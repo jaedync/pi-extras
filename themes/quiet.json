@@ -1,0 +1,102 @@
+{
+  "$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "name": "quiet",
+  "vars": {
+    "_note": "Luminance ladder for text: text > output > muted > dim > line. Hue only where it carries meaning. Nothing saturated.",
+
+    "text": "#cfcdc6",
+    "output": "#a8a69f",
+    "muted": "#8a8882",
+    "dim": "#5f5d58",
+    "line": "#3a3936",
+
+    "accent": "#8fb4c8",
+    "accentSoft": "#6f8a99",
+
+    "ok": "#8fae7a",
+    "bad": "#c97a72",
+    "warn": "#ecb64e",
+
+    "mauve": "#b294b0",
+    "tan": "#c7b28a",
+    "sage": "#9fb58a",
+    "peach": "#d19a7a",
+    "heading": "#d8c89a",
+
+    "bgUser": "#26262a",
+    "bgCustom": "#26242f",
+    "bgSelect": "#34343b",
+    "bgPending": "#232326",
+    "bgOk": "#212823",
+    "bgBad": "#2b2224"
+  },
+  "colors": {
+    "accent": "accent",
+    "border": "line",
+    "borderAccent": "accent",
+    "borderMuted": "line",
+    "success": "ok",
+    "error": "bad",
+    "warning": "warn",
+    "muted": "muted",
+    "dim": "dim",
+    "text": "text",
+    "thinkingText": "dim",
+
+    "selectedBg": "bgSelect",
+    "scrollbarTrack": "line",
+    "scrollbarThumb": "muted",
+    "searchMatchBg": "bgSelect",
+    "searchMatchText": "heading",
+    "userMessageBg": "bgUser",
+    "userMessageText": "text",
+    "customMessageBg": "bgCustom",
+    "customMessageText": "text",
+    "customMessageLabel": "mauve",
+    "toolPendingBg": "bgPending",
+    "toolSuccessBg": "bgOk",
+    "toolErrorBg": "bgBad",
+    "toolTitle": "accent",
+    "toolOutput": "output",
+
+    "mdHeading": "heading",
+    "mdLink": "accent",
+    "mdLinkUrl": "dim",
+    "mdCode": "tan",
+    "mdCodeBlock": "text",
+    "mdCodeBlockBorder": "line",
+    "mdQuote": "muted",
+    "mdQuoteBorder": "line",
+    "mdHr": "line",
+    "mdListBullet": "accentSoft",
+
+    "toolDiffAdded": "ok",
+    "toolDiffRemoved": "bad",
+    "toolDiffContext": "dim",
+
+    "syntaxComment": "dim",
+    "syntaxKeyword": "mauve",
+    "syntaxFunction": "tan",
+    "syntaxVariable": "text",
+    "syntaxString": "sage",
+    "syntaxNumber": "peach",
+    "syntaxType": "accent",
+    "syntaxOperator": "muted",
+    "syntaxPunctuation": "muted",
+
+    "thinkingOff": "line",
+    "thinkingMinimal": "dim",
+    "thinkingLow": "accentSoft",
+    "thinkingMedium": "accent",
+    "thinkingHigh": "mauve",
+    "thinkingXhigh": "peach",
+    "thinkingMax": "bad",
+
+    "bashMode": "warn"
+  },
+  "export": {
+    "pageBg": "#1b1b1d",
+    "cardBg": "#232326",
+    "infoBg": "#34343b"
+  }
+}
