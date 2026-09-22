@@ -31,6 +31,18 @@ Cost totals are recorded usage or catalog estimates, not authoritative invoices.
 TTFT and throughput describe observed request timing, not server-only decoding.
 Do not share diagnostic files without reviewing them for personal paths and data.
 
+## Usage Guard
+
+Usage Guard makes no network requests of its own. It reads the snapshots Status
+Plus polls; the `usage` tool's `refresh` option asks Status Plus to poll again,
+subject to the same `STATUS_PLUS_POLL_LIMITS` and `PI_OFFLINE` switches. It
+writes only the `usageGuard` section of `pi-extras.json` in the Pi agent
+directory (through `/usage warnings on|off`) and custom entries in the current
+session file (fired warning keys and the session budget). Warnings and `/usage`
+snapshots are injected into the model's context as ordinary messages, so they
+are sent to your provider with the next request like any other conversation
+text. They contain window labels, percentages and reset times, not credentials.
+
 ## Kagi
 
 Credentials are read locally when a search is requested. Session links are parsed

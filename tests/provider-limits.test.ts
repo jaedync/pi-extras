@@ -46,6 +46,22 @@ test("parseCodexUsage normalizes windows to ms resets and lowercases the plan", 
 	});
 });
 
+test("parseCodexUsage carries the account-level allowed and limit_reached flags", () => {
+	const usage = parseCodexUsage({
+		plan_type: "prolite",
+		rate_limit: {
+			allowed: true,
+			limit_reached: false,
+			primary_window: { used_percent: 100, limit_window_seconds: 604800, reset_at: 1790437522 },
+			secondary_window: null,
+		},
+	});
+	assert.equal(usage?.allowed, true);
+	assert.equal(usage?.limitReached, false);
+	assert.equal(usage?.windows.length, 1);
+	assert.equal(parseCodexUsage({ rate_limit: { allowed: "yes", primary_window: { used_percent: 1 } } })?.allowed, undefined);
+});
+
 test("parseCodexUsage returns nothing without a numeric window", () => {
 	assert.equal(parseCodexUsage({ rate_limit: { primary_window: { used_percent: "42" } } }), undefined);
 	assert.equal(parseCodexUsage(null), undefined);

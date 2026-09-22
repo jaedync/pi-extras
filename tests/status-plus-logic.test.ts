@@ -70,9 +70,9 @@ test("Proxy quota maps fractional utilization and extra usage", () => {
 		extraUsage: { isEnabled: true, monthlyLimit: 100, usedCredits: 12.5, currency: "USD" },
 	});
 	assert.deepEqual(entries, [
-		{ label: "5h", usedPct: 47, resetMs: 1_788_372_000_073, exhausted: false },
-		{ label: "7d-fable", usedPct: 8, resetMs: 1_788_422_400_073, exhausted: true },
-		{ label: "", remainingText: "$87.50/$100" },
+		{ label: "5h", key: "five_hour", usedPct: 47, resetMs: 1_788_372_000_073, exhausted: false, allowed: true },
+		{ label: "7d-fable", key: "seven_day_fable", modelFamily: "fable", usedPct: 8, resetMs: 1_788_422_400_073, exhausted: true },
+		{ label: "", kind: "budget", remainingText: "$87.50/$100" },
 	]);
 });
 

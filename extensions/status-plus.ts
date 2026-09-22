@@ -14,11 +14,12 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { operationalError } from "../lib/operational-log.ts";
 import { renderFooter, type FooterModel, type FooterRow } from "../lib/status-plus-footer.ts";
-import { LIMIT_POLLERS, POLL_FRESH_MS, REFRESH_INTERVAL_MS, parseLimitHeaders } from "../lib/status-plus-limits.ts";
+import { sharedLimitStore } from "../lib/limit-store.ts";
+import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, REFRESH_INTERVAL_MS, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
 import { estimateUsageCost, toEpochMs } from "../lib/status-plus-logic.ts";
 import { splitMeshStatuses } from "../lib/status-plus-mesh.ts";
 import { TWEEN_FRAME_MS, flashIntensity, incrementAt, isActive, retarget, valueAt, type Tween } from "../lib/status-plus-tween.ts";
-import { EMPTY_PROVIDER, cacheState, type LimitSnapshot } from "../lib/status-plus-render.ts";
+import { EMPTY_PROVIDER, cacheState } from "../lib/status-plus-render.ts";
 import {
 	BILLING_SOURCE_ENTRY,
 	collect,
@@ -71,11 +72,15 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	/** Counter animation for the spend cell; a frame timer runs only while a tween is live. */
 	let costTween: Tween | undefined;
 	let frameTimer: ReturnType<typeof setTimeout> | undefined;
-	/** Latest limit snapshot per provider (live-process state; headers or pollers). */
-	const providerLimits = new Map<string, LimitSnapshot>();
+	/** Latest limit snapshot per provider, shared with usage-guard through the process-wide store. */
+	const providerLimits = sharedLimitStore();
 	/** Providers with activity on this branch; gates which pollers may run. */
 	const seenProviders = new Set<string>();
 	const lastPollMs = new Map<string, number>();
+	/** Consecutive failed polls per provider, for backoff. */
+	const pollFailures = new Map<string, number>();
+	/** Context of the latest event, so forced refreshes from other extensions can poll. */
+	let latestCtx: ExtensionContext | undefined;
 
 	/**
 	 * Transcript totals, refreshed on events and the 30s timer rather than per
@@ -221,14 +226,22 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		const poller = LIMIT_POLLERS[provider];
 		if (!poller) return;
 		const last = lastPollMs.get(provider) ?? 0;
-		if (!force && Date.now() - last < poller.intervalMs) return;
+		const failures = pollFailures.get(provider) ?? 0;
+		const gap = force ? FORCED_POLL_FLOOR_MS : pollGapMs(poller.interval(ctx), failures, providerLimits.isHot(provider));
+		if (Date.now() - last < gap) return;
 		lastPollMs.set(provider, Date.now());
 		try {
 			const entries = await poller.poll(ctx);
-			if (!entries || entries.length === 0) return;
+			if (!entries || entries.length === 0) {
+				// No credentials or a non-2xx: back off rather than retry every interval.
+				pollFailures.set(provider, failures + 1);
+				return;
+			}
+			pollFailures.set(provider, 0);
 			providerLimits.set(provider, { entries, atMs: Date.now(), source: "poll" });
 			update(ctx);
 		} catch (error) {
+			pollFailures.set(provider, failures + 1);
 			// Best-effort: a failed poll must never fail Pi, but it should be findable.
 			operationalError(LOG_FILE, "status-plus", `${provider} limit poll failed: ${(error as Error)?.name ?? "error"}`);
 		}
@@ -242,6 +255,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	}
 
 	pi.on("after_provider_response", async (event, ctx) => {
+		latestCtx = ctx;
 		const provider = ctx.model?.provider;
 		if (!provider) return;
 		const entries = parseLimitHeaders(provider, event.headers);
@@ -285,6 +299,10 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		latestCtx = ctx;
+		providerLimits.setRefresher(async (provider, force) => {
+			if (latestCtx) await refreshProviderLimits(provider, latestCtx, force);
+		});
 		// New or resumed session: its first total is the baseline, not a change to animate.
 		costTween = undefined;
 		if (frameTimer) clearTimeout(frameTimer);
@@ -308,6 +326,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async () => {
+		providerLimits.setRefresher(undefined);
+		latestCtx = undefined;
 		if (timer) clearInterval(timer);
 		timer = undefined;
 		if (frameTimer) clearTimeout(frameTimer);

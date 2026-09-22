@@ -1,8 +1,8 @@
 # Pi Extras
 
 Optional extensions and a theme for [Pi](https://pi.dev): a richer footer,
-activity and timing indicators, background shell jobs, bounded shell execution,
-and Kagi subscription search.
+usage-limit awareness for the agent, activity and timing indicators, background
+shell jobs, bounded shell execution, and Kagi subscription search.
 
 ## Install
 
@@ -15,7 +15,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all five extensions; it makes `quiet` available but does not select it.
+adds all six extensions; it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -23,6 +23,7 @@ can still conflict.
 | Component | Behavior |
 | --- | --- |
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits, optional linked subagent usage |
+| Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings near a limit or a session budget |
 | Phase Spinner | Working phases, tokens/sec, time to first token, and elapsed time in the editor border |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
@@ -51,6 +52,12 @@ the package. Removing it does not remove your credentials or change other packag
   to the system timezone.
 - `STATUS_PLUS_POLL_LIMITS=0`: disable authenticated quota polling while retaining
   recorded usage and response-header limits. `PI_OFFLINE` also suppresses polling.
+- `PI_EXTRAS_USAGE_GUARD=0`: silence usage warnings for one run. See below for
+  the persistent setting.
+- `PI_CODING_AGENT_DIR/pi-extras.json` (default `~/.pi/agent/pi-extras.json`):
+  persistent Usage Guard settings under `usageGuard`, written by
+  `/usage warnings on|off`. Keys: `enabled`, `bands` (default `[90, 95]`),
+  `resumeMarginSeconds` (default `300`), `proximityPct` (default `10`).
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
   Explicit per-call timeouts are preserved.
 - `PI_CACHE_RETENTION=long`: use the longer cache-warmth indicator window.
@@ -61,6 +68,30 @@ the package. Removing it does not remove your credentials or change other packag
 
 See [security and privacy](docs/security.md) before enabling provider-limit polling
 or supplying search credentials. Extensions execute with your user permissions.
+
+## Usage Guard
+
+Usage Guard reads the limit snapshots Status Plus polls; it never fetches on its
+own except when the `usage` tool is called with `refresh: true`. Only windows that
+govern the active model count: provider-wide windows always, model-specific ones
+(such as an Anthropic `seven_day_fable` bucket) only when the active model id
+carries that family. Balances (Enterprise spend, prepaid credits) are reported
+but never warned on.
+
+- `usage` tool: percent used, thresholds, reset time, seconds until reset and
+  `resumeAfterSeconds` (reset plus margin) per window. `setBudget` records a
+  session budget ("work until 60% of the weekly limit"); `all` includes other
+  providers and non-governing windows.
+- Warnings fire once per window, threshold and reset cycle, at turn end, as a
+  message appended to context (no system-prompt change, no cache miss). At the
+  top band, a budget, or a provider block, the message asks the agent to wrap up
+  and gives the sleep duration for resuming after the reset. Fired keys and the
+  budget persist with the session, so a resumed session does not repeat them.
+- `/usage` queues the current snapshot for the next turn; `/usage budget 7d 60`
+  and `/usage budget clear` manage the session budget; `/usage warnings on|off`
+  persists the toggle.
+- Polling: providers whose window sits within `proximityPct` of a threshold poll
+  at their faster cadence; failed polls back off exponentially up to ten minutes.
 
 ## Kagi setup
 

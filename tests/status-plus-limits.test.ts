@@ -1,11 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+	FORCED_POLL_FLOOR_MS,
+	LIMIT_POLLERS,
+	MAX_BACKOFF_MS,
+	anthropicPollInterval,
 	codexEntries,
 	openCodeGoEntries,
 	parseAnthropicLimits,
 	parseCodexLimits,
 	parseLimitHeaders,
+	pollGapMs,
 	topEntries,
 } from "../lib/status-plus-limits.ts";
 
@@ -65,7 +70,11 @@ test("shared poller windows become footer entries with short labels", () => {
 			{ key: "primary", pct: 42, windowSeconds: 18000, resetsAtMs: 1 },
 			{ key: "secondary", pct: 7, resetsAtMs: 2 },
 		],
-	}), [{ label: "5h", usedPct: 42, resetMs: 1 }, { label: "7d", usedPct: 7, resetMs: 2 }]);
+	}), [{ label: "5h", key: "primary", usedPct: 42, resetMs: 1 }, { label: "7d", key: "secondary", usedPct: 7, resetMs: 2 }]);
+	assert.deepEqual(codexEntries({
+		provider: "codex", allowed: true, limitReached: false,
+		windows: [{ key: "primary", pct: 100, windowSeconds: 604800, resetsAtMs: 9 }],
+	}), [{ label: "7d", key: "primary", usedPct: 100, resetMs: 9, exhausted: false, allowed: true }]);
 	assert.deepEqual(openCodeGoEntries({
 		provider: "opencode-go",
 		windows: [
@@ -73,7 +82,34 @@ test("shared poller windows become footer entries with short labels", () => {
 			{ key: "monthly", pct: 9, windowSeconds: 2_592_000, exhausted: false },
 		],
 	}), [
-		{ label: "5h", usedPct: 100, resetMs: 3, exhausted: true },
-		{ label: "mo", usedPct: 9, resetMs: undefined, exhausted: false },
+		{ label: "5h", key: "rolling", usedPct: 100, resetMs: 3, exhausted: true },
+		{ label: "mo", key: "monthly", usedPct: 9, resetMs: undefined, exhausted: false },
 	]);
+});
+
+test("poll gaps tighten when hot, back off on failures, and cap", () => {
+	const interval = { normalMs: 60_000, hotMs: 20_000 };
+	assert.equal(pollGapMs(interval, 0, false), 60_000);
+	assert.equal(pollGapMs(interval, 0, true), 20_000);
+	assert.equal(pollGapMs(interval, 1, false), 120_000);
+	assert.equal(pollGapMs(interval, 3, true), 160_000);
+	assert.equal(pollGapMs(interval, 20, false), MAX_BACKOFF_MS);
+	// A slow poller's own interval is never shortened by the cap.
+	assert.equal(pollGapMs({ normalMs: 15 * 60_000, hotMs: 5 * 60_000 }, 9, false), 15 * 60_000);
+	assert.ok(FORCED_POLL_FLOOR_MS < interval.hotMs);
+});
+
+test("anthropic polls the local proxy route often and Anthropic itself rarely", () => {
+	const registry = (baseUrl?: string) => ({
+		async getApiKeyForProvider() { return undefined; },
+		getProvider: () => (baseUrl ? { baseUrl } : undefined),
+	});
+	assert.deepEqual(anthropicPollInterval({ modelRegistry: registry("http://127.0.0.1:3456") }), { normalMs: 60_000, hotMs: 20_000 });
+	assert.deepEqual(anthropicPollInterval({ modelRegistry: registry() }), { normalMs: 300_000, hotMs: 60_000 });
+	assert.deepEqual(
+		anthropicPollInterval({ model: { provider: "anthropic", baseUrl: "https://api.anthropic.com" }, modelRegistry: registry("http://127.0.0.1:3456") }),
+		{ normalMs: 300_000, hotMs: 60_000 },
+	);
+	assert.equal(LIMIT_POLLERS.anthropic.interval, anthropicPollInterval);
+	assert.equal(LIMIT_POLLERS["openai-codex"].interval({ modelRegistry: registry() }).normalMs, 60_000);
 });

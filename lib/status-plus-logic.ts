@@ -1,8 +1,23 @@
 /** Pure helpers for status-plus: money, time, quota shapes, catalog cost. */
 
+/**
+ * "window": a percentage against a rolling quota with a hard reset.
+ * "budget": a spend balance against a limit (monthly, approximate reset).
+ * "credits": a prepaid balance with no reset.
+ */
+export type LimitKind = "window" | "budget" | "credits";
+
 export interface LimitEntry {
 	label: string;
+	/** Source window key ("five_hour", "seven_day_fable", "primary") when the provider names it. */
+	key?: string;
+	kind?: LimitKind;
+	/** Model family token when the window only governs matching model ids ("fable"). */
+	modelFamily?: string;
+	/** Provider says the window is blocking regardless of the percentage. */
 	exhausted?: boolean;
+	/** Provider says requests still go through (Codex reports 100% while allowed). */
+	allowed?: boolean;
 	usedPct?: number;
 	remainingText?: string;
 	resetApprox?: boolean;
@@ -112,11 +127,25 @@ export function proxyQuotaUrl(baseUrl: string | undefined): string | undefined {
 	}
 }
 
-function quotaLabel(type: string): string {
-	if (type === "five_hour") return "5h";
-	if (type === "seven_day") return "7d";
-	if (type.startsWith("seven_day_")) return `7d-${type.slice("seven_day_".length).replaceAll("_", "-")}`;
-	return type.replaceAll("_", "-");
+const QUOTA_BASE_LABELS: Record<string, string> = { five_hour: "5h", seven_day: "7d", one_day: "1d", thirty_day: "30d" };
+
+/**
+ * Split a quota key into its base window and optional model family:
+ * "seven_day_fable" -> { base: "seven_day", family: "fable" }. Unknown
+ * bases are kept whole so nothing is misread as model-specific.
+ */
+export function quotaKeyParts(type: string): { base: string; family?: string } {
+	for (const base of Object.keys(QUOTA_BASE_LABELS)) {
+		if (type === base) return { base };
+		if (type.startsWith(`${base}_`)) return { base, family: type.slice(base.length + 1) };
+	}
+	return { base: type };
+}
+
+export function quotaLabel(type: string): string {
+	const { base, family } = quotaKeyParts(type);
+	const baseLabel = QUOTA_BASE_LABELS[base] ?? base.replaceAll("_", "-");
+	return family ? `${baseLabel}-${family.replaceAll("_", "-")}` : baseLabel;
 }
 
 interface ProxyQuotaBucket {
@@ -148,11 +177,15 @@ export function parseProxyQuota(body: unknown): LimitEntry[] {
 			const resetMs = typeof bucket.resetsAt === "number" && Number.isFinite(bucket.resetsAt)
 				? bucket.resetsAt
 				: undefined;
+			const { family } = quotaKeyParts(bucket.type);
 			entries.push({
 				label: quotaLabel(bucket.type),
+				key: bucket.type,
+				...(family ? { modelFamily: family } : {}),
 				usedPct: bucket.utilization <= 1 ? bucket.utilization * 100 : bucket.utilization,
 				resetMs,
 				exhausted: bucket.status === "rejected",
+				...(bucket.status === "allowed" ? { allowed: true } : {}),
 			});
 		}
 	}
@@ -169,6 +202,7 @@ export function parseProxyQuota(body: unknown): LimitEntry[] {
 		const prefix = extra.currency === "USD" || extra.currency === undefined ? "$" : `${String(extra.currency)} `;
 		entries.push({
 			label: "",
+			kind: "budget",
 			remainingText: `${prefix}${formatMoney(extra.monthlyLimit - extra.usedCredits)}/${prefix}${formatMoney(extra.monthlyLimit)}`,
 		});
 	}

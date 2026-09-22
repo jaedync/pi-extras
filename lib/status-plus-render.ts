@@ -19,11 +19,7 @@ export interface ProviderStats {
 
 export const EMPTY_PROVIDER: ProviderStats = { cost: 0, airtimeMs: 0, inputTokens: 0, outputTokens: 0 };
 
-export interface LimitSnapshot {
-	entries: LimitEntry[];
-	atMs: number;
-	source: "headers" | "poll";
-}
+export type { LimitSnapshot } from "./limit-store.ts";
 
 export interface CacheTtl {
 	ttlMs: number;

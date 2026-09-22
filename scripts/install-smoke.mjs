@@ -61,11 +61,12 @@ try {
   await loader.reload();
   const extensions = loader.getExtensions();
   assert.deepEqual(extensions.errors, []);
-  assert.equal(extensions.extensions.length, 5);
+  assert.equal(extensions.extensions.length, 6);
   assert.ok(loader.getThemes().themes.some(theme => theme.name === 'quiet'));
   assert.deepEqual(loader.getThemes().diagnostics, []);
   const tools = extensions.extensions.flatMap(ext => [...ext.tools.keys()]);
   assert.ok(tools.includes('kagi_search'));
+  assert.ok(tools.includes('usage'));
   assert.ok(!tools.includes('web_search'));
   const errors = [];
   const { session } = await createAgentSession({ cwd: scratch, agentDir, resourceLoader: loader,
@@ -79,7 +80,7 @@ try {
     await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
     session.dispose();
   }
-  console.log('Native Git install, five-extension loader and session lifecycle passed without credentials.');
+  console.log('Native Git install, six-extension loader and session lifecycle passed without credentials.');
 
   writeFileSync(join(fixture, 'lib/smoke-marker.txt'), 'updated\n');
   run('git', ['add', 'lib/smoke-marker.txt'], fixture);

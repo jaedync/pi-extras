@@ -14,6 +14,8 @@ import {
 	formatMoney,
 	parseProxyQuota,
 	proxyQuotaUrl,
+	quotaKeyParts,
+	quotaLabel,
 	toEpochMs,
 	windowLabel,
 	type LimitEntry,
@@ -26,10 +28,28 @@ export interface PollerContext {
 
 export type LimitPoller = (ctx: PollerContext) => Promise<LimitEntry[] | undefined>;
 
+/** Poll cadence: `normalMs` at rest, `hotMs` while a window sits near a warning threshold. */
+export interface PollInterval {
+	normalMs: number;
+	hotMs: number;
+}
+
 export const REFRESH_INTERVAL_MS = 30_000;
 /** A poll snapshot younger than this outranks header-derived entries. */
 export const POLL_FRESH_MS = 15 * 60_000;
+/** A forced poll (tool refresh) still waits this long after the previous one. */
+export const FORCED_POLL_FLOOR_MS = 5_000;
+/** Failed polls back off exponentially up to this gap. */
+export const MAX_BACKOFF_MS = 10 * 60_000;
+const MAX_BACKOFF_DOUBLINGS = 6;
 const POLL_TIMEOUT_MS = 10_000;
+
+/** Gap before the next poll: hot windows poll faster, consecutive failures back off. */
+export function pollGapMs(interval: PollInterval, failures: number, hot: boolean): number {
+	const base = hot ? interval.hotMs : interval.normalMs;
+	const doublings = Math.min(MAX_BACKOFF_DOUBLINGS, Math.max(0, failures));
+	return Math.min(Math.max(base, MAX_BACKOFF_MS), base * 2 ** doublings);
+}
 const KEY_LABELS: Record<string, string> = { primary: "5h", secondary: "7d", rolling: "5h", weekly: "7d", monthly: "mo" };
 
 function parseNumberHeader(value: string | undefined): number | undefined {
@@ -130,12 +150,19 @@ export function parseLimitHeaders(provider: string, headers: Record<string, stri
 	return parsed.length > 0 ? parsed : parseGenericLimits(headers);
 }
 
-/** Codex reports its window length, so the label follows it ("5h", "7d"). */
+/**
+ * Codex reports its window length, so the label follows it ("5h", "7d").
+ * The percentage saturates at 100 while requests still succeed, so the
+ * account-level allowed/limit_reached flags are carried on every window.
+ */
 export function codexEntries(usage: ProviderUsage): LimitEntry[] {
 	return usage.windows.map((window) => ({
 		label: window.windowSeconds ? windowLabel(window.windowSeconds / 60) : KEY_LABELS[window.key] ?? window.key,
+		key: window.key,
 		usedPct: window.pct,
 		resetMs: window.resetsAtMs,
+		...(usage.limitReached !== undefined ? { exhausted: usage.limitReached } : {}),
+		...(usage.allowed !== undefined ? { allowed: usage.allowed } : {}),
 	}));
 }
 
@@ -143,10 +170,25 @@ export function codexEntries(usage: ProviderUsage): LimitEntry[] {
 export function openCodeGoEntries(usage: ProviderUsage): LimitEntry[] {
 	return usage.windows.map((window) => ({
 		label: KEY_LABELS[window.key] ?? window.key,
+		key: window.key,
 		usedPct: window.pct,
 		resetMs: window.resetsAtMs,
 		exhausted: window.exhausted === true,
 	}));
+}
+
+/** Anthropic OAuth windows are keyed five_hour, seven_day, seven_day_<family>. */
+const OAUTH_WINDOW_KEY = /^(five_hour|seven_day)(_[a-z0-9_]+)?$/;
+
+function providerBaseUrl(ctx: PollerContext): string | undefined {
+	return ctx.model?.provider === "anthropic" ? ctx.model.baseUrl : ctx.modelRegistry.getProvider("anthropic")?.baseUrl;
+}
+
+/** The local proxy route is cheap and self-caching; Anthropic's own endpoint is not. */
+export function anthropicPollInterval(ctx: PollerContext): PollInterval {
+	return proxyQuotaUrl(providerBaseUrl(ctx))
+		? { normalMs: 60_000, hotMs: 20_000 }
+		: { normalMs: 5 * 60_000, hotMs: 60_000 };
 }
 
 /**
@@ -154,10 +196,7 @@ export function openCodeGoEntries(usage: ProviderUsage): LimitEntry[] {
  * otherwise the OAuth endpoint. Both expose windows and optional spend.
  */
 export async function pollAnthropicUsage(ctx: PollerContext): Promise<LimitEntry[] | undefined> {
-	const providerBaseUrl = ctx.model?.provider === "anthropic"
-		? ctx.model.baseUrl
-		: ctx.modelRegistry.getProvider("anthropic")?.baseUrl;
-	const quotaUrl = proxyQuotaUrl(providerBaseUrl);
+	const quotaUrl = proxyQuotaUrl(providerBaseUrl(ctx));
 	if (quotaUrl) {
 		const response = await fetch(quotaUrl, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) });
 		if (!response.ok) return undefined;
@@ -174,14 +213,15 @@ export async function pollAnthropicUsage(ctx: PollerContext): Promise<LimitEntry
 	if (!response.ok) return undefined;
 	const body = (await response.json()) as Record<string, unknown>;
 	const entries: LimitEntry[] = [];
-	const labels: Record<string, string> = {
-		five_hour: "5h", seven_day: "7d", seven_day_opus: "7d-opus", seven_day_sonnet: "7d-sonnet",
-	};
-	for (const [key, label] of Object.entries(labels)) {
-		const window = body[key] as { utilization?: unknown; resets_at?: unknown } | null | undefined;
+	for (const [key, raw] of Object.entries(body)) {
+		if (!OAUTH_WINDOW_KEY.test(key)) continue;
+		const window = raw as { utilization?: unknown; resets_at?: unknown } | null | undefined;
 		if (!window || typeof window.utilization !== "number") continue;
+		const { family } = quotaKeyParts(key);
 		entries.push({
-			label,
+			label: quotaLabel(key),
+			key,
+			...(family ? { modelFamily: family } : {}),
 			usedPct: window.utilization,
 			resetMs: typeof window.resets_at === "string" ? Date.parse(window.resets_at) || undefined : undefined,
 		});
@@ -203,6 +243,7 @@ export async function pollAnthropicUsage(ctx: PollerContext): Promise<LimitEntry
 			const nowDate = new Date();
 			entries.push({
 				label: "",
+				kind: "budget",
 				remainingText: `$${formatMoney(limit - used)}/$${formatMoney(limit)}`,
 				resetMs: Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth() + 1, 1),
 				resetApprox: true,
@@ -225,7 +266,7 @@ export async function pollOpenRouterCredits(ctx: PollerContext): Promise<LimitEn
 	const total = body.data?.total_credits;
 	const used = body.data?.total_usage;
 	if (typeof total !== "number" || typeof used !== "number") return undefined;
-	return [{ label: "", remainingText: `$${formatMoney(total - used)} credits` }];
+	return [{ label: "", kind: "credits", remainingText: `$${formatMoney(total - used)} credits` }];
 }
 
 async function pollCodexEntries(ctx: PollerContext): Promise<LimitEntry[] | undefined> {
@@ -239,9 +280,9 @@ async function pollOpenCodeGoEntries(ctx: PollerContext): Promise<LimitEntry[] |
 }
 
 /** Throttled non-header limit sources. */
-export const LIMIT_POLLERS: Record<string, { intervalMs: number; poll: LimitPoller }> = {
-	anthropic: { intervalMs: 5 * 60_000, poll: pollAnthropicUsage },
-	"openai-codex": { intervalMs: REFRESH_INTERVAL_MS, poll: pollCodexEntries },
-	"opencode-go": { intervalMs: 60_000, poll: pollOpenCodeGoEntries },
-	openrouter: { intervalMs: 10 * 60_000, poll: pollOpenRouterCredits },
+export const LIMIT_POLLERS: Record<string, { interval: (ctx: PollerContext) => PollInterval; poll: LimitPoller }> = {
+	anthropic: { interval: anthropicPollInterval, poll: pollAnthropicUsage },
+	"openai-codex": { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: pollCodexEntries },
+	"opencode-go": { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: pollOpenCodeGoEntries },
+	openrouter: { interval: () => ({ normalMs: 10 * 60_000, hotMs: 5 * 60_000 }), poll: pollOpenRouterCredits },
 };

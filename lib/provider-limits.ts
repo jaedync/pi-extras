@@ -21,6 +21,10 @@ export interface ProviderUsage {
 	windows: UsageWindow[];
 	/** The provider's own plan label ("plus", "enterprise"), lowercased. */
 	plan?: string;
+	/** Codex: requests still go through, even when a window reads 100%. */
+	allowed?: boolean;
+	/** Codex: the account is blocked until a window resets. */
+	limitReached?: boolean;
 }
 
 export interface RegistryLike {
@@ -111,7 +115,10 @@ export function parseCodexUsage(body: unknown): ProviderUsage | undefined {
 	if (!body || typeof body !== "object") return undefined;
 	const record = body as {
 		plan_type?: unknown;
-		rate_limit?: Record<string, { used_percent?: unknown; limit_window_seconds?: unknown; reset_at?: unknown } | null>;
+		rate_limit?: Record<string, { used_percent?: unknown; limit_window_seconds?: unknown; reset_at?: unknown } | null> & {
+			allowed?: unknown;
+			limit_reached?: unknown;
+		};
 	};
 	const windows: UsageWindow[] = [];
 	for (const [source, key] of [["primary_window", "primary"], ["secondary_window", "secondary"]] as const) {
@@ -126,7 +133,15 @@ export function parseCodexUsage(body: unknown): ProviderUsage | undefined {
 	}
 	if (!windows.length) return undefined;
 	const plan = planLabel(record.plan_type);
-	return { provider: "codex", windows, ...(plan ? { plan } : {}) };
+	const allowed = record.rate_limit?.allowed;
+	const limitReached = record.rate_limit?.limit_reached;
+	return {
+		provider: "codex",
+		windows,
+		...(plan ? { plan } : {}),
+		...(typeof allowed === "boolean" ? { allowed } : {}),
+		...(typeof limitReached === "boolean" ? { limitReached } : {}),
+	};
 }
 
 export function parseOpenCodeGoUsage(body: unknown): ProviderUsage | undefined {

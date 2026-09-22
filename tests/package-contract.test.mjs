@@ -5,10 +5,10 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-test('package explicitly exports five extensions and one theme', () => {
+test('package explicitly exports six extensions and one theme', () => {
   const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
   assert.deepEqual(pkg.pi.extensions, [
-    'extensions/status-plus.ts', 'extensions/phase-spinner.ts',
+    'extensions/status-plus.ts', 'extensions/usage-guard.ts', 'extensions/phase-spinner.ts',
     'extensions/shell-jobs.ts', 'extensions/bash-default-timeout.ts',
     'extensions/kagi-search.ts',
   ]);
