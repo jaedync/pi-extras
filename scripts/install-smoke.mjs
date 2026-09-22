@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { agentRoot } from '../tests/support/pi-runtime.mjs';
 
@@ -27,8 +27,15 @@ function run(command, args, cwd = scratch, overrides = {}) {
 }
 try {
   mkdirSync(fixture); mkdirSync(agentDir, { recursive: true });
-  const archive = JSON.parse(run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', scratch], resolve()))[0].filename;
-  run('tar', ['xf', join(scratch, archive), '--strip-components=1', '-C', fixture]);
+  // Git installs include the lockfile; npm tarballs deliberately omit it.
+  // Model the supported Git distribution, not an unshipped npm package.
+  const tracked = run('git', ['ls-files', '-z'], resolve()).split('\0').filter(Boolean);
+  assert.ok(tracked.includes('package-lock.json'));
+  for (const file of tracked) {
+    const target = join(fixture, file);
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(resolve(file), target);
+  }
   run('git', ['init', '-b', 'main'], fixture);
   run('git', ['config', 'user.name', 'Package Test'], fixture);
   run('git', ['config', 'user.email', 'test@example.invalid'], fixture);

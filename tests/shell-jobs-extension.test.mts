@@ -259,18 +259,29 @@ describe("extension integration", () => {
 		}
 	});
 
-	test("kill during residual-group cleanup does not also send a completion", async () => {
+	test("kill during residual-group cleanup does not also send a completion", async (t) => {
 		const app = createFakePi();
 		shellJobs(app.pi as any);
 		await fire(app.handlers, "session_start", app.ctx);
-		const started = await app.tools
-			.get("shell_job_start")
-			.execute("t1", { command: "( trap '' TERM; exec sleep 30 ) & exit 0" }, undefined, undefined, app.ctx);
+		const originalKill = process.kill.bind(process);
+		const cleanupStarted = new Promise<void>((resolve) => {
+			t.mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => {
+				const result = originalKill(pid, signal);
+				if (pid < 0 && signal === "SIGTERM") resolve();
+				return result;
+			});
+		});
+		// The parent must not exit until its child ignores TERM. Otherwise the
+		// cleanup can correctly finish before the test ever requests a kill.
+		const command = "mkfifo ready; ( trap '' TERM; printf 'ready\\n' > ready; exec sleep 30 ) & read -r ready < ready; exit 0";
+		const started = await app.tools.get("shell_job_start")
+			.execute("t1", { command }, undefined, undefined, app.ctx);
 		const pgid = (started.details as { pid: number }).pid;
-		await sleep(150);
+		await cleanupStarted;
+		const runtime = [...__testing.getRuntimes()].pop()!;
+		assert.strictEqual(runtime.jobs.get("j1")?.state, "stopping");
 		const killed = await app.tools.get("shell_job").execute("t2", { op: "kill", id: "j1" }, undefined, undefined, app.ctx);
 		assert.strictEqual(killed.details.state, "done");
-		await sleep(1200);
 		assert.strictEqual(groupAlive(pgid), false);
 		assert.strictEqual((app.messages.filter((m) => m.message.customType === "shell-job-complete")).length, 0);
 	});
