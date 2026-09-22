@@ -4,8 +4,10 @@
  * "window": a percentage against a rolling quota with a hard reset.
  * "budget": a spend balance against a limit (monthly, approximate reset).
  * "credits": a prepaid balance with no reset.
+ * "rate": a per-minute throughput limit from response headers; it refills
+ * within a minute and never means the agent should stop.
  */
-export type LimitKind = "window" | "budget" | "credits";
+export type LimitKind = "window" | "budget" | "credits" | "rate";
 
 export interface LimitEntry {
 	label: string;

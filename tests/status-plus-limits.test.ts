@@ -46,13 +46,13 @@ test("anthropic unified headers win over api-key triplets and drop overage", () 
 		"anthropic-ratelimit-tokens-remaining": "250",
 		"anthropic-ratelimit-tokens-reset": "2033-05-18T03:33:20Z",
 	});
-	assert.deepEqual(triplets, [{ label: "tokens", usedPct: 75, resetMs: Date.parse("2033-05-18T03:33:20Z") }]);
+	assert.deepEqual(triplets, [{ label: "tokens", kind: "rate", usedPct: 75, resetMs: Date.parse("2033-05-18T03:33:20Z") }]);
 });
 
 test("unknown providers fall back to generic x-ratelimit headers", () => {
 	assert.deepEqual(parseLimitHeaders("mystery", {
 		"x-ratelimit-limit": "10", "x-ratelimit-remaining": "4", "x-ratelimit-reset": "1750000000",
-	}), [{ label: "req", usedPct: 60, resetMs: 1_750_000_000_000 }]);
+	}), [{ label: "req", kind: "rate", usedPct: 60, resetMs: 1_750_000_000_000 }]);
 	assert.deepEqual(parseLimitHeaders("mystery", {}), []);
 });
 

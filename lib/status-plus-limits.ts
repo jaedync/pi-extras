@@ -121,6 +121,7 @@ export function parseAnthropicLimits(headers: Record<string, string>): LimitEntr
 		if (!Number.isFinite(limit) || limit <= 0 || remaining === undefined) continue;
 		pairs.push({
 			label: match[1],
+			kind: "rate",
 			usedPct: ((limit - remaining) / limit) * 100,
 			resetMs: parseResetHeader(headers[`anthropic-ratelimit-${match[1]}-reset`]),
 		});
@@ -135,6 +136,7 @@ export function parseGenericLimits(headers: Record<string, string>): LimitEntry[
 	if (limit === undefined || limit <= 0 || remaining === undefined) return [];
 	return [{
 		label: "req",
+		kind: "rate",
 		usedPct: ((limit - remaining) / limit) * 100,
 		resetMs: parseResetHeader(headers["x-ratelimit-reset"]),
 	}];

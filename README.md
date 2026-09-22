@@ -77,8 +77,8 @@ Usage Guard reads the limit snapshots Status Plus polls; it never fetches on its
 own except when the `usage` tool is called with `refresh: true`. Only windows that
 govern the active model count: provider-wide windows always, model-specific ones
 (such as an Anthropic `seven_day_fable` bucket) only when the active model id
-carries that family. Balances (Enterprise spend, prepaid credits) are reported
-but never warned on.
+carries that family. Balances (Enterprise spend, prepaid credits) and per-minute
+rate limits taken from response headers are reported but never warned on.
 
 - `usage` tool: percent used, thresholds, reset time, seconds until reset,
   `waitable` (near enough to wait for) and `resumeAfterSeconds` (reset plus

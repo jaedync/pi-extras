@@ -236,6 +236,18 @@ test("the report keeps governing windows by default and explains the gaps", () =
 	assert.equal(everything.limits[3].status, "full-but-allowed");
 });
 
+test("per-minute rate limits from headers are reported but never warned on", () => {
+	const rate: Array<[string, LimitSnapshot]> = [["anthropic", { entries: [
+		{ label: "tokens", kind: "rate", usedPct: 97, resetMs: NOW + 40_000 },
+	], atMs: NOW, source: "headers" }]];
+	assert.deepEqual(pendingWarnings(rate, SONNET, DEFAULT_GUARD_CONFIG, undefined, new Set(), NOW), []);
+	assert.deepEqual([...hotProviders(rate, SONNET, DEFAULT_GUARD_CONFIG, undefined, NOW)], []);
+	const report = usageReport(rate, SONNET, DEFAULT_GUARD_CONFIG, undefined, NOW, false, "UTC");
+	assert.equal(report.limits[0].kind, "rate");
+	assert.equal(report.limits[0].thresholds, undefined);
+	assert.match(report.notes[0], /no subscription windows/);
+});
+
 test("the report says when a provider has no percentage windows or no data", () => {
 	const budgetOnly: Array<[string, LimitSnapshot]> = [["anthropic", snapshot([
 		{ label: "", kind: "budget", remainingText: "$87.50/$100", resetMs: RESET, resetApprox: true },
@@ -244,7 +256,7 @@ test("the report says when a provider has no percentage windows or no data", () 
 	assert.equal(report.limits.length, 1);
 	assert.equal(report.limits[0].kind, "budget");
 	assert.equal(report.limits[0].reset?.resetApprox, true);
-	assert.match(report.notes[0], /no rolling percentage windows/);
+	assert.match(report.notes[0], /no subscription windows/);
 	assert.match(report.notes[1], /budget targets window "7d"/);
 	const empty = usageReport([], SONNET, DEFAULT_GUARD_CONFIG, undefined, NOW, false, "UTC");
 	assert.match(empty.notes[0], /No usage data yet for anthropic/);

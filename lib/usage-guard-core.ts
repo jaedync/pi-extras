@@ -366,7 +366,7 @@ export function usageReport(
 	if (!sawActiveProvider) {
 		notes.push(`No usage data yet for ${provider}; call again with refresh: true after a request has been made.`);
 	} else if (!limits.some((limit) => limit.kind === "window" && limit.applies)) {
-		notes.push(`${provider} reports no rolling percentage windows for this model; only balance or budget figures apply and no usage warnings will fire.`);
+		notes.push(`${provider} reports no subscription windows for this model; only per-minute rate limits, balances or budgets apply, and no usage warnings will fire.`);
 	}
 	if (budget && !limits.some((limit) => limit.budgetPct !== undefined)) {
 		notes.push(`Session budget targets window "${budget.window}", which no applicable limit matches; it will not fire.`);
