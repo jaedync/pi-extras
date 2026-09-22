@@ -19,6 +19,15 @@ test('package explicitly exports six extensions and one theme', () => {
   for (const name of ['preinstall', 'install', 'postinstall', 'prepare']) assert.equal(pkg.scripts[name], undefined);
 });
 
+test('the version matches the lockfile and the top changelog entry', () => {
+  const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+  const lock = JSON.parse(readFileSync(resolve(root, 'package-lock.json'), 'utf8'));
+  assert.equal(lock.version, pkg.version);
+  assert.equal(lock.packages[''].version, pkg.version);
+  const top = readFileSync(resolve(root, 'CHANGELOG.md'), 'utf8').match(/^## (\d+\.\d+\.\d+)/m);
+  assert.equal(top?.[1], pkg.version);
+});
+
 test('Kagi remains a separate search tool by default', () => {
   const entry = readFileSync(resolve(root, 'lib/kagi/index.ts'), 'utf8');
   assert.match(entry, /KAGI_TOOL_NAME \|\| 'kagi_search'/);
