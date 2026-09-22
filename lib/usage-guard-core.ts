@@ -166,6 +166,21 @@ function classify(
 	return { threshold, reason: budgeted ? "budget" : "band", final: budgeted || threshold === Math.max(...thresholds) };
 }
 
+/**
+ * Hard cap: once a window's wrap-up has been sent this cycle, nothing more is
+ * said about it. A later provider block adds nothing the request error won't.
+ */
+function finalFired(
+	fired: ReadonlySet<string>,
+	provider: string,
+	entry: LimitEntry,
+	config: GuardConfig,
+	budget: SessionBudget | undefined,
+): boolean {
+	const top = Math.max(...thresholdsFor(entry, config, budget));
+	return alreadyFired(fired, provider, entry, top, "band") || alreadyFired(fired, provider, entry, 100, "exhausted");
+}
+
 /** Threshold crossings not yet announced this cycle, for the active provider only. */
 export function pendingWarnings(
 	snapshots: Iterable<[string, LimitSnapshot]>,
@@ -180,6 +195,7 @@ export function pendingWarnings(
 		const hit = classify(entry, config, budget);
 		if (!hit) continue;
 		if (alreadyFired(fired, provider, entry, hit.threshold, hit.reason)) continue;
+		if (finalFired(fired, provider, entry, config, budget)) continue;
 		warnings.push({ key: warningKey(provider, entry, hit.threshold, hit.reason), provider, entry, ...hit });
 	}
 	return warnings;

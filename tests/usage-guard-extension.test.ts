@@ -206,6 +206,33 @@ test("with the default config, bands stay silent but a session budget still warn
 	assert.equal(pi.sent.length, 1);
 });
 
+test("a limit climbing to a block over many polls with drifting resets sends two messages, and none after a reload", async () => {
+	const { pi, store, ctx, configFile } = setup();
+	await pi.handlers.get("session_start")!({}, ctx);
+	const poll = (i: number, pct: number) => store.set("anthropic", {
+		// Proxies recompute the reset on every fetch, so it drifts by a few hundred ms.
+		entries: [{ label: "5h", key: "five_hour", usedPct: pct, resetMs: RESET + ((i * 397) % 1000), allowed: pct < 100, exhausted: pct >= 100 }],
+		atMs: NOW, source: "poll",
+	});
+	for (let i = 0; i < 70; i++) {
+		poll(i, Math.min(100, 90 + Math.floor(i / 5)));
+		if (i % 3 === 0) await pi.handlers.get("turn_end")!({ toolResults: [{}] }, ctx);
+	}
+	assert.deepEqual(pi.sent.map((sent) => sent.content.split(":")[0]), ["Usage notice", "Usage warning"]);
+	assert.match(pi.sent[1].content, /5h is at 95%/);
+	// A reload restores the fired keys from the session, whatever the drift.
+	const reloaded = fakePi();
+	reloaded.entries = pi.entries;
+	usageGuard(reloaded as never, { store, configFile, now: () => NOW });
+	const reloadedCtx = fakeCtx(reloaded, { provider: "anthropic", id: "claude-sonnet-5" });
+	await reloaded.handlers.get("session_start")!({}, reloadedCtx);
+	for (let i = 70; i < 90; i++) {
+		poll(i, 100);
+		await reloaded.handlers.get("turn_end")!({ toolResults: [{}] }, reloadedCtx);
+	}
+	assert.deepEqual(reloaded.sent, []);
+});
+
 test("budget arguments parse strictly", () => {
 	assert.deepEqual(parseBudgetArgs(["7d", "60"]), { window: "7d", pct: 60 });
 	assert.equal(parseBudgetArgs(["clear"]), null);
