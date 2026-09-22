@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import type { LimitSnapshot } from "../lib/limit-store.ts";
 import type { LimitEntry } from "../lib/status-plus-logic.ts";
 import {
+	CYCLE_TOLERANCE_MS,
 	DEFAULT_GUARD_CONFIG,
+	alreadyFired,
 	bandFor,
 	entryApplies,
 	entryKind,
@@ -14,6 +16,7 @@ import {
 	usageReport,
 	warningKey,
 	warningMessage,
+	type Warning,
 } from "../lib/usage-guard-core.ts";
 
 const NOW = 1_800_000_000_000;
@@ -57,8 +60,8 @@ test("bandFor picks the highest crossed threshold", () => {
 
 test("config normalization sorts bands, drops junk and keeps defaults", () => {
 	assert.deepEqual(normalizeGuardConfig(undefined), DEFAULT_GUARD_CONFIG);
-	assert.deepEqual(normalizeGuardConfig({ enabled: false, bands: [95, "x", 80, 80, 0, 101], resumeMarginSeconds: -1 }), {
-		enabled: false, bands: [80, 95], resumeMarginSeconds: 300, proximityPct: 10,
+	assert.deepEqual(normalizeGuardConfig({ enabled: false, bands: [95, "x", 80, 80, 0, 101], resumeMarginSeconds: -1, maxWaitSeconds: 60 }), {
+		enabled: false, bands: [80, 95], resumeMarginSeconds: 300, proximityPct: 10, maxWaitSeconds: 60,
 	});
 });
 
@@ -83,6 +86,53 @@ test("a crossing warns once per window, threshold and reset cycle", () => {
 		{ label: "7d", key: "seven_day", usedPct: 96, resetMs: RESET + 7 * 86_400_000 },
 	])]];
 	assert.equal(pendingWarnings(nextCycle, SONNET, DEFAULT_GUARD_CONFIG, undefined, fired, NOW).length, 1);
+});
+
+test("a reset that drifts between polls is the same cycle; one hours away is not", () => {
+	const fired = new Set<string>();
+	const at = (resetMs: number): Array<[string, LimitSnapshot]> => [["anthropic", snapshot([
+		{ label: "7d", key: "seven_day", usedPct: 91, resetMs },
+	])]];
+	const firedReset = RESET + 806;
+	const first = pendingWarnings(at(firedReset), SONNET, DEFAULT_GUARD_CONFIG, undefined, fired, NOW);
+	assert.equal(first.length, 1);
+	fired.add(first[0].key);
+	// A proxy recomputing the reset shifts it by milliseconds, or a few seconds, each fetch.
+	assert.deepEqual(pendingWarnings(at(RESET + 565), SONNET, DEFAULT_GUARD_CONFIG, undefined, fired, NOW), []);
+	assert.deepEqual(pendingWarnings(at(RESET - 30_000), SONNET, DEFAULT_GUARD_CONFIG, undefined, fired, NOW), []);
+	assert.deepEqual(pendingWarnings(at(firedReset + CYCLE_TOLERANCE_MS), SONNET, DEFAULT_GUARD_CONFIG, undefined, fired, NOW), []);
+	assert.equal(pendingWarnings(at(firedReset + CYCLE_TOLERANCE_MS + 1), SONNET, DEFAULT_GUARD_CONFIG, undefined, fired, NOW).length, 1);
+	// A different threshold, window or provider on the same reset is a different key.
+	const entry: LimitEntry = { label: "7d", key: "seven_day", usedPct: 91, resetMs: RESET + 565 };
+	assert.equal(alreadyFired(fired, "anthropic", entry, 90, "band"), true);
+	assert.equal(alreadyFired(fired, "anthropic", entry, 95, "band"), false);
+	assert.equal(alreadyFired(fired, "anthropic", { ...entry, key: "seven_day_fable" }, 90, "band"), false);
+	assert.equal(alreadyFired(fired, "openai-codex", entry, 90, "band"), false);
+	// Windows without a reset match only keys without one.
+	assert.equal(alreadyFired(fired, "anthropic", { label: "7d", key: "seven_day", usedPct: 91 }, 90, "band"), false);
+	fired.add(warningKey("anthropic", { label: "req", usedPct: 91 }, 90, "band"));
+	assert.equal(alreadyFired(fired, "anthropic", { label: "req", usedPct: 92 }, 90, "band"), true);
+	assert.equal(alreadyFired(fired, "anthropic", { label: "req", usedPct: 92, resetMs: RESET }, 90, "band"), false);
+});
+
+test("wrap-up guidance offers waiting only for a near reset and names model-scoped windows", () => {
+	const far: Warning = {
+		key: "k", provider: "anthropic", threshold: 95, reason: "band", final: true,
+		entry: { label: "7d-fable", key: "seven_day_fable", modelFamily: "fable", usedPct: 96, resetMs: NOW + 40 * 3_600_000 },
+	};
+	const farText = warningMessage(far, DEFAULT_GUARD_CONFIG, NOW, "UTC");
+	assert.match(farText, /Then stop and report; the reset is too far away to wait for\./);
+	assert.doesNotMatch(farText, /sleep/);
+	assert.match(farText, /governs only fable models on anthropic; other models are not affected/);
+	const nearEntry = { ...far.entry, resetMs: NOW + 3_600_000 };
+	const near = warningMessage({ ...far, entry: nearEntry }, DEFAULT_GUARD_CONFIG, NOW, "UTC");
+	assert.match(near, /Then stop and report\. Only if you must continue unattended, wait for the reset with a background job \(`sleep 3900`\)/);
+	const none = warningMessage({ ...far, entry: { label: "7d", usedPct: 96 } }, DEFAULT_GUARD_CONFIG, NOW, "UTC");
+	assert.match(none, /where things stand\. Then stop and report\.$/);
+	// The horizon is configurable.
+	const shortHorizon = warningMessage({ ...far, entry: nearEntry }, { ...DEFAULT_GUARD_CONFIG, maxWaitSeconds: 60 }, NOW, "UTC");
+	assert.match(shortHorizon, /too far away to wait for/);
+	assert.doesNotMatch(shortHorizon, /sleep/);
 });
 
 test("windows for other models, other providers, stale resets and disabled guards stay silent", () => {
@@ -156,8 +206,12 @@ test("reset timing reports ISO, local, seconds and the resume margin", () => {
 	assert.equal(timing?.resetsAt, new Date(RESET).toISOString());
 	assert.equal(timing?.resetsInSeconds, 3600);
 	assert.equal(timing?.resumeAfterSeconds, 3900);
+	assert.equal(timing?.waitable, true);
 	assert.match(timing?.resetsAtLocal ?? "", /UTC$/);
 	assert.equal(resetTiming({ label: "x" }, DEFAULT_GUARD_CONFIG, NOW), undefined);
+	// Days away, or only approximate: not worth waiting for.
+	assert.equal(resetTiming({ label: "7d", usedPct: 1, resetMs: NOW + 7 * 86_400_000 }, DEFAULT_GUARD_CONFIG, NOW, "UTC")?.waitable, false);
+	assert.equal(resetTiming({ label: "", resetMs: RESET, resetApprox: true }, DEFAULT_GUARD_CONFIG, NOW, "UTC")?.waitable, false);
 });
 
 test("the report keeps governing windows by default and explains the gaps", () => {

@@ -148,13 +148,13 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		label: "Usage limits",
 		description:
 			"Report subscription usage limits for the active model: rolling windows (5h, 7d, model-specific weekly), " +
-			"percent used, thresholds, reset time, seconds until reset and a safe resume delay. " +
+			"percent used, thresholds, reset time, seconds until reset, whether the reset is near enough to wait for, and a resume delay. " +
 			"Balances (budget, credits) are reported but never warned on. " +
 			"setBudget records a session budget so a wrap-up warning fires once when that window reaches pct.",
 		promptSnippet: "Check subscription usage limits, resets, and the session usage budget",
 		promptGuidelines: [
 			"Use usage before long autonomous work and whenever the user sets a usage budget (for example: work until 60% of the weekly limit); pass setBudget so a warning fires at that point.",
-			"When usage or a usage warning says a window is exhausted or over budget, wrap up at a good stopping point; to resume automatically, start a background shell job that sleeps for resumeAfterSeconds and continue when it completes.",
+			"When usage or a usage warning says a window is exhausted or over budget, wrap up at a good stopping point and report. Wait for a reset (a background shell job sleeping resumeAfterSeconds) only when the user asked for unattended continuation and the report marks that reset waitable.",
 		],
 		parameters: Type.Object({
 			refresh: Type.Optional(Type.Boolean({ description: "Poll the provider now instead of reading the cached snapshot." })),

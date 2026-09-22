@@ -57,7 +57,9 @@ the package. Removing it does not remove your credentials or change other packag
 - `PI_CODING_AGENT_DIR/pi-extras.json` (default `~/.pi/agent/pi-extras.json`):
   persistent Usage Guard settings under `usageGuard`, written by
   `/usage warnings on|off`. Keys: `enabled`, `bands` (default `[90, 95]`),
-  `resumeMarginSeconds` (default `300`), `proximityPct` (default `10`).
+  `resumeMarginSeconds` (default `300`), `proximityPct` (default `10`),
+  `maxWaitSeconds` (default `21600`; a reset further away is never worth
+  waiting for).
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
   Explicit per-call timeouts are preserved.
 - `PI_CACHE_RETENTION=long`: use the longer cache-warmth indicator window.
@@ -78,15 +80,20 @@ govern the active model count: provider-wide windows always, model-specific ones
 carries that family. Balances (Enterprise spend, prepaid credits) are reported
 but never warned on.
 
-- `usage` tool: percent used, thresholds, reset time, seconds until reset and
-  `resumeAfterSeconds` (reset plus margin) per window. `setBudget` records a
+- `usage` tool: percent used, thresholds, reset time, seconds until reset,
+  `waitable` (near enough to wait for) and `resumeAfterSeconds` (reset plus
+  margin) per window. `setBudget` records a
   session budget ("work until 60% of the weekly limit"); `all` includes other
   providers and non-governing windows.
 - Warnings fire once per window, threshold and reset cycle, at turn end, as a
-  message appended to context (no system-prompt change, no cache miss). At the
-  top band, a budget, or a provider block, the message asks the agent to wrap up
-  and gives the sleep duration for resuming after the reset. Fired keys and the
-  budget persist with the session, so a resumed session does not repeat them.
+  message appended to context (no system-prompt change, no cache miss). Resets
+  reported within ten minutes of each other count as one cycle, since proxies
+  recompute them on every fetch. At the top band, a budget, or a provider
+  block, the message asks the agent to wrap up and report. Waiting for the
+  reset is offered only for unattended work and only when the reset is within
+  `maxWaitSeconds`; a model-scoped window notes that other models are
+  unaffected. Fired keys and the budget persist with the session, so a resumed
+  session does not repeat them.
 - `/usage` queues the current snapshot for the next turn; `/usage budget 7d 60`
   and `/usage budget clear` manage the session budget; `/usage warnings on|off`
   persists the toggle.

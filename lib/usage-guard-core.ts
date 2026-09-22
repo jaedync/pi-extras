@@ -14,6 +14,8 @@ export interface GuardConfig {
 	resumeMarginSeconds: number;
 	/** A window this close below its next threshold makes its provider poll faster. */
 	proximityPct: number;
+	/** A reset further away than this is not worth waiting for; the agent should stop and report. */
+	maxWaitSeconds: number;
 }
 
 export const DEFAULT_GUARD_CONFIG: GuardConfig = {
@@ -21,6 +23,8 @@ export const DEFAULT_GUARD_CONFIG: GuardConfig = {
 	bands: [90, 95],
 	resumeMarginSeconds: 5 * 60,
 	proximityPct: 10,
+	// Covers any five-hour window; weekly resets are days away and never waitable.
+	maxWaitSeconds: 6 * 3600,
 };
 
 /** One window the agent has been told to stay under for this session. */
@@ -54,13 +58,14 @@ function finiteNumbers(value: unknown): number[] {
 export function normalizeGuardConfig(raw: unknown): GuardConfig {
 	const record = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 	const bands = [...new Set(finiteNumbers(record.bands).filter((band) => band > 0 && band <= 100))].sort((a, b) => a - b);
-	const margin = record.resumeMarginSeconds;
-	const proximity = record.proximityPct;
+	const nonNegative = (value: unknown, fallback: number): number =>
+		typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 	return {
 		enabled: record.enabled !== false,
 		bands: bands.length ? bands : DEFAULT_GUARD_CONFIG.bands,
-		resumeMarginSeconds: typeof margin === "number" && margin >= 0 ? margin : DEFAULT_GUARD_CONFIG.resumeMarginSeconds,
-		proximityPct: typeof proximity === "number" && proximity >= 0 ? proximity : DEFAULT_GUARD_CONFIG.proximityPct,
+		resumeMarginSeconds: nonNegative(record.resumeMarginSeconds, DEFAULT_GUARD_CONFIG.resumeMarginSeconds),
+		proximityPct: nonNegative(record.proximityPct, DEFAULT_GUARD_CONFIG.proximityPct),
+		maxWaitSeconds: nonNegative(record.maxWaitSeconds, DEFAULT_GUARD_CONFIG.maxWaitSeconds),
 	};
 }
 
@@ -93,9 +98,42 @@ export function bandFor(pct: number, thresholds: number[]): number | undefined {
 	return thresholds.filter((threshold) => pct >= threshold).sort((a, b) => b - a)[0];
 }
 
+/**
+ * Resets drift by sub-second amounts between polls (a proxy recomputes them
+ * on every fetch), so one cycle is a tolerance around a reset, not an exact
+ * timestamp. Consecutive cycles of any known window are hours apart.
+ */
+export const CYCLE_TOLERANCE_MS = 10 * 60_000;
+
+function cyclePrefix(provider: string, entry: LimitEntry, threshold: number, reason: WarningReason): string {
+	return [provider, entry.key ?? entry.label, reason === "exhausted" ? "x" : threshold].join("|");
+}
+
 /** One warning per provider, window, threshold and reset cycle. */
 export function warningKey(provider: string, entry: LimitEntry, threshold: number, reason: WarningReason): string {
-	return [provider, entry.key ?? entry.label, reason === "exhausted" ? "x" : threshold, entry.resetMs ?? "none"].join("|");
+	return `${cyclePrefix(provider, entry, threshold, reason)}|${entry.resetMs ?? "none"}`;
+}
+
+/** True when a fired key names the same window, threshold and a reset within tolerance. */
+export function alreadyFired(
+	fired: ReadonlySet<string>,
+	provider: string,
+	entry: LimitEntry,
+	threshold: number,
+	reason: WarningReason,
+): boolean {
+	const prefix = `${cyclePrefix(provider, entry, threshold, reason)}|`;
+	for (const key of fired) {
+		if (!key.startsWith(prefix)) continue;
+		const tail = key.slice(prefix.length);
+		if (tail === "none" || entry.resetMs === undefined) {
+			if (tail === "none" && entry.resetMs === undefined) return true;
+			continue;
+		}
+		const firedReset = Number(tail);
+		if (Number.isFinite(firedReset) && Math.abs(firedReset - entry.resetMs) <= CYCLE_TOLERANCE_MS) return true;
+	}
+	return false;
 }
 
 function activeWindows(
@@ -144,9 +182,8 @@ export function pendingWarnings(
 	for (const { provider, entry } of activeWindows(snapshots, model, now)) {
 		const hit = classify(entry, config, budget);
 		if (!hit) continue;
-		const key = warningKey(provider, entry, hit.threshold, hit.reason);
-		if (fired.has(key)) continue;
-		warnings.push({ key, provider, entry, ...hit });
+		if (alreadyFired(fired, provider, entry, hit.threshold, hit.reason)) continue;
+		warnings.push({ key: warningKey(provider, entry, hit.threshold, hit.reason), provider, entry, ...hit });
 	}
 	return warnings;
 }
@@ -180,6 +217,8 @@ export interface ResetTiming {
 	resetsAtLocal: string;
 	resetsInSeconds: number;
 	resumeAfterSeconds: number;
+	/** Near enough (and exact enough) that waiting for it is a reasonable option. */
+	waitable: boolean;
 	resetApprox?: boolean;
 }
 
@@ -191,8 +230,24 @@ export function resetTiming(entry: LimitEntry, config: GuardConfig, now: number,
 		resetsAtLocal: localTime(entry.resetMs, timeZone),
 		resetsInSeconds,
 		resumeAfterSeconds: resetsInSeconds + config.resumeMarginSeconds,
+		waitable: !entry.resetApprox && resetsInSeconds <= config.maxWaitSeconds,
 		...(entry.resetApprox ? { resetApprox: true } : {}),
 	};
+}
+
+/**
+ * What follows the wrap-up. Waiting is offered only when the reset is near
+ * and only for unattended work; a days-away reset is never worth sleeping for.
+ */
+function continuation(warning: Warning, timing: ResetTiming | undefined): string {
+	const scoped = warning.entry.modelFamily
+		? ` This window governs only ${warning.entry.modelFamily} models on ${warning.provider}; other models are not affected by it.`
+		: "";
+	if (!timing) return ` Then stop and report.${scoped}`;
+	if (timing.waitable) {
+		return ` Then stop and report. Only if you must continue unattended, wait for the reset with a background job (\`sleep ${timing.resumeAfterSeconds}\`) and resume when it completes.${scoped}`;
+	}
+	return ` Then stop and report; the reset is too far away to wait for.${scoped}`;
 }
 
 function windowName(provider: string, entry: LimitEntry): string {
@@ -219,10 +274,7 @@ export function warningMessage(warning: Warning, config: GuardConfig, now: numbe
 	if (!final) {
 		return `Usage notice: ${cause}${reset}${codexNote} Avoid starting large new work; prefer finishing what is in progress. Use the usage tool for details.`;
 	}
-	const resume = timing
-		? ` To continue autonomously after the reset, start a background shell job running \`sleep ${timing.resumeAfterSeconds}\` and resume when it completes.`
-		: "";
-	return `Usage warning: ${cause}${reset}${codexNote} Wrap up at a good stopping point now: finish the current step, commit or record state, and summarize where things stand.${resume}`;
+	return `Usage warning: ${cause}${reset}${codexNote} Wrap up at a good stopping point now: finish the current step, commit or record state, and summarize where things stand.${continuation(warning, timing)}`;
 }
 
 export interface UsageReportLimit {

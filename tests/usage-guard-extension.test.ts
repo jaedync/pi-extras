@@ -138,6 +138,8 @@ test("the tool reports governing windows, refreshes on request and honours all",
 	assert.deepEqual(report.limits.map((limit: { window: string }) => limit.window), ["5h", "7d", "7d-fable"]);
 	assert.equal(report.limits[2].usedPct, 62);
 	assert.equal(report.limits[2].reset.resumeAfterSeconds, 3600 + 86_400 + 300);
+	assert.equal(report.limits[2].reset.waitable, false);
+	assert.equal(report.limits[0].reset.waitable, true);
 	assert.equal(report.warnings, "on");
 	store.set("openai-codex", { entries: [{ label: "7d", key: "primary", usedPct: 100, allowed: true, resetMs: RESET }], atMs: NOW, source: "poll" });
 	const everything = JSON.parse((await pi.tool!.execute("t2", { all: true }, undefined, undefined, ctx)).content[0].text);
@@ -177,7 +179,7 @@ test("config helpers preserve unrelated keys and honour the env override", () =>
 	saveGuardConfig({ enabled: false }, file);
 	const reread = JSON.parse(readFileSync(file, "utf8"));
 	assert.deepEqual(reread.other, { keep: true });
-	assert.deepEqual(reread.usageGuard, { enabled: false, bands: [80, 90], resumeMarginSeconds: 300, proximityPct: 10 });
+	assert.deepEqual(reread.usageGuard, { enabled: false, bands: [80, 90], resumeMarginSeconds: 300, proximityPct: 10, maxWaitSeconds: 21_600 });
 	assert.equal(loadGuardConfig(file, { PI_EXTRAS_USAGE_GUARD: "0" }).enabled, false);
 	saveGuardConfig({ enabled: true }, file);
 	assert.equal(loadGuardConfig(file, { PI_EXTRAS_USAGE_GUARD: "0" }).enabled, false);
