@@ -23,7 +23,7 @@ can still conflict.
 | Component | Behavior |
 | --- | --- |
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits, optional linked subagent usage |
-| Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings near a limit or a session budget |
+| Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
 | Phase Spinner | Working phases, tokens/sec, time to first token, and elapsed time in the editor border |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
@@ -52,14 +52,13 @@ the package. Removing it does not remove your credentials or change other packag
   to the system timezone.
 - `STATUS_PLUS_POLL_LIMITS=0`: disable authenticated quota polling while retaining
   recorded usage and response-header limits. `PI_OFFLINE` also suppresses polling.
-- `PI_EXTRAS_USAGE_GUARD=0`: silence usage warnings for one run. See below for
-  the persistent setting.
+- `PI_EXTRAS_USAGE_GUARD=1` or `0`: turn band warnings on or off for one run.
+  See below for the persistent setting.
 - `PI_CODING_AGENT_DIR/pi-extras.json` (default `~/.pi/agent/pi-extras.json`):
   persistent Usage Guard settings under `usageGuard`, written by
-  `/usage warnings on|off`. Keys: `enabled`, `bands` (default `[90, 95]`),
-  `resumeMarginSeconds` (default `300`), `proximityPct` (default `10`),
-  `maxWaitSeconds` (default `21600`; a reset further away is never worth
-  waiting for).
+  `/usage warnings on|off`. Keys: `enabled` (default `false`), `bands`
+  (default `[90, 95]`), `resumeMarginSeconds` (default `300`), `proximityPct`
+  (default `10`).
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
   Explicit per-call timeouts are preserved.
 - `PI_CACHE_RETENTION=long`: use the longer cache-warmth indicator window.
@@ -80,20 +79,19 @@ govern the active model count: provider-wide windows always, model-specific ones
 carries that family. Balances (Enterprise spend, prepaid credits) and per-minute
 rate limits taken from response headers are reported but never warned on.
 
-- `usage` tool: percent used, thresholds, reset time, seconds until reset,
-  `waitable` (near enough to wait for) and `resumeAfterSeconds` (reset plus
-  margin) per window. `setBudget` records a
+- `usage` tool: percent used, thresholds, reset time, seconds until reset and
+  `resumeAfterSeconds` (reset plus margin) per window. `setBudget` records a
   session budget ("work until 60% of the weekly limit"); `all` includes other
   providers and non-governing windows.
-- Warnings fire once per window, threshold and reset cycle, at turn end, as a
-  message appended to context (no system-prompt change, no cache miss). Resets
-  reported within ten minutes of each other count as one cycle, since proxies
-  recompute them on every fetch. At the top band, a budget, or a provider
-  block, the message asks the agent to wrap up and report. Waiting for the
-  reset is offered only for unattended work and only when the reset is within
-  `maxWaitSeconds`; a model-scoped window notes that other models are
-  unaffected. Fired keys and the budget persist with the session, so a resumed
-  session does not repeat them.
+- Warnings are off by default: only a session budget warns, once, when its
+  window is reached. `/usage warnings on` adds band warnings (90 and 95 by
+  default) and provider blocks. Each fires once per window, threshold and reset
+  cycle, at turn end, as a message appended to context (no system-prompt
+  change, no cache miss). Resets reported within ten minutes of each other
+  count as one cycle, since proxies recompute them on every fetch. The final
+  message asks the agent to wrap up and report; a model-scoped window notes
+  that other models are unaffected. Fired keys and the budget persist with the
+  session, so a resumed session does not repeat them.
 - `/usage` queues the current snapshot for the next turn; `/usage budget 7d 60`
   and `/usage budget clear` manage the session budget; `/usage warnings on|off`
   persists the toggle.

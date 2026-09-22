@@ -52,9 +52,10 @@ function anthropicSnapshot(store: LimitStore, sevenPct: number, fablePct = 10): 
 	store.set("anthropic", { entries, atMs: NOW - 5_000, source: "poll" });
 }
 
-function setup(model = { provider: "anthropic", id: "claude-sonnet-5" }, idle = true) {
+function setup(model = { provider: "anthropic", id: "claude-sonnet-5" }, idle = true, warnings = true) {
 	const dir = mkdtempSync(join(tmpdir(), "usage-guard-"));
 	const configFile = join(dir, "pi-extras.json");
+	if (warnings) saveGuardConfig({ enabled: true }, configFile);
 	const store = createLimitStore();
 	const pi = fakePi();
 	usageGuard(pi as never, { store, configFile, now: () => NOW });
@@ -138,8 +139,6 @@ test("the tool reports governing windows, refreshes on request and honours all",
 	assert.deepEqual(report.limits.map((limit: { window: string }) => limit.window), ["5h", "7d", "7d-fable"]);
 	assert.equal(report.limits[2].usedPct, 62);
 	assert.equal(report.limits[2].reset.resumeAfterSeconds, 3600 + 86_400 + 300);
-	assert.equal(report.limits[2].reset.waitable, false);
-	assert.equal(report.limits[0].reset.waitable, true);
 	assert.equal(report.warnings, "on");
 	store.set("openai-codex", { entries: [{ label: "7d", key: "primary", usedPct: 100, allowed: true, resetMs: RESET }], atMs: NOW, source: "poll" });
 	const everything = JSON.parse((await pi.tool!.execute("t2", { all: true }, undefined, undefined, ctx)).content[0].text);
@@ -171,7 +170,7 @@ test("/usage injects a snapshot and toggles warnings in the config file", async 
 test("config helpers preserve unrelated keys and honour the env override", () => {
 	const dir = mkdtempSync(join(tmpdir(), "usage-guard-"));
 	const file = join(dir, "pi-extras.json");
-	assert.equal(loadGuardConfig(file).enabled, true);
+	assert.equal(loadGuardConfig(file).enabled, false);
 	saveGuardConfig({ bands: [80, 90] }, file);
 	const written = JSON.parse(readFileSync(file, "utf8"));
 	written.other = { keep: true };
@@ -179,11 +178,32 @@ test("config helpers preserve unrelated keys and honour the env override", () =>
 	saveGuardConfig({ enabled: false }, file);
 	const reread = JSON.parse(readFileSync(file, "utf8"));
 	assert.deepEqual(reread.other, { keep: true });
-	assert.deepEqual(reread.usageGuard, { enabled: false, bands: [80, 90], resumeMarginSeconds: 300, proximityPct: 10, maxWaitSeconds: 21_600 });
+	assert.deepEqual(reread.usageGuard, { enabled: false, bands: [80, 90], resumeMarginSeconds: 300, proximityPct: 10 });
 	assert.equal(loadGuardConfig(file, { PI_EXTRAS_USAGE_GUARD: "0" }).enabled, false);
+	assert.equal(loadGuardConfig(file, { PI_EXTRAS_USAGE_GUARD: "1" }).enabled, true);
 	saveGuardConfig({ enabled: true }, file);
 	assert.equal(loadGuardConfig(file, { PI_EXTRAS_USAGE_GUARD: "0" }).enabled, false);
 	assert.equal(loadGuardConfig(file, {}).enabled, true);
+});
+
+test("with the default config, bands stay silent but a session budget still warns once", async () => {
+	const { pi, store, ctx } = setup(undefined, true, false);
+	await pi.handlers.get("session_start")!({}, ctx);
+	anthropicSnapshot(store, 96);
+	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, ctx);
+	assert.deepEqual(pi.sent, []);
+	assert.equal(store.isHot("anthropic"), false);
+	const result = await pi.tool!.execute("t1", { setBudget: { window: "7d", pct: 60 } }, undefined, undefined, ctx);
+	const report = JSON.parse(result.content[0].text);
+	assert.equal(report.warnings, "off");
+	assert.equal(report.limits[1].budgetPct, 60);
+	assert.deepEqual(report.limits[0].thresholds, []);
+	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, ctx);
+	assert.equal(pi.sent.length, 1);
+	assert.match(pi.sent[0].content, /reached the session budget: 96% used, budget 60%/);
+	assert.doesNotMatch(pi.sent[0].content, /sleep/);
+	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, ctx);
+	assert.equal(pi.sent.length, 1);
 });
 
 test("budget arguments parse strictly", () => {

@@ -50,10 +50,13 @@ function readConfigFile(file: string): Record<string, unknown> {
 	}
 }
 
-/** `PI_EXTRAS_USAGE_GUARD=0` silences warnings for one run without touching the file. */
+/** `PI_EXTRAS_USAGE_GUARD=1` or `0` turns band warnings on or off for one run without touching the file. */
 export function loadGuardConfig(file = CONFIG_FILE, env: NodeJS.ProcessEnv = process.env): GuardConfig {
 	const config = normalizeGuardConfig(readConfigFile(file)[CONFIG_KEY]);
-	return env.PI_EXTRAS_USAGE_GUARD === "0" ? { ...config, enabled: false } : config;
+	const override = env.PI_EXTRAS_USAGE_GUARD;
+	if (override === "0") return { ...config, enabled: false };
+	if (override === "1") return { ...config, enabled: true };
+	return config;
 }
 
 /** Merge a patch into the guard section, preserving any other keys in the file. */
@@ -148,13 +151,13 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		label: "Usage limits",
 		description:
 			"Report subscription usage limits for the active model: rolling windows (5h, 7d, model-specific weekly), " +
-			"percent used, thresholds, reset time, seconds until reset, whether the reset is near enough to wait for, and a resume delay. " +
+			"percent used, thresholds, reset time, seconds until reset and a resume delay. " +
 			"Balances (budget, credits) are reported but never warned on. " +
 			"setBudget records a session budget so a wrap-up warning fires once when that window reaches pct.",
 		promptSnippet: "Check subscription usage limits, resets, and the session usage budget",
 		promptGuidelines: [
 			"Use usage before long autonomous work and whenever the user sets a usage budget (for example: work until 60% of the weekly limit); pass setBudget so a warning fires at that point.",
-			"When usage or a usage warning says a window is exhausted or over budget, wrap up at a good stopping point and report. Wait for a reset (a background shell job sleeping resumeAfterSeconds) only when the user asked for unattended continuation and the report marks that reset waitable.",
+			"When usage or a usage warning says a window is exhausted or over budget, wrap up at a good stopping point and report. Only if you must continue unattended, wait resumeAfterSeconds (a background shell job) before resuming after the reset.",
 		],
 		parameters: Type.Object({
 			refresh: Type.Optional(Type.Boolean({ description: "Poll the provider now instead of reading the cached snapshot." })),

@@ -7,24 +7,21 @@ import type { LimitSnapshot } from "./limit-store.ts";
 import { STATUS_TIME_ZONE, formatDuration, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
 
 export interface GuardConfig {
+	/** Band and provider-block warnings. Off by default; a session budget always warns. */
 	enabled: boolean;
 	/** Ascending percentages; the last one is the wrap-up warning. */
 	bands: number[];
-	/** Added to the reset time when suggesting when to resume autonomously. */
+	/** Added to the reset time when reporting when work could resume. */
 	resumeMarginSeconds: number;
 	/** A window this close below its next threshold makes its provider poll faster. */
 	proximityPct: number;
-	/** A reset further away than this is not worth waiting for; the agent should stop and report. */
-	maxWaitSeconds: number;
 }
 
 export const DEFAULT_GUARD_CONFIG: GuardConfig = {
-	enabled: true,
+	enabled: false,
 	bands: [90, 95],
 	resumeMarginSeconds: 5 * 60,
 	proximityPct: 10,
-	// Covers any five-hour window; weekly resets are days away and never waitable.
-	maxWaitSeconds: 6 * 3600,
 };
 
 /** One window the agent has been told to stay under for this session. */
@@ -61,11 +58,10 @@ export function normalizeGuardConfig(raw: unknown): GuardConfig {
 	const nonNegative = (value: unknown, fallback: number): number =>
 		typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 	return {
-		enabled: record.enabled !== false,
+		enabled: record.enabled === true,
 		bands: bands.length ? bands : DEFAULT_GUARD_CONFIG.bands,
 		resumeMarginSeconds: nonNegative(record.resumeMarginSeconds, DEFAULT_GUARD_CONFIG.resumeMarginSeconds),
 		proximityPct: nonNegative(record.proximityPct, DEFAULT_GUARD_CONFIG.proximityPct),
-		maxWaitSeconds: nonNegative(record.maxWaitSeconds, DEFAULT_GUARD_CONFIG.maxWaitSeconds),
 	};
 }
 
@@ -88,9 +84,10 @@ export function budgetMatches(entry: LimitEntry, budget: SessionBudget | undefin
 	return entry.label.toLowerCase() === wanted || entry.key?.toLowerCase() === wanted;
 }
 
-/** A session budget replaces the configured bands for the window it names. */
+/** A session budget replaces the configured bands for the window it names, and applies even with warnings off. */
 export function thresholdsFor(entry: LimitEntry, config: GuardConfig, budget: SessionBudget | undefined): number[] {
-	return budgetMatches(entry, budget) ? [budget!.pct] : config.bands;
+	if (budgetMatches(entry, budget)) return [budget!.pct];
+	return config.enabled ? config.bands : [];
 }
 
 /** Highest threshold at or below the percentage. */
@@ -161,6 +158,7 @@ function classify(
 	budget: SessionBudget | undefined,
 ): { threshold: number; reason: WarningReason; final: boolean } | undefined {
 	const thresholds = thresholdsFor(entry, config, budget);
+	if (thresholds.length === 0) return undefined;
 	if (entry.exhausted) return { threshold: 100, reason: "exhausted", final: true };
 	const threshold = bandFor(entry.usedPct as number, thresholds);
 	if (threshold === undefined) return undefined;
@@ -177,7 +175,6 @@ export function pendingWarnings(
 	fired: ReadonlySet<string>,
 	now: number,
 ): Warning[] {
-	if (!config.enabled) return [];
 	const warnings: Warning[] = [];
 	for (const { provider, entry } of activeWindows(snapshots, model, now)) {
 		const hit = classify(entry, config, budget);
@@ -197,7 +194,6 @@ export function hotProviders(
 	now: number,
 ): Set<string> {
 	const hot = new Set<string>();
-	if (!config.enabled) return hot;
 	for (const { provider, entry } of activeWindows(snapshots, model, now)) {
 		const pct = entry.usedPct as number;
 		const next = thresholdsFor(entry, config, budget).filter((threshold) => threshold > pct).sort((a, b) => a - b)[0];
@@ -217,8 +213,6 @@ export interface ResetTiming {
 	resetsAtLocal: string;
 	resetsInSeconds: number;
 	resumeAfterSeconds: number;
-	/** Near enough (and exact enough) that waiting for it is a reasonable option. */
-	waitable: boolean;
 	resetApprox?: boolean;
 }
 
@@ -230,24 +224,16 @@ export function resetTiming(entry: LimitEntry, config: GuardConfig, now: number,
 		resetsAtLocal: localTime(entry.resetMs, timeZone),
 		resetsInSeconds,
 		resumeAfterSeconds: resetsInSeconds + config.resumeMarginSeconds,
-		waitable: !entry.resetApprox && resetsInSeconds <= config.maxWaitSeconds,
 		...(entry.resetApprox ? { resetApprox: true } : {}),
 	};
 }
 
-/**
- * What follows the wrap-up. Waiting is offered only when the reset is near
- * and only for unattended work; a days-away reset is never worth sleeping for.
- */
-function continuation(warning: Warning, timing: ResetTiming | undefined): string {
+/** What follows the wrap-up: stop. A model-scoped window says which models it does not govern. */
+function continuation(warning: Warning): string {
 	const scoped = warning.entry.modelFamily
 		? ` This window governs only ${warning.entry.modelFamily} models on ${warning.provider}; other models are not affected by it.`
 		: "";
-	if (!timing) return ` Then stop and report.${scoped}`;
-	if (timing.waitable) {
-		return ` Then stop and report. Only if you must continue unattended, wait for the reset with a background job (\`sleep ${timing.resumeAfterSeconds}\`) and resume when it completes.${scoped}`;
-	}
-	return ` Then stop and report; the reset is too far away to wait for.${scoped}`;
+	return ` Then stop and report.${scoped}`;
 }
 
 function windowName(provider: string, entry: LimitEntry): string {
@@ -274,7 +260,7 @@ export function warningMessage(warning: Warning, config: GuardConfig, now: numbe
 	if (!final) {
 		return `Usage notice: ${cause}${reset}${codexNote} Avoid starting large new work; prefer finishing what is in progress. Use the usage tool for details.`;
 	}
-	return `Usage warning: ${cause}${reset}${codexNote} Wrap up at a good stopping point now: finish the current step, commit or record state, and summarize where things stand.${continuation(warning, timing)}`;
+	return `Usage warning: ${cause}${reset}${codexNote} Wrap up at a good stopping point now: finish the current step, commit or record state, and summarize where things stand.${continuation(warning)}`;
 }
 
 export interface UsageReportLimit {
