@@ -22,18 +22,22 @@ import {
 } from "@earendil-works/pi-tui";
 import {
 	formatElapsed,
+	parseStatusMessage,
 	phaseAfterFirstTokenWait,
 	renderLastRunBorder,
 	renderPhaseBorder,
 	summarizeRunningTools,
 	type PhaseAlertTone,
+	type PhaseBorderPaint,
 } from "../lib/phase-status.ts";
 
 import { emptyRunMetrics, updateRunMetrics } from "../lib/phase-metrics.ts";
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 type VisualPhase = ActivePhase | "slow_api" | "stalled";
-type ThemeTone = "dim" | "thinkingLow" | "accent" | "thinkingMedium" | "thinkingMinimal" | "mdHeading" | "toolOutput" | "warning" | "error";
+type ThemeTone = "dim" | "thinkingLow" | "accent" | "thinkingMedium" | "thinkingMinimal" | "mdHeading" | "mdLink" | "toolOutput" | "warning" | "error";
+type StatusIndicator = NonNullable<Parameters<CustomEditor["setWorkingStatusIndicator"]>[0]>;
+type StatusKind = Exclude<StatusIndicator["kind"], "working">;
 
 interface PhaseStyle {
 	label: string;
@@ -99,6 +103,49 @@ const PHASE_STYLES: Record<VisualPhase, PhaseStyle> = {
 	},
 };
 
+interface StatusStyle {
+	tone: ThemeTone;
+	alertTone: PhaseAlertTone;
+	frames: readonly string[];
+	intervalMs: number;
+}
+
+// Pi's non-working statuses (compaction, retry, branch summary) take the phase
+// slot. Pi supplies the words; each status gets a spinner that acts out the event.
+const STATUS_STYLES: Record<StatusKind, StatusStyle> = {
+	// A press squeezing down, then releasing.
+	compaction: {
+		tone: "accent",
+		alertTone: "phase",
+		frames: ["⣿", "⣶", "⣤", "⣀", "⣀", "⣤", "⣶", "⣿"],
+		intervalMs: 110,
+	},
+	// A counter-clockwise lap: rewinding for another attempt.
+	retry: {
+		tone: "warning",
+		alertTone: "warning",
+		frames: ["⠃", "⠆", "⡄", "⣀", "⢠", "⠰", "⠘", "⠉"],
+		intervalMs: 90,
+	},
+	// A stem that grows, then sprouts branches down its side.
+	branchSummary: {
+		tone: "mdLink",
+		alertTone: "phase",
+		frames: ["⡀", "⡄", "⡆", "⡇", "⡏", "⡗", "⡧", "⣇"],
+		intervalMs: 120,
+	},
+};
+
+// Statuses added by future Pi versions still render, with a generic spinner.
+const FALLBACK_STATUS_STYLE: StatusStyle = {
+	tone: "accent",
+	alertTone: "phase",
+	frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+	intervalMs: 80,
+};
+
+// Wide enough that Pi's status text never wraps or truncates while it is read.
+const INDICATOR_TEXT_WIDTH = 1_000;
 const DISPLAY_REFRESH_MS = 100;
 const DEBUG_HEARTBEAT_MS = 5_000;
 const DEBUG_LOG = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "phase-spinner-debug.jsonl");
@@ -111,8 +158,28 @@ interface VisualState {
 	alertTone: PhaseAlertTone;
 }
 
+interface StatusView {
+	spinner: string;
+	elapsedMs: number;
+	label: string;
+	detail?: string;
+	style: StatusStyle;
+}
+
 function latestToolName(message: { content: readonly { type: string; name?: string }[] }): string | undefined {
 	return [...message.content].reverse().find((part) => part.type === "toolCall" && part.name)?.name;
+}
+
+/** Pi's status text without Pi's own spinner frame. */
+function indicatorText(indicator: StatusIndicator): string {
+	const line = stripTerminalSequences(indicator.renderInBorder(INDICATOR_TEXT_WIDTH));
+	const spinner = stripTerminalSequences(indicator.renderSpinnerInBorder(INDICATOR_TEXT_WIDTH));
+	return spinner && line.startsWith(spinner) ? line.slice(spinner.length) : line;
+}
+
+function joinDetails(...details: (string | undefined)[]): string | undefined {
+	const present = details.filter((detail): detail is string => Boolean(detail));
+	return present.length > 0 ? present.join(" ") : undefined;
 }
 
 export default function phaseSpinner(pi: ExtensionAPI): void {
@@ -131,6 +198,65 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	let lastTotalElapsedMs: number | undefined;
 	let previousEditorFactory: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
 	let installedEditorFactory: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
+	let statusIndicator: StatusIndicator | undefined;
+	let statusShownAt = 0;
+	// First sighting per status kind, so the timer spans a whole event (every retry attempt).
+	let statusEpisodes = new Map<string, number>();
+	let lastRequestAt = Number.NEGATIVE_INFINITY;
+
+	function ensureTimer(): void {
+		if (!timer) timer = setInterval(() => tick(), DISPLAY_REFRESH_MS);
+	}
+
+	function releaseTimer(): void {
+		if (!timer || active || statusIndicator) return;
+		clearInterval(timer);
+		timer = undefined;
+	}
+
+	function noteStatusIndicator(indicator: StatusIndicator | undefined): void {
+		if (!indicator || indicator.kind === "working") {
+			statusIndicator = undefined;
+			// Pi clears the slot before every replacement; only a clear that sticks ends the event.
+			queueMicrotask(() => {
+				if (statusIndicator) return;
+				statusEpisodes = new Map();
+				releaseTimer();
+			});
+			activeTui?.requestRender();
+			return;
+		}
+		const now = performance.now();
+		statusIndicator = indicator;
+		statusShownAt = now;
+		if (!statusEpisodes.has(indicator.kind)) statusEpisodes = new Map(statusEpisodes).set(indicator.kind, now);
+		ensureTimer();
+		activeTui?.requestRender();
+	}
+
+	function resetStatus(): void {
+		statusIndicator = undefined;
+		statusEpisodes = new Map();
+		lastRequestAt = Number.NEGATIVE_INFINITY;
+	}
+
+	function statusView(now: number): StatusView | undefined {
+		const indicator = statusIndicator;
+		if (!indicator) return undefined;
+		// Pi keeps the retry status up through the retried request; live phases are more useful there.
+		if (indicator.kind === "retry" && lastRequestAt >= statusShownAt) return undefined;
+		const style = (STATUS_STYLES as Partial<Record<string, StatusStyle>>)[indicator.kind] ?? FALLBACK_STATUS_STYLE;
+		const elapsedMs = Math.max(0, now - (statusEpisodes.get(indicator.kind) ?? statusShownAt));
+		const { label, detail } = parseStatusMessage(indicatorText(indicator));
+		const spinner = style.frames[Math.floor(elapsedMs / style.intervalMs) % style.frames.length] ?? "⠿";
+		return { spinner, elapsedMs, label, detail, style };
+	}
+
+	function retryDetail(): string | undefined {
+		if (statusIndicator?.kind !== "retry") return undefined;
+		const { attempt } = parseStatusMessage(indicatorText(statusIndicator));
+		return attempt ? `retry ${attempt}` : undefined;
+	}
 
 	function visualState(now: number): VisualState {
 		const elapsedMs = now - phaseStartedAt;
@@ -175,14 +301,17 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	}
 
 	function tick(now = performance.now()): void {
-		if (!active || !currentContext) return;
-		const state = visualState(now);
-		if (renderedPhase !== state.phase) {
-			const previousVisualPhase = renderedPhase;
-			renderedPhase = state.phase;
-			debugState("visual_phase", currentContext, now, { previousVisualPhase });
+		if (active && currentContext) {
+			const state = visualState(now);
+			if (renderedPhase !== state.phase) {
+				const previousVisualPhase = renderedPhase;
+				renderedPhase = state.phase;
+				debugState("visual_phase", currentContext, now, { previousVisualPhase });
+			}
+			if (now - lastDebugAt >= DEBUG_HEARTBEAT_MS) debugState("heartbeat", currentContext, now);
+		} else if (!statusIndicator) {
+			return;
 		}
-		if (now - lastDebugAt >= DEBUG_HEARTBEAT_MS) debugState("heartbeat", currentContext, now);
 		activeTui?.requestRender();
 	}
 
@@ -215,8 +344,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			active = true;
 			agentStartedAt = now;
 			lastDebugAt = now;
-			if (timer) clearInterval(timer);
-			timer = setInterval(() => tick(), DISPLAY_REFRESH_MS);
+			ensureTimer();
 		}
 		debugState("agent_start", ctx, now, { resumedActiveRun: active && agentStartedAt !== now });
 		tick(now);
@@ -231,12 +359,12 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		runningTools = new Map();
 		pendingToolName = undefined;
 		renderedPhase = undefined;
-		if (timer) clearInterval(timer);
-		timer = undefined;
+		releaseTimer();
 		activeTui?.requestRender();
 	}
 
 	pi.on("session_start", (_event, ctx) => {
+		resetStatus();
 		stop();
 		const currentFactory = ctx.ui.getEditorComponent();
 		if (currentFactory !== installedEditorFactory) previousEditorFactory = currentFactory;
@@ -268,30 +396,57 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 				this.base.onExtensionShortcut = this.onExtensionShortcut;
 			}
 
-			private activeBorder(width: number, hiddenLineCount: number): string {
-				const now = performance.now();
-				const state = visualState(now);
-				const frameIndex = Math.floor(state.elapsedMs / state.style.intervalMs) % state.style.frames.length;
+			setWorkingStatusIndicator(indicator: StatusIndicator | undefined): void {
+				super.setWorkingStatusIndicator(indicator);
+				// A wrapped editor (voice) may embed status too; keep it in sync.
+				const forward = this.base as EditorComponent & { setWorkingStatusIndicator?: (indicator: StatusIndicator | undefined) => void };
+				forward.setWorkingStatusIndicator?.(indicator);
+				noteStatusIndicator(indicator);
+			}
+
+			private paint(tone: ThemeTone): PhaseBorderPaint {
 				const thm = currentContext?.ui.theme ?? ctx.ui.theme;
-				return renderPhaseBorder({
-					spinner: state.style.frames[frameIndex] ?? "⠿",
-					phaseElapsedMs: state.elapsedMs,
-					totalElapsedMs: now - agentStartedAt,
-					metrics,
-					label: state.style.label,
-					detail: currentContext ? phaseDetail(currentContext, state) : undefined,
-					tone: state.alertTone,
-					hiddenLineCount,
-				}, width, {
+				return {
 					border: (text) => this.borderColor(text),
-					phase: (text) => thm.fg(state.style.tone, text),
+					phase: (text) => thm.fg(tone, text),
 					dim: (text) => thm.fg("dim", text),
 					total: (text) => thm.fg("muted", text),
 					warning: (text) => thm.fg("warning", text),
 					error: (text) => thm.fg("error", text),
 					measure: visibleWidth,
 					truncate: (text, maxWidth) => truncateToWidth(text, maxWidth, ""),
-				});
+				};
+			}
+
+			private activeBorder(width: number, hiddenLineCount: number): string {
+				const now = performance.now();
+				const state = visualState(now);
+				const frameIndex = Math.floor(state.elapsedMs / state.style.intervalMs) % state.style.frames.length;
+				return renderPhaseBorder({
+					spinner: state.style.frames[frameIndex] ?? "⠿",
+					phaseElapsedMs: state.elapsedMs,
+					totalElapsedMs: now - agentStartedAt,
+					metrics,
+					label: state.style.label,
+					detail: currentContext ? joinDetails(phaseDetail(currentContext, state), retryDetail()) : undefined,
+					tone: state.alertTone,
+					hiddenLineCount,
+				}, width, this.paint(state.style.tone));
+			}
+
+			private statusBorder(status: StatusView, width: number, hiddenLineCount: number): string {
+				// Idle statuses (manual /compact) have no run span; the event is the whole span.
+				const totalElapsedMs = active ? performance.now() - agentStartedAt : status.elapsedMs;
+				return renderPhaseBorder({
+					spinner: status.spinner,
+					phaseElapsedMs: status.elapsedMs,
+					totalElapsedMs,
+					metrics: active ? metrics : undefined,
+					label: status.label,
+					detail: status.detail,
+					tone: status.style.alertTone,
+					hiddenLineCount,
+				}, width, this.paint(status.style.tone));
 			}
 
 			render(width: number): string[] {
@@ -300,21 +455,13 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 				if (lines.length === 0) return lines;
 				const match = stripTerminalSequences(lines[0] ?? "").match(/↑\s*(\d+)/);
 				const hiddenLineCount = match ? Number.parseInt(match[1] ?? "0", 10) : 0;
+				const status = statusView(performance.now());
+				if (status) return [this.statusBorder(status, width, hiddenLineCount), ...lines.slice(1)];
 				if (active && currentContext) {
 					return [this.activeBorder(width, hiddenLineCount), ...lines.slice(1)];
 				}
 				if (lastTotalElapsedMs === undefined) return lines;
-				const thm = ctx.ui.theme;
-				const completedBorder = renderLastRunBorder(lastTotalElapsedMs, width, {
-					border: (text) => this.borderColor(text),
-					phase: (text) => thm.fg("accent", text),
-					dim: (text) => thm.fg("dim", text),
-					total: (text) => thm.fg("muted", text),
-					warning: (text) => thm.fg("warning", text),
-					error: (text) => thm.fg("error", text),
-					measure: visibleWidth,
-					truncate: (text, maxWidth) => truncateToWidth(text, maxWidth, ""),
-				}, hiddenLineCount, metrics);
+				const completedBorder = renderLastRunBorder(lastTotalElapsedMs, width, this.paint("accent"), hiddenLineCount, metrics);
 				return [completedBorder, ...lines.slice(1)];
 			}
 
@@ -357,7 +504,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	pi.on("turn_start", (_event, ctx) => setPhase("prep", ctx, "turn_start", true));
 	pi.on("context", (_event, ctx) => setPhase("prep", ctx, "context", true));
 	pi.on("before_provider_request", (_event, ctx) => {
-		metrics = updateRunMetrics(metrics, { type: "request", at: performance.now() });
+		lastRequestAt = performance.now();
+		metrics = updateRunMetrics(metrics, { type: "request", at: lastRequestAt });
 		setPhase("api", ctx, "before_provider_request", true);
 	});
 	pi.on("after_provider_response", (event, ctx) => setPhase("first_token", ctx, "after_provider_response", true, { status: event.status }));
@@ -413,6 +561,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (active) debugState("session_shutdown", ctx);
+		resetStatus();
 		stop();
 		activeTui = undefined;
 		if (ctx.ui.getEditorComponent() === installedEditorFactory) {

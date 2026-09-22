@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.2.1 - 2026-09-22
+
+### Fixed
+
+- Phase Spinner shows Pi's compaction, retry and branch-summary statuses in
+  the editor border again. They were hidden because the spinner embeds Pi's
+  status indicators but only drew its own phases. Each status gets its own
+  spinner and an event timer; a retry keeps one timer across attempts, and the
+  retried request shows its live phase with `retry n/m`.
+
 ## 0.2.0 - 2026-09-22
 
 ### Added

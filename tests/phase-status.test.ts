@@ -3,6 +3,7 @@ import test from "node:test";
 import { stripAnsi } from "../lib/ansi.ts";
 import {
 	formatElapsed,
+	parseStatusMessage,
 	phaseAfterFirstTokenWait,
 	renderLastRunBorder,
 	renderPhaseBorder,
@@ -201,4 +202,27 @@ test("keeps editor overflow beside the completed run time", () => {
 	const line = renderLastRunBorder(42_700, 48, identityPaint, 7);
 	assert.equal(visibleWidth(line), 48);
 	assert.match(line, /↑ 7 Last 00:42\.7 ─$/);
+});
+
+test("splits Pi status text into a phase label, cancel detail, and retry attempt", () => {
+	assert.deepEqual(parseStatusMessage("Auto-compacting... (Esc to cancel)"), {
+		label: "Auto-compacting",
+		detail: "Esc cancel",
+	});
+	assert.deepEqual(parseStatusMessage("Context overflow detected, Auto-compacting... (ctrl+c to cancel)"), {
+		label: "Context overflow detected, Auto-compacting",
+		detail: "ctrl+c cancel",
+	});
+	assert.deepEqual(parseStatusMessage(" Retrying (2/3) in 4s…\n(Esc to cancel) "), {
+		label: "Retrying (2/3) in 4s",
+		detail: "Esc cancel",
+		attempt: "2/3",
+	});
+	assert.deepEqual(parseStatusMessage("Summarizing branch..."), { label: "Summarizing branch" });
+	// Unbound interrupt key: Pi renders an empty key name.
+	assert.deepEqual(parseStatusMessage("Retrying (1/3) in 2s... ( to cancel)"), {
+		label: "Retrying (1/3) in 2s",
+		detail: "cancel",
+		attempt: "1/3",
+	});
 });

@@ -73,6 +73,30 @@ function cleanInline(text: string): string {
 	return text.replace(/[\r\n\t]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+export interface StatusMessage {
+	label: string;
+	detail?: string;
+	attempt?: string;
+}
+
+/**
+ * Splits Pi's status text ("Retrying (2/3) in 4s... (Esc to cancel)") into the
+ * phase border's label and dim detail, so Pi keeps ownership of the wording.
+ */
+export function parseStatusMessage(text: string): StatusMessage {
+	const clean = cleanInline(text);
+	const hint = clean.match(/\s*\(([^()]*?)\s*to cancel\)$/);
+	const body = hint ? clean.slice(0, hint.index) : clean;
+	const label = body.replace(/\s*(?:\.{3}|…)$/, "").trim();
+	const attempt = label.match(/\((\d+\/\d+)\)/)?.[1];
+	const key = hint?.[1]?.trim();
+	return {
+		label,
+		...(hint ? { detail: key ? `${key} cancel` : "cancel" } : {}),
+		...(attempt ? { attempt } : {}),
+	};
+}
+
 export function summarizeRunningTools(toolNames: readonly string[]): string | undefined {
 	const counts = new Map<string, number>();
 	for (const rawName of toolNames) {

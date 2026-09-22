@@ -24,7 +24,7 @@ can still conflict.
 | --- | --- |
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits, optional linked subagent usage |
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
-| Phase Spinner | Working phases, tokens/sec, time to first token, and elapsed time in the editor border |
+| Phase Spinner | Working phases, tokens/sec, time to first token, elapsed time, and compaction/retry status with its own timer in the editor border |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
