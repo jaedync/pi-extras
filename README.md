@@ -180,6 +180,7 @@ Without a configured token, the rest of the package loads normally; invoking
 
 ```sh
 npm ci --ignore-scripts
+npm run typecheck
 npm test
 npm run test:install
 npm run audit:package

@@ -15,6 +15,7 @@
   },
   "scripts": {
     "test": "node scripts/test.mjs",
+    "typecheck": "tsc -p .",
     "test:unit": "node --test --test-timeout=30000 tests/*.test.ts tests/*.test.mjs tests/*.test.mts",
     "test:kagi": "vitest run",
     "test:install": "node scripts/install-smoke.mjs",
@@ -34,7 +35,9 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.87.0",
     "@earendil-works/pi-tui": "0.87.0",
+    "@types/node": "22.20.4",
     "typebox": "1.1.38",
+    "typescript": "7.0.2",
     "vitest": "5.0.0"
   }
 }

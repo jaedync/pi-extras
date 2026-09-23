@@ -66,7 +66,7 @@ function setup(model = { provider: "anthropic", id: "claude-sonnet-5" }, idle = 
 test("a crossing at turn end warns once, persists the key, and stays quiet afterwards", async () => {
 	const { pi, store, ctx } = setup();
 	await pi.handlers.get("session_start")!({}, ctx);
-	assert.deepEqual(pi.sent, []);
+	assert.equal(pi.sent.length, 0);
 	anthropicSnapshot(store, 91);
 	// A poll landing while idle announces for the next prompt.
 	assert.equal(pi.sent.length, 1);
@@ -191,7 +191,7 @@ test("with the default config, bands stay silent but a session budget still warn
 	await pi.handlers.get("session_start")!({}, ctx);
 	anthropicSnapshot(store, 96);
 	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, ctx);
-	assert.deepEqual(pi.sent, []);
+	assert.equal(pi.sent.length, 0);
 	assert.equal(store.isHot("anthropic"), false);
 	const result = await pi.tool!.execute("t1", { setBudget: { window: "7d", pct: 60 } }, undefined, undefined, ctx);
 	const report = JSON.parse(result.content[0].text);

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { parseCredential } from '../../lib/kagi/credential.js';
 import { parseResults } from '../../lib/kagi/parser.js';
 import { KagiClient } from '../../lib/kagi/client.js';
@@ -54,9 +53,10 @@ describe('HTTP integration with adversarial responses', () => {
     expect(a.cached).toBe(false);
     expect(b.cached).toBe(true);
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0][0].origin).toBe('https://kagi.com');
-    expect(fetcher.mock.calls[0][1].redirect).toBe('manual');
-    expect(fetcher.mock.calls[0][1].headers.Cookie).toBe('kagi_session=fixture-token');
+    const [url, init] = fetcher.mock.calls[0] as unknown as [URL, { redirect: string; headers: Record<string, string> }];
+    expect(url.origin).toBe('https://kagi.com');
+    expect(init.redirect).toBe('manual');
+    expect(init.headers.Cookie).toBe('kagi_session=fixture-token');
     await search.search({ query: 'docs' }, { bypassCache: true });
     expect(fetcher).toHaveBeenCalledTimes(2);
   });

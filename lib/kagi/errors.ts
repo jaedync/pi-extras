@@ -16,7 +16,8 @@ const messages: Record<ErrorCode, string> = {
   queue: 'Kagi request queue is full.',
 };
 export class KagiError extends Error {
-  constructor(readonly code: ErrorCode) { super(messages[code]); this.name = 'KagiError'; }
+  readonly code: ErrorCode;
+  constructor(code: ErrorCode) { super(messages[code]); this.name = 'KagiError'; this.code = code; }
 }
 export function safeError(error: unknown): KagiError {
   return error instanceof KagiError ? error : new KagiError('network');

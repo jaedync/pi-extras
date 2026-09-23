@@ -3,7 +3,7 @@
  * Shows activity, never the transcript, so the user is not distracted by
  * words appearing while they speak.
  */
-import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
 
 export type ChunkViewState = "filling" | "queued" | "decoding" | "done";
 

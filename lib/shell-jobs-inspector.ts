@@ -137,14 +137,16 @@ export class JobInspector implements Component, Focusable {
 	private closed = false;
 	private disposed = false;
 	private readonly paint: Paint;
+	private readonly tui: InspectorTui;
+	private readonly lookup: JobLookup;
+	private readonly onClose: () => void;
+	private readonly now: () => number;
 
-	constructor(
-		private readonly tui: InspectorTui,
-		theme: Theme,
-		private readonly lookup: JobLookup,
-		private readonly onClose: () => void,
-		private readonly now: () => number = Date.now,
-	) {
+	constructor(tui: InspectorTui, theme: Theme, lookup: JobLookup, onClose: () => void, now: () => number = Date.now) {
+		this.tui = tui;
+		this.lookup = lookup;
+		this.onClose = onClose;
+		this.now = now;
 		this.paint = painter(theme);
 		this.refresh();
 	}

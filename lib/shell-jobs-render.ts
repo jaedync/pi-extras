@@ -60,7 +60,7 @@ export function painter(theme: Theme): Paint {
  * `keyHint` reads the live keybinding table, which pi only initializes once the
  * interactive theme exists. Tests and headless runs take the plain fallback.
  */
-function expandHint(theme: Theme, paint: Paint): string {
+function expandHint(paint: Paint): string {
 	try {
 		return keyHint("app.tools.expand", "to expand");
 	} catch {
@@ -68,9 +68,9 @@ function expandHint(theme: Theme, paint: Paint): string {
 	}
 }
 
-function previewHint(theme: Theme, paint: Paint, skipped: number): string {
+function previewHint(paint: Paint, skipped: number): string {
 	const label = `... (${skipped} earlier line${skipped === 1 ? "" : "s"}, `;
-	return `${paint.fg("muted", label)}${expandHint(theme, paint)}${paint.fg("muted", ")")}`;
+	return `${paint.fg("muted", label)}${expandHint(paint)}${paint.fg("muted", ")")}`;
 }
 
 /** Text blocks of a tool result or message content, flattened in order. */
@@ -258,11 +258,15 @@ function styledBody(body: string, paint: Paint): string {
  * flag changes, so the state is read at render time from the context.
  */
 class StartCallHeader implements Component {
-	constructor(
-		private readonly args: unknown,
-		private readonly paint: Paint,
-		private readonly isExpanded: () => boolean,
-	) {}
+	private readonly args: unknown;
+	private readonly paint: Paint;
+	private readonly isExpanded: () => boolean;
+
+	constructor(args: unknown, paint: Paint, isExpanded: () => boolean) {
+		this.args = args;
+		this.paint = paint;
+		this.isExpanded = isExpanded;
+	}
 
 	invalidate(): void {}
 
@@ -299,7 +303,7 @@ export function renderJobResult(result: unknown, options: { expanded: boolean },
 	const text = textOf(record.content).replace(/\r/g, "").trimEnd();
 	// Pi wraps tool results in its own expand-on-click region, so this only has to
 	// collapse; the tool row's Box supplies the padding.
-	return new PreviewBody(styledBody(text, paint), 0, () => options.expanded, (skipped) => previewHint(theme, paint, skipped));
+	return new PreviewBody(styledBody(text, paint), 0, () => options.expanded, (skipped) => previewHint(paint, skipped));
 }
 
 /**
@@ -332,7 +336,7 @@ export function createCompletionRenderer(): MessageRenderer {
 		const under = [...(view.command.length > 0 ? [`$ ${view.command}`] : []), ...view.meta];
 		if (under.length > 0) parts.push(new Text(under.map((line) => paint.fg("muted", line)).join("\n"), 0, 0));
 		if (view.body.length > 0) {
-			const body = new PreviewBody(styledBody(view.body, paint), 0, isExpanded, (skipped) => previewHint(theme, paint, skipped));
+			const body = new PreviewBody(styledBody(view.body, paint), 0, isExpanded, (skipped) => previewHint(paint, skipped));
 			parts.push(body);
 		}
 		if (view.notice.length > 0) parts.push(new Text(`\n${paint.fg("warning", view.notice)}`, 0, 0));

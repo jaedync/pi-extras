@@ -8,6 +8,7 @@ test("increments retain small charges with two significant digits and bounded wi
 	}
 	for (const amount of [Number.MIN_VALUE, 1e-20, 0.0000093, 999999999, Number.MAX_VALUE]) {
 		const text = formatIncrement(amount);
+		assert.ok(text, String(amount));
 		assert.ok(text.length <= 10, text);
 		assert.ok(Number(text.slice(2)) > 0, text);
 	}
