@@ -2,6 +2,14 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.3.2 - 2026-09-23
+
+### Fixed
+
+- Two voice tests failed on Node 22 because they waited on a timer that
+  deliberately does not keep the process alive. The package itself is
+  unchanged from 0.3.1.
+
 ## 0.3.1 - 2026-09-23
 
 ### Changed
