@@ -1,5 +1,3 @@
-# Pi Extras
-
 ![A Pi session with pi-extras: an edit's diff, two background jobs, the phase row, voice dictation mid-sentence and the usage footer](.github/preview/pi-extras@2x.png)
 
 Optional extensions and a theme for [Pi](https://pi.dev): a richer footer,
