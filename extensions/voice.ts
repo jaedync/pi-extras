@@ -23,17 +23,8 @@ import { spawn } from "node:child_process";
 import { availableParallelism, homedir, totalmem } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CustomEditor, type ExtensionAPI, type ExtensionContext, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import {
-	truncateToWidth,
-	visibleWidth,
-	type AutocompleteProvider,
-	type EditorComponent,
-	type EditorTheme,
-	type TUI,
-	type TuiMouseEvent,
-	type TuiMouseEventResult,
-} from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { startCapture, hasAudioInput, type Capture, type CaptureCallbacks } from "../lib/voice/capture.ts";
 import { captureRoute, startMacDesktopCapture } from "../lib/voice/desktop-capture.ts";
 import { listMics, micChoices, micSummary, readMicSetting, resolveMic, writeMicSetting } from "../lib/voice/mics.ts";
@@ -49,6 +40,7 @@ import {
 	type Palette,
 } from "../lib/voice/indicator.ts";
 import { TopBorderLink, voiceRow } from "../lib/top-border.ts";
+import { EditorSlot } from "../lib/editor-wrapper.ts";
 import { backendOptions, backendSummary, CUDA_NOTE, type HardwareFacts, type TierId } from "../lib/voice/plan.ts";
 import {
 	floorReady,
@@ -482,8 +474,7 @@ export default function voice(pi: ExtensionAPI): void {
 	let runtime: VoiceRuntime | undefined;
 	let activeTui: TUI | undefined;
 	let topBorder: TopBorderLink | undefined;
-	let previousEditorFactory: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
-	let installedEditorFactory: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
+	const editorSlot = new EditorSlot();
 
 	pi.on("session_start", (_event, ctx) => {
 		runtime?.dispose();
@@ -502,124 +493,34 @@ export default function voice(pi: ExtensionAPI): void {
 		// Overlay the indicator on the editor's top border when nothing else is
 		// using it, otherwise on the bottom border. Chained wrappers each replace
 		// their own row; the phase spinner coordinates over pi.events.
-		const currentFactory = ctx.ui.getEditorComponent();
-		if (currentFactory !== installedEditorFactory) previousEditorFactory = currentFactory;
-		const baseFactory = previousEditorFactory;
-		const borderContent = () => runtime?.borderContent();
-
-		class VoiceStatusEditor extends CustomEditor {
-			private readonly base: EditorComponent;
+		editorSlot.install(ctx, (tui) => {
+			activeTui = tui;
 			/** Pi's own status sits in the top border while set, unless a wrapper draws it. */
-			private piWorking = false;
-			wantsKeyRelease?: boolean;
-
-			constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, base: EditorComponent) {
-				super(tui, theme, keybindings, { embedWorkingStatus: true });
-				this.base = base;
-				this.wantsKeyRelease = base.wantsKeyRelease;
-				if (base instanceof CustomEditor) this.actionHandlers = base.actionHandlers;
-				activeTui = tui;
-			}
-
-			/** The working spinner must keep rendering wherever it rendered before. */
-			setWorkingStatusIndicator(indicator: Parameters<CustomEditor["setWorkingStatusIndicator"]>[0]): void {
-				this.piWorking = indicator !== undefined;
-				super.setWorkingStatusIndicator(indicator);
-				const forward = this.base as EditorComponent & { setWorkingStatusIndicator?: (indicator: Parameters<CustomEditor["setWorkingStatusIndicator"]>[0]) => void };
-				forward.setWorkingStatusIndicator?.(indicator);
-			}
-
-			private syncBase(): void {
-				this.base.onSubmit = this.onSubmit;
-				this.base.onChange = this.onChange;
-				if (this.base.borderColor !== undefined) this.base.borderColor = this.borderColor;
-				const focusable = this.base as EditorComponent & { focused?: boolean };
-				if ("focused" in focusable) focusable.focused = this.focused;
-				if (!(this.base instanceof CustomEditor)) return;
-				this.base.actionHandlers = this.actionHandlers;
-				this.base.onEscape = this.onEscape;
-				this.base.onCtrlD = this.onCtrlD;
-				this.base.onPasteImage = this.onPasteImage;
-				this.base.onExtensionShortcut = this.onExtensionShortcut;
-			}
-
-			render(width: number): string[] {
-				this.syncBase();
-				const lines = this.base.render(width);
-				const content = borderContent();
-				if (!content || lines.length === 0) return lines;
-				const row = voiceRow({ spinnerBusy: link.peerActive, piWorking: this.piWorking, topLine: lines[0], spinnerKnown: link.peerKnown });
-				return overlayVoiceRow(lines, this.base, row, (overflow) => renderVoiceBorder(
-					content.state,
-					content.setup,
-					Date.now(),
-					width,
-					paletteOf(ctx.ui.theme as unknown as ThemeLike),
-					{
-						border: (text) => this.borderColor(text),
-						measure: visibleWidth,
-						truncate: (text, maxWidth) => truncateToWidth(text, maxWidth, ""),
-					},
-					overflow,
-				));
-			}
-
-			invalidate(): void {
-				super.invalidate();
-				this.base.invalidate();
-			}
-
-			handleInput(data: string): void {
-				this.syncBase();
-				this.base.handleInput(data);
-			}
-
-			handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-				this.syncBase();
-				return this.base.handleMouse?.(event);
-			}
-
-			getText(): string {
-				return this.base.getText();
-			}
-
-			getExpandedText(): string {
-				return this.base.getExpandedText?.() ?? this.base.getText();
-			}
-
-			setText(text: string): void {
-				this.syncBase();
-				this.base.setText(text);
-			}
-
-			addToHistory(text: string): void {
-				this.base.addToHistory?.(text);
-			}
-
-			insertTextAtCursor(text: string): void {
-				this.base.insertTextAtCursor?.(text);
-			}
-
-			setAutocompleteProvider(provider: AutocompleteProvider): void {
-				this.base.setAutocompleteProvider?.(provider);
-			}
-
-			setPaddingX(paddingX: number): void {
-				super.setPaddingX(paddingX);
-				this.base.setPaddingX?.(paddingX);
-			}
-
-			setAutocompleteMaxVisible(max: number): void {
-				super.setAutocompleteMaxVisible(max);
-				this.base.setAutocompleteMaxVisible?.(max);
-			}
-		}
-
-		installedEditorFactory = (tui, theme, keybindings) => {
-			const base = baseFactory?.(tui, theme, keybindings) ?? new CustomEditor(tui, theme, keybindings);
-			return new VoiceStatusEditor(tui, theme, keybindings, base);
-		};
-		ctx.ui.setEditorComponent(installedEditorFactory);
+			let piWorking = false;
+			return {
+				onWorkingStatus: (indicator) => {
+					piWorking = indicator !== undefined;
+				},
+				render: (lines, width, editor) => {
+					const content = runtime?.borderContent();
+					if (!content) return lines;
+					const row = voiceRow({ spinnerBusy: link.peerActive, piWorking, topLine: lines[0], spinnerKnown: link.peerKnown });
+					return overlayVoiceRow(lines, editor.base, row, (overflow) => renderVoiceBorder(
+						content.state,
+						content.setup,
+						Date.now(),
+						width,
+						paletteOf(ctx.ui.theme as unknown as ThemeLike),
+						{
+							border: (text) => editor.borderColor(text),
+							measure: visibleWidth,
+							truncate: (text, maxWidth) => truncateToWidth(text, maxWidth, ""),
+						},
+						overflow,
+					));
+				},
+			};
+		});
 		link.hello();
 	});
 
@@ -629,11 +530,7 @@ export default function voice(pi: ExtensionAPI): void {
 		topBorder?.dispose();
 		topBorder = undefined;
 		activeTui = undefined;
-		if (ctx.ui.getEditorComponent?.() === installedEditorFactory) {
-			ctx.ui.setEditorComponent(previousEditorFactory);
-		}
-		installedEditorFactory = undefined;
-		previousEditorFactory = undefined;
+		editorSlot.restore(ctx);
 	});
 
 	pi.registerCommand("voice", {

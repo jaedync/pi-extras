@@ -2,24 +2,8 @@ import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { join } from "node:path";
-import {
-	CustomEditor,
-	keyText,
-	type ExtensionAPI,
-	type ExtensionContext,
-	type KeybindingsManager,
-} from "@earendil-works/pi-coding-agent";
-import {
-	stripTerminalSequences,
-	truncateToWidth,
-	visibleWidth,
-	type AutocompleteProvider,
-	type EditorComponent,
-	type EditorTheme,
-	type TUI,
-	type TuiMouseEvent,
-	type TuiMouseEventResult,
-} from "@earendil-works/pi-tui";
+import { keyText, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import {
 	formatElapsed,
 	parseStatusMessage,
@@ -33,11 +17,11 @@ import {
 
 import { emptyRunMetrics, updateRunMetrics } from "../lib/phase-metrics.ts";
 import { TopBorderLink } from "../lib/top-border.ts";
+import { EditorSlot, type StatusIndicator, type WrappedEditor } from "../lib/editor-wrapper.ts";
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 type VisualPhase = ActivePhase | "slow_api" | "stalled";
 type ThemeTone = "dim" | "thinkingLow" | "accent" | "thinkingMedium" | "thinkingMinimal" | "mdHeading" | "mdLink" | "toolOutput" | "warning" | "error";
-type StatusIndicator = NonNullable<Parameters<CustomEditor["setWorkingStatusIndicator"]>[0]>;
 type StatusKind = Exclude<StatusIndicator["kind"], "working">;
 
 interface PhaseStyle {
@@ -167,8 +151,9 @@ interface StatusView {
 	style: StatusStyle;
 }
 
-function latestToolName(message: { content: readonly { type: string; name?: string }[] }): string | undefined {
-	return [...message.content].reverse().find((part) => part.type === "toolCall" && part.name)?.name;
+function latestToolName(message: object): string | undefined {
+	const content = "content" in message && Array.isArray(message.content) ? (message.content as { type?: string; name?: string }[]) : [];
+	return [...content].reverse().find((part) => part.type === "toolCall" && part.name)?.name;
 }
 
 /** Pi's status text without Pi's own spinner frame. */
@@ -197,8 +182,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	let runningTools = new Map<string, string>();
 	let pendingToolName: string | undefined;
 	let lastTotalElapsedMs: number | undefined;
-	let previousEditorFactory: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
-	let installedEditorFactory: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
+	const editorSlot = new EditorSlot();
 	let statusIndicator: StatusIndicator | undefined;
 	let statusShownAt = 0;
 	// First sighting per status kind, so the timer spans a whole event (every retry attempt).
@@ -277,7 +261,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		return { phase: visualPhase, elapsedMs, style: PHASE_STYLES[visualPhase], alertTone: wait.tone };
 	}
 
-	function phaseDetail(_ctx: ExtensionContext, state: VisualState): string | undefined {
+	function phaseDetail(state: VisualState): string | undefined {
 		if (state.phase === "run") return summarizeRunningTools([...runningTools.values()]);
 		if (state.phase === "tool") return pendingToolName;
 		if (state.phase === "stalled") return `${keyText("app.interrupt")} abort`;
@@ -374,144 +358,76 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		activeTui?.requestRender();
 	}
 
+	type Paint = (tone: ThemeTone) => PhaseBorderPaint;
+
+	function activeBorder(now: number, width: number, hiddenLineCount: number, paint: Paint): string {
+		const state = visualState(now);
+		const frameIndex = Math.floor(state.elapsedMs / state.style.intervalMs) % state.style.frames.length;
+		return renderPhaseBorder({
+			spinner: state.style.frames[frameIndex] ?? "⠿",
+			phaseElapsedMs: state.elapsedMs,
+			totalElapsedMs: now - agentStartedAt,
+			metrics,
+			label: state.style.label,
+			detail: currentContext ? joinDetails(phaseDetail(state), retryDetail()) : undefined,
+			tone: state.alertTone,
+			hiddenLineCount,
+		}, width, paint(state.style.tone));
+	}
+
+	function statusBorder(status: StatusView, now: number, width: number, hiddenLineCount: number, paint: Paint): string {
+		// Idle statuses (manual /compact) have no run span; the event is the whole span.
+		const totalElapsedMs = active ? now - agentStartedAt : status.elapsedMs;
+		return renderPhaseBorder({
+			spinner: status.spinner,
+			phaseElapsedMs: status.elapsedMs,
+			totalElapsedMs,
+			metrics: active ? metrics : undefined,
+			label: status.label,
+			detail: status.detail,
+			tone: status.style.alertTone,
+			hiddenLineCount,
+		}, width, paint(status.style.tone));
+	}
+
+	/** The editor's top row: a Pi status event, the live phase, or the last run's summary. */
+	function drawTopRow(lines: string[], width: number, paint: Paint): string[] {
+		const match = stripTerminalSequences(lines[0] ?? "").match(/↑\s*(\d+)/);
+		const hiddenLineCount = match ? Number.parseInt(match[1] ?? "0", 10) : 0;
+		const now = performance.now();
+		const status = statusView(now);
+		if (status) return [statusBorder(status, now, width, hiddenLineCount, paint), ...lines.slice(1)];
+		if (active && currentContext) return [activeBorder(now, width, hiddenLineCount, paint), ...lines.slice(1)];
+		// A recording borrows the idle row; the summary returns when it ends.
+		if (lastTotalElapsedMs === undefined || topBorder?.peerActive) return lines;
+		return [renderLastRunBorder(lastTotalElapsedMs, width, paint("accent"), hiddenLineCount, metrics), ...lines.slice(1)];
+	}
+
 	pi.on("session_start", (_event, ctx) => {
 		topBorder?.dispose();
 		topBorder = new TopBorderLink(pi.events, "phase-spinner", () => activeTui?.requestRender());
 		resetStatus();
 		stop();
-		const currentFactory = ctx.ui.getEditorComponent();
-		if (currentFactory !== installedEditorFactory) previousEditorFactory = currentFactory;
-		const baseFactory = previousEditorFactory;
-
-		class PhaseStatusEditor extends CustomEditor {
-			private readonly base: EditorComponent;
-			wantsKeyRelease?: boolean;
-
-			constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, base: EditorComponent) {
-				super(tui, theme, keybindings, { embedWorkingStatus: true });
-				this.base = base;
-				this.wantsKeyRelease = base.wantsKeyRelease;
-				if (base instanceof CustomEditor) this.actionHandlers = base.actionHandlers;
-				activeTui = tui;
-			}
-
-			private syncBase(): void {
-				this.base.onSubmit = this.onSubmit;
-				this.base.onChange = this.onChange;
-				if (this.base.borderColor !== undefined) this.base.borderColor = this.borderColor;
-				const focusable = this.base as EditorComponent & { focused?: boolean };
-				if ("focused" in focusable) focusable.focused = this.focused;
-				if (!(this.base instanceof CustomEditor)) return;
-				this.base.actionHandlers = this.actionHandlers;
-				this.base.onEscape = this.onEscape;
-				this.base.onCtrlD = this.onCtrlD;
-				this.base.onPasteImage = this.onPasteImage;
-				this.base.onExtensionShortcut = this.onExtensionShortcut;
-			}
-
-			setWorkingStatusIndicator(indicator: StatusIndicator | undefined): void {
-				super.setWorkingStatusIndicator(indicator);
-				// A wrapped editor (voice) may embed status too; keep it in sync.
-				const forward = this.base as EditorComponent & { setWorkingStatusIndicator?: (indicator: StatusIndicator | undefined) => void };
-				forward.setWorkingStatusIndicator?.(indicator);
-				noteStatusIndicator(indicator);
-			}
-
-			private paint(tone: ThemeTone): PhaseBorderPaint {
-				const thm = currentContext?.ui.theme ?? ctx.ui.theme;
-				return {
-					border: (text) => this.borderColor(text),
-					phase: (text) => thm.fg(tone, text),
-					dim: (text) => thm.fg("dim", text),
-					total: (text) => thm.fg("muted", text),
-					warning: (text) => thm.fg("warning", text),
-					error: (text) => thm.fg("error", text),
-					measure: visibleWidth,
-					truncate: (text, maxWidth) => truncateToWidth(text, maxWidth, ""),
-				};
-			}
-
-			private activeBorder(width: number, hiddenLineCount: number): string {
-				const now = performance.now();
-				const state = visualState(now);
-				const frameIndex = Math.floor(state.elapsedMs / state.style.intervalMs) % state.style.frames.length;
-				return renderPhaseBorder({
-					spinner: state.style.frames[frameIndex] ?? "⠿",
-					phaseElapsedMs: state.elapsedMs,
-					totalElapsedMs: now - agentStartedAt,
-					metrics,
-					label: state.style.label,
-					detail: currentContext ? joinDetails(phaseDetail(currentContext, state), retryDetail()) : undefined,
-					tone: state.alertTone,
-					hiddenLineCount,
-				}, width, this.paint(state.style.tone));
-			}
-
-			private statusBorder(status: StatusView, width: number, hiddenLineCount: number): string {
-				// Idle statuses (manual /compact) have no run span; the event is the whole span.
-				const totalElapsedMs = active ? performance.now() - agentStartedAt : status.elapsedMs;
-				return renderPhaseBorder({
-					spinner: status.spinner,
-					phaseElapsedMs: status.elapsedMs,
-					totalElapsedMs,
-					metrics: active ? metrics : undefined,
-					label: status.label,
-					detail: status.detail,
-					tone: status.style.alertTone,
-					hiddenLineCount,
-				}, width, this.paint(status.style.tone));
-			}
-
-			render(width: number): string[] {
-				this.syncBase();
-				const lines = this.base.render(width);
-				if (lines.length === 0) return lines;
-				const match = stripTerminalSequences(lines[0] ?? "").match(/↑\s*(\d+)/);
-				const hiddenLineCount = match ? Number.parseInt(match[1] ?? "0", 10) : 0;
-				const status = statusView(performance.now());
-				if (status) return [this.statusBorder(status, width, hiddenLineCount), ...lines.slice(1)];
-				if (active && currentContext) {
-					return [this.activeBorder(width, hiddenLineCount), ...lines.slice(1)];
-				}
-				// A recording borrows the idle row; the summary returns when it ends.
-				if (lastTotalElapsedMs === undefined || topBorder?.peerActive) return lines;
-				const completedBorder = renderLastRunBorder(lastTotalElapsedMs, width, this.paint("accent"), hiddenLineCount, metrics);
-				return [completedBorder, ...lines.slice(1)];
-			}
-
-			invalidate(): void {
-				super.invalidate();
-				this.base.invalidate();
-			}
-
-			handleInput(data: string): void {
-				this.syncBase();
-				this.base.handleInput(data);
-			}
-
-			handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-				this.syncBase();
-				return this.base.handleMouse?.(event);
-			}
-
-			getText(): string { return this.base.getText(); }
-			getExpandedText(): string { return this.base.getExpandedText?.() ?? this.base.getText(); }
-			setText(text: string): void { this.syncBase(); this.base.setText(text); }
-			addToHistory(text: string): void { this.base.addToHistory?.(text); }
-			insertTextAtCursor(text: string): void { this.base.insertTextAtCursor?.(text); }
-			setAutocompleteProvider(provider: AutocompleteProvider): void { this.base.setAutocompleteProvider?.(provider); }
-			setPaddingX(padding: number): void { super.setPaddingX(padding); this.base.setPaddingX?.(padding); }
-			setAutocompleteMaxVisible(maxVisible: number): void {
-				super.setAutocompleteMaxVisible(maxVisible);
-				this.base.setAutocompleteMaxVisible?.(maxVisible);
-			}
-		}
-
-		installedEditorFactory = (tui, theme, keybindings) => {
-			const base = baseFactory?.(tui, theme, keybindings) ?? new CustomEditor(tui, theme, keybindings);
-			return new PhaseStatusEditor(tui, theme, keybindings, base);
+		const painter = (editor: WrappedEditor): Paint => (tone) => {
+			const thm = currentContext?.ui.theme ?? ctx.ui.theme;
+			return {
+				border: (text) => editor.borderColor(text),
+				phase: (text) => thm.fg(tone, text),
+				dim: (text) => thm.fg("dim", text),
+				total: (text) => thm.fg("muted", text),
+				warning: (text) => thm.fg("warning", text),
+				error: (text) => thm.fg("error", text),
+				measure: visibleWidth,
+				truncate: (text, maxWidth) => truncateToWidth(text, maxWidth, ""),
+			};
 		};
-		ctx.ui.setEditorComponent(installedEditorFactory);
+		editorSlot.install(ctx, (tui) => {
+			activeTui = tui;
+			return {
+				render: (lines, width, editor) => drawTopRow(lines, width, painter(editor)),
+				onWorkingStatus: noteStatusIndicator,
+			};
+		});
 		topBorder.hello();
 	});
 
@@ -581,10 +497,6 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		topBorder?.dispose();
 		topBorder = undefined;
 		activeTui = undefined;
-		if (ctx.ui.getEditorComponent() === installedEditorFactory) {
-			ctx.ui.setEditorComponent(previousEditorFactory);
-		}
-		installedEditorFactory = undefined;
-		previousEditorFactory = undefined;
+		editorSlot.restore(ctx);
 	});
 }
