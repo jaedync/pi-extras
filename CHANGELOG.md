@@ -2,6 +2,14 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.3.6 - 2026-09-23
+
+### Fixed
+
+- The Kagi pacing tests no longer depend on timer punctuality, which made both
+  0.3.5 CI runs fail on slow runners. The extension behaves as in 0.3.5; its
+  pacer only gained a test clock.
+
 ## 0.3.5 - 2026-09-23
 
 ### Changed
