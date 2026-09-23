@@ -19,12 +19,14 @@ const { stripTerminalSequences, visibleWidth } = tui;
 afterEach(cleanup);
 
 const plainTheme = { fg: (_key: string, text: string) => text, bold: (text: string) => text };
+// A fixed clock: the elapsed time shown must not depend on how long the test took to get there.
+const NOW = 1_800_000_000_000;
 
 /** A job whose log lives in a temp dir, plus a mutable lookup the inspector reads. */
 function liveJob(overrides: Partial<Job> = {}, lines: string[] = ["one", "two", "three"]) {
 	const logPath = join(tempDir(), "j1.log");
 	writeFileSync(logPath, lines.length > 0 ? `${lines.join("\n")}\n` : "");
-	let job: Job | undefined = makeJob({ logPath, title: "Run unit tests", startedAt: Date.now() - 12_000, ...overrides });
+	let job: Job | undefined = makeJob({ logPath, title: "Run unit tests", startedAt: NOW - 12_000, ...overrides });
 	return {
 		logPath,
 		lookup: () => job,
@@ -40,7 +42,7 @@ function liveJob(overrides: Partial<Job> = {}, lines: string[] = ["one", "two", 
 function open(live: ReturnType<typeof liveJob>, rows = 40) {
 	const host = fakeTui(rows);
 	const closes: number[] = [];
-	const view = new JobInspector(host as any, plainTheme as any, live.lookup, () => closes.push(Date.now()));
+	const view = new JobInspector(host as any, plainTheme as any, live.lookup, () => closes.push(Date.now()), () => NOW);
 	return { host, closes, view };
 }
 
@@ -73,7 +75,7 @@ describe("job inspector", () => {
 	});
 
 	test("an untitled job is framed by its id alone and a finished one shows its exit", () => {
-		const live = liveJob({ title: null, state: "done", code: 2, endedAt: Date.now() - 1000, startedAt: Date.now() - 6000 });
+		const live = liveJob({ title: null, state: "done", code: 2, endedAt: NOW - 1000, startedAt: NOW - 6000 });
 		const { view } = open(live);
 		const lines = bare(view.render(60));
 		contains(lines[0], "j1");
@@ -202,7 +204,7 @@ describe("job inspector", () => {
 		const before = host.renders.length;
 		await sleep(INSPECTOR_REFRESH_MS * 2 + 50);
 		assert.ok(host.renders.length > before);
-		live.set({ ...live.current!, state: "done", code: 0, endedAt: Date.now() });
+		live.set({ ...live.current!, state: "done", code: 0, endedAt: NOW });
 		appendFileSync(live.logPath, "last words\n");
 		await sleep(INSPECTOR_REFRESH_MS * 2 + 50);
 		const text = bare(view.render(80)).join("\n");
@@ -244,7 +246,7 @@ describe("job inspector", () => {
 		const live = liveJob({}, []);
 		const { view } = open(live);
 		contains(bare(view.render(80)).join("\n"), "(no output yet)");
-		live.set({ ...live.current!, state: "done", code: 0, endedAt: Date.now() });
+		live.set({ ...live.current!, state: "done", code: 0, endedAt: NOW });
 		view.refresh();
 		contains(bare(view.render(80)).join("\n"), "(no output)");
 		view.dispose();
