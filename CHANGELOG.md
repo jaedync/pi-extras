@@ -2,6 +2,18 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.3.5 - 2026-09-23
+
+### Changed
+
+- Kagi searches run up to four at once instead of one at a time, so a batch of
+  four takes about as long as one (about 1.5 s instead of 5.6 s). Request starts
+  stay at least 150 ms apart and are capped at 30 page requests a minute; a
+  search that would wait past its deadline for that pace fails with a pacing
+  error. A rate limit or challenge still stops every waiting search.
+- The Kagi tool no longer makes Pi run the rest of its tool batch one at a
+  time. Identical queries in flight share one request.
+
 ## 0.3.4 - 2026-09-23
 
 ### Changed
