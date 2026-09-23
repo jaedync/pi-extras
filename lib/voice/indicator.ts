@@ -25,6 +25,8 @@ export interface IndicatorState {
 	readonly backend?: string;
 	/** Human name of the loaded model, e.g. "parakeet 0.6b-v3". */
 	readonly model?: string;
+	/** The daemon is loading the model, so decoding waits behind it. */
+	readonly loadingModel?: boolean;
 	/** Human name of the microphone, when the recorder knows it. */
 	readonly device?: string;
 	/** No audible input yet after a few seconds: likely the wrong or a muted mic. */
@@ -63,6 +65,8 @@ export const MAX_CHUNK_MS = 12_000;
 export const METER_WIDTH = 14;
 const MAX_VISIBLE_CHUNKS = 12;
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+// The usual wait after stop is one short chunk's decode; labelling that would only flash.
+export const WAIT_LABEL_AFTER_MS = 1000;
 const CLIP_WARN_MS = 2000;
 // Braille columns filled from the middle out: none, the two middle dots, all four.
 const BRAILLE_BLANK = 0x2800;
@@ -162,6 +166,13 @@ function chunkRow(chunks: readonly ChunkView[], now: number, p: Palette): string
 	return hidden > 0 ? `${p.dim(`+${hidden}`)}${glyphs}` : glyphs;
 }
 
+/** What a stopped dictation is still waiting for, once the wait is long enough to notice. */
+function waitLabel(state: IndicatorState, now: number): string | undefined {
+	if (state.stoppedAt === undefined || now - state.stoppedAt < WAIT_LABEL_AFTER_MS) return undefined;
+	if (state.queuedMs > 0) return "starting voice";
+	return state.loadingModel ? "loading the speech model" : "transcribing";
+}
+
 function trailer(state: IndicatorState, now: number, p: Palette): string {
 	const spin = p.warn(SPINNER[Math.floor(now / 80) % SPINNER.length]);
 	switch (state.phase) {
@@ -171,6 +182,11 @@ function trailer(state: IndicatorState, now: number, p: Palette): string {
 		}
 		case "loading":
 			return `${spin} ${p.dim("loading")}`;
+		case "finishing": {
+			const waiting = waitLabel(state, now);
+			const parts = [waiting && `${spin} ${p.dim(waiting)}`, state.message && p.dim(state.message), waiting && p.dim("esc cancels")];
+			return parts.filter(Boolean).join("  ");
+		}
 		case "cancelled":
 			return p.dim(state.message ?? "cancelled");
 		case "error":

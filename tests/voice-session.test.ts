@@ -125,8 +125,9 @@ test("a model load slower than the final timeout does not fail the dictation", a
 	const result = session.stop();
 	await sleep(120);
 	assert.equal(session.active, true, "still waiting on the model");
-	assert.match(session.view.message ?? "", /loading/);
+	assert.equal(session.view.loadingModel, true);
 	session.handleEvent({ t: "status", state: "ready" });
+	assert.equal(session.view.loadingModel, false);
 	session.handleEvent({ t: "final", id: 7, text: "made it" });
 	assert.equal(await result, "made it");
 });

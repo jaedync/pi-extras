@@ -140,11 +140,24 @@ test("before the daemon connects, buffered audio shows as a queue", () => {
 	assert.match(line, /2\.4s queued/);
 });
 
-test("loading is labelled; finishing and inserted stay quiet so the typed text speaks for itself", () => {
+test("loading is labelled; a quick finish and inserted stay quiet so the typed text speaks for itself", () => {
 	assert.match(renderIndicator({ ...base, phase: "loading", backend: "mlx" }, 1000, 80, plain), /loading/);
 	assert.doesNotMatch(renderIndicator({ ...base, phase: "finishing", stoppedAt: 5000 }, 5200, 80, plain), /transcribing|⠋|⠙/);
 	assert.doesNotMatch(renderIndicator({ ...base, phase: "inserted", stoppedAt: 5000 }, 5200, 80, plain), /inserted|✓/);
 	assert.match(renderIndicator({ ...base, phase: "error", message: "no mic" }, 0, 80, plain), /no mic/);
+});
+
+test("a wait after stop says what it is waiting for and that esc cancels", () => {
+	const stopped: IndicatorState = { ...base, phase: "finishing", stoppedAt: 5000 };
+	const at = (state: IndicatorState, now: number) => renderIndicator(state, now, 120, plain);
+	assert.doesNotMatch(at({ ...stopped, loadingModel: true }, 5900), /loading|esc/, "quiet for the first second");
+	assert.match(at({ ...stopped, loadingModel: true }, 6000), /loading the speech model {2}esc cancels/);
+	assert.match(at(stopped, 6000), /transcribing {2}esc cancels/);
+	assert.match(at({ ...stopped, queuedMs: 800 }, 6000), /starting voice {2}esc cancels/);
+	const noted = at({ ...stopped, loadingModel: true, message: "recording stopped at 5 minutes" }, 6000);
+	assert.match(noted, /loading the speech model {2}recording stopped at 5 minutes {2}esc cancels/);
+	const border = renderVoiceBorder({ ...stopped, loadingModel: true }, undefined, 6000, 120, plain, plainPaint);
+	assert.match(border, /loading the speech model {2}esc cancels/);
 });
 
 test("clock freezes when recording stops", () => {

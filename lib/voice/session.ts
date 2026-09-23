@@ -25,7 +25,6 @@ const LEVEL_HISTORY = 64;
 const DEFAULT_FINAL_TIMEOUT_MS = 30_000;
 // A cold load of the largest CPU model has taken tens of seconds on slow disks; this only catches a hung one.
 const DEFAULT_LOAD_TIMEOUT_MS = 5 * 60_000;
-const LOADING_MESSAGE = "loading the speech model";
 // Before any chunk has been timed: well under what every backend measured (13x to 90x realtime).
 const DEFAULT_DECODE_SPEED = 20;
 const DECODE_OVERHEAD_MS = 50;
@@ -138,7 +137,7 @@ export class DictationSession {
 			this.transport.send({ t: "stop", id: this.id });
 			this.armTimeout();
 		}
-		this.update({ phase: "finishing", stoppedAt: this.options.now(), speaking: false, ...this.loadingNote() });
+		this.update({ phase: "finishing", stoppedAt: this.options.now(), speaking: false });
 		return this.finalPromise;
 	}
 
@@ -186,8 +185,9 @@ export class DictationSession {
 		const patch = { ...(backend ? { backend } : {}), ...(model ? { model } : {}) };
 		this.model = state;
 		if (this.timer) this.armTimeout();
-		if (this.stopRequested) return this.update({ ...patch, ...this.loadingNote() });
-		this.update({ ...patch, phase: state === "loading" ? "loading" : "recording" });
+		const loadingModel = state === "loading";
+		if (this.stopRequested) return this.update({ ...patch, loadingModel });
+		this.update({ ...patch, loadingModel, phase: loadingModel ? "loading" : "recording" });
 	}
 
 	/** Transcript of the finished chunks up to the first unfinished one; a prefix of the final text. */
@@ -237,12 +237,6 @@ export class DictationSession {
 			this.filling = this.view.speaking ? { state: "filling", openedAt: this.options.now() } : undefined;
 		}
 		this.update({});
-	}
-
-	/** After stop, says why the wait is long, and clears that once the model is ready. */
-	private loadingNote(): Partial<IndicatorState> {
-		if (this.model === "loading") return { message: LOADING_MESSAGE };
-		return this.view.message === LOADING_MESSAGE ? { message: undefined } : {};
 	}
 
 	/**

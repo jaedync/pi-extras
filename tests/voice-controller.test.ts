@@ -262,6 +262,30 @@ test("escape while the text is typing in drops the rest", async () => {
 	assert.ok(typed.length < long.length);
 });
 
+test("escape while waiting on the model after stop discards the dictation", async () => {
+	const h = harness();
+	h.key(PRESS);
+	await h.flush();
+	h.frame();
+	const id = h.lastId()!;
+	h.emit({ t: "status", state: "loading", backend: "cpu", model: "parakeet 0.6b-v3" });
+	h.emit({ t: "chunk", id, index: 0, state: "queued", ms: 1000 });
+	h.tick(4000);
+	h.key(PRESS);
+	h.tick(20_000);
+	assert.equal(h.states.at(-1)?.phase, "finishing");
+	assert.equal(h.states.at(-1)?.loadingModel, true);
+	assert.deepEqual(h.key(ESC), { consume: true });
+	assert.equal(h.sent.at(-1)?.t, "cancel");
+	assert.equal(h.states.findLast(Boolean)?.phase, "cancelled");
+	h.emit({ t: "status", state: "ready", backend: "cpu", model: "parakeet 0.6b-v3" });
+	h.emit({ t: "final", id, text: "too late" });
+	await h.flush();
+	h.tick(1000);
+	assert.deepEqual(h.pasted, []);
+	assert.equal(h.key(ESC), undefined, "nothing left to cancel");
+});
+
 test("a failure after release still inserts what was already transcribed", async () => {
 	const h = harness();
 	h.key(PRESS);

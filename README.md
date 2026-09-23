@@ -107,7 +107,8 @@ rate limits taken from response headers are reported but never warned on.
 ## Voice
 
 Hold ctrl+space and speak, or tap it to start and tap again to stop. Esc
-discards the recording. The transcript is typed into the editor and never sent
+discards the recording, including after you stop while it is still being
+transcribed. The transcript is typed into the editor and never sent
 on its own; review it and press Enter yourself. Speech is transcribed in
 chunks at each pause while you talk, so when you stop only the last chunk is
 left to decode and the text starts typing in right away.
@@ -116,7 +117,8 @@ A recording row in the editor border shows a red dot, the elapsed time, a level
 meter, one mark per chunk, the microphone and the model. It uses the top border
 when that is free and the bottom border while the agent is working. Warnings
 there cover a mic that hears nothing, audio that clips, and a missing
-permission.
+permission. After you stop, a wait longer than a second says what it is
+waiting for (starting voice, loading the speech model, or transcribing).
 
 `/voice` opens a menu with the current mic and model. `/voice mic` picks the
 input device (saved by name; a missing device falls back to the system default
