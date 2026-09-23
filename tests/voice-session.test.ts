@@ -112,6 +112,16 @@ test("daemon errors for this utterance fail the stop", async () => {
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
+/** Session timers are unref'd so they never keep Pi running; hold the test open while it waits on one. */
+async function held<T>(promise: Promise<T>): Promise<T> {
+	const keepAlive = setInterval(() => {}, 1_000);
+	try {
+		return await promise;
+	} finally {
+		clearInterval(keepAlive);
+	}
+}
+
 function timedHarness(finalTimeoutMs: number, loadTimeoutMs = 10_000) {
 	const transport: SessionTransport = { send: () => {} };
 	const session = new DictationSession({ id: 7, now: Date.now, onChange: () => {}, finalTimeoutMs, loadTimeoutMs });
@@ -159,14 +169,14 @@ test("a model that never finishes loading still fails, with what went wrong", as
 	const { session, transport } = timedHarness(40, 60);
 	session.attach(transport);
 	session.handleEvent({ t: "status", state: "loading" });
-	await assert.rejects(session.stop(), /model/);
+	await assert.rejects(held(session.stop()), /model/);
 });
 
 test("with the model ready, a silent daemon still times out", async () => {
 	const { session, transport } = timedHarness(40);
 	session.attach(transport);
 	session.handleEvent({ t: "status", state: "ready" });
-	await assert.rejects(session.stop(), /timed out/);
+	await assert.rejects(held(session.stop()), /timed out/);
 });
 
 test("levels track input loudness, capped to the meter history", () => {
