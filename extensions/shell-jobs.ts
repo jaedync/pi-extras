@@ -26,7 +26,6 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } f
 import type { Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
-	DETAILS_BUDGET_BYTES,
 	KILL_WAIT_MS,
 	LOG_READ_BYTES,
 	MAX_COMMAND_BYTES,
@@ -35,10 +34,8 @@ import {
 	MAX_LIVE,
 	MAX_RETAINED,
 	MAX_TITLE_BYTES,
-	capPayload,
 	commandPreview,
 	formatJobId,
-	readLogPage,
 	resolveShellPath,
 	sanitizeControl,
 	utf8Head,
@@ -62,6 +59,7 @@ import {
 } from "../lib/shell-jobs-process.ts";
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, reconcileDeliveries } from "../lib/shell-jobs-delivery.ts";
 import { type ClickTarget, clickToInspect, type InspectorHost, openInspector } from "../lib/shell-jobs-inspector.ts";
+import { CWD_PREVIEW_BYTES, errResult, jobTitle, manageJob, okResult, type ToolResult } from "../lib/shell-jobs-manage.ts";
 
 import {
 	createCompletionRenderer,
@@ -78,8 +76,6 @@ import {
 // Recovery records kept alive past MAX_RETAINED; beyond this the oldest
 // undelivered completion is abandoned and counted instead of growing forever.
 const MAX_UNDELIVERED = 32;
-const COMMAND_PREVIEW_BYTES = 120;
-const CWD_PREVIEW_BYTES = 200;
 // The `/jobs` picker is one line per job, so its command preview is short.
 const OPTION_COMMAND_BYTES = 60;
 
@@ -111,13 +107,6 @@ function rememberInspect(context: RowContext, details: unknown): void {
 	(state as { inspect?: InspectRecord }).inspect = { id: record.id, runtimeId: record.runtimeId };
 }
 
-function okResult(text: string, details: Record<string, unknown>) {
-	return { content: [{ type: "text" as const, text: capPayload(sanitizeControl(text)) }], details };
-}
-
-function errResult(text: string, details: Record<string, unknown> = {}) {
-	return { content: [{ type: "text" as const, text: capPayload(sanitizeControl(text)) }], details, isError: true };
-}
 
 async function finalize(runtime: Runtime, id: string, code: number | null, signal: string | null): Promise<void> {
 	const current = runtime.jobs.get(id);
@@ -195,35 +184,13 @@ function trimRetained(runtime: Runtime): void {
 	}
 }
 
-/** A job parked by an older version has no title field; read it as untitled. */
-function jobTitle(job: Job): string | null {
-	return typeof job.title === "string" ? job.title : null;
-}
-
-function jobSummary(job: Job) {
-	return {
-		id: job.id,
-		state: job.state,
-		code: job.code,
-		signal: job.signal,
-		title: jobTitle(job),
-		commandPreview: commandPreview(job.command, COMMAND_PREVIEW_BYTES),
-		cwd: sanitizeControl(utf8Head(job.cwd, CWD_PREVIEW_BYTES)),
-		logPath: job.logPath,
-		startedAt: job.startedAt,
-		endedAt: job.endedAt,
-		cleanupError: job.cleanupError,
-		deliveryFailed: job.deliveryFailed,
-	};
-}
-
 async function startJob(
 	runtime: Runtime,
 	command: string,
 	cwd: string,
 	title: string | null,
 	toolCallId: string | null,
-): Promise<ReturnType<typeof okResult> | ReturnType<typeof errResult>> {
+): Promise<ToolResult> {
 	if (liveCount(runtime) >= MAX_LIVE) {
 		return errResult(`Too many live jobs (max ${MAX_LIVE}). Kill one or wait for one to finish.`);
 	}
@@ -332,130 +299,12 @@ async function startJob(
 	}
 }
 
-async function manageJob(
-	runtime: Runtime,
-	params: ReturnType<typeof validateManageParams>,
-): Promise<ReturnType<typeof okResult> | ReturnType<typeof errResult>> {
-	if (!params.ok) return errResult(params.error);
-	const { params: parsed } = params;
-
-	if (parsed.op === "list") {
-		const all = [...runtime.jobs.values()].reverse().slice(0, parsed.limit);
-		let omitted = runtime.jobs.size - all.length;
-		const summaries = all.map(jobSummary);
-		// Details get their own serialized budget rather than relying on the text cap.
-		while (summaries.length > 0 && Buffer.byteLength(JSON.stringify(summaries), "utf8") > DETAILS_BUDGET_BYTES) {
-			summaries.pop();
-			omitted += 1;
-		}
-		const shown = all.slice(0, summaries.length);
-		const lines = shown.map((job) => {
-			const title = jobTitle(job);
-			const label = title === null ? "" : `[${title}] `;
-			return `${job.id} ${jobStatusText(job)} ${label}${commandPreview(job.command, COMMAND_PREVIEW_BYTES)}`;
-		});
-		if (lines.length === 0) lines.push("No shell jobs in this session.");
-		if (omitted > 0) lines.push(`(+${omitted} job(s) omitted)`);
-		if (runtime.abandoned > 0) lines.push(`(${runtime.abandoned} completion(s) abandoned undelivered)`);
-		return okResult(lines.join("\n"), { jobs: summaries, omitted, abandoned: runtime.abandoned });
-	}
-
-	const job = runtime.jobs.get(parsed.id);
-	if (!job) return errResult(`Unknown job ${parsed.id}. No job with that id exists in this session.`);
-
-	if (parsed.op === "logs") {
-		let page;
-		try {
-			page = readLogPage(job.logPath, { offset: parsed.offset, bytes: parsed.bytes, tail: parsed.tail });
-		} catch (error) {
-			return errResult(`Could not read the log for ${parsed.id}: ${(error as Error).message}`);
-		}
-		const text = page.text.length > 0 ? page.text : "(no output yet)";
-		return okResult(text, {
-			id: job.id,
-			state: job.state,
-			logPath: job.logPath,
-			offset: page.offset,
-			nextOffset: page.nextOffset,
-			eof: page.eof,
-			totalBytes: page.totalBytes,
-		});
-	}
-
-	if (job.state === "done") {
-		if (job.cleanupError === null) {
-			return okResult(`Job ${parsed.id} already finished (${jobStatusText(job)}).`, {
-				id: job.id,
-				state: job.state,
-				code: job.code,
-				signal: job.signal,
-				cleanupError: null,
-			});
-		}
-		// A previous cleanup could not confirm the group died; retry it rather than
-		// reporting a tidy stop that never happened.
-		const retry = await stopGroup(job.pid);
-		recordResidual(runtime, job.pid, retry.cleaned);
-		if (!retry.cleaned) {
-			return errResult(`Job ${parsed.id} finished, but its process group still cannot be terminated: ${job.cleanupError}`, {
-				id: job.id,
-				state: job.state,
-				cleanupError: job.cleanupError,
-			});
-		}
-		runtime.jobs.set(job.id, { ...job, cleanupError: null });
-		runtime.widget.update();
-		return okResult(`Job ${parsed.id} finished (${jobStatusText(job)}); its process group is now gone.`, {
-			id: job.id,
-			state: job.state,
-			cleanupError: null,
-		});
-	}
-	runtime.jobs.set(job.id, { ...job, claimed: true, state: "stopping" });
-	runtime.widget.update();
-	const cleanup = await stopGroup(job.pid);
-	recordResidual(runtime, job.pid, cleanup.cleaned);
-	const final = await withTimeout(runtime.finals.get(job.id)?.promise, KILL_WAIT_MS);
-	if (final) {
-		const details = { id: final.id, state: final.state, code: final.code, signal: final.signal, cleanupError: final.cleanupError };
-		if (final.cleanupError !== null) {
-			return errResult(`Job ${parsed.id} stopped, but its process group could not be confirmed dead: ${final.cleanupError}`, details);
-		}
-		return okResult(`Job ${parsed.id} stopped (${jobStatusText(final)}).`, details);
-	}
-	const pending = runtime.jobs.get(job.id);
-	if (pending && pending.state !== "done") runtime.jobs.set(job.id, { ...pending, claimed: false });
-	return okResult(`Job ${parsed.id} is still stopping; its final status will arrive as a completion message.`, {
-		id: job.id,
-		state: (runtime.jobs.get(job.id) ?? job).state,
-		code: null,
-		signal: null,
-	});
-}
-
 function defer<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 	let resolve!: (value: T) => void;
 	const promise = new Promise<T>((res) => {
 		resolve = res;
 	});
 	return { promise, resolve };
-}
-
-function withTimeout<T>(promise: Promise<T> | undefined, ms: number): Promise<T | null> {
-	if (!promise) return Promise.resolve(null);
-	return new Promise((resolve) => {
-		const timer = setTimeout(() => resolve(null), ms);
-		promise.then(
-			(value) => {
-				clearTimeout(timer);
-				resolve(value);
-			},
-			() => {
-				clearTimeout(timer);
-				resolve(null);
-			},
-		);
-	});
 }
 
 async function shutdown(runtime: Runtime): Promise<void> {
