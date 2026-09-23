@@ -14,12 +14,18 @@ export interface SessionOptions {
 	readonly id: number;
 	readonly now: () => number;
 	readonly onChange: (view: IndicatorState) => void;
+	/** How long a stopped dictation waits for the next sign of progress. */
 	readonly finalTimeoutMs?: number;
+	/** The same wait while the daemon is still loading the model. */
+	readonly loadTimeoutMs?: number;
 }
 
 export const SAMPLE_RATE = 16_000;
 const LEVEL_HISTORY = 64;
 const DEFAULT_FINAL_TIMEOUT_MS = 30_000;
+// A cold load of the largest CPU model has taken tens of seconds on slow disks; this only catches a hung one.
+const DEFAULT_LOAD_TIMEOUT_MS = 5 * 60_000;
+const LOADING_MESSAGE = "loading the speech model";
 // Before any chunk has been timed: well under what every backend measured (13x to 90x realtime).
 const DEFAULT_DECODE_SPEED = 20;
 const DECODE_OVERHEAD_MS = 50;
@@ -48,6 +54,7 @@ export class DictationSession {
 	private finalPromise?: Promise<string>;
 	private failure?: Error;
 	private timer?: ReturnType<typeof setTimeout>;
+	private model: "unknown" | "loading" | "ready" = "unknown";
 	private capturedMs = 0;
 	private heard = false;
 	view: IndicatorState;
@@ -131,7 +138,7 @@ export class DictationSession {
 			this.transport.send({ t: "stop", id: this.id });
 			this.armTimeout();
 		}
-		this.update({ phase: "finishing", stoppedAt: this.options.now(), speaking: false });
+		this.update({ phase: "finishing", stoppedAt: this.options.now(), speaking: false, ...this.loadingNote() });
 		return this.finalPromise;
 	}
 
@@ -153,6 +160,8 @@ export class DictationSession {
 	handleEvent(event: DaemonEvent): void {
 		if (this.settled) return;
 		if ("id" in event && event.id !== undefined && event.id !== this.id) return;
+		// Any sign of life restarts the wait, so a long dictation is not held to one deadline.
+		if (this.timer) this.armTimeout();
 		switch (event.t) {
 			case "status":
 				this.onStatus(event.state, event.backend, event.model);
@@ -175,7 +184,9 @@ export class DictationSession {
 
 	private onStatus(state: "loading" | "ready", backend?: string, model?: string): void {
 		const patch = { ...(backend ? { backend } : {}), ...(model ? { model } : {}) };
-		if (this.stopRequested) return this.update(patch);
+		this.model = state;
+		if (this.timer) this.armTimeout();
+		if (this.stopRequested) return this.update({ ...patch, ...this.loadingNote() });
 		this.update({ ...patch, phase: state === "loading" ? "loading" : "recording" });
 	}
 
@@ -228,9 +239,22 @@ export class DictationSession {
 		this.update({});
 	}
 
-	/** Only counts once the daemon has the audio; first-time setup can take much longer. */
+	/** After stop, says why the wait is long, and clears that once the model is ready. */
+	private loadingNote(): Partial<IndicatorState> {
+		if (this.model === "loading") return { message: LOADING_MESSAGE };
+		return this.view.message === LOADING_MESSAGE ? { message: undefined } : {};
+	}
+
+	/**
+	 * Only counts once the daemon has the audio; first-time setup can take much longer.
+	 * Decoding waits behind a model load, so until the daemon reports ready the load cap applies.
+	 */
 	private armTimeout(): void {
-		this.timer = setTimeout(() => this.fail("transcription timed out"), this.options.finalTimeoutMs ?? DEFAULT_FINAL_TIMEOUT_MS);
+		clearTimeout(this.timer);
+		const loading = this.model !== "ready";
+		const ms = loading ? (this.options.loadTimeoutMs ?? DEFAULT_LOAD_TIMEOUT_MS) : (this.options.finalTimeoutMs ?? DEFAULT_FINAL_TIMEOUT_MS);
+		const message = loading ? "the speech model did not finish loading; see /voice status" : "transcription timed out";
+		this.timer = setTimeout(() => this.fail(message), ms);
 		this.timer.unref?.();
 	}
 

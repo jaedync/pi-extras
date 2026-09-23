@@ -71,6 +71,51 @@ test("dictation round trip through the fake daemon", { skip, timeout: 20_000 }, 
 	}
 });
 
+test("audio recorded while the model is still loading is transcribed once it loads", { skip, timeout: 20_000 }, async () => {
+	const { home, spawnDaemon, cleanup } = setup(["--load-delay", "1.5"]);
+	try {
+		const client = new DaemonClient({ socketPath: join(home, "daemon.sock"), spawnDaemon });
+		const session = new DictationSession({ id: 1, now: Date.now, onChange: () => {} });
+		const states: string[] = [];
+		client.onEvent = (event) => {
+			if (event.t === "status") states.push(event.state);
+			session.handleEvent(event);
+		};
+		await client.connect();
+		session.attach(client);
+		const audio = [tone(800, 8000), new Int16Array(16000 * 0.6), tone(500, 8000), new Int16Array(16000 * 0.2)];
+		for (const part of audio) for (const f of frames(part)) session.pushFrame(f);
+		// Both chunks are queued and the recording stopped before the model is ready.
+		const text = await session.stop();
+		assert.equal(states[0], "loading");
+		assert.equal(text, "<0.8s> <1.3s>");
+		client.close();
+	} finally {
+		cleanup();
+	}
+});
+
+test("status reports loading while a model swap holds up decoding", { skip, timeout: 20_000 }, () => {
+	const home = mkdtempSync(join(tmpdir(), "pv-"));
+	try {
+		const script = `
+import sys
+sys.path.insert(0, ${JSON.stringify(dirname(daemonPath))})
+import voice_daemon as vd
+d = vd.Daemon(sys.argv[1], True)
+d.asr, d.asr_tier = vd.FakeAsr(), "fake"
+before = d.status()["state"]
+d.loading = True
+print(before, d.status()["state"])
+`;
+		const run = spawnSync(python!, ["-c", script, home], { encoding: "utf8" });
+		assert.equal(run.status, 0, run.stderr);
+		assert.equal(run.stdout.trim(), "ready loading");
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
 /** Feeds `parts` (seconds, amplitude) through the daemon's chunker with the energy VAD. */
 function chunk(parts: [number, number][]) {
 	const script = `

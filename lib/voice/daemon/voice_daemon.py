@@ -356,9 +356,10 @@ class Connection:
 
 
 class Daemon:
-    def __init__(self, home: str, fake: bool, idle_exit_s: float = IDLE_EXIT_S, unused_exit_s: float = UNUSED_EXIT_S) -> None:
+    def __init__(self, home: str, fake: bool, idle_exit_s: float = IDLE_EXIT_S, unused_exit_s: float = UNUSED_EXIT_S, load_delay_s: float = 0.0) -> None:
         self.home = home
         self.fake = fake
+        self.load_delay_s = load_delay_s
         self.idle_exit_s = idle_exit_s
         self.unused_exit_s = unused_exit_s
         self.selector = selectors.DefaultSelector()
@@ -379,21 +380,28 @@ class Daemon:
     # ---- worker thread: model loading and decoding never block socket I/O
 
     def worker(self) -> None:
+        # Decodes queued behind a load run the moment it finishes, before the main
+        # thread has seen the result, so they must use the model loaded here.
+        model = None
         while True:
             job = self.jobs.get()
             if job[0] == "load":
-                self.results.put(("loaded", *self.load_best(job[1])))
+                asr, tier, error = self.load_best(job[1])
+                if asr is not None:
+                    model = asr
+                self.results.put(("loaded", asr, tier, error))
             elif job[0] == "decode":
                 _, utt, index, samples = job
                 self.results.put(("decoding", utt, index, None))
                 try:
-                    text = self.asr.decode(samples) if self.asr else ""
+                    text = model.decode(samples) if model else ""
                 except Exception as exc:  # a bad segment must not kill the daemon
                     log(f"decode failed: {exc!r}")
                     text = ""
                 self.results.put(("done", utt, index, text))
 
     def load_best(self, exclude_current: bool):
+        time.sleep(self.load_delay_s)
         if self.fake:
             return FakeAsr(), "fake", None
         # Provisioning may have installed packages into this environment after we started.
@@ -426,7 +434,9 @@ class Daemon:
     def status(self) -> dict:
         tier = self.asr_tier if self.asr is not None else (ready_tiers(read_tiers(self.home)) or [None])[0]
         backend, model = TIER_LABELS.get(tier, (tier or "", ""))
-        return {"t": "status", "state": "ready" if self.asr is not None else "loading", "backend": backend, "model": model}
+        # A model swap holds up decoding too, so the old model does not count as ready.
+        ready = self.asr is not None and not self.loading
+        return {"t": "status", "state": "ready" if ready else "loading", "backend": backend, "model": model}
 
     def ensure_loaded(self) -> None:
         if self.asr is None and not self.loading:
@@ -516,9 +526,10 @@ class Daemon:
                 self.loading = False
                 if asr is not None:
                     self.asr, self.asr_tier = asr, tier
+                if self.asr is not None:
+                    # Also after a swap that kept or failed back to the current model.
                     self.broadcast(self.status())
-                elif error and self.asr is None:
-                    # Keep serving with the current model if an upgrade attempt fails.
+                elif error:
                     self.broadcast({"t": "error", "message": error})
                 continue
             utt, index, text = rest
@@ -667,6 +678,7 @@ def main() -> int:
     parser.add_argument("--fake", action="store_true", help="energy VAD and stub ASR, for tests")
     parser.add_argument("--idle-exit", type=float, default=IDLE_EXIT_S, help="seconds without sessions before exiting")
     parser.add_argument("--unused-exit", type=float, default=UNUSED_EXIT_S, help="seconds without a dictation before exiting")
+    parser.add_argument("--load-delay", type=float, default=0.0, help="extra seconds per model load, for tests")
     args = parser.parse_args()
     home = os.path.abspath(args.home)
     os.makedirs(home, mode=0o700, exist_ok=True)
@@ -681,7 +693,7 @@ def main() -> int:
     lock.write(str(os.getpid()))
     lock.flush()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    Daemon(home, args.fake, args.idle_exit, args.unused_exit).serve(os.path.join(home, "daemon.sock"))
+    Daemon(home, args.fake, args.idle_exit, args.unused_exit, args.load_delay).serve(os.path.join(home, "daemon.sock"))
     return 0
 
 

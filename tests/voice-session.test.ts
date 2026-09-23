@@ -110,6 +110,64 @@ test("daemon errors for this utterance fail the stop", async () => {
 	await assert.rejects(result, /decoder crashed/);
 });
 
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+function timedHarness(finalTimeoutMs: number, loadTimeoutMs = 10_000) {
+	const transport: SessionTransport = { send: () => {} };
+	const session = new DictationSession({ id: 7, now: Date.now, onChange: () => {}, finalTimeoutMs, loadTimeoutMs });
+	return { session, transport };
+}
+
+test("a model load slower than the final timeout does not fail the dictation", async () => {
+	const { session, transport } = timedHarness(40);
+	session.attach(transport);
+	session.handleEvent({ t: "status", state: "loading" });
+	const result = session.stop();
+	await sleep(120);
+	assert.equal(session.active, true, "still waiting on the model");
+	assert.match(session.view.message ?? "", /loading/);
+	session.handleEvent({ t: "status", state: "ready" });
+	session.handleEvent({ t: "final", id: 7, text: "made it" });
+	assert.equal(await result, "made it");
+});
+
+test("until the daemon says it is ready, the model counts as loading", async () => {
+	const { session, transport } = timedHarness(40);
+	session.attach(transport);
+	const result = session.stop();
+	await sleep(120);
+	assert.equal(session.active, true);
+	session.handleEvent({ t: "final", id: 7, text: "late" });
+	assert.equal(await result, "late");
+});
+
+test("the final timeout counts from the last progress, not from stop", async () => {
+	const { session, transport } = timedHarness(60);
+	session.attach(transport);
+	session.handleEvent({ t: "status", state: "ready" });
+	const result = session.stop();
+	for (let index = 0; index < 4; index++) {
+		await sleep(40);
+		session.handleEvent({ t: "chunk", id: 7, index, state: "done", text: "x" });
+	}
+	session.handleEvent({ t: "final", id: 7, text: "x x x x" });
+	assert.equal(await result, "x x x x");
+});
+
+test("a model that never finishes loading still fails, with what went wrong", async () => {
+	const { session, transport } = timedHarness(40, 60);
+	session.attach(transport);
+	session.handleEvent({ t: "status", state: "loading" });
+	await assert.rejects(session.stop(), /model/);
+});
+
+test("with the model ready, a silent daemon still times out", async () => {
+	const { session, transport } = timedHarness(40);
+	session.attach(transport);
+	session.handleEvent({ t: "status", state: "ready" });
+	await assert.rejects(session.stop(), /timed out/);
+});
+
 test("levels track input loudness, capped to the meter history", () => {
 	const { session } = harness();
 	for (let i = 0; i < 100; i++) session.pushFrame(frame(i % 2 ? 20000 : 0));
