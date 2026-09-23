@@ -6,3 +6,5 @@ coverage/
 !.env.example
 .DS_Store
 __pycache__/
+# Preview render output; only the WebP and meta.json are committed.
+.github/preview/*.png

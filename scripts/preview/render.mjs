@@ -5,7 +5,8 @@
 //   npm run preview:render -- --try "rx=40&size=62"
 //                                       render a layout trial to a temp dir; the repo is untouched
 //
-// Writes .github/preview/{pi-extras.png, pi-extras@2x.png, meta.json}, then runs the checks.
+// Writes .github/preview/{pi-extras@2x.webp, meta.json} (committed) and pi-extras.png (the social
+// preview upload, ignored by git), then runs the checks.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -14,7 +15,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
 import { parseFrame } from "./ansi-frame.mjs";
-import { PREVIEW_DIR, RETINA, SOCIAL } from "./image-facts.mjs";
+import { PREVIEW_DIR, README_IMAGE, SOCIAL } from "./image-facts.mjs";
 import { runChecks } from "./check.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -84,6 +85,29 @@ function stage() {
 	}
 }
 
+/** Quality for Chromium's WebP encoder: the smallest setting that keeps the thin red and green diff text crisp. */
+const WEBP_QUALITY = 0.9;
+
+/** Re-encode a PNG as WebP in the browser that drew it, so the pipeline needs no image tools. */
+async function toWebp(browser, pngPath, webpPath) {
+	const page = await browser.newPage();
+	const base64 = await page.evaluate(async ({ png, quality }) => {
+		const image = new Image();
+		image.src = `data:image/png;base64,${png}`;
+		await image.decode();
+		const canvas = new OffscreenCanvas(image.naturalWidth, image.naturalHeight);
+		canvas.getContext("2d").drawImage(image, 0, 0);
+		const blob = await canvas.convertToBlob({ type: "image/webp", quality });
+		return new Promise((resolve) => {
+			const reader = new FileReader();
+			reader.onload = () => resolve(String(reader.result).split(",")[1]);
+			reader.readAsDataURL(blob);
+		});
+	}, { png: readFileSync(pngPath).toString("base64"), quality: WEBP_QUALITY });
+	await page.close();
+	writeFileSync(webpPath, Buffer.from(base64, "base64"));
+}
+
 async function shoot(page, url, path) {
 	await page.goto(url);
 	await page.waitForSelector("body[data-ready]");
@@ -108,11 +132,12 @@ async function main() {
 	mkdirSync(outDir, { recursive: true });
 	const browser = await chromium.launch({ args: ["--allow-file-access-from-files", "--font-render-hinting=none"] });
 	try {
-		for (const [spec, scale] of [[SOCIAL, 1], [RETINA, 2]]) {
+		for (const [path, scale] of [[join(outDir, SOCIAL.file), 1], [join(build, "retina.png"), 2]]) {
 			const page = await browser.newPage({ viewport: { width: SOCIAL.width, height: SOCIAL.height }, deviceScaleFactor: scale });
-			await shoot(page, url, join(outDir, spec.file));
+			await shoot(page, url, path);
 			await page.close();
 		}
+		await toWebp(browser, join(build, "retina.png"), join(outDir, README_IMAGE.file));
 	} finally {
 		await browser.close();
 	}
@@ -126,7 +151,7 @@ async function main() {
 	const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
 	const frameSha256 = createHash("sha256").update(frameText).digest("hex");
 	writeFileSync(join(outDir, "meta.json"), `${JSON.stringify({ version, frameSha256 }, null, 2)}\n`);
-	console.log(`rendered ${PREVIEW_DIR}/${SOCIAL.file} and ${RETINA.file} for ${version}`);
+	console.log(`rendered ${PREVIEW_DIR}/${README_IMAGE.file} and ${SOCIAL.file} for ${version}`);
 	await runChecks({ imageDir: outDir, strict: true });
 }
 

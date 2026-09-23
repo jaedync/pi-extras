@@ -42,7 +42,8 @@ A change that ships to `main` is done when:
    release candidate (`npm run preview:render`) and reviewed: the title, voice
    row, jobs and footer are legible in the 4:3 crop and at README width
    (`npm run preview:check -- --open`), and nothing personal is on screen.
-   Commit it with the release and upload the 1x image under the repository's
+   Commit the WebP and `meta.json` with the release, and upload the rendered
+   `.github/preview/pi-extras.png` (ignored by git) under the repository's
    Settings > General > Social preview. A contract test fails until the
    committed image was rendered for the current minor version.
 
