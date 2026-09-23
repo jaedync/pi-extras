@@ -113,14 +113,18 @@ describe('markup cooldown and output budgeting', () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(response('<p>unknown</p>'))
       .mockImplementation(async () => response(card(1)));
-    const client = new KagiClient({ credential: async () => 'fixture-token', fetcher, spacingMs: 0, markupCooldownMs: 10 });
-    await expect(client.search({ query: 'bad' })).rejects.toMatchObject({ code: 'markup' });
-    await expect(client.search({ query: 'good' })).resolves.toMatchObject({ resultCount: 1 });
-    await expect(client.search({ query: 'bad' })).rejects.toMatchObject({ code: 'markup' });
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    await new Promise(resolve => setTimeout(resolve, 15));
-    await expect(client.search({ query: 'bad' })).resolves.toMatchObject({ resultCount: 1 });
-    expect(fetcher).toHaveBeenCalledTimes(3);
+    // Only Date is faked: the cooldown must not expire mid-test on a slow runner.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const client = new KagiClient({ credential: async () => 'fixture-token', fetcher, spacingMs: 0, markupCooldownMs: 30_000 });
+      await expect(client.search({ query: 'bad' })).rejects.toMatchObject({ code: 'markup' });
+      await expect(client.search({ query: 'good' })).resolves.toMatchObject({ resultCount: 1 });
+      await expect(client.search({ query: 'bad' })).rejects.toMatchObject({ code: 'markup' });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      vi.setSystemTime(Date.now() + 30_001);
+      await expect(client.search({ query: 'bad' })).resolves.toMatchObject({ resultCount: 1 });
+      expect(fetcher).toHaveBeenCalledTimes(3);
+    } finally { vi.useRealTimers(); }
   });
 
   it('skips an oversized first record, returns later useful records, and reports exact clipping counts', () => {

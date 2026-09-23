@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { KagiClient } from '../../lib/kagi/client.js';
+import { RequestPacer } from '../../lib/kagi/pacing.js';
 
 const html = (url: string) => `<div class="search-result"><a class="__sri_title_link" href="${url}">Safe</a></div>`;
 const page = (url = 'https://example.test/') => new Response(html(url), { headers: { 'content-type': 'text/html' } });
@@ -20,21 +21,19 @@ function slowFetcher(ms: number) {
 const create = (fetcher: typeof fetch, options = {}) => new KagiClient({ credential: async () => 'test-secret', fetcher, ...options });
 
 describe('request pacing', () => {
-  it('runs up to four searches at once and staggers their starts', async () => {
+  it('runs up to four searches at once', async () => {
     const { fetcher, seen } = slowFetcher(100);
-    const client = create(fetcher, { spacingMs: 20 });
+    const client = create(fetcher, { spacingMs: 0 });
     await Promise.all(['a', 'b', 'c', 'd', 'e', 'f'].map(query => client.search({ query })));
     expect(seen.max).toBe(4);
-    // Each start is only as punctual as its timer, so check the spread rather than every gap.
-    expect(seen.starts[3] - seen.starts[0]).toBeGreaterThanOrEqual(55);
-    for (let i = 1; i < seen.starts.length; i++) expect(seen.starts[i] - seen.starts[i - 1]).toBeGreaterThanOrEqual(10);
   });
 
-  it('holds page requests to the per-window cap', async () => {
-    const { fetcher, seen } = slowFetcher(1);
-    const client = create(fetcher, { spacingMs: 0, pagesPerWindow: 3, windowMs: 120 });
-    await Promise.all(['a', 'b', 'c', 'd'].map(query => client.search({ query })));
-    expect(seen.starts[3] - seen.starts[0]).toBeGreaterThanOrEqual(115);
+  it('applies the start spacing to every request', async () => {
+    const { fetcher, calls } = slowFetcher(1);
+    const client = create(fetcher, { spacingMs: 10_000, timeoutMs: 500 });
+    await client.search({ query: 'a' });
+    await expect(client.search({ query: 'b' })).rejects.toMatchObject({ code: 'pace' });
+    expect(calls).toHaveBeenCalledTimes(1);
   });
 
   it('fails fast instead of waiting past the deadline for the window', async () => {
@@ -63,6 +62,21 @@ describe('request pacing', () => {
     expect([first.cached, second.cached]).toEqual([false, true]);
   });
 
+  it('frees a slot only once however often it is released', async () => {
+    const pacer = new RequestPacer({ concurrency: 1, spacingMs: 0, pagesPerWindow: 30, windowMs: 60_000 });
+    const release = await pacer.acquire(new AbortController().signal);
+    release(); release();
+    const again = await pacer.acquire(new AbortController().signal);
+    // A double release must not have freed a second slot.
+    let second = false;
+    void pacer.acquire(new AbortController().signal).then(() => { second = true; });
+    await sleep(5);
+    expect(second).toBe(false);
+    again();
+    await sleep(0);
+    expect(second).toBe(true);
+  });
+
   it('frees a waiting slot when its caller cancels', async () => {
     const { fetcher, calls } = slowFetcher(40);
     const client = create(fetcher, { spacingMs: 0, concurrency: 1 });
@@ -74,5 +88,41 @@ describe('request pacing', () => {
     await running;
     await client.search({ query: 'c' });
     expect(calls).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('RequestPacer schedule', () => {
+  /** A frozen clock whose waits are recorded instead of slept. */
+  function frozen(at = 1000) {
+    const clock = { time: at, waits: [] as number[] };
+    return { clock, now: () => clock.time, wait: async (ms: number) => { clock.waits.push(ms); } };
+  }
+  const signal = new AbortController().signal;
+  const options = { concurrency: 4, spacingMs: 150, pagesPerWindow: 30, windowMs: 60_000 };
+
+  it('reserves starts spacing apart, even when requested together', async () => {
+    const { clock, now, wait } = frozen();
+    const pacer = new RequestPacer(options, { now, wait });
+    await Promise.all([pacer.start(signal, Infinity), pacer.start(signal, Infinity), pacer.start(signal, Infinity)]);
+    expect(clock.waits).toEqual([0, 150, 300]);
+  });
+
+  it('holds starts past the per-window cap until the oldest leaves the window', async () => {
+    const { clock, now, wait } = frozen();
+    const pacer = new RequestPacer({ ...options, spacingMs: 0, pagesPerWindow: 3, windowMs: 100 }, { now, wait });
+    for (let i = 0; i < 4; i++) await pacer.start(signal, Infinity);
+    expect(clock.waits).toEqual([0, 0, 0, 100]);
+    clock.time += 150;
+    await pacer.start(signal, Infinity);
+    expect(clock.waits.at(-1)).toBe(0);
+  });
+
+  it('refuses a start past the deadline without reserving it', async () => {
+    const { clock, now, wait } = frozen();
+    const pacer = new RequestPacer({ ...options, spacingMs: 0, pagesPerWindow: 1, windowMs: 10_000 }, { now, wait });
+    await pacer.start(signal, Infinity);
+    await expect(pacer.start(signal, clock.time + 500)).rejects.toMatchObject({ code: 'pace' });
+    await pacer.start(signal, Infinity);
+    expect(clock.waits).toEqual([0, 10_000]);
   });
 });

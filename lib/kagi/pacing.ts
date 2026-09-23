@@ -11,6 +11,12 @@ export interface PacerOptions {
   windowMs: number;
 }
 
+/** Time source and sleep, injectable so pacing can be tested without wall-clock jitter. */
+export interface PacerClock {
+  now: () => number;
+  wait: (ms: number, signal: AbortSignal) => Promise<void>;
+}
+
 /** Bounds how many searches run at once and how fast their requests start. */
 export class RequestPacer {
   private active = 0;
@@ -18,9 +24,11 @@ export class RequestPacer {
   private starts: number[] = [];
   private nextStart = 0;
   private readonly options: PacerOptions;
+  private readonly clock: PacerClock;
 
-  constructor(options: PacerOptions) {
+  constructor(options: PacerOptions, clock: PacerClock = { now: Date.now, wait: delay }) {
     this.options = options;
+    this.clock = clock;
   }
 
   /** Waits for a search slot; the returned function frees it exactly once. */
@@ -51,7 +59,7 @@ export class RequestPacer {
    * `deadline` is refused up front rather than held until the search times out.
    */
   async start(signal: AbortSignal, deadline: number): Promise<void> {
-    const now = Date.now();
+    const now = this.clock.now();
     const recent = this.starts.filter(at => at > now - this.options.windowMs);
     const windowFull = recent.length >= this.options.pagesPerWindow;
     const at = Math.max(now, this.nextStart, windowFull ? recent[recent.length - this.options.pagesPerWindow] + this.options.windowMs : 0);
@@ -59,6 +67,6 @@ export class RequestPacer {
     // Reserved synchronously, so concurrent callers never claim the same start.
     this.starts = [...recent, at];
     this.nextStart = at + this.options.spacingMs;
-    await delay(at - Date.now(), signal);
+    await this.clock.wait(at - this.clock.now(), signal);
   }
 }
