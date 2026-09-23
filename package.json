@@ -1,6 +1,6 @@
 {
   "name": "pi-extras",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "Optional status, usage limits, activity, search, shell tools and a quiet theme for Pi",
   "type": "module",

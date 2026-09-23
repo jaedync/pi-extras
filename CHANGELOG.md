@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.3.4 - 2026-09-23
+
+### Changed
+
+- The README image is a 110 KB WebP instead of a 1.8 MB PNG, and the social
+  preview PNG is now render output ignored by git. Both PNGs were removed from
+  the history, which makes a clone about 2.3 MB smaller; the `v0.3.3` tag was
+  moved to the rewritten release commit. The package itself is unchanged from
+  0.3.3.
+
 ## 0.3.3 - 2026-09-23
 
 ### Added
