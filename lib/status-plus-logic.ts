@@ -1,5 +1,7 @@
 /** Pure helpers for status-plus: money, time, quota shapes, catalog cost. */
 
+import { dateFormat } from "./date-format.ts";
+
 /**
  * "window": a percentage against a rolling quota with a hard reset.
  * "budget": a spend balance against a limit (monthly, approximate reset).
@@ -73,8 +75,7 @@ export function formatMoneyLike(value: number, reference: number): string {
 }
 
 export function hhmm(epochMs: number, timeZone = STATUS_TIME_ZONE): string {
-	return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone })
-		.format(new Date(epochMs));
+	return dateFormat("hhmm", timeZone, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(epochMs));
 }
 
 /**

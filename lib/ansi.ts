@@ -8,7 +8,9 @@ export function stripAnsi(text: string): string {
 
 /** Code-point count of the visible text; footer content is single-width. */
 export function visibleWidth(text: string): number {
-	return [...stripAnsi(text)].length;
+	let width = 0;
+	for (const _ of text.includes("\x1b") ? stripAnsi(text) : text) width += 1;
+	return width;
 }
 
 export function padEndVisible(text: string, width: number): string {

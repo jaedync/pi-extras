@@ -5,6 +5,7 @@
  */
 import type { LimitSnapshot } from "./limit-store.ts";
 import { STATUS_TIME_ZONE, formatDuration, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
+import { dateFormat } from "./date-format.ts";
 
 export interface GuardConfig {
 	/** Band and provider-block warnings. Off by default; a session budget always warns. */
@@ -219,8 +220,8 @@ export function hotProviders(
 }
 
 export function localTime(epochMs: number, timeZone = STATUS_TIME_ZONE): string {
-	return new Intl.DateTimeFormat("en-US", {
-		timeZone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+	return dateFormat("local", timeZone, {
+		weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
 	}).format(new Date(epochMs));
 }
 

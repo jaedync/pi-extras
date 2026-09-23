@@ -4,6 +4,7 @@
  * matters, an explicit clock value, so output is deterministic.
  */
 import { STATUS_TIME_ZONE, formatDuration, type LimitEntry } from "./status-plus-logic.ts";
+import { dateFormat } from "./date-format.ts";
 
 export interface Painter {
 	fg(tone: string, text: string): string;
@@ -314,9 +315,27 @@ export function limitText(paint: Painter, entry: LimitEntry, now: number, inline
 	return paint.fg("dim", text);
 }
 
-function dateParts(ms: number, timeZone: string): { day: string; weekday: string; month: string; hour: string; minute: string; period: string } {
-	const parts = new Intl.DateTimeFormat("en-US", {
-		timeZone, weekday: "short", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true,
+interface DateParts { day: string; weekday: string; month: string; hour: string; minute: string; period: string }
+
+// Parts have minute resolution, and every frame asks for the same few minutes.
+const MINUTE_MS = 60_000;
+const MAX_CACHED_PARTS = 256;
+const partsCache = new Map<string, DateParts>();
+
+function dateParts(ms: number, timeZone: string): DateParts {
+	const key = `${timeZone}\u0000${Math.floor(ms / MINUTE_MS)}`;
+	let parts = partsCache.get(key);
+	if (!parts) {
+		if (partsCache.size >= MAX_CACHED_PARTS) partsCache.clear();
+		parts = formatParts(ms, timeZone);
+		partsCache.set(key, parts);
+	}
+	return parts;
+}
+
+function formatParts(ms: number, timeZone: string): DateParts {
+	const parts = dateFormat("parts", timeZone, {
+		weekday: "short", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true,
 	}).formatToParts(new Date(ms));
 	const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
 	return { day: get("day"), weekday: get("weekday"), month: get("month"), hour: get("hour"), minute: get("minute"), period: get("dayPeriod").toLowerCase() };
