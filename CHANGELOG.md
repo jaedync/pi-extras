@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.3.3 - 2026-09-23
+
+### Added
+
+- The README opens with a preview image rendered from a real Pi session.
+  `npm run preview:render` re-stages and re-renders it, and
+  `npm run preview:check` reviews it; every minor or major release now
+  includes a fresh one. The package itself is unchanged from 0.3.2.
+
 ## 0.3.2 - 2026-09-23
 
 ### Fixed
