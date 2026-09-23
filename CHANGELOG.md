@@ -2,6 +2,26 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.3.1 - 2026-09-23
+
+### Changed
+
+- After you stop, a voice wait longer than a second is labelled with what it is
+  waiting for (starting voice, loading the speech model, or transcribing) and
+  that Esc cancels.
+- The status-plus footer renders about 12 times faster. It rebuilt its date
+  formatters on every frame, which cost CPU whenever the screen animated.
+- The package is type-checked in CI with strict TypeScript.
+
+### Fixed
+
+- Voice no longer drops speech recorded while the model is still loading. Those
+  chunks were marked done with no text, so only speech after the load was
+  typed in.
+- A dictation stopped during a slow model load now waits for the load (up to 5
+  minutes) instead of timing out after 30 seconds. After that, the 30 second
+  limit counts from the last progress, not from the stop.
+
 ## 0.3.0 - 2026-09-22
 
 ### Added
