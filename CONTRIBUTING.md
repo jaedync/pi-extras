@@ -38,6 +38,13 @@ A change that ships to `main` is done when:
 4. The release commit is tagged `vX.Y.Z` and pushed together with the tag.
 5. The running Pi has reloaded the pushed commit and the change was checked
    live.
+6. For a minor or major release, the preview image is re-rendered from the
+   release candidate (`npm run preview:render`) and reviewed: the title, voice
+   row, jobs and footer are legible in the 4:3 crop and at README width
+   (`npm run preview:check -- --open`), and nothing personal is on screen.
+   Commit it with the release and upload the 1x image under the repository's
+   Settings > General > Social preview. A contract test fails until the
+   committed image was rendered for the current minor version.
 
 Before publication, inspect `git ls-files`, run a secret scanner across the full
 history, inspect `npm pack --dry-run --json`, and inspect the actual archive.

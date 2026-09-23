@@ -28,6 +28,11 @@ test('the version matches the lockfile and the top changelog entry', () => {
   assert.equal(top?.[1], pkg.version);
 });
 
+test('every minor and major release ships a freshly rendered preview image', async () => {
+  const { previewProblems } = await import('../scripts/preview/image-facts.mjs');
+  assert.deepEqual(previewProblems(root), []);
+});
+
 test('Kagi remains a separate search tool by default', () => {
   const entry = readFileSync(resolve(root, 'lib/kagi/index.ts'), 'utf8');
   assert.match(entry, /KAGI_TOOL_NAME \|\| 'kagi_search'/);

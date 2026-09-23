@@ -1,5 +1,7 @@
 # Pi Extras
 
+![A Pi session with pi-extras: an edit's diff, two background jobs, the phase row, voice dictation mid-sentence and the usage footer](.github/preview/pi-extras@2x.png)
+
 Optional extensions and a theme for [Pi](https://pi.dev): a richer footer,
 usage-limit awareness for the agent, activity and timing indicators, background
 shell jobs, bounded shell execution, Kagi subscription search, and local voice
@@ -185,6 +187,12 @@ npm test
 npm run test:install
 npm run audit:package
 ```
+
+The image above is rendered from a real Pi session, not drawn: `npm run
+preview:render` stages one against a scripted local endpoint (no model calls)
+with a spoken dictation, then lays the captured terminal onto the card. It needs
+macOS, tmux, ffmpeg and a provisioned voice model. `npm run preview:check --
+--open` shows it as a 4:3 crop and at README width for review.
 
 Tests use synthetic credentials and isolated homes, not live accounts. The test
 runner bounds each suite to two minutes. The installation smoke test uses Pi's

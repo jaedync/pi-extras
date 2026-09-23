@@ -19,7 +19,9 @@
     "test:unit": "node --test --test-timeout=30000 tests/*.test.ts tests/*.test.mjs tests/*.test.mts",
     "test:kagi": "vitest run",
     "test:install": "node scripts/install-smoke.mjs",
-    "audit:package": "node scripts/audit-package.mjs"
+    "audit:package": "node scripts/audit-package.mjs",
+    "preview:render": "node scripts/preview/render.mjs",
+    "preview:check": "node scripts/preview/check.mjs"
   },
   "dependencies": { "@picovoice/pvrecorder-node": "1.2.1", "node-html-parser": "7.0.2" },
   "peerDependencies": {
@@ -36,6 +38,7 @@
     "@earendil-works/pi-coding-agent": "0.87.0",
     "@earendil-works/pi-tui": "0.87.0",
     "@types/node": "22.20.4",
+    "playwright-core": "1.63.0",
     "typebox": "1.1.38",
     "typescript": "7.0.2",
     "vitest": "5.0.0"
