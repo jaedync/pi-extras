@@ -15,13 +15,14 @@ const jiti = createJiti(import.meta.url, {
 	},
 });
 const phaseSpinner = await jiti.import("../extensions/phase-spinner.ts", { default: true });
+const { TopBorderLink } = await jiti.import("../lib/top-border.ts");
 
-function harness(t) {
+function harness(t, events) {
 	let now = 0;
 	let idle = false;
 	t.mock.method(performance, "now", () => now);
 	const handlers = new Map();
-	phaseSpinner({ on: (name, handler) => handlers.set(name, handler) });
+	phaseSpinner({ on: (name, handler) => handlers.set(name, handler), events });
 	const forwarded = [];
 	const base = {
 		render: width => ["─".repeat(width), "input"], getText: () => "", invalidate() {},
@@ -162,4 +163,40 @@ test("manual compaction shows while idle and the working indicator stays hidden"
 	h.show(compaction, 100);
 	assert.match(h.render(1600)[0], / 00:01\.5 Compacting context Esc cancel /);
 	assert.equal(h.forwarded.at(-1), compaction);
+});
+
+function eventBus() {
+	const handlers = new Map();
+	return {
+		emit: (channel, data) => { for (const handler of handlers.get(channel) ?? []) handler(data); },
+		on: (channel, handler) => {
+			const set = handlers.get(channel) ?? new Set();
+			set.add(handler);
+			handlers.set(channel, set);
+			return () => set.delete(handler);
+		},
+	};
+}
+
+test("a recording borrows the idle top row, but live runs and statuses keep it", async t => {
+	const events = eventBus();
+	const voice = new TopBorderLink(events, "voice", () => {});
+	voice.set(true); // Already recording when the session starts: the spinner's hello must learn it.
+	const h = harness(t, events);
+	assert.equal(voice.peerActive, false);
+	h.emit("agent_start");
+	assert.equal(voice.peerActive, true, "a run is busy");
+	assert.match(h.render()[0], /Time 00:00\.0/, "the live run keeps the row");
+	h.finish(10, 1000);
+	h.settle();
+	assert.equal(voice.peerActive, false);
+	assert.equal(h.render()[0], "─".repeat(120), "the last-run summary steps aside");
+	voice.set(false);
+	assert.match(h.render()[0], /Last 00:01\.0/, "and comes back afterwards");
+	h.show(indicator("compaction", "Compacting context... (Esc to cancel)"), 2000);
+	assert.equal(voice.peerActive, true, "an idle status is busy too");
+	h.show(undefined, 3000);
+	assert.equal(voice.peerActive, true, "Pi clears before each replacement, so a clear waits a tick");
+	await Promise.resolve();
+	assert.equal(voice.peerActive, false);
 });

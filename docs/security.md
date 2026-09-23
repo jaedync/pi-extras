@@ -57,6 +57,32 @@ path, never the token value. Search queries are sent to Kagi and search results
 enter your model context when you invoke the tool. Search results can contain
 malicious instructions; they are evidence, not instructions to execute.
 
+## Voice
+
+Audio is transcribed on your machine and is not sent anywhere. Recordings are
+held in memory only for the length of a dictation and are never written to
+disk. The transcript is inserted into the editor, not submitted; it reaches
+your model provider only if you send it.
+
+Setup downloads, into `PI_VOICE_HOME` (default `~/.cache/pi-extras/voice`):
+
+- uv from `github.com/astral-sh/uv` releases, pinned and SHA-256 checked.
+- Python 3.12 through uv, and the `sherpa-onnx` and `numpy` wheels from PyPI.
+  The MLX backend adds `parakeet-mlx` and its dependencies.
+- Models from the `k2-fsa/sherpa-onnx` GitHub releases and, for MLX,
+  `mlx-community/parakeet-tdt-0.6b-v3` on Hugging Face at a pinned revision.
+  Every model file is SHA-256 checked before use.
+
+`PI_OFFLINE` skips setup; voice then uses only what is already installed.
+Nothing downloads on hosts without an audio input.
+
+Sessions talk to the daemon over a Unix socket in `PI_VOICE_HOME` that only your
+user can open. The daemon exits when it goes unused or no Pi session is open.
+Over SSH on macOS, capture runs as a per-dictation launchd job in your GUI
+session that streams audio over another user-only socket; the job is removed
+when the dictation ends, and jobs left by a crashed session are cleaned up on
+the next start. macOS asks you to allow `ffmpeg` to use the microphone.
+
 ## Shell Jobs
 
 Commands execute locally without stdin or a TTY. Jobs use process groups so they

@@ -2,7 +2,8 @@
 
 Optional extensions and a theme for [Pi](https://pi.dev): a richer footer,
 usage-limit awareness for the agent, activity and timing indicators, background
-shell jobs, bounded shell execution, and Kagi subscription search.
+shell jobs, bounded shell execution, Kagi subscription search, and local voice
+dictation.
 
 ## Install
 
@@ -15,7 +16,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all six extensions; it makes `quiet` available but does not select it.
+adds all seven extensions; it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -28,6 +29,7 @@ can still conflict.
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
+| Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Quiet | Low-contrast theme with restrained accent colors |
 
 ## Updates and removal
@@ -63,6 +65,10 @@ the package. Removing it does not remove your credentials or change other packag
   Explicit per-call timeouts are preserved.
 - `PI_CACHE_RETENTION=long`: use the longer cache-warmth indicator window.
 - `PHASE_SPINNER_DEBUG=1`: opt-in local timing diagnostics. Leave off normally.
+- `PI_VOICE=off`: disable voice dictation. `PI_VOICE_KEY`: a different key
+  (default `ctrl+space`). `PI_VOICE_HOME`: where voice keeps its runtime,
+  models and settings (default `~/.cache/pi-extras/voice`, or under
+  `XDG_CACHE_HOME`).
 - `KAGI_TOKEN_FILE`: path to your own subscription session credential. See below.
 - `KAGI_TOOL_NAME=web_search`: explicit search-tool replacement. Leave unset to
   keep `kagi_search` and avoid conflicting with another search extension.
@@ -97,6 +103,50 @@ rate limits taken from response headers are reported but never warned on.
   persists the toggle.
 - Polling: providers whose window sits within `proximityPct` of a threshold poll
   at their faster cadence; failed polls back off exponentially up to ten minutes.
+
+## Voice
+
+Hold ctrl+space and speak, or tap it to start and tap again to stop. Esc
+discards the recording. The transcript is typed into the editor and never sent
+on its own; review it and press Enter yourself. Speech is transcribed in
+chunks at each pause while you talk, so when you stop only the last chunk is
+left to decode and the text starts typing in right away.
+
+A recording row in the editor border shows a red dot, the elapsed time, a level
+meter, one mark per chunk, the microphone and the model. It uses the top border
+when that is free and the bottom border while the agent is working. Warnings
+there cover a mic that hears nothing, audio that clips, and a missing
+permission.
+
+`/voice` opens a menu with the current mic and model. `/voice mic` picks the
+input device (saved by name; a missing device falls back to the system default
+with a one-time warning). `/voice model` picks the speech model, `/voice status`
+shows what is installed and why a model was skipped, `/voice setup` retries
+installation, and `/voice unload` frees the model's memory.
+
+**Platforms.** macOS, and Linux with PulseAudio or ALSA (including WSLg).
+Linux has had less testing than macOS. Windows is not supported. Hosts without
+an audio input never download anything.
+
+**First run.** On a machine with a microphone, the first Pi session installs
+voice in the background: a private [uv](https://github.com/astral-sh/uv),
+Python 3.12, the `sherpa-onnx` speech runtime, and NVIDIA Parakeet models. The
+108 MB English model comes first; on machines with 8 GB of RAM or more the
+487 MB multilingual Parakeet v3 follows and becomes the default. On Apple
+Silicon, `/voice model` also offers an MLX build of Parakeet v3 (about 2.5 GB).
+A model is skipped when the disk has less than twice its size free. Setup
+never blocks Pi; a dictation started before it finishes waits for it.
+
+**Background process.** One daemon per user holds the model and serves every
+Pi session. It starts on the first dictation, exits 15 minutes after the last
+one, and exits sooner once no Pi session is open. The next dictation starts it
+again and loses no audio while it loads.
+
+**macOS over SSH.** macOS gives SSH sessions a silent microphone, so when Pi
+runs over SSH, recording runs as a short-lived launchd job in your desktop
+session instead. macOS asks once, on the Mac's screen, to allow
+`ffmpeg` to use the microphone; this needs Homebrew `ffmpeg`. About the first
+half second of each recording is lost while that job starts.
 
 ## Kagi setup
 

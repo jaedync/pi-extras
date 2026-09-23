@@ -32,6 +32,7 @@ import {
 } from "../lib/phase-status.ts";
 
 import { emptyRunMetrics, updateRunMetrics } from "../lib/phase-metrics.ts";
+import { TopBorderLink } from "../lib/top-border.ts";
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 type VisualPhase = ActivePhase | "slow_api" | "stalled";
@@ -203,6 +204,12 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	// First sighting per status kind, so the timer spans a whole event (every retry attempt).
 	let statusEpisodes = new Map<string, number>();
 	let lastRequestAt = Number.NEGATIVE_INFINITY;
+	let topBorder: TopBorderLink | undefined;
+
+	/** Voice records in the top row only while this is false. */
+	function announceBusy(): void {
+		topBorder?.set(active || statusIndicator !== undefined);
+	}
 
 	function ensureTimer(): void {
 		if (!timer) timer = setInterval(() => tick(), DISPLAY_REFRESH_MS);
@@ -222,6 +229,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 				if (statusIndicator) return;
 				statusEpisodes = new Map();
 				releaseTimer();
+				announceBusy();
 			});
 			activeTui?.requestRender();
 			return;
@@ -231,6 +239,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		statusShownAt = now;
 		if (!statusEpisodes.has(indicator.kind)) statusEpisodes = new Map(statusEpisodes).set(indicator.kind, now);
 		ensureTimer();
+		announceBusy();
 		activeTui?.requestRender();
 	}
 
@@ -347,6 +356,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			ensureTimer();
 		}
 		debugState("agent_start", ctx, now, { resumedActiveRun: active && agentStartedAt !== now });
+		announceBusy();
 		tick(now);
 	}
 
@@ -360,10 +370,13 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		pendingToolName = undefined;
 		renderedPhase = undefined;
 		releaseTimer();
+		announceBusy();
 		activeTui?.requestRender();
 	}
 
 	pi.on("session_start", (_event, ctx) => {
+		topBorder?.dispose();
+		topBorder = new TopBorderLink(pi.events, "phase-spinner", () => activeTui?.requestRender());
 		resetStatus();
 		stop();
 		const currentFactory = ctx.ui.getEditorComponent();
@@ -460,7 +473,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 				if (active && currentContext) {
 					return [this.activeBorder(width, hiddenLineCount), ...lines.slice(1)];
 				}
-				if (lastTotalElapsedMs === undefined) return lines;
+				// A recording borrows the idle row; the summary returns when it ends.
+				if (lastTotalElapsedMs === undefined || topBorder?.peerActive) return lines;
 				const completedBorder = renderLastRunBorder(lastTotalElapsedMs, width, this.paint("accent"), hiddenLineCount, metrics);
 				return [completedBorder, ...lines.slice(1)];
 			}
@@ -498,6 +512,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			return new PhaseStatusEditor(tui, theme, keybindings, base);
 		};
 		ctx.ui.setEditorComponent(installedEditorFactory);
+		topBorder.hello();
 	});
 
 	pi.on("agent_start", (_event, ctx) => start(ctx));
@@ -563,6 +578,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		if (active) debugState("session_shutdown", ctx);
 		resetStatus();
 		stop();
+		topBorder?.dispose();
+		topBorder = undefined;
 		activeTui = undefined;
 		if (ctx.ui.getEditorComponent() === installedEditorFactory) {
 			ctx.ui.setEditorComponent(previousEditorFactory);
