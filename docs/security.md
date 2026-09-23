@@ -83,6 +83,26 @@ session that streams audio over another user-only socket; the job is removed
 when the dictation ends, and jobs left by a crashed session are cleaned up on
 the next start. macOS asks you to allow `ffmpeg` to use the microphone.
 
+## Computer Use
+
+Off unless `PI_COMPUTER_USE=on`, and only on macOS. When enabled, the agent can
+see and operate the apps you allow: it reads their accessibility trees and
+screenshots, and clicks, types and scrolls in them. Screenshots and app text
+enter the conversation only when the agent's script emits them, and then reach
+your model provider like any other tool output.
+
+Before each start, the codex helper in the ChatGPT app and the Computer Use
+client are checked with `codesign`: both must be validly signed by OpenAI (team
+`2DC432GLL2`), and the helper must be the `codex` binary the Computer Use service
+accepts. The client runs as a child of that helper, outside Codex's sandbox,
+because the sandbox stops it from reaching the service. It is a one-shot
+launchd job in your desktop session, wired to user-only pipes in a private
+temporary directory, and is removed when it exits; jobs left by a crashed
+session are removed on the next start. Each app needs your approval on first
+use; without a UI, every app is denied. Agent scripts run in a separate V8
+context on a worker thread with no Node globals; that is for isolation and
+runaway loops, not a security boundary.
+
 ## Shell Jobs
 
 Commands execute locally without stdin or a TTY. Jobs use process groups so they

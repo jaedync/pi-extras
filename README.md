@@ -16,7 +16,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all seven extensions; it makes `quiet` available but does not select it.
+adds all eight extensions (computer use stays off until you opt in); it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -30,6 +30,7 @@ can still conflict.
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
+| Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
 | Quiet | Low-contrast theme with restrained accent colors |
 
 ## Updates and removal
@@ -69,6 +70,7 @@ the package. Removing it does not remove your credentials or change other packag
   (default `ctrl+space`). `PI_VOICE_HOME`: where voice keeps its runtime,
   models and settings (default `~/.cache/pi-extras/voice`, or under
   `XDG_CACHE_HOME`).
+- `PI_COMPUTER_USE=on`: enable computer use on macOS. Off by default. See below.
 - `KAGI_TOKEN_FILE`: path to your own subscription session credential. See below.
 - `KAGI_TOOL_NAME=web_search`: explicit search-tool replacement. Leave unset to
   keep `kagi_search` and avoid conflicting with another search extension.
@@ -149,6 +151,26 @@ runs over SSH, recording runs as a short-lived launchd job in your desktop
 session instead. macOS asks once, on the Mac's screen, to allow
 `ffmpeg` to use the microphone; this needs Homebrew `ffmpeg`. About the first
 half second of each recording is lost while that job starts.
+
+## Computer use
+
+Opt-in and macOS only: set `PI_COMPUTER_USE=on` before starting Pi. It adds a
+`computer_use` tool that runs a short script against OpenAI's Computer Use
+methods (`sky.list_apps`, `sky.get_app_state`, `sky.click`, `sky.type_text` and
+the rest), so the agent can read an app's accessibility tree and screenshot and
+act on it. It needs the ChatGPT app for macOS with Computer Use turned on, which
+installs the signed Computer Use client under `~/.codex/computer-use`, and
+someone logged in to the Mac's desktop. `/computer-use` shows what is missing.
+
+The first use of each app asks you to allow it: once, always, or not at all.
+Without a UI, such as `pi -p`, every app is denied. The client stays running
+between calls, so element indices stay valid across turns, and exits after five
+idle minutes. It runs as a launchd job in your desktop session, so it works the
+same from a local terminal and over SSH. Use only one `computer_use` provider at
+a time; remove another computer-use extension before opting in.
+
+This relies on undocumented parts of the ChatGPT app and can break when it
+updates. OpenAI does not produce or endorse this integration.
 
 ## Kagi setup
 

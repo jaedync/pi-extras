@@ -1,3 +1,10 @@
+# Computer Use attribution
+
+The `computer_use({ code })` interface, its method list and the worker-based
+script runner follow https://github.com/tmustier/codex-computer-use-mcp, MIT,
+Copyright (c) 2026 Thomas Mustier. The launchd transport, direct MCP client and
+session handling here are new; the code was written for this package.
+
 # Parser research attribution
 
 Selector vocabulary and grouped-result extraction were informed by:
@@ -6,8 +13,9 @@ Selector vocabulary and grouped-result extraction were informed by:
 
 The HTTP safety, bounded client, queue/cache and tests here are new. No upstream credential persistence/login UI was reused. `node-html-parser` 7.0.2 is a locked runtime dependency with its own license in node_modules.
 
-## MIT License notice for the referenced parser implementations
+## MIT License notice for the referenced implementations
 
+Copyright (c) 2026 Thomas Mustier
 Copyright (c) 2026 Michael Jakl
 Copyright (c) 2025 Carlo Zottmann
 

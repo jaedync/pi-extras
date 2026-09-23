@@ -10,7 +10,7 @@
   "engines": { "node": ">=22.18.0" },
   "files": ["extensions/", "lib/", "!lib/**/__pycache__/", "!lib/**/*.pyc", "themes/", "docs/", "licenses/", "README.md", "LICENSE", "THIRD_PARTY.md"],
   "pi": {
-    "extensions": ["extensions/status-plus.ts", "extensions/usage-guard.ts", "extensions/phase-spinner.ts", "extensions/shell-jobs.ts", "extensions/bash-default-timeout.ts", "extensions/kagi-search.ts", "extensions/voice.ts"],
+    "extensions": ["extensions/status-plus.ts", "extensions/usage-guard.ts", "extensions/phase-spinner.ts", "extensions/shell-jobs.ts", "extensions/bash-default-timeout.ts", "extensions/kagi-search.ts", "extensions/voice.ts", "extensions/computer-use.ts"],
     "themes": ["themes/quiet.json"]
   },
   "scripts": {

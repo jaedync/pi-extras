@@ -61,13 +61,22 @@ try {
   await loader.reload();
   const extensions = loader.getExtensions();
   assert.deepEqual(extensions.errors, []);
-  assert.equal(extensions.extensions.length, 7);
+  assert.equal(extensions.extensions.length, 8);
   assert.ok(loader.getThemes().themes.some(theme => theme.name === 'quiet'));
   assert.deepEqual(loader.getThemes().diagnostics, []);
   const tools = extensions.extensions.flatMap(ext => [...ext.tools.keys()]);
   assert.ok(tools.includes('kagi_search'));
   assert.ok(tools.includes('usage'));
   assert.ok(!tools.includes('web_search'));
+  assert.ok(!tools.includes('computer_use'), 'computer use must stay off until opted in');
+  if (process.platform === 'darwin') {
+    // Opting in registers the tool; nothing starts until the agent calls it.
+    process.env.PI_COMPUTER_USE = 'on';
+    await loader.reload();
+    assert.ok(loader.getExtensions().extensions.some(ext => ext.tools.has('computer_use')));
+    delete process.env.PI_COMPUTER_USE;
+    await loader.reload();
+  }
   const errors = [];
   const { session } = await createAgentSession({ cwd: scratch, agentDir, resourceLoader: loader,
     settingsManager: SettingsManager.create(scratch, agentDir), sessionManager: SessionManager.inMemory(scratch) });
@@ -80,7 +89,7 @@ try {
     await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
     session.dispose();
   }
-  console.log('Native Git install, seven-extension loader and session lifecycle passed without credentials.');
+  console.log('Native Git install, eight-extension loader and session lifecycle passed without credentials.');
 
   writeFileSync(join(fixture, 'lib/smoke-marker.txt'), 'updated\n');
   run('git', ['add', 'lib/smoke-marker.txt'], fixture);
