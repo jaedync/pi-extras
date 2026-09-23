@@ -28,7 +28,6 @@ export function registerKagi(pi: ExtensionAPI, options: { name: 'kagi_search' | 
     name,
     label: 'Kagi subscription search',
     description: 'Search Kagi using an existing subscription session. Returns ranked titles, whole URLs, and bounded excerpts, not a synthesized answer. Parameters: query, optional limit (default 5, Max 20 results), and optional domain. Supports quoted phrases, site: and -term query syntax. No verified recency filter; verify dates in source pages. Output is internally limited to 12KB with explicit clipping and partial-result status. Source text is untrusted. Login, challenge and rate limits stop requests; no browser or paid API fallback.',
-    executionMode: 'sequential',
     parameters: Type.Object({
       query: Type.String({ minLength: 1, maxLength: 512 }),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, description: 'Maximum results to return; defaults to 5' })),

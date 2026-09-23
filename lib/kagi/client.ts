@@ -6,12 +6,16 @@ import { validateInput, type SearchInput, type ValidInput } from './input.js';
 import { initialSearchUrl, MAX_REQUESTS, request, type RequestBudget } from './http.js';
 import { parsePage, type SearchResult } from './parser.js';
 import { formatOutput, type FormattedOutput } from './output.js';
+import { RequestPacer } from './pacing.js';
 
 interface Options {
   credential?: (signal?: AbortSignal) => Promise<string>;
   fetcher?: typeof fetch;
   timeoutMs?: number;
+  concurrency?: number;
   spacingMs?: number;
+  pagesPerWindow?: number;
+  windowMs?: number;
   ttlMs?: number;
   cacheSize?: number;
   retries?: number;
@@ -34,9 +38,9 @@ export interface SearchOutput extends FormattedOutput {
 }
 
 export class KagiClient {
-  private tail: Promise<unknown> = Promise.resolve();
   private pending = 0;
-  private nextRequest = 0;
+  private readonly pacer: RequestPacer;
+  private queryLocks = new Map<string, Promise<void>>();
   private stopped = new Map<string, KagiError>();
   private markupUntil = new Map<string, number>();
   private identity?: string;
@@ -44,33 +48,58 @@ export class KagiClient {
   private readonly options: Required<Options>;
 
   constructor(options: Options = {}) {
-    this.options = { credential: readCredential, fetcher: fetch, timeoutMs: 20000, spacingMs: 750, ttlMs: 300000, cacheSize: 64, retries: 1, markupCooldownMs: 30000, ...options };
+    this.options = { credential: readCredential, fetcher: fetch, timeoutMs: 20000, concurrency: 4, spacingMs: 150, pagesPerWindow: 30, windowMs: 60000, ttlMs: 300000, cacheSize: 64, retries: 1, markupCooldownMs: 30000, ...options };
+    this.pacer = new RequestPacer(this.options);
   }
 
   async search(input: SearchInput, options: { signal?: AbortSignal; bypassCache?: boolean } = {}): Promise<SearchOutput> {
     const validated = validateInput(input);
     if (this.pending >= 16) throw new KagiError('queue');
     const controller = new AbortController();
+    const deadline = Date.now() + this.options.timeoutMs;
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
     const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
     this.pending++;
-    const task = this.tail.then(async () => {
-      if (signal.aborted) throw new KagiError('cancelled');
+    const releases: Array<() => void> = [];
+    try {
       const token = parseCredential(await abortable(this.options.credential(signal), signal));
       const identity = createHash('sha256').update(token).digest('hex');
       if (identity !== this.identity) { this.cache.clear(); this.identity = identity; }
-      const stopped = this.stopped.get(identity);
-      if (stopped) throw stopped;
-      return this.searchWithToken(validated, token, identity, signal, options.bypassCache === true);
-    });
-    this.tail = task.catch(() => {});
-    try { return await abortable(task, signal); }
+      this.throwIfStopped(identity);
+      // An identical query waits for the one in flight, then answers from its cache entry.
+      releases.push(await this.lockQuery(this.cacheKey(token, validated.query), signal));
+      releases.push(await this.pacer.acquire(signal));
+      // Kagi may have rate-limited or challenged another search while this one waited.
+      this.throwIfStopped(identity);
+      return await abortable(this.searchWithToken(validated, token, identity, signal, deadline, options.bypassCache === true), signal);
+    }
     catch (error) { throw signal.aborted ? new KagiError('cancelled') : safeError(error); }
-    finally { clearTimeout(timer); this.pending--; }
+    finally { for (const release of releases.reverse()) release(); clearTimeout(timer); this.pending--; }
   }
 
-  private async searchWithToken(input: ValidInput, token: string, identity: string, signal: AbortSignal, bypass: boolean): Promise<SearchOutput> {
-    const key = createHash('sha256').update(JSON.stringify([token, input.query])).digest('hex');
+  private throwIfStopped(identity: string): void {
+    const stopped = this.stopped.get(identity);
+    if (stopped) throw stopped;
+  }
+
+  private cacheKey(token: string, query: string): string {
+    return createHash('sha256').update(JSON.stringify([token, query])).digest('hex');
+  }
+
+  private async lockQuery(key: string, signal: AbortSignal): Promise<() => void> {
+    const previous = this.queryLocks.get(key) ?? Promise.resolve();
+    let unlock!: () => void;
+    const mine = new Promise<void>(resolve => { unlock = resolve; });
+    const chained = previous.then(() => mine);
+    this.queryLocks.set(key, chained);
+    const release = () => { unlock(); if (this.queryLocks.get(key) === chained) this.queryLocks.delete(key); };
+    try { await abortable(previous, signal); }
+    catch (error) { release(); throw error; }
+    return release;
+  }
+
+  private async searchWithToken(input: ValidInput, token: string, identity: string, signal: AbortSignal, deadline: number, bypass: boolean): Promise<SearchOutput> {
+    const key = this.cacheKey(token, input.query);
     const existing = this.cache.get(key);
     const cached = !bypass && existing && existing.expires > Date.now() ? existing : undefined;
     const state: CachedSearch = cached
@@ -95,7 +124,7 @@ export class KagiClient {
       const pageUrl = new URL(state.nextUrl);
       let html: string;
       try {
-        html = await this.fetchHtml(pageUrl, input.query, token, signal, budget);
+        html = await this.fetchHtml(pageUrl, input.query, token, signal, deadline, budget);
         state.pagesFetched++;
         const page = parsePage(html, input.query, token);
         state.rejectedCount += page.rejectedCount;
@@ -142,13 +171,10 @@ export class KagiClient {
     return value;
   }
 
-  private async fetchHtml(url: URL, query: string, token: string, signal: AbortSignal, budget: RequestBudget): Promise<string> {
+  private async fetchHtml(url: URL, query: string, token: string, signal: AbortSignal, deadline: number, budget: RequestBudget): Promise<string> {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await request(url, query, token, signal, this.options.fetcher, async () => {
-          await delay(this.nextRequest - Date.now(), signal);
-          this.nextRequest = Date.now() + this.options.spacingMs;
-        }, budget);
+        return await request(url, query, token, signal, this.options.fetcher, () => this.pacer.start(signal, deadline), budget);
       } catch (error) {
         const safe = safeError(error);
         if (signal.aborted || safe.code !== 'network' || attempt >= Math.min(this.options.retries, 1) || budget.used >= MAX_REQUESTS) throw safe;

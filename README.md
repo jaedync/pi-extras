@@ -170,7 +170,11 @@ unofficial and can break when Kagi changes its pages. Use it in accordance with
 Kagi's terms and your subscription.
 
 Search results are bounded and treated as untrusted source text. A five-minute
-in-memory cache reduces repeated queries. The client uses a **cooperative I/O deadline**;
+in-memory cache reduces repeated queries. Up to four searches run at once, with
+request starts at least 150 ms apart and at most 30 page requests a minute, so a
+batch of searches is fast but a looping agent cannot hammer the account. A search
+that would have to wait past its deadline for that pace fails with a pacing
+error instead. The client uses a **cooperative I/O deadline**;
 **synchronous parsing cannot be interrupted** by that timer. There is a 2 MB
 response cap, but pathological HTML can still occupy the event loop.
 Without a configured token, the rest of the package loads normally; invoking

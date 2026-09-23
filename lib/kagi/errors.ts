@@ -1,4 +1,4 @@
-export type ErrorCode = 'input' | 'credential' | 'auth' | 'challenge' | 'markup' | 'redirect' | 'rate' | 'body' | 'content' | 'network' | 'http' | 'requestCap' | 'cancelled' | 'queue';
+export type ErrorCode = 'input' | 'credential' | 'auth' | 'challenge' | 'markup' | 'redirect' | 'rate' | 'body' | 'content' | 'network' | 'http' | 'requestCap' | 'cancelled' | 'queue' | 'pace';
 const messages: Record<ErrorCode, string> = {
   input: 'Kagi input is invalid. Check query (1-512 characters), limit (1-20), domain, and unsupported fields.',
   credential: 'Kagi credential is unavailable or invalid. Check the token file exists, is readable and contains a raw token or Kagi session link; never paste credentials into chat.',
@@ -14,6 +14,7 @@ const messages: Record<ErrorCode, string> = {
   requestCap: 'Kagi request cap reached.',
   cancelled: 'Kagi search cancelled or timed out.',
   queue: 'Kagi request queue is full.',
+  pace: 'Kagi page requests are paced per minute to protect the account, and this search could not start before its deadline. Retry in a minute.',
 };
 export class KagiError extends Error {
   readonly code: ErrorCode;

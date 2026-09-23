@@ -38,6 +38,7 @@ const REASONS: Record<string, string> = {
   body: 'a later page exceeded the response safety limit',
   content: 'a later page was not HTML',
   cancelled: 'pagination was cancelled or timed out',
+  pace: 'the per-minute request pace would have outlasted the deadline',
 };
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
