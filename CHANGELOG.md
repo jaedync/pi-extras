@@ -2,6 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.4.0 - 2026-09-23
+
+### Added
+
+- Computer Use, an opt-in macOS extension: `PI_COMPUTER_USE=on` adds a
+  `computer_use({ code })` tool that operates Mac apps through the signed
+  Computer Use client the ChatGPT app installs. It runs as a launchd job in the
+  desktop session, so it works from a local terminal and over SSH. Each app
+  needs approval on first use; `/computer-use` shows what is missing. Off by
+  default and not registered on other platforms.
+
 ## 0.3.6 - 2026-09-23
 
 ### Fixed
