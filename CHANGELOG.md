@@ -2,6 +2,44 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.4.1 - 2026-09-24
+
+### Added
+
+- `/computer-use` opens a panel with the client's status, an apps mode and a
+  checklist of the apps the agent may always use. Check and uncheck several
+  apps at once, filter by typing, and save together; widening access asks for
+  confirmation first. Checking an app ahead of time lets headless runs use it.
+  The checklist edits the Computer Use service's approvals file the way the
+  ChatGPT app does, and only when the file has that exact format.
+- An apps mode for every Pi session: Ask per app (the default), Allow all,
+  which approves every app for the client session without asking or storing
+  anything, and Allow none, which refuses every computer use call. The
+  checklist is kept while either override is on.
+- Computer use tool rows show the script as highlighted code and a live
+  timeline of its Computer Use calls, each with its app, target, time, client
+  startup and approval.
+
+### Changed
+
+- The app approval dialog is drawn by pi-extras instead of as an all-accent
+  select list, defaults to "Don't allow", shows the service's risk warning for
+  apps such as browsers, says the agent is asking rather than
+  ChatGPT, and says that "Always allow" also applies to ChatGPT and Codex.
+  "Allow once" is now "Allow for this session", which is what it did.
+- A headless run that is denied an app tells the agent how to allow it.
+
+### Fixed
+
+- Cancelling a computer use call while its approval dialog was open left the
+  dialog up, and answering it could still allow the app. The dialog now closes
+  and a late answer is ignored.
+- Requests from the Computer Use service other than a plain app approval, such
+  as a URL to open, were shown as an app approval, and allowing one accepted
+  it. They are now declined without asking.
+- A script that fired many Computer Use calls in parallel could exceed the
+  50-call limit.
+
 ## 0.4.0 - 2026-09-23
 
 ### Added
