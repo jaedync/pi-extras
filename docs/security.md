@@ -115,8 +115,17 @@ shared with ChatGPT and Codex computer use. `/computer-use` changes it only
 after you confirm, only when it has the exact format the ChatGPT app writes,
 and by replacing it atomically; it never changes anything else there.
 
+The apps mode in `/computer-use` applies on top of that file and is read on
+every call from `pi-extras.json` in Pi's agent directory. Allow none refuses
+every computer use call before the client is contacted. Allow all answers every
+app request with yes for the client session only, without asking, even with
+no UI, and never writes the approvals file; it needs a confirmation to turn
+on. When a session sees that Allow all was turned off, it restarts its client
+before the next call, so those session approvals end. Unchecking an app also
+restarts the client, ending any approval it held for this session.
+
 This is consent, not containment. Any process running as you, including an
-agent with shell access, can edit that file or start the Computer Use client
+agent with shell access, can edit these files or start the Computer Use client
 itself, as it could with ChatGPT's or Codex's own integration. Keep that in
 mind before giving an agent both computer use and an unrestricted shell.
 

@@ -13,8 +13,11 @@ import { ApprovalStore, approvalsPath, isBundleId, parseAppList } from "./approv
 import { locateBinaries } from "./binaries.ts";
 import { CodeExecutor, type CodeResult } from "./executor.ts";
 import { guiSessionAvailable, spawnGuiJob, sweepStaleJobs } from "./gui-job.ts";
-import { renderCall, renderResult, type Paint, type RowDetails } from "./render.ts";
+import { painter } from "./paint.ts";
+import type { StatusItem } from "./panel.ts";
+import { renderCall, renderResult, type RowDetails } from "./render.ts";
 import { SkySession } from "./session.ts";
+import { readAppsMode, writeAppsMode, type AppsMode } from "./settings.ts";
 
 const ENABLED = new Set(["1", "on", "true", "yes"]);
 /** Close the client after this long without a call; the next call restarts it in well under a second. */
@@ -65,12 +68,6 @@ function failure(result: CodeResult): Error {
 	return new Error(images > 0 ? `${text}\n(${images} emitted image${images === 1 ? "" : "s"} omitted)` : text);
 }
 
-/** A theme missing a key degrades to plain text instead of breaking the row. */
-function painter(theme: Theme): Paint {
-	const safe = (paint: () => string, text: string) => { try { return paint(); } catch { return text; } };
-	return { fg: (key, text) => safe(() => theme.fg(key, text), text), bold: (text) => safe(() => theme.bold(text), text) };
-}
-
 function expandHint(theme: Theme): string {
 	try { return keyHint("app.tools.expand", "to expand"); } catch {
 		const paint = painter(theme);
@@ -85,6 +82,7 @@ function highlight(code: string): string[] {
 const hasCalls = (details: unknown): details is RowDetails => !!details && typeof details === "object" && Array.isArray((details as RowDetails).calls);
 
 export function registerComputerUse(pi: ExtensionAPI, deps: ComputerUseDeps): void {
+	let lastMode: AppsMode | undefined;
 	pi.registerTool({
 		name: "computer_use",
 		label: "Computer use",
@@ -93,9 +91,15 @@ export function registerComputerUse(pi: ExtensionAPI, deps: ComputerUseDeps): vo
 			code: Type.String({ description: "JavaScript body to execute. Use await sky.<method>(args), emit(value), emitImage(screenshot), and store for state shared across calls." }),
 		}, { additionalProperties: false }),
 		async execute(_id, params, signal, onUpdate, ctx) {
+			// Read per call, so a change made in any Pi session applies here too.
+			const mode = deps.mode.read();
+			// The client keeps what Allow all approved until it exits, so leaving Allow all, from any session, ends that here.
+			if (lastMode === "all" && mode !== "all") await deps.restart();
+			lastMode = mode;
+			if (mode === "none") throw new Error("Computer use is set to Allow none, so no app can be used. The user can change this with /computer-use.");
 			const notes = new Set<string>();
 			const result = await deps.executor.execute(params.code, {
-				approve: approver(ctx, notes),
+				approve: approver(ctx, notes, mode),
 				signal,
 				onProgress: (progress) => onUpdate?.({ content: [], details: progress }),
 			});
@@ -115,7 +119,7 @@ export function registerComputerUse(pi: ExtensionAPI, deps: ComputerUseDeps): vo
 		description: "Computer use status, and the apps the agent may always use",
 		handler: async (_args, ctx) => {
 			if (ctx.hasUI) await computerUseMenu(ctx, deps);
-			else ctx.ui.notify(deps.status().join("\n"), "info");
+			else ctx.ui.notify(deps.status().map((item) => item.text).join("\n"), "info");
 		},
 	});
 	pi.on("session_shutdown", () => deps.close());
@@ -151,14 +155,16 @@ export function productionDeps(): ComputerUseDeps {
 	return {
 		executor: new CodeExecutor({ session }),
 		close: () => session.close(),
-		status: () => {
+		status: (): StatusItem[] => {
 			const found = locateBinaries(homedir());
 			return [
-				found.ok ? "Computer Use client: signed by OpenAI" : `Computer Use client: ${found.problem}`,
-				guiSessionAvailable() ? "Desktop session: available" : "Desktop session: nobody is logged in to this Mac's desktop",
-				`Client: ${session.state === "ready" ? "running" : session.state === "starting" ? "starting" : "not running; starts on the first call"}`,
+				found.ok ? { level: "ok", text: "Signed OpenAI client" } : { level: "problem", text: found.problem },
+				guiSessionAvailable() ? { level: "ok", text: "Desktop session" } : { level: "problem", text: "Nobody is logged in to this Mac's desktop" },
+				session.state === "ready" ? { level: "ok", text: "Client running" } : { level: "info", text: session.state === "starting" ? "Client starting" : "Client idle, starts on the first call" },
 			];
 		},
+		mode: { read: () => readAppsMode(), write: (mode) => writeAppsMode(mode) },
+		restart: () => session.close(),
 		approvals: new ApprovalStore(approvalsPath(homedir())),
 		appName: (bundleId) => {
 			if (!names.has(bundleId)) names.set(bundleId, spotlightName(bundleId));

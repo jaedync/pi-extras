@@ -46,6 +46,10 @@ test("an app approval request goes to the caller and its answer is honored", asy
 
 		const denied = await session.call("get_app_state", { app: "Notes" }, { approve: allow("deny") });
 		assert.equal(denied.isError, true);
+
+		const auto = await session.call("get_app_state", { app: "Maps" }, { approve: allow("auto") });
+		assert.notEqual(auto.isError, true);
+		assert.equal(stderr.join("").match(/persist=/g)?.length, 1, "Allow all must never remember an app");
 	} finally { await session.close(); }
 });
 

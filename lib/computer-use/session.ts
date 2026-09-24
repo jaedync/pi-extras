@@ -5,7 +5,8 @@
  */
 import { type ClientProcess, McpLink } from "./mcp-link.ts";
 
-export type Approval = "once" | "always" | "deny";
+/** "auto" is Allow all answering for the user: accepted for the session, never remembered. */
+export type Approval = "once" | "always" | "deny" | "auto";
 
 /** The client asking the user to let the agent use an app. Text is control-free and length-capped. */
 export interface ApprovalRequest {

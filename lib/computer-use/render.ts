@@ -8,6 +8,7 @@
 import { Text, type Component } from "@earendil-works/pi-tui";
 import type { CallRecord, Progress } from "./executor.ts";
 import { formatMs } from "./describe.ts";
+import type { Paint, PaintKey } from "./paint.ts";
 
 const PREVIEW_CODE_LINES = 6;
 const PREVIEW_TEXT_LINES = 5;
@@ -15,8 +16,6 @@ const MAX_EXPANDED_LINES = 1000;
 /** Escape sequences in agent code or app text must not reach the terminal. */
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
 
-type PaintKey = "toolTitle" | "toolOutput" | "muted" | "dim" | "accent" | "success" | "error" | "warning";
-export interface Paint { fg(key: PaintKey, text: string): string; bold(text: string): string }
 
 export interface RowDetails {
 	readonly calls?: CallRecord[];
@@ -64,6 +63,7 @@ export function callLines(args: unknown, options: CallOptions): string[] {
 function approvalNote(call: CallRecord): { text: string; key: PaintKey } | undefined {
 	if (call.approval === "always") return { text: "always allowed", key: "success" };
 	if (call.approval === "once") return { text: "allowed for this session", key: "success" };
+	if (call.approval === "auto") return { text: "allowed by Allow all", key: "warning" };
 	// The client's own denial message only repeats this.
 	if (call.approval === "deny") return { text: "not allowed", key: "warning" };
 	return undefined;

@@ -168,13 +168,28 @@ so a stray Enter refuses. "Allow for this session" lasts until the client exits;
 and Codex computer use. Apps the service rates high risk, such as browsers, show
 its prompt injection warning. The service never allows some apps, such as
 terminals. Without a UI, such as `pi -p` or a subagent, an app that is not
-always allowed is denied, and the agent is told how to allow it.
+always allowed is denied unless Allow all is on, and the agent is told how to
+allow it.
 
-`/computer-use` lists the always-allowed apps. From there you can stop allowing
-one, or always allow an app ahead of time so headless runs can use it. The
-change applies immediately, including to a running client. It edits the same
-approvals file as the ChatGPT app's settings; if that file ever has a format
-this version does not know, the list is shown read-only.
+`/computer-use` opens a panel with the client's status, the apps mode and a
+checklist of the apps the agent may always use. Check and uncheck any number of
+apps, type to filter, and press Enter to save them together; always allowing an
+app or turning on Allow all asks you to confirm first. Checking an app ahead of
+time lets headless runs use it. Changes apply immediately, including to a
+running client. The checklist edits the same approvals file as the ChatGPT
+app's settings; if that file ever has a format this version does not know, it
+is shown read-only.
+
+The apps mode sits on top of the checklist, applies to every Pi session, and
+is kept in `~/.pi/agent/pi-extras.json`:
+
+- Ask per app (default): checked apps are used without asking; any other app
+  asks you first.
+- Allow all: every app is allowed without asking, including high-risk apps
+  such as browsers and mail, and also without a UI. These approvals last only
+  for the client session and are never stored, so the checklist is unchanged
+  when you switch back. The service still refuses some apps, such as terminals.
+- Allow none: every computer use call is refused, even for checked apps.
 
 Each tool call shows the script as highlighted code, then every Computer Use
 call it made, with its app and target, how long it took, and any approval.

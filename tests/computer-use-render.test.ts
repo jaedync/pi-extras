@@ -71,7 +71,9 @@ test("denied and session-only approvals are labelled", () => {
 	const lines = strip(resultLines({ content: [], details: { calls: [
 		{ method: "get_app_state", app: "Safari", detail: "", ms: 3000, ok: false, error: "User denied Safari", approval: "deny" },
 		{ method: "get_app_state", app: "Notes", detail: "", ms: 1000, ok: true, approval: "once" },
-	], durationMs: 4000 } }, { expanded: false, isError: false, paint, hint }));
+		{ method: "get_app_state", app: "Maps", detail: "", ms: 1000, ok: true, approval: "auto" },
+	], durationMs: 5000 } }, { expanded: false, isError: false, paint, hint }));
 	assert.match(lines[0], /3\.0s  not allowed$/);
 	assert.match(lines[1], /1\.0s  allowed for this session$/);
+	assert.match(lines[2], /1\.0s  allowed by Allow all$/);
 });
