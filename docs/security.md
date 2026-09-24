@@ -98,10 +98,27 @@ accepts. The client runs as a child of that helper, outside Codex's sandbox,
 because the sandbox stops it from reaching the service. It is a one-shot
 launchd job in your desktop session, wired to user-only pipes in a private
 temporary directory, and is removed when it exits; jobs left by a crashed
-session are removed on the next start. Each app needs your approval on first
-use; without a UI, every app is denied. Agent scripts run in a separate V8
+session are removed on the next start. Agent scripts run in a separate V8
 context on a worker thread with no Node globals; that is for isolation and
 runaway loops, not a security boundary.
+
+The Computer Use service asks before the agent first uses each app, and Pi
+answers only with your choice. The dialog defaults to "Don't allow", shows the
+service's risk warning, and closes if the call is cancelled; an answer given
+after that is ignored. Without a UI, a dismissed dialog or any other kind of
+request from the service, the answer is no. Agent scripts cannot reach the
+dialog or the answer.
+
+"Always allow" is kept by the service in
+`~/Library/Group Containers/2DC432GLL2.com.openai.sky.CUAService/Library/Application Support/Software/ComputerUseAppApprovals.json`,
+shared with ChatGPT and Codex computer use. `/computer-use` changes it only
+after you confirm, only when it has the exact format the ChatGPT app writes,
+and by replacing it atomically; it never changes anything else there.
+
+This is consent, not containment. Any process running as you, including an
+agent with shell access, can edit that file or start the Computer Use client
+itself, as it could with ChatGPT's or Codex's own integration. Keep that in
+mind before giving an agent both computer use and an unrestricted shell.
 
 ## Shell Jobs
 

@@ -17,8 +17,14 @@ async function call(name, args) {
   if (name === 'list_apps') return text('Finder — /System/Library/CoreServices/Finder.app/ — com.apple.finder [running]');
   if (name === 'crash') process.exit(3);
   if (name === 'slow') { await new Promise((resolve) => setTimeout(resolve, Number(args.ms ?? 1000))); return text('slow done'); }
+  // Requests the real client has never been seen to send; they must not be accepted blindly.
+  if (name === 'ask_url') return text(`url ${(await ask('elicitation/create', { mode: 'url', message: 'Sign in', url: 'https://example.com', elicitationId: 'e1' })).result?.action}`);
+  if (name === 'ask_form') return text(`form ${(await ask('elicitation/create', { message: 'Your name?', requestedSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } })).result?.action}`);
   if (!approved.has(args.app)) {
-    const answer = await ask('elicitation/create', { message: `Allow ChatGPT to use ${args.app}?`, requestedSchema: { type: 'object', properties: {} }, _meta: { persist: ['always'] } });
+    // Payload captured from the real client: high-risk apps carry a warning.
+    const risky = args.app === 'Safari' ? { riskLevel: 'high', subtitle: 'Allowing ChatGPT to use this app introduces new risks, including those related to prompt injection attacks, such as data theft or loss. Carefully monitor ChatGPT while it uses this app.' } : {};
+    const answer = await ask('elicitation/create', { message: `Allow ChatGPT to use ${args.app}?`, requestedSchema: { type: 'object', properties: {} }, _meta: { persist: ['always'], ...risky } });
+    process.stderr.write(`answer=${answer.result?.action}\n`);
     if (answer.result?.action !== 'accept') return text(`User denied ${args.app}`, true);
     approved.add(args.app);
     if (answer.result?._meta?.persist) process.stderr.write(`persist=${answer.result._meta.persist}\n`);

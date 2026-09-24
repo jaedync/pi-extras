@@ -162,12 +162,27 @@ act on it. It needs the ChatGPT app for macOS with Computer Use turned on, which
 installs the signed Computer Use client under `~/.codex/computer-use`, and
 someone logged in to the Mac's desktop. `/computer-use` shows what is missing.
 
-The first use of each app asks you to allow it: once, always, or not at all.
-Without a UI, such as `pi -p`, every app is denied. The client stays running
-between calls, so element indices stay valid across turns, and exits after five
-idle minutes. It runs as a launchd job in your desktop session, so it works the
-same from a local terminal and over SSH. Use only one `computer_use` provider at
-a time; remove another computer-use extension before opting in.
+The first use of each app asks you to allow it. "Don't allow" is the default,
+so a stray Enter refuses. "Allow for this session" lasts until the client exits;
+"Always allow" is stored by the Computer Use service and also applies to ChatGPT
+and Codex computer use. Apps the service rates high risk, such as browsers, show
+its prompt injection warning. The service never allows some apps, such as
+terminals. Without a UI, such as `pi -p` or a subagent, an app that is not
+always allowed is denied, and the agent is told how to allow it.
+
+`/computer-use` lists the always-allowed apps. From there you can stop allowing
+one, or always allow an app ahead of time so headless runs can use it. The
+change applies immediately, including to a running client. It edits the same
+approvals file as the ChatGPT app's settings; if that file ever has a format
+this version does not know, the list is shown read-only.
+
+Each tool call shows the script as highlighted code, then every Computer Use
+call it made, with its app and target, how long it took, and any approval.
+The client stays running between calls, so element indices stay valid across
+turns, and exits after five idle minutes. It runs as a launchd job in your
+desktop session, so it works the same from a local terminal and over SSH. Use
+only one `computer_use` provider at a time; remove another computer-use
+extension before opting in.
 
 This relies on undocumented parts of the ChatGPT app and can break when it
 updates. OpenAI does not produce or endorse this integration.

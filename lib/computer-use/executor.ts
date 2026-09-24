@@ -4,7 +4,8 @@
  * Only what the script emits returns to the conversation.
  */
 import { Worker } from "node:worker_threads";
-import type { CallOptions, ContentBlock, SkySession } from "./session.ts";
+import { describeCall } from "./describe.ts";
+import type { Approval, CallOptions, ContentBlock, SkySession } from "./session.ts";
 
 export const METHODS = [
 	"list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
@@ -29,16 +30,40 @@ export interface ExecutorOptions {
 	readonly session: Pick<SkySession, "call">;
 	readonly sliceMs?: number;
 	readonly maxTextChars?: number;
+	/** Clock for call timings; tests pass their own. */
+	readonly now?: () => number;
+}
+
+/** One Computer Use call as the tool row shows it. */
+export interface CallRecord {
+	readonly method: string;
+	readonly app?: string;
+	readonly detail: string;
+	readonly ms: number;
+	readonly ok: boolean;
+	readonly error?: string;
+	/** The user's answer, when this call had to ask. */
+	readonly approval?: Approval;
+	/** Set when this call had to start the client first. */
+	readonly startupMs?: number;
+}
+
+export interface Progress {
+	readonly calls: CallRecord[];
+	readonly running?: { readonly method: string; readonly app?: string; readonly detail: string };
 }
 
 export interface RunOptions {
 	readonly approve: CallOptions["approve"];
 	readonly signal?: AbortSignal;
+	/** Told when each call starts and finishes, for a live tool row. */
+	readonly onProgress?: (progress: Progress) => void;
 }
 
 export interface CodeResult {
 	readonly content: ContentBlock[];
-	readonly calls: string[];
+	readonly calls: CallRecord[];
+	readonly durationMs: number;
 	readonly error?: string;
 }
 
@@ -104,7 +129,11 @@ type Outcome = Error | { result: CodeResult; store?: Record<string, unknown> };
 class Run {
 	settle: (outcome: Outcome) => void = () => {};
 	private readonly content: ContentBlock[] = [];
-	private readonly calls: string[] = [];
+	private readonly calls: CallRecord[] = [];
+	/** Counted at the start of each call: records only land when calls finish. */
+	private startedCalls = 0;
+	private readonly now: () => number;
+	private readonly started: number;
 	private readonly sliceMs: number;
 	private readonly maxTextChars: number;
 	private textChars = 0;
@@ -124,6 +153,8 @@ class Run {
 		this.worker = worker;
 		this.screenshot = screenshot;
 		this.keep = keep;
+		this.now = executor.now ?? (() => performance.now());
+		this.started = this.now();
 		this.sliceMs = executor.sliceMs ?? DEFAULT_SLICE_MS;
 		this.maxTextChars = executor.maxTextChars ?? DEFAULT_MAX_TEXT_CHARS;
 	}
@@ -166,12 +197,26 @@ class Run {
 	}
 
 	private async call(message: Extract<WorkerMessage, { type: "call" }>): Promise<void> {
-		if (this.calls.length >= MAX_CALLS) return this.reply(message.id, { error: `the code made more than ${MAX_CALLS} Computer Use calls` });
+		if (++this.startedCalls > MAX_CALLS) return this.reply(message.id, { error: `the code made more than ${MAX_CALLS} Computer Use calls` });
 		clearTimeout(this.timer);
-		this.calls.push(message.method);
+		let args: Record<string, unknown> = {};
+		try { args = JSON.parse(message.args) as Record<string, unknown>; } catch { /* reported by the call below */ }
+		const target = { method: message.method, ...describeCall(message.method, args) };
+		const started = this.now();
+		let approval: Approval | undefined;
+		let startupMs: number | undefined;
+		const approve: CallOptions["approve"] = async (request) => (approval = await this.options.approve(request));
+		const record = (error?: string) => {
+			this.calls.push({
+				...target, ms: Math.round(this.now() - started), ok: error === undefined,
+				...(error === undefined ? {} : { error }), ...(approval ? { approval } : {}), ...(startupMs === undefined ? {} : { startupMs }),
+			});
+			this.options.onProgress?.({ calls: [...this.calls] });
+		};
+		this.options.onProgress?.({ calls: [...this.calls], running: target });
 		try {
-			const args = JSON.parse(message.args) as Record<string, unknown>;
-			const result = await this.executor.session.call(message.method, args, { approve: this.options.approve, signal: this.options.signal });
+			const result = await this.executor.session.call(message.method, args, { approve, signal: this.options.signal });
+			startupMs = result.startupMs;
 			const text = result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
 			if (result.isError) throw new Error(text || `${message.method} failed`);
 			let value: unknown = text || null;
@@ -179,9 +224,12 @@ class Run {
 				const image = result.content.find((block): block is Image => block.type === "image");
 				value = { app: args.app, text, screenshot: image ? this.keep(image) : null };
 			}
+			record();
 			this.reply(message.id, { value: JSON.stringify(value) });
 		} catch (error) {
-			this.reply(message.id, { error: error instanceof Error ? error.message : String(error) });
+			const reason = error instanceof Error ? error.message : String(error);
+			record(reason);
+			this.reply(message.id, { error: reason });
 		} finally {
 			if (!this.settled) this.startTimer(this.sliceMs, `the code ran over ${this.sliceMs} ms between Computer Use calls`);
 		}
@@ -202,6 +250,6 @@ class Run {
 		const content = [...this.content];
 		if (this.clippedChars > 0) content.push({ type: "text", text: `[${this.clippedChars} more characters clipped; emit only what you need]` });
 		if (error) content.push({ type: "text", text: `Computer Use code stopped: ${error}` });
-		this.settle({ result: { content, calls: [...this.calls], ...(error ? { error } : {}) }, store });
+		this.settle({ result: { content, calls: [...this.calls], durationMs: Math.round(this.now() - this.started), ...(error ? { error } : {}) }, store });
 	}
 }

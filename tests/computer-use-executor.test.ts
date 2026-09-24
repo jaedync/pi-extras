@@ -95,3 +95,39 @@ test("emitting a value JSON cannot represent gives text instead of breaking the 
 	assert.equal(result.error, undefined);
 	assert.deepEqual(result.content.map((block) => block.type === "text" ? block.text : ""), ["() => 1", "Symbol(s)", "after"]);
 });
+
+test("each call is recorded with its target, timing, outcome and any approval", async () => {
+	let now = 0;
+	const { session } = fakeSession(async (tool, args) => {
+		now += tool === "get_app_state" ? 250 : 40;
+		if (tool === "click") return text("no such element", true);
+		return { content: [{ type: "text", text: `App=${args.app}` }], isError: false, ...(tool === "get_app_state" ? { startupMs: 900 } : {}) };
+	});
+	const withApproval = {
+		async call(tool: string, args: Record<string, unknown>, options: CallOptions) {
+			if (tool === "get_app_state") await options.approve({ app: "Finder", message: "Allow ChatGPT to use Finder?", highRisk: false, canRemember: true, signal: new AbortController().signal });
+			return session.call(tool, args, options);
+		},
+	};
+	const executor = new CodeExecutor({ session: withApproval, now: () => now });
+	const progress: string[] = [];
+	const result = await executor.execute(`await sky.get_app_state({ app: "Finder" }); await sky.type_text({ app: "Finder", text: "hello\\nworld" }); try { await sky.click({ app: "Finder", element_index: "12" }); } catch {}`, {
+		approve: async () => "always",
+		onProgress: (update) => progress.push(update.running ? `run ${update.running.method}` : `done ${update.calls.length}`),
+	});
+	assert.deepEqual(result.calls, [
+		{ method: "get_app_state", app: "Finder", detail: "", ms: 250, ok: true, approval: "always", startupMs: 900 },
+		{ method: "type_text", app: "Finder", detail: '"hello↵world"', ms: 40, ok: true },
+		{ method: "click", app: "Finder", detail: "#12", ms: 40, ok: false, error: "no such element" },
+	]);
+	assert.equal(result.durationMs, 330);
+	assert.deepEqual(progress, ["run get_app_state", "done 1", "run type_text", "done 2", "run click", "done 3"]);
+});
+
+test("the call cap counts calls as they start, so parallel calls cannot slip past it", async () => {
+	const { session, calls } = fakeSession(async (tool) => { await new Promise((resolve) => setTimeout(resolve, 20)); return text(`${tool} ok`); });
+	const executor = new CodeExecutor({ session });
+	const result = await executor.execute(`await Promise.allSettled(Array.from({ length: 80 }, () => sky.list_apps())); emit("done");`, { approve });
+	assert.equal(calls.length, 50);
+	assert.deepEqual(result.content, [{ type: "text", text: "done" }]);
+});

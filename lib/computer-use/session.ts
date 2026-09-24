@@ -7,9 +7,23 @@ import { type ClientProcess, McpLink } from "./mcp-link.ts";
 
 export type Approval = "once" | "always" | "deny";
 
+/** The client asking the user to let the agent use an app. Text is control-free and length-capped. */
+export interface ApprovalRequest {
+	/** The app's name as the client resolved it, or "" if the message had an unfamiliar shape. */
+	readonly app: string;
+	readonly message: string;
+	/** The client's risk warning, with "ChatGPT" replaced by "the agent" since that is who asks. */
+	readonly warning?: string;
+	readonly highRisk: boolean;
+	/** Whether the client offers to remember the answer ("Always allow"). */
+	readonly canRemember: boolean;
+	/** Aborts when the call is cancelled; the answer is then ignored and the request declined. */
+	readonly signal: AbortSignal;
+}
+
 export interface CallOptions {
-	/** Asked when the client wants the user to allow an app; `canRemember` offers "always". */
-	readonly approve: (message: string, canRemember: boolean) => Promise<Approval>;
+	/** Asked when the client wants the user to allow an app. */
+	readonly approve: (request: ApprovalRequest) => Promise<Approval>;
 	readonly signal?: AbortSignal;
 }
 
@@ -18,6 +32,8 @@ export type ContentBlock = { type: "text"; text: string } | { type: "image"; dat
 export interface ToolResult {
 	readonly content: ContentBlock[];
 	readonly isError: boolean;
+	/** Set on the call that had to start the client: how long that took. */
+	readonly startupMs?: number;
 }
 
 export interface SessionOptions {
@@ -31,6 +47,45 @@ export interface SessionOptions {
 
 const PROTOCOL_VERSION = "2025-06-18";
 const DEFAULT_START_TIMEOUT_MS = 15_000;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
+const MAX_MESSAGE_CHARS = 200;
+const MAX_WARNING_CHARS = 600;
+/** The client's wording, captured from Computer Use 26.819: "Allow ChatGPT to use Safari?". */
+const APPROVAL_MESSAGE = /^Allow \S+ to use (.+)\?$/;
+const DECLINE = { action: "decline" } as const;
+
+function plain(value: unknown, max: number): string {
+	if (typeof value !== "string") return "";
+	const text = value.replace(CONTROL, " ").replace(/\s+/g, " ").trim();
+	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/**
+ * Only the one shape the client uses for app approvals is answered: a form
+ * with nothing to fill in. Anything else (a URL to open, fields to fill) is
+ * declined unseen, so saying yes to an app can never mean saying yes to that.
+ */
+function approvalRequest(params: unknown, signal: AbortSignal): ApprovalRequest | undefined {
+	const request = record(params);
+	const schema = record(request.requestedSchema);
+	const properties = schema.properties === undefined ? {} : schema.properties;
+	const required = schema.required === undefined ? [] : schema.required;
+	if (request.mode !== undefined && request.mode !== "form") return undefined;
+	if (schema.type !== "object" || !properties || typeof properties !== "object" || Object.keys(properties).length > 0) return undefined;
+	if (!Array.isArray(required) || required.length > 0) return undefined;
+	const message = plain(request.message, MAX_MESSAGE_CHARS);
+	if (!message) return undefined;
+	const meta = record(request._meta);
+	const warning = plain(meta.subtitle, MAX_WARNING_CHARS).replace(/\bChatGPT\b/g, "the agent");
+	return {
+		app: APPROVAL_MESSAGE.exec(message)?.[1] ?? "",
+		message,
+		warning: warning || undefined,
+		highRisk: meta.riskLevel === "high",
+		canRemember: Array.isArray(meta.persist) && meta.persist.includes("always"),
+		signal,
+	};
+}
 
 function record(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -85,10 +140,14 @@ export class SkySession {
 		const arm = () => { timer = setTimeout(() => timeout.abort(), this.options.callTimeoutMs); };
 		const signal = options.signal ? AbortSignal.any([options.signal, timeout.signal]) : timeout.signal;
 		try {
+			const cold = this.state !== "ready";
+			const started = performance.now();
 			const link = await this.connect(signal);
+			const startupMs = cold ? Math.round(performance.now() - started) : undefined;
 			this.current = { options, pause: () => clearTimeout(timer), resume: arm };
 			arm();
-			return toResult(await link.request("tools/call", { name: tool, arguments: args }, signal));
+			const result = toResult(await link.request("tools/call", { name: tool, arguments: args }, signal));
+			return startupMs === undefined ? result : { ...result, startupMs };
 		} catch (error) {
 			if (!timeout.signal.aborted) throw error;
 			// The client is still busy with the abandoned call; start fresh next time.
@@ -129,16 +188,19 @@ export class SkySession {
 		if (method === "ping") return {};
 		if (method !== "elicitation/create") throw Object.assign(new Error(`unsupported request ${method}`), { code: -32601 });
 		const call = this.current;
-		if (!call) return { action: "decline" };
-		const request = record(params);
-		const persist = record(request._meta).persist;
-		const canRemember = Array.isArray(persist) && persist.includes("always");
+		if (!call) return DECLINE;
+		// The dialog closes when the call is cancelled, and nothing is accepted after that.
+		const cancelled = new AbortController();
+		const signal = call.options.signal ? AbortSignal.any([call.options.signal, cancelled.signal]) : cancelled.signal;
+		const request = approvalRequest(params, signal);
+		if (!request || signal.aborted) return DECLINE;
 		call.pause();
 		try {
-			const answer = await call.options.approve(typeof request.message === "string" ? request.message : "Allow Computer Use?", canRemember);
-			if (answer === "deny") return { action: "decline" };
-			return answer === "always" && canRemember ? { action: "accept", content: {}, _meta: { persist: "always" } } : { action: "accept", content: {} };
+			const answer = await call.options.approve(request).catch(() => "deny" as const);
+			if (signal.aborted || answer === "deny") return DECLINE;
+			return answer === "always" && request.canRemember ? { action: "accept", content: {}, _meta: { persist: "always" } } : { action: "accept", content: {} };
 		} finally {
+			cancelled.abort();
 			call.resume();
 		}
 	}
