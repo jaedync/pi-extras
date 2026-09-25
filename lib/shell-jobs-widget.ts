@@ -261,14 +261,14 @@ export function createJobsWidget(): JobsWidget {
 				// One band per job, like a tool row; a quiet log stills the sweep to a tint.
 				const bands = rows.map((job) => jobBand(theme, factsOf(job), { width, now, view: "live", quiet: isQuiet(job, now) }));
 				const more = hidden > 0 ? [`${WIDGET_PAD}${paintWith(theme)("dim", `+${hidden} more`)}`] : [];
-				// A blank line sets the bands apart from the transcript above.
-				return ["", ...bands, ...more];
+				// Pi already puts a blank line between the transcript and the widgets.
+				return [...bands, ...more];
 			},
 			invalidate: () => {},
-			// A blank line, then one band per job in painted order; the `+N more` line is no job.
+			// One band per job in painted order; the `+N more` line is no job.
 			handleMouse: (event: WidgetMouseEvent) => {
 				if (event.type !== "click" || event.button !== "left" || onSelect === null) return undefined;
-				const job = lastRows[event.y - 1];
+				const job = lastRows[event.y];
 				if (job === undefined) return undefined;
 				onSelect(job);
 				return { handled: true };

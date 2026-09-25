@@ -199,7 +199,7 @@ describe("job widget", () => {
 		assert.deepStrictEqual(renderJobLines([job], 2000, plainPaint), [`${frameAt(SPINNER_FRAMES, 2000)}  j1  1s     cd app && make [31mall[0m`]);
 	});
 
-	test("the TUI widget draws one band per job under a blank line, named by title", async () => {
+	test("the TUI widget draws one band per job, named by title", async () => {
 		const app = createFakePi([], "tui");
 		shellJobs(app.pi as any);
 		await fire(app.handlers, "session_start", app.ctx);
@@ -207,12 +207,12 @@ describe("job widget", () => {
 		await app.tools.get("shell_job_start").execute("t2", { command: "sleep 31", title: "Nap" }, undefined, undefined, app.ctx);
 		const factory = app.widgets.at(-1)?.value as (host: unknown, theme: unknown) => { render(width: number): string[] };
 		const lines = factory({ requestRender: () => {} }, quiet()).render(40).map((line) => stripTerminalSequences(line));
-		assert.strictEqual(lines[0], "");
-		assert.strictEqual(lines.length, 3);
-		contains(lines[1], "$ sleep 30");
+		// Pi puts the blank line above widgets itself.
+		assert.strictEqual(lines.length, 2);
+		contains(lines[0], "$ sleep 30");
 		// A titled job shows its title alone; ids are for the model.
-		contains(lines[2], "Nap");
-		doesNotContain(lines[2], "sleep 31");
+		contains(lines[1], "Nap");
+		doesNotContain(lines[1], "sleep 31");
 		doesNotContain(lines.join("\n"), "sleep-30");
 		for (const line of lines) assert.ok(visibleWidth(line) <= 40, line);
 		await fire(app.handlers, "session_shutdown", app.ctx);
@@ -237,8 +237,8 @@ describe("job widget", () => {
 		// j1 never printed, so its first sample is dated from its start and its band is
 		// already still; j2 has output, so it sweeps.
 		const bandOf = (job: (typeof jobs)[number], isQuiet: boolean) => band.jobBand(theme, band.factsOf(job), { width: 80, now, view: "live", quiet: isQuiet });
-		assert.strictEqual(lines[1], bandOf(jobs[0]!, true));
-		assert.strictEqual(lines[2], bandOf(jobs[1]!, false));
+		assert.strictEqual(lines[0], bandOf(jobs[0]!, true));
+		assert.strictEqual(lines[1], bandOf(jobs[1]!, false));
 		assert.notStrictEqual(bandOf(jobs[1]!, true), bandOf(jobs[1]!, false));
 		jobsWidget.detach();
 	});

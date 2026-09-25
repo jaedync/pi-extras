@@ -572,12 +572,11 @@ describe("extension integration", () => {
 			{ fg: (_key: string, text: string) => text },
 		);
 		const lines = component.render(24);
-		// A blank line apart from the transcript, then the job's band.
-		assert.strictEqual(lines[0], "");
-		contains(lines[1], "$ sleep 30");
-		assert.ok(visibleWidth(lines[1]) <= 24);
+		assert.strictEqual(lines.length, 1);
+		contains(lines[0], "$ sleep 30");
+		assert.ok(visibleWidth(lines[0]) <= 24);
 		// 24 columns is narrower than the row, so the command must be truncated.
-		doesNotContain(lines[1], "watchAll");
+		doesNotContain(lines[0], "watchAll");
 		const widgetCalls = app.widgets.length;
 		await sleep(WIDGET_REFRESH_MS + 500);
 		// The timer asks for a render instead of re-setting the widget.
@@ -589,8 +588,8 @@ describe("extension integration", () => {
 			{ fg: () => { throw new Error("no such theme key"); } },
 		);
 		const fallback = degrade.render(24);
-		contains(fallback[1], "$ sleep 30");
-		assert.ok(visibleWidth(fallback[1]) <= 24);
+		contains(fallback[0], "$ sleep 30");
+		assert.ok(visibleWidth(fallback[0]) <= 24);
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});
 
@@ -747,13 +746,11 @@ describe("inspector hooks", () => {
 		const factory = app.widgets.at(-1)?.value as (host: unknown, theme: unknown) => any;
 		const rows = factory({ requestRender: () => {} }, plainTheme);
 		rows.render(80);
-		// Row 0 is the blank line above the bands.
-		assert.deepStrictEqual(rows.handleMouse({ ...click, y: 2 }), { handled: true });
+		assert.deepStrictEqual(rows.handleMouse({ ...click, y: 1 }), { handled: true });
 		const shown = lastOverlay(app);
 		contains(shown.text(), "Second");
 		await closeOverlay(shown.component);
-		// The blank line, past the last row, or not a left click: nothing.
-		assert.strictEqual(rows.handleMouse({ ...click, y: 0 }), undefined);
+		// Past the last row, or not a left click: nothing.
 		assert.strictEqual(rows.handleMouse({ ...click, y: 7 }), undefined);
 		assert.strictEqual(rows.handleMouse({ ...click, y: 0, button: "middle" }), undefined);
 		assert.strictEqual(app.overlays.length, 1);
