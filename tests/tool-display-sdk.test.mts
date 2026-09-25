@@ -65,6 +65,12 @@ test("in the terminal UI the built-in tools gain the new rows and nothing the ag
 		assert.ok(bash);
 		const result = await bash.execute("call-1", { command: "printf hello" }) as { content: Array<{ text: string }> };
 		assert.equal(result.content[0]?.text, "hello");
+		// A chained command runs step by step, and Pi's bash tool returns exactly what the command wrote.
+		const chained = await bash.execute("call-2", { command: "printf 'a\\n' && printf 'b\\n' ; printf c" }) as { content: Array<{ text: string }> };
+		assert.equal(chained.content[0]?.text, "a\nb\nc");
+		// A failure reads the same as the one-step command (a subshell isn't split) would.
+		const failure = (command: string) => bash.execute("call-3", { command }).then(() => "resolved", (error: Error) => error.message);
+		assert.equal(await failure("echo x && (exit 4) && echo never"), await failure("(echo x; exit 4)"));
 	} finally {
 		session.dispose();
 	}

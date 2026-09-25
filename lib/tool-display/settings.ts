@@ -1,47 +1,29 @@
 /**
- * The row density, kept under `toolDisplay` in pi-extras.json next to the
- * other persistent settings.
+ * Tool Display's switches, kept under `toolDisplay` in pi-extras.json: the
+ * extension itself, the step breakdown of chained bash commands, and reduced
+ * motion. Anything missing or unrecognised reads as the default.
  */
-import { randomBytes } from "node:crypto";
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import type { Density } from "./slot.ts";
+import type { Motion } from "../band/band.ts";
+import { CONFIG_FILE, readSection, writeSection } from "../extras-config.ts";
 
-export const DENSITIES: readonly Density[] = ["boxed", "compact"];
+export interface DisplaySettings {
+	readonly enabled: boolean;
+	readonly chains: boolean;
+	readonly motion: Motion;
+}
+
+export const DEFAULT_SETTINGS: DisplaySettings = { enabled: true, chains: true, motion: "full" };
 const SECTION = "toolDisplay";
 
-export const CONFIG_FILE = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "pi-extras.json");
-
-function readConfig(file: string): Record<string, unknown> {
-	try {
-		const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-	} catch {
-		return {};
-	}
+export function readSettings(file = CONFIG_FILE): DisplaySettings {
+	const section = readSection(SECTION, file);
+	return {
+		enabled: section.enabled !== false,
+		chains: section.chains !== false,
+		motion: section.motion === "reduced" ? "reduced" : "full",
+	};
 }
 
-const section = (config: Record<string, unknown>): Record<string, unknown> => {
-	const value = config[SECTION];
-	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-};
-
-/** Anything but a known density reads as boxed, Pi's own look. */
-export function readDensity(file = CONFIG_FILE): Density {
-	const density = section(readConfig(file)).density;
-	return DENSITIES.includes(density as Density) ? density as Density : "boxed";
-}
-
-export function writeDensity(density: Density, file = CONFIG_FILE): void {
-	const config = readConfig(file);
-	const next = { ...config, [SECTION]: { ...section(config), density } };
-	const temp = join(dirname(file), `.pi-extras.json.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
-	try {
-		writeFileSync(temp, `${JSON.stringify(next, null, 2)}\n`, { flag: "wx" });
-		renameSync(temp, file);
-	} catch (error) {
-		rmSync(temp, { force: true });
-		throw error;
-	}
+export function writeSettings(settings: DisplaySettings, file = CONFIG_FILE): void {
+	writeSection(SECTION, { enabled: settings.enabled, chains: settings.chains, motion: settings.motion }, file);
 }

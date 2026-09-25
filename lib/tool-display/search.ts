@@ -1,72 +1,81 @@
 /**
- * The grep, find and ls rows. Collapsed, the header says what was found
- * (`23 matches in 7 files`) instead of listing the first lines; expanded, the
- * full listing follows.
+ * The grep, find and ls rows. The band says what was found (`23 matches in
+ * 7 files`) instead of listing the first lines; the popup and Pi's expand key
+ * show the full listing.
  */
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { Seg } from "../band/band.ts";
 import { grepSummary, listSummary, sanitize, type GrepSummary, type ListSummary } from "./format.ts";
-import { Lines, type Paint, type PaintKey } from "./slot.ts";
-import { errorLines, header, meta, numberArg, pathText, plural, resultText, slotFor, stringArg, title, wrapAll, type Kit, type RenderContext, type ThemeLike } from "./kit.ts";
+import { absolutePath, errorLines, mutedSeg, numberArg, pathSeg, plural, resultText, shownPath, stringArg, titleSeg, wrapAll, type Kit } from "./kit.ts";
+import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
 
 type Tool = "grep" | "find" | "ls";
 type Summary = GrepSummary | ListSummary;
-type ResultInput = { content?: unknown; details?: unknown };
 
 const flat = (text: string) => sanitize(text).replace(/\n/g, " ");
+const failed = (view: View) => !view.context.isPartial && view.context.isError;
 
-function describe(paint: Paint, kit: Kit, tool: Tool, args: unknown, cwd: string): string {
+function describe(view: View, tool: Tool): Seg[] {
+	const args = view.context.args;
 	const path = stringArg(args, "path");
 	const limit = numberArg(args, "limit");
-	const limitText = limit !== undefined ? paint.fg("toolOutput", ` limit ${limit}`) : "";
-	if (tool === "ls") return `${title(paint, "ls")} ${pathText(paint, kit, path, cwd, ".")}${limitText}`;
-	const pattern = stringArg(args, "pattern");
-	const where = paint.fg("toolOutput", ` in ${flat(path || ".")}`);
-	if (tool === "find") return `${title(paint, "find")} ${paint.fg("accent", flat(pattern ?? ""))}${where}${limitText}`;
+	const limitSeg: Seg[] = limit !== undefined ? [{ text: ` limit ${limit}`, color: "toolOutput" }] : [];
+	if (tool === "ls") return [titleSeg("ls"), pathSeg(view.kit, path, view.context.cwd, "."), ...limitSeg];
+	const pattern = stringArg(args, "pattern") ?? "";
+	const where: Seg = { text: ` in ${flat(path || ".")}`, color: "toolOutput" };
+	if (tool === "find") return [titleSeg("find"), { text: ` ${flat(pattern)}`, color: "accent" }, where, ...limitSeg];
 	const glob = stringArg(args, "glob");
-	return `${title(paint, "grep")} ${paint.fg("accent", `/${flat(pattern ?? "")}/`)}${where}${glob ? paint.fg("toolOutput", ` (${flat(glob)})`) : ""}${limitText}`;
+	return [titleSeg("grep"), { text: ` /${flat(pattern)}/`, color: "accent" }, where, ...(glob ? [{ text: ` (${flat(glob)})`, color: "toolOutput" }] : []), ...limitSeg];
 }
 
-export function summaryParts(tool: Tool, summary: Summary): Array<readonly [PaintKey, string]> {
-	const parts: Array<readonly [PaintKey, string]> = [];
-	if ("matches" in summary) {
-		parts.push(["muted", summary.matches === 0 ? "no matches" : `${plural(summary.matches, "match", "matches")} in ${plural(summary.files, "file")}`]);
-	} else if (summary.entries === 0) {
-		parts.push(["muted", tool === "ls" ? "empty" : "no files"]);
-	} else if (tool === "ls") {
-		parts.push(["muted", plural(summary.entries, "entry", "entries") + (summary.dirs > 0 ? ` (${plural(summary.dirs, "dir")})` : "")]);
-	} else {
-		parts.push(["muted", plural(summary.entries, "file")]);
-	}
-	if (summary.notice) parts.push(["warning", "limit reached"]);
-	return parts;
+export function summaryText(tool: Tool, summary: Summary): Seg[] {
+	let text: string;
+	if ("matches" in summary) text = summary.matches === 0 ? "no matches" : `${plural(summary.matches, "match", "matches")} in ${plural(summary.files, "file")}`;
+	else if (summary.entries === 0) text = tool === "ls" ? "empty" : "no files";
+	else if (tool === "ls") text = plural(summary.entries, "entry", "entries") + (summary.dirs > 0 ? ` (${plural(summary.dirs, "dir")})` : "");
+	else text = plural(summary.entries, "file");
+	return summary.notice ? [mutedSeg(` · ${text}`), { text: " · limit reached", color: "warning" }] : [mutedSeg(` · ${text}`)];
 }
 
-export function searchRenderers(kit: Kit, tool: Tool) {
+function summaryOf(view: View, tool: Tool): Summary | undefined {
+	if (!view.result || view.context.isPartial || view.context.isError) return undefined;
+	const text = resultText(view.result);
+	return tool === "grep" ? grepSummary(text) : listSummary(text);
+}
+
+function listing(view: View, summary: Summary, width: number): string[] {
+	const text = resultText(view.result);
+	const notice = summary.notice ? wrapTextWithAnsi(view.paint.fg("warning", summary.notice), width) : [];
+	const empty = "matches" in summary ? summary.matches === 0 : summary.entries === 0;
+	if (empty) return notice;
+	const body = text.trim().replace(/\n\n\[[^\n]*\]$/, "").split("\n").map((line) => view.paint.fg("toolOutput", line));
+	return [...wrapAll(body, width), ...notice];
+}
+
+export function searchSpec(tool: Tool): ToolSpec {
 	return {
-		renderCall(_args: unknown, theme: ThemeLike, context: RenderContext) {
-			const { slot, state } = slotFor("call", kit, theme, context);
-			return slot.setBody(new Lines((width) => {
-				const paint = state.paint as Paint;
-				const summary = state.summary as Summary | undefined;
-				return header(describe(paint, kit, tool, context.args, context.cwd), summary ? meta(paint, summaryParts(tool, summary)) : "", width, context.expanded);
-			}));
+		label: () => tool,
+		title(view) {
+			const summary = summaryOf(view, tool);
+			return [...describe(view, tool), ...(summary ? summaryText(tool, summary) : [])];
 		},
-		renderResult(result: ResultInput, options: { expanded: boolean; isPartial: boolean }, theme: ThemeLike, context: RenderContext) {
-			const { slot, paint, state } = slotFor("result", kit, theme, context);
-			const text = resultText(result);
-			if (context.isError) {
-				state.summary = undefined;
-				return slot.setBody(new Lines((width) => wrapAll(errorLines(paint, text), width)));
-			}
-			const summary = tool === "grep" ? grepSummary(text) : listSummary(text);
-			state.summary = summary;
-			const empty = "matches" in summary ? summary.matches === 0 : summary.entries === 0;
-			return slot.setBody(new Lines((width) => {
-				const notice = summary.notice ? wrapTextWithAnsi(paint.fg("warning", summary.notice), width) : [];
-				if (!options.expanded || empty) return options.expanded ? notice : [];
-				const body = text.trim().replace(/\n\n\[[^\n]*\]$/, "").split("\n").map((line) => paint.fg("toolOutput", line));
-				return [...wrapAll(body, width), ...notice];
-			}));
+		body(view, width) {
+			if (failed(view)) return wrapAll(errorLines(view.paint, resultText(view.result)), width);
+			const summary = summaryOf(view, tool);
+			return summary && view.context.expanded ? listing(view, summary, width) : [];
+		},
+		details(view) {
+			const path = stringArg(view.context.args, "path");
+			return `in ${shownPath(absolutePath(path || ".", view.context.cwd))}`;
+		},
+		output(view, width) {
+			if (failed(view)) return wrapAll(errorLines(view.paint, resultText(view.result)), width);
+			const summary = summaryOf(view, tool);
+			if (!summary) return [view.paint.fg("dim", "(searching…)")];
+			const lines = listing(view, summary, width);
+			return lines.length > 0 ? lines : [view.paint.fg("dim", "(nothing found)")];
 		},
 	};
 }
+
+export const searchRenderers = (kit: Kit, tool: Tool) => toolRenderers(kit, searchSpec(tool));

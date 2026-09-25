@@ -1,46 +1,82 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { registerToolDisplay, toolDisplayEnabled, TOOL_NAMES, withDisplay, type ToolDisplayDeps } from "../lib/tool-display/index.ts";
-import { readDensity, writeDensity } from "../lib/tool-display/settings.ts";
-import type { Density } from "../lib/tool-display/slot.ts";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { CHAIN_ENTRY, CHAIN_EVENT } from "../lib/chain/run.ts";
+import { applyArgs, registerToolDisplay, toolDisplayEnabled, TOOL_NAMES, withDisplay, type ToolDisplayDeps } from "../lib/tool-display/index.ts";
+import { DEFAULT_SETTINGS, readSettings, writeSettings, type DisplaySettings } from "../lib/tool-display/settings.ts";
+import { quiet } from "./support/quiet-theme.ts";
 
-const kit = { hint: () => "", highlight: (code: string) => code.split("\n"), language: () => undefined, diff: (d: string) => d, link: (s: string) => s, now: () => 0 };
+const host = { expandHint: () => "ctrl+o to expand", highlight: (code: string) => code.split("\n"), language: () => undefined, diff: (d: string) => d, fileUrl: () => undefined, now: () => Date.now() };
 
-function harness(options: { sources?: Record<string, string>; density?: Density; failWrite?: boolean } = {}) {
+type Ops = { exec(command: string, cwd: string, options: { onData(data: Buffer): void }): Promise<{ exitCode: number | null }> };
+
+/** The shell behind Pi's bash operations. */
+const shell: Ops = {
+	exec: (command, cwd, options) => new Promise((resolve) => {
+		const child = spawn("/bin/bash", ["-c", command], { cwd });
+		child.stdout.on("data", options.onData);
+		child.stderr.on("data", options.onData);
+		child.on("close", (code) => resolve({ exitCode: code }));
+	}),
+};
+
+function harness(options: { sources?: Record<string, string>; settings?: DisplaySettings; failWrite?: boolean; entries?: unknown[] } = {}) {
 	const registered: any[] = [];
 	const notes: Array<[string, string | undefined]> = [];
+	const appended: Array<[string, unknown]> = [];
+	const emitted: Array<[string, unknown]> = [];
 	const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
 	const commands = new Map<string, any>();
-	let density: Density = options.density ?? "boxed";
-	const writes: Density[] = [];
+	let settings = options.settings ?? DEFAULT_SETTINGS;
+	const writes: DisplaySettings[] = [];
 	const sources = options.sources ?? Object.fromEntries(TOOL_NAMES.map((name) => [name, "builtin"]));
-	const definitions = Object.fromEntries(TOOL_NAMES.map((name) => [name, { name, description: `${name} tool`, parameters: {}, promptSnippet: `use ${name}`, execute: async () => ({ content: [] }) }]));
 	const deps: ToolDisplayDeps = {
-		definitions: () => definitions as never,
-		density: {
-			read: () => density,
+		tools: (_ctx, wrap) => {
+			const ops = wrap(shell as never) as unknown as Ops;
+			const definitions = Object.fromEntries(TOOL_NAMES.map((name) => [name, { name, description: `${name} tool`, parameters: {}, promptSnippet: `use ${name}`, execute: async () => ({ content: [] }) }]));
+			// Stands in for Pi's bash tool: runs through the operations and throws on a failed command.
+			definitions.bash!.execute = (async (_id: string, params: { command: string }) => {
+				let out = "";
+				const { exitCode } = await ops.exec(params.command, "/", { onData: (data) => { out += data.toString(); } });
+				if (exitCode !== 0) throw new Error(`${out}\n\nCommand exited with code ${exitCode}`);
+				return { content: [{ type: "text", text: out }] };
+			}) as never;
+			return { definitions: definitions as never, fullscreen: true };
+		},
+		settings: {
+			read: () => settings,
 			write: (next) => {
 				if (options.failWrite) throw new Error("read-only");
 				writes.push(next);
-				density = next;
+				settings = next;
 			},
 		},
-		kit,
+		host,
+		nonce: () => "0123456789abcdef",
 	};
 	registerToolDisplay({
 		on: (event: string, handler: any) => handlers.set(event, handler),
 		registerCommand: (name: string, command: unknown) => commands.set(name, command),
 		registerTool: (tool: unknown) => registered.push(tool),
 		getAllTools: () => Object.entries(sources).map(([name, source]) => ({ name, sourceInfo: { source } })),
+		appendEntry: (type: string, data: unknown) => appended.push([type, data]),
+		events: { emit: (channel: string, data: unknown) => emitted.push([channel, data]), on: () => () => {} },
 	} as never, deps);
-	const ctx = (mode: string) => ({ mode, ui: { notify: (message: string, level?: string) => notes.push([message, level]) } });
+	const ctx = (mode: string) => ({
+		mode,
+		ui: { notify: (message: string, level?: string) => notes.push([message, level]), custom: async () => undefined },
+		sessionManager: { getEntries: () => options.entries ?? [] },
+	});
 	return {
-		registered, notes, writes, commands,
+		registered, notes, writes, commands, appended, emitted,
 		start: (mode = "tui") => handlers.get("session_start")!({ type: "session_start" }, ctx(mode)),
+		fire: (event: string) => handlers.get(event)!({ type: event }, ctx("tui")),
 		run: (args: string) => commands.get("tool-display").handler(args, ctx("tui")),
+		latest: (name: string) => registered.filter((tool) => tool.name === name).at(-1),
 	};
 }
 
@@ -70,45 +106,104 @@ test("session start replaces built-in tools only, and only in the terminal UI", 
 	h.start("tui");
 	assert.deepEqual(h.registered.map((tool) => tool.name), ["read", "bash", "grep"]);
 	assert.equal(h.registered[0].promptSnippet, "use read");
+	assert.equal(h.registered[1].description, "bash tool", "bash keeps its description while its execute gains steps");
 	// A later session start (a /new or /resume) replaces its own tools again.
 	h.start("tui");
 	assert.equal(h.registered.length, 6);
 });
 
-test("/tool-display toggles, sets and saves the density", async () => {
+test("a chained command runs as written for the model, and its steps are saved between turns", async () => {
+	const h = harness();
+	h.start();
+	const result = await h.latest("bash").execute("call-1", { command: "echo one && echo two" });
+	assert.equal(result.content[0].text, "one\ntwo\n");
+	assert.deepEqual(h.emitted, [[CHAIN_EVENT, { toolCallId: "call-1", ran: 2 }]]);
+	assert.equal(h.appended.length, 0, "nothing is written in the middle of a turn");
+	h.fire("turn_end");
+	assert.equal(h.appended.length, 1);
+	const [type, data] = h.appended[0] as [string, any];
+	assert.equal(type, CHAIN_ENTRY);
+	assert.equal(data.toolCallId, "call-1");
+	assert.deepEqual(data.steps.map((step: any) => step.code), [0, 0]);
+	await assert.rejects(h.latest("bash").execute("call-2", { command: "echo a && false && echo b" }), /Command exited with code 1$/);
+	h.fire("agent_end");
+	assert.equal(h.appended.length, 2);
+});
+
+test("a resumed session shows the saved steps of a chained command", () => {
+	const saved = { v: 1, toolCallId: "old-1", outcome: "fail", steps: [{ at: 0, ms: 1_200, code: 0, tail: "built\n" }, { at: 1_200, ms: 300, code: 2, tail: "FAIL x\n" }, {}] };
+	const h = harness({ entries: [{ type: "custom", customType: CHAIN_ENTRY, data: saved }, { type: "custom", customType: "other", data: {} }] });
+	h.start();
+	const bash = h.latest("bash");
+	const state = {};
+	const context = { args: { command: "make && make test && make dist" }, toolCallId: "old-1", state, lastComponent: undefined, cwd: "/", executionStarted: false, argsComplete: false, isPartial: false, expanded: false, isError: true, invalidate() {} };
+	const call = bash.renderCall(context.args, quiet(), context);
+	bash.renderResult({ content: [{ type: "text", text: "FAIL x\n\nCommand exited with code 2" }] }, { expanded: false, isPartial: false }, quiet(), context);
+	const lines = call.render(60).map((line: string) => stripTerminalSequences(line).trimEnd());
+	assert.match(lines[0], /exit 2 at 2 of 3$/, "a resumed row has no total time");
+	assert.match(lines[1], /^ {4}1 +make +1\.2s$/);
+	assert.match(lines[2], /^ {4}2 +make test +exit 2 +300ms$/);
+	assert.equal(lines[3], "        FAIL x");
+	assert.match(lines[4], /^ {4}3 +make dist +skipped$/);
+});
+
+test("/tool-display reports, switches and saves its settings", async () => {
 	const h = harness();
 	h.start();
 	await h.run("");
-	assert.deepEqual(h.writes, ["compact"]);
-	assert.match(h.notes.at(-1)![0], /Tool rows are compact\. \/tool-display boxed switches back\./);
-	await h.run("compact");
-	await h.run(" BOXED ");
-	assert.deepEqual(h.writes, ["compact", "compact", "boxed"]);
-	await h.run("tiny");
-	assert.deepEqual(h.notes.at(-1), ['Unknown option "tiny". Use /tool-display, /tool-display boxed or /tool-display compact.', "warning"]);
-	assert.equal(h.writes.length, 3);
-	assert.deepEqual(h.commands.get("tool-display").getArgumentCompletions("c").map((item: { value: string }) => item.value), ["compact"]);
-	assert.equal(h.commands.get("tool-display").getArgumentCompletions("x"), null);
+	assert.match(h.notes.at(-1)![0], /^Tool Display is on · chain steps on · motion full\./);
+	await h.run("motion reduced");
+	assert.deepEqual(h.writes.at(-1), { enabled: true, chains: true, motion: "reduced" });
+	await h.run("chains off");
+	assert.deepEqual(h.writes.at(-1), { enabled: true, chains: false, motion: "reduced" });
+	await h.run("sideways");
+	assert.equal(h.notes.at(-1)![1], "warning");
+	assert.equal(h.writes.length, 2);
+});
+
+test("/tool-display off gives the tools back to Pi, and on takes them again", async () => {
+	const h = harness();
+	h.start();
+	await h.run("off");
+	const plain = h.latest("read");
+	assert.equal(plain.renderShell, undefined);
+	assert.equal(plain.promptSnippet, "use read");
+	await h.run("on");
+	assert.equal(h.latest("read").renderShell, "self");
+	// Off from the start of a session leaves Pi's tools alone entirely.
+	const off = harness({ settings: { ...DEFAULT_SETTINGS, enabled: false } });
+	off.start();
+	assert.equal(off.registered.length, 0);
 });
 
 test("/tool-display says when the setting could not be saved", async () => {
 	const h = harness({ failWrite: true });
 	h.start();
-	await h.run("compact");
+	await h.run("chains off");
 	assert.equal(h.notes.at(-1)![1], "warning");
-	assert.match(h.notes.at(-1)![0], /applies to this session only/);
+	assert.match(h.notes.at(-1)![0], /this session only/);
 });
 
-test("the density persists under toolDisplay in pi-extras.json and keeps other settings", () => {
-	const dir = mkdtempSync(join(tmpdir(), "tool-display-settings-"));
+test("/tool-display arguments", () => {
+	assert.deepEqual(applyArgs(DEFAULT_SETTINGS, " Off "), { ...DEFAULT_SETTINGS, enabled: false });
+	assert.deepEqual(applyArgs(DEFAULT_SETTINGS, "chains off"), { ...DEFAULT_SETTINGS, chains: false });
+	assert.equal(applyArgs(DEFAULT_SETTINGS, "motion"), undefined);
+	assert.equal(applyArgs(DEFAULT_SETTINGS, "compact"), undefined);
+});
+
+test("the settings persist under toolDisplay in pi-extras.json and keep other settings", () => {
+	const dir = mkdtempSync(join(tmpdir(), "tool-display-"));
 	try {
 		const file = join(dir, "pi-extras.json");
-		assert.equal(readDensity(file), "boxed");
-		writeFileSync(file, JSON.stringify({ usageGuard: { enabled: true }, toolDisplay: { density: "huge" } }));
-		assert.equal(readDensity(file), "boxed");
-		writeDensity("compact", file);
-		assert.equal(readDensity(file), "compact");
-		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { usageGuard: { enabled: true }, toolDisplay: { density: "compact" } });
+		assert.deepEqual(readSettings(file), DEFAULT_SETTINGS, "a missing file reads as the defaults");
+		writeFileSync(file, JSON.stringify({ computerUse: { apps: "all" }, toolDisplay: { density: "compact" } }));
+		assert.deepEqual(readSettings(file), DEFAULT_SETTINGS, "the 0.5 density setting is ignored");
+		writeSettings({ enabled: true, chains: false, motion: "reduced" }, file);
+		assert.deepEqual(readSettings(file), { enabled: true, chains: false, motion: "reduced" });
+		const saved = JSON.parse(readFileSync(file, "utf8"));
+		assert.deepEqual(saved.computerUse, { apps: "all" });
+		writeFileSync(file, "{ not json");
+		assert.deepEqual(readSettings(file), DEFAULT_SETTINGS);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

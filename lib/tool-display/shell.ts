@@ -1,116 +1,194 @@
 /**
- * The bash row. The command is highlighted and, collapsed, cut to its first
- * lines; the header ends with the run time and, on failure, how the command
- * ended, so the status lines Pi appends to failed output are not repeated in
- * the body. Output collapses to its last lines, as Pi's own row does.
+ * The bash row. The band holds the command and, on the rail, how it is going:
+ * the live time against the timeout, then how it ended. Output sits under the
+ * band, its last lines while collapsed.
+ *
+ * A chained command (`a && b && c`) that ran step by step also gets one line
+ * per step, and the output shows under the step that matters: the one
+ * running, else the one that failed, else the last one.
  */
-import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { formatDuration } from "../shell-jobs-core.ts";
-import { commandLines, parseShellOutput, type ShellOutcome } from "./format.ts";
-import { Lines, type Paint, type PaintKey } from "./slot.ts";
-import { codeLines, header, meta, more, numberArg, plural, resultText, slotFor, tail, wrapAll, type Kit, type RenderContext, type ThemeLike } from "./kit.ts";
+import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { resolve } from "node:path";
+import type { Outcome, Seg } from "../band/band.ts";
+import type { ChainRun } from "../chain/run.ts";
+import { commandLines, parseShellOutput, sanitize, type ShellOutput } from "./format.ts";
+import { codeLines, more, numberArg, plural, resultText, shownPath, tail, textLines, titleSeg, wrapAll, type Kit, type Paint } from "./kit.ts";
+import { BODY_INDENT } from "./row.ts";
+import { chainTitle, flat, shownSteps, stateOf, stepLine } from "./steps.ts";
+import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
 
-/** Command lines shown collapsed, the prompt line included. */
-export const COMMAND_PREVIEW_LINES = 3;
-/** Output lines shown collapsed; the same as Pi's bash row. */
-export const OUTPUT_PREVIEW_LINES = 5;
-const TICK_MS = 1000;
-const INDENT = "  ";
+/** Output lines under a collapsed row. */
+export const OUTPUT_PREVIEW_LINES = 4;
+/** Output lines under the focused step of a collapsed chain. */
+export const STEP_PREVIEW_LINES = 3;
+/** Where a step's output starts: under the step's command, past its number. */
+const STEP_OUTPUT_INDENT = 8;
 
-interface ShellState {
-	startedAt?: number;
-	endedAt?: number;
-	outcome?: ShellOutcome;
-	ticker?: ReturnType<typeof setInterval>;
+function commandOf(view: View): { text?: string; invalid: boolean } {
+	const raw = view.context.args && typeof view.context.args === "object" ? (view.context.args as { command?: unknown }).command : undefined;
+	return typeof raw === "string" ? { text: raw, invalid: false } : { invalid: raw !== undefined };
 }
 
-function outcomeMeta(outcome: ShellOutcome | undefined): readonly [PaintKey, string] | undefined {
-	switch (outcome?.kind) {
-		case "exit": return ["error", `exit ${outcome.code}`];
-		case "timeout": return ["error", `timed out after ${outcome.seconds}s`];
-		case "aborted": return ["warning", "aborted"];
-		case "killed": return ["error", "no exit code"];
-		case "failed": return ["error", "failed"];
-		default: return undefined;
+function runOf(view: View): ChainRun | undefined {
+	const { text } = commandOf(view);
+	return text === undefined || !view.kit.chains() ? undefined : view.kit.chainRun(view.context.toolCallId, text);
+}
+
+function parsed(view: View): ShellOutput | undefined {
+	if (!view.result) return undefined;
+	return parseShellOutput(resultText(view.result), !view.context.isPartial && view.context.isError);
+}
+
+function outcome(output: ShellOutput | undefined): Outcome | undefined {
+	switch (output?.outcome.kind) {
+		case "timeout": return "timeout";
+		case "aborted": return "aborted";
+		case "ok": return "ok";
+		case undefined: return undefined;
+		default: return "fail";
 	}
 }
 
-export function shellMeta(paint: Paint, kit: Kit, args: unknown, shell: ShellState): string {
-	const timeout = numberArg(args, "timeout");
-	const shown = timeout !== undefined ? `timeout ${timeout}s` : "";
-	const elapsed = shell.startedAt === undefined ? "" : formatDuration((shell.endedAt ?? kit.now()) - shell.startedAt);
-	return meta(paint, [["muted", shown], outcomeMeta(shell.outcome), ["muted", elapsed]]);
+const stepOutput = (run: ChainRun, index: number) => textLines(sanitize(stripTerminalSequences(run.steps[index]?.output ?? "")));
+
+/** Steps shown, and where the one being run or that failed sits among them. */
+function position(run: ChainRun): { shown: number[]; at: number } {
+	const shown = shownSteps(run.chain, run);
+	return { shown, at: Math.max(0, shown.indexOf(run.focus())) + 1 };
 }
 
-export function callLines(paint: Paint, kit: Kit, args: unknown, tailText: string, width: number, expanded: boolean): string[] {
-	const raw = args && typeof args === "object" ? (args as { command?: unknown }).command : undefined;
-	const prompt = `${paint.fg("toolTitle", paint.bold("$"))} `;
-	if (raw !== undefined && typeof raw !== "string") return header(prompt + paint.fg("error", "[invalid command]"), tailText, width, expanded);
-	const lines = commandLines(raw ?? "");
-	if (lines.length === 0) return header(prompt + paint.fg("toolOutput", "…"), tailText, width, expanded);
-	const code = codeLines(paint, kit, lines, "bash");
-	const first = header(prompt + code[0]!, tailText, width, expanded);
-	const inner = Math.max(1, width - INDENT.length);
-	if (expanded) return [...first, ...wrapAll(code.slice(1), inner).map((line) => INDENT + line)];
-	const rest = code.slice(1, COMMAND_PREVIEW_LINES).map((line) => INDENT + truncateToWidth(line, inner, "…"));
-	const hidden = lines.length - 1 - rest.length;
-	return hidden > 0 ? [...first, ...rest, INDENT + truncateToWidth(more(paint, kit, plural(hidden, "more line")), inner, "…")] : [...first, ...rest];
+function details(view: View, run: ChainRun | undefined): string {
+	const where = run?.chain.cd ? resolve(view.context.cwd, run.chain.cd.replace(/^~(?=\/|$)/, process.env.HOME ?? "~")) : view.context.cwd;
+	const timeout = numberArg(view.context.args, "timeout");
+	const parts = [`in ${shownPath(where)}`];
+	if (timeout !== undefined) parts.push(`timeout ${timeout}s`);
+	if (view.row.startedAt !== undefined) parts.push(`started ${new Date(view.row.startedAt).toLocaleTimeString("en-GB", { hour12: false })}`);
+	return parts.join(" · ");
 }
 
-export function outputLines(paint: Paint, kit: Kit, body: string, notice: string | undefined, width: number, expanded: boolean): string[] {
-	const lines = body.trim() === "" ? [] : body.replace(/\n+$/, "").split("\n").map((line) => paint.fg("toolOutput", line));
-	const out: string[] = [];
-	if (expanded) {
-		out.push(...wrapAll(lines, width));
-	} else {
-		const shown = tail(lines, OUTPUT_PREVIEW_LINES, width);
-		if (shown.skipped > 0) out.push(truncateToWidth(more(paint, kit, plural(shown.skipped, "earlier line")), width, "…"));
-		out.push(...shown.lines);
-	}
-	if (notice) out.push(...wrapTextWithAnsi(paint.fg("warning", notice), width));
-	return out;
+/** Output lines with a line saying how many earlier ones are hidden. */
+export function preview(paint: Paint, kit: Kit, lines: readonly string[], max: number, width: number): string[] {
+	const shown = tail(lines.map((line) => paint.fg("toolOutput", line)), max, width);
+	const out = shown.skipped > 0 ? [truncateToWidth(more(paint, kit, plural(shown.skipped, "earlier line")), width, "…")] : [];
+	return [...out, ...shown.lines];
 }
 
-export function bashRenderers(kit: Kit) {
-	// Every running row's timer, so a session switch can stop timers whose rows are gone.
-	const tickers = new Set<ReturnType<typeof setInterval>>();
-	const stop = (shell: ShellState) => {
-		if (shell.ticker) {
-			clearInterval(shell.ticker);
-			tickers.delete(shell.ticker);
+function chainLines(view: View, run: ChainRun, width: number): string[] {
+	const { shown } = position(run);
+	const focus = run.focus();
+	const pad = " ".repeat(STEP_OUTPUT_INDENT);
+	const inner = Math.max(1, width - STEP_OUTPUT_INDENT);
+	return shown.flatMap((index, number) => {
+		const line = stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: BODY_INDENT, now: view.now });
+		const output = stepOutput(run, index);
+		const wanted = view.context.expanded ? output.length > 0 : index === focus && output.length > 0;
+		if (!wanted) return [line];
+		const body = view.context.expanded ? wrapAll(output.map((text) => view.paint.fg("toolOutput", text)), inner) : preview(view.paint, view.kit, output, STEP_PREVIEW_LINES, inner);
+		return [line, ...body.map((text) => pad + text)];
+	});
+}
+
+export const bashSpec: ToolSpec = {
+	label(view) {
+		const run = runOf(view);
+		return run ? `bash · ${plural(position(run).shown.length, "command")}` : "bash";
+	},
+	title(view) {
+		const command = commandOf(view);
+		const prompt: Seg = { ...titleSeg("$"), text: "$ " };
+		if (command.invalid) return [prompt, { text: "[invalid command]", color: "error" }];
+		const run = runOf(view);
+		if (run) return [prompt, { text: chainTitle(run.chain), color: "text" }];
+		const lines = commandLines(command.text ?? "");
+		if (lines.length === 0) return [prompt, { text: "…", color: "muted" }];
+		const rest = lines.length > 1 ? [{ text: `  +${plural(lines.length - 1, "line")}`, color: "muted" }] : [];
+		return [prompt, { text: lines[0]!, color: "text" }, ...rest];
+	},
+	timeoutMs(view) {
+		const seconds = numberArg(view.context.args, "timeout");
+		return seconds !== undefined && seconds > 0 ? seconds * 1_000 : undefined;
+	},
+	lead(view, phase) {
+		const run = runOf(view);
+		if (!run) return [];
+		const { shown, at } = position(run);
+		if (phase.kind === "running") return [{ text: `${at} of ${shown.length}`, color: "muted" }];
+		if (phase.kind !== "done") return [];
+		const ran = shown.filter((index) => run.steps[index]?.startedAt !== undefined).length;
+		return [{ text: ran === shown.length ? plural(shown.length, "command") : `${ran} of ${shown.length} ran`, color: "muted" }];
+	},
+	failure(view) {
+		const output = parsed(view);
+		const run = runOf(view);
+		const code = run?.steps[run.focus()]?.code;
+		const kind = output?.outcome.kind;
+		const word: Seg = kind === "timeout" ? { text: "timed out", color: "warning" }
+			: kind === "aborted" ? { text: "aborted", color: "muted" }
+			: kind === "killed" ? { text: "no exit code", color: "error" }
+			: kind === "exit" ? { text: `exit ${run && code !== undefined ? code : output!.outcome.kind === "exit" ? output!.outcome.code : 1}`, color: "error" }
+			: { text: "failed", color: "error" };
+		if (!run) return [word];
+		const { shown, at } = position(run);
+		return [word, { text: ` at ${at} of ${shown.length}`, color: "muted" }];
+	},
+	outcome: (view) => outcome(parsed(view)),
+	below(view, width) {
+		const run = runOf(view);
+		if (run) return chainLines(view, run, width);
+		const lines = commandLines(commandOf(view).text ?? "");
+		if (!view.context.expanded || lines.length < 2) return [];
+		const inner = Math.max(1, width - BODY_INDENT);
+		return wrapAll(codeLines(view.paint, view.kit, lines, "bash").slice(1), inner).map((line) => " ".repeat(BODY_INDENT) + line);
+	},
+	body(view, width) {
+		const output = parsed(view);
+		if (!output) return [];
+		const notice = output.notice ? wrapTextWithAnsi(view.paint.fg("warning", output.notice), width) : [];
+		if (runOf(view)) return notice;
+		const lines = textLines(output.body);
+		const shown = view.context.expanded ? wrapAll(lines.map((line) => view.paint.fg("toolOutput", line)), width) : preview(view.paint, view.kit, lines, OUTPUT_PREVIEW_LINES, width);
+		return [...shown, ...notice];
+	},
+	details: (view) => details(view, runOf(view)),
+	head(view, width, selected) {
+		const run = runOf(view);
+		if (run) return position(run).shown.map((index, number) => stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: 0, now: view.now, selected: number === selected }));
+		const lines = commandLines(commandOf(view).text ?? "");
+		const code = codeLines(view.paint, view.kit, lines, "bash");
+		return wrapAll(code.map((line, index) => (index === 0 ? `${view.paint.fg("accent", view.paint.bold("$"))} ${line}` : `  ${line}`)), width);
+	},
+	steps: (view) => {
+		const run = runOf(view);
+		return run ? position(run).shown.length : 0;
+	},
+	firstStep: (view) => {
+		const run = runOf(view);
+		return run ? position(run).at - 1 : 0;
+	},
+	outputLabel(view, selected) {
+		const run = runOf(view);
+		if (!run) return "output";
+		const index = position(run).shown[selected];
+		if (index === undefined) return "output";
+		const state = stateOf(run, index);
+		const text = flat(run.chain.steps[index]!.text);
+		return `output of ${selected + 1} · ${text}${state === "skipped" ? " (skipped)" : ""}`;
+	},
+	output(view, width, selected) {
+		const run = runOf(view);
+		const paint = view.paint;
+		if (run) {
+			const index = position(run).shown[selected];
+			const lines = index === undefined ? [] : stepOutput(run, index);
+			if (lines.length === 0) return [paint.fg("dim", run.done ? "(no output)" : "(no output yet)")];
+			return wrapAll(lines.map((line) => paint.fg("toolOutput", line)), width);
 		}
-		shell.ticker = undefined;
-	};
-	return {
-		stopTimers() {
-			for (const ticker of tickers) clearInterval(ticker);
-			tickers.clear();
-		},
-		renderCall(_args: unknown, theme: ThemeLike, context: RenderContext) {
-			const { slot, state } = slotFor("call", kit, theme, context);
-			const shell = (state.shell ??= {}) as ShellState;
-			if (context.executionStarted && shell.startedAt === undefined) shell.startedAt = kit.now();
-			return slot.setBody(new Lines((width) => {
-				const paint = state.paint as Paint;
-				return callLines(paint, kit, context.args, shellMeta(paint, kit, context.args, shell), width, context.expanded);
-			}));
-		},
-		renderResult(result: { content?: unknown }, options: { expanded: boolean; isPartial: boolean }, theme: ThemeLike, context: RenderContext) {
-			const { slot, paint, state } = slotFor("result", kit, theme, context);
-			const shell = (state.shell ??= {}) as ShellState;
-			const done = !options.isPartial || context.isError;
-			const parsed = parseShellOutput(resultText(result), done && context.isError);
-			if (done) {
-				shell.outcome = parsed.outcome;
-				if (shell.startedAt !== undefined) shell.endedAt ??= kit.now();
-				stop(shell);
-			} else if (shell.startedAt !== undefined && !shell.ticker) {
-				// Keeps the elapsed time in the header moving while the command runs.
-				shell.ticker = setInterval(() => context.invalidate(), TICK_MS);
-				shell.ticker.unref?.();
-				tickers.add(shell.ticker);
-			}
-			return slot.setBody(new Lines((width) => outputLines(paint, kit, parsed.body, parsed.notice, width, options.expanded)));
-		},
-	};
-}
+		const output = parsed(view);
+		const lines = textLines(output?.body ?? "");
+		if (lines.length === 0) return [paint.fg("dim", view.context.isPartial ? "(no output yet)" : "(no output)")];
+		const notice = output?.notice ? wrapTextWithAnsi(paint.fg("warning", output.notice), width) : [];
+		return [...wrapAll(lines.map((line) => paint.fg("toolOutput", line)), width), ...notice];
+	},
+};
+
+export const bashRenderers = (kit: Kit) => toolRenderers(kit, bashSpec);
