@@ -29,6 +29,7 @@ import { openPopup, type PopupHost } from "../band/popup.ts";
 import { chainOperations, withChains, type ActiveRuns } from "../chain/exec.ts";
 import { CHAIN_ENTRY, CHAIN_EVENT, ChainRun, type SavedChain } from "../chain/run.ts";
 import { splitChain } from "../chain/split.ts";
+import { TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../tool-count.ts";
 import { editRenderers, readRenderers, writeRenderers } from "./files.ts";
 import type { Kit } from "./kit.ts";
 import { searchRenderers } from "./search.ts";
@@ -63,6 +64,8 @@ export interface ToolDisplayDeps {
 	readonly settings: { read(): DisplaySettings; write(settings: DisplaySettings): void };
 	readonly host: HostKit;
 	readonly nonce?: () => string;
+	/** Saves the Status Plus tool count for `/tool-display count`. */
+	readonly writeToolCount: (count: ToolCount) => void;
 }
 
 /** The built-in definition with only its presentation replaced. */
@@ -70,7 +73,7 @@ export function withDisplay(definition: AnyTool, renderers: Renderers): AnyTool 
 	return { ...definition, renderShell: "self", renderCall: renderers.renderCall, renderResult: renderers.renderResult };
 }
 
-const USAGE = "/tool-display on|off · chains on|off · motion full|reduced";
+const USAGE = "/tool-display on|off · chains on|off · motion full|reduced · count calls|steps";
 
 function describeSettings(settings: DisplaySettings): string {
 	if (!settings.enabled) return "Tool Display is off; Pi draws its own tool rows.";
@@ -78,6 +81,12 @@ function describeSettings(settings: DisplaySettings): string {
 }
 
 /** Applies a /tool-display argument, or undefined when it isn't one. */
+/** `count calls` or `count steps`, for the Status Plus tool figure. */
+export function countArg(args: string): ToolCount | undefined {
+	const words = args.trim().toLowerCase().split(/\s+/);
+	return words.length === 2 && words[0] === "count" && (words[1] === "calls" || words[1] === "steps") ? words[1] : undefined;
+}
+
 export function applyArgs(settings: DisplaySettings, args: string): DisplaySettings | undefined {
 	const words = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
 	const [first, second] = words;
@@ -211,6 +220,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 				["chains off", "Run chained bash commands as written"],
 				["motion full", "Animated progress and finish"],
 				["motion reduced", "A steady tint; times still count"],
+				["count calls", "Status Plus counts one per tool call"],
+				["count steps", "Status Plus counts each step a chain ran"],
 			] as const;
 			const wanted = prefix.trim().toLowerCase();
 			const items = options.filter(([value]) => value.startsWith(wanted)).map(([value, description]) => ({ value, label: value, description }));
@@ -219,6 +230,16 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		handler: async (args, ctx) => {
 			if (args.trim() === "") {
 				ctx.ui.notify(`${describeSettings(settings)} ${USAGE}`, "info");
+				return;
+			}
+			const count = countArg(args);
+			if (count !== undefined) {
+				// Status Plus owns this setting; a click on its tool figure does the same.
+				let saved = true;
+				try { deps.writeToolCount(count); } catch { saved = false; }
+				pi.events.emit(TOOL_COUNT_EVENT, count);
+				const what = count === "steps" ? "each step a chained command ran" : "one per tool call";
+				ctx.ui.notify(`The Status Plus tool count now counts ${what}.${saved ? "" : " Could not save the setting, so it applies to this session only."}`, saved ? "info" : "warning");
 				return;
 			}
 			const next = applyArgs(settings, args);
@@ -264,6 +285,7 @@ export function productionDeps(): ToolDisplayDeps {
 	return {
 		tools: sessionTools,
 		settings: { read: () => readSettings(), write: (settings) => writeSettings(settings) },
+		writeToolCount,
 		host: {
 			expandHint: () => {
 				try { return keyHint("app.tools.expand", "to expand"); } catch { return "ctrl+o to expand"; }

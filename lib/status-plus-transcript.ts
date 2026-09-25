@@ -10,6 +10,7 @@
 import { ChildEvidenceCollector } from "./status-plus-children.ts";
 import { addChild, messageIdentity, supplementChild } from "./status-plus-usage.ts";
 import { toEpochMs } from "./status-plus-logic.ts";
+import { CHAIN_ENTRY, savedRan } from "./chain/run.ts";
 import { EMPTY_PROVIDER, type ProviderStats } from "./status-plus-render.ts";
 
 export const BILLING_SOURCE_ENTRY = "status-plus-billing-source";
@@ -58,6 +59,8 @@ export interface TokenTotals {
 export interface SessionStats {
 	prompts: number;
 	toolCalls: number;
+	/** Steps each chained bash call ran, by tool call id, from Tool Display's saved chains. */
+	chains: Map<string, number>;
 	turns: number;
 	providers: Map<string, ProviderStats>;
 	tokens: TokenTotals;
@@ -96,7 +99,7 @@ function newest(current: number | undefined, candidate: number): number | undefi
 
 function collectEntries(source: TranscriptSource): SessionStats {
 	const stats: SessionStats = {
-		prompts: 0, toolCalls: 0, turns: 0, providers: new Map(),
+		prompts: 0, toolCalls: 0, chains: new Map(), turns: 0, providers: new Map(),
 		tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	};
 	const branch = source.getBranch();
@@ -105,6 +108,12 @@ function collectEntries(source: TranscriptSource): SessionStats {
 	for (const entry of branch) {
 		if (entry.type === "compaction" || entry.type === "branch_summary") {
 			stats.lastContextResetMs = newest(stats.lastContextResetMs, Date.parse(entry.timestamp));
+			continue;
+		}
+		if (entry.type === "custom" && entry.customType === CHAIN_ENTRY) {
+			const ran = savedRan(entry.data);
+			const id = (entry.data as { toolCallId?: unknown }).toolCallId;
+			if (ran !== undefined && typeof id === "string") stats.chains.set(id, ran);
 			continue;
 		}
 		if (entry.type !== "message" || !entry.message) continue;

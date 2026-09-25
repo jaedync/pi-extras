@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { stripAnsi, visibleWidth } from "../lib/ansi.ts";
 import { formatIncrement } from "../lib/status-plus-spend.ts";
-import { renderFooter, type FooterModel } from "../lib/status-plus-footer.ts";
+import { footerLayout, renderFooter, type FooterModel } from "../lib/status-plus-footer.ts";
 
 const paint = { fg: (_tone: string, text: string) => `\x1b[2m${text}\x1b[22m` };
 const NOON = Date.parse("2026-07-01T17:00:00Z"); // 12:00 Central
@@ -329,4 +329,20 @@ test("long model ids lose their vendor prefix, then their middle", () => {
 	assert.match(long, /│ qwen3\.6-23…nking-2507 high /, long);
 	const seps = columns(long);
 	assert.equal(seps[1] - seps[0], 2 + 26 + 1, "model cell never exceeds its cap: " + long);
+});
+
+test("the footer reports where its tool figure landed, wide or on a line of its own", () => {
+	for (const width of [200, 70]) {
+		const { lines, tools } = footerLayout(model(), width, paint);
+		const plain = stripAnsi(lines[tools.y]!);
+		assert.equal(plain.slice(tools.x0, tools.x1), "48 tools", `${width}: ${plain}`);
+	}
+});
+
+test("a split tool count draws its figure brighter than the other counters", () => {
+	const toned = { fg: (tone: string, text: string) => `<${tone}>${text}` };
+	const calls = renderFooter(model(), 200, toned)[1]!;
+	assert.ok(calls.includes("<dim>12 prompts · 31 turns · 48 tools"), calls);
+	const split = renderFooter(model({ counters: { prompts: 12, turns: 31, toolCalls: 52, split: true } }), 200, toned)[1]!;
+	assert.ok(split.includes("<dim>12 prompts · 31 turns · <text>52 tools"), split);
 });

@@ -69,7 +69,8 @@ export interface FooterModel {
 	 * A positive `delta` overpaints airtime and neighboring cells without resizing the grid.
 	 */
 	spend?: { cost: number; airtimeMs: number; flash: number; delta?: number };
-	counters: { prompts: number; turns: number; toolCalls: number };
+	/** `split` means a chain counts each step it ran; the figure is then drawn brighter. */
+	counters: { prompts: number; turns: number; toolCalls: number; split?: boolean };
 	cwd: string;
 	gitBranch?: string | null;
 	sessionName?: string | null;
@@ -130,8 +131,27 @@ function tokensCell(model: FooterModel, compact: boolean): string {
 }
 
 function countersText(model: FooterModel, compact: boolean): string {
-	const { prompts, turns, toolCalls } = model.counters;
-	return [`${prompts} prompts`, `${turns} turns`, `${toolCalls} tools`].join(fieldSeparator(compact));
+	const { prompts, turns } = model.counters;
+	return [`${prompts} prompts`, `${turns} turns`, toolsText(model)].join(fieldSeparator(compact));
+}
+
+function toolsText(model: FooterModel): string {
+	return `${model.counters.toolCalls} tools`;
+}
+
+/** The counters, dim, with the tool figure brighter while it counts chain steps. */
+function countersCell(paint: Painter, model: FooterModel, compact: boolean): string {
+	const text = countersText(model, compact);
+	if (!model.counters.split) return paint.fg("dim", text);
+	const tools = toolsText(model);
+	return `${paint.fg("dim", text.slice(0, -tools.length))}${paint.fg("text", tools)}`;
+}
+
+/** Where the tool figure was drawn: a row of the footer and its columns, end exclusive. */
+export interface Span {
+	y: number;
+	x0: number;
+	x1: number;
 }
 
 function placeText(model: FooterModel, compact: boolean): string {
@@ -167,6 +187,7 @@ function cacheText(paint: Painter, model: FooterModel, room: number, compact: bo
  */
 interface Grid {
 	lines: string[];
+	tools: Span;
 	/** True when the mesh cell needs its own line because the tail had no room. */
 	meshOverflow: boolean;
 }
@@ -175,7 +196,7 @@ function gridLines(model: FooterModel, paint: Painter, width: number, compact: b
 	const sep = joiner(paint);
 	const clock = paint.fg(model.cache.tone, model.lastApiEndMs ? hhmm(model.lastApiEndMs) : "--:--");
 	const clockContent = `${clock} ${contextBar(paint, model.context.percent ?? 0)} ${contextText(paint, model)}`;
-	const counters = paint.fg("dim", countersText(model, compact));
+	const counters = countersCell(paint, model, compact);
 	const firstWidth = Math.max(visibleWidth(clockContent), visibleWidth(counters));
 	const modelText = modelCell(paint, model);
 	const modelWidth = visibleWidth(modelText);
@@ -216,10 +237,11 @@ function gridLines(model: FooterModel, paint: Painter, width: number, compact: b
 		baseline, firstWidth + modelWidth + 2 * visibleWidth(sep),
 		fadeFg(paint, "error", "text", model.spend?.flash ?? 0, padEndVisible(increment, visibleWidth(costText))),
 	);
-	const lines = visibleWidth(secondLine) <= width
-		? [topLine, secondLine]
-		: [topLine, counters, paint.fg("dim", tokensText)];
-	return { lines, meshOverflow };
+	const wide = visibleWidth(secondLine) <= width;
+	const lines = wide ? [topLine, secondLine] : [topLine, counters, paint.fg("dim", tokensText)];
+	// The counters end at the first column's edge, or at their own end on a line of their own.
+	const end = wide ? firstWidth : visibleWidth(counters);
+	return { lines, meshOverflow, tools: { y: 1, x0: end - visibleWidth(toolsText(model)), x1: end } };
 }
 
 interface RowCells {
@@ -285,6 +307,11 @@ function firstFitting(candidates: string[][], width: number, paint: Painter): st
 }
 
 export function renderFooter(model: FooterModel, width: number, paint: Painter): string[] {
+	return footerLayout(model, width, paint).lines;
+}
+
+/** The footer's lines and where its tool figure landed, so a click on it can be recognized. */
+export function footerLayout(model: FooterModel, width: number, paint: Painter): { lines: string[]; tools: Span } {
 	const rows = [...model.rows]
 		.filter((row) => row.cost > 0)
 		.sort((left, right) => compareProviderIds(left.id, right.id));
@@ -292,7 +319,7 @@ export function renderFooter(model: FooterModel, width: number, paint: Painter):
 	const settledModel = model.spend ? { ...model, spend: { ...model.spend, delta: undefined } } : model;
 	const decorated = [...gridLines(settledModel, paint, Infinity, false).lines, ...rowLines(rows, paint, model.nowMs, "full", false)];
 	const compact = !fits(decorated, width - DECORATION_SPARE);
-	const { lines: gridRaw, meshOverflow } = gridLines(model, paint, width, compact);
+	const { lines: gridRaw, meshOverflow, tools } = gridLines(model, paint, width, compact);
 	const grid = gridRaw.map((line) => truncateVisible(line.trimEnd(), width, paint.fg("dim", ELLIPSIS)));
 	const rowBlock = rows.length
 		? firstFitting(
@@ -305,7 +332,7 @@ export function renderFooter(model: FooterModel, width: number, paint: Painter):
 		.map((text) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim())
 		.filter(Boolean)
 		.map((text) => truncateVisible(text, width, paint.fg("dim", ELLIPSIS)));
-	return [...grid, ...meshLine, ...rowBlock, ...statuses];
+	return { lines: [...grid, ...meshLine, ...rowBlock, ...statuses], tools };
 }
 
 export { _cacheState as cacheState };

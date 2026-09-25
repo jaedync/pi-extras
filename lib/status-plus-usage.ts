@@ -89,6 +89,7 @@ export function addChild(stats: SessionStats, child: SessionStats): void {
 	stats.prompts += child.prompts;
 	stats.turns += child.turns;
 	stats.toolCalls += child.toolCalls;
+	for (const [id, ran] of child.chains) stats.chains.set(id, ran);
 	for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) stats.tokens[key] += child.tokens[key];
 	for (const [id, usage] of child.providers) {
 		const provider = stats.providers.get(id) ?? { ...EMPTY_PROVIDER };

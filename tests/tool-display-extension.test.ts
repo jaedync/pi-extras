@@ -6,7 +6,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { CHAIN_ENTRY, CHAIN_EVENT } from "../lib/chain/run.ts";
-import { applyArgs, registerToolDisplay, toolDisplayEnabled, TOOL_NAMES, withDisplay, type ToolDisplayDeps } from "../lib/tool-display/index.ts";
+import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount } from "../lib/tool-count.ts";
+import { applyArgs, countArg, registerToolDisplay, toolDisplayEnabled, TOOL_NAMES, withDisplay, type ToolDisplayDeps } from "../lib/tool-display/index.ts";
 import { DEFAULT_SETTINGS, readSettings, writeSettings, type DisplaySettings } from "../lib/tool-display/settings.ts";
 import { quiet } from "./support/quiet-theme.ts";
 
@@ -33,6 +34,7 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 	const commands = new Map<string, any>();
 	let settings = options.settings ?? DEFAULT_SETTINGS;
 	const writes: DisplaySettings[] = [];
+	const counts: string[] = [];
 	const sources = options.sources ?? Object.fromEntries(TOOL_NAMES.map((name) => [name, "builtin"]));
 	const deps: ToolDisplayDeps = {
 		tools: (_ctx, wrap) => {
@@ -57,6 +59,10 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 		},
 		host,
 		nonce: () => "0123456789abcdef",
+		writeToolCount: (count) => {
+			if (options.failWrite) throw new Error("read-only");
+			counts.push(count);
+		},
 	};
 	registerToolDisplay({
 		on: (event: string, handler: any) => handlers.set(event, handler),
@@ -72,7 +78,7 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 		sessionManager: { getEntries: () => options.entries ?? [] },
 	});
 	return {
-		registered, notes, writes, commands, appended, emitted,
+		registered, notes, writes, counts, commands, appended, emitted,
 		start: (mode = "tui") => handlers.get("session_start")!({ type: "session_start" }, ctx(mode)),
 		fire: (event: string) => handlers.get(event)!({ type: event }, ctx("tui")),
 		run: (args: string) => commands.get("tool-display").handler(args, ctx("tui")),
@@ -182,6 +188,43 @@ test("/tool-display says when the setting could not be saved", async () => {
 	await h.run("chains off");
 	assert.equal(h.notes.at(-1)![1], "warning");
 	assert.match(h.notes.at(-1)![0], /this session only/);
+});
+
+test("/tool-display count switches the Status Plus tool count and tells it", async () => {
+	const h = harness();
+	h.start();
+	await h.run("count steps");
+	assert.deepEqual(h.counts, ["steps"]);
+	assert.deepEqual(h.emitted.at(-1), [TOOL_COUNT_EVENT, "steps"]);
+	assert.match(h.notes.at(-1)![0], /each step a chained command ran/);
+	await h.run("COUNT calls");
+	assert.deepEqual(h.emitted.at(-1), [TOOL_COUNT_EVENT, "calls"]);
+	// It is not a Tool Display setting.
+	assert.equal(h.writes.length, 0);
+	await h.run("count all");
+	assert.equal(h.notes.at(-1)![1], "warning");
+	const failing = harness({ failWrite: true });
+	failing.start();
+	await failing.run("count steps");
+	assert.match(failing.notes.at(-1)![0], /this session only/);
+	assert.deepEqual(failing.emitted.at(-1), [TOOL_COUNT_EVENT, "steps"]);
+	assert.equal(countArg("count"), undefined);
+});
+
+test("the tool count persists under statusPlus, and a split count adds the steps each chain ran", () => {
+	const dir = mkdtempSync(join(tmpdir(), "tool-count-"));
+	try {
+		const file = join(dir, "pi-extras.json");
+		assert.equal(readToolCount(file), "calls");
+		writeFileSync(file, JSON.stringify({ toolDisplay: { chains: false } }));
+		writeToolCount("steps", file);
+		assert.equal(readToolCount(file), "steps");
+		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).toolDisplay, { chains: false });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+	// Three steps add two; a chain that ran none is still the one call it was.
+	assert.equal(splitCount(5, new Map([["a", 3], ["b", 1], ["c", 0]])), 7);
 });
 
 test("/tool-display arguments", () => {

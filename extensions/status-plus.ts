@@ -13,7 +13,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { operationalError } from "../lib/operational-log.ts";
-import { renderFooter, type FooterModel, type FooterRow } from "../lib/status-plus-footer.ts";
+import type { TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { CHAIN_EVENT } from "../lib/chain/run.ts";
+import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
+import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
 import { sharedLimitStore } from "../lib/limit-store.ts";
 import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, REFRESH_INTERVAL_MS, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
 import { estimateUsageCost, toEpochMs } from "../lib/status-plus-logic.ts";
@@ -89,6 +92,10 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	 * transcript and child evidence there would scale with session length.
 	 */
 	let transcriptStats: SessionStats | undefined;
+	/** Chains that finished since the transcript last saved them; Tool Display saves between turns. */
+	const liveChains = new Map<string, number>();
+	let toolCount: ToolCount = "calls";
+	let toolsSpan: Span | undefined;
 
 	function refreshStats(ctx: ExtensionContext): SessionStats {
 		transcriptStats = collect(transcriptSource(ctx));
@@ -173,7 +180,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			providerId: ctx.model?.provider,
 			thinkingLevel: ctx.model?.reasoning ? ctx.thinkingLevel || "off" : undefined,
 			spend: animatedSpend(rows, now),
-			counters: { prompts: stats.prompts, turns: stats.turns, toolCalls: stats.toolCalls },
+			counters: toolCounters(stats),
 			cwd: formatCwd(ctx.sessionManager.getCwd()),
 			gitBranch: footerData.getGitBranch(),
 			sessionName: ctx.sessionManager.getSessionName(),
@@ -189,6 +196,34 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		};
 	}
 
+	function toolCounters(stats: SessionStats): FooterModel["counters"] {
+		const counters = { prompts: stats.prompts, turns: stats.turns, toolCalls: stats.toolCalls };
+		if (toolCount === "calls") return counters;
+		return { ...counters, toolCalls: splitCount(stats.toolCalls, new Map([...liveChains, ...stats.chains])), split: true };
+	}
+
+	/** A click on the tool figure switches how it counts, and the choice is kept for later sessions. */
+	function toggleToolCount(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		const span = toolsSpan;
+		if (event.type !== "click" || event.button !== "left" || span === undefined) return undefined;
+		// One column of slack before the figure: a click on its first digit often lands just left of it.
+		if (event.y !== span.y || event.x < span.x0 - 1 || event.x >= span.x1) return undefined;
+		setToolCount(toolCount === "calls" ? "steps" : "calls", true);
+		return { handled: true };
+	}
+
+	function setToolCount(next: ToolCount, save: boolean): void {
+		toolCount = next;
+		if (save) {
+			try {
+				writeToolCount(next);
+			} catch (error) {
+				operationalError(LOG_FILE, "status-plus", `could not save the tool count: ${(error as Error).message}`);
+			}
+		}
+		requestFooterRender?.();
+	}
+
 	function meshAndStatuses(footerData: FooterData): Pick<FooterModel, "mesh" | "extensionStatuses"> {
 		const { mesh, others } = splitMeshStatuses(footerData.getExtensionStatuses().entries());
 		return { mesh, extensionStatuses: others };
@@ -201,11 +236,18 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			const unsubscribe = footerData.onBranchChange(() => {
 				// A branch switch is a context change, not spend: no animation.
 				costTween = undefined;
+				// Chains announced on the old branch are not on this one; its saved ones are in the transcript.
+				liveChains.clear();
 				refreshStats(ctx);
 				tui.requestRender();
 			});
 			return {
-				render: (width: number) => renderFooter(footerModel(ctx, footerData as FooterData), width, theme),
+				render: (width: number) => {
+					const layout = footerLayout(footerModel(ctx, footerData as FooterData), width, theme);
+					toolsSpan = layout.tools;
+					return layout.lines;
+				},
+				handleMouse: toggleToolCount,
 				invalidate() {},
 				dispose() {
 					unsubscribe();
@@ -298,8 +340,22 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		update(ctx);
 	});
 
+	// Tool Display announces each chain as it finishes; it reaches the transcript between turns.
+	pi.events?.on(CHAIN_EVENT, (data: unknown) => {
+		const { toolCallId, ran } = (data ?? {}) as { toolCallId?: unknown; ran?: unknown };
+		if (typeof toolCallId !== "string" || typeof ran !== "number") return;
+		liveChains.set(toolCallId, ran);
+		if (toolCount === "steps") requestFooterRender?.();
+	});
+	// `/tool-display count` switches the count where the terminal sends no clicks, and saves it itself.
+	pi.events?.on(TOOL_COUNT_EVENT, (data: unknown) => {
+		if (data === "calls" || data === "steps") setToolCount(data, false);
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		latestCtx = ctx;
+		liveChains.clear();
+		toolCount = readToolCount();
 		providerLimits.setRefresher(async (provider, force) => {
 			if (latestCtx) await refreshProviderLimits(provider, latestCtx, force);
 		});

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CHAIN_ENTRY } from "../lib/chain/run.ts";
 import { BILLING_SOURCE_ENTRY, collect } from "../lib/status-plus-transcript.ts";
 
 const T0 = 1_750_000_000_000;
@@ -40,6 +41,21 @@ test("collect counts prompts, tools, turns, airtime, and per-provider spend from
 	assert.deepEqual(stats.providers.get("openai-codex"), { cost: 0.1, airtimeMs: 500, inputTokens: 1, outputTokens: 1 });
 	assert.deepEqual(stats.tokens, { input: 42, output: 9, cacheRead: 100, cacheWrite: 20 });
 	assert.equal(stats.cacheHitPct, 0);
+});
+
+test("collect reads the steps each chained command ran from Tool Display's saved chains", () => {
+	const step = { at: 1, ms: 5 };
+	const branch = [
+		assistant(T0, T0 + 1000, "anthropic", 0, 2),
+		// A leading cd is a location, not a step.
+		{ type: "custom", timestamp: iso(T0 + 2000), customType: CHAIN_ENTRY, data: { v: 1, toolCallId: "call-1", cd: true, steps: [step, step, step] } },
+		// The third step never ran.
+		{ type: "custom", timestamp: iso(T0 + 2000), customType: CHAIN_ENTRY, data: { v: 1, toolCallId: "call-2", steps: [step, step, {}] } },
+		{ type: "custom", timestamp: iso(T0 + 2000), customType: CHAIN_ENTRY, data: { v: 2, toolCallId: "call-3", steps: [] } },
+	];
+	const stats = collect({ getBranch: () => branch, getSessionDir: () => "/nowhere", costOf: () => 0 });
+	assert.equal(stats.toolCalls, 2);
+	assert.deepEqual([...stats.chains], [["call-1", 2], ["call-2", 2]]);
 });
 
 test("a Zen billing marker moves a Go message's cost to the Zen category", () => {
