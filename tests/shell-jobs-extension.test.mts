@@ -29,7 +29,7 @@ import {
 } from "./support/shell-jobs-harness.mts";
 
 const { DETAILS_BUDGET_BYTES, LOG_READ_BYTES, MAX_LIVE, PAYLOAD_CAP_BYTES, TEXT_BUDGET_BYTES, jsonEscapedBytes } = core;
-const { SPINNER_FRAMES, WIDGET_REFRESH_MS } = widget;
+const { WIDGET_REFRESH_MS } = widget;
 const { visibleWidth } = tui;
 
 afterEach(cleanup);
@@ -68,10 +68,10 @@ describe("extension integration", () => {
 		const result = await start.execute("t1", { command: "echo out; echo err 1>&2; sleep 0.3" }, undefined, undefined, app.ctx);
 		assert.ok(Date.now() - started < 250);
 		const details = result.details as { id: string; logPath: string; pid: number };
-		assert.strictEqual(details.id, "j1");
+		assert.strictEqual(details.id, "echo-out");
 		assert.strictEqual(groupAlive(details.pid), true);
 		await sleep(600);
-		const logs = await app.tools.get("shell_job").execute("t2", { op: "logs", id: "j1" }, undefined, undefined, app.ctx);
+		const logs = await app.tools.get("shell_job").execute("t2", { op: "logs", id: "echo-out" }, undefined, undefined, app.ctx);
 		const text = logs.content.map((c: { text: string }) => c.text).join("\n");
 		contains(text, "out");
 		contains(text, "err");
@@ -102,7 +102,7 @@ describe("extension integration", () => {
 			.get("shell_job_start")
 			.execute("t1", { command: "sleep 30 & sleep 30" }, undefined, undefined, app.ctx);
 		const pgid = (started.details as { pid: number }).pid;
-		const killed = await app.tools.get("shell_job").execute("t2", { op: "kill", id: "j1" }, undefined, undefined, app.ctx);
+		const killed = await app.tools.get("shell_job").execute("t2", { op: "kill", id: "sleep-30" }, undefined, undefined, app.ctx);
 		assert.strictEqual(killed.details.state, "done");
 		await sleep(400);
 		assert.strictEqual(groupAlive(pgid), false);
@@ -117,10 +117,10 @@ describe("extension integration", () => {
 		await sleep(400);
 		const listed = await app.tools.get("shell_job").execute("t2", { op: "list" }, undefined, undefined, app.ctx);
 		assert.strictEqual((listed.details.jobs).length, 1);
-		assert.strictEqual(listed.details.jobs[0].id, "j1");
+		assert.strictEqual(listed.details.jobs[0].id, "echo-one");
 		assert.strictEqual(listed.details.jobs[0].state, "done");
 		// Status text already carries the state; it must not be printed twice.
-		assert.strictEqual(listed.content[0].text, "j1 exit 0 echo one");
+		assert.strictEqual(listed.content[0].text, "echo-one exit 0 echo one");
 	});
 
 	test("a title is flattened, echoed in the list, and carried on the completion", async () => {
@@ -133,11 +133,11 @@ describe("extension integration", () => {
 		assert.strictEqual(started.details.title, "Say one");
 		await sleep(400);
 		const listed = await app.tools.get("shell_job").execute("t2", { op: "list" }, undefined, undefined, app.ctx);
-		assert.strictEqual(listed.content[0].text, "j1 exit 0 [Say one] echo one");
+		assert.strictEqual(listed.content[0].text, "say-one exit 0 [Say one] echo one");
 		assert.strictEqual(listed.details.jobs[0].title, "Say one");
 		const completion = app.messages.find((m) => m.message.customType === "shell-job-complete")!;
 		assert.ok(completion, "expected a completion");
-		contains(completion.message.content, "Job j1 finished: exit 0");
+		contains(completion.message.content, "Job say-one finished: exit 0");
 		contains(completion.message.content, "\ntitle: Say one\nlog: ");
 		assert.strictEqual(completion.message.details?.title, "Say one");
 		// An untitled job is unchanged: no title line, a null title in details.
@@ -189,7 +189,7 @@ describe("extension integration", () => {
 		]);
 		assert.notStrictEqual(first.isError, true);
 		assert.notStrictEqual(second.isError, true);
-		assert.deepStrictEqual([first.details.id, second.details.id].sort(), ["j1", "j2"]);
+		assert.deepStrictEqual([first.details.id, second.details.id].sort(), ["sleep-30", "sleep-30-2"]);
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});
 
@@ -279,8 +279,8 @@ describe("extension integration", () => {
 		const pgid = (started.details as { pid: number }).pid;
 		await cleanupStarted;
 		const runtime = [...__testing.getRuntimes()].pop()!;
-		assert.strictEqual(runtime.jobs.get("j1")?.state, "stopping");
-		const killed = await app.tools.get("shell_job").execute("t2", { op: "kill", id: "j1" }, undefined, undefined, app.ctx);
+		assert.strictEqual(runtime.jobs.get("mkfifo-ready")?.state, "stopping");
+		const killed = await app.tools.get("shell_job").execute("t2", { op: "kill", id: "mkfifo-ready" }, undefined, undefined, app.ctx);
 		assert.strictEqual(killed.details.state, "done");
 		assert.strictEqual(groupAlive(pgid), false);
 		assert.strictEqual((app.messages.filter((m) => m.message.customType === "shell-job-complete")).length, 0);
@@ -351,13 +351,13 @@ describe("extension integration", () => {
 			.execute("t1", { command: "printf 'A'; printf '\\377%.0s' $(seq 1 4094); printf 'Z'; sleep 0.2" }, undefined, undefined, app.ctx);
 		assert.ok(!(started as { isError?: boolean }).isError);
 		await sleep(600);
-		const page1 = await app.tools.get("shell_job").execute("t2", { op: "logs", id: "j1", offset: 0, bytes: LOG_READ_BYTES }, undefined, undefined, app.ctx);
+		const page1 = await app.tools.get("shell_job").execute("t2", { op: "logs", id: "printf-a", offset: 0, bytes: LOG_READ_BYTES }, undefined, undefined, app.ctx);
 		const first = page1.content[0].text as string;
 		doesNotContain(first, "truncated");
 		assert.ok(jsonEscapedBytes(first) <= TEXT_BUDGET_BYTES);
 		const next = page1.details.nextOffset as number;
 		assert.ok(next < 4096);
-		const page2 = await app.tools.get("shell_job").execute("t3", { op: "logs", id: "j1", offset: next, bytes: LOG_READ_BYTES }, undefined, undefined, app.ctx);
+		const page2 = await app.tools.get("shell_job").execute("t3", { op: "logs", id: "printf-a", offset: next, bytes: LOG_READ_BYTES }, undefined, undefined, app.ctx);
 		contains(page2.content[0].text, "Z");
 	});
 
@@ -388,7 +388,7 @@ describe("extension integration", () => {
 			.execute("t1", { command: "printf '\\t%.0s' $(seq 1 20000); sleep 0.2" }, undefined, undefined, app.ctx);
 		assert.ok(!(started as { isError?: boolean }).isError);
 		await sleep(600);
-		const page = await app.tools.get("shell_job").execute("t2", { op: "logs", id: "j1", offset: 0, bytes: LOG_READ_BYTES }, undefined, undefined, app.ctx);
+		const page = await app.tools.get("shell_job").execute("t2", { op: "logs", id: "printf-t", offset: 0, bytes: LOG_READ_BYTES }, undefined, undefined, app.ctx);
 		const text = page.content[0].text as string;
 		doesNotContain(text, "truncated");
 		assert.strictEqual(text.length, LOG_READ_BYTES);
@@ -430,7 +430,7 @@ describe("extension integration", () => {
 
 		// A history entry from an earlier runtime (same j1 after a restart) must not
 		// count as delivery for this runtime.
-		await fire(app.handlers, "agent_settled", branchOf([{ type: "custom_message", customType: "shell-job-complete", details: { id: "j1", runtimeId: "earlier-runtime" } }]));
+		await fire(app.handlers, "agent_settled", branchOf([{ type: "custom_message", customType: "shell-job-complete", details: { id: "echo-done", runtimeId: "earlier-runtime" } }]));
 		assert.strictEqual((completions()).length, 2);
 
 		// Empty history: simulate an abort that cleared the queued follow-up.
@@ -441,7 +441,7 @@ describe("extension integration", () => {
 		assert.strictEqual((completions()).length, 3);
 
 		// Once history contains this runtime's entry, reconcile marks it delivered.
-		await fire(app.handlers, "agent_settled", branchOf([{ type: "custom_message", customType: "shell-job-complete", details: { id: "j1", runtimeId } }]));
+		await fire(app.handlers, "agent_settled", branchOf([{ type: "custom_message", customType: "shell-job-complete", details: { id: "echo-done", runtimeId } }]));
 		assert.strictEqual((completions()).length, 3);
 	});
 
@@ -474,9 +474,9 @@ describe("extension integration", () => {
 		await app.tools.get("shell_job_start").execute("t1", { command: "seq 1 40" }, undefined, undefined, app.ctx);
 		await sleep(800);
 		const message = app.messages.find((m) => m.message.customType === "shell-job-complete")!;
-		contains(message.message.content, "Job j1 finished: exit 0 after");
+		contains(message.message.content, "Job seq-1 finished: exit 0 after");
 		// The log line is always the second line, truncated or not.
-		assert.match(message.message.content, /^Job j1 finished: exit 0 after [\d.]+s\nlog: \S+\/j1\.log\n\n/);
+		assert.match(message.message.content, /^Job seq-1 finished: exit 0 after [\d.]+s\nlog: \S+\/seq-1\.log\n\n/);
 		assert.match(message.message.content, /\[Showing lines 11-40 of 40\. Full output: /);
 		doesNotContain(message.message.content, "bounded to");
 		assert.strictEqual(message.message.details?.truncated, true);
@@ -551,7 +551,7 @@ describe("extension integration", () => {
 		const shown = app.widgets.at(-1);
 		assert.strictEqual(shown?.id, "shell-jobs");
 		assert.strictEqual(Array.isArray(shown?.value), true);
-		contains(JSON.stringify(shown?.value), "j1");
+		contains(JSON.stringify(shown?.value), "sleep-30");
 		contains(JSON.stringify(shown?.value), "sleep 30");
 		// No header row and no elapsed column: RPC cannot tick a timer.
 		doesNotContain(JSON.stringify(shown?.value), "running");
@@ -572,11 +572,12 @@ describe("extension integration", () => {
 			{ fg: (_key: string, text: string) => text },
 		);
 		const lines = component.render(24);
-		assert.match(lines[0], new RegExp(`^ [${SPINNER_FRAMES.join("")}]  j1`));
-		// truncateToWidth adds ANSI resets, so width must be measured visibly.
-		assert.ok(visibleWidth(lines[0]) <= 24);
+		// A blank line apart from the transcript, then the job's band.
+		assert.strictEqual(lines[0], "");
+		contains(lines[1], "$ sleep 30");
+		assert.ok(visibleWidth(lines[1]) <= 24);
 		// 24 columns is narrower than the row, so the command must be truncated.
-		doesNotContain(lines[0], "watchAll");
+		doesNotContain(lines[1], "watchAll");
 		const widgetCalls = app.widgets.length;
 		await sleep(WIDGET_REFRESH_MS + 500);
 		// The timer asks for a render instead of re-setting the widget.
@@ -588,8 +589,8 @@ describe("extension integration", () => {
 			{ fg: () => { throw new Error("no such theme key"); } },
 		);
 		const fallback = degrade.render(24);
-		contains(fallback[0], "j1");
-		assert.ok(visibleWidth(fallback[0]) <= 24);
+		contains(fallback[1], "$ sleep 30");
+		assert.ok(visibleWidth(fallback[1]) <= 24);
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});
 
@@ -676,12 +677,12 @@ describe("inspector hooks", () => {
 		const app = await startApp();
 		await app.tools.get("shell_job_start").execute("call-1", { command: "sleep 30", title: "Nap" }, undefined, undefined, app.ctx);
 		const manage = app.tools.get("shell_job");
-		const logs = await manage.execute("call-2", { op: "logs", id: "j1" }, undefined, undefined, app.ctx);
+		const logs = await manage.execute("call-2", { op: "logs", id: "nap" }, undefined, undefined, app.ctx);
 		assert.strictEqual(typeof logs.details.runtimeId, "string");
 		const context = { toolCallId: "call-2", expanded: false, state: {} };
 		// The result slot renders first in pi's order and records what the row is about.
 		manage.renderResult(logs, { expanded: false }, plainTheme, context);
-		const header = manage.renderCall({ op: "logs", id: "j1" }, plainTheme, context);
+		const header = manage.renderCall({ op: "logs", id: "nap" }, plainTheme, context);
 		assert.deepStrictEqual(header.handleMouse(click), { handled: true });
 		assert.strictEqual(app.overlays.length, 1);
 		const shown = lastOverlay(app);
@@ -690,7 +691,7 @@ describe("inspector hooks", () => {
 		// The same id from an earlier session is not this session's j1.
 		const foreign = { toolCallId: "call-3", expanded: false, state: {} };
 		manage.renderResult({ ...logs, details: { ...logs.details, runtimeId: "other" } }, { expanded: false }, plainTheme, foreign);
-		assert.strictEqual(manage.renderCall({ op: "logs", id: "j1" }, plainTheme, foreign).handleMouse(click), undefined);
+		assert.strictEqual(manage.renderCall({ op: "logs", id: "nap" }, plainTheme, foreign).handleMouse(click), undefined);
 		// A list names no job, so its row keeps pi's expand toggle.
 		const listed = await manage.execute("call-4", { op: "list" }, undefined, undefined, app.ctx);
 		const listContext = { toolCallId: "call-4", expanded: false, state: {} };
@@ -708,7 +709,7 @@ describe("inspector hooks", () => {
 		const start = app.tools.get("shell_job_start");
 		await start.execute("c1", { command: "sleep 30", title: "Nap" }, undefined, undefined, app.ctx);
 		await start.execute("c2", { command: "sleep 31", title: "Second" }, undefined, undefined, app.ctx);
-		await command.handler("j2", app.ctx);
+		await command.handler("second", app.ctx);
 		assert.strictEqual(app.overlays.length, 1);
 		const direct = lastOverlay(app);
 		contains(direct.text(), "Second");
@@ -719,7 +720,7 @@ describe("inspector hooks", () => {
 		assert.strictEqual(app.overlays.length, 1);
 		const options = app.selects[0].options;
 		assert.strictEqual(options.length, 2);
-		assert.strictEqual(options[0].startsWith("j2"), true);
+		assert.strictEqual(options[0].startsWith("second"), true);
 		contains(options[0], "Second");
 		contains(options[1], "sleep 30");
 		app.selectAnswers.push(options[1]);
@@ -731,9 +732,9 @@ describe("inspector hooks", () => {
 		await command.handler("j7", app.ctx);
 		contains(app.notices.at(-1)?.text, "Unknown job j7");
 		assert.strictEqual(app.overlays.length, 2);
-		const completions = await command.getArgumentCompletions("j");
-		assert.deepStrictEqual(completions.map((item: { value: string }) => item.value), ["j2", "j1"]);
-		assert.deepStrictEqual((await command.getArgumentCompletions("j1")).map((item: { value: string }) => item.value), ["j1"]);
+		const completions = await command.getArgumentCompletions("");
+		assert.deepStrictEqual(completions.map((item: { value: string }) => item.value), ["second", "nap"]);
+		assert.deepStrictEqual((await command.getArgumentCompletions("nap")).map((item: { value: string }) => item.value), ["nap"]);
 		assert.deepStrictEqual(await command.getArgumentCompletions("zzz"), []);
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});
@@ -746,11 +747,13 @@ describe("inspector hooks", () => {
 		const factory = app.widgets.at(-1)?.value as (host: unknown, theme: unknown) => any;
 		const rows = factory({ requestRender: () => {} }, plainTheme);
 		rows.render(80);
-		assert.deepStrictEqual(rows.handleMouse({ ...click, y: 1 }), { handled: true });
+		// Row 0 is the blank line above the bands.
+		assert.deepStrictEqual(rows.handleMouse({ ...click, y: 2 }), { handled: true });
 		const shown = lastOverlay(app);
 		contains(shown.text(), "Second");
 		await closeOverlay(shown.component);
-		// Past the last row, or not a left click: nothing.
+		// The blank line, past the last row, or not a left click: nothing.
+		assert.strictEqual(rows.handleMouse({ ...click, y: 0 }), undefined);
 		assert.strictEqual(rows.handleMouse({ ...click, y: 7 }), undefined);
 		assert.strictEqual(rows.handleMouse({ ...click, y: 0, button: "middle" }), undefined);
 		assert.strictEqual(app.overlays.length, 1);
@@ -763,7 +766,7 @@ describe("inspector hooks", () => {
 		await start.execute("c1", { command: "sleep 30" }, undefined, undefined, app.ctx);
 		const header = start.renderCall({ command: "sleep 30" }, plainTheme, { toolCallId: "c1", expanded: false, state: {} });
 		assert.strictEqual(header.handleMouse?.(click), undefined);
-		await app.commands.get("jobs")!.handler("j1", app.ctx);
+		await app.commands.get("jobs")!.handler("sleep-30", app.ctx);
 		assert.strictEqual(app.overlays.length, 0);
 		contains(app.notices.at(-1)?.text, "TUI");
 		await fire(app.handlers, "session_shutdown", app.ctx);

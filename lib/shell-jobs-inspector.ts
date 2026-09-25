@@ -26,19 +26,23 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import { FRAME_MS } from "./band/clock.ts";
+import { factsOf, jobBand } from "./shell-jobs-band.ts";
 import { readLogWindow, sanitizeControl } from "./shell-jobs-core.ts";
 import { type Job, jobStatusText } from "./shell-jobs-process.ts";
 import { formatElapsed } from "./shell-jobs-widget.ts";
 
-// Same cadence as the widget, so a job in both places moves in step.
-export const INSPECTOR_REFRESH_MS = 250;
+// The band's frame rate, so the job moves as it does in the widget; the log is
+// only re-read when its size or the job's state changes.
+export const INSPECTOR_REFRESH_MS = FRAME_MS;
 // Enough for a build's last few screens; the log path is shown for the rest.
 export const INSPECTOR_TAIL_BYTES = 64 * 1024;
 // A command block is capped so a pasted script cannot push the output away.
 export const INSPECTOR_COMMAND_LINES = 8;
 // The overlay takes this share of the terminal height, never fewer rows than the minimum.
 export const INSPECTOR_HEIGHT_SHARE = 0.8;
-export const INSPECTOR_MIN_ROWS = 12;
+// Frame and header rows plus the smallest output viewport, for a single-line command.
+export const INSPECTOR_MIN_ROWS = 13;
 export const INSPECTOR_WIDTH = "80%";
 // Rows of output kept visible even when the frame leaves little room.
 const MIN_VIEWPORT_ROWS = 3;
@@ -100,21 +104,12 @@ function fitTail(text: string, width: number): string {
 	return `\u2026${kept}`;
 }
 
-interface StatusLine {
-	text: string;
-	key: PaintKey;
-}
-
-function statusOf(job: Job | undefined, tracked: boolean, now: number): StatusLine {
-	if (job === undefined) return { text: "\u2717 no job", key: "warning" };
-	const elapsed = formatElapsed((job.endedAt ?? now) - job.startedAt);
-	const pid = `pid ${job.pid}`;
-	if (!tracked) return { text: `\u2717 no longer tracked in this session \u00b7 last seen ${jobStatusText(job)} \u00b7 ${pid}`, key: "warning" };
-	if (job.state === "running") return { text: `\u25cf running \u00b7 ${elapsed} \u00b7 ${pid}`, key: "accent" };
-	if (job.state === "stopping") return { text: `\u25d0 stopping \u00b7 ${elapsed} \u00b7 ${pid}`, key: "warning" };
-	const failed = job.signal !== null || (job.code ?? 0) !== 0;
-	const cleanup = job.cleanupError === null ? "" : ` \u00b7 ${job.cleanupError}`;
-	return { text: `${failed ? "\u2717" : "\u2713"} ${jobStatusText(job)} \u00b7 took ${elapsed} \u00b7 ${pid}${cleanup}`, key: failed ? "error" : "success" };
+/** Facts under the band: what the band does not say, and the id the model uses. */
+function detailsOf(job: Job, now: number): string {
+	const parts = [job.id, `pid ${job.pid}`];
+	if (job.state === "done") parts.push(`${jobStatusText(job)} after ${formatElapsed((job.endedAt ?? now) - job.startedAt)}`);
+	if (job.cleanupError !== null) parts.push(job.cleanupError);
+	return parts.join(" \u00b7 ");
 }
 
 export class JobInspector implements Component, Focusable {
@@ -137,6 +132,7 @@ export class JobInspector implements Component, Focusable {
 	private closed = false;
 	private disposed = false;
 	private readonly paint: Paint;
+	private readonly theme: Theme;
 	private readonly tui: InspectorTui;
 	private readonly lookup: JobLookup;
 	private readonly onClose: () => void;
@@ -147,6 +143,7 @@ export class JobInspector implements Component, Focusable {
 		this.lookup = lookup;
 		this.onClose = onClose;
 		this.now = now;
+		this.theme = theme;
 		this.paint = painter(theme);
 		this.refresh();
 	}
@@ -232,21 +229,21 @@ export class JobInspector implements Component, Focusable {
 	render(width: number): string[] {
 		const w = Math.max(FRAME_COLUMNS + 8, width);
 		const inner = w - FRAME_COLUMNS;
-		const { fg, bold } = this.paint;
+		const { fg } = this.paint;
 		const border = (text: string) => fg("border", text);
 		const row = (content: string) => `${border("\u2502")} ${truncateToWidth(content, inner, "\u2026", true)} ${border("\u2502")}`;
 		const rule = (left: string, right: string) => border(`${left}${"\u2500".repeat(w - 2)}${right}`);
 		const job = this.job;
 		const now = this.now();
 
-		const label = job === undefined ? "job" : job.title === null || job.title === undefined ? job.id : `${job.id} \u00b7 ${job.title}`;
-		const title = truncateToWidth(label, w - 6, "\u2026");
-		const top = `${border("\u256d\u2500 ")}${fg("toolTitle", bold(title))}${border(` ${"\u2500".repeat(w - 5 - visibleWidth(title))}\u256e`)}`;
+		const top = rule("\u256d", "\u256e");
 
 		const header: string[] = [];
-		const status = statusOf(job, this.tracked, now);
-		header.push(row(fg(status.key, status.text)));
-		if (job !== undefined) {
+		if (job === undefined) header.push(row(fg("warning", "no job")));
+		else {
+			header.push(row(jobBand(this.theme, factsOf(job), { width: inner, now, view: this.tracked ? "live" : "calm" })));
+			const lost = this.tracked ? "" : `no longer tracked in this session \u00b7 last seen ${jobStatusText(job)} \u00b7 `;
+			header.push(row(`${fg("warning", lost)}${fg("dim", detailsOf(job, now))}`));
 			for (const line of this.commandLines(job, inner)) header.push(row(line));
 			header.push(row(fg("muted", `cwd ${fitTail(job.cwd, inner - 4)}`)));
 			header.push(row(fg("muted", `log ${fitTail(job.logPath, inner - 4)}`)));

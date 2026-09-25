@@ -22,7 +22,8 @@
  */
 import { statSync } from "node:fs";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { FRAME_MS } from "./band/clock.ts";
+import { factsOf, jobBand } from "./shell-jobs-band.ts";
 import { commandPreview } from "./shell-jobs-core.ts";
 import { type Job, jobStatusText } from "./shell-jobs-process.ts";
 
@@ -231,6 +232,11 @@ export function createJobsWidget(): JobsWidget {
 		for (const id of [...activity.keys()]) if (!live.has(id)) activity.delete(id);
 	};
 	const lookup: ActivityLookup = (job) => activity.get(job.id) ?? null;
+	const isQuiet = (job: Job, now: number): boolean => {
+		const seen = lookup(job);
+		return job.state === "running" && seen !== null && now - seen.changedAt >= QUIET_AFTER_MS;
+	};
+	let sampledAt = 0;
 
 	const paintWith = (theme: Theme): Paint => (key, text) => {
 		try {
@@ -247,18 +253,22 @@ export function createJobsWidget(): JobsWidget {
 		tui = host;
 		return {
 			render: (width: number) => {
-				const inner = Math.max(1, width - WIDGET_PAD.length * 2);
 				const jobs = snapshot();
-				lastRows = selectRows(jobs).rows;
-				return renderJobLines(jobs, Date.now(), paintWith(theme), lookup).map(
-					(line) => `${WIDGET_PAD}${truncateToWidth(line, inner)}`,
-				);
+				const { rows, hidden } = selectRows(jobs);
+				lastRows = rows;
+				if (rows.length === 0) return [];
+				const now = Date.now();
+				// One band per job, like a tool row; a quiet log stills the sweep to a tint.
+				const bands = rows.map((job) => jobBand(theme, factsOf(job), { width, now, view: "live", quiet: isQuiet(job, now) }));
+				const more = hidden > 0 ? [`${WIDGET_PAD}${paintWith(theme)("dim", `+${hidden} more`)}`] : [];
+				// A blank line sets the bands apart from the transcript above.
+				return ["", ...bands, ...more];
 			},
 			invalidate: () => {},
-			// Rows are one line each in painted order; the `+N more` line is no job.
+			// A blank line, then one band per job in painted order; the `+N more` line is no job.
 			handleMouse: (event: WidgetMouseEvent) => {
 				if (event.type !== "click" || event.button !== "left" || onSelect === null) return undefined;
-				const job = lastRows[event.y];
+				const job = lastRows[event.y - 1];
 				if (job === undefined) return undefined;
 				onSelect(job);
 				return { handled: true };
@@ -317,9 +327,14 @@ export function createJobsWidget(): JobsWidget {
 			if (rows.some((job) => job.state !== "done")) {
 				if (timer === null && tuiMode) {
 					const handle = setInterval(() => {
-						sample(Date.now());
+						const now = Date.now();
+						// Bands move at the animation rate; the logs are sampled less often.
+						if (now - sampledAt >= WIDGET_REFRESH_MS) {
+							sample(now);
+							sampledAt = now;
+						}
 						tui?.requestRender();
-					}, WIDGET_REFRESH_MS);
+					}, FRAME_MS);
 					handle.unref?.();
 					timer = handle;
 				}

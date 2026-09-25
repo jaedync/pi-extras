@@ -1,76 +1,84 @@
 /**
  * Presentation for the shell job tools and completion messages.
  *
- * This deliberately mirrors pi's built-in bash renderer: the call line reads
- * `$ command`, long bodies collapse to the last few lines behind the expand hint,
- * a truncated log gets the bracketed warning banner, and the run time lands in a
- * muted "Took" footer. Imports of the pi packages resolve to the host instance
- * through the extension loader's aliases, so the theme and the keybinding hint
- * come from the running app rather than a bundled copy.
+ * Every row is a header band, as Tool Display draws a tool call: the start
+ * row names the job (its title, or the command without one) and stays calm
+ * while it runs in the background, the widget being the one that moves; the
+ * completion message is the same band in the job's final color; a shell_job
+ * row names the operation and the job it addressed. Output is hidden until
+ * clicked or expanded, then sits indented under the band.
  */
-import { Box, MouseRegion, Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
-import { keyHint, truncateToVisualLines, type MessageRenderer, type Theme } from "@earendil-works/pi-coding-agent";
-import { commandPreview, DURATION_PATTERN, formatDuration, MAX_COMMAND_BYTES, sanitizeControl, titlePreview } from "./shell-jobs-core.ts";
+import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { keyHint, type MessageRenderer, type Theme } from "@earendil-works/pi-coding-agent";
+import { renderBand, type Seg } from "./band/band.ts";
+import { paletteFrom } from "./band/palette.ts";
+import { factsOf, jobBand, type JobFacts } from "./shell-jobs-band.ts";
+import { DURATION_PATTERN, formatDuration, sanitizeControl, titlePreview } from "./shell-jobs-core.ts";
+import type { Job } from "./shell-jobs-process.ts";
 
 const TITLE_DURATION_SUFFIX = new RegExp(` after ${DURATION_PATTERN}$`);
 
-/** Matches the built-in bash preview so the two call styles agree. */
-export const PREVIEW_LINES = 5;
+/** Output lines under a collapsed row; the same as Tool Display's bash row. */
+export const PREVIEW_LINES = 4;
+/** Output sits under the band's title. */
+export const BODY_INDENT = 3;
 
-export type PaintKey = "toolTitle" | "toolOutput" | "muted" | "dim" | "warning" | "success" | "error";
-export type BgKey = "toolSuccessBg" | "toolErrorBg";
+export type PaintKey = "toolTitle" | "toolOutput" | "muted" | "dim" | "warning" | "success" | "error" | "accent";
 
 export interface Paint {
 	fg(key: PaintKey, text: string): string;
-	bg(key: BgKey, text: string): string;
 	bold(text: string): string;
 }
 
 /** A theme missing a key must degrade to plain text, not break the row. */
 export function painter(theme: Theme): Paint {
-	const fg = (key: PaintKey, text: string): string => {
+	const safe = (paint: () => string, text: string) => {
 		try {
-			return theme.fg(key, text);
+			return paint();
 		} catch {
 			return text;
 		}
 	};
-	return {
-		fg,
-		// A finished tool call carries toolSuccessBg or toolErrorBg, so completions
-		// painted with the same backgrounds read as the same kind of thing.
-		bg: (key, text) => {
-			try {
-				return theme.bg(key, text);
-			} catch {
-				return text;
-			}
-		},
-		bold: (text) => {
-			try {
-				return theme.bold(text);
-			} catch {
-				return text;
-			}
-		},
-	};
+	return { fg: (key, text) => safe(() => theme.fg(key, text), text), bold: (text) => safe(() => theme.bold(text), text) };
 }
 
 /**
  * `keyHint` reads the live keybinding table, which pi only initializes once the
  * interactive theme exists. Tests and headless runs take the plain fallback.
  */
-function expandHint(paint: Paint): string {
+function expandHint(): string {
 	try {
 		return keyHint("app.tools.expand", "to expand");
 	} catch {
-		return `${paint.fg("dim", "ctrl+o")}${paint.fg("muted", " to expand")}`;
+		return "ctrl+o to expand";
 	}
 }
 
-function previewHint(paint: Paint, skipped: number): string {
-	const label = `... (${skipped} earlier line${skipped === 1 ? "" : "s"}, `;
-	return `${paint.fg("muted", label)}${expandHint(paint)}${paint.fg("muted", ")")}`;
+/** Lines drawn on demand at the width they are given. */
+class Lines implements Component {
+	private readonly draw: (width: number) => string[];
+	constructor(draw: (width: number) => string[]) {
+		this.draw = draw;
+	}
+	render(width: number): string[] {
+		return this.draw(Math.max(1, width));
+	}
+	invalidate(): void {}
+}
+
+/** Output under a band: its last lines while collapsed, all of it expanded. */
+export function bodyLines(text: string, paint: Paint, width: number, expanded: boolean): string[] {
+	const trimmed = text.replace(/\r/g, "").replace(/\n+$/, "");
+	if (trimmed.trim() === "") return [];
+	const inner = Math.max(1, width - BODY_INDENT);
+	const pad = " ".repeat(BODY_INDENT);
+	const all = trimmed.split("\n");
+	const shown = expanded ? all : all.slice(-PREVIEW_LINES);
+	const hidden = all.length - shown.length;
+	const lines = shown.map((line) => pad + truncateToWidth(paint.fg("toolOutput", line), inner, "\u2026"));
+	if (hidden === 0) return lines;
+	const hint = `${paint.fg("muted", `\u2026 ${hidden} earlier line${hidden === 1 ? "" : "s"} (`)}${paint.fg("dim", expandHint())}${paint.fg("muted", ")")}`;
+	return [pad + truncateToWidth(hint, inner, "\u2026"), ...lines];
 }
 
 /** Text blocks of a tool result or message content, flattened in order. */
@@ -82,54 +90,6 @@ export function textOf(content: unknown): string {
 		.filter((part) => part.type === "text")
 		.map((part) => String(part.text ?? ""))
 		.join("\n");
-}
-
-/** The `$ <command>` text and its muted cwd suffix, before the title styling. */
-function commandParts(args: unknown, paint: Paint, flatten: boolean): { shown: string; suffix: string } {
-	const record = (args ?? {}) as { command?: unknown; cwd?: unknown };
-	const raw = typeof record.command === "string" ? record.command : null;
-	const cwd = typeof record.cwd === "string" ? record.cwd : "";
-	const command = raw === null ? null : flatten ? commandPreview(raw, MAX_COMMAND_BYTES) : sanitizeControl(raw);
-	const shown = command === null ? paint.fg("error", "[invalid arg]") : command.length > 0 ? command : paint.fg("toolOutput", "...");
-	const suffix = cwd.length > 0 ? paint.fg("muted", ` (cwd ${cwd})`) : "";
-	return { shown, suffix };
-}
-
-/** `$ <command>` exactly as the bash tool renders it, plus an explicit cwd. */
-export function startCallLine(args: unknown, paint: Paint): string {
-	const { shown, suffix } = commandParts(args, paint, false);
-	return paint.fg("toolTitle", paint.bold(`$ ${shown}`)) + suffix;
-}
-
-/**
- * Header lines of a start call. Without a title this is the bash-style line.
- * With one, the title leads in the tool colour and the command follows muted,
- * flattened to a single line that is cut at the width until the row is
- * expanded, so the label is what the eye lands on but the command never
- * disappears from the transcript.
- */
-export function startCallLines(args: unknown, paint: Paint, width: number, expanded: boolean): string[] {
-	const title = titlePreview((args as { title?: unknown } | null)?.title);
-	if (title === null) return [startCallLine(args, paint)];
-	const { shown, suffix } = commandParts(args, paint, !expanded);
-	// Paint before cutting so the truncation closes the colour sequence itself.
-	const command = paint.fg("muted", `$ ${shown}${suffix}`);
-	const line = expanded ? command : truncateToWidth(command, Math.max(1, width), "\u2026");
-	return [paint.fg("toolTitle", paint.bold(title)), line];
-}
-
-/** `shell_job logs j1`, with the paging arguments that matter kept visible. */
-export function jobCallLine(args: unknown, paint: Paint): string {
-	const record = (args ?? {}) as { op?: unknown; id?: unknown; offset?: unknown; tail?: unknown; bytes?: unknown; limit?: unknown };
-	const op = typeof record.op === "string" ? record.op : "";
-	const id = typeof record.id === "string" ? record.id : "";
-	const extras: string[] = [];
-	if (typeof record.offset === "number") extras.push(`offset ${record.offset}`);
-	if (record.tail === true) extras.push("tail");
-	if (typeof record.bytes === "number") extras.push(`${record.bytes} bytes`);
-	if (typeof record.limit === "number") extras.push(`limit ${record.limit}`);
-	const suffix = extras.length > 0 ? paint.fg("muted", ` (${extras.join(", ")})`) : "";
-	return paint.fg("toolTitle", paint.bold(`shell_job ${op}${id.length > 0 ? ` ${id}` : ""}`)) + suffix;
 }
 
 export interface CompletionView {
@@ -193,127 +153,105 @@ export function completionView(content: unknown, details: unknown): CompletionVi
 	};
 }
 
+interface RowContext {
+	readonly isPartial?: boolean;
+	readonly executionStarted?: boolean;
+	readonly expanded?: boolean;
+	readonly isError?: boolean;
+}
+
+/** What a start row knows before, or without, the job it started. */
+function startFacts(args: unknown): JobFacts {
+	const record = (args ?? {}) as { command?: unknown; title?: unknown };
+	return {
+		title: titlePreview(record.title),
+		command: typeof record.command === "string" ? sanitizeControl(record.command) : "",
+		state: "unknown",
+		code: null,
+		signal: null,
+	};
+}
+
 /**
- * Collapsed bodies show the last lines, like bash, because the interesting part of
- * a failing command is at the end. Wrapped-line accounting is width dependent, so
- * the result is cached until the width or the expanded state changes.
+ * The `shell_job_start` row: one band naming the job. It follows the job it
+ * started while this session owns it; a resumed row, whose job belongs to an
+ * earlier session, just says it ran in the background.
  */
-class PreviewBody implements Component {
-	private readonly text: string;
-	private readonly paddingX: number;
-	private readonly isExpanded: () => boolean;
-	private readonly hint: (skipped: number) => string;
-	private width: number | undefined;
-	private expanded: boolean | undefined;
-	private lines: string[] | undefined;
-	private skipped = 0;
-	private full: string[] | undefined;
-
-	constructor(text: string, paddingX: number, isExpanded: () => boolean, hint: (skipped: number) => string) {
-		this.text = text;
-		this.paddingX = paddingX;
-		this.isExpanded = isExpanded;
-		this.hint = hint;
-	}
-
-	invalidate(): void {
-		this.width = undefined;
-		this.lines = undefined;
-		this.full = undefined;
-	}
-
-	render(width: number): string[] {
-		const expanded = this.isExpanded();
-		if (expanded) {
-			if (this.full === undefined || this.width !== width) {
-				this.full = new Text(this.text, this.paddingX, 0).render(width);
-				this.width = width;
-				this.lines = undefined;
-			}
-			return ["", ...this.full];
+export function renderStartCall(args: unknown, theme: Theme, context?: RowContext, job: () => Job | undefined = () => undefined, now: () => number = Date.now): Component {
+	return new Lines((width) => {
+		const live = job();
+		if (live !== undefined) return [jobBand(theme, factsOf(live), { width, now: now(), view: "calm" })];
+		const facts = startFacts(args);
+		if (context?.isPartial && !context.executionStarted) {
+			const title = facts.title ?? facts.command;
+			return [renderBand(theme, paletteFrom(theme), { width, phase: { kind: "writing" }, segs: title ? jobBandSegs(facts) : [], rail: [], clockMs: now() })];
 		}
-		if (this.lines === undefined || this.width !== width || this.expanded !== expanded) {
-			const preview = truncateToVisualLines(this.text, PREVIEW_LINES, width, this.paddingX);
-			this.lines = preview.visualLines;
-			this.skipped = preview.skippedCount;
-			this.width = width;
-			this.expanded = expanded;
-		}
-		const head = this.skipped > 0 ? [this.hint(this.skipped)] : [];
-		return ["", ...head, ...(this.lines ?? [])];
-	}
+		if (context?.isError) return [renderBand(theme, paletteFrom(theme), { width, phase: { kind: "done", outcome: "fail", sinceMs: Number.POSITIVE_INFINITY }, segs: jobBandSegs(facts), rail: [{ text: "not started", color: "error" }], clockMs: now() })];
+		return [jobBand(theme, facts, { width, now: now(), view: "calm" })];
+	});
 }
 
-function styledBody(body: string, paint: Paint): string {
-	return body
-		.split("\n")
-		.map((line) => paint.fg("toolOutput", line))
-		.join("\n");
+function jobBandSegs(facts: JobFacts): Seg[] {
+	return facts.title !== null ? [{ text: facts.title, color: "text", bold: true }] : [{ text: "$ ", color: "accent", bold: true }, { text: facts.command.replace(/\s+/g, " ").trim(), color: "text" }];
 }
 
-/**
- * Header of a `shell_job_start` row. The width and the row's expanded state
- * decide how the command under a title is shown, so this renders lazily rather
- * than fixing the text up front. Pi re-invokes the renderer when the expanded
- * flag changes, so the state is read at render time from the context.
- */
-class StartCallHeader implements Component {
-	private readonly args: unknown;
-	private readonly paint: Paint;
-	private readonly isExpanded: () => boolean;
-
-	constructor(args: unknown, paint: Paint, isExpanded: () => boolean) {
-		this.args = args;
-		this.paint = paint;
-		this.isExpanded = isExpanded;
-	}
-
-	invalidate(): void {}
-
-	render(width: number): string[] {
-		return new Text(startCallLines(this.args, this.paint, width, this.isExpanded()).join("\n"), 0, 0).render(width);
-	}
+/** The start result says where the job runs and logs; the row shows it only for an error, or expanded. */
+export function renderStartResult(result: unknown, theme: Theme, context?: RowContext): Component {
+	const text = textOf((result as { content?: unknown } | null)?.content).trimEnd();
+	const paint = painter(theme);
+	return new Lines((width) => {
+		if (context?.isError) return bodyLines(text, { ...paint, fg: (key, line) => paint.fg(key === "toolOutput" ? "error" : key, line) }, width, true);
+		return context?.expanded ? bodyLines(text, paint, width, true) : [];
+	});
 }
 
-/** Call header for `shell_job_start`, rendered like the built-in bash tool. */
-export function renderStartCall(args: unknown, theme: Theme, context?: { expanded?: boolean }): Component {
-	return new StartCallHeader(args, painter(theme), () => context?.expanded === true);
+/** `shell_job logs`, and the job it addressed by title where this session knows it. */
+export function jobCallSegs(args: unknown, titleOf: (id: string) => string | null = () => null): Seg[] {
+	const record = (args ?? {}) as { op?: unknown; id?: unknown; offset?: unknown; tail?: unknown; bytes?: unknown; limit?: unknown };
+	const op = typeof record.op === "string" ? sanitizeControl(record.op) : "";
+	const id = typeof record.id === "string" ? sanitizeControl(record.id) : "";
+	const extras: string[] = [];
+	if (typeof record.offset === "number") extras.push(`offset ${record.offset}`);
+	if (record.tail === true) extras.push("tail");
+	if (typeof record.bytes === "number") extras.push(`${record.bytes} bytes`);
+	if (typeof record.limit === "number") extras.push(`limit ${record.limit}`);
+	const title = id ? titleOf(id) : null;
+	const target: Seg[] = id ? [{ text: ` ${title ?? id}`, color: title === null ? "accent" : "text" }] : [];
+	return [
+		{ text: "shell_job", color: "accent", bold: true },
+		{ text: op ? ` ${op}` : "", color: "text" },
+		...target,
+		...(extras.length > 0 ? [{ text: ` (${extras.join(", ")})`, color: "muted" }] : []),
+	];
 }
 
-/** Call line for the management tool. */
-export function renderJobCall(args: unknown, theme: Theme): Text {
-	return new Text(jobCallLine(args, painter(theme)), 0, 0);
-}
-
-/**
- * Result of `shell_job_start`: the id, pid and log path under a blank line, the
- * way bash separates its output from the call line. It is short, so it never
- * collapses.
- */
-export function renderStartResult(result: unknown, theme: Theme): Component {
-	const record = (result ?? {}) as { content?: unknown };
-	const text = textOf(record.content).replace(/\r/g, "").trimEnd();
-	return new Text(`\n${styledBody(text, painter(theme))}`, 0, 0);
+/** The shell_job row's band: still while it runs (it takes milliseconds), then its result's color. */
+export function renderJobCall(args: unknown, theme: Theme, context?: RowContext, titleOf?: (id: string) => string | null, now: () => number = Date.now): Component {
+	return new Lines((width) => {
+		const done = context?.isPartial === false;
+		const phase = done ? { kind: "done" as const, outcome: context?.isError ? "fail" as const : "ok" as const, sinceMs: Number.POSITIVE_INFINITY } : { kind: "queued" as const };
+		const rail: Seg[] = done && context?.isError ? [{ text: "failed", color: "error" }] : [];
+		return [renderBand(theme, paletteFrom(theme), { width, phase, segs: jobCallSegs(args, titleOf), rail, clockMs: now() })];
+	});
 }
 
 /** Result body for `shell_job`, collapsed to the tail like bash output. */
 export function renderJobResult(result: unknown, options: { expanded: boolean }, theme: Theme): Component {
-	const record = (result ?? {}) as { content?: unknown };
+	const text = textOf((result as { content?: unknown } | null)?.content);
 	const paint = painter(theme);
-	const text = textOf(record.content).replace(/\r/g, "").trimEnd();
-	// Pi wraps tool results in its own expand-on-click region, so this only has to
-	// collapse; the tool row's Box supplies the padding.
-	return new PreviewBody(styledBody(text, paint), 0, () => options.expanded, (skipped) => previewHint(paint, skipped));
+	return new Lines((width) => bodyLines(text, paint, width, options.expanded));
 }
 
 /**
- * Renderer for `shell-job-complete` messages.
+ * Renderer for `shell-job-complete` messages: the job's band in its final
+ * color, `finished` after its name, how it ended and how long it took on the
+ * right. The command, log and output stay hidden until the message is
+ * clicked (or everything is expanded), since the band already answers
+ * whether it worked.
  *
- * The result is framed like a finished bash tool call: a Box carrying the same
- * success or error background, and a mouse region that expands the body on click,
- * which pi does for tool rows but not for custom messages. Expansion is tracked per
- * message because the interactive mode owns the global expand flag; toggling that
- * flag (ctrl+O) clears the per-message choice so the global one keeps winning.
+ * Expansion is tracked per message because the interactive mode owns the
+ * global expand flag; toggling that flag (ctrl+O) clears the per-message
+ * choice so the global one keeps winning.
  */
 export function createCompletionRenderer(): MessageRenderer {
 	const overrides = new WeakMap<object, boolean>();
@@ -328,37 +266,40 @@ export function createCompletionRenderer(): MessageRenderer {
 		}
 		const isExpanded = (): boolean => overrides.get(key) ?? options.expanded;
 		const paint = painter(theme);
-		const parts: Component[] = [];
-		const header = view.label.length > 0 ? `${view.label} \u00b7 ${view.title}` : view.title;
-		parts.push(new Text(paint.fg(view.failed ? "error" : "success", paint.bold(header)), 0, 0));
-		// The command sits under the title so the reader need not scroll back to the
-		// start call to learn what j1 was; the log path follows in the same tone.
-		const under = [...(view.command.length > 0 ? [`$ ${view.command}`] : []), ...view.meta];
-		if (under.length > 0) parts.push(new Text(under.map((line) => paint.fg("muted", line)).join("\n"), 0, 0));
-		if (view.body.length > 0) {
-			const body = new PreviewBody(styledBody(view.body, paint), 0, isExpanded, (skipped) => previewHint(paint, skipped));
-			parts.push(body);
-		}
-		if (view.notice.length > 0) parts.push(new Text(`\n${paint.fg("warning", view.notice)}`, 0, 0));
-		if (view.took.length > 0) parts.push(new Text(`\n${paint.fg("muted", `Took ${view.took}`)}`, 0, 0));
-		const box = new Box(options.outputPad, 1, (text) => paint.bg(view.failed ? "toolErrorBg" : "toolSuccessBg", text));
-		box.addChild(containerOf(parts));
-		return new MouseRegion(box, (event) => {
-			if (event.type !== "click" || event.button !== "left") return undefined;
-			overrides.set(key, !isExpanded());
-			box.invalidate();
-			return { handled: true };
+		const facts = completionFacts(view, message.details);
+		// A message with no title or command names itself: "Job j1 finished: exit 0".
+		const extra: Seg[] = facts.title === view.title ? [] : [{ text: " finished", color: "muted" }];
+		const lines = new Lines((width) => {
+			const band = jobBand(theme, facts, { width, now: 0, view: "calm", extra });
+			if (!isExpanded()) return [band];
+			const pad = " ".repeat(BODY_INDENT);
+			const inner = Math.max(1, width - BODY_INDENT);
+			const under = [...(view.command.length > 0 ? [`$ ${view.command}`] : []), ...view.meta].map((line) => pad + truncateToWidth(paint.fg("muted", line), inner, "\u2026"));
+			const notice = view.notice.length > 0 ? [pad + truncateToWidth(paint.fg("warning", view.notice), inner, "\u2026")] : [];
+			return [band, ...under, ...bodyLines(view.body, paint, width, true), ...notice];
 		});
+		return {
+			render: (width: number) => lines.render(width),
+			invalidate: () => {},
+			handleMouse: (event: { type: string; button: string }) => {
+				if (event.type !== "click" || event.button !== "left") return undefined;
+				overrides.set(key, !isExpanded());
+				return { handled: true };
+			},
+		} as Component;
 	};
 }
 
-function containerOf(parts: Component[]): Component {
+/** The band facts of a completion, from the details the message was sent with. */
+export function completionFacts(view: CompletionView, details: unknown): JobFacts {
+	const record = (details ?? {}) as { code?: unknown; signal?: unknown; durationMs?: unknown; command?: unknown; title?: unknown };
+	const durationMs = typeof record.durationMs === "number" ? record.durationMs : undefined;
 	return {
-		invalidate(): void {
-			for (const part of parts) part.invalidate?.();
-		},
-		render(width: number): string[] {
-			return parts.flatMap((part) => part.render(width));
-		},
+		title: view.label.length > 0 ? view.label : view.command.length > 0 ? null : view.title,
+		command: view.command,
+		state: "done",
+		code: typeof record.code === "number" ? record.code : null,
+		signal: typeof record.signal === "string" ? record.signal : null,
+		...(durationMs === undefined ? {} : { startedAt: 0, endedAt: durationMs }),
 	};
 }

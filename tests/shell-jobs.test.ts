@@ -24,6 +24,9 @@ import {
 	commandPreview,
 	countLogLines,
 	formatJobId,
+	isJobId,
+	jobIdFor,
+	MAX_JOB_ID,
 	formatSize,
 	jsonEscapedBytes,
 	parseJobId,
@@ -79,6 +82,24 @@ describe("ids", () => {
 		assert.strictEqual(parseJobId("j"), null);
 		assert.strictEqual(parseJobId("x1"), null);
 	});
+	test("a job is named by its title, else by its program and what it runs", () => {
+		const none = () => false;
+		assert.strictEqual(jobIdFor("Run e2e tests!", "npx playwright test", none), "run-e2e-tests");
+		assert.strictEqual(jobIdFor(null, "npm test", none), "npm-test");
+		assert.strictEqual(jobIdFor(null, "npm run dev -- --port 3000", none), "npm-dev");
+		assert.strictEqual(jobIdFor(null, "PORT=4000 node scripts/serve.mjs --watch", none), "node-serve");
+		assert.strictEqual(jobIdFor(null, "sudo -E npx tsc -p . --watch", none), "tsc");
+		assert.strictEqual(jobIdFor(null, "sleep 30 && echo done", none), "sleep-30");
+		assert.strictEqual(jobIdFor("   ", "  ", none), "job");
+		assert.strictEqual(jobIdFor("A very long title that keeps going and going", "x", none), "a-very-long-title-that");
+		assert.ok(jobIdFor("x".repeat(80), "x", none).length <= MAX_JOB_ID);
+	});
+	test("a name already taken gets a number, and one that looks like an old id a prefix", () => {
+		const taken = new Set(["npm-test", "npm-test-2"]);
+		assert.strictEqual(jobIdFor(null, "npm test", (id) => taken.has(id)), "npm-test-3");
+		assert.strictEqual(jobIdFor("J1", "x", () => false), "job-j1");
+		for (const id of ["npm-test-3", "job-j1", "run-e2e-tests", "tsc"]) assert.ok(isJobId(id), id);
+	});
 });
 
 describe("shell resolution", () => {
@@ -127,7 +148,9 @@ describe("manage validation", () => {
 		assert.strictEqual(validateManageParams({ op: "nope" }).ok, false);
 		assert.strictEqual(validateManageParams({ op: "logs" }).ok, false);
 		assert.strictEqual(validateManageParams({ op: "kill" }).ok, false);
-		assert.strictEqual(validateManageParams({ op: "logs", id: "x" }).ok, false);
+		for (const id of ["", "Run tests", "-x", "../etc/passwd", "a".repeat(33)]) assert.strictEqual(validateManageParams({ op: "logs", id }).ok, false, id);
+		// Names from 0.6 on, and the numbered ids a resumed 0.5 session still mentions.
+		for (const id of ["run-tests", "j1", "x"]) assert.strictEqual(validateManageParams({ op: "logs", id }).ok, true, id);
 	});
 	test("rejects offset together with tail", () => {
 		assert.strictEqual(validateManageParams({ op: "logs", id: "j1", tail: true, offset: 5 }).ok, false);

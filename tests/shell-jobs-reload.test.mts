@@ -76,9 +76,9 @@ test("reload preserves pid, log, runtime identity, counter, widget and kill cont
 	const [restored] = await list(second);
 	assert.equal(restored.logPath, job.logPath);
 	assert.equal(restored.startedAt, runtime.jobs.get(job.id)!.startedAt);
-	assert.match(JSON.stringify(second.widgets.at(-1)?.value), /j1/);
+	assert.match(JSON.stringify(second.widgets.at(-1)?.value), /echo-before/);
 	const next = await start(second);
-	assert.equal(next.id, "j2");
+	assert.equal(next.id, "sleep-30");
 	const logs = await second.tools.get("shell_job").execute("logs", { op: "logs", id: job.id });
 	assert.match(logs.content[0].text, /before/);
 	const killed = await second.tools.get("shell_job").execute("kill", { op: "kill", id: job.id });
@@ -119,7 +119,7 @@ test("a spawn in flight survives reload without releasing its live slot", async 
 	assert.doesNotThrow(() => process.kill(-result.details.pid, 0));
 	const second = await boot(first);
 	assert.equal((await list(second)).length, 1);
-	assert.equal((await start(second)).id, "j2");
+	assert.equal((await start(second)).id, "sleep-30-2");
 });
 
 test("repeated reloads keep one runtime and exit listener, without stale tools or events", async () => {
@@ -137,12 +137,12 @@ test("repeated reloads keep one runtime and exit listener, without stale tools o
 	}
 	const stale = await first.tools.get("shell_job_start").execute("stale", { command: "true" }, undefined, undefined, first.ctx);
 	assert.equal(stale.isError, true);
-	const staleKill = await first.tools.get("shell_job").execute("stale", { op: "kill", id: "j1" });
+	const staleKill = await first.tools.get("shell_job").execute("stale", { op: "kill", id: "sleep-30" });
 	assert.equal(staleKill.isError, true);
 	await fire(first.handlers, "message_end", first.ctx, {
-		message: { role: "custom", customType: "shell-job-complete", details: { id: "j1", runtimeId: runtime.runtimeId } },
+		message: { role: "custom", customType: "shell-job-complete", details: { id: "sleep-30", runtimeId: runtime.runtimeId } },
 	});
-	assert.equal(runtime.jobs.get("j1")!.delivered, false);
+	assert.equal(runtime.jobs.get("sleep-30")!.delivered, false);
 });
 
 test("another session in the same process cannot adopt a parked runtime", async () => {
@@ -185,7 +185,7 @@ test("history acknowledgement missed during reload prevents a duplicate", async 
 	await pause(first);
 	const second = await boot(first);
 	assert.equal(second.messages.length, 0);
-	assert.equal([...__testing.getRuntimes()][0].jobs.get("j1")!.delivered, true);
+	assert.equal([...__testing.getRuntimes()][0].jobs.get("echo-once")!.delivered, true);
 });
 
 test("reload does not requeue a completion still owned by a busy Pi turn", async () => {
@@ -233,7 +233,7 @@ test("reload during a tail read leaves delivery to the new API, without a duplic
 	await oldFlight;
 	assert.equal(first.messages.length, 0);
 	assert.equal(second.messages.length, 1);
-	assert.equal(runtime.jobs.get("j1")!.attempts, 1);
+	assert.equal(runtime.jobs.get("echo-tail-read-race")!.attempts, 1);
 });
 
 test("tail read errors during actual shutdown cannot send or reject a process callback", async () => {
@@ -264,8 +264,8 @@ test("live limit and completion attempt cap survive repeated reloads", async () 
 		current = await boot(current);
 	}
 	const runtime = [...__testing.getRuntimes()][0];
-	assert.equal(runtime.jobs.get("j1")!.attempts, 3);
-	assert.equal(runtime.jobs.get("j1")!.deliveryFailed, true);
+	assert.equal(runtime.jobs.get("echo-retry")!.attempts, 3);
+	assert.equal(runtime.jobs.get("echo-retry")!.deliveryFailed, true);
 	assert.equal(apps.reduce((n, app) => n + app.messages.length, 0), 3);
 	for (let i = 0; i < core.MAX_LIVE; i++) await start(current);
 	await pause(current);
@@ -279,7 +279,7 @@ test("a kill in progress across reload keeps its claim and never emits a complet
 	const first = await boot();
 	const job = await start(first, "trap '' TERM; echo ready; sleep 30 & wait");
 	await until(() => readFileSync(job.logPath, "utf8").includes("ready"));
-	const kill = first.tools.get("shell_job").execute("kill", { op: "kill", id: "j1" });
+	const kill = first.tools.get("shell_job").execute("kill", { op: "kill", id: "trap" });
 	await pause(first);
 	const second = await boot(first);
 	assert.equal((await list(second))[0].state, "stopping");

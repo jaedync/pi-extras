@@ -41,6 +41,7 @@ export const core = (await jiti.import("../../lib/shell-jobs-core.ts")) as typeo
 export const delivery = (await jiti.import("../../lib/shell-jobs-delivery.ts")) as typeof import("../../lib/shell-jobs-delivery.ts");
 export const widget = (await jiti.import("../../lib/shell-jobs-widget.ts")) as typeof import("../../lib/shell-jobs-widget.ts");
 export const render = (await jiti.import("../../lib/shell-jobs-render.ts")) as typeof import("../../lib/shell-jobs-render.ts");
+export const band = (await jiti.import("../../lib/shell-jobs-band.ts")) as typeof import("../../lib/shell-jobs-band.ts");
 export const inspector = (await jiti.import("../../lib/shell-jobs-inspector.ts")) as typeof import("../../lib/shell-jobs-inspector.ts");
 export const tui = (await jiti.import("@earendil-works/pi-tui")) as typeof import("@earendil-works/pi-tui");
 

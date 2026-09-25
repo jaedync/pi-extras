@@ -35,6 +35,7 @@ export type ListParams = { op: "list"; limit: number };
 export type ManageParams = LogsParams | KillParams | ListParams;
 export type ManageValidation = { ok: true; params: ManageParams } | { ok: false; error: string };
 
+/** The numbered ids of pi-extras 0.5 and earlier; a resumed session can still name one. */
 export function formatJobId(counter: number): string {
 	return `j${counter}`;
 }
@@ -44,6 +45,62 @@ export function parseJobId(value: string): number | null {
 	if (!match) return null;
 	const parsed = Number(match[1]);
 	return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+export const MAX_JOB_ID = 24;
+/** Lowercase words joined by hyphens; also safe as a log file name. */
+export const JOB_ID_PATTERN = "^[a-z0-9][a-z0-9-]{0,31}$";
+const JOB_ID = new RegExp(JOB_ID_PATTERN);
+
+export function isJobId(value: string): boolean {
+	return JOB_ID.test(value);
+}
+
+/** `Run e2e tests!` → `run-e2e-tests`, cut at a word boundary to fit. */
+export function slugify(text: string, max = MAX_JOB_ID): string {
+	const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+	if (slug.length <= max) return slug;
+	const cut = slug.slice(0, max);
+	const boundary = cut.lastIndexOf("-");
+	return (boundary >= max / 3 ? cut.slice(0, boundary) : cut).replace(/-+$/, "");
+}
+
+// Launchers that say nothing about what runs; the name comes from what they launch.
+const WRAPPERS = new Set(["sudo", "env", "npx", "bunx", "pnpx", "nohup", "time", "exec", "command", "nice", "caffeinate"]);
+const RUNNERS = new Set(["npm", "pnpm", "yarn", "bun"]);
+
+/** The part of a path or script name that names it: `scripts/serve.mjs` → `serve`. */
+const stem = (word: string) => (word.includes("/") || /\.[a-z0-9]+$/i.test(word) ? word.split("/").filter(Boolean).at(-1)!.replace(/\.[^.]+$/, "") : word);
+
+/** A name for an untitled job: the program and what it runs, e.g. `npm test` → `npm-test`. */
+export function commandSlug(command: string): string {
+	const first = command.trim().split(/[;&|\n]/, 1)[0] ?? "";
+	const words = first.split(/\s+/).filter(Boolean).map((word) => word.replace(/^['"]|['"]$/g, ""));
+	let index = 0;
+	while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]!) || WRAPPERS.has(words[index]!) || words[index]!.startsWith("-"))) index++;
+	const program = words[index];
+	if (program === undefined) return "";
+	const parts = [stem(program)];
+	const rest = words.slice(index + 1).filter((word) => !word.startsWith("-"));
+	if (rest[0] !== undefined) parts.push(stem(rest[0]));
+	// `npm run dev` is named by the script, not by `run`.
+	if (RUNNERS.has(parts[0]!) && (rest[0] === "run" || rest[0] === "exec") && rest[1] !== undefined) parts[1] = stem(rest[1]);
+	return slugify(parts.join(" "));
+}
+
+/**
+ * A job's id: its title or command as a short name, made unique among
+ * `taken`. A name that reads like an old numbered id gets a prefix, so the two
+ * kinds never collide.
+ */
+export function jobIdFor(title: string | null, command: string, taken: (id: string) => boolean): string {
+	let base = (title ? slugify(title) : "") || commandSlug(command) || "job";
+	if (parseJobId(base) !== null) base = `job-${base}`;
+	if (!taken(base)) return base;
+	for (let n = 2; ; n++) {
+		const id = `${base}-${n}`;
+		if (!taken(id)) return id;
+	}
 }
 
 export function resolveShellPath(env: NodeJS.ProcessEnv): string {
@@ -94,7 +151,7 @@ export function validateStartParams(raw: unknown): StartValidation {
 
 function readId(raw: unknown): string | null {
 	if (typeof raw !== "string") return null;
-	return parseJobId(raw) === null ? null : raw;
+	return isJobId(raw) ? raw : null;
 }
 
 function readCount(raw: unknown, fallback: number, max: number): number {
@@ -115,7 +172,7 @@ export function validateManageParams(raw: unknown): ManageValidation {
 	}
 
 	const id = readId(input.id);
-	if (id === null) return { ok: false, error: `'op: ${input.op}' requires a valid job id such as j1.` };
+	if (id === null) return { ok: false, error: `'op: ${input.op}' requires a job id, such as run-tests.` };
 
 	if (input.op === "kill") {
 		return { ok: true, params: { op: "kill", id } };

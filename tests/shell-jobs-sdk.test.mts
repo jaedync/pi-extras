@@ -61,7 +61,7 @@ test("SDK reload retains running groups and delivers a gap completion through th
 			command: `while [ ! -f '${release}' ]; do sleep 0.02; done; echo gap-complete`,
 		});
 		pids.add(completed.details.pid);
-		assert.equal(completed.details.id, "j2");
+		assert.equal(completed.details.id, "while");
 		// The SDK has invalidated the old API but has not emitted session_start yet.
 		await session.reload({ beforeSessionStart: async () => {
 			writeFileSync(release, "");

@@ -24,7 +24,7 @@ const NOW = 1_800_000_000_000;
 
 /** A job whose log lives in a temp dir, plus a mutable lookup the inspector reads. */
 function liveJob(overrides: Partial<Job> = {}, lines: string[] = ["one", "two", "three"]) {
-	const logPath = join(tempDir(), "j1.log");
+	const logPath = join(tempDir(), "run-unit-tests.log");
 	writeFileSync(logPath, lines.length > 0 ? `${lines.join("\n")}\n` : "");
 	let job: Job | undefined = makeJob({ logPath, title: "Run unit tests", startedAt: NOW - 12_000, ...overrides });
 	return {
@@ -49,24 +49,26 @@ function open(live: ReturnType<typeof liveJob>, rows = 40) {
 const bare = (lines: string[]) => lines.map((line) => stripTerminalSequences(line));
 
 describe("job inspector", () => {
-	test("frames the job: title and id in the border, status, full command, cwd, log, output, footer", () => {
-		const live = liveJob({ command: "npm test -- --watchAll=false", cwd: "/repo", pid: 4321 });
+	test("frames the job: a band with the title, then id and pid, full command, cwd, log, output, footer", () => {
+		const live = liveJob({ id: "run-unit-tests", command: "npm test -- --watchAll=false", cwd: "/repo", pid: 4321 });
 		const { view } = open(live);
 		const lines = bare(view.render(60));
 		assert.ok(lines.every((line) => visibleWidth(line) <= 60), lines.join("\n"));
-		contains(lines[0], "j1");
-		contains(lines[0], "Run unit tests");
-		contains(lines[1], "running");
-		contains(lines[1], "12s");
-		contains(lines[1], "pid 4321");
-		contains(lines[2], "$ npm test -- --watchAll=false");
-		contains(lines[3], "cwd /repo");
+		// The band names the job by title and shows the elapsed time in its rail.
+		contains(lines[1], "Run unit tests");
+		contains(lines[1], "12.0s");
+		// The id the model uses, dimmed beneath it.
+		contains(lines[2], "run-unit-tests");
+		contains(lines[2], "pid 4321");
+		contains(lines[3], "$ npm test -- --watchAll=false");
+		contains(lines[4], "cwd /repo");
 		// A long temp path keeps its file name, so the start is what gets cut.
-		contains(lines[4], "log ");
-		contains(lines[4], "j1.log");
+		contains(lines[5], "log ");
+		contains(lines[5], "run-unit-tests.log");
 		const text = lines.join("\n");
 		contains(text, "one");
 		contains(text, "three");
+		for (const glyph of ["\u2713", "\u2717", "\u25cf"]) doesNotContain(text, glyph);
 		contains(lines.at(-2), "esc close");
 		// A rounded frame like pi's own overlays.
 		assert.strictEqual(lines[0].startsWith("\u256d"), true);
@@ -74,14 +76,15 @@ describe("job inspector", () => {
 		view.dispose();
 	});
 
-	test("an untitled job is framed by its id alone and a finished one shows its exit", () => {
+	test("an untitled job's band shows its command, and a finished one its exit in words", () => {
 		const live = liveJob({ title: null, state: "done", code: 2, endedAt: NOW - 1000, startedAt: NOW - 6000 });
 		const { view } = open(live);
 		const lines = bare(view.render(60));
-		contains(lines[0], "j1");
-		doesNotContain(lines[0], "Run unit tests");
+		contains(lines[1], "$ npm test");
+		doesNotContain(lines[1], "Run unit tests");
 		contains(lines[1], "exit 2");
-		contains(lines[1], "5s");
+		contains(lines[1], "5.0s");
+		contains(lines[2], "exit 2 after 5s");
 		view.dispose();
 	});
 
