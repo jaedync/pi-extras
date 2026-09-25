@@ -16,7 +16,9 @@ PATH=$(printf %s "$PATH" | tr : '\n' | grep -v '/node_modules/\.bin$' | paste -s
 PI=$(command -v pi)
 FFMPEG=$(command -v ffmpeg)
 PORT=${FAKE_PORT:-3499}
-COLS=112 ROWS=56
+# The voice row names the mic, and the system default is often a personal headset ("Name's AirPods").
+MIC=${PREVIEW_MIC:-MacBook Pro Microphone}
+COLS=112 ROWS=44
 SESSION=pi-extras-preview
 SPEECH="Once the suite is green, bump the patch version. [[slnc 700]] Then draft the changelog entry, and keep it short."
 PROMPT="run the tests in the background, then give the model name in the footer a bit more room"
@@ -33,6 +35,8 @@ trap cleanup EXIT
 
 mkdir -p "$T/tmp" "$T/home" "$T/agent/themes" "$T/voice/sessions" "$T/bin"
 git clone -q "$REPO" "$T/home/pi-extras"
+# The preview shows a release, and releases ship from main, whatever branch this runs on.
+git -C "$T/home/pi-extras" checkout -q -B main
 ln -s "$REPO/node_modules" "$T/home/pi-extras/node_modules"
 cat > "$T/agent/models.json" <<EOF
 { "providers": { "anthropic": { "baseUrl": "http://127.0.0.1:$PORT", "apiKey": "staged", "headers": {} } } }
@@ -43,8 +47,16 @@ cat > "$T/agent/settings.json" <<EOF
   "theme": "quiet", "tuiMode": "fullscreen", "fullscreenScrollbar": "always", "hideThinkingBlock": true,
   "quietStartup": true, "defaultProjectTrust": "always", "lastChangelogVersion": "$("$PI" --version)", "enableInstallTelemetry": false }
 EOF
+# Likewise for pi-extras' own release notes.
+cat > "$T/agent/pi-extras.json" <<EOF
+{ "releaseNotes": { "seen": "$(node -p "require('$REPO/package.json').version")" } }
+EOF
 cp "$REPO/themes/quiet.json" "$T/agent/themes/"
 cp "$VOICE_HOME/tiers.json" "$T/voice/"
+# A saved mic that is not connected falls back to the system default, and so to its name.
+MIC="$MIC" node --input-type=module -e "import { listMics } from '$REPO/lib/voice/mics.ts';
+if (!listMics(false).devices.includes(process.env.MIC)) { console.error('mic not connected: ' + process.env.MIC + '; set PREVIEW_MIC'); process.exit(1); }"
+node -e 'console.log(JSON.stringify({ mic: process.argv[1] }))' "$MIC" > "$T/voice/settings.json"
 
 # The "microphone": 0.6 s of silence, the speech, then a second of silence, streamed in real time.
 say -o "$T/speech.aiff" "$SPEECH"

@@ -5,12 +5,12 @@
 (() => {
 	const PANEL_BG = "#212823"; // Pi's tool-result panel
 	const CURSOR = "#cfcdc6";
-	const METER_ROW = 52;
-	const WIDGET_ROW = 47; // rows above this carry Pi's scrollbar in the last column
+	const METER_ROW = 40;
+	const WIDGET_ROW = 35; // rows above this carry Pi's scrollbar in the last column
 
-	// Tuned against the 112x56 staged frame; any value can be overridden from the query string while adjusting.
+	// Tuned against the 112x44 staged frame; any value can be overridden from the query string while adjusting.
 	const LAYOUT = {
-		r0: 24, cw: 11.5, ch: 24, left: 250, top: -128, rx: 36, ry: 12, rz: -10, persp: 1400, po: "40% 40%",
+		r0: 12, cw: 11.5, ch: 24, left: 250, top: -128, rx: 36, ry: 12, rz: -10, persp: 1400, po: "40% 40%",
 		far: "18%", solid: "45%", fadeRight: "20%", tx: 262, ty: 50, size: 58, band: 280, bandSolid: "72%",
 	};
 

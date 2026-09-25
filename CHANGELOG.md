@@ -2,6 +2,46 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.6.0 - 2026-09-25
+
+### Changed
+
+- Tool Display is redesigned. Each tool call is now one colored header band
+  instead of a box: green when it worked, red when it failed, amber when it
+  timed out, gray when it was stopped. Failures are named in words on the right
+  (`exit 1`, `timed out`), next to the time. While a command runs, its band
+  fills toward the timeout and warms as the timeout gets close; without a
+  timeout it sweeps. Times of 10s or more are drawn in a warmer color.
+- The `boxed` and `compact` densities are gone, along with the ✓ and ✗ marks.
+  `/tool-display` now has `on|off`, `chains on|off` and `motion full|reduced`.
+  A saved density setting is ignored.
+- Shell Jobs are named after their titles: a job titled "Run unit tests" is
+  `run-unit-tests`, not `j1`, and the model is asked to call jobs by their
+  titles. Old `j1` ids from a resumed session still work. Job rows, completions,
+  the widget above the editor and the job popup use the same bands. A running
+  job's transcript row stays still, and its widget band is the one that moves.
+  A completion is one line until you click it, and a job stopped with
+  `shell_job kill` reads `stopped` in gray rather than as a failure.
+
+### Added
+
+- Click any tool row to open a popup with the whole call: the full command,
+  all its output, and, for a chained command, each step. Esc or `q` closes it.
+  ctrl+o still expands rows in place.
+- Chained bash commands (`a && b || c`) are shown step by step, each with its
+  own status and time, so you can see which step failed and which never ran. A
+  leading `cd` is shown as the location. To time the steps, Tool Display adds
+  marker lines around each step and removes them from the output before the
+  model sees it; the command the model wrote and the output it reads are
+  unchanged. Commands it can't split safely run as written.
+  `/tool-display chains off` turns this off. `docs/security.md` describes the
+  rewrite.
+- Click the tool count in the Status Plus footer to count each step a chained
+  command ran; click again for one per call. `/tool-display count steps|calls`
+  does the same where the terminal sends no clicks.
+- These notes. The first new session after an update shows what changed in
+  pi-extras, once per version. `/pi-extras changelog` shows them again.
+
 ## 0.5.0 - 2026-09-25
 
 ### Added

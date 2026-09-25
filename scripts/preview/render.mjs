@@ -64,8 +64,11 @@ export function pickFrame(frames) {
 	for (const text of frames) {
 		const lines = plain(text).split("\n");
 		const voice = lines.find((line) => /^── ● \d+:\d\d /.test(line));
-		const ready = voice && lines.some((l) => /\sj1\s.*Run unit tests/.test(l)) && lines.some((l) => /\sj2\s.*Watch types/.test(l))
-			&& lines.some((l) => l.includes("TPS")) && lines.some((l) => l.includes("TAIL_CELL_MIN = 10"));
+		// The jobs widget sits right above the phase row, one band per running job.
+		const phase = lines.findIndex((line) => line.includes("TPS"));
+		const widget = phase > 1 ? lines.slice(phase - 2, phase) : [];
+		const running = (title) => widget.some((line) => line.trimStart().startsWith(title));
+		const ready = voice && running("Run unit tests") && running("Watch types") && lines.some((l) => l.includes("TAIL_CELL_MIN = 10"));
 		if (!ready) continue;
 		const score = [...voice].filter((ch) => ch === "◆").length * 2000 + (voice.includes("◈") ? 1000 : 0) + litDots(voice);
 		if (!best || score > best.score) best = { text, score };
