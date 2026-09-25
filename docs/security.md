@@ -135,7 +135,8 @@ Commands execute locally without stdin or a TTY. Jobs use process groups so they
 can be cancelled; do not detach again inside a job. Logs live in temporary files
 and may contain whatever a command prints, including secrets. Bounded completion
 snippets and requested logs enter the conversation. Do not use these tools for
-commands that print credentials. `/reload` retains managed jobs; leaving the
+commands that print credentials. A job's id, and its log file's name, is made
+from its title or command. `/reload` retains managed jobs; leaving the
 session stops them according to the extension lifecycle.
 
 The Bash Default Timeout extension does not sandbox commands. It only supplies
@@ -146,10 +147,49 @@ a default timeout for calls that omit one. Explicit timeouts remain unchanged.
 Tool Display re-registers Pi's built-in `read`, `bash`, `edit`, `write`,
 `grep`, `find` and `ls` tools with the definitions Pi itself builds, including
 the shell path, command prefix and image settings from your settings files
-(project settings only when the project is trusted), and replaces only how
-their rows are drawn. It sends nothing anywhere and stores only the density in
-`pi-extras.json`. Command text, file contents and tool output shown in rows are
-stripped of terminal control sequences before they are drawn.
+(project settings only when the project is trusted), and replaces how their
+rows are drawn. It sends nothing anywhere. Command text, file contents and tool
+output shown in rows are stripped of terminal control sequences before they
+are drawn.
+
+**Chained bash commands are rewritten before they run.** When a command is a
+list of steps joined by `&&`, `||`, `;` or newlines, and the shell is `bash`,
+`sh`, `zsh`, `dash`, `ksh` or `mksh`, Tool Display runs a rewritten
+command in its place so it can time each step:
+
+- It defines two shell functions, `__pi_m` and `__pi_r`, and a variable,
+  `__pi_s`, at the start of the command. The steps can see them (for example
+  in `set` or `declare -f` output).
+- Each step is wrapped in a `{ }` group, not a subshell, so `cd` and variables
+  carry over as before. The group prints a marker line before and after the
+  step, and restores the exit status so `$?`, `&&` and `||` behave as written.
+- A marker line is a record separator byte, `PI:`, a random nonce made for that
+  call, and the step number and exit code. Markers are printed to stdout and
+  removed from the output before Pi, the model or the row sees it. Only markers
+  with the call's own nonce are removed, so a program that prints something
+  similar is left alone.
+
+The splitter is conservative: heredocs, `if`, `for`, `while` and `case`
+blocks, background `&`, function definitions, `exit`, `set` and other commands
+that depend on the shell's own state, and lists longer than 12 steps run
+exactly as written. `/tool-display chains off` turns the rewrite off, and
+`/tool-display off` or `PI_TOOL_DISPLAY=off` turns off Tool Display entirely.
+
+Because stdout and stderr arrive through separate pipes, a line of stderr can
+be shown under a neighboring step rather than the one that printed it. The output the model
+reads is the same either way.
+
+Each chained command's step times, exit codes and last 2,048 characters of output per step
+are saved as custom entries in the session file, so a resumed session can show
+them. Custom entries are not sent to the model. Tool Display writes the
+`toolDisplay` section of `pi-extras.json`, and `/tool-display count` writes
+`statusPlus.toolCount`.
+
+## Release Notes
+
+Release Notes reads `CHANGELOG.md` from the installed package and writes the
+last version it showed to `releaseNotes.seen` in `pi-extras.json`. The notes
+are a custom entry in the session file; they are not sent to the model.
 
 ## Reporting
 

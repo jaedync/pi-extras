@@ -16,7 +16,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all nine extensions (computer use stays off until you opt in); it makes `quiet` available but does not select it.
+adds all ten extensions (computer use stays off until you opt in); it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -26,12 +26,13 @@ can still conflict.
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits, optional linked subagent usage |
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
 | Phase Spinner | Working phases, tokens/sec, time to first token, elapsed time, and compaction/retry status with its own timer in the editor border |
-| Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications |
+| Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
-| Tool Display | Clearer rows for Pi's built-in tools (exit codes, line counts, `+12 −3` edits, match counts), and an opt-in compact density via `/tool-display` |
+| Tool Display | Pi's built-in tool rows as colored header bands with live progress, a popup with the whole call, and chained bash commands broken into steps |
+| Release Notes | What changed in pi-extras, shown once in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
 
 ## Updates and removal
@@ -72,9 +73,13 @@ the package. Removing it does not remove your credentials or change other packag
   models and settings (default `~/.cache/pi-extras/voice`, or under
   `XDG_CACHE_HOME`).
 - `PI_COMPUTER_USE=on`: enable computer use on macOS. Off by default. See below.
-- `PI_TOOL_DISPLAY=off`: leave Pi's own tool rows in place. The density is
-  kept under `toolDisplay.density` in `pi-extras.json` (`boxed` or `compact`),
-  written by `/tool-display`.
+- `PI_TOOL_DISPLAY=off`: leave Pi's own tool rows in place. `/tool-display`
+  writes its switches under `toolDisplay` in `pi-extras.json`: `enabled`,
+  `chains` (default `true`) and `motion` (`full` or `reduced`).
+- `statusPlus.toolCount` in `pi-extras.json`: `calls` (the default) or `steps`,
+  switched by clicking the footer's tool count or with `/tool-display count`.
+- `releaseNotes.seen` in `pi-extras.json`: the last pi-extras version whose
+  notes were shown.
 - `KAGI_TOKEN_FILE`: path to your own subscription session credential. See below.
 - `KAGI_TOOL_NAME=web_search`: explicit search-tool replacement. Leave unset to
   keep `kagi_search` and avoid conflicting with another search extension.
@@ -162,30 +167,60 @@ Tool Display redraws the rows for Pi's built-in tools in the terminal. Pi
 builds the tools as usual, and the model sees the same tools, descriptions and
 results; only the rows change.
 
-- **bash**: the command is syntax highlighted and, collapsed, shows its first
-  three lines. The header ends with the run time and, when the command fails,
-  `exit 1`, `timed out after 120s` or `aborted`, so those lines are not repeated
-  under the output. Output collapses to its last five lines, as before.
-- **read**: the header ends with what was read, e.g. `· 80 lines` or
-  `· 20 of 5,321 lines`.
-- **edit**: the header shows `+12 −3`, and diffs longer than 20 lines collapse.
-- **write**: the header shows the file's line count.
-- **grep, find, ls**: the header says what was found (`23 matches in 7 files`,
-  `42 files`, `18 entries (3 dirs)`); the listing shows when expanded.
+Each call is one header band: the tool and its target on the left, the time on
+the right. The band's color says how it went (green done, red failed, amber
+timed out, gray aborted), so there are no status marks, and a failure is named
+in words in the right rail (`exit 1`, `timed out`). While a call runs, the band
+fills toward its timeout and warms as the timeout gets close; a call without a
+timeout sweeps instead. Times of ten seconds or more are drawn in a warmer
+color, so slow calls stand out when you scroll back. Output sits indented under
+the band.
 
-Expand and collapse rows as usual with ctrl+o or a click. `/tool-display`
-switches between two densities for every row, including earlier ones, and
-remembers the choice:
+- **bash**: the command, and its last few lines of output.
+- **read**: what was read, e.g. `80 lines` or `20 of 5,321 lines`.
+- **edit**: `+12 −3`, with long diffs collapsed.
+- **write**: the file's line count.
+- **grep, find, ls**: what was found (`23 matches in 7 files`, `42 files`).
 
-- `boxed` (default): Pi's look, a background box per row colored by status.
-- `compact`: no box. A `✓`, `✗` or `○` (running) leads each row, which halves
-  the height of a one-line row.
+Click a row to open a popup with the whole call: the full command, every line
+of output, and for a chained command each step. Esc or `q` closes it. ctrl+o
+still expands every row in place.
 
-`/tool-display compact` and `/tool-display boxed` set it directly. Rows change
-only in the terminal UI; print, JSON and RPC runs keep Pi's tools untouched. If
-another extension already replaces one of these tools, Tool Display leaves that
-tool alone. Other extensions' tools, such as MCP or subagent tools, draw their
-own rows and are unchanged.
+**Chained commands.** A bash command joined with `&&`, `||` or `;` is shown as
+its steps, each with its own status and time, so you can see which one failed
+and which never ran. A leading `cd` becomes the location instead of a step.
+To time each step, Tool Display adds a marker line around each step before the
+command runs and removes the markers from the output before Pi or the model
+sees it. The model's command and the output it reads are unchanged. Commands
+Tool Display can't split safely (heredocs, `if` and `for` blocks, background
+`&`, `exit` or `set`) run exactly as written. See
+[security and privacy](docs/security.md#tool-display) for what the rewrite does.
+
+`/tool-display` switches it:
+
+- `/tool-display on|off`: Tool Display's rows, or Pi's own.
+- `/tool-display chains on|off`: break chained commands into steps, or run
+  them as written.
+- `/tool-display motion full|reduced`: the reduced setting drops the sweep and
+  finish flash, and updates times once a second.
+- `/tool-display count calls|steps`: how Status Plus counts tools (see below).
+
+The choices are saved in `pi-extras.json`. Rows change only in the terminal UI;
+print, JSON and RPC runs keep Pi's tools untouched. If another extension
+already replaces one of these tools, Tool Display leaves that tool alone. Other
+extensions' tools, such as MCP or subagent tools, draw their own rows.
+
+**Tool count.** Status Plus counts one tool per call, as Pi does. Click the
+count in the footer to count each step of a chained command instead; the
+count brightens to show it, and the choice is saved. Where the terminal sends
+no clicks to the footer, `/tool-display count steps` does the same.
+
+**Shell Jobs** use the same bands. A job is named after its title
+(`Run unit tests` becomes `run-unit-tests`), and the model is asked to call it
+by its title when talking to you. While a job runs, its row in the transcript
+says it is running in the background, and the job's band above the editor is
+the one that moves. When it finishes, its completion is one band with how it
+ended and how long it took; click it for the output.
 
 ## Computer use
 
