@@ -120,6 +120,17 @@ test("without a timeout a bright sweep crosses the band over time", () => {
 	assert.ok(brightest(at(900)) > brightest(at(300)));
 });
 
+test("a running band stands clear of its unlit part, as bright as the approved design", () => {
+	const palette = paletteFrom(quiet())!;
+	// Brightest channel gain; 0.6.0 drew both near 24, which read as barely moving.
+	const lift = (lit: readonly number[], unlit: readonly number[]) => Math.max(...lit.map((value, i) => value - unlit[i]!));
+	const progress = bandBackground(palette, { kind: "running", elapsedMs: 5_000, timeoutMs: 10_000 }, 80, 0, "full");
+	assert.ok(lift(progress(10), progress(79)) >= 35, "the fill against the unfilled rest");
+	// At 1.1s the sweep's centre is on column 40.
+	const sweep = bandBackground(palette, { kind: "running", elapsedMs: 1_000 }, 80, 1_100, "full");
+	assert.ok(lift(sweep(40), sweep(0)) >= 35, "the sweep's peak against its trough");
+});
+
 test("reduced motion holds a steady tint while running and skips the finish flash", () => {
 	const palette = paletteFrom(quiet())!;
 	const sweep = bandBackground(palette, { kind: "running", elapsedMs: 1_000 }, 80, 700, "reduced");

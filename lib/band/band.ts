@@ -37,6 +37,12 @@ export const FLASH_MS = 800;
 export const SWEEP_MS = 2_200;
 /** Times at or above this read in the warm heading color. */
 export const SLOW_MS = 10_000;
+/**
+ * How far a running band leans toward its hue. These reproduce the approved design's medium
+ * tint, which mixed from the terminal background; mixing from the lighter pending gray needs
+ * these values to reach the same colors.
+ */
+const RUN_TINT = { rest: 0.05, fill: 0.31, lead: 0.38, pulse: 0.05, sweepLow: 0.06, sweepPeak: 0.34, steady: 0.15 } as const;
 
 const clamp = (value: number, low = 0, high = 1) => Math.min(high, Math.max(low, value));
 const wave = (ms: number, period: number) => 0.5 + 0.5 * Math.sin((2 * Math.PI * ms) / period - Math.PI / 2);
@@ -72,17 +78,18 @@ export function bandBackground(palette: Palette, phase: BandPhase, width: number
 		}
 		case "running": {
 			if (!phase.timeoutMs) {
-				if (motion === "reduced") return () => mix(base, accent, 0.1);
+				if (motion === "reduced") return () => mix(base, accent, RUN_TINT.steady);
 				const center = ((clockMs % SWEEP_MS) / SWEEP_MS) * (width + 30) - 15;
-				return (x) => mix(base, accent, 0.08 + 0.16 * Math.pow(clamp(1 - Math.abs(x - center) / 12), 1.4));
+				const swing = RUN_TINT.sweepPeak - RUN_TINT.sweepLow;
+				return (x) => mix(base, accent, RUN_TINT.sweepLow + swing * Math.pow(clamp(1 - Math.abs(x - center) / 12), 1.4));
 			}
 			const share = clamp(phase.elapsedMs / phase.timeoutMs);
 			const edge = Math.max(1, Math.ceil(easedFill(share) * width));
 			// The heat follows the real share of the timeout, so amber means a kill is actually close.
 			const hue = mix(accent, palette.warning, clamp((share - 0.5) / 0.4));
-			const filled = mix(base, hue, 0.2);
-			const lead = mix(base, hue, 0.27 + (motion === "full" ? 0.05 * wave(clockMs, 1_000) : 0));
-			const rest = mix(base, accent, 0.05);
+			const filled = mix(base, hue, RUN_TINT.fill);
+			const lead = mix(base, hue, RUN_TINT.lead + (motion === "full" ? RUN_TINT.pulse * wave(clockMs, 1_000) : 0));
+			const rest = mix(base, accent, RUN_TINT.rest);
 			return (x) => (x === edge - 1 ? lead : x < edge ? filled : rest);
 		}
 	}
