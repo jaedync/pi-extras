@@ -157,11 +157,11 @@ test("/tool-display reports, switches and saves its settings", async () => {
 	const h = harness();
 	h.start();
 	await h.run("");
-	assert.match(h.notes.at(-1)![0], /^Tool Display is on · chain steps on · motion full\./);
+	assert.match(h.notes.at(-1)![0], /^Tool Display is on · chain steps on · motion full · thinking tail\./);
 	await h.run("motion reduced");
-	assert.deepEqual(h.writes.at(-1), { enabled: true, chains: true, motion: "reduced" });
+	assert.deepEqual(h.writes.at(-1), { enabled: true, chains: true, motion: "reduced", thinking: "tail" });
 	await h.run("chains off");
-	assert.deepEqual(h.writes.at(-1), { enabled: true, chains: false, motion: "reduced" });
+	assert.deepEqual(h.writes.at(-1), { enabled: true, chains: false, motion: "reduced", thinking: "tail" });
 	await h.run("sideways");
 	assert.equal(h.notes.at(-1)![1], "warning");
 	assert.equal(h.writes.length, 2);
@@ -232,6 +232,8 @@ test("/tool-display arguments", () => {
 	assert.deepEqual(applyArgs(DEFAULT_SETTINGS, "chains off"), { ...DEFAULT_SETTINGS, chains: false });
 	assert.equal(applyArgs(DEFAULT_SETTINGS, "motion"), undefined);
 	assert.equal(applyArgs(DEFAULT_SETTINGS, "compact"), undefined);
+	assert.deepEqual(applyArgs(DEFAULT_SETTINGS, "thinking full"), { ...DEFAULT_SETTINGS, thinking: "full" });
+	assert.equal(applyArgs(DEFAULT_SETTINGS, "thinking some"), undefined);
 });
 
 test("the settings persist under toolDisplay in pi-extras.json and keep other settings", () => {
@@ -241,8 +243,8 @@ test("the settings persist under toolDisplay in pi-extras.json and keep other se
 		assert.deepEqual(readSettings(file), DEFAULT_SETTINGS, "a missing file reads as the defaults");
 		writeFileSync(file, JSON.stringify({ computerUse: { apps: "all" }, toolDisplay: { density: "compact" } }));
 		assert.deepEqual(readSettings(file), DEFAULT_SETTINGS, "the 0.5 density setting is ignored");
-		writeSettings({ enabled: true, chains: false, motion: "reduced" }, file);
-		assert.deepEqual(readSettings(file), { enabled: true, chains: false, motion: "reduced" });
+		writeSettings({ enabled: true, chains: false, motion: "reduced", thinking: "collapsed" }, file);
+		assert.deepEqual(readSettings(file), { enabled: true, chains: false, motion: "reduced", thinking: "collapsed" });
 		const saved = JSON.parse(readFileSync(file, "utf8"));
 		assert.deepEqual(saved.computerUse, { apps: "all" });
 		writeFileSync(file, "{ not json");

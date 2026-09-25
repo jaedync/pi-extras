@@ -150,7 +150,9 @@ the shell path, command prefix and image settings from your settings files
 (project settings only when the project is trusted), and replaces how their
 rows are drawn. It sends nothing anywhere. Command text, file contents and tool
 output shown in rows are stripped of terminal control sequences before they
-are drawn.
+are drawn. To show thinking as a live tail, it wraps how Pi's assistant message
+component lays out its content; what the model wrote and what is saved in the
+session are unchanged.
 
 **Chained bash commands are rewritten before they run.** When a command is a
 list of steps joined by `&&`, `||`, `;` or newlines, and the shell is `bash`,

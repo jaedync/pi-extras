@@ -1,7 +1,8 @@
 /**
  * Tool Display: a header band for each of Pi's built-in tool rows, a popup
  * with everything a call did, and a step-by-step view of chained bash
- * commands. /tool-display switches it, the chain view and motion.
+ * commands, and thinking blocks as a live tail of their newest lines.
+ * /tool-display switches it, the chain view, motion and the thinking style.
  *
  * Pi draws a tool row with the renderers on the tool's definition, so this
  * re-registers each built-in tool under its own name: the definition Pi
@@ -35,6 +36,7 @@ import type { Kit } from "./kit.ts";
 import { searchRenderers } from "./search.ts";
 import { DEFAULT_SETTINGS, readSettings, writeSettings, type DisplaySettings } from "./settings.ts";
 import { bashRenderers } from "./shell.ts";
+import { installThinkingTail, THINKING_MODES, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
 
 export const TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -54,10 +56,16 @@ export interface SessionTools {
 	readonly shellPath?: string;
 	/** Whether Pi runs in its fullscreen view, where rows take clicks. */
 	readonly fullscreen: boolean;
+	/** Pi's hide-thinking setting as the session starts. */
+	readonly hideThinking?: boolean;
 }
 
 /** The host helpers rows need; injected so tests run without a live Pi. */
-export type HostKit = Pick<Kit, "highlight" | "language" | "diff" | "fileUrl" | "now"> & { readonly expandHint: () => string };
+export type HostKit = Pick<Kit, "highlight" | "language" | "diff" | "fileUrl" | "now"> & {
+	readonly expandHint: () => string;
+	/** Pi's key for showing thinking blocks, outside the fullscreen UI. */
+	readonly thinkingHint?: () => string;
+};
 
 export interface ToolDisplayDeps {
 	readonly tools: (ctx: ExtensionContext, wrap: (operations: BashOperations) => BashOperations) => SessionTools;
@@ -73,26 +81,28 @@ export function withDisplay(definition: AnyTool, renderers: Renderers): AnyTool 
 	return { ...definition, renderShell: "self", renderCall: renderers.renderCall, renderResult: renderers.renderResult };
 }
 
-const USAGE = "/tool-display on|off · chains on|off · motion full|reduced · count calls|steps";
+const USAGE = "/tool-display on|off · chains on|off · motion full|reduced · thinking tail|collapsed|full · count calls|steps";
 
 function describeSettings(settings: DisplaySettings): string {
 	if (!settings.enabled) return "Tool Display is off; Pi draws its own tool rows.";
-	return `Tool Display is on · chain steps ${settings.chains ? "on" : "off"} · motion ${settings.motion}.`;
+	return `Tool Display is on · chain steps ${settings.chains ? "on" : "off"} · motion ${settings.motion} · thinking ${settings.thinking}.`;
 }
 
-/** Applies a /tool-display argument, or undefined when it isn't one. */
 /** `count calls` or `count steps`, for the Status Plus tool figure. */
 export function countArg(args: string): ToolCount | undefined {
 	const words = args.trim().toLowerCase().split(/\s+/);
 	return words.length === 2 && words[0] === "count" && (words[1] === "calls" || words[1] === "steps") ? words[1] : undefined;
 }
 
+/** Applies a /tool-display argument, or undefined when it isn't one. */
 export function applyArgs(settings: DisplaySettings, args: string): DisplaySettings | undefined {
 	const words = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
 	const [first, second] = words;
 	if (words.length === 1 && (first === "on" || first === "off")) return { ...settings, enabled: first === "on" };
 	if (words.length === 2 && first === "chains" && (second === "on" || second === "off")) return { ...settings, chains: second === "on" };
 	if (words.length === 2 && first === "motion" && (second === "full" || second === "reduced")) return { ...settings, motion: second };
+	const thinking = THINKING_MODES.find((mode) => mode === second);
+	if (words.length === 2 && first === "thinking" && thinking) return { ...settings, thinking };
 	return undefined;
 }
 
@@ -102,6 +112,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	let fullscreen = false;
 	let popupOpen = false;
 	let session: SessionTools | undefined;
+	let undoThinking: (() => void) | undefined;
 	const owned = new Set<string>();
 	const clock = new AnimationClock();
 	const active: ActiveRuns = new Map();
@@ -200,6 +211,15 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		}
 		session = deps.tools(ctx, (operations) => chainOperations(operations, active, () => deps.host.now()));
 		fullscreen = session.fullscreen;
+		const hiddenAtStart = session.hideThinking ?? false;
+		const host = ctx.ui as { theme?: ThinkingTheme };
+		undoThinking?.();
+		undoThinking = installThinkingTail({
+			mode: (): ThinkingMode | undefined => (settings.enabled ? settings.thinking : undefined),
+			hiddenAtStart: () => hiddenAtStart,
+			theme: () => host.theme,
+			hint: () => (fullscreen ? "click for all" : deps.host.thinkingHint?.() ?? "ctrl+t to expand"),
+		});
 		install();
 	});
 
@@ -208,10 +228,12 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	pi.on("session_shutdown", () => {
 		flush();
 		clock.stop();
+		undoThinking?.();
+		undoThinking = undefined;
 	});
 
 	pi.registerCommand("tool-display", {
-		description: "Switch Tool Display, its bash chain steps, or its motion",
+		description: "Switch Tool Display, its bash chain steps, its motion, or how thinking shows",
 		getArgumentCompletions: (prefix) => {
 			const options = [
 				["on", "Draw tool rows with header bands"],
@@ -220,6 +242,9 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 				["chains off", "Run chained bash commands as written"],
 				["motion full", "Animated progress and finish"],
 				["motion reduced", "A steady tint; times still count"],
+				["thinking tail", "Thinking shows its newest three lines"],
+				["thinking collapsed", "Thinking shows only its label"],
+				["thinking full", "Thinking shows everything"],
 				["count calls", "Status Plus counts one per tool call"],
 				["count steps", "Status Plus counts each step a chain ran"],
 			] as const;
@@ -278,6 +303,7 @@ function sessionTools(ctx: ExtensionContext, wrap: (operations: BashOperations) 
 		} as Record<ToolName, AnyTool>,
 		...(shellPath ? { shellPath } : {}),
 		fullscreen: settings.getTuiMode() === "fullscreen",
+		hideThinking: settings.getHideThinkingBlock(),
 	};
 }
 
@@ -289,6 +315,9 @@ export function productionDeps(): ToolDisplayDeps {
 		host: {
 			expandHint: () => {
 				try { return keyHint("app.tools.expand", "to expand"); } catch { return "ctrl+o to expand"; }
+			},
+			thinkingHint: () => {
+				try { return keyHint("app.thinking.toggle", "to expand"); } catch { return "ctrl+t to expand"; }
 			},
 			highlight: (code, lang) => highlightCode(code, lang),
 			language: (path) => getLanguageFromPath(path),
