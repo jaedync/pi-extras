@@ -173,7 +173,8 @@ export class Popup implements Component, Focusable {
 		this.maxScroll = Math.max(0, lines.length - this.viewport);
 		this.scroll = this.follow ? this.maxScroll : clamp(this.scroll, 0, this.maxScroll);
 		const visible = lines.slice(this.scroll, this.scroll + this.viewport);
-		while (visible.length < this.viewport) visible.push("");
+		// Short output gets a short popup; it grows with a running call's output up to the cap.
+		while (visible.length < Math.min(this.viewport, MIN_VIEWPORT)) visible.push("");
 
 		const first = lines.length === 0 ? 0 : this.scroll + 1;
 		const last = Math.min(lines.length, this.scroll + this.viewport);
