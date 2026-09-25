@@ -2,6 +2,21 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.5.0 - 2026-09-25
+
+### Added
+
+- Tool Display, a new extension that redraws the rows for Pi's built-in tools.
+  Bash rows highlight the command, collapse long scripts to their first lines
+  and put the run time and exit code in the header. Read rows show how many
+  lines were read, edit rows show `+added −removed` and collapse long diffs,
+  write rows show the line count, and grep, find and ls rows summarize what
+  they found. The model sees the same tools and results.
+- `/tool-display` switches every row between `boxed` (Pi's look, the default)
+  and `compact`, which replaces the box with a status mark and halves the
+  height of one-line rows. The choice is saved in `pi-extras.json`.
+  `PI_TOOL_DISPLAY=off` turns the extension off.
+
 ## 0.4.1 - 2026-09-24
 
 ### Added
