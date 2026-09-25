@@ -2,6 +2,28 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.7.0 - 2026-09-25
+
+### Changed
+
+- Thinking shows as a live tail by default: `Thinking...` while it streams and
+  `Thought` once done, then only its newest three lines, with a line saying how
+  many earlier ones are hidden. Click a block to read all of it; ctrl+t does
+  the same for every block. `/tool-display thinking collapsed` brings back
+  Pi's label, and `/tool-display thinking full` shows everything.
+- A write row shows the last three lines of the file instead of the first ten,
+  so a streaming write shows what is being written now.
+- Everything under a tool row's band sits on a gray panel, so each call reads
+  as one block apart from the conversation. Shell Jobs rows get the same.
+- Popups, including the Shell Jobs log, sit on a lighter panel and close with a
+  click outside them.
+
+### Fixed
+
+- Running tool bands are easier to see. 0.6.0 drew the fill and the sweep at
+  about half the intended strength, so a command in progress looked nearly
+  still. Background job bands above the editor get the same fix.
+
 ## 0.6.0 - 2026-09-25
 
 ### Changed

@@ -31,7 +31,7 @@ can still conflict.
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
-| Tool Display | Pi's built-in tool rows as colored header bands with live progress, a popup with the whole call, and chained bash commands broken into steps |
+| Tool Display | Pi's built-in tool rows as colored header bands with live progress, a popup with the whole call, chained bash commands broken into steps, and thinking as a live tail of its newest lines |
 | Release Notes | What changed in pi-extras, shown once in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
 
@@ -75,7 +75,8 @@ the package. Removing it does not remove your credentials or change other packag
 - `PI_COMPUTER_USE=on`: enable computer use on macOS. Off by default. See below.
 - `PI_TOOL_DISPLAY=off`: leave Pi's own tool rows in place. `/tool-display`
   writes its switches under `toolDisplay` in `pi-extras.json`: `enabled`,
-  `chains` (default `true`) and `motion` (`full` or `reduced`).
+  `chains` (default `true`), `motion` (`full` or `reduced`) and `thinking`
+  (`tail`, `collapsed` or `full`; default `tail`).
 - `statusPlus.toolCount` in `pi-extras.json`: `calls` (the default) or `steps`,
   switched by clicking the footer's tool count or with `/tool-display count`.
 - `releaseNotes.seen` in `pi-extras.json`: the last pi-extras version whose
@@ -174,17 +175,26 @@ in words in the right rail (`exit 1`, `timed out`). While a call runs, the band
 fills toward its timeout and warms as the timeout gets close; a call without a
 timeout sweeps instead. Times of ten seconds or more are drawn in a warmer
 color, so slow calls stand out when you scroll back. Output sits indented under
-the band.
+the band on a gray panel, so each call reads as one block apart from the
+conversation.
 
 - **bash**: the command, and its last few lines of output.
 - **read**: what was read, e.g. `80 lines` or `20 of 5,321 lines`.
 - **edit**: `+12 −3`, with long diffs collapsed.
-- **write**: the file's line count.
+- **write**: the file's line count, and its last three lines (where a
+  streaming write is).
 - **grep, find, ls**: what was found (`23 matches in 7 files`, `42 files`).
 
 Click a row to open a popup with the whole call: the full command, every line
-of output, and for a chained command each step. Esc or `q` closes it. ctrl+o
-still expands every row in place.
+of output, and for a chained command each step. Esc, `q` or a click outside
+closes it. ctrl+o still expands every row in place.
+
+**Thinking.** A thinking block shows `Thinking...` while it streams and
+`Thought` once done, then only its newest three lines, with a line saying how
+many earlier ones are hidden. Click a block to read all of it, and again to go
+back; ctrl+t does the same for every block. `/tool-display thinking collapsed`
+shows just the label, as Pi does, and `/tool-display thinking full` shows
+everything.
 
 **Chained commands.** A bash command joined with `&&`, `||` or `;` is shown as
 its steps, each with its own status and time, so you can see which one failed
@@ -203,6 +213,7 @@ Tool Display can't split safely (heredocs, `if` and `for` blocks, background
   them as written.
 - `/tool-display motion full|reduced`: the reduced setting drops the sweep and
   finish flash, and updates times once a second.
+- `/tool-display thinking tail|collapsed|full`: how thinking blocks rest.
 - `/tool-display count calls|steps`: how Status Plus counts tools (see below).
 
 The choices are saved in `pi-extras.json`. Rows change only in the terminal UI;
@@ -220,7 +231,9 @@ no clicks to the footer, `/tool-display count steps` does the same.
 by its title when talking to you. While a job runs, its row in the transcript
 says it is running in the background, and the job's band above the editor is
 the one that moves. When it finishes, its completion is one band with how it
-ended and how long it took; click it for the output.
+ended and how long it took; click it for the output. Click a running job's row
+or its band above the editor to open its live log; Esc or a click outside
+closes it.
 
 ## Computer use
 
