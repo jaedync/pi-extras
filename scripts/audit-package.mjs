@@ -9,7 +9,7 @@ const result = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-script
 assert.equal(result.status, 0, result.stderr);
 const files = JSON.parse(result.stdout)[0].files;
 const roots = new Set(['extensions', 'lib', 'themes', 'docs', 'licenses']);
-const top = new Set(['package.json', 'README.md', 'LICENSE', 'THIRD_PARTY.md']);
+const top = new Set(['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'THIRD_PARTY.md']);
 for (const { path } of files) {
   assert.ok(!path.split('/').includes('..'), path);
   assert.ok(top.has(path) || roots.has(path.split('/')[0]), `Unexpected package file: ${path}`);

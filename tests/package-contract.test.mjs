@@ -5,14 +5,16 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-test('package explicitly exports nine extensions and one theme', () => {
+test('package explicitly exports ten extensions and one theme', () => {
   const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
   assert.deepEqual(pkg.pi.extensions, [
     'extensions/status-plus.ts', 'extensions/usage-guard.ts', 'extensions/phase-spinner.ts',
     'extensions/shell-jobs.ts', 'extensions/bash-default-timeout.ts',
     'extensions/kagi-search.ts', 'extensions/voice.ts', 'extensions/computer-use.ts',
-    'extensions/tool-display.ts',
+    'extensions/tool-display.ts', 'extensions/release-notes.ts',
   ]);
+  // The release notes read the changelog from the installed package.
+  assert.ok(pkg.files.includes('CHANGELOG.md'));
   assert.deepEqual(pkg.pi.themes, ['themes/quiet.json']);
   for (const path of [...pkg.pi.extensions, ...pkg.pi.themes]) assert.ok(existsSync(resolve(root, path)), path);
   assert.equal(pkg.private, true);
