@@ -279,12 +279,31 @@ test("a write shows its line count and a preview of the file", () => {
 	write.update({ isPartial: false, result: text("Successfully wrote") });
 	const lines = write.lines();
 	assert.equal(lines[0], band("write out.txt · 14 lines"));
-	assert.equal(lines[1], "   row 0");
-	assert.equal(lines.at(-1), "   … 4 more lines (click for all)");
+	// The end of the file, where a streaming write is, with a count of what is above it.
+	assert.deepEqual(lines.slice(1), ["   … 11 earlier lines (click for all)", "   row 11", "   row 12", "   row 13"]);
+	write.update({ isPartial: false, expanded: true, result: text("Successfully wrote") });
+	assert.equal(write.lines().filter((line) => line.startsWith("   row ")).length, 14);
 	// A row replayed from a saved session has its result but was never marked complete.
 	const replayed = row(writeRenderers(h.kit), { path: "out.txt", content });
 	replayed.update({ argsComplete: false, isPartial: false, result: text("Successfully wrote") });
 	assert.equal(replayed.lines()[0], band("write out.txt · 14 lines"));
+});
+
+test("everything under a band sits on the theme's tool gray, padded to the full width", () => {
+	const h = harness();
+	const gray = theme.getBgAnsi("toolPendingBg");
+	const bash = row(bashRenderers(h.kit), { command: "echo hi" });
+	bash.update({ isPartial: false, executionStarted: true, result: text("hi\nthere") });
+	const [head, ...body] = bash.raw(40);
+	assert.ok(!head!.startsWith(gray), "the band keeps its own color");
+	assert.ok(body.length > 0);
+	for (const line of body) {
+		assert.ok(line.startsWith(gray), "each body line opens on the gray");
+		assert.equal(stripTerminalSequences(line).length, 40);
+	}
+	const write = row(writeRenderers(h.kit), { path: "a.txt", content: "one\ntwo" });
+	write.update({ isPartial: false, result: text("Successfully wrote") });
+	assert.ok(write.raw(40).slice(1).every((line) => line.startsWith(gray)));
 });
 
 test("grep, find and ls summarize what they found and list it only when expanded", () => {

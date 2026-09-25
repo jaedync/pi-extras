@@ -1,21 +1,21 @@
 /**
  * The read, edit and write rows. The band says what the call did: lines
  * read, lines added and removed, or lines written. Collapsed, a read shows
- * no content, and a diff or new file shows its first lines; the popup and
- * Pi's expand key show everything.
+ * no content, a diff shows its first lines, and a new file its last few
+ * (where a streaming write is); the popup and Pi's expand key show everything.
  */
 import { basename, dirname } from "node:path";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Seg } from "../band/band.ts";
 import { diffStats, readSummary, sanitize, type ReadSummary } from "./format.ts";
-import { absolutePath, codeLines, errorLines, hasImage, more, mutedSeg, numberArg, pathSeg, plural, resultText, shownPath, stringArg, textLines, titleSeg, wrapAll, type Kit } from "./kit.ts";
+import { absolutePath, codeLines, errorLines, hasImage, more, mutedSeg, numberArg, pathSeg, plural, resultText, shownPath, stringArg, tail, textLines, titleSeg, wrapAll, type Kit } from "./kit.ts";
 import { BODY_INDENT, indent } from "./row.ts";
 import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
 
 /** Diff lines shown collapsed. Most edits fit; a rewrite does not. */
 export const DIFF_PREVIEW_LINES = 20;
-/** File lines shown collapsed for a write; the same as Pi's write row. */
-export const WRITE_PREVIEW_LINES = 10;
+/** File lines shown collapsed for a write: the end, which is where a streaming write is. */
+export const WRITE_PREVIEW_LINES = 3;
 /** Instruction files Pi also shows as a labelled, compact read. */
 const RESOURCE_FILES = new Set(["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]);
 
@@ -171,10 +171,10 @@ export const writeSpec: ToolSpec = {
 		if (lines.length === 0) return [];
 		const inner = Math.max(1, width - BODY_INDENT);
 		const code = writeLines(view);
-		const shown = view.context.expanded ? code : code.slice(0, WRITE_PREVIEW_LINES);
-		const body = wrapAll(shown, inner);
-		if (lines.length > shown.length) body.push(truncateToWidth(more(view.paint, view.kit, plural(lines.length - shown.length, "more line")), inner, "…"));
-		return indent(body);
+		if (view.context.expanded) return indent(wrapAll(code, inner));
+		const shown = tail(code, WRITE_PREVIEW_LINES, inner);
+		const hint = shown.skipped > 0 ? [truncateToWidth(more(view.paint, view.kit, plural(shown.skipped, "earlier line")), inner, "…")] : [];
+		return indent([...hint, ...shown.lines]);
 	},
 	body: (view, width) => errorBody(view, width),
 	details: (view) => fileDetails(view),

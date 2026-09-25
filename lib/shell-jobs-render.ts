@@ -6,12 +6,14 @@
  * while it runs in the background, the widget being the one that moves; the
  * completion message is the same band in the job's final color; a shell_job
  * row names the operation and the job it addressed. Output is hidden until
- * clicked or expanded, then sits indented under the band.
+ * clicked or expanded, then sits indented under the band on the theme's
+ * tool gray.
  */
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { keyHint, type MessageRenderer, type Theme } from "@earendil-works/pi-coding-agent";
 import { renderBand, type Seg } from "./band/band.ts";
 import { paletteFrom } from "./band/palette.ts";
+import { bodyBackground, onBackground } from "./band/surface.ts";
 import { factsOf, jobBand, type JobFacts } from "./shell-jobs-band.ts";
 import { DURATION_PATTERN, formatDuration, sanitizeControl, titlePreview } from "./shell-jobs-core.ts";
 import type { Job } from "./shell-jobs-process.ts";
@@ -200,8 +202,8 @@ export function renderStartResult(result: unknown, theme: Theme, context?: RowCo
 	const text = textOf((result as { content?: unknown } | null)?.content).trimEnd();
 	const paint = painter(theme);
 	return new Lines((width) => {
-		if (context?.isError) return bodyLines(text, { ...paint, fg: (key, line) => paint.fg(key === "toolOutput" ? "error" : key, line) }, width, true);
-		return context?.expanded ? bodyLines(text, paint, width, true) : [];
+		if (context?.isError) return onBackground(bodyLines(text, { ...paint, fg: (key, line) => paint.fg(key === "toolOutput" ? "error" : key, line) }, width, true), width, bodyBackground(theme));
+		return context?.expanded ? onBackground(bodyLines(text, paint, width, true), width, bodyBackground(theme)) : [];
 	});
 }
 
@@ -239,7 +241,7 @@ export function renderJobCall(args: unknown, theme: Theme, context?: RowContext,
 export function renderJobResult(result: unknown, options: { expanded: boolean }, theme: Theme): Component {
 	const text = textOf((result as { content?: unknown } | null)?.content);
 	const paint = painter(theme);
-	return new Lines((width) => bodyLines(text, paint, width, options.expanded));
+	return new Lines((width) => onBackground(bodyLines(text, paint, width, options.expanded), width, bodyBackground(theme)));
 }
 
 /**
@@ -276,7 +278,7 @@ export function createCompletionRenderer(): MessageRenderer {
 			const inner = Math.max(1, width - BODY_INDENT);
 			const under = [...(view.command.length > 0 ? [`$ ${view.command}`] : []), ...view.meta].map((line) => pad + truncateToWidth(paint.fg("muted", line), inner, "\u2026"));
 			const notice = view.notice.length > 0 ? [pad + truncateToWidth(paint.fg("warning", view.notice), inner, "\u2026")] : [];
-			return [band, ...under, ...bodyLines(view.body, paint, width, true), ...notice];
+			return [band, ...onBackground([...under, ...bodyLines(view.body, paint, width, true), ...notice], width, bodyBackground(theme))];
 		});
 		return {
 			render: (width: number) => lines.render(width),

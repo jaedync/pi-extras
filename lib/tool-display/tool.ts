@@ -2,10 +2,13 @@
  * Turns a tool's description of its row into Pi's two renderers. A spec says
  * what the band's title is, what else the rail shows, what goes under the
  * band and in the body, and what the popup holds; the timing, animation,
- * clicks and popup wiring are the same for every tool.
+ * clicks and popup wiring are the same for every tool. Everything under the
+ * band sits on the theme's tool gray, so a call reads as one block apart
+ * from the conversation around it.
  */
 import type { Outcome, Seg } from "../band/band.ts";
 import type { PopupSource } from "../band/popup.ts";
+import { bodyBackground, onBackground } from "../band/surface.ts";
 import { painter, type Kit, type Paint, type RenderContext, type ThemeLike } from "./kit.ts";
 import { animate, band, BODY_INDENT, indent, phaseOf, rail, rowState, slotFor, tookMs, track, type RowState } from "./row.ts";
 import type { BandPhase } from "../band/band.ts";
@@ -86,7 +89,7 @@ export function toolRenderers(kit: Kit, spec: ToolSpec) {
 				const view = viewOf(kit, row)!;
 				const input = bandOf(spec, view);
 				animate(row, kit, input.phase);
-				return [band(theme, kit, input, width), ...(spec.below?.(view, width) ?? [])];
+				return [band(theme, kit, input, width), ...onBackground(spec.below?.(view, width) ?? [], width, bodyBackground(theme))];
 			});
 		},
 		renderResult(result: ResultInput, _options: { expanded: boolean; isPartial: boolean }, theme: ThemeLike, context: RenderContext) {
@@ -97,7 +100,7 @@ export function toolRenderers(kit: Kit, spec: ToolSpec) {
 			track(row, context, kit.now(), spec.outcome?.(view));
 			return slotFor(context).onClick(open(row)).set((width) => {
 				const current = viewOf(kit, row)!;
-				return indent(spec.body(current, Math.max(1, width - BODY_INDENT)));
+				return onBackground(indent(spec.body(current, Math.max(1, width - BODY_INDENT))), width, bodyBackground(theme));
 			});
 		},
 	};
