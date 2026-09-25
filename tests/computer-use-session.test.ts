@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { SkySession, type Approval, type ApprovalRequest } from "../lib/computer-use/session.ts";
@@ -9,17 +10,26 @@ const FAKE = fileURLToPath(new URL("./fixtures/fake-sky.mjs", import.meta.url));
 function fakeSession(options: { idleMs?: number; callTimeoutMs?: number } = {}) {
 	let launches = 0;
 	const stderr: string[] = [];
+	const closed: Promise<unknown>[] = [];
 	const session = new SkySession({
 		launch: async () => {
 			launches++;
 			const child = spawn(process.execPath, [FAKE], { stdio: ["pipe", "pipe", "pipe"] });
 			child.stderr.on("data", (chunk: Buffer) => stderr.push(String(chunk)));
+			closed.push(once(child.stderr, "close"));
 			return child;
 		},
 		idleMs: options.idleMs ?? 60_000,
 		callTimeoutMs: options.callTimeoutMs ?? 5_000,
 	});
-	return { session, launches: () => launches, stderr };
+	return { session, launches: () => launches, stderr, stderrClosed: () => Promise.all(closed) };
+}
+
+/** The fake reports on stderr, a separate pipe from its replies, so a line can arrive after the reply it preceded. */
+async function stderrMatching(stderr: string[], pattern: RegExp): Promise<string> {
+	const deadline = Date.now() + 2_000;
+	while (!pattern.test(stderr.join("")) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+	return stderr.join("");
 }
 
 const allow = (answer: Approval) => async () => answer;
@@ -35,22 +45,24 @@ test("one warm session serves consecutive calls", async () => {
 });
 
 test("an app approval request goes to the caller and its answer is honored", async () => {
-	const { session, stderr } = fakeSession();
+	const { session, stderr, stderrClosed } = fakeSession();
 	try {
 		const asked: ApprovalRequest[] = [];
 		const state = await session.call("get_app_state", { app: "Finder" }, { approve: async (request) => { asked.push(request); return "always"; } });
 		assert.deepEqual(asked.map(({ app, message, warning, highRisk, canRemember }) => ({ app, message, warning, highRisk, canRemember })),
 			[{ app: "Finder", message: "Allow ChatGPT to use Finder?", warning: undefined, highRisk: false, canRemember: true }]);
 		assert.deepEqual(state.content.map((block) => block.type), ["text", "image"]);
-		assert.match(stderr.join(""), /persist=always/);
+		assert.match(await stderrMatching(stderr, /persist=always/), /persist=always/);
 
 		const denied = await session.call("get_app_state", { app: "Notes" }, { approve: allow("deny") });
 		assert.equal(denied.isError, true);
 
 		const auto = await session.call("get_app_state", { app: "Maps" }, { approve: allow("auto") });
 		assert.notEqual(auto.isError, true);
-		assert.equal(stderr.join("").match(/persist=/g)?.length, 1, "Allow all must never remember an app");
 	} finally { await session.close(); }
+	// Only a closed pipe shows everything the fake said, so a second persist cannot still be in flight.
+	await stderrClosed();
+	assert.equal(stderr.join("").match(/persist=/g)?.length, 1, "Allow all must never remember an app");
 });
 
 test("a crashed client is replaced on the next call", async () => {
