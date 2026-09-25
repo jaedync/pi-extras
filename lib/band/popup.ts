@@ -5,7 +5,8 @@
  * step is picked with a click or its number and the output narrows to it.
  *
  * The popup knows nothing about tools; a source supplies each part, read
- * again on every frame so a running call stays live.
+ * again on every frame so a running call stays live. It sits on a panel a
+ * step lighter than the tool rows beneath, and a click outside it closes it.
  */
 import {
 	matchesKey,
@@ -17,7 +18,9 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import { closeOnOutsideClick } from "./modal.ts";
 import type { BandTheme } from "./palette.ts";
+import { onBackground, panelBackground } from "./surface.ts";
 
 export interface PopupTheme extends BandTheme {
 	bold(text: string): string;
@@ -71,6 +74,7 @@ export class Popup implements Component, Focusable {
 	private readonly theme: PopupTheme;
 	private readonly source: PopupSource;
 	private readonly onClose: () => void;
+	private readonly undoOutside: () => void;
 
 	constructor(tui: PopupTui, theme: PopupTheme, source: PopupSource, onClose: () => void) {
 		this.tui = tui;
@@ -78,6 +82,7 @@ export class Popup implements Component, Focusable {
 		this.source = source;
 		this.onClose = onClose;
 		this.selected = source.firstStep();
+		this.undoOutside = closeOnOutsideClick(tui, () => this.close());
 		this.tick();
 	}
 
@@ -140,6 +145,7 @@ export class Popup implements Component, Focusable {
 
 	dispose(): void {
 		this.closed = true;
+		this.undoOutside();
 		if (this.timer !== null) clearInterval(this.timer);
 		this.timer = null;
 	}
@@ -184,7 +190,8 @@ export class Popup implements Component, Focusable {
 		const gap = Math.max(1, inner - visibleWidth(hint) - visibleWidth(position));
 		const footer = row(fg("dim", `${hint}${" ".repeat(gap)}${position}`));
 
-		return [top, bandRow, details, ...head.map(row), rule("├", "┤"), outputLabel, ...visible.map(row), rule("├", "┤"), footer, rule("╰", "╯")];
+		const frame = [top, bandRow, details, ...head.map(row), rule("├", "┤"), outputLabel, ...visible.map(row), rule("├", "┤"), footer, rule("╰", "╯")];
+		return onBackground(frame, w, panelBackground(theme));
 	}
 
 	private select(step: number): void {

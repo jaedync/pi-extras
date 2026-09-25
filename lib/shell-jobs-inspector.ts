@@ -5,9 +5,10 @@
  * these on top of the conversation. It shows the whole story of one job: the
  * title, the full command (not the flattened preview), cwd, pid, log path,
  * state and elapsed time, and the tail of the log, refreshed on a timer while
- * the process is alive. Escape closes it. The overlay reads the runtime's job
- * record through a lookup on every refresh, so it follows the job through
- * running, stopping and done, and notices when the record is evicted.
+ * the process is alive. Escape or a click outside closes it. The overlay
+ * reads the runtime's job record through a lookup on every refresh, so it
+ * follows the job through running, stopping and done, and notices when the
+ * record is evicted.
  *
  * Output is wrapped, not cut, because the end of a long line is usually where
  * the error is. The view follows the end of the log until the reader scrolls
@@ -27,6 +28,8 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { FRAME_MS } from "./band/clock.ts";
+import { closeOnOutsideClick } from "./band/modal.ts";
+import { onBackground, panelBackground } from "./band/surface.ts";
 import { factsOf, jobBand } from "./shell-jobs-band.ts";
 import { readLogWindow, sanitizeControl } from "./shell-jobs-core.ts";
 import { type Job, jobStatusText } from "./shell-jobs-process.ts";
@@ -137,6 +140,7 @@ export class JobInspector implements Component, Focusable {
 	private readonly lookup: JobLookup;
 	private readonly onClose: () => void;
 	private readonly now: () => number;
+	private readonly undoOutside: () => void;
 
 	constructor(tui: InspectorTui, theme: Theme, lookup: JobLookup, onClose: () => void, now: () => number = Date.now) {
 		this.tui = tui;
@@ -145,6 +149,7 @@ export class JobInspector implements Component, Focusable {
 		this.now = now;
 		this.theme = theme;
 		this.paint = painter(theme);
+		this.undoOutside = closeOnOutsideClick(tui, () => this.close());
 		this.refresh();
 	}
 
@@ -223,6 +228,7 @@ export class JobInspector implements Component, Focusable {
 
 	dispose(): void {
 		this.disposed = true;
+		this.undoOutside();
 		this.stopTimer();
 	}
 
@@ -267,7 +273,8 @@ export class JobInspector implements Component, Focusable {
 		const gap = Math.max(1, inner - visibleWidth(FOOTER_HINT) - visibleWidth(position));
 		const footer = row(fg("dim", `${FOOTER_HINT}${" ".repeat(gap)}${position}`));
 
-		return [top, ...header, rule("\u251c", "\u2524"), ...visible.map(row), rule("\u251c", "\u2524"), footer, rule("\u2570", "\u256f")];
+		const frame = [top, ...header, rule("\u251c", "\u2524"), ...visible.map(row), rule("\u251c", "\u2524"), footer, rule("\u2570", "\u256f")];
+		return onBackground(frame, w, panelBackground(this.theme));
 	}
 
 	private commandLines(job: Job, inner: number): string[] {
@@ -322,6 +329,7 @@ export class JobInspector implements Component, Focusable {
 	private close(): void {
 		if (this.closed) return;
 		this.closed = true;
+		this.undoOutside();
 		this.stopTimer();
 		this.onClose();
 	}

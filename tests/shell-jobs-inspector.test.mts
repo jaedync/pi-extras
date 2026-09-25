@@ -197,6 +197,21 @@ describe("job inspector", () => {
 		view.refresh();
 	});
 
+	test("a left press outside closes it, and the transcript gets its clicks back once closed", () => {
+		const live = liveJob();
+		const reached: string[] = [];
+		const host = { ...fakeTui(), dispatchMouseToLayout: (event: { type: string }) => { reached.push(event.type); return undefined; } };
+		const closes: number[] = [];
+		const view = new JobInspector(host as any, plainTheme as any, live.lookup, () => closes.push(1), () => NOW);
+		const press = { type: "press", button: "left", x: 0, y: 0, screenX: 0, screenY: 0, width: 80, height: 24 };
+		const taken = host.dispatchMouseToLayout(press) as { handled?: boolean } | undefined;
+		assert.strictEqual(taken?.handled, true);
+		assert.strictEqual(closes.length, 1);
+		host.dispatchMouseToLayout(press);
+		assert.deepStrictEqual(reached, ["press"]);
+		view.dispose();
+	});
+
 	test("the timer picks up new output while the job runs and rests once it is done", async () => {
 		const live = liveJob();
 		const { view, host } = open(live);
