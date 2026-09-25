@@ -141,6 +141,16 @@ session stops them according to the extension lifecycle.
 The Bash Default Timeout extension does not sandbox commands. It only supplies
 a default timeout for calls that omit one. Explicit timeouts remain unchanged.
 
+## Tool Display
+
+Tool Display re-registers Pi's built-in `read`, `bash`, `edit`, `write`,
+`grep`, `find` and `ls` tools with the definitions Pi itself builds, including
+the shell path, command prefix and image settings from your settings files
+(project settings only when the project is trusted), and replaces only how
+their rows are drawn. It sends nothing anywhere and stores only the density in
+`pi-extras.json`. Command text, file contents and tool output shown in rows are
+stripped of terminal control sequences before they are drawn.
+
 ## Reporting
 
 Do not open a public issue containing tokens, session links, auth files, raw

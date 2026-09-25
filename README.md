@@ -2,8 +2,8 @@
 
 Optional extensions and a theme for [Pi](https://pi.dev): a richer footer,
 usage-limit awareness for the agent, activity and timing indicators, background
-shell jobs, bounded shell execution, Kagi subscription search, and local voice
-dictation.
+shell jobs, bounded shell execution, Kagi subscription search, local voice
+dictation, and clearer tool rows.
 
 ## Install
 
@@ -16,7 +16,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all eight extensions (computer use stays off until you opt in); it makes `quiet` available but does not select it.
+adds all nine extensions (computer use stays off until you opt in); it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -31,6 +31,7 @@ can still conflict.
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
+| Tool Display | Clearer rows for Pi's built-in tools (exit codes, line counts, `+12 −3` edits, match counts), and an opt-in compact density via `/tool-display` |
 | Quiet | Low-contrast theme with restrained accent colors |
 
 ## Updates and removal
@@ -71,6 +72,9 @@ the package. Removing it does not remove your credentials or change other packag
   models and settings (default `~/.cache/pi-extras/voice`, or under
   `XDG_CACHE_HOME`).
 - `PI_COMPUTER_USE=on`: enable computer use on macOS. Off by default. See below.
+- `PI_TOOL_DISPLAY=off`: leave Pi's own tool rows in place. The density is
+  kept under `toolDisplay.density` in `pi-extras.json` (`boxed` or `compact`),
+  written by `/tool-display`.
 - `KAGI_TOKEN_FILE`: path to your own subscription session credential. See below.
 - `KAGI_TOOL_NAME=web_search`: explicit search-tool replacement. Leave unset to
   keep `kagi_search` and avoid conflicting with another search extension.
@@ -151,6 +155,37 @@ runs over SSH, recording runs as a short-lived launchd job in your desktop
 session instead. macOS asks once, on the Mac's screen, to allow
 `ffmpeg` to use the microphone; this needs Homebrew `ffmpeg`. About the first
 half second of each recording is lost while that job starts.
+
+## Tool Display
+
+Tool Display redraws the rows for Pi's built-in tools in the terminal. Pi
+builds the tools as usual, and the model sees the same tools, descriptions and
+results; only the rows change.
+
+- **bash**: the command is syntax highlighted and, collapsed, shows its first
+  three lines. The header ends with the run time and, when the command fails,
+  `exit 1`, `timed out after 120s` or `aborted`, so those lines are not repeated
+  under the output. Output collapses to its last five lines, as before.
+- **read**: the header ends with what was read, e.g. `· 80 lines` or
+  `· 20 of 5,321 lines`.
+- **edit**: the header shows `+12 −3`, and diffs longer than 20 lines collapse.
+- **write**: the header shows the file's line count.
+- **grep, find, ls**: the header says what was found (`23 matches in 7 files`,
+  `42 files`, `18 entries (3 dirs)`); the listing shows when expanded.
+
+Expand and collapse rows as usual with ctrl+o or a click. `/tool-display`
+switches between two densities for every row, including earlier ones, and
+remembers the choice:
+
+- `boxed` (default): Pi's look, a background box per row colored by status.
+- `compact`: no box. A `✓`, `✗` or `○` (running) leads each row, which halves
+  the height of a one-line row.
+
+`/tool-display compact` and `/tool-display boxed` set it directly. Rows change
+only in the terminal UI; print, JSON and RPC runs keep Pi's tools untouched. If
+another extension already replaces one of these tools, Tool Display leaves that
+tool alone. Other extensions' tools, such as MCP or subagent tools, draw their
+own rows and are unchanged.
 
 ## Computer use
 
