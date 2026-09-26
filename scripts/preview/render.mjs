@@ -56,8 +56,8 @@ const litDots = (line) => [...line].reduce((sum, ch) => {
 
 /**
  * The frame that shows the most at once: both jobs running, the diff on screen, the phase row
- * with a TPS reading and voice recording. Among those, the most transcribed chunks (◆) win, then
- * a chunk mid-decode (◈), then the fullest level meter.
+ * with a TPS reading while the model still thinks, and voice recording. Among those, the most
+ * transcribed chunks (◆) win, then a chunk mid-decode (◈), then the fullest level meter.
  */
 export function pickFrame(frames) {
 	let best;
@@ -68,12 +68,16 @@ export function pickFrame(frames) {
 		const phase = lines.findIndex((line) => line.includes("TPS"));
 		const widget = phase > 1 ? lines.slice(phase - 2, phase) : [];
 		const running = (title) => widget.some((line) => line.trimStart().startsWith(title));
-		const ready = voice && running("Run unit tests") && running("Watch types") && lines.some((l) => l.includes("TAIL_CELL_MIN = 10"));
+		// Once the reply starts, the phase row's clock restarts at zero, which reads like a glitch.
+		const thinking = phase >= 0 && /\d\d:\d\d\.\d Think /.test(lines[phase]);
+		const ready = voice && thinking && running("Run unit tests") && running("Watch types") && lines.some((l) => l.includes("TAIL_CELL_MIN = 10"));
 		if (!ready) continue;
 		const score = [...voice].filter((ch) => ch === "◆").length * 2000 + (voice.includes("◈") ? 1000 : 0) + litDots(voice);
 		if (!best || score > best.score) best = { text, score };
 	}
 	if (!best) throw new Error("no staged frame showed jobs, diff, phase row and voice together; re-run the stage");
+	// Without a ◆ the recorder heard silence, not the scripted speech (see the recorder note in stage.sh).
+	if (best.score < 2000) throw new Error("the staged dictation transcribed nothing; check that stage.sh records the scripted speech");
 	return best.text;
 }
 

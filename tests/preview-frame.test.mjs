@@ -30,3 +30,18 @@ test('a staged session that never showed everything at once is rejected', () => 
   const notRecording = frame('────────────────');
   assert.throws(() => pickFrame([noJobs, notRecording]), /re-run the stage/);
 });
+
+test('a staged session whose dictation transcribed nothing is rejected', () => {
+  // A flat meter and no chunks: the recorder heard silence instead of the scripted speech.
+  const silent = frame('── ● 0:06  ⠶⠶⠶⠶⠶⠶ ──');
+  const loading = frame('── ● 0:01  ⠀⠀⠶⠶  ⠹ loading ──');
+  assert.throws(() => pickFrame([silent, loading]), /transcribed nothing/);
+});
+
+test('the preview frame is taken while the model is still thinking', () => {
+  const thinking = frame('── ● 0:07  ⠶⠆⠀⠀  ◆◇ ──');
+  // The reply has started: the phase row restarts its clock on Text.
+  const replying = frame('── ● 0:07  ⣿⣿⣿⣿  ◆◆ ──').replace('00:09.7 Think', '00:00.0 Text');
+  assert.equal(pickFrame([replying, thinking]), thinking);
+  assert.throws(() => pickFrame([replying]), /re-run the stage/);
+});

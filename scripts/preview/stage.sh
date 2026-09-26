@@ -57,6 +57,23 @@ cp "$VOICE_HOME/tiers.json" "$T/voice/"
 MIC="$MIC" node --input-type=module -e "import { listMics } from '$REPO/lib/voice/mics.ts';
 if (!listMics(false).devices.includes(process.env.MIC)) { console.error('mic not connected: ' + process.env.MIC + '; set PREVIEW_MIC'); process.exit(1); }"
 node -e 'console.log(JSON.stringify({ mic: process.argv[1] }))' "$MIC" > "$T/voice/settings.json"
+# The staged Pi must record the scripted speech, never the real microphone. Voice tries PvRecorder
+# before ffmpeg, and PvRecorder opens the mic whenever this terminal may use it. Here it can still
+# list devices, so the row names the mic, but it cannot open one, so capture falls back to the shim.
+cat > "$T/no-mic.cjs" <<'EOF'
+const Module = require("node:module");
+const load = Module._load;
+Module._load = function (request, ...rest) {
+	const loaded = load.call(this, request, ...rest);
+	if (request !== "@picovoice/pvrecorder-node") return loaded;
+	class StagedRecorder extends loaded.PvRecorder {
+		start() {
+			throw new Error("the preview stage records the scripted speech, not the microphone");
+		}
+	}
+	return { ...loaded, PvRecorder: StagedRecorder };
+};
+EOF
 
 # The "microphone": 0.6 s of silence, the speech, then a second of silence, streamed in real time.
 say -o "$T/speech.aiff" "$SPEECH"
@@ -74,7 +91,7 @@ for _ in $(seq 50); do [ -S "$T/voice/daemon.sock" ] && break; sleep 0.1; done
 EXTS=$(node -p "require('$REPO/package.json').pi.extensions.map((e) => '-e $REPO/' + e).join(' ')")
 # A private tmux server, so extended-keys can be on without touching the user's tmux.
 tmux -L $SESSION -f /dev/null new -d -s $SESSION -x $COLS -y $ROWS -c "$T/home/pi-extras" \
-	"tmux set -s extended-keys on; tmux set -g extended-keys-format csi-u; env TMPDIR=$T/tmp HOME=$T/home PATH=$T/bin:$PATH COLORTERM=truecolor npm_config_update_notifier=false PI_CODING_AGENT_DIR=$T/agent PI_VOICE_HOME=$T/voice $PI -ne $EXTS"
+	"tmux set -s extended-keys on; tmux set -g extended-keys-format csi-u; env TMPDIR=$T/tmp HOME=$T/home PATH=$T/bin:$PATH NODE_OPTIONS=--require=$T/no-mic.cjs COLORTERM=truecolor npm_config_update_notifier=false PI_CODING_AGENT_DIR=$T/agent PI_VOICE_HOME=$T/voice $PI -ne $EXTS"
 
 record() {
 	local n=0
