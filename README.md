@@ -189,10 +189,9 @@ Click a row to open a popup with the whole call: the full command, every line
 of output, and for a chained command each step. Esc, `q` or a click outside
 closes it. ctrl+o still expands every row in place.
 
-**Thinking.** A thinking block shows `Thinking...` while it streams and
-`Thought` once done, then only its newest three lines, with a line saying how
-many earlier ones are hidden. Click a block to read all of it, and again to go
-back; ctrl+t does the same for every block. `/tool-display thinking collapsed`
+**Thinking.** A thinking block of up to three lines shows whole; a longer one
+shows only its newest three, the first starting with `…`. Click a block to
+read all of it, and again to go back; ctrl+t does the same for every block. `/tool-display thinking collapsed`
 shows just the label, as Pi does, and `/tool-display thinking full` shows
 everything.
 

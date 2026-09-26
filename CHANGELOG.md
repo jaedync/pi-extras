@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.7.1 - 2026-09-26
+
+### Changed
+
+- A thinking block's tail is just its text: no `Thinking...` or `Thought`
+  label and no line counting what is hidden. Up to three lines show whole; a
+  longer block shows its newest three, the first starting with `…`. Click it,
+  or press ctrl+t, to read all of it.
+
 ## 0.7.0 - 2026-09-25
 
 ### Changed
