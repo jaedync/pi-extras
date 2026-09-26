@@ -38,10 +38,12 @@ A change that ships to `main` is done when:
 4. The release commit is tagged `vX.Y.Z` and pushed together with the tag.
 5. The running Pi has reloaded the pushed commit and the change was checked
    live.
-6. For a minor or major release, the preview image is re-rendered from the
-   release candidate (`npm run preview:render`) and reviewed: the title, voice
-   row, jobs and footer are legible in the 4:3 crop and at README width
-   (`npm run preview:check -- --open`), and nothing personal is on screen.
+6. For a minor or major release, and for any release that changes something
+   the preview shows (the transcript, jobs, phase row, voice row or footer), the
+   preview image is re-rendered from the release candidate (`npm run
+   preview:render`) and reviewed: the title, voice row, jobs and footer are
+   legible in the 4:3 crop and at README width (`npm run preview:check --
+   --open`), and nothing personal is on screen.
    Commit the WebP and `meta.json` with the release, and upload the rendered
    `.github/preview/pi-extras.png` (ignored by git) under the repository's
    Settings > General > Social preview. A contract test fails until the
