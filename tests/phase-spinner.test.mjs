@@ -24,6 +24,7 @@ function harness(t, events) {
 	const handlers = new Map();
 	phaseSpinner({ on: (name, handler) => handlers.set(name, handler), events });
 	const forwarded = [];
+	const indicators = [];
 	const base = {
 		render: width => ["─".repeat(width), "input"], getText: () => "", invalidate() {},
 		setWorkingStatusIndicator: indicator => forwarded.push(indicator),
@@ -34,6 +35,7 @@ function harness(t, events) {
 		ui: {
 			getEditorComponent: () => factory,
 			setEditorComponent: value => { factory = value; },
+			setWorkingIndicator: options => indicators.push(options),
 			theme: { fg: (_tone, text) => text },
 		},
 	};
@@ -54,7 +56,7 @@ function harness(t, events) {
 		if (indicator) editor.setWorkingStatusIndicator(indicator);
 	};
 	return {
-		emit, update, finish, show, forwarded,
+		emit, update, finish, show, forwarded, indicators,
 		render: (at = now) => { now = at; return editor.render(120); },
 		settle: () => { idle = true; emit("agent_settled"); },
 	};
@@ -89,6 +91,22 @@ test("real extension wires stream timing to the live and retained editor border"
 	h.emit("agent_start", {}, 20000);
 	assert.match(h.render()[0], /Time 00:00\.0/);
 	assert.doesNotMatch(h.render()[0], /TTFT|Decode|TPS|•/);
+});
+
+test("Pi's working loader is held still only once this row covers it, and moves again after the run", t => {
+	const h = harness(t);
+	h.emit("agent_start");
+	h.emit("turn_start");
+	assert.deepEqual(h.indicators, [], "nothing covers the loader yet");
+	h.render();
+	h.emit("before_provider_request", {}, 100);
+	assert.deepEqual(h.indicators, [{ frames: ["⠿"] }]);
+	h.update("text_delta", "answer", 900);
+	h.render();
+	h.emit("message_start", { message: { role: "assistant" } }, 1000);
+	assert.equal(h.indicators.length, 1, "held once per run");
+	h.settle();
+	assert.deepEqual(h.indicators, [{ frames: ["⠿"] }, undefined]);
 });
 
 test("reload clears retained timing and tool messages cannot finalize a model sample", t => {

@@ -22,7 +22,7 @@
  */
 import { statSync } from "node:fs";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { FRAME_MS } from "./band/clock.ts";
+import { everyFrame } from "./band/clock.ts";
 import { factsOf, jobBand } from "./shell-jobs-band.ts";
 import { commandPreview } from "./shell-jobs-core.ts";
 import { type Job, jobStatusText } from "./shell-jobs-process.ts";
@@ -203,7 +203,7 @@ export function createJobsWidget(): JobsWidget {
 	let onSelect: ((job: Job) => void) | null = null;
 	// The jobs behind the rows last painted, so a click's row maps to a job.
 	let lastRows: Job[] = [];
-	let timer: ReturnType<typeof setInterval> | null = null;
+	let stopFrames: (() => void) | null = null;
 	const activity = new Map<string, Activity>();
 
 	const snapshot = (): Job[] => (listJobs ? [...listJobs()] : []);
@@ -285,8 +285,8 @@ export function createJobsWidget(): JobsWidget {
 	};
 
 	const stopTimer = (): void => {
-		if (timer !== null) clearInterval(timer);
-		timer = null;
+		stopFrames?.();
+		stopFrames = null;
 	};
 
 	return {
@@ -325,8 +325,8 @@ export function createJobsWidget(): JobsWidget {
 			}
 			// Motion and sampling only while something is alive; pending rows are static.
 			if (rows.some((job) => job.state !== "done")) {
-				if (timer === null && tuiMode) {
-					const handle = setInterval(() => {
+				if (stopFrames === null && tuiMode) {
+					stopFrames = everyFrame(() => {
 						const now = Date.now();
 						// Bands move at the animation rate; the logs are sampled less often.
 						if (now - sampledAt >= WIDGET_REFRESH_MS) {
@@ -334,9 +334,7 @@ export function createJobsWidget(): JobsWidget {
 							sampledAt = now;
 						}
 						tui?.requestRender();
-					}, FRAME_MS);
-					handle.unref?.();
-					timer = handle;
+					});
 				}
 			} else {
 				stopTimer();

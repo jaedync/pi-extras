@@ -18,6 +18,7 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import { everyFrame } from "./clock.ts";
 import { closeOnOutsideClick } from "./modal.ts";
 import type { BandTheme } from "./palette.ts";
 import { onBackground, panelBackground } from "./surface.ts";
@@ -68,7 +69,7 @@ export class Popup implements Component, Focusable {
 	private maxScroll = 0;
 	private headTop = 0;
 	private headRows = 0;
-	private timer: ReturnType<typeof setInterval> | null = null;
+	private stopFrames: (() => void) | null = null;
 	private closed = false;
 	private readonly tui: PopupTui;
 	private readonly theme: PopupTheme;
@@ -93,18 +94,17 @@ export class Popup implements Component, Focusable {
 
 	private tick(): void {
 		if (this.closed) return;
-		if (this.source.live() && this.timer === null) {
-			this.timer = setInterval(() => {
+		if (this.source.live() && this.stopFrames === null) {
+			this.stopFrames = everyFrame(() => {
 				this.tui.requestRender();
 				if (!this.source.live()) this.stop();
 			}, POPUP_FRAME_MS);
-			this.timer.unref?.();
 		}
 	}
 
 	private stop(): void {
-		if (this.timer !== null) clearInterval(this.timer);
-		this.timer = null;
+		this.stopFrames?.();
+		this.stopFrames = null;
 		// One more frame so the band settles on its final color.
 		this.tui.requestRender();
 	}
@@ -146,8 +146,8 @@ export class Popup implements Component, Focusable {
 	dispose(): void {
 		this.closed = true;
 		this.undoOutside();
-		if (this.timer !== null) clearInterval(this.timer);
-		this.timer = null;
+		this.stopFrames?.();
+		this.stopFrames = null;
 	}
 
 	render(width: number): string[] {

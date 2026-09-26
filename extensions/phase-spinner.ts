@@ -18,6 +18,7 @@ import {
 import { emptyRunMetrics, updateRunMetrics } from "../lib/phase-metrics.ts";
 import { TopBorderLink } from "../lib/top-border.ts";
 import { EditorSlot, type StatusIndicator, type WrappedEditor } from "../lib/editor-wrapper.ts";
+import { everyFrame } from "../lib/band/clock.ts";
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 type VisualPhase = ActivePhase | "slow_api" | "stalled";
@@ -132,6 +133,8 @@ const FALLBACK_STATUS_STYLE: StatusStyle = {
 // Wide enough that Pi's status text never wraps or truncates while it is read.
 const INDICATOR_TEXT_WIDTH = 1_000;
 const DISPLAY_REFRESH_MS = 100;
+/** What Pi's working loader shows while held still; this row draws over it. */
+const STILL_LOADER_FRAME = "⠿";
 const DEBUG_HEARTBEAT_MS = 5_000;
 const DEBUG_LOG = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "phase-spinner-debug.jsonl");
 const DEBUG_ENABLED = process.env.PHASE_SPINNER_DEBUG === "1";
@@ -175,7 +178,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	let phaseStartedAt = performance.now();
 	let agentStartedAt = phaseStartedAt;
 	let renderedPhase: VisualPhase | undefined;
-	let timer: ReturnType<typeof setInterval> | undefined;
+	let stopFrames: (() => void) | undefined;
 	let activeTui: TUI | undefined;
 	let currentContext: ExtensionContext | undefined;
 	let lastDebugAt = performance.now();
@@ -189,6 +192,10 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	let statusEpisodes = new Map<string, number>();
 	let lastRequestAt = Number.NEGATIVE_INFINITY;
 	let topBorder: TopBorderLink | undefined;
+	/** This run's row has been drawn over Pi's working loader, so the loader is out of sight. */
+	let paintedOver = false;
+	/** Where Pi's loader was held still, to let it move again when the run ends. */
+	let stillLoader: ExtensionContext | undefined;
 
 	/** Voice records in the top row only while this is false. */
 	function announceBusy(): void {
@@ -196,13 +203,13 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	}
 
 	function ensureTimer(): void {
-		if (!timer) timer = setInterval(() => tick(), DISPLAY_REFRESH_MS);
+		stopFrames ??= everyFrame(() => tick(), DISPLAY_REFRESH_MS);
 	}
 
 	function releaseTimer(): void {
-		if (!timer || active || statusIndicator) return;
-		clearInterval(timer);
-		timer = undefined;
+		if (!stopFrames || active || statusIndicator) return;
+		stopFrames();
+		stopFrames = undefined;
 	}
 
 	function noteStatusIndicator(indicator: StatusIndicator | undefined): void {
@@ -302,6 +309,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 				debugState("visual_phase", currentContext, now, { previousVisualPhase });
 			}
 			if (now - lastDebugAt >= DEBUG_HEARTBEAT_MS) debugState("heartbeat", currentContext, now);
+			if (paintedOver && !stillLoader) holdLoaderStill(currentContext);
 		} else if (!statusIndicator) {
 			return;
 		}
@@ -322,6 +330,32 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			debugState(cause, ctx, now, { previousPhase, previousVisualPhase, ...details });
 		}
 		tick(now);
+	}
+
+	/**
+	 * Pi's working loader keeps its own timer, and every tick redraws the whole
+	 * screen, though this row covers it. With one frame it has no timer; the
+	 * row's own spinner is unchanged.
+	 */
+	function holdLoaderStill(ctx: ExtensionContext): void {
+		if (typeof ctx.ui.setWorkingIndicator !== "function") return;
+		try {
+			ctx.ui.setWorkingIndicator({ frames: [STILL_LOADER_FRAME] });
+			stillLoader = ctx;
+		} catch {
+			// The loader keeps moving; that only costs frames.
+		}
+	}
+
+	function releaseLoader(): void {
+		const ctx = stillLoader;
+		stillLoader = undefined;
+		paintedOver = false;
+		try {
+			ctx?.ui.setWorkingIndicator(undefined);
+		} catch {
+			// A session that has ended resets its loader itself.
+		}
 	}
 
 	function start(ctx: ExtensionContext): void {
@@ -353,6 +387,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		runningTools = new Map();
 		pendingToolName = undefined;
 		renderedPhase = undefined;
+		releaseLoader();
 		releaseTimer();
 		announceBusy();
 		activeTui?.requestRender();
@@ -397,7 +432,10 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const now = performance.now();
 		const status = statusView(now);
 		if (status) return [statusBorder(status, now, width, hiddenLineCount, paint), ...lines.slice(1)];
-		if (active && currentContext) return [activeBorder(now, width, hiddenLineCount, paint), ...lines.slice(1)];
+		if (active && currentContext) {
+			paintedOver = true;
+			return [activeBorder(now, width, hiddenLineCount, paint), ...lines.slice(1)];
+		}
 		// A recording borrows the idle row; the summary returns when it ends.
 		if (lastTotalElapsedMs === undefined || topBorder?.peerActive) return lines;
 		return [renderLastRunBorder(lastTotalElapsedMs, width, paint("accent"), hiddenLineCount, metrics), ...lines.slice(1)];

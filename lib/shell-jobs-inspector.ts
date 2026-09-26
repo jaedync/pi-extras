@@ -27,7 +27,7 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import { FRAME_MS } from "./band/clock.ts";
+import { everyFrame, FRAME_MS } from "./band/clock.ts";
 import { closeOnOutsideClick } from "./band/modal.ts";
 import { onBackground, panelBackground } from "./band/surface.ts";
 import { factsOf, jobBand } from "./shell-jobs-band.ts";
@@ -131,7 +131,7 @@ export class JobInspector implements Component, Focusable {
 	private follow = true;
 	private viewport = MIN_VIEWPORT_ROWS;
 	private maxScroll = 0;
-	private timer: ReturnType<typeof setInterval> | null = null;
+	private stopFrames: (() => void) | null = null;
 	private closed = false;
 	private disposed = false;
 	private readonly paint: Paint;
@@ -315,15 +315,13 @@ export class JobInspector implements Component, Focusable {
 	}
 
 	private startTimer(): void {
-		if (this.timer !== null) return;
-		const handle = setInterval(() => this.refresh(), INSPECTOR_REFRESH_MS);
-		handle.unref?.();
-		this.timer = handle;
+		if (this.stopFrames !== null) return;
+		this.stopFrames = everyFrame(() => this.refresh(), INSPECTOR_REFRESH_MS);
 	}
 
 	private stopTimer(): void {
-		if (this.timer !== null) clearInterval(this.timer);
-		this.timer = null;
+		this.stopFrames?.();
+		this.stopFrames = null;
 	}
 
 	private close(): void {
