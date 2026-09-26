@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, dirname } from "node:path";
-import { highlightCode, keyHint, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
+import { defineTool, highlightCode, keyHint, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { approver, computerUseMenu, type MenuDeps } from "./approval-ui.ts";
 import { ApprovalStore, approvalsPath, isBundleId, parseAppList } from "./approvals.ts";
@@ -16,6 +16,7 @@ import { guiSessionAvailable, spawnGuiJob, sweepStaleJobs } from "./gui-job.ts";
 import { painter } from "./paint.ts";
 import type { StatusItem } from "./panel.ts";
 import { renderCall, renderResult, type RowDetails } from "./render.ts";
+import { markRow } from "../tool-row.ts";
 import { SkySession } from "./session.ts";
 import { readAppsMode, writeAppsMode, type AppsMode } from "./settings.ts";
 
@@ -83,7 +84,8 @@ const hasCalls = (details: unknown): details is RowDetails => !!details && typeo
 
 export function registerComputerUse(pi: ExtensionAPI, deps: ComputerUseDeps): void {
 	let lastMode: AppsMode | undefined;
-	pi.registerTool({
+	// Tool Display draws these rows with its band; the renderers below are for when it is off.
+	pi.registerTool(markRow(defineTool({
 		name: "computer_use",
 		label: "Computer use",
 		description: DESCRIPTION,
@@ -114,7 +116,7 @@ export function registerComputerUse(pi: ExtensionAPI, deps: ComputerUseDeps): vo
 			if (hasCalls(result.details)) state.last = result.details;
 			return renderResult(result, { expanded: options.expanded, isError: context.isError, partial: options.isPartial, paint: painter(theme), hint: expandHint(theme), last: state.last });
 		},
-	});
+	}), "computer-use"));
 	pi.registerCommand("computer-use", {
 		description: "Computer use status, and the apps the agent may always use",
 		handler: async (_args, ctx) => {

@@ -154,6 +154,16 @@ are drawn. To show thinking as a live tail, it wraps how Pi's assistant message
 component lays out its content; what the model wrote and what is saved in the
 session are unchanged.
 
+To draw every other tool's rows, Tool Display replaces three lookups on Pi's
+tool row component (`getRenderShell`, `getCallRenderer` and
+`getResultRenderer`) for as long as Pi runs, in the terminal UI only. The
+tools themselves, what they are sent and what they return are unchanged; only
+the renderer that draws a row changes. Other extensions' renderers are still
+called, with their own state, to borrow the call line and result lines shown
+under the band. When one throws, the row shows the call's arguments and the
+result's text instead, stripped of terminal control sequences.
+`/tool-display others off` stops this for other extensions' tools.
+
 **Chained bash commands are rewritten before they run.** When a command is a
 list of steps joined by `&&`, `||`, `;` or newlines, and the shell is `bash`,
 `sh`, `zsh`, `dash`, `ksh` or `mksh`, Tool Display runs a rewritten

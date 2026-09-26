@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import extension from '../../lib/kagi/index.js';
+import { rowKind } from '../../lib/tool-row.js';
 vi.mock('../../lib/kagi/client.js', () => ({ KagiClient: class { search = vi.fn(async () => ({ text: 'fixture output', results: [{ rank: 1, title: 'T', url: 'https://e.test/', snippet: 's', excerptClipped: false }], cached: false, resultCount: 1, requestedCount: 1, retrievedCount: 1, omittedCount: 0, excerptClippedCount: 0, pagesFetched: 1, status: 'complete', truncated: false })) } }));
 afterEach(() => vi.unstubAllEnvs());
 describe('Pi registration', () => {
@@ -9,6 +10,8 @@ describe('Pi registration', () => {
     extension(pi as never);
     const tool = pi.registerTool.mock.calls[0][0];
     expect(tool.name).toBe('kagi_search');
+    // Tool Display draws its rows with a layout of its own.
+    expect(rowKind(tool)).toBe('kagi');
     // Sequential would make Pi run every tool call in the same batch one at a time.
     expect(tool.executionMode).toBeUndefined();
     expect(await tool.execute('fixture', { query: 'test' })).toEqual({

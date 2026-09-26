@@ -27,6 +27,7 @@ import {
 	tui,
 	widget,
 } from "./support/shell-jobs-harness.mts";
+import { rowKind } from "../lib/tool-row.ts";
 
 const { DETAILS_BUDGET_BYTES, LOG_READ_BYTES, MAX_LIVE, PAYLOAD_CAP_BYTES, TEXT_BUDGET_BYTES, jsonEscapedBytes } = core;
 const { WIDGET_REFRESH_MS } = widget;
@@ -50,6 +51,7 @@ describe("extension integration", () => {
 		await fire(app.handlers, "session_start", app.ctx);
 		assert.strictEqual(app.tools.has("shell_job_start"), true);
 		assert.strictEqual(app.tools.has("shell_job"), true);
+		for (const tool of app.tools.values()) assert.strictEqual(rowKind(tool), "band", "its rows draw their own band, so Tool Display leaves them alone");
 
 		const blocked = createFakePi(["shell_job_start"]);
 		shellJobs(blocked.pi as any);

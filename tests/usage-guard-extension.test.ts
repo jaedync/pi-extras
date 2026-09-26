@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLimitStore, type LimitStore } from "../lib/limit-store.ts";
 import type { LimitEntry } from "../lib/status-plus-logic.ts";
+import { rowKind } from "../lib/tool-row.ts";
 import usageGuard, { GUARD_CUSTOM_TYPE, loadGuardConfig, parseBudgetArgs, saveGuardConfig } from "../extensions/usage-guard.ts";
 
 const NOW = 1_800_000_000_000;
@@ -62,6 +63,12 @@ function setup(model = { provider: "anthropic", id: "claude-sonnet-5" }, idle = 
 	const ctx = fakeCtx(pi, model, idle);
 	return { pi, store, ctx, configFile };
 }
+
+test("the usage tool is marked for Tool Display, which draws its rows with a layout of its own", () => {
+	const { pi } = setup();
+	assert.equal(rowKind(pi.tool), "usage");
+	assert.equal(pi.tool!.name, "usage");
+});
 
 test("a crossing at turn end warns once, persists the key, and stays quiet afterwards", async () => {
 	const { pi, store, ctx } = setup();

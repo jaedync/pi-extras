@@ -1,8 +1,8 @@
 /**
- * Tool Display: a header band for each of Pi's built-in tool rows, a popup
- * with everything a call did, and a step-by-step view of chained bash
- * commands, and thinking blocks as a live tail of their newest lines.
- * /tool-display switches it, the chain view, motion and the thinking style.
+ * Tool Display: a header band for every tool row, a popup with everything a
+ * call did, a step-by-step view of chained bash commands, and thinking
+ * blocks as a live tail of their newest lines. /tool-display switches it,
+ * other tools' rows, the chain view, motion and the thinking style.
  *
  * Pi draws a tool row with the renderers on the tool's definition, so this
  * re-registers each built-in tool under its own name: the definition Pi
@@ -15,6 +15,10 @@
  * load are all switched on, which would enable grep, find and ls in sessions
  * that had them off; replacing a tool that already exists keeps the active set
  * as it was. A tool another extension already replaced is left alone.
+ *
+ * Every other tool's rows get the band through Pi's tool row itself (see
+ * adopt.ts): pi-extras's own tools with layouts written for them, other
+ * extensions' tools with their own words in it (see foreign.ts).
  */
 import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -31,11 +35,18 @@ import { chainOperations, withChains, type ActiveRuns } from "../chain/exec.ts";
 import { CHAIN_ENTRY, CHAIN_EVENT, ChainRun, type SavedChain } from "../chain/run.ts";
 import { splitChain } from "../chain/split.ts";
 import { TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../tool-count.ts";
+import { markRow, rowKind, type RowKind } from "../tool-row.ts";
+import { canAdopt, installAdoption, type RowRenderers } from "./adopt.ts";
+import { computerUseSpec } from "./computer.ts";
 import { editRenderers, readRenderers, writeRenderers } from "./files.ts";
+import { foreignRenderers, type ForeignTool } from "./foreign.ts";
 import type { Kit } from "./kit.ts";
 import { searchRenderers } from "./search.ts";
 import { DEFAULT_SETTINGS, readSettings, writeSettings, type DisplaySettings } from "./settings.ts";
 import { bashRenderers } from "./shell.ts";
+import { toolRenderers, type ToolSpec } from "./tool.ts";
+import { usageSpec } from "./usage.ts";
+import { webSearchSpec } from "./web.ts";
 import { installThinkingTail, THINKING_MODES, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
 
 export const TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
@@ -76,14 +87,14 @@ export interface ToolDisplayDeps {
 
 /** The built-in definition with only its presentation replaced. */
 export function withDisplay(definition: AnyTool, renderers: Renderers): AnyTool {
-	return { ...definition, renderShell: "self", renderCall: renderers.renderCall, renderResult: renderers.renderResult };
+	return markRow({ ...definition, renderShell: "self", renderCall: renderers.renderCall, renderResult: renderers.renderResult }, "band");
 }
 
-const USAGE = "/tool-display on|off · chains on|off · motion full|reduced · thinking tail|collapsed|full · count calls|steps";
+const USAGE = "/tool-display on|off · others on|off · chains on|off · motion full|reduced · thinking tail|collapsed|full · count calls|steps";
 
 function describeSettings(settings: DisplaySettings): string {
-	if (!settings.enabled) return "Tool Display is off; Pi draws its own tool rows.";
-	return `Tool Display is on · chain steps ${settings.chains ? "on" : "off"} · motion ${settings.motion} · thinking ${settings.thinking}.`;
+	if (!settings.enabled) return "Tool Display is off; every tool draws its own rows.";
+	return `Tool Display is on · other tools' rows ${settings.others ? "on" : "off"} · chain steps ${settings.chains ? "on" : "off"} · motion ${settings.motion} · thinking ${settings.thinking}.`;
 }
 
 /** `count calls` or `count steps`, for the Status Plus tool figure. */
@@ -97,12 +108,20 @@ export function applyArgs(settings: DisplaySettings, args: string): DisplaySetti
 	const words = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
 	const [first, second] = words;
 	if (words.length === 1 && (first === "on" || first === "off")) return { ...settings, enabled: first === "on" };
+	if (words.length === 2 && first === "others" && (second === "on" || second === "off")) return { ...settings, others: second === "on" };
 	if (words.length === 2 && first === "chains" && (second === "on" || second === "off")) return { ...settings, chains: second === "on" };
 	if (words.length === 2 && first === "motion" && (second === "full" || second === "reduced")) return { ...settings, motion: second };
 	const thinking = THINKING_MODES.find((mode) => mode === second);
 	if (words.length === 2 && first === "thinking" && thinking) return { ...settings, thinking };
 	return undefined;
 }
+
+/** Layouts for pi-extras's own tools, by the mark on their definitions. */
+const OWN_SPECS: Partial<Record<RowKind, (name: string) => ToolSpec>> = {
+	kagi: webSearchSpec,
+	"computer-use": () => computerUseSpec,
+	usage: () => usageSpec,
+};
 
 export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): void {
 	let settings: DisplaySettings = DEFAULT_SETTINGS;
@@ -111,7 +130,10 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	let popupOpen = false;
 	let session: SessionTools | undefined;
 	let undoThinking: (() => void) | undefined;
+	let undoAdoption: (() => void) | undefined;
+	let adopting = false;
 	const owned = new Set<string>();
+	const adopted = new WeakMap<object, RowRenderers>();
 	const clock = new AnimationClock();
 	const active: ActiveRuns = new Map();
 	const live = new Map<string, ChainRun>();
@@ -190,6 +212,21 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		}
 	};
 
+	/** Band renderers for another tool's rows; undefined leaves them to the tool. */
+	const renderersFor = (definition: object): RowRenderers | undefined => {
+		const tool = definition as ForeignTool;
+		const kind = rowKind(definition);
+		const own = kind ? OWN_SPECS[kind] : undefined;
+		if (!settings.enabled || kind === "band" || typeof tool.name !== "string") return undefined;
+		if (!own && !settings.others) return undefined;
+		let renderers = adopted.get(definition);
+		if (!renderers) {
+			renderers = (own ? toolRenderers(kit, own(tool.name)) : foreignRenderers(kit, tool)) as unknown as RowRenderers;
+			adopted.set(definition, renderers);
+		}
+		return renderers;
+	};
+
 	pi.on("session_start", (_event, ctx) => {
 		// Rows from the previous session are gone, so nothing of theirs needs to animate.
 		clock.stop();
@@ -217,6 +254,9 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			hiddenAtStart: () => hiddenAtStart,
 			theme: () => host.theme,
 		});
+		undoAdoption?.();
+		undoAdoption = installAdoption({ renderersFor });
+		adopting = canAdopt();
 		install();
 	});
 
@@ -227,6 +267,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		clock.stop();
 		undoThinking?.();
 		undoThinking = undefined;
+		undoAdoption?.();
+		undoAdoption = undefined;
 	});
 
 	pi.registerCommand("tool-display", {
@@ -234,7 +276,9 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		getArgumentCompletions: (prefix) => {
 			const options = [
 				["on", "Draw tool rows with header bands"],
-				["off", "Go back to Pi's own tool rows"],
+				["off", "Go back to each tool's own rows"],
+				["others on", "Draw other extensions' tool rows with bands too"],
+				["others off", "Leave other extensions' tool rows to them"],
 				["chains on", "Break chained bash commands into steps"],
 				["chains off", "Run chained bash commands as written"],
 				["motion full", "Animated progress and finish"],
@@ -276,7 +320,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			try { deps.settings.write(settings); } catch { saved = false; }
 			if (toggled) install();
 			const note = saved ? "" : " Could not save the setting, so it applies to this session only.";
-			const reach = !toggled && next.enabled && owned.size === 0 ? " No tool rows are drawn by Tool Display in this session." : "";
+			const reach = !toggled && next.enabled && owned.size === 0 && !adopting ? " No tool rows are drawn by Tool Display in this session." : "";
 			ctx.ui.notify(`${describeSettings(settings)}${reach}${note}`, saved && !reach ? "info" : "warning");
 		},
 	});

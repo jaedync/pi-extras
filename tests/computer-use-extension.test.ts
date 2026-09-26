@@ -5,6 +5,7 @@ import type { CodeResult, RunOptions } from "../lib/computer-use/executor.ts";
 import { computerUseEnabled, registerComputerUse, type ComputerUseDeps } from "../lib/computer-use/index.ts";
 import type { ApprovalRequest } from "../lib/computer-use/session.ts";
 import type { AppsMode } from "../lib/computer-use/settings.ts";
+import { rowKind } from "../lib/tool-row.ts";
 
 const KEY = { down: "\x1b[B", right: "\x1b[C", enter: "\r", esc: "\x1b", space: " " };
 const theme = { fg: (_key: string, text: string) => text, bold: (text: string) => text };
@@ -94,6 +95,7 @@ test("registers one computer_use tool with its own rendering, a menu command, an
 	assert.match(tools[0].description, /sky\.get_app_state/);
 	assert.equal(typeof tools[0].renderCall, "function");
 	assert.equal(typeof tools[0].renderResult, "function");
+	assert.equal(rowKind(tools[0]), "computer-use", "Tool Display draws its rows with a layout of its own");
 	assert.ok(commands.has("computer-use"));
 	await handlers.get("session_shutdown")!();
 	assert.equal(closed(), 1);

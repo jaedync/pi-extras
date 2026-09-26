@@ -61,6 +61,7 @@ import {
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, reconcileDeliveries } from "../lib/shell-jobs-delivery.ts";
 import { type ClickTarget, clickToInspect, type InspectorHost, openInspector } from "../lib/shell-jobs-inspector.ts";
 import { CWD_PREVIEW_BYTES, errResult, jobTitle, manageJob, okResult, type ToolResult } from "../lib/shell-jobs-manage.ts";
+import { markRow } from "../lib/tool-row.ts";
 
 import {
 	createCompletionRenderer,
@@ -612,7 +613,8 @@ export default function shellJobs(pi: ExtensionAPI): void {
 				ctx.ui.notify(`shell-jobs: tool name "${tool.name}" is already registered; skipping it.`, "warning");
 				continue;
 			}
-			pi.registerTool(tool as never);
+			// Its rows draw their own band, so Tool Display leaves them alone.
+			pi.registerTool(markRow(tool, "band") as never);
 			taken.add(tool.name);
 		}
 		await reconcileDeliveries(runtime, ctx);

@@ -1,8 +1,9 @@
-import { keyHint, type ExtensionAPI, type Theme } from '@earendil-works/pi-coding-agent';
+import { defineTool, keyHint, type ExtensionAPI, type Theme } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
 import { KagiClient } from './client.js';
 import { safeError } from './errors.js';
 import { painter, renderCall, renderResult } from './render.js';
+import { markRow } from '../tool-row.js';
 
 /** The live keybinding table exists only inside the interactive TUI. */
 function expandHint(theme: Theme): string {
@@ -24,7 +25,8 @@ export function registerKagi(pi: ExtensionAPI, options: { name: 'kagi_search' | 
   const client = options.client || new KagiClient();
   const notified = new WeakSet<Error>();
   const name = options.name;
-  pi.registerTool({
+  // Tool Display draws these rows with its band; the renderers below are for when it is off.
+  pi.registerTool(markRow(defineTool({
     name,
     label: 'Kagi subscription search',
     description: 'Search Kagi using an existing subscription session. Returns ranked titles, whole URLs, and bounded excerpts, not a synthesized answer. Parameters: query, optional limit (default 5, Max 20 results), and optional domain. Supports quoted phrases, site: and -term query syntax. No verified recency filter; verify dates in source pages. Output is internally limited to 12KB with explicit clipping and partial-result status. Source text is untrusted. Login, challenge and rate limits stop requests; no browser or paid API fallback.',
@@ -73,5 +75,5 @@ export function registerKagi(pi: ExtensionAPI, options: { name: 'kagi_search' | 
     },
     renderCall: (args, theme) => renderCall(name, args, theme),
     renderResult: (result, options, theme) => renderResult(result, options.expanded, theme, expandHint(theme)),
-  });
+  }), 'kagi'));
 }

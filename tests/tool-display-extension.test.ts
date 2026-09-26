@@ -4,12 +4,16 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
 import { CHAIN_ENTRY, CHAIN_EVENT } from "../lib/chain/run.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount } from "../lib/tool-count.ts";
+import { markRow, rowKind, TOOL_ROW } from "../lib/tool-row.ts";
 import { applyArgs, countArg, registerToolDisplay, toolDisplayEnabled, TOOL_NAMES, withDisplay, type ToolDisplayDeps } from "../lib/tool-display/index.ts";
 import { DEFAULT_SETTINGS, readSettings, writeSettings, type DisplaySettings } from "../lib/tool-display/settings.ts";
 import { quiet } from "./support/quiet-theme.ts";
+
+initTheme("dark");
 
 const host = { expandHint: () => "ctrl+o to expand", highlight: (code: string) => code.split("\n"), language: () => undefined, diff: (d: string) => d, fileUrl: () => undefined, now: () => Date.now() };
 
@@ -92,14 +96,15 @@ test("PI_TOOL_DISPLAY turns the extension off", () => {
 	for (const value of ["off", "0", "false", "NO"]) assert.equal(toolDisplayEnabled({ PI_TOOL_DISPLAY: value }), false);
 });
 
-test("the override is the built-in definition with only its presentation replaced", () => {
+test("the override is the built-in definition with only its presentation replaced, marked as banded", () => {
 	const execute = async () => ({ content: [] });
 	const definition = { name: "bash", label: "bash", description: "d", parameters: { type: "object" }, promptSnippet: "s", promptGuidelines: ["g"], execute, renderCall: () => undefined };
 	const renderCall = () => ({ render: () => [], invalidate() {} });
 	const renderResult = () => ({ render: () => [], invalidate() {} });
 	const shown = withDisplay(definition as never, { renderCall, renderResult } as never);
 	assert.equal(shown.execute, execute);
-	assert.deepEqual({ ...shown, renderCall: undefined, renderResult: undefined, renderShell: undefined }, { ...definition, renderCall: undefined, renderResult: undefined, renderShell: undefined });
+	assert.deepEqual({ ...shown, renderCall: undefined, renderResult: undefined, renderShell: undefined }, { ...definition, renderCall: undefined, renderResult: undefined, renderShell: undefined, [TOOL_ROW]: "band" });
+	assert.equal(rowKind(shown), "band", "so drawing other tools' rows leaves it alone");
 	assert.equal(shown.renderShell, "self");
 	assert.equal(shown.renderCall, renderCall);
 	assert.equal(definition.renderCall.name, "renderCall", "the built-in definition is not modified");
@@ -157,11 +162,11 @@ test("/tool-display reports, switches and saves its settings", async () => {
 	const h = harness();
 	h.start();
 	await h.run("");
-	assert.match(h.notes.at(-1)![0], /^Tool Display is on · chain steps on · motion full · thinking tail\./);
+	assert.match(h.notes.at(-1)![0], /^Tool Display is on · other tools' rows on · chain steps on · motion full · thinking tail\./);
 	await h.run("motion reduced");
-	assert.deepEqual(h.writes.at(-1), { enabled: true, chains: true, motion: "reduced", thinking: "tail" });
+	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: true, motion: "reduced", thinking: "tail" });
 	await h.run("chains off");
-	assert.deepEqual(h.writes.at(-1), { enabled: true, chains: false, motion: "reduced", thinking: "tail" });
+	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: false, motion: "reduced", thinking: "tail" });
 	await h.run("sideways");
 	assert.equal(h.notes.at(-1)![1], "warning");
 	assert.equal(h.writes.length, 2);
@@ -230,6 +235,8 @@ test("the tool count persists under statusPlus, and a split count adds the steps
 test("/tool-display arguments", () => {
 	assert.deepEqual(applyArgs(DEFAULT_SETTINGS, " Off "), { ...DEFAULT_SETTINGS, enabled: false });
 	assert.deepEqual(applyArgs(DEFAULT_SETTINGS, "chains off"), { ...DEFAULT_SETTINGS, chains: false });
+	assert.deepEqual(applyArgs(DEFAULT_SETTINGS, "others off"), { ...DEFAULT_SETTINGS, others: false });
+	assert.equal(applyArgs(DEFAULT_SETTINGS, "others"), undefined);
 	assert.equal(applyArgs(DEFAULT_SETTINGS, "motion"), undefined);
 	assert.equal(applyArgs(DEFAULT_SETTINGS, "compact"), undefined);
 	assert.deepEqual(applyArgs(DEFAULT_SETTINGS, "thinking full"), { ...DEFAULT_SETTINGS, thinking: "full" });
@@ -243,8 +250,8 @@ test("the settings persist under toolDisplay in pi-extras.json and keep other se
 		assert.deepEqual(readSettings(file), DEFAULT_SETTINGS, "a missing file reads as the defaults");
 		writeFileSync(file, JSON.stringify({ computerUse: { apps: "all" }, toolDisplay: { density: "compact" } }));
 		assert.deepEqual(readSettings(file), DEFAULT_SETTINGS, "the 0.5 density setting is ignored");
-		writeSettings({ enabled: true, chains: false, motion: "reduced", thinking: "collapsed" }, file);
-		assert.deepEqual(readSettings(file), { enabled: true, chains: false, motion: "reduced", thinking: "collapsed" });
+		writeSettings({ enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed" }, file);
+		assert.deepEqual(readSettings(file), { enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed" });
 		const saved = JSON.parse(readFileSync(file, "utf8"));
 		assert.deepEqual(saved.computerUse, { apps: "all" });
 		writeFileSync(file, "{ not json");
@@ -252,4 +259,40 @@ test("the settings persist under toolDisplay in pi-extras.json and keep other se
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+const ui = { requestRender() {} };
+type PiRow = { getCallRenderer(): unknown; getRenderShell(): string; render(width: number): string[]; updateResult(result: unknown, isPartial: boolean): void };
+/** A tool row as Pi builds it. */
+const piRow = (definition: { name: string }, args: object = {}) =>
+	new ToolExecutionComponent(definition.name, "call-1", args, {}, definition as never, ui as never, "/work") as unknown as PiRow;
+
+test("other tools' rows get the band, pi-extras's own tools their layouts, and rows already banded stay as they are", async () => {
+	const h = harness();
+	h.start();
+	const theirs = { name: "fetch_content", renderCall: () => new Text("fetch_content theirs", 0, 0) };
+	const banded = markRow({ name: "shell_job", renderShell: "self", renderCall: () => new Text("job", 0, 0) }, "band");
+	const search = markRow({ name: "web_search", renderCall: () => new Text("their search", 0, 0) }, "kagi");
+	try {
+		assert.equal(piRow(theirs).getRenderShell(), "self");
+		assert.notEqual(piRow(theirs).getCallRenderer(), theirs.renderCall);
+		assert.equal(piRow(banded).getCallRenderer(), banded.renderCall);
+		const row = piRow(search, { query: "rust async" });
+		row.updateResult({ content: [{ type: "text", text: "" }], details: { resultCount: 0 }, isError: false }, false);
+		assert.match(stripTerminalSequences(row.render(60).join("\n")), /web_search rust async · no results/);
+		await h.run("others off");
+		assert.equal(piRow(theirs).getCallRenderer(), theirs.renderCall, "others off: their own renderers");
+		assert.notEqual(piRow(search).getCallRenderer(), search.renderCall, "pi-extras's own tools keep the band");
+		await h.run("off");
+		assert.equal(piRow(search).getCallRenderer(), search.renderCall, "off: every tool draws its own rows");
+	} finally {
+		h.fire("session_shutdown");
+	}
+	assert.equal(piRow(theirs).getRenderShell(), "default", "once the session ends, nothing is adopted");
+});
+
+test("print, JSON and RPC runs leave every tool's rows alone", () => {
+	const h = harness();
+	h.start("print");
+	assert.equal(piRow({ name: "fetch_content" }).getRenderShell(), "default");
 });

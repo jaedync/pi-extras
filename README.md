@@ -31,7 +31,7 @@ can still conflict.
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
-| Tool Display | Pi's built-in tool rows as colored header bands with live progress, a popup with the whole call, chained bash commands broken into steps, and thinking as a live tail of its newest lines |
+| Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; thinking as a live tail of its newest lines |
 | Release Notes | What changed in pi-extras, shown once in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
 
@@ -75,8 +75,8 @@ the package. Removing it does not remove your credentials or change other packag
 - `PI_COMPUTER_USE=on`: enable computer use on macOS. Off by default. See below.
 - `PI_TOOL_DISPLAY=off`: leave Pi's own tool rows in place. `/tool-display`
   writes its switches under `toolDisplay` in `pi-extras.json`: `enabled`,
-  `chains` (default `true`), `motion` (`full` or `reduced`) and `thinking`
-  (`tail`, `collapsed` or `full`; default `tail`).
+  `others` (default `true`), `chains` (default `true`), `motion` (`full` or
+  `reduced`) and `thinking` (`tail`, `collapsed` or `full`; default `tail`).
 - `statusPlus.toolCount` in `pi-extras.json`: `calls` (the default) or `steps`,
   switched by clicking the footer's tool count or with `/tool-display count`.
 - `releaseNotes.seen` in `pi-extras.json`: the last pi-extras version whose
@@ -164,9 +164,9 @@ half second of each recording is lost while that job starts.
 
 ## Tool Display
 
-Tool Display redraws the rows for Pi's built-in tools in the terminal. Pi
-builds the tools as usual, and the model sees the same tools, descriptions and
-results; only the rows change.
+Tool Display redraws tool rows in the terminal: Pi's built-in tools, and
+every other tool too (see below). The tools are built as usual, and the model
+sees the same tools, descriptions and results; only the rows change.
 
 Each call is one header band: the tool and its target on the left, the time on
 the right. The band's color says how it went (green done, red failed, amber
@@ -189,6 +189,28 @@ Click a row to open a popup with the whole call: the full command, every line
 of output, and for a chained command each step. Esc, `q` or a click outside
 closes it. ctrl+o still expands every row in place.
 
+**Other tools.** Every other tool's rows get the same band, with the time and
+any failure in the right rail. pi-extras's own tools have layouts of their own:
+
+- **web_search, kagi_search**: the query and how many results came back, with
+  the first three under it.
+- **computer_use**: the apps the script used and how many calls and
+  screenshots it took, with the last calls under it. A failed call says
+  `failed` or `not allowed` in words.
+- **usage**: each window's use in the band itself, amber from 80% and red when
+  a limit is spent.
+
+Other extensions' tools, such as MCP, subagent and web access tools, keep their
+own words: the band shows the line the tool would draw for its call, and under
+it sit the first four lines of the tool's own result. A tool with nothing of
+its own to say shows its most telling argument and the result's text. The
+popup lists every argument and the whole result. Rows that already draw a band
+of their own, such as Shell Jobs, are left as they are.
+
+Drawing other tools' rows relies on how Pi builds a tool row, which is not part
+of Pi's extension API. If a Pi update changes it, those rows are drawn by
+their own tools again; Pi's built-in tools keep the band either way.
+
 **Thinking.** A thinking block of up to three lines shows whole; a longer one
 shows only its newest three, the first starting with `…`. Click a block to
 read all of it, and again to go back; ctrl+t does the same for every block. `/tool-display thinking collapsed`
@@ -207,7 +229,9 @@ Tool Display can't split safely (heredocs, `if` and `for` blocks, background
 
 `/tool-display` switches it:
 
-- `/tool-display on|off`: Tool Display's rows, or Pi's own.
+- `/tool-display on|off`: Tool Display's rows, or each tool's own.
+- `/tool-display others on|off`: draw other extensions' tool rows with the
+  band, or leave them to their own renderers.
 - `/tool-display chains on|off`: break chained commands into steps, or run
   them as written.
 - `/tool-display motion full|reduced`: the reduced setting drops the sweep and
@@ -217,8 +241,8 @@ Tool Display can't split safely (heredocs, `if` and `for` blocks, background
 
 The choices are saved in `pi-extras.json`. Rows change only in the terminal UI;
 print, JSON and RPC runs keep Pi's tools untouched. If another extension
-already replaces one of these tools, Tool Display leaves that tool alone. Other
-extensions' tools, such as MCP or subagent tools, draw their own rows.
+already replaces one of Pi's built-in tools, Tool Display leaves that tool's
+definition alone and draws its rows as it does any other extension's.
 
 **Tool count.** Status Plus counts one tool per call, as Pi does. Click the
 count in the footer to count each step of a chained command instead; the

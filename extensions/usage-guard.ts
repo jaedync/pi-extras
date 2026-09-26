@@ -11,10 +11,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { sharedLimitStore, type LimitStore } from "../lib/limit-store.ts";
 import { operationalError } from "../lib/operational-log.ts";
+import { markRow } from "../lib/tool-row.ts";
 import {
 	hotProviders,
 	normalizeGuardConfig,
@@ -146,7 +147,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		}
 	}
 
-	pi.registerTool({
+	// Tool Display draws these rows with its band.
+	pi.registerTool(markRow(defineTool({
 		name: "usage",
 		label: "Usage limits",
 		description:
@@ -181,7 +183,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			const report = usageReport(store.entries(), model, config, budget, now(), params.all === true);
 			return { content: [{ type: "text", text: JSON.stringify(report, null, 1) }], details: report };
 		},
-	});
+	}), "usage"));
 
 	pi.registerCommand("usage", {
 		description: "Inject usage limits into context; `budget <window> <pct>|clear`; `warnings on|off`",
