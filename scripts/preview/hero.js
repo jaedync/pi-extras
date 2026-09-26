@@ -59,8 +59,7 @@
 			background: `linear-gradient(to bottom, #0b0c0f 0%, rgba(11,12,15,.94) ${P.bandSolid}, rgba(11,12,15,0) 100%)` }, stage);
 		const size = +P.size;
 		const block = div({ position: "absolute", left: `${P.tx}px`, top: `${P.ty}px` }, stage);
-		div({ fontSize: `${size}px`, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.03em", color: "#ece8df" }, block,
-			`pi<span style="color:#8fb4c8">-extras</span>`);
+		div({ fontSize: `${size}px`, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.03em", color: "#ece8df" }, block, "pi-extras");
 		div({ marginTop: `${Math.round(size * 0.36)}px`, fontSize: `${Math.round(size * 0.42)}px`, color: "#8a8882", letterSpacing: "-0.01em" }, block,
 			"status, limits, background jobs and voice for Pi");
 		grain(stage, 0.06);
