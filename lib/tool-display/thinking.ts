@@ -14,7 +14,7 @@
  */
 import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { Markdown, truncateToWidth } from "@earendil-works/pi-tui";
 
 export type ThinkingMode = "tail" | "collapsed" | "full";
 export const THINKING_MODES: readonly ThinkingMode[] = ["tail", "collapsed", "full"];
@@ -72,11 +72,69 @@ export function viewFor(mode: ThinkingMode, toggledAll: boolean, toggledBlock: b
 	return toggledAll !== toggledBlock ? other : mode;
 }
 
-/** The newest `max` lines of a rendered block, with the count of those above them. */
+/** Below this width a cut tail's lines could differ from the whole's, so the whole is wrapped. */
+const CUT_MIN_WIDTH = 20;
+/** The shortest end of a block worth wrapping alone; it grows until it fills the tail. */
+const CUT_START_CHARS = 1_500;
+/** Markdown that reaches across blank lines (link definitions, HTML blocks), which a cut could change. */
+const CUT_UNSAFE = /^ {0,3}\[[^\]]+\]:|<!--|<(?:pre|script|style|textarea)\b/im;
+/** A paragraph or heading, not a list item, quote, table, HTML or indented code. */
+const CUT_LINE = /^(?![-*+>|<\d\s])/;
+
+/**
+ * Offsets where a paragraph or heading starts after a blank line, outside any
+ * code fence. Markdown from there on draws exactly as it does within the whole.
+ */
+export function paragraphStarts(text: string): number[] {
+	const starts: number[] = [];
+	let fence: { char: string; size: number } | undefined;
+	let blank = false;
+	let offset = 0;
+	for (const line of text.split("\n")) {
+		const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+		if (fence) {
+			if (marker && marker[0] === fence.char && marker.length >= fence.size && line.trim() === marker) fence = undefined;
+		} else if (marker) {
+			fence = { char: marker[0]!, size: marker.length };
+		} else if (blank && offset > 0 && CUT_LINE.test(line)) {
+			starts.push(offset);
+		}
+		blank = line.trim() === "";
+		offset += line.length + 1;
+	}
+	return starts;
+}
+
+/**
+ * The newest lines of a long Markdown block, wrapped from a late paragraph
+ * rather than from the top, so a block that is still streaming costs the same
+ * to draw however long it has grown. Undefined when that isn't safe or the
+ * block is short; the caller then wraps the whole.
+ */
+export function cutTail(full: Component, width: number, max: number): string[] | undefined {
+	if (!(full instanceof Markdown) || width < CUT_MIN_WIDTH) return undefined;
+	const block = full as unknown as { text: string; paddingX: number; paddingY: number; theme: never; defaultTextStyle: never; options: never };
+	const text = block.text;
+	if (typeof text !== "string" || block.paddingY !== 0 || text.length < CUT_START_CHARS * 2 || CUT_UNSAFE.test(text)) return undefined;
+	const starts = paragraphStarts(text);
+	for (let want = CUT_START_CHARS; want < text.length; want *= 4) {
+		const cut = starts.findLast((start) => start <= text.length - want);
+		if (cut === undefined) return undefined;
+		const part = new Markdown(text.slice(cut), block.paddingX, 0, block.theme, block.defaultTextStyle, block.options);
+		const shown = tailOf(part.render(width), max);
+		// More lines than the tail keeps, so the whole is longer than the tail too.
+		if (shown.skipped > 0) return shown.lines;
+	}
+	return undefined;
+}
+
+/** The newest `max` lines of a rendered block, less any blank ones it would open with, and the count of those above them. */
 export function tailOf(lines: readonly string[], max: number): { lines: string[]; skipped: number } {
 	let end = lines.length;
 	while (end > 0 && lines[end - 1]!.trim() === "") end--;
-	const start = Math.max(0, end - max);
+	let start = Math.max(0, end - max);
+	// A tail that opens on the gap between paragraphs starts at the next one instead.
+	while (start < end - 1 && lines[start]!.trim() === "") start++;
 	return { lines: lines.slice(start, end), skipped: start };
 }
 
@@ -91,19 +149,34 @@ export interface ViewOptions {
 	readonly toggle: () => void;
 }
 
-/** One thinking block, drawn in the style `view` names on every frame. */
+/**
+ * One thinking block, drawn in the style `view` names on every frame. Pi
+ * rebuilds the view whenever the message changes, so its drawing depends only
+ * on the width, style and theme and is kept until one of them changes: Pi
+ * redraws the whole transcript every frame, and the tail's narrower render
+ * would otherwise throw away Pi's own cached wrapping each time.
+ */
 export class ThinkingView implements Component {
 	private readonly options: ViewOptions;
+	private cache: { key: string; theme: ThinkingTheme | undefined; lines: string[] } | undefined;
 
 	constructor(options: ViewOptions) {
 		this.options = options;
 	}
 
 	render(width: number): string[] {
-		const { full, pad, host } = this.options;
 		const view = this.options.view();
-		if (view === "full") return full.render(width);
-		const theme = host.theme();
+		if (view === "full") return this.options.full.render(width);
+		const theme = this.options.host.theme();
+		const key = `${width}|${view}|${view === "collapsed" ? this.options.label() : ""}`;
+		if (this.cache?.key === key && this.cache.theme === theme) return this.cache.lines;
+		const lines = this.draw(width, view, theme);
+		this.cache = { key, theme, lines };
+		return lines;
+	}
+
+	private draw(width: number, view: Exclude<ThinkingMode, "full">, theme: ThinkingTheme | undefined): string[] {
+		const { full, pad } = this.options;
 		const paint = (key: string, text: string) => {
 			try { return theme ? theme.fg(key, text) : text; } catch { return text; }
 		};
@@ -112,10 +185,18 @@ export class ThinkingView implements Component {
 			const italic = (text: string) => { try { return theme?.italic?.(text) ?? text; } catch { return text; } };
 			return [indent + truncateToWidth(italic(paint("thinkingText", this.options.label())), Math.max(1, width - pad), "…")];
 		}
-		const whole = tailOf(full.render(width), THINKING_TAIL_LINES);
-		if (whole.skipped === 0) return whole.lines;
 		const narrow = Math.max(1, width - TAIL_MARK.length);
-		const [first = "", ...rest] = tailOf(full.render(narrow), THINKING_TAIL_LINES).lines;
+		let lines = cutTail(full, narrow, THINKING_TAIL_LINES);
+		if (!lines) {
+			const cut = tailOf(full.render(narrow), THINKING_TAIL_LINES);
+			// Two more columns can only fold a block into the tail's three lines when it is barely longer, so only a short block is wrapped twice.
+			if (cut.skipped + cut.lines.length <= 2 * THINKING_TAIL_LINES + 2 || narrow < CUT_MIN_WIDTH) {
+				const whole = tailOf(full.render(width), THINKING_TAIL_LINES);
+				if (whole.skipped === 0) return whole.lines;
+			}
+			lines = cut.lines;
+		}
+		const [first = "", ...rest] = lines;
 		const body = first.startsWith(indent) ? first.slice(pad) : first;
 		return [indent + paint("thinkingText", TAIL_MARK) + body, ...rest];
 	}
@@ -127,6 +208,7 @@ export class ThinkingView implements Component {
 	}
 
 	invalidate(): void {
+		this.cache = undefined;
 		this.options.full.invalidate();
 	}
 }

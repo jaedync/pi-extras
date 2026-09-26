@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AssistantMessageComponent, initTheme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { installThinkingTail, tailOf, thinkingRuns, viewFor, type ThinkingHost, type ThinkingMode } from "../lib/tool-display/thinking.ts";
+import { AssistantMessageComponent, getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
+import { Markdown, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { cutTail, installThinkingTail, paragraphStarts, tailOf, thinkingRuns, ThinkingView, viewFor, type ThinkingHost, type ThinkingMode } from "../lib/tool-display/thinking.ts";
 
 initTheme("dark");
 
@@ -35,6 +35,67 @@ test("a block rests in the chosen style and flips to the other once toggled", ()
 	assert.equal(viewFor("full", true, false), "tail");
 	assert.deepEqual(tailOf(["a", "b", "c", "d", ""], 3), { lines: ["b", "c", "d"], skipped: 1 });
 	assert.deepEqual(tailOf(["a"], 3), { lines: ["a"], skipped: 0 });
+	assert.deepEqual(tailOf(["a", "b", "  ", "c", "d"], 3), { lines: ["c", "d"], skipped: 3 }, "never opens on a paragraph gap");
+});
+
+test("a tail that would open on a paragraph gap puts the ellipsis on the next paragraph", () => {
+	const undo = installThinkingTail(host());
+	try {
+		const component = new AssistantMessageComponent(message(thinking("one\n\ntwo\n\nthree\n\nlast paragraph\nstill last")), true);
+		assert.deepEqual(plain(component.render(60)), ["… last paragraph", "still last"]);
+		const wrapped = new AssistantMessageComponent(message(thinking(`one\n\ntwo\n\n${"word ".repeat(15).trim()}`)), true);
+		const lines = plain(wrapped.render(40));
+		assert.ok(lines[0]!.startsWith("… word"), lines[0]);
+	} finally {
+		undo();
+	}
+});
+
+test("a tail keeps its drawing between frames instead of redrawing Pi's rendering", () => {
+	let renders = 0;
+	let view: ThinkingMode = "tail";
+	const full = { render: (width: number) => { renders++; return Array.from({ length: 6 }, (_, index) => `line ${index} at ${width}`); }, invalidate: () => {} };
+	const block = new ThinkingView({ full, view: () => view, label: () => "Thinking...", pad: 0, host: host(), toggle: () => {} });
+	const first = block.render(40);
+	const drawn = renders;
+	assert.equal(block.render(40), first);
+	assert.equal(renders, drawn, "a repeat frame reuses the drawing");
+	assert.notEqual(block.render(50), first, "a new width draws again");
+	block.invalidate();
+	block.render(50);
+	assert.ok(renders > drawn + 2, "an invalidated block draws again");
+	view = "collapsed";
+	assert.deepEqual(block.render(50), ["Thinking..."]);
+});
+
+test("paragraph starts skip fences, lists and the first line", () => {
+	const text = "intro\n\n```\ncode\n\nmore code\n```\n\n- item\n\n2. item\n\n> quote\n\n# Heading\n\nlast";
+	assert.deepEqual(paragraphStarts(text).map((start) => text.slice(start).split("\n")[0]), ["# Heading", "last"]);
+	const tildes = "a\n\n~~~~\n```\n\nstill code\n~~~~\n\nafter";
+	assert.deepEqual(paragraphStarts(tildes).map((start) => tildes.slice(start)), ["after"]);
+});
+
+test("a tail wrapped from a late paragraph matches the whole block's newest lines", () => {
+	const markdown = getMarkdownTheme();
+	const style = { color: (text: string) => `\x1b[3m${text}\x1b[23m`, italic: true };
+	const prose = (index: number) => `Paragraph ${index}: weighing **how** the \`change\` interacts with the renderer and which checks to run next, then *why*.`;
+	const samples = [
+		Array.from({ length: 60 }, (_, index) => prose(index)).join("\n\n"),
+		Array.from({ length: 40 }, (_, index) => index % 5 === 0 ? `## Part ${index}\n\n\`\`\`ts\nconst a = ${index};\n\nconst b = a;\n\`\`\`` : index % 7 === 0 ? `- one ${index}\n- two\n\n1. first\n2. second` : prose(index)).join("\n\n"),
+		`${Array.from({ length: 50 }, (_, index) => prose(index)).join("\n\n")}\n\n\`\`\`\nopen fence still streaming\n\nwith blank lines`,
+	];
+	for (const text of samples) {
+		for (const width of [30, 58, 118]) {
+			const whole = new Markdown(text, 1, 0, markdown, style);
+			const cut = cutTail(new Markdown(text, 1, 0, markdown, style), width, 3);
+			assert.ok(cut, "long safe text takes the short path");
+			assert.deepEqual(cut, tailOf(whole.render(width), 3).lines);
+		}
+	}
+	const short = new Markdown(prose(1), 1, 0, markdown, style);
+	assert.equal(cutTail(short, 60, 3), undefined, "a short block is wrapped whole");
+	const linked = new Markdown(`${samples[0]}\n\n[ref]: https://example.com`, 1, 0, markdown, style);
+	assert.equal(cutTail(linked, 60, 3), undefined, "link definitions reach across paragraphs");
 });
 
 test("a long thinking block shows its newest three lines, the first opening with an ellipsis", () => {
