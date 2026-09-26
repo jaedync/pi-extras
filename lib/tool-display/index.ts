@@ -63,8 +63,6 @@ export interface SessionTools {
 /** The host helpers rows need; injected so tests run without a live Pi. */
 export type HostKit = Pick<Kit, "highlight" | "language" | "diff" | "fileUrl" | "now"> & {
 	readonly expandHint: () => string;
-	/** Pi's key for showing thinking blocks, outside the fullscreen UI. */
-	readonly thinkingHint?: () => string;
 };
 
 export interface ToolDisplayDeps {
@@ -218,7 +216,6 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			mode: (): ThinkingMode | undefined => (settings.enabled ? settings.thinking : undefined),
 			hiddenAtStart: () => hiddenAtStart,
 			theme: () => host.theme,
-			hint: () => (fullscreen ? "click for all" : deps.host.thinkingHint?.() ?? "ctrl+t to expand"),
 		});
 		install();
 	});
@@ -315,9 +312,6 @@ export function productionDeps(): ToolDisplayDeps {
 		host: {
 			expandHint: () => {
 				try { return keyHint("app.tools.expand", "to expand"); } catch { return "ctrl+o to expand"; }
-			},
-			thinkingHint: () => {
-				try { return keyHint("app.thinking.toggle", "to expand"); } catch { return "ctrl+t to expand"; }
 			},
 			highlight: (code, lang) => highlightCode(code, lang),
 			language: (path) => getLanguageFromPath(path),

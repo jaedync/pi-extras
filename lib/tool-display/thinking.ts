@@ -1,9 +1,9 @@
 /**
- * Thinking blocks as a live tail: a `Thinking...` label (`Thought` once the
- * block is done), then only the newest three wrapped lines, with a line
- * saying how many earlier ones are hidden. A click on a block, or Pi's
- * thinking toggle for all of them, switches to the full text and back. The
- * resting style can also be Pi's collapsed label or the full text.
+ * Thinking blocks as a live tail: a block of up to three wrapped lines shows
+ * whole; a longer one shows its newest three, the first opening with `…`.
+ * A click on a block, or Pi's thinking toggle for all of them, switches to
+ * the full text and back. The resting style can also be Pi's collapsed label
+ * or the full text.
  *
  * Pi draws an assistant message with its AssistantMessageComponent and has
  * no hook for thinking blocks, so this wraps the component's `updateContent`.
@@ -20,7 +20,8 @@ export type ThinkingMode = "tail" | "collapsed" | "full";
 export const THINKING_MODES: readonly ThinkingMode[] = ["tail", "collapsed", "full"];
 /** Wrapped lines a tail keeps. */
 export const THINKING_TAIL_LINES = 3;
-export const THOUGHT_LABEL = "Thought";
+/** Opens a cut tail's first line; the tail is wrapped this much narrower so it still fits. */
+export const TAIL_MARK = "… ";
 
 export interface ThinkingTheme {
 	fg(key: string, text: string): string;
@@ -33,8 +34,6 @@ export interface ThinkingHost {
 	/** Pi's hide-thinking setting when the session started; a message that differs has been toggled. */
 	hiddenAtStart(): boolean;
 	theme(): ThinkingTheme | undefined;
-	/** How to see the rest: `click for all`, or Pi's thinking key. */
-	hint(): string;
 }
 
 type Content = { type: string; thinking?: unknown; text?: unknown };
@@ -51,19 +50,9 @@ interface Internals {
 	lastMessage?: Message;
 }
 
-export interface ThinkingRun {
-	readonly text: string;
-	/** No visible text or thinking follows, so it's the part still streaming. */
-	readonly trailing: boolean;
-}
-
-const visible = (part: Content) =>
-	(part.type === "text" && typeof part.text === "string" && part.text.trim() !== "") ||
-	(part.type === "thinking" && typeof part.thinking === "string" && part.thinking.trim() !== "");
-
 /** The runs of consecutive thinking blocks Pi draws, one per run, in order; empty runs are skipped as Pi skips them. */
-export function thinkingRuns(content: readonly Content[]): ThinkingRun[] {
-	const runs: ThinkingRun[] = [];
+export function thinkingRuns(content: readonly Content[]): string[] {
+	const runs: string[] = [];
 	for (let index = 0; index < content.length; index++) {
 		if (content[index]!.type !== "thinking") continue;
 		const texts: string[] = [];
@@ -72,7 +61,7 @@ export function thinkingRuns(content: readonly Content[]): ThinkingRun[] {
 			if (typeof thinking === "string" && thinking.trim()) texts.push(thinking.trim());
 		}
 		index--;
-		if (texts.length > 0) runs.push({ text: texts.join("\n\n"), trailing: !content.slice(index + 1).some(visible) });
+		if (texts.length > 0) runs.push(texts.join("\n\n"));
 	}
 	return runs;
 }
@@ -95,6 +84,7 @@ export interface ViewOptions {
 	/** Pi's own rendering of the block, in full. */
 	readonly full: Component;
 	readonly view: () => ThinkingMode;
+	/** Pi's label for a hidden block, shown in the collapsed style. */
 	readonly label: () => string;
 	readonly pad: number;
 	readonly host: ThinkingHost;
@@ -118,17 +108,16 @@ export class ThinkingView implements Component {
 			try { return theme ? theme.fg(key, text) : text; } catch { return text; }
 		};
 		const indent = " ".repeat(pad);
-		const room = Math.max(1, width - pad);
-		const label = this.options.label();
 		if (view === "collapsed") {
 			const italic = (text: string) => { try { return theme?.italic?.(text) ?? text; } catch { return text; } };
-			return [indent + truncateToWidth(italic(paint("thinkingText", label)), room, "…")];
+			return [indent + truncateToWidth(italic(paint("thinkingText", this.options.label())), Math.max(1, width - pad), "…")];
 		}
-		const shown = tailOf(full.render(width), THINKING_TAIL_LINES);
-		const hint = shown.skipped > 0
-			? [indent + truncateToWidth(`${paint("muted", `… ${shown.skipped.toLocaleString("en-US")} earlier line${shown.skipped === 1 ? "" : "s"} (`)}${paint("dim", host.hint())}${paint("muted", ")")}`, room, "…")]
-			: [];
-		return [indent + truncateToWidth(paint("muted", label), room, "…"), ...hint, ...shown.lines];
+		const whole = tailOf(full.render(width), THINKING_TAIL_LINES);
+		if (whole.skipped === 0) return whole.lines;
+		const narrow = Math.max(1, width - TAIL_MARK.length);
+		const [first = "", ...rest] = tailOf(full.render(narrow), THINKING_TAIL_LINES).lines;
+		const body = first.startsWith(indent) ? first.slice(pad) : first;
+		return [indent + paint("thinkingText", TAIL_MARK) + body, ...rest];
 	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -166,7 +155,7 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 			pad: self.outputPad,
 			host,
 			view: () => viewFor(host.mode() ?? mode, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false),
-			label: () => (self.isStreaming && runs[run]!.trailing ? self.hiddenThinkingLabel : THOUGHT_LABEL),
+			label: () => self.hiddenThinkingLabel,
 			toggle: () => toggleBlock(owner, run),
 		});
 		children[children.indexOf(region)] = view;
