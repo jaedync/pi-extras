@@ -2,6 +2,32 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.7.2 - 2026-09-26
+
+### Fixed
+
+- Long sessions no longer lag. 0.7.1's thinking tail wrapped every thinking
+  block in the transcript again on every frame, so anything that moved (a
+  running tool, the spinner, streaming text) made Pi redo that work many times
+  a second. Each tail is now drawn once, and a long block is wrapped from its
+  newest paragraphs rather than from the top. Replaying a long session, CPU
+  while a reply streams fell from 90% to 15%, against 32% for Pi on its own,
+  and while a tool runs from 45% to under 4%, against 10%.
+- A finished thinking block is no longer wrapped again for every token of the
+  reply that follows it.
+- Everything that animates (tool bands, the phase spinner, the Shell Jobs
+  widget, popups) ticks off one shared frame timer, so Pi draws one frame for
+  all of them instead of one per timer. While the phase spinner covers Pi's own
+  working loader, that loader is held still instead of redrawing the screen on
+  its own timer. A running tool now costs about 11 frames a second instead of
+  23.
+- The Status Plus footer reads context usage and the session name only when the
+  session or model changes, not on every frame, formats its clock once a
+  minute, and hashes messages only when there are subagent sessions to tell
+  them apart from.
+- A thinking tail that would start on the blank line between two paragraphs
+  starts at the next paragraph, instead of showing `…` on a line by itself.
+
 ## 0.7.1 - 2026-09-26
 
 ### Changed
