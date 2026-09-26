@@ -163,11 +163,27 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		return { cost: valueAt(costTween, now), airtimeMs, flash: flashIntensity(costTween, now), delta: incrementAt(costTween, now) };
 	}
 
+	/**
+	 * Context usage and the session name, read again only when the session
+	 * gains an entry (which moves its leaf) or the model changes. Pi works both
+	 * out by walking the whole session, too slow for every frame of a long one.
+	 */
+	let sessionFacts: { key: string; model: unknown; usage: ReturnType<ExtensionContext["getContextUsage"]>; name: string | undefined } | undefined;
+
+	function readSessionFacts(ctx: ExtensionContext): NonNullable<typeof sessionFacts> {
+		const leaf = typeof ctx.sessionManager.getLeafId === "function" ? ctx.sessionManager.getLeafId() : undefined;
+		const key = `${leaf ?? ""}|${ctx.model?.contextWindow ?? ""}`;
+		if (leaf !== undefined && sessionFacts?.key === key && sessionFacts.model === ctx.model) return sessionFacts;
+		sessionFacts = { key, model: ctx.model, usage: ctx.getContextUsage(), name: ctx.sessionManager.getSessionName() };
+		return sessionFacts;
+	}
+
 	function footerModel(ctx: ExtensionContext, footerData: FooterData): FooterModel {
 		const stats = sessionStats(ctx);
 		const now = Date.now();
 		const rows = footerRows(stats);
-		const usage = ctx.getContextUsage();
+		const facts = readSessionFacts(ctx);
+		const usage = facts.usage;
 		const windowTokens = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 		const percent = usage?.percent ?? undefined;
 		const usedTokens = usage?.tokens ?? (percent !== undefined ? (percent / 100) * windowTokens : 0);
@@ -183,7 +199,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			counters: toolCounters(stats),
 			cwd: formatCwd(ctx.sessionManager.getCwd()),
 			gitBranch: footerData.getGitBranch(),
-			sessionName: ctx.sessionManager.getSessionName(),
+			sessionName: facts.name,
 			tokens: {
 				input: stats.tokens.input,
 				cacheWrite: stats.tokens.cacheWrite,
@@ -259,6 +275,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	}
 
 	function update(ctx: ExtensionContext): void {
+		sessionFacts = undefined;
 		refreshStats(ctx);
 		requestFooterRender?.();
 	}

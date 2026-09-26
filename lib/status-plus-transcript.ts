@@ -162,9 +162,12 @@ export function collect(source: TranscriptSource): SessionStats {
 	const stats = collectEntries({ ...source, getBranch: () => branch });
 	const children = new ChildEvidenceCollector(source.getSessionDir(), source.getSessionFile?.());
 	children.scanBranch(branch, source.getSessionFile?.() ?? "parent");
+	const resolved = children.resolve();
+	if (resolved.length === 0) return stats;
+	// Hashing every message is only needed to tell a child's copies apart from the parent's.
 	const seen = new Set(branch.map(entry => messageIdentity(entry)).filter((id): id is string => !!id));
 	const paths = new Set<string>();
-	for (const child of children.resolve()) {
+	for (const child of resolved) {
 		const evidencePaths = [...child.sessionFiles, ...child.transcriptPaths];
 		let inherited = evidencePaths.some(path => paths.has(path));
 		evidencePaths.forEach(path => paths.add(path));
