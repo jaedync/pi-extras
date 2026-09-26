@@ -1,86 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stripTerminalSequences, type Component } from "@earendil-works/pi-tui";
-import { AnimationClock, type Timers } from "../lib/band/clock.ts";
-import type { PopupSource } from "../lib/band/popup.ts";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { ChainRun } from "../lib/chain/run.ts";
 import { splitChain } from "../lib/chain/split.ts";
 import { editRenderers, readRenderers, writeRenderers } from "../lib/tool-display/files.ts";
-import type { Kit, RenderContext } from "../lib/tool-display/kit.ts";
 import { searchRenderers } from "../lib/tool-display/search.ts";
 import { bashRenderers } from "../lib/tool-display/shell.ts";
-import { quiet } from "./support/quiet-theme.ts";
-
-const theme = quiet();
-
-/** A clock driven by hand: `tick()` runs one frame. */
-function manualClock() {
-	let frame: (() => void) | undefined;
-	const timers: Timers = { setInterval: (fn) => { frame = fn; return 1; }, clearInterval: () => { frame = undefined; } };
-	return { clock: new AnimationClock(timers), tick: () => frame?.(), running: () => frame !== undefined };
-}
-
-function harness() {
-	let now = 1_000;
-	const runs = new Map<string, ChainRun>();
-	const popups: PopupSource[] = [];
-	const { clock, tick, running } = manualClock();
-	const kit: Kit = {
-		moreHint: () => "click for all",
-		highlight: (code) => code.split("\n"),
-		language: () => undefined,
-		diff: (diff) => diff,
-		fileUrl: () => undefined,
-		now: () => now,
-		motion: () => "full",
-		chains: () => true,
-		clock,
-		chainRun: (id) => runs.get(id),
-		openPopup: (source) => { popups.push(source); return true; },
-	};
-	return { kit, runs, popups, tick, running, advance: (ms: number) => { now += ms; }, now: () => now };
-}
-
-type Renderers = {
-	renderCall(args: unknown, theme: unknown, context: RenderContext): Component;
-	renderResult(result: unknown, options: { expanded: boolean; isPartial: boolean }, theme: unknown, context: RenderContext): Component;
-};
-
-/** Mimics Pi's tool row: the call slot, then the result slot once there is a result. */
-function row(renderers: Renderers, args: unknown, toolCallId = "call-1") {
-	const state: Record<string, unknown> = {};
-	let call: Component | undefined;
-	let result: Component | undefined;
-	let invalidations = 0;
-	let last: Partial<RenderContext> & { result?: unknown } = {};
-	const context = (over: Partial<RenderContext>, component: unknown): RenderContext => ({
-		args, toolCallId, state, lastComponent: component, cwd: "/work", executionStarted: false, argsComplete: true,
-		isPartial: true, expanded: false, isError: false, invalidate: () => { invalidations++; update(last); }, ...over,
-	});
-	function update(over: Partial<RenderContext> & { result?: unknown } = {}) {
-		last = over;
-		const { result: value, ...rest } = over;
-		call = renderers.renderCall(args, theme, context(rest, call));
-		if (value !== undefined) {
-			result = renderers.renderResult(value, { expanded: rest.expanded ?? false, isPartial: rest.isPartial ?? true }, theme, context(rest, result));
-		}
-	}
-	return {
-		update,
-		lines(width = 60) {
-			return [...(call?.render(width) ?? []), ...(result?.render(width) ?? [])].map((line) => stripTerminalSequences(line).trimEnd());
-		},
-		raw(width = 60) {
-			return [...(call?.render(width) ?? []), ...(result?.render(width) ?? [])];
-		},
-		click: () => (call as { handleMouse?: (event: unknown) => unknown }).handleMouse?.({ type: "click", button: "left", x: 3, y: 0 }),
-		invalidations: () => invalidations,
-	};
-}
-
-const text = (value: string, details?: unknown) => ({ content: [{ type: "text", text: value }], details });
-/** A band: the title from column 1, the rail ending one column before the edge. */
-const band = (title: string, rail = "", width = 60) => ` ${title}${" ".repeat(Math.max(1, width - 2 - title.length - rail.length))}${rail}`.trimEnd();
+import { band, harness, row, text, theme } from "./support/tool-rows.ts";
 
 test("a bash row runs against its timeout, then keeps the time and the last lines of output", () => {
 	const h = harness();
