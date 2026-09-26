@@ -112,15 +112,18 @@ export function paragraphStarts(text: string): number[] {
  * block is short; the caller then wraps the whole.
  */
 export function cutTail(full: Component, width: number, max: number): string[] | undefined {
-	if (!(full instanceof Markdown) || width < CUT_MIN_WIDTH) return undefined;
+	// Pi's bundle can carry its own copy of the class, so the same class under another identity counts too.
+	const same = full instanceof Markdown || full.constructor?.name === Markdown.name;
+	if (!same || width < CUT_MIN_WIDTH) return undefined;
 	const block = full as unknown as { text: string; paddingX: number; paddingY: number; theme: never; defaultTextStyle: never; options: never };
+	const Make = full.constructor as typeof Markdown;
 	const text = block.text;
 	if (typeof text !== "string" || block.paddingY !== 0 || text.length < CUT_START_CHARS * 2 || CUT_UNSAFE.test(text)) return undefined;
 	const starts = paragraphStarts(text);
 	for (let want = CUT_START_CHARS; want < text.length; want *= 4) {
 		const cut = starts.findLast((start) => start <= text.length - want);
 		if (cut === undefined) return undefined;
-		const part = new Markdown(text.slice(cut), block.paddingX, 0, block.theme, block.defaultTextStyle, block.options);
+		const part = new Make(text.slice(cut), block.paddingX, 0, block.theme, block.defaultTextStyle, block.options);
 		const shown = tailOf(part.render(width), max);
 		// More lines than the tail keeps, so the whole is longer than the tail too.
 		if (shown.skipped > 0) return shown.lines;
@@ -147,36 +150,45 @@ export interface ViewOptions {
 	readonly pad: number;
 	readonly host: ThinkingHost;
 	readonly toggle: () => void;
+	/** Where the drawing is kept; shared by the views Pi's rebuilds make of an unchanged block. */
+	readonly memo?: ViewMemo;
+}
+
+/** A block's last drawing and what it was drawn at. */
+export interface ViewMemo {
+	drawing?: { key: string; theme: ThinkingTheme | undefined; lines: string[] };
 }
 
 /**
- * One thinking block, drawn in the style `view` names on every frame. Pi
- * rebuilds the view whenever the message changes, so its drawing depends only
- * on the width, style and theme and is kept until one of them changes: Pi
- * redraws the whole transcript every frame, and the tail's narrower render
- * would otherwise throw away Pi's own cached wrapping each time.
+ * One thinking block, drawn in the style `view` names on every frame. The
+ * drawing depends only on the block's text, the width, style and theme, so
+ * it is kept until one of them changes, even across Pi's rebuilds of the
+ * message on every streamed token: Pi redraws the whole transcript every
+ * frame, and wrapping a long block again each time is most of that work.
  */
 export class ThinkingView implements Component {
 	private readonly options: ViewOptions;
-	private cache: { key: string; theme: ThinkingTheme | undefined; lines: string[] } | undefined;
+	private readonly memo: ViewMemo;
 
 	constructor(options: ViewOptions) {
 		this.options = options;
+		this.memo = options.memo ?? {};
 	}
 
 	render(width: number): string[] {
 		const view = this.options.view();
-		if (view === "full") return this.options.full.render(width);
 		const theme = this.options.host.theme();
 		const key = `${width}|${view}|${view === "collapsed" ? this.options.label() : ""}`;
-		if (this.cache?.key === key && this.cache.theme === theme) return this.cache.lines;
+		const kept = this.memo.drawing;
+		if (kept?.key === key && kept.theme === theme) return kept.lines;
 		const lines = this.draw(width, view, theme);
-		this.cache = { key, theme, lines };
+		this.memo.drawing = { key, theme, lines };
 		return lines;
 	}
 
-	private draw(width: number, view: Exclude<ThinkingMode, "full">, theme: ThinkingTheme | undefined): string[] {
+	private draw(width: number, view: ThinkingMode, theme: ThinkingTheme | undefined): string[] {
 		const { full, pad } = this.options;
+		if (view === "full") return full.render(width);
 		const paint = (key: string, text: string) => {
 			try { return theme ? theme.fg(key, text) : text; } catch { return text; }
 		};
@@ -208,7 +220,7 @@ export class ThinkingView implements Component {
 	}
 
 	invalidate(): void {
-		this.cache = undefined;
+		this.memo.drawing = undefined;
 		this.options.full.invalidate();
 	}
 }
@@ -218,6 +230,20 @@ const isRegion = (child: unknown): child is { child: Component } =>
 
 /** Blocks a click switched, per message component: the choice outlives each rebuild while the message streams. */
 const clicked = new WeakMap<object, Set<number>>();
+
+/** Each block's drawing, per message component, kept while Pi rebuilds the message from the same block. */
+const memos = new WeakMap<object, Map<number, { text: string; streaming: boolean; pad: number; memo: ViewMemo }>>();
+
+function memoFor(owner: object, run: number, text: string, streaming: boolean, pad: number): ViewMemo {
+	const byRun = memos.get(owner) ?? new Map();
+	memos.set(owner, byRun);
+	const kept = byRun.get(run);
+	if (kept && kept.text === text && kept.streaming === streaming && kept.pad === pad) return kept.memo;
+	// Pi's markdown can draw a streaming block differently, so a finished one is drawn again.
+	const memo: ViewMemo = {};
+	byRun.set(run, { text, streaming, pad, memo });
+	return memo;
+}
 
 function toggleBlock(owner: object, run: number): void {
 	const was = clicked.get(owner) ?? new Set<number>();
@@ -239,6 +265,7 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 			view: () => viewFor(host.mode() ?? mode, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false),
 			label: () => self.hiddenThinkingLabel,
 			toggle: () => toggleBlock(owner, run),
+			memo: memoFor(owner, run, runs[run]!, self.isStreaming, self.outputPad),
 		});
 		children[children.indexOf(region)] = view;
 	});

@@ -51,6 +51,37 @@ test("a tail that would open on a paragraph gap puts the ellipsis on the next pa
 	}
 });
 
+test("a finished thinking block is not wrapped again while the reply after it streams", () => {
+	// Pi's bundle has its own copy of pi-tui's Markdown; count the renders of the one it uses.
+	const PiMarkdown = (new AssistantMessageComponent(message(said("x")), false) as unknown as { contentContainer: { children: object[] } })
+		.contentContainer.children.find((child) => child.constructor.name === "Markdown")!.constructor as typeof Markdown;
+	const undo = installThinkingTail(host());
+	const render = PiMarkdown.prototype.render;
+	let wraps = 0;
+	PiMarkdown.prototype.render = function (this: Markdown, width: number) {
+		if ((this as unknown as { text: string }).text.includes("step 8")) wraps++;
+		return render.call(this, width);
+	};
+	try {
+		const component = new AssistantMessageComponent(undefined, true);
+		component.updateContent(message(thinking(LONG), said("a")), true);
+		const first = plain(component.render(60));
+		const drawn = wraps;
+		assert.ok(drawn > 0);
+		for (const reply of ["ab", "abc", "abcd"]) {
+			component.updateContent(message(thinking(LONG), said(reply)), true);
+			assert.deepEqual(plain(component.render(60)).slice(0, 2), first.slice(0, 2));
+		}
+		assert.equal(wraps, drawn, "each token of the reply reuses the thinking's drawing");
+		component.updateContent(message(thinking(LONG), said("abcd")), false);
+		component.render(60);
+		assert.ok(wraps > drawn, "the finished message is drawn once more");
+	} finally {
+		PiMarkdown.prototype.render = render;
+		undo();
+	}
+});
+
 test("a tail keeps its drawing between frames instead of redrawing Pi's rendering", () => {
 	let renders = 0;
 	let view: ThinkingMode = "tail";
@@ -66,6 +97,15 @@ test("a tail keeps its drawing between frames instead of redrawing Pi's renderin
 	assert.ok(renders > drawn + 2, "an invalidated block draws again");
 	view = "collapsed";
 	assert.deepEqual(block.render(50), ["Thinking..."]);
+});
+
+test("a long block Pi builds is drawn from its late paragraphs, matching the whole", () => {
+	const text = Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: weighing how the change interacts with the renderer and which checks to run next.`).join("\n\n");
+	const component = new AssistantMessageComponent(message(thinking(text)), false) as unknown as { contentContainer: { children: Array<{ child?: Markdown }> } };
+	const block = component.contentContainer.children.find((child) => child.child)!.child!;
+	const cut = cutTail(block, 58, 3);
+	assert.ok(cut, "Pi's own Markdown takes the short path");
+	assert.deepEqual(cut, tailOf(block.render(58), 3).lines);
 });
 
 test("paragraph starts skip fences, lists and the first line", () => {
