@@ -74,8 +74,15 @@ export function formatMoneyLike(value: number, reference: number): string {
 	return value.toFixed(moneyDecimals(reference));
 }
 
+/** The footer shows the same minute on every frame; formatting it is the costly part. */
+let lastClock: { minute: number; timeZone: string; text: string } | undefined;
+
 export function hhmm(epochMs: number, timeZone = STATUS_TIME_ZONE): string {
-	return dateFormat("hhmm", timeZone, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(epochMs));
+	const minute = Math.floor(epochMs / 60_000);
+	if (lastClock?.minute === minute && lastClock.timeZone === timeZone) return lastClock.text;
+	const text = dateFormat("hhmm", timeZone, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(epochMs));
+	lastClock = { minute, timeZone, text };
+	return text;
 }
 
 /**
