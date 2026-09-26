@@ -2,6 +2,24 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.8.0 - 2026-09-26
+
+### Added
+
+- Every tool row gets Tool Display's band, not only Pi's built-in tools.
+  Other extensions' tools (MCP, subagents, web access, goals and the rest)
+  keep their own words: the band shows the line the tool would draw for its
+  call, with the time and any failure in the right rail, and under it sit the
+  first four lines of the tool's own result. Click a row for a popup with
+  every argument and the whole result. `/tool-display others off` gives those
+  rows back to their own renderers.
+- pi-extras's own tools get layouts of their own. A web search row shows the
+  query and how many results came back, with the first three under it. A
+  computer use row names the apps and counts the calls and screenshots, and
+  says `failed` or `not allowed` in words instead of marks. A usage row answers
+  in its band, each window's use amber from 80% and red when spent, instead of
+  a page of JSON.
+
 ## 0.7.2 - 2026-09-26
 
 ### Fixed
