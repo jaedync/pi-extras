@@ -292,10 +292,14 @@ describe("job inspector", () => {
 			notify() {},
 		};
 		const opened = openInspector(host as any, live.lookup);
-		assert.deepStrictEqual(shown[0].options, { overlay: true, overlayOptions: { anchor: "center", width: INSPECTOR_WIDTH, margin: 1 } });
+		const { onHandle, ...options } = shown[0].options as { onHandle: unknown };
+		assert.deepStrictEqual(options, { overlay: true, overlayOptions: { anchor: "center", width: INSPECTOR_WIDTH, margin: 1 } });
+		assert.strictEqual(typeof onHandle, "function", "Pi's overlay handle tells the inspector when it is off screen");
 		assert.ok(component instanceof JobInspector);
+		assert.strictEqual(opened.isOpen(), true);
 		component.handleInput("\u001b");
-		await opened;
+		await opened.closed;
+		assert.strictEqual(opened.isOpen(), false);
 		component.dispose();
 	});
 });

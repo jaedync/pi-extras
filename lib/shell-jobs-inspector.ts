@@ -28,7 +28,7 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { everyFrame, FRAME_MS } from "./band/clock.ts";
-import { closeOnOutsideClick } from "./band/modal.ts";
+import { closeOnOutsideClick, OnScreen, type OverlayPresence, type ShownOverlay } from "./band/modal.ts";
 import { onBackground, panelBackground } from "./band/surface.ts";
 import { factsOf, jobBand } from "./shell-jobs-band.ts";
 import { readLogWindow, sanitizeControl } from "./shell-jobs-core.ts";
@@ -141,6 +141,7 @@ export class JobInspector implements Component, Focusable {
 	private readonly onClose: () => void;
 	private readonly now: () => number;
 	private readonly undoOutside: () => void;
+	private readonly screen = new OnScreen();
 
 	constructor(tui: InspectorTui, theme: Theme, lookup: JobLookup, onClose: () => void, now: () => number = Date.now) {
 		this.tui = tui;
@@ -149,8 +150,17 @@ export class JobInspector implements Component, Focusable {
 		this.now = now;
 		this.theme = theme;
 		this.paint = painter(theme);
-		this.undoOutside = closeOnOutsideClick(tui, () => this.close());
+		this.undoOutside = closeOnOutsideClick(tui, () => this.close(), () => this.screen.shown());
 		this.refresh();
+	}
+
+	/** Pi's handle for this overlay, from `onHandle`. */
+	attach(handle: OverlayPresence): void {
+		this.screen.attach(handle);
+	}
+
+	isOpen(): boolean {
+		return !this.closed && !this.disposed && this.screen.shown();
 	}
 
 	/** First visible output line; exposed for tests. */
@@ -233,6 +243,7 @@ export class JobInspector implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
+		this.screen.drew();
 		const w = Math.max(FRAME_COLUMNS + 8, width);
 		const inner = w - FRAME_COLUMNS;
 		const { fg } = this.paint;
@@ -316,7 +327,8 @@ export class JobInspector implements Component, Focusable {
 
 	private startTimer(): void {
 		if (this.stopFrames !== null) return;
-		this.stopFrames = everyFrame(() => this.refresh(), INSPECTOR_REFRESH_MS);
+		// Taken off screen without being closed, nothing else would stop this while the job runs.
+		this.stopFrames = everyFrame(() => (this.screen.shown() ? this.refresh() : this.dispose()), INSPECTOR_REFRESH_MS);
 	}
 
 	private stopTimer(): void {
@@ -337,16 +349,18 @@ export class JobInspector implements Component, Focusable {
 export interface InspectorHost {
 	custom<T>(
 		factory: (tui: InspectorTui, theme: Theme, keybindings: unknown, done: (result: T) => void) => Component & { dispose?(): void },
-		options: { overlay: boolean; overlayOptions?: OverlayOptions },
+		options: { overlay: boolean; overlayOptions?: OverlayOptions; onHandle?: (handle: OverlayPresence) => void },
 	): Promise<T>;
 }
 
-/** Show the inspector as a centred overlay; resolves once the reader closes it. */
-export function openInspector(ui: InspectorHost, lookup: JobLookup): Promise<void> {
-	return ui.custom<void>(
-		(tui, theme, _keybindings, done) => new JobInspector(tui, theme, lookup, () => done(undefined)),
-		{ overlay: true, overlayOptions: { anchor: "center", width: INSPECTOR_WIDTH, margin: 1 } },
+/** Show the inspector as a centred overlay. */
+export function openInspector(ui: InspectorHost, lookup: JobLookup): ShownOverlay {
+	let inspector: JobInspector | undefined;
+	const closed = ui.custom<void>(
+		(tui, theme, _keybindings, done) => (inspector = new JobInspector(tui, theme, lookup, () => done(undefined))),
+		{ overlay: true, overlayOptions: { anchor: "center", width: INSPECTOR_WIDTH, margin: 1 }, onHandle: (handle) => inspector?.attach(handle) },
 	);
+	return { closed, isOpen: () => inspector?.isOpen() ?? false };
 }
 
 /** What a transcript row resolves to when clicked: a job this session knows, one it does not, or nothing. */

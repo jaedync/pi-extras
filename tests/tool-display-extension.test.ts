@@ -11,6 +11,7 @@ import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount } from "../
 import { markRow, rowKind, TOOL_ROW } from "../lib/tool-row.ts";
 import { applyArgs, countArg, registerToolDisplay, toolDisplayEnabled, TOOL_NAMES, withDisplay, type ToolDisplayDeps } from "../lib/tool-display/index.ts";
 import { DEFAULT_SETTINGS, readSettings, writeSettings, type DisplaySettings } from "../lib/tool-display/settings.ts";
+import { fullscreen } from "./support/fullscreen.ts";
 import { quiet } from "./support/quiet-theme.ts";
 
 initTheme("dark");
@@ -29,7 +30,7 @@ const shell: Ops = {
 	}),
 };
 
-function harness(options: { sources?: Record<string, string>; settings?: DisplaySettings; failWrite?: boolean; entries?: unknown[] } = {}) {
+function harness(options: { sources?: Record<string, string>; settings?: DisplaySettings; failWrite?: boolean; entries?: unknown[]; ui?: object } = {}) {
 	const registered: any[] = [];
 	const notes: Array<[string, string | undefined]> = [];
 	const appended: Array<[string, unknown]> = [];
@@ -78,7 +79,7 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 	} as never, deps);
 	const ctx = (mode: string) => ({
 		mode,
-		ui: { notify: (message: string, level?: string) => notes.push([message, level]), custom: async () => undefined },
+		ui: { notify: (message: string, level?: string) => notes.push([message, level]), custom: async () => undefined, ...options.ui },
 		sessionManager: { getEntries: () => options.entries ?? [] },
 	});
 	return {
@@ -295,4 +296,28 @@ test("print, JSON and RPC runs leave every tool's rows alone", () => {
 	const h = harness();
 	h.start("print");
 	assert.equal(piRow({ name: "fetch_content" }).getRenderShell(), "default");
+});
+
+test("a popup Pi took off screen without closing it doesn't stop a row click from opening the next", async () => {
+	const screen = fullscreen();
+	const h = harness({ ui: screen.ui });
+	h.start();
+	try {
+		const row = piRow(h.latest("read"), { path: "a.txt" });
+		const lines = row.render(100).map((line) => stripTerminalSequences(line));
+		// The transcript's first two lines are the harness's own; the row starts on the third.
+		const y = 3 + lines.findIndex((line) => line.includes("a.txt"));
+		screen.tui.addChild(row as never);
+		// Laid out first, so the click finds the row.
+		await screen.settle();
+		await screen.click(6, y);
+		assert.equal(screen.tui.hasOverlay(), true, "a click on the row opens its popup");
+		// What Pi does to the top overlay on /reload and session switches: no done, no dispose.
+		screen.tui.hideOverlay();
+		await screen.click(6, y);
+		assert.equal(screen.tui.hasOverlay(), true, "the next click opens it again");
+	} finally {
+		screen.stop();
+		h.fire("session_shutdown");
+	}
 });

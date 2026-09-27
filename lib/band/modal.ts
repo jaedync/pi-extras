@@ -15,6 +15,10 @@
  * the Proxy's prototype, and is taken off once no popup needs it. A stand-in
  * left behind would swallow every left press, clicks and text selection with
  * it, for the rest of the process.
+ *
+ * Pi also takes overlays off screen without closing them, on /reload and
+ * session switches, so a popup's undo and dispose may never run. Whatever an
+ * overlay starts therefore checks `OnScreen` and lets go by itself.
  */
 import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
 
@@ -23,11 +27,47 @@ type Dispatch = (event: TuiMouseEvent) => unknown;
 /** Where the stand-in keeps its state on the patched prototype; shared by copies of this module loaded by /reload. */
 const SLOT = Symbol.for("pi-extras.outside-click.v1");
 
+interface Closer {
+	readonly close: () => void;
+	readonly shown: () => boolean;
+}
+
 interface Patch {
 	readonly original: Dispatch;
 	readonly standIn: Dispatch;
 	/** One per open popup, newest last. */
-	readonly closers: Array<() => void>;
+	readonly closers: Closer[];
+}
+
+/** The part of Pi's overlay handle used here: it has bounds only while the overlay is on screen. */
+export interface OverlayPresence {
+	getBounds(): unknown;
+}
+
+/** An overlay pi-extras opened. `closed` settles when it closes; `isOpen` turns false once Pi takes it off screen, closed or not. */
+export interface ShownOverlay {
+	readonly closed: Promise<void>;
+	isOpen(): boolean;
+}
+
+/** Whether Pi still has an overlay on screen, from the handle Pi passes to `onHandle`. */
+export class OnScreen {
+	private handle: OverlayPresence | undefined;
+	private drawn = false;
+
+	attach(handle: OverlayPresence): void {
+		this.handle = handle;
+	}
+
+	/** Called from the overlay's render. */
+	drew(): void {
+		this.drawn = true;
+	}
+
+	/** False once Pi has taken the overlay off screen; true until there is a handle and a first draw to go by. */
+	shown(): boolean {
+		return this.handle === undefined || !this.drawn || this.handle.getBounds() !== undefined;
+	}
 }
 
 /** The prototype that defines Pi's transcript dispatch; the classic view has no mouse and lacks it. */
@@ -66,17 +106,18 @@ function dispatcherOf(tui: unknown): LayoutDispatcher | undefined {
 }
 
 function install(dispatcher: LayoutDispatcher, original: Dispatch): Patch {
-	const closers: Array<() => void> = [];
+	const closers: Closer[] = [];
 	const standIn: Dispatch = function (this: OverlayHost | undefined, event) {
-		// Pi hides the top overlay on /reload and session switches without closing it, so
-		// that popup's undo never runs. With nothing on screen no popup is open: let go.
-		if (closers.length > 0 && this?.hasOverlay?.() === false) {
-			closers.splice(0);
-			uninstall(dispatcher, patch);
+		// A popup Pi took off screen without closing it never undoes its closer: drop it
+		// here, and every closer when nothing at all is on screen.
+		const nothingShown = this?.hasOverlay?.() === false;
+		for (let at = closers.length - 1; at >= 0; at--) {
+			if (nothingShown || !closers[at]!.shown()) closers.splice(at, 1);
 		}
-		const close = closers.at(-1);
-		if (close && event.type === "press" && event.button === "left") {
-			close();
+		if (closers.length === 0) uninstall(dispatcher, patch);
+		const top = closers.at(-1);
+		if (top && event.type === "press" && event.button === "left") {
+			top.close();
 			return swallowed(event);
 		}
 		return original.call(this, event);
@@ -96,16 +137,17 @@ function uninstall(dispatcher: LayoutDispatcher, patch: Patch): void {
 
 /**
  * Calls `close` on a left press outside the popup until the returned undo is
- * called; with several popups open, the newest closes. Undo is idempotent.
- * Returns a no-op when the TUI has no transcript dispatch to stand in for.
+ * called or `shown` turns false; with several popups open, the newest closes.
+ * Undo is idempotent. Returns a no-op when the TUI has no transcript dispatch
+ * to stand in for.
  */
-export function closeOnOutsideClick(tui: unknown, close: () => void): () => void {
+export function closeOnOutsideClick(tui: unknown, close: () => void, shown: () => boolean = () => true): () => void {
 	const dispatcher = dispatcherOf(tui);
 	const original = dispatcher?.dispatchMouseToLayout;
 	if (!dispatcher || !original) return () => undefined;
 	const patch = dispatcher[SLOT] ?? install(dispatcher, original);
-	// A fresh function per popup, so undo removes this popup's entry even when two share a `close`.
-	const closer = () => close();
+	// An entry per popup, so undo removes this popup's even when two share a `close`.
+	const closer: Closer = { close, shown };
 	patch.closers.push(closer);
 	return () => {
 		const at = patch.closers.indexOf(closer);

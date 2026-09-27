@@ -25,6 +25,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import type { ShownOverlay } from "../lib/band/modal.ts";
 import {
 	KILL_WAIT_MS,
 	LOG_READ_BYTES,
@@ -408,7 +409,7 @@ export default function shellJobs(pi: ExtensionAPI): void {
 	// The TUI's UI handle, kept so a click on a transcript row can open the
 	// inspector; null outside the TUI, where no mouse events arrive anyway.
 	let inspectorUi: InspectorUi | null = null;
-	let inspecting = false;
+	let inspected: ShownOverlay | undefined;
 
 	const findJobByCall = (toolCallId: unknown): Job | undefined => {
 		if (typeof toolCallId !== "string") return undefined;
@@ -416,15 +417,16 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		return undefined;
 	};
 
-	/** Open the overlay for one of this session's jobs; one at a time. */
+	/** Open the overlay for one of this session's jobs; one at a time, and one Pi took off screen without closing it no longer counts. */
 	const inspect = (id: string): void => {
 		const ui = inspectorUi;
-		if (ui === null || inspecting || !runtime.jobs.has(id)) return;
-		inspecting = true;
-		openInspector(ui, () => runtime.jobs.get(id))
+		if (ui === null || inspected?.isOpen() || !runtime.jobs.has(id)) return;
+		const shown = openInspector(ui, () => runtime.jobs.get(id));
+		inspected = shown;
+		shown.closed
 			.catch((error: unknown) => ui.notify(`shell-jobs: could not open the inspector: ${(error as Error).message}`, "error"))
 			.finally(() => {
-				inspecting = false;
+				if (inspected === shown) inspected = undefined;
 			});
 	};
 
@@ -647,7 +649,7 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		if (!active) return;
 		active = false;
 		inspectorUi = null;
-		inspecting = false;
+		inspected = undefined;
 		if (event.reason === "reload") {
 			parkForReload(ctx.sessionManager, runtime);
 			return;

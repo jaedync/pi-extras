@@ -19,7 +19,7 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { everyFrame } from "./clock.ts";
-import { closeOnOutsideClick } from "./modal.ts";
+import { closeOnOutsideClick, OnScreen, type OverlayPresence, type ShownOverlay } from "./modal.ts";
 import type { BandTheme } from "./palette.ts";
 import { onBackground, panelBackground } from "./surface.ts";
 
@@ -76,6 +76,7 @@ export class Popup implements Component, Focusable {
 	private readonly source: PopupSource;
 	private readonly onClose: () => void;
 	private readonly undoOutside: () => void;
+	private readonly screen = new OnScreen();
 
 	constructor(tui: PopupTui, theme: PopupTheme, source: PopupSource, onClose: () => void) {
 		this.tui = tui;
@@ -83,8 +84,17 @@ export class Popup implements Component, Focusable {
 		this.source = source;
 		this.onClose = onClose;
 		this.selected = source.firstStep();
-		this.undoOutside = closeOnOutsideClick(tui, () => this.close());
+		this.undoOutside = closeOnOutsideClick(tui, () => this.close(), () => this.screen.shown());
 		this.tick();
+	}
+
+	/** Pi's handle for this overlay, from `onHandle`. */
+	attach(handle: OverlayPresence): void {
+		this.screen.attach(handle);
+	}
+
+	isOpen(): boolean {
+		return !this.closed && this.screen.shown();
 	}
 
 	/** Exposed for tests. */
@@ -96,6 +106,11 @@ export class Popup implements Component, Focusable {
 		if (this.closed) return;
 		if (this.source.live() && this.stopFrames === null) {
 			this.stopFrames = everyFrame(() => {
+				// Taken off screen without being closed: nothing else will stop this.
+				if (!this.screen.shown()) {
+					this.dispose();
+					return;
+				}
 				this.tui.requestRender();
 				if (!this.source.live()) this.stop();
 			}, POPUP_FRAME_MS);
@@ -151,6 +166,7 @@ export class Popup implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
+		this.screen.drew();
 		const theme = this.theme;
 		const fg = (key: string, text: string) => { try { return theme.fg(key, text); } catch { return text; } };
 		const bold = (text: string) => { try { return theme.bold(text); } catch { return text; } };
@@ -223,14 +239,16 @@ export class Popup implements Component, Focusable {
 export interface PopupHost {
 	custom<T>(
 		factory: (tui: PopupTui, theme: PopupTheme, keybindings: unknown, done: (result: T) => void) => Component & { dispose?(): void },
-		options: { overlay: boolean; overlayOptions?: OverlayOptions },
+		options: { overlay: boolean; overlayOptions?: OverlayOptions; onHandle?: (handle: OverlayPresence) => void },
 	): Promise<T>;
 }
 
-/** Shows the popup as a centred overlay; resolves when it closes. */
-export function openPopup(ui: PopupHost, source: PopupSource): Promise<void> {
-	return ui.custom<void>(
-		(tui, theme, _keybindings, done) => new Popup(tui, theme, source, () => done(undefined)),
-		{ overlay: true, overlayOptions: { anchor: "center", width: POPUP_WIDTH, margin: 1 } },
+/** Shows the popup as a centred overlay. */
+export function openPopup(ui: PopupHost, source: PopupSource): ShownOverlay {
+	let popup: Popup | undefined;
+	const closed = ui.custom<void>(
+		(tui, theme, _keybindings, done) => (popup = new Popup(tui, theme, source, () => done(undefined))),
+		{ overlay: true, overlayOptions: { anchor: "center", width: POPUP_WIDTH, margin: 1 }, onHandle: (handle) => popup?.attach(handle) },
 	);
+	return { closed, isOpen: () => popup?.isOpen() ?? false };
 }

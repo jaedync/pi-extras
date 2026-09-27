@@ -30,6 +30,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { getCapabilities } from "@earendil-works/pi-tui";
 import { AnimationClock } from "../band/clock.ts";
+import type { ShownOverlay } from "../band/modal.ts";
 import { openPopup, type PopupHost } from "../band/popup.ts";
 import { chainOperations, withChains, type ActiveRuns } from "../chain/exec.ts";
 import { CHAIN_ENTRY, CHAIN_EVENT, ChainRun, type SavedChain } from "../chain/run.ts";
@@ -127,7 +128,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	let settings: DisplaySettings = DEFAULT_SETTINGS;
 	let ui: PopupHost | undefined;
 	let fullscreen = false;
-	let popupOpen = false;
+	let popup: ShownOverlay | undefined;
 	let session: SessionTools | undefined;
 	let undoThinking: (() => void) | undefined;
 	let undoAdoption: (() => void) | undefined;
@@ -159,9 +160,11 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			return restored.get(toolCallId) ?? undefined;
 		},
 		openPopup(source) {
-			if (!ui || popupOpen) return false;
-			popupOpen = true;
-			openPopup(ui, source).catch(() => undefined).finally(() => { popupOpen = false; });
+			// One at a time; one Pi took off screen without closing it no longer counts.
+			if (!ui || popup?.isOpen()) return false;
+			const shown = openPopup(ui, source);
+			popup = shown;
+			shown.closed.catch(() => undefined).finally(() => { if (popup === shown) popup = undefined; });
 			return true;
 		},
 	};
