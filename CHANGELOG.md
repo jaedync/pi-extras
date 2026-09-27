@@ -2,6 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.8.1 - 2026-09-26
+
+### Fixed
+
+- Clicking and selecting text work again after a popup closes. Closing a
+  tool popup or the job inspector left behind the piece that closes it on a
+  click outside, and it went on swallowing every left click in the
+  transcript: rows stopped opening popups and text couldn't be selected until
+  Pi restarted. If clicks have already stopped in a running Pi, restart it
+  once after updating; `/reload` isn't enough.
+
 ## 0.8.0 - 2026-09-26
 
 ### Added
