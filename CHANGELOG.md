@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.8.2 - 2026-09-26
+
+### Fixed
+
+- A tool popup or job inspector that Pi takes off screen without closing it,
+  as `/reload` and session switches do, now lets go by itself. Before, it
+  could keep redrawing the screen every frame, swallow clicks while another
+  extension's overlay was open, or stop rows from opening popups at all.
+
 ## 0.8.1 - 2026-09-26
 
 ### Fixed
