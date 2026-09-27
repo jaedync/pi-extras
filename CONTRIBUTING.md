@@ -15,6 +15,27 @@ The default branch is consumed by unpinned Git installs. Review changes and pass
 CI before merging. A tag is an optional pin, not the update mechanism for
 unpinned users.
 
+## Reaching into Pi
+
+Some extensions patch Pi internals: the transcript's mouse dispatch, the tool
+row and the assistant message. Two things about how Pi runs extensions have
+caused real bugs:
+
+- `ctx.ui`, and the `tui` a `custom` factory gets, are Proxies. Each read of a
+  method returns a new wrapper, and own-property checks and deletes reach an
+  empty target. Never compare, check or delete methods through them. Patch the
+  class that defines the method, found with `Reflect.getPrototypeOf`, and keep
+  the patch's state in a `Symbol.for` slot so a copy loaded by `/reload` shares
+  it.
+- Pi takes overlays off screen without closing them on `/reload` and session
+  switches: no `done`, no `dispose`. Anything an overlay starts (a timer, a
+  patch, a one-at-a-time flag) must let go by itself once `OnScreen` in
+  `lib/band/modal.ts` says the overlay is gone.
+
+Test such code against Pi's own classes. `tests/support/tui-reference.ts`
+copies Pi's Proxy, and `tests/support/fullscreen.ts` runs Pi's real fullscreen
+TUI with its mouse handling and text selection.
+
 ## Versioning
 
 Bump once per push batch; the largest change in the batch decides.
