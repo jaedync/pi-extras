@@ -2,6 +2,22 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.8.3 - 2026-09-26
+
+### Changed
+
+- Usage Guard keeps long runs going past a limit instead of ending them.
+  When the window near its limit resets within five hours
+  (`maxWaitSeconds`), a weekly window in its last hours included, the final
+  warning tells the agent to finish what fits, then sleep through the reset
+  in a background job and continue. The sleep
+  ends three minutes after the reset (`resumeMarginSeconds`, was five). The
+  `usage` report marks such resets `waitable`.
+- Usage warnings no longer push short tasks to stop half done. The first
+  band is advance notice only, and a reset days away asks the agent to
+  finish small remaining work before stopping at a clean checkpoint. A
+  session budget still stops, since the user set it.
+
 ## 0.8.2 - 2026-09-26
 
 ### Fixed
