@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stripTerminalSequences, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, TuiAltScreen, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { closeOnOutsideClick } from "../lib/band/modal.ts";
 import { Popup, type PopupSource } from "../lib/band/popup.ts";
 import { bodyBackground, onBackground, panelBackground } from "../lib/band/surface.ts";
 import { quiet } from "./support/quiet-theme.ts";
+import { tuiReference } from "./support/tui-reference.ts";
 
 const BG = "\x1b[48;2;1;2;3m";
 
@@ -63,6 +64,99 @@ test("a TUI without a transcript dispatch (Pi's classic view) is left alone", ()
 	const tui = { requestRender() {}, terminal: { rows: 30, columns: 80 } };
 	closeOnOutsideClick(tui, () => assert.fail("never called"))();
 	assert.deepEqual(Object.keys(tui), ["requestRender", "terminal"]);
+});
+
+test("through the TUI reference Pi hands extensions, a closed popup gives the transcript its clicks back", () => {
+	const { tui, reached } = fakeTui();
+	const reference = tuiReference(tui);
+	let closed = 0;
+	const undo = closeOnOutsideClick(reference, () => { closed++; });
+	assert.equal((reference.dispatchMouseToLayout(mouse("press")) as { handled?: boolean } | undefined)?.handled, true);
+	assert.equal(closed, 1);
+	undo();
+	reference.dispatchMouseToLayout(mouse("press"));
+	tui.dispatchMouseToLayout(mouse("press"));
+	assert.equal(closed, 1);
+	assert.deepEqual(reached, ["press", "press"], "presses reach the transcript again, and selection with them");
+	assert.equal(Object.prototype.hasOwnProperty.call(tui, "dispatchMouseToLayout"), false);
+});
+
+test("popups closed out of order both let go of the transcript", () => {
+	const { tui, reached } = fakeTui();
+	const closes: string[] = [];
+	const undoFirst = closeOnOutsideClick(tui, () => closes.push("first"));
+	const undoSecond = closeOnOutsideClick(tui, () => closes.push("second"));
+	tui.dispatchMouseToLayout(mouse("press"));
+	assert.deepEqual(closes, ["second"], "a press outside closes the newest popup");
+	undoFirst();
+	undoSecond();
+	tui.dispatchMouseToLayout(mouse("press"));
+	assert.deepEqual(closes, ["second"]);
+	assert.deepEqual(reached, ["press"]);
+	undoFirst();
+	tui.dispatchMouseToLayout(mouse("press"));
+	assert.deepEqual(reached, ["press", "press"], "a second undo changes nothing");
+});
+
+test("a popup Pi hid without closing it stops taking clicks once nothing is on screen", () => {
+	const reached: string[] = [];
+	class Screen {
+		overlay = true;
+		hasOverlay() {
+			return this.overlay;
+		}
+		dispatchMouseToLayout(event: TuiMouseEvent) {
+			reached.push(event.type);
+			return undefined;
+		}
+	}
+	const own = Screen.prototype.dispatchMouseToLayout;
+	const screen = new Screen();
+	const reference = tuiReference(screen);
+	let closed = 0;
+	const undo = closeOnOutsideClick(reference, () => { closed++; });
+	// Session switches and /reload hide the top overlay without closing it, so the popup's undo never runs.
+	screen.overlay = false;
+	reference.dispatchMouseToLayout(mouse("press"));
+	assert.equal(closed, 0);
+	assert.deepEqual(reached, ["press"]);
+	assert.equal(Screen.prototype.dispatchMouseToLayout, own, "Pi's own dispatch is back");
+	undo();
+	assert.equal(Screen.prototype.dispatchMouseToLayout, own);
+});
+
+test("a copy loaded by /reload shares the one patch", async () => {
+	const url = new URL("../lib/band/modal.ts?reloaded", import.meta.url).href;
+	const reloaded = (await import(url)) as { closeOnOutsideClick: typeof closeOnOutsideClick };
+	const { tui, reached } = fakeTui();
+	const own = Object.getPrototypeOf(tui).dispatchMouseToLayout;
+	const closes: string[] = [];
+	const undoOld = closeOnOutsideClick(tui, () => closes.push("old"));
+	const undoNew = reloaded.closeOnOutsideClick(tui, () => closes.push("new"));
+	tui.dispatchMouseToLayout(mouse("press"));
+	assert.deepEqual(closes, ["new"]);
+	undoOld();
+	undoNew();
+	tui.dispatchMouseToLayout(mouse("press"));
+	assert.deepEqual(reached, ["press"]);
+	assert.equal(Object.getPrototypeOf(tui).dispatchMouseToLayout, own, "Pi's own dispatch is back");
+});
+
+test("on Pi's real fullscreen TUI, undo puts Pi's own dispatch back", () => {
+	// The dispatch is private to TuiAltScreen, so the instance is typed by the one method used here.
+	const screen = Object.create(TuiAltScreen.prototype) as { dispatchMouseToLayout(event: TuiMouseEvent): unknown };
+	// The popup on screen, as Pi's own `hasOverlay` sees it.
+	Object.assign(screen, { overlayStack: [{ component: {}, options: {} }] });
+	const own = Object.getOwnPropertyDescriptor(TuiAltScreen.prototype, "dispatchMouseToLayout")?.value;
+	assert.equal(typeof own, "function", "Pi's fullscreen TUI still has the transcript dispatch this stands in for");
+	const reference = tuiReference(screen);
+	let closed = 0;
+	const undo = closeOnOutsideClick(reference, () => { closed++; });
+	assert.equal((reference.dispatchMouseToLayout(mouse("press")) as { handled?: boolean } | undefined)?.handled, true);
+	undo();
+	assert.equal(Object.getOwnPropertyDescriptor(TuiAltScreen.prototype, "dispatchMouseToLayout")?.value, own);
+	assert.equal(reference.dispatchMouseToLayout(mouse("press")), undefined, "with no layout drawn, Pi's dispatch finds nothing");
+	assert.equal(closed, 1);
 });
 
 const source: PopupSource = {

@@ -12,6 +12,7 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Job } from "../lib/shell-jobs-process.ts";
 import { cleanup, contains, doesNotContain, fakeTui, inspector, makeJob, sleep, tempDir, tui } from "./support/shell-jobs-harness.mts";
+import { tuiReference } from "./support/tui-reference.ts";
 
 const { INSPECTOR_HEIGHT_SHARE, INSPECTOR_MIN_ROWS, INSPECTOR_REFRESH_MS, INSPECTOR_TAIL_BYTES, INSPECTOR_WIDTH, JobInspector, openInspector } = inspector;
 const { stripTerminalSequences, visibleWidth } = tui;
@@ -200,7 +201,14 @@ describe("job inspector", () => {
 	test("a left press outside closes it, and the transcript gets its clicks back once closed", () => {
 		const live = liveJob();
 		const reached: string[] = [];
-		const host = { ...fakeTui(), dispatchMouseToLayout: (event: { type: string }) => { reached.push(event.type); return undefined; } };
+		class Screen {
+			dispatchMouseToLayout(event: { type: string }) {
+				reached.push(event.type);
+				return undefined;
+			}
+		}
+		// Pi's fullscreen TUI keeps this method on its class and hands extensions a Proxy of it.
+		const host = tuiReference(Object.assign(new Screen(), fakeTui()));
 		const closes: number[] = [];
 		const view = new JobInspector(host as any, plainTheme as any, live.lookup, () => closes.push(1), () => NOW);
 		const press = { type: "press", button: "left", x: 0, y: 0, screenX: 0, screenY: 0, width: 80, height: 24 };
