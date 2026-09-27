@@ -92,7 +92,7 @@ test("a crossing at turn end warns once, persists the key, and stays quiet after
 	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, busy);
 	assert.equal(pi.sent.length, 2);
 	assert.equal(pi.sent[1].deliverAs, "steer");
-	assert.match(pi.sent[1].content, /^Usage warning: .*Wrap up at a good stopping point/);
+	assert.match(pi.sent[1].content, /^Usage warning: .*too far away to wait for/);
 	assert.equal(store.isHot("anthropic"), false);
 });
 
@@ -145,7 +145,7 @@ test("the tool reports governing windows, refreshes on request and honours all",
 	const report = JSON.parse(result.content[0].text);
 	assert.deepEqual(report.limits.map((limit: { window: string }) => limit.window), ["5h", "7d", "7d-fable"]);
 	assert.equal(report.limits[2].usedPct, 62);
-	assert.equal(report.limits[2].reset.resumeAfterSeconds, 3600 + 86_400 + 300);
+	assert.equal(report.limits[2].reset.resumeAfterSeconds, 3600 + 86_400 + 180);
 	assert.equal(report.warnings, "on");
 	store.set("openai-codex", { entries: [{ label: "7d", key: "primary", usedPct: 100, allowed: true, resetMs: RESET }], atMs: NOW, source: "poll" });
 	const everything = JSON.parse((await pi.tool!.execute("t2", { all: true }, undefined, undefined, ctx)).content[0].text);
@@ -185,7 +185,7 @@ test("config helpers preserve unrelated keys and honour the env override", () =>
 	saveGuardConfig({ enabled: false }, file);
 	const reread = JSON.parse(readFileSync(file, "utf8"));
 	assert.deepEqual(reread.other, { keep: true });
-	assert.deepEqual(reread.usageGuard, { enabled: false, bands: [80, 90], resumeMarginSeconds: 300, proximityPct: 10 });
+	assert.deepEqual(reread.usageGuard, { enabled: false, bands: [80, 90], resumeMarginSeconds: 180, proximityPct: 10, maxWaitSeconds: 18_000 });
 	assert.equal(loadGuardConfig(file, { PI_EXTRAS_USAGE_GUARD: "0" }).enabled, false);
 	assert.equal(loadGuardConfig(file, { PI_EXTRAS_USAGE_GUARD: "1" }).enabled, true);
 	saveGuardConfig({ enabled: true }, file);

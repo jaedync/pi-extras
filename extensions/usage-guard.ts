@@ -159,7 +159,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		promptSnippet: "Check subscription usage limits, resets, and the session usage budget",
 		promptGuidelines: [
 			"Use usage before long autonomous work and whenever the user sets a usage budget (for example: work until 60% of the weekly limit); pass setBudget so a warning fires at that point.",
-			"When usage or a usage warning says a window is exhausted or over budget, wrap up at a good stopping point and report. Only if you must continue unattended, wait resumeAfterSeconds (a background shell job) before resuming after the reset.",
+			"Usage warnings are not a reason to cut work short: finish tasks that fit in the remaining headroom.",
+			"When a window near its limit is waitable (resets within a few hours) and work remains, keep going past it: at a clean checkpoint start a background shell job running `sleep <resumeAfterSeconds>` titled \"Wait for usage reset\", end the turn, and continue the task when it completes. Stop and report only at a user-set budget or when the reset is too far away to wait for.",
 		],
 		parameters: Type.Object({
 			refresh: Type.Optional(Type.Boolean({ description: "Poll the provider now instead of reading the cached snapshot." })),

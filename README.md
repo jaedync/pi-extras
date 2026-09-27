@@ -62,8 +62,8 @@ the package. Removing it does not remove your credentials or change other packag
 - `PI_CODING_AGENT_DIR/pi-extras.json` (default `~/.pi/agent/pi-extras.json`):
   persistent Usage Guard settings under `usageGuard`, written by
   `/usage warnings on|off`. Keys: `enabled` (default `false`), `bands`
-  (default `[90, 95]`), `resumeMarginSeconds` (default `300`), `proximityPct`
-  (default `10`).
+  (default `[90, 95]`), `resumeMarginSeconds` (default `180`), `proximityPct`
+  (default `10`), `maxWaitSeconds` (default `18000`, five hours).
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
   Explicit per-call timeouts are preserved.
 - `PI_CACHE_RETENTION=long`: use the longer cache-warmth indicator window.
@@ -98,7 +98,8 @@ carries that family. Balances (Enterprise spend, prepaid credits) and per-minute
 rate limits taken from response headers are reported but never warned on.
 
 - `usage` tool: percent used, thresholds, reset time, seconds until reset and
-  `resumeAfterSeconds` (reset plus margin) per window. `setBudget` records a
+  `resumeAfterSeconds` (reset plus margin) per window, and `waitable` when the
+  reset is exact and within `maxWaitSeconds`. `setBudget` records a
   session budget ("work until 60% of the weekly limit"); `all` includes other
   providers and non-governing windows.
 - Warnings are off by default: only a session budget warns, once, when its
@@ -106,9 +107,14 @@ rate limits taken from response headers are reported but never warned on.
   default) and provider blocks. Each fires once per window, threshold and reset
   cycle, at turn end, as a message appended to context (no system-prompt
   change, no cache miss). Resets reported within ten minutes of each other
-  count as one cycle, since proxies recompute them on every fetch. The final
-  message asks the agent to wrap up and report; a model-scoped window notes
-  that other models are unaffected. Fired keys and the budget persist with the
+  count as one cycle, since proxies recompute them on every fetch. The first
+  band is advance notice only. The final message never cuts short work that
+  fits: for a waitable reset (any window, weekly included, within
+  `maxWaitSeconds` of its reset) it tells the agent to finish what fits, then
+  sleep through the reset in a background job (`sleep resumeAfterSeconds`)
+  and carry on, so the run outlasts the limit instead of halting. A reset
+  days away or a session budget asks for a clean checkpoint and a summary. A
+  model-scoped window notes that other models are unaffected. Fired keys and the budget persist with the
   session, so a resumed session does not repeat them.
 - `/usage` queues the current snapshot for the next turn; `/usage budget 7d 60`
   and `/usage budget clear` manage the session budget; `/usage warnings on|off`

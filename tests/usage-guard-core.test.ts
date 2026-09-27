@@ -62,7 +62,7 @@ test("bandFor picks the highest crossed threshold", () => {
 test("config normalization sorts bands, drops junk and keeps defaults", () => {
 	assert.deepEqual(normalizeGuardConfig(undefined), DEFAULT_GUARD_CONFIG);
 	assert.deepEqual(normalizeGuardConfig({ enabled: true, bands: [95, "x", 80, 80, 0, 101], resumeMarginSeconds: -1 }), {
-		enabled: true, bands: [80, 95], resumeMarginSeconds: 300, proximityPct: 10,
+		enabled: true, bands: [80, 95], resumeMarginSeconds: 180, proximityPct: 10, maxWaitSeconds: 18_000,
 	});
 	// Anything but an explicit true stays quiet.
 	assert.equal(normalizeGuardConfig({ enabled: "yes" }).enabled, false);
@@ -118,18 +118,43 @@ test("a reset that drifts between polls is the same cycle; one hours away is not
 	assert.equal(alreadyFired(fired, "anthropic", { label: "req", usedPct: 92, resetMs: RESET }, 90, "band"), false);
 });
 
-test("wrap-up guidance says stop, never sleep, and names model-scoped windows", () => {
+test("a near reset is slept through, a far one stops, and short work is finished either way", () => {
 	const scoped: Warning = {
 		key: "k", provider: "anthropic", threshold: 95, reason: "band", final: true,
 		entry: { label: "7d-fable", key: "seven_day_fable", modelFamily: "fable", usedPct: 96, resetMs: NOW + 40 * 3_600_000 },
 	};
-	const text = warningMessage(scoped, ON, NOW, "UTC");
-	assert.match(text, /where things stand\. Then stop and report\. This window governs only fable models on anthropic; other models are not affected by it\.$/);
-	assert.doesNotMatch(text, /sleep/);
+	const far = warningMessage(scoped, ON, NOW, "UTC");
+	assert.match(far, /too far away to wait for\. If what remains of the current task is small, finish it;/);
+	assert.match(far, /This window governs only fable models on anthropic; other models are not affected by it\.$/);
+	assert.doesNotMatch(far, /sleep/);
 	const near = warningMessage({ ...scoped, entry: { ...scoped.entry, resetMs: NOW + 3_600_000 } }, ON, NOW, "UTC");
-	assert.doesNotMatch(near, /sleep/);
-	const plain = warningMessage({ ...scoped, entry: { label: "7d", usedPct: 96 } }, ON, NOW, "UTC");
-	assert.match(plain, /where things stand\. Then stop and report\.$/);
+	assert.match(near, /does not have to end the task\. Finish anything that fits/);
+	assert.match(near, /shell_job_start with command `sleep 3780` and title "Wait for usage reset", then end your turn/);
+	assert.match(near, /wakes you 3m after the reset/);
+	assert.doesNotMatch(near, /stop/);
+	// A weekly window in its last hours is slept through like a five-hour one.
+	const weekly = warningMessage({ ...scoped, entry: { label: "7d", key: "seven_day", usedPct: 96, resetMs: NOW + 4 * 3_600_000 } }, ON, NOW, "UTC");
+	assert.match(weekly, /^Usage warning: anthropic 7d is at 96%.*`sleep 14580` and title "Wait for usage reset"/);
+	assert.equal(resetTiming({ label: "7d", usedPct: 96, resetMs: NOW + 4 * 3_600_000 }, ON, NOW)?.waitable, true);
+	assert.equal(resetTiming({ label: "7d", usedPct: 96, resetMs: NOW + 5 * 3_600_000 + 1000 }, ON, NOW)?.waitable, false);
+	// Five hours out still covers a fresh five-hour window.
+	const edge = warningMessage({ ...scoped, entry: { label: "5h", usedPct: 96, resetMs: NOW + 5 * 3_600_000 } }, ON, NOW, "UTC");
+	assert.match(edge, /`sleep 18180`/);
+	// An approximate reset is not precise enough to sleep to.
+	const approx = warningMessage({ ...scoped, entry: { label: "5h", usedPct: 96, resetMs: NOW + 3_600_000, resetApprox: true } }, ON, NOW, "UTC");
+	assert.doesNotMatch(approx, /sleep/);
+	const unknown = warningMessage({ ...scoped, entry: { label: "7d", usedPct: 96 } }, ON, NOW, "UTC");
+	assert.match(unknown, /summarize where things stand\.$/);
+});
+
+test("a session budget near its reset still stops, since the user set it", () => {
+	const warning: Warning = {
+		key: "k", provider: "anthropic", threshold: 60, reason: "budget", final: true,
+		entry: { label: "5h", key: "five_hour", usedPct: 61, resetMs: NOW + 3_600_000 },
+	};
+	const text = warningMessage(warning, ON, NOW, "UTC");
+	assert.match(text, /limit the user set: finish the current step, record state, summarize where things stand, and stop\.$/);
+	assert.doesNotMatch(text, /sleep/);
 });
 
 test("with warnings off, bands and blocks stay silent but a budget window still fires", () => {
@@ -205,10 +230,10 @@ test("warning text carries reset, resume delay and the Codex saturation note", (
 	assert.match(text, /^Usage warning: openai-codex 7d is at 100% \(threshold 95%\)\./);
 	assert.match(text, /Resets .* \(in 1h\)\./);
 	assert.match(text, /still accepts requests; the percentage is capped at 100/);
-	assert.doesNotMatch(text, /sleep/);
+	assert.match(text, /`sleep 3780`/);
 	const notice = warningMessage({ ...warning, threshold: 90, final: false }, ON, NOW, "UTC");
-	assert.match(notice, /^Usage notice: /);
-	assert.doesNotMatch(notice, /sleep/);
+	assert.match(notice, /^Usage notice: .*Advance notice only: keep working normally\./);
+	assert.doesNotMatch(notice, /sleep|stop|avoid/i);
 });
 
 test("hot providers sit within proximity of their next threshold", () => {
@@ -225,7 +250,8 @@ test("reset timing reports ISO, local, seconds and the resume margin", () => {
 	const timing = resetTiming({ label: "5h", usedPct: 1, resetMs: RESET }, ON, NOW, "UTC");
 	assert.equal(timing?.resetsAt, new Date(RESET).toISOString());
 	assert.equal(timing?.resetsInSeconds, 3600);
-	assert.equal(timing?.resumeAfterSeconds, 3900);
+	assert.equal(timing?.resumeAfterSeconds, 3780);
+	assert.equal(timing?.waitable, true);
 	assert.match(timing?.resetsAtLocal ?? "", /UTC$/);
 	assert.equal(resetTiming({ label: "x" }, ON, NOW), undefined);
 	assert.equal(resetTiming({ label: "", resetMs: RESET, resetApprox: true }, ON, NOW, "UTC")?.resetApprox, true);
@@ -241,7 +267,8 @@ test("the report keeps governing windows by default and explains the gaps", () =
 	assert.equal(report.limits[1].budgetPct, 60);
 	assert.equal(report.limits[1].nextThreshold, 60);
 	assert.equal(report.limits[1].headroomPct, 29);
-	assert.equal(report.limits[0].reset?.resumeAfterSeconds, 3900);
+	assert.equal(report.limits[0].reset?.resumeAfterSeconds, 3780);
+	assert.equal(report.limits[1].reset?.waitable, false);
 	assert.deepEqual(report.snapshotAgeSeconds, { anthropic: 10 });
 	assert.deepEqual(report.notes, []);
 	assert.equal(report.budget?.pct, 60);

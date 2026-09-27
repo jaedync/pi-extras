@@ -12,17 +12,22 @@ export interface GuardConfig {
 	enabled: boolean;
 	/** Ascending percentages; the last one is the wrap-up warning. */
 	bands: number[];
-	/** Added to the reset time when reporting when work could resume. */
+	/** Added to the reset time when suggesting how long to sleep before resuming. */
 	resumeMarginSeconds: number;
 	/** A window this close below its next threshold makes its provider poll faster. */
 	proximityPct: number;
+	/** A reset at most this far away is worth sleeping through instead of stopping. */
+	maxWaitSeconds: number;
 }
 
 export const DEFAULT_GUARD_CONFIG: GuardConfig = {
 	enabled: false,
 	bands: [90, 95],
-	resumeMarginSeconds: 5 * 60,
+	// Enough to absorb reset drift between polls without idling long after the window reopens.
+	resumeMarginSeconds: 3 * 60,
 	proximityPct: 10,
+	// Covers any five-hour window, and a weekly window in its last five hours; any window counts by time to reset.
+	maxWaitSeconds: 5 * 3600,
 };
 
 /** One window the agent has been told to stay under for this session. */
@@ -63,6 +68,7 @@ export function normalizeGuardConfig(raw: unknown): GuardConfig {
 		bands: bands.length ? bands : DEFAULT_GUARD_CONFIG.bands,
 		resumeMarginSeconds: nonNegative(record.resumeMarginSeconds, DEFAULT_GUARD_CONFIG.resumeMarginSeconds),
 		proximityPct: nonNegative(record.proximityPct, DEFAULT_GUARD_CONFIG.proximityPct),
+		maxWaitSeconds: nonNegative(record.maxWaitSeconds, DEFAULT_GUARD_CONFIG.maxWaitSeconds),
 	};
 }
 
@@ -230,6 +236,8 @@ export interface ResetTiming {
 	resetsAtLocal: string;
 	resetsInSeconds: number;
 	resumeAfterSeconds: number;
+	/** Near and exact enough that sleeping resumeAfterSeconds beats stopping. */
+	waitable: boolean;
 	resetApprox?: boolean;
 }
 
@@ -241,16 +249,35 @@ export function resetTiming(entry: LimitEntry, config: GuardConfig, now: number,
 		resetsAtLocal: localTime(entry.resetMs, timeZone),
 		resetsInSeconds,
 		resumeAfterSeconds: resetsInSeconds + config.resumeMarginSeconds,
+		waitable: !entry.resetApprox && resetsInSeconds <= config.maxWaitSeconds,
 		...(entry.resetApprox ? { resetApprox: true } : {}),
 	};
 }
 
-/** What follows the wrap-up: stop. A model-scoped window says which models it does not govern. */
-function continuation(warning: Warning): string {
-	const scoped = warning.entry.modelFamily
+/**
+ * What the final warning asks for. A near reset is slept through so the run
+ * keeps going; stopping is reserved for a user-set budget or a reset days
+ * away. Either way, work that nearly fits is finished rather than cut short.
+ */
+function guidance(warning: Warning, timing: ResetTiming | undefined, config: GuardConfig): string {
+	if (warning.reason === "budget") {
+		return "This is the limit the user set: finish the current step, record state, summarize where things stand, and stop.";
+	}
+	if (timing?.waitable) {
+		const margin = formatDuration(config.resumeMarginSeconds * 1000, false);
+		return "This limit does not have to end the task. Finish anything that fits in the remaining headroom. " +
+			`If more remains, pause at a clean checkpoint and sleep through the reset: call shell_job_start with command \`sleep ${timing.resumeAfterSeconds}\` ` +
+			`and title "Wait for usage reset", then end your turn. This is a deliberate wait, not polling; its completion wakes you ${margin} after the reset, ` +
+			`so continue the task from there. Without background jobs, run \`sleep ${timing.resumeAfterSeconds}\` in the foreground with a longer timeout.`;
+	}
+	return "The reset is too far away to wait for. If what remains of the current task is small, finish it; " +
+		"otherwise stop at a clean checkpoint (commit or record state) and summarize where things stand.";
+}
+
+function scopeNote(warning: Warning): string {
+	return warning.entry.modelFamily
 		? ` This window governs only ${warning.entry.modelFamily} models on ${warning.provider}; other models are not affected by it.`
 		: "";
-	return ` Then stop and report.${scoped}`;
 }
 
 function windowName(provider: string, entry: LimitEntry): string {
@@ -275,9 +302,9 @@ export function warningMessage(warning: Warning, config: GuardConfig, now: numbe
 		? " The provider still accepts requests; the percentage is capped at 100."
 		: "";
 	if (!final) {
-		return `Usage notice: ${cause}${reset}${codexNote} Avoid starting large new work; prefer finishing what is in progress. Use the usage tool for details.`;
+		return `Usage notice: ${cause}${reset}${codexNote} Advance notice only: keep working normally. Use the usage tool for details.`;
 	}
-	return `Usage warning: ${cause}${reset}${codexNote} Wrap up at a good stopping point now: finish the current step, commit or record state, and summarize where things stand.${continuation(warning)}`;
+	return `Usage warning: ${cause}${reset}${codexNote} ${guidance(warning, timing, config)}${scopeNote(warning)}`;
 }
 
 export interface UsageReportLimit {
