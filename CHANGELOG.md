@@ -2,6 +2,29 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.9.0 - 2026-09-28
+
+### Added
+
+- Windows Use (opt-in, `PI_WINDOWS_USE=on`, Pi in WSL on a Hyper-V host): a
+  `windows_use` tool that runs short scripts against the host's Windows VMs,
+  batching calls like `computer_use`. `win.snapshot`, `win.click`, `win.type`,
+  `win.powershell` and the rest act inside the guest through Windows-MCP,
+  with its UI Automation tree; `win.console.*` drives the VM's screen, keyboard
+  and mouse through Hyper-V, also on lock, sign-in and UAC screens. The first
+  call to a VM installs Windows-MCP in it through the console, with nothing to
+  configure, and later calls sign a locked or rebooted VM back in, wait out a
+  restart that installs updates, and repair a stopped server by themselves.
+  They never click on a desktop in use. A call whose connection drops mid-way
+  is not repeated, since it may have run. A failed install stops with the
+  guest's reason within seconds. `win.sleep` paces console steps.
+  `/windows-use` lists the VMs.
+
+### Changed
+
+- `emitImage` in `computer_use` scripts also takes the whole result that
+  carries a screenshot, not only its `.screenshot`.
+
 ## 0.8.3 - 2026-09-26
 
 ### Changed
