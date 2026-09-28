@@ -129,6 +129,45 @@ agent with shell access, can edit these files or start the Computer Use client
 itself, as it could with ChatGPT's or Codex's own integration. Keep that in
 mind before giving an agent both computer use and an unrestricted shell.
 
+## Windows Use
+
+Off unless `PI_WINDOWS_USE=on`, and only in WSL. When enabled, the agent can
+see and operate every Hyper-V VM on the host that the Windows user can manage:
+it reads UI trees and screenshots, types, clicks and runs PowerShell in the
+signed-in guest session, and presses keys and clicks on each VM's console,
+including on sign-in and UAC screens. There is no per-VM approval: opting in
+covers every VM. Screenshots and guest text enter the conversation only when
+the agent's script emits them.
+
+Setting up a VM installs uv and Windows-MCP for the signed-in guest user,
+registers a logon task that runs it (also started by a `pi-windows-use` value
+under the user's `Run` key, since the task's logon trigger proved unreliable
+after restarts), and adds an inbound firewall rule
+(`pi-windows-use`) for its TCP port from the local subnet only. The server
+requires a bearer key: 32 random bytes generated on the host, kept in
+`%LOCALAPPDATA%\pi-extras\windows-use\<vm>.key` for the Windows user, and in
+the guest user's `%USERPROFILE%\.windows-mcp\config.toml`. The key is typed
+into the guest inside the bootstrap and removed from that PowerShell's
+history afterwards. It never enters the conversation. Anyone who holds it and
+can reach the guest's port gets the guest user's full PowerShell, so treat
+other VMs on the same virtual switch as able to try.
+
+While it runs, the bootstrap reports its progress to the host through Hyper-V
+key-value exchange, as the value `PiWindowsUse` under
+`HKLM\SOFTWARE\Microsoft\Virtual Machine\Guest` in the guest. The value holds
+a run id and a status line, and on failure the installer's last output lines,
+never the key. The host reads it to stop a failed install at once.
+
+Requests to the guest go from the host, without a proxy and without following
+redirects, so the key goes only to the guest's address. Signing in clicks the
+last-used account's Sign in button and never types a password. It happens
+only when the console shows no taskbar even after the Windows key, which
+brings the taskbar up over any unlocked desktop, so a desktop in use is never
+clicked, whatever the guest reports. It never clicks a nearly black screen
+(Windows starting, restarting or installing updates), and stops after two
+clicks.
+Agent scripts run in the same isolated V8 context as computer use.
+
 ## Shell Jobs
 
 Commands execute locally without stdin or a TTY. Jobs use process groups so they

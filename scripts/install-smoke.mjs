@@ -61,7 +61,7 @@ try {
   await loader.reload();
   const extensions = loader.getExtensions();
   assert.deepEqual(extensions.errors, []);
-  assert.equal(extensions.extensions.length, 10);
+  assert.equal(extensions.extensions.length, 11);
   assert.ok(loader.getThemes().themes.some(theme => theme.name === 'quiet'));
   assert.deepEqual(loader.getThemes().diagnostics, []);
   const tools = extensions.extensions.flatMap(ext => [...ext.tools.keys()]);
@@ -69,6 +69,7 @@ try {
   assert.ok(tools.includes('usage'));
   assert.ok(!tools.includes('web_search'));
   assert.ok(!tools.includes('computer_use'), 'computer use must stay off until opted in');
+  assert.ok(!tools.includes('windows_use'), 'windows use must stay off until opted in');
   if (process.platform === 'darwin') {
     // Opting in registers the tool; nothing starts until the agent calls it.
     process.env.PI_COMPUTER_USE = 'on';

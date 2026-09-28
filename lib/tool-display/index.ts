@@ -38,7 +38,7 @@ import { splitChain } from "../chain/split.ts";
 import { TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../tool-count.ts";
 import { markRow, rowKind, type RowKind } from "../tool-row.ts";
 import { canAdopt, installAdoption, type RowRenderers } from "./adopt.ts";
-import { computerUseSpec } from "./computer.ts";
+import { computerUseSpec, windowsUseSpec } from "./computer.ts";
 import { editRenderers, readRenderers, writeRenderers } from "./files.ts";
 import { foreignRenderers, type ForeignTool } from "./foreign.ts";
 import type { Kit } from "./kit.ts";
@@ -121,6 +121,7 @@ export function applyArgs(settings: DisplaySettings, args: string): DisplaySetti
 const OWN_SPECS: Partial<Record<RowKind, (name: string) => ToolSpec>> = {
 	kagi: webSearchSpec,
 	"computer-use": () => computerUseSpec,
+	"windows-use": () => windowsUseSpec,
 	usage: () => usageSpec,
 };
 

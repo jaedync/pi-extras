@@ -16,7 +16,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all ten extensions (computer use stays off until you opt in); it makes `quiet` available but does not select it.
+adds all eleven extensions (computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -31,6 +31,7 @@ can still conflict.
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
+| Windows Use | Opt-in, WSL on a Hyper-V host: a `windows_use` tool that operates Windows VMs through Windows-MCP, which it installs in each guest, and through their consoles |
 | Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; thinking as a live tail of its newest lines |
 | Release Notes | What changed in pi-extras, shown once in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
@@ -73,6 +74,7 @@ the package. Removing it does not remove your credentials or change other packag
   models and settings (default `~/.cache/pi-extras/voice`, or under
   `XDG_CACHE_HOME`).
 - `PI_COMPUTER_USE=on`: enable computer use on macOS. Off by default. See below.
+- `PI_WINDOWS_USE=on`: enable Windows use in WSL on a Hyper-V host. Off by default. See below.
 - `PI_TOOL_DISPLAY=off`: leave Pi's own tool rows in place. `/tool-display`
   writes its switches under `toolDisplay` in `pi-extras.json`: `enabled`,
   `others` (default `true`), `chains` (default `true`), `motion` (`full` or
@@ -200,9 +202,9 @@ any failure in the right rail. pi-extras's own tools have layouts of their own:
 
 - **web_search, kagi_search**: the query and how many results came back, with
   the first three under it.
-- **computer_use**: the apps the script used and how many calls and
-  screenshots it took, with the last calls under it. A failed call says
-  `failed` or `not allowed` in words.
+- **computer_use**, **windows_use**: the apps (or VMs) the script used and how
+  many calls and screenshots it took, with the last calls under it. A failed
+  call says `failed` or `not allowed` in words.
 - **usage**: each window's use in the band itself, amber from 80% and red when
   a limit is spent.
 
@@ -313,6 +315,65 @@ extension before opting in.
 
 This relies on undocumented parts of the ChatGPT app and can break when it
 updates. OpenAI does not produce or endorse this integration.
+
+## Windows use
+
+Opt-in, for Pi running in WSL on a Windows Hyper-V host: set
+`PI_WINDOWS_USE=on` before starting Pi. It adds a `windows_use` tool that runs a
+short script against the host's Windows VMs, the way `computer_use` runs one
+against Mac apps. Guest methods (`win.snapshot`, `win.click`, `win.type`,
+`win.key`, `win.app`, `win.powershell` and the rest) go to
+[Windows-MCP](https://github.com/CursorTouch/Windows-MCP) inside the VM, which
+reads the UI Automation tree and acts in the signed-in desktop. `win.console.*`
+methods drive the VM's screen, keyboard and mouse from the host through
+Hyper-V, and also work on lock, sign-in and UAC screens. Every method names its
+VM: `win.snapshot({ vm: "Win11" })`; `win.vms()` lists them.
+
+There is nothing to set up per VM. The first call to a VM installs Windows-MCP
+in it through the console: it opens an elevated PowerShell from Start search,
+accepts the UAC prompt and types a short bootstrap that installs
+[uv](https://docs.astral.sh/uv/) and Windows-MCP for the signed-in user, starts
+it at every logon, opens its port to the local subnet only, and requires a
+random key held on the host, new for every install. This takes a few minutes
+the first time and needs internet access in the guest. An install that fails
+stops at once with the guest's error, which the bootstrap reports to the host
+through Hyper-V key-value exchange. After that, each call first makes sure the VM
+is usable and repairs what it can, and the result says what it did:
+
+- A locked VM is signed back in at the console.
+- A VM that rebooted to the sign-in screen is signed in, and the server starts
+  at logon.
+- A server that stopped while the desktop is showing is reinstalled.
+- A VM that is starting, restarting or installing updates is waited for, up
+  to 15 minutes, before anything is clicked. It shows as a nearly black screen
+  or a missing Hyper-V heartbeat.
+- A VM that is off or saved is left alone; `win.start({ vm })` starts it.
+
+A call that never reached the server is sent again after the repair. One whose
+connection dropped mid-way is not, since it may have run (a `Restart-Computer`,
+say); its error says so, and the next call reconnects.
+
+Signing in clicks the Sign in button of the last-used account, which suits
+passwordless lab accounts. Before clicking, it looks for the taskbar and, if
+none shows, presses the Windows key: over an unlocked desktop, even under a
+full-screen app, that brings up the taskbar (Start is closed again), while
+lock and sign-in screens ignore it. So an unlocked desktop is never clicked.
+A black screen is first woken with Shift, which does nothing by itself. A VM
+that still shows no desktop after two Sign in clicks, such as one with a
+password, stops with a pointer to `win.console.screenshot`.
+
+It needs `powershell.exe` through WSL interop and a Windows user in the
+Hyper-V Administrators group. Guests need a US keyboard layout for console
+typing. The host side runs as one Windows PowerShell process, started on the
+first call and closed after ten idle minutes; its first call takes a few
+seconds. `/windows-use` lists the host's VMs and which are set up.
+
+To watch the agent work, connect to the VM with VM Connect in a basic session
+(turn off Enhanced session in its View menu): that window shows the console,
+where the agent's clicks and typing land. Keep your own mouse and keyboard out
+of it meanwhile, since both reach the same console. An enhanced session is a
+separate sign-in that doesn't show the agent's work, and signing in at the
+console, which recovery may do, disconnects it.
 
 ## Kagi setup
 

@@ -10,7 +10,7 @@
  */
 export const TOOL_ROW = Symbol.for("pi-extras.tool-row.v1");
 
-export const ROW_KINDS = ["band", "kagi", "computer-use", "usage"] as const;
+export const ROW_KINDS = ["band", "kagi", "computer-use", "windows-use", "usage"] as const;
 export type RowKind = (typeof ROW_KINDS)[number];
 
 /** A copy of `definition` carrying the mark. */

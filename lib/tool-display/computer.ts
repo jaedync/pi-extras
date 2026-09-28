@@ -1,8 +1,9 @@
 /**
- * The computer_use row. The band names the apps the script used and how many
- * Computer Use calls it made; under it sit the last calls, each with its
- * target and time, then the start of what the script emitted. The popup has
- * the script, highlighted, and every call and line of output.
+ * The computer_use row, and windows_use's, which shares it. The band names the
+ * apps (or VMs) the script used and how many calls it made; under it sit the
+ * last calls, each with its target and time, then the start of what the script
+ * emitted. The popup has the script, highlighted, and every call and line of
+ * output.
  */
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Seg } from "../band/band.ts";
@@ -60,12 +61,19 @@ function approvalNote(paint: Paint, call: CallRecord): string | undefined {
 	return undefined;
 }
 
-function callLine(paint: Paint, call: CallRecord, methodWidth: number, running: boolean): string {
+/** How a script tool names itself, its calls and the process a cold call starts. */
+export interface ScriptRowNames {
+	readonly title: string;
+	readonly call: string;
+	readonly started: string;
+}
+
+function callLine(paint: Paint, names: ScriptRowNames, call: CallRecord, methodWidth: number, running: boolean): string {
 	const target = [call.app ? paint.fg("accent", flat(call.app)) : "", call.detail ? paint.fg("muted", flat(call.detail)) : ""].filter(Boolean).join(" ");
 	const head = `${paint.fg("toolOutput", call.method.padEnd(methodWidth))}  ${target}`;
 	if (running) return `${head}  ${paint.fg("dim", "…")}`;
 	const notes = [paint.fg("dim", formatMs(call.ms))];
-	if (call.startupMs !== undefined) notes.push(paint.fg("dim", `started client ${formatMs(call.startupMs)}`));
+	if (call.startupMs !== undefined) notes.push(paint.fg("dim", `started ${names.started} ${formatMs(call.startupMs)}`));
 	const approval = approvalNote(paint, call);
 	if (approval) notes.push(approval);
 	if (call.approval === "deny") notes.push(paint.fg("warning", "not allowed"));
@@ -73,29 +81,29 @@ function callLine(paint: Paint, call: CallRecord, methodWidth: number, running: 
 	return `${head}  ${notes.join(paint.fg("dim", " · "))}`;
 }
 
-function timeline(paint: Paint, details: RowDetails): string[] {
+function timeline(paint: Paint, names: ScriptRowNames, details: RowDetails): string[] {
 	const calls = details.calls ?? [];
 	const all = [...calls.map((call) => ({ call, running: false })), ...(details.running ? [{ call: { ...details.running, ms: 0, ok: true } as CallRecord, running: true }] : [])];
 	const methodWidth = Math.max(0, ...all.map(({ call }) => call.method.length));
-	return all.map(({ call, running }) => callLine(paint, call, methodWidth, running));
+	return all.map(({ call, running }) => callLine(paint, names, call, methodWidth, running));
 }
 
 function emitted(view: View): string[] {
 	return textLines(resultText(view.result)).map((line) => view.paint.fg(failed(view) ? "error" : "toolOutput", line));
 }
 
-export const computerUseSpec: ToolSpec = {
-	label: () => "computer_use",
+export const scriptSpec = (names: ScriptRowNames): ToolSpec => ({
+	label: () => names.title,
 	title(view) {
 		const details = detailsOf(view);
 		const used = apps(details?.calls ?? (details?.running ? [details.running as CallRecord] : []));
-		if (used.length > 0) return [titleSeg("computer_use"), { text: ` ${used.join(", ")}`, color: "accent" }, ...summary(view, details!)];
+		if (used.length > 0) return [titleSeg(names.title), { text: ` ${used.join(", ")}`, color: "accent" }, ...summary(view, details!)];
 		const first = codeOf(view).split("\n").find((line) => line.trim() !== "");
-		return [titleSeg("computer_use"), ...(first ? [{ text: ` ${flat(first)}`, color: "toolOutput" }] : [])];
+		return [titleSeg(names.title), ...(first ? [{ text: ` ${flat(first)}`, color: "toolOutput" }] : [])];
 	},
 	body(view, width) {
 		const details = detailsOf(view);
-		const calls = details ? timeline(view.paint, details) : [];
+		const calls = details ? timeline(view.paint, names, details) : [];
 		const text = view.context.isPartial ? [] : emitted(view);
 		if (view.context.expanded) return wrapAll([...calls, ...text], width);
 		const hidden = Math.max(0, calls.length - CALL_PREVIEW_LINES);
@@ -115,7 +123,7 @@ export const computerUseSpec: ToolSpec = {
 		const details = detailsOf(view);
 		const calls = details?.calls?.length ?? 0;
 		const took = details?.durationMs;
-		return [plural(calls, "Computer Use call"), ...(typeof took === "number" ? [`took ${formatMs(took)}`] : [])].join(" · ");
+		return [plural(calls, names.call), ...(typeof took === "number" ? [`took ${formatMs(took)}`] : [])].join(" · ");
 	},
 	head(view, width) {
 		const code = codeOf(view);
@@ -123,9 +131,12 @@ export const computerUseSpec: ToolSpec = {
 	},
 	output(view, width) {
 		const details = detailsOf(view);
-		const calls = details ? timeline(view.paint, details) : [];
+		const calls = details ? timeline(view.paint, names, details) : [];
 		const text = view.context.isPartial ? [] : emitted(view);
 		const lines = [...calls, ...(calls.length > 0 && text.length > 0 ? [""] : []), ...text];
 		return lines.length > 0 ? wrapAll(lines, width) : [view.paint.fg("dim", view.context.isPartial ? "(no calls yet)" : "(no output)")];
 	},
-};
+});
+
+export const computerUseSpec = scriptSpec({ title: "computer_use", call: "Computer Use call", started: "client" });
+export const windowsUseSpec = scriptSpec({ title: "windows_use", call: "Windows call", started: "host" });

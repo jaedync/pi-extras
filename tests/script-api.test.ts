@@ -52,6 +52,14 @@ test("a custom API decides which results carry screenshot handles", async () => 
 	assert.deepEqual(result.content, [{ type: "text", text: "tree" }, { type: "image", data: "BBBB", mimeType: "image/png" }, { type: "image", data: "BBBB", mimeType: "image/png" }]);
 });
 
+test("emitImage also takes the whole result that carries the screenshot", async () => {
+	const { session: s } = session(() => ({ content: [{ type: "text", text: "tree" }, { type: "image", data: "BBBB", mimeType: "image/png" }], isError: false }));
+	const executor = new CodeExecutor({ session: s, api: API });
+	const result = await executor.execute(`emitImage(await win.console.screenshot({ vm: "A" }));`, { approve });
+	assert.equal(result.error, undefined);
+	assert.deepEqual(result.content, [{ type: "image", data: "BBBB", mimeType: "image/png" }]);
+});
+
 test("a custom API's errors and limits use its label and image hint", async () => {
 	const executor = new CodeExecutor({ session: session().session, api: API, sliceMs: 100 });
 	const bad = await executor.execute(`emitImage({});`, { approve });
