@@ -26,8 +26,17 @@ interface Waiter {
 const STDERR_TAIL_CHARS = 400;
 const METHOD_NOT_FOUND = -32601;
 
+/** How errors name the child process and its calls. */
+export interface LinkNames {
+	readonly process: string;
+	readonly call: string;
+}
+
+const COMPUTER_USE: LinkNames = { process: "Computer Use client", call: "Computer Use" };
+
 export class McpLink {
 	private readonly proc: ClientProcess;
+	private readonly names: LinkNames;
 	private readonly pending = new Map<number, Waiter>();
 	private nextId = 1;
 	private stderrTail = "";
@@ -36,8 +45,9 @@ export class McpLink {
 		throw Object.assign(new Error(`unsupported request ${method}`), { code: METHOD_NOT_FOUND });
 	};
 
-	constructor(proc: ClientProcess) {
+	constructor(proc: ClientProcess, names: LinkNames = COMPUTER_USE) {
 		this.proc = proc;
+		this.names = names;
 		createInterface({ input: proc.stdout }).on("line", (line) => this.receive(line));
 		proc.stderr?.on("data", (chunk: Buffer) => {
 			this.stderrTail = `${this.stderrTail}${chunk}`.slice(-STDERR_TAIL_CHARS);
@@ -46,7 +56,7 @@ export class McpLink {
 		proc.stdin.on("error", () => {});
 		proc.once("close", (code) => {
 			const detail = this.stderrTail.trim();
-			this.exitError = new Error(`Computer Use client exited (code ${code ?? "unknown"})${detail ? `: ${detail}` : ""}`);
+			this.exitError = new Error(`${this.names.process} exited (code ${code ?? "unknown"})${detail ? `: ${detail}` : ""}`);
 			for (const waiter of this.pending.values()) waiter.reject(this.exitError);
 			this.pending.clear();
 		});
@@ -58,13 +68,13 @@ export class McpLink {
 
 	request(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
 		if (this.exitError) return Promise.reject(this.exitError);
-		if (signal?.aborted) return Promise.reject(new Error("Computer Use call cancelled"));
+		if (signal?.aborted) return Promise.reject(new Error(`${this.names.call} call cancelled`));
 		const id = this.nextId++;
 		return new Promise((resolve, reject) => {
 			const abort = () => {
 				// The client may still answer; that late response is dropped as unknown.
 				this.pending.delete(id);
-				reject(new Error("Computer Use call cancelled"));
+				reject(new Error(`${this.names.call} call cancelled`));
 			};
 			signal?.addEventListener("abort", abort, { once: true });
 			const done = () => signal?.removeEventListener("abort", abort);
@@ -99,7 +109,7 @@ export class McpLink {
 		const waiter = this.pending.get(message.id);
 		if (!waiter) return;
 		this.pending.delete(message.id);
-		if (message.error) waiter.reject(new Error(String(message.error.message ?? "Computer Use request failed")));
+		if (message.error) waiter.reject(new Error(String(message.error.message ?? `${this.names.call} request failed`)));
 		else waiter.resolve(message.result);
 	}
 

@@ -24,6 +24,8 @@ export interface RowDetails {
 }
 
 interface CallOptions {
+	/** The tool name the row starts with; computer_use unless another tool shares this layout. */
+	readonly title?: string;
 	readonly expanded: boolean;
 	readonly paint: Paint;
 	readonly highlight: (code: string) => string[];
@@ -31,6 +33,8 @@ interface CallOptions {
 }
 
 interface ResultOptions {
+	/** What a call's startup note calls the process it started. */
+	readonly started?: string;
 	readonly expanded: boolean;
 	readonly isError: boolean;
 	readonly paint: Paint;
@@ -49,7 +53,7 @@ function more(hidden: number, options: { paint: Paint; hint: string }): string {
 
 export function callLines(args: unknown, options: CallOptions): string[] {
 	const { paint } = options;
-	const title = paint.fg("toolTitle", paint.bold("computer_use"));
+	const title = paint.fg("toolTitle", paint.bold(options.title ?? "computer_use"));
 	const code = args && typeof args === "object" && typeof (args as { code?: unknown }).code === "string" ? sanitize((args as { code: string }).code).trimEnd() : "";
 	if (!code) return [`${title} ${paint.fg("dim", "…")}`];
 	const lines = options.highlight(code);
@@ -69,7 +73,7 @@ function approvalNote(call: CallRecord): { text: string; key: PaintKey } | undef
 	return undefined;
 }
 
-function timeline(details: RowDetails, paint: Paint): string[] {
+function timeline(details: RowDetails, paint: Paint, started: string): string[] {
 	const calls = details.calls ?? [];
 	const rows = [...calls.map((call) => ({ call, running: false })), ...(details.running ? [{ call: { ...details.running, ms: 0, ok: true } as CallRecord, running: true }] : [])];
 	if (rows.length === 0) return [];
@@ -83,7 +87,7 @@ function timeline(details: RowDetails, paint: Paint): string[] {
 		if (running) return head;
 		const pad = " ".repeat(targetWidth - target(call).length);
 		const notes: string[] = [];
-		if (call.startupMs !== undefined) notes.push(paint.fg("dim", `started client ${formatMs(call.startupMs)}`));
+		if (call.startupMs !== undefined) notes.push(paint.fg("dim", `started ${started} ${formatMs(call.startupMs)}`));
 		const approval = approvalNote(call);
 		if (approval) notes.push(paint.fg(approval.key, approval.text));
 		if (!call.ok && call.approval !== "deny" && call.error) notes.push(paint.fg("error", sanitize(call.error).split("\n")[0]));
@@ -118,7 +122,7 @@ export function resultLines(input: { content?: unknown; details?: unknown }, opt
 	if (calls.some((call) => typeof call === "string")) return [paint.fg("muted", (calls as unknown as string[]).join(", ")), ...body];
 	if (!details) return body;
 
-	const out = [...timeline(details, paint), ...body];
+	const out = [...timeline(details, paint, options.started ?? "client"), ...body];
 	if (!options.partial && !options.isError && details.durationMs !== undefined) {
 		const shots = images(input.content);
 		out.push(paint.fg("muted", `${plural(calls.length, "call")} in ${formatMs(details.durationMs)}${shots ? `, ${plural(shots, "screenshot")}` : ""}`));

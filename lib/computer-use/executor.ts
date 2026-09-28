@@ -4,8 +4,8 @@
  * Only what the script emits returns to the conversation.
  */
 import { Worker } from "node:worker_threads";
-import { describeCall } from "./describe.ts";
-import type { Approval, CallOptions, ContentBlock, SkySession } from "./session.ts";
+import { type CallTarget, describeCall } from "./describe.ts";
+import type { Approval, CallOptions, ContentBlock, SkySession, ToolResult } from "./session.ts";
 
 export const METHODS = [
 	"list_apps", "get_app_state", "click", "perform_secondary_action", "set_value",
@@ -25,9 +25,47 @@ const DEFAULT_MAX_TEXT_CHARS = 50_000;
 const WORKER_START_MS = 5_000;
 
 type Image = Extract<ContentBlock, { type: "image" }>;
+export type ScreenshotHandle = { readonly type: "screenshot"; readonly id: string };
+
+/**
+ * What the script sees: one global of async methods backed by session calls.
+ * Dotted method names ("console.click") become nested objects.
+ */
+export interface ScriptApi {
+	/** The tool's name, for messages about the code as a whole. */
+	readonly tool: string;
+	readonly global: string;
+	readonly methods: readonly string[];
+	/** Names the calls in messages: "the code made more than 50 <label> calls". */
+	readonly label: string;
+	/** Where emitImage's argument comes from, for its error message. */
+	readonly imageHint: string;
+	describe(method: string, args: Record<string, unknown>): CallTarget;
+	/** The value a call resolves to in the script; images stay here behind `keep`'s handles. */
+	value(method: string, args: Record<string, unknown>, result: ToolResult, keep: (image: Image) => ScreenshotHandle): unknown;
+}
+
+const textOf = (result: ToolResult) => result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
+
+export const SKY_API: ScriptApi = {
+	tool: "computer_use",
+	global: "sky",
+	methods: METHODS,
+	label: "Computer Use",
+	imageHint: "sky.get_app_state",
+	describe: describeCall,
+	value(method, args, result, keep) {
+		const text = textOf(result);
+		if (method !== "get_app_state") return text || null;
+		const image = result.content.find((block): block is Image => block.type === "image");
+		return { app: args.app, text, screenshot: image ? keep(image) : null };
+	},
+};
 
 export interface ExecutorOptions {
 	readonly session: Pick<SkySession, "call">;
+	/** Defaults to computer use's `sky`. */
+	readonly api?: ScriptApi;
 	readonly sliceMs?: number;
 	readonly maxTextChars?: number;
 	/** Clock for call timings; tests pass their own. */
@@ -92,9 +130,10 @@ export class CodeExecutor {
 	}
 
 	private run(code: string, options: RunOptions): Promise<CodeResult> {
-		if (code.length > MAX_CODE_CHARS) return Promise.reject(new Error(`computer_use code is over ${MAX_CODE_CHARS} characters`));
+		const api = this.options.api ?? SKY_API;
+		if (code.length > MAX_CODE_CHARS) return Promise.reject(new Error(`${api.tool} code is over ${MAX_CODE_CHARS} characters`));
 		return new Promise((resolve, reject) => {
-			const worker = new Worker(WORKER, { workerData: { code, store: this.store, methods: METHODS } });
+			const worker = new Worker(WORKER, { workerData: { code, store: this.store, methods: api.methods, global: api.global, imageHint: api.imageHint } });
 			const run = new Run(this.options, options, worker, (key) => this.screenshots.get(key), (image) => this.keepScreenshot(image));
 			run.settle = (outcome) => {
 				options.signal?.removeEventListener("abort", abort);
@@ -105,17 +144,17 @@ export class CodeExecutor {
 					resolve(outcome.result);
 				}
 			};
-			const abort = () => run.fail(new Error("Computer Use code cancelled"));
+			const abort = () => run.fail(new Error(`${api.label} code cancelled`));
 			if (options.signal?.aborted) return abort();
 			options.signal?.addEventListener("abort", abort, { once: true });
 			worker.on("message", (message: WorkerMessage) => run.handle(message).catch((error: unknown) => run.fail(error instanceof Error ? error : new Error(String(error)))));
 			worker.once("error", (error) => run.fail(error));
-			worker.once("exit", (code) => run.fail(new Error(`Computer Use code worker exited early (${code})`)));
+			worker.once("exit", (code) => run.fail(new Error(`${api.label} code worker exited early (${code})`)));
 			run.startTimer(WORKER_START_MS, "the code worker did not start");
 		});
 	}
 
-	private keepScreenshot(image: Image): { type: "screenshot"; id: string } {
+	private keepScreenshot(image: Image): ScreenshotHandle {
 		const id = String(this.nextScreenshot++);
 		this.screenshots.set(id, image);
 		if (this.screenshots.size > MAX_SCREENSHOTS) this.screenshots.delete(this.screenshots.keys().next().value!);
@@ -145,10 +184,12 @@ class Run {
 	private readonly options: RunOptions;
 	private readonly worker: Worker;
 	private readonly screenshot: (id: string) => Image | undefined;
-	private readonly keep: (image: Image) => object;
+	private readonly keep: (image: Image) => ScreenshotHandle;
+	private readonly api: ScriptApi;
 
-	constructor(executor: ExecutorOptions, options: RunOptions, worker: Worker, screenshot: (id: string) => Image | undefined, keep: (image: Image) => object) {
+	constructor(executor: ExecutorOptions, options: RunOptions, worker: Worker, screenshot: (id: string) => Image | undefined, keep: (image: Image) => ScreenshotHandle) {
 		this.executor = executor;
+		this.api = executor.api ?? SKY_API;
 		this.options = options;
 		this.worker = worker;
 		this.screenshot = screenshot;
@@ -173,7 +214,7 @@ class Run {
 
 	async handle(message: WorkerMessage): Promise<void> {
 		if (this.settled) return;
-		if (message.type === "ready") this.startTimer(this.sliceMs, `the code ran over ${this.sliceMs} ms between Computer Use calls`);
+		if (message.type === "ready") this.startTimer(this.sliceMs, this.sliceReason());
 		else if (message.type === "emit") this.emitText(JSON.parse(message.value));
 		else if (message.type === "emit_image") this.emitImage(JSON.parse(message.value).id);
 		else if (message.type === "call") await this.call(message);
@@ -197,11 +238,11 @@ class Run {
 	}
 
 	private async call(message: Extract<WorkerMessage, { type: "call" }>): Promise<void> {
-		if (++this.startedCalls > MAX_CALLS) return this.reply(message.id, { error: `the code made more than ${MAX_CALLS} Computer Use calls` });
+		if (++this.startedCalls > MAX_CALLS) return this.reply(message.id, { error: `the code made more than ${MAX_CALLS} ${this.api.label} calls` });
 		clearTimeout(this.timer);
 		let args: Record<string, unknown> = {};
 		try { args = JSON.parse(message.args) as Record<string, unknown>; } catch { /* reported by the call below */ }
-		const target = { method: message.method, ...describeCall(message.method, args) };
+		const target = { method: message.method, ...this.api.describe(message.method, args) };
 		const started = this.now();
 		let approval: Approval | undefined;
 		let startupMs: number | undefined;
@@ -217,13 +258,8 @@ class Run {
 		try {
 			const result = await this.executor.session.call(message.method, args, { approve, signal: this.options.signal });
 			startupMs = result.startupMs;
-			const text = result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
-			if (result.isError) throw new Error(text || `${message.method} failed`);
-			let value: unknown = text || null;
-			if (message.method === "get_app_state") {
-				const image = result.content.find((block): block is Image => block.type === "image");
-				value = { app: args.app, text, screenshot: image ? this.keep(image) : null };
-			}
+			if (result.isError) throw new Error(textOf(result) || `${message.method} failed`);
+			const value = this.api.value(message.method, args, result, this.keep);
 			record();
 			this.reply(message.id, { value: JSON.stringify(value) });
 		} catch (error) {
@@ -231,8 +267,12 @@ class Run {
 			record(reason);
 			this.reply(message.id, { error: reason });
 		} finally {
-			if (!this.settled) this.startTimer(this.sliceMs, `the code ran over ${this.sliceMs} ms between Computer Use calls`);
+			if (!this.settled) this.startTimer(this.sliceMs, this.sliceReason());
 		}
+	}
+
+	private sliceReason(): string {
+		return `the code ran over ${this.sliceMs} ms between ${this.api.label} calls`;
 	}
 
 	private reply(id: number, payload: { value: string } | { error: string }): void {
@@ -249,7 +289,7 @@ class Run {
 		clearTimeout(this.timer);
 		const content = [...this.content];
 		if (this.clippedChars > 0) content.push({ type: "text", text: `[${this.clippedChars} more characters clipped; emit only what you need]` });
-		if (error) content.push({ type: "text", text: `Computer Use code stopped: ${error}` });
+		if (error) content.push({ type: "text", text: `${this.api.label} code stopped: ${error}` });
 		this.settle({ result: { content, calls: [...this.calls], durationMs: Math.round(this.now() - this.started), ...(error ? { error } : {}) }, store });
 	}
 }
