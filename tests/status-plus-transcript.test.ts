@@ -144,8 +144,19 @@ test("the newest cache write says whether the cache lives five minutes or an hou
 	const source = (entries: unknown[]) => ({ getBranch: () => entries as any, getSessionDir: () => "/nowhere", costOf: () => 0 });
 	const hour = assistant(T0, T0 + 1000, "anthropic", 0, 0, { cacheWrite: 500, cacheWrite1h: 500 });
 	const readOnly = assistant(T0 + 2000, T0 + 3000, "anthropic", 0, 0, { cacheRead: 500 });
-	const short = assistant(T0 + 4000, T0 + 5000, "anthropic", 0, 0, { cacheWrite: 50 });
+	const short = assistant(T0 + 4000, T0 + 5000, "anthropic", 0, 0, { cacheWrite: 50, cacheWrite1h: 0 });
 	assert.equal(collect(source([readOnly])).cacheLongRetention, undefined);
 	assert.equal(collect(source([hour, readOnly])).cacheLongRetention, true);
 	assert.equal(collect(source([hour, readOnly, short])).cacheLongRetention, false);
+});
+
+test("cache lifetime evidence belongs to the provider that wrote it", () => {
+	const source = (entries: unknown[]) => ({ getBranch: () => entries as any, getSessionDir: () => "/nowhere", costOf: () => 0 });
+	const hour = assistant(T0, T0 + 1000, "anthropic", 0, 0, { cacheWrite: 500, cacheWrite1h: 500 });
+	// OpenAI-style APIs report writes without the one-hour split: no evidence either way.
+	const codexWrite = assistant(T0 + 2000, T0 + 3000, "openai-codex", 0, 0, { cacheWrite: 50 });
+	const codexRead = assistant(T0 + 4000, T0 + 5000, "openai-codex", 0, 0, { cacheRead: 500 });
+	assert.equal(collect(source([hour, codexRead])).cacheLongRetention, undefined);
+	assert.equal(collect(source([hour, codexWrite])).cacheLongRetention, undefined);
+	assert.equal(collect(source([codexWrite])).cacheLongRetention, undefined);
 });

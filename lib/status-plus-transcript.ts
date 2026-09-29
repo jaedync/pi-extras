@@ -149,6 +149,8 @@ function collectEntries(source: TranscriptSource): SessionStats {
 	const zenMessages = zenFallbackMessages(branch);
 	// Pi summarizes with the session's current model, which these track.
 	let active = { provider: "unknown", id: "" };
+	// Cache lifetime evidence only describes the provider that wrote it.
+	let retentionProvider: string | undefined;
 
 	for (const entry of branch) {
 		if (entry.type === "model_change" && typeof entry.provider === "string") {
@@ -196,7 +198,14 @@ function collectEntries(source: TranscriptSource): SessionStats {
 		const promptTokens = promptTokensOf(usage);
 		// A request refused before its prompt was read says nothing about the cache.
 		if (promptTokens > 0) stats.cacheHitPct = ((usage.cacheRead ?? 0) / promptTokens) * 100;
-		if ((usage.cacheWrite ?? 0) > 0) stats.cacheLongRetention = (usage.cacheWrite1h ?? 0) > 0;
+		// Only Anthropic reports the one-hour split; other APIs leave it undefined, which is no evidence.
+		if ((usage.cacheWrite ?? 0) > 0 && typeof usage.cacheWrite1h === "number") {
+			stats.cacheLongRetention = usage.cacheWrite1h > 0;
+			retentionProvider = message.provider;
+		} else if (promptTokens > 0 && message.provider !== retentionProvider) {
+			stats.cacheLongRetention = undefined;
+			retentionProvider = undefined;
+		}
 
 		const startedMs = toEpochMs(message.timestamp);
 		// OpenCode keeps the wire provider as opencode-go when an exhausted Go
