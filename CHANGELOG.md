@@ -2,6 +2,33 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.9.2 - 2026-09-29
+
+Status Plus, checked against every recorded session: it now matches the
+transcripts to the cent wherever they link their spend.
+
+### Fixed
+
+- Status Plus charges compactions, branch summaries and Pi's cache refreshes.
+  Pi bills them but records their usage outside replies, and the footer
+  skipped them; compactions alone were about 5% of real spend. They are
+  charged to the model that ran them and count as no turn.
+- Subagent children that a workflow notice, incremental child notice or
+  supervisor request names only in its text are charged, when their session
+  sits under this session's folder. A child reachable under two run ids, its
+  own session and another run's artifact copy, is charged once.
+- The cache clock follows the lifetime the newest cache write actually got.
+  Anthropic-compatible proxies such as Meridian write hour-long entries
+  whatever Pi asked for, so a warm cache read cold after five minutes.
+  `PI_CACHE_RETENTION` still decides when the transcript doesn't say.
+- A request refused before its prompt was read no longer blanks the cache hit
+  rate or restarts the cache clock, and tool calls in a failed or aborted
+  reply, which never run, are no longer counted.
+- Context Pi can't size yet, as after a compaction, shows `?` rather than 0.
+- A cost recovered for a reply saved without one prices hour-long cache
+  writes at twice the input rate, as Pi does.
+- Pi's cache refreshes during a long tool call no longer tick live airtime.
+
 ## 0.9.1 - 2026-09-29
 
 Windows Use, after a night of live agent runs against a Hyper-V guest.
