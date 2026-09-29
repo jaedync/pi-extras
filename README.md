@@ -368,17 +368,18 @@ it can't read or send input to the windows of apps that run as administrator:
 their UI tree is empty, and its clicks and keys to them are dropped without an
 error. Snapshots mark such windows, and the console methods reach them.
 
-To let Windows-MCP reach those windows too, set `PI_WINDOWS_USE_ELEVATED=on`.
+To give Windows-MCP administrator rights, set `PI_WINDOWS_USE_ELEVATED=on`.
 Setup then has the logon task run it with the guest user's full
 administrator rights (the task's highest run level, which needs that user to
 be an administrator), and a server set up the other way is reinstalled on
-the next call; turning the setting off reinstalls it without them. MMC
-consoles such as Event Viewer, and most vendor admin tools, then get UI
-trees, and clicks and keys reach them. `win.powershell` and the apps
-`win.app` launches run as administrator as well. One caveat from testing:
-a snapshot of Event Viewer showing an event log crashes Event Viewer, every
-time, once Windows-MCP can read it; the tool description steers agents to
-`Get-WinEvent` for logs. See
+the next call; turning the setting off reinstalls it without them.
+`win.powershell` and the apps `win.app` launches then run as administrator,
+without UAC prompts, and Windows-MCP's clicks and keys reach apps running as
+administrator. Their UI trees fared poorly in testing even so: a snapshot
+crashed Event Viewer whenever it showed an event log, Services stalled
+snapshots past their limit, and a vendor's MMC console kept its tree hidden. The
+tool description steers agents to PowerShell (`Get-WinEvent`,
+`Get-Service`) and OCR for such consoles. See
 [security and privacy](docs/security.md#windows-use) for what the setting
 allows.
 
