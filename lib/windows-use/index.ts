@@ -40,7 +40,7 @@ Guest methods run through Windows-MCP inside the VM (UI Automation tree, input, 
 - win.scroll({ vm, x?, y?, direction?: "up"|"down"|"left"|"right", amount?, horizontal? })
 - win.move({ vm, x, y, drag?, from?: [x, y] })
 - win.key({ vm, keys }): e.g. "ctrl+c", "win+r", "enter"
-- win.app({ vm, mode?: "launch"|"switch"|"resize", name }): launch finds an app by its Start menu name, roughly matched ("System Management Console"), which is quicker and surer than typing into Start search; switch brings an open window to the front
+- win.app({ vm, mode?: "launch"|"switch"|"resize", name }): launch takes a Start menu app's name, or words only it has ("edge"), which is quicker and surer than Start search; a name no app has fails naming the nearest, and nothing starts. switch brings an open window to the front
 - win.wait_for({ vm, condition, text?, window_name?, timeout? })
 - win.powershell({ vm, command, timeout? }) -> { output, status }: output is stdout (stderr when stdout is empty), status the exit code; runs as the signed-in user; timeout in seconds, default 30, at most 540
 - win.call({ vm, tool, args }): any other Windows-MCP tool (Clipboard, Process, FileSystem, Registry, Scrape, MultiSelect, MultiEdit, Wait); args is an object, and a wrong tool name or argument lists them all with their arguments. Scrape with { url } fetches a page's text from the guest; with { url, use_dom: true } it reads the browser tab in front

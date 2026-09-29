@@ -317,6 +317,27 @@ test("an app launch whose window check fails in UI Automation says the app may b
 	await assert.rejects(new WinSession(fakeHost().host, guest).call("app", { vm: "A", mode: "launch", name: "Microsoft Edge" }, {}), /Microsoft Edge may have opened[\s\S]*snapshot before launching it again/);
 });
 
+test("win.app launches the Start menu app a name means, and refuses a near miss before anything starts", async () => {
+	const log: string[] = [];
+	const guest = (vm: string) => ({
+		vm,
+		async tool(name: string, args: Record<string, unknown>) {
+			log.push(`${name} ${JSON.stringify(args)}`);
+			if (name === "PowerShell" && String(args.command).includes("Get-StartApps")) return { content: [{ type: "text", text: "Response: Print Management\r\nOperations Control Management Console\r\nMicrosoft Edge\n\nStatus Code: 0" }], isError: false };
+			return { content: [{ type: "text", text: `${name} done` }], isError: false };
+		},
+		forget() {},
+		recheck() {},
+	}) as unknown as Guest;
+	const session = new WinSession(fakeHost().host, guest);
+	await session.call("app", { vm: "A", name: "edge" }, {});
+	assert.equal(log.at(-1), 'App {"name":"Microsoft Edge"}');
+	await assert.rejects(session.call("app", { vm: "A", mode: "launch", name: "System Management Console" }, {}), /No Start menu app is named like "System Management Console"\. Nearest: Operations Control Management Console, Print Management/);
+	assert.ok(!log.at(-1)!.startsWith("App"), "nothing was launched");
+	await session.call("app", { vm: "A", mode: "switch", name: "Notepad" }, {});
+	assert.equal(log.at(-1), 'App {"mode":"switch","name":"Notepad"}', "switching goes by window titles, not Start menu names");
+});
+
 test("win.uac answers a prompt through the console and waits for it to close; it never types a password", async () => {
 	const { host, calls } = fakeHost();
 	const answered = await new WinSession(host, secureDesktop([], 2), undefined, async () => {}).call("uac", { vm: "A", answer: "yes" }, {});

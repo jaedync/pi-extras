@@ -14,6 +14,7 @@ import { Guest, wait, type HostCalls } from "./guest.ts";
 import { answerUac, captureFailure, SCREEN_GRAB_FAILED, typeAtFocus } from "./guest-input.ts";
 import { textOf, textResult } from "./result.ts";
 import { OCR_TIMEOUT_MS, Screen } from "./screen.ts";
+import { pickApp, START_APPS } from "./apps.ts";
 import { compactSnapshot } from "./snapshot.ts";
 
 export const GUEST_METHODS = ["snapshot", "screenshot", "click", "type", "scroll", "move", "key", "app", "wait_for", "powershell", "call"] as const;
@@ -305,8 +306,18 @@ export class WinSession {
 			case "type":
 				if (args.label === undefined && !hasPoint(args)) return typeAtFocus(this.guest(vm), args, signal);
 				return this.guestTool(vm, method, args, signal);
+			case "app":
+				if ((args.mode ?? "launch") !== "launch" || typeof args.name !== "string" || args.executable !== undefined) return this.guestTool(vm, method, args, signal);
+				return this.guestTool(vm, method, { ...args, name: await this.startApp(vm, args.name, signal) }, signal);
 			default: return this.guestTool(vm, method, args, signal);
 		}
+	}
+
+	/** The Start menu app `name` means, by the guest's list; the name as given if the list can't be read. */
+	private async startApp(vm: string, name: string, signal?: AbortSignal): Promise<string> {
+		const result = await this.guest(vm).tool("PowerShell", { command: START_APPS }, signal);
+		const listed = result.isError ? [] : shellResult(textOf(result)).output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+		return listed.length ? pickApp(name, listed) : name;
 	}
 
 	private async guestTool(vm: string, method: string, args: Args, signal?: AbortSignal): Promise<ToolResult> {
