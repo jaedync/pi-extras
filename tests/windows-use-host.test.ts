@@ -12,6 +12,9 @@ function fakeProcess(answer: (method: string, params: unknown) => unknown) {
 	const stdout = new PassThrough();
 	const events = new EventEmitter();
 	let killed = 0;
+	// A real child process keeps the event loop alive while it runs; without this, Node 22 and 24
+	// end the file while a call waits on an (unref'd) AbortSignal.timeout.
+	const running = setInterval(() => {}, 60_000);
 	createInterface({ input: stdin }).on("line", (line) => {
 		const message = JSON.parse(line);
 		const value = answer(message.method, message.params);
@@ -19,7 +22,7 @@ function fakeProcess(answer: (method: string, params: unknown) => unknown) {
 	});
 	const proc = {
 		stdin, stdout, stderr: null,
-		kill() { killed++; events.emit("close", null); return true; },
+		kill() { killed++; clearInterval(running); events.emit("close", null); return true; },
 		once(event: "close", listener: (code: number | null) => void) { events.once(event, listener); return proc; },
 	};
 	return { proc, killed: () => killed };
