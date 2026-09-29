@@ -13,7 +13,7 @@ import { ocrItems, ocrText, readOcr, type Region } from "./ocr.ts";
 import { Guest, wait, type HostCalls } from "./guest.ts";
 import { answerUac, captureFailure, SCREEN_GRAB_FAILED, typeAtFocus } from "./guest-input.ts";
 import { textOf, textResult } from "./result.ts";
-import { Screen } from "./screen.ts";
+import { OCR_TIMEOUT_MS, Screen } from "./screen.ts";
 import { compactSnapshot } from "./snapshot.ts";
 
 export const GUEST_METHODS = ["snapshot", "screenshot", "click", "type", "scroll", "move", "key", "app", "wait_for", "powershell", "call"] as const;
@@ -241,7 +241,7 @@ export class WinSession {
 			}
 			case "console.ocr": {
 				const area = region(args);
-				const read = async () => readOcr(await this.host.call("ocr", { vm }, { signal, timeoutMs: 60_000 }));
+				const read = async () => readOcr(await this.host.call("ocr", { vm }, { signal, timeoutMs: OCR_TIMEOUT_MS }));
 				let ocr = await read();
 				if (ocr.lines.length === 0 && await this.wake(vm, signal)) ocr = await read();
 				const items = ocrItems(ocr.lines, area);

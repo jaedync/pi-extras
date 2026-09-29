@@ -8,6 +8,8 @@
  * - locked (server answers, LogonUI runs in its session, no desktop on screen): sign in at the console
  * - unreachable, installed, no desktop on screen: sign in, the logon task starts it
  * - unreachable with the desktop showing, or never installed: install it
+ * - reachable but answering no tool (stalled calls hold every worker): restart it from the Run box
+ * - a snapshot stalled by Start or its search: restart them and snapshot again
  *
  * The console is only clicked when no taskbar shows even after pressing the
  * Windows key, which brings up Start and the taskbar over any unlocked desktop,
@@ -15,8 +17,10 @@
  * only when the screen isn't busy. So an unlocked desktop is never clicked blind.
  */
 import type { ToolResult } from "../computer-use/session.ts";
-import { toResult } from "./result.ts";
+import { textOf, toResult } from "./result.ts";
 import { Screen, type Look } from "./screen.ts";
+import { checkBootstrap, LAUNCHER, NO_OCR, openAdminShell, type Bootstrap } from "./install.ts";
+import { CAPTURES, DEFAULT_TOOL_MS, FRONT_WINDOW, hangMessage, QUICK_MS, readFront, RESTART_SERVER, RESTART_SETTLE_MS, RESTART_SHELL_UI, RUN_BOX, SHELL_UI, stallMessage, toolLimit, type FrontWindow } from "./stall.ts";
 
 export interface HostCallOptions {
 	readonly signal?: AbortSignal;
@@ -38,6 +42,13 @@ interface Timing {
 	readonly installWaitMs: number;
 	/** Wait for the typed bootstrap to report that it started; past it, typing went astray. */
 	readonly bootstrapStartMs: number;
+	/** Wait for an administrator's PowerShell to show after UAC, reading the console every `pollMs`. */
+	readonly adminShellMs: number;
+	/**
+	 * Wait after its title shows for PowerShell to take input: keys typed before
+	 * its prompt are lost. A read prompt ends the wait sooner.
+	 */
+	readonly shellReadyMs: number;
 	/** Pause after clicking Sign in before looking at the screen again. */
 	readonly signInSettleMs: number;
 	/** Pause after pressing the Windows key for Start and the taskbar to appear. */
@@ -55,6 +66,8 @@ const TIMING: Timing = {
 	restartWaitMs: 15_000,
 	installWaitMs: 15 * 60_000,
 	bootstrapStartMs: 120_000,
+	adminShellMs: 20_000,
+	shellReadyMs: 9_000,
 	signInSettleMs: 10_000,
 	startMenuMs: 1_500,
 	bootWaitMs: 15 * 60_000,
@@ -65,41 +78,12 @@ const TIMING: Timing = {
 export const DEFAULT_PORT = 8000;
 const PROTOCOL_VERSION = "2025-06-18";
 /**
- * The line typed into the guest's elevated PowerShell: it unpacks and runs the
- * gzip+base64 bootstrap the host substitutes for __PAYLOAD__. It lives here,
- * not in host.ps1, because antivirus delays scripts that contain it.
- */
-export const LAUNCHER = "$b='__PAYLOAD__';$g=New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,[Convert]::FromBase64String($b))),[IO.Compression.CompressionMode]::Decompress);iex (New-Object IO.StreamReader($g)).ReadToEnd()";
-/**
  * Only a LogonUI in the server's own session means this desktop is locked: a
  * pending enhanced-session connection runs one in a session of its own.
  */
 const LOCK_CHECK = "$me = (Get-Process -Id $PID).SessionId; if (Get-Process LogonUI -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }) { 'locked' } else { 'unlocked' }";
 /** Sign in clicks per repair: a second covers a screen that wasn't ready; more won't help a password. */
 const MAX_SIGN_IN_CLICKS = 2;
-/** Longest a single Windows-MCP call may take; PowerShell calls can set their own timeout below it. */
-const TOOL_TIMEOUT_MS = 10 * 60_000;
-/** Most tools answer in a second or two; App launches take up to a dozen. */
-const DEFAULT_TOOL_MS = 120_000;
-/** Snapshots take 0.5 to 10 s. One that runs longer is stuck on a window whose UI Automation stopped answering. */
-const CAPTURE_MS = 60_000;
-/** On top of a tool's own timeout, for the round trip and PowerShell's start. */
-const TOOL_SLACK_MS = 60_000;
-
-/** How long to wait for a Windows-MCP tool before giving up on it. */
-export function toolLimit(name: string, args: Record<string, unknown>): number {
-	if (name === "Snapshot" || name === "Screenshot") return CAPTURE_MS;
-	const own = name === "PowerShell" ? 30 : name === "WaitFor" ? 10 : undefined;
-	if (own === undefined) return DEFAULT_TOOL_MS;
-	const seconds = typeof args.timeout === "number" && Number.isFinite(args.timeout) ? args.timeout : own;
-	return Math.min(seconds * 1000 + TOOL_SLACK_MS, TOOL_TIMEOUT_MS);
-}
-
-function hangMessage(vm: string, name: string, limitMs: number): string {
-	const head = `Windows-MCP on ${vm} didn't answer ${name} within ${Math.round(limitMs / 1000)} s`;
-	if (name !== "Snapshot" && name !== "Screenshot") return `${head}; it may still be running in the guest, so it was not repeated. The next call reconnects.`;
-	return `${head}. A window whose UI Automation stops answering (often Start search results or a busy app) stalls the UI tree. Close it with win.console.key({ vm: ${JSON.stringify(vm)}, keys: "esc" }), which doesn't go through Windows-MCP, or snapshot with use_ui_tree: false.`;
-}
 
 export interface GuestOptions {
 	readonly host: HostCalls;
@@ -155,20 +139,95 @@ export class Guest {
 	/**
 	 * Runs a Windows-MCP tool, repairing the guest first. A call that never
 	 * reached the server is repaired and sent once more; one whose connection
-	 * dropped mid-way may have run, so it is not repeated.
+	 * dropped mid-way may have run, so it is not repeated. A server that
+	 * answers nothing is restarted first.
 	 */
 	async tool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
-		await this.ensure(signal);
+		await this.ensureAnswering(signal);
 		try {
 			return await this.callTool(name, args, signal);
 		} catch (error) {
 			if (!(error instanceof TransportError)) throw error;
 			this.forget();
-			if (error.timedOut) throw new Error(hangMessage(this.vm, name, toolLimit(name, args)));
+			if (error.timedOut) return this.afterStall(name, args, signal);
 			if (!error.unsent) throw new Error(`The connection to Windows-MCP on ${this.vm} dropped during ${name}, so it may have run; it was not repeated. The next call reconnects. (${error.message})`);
 			await this.ensure(signal);
 			return this.callTool(name, args, signal);
 		}
+	}
+
+	/** ensure(), restarting a server whose lock check, a moment's PowerShell, gets no answer. */
+	private async ensureAnswering(signal?: AbortSignal): Promise<void> {
+		try {
+			await this.ensure(signal);
+		} catch (error) {
+			if (!(error instanceof TransportError && error.timedOut)) throw error;
+			await this.restartServer(signal);
+			await this.ensure(signal);
+		}
+	}
+
+	/**
+	 * A call got no answer. Whatever it was, a server that answers nothing now
+	 * is restarted. A capture stalled by Start or its search, which Windows
+	 * restarts on demand, gets them restarted and runs again; any other is
+	 * reported with the window that stalled it.
+	 */
+	private async afterStall(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
+		const limit = toolLimit(name, args);
+		const front = await this.frontWindow(signal);
+		const restarted = front === "restarted";
+		if (!CAPTURES.has(name)) throw new Error(hangMessage(this.vm, name, limit, restarted));
+		if (restarted || !front || !SHELL_UI.test(front.process)) throw new Error(stallMessage(this.vm, name, limit, restarted ? undefined : front, restarted));
+		await this.callTool("PowerShell", { command: RESTART_SHELL_UI }, signal, QUICK_MS);
+		this.note(`${this.vm}: Start or its search stopped answering UI Automation and stalled ${name}; restarted them (Windows brings them back when next opened)`);
+		await this.sleep(this.timing.startMenuMs, signal);
+		try {
+			return await this.callTool(name, args, signal);
+		} catch (error) {
+			if (!(error instanceof TransportError && error.timedOut)) throw error;
+			this.forget();
+			throw new Error(stallMessage(this.vm, name, limit, front));
+		}
+	}
+
+	/** The window in front, if the guest can say; "restarted" if the server answered nothing and was restarted. */
+	private async frontWindow(signal?: AbortSignal): Promise<FrontWindow | "restarted" | undefined> {
+		try {
+			await this.ensure(signal);
+			return readFront(textOf(await this.callTool("PowerShell", { command: FRONT_WINDOW }, signal, QUICK_MS)));
+		} catch (error) {
+			if (!(error instanceof TransportError && error.timedOut)) throw error;
+			await this.restartServer(signal);
+			return "restarted";
+		}
+	}
+
+	/**
+	 * Restarts a server that answers nothing, from the console's Run box, as the
+	 * signed-in user. The Run box is read before anything is typed, so a command
+	 * never lands in another window; without OCR to read it, nothing is typed.
+	 */
+	private async restartServer(signal?: AbortSignal): Promise<void> {
+		this.forget();
+		const vm = JSON.stringify(this.vm);
+		const cannot = (why: string) => new Error(`Windows-MCP on ${this.vm} stopped answering (a stalled call holds it), and ${why}. Reinstalling restarts it: win.setup({ vm: ${vm} }).`);
+		if (!(await this.screen.input("key", { keys: "win+r" }, signal))) throw cannot("the console took no input");
+		let open = false;
+		for (let read = 0; read < 3 && !open; read++) {
+			await this.sleep(this.timing.startMenuMs, signal);
+			try {
+				open = RUN_BOX.test(await this.screen.text(signal));
+			} catch (error) {
+				if (!(error instanceof Error && NO_OCR.test(error.message))) throw error;
+				throw cannot("without Windows OCR the console's Run box can't be checked before typing into it");
+			}
+		}
+		if (!open) throw cannot("the console's Run box didn't open to restart it from");
+		await this.screen.input("type", { text: `${RESTART_SERVER}\n` }, signal);
+		this.note(`${this.vm}: Windows-MCP stopped answering (a stalled call held it); restarted it from the console's Run box`);
+		await this.sleep(RESTART_SETTLE_MS, signal);
+		if (!(await this.waitConnect(this.timing.logonWaitMs, signal))) throw cannot("it didn't come back after a restart");
 	}
 
 	/** Signs in at the console, whatever the screen shows. */
@@ -198,7 +257,12 @@ export class Guest {
 	private async ensure(signal?: AbortSignal): Promise<void> {
 		if (this.connected && this.now() - this.unlockedAt < this.timing.lockTtlMs) return;
 		const status = await this.running(signal);
-		if (!this.connected && !(await this.connect(signal))) await this.revive(status, signal);
+		if (!this.connected) {
+			const reply = await this.connect(signal);
+			// Listening and silent: restarting it (ensureAnswering) beats waiting on it or reinstalling.
+			if (reply === "silent") throw new TransportError(`Windows-MCP on ${this.vm} took the connection and answered nothing`, false, true);
+			if (reply === "unreachable") await this.revive(status, signal);
+		}
 		if (this.now() - this.unlockedAt >= this.timing.lockTtlMs) await this.unlock(signal);
 	}
 
@@ -223,6 +287,8 @@ export class Guest {
 	private async install(signal?: AbortSignal): Promise<void> {
 		await this.reachDesktop(signal);
 		this.note(`${this.vm}: installing Windows-MCP in the guest (a first install takes a few minutes)`);
+		const { pollMs, adminShellMs: openMs, shellReadyMs: readyMs } = this.timing;
+		await openAdminShell({ host: this.host, vm: this.vm, screen: this.screen, sleep: this.sleep, now: this.now, pollMs, openMs, readyMs }, signal);
 		const { run } = await this.host.call("setup", { vm: this.vm, port: this.port, launcher: LAUNCHER }, { signal, timeoutMs: 5 * 60_000 }) as { run?: string };
 		const bootstrap = run ? { run, startBy: this.now() + this.timing.bootstrapStartMs, started: false } : undefined;
 		if (!(await this.waitConnect(this.timing.installWaitMs, signal, bootstrap))) {
@@ -279,44 +345,27 @@ export class Guest {
 		let bootstrap = initial;
 		for (;;) {
 			const probe = await this.host.call("probe", { vm: this.vm, port: this.port }, { signal }) as { reachable?: boolean; setup?: unknown };
-			if (probe.reachable && await this.connect(signal)) return true;
-			if (bootstrap) bootstrap = this.checkBootstrap(bootstrap, probe.setup);
+			if (probe.reachable && await this.connect(signal) === "ok") return true;
+			if (bootstrap) bootstrap = checkBootstrap(this.vm, this.now(), bootstrap, probe.setup);
 			if (this.now() >= deadline) return false;
 			await this.sleep(this.timing.pollMs, signal);
 		}
 	}
 
 	/**
-	 * Reads the bootstrap's progress, which the guest publishes over Hyper-V
-	 * key-value exchange as "<run> <status>". A status from an earlier run is
-	 * ignored, so a leftover success or failure can't be misread.
+	 * Checks the server answers with the key we hold; stateless HTTP needs no
+	 * session beyond this. Silent: it took the request and never answered.
 	 */
-	private checkBootstrap(bootstrap: Bootstrap, published: unknown): Bootstrap {
-		const prefix = `${bootstrap.run} `;
-		if (typeof published === "string" && published.startsWith(prefix)) {
-			const status = published.slice(prefix.length);
-			if (status.startsWith("FAIL ")) {
-				throw new Error(`Installing Windows-MCP on ${this.vm} failed in the guest: ${status.slice(5)}. Its PowerShell window stays open with the details: win.console.screenshot({ vm: ${JSON.stringify(this.vm)} }). Fix the cause, then call win.setup.`);
-			}
-			return { ...bootstrap, started: true };
-		}
-		if (!bootstrap.started && this.now() >= bootstrap.startBy) {
-			throw new Error(`The Windows-MCP installer never started on ${this.vm}: the bootstrap typed into an elevated PowerShell from Start search didn't run. Look with win.console.screenshot({ vm: ${JSON.stringify(this.vm)} }), close stray windows, then call win.setup.`);
-		}
-		return bootstrap;
-	}
-
-	/** Checks the server answers with the key we hold; stateless HTTP needs no session beyond this. */
-	private async connect(signal?: AbortSignal): Promise<boolean> {
+	private async connect(signal?: AbortSignal): Promise<"ok" | "unreachable" | "silent"> {
 		try {
-			await this.request("initialize", { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "pi-extras windows_use", version: "1" } }, signal);
-			await this.send({ jsonrpc: "2.0", method: "notifications/initialized" }, signal);
+			await this.request("initialize", { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "pi-extras windows_use", version: "1" } }, signal, QUICK_MS);
+			await this.send({ jsonrpc: "2.0", method: "notifications/initialized" }, signal, QUICK_MS);
 			this.connected = true;
-			return true;
+			return "ok";
 		} catch (error) {
-			if (!isTransport(error)) throw error;
+			if (!(error instanceof TransportError)) throw error;
 			this.connected = false;
-			return false;
+			return error.timedOut ? "silent" : "unreachable";
 		}
 	}
 
@@ -328,12 +377,12 @@ export class Guest {
 	}
 
 	private async locked(signal?: AbortSignal): Promise<boolean> {
-		const result = await this.callTool("PowerShell", { command: LOCK_CHECK }, signal);
+		const result = await this.callTool("PowerShell", { command: LOCK_CHECK }, signal, QUICK_MS);
 		return /\blocked\b/.test(result.content.map((block) => block.type === "text" ? block.text : "").join("\n"));
 	}
 
-	private async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
-		return toResult(await this.request("tools/call", { name, arguments: args }, signal, toolLimit(name, args)));
+	private async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, limitMs = toolLimit(name, args)): Promise<ToolResult> {
+		return toResult(await this.request("tools/call", { name, arguments: args }, signal, limitMs));
 	}
 
 	private async request(method: string, params: unknown, signal?: AbortSignal, timeoutMs = DEFAULT_TOOL_MS): Promise<unknown> {
@@ -358,12 +407,6 @@ export class Guest {
 	}
 }
 
-interface Bootstrap {
-	readonly run: string;
-	readonly startBy: number;
-	readonly started: boolean;
-}
-
 /** Host errors that prove a request never reached the server, so sending it again is safe. */
 const NOT_SENT = /^(cannot reach Windows-MCP|VM '.*' has no IPv4 address|Windows-MCP is not set up)/;
 
@@ -382,4 +425,3 @@ class TransportError extends Error {
 	}
 }
 
-const isTransport = (error: unknown) => error instanceof TransportError;

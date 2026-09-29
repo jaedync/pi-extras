@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline";
 import test from "node:test";
 import { HostSession } from "../lib/windows-use/host.ts";
+import { RESTART_SERVER, SERVER_TASK } from "../lib/windows-use/stall.ts";
 
 /** A stand-in for host.ps1: answers each JSON-RPC line with `answer`, or never when it returns undefined. */
 function fakeProcess(answer: (method: string, params: unknown) => unknown) {
@@ -94,6 +95,44 @@ test("setup rotates the key, so a server it is replacing can't pass for the new 
 	const setup = host.slice(host.indexOf("function Invoke-Setup"), host.indexOf("function Get-SetupStatus"));
 	assert.match(setup, /Get-Key \$vm \$true/);
 	assert.match(setup, /notmatch '\^\\s\*#'/, "comment lines are dropped before typing, which takes seconds per hundred characters");
+});
+
+test("PowerShell for setup opens through Run, which works while Start search hangs, and setup itself only types", () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	const open = host.slice(host.indexOf("function Open-AdminShell"), host.indexOf("function Invoke-Setup"));
+	assert.match(open, /Send-Keys \$m 'win\+r'/);
+	assert.match(open, /'ctrl\+shift\+enter'/);
+	assert.doesNotMatch(open, /Send-Keys \$m 'win'/, "Start search can hang and swallow what is typed");
+	const setup = host.slice(host.indexOf("function Invoke-Setup"), host.indexOf("function Get-SetupStatus"));
+	assert.doesNotMatch(setup, /Send-Keys/, "the caller checks the console between opening PowerShell and typing the key");
+	assert.match(host, /adminShell\s+= \{ param\(\$p\) Open-AdminShell \$p\.vm \}/);
+});
+
+/** Hyper-V's input methods and their parameters, as the host's WMI provider declares them. */
+const HYPERV_METHODS: Record<string, readonly string[]> = {
+	PressKey: ["KeyCode"], ReleaseKey: ["KeyCode"], TypeKey: ["KeyCode"], TypeScancodes: ["Scancodes"], TypeCtrlAltDel: [],
+	SetAbsolutePosition: ["HorizontalPosition", "VerticalPosition"], ClickButton: ["ButtonIndex"],
+	SetButtonState: ["ButtonIndex", "IsDown"], SetScrollPosition: ["ScrollPositionDelta"],
+};
+
+test("every Hyper-V input method host.ps1 calls gets the parameters Hyper-V declares", () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	const calls = [...host.matchAll(/(?:Invoke-Checked \$\w+|-MethodName) '?(\w+)'? (?:-Arguments )?@\{([^}]*)\}/g)];
+	const checked = calls.filter((call) => call[1]! in HYPERV_METHODS);
+	assert.ok(checked.length >= 10, `found ${checked.length} input calls`);
+	for (const [, method, args] of checked) {
+		const names = [...args!.matchAll(/(\w+)\s*=/g)].map((match) => match[1]!.toLowerCase()).sort();
+		assert.deepEqual(names, HYPERV_METHODS[method!]!.map((name) => name.toLowerCase()).sort(), `${method} is called with ${args}`);
+	}
+});
+
+test("the restart typed into the Run box stops and starts what the bootstrap installs", () => {
+	const bootstrap = readFileSync(new URL("../lib/windows-use/guest-bootstrap.ps1", import.meta.url), "utf8");
+	assert.match(bootstrap, new RegExp(`\\$taskName = '${SERVER_TASK}'`));
+	assert.match(bootstrap, /Join-Path \$bin 'windows-mcp\.exe'/);
+	assert.match(RESTART_SERVER, /taskkill \/f \/t \/im windows-mcp\.exe/);
+	assert.match(RESTART_SERVER, new RegExp(`schtasks /run /tn ${SERVER_TASK}"$`));
+	assert.ok(RESTART_SERVER.length < 200, "typed at about 30 characters a second");
 });
 
 test("the bootstrap starts the server at every sign-in through the Run key as well as the logon task", () => {

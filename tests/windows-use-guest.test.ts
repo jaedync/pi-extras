@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Guest, LAUNCHER } from "../lib/windows-use/guest.ts";
+import { Guest } from "../lib/windows-use/guest.ts";
+import { LAUNCHER } from "../lib/windows-use/install.ts";
 import { hostFrame } from "./support/windows-frames.ts";
 
 /** A simulated Hyper-V guest behind the host's JSON-RPC methods. */
@@ -48,6 +49,34 @@ interface World {
 	published?: string;
 	/** The lock check says locked while the desktop is in use, as a LogonUI in another session once did. */
 	misreportsLock?: boolean;
+	/** What opening an administrator's PowerShell leads to: by default it opens. */
+	adminShell?: "opens" | "blocked";
+	/** Windows OCR has no recognizer for the guest user's languages. */
+	noOcr?: boolean;
+	/** An administrator's PowerShell is on the console, ready for the installer. */
+	shellOpen?: boolean;
+	/** OCR reads the PowerShell window's title but not its prompt, as it sometimes can't. */
+	promptUnread?: boolean;
+	/** When the shell opened, by the test's clock. */
+	shellAt?: number;
+	/** How long after the shell opened the installer was typed. */
+	typedAfter?: number;
+	/** The test's clock, for the host to timestamp what it sees. */
+	clock?: () => number;
+	/** The window in front, as the guest's PowerShell reports it. */
+	front?: { process: string; title: string; responding?: boolean };
+	/** Snapshots stall on the window in front until its app is restarted (Start and Search) or goes. */
+	stalls?: boolean;
+	/** Every tool call stalls, the lock check included, until the server restarts; initialize still answers. */
+	wedged?: boolean;
+	/** The console's Run box is open. */
+	runBox?: boolean;
+	/** Win+R opens no Run box (something odd holds the console). */
+	noRunBox?: boolean;
+	/** Server restarts from the Run box. */
+	restarts?: number;
+	/** The server takes connections and answers nothing, initialize included, until restarted. */
+	frozen?: boolean;
 }
 
 function fakeHost(world: World) {
@@ -62,9 +91,30 @@ function fakeHost(world: World) {
 					if (world.dropNext) world.dropNext--;
 					throw new Error(`cannot reach Windows-MCP on '${params.vm}' (10.0.0.2:8000): connection refused`);
 				}
+				if (world.frozen) {
+					log.push(`mcp ${message.method} (stalled)`);
+					throw new Error(`windows_use host mcp timed out after ${Math.round((options.timeoutMs ?? 0) / 1000)} s`);
+				}
 				if (message.id === undefined) return { messages: [] };
 				if (message.method === "initialize") { log.push("mcp initialize"); return { messages: [{ jsonrpc: "2.0", id: message.id, result: { serverInfo: { name: "windows-mcp" } } }] }; }
 				const { name, arguments: args } = message.params;
+				const hang = (what: string) => {
+					log.push(`mcp ${what} (stalled)`);
+					throw new Error(`windows_use host mcp timed out after ${Math.round((options.timeoutMs ?? 0) / 1000)} s`);
+				};
+				const answer = (text: string) => ({ messages: [{ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text }], isError: false } }] });
+				const command = name === "PowerShell" ? String(args.command) : "";
+				if (world.wedged) return hang(command.includes("LogonUI") ? "lock-check" : name);
+				if (command.includes("GetForegroundWindow")) {
+					log.push("mcp front-window");
+					return answer(world.front ? `Response: ${JSON.stringify(world.front)}\n\nStatus Code: 0` : "Response: \n\nStatus Code: 0");
+				}
+				if (command.includes("StartMenuExperienceHost")) {
+					log.push("mcp restart-shell");
+					if (world.front && /^(SearchHost|StartMenuExperienceHost)$/.test(world.front.process)) world.stalls = false;
+					return answer("Response: \n\nStatus Code: 0");
+				}
+				if (name === "Snapshot" && world.stalls) return hang("Snapshot");
 				if (name === "PowerShell" && String(args.command).includes("LogonUI")) {
 					log.push("mcp lock-check");
 					assert.match(String(args.command), /SessionId/, "the lock check must look only at the server's own session");
@@ -108,8 +158,18 @@ function fakeHost(world: World) {
 					if (world.serverAfter !== undefined && world.serverAfter-- <= 0) world.server = true;
 					if (typeof world.bootstrap === "number" && world.bootstrap-- <= 0) { world.server = true; world.published = "r2 OK listening on 8000"; }
 					return { reachable: world.server, setup: world.published ?? null };
+				case "type":
+					log.push(`type ${params.text}`);
+					if (world.runBox && /taskkill .*windows-mcp\.exe.*schtasks \/run \/tn windows-mcp-server/.test(String(params.text)) && String(params.text).endsWith("\n")) {
+						world.wedged = false;
+						world.frozen = false;
+						world.restarts = (world.restarts ?? 0) + 1;
+					}
+					world.runBox = false;
+					return { ok: true };
 				case "key":
 					log.push(`key ${params.keys}`);
+					if (params.keys === "win+r" && unlocked() && !world.noRunBox) world.runBox = true;
 					if (world.asleep) { world.asleep = false; return { ok: true }; }
 					// The Windows key does nothing on lock and sign-in screens.
 					if (params.keys === "win" && unlocked()) world.start = !world.start;
@@ -122,8 +182,22 @@ function fakeHost(world: World) {
 					if (world.locked) world.locked = false;
 					else if (!world.session) { world.session = true; if (world.installed) world.server = true; }
 					return { clicked: [512, 426] };
+				case "adminShell":
+					assert.ok(unlocked(), "PowerShell must only be opened on an unlocked desktop");
+					world.shellOpen = world.adminShell !== "blocked";
+					world.shellAt = world.clock?.();
+					return { ok: true };
+				case "ocr":
+					if (world.noOcr) throw new Error("Windows OCR has no recognizer for this Windows user's languages; add one with OCR support under Settings > Time & language");
+					if (world.runBox) return ocrOf(["Run", "Type the name of a program, folder, document, or Internet", "resource, and Windows will open it for you.", "Open:", "OK Cancel Browse..."]);
+					// As OCR reads it on a Hyper-V console, a letter off.
+					if (!world.shellOpen) return ocrOf(["Recycle Bin", "Notepad Untitled"]);
+					return ocrOf(["Administrator: Wndows PowerShell", "Wi ndows PowerShell", ...(world.promptUnread ? [] : ["PS C: \\WINDOWS\\system32>"])]);
 				case "setup":
 					assert.ok(unlocked(), "setup must only run on an unlocked desktop");
+					assert.ok(world.shellOpen || world.noOcr, "the installer carries the server's key: type it only into an administrator's PowerShell");
+					world.shellOpen = false;
+					world.typedAfter = (world.clock?.() ?? 0) - (world.shellAt ?? 0);
 					assert.equal(params.launcher, LAUNCHER);
 					world.installed = true;
 					if (world.bootstrap === "fail") world.published = "r2 FAIL uv tool install windows-mcp failed (2): Access is denied. (os error 5)";
@@ -138,9 +212,15 @@ function fakeHost(world: World) {
 	return { host, log };
 }
 
+/** The host's OCR answer for these lines of text, one word per space. */
+function ocrOf(lines: readonly string[]) {
+	return { width: 1024, height: 768, lines: lines.map((line, row) => ({ words: line.split(" ").map((word, column) => ({ text: word, x: 10 + column * 80, y: 10 + row * 20, w: 70, h: 14 })) })) };
+}
+
 function guest(world: World) {
 	const { host, log } = fakeHost(world);
 	let clock = 0;
+	world.clock = () => clock;
 	const notes: string[] = [];
 	const g = new Guest({
 		host, vm: "Win11", note: (text) => notes.push(text),
@@ -278,13 +358,70 @@ test("a tool call that hangs fails at its own limit with what to try, and is not
 	await g.tool("Click", { loc: [1, 2] });
 	await g.tool("PowerShell", { command: "x", timeout: 100 });
 	world.hangNext = 1;
-	await assert.rejects(g.tool("Snapshot", { use_vision: true }), /Windows-MCP on Win11 didn't answer Snapshot within 60 s[\s\S]*win\.console\.key\(\{ vm: "Win11", keys: "esc" \}\)[\s\S]*use_ui_tree: false/);
+	await assert.rejects(g.tool("Snapshot", { use_vision: true }), /Windows-MCP on Win11 didn't answer Snapshot within 60 s[\s\S]*use_ui_tree: false[\s\S]*win\.console\.key\(\{ vm: "Win11", keys: "esc" \}\)/);
 	assert.deepEqual(world.limits, { Click: 120_000, PowerShell: 160_000, Snapshot: 60_000 });
 	assert.equal(log.filter((entry) => entry === "mcp Snapshot").length, 1);
 	world.hangNext = 1;
 	await assert.rejects(g.tool("App", { mode: "launch", name: "x" }), /didn't answer App within 120 s; it may still be running in the guest, so it was not repeated/);
 	await g.tool("Click", { loc: [3, 4] });
 	assert.ok(log.lastIndexOf("mcp initialize") > log.lastIndexOf("mcp App"), "the next call reconnects first");
+});
+
+test("a snapshot stalled by Start or its search, which stopped answering, gets them restarted and is taken again", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, stalls: true, front: { process: "SearchHost", title: "Search" } };
+	const { g, log, notes } = guest(world);
+	const result = await g.tool("Snapshot", { use_vision: true });
+	assert.match(text(result), /^Snapshot/);
+	assert.deepEqual(log.filter((entry) => entry.startsWith("mcp Snapshot") || entry === "mcp front-window" || entry === "mcp restart-shell"), ["mcp Snapshot (stalled)", "mcp front-window", "mcp restart-shell", "mcp Snapshot"]);
+	assert.match(notes.join("\n"), /Start or its search stopped answering/);
+});
+
+test("a snapshot stalled by an app's window names it and what to do instead, and isn't repeated", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, stalls: true, front: { process: "mmc", title: "Operations Console", responding: false } };
+	const { g, log } = guest(world);
+	await assert.rejects(g.tool("Snapshot", {}), (error: Error) =>
+		/didn't answer Snapshot within 60 s/.test(error.message) && /"Operations Console" \(mmc, not responding\)/.test(error.message)
+		&& /use_ui_tree: false/.test(error.message) && /win\.console\.ocr/.test(error.message));
+	assert.equal(log.filter((entry) => entry.startsWith("mcp Snapshot")).length, 1);
+	assert.ok(!log.includes("mcp restart-shell"), "an app is not the tool's to restart");
+});
+
+test("a server stuck on an earlier call, answering no tool at all, is restarted from the console's Run box and the call goes through", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, wedged: true };
+	const { g, log, notes } = guest(world);
+	const result = await g.tool("Click", { loc: [1, 2] });
+	assert.match(text(result), /^Click/);
+	assert.equal(world.restarts, 1);
+	assert.ok(log.indexOf("key win+r") < log.findIndex((entry) => entry.startsWith("type cmd /c")), "the Run box opens before anything is typed");
+	assert.match(notes.join("\n"), /restarted it from the console's Run box/);
+	assert.equal(log.filter((entry) => entry.startsWith("mcp Click")).length, 1, "the call runs once, after the restart");
+});
+
+test("a stuck server is restarted after a stalled snapshot too, and the snapshot error says so", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true };
+	const { g } = guest(world);
+	await g.tool("Click", { loc: [1, 2] });
+	world.wedged = true;
+	await assert.rejects(g.tool("Snapshot", {}), /didn't answer Snapshot[\s\S]*restarted/);
+	assert.equal(world.restarts, 1);
+	await g.tool("Click", { loc: [3, 4] });
+});
+
+test("a server that takes connections but answers nothing, not even initialize, is restarted from the Run box, not reinstalled", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, frozen: true };
+	const { g, log, clock } = guest(world);
+	const result = await g.tool("Click", { loc: [1, 2] });
+	assert.match(text(result), /^Click/);
+	assert.equal(world.restarts, 1);
+	assert.ok(!log.includes("setup") && !log.includes("adminShell"));
+	assert.ok(clock() < 90_000, `took ${clock()} ms`);
+});
+
+test("without a Run box to type into, a stuck server isn't typed at blind; the error points to win.setup", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, wedged: true, noRunBox: true };
+	const { g, log } = guest(world);
+	await assert.rejects(g.tool("Click", { loc: [1, 2] }), /stopped answering[\s\S]*Run box didn't open[\s\S]*win\.setup/);
+	assert.ok(!log.some((entry) => entry.startsWith("type ")));
 });
 
 test("a display that went to sleep is woken with Shift before the tool runs, since Windows-MCP would read a stale screen", async () => {
@@ -310,6 +447,47 @@ test("explicit login and setup are available to the script", async () => {
 	await g.setup();
 	assert.equal(world.installed, true);
 	assert.deepEqual(log.filter((entry) => entry === "login" || entry === "setup"), ["login", "setup"]);
+});
+
+test("the installer, which carries the server's key, is typed only once the console shows an administrator's PowerShell", async () => {
+	const world = { running: true, installed: false, session: true, locked: false, server: false };
+	const { g, log } = guest(world);
+	await g.setup();
+	const order = log.filter((entry) => ["adminShell", "ocr", "setup"].includes(entry));
+	assert.deepEqual(order.slice(0, 1), ["adminShell"]);
+	assert.equal(order.at(-1), "setup");
+	assert.ok(order.includes("ocr"));
+});
+
+test("when no administrator's PowerShell opens, nothing is typed and the error says what the screen shows", async () => {
+	const world = { running: true, installed: false, session: true, locked: false, server: false, adminShell: "blocked" as const };
+	const { g, log, clock } = guest(world);
+	await assert.rejects(g.tool("Snapshot", {}), (error: Error) => /administrator's PowerShell didn't open/.test(error.message) && /Notepad Untitled/.test(error.message) && /nothing was typed/.test(error.message));
+	assert.ok(!log.includes("setup"));
+	assert.ok(clock() < 30_000, `gave up after ${clock()} ms`);
+});
+
+test("a PowerShell whose prompt OCR can't read still gets the installer, after a longer wait for it to take input", async () => {
+	const world: World = { running: true, installed: false, session: true, locked: false, server: false, promptUnread: true };
+	const { g, log } = guest(world);
+	await g.setup();
+	assert.ok(log.includes("setup"));
+	assert.ok(world.typedAfter! >= 9_000, `typed ${world.typedAfter} ms after the shell opened`);
+});
+
+test("with its prompt showing, the installer follows soon", async () => {
+	const world: World = { running: true, installed: false, session: true, locked: false, server: false };
+	const { g } = guest(world);
+	await g.setup();
+	assert.ok(world.typedAfter! < 9_000, `typed ${world.typedAfter} ms after the shell opened`);
+});
+
+test("without Windows OCR to check the console, the installer is typed as before", async () => {
+	const world = { running: true, installed: false, session: true, locked: false, server: false, noOcr: true };
+	const { g, log } = guest(world);
+	await g.tool("Snapshot", {});
+	assert.ok(log.includes("setup"));
+	assert.ok(log.includes("mcp Snapshot"));
 });
 
 test("an install that fails in the guest stops at once with the guest's reason", async () => {

@@ -212,16 +212,16 @@ function Send-Click($machine, [int]$x, [int]$y, [string]$button, [bool]$double) 
 function Send-Drag($machine, [int]$x, [int]$y, [int]$x2, [int]$y2) {
     $mouse = Get-Device $machine 'Msvm_SyntheticMouse'
     Set-Pointer $mouse $x $y
-    Invoke-Checked $mouse 'SetButtonState' @{ buttonIndex = [uint32]1; isPressed = $true }
+    Invoke-Checked $mouse 'SetButtonState' @{ buttonIndex = [uint32]1; isDown = $true }
     Start-Sleep -Milliseconds 100
     Invoke-Checked $mouse 'SetAbsolutePosition' @{ horizontalPosition = $x2; verticalPosition = $y2 }
     Start-Sleep -Milliseconds 100
-    Invoke-Checked $mouse 'SetButtonState' @{ buttonIndex = [uint32]1; isPressed = $false }
+    Invoke-Checked $mouse 'SetButtonState' @{ buttonIndex = [uint32]1; isDown = $false }
 }
 function Send-Scroll($machine, [int]$x, [int]$y, [int]$amount) {
     $mouse = Get-Device $machine 'Msvm_SyntheticMouse'
     Set-Pointer $mouse $x $y
-    Invoke-Checked $mouse 'SetScrollPosition' @{ scrollPosition = $amount }
+    Invoke-Checked $mouse 'SetScrollPosition' @{ scrollPositionDelta = $amount }
 }
 
 # Signs in the last-used account at the console. A passwordless account's tile
@@ -252,13 +252,25 @@ function Get-Key([string]$vm, [bool]$rotate) {
     (Get-Content -Path $file -Raw).Trim()
 }
 
-# Installs Windows-MCP into the signed-in guest with nothing but the console:
-# opens an elevated PowerShell from Start search, accepts UAC (host-injected
-# keys reach the secure desktop) and types the bootstrap, compressed, into the
-# caller's launcher line. The launcher arrives as data rather than living in
-# this file: antivirus holds up scripts that decode and run payloads for many
-# seconds before they start. Returns once typing is queued; the caller waits
-# for the port. The desktop must be unlocked.
+# Opens an administrator's PowerShell at the console of a signed-in, unlocked
+# guest: Run (Win+R), which explorer serves even while Start search hangs, then
+# Ctrl+Shift+Enter, and Yes on UAC (host-injected keys reach the secure desktop).
+# The caller reads the console to check it opened before calling setup.
+function Open-AdminShell([string]$vm) {
+    $m = Get-RunningMachine $vm
+    Send-Keys $m 'esc'; Start-Sleep -Seconds 1
+    Send-Keys $m 'win+r'; Start-Sleep -Seconds 2
+    Send-Text $m 'powershell'; Start-Sleep -Seconds 1
+    Send-Keys $m 'ctrl+shift+enter'; Start-Sleep -Seconds 4
+    Send-Keys $m 'alt+y'
+    @{ ok = $true }
+}
+
+# Installs Windows-MCP by typing the bootstrap, compressed, into the caller's
+# launcher line, at the administrator's PowerShell Open-AdminShell opened. The
+# launcher arrives as data rather than living in this file: antivirus holds up
+# scripts that decode and run payloads for many seconds before they start.
+# Returns once typing is queued; the caller waits for the port.
 function Invoke-Setup([string]$vm, [int]$port, [string]$launcher) {
     if (-not $launcher.Contains('__PAYLOAD__')) { throw 'setup needs a launcher containing __PAYLOAD__' }
     $m = Get-RunningMachine $vm
@@ -276,11 +288,6 @@ function Invoke-Setup([string]$vm, [int]$port, [string]$launcher) {
     $gz.Write($raw, 0, $raw.Length); $gz.Close()
     $b64 = [Convert]::ToBase64String($ms.ToArray())
     $line = $launcher.Replace('__PAYLOAD__', $b64) + "`n"
-    Send-Keys $m 'esc'; Start-Sleep -Seconds 1
-    Send-Keys $m 'win'; Start-Sleep -Seconds 2
-    Send-Text $m 'powershell'; Start-Sleep -Seconds 2
-    Send-Keys $m 'ctrl+shift+enter'; Start-Sleep -Seconds 4
-    Send-Keys $m 'alt+y'; Start-Sleep -Seconds 5
     # The newline rides in the same scancode stream, so Enter can't overtake the text.
     Send-Text $m $line
     [ordered]@{ typed = $line.Length; port = $port; run = $run }
@@ -373,6 +380,7 @@ $handlers = @{
     key        = { param($p) Send-Keys (Get-RunningMachine $p.vm) ([string]$p.keys); @{ ok = $true } }
     cad        = { param($p) Invoke-Checked (Get-Device (Get-RunningMachine $p.vm) 'Msvm_Keyboard') 'TypeCtrlAltDel' @{}; @{ ok = $true } }
     login      = { param($p) Invoke-Login $p.vm }
+    adminShell = { param($p) Open-AdminShell $p.vm }
     setup      = { param($p) Invoke-Setup $p.vm (Get-Port $p) ([string]$p.launcher) }
     probe      = { param($p) Test-Port $p.vm (Get-Port $p) }
     mcp        = { param($p) Send-Mcp $p.vm (Get-Port $p) ([string]$p.message) }

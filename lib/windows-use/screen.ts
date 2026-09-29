@@ -5,6 +5,7 @@
  */
 import { hasTaskbar, isDark, readFrame, type Frame } from "./frame.ts";
 import type { HostCalls } from "./guest.ts";
+import { readOcr } from "./ocr.ts";
 
 /**
  * Console errors while a VM changes state: devices and screen vanish for a
@@ -15,6 +16,8 @@ import type { HostCalls } from "./guest.ts";
 export const RESETTING = /not found on '|GetVirtualSystemThumbnailImage failed|failed with code 3277[57]\b/;
 /** A thumbnail this wide is plenty to find the taskbar or a dark screen, and quick to fetch. */
 const SMALL_FRAME_WIDTH = 320;
+/** The host loads Windows OCR on first use, which takes about ten seconds; a read then takes one or two. */
+export const OCR_TIMEOUT_MS = 60_000;
 
 /** Busy: Windows is starting, restarting or installing updates. Other: neither a desktop nor busy, such as the lock or sign-in screen. */
 export type Look = "desktop" | "busy" | "other";
@@ -48,6 +51,12 @@ export class Screen {
 			if (error instanceof Error && RESETTING.test(error.message)) return undefined;
 			throw error;
 		}
+	}
+
+	/** The console's text by Windows OCR, a line per recognized line. */
+	async text(signal?: AbortSignal): Promise<string> {
+		const result = readOcr(await this.host.call("ocr", { vm: this.vm }, { signal, timeoutMs: OCR_TIMEOUT_MS }));
+		return result.lines.map((line) => line.words.map((word) => word.text).join(" ")).join("\n");
 	}
 
 	/** Console input that a VM resetting mid-restart can't take; returns whether it went in. */
