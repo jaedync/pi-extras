@@ -11,7 +11,7 @@
  * - A reply to someone blocked on a question resolves that question instead.
  * A child is not done until its own children have reported.
  */
-import { EVERYONE, MAIN, nameFor } from "./names.ts";
+import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
 import {
 	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest,
@@ -120,8 +120,10 @@ export class Team {
 		if (to === from) return { ok: false, error: "That is you." };
 		if (to === EVERYONE) return this.broadcast(from, text, options.expectReply === true);
 		const pending = this.questions.get(to);
-		if (pending && pending.to === from) {
+		// The user can answer any question, whoever it was put to.
+		if (pending && (pending.to === from || from === USER)) {
 			pending.resolve(text);
+			if (from === USER) this.options.deliverToMain({ kind: "relay", from, to, text, answered: true });
 			return { ok: true, delivered: "replied" };
 		}
 		const body = options.expectReply ? questionText(from, text) : noteText(from, text);
@@ -138,9 +140,16 @@ export class Team {
 			result = { ok: true, delivered: "main" };
 		} else {
 			result = this.deliverToChild(from, to, body, options.expectReply === true);
+			// Main should never be surprised by work the user asked for directly.
+			if (result.ok && from === USER) this.options.deliverToMain({ kind: "relay", from, to, text, answered: false });
 		}
 		if (!result.ok || !options.expectReply) return result;
 		return this.awaitReply(from, to, options.signal);
+	}
+
+	/** The child's messages so far; empty before it starts. */
+	messages(name: string): readonly unknown[] {
+		return this.handles.get(name)?.messages() ?? [];
 	}
 
 	/** Stops a child and everything under it. */
@@ -269,8 +278,9 @@ export class Team {
 			handle.steer(body);
 			return { ok: true, delivered: "steered" };
 		}
-		const resumes = wakes || from === target.parent;
+		const resumes = wakes || from === target.parent || from === USER;
 		if ((target.state === "idle" || target.state === "waiting") && handle && resumes) {
+			if (target.state === "idle") this.patch(to, { resumedBy: { from, text: body } });
 			void this.run(to, [...this.takeInbox(to), body].join("\n\n"));
 			return { ok: true, delivered: "resumed" };
 		}

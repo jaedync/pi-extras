@@ -44,7 +44,8 @@ export function reportText(record: AgentRecord, now: number): string {
 		return `${head} was stopped after ${duration(record, now)}.${partial}${session}`;
 	}
 	const report = record.report?.trim() ? capReport(record.report, record.sessionFile) : "(no final message)";
-	return `${head} finished after ${duration(record, now)}. Message it to follow up; it keeps its context.${session}\n\n${report}`;
+	const why = record.resumedBy && record.runs > 1 ? `\nThis run (${record.runs}) handled: ${oneLine(record.resumedBy.text, 300)}` : "";
+	return `${head} finished after ${duration(record, now)}. Message it to follow up; it keeps its context.${session}${why}\n\n${report}`;
 }
 
 export interface RosterEntry {

@@ -9,7 +9,8 @@
  * restart or reload.
  */
 import * as sdk from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ModelRuntime, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -18,7 +19,10 @@ import { GUIDE_FILE, loadConfig, readGuide, type SubagentsConfig } from "../lib/
 import { MainMail, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
 import { childInstructions, conversationDigest, rosterText } from "../lib/subagents/format.ts";
 import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "../lib/subagents/models.ts";
-import { MAIN } from "../lib/subagents/names.ts";
+import { MAIN, USER } from "../lib/subagents/names.ts";
+import { type InspectorHost, openAgentInspector } from "../lib/subagents/inspector.ts";
+import { createMessageRenderer, createReportRenderer, messageCallRow, messageResultRow, rememberAgent, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
+import { markRow } from "../lib/tool-row.ts";
 import { appendRunLog, runLogEntry, runLogPath } from "../lib/subagents/runlog.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
@@ -75,6 +79,54 @@ export default function subagents(pi: ExtensionAPI) {
 	const widget = createAgentsWidget();
 	let mainRun = 0;
 	pi.on("agent_start", async () => { mainRun++; });
+	let inspectorUi: InspectorHost | null = null;
+
+	const inspect = (name: string): void => {
+		const current = state;
+		if (!inspectorUi || !current) return;
+		openAgentInspector(inspectorUi, {
+			record: () => current.team.get(name),
+			messages: () => current.team.messages(name),
+			describe: describeTool,
+			stop: () => current.team.stop(name),
+			async send(text) {
+				const result = await current.team.send(USER, name, text);
+				if (!result.ok) throw new Error(result.error);
+				return result.delivered === "replied" ? "Answered its question." : result.delivered === "resumed" ? "It resumed to handle your message." : "Delivered after its current step.";
+			},
+		});
+	};
+
+	type RowContext = Parameters<typeof subagentCallRow>[2];
+	/** A row that opens the inspector on click, once its agent is known. */
+	const clickable = (component: Component, context: RowContext): Component => ({
+		render: (width) => component.render(width),
+		invalidate: () => component.invalidate(),
+		handleMouse: (event: { type: string; button: string }) => {
+			const name = (context?.state as { agent?: string } | undefined)?.agent;
+			if (event.type !== "click" || event.button !== "left" || !name || !state?.team.get(name) || !inspectorUi) return undefined;
+			inspect(name);
+			return { handled: true };
+		},
+	} as Component);
+
+	const withRows = (tool: ToolDefinition): ToolDefinition => markRow({
+		...tool,
+		renderShell: "self" as const,
+		renderCall: (args: unknown, theme: Theme, context?: RowContext) => tool.name === "subagent"
+			? clickable(subagentCallRow(args, theme, context, (name) => state?.team.get(name)), context)
+			: messageCallRow(args, theme, context),
+		renderResult: (result: unknown, _options: { expanded: boolean }, theme: Theme, context?: RowContext) => {
+			if (tool.name !== "subagent") return messageResultRow(result, theme, context);
+			rememberAgent(context, (result as { details?: unknown } | null)?.details);
+			return clickable(subagentResultRow(result, theme, context), context);
+		},
+	} as ToolDefinition, "band");
+
+	if (typeof pi.registerMessageRenderer === "function") {
+		pi.registerMessageRenderer(MESSAGE_TYPE, createMessageRenderer());
+		pi.registerMessageRenderer(REPORT_TYPE, createReportRenderer());
+	}
 
 	const build = (ctx: ExtensionContext): SessionState => {
 		const agentDir = sdk.getAgentDir();
@@ -170,10 +222,11 @@ export default function subagents(pi: ExtensionAPI) {
 				ctx.ui.notify(`subagents: tool name "${tool.name}" is already registered by another extension; skipping it.`, "warning");
 				continue;
 			}
-			pi.registerTool(tool);
+			pi.registerTool(withRows(tool));
 		}
+		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui as unknown as InspectorHost : null;
 		if (ctx.hasUI && ctx.mode === "tui") {
-			widget.attach(ctx.ui as never, () => ({ records: current.team.list(), pending: current.mail.pending() }));
+			widget.attach(ctx.ui as never, () => ({ records: current.team.list(), pending: current.mail.pending() }), inspect);
 		}
 	});
 
@@ -216,10 +269,10 @@ export default function subagents(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("subagents", {
-		description: "List subagents, stop one (stop <name> | stop all), or edit the model guide (guide)",
+		description: "Inspect subagents (/subagents [name]), stop them (stop <name> | stop all), or edit the model guide (guide)",
 		getArgumentCompletions: (prefix: string) => {
 			const names = state?.team.list().map((record) => record.name) ?? [];
-			return ["guide", "stop all", ...names.map((name) => `stop ${name}`)]
+			return ["guide", "stop all", ...names, ...names.map((name) => `stop ${name}`)]
 				.filter((value) => value.startsWith(prefix))
 				.map((value) => ({ value, label: value }));
 		},
@@ -236,7 +289,12 @@ export default function subagents(pi: ExtensionAPI) {
 				}
 				return;
 			}
-			ctx.ui.notify(listing(state.team.list()), "info");
+			const records = state.team.list();
+			if (verb && state.team.get(verb) && inspectorUi) return inspect(verb);
+			if (!inspectorUi || records.length === 0) return ctx.ui.notify(listing(records), "info");
+			const width = Math.max(...records.map((record) => record.name.length));
+			const choice = await ctx.ui.select("Subagents", records.slice().reverse().map((record) => `${record.name.padEnd(width)}  ${record.state.padEnd(8)}  ${record.model}`));
+			if (choice) inspect(choice.split(/\s+/)[0]!);
 		},
 	});
 

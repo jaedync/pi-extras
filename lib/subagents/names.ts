@@ -6,9 +6,11 @@
 import { slugify } from "../shell-jobs-core.ts";
 
 export const MAIN = "main";
+/** The person at the terminal, writing from the inspector. */
+export const USER = "user";
 export const EVERYONE = "all";
 export const NAME_MAX = 24;
-const RESERVED = new Set([MAIN, EVERYONE, "user", "you", "me", "parent"]);
+const RESERVED = new Set([MAIN, EVERYONE, USER, "you", "me", "parent"]);
 
 // Words that say nothing about which task this is.
 const FILLER = new Set([

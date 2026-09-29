@@ -36,6 +36,7 @@ function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTime
 					steer: (text) => steered.set(record.name, [...(steered.get(record.name) ?? []), text]),
 					abort: async () => { aborted.push(record.name); },
 					lastText: () => last,
+					messages: () => [],
 					takeQueued: () => { const late = queuedLate.get(record.name) ?? []; queuedLate.delete(record.name); return late; },
 					dispose: async () => undefined,
 				};
@@ -221,6 +222,28 @@ test("broadcast reaches live siblings and main; asking everyone is refused", asy
 	assert.deepEqual(h.main.at(-1), { kind: "note", from: a, text: "heads up" });
 	assert.equal((await h.team.send(a, "all", "?", { expectReply: true })).ok, false);
 	assert.equal((await h.team.send("main", "nobody", "hi")).ok, false);
+});
+
+test("the user answers a child's question from the inspector, and resumes finished children", async () => {
+	const h = harness();
+	const name = h.spawn("delete old rows");
+	await tick();
+	const asked = h.team.send(name, "main", "Delete 40k rows?", { expectReply: true });
+	await tick();
+	assert.deepEqual(await h.team.send("user", name, "No, keep them."), { ok: true, delivered: "replied" });
+	assert.deepEqual(h.main.at(-1), { kind: "relay", from: "user", to: name, text: "No, keep them.", answered: true });
+	assert.deepEqual(await asked, { ok: true, delivered: "replied", reply: "No, keep them." });
+	h.lastCall(name).finish("kept");
+	await h.team.whenDone(name);
+	assert.deepEqual(await h.team.send("user", name, "Now archive them."), { ok: true, delivered: "resumed" });
+	assert.deepEqual(h.main.at(-1), { kind: "relay", from: "user", to: name, text: "Now archive them.", answered: false });
+	await tick();
+	h.lastCall(name).finish("archived");
+	await tick();
+	const report = h.main.at(-1);
+	assert.equal(report?.kind, "report");
+	const { reportText } = await import("../lib/subagents/format.ts");
+	assert.match(reportText((report as { record: AgentRecord }).record, Date.now()), /This run \(2\) handled: Message from user: Now archive them\./);
 });
 
 test("main never blocks: its question is delivered and the answer wakes it as a reply", async () => {

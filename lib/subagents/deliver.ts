@@ -31,6 +31,7 @@ export interface OutgoingMessage {
 
 export type MailDetails =
 	| { id: string; kind: "note" | "question" | "reply"; from: string; text: string }
+	| { id: string; kind: "relay"; from: string; to: string; text: string; answered: boolean }
 	| { id: string; kind: "report"; reports: ReportSummary[] };
 
 export interface ReportSummary {
@@ -120,6 +121,12 @@ export class MainMail {
 			return;
 		}
 		const id = this.nextId();
+		if (delivery.kind === "relay") {
+			const said = delivery.answered ? `The user answered ${delivery.to}'s question directly:` : `The user messaged ${delivery.to} directly:`;
+			this.remember({ id, kind: "relay", from: delivery.from, text: `to ${delivery.to}: ${delivery.text}`, at: this.now() });
+			this.send({ customType: MESSAGE_TYPE, content: `${said}\n${delivery.text}`, display: true, details: { id, ...delivery } }, { triggerTurn: false });
+			return;
+		}
 		const content = delivery.kind === "question" ? questionText(delivery.from, delivery.text) : delivery.kind === "reply"
 			? `Answer from ${delivery.from}:\n${delivery.text}` : noteText(delivery.from, delivery.text);
 		this.remember({ id, kind: delivery.kind, from: delivery.from, text: delivery.text, at: this.now() });

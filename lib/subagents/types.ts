@@ -53,6 +53,8 @@ export interface AgentRecord {
 	sessionFile?: string;
 	/** How many runs: 1, then one more per resume. */
 	runs: number;
+	/** The message that resumed it, for the report of that run. */
+	resumedBy?: { from: string; text: string };
 }
 
 export interface SpawnRequest {
@@ -77,6 +79,8 @@ export interface ChildHandle {
 	lastText(): string | undefined;
 	/** Steering that arrived too late for the run that just ended. */
 	takeQueued(): string[];
+	/** The session's messages so far, for the inspector. */
+	messages(): readonly unknown[];
 	dispose(): Promise<void>;
 	sessionFile?: string;
 }
@@ -95,4 +99,6 @@ export type MainDelivery =
 	| { kind: "question"; from: string; text: string }
 	/** An answer to something main asked with expectReply; it wakes main. */
 	| { kind: "reply"; from: string; text: string }
+	/** The user wrote to a child directly; main is told but not woken. */
+	| { kind: "relay"; from: string; to: string; text: string; answered: boolean }
 	| { kind: "report"; record: AgentRecord };

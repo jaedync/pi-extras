@@ -167,6 +167,7 @@ function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: numb
 		},
 		abort: () => session.abort(),
 		lastText: () => session.getLastAssistantText(),
+		messages: () => session.messages,
 		takeQueued() {
 			const agent = session.agent as { hasQueuedMessages?: () => boolean };
 			if (agent.hasQueuedMessages?.() !== true) return [];

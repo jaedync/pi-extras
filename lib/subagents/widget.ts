@@ -97,6 +97,7 @@ export function pendingLines(items: readonly PendingItem[]): Array<{ text: strin
 	const lines = messages.slice(0, MAX_PENDING_ROWS).map((item) => {
 		const mark = item.kind === "question" ? "?" : "↳";
 		const text = item.text.replace(/\s+/g, " ").trim();
+		if (item.kind === "relay") return { text: `${mark} ${item.from} ${text}`, color: "dim" };
 		return { text: `${mark} ${item.from} → ${MAIN}: ${text}`, color: item.kind === "question" ? "warning" : "dim" };
 	});
 	if (messages.length > MAX_PENDING_ROWS) lines.push({ text: `+${messages.length - MAX_PENDING_ROWS} more queued for ${MAIN}`, color: "dim" });

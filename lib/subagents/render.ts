@@ -1,0 +1,188 @@
+/**
+ * Transcript rows for the subagent tools and messages, as header bands like
+ * every other pi-extras row.
+ *
+ * - A `subagent` row names the agent, its model and task. It stays calm while
+ *   the agent works in the background (the widget is what moves), runs while
+ *   main waits on it, and takes the final color when it ends.
+ * - A `message` row says who it went to and what happened to it.
+ * - A message from an agent is a band (amber for a question) over its text.
+ * - A report is one band per agent, the first lines of the report under it;
+ *   a click shows all of it.
+ */
+import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { formatTime, renderBand, type BandPhase, type Seg } from "../band/band.ts";
+import { paletteFrom } from "../band/palette.ts";
+import { bodyBackground, onBackground } from "../band/surface.ts";
+import { formatMoney } from "../status-plus-logic.ts";
+import type { MailDetails, ReportSummary } from "./deliver.ts";
+import { MAIN } from "./names.ts";
+import { type AgentRecord, LIVE_STATES } from "./types.ts";
+import { phaseOf, shortModel } from "./widget.ts";
+
+export const REPORT_PREVIEW_LINES = 3;
+export const MESSAGE_PREVIEW_LINES = 8;
+const BODY_INDENT = 3;
+const DONE = Number.POSITIVE_INFINITY;
+
+type RowContext = { state?: unknown; isPartial?: boolean; executionStarted?: boolean; isError?: boolean; expanded?: boolean } | undefined;
+
+class Lines implements Component {
+	private readonly draw: (width: number) => string[];
+	constructor(draw: (width: number) => string[]) { this.draw = draw; }
+	render(width: number): string[] { return this.draw(Math.max(1, width)); }
+	invalidate(): void {}
+}
+
+const paintOf = (theme: Theme) => (color: string, text: string): string => {
+	try { return theme.fg(color as never, text); } catch { return text; }
+};
+const oneLine = (text: unknown): string => String(text ?? "").replace(/\s+/g, " ").trim();
+
+function band(theme: Theme, width: number, phase: BandPhase, segs: Seg[], rail: Seg[]): string {
+	return renderBand(theme, paletteFrom(theme), { width, phase, segs, rail, clockMs: Date.now() });
+}
+
+/** Text under a band, on the tool background; `limit` lines unless expanded. */
+function body(theme: Theme, width: number, text: string, color: string, limit: number | null): string[] {
+	const trimmed = text.replace(/\r/g, "").trim();
+	if (!trimmed) return [];
+	const paint = paintOf(theme);
+	const inner = Math.max(4, width - BODY_INDENT);
+	const pad = " ".repeat(BODY_INDENT);
+	const all = wrapTextWithAnsi(trimmed, inner);
+	const shown = limit === null ? all : all.slice(0, limit);
+	const lines = shown.map((line) => pad + truncateToWidth(paint(color, line), inner, "…"));
+	if (shown.length < all.length) lines.push(pad + paint("dim", `… ${all.length - shown.length} more lines (click to show)`));
+	return onBackground(lines, width, bodyBackground(theme));
+}
+
+/** A shared row-state slot: the result names the agent, the call row reads it. */
+export function rememberAgent(context: RowContext, details: unknown): void {
+	const state = context?.state;
+	const name = (details as { name?: unknown } | undefined)?.name;
+	if (state && typeof state === "object" && typeof name === "string") (state as { agent?: string }).agent = name;
+}
+
+const agentOf = (context: RowContext): string | undefined => (context?.state as { agent?: string } | undefined)?.agent;
+
+export function subagentCallRow(args: unknown, theme: Theme, context: RowContext, lookup: (name: string) => AgentRecord | undefined): Component {
+	const input = (args ?? {}) as { task?: unknown; name?: unknown; model?: unknown; thinking?: unknown; wait?: unknown };
+	return new Lines((width) => {
+		const now = Date.now();
+		const name = agentOf(context);
+		const record = name ? lookup(name) : undefined;
+		const model = record ? `${shortModel(record.model)}${record.thinking ? ` ${record.thinking}` : ""}` : oneLine(input.model);
+		const segs: Seg[] = [
+			{ text: record?.name ?? (oneLine(input.name) || "subagent"), color: "text", bold: true },
+			...(model ? [{ text: `  ${model}`, color: "dim" }] : []),
+			{ text: `  ${oneLine(input.task)}`, color: "muted" },
+		];
+		if (context?.isPartial && !context.executionStarted) return [band(theme, width, { kind: "writing" }, segs, [])];
+		if (context?.isError && !record) return [band(theme, width, { kind: "done", outcome: "fail", sinceMs: DONE }, segs, [{ text: "not started", color: "error" }])];
+		if (!record) return [band(theme, width, { kind: "calm" }, segs, [{ text: "background", color: "dim" }])];
+		if (LIVE_STATES.has(record.state)) {
+			if (record.blocking) return [band(theme, width, phaseOf(record, now), segs, [{ text: formatTime(now - (record.startedAt ?? now)), color: "text" }])];
+			return [band(theme, width, { kind: "calm" }, segs, [{ text: record.state === "asking" ? record.activity ?? "asking" : "in background", color: record.state === "asking" ? "warning" : "dim" }])];
+		}
+		const took = formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt));
+		const cost: Seg[] = record.usage.cost > 0 ? [{ text: `$${formatMoney(record.usage.cost)}`, color: "dim" }, { text: "  ", color: "dim" }] : [];
+		const word: Seg[] = record.state === "idle" ? [] : [{ text: record.state, color: record.state === "failed" ? "error" : "muted" }, { text: "  ", color: "dim" }];
+		return [band(theme, width, phaseOf(record, now), segs, [...word, ...cost, { text: took, color: "text" }])];
+	});
+}
+
+export function subagentResultRow(result: unknown, theme: Theme, context: RowContext): Component {
+	const details = (result as { details?: { wait?: unknown } } | null)?.details;
+	rememberAgent(context, details);
+	const text = ((result as { content?: Array<{ text?: string }> } | null)?.content ?? []).map((part) => part.text ?? "").join("\n");
+	return new Lines((width) => {
+		if (context?.isError) return body(theme, width, text, "error", null);
+		if (details?.wait === true) return body(theme, width, text, "toolOutput", context?.expanded ? null : REPORT_PREVIEW_LINES + 2);
+		return context?.expanded ? body(theme, width, text, "muted", null) : [];
+	});
+}
+
+const DELIVERED: Record<string, string> = { steered: "delivered", resumed: "resumed it", queued: "queued", inbox: "for its next run", replied: "answered", main: "delivered" };
+
+export function messageCallRow(args: unknown, theme: Theme, context: RowContext): Component {
+	const input = (args ?? {}) as { to?: unknown; text?: unknown; expectReply?: unknown };
+	return new Lines((width) => {
+		const segs: Seg[] = [{ text: `→ ${oneLine(input.to)}`, color: "text", bold: true }, { text: `  ${oneLine(input.text)}`, color: "muted" }];
+		if (context?.isPartial && !context.executionStarted) return [band(theme, width, { kind: "writing" }, segs, [])];
+		const delivered = (context?.state as { delivered?: string } | undefined)?.delivered;
+		const rail: Seg[] = context?.isError ? [{ text: "not delivered", color: "error" }]
+			: [{ text: (delivered && DELIVERED[delivered]) ?? "", color: "dim" }, ...(input.expectReply ? [{ text: "  awaits answer", color: "warning" }] : [])];
+		return [band(theme, width, { kind: "done", outcome: context?.isError ? "fail" : "ok", sinceMs: DONE }, segs, rail)];
+	});
+}
+
+export function messageResultRow(result: unknown, theme: Theme, context: RowContext): Component {
+	const details = (result as { details?: { delivered?: unknown } } | null)?.details;
+	const state = context?.state;
+	if (state && typeof state === "object" && typeof details?.delivered === "string") (state as { delivered?: string }).delivered = details.delivered;
+	const text = ((result as { content?: Array<{ text?: string }> } | null)?.content ?? []).map((part) => part.text ?? "").join("\n");
+	return new Lines((width) => (context?.isError ? body(theme, width, text, "error", null) : context?.expanded ? body(theme, width, text, "muted", null) : []));
+}
+
+/** Per-message expansion toggled by a click; ctrl+O (the global flag) resets it. */
+function expandable(render: (width: number, expanded: boolean) => string[], globalExpanded: boolean, key: object, memory: { overrides: WeakMap<object, boolean>; seen: WeakMap<object, boolean> }): Component {
+	if (memory.seen.get(key) !== globalExpanded) {
+		memory.overrides.delete(key);
+		memory.seen.set(key, globalExpanded);
+	}
+	const expanded = () => memory.overrides.get(key) ?? globalExpanded;
+	return {
+		render: (width: number) => render(Math.max(1, width), expanded()),
+		invalidate: () => {},
+		handleMouse: (event: { type: string; button: string }) => {
+			if (event.type !== "click" || event.button !== "left") return undefined;
+			memory.overrides.set(key, !expanded());
+			return { handled: true };
+		},
+	} as Component;
+}
+
+export function createMessageRenderer(): MessageRenderer {
+	const memory = { overrides: new WeakMap<object, boolean>(), seen: new WeakMap<object, boolean>() };
+	return (message, options, theme) => {
+		const details = message.details as MailDetails | undefined;
+		if (!details || details.kind === "report") return undefined;
+		const question = details.kind === "question";
+		const to = details.kind === "relay" ? details.to : MAIN;
+		const segs: Seg[] = [{ text: details.from, color: "text", bold: true }, { text: ` → ${to}`, color: "dim" }];
+		const said = question ? "asks" : details.kind === "reply" ? "answers" : details.kind === "relay" ? (details.answered ? "you answered" : "you wrote") : "note";
+		const rail: Seg[] = [{ text: said, color: question ? "warning" : "dim" }];
+		const phase: BandPhase = question ? { kind: "done", outcome: "timeout", sinceMs: DONE } : { kind: "calm" };
+		return expandable((width, expanded) => [band(theme, width, phase, segs, rail), ...body(theme, width, details.text, "text", expanded ? null : MESSAGE_PREVIEW_LINES)],
+			options.expanded, message as object, memory);
+	};
+}
+
+function reportPhase(report: ReportSummary): BandPhase {
+	const outcome = report.state === "idle" ? "ok" : report.state === "stopped" ? "aborted" : "fail";
+	return { kind: "done", outcome, sinceMs: DONE };
+}
+
+function reportLines(theme: Theme, width: number, report: ReportSummary, expanded: boolean): string[] {
+	const paint = paintOf(theme);
+	const took = report.startedAt !== undefined && report.endedAt !== undefined ? formatTime(report.endedAt - report.startedAt) : "";
+	const word = report.state === "idle" ? "finished" : report.state;
+	const segs: Seg[] = [{ text: report.name, color: "text", bold: true }, { text: ` ${word}`, color: report.state === "failed" ? "error" : "muted" }, { text: `  ${shortModel(report.model)}`, color: "dim" }];
+	const rail: Seg[] = [...(report.cost > 0 ? [{ text: `$${formatMoney(report.cost)}`, color: "dim" }, { text: "  ", color: "dim" }] : []), { text: took, color: "text" }];
+	const text = report.state === "failed" ? report.error ?? "failed" : report.report ?? "(no final message)";
+	const under = body(theme, width, text, report.state === "failed" ? "error" : "toolOutput", expanded ? null : REPORT_PREVIEW_LINES);
+	const session = expanded && report.sessionFile ? onBackground([" ".repeat(BODY_INDENT) + truncateToWidth(paint("dim", `session ${report.sessionFile}`), width - BODY_INDENT, "…")], width, bodyBackground(theme)) : [];
+	return [band(theme, width, reportPhase(report), segs, rail), ...under, ...session];
+}
+
+export function createReportRenderer(): MessageRenderer {
+	const memory = { overrides: new WeakMap<object, boolean>(), seen: new WeakMap<object, boolean>() };
+	return (message, options, theme) => {
+		const details = message.details as MailDetails | undefined;
+		if (!details || details.kind !== "report" || !Array.isArray(details.reports)) return undefined;
+		return expandable((width, expanded) => details.reports.flatMap((report) => reportLines(theme, width, report, expanded)),
+			options.expanded, message as object, memory);
+	};
+}
