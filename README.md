@@ -75,6 +75,7 @@ the package. Removing it does not remove your credentials or change other packag
   `XDG_CACHE_HOME`).
 - `PI_COMPUTER_USE=on`: enable computer use on macOS. Off by default. See below.
 - `PI_WINDOWS_USE=on`: enable Windows use in WSL on a Hyper-V host. Off by default. See below.
+  `PI_WINDOWS_USE_VMS`: the only VMs it may use, comma-separated (default: all).
 - `PI_TOOL_DISPLAY=off`: leave Pi's own tool rows in place. `/tool-display`
   writes its switches under `toolDisplay` in `pi-extras.json`: `enabled`,
   `others` (default `true`), `chains` (default `true`), `motion` (`full` or
@@ -327,7 +328,11 @@ against Mac apps. Guest methods (`win.snapshot`, `win.click`, `win.type`,
 reads the UI Automation tree and acts in the signed-in desktop. `win.console.*`
 methods drive the VM's screen, keyboard and mouse from the host through
 Hyper-V, and also work on lock, sign-in and UAC screens. Every method names its
-VM: `win.snapshot({ vm: "Win11" })`; `win.vms()` lists them.
+VM: `win.snapshot({ vm: "Win11" })`; `win.vms()` lists them. To keep a session
+away from some VMs, set `PI_WINDOWS_USE_VMS` to the ones it may use, such as
+`PI_WINDOWS_USE_VMS="Win11,Test Lab"` (names match case-insensitively). Other
+VMs are then left out of `win.vms()`, and a call naming one fails before
+anything reaches the host.
 
 There is nothing to set up per VM. The first call to a VM installs Windows-MCP
 in it through the console: it opens an elevated PowerShell from Start search,

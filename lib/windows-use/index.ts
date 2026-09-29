@@ -12,7 +12,7 @@ import { CodeExecutor, type CodeResult } from "../computer-use/executor.ts";
 import { painter } from "../computer-use/paint.ts";
 import { renderCall, renderResult, type RowDetails } from "../computer-use/render.ts";
 import { markRow } from "../tool-row.ts";
-import { WIN_API, WinSession } from "./api.ts";
+import { WIN_API, WinSession, vmAllowlist } from "./api.ts";
 import { HostSession } from "./host.ts";
 
 const ENABLED = new Set(["1", "on", "true", "yes"]);
@@ -32,7 +32,7 @@ export function windowsUseEnabled(platform: NodeJS.Platform, env: Readonly<Recor
 const DESCRIPTION = `Run JavaScript that operates Windows Hyper-V virtual machines on this host, the way computer use operates apps. No nested model is used.
 
 Guest methods run through Windows-MCP inside the VM (UI Automation tree, input, PowerShell). Every method takes { vm: "<VM name>" }. The first call to a VM signs it in, unlocks it or installs Windows-MCP as needed, and says so in the result.
-- win.vms() -> [{ name, state, running, installed, ip }]
+- win.vms() -> [{ name, state, running, installed, ip }]: the VMs this session may use
 - win.snapshot({ vm, use_vision?, use_ui_tree?, use_dom? }) -> { text, screenshot }: text lists windows and UI elements with labels and (x, y) centers
 - win.screenshot({ vm }) -> { text, screenshot }: fast, no UI tree
 - win.click({ vm, label? | x?, y?, button?, clicks? })
@@ -98,7 +98,7 @@ export function registerWindowsUse(pi: ExtensionAPI, deps: WindowsUseDeps): void
 		async execute(_id, params, signal, onUpdate) {
 			deps.notes();
 			const result = await deps.executor.execute(params.code, {
-				// No approvals: opting in with PI_WINDOWS_USE covers every VM on this host.
+				// No approvals: opting in with PI_WINDOWS_USE covers every VM it allows (PI_WINDOWS_USE_VMS, or all).
 				approve: async () => "deny",
 				signal,
 				onProgress: (progress) => onUpdate?.({ content: [], details: progress }),
@@ -144,7 +144,8 @@ export function productionDeps(): WindowsUseDeps {
 			});
 		},
 	});
-	const session = new WinSession(host);
+	const allowed = vmAllowlist(process.env);
+	const session = new WinSession(host, undefined, allowed);
 	return {
 		executor: new CodeExecutor({ session, api: WIN_API }),
 		notes: () => session.drainNotes(),
@@ -152,10 +153,11 @@ export function productionDeps(): WindowsUseDeps {
 		status: async () => {
 			const exe = powershellPath();
 			const lines = [exe ? `powershell.exe: ${exe}` : "powershell.exe: not found (needs WSL interop)", `host: ${host.state}`];
+			if (allowed) lines.push(`limited to: ${allowed.join(", ")} (PI_WINDOWS_USE_VMS)`);
 			if (!exe) return lines;
 			try {
-				const vms = await host.call("vms") as { name: string; state: string; installed: boolean; ip?: string | null }[];
-				if (vms.length === 0) lines.push("No Hyper-V VMs on this host");
+				const vms = session.visible(await host.call("vms") as { name: string; state: string; installed: boolean; ip?: string | null }[]);
+				if (vms.length === 0) lines.push(allowed ? "None of those VMs is on this host" : "No Hyper-V VMs on this host");
 				for (const vm of vms) lines.push(`${vm.name}: ${vm.state}${vm.ip ? ` ${vm.ip}` : ""}${vm.installed ? ", set up" : ""}`);
 			} catch (error) {
 				lines.push(`Hyper-V: ${error instanceof Error ? error.message : String(error)} (the Windows user needs to be in Hyper-V Administrators)`);

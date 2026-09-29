@@ -136,7 +136,9 @@ see and operate every Hyper-V VM on the host that the Windows user can manage:
 it reads UI trees and screenshots, types, clicks and runs PowerShell in the
 signed-in guest session, and presses keys and clicks on each VM's console,
 including on sign-in and UAC screens. There is no per-VM approval: opting in
-covers every VM. Screenshots and guest text enter the conversation only when
+covers every VM, unless `PI_WINDOWS_USE_VMS` names the only ones the tool may
+list or act on. That limit binds the tool, not an agent that also has a shell,
+which can run `powershell.exe` itself. Screenshots and guest text enter the conversation only when
 the agent's script emits them.
 
 Setting up a VM installs uv and Windows-MCP for the signed-in guest user,

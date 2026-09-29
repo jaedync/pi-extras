@@ -119,6 +119,15 @@ function requireVm(method: string, args: Args): string {
 	return args.vm;
 }
 
+/**
+ * The VMs named in PI_WINDOWS_USE_VMS (comma-separated, as written); undefined
+ * when unset, meaning every VM on the host. Names match case-insensitively, as in Hyper-V.
+ */
+export function vmAllowlist(env: Readonly<Record<string, string | undefined>>): readonly string[] | undefined {
+	const names = (env.PI_WINDOWS_USE_VMS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+	return names.length > 0 ? names : undefined;
+}
+
 function number(method: string, args: Args, ...keys: string[]): void {
 	for (const key of keys) if (typeof args[key] !== "number" || !Number.isFinite(args[key])) throw new Error(`win.${method} needs a number for ${key}`);
 }
@@ -132,9 +141,25 @@ export class WinSession {
 	private readonly makeGuest: (vm: string, note: (text: string) => void) => Guest;
 	private notes: string[] = [];
 
-	constructor(host: HostCalls, makeGuest?: (vm: string, note: (text: string) => void) => Guest) {
+	/** When set, the only VMs this session may list or act on, as written in PI_WINDOWS_USE_VMS. */
+	private readonly allowed?: readonly string[];
+	private readonly allowedKeys?: ReadonlySet<string>;
+
+	constructor(host: HostCalls, makeGuest?: (vm: string, note: (text: string) => void) => Guest, allowed?: readonly string[]) {
 		this.host = host;
 		this.makeGuest = makeGuest ?? ((vm, note) => new Guest({ host, vm, note }));
+		this.allowed = allowed;
+		this.allowedKeys = allowed ? new Set(allowed.map((name) => name.toLowerCase())) : undefined;
+	}
+
+	/** Host VM entries this session may see. */
+	visible<T extends { name: string }>(vms: readonly T[]): T[] {
+		return vms.filter((vm) => !this.allowedKeys || this.allowedKeys.has(vm.name.toLowerCase()));
+	}
+
+	private permit(vm: string): void {
+		if (!this.allowedKeys || this.allowedKeys.has(vm.trim().toLowerCase())) return;
+		throw new Error(`"${vm}" is not a VM this session may use (PI_WINDOWS_USE_VMS: ${this.allowed!.join(", ")}); win.vms() lists the ones it may`);
 	}
 
 	/** What recovery did since the last drain, for the agent to read. */
@@ -146,7 +171,7 @@ export class WinSession {
 
 	async call(method: string, args: Args, options: Pick<CallOptions, "signal">): Promise<ToolResult> {
 		const { signal } = options;
-		if (method === "vms") return json(await this.host.call("vms", {}, { signal }));
+		if (method === "vms") return json(this.visible(await this.host.call("vms", {}, { signal }) as { name: string }[]));
 		if (method === "sleep") {
 			if (typeof args.ms !== "number" || !Number.isFinite(args.ms) || args.ms < 0) throw new Error("win.sleep needs { ms } (milliseconds)");
 			if (args.ms > MAX_SLEEP_MS) throw new Error(`win.sleep waits at most ${MAX_SLEEP_MS} ms; to wait on the guest, use win.wait_for`);
@@ -154,6 +179,7 @@ export class WinSession {
 			return textResult("ok");
 		}
 		const vm = requireVm(method, args);
+		this.permit(vm);
 		switch (method) {
 			case "start": {
 				const status = await this.host.call("start", { vm }, { signal, timeoutMs: 180_000 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CodeExecutor } from "../lib/computer-use/executor.ts";
-import { WIN_API, WinSession, describeWinCall, toMcp } from "../lib/windows-use/api.ts";
+import { WIN_API, WinSession, describeWinCall, toMcp, vmAllowlist } from "../lib/windows-use/api.ts";
 import type { Guest, HostCalls } from "../lib/windows-use/guest.ts";
 import { hostFrame } from "./support/windows-frames.ts";
 
@@ -140,4 +140,30 @@ test("snapshot text that Windows-MCP sent as a JSON list reads as plain lines; o
 	assert.equal(WIN_API.value("powershell", {}, listed, keep), listed.content[0]!.text);
 	const plain = { content: [{ type: "text" as const, text: "[not json" }], isError: false };
 	assert.equal((WIN_API.value("snapshot", {}, plain, keep) as { text: string }).text, "[not json");
+});
+
+test("PI_WINDOWS_USE_VMS names the only VMs a session may see or touch, case-insensitively", async () => {
+	assert.equal(vmAllowlist({}), undefined);
+	assert.equal(vmAllowlist({ PI_WINDOWS_USE_VMS: " , " }), undefined);
+	assert.deepEqual(vmAllowlist({ PI_WINDOWS_USE_VMS: " Win11-Lab , Test VM " }), ["Win11-Lab", "Test VM"]);
+
+	const calls: string[] = [];
+	const host = {
+		async call(method: string, params: Record<string, unknown> = {}) {
+			calls.push(`${method} ${String(params.vm ?? "")}`.trim());
+			return method === "vms" ? [{ name: "Win11-Lab", state: "running" }, { name: "Production", state: "running" }] : { ok: true };
+		},
+	};
+	const log: string[] = [];
+	const session = new WinSession(host, fakeGuest(log), vmAllowlist({ PI_WINDOWS_USE_VMS: "Win11-Lab" }));
+	const first = (await session.call("vms", {}, {})).content[0];
+	const listed = JSON.parse(first?.type === "text" ? first.text : "[]");
+	assert.deepEqual(listed.map((vm: { name: string }) => vm.name), ["Win11-Lab"], "other VMs aren't even listed");
+	for (const method of ["snapshot", "start", "setup", "login", "console.screenshot", "console.key", "console.click"]) {
+		await assert.rejects(session.call(method, { vm: "Production", keys: "win", x: 1, y: 1 }, {}), /"Production" is not a VM this session may use \(PI_WINDOWS_USE_VMS: Win11-Lab\)/, method);
+	}
+	assert.deepEqual(calls.filter((call) => call !== "vms"), [], "nothing reached the host for Production");
+	assert.deepEqual(log, [], "nor a guest");
+	await session.call("console.key", { vm: "WIN11-LAB", keys: "win" }, {});
+	assert.ok(calls.includes("key WIN11-LAB"));
 });
