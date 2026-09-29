@@ -280,7 +280,7 @@ test("a VM passing through shutting down, as a restart inside Windows makes it, 
 	const { g, log, notes } = guest(world);
 	const result = await g.tool("Click", { loc: [1, 2] });
 	assert.match(text(result), /^Click/);
-	assert.match(notes.join("\n"), /waiting while Win11 is shutting down/);
+	assert.match(notes.join("\n"), /waiting while Hyper-V shows the VM shutting down/);
 	assert.ok(!log.includes("login"));
 });
 

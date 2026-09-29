@@ -254,7 +254,7 @@ export class Guest {
 		const deadline = this.now() + this.timing.transitionWaitMs;
 		let status = await this.host.call("status", { vm: this.vm }, { signal }) as Status;
 		for (let noted = false; !status.running && IN_BETWEEN.test(status.state) && this.now() < deadline; noted = true) {
-			if (!noted) this.note(`${this.vm}: waiting while ${this.vm} is ${status.state} (a restart inside Windows passes through it)`);
+			if (!noted) this.note(`${this.vm}: waiting while Hyper-V shows the VM ${status.state} (a restart inside Windows passes through it)`);
 			await this.sleep(this.timing.pollMs, signal);
 			status = await this.host.call("status", { vm: this.vm }, { signal }) as Status;
 		}

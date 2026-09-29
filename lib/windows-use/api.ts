@@ -329,7 +329,7 @@ export class WinSession {
 			throw new Error(`${String(args.name)} may have opened: Windows-MCP started it, then failed to find its window through UI Automation (${firstLine(textOf(result))}). Take a snapshot before launching it again.`);
 		}
 		if (!IMAGE_METHODS.has(method)) return result;
-		if (LOCK_SCREEN.test(textOf(result))) {
+		if (LOCK_SCREEN.test(unlist(textOf(result)))) {
 			// Locked since the last lock check: check again, which signs in, and look again.
 			guest.recheck();
 			return guest.tool(call.tool, call.args, signal);
