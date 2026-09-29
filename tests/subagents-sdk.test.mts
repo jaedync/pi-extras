@@ -140,3 +140,28 @@ test("an unknown model fails the child, not the session", { timeout: 20_000 }, a
 });
 
 test.after(() => rmSync(scratch, { recursive: true, force: true }));
+
+test("with another extension's subagent tool, Subagents stands down entirely", { timeout: 20_000 }, async () => {
+	const { fileURLToPath } = await import("node:url");
+	const settingsManager = sdk.SettingsManager.inMemory();
+	const notices: string[] = [];
+	const loader = new sdk.DefaultResourceLoader({
+		cwd: scratch, agentDir, settingsManager, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+		additionalExtensionPaths: [
+			fileURLToPath(new URL("./fixtures/foreign-subagent.mjs", import.meta.url)),
+			fileURLToPath(new URL("../extensions/subagents.ts", import.meta.url)),
+		],
+	});
+	await loader.reload();
+	assert.deepEqual(loader.getExtensions().errors, []);
+	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, resourceLoader: loader, settingsManager, sessionManager: sdk.SessionManager.inMemory(scratch) });
+	try {
+		await session.bindExtensions({ uiContext: { notify: (text: string) => notices.push(text) } as never } as never);
+		const names = session.agent.state.tools.map((tool) => tool.name);
+		assert.equal(names.filter((name) => name === "subagent").length, 1);
+		assert.ok(!names.includes("message"), "no stray message tool");
+	} finally {
+		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+		session.dispose();
+	}
+});

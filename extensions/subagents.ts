@@ -214,13 +214,25 @@ export default function subagents(pi: ExtensionAPI) {
 		};
 	};
 
+	const ours = (path: unknown) => /[/\\]extensions[/\\]subagents\.ts$/.test(String(path ?? ""));
+	/** Another extension owns the tool name; Pi keeps the first registration's rows and behavior. */
+	const foreign = (name: string) => {
+		const owner = pi.getAllTools().find((info) => info.name === name);
+		return owner !== undefined && !ours(owner.sourceInfo?.path);
+	};
+
 	pi.on("session_start", async (_event, ctx) => {
 		await state?.close();
+		state = null;
+		// Two subagent systems in one session would split the model's attention and the user's.
+		if (foreign("subagent")) {
+			ctx.ui.notify("pi-extras Subagents is off: another extension already provides a subagent tool. Remove one of them.", "warning");
+			return;
+		}
 		state = build(ctx);
 		const current = state;
 		for (const tool of [subagentTool(current.tools, MAIN), mainMessageTool(current.tools)]) {
-			const owner = pi.getAllTools().find((info) => info.name === tool.name);
-			if (owner && !/[/\\]extensions[/\\]subagents\.ts$/.test(String(owner.sourceInfo?.path ?? ""))) {
+			if (foreign(tool.name)) {
 				ctx.ui.notify(`subagents: tool name "${tool.name}" is already registered by another extension; skipping it.`, "warning");
 				continue;
 			}

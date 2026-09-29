@@ -335,8 +335,10 @@ task opening, time, tool calls, cost, how it ended); `/subagents stats` sums it
 by model, which is what to tune the guide on. `/subagents stop <name>` or
 `stop all` stops children.
 
-If another extension already has a `subagent` or `message` tool, Subagents
-leaves that tool alone and says so.
+If another extension already has a `subagent` tool, such as pi-subagents,
+Subagents stays off for the session and says so; remove one of the two. A
+`message` tool from another extension is left alone and only that tool is
+skipped.
 
 ## Computer use
 
