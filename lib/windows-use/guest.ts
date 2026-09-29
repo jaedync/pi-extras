@@ -230,6 +230,11 @@ export class Guest {
 		await this.install(signal);
 	}
 
+	/** Connected and checked unlocked lately, so a tool call runs without repairs first. */
+	ready(): boolean {
+		return this.connected && this.now() - this.unlockedAt < this.timing.lockTtlMs;
+	}
+
 	/** Checks the lock again before the next tool call; the connection stays. */
 	recheck(): void {
 		this.unlockedAt = Number.NEGATIVE_INFINITY;

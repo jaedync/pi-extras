@@ -11,7 +11,7 @@ import type { CallOptions, ToolResult } from "../computer-use/session.ts";
 import { isDark, readFrame, toPng, type Frame } from "./frame.ts";
 import { ocrItems, ocrText, readOcr, seamOf, type Region } from "./ocr.ts";
 import { Guest, wait, type HostCalls } from "./guest.ts";
-import { answerUac, captureFailure, SCREEN_GRAB_FAILED, typeAtFocus } from "./guest-input.ts";
+import { answerUac, captureFailure, checkAltF4, SCREEN_GRAB_FAILED, typeAtFocus } from "./guest-input.ts";
 import { textOf, textResult } from "./result.ts";
 import { OCR_TIMEOUT_MS, Screen } from "./screen.ts";
 import { pickApp, START_APPS } from "./apps.ts";
@@ -299,9 +299,13 @@ export class WinSession {
 			case "console.type":
 				if (typeof args.text !== "string") throw new Error("win.console.type needs { vm, text }");
 				return this.console("type", { vm, text: args.text }, signal, 120_000);
-			case "console.key":
+			case "console.key": {
 				if (typeof args.keys !== "string") throw new Error("win.console.key needs { vm, keys }");
+				// Console keys also serve lock and sign-in screens, where the guest can't be asked what is in front.
+				const guest = this.guests.get(vm.toLowerCase());
+				if (guest?.ready()) await checkAltF4(guest, args.keys, signal);
 				return this.console("key", { vm, keys: args.keys }, signal);
+			}
 			case "console.cad": return this.console("cad", { vm }, signal);
 			case "type":
 				if (args.label === undefined && !hasPoint(args)) return typeAtFocus(this.guest(vm), args, signal);
@@ -324,6 +328,7 @@ export class WinSession {
 		const call = toMcp(method, args);
 		const guest = this.guest(vm);
 		if (method === "call") return anyTool(guest, call.tool, call.args, signal);
+		if (method === "key") await checkAltF4(guest, args.keys, signal);
 		const result = await guest.tool(call.tool, call.args, signal);
 		if (method === "app" && result.isError && UIA_EVENT_FAILED.test(textOf(result)) && (args.mode ?? "launch") === "launch") {
 			throw new Error(`${String(args.name)} may have opened: Windows-MCP started it, then failed to find its window through UI Automation (${firstLine(textOf(result))}). Take a snapshot before launching it again.`);

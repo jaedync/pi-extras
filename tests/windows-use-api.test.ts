@@ -62,6 +62,7 @@ function fakeGuest(log: string[]): (vm: string, note: (text: string) => void) =>
 		async setup() { log.push(`${vm} setup`); },
 		forget() { log.push(`${vm} forget`); },
 		recheck() {},
+		ready: () => false,
 	}) as unknown as Guest;
 }
 
@@ -336,6 +337,38 @@ test("win.app launches the Start menu app a name means, and refuses a near miss 
 	assert.ok(!log.at(-1)!.startsWith("App"), "nothing was launched");
 	await session.call("app", { vm: "A", mode: "switch", name: "Notepad" }, {});
 	assert.equal(log.at(-1), 'App {"mode":"switch","name":"Notepad"}', "switching goes by window titles, not Start menu names");
+});
+
+test("Alt+F4 with the desktop or taskbar in front, where it opens Shut Down Windows, is refused; with a window in front it goes", async () => {
+	const log: string[] = [];
+	let front = { process: "explorer", title: "Program Manager" };
+	const guest = (vm: string) => ({
+		vm,
+		async tool(name: string, args: Record<string, unknown>) {
+			if (name === "PowerShell" && String(args.command).includes("GetForegroundWindow")) return { content: [{ type: "text", text: `Response: ${JSON.stringify({ ...front, responding: true })}\n\nStatus Code: 0` }], isError: false };
+			log.push(`${name} ${JSON.stringify(args)}`);
+			return { content: [{ type: "text", text: `${name} done` }], isError: false };
+		},
+		ready: () => true,
+		forget() {},
+		recheck() {},
+	}) as unknown as Guest;
+	const { host, calls } = fakeHost();
+	const session = new WinSession(host, guest);
+	await assert.rejects(session.call("key", { vm: "A", keys: "alt+f4" }, {}), /Alt\+F4 wasn't sent[\s\S]*desktop or taskbar[\s\S]*Shut Down Windows/);
+	await assert.rejects(session.call("console.key", { vm: "A", keys: "Alt+F4" }, {}), /Alt\+F4 wasn't sent/);
+	front = { process: "explorer", title: "" };
+	await assert.rejects(session.call("key", { vm: "A", keys: "alt + f4" }, {}), /Alt\+F4 wasn't sent/);
+	assert.deepEqual(log, []);
+	assert.ok(!calls.some(([method]) => method === "key"));
+	front = { process: "explorer", title: "Documents" };
+	await session.call("key", { vm: "A", keys: "alt+f4" }, {});
+	front = { process: "notepad", title: "Untitled - Notepad" };
+	await session.call("console.key", { vm: "A", keys: "alt+f4" }, {});
+	assert.deepEqual(log, ['Shortcut {"shortcut":"alt+f4"}']);
+	assert.deepEqual(calls.filter(([method]) => method === "key"), [["key", { vm: "A", keys: "alt+f4" }]]);
+	await session.call("key", { vm: "A", keys: "ctrl+c" }, {});
+	assert.equal(log.at(-1), 'Shortcut {"shortcut":"ctrl+c"}', "other keys go without a look");
 });
 
 test("win.uac answers a prompt through the console and waits for it to close; it never types a password", async () => {

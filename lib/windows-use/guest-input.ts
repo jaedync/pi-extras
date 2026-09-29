@@ -6,6 +6,7 @@
 import type { ToolResult } from "../computer-use/session.ts";
 import type { Guest, HostCalls } from "./guest.ts";
 import { textOf, textResult } from "./result.ts";
+import { FRONT_WINDOW, readFront } from "./stall.ts";
 
 type Args = Record<string, unknown>;
 type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -45,6 +46,19 @@ export async function typeAtFocus(guest: Guest, args: Args, signal?: AbortSignal
 	if (enter) await key("enter");
 	if (prior !== undefined) await tool("Clipboard", { mode: "set", text: prior });
 	return textResult(`Typed ${args.text.length} characters into the focused control${enter ? ", then pressed Enter" : ""}.`);
+}
+
+/** Alt+F4 closes the window in front; with the desktop or taskbar there, it opens Shut Down Windows, an Enter away from turning the VM off. */
+const CLOSE_WINDOW = /^\s*alt\s*\+\s*f4\s*$/i;
+/** Explorer's desktop ("Program Manager") and taskbar (untitled), as opposed to its folder windows. */
+const SHELL_TITLES = new Set(["", "Program Manager"]);
+
+/** Refuses Alt+F4 while the desktop or taskbar is in front, as after a switch that didn't take. */
+export async function checkAltF4(guest: Guest, keys: unknown, signal?: AbortSignal): Promise<void> {
+	if (typeof keys !== "string" || !CLOSE_WINDOW.test(keys)) return;
+	const front = readFront(textOf(await guest.tool("PowerShell", { command: FRONT_WINDOW }, signal)));
+	if (front?.process.toLowerCase() !== "explorer" || !SHELL_TITLES.has(front.title)) return;
+	throw new Error(`Alt+F4 wasn't sent to ${guest.vm}: the desktop or taskbar is in front, where it opens Shut Down Windows. Bring the window to close to the front first (a click on it, or win.app with mode "switch"), check with a snapshot, or click its Close button.`);
 }
 
 export async function uacShowing(guest: Guest, signal?: AbortSignal): Promise<boolean> {

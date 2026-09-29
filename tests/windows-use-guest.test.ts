@@ -265,6 +265,18 @@ test("a ready guest runs the tool after one lock check, and nothing else", async
 	assert.deepEqual(notes, []);
 });
 
+test("a guest is ready, needing no repair before a call, only while connected and lately checked unlocked", async () => {
+	const { g, advance } = guest({ running: true, installed: true, session: true, locked: false, server: true });
+	assert.equal(g.ready(), false);
+	await g.tool("Click", { label: 1 });
+	assert.equal(g.ready(), true);
+	advance(10 * 60_000);
+	assert.equal(g.ready(), false);
+	await g.tool("Click", { label: 1 });
+	g.forget();
+	assert.equal(g.ready(), false);
+});
+
 test("the lock check is reused for a while, then repeated", async () => {
 	const { g, log, advance } = guest({ running: true, installed: true, session: true, locked: false, server: true });
 	await g.tool("Click", { label: 1 });
