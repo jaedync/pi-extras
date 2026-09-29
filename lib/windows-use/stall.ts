@@ -25,6 +25,10 @@ export const QUICK_MS = 30_000;
 /** After the restart is typed: the old server answers until it's stopped, a few seconds in. */
 export const RESTART_SETTLE_MS = 6_000;
 export const CAPTURES = new Set(["Snapshot", "Screenshot"]);
+/** A desktop just signed in to, or a server just started, took over 30 s for its first snapshot after a restart. */
+export const COLD_CAPTURE_MS = 90_000;
+/** How long after the guest comes back its captures get COLD_CAPTURE_MS. */
+export const COLD_MS = 3 * 60_000;
 
 /** How long to wait for a Windows-MCP tool before giving up on it. */
 export function toolLimit(name: string, args: Record<string, unknown>): number {
@@ -76,7 +80,8 @@ export function readFront(text: string): FrontWindow | undefined {
 	if (!json) return undefined;
 	try {
 		const value = JSON.parse(json) as Record<string, unknown>;
-		if (typeof value.process !== "string" || !value.process) return undefined;
+		// With no window in front, the handle's process is the Idle process.
+		if (typeof value.process !== "string" || !value.process || value.process === "Idle") return undefined;
 		return { process: value.process, title: typeof value.title === "string" ? value.title : "", ...(typeof value.responding === "boolean" ? { responding: value.responding } : {}) };
 	} catch {
 		return undefined;

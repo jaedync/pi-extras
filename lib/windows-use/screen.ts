@@ -10,10 +10,11 @@ import { readOcr } from "./ocr.ts";
 /**
  * Console errors while a VM changes state: devices and screen vanish for a
  * moment mid-restart, and input is refused as "invalid state" (32775) or
- * "system not available" (32777). If the VM was saved or turned off instead,
- * the next status check says so.
+ * "system not available" (32777), and Hyper-V may show the VM shutting down
+ * or starting. If the VM was saved or turned off instead, the next status
+ * check says so.
  */
-export const RESETTING = /not found on '|GetVirtualSystemThumbnailImage failed|failed with code 3277[57]\b/;
+export const RESETTING = /not found on '|GetVirtualSystemThumbnailImage failed|failed with code 3277[57]\b|is (?:shutting down|starting|stopping|resuming|state \d+), not running/;
 /** A thumbnail this wide is plenty to find the taskbar or a dark screen, and quick to fetch. */
 const SMALL_FRAME_WIDTH = 320;
 /** The host loads Windows OCR on first use, which takes about ten seconds; a read then takes one or two. */

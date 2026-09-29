@@ -77,6 +77,10 @@ interface World {
 	restarts?: number;
 	/** The server takes connections and answers nothing, initialize included, until restarted. */
 	frozen?: boolean;
+	/** Status checks during which Hyper-V reports the VM between states, as a restart inside Windows makes it. */
+	transitioning?: number;
+	/** The next snapshot never answers: Windows restarts under it, back at the sign-in screen. */
+	restartsUnderSnapshot?: boolean;
 }
 
 function fakeHost(world: World) {
@@ -115,6 +119,13 @@ function fakeHost(world: World) {
 					return answer("Response: \n\nStatus Code: 0");
 				}
 				if (name === "Snapshot" && world.stalls) return hang("Snapshot");
+				if (name === "Snapshot" && world.restartsUnderSnapshot) {
+					world.restartsUnderSnapshot = false;
+					world.server = false;
+					world.session = false;
+					world.uptime = 20;
+					return hang("Snapshot");
+				}
 				if (name === "PowerShell" && String(args.command).includes("LogonUI")) {
 					log.push("mcp lock-check");
 					assert.match(String(args.command), /SessionId/, "the lock check must look only at the server's own session");
@@ -134,12 +145,17 @@ function fakeHost(world: World) {
 				return { messages: [{ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: `${name} ${JSON.stringify(args)}` }], isError: false } }] };
 			}
 			log.push(method);
+			if ((world.transitioning ?? 0) > 0 && ["frame", "key", "login"].includes(method)) throw new Error(`VM '${params.vm}' is shutting down, not running`);
 			if ((world.resetting ?? 0) > 0 && ["frame", "key", "login"].includes(method)) {
 				world.resetting!--;
 				throw new Error(world.resetError ?? `Msvm_SyntheticMouse not found on '${params.vm}'`);
 			}
 			switch (method) {
 				case "status": {
+					if ((world.transitioning ?? 0) > 0) {
+						world.transitioning!--;
+						return { vm: params.vm, running: false, state: "shutting down", installed: world.installed, heartbeat: null, uptime: null };
+					}
 					const heartbeat = !((world.booting ?? 0) > 0);
 					if (!heartbeat) world.booting!--;
 					return { vm: params.vm, running: world.running, state: world.running ? "running" : "saved", installed: world.installed, heartbeat, uptime: world.uptime };
@@ -259,6 +275,22 @@ test("a locked guest is signed back in before the tool runs", async () => {
 	assert.match(notes.join("\n"), /signed in/);
 });
 
+test("a VM passing through shutting down, as a restart inside Windows makes it, is waited for, not reported as stopped", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, transitioning: 4 };
+	const { g, log, notes } = guest(world);
+	const result = await g.tool("Click", { loc: [1, 2] });
+	assert.match(text(result), /^Click/);
+	assert.match(notes.join("\n"), /waiting while Win11 is shutting down/);
+	assert.ok(!log.includes("login"));
+});
+
+test("a VM that stays between states is reported after a while", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, transitioning: 10_000 };
+	const { g, clock } = guest(world);
+	await assert.rejects(g.tool("Click", { loc: [1, 2] }), /Win11 is shutting down, not running/);
+	assert.ok(clock() >= 3 * 60_000 && clock() < 4 * 60_000, `waited ${clock()} ms`);
+});
+
 test("a VM that is not running is reported with how to start it, untouched", async () => {
 	const { g, log } = guest({ running: false, installed: true, session: false, locked: false, server: false });
 	await assert.rejects(g.tool("Snapshot", {}), /Win11 is saved.*win\.start/s);
@@ -288,6 +320,16 @@ test("an installed VM that rebooted to the sign-in screen is signed in and the s
 	await g.tool("Snapshot", {});
 	assert.ok(log.includes("login"));
 	assert.ok(!log.includes("setup"), "the logon task starts the server; no reinstall");
+});
+
+test("snapshots get longer for a while after the guest comes back, since a desktop just signed in to is slow to describe", async () => {
+	const world: World = { running: true, installed: true, session: false, locked: false, server: false };
+	const { g, advance } = guest(world);
+	await g.tool("Snapshot", {});
+	assert.equal(world.limits?.Snapshot, 90_000);
+	advance(5 * 60_000);
+	await g.tool("Snapshot", {});
+	assert.equal(world.limits?.Snapshot, 30_000);
 });
 
 test("an installed VM whose server died on an unlocked desktop is repaired without clicking", async () => {
@@ -374,6 +416,17 @@ test("a snapshot stalled by Start or its search, which stopped answering, gets t
 	assert.match(text(result), /^Snapshot/);
 	assert.deepEqual(log.filter((entry) => entry.startsWith("mcp Snapshot") || entry === "mcp front-window" || entry === "mcp restart-shell"), ["mcp Snapshot (stalled)", "mcp front-window", "mcp restart-shell", "mcp Snapshot"]);
 	assert.match(notes.join("\n"), /Start or its search stopped answering/);
+});
+
+test("a snapshot cut off by Windows restarting is taken again once the guest is back, with the longer limit", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, front: { process: "explorer", title: "" } };
+	const { g, log } = guest(world);
+	await g.tool("Click", { loc: [1, 2] });
+	world.restartsUnderSnapshot = true;
+	const result = await g.tool("Snapshot", {});
+	assert.match(text(result), /^Snapshot/);
+	assert.ok(log.includes("login"), "signed back in after the restart");
+	assert.equal(world.limits?.Snapshot, 90_000);
 });
 
 test("a snapshot stalled by an app's window names it and what to do instead, and isn't repeated", async () => {

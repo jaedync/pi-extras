@@ -132,6 +132,12 @@ test("a key combination that fails part-way lets go of the keys it held, so no m
 	assert.match(keys, /try \{[\s\S]*'PressKey'[\s\S]*\} finally \{[\s\S]*'ReleaseKey'/);
 });
 
+test("Hyper-V's in-between states have names, since a restart inside Windows passes through them", () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	assert.match(host, /4 = 'shutting down'/);
+	assert.match(host, /10 = 'starting'/);
+});
+
 test("console scroll counts wheel notches, as Windows-MCP's scroll does, not Hyper-V's 120ths of one", () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	assert.match(host, /'SetScrollPosition' @\{ scrollPositionDelta = \$notches \* 120 \}/);

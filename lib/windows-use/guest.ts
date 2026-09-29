@@ -20,7 +20,7 @@ import type { ToolResult } from "../computer-use/session.ts";
 import { textOf, toResult } from "./result.ts";
 import { Screen, type Look } from "./screen.ts";
 import { checkBootstrap, LAUNCHER, NO_OCR, openAdminShell, type Bootstrap } from "./install.ts";
-import { CAPTURES, DEFAULT_TOOL_MS, FRONT_WINDOW, hangMessage, QUICK_MS, readFront, RESTART_SERVER, RESTART_SETTLE_MS, RESTART_SHELL_UI, RUN_BOX, SHELL_UI, stallMessage, toolLimit, type FrontWindow } from "./stall.ts";
+import { CAPTURES, COLD_CAPTURE_MS, COLD_MS, DEFAULT_TOOL_MS, FRONT_WINDOW, hangMessage, QUICK_MS, readFront, RESTART_SERVER, RESTART_SETTLE_MS, RESTART_SHELL_UI, RUN_BOX, SHELL_UI, stallMessage, toolLimit, type FrontWindow } from "./stall.ts";
 
 export interface HostCallOptions {
 	readonly signal?: AbortSignal;
@@ -57,6 +57,8 @@ interface Timing {
 	readonly bootWaitMs: number;
 	/** Windows started this recently: its logon task may still be starting the server. */
 	readonly recentBootMs: number;
+	/** Wait for Hyper-V to leave a state between two others (shutting down, starting). */
+	readonly transitionWaitMs: number;
 	readonly pollMs: number;
 }
 
@@ -72,6 +74,7 @@ const TIMING: Timing = {
 	startMenuMs: 1_500,
 	bootWaitMs: 15 * 60_000,
 	recentBootMs: 5 * 60_000,
+	transitionWaitMs: 3 * 60_000,
 	pollMs: 3_000,
 };
 
@@ -82,6 +85,8 @@ const PROTOCOL_VERSION = "2025-06-18";
  * pending enhanced-session connection runs one in a session of its own.
  */
 const LOCK_CHECK = "$me = (Get-Process -Id $PID).SessionId; if (Get-Process LogonUI -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }) { 'locked' } else { 'unlocked' }";
+/** Hyper-V states a VM passes through on its way between running, off and saved. */
+const IN_BETWEEN = /^(?:shutting down|starting|stopping|resuming|saving|pausing|state \d+)$/;
 /** Sign in clicks per repair: a second covers a screen that wasn't ready; more won't help a password. */
 const MAX_SIGN_IN_CLICKS = 2;
 
@@ -123,6 +128,8 @@ export class Guest {
 	private readonly screen: Screen;
 	private connected = false;
 	private unlockedAt = Number.NEGATIVE_INFINITY;
+	/** Until then the guest has just come back (restart, sign-in, new server), and captures get longer. */
+	private coldUntil = Number.NEGATIVE_INFINITY;
 	private nextId = 1;
 
 	constructor(options: GuestOptions) {
@@ -174,14 +181,22 @@ export class Guest {
 	 * reported with the window that stalled it.
 	 */
 	private async afterStall(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
-		const limit = toolLimit(name, args);
+		const limit = this.limit(name, args);
+		const coldUntil = this.coldUntil;
 		const front = await this.frontWindow(signal);
 		const restarted = front === "restarted";
 		if (!CAPTURES.has(name)) throw new Error(hangMessage(this.vm, name, limit, restarted));
+		// Getting the front window brought the guest back (Windows restarted under the capture): look again.
+		if (!restarted && this.coldUntil !== coldUntil) return this.captureAgain(name, args, limit, front, signal);
 		if (restarted || !front || !SHELL_UI.test(front.process)) throw new Error(stallMessage(this.vm, name, limit, restarted ? undefined : front, restarted));
 		await this.callTool("PowerShell", { command: RESTART_SHELL_UI }, signal, QUICK_MS);
 		this.note(`${this.vm}: Start or its search stopped answering UI Automation and stalled ${name}; restarted them (Windows brings them back when next opened)`);
 		await this.sleep(this.timing.startMenuMs, signal);
+		return this.captureAgain(name, args, limit, front, signal);
+	}
+
+	/** A capture's one retry after recovery; a second stall is reported. */
+	private async captureAgain(name: string, args: Record<string, unknown>, limit: number, front: FrontWindow | undefined, signal?: AbortSignal): Promise<ToolResult> {
 		try {
 			return await this.callTool(name, args, signal);
 		} catch (error) {
@@ -226,6 +241,7 @@ export class Guest {
 		if (!open) throw cannot("the console's Run box didn't open to restart it from");
 		await this.screen.input("type", { text: `${RESTART_SERVER}\n` }, signal);
 		this.note(`${this.vm}: Windows-MCP stopped answering (a stalled call held it); restarted it from the console's Run box`);
+		this.cameBack();
 		await this.sleep(RESTART_SETTLE_MS, signal);
 		if (!(await this.waitConnect(this.timing.logonWaitMs, signal))) throw cannot("it didn't come back after a restart");
 	}
@@ -273,14 +289,26 @@ export class Guest {
 		if (this.now() - this.unlockedAt >= this.timing.lockTtlMs) await this.unlock(signal);
 	}
 
+	/**
+	 * The VM's status, once it is running. Hyper-V shows a restart inside
+	 * Windows as shutting down, then starting; those are waited out, as they
+	 * may end with it running again.
+	 */
 	private async running(signal?: AbortSignal): Promise<Status> {
-		const status = await this.host.call("status", { vm: this.vm }, { signal }) as Status;
+		const deadline = this.now() + this.timing.transitionWaitMs;
+		let status = await this.host.call("status", { vm: this.vm }, { signal }) as Status;
+		for (let noted = false; !status.running && IN_BETWEEN.test(status.state) && this.now() < deadline; noted = true) {
+			if (!noted) this.note(`${this.vm}: waiting while ${this.vm} is ${status.state} (a restart inside Windows passes through it)`);
+			await this.sleep(this.timing.pollMs, signal);
+			status = await this.host.call("status", { vm: this.vm }, { signal }) as Status;
+		}
 		if (!status.running) throw new Error(`${this.vm} is ${status.state}, not running. Start it with win.start({ vm: ${JSON.stringify(this.vm)} }) if that is intended.`);
 		return status;
 	}
 
 	/** The server is unreachable: get to the desktop, give the logon task its time, else reinstall. */
 	private async revive(status: Status, signal?: AbortSignal): Promise<void> {
+		this.cameBack();
 		if (status.installed) {
 			// After a logon, or a start that signed itself in, the task starts the server; give it time.
 			const fresh = await this.reachDesktop(signal) || await this.bootedRecently(signal);
@@ -302,6 +330,7 @@ export class Guest {
 			throw new Error(`Windows-MCP did not come up on ${this.vm}. The guest's PowerShell window shows why: win.console.screenshot({ vm: ${JSON.stringify(this.vm)} }).`);
 		}
 		this.note(`${this.vm}: Windows-MCP is ready`);
+		this.cameBack();
 	}
 
 	/**
@@ -379,7 +408,7 @@ export class Guest {
 	private async unlock(signal?: AbortSignal): Promise<void> {
 		if (await this.screen.wake(signal)) this.note(`${this.vm}: woke the display, which had gone dark`);
 		// The guest's word alone never triggers a click: reachDesktop clicks only when the console agrees.
-		if (await this.locked(signal)) await this.reachDesktop(signal, "was locked; ");
+		if (await this.locked(signal) && await this.reachDesktop(signal, "was locked; ")) this.cameBack();
 		this.unlockedAt = this.now();
 	}
 
@@ -388,7 +417,15 @@ export class Guest {
 		return /\blocked\b/.test(result.content.map((block) => block.type === "text" ? block.text : "").join("\n"));
 	}
 
-	private async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, limitMs = toolLimit(name, args)): Promise<ToolResult> {
+	private cameBack(): void {
+		this.coldUntil = this.now() + COLD_MS;
+	}
+
+	private limit(name: string, args: Record<string, unknown>): number {
+		return CAPTURES.has(name) && this.now() < this.coldUntil ? COLD_CAPTURE_MS : toolLimit(name, args);
+	}
+
+	private async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, limitMs = this.limit(name, args)): Promise<ToolResult> {
 		return toResult(await this.request("tools/call", { name, arguments: args }, signal, limitMs));
 	}
 

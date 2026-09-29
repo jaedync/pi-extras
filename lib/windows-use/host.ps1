@@ -23,7 +23,7 @@ class RawJson { [string]$Text; RawJson([string]$text) { $this.Text = $text } }
 
 # ---- VMs -------------------------------------------------------------------
 
-$stateNames = @{ 2 = 'running'; 3 = 'off'; 6 = 'saved'; 32768 = 'paused'; 32769 = 'saved'; 32770 = 'starting'; 32773 = 'saving'; 32774 = 'stopping'; 32776 = 'pausing'; 32777 = 'resuming' }
+$stateNames = @{ 2 = 'running'; 3 = 'off'; 4 = 'shutting down'; 6 = 'saved'; 10 = 'starting'; 32768 = 'paused'; 32769 = 'saved'; 32770 = 'starting'; 32773 = 'saving'; 32774 = 'stopping'; 32776 = 'pausing'; 32777 = 'resuming' }
 function Get-StateName($state) { $n = $stateNames[[int]$state]; if ($n) { $n } else { "state $state" } }
 function Get-SafeName([string]$vm) { $vm -replace '[^\w-]', '_' }
 function Get-KeyFile([string]$vm) { Join-Path $dataDir ((Get-SafeName $vm) + '.key') }
