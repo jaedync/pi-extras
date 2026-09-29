@@ -2,6 +2,85 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.9.1 - 2026-09-29
+
+Windows Use, after a night of live agent runs against a Hyper-V guest.
+
+### Added
+
+- `PI_WINDOWS_USE_VMS` limits `windows_use` to the VMs it names (for example
+  `"Win11,Test Lab"`, matched case-insensitively): others are left out of
+  `win.vms()`, and calls naming them fail before reaching the host. With one
+  VM allowed, calls may leave out `vm`.
+- `win.console.ocr({ vm })` reads a VM's screen with Windows OCR on the host,
+  as `(x,y) text` lines whose centers can be clicked. It reads what the UI
+  tree can't: apps running as administrator, custom-drawn windows, UAC and
+  sign-in screens, and it needs no model that takes images. It reads the
+  screen at twice its size, a quarter at a time, where small UI text and
+  text over a photo wallpaper come out right far more often.
+- `win.uac({ vm, answer })` answers a UAC prompt from the console. It never
+  types a password.
+- `PI_WINDOWS_USE_ELEVATED=on` runs Windows-MCP with the guest user's
+  administrator rights: `win.powershell` and the apps `win.app` launches run
+  as administrator, and its input reaches apps running as administrator. A
+  server set up with other rights is reinstalled on the next call. MMC
+  consoles' UI trees remain unreliable (Event Viewer crashed, Services
+  stalled), so agents are pointed to PowerShell and OCR for them.
+- Snapshots mark windows Windows-MCP can't see into, such as apps running as
+  administrator, and point to the console methods, which reach them.
+
+### Changed
+
+- `win.powershell` returns `{ output, status }` rather than Windows-MCP's
+  text. A `timeout` over 540 seconds, longer than a call may run, is refused
+  with how to run the command in the background instead.
+- Snapshot text is about 40% shorter: no box drawing, one line per window,
+  and no lines that say nothing on a single-display guest. Lines past 2,000
+  characters, such as a document's whole text, are cut. Runs of one-word
+  elements, as rich text boxes and translated pages list them, read as one
+  line.
+- `win.type` without coordinates types into the focused control by pasting,
+  exactly (any characters, several lines), and restores the clipboard.
+- `win.sleep(ms)` takes a plain number. Guest calls have limits of their own
+  (30 seconds for a snapshot) instead of ten minutes for all.
+- `win.console.scroll`'s `amount` counts wheel notches, as `win.scroll` does.
+- `win.app` launches the Start menu app a name means: its exact name, or
+  words only it has. Windows-MCP matched names loosely and reported the name
+  it was given, so asking for "System Management Console" started Print
+  Management and said the console launched. A name no app has now fails with
+  the nearest ones, and nothing starts.
+- A `win.call` that names no Windows-MCP tool, or gives wrong arguments,
+  fails with the server's own list of tools and their arguments.
+- Setup opens PowerShell from the Run box instead of Start search, and types
+  the installer, which carries the server's key, only once OCR reads an
+  administrator's PowerShell on the console. It installs Windows-MCP 0.8.6 or
+  a later 0.8 release.
+- With a model that takes no images, results say that emitted images were
+  left out.
+
+### Fixed
+
+- A snapshot stalled by Start or its search, which can stop answering UI
+  Automation, restarts them and is taken again, instead of failing for good.
+  A snapshot stalled by another window names it.
+- A Windows-MCP that answers nothing is restarted from the console's Run box,
+  instead of leaving the agent without it. A live run lost half an hour to this.
+- A VM locked between lock checks is signed back in before a snapshot,
+  instead of the agent getting a picture of the lock screen.
+- A restart inside Windows no longer reads as a stopped VM: Hyper-V's brief
+  "shutting down" is waited out, a snapshot Windows restarted under is taken
+  again once the guest is back, and the first snapshots after it get longer.
+- A display that went to sleep is woken before recovery and console captures,
+  which read a black or stale screen before.
+- A `win.app` launch whose window Windows-MCP lost track of says the app may
+  have opened and to look before launching it again, instead of reading as a
+  failure that agents answered with a second copy.
+- Alt+F4 through `win.key` or `win.console.key` is refused while the
+  desktop or taskbar is in front, where it opens Shut Down Windows. A window
+  switch that silently didn't take led there in testing.
+- `win.console.scroll` and `win.console.drag` failed on every call.
+- Console key combinations let go of every key even when a press fails.
+
 ## 0.9.0 - 2026-09-28
 
 ### Added
