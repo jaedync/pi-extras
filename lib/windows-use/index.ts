@@ -60,7 +60,7 @@ const s = await win.snapshot({ vm: "Win11" });
 emit(s.text);
 emitImage(s.screenshot);
 
-Batch known actions sequentially, then inspect again before deciding the next step. Only emit what you need: UI trees are long.`;
+Batch known actions sequentially, then inspect again before deciding the next step. Only emit what you need: UI trees are long, so filter s.text in the script when you know what you are looking for.`;
 
 /** The description, naming the VMs a session limited by PI_WINDOWS_USE_VMS may use. */
 export function toolDescription(allowed?: readonly string[]): string {
