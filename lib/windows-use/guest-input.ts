@@ -53,14 +53,14 @@ export async function uacShowing(guest: Guest, signal?: AbortSignal): Promise<bo
 }
 
 /** Why a snapshot came back empty, for the error that replaces it. */
-export async function captureFailure(guest: Guest, signal?: AbortSignal): Promise<string> {
+export async function captureFailure(guest: Guest, signal?: AbortSignal): Promise<{ readonly uac: boolean; readonly message: string }> {
 	// Whatever took the screen may also have locked it.
 	guest.recheck();
 	const vm = guest.vm;
 	if (await uacShowing(guest, signal).catch(() => false)) {
-		return `A UAC prompt is showing on ${vm}, on the secure desktop where Windows-MCP can't see or act. Answer it with win.uac({ vm: ${JSON.stringify(vm)}, answer: "yes" }) or "no".`;
+		return { uac: true, message: `A UAC prompt is showing on ${vm}, on the secure desktop where Windows-MCP can't see or act. Answer it with win.uac({ vm: ${JSON.stringify(vm)}, answer: "yes" }) or "no".` };
 	}
-	return `Windows-MCP couldn't capture ${vm}'s screen; the secure desktop may be up (Ctrl+Alt+Del or a credential prompt). win.console.screenshot({ vm: ${JSON.stringify(vm)} }) shows the console.`;
+	return { uac: false, message: `Windows-MCP couldn't capture ${vm}'s screen; the secure desktop may be up (Ctrl+Alt+Del or a credential prompt). win.console.screenshot({ vm: ${JSON.stringify(vm)} }) shows the console.` };
 }
 
 /**

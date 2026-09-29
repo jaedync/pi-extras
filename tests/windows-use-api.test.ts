@@ -226,16 +226,21 @@ test("PI_WINDOWS_USE_VMS names the only VMs a session may see or touch, case-ins
 	assert.ok(calls.includes("key WIN11-LAB"));
 });
 
-/** A guest whose snapshots fail as on the secure desktop, with a UAC prompt up for `prompts` checks. */
-function secureDesktop(log: string[], prompts: number): (vm: string, note: (text: string) => void) => Guest {
+/**
+ * A guest whose snapshots fail as on the secure desktop, with a UAC prompt up
+ * for `prompts` checks; after `grabs` failed captures they work again, as when
+ * the lock behind them is signed out of.
+ */
+function secureDesktop(log: string[], prompts: number, grabs = Number.POSITIVE_INFINITY): (vm: string, note: (text: string) => void) => Guest {
 	let left = prompts;
+	let failing = grabs;
 	return (vm) => ({
 		vm,
 		async tool(name: string, args: Record<string, unknown>) {
 			log.push(`${vm} ${name}`);
 			const text = name === "PowerShell" && String(args.command).includes("consent")
 				? `Response: ${left > 0 ? (left--, 1) : 0}\nStatus Code: 0`
-				: "Error capturing desktop state: screen grab failed. Please try again.";
+				: failing-- > 0 ? "Error capturing desktop state: screen grab failed. Please try again." : `${name} ok`;
 			return { content: [{ type: "text", text }], isError: false };
 		},
 		forget() {},
@@ -250,6 +255,32 @@ test("a snapshot Windows-MCP can't capture fails and says why, naming a UAC prom
 	assert.ok(log.includes("A recheck"), "the lock is checked again before the next call");
 	const other = new WinSession(fakeHost().host, secureDesktop([], 0));
 	await assert.rejects(other.call("screenshot", { vm: "A" }, {}), /couldn't capture A's screen.*win\.console\.screenshot/);
+});
+
+test("a capture stopped by a lock since the last check is taken again after the lock check, which signs in", async () => {
+	const log: string[] = [];
+	const result = await new WinSession(fakeHost().host, secureDesktop(log, 0, 1)).call("snapshot", { vm: "A" }, {});
+	assert.match(JSON.stringify(result.content), /Snapshot ok/);
+	assert.deepEqual(log.filter((entry) => entry !== "A PowerShell"), ["A Snapshot", "A recheck", "A Snapshot"]);
+});
+
+test("a snapshot of the lock screen, locked since the last check, is taken again after signing in", async () => {
+	const log: string[] = [];
+	let locked = true;
+	const guest = (vm: string) => ({
+		vm,
+		async tool(name: string) {
+			log.push(`${vm} ${name}`);
+			const focused = locked ? "Windows Default Lock Screen" : "Editor";
+			return { content: [{ type: "text", text: `Cursor Position: (1, 1)\n\n    Focused Window:\n    Name                         Depth  Status  Width  Height  Handle\n---------------------------  -----  ------  -----  ------  ------\n${focused}      0  Normal   1024     768     1\n\n    UI Tree:\n    desktop\n    └── window "${focused}"` }], isError: false };
+		},
+		forget() {},
+		recheck() { log.push(`${vm} recheck`); locked = false; },
+	}) as unknown as Guest;
+	const result = await new WinSession(fakeHost().host, guest).call("snapshot", { vm: "A" }, {});
+	assert.match(JSON.stringify(result.content), /Editor/);
+	assert.doesNotMatch(JSON.stringify(result.content), /Lock Screen/);
+	assert.deepEqual(log, ["A Snapshot", "A recheck", "A Snapshot"]);
 });
 
 test("win.uac answers a prompt through the console and waits for it to close; it never types a password", async () => {

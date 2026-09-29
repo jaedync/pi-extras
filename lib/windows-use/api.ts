@@ -103,6 +103,8 @@ function unlist(text: string): string {
 		return text;
 	}
 }
+/** The lock screen in front, as a snapshot's window table names it. */
+const LOCK_SCREEN = /Focused Window:\s*\n[^\n]*\n-[- ]*\n\s*Windows Default Lock Screen\s/;
 const JSON_METHODS = new Set(["vms", "start", "console.ocr"]);
 
 /** Windows-MCP wraps PowerShell output as "Response: <stdout, or stderr when stdout is empty>\nStatus Code: <exit code>". */
@@ -269,9 +271,20 @@ export class WinSession {
 		const call = toMcp(method, args);
 		const guest = this.guest(vm);
 		const result = await guest.tool(call.tool, call.args, signal);
+		if (!IMAGE_METHODS.has(method)) return result;
+		if (LOCK_SCREEN.test(textOf(result))) {
+			// Locked since the last lock check: check again, which signs in, and look again.
+			guest.recheck();
+			return guest.tool(call.tool, call.args, signal);
+		}
 		// Windows-MCP answers with a line of text; an empty tree would read as an empty screen.
-		if (IMAGE_METHODS.has(method) && SCREEN_GRAB_FAILED.test(textOf(result))) throw new Error(await captureFailure(guest, signal));
-		return result;
+		if (!SCREEN_GRAB_FAILED.test(textOf(result))) return result;
+		const failure = await captureFailure(guest, signal);
+		if (failure.uac) throw new Error(failure.message);
+		// A lock since the last check stops a capture too; the next call checks, signing in first.
+		const again = await guest.tool(call.tool, call.args, signal);
+		if (SCREEN_GRAB_FAILED.test(textOf(again))) throw new Error(failure.message);
+		return again;
 	}
 
 	/** Wakes a display that went to sleep, since a black console shows and reads nothing. */
