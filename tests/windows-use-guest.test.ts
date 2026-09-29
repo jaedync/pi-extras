@@ -358,8 +358,8 @@ test("a tool call that hangs fails at its own limit with what to try, and is not
 	await g.tool("Click", { loc: [1, 2] });
 	await g.tool("PowerShell", { command: "x", timeout: 100 });
 	world.hangNext = 1;
-	await assert.rejects(g.tool("Snapshot", { use_vision: true }), /Windows-MCP on Win11 didn't answer Snapshot within 60 s[\s\S]*use_ui_tree: false[\s\S]*win\.console\.key\(\{ vm: "Win11", keys: "esc" \}\)/);
-	assert.deepEqual(world.limits, { Click: 120_000, PowerShell: 160_000, Snapshot: 60_000 });
+	await assert.rejects(g.tool("Snapshot", { use_vision: true }), /Windows-MCP on Win11 didn't answer Snapshot within 30 s[\s\S]*use_ui_tree: false[\s\S]*win\.console\.key\(\{ vm: "Win11", keys: "esc" \}\)/);
+	assert.deepEqual(world.limits, { Click: 120_000, PowerShell: 160_000, Snapshot: 30_000 });
 	assert.equal(log.filter((entry) => entry === "mcp Snapshot").length, 1);
 	world.hangNext = 1;
 	await assert.rejects(g.tool("App", { mode: "launch", name: "x" }), /didn't answer App within 120 s; it may still be running in the guest, so it was not repeated/);
@@ -380,7 +380,7 @@ test("a snapshot stalled by an app's window names it and what to do instead, and
 	const world: World = { running: true, installed: true, session: true, locked: false, server: true, stalls: true, front: { process: "mmc", title: "Operations Console", responding: false } };
 	const { g, log } = guest(world);
 	await assert.rejects(g.tool("Snapshot", {}), (error: Error) =>
-		/didn't answer Snapshot within 60 s/.test(error.message) && /"Operations Console" \(mmc, not responding\)/.test(error.message)
+		/didn't answer Snapshot within 30 s/.test(error.message) && /"Operations Console" \(mmc, not responding\)/.test(error.message)
 		&& /use_ui_tree: false/.test(error.message) && /win\.console\.ocr/.test(error.message));
 	assert.equal(log.filter((entry) => entry.startsWith("mcp Snapshot")).length, 1);
 	assert.ok(!log.includes("mcp restart-shell"), "an app is not the tool's to restart");

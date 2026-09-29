@@ -12,8 +12,12 @@
 const TOOL_TIMEOUT_MS = 10 * 60_000;
 /** Most tools answer in a second or two; App launches take up to a dozen. */
 export const DEFAULT_TOOL_MS = 120_000;
-/** Snapshots take 0.5 to 10 s. One that runs longer is stuck on a window whose UI Automation stopped answering. */
-const CAPTURE_MS = 60_000;
+/**
+ * Snapshots took 0.4 to 8.5 s across live agent runs, the slowest the first
+ * after a pause. One that runs past this is stuck on a window whose UI
+ * Automation stopped answering, and each second past it is the agent's.
+ */
+const CAPTURE_MS = 30_000;
 /** On top of a tool's own timeout, for the round trip and PowerShell's start. */
 const TOOL_SLACK_MS = 60_000;
 /** The lock check and other short PowerShell the guest runs for itself take a second or two. */

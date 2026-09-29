@@ -355,8 +355,8 @@ is usable and repairs what it can, and the result says what it did:
   one) is restarted from the console's Run box, which is read with OCR first.
 - A snapshot stalled by Start or its search, which sometimes stop answering UI
   Automation, gets them restarted (Windows starts them again when opened) and
-  is taken again. A snapshot stalled by another app's window fails after a
-  minute and names that window.
+  is taken again. A snapshot stalled by another app's window fails after 30
+  seconds and names that window.
 - A VM that is starting, restarting or installing updates is waited for, up
   to 15 minutes, before anything is clicked. It shows as a nearly black screen
   or a missing Hyper-V heartbeat.
