@@ -351,6 +351,9 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		schedulePolls(ctx);
 	});
 
+	// A compaction is billed but ends no turn; show its charge now rather than on the next timer tick.
+	pi.on("session_compact", async (_event, ctx) => update(ctx));
+
 	pi.on("turn_end", async (_event, ctx) => {
 		// Close a dangling interval (e.g. aborted request with no message_end).
 		if (inflight && !inflight.endedMs) inflight.endedMs = Date.now();

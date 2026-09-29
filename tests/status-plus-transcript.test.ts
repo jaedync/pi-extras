@@ -89,3 +89,31 @@ test("subagent spend folds in inline results and durable meta files, deduped by 
 	assert.equal(stats.providers.get("anthropic")?.cost, 1.5);
 	assert.equal(stats.providers.get("openai-codex")?.cost, 2);
 });
+
+test("summaries and cache refreshes are charged to the model that ran them, without counting as turns", () => {
+	const usage = (cost: number, tokens: Record<string, number> = {}) => ({ input: 100, output: 20, cacheRead: 0, cacheWrite: 0, ...tokens, cost: { total: cost } });
+	const branch = [
+		{ type: "model_change", timestamp: iso(T0), provider: "anthropic", modelId: "m" },
+		assistant(T0 + 1000, T0 + 2000, "anthropic", 0.5),
+		{ type: "model_change", timestamp: iso(T0 + 3000), provider: "openai-codex", modelId: "gpt" },
+		// Pi summarizes with the session's current model and records no provider on these entries.
+		{ type: "compaction", timestamp: iso(T0 + 4000), usage: usage(2) },
+		{ type: "branch_summary", timestamp: iso(T0 + 5000), usage: usage(0) },
+		{ type: "usage", kind: "cache_warm", provider: "anthropic", model: "m", timestamp: iso(T0 + 6000), usage: usage(0.25, { input: 1, output: 1, cacheRead: 900 }) },
+	];
+	const priced: string[] = [];
+	const stats = collect({ getBranch: () => branch, getSessionDir: () => "/nowhere", costOf: (m) => {
+		priced.push(`${m.provider}/${m.model}`);
+		return m.usage.cost.total || 0.125;
+	} });
+	assert.deepEqual([stats.prompts, stats.turns, stats.toolCalls], [0, 1, 0]);
+	// A summary persisted without a price is estimated like any other zero-cost call.
+	assert.ok(priced.includes("openai-codex/gpt"));
+	assert.deepEqual(stats.providers.get("openai-codex"), { cost: 2.125, airtimeMs: 0, inputTokens: 200, outputTokens: 40 });
+	assert.deepEqual(stats.providers.get("anthropic"), { cost: 0.75, airtimeMs: 1000, inputTokens: 902, outputTokens: 2 });
+	assert.deepEqual(stats.tokens, { input: 202, output: 42, cacheRead: 900, cacheWrite: 0 });
+	// Only replies say how warm the prompt cache was; a refresh does say when it was last kept warm.
+	assert.equal(stats.cacheHitPct, 0);
+	assert.equal(stats.lastContextResetMs, T0 + 5000);
+	assert.equal(stats.lastApiEndMs, T0 + 6000);
+});

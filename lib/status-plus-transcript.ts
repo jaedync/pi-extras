@@ -39,6 +39,12 @@ export interface BranchEntry {
 	content?: unknown;
 	data?: unknown;
 	message?: { role: string; toolName?: unknown; details?: unknown } | AssistantLike;
+	/** model_change and usage entries name the model; summaries only carry usage. */
+	provider?: unknown;
+	modelId?: unknown;
+	model?: unknown;
+	kind?: unknown;
+	usage?: unknown;
 }
 
 export interface TranscriptSource {
@@ -97,6 +103,38 @@ function newest(current: number | undefined, candidate: number): number | undefi
 	return !current || candidate > current ? candidate : current;
 }
 
+type UsageLike = AssistantLike["usage"];
+
+function usageOf(value: unknown): UsageLike | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const usage = value as Partial<UsageLike>;
+	return { ...usage, cost: { total: Number(usage.cost?.total) || 0 } };
+}
+
+const promptTokensOf = (usage: UsageLike): number => (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+
+function addTokens(tokens: TokenTotals, usage: UsageLike): TokenTotals {
+	return {
+		input: tokens.input + (usage.input ?? 0),
+		output: tokens.output + (usage.output ?? 0),
+		cacheRead: tokens.cacheRead + (usage.cacheRead ?? 0),
+		cacheWrite: tokens.cacheWrite + (usage.cacheWrite ?? 0),
+	};
+}
+
+/**
+ * Spend Pi records outside replies: compaction and branch summaries, and cache
+ * refreshes. It is billed like any request but is neither a turn nor a sign of
+ * how warm the conversation's cache is.
+ */
+function chargeOffTurn(stats: SessionStats, source: TranscriptSource, model: { provider: string; id: string }, usage: UsageLike): void {
+	stats.tokens = addTokens(stats.tokens, usage);
+	const provider = providerStats(stats, model.provider);
+	provider.cost += source.costOf({ role: "assistant", provider: model.provider, model: model.id, timestamp: 0, usage, content: [] });
+	provider.inputTokens += promptTokensOf(usage);
+	provider.outputTokens += usage.output ?? 0;
+}
+
 function collectEntries(source: TranscriptSource): SessionStats {
 	const stats: SessionStats = {
 		prompts: 0, toolCalls: 0, chains: new Map(), turns: 0, providers: new Map(),
@@ -104,10 +142,26 @@ function collectEntries(source: TranscriptSource): SessionStats {
 	};
 	const branch = source.getBranch();
 	const zenMessages = zenFallbackMessages(branch);
+	// Pi summarizes with the session's current model, which these track.
+	let active = { provider: "unknown", id: "" };
 
 	for (const entry of branch) {
+		if (entry.type === "model_change" && typeof entry.provider === "string") {
+			active = { provider: entry.provider, id: String(entry.modelId ?? "") };
+			continue;
+		}
 		if (entry.type === "compaction" || entry.type === "branch_summary") {
 			stats.lastContextResetMs = newest(stats.lastContextResetMs, Date.parse(entry.timestamp));
+			const usage = usageOf(entry.usage);
+			if (usage) chargeOffTurn(stats, source, active, usage);
+			continue;
+		}
+		if (entry.type === "usage") {
+			const usage = usageOf(entry.usage);
+			const model = typeof entry.provider === "string" ? { provider: entry.provider, id: String(entry.model ?? "") } : active;
+			if (usage) chargeOffTurn(stats, source, model, usage);
+			// A refresh keeps the cache warm exactly as a reply would.
+			if (entry.kind === "cache_warm") stats.lastApiEndMs = newest(stats.lastApiEndMs, Date.parse(entry.timestamp));
 			continue;
 		}
 		if (entry.type === "custom" && entry.customType === CHAIN_ENTRY) {
@@ -124,16 +178,12 @@ function collectEntries(source: TranscriptSource): SessionStats {
 		if (entry.message.role !== "assistant") continue;
 
 		const message = entry.message as AssistantLike;
+		if (typeof message.provider === "string") active = { provider: message.provider, id: String(message.model ?? "") };
 		stats.turns++;
 		for (const block of Array.isArray(message.content) ? message.content : []) if (block.type === "toolCall") stats.toolCalls++;
 		const usage = message.usage ?? { cost: { total: 0 } };
-		stats.tokens = {
-			input: stats.tokens.input + (usage.input ?? 0),
-			output: stats.tokens.output + (usage.output ?? 0),
-			cacheRead: stats.tokens.cacheRead + (usage.cacheRead ?? 0),
-			cacheWrite: stats.tokens.cacheWrite + (usage.cacheWrite ?? 0),
-		};
-		const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+		stats.tokens = addTokens(stats.tokens, usage);
+		const promptTokens = promptTokensOf(usage);
 		stats.cacheHitPct = promptTokens > 0 ? ((usage.cacheRead ?? 0) / promptTokens) * 100 : undefined;
 
 		const startedMs = toEpochMs(message.timestamp);
