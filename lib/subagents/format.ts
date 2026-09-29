@@ -68,6 +68,48 @@ export function rosterText(self: string, entries: readonly RosterEntry[]): strin
 	return lines.join("\n");
 }
 
+export const DIGEST_MAX_CHARS = 40_000;
+const DIGEST_ENTRY_CHARS = 4_000;
+
+/**
+ * Main's conversation for a forked child: what was said, and one line per tool
+ * call. Tool output stays out; the child can re-read what it needs. Text is
+ * portable across providers where raw messages (thinking signatures, tool ids)
+ * are not. The newest entries win when it is too long.
+ */
+export function conversationDigest(entries: readonly unknown[], describe: (tool: string, args: unknown) => string, maxChars = DIGEST_MAX_CHARS): string {
+	const parts: string[] = [];
+	for (const entry of entries) {
+		const e = entry as { type?: string; customType?: string; content?: unknown; message?: { role?: string; content?: unknown } };
+		const cap = (text: string) => (text.length > DIGEST_ENTRY_CHARS ? `${text.slice(0, DIGEST_ENTRY_CHARS)}…` : text);
+		if (e.type === "custom_message" && String(e.customType ?? "").startsWith("subagent")) {
+			parts.push(cap(typeof e.content === "string" ? e.content : ""));
+			continue;
+		}
+		if (e.type !== "message" || !e.message) continue;
+		const { role, content } = e.message;
+		const blocks = typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content as Array<Record<string, unknown>> : [];
+		if (role === "user") {
+			const text = blocks.filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join("\n").trim();
+			if (text) parts.push(`User: ${cap(text)}`);
+		} else if (role === "assistant") {
+			const said = blocks.filter((b) => b.type === "text").map((b) => String(b.text ?? "")).join("\n").trim();
+			const calls = blocks.filter((b) => b.type === "toolCall").map((b) => `[${describe(String(b.name ?? "tool"), b.arguments)}]`);
+			const line = [said ? cap(said) : "", ...calls].filter(Boolean).join("\n");
+			if (line) parts.push(`${MAIN}: ${line}`);
+		}
+	}
+	const kept: string[] = [];
+	let used = 0;
+	for (const part of parts.reverse()) {
+		if (used + part.length > maxChars) break;
+		kept.unshift(part);
+		used += part.length + 2;
+	}
+	const dropped = parts.length - kept.length;
+	return `${dropped > 0 ? `(${dropped} earlier entries omitted)\n\n` : ""}${kept.join("\n\n")}`;
+}
+
 /** Appended to a child's system prompt. */
 export function childInstructions(options: {
 	name: string;
@@ -75,6 +117,8 @@ export function childInstructions(options: {
 	readOnly: boolean;
 	canSpawn: boolean;
 	roster: string;
+	/** Main's conversation, for a forked child. */
+	conversation?: string;
 }): string {
 	const { name, parent } = options;
 	return [
@@ -95,5 +139,6 @@ export function childInstructions(options: {
 		"",
 		"## Team right now",
 		options.roster,
+		...(options.conversation ? ["", `## ${MAIN}'s conversation so far (condensed; tool output omitted)`, options.conversation] : []),
 	].join("\n");
 }

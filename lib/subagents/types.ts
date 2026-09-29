@@ -34,6 +34,8 @@ export interface AgentRecord {
 	fork: boolean;
 	/** The parent's tool call waits for the report instead of a message. */
 	blocking: boolean;
+	/** Children main started in the same turn; their reports arrive together. */
+	group?: string;
 	state: AgentState;
 	createdAt: number;
 	startedAt?: number;
@@ -62,6 +64,7 @@ export interface SpawnRequest {
 	readOnly: boolean;
 	fork: boolean;
 	blocking: boolean;
+	group?: string;
 }
 
 /** What the team needs from a running child session. */

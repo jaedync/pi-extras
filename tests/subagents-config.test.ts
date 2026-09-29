@@ -57,3 +57,17 @@ test("names come from the task, skip filler, and avoid reserved names and collis
 	assert.equal(nameFor(undefined, "the a an", () => false), "agent");
 	assert.ok(nameFor(undefined, "x".repeat(80), () => false).length <= 24);
 });
+
+test("a fork digest keeps what was said and one line per tool call, newest first when cut", async () => {
+	const { conversationDigest } = await import("../lib/subagents/format.ts");
+	const describe = (tool: string, args: any) => `${tool} ${args?.command ?? ""}`.trim();
+	const entries = [
+		{ type: "message", message: { role: "user", content: "Plan the migration" } },
+		{ type: "message", message: { role: "assistant", content: [{ type: "thinking", thinking: "secret" }, { type: "text", text: "Checking." }, { type: "toolCall", name: "bash", arguments: { command: "ls" } }] } },
+		{ type: "message", message: { role: "toolResult", content: [{ type: "text", text: "huge output" }] } },
+		{ type: "custom_message", customType: "subagent-report", content: "scout finished" },
+		{ type: "custom_message", customType: "other", content: "ignored" },
+	];
+	assert.equal(conversationDigest(entries, describe), "User: Plan the migration\n\nmain: Checking.\n[bash ls]\n\nscout finished");
+	assert.equal(conversationDigest(entries, describe, 30), "(2 earlier entries omitted)\n\nscout finished");
+});

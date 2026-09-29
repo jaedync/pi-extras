@@ -13,10 +13,10 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ModelRunt
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createLauncher, childToolNames } from "../lib/subagents/child.ts";
+import { createLauncher, childToolNames, describeTool } from "../lib/subagents/child.ts";
 import { GUIDE_FILE, loadConfig, readGuide, type SubagentsConfig } from "../lib/subagents/config.ts";
 import { MainMail, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
-import { childInstructions, rosterText } from "../lib/subagents/format.ts";
+import { childInstructions, conversationDigest, rosterText } from "../lib/subagents/format.ts";
 import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "../lib/subagents/models.ts";
 import { MAIN } from "../lib/subagents/names.ts";
 import { appendRunLog, runLogEntry, runLogPath } from "../lib/subagents/runlog.ts";
@@ -73,6 +73,8 @@ export default function subagents(pi: ExtensionAPI) {
 	if (process.env.PI_SUBAGENTS === "off") return;
 	let state: SessionState | null = null;
 	const widget = createAgentsWidget();
+	let mainRun = 0;
+	pi.on("agent_start", async () => { mainRun++; });
 
 	const build = (ctx: ExtensionContext): SessionState => {
 		const agentDir = sdk.getAgentDir();
@@ -89,8 +91,12 @@ export default function subagents(pi: ExtensionAPI) {
 		const sessionDir = join(agentDir, "sessions", "subagents", sessionId);
 		let logFailed = false;
 
+		// The team is made below; the mail only asks it once reports arrive.
+		let team!: Team;
 		const mail = new MainMail({
 			batchMs: config.batchMs,
+			groupWaitMs: config.groupWaitMs,
+			groupBusy: (group, except) => team.list().some((r) => r.group === group && r.name !== except && LIVE_STATES.has(r.state)),
 			port: { send: (message, options) => pi.sendMessage(message, options) },
 			onChange: () => {
 				widget.update();
@@ -99,7 +105,7 @@ export default function subagents(pi: ExtensionAPI) {
 		});
 		// The launcher and tools need the team, and the team needs the launcher.
 		let tools!: ToolContext;
-		const team = new Team({
+		team = new Team({
 			maxConcurrent: config.maxConcurrent,
 			maxDepth: config.maxDepth,
 			replyTimeoutMs: config.replyTimeoutMs,
@@ -119,13 +125,14 @@ export default function subagents(pi: ExtensionAPI) {
 				instructions: (record) => childInstructions({
 					name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < config.maxDepth,
 					roster: rosterText(record.name, team.list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model }))),
+					...(record.fork ? { conversation: conversationDigest(ctx.sessionManager.getBranch(), describeTool) } : {}),
 				}),
-				forkEntries: () => ctx.sessionManager.getBranch() as unknown[],
 			}),
 		});
 		tools = {
 			team, allowed, fallbackModel, thinking, modelTable: modelTable(allowed, thinking),
 			guide: readGuide(agentDir, cwd).text, replyTimeoutMs: config.replyTimeoutMs, now: Date.now,
+			currentGroup: () => `run-${mainRun}`,
 		};
 
 		const logged = new Set<string>();

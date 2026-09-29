@@ -6,8 +6,10 @@
  * - A question, or the answer to something main asked, wakes main: steered in
  *   while it works, a new turn when it is idle.
  * - Reports wake main too, batched: reports landing within `batchMs` of each
- *   other become one message and one turn. A child the user stopped doesn't
- *   wake it.
+ *   other become one message and one turn. Children main started in the same
+ *   turn form a group, and a report waits (up to `groupWaitMs`) for the rest
+ *   of its group, so parallel work lands as one message. A child the user
+ *   stopped doesn't wake it.
  *
  * Everything sent but not yet in the transcript is kept as pending, so the
  * widget can show it queued until Pi appends it.
@@ -75,24 +77,46 @@ export class MainMail {
 	private readonly pendingItems = new Map<string, PendingItem>();
 	private batch: AgentRecord[] = [];
 	private timer: ReturnType<typeof setTimeout> | null = null;
+	private readonly held = new Map<string, { records: AgentRecord[]; timer: ReturnType<typeof setTimeout> }>();
 	private seq = 0;
 	private readonly port: MainPort;
 	private readonly batchMs: number;
+	private readonly groupWaitMs: number;
+	private readonly groupBusy: (group: string, except: string) => boolean;
 	private readonly now: () => number;
 	private readonly onChange: () => void;
 
-	constructor(options: { port: MainPort; batchMs: number; now?: () => number; onChange?: () => void }) {
+	constructor(options: {
+		port: MainPort;
+		batchMs: number;
+		groupWaitMs?: number;
+		/** Whether another member of the group is still working. */
+		groupBusy?: (group: string, except: string) => boolean;
+		now?: () => number;
+		onChange?: () => void;
+	}) {
 		this.port = options.port;
 		this.batchMs = options.batchMs;
+		this.groupWaitMs = options.groupWaitMs ?? 0;
+		this.groupBusy = options.groupBusy ?? (() => false);
 		this.now = options.now ?? Date.now;
 		this.onChange = options.onChange ?? (() => undefined);
 	}
 
 	deliver(delivery: MainDelivery): void {
 		if (delivery.kind === "report") {
-			this.batch.push(delivery.record);
+			const { record } = delivery;
+			this.remember({ id: `pending-report-${record.name}`, kind: "report", from: record.name, text: "report", at: this.now() });
+			const group = record.group;
+			if (group && this.groupWaitMs > 0 && this.groupBusy(group, record.name)) {
+				const held = this.held.get(group);
+				if (held) held.records.push(record);
+				else this.held.set(group, { records: [record], timer: setTimeout(() => this.release(group), this.groupWaitMs) });
+				return;
+			}
+			if (group) this.release(group, false);
+			this.batch.push(record);
 			this.timer ??= setTimeout(() => this.flush(), this.batchMs);
-			this.remember({ id: `pending-report-${delivery.record.name}`, kind: "report", from: delivery.record.name, text: "report", at: this.now() });
 			return;
 		}
 		const id = this.nextId();
@@ -101,6 +125,16 @@ export class MainMail {
 		this.remember({ id, kind: delivery.kind, from: delivery.from, text: delivery.text, at: this.now() });
 		this.send({ customType: MESSAGE_TYPE, content, display: true, details: { id, kind: delivery.kind, from: delivery.from, text: delivery.text } },
 			delivery.kind === "note" ? { triggerTurn: false } : { triggerTurn: true, deliverAs: "steer" });
+	}
+
+	/** Moves a group's held reports into the batch. */
+	private release(group: string, schedule = true): void {
+		const held = this.held.get(group);
+		if (!held) return;
+		clearTimeout(held.timer);
+		this.held.delete(group);
+		this.batch.push(...held.records);
+		if (schedule) this.timer ??= setTimeout(() => this.flush(), this.batchMs);
 	}
 
 	/** Sends the batched reports now. */
@@ -143,6 +177,8 @@ export class MainMail {
 	}
 
 	dispose(): void {
+		for (const held of this.held.values()) clearTimeout(held.timer);
+		this.held.clear();
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = null;
 		this.batch = [];

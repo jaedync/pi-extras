@@ -86,8 +86,6 @@ export interface LauncherDeps {
 	/** Tool names and custom tools for this child. */
 	toolsFor(record: AgentRecord): { tools: string[]; customTools: ToolDefinition[] };
 	instructions(record: AgentRecord): string;
-	/** The parent's transcript for `context: "fork"`. */
-	forkEntries?(record: AgentRecord): unknown[] | undefined;
 	onExtensionError?(error: unknown): void;
 }
 
@@ -110,11 +108,8 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				}),
 			});
 			await loader.reload();
-			const fork = record.fork ? deps.forkEntries?.(record) : undefined;
 			// A path fixed at spawn opens as a new session written there.
-			const sessionManager = fork
-				? sdk.SessionManager.inMemory(cwd, undefined, fork as never)
-				: record.sessionFile ? sdk.SessionManager.open(record.sessionFile, dirname(record.sessionFile), cwd)
+			const sessionManager = record.sessionFile ? sdk.SessionManager.open(record.sessionFile, dirname(record.sessionFile), cwd)
 				: deps.sessionDir ? sdk.SessionManager.create(cwd, deps.sessionDir) : sdk.SessionManager.inMemory(cwd);
 			const { session } = await sdk.createAgentSession({
 				cwd, agentDir, modelRuntime, settingsManager, resourceLoader: loader, sessionManager,

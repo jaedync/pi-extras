@@ -88,12 +88,13 @@ export class Team {
 		const depth = (parent?.depth ?? 0) + 1;
 		if (depth > this.options.maxDepth) return { ok: false, error: `Subagents cannot start subagents here (depth limit ${this.options.maxDepth}).` };
 		const name = nameFor(request.name, request.task, (candidate) => this.records.has(candidate));
-		const sessionFile = request.fork ? undefined : this.options.sessionFileFor?.(name);
+		const sessionFile = this.options.sessionFileFor?.(name);
 		const record: AgentRecord = {
 			name, parent: request.parent, depth, task: request.task, model: request.model, readOnly: request.readOnly,
 			fork: request.fork, blocking: request.blocking, state: "queued", createdAt: this.now(), activity: "queued",
 			toolCalls: 0, usage: NO_USAGE, runs: 0, ...(request.thinking ? { thinking: request.thinking } : {}),
 			...(sessionFile ? { sessionFile } : {}),
+			...(request.group ? { group: request.group } : {}),
 		};
 		this.put(record);
 		this.queue.push(name);

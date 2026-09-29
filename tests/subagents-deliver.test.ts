@@ -63,6 +63,35 @@ test("reports close together become one message and one turn", async () => {
 	box.dispose();
 });
 
+test("a report waits for the rest of its group, then all arrive as one message", async () => {
+	const sent: OutgoingMessage[] = [];
+	let busy = new Set(["beta"]);
+	const box = new MainMail({
+		port: { send: (message) => sent.push(message) }, batchMs: 5, groupWaitMs: 1_000,
+		groupBusy: (_group, except) => [...busy].some((name) => name !== except),
+	});
+	box.deliver({ kind: "report", record: record("alpha", { group: "turn-1" }) });
+	await sleep(20);
+	assert.equal(sent.length, 0);
+	busy = new Set();
+	box.deliver({ kind: "report", record: record("beta", { group: "turn-1" }) });
+	await sleep(20);
+	assert.equal(sent.length, 1);
+	assert.match(sent[0]!.content, /^alpha[\s\S]*---[\s\S]*beta/);
+	box.dispose();
+});
+
+test("a held report is released after groupWaitMs even if the group is still busy", async () => {
+	const sent: OutgoingMessage[] = [];
+	const box = new MainMail({ port: { send: (message) => sent.push(message) }, batchMs: 5, groupWaitMs: 30, groupBusy: () => true });
+	box.deliver({ kind: "report", record: record("alpha", { group: "turn-1" }) });
+	await sleep(15);
+	assert.equal(sent.length, 0);
+	await sleep(40);
+	assert.equal(sent.length, 1);
+	box.dispose();
+});
+
 test("a report of a child the user stopped does not wake main", async () => {
 	const { box, sent } = mail(5);
 	box.deliver({ kind: "report", record: record("gamma", { state: "stopped" }) });

@@ -18,6 +18,8 @@ export interface SubagentsConfig {
 	replyTimeoutMs: number;
 	/** Completions that land this close together wake the parent once. */
 	batchMs: number;
+	/** The longest a report waits for the rest of its group. */
+	groupWaitMs: number;
 	/** Tools a child never gets, on top of the built-in exclusions. */
 	childToolsExclude: string[];
 }
@@ -27,6 +29,7 @@ export const DEFAULTS: SubagentsConfig = {
 	maxDepth: 1,
 	replyTimeoutMs: 10 * 60_000,
 	batchMs: 2_000,
+	groupWaitMs: 60_000,
 	childToolsExclude: [],
 };
 
@@ -46,6 +49,7 @@ export function parseConfig(section: Record<string, unknown>): SubagentsConfig {
 		maxDepth: positiveInt(section.maxDepth, DEFAULTS.maxDepth, 4),
 		replyTimeoutMs: positiveInt(section.replyTimeoutMs, DEFAULTS.replyTimeoutMs, 60 * 60_000),
 		batchMs: positiveInt(section.batchMs, DEFAULTS.batchMs, 30_000),
+		groupWaitMs: positiveInt(section.groupWaitMs, DEFAULTS.groupWaitMs, 30 * 60_000),
 		childToolsExclude: exclude,
 	};
 	const model = section.defaultModel;

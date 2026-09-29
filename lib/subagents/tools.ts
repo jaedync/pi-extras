@@ -25,6 +25,8 @@ export interface ToolContext {
 	guide: string;
 	replyTimeoutMs: number;
 	now(): number;
+	/** Main's current run; children it starts in one run report together. */
+	currentGroup?(): string | undefined;
 }
 
 type Result = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> | undefined };
@@ -74,7 +76,9 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 			const thinking = thinkingFor(resolved.choice, params.thinking as Thinking | undefined, tc.thinking);
 			const fork = params.context === "fork";
 			if (fork && parent !== MAIN) throw new Error("Only the main session can fork its context.");
+			const group = parent === MAIN ? tc.currentGroup?.() : undefined;
 			const spawned = tc.team.spawn({
+				...(group ? { group } : {}),
 				task: params.task.trim(), parent, model: resolved.choice.ref, readOnly: params.readOnly === true, fork,
 				blocking: params.wait === true, ...(params.name ? { name: params.name } : {}), ...(thinking ? { thinking } : {}),
 			});
