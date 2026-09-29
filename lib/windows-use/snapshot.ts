@@ -16,6 +16,11 @@ const OPAQUE = "[no elements: it runs as administrator or draws itself. Read it 
 const NOISE = /^(?:Screenshot Backend: |UI Tree: Skipped)/;
 /** A tree line: "│   " or "    " per level above it, then "├── " or "└── ". */
 const TREE_LINE = /^((?:[│ ] {3})*)[├└]── ([^\n]*)$/;
+/**
+ * Longest tree line kept whole. A document's text is its value, so a large
+ * file open in an editor would otherwise ride along in every snapshot.
+ */
+const MAX_LINE = 2000;
 /** Direction marks that UI Automation leaves in dates and names. */
 const BIDI_MARKS = /[\u200e\u200f\u202a-\u202e]/g;
 
@@ -63,7 +68,12 @@ function compactTree(tree: string, listed: ReadonlySet<string>): string {
 	const kept = out
 		.filter((line, index) => !(line.body === 'window ""' && empty(index)))
 		.map((line, index, lines) => line.depth === 0 && opaque(line.body, index) && !((lines[index + 1]?.depth ?? -1) > 0) ? { ...line, body: `${line.body} ${OPAQUE}` } : line);
-	return kept.map((line) => line.depth < 0 ? line.body : `${"  ".repeat(line.depth)}${line.body}`).join("\n").replace(/^\n+/, "").trimEnd();
+	return kept.map((line) => cap(line.depth < 0 ? line.body : `${"  ".repeat(line.depth)}${line.body}`)).join("\n").replace(/^\n+/, "").trimEnd();
+}
+
+function cap(line: string): string {
+	if (line.length <= MAX_LINE) return line;
+	return `${line.slice(0, MAX_LINE)}…[${line.length - MAX_LINE} more characters]`;
 }
 
 /** Header sections split on blank lines, each with the dedent artifact (4 spaces) removed. */

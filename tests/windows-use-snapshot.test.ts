@@ -172,3 +172,14 @@ test("several desktops or displays are kept, and text it doesn't recognize passe
 	assert.match(noWindows, /Opened Windows:\nNo windows found\n\nUI Tree:/);
 	assert.match(compactSnapshot(`${RAW}\n\nThe tree was cut at 500 elements.`), /"Start"\n\nThe tree was cut at 500 elements\.$/);
 });
+
+test("an element's very long text is cut, saying how much was left out, so every snapshot of a big document doesn't carry it", () => {
+	const text = "lorem ipsum ".repeat(500).trim();
+	const raw = ["    UI Tree:", "    desktop", "    └── window \"Editor\"", `        └── (400,300) document \"Text editor\"  [action: scroll]  [value:\"${text}\"]`].join("\n");
+	const line = compactSnapshot(raw).split("\n").find((entry) => entry.includes("document"))!;
+	assert.ok(line.startsWith("  (400,300) document \"Text editor\" [action: scroll] [value:\"lorem ipsum"));
+	assert.ok(line.length < 2100, `line is ${line.length} characters`);
+	const cut = /…\[(\d+) more characters\]$/.exec(line);
+	assert.ok(cut, line.slice(-80));
+	assert.equal(line.length - cut[0].length + Number(cut[1]), `  (400,300) document "Text editor" [action: scroll] [value:"${text}"]`.length);
+});
