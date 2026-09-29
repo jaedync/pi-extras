@@ -97,8 +97,13 @@ test("OCR reads the frame at twice its size, where small UI text reads right, an
 	const ocr = readFileSync(new URL("../lib/windows-use/ocr.psm1", import.meta.url), "utf8");
 	// Live, an Event Viewer list read at 1x got no time right ("1237:02"); at 2x it got all 15.
 	assert.match(ocr, /\$upscale = 2\b/);
-	assert.match(ocr, /TransformedBitmap\(\$source, \(New-Object System\.Windows\.Media\.ScaleTransform\(\$upscale, \$upscale\)\)\)/);
-	for (const key of ["x", "y", "w", "h"]) assert.match(ocr, new RegExp(`${key} = \\[int\\]\\[math\\]::Round\\(\\$r\\.\\w+ / \\$upscale\\)`), `${key} is in frame pixels`);
+	assert.match(ocr, /TransformedBitmap\(\$tile, \(New-Object System\.Windows\.Media\.ScaleTransform\(\$upscale, \$upscale\)\)\)/);
+	// Over a photo wallpaper it read none of a Run box from the whole frame, and all of it from a quarter.
+	assert.match(ocr, /CroppedBitmap\(\$source, \(New-Object System\.Windows\.Int32Rect\(\$x, \$y, \$w, \$h\)\)\)/);
+	assert.match(ocr, /foreach \(\$right in \$false, \$true\)/);
+	assert.match(ocr, /\$left = \$x \+ \$r\.X \/ \$upscale/, "boxes are in frame pixels");
+	assert.match(ocr, /w = \[int\]\[math\]::Round\(\$r\.Width \/ \$upscale\)/);
+	assert.match(ocr, /\(\$cx -ge \$midX\) -eq \$right -and \(\$cy -ge \$midY\) -eq \$lower/, "a word overlapping quarters read in both is kept once");
 });
 
 test("setup rotates the key, so a server it is replacing can't pass for the new one", () => {

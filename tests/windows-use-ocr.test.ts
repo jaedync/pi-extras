@@ -30,6 +30,18 @@ test("OCR lines become clickable items: split where words sit far apart, centere
 	]);
 });
 
+test("a line the host read in two quarters, cut at the middle, comes back as one item", () => {
+	const cut = [
+		{ words: [word("Management", 512, 101, 52, 12), word("Console", 570, 101, 44, 12)] },
+		{ words: [word("Operations", 400, 100, 60, 12), word("Control", 466, 100, 40, 12)] },
+		{ words: [word("Far", 900, 100, 20, 12)] },
+		// Lines OCR told apart, close together away from the middle, stay apart.
+		{ words: [word("Services", 150, 200, 60, 12)] },
+		{ words: [word("Information", 215, 200, 60, 12)] },
+	];
+	assert.deepEqual(ocrItems(cut, undefined, 512).map((item) => item.text), ["Operations Control Management Console", "Far", "Services", "Information"]);
+});
+
 test("a region keeps only the items centered inside it", () => {
 	const items = ocrItems(LINES, { x: 50, y: 170, width: 200, height: 120 });
 	assert.deepEqual(items.map((item) => item.text), ["File", "Action", "View", "Help", "Galaxy Database Manager"]);

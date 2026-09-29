@@ -9,7 +9,7 @@ import { clean, type CallTarget } from "../computer-use/describe.ts";
 import type { ScriptApi } from "../computer-use/executor.ts";
 import type { CallOptions, ToolResult } from "../computer-use/session.ts";
 import { isDark, readFrame, toPng, type Frame } from "./frame.ts";
-import { ocrItems, ocrText, readOcr, type Region } from "./ocr.ts";
+import { ocrItems, ocrText, readOcr, seamOf, type Region } from "./ocr.ts";
 import { Guest, wait, type HostCalls } from "./guest.ts";
 import { answerUac, captureFailure, SCREEN_GRAB_FAILED, typeAtFocus } from "./guest-input.ts";
 import { textOf, textResult } from "./result.ts";
@@ -289,7 +289,7 @@ export class WinSession {
 				const read = async () => readOcr(await this.host.call("ocr", { vm }, { signal, timeoutMs: OCR_TIMEOUT_MS }));
 				let ocr = await read();
 				if (ocr.lines.length === 0 && await this.wake(vm, signal)) ocr = await read();
-				const items = ocrItems(ocr.lines, area);
+				const items = ocrItems(ocr.lines, area, seamOf(ocr.width));
 				return json({ width: ocr.width, height: ocr.height, text: ocrText(items), items });
 			}
 			case "console.click": number(method, args, "x", "y"); return this.console("click", { vm, x: args.x, y: args.y, button: args.button, double: args.double === true }, signal);

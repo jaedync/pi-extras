@@ -12,6 +12,9 @@ export interface OcrResult { readonly width: number; readonly height: number; re
 export interface OcrItem { readonly text: string; readonly x: number; readonly y: number }
 export interface Region { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 
+/** Where the host's quarters of a frame this wide meet, which a line crossing it is cut at. */
+export const seamOf = (width: number) => Math.round(width / 2);
+
 /**
  * OCR joins words on one baseline into a line even when they are separate
  * controls, such as a menu bar's items. A gap wider than the words are tall
@@ -54,6 +57,33 @@ function toBox(words: readonly OcrWord[]): Box {
 	return { text: words.map((word) => word.text).join(" "), x: Math.round((left + right) / 2), y: Math.round((top + bottom) / 2), h: bottom - top };
 }
 
+const centerX = (word: OcrWord) => word.x + word.w / 2;
+const centerY = (word: OcrWord) => word.y + word.h / 2;
+
+/**
+ * The host reads the frame in quarters, keeping each word from the quarter
+ * its center is in, so a line crossing the middle (seamX) arrives as two: one
+ * ending left of it and one starting right of it. Those join again when they
+ * sit on one row as close as words in a line do.
+ */
+function joinAtSeam(lines: readonly OcrLine[], seamX: number): OcrLine[] {
+	const sorted = lines.filter((line) => line.words.length > 0).map((line) => [...line.words].sort((a, b) => a.x - b.x));
+	const partner = new Map<number, number>();
+	sorted.forEach((left, index) => {
+		const last = left.at(-1)!;
+		if (centerX(last) >= seamX) return;
+		const match = sorted.findIndex((right, other) => {
+			const first = right[0]!;
+			const height = Math.max(last.h, first.h);
+			return other !== index && ![...partner.values()].includes(other) && centerX(first) >= seamX
+				&& Math.abs(centerY(first) - centerY(last)) <= height / 2 && first.x - (last.x + last.w) <= GAP_RATIO * height;
+		});
+		if (match >= 0) partner.set(index, match);
+	});
+	const joined = new Set(partner.values());
+	return sorted.flatMap((words, index) => joined.has(index) ? [] : [{ words: partner.has(index) ? [...words, ...sorted[partner.get(index)!]!] : words }]);
+}
+
 /** A line's words, split into items wherever a gap is wider than the words beside it are tall. */
 function splitLine(line: OcrLine): Box[] {
 	const words = [...line.words].sort((a, b) => a.x - b.x);
@@ -75,8 +105,8 @@ const inside = (item: OcrItem, region: Region) =>
  * Items share a row when their centers are within half the taller one's
  * height, since OCR reports a row's lines in no particular order.
  */
-export function ocrItems(lines: readonly OcrLine[], region?: Region): OcrItem[] {
-	const boxes = lines.flatMap(splitLine).filter((box) => !region || inside(box, region)).sort((a, b) => a.y - b.y);
+export function ocrItems(lines: readonly OcrLine[], region?: Region, seamX?: number): OcrItem[] {
+	const boxes = (seamX === undefined ? lines : joinAtSeam(lines, seamX)).flatMap(splitLine).filter((box) => !region || inside(box, region)).sort((a, b) => a.y - b.y);
 	const rows: Box[][] = [];
 	for (const box of boxes) {
 		const row = rows.at(-1);

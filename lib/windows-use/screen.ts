@@ -5,7 +5,7 @@
  */
 import { hasTaskbar, isDark, readFrame, type Frame } from "./frame.ts";
 import type { HostCalls } from "./guest.ts";
-import { readOcr } from "./ocr.ts";
+import { ocrItems, readOcr, seamOf } from "./ocr.ts";
 
 /**
  * Console errors while a VM changes state: devices and screen vanish for a
@@ -54,10 +54,10 @@ export class Screen {
 		}
 	}
 
-	/** The console's text by Windows OCR, a line per recognized line. */
+	/** The console's text by Windows OCR, an item per line in reading order. */
 	async text(signal?: AbortSignal): Promise<string> {
 		const result = readOcr(await this.host.call("ocr", { vm: this.vm }, { signal, timeoutMs: OCR_TIMEOUT_MS }));
-		return result.lines.map((line) => line.words.map((word) => word.text).join(" ")).join("\n");
+		return ocrItems(result.lines, undefined, seamOf(result.width)).map((item) => item.text).join("\n");
 	}
 
 	/** Console input that a VM resetting mid-restart can't take; returns whether it went in. */
