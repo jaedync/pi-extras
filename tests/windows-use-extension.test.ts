@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CodeResult, RunOptions } from "../lib/computer-use/executor.ts";
-import { isWsl, registerWindowsUse, windowsUseEnabled, type WindowsUseDeps } from "../lib/windows-use/index.ts";
+import { isWsl, registerWindowsUse, toolDescription, windowsUseEnabled, type WindowsUseDeps } from "../lib/windows-use/index.ts";
 import { rowKind } from "../lib/tool-row.ts";
 
 test("windows use is off unless opted in, and only under WSL", () => {
@@ -51,6 +51,13 @@ test("registers one windows_use tool with the shared row layout, a status comman
 	assert.deepEqual(notes, ["host: closed\nWin11: running, set up"]);
 	await handlers.get("session_shutdown")!();
 	assert.equal(closed(), 1);
+});
+
+test("the description names the VMs a limited session may use, and the default when there is one", () => {
+	assert.doesNotMatch(toolDescription(), /may use only/);
+	assert.match(toolDescription(["Win11-Lab"]), /This session may use only this VM: Win11-Lab\. Calls may leave out vm; it defaults to "Win11-Lab"\./);
+	assert.match(toolDescription(["Win11-Lab", "Test"]), /This session may use only these VMs: Win11-Lab, Test\./);
+	assert.match(toolDescription(), /win\.powershell\(\{ vm, command, timeout\? \}\) -> \{ output, status \}/);
 });
 
 test("recovery notes from the run follow what the script emitted; stale ones are dropped first", async () => {

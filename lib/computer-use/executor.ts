@@ -41,6 +41,8 @@ export interface ScriptApi {
 	/** Where emitImage's argument comes from, for its error message. */
 	readonly imageHint: string;
 	describe(method: string, args: Record<string, unknown>): CallTarget;
+	/** Turns what the script passed (JSON-decoded) into a method's arguments, for shorthands such as `win.sleep(500)`. */
+	args?(method: string, raw: unknown): Record<string, unknown>;
 	/** The value a call resolves to in the script; images stay here behind `keep`'s handles. */
 	value(method: string, args: Record<string, unknown>, result: ToolResult, keep: (image: Image) => ScreenshotHandle): unknown;
 }
@@ -240,8 +242,9 @@ class Run {
 	private async call(message: Extract<WorkerMessage, { type: "call" }>): Promise<void> {
 		if (++this.startedCalls > MAX_CALLS) return this.reply(message.id, { error: `the code made more than ${MAX_CALLS} ${this.api.label} calls` });
 		clearTimeout(this.timer);
-		let args: Record<string, unknown> = {};
-		try { args = JSON.parse(message.args) as Record<string, unknown>; } catch { /* reported by the call below */ }
+		let raw: unknown = {};
+		try { raw = JSON.parse(message.args); } catch { /* reported by the call below */ }
+		const args = this.api.args ? this.api.args(message.method, raw) : raw as Record<string, unknown>;
 		const target = { method: message.method, ...this.api.describe(message.method, args) };
 		const started = this.now();
 		let approval: Approval | undefined;

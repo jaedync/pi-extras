@@ -17,6 +17,8 @@ test("guest methods map onto Windows-MCP tools, with labels or coordinates", () 
 	assert.deepEqual(toMcp("app", { vm: "A", mode: "launch", name: "notepad" }), { tool: "App", args: { mode: "launch", name: "notepad" } });
 	assert.deepEqual(toMcp("call", { vm: "A", tool: "Clipboard", args: { mode: "get" } }), { tool: "Clipboard", args: { mode: "get" } });
 	assert.throws(() => toMcp("call", { vm: "A" }), /win\.call needs/);
+	assert.deepEqual(toMcp("powershell", { vm: "A", command: "x", timeout: 540 }), { tool: "PowerShell", args: { command: "x", timeout: 540 } });
+	assert.throws(() => toMcp("powershell", { vm: "A", command: "x", timeout: 900 }), /at most 540 seconds.*Start-Process/);
 });
 
 test("calls are described by VM and target for the tool row", () => {
@@ -137,9 +139,34 @@ test("snapshot text that Windows-MCP sent as a JSON list reads as plain lines; o
 	const listed = { content: [{ type: "text" as const, text: JSON.stringify(["Focused Window:\nNotepad", "UI Tree:\n- button"]) }], isError: false };
 	const snapshot = WIN_API.value("snapshot", {}, listed, keep) as { text: string };
 	assert.equal(snapshot.text, "Focused Window:\nNotepad\nUI Tree:\n- button");
-	assert.equal(WIN_API.value("powershell", {}, listed, keep), listed.content[0]!.text);
+	assert.equal(WIN_API.value("key", {}, listed, keep), listed.content[0]!.text);
 	const plain = { content: [{ type: "text" as const, text: "[not json" }], isError: false };
 	assert.equal((WIN_API.value("snapshot", {}, plain, keep) as { text: string }).text, "[not json");
+});
+
+test("win.powershell resolves to its output and exit status, without Windows-MCP's wrapping", () => {
+	const keep = () => ({ type: "screenshot", id: "1" }) as const;
+	const result = (text: string) => ({ content: [{ type: "text" as const, text }], isError: false });
+	assert.deepEqual(WIN_API.value("powershell", {}, result("Response: a\r\nb  \r\n\nStatus Code: 0"), keep), { output: "a\nb", status: 0 });
+	assert.deepEqual(WIN_API.value("powershell", {}, result("Response: Get-Item : Cannot find path\nStatus Code: 1"), keep), { output: "Get-Item : Cannot find path", status: 1 });
+	assert.deepEqual(WIN_API.value("powershell", {}, result("Response: \nStatus Code: 0"), keep), { output: "", status: 0 });
+	assert.deepEqual(WIN_API.value("powershell", {}, result("something else"), keep), { output: "something else", status: null });
+});
+
+test("win.sleep also takes the milliseconds alone", () => {
+	assert.deepEqual(WIN_API.args!("sleep", 1500), { ms: 1500 });
+	assert.deepEqual(WIN_API.args!("sleep", { ms: 5 }), { ms: 5 });
+	assert.deepEqual(WIN_API.args!("snapshot", { vm: "A" }), { vm: "A" });
+	assert.deepEqual(WIN_API.args!("snapshot", undefined), {});
+});
+
+test("a session limited to one VM uses it when a call names none", async () => {
+	const log: string[] = [];
+	const one = new WinSession(fakeHost().host, fakeGuest(log), ["Win11-Lab"]);
+	await one.call("key", { keys: "win" }, {});
+	assert.deepEqual(log, ['Win11-Lab Shortcut {"shortcut":"win"}']);
+	const two = new WinSession(fakeHost().host, fakeGuest([]), ["Win11-Lab", "Other"]);
+	await assert.rejects(two.call("key", { keys: "win" }, {}), /needs \{ vm: /);
 });
 
 test("PI_WINDOWS_USE_VMS names the only VMs a session may see or touch, case-insensitively", async () => {

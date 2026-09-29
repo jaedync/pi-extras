@@ -42,14 +42,14 @@ Guest methods run through Windows-MCP inside the VM (UI Automation tree, input, 
 - win.key({ vm, keys }): e.g. "ctrl+c", "win+r", "enter"
 - win.app({ vm, mode?: "launch"|"switch"|"resize", name })
 - win.wait_for({ vm, condition, text?, window_name?, timeout? })
-- win.powershell({ vm, command, timeout? }) -> output, run as the signed-in user
+- win.powershell({ vm, command, timeout? }) -> { output, status }: output is stdout (stderr when stdout is empty), status the exit code; runs as the signed-in user; timeout in seconds, default 30, at most 540
 - win.call({ vm, tool, args }): any other Windows-MCP tool (Clipboard, Process, FileSystem, Registry, Scrape, MultiSelect, MultiEdit, Wait)
 Console methods drive the VM's screen, keyboard and mouse from the host; they also work on lock, sign-in and UAC screens. Coordinates are guest pixels.
 - win.console.screenshot({ vm }) -> { text: '{"width","height"}', screenshot }
 - win.console.click({ vm, x, y, button?, double? }), win.console.move/drag({ vm, x, y, x2?, y2? }), win.console.scroll({ vm, x, y, amount? })
 - win.console.type({ vm, text }) (US keyboard layout; "\\n" presses Enter), win.console.key({ vm, keys }), win.console.cad({ vm })
 - win.start({ vm }) starts or resumes a VM; win.login({ vm }) clicks Sign in; win.setup({ vm }) reinstalls Windows-MCP
-- win.sleep({ ms }) pauses up to 60 s, e.g. for the screen to settle between console steps
+- win.sleep(ms) pauses up to 60 s, e.g. for the screen to settle between console steps
 - emit(value) returns text or JSON to Pi; emitImage(result.screenshot) returns a screenshot; store is a persistent JSON object
 
 Example:
@@ -59,7 +59,19 @@ emitImage(s.screenshot);
 
 Batch known actions sequentially, then inspect again before deciding the next step. Only emit what you need: UI trees are long.`;
 
+/** The description, naming the VMs a session limited by PI_WINDOWS_USE_VMS may use. */
+export function toolDescription(allowed?: readonly string[]): string {
+	if (!allowed?.length) return DESCRIPTION;
+	const limit = allowed.length === 1
+		? `This session may use only this VM: ${allowed[0]}. Calls may leave out vm; it defaults to "${allowed[0]}".`
+		: `This session may use only these VMs: ${allowed.join(", ")}.`;
+	const [head, ...rest] = DESCRIPTION.split("\n\n");
+	return [head, limit, ...rest].join("\n\n");
+}
+
 export interface WindowsUseDeps {
+	/** The VMs PI_WINDOWS_USE_VMS allows, when it is set. */
+	readonly allowed?: readonly string[];
 	readonly executor: Pick<CodeExecutor, "execute">;
 	/** What recovery did during the last run. */
 	readonly notes: () => string[];
@@ -91,7 +103,7 @@ export function registerWindowsUse(pi: ExtensionAPI, deps: WindowsUseDeps): void
 	pi.registerTool(markRow(defineTool({
 		name: "windows_use",
 		label: "Windows use",
-		description: DESCRIPTION,
+		description: toolDescription(deps.allowed),
 		parameters: Type.Object({
 			code: Type.String({ description: "JavaScript body to execute. Use await win.<method>({ vm, ... }), emit(value), emitImage(result.screenshot), and store for state shared across calls." }),
 		}, { additionalProperties: false }),
@@ -147,6 +159,7 @@ export function productionDeps(): WindowsUseDeps {
 	const allowed = vmAllowlist(process.env);
 	const session = new WinSession(host, undefined, allowed);
 	return {
+		allowed,
 		executor: new CodeExecutor({ session, api: WIN_API }),
 		notes: () => session.drainNotes(),
 		close: () => host.close(),

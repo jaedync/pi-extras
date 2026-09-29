@@ -70,6 +70,16 @@ test("a custom API's errors and limits use its label and image hint", async () =
 	assert.match(last?.type === "text" ? last.text : "", /^Windows code stopped:/);
 });
 
+test("a custom API can reshape shorthand arguments before they are described or sent", async () => {
+	const { session: fake, calls } = session();
+	const api: ScriptApi = { ...API, methods: [...API.methods, "sleep"], args: (method, raw) => method === "sleep" && typeof raw === "number" ? { ms: raw } : raw as Record<string, unknown> };
+	const executor = new CodeExecutor({ session: fake, api: { ...api, describe: (method, args) => ({ detail: `${method} ${JSON.stringify(args)}` }) } });
+	const result = await executor.execute("await win.sleep(1500); await win.vms();", { approve });
+	assert.equal(result.error, undefined);
+	assert.deepEqual(calls, [{ tool: "sleep", args: { ms: 1500 } }, { tool: "vms", args: {} }]);
+	assert.deepEqual(result.calls.map((call) => call.detail), ['sleep {"ms":1500}', "vms {}"]);
+});
+
 test("the default API is still sky, unchanged", async () => {
 	const { session: s } = session();
 	const executor = new CodeExecutor({ session: s });

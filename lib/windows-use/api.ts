@@ -17,6 +17,8 @@ export const CONSOLE_METHODS = ["console.screenshot", "console.click", "console.
 export const METHODS = ["vms", "sleep", "start", "login", "setup", ...GUEST_METHODS, ...CONSOLE_METHODS] as const;
 /** Longest win.sleep: long enough for a boot or sign-in to settle, short of hiding a hung script. */
 const MAX_SLEEP_MS = 60_000;
+/** Longest PowerShell timeout, in seconds: the guest's reply must arrive inside the host's 10-minute call limit. */
+const MAX_SHELL_TIMEOUT_S = 540;
 
 type Args = Record<string, unknown>;
 
@@ -39,7 +41,9 @@ export function toMcp(method: string, args: Args): { tool: string; args: Args } 
 		case "key": return { tool: "Shortcut", args: { shortcut: args.keys } };
 		case "app": return { tool: "App", args: rest };
 		case "wait_for": return { tool: "WaitFor", args: rest };
-		case "powershell": return { tool: "PowerShell", args: defined({ command: args.command, timeout: args.timeout }) };
+		case "powershell":
+			if (typeof args.timeout === "number" && args.timeout > MAX_SHELL_TIMEOUT_S) throw new Error(`win.powershell waits at most ${MAX_SHELL_TIMEOUT_S} seconds; start longer work with Start-Process or Start-Job and check on it in later calls`);
+			return { tool: "PowerShell", args: defined({ command: args.command, timeout: args.timeout }) };
 		case "call": {
 			if (typeof args.tool !== "string" || !args.tool) throw new Error("win.call needs { vm, tool, args }");
 			return { tool: args.tool, args: args.args && typeof args.args === "object" ? args.args as Args : {} };
@@ -93,6 +97,14 @@ function unlist(text: string): string {
 }
 const JSON_METHODS = new Set(["vms", "start"]);
 
+/** Windows-MCP wraps PowerShell output as "Response: <stdout, or stderr when stdout is empty>\nStatus Code: <exit code>". */
+function shellResult(text: string): { output: string; status: number | null } {
+	const match = /^Response: ?([\s\S]*?)\r?\nStatus Code: (-?\d+)\s*$/.exec(text);
+	// Format-Table pads every line; the padding costs tokens and says nothing.
+	const tidy = (value: string) => value.replace(/\r\n/g, "\n").split("\n").map((line) => line.trimEnd()).join("\n").replace(/^\n+/, "").trimEnd();
+	return match ? { output: tidy(match[1]!), status: Number(match[2]) } : { output: tidy(text), status: null };
+}
+
 export const WIN_API: ScriptApi = {
 	tool: "windows_use",
 	global: "win",
@@ -100,8 +112,13 @@ export const WIN_API: ScriptApi = {
 	label: "Windows",
 	imageHint: "win.snapshot, win.screenshot or win.console.screenshot",
 	describe: describeWinCall,
+	args(method, raw) {
+		if (method === "sleep" && typeof raw === "number") return { ms: raw };
+		return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Args : {};
+	},
 	value(method, _args, result, keep) {
 		const text = result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
+		if (method === "powershell") return shellResult(text);
 		if (IMAGE_METHODS.has(method)) {
 			const image = result.content.find((block) => block.type === "image");
 			const lines = result.content.flatMap((block) => block.type === "text" ? [unlist(block.text)] : []).join("\n");
@@ -157,6 +174,12 @@ export class WinSession {
 		return vms.filter((vm) => !this.allowedKeys || this.allowedKeys.has(vm.name.toLowerCase()));
 	}
 
+	/** The VM a call names, or the only one this session may use when it names none. */
+	private vmOf(method: string, args: Args): string {
+		if (args.vm === undefined && this.allowed?.length === 1) return this.allowed[0]!;
+		return requireVm(method, args);
+	}
+
 	private permit(vm: string): void {
 		if (!this.allowedKeys || this.allowedKeys.has(vm.trim().toLowerCase())) return;
 		throw new Error(`"${vm}" is not a VM this session may use (PI_WINDOWS_USE_VMS: ${this.allowed!.join(", ")}); win.vms() lists the ones it may`);
@@ -178,7 +201,7 @@ export class WinSession {
 			await wait(args.ms, signal);
 			return textResult("ok");
 		}
-		const vm = requireVm(method, args);
+		const vm = this.vmOf(method, args);
 		this.permit(vm);
 		switch (method) {
 			case "start": {
@@ -213,15 +236,16 @@ export class WinSession {
 	private async console(method: string, params: Args, signal?: AbortSignal, timeoutMs?: number): Promise<ToolResult> {
 		await this.host.call(method, defined(params), { signal, timeoutMs });
 		// Console input can lock, sign out or sign in behind recovery's back.
-		if (typeof params.vm === "string") this.guests.get(params.vm)?.recheck();
+		if (typeof params.vm === "string") this.guests.get(params.vm.toLowerCase())?.recheck();
 		return textResult("ok");
 	}
 
+	/** One Guest per VM, however the script capitalizes its name, so recovery state isn't split. */
 	private guest(vm: string): Guest {
-		let guest = this.guests.get(vm);
+		let guest = this.guests.get(vm.toLowerCase());
 		if (!guest) {
 			guest = this.makeGuest(vm, (text) => this.notes.push(text));
-			this.guests.set(vm, guest);
+			this.guests.set(vm.toLowerCase(), guest);
 		}
 		return guest;
 	}
