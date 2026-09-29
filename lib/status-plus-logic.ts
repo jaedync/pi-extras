@@ -33,6 +33,8 @@ export interface UsageCounts {
 	output?: number;
 	cacheRead?: number;
 	cacheWrite?: number;
+	/** The share of cacheWrite written with one-hour retention (Anthropic only). */
+	cacheWrite1h?: number;
 }
 
 export interface CostRates {
@@ -227,11 +229,15 @@ export function estimateUsageCost(usage: UsageCounts, modelCost: ModelCost): num
 		.filter((candidate) => totalInput > candidate.inputTokensAbove)
 		.sort((left, right) => right.inputTokensAbove - left.inputTokensAbove)[0];
 	const rates = tier ?? modelCost;
+	// Pi's calculateCost: an hour-long write costs twice the input rate, not the five-minute write rate.
+	const longWrite = usage.cacheWrite1h ?? 0;
+	const shortWrite = (usage.cacheWrite ?? 0) - longWrite;
 	return (
 		((usage.input ?? 0) * rates.input +
 			(usage.output ?? 0) * rates.output +
 			(usage.cacheRead ?? 0) * rates.cacheRead +
-			(usage.cacheWrite ?? 0) * rates.cacheWrite) /
+			shortWrite * rates.cacheWrite +
+			longWrite * rates.input * 2) /
 		1_000_000
 	);
 }

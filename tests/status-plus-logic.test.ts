@@ -90,3 +90,12 @@ test("catalog cost recovery uses every token bucket", () => {
 	);
 	assert.ok(Math.abs(cost - 0.1494675) < 1e-8);
 });
+
+test("recovered cost prices one-hour cache writes at twice the input rate, as Pi does", () => {
+	const rates = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
+	const usage = { input: 2, output: 1_256, cacheRead: 53_335, cacheWrite: 2_665 };
+	const hour = estimateUsageCost({ ...usage, cacheWrite1h: 2_665 }, rates);
+	assert.ok(Math.abs(hour - (0.1494675 - 2_665 * 12.5 / 1e6 + 2_665 * 20 / 1e6)) < 1e-8);
+	const split = estimateUsageCost({ ...usage, cacheWrite1h: 665 }, rates);
+	assert.ok(Math.abs(split - (0.1494675 - 665 * 12.5 / 1e6 + 665 * 20 / 1e6)) < 1e-8);
+});
