@@ -301,6 +301,12 @@ test("other extensions' statuses still get a line", () => {
 	assert.equal(lines[2], "subagents: 2 running");
 });
 
+test("context Pi cannot size yet reads as unknown, not empty", () => {
+	// After a compaction Pi has no usage for the new context until the next reply.
+	const plain = renderFooter(model({ context: { usedTokens: undefined, windowTokens: 272_000, percent: undefined } }), 150, paint).map(stripAnsi);
+	assert.match(plain[0], /^12:00 ░{20} \? \/ 272k\s+│/);
+});
+
 test("everything is dim except the model, total cost, and what needs attention", () => {
 	const toned = { fg: (tone: string, text: string) => `<${tone}>${text}</${tone}>` };
 	const hot = model({

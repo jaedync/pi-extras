@@ -185,7 +185,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		const usage = facts.usage;
 		const windowTokens = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 		const percent = usage?.percent ?? undefined;
-		const usedTokens = usage?.tokens ?? (percent !== undefined ? (percent / 100) * windowTokens : 0);
+		// Pi reports null tokens after a compaction until a reply sizes the new context; that is unknown, not empty.
+		const usedTokens = usage?.tokens ?? (percent !== undefined ? (percent / 100) * windowTokens : undefined);
 		return {
 			nowMs: now,
 			lastApiEndMs: stats.lastApiEndMs,

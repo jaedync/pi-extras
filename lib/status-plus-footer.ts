@@ -57,7 +57,8 @@ export interface FooterModel {
 	 */
 	lastApiEndMs?: number;
 	cache: CacheState;
-	context: { usedTokens: number; windowTokens: number; percent: number | undefined };
+	/** usedTokens is undefined while Pi cannot size the context, as after a compaction until the next reply. */
+	context: { usedTokens: number | undefined; windowTokens: number; percent: number | undefined };
 	modelName: string;
 	/** Provider of the active model; colours the model id in that provider's identity colour. */
 	providerId?: string;
@@ -109,7 +110,8 @@ function fieldSeparator(compact: boolean): string {
 
 /** Everything is dim unless it needs attention; the context figure turns at 70 and 90 percent. */
 function contextText(paint: Painter, model: FooterModel): string {
-	const text = `${formatTokens(model.context.usedTokens)} / ${formatTokens(model.context.windowTokens)}`;
+	const used = model.context.usedTokens === undefined ? "?" : formatTokens(model.context.usedTokens);
+	const text = `${used} / ${formatTokens(model.context.windowTokens)}`;
 	const pct = model.context.percent ?? 0;
 	return paint.fg(pct > 90 ? "error" : pct > 70 ? "warning" : "dim", text);
 }
