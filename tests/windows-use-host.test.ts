@@ -126,6 +126,12 @@ test("every Hyper-V input method host.ps1 calls gets the parameters Hyper-V decl
 	}
 });
 
+test("a key combination that fails part-way lets go of the keys it held, so no modifier stays down in the guest", () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	const keys = host.slice(host.indexOf("function Send-Keys"), host.indexOf("# The synthetic mouse"));
+	assert.match(keys, /try \{[\s\S]*'PressKey'[\s\S]*\} finally \{[\s\S]*'ReleaseKey'/);
+});
+
 test("console scroll counts wheel notches, as Windows-MCP's scroll does, not Hyper-V's 120ths of one", () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	assert.match(host, /'SetScrollPosition' @\{ scrollPositionDelta = \$notches \* 120 \}/);

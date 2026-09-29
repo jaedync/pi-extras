@@ -188,9 +188,18 @@ function Send-Keys($machine, [string]$keys) {
     $kb = Get-Device $machine 'Msvm_Keyboard'
     $codes = @($keys -split '\+' | ForEach-Object { Get-Vk $_ })
     # Hold in order, release in reverse, so combos like ctrl+shift+esc register.
-    foreach ($c in $codes) { Invoke-Checked $kb 'PressKey' @{ keyCode = [uint32]$c } }
-    [array]::Reverse($codes)
-    foreach ($c in $codes) { Invoke-Checked $kb 'ReleaseKey' @{ keyCode = [uint32]$c } }
+    # Whatever went down comes up even if a press fails, or Ctrl stays held in the guest.
+    $held = New-Object System.Collections.Generic.List[int]
+    $failed = $null
+    try {
+        foreach ($c in $codes) { Invoke-Checked $kb 'PressKey' @{ keyCode = [uint32]$c }; $held.Insert(0, $c) }
+    } finally {
+        foreach ($c in $held) {
+            $r = Invoke-CimMethod -InputObject $kb -MethodName 'ReleaseKey' -Arguments @{ keyCode = [uint32]$c }
+            if ($r.ReturnValue -ne 0 -and -not $failed) { $failed = Get-Failure 'ReleaseKey' $r.ReturnValue }
+        }
+    }
+    if ($failed) { throw $failed }
 }
 
 # The synthetic mouse drops a click unless the pointer has just moved, so every
