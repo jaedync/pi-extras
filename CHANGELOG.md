@@ -2,6 +2,36 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.10.0 - 2026-09-29
+
+Subagents: background child agents on the model of your choice, which talk to
+the session and to each other, with a live band per agent.
+
+### Added
+
+- Subagents. The `subagent` tool starts a child agent: a separate Pi session
+  on one of your scoped models, with a fresh context (or a condensed copy of
+  the conversation), in the background by default. Its report arrives as a
+  message; `wait: true` blocks for a quick check, and `readOnly: true` takes
+  away edits and shell commands.
+- A model guide, `~/.pi/agent/subagent-models.md`, says which model suits
+  what. It goes into the tool description at session start and on `/reload`
+  only, so it never busts the prompt cache mid-session. `/subagents guide`
+  edits it. Thinking levels come from Pi's `modelThinkingLevels`.
+- `message` between every agent: main, children, and siblings by name, or
+  `all`. A running agent reads it after its current tool call and a finished
+  one resumes with its context. Children can ask and wait for an answer; main
+  never waits, and a child's question wakes it. Reports from children started
+  in the same run arrive as one message.
+- A band per agent above the editor with its model, what it is doing, context
+  used, spend and time, children nested under their parent, and notes queued
+  for main until they reach the transcript. `/subagents`, or a click on a
+  band or row, opens an inspector with the agent's live transcript, where you
+  can write to it or stop it; main is told what you wrote.
+- Status Plus counts children's usage in its totals as they run.
+- A run log, `~/.pi/agent/subagents/runs.jsonl`, and `/subagents stats` to
+  compare models by runs, time and cost.
+
 ## 0.9.2 - 2026-09-29
 
 Status Plus, checked against every recorded session: it now matches the

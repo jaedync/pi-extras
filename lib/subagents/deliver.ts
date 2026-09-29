@@ -80,6 +80,7 @@ export class MainMail {
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private readonly held = new Map<string, { records: AgentRecord[]; timer: ReturnType<typeof setTimeout> }>();
 	private seq = 0;
+	private closed = false;
 	private readonly port: MainPort;
 	private readonly batchMs: number;
 	private readonly groupWaitMs: number;
@@ -105,6 +106,8 @@ export class MainMail {
 	}
 
 	deliver(delivery: MainDelivery): void {
+		// Children stopped by a shutdown report into a session that is going away.
+		if (this.closed) return;
 		if (delivery.kind === "report") {
 			const { record } = delivery;
 			this.remember({ id: `pending-report-${record.name}`, kind: "report", from: record.name, text: "report", at: this.now() });
@@ -184,6 +187,7 @@ export class MainMail {
 	}
 
 	dispose(): void {
+		this.closed = true;
 		for (const held of this.held.values()) clearTimeout(held.timer);
 		this.held.clear();
 		if (this.timer) clearTimeout(this.timer);

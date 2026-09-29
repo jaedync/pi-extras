@@ -2,8 +2,9 @@
 
 Optional extensions and a theme for [Pi](https://pi.dev): a richer footer,
 usage-limit awareness for the agent, activity and timing indicators, background
-shell jobs, bounded shell execution, Kagi subscription search, local voice
-dictation, and clearer tool rows.
+shell jobs, background subagents on the model of your choice, bounded shell
+execution, Kagi subscription search, local voice dictation, and clearer tool
+rows.
 
 ## Install
 
@@ -16,7 +17,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all eleven extensions (computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
+adds all twelve extensions (computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -27,6 +28,7 @@ can still conflict.
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
 | Phase Spinner | Working phases, tokens/sec, time to first token, elapsed time, and compaction/retry status with its own timer in the editor border |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
+| Subagents | `subagent` and `message` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, with a live band per agent |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
@@ -65,6 +67,13 @@ the package. Removing it does not remove your credentials or change other packag
   `/usage warnings on|off`. Keys: `enabled` (default `false`), `bands`
   (default `[90, 95]`), `resumeMarginSeconds` (default `180`), `proximityPct`
   (default `10`), `maxWaitSeconds` (default `18000`, five hours).
+- `PI_SUBAGENTS=off`: disable Subagents. `subagents` in `pi-extras.json`, all
+  optional: `defaultModel` (a model or short name; default: the session's
+  model), `maxConcurrent` (default `4`), `batchMs` (default `2000`),
+  `groupWaitMs` (default `60000`), `replyTimeoutMs` (default `600000`) and
+  `childToolsExclude` (tool names children never get). The model guide is
+  `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
+  project. See below.
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
   Explicit per-call timeouts are preserved.
 - `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
@@ -270,6 +279,64 @@ the one that moves. When it finishes, its completion is one band with how it
 ended and how long it took; click it for the output. Click a running job's row
 or its band above the editor to open its live log; Esc or a click outside
 closes it.
+
+## Subagents
+
+The `subagent` tool starts a child agent: a separate Pi session on the model
+the agent picks, with a fresh context, the same working directory and the
+same tools minus a few that make no sense in a child (mesh, goals, desktop
+control, background jobs). It runs in the background and its report arrives
+as a message, so the agent keeps working or ends its turn and is woken when it
+matters. `wait: true` blocks instead, for a quick check. `readOnly: true` takes
+away `bash`, `edit` and `write`. `context: "fork"` gives the child a condensed
+copy of the conversation so far.
+
+**Models.** A child may run on any of the session's scoped models
+(`enabledModels`, the list `/scoped-models` shows); short names such as `luna`
+or `opus` work when they match one. Its thinking level is the call's, else the
+one Pi's `modelThinkingLevels` sets for that model, else your default. Which
+model suits what is yours to say in a Markdown guide,
+`~/.pi/agent/subagent-models.md`:
+
+```md
+- luna: extreme cost savings; bulk search, summaries, mechanical edits
+- gpt-6.1 sol: reliable worker for implementation
+- opus 5.5: taste; design, naming, reviewing plans
+```
+
+It goes into the tool's description with the model list. Pi reads it when a
+session starts and on `/reload`, never mid-session, since a changed tool
+description busts the prompt cache. `/subagents guide` edits it, or ask the
+agent to.
+
+**Talking.** Every agent has a name made from its task, and `main` is the
+session. `message` sends a note to an agent by name, or to `all`. A running
+agent reads it after its current tool call; a finished one resumes with its
+context to handle it. A child can ask with `expectReply: true` and wait for the
+answer. Main never waits: a child's question wakes it, and so does the answer
+to anything main asked. Children know each other and can split work directly.
+Notes that don't need main's attention queue for its next turn instead of
+waking it, and show above the editor until they are in the transcript.
+Reports from children started in the same run arrive together, as one message.
+
+**Seeing it.** Each agent has a band above the editor: its model and thinking
+level, what it is doing right now, how full its context is, what it has cost
+and how long it has run. Children of children sit under their parent. Click a
+band, a `subagent` row, or run `/subagents` to open the inspector: the agent's
+task and live transcript. Press Enter to write to it (steered in while it
+runs, resuming it when it has finished, answering it when it asked), and `x`
+twice to stop it. Main is told what you wrote. Status Plus counts every child
+in its totals.
+
+**Limits.** At most `maxConcurrent` children run at once; the rest queue. A
+child can't start children of its own. Children stop with the session and on
+`/reload`. Each run adds a line to `~/.pi/agent/subagents/runs.jsonl` (model,
+task opening, time, tool calls, cost, how it ended); `/subagents stats` sums it
+by model, which is what to tune the guide on. `/subagents stop <name>` or
+`stop all` stops children.
+
+If another extension already has a `subagent` or `message` tool, Subagents
+leaves that tool alone and says so.
 
 ## Computer use
 

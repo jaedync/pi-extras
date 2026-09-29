@@ -214,6 +214,25 @@ session stops them according to the extension lifecycle.
 The Bash Default Timeout extension does not sandbox commands. It only supplies
 a default timeout for calls that omit one. Explicit timeouts remain unchanged.
 
+## Subagents
+
+Children are Pi sessions in the same process, with your permissions. A child
+gets the parent's active tools except mesh, goal, desktop-control, background
+job and subagent tools, and `childToolsExclude`; read-only children lose
+`bash`, `edit` and `write`. Only the extensions that provide one of its tools
+load into a child. Your context files (`AGENTS.md`) and skills load as they do
+for the parent. Children use the parent's model credentials.
+
+Child sessions are written under
+`PI_CODING_AGENT_DIR/sessions/subagents/<parent session id>/`. The run log,
+`PI_CODING_AGENT_DIR/subagents/runs.jsonl`, keeps the first 200 characters of
+each task, the model, timings, tool-call counts, usage, the session path and
+any error. Delete either whenever you like. Nothing is sent anywhere except
+the child's own model requests.
+
+A forked child's system prompt carries a condensed copy of the conversation:
+user and assistant text and one line per tool call, not tool output.
+
 ## Tool Display
 
 Tool Display re-registers Pi's built-in `read`, `bash`, `edit`, `write`,

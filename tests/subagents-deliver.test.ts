@@ -38,6 +38,16 @@ test("everything stays pending until Pi appends it", () => {
 	assert.equal(box.pending().length, 0);
 });
 
+test("nothing is sent or scheduled after dispose", async () => {
+	const { box, sent } = mail(5);
+	box.dispose();
+	box.deliver({ kind: "report", record: record("late") });
+	box.deliver({ kind: "note", from: "late", text: "hi" });
+	await sleep(20);
+	assert.equal(sent.length, 0);
+	assert.equal(box.pending().length, 0);
+});
+
 test("messages Pi appended silently are found in the transcript", () => {
 	const { box, sent } = mail();
 	box.deliver({ kind: "note", from: "scout", text: "one" });

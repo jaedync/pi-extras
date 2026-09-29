@@ -61,7 +61,7 @@ try {
   await loader.reload();
   const extensions = loader.getExtensions();
   assert.deepEqual(extensions.errors, []);
-  assert.equal(extensions.extensions.length, 11);
+  assert.equal(extensions.extensions.length, 12);
   assert.ok(loader.getThemes().themes.some(theme => theme.name === 'quiet'));
   assert.deepEqual(loader.getThemes().diagnostics, []);
   const tools = extensions.extensions.flatMap(ext => [...ext.tools.keys()]);
@@ -84,13 +84,14 @@ try {
   try {
     await session.bindExtensions({ onError: error => errors.push(error) });
     assert.ok(session.agent.state.tools.some(tool => tool.name === 'shell_job_start'));
+    assert.ok(session.agent.state.tools.some(tool => tool.name === 'subagent'), 'subagents registers its tool at session start');
     assert.deepEqual(errors, []);
     assert.equal(requests.length, 0, 'Offline startup unexpectedly attempted a network request');
   } finally {
     await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
     session.dispose();
   }
-  console.log('Native Git install, eleven-extension loader and session lifecycle passed without credentials.');
+  console.log('Native Git install, twelve-extension loader and session lifecycle passed without credentials.');
 
   writeFileSync(join(fixture, 'lib/smoke-marker.txt'), 'updated\n');
   run('git', ['add', 'lib/smoke-marker.txt'], fixture);
