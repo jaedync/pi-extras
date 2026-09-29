@@ -94,6 +94,35 @@ test("names and values that span lines stay on their element's line, and empty w
 	].join("\n").replace(/^\n\n/, ""));
 });
 
+test("a screenshot's header is compacted too; its UI Tree note is not a tree", () => {
+	const raw = [
+		"",
+		"    Cursor Position: (512, 81)",
+		"Screenshot Size: (1024,768)",
+		"Visible Displays: 0:\\\\.\\DISPLAY1 (0,0,1024,768) primary",
+		"Screenshot Backend: pillow",
+		"UI Tree: Skipped for fast screenshot-only capture. Call Snapshot when you need interactive or scrollable elements.",
+		"",
+		"    Active Desktop:",
+		"    Name",
+		"---------",
+		"Desktop 1",
+		"",
+		"    All Desktops:",
+		"    Name",
+		"---------",
+		"Desktop 1",
+		"",
+		"    Focused Window:",
+		"    No active window found",
+		"",
+		"    Opened Windows:",
+		"    No windows found",
+		"    ",
+	].join("\n");
+	assert.equal(compactSnapshot(raw), "Cursor Position: (512, 81)\nScreenshot Size: (1024,768)\n\nFocused Window:\nNo active window found\n\nOpened Windows:\nNo windows found");
+});
+
 test("several desktops or displays are kept, and text it doesn't recognize passes through", () => {
 	const many = RAW.replace("    All Desktops:\n    Name\n---------\nDesktop 1", "    All Desktops:\n    Name\n---------\nDesktop 1\nDesktop 2")
 		.replace("primary\n", "primary; 1:\\\\.\\DISPLAY2 (800,0,1600,600)\n");

@@ -22,6 +22,10 @@ interface World {
 	dropNext?: number;
 	/** Tool calls that run, then lose the connection before the answer arrives. */
 	cutNext?: number;
+	/** Tool calls that never answer, as when an app's UI Automation stops responding mid-snapshot. */
+	hangNext?: number;
+	/** The time limit the host was given for each tool call, by tool. */
+	limits?: Record<string, number>;
 	/** Status checks during which Windows is still starting (boot, updates) and sends no heartbeat. */
 	booting?: number;
 	/** Frames during which Windows is restarting with its heartbeat still on: a dark screen. */
@@ -51,7 +55,7 @@ function fakeHost(world: World) {
 	const unlocked = () => world.running && world.session && !world.locked;
 	const taskbar = () => unlocked() && (!world.fullscreen || world.start === true);
 	const host = {
-		async call(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+		async call(method: string, params: Record<string, unknown> = {}, options: { timeoutMs?: number } = {}): Promise<unknown> {
 			if (method === "mcp") {
 				const message = JSON.parse(String(params.message));
 				if (!world.server || (world.dropNext ?? 0) > 0) {
@@ -68,6 +72,11 @@ function fakeHost(world: World) {
 					return { messages: [{ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: `Response: ${locked ? "locked" : "unlocked"}\n\nStatus Code: 0` }], isError: false } }] };
 				}
 				log.push(`mcp ${name}`);
+				world.limits = { ...world.limits, [name]: options.timeoutMs ?? 0 };
+				if ((world.hangNext ?? 0) > 0) {
+					world.hangNext!--;
+					throw new Error(`windows_use host mcp timed out after ${Math.round((options.timeoutMs ?? 0) / 1000)} s`);
+				}
 				if ((world.cutNext ?? 0) > 0) {
 					world.cutNext!--;
 					throw new Error(`lost the connection to Windows-MCP on '${params.vm}' (10.0.0.2:8000) during the call: connection reset`);
@@ -261,6 +270,21 @@ test("a call whose connection drops mid-way is not run again, since it may have 
 	const after = await g.tool("Click", { label: 2 });
 	assert.match(text(after), /"label":2/);
 	assert.ok(log.lastIndexOf("mcp initialize") > log.indexOf("mcp PowerShell"), "the next call reconnects first");
+});
+
+test("a tool call that hangs fails at its own limit with what to try, and is not repeated", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true };
+	const { g, log } = guest(world);
+	await g.tool("Click", { loc: [1, 2] });
+	await g.tool("PowerShell", { command: "x", timeout: 100 });
+	world.hangNext = 1;
+	await assert.rejects(g.tool("Snapshot", { use_vision: true }), /Windows-MCP on Win11 didn't answer Snapshot within 60 s[\s\S]*win\.console\.key\(\{ vm: "Win11", keys: "esc" \}\)[\s\S]*use_ui_tree: false/);
+	assert.deepEqual(world.limits, { Click: 120_000, PowerShell: 160_000, Snapshot: 60_000 });
+	assert.equal(log.filter((entry) => entry === "mcp Snapshot").length, 1);
+	world.hangNext = 1;
+	await assert.rejects(g.tool("App", { mode: "launch", name: "x" }), /didn't answer App within 120 s; it may still be running in the guest, so it was not repeated/);
+	await g.tool("Click", { loc: [3, 4] });
+	assert.ok(log.lastIndexOf("mcp initialize") > log.lastIndexOf("mcp App"), "the next call reconnects first");
 });
 
 test("explicit login and setup are available to the script", async () => {

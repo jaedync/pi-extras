@@ -8,6 +8,10 @@
  */
 
 const TREE_HEADING = "UI Tree:";
+/** The heading on a line of its own; a screenshot says "UI Tree: Skipped for ..." in its header instead. */
+const TREE_START = /^[ \t]*UI Tree:[ \t]*$/m;
+/** Header lines that say nothing an agent acts on. */
+const NOISE = /^(?:Screenshot Backend: |UI Tree: Skipped)/;
 /** A tree line: "│   " or "    " per level above it, then "├── " or "└── ". */
 const TREE_LINE = /^((?:[│ ] {3})*)[├└]── ([^\n]*)$/;
 /** Direction marks that UI Automation leaves in dates and names. */
@@ -92,18 +96,19 @@ function compactHeader(head: string): string {
 	const oneDesktop = all !== undefined && rows(all).length === 1;
 	return blocks
 		.filter((block) => !(oneDesktop && (block[0] === "Active Desktop:" || block[0] === "All Desktops:")))
-		.map((block) => WINDOW_SECTIONS.has(block[0]!) ? windowList(block) : block.filter((line) => !/^Screenshot Backend: /.test(line) && !(/^Visible Displays: /.test(line) && !line.includes(";"))))
+		.map((block) => WINDOW_SECTIONS.has(block[0]!) ? windowList(block) : block.filter((line) => !NOISE.test(line) && !(/^Visible Displays: /.test(line) && !line.includes(";"))))
 		.filter((block) => block.length > 0)
 		.map((block) => block.join("\n"))
 		.join("\n\n");
 }
 
 export function compactSnapshot(text: string): string {
-	const at = text.indexOf(TREE_HEADING);
+	const found = TREE_START.exec(text);
+	const at = found ? found.index : -1;
 	if (at < 0) {
 		// Not a snapshot this knows; keep it whole unless it has the header's shape.
 		return /Cursor Position: /.test(text) ? compactHeader(text) : text;
 	}
 	const head = compactHeader(text.slice(0, at));
-	return `${head ? `${head}\n\n` : ""}${TREE_HEADING}\n${compactTree(text.slice(at + TREE_HEADING.length))}`;
+	return `${head ? `${head}\n\n` : ""}${TREE_HEADING}\n${compactTree(text.slice(at + found![0].length))}`;
 }

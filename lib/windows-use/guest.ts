@@ -88,6 +88,27 @@ const MAX_SIGN_IN_CLICKS = 2;
 const RESETTING = /not found on '|GetVirtualSystemThumbnailImage failed|failed with code 3277[57]\b/;
 /** Longest a single Windows-MCP call may take; PowerShell calls can set their own timeout below it. */
 const TOOL_TIMEOUT_MS = 10 * 60_000;
+/** Most tools answer in a second or two; App launches take up to a dozen. */
+const DEFAULT_TOOL_MS = 120_000;
+/** Snapshots take 0.5 to 10 s. One that runs longer is stuck on a window whose UI Automation stopped answering. */
+const CAPTURE_MS = 60_000;
+/** On top of a tool's own timeout, for the round trip and PowerShell's start. */
+const TOOL_SLACK_MS = 60_000;
+
+/** How long to wait for a Windows-MCP tool before giving up on it. */
+export function toolLimit(name: string, args: Record<string, unknown>): number {
+	if (name === "Snapshot" || name === "Screenshot") return CAPTURE_MS;
+	const own = name === "PowerShell" ? 30 : name === "WaitFor" ? 10 : undefined;
+	if (own === undefined) return DEFAULT_TOOL_MS;
+	const seconds = typeof args.timeout === "number" && Number.isFinite(args.timeout) ? args.timeout : own;
+	return Math.min(seconds * 1000 + TOOL_SLACK_MS, TOOL_TIMEOUT_MS);
+}
+
+function hangMessage(vm: string, name: string, limitMs: number): string {
+	const head = `Windows-MCP on ${vm} didn't answer ${name} within ${Math.round(limitMs / 1000)} s`;
+	if (name !== "Snapshot" && name !== "Screenshot") return `${head}; it may still be running in the guest, so it was not repeated. The next call reconnects.`;
+	return `${head}. A window whose UI Automation stops answering (often Start search results or a busy app) stalls the UI tree. Close it with win.console.key({ vm: ${JSON.stringify(vm)}, keys: "esc" }), which doesn't go through Windows-MCP, or snapshot with use_ui_tree: false.`;
+}
 
 export interface GuestOptions {
 	readonly host: HostCalls;
@@ -150,6 +171,7 @@ export class Guest {
 		} catch (error) {
 			if (!(error instanceof TransportError)) throw error;
 			this.forget();
+			if (error.timedOut) throw new Error(hangMessage(this.vm, name, toolLimit(name, args)));
 			if (!error.unsent) throw new Error(`The connection to Windows-MCP on ${this.vm} dropped during ${name}, so it may have run; it was not repeated. The next call reconnects. (${error.message})`);
 			await this.ensure(signal);
 			return this.callTool(name, args, signal);
@@ -364,27 +386,27 @@ export class Guest {
 	}
 
 	private async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
-		return toResult(await this.request("tools/call", { name, arguments: args }, signal));
+		return toResult(await this.request("tools/call", { name, arguments: args }, signal, toolLimit(name, args)));
 	}
 
-	private async request(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
+	private async request(method: string, params: unknown, signal?: AbortSignal, timeoutMs = DEFAULT_TOOL_MS): Promise<unknown> {
 		const id = this.nextId++;
-		const messages = await this.send({ jsonrpc: "2.0", id, method, params }, signal);
+		const messages = await this.send({ jsonrpc: "2.0", id, method, params }, signal, timeoutMs);
 		const reply = messages.find((message) => message.id === id);
 		if (!reply) throw new TransportError(`Windows-MCP on ${this.vm} did not answer ${method}`);
 		if (reply.error) throw new Error(String(reply.error.message ?? `${method} failed`));
 		return reply.result;
 	}
 
-	private async send(message: object, signal?: AbortSignal): Promise<{ id?: unknown; result?: unknown; error?: { message?: unknown } }[]> {
+	private async send(message: object, signal?: AbortSignal, timeoutMs = DEFAULT_TOOL_MS): Promise<{ id?: unknown; result?: unknown; error?: { message?: unknown } }[]> {
 		try {
-			const answer = await this.host.call("mcp", { vm: this.vm, port: this.port, message: JSON.stringify(message) }, { signal, timeoutMs: TOOL_TIMEOUT_MS }) as { messages?: unknown };
+			const answer = await this.host.call("mcp", { vm: this.vm, port: this.port, message: JSON.stringify(message) }, { signal, timeoutMs }) as { messages?: unknown };
 			return Array.isArray(answer.messages) ? answer.messages : [];
 		} catch (error) {
 			if (signal?.aborted) throw error;
 			// Anything the host reports here is between it and the server: unreachable, wrong key, no IP yet.
 			const message = error instanceof Error ? error.message : String(error);
-			throw new TransportError(message, NOT_SENT.test(message));
+			throw new TransportError(message, NOT_SENT.test(message), HOST_TIMEOUT.test(message));
 		}
 	}
 }
@@ -398,13 +420,18 @@ interface Bootstrap {
 /** Host errors that prove a request never reached the server, so sending it again is safe. */
 const NOT_SENT = /^(cannot reach Windows-MCP|VM '.*' has no IPv4 address|Windows-MCP is not set up)/;
 
+/** The host's own limit ran out: the server took the request and never answered. */
+const HOST_TIMEOUT = /^windows_use host mcp timed out after/;
+
 class TransportError extends Error {
 	/** True only when the request provably never reached the server. */
 	readonly unsent: boolean;
+	readonly timedOut: boolean;
 
-	constructor(message: string, unsent = false) {
+	constructor(message: string, unsent = false, timedOut = false) {
 		super(message);
 		this.unsent = unsent;
+		this.timedOut = timedOut;
 	}
 }
 
