@@ -2,6 +2,14 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.10.1 - 2026-09-29
+
+### Fixed
+
+- Subagents stays off, with one notice, when another extension such as
+  pi-subagents already provides a `subagent` tool. It used to skip only that
+  tool and still add `message`, which then had no agents to reach.
+
 ## 0.10.0 - 2026-09-29
 
 Subagents: background child agents on the model of your choice, which talk to
