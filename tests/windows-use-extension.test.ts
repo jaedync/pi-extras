@@ -67,6 +67,15 @@ test("recovery notes from the run follow what the script emitted; stale ones are
 	assert.deepEqual(result.details, { calls: ok("").calls, durationMs: 9 });
 });
 
+test("a model that can't take images gets a note instead of the images it emitted", async () => {
+	const withImage = (): CodeResult => ({ ...ok("tree"), content: [{ type: "text", text: "tree" }, { type: "image", data: "IMG", mimeType: "image/png" }] });
+	const { tools } = harness(async () => withImage());
+	const textOnly = await tools[0].execute("id", { code: "x" }, undefined, undefined, { model: { input: ["text"] } });
+	assert.deepEqual(textOnly.content, [{ type: "text", text: "tree" }, { type: "text", text: "(1 emitted image left out: the current model doesn't take images. Read win.snapshot's text instead.)" }]);
+	const vision = await tools[0].execute("id", { code: "x" }, undefined, undefined, { model: { input: ["text", "image"] } });
+	assert.equal(vision.content[1].type, "image");
+});
+
 test("a failed run throws with its output and notes, and approvals are never granted", async () => {
 	let answer: string | undefined;
 	const { tools } = harness(async (options) => {

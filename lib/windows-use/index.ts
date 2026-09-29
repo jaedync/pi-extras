@@ -96,6 +96,16 @@ function highlight(code: string): string[] {
 	try { return highlightCode(code, "javascript"); } catch { return code.split("\n"); }
 }
 
+type Content = CodeResult["content"];
+
+/** Pi would swap the images for a placeholder for a text-only model; saying so once is clearer and skips the bytes. */
+export function forModel(content: Content, model?: { readonly input: readonly string[] }): Content {
+	const images = content.filter((block) => block.type === "image").length;
+	if (!model || model.input.includes("image") || images === 0) return content;
+	const note = `(${images} emitted image${images === 1 ? "" : "s"} left out: the current model doesn't take images. Read win.snapshot's text instead.)`;
+	return [...content.filter((block) => block.type !== "image"), { type: "text", text: note }];
+}
+
 const hasCalls = (details: unknown): details is RowDetails => !!details && typeof details === "object" && Array.isArray((details as RowDetails).calls);
 
 export function registerWindowsUse(pi: ExtensionAPI, deps: WindowsUseDeps): void {
@@ -107,7 +117,7 @@ export function registerWindowsUse(pi: ExtensionAPI, deps: WindowsUseDeps): void
 		parameters: Type.Object({
 			code: Type.String({ description: "JavaScript body to execute. Use await win.<method>({ vm, ... }), emit(value), emitImage(result.screenshot), and store for state shared across calls." }),
 		}, { additionalProperties: false }),
-		async execute(_id, params, signal, onUpdate) {
+		async execute(_id, params, signal, onUpdate, ctx) {
 			deps.notes();
 			const result = await deps.executor.execute(params.code, {
 				// No approvals: opting in with PI_WINDOWS_USE covers every VM it allows (PI_WINDOWS_USE_VMS, or all).
@@ -115,7 +125,7 @@ export function registerWindowsUse(pi: ExtensionAPI, deps: WindowsUseDeps): void
 				signal,
 				onProgress: (progress) => onUpdate?.({ content: [], details: progress }),
 			});
-			const content = [...result.content, ...deps.notes().map((text) => ({ type: "text" as const, text }))];
+			const content = forModel([...result.content, ...deps.notes().map((text) => ({ type: "text" as const, text }))], ctx?.model);
 			if (result.error) throw failure({ ...result, content });
 			return { content, details: { calls: result.calls, durationMs: result.durationMs } };
 		},
