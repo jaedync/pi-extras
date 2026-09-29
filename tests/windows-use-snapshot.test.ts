@@ -183,3 +183,24 @@ test("an element's very long text is cut, saying how much was left out, so every
 	assert.ok(cut, line.slice(-80));
 	assert.equal(line.length - cut[0].length + Number(cut[1]), `  (400,300) document "Text editor" [action: scroll] [value:"${text}"]`.length);
 });
+
+test("a run of word elements, as a rich text box or a translated page lists them, reads as one text line", () => {
+	const raw = [
+		"    UI Tree:",
+		"    desktop",
+		"    └── window \"Viewer\"",
+		"        ├── (60,40) word \"started\"",
+		"        ├── (30,40) word \"session\"",
+		"        ├── (10,40) word \"XE\"",
+		"        ├── (10,60) word \"again\"",
+		"        ├── (200,40) document \"Details\"  [action: scroll]",
+		"        └── (10,80) word \"alone\"",
+	].join("\n");
+	assert.equal(compactSnapshot(raw), [
+		"UI Tree:",
+		"window \"Viewer\"",
+		"  (10,40) text \"XE session started again\"",
+		"  (200,40) document \"Details\" [action: scroll]",
+		"  (10,80) word \"alone\"",
+	].join("\n"));
+});

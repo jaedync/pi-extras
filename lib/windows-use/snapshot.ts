@@ -65,10 +65,31 @@ function compactTree(tree: string, listed: ReadonlySet<string>): string {
 		const name = /^window "(.*)"$/.exec(body)?.[1];
 		return name !== undefined && listed.has(name) && empty(index);
 	};
-	const kept = out
+	const kept = mergeWords(out
 		.filter((line, index) => !(line.body === 'window ""' && empty(index)))
-		.map((line, index, lines) => line.depth === 0 && opaque(line.body, index) && !((lines[index + 1]?.depth ?? -1) > 0) ? { ...line, body: `${line.body} ${OPAQUE}` } : line);
+		.map((line, index, lines) => line.depth === 0 && opaque(line.body, index) && !((lines[index + 1]?.depth ?? -1) > 0) ? { ...line, body: `${line.body} ${OPAQUE}` } : line));
 	return kept.map((line) => cap(line.depth < 0 ? line.body : `${"  ".repeat(line.depth)}${line.body}`)).join("\n").replace(/^\n+/, "").trimEnd();
+}
+
+/** An element UI Automation gives one word of text, as rich text boxes and translated pages do. */
+const WORD = /^\((-?\d+),(-?\d+)\) word "(.*)"$/;
+
+/**
+ * Runs of word elements side by side, one line each and in no set order, as
+ * one text line read top to bottom, left to right, at the first word.
+ */
+function mergeWords(lines: readonly { depth: number; body: string }[]): { depth: number; body: string }[] {
+	const out: { depth: number; body: string }[] = [];
+	for (let at = 0; at < lines.length;) {
+		let end = at;
+		while (end < lines.length && lines[end]!.depth === lines[at]!.depth && WORD.test(lines[end]!.body)) end++;
+		if (end - at < 2) { out.push(lines[at]!); at++; continue; }
+		const words = lines.slice(at, end).map((line) => WORD.exec(line.body)!).map(([, x, y, word]) => ({ x: Number(x), y: Number(y), word: word! }))
+			.sort((a, b) => a.y - b.y || a.x - b.x);
+		out.push({ depth: lines[at]!.depth, body: `(${words[0]!.x},${words[0]!.y}) text "${words.map((entry) => entry.word).join(" ")}"` });
+		at = end;
+	}
+	return out;
 }
 
 function cap(line: string): string {
