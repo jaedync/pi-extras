@@ -10,6 +10,19 @@ const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const validRun = (value: unknown): value is string => typeof value === "string" && new RegExp(`^${UUID}$`, "i").test(value);
 const object = (value: unknown): RecordValue | undefined => value && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : undefined;
 const containers = ["results", "children", "childRuns", "childOutputs", "workflowChildren", "steps", "runs", "result", "workflow", "implementation", "reviews"];
+const UUID_ANYWHERE = new RegExp(UUID, "gi");
+
+/** Tool results and notices the subagent extension writes; other tools' text may name runs this branch never started. */
+function subagentProtocol(entry: BranchEntry): unknown[] | undefined {
+	const message = entry.message as RecordValue | undefined;
+	if (entry.type === "message" && message?.role === "toolResult" && String(message.toolName ?? "").startsWith("subagent")) {
+		return [message.content, message.details];
+	}
+	if ((entry.type === "custom_message" || entry.type === "custom") && String(entry.customType ?? "").startsWith("subagent")) {
+		return [entry.content, entry.details, entry.data];
+	}
+	return undefined;
+}
 
 export interface ChildEvidence {
 	key: string;
@@ -47,6 +60,14 @@ function transcriptEntries(lines: unknown[], hasNativePrompt = false): BranchEnt
 export class ChildEvidenceCollector {
 	private readonly children = new Map<string, ChildEvidence>();
 	private readonly runs = new Set<string>();
+	/**
+	 * Run ids a subagent notice names in any form ("Child run: …", "- key=… run=…",
+	 * supervisor requests). Notice formats drift between subagent releases, so these
+	 * are trusted only where the child's native session sits under this session's own
+	 * directory, never through the artifact directory every session in the project shares.
+	 */
+	private readonly mentioned = new Set<string>();
+	private readonly rootListings = new Map<string, string[]>();
 	private readonly workflowAliases = new Map<string, string>();
 	private readonly roots = new Set<string>();
 	private readonly artifactDirs = new Set<string>();
@@ -124,6 +145,8 @@ export class ChildEvidenceCollector {
 
 	scanBranch(entries: BranchEntry[], origin: string): void {
 		entries.forEach((entry, index) => {
+			const protocol = subagentProtocol(entry);
+			if (protocol) for (const match of JSON.stringify(protocol).matchAll(UUID_ANYWHERE)) this.mentioned.add(match[0].toLowerCase());
 			const message = entry.message as RecordValue | undefined;
 			if (entry.type === "message" && message?.role === "toolResult" && ["subagent", "subagent_wait", "subagent_status", "subagent_result"].includes(message.toolName)) {
 				this.scanDetails(message.details, `${origin}:${message.toolCallId ?? entry.id ?? index}`);
@@ -161,7 +184,19 @@ export class ChildEvidenceCollector {
 		return this.budget-- > 0 ? evidenceFiles(path) : [];
 	}
 
-	private discoverRun(runId: string): void {
+	/** Mentioned runs whose native sessions exist under a known session directory. */
+	private discoverMentioned(): void {
+		for (const root of this.roots) {
+			// Listed once per resolve: later passes add mentions, not directories.
+			if (!this.rootListings.has(root)) this.rootListings.set(root, this.files(root));
+			for (const name of this.rootListings.get(root)!) {
+				const runId = name.toLowerCase();
+				if (this.mentioned.has(runId) && !this.runs.has(runId)) this.discoverRun(runId, false);
+			}
+		}
+	}
+
+	private discoverRun(runId: string, artifacts = true): void {
 		for (const root of this.roots) {
 			const key = `${root}:${runId}`;
 			if (this.expanded.has(key)) continue;
@@ -174,6 +209,7 @@ export class ChildEvidenceCollector {
 				for (const file of this.files(join(dir, name))) if (file.endsWith(".jsonl")) child.sessionFiles.add(join(dir, name, file));
 			}
 		}
+		if (!artifacts) return;
 		for (const dir of this.artifactDirs) {
 			const key = `${dir}:${runId}`;
 			if (this.expanded.has(key)) continue;
@@ -211,6 +247,7 @@ export class ChildEvidenceCollector {
 			}
 			this.reconcileWorkflowAliases();
 			for (const runId of this.runs) this.discoverRun(runId);
+			this.discoverMentioned();
 			for (const child of [...this.children.values()]) {
 				for (const path of child.metadataPaths) {
 					if (this.visited.has(path)) continue;

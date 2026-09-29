@@ -166,11 +166,19 @@ export function collect(source: TranscriptSource): SessionStats {
 	if (resolved.length === 0) return stats;
 	// Hashing every message is only needed to tell a child's copies apart from the parent's.
 	const seen = new Set(branch.map(entry => messageIdentity(entry)).filter((id): id is string => !!id));
+	// Id-free fingerprints of every counted message. One child can surface under two
+	// run ids (a native session and another run's artifact copy of it), and those
+	// copies share no row ids, so only these fingerprints can tell them apart.
+	const counted = new Set(branch.map(entry => messageIdentity(entry, false)).filter((id): id is string => !!id));
 	const paths = new Set<string>();
 	for (const child of resolved) {
 		const evidencePaths = [...child.sessionFiles, ...child.transcriptPaths];
 		let inherited = evidencePaths.some(path => paths.has(path));
 		evidencePaths.forEach(path => paths.add(path));
+		// Independent parallel children never share a response, so only a child that
+		// repeats an already-counted reply is a copy whose prompts may be repeats too.
+		const alias = child.entries.some(entry => entry.message?.role === "assistant" && counted.has(messageIdentity(entry, false) ?? ""));
+		if (alias) inherited = true;
 		const local = new Set<string>();
 		const copies = new Set<string>();
 		const entries = child.entries.filter(entry => {
@@ -180,10 +188,14 @@ export function collect(source: TranscriptSource): SessionStats {
 			if (local.has(id) || !entry.id && copies.has(copy)) return false;
 			local.add(id);
 			copies.add(copy);
-			if (seen.has(id)) { inherited = true; return false; }
+			if (seen.has(id) || alias && counted.has(copy)) { inherited = true; return false; }
 			seen.add(id);
 			return true;
 		});
+		for (const entry of entries) {
+			const copy = messageIdentity(entry, false);
+			if (copy) counted.add(copy);
+		}
 		const usage = collectEntries({ ...source, getBranch: () => entries });
 		supplementChild(usage, child, inherited);
 		addChild(stats, usage);

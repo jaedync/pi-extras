@@ -295,3 +295,46 @@ test("independent parallel prompts with identical text and timestamps are still 
 	f.session(other, [{ ...p, id: "second-prompt" }, reply("b")]);
 	assert.equal(f.stats([result({ workflowChildren: { children: [{ runId: run }, { runId: other }] } })]).prompts, 2);
 });
+
+test("runs named only by current subagent notices are found under this session's own directory", () => {
+	const f = fixture();
+	const third = "33333333-3333-3333-3333-333333333333";
+	f.session(run, [prompt("a"), reply("a", "openai", T + 2000)]);
+	f.session(other, [prompt("b"), reply("b", "openai", T + 3000)]);
+	f.session(third, [prompt("c"), reply("c", "openai", T + 4000)]);
+	const stats = f.stats([
+		{ type: "custom_message", customType: "subagent-incremental-child-notify", timestamp: iso(T), content: `Workflow child completed: **review**\nWorkflow run: ${"4".repeat(8)}-4444-4444-4444-${"4".repeat(12)}\nChild run: ${run}\nStatus: workflow still running` },
+		{ type: "custom_message", customType: "subagent-notify", timestamp: iso(T), content: `Background task completed: **workflow**\nChild outputs:\n- key=build run=${other} status=completed` },
+		{ type: "custom_message", customType: "subagent_supervisor_request", timestamp: iso(T), content: "needs a decision", details: { runId: third, agent: "worker" } },
+	]);
+	assert.deepEqual([stats.prompts, stats.turns], [3, 3]);
+	assert.equal(stats.providers.get("openai")?.cost, 1.5);
+});
+
+test("a run named in prose is not charged from the shared artifact directory or from outside the subagent protocol", () => {
+	const f = fixture();
+	f.meta(run, { model: "anthropic/m", usage: { cost: 99, turns: 99 } });
+	f.session(other, [prompt("b"), reply("b")]);
+	const stats = f.stats([
+		{ type: "custom_message", customType: "subagent-notify", timestamp: iso(T), content: `Child outputs:\n- key=a run=${run} status=completed` },
+		{ type: "message", timestamp: iso(T), message: { role: "toolResult", toolName: "bash", toolCallId: "b", content: [{ type: "text", text: `ls ${other}` }] } },
+	]);
+	assert.deepEqual([stats.turns, stats.providers.size], [0, 0]);
+});
+
+test("one child reachable under two run ids is charged once", () => {
+	const f = fixture();
+	const a = reply("a", "openai", T + 2000);
+	const b = reply("b", "openai", T + 4000);
+	f.session(other, [prompt("task"), a, b]);
+	// The artifact copy lacks row ids and stopped early, like a detached child's receipt.
+	const record = (e: any) => JSON.stringify({ recordType: "message", sourceEventType: "message_end", timestamp: e.timestamp, message: e.message });
+	writeFileSync(join(f.artifacts, `${run}_worker_transcript.jsonl`), [prompt("task"), a].map(record).join("\n"));
+	f.meta(run, { model: "openai/model", usage: { turns: 1, cost: .5 } });
+	const notice = { type: "custom_message", customType: "subagent-incremental-child-notify", timestamp: iso(T), content: `Child run: ${other}` };
+	for (const branch of [[result({ runId: run }), notice], [notice, result({ runId: run })]]) {
+		const stats = f.stats(branch);
+		assert.deepEqual([stats.prompts, stats.turns, stats.toolCalls], [1, 2, 2]);
+		assert.equal(stats.providers.get("openai")?.cost, 1);
+	}
+});
