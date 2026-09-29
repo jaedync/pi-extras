@@ -63,6 +63,7 @@ test("the description names the VMs a limited session may use, and the default w
 	assert.doesNotMatch(elevated, /runs without administrator rights/);
 	assert.match(elevated, /Windows-MCP runs with administrator rights \(PI_WINDOWS_USE_ELEVATED\), so it reads and drives apps running as administrator too[\s\S]*win\.powershell and the apps win\.app launches run as administrator/);
 	assert.match(toolDescription(["Win11-Lab"], true), /may use only this VM[\s\S]*runs with administrator rights/);
+	assert.match(elevated, /Event Viewer showing a log crashed it[\s\S]*Get-WinEvent/);
 	assert.doesNotMatch(toolDescription(), /[\t\r]|"\n"/, "escapes in the description reach the model as written, not as a tab or a line break");
 });
 

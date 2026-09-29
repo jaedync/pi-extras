@@ -64,7 +64,7 @@ emitImage(s.screenshot);
 Batch known actions sequentially, then inspect again before deciding the next step. Only emit what you need: UI trees are long, so filter s.text in the script when you know what you are looking for.`;
 
 const LIMITED_RIGHTS = /^Windows-MCP runs without administrator rights, .*$/m;
-const ELEVATED_RIGHTS = "Windows-MCP runs with administrator rights (PI_WINDOWS_USE_ELEVATED), so it reads and drives apps running as administrator too, such as MMC consoles. win.powershell and the apps win.app launches run as administrator as well.";
+const ELEVATED_RIGHTS = "Windows-MCP runs with administrator rights (PI_WINDOWS_USE_ELEVATED), so it reads and drives apps running as administrator too, such as MMC consoles. win.powershell and the apps win.app launches run as administrator as well. A snapshot of Event Viewer showing a log crashed it in testing: read event logs with win.powershell (Get-WinEvent).";
 
 /**
  * The description, naming the VMs a session limited by PI_WINDOWS_USE_VMS may

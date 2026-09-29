@@ -375,8 +375,12 @@ be an administrator), and a server set up the other way is reinstalled on
 the next call; turning the setting off reinstalls it without them. MMC
 consoles such as Event Viewer, and most vendor admin tools, then get UI
 trees, and clicks and keys reach them. `win.powershell` and the apps
-`win.app` launches run as administrator as well. See
-[security and privacy](docs/security.md#windows-use) for what that allows.
+`win.app` launches run as administrator as well. One caveat from testing:
+a snapshot of Event Viewer showing an event log crashes Event Viewer, every
+time, once Windows-MCP can read it; the tool description steers agents to
+`Get-WinEvent` for logs. See
+[security and privacy](docs/security.md#windows-use) for what the setting
+allows.
 
 `win.console.ocr({ vm })` reads the screen's text with Windows OCR on the
 host, as lines of `(x,y) text` whose centers can be clicked. It covers what
