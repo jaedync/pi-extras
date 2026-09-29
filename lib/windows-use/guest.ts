@@ -20,6 +20,8 @@ import type { ToolResult } from "../computer-use/session.ts";
 import { textOf, toResult } from "./result.ts";
 import { Screen, type Look } from "./screen.ts";
 import { checkBootstrap, LAUNCHER, NO_OCR, openAdminShell, type Bootstrap } from "./install.ts";
+import { TIMING, type Timing } from "./timing.ts";
+import { HOST_TIMEOUT, NOT_SENT, TransportError } from "./transport.ts";
 import { CAPTURES, COLD_CAPTURE_MS, COLD_MS, DEFAULT_TOOL_MS, FRONT_WINDOW, hangMessage, QUICK_MS, readFront, RESTART_SERVER, RESTART_SETTLE_MS, RESTART_SHELL_UI, RUN_BOX, SHELL_UI, stallMessage, toolLimit, type FrontWindow } from "./stall.ts";
 
 export interface HostCallOptions {
@@ -31,52 +33,6 @@ export interface HostCalls {
 	call(method: string, params?: Record<string, unknown>, options?: HostCallOptions): Promise<unknown>;
 }
 
-interface Timing {
-	/** How long an unlocked verdict holds before the next tool call checks again. */
-	readonly lockTtlMs: number;
-	/** Wait for the server after signing in: the logon task has to start it. */
-	readonly logonWaitMs: number;
-	/** Wait for a server that may just be starting on an unlocked desktop. */
-	readonly restartWaitMs: number;
-	/** Wait for a first install: uv, Python and Windows-MCP download. */
-	readonly installWaitMs: number;
-	/** Wait for the typed bootstrap to report that it started; past it, typing went astray. */
-	readonly bootstrapStartMs: number;
-	/** Wait for an administrator's PowerShell to show after UAC, reading the console every `pollMs`. */
-	readonly adminShellMs: number;
-	/**
-	 * Wait after its title shows for PowerShell to take input: keys typed before
-	 * its prompt are lost. A read prompt ends the wait sooner.
-	 */
-	readonly shellReadyMs: number;
-	/** Pause after clicking Sign in before looking at the screen again. */
-	readonly signInSettleMs: number;
-	/** Pause after pressing the Windows key for Start and the taskbar to appear. */
-	readonly startMenuMs: number;
-	/** Wait for Windows to finish starting: a restart that installs updates takes minutes. */
-	readonly bootWaitMs: number;
-	/** Windows started this recently: its logon task may still be starting the server. */
-	readonly recentBootMs: number;
-	/** Wait for Hyper-V to leave a state between two others (shutting down, starting). */
-	readonly transitionWaitMs: number;
-	readonly pollMs: number;
-}
-
-const TIMING: Timing = {
-	lockTtlMs: 30_000,
-	logonWaitMs: 90_000,
-	restartWaitMs: 15_000,
-	installWaitMs: 15 * 60_000,
-	bootstrapStartMs: 120_000,
-	adminShellMs: 20_000,
-	shellReadyMs: 9_000,
-	signInSettleMs: 10_000,
-	startMenuMs: 1_500,
-	bootWaitMs: 15 * 60_000,
-	recentBootMs: 5 * 60_000,
-	transitionWaitMs: 3 * 60_000,
-	pollMs: 3_000,
-};
 
 export const DEFAULT_PORT = 8000;
 const PROTOCOL_VERSION = "2025-06-18";
@@ -450,22 +406,3 @@ export class Guest {
 		}
 	}
 }
-
-/** Host errors that prove a request never reached the server, so sending it again is safe. */
-const NOT_SENT = /^(cannot reach Windows-MCP|VM '.*' has no IPv4 address|Windows-MCP is not set up)/;
-
-/** The host's own limit ran out: the server took the request and never answered. */
-const HOST_TIMEOUT = /^windows_use host mcp timed out after/;
-
-class TransportError extends Error {
-	/** True only when the request provably never reached the server. */
-	readonly unsent: boolean;
-	readonly timedOut: boolean;
-
-	constructor(message: string, unsent = false, timedOut = false) {
-		super(message);
-		this.unsent = unsent;
-		this.timedOut = timedOut;
-	}
-}
-
