@@ -242,6 +242,12 @@ export function collect(source: TranscriptSource): SessionStats {
 	// run ids (a native session and another run's artifact copy of it), and those
 	// copies share no row ids, so only these fingerprints can tell them apart.
 	const counted = new Set(branch.map(entry => messageIdentity(entry, false)).filter((id): id is string => !!id));
+	// Each child entry's fingerprint is needed up to three times; hashing is the costly part of a refresh.
+	const fingerprints = new Map<BranchEntry, string | undefined>();
+	const copyOf = (entry: BranchEntry): string | undefined => {
+		if (!fingerprints.has(entry)) fingerprints.set(entry, messageIdentity(entry, false));
+		return fingerprints.get(entry);
+	};
 	const paths = new Set<string>();
 	for (const child of resolved) {
 		const evidencePaths = [...child.sessionFiles, ...child.transcriptPaths];
@@ -249,14 +255,14 @@ export function collect(source: TranscriptSource): SessionStats {
 		evidencePaths.forEach(path => paths.add(path));
 		// Independent parallel children never share a response, so only a child that
 		// repeats an already-counted reply is a copy whose prompts may be repeats too.
-		const alias = child.entries.some(entry => entry.message?.role === "assistant" && counted.has(messageIdentity(entry, false) ?? ""));
+		const alias = child.entries.some(entry => entry.message?.role === "assistant" && counted.has(copyOf(entry) ?? ""));
 		if (alias) inherited = true;
 		const local = new Set<string>();
 		const copies = new Set<string>();
 		const entries = child.entries.filter(entry => {
 			const id = messageIdentity(entry, true, child.key);
 			if (!id) return true;
-			const copy = messageIdentity(entry, false)!;
+			const copy = copyOf(entry)!;
 			if (local.has(id) || !entry.id && copies.has(copy)) return false;
 			local.add(id);
 			copies.add(copy);
@@ -265,7 +271,7 @@ export function collect(source: TranscriptSource): SessionStats {
 			return true;
 		});
 		for (const entry of entries) {
-			const copy = messageIdentity(entry, false);
+			const copy = copyOf(entry);
 			if (copy) counted.add(copy);
 		}
 		const usage = collectEntries({ ...source, getBranch: () => entries });
