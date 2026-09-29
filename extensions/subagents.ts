@@ -1,0 +1,219 @@
+/**
+ * subagents: background child agents on the model of your choice, which talk
+ * to main and to each other, with a live band per agent above the editor.
+ *
+ * Children are Pi sessions in this process. Which models they may use comes
+ * from the session's scoped models; which model suits what comes from the
+ * user's guide file. Both are read at session start and on /reload only, so
+ * the tool description never changes mid-session. Children do not survive a
+ * restart or reload.
+ */
+import * as sdk from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { createLauncher, childToolNames } from "../lib/subagents/child.ts";
+import { GUIDE_FILE, loadConfig, readGuide, type SubagentsConfig } from "../lib/subagents/config.ts";
+import { MainMail, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
+import { childInstructions, rosterText } from "../lib/subagents/format.ts";
+import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "../lib/subagents/models.ts";
+import { MAIN } from "../lib/subagents/names.ts";
+import { appendRunLog, runLogEntry, runLogPath } from "../lib/subagents/runlog.ts";
+import { Team } from "../lib/subagents/team.ts";
+import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
+import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
+import { createAgentsWidget } from "../lib/subagents/widget.ts";
+
+const GUIDE_TEMPLATE = `# Subagent model guide
+
+What is true today about which model to use for what. Read at session start
+and on /reload. Edit freely.
+
+- (model): (when to use it)
+`;
+
+interface SessionState {
+	team: Team;
+	mail: MainMail;
+	tools: ToolContext;
+	config: SubagentsConfig;
+	close(): Promise<void>;
+}
+
+function thinkingSettings(cwd: string, agentDir: string): ThinkingSettings {
+	try {
+		const settings = sdk.SettingsManager.create(cwd, agentDir) as unknown as {
+			getAllModelThinkingLevels?: () => ThinkingSettings["modelThinkingLevels"];
+			getDefaultThinkingLevel?: () => string | undefined;
+		};
+		return {
+			modelThinkingLevels: settings.getAllModelThinkingLevels?.() ?? {},
+			...(settings.getDefaultThinkingLevel?.() ? { defaultThinkingLevel: settings.getDefaultThinkingLevel!()! } : {}),
+		};
+	} catch {
+		return {};
+	}
+}
+
+/** The parent's model runtime when Pi exposes it, so children share auth and providers. */
+function runtimeSource(ctx: ExtensionContext): () => Promise<ModelRuntime> {
+	let own: Promise<ModelRuntime> | null = null;
+	const parent = (ctx.modelRegistry as unknown as { runtime?: ModelRuntime }).runtime;
+	return () => {
+		if (parent && typeof (parent as { refresh?: unknown }).refresh === "function") return Promise.resolve(parent);
+		own ??= sdk.ModelRuntime.create();
+		return own;
+	};
+}
+
+export default function subagents(pi: ExtensionAPI) {
+	if (process.env.PI_SUBAGENTS === "off") return;
+	let state: SessionState | null = null;
+	const widget = createAgentsWidget();
+
+	const build = (ctx: ExtensionContext): SessionState => {
+		const agentDir = sdk.getAgentDir();
+		const cwd = ctx.cwd;
+		const config = loadConfig();
+		const thinking = thinkingSettings(cwd, agentDir);
+		const allowed = allowedModels(ctx.scopedModels ?? [], ctx.model);
+		const parentRef = ctx.model ? refOf(ctx.model) : null;
+		const configured = config.defaultModel ? resolveModel(config.defaultModel, allowed) : null;
+		if (configured && !configured.ok) ctx.ui.notify(`subagents.defaultModel: ${configured.error}`, "warning");
+		const fallbackModel = configured?.ok ? configured.choice.ref : parentRef;
+		const sessionId = ctx.sessionManager.getSessionId();
+		const logFile = runLogPath(agentDir);
+		const sessionDir = join(agentDir, "sessions", "subagents", sessionId);
+		let logFailed = false;
+
+		const mail = new MainMail({
+			batchMs: config.batchMs,
+			port: { send: (message, options) => pi.sendMessage(message, options) },
+			onChange: () => widget.update(),
+		});
+		// The launcher and tools need the team, and the team needs the launcher.
+		let tools!: ToolContext;
+		const team = new Team({
+			maxConcurrent: config.maxConcurrent,
+			maxDepth: config.maxDepth,
+			replyTimeoutMs: config.replyTimeoutMs,
+			sessionFileFor: (name) => join(sessionDir, `${new Date().toISOString().replace(/[:.]/g, "-")}_${name}_${randomUUID().slice(0, 8)}.jsonl`),
+			deliverToMain: (delivery) => mail.deliver(delivery),
+			launcher: createLauncher({
+				sdk, agentDir, cwd,
+				sessionDir,
+				modelRuntime: runtimeSource(ctx),
+				toolsFor: (record) => ({
+					tools: childToolNames(pi.getActiveTools(), record.readOnly, config.childToolsExclude),
+					customTools: [
+						childMessageTool(tools, record.name),
+						...(record.depth < config.maxDepth ? [subagentTool(tools, record.name)] : []),
+					],
+				}),
+				instructions: (record) => childInstructions({
+					name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < config.maxDepth,
+					roster: rosterText(record.name, team.list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model }))),
+				}),
+				forkEntries: () => ctx.sessionManager.getBranch() as unknown[],
+			}),
+		});
+		tools = {
+			team, allowed, fallbackModel, thinking, modelTable: modelTable(allowed, thinking),
+			guide: readGuide(agentDir, cwd).text, replyTimeoutMs: config.replyTimeoutMs, now: Date.now,
+		};
+
+		const logged = new Set<string>();
+		const unsubscribe = team.onChange((record) => {
+			widget.update();
+			if (!record || LIVE_STATES.has(record.state)) return;
+			const key = `${record.name}#${record.runs}#${record.state}`;
+			if (logged.has(key)) return;
+			logged.add(key);
+			try {
+				appendRunLog(logFile, runLogEntry(record, Date.now(), sessionId));
+			} catch (error) {
+				if (!logFailed) ctx.ui.notify(`subagents: could not write the run log ${logFile}: ${(error as Error).message}`, "warning");
+				logFailed = true;
+			}
+		});
+
+		return {
+			team, mail, tools, config,
+			async close() {
+				unsubscribe();
+				mail.dispose();
+				await team.close();
+			},
+		};
+	};
+
+	pi.on("session_start", async (_event, ctx) => {
+		await state?.close();
+		state = build(ctx);
+		const current = state;
+		for (const tool of [subagentTool(current.tools, MAIN), mainMessageTool(current.tools)]) {
+			const owner = pi.getAllTools().find((info) => info.name === tool.name);
+			if (owner && !/[/\\]extensions[/\\]subagents\.ts$/.test(String(owner.sourceInfo?.path ?? ""))) {
+				ctx.ui.notify(`subagents: tool name "${tool.name}" is already registered by another extension; skipping it.`, "warning");
+				continue;
+			}
+			pi.registerTool(tool);
+		}
+		if (ctx.hasUI && ctx.mode === "tui") {
+			widget.attach(ctx.ui as never, () => ({ records: current.team.list(), pending: current.mail.pending() }));
+		}
+	});
+
+	pi.on("message_end", (event) => {
+		const message = (event as { message?: { role?: string; customType?: string; details?: { id?: unknown } } }).message;
+		if (message?.role !== "custom" || (message.customType !== MESSAGE_TYPE && message.customType !== REPORT_TYPE)) return;
+		if (typeof message.details?.id === "string") state?.mail.acknowledge(message.details.id);
+	});
+
+	pi.on("session_shutdown", async () => {
+		widget.detach();
+		await state?.close();
+		state = null;
+	});
+
+	pi.registerCommand("subagents", {
+		description: "List subagents, stop one (stop <name> | stop all), or edit the model guide (guide)",
+		getArgumentCompletions: (prefix: string) => {
+			const names = state?.team.list().map((record) => record.name) ?? [];
+			return ["guide", "stop all", ...names.map((name) => `stop ${name}`)]
+				.filter((value) => value.startsWith(prefix))
+				.map((value) => ({ value, label: value }));
+		},
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const [verb, ...rest] = args.trim().split(/\s+/);
+			if (verb === "guide") return editGuide(ctx);
+			if (!state) return ctx.ui.notify("Subagents are not active in this session.", "info");
+			if (verb === "stop") {
+				const target = rest.join(" ");
+				const names = target === "all" ? state.team.live().map((record) => record.name) : [target];
+				for (const name of names) {
+					if (!state.team.get(name)) { ctx.ui.notify(`No subagent named ${name}.`, "warning"); continue; }
+					await state.team.stop(name);
+				}
+				return;
+			}
+			ctx.ui.notify(listing(state.team.list()), "info");
+		},
+	});
+
+	async function editGuide(ctx: ExtensionCommandContext): Promise<void> {
+		const file = join(sdk.getAgentDir(), GUIDE_FILE);
+		const current = existsSync(file) ? readFileSync(file, "utf8") : GUIDE_TEMPLATE;
+		const edited = await ctx.ui.editor("Subagent model guide (applies after /reload)", current);
+		if (edited === undefined || edited === current) return;
+		mkdirSync(dirname(file), { recursive: true });
+		writeFileSync(file, edited.endsWith("\n") ? edited : `${edited}\n`);
+		ctx.ui.notify(`Saved ${file}. Run /reload to apply it.`, "info");
+	}
+}
+
+function listing(records: readonly AgentRecord[]): string {
+	if (records.length === 0) return "No subagents in this session.";
+	return records.map((record) => `${record.name}  ${record.state}  ${record.model}${record.activity ? `  ${record.activity}` : ""}`).join("\n");
+}
