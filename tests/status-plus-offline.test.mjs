@@ -19,6 +19,8 @@ for (const setting of ['PI_OFFLINE', 'STATUS_PLUS_POLL_LIMITS']) {
     statusPlus({ on: (name, handler) => handlers.set(name, handler) });
     try {
       await handlers.get('session_start')({}, ctx);
+      // A turn's own request, which forces an OpenCode Go poll when polling is allowed.
+      await handlers.get('turn_start')({}, ctx);
       await handlers.get('before_provider_request')({}, ctx);
       assert.equal(reads, 0);
     } finally {

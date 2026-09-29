@@ -69,6 +69,12 @@ function formatCwd(cwd: string): string {
 export default function statusPlus(pi: ExtensionAPI): void {
 	/** The one provider request the transcript can't see yet. */
 	let inflight: { provider: string; startedMs: number; endedMs?: number } | undefined;
+	/**
+	 * Between a turn's start and its reply. Pi also sends requests of its own
+	 * outside turns (cache refreshes during a long tool call) that end in no
+	 * reply, so they would tick airtime until the next one.
+	 */
+	let awaitingReply = false;
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let requestFooterRender: (() => void) | undefined;
 	/** Counter animation for the spend cell; a frame timer runs only while a tween is live. */
@@ -326,7 +332,12 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		update(ctx);
 	});
 
+	pi.on("turn_start", async () => {
+		awaitingReply = true;
+	});
+
 	pi.on("before_provider_request", async (_event, ctx) => {
+		if (!awaitingReply) return;
 		const sourceProvider = ctx.model?.provider ?? "unknown";
 		if (sourceProvider === "opencode-go") {
 			// The usage endpoint is the only authoritative signal that Go has
@@ -340,6 +351,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 
 	pi.on("message_end", async (event, ctx) => {
 		if (event.message.role !== "assistant") return;
+		awaitingReply = false;
 		if (event.message.provider === "opencode-go" && inflight?.provider === "opencode") {
 			pi.appendEntry(BILLING_SOURCE_ENTRY, {
 				messageTimestampMs: toEpochMs(event.message.timestamp),
@@ -356,6 +368,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 
 	pi.on("turn_end", async (_event, ctx) => {
 		// Close a dangling interval (e.g. aborted request with no message_end).
+		awaitingReply = false;
 		if (inflight && !inflight.endedMs) inflight.endedMs = Date.now();
 		update(ctx);
 	});
