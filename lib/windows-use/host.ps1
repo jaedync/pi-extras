@@ -287,7 +287,7 @@ function Open-AdminShell([string]$vm) {
 # launcher arrives as data rather than living in this file: antivirus holds up
 # scripts that decode and run payloads for many seconds before they start.
 # Returns once typing is queued; the caller waits for the port.
-function Invoke-Setup([string]$vm, [int]$port, [string]$launcher) {
+function Invoke-Setup([string]$vm, [int]$port, [string]$launcher, [bool]$elevated) {
     if (-not $launcher.Contains('__PAYLOAD__')) { throw 'setup needs a launcher containing __PAYLOAD__' }
     $m = Get-RunningMachine $vm
     # A fresh key: a server being replaced keeps answering until the bootstrap
@@ -297,7 +297,8 @@ function Invoke-Setup([string]$vm, [int]$port, [string]$launcher) {
     $run = -join (1..8 | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
     # Comment lines go: typing runs at a few dozen characters a second.
     $lines = (Get-Content -Path (Join-Path $PSScriptRoot 'guest-bootstrap.ps1')) | Where-Object { $_ -notmatch '^\s*#' }
-    $script = ($lines -join "`n").Replace('__KEY__', $key).Replace('__PORT__', "$port").Replace('__RUN__', $run)
+    $runLevel = if ($elevated) { 'Highest' } else { 'Limited' }
+    $script = ($lines -join "`n").Replace('__KEY__', $key).Replace('__PORT__', "$port").Replace('__RUNLEVEL__', $runLevel).Replace('__RUN__', $run)
     $ms = New-Object IO.MemoryStream
     $gz = New-Object IO.Compression.GZipStream($ms, [IO.Compression.CompressionMode]::Compress)
     $raw = [Text.Encoding]::UTF8.GetBytes($script)
@@ -397,7 +398,7 @@ $handlers = @{
     cad        = { param($p) Invoke-Checked (Get-Device (Get-RunningMachine $p.vm) 'Msvm_Keyboard') 'TypeCtrlAltDel' @{}; @{ ok = $true } }
     login      = { param($p) Invoke-Login $p.vm }
     adminShell = { param($p) Open-AdminShell $p.vm }
-    setup      = { param($p) Invoke-Setup $p.vm (Get-Port $p) ([string]$p.launcher) }
+    setup      = { param($p) Invoke-Setup $p.vm (Get-Port $p) ([string]$p.launcher) ($p.elevated -eq $true) }
     probe      = { param($p) Test-Port $p.vm (Get-Port $p) }
     mcp        = { param($p) Send-Mcp $p.vm (Get-Port $p) ([string]$p.message) }
 }

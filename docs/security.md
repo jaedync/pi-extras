@@ -152,9 +152,17 @@ the guest user's `%USERPROFILE%\.windows-mcp\config.toml`. The key is typed
 into the guest inside the bootstrap, only after Windows OCR on the host reads
 an administrator's PowerShell window on the console (without OCR it is typed
 unchecked), and removed from that PowerShell's history afterwards. A new key
-is made only at that point, so a setup that stops earlier leaves the old one. It never enters the conversation. Anyone who holds it and
-can reach the guest's port gets the guest user's full PowerShell, so treat
-other VMs on the same virtual switch as able to try.
+is made only at that point, so a setup that stops earlier leaves the old one.
+It never enters the conversation. Anyone who holds it and can reach the
+guest's port gets the guest user's full PowerShell, so treat other VMs on the
+same virtual switch as able to try.
+
+With `PI_WINDOWS_USE_ELEVATED=on` the logon task runs Windows-MCP at its
+highest run level: with the administrator rights of a guest user who is an
+administrator, without a UAC prompt. Its PowerShell, its input to elevated
+windows, and the apps it launches then have those rights, and so does anyone
+holding the key. Without the setting, an agent can still get them by
+answering a UAC prompt (below), but a stolen key can't.
 
 While it runs, the bootstrap reports its progress to the host through Hyper-V
 key-value exchange, as the value `PiWindowsUse` under
@@ -176,6 +184,10 @@ Recovery may restart parts of the guest without asking: Start and its search
 demand) when they stall a snapshot, and Windows-MCP itself, from the console's
 Run box as the signed-in user, when it answers nothing. The Run box is read
 with OCR before the restart command is typed; without OCR nothing is typed.
+The restart ends and reruns the logon task, which first stops any server
+still running: the signed-in user can't stop one that has administrator
+rights. A server whose rights don't match `PI_WINDOWS_USE_ELEVATED` is
+reinstalled, once per session.
 
 `win.console.ocr` runs Windows OCR on the host over a console frame, locally,
 through a PowerShell module (`ocr.psm1`) the host loads on first use. Its text

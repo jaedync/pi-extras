@@ -81,6 +81,12 @@ interface World {
 	transitioning?: number;
 	/** The next snapshot never answers: Windows restarts under it, back at the sign-in screen. */
 	restartsUnderSnapshot?: boolean;
+	/** Windows-MCP runs with administrator rights (its logon task runs at the highest level). */
+	elevatedServer?: boolean;
+	/** The guest user is no administrator, so a task at the highest level still runs without rights. */
+	standardUser?: boolean;
+	/** What each setup asked for: administrator rights or not. */
+	setups?: boolean[];
 }
 
 function fakeHost(world: World) {
@@ -130,7 +136,8 @@ function fakeHost(world: World) {
 					log.push("mcp lock-check");
 					assert.match(String(args.command), /SessionId/, "the lock check must look only at the server's own session");
 					const locked = world.locked || world.misreportsLock === true;
-					return { messages: [{ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: `Response: ${locked ? "locked" : "unlocked"}\n\nStatus Code: 0` }], isError: false } }] };
+					const rights = world.elevatedServer ? "elevated" : "limited";
+					return { messages: [{ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: `Response: ${locked ? "locked" : "unlocked"} ${rights}\n\nStatus Code: 0` }], isError: false } }] };
 				}
 				log.push(`mcp ${name}`);
 				world.limits = { ...world.limits, [name]: options.timeoutMs ?? 0 };
@@ -216,6 +223,8 @@ function fakeHost(world: World) {
 					world.typedAfter = (world.clock?.() ?? 0) - (world.shellAt ?? 0);
 					assert.equal(params.launcher, LAUNCHER);
 					world.installed = true;
+					world.setups = [...(world.setups ?? []), params.elevated === true];
+					world.elevatedServer = params.elevated === true && !world.standardUser;
 					if (world.bootstrap === "fail") world.published = "r2 FAIL uv tool install windows-mcp failed (2): Access is denied. (os error 5)";
 					else if (world.bootstrap === "never") world.published ??= "r1 OK listening on 8000";
 					else if (typeof world.bootstrap === "number") world.published = "r2 installing windows-mcp";
@@ -233,13 +242,13 @@ function ocrOf(lines: readonly string[]) {
 	return { width: 1024, height: 768, lines: lines.map((line, row) => ({ words: line.split(" ").map((word, column) => ({ text: word, x: 10 + column * 80, y: 10 + row * 20, w: 70, h: 14 })) })) };
 }
 
-function guest(world: World) {
+function guest(world: World, elevated?: boolean) {
 	const { host, log } = fakeHost(world);
 	let clock = 0;
 	world.clock = () => clock;
 	const notes: string[] = [];
 	const g = new Guest({
-		host, vm: "Win11", note: (text) => notes.push(text),
+		host, vm: "Win11", note: (text) => notes.push(text), elevated,
 		now: () => clock,
 		sleep: async (ms) => { clock += ms; },
 	});
@@ -437,6 +446,45 @@ test("a snapshot stalled by an app's window names it and what to do instead, and
 		&& /use_ui_tree: false/.test(error.message) && /win\.console\.ocr/.test(error.message));
 	assert.equal(log.filter((entry) => entry.startsWith("mcp Snapshot")).length, 1);
 	assert.ok(!log.includes("mcp restart-shell"), "an app is not the tool's to restart");
+});
+
+test("a guest asked for administrator rights installs Windows-MCP with them", async () => {
+	const world: World = { running: true, installed: false, session: true, locked: false, server: false };
+	const { g, notes } = guest(world, true);
+	await g.tool("Click", { loc: [1, 2] });
+	assert.deepEqual(world.setups, [true]);
+	assert.doesNotMatch(notes.join("\n"), /administrator rights/, "installed with them from the start: nothing to redo");
+});
+
+test("a server without the rights the session asks for is reinstalled with them, once, then the call runs", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true };
+	const { g, log, notes, advance } = guest(world, true);
+	const result = await g.tool("Click", { loc: [1, 2] });
+	assert.match(text(result), /^Click/);
+	assert.deepEqual(world.setups, [true]);
+	assert.match(notes.join("\n"), /Windows-MCP ran without administrator rights, and PI_WINDOWS_USE_ELEVATED asks for them: reinstalling it/);
+	advance(10 * 60_000);
+	await g.tool("Click", { loc: [3, 4] });
+	assert.equal(log.filter((entry) => entry === "setup").length, 1);
+});
+
+test("a server with administrator rights the session doesn't ask for is reinstalled without them", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, elevatedServer: true };
+	const { g, notes } = guest(world);
+	await g.tool("Click", { loc: [1, 2] });
+	assert.deepEqual(world.setups, [false]);
+	assert.equal(world.elevatedServer, false);
+	assert.match(notes.join("\n"), /Windows-MCP ran with administrator rights, which PI_WINDOWS_USE_ELEVATED doesn't ask for: reinstalling it without them/);
+});
+
+test("a guest user who is no administrator gets one reinstall, then a note, not a reinstall on every check", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, standardUser: true };
+	const { g, notes, advance } = guest(world, true);
+	await g.tool("Click", { loc: [1, 2] });
+	advance(10 * 60_000);
+	await g.tool("Click", { loc: [3, 4] });
+	assert.deepEqual(world.setups, [true]);
+	assert.match(notes.join("\n"), /still runs without administrator rights: the guest user may not be an administrator/);
 });
 
 test("a server stuck on an earlier call, answering no tool at all, is restarted from the console's Run box and the call goes through", async () => {

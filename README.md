@@ -368,6 +368,16 @@ it can't read or send input to the windows of apps that run as administrator:
 their UI tree is empty, and its clicks and keys to them are dropped without an
 error. Snapshots mark such windows, and the console methods reach them.
 
+To let Windows-MCP reach those windows too, set `PI_WINDOWS_USE_ELEVATED=on`.
+Setup then has the logon task run it with the guest user's full
+administrator rights (the task's highest run level, which needs that user to
+be an administrator), and a server set up the other way is reinstalled on
+the next call; turning the setting off reinstalls it without them. MMC
+consoles such as Event Viewer, and most vendor admin tools, then get UI
+trees, and clicks and keys reach them. `win.powershell` and the apps
+`win.app` launches run as administrator as well. See
+[security and privacy](docs/security.md#windows-use) for what that allows.
+
 `win.console.ocr({ vm })` reads the screen's text with Windows OCR on the
 host, as lines of `(x,y) text` whose centers can be clicked. It covers what
 the UI tree can't describe, such as custom-drawn windows, MMC consoles, UAC

@@ -86,7 +86,10 @@ test("host.ps1 stays clear of what antivirus holds up, and fills in every bootst
 	assert.match(host, /ocr\s+= \{ param\(\$p\) Get-FrameText/, "the OCR module loads only when asked for");
 	assert.doesNotMatch(host.replace(/function Get-FrameText[\s\S]*?\n\}/, ""), /ocr\.psm1/);
 	const placeholders = [...new Set(bootstrap.match(/__[A-Z]+__/g))].sort();
-	assert.deepEqual(placeholders, ["__KEY__", "__PORT__", "__RUN__"]);
+	assert.deepEqual(placeholders, ["__KEY__", "__PORT__", "__RUNLEVEL__", "__RUN__"]);
+	assert.match(bootstrap, /-RunLevel \$runLevel\b/);
+	assert.match(host, /\$runLevel = if \(\$elevated\) \{ 'Highest' \} else \{ 'Limited' \}/);
+	assert.match(host, /setup\s+= \{ param\(\$p\) Invoke-Setup \$p\.vm \(Get-Port \$p\) \(\[string\]\$p\.launcher\) \(\$p\.elevated -eq \$true\) \}/);
 	for (const placeholder of placeholders) assert.ok(host.includes(`.Replace('${placeholder}'`), `${placeholder} is never filled in`);
 });
 
@@ -156,8 +159,12 @@ test("the restart typed into the Run box stops and starts what the bootstrap ins
 	assert.match(bootstrap, new RegExp(`\\$taskName = '${SERVER_TASK}'`));
 	assert.match(bootstrap, /Join-Path \$bin 'windows-mcp\.exe'/);
 	assert.match(RESTART_SERVER, /taskkill \/f \/t \/im windows-mcp\.exe/);
+	assert.match(RESTART_SERVER, new RegExp(`^cmd /c "schtasks /end /tn ${SERVER_TASK} & `), "an ended task takes the next start even while a server it started runs on");
 	assert.match(RESTART_SERVER, new RegExp(`schtasks /run /tn ${SERVER_TASK}"$`));
 	assert.ok(RESTART_SERVER.length < 200, "typed at about 30 characters a second");
+	// The signed-in user can't stop a server with administrator rights (live: "Access is denied"); the task, which has them, can.
+	const start = /\$serve = @\(([\s\S]*?)\)/.exec(bootstrap)?.[1] ?? "";
+	assert.match(start, /'taskkill \/f \/t \/im windows-mcp\.exe >nul 2>&1'[\s\S]*'ping -n 3 127\.0\.0\.1 >nul'[\s\S]*serve 1>>/, "the task stops a server still running, lets its port go, then serves");
 });
 
 test("the bootstrap installs a Windows-MCP release line whose snapshot text windows_use was built against", () => {

@@ -38,9 +38,10 @@ export const DEFAULT_PORT = 8000;
 const PROTOCOL_VERSION = "2025-06-18";
 /**
  * Only a LogonUI in the server's own session means this desktop is locked: a
- * pending enhanced-session connection runs one in a session of its own.
+ * pending enhanced-session connection runs one in a session of its own. The
+ * PowerShell it runs in has the server's rights, which it reports as well.
  */
-const LOCK_CHECK = "$me = (Get-Process -Id $PID).SessionId; if (Get-Process LogonUI -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }) { 'locked' } else { 'unlocked' }";
+const LOCK_CHECK = "$me = (Get-Process -Id $PID).SessionId; $lock = if (Get-Process LogonUI -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }) { 'locked' } else { 'unlocked' }; $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); \"$lock $(if ($admin) { 'elevated' } else { 'limited' })\"";
 /** Hyper-V states a VM passes through on its way between running, off and saved. */
 const IN_BETWEEN = /^(?:shutting down|starting|stopping|resuming|saving|pausing|state \d+)$/;
 /** Sign in clicks per repair: a second covers a screen that wasn't ready; more won't help a password. */
@@ -55,6 +56,8 @@ export interface GuestOptions {
 	readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 	readonly now?: () => number;
 	readonly timing?: Partial<Timing>;
+	/** Windows-MCP should run with administrator rights (PI_WINDOWS_USE_ELEVATED); a server installed otherwise is reinstalled. */
+	readonly elevated?: boolean;
 }
 
 interface Status {
@@ -82,6 +85,9 @@ export class Guest {
 	private readonly now: () => number;
 	private readonly timing: Timing;
 	private readonly screen: Screen;
+	private readonly elevated: boolean;
+	/** A server with other rights than asked is reinstalled once; if that doesn't take, it is left as it is. */
+	private rights: "unchecked" | "reinstalled" | "settled" = "unchecked";
 	private connected = false;
 	private unlockedAt = Number.NEGATIVE_INFINITY;
 	/** Until then the guest has just come back (restart, sign-in, new server), and captures get longer. */
@@ -96,6 +102,7 @@ export class Guest {
 		this.sleep = options.sleep ?? wait;
 		this.now = options.now ?? (() => Date.now());
 		this.timing = { ...TIMING, ...options.timing };
+		this.elevated = options.elevated === true;
 		this.screen = new Screen({ host: this.host, vm: this.vm, sleep: this.sleep, settleMs: this.timing.startMenuMs });
 	}
 
@@ -280,7 +287,7 @@ export class Guest {
 		this.note(`${this.vm}: installing Windows-MCP in the guest (a first install takes a few minutes)`);
 		const { pollMs, adminShellMs: openMs, shellReadyMs: readyMs } = this.timing;
 		await openAdminShell({ host: this.host, vm: this.vm, screen: this.screen, sleep: this.sleep, now: this.now, pollMs, openMs, readyMs }, signal);
-		const { run } = await this.host.call("setup", { vm: this.vm, port: this.port, launcher: LAUNCHER }, { signal, timeoutMs: 5 * 60_000 }) as { run?: string };
+		const { run } = await this.host.call("setup", { vm: this.vm, port: this.port, launcher: LAUNCHER, elevated: this.elevated }, { signal, timeoutMs: 5 * 60_000 }) as { run?: string };
 		const bootstrap = run ? { run, startBy: this.now() + this.timing.bootstrapStartMs, started: false } : undefined;
 		if (!(await this.waitConnect(this.timing.installWaitMs, signal, bootstrap))) {
 			throw new Error(`Windows-MCP did not come up on ${this.vm}. The guest's PowerShell window shows why: win.console.screenshot({ vm: ${JSON.stringify(this.vm)} }).`);
@@ -363,14 +370,32 @@ export class Guest {
 
 	private async unlock(signal?: AbortSignal): Promise<void> {
 		if (await this.screen.wake(signal)) this.note(`${this.vm}: woke the display, which had gone dark`);
+		const { locked, elevated } = await this.lockCheck(signal);
 		// The guest's word alone never triggers a click: reachDesktop clicks only when the console agrees.
-		if (await this.locked(signal) && await this.reachDesktop(signal, "was locked; ")) this.cameBack();
+		if (locked && await this.reachDesktop(signal, "was locked; ")) this.cameBack();
 		this.unlockedAt = this.now();
+		if (elevated !== undefined && elevated !== this.elevated) await this.matchRights(signal);
 	}
 
-	private async locked(signal?: AbortSignal): Promise<boolean> {
-		const result = await this.callTool("PowerShell", { command: LOCK_CHECK }, signal, QUICK_MS);
-		return /\blocked\b/.test(result.content.map((block) => block.type === "text" ? block.text : "").join("\n"));
+	private async lockCheck(signal?: AbortSignal): Promise<{ locked: boolean; elevated?: boolean }> {
+		const text = textOf(await this.callTool("PowerShell", { command: LOCK_CHECK }, signal, QUICK_MS));
+		const rights = /\b(elevated|limited)\b/.exec(text)?.[1];
+		return { locked: /\blocked\b/.test(text), elevated: rights === undefined ? undefined : rights === "elevated" };
+	}
+
+	/** Reinstalls a server whose rights aren't the ones this session asks for. */
+	private async matchRights(signal?: AbortSignal): Promise<void> {
+		if (this.rights === "settled") return;
+		if (this.rights === "reinstalled") {
+			this.rights = "settled";
+			this.note(`${this.vm}: Windows-MCP still runs ${this.elevated ? "without" : "with"} administrator rights: the guest user may not be an administrator. Left as it is.`);
+			return;
+		}
+		this.rights = "reinstalled";
+		this.note(this.elevated
+			? `${this.vm}: Windows-MCP ran without administrator rights, and PI_WINDOWS_USE_ELEVATED asks for them: reinstalling it with them`
+			: `${this.vm}: Windows-MCP ran with administrator rights, which PI_WINDOWS_USE_ELEVATED doesn't ask for: reinstalling it without them`);
+		await this.install(signal);
 	}
 
 	private cameBack(): void {

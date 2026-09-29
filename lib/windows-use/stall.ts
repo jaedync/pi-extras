@@ -43,11 +43,12 @@ export function toolLimit(name: string, args: Record<string, unknown>): number {
 export const SERVER_TASK = "windows-mcp-server";
 
 /**
- * Typed into the Run box, as the signed-in user: stops the server and its
- * Python, waits for the task to end (it ignores a start while running), and
- * starts it again.
+ * Typed into the Run box, as the signed-in user: ends the task (it ignores a
+ * start while running), stops the server and its Python, and starts the task
+ * again. A server with administrator rights refuses the signed-in user's
+ * taskkill; the task stops it when it starts.
  */
-export const RESTART_SERVER = `cmd /c "taskkill /f /t /im windows-mcp.exe & timeout /t 3 /nobreak & schtasks /run /tn ${SERVER_TASK}"`;
+export const RESTART_SERVER = `cmd /c "schtasks /end /tn ${SERVER_TASK} & taskkill /f /t /im windows-mcp.exe & timeout /t 3 /nobreak & schtasks /run /tn ${SERVER_TASK}"`;
 
 /** The Run box's own words, read from the console before anything is typed into it. */
 export const RUN_BOX = /Type the name of a program|Windows will open it for you/i;

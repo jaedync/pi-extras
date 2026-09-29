@@ -13,6 +13,7 @@ import { painter } from "../computer-use/paint.ts";
 import { renderCall, renderResult, type RowDetails } from "../computer-use/render.ts";
 import { markRow } from "../tool-row.ts";
 import { WIN_API, WinSession, vmAllowlist } from "./api.ts";
+import { Guest } from "./guest.ts";
 import { HostSession } from "./host.ts";
 
 const ENABLED = new Set(["1", "on", "true", "yes"]);
@@ -62,19 +63,28 @@ emitImage(s.screenshot);
 
 Batch known actions sequentially, then inspect again before deciding the next step. Only emit what you need: UI trees are long, so filter s.text in the script when you know what you are looking for.`;
 
-/** The description, naming the VMs a session limited by PI_WINDOWS_USE_VMS may use. */
-export function toolDescription(allowed?: readonly string[]): string {
-	if (!allowed?.length) return DESCRIPTION;
+const LIMITED_RIGHTS = /^Windows-MCP runs without administrator rights, .*$/m;
+const ELEVATED_RIGHTS = "Windows-MCP runs with administrator rights (PI_WINDOWS_USE_ELEVATED), so it reads and drives apps running as administrator too, such as MMC consoles. win.powershell and the apps win.app launches run as administrator as well.";
+
+/**
+ * The description, naming the VMs a session limited by PI_WINDOWS_USE_VMS may
+ * use, and what Windows-MCP can reach with the rights PI_WINDOWS_USE_ELEVATED gives it.
+ */
+export function toolDescription(allowed?: readonly string[], elevated = false): string {
+	const description = elevated ? DESCRIPTION.replace(LIMITED_RIGHTS, ELEVATED_RIGHTS) : DESCRIPTION;
+	if (!allowed?.length) return description;
 	const limit = allowed.length === 1
 		? `This session may use only this VM: ${allowed[0]}. Calls may leave out vm; it defaults to "${allowed[0]}".`
 		: `This session may use only these VMs: ${allowed.join(", ")}.`;
-	const [head, ...rest] = DESCRIPTION.split("\n\n");
+	const [head, ...rest] = description.split("\n\n");
 	return [head, limit, ...rest].join("\n\n");
 }
 
 export interface WindowsUseDeps {
 	/** The VMs PI_WINDOWS_USE_VMS allows, when it is set. */
 	readonly allowed?: readonly string[];
+	/** Windows-MCP runs with administrator rights (PI_WINDOWS_USE_ELEVATED). */
+	readonly elevated?: boolean;
 	readonly executor: Pick<CodeExecutor, "execute">;
 	/** What recovery did during the last run. */
 	readonly notes: () => string[];
@@ -116,7 +126,7 @@ export function registerWindowsUse(pi: ExtensionAPI, deps: WindowsUseDeps): void
 	pi.registerTool(markRow(defineTool({
 		name: "windows_use",
 		label: "Windows use",
-		description: toolDescription(deps.allowed),
+		description: toolDescription(deps.allowed, deps.elevated),
 		parameters: Type.Object({
 			code: Type.String({ description: "JavaScript body to execute. Use await win.<method>({ vm, ... }), emit(value), emitImage(result.screenshot), and store for state shared across calls." }),
 		}, { additionalProperties: false }),
@@ -170,9 +180,11 @@ export function productionDeps(): WindowsUseDeps {
 		},
 	});
 	const allowed = vmAllowlist(process.env);
-	const session = new WinSession(host, undefined, allowed);
+	const elevated = ENABLED.has((process.env.PI_WINDOWS_USE_ELEVATED ?? "").trim().toLowerCase());
+	const session = new WinSession(host, (vm, note) => new Guest({ host, vm, note, elevated }), allowed);
 	return {
 		allowed,
+		elevated,
 		executor: new CodeExecutor({ session, api: WIN_API }),
 		notes: () => session.drainNotes(),
 		close: () => host.close(),
@@ -180,6 +192,7 @@ export function productionDeps(): WindowsUseDeps {
 			const exe = powershellPath();
 			const lines = [exe ? `powershell.exe: ${exe}` : "powershell.exe: not found (needs WSL interop)", `host: ${host.state}`];
 			if (allowed) lines.push(`limited to: ${allowed.join(", ")} (PI_WINDOWS_USE_VMS)`);
+			if (elevated) lines.push("Windows-MCP runs with administrator rights (PI_WINDOWS_USE_ELEVATED)");
 			if (!exe) return lines;
 			try {
 				const vms = session.visible(await host.call("vms") as { name: string; state: string; installed: boolean; ip?: string | null }[]);

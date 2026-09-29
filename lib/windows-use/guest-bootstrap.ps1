@@ -1,10 +1,11 @@
 # Runs inside the guest, in an elevated PowerShell in the signed-in user's
-# desktop session. The windows_use host fills in __KEY__ and __PORT__, gzips and
-# base64s this file, and types it in, so the guest needs no file copy,
-# credentials or network access from the host. Idempotent: rerunning repairs.
+# desktop session. The windows_use host fills in the key, port, run id and
+# run level, gzips and base64s this file, and types it in, so the guest needs
+# no file copy, credentials or network access from the host. Idempotent:
+# rerunning repairs.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$key = '__KEY__'; $port = __PORT__; $run = '__RUN__'
+$key = '__KEY__'; $port = __PORT__; $run = '__RUN__'; $runLevel = '__RUNLEVEL__'
 $utf8 = New-Object Text.UTF8Encoding $false
 $done = $false
 $statusDir = 'C:\ProgramData\pi-windows-use'
@@ -65,15 +66,20 @@ try {
     $toml = "[server]`ntransport = `"streamable-http`"`nhost = `"0.0.0.0`"`nport = $port`nauth_key = `"$key`"`nstateless_http = true`n"
     [IO.File]::WriteAllText((Join-Path $cfgDir 'config.toml'), $toml, $utf8)
     $start = Join-Path $cfgDir 'windows-use-start.cmd'
-    [IO.File]::WriteAllText($start, "@echo off`r`n`"$exe`" serve 1>>`"$cfgDir\server.log`" 2>>`"$cfgDir\server.error.log`"`r`n", [Text.Encoding]::ASCII)
+    # First stop a server still running, which a restart typed as the signed-in user can't
+    # when the server has administrator rights, and give its port a moment to close.
+    $serve = @('@echo off', 'taskkill /f /t /im windows-mcp.exe >nul 2>&1', 'ping -n 3 127.0.0.1 >nul',
+        "`"$exe`" serve 1>>`"$cfgDir\server.log`" 2>>`"$cfgDir\server.error.log`"")
+    [IO.File]::WriteAllText($start, ($serve -join "`r`n") + "`r`n", [Text.Encoding]::ASCII)
 
-    # Logon task at Limited run level: the server lives in the interactive session (UIA needs
-    # it) and conhost --headless keeps a console window off the desktop the agent drives.
+    # Logon task: the server lives in the interactive session (UIA needs it) and conhost
+    # --headless keeps a console window off the desktop the agent drives. Its run level is
+    # Limited, or Highest when the host asks for administrator rights (PI_WINDOWS_USE_ELEVATED).
     $action = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\conhost.exe" -Argument "--headless cmd.exe /c `"$start`""
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $who
     # Restarts cover a crash while the user stays signed in, which the host cannot repair without clicking blind.
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1)
-    $principal = New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel Limited
+    $principal = New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel $runLevel
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
     # In testing the logon trigger never fired after a restart. Explorer runs the Run key at every
     # sign-in, automatic ones included; it starts the same task, whose IgnoreNew policy stops doubles.

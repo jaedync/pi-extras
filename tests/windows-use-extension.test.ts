@@ -58,6 +58,11 @@ test("the description names the VMs a limited session may use, and the default w
 	assert.match(toolDescription(["Win11-Lab"]), /This session may use only this VM: Win11-Lab\. Calls may leave out vm; it defaults to "Win11-Lab"\./);
 	assert.match(toolDescription(["Win11-Lab", "Test"]), /This session may use only these VMs: Win11-Lab, Test\./);
 	assert.match(toolDescription(), /win\.powershell\(\{ vm, command, timeout\? \}\) -> \{ output, status \}/);
+	assert.match(toolDescription(), /Windows-MCP runs without administrator rights/);
+	const elevated = toolDescription(undefined, true);
+	assert.doesNotMatch(elevated, /runs without administrator rights/);
+	assert.match(elevated, /Windows-MCP runs with administrator rights \(PI_WINDOWS_USE_ELEVATED\), so it reads and drives apps running as administrator too[\s\S]*win\.powershell and the apps win\.app launches run as administrator/);
+	assert.match(toolDescription(["Win11-Lab"], true), /may use only this VM[\s\S]*runs with administrator rights/);
 	assert.doesNotMatch(toolDescription(), /[\t\r]|"\n"/, "escapes in the description reach the model as written, not as a tab or a line break");
 });
 
