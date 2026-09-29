@@ -33,12 +33,12 @@ const DESCRIPTION = `Run JavaScript that operates Windows Hyper-V virtual machin
 
 Guest methods run through Windows-MCP inside the VM (UI Automation tree, input, PowerShell). Every method takes { vm: "<VM name>" }. The first call to a VM signs it in, unlocks it or installs Windows-MCP as needed, and says so in the result.
 - win.vms() -> [{ name, state, running, installed, ip }]: the VMs this session may use
-- win.snapshot({ vm, use_vision?, use_ui_tree?, use_dom? }) -> { text, screenshot }: text lists windows and UI elements with labels and (x, y) centers
+- win.snapshot({ vm, use_vision?, use_ui_tree?, use_dom? }) -> { text, screenshot }: text lists the windows, then the UI tree: one element per line with its (x, y) center, type, "name" and state, indented under its container. use_dom: true lists a browser page's elements instead
 - win.screenshot({ vm }) -> { text, screenshot }: fast, no UI tree
-- win.click({ vm, label? | x?, y?, button?, clicks? })
-- win.type({ vm, text, label? | x?, y?, clear?, enter? })
-- win.scroll({ vm, label? | x?, y?, direction?: "up"|"down"|"left"|"right", amount?, horizontal? })
-- win.move({ vm, label? | x?, y?, drag?, from?: [x, y] })
+- win.click({ vm, x, y, button?: "left"|"right"|"middle", clicks? })
+- win.type({ vm, text, x?, y?, clear?, enter? }): with x, y it clicks there first, then types (any text); without, it types into the focused control by pasting, restoring the clipboard after. "\n" presses Enter and "\t" Tab, as typing would. clear: true replaces the field's text; enter: true presses Enter after
+- win.scroll({ vm, x?, y?, direction?: "up"|"down"|"left"|"right", amount?, horizontal? })
+- win.move({ vm, x, y, drag?, from?: [x, y] })
 - win.key({ vm, keys }): e.g. "ctrl+c", "win+r", "enter"
 - win.app({ vm, mode?: "launch"|"switch"|"resize", name })
 - win.wait_for({ vm, condition, text?, window_name?, timeout? })

@@ -49,6 +49,7 @@ function fakeGuest(log: string[]): (vm: string, note: (text: string) => void) =>
 		async tool(name: string, args: Record<string, unknown>) {
 			log.push(`${vm} ${name} ${JSON.stringify(args)}`);
 			if (name === "Snapshot") note(`${vm}: installing Windows-MCP`);
+			if (name === "Clipboard" && args.mode === "get") return { content: [{ type: "text", text: vm === "A" ? "Clipboard content:\nold" : "Clipboard is empty or contains non-text data." }], isError: false };
 			return name === "Snapshot"
 				? { content: [{ type: "text", text: "tree" }, { type: "image", data: "IMG", mimeType: "image/png" }], isError: false }
 				: { content: [{ type: "text", text: `${name} done` }], isError: false };
@@ -138,7 +139,7 @@ test("snapshot text that Windows-MCP sent as a JSON list reads as plain lines; o
 	const keep = () => ({ type: "screenshot", id: "1" }) as const;
 	const listed = { content: [{ type: "text" as const, text: JSON.stringify(["Focused Window:\nNotepad", "UI Tree:\n- button"]) }], isError: false };
 	const snapshot = WIN_API.value("snapshot", {}, listed, keep) as { text: string };
-	assert.equal(snapshot.text, "Focused Window:\nNotepad\nUI Tree:\n- button");
+	assert.equal(snapshot.text, "Focused Window:\nNotepad\n\nUI Tree:\n- button");
 	assert.equal(WIN_API.value("key", {}, listed, keep), listed.content[0]!.text);
 	const plain = { content: [{ type: "text" as const, text: "[not json" }], isError: false };
 	assert.equal((WIN_API.value("snapshot", {}, plain, keep) as { text: string }).text, "[not json");
@@ -151,6 +152,32 @@ test("win.powershell resolves to its output and exit status, without Windows-MCP
 	assert.deepEqual(WIN_API.value("powershell", {}, result("Response: Get-Item : Cannot find path\nStatus Code: 1"), keep), { output: "Get-Item : Cannot find path", status: 1 });
 	assert.deepEqual(WIN_API.value("powershell", {}, result("Response: \nStatus Code: 0"), keep), { output: "", status: 0 });
 	assert.deepEqual(WIN_API.value("powershell", {}, result("something else"), keep), { output: "something else", status: null });
+});
+
+test("win.type without a place pastes into the focused control in order, keys between lines, and restores the clipboard", async () => {
+	const { host, calls } = fakeHost();
+	const log: string[] = [];
+	const session = new WinSession(host, fakeGuest(log));
+	await session.call("type", { vm: "A", text: "two\nlines\tend", clear: true, enter: true }, {});
+	assert.deepEqual(log, [
+		'A Clipboard {"mode":"get"}',
+		'A Shortcut {"shortcut":"ctrl+a"}', 'A Shortcut {"shortcut":"backspace"}',
+		'A Clipboard {"mode":"set","text":"two"}', 'A Shortcut {"shortcut":"ctrl+v"}',
+		'A Shortcut {"shortcut":"enter"}',
+		'A Clipboard {"mode":"set","text":"lines"}', 'A Shortcut {"shortcut":"ctrl+v"}',
+		'A Shortcut {"shortcut":"tab"}',
+		'A Clipboard {"mode":"set","text":"end"}', 'A Shortcut {"shortcut":"ctrl+v"}',
+		'A Shortcut {"shortcut":"enter"}',
+		'A Clipboard {"mode":"set","text":"old"}',
+	]);
+	assert.deepEqual(calls, [], "no console input, which arrives late and out of order");
+	log.length = 0;
+	await session.call("type", { vm: "B", text: "x" }, {});
+	assert.deepEqual(log, ['B Clipboard {"mode":"get"}', 'B Clipboard {"mode":"set","text":"x"}', 'B Shortcut {"shortcut":"ctrl+v"}'], "a clipboard without text is left as the paste left it");
+	log.length = 0;
+	await session.call("type", { vm: "A", text: "at", x: 5, y: 6 }, {});
+	assert.equal(log.at(-1), 'A Type {"text":"at","loc":[5,6]}', "a place still goes to Windows-MCP, which clicks it first");
+	await assert.rejects(session.call("type", { vm: "A" }, {}), /win\.type needs \{ vm, text \}/);
 });
 
 test("win.sleep also takes the milliseconds alone", () => {

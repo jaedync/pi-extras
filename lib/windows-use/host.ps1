@@ -134,7 +134,7 @@ function ConvertTo-Scancodes([string]$text) {
     $out = New-Object System.Collections.Generic.List[byte]
     foreach ($ch in ($text -replace "`r`n", "`n").ToCharArray()) {
         $e = $scanMap[[string]$ch]
-        if (-not $e) { throw "Cannot type character U+$(([int]$ch).ToString('X4')) on a US keyboard layout; use win.type inside the guest instead" }
+        if (-not $e) { throw "Cannot type character U+$(([int]$ch).ToString('X4')) through the console keyboard (US layout); win.type types any text through Windows-MCP" }
         if ($e[1]) { $out.Add(0x2A) }
         $out.Add([byte]$e[0]); $out.Add([byte]($e[0] -bor 0x80))
         if ($e[1]) { $out.Add(0xAA) }

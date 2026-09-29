@@ -11,6 +11,7 @@ import type { CallOptions, ToolResult } from "../computer-use/session.ts";
 import { readFrame, toPng } from "./frame.ts";
 import { Guest, wait, type HostCalls } from "./guest.ts";
 import { textResult } from "./result.ts";
+import { compactSnapshot } from "./snapshot.ts";
 
 export const GUEST_METHODS = ["snapshot", "screenshot", "click", "type", "scroll", "move", "key", "app", "wait_for", "powershell", "call"] as const;
 export const CONSOLE_METHODS = ["console.screenshot", "console.click", "console.move", "console.drag", "console.scroll", "console.type", "console.key", "console.cad"] as const;
@@ -25,8 +26,9 @@ type Args = Record<string, unknown>;
 /** Drops unset values so Windows-MCP applies its own defaults. */
 const defined = (args: Args): Args => Object.fromEntries(Object.entries(args).filter(([, value]) => value !== undefined));
 const without = (args: Args, ...keys: string[]): Args => Object.fromEntries(Object.entries(args).filter(([key]) => !keys.includes(key)));
-/** A UI element's label from the last snapshot, or screen coordinates. */
-const target = (args: Args): Args => args.label !== undefined ? { label: args.label } : typeof args.x === "number" && typeof args.y === "number" ? { loc: [args.x, args.y] } : {};
+/** Screen coordinates, or a Windows-MCP element index (its snapshot text doesn't show them, so scripts rarely can). */
+const target = (args: Args): Args => args.label !== undefined ? { label: args.label } : hasPoint(args) ? { loc: [args.x, args.y] } : {};
+const hasPoint = (args: Args) => typeof args.x === "number" && typeof args.y === "number";
 
 /** The Windows-MCP tool and arguments behind a guest method. */
 export function toMcp(method: string, args: Args): { tool: string; args: Args } {
@@ -96,6 +98,9 @@ function unlist(text: string): string {
 	}
 }
 const JSON_METHODS = new Set(["vms", "start"]);
+/** How Windows-MCP's Clipboard get starts when the clipboard holds text. */
+const CLIPBOARD_TEXT = "Clipboard content:\n";
+const textOf = (result: ToolResult) => result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
 
 /** Windows-MCP wraps PowerShell output as "Response: <stdout, or stderr when stdout is empty>\nStatus Code: <exit code>". */
 function shellResult(text: string): { output: string; status: number | null } {
@@ -121,7 +126,7 @@ export const WIN_API: ScriptApi = {
 		if (method === "powershell") return shellResult(text);
 		if (IMAGE_METHODS.has(method)) {
 			const image = result.content.find((block) => block.type === "image");
-			const lines = result.content.flatMap((block) => block.type === "text" ? [unlist(block.text)] : []).join("\n");
+			const lines = result.content.flatMap((block) => block.type === "text" ? [compactSnapshot(unlist(block.text))] : []).join("\n");
 			return { text: lines, screenshot: image && image.type === "image" ? keep(image) : null };
 		}
 		if (JSON_METHODS.has(method)) {
@@ -226,11 +231,44 @@ export class WinSession {
 				if (typeof args.keys !== "string") throw new Error("win.console.key needs { vm, keys }");
 				return this.console("key", { vm, keys: args.keys }, signal);
 			case "console.cad": return this.console("cad", { vm }, signal);
-			default: {
-				const call = toMcp(method, args);
-				return this.guest(vm).tool(call.tool, call.args, signal);
-			}
+			case "type":
+				if (args.label === undefined && !hasPoint(args)) return this.typeAtFocus(vm, args, signal);
+				return this.guestTool(vm, method, args, signal);
+			default: return this.guestTool(vm, method, args, signal);
 		}
+	}
+
+	private guestTool(vm: string, method: string, args: Args, signal?: AbortSignal): Promise<ToolResult> {
+		const call = toMcp(method, args);
+		return this.guest(vm).tool(call.tool, call.args, signal);
+	}
+
+	/**
+	 * Types into whatever has focus. Windows-MCP's Type always clicks its target
+	 * first, which moves the caret and drops a selection, and console typing
+	 * arrives late (about 50 characters a second) and can lose shifted keys, so
+	 * later input overtakes it. This pastes each line through Windows-MCP, in
+	 * order with its other input, and presses Enter or Tab between them as
+	 * typing would. Each Shortcut returns half a second after its keys, by which
+	 * time the app has taken the paste, so the clipboard can change again.
+	 */
+	private async typeAtFocus(vm: string, args: Args, signal?: AbortSignal): Promise<ToolResult> {
+		if (typeof args.text !== "string") throw new Error("win.type needs { vm, text }");
+		const guest = this.guest(vm);
+		const tool = (name: string, toolArgs: Args) => guest.tool(name, toolArgs, signal);
+		const key = (shortcut: string) => tool("Shortcut", { shortcut });
+		const saved = textOf(await tool("Clipboard", { mode: "get" }));
+		const prior = saved.startsWith(CLIPBOARD_TEXT) ? saved.slice(CLIPBOARD_TEXT.length) : undefined;
+		if (args.clear === true) { await key("ctrl+a"); await key("backspace"); }
+		for (const part of args.text.split(/(\r?\n|\t)/)) {
+			if (part === "\t") await key("tab");
+			else if (part === "\n" || part === "\r\n") await key("enter");
+			else if (part) { await tool("Clipboard", { mode: "set", text: part }); await key("ctrl+v"); }
+		}
+		const enter = args.enter === true || args.press_enter === true;
+		if (enter) await key("enter");
+		if (prior !== undefined) await tool("Clipboard", { mode: "set", text: prior });
+		return textResult(`Typed ${args.text.length} characters into the focused control${enter ? ", then pressed Enter" : ""}.`);
 	}
 
 	private async console(method: string, params: Args, signal?: AbortSignal, timeoutMs?: number): Promise<ToolResult> {
