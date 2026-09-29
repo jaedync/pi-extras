@@ -90,6 +90,14 @@ test("host.ps1 stays clear of what antivirus holds up, and fills in every bootst
 	for (const placeholder of placeholders) assert.ok(host.includes(`.Replace('${placeholder}'`), `${placeholder} is never filled in`);
 });
 
+test("OCR reads the frame at twice its size, where small UI text reads right, and reports frame pixels", () => {
+	const ocr = readFileSync(new URL("../lib/windows-use/ocr.psm1", import.meta.url), "utf8");
+	// Live, an Event Viewer list read at 1x got no time right ("1237:02"); at 2x it got all 15.
+	assert.match(ocr, /\$upscale = 2\b/);
+	assert.match(ocr, /TransformedBitmap\(\$source, \(New-Object System\.Windows\.Media\.ScaleTransform\(\$upscale, \$upscale\)\)\)/);
+	for (const key of ["x", "y", "w", "h"]) assert.match(ocr, new RegExp(`${key} = \\[int\\]\\[math\\]::Round\\(\\$r\\.\\w+ / \\$upscale\\)`), `${key} is in frame pixels`);
+});
+
 test("setup rotates the key, so a server it is replacing can't pass for the new one", () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	const setup = host.slice(host.indexOf("function Invoke-Setup"), host.indexOf("function Get-SetupStatus"));
