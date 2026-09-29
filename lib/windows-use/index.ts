@@ -48,7 +48,7 @@ Windows-MCP runs without administrator rights, so a window of an app running as 
 Console methods drive the VM's screen, keyboard and mouse from the host; they also work on lock, sign-in and UAC screens. Coordinates are guest pixels. A display that went dark is woken with Shift first.
 - win.console.screenshot({ vm }) -> { text: '{"width","height"}', screenshot }
 - win.console.ocr({ vm, x?, y?, width?, height? }) -> { text, items: [{ text, x, y }] }: the screen's text through Windows OCR, one "(x,y) text" per line, each center clickable with win.click or win.console.click. It reads what the UI tree can't: custom-drawn windows, MMC consoles, UAC and sign-in screens. x, y, width and height limit it to a rectangle
-- win.console.click({ vm, x, y, button?, double? }), win.console.move/drag({ vm, x, y, x2?, y2? }), win.console.scroll({ vm, x, y, amount? })
+- win.console.click({ vm, x, y, button?, double? }), win.console.move/drag({ vm, x, y, x2?, y2? }), win.console.scroll({ vm, x, y, amount? }) (amount: wheel notches, negative down, default -3)
 - win.console.type({ vm, text }) (US keyboard layout; "\\n" presses Enter), win.console.key({ vm, keys }), win.console.cad({ vm })
 - win.uac({ vm, answer: "yes"|"no" }) answers a UAC prompt, as when an app asks for administrator rights. It shows on the secure desktop, where Windows-MCP can't see, so snapshots fail meanwhile and say so. It never types a password
 - win.start({ vm }) starts or resumes a VM; win.login({ vm }) clicks Sign in; win.setup({ vm }) reinstalls Windows-MCP

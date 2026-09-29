@@ -209,19 +209,26 @@ function Send-Click($machine, [int]$x, [int]$y, [string]$button, [bool]$double) 
     Invoke-Checked $mouse 'ClickButton' @{ buttonIndex = [uint32]$index }
     if ($double) { Invoke-Checked $mouse 'ClickButton' @{ buttonIndex = [uint32]$index } }
 }
+# Windows starts a drag only after the pointer moves with the button down, and a
+# window being moved follows the moves it sees, so the pointer travels in steps.
 function Send-Drag($machine, [int]$x, [int]$y, [int]$x2, [int]$y2) {
     $mouse = Get-Device $machine 'Msvm_SyntheticMouse'
     Set-Pointer $mouse $x $y
     Invoke-Checked $mouse 'SetButtonState' @{ buttonIndex = [uint32]1; isDown = $true }
-    Start-Sleep -Milliseconds 100
-    Invoke-Checked $mouse 'SetAbsolutePosition' @{ horizontalPosition = $x2; verticalPosition = $y2 }
-    Start-Sleep -Milliseconds 100
+    Start-Sleep -Milliseconds 150
+    $steps = 12
+    for ($i = 1; $i -le $steps; $i++) {
+        Invoke-Checked $mouse 'SetAbsolutePosition' @{ horizontalPosition = [int]($x + ($x2 - $x) * $i / $steps); verticalPosition = [int]($y + ($y2 - $y) * $i / $steps) }
+        Start-Sleep -Milliseconds 25
+    }
+    Start-Sleep -Milliseconds 150
     Invoke-Checked $mouse 'SetButtonState' @{ buttonIndex = [uint32]1; isDown = $false }
 }
-function Send-Scroll($machine, [int]$x, [int]$y, [int]$amount) {
+# Notches of the wheel: negative scrolls down. Hyper-V takes 120ths of a notch.
+function Send-Scroll($machine, [int]$x, [int]$y, [int]$notches) {
     $mouse = Get-Device $machine 'Msvm_SyntheticMouse'
     Set-Pointer $mouse $x $y
-    Invoke-Checked $mouse 'SetScrollPosition' @{ scrollPositionDelta = $amount }
+    Invoke-Checked $mouse 'SetScrollPosition' @{ scrollPositionDelta = $notches * 120 }
 }
 
 # Signs in the last-used account at the console. A passwordless account's tile

@@ -126,6 +126,11 @@ test("every Hyper-V input method host.ps1 calls gets the parameters Hyper-V decl
 	}
 });
 
+test("console scroll counts wheel notches, as Windows-MCP's scroll does, not Hyper-V's 120ths of one", () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	assert.match(host, /'SetScrollPosition' @\{ scrollPositionDelta = \$notches \* 120 \}/);
+});
+
 test("the restart typed into the Run box stops and starts what the bootstrap installs", () => {
 	const bootstrap = readFileSync(new URL("../lib/windows-use/guest-bootstrap.ps1", import.meta.url), "utf8");
 	assert.match(bootstrap, new RegExp(`\\$taskName = '${SERVER_TASK}'`));
