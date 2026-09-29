@@ -146,6 +146,11 @@ test("the restart typed into the Run box stops and starts what the bootstrap ins
 	assert.ok(RESTART_SERVER.length < 200, "typed at about 30 characters a second");
 });
 
+test("the bootstrap installs a Windows-MCP release line whose snapshot text windows_use was built against", () => {
+	const bootstrap = readFileSync(new URL("../lib/windows-use/guest-bootstrap.ps1", import.meta.url), "utf8");
+	assert.match(bootstrap, /tool install --upgrade --python 3\.14 'windows-mcp>=0\.8\.6,<0\.9'/);
+});
+
 test("the bootstrap starts the server at every sign-in through the Run key as well as the logon task", () => {
 	const bootstrap = readFileSync(new URL("../lib/windows-use/guest-bootstrap.ps1", import.meta.url), "utf8");
 	assert.match(bootstrap, /CurrentVersion\\Run' -Name 'pi-windows-use'/);

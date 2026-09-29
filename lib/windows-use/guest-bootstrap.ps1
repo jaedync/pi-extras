@@ -53,7 +53,8 @@ try {
     Stop-Server
     Set-Status 'installing windows-mcp'
     $env:UV_TOOL_BIN_DIR = $bin
-    Invoke-Native { & $uv tool install --upgrade --python 3.14 windows-mcp } 'uv tool install windows-mcp'
+    # Within the release line windows_use reads the snapshot text of; a new line may change it.
+    Invoke-Native { & $uv tool install --upgrade --python 3.14 'windows-mcp>=0.8.6,<0.9' } 'uv tool install windows-mcp'
     $exe = Join-Path $bin 'windows-mcp.exe'
     if (-not (Test-Path $exe)) { throw "windows-mcp.exe missing at $exe" }
 
