@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { stripAnsi } from "../lib/ansi.ts";
-import { PROVIDERS, barGradient, cacheState, contextBar, fadeFg, formatTokens, limitText, mixRgb, providerTag, resetLabel, toneForPct, toneRgb } from "../lib/status-plus-render.ts";
+import { PROVIDERS, barGradient, cacheState, cacheTtl, contextBar, fadeFg, formatTokens, limitText, mixRgb, providerTag, resetLabel, toneForPct, toneRgb } from "../lib/status-plus-render.ts";
 
 const paint = { fg: (tone: string, text: string) => `<${tone}>${text}</${tone}>` };
 const NOON = Date.parse("2026-07-01T17:00:00Z"); // 12:00 Central, a Wednesday
@@ -13,6 +13,17 @@ test("cache warmth states drive the clock tone", () => {
 	assert.deepEqual(cacheState(NOON - 4 * 60_000, undefined, NOON, cache), { kind: "cooling", tone: "warning", label: "4m cooling" });
 	assert.deepEqual(cacheState(NOON - 6 * 60_000, undefined, NOON, cache), { kind: "cold", tone: "error", label: "6m cold" });
 	assert.deepEqual(cacheState(NOON - 60_000, NOON - 30_000, NOON, cache), { kind: "new-ctx", tone: "dim", label: "new ctx" });
+});
+
+test("the transcript's newest cache write picks the cache lifetime before the environment does", () => {
+	const short = { ttlMs: 5 * 60_000, warnMs: 4 * 60_000 };
+	const long = { ttlMs: 60 * 60_000, warnMs: 55 * 60_000 };
+	assert.deepEqual(cacheTtl(undefined, false), short);
+	assert.deepEqual(cacheTtl(undefined, true), long);
+	// A proxy can write hour-long entries while Pi asked for five minutes, and the reverse.
+	assert.deepEqual(cacheTtl(true, false), long);
+	assert.deepEqual(cacheTtl(false, true), short);
+	assert.equal(cacheState(NOON - 20 * 60_000, undefined, NOON, cacheTtl(true, false)).kind, "warm");
 });
 
 test("context bar fills twenty cells with eighth-block precision", () => {

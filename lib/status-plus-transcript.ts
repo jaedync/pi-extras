@@ -25,8 +25,9 @@ export interface AssistantLike {
 	provider: string;
 	model: string;
 	timestamp: number;
-	usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost: { total: number } };
+	usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cacheWrite1h?: number; cost: { total: number } };
 	content: Array<{ type: string }>;
+	stopReason?: string;
 }
 
 /** The subset of a Pi session entry this module reads. */
@@ -70,9 +71,13 @@ export interface SessionStats {
 	turns: number;
 	providers: Map<string, ProviderStats>;
 	tokens: TokenTotals;
-	/** Cache read share of the newest assistant message's prompt, in percent. */
+	/** Cache read share of the newest prompt a provider reported reading, in percent. */
 	cacheHitPct?: number;
 	lastApiEndMs?: number;
+	/** End of the newest request that reported reading its prompt, which is what keeps the cache warm. */
+	lastCacheMs?: number;
+	/** Whether the newest cache write used one-hour retention; undefined when no write reported it either way. */
+	cacheLongRetention?: boolean;
 	/** Newest compaction/branch summary; the old prompt-prefix cache is unreachable after it. */
 	lastContextResetMs?: number;
 }
@@ -161,7 +166,10 @@ function collectEntries(source: TranscriptSource): SessionStats {
 			const model = typeof entry.provider === "string" ? { provider: entry.provider, id: String(entry.model ?? "") } : active;
 			if (usage) chargeOffTurn(stats, source, model, usage);
 			// A refresh keeps the cache warm exactly as a reply would.
-			if (entry.kind === "cache_warm") stats.lastApiEndMs = newest(stats.lastApiEndMs, Date.parse(entry.timestamp));
+			if (entry.kind === "cache_warm") {
+				stats.lastApiEndMs = newest(stats.lastApiEndMs, Date.parse(entry.timestamp));
+				stats.lastCacheMs = newest(stats.lastCacheMs, Date.parse(entry.timestamp));
+			}
 			continue;
 		}
 		if (entry.type === "custom" && entry.customType === CHAIN_ENTRY) {
@@ -180,11 +188,15 @@ function collectEntries(source: TranscriptSource): SessionStats {
 		const message = entry.message as AssistantLike;
 		if (typeof message.provider === "string") active = { provider: message.provider, id: String(message.model ?? "") };
 		stats.turns++;
-		for (const block of Array.isArray(message.content) ? message.content : []) if (block.type === "toolCall") stats.toolCalls++;
+		// A failed or aborted reply's tool calls are never run.
+		const ran = message.stopReason !== "error" && message.stopReason !== "aborted";
+		for (const block of ran && Array.isArray(message.content) ? message.content : []) if (block.type === "toolCall") stats.toolCalls++;
 		const usage = message.usage ?? { cost: { total: 0 } };
 		stats.tokens = addTokens(stats.tokens, usage);
 		const promptTokens = promptTokensOf(usage);
-		stats.cacheHitPct = promptTokens > 0 ? ((usage.cacheRead ?? 0) / promptTokens) * 100 : undefined;
+		// A request refused before its prompt was read says nothing about the cache.
+		if (promptTokens > 0) stats.cacheHitPct = ((usage.cacheRead ?? 0) / promptTokens) * 100;
+		if ((usage.cacheWrite ?? 0) > 0) stats.cacheLongRetention = (usage.cacheWrite1h ?? 0) > 0;
 
 		const startedMs = toEpochMs(message.timestamp);
 		// OpenCode keeps the wire provider as opencode-go when an exhausted Go
@@ -202,6 +214,7 @@ function collectEntries(source: TranscriptSource): SessionStats {
 		if (!Number.isFinite(startedMs) || !Number.isFinite(finishedMs)) continue;
 		if (finishedMs > startedMs) provider.airtimeMs += finishedMs - startedMs;
 		stats.lastApiEndMs = newest(stats.lastApiEndMs, finishedMs);
+		if (promptTokens > 0) stats.lastCacheMs = newest(stats.lastCacheMs, finishedMs);
 	}
 
 	return stats;

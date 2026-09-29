@@ -27,6 +27,19 @@ export interface CacheTtl {
 	warnMs: number;
 }
 
+/** Anthropic's two prompt-cache lifetimes, each warning a little before it lapses. */
+const SHORT_CACHE: CacheTtl = { ttlMs: 5 * 60_000, warnMs: 4 * 60_000 };
+const LONG_CACHE: CacheTtl = { ttlMs: 60 * 60_000, warnMs: 55 * 60_000 };
+
+/**
+ * The lifetime the newest cache write actually got, when the transcript reports
+ * it, rather than the one Pi asked for: a proxy can write hour-long entries while
+ * Pi requested five minutes. Without that evidence, the configured retention.
+ */
+export function cacheTtl(writtenLong: boolean | undefined, configuredLong: boolean): CacheTtl {
+	return (writtenLong ?? configuredLong) ? LONG_CACHE : SHORT_CACHE;
+}
+
 export interface CacheState {
 	kind: "none" | "new-ctx" | "warm" | "cooling" | "cold";
 	tone: "dim" | "warning" | "error";

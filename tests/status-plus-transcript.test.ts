@@ -117,3 +117,35 @@ test("summaries and cache refreshes are charged to the model that ran them, with
 	assert.equal(stats.lastContextResetMs, T0 + 5000);
 	assert.equal(stats.lastApiEndMs, T0 + 6000);
 });
+
+test("replies that never ran leave tool counts, cache hit rate and cache warmth alone", () => {
+	const ended = (start: number, end: number, stopReason: string, tools: number, tokens: Record<string, number>) => {
+		const entry = assistant(start, end, "anthropic", 0, tools, tokens);
+		return { ...entry, message: { ...entry.message, stopReason } };
+	};
+	const branch = [
+		assistant(T0, T0 + 1000, "anthropic", 0.5, 1, { input: 10, cacheRead: 90 }),
+		// Tools in an aborted or failed reply never run; a request refused before any prompt was read never touched the cache.
+		ended(T0 + 2000, T0 + 3000, "aborted", 2, { input: 0, output: 0 }),
+		ended(T0 + 4000, T0 + 5000, "error", 1, { input: 0, output: 0 }),
+	];
+	const source = (entries: unknown[]) => ({ getBranch: () => entries as any, getSessionDir: () => "/nowhere", costOf: () => 0 });
+	let stats = collect(source(branch));
+	assert.deepEqual([stats.turns, stats.toolCalls], [3, 1]);
+	assert.equal(stats.cacheHitPct, 90);
+	assert.equal(stats.lastApiEndMs, T0 + 5000);
+	assert.equal(stats.lastCacheMs, T0 + 1000);
+	// A stream that failed after the prompt was read did refresh the cache.
+	stats = collect(source([...branch, ended(T0 + 6000, T0 + 7000, "error", 1, { input: 5, cacheRead: 95 })]));
+	assert.deepEqual([stats.toolCalls, stats.cacheHitPct, stats.lastCacheMs], [1, 95, T0 + 7000]);
+});
+
+test("the newest cache write says whether the cache lives five minutes or an hour", () => {
+	const source = (entries: unknown[]) => ({ getBranch: () => entries as any, getSessionDir: () => "/nowhere", costOf: () => 0 });
+	const hour = assistant(T0, T0 + 1000, "anthropic", 0, 0, { cacheWrite: 500, cacheWrite1h: 500 });
+	const readOnly = assistant(T0 + 2000, T0 + 3000, "anthropic", 0, 0, { cacheRead: 500 });
+	const short = assistant(T0 + 4000, T0 + 5000, "anthropic", 0, 0, { cacheWrite: 50 });
+	assert.equal(collect(source([readOnly])).cacheLongRetention, undefined);
+	assert.equal(collect(source([hour, readOnly])).cacheLongRetention, true);
+	assert.equal(collect(source([hour, readOnly, short])).cacheLongRetention, false);
+});

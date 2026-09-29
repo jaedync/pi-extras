@@ -22,7 +22,7 @@ import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, REFRESH_INTERVAL_MS
 import { estimateUsageCost, toEpochMs } from "../lib/status-plus-logic.ts";
 import { splitMeshStatuses } from "../lib/status-plus-mesh.ts";
 import { TWEEN_FRAME_MS, flashIntensity, incrementAt, isActive, retarget, valueAt, type Tween } from "../lib/status-plus-tween.ts";
-import { EMPTY_PROVIDER, cacheState } from "../lib/status-plus-render.ts";
+import { EMPTY_PROVIDER, cacheState, cacheTtl } from "../lib/status-plus-render.ts";
 import {
 	BILLING_SOURCE_ENTRY,
 	collect,
@@ -34,7 +34,6 @@ import {
 } from "../lib/status-plus-transcript.ts";
 
 const LONG_CACHE = process.env.PI_CACHE_RETENTION === "long";
-const CACHE = { ttlMs: (LONG_CACHE ? 60 : 5) * 60_000, warnMs: (LONG_CACHE ? 55 : 4) * 60_000 };
 const LOG_FILE = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "status-plus.log");
 const ZEN_NOTE = "balance not exposed by OpenCode";
 const GO_BILLING_NOTE = "billing Zen";
@@ -190,7 +189,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		return {
 			nowMs: now,
 			lastApiEndMs: stats.lastApiEndMs,
-			cache: cacheState(stats.lastApiEndMs, stats.lastContextResetMs, now, CACHE),
+			cache: cacheState(stats.lastCacheMs, stats.lastContextResetMs, now, cacheTtl(stats.cacheLongRetention, LONG_CACHE)),
 			context: { usedTokens, windowTokens, percent },
 			modelName: ctx.model?.id || "no-model",
 			providerId: ctx.model?.provider,
