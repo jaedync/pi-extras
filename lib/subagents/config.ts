@@ -56,8 +56,11 @@ export function parseConfig(section: Record<string, unknown>): SubagentsConfig {
 	return typeof model === "string" && model.trim().length > 0 ? { ...config, defaultModel: model.trim() } : config;
 }
 
-export function loadConfig(file?: string): SubagentsConfig {
-	return parseConfig(file ? readSection("subagents", file) : readSection("subagents"));
+/** `PI_SUBAGENTS_MAX_DEPTH` overrides the file for one run; nesting is experimental. */
+export function loadConfig(file?: string, env: NodeJS.ProcessEnv = process.env): SubagentsConfig {
+	const section = file ? readSection("subagents", file) : readSection("subagents");
+	const depth = Number(env.PI_SUBAGENTS_MAX_DEPTH);
+	return parseConfig(Number.isInteger(depth) && depth >= 1 ? { ...section, maxDepth: depth } : section);
 }
 
 function readCapped(path: string): string | null {

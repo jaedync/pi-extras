@@ -23,7 +23,9 @@ import { MAIN, USER } from "../lib/subagents/names.ts";
 import { type InspectorHost, openAgentInspector } from "../lib/subagents/inspector.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, messageResultRow, rememberAgent, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { markRow } from "../lib/tool-row.ts";
-import { appendRunLog, runLogEntry, runLogPath } from "../lib/subagents/runlog.ts";
+import { appendRunLog, runLogEntry, runLogPath, statsByModel, statsText } from "../lib/subagents/runlog.ts";
+import { formatTime } from "../lib/band/band.ts";
+import { formatMoney } from "../lib/status-plus-logic.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
@@ -269,16 +271,21 @@ export default function subagents(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("subagents", {
-		description: "Inspect subagents (/subagents [name]), stop them (stop <name> | stop all), or edit the model guide (guide)",
+		description: "Inspect subagents (/subagents [name]), stop them (stop <name> | stop all), edit the model guide (guide), or see runs by model (stats)",
 		getArgumentCompletions: (prefix: string) => {
 			const names = state?.team.list().map((record) => record.name) ?? [];
-			return ["guide", "stop all", ...names, ...names.map((name) => `stop ${name}`)]
+			return ["guide", "stats", "stop all", ...names, ...names.map((name) => `stop ${name}`)]
 				.filter((value) => value.startsWith(prefix))
 				.map((value) => ({ value, label: value }));
 		},
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const [verb, ...rest] = args.trim().split(/\s+/);
 			if (verb === "guide") return editGuide(ctx);
+			if (verb === "stats") {
+				const file = runLogPath(sdk.getAgentDir());
+				const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+				return ctx.ui.notify(`Subagent runs by model (${file}):\n${statsText(statsByModel(lines), formatTime, formatMoney)}`, "info");
+			}
 			if (!state) return ctx.ui.notify("Subagents are not active in this session.", "info");
 			if (verb === "stop") {
 				const target = rest.join(" ");

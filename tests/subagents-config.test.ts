@@ -22,7 +22,9 @@ test("config reads the subagents section of pi-extras.json", () => {
 		const file = join(dir, "pi-extras.json");
 		writeFileSync(file, JSON.stringify({ subagents: { maxConcurrent: 2 }, other: { maxConcurrent: 9 } }));
 		assert.equal(loadConfig(file).maxConcurrent, 2);
-		assert.deepEqual(loadConfig(join(dir, "missing.json")), DEFAULTS);
+		assert.deepEqual(loadConfig(join(dir, "missing.json"), {}), DEFAULTS);
+		assert.equal(loadConfig(file, { PI_SUBAGENTS_MAX_DEPTH: "2" }).maxDepth, 2);
+		assert.equal(loadConfig(file, { PI_SUBAGENTS_MAX_DEPTH: "zero" }).maxDepth, 1);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -70,4 +72,12 @@ test("a fork digest keeps what was said and one line per tool call, newest first
 	];
 	assert.equal(conversationDigest(entries, describe), "User: Plan the migration\n\nmain: Checking.\n[bash ls]\n\nscout finished");
 	assert.equal(conversationDigest(entries, describe, 30), "(2 earlier entries omitted)\n\nscout finished");
+});
+
+test("run stats total each model's runs, outcomes, time and spend", async () => {
+	const { statsByModel, statsText } = await import("../lib/subagents/runlog.ts");
+	const line = (model: string, state: string, cost: number, durationMs: number) => JSON.stringify({ model, state, usage: { cost }, durationMs, toolCalls: 2 });
+	const stats = statsByModel([line("a/luna", "idle", 0.001, 4_000), line("a/luna", "failed", 0.003, 6_000), "not json", line("b/sol", "idle", 0.02, 30_000)]);
+	assert.deepEqual(stats.map((s) => [s.model, s.runs, s.ok, s.failed]), [["a/luna", 2, 1, 1], ["b/sol", 1, 1, 0]]);
+	assert.equal(statsText(stats, (ms) => `${ms / 1000}s`, (v) => v.toFixed(4)).split("\n")[0], "a/luna     2 runs (1 failed)  avg 5s, 2.0 tools, $0.0020  total $0.0040");
 });
