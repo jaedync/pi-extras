@@ -34,6 +34,7 @@ test("more than six agents collapse into a count", () => {
 test("the rail shows context share, spend and elapsed time", () => {
 	const busy = record("x", { contextTokens: 50_000, contextWindow: 200_000, usage: { ...NO_USAGE, cost: 0.0123 } });
 	assert.equal(text(rowRail(busy, 66_000)), "25%  $0.012  1m 05s");
+	assert.equal(text(rowRail(record("tiny", { usage: { ...NO_USAGE, cost: 0.00041 } }), 2_000)), "$0.00041  1.0s");
 	assert.equal(text(rowRail(record("q", { state: "queued", startedAt: undefined }), 5_000)), "");
 });
 

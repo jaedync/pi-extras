@@ -25,6 +25,8 @@ import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } fro
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget } from "../lib/subagents/widget.ts";
 
+const RECONCILE_MS = 1_000;
+
 const GUIDE_TEMPLATE = `# Subagent model guide
 
 What is true today about which model to use for what. Read at session start
@@ -90,7 +92,10 @@ export default function subagents(pi: ExtensionAPI) {
 		const mail = new MainMail({
 			batchMs: config.batchMs,
 			port: { send: (message, options) => pi.sendMessage(message, options) },
-			onChange: () => widget.update(),
+			onChange: () => {
+				widget.update();
+				watchPending(ctx);
+			},
 		});
 		// The launcher and tools need the team, and the team needs the launcher.
 		let tools!: ToolContext;
@@ -165,6 +170,30 @@ export default function subagents(pi: ExtensionAPI) {
 		}
 	});
 
+	// A note appended without waking main raises no event, so look for it.
+	let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+	const reconcile = (ctx: ExtensionContext) => {
+		if (!state) return;
+		try {
+			state.mail.reconcile(ctx.sessionManager.getBranch());
+		} catch {
+			// A stale context after a session switch; the next session starts clean.
+		}
+	};
+	const watchPending = (ctx: ExtensionContext) => {
+		if (reconcileTimer || !state || state.mail.pending().length === 0) return;
+		reconcileTimer = setInterval(() => {
+			reconcile(ctx);
+			if (!state || state.mail.pending().length === 0) {
+				if (reconcileTimer) clearInterval(reconcileTimer);
+				reconcileTimer = null;
+			}
+		}, RECONCILE_MS);
+	};
+	pi.on("turn_end", async (_event, ctx) => reconcile(ctx));
+	pi.on("agent_end", async (_event, ctx) => reconcile(ctx));
+	pi.on("agent_settled", async (_event, ctx) => reconcile(ctx));
+
 	pi.on("message_end", (event) => {
 		const message = (event as { message?: { role?: string; customType?: string; details?: { id?: unknown } } }).message;
 		if (message?.role !== "custom" || (message.customType !== MESSAGE_TYPE && message.customType !== REPORT_TYPE)) return;
@@ -172,6 +201,8 @@ export default function subagents(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		if (reconcileTimer) clearInterval(reconcileTimer);
+		reconcileTimer = null;
 		widget.detach();
 		await state?.close();
 		state = null;

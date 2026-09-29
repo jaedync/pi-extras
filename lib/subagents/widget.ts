@@ -10,6 +10,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { formatTime, renderBand, type BandPhase, type Seg } from "../band/band.ts";
 import { everyFrame } from "../band/clock.ts";
 import { paletteFrom } from "../band/palette.ts";
+import { formatMoney } from "../status-plus-logic.ts";
 import type { PendingItem } from "./deliver.ts";
 import { MAIN } from "./names.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
@@ -86,7 +87,7 @@ export function rowRail(record: AgentRecord, now: number): Seg[] {
 	if (record.contextTokens && record.contextWindow) {
 		rail.push({ text: `${Math.round((100 * record.contextTokens) / record.contextWindow)}%`, color: "dim" }, { text: "  ", color: "dim" });
 	}
-	if (record.usage.cost > 0) rail.push({ text: `$${record.usage.cost.toFixed(record.usage.cost < 1 ? 3 : 2)}`, color: "dim" }, { text: "  ", color: "dim" });
+	if (record.usage.cost > 0) rail.push({ text: `$${formatMoney(record.usage.cost)}`, color: "dim" }, { text: "  ", color: "dim" });
 	if (record.state !== "queued") rail.push({ text: formatTime((record.endedAt ?? now) - (record.startedAt ?? now)), color: "text" });
 	return rail;
 }

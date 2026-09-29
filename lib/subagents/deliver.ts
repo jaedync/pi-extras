@@ -17,6 +17,8 @@ import type { AgentRecord, MainDelivery } from "./types.ts";
 
 export const MESSAGE_TYPE = "subagent-message";
 export const REPORT_TYPE = "subagent-report";
+/** How far back a reconcile looks; pending messages are always recent. */
+export const RECONCILE_WINDOW = 200;
 
 export interface OutgoingMessage {
 	customType: string;
@@ -114,6 +116,21 @@ export class MainMail {
 		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
 		this.send({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } },
 			wakes ? { triggerTurn: true, deliverAs: "steer" } : { triggerTurn: false });
+	}
+
+	/**
+	 * Acknowledges every pending id found among recent transcript entries. Pi
+	 * appends a message that doesn't wake it without telling extensions, so the
+	 * transcript is the only witness.
+	 */
+	reconcile(entries: readonly unknown[]): void {
+		if (this.pendingItems.size === 0) return;
+		for (const entry of entries.slice(-RECONCILE_WINDOW)) {
+			const e = entry as { type?: string; customType?: string; details?: { id?: unknown } };
+			if (e.type === "custom_message" && (e.customType === MESSAGE_TYPE || e.customType === REPORT_TYPE) && typeof e.details?.id === "string") {
+				this.acknowledge(e.details.id);
+			}
+		}
 	}
 
 	/** Pi appended the message with this id to the transcript. */

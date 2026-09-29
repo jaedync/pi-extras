@@ -4,6 +4,7 @@
  * against the run log without touching the plumbing.
  */
 import { formatElapsed } from "../shell-jobs-widget.ts";
+import { formatMoney } from "../status-plus-logic.ts";
 import { MAIN } from "./names.ts";
 import type { AgentRecord } from "./types.ts";
 
@@ -26,7 +27,7 @@ export function questionText(from: string, text: string): string {
 }
 
 export function spend(record: Pick<AgentRecord, "usage">): string {
-	return record.usage.cost > 0 ? `, $${record.usage.cost.toFixed(record.usage.cost < 0.1 ? 4 : 2)}` : "";
+	return record.usage.cost > 0 ? `, $${formatMoney(record.usage.cost)}` : "";
 }
 
 function duration(record: AgentRecord, now: number): string {

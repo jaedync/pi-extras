@@ -38,6 +38,15 @@ test("everything stays pending until Pi appends it", () => {
 	assert.equal(box.pending().length, 0);
 });
 
+test("messages Pi appended silently are found in the transcript", () => {
+	const { box, sent } = mail();
+	box.deliver({ kind: "note", from: "scout", text: "one" });
+	box.deliver({ kind: "note", from: "scout", text: "two" });
+	const [first] = sent.map((s) => s.message);
+	box.reconcile([{ type: "message" }, { type: "custom_message", customType: first!.customType, details: first!.details }]);
+	assert.deepEqual(box.pending().map((item) => item.text), ["two"]);
+});
+
 test("reports close together become one message and one turn", async () => {
 	const { box, sent } = mail(20);
 	box.deliver({ kind: "report", record: record("alpha") });
