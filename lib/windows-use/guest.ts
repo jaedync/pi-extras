@@ -230,6 +230,13 @@ export class Guest {
 		if (!(await this.waitConnect(this.timing.logonWaitMs, signal))) throw cannot("it didn't come back after a restart");
 	}
 
+	/** Windows-MCP's tools as it lists them, with their input schemas. */
+	async tools(signal?: AbortSignal): Promise<{ name?: unknown; inputSchema?: { properties?: Record<string, unknown>; required?: readonly unknown[] } }[]> {
+		await this.ensureAnswering(signal);
+		const listed = await this.request("tools/list", {}, signal, QUICK_MS) as { tools?: unknown };
+		return Array.isArray(listed?.tools) ? listed.tools : [];
+	}
+
 	/** Signs in at the console, whatever the screen shows. */
 	async login(signal?: AbortSignal): Promise<void> {
 		await this.running(signal);

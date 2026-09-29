@@ -53,7 +53,8 @@ export function toMcp(method: string, args: Args): { tool: string; args: Args } 
 			return { tool: "PowerShell", args: defined({ command: args.command, timeout: args.timeout }) };
 		case "call": {
 			if (typeof args.tool !== "string" || !args.tool) throw new Error("win.call needs { vm, tool, args }");
-			return { tool: args.tool, args: args.args && typeof args.args === "object" ? args.args as Args : {} };
+			if (args.args !== undefined && (!args.args || typeof args.args !== "object" || Array.isArray(args.args))) throw new Error("win.call's args must be an object of the tool's arguments, such as { url: \"https://example.com\" }");
+			return { tool: args.tool, args: (args.args ?? {}) as Args };
 		}
 		default: throw new Error(`unknown method win.${method}`);
 	}
@@ -103,6 +104,47 @@ function unlist(text: string): string {
 		return text;
 	}
 }
+/** UI Automation's "an event was unable to invoke any of the subscribers" (0x80040201), which App's wait for a new window can hit. */
+const UIA_EVENT_FAILED = /-2147220991|unable to invoke any of the subscribers/;
+const firstLine = (text: string) => text.split("\n")[0]!.trim();
+
+/** Windows-MCP refusing a call it can't match to a tool or the tool's arguments. */
+const TOOL_MISUSE = /^Unknown tool|validation error/i;
+
+/**
+ * win.call: any Windows-MCP tool by name. Agents guess at names and arguments
+ * the description doesn't list, so a refusal comes back with the server's own
+ * list of tools and their arguments.
+ */
+async function anyTool(guest: Guest, tool: string, args: Args, signal?: AbortSignal): Promise<ToolResult> {
+	let refusal: string;
+	try {
+		const result = await guest.tool(tool, args, signal);
+		if (!result.isError || !TOOL_MISUSE.test(textOf(result))) return result;
+		refusal = textOf(result);
+	} catch (error) {
+		if (!(error instanceof Error) || !TOOL_MISUSE.test(error.message)) throw error;
+		refusal = error.message;
+	}
+	const reason = refusal.replace(/\s*For further information[\s\S]*$/, "").replace(/\s+/g, " ").trim();
+	const tools = await guest.tools(signal).then(toolSignatures, () => "");
+	throw new Error(tools ? `${reason}. Windows-MCP's tools (? marks optional arguments): ${tools}` : reason);
+}
+
+/** "Name(required, optional?)" for each tool Windows-MCP lists, by name. */
+function toolSignatures(tools: readonly { name?: unknown; inputSchema?: { properties?: Record<string, unknown>; required?: readonly unknown[] } }[]): string {
+	return tools
+		.filter((tool): tool is typeof tool & { name: string } => typeof tool.name === "string")
+		.map((tool) => {
+			const required = new Set(tool.inputSchema?.required ?? []);
+			const params = Object.keys(tool.inputSchema?.properties ?? {}).filter((name) => name !== "ctx");
+			const ordered = [...params.filter((name) => required.has(name)), ...params.filter((name) => !required.has(name)).map((name) => `${name}?`)];
+			return `${tool.name}(${ordered.join(", ")})`;
+		})
+		.sort()
+		.join(", ");
+}
+
 /** The lock screen in front, as a snapshot's window table names it. */
 const LOCK_SCREEN = /Focused Window:\s*\n[^\n]*\n-[- ]*\n\s*Windows Default Lock Screen\s/;
 const JSON_METHODS = new Set(["vms", "start", "console.ocr"]);
@@ -270,7 +312,11 @@ export class WinSession {
 	private async guestTool(vm: string, method: string, args: Args, signal?: AbortSignal): Promise<ToolResult> {
 		const call = toMcp(method, args);
 		const guest = this.guest(vm);
+		if (method === "call") return anyTool(guest, call.tool, call.args, signal);
 		const result = await guest.tool(call.tool, call.args, signal);
+		if (method === "app" && result.isError && UIA_EVENT_FAILED.test(textOf(result)) && (args.mode ?? "launch") === "launch") {
+			throw new Error(`${String(args.name)} may have opened: Windows-MCP started it, then failed to find its window through UI Automation (${firstLine(textOf(result))}). Take a snapshot before launching it again.`);
+		}
 		if (!IMAGE_METHODS.has(method)) return result;
 		if (LOCK_SCREEN.test(textOf(result))) {
 			// Locked since the last lock check: check again, which signs in, and look again.

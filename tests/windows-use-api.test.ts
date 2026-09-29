@@ -283,6 +283,40 @@ test("a snapshot of the lock screen, locked since the last check, is taken again
 	assert.deepEqual(log, ["A Snapshot", "A recheck", "A Snapshot"]);
 });
 
+test("win.call with a tool Windows-MCP lacks, or wrong arguments, fails listing its tools and their arguments", async () => {
+	const guest = (vm: string) => ({
+		vm,
+		async tool(name: string, args: Record<string, unknown>) {
+			if (name === "Evaluate") throw new Error("Unknown tool: 'Evaluate'");
+			if (name === "Scrape" && !args.url) return { content: [{ type: "text", text: "1 validation error for call[scrape_tool]\nurl\n  Missing required argument [type=missing_argument, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing_argument" }], isError: true };
+			return { content: [{ type: "text", text: `${name} done` }], isError: false };
+		},
+		async tools() {
+			return [
+				{ name: "Scrape", inputSchema: { properties: { url: {}, query: {}, use_dom: {}, ctx: {} }, required: ["url"] } },
+				{ name: "Clipboard", inputSchema: { properties: { mode: {}, text: {} }, required: ["mode"] } },
+			];
+		},
+		forget() {},
+		recheck() {},
+	}) as unknown as Guest;
+	const session = new WinSession(fakeHost().host, guest);
+	await assert.rejects(session.call("call", { vm: "A", tool: "Evaluate", args: {} }, {}), /Unknown tool: 'Evaluate'\. Windows-MCP's tools \(\? marks optional arguments\): Clipboard\(mode, text\?\), Scrape\(url, query\?, use_dom\?\)$/);
+	await assert.rejects(session.call("call", { vm: "A", tool: "Scrape", args: {} }, {}), /1 validation error for call\[scrape_tool\] url Missing required argument[^\n]*Scrape\(url, query\?, use_dom\?\)$/);
+	await assert.rejects(session.call("call", { vm: "A", tool: "Scrape", args: "https://example.com" }, {}), /win\.call's args must be an object/);
+	assert.deepEqual((await session.call("call", { vm: "A", tool: "Scrape", args: { url: "https://example.com" } }, {})).content, [{ type: "text", text: "Scrape done" }]);
+});
+
+test("an app launch whose window check fails in UI Automation says the app may be open, so it isn't launched twice", async () => {
+	const guest = (vm: string) => ({
+		vm,
+		async tool() { return { content: [{ type: "text", text: "Error calling tool 'App': (-2147220991, 'An event was unable to invoke any of the subscribers', (None, None, None, 0, None))" }], isError: true }; },
+		forget() {},
+		recheck() {},
+	}) as unknown as Guest;
+	await assert.rejects(new WinSession(fakeHost().host, guest).call("app", { vm: "A", mode: "launch", name: "Microsoft Edge" }, {}), /Microsoft Edge may have opened[\s\S]*snapshot before launching it again/);
+});
+
 test("win.uac answers a prompt through the console and waits for it to close; it never types a password", async () => {
 	const { host, calls } = fakeHost();
 	const answered = await new WinSession(host, secureDesktop([], 2), undefined, async () => {}).call("uac", { vm: "A", answer: "yes" }, {});
