@@ -354,6 +354,14 @@ is usable and repairs what it can, and the result says what it did:
   or a missing Hyper-V heartbeat.
 - A VM that is off or saved is left alone; `win.start({ vm })` starts it.
 
+`win.console.ocr({ vm })` reads the screen's text with Windows OCR on the
+host, as lines of `(x,y) text` whose centers can be clicked. It covers what
+the UI tree can't describe, such as custom-drawn windows, MMC consoles, UAC
+and sign-in screens, and needs no model that takes images. A guest display
+that went dark is woken with Shift before recovery checks the lock and before
+console screenshots and OCR, since Windows-MCP otherwise captures an old
+picture of it.
+
 An app that asks for administrator rights raises a UAC prompt on the secure
 desktop, where Windows-MCP can't see: a snapshot then fails and says a prompt
 is up, and `win.uac({ vm, answer: "yes" })` (or `"no"`) answers it from the

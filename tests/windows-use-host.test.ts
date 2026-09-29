@@ -75,9 +75,15 @@ test("the host closes itself after sitting idle", async () => {
 test("host.ps1 stays clear of what antivirus holds up, and fills in every bootstrap placeholder", () => {
 	const dir = new URL("../lib/windows-use/", import.meta.url);
 	const host = readFileSync(new URL("host.ps1", dir), "utf8");
+	const ocr = readFileSync(new URL("ocr.psm1", dir), "utf8");
 	const bootstrap = readFileSync(new URL("guest-bootstrap.ps1", dir), "utf8");
 	// Defender held host.ps1 for up to half a minute over these; they live in Node instead.
-	for (const pattern of [/\biex\b/i, /Invoke-Expression/i, /FromBase64String/i, /System\.Drawing/i, /Marshal/i]) assert.doesNotMatch(host, pattern);
+	for (const pattern of [/\biex\b/i, /Invoke-Expression/i, /FromBase64String/i, /System\.Drawing/i, /Marshal/i]) {
+		assert.doesNotMatch(host, pattern);
+		assert.doesNotMatch(ocr, pattern);
+	}
+	assert.match(host, /ocr\s+= \{ param\(\$p\) Get-FrameText/, "the OCR module loads only when asked for");
+	assert.doesNotMatch(host.replace(/function Get-FrameText[\s\S]*?\n\}/, ""), /ocr\.psm1/);
 	const placeholders = [...new Set(bootstrap.match(/__[A-Z]+__/g))].sort();
 	assert.deepEqual(placeholders, ["__KEY__", "__PORT__", "__RUN__"]);
 	for (const placeholder of placeholders) assert.ok(host.includes(`.Replace('${placeholder}'`), `${placeholder} is never filled in`);

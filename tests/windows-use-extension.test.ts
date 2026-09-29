@@ -58,6 +58,7 @@ test("the description names the VMs a limited session may use, and the default w
 	assert.match(toolDescription(["Win11-Lab"]), /This session may use only this VM: Win11-Lab\. Calls may leave out vm; it defaults to "Win11-Lab"\./);
 	assert.match(toolDescription(["Win11-Lab", "Test"]), /This session may use only these VMs: Win11-Lab, Test\./);
 	assert.match(toolDescription(), /win\.powershell\(\{ vm, command, timeout\? \}\) -> \{ output, status \}/);
+	assert.doesNotMatch(toolDescription(), /[\t\r]|"\n"/, "escapes in the description reach the model as written, not as a tab or a line break");
 });
 
 test("recovery notes from the run follow what the script emitted; stale ones are dropped first", async () => {
@@ -71,7 +72,7 @@ test("a model that can't take images gets a note instead of the images it emitte
 	const withImage = (): CodeResult => ({ ...ok("tree"), content: [{ type: "text", text: "tree" }, { type: "image", data: "IMG", mimeType: "image/png" }] });
 	const { tools } = harness(async () => withImage());
 	const textOnly = await tools[0].execute("id", { code: "x" }, undefined, undefined, { model: { input: ["text"] } });
-	assert.deepEqual(textOnly.content, [{ type: "text", text: "tree" }, { type: "text", text: "(1 emitted image left out: the current model doesn't take images. Read win.snapshot's text instead.)" }]);
+	assert.deepEqual(textOnly.content, [{ type: "text", text: "tree" }, { type: "text", text: "(1 emitted image left out: the current model doesn't take images. Read win.snapshot's text or win.console.ocr instead.)" }]);
 	const vision = await tools[0].execute("id", { code: "x" }, undefined, undefined, { model: { input: ["text", "image"] } });
 	assert.equal(vision.content[1].type, "image");
 });

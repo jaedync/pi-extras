@@ -8,19 +8,23 @@
 import { clean, type CallTarget } from "../computer-use/describe.ts";
 import type { ScriptApi } from "../computer-use/executor.ts";
 import type { CallOptions, ToolResult } from "../computer-use/session.ts";
-import { readFrame, toPng } from "./frame.ts";
+import { isDark, readFrame, toPng, type Frame } from "./frame.ts";
+import { ocrItems, ocrText, readOcr, type Region } from "./ocr.ts";
 import { Guest, wait, type HostCalls } from "./guest.ts";
 import { answerUac, captureFailure, SCREEN_GRAB_FAILED, typeAtFocus } from "./guest-input.ts";
 import { textOf, textResult } from "./result.ts";
+import { Screen } from "./screen.ts";
 import { compactSnapshot } from "./snapshot.ts";
 
 export const GUEST_METHODS = ["snapshot", "screenshot", "click", "type", "scroll", "move", "key", "app", "wait_for", "powershell", "call"] as const;
-export const CONSOLE_METHODS = ["console.screenshot", "console.click", "console.move", "console.drag", "console.scroll", "console.type", "console.key", "console.cad"] as const;
+export const CONSOLE_METHODS = ["console.screenshot", "console.ocr", "console.click", "console.move", "console.drag", "console.scroll", "console.type", "console.key", "console.cad"] as const;
 export const METHODS = ["vms", "sleep", "start", "login", "setup", "uac", ...GUEST_METHODS, ...CONSOLE_METHODS] as const;
 /** Longest win.sleep: long enough for a boot or sign-in to settle, short of hiding a hung script. */
 const MAX_SLEEP_MS = 60_000;
 /** Longest PowerShell timeout, in seconds: the guest's reply must arrive inside the host's 10-minute call limit. */
 const MAX_SHELL_TIMEOUT_S = 540;
+/** A display woken with a key is back within a second or so. */
+const WAKE_SETTLE_MS = 1_500;
 
 type Args = Record<string, unknown>;
 
@@ -72,6 +76,7 @@ function detail(method: string, args: Args): string[] {
 		case "powershell": return [clean(args.command, 60)];
 		case "call": return [clean(args.tool, 24)];
 		case "console.click": return [point(args), typeof args.button === "string" && args.button !== "left" ? clean(args.button, 8) : "", args.double === true ? "×2" : ""];
+		case "console.ocr": return [typeof args.width === "number" ? `${point(args)} ${args.width}×${args.height}` : ""];
 		case "console.move": return [point(args)];
 		case "console.drag": return [`${point(args)} → ${point(args, "x2", "y2")}`];
 		case "console.scroll": return [point(args)];
@@ -98,7 +103,7 @@ function unlist(text: string): string {
 		return text;
 	}
 }
-const JSON_METHODS = new Set(["vms", "start"]);
+const JSON_METHODS = new Set(["vms", "start", "console.ocr"]);
 
 /** Windows-MCP wraps PowerShell output as "Response: <stdout, or stderr when stdout is empty>\nStatus Code: <exit code>". */
 function shellResult(text: string): { output: string; status: number | null } {
@@ -146,6 +151,17 @@ function requireVm(method: string, args: Args): string {
 export function vmAllowlist(env: Readonly<Record<string, string | undefined>>): readonly string[] | undefined {
 	const names = (env.PI_WINDOWS_USE_VMS ?? "").split(",").map((name) => name.trim()).filter(Boolean);
 	return names.length > 0 ? names : undefined;
+}
+
+/** The rectangle a console.ocr call names, if it names one. */
+function region(args: Args): Region | undefined {
+	const keys = ["x", "y", "width", "height"] as const;
+	const given = keys.filter((key) => args[key] !== undefined);
+	if (given.length === 0) return undefined;
+	if (given.length < keys.length || !keys.every((key) => typeof args[key] === "number" && Number.isFinite(args[key]))) {
+		throw new Error("win.console.ocr needs x, y, width and height together, as numbers, or none of them for the whole screen");
+	}
+	return { x: args.x as number, y: args.y as number, width: args.width as number, height: args.height as number };
 }
 
 function number(method: string, args: Args, ...keys: string[]): void {
@@ -219,8 +235,17 @@ export class WinSession {
 			case "uac": return answerUac(this.guest(vm), this.host, args.answer, this.sleep, signal);
 			case "setup": await this.guest(vm).setup(signal); return textResult(`Windows-MCP is ready on ${vm}`);
 			case "console.screenshot": {
-				const frame = readFrame(await this.host.call("frame", { vm }, { signal }));
+				let frame = readFrame(await this.host.call("frame", { vm }, { signal }));
+				if (isDark(frame) && await this.wake(vm, signal, frame)) frame = readFrame(await this.host.call("frame", { vm }, { signal }));
 				return { content: [{ type: "text", text: JSON.stringify({ width: frame.width, height: frame.height }) }, { type: "image", data: toPng(frame).toString("base64"), mimeType: "image/png" }], isError: false };
+			}
+			case "console.ocr": {
+				const area = region(args);
+				const read = async () => readOcr(await this.host.call("ocr", { vm }, { signal, timeoutMs: 60_000 }));
+				let ocr = await read();
+				if (ocr.lines.length === 0 && await this.wake(vm, signal)) ocr = await read();
+				const items = ocrItems(ocr.lines, area);
+				return json({ width: ocr.width, height: ocr.height, text: ocrText(items), items });
 			}
 			case "console.click": number(method, args, "x", "y"); return this.console("click", { vm, x: args.x, y: args.y, button: args.button, double: args.double === true }, signal);
 			case "console.move": number(method, args, "x", "y"); return this.console("move", { vm, x: args.x, y: args.y }, signal);
@@ -247,6 +272,13 @@ export class WinSession {
 		// Windows-MCP answers with a line of text; an empty tree would read as an empty screen.
 		if (IMAGE_METHODS.has(method) && SCREEN_GRAB_FAILED.test(textOf(result))) throw new Error(await captureFailure(guest, signal));
 		return result;
+	}
+
+	/** Wakes a display that went to sleep, since a black console shows and reads nothing. */
+	private async wake(vm: string, signal?: AbortSignal, seen?: Frame): Promise<boolean> {
+		const woke = await new Screen({ host: this.host, vm, sleep: this.sleep, settleMs: WAKE_SETTLE_MS }).wake(signal, seen);
+		if (woke) this.notes.push(`${vm}: woke the display, which had gone dark`);
+		return woke;
 	}
 
 	private async console(method: string, params: Args, signal?: AbortSignal, timeoutMs?: number): Promise<ToolResult> {

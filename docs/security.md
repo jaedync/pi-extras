@@ -169,6 +169,10 @@ clicked, whatever the guest reports. It never clicks a nearly black screen
 (Windows starting, restarting or installing updates), and stops after two
 clicks.
 
+`win.console.ocr` runs Windows OCR on the host over a console frame, locally,
+through a PowerShell module (`ocr.psm1`) the host loads on first use. Its text
+enters the conversation only when the agent's script emits it.
+
 `win.uac` answers UAC consent prompts with the console keyboard, which
 reaches the secure desktop (the agent could press the same keys through
 `win.console.key`). That elevates whatever asked, so treat an agent with

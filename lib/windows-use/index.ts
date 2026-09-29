@@ -33,10 +33,10 @@ const DESCRIPTION = `Run JavaScript that operates Windows Hyper-V virtual machin
 
 Guest methods run through Windows-MCP inside the VM (UI Automation tree, input, PowerShell). Every method takes { vm: "<VM name>" }. The first call to a VM signs it in, unlocks it or installs Windows-MCP as needed, and says so in the result.
 - win.vms() -> [{ name, state, running, installed, ip }]: the VMs this session may use
-- win.snapshot({ vm, use_vision?, use_ui_tree?, use_dom? }) -> { text, screenshot }: text lists the windows, then the UI tree: one element per line with its (x, y) center, type, "name" and state, indented under its container. use_dom: true lists a browser page's elements instead
+- win.snapshot({ vm, use_vision?, use_ui_tree?, use_dom? }) -> { text, screenshot }: text lists the windows, then the UI tree: one element per line with its (x, y) center, type, "name" and state, indented under its container. A window with nothing under it draws its own controls: read it with win.console.ocr. use_dom: true lists a browser page's elements instead
 - win.screenshot({ vm }) -> { text, screenshot }: fast, no UI tree
 - win.click({ vm, x, y, button?: "left"|"right"|"middle", clicks? })
-- win.type({ vm, text, x?, y?, clear?, enter? }): with x, y it clicks there first, then types (any text); without, it types into the focused control by pasting, restoring the clipboard after. "\n" presses Enter and "\t" Tab, as typing would. clear: true replaces the field's text; enter: true presses Enter after
+- win.type({ vm, text, x?, y?, clear?, enter? }): with x, y it clicks there first, then types (any text); without, it types into the focused control by pasting, restoring the clipboard after. "\\n" presses Enter and "\\t" Tab, as typing would. clear: true replaces the field's text; enter: true presses Enter after
 - win.scroll({ vm, x?, y?, direction?: "up"|"down"|"left"|"right", amount?, horizontal? })
 - win.move({ vm, x, y, drag?, from?: [x, y] })
 - win.key({ vm, keys }): e.g. "ctrl+c", "win+r", "enter"
@@ -44,8 +44,9 @@ Guest methods run through Windows-MCP inside the VM (UI Automation tree, input, 
 - win.wait_for({ vm, condition, text?, window_name?, timeout? })
 - win.powershell({ vm, command, timeout? }) -> { output, status }: output is stdout (stderr when stdout is empty), status the exit code; runs as the signed-in user; timeout in seconds, default 30, at most 540
 - win.call({ vm, tool, args }): any other Windows-MCP tool (Clipboard, Process, FileSystem, Registry, Scrape, MultiSelect, MultiEdit, Wait)
-Console methods drive the VM's screen, keyboard and mouse from the host; they also work on lock, sign-in and UAC screens. Coordinates are guest pixels.
+Console methods drive the VM's screen, keyboard and mouse from the host; they also work on lock, sign-in and UAC screens. Coordinates are guest pixels. A display that went dark is woken with Shift first.
 - win.console.screenshot({ vm }) -> { text: '{"width","height"}', screenshot }
+- win.console.ocr({ vm, x?, y?, width?, height? }) -> { text, items: [{ text, x, y }] }: the screen's text through Windows OCR, one "(x,y) text" per line, each center clickable with win.click or win.console.click. It reads what the UI tree can't: custom-drawn windows, MMC consoles, UAC and sign-in screens. x, y, width and height limit it to a rectangle
 - win.console.click({ vm, x, y, button?, double? }), win.console.move/drag({ vm, x, y, x2?, y2? }), win.console.scroll({ vm, x, y, amount? })
 - win.console.type({ vm, text }) (US keyboard layout; "\\n" presses Enter), win.console.key({ vm, keys }), win.console.cad({ vm })
 - win.uac({ vm, answer: "yes"|"no" }) answers a UAC prompt, as when an app asks for administrator rights. It shows on the secure desktop, where Windows-MCP can't see, so snapshots fail meanwhile and say so. It never types a password
@@ -103,7 +104,7 @@ type Content = CodeResult["content"];
 export function forModel(content: Content, model?: { readonly input: readonly string[] }): Content {
 	const images = content.filter((block) => block.type === "image").length;
 	if (!model || model.input.includes("image") || images === 0) return content;
-	const note = `(${images} emitted image${images === 1 ? "" : "s"} left out: the current model doesn't take images. Read win.snapshot's text instead.)`;
+	const note = `(${images} emitted image${images === 1 ? "" : "s"} left out: the current model doesn't take images. Read win.snapshot's text or win.console.ocr instead.)`;
 	return [...content.filter((block) => block.type !== "image"), { type: "text", text: note }];
 }
 

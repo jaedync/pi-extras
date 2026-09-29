@@ -156,7 +156,7 @@ test("a ready guest runs the tool after one lock check, and nothing else", async
 	const { g, log, notes } = guest({ running: true, installed: true, session: true, locked: false, server: true });
 	const result = await g.tool("Click", { label: 3 });
 	assert.match(text(result), /^Click \{"label":3\}$/);
-	assert.deepEqual(log, ["status", "mcp initialize", "mcp lock-check", "mcp Click"]);
+	assert.deepEqual(log, ["status", "mcp initialize", "frame", "mcp lock-check", "mcp Click"], "one small frame to see the display is awake");
 	assert.deepEqual(notes, []);
 });
 
@@ -285,6 +285,21 @@ test("a tool call that hangs fails at its own limit with what to try, and is not
 	await assert.rejects(g.tool("App", { mode: "launch", name: "x" }), /didn't answer App within 120 s; it may still be running in the guest, so it was not repeated/);
 	await g.tool("Click", { loc: [3, 4] });
 	assert.ok(log.lastIndexOf("mcp initialize") > log.lastIndexOf("mcp App"), "the next call reconnects first");
+});
+
+test("a display that went to sleep is woken with Shift before the tool runs, since Windows-MCP would read a stale screen", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true };
+	const { g, log, notes, advance } = guest(world);
+	await g.tool("Click", { loc: [1, 2] });
+	assert.ok(!log.includes("key shift"), "an awake display gets no key");
+	world.asleep = true;
+	advance(60_000);
+	await g.tool("Snapshot", {});
+	assert.ok(!world.asleep);
+	const shift = log.indexOf("key shift");
+	assert.ok(shift > 0 && shift < log.lastIndexOf("mcp Snapshot"), "woken before the snapshot");
+	assert.ok(!log.includes("login") && !log.includes("key win"), "an unlocked desktop is only woken, never clicked or given the Windows key");
+	assert.deepEqual(notes, ["Win11: woke the display, which had gone dark"]);
 });
 
 test("explicit login and setup are available to the script", async () => {

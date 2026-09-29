@@ -37,6 +37,10 @@ function fakeHost(): { host: HostCalls; calls: [string, Record<string, unknown>]
 				calls.push([method, params]);
 				if (method === "vms") return [{ name: "A", state: "running", running: true, installed: true, ip: "10.0.0.2" }];
 				if (method === "frame") return hostFrame({ taskbar: true, width: 64, height: 48 });
+				if (method === "ocr") return { width: 64, height: 48, lines: [
+					{ words: [{ text: "File", x: 2, y: 2, w: 8, h: 6 }, { text: "Edit", x: 20, y: 2, w: 8, h: 6 }] },
+					{ words: [{ text: "Platform", x: 2, y: 30, w: 20, h: 6 }, { text: "Manager", x: 24, y: 30, w: 18, h: 6 }] },
+				] };
 				return { ok: true };
 			},
 		},
@@ -259,4 +263,60 @@ test("win.uac answers a prompt through the console and waits for it to close; it
 	await assert.rejects(new WinSession(host, secureDesktop([], 0), undefined, async () => {}).call("uac", { vm: "A", answer: "yes" }, {}), /No UAC prompt is showing on A/);
 	await assert.rejects(new WinSession(host, secureDesktop([], 99), undefined, async () => {}).call("uac", { vm: "A", answer: "yes" }, {}), /still showing.*password/);
 	await assert.rejects(new WinSession(host, secureDesktop([], 1)).call("uac", { vm: "A", answer: "maybe" }, {}), /answer: "yes"/);
+});
+
+test("win.console.ocr reads the console's text as items with click points, optionally in a region", async () => {
+	const { host, calls } = fakeHost();
+	const session = new WinSession(host, fakeGuest([]));
+	const executor = new CodeExecutor({ session, api: WIN_API });
+	const result = await executor.execute(`
+		const all = await win.console.ocr({ vm: "A" });
+		emit(all.text);
+		emit(all.items.find((item) => item.text === "Platform Manager"));
+		const part = await win.console.ocr({ vm: "A", x: 0, y: 20, width: 64, height: 28 });
+		emit(part.text);
+	`, { approve: async () => "deny" });
+	assert.equal(result.error, undefined, JSON.stringify(result.content));
+	assert.deepEqual(result.content.map((block) => block.type === "text" ? block.text : ""), [
+		"(6,5) File\n(24,5) Edit\n(22,33) Platform Manager",
+		JSON.stringify({ text: "Platform Manager", x: 22, y: 33 }, null, 2),
+		"(22,33) Platform Manager",
+	]);
+	assert.deepEqual(calls.map(([method]) => method), ["ocr", "ocr"]);
+	assert.deepEqual(describeWinCall("console.ocr", { vm: "A", x: 0, y: 20, width: 64, height: 28 }), { app: "A", detail: "(0, 20) 64×28" });
+	await assert.rejects(session.call("console.ocr", { vm: "A", width: 10 }, {}), /win\.console\.ocr needs x, y, width and height together/);
+});
+
+/** A host whose display sleeps until a key arrives: black frames and no OCR text meanwhile. */
+function sleepyHost() {
+	const calls: string[] = [];
+	let asleep = true;
+	const host: HostCalls = {
+		async call(method, params = {}) {
+			calls.push(method === "key" ? `key ${params.keys}` : method);
+			if (method === "key") { asleep = false; return { ok: true }; }
+			if (method === "frame") return hostFrame({ taskbar: !asleep, dark: asleep, width: 64, height: 48 });
+			if (method === "ocr") return { width: 64, height: 48, lines: asleep ? [] : [{ words: [{ text: "Start", x: 2, y: 40, w: 10, h: 6 }] }] };
+			throw new Error(`unexpected ${method}`);
+		},
+	};
+	return { host, calls };
+}
+
+test("console.screenshot and console.ocr wake a display that went dark, and say so", async () => {
+	const shot = sleepyHost();
+	const session = new WinSession(shot.host, fakeGuest([]), undefined, async () => {});
+	const result = await session.call("console.screenshot", { vm: "A" }, {});
+	const png = result.content[1];
+	assert.ok(png?.type === "image");
+	assert.deepEqual(shot.calls, ["frame", "key shift", "frame", "frame"]);
+	assert.deepEqual(session.drainNotes(), ["A: woke the display, which had gone dark"]);
+
+	const read = sleepyHost();
+	const reader = new WinSession(read.host, fakeGuest([]), undefined, async () => {});
+	const first = (await reader.call("console.ocr", { vm: "A" }, {})).content[0];
+	const ocr = JSON.parse(first?.type === "text" ? first.text : "{}");
+	assert.equal(ocr.text, "(7,43) Start");
+	assert.deepEqual(read.calls, ["ocr", "frame", "key shift", "frame", "ocr"], "read again once awake");
+	assert.deepEqual(reader.drainNotes(), ["A: woke the display, which had gone dark"]);
 });

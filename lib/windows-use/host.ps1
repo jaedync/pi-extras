@@ -101,7 +101,7 @@ function Start-Machine([string]$vm) {
 # The console as raw RGB565 pixels, scaled by Hyper-V to the requested width.
 # pi-extras encodes and inspects them: pixel work here would get this script
 # held up by antivirus, which watches PowerShell that copies image memory.
-function Get-Frame([string]$vm, [int]$width) {
+function Get-FrameData([string]$vm, [int]$width) {
     $m = Get-RunningMachine $vm
     $size = Get-Resolution $m
     $w = if ($width -gt 0 -and $width -lt $size.w) { $width } else { $size.w }
@@ -111,7 +111,19 @@ function Get-Frame([string]$vm, [int]$width) {
         Where-Object { $_.VirtualSystemType -eq 'Microsoft:Hyper-V:System:Realized' } | Select-Object -First 1
     $r = Invoke-CimMethod -InputObject $vmms -MethodName GetVirtualSystemThumbnailImage -Arguments @{ TargetSystem = $vssd; WidthPixels = [uint16]$w; HeightPixels = [uint16]$h }
     if ($r.ReturnValue -ne 0) { throw (Get-Failure 'GetVirtualSystemThumbnailImage' $r.ReturnValue) }
-    [RawJson]::new('{"width":' + $w + ',"height":' + $h + ',"data":"' + [Convert]::ToBase64String([byte[]]$r.ImageData) + '"}')
+    [pscustomobject]@{ w = $w; h = $h; data = [byte[]]$r.ImageData }
+}
+function Get-Frame([string]$vm, [int]$width) {
+    $f = Get-FrameData $vm $width
+    [RawJson]::new('{"width":' + $f.w + ',"height":' + $f.h + ',"data":"' + [Convert]::ToBase64String($f.data) + '"}')
+}
+
+# The console's text through Windows OCR, at full resolution. The module loads
+# on first use; its warnings and output must stay off stdout, which carries the protocol.
+function Get-FrameText([string]$vm) {
+    Import-Module (Join-Path $PSScriptRoot 'ocr.psm1') -WarningAction SilentlyContinue | Out-Null
+    $f = Get-FrameData $vm 0
+    Read-FrameText $f.w $f.h $f.data
 }
 
 # ---- Input -------------------------------------------------------------------
@@ -352,6 +364,7 @@ $handlers = @{
     status     = { param($p) Get-Status $p.vm }
     start      = { param($p) Start-Machine $p.vm }
     frame      = { param($p) Get-Frame $p.vm $(if ($p.width) { [int]$p.width } else { 0 }) }
+    ocr        = { param($p) Get-FrameText $p.vm }
     click      = { param($p) Send-Click (Get-RunningMachine $p.vm) $p.x $p.y $p.button ([bool]$p.double); @{ ok = $true } }
     move       = { param($p) Set-Pointer (Get-Device (Get-RunningMachine $p.vm) 'Msvm_SyntheticMouse') $p.x $p.y; @{ ok = $true } }
     drag       = { param($p) Send-Drag (Get-RunningMachine $p.vm) $p.x $p.y $p.x2 $p.y2; @{ ok = $true } }

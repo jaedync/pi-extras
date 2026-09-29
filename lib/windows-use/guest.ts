@@ -15,8 +15,8 @@
  * only when the screen isn't busy. So an unlocked desktop is never clicked blind.
  */
 import type { ToolResult } from "../computer-use/session.ts";
-import { hasTaskbar, isDark, readFrame, type Frame } from "./frame.ts";
 import { toResult } from "./result.ts";
+import { Screen, type Look } from "./screen.ts";
 
 export interface HostCallOptions {
 	readonly signal?: AbortSignal;
@@ -75,17 +75,8 @@ export const LAUNCHER = "$b='__PAYLOAD__';$g=New-Object IO.Compression.GZipStrea
  * pending enhanced-session connection runs one in a session of its own.
  */
 const LOCK_CHECK = "$me = (Get-Process -Id $PID).SessionId; if (Get-Process LogonUI -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }) { 'locked' } else { 'unlocked' }";
-/** A thumbnail this wide is plenty to find the taskbar, and quick to fetch. */
-const TASKBAR_FRAME_WIDTH = 320;
 /** Sign in clicks per repair: a second covers a screen that wasn't ready; more won't help a password. */
 const MAX_SIGN_IN_CLICKS = 2;
-/**
- * Console errors while a VM changes state: devices and screen vanish for a
- * moment mid-restart, and input is refused as "invalid state" (32775) or
- * "system not available" (32777). If the VM was saved or turned off instead,
- * the next status check says so.
- */
-const RESETTING = /not found on '|GetVirtualSystemThumbnailImage failed|failed with code 3277[57]\b/;
 /** Longest a single Windows-MCP call may take; PowerShell calls can set their own timeout below it. */
 const TOOL_TIMEOUT_MS = 10 * 60_000;
 /** Most tools answer in a second or two; App launches take up to a dozen. */
@@ -145,6 +136,7 @@ export class Guest {
 	private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 	private readonly now: () => number;
 	private readonly timing: Timing;
+	private readonly screen: Screen;
 	private connected = false;
 	private unlockedAt = Number.NEGATIVE_INFINITY;
 	private nextId = 1;
@@ -157,6 +149,7 @@ export class Guest {
 		this.sleep = options.sleep ?? wait;
 		this.now = options.now ?? (() => Date.now());
 		this.timing = { ...TIMING, ...options.timing };
+		this.screen = new Screen({ host: this.host, vm: this.vm, sleep: this.sleep, settleMs: this.timing.startMenuMs });
 	}
 
 	/**
@@ -263,7 +256,7 @@ export class Guest {
 			if (clicks >= MAX_SIGN_IN_CLICKS) {
 				throw new Error(`${this.vm} still shows no desktop after clicking Sign in (the account may need a password). Look with win.console.screenshot({ vm: ${JSON.stringify(this.vm)} }), get to the desktop with win.console.* input, then try again.`);
 			}
-			if (await this.consoleInput("login", {}, signal)) {
+			if (await this.screen.input("login", {}, signal)) {
 				clicks++;
 				this.note(`${this.vm}: ${reason}signed in at the console`);
 				await this.sleep(this.timing.signInSettleMs, signal);
@@ -277,55 +270,8 @@ export class Guest {
 		return typeof uptime === "number" && uptime * 1000 < this.timing.recentBootMs;
 	}
 
-	/**
-	 * What the console shows. Busy: Windows is starting, restarting or installing
-	 * updates, seen as no heartbeat, a nearly black screen even after a key
-	 * (which also wakes a sleeping display), or devices missing mid-reset.
-	 * Other: neither, such as the lock or sign-in screen.
-	 */
-	private async look(signal?: AbortSignal): Promise<"desktop" | "busy" | "other"> {
-		if ((await this.running(signal)).heartbeat === false) return "busy";
-		let first = await this.frame(signal);
-		if (first && hasTaskbar(first)) return "desktop";
-		if (!first || isDark(first)) {
-			// A sleeping display is black too. Wake it with a key that does nothing by
-			// itself, so the Esc below only ever follows a Start menu it opened.
-			if (!(await this.consoleInput("key", { keys: "shift" }, signal))) return "busy";
-			await this.sleep(this.timing.startMenuMs, signal);
-			first = await this.frame(signal);
-			if (first && hasTaskbar(first)) return "desktop";
-		}
-		if (!(await this.consoleInput("key", { keys: "win" }, signal))) return "busy";
-		await this.sleep(this.timing.startMenuMs, signal);
-		const second = await this.frame(signal);
-		if (!second) return "busy";
-		if (hasTaskbar(second)) {
-			// Start opened over whatever was in front; close it so it is as the user left it.
-			await this.consoleInput("key", { keys: "esc" }, signal);
-			return "desktop";
-		}
-		return isDark(second) ? "busy" : "other";
-	}
-
-	/** A small console frame, or undefined while the VM resets. */
-	private async frame(signal?: AbortSignal): Promise<Frame | undefined> {
-		try {
-			return readFrame(await this.host.call("frame", { vm: this.vm, width: TASKBAR_FRAME_WIDTH }, { signal }));
-		} catch (error) {
-			if (error instanceof Error && RESETTING.test(error.message)) return undefined;
-			throw error;
-		}
-	}
-
-	/** Console input that a VM resetting mid-restart can't take; returns whether it went in. */
-	private async consoleInput(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<boolean> {
-		try {
-			await this.host.call(method, { vm: this.vm, ...params }, { signal });
-			return true;
-		} catch (error) {
-			if (error instanceof Error && RESETTING.test(error.message)) return false;
-			throw error;
-		}
+	private async look(signal?: AbortSignal): Promise<Look> {
+		return this.screen.look((await this.running(signal)).heartbeat, signal);
 	}
 
 	private async waitConnect(ms: number, signal?: AbortSignal, initial?: Bootstrap): Promise<boolean> {
@@ -375,6 +321,7 @@ export class Guest {
 	}
 
 	private async unlock(signal?: AbortSignal): Promise<void> {
+		if (await this.screen.wake(signal)) this.note(`${this.vm}: woke the display, which had gone dark`);
 		// The guest's word alone never triggers a click: reachDesktop clicks only when the console agrees.
 		if (await this.locked(signal)) await this.reachDesktop(signal, "was locked; ");
 		this.unlockedAt = this.now();
