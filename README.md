@@ -67,7 +67,10 @@ the package. Removing it does not remove your credentials or change other packag
   (default `10`), `maxWaitSeconds` (default `18000`, five hours).
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
   Explicit per-call timeouts are preserved.
-- `PI_CACHE_RETENTION=long`: use the longer cache-warmth indicator window.
+- `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
+  transcript doesn't say. Anthropic replies report hour-long cache writes and
+  Status Plus follows them, so a proxy that always writes them, such as
+  Meridian, needs no setting.
 - `PHASE_SPINNER_DEBUG=1`: opt-in local timing diagnostics. Leave off normally.
 - `PI_VOICE=off`: disable voice dictation. `PI_VOICE_KEY`: a different key
   (default `ctrl+space`). `PI_VOICE_HOME`: where voice keeps its runtime,
@@ -253,7 +256,8 @@ print, JSON and RPC runs keep Pi's tools untouched. If another extension
 already replaces one of Pi's built-in tools, Tool Display leaves that tool's
 definition alone and draws its rows as it does any other extension's.
 
-**Tool count.** Status Plus counts one tool per call, as Pi does. Click the
+**Tool count.** Status Plus counts one tool per call that ran; calls in a
+failed or aborted reply never run and are left out. Click the
 count in the footer to count each step of a chained command instead; the
 count brightens to show it, and the choice is saved. Where the terminal sends
 no clicks to the footer, `/tool-display count steps` does the same.
