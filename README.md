@@ -339,10 +339,10 @@ in it through the console: it opens an elevated PowerShell from the Run box,
 accepts the UAC prompt, reads the console with OCR until that PowerShell is
 ready (so the bootstrap, which carries the key, is never typed into another
 window), and types a short bootstrap that installs
-[uv](https://docs.astral.sh/uv/) and Windows-MCP (a 0.8 release, 0.8.6 or later, whose
-output windows_use is built to read) for the signed-in user, starts
-it at every logon, opens its port to the local subnet only, and requires a
-random key held on the host, new for every install. This takes a few minutes
+[uv](https://docs.astral.sh/uv/) and Windows-MCP (0.8.6 or a later 0.8
+release, whose output windows_use is built to read) for the signed-in user,
+starts it at every logon, opens its port to the local subnet only, and
+requires a random key held on the host, new for every install. This takes a few minutes
 the first time and needs internet access in the guest. An install that fails
 stops at once with the guest's error, which the bootstrap reports to the host
 through Hyper-V key-value exchange. After that, each call first makes sure the VM
