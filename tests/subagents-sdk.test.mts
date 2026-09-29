@@ -108,6 +108,28 @@ test("main resumes a finished child, which keeps its context", { timeout: 20_000
 	await team.close();
 });
 
+test("a message that lands while the child writes its final answer still gets handled", { timeout: 20_000 }, async () => {
+	const { team, faux } = await setup();
+	let releaseFinal!: () => void;
+	const finalStarted = new Promise<void>((started) => {
+		faux.setResponses([
+			async () => {
+				started();
+				await new Promise<void>((release) => { releaseFinal = release; });
+				return ai.fauxAssistantMessage("APPLE");
+			},
+			(context: any) => ai.fauxAssistantMessage(JSON.stringify(context.messages).includes("BANANA") ? "BANANA" : "no steer seen"),
+		]);
+	});
+	team.spawn({ task: "Say a fruit", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false });
+	await finalStarted;
+	assert.deepEqual(await team.send("main", "say-fruit", "Say BANANA instead."), { ok: true, delivered: "steered" });
+	releaseFinal();
+	const done = await team.whenDone("say-fruit");
+	assert.equal(done.report, "BANANA");
+	await team.close();
+});
+
 test("an unknown model fails the child, not the session", { timeout: 20_000 }, async () => {
 	const { team, main } = await setup();
 	team.spawn({ task: "anything", parent: "main", model: "faux/nope", readOnly: false, fork: false, blocking: false });

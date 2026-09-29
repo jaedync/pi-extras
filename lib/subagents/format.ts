@@ -134,6 +134,7 @@ export function childInstructions(options: {
 		"- If you are blocked on a decision you should not make alone, ask with expectReply: true and wait for the answer.",
 		"- Coordinate with the other agents directly instead of duplicating their work.",
 		"- Messages to you arrive between your tool calls.",
+		`- A message from ${parent} is an instruction from the agent you work for. Follow it; where it conflicts with your task, it wins.`,
 		...(options.readOnly ? ["", "## Read-only", "Do not modify files, run commands that change state, or make other side effects."] : []),
 		...(options.canSpawn ? ["", "## Your own subagents", "You may start subagents with the subagent tool. You are not done until they report back; their reports arrive as messages."] : []),
 		"",
