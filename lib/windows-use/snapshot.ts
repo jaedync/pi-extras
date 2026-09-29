@@ -10,6 +10,8 @@
 const TREE_HEADING = "UI Tree:";
 /** The heading on a line of its own; a screenshot says "UI Tree: Skipped for ..." in its header instead. */
 const TREE_START = /^[ \t]*UI Tree:[ \t]*$/m;
+/** What an agent can do about a window Windows-MCP sees nothing in. */
+const OPAQUE = "[no elements: it runs as administrator or draws itself. Read it with win.console.ocr; click and type with win.console.*, since Windows-MCP input doesn't reach it]";
 /** Header lines that say nothing an agent acts on. */
 const NOISE = /^(?:Screenshot Backend: |UI Tree: Skipped)/;
 /** A tree line: "│   " or "    " per level above it, then "├── " or "└── ". */
@@ -37,7 +39,8 @@ function logicalLines(tree: string): string[] {
 	return out;
 }
 
-function compactTree(tree: string): string {
+/** `listed` holds the windows the header names; only those can be told apart from hidden helper windows. */
+function compactTree(tree: string, listed: ReadonlySet<string>): string {
 	const lines = logicalLines(tree);
 	const out: { depth: number; body: string }[] = [];
 	let rootSeen = false;
@@ -49,8 +52,17 @@ function compactTree(tree: string): string {
 		const depth = match[1]!.length / 4 + (rootSeen ? 0 : 1);
 		out.push({ depth, body: match[2]!.replace(/ {2}\[action: click\]/g, "").replace(/ {2}\[/g, " [").trimEnd() });
 	}
-	// An unnamed window with nothing under it says nothing.
-	const kept = out.filter((line, index) => !(line.body === 'window ""' && !((out[index + 1]?.depth ?? -1) > line.depth)));
+	const empty = (index: number) => !((out[index + 1]?.depth ?? -1) > out[index]!.depth);
+	// An unnamed window with nothing under it says nothing. A listed one, without even
+	// its title bar's buttons, is one Windows-MCP may not read: UI Automation hides
+	// administrators' windows from a server without those rights, and drops its input to them.
+	const opaque = (body: string, index: number) => {
+		const name = /^window "(.*)"$/.exec(body)?.[1];
+		return name !== undefined && listed.has(name) && empty(index);
+	};
+	const kept = out
+		.filter((line, index) => !(line.body === 'window ""' && empty(index)))
+		.map((line, index, lines) => line.depth === 0 && opaque(line.body, index) && !((lines[index + 1]?.depth ?? -1) > 0) ? { ...line, body: `${line.body} ${OPAQUE}` } : line);
 	return kept.map((line) => line.depth < 0 ? line.body : `${"  ".repeat(line.depth)}${line.body}`).join("\n").replace(/^\n+/, "").trimEnd();
 }
 
@@ -70,24 +82,28 @@ const rows = (block: readonly string[]) => block.slice(3);
 const WINDOW_SECTIONS = new Set(["Focused Window:", "Opened Windows:"]);
 
 /**
- * A window table as one line per window, name, state and size; the depth and
- * handle columns mean nothing to an agent. Columns are read from the dashes
- * under the header, as the table is fixed-width. Anything else is kept.
+ * A window table's rows by column, or undefined if it isn't one. Columns are
+ * read from the dashes under the header, as the table is fixed-width.
  */
-function windowList(block: readonly string[]): readonly string[] {
-	const [title, header, dashes] = block;
-	if (!header || !dashes || !/^-+(?: +-+)*$/.test(dashes)) return block;
+function readTable(block: readonly string[]): Record<string, string>[] | undefined {
+	const [, header, dashes] = block;
+	if (!header || !dashes || !/^-+(?: +-+)*$/.test(dashes)) return undefined;
 	const spans = [...dashes.matchAll(/-+/g)].map((match) => [match.index, match.index + match[0].length] as const);
 	const columns = spans.map(([from, to]) => header.slice(from, to).trim());
-	const at = (row: string, column: string) => {
-		const index = columns.indexOf(column);
-		return index < 0 ? "" : row.slice(spans[index]![0], spans[index]![1]).trim();
-	};
-	if (!columns.includes("Name")) return block;
-	return [title!, ...rows(block).map((row) => {
-		const size = at(row, "Width") && at(row, "Height") ? `, ${at(row, "Width")}x${at(row, "Height")}` : "";
-		return `- ${at(row, "Name")} (${at(row, "Status") || "?"}${size})`;
-	})];
+	if (!columns.includes("Name")) return undefined;
+	return rows(block).map((row) => Object.fromEntries(columns.map((column, index) => [column, row.slice(spans[index]![0], spans[index]![1]).trim()])));
+}
+
+/** A window table as one line per window, name, state and size; the depth and handle columns mean nothing to an agent. */
+function windowList(block: readonly string[]): readonly string[] {
+	const table = readTable(block);
+	if (!table) return block;
+	return [block[0]!, ...table.map((row) => `- ${row.Name} (${row.Status || "?"}${row.Width && row.Height ? `, ${row.Width}x${row.Height}` : ""})`)];
+}
+
+/** The windows the header's window tables name. */
+function listedWindows(head: string): Set<string> {
+	return new Set(sections(head).filter((block) => WINDOW_SECTIONS.has(block[0]!)).flatMap((block) => (readTable(block) ?? []).map((row) => row.Name!)));
 }
 
 function compactHeader(head: string): string {
@@ -110,5 +126,6 @@ export function compactSnapshot(text: string): string {
 		return /Cursor Position: /.test(text) ? compactHeader(text) : text;
 	}
 	const head = compactHeader(text.slice(0, at));
-	return `${head ? `${head}\n\n` : ""}${TREE_HEADING}\n${compactTree(text.slice(at + found![0].length))}`;
+	const tree = compactTree(text.slice(at + found![0].length), listedWindows(text.slice(0, at)));
+	return `${head ? `${head}\n\n` : ""}${TREE_HEADING}\n${tree}`;
 }

@@ -44,6 +44,7 @@ Guest methods run through Windows-MCP inside the VM (UI Automation tree, input, 
 - win.wait_for({ vm, condition, text?, window_name?, timeout? })
 - win.powershell({ vm, command, timeout? }) -> { output, status }: output is stdout (stderr when stdout is empty), status the exit code; runs as the signed-in user; timeout in seconds, default 30, at most 540
 - win.call({ vm, tool, args }): any other Windows-MCP tool (Clipboard, Process, FileSystem, Registry, Scrape, MultiSelect, MultiEdit, Wait)
+Windows-MCP runs without administrator rights, so a window of an app running as administrator (one that raised a UAC prompt) shows no elements, and Windows-MCP's clicks and keys to it are dropped without an error, as are its keys while such a window has focus. Snapshots mark these windows. Read them with win.console.ocr and act on them with win.console.click, win.console.key and win.console.type.
 Console methods drive the VM's screen, keyboard and mouse from the host; they also work on lock, sign-in and UAC screens. Coordinates are guest pixels. A display that went dark is woken with Shift first.
 - win.console.screenshot({ vm }) -> { text: '{"width","height"}', screenshot }
 - win.console.ocr({ vm, x?, y?, width?, height? }) -> { text, items: [{ text, x, y }] }: the screen's text through Windows OCR, one "(x,y) text" per line, each center clickable with win.click or win.console.click. It reads what the UI tree can't: custom-drawn windows, MMC consoles, UAC and sign-in screens. x, y, width and height limit it to a rectangle

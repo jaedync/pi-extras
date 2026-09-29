@@ -354,6 +354,11 @@ is usable and repairs what it can, and the result says what it did:
   or a missing Hyper-V heartbeat.
 - A VM that is off or saved is left alone; `win.start({ vm })` starts it.
 
+Windows-MCP runs with the signed-in user's rights, not an administrator's, so
+it can't read or send input to the windows of apps that run as administrator:
+their UI tree is empty, and its clicks and keys to them are dropped without an
+error. Snapshots mark such windows, and the console methods reach them.
+
 `win.console.ocr({ vm })` reads the screen's text with Windows OCR on the
 host, as lines of `(x,y) text` whose centers can be clicked. It covers what
 the UI tree can't describe, such as custom-drawn windows, MMC consoles, UAC

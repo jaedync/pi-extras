@@ -123,6 +123,44 @@ test("a screenshot's header is compacted too; its UI Tree note is not a tree", (
 	assert.equal(compactSnapshot(raw), "Cursor Position: (512, 81)\nScreenshot Size: (1024,768)\n\nFocused Window:\nNo active window found\n\nOpened Windows:\nNo windows found");
 });
 
+/** A window table section as Windows-MCP prints it: fixed-width columns under a line of dashes. */
+function windowTable(title: string, names: readonly string[]): string[] {
+	const width = Math.max(4, ...names.map((name) => name.length));
+	return [`    ${title}`, `    ${"Name".padEnd(width)}  Status`, `${"-".repeat(width)}  ------`, ...names.map((name) => `${name.padEnd(width)}  Normal`)];
+}
+
+test("a listed window Windows-MCP can't see into is marked with where to turn instead; hidden helpers aren't", () => {
+	const raw = [
+		...windowTable("Focused Window:", ["Console - [Admin Tool]"]),
+		"",
+		...windowTable("Opened Windows:", ["Editor"]),
+		"",
+		"    UI Tree:",
+		"    desktop",
+		"    ├── window \"Console - [Admin Tool]\"",
+		"    ├── window \"Editor\"",
+		"    │   └── (5,5) button \"Close\"  [action: click]",
+		"    ├── window \"OLEChannelWnd\"",
+		"    └── window \"Taskbar\"",
+		"        └── (20,590) button \"Start\"  [action: click]",
+	].join("\n");
+	assert.equal(compactSnapshot(raw), [
+		"Focused Window:",
+		"- Console - [Admin Tool] (Normal)",
+		"",
+		"Opened Windows:",
+		"- Editor (Normal)",
+		"",
+		"UI Tree:",
+		"window \"Console - [Admin Tool]\" [no elements: it runs as administrator or draws itself. Read it with win.console.ocr; click and type with win.console.*, since Windows-MCP input doesn't reach it]",
+		"window \"Editor\"",
+		"  (5,5) button \"Close\"",
+		"window \"OLEChannelWnd\"",
+		"window \"Taskbar\"",
+		"  (20,590) button \"Start\"",
+	].join("\n"));
+});
+
 test("several desktops or displays are kept, and text it doesn't recognize passes through", () => {
 	const many = RAW.replace("    All Desktops:\n    Name\n---------\nDesktop 1", "    All Desktops:\n    Name\n---------\nDesktop 1\nDesktop 2")
 		.replace("primary\n", "primary; 1:\\\\.\\DISPLAY2 (800,0,1600,600)\n");
