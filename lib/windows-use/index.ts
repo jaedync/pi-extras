@@ -48,6 +48,7 @@ Console methods drive the VM's screen, keyboard and mouse from the host; they al
 - win.console.screenshot({ vm }) -> { text: '{"width","height"}', screenshot }
 - win.console.click({ vm, x, y, button?, double? }), win.console.move/drag({ vm, x, y, x2?, y2? }), win.console.scroll({ vm, x, y, amount? })
 - win.console.type({ vm, text }) (US keyboard layout; "\\n" presses Enter), win.console.key({ vm, keys }), win.console.cad({ vm })
+- win.uac({ vm, answer: "yes"|"no" }) answers a UAC prompt, as when an app asks for administrator rights. It shows on the secure desktop, where Windows-MCP can't see, so snapshots fail meanwhile and say so. It never types a password
 - win.start({ vm }) starts or resumes a VM; win.login({ vm }) clicks Sign in; win.setup({ vm }) reinstalls Windows-MCP
 - win.sleep(ms) pauses up to 60 s, e.g. for the screen to settle between console steps
 - emit(value) returns text or JSON to Pi; emitImage(result.screenshot) returns a screenshot; store is a persistent JSON object

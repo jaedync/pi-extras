@@ -221,3 +221,42 @@ test("PI_WINDOWS_USE_VMS names the only VMs a session may see or touch, case-ins
 	await session.call("console.key", { vm: "WIN11-LAB", keys: "win" }, {});
 	assert.ok(calls.includes("key WIN11-LAB"));
 });
+
+/** A guest whose snapshots fail as on the secure desktop, with a UAC prompt up for `prompts` checks. */
+function secureDesktop(log: string[], prompts: number): (vm: string, note: (text: string) => void) => Guest {
+	let left = prompts;
+	return (vm) => ({
+		vm,
+		async tool(name: string, args: Record<string, unknown>) {
+			log.push(`${vm} ${name}`);
+			const text = name === "PowerShell" && String(args.command).includes("consent")
+				? `Response: ${left > 0 ? (left--, 1) : 0}\nStatus Code: 0`
+				: "Error capturing desktop state: screen grab failed. Please try again.";
+			return { content: [{ type: "text", text }], isError: false };
+		},
+		forget() {},
+		recheck() { log.push(`${vm} recheck`); },
+	}) as unknown as Guest;
+}
+
+test("a snapshot Windows-MCP can't capture fails and says why, naming a UAC prompt when one is up", async () => {
+	const log: string[] = [];
+	const uac = new WinSession(fakeHost().host, secureDesktop(log, 1));
+	await assert.rejects(uac.call("snapshot", { vm: "A" }, {}), /A UAC prompt is showing on A.*win\.uac\(\{ vm: "A", answer: "yes" \}\)/);
+	assert.ok(log.includes("A recheck"), "the lock is checked again before the next call");
+	const other = new WinSession(fakeHost().host, secureDesktop([], 0));
+	await assert.rejects(other.call("screenshot", { vm: "A" }, {}), /couldn't capture A's screen.*win\.console\.screenshot/);
+});
+
+test("win.uac answers a prompt through the console and waits for it to close; it never types a password", async () => {
+	const { host, calls } = fakeHost();
+	const answered = await new WinSession(host, secureDesktop([], 2), undefined, async () => {}).call("uac", { vm: "A", answer: "yes" }, {});
+	assert.deepEqual(answered.content, [{ type: "text", text: "Answered the UAC prompt on A: yes." }]);
+	assert.deepEqual(calls, [["key", { vm: "A", keys: "alt+y" }]]);
+	calls.length = 0;
+	await new WinSession(host, secureDesktop([], 1), undefined, async () => {}).call("uac", { vm: "A", answer: "no" }, {});
+	assert.deepEqual(calls, [["key", { vm: "A", keys: "esc" }]]);
+	await assert.rejects(new WinSession(host, secureDesktop([], 0), undefined, async () => {}).call("uac", { vm: "A", answer: "yes" }, {}), /No UAC prompt is showing on A/);
+	await assert.rejects(new WinSession(host, secureDesktop([], 99), undefined, async () => {}).call("uac", { vm: "A", answer: "yes" }, {}), /still showing.*password/);
+	await assert.rejects(new WinSession(host, secureDesktop([], 1)).call("uac", { vm: "A", answer: "maybe" }, {}), /answer: "yes"/);
+});

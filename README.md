@@ -354,6 +354,11 @@ is usable and repairs what it can, and the result says what it did:
   or a missing Hyper-V heartbeat.
 - A VM that is off or saved is left alone; `win.start({ vm })` starts it.
 
+An app that asks for administrator rights raises a UAC prompt on the secure
+desktop, where Windows-MCP can't see: a snapshot then fails and says a prompt
+is up, and `win.uac({ vm, answer: "yes" })` (or `"no"`) answers it from the
+console. A prompt that asks for a password stays up; it is never typed.
+
 A call that never reached the server is sent again after the repair. One whose
 connection dropped mid-way is not, since it may have run (a `Restart-Computer`,
 say); its error says so, and the next call reconnects.

@@ -15,3 +15,6 @@ export function toResult(raw: unknown): ToolResult {
 }
 
 export const textResult = (text: string): ToolResult => ({ content: [{ type: "text", text }], isError: false });
+
+/** A result's text blocks, joined. */
+export const textOf = (result: ToolResult): string => result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");

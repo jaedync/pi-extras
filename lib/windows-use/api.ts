@@ -10,12 +10,13 @@ import type { ScriptApi } from "../computer-use/executor.ts";
 import type { CallOptions, ToolResult } from "../computer-use/session.ts";
 import { readFrame, toPng } from "./frame.ts";
 import { Guest, wait, type HostCalls } from "./guest.ts";
-import { textResult } from "./result.ts";
+import { answerUac, captureFailure, SCREEN_GRAB_FAILED, typeAtFocus } from "./guest-input.ts";
+import { textOf, textResult } from "./result.ts";
 import { compactSnapshot } from "./snapshot.ts";
 
 export const GUEST_METHODS = ["snapshot", "screenshot", "click", "type", "scroll", "move", "key", "app", "wait_for", "powershell", "call"] as const;
 export const CONSOLE_METHODS = ["console.screenshot", "console.click", "console.move", "console.drag", "console.scroll", "console.type", "console.key", "console.cad"] as const;
-export const METHODS = ["vms", "sleep", "start", "login", "setup", ...GUEST_METHODS, ...CONSOLE_METHODS] as const;
+export const METHODS = ["vms", "sleep", "start", "login", "setup", "uac", ...GUEST_METHODS, ...CONSOLE_METHODS] as const;
 /** Longest win.sleep: long enough for a boot or sign-in to settle, short of hiding a hung script. */
 const MAX_SLEEP_MS = 60_000;
 /** Longest PowerShell timeout, in seconds: the guest's reply must arrive inside the host's 10-minute call limit. */
@@ -98,9 +99,6 @@ function unlist(text: string): string {
 	}
 }
 const JSON_METHODS = new Set(["vms", "start"]);
-/** How Windows-MCP's Clipboard get starts when the clipboard holds text. */
-const CLIPBOARD_TEXT = "Clipboard content:\n";
-const textOf = (result: ToolResult) => result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
 
 /** Windows-MCP wraps PowerShell output as "Response: <stdout, or stderr when stdout is empty>\nStatus Code: <exit code>". */
 function shellResult(text: string): { output: string; status: number | null } {
@@ -167,8 +165,11 @@ export class WinSession {
 	private readonly allowed?: readonly string[];
 	private readonly allowedKeys?: ReadonlySet<string>;
 
-	constructor(host: HostCalls, makeGuest?: (vm: string, note: (text: string) => void) => Guest, allowed?: readonly string[]) {
+	private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+
+	constructor(host: HostCalls, makeGuest?: (vm: string, note: (text: string) => void) => Guest, allowed?: readonly string[], sleep = wait) {
 		this.host = host;
+		this.sleep = sleep;
 		this.makeGuest = makeGuest ?? ((vm, note) => new Guest({ host, vm, note }));
 		this.allowed = allowed;
 		this.allowedKeys = allowed ? new Set(allowed.map((name) => name.toLowerCase())) : undefined;
@@ -203,7 +204,7 @@ export class WinSession {
 		if (method === "sleep") {
 			if (typeof args.ms !== "number" || !Number.isFinite(args.ms) || args.ms < 0) throw new Error("win.sleep needs { ms } (milliseconds)");
 			if (args.ms > MAX_SLEEP_MS) throw new Error(`win.sleep waits at most ${MAX_SLEEP_MS} ms; to wait on the guest, use win.wait_for`);
-			await wait(args.ms, signal);
+			await this.sleep(args.ms, signal);
 			return textResult("ok");
 		}
 		const vm = this.vmOf(method, args);
@@ -215,6 +216,7 @@ export class WinSession {
 				return json(status);
 			}
 			case "login": await this.guest(vm).login(signal); return textResult(`signed in at ${vm}'s console`);
+			case "uac": return answerUac(this.guest(vm), this.host, args.answer, this.sleep, signal);
 			case "setup": await this.guest(vm).setup(signal); return textResult(`Windows-MCP is ready on ${vm}`);
 			case "console.screenshot": {
 				const frame = readFrame(await this.host.call("frame", { vm }, { signal }));
@@ -232,43 +234,19 @@ export class WinSession {
 				return this.console("key", { vm, keys: args.keys }, signal);
 			case "console.cad": return this.console("cad", { vm }, signal);
 			case "type":
-				if (args.label === undefined && !hasPoint(args)) return this.typeAtFocus(vm, args, signal);
+				if (args.label === undefined && !hasPoint(args)) return typeAtFocus(this.guest(vm), args, signal);
 				return this.guestTool(vm, method, args, signal);
 			default: return this.guestTool(vm, method, args, signal);
 		}
 	}
 
-	private guestTool(vm: string, method: string, args: Args, signal?: AbortSignal): Promise<ToolResult> {
+	private async guestTool(vm: string, method: string, args: Args, signal?: AbortSignal): Promise<ToolResult> {
 		const call = toMcp(method, args);
-		return this.guest(vm).tool(call.tool, call.args, signal);
-	}
-
-	/**
-	 * Types into whatever has focus. Windows-MCP's Type always clicks its target
-	 * first, which moves the caret and drops a selection, and console typing
-	 * arrives late (about 50 characters a second) and can lose shifted keys, so
-	 * later input overtakes it. This pastes each line through Windows-MCP, in
-	 * order with its other input, and presses Enter or Tab between them as
-	 * typing would. Each Shortcut returns half a second after its keys, by which
-	 * time the app has taken the paste, so the clipboard can change again.
-	 */
-	private async typeAtFocus(vm: string, args: Args, signal?: AbortSignal): Promise<ToolResult> {
-		if (typeof args.text !== "string") throw new Error("win.type needs { vm, text }");
 		const guest = this.guest(vm);
-		const tool = (name: string, toolArgs: Args) => guest.tool(name, toolArgs, signal);
-		const key = (shortcut: string) => tool("Shortcut", { shortcut });
-		const saved = textOf(await tool("Clipboard", { mode: "get" }));
-		const prior = saved.startsWith(CLIPBOARD_TEXT) ? saved.slice(CLIPBOARD_TEXT.length) : undefined;
-		if (args.clear === true) { await key("ctrl+a"); await key("backspace"); }
-		for (const part of args.text.split(/(\r?\n|\t)/)) {
-			if (part === "\t") await key("tab");
-			else if (part === "\n" || part === "\r\n") await key("enter");
-			else if (part) { await tool("Clipboard", { mode: "set", text: part }); await key("ctrl+v"); }
-		}
-		const enter = args.enter === true || args.press_enter === true;
-		if (enter) await key("enter");
-		if (prior !== undefined) await tool("Clipboard", { mode: "set", text: prior });
-		return textResult(`Typed ${args.text.length} characters into the focused control${enter ? ", then pressed Enter" : ""}.`);
+		const result = await guest.tool(call.tool, call.args, signal);
+		// Windows-MCP answers with a line of text; an empty tree would read as an empty screen.
+		if (IMAGE_METHODS.has(method) && SCREEN_GRAB_FAILED.test(textOf(result))) throw new Error(await captureFailure(guest, signal));
+		return result;
 	}
 
 	private async console(method: string, params: Args, signal?: AbortSignal, timeoutMs?: number): Promise<ToolResult> {

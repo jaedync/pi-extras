@@ -168,6 +168,13 @@ brings the taskbar up over any unlocked desktop, so a desktop in use is never
 clicked, whatever the guest reports. It never clicks a nearly black screen
 (Windows starting, restarting or installing updates), and stops after two
 clicks.
+
+`win.uac` answers UAC consent prompts with the console keyboard, which
+reaches the secure desktop (the agent could press the same keys through
+`win.console.key`). That elevates whatever asked, so treat an agent with
+Windows use as able to run anything as an administrator of the guest when its
+user is one. It never types credentials.
+
 Agent scripts run in the same isolated V8 context as computer use.
 
 ## Shell Jobs
