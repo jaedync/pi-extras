@@ -335,8 +335,10 @@ VMs are then left out of `win.vms()`, and a call naming one fails before
 anything reaches the host.
 
 There is nothing to set up per VM. The first call to a VM installs Windows-MCP
-in it through the console: it opens an elevated PowerShell from Start search,
-accepts the UAC prompt and types a short bootstrap that installs
+in it through the console: it opens an elevated PowerShell from the Run box,
+accepts the UAC prompt, reads the console with OCR until that PowerShell is
+ready (so the bootstrap, which carries the key, is never typed into another
+window), and types a short bootstrap that installs
 [uv](https://docs.astral.sh/uv/) and Windows-MCP for the signed-in user, starts
 it at every logon, opens its port to the local subnet only, and requires a
 random key held on the host, new for every install. This takes a few minutes
@@ -349,6 +351,12 @@ is usable and repairs what it can, and the result says what it did:
 - A VM that rebooted to the sign-in screen is signed in, and the server starts
   at logon.
 - A server that stopped while the desktop is showing is reinstalled.
+- A server that is running but answers nothing (calls stuck behind a stalled
+  one) is restarted from the console's Run box, which is read with OCR first.
+- A snapshot stalled by Start or its search, which sometimes stop answering UI
+  Automation, gets them restarted (Windows starts them again when opened) and
+  is taken again. A snapshot stalled by another app's window fails after a
+  minute and names that window.
 - A VM that is starting, restarting or installing updates is waited for, up
   to 15 minutes, before anything is clicked. It shows as a nearly black screen
   or a missing Hyper-V heartbeat.

@@ -149,8 +149,10 @@ after restarts), and adds an inbound firewall rule
 requires a bearer key: 32 random bytes generated on the host, kept in
 `%LOCALAPPDATA%\pi-extras\windows-use\<vm>.key` for the Windows user, and in
 the guest user's `%USERPROFILE%\.windows-mcp\config.toml`. The key is typed
-into the guest inside the bootstrap and removed from that PowerShell's
-history afterwards. It never enters the conversation. Anyone who holds it and
+into the guest inside the bootstrap, only after Windows OCR on the host reads
+an administrator's PowerShell window on the console (without OCR it is typed
+unchecked), and removed from that PowerShell's history afterwards. A new key
+is made only at that point, so a setup that stops earlier leaves the old one. It never enters the conversation. Anyone who holds it and
 can reach the guest's port gets the guest user's full PowerShell, so treat
 other VMs on the same virtual switch as able to try.
 
@@ -168,6 +170,12 @@ brings the taskbar up over any unlocked desktop, so a desktop in use is never
 clicked, whatever the guest reports. It never clicks a nearly black screen
 (Windows starting, restarting or installing updates), and stops after two
 clicks.
+
+Recovery may restart parts of the guest without asking: Start and its search
+(`SearchHost` and `StartMenuExperienceHost`, which Windows starts again on
+demand) when they stall a snapshot, and Windows-MCP itself, from the console's
+Run box as the signed-in user, when it answers nothing. The Run box is read
+with OCR before the restart command is typed; without OCR nothing is typed.
 
 `win.console.ocr` runs Windows OCR on the host over a console frame, locally,
 through a PowerShell module (`ocr.psm1`) the host loads on first use. Its text

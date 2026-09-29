@@ -33,14 +33,14 @@ const DESCRIPTION = `Run JavaScript that operates Windows Hyper-V virtual machin
 
 Guest methods run through Windows-MCP inside the VM (UI Automation tree, input, PowerShell). Every method takes { vm: "<VM name>" }. The first call to a VM signs it in, unlocks it or installs Windows-MCP as needed, and says so in the result.
 - win.vms() -> [{ name, state, running, installed, ip }]: the VMs this session may use
-- win.snapshot({ vm, use_vision?, use_ui_tree?, use_dom? }) -> { text, screenshot }: text lists the windows, then the UI tree: one element per line with its (x, y) center, type, "name" and state, indented under its container. A window with nothing under it draws its own controls: read it with win.console.ocr. use_dom: true lists a browser page's elements instead
+- win.snapshot({ vm, use_vision?, use_ui_tree?, use_dom? }) -> { text, screenshot }: text lists the windows, then the UI tree: one element per line with its (x, y) center, type, "name" and state, indented under its container. A window with nothing under it draws its own controls: read it with win.console.ocr. use_dom: true lists a browser page's elements instead. A window whose app stops answering stalls the tree: the snapshot fails after 60 s naming that window (Start and its search are restarted and the snapshot taken again)
 - win.screenshot({ vm }) -> { text, screenshot }: fast, no UI tree
 - win.click({ vm, x, y, button?: "left"|"right"|"middle", clicks? })
 - win.type({ vm, text, x?, y?, clear?, enter? }): with x, y it clicks there first, then types (any text); without, it types into the focused control by pasting, restoring the clipboard after. "\\n" presses Enter and "\\t" Tab, as typing would. clear: true replaces the field's text; enter: true presses Enter after
 - win.scroll({ vm, x?, y?, direction?: "up"|"down"|"left"|"right", amount?, horizontal? })
 - win.move({ vm, x, y, drag?, from?: [x, y] })
 - win.key({ vm, keys }): e.g. "ctrl+c", "win+r", "enter"
-- win.app({ vm, mode?: "launch"|"switch"|"resize", name })
+- win.app({ vm, mode?: "launch"|"switch"|"resize", name }): launch finds an app by its Start menu name, roughly matched ("System Management Console"), which is quicker and surer than typing into Start search; switch brings an open window to the front
 - win.wait_for({ vm, condition, text?, window_name?, timeout? })
 - win.powershell({ vm, command, timeout? }) -> { output, status }: output is stdout (stderr when stdout is empty), status the exit code; runs as the signed-in user; timeout in seconds, default 30, at most 540
 - win.call({ vm, tool, args }): any other Windows-MCP tool (Clipboard, Process, FileSystem, Registry, Scrape, MultiSelect, MultiEdit, Wait)
