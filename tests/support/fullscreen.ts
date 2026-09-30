@@ -67,7 +67,7 @@ export function fullscreen() {
 		await sleep(ms);
 	};
 
-	/** Pi 0.87's showExtensionCustom for overlays: the extension gets the TUI reference, and `done` hides the overlay, then disposes it. */
+	/** Pi's showExtensionCustom for overlays: the extension gets the TUI reference, and `done` hides the overlay, then disposes it. */
 	const ui = {
 		custom<T>(factory: Factory, options?: CustomOptions): Promise<T> {
 			return new Promise<T>((resolve, reject) => {

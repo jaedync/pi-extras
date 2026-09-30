@@ -23,7 +23,7 @@ interface Box {
 	render(width: number): string[];
 }
 
-/** Pi's layout in 0.87 through 0.99: the queue follows the transcript, the editor comes fifth. */
+/** Pi's layout: the queue follows the transcript, the editor comes fifth (tests/tail-row.test.ts checks it). */
 const LAYOUT_SIZE = 7;
 const QUEUE_AT = 1;
 const EDITOR_AT = 4;

@@ -32,7 +32,7 @@ export interface CopyHost {
 	now?(): number;
 }
 
-/** The fields of Pi's Markdown this reads; all present in Pi 0.87. */
+/** The fields of Pi's Markdown this reads. */
 interface PiMarkdown extends Component {
 	text: string;
 	paddingX: number;

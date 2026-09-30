@@ -64,8 +64,8 @@
     "node-html-parser": "7.0.2"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.87.0",
-    "@earendil-works/pi-tui": ">=0.87.0",
+    "@earendil-works/pi-coding-agent": ">=0.99.2",
+    "@earendil-works/pi-tui": ">=0.99.2",
     "typebox": "*"
   },
   "peerDependenciesMeta": {
@@ -80,8 +80,8 @@
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.87.0",
-    "@earendil-works/pi-tui": "0.87.0",
+    "@earendil-works/pi-coding-agent": "0.99.2",
+    "@earendil-works/pi-tui": "0.99.2",
     "@types/node": "22.20.4",
     "playwright-core": "1.63.0",
     "typebox": "1.1.38",

@@ -1,6 +1,9 @@
 # Contributing
 
-Use Node 22.18+ and Pi 0.87.0+. Install development dependencies with
+Use Node 22.18+ and Pi's latest release. pi-extras supports only the latest
+Pi: when Pi releases, raise the `@earendil-works/pi-coding-agent` and
+`@earendil-works/pi-tui` development pins and peer minimums to it, then run
+the checks below and fix what breaks. Install development dependencies with
 `npm ci --ignore-scripts` and run `npm run typecheck`, `npm test`,
 `npm run test:install` and `npm run audit:package`. Tests must use synthetic inputs and isolated homes.
 Never add account credentials, real authenticated HTML, raw session recordings

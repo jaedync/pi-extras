@@ -42,7 +42,7 @@ export interface ThinkingHost {
 type Content = { type: string; thinking?: unknown; text?: unknown };
 type Message = { content: readonly Content[] };
 
-/** The parts of Pi's component this reads and writes; all present in Pi 0.87. */
+/** The parts of Pi's component this reads and writes. */
 interface Internals {
 	contentContainer: { children: Component[] };
 	hideThinkingBlock: boolean;

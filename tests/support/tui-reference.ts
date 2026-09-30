@@ -1,5 +1,5 @@
 /**
- * A copy of Pi 0.87's `createInteractiveTuiReference`
+ * A copy of Pi's `createInteractiveTuiReference`
  * (dist/modes/interactive/tui-renderer.js), which isn't exported. Pi hands
  * extensions this Proxy instead of its TUI, so tests of code that reaches
  * into the TUI go through it too. Each read of a method returns a new
