@@ -90,3 +90,11 @@ test("configuration is opt-in and bounded, with defensive immutable defaults", (
 	assert.equal(normalizeConfig({ maxRecoveries: 0 }).maxRecoveries, 0);
 	assert.notEqual(normalizeConfig({}), DEFAULT_CONFIG);
 });
+
+test("the Anthropic stall watchdog is on by default, bounded, and 0 disables it", () => {
+	assert.equal(DEFAULT_CONFIG.anthropicFirstEventSeconds, 45);
+	assert.equal(normalizeConfig({ anthropicFirstEventSeconds: 0 }).anthropicFirstEventSeconds, 0);
+	assert.equal(normalizeConfig({ anthropicFirstEventSeconds: 10 }).anthropicFirstEventSeconds, 10);
+	assert.equal(normalizeConfig({ anthropicFirstEventSeconds: 600 }).anthropicFirstEventSeconds, 600);
+	for (const invalid of [5, 601, -1, "30", Infinity, null]) assert.equal(normalizeConfig({ anthropicFirstEventSeconds: invalid }).anthropicFirstEventSeconds, 45);
+});

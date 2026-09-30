@@ -7,6 +7,7 @@ import { loadConfig, saveConfig, type RecoveryConfig } from "./config.ts";
 import { captureLimit, failureMessage, parseRateLimit, planWait, resumedMessage, sameScope, type CapturedLimit, type WaitPlan, type WaitRefusal } from "./core.ts";
 import { waitForDelay, waitUI, type Wait } from "./wait.ts";
 import { createQuotaTransportGuard } from "./transport.ts";
+import { ANTHROPIC_HOSTS, type FirstEventPolicy } from "./first-event.ts";
 
 export const RECOVERY_TYPE = "rate-limit-recovery";
 const HELP = "Usage: /rate-limit-recovery on|off|status|cancel";
@@ -23,6 +24,8 @@ export interface RecoveryOptions {
 	readonly now?: () => number;
 	readonly wait?: Wait;
 	readonly role?: "main" | "subagent";
+	/** Overrides the configured stall watchdog; tests use fixture hosts and short timeouts. */
+	readonly firstEvent?: Partial<FirstEventPolicy>;
 }
 interface Pending { readonly limit: CapturedLimit; readonly eligible: boolean }
 interface Active { readonly controller: AbortController; readonly ctx: ExtensionContext; readonly scope: string }
@@ -34,6 +37,7 @@ export class Recovery {
 	private readonly role: string;
 	private readonly now: () => number;
 	private readonly wait: Wait;
+	private readonly firstEvent: Partial<FirstEventPolicy>;
 	private config: RecoveryConfig;
 	private pending: Pending | undefined;
 	private active: Active | undefined;
@@ -53,8 +57,9 @@ export class Recovery {
 		this.role = options.role ?? (this.env.PI_RATE_LIMIT_RECOVERY_ROLE === "subagent" ? "subagent" : "main");
 		this.now = options.now ?? Date.now;
 		this.wait = options.wait ?? waitForDelay;
+		this.firstEvent = options.firstEvent ?? {};
 		this.config = loadConfig(this.file, this.env);
-		this.transport = createQuotaTransportGuard({ onWarning: (code) => {
+		this.transport = createQuotaTransportGuard({ firstEvent: () => this.firstEventPolicy(), onWarning: (code) => {
 			if (code === "unsupported-mixed-api" || code === "unsupported-default-model-api") this.unsupportedTransport = true;
 			operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `transport protection: ${code}`);
 		} });
@@ -76,6 +81,11 @@ export class Recovery {
 			description: "Opt in to quota hibernation; on|off|status|cancel",
 			handler: (args, ctx) => this.command(args, ctx),
 		});
+	}
+
+	private firstEventPolicy(): FirstEventPolicy | undefined {
+		const timeoutMs = this.firstEvent.timeoutMs ?? this.config.anthropicFirstEventSeconds * 1000;
+		return timeoutMs > 0 ? { timeoutMs, hosts: this.firstEvent.hosts ?? ANTHROPIC_HOSTS } : undefined;
 	}
 
 	private releaseTransport(): void {
@@ -194,6 +204,6 @@ export class Recovery {
 			try { this.config = saveConfig({ autoWait: this.config.autoWait }, this.file); }
 			catch { ctx.ui.notify("Could not save quota recovery settings. Check permissions on pi-extras.json. The choice applies to this session only.", "error"); return; }
 		} else if (command !== "status") { ctx.ui.notify(HELP, "warning"); return; }
-		ctx.ui.notify(`Automatic quota waiting ${this.config.autoWait ? "on" : "off"} (interactive main sessions only). Budget ${this.config.maxWaitSeconds}s, at most ${this.config.maxRecoveries} recoveries per run.${this.active ? " Currently hibernating." : ""}`, "info");
+		ctx.ui.notify(`Automatic quota waiting ${this.config.autoWait ? "on" : "off"} (interactive main sessions only). Budget ${this.config.maxWaitSeconds}s, at most ${this.config.maxRecoveries} recoveries per run. Anthropic subscription stall retry ${this.config.anthropicFirstEventSeconds ? `after ${this.config.anthropicFirstEventSeconds}s of pings` : "off"}.${this.active ? " Currently hibernating." : ""}`, "info");
 	}
 }

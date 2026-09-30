@@ -1,6 +1,7 @@
 /** Request-local quota classification before SDK transport retries, without changing user settings. */
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { parseRateLimit } from "./core.ts";
+import { guardFirstEvent, type FirstEventPolicy } from "./first-event.ts";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const INSPECTION_MS = 500;
@@ -8,11 +9,14 @@ const SDK_APIS = new Set(["anthropic-messages", "openai-completions", "openai-re
 const CODEX_API = "openai-codex-responses";
 const SHARED = Symbol.for("pi-extras.quota-transport-leases.v3");
 const DELEGATING = Symbol.for("pi-extras.quota-transport-delegating.v1");
+const POLICIES = Symbol.for("pi-extras.quota-transport-first-event.v1");
 type Provider = NonNullable<ReturnType<ModelRegistry["getProvider"]>>;
 type StreamOptions = NonNullable<Parameters<Provider["streamSimple"]>[2]>;
 type Registry = Pick<ModelRegistry, "getProvider" | "getRegisteredNativeProvider" | "getRegisteredProviderConfig" | "registerProvider" | "unregisterProvider">;
 type GuardContext = Pick<ExtensionContext, "modelRegistry" | "model"> & { readonly retarget?: boolean };
 type Warning = (code: string) => void;
+/** Read per request so config reloads apply without re-registering the provider. */
+type FirstEventSource = () => FirstEventPolicy | undefined;
 type LegacyConfig = NonNullable<ReturnType<ModelRegistry["getRegisteredProviderConfig"]>>;
 type LegacyStream = NonNullable<LegacyConfig["streamSimple"]>;
 interface CommonLease { readonly registry: Registry; readonly id: string; readonly owners: Set<object> }
@@ -25,13 +29,27 @@ interface LegacyLease extends CommonLease {
 	readonly api: string;
 }
 type Lease = NativeLease | LegacyLease;
-export interface QuotaTransportOptions { readonly onWarning?: Warning }
+export interface QuotaTransportOptions { readonly onWarning?: Warning; readonly firstEvent?: FirstEventSource }
 export interface QuotaTransportGuard { ensure(ctx: GuardContext): void; dispose(): void }
 
 const supported = (api: string) => SDK_APIS.has(api) || api === CODEX_API;
 function sharedLeases(): WeakMap<object, Lease> {
 	const global = globalThis as typeof globalThis & { [SHARED]?: WeakMap<object, Lease> };
 	return global[SHARED] ??= new WeakMap<object, Lease>();
+}
+function ownerPolicies(): WeakMap<object, FirstEventSource> {
+	const global = globalThis as typeof globalThis & { [POLICIES]?: WeakMap<object, FirstEventSource> };
+	return global[POLICIES] ??= new WeakMap<object, FirstEventSource>();
+}
+/** A lease outlives the guard that created it, so follow its live owners, newest first. */
+function livePolicy(owners: () => ReadonlySet<object> | undefined): FirstEventSource {
+	return () => {
+		for (const owner of [...(owners() ?? [])].reverse()) {
+			const source = ownerPolicies().get(owner);
+			if (source) return source();
+		}
+		return undefined;
+	};
 }
 function reporter(options: QuotaTransportOptions): Warning {
 	return (code) => {
@@ -86,11 +104,11 @@ function jsonQuota(text: string | undefined): ReturnType<typeof parseRateLimit> 
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
 	return parseRateLimit(text);
 }
-function guardedOptions<T extends Pick<StreamOptions, "fetch" | "signal">>(api: string, options: T | undefined, warn: Warning): T | undefined {
+function guardedOptions<T extends Pick<StreamOptions, "fetch" | "signal">>(api: string, options: T | undefined, warn: Warning, firstEvent: FirstEventSource): T | undefined {
 	if (!supported(api)) return options;
 	return { ...options, fetch: async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
 		const response = await (options?.fetch ?? globalThis.fetch)(input, init);
-		if (response.status !== 429) return response;
+		if (response.status !== 429) return guardFirstEvent(api, input, init, response, firstEvent(), init?.signal ?? undefined);
 		const signals = [init?.signal, options?.signal, input instanceof Request ? input.signal : undefined].filter((signal): signal is AbortSignal => Boolean(signal));
 		const signal = signals.length ? AbortSignal.any(signals) : undefined;
 		const limit = jsonQuota(await inspect(response, signal, warn));
@@ -121,11 +139,11 @@ function providerCopy(original: Provider): Provider {
 	}
 	return copy as Provider;
 }
-function wrapProvider(original: Provider, warn: Warning): Provider {
+function wrapProvider(original: Provider, warn: Warning, firstEvent: FirstEventSource): Provider {
 	const copy = providerCopy(original);
 	Object.defineProperties(copy, {
-		stream: { configurable: true, enumerable: true, value: (model: Parameters<Provider["stream"]>[0], context: Parameters<Provider["stream"]>[1], options: Parameters<Provider["stream"]>[2]) => original.stream(model, context, guardedOptions(model.api, options, warn)) },
-		streamSimple: { configurable: true, enumerable: true, value: (model: Parameters<Provider["streamSimple"]>[0], context: Parameters<Provider["streamSimple"]>[1], options: Parameters<Provider["streamSimple"]>[2]) => original.streamSimple(model, context, guardedOptions(model.api, options, warn)) },
+		stream: { configurable: true, enumerable: true, value: (model: Parameters<Provider["stream"]>[0], context: Parameters<Provider["stream"]>[1], options: Parameters<Provider["stream"]>[2]) => original.stream(model, context, guardedOptions(model.api, options, warn, firstEvent)) },
+		streamSimple: { configurable: true, enumerable: true, value: (model: Parameters<Provider["streamSimple"]>[0], context: Parameters<Provider["streamSimple"]>[1], options: Parameters<Provider["streamSimple"]>[2]) => original.streamSimple(model, context, guardedOptions(model.api, options, warn, firstEvent)) },
 	});
 	return copy;
 }
@@ -134,10 +152,10 @@ function installed(lease: Lease): boolean {
 	return lease.kind === "native" ? native === lease.wrapper
 		: !native && lease.registry.getRegisteredProviderConfig(lease.id)?.streamSimple === lease.overlay;
 }
-function legacyDispatch(lease: LegacyLease, model: Parameters<LegacyStream>[0], context: Parameters<LegacyStream>[1], options: Parameters<LegacyStream>[2], warn: Warning): ReturnType<LegacyStream> {
+function legacyDispatch(lease: LegacyLease, model: Parameters<LegacyStream>[0], context: Parameters<LegacyStream>[1], options: Parameters<LegacyStream>[2], warn: Warning, firstEvent: FirstEventSource): ReturnType<LegacyStream> {
 	const active = installed(lease);
 	const delegated = (options as StreamOptions & { [DELEGATING]?: ReadonlySet<string> } | undefined)?.[DELEGATING];
-	const guarded = guardedOptions(model.api, options, warn);
+	const guarded = guardedOptions(model.api, options, warn, firstEvent);
 	const next = supported(model.api) ? { ...guarded, [DELEGATING]: new Set([...(delegated ?? []), lease.id]) } : options;
 	if (!active && !delegated?.has(lease.id)) {
 		const fresh = lease.registry.getProvider(lease.id);
@@ -153,10 +171,10 @@ function legacyDispatch(lease: LegacyLease, model: Parameters<LegacyStream>[0], 
 	// No provider re-registration on each request.
 	return lease.fallback.streamSimple(model, context, next);
 }
-function newLegacyLease(registry: Registry, id: string, api: string, warn: Warning): LegacyLease | undefined {
+function newLegacyLease(registry: Registry, id: string, api: string, warn: Warning, firstEvent: FirstEventSource): LegacyLease | undefined {
 	const fallback = registry.getProvider(id); if (!fallback) return undefined;
 	const original = registry.getRegisteredProviderConfig(id); let lease: LegacyLease;
-	const overlay: LegacyStream = (model, context, options) => legacyDispatch(lease, model, context, options, warn);
+	const overlay: LegacyStream = (model, context, options) => legacyDispatch(lease, model, context, options, warn, firstEvent);
 	lease = { kind: "legacy", registry, id, overlay, fallback, original, api: original?.api ?? api, owners: new Set<object>() };
 	return lease;
 }
@@ -222,6 +240,11 @@ function refreshLease(lease: Lease, api: string, owner: object, retarget: boolea
 export function createQuotaTransportGuard(options: QuotaTransportOptions = {}): QuotaTransportGuard {
 	const owner = {}; const owned = new Map<string, Lease>(); const shared = sharedLeases();
 	const warn = reporter(options); const warned = new Set<string>();
+	const firstEvent: FirstEventSource = () => {
+		// A broken policy source must never break the request it would protect.
+		try { return options.firstEvent?.(); } catch { warn("first-event-policy-failed"); return undefined; }
+	};
+	ownerPolicies().set(owner, firstEvent);
 	const once = (code: string, id: string, api = "") => {
 		const key = JSON.stringify([code, id, api]); if (warned.has(key)) return;
 		warned.add(key); warn(code);
@@ -247,7 +270,12 @@ export function createQuotaTransportGuard(options: QuotaTransportOptions = {}): 
 			if (!native && !config?.api && config?.models?.some((entry) => entry.api === undefined)) { once("unsupported-default-model-api", id, model.api); return; }
 			const key = native ?? config?.streamSimple; let lease = key && shared.get(key);
 			const fresh = !lease;
-			if (!lease) lease = native ? { kind: "native", registry, id, native, wrapper: wrapProvider(native, warn), owners: new Set<object>() } : newLegacyLease(registry, id, model.api, warn);
+			if (!lease) {
+				let created: Lease | undefined;
+				const policy = livePolicy(() => created?.owners);
+				created = native ? { kind: "native", registry, id, native, wrapper: wrapProvider(native, warn, policy), owners: new Set<object>() } : newLegacyLease(registry, id, model.api, warn, policy);
+				lease = created;
+			}
 			if (!lease) return;
 			shared.set(lease.kind === "native" ? lease.wrapper : lease.overlay, lease); lease.owners.add(owner); owned.set(id, lease);
 			if (!fresh) return;

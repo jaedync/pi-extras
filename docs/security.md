@@ -64,6 +64,16 @@ provider retain their own transport retries, with an internal unsupported-path
 warning. Detection still handles recognized finalized errors. Reset timing
 requires structured numeric fields; response headers alone are not guessed.
 
+The same fetch guard watches Anthropic subscription streams: only
+`anthropic-messages` requests to `api.anthropic.com` Messages with bearer auth
+and no API key. It reads SSE event names until the first non-ping event and
+passes every byte through unchanged. If only pings arrive for
+`anthropicFirstEventSeconds` after the headers, it cancels that response and
+fails the turn with a fixed timeout message, which Pi's own retry policy (its
+attempt limit and backoff) retries. Credentials are checked for presence only,
+never read or logged. After the first event, and for every other request, Pi's
+stream handling is unchanged.
+
 Automatic waiting is off by default and limited to interactive main sessions.
 It uses cancellable in-process timers, not background shell processes or a
 persistent service. The wait budget is at most five hours total per user-started

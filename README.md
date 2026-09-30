@@ -73,7 +73,8 @@ the package. Removing it does not remove your credentials or change other packag
   `rateLimitRecovery` in `pi-extras.json`: `autoWait` (default `false`),
   `resumeMarginSeconds` (default `10`), `maxWaitSeconds` (default and hard maximum
   `18000`, five hours total per user-started run), `maxRecoveries` (default `3`,
-  maximum `10`). `/rate-limit-recovery on|off` persists the choice; commands
+  maximum `10`), `anthropicFirstEventSeconds` (default `45`, `10` to `600`, `0`
+  disables the Anthropic stall retry). `/rate-limit-recovery on|off` persists the choice; commands
   take precedence for the current session. `PI_RATE_LIMIT_RECOVERY_ROLE=subagent`
   marks external child sessions as detection-only.
 - `PI_SUBAGENTS=off`: disable Subagents. `subagents` in `pi-extras.json`, all
@@ -175,6 +176,13 @@ has a shared five-hour maximum wait budget (margins included) and at most three
 recoveries by default. Excessive delays are refused, never shortened to retry
 early. Reload, session replacement and exit cancel; a restarted session never
 silently resumes a previous wait.
+
+Anthropic subscription requests (OAuth, direct to `api.anthropic.com`) can be
+held near :00 and :30 UTC: the response starts, then sends only keep-alive
+pings for minutes, and Pi never retries because pings count as activity. If no
+real event follows the headers within `anthropicFirstEventSeconds` (45 s), the
+request fails as a timeout and Pi's normal auto-retry sends it again. API-key
+requests, proxies such as a local gateway, and other providers are untouched.
 
 Recognized quota errors remain errors and are classified as non-transient so
 Pi does not run a competing short retry loop. This recovery policy is independent
