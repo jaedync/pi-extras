@@ -26,6 +26,17 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   lifetimes are labeled `overlap`, not inferred parallel execution. Saved Pi
   metadata restores calls without inventing missing results. No scripts or
   tool behavior are changed.
+- Subagent report bands show tokens (prompt, including cached, and output)
+  beside cost and time. Reports saved earlier keep their cost and time.
+
+### Fixed
+
+- A child resumed by main's question that answered and then kept working
+  delivered its final report silently, so an idle main never woke. Now only a
+  run that answered main's resuming question and then just wrote its final text
+  counts as already reported. Further tool work, any new input (steering, notes,
+  its own subagents' reports) or a failure makes the report wake main. Even an
+  already-answered report shows its band (cost, tokens, time), text folded.
 
 ## 0.11.5 - 2026-09-30
 

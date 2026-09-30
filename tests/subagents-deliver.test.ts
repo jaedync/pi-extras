@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { MainMail, MESSAGE_TYPE, REPORT_TYPE, type OutgoingMessage } from "../lib/subagents/deliver.ts";
+import { MainMail, MESSAGE_TYPE, REPORT_TYPE, type OutgoingMessage, type ReportSummary } from "../lib/subagents/deliver.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 
 function record(name: string, extra: Partial<AgentRecord> = {}): AgentRecord {
@@ -110,13 +110,28 @@ test("a report of a child the user stopped does not wake main", async () => {
 	assert.match(sent[0]!.message.content, /gamma .* was stopped after/);
 });
 
-test("a report whose run already answered main is appended without waking it", async () => {
+test("a report whose run already answered main shows its counters without waking main", async () => {
 	const { box, sent } = mail(5);
-	box.deliver({ kind: "report", record: record("reader", { answeredMain: true }) });
+	const usage = { input: 1_200, output: 300, cacheRead: 40_000, cacheWrite: 500, cost: 0.0042 };
+	box.deliver({ kind: "report", record: record("reader", { answeredMain: true, usage }) });
 	await sleep(20);
 	assert.equal(sent.length, 1);
 	assert.equal(sent[0]!.message.customType, REPORT_TYPE);
 	assert.equal(sent[0]!.options.triggerTurn, false);
-	// Main already has the answer; the user saw it as a reply.
-	assert.equal(sent[0]!.message.display, false);
+	// Main already has the answer, but the user still sees what the run took.
+	assert.equal(sent[0]!.message.display, true);
+	const summary = (sent[0]!.message.details as { reports: ReportSummary[] }).reports[0]!;
+	assert.equal(summary.answered, true);
+	assert.deepEqual(summary.tokens, { input: 41_700, output: 300 });
+});
+
+test("an ordinary report summary carries tokens but is not marked answered", async () => {
+	const { box, sent } = mail(5);
+	box.deliver({ kind: "report", record: record("scout", { usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0 } }) });
+	box.deliver({ kind: "report", record: record("idle-cost") });
+	await sleep(20);
+	const [scout, empty] = (sent[0]!.message.details as { reports: ReportSummary[] }).reports;
+	assert.equal(scout!.answered, undefined);
+	assert.deepEqual(scout!.tokens, { input: 10, output: 20 });
+	assert.equal(empty!.tokens, undefined, "no tokens recorded, nothing to show");
 });

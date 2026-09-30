@@ -55,6 +55,10 @@ export class Team {
 	private readonly queue: string[] = [];
 	/** Children that owe main an answer; their next message to main wakes it. */
 	private readonly owesMain = new Set<string>();
+	/** Children main resumed from idle with a question: only that answer can stand in for the run's report. */
+	private readonly resumedToAnswer = new Set<string>();
+	/** Tool calls a child had finished when it gave that answer. */
+	private readonly answeredAt = new Map<string, number>();
 	private closed = false;
 	private readonly now: () => number;
 	private readonly options: TeamOptions;
@@ -139,14 +143,20 @@ export class Team {
 		const said = `${options.expectReply ? "Question" : "Message"} from ${from}: ${text}`;
 		// Main never blocks: its question is delivered, and the answer wakes it later.
 		if (from === MAIN && options.expectReply) {
+			const idle = this.records.get(to)?.state === "idle";
 			const result = this.deliverToChild(from, to, body, true, said);
 			if (result.ok) this.owesMain.add(to);
+			if (result.ok && idle && result.delivered === "resumed") this.resumedToAnswer.add(to);
 			return result;
 		}
 		let result: SendResult;
 		if (to === MAIN) {
 			const answering = this.owesMain.delete(from);
-			if (answering && this.records.get(from)?.resumedBy?.from === MAIN) this.patch(from, { answeredMain: true });
+			const answerer = this.records.get(from);
+			if (answering && answerer && this.resumedToAnswer.delete(from)) {
+				this.answeredAt.set(from, answerer.toolCalls);
+				this.patch(from, { answeredMain: true });
+			}
 			this.options.deliverToMain(options.expectReply ? { kind: "question", from, text } : answering ? { kind: "reply", from, text } : { kind: "note", from, text });
 			result = { ok: true, delivered: "main" };
 		} else {
@@ -211,7 +221,7 @@ export class Team {
 			handle = await this.options.launcher.launch(this.records.get(name)!, {
 				update: (patch) => {
 					const record = this.records.get(name);
-					if (record && LIVE_STATES.has(record.state)) this.patch(name, patch);
+					if (record && LIVE_STATES.has(record.state)) this.patch(name, this.workedSinceAnswer(name, patch) ? { ...patch, answeredMain: undefined } : patch);
 				},
 			});
 		} catch (error) {
@@ -261,13 +271,34 @@ export class Team {
 
 	private fail(name: string, error: unknown): void {
 		const message = error instanceof Error ? error.message : String(error);
-		this.patch(name, { state: "failed", endedAt: this.now(), activity: null, error: message });
+		// A failure after an answer is news main has not heard.
+		this.patch(name, { state: "failed", endedAt: this.now(), activity: null, error: message, answeredMain: undefined });
 		this.finish(name);
+	}
+
+	/**
+	 * The call that carried the answer ends right after it; any call after that is
+	 * work main has not heard about, so the report must wake main after all.
+	 */
+	private workedSinceAnswer(name: string, patch: { toolCalls?: number }): boolean {
+		const at = this.answeredAt.get(name);
+		if (at === undefined || patch.toolCalls === undefined || patch.toolCalls <= at + 1) return false;
+		this.answeredAt.delete(name);
+		return true;
+	}
+
+	/** Anything delivered to a child (steering, a note, a subagent's report, a resume) is new work its report must tell main about. */
+	private forgetAnswer(name: string): void {
+		this.resumedToAnswer.delete(name);
+		this.answeredAt.delete(name);
+		if (this.records.get(name)?.answeredMain) this.patch(name, { answeredMain: undefined });
 	}
 
 	/** Hands the report up and frees the slot. */
 	private finish(name: string): void {
 		const record = this.records.get(name)!;
+		this.answeredAt.delete(name);
+		this.resumedToAnswer.delete(name);
 		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
 		this.waiters.delete(name);
 		// The report answers anything main was waiting on.
@@ -289,6 +320,7 @@ export class Team {
 		const target = this.records.get(to);
 		if (!target) return { ok: false, error: `No agent named ${to}. ${this.knownNames()}` };
 		if (target.state === "failed" || target.state === "stopped") return { ok: false, error: `${to} has ${target.state}.` };
+		this.forgetAnswer(to);
 		const handle = this.handles.get(to);
 		if ((target.state === "running" || target.state === "asking") && handle) {
 			handle.steer(body);
@@ -297,7 +329,7 @@ export class Team {
 		const resumes = wakes || from === target.parent || from === USER;
 		if ((target.state === "idle" || target.state === "waiting") && handle && resumes) {
 			// A new run: time it on its own and forget what the last one answered.
-			if (target.state === "idle") this.patch(to, { resumedBy: { from, text: said }, startedAt: this.now(), answeredMain: undefined });
+			if (target.state === "idle") this.patch(to, { resumedBy: { from, text: said }, startedAt: this.now() });
 			void this.run(to, [...this.takeInbox(to), body].join("\n\n"));
 			return { ok: true, delivered: "resumed" };
 		}

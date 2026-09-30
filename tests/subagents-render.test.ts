@@ -49,6 +49,37 @@ test("a message band shows who wrote and whether it asks; a report shows its fir
 	assert.equal(report.render(80).length, 1 + 8);
 });
 
+test("a report band shows cost, tokens and time; an answered report stays one band until clicked", () => {
+	const report = createReportRenderer()({ details: { id: "5", kind: "report", reports: [
+		{ name: "scout", model: "openai-codex/gpt-6-luna", state: "idle", startedAt: 0, endedAt: 65_000, cost: 0.42, toolCalls: 9, tokens: { input: 41_700, output: 3_400 }, report: "a\nb" },
+		{ name: "reader", model: "openai-codex/gpt-6-luna", state: "idle", startedAt: 0, endedAt: 5_000, cost: 0.01, toolCalls: 1, tokens: { input: 900, output: 120 }, answered: true, report: "lib/a.ts\nlib/b.ts" },
+	] } } as any, { expanded: false } as any, theme)!;
+	const lines = report.render(100).map(strip);
+	assert.match(lines[0]!, /scout finished  gpt-6-luna.*\$0\.42  42k in · 3\.4k out  1m 05s/);
+	assert.deepEqual(lines.slice(1, 3).map((line) => line.trim()), ["a", "b"]);
+	assert.match(lines[3]!, /reader finished  gpt-6-luna  answered above.*\$0\.010  900 in · 120 out  5\.0s/);
+	assert.equal(lines[4]!.trim(), "… 2 lines (click to show)", "the answer is already on screen; the report waits for a click");
+	assert.equal(lines.length, 5);
+	(report as any).handleMouse({ type: "click", button: "left" });
+	assert.deepEqual(report.render(100).map(strip).slice(4).map((line) => line.trim()), ["lib/a.ts", "lib/b.ts"]);
+});
+
+test("an answered report without final text is just its band", () => {
+	const report = createReportRenderer()({ details: { id: "7", kind: "report", reports: [
+		{ name: "quiet", model: "openai-codex/gpt-6-luna", state: "idle", startedAt: 0, endedAt: 2_000, cost: 0, toolCalls: 1, answered: true },
+	] } } as any, { expanded: false } as any, theme)!;
+	assert.equal(report.render(100).length, 1);
+});
+
+test("a report saved before tokens were recorded still shows cost and time", () => {
+	const report = createReportRenderer()({ details: { id: "6", kind: "report", reports: [
+		{ name: "old", model: "openai-codex/gpt-6-luna", state: "idle", startedAt: 0, endedAt: 5_000, cost: 0.01, toolCalls: 1, report: "done" },
+	] } } as any, { expanded: false } as any, theme)!;
+	const head = strip(report.render(100)[0]!);
+	assert.match(head, /\$0\.010?  5\.0s/);
+	assert.doesNotMatch(head, / in · /);
+});
+
 test("a background subagent row stays calm and says so; a finished one shows cost and time", () => {
 	const record: AgentRecord = { name: "scout", parent: "main", depth: 1, task: "Find it", model: "openai-codex/gpt-6-luna", readOnly: false, fork: false,
 		blocking: false, state: "running", createdAt: 0, startedAt: Date.now() - 3_000, activity: "bash ls", toolCalls: 1, usage: NO_USAGE, runs: 1 };

@@ -433,8 +433,11 @@ session. `message` sends a note to an agent by name, or to `all`. A running
 agent reads it after its current tool call; a finished one resumes with its
 context to handle it. A child can ask with `expectReply: true` and wait for the
 answer. Main never waits: a child's question wakes it, and so does the answer
-to anything main asked; the report of a run that answered it doesn't wake main
-a second time. Children know each other and can split work directly.
+to anything main asked. When main's question resumes a finished child that
+answers and then just writes its final text, the report doesn't wake main a
+second time. More work, new input or a failure after the answer does, so a
+report is never silently missed. Children know each other and can split work
+directly.
 Notes that don't need main's attention queue for its next turn instead of
 waking it, and show above the editor until they are in the transcript.
 Reports from children started in the same run arrive together, as one message.
@@ -442,7 +445,10 @@ Reports from children started in the same run arrive together, as one message.
 **Seeing it.** A backgrounded start leaves a compact, still chip like Shell
 Jobs: `↳ reviewer  opus high  in background`. It takes the final outcome and
 time when the child ends. A blocking `wait: true` call retains its full band
-and activity line; expanding a background call shows its task in full.
+and activity line; expanding a background call shows its task in full. A
+report's band shows the run's cost, tokens (`in` counts cached prompt tokens
+too) and time. When its answer is already on screen, the report stays one band
+and a click unfolds its text.
 Each agent has a band above the editor: its model and thinking
 level, what it is doing right now, how full its context is (`ctx 12%`), what
 it has cost and how long this run has taken. Children of children sit under

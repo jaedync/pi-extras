@@ -19,6 +19,7 @@ import { paletteFrom } from "../band/palette.ts";
 import { handoffChip, type ChipTint } from "../band/job-chip.ts";
 import { bodyBackground, onBackground } from "../band/surface.ts";
 import { formatMoney } from "../status-plus-logic.ts";
+import { formatTokens } from "../status-plus-render.ts";
 import type { MailDetails, ReportSummary } from "./deliver.ts";
 import { noReport, reportBody } from "./format.ts";
 import { MAIN, moreLines } from "./names.ts";
@@ -66,7 +67,9 @@ function body(theme: Theme, width: number, text: string, color: string, limit: n
 		: wrapTextWithAnsi(trimmed, inner).map((line) => paint(color, line));
 	const shown = limit === null ? all : all.slice(0, limit);
 	const lines = shown.map((line) => pad + truncateToWidth(line, inner, "…"));
-	if (shown.length < all.length) lines.push(pad + paint("dim", `… ${moreLines(all.length - shown.length)} (click to show)`));
+	const hidden = all.length - shown.length;
+	const count = shown.length > 0 ? moreLines(hidden) : `${hidden} line${hidden === 1 ? "" : "s"}`;
+	if (hidden > 0) lines.push(pad + paint("dim", `… ${count} (click to show)`));
 	return onBackground(lines, width, bodyBackground(theme));
 }
 
@@ -218,10 +221,21 @@ function reportLines(theme: Theme, width: number, report: ReportSummary, expande
 	const paint = paintOf(theme);
 	const took = report.startedAt !== undefined && report.endedAt !== undefined ? formatTime(report.endedAt - report.startedAt) : "";
 	const word = report.state === "idle" ? "finished" : report.state;
-	const segs: Seg[] = [{ text: report.name, color: "text", bold: true }, { text: ` ${word}`, color: report.state === "failed" ? "error" : "muted" }, { text: `  ${shortModel(report.model)}`, color: "dim" }];
-	const rail: Seg[] = [...(report.cost > 0 ? [{ text: `$${formatMoney(report.cost)}`, color: "dim" }, { text: "  ", color: "dim" }] : []), { text: took, color: "text" }];
-	const text = report.state === "failed" ? report.error ?? "failed" : report.report ?? noReport(report.state);
-	const under = body(theme, width, text, report.state === "failed" ? "error" : "toolOutput", expanded ? null : REPORT_PREVIEW_LINES, report.state === "failed" ? undefined : markdown);
+	const segs: Seg[] = [
+		{ text: report.name, color: "text", bold: true }, { text: ` ${word}`, color: report.state === "failed" ? "error" : "muted" }, { text: `  ${shortModel(report.model)}`, color: "dim" },
+		...(report.answered ? [{ text: "  answered above", color: "dim" }] : []),
+	];
+	const gap: Seg = { text: "  ", color: "dim" };
+	const rail: Seg[] = [
+		...(report.cost > 0 ? [{ text: `$${formatMoney(report.cost)}`, color: "dim" }, gap] : []),
+		...(report.tokens ? [{ text: `${formatTokens(report.tokens.input)} in · ${formatTokens(report.tokens.output)} out`, color: "dim" }, gap] : []),
+		{ text: took, color: "text" },
+	];
+	// An answered run with no final text has nothing to unfold.
+	const text = report.state === "failed" ? report.error ?? "failed" : report.report ?? (report.answered ? "" : noReport(report.state));
+	// An answered run's text is already on screen as its reply; the band alone says what the run took.
+	const limit = expanded ? null : report.answered ? 0 : REPORT_PREVIEW_LINES;
+	const under = body(theme, width, text, report.state === "failed" ? "error" : "toolOutput", limit, report.state === "failed" ? undefined : markdown);
 	const session = expanded && report.sessionFile ? onBackground([" ".repeat(BODY_INDENT) + truncateToWidth(paint("dim", `session ${report.sessionFile}`), width - BODY_INDENT, "…")], width, bodyBackground(theme)) : [];
 	return [band(theme, width, reportPhase(report), segs, rail), ...under, ...session];
 }

@@ -10,7 +10,8 @@
  *   turn form a group, and a report waits (up to `groupWaitMs`) for the rest
  *   of its group, so parallel work lands as one message. A child the user
  *   stopped doesn't wake it, nor does one from a run that began with main's
- *   question and already answered it.
+ *   question, answered it and did no more work. That report still shows its
+ *   band, so the run's time, cost and tokens are on screen.
  *
  * Everything sent but not yet in the transcript is kept as pending, so the
  * widget can show it queued until Pi appends it.
@@ -43,6 +44,10 @@ export interface ReportSummary {
 	endedAt?: number;
 	cost: number;
 	toolCalls: number;
+	/** Prompt tokens (fresh and cached) and output; absent in sessions saved before it was recorded. */
+	tokens?: { input: number; output: number };
+	/** The run's answer already reached main as a reply. */
+	answered?: true;
 	report?: string;
 	error?: string;
 	sessionFile?: string;
@@ -61,8 +66,12 @@ export interface PendingItem {
 }
 
 export function summarize(record: AgentRecord): ReportSummary {
+	const { input, output, cacheRead, cacheWrite } = record.usage;
+	const prompt = input + cacheRead + cacheWrite;
 	return {
 		name: record.name, model: record.model, state: record.state, cost: record.usage.cost, toolCalls: record.toolCalls,
+		...(prompt + output > 0 ? { tokens: { input: prompt, output } } : {}),
+		...(record.answeredMain ? { answered: true as const } : {}),
 		...(record.startedAt !== undefined ? { startedAt: record.startedAt } : {}),
 		...(record.endedAt !== undefined ? { endedAt: record.endedAt } : {}),
 		...(record.report !== undefined ? { report: record.report } : {}),
@@ -159,9 +168,8 @@ export class MainMail {
 		const id = this.nextId();
 		const wakes = records.some((record) => record.state !== "stopped" && !record.answeredMain);
 		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
-		// A report that only repeats an answer main already showed stays in its context, off screen.
-		const display = records.some((record) => !record.answeredMain);
-		this.send({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display, details: { id, kind: "report", reports: records.map(summarize) } },
+		// Every report shows its band; one that only repeats an answer keeps its text folded.
+		this.send({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } },
 			wakes ? { triggerTurn: true, deliverAs: "steer" } : { triggerTurn: false });
 	}
 

@@ -108,6 +108,34 @@ test("main resumes a finished child, which keeps its context", { timeout: 20_000
 	await team.close();
 });
 
+test("a resumed child that answers main then keeps working wakes main with its report; one that stops does not", { timeout: 20_000 }, async () => {
+	writeFileSync(join(scratch, "notes.txt"), "two files need fixes\n");
+	const { team, faux, main } = await setup();
+	faux.setResponses([
+		ai.fauxAssistantMessage("First pass done."),
+		ai.fauxAssistantMessage(ai.fauxToolCall("message", { to: "main", text: "Yes, starting now." })),
+		ai.fauxAssistantMessage(ai.fauxToolCall("read", { path: join(scratch, "notes.txt") })),
+		ai.fauxAssistantMessage("Fixed both files."),
+		ai.fauxAssistantMessage(ai.fauxToolCall("message", { to: "main", text: "It is notes.txt." })),
+		ai.fauxAssistantMessage("It is notes.txt."),
+	]);
+	team.spawn({ task: "Review notes", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false });
+	await team.whenDone("review-notes");
+	await team.send("main", "review-notes", "Fix the rest too?", { expectReply: true });
+	await new Promise((r) => setTimeout(r, 50));
+	const worked = await team.whenDone("review-notes");
+	assert.equal(worked.report, "Fixed both files.");
+	assert.deepEqual(main.map((d) => d.kind), ["report", "reply", "report"]);
+	assert.equal(worked.answeredMain, undefined, "work after the answer makes the report wake main");
+	await team.send("main", "review-notes", "Which file was it?", { expectReply: true });
+	await new Promise((r) => setTimeout(r, 50));
+	const answered = await team.whenDone("review-notes");
+	assert.equal(answered.report, "It is notes.txt.");
+	assert.deepEqual(main.slice(3).map((d) => d.kind), ["reply", "report"]);
+	assert.equal(answered.answeredMain, true, "an answer followed only by the final text need not wake main twice");
+	await team.close();
+});
+
 test("a message that lands while the child writes its final answer still gets handled", { timeout: 20_000 }, async () => {
 	const { team, faux } = await setup();
 	let releaseFinal!: () => void;

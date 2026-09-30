@@ -55,7 +55,11 @@ export interface AgentRecord {
 	runs: number;
 	/** The message that resumed it, for the report of that run. */
 	resumedBy?: { from: string; text: string };
-	/** This run began with main's question and has already answered it, so its report need not wake main. */
+	/**
+	 * Main resumed this idle child with a question, and the child answered it and
+	 * then only wrote its final text: no tool calls, no new input, no failure. Its
+	 * report need not wake main.
+	 */
 	answeredMain?: boolean;
 }
 

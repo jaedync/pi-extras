@@ -291,6 +291,8 @@ test("a report doesn't wake main again once the run answered main's question", a
 	await tick();
 	await h.team.send(name, "main", "Message from X");
 	assert.equal(h.main.at(-1)?.kind, "reply");
+	// The message call that carried the answer ends; that alone is not more work.
+	h.hooks.get(name)!.update({ toolCalls: 1 });
 	h.lastCall(name).finish("Message from X");
 	await tick();
 	assert.equal((h.main.at(-1) as { record: AgentRecord }).record.answeredMain, true);
@@ -300,6 +302,104 @@ test("a report doesn't wake main again once the run answered main's question", a
 	h.lastCall(name).finish("tests fine");
 	await tick();
 	assert.equal((h.main.at(-1) as { record: AgentRecord }).record.answeredMain, undefined);
+});
+
+test("a run that keeps working after answering main's question still wakes main with its report", async () => {
+	const h = harness();
+	const name = h.spawn("read format.ts");
+	await tick();
+	h.lastCall(name).finish("capReport is 12k");
+	await h.team.whenDone(name);
+	await h.team.send("main", name, "Fix the other files too?", { expectReply: true });
+	await tick();
+	await h.team.send(name, "main", "Yes, starting now.");
+	assert.equal(h.main.at(-1)?.kind, "reply");
+	h.hooks.get(name)!.update({ toolCalls: 1 });
+	h.hooks.get(name)!.update({ toolCalls: 2 });
+	h.lastCall(name).finish("Fixed 14 files; two need review.");
+	await tick();
+	const report = h.main.at(-1) as { kind: string; record: AgentRecord };
+	assert.equal(report.kind, "report");
+	assert.equal(report.record.answeredMain, undefined, "an hour of work after a quick answer is news main must wake for");
+});
+
+/** Main resumes a finished child with a question; the child's first run ended as `first`. */
+async function resumedWithQuestion(h: ReturnType<typeof harness>, task: string) {
+	const name = h.spawn(task);
+	await tick();
+	h.lastCall(name).finish("first");
+	await h.team.whenDone(name);
+	await h.team.send("main", name, "Can you take this further?", { expectReply: true });
+	await tick();
+	return name;
+}
+
+const lastReport = (h: ReturnType<typeof harness>) => {
+	const delivery = h.main.at(-1) as { kind: string; record: AgentRecord };
+	assert.equal(delivery.kind, "report");
+	return delivery.record;
+};
+
+test("an answer given before the child waits on its own subagent does not silence the later report", async () => {
+	const h = harness({ maxDepth: 2 });
+	const lead = await resumedWithQuestion(h, "coordinate the audit");
+	const helper = h.team.spawn({ task: "helper audit work", parent: lead, model: "openai-codex/gpt-6-luna", readOnly: false, fork: false, blocking: false });
+	assert.ok(helper.ok);
+	h.hooks.get(lead)!.update({ toolCalls: 1 });
+	await h.team.send(lead, "main", "Dispatched a helper; I'll report.");
+	h.hooks.get(lead)!.update({ toolCalls: 2 });
+	h.lastCall(lead).finish("waiting on the helper");
+	await tick();
+	assert.equal(h.team.get(lead)!.state, "waiting");
+	await tick();
+	h.lastCall(helper.record.name).finish("helper found two issues");
+	await tick();
+	h.lastCall(lead).finish("Audit done: two issues, both fixed.");
+	await tick();
+	assert.equal(lastReport(h).answeredMain, undefined, "the helper's report was new input, so the final report is news");
+});
+
+test("answering main's status question in a run main started with a note does not silence the deliverable", async () => {
+	const h = harness();
+	const name = h.spawn("write the migration");
+	await tick();
+	h.lastCall(name).finish("first");
+	await h.team.whenDone(name);
+	await h.team.send("main", name, "Now apply it to the other tables.");
+	await tick();
+	h.hooks.get(name)!.update({ toolCalls: 7 });
+	await h.team.send("main", name, "Status?", { expectReply: true });
+	await h.team.send(name, "main", "Almost done, writing up.");
+	assert.equal(h.main.at(-1)?.kind, "reply");
+	h.hooks.get(name)!.update({ toolCalls: 8 });
+	h.lastCall(name).finish("Migration applied to 14 tables.");
+	await tick();
+	assert.equal(lastReport(h).answeredMain, undefined);
+});
+
+test("a second question steered into an answered run makes its report news again", async () => {
+	const h = harness();
+	const name = await resumedWithQuestion(h, "profile the build");
+	await h.team.send(name, "main", "Yes: webpack dominates.");
+	h.hooks.get(name)!.update({ toolCalls: 1 });
+	await h.team.send("main", name, "And the fix?", { expectReply: true });
+	await h.team.send(name, "main", "Working on it.");
+	h.hooks.get(name)!.update({ toolCalls: 2 });
+	h.lastCall(name).finish("Cut build time from 90s to 31s by caching loaders.");
+	await tick();
+	assert.equal(lastReport(h).answeredMain, undefined);
+});
+
+test("a run that fails after answering main still wakes main with the failure", async () => {
+	const h = harness();
+	const name = await resumedWithQuestion(h, "check the quota");
+	await h.team.send(name, "main", "Checking now.");
+	h.hooks.get(name)!.update({ toolCalls: 1 });
+	h.lastCall(name).fail(new Error("usage limit reached"));
+	await tick();
+	const report = lastReport(h);
+	assert.equal(report.state, "failed");
+	assert.equal(report.answeredMain, undefined);
 });
 
 test("a child can wait on two agents at once; each answer settles its own question", async () => {
