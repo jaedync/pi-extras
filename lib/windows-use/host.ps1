@@ -422,6 +422,14 @@ function Send-Mcp([string]$vm, [int]$port, [string]$message) {
     } finally { $resp.Dispose() }
 }
 
+# What the Hyper-V socket route needs: the VM's id, which addresses it, and the
+# server's key. Both go back over this private pipe only, never a command line.
+function Get-RelayAuth([string]$vm) {
+    $keyFile = Get-KeyFile $vm
+    $key = if (Test-Path $keyFile) { (Get-Content -Path $keyFile -Raw).Trim() } else { $null }
+    [ordered]@{ id = [string](Get-Machine $vm).Name; key = $key }
+}
+
 # ---- Protocol ------------------------------------------------------------------
 
 function Get-Port($p) { if ($p.port) { [int]$p.port } else { $defaultPort } }
@@ -445,6 +453,7 @@ $handlers = @{
     setup      = { param($p) Invoke-Setup $p.vm (Get-Port $p) ([string]$p.launcher) ($p.elevated -eq $true) }
     probe      = { param($p) Test-Port $p.vm (Get-Port $p) }
     mcp        = { param($p) Send-Mcp $p.vm (Get-Port $p) ([string]$p.message) }
+    relayAuth  = { param($p) Get-RelayAuth $p.vm }
 }
 
 function Write-Message([string]$idJson, [string]$body) { $stdout.WriteLine('{"jsonrpc":"2.0","id":' + $idJson + ',' + $body + '}') }

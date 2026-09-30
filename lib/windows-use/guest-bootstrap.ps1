@@ -66,9 +66,10 @@ try {
     $toml = "[server]`ntransport = `"streamable-http`"`nhost = `"0.0.0.0`"`nport = $port`nauth_key = `"$key`"`nstateless_http = true`n"
     [IO.File]::WriteAllText((Join-Path $cfgDir 'config.toml'), $toml, $utf8)
     $start = Join-Path $cfgDir 'windows-use-start.cmd'
+    # Windows-MCP's glow around each capture lags and lands in console OCR.
     # First stop a server still running, which a restart typed as the signed-in user can't
     # when the server has administrator rights, and give its port a moment to close.
-    $serve = @('@echo off', 'taskkill /f /t /im windows-mcp.exe >nul 2>&1', 'ping -n 3 127.0.0.1 >nul',
+    $serve = @('@echo off', 'set WINDOWS_MCP_DISABLE_FLASH=1', 'taskkill /f /t /im windows-mcp.exe >nul 2>&1', 'ping -n 3 127.0.0.1 >nul',
         "`"$exe`" serve 1>>`"$cfgDir\server.log`" 2>>`"$cfgDir\server.error.log`"")
     [IO.File]::WriteAllText($start, ($serve -join "`r`n") + "`r`n", [Text.Encoding]::ASCII)
 

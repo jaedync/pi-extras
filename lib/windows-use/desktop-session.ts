@@ -16,8 +16,14 @@ export interface DesktopSession {
 /** A failed PowerShell command is not evidence of an unlocked desktop. */
 export function readSession(text: string): DesktopSession {
 	const match = /^Response: PI_WINDOWS_SESSION=(\{[^\r\n]+\})\s*\r?\nStatus Code: 0\s*$/.exec(text);
-	let value: Record<string, unknown> = {};
+	let value: unknown = {};
 	try { if (match) value = JSON.parse(match[1]!); } catch { /* Invalid replies fail closed below. */ }
+	return toSession(value);
+}
+
+/** The same WTS facts, from the PowerShell check or the guest relay's native query. */
+export function toSession(raw: unknown): DesktopSession {
+	const value = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
 	const uint = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= NO_CONSOLE;
 	if (!uint(value.id) || value.id === 0 || !uint(value.console) || !uint(value.state) || value.state > 9 || typeof value.locked !== "boolean" || typeof value.elevated !== "boolean") {
 		throw new Error("Windows-MCP could not report its live desktop session; no input was sent. Reconnect the intended desktop in VM Connect and retry.");

@@ -9,12 +9,15 @@ import { fileURLToPath } from "node:url";
 import { defineTool, highlightCode, keyHint, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { CodeExecutor, type CodeResult } from "../computer-use/executor.ts";
+import type { ClientProcess } from "../computer-use/mcp-link.ts";
 import { painter } from "../computer-use/paint.ts";
 import { renderCall, renderResult, type RowDetails } from "../computer-use/render.ts";
 import { markRow } from "../tool-row.ts";
 import { WIN_API, WinSession, vmAllowlist } from "./api.ts";
 import { Guest } from "./guest.ts";
 import { HostSession } from "./host.ts";
+import { RelayChannel } from "./relay-channel.ts";
+import { Tunnel } from "./tunnel.ts";
 
 const ENABLED = new Set(["1", "on", "true", "yes"]);
 /** Close the host after this long without a call; restarting it takes a few seconds. */
@@ -164,30 +167,34 @@ function powershellPath(): string | undefined {
 	return existsSync(WINDOWS_POWERSHELL) ? WINDOWS_POWERSHELL : undefined;
 }
 
+/** Starts one of the package's Windows PowerShell scripts on the Hyper-V host. */
+function launchScript(name: string): () => ClientProcess {
+	const script = fileURLToPath(new URL(name, import.meta.url));
+	return () => {
+		const exe = powershellPath();
+		if (!exe) throw new Error("windows_use needs powershell.exe through WSL interop (Windows PowerShell 5.1 on the Hyper-V host)");
+		const windowsPath = execFileSync("wslpath", ["-w", script], { encoding: "utf8" }).trim();
+		// A Windows working directory keeps Windows tools from warning about UNC paths.
+		return spawn(exe, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", windowsPath], {
+			cwd: existsSync("/mnt/c/Windows") ? "/mnt/c/Windows" : undefined,
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+	};
+}
+
 export function productionDeps(): WindowsUseDeps {
-	const script = fileURLToPath(new URL("./host.ps1", import.meta.url));
-	const host = new HostSession({
-		idleMs: IDLE_MS,
-		launch: () => {
-			const exe = powershellPath();
-			if (!exe) throw new Error("windows_use needs powershell.exe through WSL interop (Windows PowerShell 5.1 on the Hyper-V host)");
-			const windowsPath = execFileSync("wslpath", ["-w", script], { encoding: "utf8" }).trim();
-			// A Windows working directory keeps Windows tools from warning about UNC paths.
-			return spawn(exe, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", windowsPath], {
-				cwd: existsSync("/mnt/c/Windows") ? "/mnt/c/Windows" : undefined,
-				stdio: ["pipe", "pipe", "pipe"],
-			});
-		},
-	});
+	const host = new HostSession({ idleMs: IDLE_MS, launch: launchScript("./host.ps1") });
+	// Its own process: a long tool call over it never holds up console input on the host.
+	const tunnel = new Tunnel({ idleMs: IDLE_MS, launch: launchScript("./tunnel.ps1") });
 	const allowed = vmAllowlist(process.env);
 	const elevated = ENABLED.has((process.env.PI_WINDOWS_USE_ELEVATED ?? "").trim().toLowerCase());
-	const session = new WinSession(host, (vm, note) => new Guest({ host, vm, note, elevated }), allowed);
+	const session = new WinSession(host, (vm, note) => new Guest({ host, vm, note, elevated, relay: new RelayChannel({ tunnel, host, vm }) }), allowed);
 	return {
 		allowed,
 		elevated,
 		executor: new CodeExecutor({ session, api: WIN_API }),
 		notes: () => session.drainNotes(),
-		close: () => host.close(),
+		close: () => { host.close(); tunnel.close(); },
 		status: async () => {
 			const exe = powershellPath();
 			const lines = [exe ? `powershell.exe: ${exe}` : "powershell.exe: not found (needs WSL interop)", `host: ${host.state}`];
