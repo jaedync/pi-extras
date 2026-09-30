@@ -51,6 +51,29 @@ that no longer govern the selected model or whose window has since reset,
 including older queued notices, while
 preserving raw session history and explicit requested usage snapshots.
 
+## Cache Compaction
+
+The latest full request transcript and non-conversation provider payload fields
+are kept in memory only, never persisted or logged. This can include private tool
+output and provider metadata, just like Pi's normal in-memory context. The
+conversation body is not retained a second time inside the payload snapshot.
+Snapshots are replaced on each request and cleared on compaction, session
+start/shutdown/reload, tree navigation, model and thinking-level changes.
+
+Summarization sends the captured transcript, finalized replies/tool results, and
+a summary instruction to the same configured model and endpoint with the same
+session ID. It does not read credential files or change authentication, tools,
+reasoning, provider settings, or ordinary requests. Preserved provider fields
+include tool declarations, but the instruction forbids tool use and any summary
+with a tool call is rejected without executing it. Errors are reported only as
+fixed categories, never provider text or request bodies.
+
+Only summaries, file lists, normal usage and `details.cachePrefix: true` enter
+the session file. No new network destination, telemetry, timer or disk cache is
+created. Cache hits and expiry cannot be guaranteed. Unsafe, cold or unsupported
+requests use Pi's default summarization; a failed prefix attempt can add usage
+before that fallback. Disable with `cacheCompaction.enabled: false`.
+
 ## Rate-limit Recovery
 
 Detection reads finalized assistant errors, not credentials. Only structured

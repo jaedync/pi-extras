@@ -18,7 +18,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all fourteen extensions (quota hibernation, computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
+adds all fifteen extensions (quota hibernation, computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -27,6 +27,7 @@ can still conflict.
 | --- | --- |
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits, optional linked subagent usage |
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
+| Cache Compaction | Prefix-sharing summaries that reuse the session's warm prompt cache, with safe fallback to Pi's default compaction |
 | Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
 | Phase Spinner | A line under the conversation, above any queued messages, saying what the agent is doing (working phase, compaction, retries) with its own timer; tokens/sec, time to first token and elapsed time in the editor border |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
@@ -115,6 +116,69 @@ the package. Removing it does not remove your credentials or change other packag
 
 See [security and privacy](docs/security.md) before enabling provider-limit polling
 or supplying search credentials. Extensions execute with your user permissions.
+
+## Cache Compaction
+
+Enabled by default. Pi's usual compaction serializes history into a separate
+summarization prompt, which cannot reuse the session's cached prefix. Cache
+Compaction instead appends an extraction instruction to the last full session
+request plus its finalized assistant replies/tool results, preserving the
+session ID and every non-conversation provider payload field, including
+thinking/reasoning, tools, output limits and cache routing. It never reduces the
+session's reasoning settings, because doing so loses cache hits. The instruction
+asks for brief reasoning, Pi's structured checkpoint, previous-summary updates,
+and split-turn context. Its retained-boundary identifier includes role, absolute
+and from-end positions, content types, tool-call IDs/names and bounded excerpts
+(capped at 1,800 characters, including for textless tool calls). It identifies the retained boundary and summarizes only
+the history that Pi will discard, not the recent messages Pi keeps verbatim.
+
+A salted ~42k-context recipe probe measured $0.010 vs $0.169 for Sonnet through
+Meridian, and $0.0034 vs $0.055 for Codex (about 94% savings). Smaller live A/B
+runs loading this extension measured Sonnet $0.0149 vs $0.0481 (14,826 cache-read
+tokens) and Codex $0.0065 vs $0.0188 (7,552 cached). These are provider-reported
+catalog costs, not subscription invoices. Savings, latency and summary quality
+vary; post-compaction turns still start with a new, cold summary prefix.
+
+Configure `cacheCompaction` in `PI_CODING_AGENT_DIR/pi-extras.json` (default
+`~/.pi/agent/pi-extras.json`), then `/reload`:
+
+```json
+{
+  "cacheCompaction": {
+    "enabled": true,
+    "idleSeconds": {
+      "anthropic": 3300,
+      "openai-codex": 240
+    }
+  }
+}
+```
+
+`enabled` defaults to `true`; `false` leaves Pi's default summarization intact.
+`idleSeconds` optionally overrides the maximum idle time per provider, in whole
+seconds from 0 to 86400. Zero always uses default compaction. Without an override,
+Anthropic on Meridian's loopback port 3456 gets 55 minutes (observed one-hour
+SDK cache writes, minus a five-minute margin). Native Anthropic, Codex and other
+providers get four minutes, conservatively allowing for short cache lifetimes.
+The example's Anthropic override also applies to native Anthropic, so omit it
+unless that route has a long-lived cache. Invalid values use the defaults.
+
+Supported APIs: Anthropic Messages, OpenAI Responses/Codex/Azure Responses, and
+Google Generative AI/Vertex. Unsupported APIs and missing capture hooks degrade
+to Pi's default compaction. The capture/request APIs exist in Pi 0.87.0 and were
+also exercised with 0.99.1. Load this extension after extensions that transform
+`context_with_system` or `before_provider_request`, so its snapshot sees their
+final changes. Incompatible context transformations safely lose eligibility.
+
+Fallbacks include no captured payload, model/provider/API/endpoint or session
+changes, irreconcilable branches/context edits, new unsent input, expired cache,
+overflow recovery, insufficient context-window headroom, abort, provider error,
+empty/tool-calling or token-capped summaries. Interactive notices say which path
+ran and why; successful entries save usage, cumulative file lists and
+`details.cachePrefix: true`. Provider errors and payloads are never logged.
+Snapshots stay in memory only and are cleared on lifecycle changes and
+compaction. A failed prefix request can add provider usage before default
+compaction runs. See [security and privacy](docs/security.md#cache-compaction).
 
 ## Usage Guard
 

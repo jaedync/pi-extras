@@ -2,6 +2,20 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Cache Compaction: compaction summaries reuse the session's warm prompt cache.
+  The summary request is the session's own next request (same system prompt,
+  tools, history, reasoning settings and session ID) with a summarization
+  instruction appended, instead of Pi's standalone summarizer request, which
+  cannot read the cache. Measured locally: about 3x cheaper at 15k tokens of
+  context and 16-17x at 42k (Claude via Meridian and Codex), with equivalent
+  summaries. Model changes, branch changes, overflow recovery, a cold cache or
+  an unusable reply fall back to Pi's default compaction. Configure
+  `cacheCompaction.enabled` and per-provider `idleSeconds` in `pi-extras.json`.
+
 ## 0.13.0 - 2026-09-30
 
 ### Changed

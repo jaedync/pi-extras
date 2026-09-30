@@ -43,7 +43,8 @@
       "extensions/windows-use.ts",
       "extensions/tool-display.ts",
       "extensions/copy-blocks.ts",
-      "extensions/release-notes.ts"
+      "extensions/release-notes.ts",
+      "extensions/cache-compaction.ts"
     ],
     "themes": [
       "themes/quiet.json"

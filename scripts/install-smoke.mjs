@@ -30,8 +30,10 @@ try {
   // Git installs include the lockfile; npm tarballs deliberately omit it.
   // Model the supported Git distribution, not an unshipped npm package.
   const tracked = run('git', ['ls-files', '-z'], resolve()).split('\0').filter(Boolean);
+  // New runtime files must also be exercised before the author stages a feature.
+  const newRuntime = run('git', ['ls-files', '--others', '--exclude-standard', '-z', '--', 'extensions', 'lib'], resolve()).split('\0').filter(Boolean);
   assert.ok(tracked.includes('package-lock.json'));
-  for (const file of tracked) {
+  for (const file of [...new Set([...tracked, ...newRuntime])]) {
     const target = join(fixture, file);
     mkdirSync(dirname(target), { recursive: true });
     cpSync(resolve(file), target);
@@ -61,7 +63,7 @@ try {
   await loader.reload();
   const extensions = loader.getExtensions();
   assert.deepEqual(extensions.errors, []);
-  assert.equal(extensions.extensions.length, 14);
+  assert.equal(extensions.extensions.length, 15);
   assert.ok(loader.getThemes().themes.some(theme => theme.name === 'quiet'));
   assert.deepEqual(loader.getThemes().diagnostics, []);
   const tools = extensions.extensions.flatMap(ext => [...ext.tools.keys()]);
@@ -91,7 +93,7 @@ try {
     await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
     session.dispose();
   }
-  console.log('Native Git install, fourteen-extension loader and session lifecycle passed without credentials.');
+  console.log('Native Git install, fifteen-extension loader and session lifecycle passed without credentials.');
 
   writeFileSync(join(fixture, 'lib/smoke-marker.txt'), 'updated\n');
   run('git', ['add', 'lib/smoke-marker.txt'], fixture);
