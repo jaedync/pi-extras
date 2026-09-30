@@ -452,6 +452,19 @@ describe("job rendering", () => {
 		contains(expanded, "\n     line 1");
 	});
 
+	test("an expanded completion never draws wider than the terminal, however narrow", () => {
+		// Pi stops drawing, and throws, on a line wider than the terminal.
+		const app = createFakePi();
+		shellJobs(app.pi as any);
+		const renderer = app.renderers.get("shell-job-complete")!;
+		const body = Array.from({ length: 8 }, (_, index) => `line ${index + 1} of the output`).join("\n");
+		const message = completionMessage(body, { code: 0, durationMs: 12100, command: "seq 1 20" });
+		const component = renderer(message, { expanded: true, outputPad: 2 }, plainTheme)!;
+		for (let width = 1; width <= 40; width++) {
+			for (const line of component.render(width)) assert.ok(visibleWidth(line) <= width, `width ${width}: ${line}`);
+		}
+	});
+
 	test("a completion band takes the color of how the job ended", () => {
 		const app = createFakePi();
 		shellJobs(app.pi as any);

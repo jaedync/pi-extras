@@ -6,17 +6,24 @@
  */
 import { bgSgr, mix, parseAnsiColor } from "./color.ts";
 import { paletteFrom, type BandTheme } from "./palette.ts";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 // How far a popup panel leans from the tool body gray toward the muted text color.
 const PANEL_LIFT = 0.1;
 
 const RESET = /\x1b\[0?m|\x1b\[49m/g;
 
-/** Pads each line to `width` on the background, re-opening it after any reset inside the line. */
+/** A line cut to `width`: Pi stops drawing, and throws, on a line wider than the terminal. */
+const fitted = (line: string, width: number) => (visibleWidth(line) > width ? truncateToWidth(line, Math.max(0, width), "…") : line);
+
+/**
+ * Pads each line to `width` on the background, re-opening it after any reset
+ * inside the line. A line wider than `width` is cut to fit, background or not.
+ */
 export function onBackground(lines: readonly string[], width: number, sgr: string | undefined): string[] {
-	if (!sgr) return [...lines];
-	return lines.map((line) => {
+	if (!sgr) return lines.map((line) => fitted(line, width));
+	return lines.map((wide) => {
+		const line = fitted(wide, width);
 		const pad = " ".repeat(Math.max(0, width - visibleWidth(line)));
 		return `${sgr}${line.replace(RESET, (reset) => (reset === "\x1b[49m" ? sgr : `${reset}${sgr}`))}${pad}\x1b[49m`;
 	});

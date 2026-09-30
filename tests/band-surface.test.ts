@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { Sheet, type SheetSource } from "../lib/band/sheet.ts";
 import { bodyBackground, onBackground, panelBackground } from "../lib/band/surface.ts";
 import { quiet } from "./support/quiet-theme.ts";
@@ -12,6 +12,18 @@ test("a background covers the whole width and comes back after a reset inside th
 	assert.equal(line, `${BG}a\x1b[0m${BG}b${BG}c   \x1b[49m`);
 	assert.equal(stripTerminalSequences(line!).length, 6);
 	assert.deepEqual(onBackground(["x"], 4, undefined), ["x"], "no background leaves the lines alone");
+});
+
+test("a line wider than its row is cut to fit, with or without a background", () => {
+	// Pi stops drawing, and throws, on a line wider than the terminal.
+	const wide = "     indented text past the edge";
+	for (let width = 1; width <= 12; width++) {
+		for (const bg of [BG, undefined]) {
+			const [line] = onBackground([wide], width, bg);
+			assert.ok(visibleWidth(line!) <= width, `width ${width}, ${bg ? "with" : "without"} a background`);
+		}
+	}
+	assert.equal(stripTerminalSequences(onBackground([wide], 8, BG)[0]!), "     in…");
 });
 
 test("tool bodies use the theme's tool gray and popups a lighter panel", () => {

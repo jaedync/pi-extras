@@ -198,6 +198,18 @@ test("a wait that ended early says why in plain words", () => {
 	assert.deepEqual(escaped.render(100).map(strip).map((line) => line.trim()), ["You stopped waiting. It keeps running, and its report will arrive as a message."]);
 });
 
+test("report and message rows never draw wider than the terminal, however narrow", () => {
+	// Pi stops drawing, and throws, on a line wider than the terminal.
+	const long = Array.from({ length: 8 }, (_, i) => `line ${i + 1} with a few more words`).join("\n");
+	const report = createReportRenderer()({ details: { id: "9", kind: "report", reports: [
+		{ name: "scout", model: "openai-codex/gpt-6-luna", state: "idle", startedAt: 0, endedAt: 5_000, cost: 0.0004, toolCalls: 2, report: long },
+	] } } as any, { expanded: false } as any, theme)!;
+	const message = createMessageRenderer()({ details: { id: "1", kind: "question", from: "scout", text: "Delete it? It is a longer question." } } as any, { expanded: false } as any, theme)!;
+	for (let width = 1; width <= 40; width++) {
+		for (const line of [...report.render(width), ...message.render(width)]) assert.ok(visibleWidth(line) <= width, `width ${width}: ${strip(line)}`);
+	}
+});
+
 test("an unstarted subagent or message call spins only while the model writes it", () => {
 	const rows = {
 		subagent: (context: object, streaming: () => boolean) => subagentCallRow({ task: "Find it" }, theme, context, () => undefined, streaming),
