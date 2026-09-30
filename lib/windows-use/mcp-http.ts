@@ -4,7 +4,13 @@ import type { Duplex } from "node:stream";
 import type { Tunnel, TunnelTarget } from "./tunnel.ts";
 import { TransportError } from "./transport.ts";
 
-interface RelayOptions { readonly signal?: AbortSignal; readonly timeoutMs?: number }
+interface RelayOptions {
+	readonly signal?: AbortSignal;
+	/** For the open and the relay's status byte together. */
+	readonly timeoutMs?: number;
+	/** For the open alone: a missing relay never refuses a Hyper-V socket, it only times out. */
+	readonly openTimeoutMs?: number;
+}
 interface PostOptions extends RelayOptions { readonly key: string; readonly message: unknown }
 const DEFAULT_TIMEOUT_MS = 60_000;
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
@@ -16,7 +22,7 @@ export async function openRelay(tunnel: Tunnel, target: TunnelTarget, options: R
 	const timer = setTimeout(() => timeout.abort(), limit);
 	const signal = options.signal ? AbortSignal.any([timeout.signal, options.signal]) : timeout.signal;
 	try {
-		const stream = await tunnel.open(target, { signal, timeoutMs: limit });
+		const stream = await tunnel.open(target, { signal, timeoutMs: Math.min(options.openTimeoutMs ?? limit, limit) });
 		return await readStatus(stream, signal);
 	} catch (error) {
 		if (timeout.signal.aborted && !options.signal?.aborted) throw new TransportError(`windows_use relay handshake timed out after ${Math.round(limit / 1000)} s`, true);

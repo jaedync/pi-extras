@@ -46,6 +46,12 @@ interface Rig {
 	script?: string;
 	/** The relay reports this session id instead of the server's own. */
 	relaySession?: number;
+	/** The test clock when the relay last restarted the server. */
+	restartedAt?: number;
+	/** The relay started this many seconds ago. */
+	relayUptime?: number;
+	/** The logon task has the server listening after this many more pings. */
+	serverAfterPings?: number;
 	/** The restart reply's steps, when not the usual three. */
 	steps?: { step: "end" | "kill" | "run"; code: number }[];
 }
@@ -104,13 +110,15 @@ function rig(overrides: Partial<Rig> = {}) {
 	const control = async (op: ControlOp): Promise<ControlReply> => {
 		if (!world.relay || world.saved) throw unsent("connect timed out");
 		world.log.push(`relay ${op}`);
-		if (op === "ping") return { ok: true, relay: 1, pid: 42, listening: world.server, uptime: 3000, ...(world.script ? { script: world.script } : {}) };
+		if (op === "ping" && world.serverAfterPings !== undefined && world.serverAfterPings-- <= 0) world.server = true;
+		if (op === "ping") return { ok: true, relay: 1, pid: 42, listening: world.server, uptime: world.relayUptime ?? 3000, ...(world.script ? { script: world.script } : {}) };
 		if (op === "session") {
 			if (world.sessionFails) return { ok: false, error: "session query failed: WTSEnumerateProcessesW (Windows error 5)" };
 			return { ok: true, session: { ...world.session, id: world.relaySession ?? world.session.id, elevated: world.relayElevated } };
 		}
 		if (world.restartThrows) throw new TransportError("the windows_use relay didn't answer within 60 s", false, true);
 		world.restarts++;
+		world.restartedAt = clock;
 		world.wedged = false;
 		world.server = world.restartWorks && !world.runFails;
 		return { ok: true, steps: world.steps ?? [{ step: "end", code: 0 }, { step: "kill", code: 128 }, { step: "run", code: world.runFails ? 1 : 0 }] };
@@ -323,4 +331,16 @@ test("a console session's display is checked for sleep at most every 20 s, not b
 	advance(21_000);
 	await guest.tool("Snapshot", {});
 	assert.equal(world.calls.frame, 2, "Windows turns a display off after a minute idle at the soonest");
+});
+
+test("a server that stopped long after sign-in is restarted through the relay at once, not after a wait", async () => {
+	const { world, guest } = rig({ server: false });
+	assert.equal((await guest.tool("Snapshot", {})).isError, false);
+	assert.equal(world.restartedAt, 0, "nothing is starting it: waiting only delays the restart");
+});
+
+test("just after sign-in, a server the logon task is still starting gets that time before any restart", async () => {
+	const { world, guest } = rig({ server: false, relayUptime: 5, serverAfterPings: 8 });
+	assert.equal((await guest.tool("Snapshot", {})).isError, false);
+	assert.equal(world.restarts, 0);
 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { gunzipSync } from "node:zlib";
 import { NO_FLASH, readRelayDeployed, RELAY_TASK, relayDeployCommands } from "../lib/windows-use/relay-deploy.ts";
@@ -32,7 +32,29 @@ test("the chunks reassemble to exactly the relay script, and the install checks 
 	const restartAt = install.indexOf("Invoke-CimMethod -ClassName Win32_Process -MethodName Create");
 	assert.ok(restartAt > 0, "the relay restarts from a detached helper");
 	assert.ok(!/^Stop-ScheduledTask|^Get-CimInstance.*Stop-Process/m.test(install), "never stopped inline");
-	assert.match(install, /if \(-not \(\$current -and \$running -and \$task\)\)/, "the same relay already running is left alone");
+	assert.match(install, /if \(\$false -or -not \(\$current -and \$running -and \$registered\)\)/, "the same relay already running is left alone");
+});
+
+test("an upgrade the host knows is due restarts the relay even when its file is current", () => {
+	assert.match(relayDeployCommands().at(-1)!, /if \(\$false -or -not/);
+	assert.match(relayDeployCommands(true).at(-1)!, /if \(\$true -or -not/);
+	assert.match(relayDeployCommands().at(-1)!, /\$registered = \$task -or \(Get-ItemProperty [^\n]*'pi-windows-use-relay'/, "a Run-key relay counts as installed too");
+});
+
+test("a new relay that dies at start is rolled back to the previous one, so a VPN never leaves no route", () => {
+	const install = relayDeployCommands(true).at(-1)!;
+	assert.match(install, /Copy-Item \$f \$prev -Force/, "the previous relay is kept before it is overwritten");
+	const helper = /\$helper = "([^\n]+)"/.exec(install)?.[1] ?? "";
+	assert.match(helper, /^Start-Sleep -Seconds 5;/, "the install's answer gets back before the relay carrying it stops");
+	assert.match(helper, /\$launch; Start-Sleep -Seconds 10; if \(-not \(\$relays\) -and \(Test-Path .+\)\) \{ Copy-Item .+ -Force; \$launch \}$/);
+});
+
+test("a reinstall brings the relay back whether a task or the Run key starts it", () => {
+	const bootstrap = readFileSync(new URL("../lib/windows-use/guest-bootstrap.ps1", import.meta.url), "utf8");
+	const tail = bootstrap.slice(bootstrap.indexOf("Stop-Server also stopped"));
+	assert.match(tail, /Start-ScheduledTask -TaskName 'windows-mcp-relay'/);
+	assert.match(tail, /'pi-windows-use-relay'; if \(\$r\) \{ Start-Process cmd\.exe/);
+	assert.ok(tail.indexOf("windows-mcp-relay") < tail.indexOf('Set-Status "OK listening'), "before the host is told the server is ready");
 });
 
 test("the install's report is read strictly, and any other output is shown as the failure", () => {

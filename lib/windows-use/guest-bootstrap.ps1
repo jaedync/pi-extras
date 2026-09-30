@@ -105,7 +105,8 @@ try {
     }
     # Stop-Server also stopped the Hyper-V socket relay, which runs on the server's
     # Python; without it a VPN in the guest leaves the new server unreachable.
-    Start-ScheduledTask -TaskName 'windows-mcp-relay' -ErrorAction SilentlyContinue
+    if (Get-ScheduledTask -TaskName 'windows-mcp-relay' -ErrorAction SilentlyContinue) { Start-ScheduledTask -TaskName 'windows-mcp-relay' }
+    else { $r = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).'pi-windows-use-relay'; if ($r) { Start-Process cmd.exe "/c start `"`" $r" -WindowStyle Hidden } }
     Set-Status "OK listening on $port"
     $done = $true
 } catch {

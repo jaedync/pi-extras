@@ -62,7 +62,7 @@ export class RelayChannel implements RelayCalls {
 
 	async mcp(message: string, options: RelayCallOptions): Promise<unknown[]> {
 		const { id, key } = await this.credentials(options.signal);
-		const stream = await openRelay(this.tunnel, { vm: id, service: DATA_SERVICE }, { signal: options.signal, timeoutMs: DATA_HANDSHAKE_MS });
+		const stream = await openRelay(this.tunnel, { vm: id, service: DATA_SERVICE }, { signal: options.signal, timeoutMs: DATA_HANDSHAKE_MS, openTimeoutMs: RELAY_CONNECT_MS });
 		try {
 			return await postMcp(stream, { key, message, signal: options.signal, timeoutMs: options.timeoutMs });
 		} catch (error) {

@@ -123,6 +123,18 @@ test("openRelay consumes success byte only and handles failure, EOF and timeout 
 	}
 });
 
+test("openRelay gives the open its own shorter limit, and the status byte the rest", async () => {
+	let openLimit: number | undefined;
+	const [client, server] = pair();
+	const fake = { open: async (_target: unknown, options: { timeoutMs?: number }) => { openLimit = options.timeoutMs; return client; } } as unknown as Tunnel;
+	const result = openRelay(fake, target, { timeoutMs: 8_000, openTimeoutMs: 2_500 });
+	await sleep(5);
+	server.write(Buffer.from([1]));
+	(await result).destroy();
+	server.destroy();
+	assert.equal(openLimit, 2_500, "a dead relay is noticed in 2.5 s, not 8");
+});
+
 test("postMcp uses authenticated HTTP and parses JSON, SSE, 202 and HTTP errors", async () => {
 	for (const kind of ["json", "sse", "accepted", "denied"] as const) {
 		const [client, peer] = pair();

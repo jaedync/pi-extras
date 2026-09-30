@@ -22,18 +22,22 @@ const DONE = "PI_RELAY_DEPLOYED=";
 const packed = gzipSync(Buffer.from(RELAY_SCRIPT, "utf8")).toString("base64");
 const dir = "$d = Join-Path $env:USERPROFILE '.windows-mcp'; $b = Join-Path $d 'guest-relay.py.gz.b64'";
 
-/** The PowerShell commands, in order; each must succeed before the next. */
-export function relayDeployCommands(): string[] {
+/**
+ * The PowerShell commands, in order; each must succeed before the next.
+ * `force` restarts the relay even when its file is current: the host saw an
+ * older one answer, so what runs isn't what's on disk.
+ */
+export function relayDeployCommands(force = false): string[] {
 	const chunks: string[] = [];
 	for (let at = 0; at < packed.length; at += CHUNK) chunks.push(packed.slice(at, at + CHUNK));
 	return [
 		`${dir}; New-Item -ItemType Directory -Force -Path $d | Out-Null; Set-Content -Path $b -Value '' -NoNewline`,
 		...chunks.map((chunk) => `${dir}; Add-Content -Path $b -Value '${chunk}' -NoNewline`),
-		installCommand(),
+		installCommand(force),
 	];
 }
 
-function installCommand(): string {
+function installCommand(force: boolean): string {
 	return `$ErrorActionPreference = 'Stop'; ${dir}; $f = Join-Path $d 'guest-relay.py'; $cfg = Join-Path $d 'config.toml'
 $gz = New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,[Convert]::FromBase64String((Get-Content $b -Raw).Trim()))), [IO.Compression.CompressionMode]::Decompress)
 $out = New-Object IO.MemoryStream; $gz.CopyTo($out); $bytes = $out.ToArray(); Remove-Item $b
@@ -46,9 +50,12 @@ $who = "$env:USERDOMAIN\\$env:USERNAME"; $arguments = "\`"$f\`" --config \`"$cfg
 $running = @(Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" | Where-Object { $_.CommandLine -like '*guest-relay.py*' }).Count
 $current = (Test-Path $f) -and ((Get-Sha ([IO.File]::ReadAllBytes($f))) -eq '${RELAY_SHA}')
 $task = Get-ScheduledTask -TaskName '${RELAY_TASK}' -ErrorAction SilentlyContinue
+$registered = $task -or (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'pi-windows-use-relay' -ErrorAction SilentlyContinue)
 $mode = if ($task) { 'task' } else { 'runkey' }; $restart = 'none'
 # The same relay already running only answered slowly: leave it be.
-if (-not ($current -and $running -and $task)) {
+if (${force ? "$true" : "$false"} -or -not ($current -and $running -and $registered)) {
+    # Kept for the helper to roll back to: under a VPN a relay that fails to start leaves no route.
+    $prev = "$f.prev"; if (Test-Path $f) { Copy-Item $f $prev -Force } else { Remove-Item $prev -ErrorAction SilentlyContinue }
     [IO.File]::WriteAllBytes($f, $bytes)
     $runLevel = try { (Get-ScheduledTask -TaskName '${SERVER_TASK}' -ErrorAction Stop).Principal.RunLevel } catch { 'Limited' }
     try {
@@ -59,13 +66,15 @@ if (-not ($current -and $running -and $task)) {
         $kick = "\`"$env:WINDIR\\System32\\conhost.exe\`" --headless \`"$env:WINDIR\\System32\\schtasks.exe\`" /run /tn ${RELAY_TASK}"
     } catch {
         # A user who may not register tasks still starts it at every sign-in.
-        $mode = 'runkey'; $launch = "Start-Process -FilePath '$pyw' -ArgumentList '$($arguments -replace "'", "''")'"
+        $mode = 'runkey'; $launch = "Start-Process -FilePath '$($pyw -replace "'", "''")' -ArgumentList '$($arguments -replace "'", "''")'"
         $kick = "\`"$pyw\`" $arguments"
     }
     New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'pi-windows-use-relay' -Value $kick -PropertyType String -Force | Out-Null
-    # Restarted two seconds after this command answers, and outside windows-mcp.exe's
-    # process tree: over the relay route, stopping it now would cut off this very answer.
-    $helper = "Start-Sleep -Seconds 2; Get-CimInstance Win32_Process | Where-Object { \`$_.Name -eq 'pythonw.exe' -and \`$_.CommandLine -like '*guest-relay.py*' } | ForEach-Object { Stop-Process -Id \`$_.ProcessId -Force -ErrorAction SilentlyContinue }; $launch"
+    # Restarted after this command's answer is back, and outside windows-mcp.exe's process
+    # tree: over the relay route, stopping it now would cut off this very answer. A new
+    # relay that dies at start (a bind race, a script error) is rolled back to the old one.
+    $relays = "Get-CimInstance Win32_Process | Where-Object { \`$_.Name -eq 'pythonw.exe' -and \`$_.CommandLine -like '*guest-relay.py*' }"
+    $helper = "Start-Sleep -Seconds 5; $relays | ForEach-Object { Stop-Process -Id \`$_.ProcessId -Force -ErrorAction SilentlyContinue }; $launch; Start-Sleep -Seconds 10; if (-not ($relays) -and (Test-Path '$($prev -replace "'", "''")')) { Copy-Item '$($prev -replace "'", "''")' '$($f -replace "'", "''")' -Force; $launch }"
     $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helper)) }
     if ($r.ReturnValue -ne 0) { throw "starting the relay failed with $($r.ReturnValue)" }
     $restart = 'scheduled'

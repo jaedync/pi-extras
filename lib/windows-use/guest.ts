@@ -57,6 +57,12 @@ const RELAY_START_MS = 20_000;
 /** The relay's restart ends the task, kills the server, waits 3 s and starts it: each step has 30 s. */
 const RELAY_RESTART_MS = 120_000;
 const WAKE_CHECK_MS = 20_000;
+/**
+ * Initialize is answered by the server's HTTP layer, not a tool worker: under a
+ * second even while tools stall. Past this the server itself is stuck, and each
+ * second is the agent's; a wedge took 72 s to repair with the former 30 s.
+ */
+const INITIALIZE_MS = 15_000;
 
 interface RelayPing {
 	readonly listening: boolean;
@@ -373,9 +379,9 @@ export class Guest {
 		const relay = await this.ping(signal);
 		if (relay) {
 			// The relay runs in the signed-in session: no console sign-in or typing is needed.
-			// Just after sign-in the logon task may still be starting the server; give it that time first.
-			const starting = relay.uptime * 1000 < this.timing.logonWaitMs;
-			if (await this.waitConnect(starting ? this.timing.logonWaitMs : this.timing.restartWaitMs, signal)) return;
+			// Just after sign-in the logon task may still be starting the server; give it that
+			// time. Long after, nothing is starting it, and waiting only delays the restart.
+			if (relay.uptime * 1000 < this.timing.logonWaitMs && await this.waitConnect(this.timing.logonWaitMs, signal)) return;
 			// Otherwise on to the console's repairs, which the session checks below still guard.
 			if (await this.relayRestart(signal, "Windows-MCP wasn't answering; restarted it through the guest relay") === "back") return;
 			// Where the desktop is decides whether the console may be touched at all.
@@ -556,7 +562,7 @@ export class Guest {
 		let deployed: RelayDeployed;
 		try {
 			let text = "";
-			for (const command of relayDeployCommands()) {
+			for (const command of relayDeployCommands(replacing)) {
 				const result = await this.callTool("PowerShell", { command, timeout: 60 }, signal, QUICK_MS + 60_000);
 				text = textOf(result);
 				if (result.isError || !/Status Code: 0\s*$/.test(text)) throw new Error(text.replace(/\s+/g, " ").trim().slice(0, 400));
@@ -590,7 +596,7 @@ export class Guest {
 	 */
 	private async initialize(signal?: AbortSignal): Promise<"ok" | "unreachable" | "silent"> {
 		try {
-			await this.request("initialize", { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "pi-extras windows_use", version: "1" } }, signal, QUICK_MS);
+			await this.request("initialize", { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: "pi-extras windows_use", version: "1" } }, signal, INITIALIZE_MS);
 			await this.send({ jsonrpc: "2.0", method: "notifications/initialized" }, signal, QUICK_MS);
 			this.connected = true;
 			return "ok";
