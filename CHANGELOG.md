@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.12.4 - 2026-09-30
+
+### Added
+
+- Rate-limit Recovery: short rate limits, such as OpenRouter's "temporarily
+  rate-limited upstream" and other 429s without a structured reset, are waited
+  out instead of failing after Pi's roughly 14-second retry. Waits back off 5,
+  10, 20, 40, then 60 seconds (jittered, never below the 429's `Retry-After`)
+  for up to `transientMaxWaitSeconds` (default 180, `0` leaves them to Pi) per
+  streak, in every session including subagents. Interactive sessions show a
+  countdown; Esc cancels, and switching models resumes at once with the new
+  model. Quota, billing and usage-limit errors keep their existing handling.
+
 ## 0.12.3 - 2026-09-30
 
 ### Fixed
