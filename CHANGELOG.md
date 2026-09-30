@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.12.1 - 2026-09-30
+
+### Fixed
+
+- A resumed child could answer main's question in the same response as other
+  tool calls (when tools run one at a time, or when the answer comes from
+  inside another tool) and then report without waking main. The answer now
+  counts as the whole report only when its response made just that `message`
+  call; otherwise the report wakes main.
+
 ## 0.12.0 - 2026-09-30
 
 ### Added
