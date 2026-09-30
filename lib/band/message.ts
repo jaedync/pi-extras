@@ -41,7 +41,7 @@ export function markdownIsSafe(text: string): boolean {
 
 interface Layout {
 	readonly theme: BandTheme;
-	readonly markdown?: MarkdownTheme;
+	readonly markdown: boolean;
 	readonly lines: readonly string[];
 	/** Finished rows by width, preview limit and background: padding and backgrounds cost as much as parsing on long bodies. */
 	readonly framed: Map<string, readonly string[]>;
@@ -52,12 +52,14 @@ const layouts = new Map<string, Layout>();
 function layout(theme: BandTheme, text: string, inner: number, color: string, markdown: MarkdownTheme | undefined, paint: (key: string, value: string) => string): Layout {
 	const key = `${inner}\u0000${color}\u0000${text}`;
 	const cached = layouts.get(key);
-	if (cached && cached.theme === theme && cached.markdown === markdown) {
+	// Pi builds a new Markdown theme object per call, always from the active Theme, so
+	// the Theme's identity (it changes on a theme switch) is what invalidates a layout.
+	if (cached && cached.theme === theme && cached.markdown === !!markdown) {
 		layouts.delete(key);
 		layouts.set(key, cached);
 		return cached;
 	}
-	const entry: Layout = { theme, markdown, lines: render(text, inner, color, markdown, paint), framed: new Map() };
+	const entry: Layout = { theme, markdown: !!markdown, lines: render(text, inner, color, markdown, paint), framed: new Map() };
 	layouts.set(key, entry);
 	if (layouts.size > LAYOUT_CACHE_SIZE) layouts.delete(layouts.keys().next().value!);
 	return entry;

@@ -3,6 +3,7 @@ import test from "node:test";
 import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { markdownIsSafe, MAX_EXPANDED_LINES, messageBody } from "../lib/band/message.ts";
+import { createMeshMessageRenderer } from "../lib/tool-display/mesh.ts";
 import { quiet } from "./support/quiet-theme.ts";
 
 initTheme("dark");
@@ -49,7 +50,19 @@ test("a Markdown render that throws falls back to plain text", () => {
 	assert.match(lines.join("\n"), /const x = 1;/);
 });
 
-test("repeated redraws reuse the rendered body until width, theme or Markdown theme changes", () => {
+test("a mesh row parses its body once although Pi hands out a fresh Markdown theme each call", () => {
+	const counter = { calls: 0 };
+	// Pi's getMarkdownTheme() builds a new object per call; the row asks for one every frame.
+	const source = () => ({ ...getMarkdownTheme(), highlightCode: (code: string, lang?: string) => { counter.calls++; return getMarkdownTheme().highlightCode!(code, lang); } });
+	const body = "```js\n" + Array.from({ length: 150 }, (_, i) => `const w${i} = ${i};`).join("\n") + "\n```";
+	const message = { role: "custom", customType: "remote-pi:mesh-message", display: true, timestamp: 0,
+		content: `[agent-network] message from "/Users/x@peer" (id=01a):\n${body}\n\n(If a reply is expected, call agent_send with to="/Users/x@peer" and re="01a".)` };
+	const row = createMeshMessageRenderer(source)(message as never, { expanded: false } as never, theme as never)!;
+	for (let i = 0; i < 20; i++) row.render(100);
+	assert.equal(counter.calls, 1);
+});
+
+test("repeated redraws reuse the rendered body until width or theme changes", () => {
 	const { markdown, counter } = counting();
 	const text = "```js\n" + Array.from({ length: 200 }, (_, i) => `const v${i} = ${i};`).join("\n") + "\n```";
 	for (let i = 0; i < 20; i++) messageBody(theme, 100, text, "text", 8, markdown);
