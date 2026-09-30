@@ -2,6 +2,46 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.11.5 - 2026-09-30
+
+Windows Use for guests behind a VPN, and in the desktop session the user is
+already using.
+
+### Added
+
+- A Hyper-V socket relay in the guest carries `windows_use` calls, session
+  checks and server restarts without the guest's network. A full-tunnel VPN in
+  the guest, or firewall rules that cut it off from the host, no longer cut
+  Windows-MCP off. Setup installs the relay with the server, and an existing
+  server gets it on its next call over the guest's IP. A relay that stops comes
+  back within a minute or two, and a relay update that fails to start is rolled
+  back to the previous version. Without a relay, calls use the guest's IP and
+  port as before.
+
+### Changed
+
+- Setup sends its installer over Hyper-V key-value exchange and types only a
+  short stub that carries the key and the installer's hash, about 650
+  characters instead of 3,400. A setup took about three minutes live instead of
+  seven and a half. The bootstrap clears the stub, which shows the key, off the
+  screen before anything else. Without a working key-value exchange, all of it
+  is typed as before.
+- A setup works with the guest's VPN already up. A reinstall that can't reach
+  the package index keeps an installed Windows-MCP from the same release line.
+- A new session's first call takes about 3 seconds instead of 7 to 11. Warm
+  calls take 130 to 180 ms instead of 1.1 to 1.8 s. Under WSL the host scripts
+  run from a copy under the Windows `%LOCALAPPDATA%`, because read over
+  `\\wsl.localhost` they started seconds slower.
+- A stalled or stopped server is restarted through the relay without console
+  input, and at once, instead of after a wait, once the guest has been up a
+  while.
+- In an enhanced VM Connect/RDP session, guest methods work in that session.
+  Console input, which could take the session over, is refused, and console
+  screenshots and OCR read Windows-MCP's image, scaled back to desktop pixels.
+- Console typing sends one paired `TypeKey` per character with settled
+  modifiers, and setup switches to its new key only once the whole command is
+  queued, so a typing failure leaves the running server usable.
+
 ## 0.11.4 - 2026-09-29
 
 ### Changed
