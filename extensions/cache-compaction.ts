@@ -1,6 +1,6 @@
-import { convertToLlm, estimateTokens, type ExtensionAPI, type ExtensionContext, type SessionProjection, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, estimateTokens, type ExtensionAPI, type ExtensionContext, type SessionProjection, type SessionBeforeCompactEvent, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { CONFIG_FILE, readSection } from "../lib/extras-config.ts";
-import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, loadConfig, mergePayload, payloadHashes, reconcile, type RequestIdentity, type Snapshot } from "../lib/cache-compaction/core.ts";
+import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, loadConfig, mergePayload, payloadHashes, reconcile, outputAllowance, requestOutputLimit, requestEffort, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
 
 type Message = SessionProjection["messages"][number];
 interface Captured extends RequestIdentity, Snapshot {
@@ -8,16 +8,24 @@ interface Captured extends RequestIdentity, Snapshot {
 	readonly positions: readonly number[];
 	readonly payload?: Record<string, unknown>;
 	readonly payloadPrefix?: readonly string[];
+	readonly headers?: Record<string, string>;
+	readonly effort?: RequestEffort;
 }
-export interface CacheCompactionOptions { readonly configFile?: string; readonly now?: () => number }
+type RequestSettings = Pick<SettingsManager, "getProviderRetrySettings" | "getHttpIdleTimeoutMs" | "getWebSocketConnectTimeoutMs">;
+export interface CacheCompactionOptions { readonly configFile?: string; readonly now?: () => number; readonly settingsManager?: RequestSettings }
+
+function sessionOptions(settings: RequestSettings) {
+	const retry = settings.getProviderRetrySettings();
+	const idle = settings.getHttpIdleTimeoutMs();
+	return { timeoutMs: retry.timeoutMs ?? (idle === 0 ? 2147483647 : idle), maxRetries: retry.maxRetries, maxRetryDelayMs: retry.maxRetryDelayMs, websocketConnectTimeoutMs: settings.getWebSocketConnectTimeoutMs() };
+}
 
 function identity(ctx: ExtensionContext, at: number): RequestIdentity | undefined {
 	const model = ctx.model;
 	return model ? { provider: model.provider, id: model.id, api: model.api, baseUrl: model.baseUrl, contextWindow: model.contextWindow, sessionId: ctx.sessionManager.getSessionId(), at } : undefined;
 }
 /** Map canonical messages by complete identity, allowing injected request-local messages, never guessed text. */
-function positionsFor(hashes: readonly string[], messages: readonly Message[]): number[] | undefined {
-	const requestHashes = messages.map(fingerprint);
+function positionsFor(hashes: readonly string[], requestHashes: readonly string[]): number[] | undefined {
 	const positions: number[] = [];
 	let from = 0;
 	for (const hash of hashes) {
@@ -33,10 +41,10 @@ function entryMessageIndex(projection: SessionProjection, id: string): number | 
 	if (index < 0) return undefined;
 	return projection.entries.slice(0, index).reduce((sum, entry) => sum + entry.messages.length, 0);
 }
-function startOf(messages: readonly Message[], span: readonly Message[], end: number): number | undefined {
+function startOf(messages: readonly Message[], span: readonly Message[], end: number, hash: (message: Message) => string): number | undefined {
 	if (!span.length) return undefined;
-	const hashes = span.map(fingerprint);
-	const visible = messages.slice(0, end).flatMap((message, i) => message.role === "system" ? [] : [{ hash: fingerprint(message), index: i }]);
+	const hashes = span.map(hash);
+	const visible = messages.slice(0, end).flatMap((message, i) => message.role === "system" ? [] : [{ hash: hash(message), index: i }]);
 	const matches = visible.flatMap((message, i) => hashes.every((hash, j) => hash === visible[i + j]?.hash) ? [message.index] : []);
 	return matches.length === 1 ? matches[0] : undefined;
 }
@@ -46,37 +54,56 @@ function report(ctx: ExtensionContext, path: string): void {
 	} catch { /* A missing or disposed UI must not stop default compaction. */ }
 }
 
+function hashOnce(): (message: Message) => string {
+	const hashes = new WeakMap<Message, string>();
+	return (message) => { const known = hashes.get(message); if (known) return known; const hash = fingerprint(message); hashes.set(message, hash); return hash; };
+}
+const excluded = (message: Message) => message.role === "bashExecution" && message.excludeFromContext;
+const unsentInput = (message: Message) => message.role === "user" || message.role === "custom" || (message.role === "bashExecution" && !message.excludeFromContext);
 function prepareRequest(captured: Captured, event: SessionBeforeCompactEvent, ctx: ExtensionContext, at: number): { messages: Message[]; estimated: number } | { fallback: string } {
 	const p = event.preparation;
 	const projection = ctx.sessionManager.buildSessionProjection();
-	const count = reconcile(captured, ctx.sessionManager.getBranch().map((entry) => entry.id), projection.messages);
+	const hash = hashOnce();
+	const hashes = projection.messages.map(hash);
+	const count = reconcile(captured, ctx.sessionManager.getBranch().map((entry) => entry.id), projection.messages, hashes);
 	if (count === undefined) return { fallback: "branch-changed" };
-	const tail = projection.messages.slice(count);
-	// Only finalized replies/results can follow the last request without a fresh capture.
-	if (tail.some((message) => message.role !== "assistant" && message.role !== "toolResult")) return { fallback: "unrequested-tail" };
-	const messages = [...captured.messages, ...tail];
-	const position = (canonical: number) => canonical < count ? captured.positions[canonical] : captured.messages.length + canonical - count;
 	const kept = entryMessageIndex(projection, p.firstKeptEntryId);
-	const split = kept === undefined ? undefined : startOf(projection.messages, p.turnPrefixMessages, kept);
-	const history = kept === undefined ? undefined : startOf(projection.messages, p.messagesToSummarize, split ?? kept);
-	if (kept === undefined || !messages[position(kept)] || (p.messagesToSummarize.length && history === undefined) || (p.isSplitTurn && split === undefined)) return { fallback: "unknown-boundary" };
+	if (kept === undefined || !projection.messages[kept]) return { fallback: "unknown-boundary" };
+	const tail = projection.messages.slice(count);
+	const unsent = tail.findIndex(unsentInput);
+	if (unsent >= 0 && (count + unsent < kept || tail.slice(unsent).some((message) => !unsentInput(message) && !excluded(message)))) return { fallback: "unrequested-tail" };
+	const sentTail = unsent < 0 ? tail : tail.slice(0, unsent);
+	if (sentTail.some((message) => message.role !== "assistant" && message.role !== "toolResult" && !excluded(message))) return { fallback: "unrequested-tail" };
+	const messages = [...captured.messages, ...sentTail];
+	const position = (canonical: number) => canonical < count ? captured.positions[canonical] : captured.messages.length + canonical - count;
+	const split = startOf(projection.messages, p.turnPrefixMessages, kept, hash);
+	const history = startOf(projection.messages, p.messagesToSummarize, split ?? kept, hash);
+	if ((p.messagesToSummarize.length && history === undefined) || (p.isSplitTurn && split === undefined)) return { fallback: "unknown-boundary" };
+	const visibleKept = projection.messages.findIndex((message, i) => i >= kept && !excluded(message));
+	const firstVisibleKept = visibleKept < 0 ? kept : visibleKept;
 	const llmMessages = convertToLlm(messages);
-	if (llmMessages.length !== messages.length) return { fallback: "invisible-messages" };
-	const instruction = buildInstruction({ messages: llmMessages, boundary: position(kept), entryId: p.firstKeptEntryId, historyStart: history === undefined ? position(split ?? kept) : position(history), splitStart: p.isSplitTurn && split !== undefined ? position(split) : undefined, previousSummary: p.previousSummary, customInstructions: event.customInstructions });
+	// !! output is invisible to the provider, including when it precedes the retained boundary.
+	const visiblePosition = (canonical: number) => convertToLlm(messages.slice(0, position(canonical))).length;
+	const instruction = buildInstruction({ messages: llmMessages, boundary: visiblePosition(firstVisibleKept), entryId: p.firstKeptEntryId, historyStart: visiblePosition(history ?? split ?? kept), splitStart: p.isSplitTurn && split !== undefined ? visiblePosition(split) : undefined, previousSummary: p.previousSummary, customInstructions: event.customInstructions, keptMessage: convertToLlm([projection.messages[firstVisibleKept]])[0] ?? { role: projection.messages[kept].role, content: [] }, boundaryInRequest: visibleKept >= 0 && position(firstVisibleKept) < messages.length, boundaryExcluded: visibleKept < 0 });
 	const prompt: Message = { role: "user", content: [{ type: "text", text: instruction }], timestamp: at };
 	const full = [...messages, prompt];
 	// Include full tool outputs, system/tools, injected messages and the uncached instruction.
-	return { messages: full, estimated: full.reduce((sum, message) => sum + estimateTokens(message), 0) };
+	return { messages: full, estimated: convertToLlm(full).reduce((sum, message) => sum + estimateTokens(message), 0) };
 }
 
 export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompactionOptions = {}): void {
 	const now = options.now ?? Date.now;
 	const configFile = options.configFile ?? CONFIG_FILE;
-	const config = () => loadConfig(readSection("cacheCompaction", configFile));
+	let policy = loadConfig(readSection("cacheCompaction", configFile));
+	let requestOptions: ReturnType<typeof sessionOptions> | undefined;
 	let pending: Captured | undefined;
 	let latest: Captured | undefined;
 	const clear = () => { pending = undefined; latest = undefined; };
-	pi.on("session_start", clear);
+	pi.on("session_start", (_event, ctx) => {
+		clear();
+		try { policy = loadConfig(readSection("cacheCompaction", configFile)); requestOptions = sessionOptions(options.settingsManager ?? SettingsManager.create(ctx.cwd, getAgentDir(), { projectTrusted: ctx.isProjectTrusted() })); }
+		catch { requestOptions = undefined; }
+	});
 	pi.on("session_shutdown", clear);
 	pi.on("session_tree", clear);
 	pi.on("session_compact", clear);
@@ -86,27 +113,33 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 	pi.on("context_with_system", (event, ctx) => {
 		clear();
 		try {
-			if (!config().enabled || event.messages[0]?.role !== "system") return;
+			if (!policy.enabled || event.messages[0]?.role !== "system") return;
 			const request = identity(ctx, now());
 			if (!request) return;
 			const projection = ctx.sessionManager.buildSessionProjection();
-			const hashes = projection.messages.map(fingerprint);
-			const positions = positionsFor(hashes, event.messages);
+			const hash = hashOnce();
+			const hashes = projection.messages.map(hash);
+			const positions = positionsFor(hashes, event.messages.map(hash));
 			if (!positions) return;
 			// Pi and later extensions may mutate these messages after this observational hook.
 			pending = { ...request, ids: ctx.sessionManager.getBranch().map((entry) => entry.id), hashes, positions, messages: structuredClone(event.messages) };
 		} catch { clear(); }
 	});
+	pi.on("before_provider_headers", (event) => {
+		try { if (pending) pending = { ...pending, headers: safeHeaders(event.headers) }; }
+		catch { clear(); }
+	});
 	pi.on("before_provider_request", (event, ctx) => {
-		const request = pending;
-		pending = undefined;
-		if (!request) return;
 		try {
+			if (requestOutputLimit(event.payload) === 1) return;
+			const request = pending;
+			pending = undefined;
+			if (!request) return;
 			const current = identity(ctx, now());
 			if (!current || current.provider !== request.provider || current.id !== request.id || current.api !== request.api || current.sessionId !== request.sessionId) return;
 			const payload = capturePayload(request.api, event.payload);
 			const payloadPrefix = payloadHashes(request.api, event.payload);
-			if (payload && payloadPrefix) latest = { ...request, at: now(), payload, payloadPrefix };
+			if (payload && payloadPrefix) latest = { ...request, at: now(), payload, payloadPrefix, effort: request.api === "anthropic-messages" ? requestEffort(event.payload) : undefined };
 		} catch { clear(); }
 	});
 
@@ -118,18 +151,18 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 		try {
 			const model = ctx.model;
 			if (!model) return fallback("no-model");
-			const policy = config();
 			const p = event.preparation;
-			const reason = fallbackReason({ enabled: policy.enabled, captured, model, sessionId: ctx.sessionManager.getSessionId(), now: now(), idleMs: idleLimitMs(policy, model), reason: event.reason, aborted: event.signal.aborted, tokensBefore: p.tokensBefore, reserveTokens: p.settings.reserveTokens });
+			const reason = fallbackReason({ enabled: policy.enabled, captured, model, sessionId: ctx.sessionManager.getSessionId(), now: now(), idleMs: idleLimitMs(policy, model), reason: event.reason, aborted: event.signal.aborted });
 			if (reason || !captured?.payload) return fallback(reason ?? "no-payload");
 			const request = prepareRequest(captured, event, ctx, now());
 			if ("fallback" in request) return fallback(request.fallback);
-			if (Math.max(request.estimated, p.tokensBefore) + p.settings.reserveTokens > model.contextWindow) return fallback("context-window");
+			if (request.estimated + outputAllowance(captured.payload, p.settings.reserveTokens, model.maxTokens) > model.contextWindow) return fallback("context-window");
 			if (event.signal.aborted) return fallback("aborted");
 			report(ctx, "prefix-sharing");
 			// ModelRuntime.complete normalizes this context with pi-ai normalizeContext, just as
 			// streamSimple does in Pi's agent loop. Rebuilding any other provider fields misses cache.
 			const response = await ctx.modelRegistry.complete(model, { messages: convertToLlm(request.messages) }, {
+				...requestOptions, headers: captured.headers, effort: captured.effort,
 				sessionId: captured.sessionId, signal: event.signal,
 				onPayload: (generated: unknown) => mergePayload(model.api, captured.payload!, generated, captured.payloadPrefix),
 			});

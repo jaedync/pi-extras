@@ -12,8 +12,12 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   instruction appended, instead of Pi's standalone summarizer request, which
   cannot read the cache. Measured locally: about 3x cheaper at 15k tokens of
   context and 16-17x at 42k (Claude via Meridian and Codex), with equivalent
-  summaries. Model changes, branch changes, overflow recovery, a cold cache or
-  an unusable reply fall back to Pi's default compaction. Configure
+  summaries. Manual `/compact`, after-turn threshold and pre-prompt threshold
+  compactions can reuse the prefix. Retained unsent input stays out of the summary
+  request. Overflow recovery, model/branch/session changes, a cold cache,
+  unsupported APIs, a request that does not fit or an unusable reply fall back
+  to Pi's default compaction. A failed prefix attempt spends provider usage that
+  is not recorded in session totals. Configure
   `cacheCompaction.enabled` and per-provider `idleSeconds` in `pi-extras.json`.
 
 ## 0.13.0 - 2026-09-30

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { conversationKey, capturePayload, payloadHashes, mergePayload, loadConfig, idleLimitMs, fallbackReason, fileLists, formatFiles, fingerprint, reconcile, buildInstruction, boundaryIdentifier, MAX_BOUNDARY_IDENTIFIER_CHARS } from "../lib/cache-compaction/core.ts";
+import { conversationKey, capturePayload, payloadHashes, mergePayload, loadConfig, idleLimitMs, fallbackReason, fileLists, formatFiles, fingerprint, reconcile, buildInstruction, boundaryIdentifier, MAX_BOUNDARY_IDENTIFIER_CHARS, requestOutputLimit, outputAllowance, requestEffort, safeHeaders } from "../lib/cache-compaction/core.ts";
 
 for (const [api, key] of [["anthropic-messages", "messages"], ["openai-responses", "input"], ["openai-codex-responses", "input"], ["google-generative-ai", "contents"], ["google-vertex", "contents"]]) {
 	test(`payload replay changes only ${key} for ${api}`, () => {
@@ -33,7 +33,7 @@ test("split-turn boundary identifies tool-only messages and explicitly excludes 
 	assert.match(text, /"id": "read-1"/);
 	assert.match(text, /"name": "read"/);
 	assert.match(text, /"type": "toolCall"/);
-	assert.match(text, /4th message from the end/);
+	assert.doesNotMatch(text, /message \d|\d+(?:st|nd|rd|th) message|from the end|messages \d/);
 	assert.match(text, /AFTER your summary/);
 	assert.match(text, /must NOT appear in your summary/);
 	assert.match(text, /Early Progress.*Context for Suffix.*only.*before/s);
@@ -57,13 +57,13 @@ test("validated idle configuration defaults are conservative except known Meridi
 	assert.equal(idleLimitMs(loadConfig({}), { provider: "openai-codex", api: "openai-codex-responses" }), 4 * 60000);
 });
 const model = { provider: "anthropic", id: "fixture", api: "anthropic-messages", contextWindow: 10000 };
-const gate = { enabled: true, captured: { ...model, sessionId: "s", at: 100 }, model, sessionId: "s", now: 200, idleMs: 1000, reason: "manual", aborted: false, tokensBefore: 1000, reserveTokens: 1000 };
+const gate = { enabled: true, captured: { ...model, sessionId: "s", at: 100 }, model, sessionId: "s", now: 200, idleMs: 1000, reason: "manual", aborted: false };
 test("fallback decisions cover disabled, missing, changed, cold, overflow, unsupported and abort", () => {
 	assert.equal(fallbackReason(gate), undefined);
 	for (const [patch, expected] of [
 		[{ enabled: false }, "disabled"], [{ captured: undefined }, "no-request"], [{ model: { ...model, id: "other" } }, "model-changed"],
 		[{ sessionId: "other" }, "session-changed"], [{ now: 1200 }, "cold-cache"], [{ now: 0 }, "cold-cache"], [{ reason: "overflow" }, "overflow"],
-		[{ tokensBefore: 9001 }, "context-window"], [{ model: { ...model, api: "unknown" }, captured: { ...gate.captured, api: "unknown" } }, "unsupported-api"], [{ aborted: true }, "aborted"],
+		[{ model: { ...model, api: "unknown" }, captured: { ...gate.captured, api: "unknown" } }, "unsupported-api"], [{ aborted: true }, "aborted"],
 	] as const) assert.equal(fallbackReason({ ...gate, ...patch }), expected);
 });
 test("file operations carry prior hook details and exactly mirror Pi XML lists", () => {
@@ -82,12 +82,13 @@ test("reconciliation requires entry identity and immutable message fingerprints,
 	assert.equal(reconcile(snapshot, ["a", "different", "c"], messages), undefined);
 	assert.equal(reconcile(snapshot, ["a", "b", "c"], [messages[0], { ...messages[1], content: "edit" }, messages[2]]), undefined);
 });
-test("instructions locate kept boundary by numbered message, role, entry ID and quote", () => {
+test("instructions identify kept and history boundaries without provider-dependent numbering", () => {
 	const messages = [msg("system", "sys"), msg("user", "old"), msg("assistant", "kept start")];
 	const instruction = buildInstruction({ messages, boundary: 2, entryId: "kept-id", historyStart: 1, splitStart: undefined, previousSummary: undefined, customInstructions: "Preserve tests" });
-	assert.match(instruction, /message 3.*assistant.*kept-id/);
+	assert.match(instruction, /role assistant.*kept-id/);
+	assert.doesNotMatch(instruction, /message \d|from the end|messages \d/);
 	assert.match(instruction, /"kept start"/);
-	assert.match(instruction, /messages 2 through 2/);
+	assert.match(instruction, /<history-start-message>/);
 	assert.match(instruction, /Preserve tests/);
 	for (const header of ["## Goal", "## Constraints & Preferences", "### Done", "### In Progress", "### Blocked", "## Key Decisions", "## Next Steps", "## Critical Context"]) assert.ok(instruction.includes(header));
 	assert.match(instruction, /Do not call tools/);
@@ -97,10 +98,39 @@ test("update and split-turn instructions separate history from prefix and exclud
 	const text = buildInstruction({ messages, boundary: 4, entryId: "suffix-id", historyStart: 1, splitStart: 2, previousSummary: "prior facts", customInstructions: undefined });
 	assert.match(text, /<previous-summary>\nprior facts/);
 	assert.match(text, /PRESERVE/);
-	assert.match(text, /messages 3 through 4/);
+	assert.match(text, /<split-turn-request>/);
+	assert.doesNotMatch(text, /messages \d|from the end/);
 	assert.match(text, /Turn Context \(split turn\)/);
 	assert.match(text, /## Original Request/);
 	assert.match(text, /## Early Progress/);
 	assert.match(text, /## Context for Suffix/);
 	assert.match(text, /Do not summarize.*retained/s);
+});
+
+for (const api of ["google-generative-ai", "google-vertex"]) test(`${api} replaces live abort signals rather than cloning them`, () => {
+ const previous = new AbortController(); const current = new AbortController();
+ const captured = capturePayload(api, { contents: [], config: { abortSignal: previous.signal, maxOutputTokens: 200, thinkingConfig: { thinkingBudget: 123 } } })!;
+ assert.equal("abortSignal" in (captured.config as Record<string, unknown>), false);
+ previous.abort();
+ const merged = mergePayload(api, captured, { contents: ["new"], config: { abortSignal: current.signal } });
+ assert.equal((merged.config as any).abortSignal, current.signal);
+ assert.equal((merged.config as any).abortSignal.aborted, false);
+ assert.equal((merged.config as any).maxOutputTokens, 200);
+ assert.deepEqual((merged.config as any).thinkingConfig, { thinkingBudget: 123 });
+});
+test("fit uses declared output caps, otherwise Pi's compaction allowance, never model maximum alone", () => {
+ assert.equal(requestOutputLimit({ max_tokens: 1 }), 1);
+ assert.equal(requestOutputLimit({ max_output_tokens: 800 }), 800);
+ assert.equal(requestOutputLimit({ config: { maxOutputTokens: 300 } }), 300);
+ assert.equal(outputAllowance({ max_tokens: 2000 }, 16384, 32000), 2000);
+ assert.equal(outputAllowance({}, 16384, 100000), 13107);
+ assert.equal(outputAllowance({}, 20000, 1000), 1000);
+ assert.equal(requestOutputLimit({ max_tokens: "1" }), undefined);
+});
+test("headers retain routing but never credential-like names; effort comes from the actual payload", () => {
+ assert.deepEqual(safeHeaders({ "x-opencode-session": "same-session", "content-type": "application/json", Authorization: "secret", "x-api-key": "secret", cookie: "secret", "x-access-token": "secret", "X-Custom-Key": "secret", "x-signature": "secret", "x-amz-security-token": "synthetic", "CF-Access-Client-Secret": "synthetic", "x-goog-api-key": "synthetic", "x-aws-signature": "synthetic", "Proxy-Authorization": "synthetic", "Set-Cookie": "synthetic" }), { "x-opencode-session": "same-session", "content-type": "application/json" });
+ assert.equal(requestEffort({ output_config: { effort: "max" } }), "max");
+ assert.equal(requestEffort({ output_config: { effort: "high" }, messages: [{ role: "system", output_config: { effort: "low" } }] }), "low");
+ assert.equal(requestEffort({ reasoning: { effort: "low" } }), undefined);
+ assert.equal(requestEffort({ messages: [{ role: "system", content: [], output_config: { effort: "xhigh" } }] }), "xhigh");
 });

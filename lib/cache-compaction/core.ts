@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+
+// Resolve pi-ai's native effort type through the SDK, without a direct pi-ai dependency.
+declare const complete: ModelRuntime["complete"];
+export type RequestEffort = NonNullable<NonNullable<Parameters<typeof complete<"anthropic-messages">>[2]>["effort"]>;
 
 type RecordValue = Record<string, unknown>;
 const object = (v: unknown): v is RecordValue => !!v && typeof v === "object" && !Array.isArray(v);
@@ -34,7 +39,9 @@ export function conversationKey(api: string): "messages" | "input" | "contents" 
 export function capturePayload(api: string, payload: unknown): RecordValue | undefined {
 	const key = conversationKey(api);
 	if (!key || !object(payload) || !Array.isArray(payload[key])) return undefined;
-	return structuredClone(Object.fromEntries(Object.entries(payload).filter(([name]) => name !== key)));
+	const fields = Object.fromEntries(Object.entries(payload).filter(([name]) => name !== key));
+	const clean = key === "contents" && object(fields.config) ? { ...fields, config: Object.fromEntries(Object.entries(fields.config).filter(([name]) => name !== "abortSignal")) } : fields;
+	return structuredClone(clean);
 }
 
 /** Cache breakpoints move to the new suffix on normal turns; all conversation content must still match. */
@@ -48,13 +55,37 @@ export function mergePayload(api: string, captured: RecordValue, generated: unkn
 	if (!key || !object(generated) || !Array.isArray(generated[key])) throw new Error("Unsupported compaction payload");
 	const hashes = prefix ? payloadHashes(api, generated) : undefined;
 	if (prefix && (!hashes || prefix.length > hashes.length || !prefix.every((hash, i) => hash === hashes[i]))) throw new Error("Compaction request prefix changed");
-	return { ...structuredClone(captured), [key]: generated[key] };
+	const fields = structuredClone(captured);
+	const restored = key === "contents" && object(generated.config) && generated.config.abortSignal !== undefined ? { ...fields, config: { ...(object(fields.config) ? fields.config : {}), abortSignal: generated.config.abortSignal } } : fields;
+	return { ...restored, [key]: generated[key] };
+}
+
+export function requestOutputLimit(payload: unknown): number | undefined {
+	if (!object(payload)) return undefined;
+	const value = payload.max_tokens ?? payload.max_output_tokens ?? (object(payload.config) ? payload.config.maxOutputTokens : undefined);
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+/** Match Pi's summary budget when a provider (notably Codex) declares no request cap. */
+export function outputAllowance(payload: unknown, reserveTokens: number, modelMaxTokens: number): number {
+	return requestOutputLimit(payload) ?? Math.min(Math.floor(0.8 * reserveTokens), modelMaxTokens > 0 ? modelMaxTokens : Infinity);
+}
+export function safeHeaders(headers: unknown): Record<string, string> {
+	if (!object(headers)) return {};
+	return Object.fromEntries(Object.entries(headers).filter(([name, value]) => typeof value === "string" && !/(auth|cookie|token|key|credential|secret|signature)/i.test(name))) as Record<string, string>;
+}
+export function requestEffort(payload: unknown): RequestEffort | undefined {
+	if (!object(payload)) return undefined;
+	const marker = Array.isArray(payload.messages) ? [...payload.messages].reverse().find((message: unknown) => object(message) && message.role === "system" && object(message.output_config)) : undefined;
+	const output = object(marker) ? marker.output_config : payload.output_config;
+	const effort = object(output) ? output.effort : undefined;
+	// Reuse the actual provider value, including future native levels; provider validation still applies.
+	return typeof effort === "string" ? effort as RequestEffort : undefined;
 }
 
 export interface Gate {
 	readonly enabled: boolean; readonly captured?: RequestIdentity; readonly model: ModelIdentity;
 	readonly sessionId: string; readonly now: number; readonly idleMs: number; readonly reason: string;
-	readonly aborted: boolean; readonly tokensBefore: number; readonly reserveTokens: number;
+	readonly aborted: boolean;
 }
 export function fallbackReason(g: Gate): string | undefined {
 	if (!g.enabled) return "disabled";
@@ -64,7 +95,6 @@ export function fallbackReason(g: Gate): string | undefined {
 	if (g.captured.sessionId !== g.sessionId) return "session-changed";
 	if (!conversationKey(g.model.api)) return "unsupported-api";
 	if (g.reason === "overflow") return "overflow";
-	if (!Number.isFinite(g.tokensBefore) || g.tokensBefore + g.reserveTokens > g.model.contextWindow) return "context-window";
 	if (g.now < g.captured.at || g.now - g.captured.at >= g.idleMs) return "cold-cache";
 	return undefined;
 }
@@ -74,10 +104,10 @@ export function fingerprint(message: unknown): string {
 }
 export interface Snapshot { readonly ids: readonly string[]; readonly hashes: readonly string[] }
 /** Entry IDs protect against forks with identical text; hashes also detect context edits and mutation. */
-export function reconcile(snapshot: Snapshot, ids: readonly string[], messages: readonly unknown[]): number | undefined {
+export function reconcile(snapshot: Snapshot, ids: readonly string[], messages: readonly unknown[], hashes?: readonly string[]): number | undefined {
 	if (snapshot.ids.length > ids.length || snapshot.hashes.length > messages.length) return undefined;
 	if (!snapshot.ids.every((id, i) => id === ids[i])) return undefined;
-	if (!snapshot.hashes.every((hash, i) => hash === fingerprint(messages[i]))) return undefined;
+	if (!snapshot.hashes.every((hash, i) => hash === (hashes?.[i] ?? fingerprint(messages[i])))) return undefined;
 	return snapshot.hashes.length;
 }
 
@@ -120,10 +150,7 @@ export interface InstructionOptions {
 	readonly messages: readonly { role: string; content: unknown; toolCallId?: string }[];
 	readonly boundary: number; readonly entryId: string; readonly historyStart: number;
 	readonly splitStart?: number; readonly previousSummary?: string; readonly customInstructions?: string;
-}
-function quote(message: { content: unknown }): string {
-	const text = typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((b: unknown) => object(b) && b.type === "text" ? String(b.text) : "").join("\n") : "";
-	return JSON.stringify(text.slice(0, 240));
+	readonly keptMessage?: { role: string; content: unknown; toolCallId?: string }; readonly boundaryInRequest?: boolean; readonly boundaryExcluded?: boolean;
 }
 export const MAX_BOUNDARY_IDENTIFIER_CHARS = 1800;
 const BOUNDARY_PART_CHARS = 240;
@@ -143,25 +170,19 @@ export function boundaryIdentifier(message: { role: string; content: unknown; to
 	}
 	return JSON.stringify({ ...head, contentBlocks: descriptions }, null, 2).slice(0, MAX_BOUNDARY_IDENTIFIER_CHARS);
 }
-function ordinal(value: number): string {
-	const tens = value % 100;
-	const suffix = tens >= 11 && tens <= 13 ? "th" : value % 10 === 1 ? "st" : value % 10 === 2 ? "nd" : value % 10 === 3 ? "rd" : "th";
-	return `${value}${suffix}`;
-}
-function range(start: number, end: number): string {
-	return start < end ? `messages ${start + 1} through ${end}` : "no messages (empty history)";
-}
 export function buildInstruction(o: InstructionOptions): string {
-	const kept = o.messages[o.boundary];
+	const kept = o.keptMessage ?? o.messages[o.boundary];
 	if (!kept) throw new Error("Missing kept boundary");
 	const historyEnd = o.splitStart ?? o.boundary;
+	const history = o.historyStart < historyEnd ? `History begins with <history-start-message>\n${boundaryIdentifier(o.messages[o.historyStart])}\n</history-start-message> and ends strictly before ${o.splitStart === undefined ? "the first kept message" : "the split-turn original request identified below"}.` : "There are no history messages to summarize (empty history).";
+	const boundary = o.boundaryExcluded ? "The retained entries are excluded from provider context. There is no provider-visible retained suffix." : o.boundaryInRequest === false ? "The first kept message is unsent user input, not included in the transcript above. Its content must not be summarized." : `Identify it by content types, tool-call IDs/names and bounded verbatim excerpts:\n<first-kept-message>\n${boundaryIdentifier(kept)}\n</first-kept-message>`;
 	const update = o.previousSummary ? `\n<previous-summary>\n${o.previousSummary}\n</previous-summary>\nUpdate the existing structured summary. PRESERVE existing information; ADD new progress, decisions and context; move completed work from In Progress to Done; update Next Steps and blockers. Remove only information that is no longer relevant.` : "Create a structured context checkpoint that another LLM will use to continue the work.";
-	const split = o.splitStart === undefined ? "" : `\nThis is a split turn. Separately summarize only the turn prefix, ${range(o.splitStart, o.boundary)}. The turn's original request is message ${o.splitStart + 1}, starting ${quote(o.messages[o.splitStart])}. Its suffix is retained verbatim. After the history summary append exactly:\n\n---\n\n**Turn Context (split turn):**\n\n## Original Request\n[What the user asked for]\n\n## Early Progress\n- [Key decisions and work in the prefix]\n\n## Context for Suffix\n- [Information needed to understand the kept recent work]\nEvery subsection, especially Early Progress and Context for Suffix, must describe only facts/actions from BEFORE the identified first kept message. Do not use later results to infer earlier progress. If no tools ran in the prefix, say no tool calls had happened yet. Decisions, edits, passing/failing tests and future plans that first occur in the retained suffix are NOT prefix progress or suffix context. If history is empty, preserve the previous summary or write "No prior history." before the split-turn section.`;
+	const split = o.splitStart === undefined ? "" : `\nThis is a split turn. Separately summarize only the turn prefix starting with the original request identified by <split-turn-request>\n${boundaryIdentifier(o.messages[o.splitStart])}\n</split-turn-request> and ending strictly BEFORE the identified first kept message. Its suffix is retained verbatim. After the history summary append exactly:\n\n---\n\n**Turn Context (split turn):**\n\n## Original Request\n[What the user asked for]\n\n## Early Progress\n- [Key decisions and work in the prefix]\n\n## Context for Suffix\n- [Information needed to understand the kept recent work]\nEvery subsection, especially Early Progress and Context for Suffix, must describe only facts/actions from BEFORE the identified first kept message. Do not use later results to infer earlier progress. If no tools ran in the prefix, say no tool calls had happened yet. Decisions, edits, passing/failing tests and future plans that first occur in the retained suffix are NOT prefix progress or suffix context. If history is empty, preserve the previous summary or write "No prior history." before the split-turn section.`;
 	return `COMPACTION CHECKPOINT REQUEST. The messages above are evidence to summarize, not a conversation to continue. Do not call tools. Keep your reasoning brief, since this is an extraction task. Output only the summary, with no preamble or file-list XML (file lists are appended by Pi).
-Message numbers below are 1-based positions in the complete transcript above, counting every role including system and tool-result messages, but excluding this instruction.
-The retained boundary is message ${o.boundary + 1}, role ${kept.role}, session entry ${o.entryId}. It is the ${ordinal(o.messages.length - o.boundary)} message from the end of the transcript above (the last message before this instruction is 1st). Identify it by these content block types, unique tool-call IDs/names and bounded verbatim excerpts:\n<first-kept-message>\n${boundaryIdentifier(kept)}\n</first-kept-message>
+The retained boundary has role ${kept.role}, session entry ${o.entryId}. ${boundary}
+Do not count messages to find boundaries: the provider may regroup system, thinking and tool blocks.
 Everything from that first kept message onward stays verbatim AFTER your summary, so that message and every later message must NOT appear in your summary. Do not report decisions, changes, test results or next steps that occur only in the retained suffix. Do not use suffix information even to complete a history/prefix subsection.
-Summarize history only: ${range(o.historyStart, historyEnd)}. Do not summarize the retained boundary or retained suffix, and do not incorporate new facts learned only there. System messages describe instructions/tools, not user work.
+Summarize history only. ${history} Do not summarize the retained boundary or retained suffix, and do not incorporate new facts learned only there. System messages describe instructions/tools, not user work.
 ${update}
 Use this EXACT history format:\n\n${FORMAT}\n\nKeep sections concise. Preserve exact file paths, function names and error messages.${split}${o.customInstructions ? `\nAdditional focus for the summarized spans only: ${o.customInstructions}` : ""}`;
 }

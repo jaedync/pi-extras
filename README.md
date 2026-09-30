@@ -124,13 +124,15 @@ summarization prompt, which cannot reuse the session's cached prefix. Cache
 Compaction instead appends an extraction instruction to the last full session
 request plus its finalized assistant replies/tool results, preserving the
 session ID and every non-conversation provider payload field, including
-thinking/reasoning, tools, output limits and cache routing. It never reduces the
-session's reasoning settings, because doing so loses cache hits. The instruction
-asks for brief reasoning, Pi's structured checkpoint, previous-summary updates,
-and split-turn context. Its retained-boundary identifier includes role, absolute
-and from-end positions, content types, tool-call IDs/names and bounded excerpts
-(capped at 1,800 characters, including for textless tool calls). It identifies the retained boundary and summarizes only
-the history that Pi will discard, not the recent messages Pi keeps verbatim.
+thinking/reasoning, tools, output limits and cache routing. Manual `/compact`,
+after-turn threshold and pre-prompt threshold compactions can use this path.
+Retained input not sent yet, including bash output and custom messages, stays
+out of the summary request. The instruction asks for brief reasoning, Pi's structured checkpoint, previous-summary updates,
+and split-turn context. Its retained-boundary identifier includes role,
+content types, tool-call IDs/names and bounded excerpts (capped at 1,800
+characters, including for textless tool calls), not message numbers, since
+providers can regroup messages. It identifies the retained boundary and summarizes
+only the history that Pi will discard, not the recent messages Pi keeps verbatim.
 
 A salted ~42k-context recipe probe measured $0.010 vs $0.169 for Sonnet through
 Meridian, and $0.0034 vs $0.055 for Codex (about 94% savings). Smaller live A/B
@@ -165,20 +167,22 @@ unless that route has a long-lived cache. Invalid values use the defaults.
 
 Supported APIs: Anthropic Messages, OpenAI Responses/Codex/Azure Responses, and
 Google Generative AI/Vertex. Unsupported APIs and missing capture hooks degrade
-to Pi's default compaction. The capture/request APIs exist in Pi 0.87.0 and were
-also exercised with 0.99.1. Load this extension after extensions that transform
-`context_with_system` or `before_provider_request`, so its snapshot sees their
+to Pi's default compaction. Tested with Pi 0.99.2. Load this extension after
+extensions that transform `context_with_system`, `before_provider_headers`
+or `before_provider_request`, so its snapshot sees their
 final changes. Incompatible context transformations safely lose eligibility.
 
 Fallbacks include no captured payload, model/provider/API/endpoint or session
-changes, irreconcilable branches/context edits, new unsent input, expired cache,
-overflow recovery, insufficient context-window headroom, abort, provider error,
+changes, irreconcilable branches/context edits, unsent input in discarded
+history, expired cache, overflow recovery, insufficient context-window headroom, abort, provider error,
 empty/tool-calling or token-capped summaries. Interactive notices say which path
 ran and why; successful entries save usage, cumulative file lists and
 `details.cachePrefix: true`. Provider errors and payloads are never logged.
-Snapshots stay in memory only and are cleared on lifecycle changes and
-compaction. A failed prefix request can add provider usage before default
-compaction runs. See [security and privacy](docs/security.md#cache-compaction).
+Snapshots and filtered routing headers stay in memory only and are cleared on
+lifecycle changes and compaction. Credential-like headers are never captured.
+A failed prefix attempt spends provider usage before default compaction runs,
+but that attempt's usage is not recorded in session totals.
+See [security and privacy](docs/security.md#cache-compaction).
 
 ## Usage Guard
 

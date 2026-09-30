@@ -30,10 +30,8 @@ try {
   // Git installs include the lockfile; npm tarballs deliberately omit it.
   // Model the supported Git distribution, not an unshipped npm package.
   const tracked = run('git', ['ls-files', '-z'], resolve()).split('\0').filter(Boolean);
-  // New runtime files must also be exercised before the author stages a feature.
-  const newRuntime = run('git', ['ls-files', '--others', '--exclude-standard', '-z', '--', 'extensions', 'lib'], resolve()).split('\0').filter(Boolean);
   assert.ok(tracked.includes('package-lock.json'));
-  for (const file of [...new Set([...tracked, ...newRuntime])]) {
+  for (const file of tracked) {
     const target = join(fixture, file);
     mkdirSync(dirname(target), { recursive: true });
     cpSync(resolve(file), target);
