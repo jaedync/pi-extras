@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.11.0 - 2026-09-29
+
+Copy Blocks: one click copies a code block or quote from a reply.
+
+### Added
+
+- Copy Blocks. Code blocks and quotes in replies are drawn as cards on a
+  background of their own, with a `copy` label. In fullscreen mode a click on
+  a code block's header or a quote's label copies the block's exact text:
+  tabs kept, and quotes without their `>` markers or wrapping. `/copy-block`
+  copies the last block of the latest reply, or the nth, from the keyboard.
+  `PI_COPY_BLOCKS=off` turns it off.
+
 ## 0.10.2 - 2026-09-29
 
 ### Fixed
