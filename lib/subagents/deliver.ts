@@ -1,10 +1,12 @@
 /**
  * How the team's messages reach the main session.
  *
- * - A note never wakes main. It is appended after main's current turn, or at
- *   once when main is idle, and the model reads it on its next request.
- * - A question, or the answer to something main asked, wakes main: steered in
- *   while it works, a new turn when it is idle.
+ * - A note, a question, or the answer to something main asked wakes main:
+ *   steered in while it works, a new turn when it is idle. Children send notes
+ *   only when they would change what main is doing, so none may wait for a
+ *   report. Notes landing together share the turn the first one started.
+ * - What the user said to a child directly is recorded for main without
+ *   waking it: the user is there and did it on purpose.
  * - Reports wake main too, batched: reports landing within `batchMs` of each
  *   other become one message and one turn. Children main started in the same
  *   turn form a group, and a report waits (up to `groupWaitMs`) for the rest
@@ -144,7 +146,7 @@ export class MainMail {
 			? `Answer from ${delivery.from}:\n${delivery.text}` : noteText(delivery.from, delivery.text);
 		this.remember({ id, kind: delivery.kind, from: delivery.from, text: delivery.text, at: this.now() });
 		this.send({ customType: MESSAGE_TYPE, content, display: true, details: { id, kind: delivery.kind, from: delivery.from, text: delivery.text } },
-			delivery.kind === "note" ? { triggerTurn: false } : { triggerTurn: true, deliverAs: "steer" });
+			{ triggerTurn: true, deliverAs: "steer" });
 	}
 
 	/** Moves a group's held reports into the batch. */

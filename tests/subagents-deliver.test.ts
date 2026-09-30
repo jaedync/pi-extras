@@ -18,16 +18,26 @@ function mail(batchMs = 20) {
 	return { box, sent };
 }
 
-test("notes never wake main; questions and replies do", () => {
+test("notes, questions and replies all wake main, steered in while it works", () => {
 	const { box, sent } = mail();
 	box.deliver({ kind: "note", from: "scout", text: "found it" });
 	box.deliver({ kind: "question", from: "worker", text: "delete it?" });
 	box.deliver({ kind: "reply", from: "scout", text: "lib/a.ts" });
-	assert.deepEqual(sent.map((s) => [s.message.customType, s.options.triggerTurn]), [[MESSAGE_TYPE, false], [MESSAGE_TYPE, true], [MESSAGE_TYPE, true]]);
+	// A child sends a note only when it would change what main is doing, so an idle main must not sit on it.
+	assert.deepEqual(sent.map((s) => [s.message.customType, s.options.triggerTurn, s.options.deliverAs]),
+		[[MESSAGE_TYPE, true, "steer"], [MESSAGE_TYPE, true, "steer"], [MESSAGE_TYPE, true, "steer"]]);
 	assert.equal(sent[0]!.message.content, "Message from scout:\nfound it");
 	assert.match(sent[1]!.message.content, /^Question from worker, who is waiting for your reply \(answer with message\(\{ to: "worker", text \}\)\):\ndelete it\?$/);
 	assert.equal(sent[2]!.message.content, "Answer from scout:\nlib/a.ts");
 	assert.equal(sent[1]!.options.deliverAs, "steer");
+});
+
+test("what the user said to a child directly is recorded without waking main", () => {
+	const { box, sent } = mail();
+	box.deliver({ kind: "relay", from: "user", to: "scout", text: "stop after the tests", answered: false });
+	assert.equal(sent.length, 1);
+	assert.equal(sent[0]!.options.triggerTurn, false);
+	assert.equal(sent[0]!.message.content, "The user messaged scout directly:\nstop after the tests");
 });
 
 test("everything stays pending until Pi appends it", () => {
