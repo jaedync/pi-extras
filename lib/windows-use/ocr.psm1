@@ -34,7 +34,8 @@ $seam = 0.1
 function Read-Tile($source, [int]$x, [int]$y, [int]$w, [int]$h) {
     # WPF crops, scales and converts the pixels to the BGRA that OCR takes, with no per-pixel loop in script.
     $tile = New-Object System.Windows.Media.Imaging.CroppedBitmap($source, (New-Object System.Windows.Int32Rect($x, $y, $w, $h)))
-    $large = New-Object System.Windows.Media.Imaging.TransformedBitmap($tile, (New-Object System.Windows.Media.ScaleTransform($upscale, $upscale)))
+    $scale = [math]::Min($upscale, [Windows.Media.Ocr.OcrEngine]::MaxImageDimension / [math]::Max($w, $h))
+    $large = New-Object System.Windows.Media.Imaging.TransformedBitmap($tile, (New-Object System.Windows.Media.ScaleTransform($scale, $scale)))
     $bgra = New-Object System.Windows.Media.Imaging.FormatConvertedBitmap($large, [System.Windows.Media.PixelFormats]::Bgra32, $null, 0)
     $width = $bgra.PixelWidth
     $height = $bgra.PixelHeight
@@ -42,18 +43,40 @@ function Read-Tile($source, [int]$x, [int]$y, [int]$w, [int]$h) {
     $bgra.CopyPixels($pixels, $width * 4, 0)
     $buffer = [System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions]::AsBuffer($pixels)
     $bitmap = [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromBuffer($buffer, [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, $width, $height)
-    Wait-Operation ($script:engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+    try {
+        @{ result = (Wait-Operation ($script:engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])); scale = $scale; width = $width; height = $height }
+    } finally { $bitmap.Dispose() }
 }
 
-# Text in a frame of little-endian RGB565 pixels, as Hyper-V sends them: lines
-# of words with their boxes in frame pixels, read a quarter of the frame at a
-# time, each word from the quarter its center is in.
-function Read-FrameText([int]$width, [int]$height, [byte[]]$data) {
+# OCR deskews around the image center. Its boxes need the reported clockwise
+# rotation to return to the original image (OcrResult.TextAngle contract).
+function Get-OcrBox($rect, [double]$angle, [double]$width, [double]$height) {
+    $radians = $angle * [math]::PI / 180
+    $cos = [math]::Cos($radians)
+    $sin = [math]::Sin($radians)
+    $dx = $rect.X + $rect.Width / 2 - $width / 2
+    $dy = $rect.Y + $rect.Height / 2 - $height / 2
+    $cx = $width / 2 + $dx * $cos - $dy * $sin
+    $cy = $height / 2 + $dx * $sin + $dy * $cos
+    $w = [math]::Abs($rect.Width * $cos) + [math]::Abs($rect.Height * $sin)
+    $h = [math]::Abs($rect.Width * $sin) + [math]::Abs($rect.Height * $cos)
+    @{ x = $cx - $w / 2; y = $cy - $h / 2; w = $w; h = $h }
+}
+
+# Bound pixel allocation as well as compressed input size.
+function Assert-ImageSize([long]$width, [long]$height) {
+    if ($width -lt 2 -or $height -lt 2 -or $width -gt 8192 -or $height -gt 8192 -or $width * $height -gt 33554432) { throw 'Screenshot dimensions exceed the supported bounds' }
+}
+
+# Both RGB565 console frames and guest PNGs use the same quarter-tile OCR.
+function Read-SourceText($source) {
+    $width = $source.PixelWidth
+    $height = $source.PixelHeight
+    Assert-ImageSize $width $height
     if (-not $script:engine) {
         $script:engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
         if (-not $script:engine) { throw "Windows OCR has no recognizer for this Windows user's languages; add one with OCR support under Settings > Time & language" }
     }
-    $source = [System.Windows.Media.Imaging.BitmapSource]::Create($width, $height, 96, 96, [System.Windows.Media.PixelFormats]::Bgr565, $null, $data, $width * 2)
     $midX = [int]($width / 2)
     $midY = [int]($height / 2)
     $spanX = $midX + [int]($width * $seam)
@@ -62,15 +85,17 @@ function Read-FrameText([int]$width, [int]$height, [byte[]]$data) {
         foreach ($lower in $false, $true) {
             $x = if ($right) { $width - $spanX } else { 0 }
             $y = if ($lower) { $height - $spanY } else { 0 }
-            foreach ($line in (Read-Tile $source $x $y $spanX $spanY).Lines) {
+            $tile = Read-Tile $source $x $y $spanX $spanY
+            $scale = $tile.scale
+            foreach ($line in $tile.result.Lines) {
                 $words = @(foreach ($word in $line.Words) {
-                        $r = $word.BoundingRect
-                        $left = $x + $r.X / $upscale
-                        $top = $y + $r.Y / $upscale
-                        $cx = $left + $r.Width / $upscale / 2
-                        $cy = $top + $r.Height / $upscale / 2
+                        $r = Get-OcrBox $word.BoundingRect ([double]$tile.result.TextAngle) $tile.width $tile.height
+                        $left = $x + $r.x / $scale
+                        $top = $y + $r.y / $scale
+                        $cx = $left + $r.w / $scale / 2
+                        $cy = $top + $r.h / $scale / 2
                         if (($cx -ge $midX) -eq $right -and ($cy -ge $midY) -eq $lower) {
-                            [ordered]@{ text = $word.Text; x = [int][math]::Round($left); y = [int][math]::Round($top); w = [int][math]::Round($r.Width / $upscale); h = [int][math]::Round($r.Height / $upscale) }
+                            [ordered]@{ text = $word.Text; x = [int][math]::Round($left); y = [int][math]::Round($top); w = [int][math]::Round($r.w / $scale); h = [int][math]::Round($r.h / $scale) }
                         }
                     })
                 if ($words.Count -gt 0) { [ordered]@{ words = $words } }
@@ -80,4 +105,24 @@ function Read-FrameText([int]$width, [int]$height, [byte[]]$data) {
     [ordered]@{ width = $width; height = $height; lines = $lines }
 }
 
-Export-ModuleMember -Function Read-FrameText
+function Read-FrameText([int]$width, [int]$height, [byte[]]$data) {
+    $source = [System.Windows.Media.Imaging.BitmapSource]::Create($width, $height, 96, 96, [System.Windows.Media.PixelFormats]::Bgr565, $null, $data, $width * 2)
+    Read-SourceText $source
+}
+
+# Bytes arrive over the existing stdio channel, never through a temporary image file.
+function Read-ImageText($png) {
+    if (-not $png -or $png.Count -lt 33 -or $png.Count -gt 16777216) { throw 'PNG screenshot is missing or exceeds 16 MiB' }
+    $data = [byte[]]$png
+    if (($data[0..15] -join ',') -ne '137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82') { throw 'Invalid PNG screenshot header' }
+    $width = [BitConverter]::ToUInt32([byte[]]@($data[19], $data[18], $data[17], $data[16]), 0)
+    $height = [BitConverter]::ToUInt32([byte[]]@($data[23], $data[22], $data[21], $data[20]), 0)
+    Assert-ImageSize $width $height
+    $stream = New-Object IO.MemoryStream(,$data)
+    try {
+        $decoder = [System.Windows.Media.Imaging.PngBitmapDecoder]::new($stream, [System.Windows.Media.Imaging.BitmapCreateOptions]::PreservePixelFormat, [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad)
+        Read-SourceText $decoder.Frames[0]
+    } finally { $stream.Dispose() }
+}
+
+Export-ModuleMember -Function Read-FrameText, Read-ImageText

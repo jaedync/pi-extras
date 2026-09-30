@@ -120,6 +120,10 @@ function Get-Frame([string]$vm, [int]$width) {
 
 # The console's text through Windows OCR, at full resolution. The module loads
 # on first use; its warnings and output must stay off stdout, which carries the protocol.
+function Get-ImageText($png) {
+    Import-Module (Join-Path $PSScriptRoot 'ocr.psm1') -WarningAction SilentlyContinue | Out-Null
+    Read-ImageText $png
+}
 function Get-FrameText([string]$vm) {
     Import-Module (Join-Path $PSScriptRoot 'ocr.psm1') -WarningAction SilentlyContinue | Out-Null
     $f = Get-FrameData $vm 0
@@ -128,46 +132,66 @@ function Get-FrameText([string]$vm) {
 
 # ---- Input -------------------------------------------------------------------
 
-# US-layout ASCII to PC/AT set-1 scancodes: make code and whether shift is held.
-$scanMap = New-Object System.Collections.Hashtable([StringComparer]::Ordinal)
+# US-layout ASCII to virtual key codes and whether Shift is held.
+$keyMap = New-Object System.Collections.Hashtable([StringComparer]::Ordinal)
 foreach ($row in @(
-        @('1234567890-=', '!@#$%^&*()_+', 0x02),
-        @('qwertyuiop[]', 'QWERTYUIOP{}', 0x10),
-        @("asdfghjkl;'``", 'ASDFGHJKL:"~', 0x1E),
-        @('\zxcvbnm,./', '|ZXCVBNM<>?', 0x2B))) {
+        @('1234567890-=', '!@#$%^&*()_+', @(0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x30,0xBD,0xBB)),
+        @('qwertyuiop[]', 'QWERTYUIOP{}', @(0x51,0x57,0x45,0x52,0x54,0x59,0x55,0x49,0x4F,0x50,0xDB,0xDD)),
+        @("asdfghjkl;'``", 'ASDFGHJKL:"~', @(0x41,0x53,0x44,0x46,0x47,0x48,0x4A,0x4B,0x4C,0xBA,0xDE,0xC0)),
+        @('\zxcvbnm,./', '|ZXCVBNM<>?', @(0xDC,0x5A,0x58,0x43,0x56,0x42,0x4E,0x4D,0xBC,0xBE,0xBF)))) {
     for ($k = 0; $k -lt $row[0].Length; $k++) {
-        $scanMap[[string]$row[0][$k]] = @(($row[2] + $k), $false)
-        $scanMap[[string]$row[1][$k]] = @(($row[2] + $k), $true)
+        $keyMap[[string]$row[0][$k]] = @($row[2][$k], $false)
+        $keyMap[[string]$row[1][$k]] = @($row[2][$k], $true)
     }
 }
-$scanMap[' '] = @(0x39, $false); $scanMap["`t"] = @(0x0F, $false); $scanMap["`n"] = @(0x1C, $false)
+$keyMap[' '] = @(0x20, $false); $keyMap["`t"] = @(0x09, $false); $keyMap["`n"] = @(0x0D, $false)
 
-function ConvertTo-Scancodes([string]$text) {
-    $out = New-Object System.Collections.Generic.List[byte]
+function ConvertTo-KeyEvents([string]$text) {
+    $out = New-Object System.Collections.Generic.List[object]
+    $shifted = $false
     foreach ($ch in ($text -replace "`r`n", "`n").ToCharArray()) {
-        $e = $scanMap[[string]$ch]
+        $e = $keyMap[[string]$ch]
         if (-not $e) { throw "Cannot type character U+$(([int]$ch).ToString('X4')) through the console keyboard (US layout); win.type types any text through Windows-MCP" }
-        if ($e[1]) { $out.Add(0x2A) }
-        $out.Add([byte]$e[0]); $out.Add([byte]($e[0] -bor 0x80))
-        if ($e[1]) { $out.Add(0xAA) }
+        if ($e[1] -ne $shifted) {
+            $out.Add([pscustomobject]@{ Method = $(if ($e[1]) { 'PressKey' } else { 'ReleaseKey' }); Key = 0x10 })
+            $shifted = $e[1]
+        }
+        $out.Add([pscustomobject]@{ Method = 'TypeKey'; Key = $e[0] })
     }
+    if ($shifted) { $out.Add([pscustomobject]@{ Method = 'ReleaseKey'; Key = 0x10 }) }
     , $out.ToArray()
 }
 
-# TypeText is ignored by console windows, so text goes in as scancodes, which
-# behave like physical key presses. Input is asynchronous with a bounded guest
-# buffer; a full buffer answers 32773 (Invalid parameter), so back off.
-function Send-Text($machine, [string]$text) {
+# TypeText is ignored by console windows. TypeKey supplies a physical paired
+# stroke in one CIM call; separate scancode calls made large input too slow.
+# Settlement is still essential: unsynchronised Shift typed '$x' as '4x' live.
+$textEventSettleMs = 50
+function Send-Text($machine, [string]$text, [scriptblock]$onQueued) {
+    $events = ConvertTo-KeyEvents $text
     $kb = Get-Device $machine 'Msvm_Keyboard'
-    $codes = ConvertTo-Scancodes $text
-    for ($i = 0; $i -lt $codes.Count; $i += 480) {
-        $chunk = [byte[]]$codes[$i..([math]::Min($i + 480, $codes.Count) - 1)]
-        for ($try = 0; ; $try++) {
-            $rv = (Invoke-CimMethod -InputObject $kb -MethodName TypeScancodes -Arguments @{ scancodes = $chunk }).ReturnValue
-            if ($rv -eq 0) { break }
-            if ($rv -ne 32773 -or $try -ge 120) { throw (Get-Failure 'TypeScancodes' $rv) }
-            Start-Sleep -Milliseconds 500
+    $pendingKey = $null
+    $errors = @()
+    $lastStroke = $events.Count - 1
+    if ($lastStroke -ge 0 -and $events[$lastStroke].Method -ne 'TypeKey') { $lastStroke-- }
+    try {
+        for ($i = 0; $i -lt $events.Count; $i++) {
+            $event = $events[$i]
+            if ($event.Method -eq 'TypeKey') { $pendingKey = $event.Key }
+            Invoke-Checked $kb $event.Method @{ keyCode = [uint32]$event.Key }
+            $pendingKey = $null
+            if ($i -eq $lastStroke -and $onQueued) { & $onQueued }
+            Start-Sleep -Milliseconds $textEventSettleMs
         }
+    } catch { $errors = @($_.Exception.Message) }
+    finally {
+        # A failed paired stroke may have pressed its ordinary key. Release it
+        # without replaying, and attempt Shift cleanup even if that release fails.
+        $release = if ($null -ne $pendingKey) { @($pendingKey, 0x10) } else { @(0x10) }
+        foreach ($releaseCode in $release) {
+            try { Invoke-Checked $kb 'ReleaseKey' @{ keyCode = [uint32]$releaseCode } }
+            catch { $errors = @($errors + $_.Exception.Message) }
+        }
+        if ($errors.Count) { throw ("Console text input failed; earlier characters may already be typed. The failed stroke was not repeated. " + ($errors -join '; ')) }
     }
 }
 
@@ -257,14 +281,28 @@ function Invoke-Login([string]$vm) {
 
 # ---- Setup -------------------------------------------------------------------
 
-function Get-Key([string]$vm, [bool]$rotate) {
+function New-Key {
+    $bytes = New-Object byte[] 32
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    -join ($bytes | ForEach-Object { $_.ToString('x2') })
+}
+
+function Set-Key([string]$vm, [string]$key) {
     New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
     $file = Get-KeyFile $vm
-    if ($rotate -or -not (Test-Path $file)) {
-        $bytes = New-Object byte[] 32
-        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-        [IO.File]::WriteAllText($file, (-join ($bytes | ForEach-Object { $_.ToString('x2') })))
-    }
+    $pending = $file + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+    try {
+        [IO.File]::WriteAllText($pending, $key)
+        # PS5.1 converts $null to an empty string here; the API needs a real null.
+        if (Test-Path $file) { [IO.File]::Replace($pending, $file, [NullString]::Value) }
+        else { [IO.File]::Move($pending, $file) }
+    } finally { if (Test-Path $pending) { [IO.File]::Delete($pending) } }
+}
+
+function Get-Key([string]$vm, [bool]$rotate) {
+    $file = Get-KeyFile $vm
+    if ($rotate -or -not (Test-Path $file)) { Set-Key $vm (New-Key) }
     (Get-Content -Path $file -Raw).Trim()
 }
 
@@ -290,12 +328,15 @@ function Open-AdminShell([string]$vm) {
 function Invoke-Setup([string]$vm, [int]$port, [string]$launcher, [bool]$elevated) {
     if (-not $launcher.Contains('__PAYLOAD__')) { throw 'setup needs a launcher containing __PAYLOAD__' }
     $m = Get-RunningMachine $vm
-    # A fresh key: a server being replaced keeps answering until the bootstrap
-    # stops it, and must not pass for the new one. It also retires the last key typed.
-    $key = Get-Key $vm $true
+    # Disable sensitive command history and per-character line redraws only
+    # in this disposable shell. The user's profile remains unchanged.
+    Send-Text $m "if(get-module psreadline){remove-module psreadline}`n"
+    Start-Sleep -Seconds 2
+    # Keep the active key usable if typing times out before the command enters.
+    $key = New-Key
     # Tags the status the bootstrap publishes, so an earlier run's can't be mistaken for this one's.
     $run = -join (1..8 | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-    # Comment lines go: typing runs at a few dozen characters a second.
+    # Comment lines go: paced console input makes every extra character costly.
     $lines = (Get-Content -Path (Join-Path $PSScriptRoot 'guest-bootstrap.ps1')) | Where-Object { $_ -notmatch '^\s*#' }
     $runLevel = if ($elevated) { 'Highest' } else { 'Limited' }
     $script = ($lines -join "`n").Replace('__KEY__', $key).Replace('__PORT__', "$port").Replace('__RUNLEVEL__', $runLevel).Replace('__RUN__', $run)
@@ -305,8 +346,10 @@ function Invoke-Setup([string]$vm, [int]$port, [string]$launcher, [bool]$elevate
     $gz.Write($raw, 0, $raw.Length); $gz.Close()
     $b64 = [Convert]::ToBase64String($ms.ToArray())
     $line = $launcher.Replace('__PAYLOAD__', $b64) + "`n"
-    # The newline rides in the same scancode stream, so Enter can't overtake the text.
-    Send-Text $m $line
+    # Enter follows the same sequential key-event path, so it cannot overtake text.
+    # Commit when Enter is queued, before cleanup that can itself fail. The old
+    # server must not masquerade as ready after the new install may have started.
+    Send-Text $m $line { Set-Key $vm $key }
     [ordered]@{ typed = $line.Length; port = $port; run = $run }
 }
 
@@ -389,6 +432,7 @@ $handlers = @{
     start      = { param($p) Start-Machine $p.vm }
     frame      = { param($p) Get-Frame $p.vm $(if ($p.width) { [int]$p.width } else { 0 }) }
     ocr        = { param($p) Get-FrameText $p.vm }
+    ocrImage   = { param($p) Get-ImageText $p.png }
     click      = { param($p) Send-Click (Get-RunningMachine $p.vm) $p.x $p.y $p.button ([bool]$p.double); @{ ok = $true } }
     move       = { param($p) Set-Pointer (Get-Device (Get-RunningMachine $p.vm) 'Msvm_SyntheticMouse') $p.x $p.y; @{ ok = $true } }
     drag       = { param($p) Send-Drag (Get-RunningMachine $p.vm) $p.x $p.y $p.x2 $p.y2; @{ ok = $true } }

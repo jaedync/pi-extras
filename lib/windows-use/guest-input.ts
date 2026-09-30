@@ -14,7 +14,7 @@ type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>;
 /** How Windows-MCP's Clipboard get starts when the clipboard holds text. */
 const CLIPBOARD_TEXT = "Clipboard content:\n";
 /** consent.exe draws UAC prompts; it runs only while one is up. */
-const UAC_CHECK = "@(Get-Process consent -ErrorAction SilentlyContinue).Count";
+const UAC_CHECK = "$me = (Get-Process -Id $PID).SessionId; @(Get-Process consent -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }).Count";
 /** Windows-MCP's snapshot and screenshot text when the screen can't be read, as on the secure desktop. */
 export const SCREEN_GRAB_FAILED = /screen grab failed/i;
 const UAC_POLL_MS = 500;
@@ -71,7 +71,11 @@ export async function captureFailure(guest: Guest, signal?: AbortSignal): Promis
 	// Whatever took the screen may also have locked it.
 	guest.recheck();
 	const vm = guest.vm;
-	if (await uacShowing(guest, signal).catch(() => false)) {
+	const uac = await uacShowing(guest, signal);
+	if (guest.where() === "remote") {
+		return { uac, message: `Windows-MCP couldn't capture ${vm}'s enhanced/remote session${uac ? ": a UAC prompt is on its secure desktop" : "; it may be minimized, locked, disconnected, or on a secure desktop"}. Restore the same VM Connect window${uac ? " and answer the prompt there" : " and check that its desktop is visible"}, then retry. The separate console was left alone.` };
+	}
+	if (uac) {
 		return { uac: true, message: `A UAC prompt is showing on ${vm}, on the secure desktop where Windows-MCP can't see or act. Answer it with win.uac({ vm: ${JSON.stringify(vm)}, answer: "yes" }) or "no".` };
 	}
 	return { uac: false, message: `Windows-MCP couldn't capture ${vm}'s screen; the secure desktop may be up (Ctrl+Alt+Del or a credential prompt). win.console.screenshot({ vm: ${JSON.stringify(vm)} }) shows the console.` };
@@ -85,7 +89,9 @@ export async function captureFailure(guest: Guest, signal?: AbortSignal): Promis
 export async function answerUac(guest: Guest, host: HostCalls, answer: unknown, sleep: Sleep, signal?: AbortSignal): Promise<ToolResult> {
 	if (answer !== "yes" && answer !== "no") throw new Error('win.uac needs { vm, answer: "yes" } or answer: "no"');
 	const vm = guest.vm;
+	await guest.assertConsole(signal);
 	if (!(await uacShowing(guest, signal))) throw new Error(`No UAC prompt is showing on ${vm}.`);
+	await guest.assertConsole(signal);
 	await host.call("key", { vm, keys: answer === "yes" ? "alt+y" : "esc" }, { signal });
 	for (let waited = 0; ; waited += UAC_POLL_MS) {
 		await sleep(UAC_POLL_MS, signal);

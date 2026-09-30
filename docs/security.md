@@ -135,7 +135,11 @@ Off unless `PI_WINDOWS_USE=on`, and only in WSL. When enabled, the agent can
 see and operate every Hyper-V VM on the host that the Windows user can manage:
 it reads UI trees and screenshots, types, clicks and runs PowerShell in the
 signed-in guest session, and presses keys and clicks on each VM's console,
-including on sign-in and UAC screens. There is no per-VM approval: opting in
+including on sign-in and UAC screens when a fresh check confirms the console
+session. Enhanced/remote sessions receive guest input only; console input,
+console sign-in, console UAC and console repair are refused. A locked or
+disconnected remote session needs the user to reconnect/unlock it. There is no
+per-VM approval: opting in
 covers every VM, unless `PI_WINDOWS_USE_VMS` names the only ones the tool may
 list or act on. That limit binds the tool, not an agent that also has a shell,
 which can run `powershell.exe` itself. Screenshots and guest text enter the conversation only when
@@ -151,9 +155,13 @@ requires a bearer key: 32 random bytes generated on the host, kept in
 the guest user's `%USERPROFILE%\.windows-mcp\config.toml`. The key is typed
 into the guest inside the bootstrap, only after Windows OCR on the host reads
 an administrator's PowerShell window on the console (without OCR it is typed
-unchecked), and removed from that PowerShell's history afterwards. A new key
-is made only at that point, so a setup that stops earlier leaves the old one.
-It never enters the conversation. Anyone who holds it and can reach the
+unchecked). PSReadLine is disabled only in this temporary shell before the
+sensitive command is typed; the bootstrap also removes matching prior history.
+The new key stays in host memory during typing. The active key file is replaced
+atomically after the complete command is queued, so interrupted partial typing
+leaves the existing server's authentication usable. A failure after queuing can
+still have started the install; do not blindly replay it. The key never enters
+the conversation. Anyone who holds it and can reach the
 guest's port gets the guest user's full PowerShell, so treat other VMs on the
 same virtual switch as able to try.
 
@@ -171,13 +179,25 @@ a run id and a status line, and on failure the installer's last output lines,
 never the key. The host reads it to stop a failed install at once.
 
 Requests to the guest go from the host, without a proxy and without following
-redirects, so the key goes only to the guest's address. Signing in clicks the
-last-used account's Sign in button and never types a password. It happens
-only when the console shows no taskbar even after the Windows key, which
-brings the taskbar up over any unlocked desktop, so a desktop in use is never
-clicked, whatever the guest reports. It never clicks a nearly black screen
-(Windows starting, restarting or installing updates), and stops after two
-clicks.
+redirects, so the key goes only to the guest's address. This remains an IP/TCP
+transport, not a VPN-independent PowerShell Direct relay.
+
+Before guest tools run, a read-only PowerShell query compares the server's
+session with `WTSGetActiveConsoleSessionId` and reads its WTS connection state.
+This detects a desktop moving to enhanced/RDP mode without restarting the
+server. A failed/malformed query is not interpreted as an unlocked desktop.
+Console actions require fresh confirmation, not a cached console observation.
+When the server is unavailable, setup/repair requires a visible console
+desktop, and a remembered remote session still blocks that fallback. An
+ambiguous lock/sign-in screen gets no keys or clicks. Initial enhanced-session
+setup remains unresolved without an authorized guest execution channel; no
+guest credentials or password policies are changed by these checks.
+
+Only a freshly confirmed console session can be signed in. The taskbar check
+prevents a Sign in click on a desktop, and at most two attempts are made.
+`win.login` and `win.setup` do not override session protection. These checks
+are observations before actions, not an atomic lock on Windows session moves;
+avoid changing session mode or competing for input while the agent runs.
 
 Recovery may restart parts of the guest without asking: Start and its search
 (`SearchHost` and `StartMenuExperienceHost`, which Windows starts again on
@@ -187,14 +207,23 @@ with OCR before the restart command is typed; without OCR nothing is typed.
 The restart ends and reruns the logon task, which first stops any server
 still running: the signed-in user can't stop one that has administrator
 rights. A server whose rights don't match `PI_WINDOWS_USE_ELEVATED` is
-reinstalled, once per session.
+reinstalled, once per session, only at the console. A rights mismatch in an
+enhanced session is reported rather than triggering console repair. Shell UI
+restarts and UAC detection are scoped to the server's own Windows session.
 
-`win.console.ocr` runs Windows OCR on the host over a console frame, locally,
-through a PowerShell module (`ocr.psm1`) the host loads on first use. Its text
-enters the conversation only when the agent's script emits it.
+`win.console.ocr` runs Windows OCR locally on the host through `ocr.psm1`.
+In enhanced mode its source is Windows-MCP's guest-session PNG, sent over the
+existing stdio channel without a temporary image file. PNG size/dimensions
+are bounded before decoding. OCR points account for downscaling and monitor
+origins. Console screenshots use the guest image in that mode too; failures
+never substitute a console lock screen. Its text enters the conversation only
+when the agent's script emits it. Secure-desktop captures in enhanced mode
+require user action in the same VM Connect window.
 
-`win.uac` answers UAC consent prompts with the console keyboard, which
-reaches the secure desktop (the agent could press the same keys through
+`win.uac` answers UAC consent prompts with the console keyboard only in a
+freshly confirmed console session. It cannot answer an enhanced session's
+prompt: the user must do so in VM Connect. At the console it reaches the secure
+desktop (the agent could press the same keys through
 `win.console.key`). That elevates whatever asked, so treat an agent with
 Windows use as able to run anything as an administrator of the guest when its
 user is one. It never types credentials.

@@ -5,20 +5,21 @@
  * unlocked and serving; whatever is missing is repaired here:
  *
  * - Windows starting, restarting or installing updates: wait for it
- * - locked (server answers, LogonUI runs in its session, no desktop on screen): sign in at the console
- * - unreachable, installed, no desktop on screen: sign in, the logon task starts it
+ * - locked and confirmed at the console: sign in there; locked remote sessions need the user
+ * - unreachable, installed, no desktop on screen: wait, then ask the user; never assume console sign-in is safe
  * - unreachable with the desktop showing, or never installed: install it
  * - reachable but answering no tool (stalled calls hold every worker): restart it from the Run box
  * - a snapshot stalled by Start or its search: restart them and snapshot again
  *
- * The console is only clicked when no taskbar shows even after pressing the
- * Windows key, which brings up Start and the taskbar over any unlocked desktop,
- * full-screen apps included, and does nothing on lock and sign-in screens; and
- * only when the screen isn't busy. So an unlocked desktop is never clicked blind.
+ * Console input requires a fresh report of an active console session, or (for
+ * setup/repair when the server is unavailable) a visible console desktop.
+ * A remembered remote session only blocks input; it never authorizes recovery.
  */
 import type { ToolResult } from "../computer-use/session.ts";
 import { textOf, toResult } from "./result.ts";
 import { Screen, type Look } from "./screen.ts";
+import { hasTaskbar } from "./frame.ts";
+import { consoleRefusal, readSession, requireActive, SESSION_CHECK, type DesktopSession } from "./desktop-session.ts";
 import { checkBootstrap, LAUNCHER, NO_OCR, openAdminShell, type Bootstrap } from "./install.ts";
 import { TIMING, type Timing } from "./timing.ts";
 import { HOST_TIMEOUT, NOT_SENT, TransportError } from "./transport.ts";
@@ -36,16 +37,12 @@ export interface HostCalls {
 
 export const DEFAULT_PORT = 8000;
 const PROTOCOL_VERSION = "2025-06-18";
-/**
- * Only a LogonUI in the server's own session means this desktop is locked: a
- * pending enhanced-session connection runs one in a session of its own. The
- * PowerShell it runs in has the server's rights, which it reports as well.
- */
-const LOCK_CHECK = "$me = (Get-Process -Id $PID).SessionId; $lock = if (Get-Process LogonUI -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me }) { 'locked' } else { 'unlocked' }; $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); \"$lock $(if ($admin) { 'elevated' } else { 'limited' })\"";
 /** Hyper-V states a VM passes through on its way between running, off and saved. */
 const IN_BETWEEN = /^(?:shutting down|starting|stopping|resuming|saving|pausing|state \d+)$/;
 /** Sign in clicks per repair: a second covers a screen that wasn't ready; more won't help a password. */
 const MAX_SIGN_IN_CLICKS = 2;
+/** Paced make/break events keep case and symbols intact; a full compressed bootstrap needs minutes. */
+const BOOTSTRAP_INPUT_MS = 10 * 60_000;
 
 export interface GuestOptions {
 	readonly host: HostCalls;
@@ -88,6 +85,7 @@ export class Guest {
 	private readonly elevated: boolean;
 	/** A server with other rights than asked is reinstalled once; if that doesn't take, it is left as it is. */
 	private rights: "unchecked" | "reinstalled" | "settled" = "unchecked";
+	private desktop?: DesktopSession;
 	private connected = false;
 	private unlockedAt = Number.NEGATIVE_INFINITY;
 	/** Until then the guest has just come back (restart, sign-in, new server), and captures get longer. */
@@ -131,8 +129,10 @@ export class Guest {
 		try {
 			await this.ensure(signal);
 		} catch (error) {
-			if (!(error instanceof TransportError && error.timedOut)) throw error;
-			await this.restartServer(signal);
+			if (!(error instanceof TransportError)) throw error;
+			this.forget();
+			if (error.timedOut) await this.restartServer(signal);
+			else if (!error.unsent) throw error;
 			await this.ensure(signal);
 		}
 	}
@@ -146,12 +146,16 @@ export class Guest {
 	private async afterStall(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
 		const limit = this.limit(name, args);
 		const coldUntil = this.coldUntil;
-		const front = await this.frontWindow(signal);
+		const front = await this.frontWindow(signal).catch((error: unknown) => {
+			if (CAPTURES.has(name) || signal?.aborted) throw error;
+			throw new Error(`${hangMessage(this.vm, name, limit)} Recovery stopped: ${error instanceof Error ? error.message : String(error)}`);
+		});
 		const restarted = front === "restarted";
 		if (!CAPTURES.has(name)) throw new Error(hangMessage(this.vm, name, limit, restarted));
 		// Getting the front window brought the guest back (Windows restarted under the capture): look again.
 		if (!restarted && this.coldUntil !== coldUntil) return this.captureAgain(name, args, limit, front, signal);
 		if (restarted || !front || !SHELL_UI.test(front.process)) throw new Error(stallMessage(this.vm, name, limit, restarted ? undefined : front, restarted));
+		requireActive(this.vm, await this.lockCheck(signal));
 		await this.callTool("PowerShell", { command: RESTART_SHELL_UI }, signal, QUICK_MS);
 		this.note(`${this.vm}: Start or its search stopped answering UI Automation and stalled ${name}; restarted them (Windows brings them back when next opened)`);
 		await this.sleep(this.timing.startMenuMs, signal);
@@ -188,6 +192,7 @@ export class Guest {
 	 */
 	private async restartServer(signal?: AbortSignal): Promise<void> {
 		this.forget();
+		await this.assertConsole(signal);
 		const vm = JSON.stringify(this.vm);
 		const cannot = (why: string) => new Error(`Windows-MCP on ${this.vm} stopped answering (a stalled call holds it), and ${why}. Reinstalling restarts it: win.setup({ vm: ${vm} }).`);
 		if (!(await this.screen.input("key", { keys: "win+r" }, signal))) throw cannot("the console took no input");
@@ -202,6 +207,7 @@ export class Guest {
 			}
 		}
 		if (!open) throw cannot("the console's Run box didn't open to restart it from");
+		await this.assertConsole(signal);
 		await this.screen.input("type", { text: `${RESTART_SERVER}\n` }, signal);
 		this.note(`${this.vm}: Windows-MCP stopped answering (a stalled call held it); restarted it from the console's Run box`);
 		this.cameBack();
@@ -216,12 +222,13 @@ export class Guest {
 		return Array.isArray(listed?.tools) ? listed.tools : [];
 	}
 
-	/** Signs in at the console, whatever the screen shows. */
+	/** Signs in only when a fresh check confirms the desktop is at the console. */
 	async login(signal?: AbortSignal): Promise<void> {
 		await this.running(signal);
-		await this.host.call("login", { vm: this.vm }, { signal });
-		this.unlockedAt = Number.NEGATIVE_INFINITY;
-		this.note(`${this.vm}: clicked Sign in at the console`);
+		const state = await this.inspect(signal);
+		if (state?.where !== "console" || !state.active) throw consoleRefusal(this.vm, this.where() === "remote");
+		await this.reachDesktop(signal, "", true);
+		this.recheck();
 	}
 
 	/** Installs (or repairs) Windows-MCP, getting to the desktop first. */
@@ -230,7 +237,34 @@ export class Guest {
 		await this.install(signal);
 	}
 
-	/** Connected and checked unlocked lately, so a tool call runs without repairs first. */
+	/** Last reported location. Retained across failures so disconnects cannot enable console repair. */
+	where(): "console" | "remote" | "unknown" { return this.desktop?.where ?? "unknown"; }
+
+	/** Read-only probe: no setup, wake, sign-in, or restart if the server is unavailable. */
+	async inspect(signal?: AbortSignal): Promise<DesktopSession | undefined> {
+		try {
+			if (!this.connected && await this.connect(signal) !== "ok") return undefined;
+			return await this.lockCheck(signal);
+		} catch (error) {
+			if (!(error instanceof TransportError)) throw error;
+			this.forget();
+			return undefined;
+		}
+	}
+
+	/** A stale console observation never authorizes input; a stale remote one still forbids it. */
+	async assertConsole(signal?: AbortSignal): Promise<void> {
+		const state = await this.inspect(signal);
+		if (this.where() === "remote") throw consoleRefusal(this.vm, true);
+		if (state?.where === "console" && state.active) return;
+		if (!state) {
+			const frame = await this.screen.frame(signal);
+			if (frame && hasTaskbar(frame)) return;
+		}
+		throw consoleRefusal(this.vm, false);
+	}
+
+	/** Connected and checked unlocked lately, for helpers that need a foreground-window check. */
 	ready(): boolean {
 		return this.connected && this.now() - this.unlockedAt < this.timing.lockTtlMs;
 	}
@@ -246,7 +280,6 @@ export class Guest {
 	}
 
 	private async ensure(signal?: AbortSignal): Promise<void> {
-		if (this.connected && this.now() - this.unlockedAt < this.timing.lockTtlMs) return;
 		const status = await this.running(signal);
 		if (!this.connected) {
 			const reply = await this.connect(signal);
@@ -254,7 +287,8 @@ export class Guest {
 			if (reply === "silent") throw new TransportError(`Windows-MCP on ${this.vm} took the connection and answered nothing`, false, true);
 			if (reply === "unreachable") await this.revive(status, signal);
 		}
-		if (this.now() - this.unlockedAt >= this.timing.lockTtlMs) await this.unlock(signal);
+		// Session moves and disconnects can happen between consecutive calls, even within the old lock TTL.
+		await this.unlock(signal);
 	}
 
 	/**
@@ -277,6 +311,10 @@ export class Guest {
 	/** The server is unreachable: get to the desktop, give the logon task its time, else reinstall. */
 	private async revive(status: Status, signal?: AbortSignal): Promise<void> {
 		this.cameBack();
+		if (this.where() === "remote") {
+			if (await this.waitConnect(this.timing.restartWaitMs, signal)) return;
+			throw consoleRefusal(this.vm, true);
+		}
 		if (status.installed) {
 			// After a logon, or a start that signed itself in, the task starts the server; give it time.
 			const fresh = await this.reachDesktop(signal) || await this.bootedRecently(signal);
@@ -288,11 +326,14 @@ export class Guest {
 	}
 
 	private async install(signal?: AbortSignal): Promise<void> {
-		await this.reachDesktop(signal);
+		await this.assertConsole(signal);
+		await this.reachDesktop(signal, "", this.connected);
 		this.note(`${this.vm}: installing Windows-MCP in the guest (a first install takes a few minutes)`);
 		const { pollMs, adminShellMs: openMs, shellReadyMs: readyMs } = this.timing;
+		await this.assertConsole(signal);
 		await openAdminShell({ host: this.host, vm: this.vm, screen: this.screen, sleep: this.sleep, now: this.now, pollMs, openMs, readyMs }, signal);
-		const { run } = await this.host.call("setup", { vm: this.vm, port: this.port, launcher: LAUNCHER, elevated: this.elevated }, { signal, timeoutMs: 5 * 60_000 }) as { run?: string };
+		await this.assertConsole(signal);
+		const { run } = await this.host.call("setup", { vm: this.vm, port: this.port, launcher: LAUNCHER, elevated: this.elevated }, { signal, timeoutMs: BOOTSTRAP_INPUT_MS }) as { run?: string };
 		const bootstrap = run ? { run, startBy: this.now() + this.timing.bootstrapStartMs, started: false } : undefined;
 		if (!(await this.waitConnect(this.timing.installWaitMs, signal, bootstrap))) {
 			throw new Error(`Windows-MCP did not come up on ${this.vm}. The guest's PowerShell window shows why: win.console.screenshot({ vm: ${JSON.stringify(this.vm)} }).`);
@@ -307,12 +348,16 @@ export class Guest {
 	 * twice. Returns whether a logon just happened (it waited or clicked), after
 	 * which the logon task needs time to start the server.
 	 */
-	private async reachDesktop(signal?: AbortSignal, reason = ""): Promise<boolean> {
+	private async reachDesktop(signal?: AbortSignal, reason = "", confirmed = false): Promise<boolean> {
 		const deadline = this.now() + this.timing.bootWaitMs;
 		let clicks = 0;
 		let waited = false;
 		for (;;) {
-			const screen = await this.look(signal);
+			if (this.where() === "remote") throw consoleRefusal(this.vm, true);
+			// The guest may recover into RDP while its unrelated console remains black.
+			if (!confirmed && await this.waitConnect(0, signal)) return true;
+			if (confirmed) await this.assertConsole(signal);
+			const screen = await this.look(signal, confirmed);
 			if (screen === "desktop") return waited || clicks > 0;
 			if (screen === "busy") {
 				if (this.now() >= deadline) {
@@ -323,9 +368,14 @@ export class Guest {
 				await this.sleep(this.timing.pollMs, signal);
 				continue;
 			}
+			if (!confirmed) {
+				if (await this.waitConnect(this.timing.logonWaitMs, signal)) return true;
+				throw consoleRefusal(this.vm, false);
+			}
 			if (clicks >= MAX_SIGN_IN_CLICKS) {
 				throw new Error(`${this.vm} still shows no desktop after clicking Sign in (the account may need a password). Look with win.console.screenshot({ vm: ${JSON.stringify(this.vm)} }), get to the desktop with win.console.* input, then try again.`);
 			}
+			await this.assertConsole(signal);
 			if (await this.screen.input("login", {}, signal)) {
 				clicks++;
 				this.note(`${this.vm}: ${reason}signed in at the console`);
@@ -340,8 +390,8 @@ export class Guest {
 		return typeof uptime === "number" && uptime * 1000 < this.timing.recentBootMs;
 	}
 
-	private async look(signal?: AbortSignal): Promise<Look> {
-		return this.screen.look((await this.running(signal)).heartbeat, signal);
+	private async look(signal?: AbortSignal, allowInput = false): Promise<Look> {
+		return this.screen.look((await this.running(signal)).heartbeat, signal, allowInput);
 	}
 
 	private async waitConnect(ms: number, signal?: AbortSignal, initial?: Bootstrap): Promise<boolean> {
@@ -374,22 +424,30 @@ export class Guest {
 	}
 
 	private async unlock(signal?: AbortSignal): Promise<void> {
-		if (await this.screen.wake(signal)) this.note(`${this.vm}: woke the display, which had gone dark`);
-		const { locked, elevated } = await this.lockCheck(signal);
-		// The guest's word alone never triggers a click: reachDesktop clicks only when the console agrees.
-		if (locked && await this.reachDesktop(signal, "was locked; ")) this.cameBack();
+		const state = await this.lockCheck(signal);
+		requireActive(this.vm, state);
+		if (state.where === "console") {
+			if (await this.screen.wake(signal)) this.note(`${this.vm}: woke the display, which had gone dark`);
+			if (state.locked && await this.reachDesktop(signal, "was locked; ", true)) this.cameBack();
+		}
+		if (state.elevated !== this.elevated) {
+			await this.matchRights(signal);
+			requireActive(this.vm, await this.lockCheck(signal));
+		}
 		this.unlockedAt = this.now();
-		if (elevated !== undefined && elevated !== this.elevated) await this.matchRights(signal);
 	}
 
-	private async lockCheck(signal?: AbortSignal): Promise<{ locked: boolean; elevated?: boolean }> {
-		const text = textOf(await this.callTool("PowerShell", { command: LOCK_CHECK }, signal, QUICK_MS));
-		const rights = /\b(elevated|limited)\b/.exec(text)?.[1];
-		return { locked: /\blocked\b/.test(text), elevated: rights === undefined ? undefined : rights === "elevated" };
+	private async lockCheck(signal?: AbortSignal): Promise<DesktopSession> {
+		const result = await this.callTool("PowerShell", { command: SESSION_CHECK }, signal, QUICK_MS);
+		const state = readSession(result.isError ? "" : textOf(result));
+		// Only an active console observation can clear an earlier remote-session warning.
+		if (state.where === "remote" || state.where === "console" && state.active) this.desktop = state;
+		return state;
 	}
 
 	/** Reinstalls a server whose rights aren't the ones this session asks for. */
 	private async matchRights(signal?: AbortSignal): Promise<void> {
+		if (this.where() === "remote") throw new Error(`${this.vm}: Windows-MCP's administrator rights do not match PI_WINDOWS_USE_ELEVATED. Automatic reinstall is disabled in an enhanced/remote session. Match the setting to this server or arrange an explicit repair without moving the desktop.`);
 		if (this.rights === "settled") return;
 		if (this.rights === "reinstalled") {
 			this.rights = "settled";

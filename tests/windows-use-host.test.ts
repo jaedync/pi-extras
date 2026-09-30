@@ -84,7 +84,7 @@ test("host.ps1 stays clear of what antivirus holds up, and fills in every bootst
 		assert.doesNotMatch(ocr, pattern);
 	}
 	assert.match(host, /ocr\s+= \{ param\(\$p\) Get-FrameText/, "the OCR module loads only when asked for");
-	assert.doesNotMatch(host.replace(/function Get-FrameText[\s\S]*?\n\}/, ""), /ocr\.psm1/);
+	assert.doesNotMatch(host.replace(/function Get-(?:Frame|Image)Text[\s\S]*?\n\}/g, ""), /ocr\.psm1/);
 	const placeholders = [...new Set(bootstrap.match(/__[A-Z]+__/g))].sort();
 	assert.deepEqual(placeholders, ["__KEY__", "__PORT__", "__RUNLEVEL__", "__RUN__"]);
 	assert.match(bootstrap, /-RunLevel \$runLevel\b/);
@@ -97,19 +97,22 @@ test("OCR reads the frame at twice its size, where small UI text reads right, an
 	const ocr = readFileSync(new URL("../lib/windows-use/ocr.psm1", import.meta.url), "utf8");
 	// Live, an Event Viewer list read at 1x got no time right ("1237:02"); at 2x it got all 15.
 	assert.match(ocr, /\$upscale = 2\b/);
-	assert.match(ocr, /TransformedBitmap\(\$tile, \(New-Object System\.Windows\.Media\.ScaleTransform\(\$upscale, \$upscale\)\)\)/);
+	assert.match(ocr, /TransformedBitmap\(\$tile, \(New-Object System\.Windows\.Media\.ScaleTransform\(\$scale, \$scale\)\)\)/);
 	// Over a photo wallpaper it read none of a Run box from the whole frame, and all of it from a quarter.
 	assert.match(ocr, /CroppedBitmap\(\$source, \(New-Object System\.Windows\.Int32Rect\(\$x, \$y, \$w, \$h\)\)\)/);
 	assert.match(ocr, /foreach \(\$right in \$false, \$true\)/);
-	assert.match(ocr, /\$left = \$x \+ \$r\.X \/ \$upscale/, "boxes are in frame pixels");
-	assert.match(ocr, /w = \[int\]\[math\]::Round\(\$r\.Width \/ \$upscale\)/);
+	assert.match(ocr, /Get-OcrBox \$word\.BoundingRect \(\[double\]\$tile\.result\.TextAngle\) \$tile\.width \$tile\.height/, "deskewed boxes rotate around the actual bitmap center before scaling");
+	assert.match(ocr, /\$left = \$x \+ \$r\.x \/ \$scale/, "boxes are in frame pixels");
+	assert.match(ocr, /w = \[int\]\[math\]::Round\(\$r\.w \/ \$scale\)/);
 	assert.match(ocr, /\(\$cx -ge \$midX\) -eq \$right -and \(\$cy -ge \$midY\) -eq \$lower/, "a word overlapping quarters read in both is kept once");
 });
 
-test("setup rotates the key, so a server it is replacing can't pass for the new one", () => {
+test("setup commits a fresh key after typing, so a timeout preserves the old server but cannot report it as ready", () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	const setup = host.slice(host.indexOf("function Invoke-Setup"), host.indexOf("function Get-SetupStatus"));
-	assert.match(setup, /Get-Key \$vm \$true/);
+	assert.match(setup, /\$key = New-Key/);
+	assert.match(setup, /Send-Text \$m \$line[\s\S]*Set-Key \$vm \$key/, "the key file changes only after the entire command was sent");
+	assert.match(setup, /remove-module psreadline/, "the dedicated setup shell avoids expensive long-line redraws");
 	assert.match(setup, /notmatch '\^\\s\*#'/, "comment lines are dropped before typing, which takes seconds per hundred characters");
 });
 

@@ -136,8 +136,8 @@ function fakeHost(world: World) {
 					log.push("mcp lock-check");
 					assert.match(String(args.command), /SessionId/, "the lock check must look only at the server's own session");
 					const locked = world.locked || world.misreportsLock === true;
-					const rights = world.elevatedServer ? "elevated" : "limited";
-					return { messages: [{ jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: `Response: ${locked ? "locked" : "unlocked"} ${rights}\n\nStatus Code: 0` }], isError: false } }] };
+					const state = { id: 1, console: 1, state: 0, locked, elevated: world.elevatedServer === true };
+					return answer(`Response: PI_WINDOWS_SESSION=${JSON.stringify(state)}\nStatus Code: 0`);
 				}
 				log.push(`mcp ${name}`);
 				world.limits = { ...world.limits, [name]: options.timeoutMs ?? 0 };
@@ -178,7 +178,7 @@ function fakeHost(world: World) {
 					if ((world.restarting ?? 0) > 0) { world.restarting!--; return hostFrame({ taskbar: false, dark: true }); }
 					return hostFrame({ taskbar: taskbar() });
 				case "probe":
-					if (world.serverAfter !== undefined && world.serverAfter-- <= 0) world.server = true;
+					if (world.serverAfter !== undefined && world.serverAfter-- <= 0) { world.server = true; world.session = true; }
 					if (typeof world.bootstrap === "number" && world.bootstrap-- <= 0) { world.server = true; world.published = "r2 OK listening on 8000"; }
 					return { reachable: world.server, setup: world.published ?? null };
 				case "type":
@@ -217,6 +217,7 @@ function fakeHost(world: World) {
 					if (!world.shellOpen) return ocrOf(["Recycle Bin", "Notepad Untitled"]);
 					return ocrOf(["Administrator: Wndows PowerShell", "Wi ndows PowerShell", ...(world.promptUnread ? [] : ["PS C: \\WINDOWS\\system32>"])]);
 				case "setup":
+					assert.equal(options.timeoutMs, 10 * 60_000, "paced console bootstrap input needs its own bounded typing budget");
 					assert.ok(unlocked(), "setup must only run on an unlocked desktop");
 					assert.ok(world.shellOpen || world.noOcr, "the installer carries the server's key: type it only into an administrator's PowerShell");
 					world.shellOpen = false;
@@ -261,7 +262,7 @@ test("a ready guest runs the tool after one lock check, and nothing else", async
 	const { g, log, notes } = guest({ running: true, installed: true, session: true, locked: false, server: true });
 	const result = await g.tool("Click", { label: 3 });
 	assert.match(text(result), /^Click \{"label":3\}$/);
-	assert.deepEqual(log, ["status", "mcp initialize", "frame", "mcp lock-check", "mcp Click"], "one small frame to see the display is awake");
+	assert.deepEqual(log, ["status", "mcp initialize", "mcp lock-check", "frame", "mcp Click"], "one small frame to see the display is awake");
 	assert.deepEqual(notes, []);
 });
 
@@ -277,14 +278,14 @@ test("a guest is ready, needing no repair before a call, only while connected an
 	assert.equal(g.ready(), false);
 });
 
-test("the lock check is reused for a while, then repeated", async () => {
+test("live session state is checked before each call, including within the former lock TTL", async () => {
 	const { g, log, advance } = guest({ running: true, installed: true, session: true, locked: false, server: true });
 	await g.tool("Click", { label: 1 });
 	await g.tool("Click", { label: 2 });
-	assert.deepEqual(log.filter((entry) => entry === "mcp lock-check").length, 1);
+	assert.deepEqual(log.filter((entry) => entry === "mcp lock-check").length, 2);
 	advance(60_000);
 	await g.tool("Click", { label: 3 });
-	assert.deepEqual(log.filter((entry) => entry === "mcp lock-check").length, 2);
+	assert.deepEqual(log.filter((entry) => entry === "mcp lock-check").length, 3);
 });
 
 test("a locked guest is signed back in before the tool runs", async () => {
@@ -328,23 +329,23 @@ test("a fresh VM showing its desktop gets Windows-MCP installed, then runs the t
 	assert.match(notes.join("\n"), /install/i);
 });
 
-test("a fresh VM at the sign-in screen is signed in first, then set up", async () => {
+test("a fresh VM at the sign-in screen needs the user's desktop before setup", async () => {
 	const world = { running: true, installed: false, session: false, locked: false, server: false };
 	const { g, log } = guest(world);
-	await g.tool("Snapshot", {});
-	assert.ok(log.indexOf("login") >= 0 && log.indexOf("login") < log.indexOf("setup"));
+	await assert.rejects(g.tool("Snapshot", {}), /Cannot confirm.*VM Connect/);
+	assert.ok(!log.includes("login") && !log.includes("key") && !log.includes("setup"));
 });
 
-test("an installed VM that rebooted to the sign-in screen is signed in and the server comes back", async () => {
-	const world = { running: true, installed: true, session: false, locked: false, server: false };
+test("an installed VM that rebooted to sign-in waits for the user's connection without console input", async () => {
+	const world = { running: true, installed: true, session: false, locked: false, server: false, serverAfter: 3 };
 	const { g, log } = guest(world);
 	await g.tool("Snapshot", {});
-	assert.ok(log.includes("login"));
+	assert.ok(!log.includes("login") && !log.includes("key"));
 	assert.ok(!log.includes("setup"), "the logon task starts the server; no reinstall");
 });
 
 test("snapshots get longer for a while after the guest comes back, since a desktop just signed in to is slow to describe", async () => {
-	const world: World = { running: true, installed: true, session: false, locked: false, server: false };
+	const world: World = { running: true, installed: true, session: false, locked: false, server: false, serverAfter: 1 };
 	const { g, advance } = guest(world);
 	await g.tool("Snapshot", {});
 	assert.equal(world.limits?.Snapshot, 90_000);
@@ -361,33 +362,35 @@ test("an installed VM whose server died on an unlocked desktop is repaired witho
 	assert.ok(log.includes("setup"));
 });
 
-test("a full-screen app hiding the taskbar is told apart from a lock screen with the Windows key", async () => {
-	const world: World = { running: true, installed: false, session: true, locked: false, server: false, fullscreen: true };
+test("a confirmed console's full-screen app is told apart from a lock screen with the Windows key", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, fullscreen: true };
 	const { g, log } = guest(world);
-	await g.tool("Snapshot", {});
+	await g.setup();
 	assert.ok(!log.includes("login"), "an unlocked full-screen app is never clicked blind");
 	assert.deepEqual(log.filter((entry) => entry.startsWith("key ")), ["key win", "key esc"], "Start is closed again after the check");
 	assert.ok(log.includes("setup"));
 });
 
-test("a stopped server behind a full-screen app is reinstalled without signing in", async () => {
+test("an unreachable server behind an ambiguous full-screen picture gets no probe keys or setup", async () => {
 	const world: World = { running: true, installed: true, session: true, locked: false, server: false, fullscreen: true };
 	const { g, log } = guest(world);
-	await g.tool("Snapshot", {});
-	assert.ok(!log.includes("login"));
-	assert.ok(log.includes("setup"));
+	await assert.rejects(g.tool("Snapshot", {}), /Cannot confirm/);
+	assert.ok(!log.includes("login") && !log.includes("key") && !log.includes("setup"));
 });
 
-test("the Windows key check leaves a lock screen alone, and signing in follows", async () => {
-	const world: World = { running: true, installed: true, session: false, locked: false, server: false };
+test("a stale console observation does not authorize keys or sign-in after the server disappears", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true };
 	const { g, log } = guest(world);
 	await g.tool("Snapshot", {});
-	assert.ok(log.indexOf("key win") >= 0 && log.indexOf("key win") < log.indexOf("login"));
-	assert.ok(!log.includes("key esc"), "nothing opened, so nothing to close");
+	world.server = false;
+	world.locked = true;
+	g.forget();
+	await assert.rejects(g.tool("Snapshot", {}), /Cannot confirm/);
+	assert.ok(!log.includes("login") && !log.includes("key"));
 });
 
 test("a guest that stays locked after Sign in (a password) fails with a pointer to the console", async () => {
-	const world: World = { running: true, installed: false, session: false, locked: false, server: false, password: true };
+	const world: World = { running: true, installed: true, session: true, locked: true, server: true, password: true };
 	const { g, log } = guest(world);
 	await assert.rejects(g.tool("Snapshot", {}), /win\.console\.screenshot/);
 	assert.ok(!log.includes("setup"));
@@ -444,9 +447,10 @@ test("a snapshot cut off by Windows restarting is taken again once the guest is 
 	const { g, log } = guest(world);
 	await g.tool("Click", { loc: [1, 2] });
 	world.restartsUnderSnapshot = true;
+	world.serverAfter = 2;
 	const result = await g.tool("Snapshot", {});
 	assert.match(text(result), /^Snapshot/);
-	assert.ok(log.includes("login"), "signed back in after the restart");
+	assert.ok(!log.includes("login"), "waited for the user/logon task without taking the console");
 	assert.equal(world.limits?.Snapshot, 90_000);
 });
 
@@ -510,12 +514,12 @@ test("a server stuck on an earlier call, answering no tool at all, is restarted 
 	assert.equal(log.filter((entry) => entry.startsWith("mcp Click")).length, 1, "the call runs once, after the restart");
 });
 
-test("a stuck server is restarted after a stalled snapshot too, and the snapshot error says so", async () => {
+test("a server wedged between calls is repaired before sending the next snapshot", async () => {
 	const world: World = { running: true, installed: true, session: true, locked: false, server: true };
 	const { g } = guest(world);
 	await g.tool("Click", { loc: [1, 2] });
 	world.wedged = true;
-	await assert.rejects(g.tool("Snapshot", {}), /didn't answer Snapshot[\s\S]*restarted/);
+	assert.match(text(await g.tool("Snapshot", {})), /^Snapshot/);
 	assert.equal(world.restarts, 1);
 	await g.tool("Click", { loc: [3, 4] });
 });
@@ -552,8 +556,8 @@ test("a display that went to sleep is woken with Shift before the tool runs, sin
 	assert.deepEqual(notes, ["Win11: woke the display, which had gone dark"]);
 });
 
-test("explicit login and setup are available to the script", async () => {
-	const world = { running: true, installed: false, session: false, locked: false, server: false };
+test("explicit login and setup work for a freshly confirmed console session", async () => {
+	const world = { running: true, installed: true, session: true, locked: true, server: true };
 	const { g, log } = guest(world);
 	await g.login();
 	assert.equal(world.session, true);
@@ -606,7 +610,7 @@ test("without Windows OCR to check the console, the installer is typed as before
 test("an install that fails in the guest stops at once with the guest's reason", async () => {
 	const { g, log, clock } = guest({ running: true, installed: false, session: true, locked: false, server: false, bootstrap: "fail" });
 	await assert.rejects(g.tool("Snapshot", {}), (error: Error) => /Access is denied/.test(error.message) && /win\.console\.screenshot/.test(error.message));
-	assert.equal(log.filter((entry) => entry === "probe").length, 1);
+	assert.equal(log.slice(log.indexOf("setup")).filter((entry) => entry === "probe").length, 1);
 	assert.ok(clock() < 10_000);
 });
 
@@ -631,10 +635,10 @@ test("a lock check that disagrees with the console never clicks on a desktop in 
 });
 
 test("a guest still starting (no heartbeat) is waited for before anything is clicked", async () => {
-	const world: World = { running: true, installed: true, session: false, locked: false, server: false, booting: 4 };
+	const world: World = { running: true, installed: true, session: false, locked: false, server: false, booting: 4, serverAfter: 2 };
 	const { g, log, notes } = guest(world);
 	await g.tool("Snapshot", {});
-	assert.ok(log.includes("login") && log.includes("mcp Snapshot"));
+	assert.ok(!log.includes("login") && log.includes("mcp Snapshot"));
 	assert.ok(!log.includes("setup"), "the logon task brought the server back");
 	assert.match(notes[0] ?? "", /waiting for Windows to finish starting/);
 });
@@ -647,17 +651,19 @@ test("a guest that never finishes starting stops with a pointer to the console, 
 	assert.ok(clock() >= 15 * 60_000);
 });
 
-test("a guest restarting with its heartbeat still on (a dark screen) is waited for, then signed in once", async () => {
-	const world: World = { running: true, installed: true, session: false, locked: false, server: false, restarting: 6 };
+test("a guest restarting with its heartbeat still on is waited for without unconfirmed keys or sign-in", async () => {
+	const world: World = { running: true, installed: true, session: false, locked: false, server: false, restarting: 6, serverAfter: 1 };
 	const { g, log, notes } = guest(world);
 	await g.tool("Snapshot", {});
-	assert.equal(log.filter((entry) => entry === "login").length, 1);
+	assert.equal(log.filter((entry) => entry === "login").length, 0);
+	const key = log.indexOf("key");
+	assert.ok(key < 0 || log.indexOf("mcp lock-check") < key, "only a freshly confirmed console may be woken");
 	assert.ok(log.includes("mcp Snapshot") && !log.includes("setup"));
 	assert.match(notes.join("\n"), /waiting for Windows to finish starting/);
 });
 
 test("a VM whose devices vanish mid-restart is waited for, not failed", async () => {
-	const world: World = { running: true, installed: true, session: false, locked: false, server: false, resetting: 3 };
+	const world: World = { running: true, installed: true, session: false, locked: false, server: false, resetting: 3, serverAfter: 1 };
 	const { g, log } = guest(world);
 	await g.tool("Snapshot", {});
 	assert.ok(log.includes("mcp Snapshot"));
@@ -670,8 +676,8 @@ test("a screen that stays dark ends the wait with a pointer to the console, uncl
 	assert.ok(!log.includes("login"));
 });
 
-test("a sleeping display is woken with Shift, so no Esc lands in the app in front", async () => {
-	const world: World = { running: true, installed: true, session: true, locked: false, server: false, asleep: true };
+test("a confirmed console's sleeping display is woken with Shift, so no Esc lands in the app in front", async () => {
+	const world: World = { running: true, installed: true, session: true, locked: false, server: true, asleep: true };
 	const { g, log } = guest(world);
 	await g.tool("Snapshot", {});
 	const keys = log.filter((entry) => entry.startsWith("key "));
@@ -689,7 +695,7 @@ test("a desktop that lingers as a restart begins is waited out, not reinstalled 
 });
 
 test("console input refused as 'invalid state' mid-restart is waited out too", async () => {
-	const world: World = { running: true, installed: true, session: false, locked: false, server: false, resetting: 2, resetError: "PressKey failed with code 32775 (invalid state: the VM may be saving, restarting or stopping)" };
+	const world: World = { running: true, installed: true, session: false, locked: false, server: false, resetting: 2, serverAfter: 1, resetError: "PressKey failed with code 32775 (invalid state: the VM may be saving, restarting or stopping)" };
 	const { g, log } = guest(world);
 	await g.tool("Snapshot", {});
 	assert.ok(log.includes("mcp Snapshot"));

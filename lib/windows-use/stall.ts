@@ -67,7 +67,7 @@ export const FRONT_WINDOW = [
 
 /** Start and its search: Windows starts them again when next opened, so restarting them loses nothing. */
 export const SHELL_UI = /^(?:SearchHost|StartMenuExperienceHost|SearchApp)$/i;
-export const RESTART_SHELL_UI = "Stop-Process -Name SearchHost, StartMenuExperienceHost -Force -ErrorAction SilentlyContinue";
+export const RESTART_SHELL_UI = "$me = (Get-Process -Id $PID).SessionId; Get-Process -Name SearchHost, StartMenuExperienceHost -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $me } | Stop-Process -Force -ErrorAction Stop";
 
 export interface FrontWindow {
 	readonly process: string;

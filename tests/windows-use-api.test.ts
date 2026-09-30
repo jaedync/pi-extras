@@ -63,6 +63,9 @@ function fakeGuest(log: string[]): (vm: string, note: (text: string) => void) =>
 		forget() { log.push(`${vm} forget`); },
 		recheck() {},
 		ready: () => false,
+		where: () => "console",
+		inspect: async () => ({ where: "console", active: true }),
+		assertConsole: async () => {},
 	}) as unknown as Guest;
 }
 
@@ -137,7 +140,7 @@ test("console input makes that VM's guest check its lock again, since recovery c
 	await session.call("snapshot", { vm: "A" }, {});
 	await session.call("console.key", { vm: "A", keys: "win+l" }, {});
 	await session.call("console.key", { vm: "B", keys: "enter" }, {});
-	assert.deepEqual(log.filter((entry) => entry.endsWith("recheck")), ["A recheck"], "only a guest already in use, for that VM");
+	assert.deepEqual(log.filter((entry) => entry.endsWith("recheck")), ["A recheck", "B recheck"], "each console input invalidates that VM's checked state");
 });
 
 test("snapshot text that Windows-MCP sent as a JSON list reads as plain lines; other methods keep theirs", () => {
@@ -245,6 +248,8 @@ function secureDesktop(log: string[], prompts: number, grabs = Number.POSITIVE_I
 			return { content: [{ type: "text", text }], isError: false };
 		},
 		forget() {},
+		where: () => "console",
+		assertConsole: async () => {},
 		recheck() { log.push(`${vm} recheck`); },
 	}) as unknown as Guest;
 }
@@ -350,6 +355,7 @@ test("Alt+F4 with the desktop or taskbar in front, where it opens Shut Down Wind
 			return { content: [{ type: "text", text: `${name} done` }], isError: false };
 		},
 		ready: () => true,
+		assertConsole: async () => {},
 		forget() {},
 		recheck() {},
 	}) as unknown as Guest;

@@ -64,6 +64,9 @@ test("the description names the VMs a limited session may use, and the default w
 	assert.match(elevated, /Windows-MCP runs with administrator rights \(PI_WINDOWS_USE_ELEVATED\): win\.powershell and the apps win\.app launches run as administrator, and Windows-MCP's clicks and keys reach apps running as administrator/);
 	assert.match(toolDescription(["Win11-Lab"], true), /may use only this VM[\s\S]*runs with administrator rights/);
 	assert.match(elevated, /crashed Event Viewer's log view and stalled on Services[\s\S]*Get-WinEvent, Get-Service/);
+	assert.match(toolDescription(), /enhanced VM Connect\/RDP session/);
+	assert.match(toolDescription(), /Neither overrides session protection/);
+	assert.match(toolDescription(), /user must answer in VM Connect/);
 	assert.doesNotMatch(toolDescription(), /[\t\r]|"\n"/, "escapes in the description reach the model as written, not as a tab or a line break");
 });
 

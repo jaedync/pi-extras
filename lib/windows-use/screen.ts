@@ -89,14 +89,16 @@ export class Screen {
 	/**
 	 * What the console shows. Busy: no heartbeat, a nearly black screen even
 	 * after a key (which also wakes a sleeping display), or devices missing
-	 * mid-reset. A desktop shows its taskbar, if need be after the Windows key,
-	 * which brings it up over full-screen apps and does nothing on lock and
-	 * sign-in screens.
+	 * mid-reset. Passive by default: a dark screen must not receive even a wake
+	 * key unless the caller freshly confirmed a console session. Only then may
+	 * the Windows key reveal a taskbar hidden by a full-screen app.
 	 */
-	async look(heartbeat: boolean | null | undefined, signal?: AbortSignal): Promise<Look> {
+	async look(heartbeat: boolean | null | undefined, signal?: AbortSignal, allowInput = false): Promise<Look> {
 		if (heartbeat === false) return "busy";
 		let first = await this.frame(signal);
 		if (first && hasTaskbar(first)) return "desktop";
+		// An ambiguous lock screen may belong to another session. Never probe it with keys.
+		if (!allowInput) return !first || isDark(first) ? "busy" : "other";
 		if (!first || isDark(first)) {
 			// Shift first, so the Esc below only ever follows a Start menu it opened.
 			if (!(await this.input("key", { keys: "shift" }, signal))) return "busy";

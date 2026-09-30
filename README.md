@@ -447,33 +447,50 @@ against Mac apps. Guest methods (`win.snapshot`, `win.click`, `win.type`,
 [Windows-MCP](https://github.com/CursorTouch/Windows-MCP) inside the VM, which
 reads the UI Automation tree and acts in the signed-in desktop. `win.console.*`
 methods drive the VM's screen, keyboard and mouse from the host through
-Hyper-V, and also work on lock, sign-in and UAC screens. Every method names its
+Hyper-V in a confirmed console session, including its lock and UAC screens.
+In an enhanced VM Connect/RDP session, guest methods operate in that same
+session, console input is refused, and console screenshot/OCR methods read
+Windows-MCP's image instead. Every method names its
 VM: `win.snapshot({ vm: "Win11" })`; `win.vms()` lists them. To keep a session
 away from some VMs, set `PI_WINDOWS_USE_VMS` to the ones it may use, such as
 `PI_WINDOWS_USE_VMS="Win11,Test Lab"` (names match case-insensitively). Other
 VMs are then left out of `win.vms()`, and a call naming one fails before
 anything reaches the host.
 
-There is nothing to set up per VM. The first call to a VM installs Windows-MCP
-in it through the console: it opens an elevated PowerShell from the Run box,
+On a visible basic-session desktop, the first call installs Windows-MCP
+through the console. An enhanced session needs Windows-MCP already installed
+and reachable; a sign-in screen alone is not evidence that console sign-in is
+safe. Setup opens an elevated PowerShell from the Run box,
 accepts the UAC prompt, reads the console with OCR until that PowerShell is
 ready (so the bootstrap, which carries the key, is never typed into another
 window), and types a short bootstrap that installs
 [uv](https://docs.astral.sh/uv/) and Windows-MCP (0.8.6 or a later 0.8
 release, whose output windows_use is built to read) for the signed-in user,
 starts it at every logon, opens its port to the local subnet only, and
-requires a random key held on the host, new for every install. This takes a few minutes
-the first time and needs internet access in the guest. An install that fails
+requires a random key held on the host, new for every install. Setup disables
+PSReadLine only in its temporary shell to avoid expensive long-line redraws.
+The host key changes atomically after the entire command is queued, so a
+partial-typing failure leaves the existing server's authentication usable.
+Console input uses a paired Hyper-V `TypeKey` stroke per character with settled,
+grouped modifiers to preserve case and punctuation without a separate CIM call
+for every make and break.
+Typing the full bootstrap alone can take several minutes, with a bounded
+10-minute input budget; installation also needs internet access in the guest. An install that fails
 stops at once with the guest's error, which the bootstrap reports to the host
 through Hyper-V key-value exchange. After that, each call first makes sure the VM
 is usable and repairs what it can, and the result says what it did:
 
-- A locked VM is signed back in at the console.
-- A VM that rebooted to the sign-in screen is signed in, and the server starts
-  at logon.
-- A server that stopped while the desktop is showing is reinstalled.
-- A server that is running but answers nothing (calls stuck behind a stalled
-  one) is restarted from the console's Run box, which is read with OCR first.
+- The server reports its live Windows session and connection state before
+  guest tools run. A locked, disconnected or transitioning remote session
+  needs the user to reconnect or unlock the same VM Connect window.
+- A locked console session is signed back in only after a fresh session check.
+  After a reboot, the tool waits for the logon task. If the server remains
+  unavailable at sign-in, it asks for help instead of taking the console.
+- A stopped server may be reinstalled when a console desktop is visible.
+  A remembered enhanced session blocks this fallback even if it goes offline.
+- An unresponsive server may be restarted from a confirmed console's Run box,
+  read with OCR first. In an enhanced session, it reports the failure without
+  sending console input.
 - A snapshot stalled by Start or its search, which sometimes stop answering UI
   Automation, gets them restarted (Windows starts them again when opened) and
   is taken again. A snapshot stalled by another app's window fails after 30
@@ -486,13 +503,17 @@ is usable and repairs what it can, and the result says what it did:
 Windows-MCP runs with the signed-in user's rights, not an administrator's, so
 it can't read or send input to the windows of apps that run as administrator:
 their UI tree is empty, and its clicks and keys to them are dropped without an
-error. Snapshots mark such windows, and the console methods reach them.
+error. Snapshots mark such windows. Console input can reach them only in a
+confirmed basic session; an enhanced session cannot use that fallback.
 
 To give Windows-MCP administrator rights, set `PI_WINDOWS_USE_ELEVATED=on`.
 Setup then has the logon task run it with the guest user's full
 administrator rights (the task's highest run level, which needs that user to
 be an administrator), and a server set up the other way is reinstalled on
-the next call; turning the setting off reinstalls it without them.
+the next call at the console; turning the setting off reinstalls it without
+them. In an enhanced session a mismatch is reported, not repaired through the
+console. Match the setting to the existing server or arrange a repair without
+moving the desktop.
 `win.powershell` and the apps `win.app` launches then run as administrator,
 without UAC prompts, and Windows-MCP's clicks and keys reach apps running as
 administrator. Their UI trees fared poorly in testing even so: a snapshot
@@ -506,28 +527,38 @@ allows.
 `win.console.ocr({ vm })` reads the screen's text with Windows OCR on the
 host, as lines of `(x,y) text` whose centers can be clicked. It covers what
 the UI tree can't describe, such as custom-drawn windows, MMC consoles, UAC
-and sign-in screens, and needs no model that takes images. A guest display
-that went dark is woken with Shift before recovery checks the lock and before
-console screenshots and OCR, since Windows-MCP otherwise captures an old
-picture of it.
+and sign-in screens at the console, and needs no model that takes images.
+In enhanced sessions it reads the guest screenshot and converts OCR points
+back to desktop pixels, accounting for image downscaling and monitor offsets.
+Region filters use those same desktop pixels. `win.console.screenshot` reports
+the image dimensions plus the enhanced image's `source`, session, `x`/`y`
+origin, `screenWidth`/`screenHeight` and `scaleX`/`scaleY`; screen coordinates
+are origin plus image coordinates times scale. Failed remote captures never
+fall back to the unrelated console. Only a freshly confirmed console display
+may be woken with Shift; an unknown console screenshot stays read-only.
 
 An app that asks for administrator rights raises a UAC prompt on the secure
 desktop, where Windows-MCP can't see: a snapshot then fails and says a prompt
-is up, and `win.uac({ vm, answer: "yes" })` (or `"no"`) answers it from the
-console. A prompt that asks for a password stays up; it is never typed.
+is up. At a freshly confirmed console, `win.uac({ vm, answer: "yes" })` (or
+`"no"`) answers it. In an enhanced session the user must answer in VM Connect;
+console keys cannot reach that session's secure desktop. A prompt that asks
+for a password stays up; it is never typed. A synchronous PowerShell
+`Start-Process -Verb RunAs` can wait for consent and time out. Commands are not
+rewritten or automatically repeated to work around that.
 
 A call that never reached the server is sent again after the repair. One whose
 connection dropped mid-way is not, since it may have run (a `Restart-Computer`,
 say); its error says so, and the next call reconnects.
 
-Signing in clicks the Sign in button of the last-used account, which suits
-passwordless lab accounts. Before clicking, it looks for the taskbar and, if
-none shows, presses the Windows key: over an unlocked desktop, even under a
-full-screen app, that brings up the taskbar (Start is closed again), while
-lock and sign-in screens ignore it. So an unlocked desktop is never clicked.
-A black screen is first woken with Shift, which does nothing by itself. A VM
-that still shows no desktop after two Sign in clicks, such as one with a
-password, stops with a pointer to `win.console.screenshot`.
+At a confirmed console, signing in clicks the last-used account's Sign in
+button, which suits passwordless lab accounts. The taskbar check still avoids
+clicking an unlocked desktop, and at most two sign-in clicks are attempted.
+Session checks use Windows WTS APIs, not an inherited `SESSIONNAME` or localized
+command output. `win.login`, `win.setup`, UAC and console input all share the
+session guard; none is an override. If the server is unavailable and no console
+desktop is visible, even probe/wake keys are withheld. This deliberately gives
+up unattended sign-in in an ambiguous case rather than disconnecting a user's
+remote desktop or VPN.
 
 It needs `powershell.exe` through WSL interop and a Windows user in the
 Hyper-V Administrators group. Guests need a US keyboard layout for console
@@ -535,12 +566,29 @@ typing. The host side runs as one Windows PowerShell process, started on the
 first call and closed after ten idle minutes; its first call takes a few
 seconds. `/windows-use` lists the host's VMs and which are set up.
 
-To watch the agent work, connect to the VM with VM Connect in a basic session
-(turn off Enhanced session in its View menu): that window shows the console,
-where the agent's clicks and typing land. Keep your own mouse and keyboard out
-of it meanwhile, since both reach the same console. An enhanced session is a
-separate sign-in that doesn't show the agent's work, and signing in at the
-console, which recovery may do, disconnects it.
+To watch the agent work, keep the intended VM Connect window open and visible,
+in either basic or enhanced mode. Windows can move the existing desktop and
+Windows-MCP process into an enhanced session; it is not necessarily a separate
+user login. Avoid simultaneous mouse/keyboard input. Do not switch sessions
+just to repair a failure: moving the desktop can disconnect a VPN.
+
+The transport still uses the guest's IP and TCP port. VPN routing/firewall
+rules can block it. This does not add a PowerShell Direct relay, change guest
+credentials or relax password policy. Live validation confirmed same-session
+input, UIA, screenshots, OCR-coordinate clicks, disconnected-session refusals,
+and no console takeover during a server outage. Live screenshot and OCR-click
+checks passed at 1366x768 and at 2560x1440 with screenshots downscaled to
+1920x1080. OCR boxes are rotated back from Windows' detected text angle before
+conversion to native coordinates. A timed restart of the existing logon task
+restored the server in the same enhanced session; this was a test helper, not
+automatic remote repair. Live basic-session lock/sign-in and unresponsive-
+server Run-box recovery also passed. After replacing separate scancode events
+with paired `TypeKey` strokes, full basic-session bootstrap passed in about
+7 minutes 24 seconds, retaining the same unlocked session and limited server.
+A forced partial-typing timeout preserved the original authenticated server.
+Post-bootstrap stalled-server recovery passed in 90 seconds without reinstalling.
+These changes remain unreleased. Network timeouts can delay outage detection
+and recovery; console bootstrap remains slow.
 
 ## Kagi setup
 

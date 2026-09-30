@@ -8,12 +8,11 @@
 import { clean, type CallTarget } from "../computer-use/describe.ts";
 import type { ScriptApi } from "../computer-use/executor.ts";
 import type { CallOptions, ToolResult } from "../computer-use/session.ts";
-import { isDark, readFrame, toPng, type Frame } from "./frame.ts";
-import { ocrItems, ocrText, readOcr, seamOf, type Region } from "./ocr.ts";
+import type { Region } from "./ocr.ts";
+import { Display } from "./display.ts";
 import { Guest, wait, type HostCalls } from "./guest.ts";
 import { answerUac, captureFailure, checkAltF4, SCREEN_GRAB_FAILED, typeAtFocus } from "./guest-input.ts";
 import { textOf, textResult } from "./result.ts";
-import { OCR_TIMEOUT_MS, Screen } from "./screen.ts";
 import { pickApp, START_APPS } from "./apps.ts";
 import { compactSnapshot } from "./snapshot.ts";
 
@@ -24,8 +23,6 @@ export const METHODS = ["vms", "sleep", "start", "login", "setup", "uac", ...GUE
 const MAX_SLEEP_MS = 60_000;
 /** Longest PowerShell timeout, in seconds: the guest's reply must arrive inside the host's 10-minute call limit. */
 const MAX_SHELL_TIMEOUT_S = 540;
-/** A display woken with a key is back within a second or so. */
-const WAKE_SETTLE_MS = 1_500;
 
 type Args = Record<string, unknown>;
 
@@ -279,19 +276,10 @@ export class WinSession {
 			case "login": await this.guest(vm).login(signal); return textResult(`signed in at ${vm}'s console`);
 			case "uac": return answerUac(this.guest(vm), this.host, args.answer, this.sleep, signal);
 			case "setup": await this.guest(vm).setup(signal); return textResult(`Windows-MCP is ready on ${vm}`);
-			case "console.screenshot": {
-				let frame = readFrame(await this.host.call("frame", { vm }, { signal }));
-				if (isDark(frame) && await this.wake(vm, signal, frame)) frame = readFrame(await this.host.call("frame", { vm }, { signal }));
-				return { content: [{ type: "text", text: JSON.stringify({ width: frame.width, height: frame.height }) }, { type: "image", data: toPng(frame).toString("base64"), mimeType: "image/png" }], isError: false };
-			}
-			case "console.ocr": {
-				const area = region(args);
-				const read = async () => readOcr(await this.host.call("ocr", { vm }, { signal, timeoutMs: OCR_TIMEOUT_MS }));
-				let ocr = await read();
-				if (ocr.lines.length === 0 && await this.wake(vm, signal)) ocr = await read();
-				const items = ocrItems(ocr.lines, area, seamOf(ocr.width));
-				return json({ width: ocr.width, height: ocr.height, text: ocrText(items), items });
-			}
+			case "console.screenshot":
+			case "console.ocr": return new Display({ host: this.host, guest: this.guest(vm), sleep: this.sleep,
+				capture: () => this.guestTool(vm, "screenshot", {}, signal), note: (text) => this.notes.push(text),
+			}).read(method, method === "console.ocr" ? region(args) : undefined, signal);
 			case "console.click": number(method, args, "x", "y"); return this.console("click", { vm, x: args.x, y: args.y, button: args.button, double: args.double === true }, signal);
 			case "console.move": number(method, args, "x", "y"); return this.console("move", { vm, x: args.x, y: args.y }, signal);
 			case "console.drag": number(method, args, "x", "y", "x2", "y2"); return this.console("drag", { vm, x: args.x, y: args.y, x2: args.x2, y2: args.y2 }, signal);
@@ -342,21 +330,15 @@ export class WinSession {
 		// Windows-MCP answers with a line of text; an empty tree would read as an empty screen.
 		if (!SCREEN_GRAB_FAILED.test(textOf(result))) return result;
 		const failure = await captureFailure(guest, signal);
-		if (failure.uac) throw new Error(failure.message);
+		if (failure.uac || guest.where() === "remote") throw new Error(failure.message);
 		// A lock since the last check stops a capture too; the next call checks, signing in first.
 		const again = await guest.tool(call.tool, call.args, signal);
 		if (SCREEN_GRAB_FAILED.test(textOf(again))) throw new Error(failure.message);
 		return again;
 	}
 
-	/** Wakes a display that went to sleep, since a black console shows and reads nothing. */
-	private async wake(vm: string, signal?: AbortSignal, seen?: Frame): Promise<boolean> {
-		const woke = await new Screen({ host: this.host, vm, sleep: this.sleep, settleMs: WAKE_SETTLE_MS }).wake(signal, seen);
-		if (woke) this.notes.push(`${vm}: woke the display, which had gone dark`);
-		return woke;
-	}
-
 	private async console(method: string, params: Args, signal?: AbortSignal, timeoutMs?: number): Promise<ToolResult> {
+		await this.guest(String(params.vm)).assertConsole(signal);
 		await this.host.call(method, defined(params), { signal, timeoutMs });
 		// Console input can lock, sign out or sign in behind recovery's back.
 		if (typeof params.vm === "string") this.guests.get(params.vm.toLowerCase())?.recheck();
