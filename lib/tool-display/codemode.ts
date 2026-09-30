@@ -1,6 +1,6 @@
 /** JavaScript is not a shell chain. Only observed calls receive numbered execution cells. */
 import { stripVTControlCharacters } from "node:util";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { timeSeg, type Seg } from "../band/band.ts";
 import type { SheetCopy } from "../band/sheet.ts";
 import { foreignSpec, type ForeignTool } from "./foreign.ts";
@@ -17,6 +17,9 @@ const WORDS = { running: "running", ok: "done", error: "failed", cancelled: "abo
 const flat = (text: string) => text.replace(/\s+/g, " ").trim();
 const rawCodeOf = (view: View) => stringArg(view.context.args, "code", "script", "source");
 const codeOf = (view: View) => sanitize(rawCodeOf(view) ?? "").trimEnd();
+const SCRIPT_PREVIEW_LINES = 4;
+const SCRIPT_PREVIEW_CHARS = 2_048;
+const writingSource = (view: View) => view.context.isPartial && !view.context.argsComplete && !view.context.executionStarted;
 const SOURCE_VIEW = 0;
 const RESULT_VIEW = 1;
 const CALL_VIEW_OFFSET = 2;
@@ -41,6 +44,7 @@ function callsOf(view: View): CallSnapshot | undefined {
 
 function snapshotOf(view: View): CallSnapshot | undefined {
 	const observed = view.kit.nestedCalls?.(view.context.toolCallId);
+	const saved = readCalls((view.result as { nestedCalls?: unknown } | undefined)?.nestedCalls);
 	if (observed) {
 		const details = readCalls(view.result?.details);
 		// Reversing keeps the first duplicate detail authoritative, like the former find().
@@ -51,9 +55,8 @@ function snapshotOf(view: View): CallSnapshot | undefined {
 			return detail ? { ...detail, ...call, status: detail.status === "cancelled" ? "cancelled" as const : call.status } : call;
 		});
 		const extra = details?.calls.filter((call) => !call.id.endsWith("/?") && !observedIds.has(call.id)) ?? [];
-		return { complete: observed.complete && details?.complete !== false && calls.length + extra.length <= NESTED_CALL_LIMIT, calls: [...calls, ...extra].slice(0, NESTED_CALL_LIMIT) };
+		return { complete: observed.complete && saved?.complete !== false && details?.complete !== false && calls.length + extra.length <= NESTED_CALL_LIMIT, calls: [...calls, ...extra].slice(0, NESTED_CALL_LIMIT) };
 	}
-	const saved = readCalls((view.result as { nestedCalls?: unknown } | undefined)?.nestedCalls);
 	const details = readCalls(view.result?.details);
 	const snapshot = saved ?? details;
 	if (snapshot) view.row.nested = snapshot;
@@ -114,6 +117,18 @@ function sourceOutput(view: View, width: number, fallback: ToolSpec): string[] {
 	return lines.map((line) => truncateToWidth(line, width, "…"));
 }
 
+function scriptPreview(view: View, width: number): string[] {
+	// Pi already decodes incremental JSON arguments. Source text never implies execution.
+	const source = sanitize(clipboardCodeOf(view) ?? "").trimEnd();
+	const lines = source.slice(-SCRIPT_PREVIEW_CHARS).split("\n");
+	const shown = source ? lines.slice(-SCRIPT_PREVIEW_LINES) : [];
+	const available = Math.max(1, width - BODY_INDENT);
+	const truncated = source.length > SCRIPT_PREVIEW_CHARS || lines.length > SCRIPT_PREVIEW_LINES || shown.some((line) => visibleWidth(line) > available);
+	return [view.paint.fg("dim", "Writing JavaScript…"), ...codeLines(view.paint, view.kit, shown, "javascript"),
+		...(truncated ? [view.paint.fg("dim", "… script preview truncated")] : [])]
+		.map((line) => truncateToWidth(" ".repeat(BODY_INDENT) + line, width, "…"));
+}
+
 function retainedOutput(view: View, selected: number): string | undefined {
 	const call = callsOf(view)?.calls[selected - CALL_VIEW_OFFSET];
 	if (!call || call.output === OMITTED_OUTPUT) return undefined;
@@ -141,6 +156,7 @@ export function codemodeSpec(tool: ForeignTool): ToolSpec {
 				...(calls?.length ? [{ text: ` · ${plural(calls.length, "call")}`, color: "muted" }] : [])];
 		},
 		below(view, width) {
+			if (writingSource(view)) return [...scriptPreview(view, width), ...timeline(view, width)];
 			const code = view.context.expanded ? wrapAll(codeLines(view.paint, view.kit, codeOf(view).split("\n"), "javascript"), Math.max(1, width - BODY_INDENT)) : [];
 			return [...code.map((line) => truncateToWidth(" ".repeat(BODY_INDENT) + line, width, "…")), ...timeline(view, width)];
 		},

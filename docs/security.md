@@ -42,6 +42,13 @@ session file (fired warning keys and the session budget). Warnings and `/usage`
 snapshots are injected into the model's context as ordinary messages, so they
 are sent to your provider with the next request like any other conversation
 text. They contain window labels, percentages and reset times, not credentials.
+Idle polls update proximity but do not persist a fired warning or queue instructions
+for a future model. Delivery checks the active provider/model family at the shared
+request-context boundary, including automated wakeups and queued follow-ups. New
+notices enter that request immediately and are persisted/displayed at Pi's safe
+turn boundary without steering or starting an extra request. The context projection also omits automatic notices
+that no longer govern the selected model, including older queued notices, while
+preserving raw session history and explicit requested usage snapshots.
 
 ## Rate-limit Recovery
 
@@ -408,13 +415,15 @@ them. Custom entries are not sent to the model. Tool Display writes the
 
 **Codemode is not rewritten.** Its numbered call cells observe Pi's nested
 execution events in TUI mode and read the active branch's existing `nestedCalls`
-metadata. They never infer execution from JavaScript or change tool arguments,
-execution, results or model context. Call durations include queue and permission
+metadata. A bounded streaming source preview shows only Pi-decoded draft
+arguments, not inferred execution. They never infer execution from JavaScript
+or change tool arguments, execution, results or model context. Call durations include queue and permission
 waits; overlapping lifetimes are not evidence of parallel execution. Sanitized
 live argument/output previews are bounded in memory and cleared on session
 start/shutdown. No nested output logs or new persistence are created. Existing
 Pi metadata determines what a restored row can show; missing output is labeled
-as missing. `others off` disables adoption for new codemode rows, matching the
+as missing. Live preview truncation is distinct from missing call history;
+genuinely incomplete saved metadata remains marked incomplete. `others off` disables adoption for new codemode rows, matching the
 rest of Tool Display.
 
 ## Copy Blocks

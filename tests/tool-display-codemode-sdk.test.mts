@@ -33,7 +33,7 @@ function rowFor(session: any, id: string, args: object) {
 	return row;
 }
 
-function probe() {
+function probe(output?: string) {
 	let active = 0;
 	let peak = 0;
 	let starts = 0;
@@ -60,7 +60,7 @@ function probe() {
 			try {
 				if (cell === 1) { await requested; snapshots.push(plain(row)); }
 				await pause(cell === 1 ? 110 : 20);
-				return { content: [{ type: "text", text: `cell ${cell} written` }], details: { cell } };
+				return { content: [{ type: "text", text: output ?? `cell ${cell} written` }], details: { cell } };
 			} finally { execution.end = Date.now(); executions.push(execution); active--; }
 		},
 	};
@@ -79,7 +79,7 @@ async function setup(options: { legacy?: boolean; manager?: any; measurements?: 
 			renderCall: () => new tui.Text("native foreign codemode", 0, 0),
 			renderResult: () => new tui.Text("foreign result vocabulary", 0, 0),
 			execute: async () => ({ content: [{ type: "text", text: "foreign result vocabulary" }], details: undefined }) });
-		else pi.registerTool({ name: "fixture_write", label: "Fixture Write", description: "Offline exclusive write fixture, no filesystem or network", parameters: Type.Object({ cell: Type.Integer() }),
+		else pi.registerTool({ name: "fixture_write", label: "Fixture Write", description: "Offline exclusive write fixture, no filesystem or network", parameters: Type.Object({ cell: Type.Integer(), padding: Type.Optional(Type.String()) }),
 			executionMode: "sequential", execute: async (_id: string, args: { cell: number }) => options.measurements!.execute(args.cell) });
 		pi.on("tool_call", (event: any) => { if (event.parentToolCallId) options.measurements?.hookCalls.push(event.toolCallId); });
 		pi.on("tool_result", (event: any) => { if (event.parentToolCallId) options.measurements?.hookResults.push(event.toolCallId); });
@@ -165,6 +165,59 @@ test("native codemode executes exclusive requests serially while cells truthfull
 		assert.deepEqual(restored.errors, []);
 		assert.equal(restored.faux.state.callCount, 0, "restoration performs no provider request");
 	} finally { await restored.close(); }
+});
+
+test("native codemode huge nested results truncate UI previews without marking durable or live call history incomplete", { skip: !modern, timeout: 20_000 }, async () => {
+	const measurements = probe("x".repeat(20_000));
+	const f = await setup({ measurements });
+	try {
+		let live: any;
+		f.session.subscribe((event: any) => {
+			if (event.type === "tool_execution_start" && event.toolName === "codemode" && !event.parentToolCallId) {
+				live = rowFor(f.session, event.toolCallId, event.args);
+				live.markExecutionStarted(); measurements.setRow(live);
+			}
+			if (event.type === "tool_execution_end" && event.toolName === "codemode" && !event.parentToolCallId) live.updateResult({ ...event.result, isError: event.isError }, false);
+		});
+		f.faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("codemode", { code: SCRIPT })), ai.fauxAssistantMessage("Read both synthetic results.")]);
+		await f.session.prompt("Run the synthetic large-result fixture.");
+		const saved = resultOf(f.session);
+		assert.equal(saved.isError, false);
+		assert.equal(saved.nestedCalls.complete, true);
+		assert.equal(saved.nestedCalls.calls.length, 2);
+		assert.ok(saved.nestedCalls.calls.every((call: any) => call.status === "ok"));
+		assert.match(plain(live).join("\n"), /ƒ2.*fixture_write.*done/);
+		assert.doesNotMatch(plain(live).join("\n"), /nested call record incomplete/);
+		assert.deepEqual(f.errors, []);
+	} finally { await f.close(); }
+});
+
+test("native oversized nested arguments reconcile durable incomplete history into the live row through message_end", { skip: !modern, timeout: 20_000 }, async () => {
+	const measurements = probe();
+	const f = await setup({ measurements });
+	try {
+		let live: any;
+		let durableMessageSeen = false;
+		f.session.subscribe((event: any) => {
+			if (event.type === "tool_execution_start" && event.toolName === "codemode" && !event.parentToolCallId) {
+				live = rowFor(f.session, event.toolCallId, event.args);
+				live.markExecutionStarted(); measurements.setRow(live);
+			}
+			if (event.type === "tool_execution_end" && event.toolName === "codemode" && !event.parentToolCallId) live.updateResult({ ...event.result, isError: event.isError }, false);
+			if (event.type === "message_end" && event.message.role === "toolResult" && event.message.toolName === "codemode") durableMessageSeen = true;
+		});
+		const code = `return await Promise.all([tools.fixture_write(${JSON.stringify({ cell: 1, padding: "x".repeat(9_000) })}), tools.fixture_write({cell: 2})]);`;
+		f.faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("codemode", { code })), ai.fauxAssistantMessage("Completed the synthetic argument-cap fixture.")]);
+		await f.session.prompt("Run the synthetic oversized-argument fixture.");
+		const saved = resultOf(f.session);
+		assert.equal(saved.isError, false);
+		assert.equal(saved.nestedCalls.complete, false, "Pi omits durable arguments above 8 KiB");
+		assert.ok(saved.nestedCalls.calls.every((call: any) => call.status === "ok"));
+		assert.equal(durableMessageSeen, true);
+		assert.match(plain(live).join("\n"), /nested call record incomplete/);
+		assert.match(plain(live).join("\n"), /ƒ2.*fixture_write.*done/);
+		assert.deepEqual(f.errors, []);
+	} finally { await f.close(); }
 });
 
 test("legacy foreign codemode keeps its result vocabulary and original execute without inventing nested calls", { timeout: 10_000 }, async () => {

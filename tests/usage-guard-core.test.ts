@@ -16,6 +16,7 @@ import {
 	usageReport,
 	warningKey,
 	warningMessage,
+	warningApplies,
 	type Warning,
 } from "../lib/usage-guard-core.ts";
 
@@ -43,6 +44,15 @@ test("model-scoped windows govern only ids carrying the family token", () => {
 	assert.equal(entryApplies(fable, SONNET), false);
 	assert.equal(entryApplies(fable, { provider: "anthropic" }), false);
 	assert.equal(entryApplies({ label: "7d", usedPct: 1 }, SONNET), true);
+});
+
+test("legacy notices infer family scope for every supported quota window base", () => {
+	for (const window of ["five_hour_sonnet", "seven_day_sonnet", "one_day_opus", "thirty_day_fable"]) {
+		const family = window.slice(window.lastIndexOf("_") + 1);
+		const notice = { key: `anthropic|${window}|95|${RESET}`, reason: "band" };
+		assert.equal(warningApplies(notice, { provider: "anthropic", id: `claude-${family}-5` }), true, window);
+		assert.equal(warningApplies(notice, { provider: "anthropic", id: "claude-other-5" }), false, window);
+	}
 });
 
 test("entry kinds are explicit when set and inferred from shape otherwise", () => {
@@ -193,6 +203,14 @@ test("windows for other models, other providers, stale resets and disabled guard
 	const stale: Array<[string, LimitSnapshot]> = [["anthropic", snapshot([{ label: "5h", usedPct: 99, resetMs: NOW - 1 }])]];
 	assert.deepEqual(pendingWarnings(stale, SONNET, ON, undefined, fired, NOW), []);
 	assert.deepEqual(pendingWarnings(anthropic(99, 99, 99), FABLE, { ...ON, enabled: false }, undefined, fired, NOW), []);
+});
+
+test("an unknown active provider cannot warn, poll hot, or claim other providers apply", () => {
+	const data = anthropic(99, 99, 99);
+	assert.deepEqual(pendingWarnings(data, {}, ON, undefined, new Set(), NOW), []);
+	assert.deepEqual([...hotProviders(data, {}, ON, undefined, NOW)], []);
+	assert.deepEqual(usageReport(data, {}, ON, undefined, NOW).limits, []);
+	assert.ok(usageReport(data, {}, ON, undefined, NOW, true).limits.every((limit) => !limit.applies));
 });
 
 test("a session budget replaces the bands for its window and is final", () => {

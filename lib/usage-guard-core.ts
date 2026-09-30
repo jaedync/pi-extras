@@ -4,7 +4,7 @@
  * `usage` tool returns. No I/O; the extension wires this to Pi.
  */
 import type { LimitSnapshot } from "./limit-store.ts";
-import { STATUS_TIME_ZONE, formatDuration, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
+import { STATUS_TIME_ZONE, formatDuration, quotaKeyParts, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
 import { dateFormat } from "./date-format.ts";
 
 export interface GuardConfig {
@@ -85,6 +85,17 @@ export function entryApplies(entry: LimitEntry, model: ActiveModel): boolean {
 	return tokens.includes(entry.modelFamily.toLowerCase());
 }
 
+/** Recheck automatic notices at request time, including notices queued by older extension versions. */
+export function warningApplies(details: unknown, model: ActiveModel): boolean {
+	if (!details || typeof details !== "object") return true;
+	const record = details as Record<string, unknown>;
+	if (typeof record.key !== "string" || !["band", "budget", "exhausted"].includes(String(record.reason))) return true;
+	const [legacyProvider, window] = record.key.split("|");
+	const provider = typeof record.provider === "string" ? record.provider : legacyProvider;
+	const modelFamily = typeof record.modelFamily === "string" ? record.modelFamily : quotaKeyParts(window ?? "").family;
+	return !!model.provider && provider === model.provider && entryApplies({ label: "", modelFamily }, model);
+}
+
 export function budgetMatches(entry: LimitEntry, budget: SessionBudget | undefined): boolean {
 	if (!budget) return false;
 	const wanted = budget.window.toLowerCase();
@@ -146,8 +157,9 @@ function activeWindows(
 	now: number,
 ): Array<{ provider: string; entry: LimitEntry }> {
 	const result: Array<{ provider: string; entry: LimitEntry }> = [];
+	if (!model.provider) return result;
 	for (const [provider, snapshot] of snapshots) {
-		if (model.provider && provider !== model.provider) continue;
+		if (provider !== model.provider) continue;
 		for (const entry of snapshot.entries) {
 			if (entryKind(entry) !== "window" || entry.usedPct === undefined) continue;
 			if (!entryApplies(entry, model)) continue;
@@ -343,7 +355,7 @@ function reportLimit(
 	timeZone?: string,
 ): UsageReportLimit {
 	const kind = entryKind(entry);
-	const applies = (!model.provider || provider === model.provider) && entryApplies(entry, model);
+	const applies = provider === model.provider && entryApplies(entry, model);
 	const pct = entry.usedPct;
 	const status = entry.exhausted ? "exhausted" : entry.allowed === true && pct !== undefined && pct >= 100 ? "full-but-allowed" : "ok";
 	const base: UsageReportLimit = {
@@ -382,7 +394,7 @@ export function usageReport(
 	const snapshotAgeSeconds: Record<string, number> = {};
 	let sawActiveProvider = false;
 	for (const [provider, snapshot] of snapshots) {
-		const active = !model.provider || provider === model.provider;
+		const active = provider === model.provider;
 		if (active) sawActiveProvider = true;
 		if (!active && !includeAll) continue;
 		snapshotAgeSeconds[provider] = Math.max(0, Math.round((now - snapshot.atMs) / 1000));

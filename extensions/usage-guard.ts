@@ -3,15 +3,15 @@
  * one-shot threshold warnings, all built on the limit snapshots status-plus
  * polls into the shared store (lib/limit-store.ts).
  *
- * Warnings fire on band transitions within a reset cycle, at turn end (or
- * while idle), delivered as a steer/next-turn message appended to context so
- * the cached prefix is untouched. Fired keys and the session budget persist
+ * Warnings fire on band transitions within a reset cycle, at request-context
+ * assembly. Idle polls update proximity without queueing stale instructions
+ * for a model the user may switch away from. Fired keys and the session budget persist
  * as custom session entries; a resumed session does not repeat them.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ContextEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { sharedLimitStore, type LimitStore } from "../lib/limit-store.ts";
 import { operationalError } from "../lib/operational-log.ts";
@@ -21,6 +21,7 @@ import {
 	normalizeGuardConfig,
 	pendingWarnings,
 	usageReport,
+	warningApplies,
 	warningMessage,
 	type ActiveModel,
 	type GuardConfig,
@@ -41,6 +42,7 @@ interface GuardEntry {
 }
 
 type DeliverAs = "steer" | "nextTurn";
+type CustomMessage = Extract<ContextEvent["messages"][number], { role: "custom" }>;
 
 function readConfigFile(file: string): Record<string, unknown> {
 	try {
@@ -118,9 +120,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	}
 
 	/**
-	 * Appended to the end of context: never a prefix change, never a cache miss.
-	 * "steer" lands before the next model call of a running tool loop; "nextTurn"
-	 * rides along with the next user prompt and never triggers a call by itself.
+	 * Explicit snapshots use the requested queue. Automatic notices instead
+	 * enter the current request in the context hook, without starting another run.
 	 */
 	function deliver(content: string, deliverAs: DeliverAs, details?: unknown): void {
 		pi.sendMessage(
@@ -129,21 +130,32 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		);
 	}
 
-	function evaluate(ctx: ExtensionContext, deliverAs: DeliverAs): void {
+	function evaluate(ctx: ExtensionContext, deliverWarnings = false): CustomMessage[] {
 		try {
 			const snapshots = store.entries();
 			const model = activeModel(ctx);
 			const hot = hotProviders(snapshots, model, config, budget, now());
 			for (const [provider] of snapshots) store.setHot(provider, hot.has(provider));
-			for (const warning of pendingWarnings(snapshots, model, config, budget, fired, now())) {
+			if (!deliverWarnings) return [];
+			return pendingWarnings(snapshots, model, config, budget, fired, now()).map((warning) => {
+				const notice: CustomMessage = {
+					role: "custom", customType: GUARD_CUSTOM_TYPE, display: true, timestamp: now(),
+					content: warningMessage(warning, config, now()),
+					details: {
+						key: warning.key, provider: warning.provider, modelFamily: warning.entry.modelFamily,
+						threshold: warning.threshold, reason: warning.reason, final: warning.final,
+					},
+				};
 				fired.add(warning.key);
 				pi.appendEntry(GUARD_CUSTOM_TYPE, { fired: [warning.key] } satisfies GuardEntry);
-				deliver(warningMessage(warning, config, now()), deliverAs, {
-					key: warning.key, threshold: warning.threshold, reason: warning.reason, final: warning.final,
-				});
-			}
+				// The returned projection reaches this request immediately. Persist/display
+				// at the safe turn boundary, never steer or create a follow-up request.
+				pi.sendMessage(notice, { triggerTurn: false });
+				return notice;
+			});
 		} catch (error) {
 			operationalError(LOG_FILE, "usage-guard", `evaluate failed: ${(error as Error)?.message ?? "error"}`);
+			return [];
 		}
 	}
 
@@ -219,21 +231,35 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		latestCtx = ctx;
 		config = loadGuardConfig(configFile);
 		restore(ctx);
-		evaluate(ctx, "nextTurn");
+		evaluate(ctx);
 	});
 
-	// A turn without tool calls ends the run: a steer there would provoke one
-	// more model call just to read the notice, so it waits for the next prompt.
-	pi.on("turn_end", async (event, ctx) => {
+	pi.on("model_select", async (_event, ctx) => {
 		latestCtx = ctx;
-		const continuing = Array.isArray(event.toolResults) && event.toolResults.length > 0;
-		evaluate(ctx, continuing ? "steer" : "nextTurn");
+		evaluate(ctx);
 	});
 
-	// A poll landing while idle (session start, the timer) can announce a crossing for the next prompt.
+	pi.on("turn_end", async (_event, ctx) => {
+		latestCtx = ctx;
+		evaluate(ctx);
+	});
+
+	// Prompts, automatic job wakes and queued follow-ups all share this request
+	// boundary. before_agent_start alone misses the latter two.
+	pi.on("context", async (event, ctx) => {
+		latestCtx = ctx;
+		const notices = evaluate(ctx, true);
+		return {
+			messages: [...event.messages.filter((message) => message.role !== "custom" ||
+				message.customType !== GUARD_CUSTOM_TYPE || warningApplies(message.details, activeModel(ctx))), ...notices],
+		};
+	});
+
+	// Idle polls still select faster polling near a threshold, but never persist
+	// a fired key or queue model-facing text before the next prompt chooses its model.
 	const unsubscribe = store.subscribe(() => {
 		const ctx = latestCtx;
-		if (ctx && idle(ctx)) evaluate(ctx, "nextTurn");
+		if (ctx && idle(ctx)) evaluate(ctx);
 	});
 
 	pi.on("session_shutdown", async () => {

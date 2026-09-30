@@ -132,8 +132,12 @@ rate limits taken from response headers are reported but never warned on.
 - Warnings are off by default: only a session budget warns, once, when its
   window is reached. `/usage warnings on` adds band warnings (90 and 95 by
   default) and provider blocks. Each fires once per window, threshold and reset
-  cycle, at turn end, as a message appended to context (no system-prompt
-  change, no cache miss). Resets reported within ten minutes of each other
+  cycle, immediately before a model request, as a message appended to context
+  without changing the system prompt or initiating another request. Idle polls
+  do not queue warnings for later delivery: the active provider and model family
+  are checked again for manual prompts, automated wakeups and queued follow-ups. Obsolete automatic warnings remain in raw history
+  but are omitted from requests for models they do not govern. Resets reported
+  within ten minutes of each other
   count as one cycle, since proxies recompute them on every fetch. The first
   band is advance notice only. The final message never cuts short work that
   fits: for a waitable reset (any window, weekly included, within
@@ -319,8 +323,10 @@ any failure in the right rail. pi-extras's own tools have layouts of their own:
 - **usage**: each window's use in the band itself, amber from 80% and red when
   a limit is spent.
 - **codemode**: a JavaScript band with numbered `ƒ` tool-call cells, distinct
-  from shell steps. Live statuses and elapsed times come from Pi's nested-call
-  events, never guesses about JavaScript statements. `overlap` means call
+  from shell steps. While arguments stream, a bounded preview shows the newest
+  four JavaScript source lines, or “Writing JavaScript…” until source arrives.
+  It does not label draft calls as queued or executing. Live statuses and elapsed
+  times come from Pi's nested-call events, never guesses about JavaScript statements. `overlap` means call
   lifetimes overlap, including queue and permission waits; it does not claim
   parallel execution. The collapsed row keeps the newest four calls. Expand
   or click for the full script, individual call output and script result.
@@ -329,6 +335,7 @@ any failure in the right rail. pi-extras's own tools have layouts of their own:
   ordinary source text but removes unsafe terminal controls, without changing
   execution; Copy Preview copies only retained call output. Missing or omitted
   previews cannot be copied.
+  Truncating live output previews does not mark call history incomplete.
   Restored calls use Pi's saved metadata and say when nested output was not
   saved. Older/foreign implementations without call metadata retain their own
   result renderer. `/tool-display others off` leaves codemode's original row;

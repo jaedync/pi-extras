@@ -21,6 +21,7 @@ export interface NestedCall {
 	readonly output?: string;
 	/** Overlapping call lifetimes include Pi queue/permission waits, not proof of parallel execution. */
 	readonly overlapping?: boolean;
+	/** Presentation snippets only. This does not imply missing call history. */
 	readonly truncated?: boolean;
 }
 export interface CallSnapshot { readonly calls: readonly NestedCall[]; readonly complete: boolean }
@@ -34,16 +35,14 @@ export const argSummary = (args: unknown): string | undefined => {
 
 function boundCalls(snapshot: CallSnapshot): CallSnapshot {
 	let room = CACHE_DETAIL_CHARS;
-	let complete = snapshot.complete;
 	const calls = snapshot.calls.toReversed().map((call) => {
 		const cost = (call.args?.length ?? 0) + (call.output?.length ?? 0) + (call.error?.length ?? 0);
-		if (call.truncated) complete = false;
 		if (cost <= room) { room -= cost; return call; }
-		complete = false;
 		return { ...call, args: call.args === undefined ? undefined : "[arguments omitted from live cache]", error: undefined,
-			output: call.output === undefined ? undefined : OMITTED_OUTPUT };
+			output: call.output === undefined ? undefined : OMITTED_OUTPUT, truncated: true };
 	}).toReversed();
-	return { calls, complete };
+	// Snippet loss is not history loss: every id and status is still retained.
+	return { calls, complete: snapshot.complete };
 }
 
 /** Both Pi's durable nestedCalls and codemode's streamed details.calls are data, not source guesses. */
@@ -75,7 +74,11 @@ export class NestedCalls {
 	clear(): void { this.records.clear(); this.roots.clear(); this.listeners.clear(); }
 	restore(id: string, value: unknown): void {
 		const saved = readCalls(value);
-		if (saved && !this.records.has(id)) this.put(id, saved);
+		if (!saved) return;
+		const live = this.records.get(id);
+		if (!live) this.put(id, saved);
+		// Pi forwards durable history on message_end, not through renderResult.
+		else if (live.complete && !saved.complete) this.put(id, { ...live, complete: false });
 	}
 	finish(id: string): void {
 		const snapshot = this.records.get(id);
@@ -101,7 +104,7 @@ export class NestedCalls {
 		const calls = previous.calls.map((other, index) => index === at ? call : overlapping && other.status === "running" && other.parentId === event.parentToolCallId ? { ...other, overlapping: true } : other);
 		if (at < 0) calls.push(overlapping ? { ...call, overlapping: true } : call);
 		this.roots.set(event.toolCallId, root);
-		this.put(root, { ...previous, calls });
+		this.put(root, { calls, complete: previous.complete && (at >= 0 || event.type === "tool_execution_start") });
 	}
 
 	private updated(event: Event, previous?: NestedCall): NestedCall {

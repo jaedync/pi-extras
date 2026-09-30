@@ -104,9 +104,75 @@ test("live nested output is bounded with honest truncation and omission notices"
 	}
 	const snapshot = calls.get("script")!;
 	assert.ok(snapshot.calls.reduce((sum, call) => sum + (call.args?.length ?? 0) + (call.output?.length ?? 0), 0) < 70_000);
-	assert.equal(snapshot.complete, false);
+	assert.equal(snapshot.complete, true, "UI output snippets do not lose call bookkeeping");
 	assert.ok(snapshot.calls.some((call) => call.output?.includes("truncated")));
 	assert.ok(snapshot.calls.some((call) => call.output?.includes("omitted")));
+});
+
+test("completed huge nested reads do not show an incomplete history warning", () => {
+	const h = setup();
+	for (let i = 1; i <= 4; i++) {
+		h.calls.observe(start(`script/${i}`));
+		h.calls.observe({ ...end(`script/${i}`), result: text("x".repeat(20_000)) });
+	}
+	const saved = { complete: true, calls: Array.from({ length: 4 }, (_, i) => ({ id: `script/${i + 1}`, name: "read", status: "ok", arguments: { path: "fixture" } })) };
+	h.script.update({ isPartial: false, result: { ...text("read complete"), nestedCalls: saved } });
+	assert.equal(h.calls.get("script")!.complete, true);
+	assert.doesNotMatch(h.script.lines().join("\n"), /incomplete/);
+	h.script.click();
+	assert.doesNotMatch(h.popups[0]!.details(), /incomplete/);
+	assert.match(h.popups[0]!.output(theme, 80, 5).join("\n"), /nested output truncated/);
+});
+
+test("durable record loss remains incomplete even when live observations are complete", () => {
+	const h = setup();
+	h.calls.observe(start("script/1")); h.calls.observe(end("script/1"));
+	h.script.update({ isPartial: false, result: { ...text("done"), nestedCalls: { complete: false, calls: [{ id: "script/1", name: "read", status: "ok" }] } } });
+	assert.match(h.script.lines().join("\n"), /nested call record incomplete/);
+});
+
+test("durable completeness reconciles into live records, preserving previews and timing and notifying watchers", () => {
+	const h = setup();
+	h.calls.observe(start("script/1")); h.advance(30); h.calls.observe(end("script/1"));
+	const live = h.calls.get("script")!;
+	let notifications = 0;
+	h.calls.watch("script", () => { notifications++; });
+	h.calls.restore("script", { complete: false, calls: [{ id: "script/1", name: "read", status: "ok", durationMs: 30 }] });
+	assert.equal(h.calls.get("script")!.complete, false);
+	assert.deepEqual(h.calls.get("script")!.calls, live.calls, "retains live args, output, starts and durations");
+	assert.equal(live.complete, true, "does not mutate the previous snapshot");
+	assert.equal(notifications, 1);
+	h.calls.restore("script", { complete: true, calls: [] });
+	assert.equal(h.calls.get("script")!.complete, false, "does not erase earlier history loss");
+	h.script.update({ isPartial: false, result: text("done") });
+	assert.match(h.script.lines().join("\n"), /nested call record incomplete/);
+	h.script.click();
+	assert.match(h.popups[0]!.output(theme, 80, 2).join("\n"), /contents/);
+});
+
+test("a missing nested start remains incomplete even after receiving its result", () => {
+	const h = setup();
+	h.calls.observe(end("script/1"));
+	h.script.update({ isPartial: false, result: text("done") });
+	assert.equal(h.calls.get("script")!.complete, false);
+	assert.match(h.script.lines().join("\n"), /nested call record incomplete/);
+});
+
+test("history caps and unfinished cancellation stay incomplete independently of snippet truncation", () => {
+	for (const storage of ["live", "saved", "details"]) {
+		const h = setup();
+		const calls = Array.from({ length: 257 }, (_, i) => ({ id: `script/${i}`, name: "read", status: "ok" }));
+		if (storage === "live") for (let i = 0; i < 257; i++) { h.calls.observe(start(`script/${i}`)); h.calls.observe(end(`script/${i}`)); }
+		const record = { complete: true, calls };
+		h.script.update({ isPartial: false, result: storage === "saved" ? { ...text("done"), nestedCalls: record } : text("done", storage === "details" ? record : undefined) });
+		assert.match(h.script.lines().join("\n"), /nested call record incomplete/, storage);
+	}
+	const h = setup();
+	h.calls.observe(start("script/1"));
+	h.script.update({ isPartial: false, isError: true, result: text("cancelled") });
+	assert.match(h.script.lines().join("\n"), /unfinished/);
+	assert.match(h.script.lines().join("\n"), /nested call record incomplete/);
+	assert.doesNotMatch(h.script.lines().join("\n"), /running|read.*done/);
 });
 
 test("nested tracking is bounded, ignores malformed records, preserves updates and closes unfinished live calls honestly", () => {
