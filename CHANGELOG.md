@@ -2,6 +2,27 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.11.2 - 2026-09-29
+
+### Changed
+
+- Chained bash commands: the running step's line breathes gently, and each
+  step that finishes flashes green, red or amber and fades back, so quick
+  steps read as a wave down the list. Reduced motion keeps both still.
+- Thinking tails run the block's lines together, joining paragraphs and list
+  items with `·`, so the three lines hold as much of the thinking as fits
+  instead of spending them on list items and gaps.
+- Starting a background job leaves a small chip, `↳ Run unit tests  in
+  background`, set in from the edge, instead of a full-width row that looked
+  like any other call. It takes the job's outcome and time when it ends.
+
+### Fixed
+
+- Output previews no longer say `… 1 earlier line`: a single hidden line is
+  shown in the row the hint would take. This covers bash and step output,
+  write previews, edit diffs, search results, computer use, other tools' rows
+  and job logs.
+
 ## 0.11.1 - 2026-09-29
 
 ### Fixed
