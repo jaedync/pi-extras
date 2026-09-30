@@ -13,7 +13,9 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   wait and use the selected model. Before retrying, the agent receives actual
   elapsed wait and UTC pause/resume timestamps. Ordinary transient retries are
   unchanged. Subagents never wait: one quota error fails fast with the provider
-  and estimated reset, even if the parent opted in.
+  and estimated reset, even if the parent opted in. Recognized native HTTP
+  quotas also bypass configured transport retries without changing ordinary
+  retry behavior or provider configuration.
 
 ### Changed
 

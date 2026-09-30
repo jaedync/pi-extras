@@ -6,6 +6,7 @@ import { operationalError } from "../operational-log.ts";
 import { loadConfig, saveConfig, type RecoveryConfig } from "./config.ts";
 import { captureLimit, failureMessage, parseRateLimit, planWait, resumedMessage, sameScope, type CapturedLimit, type WaitPlan, type WaitRefusal } from "./core.ts";
 import { waitForDelay, waitUI, type Wait } from "./wait.ts";
+import { createQuotaTransportGuard } from "./transport.ts";
 
 export const RECOVERY_TYPE = "rate-limit-recovery";
 const HELP = "Usage: /rate-limit-recovery on|off|status|cancel";
@@ -41,6 +42,9 @@ export class Recovery {
 	private spentMs = 0;
 	private generation = 0;
 	private limited: CapturedLimit | undefined;
+	private readonly transport: ReturnType<typeof createQuotaTransportGuard>;
+	private stopped = false;
+	private unsupportedTransport = false;
 
 	constructor(pi: ExtensionAPI, options: RecoveryOptions) {
 		this.pi = pi;
@@ -50,6 +54,10 @@ export class Recovery {
 		this.now = options.now ?? Date.now;
 		this.wait = options.wait ?? waitForDelay;
 		this.config = loadConfig(this.file, this.env);
+		this.transport = createQuotaTransportGuard({ onWarning: (code) => {
+			if (code === "unsupported-mixed-api" || code === "unsupported-default-model-api") this.unsupportedTransport = true;
+			operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `transport protection: ${code}`);
+		} });
 	}
 
 	register(): void {
@@ -58,16 +66,38 @@ export class Recovery {
 		pi.on("turn_end", (event, ctx) => this.turnEnd(event, ctx));
 		pi.on("agent_before_settle", (event) => this.beforeSettle(event));
 		// Queued work or another extension can already have continued the run.
-		pi.on("context", () => { this.ready = false; });
-		pi.on("model_select", (event) => { if (this.active && !sameScope(this.active.scope, event.model)) this.cancel(); });
+		pi.on("context", (_event, ctx) => { this.ready = false; this.protectTransport(ctx, ctx.model, true); });
+		pi.on("model_select", (event, ctx) => { this.protectTransport(ctx, event.model); if (this.active && !sameScope(this.active.scope, event.model)) this.cancel(); });
 		pi.on("cache_warming_decision", (_event, ctx) => this.limited?.resetAtMs !== undefined && this.limited.resetAtMs > this.now() && sameScope(this.limited.scope, ctx.model) ? { action: "stop" } : undefined);
-		pi.on("before_agent_start", () => { this.attempts = 0; this.spentMs = 0; this.pending = undefined; this.ready = false; });
-		pi.on("session_start", () => { this.cancel(); this.config = loadConfig(this.file, this.env); this.generation++; this.limited = undefined; });
-		pi.on("session_shutdown", () => { this.cancel(); this.generation++; this.limited = undefined; });
+		pi.on("before_agent_start", (_event, ctx) => { this.attempts = 0; this.spentMs = 0; this.pending = undefined; this.ready = false; this.protectTransport(ctx, ctx.model, true); });
+		pi.on("session_start", (_event, ctx) => { this.stopped = false; this.cancel(); this.releaseTransport(); this.config = loadConfig(this.file, this.env); this.generation++; this.limited = undefined; this.protectTransport(ctx); });
+		pi.on("session_shutdown", () => { this.stopped = true; this.cancel(); this.generation++; this.limited = undefined; this.releaseTransport(); });
 		if (this.role !== "subagent") pi.registerCommand("rate-limit-recovery", {
 			description: "Opt in to quota hibernation; on|off|status|cancel",
 			handler: (args, ctx) => this.command(args, ctx),
 		});
+	}
+
+	private releaseTransport(): void {
+		try { this.transport.dispose(); }
+		catch { operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, "quota transport disposal failed"); }
+	}
+
+	// Only request boundaries may move a guard to another API: a model_select can land
+	// between an in-flight request's context hook and its stream dispatch.
+	private protectTransport(ctx: ExtensionContext, model = ctx.model, retarget = false): void {
+		if (this.stopped) return;
+		this.unsupportedTransport = false;
+		try {
+			this.transport.ensure({ modelRegistry: ctx.modelRegistry, model, retarget });
+			if (this.unsupportedTransport && ctx.hasUI && !ctx.signal?.aborted) ctx.ui.notify("Hidden-retry protection is unavailable for this provider and API. Routing and retries are unchanged; quota errors are still reported when Pi surfaces them.", "warning");
+		}
+		catch {
+			this.cancel();
+			ctx.abort();
+			operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, "quota transport registration failed");
+			ctx.ui.notify("Quota retry protection could not be initialized. Check models.json and custom provider configuration, then reload Pi before retrying.", "error");
+		}
 	}
 
 	private reasonFor(ctx: ExtensionContext, plan: WaitPlan | WaitRefusal): string {
@@ -79,7 +109,7 @@ export class Recovery {
 	}
 
 	private messageEnd(event: MessageEndEvent, ctx: ExtensionContext): MessageEndEventResult | undefined {
-		if (event.message.role !== "assistant") return undefined;
+		if (this.stopped || event.message.role !== "assistant") return undefined;
 		this.pending = undefined; this.ready = false;
 		if (event.message.stopReason !== "error") return undefined;
 		const parsed = parseRateLimit(event.message.errorMessage);
@@ -138,7 +168,7 @@ export class Recovery {
 	private async turnEnd(event: TurnEndEvent, ctx: ExtensionContext): Promise<TurnEndEventResult | undefined> {
 		const candidate = this.pending;
 		this.pending = undefined;
-		if (!candidate?.eligible || event.message.role !== "assistant" || event.message.stopReason !== "error") return undefined;
+		if (this.stopped || !candidate?.eligible || event.message.role !== "assistant" || event.message.stopReason !== "error") return undefined;
 		const plan = planWait(candidate.limit, this.config, this.spentMs, this.attempts, this.now());
 		if (typeof plan === "string") return undefined;
 		const drafts = await this.hibernate(ctx, candidate.limit, plan);

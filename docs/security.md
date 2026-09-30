@@ -50,6 +50,20 @@ rate-limit types are recognized; numeric `retry_after` values are seconds.
 Provider prose is not executed, injected, logged or repeated in the normalized
 warning. Warnings expose only provider/model identity and reset estimates.
 
+Native Anthropic/OpenAI HTTP adapters also receive a request-local fetch guard.
+It inspects only bounded JSON 429 bodies (32 KiB, 500 ms, cancellable), never
+changes global fetch or persisted provider settings, and prevents hidden client
+retries before finalization. SDK responses retain their body/status with a local
+non-retry header. Codex receives only validated type/timing in a structured
+exception, not provider prose. Ownership-safe registration preserves dynamic
+model configuration and foreign partial updates; shutdown releases the guard.
+Unsupported adapters and unrecognized bodies pass through unchanged. Legacy
+custom providers keep a fixed API selector so concurrent children cannot
+retarget or bypass another extension's stream. Other APIs of that legacy
+provider retain their own transport retries, with an internal unsupported-path
+warning. Detection still handles recognized finalized errors. Reset timing
+requires structured numeric fields; response headers alone are not guessed.
+
 Automatic waiting is off by default and limited to interactive main sessions.
 It uses cancellable in-process timers, not background shell processes or a
 persistent service. The wait budget is at most five hours total per user-started

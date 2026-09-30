@@ -80,4 +80,24 @@ test("a quota-blocked child promptly frees the only slot for queued work", { tim
 	} finally { await team.close(); }
 });
 
+test("a child reports guard initialization failure instead of successful aborted work", { timeout: 10_000 }, async () => {
+	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
+	const faux = ai.fauxProvider({ provider: "guard-install-fixture", models: [{ id: "claude-opus" }] });
+	const provider = { ...faux.provider, getModels: () => faux.provider.getModels().map((model: any) => ({ ...model, api: "anthropic-messages" })) };
+	runtime.registerNativeProvider(provider);
+	faux.setResponses([ai.fauxAssistantMessage("This must not run.")]);
+	const register = runtime.registerNativeProvider;
+	runtime.registerNativeProvider = () => { throw new Error("synthetic guard registration failure"); };
+	const reports: any[] = [], errors: unknown[] = [];
+	const team = quotaTeam(runtime, reports, errors);
+	try {
+		assert.equal(team.spawn({ name: "failed-guard", task: "Do not run without protection", parent: "main", model: "guard-install-fixture/claude-opus", readOnly: false, fork: false, blocking: false }).ok, true);
+		const done = await team.whenDone("failed-guard");
+		assert.equal(done.state, "failed");
+		assert.match(done.error ?? "", /quota retry protection.*reload/i);
+		assert.equal(faux.state.callCount, 0);
+		assert.equal(reports.filter((report) => report.kind === "report").length, 1);
+	} finally { runtime.registerNativeProvider = register; await team.close(); }
+});
+
 test.after(() => rmSync(scratch, { recursive: true, force: true }));

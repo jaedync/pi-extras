@@ -5,8 +5,9 @@
  * of those tools load into it, so status bars, voice and the like stay out.
  */
 import type { AgentSession, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { dirname } from "node:path";
-import { CHILD_GUARD_PATH, childRateLimitGuard } from "../rate-limit-recovery/child.ts";
+import { dirname, join } from "node:path";
+import { operationalError } from "../operational-log.ts";
+import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, Usage } from "./types.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
@@ -99,11 +100,12 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Unknown model ${record.model}.`);
 			const { tools, customTools } = deps.toolsFor(record);
 			const wanted = new Set(tools);
+			const guard = createChildRateLimitGuard({ onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
 			const settingsManager = sdk.SettingsManager.create(cwd, agentDir);
 			const loader = new sdk.DefaultResourceLoader({
 				cwd, agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
 				appendSystemPrompt: [deps.instructions(record)],
-				extensionFactories: [childRateLimitGuard],
+				extensionFactories: [guard.extension],
 				extensionsOverride: (base) => ({
 					...base,
 					extensions: base.extensions.filter((extension) => extension.path === CHILD_GUARD_PATH || [...extension.tools.keys()].some((name) => wanted.has(name))),
@@ -119,19 +121,19 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				...(record.thinking ? { thinkingLevel: record.thinking } : {}),
 				tools: [...wanted, ...customTools.map((tool) => tool.name)],
 				customTools,
-			});
-			try {
-				await session.bindExtensions({ mode: "print", onError: (error: unknown) => deps.onExtensionError?.(error) } as never);
-			} catch (error) {
-				session.dispose();
-				throw error;
-			}
-			return handleFor(session, hooks, resolved.model.contextWindow);
+			}).catch((error) => { guard.dispose(); throw error; });
+			await bindChild(session, guard, deps.onExtensionError);
+			return handleFor(session, hooks, resolved.model.contextWindow, guard);
 		},
 	};
 }
 
-function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined): ChildHandle {
+async function bindChild(session: AgentSession, guard: ReturnType<typeof createChildRateLimitGuard>, onError: LauncherDeps["onExtensionError"]): Promise<void> {
+	try { await session.bindExtensions({ mode: "print", onError: (error: unknown) => onError?.(error) } as never); }
+	catch (error) { guard.dispose(); session.dispose(); throw error; }
+}
+
+function watchChild(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined): () => void {
 	let usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 	let toolCalls = 0;
 	let activity: string | null = null;
@@ -140,7 +142,7 @@ function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: numb
 		activity = next;
 		hooks.update({ activity: next });
 	};
-	const unsubscribe = session.subscribe((event) => {
+	return session.subscribe((event) => {
 		const e = event as { type: string; toolName?: string; args?: unknown; message?: AssistantLike; assistantMessageEvent?: { type?: string } };
 		if (e.type === "tool_execution_start" && e.toolName) setActivity(describeTool(e.toolName, e.args));
 		else if (e.type === "compaction_start") setActivity("compacting context");
@@ -159,11 +161,37 @@ function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: numb
 			hooks.update({ usage, ...(contextTokens ? { contextTokens } : {}), ...(contextWindow ? { contextWindow } : {}) });
 		}
 	});
+}
+
+function childDisposer(session: AgentSession, unsubscribe: () => void, guard: ReturnType<typeof createChildRateLimitGuard>): () => Promise<void> {
 	let disposed: Promise<void> | null = null;
+	return () => disposed ??= (async () => {
+		// SDK disposal can skip or time out extension shutdown handlers.
+		guard.dispose();
+		unsubscribe();
+		// Pi's own hosts let extensions release watchers and timers before disposing.
+		const runner = session.extensionRunner as { hasHandlers?(name: string): boolean; emit?(event: unknown): Promise<unknown> } | undefined;
+		if (runner?.hasHandlers?.("session_shutdown")) {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				await Promise.race([
+					runner.emit!({ type: "session_shutdown", reason: "quit" }).catch(() => undefined),
+					new Promise<void>((resolve) => { timer = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS); timer.unref?.(); }),
+				]);
+			} finally { if (timer) clearTimeout(timer); }
+		}
+		session.dispose();
+	})();
+}
+
+function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined, guard: ReturnType<typeof createChildRateLimitGuard>): ChildHandle {
+	const dispose = childDisposer(session, watchChild(session, hooks, contextWindow), guard);
 	return {
 		sessionFile: session.sessionFile,
 		async prompt(text) {
 			await session.prompt(text);
+			const failure = guard.failure();
+			if (failure) throw new Error(failure);
 			const last = [...session.messages].reverse().find((message) => (message as AssistantLike).role === "assistant") as AssistantLike | undefined;
 			if (last?.stopReason === "error") throw new Error(last.errorMessage || "The model returned an error.");
 		},
@@ -179,20 +207,6 @@ function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: numb
 			const { steering, followUp } = session.clearQueue();
 			return [...steering, ...followUp];
 		},
-		dispose() {
-			disposed ??= (async () => {
-				unsubscribe();
-				// Pi's own hosts let extensions release watchers and timers before disposing.
-				const runner = session.extensionRunner as { hasHandlers?(name: string): boolean; emit?(event: unknown): Promise<unknown> } | undefined;
-				if (runner?.hasHandlers?.("session_shutdown")) {
-					await Promise.race([
-						runner.emit!({ type: "session_shutdown", reason: "quit" }).catch(() => undefined),
-						new Promise((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS).unref?.()),
-					]);
-				}
-				session.dispose();
-			})();
-			return disposed;
-		},
+		dispose,
 	};
 }

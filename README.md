@@ -179,13 +179,26 @@ silently resumes a previous wait.
 Recognized quota errors remain errors and are classified as non-transient so
 Pi does not run a competing short retry loop. This recovery policy is independent
 of Pi's `retry.enabled`; ordinary transient failures retain Pi's native retries.
+For native Anthropic and OpenAI HTTP adapters (including Azure and Codex), a
+request-local guard also stops configured transport retries on recognized JSON
+429 errors. It preserves endpoint, authentication and model configuration;
+ordinary HTTP failures keep both transport and session retry behavior. Inspection
+is bounded to 32 KiB and 500 ms. A legacy custom provider's guard stays on one
+API; switching that provider to another API preserves its custom routing and
+adapter retries rather than retargeting it. Built-in providers with several APIs
+(OpenRouter, Copilot) move their guard to the selected API at the next request,
+unless a subagent shares it. Unsupported transports, mixed-API
+legacy requests and unrecognized formats retain adapter behavior; detection
+runs when Pi reports the final error. Header-only reset timing is not guessed.
 If waiting is off, timing is missing, or the budget is exhausted, the session
 fails with reset guidance instead. Provider reset times are estimates.
 
 **Children never hibernate.** The pi-extras child launcher installs an explicit
 detection-only guard, even when the parent has opted in: one quota rejection
 fails the child, frees its slot, and tells the parent the provider, expected
-reset time and time remaining. Print, JSON and RPC sessions likewise never
+reset time and time remaining. Hidden transport retries are suppressed on the
+guarded native HTTP paths described above; custom or unsupported adapter retries
+remain owned by those adapters. Print, JSON and RPC sessions likewise never
 auto-wait, so external noninteractive children cannot inherit a long sleep.
 External launchers that disable extensions must explicitly load detection;
 this package cannot intercept requests made outside Pi's extension runtime.
