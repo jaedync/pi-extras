@@ -61,7 +61,7 @@ try {
   await loader.reload();
   const extensions = loader.getExtensions();
   assert.deepEqual(extensions.errors, []);
-  assert.equal(extensions.extensions.length, 12);
+  assert.equal(extensions.extensions.length, 13);
   assert.ok(loader.getThemes().themes.some(theme => theme.name === 'quiet'));
   assert.deepEqual(loader.getThemes().diagnostics, []);
   const tools = extensions.extensions.flatMap(ext => [...ext.tools.keys()]);
