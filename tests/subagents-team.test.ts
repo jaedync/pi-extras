@@ -13,6 +13,7 @@ function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTime
 	const aborted: string[] = [];
 	const hooks = new Map<string, ChildHooks>();
 	const queuedLate = new Map<string, string[]>();
+	const transcripts = new Map<string, unknown[]>();
 	const main: MainDelivery[] = [];
 	const team = new Team({
 		maxConcurrent: options.maxConcurrent ?? 4,
@@ -36,7 +37,7 @@ function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTime
 					steer: (text) => steered.set(record.name, [...(steered.get(record.name) ?? []), text]),
 					abort: async () => { aborted.push(record.name); },
 					lastText: () => last,
-					messages: () => [],
+					messages: () => transcripts.get(record.name) ?? [],
 					takeQueued: () => { const late = queuedLate.get(record.name) ?? []; queuedLate.delete(record.name); return late; },
 					dispose: async () => undefined,
 				};
@@ -49,7 +50,11 @@ function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTime
 		return result.record.name;
 	};
 	const lastCall = (name: string) => calls.get(name)!.at(-1)!;
-	return { team, calls, steered, aborted, hooks, queuedLate, main, spawn, lastCall };
+	/** The child's latest response, making these tool calls. */
+	const responds = (name: string, ...tools: string[]) => transcripts.set(name, [
+		{ role: "assistant", content: tools.map((tool, i) => ({ type: "toolCall", id: `call-${i}`, name: tool, arguments: {} })) },
+	]);
+	return { team, calls, steered, aborted, hooks, queuedLate, main, spawn, lastCall, responds };
 }
 
 test("a child runs its task and reports to main once", async () => {
@@ -289,6 +294,7 @@ test("a report doesn't wake main again once the run answered main's question", a
 	assert.equal((h.main.at(-1) as { record: AgentRecord }).record.answeredMain, undefined);
 	await h.team.send("main", name, "What does noteText return?", { expectReply: true });
 	await tick();
+	h.responds(name, "message");
 	await h.team.send(name, "main", "Message from X");
 	assert.equal(h.main.at(-1)?.kind, "reply");
 	// The message call that carried the answer ends; that alone is not more work.
@@ -388,6 +394,36 @@ test("a second question steered into an answered run makes its report news again
 	h.lastCall(name).finish("Cut build time from 90s to 31s by caching loaders.");
 	await tick();
 	assert.equal(lastReport(h).answeredMain, undefined);
+});
+
+test("an answer sent in one response with other tool calls still wakes main with the report", async () => {
+	const h = harness();
+	const name = await resumedWithQuestion(h, "tidy the config");
+	// Sequential execution: the edit in the same response ends before the answer is sent.
+	h.responds(name, "edit", "message");
+	h.hooks.get(name)!.update({ toolCalls: 1 });
+	await h.team.send(name, "main", "Yes, done.");
+	h.hooks.get(name)!.update({ toolCalls: 2 });
+	h.lastCall(name).finish("Renamed the key and updated its three readers.");
+	await tick();
+	assert.equal(lastReport(h).answeredMain, undefined, "the edit's outcome is news the answer could not include");
+});
+
+test("an answer not carried by a lone message call wakes main with the report", async () => {
+	const h = harness();
+	const traceless = await resumedWithQuestion(h, "scan the logs");
+	await h.team.send(traceless, "main", "Nothing unusual.");
+	h.hooks.get(traceless)!.update({ toolCalls: 1 });
+	h.lastCall(traceless).finish("Nothing unusual.");
+	await tick();
+	assert.equal(lastReport(h).answeredMain, undefined, "without the carrying response, err toward waking");
+	const nested = await resumedWithQuestion(h, "run the script");
+	h.responds(nested, "run_script");
+	await h.team.send(nested, "main", "Started.");
+	h.hooks.get(nested)!.update({ toolCalls: 1 });
+	h.lastCall(nested).finish("Script finished: 3 warnings.");
+	await tick();
+	assert.equal(lastReport(h).answeredMain, undefined, "a script that sent the answer may have done more work");
 });
 
 test("a run that fails after answering main still wakes main with the failure", async () => {

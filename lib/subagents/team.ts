@@ -153,7 +153,7 @@ export class Team {
 		if (to === MAIN) {
 			const answering = this.owesMain.delete(from);
 			const answerer = this.records.get(from);
-			if (answering && answerer && this.resumedToAnswer.delete(from)) {
+			if (answering && answerer && this.resumedToAnswer.delete(from) && this.answerStandsAlone(from)) {
 				this.answeredAt.set(from, answerer.toolCalls);
 				this.patch(from, { answeredMain: true });
 			}
@@ -285,6 +285,18 @@ export class Team {
 		if (at === undefined || patch.toolCalls === undefined || patch.toolCalls <= at + 1) return false;
 		this.answeredAt.delete(name);
 		return true;
+	}
+
+	/**
+	 * Whether the response carrying the answer made only this `message` call. Its
+	 * other calls may finish before the answer is sent (sequential execution) or
+	 * run inside another tool, so neither shows up as work after the answer.
+	 */
+	private answerStandsAlone(name: string): boolean {
+		const messages = this.handles.get(name)?.messages() ?? [];
+		const last = [...messages].reverse().find((message) => (message as { role?: unknown }).role === "assistant") as { content?: unknown } | undefined;
+		const calls = Array.isArray(last?.content) ? last.content.filter((part) => (part as { type?: unknown }).type === "toolCall") : [];
+		return calls.length === 1 && (calls[0] as { name?: unknown }).name === "message";
 	}
 
 	/** Anything delivered to a child (steering, a note, a subagent's report, a resume) is new work its report must tell main about. */
