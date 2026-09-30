@@ -10,6 +10,9 @@ import {
 	phaseAfterFirstTokenWait,
 	renderLastRunBorder,
 	renderPhaseBorder,
+	renderPhaseLine,
+	renderPlainBorder,
+	renderRunBorder,
 	summarizeRunningTools,
 	type PhaseAlertTone,
 	type PhaseBorderPaint,
@@ -19,6 +22,7 @@ import { emptyRunMetrics, updateRunMetrics } from "../lib/phase-metrics.ts";
 import { TopBorderLink } from "../lib/top-border.ts";
 import { EditorSlot, type StatusIndicator, type WrappedEditor } from "../lib/editor-wrapper.ts";
 import { everyFrame } from "../lib/band/clock.ts";
+import { TailRow } from "../lib/tail-row.ts";
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 type VisualPhase = ActivePhase | "slow_api" | "stalled";
@@ -34,19 +38,19 @@ interface PhaseStyle {
 
 const PHASE_STYLES: Record<VisualPhase, PhaseStyle> = {
 	prep: {
-		label: "Prep",
+		label: "Preparing",
 		tone: "dim",
 		frames: ["⠁", "⠃", "⠇", "⠧", "⠷", "⠿", "⠷", "⠧", "⠇", "⠃"],
 		intervalMs: 90,
 	},
 	api: {
-		label: "API",
+		label: "Sending request",
 		tone: "thinkingLow",
 		frames: ["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"],
 		intervalMs: 90,
 	},
 	first_token: {
-		label: "Starting response",
+		label: "Waiting for first token",
 		tone: "accent",
 		frames: ["⠂", "⠆", "⠇", "⠧", "⠷", "⠿", "⠷", "⠧", "⠇", "⠆"],
 		intervalMs: 150,
@@ -64,25 +68,25 @@ const PHASE_STYLES: Record<VisualPhase, PhaseStyle> = {
 		intervalMs: 300,
 	},
 	think: {
-		label: "Think",
+		label: "Thinking",
 		tone: "thinkingMedium",
 		frames: ["⠊", "⠑", "⠈", "⠁", "⠈", "⠑"],
 		intervalMs: 120,
 	},
 	text: {
-		label: "Text",
+		label: "Writing",
 		tone: "thinkingMinimal",
 		frames: ["⡀", "⡄", "⡆", "⡇", "⠇", "⠃", "⠁", "⠃", "⠇", "⡇", "⡆", "⡄"],
 		intervalMs: 70,
 	},
 	tool: {
-		label: "Tool",
+		label: "Writing a tool call",
 		tone: "mdHeading",
 		frames: ["⠈", "⠘", "⠸", "⠴", "⠦", "⠇", "⠃", "⠉"],
 		intervalMs: 85,
 	},
 	run: {
-		label: "Run",
+		label: "Running",
 		tone: "toolOutput",
 		frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
 		intervalMs: 80,
@@ -138,6 +142,8 @@ const STILL_LOADER_FRAME = "⠿";
 const DEBUG_HEARTBEAT_MS = 5_000;
 const DEBUG_LOG = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "phase-spinner-debug.jsonl");
 const DEBUG_ENABLED = process.env.PHASE_SPINNER_DEBUG === "1";
+/** Marks an indicator whose dispose this copy of the extension already watches. */
+const DISPOSE_WATCHED = Symbol("phase-spinner.dispose-watched");
 
 interface VisualState {
 	phase: VisualPhase;
@@ -166,11 +172,6 @@ function indicatorText(indicator: StatusIndicator): string {
 	return spinner && line.startsWith(spinner) ? line.slice(spinner.length) : line;
 }
 
-function joinDetails(...details: (string | undefined)[]): string | undefined {
-	const present = details.filter((detail): detail is string => Boolean(detail));
-	return present.length > 0 ? present.join(" ") : undefined;
-}
-
 export default function phaseSpinner(pi: ExtensionAPI): void {
 	let active = false;
 	let metrics = emptyRunMetrics();
@@ -196,6 +197,9 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	let paintedOver = false;
 	/** Where Pi's loader was held still, to let it move again when the run ends. */
 	let stillLoader: ExtensionContext | undefined;
+	/** The phase's own line under the transcript; until it finds its place, the phase stays in the border. */
+	const tailRow = new TailRow();
+	let linePaint: Paint | undefined;
 
 	/** Voice records in the top row only while this is false. */
 	function announceBusy(): void {
@@ -212,6 +216,22 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		stopFrames = undefined;
 	}
 
+	/**
+	 * Ends a status when Pi disposes its indicator. Pi tells only the editor it
+	 * has mounted now; if another extension replaced ours meanwhile, the clear
+	 * never reaches it, and the phase line would show the status for good.
+	 */
+	function endOnDispose(indicator: StatusIndicator): void {
+		const target = indicator as StatusIndicator & { dispose?: () => void; [DISPOSE_WATCHED]?: true };
+		if (typeof target.dispose !== "function" || target[DISPOSE_WATCHED]) return;
+		const dispose = target.dispose;
+		target[DISPOSE_WATCHED] = true;
+		target.dispose = function (this: unknown) {
+			dispose.call(this);
+			if (statusIndicator === indicator) noteStatusIndicator(undefined);
+		};
+	}
+
 	function noteStatusIndicator(indicator: StatusIndicator | undefined): void {
 		if (!indicator || indicator.kind === "working") {
 			statusIndicator = undefined;
@@ -226,6 +246,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			return;
 		}
 		const now = performance.now();
+		endOnDispose(indicator);
 		statusIndicator = indicator;
 		statusShownAt = now;
 		if (!statusEpisodes.has(indicator.kind)) statusEpisodes = new Map(statusEpisodes).set(indicator.kind, now);
@@ -268,11 +289,23 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		return { phase: visualPhase, elapsedMs, style: PHASE_STYLES[visualPhase], alertTone: wait.tone };
 	}
 
-	function phaseDetail(state: VisualState): string | undefined {
-		if (state.phase === "run") return summarizeRunningTools([...runningTools.values()]);
-		if (state.phase === "tool") return pendingToolName;
+	/** What the agent is doing: `Running bash ×2`, `Writing edit call`, `Thinking`. */
+	function phaseLabel(state: VisualState): string {
+		if (state.phase === "run") {
+			const tools = summarizeRunningTools([...runningTools.values()]);
+			return tools ? `${state.style.label} ${tools}` : state.style.label;
+		}
+		if (state.phase === "tool" && pendingToolName) return `Writing ${pendingToolName} call`;
+		return state.style.label;
+	}
+
+	function phaseHint(state: VisualState): string | undefined {
 		if (state.phase === "stalled") return `${keyText("app.interrupt")} abort`;
-		return undefined;
+		return retryDetail();
+	}
+
+	function spinnerFrame(state: VisualState): string {
+		return state.style.frames[Math.floor(state.elapsedMs / state.style.intervalMs) % state.style.frames.length] ?? "⠿";
 	}
 
 	function debugState(event: string, ctx: ExtensionContext, now = performance.now(), details?: Record<string, unknown>): void {
@@ -397,14 +430,13 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 
 	function activeBorder(now: number, width: number, hiddenLineCount: number, paint: Paint): string {
 		const state = visualState(now);
-		const frameIndex = Math.floor(state.elapsedMs / state.style.intervalMs) % state.style.frames.length;
 		return renderPhaseBorder({
-			spinner: state.style.frames[frameIndex] ?? "⠿",
+			spinner: spinnerFrame(state),
 			phaseElapsedMs: state.elapsedMs,
 			totalElapsedMs: now - agentStartedAt,
 			metrics,
-			label: state.style.label,
-			detail: currentContext ? joinDetails(phaseDetail(state), retryDetail()) : undefined,
+			label: phaseLabel(state),
+			detail: phaseHint(state),
 			tone: state.alertTone,
 			hiddenLineCount,
 		}, width, paint(state.style.tone));
@@ -425,20 +457,67 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		}, width, paint(status.style.tone));
 	}
 
-	/** The editor's top row: a Pi status event, the live phase, or the last run's summary. */
-	function drawTopRow(lines: string[], width: number, paint: Paint): string[] {
+	/**
+	 * The line under the transcript, above the queued messages: a Pi status,
+	 * else the live phase, set apart by a blank line like the transcript's
+	 * entries. Nothing while idle.
+	 */
+	function drawPhaseLine(width: number): string[] {
+		const paint = linePaint;
+		if (!paint) return [];
+		const now = performance.now();
+		const status = statusView(now);
+		if (status) {
+			const { spinner, elapsedMs, label, detail, style } = status;
+			return ["", renderPhaseLine({ spinner, elapsedMs, label, detail, tone: style.alertTone }, width, paint(style.tone))];
+		}
+		if (!active || !currentContext) return [];
+		const state = visualState(now);
+		return ["", renderPhaseLine({
+			spinner: spinnerFrame(state),
+			elapsedMs: state.elapsedMs,
+			label: phaseLabel(state),
+			detail: phaseHint(state),
+			tone: state.alertTone,
+		}, width, paint(state.style.tone))];
+	}
+
+	function lastRunRow(lines: string[], width: number, paint: Paint, hiddenLineCount: number): string[] {
+		// A recording borrows the idle row; the summary returns when it ends.
+		if (lastTotalElapsedMs === undefined || topBorder?.peerActive) return lines;
+		return [renderLastRunBorder(lastTotalElapsedMs, width, paint("accent"), hiddenLineCount, metrics), ...lines.slice(1)];
+	}
+
+	/**
+	 * The editor's top row. With the phase line in place: the run's metrics and
+	 * total time, or the last run's. Otherwise the phase or a Pi status is drawn
+	 * here too.
+	 */
+	function drawTopRow(lines: string[], width: number, paint: Paint, editor: WrappedEditor): string[] {
+		// Pi draws the editor once it is mounted, so its place in Pi's layout is known by now.
+		if (!tailRow.attached && activeTui) tailRow.attach(activeTui, editor, drawPhaseLine);
 		const match = stripTerminalSequences(lines[0] ?? "").match(/↑\s*(\d+)/);
 		const hiddenLineCount = match ? Number.parseInt(match[1] ?? "0", 10) : 0;
 		const now = performance.now();
+		if (tailRow.attached) {
+			if (active && currentContext) {
+				paintedOver = true;
+				return [renderRunBorder(now - agentStartedAt, width, paint("accent"), hiddenLineCount, metrics), ...lines.slice(1)];
+			}
+			if (!statusIndicator) return lastRunRow(lines, width, paint, hiddenLineCount);
+			// The phase line shows Pi's status; the editor would draw it in this row as well.
+			const summary = lastTotalElapsedMs === undefined
+				? renderPlainBorder(width, paint("accent"), hiddenLineCount)
+				: renderLastRunBorder(lastTotalElapsedMs, width, paint("accent"), hiddenLineCount, metrics);
+			return [summary, ...lines.slice(1)];
+		}
 		const status = statusView(now);
 		if (status) return [statusBorder(status, now, width, hiddenLineCount, paint), ...lines.slice(1)];
 		if (active && currentContext) {
 			paintedOver = true;
 			return [activeBorder(now, width, hiddenLineCount, paint), ...lines.slice(1)];
 		}
-		// A recording borrows the idle row; the summary returns when it ends.
-		if (lastTotalElapsedMs === undefined || topBorder?.peerActive) return lines;
-		return [renderLastRunBorder(lastTotalElapsedMs, width, paint("accent"), hiddenLineCount, metrics), ...lines.slice(1)];
+		return lastRunRow(lines, width, paint, hiddenLineCount);
 	}
 
 	pi.on("session_start", (_event, ctx) => {
@@ -446,10 +525,11 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		topBorder = new TopBorderLink(pi.events, "phase-spinner", () => activeTui?.requestRender());
 		resetStatus();
 		stop();
-		const painter = (editor: WrappedEditor): Paint => (tone) => {
+		tailRow.detach();
+		const painter = (border: (text: string) => string): Paint => (tone) => {
 			const thm = currentContext?.ui.theme ?? ctx.ui.theme;
 			return {
-				border: (text) => editor.borderColor(text),
+				border,
 				phase: (text) => thm.fg(tone, text),
 				dim: (text) => thm.fg("dim", text),
 				total: (text) => thm.fg("muted", text),
@@ -459,10 +539,11 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 				truncate: (text, maxWidth) => truncateToWidth(text, maxWidth, ""),
 			};
 		};
+		linePaint = painter((text) => text);
 		editorSlot.install(ctx, (tui) => {
 			activeTui = tui;
 			return {
-				render: (lines, width, editor) => drawTopRow(lines, width, painter(editor)),
+				render: (lines, width, editor) => drawTopRow(lines, width, painter((text) => editor.borderColor(text)), editor),
 				onWorkingStatus: noteStatusIndicator,
 			};
 		});
@@ -532,6 +613,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		if (active) debugState("session_shutdown", ctx);
 		resetStatus();
 		stop();
+		tailRow.detach();
+		linePaint = undefined;
 		topBorder?.dispose();
 		topBorder = undefined;
 		activeTui = undefined;

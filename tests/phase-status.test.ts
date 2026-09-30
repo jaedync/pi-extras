@@ -7,8 +7,11 @@ import {
 	phaseAfterFirstTokenWait,
 	renderLastRunBorder,
 	renderPhaseBorder,
+	renderPhaseLine,
+	renderRunBorder,
 	summarizeRunningTools,
 	type PhaseBorderModel,
+	type PhaseLineModel,
 } from "../lib/phase-status.ts";
 
 function cellWidth(char: string): number {
@@ -122,8 +125,8 @@ test("formats elapsed time without capping long turns", () => {
 });
 
 test("escalates response-start latency into useful states", () => {
-	assert.deepEqual(phaseAfterFirstTokenWait(0), { label: "Starting response", tone: "phase" });
-	assert.deepEqual(phaseAfterFirstTokenWait(29_999), { label: "Starting response", tone: "phase" });
+	assert.deepEqual(phaseAfterFirstTokenWait(0), { label: "Waiting for first token", tone: "phase" });
+	assert.deepEqual(phaseAfterFirstTokenWait(29_999), { label: "Waiting for first token", tone: "phase" });
 	assert.deepEqual(phaseAfterFirstTokenWait(30_000), { label: "Slow response", tone: "warning" });
 	assert.deepEqual(phaseAfterFirstTokenWait(120_000), { label: "Stalled", tone: "error" });
 });
@@ -225,4 +228,47 @@ test("splits Pi status text into a phase label, cancel detail, and retry attempt
 		detail: "cancel",
 		attempt: "1/3",
 	});
+});
+
+function line(overrides: Partial<PhaseLineModel> = {}): PhaseLineModel {
+	return { spinner: "⠦", elapsedMs: 2_900, label: "Running bash ×2, edit", detail: "retry 1/3", tone: "phase", ...overrides };
+}
+
+test("the phase line reads spinner, what the agent does, its time, then the hint, one column in", () => {
+	assert.equal(renderPhaseLine(line(), 80, identityPaint), " ⠦ Running bash ×2, edit  00:02.9  retry 1/3");
+	assert.equal(renderPhaseLine(line({ detail: undefined }), 80, identityPaint), " ⠦ Running bash ×2, edit  00:02.9");
+});
+
+test("a narrow phase line drops the hint, then the tenths, then cuts the label, never overflowing", () => {
+	assert.equal(renderPhaseLine(line(), 44, identityPaint), " ⠦ Running bash ×2, edit  00:02.9  retry 1/3");
+	assert.equal(renderPhaseLine(line(), 43, identityPaint), " ⠦ Running bash ×2, edit  00:02.9");
+	assert.equal(renderPhaseLine(line(), 32, identityPaint), " ⠦ Running bash ×2, edit  00:02");
+	assert.equal(renderPhaseLine(line(), 16, identityPaint), " ⠦ Running bash…");
+	for (let width = 0; width <= 60; width++) {
+		assert.ok(visibleWidth(renderPhaseLine(line(), width, identityPaint)) <= width, `width ${width}`);
+	}
+});
+
+test("the phase line paints spinner and label in the phase tone, time and hint dim, alerts in their color", () => {
+	const paint = {
+		...identityPaint,
+		phase: (text: string) => `<p>${text}</p>`,
+		dim: (text: string) => `<d>${text}</d>`,
+		warning: (text: string) => `<w>${text}</w>`,
+		error: (text: string) => `<e>${text}</e>`,
+		measure: (text: string) => visibleWidth(text.replace(/<\/?[pdwe]>/g, "")),
+	};
+	assert.equal(renderPhaseLine(line(), 80, paint), " <p>⠦</p> <p>Running bash ×2, edit</p>  <d>00:02.9</d>  <d>retry 1/3</d>");
+	assert.match(renderPhaseLine(line({ tone: "warning", label: "Slow response" }), 80, paint), /<w>⠦<\/w> <w>Slow response<\/w>/);
+	assert.match(renderPhaseLine(line({ tone: "error", label: "Stalled" }), 80, paint), /<e>⠦<\/e> <e>Stalled<\/e>/);
+});
+
+test("the run border keeps only the metrics and total time, with the editor overflow", () => {
+	const run = renderRunBorder(227_800, 120, identityPaint, 7, metrics);
+	assert.equal(visibleWidth(run), 120);
+	assert.match(run, /^─{20,} TPS 66\.7 ─ TTFT 0\.8–2\.4s ─ ↑ 7 Time 03:47\.8 ─$/);
+	for (let width = 0; width <= 160; width++) {
+		assert.equal(visibleWidth(renderRunBorder(227_800, width, identityPaint, 7, metrics)), width);
+	}
+	assert.match(renderRunBorder(227_800, 16, identityPaint), /^─+ Σ 03:47 ─$/);
 });

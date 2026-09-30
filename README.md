@@ -27,7 +27,7 @@ can still conflict.
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits, optional linked subagent usage |
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
 | Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
-| Phase Spinner | Working phases, tokens/sec, time to first token, elapsed time, and compaction/retry status with its own timer in the editor border |
+| Phase Spinner | A line under the conversation, above any queued messages, saying what the agent is doing (working phase, compaction, retries) with its own timer; tokens/sec, time to first token and elapsed time in the editor border |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
 | Subagents | `subagent` and `message` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, with a live band per agent |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |

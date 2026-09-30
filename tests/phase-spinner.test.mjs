@@ -17,7 +17,14 @@ const jiti = createJiti(import.meta.url, {
 const phaseSpinner = await jiti.import("../extensions/phase-spinner.ts", { default: true });
 const { TopBorderLink } = await jiti.import("../lib/top-border.ts");
 
-function harness(t, events) {
+/** Pi's interactive layout: transcript, queued messages, status, widgets, editor, widgets, footer. */
+function piLayout() {
+	const box = () => ({ children: [], lines: [], render() { return [...this.lines]; } });
+	const children = Array.from({ length: 7 }, box);
+	return { children, queue: children[1], editorBox: children[4] };
+}
+
+function harness(t, events, { layout, nativeStatus = false } = {}) {
 	let now = 0;
 	let idle = false;
 	t.mock.method(performance, "now", () => now);
@@ -25,9 +32,11 @@ function harness(t, events) {
 	phaseSpinner({ on: (name, handler) => handlers.set(name, handler), events });
 	const forwarded = [];
 	const indicators = [];
+	let shown;
+	// Pi's own editor draws the status it is given in its top border.
 	const base = {
-		render: width => ["─".repeat(width), "input"], getText: () => "", invalidate() {},
-		setWorkingStatusIndicator: indicator => forwarded.push(indicator),
+		render: width => [nativeStatus && shown ? `─ ${shown.renderInBorder()} ─` : "─".repeat(width), "input"], getText: () => "", invalidate() {},
+		setWorkingStatusIndicator: indicator => { forwarded.push(indicator); shown = indicator; },
 	};
 	let factory = () => base;
 	const ctx = {
@@ -41,7 +50,9 @@ function harness(t, events) {
 	};
 	const emit = (name, event = {}, at = now) => { now = at; handlers.get(name)(event, ctx); };
 	emit("session_start");
-	const editor = factory({ requestRender() {} }, { borderColor: text => text }, {});
+	const tui = layout ? { requestRender() {}, children: layout.children } : { requestRender() {} };
+	const editor = factory(tui, { borderColor: text => text }, {});
+	layout?.editorBox.children.push(editor);
 	t.after(() => emit("session_shutdown"));
 	const update = (kind, delta, at) => emit("message_update", {
 		assistantMessageEvent: { type: kind, delta }, message: { role: "assistant", content: [] },
@@ -58,6 +69,7 @@ function harness(t, events) {
 	return {
 		emit, update, finish, show, forwarded, indicators,
 		render: (at = now) => { now = at; return editor.render(120); },
+		queue: (at = now) => { now = at; return layout.queue.render(120); },
 		settle: () => { idle = true; emit("agent_settled"); },
 	};
 }
@@ -131,6 +143,7 @@ function indicator(kind, message) {
 		setMessage(next) { message = next; },
 		renderInBorder: () => `\x1b[36m⠋\x1b[39m \x1b[2m${message}\x1b[22m`,
 		renderSpinnerInBorder: () => "\x1b[36m⠋\x1b[39m",
+		dispose() {},
 	};
 }
 
@@ -149,7 +162,7 @@ test("compaction replaces the phase slot with its own spinner, timer, and Pi's l
 	assert.doesNotMatch(line, /⠋|Prep|\.\.\./);
 	h.show(undefined, 9400);
 	await Promise.resolve();
-	assert.match(h.render()[0], /Prep/);
+	assert.match(h.render()[0], /Preparing/);
 });
 
 test("retry keeps one event timer across attempts and yields to live request phases", async t => {
@@ -162,7 +175,7 @@ test("retry keeps one event timer across attempts and yields to live request pha
 	assert.match(line, / 00:02\.0 Retrying \(1\/3\) in 2s Esc cancel /);
 	assert.match(line.slice(0, 3), RETRY_FRAMES);
 	h.emit("before_provider_request", {}, 5000);
-	assert.match(h.render(5500)[0], / 00:00\.5 API retry 1\/3 /);
+	assert.match(h.render(5500)[0], / 00:00\.5 Sending request retry 1\/3 /);
 	h.show(indicator("retry", "Retrying (2/3) in 8s... (Esc to cancel)"), 8000);
 	await Promise.resolve();
 	assert.match(h.render(9000)[0], / 00:08\.0 Retrying \(2\/3\) in 8s /);
@@ -217,4 +230,116 @@ test("a recording borrows the idle top row, but live runs and statuses keep it",
 	assert.equal(voice.peerActive, true, "Pi clears before each replacement, so a clear waits a tick");
 	await Promise.resolve();
 	assert.equal(voice.peerActive, false);
+});
+
+const QUEUED = ["", " Steering: check the logs", " ↳ Alt+Up to edit all queued messages"];
+
+function laidOut(t) {
+	const layout = piLayout();
+	const h = harness(t, undefined, { layout });
+	h.render(); // Pi draws the editor once it is mounted, and the line finds its place then.
+	return { h, layout };
+}
+
+test("the phase line sits right under the transcript, above queued messages, and the border keeps the totals", t => {
+	const { h, layout } = laidOut(t);
+	h.emit("agent_start");
+	h.emit("turn_start");
+	h.emit("before_provider_request", {}, 100);
+	layout.queue.lines = QUEUED;
+	const top = h.render(1600)[0];
+	assert.match(top, /^─{60,} Time 00:01\.6 ─$/);
+	assert.doesNotMatch(top, /Sending request/);
+	const [blank, line, ...rest] = h.queue(1600);
+	assert.equal(blank, "");
+	assert.match(line, /^ [⠁⠂⠄⡀⢀⠠⠐⠈] Sending request {2}00:01\.5$/);
+	assert.deepEqual(rest, QUEUED);
+});
+
+test("the phase line names what runs and what the model writes, and says how to abort a stall", t => {
+	const { h } = laidOut(t);
+	h.emit("agent_start");
+	h.emit("message_start", { message: { role: "assistant" } }, 100);
+	assert.match(h.queue(125_100)[1], / Stalled {2}02:05\.0 {2}(\S+ )?abort$/);
+	h.update("thinking_delta", "hm", 125_200);
+	assert.match(h.queue(126_200)[1], / Thinking {2}00:01\.0$/);
+	h.update("text_delta", "ok", 126_300);
+	assert.match(h.queue()[1], / Writing {2}00:00\.0$/);
+	h.emit("message_update", {
+		assistantMessageEvent: { type: "toolcall_delta", delta: "{}" },
+		message: { role: "assistant", content: [{ type: "toolCall", name: "bash" }] },
+	}, 126_400);
+	assert.match(h.queue()[1], / Writing bash call {2}00:00\.0$/);
+	h.emit("tool_execution_start", { toolCallId: "a", toolName: "bash" }, 127_000);
+	h.emit("tool_execution_start", { toolCallId: "b", toolName: "bash" }, 127_000);
+	assert.match(h.queue(129_900)[1], / Running bash ×2 {2}00:02\.9$/);
+});
+
+test("an idle agent has no phase line, and the border shows the last run", t => {
+	const { h, layout } = laidOut(t);
+	h.emit("agent_start");
+	h.finish(10, 1000);
+	h.settle();
+	layout.queue.lines = QUEUED;
+	assert.deepEqual(h.queue(), QUEUED);
+	assert.match(h.render()[0], /Last 00:01\.0 ─$/);
+});
+
+test("Pi's statuses take the phase line, idle or during a run", async t => {
+	const { h } = laidOut(t);
+	h.show(indicator("compaction", "Compacting context... (Esc to cancel)"), 100);
+	assert.match(h.queue(1600)[1], /^ [⣿⣶⣤⣀] Compacting context {2}00:01\.5 {2}Esc cancel$/);
+	assert.doesNotMatch(h.render()[0], /Compacting/);
+	h.show(undefined, 1700);
+	await Promise.resolve();
+	assert.deepEqual(h.queue(), []);
+	h.emit("agent_start", {}, 2000);
+	h.show(indicator("retry", "Retrying (1/3) in 4s... (Esc to cancel)"), 2000);
+	assert.match(h.queue(3000)[1], / Retrying \(1\/3\) in 4s {2}00:01\.0 {2}Esc cancel$/);
+	assert.match(h.render()[0], /Time 00:01\.0 ─$/);
+});
+
+test("ending the session takes the phase line away and leaves Pi's queue", t => {
+	const { h, layout } = laidOut(t);
+	h.emit("agent_start");
+	layout.queue.lines = QUEUED;
+	assert.equal(h.queue().length, QUEUED.length + 2);
+	h.emit("session_shutdown");
+	assert.deepEqual(h.queue(), QUEUED);
+});
+
+test("without Pi's layout the phase stays in the editor border", t => {
+	const h = harness(t);
+	h.emit("agent_start");
+	h.emit("before_provider_request", {}, 100);
+	assert.match(h.render(600)[0], /^─ \S 00:00\.5 Sending request ─+ Time 00:00\.6 ─$/);
+});
+
+test("an idle status shows on the phase line only, never in the border as well", t => {
+	const layout = piLayout();
+	const h = harness(t, undefined, { layout, nativeStatus: true });
+	h.render();
+	h.show(indicator("compaction", "Compacting context... (Esc to cancel)"), 100);
+	assert.match(h.queue(1600)[1], /Compacting context/);
+	assert.equal(h.render()[0], "─".repeat(120), "no run yet: a plain border, not Pi's status");
+	h.show(undefined, 1700);
+	h.emit("agent_start", {}, 2000);
+	h.finish(10, 3000);
+	h.settle();
+	h.show(indicator("compaction", "Compacting context... (Esc to cancel)"), 4000);
+	assert.match(h.render(4500)[0], /^─+ Last 00:01\.0 ─$/, "after a run: the last run's summary");
+});
+
+test("a status ends when Pi disposes it, even if Pi no longer tells this editor", async t => {
+	const { h } = laidOut(t);
+	const compaction = indicator("compaction", "Compacting context... (Esc to cancel)");
+	let disposed = 0;
+	compaction.dispose = () => { disposed++; };
+	h.show(compaction, 100);
+	assert.match(h.queue(600)[1], /Compacting context/);
+	// Another extension replaced the editor: Pi hands the status over, then disposes it when compaction ends.
+	compaction.dispose();
+	await Promise.resolve();
+	assert.equal(disposed, 1, "Pi's own dispose still runs");
+	assert.deepEqual(h.queue(), []);
 });

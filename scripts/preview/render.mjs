@@ -55,21 +55,22 @@ const litDots = (line) => [...line].reduce((sum, ch) => {
 }, 0);
 
 /**
- * The frame that shows the most at once: both jobs running, the diff on screen, the phase row
- * with a TPS reading while the model still thinks, and voice recording. Among those, the most
- * transcribed chunks (◆) win, then a chunk mid-decode (◈), then the fullest level meter.
+ * The frame that shows the most at once: both jobs running, the diff on screen, a TPS reading in
+ * the editor border, the phase line while the model still thinks, and voice recording. Among
+ * those, the most transcribed chunks (◆) win, then a chunk mid-decode (◈), then the fullest
+ * level meter.
  */
 export function pickFrame(frames) {
 	let best;
 	for (const text of frames) {
 		const lines = plain(text).split("\n");
 		const voice = lines.find((line) => /^── ● \d+:\d\d /.test(line));
-		// The jobs widget sits right above the phase row, one band per running job.
-		const phase = lines.findIndex((line) => line.includes("TPS"));
-		const widget = phase > 1 ? lines.slice(phase - 2, phase) : [];
+		// The jobs widget sits right above the editor border, one band per running job.
+		const border = lines.findIndex((line) => line.includes("TPS"));
+		const widget = border > 1 ? lines.slice(border - 2, border) : [];
 		const running = (title) => widget.some((line) => line.trimStart().startsWith(title));
-		// Once the reply starts, the phase row's clock restarts at zero, which reads like a glitch.
-		const thinking = phase >= 0 && /\d\d:\d\d\.\d Think /.test(lines[phase]);
+		// Once the reply starts, the phase line's clock restarts at zero, which reads like a glitch.
+		const thinking = lines.slice(0, Math.max(0, border)).some((line) => /^ \S Thinking {2}\d\d:\d\d\.\d/.test(line));
 		const ready = voice && thinking && running("Run unit tests") && running("Watch types") && lines.some((l) => l.includes("TAIL_CELL_MIN = 10"));
 		if (!ready) continue;
 		const score = [...voice].filter((ch) => ch === "◆").length * 2000 + (voice.includes("◈") ? 1000 : 0) + litDots(voice);
