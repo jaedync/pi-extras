@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AssistantMessageComponent, getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
-import { Markdown, stripTerminalSequences } from "@earendil-works/pi-tui";
-import { cutTail, installThinkingTail, paragraphStarts, tailOf, thinkingRuns, ThinkingView, viewFor, type ThinkingHost, type ThinkingMode } from "../lib/tool-display/thinking.ts";
+import { AssistantMessageComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { flatThinking, installThinkingTail, JOIN, tailLines, thinkingRuns, ThinkingView, viewFor, type ThinkingHost, type ThinkingMode } from "../lib/tool-display/thinking.ts";
 
 initTheme("dark");
 
@@ -15,7 +15,9 @@ function host(over: Partial<ThinkingHost> & { mode?: () => ThinkingMode | undefi
 	return { mode: () => "tail", hiddenAtStart: () => true, theme: () => undefined, ...over };
 }
 
-const plain = (lines: readonly string[]) => lines.map((line) => stripTerminalSequences(line).trim()).filter((line) => line !== "");
+/** Plain text, with the no-break space the tail glues `·` on with read as a space. */
+const spaced = (text: string) => text.replace(/\u00a0/g, " ");
+const plain = (lines: readonly string[]) => lines.map((line) => spaced(stripTerminalSequences(line)).trim()).filter((line) => line !== "");
 
 function click(component: AssistantMessageComponent, row: number) {
 	return component.handleMouse({ type: "click", button: "left", x: 2, y: row, screenX: 2, screenY: row, width: 60, height: 20 } as never);
@@ -33,117 +35,96 @@ test("a block rests in the chosen style and flips to the other once toggled", ()
 	assert.equal(viewFor("tail", true, true), "tail");
 	assert.equal(viewFor("collapsed", false, true), "full");
 	assert.equal(viewFor("full", true, false), "tail");
-	assert.deepEqual(tailOf(["a", "b", "c", "d", ""], 3), { lines: ["b", "c", "d"], skipped: 1 });
-	assert.deepEqual(tailOf(["a"], 3), { lines: ["a"], skipped: 0 });
-	assert.deepEqual(tailOf(["a", "b", "  ", "c", "d"], 3), { lines: ["c", "d"], skipped: 3 }, "never opens on a paragraph gap");
 });
 
-test("a tail that would open on a paragraph gap puts the ellipsis on the next paragraph", () => {
+test("a tail runs the block's lines together, dropping line markup, so it fills with text", () => {
+	const flat = (text: string) => spaced(flatThinking(text));
+	assert.equal(flat("one\n\ntwo\nthree"), "one · two three", "a line that continues its paragraph joins with a space");
+	assert.equal(flat("Done.\n\nNext:\n- check\n\nit, then"), "Done. Next: check · it, then", "a sentence end or a colon joins with a space");
+	assert.equal(
+		flat("## Plan\nread **the** file\n2. edit `x`\n   and more\n> quoted [docs](https://x.dev)\n\n```ts\nconst a = 1\nconst b = 2\n```\n~~old~~   new"),
+		"Plan · read the file · edit x and more · quoted docs · const a = 1 · const b = 2 · old new",
+	);
+	assert.equal(flat("\n  \n"), "");
+	assert.equal(flatThinking("a\n\nb"), `a${JOIN}b`);
+	assert.deepEqual(tailLines("a\n\nb", 20), { lines: [`a${JOIN}b`], cut: false });
+	const long = tailLines(Array.from({ length: 30 }, (_, index) => `thought ${index}`).join("\n\n"), 30);
+	assert.equal(long.cut, true);
+	assert.equal(long.lines.length, 3);
+	assert.ok(long.lines.at(-1)!.endsWith("thought 29"), long.lines.at(-1));
+	assert.ok(long.lines.every((line) => line.length <= 28), "cut lines leave room for the ellipsis");
+	const huge = tailLines("word ".repeat(200_000), 50);
+	assert.equal(huge.lines.length, 3, "a huge block wraps only its end");
+});
+
+test("a tail of a block with many short lines shows several of them at once", () => {
 	const undo = installThinkingTail(host());
 	try {
 		const component = new AssistantMessageComponent(message(thinking("one\n\ntwo\n\nthree\n\nlast paragraph\nstill last")), true);
-		assert.deepEqual(plain(component.render(60)), ["… last paragraph", "still last"]);
-		const wrapped = new AssistantMessageComponent(message(thinking(`one\n\ntwo\n\n${"word ".repeat(15).trim()}`)), true);
+		assert.deepEqual(plain(component.render(60)), ["one · two · three · last paragraph still last"]);
+		const wrapped = new AssistantMessageComponent(message(thinking(`one\n\ntwo\n\n${"word ".repeat(30).trim()}`)), true);
 		const lines = plain(wrapped.render(40));
-		assert.ok(lines[0]!.startsWith("… word"), lines[0]);
+		assert.equal(lines.length, 3);
+		assert.ok(lines[0]!.startsWith("… "), lines[0]);
 	} finally {
 		undo();
 	}
 });
 
-test("a finished thinking block is not wrapped again while the reply after it streams", () => {
+test("a tail never draws Pi's rendering of the block, and keeps its drawing while the reply streams", () => {
 	// Pi's bundle has its own copy of pi-tui's Markdown; count the renders of the one it uses.
 	const PiMarkdown = (new AssistantMessageComponent(message(said("x")), false) as unknown as { contentContainer: { children: object[] } })
-		.contentContainer.children.find((child) => child.constructor.name === "Markdown")!.constructor as typeof Markdown;
+		.contentContainer.children.find((child) => child.constructor.name === "Markdown")!.constructor as { prototype: { render(width: number): string[] } };
 	const undo = installThinkingTail(host());
 	const render = PiMarkdown.prototype.render;
 	let wraps = 0;
-	PiMarkdown.prototype.render = function (this: Markdown, width: number) {
-		if ((this as unknown as { text: string }).text.includes("step 8")) wraps++;
+	PiMarkdown.prototype.render = function (this: { text: string }, width: number) {
+		if (this.text.includes("step 8")) wraps++;
 		return render.call(this, width);
 	};
 	try {
 		const component = new AssistantMessageComponent(undefined, true);
 		component.updateContent(message(thinking(LONG), said("a")), true);
 		const first = plain(component.render(60));
-		const drawn = wraps;
-		assert.ok(drawn > 0);
 		for (const reply of ["ab", "abc", "abcd"]) {
 			component.updateContent(message(thinking(LONG), said(reply)), true);
 			assert.deepEqual(plain(component.render(60)).slice(0, 2), first.slice(0, 2));
 		}
-		assert.equal(wraps, drawn, "each token of the reply reuses the thinking's drawing");
-		component.updateContent(message(thinking(LONG), said("abcd")), false);
-		component.render(60);
-		assert.ok(wraps > drawn, "the finished message is drawn once more");
+		assert.equal(wraps, 0);
 	} finally {
 		PiMarkdown.prototype.render = render;
 		undo();
 	}
 });
 
-test("a tail keeps its drawing between frames instead of redrawing Pi's rendering", () => {
+test("a view keeps its drawing between frames and draws again on a new width or invalidate", () => {
 	let renders = 0;
-	let view: ThinkingMode = "tail";
+	let view: ThinkingMode = "full";
 	const full = { render: (width: number) => { renders++; return Array.from({ length: 6 }, (_, index) => `line ${index} at ${width}`); }, invalidate: () => {} };
-	const block = new ThinkingView({ full, view: () => view, label: () => "Thinking...", pad: 0, host: host(), toggle: () => {} });
+	const block = new ThinkingView({ full, text: "a\n\nb", view: () => view, label: () => "Thinking...", pad: 0, host: host(), toggle: () => {} });
 	const first = block.render(40);
-	const drawn = renders;
 	assert.equal(block.render(40), first);
-	assert.equal(renders, drawn, "a repeat frame reuses the drawing");
+	assert.equal(renders, 1, "a repeat frame reuses the drawing");
 	assert.notEqual(block.render(50), first, "a new width draws again");
 	block.invalidate();
 	block.render(50);
-	assert.ok(renders > drawn + 2, "an invalidated block draws again");
+	assert.equal(renders, 3, "an invalidated block draws again");
+	view = "tail";
+	assert.deepEqual(block.render(50).map(spaced), ["a · b"]);
 	view = "collapsed";
 	assert.deepEqual(block.render(50), ["Thinking..."]);
-});
-
-test("a long block Pi builds is drawn from its late paragraphs, matching the whole", () => {
-	const text = Array.from({ length: 60 }, (_, index) => `Paragraph ${index}: weighing how the change interacts with the renderer and which checks to run next.`).join("\n\n");
-	const component = new AssistantMessageComponent(message(thinking(text)), false) as unknown as { contentContainer: { children: Array<{ child?: Markdown }> } };
-	const block = component.contentContainer.children.find((child) => child.child)!.child!;
-	const cut = cutTail(block, 58, 3);
-	assert.ok(cut, "Pi's own Markdown takes the short path");
-	assert.deepEqual(cut, tailOf(block.render(58), 3).lines);
-});
-
-test("paragraph starts skip fences, lists and the first line", () => {
-	const text = "intro\n\n```\ncode\n\nmore code\n```\n\n- item\n\n2. item\n\n> quote\n\n# Heading\n\nlast";
-	assert.deepEqual(paragraphStarts(text).map((start) => text.slice(start).split("\n")[0]), ["# Heading", "last"]);
-	const tildes = "a\n\n~~~~\n```\n\nstill code\n~~~~\n\nafter";
-	assert.deepEqual(paragraphStarts(tildes).map((start) => tildes.slice(start)), ["after"]);
-});
-
-test("a tail wrapped from a late paragraph matches the whole block's newest lines", () => {
-	const markdown = getMarkdownTheme();
-	const style = { color: (text: string) => `\x1b[3m${text}\x1b[23m`, italic: true };
-	const prose = (index: number) => `Paragraph ${index}: weighing **how** the \`change\` interacts with the renderer and which checks to run next, then *why*.`;
-	const samples = [
-		Array.from({ length: 60 }, (_, index) => prose(index)).join("\n\n"),
-		Array.from({ length: 40 }, (_, index) => index % 5 === 0 ? `## Part ${index}\n\n\`\`\`ts\nconst a = ${index};\n\nconst b = a;\n\`\`\`` : index % 7 === 0 ? `- one ${index}\n- two\n\n1. first\n2. second` : prose(index)).join("\n\n"),
-		`${Array.from({ length: 50 }, (_, index) => prose(index)).join("\n\n")}\n\n\`\`\`\nopen fence still streaming\n\nwith blank lines`,
-	];
-	for (const text of samples) {
-		for (const width of [30, 58, 118]) {
-			const whole = new Markdown(text, 1, 0, markdown, style);
-			const cut = cutTail(new Markdown(text, 1, 0, markdown, style), width, 3);
-			assert.ok(cut, "long safe text takes the short path");
-			assert.deepEqual(cut, tailOf(whole.render(width), 3).lines);
-		}
-	}
-	const short = new Markdown(prose(1), 1, 0, markdown, style);
-	assert.equal(cutTail(short, 60, 3), undefined, "a short block is wrapped whole");
-	const linked = new Markdown(`${samples[0]}\n\n[ref]: https://example.com`, 1, 0, markdown, style);
-	assert.equal(cutTail(linked, 60, 3), undefined, "link definitions reach across paragraphs");
 });
 
 test("a long thinking block shows its newest three lines, the first opening with an ellipsis", () => {
 	const undo = installThinkingTail(host());
 	try {
-		const component = new AssistantMessageComponent(message(thinking(LONG), said("done")), true);
-		const raw = component.render(40);
-		assert.deepEqual(plain(raw), ["… step 7", "step 8", "done"]);
+		const long = Array.from({ length: 20 }, (_, index) => `step ${index + 1}`).join("\n\n");
+		const component = new AssistantMessageComponent(message(thinking(long), said("done")), true);
+		const shown = plain(component.render(40));
+		assert.equal(shown.length, 4);
+		assert.ok(shown[0]!.startsWith("… "), shown[0]);
+		assert.ok(shown[2]!.endsWith("step 20"), shown[2]);
+		assert.equal(shown[3], "done");
 		const wrapped = new AssistantMessageComponent(message(thinking("word ".repeat(60).trim())), true);
 		const lines = wrapped.render(30).map((line) => stripTerminalSequences(line)).filter((line) => line.trim() !== "");
 		assert.equal(lines.length, 3);
@@ -161,7 +142,7 @@ test("a block of three lines or fewer shows whole, with no label, while streamin
 		component.updateContent(message(thinking("one line")), true);
 		assert.deepEqual(plain(component.render(60)), ["one line"]);
 		component.updateContent(message(thinking("a\n\nb"), said("answer")), false);
-		assert.deepEqual(plain(component.render(60)), ["a", "b", "answer"]);
+		assert.deepEqual(plain(component.render(60)), ["a · b", "answer"]);
 	} finally {
 		undo();
 	}
@@ -178,7 +159,7 @@ test("a click shows a block in full and another brings back the tail, across reb
 		component.updateContent(message(thinking(LONG), said("done")));
 		assert.ok(plain(component.render(60)).includes("step 1"), "a rebuild while streaming keeps the choice");
 		assert.ok(click(component, 2));
-		assert.equal(plain(component.render(60))[0], "… step 7");
+		assert.deepEqual(plain(component.render(60)).slice(0, 2), ["step 1 · step 2 · step 3 · step 4 · step 5 · step 6 · step", "7 · step 8"]);
 	} finally {
 		undo();
 	}
@@ -191,7 +172,7 @@ test("Pi's thinking toggle switches every block between the resting style and fu
 		component.setHideThinkingBlock(false);
 		assert.ok(plain(component.render(60)).includes("step 1"));
 		component.setHideThinkingBlock(true);
-		assert.equal(plain(component.render(60))[0], "… step 7");
+		assert.deepEqual(plain(component.render(60)).slice(0, 2), ["step 1 · step 2 · step 3 · step 4 · step 5 · step 6 · step", "7 · step 8"]);
 	} finally {
 		undo();
 	}
@@ -219,7 +200,7 @@ test("installing again replaces the host rather than stacking patches", () => {
 		assert.equal(AssistantMessageComponent.prototype.updateContent, patched);
 		first();
 		const component = new AssistantMessageComponent(message(thinking(LONG), said("done")), true);
-		assert.equal(plain(component.render(60))[0], "… step 7", "an old undo leaves the new host in place");
+		assert.equal(plain(component.render(60)).length, 3, "an old undo leaves the new host in place: a two-line tail and the reply");
 	} finally {
 		second();
 	}

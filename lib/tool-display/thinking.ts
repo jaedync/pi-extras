@@ -1,6 +1,8 @@
 /**
- * Thinking blocks as a live tail: a block of up to three wrapped lines shows
- * whole; a longer one shows its newest three, the first opening with `…`.
+ * Thinking blocks as a live tail: the block's text run together on one line
+ * (flatThinking), shown whole when it wraps to three lines or fewer, else its
+ * newest three, the first opening with `…`. Newlines would spend the tail's
+ * few lines on list items and blank gaps, so the tail joins them instead.
  * A click on a block, or Pi's thinking toggle for all of them, switches to
  * the full text and back. The resting style can also be Pi's collapsed label
  * or the full text.
@@ -8,13 +10,13 @@
  * Pi draws an assistant message with its AssistantMessageComponent and has
  * no hook for thinking blocks, so this wraps the component's `updateContent`.
  * Pi builds the message with every thinking block visible, then each block
- * is swapped for a view that draws Pi's own rendering of it (the same
- * wrapping, colors and markdown) in the chosen style. Anything unexpected
- * leaves Pi's rendering as it was.
+ * is swapped for a view that draws it in the chosen style: the full style is
+ * Pi's own rendering (the same wrapping, colors and markdown). Anything
+ * unexpected leaves Pi's rendering as it was.
  */
 import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { Markdown, truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export type ThinkingMode = "tail" | "collapsed" | "full";
 export const THINKING_MODES: readonly ThinkingMode[] = ["tail", "collapsed", "full"];
@@ -72,78 +74,75 @@ export function viewFor(mode: ThinkingMode, toggledAll: boolean, toggledBlock: b
 	return toggledAll !== toggledBlock ? other : mode;
 }
 
-/** Below this width a cut tail's lines could differ from the whole's, so the whole is wrapped. */
-const CUT_MIN_WIDTH = 20;
-/** The shortest end of a block worth wrapping alone; it grows until it fills the tail. */
-const CUT_START_CHARS = 1_500;
-/** Markdown that reaches across blank lines (link definitions, HTML blocks), which a cut could change. */
-const CUT_UNSAFE = /^ {0,3}\[[^\]]+\]:|<!--|<(?:pre|script|style|textarea)\b/im;
-/** A paragraph or heading, not a list item, quote, table, HTML or indented code. */
-const CUT_LINE = /^(?![-*+>|<\d\s])/;
+/** Joins a paragraph or list item to the text before it; the no-break space keeps `·` off the start of a line. */
+export const JOIN = "\u00a0· ";
+/** Characters from the end of a block wrapped per line of the tail; plenty, so a long block costs the same as a short one. */
+const TAIL_CHARS_PER_LINE = 3;
+
+/** Markdown that marks a line (a heading, list item or quote) rather than being part of what it says. */
+const LINE_MARKER = /^(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)+/;
+const HEADING = /^#{1,6}\s/;
+/** A code fence line. */
+const FENCE = /^\s*(?:`{3,}|~{3,})/;
 
 /**
- * Offsets where a paragraph or heading starts after a blank line, outside any
- * code fence. Markdown from there on draws exactly as it does within the whole.
+ * A thinking block as one run of text. A line that only continues its
+ * paragraph joins with a space, as Markdown would draw it; a new paragraph,
+ * list item, heading or code line joins with `·`, or with a space after a
+ * sentence ends. Heading, list and quote markers and fences go, as do bold,
+ * code and strikethrough marks, and a link keeps its words.
  */
-export function paragraphStarts(text: string): number[] {
-	const starts: number[] = [];
-	let fence: { char: string; size: number } | undefined;
-	let blank = false;
-	let offset = 0;
-	for (const line of text.split("\n")) {
-		const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-		if (fence) {
-			if (marker && marker[0] === fence.char && marker.length >= fence.size && line.trim() === marker) fence = undefined;
-		} else if (marker) {
-			fence = { char: marker[0]!, size: marker.length };
-		} else if (blank && offset > 0 && CUT_LINE.test(line)) {
-			starts.push(offset);
+export function flatThinking(text: string): string {
+	let out = "";
+	let fresh = true;
+	let code = false;
+	for (const raw of text.split("\n")) {
+		if (FENCE.test(raw)) {
+			code = !code;
+			fresh = true;
+			continue;
 		}
-		blank = line.trim() === "";
-		offset += line.length + 1;
+		const trimmed = raw.trim();
+		const line = code ? trimmed : trimmed.replace(LINE_MARKER, "").trim();
+		if (!line) {
+			fresh = true;
+			continue;
+		}
+		const starts = fresh || code || LINE_MARKER.test(trimmed);
+		out = out === "" ? line : `${out}${!starts || /[.!?:;,]$/.test(out) ? " " : JOIN}${line}`;
+		// A heading or code line is a block of its own, so what follows starts another.
+		fresh = code || HEADING.test(trimmed);
 	}
-	return starts;
+	return out
+		.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+		.replace(/(\*\*|__|~~|`)/g, "")
+		.replace(/[ \t]+/g, " ");
 }
 
 /**
- * The newest lines of a long Markdown block, wrapped from a late paragraph
- * rather than from the top, so a block that is still streaming costs the same
- * to draw however long it has grown. Undefined when that isn't safe or the
- * block is short; the caller then wraps the whole.
+ * The tail's lines at `width`: the whole block when it fits in `max` lines,
+ * else its newest `max` with the first opening with `…`. Only the end of a
+ * long block is wrapped.
  */
-export function cutTail(full: Component, width: number, max: number): string[] | undefined {
-	// Pi's bundle can carry its own copy of the class, so the same class under another identity counts too.
-	const same = full instanceof Markdown || full.constructor?.name === Markdown.name;
-	if (!same || width < CUT_MIN_WIDTH) return undefined;
-	const block = full as unknown as { text: string; paddingX: number; paddingY: number; theme: never; defaultTextStyle: never; options: never };
-	const Make = full.constructor as typeof Markdown;
-	const text = block.text;
-	if (typeof text !== "string" || block.paddingY !== 0 || text.length < CUT_START_CHARS * 2 || CUT_UNSAFE.test(text)) return undefined;
-	const starts = paragraphStarts(text);
-	for (let want = CUT_START_CHARS; want < text.length; want *= 4) {
-		const cut = starts.findLast((start) => start <= text.length - want);
-		if (cut === undefined) return undefined;
-		const part = new Make(text.slice(cut), block.paddingX, 0, block.theme, block.defaultTextStyle, block.options);
-		const shown = tailOf(part.render(width), max);
-		// More lines than the tail keeps, so the whole is longer than the tail too.
-		if (shown.skipped > 0) return shown.lines;
+export function tailLines(text: string, width: number, max = THINKING_TAIL_LINES): { lines: string[]; cut: boolean } {
+	const flat = flatThinking(text);
+	const room = Math.max(1, width);
+	const budget = room * max * TAIL_CHARS_PER_LINE;
+	const long = flat.length > budget;
+	const end = long ? flat.slice(flat.indexOf(" ", flat.length - budget) + 1) : flat;
+	if (!long) {
+		const whole = wrapTextWithAnsi(end, room);
+		if (whole.length <= max) return { lines: whole, cut: false };
 	}
-	return undefined;
-}
-
-/** The newest `max` lines of a rendered block, less any blank ones it would open with, and the count of those above them. */
-export function tailOf(lines: readonly string[], max: number): { lines: string[]; skipped: number } {
-	let end = lines.length;
-	while (end > 0 && lines[end - 1]!.trim() === "") end--;
-	let start = Math.max(0, end - max);
-	// A tail that opens on the gap between paragraphs starts at the next one instead.
-	while (start < end - 1 && lines[start]!.trim() === "") start++;
-	return { lines: lines.slice(start, end), skipped: start };
+	const narrow = wrapTextWithAnsi(end, Math.max(1, room - TAIL_MARK.length));
+	return { lines: narrow.slice(-max), cut: true };
 }
 
 export interface ViewOptions {
 	/** Pi's own rendering of the block, in full. */
 	readonly full: Component;
+	/** The block's text, which the tail draws flattened. */
+	readonly text: string;
 	readonly view: () => ThinkingMode;
 	/** Pi's label for a hidden block, shown in the collapsed style. */
 	readonly label: () => string;
@@ -197,20 +196,10 @@ export class ThinkingView implements Component {
 			const italic = (text: string) => { try { return theme?.italic?.(text) ?? text; } catch { return text; } };
 			return [indent + truncateToWidth(italic(paint("thinkingText", this.options.label())), Math.max(1, width - pad), "…")];
 		}
-		const narrow = Math.max(1, width - TAIL_MARK.length);
-		let lines = cutTail(full, narrow, THINKING_TAIL_LINES);
-		if (!lines) {
-			const cut = tailOf(full.render(narrow), THINKING_TAIL_LINES);
-			// Two more columns can only fold a block into the tail's three lines when it is barely longer, so only a short block is wrapped twice.
-			if (cut.skipped + cut.lines.length <= 2 * THINKING_TAIL_LINES + 2 || narrow < CUT_MIN_WIDTH) {
-				const whole = tailOf(full.render(width), THINKING_TAIL_LINES);
-				if (whole.skipped === 0) return whole.lines;
-			}
-			lines = cut.lines;
-		}
-		const [first = "", ...rest] = lines;
-		const body = first.startsWith(indent) ? first.slice(pad) : first;
-		return [indent + paint("thinkingText", TAIL_MARK) + body, ...rest];
+		// Pi's Markdown keeps `pad` columns on each side; the tail keeps the same margins.
+		const style = (text: string) => { const colored = paint("thinkingText", text); try { return theme?.italic?.(colored) ?? colored; } catch { return colored; } };
+		const tail = tailLines(this.options.text, width - 2 * pad);
+		return tail.lines.map((line, index) => indent + (tail.cut && index === 0 ? paint("thinkingText", TAIL_MARK) : "") + style(line));
 	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -260,6 +249,7 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 	regions.forEach((region, run) => {
 		const view = new ThinkingView({
 			full: region.child,
+			text: runs[run]!,
 			pad: self.outputPad,
 			host,
 			view: () => viewFor(host.mode() ?? mode, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false),

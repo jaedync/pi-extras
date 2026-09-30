@@ -208,6 +208,8 @@ conversation.
   streaming write is).
 - **grep, find, ls**: what was found (`23 matches in 7 files`, `42 files`).
 
+Output that doesn't fit ends in a line such as `… 12 earlier lines`; a single
+hidden line is shown instead, since the hint would take its place anyway.
 Click a row to open a popup with the whole call: the full command, every line
 of output, and for a chained command each step. Esc, `q` or a click outside
 closes it. ctrl+o still expands every row in place.
@@ -234,15 +236,20 @@ Drawing other tools' rows relies on how Pi builds a tool row, which is not part
 of Pi's extension API. If a Pi update changes it, those rows are drawn by
 their own tools again; Pi's built-in tools keep the band either way.
 
-**Thinking.** A thinking block of up to three lines shows whole; a longer one
-shows only its newest three, the first starting with `…`. Click a block to
+**Thinking.** A thinking block shows as one run of text: paragraphs and list
+items are joined with `·` rather than taking lines of their own, so the view
+holds as much of the thinking as fits. Up to three lines show whole; a longer
+block shows only its newest three, the first starting with `…`. Click a block to
 read all of it, and again to go back; ctrl+t does the same for every block. `/tool-display thinking collapsed`
 shows just the label, as Pi does, and `/tool-display thinking full` shows
 everything.
 
 **Chained commands.** A bash command joined with `&&`, `||` or `;` is shown as
 its steps, each with its own status and time, so you can see which one failed
-and which never ran. A leading `cd` becomes the location instead of a step.
+and which never ran. The running step's line breathes gently, and each step
+that finishes flashes green (or red, or amber) and fades back, so a run of
+quick steps reads as a wave down the list. A leading `cd` becomes the
+location instead of a step.
 To time each step, Tool Display adds a marker line around each step before the
 command runs and removes the markers from the output before Pi or the model
 sees it. The model's command and the output it reads are unchanged. Commands
@@ -257,8 +264,9 @@ Tool Display can't split safely (heredocs, `if` and `for` blocks, background
   band, or leave them to their own renderers.
 - `/tool-display chains on|off`: break chained commands into steps, or run
   them as written.
-- `/tool-display motion full|reduced`: the reduced setting drops the sweep and
-  finish flash, and updates times once a second.
+- `/tool-display motion full|reduced`: the reduced setting drops the sweep,
+  the running step's breathing and the finish flashes, and updates times once
+  a second.
 - `/tool-display thinking tail|collapsed|full`: how thinking blocks rest.
 - `/tool-display count calls|steps`: how Status Plus counts tools (see below).
 

@@ -166,7 +166,7 @@ test("thinking tails and copy cards share the assistant message", async () => {
 	try {
 		const component = new AssistantMessageComponent(message({ type: "thinking", thinking: "a\n\nb\n\nc\n\nd\n\ne" }, said("```\nx\n```")), false);
 		const lines = component.render(WIDTH);
-		assert.ok(lines.some((line) => plain(line).trim() === "… d") && !lines.some((line) => plain(line).trim() === "a"), "thinking is still a tail");
+		assert.ok(lines.some((line) => plain(line).replace(/\u00a0/g, " ").trim() === "a · b · c · d · e"), "thinking is still drawn as a tail");
 		click(component, rowOf(lines, LABEL), 5);
 		await Promise.resolve();
 		assert.deepEqual(copy.copies, ["x"]);
