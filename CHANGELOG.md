@@ -2,6 +2,33 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.11.1 - 2026-09-29
+
+### Fixed
+
+- A child that asked two agents at once lost one of the questions and stayed
+  blocked, shown as `thinking`, until the reply timeout. A child can now wait
+  on several agents, and a child's report answers its parent's open question
+  to it.
+- A child main was waiting on (`wait: true`) could ask main a question main
+  could not answer until the 10-minute timeout. The question now ends the
+  wait. That child's notes to its waiting parent are refused with advice to
+  put them in the report.
+- `/subagents stop <name>`, `/subagents stats` and other complete commands
+  ran only on a second Enter; the completion menu took the first.
+- The inspector's message box is always live: type and press Enter. Esc
+  clears a draft or closes, ctrl+x twice stops the agent (it was `x`), and
+  pastes and kitty-protocol keys work. Letters are no longer shortcuts.
+- A waited-on child's row shows only its report, and reports and messages
+  render Markdown. ctrl+o shows a background child's whole task instead of
+  text written for the model.
+- After main asks a finished child something, the run's report no longer
+  repeats the answer on screen; it goes to main's context only.
+- A child's band says `compacting context` while Pi compacts it.
+- Wording: `queued` on a queued child's row, `+1 more agent`, `1 more line`,
+  `1 run`, and `Stopped before it wrote a report.`; the `/subagents` picker
+  says `finished`, adds spend, time and task, and fits one line.
+
 ## 0.11.0 - 2026-09-29
 
 Copy Blocks: one click copies a code block or quote from a reply.
