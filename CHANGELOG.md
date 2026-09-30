@@ -2,6 +2,18 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.12.2 - 2026-09-30
+
+### Fixed
+
+- Rate-limit Recovery: an Anthropic subscription request that returns headers
+  and then only keep-alive pings (seen near :00 and :30 UTC) no longer hangs
+  the turn for minutes. After `anthropicFirstEventSeconds` (default 45, `0`
+  disables) without a real event, it fails as a timeout and Pi's own
+  auto-retry sends it again. Only bearer-auth requests direct to
+  `api.anthropic.com` are watched; API keys, proxies and other providers are
+  unchanged.
+
 ## 0.12.1 - 2026-09-30
 
 ### Fixed
