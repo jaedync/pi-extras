@@ -25,6 +25,8 @@ export interface PopupSource {
 	/** Steps to choose between; 0 for a single call. */
 	stepCount(): number;
 	firstStep(): number;
+	/** Stable identities for reorderable views. A removed selection returns to view zero. */
+	stepKeys?(): readonly string[];
 	outputLabel(selected: number): string;
 	/** Every output line, styled and wrapped to `width`. */
 	output(theme: PopupTheme, width: number, selected: number): string[];
@@ -41,15 +43,28 @@ export const plainText = (lines: readonly string[]): string => lines.map((line) 
 
 /** The popup's parts for the sheet: the source's, plus which step is selected. */
 export class PopupView implements SheetSource {
-	private selected: number;
+	private selectedIndex: number;
+	private selectedKey?: string;
 	private readonly theme: PopupTheme;
 	private readonly source: PopupSource;
 
 	constructor(theme: PopupTheme, source: PopupSource) {
 		this.theme = theme;
 		this.source = source;
-		this.selected = source.firstStep();
+		this.selectedIndex = source.firstStep();
+		this.selectedKey = source.stepKeys?.()[this.selectedIndex];
 	}
+
+	private selection(): { readonly index: number; readonly key?: string } {
+		const keys = this.source.stepKeys?.();
+		if (!keys) return { index: this.selectedIndex };
+		const index = this.selectedKey === undefined ? this.selectedIndex : keys.indexOf(this.selectedKey);
+		this.selectedIndex = index >= 0 && index < keys.length ? index : 0;
+		this.selectedKey = keys[this.selectedIndex];
+		return { index: this.selectedIndex, key: this.selectedKey };
+	}
+
+	private get selected(): number { return this.selection().index; }
 
 	/** Exposed for tests. */
 	get step(): number {
@@ -96,8 +111,9 @@ export class PopupView implements SheetSource {
 		return this.source.outputLabel(this.selected);
 	}
 
-	bodyKey(): number {
-		return this.selected;
+	bodyKey(): number | string {
+		const selected = this.selection();
+		return selected.key ?? selected.index;
 	}
 
 	body(width: number): string[] {
@@ -133,7 +149,8 @@ export class PopupView implements SheetSource {
 	}
 
 	private select(step: number): void {
-		this.selected = step;
+		this.selectedIndex = step;
+		this.selectedKey = this.source.stepKeys?.()[step];
 	}
 }
 

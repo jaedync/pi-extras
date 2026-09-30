@@ -1,9 +1,11 @@
 /** JavaScript is not a shell chain. Only observed calls receive numbered execution cells. */
+import { stripVTControlCharacters } from "node:util";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { timeSeg, type Seg } from "../band/band.ts";
+import type { SheetCopy } from "../band/sheet.ts";
 import { foreignSpec, type ForeignTool } from "./foreign.ts";
-import { codeLines, more, plural, stringArg, wrapAll, type Kit } from "./kit.ts";
-import { NESTED_CALL_LIMIT, readCalls, type CallSnapshot, type NestedCall } from "./nested.ts";
+import { codeLines, more, plural, resultText, stringArg, wrapAll, type Kit } from "./kit.ts";
+import { NESTED_CALL_LIMIT, OMITTED_OUTPUT, readCalls, type CallSnapshot, type NestedCall } from "./nested.ts";
 import { BODY_INDENT } from "./row.ts";
 import { numberedLine, type ShownState } from "./steps.ts";
 import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
@@ -13,7 +15,23 @@ export const CODEMODE_CALL_PREVIEW = 4;
 const STATES: Record<NestedCall["status"], ShownState> = { running: "running", ok: "ok", error: "fail", cancelled: "aborted", unfinished: "unknown" };
 const WORDS = { running: "running", ok: "done", error: "failed", cancelled: "aborted", unfinished: "unfinished" } as const;
 const flat = (text: string) => text.replace(/\s+/g, " ").trim();
-const codeOf = (view: View) => sanitize(stringArg(view.context.args, "code", "script", "source") ?? "").trimEnd();
+const rawCodeOf = (view: View) => stringArg(view.context.args, "code", "script", "source");
+const codeOf = (view: View) => sanitize(rawCodeOf(view) ?? "").trimEnd();
+const SOURCE_VIEW = 0;
+const RESULT_VIEW = 1;
+const CALL_VIEW_OFFSET = 2;
+const CLIPBOARD_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+const CLIPBOARD_C1 = /[\u0080-\u009f]/g;
+const CLIPBOARD_STRING_SEQUENCE = /\x1b[P\]X^_][\s\S]*?(?:\x07|\x1b\\|$)/g;
+
+function clipboardCodeOf(view: View): string | undefined {
+	const code = rawCodeOf(view);
+	if (code === undefined) return undefined;
+	// Bare C1 bytes also occur in mojibake. They must not swallow the remaining source.
+	const plain = code.replace(CLIPBOARD_C1, "");
+	// Older Pi's CSI stripper can consume ordinary source after a bracketed-paste marker.
+	return stripVTControlCharacters(plain.replace(CLIPBOARD_STRING_SEQUENCE, "")).replace(CLIPBOARD_CONTROL, "");
+}
 
 function callsOf(view: View): CallSnapshot | undefined {
 	const snapshot = snapshotOf(view);
@@ -25,11 +43,14 @@ function snapshotOf(view: View): CallSnapshot | undefined {
 	const observed = view.kit.nestedCalls?.(view.context.toolCallId);
 	if (observed) {
 		const details = readCalls(view.result?.details);
+		// Reversing keeps the first duplicate detail authoritative, like the former find().
+		const detailById = new Map((details?.calls ?? []).toReversed().map((call) => [call.id, call]));
+		const observedIds = new Set(observed.calls.map((call) => call.id));
 		const calls = observed.calls.map((call) => {
-			const detail = details?.calls.find((item) => item.id === call.id);
+			const detail = detailById.get(call.id);
 			return detail ? { ...detail, ...call, status: detail.status === "cancelled" ? "cancelled" as const : call.status } : call;
 		});
-		const extra = details?.calls.filter((call) => !call.id.endsWith("/?") && !calls.some((item) => item.id === call.id)) ?? [];
+		const extra = details?.calls.filter((call) => !call.id.endsWith("/?") && !observedIds.has(call.id)) ?? [];
 		return { complete: observed.complete && details?.complete !== false && calls.length + extra.length <= NESTED_CALL_LIMIT, calls: [...calls, ...extra].slice(0, NESTED_CALL_LIMIT) };
 	}
 	const saved = readCalls((view.result as { nestedCalls?: unknown } | undefined)?.nestedCalls);
@@ -37,6 +58,16 @@ function snapshotOf(view: View): CallSnapshot | undefined {
 	const snapshot = saved ?? details;
 	if (snapshot) view.row.nested = snapshot;
 	return snapshot ?? view.row.nested as CallSnapshot | undefined;
+}
+
+function stepKeys(view: View): readonly string[] {
+	const occurrences = new Map<string, number>();
+	const keys = (callsOf(view)?.calls ?? []).map((call) => {
+		const occurrence = occurrences.get(call.id) ?? 0;
+		occurrences.set(call.id, occurrence + 1);
+		return `codemode:call:${JSON.stringify([call.id, occurrence])}`;
+	});
+	return ["codemode:source", "codemode:result", ...keys];
 }
 
 function callLine(view: View, call: NestedCall, index: number, width: number, indent: number): string {
@@ -47,7 +78,7 @@ function callLine(view: View, call: NestedCall, index: number, width: number, in
 		{ text: WORDS[call.status], color }, ...(ms === undefined ? [] : [{ text: "  ", color: "dim" }, timeSeg(ms)]),
 	];
 	return numberedLine(view.theme, ` ƒ${index + 1} `, [
-		{ text: call.name, color: "text", bold: true }, ...(call.args ? [{ text: ` ${flat(call.args)}`, color: "muted" }] : []),
+		{ text: flat(call.name), color: "text", bold: true }, ...(call.args ? [{ text: ` ${flat(call.args)}`, color: "muted" }] : []),
 	], rail, STATES[call.status], width, { indent, now: view.now, motion: view.kit.motion() });
 }
 
@@ -65,6 +96,38 @@ function callOutput(view: View, call: NestedCall, selected: number, width: numbe
 	const lines = [callLine(view, call, selected, width, 0), ...(call.args ? wrapAll([call.args], width) : [])];
 	const output = call.output ?? call.error;
 	return [...lines, ...wrapAll([output ?? (call.status === "running" ? "(no output yet)" : "(nested result not saved; see script result)")], width)];
+}
+
+function popupHead(view: View, width: number, selected: number): string[] {
+	const labels = ["script source", "script result", ...(callsOf(view)?.calls ?? []).map((call, index) => `ƒ${index + 1} ${flat(call.name)} · ${WORDS[call.status]}`)];
+	return labels.map((label, index) => {
+		const text = `${index + 1} ${label}`;
+		return truncateToWidth(view.paint.fg(index === selected ? "accent" : "muted", index === selected ? view.paint.bold(text) : text), width, "…");
+	});
+}
+
+function sourceOutput(view: View, width: number, fallback: ToolSpec): string[] {
+	const code = codeOf(view);
+	const args = rawCodeOf(view) === undefined ? fallback.head?.(view, width, SOURCE_VIEW) ?? [] : [];
+	const lines = code ? wrapAll(codeLines(view.paint, view.kit, code.split("\n"), "javascript"), width)
+		: args.length ? args : [view.paint.fg("dim", "(no script source)")];
+	return lines.map((line) => truncateToWidth(line, width, "…"));
+}
+
+function retainedOutput(view: View, selected: number): string | undefined {
+	const call = callsOf(view)?.calls[selected - CALL_VIEW_OFFSET];
+	if (!call || call.output === OMITTED_OUTPUT) return undefined;
+	const output = call.output ?? call.error;
+	return output === undefined ? undefined : resultText({ content: [{ type: "text", text: output }] }) || undefined;
+}
+
+function popupCopies(view: View, selected: number): readonly SheetCopy[] {
+	const script: SheetCopy = { label: "copy script", key: "c", text: () => clipboardCodeOf(view) };
+	if (selected === SOURCE_VIEW) return [script];
+	return [script, {
+		label: selected === RESULT_VIEW ? "copy result" : "copy preview", key: "o",
+		text: () => selected === RESULT_VIEW ? resultText(view.result) || undefined : retainedOutput(view, selected),
+	}];
 }
 
 export function codemodeSpec(tool: ForeignTool): ToolSpec {
@@ -89,15 +152,19 @@ export function codemodeSpec(tool: ForeignTool): ToolSpec {
 			return fallback.body({ ...view, result }, width);
 		},
 		details: (view) => callsOf(view)?.complete === false ? "JavaScript · nested call record incomplete" : "JavaScript · call elapsed includes queue and permission waits",
-		head: (view, width, selected) => codeOf(view) ? wrapAll(codeLines(view.paint, view.kit, codeOf(view).split("\n"), "javascript"), width) : fallback.head?.(view, width, selected) ?? [],
-		steps: (view) => (callsOf(view)?.calls.length ?? 0) + 1,
-		outputLabel: (view, selected) => selected === (callsOf(view)?.calls.length ?? 0) ? "script result" : `tool call ${selected + 1}`,
+		head: popupHead,
+		steps: (view) => (callsOf(view)?.calls.length ?? 0) + CALL_VIEW_OFFSET,
+		firstStep: () => SOURCE_VIEW,
+		stepKeys,
+		outputLabel: (view, selected) => selected === SOURCE_VIEW ? "script source" : selected === RESULT_VIEW ? "script result"
+			: `ƒ${selected - CALL_VIEW_OFFSET + 1} ${flat(callsOf(view)?.calls[selected - CALL_VIEW_OFFSET]?.name ?? "(not available)")}`,
 		output(view, width, selected) {
-			const snapshot = callsOf(view);
-			const call = snapshot?.calls[selected];
-			if (!call) return fallback.output(view, width, selected);
-			return callOutput(view, call, selected, width);
+			if (selected === SOURCE_VIEW) return sourceOutput(view, width, fallback);
+			if (selected === RESULT_VIEW) return fallback.output(view, width, selected);
+			const call = callsOf(view)?.calls[selected - CALL_VIEW_OFFSET];
+			return call ? callOutput(view, call, selected - CALL_VIEW_OFFSET, width) : [view.paint.fg("dim", "(nested call not available)")];
 		},
+		copies: popupCopies,
 	};
 }
 

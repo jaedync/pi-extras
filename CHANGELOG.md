@@ -25,7 +25,9 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   elapsed time, bounded previews and per-call popup output. Overlapping call
   lifetimes are labeled `overlap`, not inferred parallel execution. Saved Pi
   metadata restores calls without inventing missing results. No scripts or
-  tool behavior are changed.
+  tool behavior are changed. Its full-screen popup keeps Source and Result
+  views fixed, follows the selected call as calls arrive, and copies the
+  script without unsafe terminal controls or the retained call output alone.
 - Subagent report bands show tokens (prompt, including cached, and output)
   beside cost and time. Reports saved earlier keep their cost and time.
 

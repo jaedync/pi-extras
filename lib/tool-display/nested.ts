@@ -4,6 +4,7 @@ import { sanitize } from "./format.ts";
 import { resultText } from "./kit.ts";
 
 export const NESTED_CALL_LIMIT = 256;
+export const OMITTED_OUTPUT = "[nested output omitted from live cache; see script result]";
 const PARENT_LIMIT = 128;
 const TEXT_LIMIT = 8_192;
 const CACHE_DETAIL_CHARS = 32_768;
@@ -40,7 +41,7 @@ function boundCalls(snapshot: CallSnapshot): CallSnapshot {
 		if (cost <= room) { room -= cost; return call; }
 		complete = false;
 		return { ...call, args: call.args === undefined ? undefined : "[arguments omitted from live cache]", error: undefined,
-			output: call.output === undefined ? undefined : "[nested output omitted from live cache; see script result]" };
+			output: call.output === undefined ? undefined : OMITTED_OUTPUT };
 	}).toReversed();
 	return { calls, complete };
 }

@@ -33,8 +33,9 @@ test("codemode observes actual nested calls, overlap and timing, never JS syntax
 	assert.match(h.script.lines().join("\n"), /read.*done.*400ms/);
 	assert.match(h.script.lines().join("\n"), /bash.*failed.*280ms/);
 	assert.ok(h.script.click());
-	assert.match(h.popups[0]!.head(theme, 80, 0).join("\n"), /await tools.read/);
-	assert.match(h.popups[0]!.output(theme, 80, 0).join("\n"), /contents/);
+	assert.match(h.popups[0]!.head(theme, 80, 0).join("\n"), /1 script source/);
+	assert.match(h.popups[0]!.output(theme, 80, 0).join("\n"), /await tools.read/);
+	assert.match(h.popups[0]!.output(theme, 80, 2).join("\n"), /contents/);
 });
 
 test("nested records restore duration and unfinished status without guessed starts or overlap", () => {
@@ -51,7 +52,7 @@ test("nested records restore duration and unfinished status without guessed star
 	assert.doesNotMatch(lines, /parallel|overlap|running|0ms|sequential/);
 	assert.doesNotMatch(h.script.lines()[0]!, /\d+ms|\d+\.\ds/);
 	h.script.click();
-	assert.match(h.popups[0]!.output(theme, 80, 0).join("\n"), /not saved/);
+	assert.match(h.popups[0]!.output(theme, 80, 2).join("\n"), /not saved/);
 });
 
 test("older and foreign codemode tools fall back to their words and full script with no fake calls", () => {

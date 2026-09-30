@@ -47,8 +47,12 @@ export interface ToolSpec {
 	head?(view: View, width: number, selected: number): string[];
 	steps?(view: View): number;
 	firstStep?(view: View): number;
+	/** One bounded identity list, rather than a callback that rebuilds state per index. */
+	stepKeys?(view: View): readonly string[];
 	outputLabel?(view: View, selected: number): string;
 	output(view: View, width: number, selected: number): string[];
+	/** Copies raw data instead of formatted output, which may contain layout padding. */
+	copies?(view: View, selected: number): readonly SheetCopy[];
 }
 
 function viewOf(kit: Kit, row: RowState): View | undefined {
@@ -65,7 +69,8 @@ export function bandOf(spec: ToolSpec, view: View): { segs: Seg[]; rail: Seg[]; 
 }
 
 /** A bash call copies its command, a file tool its path, and every tool its output. */
-function copiesOf(spec: ToolSpec, view: () => View, selected: number): SheetCopy[] {
+function copiesOf(spec: ToolSpec, view: () => View, selected: number): readonly SheetCopy[] {
+	if (spec.copies) return spec.copies(view(), selected);
 	const args = (view().context.args ?? {}) as { command?: unknown; path?: unknown };
 	const arg = typeof args.command === "string" ? { label: "copy command", text: args.command }
 		: typeof args.path === "string" ? { label: "copy path", text: args.path } : undefined;
@@ -86,6 +91,7 @@ export function popupSource(kit: Kit, spec: ToolSpec, row: RowState): PopupSourc
 		head: (theme, width, selected) => spec.head?.({ ...view(), theme, paint: painter(theme) }, width, selected) ?? [],
 		stepCount: () => spec.steps?.(view()) ?? 0,
 		firstStep: () => spec.firstStep?.(view()) ?? 0,
+		...(spec.stepKeys ? { stepKeys: () => spec.stepKeys!(view()) } : {}),
 		outputLabel: (selected) => spec.outputLabel?.(view(), selected) ?? "output",
 		output: (theme, width, selected) => spec.output({ ...view(), theme, paint: painter(theme) }, width, selected),
 		live: () => (row.context?.isPartial ?? false) || (spec.moving?.(view()) ?? false),

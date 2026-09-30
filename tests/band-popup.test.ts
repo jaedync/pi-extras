@@ -112,6 +112,43 @@ test("copy output copies the selected step's text, unstyled and unwrapped", asyn
 	assert.deepEqual(p.copied, ["s2 line 1\ns2 line 2"]);
 });
 
+test("optional step identity follows reorders, preserves the body key, and falls back to the first view when pruned", () => {
+	let keys = ["source", "result", "call:A", "call:C"];
+	let reads = 0;
+	const src = { ...source(), firstStep: () => 0, stepCount: () => keys.length, stepKeys: () => { reads++; return keys; } };
+	const view = new PopupView(quiet(), src);
+	view.key("4");
+	reads = 0;
+	assert.equal(view.step, 3);
+	assert.equal(reads, 1, "the selected getter requests one bounded key list, not a key callback per index");
+	reads = 0;
+	assert.equal(view.bodyKey(), "call:C");
+	assert.equal(reads, 1);
+	keys = ["source", "result", "call:A", "call:B", "call:C"];
+	assert.equal(view.step, 4);
+	assert.equal(view.bodyKey(), "call:C");
+	keys = ["source", "result", "call:A", "call:B"];
+	assert.equal(view.step, 0);
+	assert.equal(view.bodyKey(), "source");
+	assert.ok(view.key("\t"));
+	assert.equal(view.step, 1);
+	assert.equal(view.bodyKey(), "result");
+	assert.ok(view.pick(3));
+	assert.equal(view.step, 2);
+	assert.equal(view.bodyKey(), "call:A");
+});
+
+test("sources without step identities keep their numeric selection, body keys and native mouse/key navigation", () => {
+	const p = popup(source({ steps: 3 }));
+	assert.equal(p.view.bodyKey(), 1);
+	p.lines(); p.sheet.handleInput("3");
+	assert.equal(p.view.bodyKey(), 2);
+	p.sheet.handleInput("\t");
+	assert.equal(p.view.bodyKey(), 0);
+	assert.deepEqual(p.click(10, 4), { handled: true });
+	assert.equal(p.view.bodyKey(), 1);
+});
+
 test("a source can offer its own copies", async () => {
 	const src = { ...source(), copies: () => [{ label: "copy command", key: "c", text: () => "a && b && c" }] };
 	const p = popup(src);

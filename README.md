@@ -299,6 +299,11 @@ any failure in the right rail. pi-extras's own tools have layouts of their own:
   lifetimes overlap, including queue and permission waits; it does not claim
   parallel execution. The collapsed row keeps the newest four calls. Expand
   or click for the full script, individual call output and script result.
+  The popup keeps Source and Result views fixed and follows selected call IDs
+  as calls arrive. The whole script scrolls in the body. Copy Script preserves
+  ordinary source text but removes unsafe terminal controls, without changing
+  execution; Copy Preview copies only retained call output. Missing or omitted
+  previews cannot be copied.
   Restored calls use Pi's saved metadata and say when nested output was not
   saved. Older/foreign implementations without call metadata retain their own
   result renderer. `/tool-display others off` leaves codemode's original row;
