@@ -14,6 +14,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   instructions stay in model context but are hidden from the human view.
 - Numbered bash steps and codemode calls keep one cell width past nine, so the
   chips, commands and step output stay aligned (for example 9 and 10).
+- Subagent and mesh mail bodies no longer reach the Markdown parser when they
+  are very large or deeply nested: 2,000 nested list items could exhaust the
+  heap and end the Pi process. Such bodies show as bounded plain text. Bodies
+  are laid out once and reused across redraws instead of re-parsed each frame.
 
 ## 0.12.6 - 2026-09-30
 
