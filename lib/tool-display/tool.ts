@@ -7,7 +7,8 @@
  * from the conversation around it.
  */
 import type { Outcome, Seg } from "../band/band.ts";
-import type { PopupSource } from "../band/popup.ts";
+import { plainText, UNWRAPPED, type PopupSource } from "../band/popup.ts";
+import type { SheetCopy } from "../band/sheet.ts";
 import { bodyBackground, onBackground } from "../band/surface.ts";
 import { painter, type Kit, type Paint, type RenderContext, type ThemeLike } from "./kit.ts";
 import { animate, band, BODY_INDENT, indent, phaseOf, rail, rowState, slotFor, tookMs, track, type RowState } from "./row.ts";
@@ -62,9 +63,19 @@ export function bandOf(spec: ToolSpec, view: View): { segs: Seg[]; rail: Seg[]; 
 	return { segs, rail: railSegs, phase };
 }
 
+/** A bash call copies its command, a file tool its path, and every tool its output. */
+function copiesOf(spec: ToolSpec, view: () => View, selected: number): SheetCopy[] {
+	const args = (view().context.args ?? {}) as { command?: unknown; path?: unknown };
+	const arg = typeof args.command === "string" ? { label: "copy command", text: args.command }
+		: typeof args.path === "string" ? { label: "copy path", text: args.path } : undefined;
+	const output = () => plainText(spec.output(view(), UNWRAPPED, selected)) || undefined;
+	return [...(arg ? [{ label: arg.label, key: "c", text: () => arg.text }] : []), { label: "copy output", key: "o", text: output }];
+}
+
 export function popupSource(kit: Kit, spec: ToolSpec, row: RowState): PopupSource {
 	const view = () => viewOf(kit, row)!;
 	return {
+		copies: (selected) => copiesOf(spec, view, selected),
 		label: () => spec.label(view()),
 		band: (theme, width) => {
 			const current = { ...view(), theme };

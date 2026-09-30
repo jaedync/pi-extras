@@ -26,6 +26,7 @@ import { offerRows } from "../lib/late-rows.ts";
 import { markRow } from "../lib/tool-row.ts";
 import { appendRunLog, runLogEntry, runLogPath, statsByModel, statsText } from "../lib/subagents/runlog.ts";
 import { formatTime } from "../lib/band/band.ts";
+import type { ShownOverlay } from "../lib/band/modal.ts";
 import { formatMoney } from "../lib/status-plus-logic.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
@@ -85,11 +86,13 @@ export default function subagents(pi: ExtensionAPI) {
 	let mainRun = 0;
 	pi.on("agent_start", async () => { mainRun++; });
 	let inspectorUi: InspectorHost | null = null;
+	let inspected: ShownOverlay | undefined;
 
+	/** One at a time, as the other sheets are; one Pi took off screen without closing it no longer counts. */
 	const inspect = (name: string): void => {
 		const current = state;
-		if (!inspectorUi || !current) return;
-		openAgentInspector(inspectorUi, {
+		if (!inspectorUi || !current || inspected?.isOpen()) return;
+		const shown = openAgentInspector(inspectorUi, {
 			record: () => current.team.get(name),
 			messages: () => current.team.messages(name),
 			describe: describeTool,
@@ -100,6 +103,8 @@ export default function subagents(pi: ExtensionAPI) {
 				return result.delivered === "replied" ? "Answered its question." : result.delivered === "resumed" ? "It resumed to handle your message." : "Delivered after its current step.";
 			},
 		});
+		inspected = shown;
+		shown.closed.catch(() => undefined).finally(() => { if (inspected === shown) inspected = undefined; });
 	};
 
 	type RowContext = Parameters<typeof subagentCallRow>[2];

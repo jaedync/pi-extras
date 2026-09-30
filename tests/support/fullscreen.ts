@@ -97,6 +97,7 @@ export function fullscreen() {
 		ui,
 		counter,
 		settle,
+		mouse,
 		key: (data: string) => input(data),
 		async click(x: number, y: number) {
 			mouse(0, x, y, "M");

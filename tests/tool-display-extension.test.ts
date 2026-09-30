@@ -314,7 +314,9 @@ test("a popup Pi took off screen without closing it doesn't stop a row click fro
 		await screen.click(6, y);
 		assert.equal(screen.tui.hasOverlay(), true, "a click on the row opens its popup");
 		// What Pi does to the top overlay on /reload and session switches: no done, no dispose.
+		// Pi draws again before any real click can arrive, so its hit map no longer has the popup.
 		screen.tui.hideOverlay();
+		await screen.settle();
 		await screen.click(6, y);
 		assert.equal(screen.tui.hasOverlay(), true, "the next click opens it again");
 	} finally {

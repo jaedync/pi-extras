@@ -560,7 +560,8 @@ export default function shellJobs(pi: ExtensionAPI): void {
 	pi.registerCommand("jobs", {
 		description: "Inspect a background shell job: full command and live output",
 		getArgumentCompletions: (prefix: string) => {
-			if (!active) return null;
+			// A complete id offers no menu, or Pi's first Enter would pick the completion instead of running the command.
+			if (!active || runtime.jobs.has(prefix)) return null;
 			return [...runtime.jobs.values()]
 				.reverse()
 				.filter((job) => job.id.startsWith(prefix))

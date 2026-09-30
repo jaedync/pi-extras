@@ -1,91 +1,128 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { Popup, type PopupSource } from "../lib/band/popup.ts";
+import { stripTerminalSequences, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { PopupView, type PopupSource } from "../lib/band/popup.ts";
+import { Sheet } from "../lib/band/sheet.ts";
 import { quiet } from "./support/quiet-theme.ts";
 
-function source(options: { steps?: number; lines?: number; live?: boolean } = {}): PopupSource & { selectedSeen: number[] } {
-	const selectedSeen: number[] = [];
+interface Options {
+	steps?: number;
+	lines?: number;
+	live?: boolean;
+	command?: string;
+	head?: string[];
+	details?: string;
+}
+
+function source(options: Options = {}): PopupSource {
+	const command = options.command ?? "a && b && c";
 	return {
-		selectedSeen,
 		label: () => "bash · 3 commands",
-		band: (_theme, width) => " $ a && b && c".padEnd(width),
-		details: () => "in ~/proj · timeout 60s",
-		head: (_theme, _width, selected) => Array.from({ length: options.steps ?? 0 }, (_, index) => `${index === selected ? ">" : " "} step ${index + 1}`),
+		band: (_theme, width) => ` $ ${command}`.slice(0, width - 1).padEnd(width),
+		details: () => options.details ?? "in ~/proj · timeout 60s",
+		head: (_theme, _width, selected) => options.head ?? (options.steps
+			? Array.from({ length: options.steps }, (_, index) => `${index === selected ? ">" : " "} step ${index + 1}`)
+			: [`$ ${command}`]),
 		stepCount: () => options.steps ?? 0,
-		firstStep: () => 1,
+		firstStep: () => (options.steps ? 1 : 0),
 		outputLabel: (selected) => `output of ${selected + 1}`,
-		output: (_theme, _width, selected) => {
-			selectedSeen.push(selected);
-			return Array.from({ length: options.lines ?? 5 }, (_, index) => `s${selected + 1} line ${index + 1}`);
-		},
+		output: (_theme, width, selected) => Array.from({ length: options.lines ?? 5 }, (_, index) => `\x1b[31ms${selected + 1} line ${index + 1}\x1b[39m`.slice(0, width + 10)),
 		live: () => options.live ?? false,
 	};
 }
 
-function popup(src: PopupSource, rows = 30) {
-	let renders = 0;
+function popup(src: PopupSource, rows = 30, columns = 80) {
+	const copied: string[] = [];
 	let closed = 0;
-	const tui = { requestRender: () => { renders++; }, terminal: { rows, columns: 80 } };
-	const view = new Popup(tui, quiet(), src, () => { closed++; });
-	return { view, lines: (width = 60) => view.render(width).map((line) => stripTerminalSequences(line)), renders: () => renders, closed: () => closed };
+	const tui = { requestRender: () => undefined, terminal: { rows, columns } };
+	const view = new PopupView(quiet(), src);
+	const sheet = new Sheet(tui, quiet(), view, () => { closed++; }, { copy: async (text) => { copied.push(text); } });
+	const lines = () => sheet.render(columns).map((line) => stripTerminalSequences(line));
+	const click = (x: number, y: number) => sheet.handleMouse({ type: "click", button: "left", x, y, screenX: x, screenY: y, width: columns, height: rows, shift: false, alt: false, ctrl: false } as TuiMouseEvent);
+	return { view, sheet, lines, click, copied, closed: () => closed };
 }
 
-test("the popup frames the band, details, steps and output at the given width", () => {
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("it covers the terminal: title bar, band, details, steps, then the selected step's output", () => {
 	const p = popup(source({ steps: 3 }));
 	const lines = p.lines();
-	assert.ok(lines.every((line) => visibleWidth(line) === 60), "every line is exactly the popup width");
-	assert.match(lines[0]!, /^╭─ bash · 3 commands ─+╮$/);
-	assert.match(lines[1]!, /^│ \$ a && b && c/);
-	assert.match(lines[2]!, /^│ in ~\/proj · timeout 60s +│$/);
-	assert.deepEqual(lines.slice(3, 6).map((line) => line.slice(2, 12)), ["  step 1  ", "> step 2  ", "  step 3  "], "the focused step starts selected");
-	assert.ok(lines.some((line) => line.includes("output of 2")));
-	assert.ok(lines.some((line) => line.includes("s2 line 5")));
-	assert.match(lines.at(-1)!, /^╰─+╯$/);
+	assert.equal(lines.length, 30);
+	assert.ok(lines.every((line) => visibleWidth(line) === 80));
+	assert.match(lines[0]!, /^ bash · 3 commands .*copy output {3}✕ $/);
+	assert.match(lines[1]!, /^ \$ a && b && c/);
+	assert.equal(lines[2]!.trim(), "in ~/proj · timeout 60s");
+	assert.deepEqual(lines.slice(3, 6).map((line) => line.trim()), ["step 1", "> step 2", "step 3"], "the focused step starts selected");
+	assert.match(lines[6]!, /^─ output of 2 ─+ 5 lines ─$/);
+	assert.equal(lines[7]!.trim(), "s2 line 1");
+	assert.match(lines.at(-1)!, /^ esc close · 1–3 step · ↑↓ scroll · o copy output · g\/G top\/end/);
 });
 
-test("a step is picked by number, tab or a click on its line", () => {
+test("a step is picked by number, tab, the arrows or a click on its line", () => {
 	const p = popup(source({ steps: 3 }));
 	p.lines();
-	p.view.handleInput("3");
+	p.sheet.handleInput("3");
 	assert.equal(p.view.step, 2);
-	p.view.handleInput("\t");
+	p.sheet.handleInput("\t");
 	assert.equal(p.view.step, 0);
-	p.view.handleInput("9");
-	assert.equal(p.view.step, 0, "a number past the last step does nothing");
+	p.sheet.handleInput("\x1b[Z");
+	assert.equal(p.view.step, 2);
+	p.sheet.handleInput("\x1b[C");
+	assert.equal(p.view.step, 0);
+	p.sheet.handleInput("\x1b[D");
+	assert.equal(p.view.step, 2);
+	p.sheet.handleInput("9");
+	assert.equal(p.view.step, 2, "a number past the last step does nothing");
+	assert.deepEqual(p.click(10, 4), { handled: true });
+	assert.equal(p.view.step, 1, "row 4 is the second step, under the details line");
+	assert.equal(p.click(10, 2), undefined, "the details line is not a step");
+	assert.match(p.lines()[6]!, /output of 2/);
+});
+
+test("a new step's output shows its end, even after scrolling the last one", () => {
+	const p = popup(source({ steps: 2, lines: 100 }), 20);
 	p.lines();
-	assert.deepEqual(p.view.handleMouse({ type: "click", button: "left", x: 5, y: 4 } as never), { handled: true });
-	assert.equal(p.view.step, 1);
-	assert.ok(p.lines().some((line) => line.includes("s2 line 1")));
+	p.sheet.handleInput("g");
+	assert.equal(p.lines()[6]!.replace(/[│┃█]$/, "").trim(), "s2 line 1");
+	p.sheet.handleInput("1");
+	assert.match(p.lines().at(-2)!, /s1 line 100/);
 });
 
-test("the output scrolls, and follows the end until scrolled up", () => {
-	const p = popup(source({ lines: 100 }), 20);
-	let lines = p.lines();
-	assert.ok(lines.some((line) => line.includes("s2 line 100")), "starts at the end");
-	p.view.handleInput("g");
-	lines = p.lines();
-	assert.ok(lines.some((line) => line.includes("s2 line 1 ")));
-	assert.ok(!lines.some((line) => line.includes("line 100")));
-	p.view.handleMouse({ type: "wheel", wheelDelta: 3, x: 0, y: 0 } as never);
-	assert.ok(p.lines().some((line) => line.includes("s2 line 4 ")));
-	p.view.handleInput("G");
-	assert.ok(p.lines().some((line) => line.includes("s2 line 100")));
+test("a command the band shows whole is not repeated under it; one it cuts is shown in full", () => {
+	const short = popup(source()).lines();
+	assert.equal(short[2]!.trim(), "in ~/proj · timeout 60s");
+	assert.match(short[3]!, /^─ output of 1/, "no repeat of the command");
+	const long = "x".repeat(120);
+	const cut = popup(source({ command: long, head: [`$ ${long.slice(0, 70)}`, long.slice(70)] })).lines();
+	assert.match(cut[3]!, /^ \$ x{70}/);
+	assert.match(cut[4]!, /^ x{50}/);
 });
 
-test("escape or q closes it once", () => {
-	const p = popup(source());
-	p.view.handleInput("\x1b");
-	p.view.handleInput("q");
-	assert.equal(p.closed(), 1);
+test("a head taller than its room says how much it hid", () => {
+	const lines = popup(source({ head: Array.from({ length: 40 }, (_, index) => `cmd ${index}`), details: "" }), 24).lines();
+	assert.ok(lines.some((line) => /… \d+ more lines/.test(line)));
+	assert.ok(lines.filter((line) => / s1 line/.test(line)).length >= 3, "the output keeps its rows");
 });
 
-test("a live popup keeps redrawing and stops once closed", async () => {
-	const p = popup(source({ live: true }));
-	await new Promise((resolve) => setTimeout(resolve, 250));
-	assert.ok(p.renders() >= 1);
-	p.view.dispose();
-	const after = p.renders();
-	await new Promise((resolve) => setTimeout(resolve, 250));
-	assert.equal(p.renders(), after);
+test("copy output copies the selected step's text, unstyled and unwrapped", async () => {
+	const p = popup(source({ steps: 2, lines: 2 }));
+	p.lines();
+	p.sheet.handleInput("o");
+	await sleep(0);
+	assert.deepEqual(p.copied, ["s2 line 1\ns2 line 2"]);
+});
+
+test("a source can offer its own copies", async () => {
+	const src = { ...source(), copies: () => [{ label: "copy command", key: "c", text: () => "a && b && c" }] };
+	const p = popup(src);
+	assert.match(p.lines()[0]!, /copy command {3}✕ $/);
+	p.sheet.handleInput("c");
+	await sleep(0);
+	assert.deepEqual(p.copied, ["a && b && c"]);
+});
+
+test("no output says so, and whether more may come", () => {
+	const empty = (live: boolean) => popup({ ...source({ live }), output: () => [] }).lines().find((line) => /no output/.test(line))!.trim();
+	assert.equal(empty(true), "(no output yet)");
+	assert.equal(empty(false), "(no output)");
 });

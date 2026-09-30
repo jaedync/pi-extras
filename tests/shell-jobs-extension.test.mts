@@ -735,7 +735,9 @@ describe("inspector hooks", () => {
 		assert.strictEqual(app.overlays.length, 2);
 		const completions = await command.getArgumentCompletions("");
 		assert.deepStrictEqual(completions.map((item: { value: string }) => item.value), ["second", "nap"]);
-		assert.deepStrictEqual((await command.getArgumentCompletions("nap")).map((item: { value: string }) => item.value), ["nap"]);
+		assert.deepStrictEqual((await command.getArgumentCompletions("na")).map((item: { value: string }) => item.value), ["nap"]);
+		// A complete id offers no menu, so the first Enter runs the command instead of picking a completion.
+		assert.strictEqual(await command.getArgumentCompletions("nap"), null);
 		assert.deepStrictEqual(await command.getArgumentCompletions("zzz"), []);
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});

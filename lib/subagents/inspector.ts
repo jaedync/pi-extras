@@ -1,40 +1,28 @@
 /**
- * The agent inspector: a centred overlay showing one agent's band, what it
- * was asked to do, and its live transcript, with a composer to message it and
- * a guarded stop. Built like the Shell Jobs inspector, so it scrolls, follows
- * the tail and closes the same way.
+ * The agent inspector: one agent over the whole terminal (see band/sheet.ts),
+ * with its band, what it was asked to do, its live transcript, and a message
+ * box to write to it. It scrolls, follows the tail and closes like the other
+ * sheets; letters go to the message box, so it has no letter shortcuts.
  */
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import {
-	decodeKittyPrintable, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi,
-	type Component, type Focusable, type OverlayOptions, type TuiMouseEvent, type TuiMouseEventResult,
-} from "@earendil-works/pi-tui";
+import { copyToClipboard, type Theme } from "@earendil-works/pi-coding-agent";
+import { decodeKittyPrintable, matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { renderBand } from "../band/band.ts";
-import { everyFrame, FRAME_MS } from "../band/clock.ts";
-import { closeOnOutsideClick, OnScreen, type OverlayPresence, type ShownOverlay } from "../band/modal.ts";
+import type { ShownOverlay } from "../band/modal.ts";
 import { paletteFrom } from "../band/palette.ts";
-import { onBackground, panelBackground } from "../band/surface.ts";
+import { openSheet, type SheetCopy, type SheetHost, type SheetKey, type SheetSource } from "../band/sheet.ts";
 import { moreLines } from "./names.ts";
 import { transcriptLines } from "./transcript.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
 import { phaseOf, rowRail, rowSegs } from "./widget.ts";
 
-export const INSPECTOR_HEIGHT_SHARE = 0.85;
-export const INSPECTOR_MIN_ROWS = 14;
-export const INSPECTOR_WIDTH = "86%";
 const TASK_LINES = 4;
-const MIN_VIEWPORT_ROWS = 3;
-const FRAME_COLUMNS = 4;
 const NOTICE_MS = 4_000;
-const HINT = "enter send · esc close · ctrl+x stop · ↑↓ PgUp/PgDn scroll";
-const HINT_DRAFT = "enter send · esc clear · ↑↓ PgUp/PgDn scroll";
+const KEYS: readonly SheetKey[] = [
+	{ key: "enter", label: "send" }, { key: "esc", label: "close" }, { key: "ctrl+x", label: "stop" }, { key: "↑↓ PgUp/PgDn", label: "scroll" },
+];
+const KEYS_DRAFT: readonly SheetKey[] = [{ key: "enter", label: "send" }, { key: "esc", label: "clear" }, { key: "↑↓ PgUp/PgDn", label: "scroll" }];
 const ENDED = "It has ended; it can't take messages.";
 const PASTE_MARKS = /\x1b\[20[01]~/g;
-
-export interface InspectorTui {
-	requestRender(): void;
-	terminal: { rows: number; columns: number };
-}
 
 export interface InspectorSource {
 	record(): AgentRecord | undefined;
@@ -44,72 +32,111 @@ export interface InspectorSource {
 	describe(tool: string, args: unknown): string;
 }
 
-const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
-
-export class AgentInspector implements Component, Focusable {
-	focused = false;
-	private scroll = 0;
-	private follow = true;
-	private viewport = MIN_VIEWPORT_ROWS;
-	private maxScroll = 0;
+export class AgentView implements SheetSource {
+	readonly typing = true;
 	/** The message box is always live: an inspector is where you talk to the agent. */
 	private draft = "";
 	private armedStop = false;
-	private notice: { text: string; color: string; at: number } | null = null;
-	private stopFrames: (() => void) | null = null;
-	private closed = false;
-	private readonly screen = new OnScreen();
-	private readonly undoOutside: () => void;
-	private readonly tui: InspectorTui;
+	private shownNotice: { text: string; color: string; at: number } | null = null;
+	private cached: { messages: readonly unknown[]; count: number; width: number; lines: string[] } | undefined;
 	private readonly theme: Theme;
 	private readonly source: InspectorSource;
-	private readonly onClose: () => void;
+	private readonly redraw: () => void;
 
-	constructor(tui: InspectorTui, theme: Theme, source: InspectorSource, onClose: () => void) {
-		this.tui = tui;
+	constructor(theme: Theme, source: InspectorSource, redraw: () => void = () => undefined) {
 		this.theme = theme;
 		this.source = source;
-		this.onClose = onClose;
-		this.undoOutside = closeOnOutsideClick(tui, () => this.close(), () => this.screen.shown());
-		// Taken off screen without being closed, nothing else would stop the timer.
-		this.stopFrames = everyFrame(() => (this.screen.shown() ? tui.requestRender() : this.dispose()), FRAME_MS);
-	}
-
-	attach(handle: OverlayPresence): void {
-		this.screen.attach(handle);
-	}
-
-	isOpen(): boolean {
-		return !this.closed && this.screen.shown();
+		this.redraw = redraw;
 	}
 
 	private paint = (color: string, text: string): string => {
 		try { return this.theme.fg(color as never, text); } catch { return text; }
 	};
 
-	handleInput(data: string): void {
-		if (matchesKey(data, "ctrl+x")) return void this.stopPressed();
+	title(): string {
+		const record = this.source.record();
+		return record ? `Subagent · ${record.name}` : "Subagent";
+	}
+
+	band(width: number): string {
+		const record = this.source.record();
+		const now = Date.now();
+		if (!record) return ` ${this.paint("warning", "This agent is gone.")}`;
+		return renderBand(this.theme, paletteFrom(this.theme), { width, phase: phaseOf(record, now), segs: rowSegs({ record, depth: 0 }), rail: rowRail(record, now), clockMs: now });
+	}
+
+	head(width: number, rows: number): string[] {
+		const record = this.source.record();
+		if (!record) return [];
+		const facts = [record.state, record.model, record.thinking && `thinking ${record.thinking}`, `${record.toolCalls} tool calls`,
+			record.runs > 1 && `${record.runs} runs`, record.readOnly && "read-only", record.parent !== "main" && `under ${record.parent}`].filter(Boolean).join(" · ");
+		const error = record.error ? [this.paint("error", record.error)] : [];
+		const task = wrapTextWithAnsi(record.task.replace(/\s+/g, " "), width);
+		// The task gets what the facts and any error leave, up to its own cap.
+		const room = Math.max(1, Math.min(TASK_LINES, rows - 1 - error.length));
+		const shown = task.length > room ? [...task.slice(0, room - 1).map((line) => this.paint("muted", line)), this.paint("dim", `… ${moreLines(task.length - room + 1)} of task`)]
+			: task.map((line) => this.paint("muted", line));
+		return [this.paint("dim", facts), ...shown, ...error].slice(0, rows);
+	}
+
+	bodyLabel(): string {
+		return "transcript";
+	}
+
+	/** Transcript lines, rebuilt only when a message arrives or the width changes. */
+	body(width: number): string[] {
+		const messages = this.source.messages();
+		const cached = this.cached;
+		if (cached && cached.messages === messages && cached.count === messages.length && cached.width === width) return cached.lines;
+		const lines = transcriptLines(messages, width, this.paint, this.source.describe);
+		if (lines.length === 0) lines.push(this.paint("dim", this.source.record()?.state === "queued" ? "(queued; not started yet)" : "(nothing yet)"));
+		this.cached = { messages, count: messages.length, width, lines };
+		return lines;
+	}
+
+	foot(width: number): string[] {
+		return [this.composer(width)];
+	}
+
+	copies(): readonly SheetCopy[] {
+		const record = () => this.source.record();
+		return [{ label: "copy task", text: () => record()?.task }, { label: "copy report", text: () => record()?.report }];
+	}
+
+	keys(): readonly SheetKey[] {
+		return this.draft ? KEYS_DRAFT : KEYS;
+	}
+
+	notice(): { text: string; color: string } | undefined {
+		return this.shownNotice && Date.now() - this.shownNotice.at < NOTICE_MS ? this.shownNotice : undefined;
+	}
+
+	/** Always redraws: the band moves while it runs, and a message can resume it at any time. */
+	live(): boolean {
+		return true;
+	}
+
+	key(data: string): boolean {
+		if (matchesKey(data, "ctrl+x")) {
+			void this.stopPressed();
+			return true;
+		}
 		this.armedStop = false;
-		if (matchesKey(data, "ctrl+c")) return this.close();
 		if (matchesKey(data, "escape")) {
-			if (!this.draft) return this.close();
+			if (!this.draft) return false;
 			this.draft = "";
 		} else if (matchesKey(data, "enter")) this.send();
 		else if (matchesKey(data, "backspace")) this.draft = this.draft.slice(0, -1);
-		else if (matchesKey(data, "up")) this.scrollTo(this.scroll - 1);
-		else if (matchesKey(data, "down")) this.scrollTo(this.scroll + 1);
-		else if (matchesKey(data, "pageUp")) this.scrollTo(this.scroll - this.viewport);
-		else if (matchesKey(data, "pageDown")) this.scrollTo(this.scroll + this.viewport);
-		else if (matchesKey(data, "home")) this.scrollTo(0);
-		else if (matchesKey(data, "end")) this.scrollTo(this.maxScroll);
-		else this.typed(data);
-		this.tui.requestRender();
+		else return this.typed(data);
+		return true;
 	}
 
 	/** Keys, pastes (one line), and letters a kitty-protocol terminal encodes. */
-	private typed(data: string): void {
+	private typed(data: string): boolean {
 		const text = (decodeKittyPrintable(data) ?? data).replace(PASTE_MARKS, "").replace(/\r?\n|\r/g, " ");
-		if (text && !/[\u0000-\u001f\u007f]/.test(text) && this.accepts()) this.draft += text;
+		if (!text || /[\u0000-\u001f\u007f]/.test(text)) return false;
+		if (this.accepts()) this.draft += text;
+		return true;
 	}
 
 	private accepts(): boolean {
@@ -139,105 +166,24 @@ export class AgentInspector implements Component, Focusable {
 	}
 
 	private flash(text: string, color: string): void {
-		this.notice = { text, color, at: Date.now() };
-		this.tui.requestRender();
+		this.shownNotice = { text, color, at: Date.now() };
+		this.redraw();
 	}
 
-	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		if (event.type === "wheel") {
-			this.scrollTo(this.scroll + (event.wheelDelta ?? 0));
-			return { handled: true };
-		}
-		if (event.type === "click") return { handled: true };
-		return undefined;
-	}
-
-	invalidate(): void {}
-
-	dispose(): void {
-		this.undoOutside();
-		this.stopFrames?.();
-		this.stopFrames = null;
-	}
-
-	render(width: number): string[] {
-		this.screen.drew();
-		const w = Math.max(FRAME_COLUMNS + 12, width);
-		const inner = w - FRAME_COLUMNS;
-		const border = (text: string) => this.paint("border", text);
-		const row = (content: string) => `${border("│")} ${truncateToWidth(content, inner, "…", true)} ${border("│")}`;
-		const rule = (left: string, right: string) => border(`${left}${"─".repeat(w - 2)}${right}`);
+	private composer(width: number): string {
 		const record = this.source.record();
-		const now = Date.now();
-		const header: string[] = [];
-		if (!record) header.push(row(this.paint("warning", "This agent is gone.")));
-		else {
-			header.push(row(renderBand(this.theme, paletteFrom(this.theme), { width: inner, phase: phaseOf(record, now), segs: rowSegs({ record, depth: 0 }), rail: rowRail(record, now), clockMs: now })));
-			const facts = [record.state, record.model, record.thinking && `thinking ${record.thinking}`, `${record.toolCalls} tool calls`,
-				record.runs > 1 && `${record.runs} runs`, record.readOnly && "read-only", record.parent !== "main" && `under ${record.parent}`].filter(Boolean).join(" · ");
-			header.push(row(this.paint("dim", facts)));
-			const task = wrapTextWithAnsi(record.task.replace(/\s+/g, " "), inner);
-			for (const line of task.slice(0, TASK_LINES)) header.push(row(this.paint("muted", line)));
-			if (task.length > TASK_LINES) header.push(row(this.paint("dim", `… ${moreLines(task.length - TASK_LINES)} of task`)));
-			if (record.error) header.push(row(this.paint("error", record.error)));
-		}
-		const fixed = header.length + 6;
-		const maxRows = Math.max(INSPECTOR_MIN_ROWS, Math.floor(this.tui.terminal.rows * INSPECTOR_HEIGHT_SHARE));
-		this.viewport = Math.max(MIN_VIEWPORT_ROWS, maxRows - fixed);
-		const lines = transcriptLines(this.source.messages(), inner, this.paint, this.source.describe);
-		if (lines.length === 0) lines.push(this.paint("dim", record?.state === "queued" ? "(queued; not started yet)" : "(nothing yet)"));
-		this.maxScroll = Math.max(0, lines.length - this.viewport);
-		this.scroll = this.follow ? this.maxScroll : clamp(this.scroll, 0, this.maxScroll);
-		const visible = lines.slice(this.scroll, this.scroll + this.viewport);
-		while (visible.length < this.viewport) visible.push("");
-		const frame = [rule("╭", "╮"), ...header, rule("├", "┤"), ...visible.map(row), rule("├", "┤"), row(this.composer(inner, record)), row(this.footer(inner, lines.length)), rule("╰", "╯")];
-		return onBackground(frame, w, panelBackground(this.theme));
-	}
-
-	private composer(inner: number, record: AgentRecord | undefined): string {
 		if (!record || !this.accepts()) return this.paint("dim", ENDED);
 		const label = `${record.name} ▸ `;
 		const caret = this.paint("accent", "▏");
 		if (!this.draft) return `${this.paint("accent", label)}${caret}${this.paint("dim", record.state === "idle" ? "write to resume it" : "write to it")}`;
-		const room = Math.max(4, inner - visibleWidth(label) - 1);
+		const room = Math.max(4, width - visibleWidth(label) - 1);
 		const draft = this.draft.length > room ? `…${this.draft.slice(-(room - 1))}` : this.draft;
 		return `${this.paint("accent", label)}${draft}${caret}`;
 	}
-
-	private footer(inner: number, total: number): string {
-		if (this.notice && Date.now() - this.notice.at < NOTICE_MS) return this.paint(this.notice.color, this.notice.text);
-		const hint = this.draft ? HINT_DRAFT : HINT;
-		const position = `${total === 0 ? 0 : this.scroll + 1}–${Math.min(total, this.scroll + this.viewport)} of ${total}${this.follow ? " · following" : ""}`;
-		const gap = Math.max(1, inner - visibleWidth(hint) - visibleWidth(position));
-		return this.paint("dim", `${hint}${" ".repeat(gap)}${position}`);
-	}
-
-	private scrollTo(target: number): void {
-		const next = clamp(target, 0, this.maxScroll);
-		this.follow = next >= this.maxScroll;
-		this.scroll = next;
-	}
-
-	private close(): void {
-		if (this.closed) return;
-		this.closed = true;
-		this.dispose();
-		this.onClose();
-	}
 }
 
-export interface InspectorHost {
-	custom<T>(
-		factory: (tui: InspectorTui, theme: Theme, keybindings: unknown, done: (result: T) => void) => Component & { dispose?(): void },
-		options: { overlay: boolean; overlayOptions?: OverlayOptions; onHandle?: (handle: OverlayPresence) => void },
-	): Promise<T>;
-}
+export type InspectorHost = SheetHost;
 
 export function openAgentInspector(ui: InspectorHost, source: InspectorSource): ShownOverlay {
-	let inspector: AgentInspector | undefined;
-	const closed = ui.custom<void>(
-		(tui, theme, _keys, done) => (inspector = new AgentInspector(tui, theme, source, () => done(undefined))),
-		{ overlay: true, overlayOptions: { anchor: "center", width: INSPECTOR_WIDTH, margin: 1 }, onHandle: (handle) => inspector?.attach(handle) },
-	);
-	return { closed, isOpen: () => inspector?.isOpen() ?? false };
+	return openSheet(ui, (theme, tui) => new AgentView(theme as unknown as Theme, source, () => tui.requestRender()), { copy: copyToClipboard });
 }

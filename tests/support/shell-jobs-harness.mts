@@ -43,6 +43,7 @@ export const widget = (await jiti.import("../../lib/shell-jobs-widget.ts")) as t
 export const render = (await jiti.import("../../lib/shell-jobs-render.ts")) as typeof import("../../lib/shell-jobs-render.ts");
 export const band = (await jiti.import("../../lib/shell-jobs-band.ts")) as typeof import("../../lib/shell-jobs-band.ts");
 export const inspector = (await jiti.import("../../lib/shell-jobs-inspector.ts")) as typeof import("../../lib/shell-jobs-inspector.ts");
+export const sheet = (await jiti.import("../../lib/band/sheet.ts")) as typeof import("../../lib/band/sheet.ts");
 export const tui = (await jiti.import("@earendil-works/pi-tui")) as typeof import("@earendil-works/pi-tui");
 
 export function contains(haystack: unknown, needle: unknown): void {

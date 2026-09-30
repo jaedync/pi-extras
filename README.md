@@ -210,9 +210,12 @@ conversation.
 
 Output that doesn't fit ends in a line such as `… 12 earlier lines`; a single
 hidden line is shown instead, since the hint would take its place anyway.
-Click a row to open a popup with the whole call: the full command, every line
-of output, and for a chained command each step. Esc, `q` or a click outside
-closes it. ctrl+o still expands every row in place.
+Click a row to open the whole call over the full terminal: the full command,
+every line of output, and for a chained command each step (pick one with a
+click, its number, tab or the arrow keys). `copy command` and `copy output` in
+its title bar, or `c` and `o`, copy them whole; text dragged across copies
+what it shows. Esc, `q` or `✕` closes it. ctrl+o still expands every row in
+place.
 
 **Other tools.** Every other tool's rows get the same band, with the time and
 any failure in the right rail. pi-extras's own tools have layouts of their own:
@@ -290,8 +293,9 @@ still; the job's band above the editor is the one that moves. When the job
 ends the chip takes its outcome (green `done`, red `exit 2`, gray `stopped`)
 and time, and its completion is one band with how it ended and how long it
 took; click it for the output. Click a running job's row
-or its band above the editor to open its live log; Esc or a click outside
-closes it.
+or its band above the editor to open its live log over the full terminal,
+with buttons (or `c` and `o`) to copy the command and the whole log; Esc, `q`
+or `✕` closes it.
 
 ## Copy Blocks
 
@@ -357,10 +361,11 @@ level, what it is doing right now, how full its context is (`ctx 12%`), what
 it has cost and how long this run has taken. Children of children sit under
 their parent. A child the agent waits on shows in its `subagent` row instead,
 with what it is doing on the line under it. Click a
-band, a `subagent` row, or run `/subagents` to open the inspector: the agent's
-task and live transcript, with a message box. Type and press Enter to write to
-it (steered in while it runs, resuming it when it has finished, answering it
-when it asked); ctrl+x twice stops it and Esc closes. Main is told what you
+band, a `subagent` row, or run `/subagents` to open the inspector over the full
+terminal: the agent's task and live transcript, with a message box. Type and
+press Enter to write to it (steered in while it runs, resuming it when it has
+finished, answering it when it asked); ctrl+x twice stops it, Esc or `✕`
+closes, and its title bar copies the task or the report. Main is told what you
 wrote. Status Plus counts every child in its totals.
 
 **Limits.** At most `maxConcurrent` children run at once; the rest queue. A
