@@ -1,9 +1,12 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 export const DATA_SERVICE = "951d64b0-077c-49a9-b668-4ef3f202debf";
 export const CONTROL_SERVICE = "3d0558c2-329e-47c2-8e62-1423eb99519e";
 export const RELAY_VERSION = 1;
 export const RELAY_SCRIPT = readFileSync(new URL("./guest-relay.py", import.meta.url), "utf8");
+/** What a relay running this script reports in its ping; anything else is replaced. */
+export const RELAY_SHA = createHash("sha256").update(RELAY_SCRIPT, "utf8").digest("hex").toUpperCase();
 
 export interface RelaySession {
 	readonly id: number;
@@ -14,7 +17,7 @@ export interface RelaySession {
 }
 export type ControlReply =
 	| { readonly ok: false; readonly error: string }
-	| { readonly ok: true; readonly relay: 1; readonly pid: number; readonly listening: boolean; readonly uptime: number }
+	| { readonly ok: true; readonly relay: 1; readonly pid: number; readonly listening: boolean; readonly uptime: number; readonly script?: string }
 	| { readonly ok: true; readonly session: RelaySession }
 	| { readonly ok: true; readonly steps: readonly { readonly step: "end" | "kill" | "run"; readonly code: number }[] };
 
@@ -35,8 +38,11 @@ export function readControlReply(line: string): ControlReply {
 	if (!record(value)) throw invalid();
 	if (value.ok === false && keys(value, ["ok", "error"]) && typeof value.error === "string" && value.error.length > 0) return { ok: false, error: value.error };
 	if (value.ok !== true) throw invalid();
-	if (keys(value, ["ok", "relay", "pid", "listening", "uptime"]) && value.relay === RELAY_VERSION && uint(value.pid) && value.pid > 0 && typeof value.listening === "boolean" && typeof value.uptime === "number" && Number.isFinite(value.uptime) && value.uptime >= 0) {
-		return { ok: true, relay: RELAY_VERSION, pid: value.pid, listening: value.listening, uptime: value.uptime };
+	// Relays before the script hash omit it; they read as outdated and get replaced.
+	const pingKeys = ["ok", "relay", "pid", "listening", "uptime", ...(Object.hasOwn(value, "script") ? ["script"] : [])];
+	if (keys(value, pingKeys) && value.relay === RELAY_VERSION && uint(value.pid) && value.pid > 0 && typeof value.listening === "boolean" && typeof value.uptime === "number" && Number.isFinite(value.uptime) && value.uptime >= 0) {
+		if (value.script !== undefined && (typeof value.script !== "string" || !/^[0-9A-F]{64}$/.test(value.script))) throw invalid();
+		return { ok: true, relay: RELAY_VERSION, pid: value.pid, listening: value.listening, uptime: value.uptime, ...(typeof value.script === "string" ? { script: value.script } : {}) };
 	}
 	if (keys(value, ["ok", "session"]) && record(value.session)) {
 		const session = value.session;

@@ -4,7 +4,7 @@ import test from "node:test";
 import { Guest, type HostCalls } from "../lib/windows-use/guest.ts";
 import type { ControlOp, RelayCalls } from "../lib/windows-use/relay-channel.ts";
 import { relayDeployCommands } from "../lib/windows-use/relay-deploy.ts";
-import type { ControlReply } from "../lib/windows-use/relay.ts";
+import { RELAY_SHA, type ControlReply } from "../lib/windows-use/relay.ts";
 import { TransportError } from "../lib/windows-use/transport.ts";
 import { hostFrame } from "./support/windows-frames.ts";
 
@@ -38,13 +38,23 @@ interface Rig {
 	restarts: number;
 	deploys: number;
 	log: string[];
+	/** Host calls by method. */
+	calls: Record<string, number>;
+	/** The VM is saved (off) from now on. */
+	saved: boolean;
+	/** The running relay's script hash; undefined for relays that predate reporting it. */
+	script?: string;
+	/** The relay reports this session id instead of the server's own. */
+	relaySession?: number;
+	/** The restart reply's steps, when not the usual three. */
+	steps?: { step: "end" | "kill" | "run"; code: number }[];
 }
 
 function rig(overrides: Partial<Rig> = {}) {
 	const world: Rig = {
 		relay: true, server: true, ip: false, wedged: false, restartWorks: true, runFails: false, restartThrows: false, deployFails: false,
 		flash: "present", relayElevated: false, serverElevated: false, session: { id: 2, console: 1, state: 0, locked: false },
-		sessionFails: false, restarts: 0, deploys: 0, log: [], ...overrides,
+		sessionFails: false, restarts: 0, deploys: 0, log: [], calls: {}, saved: false, script: RELAY_SHA, ...overrides,
 	};
 	let clock = 0;
 	const unsent = (what: string) => new TransportError(what, true);
@@ -67,7 +77,8 @@ function rig(overrides: Partial<Rig> = {}) {
 			world.log.push(`${route} deploy-install`);
 			if (world.deployFails) return text("Response: Access is denied.\nStatus Code: 1");
 			world.relay = true;
-			return text(`Response: PI_RELAY_DEPLOYED=${JSON.stringify({ mode: "task", flash: world.flash })}\nStatus Code: 0`);
+			world.script = RELAY_SHA;
+			return text(`Response: PI_RELAY_DEPLOYED=${JSON.stringify({ mode: "task", flash: world.flash, restart: "scheduled" })}\nStatus Code: 0`);
 		}
 		if (command.includes("guest-relay.py.gz.b64")) { world.log.push(`${route} deploy-chunk`); return text("Response: \nStatus Code: 0"); }
 		world.log.push(`${route} ${name}`);
@@ -76,8 +87,9 @@ function rig(overrides: Partial<Rig> = {}) {
 	const host: HostCalls = {
 		async call(method, params = {}, options = {}) {
 			if (CONSOLE_INPUT.has(method)) world.log.push(`CONSOLE ${method}`);
+			world.calls[method] = (world.calls[method] ?? 0) + 1;
 			switch (method) {
-				case "status": return { vm: params.vm, running: true, state: "running", installed: true, heartbeat: true, uptime: 3600 };
+				case "status": return { vm: params.vm, running: !world.saved, state: world.saved ? "saved" : "running", installed: true, heartbeat: true, uptime: 3600 };
 				case "probe": return { reachable: world.ip && world.server, setup: null };
 				case "frame": return hostFrame({ taskbar: true });
 				case "mcp":
@@ -90,23 +102,23 @@ function rig(overrides: Partial<Rig> = {}) {
 		},
 	};
 	const control = async (op: ControlOp): Promise<ControlReply> => {
-		if (!world.relay) throw unsent("connect timed out");
+		if (!world.relay || world.saved) throw unsent("connect timed out");
 		world.log.push(`relay ${op}`);
-		if (op === "ping") return { ok: true, relay: 1, pid: 42, listening: world.server, uptime: 3000 };
+		if (op === "ping") return { ok: true, relay: 1, pid: 42, listening: world.server, uptime: 3000, ...(world.script ? { script: world.script } : {}) };
 		if (op === "session") {
-			if (world.sessionFails) return { ok: false, error: "session query failed: WTSQuerySessionInformationW (Windows error 5)" };
-			return { ok: true, session: { ...world.session, elevated: world.relayElevated } };
+			if (world.sessionFails) return { ok: false, error: "session query failed: WTSEnumerateProcessesW (Windows error 5)" };
+			return { ok: true, session: { ...world.session, id: world.relaySession ?? world.session.id, elevated: world.relayElevated } };
 		}
 		if (world.restartThrows) throw new TransportError("the windows_use relay didn't answer within 60 s", false, true);
 		world.restarts++;
 		world.wedged = false;
 		world.server = world.restartWorks && !world.runFails;
-		return { ok: true, steps: [{ step: "end", code: 0 }, { step: "kill", code: 128 }, { step: "run", code: world.runFails ? 1 : 0 }] };
+		return { ok: true, steps: world.steps ?? [{ step: "end", code: 0 }, { step: "kill", code: 128 }, { step: "run", code: world.runFails ? 1 : 0 }] };
 	};
 	const relay: RelayCalls = {
 		control,
 		async mcp(message, options) {
-			if (!world.relay) throw unsent("connect timed out");
+			if (!world.relay || world.saved) throw unsent("connect timed out");
 			if (!world.server) throw unsent("Windows-MCP is not listening on 127.0.0.1:8000 (ConnectionRefusedError)");
 			return serve("relay", message, options.timeoutMs);
 		},
@@ -119,7 +131,7 @@ function rig(overrides: Partial<Rig> = {}) {
 		timing: { pollMs: 1_000, logonWaitMs: 30_000, restartWaitMs: 5_000 },
 	});
 	const consoleInput = () => world.log.filter((line) => line.startsWith("CONSOLE"));
-	return { world, guest, notes, consoleInput };
+	return { world, guest, notes, consoleInput, advance: (ms: number) => { clock += ms; } };
 }
 
 test("with the IP route cut by a VPN, tool calls go over the relay and never touch the console", async () => {
@@ -151,13 +163,40 @@ test("the server's own rights decide elevation, not a relay started at sign-in w
 	assert.equal(world.deploys, 0);
 });
 
-test("a relay session query that fails blocks the call rather than guessing the desktop is free", async () => {
+test("a relay session query that fails, as one did while locked, falls back to the server's own check", async () => {
 	const { world, guest } = rig();
 	await guest.tool("Snapshot", {});
 	world.sessionFails = true;
 	guest.recheck();
-	await assert.rejects(guest.tool("Snapshot", {}), /could not report its live desktop session/);
-	assert.equal(world.log.filter((line) => line === "relay Snapshot").length, 1);
+	await guest.tool("Snapshot", {});
+	assert.equal(world.log.filter((line) => line.endsWith("session-check")).length, 2);
+	assert.equal(world.log.filter((line) => line === "relay Snapshot").length, 2);
+});
+
+test("a relay in another session than the server's isn't trusted to vouch for the desktop", async () => {
+	const { world, guest } = rig({ relaySession: 3 });
+	for (let i = 0; i < 3; i++) { await guest.tool("Snapshot", {}); guest.recheck(); }
+	assert.equal(world.log.filter((line) => line.endsWith("session-check")).length, 3, "the server checks its own session every time");
+});
+
+test("an outdated relay is replaced over its own route, with the IP route cut", async () => {
+	const { world, guest, notes, consoleInput } = rig({ script: undefined });
+	await guest.tool("Snapshot", {});
+	assert.equal(world.deploys, 1);
+	assert.ok(world.log.includes("relay deploy-install"), "deployed through the relay itself");
+	assert.equal(world.script, RELAY_SHA);
+	assert.ok(notes.some((note) => /updated the Hyper-V socket relay/.test(note)));
+	guest.recheck();
+	await guest.tool("Snapshot", {});
+	assert.equal(world.deploys, 1, "a current relay isn't touched again");
+	assert.deepEqual(consoleInput(), []);
+});
+
+test("a restart reply that doesn't show the server's task started counts as no restart", async () => {
+	const { world, guest, notes } = rig({ server: false, steps: [], restartWorks: false });
+	await assert.rejects(guest.tool("Snapshot", {}), /enhanced\/remote session/);
+	assert.equal(world.restarts, 1);
+	assert.ok(!notes.some((note) => /restarted it through the guest relay/.test(note)));
 });
 
 test("over the IP route, the first call installs the relay through Windows-MCP, and later calls use it", async () => {
@@ -267,4 +306,21 @@ test("at a confirmed basic-session console, a server the relay can't restart sti
 	await assert.rejects(guest.tool("Snapshot", {}));
 	assert.equal(world.restarts, 1);
 	assert.ok(consoleInput().includes("CONSOLE adminShell"), "reinstalling at the console stays available when the desktop is there");
+});
+
+test("once connected, calls don't wait on a Hyper-V status query; a VM that went away still says so", async () => {
+	const { world, guest } = rig();
+	for (let i = 0; i < 4; i++) await guest.tool("Snapshot", {});
+	assert.equal(world.calls.status, 1, "status is for connecting and recovery, not every call");
+	world.saved = true;
+	await assert.rejects(guest.tool("Snapshot", {}), /is saved, not running/);
+});
+
+test("a console session's display is checked for sleep at most every 20 s, not before every call", async () => {
+	const { world, guest, advance } = rig({ session: { id: 1, console: 1, state: 0, locked: false } });
+	for (let i = 0; i < 4; i++) { await guest.tool("Snapshot", {}); advance(4_000); }
+	assert.equal(world.calls.frame, 1);
+	advance(21_000);
+	await guest.tool("Snapshot", {});
+	assert.equal(world.calls.frame, 2, "Windows turns a display off after a minute idle at the soonest");
 });

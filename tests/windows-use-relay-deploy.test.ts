@@ -28,11 +28,17 @@ test("the chunks reassemble to exactly the relay script, and the install checks 
 	assert.ok(install.includes(`-TaskName '${RELAY_TASK}'`));
 	assert.ok(install.includes(NO_FLASH));
 	assert.doesNotMatch(install, /auth_key|\.key\b/, "the relay reads its key from the server's config; none travels in the command");
+	// Over the relay route, stopping the relay inside this command would cut off its own answer.
+	const restartAt = install.indexOf("Invoke-CimMethod -ClassName Win32_Process -MethodName Create");
+	assert.ok(restartAt > 0, "the relay restarts from a detached helper");
+	assert.ok(!/^Stop-ScheduledTask|^Get-CimInstance.*Stop-Process/m.test(install), "never stopped inline");
+	assert.match(install, /if \(-not \(\$current -and \$running -and \$task\)\)/, "the same relay already running is left alone");
 });
 
 test("the install's report is read strictly, and any other output is shown as the failure", () => {
-	assert.deepEqual(readRelayDeployed('Response: PI_RELAY_DEPLOYED={"mode":"task","flash":"added"}\nStatus Code: 0'), { mode: "task", flash: "added" });
-	assert.deepEqual(readRelayDeployed('Response: PI_RELAY_DEPLOYED={"flash":"present","mode":"runkey"}\n'), { mode: "runkey", flash: "present" });
+	assert.deepEqual(readRelayDeployed('Response: PI_RELAY_DEPLOYED={"mode":"task","flash":"added","restart":"scheduled"}\nStatus Code: 0'), { mode: "task", flash: "added", restart: "scheduled" });
+	assert.deepEqual(readRelayDeployed('Response: PI_RELAY_DEPLOYED={"restart":"none","flash":"present","mode":"runkey"}\n'), { mode: "runkey", flash: "present", restart: "none" });
+	assert.throws(() => readRelayDeployed('Response: PI_RELAY_DEPLOYED={"mode":"task","flash":"added"}'), /the relay install reported/, "an older install's report lacks the restart");
 	assert.throws(() => readRelayDeployed('Response: PI_RELAY_DEPLOYED={"mode":"service","flash":"added"}'), /the relay install reported/);
 	assert.throws(() => readRelayDeployed("Response: pythonw.exe is missing\nStatus Code: 1"), /pythonw\.exe is missing/);
 	assert.throws(() => readRelayDeployed(""), /reported: nothing/);

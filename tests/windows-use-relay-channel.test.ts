@@ -17,7 +17,7 @@ import test, { type TestContext } from "node:test";
 import type { ClientProcess } from "../lib/computer-use/mcp-link.ts";
 import type { HostCalls } from "../lib/windows-use/guest.ts";
 import { RelayChannel } from "../lib/windows-use/relay-channel.ts";
-import { DATA_SERVICE } from "../lib/windows-use/relay.ts";
+import { DATA_SERVICE, RELAY_SHA } from "../lib/windows-use/relay.ts";
 import { TransportError } from "../lib/windows-use/transport.ts";
 import { encodeFrame, FrameDecoder, Tunnel } from "../lib/windows-use/tunnel.ts";
 
@@ -129,6 +129,7 @@ test("MCP calls and control requests reach Windows-MCP through the relay, with t
 	assert.deepEqual(await relay.mcp(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }), { timeoutMs: 10_000 }), []);
 	const ping = await relay.control("ping");
 	assert.ok(ping.ok && "listening" in ping && ping.listening);
+	assert.equal(ping.script, RELAY_SHA, "the relay reports the very script the host ships");
 	const session = await relay.control("session");
 	assert.deepEqual(session, { ok: false, error: "session query needs Windows" });
 	assert.deepEqual(await relay.control("restart"), { ok: true, steps: [] });

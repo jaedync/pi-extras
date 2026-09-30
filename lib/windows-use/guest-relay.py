@@ -1,5 +1,7 @@
-"""VPN-independent guest transport. Keep this stdlib-only and Python 3.8 compatible."""
+"""VPN-independent guest transport. Stdlib only. AF_HYPERV needs Python 3.12+ (the
+server's uv Python); the TCP test mode also runs on 3.8, which the tests use."""
 import argparse
+import hashlib
 import hmac
 import json
 import os
@@ -20,8 +22,9 @@ BUFFER_SIZE = 65536
 MAX_LOG_SIZE = 1024 * 1024
 WILDCARD = "00000000-0000-0000-0000-000000000000"
 WTS_CONNECT_STATE = 8
-TH32CS_SNAPPROCESS = 2
-ERROR_NO_MORE_FILES = 18
+# The host compares it with the script it ships, and replaces an outdated relay.
+with open(os.path.abspath(__file__), "rb") as _source:
+    SCRIPT = hashlib.sha256(_source.read()).hexdigest().upper()
 WIN_BUILTIN_ADMINISTRATORS_SID = 26
 SECURITY_MAX_SID_SIZE = 68
 
@@ -130,11 +133,8 @@ def windows_session():
     wts = c.WinDLL("wtsapi32", use_last_error=True)
     advapi = c.WinDLL("advapi32", use_last_error=True)
 
-    class ProcessEntry(c.Structure):
-        _fields_ = [("dwSize", w.DWORD), ("cntUsage", w.DWORD), ("th32ProcessID", w.DWORD),
-                    ("th32DefaultHeapID", c.c_size_t), ("th32ModuleID", w.DWORD),
-                    ("cntThreads", w.DWORD), ("th32ParentProcessID", w.DWORD),
-                    ("pcPriClassBase", w.LONG), ("dwFlags", w.DWORD), ("szExeFile", w.WCHAR * 260)]
+    class ProcessInfo(c.Structure):
+        _fields_ = [("SessionId", w.DWORD), ("ProcessId", w.DWORD), ("pProcessName", w.LPWSTR), ("pUserSid", c.c_void_p)]
 
     def bind(library, name, args, result):
         function = getattr(library, name)
@@ -151,10 +151,7 @@ def windows_session():
     console_session = bind(kernel, "WTSGetActiveConsoleSessionId", [], w.DWORD)
     query = bind(wts, "WTSQuerySessionInformationW", [w.HANDLE, w.DWORD, c.c_int, c.POINTER(c.c_void_p), c.POINTER(w.DWORD)], w.BOOL)
     free = bind(wts, "WTSFreeMemory", [c.c_void_p], None)
-    snapshot = bind(kernel, "CreateToolhelp32Snapshot", [w.DWORD, w.DWORD], w.HANDLE)
-    first = bind(kernel, "Process32FirstW", [w.HANDLE, c.POINTER(ProcessEntry)], w.BOOL)
-    next_process = bind(kernel, "Process32NextW", [w.HANDLE, c.POINTER(ProcessEntry)], w.BOOL)
-    close = bind(kernel, "CloseHandle", [w.HANDLE], w.BOOL)
+    processes = bind(wts, "WTSEnumerateProcessesW", [w.HANDLE, w.DWORD, w.DWORD, c.POINTER(c.POINTER(ProcessInfo)), c.POINTER(w.DWORD)], w.BOOL)
     create_sid = bind(advapi, "CreateWellKnownSid", [c.c_int, c.c_void_p, c.c_void_p, c.POINTER(w.DWORD)], w.BOOL)
     membership = bind(advapi, "CheckTokenMembership", [w.HANDLE, c.c_void_p, c.POINTER(w.BOOL)], w.BOOL)
 
@@ -175,23 +172,16 @@ def windows_session():
                 free(buffer)
 
     def locked(session):
-        handle = snapshot(TH32CS_SNAPPROCESS, 0)
-        if handle == c.c_void_p(-1).value:
-            raise RuntimeError("CreateToolhelp32Snapshot (Windows error %d)" % c.get_last_error())
+        # WTS reports each process's session without opening it. ProcessIdToSessionId
+        # needs PROCESS_QUERY_INFORMATION, which a standard user lacks on SYSTEM's
+        # LogonUI: live, it failed with error 5 on winlogon, lsass and csrss.
+        info, count = c.POINTER(ProcessInfo)(), w.DWORD()
+        checked(processes(None, 0, 1, c.byref(info), c.byref(count)), "WTSEnumerateProcessesW")
         try:
-            entry = ProcessEntry()
-            entry.dwSize = c.sizeof(entry)
-            checked(first(handle, c.byref(entry)), "Process32FirstW")
-            found = False
-            while True:
-                if entry.szExeFile.casefold() == "logonui.exe" and session_id(entry.th32ProcessID) == session:
-                    found = True
-                if not next_process(handle, c.byref(entry)):
-                    if c.get_last_error() != ERROR_NO_MORE_FILES:
-                        checked(False, "Process32NextW")
-                    return found
+            return any(info[i].SessionId == session and (info[i].pProcessName or "").casefold() == "logonui.exe"
+                       for i in range(count.value))
         finally:
-            checked(close(handle), "CloseHandle")
+            free(info)
 
     sid, sid_size, elevated = c.create_string_buffer(SECURITY_MAX_SID_SIZE), w.DWORD(SECURITY_MAX_SID_SIZE), w.BOOL()
     # A NULL token checks the current effective token, including UAC filtering.
@@ -294,12 +284,13 @@ class Relay:
         if op == "ping":
             listening = False
             try:
-                with socket.create_connection(("127.0.0.1", config[0]), timeout=1):
+                # A busy server can take over a second to accept; don't report it down.
+                with socket.create_connection(("127.0.0.1", config[0]), timeout=3):
                     listening = True
             except OSError:
                 pass
             result = {"ok": True, "relay": RELAY_VERSION, "pid": os.getpid(),
-                      "listening": listening, "uptime": time.monotonic() - self.started}
+                      "listening": listening, "uptime": time.monotonic() - self.started, "script": SCRIPT}
         elif op == "session":
             result = self.session()
         elif op == "restart":

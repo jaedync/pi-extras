@@ -26,7 +26,7 @@ import { hasTaskbar } from "./frame.ts";
 import { consoleRefusal, readSession, requireActive, SESSION_CHECK, toSession, type DesktopSession } from "./desktop-session.ts";
 import { checkBootstrap, LAUNCHER, NO_OCR, openAdminShell, type Bootstrap } from "./install.ts";
 import type { RelayCalls } from "./relay-channel.ts";
-import type { ControlReply } from "./relay.ts";
+import { RELAY_SHA, type ControlReply } from "./relay.ts";
 import { readRelayDeployed, relayDeployCommands, type RelayDeployed } from "./relay-deploy.ts";
 import { TIMING, type Timing } from "./timing.ts";
 import { HOST_TIMEOUT, NOT_SENT, TransportError } from "./transport.ts";
@@ -56,11 +56,14 @@ const RELAY_PING_MS = 5_000;
 const RELAY_START_MS = 20_000;
 /** The relay's restart ends the task, kills the server, waits 3 s and starts it: each step has 30 s. */
 const RELAY_RESTART_MS = 120_000;
+const WAKE_CHECK_MS = 20_000;
 
 interface RelayPing {
 	readonly listening: boolean;
 	/** Seconds since the relay started; it starts with the signed-in session. */
 	readonly uptime: number;
+	/** The running script's hash; relays before it report none. */
+	readonly script?: string;
 }
 
 export interface GuestOptions {
@@ -120,6 +123,12 @@ export class Guest {
 	 */
 	private serverElevated?: boolean;
 	private unlockedAt = Number.NEGATIVE_INFINITY;
+	/** When the console display was last seen awake. */
+	private awakeAt = Number.NEGATIVE_INFINITY;
+	/** The relay's last answer to a ping, for its script's version. */
+	private lastPing?: RelayPing;
+	/** The server's own session, from the in-server check the relay's must agree with. */
+	private serverSession?: number;
 	/** Until then the guest has just come back (restart, sign-in, new server), and captures get longer. */
 	private coldUntil = Number.NEGATIVE_INFINITY;
 	private nextId = 1;
@@ -295,16 +304,8 @@ export class Guest {
 	 * judge by, and a console showing a desktop doesn't mean the user is on it.
 	 */
 	private async relayDesktop(signal?: AbortSignal): Promise<DesktopSession | undefined> {
-		if (!this.relay) return undefined;
-		try {
-			const reply = await this.relay.control("session", { signal, timeoutMs: QUICK_MS });
-			if (!reply.ok || !("session" in reply)) return undefined;
-			return this.observe({ ...toSession(reply.session), elevated: this.serverElevated ?? reply.session.elevated });
-		} catch (error) {
-			if (signal?.aborted) throw error;
-			// Unreachable, or a session it can't vouch for (session 0): no evidence either way.
-			return undefined;
-		}
+		const state = await this.relaySession(signal);
+		return state && this.observe({ ...state, elevated: this.serverElevated ?? state.elevated });
 	}
 
 	/** A stale console observation never authorizes input; a stale remote one still forbids it. */
@@ -335,8 +336,9 @@ export class Guest {
 	}
 
 	private async ensure(signal?: AbortSignal): Promise<void> {
-		const status = await this.running(signal);
+		// Connected, a VM that went away fails the next call as unsent, which comes back here unconnected.
 		if (!this.connected) {
+			const status = await this.running(signal);
 			const reply = await this.connect(signal);
 			// Listening and silent: restarting it (ensureAnswering) beats waiting on it or reinstalling.
 			if (reply === "silent") throw new TransportError(`Windows-MCP on ${this.vm} took the connection and answered nothing`, false, true);
@@ -344,8 +346,8 @@ export class Guest {
 		}
 		// Session moves and disconnects can happen between consecutive calls, even within the old lock TTL.
 		await this.unlock(signal);
-		// Reached over the guest's IP: put the relay in while that works, before a VPN can cut it.
-		if (this.via === "host") await this.installRelay(signal);
+		// Missing or outdated: put in this relay while a route works, before a VPN can cut the IP one.
+		if (this.relay && (this.via === "host" || this.lastPing?.script !== RELAY_SHA)) await this.installRelay(signal);
 	}
 
 	/**
@@ -470,11 +472,12 @@ export class Guest {
 		let bootstrap = initial;
 		for (;;) {
 			const relay = await this.ping(signal);
-			if (relay?.listening && await this.connect(signal) === "ok") return true;
-			if (!relay) {
-				// No relay (not installed yet, or stopped by a bootstrap): the IP route, and the bootstrap's own status.
+			if (relay?.listening && await this.connect(signal, relay) === "ok") return true;
+			// Without a relay, the IP route. A bootstrap's status is read either way: the old
+			// relay answers until setup stops it, and a setup failing before then must be seen.
+			if (!relay || bootstrap) {
 				const probe = await this.host.call("probe", { vm: this.vm, port: this.port }, { signal }) as { reachable?: boolean; setup?: unknown };
-				if (probe.reachable && await this.connect(signal) === "ok") return true;
+				if (!relay && probe.reachable && await this.connect(signal, null) === "ok") return true;
 				if (bootstrap) bootstrap = checkBootstrap(this.vm, this.now(), bootstrap, probe.setup);
 			}
 			if (this.now() >= deadline) return false;
@@ -487,9 +490,11 @@ export class Guest {
 	 * then installs the relay. A relay that answers while its server doesn't
 	 * listen means the server is down: the IP route couldn't reach it either.
 	 */
-	private async connect(signal?: AbortSignal): Promise<"ok" | "unreachable" | "silent"> {
+	private async connect(signal?: AbortSignal, known?: RelayPing | null): Promise<"ok" | "unreachable" | "silent"> {
 		this.serverElevated = undefined;
-		const relay = await this.ping(signal);
+		this.serverSession = undefined;
+		// The caller's fresh ping, if it has one: a missing relay costs a connect timeout per ping.
+		const relay = known === undefined ? await this.ping(signal) : known ?? undefined;
 		if (relay) {
 			this.via = "relay";
 			if (!relay.listening) { this.connected = false; return "unreachable"; }
@@ -504,11 +509,12 @@ export class Guest {
 		if (!this.relay) return undefined;
 		try {
 			const reply = await this.relay.control("ping", { signal, timeoutMs: RELAY_PING_MS });
-			return reply.ok && "listening" in reply ? reply : undefined;
+			this.lastPing = reply.ok && "listening" in reply ? reply : undefined;
 		} catch (error) {
 			if (signal?.aborted || !(error instanceof TransportError)) throw error;
-			return undefined;
+			this.lastPing = undefined;
 		}
+		return this.lastPing;
 	}
 
 	/**
@@ -527,7 +533,7 @@ export class Guest {
 			return "absent";
 		}
 		// End and kill fail harmlessly when nothing runs; only starting the task again matters.
-		if (!reply.ok || !("steps" in reply) || reply.steps.some((step) => step.step === "run" && step.code !== 0)) return "absent";
+		if (!reply.ok || !("steps" in reply) || !reply.steps.some((step) => step.step === "run" && step.code === 0)) return "absent";
 		this.note(`${this.vm}: ${what}`);
 		this.forget();
 		this.cameBack();
@@ -544,6 +550,8 @@ export class Guest {
 	 */
 	private async installRelay(signal?: AbortSignal): Promise<void> {
 		if (!this.relay || this.relayInstall === "failed") return;
+		// An older relay answering is replaced over its own route, which works under a VPN.
+		const replacing = this.via === "relay";
 		this.relayInstall = "failed";
 		let deployed: RelayDeployed;
 		try {
@@ -559,15 +567,19 @@ export class Guest {
 			this.note(`${this.vm}: couldn't install the Hyper-V socket relay (${error instanceof Error ? error.message : String(error)}); Windows-MCP stays reachable only over the guest's network, which a VPN in the guest can cut`);
 			return;
 		}
-		for (const deadline = this.now() + RELAY_START_MS; !(await this.ping(signal)); await this.sleep(1_000, signal)) {
+		// The relay restarts a moment after the install answers; wait for this script's.
+		for (const deadline = this.now() + RELAY_START_MS; (await this.ping(signal))?.script !== RELAY_SHA; await this.sleep(1_000, signal)) {
 			if (this.now() >= deadline) {
-				this.note(`${this.vm}: installed the Hyper-V socket relay, but it didn't answer; Windows-MCP stays reachable only over the guest's network for now`);
+				this.note(replacing
+					? `${this.vm}: updated the Hyper-V socket relay, but the new one didn't answer; calls go on over the route that works`
+					: `${this.vm}: installed the Hyper-V socket relay, but it didn't answer; Windows-MCP stays reachable only over the guest's network for now`);
 				return;
 			}
 		}
 		this.relayInstall = "done";
 		this.via = "relay";
-		this.note(`${this.vm}: installed a Hyper-V socket relay (${deployed.mode === "task" ? "a logon task" : "started at sign-in"}), so Windows-MCP stays reachable without the guest's network: a VPN in the guest can't cut it off`);
+		if (replacing) this.note(`${this.vm}: updated the Hyper-V socket relay to this version of windows_use`);
+		else if (deployed.restart === "scheduled") this.note(`${this.vm}: installed a Hyper-V socket relay (${deployed.mode === "task" ? "a logon task" : "started at sign-in"}), so Windows-MCP stays reachable without the guest's network: a VPN in the guest can't cut it off`);
 		// Windows-MCP reads the flag at start; the glow it draws otherwise lands in console OCR and slows captures.
 		if (deployed.flash === "added") await this.relayRestart(signal, "restarted Windows-MCP once so its orange-red capture flash stays off");
 	}
@@ -593,7 +605,11 @@ export class Guest {
 		const state = await this.lockCheck(signal);
 		requireActive(this.vm, state);
 		if (state.where === "console") {
-			if (await this.screen.wake(signal)) this.note(`${this.vm}: woke the display, which had gone dark`);
+			// Windows turns a display off after a minute idle at the soonest; a frame costs most of a second.
+			if (this.now() - this.awakeAt >= WAKE_CHECK_MS) {
+				if (await this.screen.wake(signal)) this.note(`${this.vm}: woke the display, which had gone dark`);
+				this.awakeAt = this.now();
+			}
 			if (state.locked && await this.reachDesktop(signal, "was locked; ", true)) this.cameBack();
 		}
 		if (state.elevated !== this.elevated) {
@@ -618,14 +634,29 @@ export class Guest {
 	 * takes about half a second, and runs once per connection for the server's rights.
 	 */
 	private async readDesktop(signal?: AbortSignal): Promise<DesktopSession> {
-		if (this.via === "relay" && this.relay && this.serverElevated !== undefined) {
-			const reply = await this.relay.control("session", { signal, timeoutMs: QUICK_MS });
-			return { ...toSession(reply.ok && "session" in reply ? reply.session : undefined), elevated: this.serverElevated };
+		if (this.via === "relay" && this.serverElevated !== undefined) {
+			const session = await this.relaySession(signal);
+			// Only the server's own session counts; otherwise it checks for itself, as without a relay.
+			if (session && session.id === this.serverSession) return { ...session, elevated: this.serverElevated };
 		}
 		const result = await this.callTool("PowerShell", { command: SESSION_CHECK }, signal, QUICK_MS);
 		const state = readSession(result.isError ? "" : textOf(result));
 		this.serverElevated = state.elevated;
+		this.serverSession = state.id;
 		return state;
+	}
+
+	/** The relay's native WTS query, or undefined when it can't give one. */
+	private async relaySession(signal?: AbortSignal): Promise<DesktopSession | undefined> {
+		if (!this.relay) return undefined;
+		try {
+			const reply = await this.relay.control("session", { signal, timeoutMs: RELAY_PING_MS });
+			return reply.ok && "session" in reply ? toSession(reply.session) : undefined;
+		} catch (error) {
+			if (signal?.aborted) throw error;
+			// Unreachable, a failed query, or a session it can't vouch for (session 0).
+			return undefined;
+		}
 	}
 
 	/** Reinstalls a server whose rights aren't the ones this session asks for. */

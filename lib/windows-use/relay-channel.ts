@@ -33,6 +33,12 @@ export interface RelayCalls {
  * caller gives up. Live connects to a listening relay took 10 to 90 ms.
  */
 export const RELAY_CONNECT_MS = 2_500;
+/**
+ * A data connection opens only once a ping found the relay; its status byte can
+ * trail the open by the ~2 s Windows takes to refuse a loopback connect, and the
+ * relay's own "not listening" message says more than a timeout.
+ */
+const DATA_HANDSHAKE_MS = 8_000;
 const CONTROL_MS = 15_000;
 const MAX_REPLY = 16 * 1024;
 
@@ -56,7 +62,7 @@ export class RelayChannel implements RelayCalls {
 
 	async mcp(message: string, options: RelayCallOptions): Promise<unknown[]> {
 		const { id, key } = await this.credentials(options.signal);
-		const stream = await openRelay(this.tunnel, { vm: id, service: DATA_SERVICE }, { signal: options.signal, timeoutMs: RELAY_CONNECT_MS });
+		const stream = await openRelay(this.tunnel, { vm: id, service: DATA_SERVICE }, { signal: options.signal, timeoutMs: DATA_HANDSHAKE_MS });
 		try {
 			return await postMcp(stream, { key, message, signal: options.signal, timeoutMs: options.timeoutMs });
 		} catch (error) {
@@ -119,7 +125,8 @@ function exchange(stream: Duplex, request: string, timeoutMs: number, signal?: A
 			if (error) reject(error); else resolve(line!);
 		};
 		const abort = () => done(new Error("windows_use call cancelled"));
-		const timer = setTimeout(() => done(new TransportError(`the windows_use relay didn't answer within ${Math.round(timeoutMs / 1000)} s`, false, true)), timeoutMs);
+		// Not timedOut: that flag restarts the server, and this is the relay being slow.
+		const timer = setTimeout(() => done(new TransportError(`the windows_use relay didn't answer within ${Math.round(timeoutMs / 1000)} s`, false)), timeoutMs);
 		signal?.addEventListener("abort", abort, { once: true });
 		stream.on("data", (chunk: Buffer) => {
 			chunks.push(chunk);

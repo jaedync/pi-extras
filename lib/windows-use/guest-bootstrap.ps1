@@ -103,6 +103,9 @@ try {
         $tail = if (Test-Path "$cfgDir\server.error.log") { (Get-Content "$cfgDir\server.error.log" -Tail 20) -join "`n" } else { '' }
         throw "server did not start listening on $port. $tail"
     }
+    # Stop-Server also stopped the Hyper-V socket relay, which runs on the server's
+    # Python; without it a VPN in the guest leaves the new server unreachable.
+    Start-ScheduledTask -TaskName 'windows-mcp-relay' -ErrorAction SilentlyContinue
     Set-Status "OK listening on $port"
     $done = $true
 } catch {

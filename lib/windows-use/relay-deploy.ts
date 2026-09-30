@@ -4,9 +4,8 @@
  * the server (a first install happens before the VPN connects), and from then
  * on the relay keeps the server reachable over a Hyper-V socket.
  */
-import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
-import { RELAY_SCRIPT } from "./relay.ts";
+import { RELAY_SCRIPT, RELAY_SHA } from "./relay.ts";
 import { SERVER_TASK } from "./stall.ts";
 
 export const RELAY_TASK = "windows-mcp-relay";
@@ -21,7 +20,6 @@ export const NO_FLASH = "set WINDOWS_MCP_DISABLE_FLASH=1";
 const DONE = "PI_RELAY_DEPLOYED=";
 
 const packed = gzipSync(Buffer.from(RELAY_SCRIPT, "utf8")).toString("base64");
-const sha256 = createHash("sha256").update(RELAY_SCRIPT, "utf8").digest("hex").toUpperCase();
 const dir = "$d = Join-Path $env:USERPROFILE '.windows-mcp'; $b = Join-Path $d 'guest-relay.py.gz.b64'";
 
 /** The PowerShell commands, in order; each must succeed before the next. */
@@ -39,41 +37,52 @@ function installCommand(): string {
 	return `$ErrorActionPreference = 'Stop'; ${dir}; $f = Join-Path $d 'guest-relay.py'; $cfg = Join-Path $d 'config.toml'
 $gz = New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,[Convert]::FromBase64String((Get-Content $b -Raw).Trim()))), [IO.Compression.CompressionMode]::Decompress)
 $out = New-Object IO.MemoryStream; $gz.CopyTo($out); $bytes = $out.ToArray(); Remove-Item $b
-$sha = [Security.Cryptography.SHA256]::Create(); $hash = -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('X2') }); $sha.Dispose()
-if ($hash -ne '${sha256}') { throw 'the relay arrived corrupted' }
+function Get-Sha($data) { $sha = [Security.Cryptography.SHA256]::Create(); try { -join ($sha.ComputeHash($data) | ForEach-Object { $_.ToString('X2') }) } finally { $sha.Dispose() } }
+if ((Get-Sha $bytes) -ne '${RELAY_SHA}') { throw 'the relay arrived corrupted' }
 $py = Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.ExecutablePath -like '*\\uv\\tools\\windows-mcp\\*' } | Select-Object -First 1 -ExpandProperty ExecutablePath
 if (-not $py) { $py = Join-Path $env:APPDATA 'uv\\tools\\windows-mcp\\Scripts\\python.exe' }
 $pyw = Join-Path (Split-Path $py) 'pythonw.exe'; if (-not (Test-Path $pyw)) { throw "pythonw.exe is missing beside $py" }
-Stop-ScheduledTask -TaskName '${RELAY_TASK}' -ErrorAction SilentlyContinue
-Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" | Where-Object { $_.CommandLine -like '*guest-relay.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-[IO.File]::WriteAllBytes($f, $bytes)
-$who = "$env:USERDOMAIN\\$env:USERNAME"; $arguments = "\`"$f\`" --config \`"$cfg\`""; $mode = 'task'
-$runLevel = try { (Get-ScheduledTask -TaskName '${SERVER_TASK}' -ErrorAction Stop).Principal.RunLevel } catch { 'Limited' }
-try {
-    # Its own task: the server's restart ends the server's task, and must leave the relay running.
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
-    Register-ScheduledTask -TaskName '${RELAY_TASK}' -Action (New-ScheduledTaskAction -Execute $pyw -Argument $arguments) -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $who) -Settings $settings -Principal (New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel $runLevel) -Force | Out-Null
-    Start-ScheduledTask -TaskName '${RELAY_TASK}'
-    $kick = "\`"$env:WINDIR\\System32\\conhost.exe\`" --headless \`"$env:WINDIR\\System32\\schtasks.exe\`" /run /tn ${RELAY_TASK}"
-} catch {
-    # A user who may not register tasks still starts it at every sign-in. Started through
-    # WMI, not as this shell's child: the server's restart kills windows-mcp.exe's whole tree.
-    $mode = 'runkey'; $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "\`"$pyw\`" $arguments" }
+$who = "$env:USERDOMAIN\\$env:USERNAME"; $arguments = "\`"$f\`" --config \`"$cfg\`""
+$running = @(Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" | Where-Object { $_.CommandLine -like '*guest-relay.py*' }).Count
+$current = (Test-Path $f) -and ((Get-Sha ([IO.File]::ReadAllBytes($f))) -eq '${RELAY_SHA}')
+$task = Get-ScheduledTask -TaskName '${RELAY_TASK}' -ErrorAction SilentlyContinue
+$mode = if ($task) { 'task' } else { 'runkey' }; $restart = 'none'
+# The same relay already running only answered slowly: leave it be.
+if (-not ($current -and $running -and $task)) {
+    [IO.File]::WriteAllBytes($f, $bytes)
+    $runLevel = try { (Get-ScheduledTask -TaskName '${SERVER_TASK}' -ErrorAction Stop).Principal.RunLevel } catch { 'Limited' }
+    try {
+        # Its own task: the server's restart ends the server's task, and must leave the relay running.
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
+        Register-ScheduledTask -TaskName '${RELAY_TASK}' -Action (New-ScheduledTaskAction -Execute $pyw -Argument $arguments) -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $who) -Settings $settings -Principal (New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel $runLevel) -Force | Out-Null
+        $mode = 'task'; $launch = "Stop-ScheduledTask -TaskName '${RELAY_TASK}' -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; Start-ScheduledTask -TaskName '${RELAY_TASK}'"
+        $kick = "\`"$env:WINDIR\\System32\\conhost.exe\`" --headless \`"$env:WINDIR\\System32\\schtasks.exe\`" /run /tn ${RELAY_TASK}"
+    } catch {
+        # A user who may not register tasks still starts it at every sign-in.
+        $mode = 'runkey'; $launch = "Start-Process -FilePath '$pyw' -ArgumentList '$($arguments -replace "'", "''")'"
+        $kick = "\`"$pyw\`" $arguments"
+    }
+    New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'pi-windows-use-relay' -Value $kick -PropertyType String -Force | Out-Null
+    # Restarted two seconds after this command answers, and outside windows-mcp.exe's
+    # process tree: over the relay route, stopping it now would cut off this very answer.
+    $helper = "Start-Sleep -Seconds 2; Get-CimInstance Win32_Process | Where-Object { \`$_.Name -eq 'pythonw.exe' -and \`$_.CommandLine -like '*guest-relay.py*' } | ForEach-Object { Stop-Process -Id \`$_.ProcessId -Force -ErrorAction SilentlyContinue }; $launch"
+    $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helper)) }
     if ($r.ReturnValue -ne 0) { throw "starting the relay failed with $($r.ReturnValue)" }
-    $kick = "\`"$pyw\`" $arguments"
+    $restart = 'scheduled'
 }
-New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'pi-windows-use-relay' -Value $kick -PropertyType String -Force | Out-Null
 $start = Join-Path $d 'windows-use-start.cmd'; $flash = 'absent'
 if (Test-Path $start) {
     $lines = @(Get-Content $start)
     if ($lines -contains '${NO_FLASH}') { $flash = 'present' }
     else { [IO.File]::WriteAllText($start, ((@($lines[0], '${NO_FLASH}') + @($lines | Select-Object -Skip 1)) -join "\`r\`n") + "\`r\`n", [Text.Encoding]::ASCII); $flash = 'added' }
 }
-'${DONE}' + (@{ mode = $mode; flash = $flash } | ConvertTo-Json -Compress)`;
+'${DONE}' + (@{ mode = $mode; flash = $flash; restart = $restart } | ConvertTo-Json -Compress)`;
 }
 
 export interface RelayDeployed {
 	readonly mode: "task" | "runkey";
+	/** Scheduled: the relay restarts in a moment with this script; none: the same one already runs. */
+	readonly restart: "scheduled" | "none";
 	/** Whether the server's start script already turned off Windows-MCP's capture flash. */
 	readonly flash: "added" | "present" | "absent";
 }
@@ -82,8 +91,8 @@ export interface RelayDeployed {
 export function readRelayDeployed(text: string): RelayDeployed {
 	const line = text.split(/\r?\n/).find((l) => l.includes(DONE));
 	const value = line ? JSON.parse(line.slice(line.indexOf(DONE) + DONE.length).trim()) as Record<string, unknown> : undefined;
-	if (!value || (value.mode !== "task" && value.mode !== "runkey") || !["added", "present", "absent"].includes(String(value.flash))) {
+	if (!value || (value.mode !== "task" && value.mode !== "runkey") || !["added", "present", "absent"].includes(String(value.flash)) || (value.restart !== "scheduled" && value.restart !== "none")) {
 		throw new Error(`the relay install reported: ${text.replace(/\s+/g, " ").trim().slice(0, 400) || "nothing"}`);
 	}
-	return { mode: value.mode, flash: value.flash as RelayDeployed["flash"] };
+	return { mode: value.mode, flash: value.flash as RelayDeployed["flash"], restart: value.restart };
 }
