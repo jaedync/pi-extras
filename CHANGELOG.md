@@ -2,6 +2,42 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.11.4 - 2026-09-29
+
+### Changed
+
+- Clicking a tool call, a shell job or a subagent opens it over the full
+  terminal instead of in a box in the middle. All three share one view: a
+  title bar with copy buttons and `✕`, the live band, a scrolling body with a
+  scrollbar and a row of keys. Esc, `q` or `✕` closes it; there is no outside
+  left to click. Up and down, `j` and `k`, page keys, space and `b`, `g` and
+  `G` scroll. The subagent view has no letter keys, since letters go to its
+  message box.
+- Copy buttons: a tool call copies its command (or path) and its output, `c`
+  and `o`; a shell job its command and its whole log, `c` and `o`; a subagent
+  its task and its report. Text dragged across the view copies just what it
+  shows, without borders, the scrollbar or the transcript behind it.
+- Pi's `[compaction]` block is a purple band like a tool row's: why it ran
+  (`auto`, `manual` or `overflow`), the context size before and an estimate
+  after, its cost and how long it took. The summary's first three lines sit
+  under it on Pi's compaction purple; a click or ctrl+o shows all of it.
+  Timing and sizes survive a resume; older compactions show the size before
+  and the cost.
+
+### Fixed
+
+- A tool popup showed a single command twice, in its band and above the
+  output.
+- Popups sized to their content and moved when a chain step was picked, so
+  the next click could miss. The view's layout is now fixed.
+- In a small terminal a popup lost its details, its keys, its scroll
+  position or its bottom edge.
+- A prompt Pi shows while a popup is open (a confirmation, a choice) was
+  hidden behind it. The view steps aside until the prompt is answered.
+- The subagent inspector could open twice; it now opens one at a time, like
+  the other popups.
+- `/jobs <id>` took two Enters when the id was already complete.
+
 ## 0.11.3 - 2026-09-29
 
 ### Fixed
