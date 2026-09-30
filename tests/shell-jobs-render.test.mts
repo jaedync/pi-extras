@@ -299,6 +299,40 @@ describe("job rendering", () => {
 		assert.strictEqual(band.jobOutcome(job), "aborted");
 	});
 
+	test("a start row is a chip set in from the edge, as wide as its words, tinted by the job's state", () => {
+		const theme = quiet();
+		const bgStart = (line: string) => [...line.matchAll(/\x1b\[48;2;[\d;]+m/g)].map((match) => match[0]);
+		const lastTinted = (line: string) => {
+			// Columns up to the last one drawn on a tint: the chip's right edge.
+			let column = 0, edge = -1, tinted = false;
+			for (const piece of line.split(/(\x1b\[[\d;]*m)/)) {
+				if (piece.startsWith("\x1b")) { if (piece.startsWith("\x1b[48;")) tinted = true; else if (piece === "\x1b[49m" || piece === "\x1b[0m") tinted = false; continue; }
+				for (const _ of piece) { if (tinted) edge = column; column++; }
+			}
+			return edge;
+		};
+		const job = makeJob({ title: "Run unit tests", startedAt: 1000 });
+		const running = render.renderStartCall({ command: "npm test" }, theme as any, {}, () => job, () => 9000).render(80)[0]!;
+		const words = bare([running])[0]!;
+		assert.ok(words.startsWith("   \u21b3 Run unit tests  in background"), JSON.stringify(words));
+		assert.strictEqual(lastTinted(running), band.CHIP_INDENT + " \u21b3 Run unit tests  in background ".length - 1, "the tint ends with the words");
+		assert.strictEqual(new Set(bgStart(running)).size, 1, "one tint across the chip");
+		const tintOf = (over: object) => bgStart(render.renderStartCall({ command: "npm test" }, theme as any, {}, () => makeJob({ title: "Run unit tests", startedAt: 1000, ...over }), () => 9000).render(80)[0]!)[0];
+		const ok = tintOf({ state: "done", code: 0, endedAt: 40_000 });
+		const failed = tintOf({ state: "done", code: 2, endedAt: 4000 });
+		assert.ok(new Set([bgStart(running)[0], ok, failed]).size === 3, "running, done and failed chips differ");
+		contains(bare(render.renderStartCall({ command: "npm test" }, theme as any, {}, () => makeJob({ title: "Run unit tests", startedAt: 1000, state: "done", code: 0, endedAt: 40_000 }), () => 90_000).render(80))[0], "done  39.0s");
+	});
+
+	test("a narrow chip cuts its title and keeps its status whole", () => {
+		const job = makeJob({ title: "Run the whole integration suite against staging", startedAt: 1000, state: "done", code: 2, endedAt: 4000 });
+		const line = bare(render.renderStartCall({ command: "x" }, quiet() as any, {}, () => job, () => 9000).render(40))[0]!;
+		assert.ok(line.includes("\u2026") && line.trimEnd().endsWith("exit 2  3.0s"), JSON.stringify(line));
+		assert.ok(line.trimEnd().length <= 39);
+		const writing = bare(render.renderStartCall({ command: "make", title: "Build" }, quiet() as any, { isPartial: true, executionStarted: false }).render(40))[0]!;
+		assert.strictEqual(writing.trim(), "\u21b3 Build");
+	});
+
 	test("a shell_job row names the operation and the job by title when it knows it", () => {
 		const text = (segs: { text: string }[]) => segs.map((seg) => seg.text).join("");
 		assert.strictEqual(text(render.jobCallSegs({ op: "list" })), "shell_job list");

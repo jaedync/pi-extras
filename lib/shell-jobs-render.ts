@@ -14,7 +14,7 @@ import { keyHint, type MessageRenderer, type Theme } from "@earendil-works/pi-co
 import { renderBand, type Seg } from "./band/band.ts";
 import { paletteFrom } from "./band/palette.ts";
 import { bodyBackground, onBackground } from "./band/surface.ts";
-import { factsOf, jobBand, type JobFacts } from "./shell-jobs-band.ts";
+import { factsOf, jobBand, jobChip, type JobFacts } from "./shell-jobs-band.ts";
 import { DURATION_PATTERN, formatDuration, sanitizeControl, titlePreview } from "./shell-jobs-core.ts";
 import type { Job } from "./shell-jobs-process.ts";
 
@@ -176,26 +176,19 @@ function startFacts(args: unknown): JobFacts {
 }
 
 /**
- * The `shell_job_start` row: one band naming the job. It follows the job it
- * started while this session owns it; a resumed row, whose job belongs to an
- * earlier session, just says it ran in the background.
+ * The `shell_job_start` row: a chip naming the job (jobChip). It follows the
+ * job it started while this session owns it; a resumed row, whose job
+ * belongs to an earlier session, just says it ran in the background.
  */
 export function renderStartCall(args: unknown, theme: Theme, context?: RowContext, job: () => Job | undefined = () => undefined, now: () => number = Date.now): Component {
 	return new Lines((width) => {
 		const live = job();
-		if (live !== undefined) return [jobBand(theme, factsOf(live), { width, now: now(), view: "calm" })];
+		if (live !== undefined) return [jobChip(theme, factsOf(live), { width, now: now() })];
 		const facts = startFacts(args);
-		if (context?.isPartial && !context.executionStarted) {
-			const title = facts.title ?? facts.command;
-			return [renderBand(theme, paletteFrom(theme), { width, phase: { kind: "writing" }, segs: title ? jobBandSegs(facts) : [], rail: [], clockMs: now() })];
-		}
-		if (context?.isError) return [renderBand(theme, paletteFrom(theme), { width, phase: { kind: "done", outcome: "fail", sinceMs: Number.POSITIVE_INFINITY }, segs: jobBandSegs(facts), rail: [{ text: "not started", color: "error" }], clockMs: now() })];
-		return [jobBand(theme, facts, { width, now: now(), view: "calm" })];
+		if (context?.isPartial && !context.executionStarted) return [jobChip(theme, facts, { width, now: now(), state: "writing" })];
+		if (context?.isError) return [jobChip(theme, facts, { width, now: now(), state: "unstarted" })];
+		return [jobChip(theme, facts, { width, now: now() })];
 	});
-}
-
-function jobBandSegs(facts: JobFacts): Seg[] {
-	return facts.title !== null ? [{ text: facts.title, color: "text", bold: true }] : [{ text: "$ ", color: "accent", bold: true }, { text: facts.command.replace(/\s+/g, " ").trim(), color: "text" }];
 }
 
 /** The start result says where the job runs and logs; the row shows it only for an error, or expanded. */

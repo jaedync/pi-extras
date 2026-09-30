@@ -283,10 +283,13 @@ no clicks to the footer, `/tool-display count steps` does the same.
 
 **Shell Jobs** use the same bands. A job is named after its title
 (`Run unit tests` becomes `run-unit-tests`), and the model is asked to call it
-by its title when talking to you. While a job runs, its row in the transcript
-says it is running in the background, and the job's band above the editor is
-the one that moves. When it finishes, its completion is one band with how it
-ended and how long it took; click it for the output. Click a running job's row
+by its title when talking to you. Starting a job leaves a small chip in the
+transcript rather than a full-width row, `↳ Run unit tests  in background`,
+so handing work off reads apart from calls that ran in place. The chip stays
+still; the job's band above the editor is the one that moves. When the job
+ends the chip takes its outcome (green `done`, red `exit 2`, gray `stopped`)
+and time, and its completion is one band with how it ended and how long it
+took; click it for the output. Click a running job's row
 or its band above the editor to open its live log; Esc or a click outside
 closes it.
 

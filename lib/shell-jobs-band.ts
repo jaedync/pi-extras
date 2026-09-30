@@ -1,14 +1,18 @@
 /**
  * shell-jobs-band: a job drawn as a header band, the way Tool Display draws
- * a tool call. The same band heads the widget row, the start row, the
- * completion message and the inspector, so a job looks alike everywhere.
+ * a tool call. The same band heads the widget row, the completion message
+ * and the inspector, so a job looks alike everywhere.
  *
- * A job has one live indicator: the widget row above the editor animates
- * while the job runs, and the start row in the transcript stays calm, saying
- * only that the job is in the background, until it ends.
+ * The start row in the transcript is a chip instead (jobChip): only as wide
+ * as its words and set in from the edge, so handing a job off reads apart
+ * from the full-width rows of calls that ran in place. A job has one live
+ * indicator, the widget row above the editor; the chip stays still, saying
+ * the job is in the background, and takes the job's outcome when it ends.
  */
-import { formatTime, renderBand, timeSeg, type BandPhase, type Motion, type Outcome, type Seg } from "./band/band.ts";
-import { paletteFrom, type BandTheme } from "./band/palette.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { formatTime, paintLine, renderBand, timeSeg, type BandPhase, type Motion, type Outcome, type Seg } from "./band/band.ts";
+import { mix, type Rgb } from "./band/color.ts";
+import { paletteFrom, type BandTheme, type Palette } from "./band/palette.ts";
 import { commandPreview, titlePreview } from "./shell-jobs-core.ts";
 import { jobStatusText, type Job } from "./shell-jobs-process.ts";
 
@@ -106,4 +110,98 @@ export function factsOf(job: Job): JobFacts {
 		deliveryFailed: job.deliveryFailed,
 		claimed: job.claimed,
 	};
+}
+
+/** How a start chip reads: the job's own state, or the start call's while there is no job yet. */
+export type ChipState = "writing" | "unstarted" | "job";
+
+/** Where a start chip sits: set in from the edge, under the flow of full-width rows. */
+export const CHIP_INDENT = 2;
+const CHIP_GLYPH = "\u21b3 ";
+
+// How far a chip leans from the tool gray toward its hue; stronger than a band's, since a chip is small.
+const CHIP_TINT: Record<"running" | Outcome | "unknown" | "writing", [keyof Palette, number]> = {
+	running: ["accent", 0.16],
+	ok: ["success", 0.22],
+	fail: ["error", 0.26],
+	timeout: ["warning", 0.22],
+	aborted: ["muted", 0.12],
+	unknown: ["muted", 0.08],
+	writing: ["muted", 0.04],
+};
+
+function chipLook(facts: JobFacts, state: ChipState): { tint: keyof typeof CHIP_TINT; glyph: string } {
+	if (state === "writing") return { tint: "writing", glyph: "dim" };
+	if (state === "unstarted") return { tint: "fail", glyph: "error" };
+	if (facts.state === "unknown") return { tint: "unknown", glyph: "muted" };
+	if (facts.state !== "done") return { tint: "running", glyph: "accent" };
+	const outcome = jobOutcome(facts);
+	return { tint: outcome, glyph: outcome === "ok" ? "success" : outcome === "aborted" ? "muted" : "error" };
+}
+
+/** The words after the chip's title: where the job is, or how it ended and how long it took. */
+export function chipStatus(facts: JobFacts, now: number, state: ChipState = "job"): Seg[] {
+	if (state === "writing") return [];
+	if (state === "unstarted") return [{ text: "not started", color: "error" }];
+	if (facts.state === "unknown") return [{ text: "background job", color: "dim" }];
+	const took = facts.startedAt === undefined ? [] : [{ text: "  ", color: "dim" }, timeSeg((facts.endedAt ?? now) - facts.startedAt)];
+	if (facts.deliveryFailed) return [{ text: "not delivered", color: "warning" }, ...took];
+	if (facts.state === "done") {
+		const outcome = jobOutcome(facts);
+		const word: Seg = outcome === "ok" ? { text: "done", color: "muted" } : outcome === "aborted" ? { text: "stopped", color: "muted" } : { text: jobStatusText(facts as Job), color: "error" };
+		return [word, ...took];
+	}
+	return facts.state === "stopping" ? [{ text: "stopping", color: "warning" }] : [{ text: "in background", color: "muted" }];
+}
+
+const segsWidth = (segs: readonly Seg[]) => segs.reduce((sum, seg) => sum + visibleWidth(seg.text), 0);
+
+/** Segments cut to `room` columns, the last cut one ending in `…`. */
+function cutSegs(segs: readonly Seg[], room: number): Seg[] {
+	const out: Seg[] = [];
+	let left = room;
+	for (const seg of segs) {
+		const width = visibleWidth(seg.text);
+		if (width <= left) {
+			out.push(seg);
+			left -= width;
+			continue;
+		}
+		if (left > 0) out.push({ ...seg, text: `${[...seg.text].slice(0, Math.max(0, left - 1)).join("")}\u2026` });
+		break;
+	}
+	return out;
+}
+
+export interface JobChipOptions {
+	readonly width: number;
+	readonly now: number;
+	readonly state?: ChipState;
+}
+
+/**
+ * The start row's chip: `↳ title  status`, on a tint of the job's state. The
+ * status is kept whole and the title cut when the line is narrow.
+ */
+export function jobChip(theme: BandTheme, facts: JobFacts, options: JobChipOptions): string {
+	const state = options.state ?? "job";
+	const look = chipLook(facts, state);
+	const status = chipStatus(facts, options.now, state);
+	const glyph: Seg = { text: CHIP_GLYPH, color: look.glyph, bold: true };
+	const gap: Seg[] = status.length > 0 ? [{ text: "  ", color: "dim" }] : [];
+	const room = Math.max(1, options.width - CHIP_INDENT - 1);
+	// A space either side of the words keeps them off the chip's edges.
+	const fixed = 1 + visibleWidth(CHIP_GLYPH) + segsWidth(gap) + segsWidth(status) + 1;
+	const title = cutSegs(jobSegs(facts), Math.max(1, room - fixed));
+	const segs = cutSegs([{ text: " ", color: "text" }, glyph, ...title, ...gap, ...status, { text: " ", color: "text" }], room);
+	const end = CHIP_INDENT + segsWidth(segs);
+	const palette = paletteFrom(theme);
+	const [hue, amount] = CHIP_TINT[look.tint];
+	const tint: Rgb | undefined = palette ? mix(palette.base, palette[hue] as Rgb, amount) : undefined;
+	return paintLine(theme, palette, {
+		width: options.width,
+		left: segs,
+		indent: CHIP_INDENT,
+		...(tint ? { bgAt: (x: number) => (x >= CHIP_INDENT && x < end ? tint : undefined) } : {}),
+	});
 }
