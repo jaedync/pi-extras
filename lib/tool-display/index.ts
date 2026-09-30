@@ -40,6 +40,7 @@ import { forgetLate, lateRows, offeredRows, redrawLateMessages } from "../late-r
 import { markRow, rowKind, type RowKind } from "../tool-row.ts";
 import { canAdopt, installAdoption, prepareAdoption, rebuildRow, type RowRenderers } from "./adopt.ts";
 import { computerUseSpec, windowsUseSpec } from "./computer.ts";
+import { registerCompaction } from "./compaction.ts";
 import { editRenderers, readRenderers, writeRenderers } from "./files.ts";
 import { foreignRenderers, type ForeignTool } from "./foreign.ts";
 import type { Kit } from "./kit.ts";
@@ -176,6 +177,12 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		},
 	};
 
+	const compaction = registerCompaction(pi, {
+		enabled: () => settings.enabled,
+		now: () => deps.host.now(),
+		moreHint: () => kit.moreHint(),
+	});
+
 	const renderers: Record<ToolName, Renderers> = {
 		read: readRenderers(kit),
 		bash: bashRenderers(kit),
@@ -263,6 +270,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		restored.clear();
 		settings = deps.settings.read();
 		clock.setReduced(settings.motion === "reduced");
+		compaction.start(ctx);
 		// Rows are only drawn by the terminal UI; print, JSON and RPC runs keep Pi's tools untouched.
 		if (ctx.mode !== "tui") return;
 		ui = ctx.ui as unknown as PopupHost;
@@ -295,6 +303,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		flush();
 		clock.stop();
 		forgetLate();
+		compaction.stop();
 		undoThinking?.();
 		undoThinking = undefined;
 		undoAdoption?.();

@@ -247,6 +247,13 @@ read all of it, and again to go back; ctrl+t does the same for every block. `/to
 shows just the label, as Pi does, and `/tool-display thinking full` shows
 everything.
 
+**Compaction.** A purple header band shows the reason (`auto`, `manual` or
+`overflow`), tokens before and estimated tokens after (`~`), cost when known,
+and elapsed time. The first three summary lines sit under it on Pi's
+compaction purple. Click the row or use ctrl+o to read the full Markdown summary.
+Timing and sizes survive a session resume; older compactions show only their
+before size. Pi's separate billing notice remains when enabled.
+
 **Chained commands.** A bash command joined with `&&`, `||` or `;` is shown as
 its steps, each with its own status and time, so you can see which one failed
 and which never ran. The running step's line breathes gently, and each step
