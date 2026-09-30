@@ -2,6 +2,20 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.12.3 - 2026-09-30
+
+### Fixed
+
+- Starting a subagent ran every installed extension's setup for the child.
+  remote-pi then delivered the parent session's agent-network messages to the
+  newest child, and after one such delivery held later messages until the
+  parent's next turn ended, sometimes for hours. A child now loads only the
+  extensions that provide its tools, with the same tools as before.
+- A subagent's note to an idle main session sat unread until something else
+  woke main, usually the child's report minutes later. Notes now wake main
+  like questions and answers do. What the user types to a child directly is
+  still recorded without waking main.
+
 ## 0.12.2 - 2026-09-30
 
 ### Fixed
