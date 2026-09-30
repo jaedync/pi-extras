@@ -8,6 +8,7 @@ import { captureLimit, failureMessage, parseRateLimit, planWait, resumedMessage,
 import { waitForDelay, waitUI, type Wait } from "./wait.ts";
 import { createQuotaTransportGuard } from "./transport.ts";
 import { ANTHROPIC_HOSTS, type FirstEventPolicy } from "./first-event.ts";
+import { TransientBackoff } from "./transient.ts";
 
 export const RECOVERY_TYPE = "rate-limit-recovery";
 const HELP = "Usage: /rate-limit-recovery on|off|status|cancel";
@@ -26,6 +27,8 @@ export interface RecoveryOptions {
 	readonly role?: "main" | "subagent";
 	/** Overrides the configured stall watchdog; tests use fixture hosts and short timeouts. */
 	readonly firstEvent?: Partial<FirstEventPolicy>;
+	/** Jitter source for transient backoff; tests fix it. */
+	readonly random?: () => number;
 }
 interface Pending { readonly limit: CapturedLimit; readonly eligible: boolean }
 interface Active { readonly controller: AbortController; readonly ctx: ExtensionContext; readonly scope: string }
@@ -47,6 +50,7 @@ export class Recovery {
 	private generation = 0;
 	private limited: CapturedLimit | undefined;
 	private readonly transport: ReturnType<typeof createQuotaTransportGuard>;
+	private readonly transient: TransientBackoff;
 	private stopped = false;
 	private unsupportedTransport = false;
 
@@ -63,6 +67,14 @@ export class Recovery {
 			if (code === "unsupported-mixed-api" || code === "unsupported-default-model-api") this.unsupportedTransport = true;
 			operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `transport protection: ${code}`);
 		} });
+		this.transient = new TransientBackoff({
+			budgetMs: () => this.config.transientMaxWaitSeconds * 1000,
+			wait: this.wait,
+			...(options.random ? { random: options.random } : {}),
+			ui: (ctx, who, resumeAtMs, cancel) => this.role === "main" && ctx.mode === "tui" && ctx.hasUI
+				? waitUI(ctx, { provider: who }, { resumeAtMs }, Date.now, cancel, (remaining) => `Rate limited on ${who} \u00b7 retrying in ${remaining}`) : undefined,
+			onFailure: (error) => operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `transient wait failed (${error instanceof Error ? error.name : "unknown error"})`),
+		});
 	}
 
 	register(): void {
@@ -71,11 +83,16 @@ export class Recovery {
 		pi.on("turn_end", (event, ctx) => this.turnEnd(event, ctx));
 		pi.on("agent_before_settle", (event) => this.beforeSettle(event));
 		// Queued work or another extension can already have continued the run.
-		pi.on("context", (_event, ctx) => { this.ready = false; this.protectTransport(ctx, ctx.model, true); });
-		pi.on("model_select", (event, ctx) => { this.protectTransport(ctx, event.model); if (this.active && !sameScope(this.active.scope, event.model)) this.cancel(); });
+		pi.on("context", (_event, ctx) => { this.ready = false; this.transient.consumeReady(); this.protectTransport(ctx, ctx.model, true); });
+		pi.on("model_select", (event, ctx) => {
+			this.protectTransport(ctx, event.model);
+			if (this.active && !sameScope(this.active.scope, event.model)) this.cancel();
+			// Switching away from a limited model is a request to go on with the new one now.
+			this.transient.skip();
+		});
 		pi.on("cache_warming_decision", (_event, ctx) => this.limited?.resetAtMs !== undefined && this.limited.resetAtMs > this.now() && sameScope(this.limited.scope, ctx.model) ? { action: "stop" } : undefined);
-		pi.on("before_agent_start", (_event, ctx) => { this.attempts = 0; this.spentMs = 0; this.pending = undefined; this.ready = false; this.protectTransport(ctx, ctx.model, true); });
-		pi.on("session_start", (_event, ctx) => { this.stopped = false; this.cancel(); this.releaseTransport(); this.config = loadConfig(this.file, this.env); this.generation++; this.limited = undefined; this.protectTransport(ctx); });
+		pi.on("before_agent_start", (_event, ctx) => { this.attempts = 0; this.spentMs = 0; this.pending = undefined; this.ready = false; this.transient.reset(); this.protectTransport(ctx, ctx.model, true); });
+		pi.on("session_start", (_event, ctx) => { this.stopped = false; this.cancel(); this.transient.reset(); this.releaseTransport(); this.config = loadConfig(this.file, this.env); this.generation++; this.limited = undefined; this.protectTransport(ctx); });
 		pi.on("session_shutdown", () => { this.stopped = true; this.cancel(); this.generation++; this.limited = undefined; this.releaseTransport(); });
 		if (this.role !== "subagent") pi.registerCommand("rate-limit-recovery", {
 			description: "Opt in to quota hibernation; on|off|status|cancel",
@@ -121,6 +138,8 @@ export class Recovery {
 	private messageEnd(event: MessageEndEvent, ctx: ExtensionContext): MessageEndEventResult | undefined {
 		if (this.stopped || event.message.role !== "assistant") return undefined;
 		this.pending = undefined; this.ready = false;
+		const transient = this.transient.messageEnd(event.message, ctx);
+		if (transient) return { message: transient };
 		if (event.message.stopReason !== "error") return undefined;
 		const parsed = parseRateLimit(event.message.errorMessage);
 		if (!parsed) return undefined;
@@ -136,6 +155,7 @@ export class Recovery {
 
 	private cancel(): void {
 		this.ready = false; this.pending = undefined;
+		this.transient.cancel();
 		this.active?.controller.abort();
 		this.active?.ctx.abort();
 	}
@@ -178,6 +198,10 @@ export class Recovery {
 	private async turnEnd(event: TurnEndEvent, ctx: ExtensionContext): Promise<TurnEndEventResult | undefined> {
 		const candidate = this.pending;
 		this.pending = undefined;
+		if (!this.stopped) {
+			const resumed = await this.transient.turnEnd(event, ctx);
+			if (resumed) return resumed;
+		}
 		if (this.stopped || !candidate?.eligible || event.message.role !== "assistant" || event.message.stopReason !== "error") return undefined;
 		const plan = planWait(candidate.limit, this.config, this.spentMs, this.attempts, this.now());
 		if (typeof plan === "string") return undefined;
@@ -189,7 +213,8 @@ export class Recovery {
 	}
 
 	private beforeSettle(event: AgentBeforeSettleEvent): { continue: true } | undefined {
-		const shouldResume = this.ready;
+		const transientReady = this.transient.consumeReady();
+		const shouldResume = this.ready || transientReady;
 		// Consume before preparation: auth/routing can fail before context fires.
 		this.ready = false;
 		return shouldResume && event.context.canContinue ? { continue: true } : undefined;
@@ -204,6 +229,6 @@ export class Recovery {
 			try { this.config = saveConfig({ autoWait: this.config.autoWait }, this.file); }
 			catch { ctx.ui.notify("Could not save quota recovery settings. Check permissions on pi-extras.json. The choice applies to this session only.", "error"); return; }
 		} else if (command !== "status") { ctx.ui.notify(HELP, "warning"); return; }
-		ctx.ui.notify(`Automatic quota waiting ${this.config.autoWait ? "on" : "off"} (interactive main sessions only). Budget ${this.config.maxWaitSeconds}s, at most ${this.config.maxRecoveries} recoveries per run. Anthropic subscription stall retry ${this.config.anthropicFirstEventSeconds ? `after ${this.config.anthropicFirstEventSeconds}s of pings` : "off"}.${this.active ? " Currently hibernating." : ""}`, "info");
+		ctx.ui.notify(`Automatic quota waiting ${this.config.autoWait ? "on" : "off"} (interactive main sessions only). Budget ${this.config.maxWaitSeconds}s, at most ${this.config.maxRecoveries} recoveries per run. Anthropic subscription stall retry ${this.config.anthropicFirstEventSeconds ? `after ${this.config.anthropicFirstEventSeconds}s of pings` : "off"}. Temporary rate limits ${this.config.transientMaxWaitSeconds ? `retried for up to ${this.config.transientMaxWaitSeconds}s` : "left to Pi"}.${this.active ? " Currently hibernating." : ""}${this.transient.waiting ? " Currently waiting out a rate limit." : ""}`, "info");
 	}
 }

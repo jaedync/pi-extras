@@ -29,14 +29,15 @@ export function isCancelKey(data: string): boolean {
 	return !isKeyRelease(data) && (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c")));
 }
 
-export function waitUI(ctx: ExtensionContext, limit: CapturedLimit, plan: WaitPlan, now: () => number, cancel: () => void): { tick(): void; close(): void } {
+export function waitUI(ctx: ExtensionContext, limit: Pick<CapturedLimit, "provider">, plan: Pick<WaitPlan, "resumeAtMs"> & Partial<WaitPlan>, now: () => number, cancel: () => void,
+	line: (remaining: string) => string = (remaining) => `Hibernating ${limit.provider} · ${remaining} remaining`): { tick(): void; close(): void } {
 	let render = () => {};
 	ctx.ui.setWidget(WIDGET, (tui, theme) => {
 		render = () => tui.requestRender();
 		return {
 			render(width: number) {
 				const remaining = formatDuration(Math.max(0, plan.resumeAtMs - now()), true);
-				const text = `Hibernating ${limit.provider} · ${remaining} remaining · Esc / Ctrl+C cancels`;
+				const text = `${line(remaining)} · Esc / Ctrl+C cancels`;
 				return [truncateToWidth(theme.fg("warning", text), Math.max(1, width), "…")];
 			},
 			invalidate() {},

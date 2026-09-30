@@ -2,6 +2,7 @@
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { parseRateLimit } from "./core.ts";
 import { guardFirstEvent, type FirstEventPolicy } from "./first-event.ts";
+import { parseRetryAfter, recordRetryHint } from "./retry-hint.ts";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const INSPECTION_MS = 500;
@@ -109,6 +110,8 @@ function guardedOptions<T extends Pick<StreamOptions, "fetch" | "signal">>(api: 
 	return { ...options, fetch: async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
 		const response = await (options?.fetch ?? globalThis.fetch)(input, init);
 		if (response.status !== 429) return guardFirstEvent(api, input, init, response, firstEvent(), init?.signal ?? undefined);
+		const hint = parseRetryAfter(response.headers);
+		if (hint !== undefined) recordRetryHint(options?.signal, hint);
 		const signals = [init?.signal, options?.signal, input instanceof Request ? input.signal : undefined].filter((signal): signal is AbortSignal => Boolean(signal));
 		const signal = signals.length ? AbortSignal.any(signals) : undefined;
 		const limit = jsonQuota(await inspect(response, signal, warn));

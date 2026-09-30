@@ -79,9 +79,23 @@ It uses cancellable in-process timers, not background shell processes or a
 persistent service. The wait budget is at most five hours total per user-started
 run, margins included. Reload, replacement and shutdown cancel; no saved timer
 is restarted. Clock rollback never refunds an already completed timer; its
-resume notice labels elapsed time as a lower bound. Native pi-extras children always load a detection-only guard and
-fail fast, regardless of inherited settings. Other noninteractive sessions
-also never auto-wait.
+resume notice labels elapsed time as a lower bound. Native pi-extras children always load a quota guard that never
+hibernates and fail fast on quotas, regardless of inherited settings. Other
+noninteractive sessions also never auto-wait for quotas.
+
+Short rate limits (OpenRouter upstream limits and other 429 or rate-limit
+errors without a structured reset, excluding quota, billing and usage-limit
+wording) use a separate bounded backoff in every session, children included:
+jittered 5 to 60 s waits, at most `transientMaxWaitSeconds` (default 180, at
+most 900) per streak of consecutive limits. The fetch guard reads only a 429's
+`Retry-After`/`Retry-After-Ms` header and hands the number, as a minimum wait,
+to the next decision in the same run within 30 s; parallel sessions never see
+each other's hints, and a hint from a quota error is discarded. No body or
+credential is read for this. The
+replacement error names the provider and model, never provider prose, and uses
+Pi's non-transient class so Pi's own retry does not also run. Waits are
+cancellable in-process timers; the failed attempt is omitted from the retried
+context. No extra requests are made beyond the retried one.
 
 The `rateLimitRecovery` section of `pi-extras.json` stores policy. Pause metadata
 and the resumed timing message are written to the current session. That message
@@ -323,8 +337,8 @@ Children are Pi sessions in the same process, with your permissions. A child
 gets the parent's active tools except mesh, goal, desktop-control, background
 job and subagent tools, and `childToolsExclude`; read-only children lose
 `bash`, `edit` and `write`. Only the extensions that provide one of its tools
-load into a child, plus a detection-only quota guard that never sleeps or
-resumes automatically. Your context files (`AGENTS.md`) and skills load as they do
+load into a child, plus a quota guard that never hibernates for quotas; it
+waits out short rate limits within the bounded backoff described above. Your context files (`AGENTS.md`) and skills load as they do
 for the parent. Children use the parent's model credentials.
 
 Child sessions are written under

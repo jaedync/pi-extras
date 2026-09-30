@@ -26,7 +26,7 @@ can still conflict.
 | --- | --- |
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits, optional linked subagent usage |
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
-| Rate-limit Recovery | `/rate-limit-recovery`, opt-in main-session hibernation for provider cooldowns; subagents fail fast with reset guidance |
+| Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
 | Phase Spinner | Working phases, tokens/sec, time to first token, elapsed time, and compaction/retry status with its own timer in the editor border |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
 | Subagents | `subagent` and `message` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, with a live band per agent |
@@ -74,7 +74,8 @@ the package. Removing it does not remove your credentials or change other packag
   `resumeMarginSeconds` (default `10`), `maxWaitSeconds` (default and hard maximum
   `18000`, five hours total per user-started run), `maxRecoveries` (default `3`,
   maximum `10`), `anthropicFirstEventSeconds` (default `45`, `10` to `600`, `0`
-  disables the Anthropic stall retry). `/rate-limit-recovery on|off` persists the choice; commands
+  disables the Anthropic stall retry), `transientMaxWaitSeconds` (default `180`,
+  `10` to `900`, `0` leaves short rate limits to Pi's own retry). `/rate-limit-recovery on|off` persists the choice; commands
   take precedence for the current session. `PI_RATE_LIMIT_RECOVERY_ROLE=subagent`
   marks external child sessions as detection-only.
 - `PI_SUBAGENTS=off`: disable Subagents. `subagents` in `pi-extras.json`, all
@@ -184,6 +185,21 @@ real event follows the headers within `anthropicFirstEventSeconds` (45 s), the
 request fails as a timeout and Pi's normal auto-retry sends it again. API-key
 requests, proxies such as a local gateway, and other providers are untouched.
 
+Short rate limits get their own backoff, on by default in every session,
+subagents included: OpenRouter's "temporarily rate-limited upstream" and other
+429 or rate-limit errors without a structured reset. Pi's own retry gives up
+after about 14 seconds, while these usually clear within a minute. The extension
+waits 5, 10, 20, 40, then 60 seconds (each ±20% so parallel subagents spread
+out, and never less than the 429's `Retry-After`), for up to
+`transientMaxWaitSeconds` (180 s) per streak, then sends the request again. A
+countdown shows in interactive sessions; Esc cancels, and switching models
+resumes at once with the new model. If the limit outlasts the budget, the run
+ends with guidance. Quota, billing and usage-limit errors are not treated as
+short limits. A limit reported inside an already started stream is recognized
+only by its message text, because Pi keeps no status code or structured reset
+for it: OpenRouter's "rate-limited upstream" wording gets this backoff, while a
+generic message such as "Provider returned error" stays with Pi's own retry.
+
 Recognized quota errors remain errors and are classified as non-transient so
 Pi does not run a competing short retry loop. This recovery policy is independent
 of Pi's `retry.enabled`; ordinary transient failures retain Pi's native retries.
@@ -202,12 +218,13 @@ If waiting is off, timing is missing, or the budget is exhausted, the session
 fails with reset guidance instead. Provider reset times are estimates.
 
 **Children never hibernate.** The pi-extras child launcher installs an explicit
-detection-only guard, even when the parent has opted in: one quota rejection
+quota guard that never sleeps, even when the parent has opted in: one quota rejection
 fails the child, frees its slot, and tells the parent the provider, expected
 reset time and time remaining. Hidden transport retries are suppressed on the
 guarded native HTTP paths described above; custom or unsupported adapter retries
 remain owned by those adapters. Print, JSON and RPC sessions likewise never
 auto-wait, so external noninteractive children cannot inherit a long sleep.
+The bounded short-limit backoff above still applies to them.
 External launchers that disable extensions must explicitly load detection;
 this package cannot intercept requests made outside Pi's extension runtime.
 The extension makes no quota polls of its own and pauses cache warming for

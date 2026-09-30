@@ -111,7 +111,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Unknown model ${record.model}.`);
 			const { tools, customTools, extensionPaths = [] } = deps.toolsFor(record);
 			const wanted = new Set(tools);
-			const guard = createChildRateLimitGuard({ onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
+			const guard = createChildRateLimitGuard({ configFile: join(agentDir, "pi-extras.json"), onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
 			const settingsManager = sdk.SettingsManager.create(cwd, agentDir);
 			const loader = new sdk.DefaultResourceLoader({
 				cwd, agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
