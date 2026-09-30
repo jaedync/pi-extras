@@ -13,6 +13,15 @@ import type { Screen } from "./screen.ts";
  * not in host.ps1, because antivirus delays scripts that contain it.
  */
 export const LAUNCHER = "$b='__PAYLOAD__';$g=New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,[Convert]::FromBase64String($b))),[IO.Compression.CompressionMode]::Decompress);iex (New-Object IO.StreamReader($g)).ReadToEnd()";
+/**
+ * Typed instead of LAUNCHER when the bootstrap can go over Hyper-V key-value
+ * exchange: it joins the host's items, checks them against the hash typed with
+ * it, and runs them with the key it carries. The items reach the guest in about
+ * two seconds; typing this takes about a minute. A refusal clears the key off the
+ * screen and reports itself the way the bootstrap reports a failure.
+ */
+export const KVP_INCOMPLETE = /arrived incomplete over key-value exchange/;
+export const STUB = "$k='__KEY__';$p=Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Virtual Machine\\External';$z=[Convert]::FromBase64String(-join(0..__LAST__|%{$p.\"PiWindowsUse-__RUN__-$_\"}));if((-join([Security.Cryptography.SHA256]::Create().ComputeHash($z)|%{$_.ToString('x2')}))-ne'__SHA__'){cls;sp 'HKLM:\\SOFTWARE\\Microsoft\\Virtual Machine\\Guest' PiWindowsUse '__RUN__ FAIL the installer arrived incomplete over key-value exchange';throw 'incomplete'};iex (New-Object IO.StreamReader((New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,$z)),[IO.Compression.CompressionMode]::Decompress)))).ReadToEnd()";
 /** An administrator's PowerShell window's title, which OCR reads with a letter off at times ("Wndows"). */
 const ADMIN_SHELL = /Administrator\W+(?:\w+\s+)?Power\s?Shell/i;
 /** PowerShell's prompt at the start of a line: it reads input from here on. */

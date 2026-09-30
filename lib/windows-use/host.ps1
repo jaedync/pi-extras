@@ -321,12 +321,79 @@ function Open-AdminShell([string]$vm) {
     @{ ok = $true }
 }
 
+# ---- Setup payload --------------------------------------------------------------
+
+# A host-to-guest key-value item holds up to 1023 characters (1100 was refused
+# live). The guest shows them in HKLM\SOFTWARE\Microsoft\Virtual Machine\External,
+# which every signed-in guest user can read: they never carry the key.
+$kvpChunk = 1000
+$payloadPrefix = 'PiWindowsUse-'
+
+function Compress-Text([string]$text) {
+    $ms = New-Object IO.MemoryStream
+    $gz = New-Object IO.Compression.GZipStream($ms, [IO.Compression.CompressionMode]::Compress)
+    $raw = [Text.Encoding]::UTF8.GetBytes($text)
+    $gz.Write($raw, 0, $raw.Length); $gz.Close()
+    , $ms.ToArray()
+}
+function Get-Sha256([byte[]]$bytes) {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { -join ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) } finally { $sha.Dispose() }
+}
+function Get-KvpComponent([string]$vm) { Get-CimAssociatedInstance -InputObject (Get-Machine $vm) -ResultClassName Msvm_KvpExchangeComponent }
+# The guest's data exchange service answers: what the host puts in reaches the guest.
+function Test-KvpReady([string]$vm) {
+    try { $k = Get-KvpComponent $vm; [bool]($k -and $k.EnabledState -eq 2 -and @($k.OperationalStatus)[0] -eq 2) } catch { $false }
+}
+# Adds or removes host-to-guest items. Hyper-V may finish the change as a job.
+function Invoke-HostKvp([string]$vm, [string]$method, [Collections.IDictionary]$items) {
+    $id = (Get-Machine $vm).Name
+    $target = Get-WmiObject -Namespace $ns -Class Msvm_ComputerSystem -Filter "Name='$id'"
+    $service = Get-WmiObject -Namespace $ns -Class Msvm_VirtualSystemManagementService
+    $texts = foreach ($name in $items.Keys) {
+        $item = ([WMIClass]"\\.\$($ns):Msvm_KvpExchangeDataItem").CreateInstance()
+        $item.Name = $name; $item.Data = [string]$items[$name]; $item.Source = 0
+        $item.PSBase.GetText([Management.TextFormat]::CimDtd20)
+    }
+    $r = $service.$method($target, [string[]]@($texts))
+    if ($r.ReturnValue -eq 4096) {
+        $deadline = (Get-Date).AddSeconds(30)
+        do { Start-Sleep -Milliseconds 100; $job = [WMI]$r.Job } while ($job.JobState -in 3, 4 -and (Get-Date) -lt $deadline)
+        if ($job.JobState -ne 7) { throw (Get-Failure $method $job.ErrorCode) }
+    } elseif ($r.ReturnValue -ne 0) { throw (Get-Failure $method $r.ReturnValue) }
+}
+# An earlier setup's payload: not secret, but no use to anyone either.
+function Remove-SetupPayloads([string]$vm) {
+    $settings = Get-CimAssociatedInstance -InputObject (Get-KvpComponent $vm) -ResultClassName Msvm_KvpExchangeComponentSettingData
+    $old = [ordered]@{}
+    foreach ($text in @($settings.HostExchangeItems | Where-Object { $_ })) {
+        $name = [string](([xml]$text).INSTANCE.PROPERTY | Where-Object { $_.NAME -eq 'Name' }).VALUE
+        if ($name.StartsWith($payloadPrefix)) { $old[$name] = '' }
+    }
+    if ($old.Count) { Invoke-HostKvp $vm 'RemoveKvpItems' $old }
+}
+# Puts the compressed installer into key-value items and returns the stub line,
+# with its key still a placeholder, that reads them back, checks and runs it.
+function Send-SetupPayload([string]$vm, [string]$run, [string]$script, [string]$stub) {
+    $bytes = Compress-Text $script
+    $b64 = [Convert]::ToBase64String($bytes)
+    $items = [ordered]@{}
+    for ($i = 0; $i * $kvpChunk -lt $b64.Length; $i++) {
+        $items["$payloadPrefix$run-$i"] = $b64.Substring($i * $kvpChunk, [Math]::Min($kvpChunk, $b64.Length - $i * $kvpChunk))
+    }
+    try { Remove-SetupPayloads $vm } catch { [Console]::Error.WriteLine("old setup payloads left on '$vm': $($_.Exception.Message)") }
+    Invoke-HostKvp $vm 'AddKvpItems' $items
+    $stub.Replace('__RUN__', $run).Replace('__LAST__', "$($items.Count - 1)").Replace('__SHA__', (Get-Sha256 $bytes)) + "`n"
+}
+
 # Installs Windows-MCP by typing the bootstrap, compressed, into the caller's
 # launcher line, at the administrator's PowerShell Open-AdminShell opened. The
 # launcher arrives as data rather than living in this file: antivirus holds up
 # scripts that decode and run payloads for many seconds before they start.
-# Returns once typing is queued; the caller waits for the port.
-function Invoke-Setup([string]$vm, [int]$port, [string]$launcher, [bool]$elevated) {
+# With the caller's stub and a working key-value exchange, the bootstrap goes
+# over that instead and only the stub is typed: about 450 characters, not 3,400,
+# at eight a second. Returns once typing is queued; the caller waits for the port.
+function Invoke-Setup([string]$vm, [int]$port, [string]$launcher, [bool]$elevated, [string]$stub, [string]$relay) {
     if (-not $launcher.Contains('__PAYLOAD__')) { throw 'setup needs a launcher containing __PAYLOAD__' }
     $m = Get-RunningMachine $vm
     # Disable sensitive command history and per-character line redraws only
@@ -340,18 +407,21 @@ function Invoke-Setup([string]$vm, [int]$port, [string]$launcher, [bool]$elevate
     # Comment lines go: paced console input makes every extra character costly.
     $lines = (Get-Content -Path (Join-Path $PSScriptRoot 'guest-bootstrap.ps1')) | Where-Object { $_ -notmatch '^\s*#' }
     $runLevel = if ($elevated) { 'Highest' } else { 'Limited' }
-    $script = ($lines -join "`n").Replace('__KEY__', $key).Replace('__PORT__', "$port").Replace('__RUNLEVEL__', $runLevel).Replace('__RUN__', $run)
-    $ms = New-Object IO.MemoryStream
-    $gz = New-Object IO.Compression.GZipStream($ms, [IO.Compression.CompressionMode]::Compress)
-    $raw = [Text.Encoding]::UTF8.GetBytes($script)
-    $gz.Write($raw, 0, $raw.Length); $gz.Close()
-    $b64 = [Convert]::ToBase64String($ms.ToArray())
-    $line = $launcher.Replace('__PAYLOAD__', $b64) + "`n"
+    $script = ($lines -join "`n").Replace('__PORT__', "$port").Replace('__RUNLEVEL__', $runLevel).Replace('__RUN__', $run)
+    $line = $null; $via = 'typed'
+    if ($stub -and (Test-KvpReady $vm)) {
+        # The payload reads the key from the stub's $k, typed at the console only.
+        # The relay's install rides along: its 7 KB costs nothing here.
+        try { $line = (Send-SetupPayload $vm $run $script.Replace("'__KEY__'", '$k').Replace('__RELAY__', $relay) $stub).Replace('__KEY__', $key); $via = 'kvp' }
+        catch { [Console]::Error.WriteLine("setup payload for '$vm' couldn't go over key-value exchange, so all of it is typed: $($_.Exception.Message)") }
+    }
+    # Typed, the relay's install would add minutes; the first call through the server puts it in instead.
+    if (-not $line) { $line = $launcher.Replace('__PAYLOAD__', [Convert]::ToBase64String((Compress-Text $script.Replace('__RELAY__', '').Replace('__KEY__', $key)))) + "`n" }
     # Enter follows the same sequential key-event path, so it cannot overtake text.
     # Commit when Enter is queued, before cleanup that can itself fail. The old
     # server must not masquerade as ready after the new install may have started.
     Send-Text $m $line { Set-Key $vm $key }
-    [ordered]@{ typed = $line.Length; port = $port; run = $run }
+    [ordered]@{ typed = $line.Length; port = $port; run = $run; via = $via }
 }
 
 # The "<run> <status>" the guest bootstrap last published over Hyper-V
@@ -451,7 +521,7 @@ $handlers = @{
     cad        = { param($p) Invoke-Checked (Get-Device (Get-RunningMachine $p.vm) 'Msvm_Keyboard') 'TypeCtrlAltDel' @{}; @{ ok = $true } }
     login      = { param($p) Invoke-Login $p.vm }
     adminShell = { param($p) Open-AdminShell $p.vm }
-    setup      = { param($p) Invoke-Setup $p.vm (Get-Port $p) ([string]$p.launcher) ($p.elevated -eq $true) }
+    setup      = { param($p) Invoke-Setup $p.vm (Get-Port $p) ([string]$p.launcher) ($p.elevated -eq $true) ([string]$p.stub) ([string]$p.relay) }
     probe      = { param($p) Test-Port $p.vm (Get-Port $p) }
     mcp        = { param($p) Send-Mcp $p.vm (Get-Port $p) ([string]$p.message) }
     relayAuth  = { param($p) Get-RelayAuth $p.vm }

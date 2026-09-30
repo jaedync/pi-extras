@@ -1,11 +1,13 @@
 /** Native checks use synthetic artifacts and query their own session; they never drive a real VM. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { SESSION_CHECK } from "../lib/windows-use/desktop-session.ts";
+import { STUB } from "../lib/windows-use/install.ts";
 import { readFrame, toPng } from "../lib/windows-use/frame.ts";
 import { hostFrame } from "./support/windows-frames.ts";
 
@@ -83,7 +85,7 @@ test("native console typing uses one paired TypeKey per character with settled g
 
 test("native setup prepares its shell and commits the key only after complete typing", native, () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
-	const code = host.slice(host.indexOf("function Invoke-Setup("), host.indexOf("# The \"<run> <status>\""));
+	const code = host.slice(host.indexOf("# ---- Setup payload"), host.indexOf("# The \"<run> <status>\""));
 	const fixture = `$ErrorActionPreference='Stop'; $PSScriptRoot='synthetic'; $script:activeKey='old'; $script:events=[Collections.Generic.List[string]]::new(); $script:failTyping=$FAIL; $script:failCleanup=$FAILCLEANUP;
 		function Get-RunningMachine { 'synthetic' }
 		function New-Key { 'new' }
@@ -113,6 +115,72 @@ test("native setup prepares its shell and commits the key only after complete ty
 			Set-Key 'synthetic' 'new'; if((Get-Key 'synthetic' $false) -ne 'new'){throw 'atomic fixture replacement failed'};
 			if(@(Get-ChildItem $dataDir -Filter '*.tmp').Count){throw 'temporary fixture left behind'}; 'fixture passed'
 		} finally { if(Test-Path $dataDir){[IO.Directory]::Delete($dataDir,$true)} }`), "fixture passed");
+});
+
+test("native setup sends the installer over key-value exchange and types only a stub that checks and runs it", native, () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	const code = host.slice(host.indexOf("# ---- Setup payload"), host.indexOf("# The \"<run> <status>\""));
+	// The real stub, pointed at a scratch HKCU key standing in for the guest's External key.
+	// Random, so it compresses too little to fit one item.
+	const filler = randomBytes(2250).toString("base64");
+	const scratch = `HKCU:\\Software\\pi-wu-kvp-fixture-${process.pid}`;
+	const status = `${scratch}-guest`;
+	const stub = STUB.replace("HKLM:\\SOFTWARE\\Microsoft\\Virtual Machine\\External", scratch).replace("HKLM:\\SOFTWARE\\Microsoft\\Virtual Machine\\Guest", status).replaceAll("'", "''");
+	assert.ok(!stub.includes("HKLM"), "the test never touches the machine's own keys");
+	// The code first: the mocks below replace its Hyper-V calls.
+	const fixture = (ready: string, tamper: string) => `$ErrorActionPreference='Stop'; $PSScriptRoot='synthetic'; $script:events=[Collections.Generic.List[string]]::new(); $script:items=[ordered]@{}
+		${code}
+		function Get-RunningMachine { 'synthetic' }
+		function New-Key { 'synthetic-key-0123' }
+		function Set-Key { param($vm,$key); $script:events.Add('commit') }
+		function Get-Content { '$key = ''__KEY__''; $port = __PORT__', '# a comment line', '''PAYLOAD-RAN '' + $key + '' '' + $port + '' ${filler}''' }
+		function Join-Path { 'synthetic' }
+		function Start-Sleep { }
+		function Test-KvpReady { ${ready} }
+		function Remove-SetupPayloads { $script:events.Add('remove-old') }
+		function Invoke-HostKvp { param($vm,$method,$items); $script:events.Add($method); foreach($n in $items.Keys){ $script:items[$n]=$items[$n] } }
+		function Send-Text { param($machine,$text,$onQueued); if($text -match 'remove-module psreadline'){ $script:events.Add('prepare'); return }; $script:events.Add('type'); $script:typed=$text; if($onQueued){& $onQueued} }
+		$r = Invoke-Setup 'synthetic' 8000 '__PAYLOAD__' $false '${stub}'
+		$out = $null
+		if ($r.via -eq 'kvp') {
+			New-Item '${scratch}' -Force | Out-Null; New-Item '${status}' -Force | Out-Null
+			try {
+				foreach($n in $script:items.Keys){ New-ItemProperty '${scratch}' -Name $n -Value $script:items[$n] -Force | Out-Null }
+				${tamper}
+				$out = try { [string](iex $script:typed) } catch { 'REFUSED ' + (Get-ItemProperty '${status}').PiWindowsUse }
+			} finally { Remove-Item '${scratch}','${status}' -Recurse -Force }
+		}
+		@{ via=$r.via; typed=$script:typed.Length; events=@($script:events.ToArray()); sizes=@($script:items.Values | % { $_.Length }); payload=$(if ($script:items.Count) { $z=[Convert]::FromBase64String((-join @($script:items.Values))); (New-Object IO.StreamReader((New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,$z)),[IO.Compression.CompressionMode]::Decompress)))).ReadToEnd() } else { '' }); out=$out } | ConvertTo-Json -Depth 4 -Compress`;
+	const kvp = JSON.parse(powershell(fixture("$true", "")));
+	assert.equal(kvp.via, "kvp");
+	assert.deepEqual(kvp.events, ["prepare", "remove-old", "AddKvpItems", "type", "commit"], "the items are in place before the stub's first key");
+	assert.ok(kvp.sizes.length >= 2 && kvp.sizes.every((n: number) => n <= 1000), `chunks ${kvp.sizes}`);
+	assert.ok(!kvp.payload.includes("synthetic-key") && !kvp.payload.includes("__KEY__"), "guest users can read these items; the key goes in the typed stub only");
+	assert.match(kvp.payload, /^\$key = \$k; \$port = 8000/);
+	assert.ok(kvp.typed < 700, `typed ${kvp.typed}, against about 3,400 for the whole installer`);
+	assert.equal(kvp.out, `PAYLOAD-RAN synthetic-key-0123 8000 ${filler}`);
+	const tampered = JSON.parse(powershell(fixture("$true", `Set-ItemProperty '${scratch}' -Name @($script:items.Keys)[0] -Value ('A' * 1000)`)));
+	assert.match(tampered.out, /^REFUSED [0-9a-f]{8} FAIL the installer arrived incomplete over key-value exchange$/, "reported the way the bootstrap reports a failure");
+	const typed = JSON.parse(powershell(fixture("$false", "")));
+	assert.equal(typed.via, "typed", "without a working key-value exchange, everything is typed as before");
+	assert.deepEqual(typed.events, ["prepare", "type", "commit"]);
+	assert.ok(typed.typed > 2000);
+});
+
+test("native reinstall keeps an installed 0.8.6+ release when the package index can't be reached", native, () => {
+	const bootstrap = readFileSync(new URL("../lib/windows-use/guest-bootstrap.ps1", import.meta.url), "utf8");
+	const step = bootstrap.slice(bootstrap.indexOf("    try { Invoke-Native { & $uv tool install"), bootstrap.indexOf("    $exe = Join-Path $bin"));
+	const outcome = (listed: string) => powershell(`$ErrorActionPreference='Stop'; $script:status=$null
+		function Invoke-Native { param($cmd,$what); throw "$what failed (2): client error (Connect)" }
+		function Set-Status { param($s); $script:status=$s }
+		$uv = { if ($args[0] -eq 'tool' -and $args[1] -eq 'list') { ${listed ? `'${listed}', '- windows-mcp.exe'` : "@()"} } }
+		try {
+${step}
+			'KEPT ' + $script:status
+		} catch { 'FAILED ' + $_.Exception.Message }`);
+	assert.match(outcome("windows-mcp v0.8.6"), /^KEPT kept windows-mcp v0\.8\.6, as installing failed: uv tool install windows-mcp failed \(2\)/);
+	assert.match(outcome("windows-mcp v0.8.12"), /^KEPT /);
+	for (const listed of ["windows-mcp v0.8.5", "windows-mcp v0.9.0", ""]) assert.match(outcome(listed), /^FAILED uv tool install windows-mcp failed \(2\)/, listed || "none installed");
 });
 
 test("native Windows OCR decodes a synthetic guest PNG with the original dimensions", native, () => {

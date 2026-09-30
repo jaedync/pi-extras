@@ -106,10 +106,10 @@ test("host.ps1 stays clear of what antivirus holds up, and fills in every bootst
 	assert.match(host, /ocr\s+= \{ param\(\$p\) Get-FrameText/, "the OCR module loads only when asked for");
 	assert.doesNotMatch(host.replace(/function Get-(?:Frame|Image)Text[\s\S]*?\n\}/g, ""), /ocr\.psm1/);
 	const placeholders = [...new Set(bootstrap.match(/__[A-Z]+__/g))].sort();
-	assert.deepEqual(placeholders, ["__KEY__", "__PORT__", "__RUNLEVEL__", "__RUN__"]);
+	assert.deepEqual(placeholders, ["__KEY__", "__PORT__", "__RELAY__", "__RUNLEVEL__", "__RUN__"]);
 	assert.match(bootstrap, /-RunLevel \$runLevel\b/);
 	assert.match(host, /\$runLevel = if \(\$elevated\) \{ 'Highest' \} else \{ 'Limited' \}/);
-	assert.match(host, /setup\s+= \{ param\(\$p\) Invoke-Setup \$p\.vm \(Get-Port \$p\) \(\[string\]\$p\.launcher\) \(\$p\.elevated -eq \$true\) \}/);
+	assert.match(host, /setup\s+= \{ param\(\$p\) Invoke-Setup \$p\.vm \(Get-Port \$p\) \(\[string\]\$p\.launcher\) \(\$p\.elevated -eq \$true\) \(\[string\]\$p\.stub\) \(\[string\]\$p\.relay\) \}/);
 	for (const placeholder of placeholders) assert.ok(host.includes(`.Replace('${placeholder}'`), `${placeholder} is never filled in`);
 });
 
@@ -211,4 +211,31 @@ test("status skips the guest's IP, which Hyper-V takes one to two seconds to rep
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	const status = host.slice(host.indexOf("function Get-Status"), host.indexOf("function Start-Machine"));
 	assert.doesNotMatch(status, /Get-Ipv4/, "every reconnect waits on status; win.vms() still lists IPs");
+});
+
+test("both typed setup lines, which carry the key, are scrubbed from PSReadLine history", async () => {
+	const { LAUNCHER, STUB } = await import("../lib/windows-use/install.ts");
+	const bootstrap = readFileSync(new URL("../lib/windows-use/guest-bootstrap.ps1", import.meta.url), "utf8");
+	const patterns = [...bootstrap.matchAll(/-notlike '((?:[^']|'')*)'/g)].map((m) => m[1]!.replaceAll("''", "'"));
+	const like = (text: string, pattern: string) => new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*")}$`).test(text);
+	for (const line of [LAUNCHER.replace("__PAYLOAD__", "H4sIAAAA"), STUB.replace("__KEY__", "synthetic")]) {
+		assert.ok(patterns.some((pattern) => like(line, pattern)), line.slice(0, 20));
+	}
+});
+
+test("a reinstall that can't reach the package index keeps an installed release of the same line", () => {
+	const bootstrap = readFileSync(new URL("../lib/windows-use/guest-bootstrap.ps1", import.meta.url), "utf8");
+	const step = bootstrap.slice(bootstrap.indexOf("Set-Status 'installing windows-mcp'"), bootstrap.indexOf("$exe = Join-Path $bin"));
+	assert.match(step, /'windows-mcp>=0\.8\.6,<0\.9'/);
+	assert.match(step, /catch \{[\s\S]*uv tool list[\s\S]*\^windows-mcp v0\\\.8\\\.\(\\d\+\)'[\s\S]*-ge 6[\s\S]*if \(-not \$kept\) \{ throw \}/, "the same bounds as the install: 0.8.6 up to 0.9");
+	assert.doesNotMatch(step, /Set-Status "FAIL/, "keeping it isn't a failure");
+});
+
+test("the bootstrap clears the typed stub, which shows the key, off the screen before anything else", () => {
+	const bootstrap = readFileSync(new URL("../lib/windows-use/guest-bootstrap.ps1", import.meta.url), "utf8");
+	const code = bootstrap.split("\n").filter((line) => line.trim() && !line.trim().startsWith("#"));
+	assert.match(code[2]!, /^\$key = '__KEY__';/);
+	assert.equal(code[3], "Remove-Variable k -ErrorAction SilentlyContinue; Clear-Host");
+	const install = readFileSync(new URL("../lib/windows-use/install.ts", import.meta.url), "utf8");
+	assert.match(install, /\{cls;sp /, "a refused payload clears the screen too, as its window stays open to read");
 });

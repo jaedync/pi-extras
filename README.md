@@ -474,8 +474,13 @@ partial-typing failure leaves the existing server's authentication usable.
 Console input uses a paired Hyper-V `TypeKey` stroke per character with settled,
 grouped modifiers to preserve case and punctuation without a separate CIM call
 for every make and break.
-Typing the full bootstrap alone can take several minutes, with a bounded
-10-minute input budget; installation also needs internet access in the guest. An install that fails
+When the VM's Hyper-V key-value exchange works (it's on by default), the
+bootstrap itself goes over it and only a short stub is typed. The stub carries
+the key and the bootstrap's hash, and a whole setup took about three minutes
+live. Otherwise all of it is typed, which took about seven minutes, within a
+10-minute input budget. Installation needs internet access in the guest. The
+exception is a reinstall that can't reach the package index: it keeps an
+installed Windows-MCP from the same release line. An install that fails
 stops at once with the guest's error, which the bootstrap reports to the host
 through Hyper-V key-value exchange. After that, each call first makes sure the VM
 is usable and repairs what it can, and the result says what it did:
@@ -572,9 +577,32 @@ Windows-MCP process into an enhanced session; it is not necessarily a separate
 user login. Avoid simultaneous mouse/keyboard input. Do not switch sessions
 just to repair a failure: moving the desktop can disconnect a VPN.
 
-The transport still uses the guest's IP and TCP port. VPN routing/firewall
-rules can block it. This does not add a PowerShell Direct relay, change guest
-credentials or relax password policy. Live validation confirmed same-session
+### Guests behind a VPN
+
+Calls reach Windows-MCP over a Hyper-V socket, not the guest's network. A
+small relay in the guest (Python standard library only, run by the signed-in
+user from `%USERPROFILE%\.windows-mcp\guest-relay.py`) takes them from the
+host and forwards them to the server on the guest's loopback. So a VPN in the
+guest that captures all its traffic, or firewall rules that cut the guest off
+from the host, leave `windows_use` working. When the installer comes over
+key-value exchange, setup installs the relay with the server. Otherwise the
+first call that reaches the server over the guest's IP installs it. From then
+on, the relay also restarts a stopped or stalled server and reports the
+desktop session, without the console. A relay update that fails to start is
+rolled back to the previous version. Without a relay, calls use the guest's IP
+and port as before. The relay changes no guest credentials or password policy.
+
+Live, the test guest ran a full-tunnel VPN that cut the host's route to it.
+Normal work, a new Pi session, a stalled server and a stopped one, a VPN
+reconnect, a reboot with the VPN up at boot, a locked console, and a relay
+upgrade (plus a failed one, rolled back) all worked, with nothing sent to the
+guest's IP. So did a first setup with the VPN already up and no relay in the
+guest: it took four and a half minutes through the console and key-value
+exchange alone, and kept the installed Windows-MCP because the VPN blocked
+the internet. Warm calls took 130–180 ms, and a new session's first call took
+about 3 seconds.
+
+Earlier live validation confirmed same-session
 input, UIA, screenshots, OCR-coordinate clicks, disconnected-session refusals,
 and no console takeover during a server outage. Live screenshot and OCR-click
 checks passed at 1366x768 and at 2560x1440 with screenshots downscaled to
@@ -587,8 +615,7 @@ with paired `TypeKey` strokes, full basic-session bootstrap passed in about
 7 minutes 24 seconds, retaining the same unlocked session and limited server.
 A forced partial-typing timeout preserved the original authenticated server.
 Post-bootstrap stalled-server recovery passed in 90 seconds without reinstalling.
-These changes remain unreleased. Network timeouts can delay outage detection
-and recovery; console bootstrap remains slow.
+Without a relay, network timeouts can delay outage detection and recovery.
 
 ## Kagi setup
 

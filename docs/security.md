@@ -155,7 +155,19 @@ requires a bearer key: 32 random bytes generated on the host, kept in
 the guest user's `%USERPROFILE%\.windows-mcp\config.toml`. The key is typed
 into the guest inside the bootstrap, only after Windows OCR on the host reads
 an administrator's PowerShell window on the console (without OCR it is typed
-unchecked). PSReadLine is disabled only in this temporary shell before the
+unchecked). When the VM's key-value exchange works, the bootstrap itself goes
+over it instead, as `PiWindowsUse-*` items in the guest's
+`HKLM\SOFTWARE\Microsoft\Virtual Machine\External`. Every signed-in guest
+user can read those items, so they hold the installer without its key. Only
+a short stub is typed: the key, the installer's SHA-256 (the stub refuses a
+payload that doesn't match), and the code that joins and runs it. The next
+setup removes the items. The typed stub shows the key on the console, so the
+bootstrap clears the screen and its scrollback before doing anything else. A
+stub that refuses its payload clears the screen too, then reports the refusal;
+the next setup types the whole installer instead. That setup also installs
+the Hyper-V socket relay. The relay is started only through its scheduled
+task, which runs at the server's run level, never directly by the elevated
+setup shell. PSReadLine is disabled only in this temporary shell before the
 sensitive command is typed; the bootstrap also removes matching prior history.
 The new key stays in host memory during typing. The active key file is replaced
 atomically after the complete command is queued, so interrupted partial typing

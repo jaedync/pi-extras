@@ -44,7 +44,9 @@ interface World {
 	/** Probes before the logon task has the server listening. */
 	serverAfter?: number;
 	/** How the typed bootstrap goes: fails in the guest, never starts, or reports progress for this many probes. */
-	bootstrap?: "fail" | "never" | number;
+	bootstrap?: "fail" | "never" | "incomplete" | number;
+	/** The stub each setup sent: empty when all of the installer was typed. */
+	stubs?: string[];
 	/** The status the guest last published over KVP, prefixed by its run id. */
 	published?: string;
 	/** The lock check says locked while the desktop is in use, as a LogonUI in another session once did. */
@@ -225,8 +227,10 @@ function fakeHost(world: World) {
 					assert.equal(params.launcher, LAUNCHER);
 					world.installed = true;
 					world.setups = [...(world.setups ?? []), params.elevated === true];
+					world.stubs = [...(world.stubs ?? []), String(params.stub ?? "")];
 					world.elevatedServer = params.elevated === true && !world.standardUser;
-					if (world.bootstrap === "fail") world.published = "r2 FAIL uv tool install windows-mcp failed (2): Access is denied. (os error 5)";
+					if (world.bootstrap === "incomplete" && params.stub) world.published = "r2 FAIL the installer arrived incomplete over key-value exchange";
+					else if (world.bootstrap === "fail") world.published = "r2 FAIL uv tool install windows-mcp failed (2): Access is denied. (os error 5)";
 					else if (world.bootstrap === "never") world.published ??= "r1 OK listening on 8000";
 					else if (typeof world.bootstrap === "number") world.published = "r2 installing windows-mcp";
 					else world.server = true;
@@ -716,4 +720,16 @@ test("a server that stopped long after startup is still reinstalled after the sh
 	await g.tool("Snapshot", {});
 	assert.ok(log.includes("setup"));
 	assert.ok(clock() < 90_000, `waited ${clock()} ms before reinstalling`);
+});
+
+test("an installer that didn't arrive whole over key-value exchange says so, and the next setup types all of it", async () => {
+	const world: World = { running: true, installed: false, session: true, locked: false, server: false, bootstrap: "incomplete" };
+	const { g } = guest(world);
+	await assert.rejects(g.tool("Snapshot", {}), /didn't arrive whole in Win11 over Hyper-V key-value exchange, so it didn't run\. Call win\.setup\(\{ vm: "Win11" \}\) again: it types the whole installer/);
+	assert.equal(world.stubs?.length, 1);
+	assert.ok(world.stubs?.[0], "the first setup tried the stub");
+	world.shellOpen = false;
+	await g.setup();
+	assert.deepEqual(world.stubs?.slice(1), [""], "then the typed launcher, with no stub");
+	assert.equal(world.server, true);
 });

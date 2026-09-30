@@ -24,10 +24,10 @@ import { textOf, toResult } from "./result.ts";
 import { Screen, type Look } from "./screen.ts";
 import { hasTaskbar } from "./frame.ts";
 import { consoleRefusal, readSession, requireActive, SESSION_CHECK, toSession, type DesktopSession } from "./desktop-session.ts";
-import { checkBootstrap, LAUNCHER, NO_OCR, openAdminShell, type Bootstrap } from "./install.ts";
+import { checkBootstrap, KVP_INCOMPLETE, LAUNCHER, NO_OCR, openAdminShell, STUB, type Bootstrap } from "./install.ts";
 import type { RelayCalls } from "./relay-channel.ts";
 import { RELAY_SHA, type ControlReply } from "./relay.ts";
-import { readRelayDeployed, relayDeployCommands, type RelayDeployed } from "./relay-deploy.ts";
+import { readRelayDeployed, relayBootstrapCommand, relayDeployCommands, type RelayDeployed } from "./relay-deploy.ts";
 import { TIMING, type Timing } from "./timing.ts";
 import { HOST_TIMEOUT, NOT_SENT, TransportError } from "./transport.ts";
 import { CAPTURES, COLD_CAPTURE_MS, COLD_MS, DEFAULT_TOOL_MS, FRONT_WINDOW, hangMessage, QUICK_MS, readFront, RESTART_SERVER, RESTART_SETTLE_MS, RESTART_SHELL_UI, RUN_BOX, SHELL_UI, stallMessage, toolLimit, type FrontWindow } from "./stall.ts";
@@ -124,6 +124,8 @@ export class Guest {
 	private via: "relay" | "host" = "host";
 	/** The relay is installed at most once per install of the server. */
 	private relayInstall: "unchecked" | "done" | "failed" = "unchecked";
+	/** The installer didn't arrive whole over key-value exchange once: type all of it from then on. */
+	private typeInstaller = false;
 	/**
 	 * The server's own rights, from a check run inside it once per connection.
 	 * The relay's rights normally match, but a relay started from the Run key
@@ -417,12 +419,21 @@ export class Guest {
 		await this.assertConsole(signal);
 		await openAdminShell({ host: this.host, vm: this.vm, screen: this.screen, sleep: this.sleep, now: this.now, pollMs, openMs, readyMs }, signal);
 		await this.assertConsole(signal);
-		const { run } = await this.host.call("setup", { vm: this.vm, port: this.port, launcher: LAUNCHER, elevated: this.elevated }, { signal, timeoutMs: BOOTSTRAP_INPUT_MS }) as { run?: string };
+		const stub = this.typeInstaller ? "" : STUB;
+		const { run } = await this.host.call("setup", { vm: this.vm, port: this.port, launcher: LAUNCHER, stub, relay: stub && this.relay ? relayBootstrapCommand() : "", elevated: this.elevated }, { signal, timeoutMs: BOOTSTRAP_INPUT_MS }) as { run?: string };
 		// Setup wrote a new key, and its bootstrap stopped the relay with the server.
 		this.relay?.forget();
 		this.relayInstall = "unchecked";
 		const bootstrap = run ? { run, startBy: this.now() + this.timing.bootstrapStartMs, started: false } : undefined;
-		if (!(await this.waitConnect(this.timing.installWaitMs, signal, bootstrap))) {
+		let up: boolean;
+		try {
+			up = await this.waitConnect(this.timing.installWaitMs, signal, bootstrap);
+		} catch (error) {
+			if (!(error instanceof Error && KVP_INCOMPLETE.test(error.message))) throw error;
+			this.typeInstaller = true;
+			throw new Error(`The Windows-MCP installer didn't arrive whole in ${this.vm} over Hyper-V key-value exchange, so it didn't run. Call win.setup({ vm: ${JSON.stringify(this.vm)} }) again: it types the whole installer instead, which takes about seven minutes.`, { cause: error });
+		}
+		if (!up) {
 			throw new Error(`Windows-MCP did not come up on ${this.vm}. The guest's PowerShell window shows why: win.console.screenshot({ vm: ${JSON.stringify(this.vm)} }).`);
 		}
 		this.note(`${this.vm}: Windows-MCP is ready`);

@@ -37,7 +37,18 @@ export function relayDeployCommands(force = false): string[] {
 	];
 }
 
-function installCommand(force: boolean): string {
+/**
+ * The same install for the setup bootstrap, which runs it once the server
+ * listens: the relay then exists before any call needs it, so a first setup
+ * under a guest VPN works. Sent only over key-value exchange, where its size
+ * costs no typing. Its own scope keeps the bootstrap's variables as they were.
+ */
+export function relayBootstrapCommand(): string {
+	return `& {\n${dir}; New-Item -ItemType Directory -Force -Path $d | Out-Null; Set-Content -Path $b -Value '${packed}' -NoNewline\n${installCommand(true, true)}\n} | Out-Null`;
+}
+
+/** inline: the setup bootstrap's restart, done before it reports the server ready rather than after an answer. */
+function installCommand(force: boolean, inline = false): string {
 	return `$ErrorActionPreference = 'Stop'; ${dir}; $f = Join-Path $d 'guest-relay.py'; $cfg = Join-Path $d 'config.toml'
 $gz = New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,[Convert]::FromBase64String((Get-Content $b -Raw).Trim()))), [IO.Compression.CompressionMode]::Decompress)
 $out = New-Object IO.MemoryStream; $gz.CopyTo($out); $bytes = $out.ToArray(); Remove-Item $b
@@ -58,26 +69,34 @@ if (${force ? "$true" : "$false"} -or -not ($current -and $running -and $registe
     $prev = "$f.prev"; if (Test-Path $f) { Copy-Item $f $prev -Force } else { Remove-Item $prev -ErrorAction SilentlyContinue }
     [IO.File]::WriteAllBytes($f, $bytes)
     $runLevel = try { (Get-ScheduledTask -TaskName '${SERVER_TASK}' -ErrorAction Stop).Principal.RunLevel } catch { 'Limited' }
-    try {
+    $launchTask = "Stop-ScheduledTask -TaskName '${RELAY_TASK}' -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; Start-ScheduledTask -TaskName '${RELAY_TASK}'"
+    $kickTask = "\`"$env:WINDIR\\System32\\conhost.exe\`" --headless \`"$env:WINDIR\\System32\\schtasks.exe\`" /run /tn ${RELAY_TASK}"
+    # A task the elevated setup registered is the user's to run but not to change: the same
+    # command line needs no change, and registering it again would fail.
+    if ($task -and $task.Actions[0].Execute -eq $pyw -and $task.Actions[0].Arguments -eq $arguments) { $mode = 'task'; $launch = $launchTask; $kick = $kickTask }
+    else { try {
         # Its own task: the server's restart ends the server's task, and must leave the relay running.
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
         Register-ScheduledTask -TaskName '${RELAY_TASK}' -Action (New-ScheduledTaskAction -Execute $pyw -Argument $arguments) -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $who) -Settings $settings -Principal (New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel $runLevel) -Force | Out-Null
-        $mode = 'task'; $launch = "Stop-ScheduledTask -TaskName '${RELAY_TASK}' -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; Start-ScheduledTask -TaskName '${RELAY_TASK}'"
-        $kick = "\`"$env:WINDIR\\System32\\conhost.exe\`" --headless \`"$env:WINDIR\\System32\\schtasks.exe\`" /run /tn ${RELAY_TASK}"
+        $mode = 'task'; $launch = $launchTask; $kick = $kickTask
     } catch {
         # A user who may not register tasks still starts it at every sign-in.
         $mode = 'runkey'; $launch = "Start-Process -FilePath '$($pyw -replace "'", "''")' -ArgumentList '$($arguments -replace "'", "''")'"
         $kick = "\`"$pyw\`" $arguments"
-    }
+    } }
     New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'pi-windows-use-relay' -Value $kick -PropertyType String -Force | Out-Null
-    # Restarted after this command's answer is back, and outside windows-mcp.exe's process
-    # tree: over the relay route, stopping it now would cut off this very answer. A new
-    # relay that dies at start (a bind race, a script error) is rolled back to the old one.
+    # A new relay that dies at start (a bind race, a script error) is rolled back to the old one.
     $relays = "Get-CimInstance Win32_Process | Where-Object { \`$_.Name -eq 'pythonw.exe' -and \`$_.CommandLine -like '*guest-relay.py*' }"
-    $helper = "Start-Sleep -Seconds 5; $relays | ForEach-Object { Stop-Process -Id \`$_.ProcessId -Force -ErrorAction SilentlyContinue }; $launch; Start-Sleep -Seconds 10; if (-not ($relays) -and (Test-Path '$($prev -replace "'", "''")')) { Copy-Item '$($prev -replace "'", "''")' '$($f -replace "'", "''")' -Force; $launch }"
+    $body = "$relays | ForEach-Object { Stop-Process -Id \`$_.ProcessId -Force -ErrorAction SilentlyContinue }; $launch; Start-Sleep -Seconds 10; if (-not ($relays) -and (Test-Path '$($prev -replace "'", "''")')) { Copy-Item '$($prev -replace "'", "''")' '$($f -replace "'", "''")' -Force; $launch }"
+${inline ? `    # Nothing answers over the relay while setup runs, so it restarts now, before the host
+    # hears the server is ready. Only as a task: this shell is elevated, and a relay it
+    # started itself would be too. A Run-key relay starts at the next sign-in instead.
+    if ($mode -eq 'task') { & ([scriptblock]::Create($body)); $restart = 'done' } else { $restart = 'none' }` : `    # Restarted after this command's answer is back, and outside windows-mcp.exe's process
+    # tree: over the relay route, stopping it now would cut off this very answer.
+    $helper = "Start-Sleep -Seconds 5; $body"
     $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helper)) }
     if ($r.ReturnValue -ne 0) { throw "starting the relay failed with $($r.ReturnValue)" }
-    $restart = 'scheduled'
+    $restart = 'scheduled'`}
 }
 $start = Join-Path $d 'windows-use-start.cmd'; $flash = 'absent'
 if (Test-Path $start) {

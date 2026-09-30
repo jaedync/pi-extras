@@ -6,6 +6,9 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $key = '__KEY__'; $port = __PORT__; $run = '__RUN__'; $runLevel = '__RUNLEVEL__'
+# A typed stub shows the key: clear it off the console, scrollback included, before
+# anything on the screen can be read, as a failure leaves this window open to read.
+Remove-Variable k -ErrorAction SilentlyContinue; Clear-Host
 $utf8 = New-Object Text.UTF8Encoding $false
 $done = $false
 $statusDir = 'C:\ProgramData\pi-windows-use'
@@ -55,7 +58,14 @@ try {
     Set-Status 'installing windows-mcp'
     $env:UV_TOOL_BIN_DIR = $bin
     # Within the release line windows_use reads the snapshot text of; a new line may change it.
-    Invoke-Native { & $uv tool install --upgrade --python 3.14 'windows-mcp>=0.8.6,<0.9' } 'uv tool install windows-mcp'
+    try { Invoke-Native { & $uv tool install --upgrade --python 3.14 'windows-mcp>=0.8.6,<0.9' } 'uv tool install windows-mcp' }
+    catch {
+        # A VPN that blocks the internet blocks the upgrade too; a release this line reads still serves.
+        # Continue: under Stop, PS 5.1 turns uv's stderr into an error that would hide the real one.
+        $kept = & { $ErrorActionPreference = 'Continue'; @(& $uv tool list 2>$null) } | Where-Object { $_ -match '^windows-mcp v0\.8\.(\d+)' -and [int]$Matches[1] -ge 6 } | Select-Object -First 1
+        if (-not $kept) { throw }
+        Set-Status "kept $kept, as installing failed: $($_.Exception.Message)"
+    }
     $exe = Join-Path $bin 'windows-mcp.exe'
     if (-not (Test-Path $exe)) { throw "windows-mcp.exe missing at $exe" }
 
@@ -103,19 +113,22 @@ try {
         $tail = if (Test-Path "$cfgDir\server.error.log") { (Get-Content "$cfgDir\server.error.log" -Tail 20) -join "`n" } else { '' }
         throw "server did not start listening on $port. $tail"
     }
-    # Stop-Server also stopped the Hyper-V socket relay, which runs on the server's
-    # Python; without it a VPN in the guest leaves the new server unreachable.
+    # The Hyper-V socket relay's install, when the host sent it with this script;
+    # without the relay a VPN in the guest leaves the new server unreachable.
+    try { __RELAY__ } catch { Write-Host "[windows_use] the Hyper-V socket relay didn't install: $($_.Exception.Message)" }
+    # Stop-Server also stopped the relay, which runs on the server's Python. Only its task
+    # restarts it: this shell is elevated, and a relay it started would be too. A relay the
+    # Run key starts comes back at the next sign-in, or through the server on the next call.
     if (Get-ScheduledTask -TaskName 'windows-mcp-relay' -ErrorAction SilentlyContinue) { Start-ScheduledTask -TaskName 'windows-mcp-relay' }
-    else { $r = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).'pi-windows-use-relay'; if ($r) { Start-Process cmd.exe "/c start `"`" $r" -WindowStyle Hidden } }
     Set-Status "OK listening on $port"
     $done = $true
 } catch {
     Set-Status "FAIL $($_.Exception.Message)"
 }
-# The typed one-liner carries the auth key; keep it out of PSReadLine history.
+# The typed one-liner (the full launcher, or the stub) carries the auth key; keep it out of PSReadLine history.
 try {
     $history = (Get-PSReadLineOption).HistorySavePath
-    if (Test-Path $history) { Set-Content -Path $history -Value @(Get-Content $history | Where-Object { $_ -notlike '$b=''H4sI*' }) }
+    if (Test-Path $history) { Set-Content -Path $history -Value @(Get-Content $history | Where-Object { $_ -notlike '$b=''H4sI*' -and $_ -notlike '$k=''*' }) }
 } catch { }
 # On success close the window so it doesn't cover the desktop the agent drives;
 # on failure leave it open with the error for a screenshot.
