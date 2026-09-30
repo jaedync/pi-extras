@@ -16,7 +16,7 @@ import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { expandable, expansionMemory, markdownOf, messageBody as body, type MarkdownSource } from "../band/message.ts";
 import { purpleBackground, renderPurpleBand } from "../band/purple.ts";
-import { formatTime, renderBand, type BandPhase, type Seg } from "../band/band.ts";
+import { formatTime, renderBand, ROW_MARGIN, type BandPhase, type Seg } from "../band/band.ts";
 import { paletteFrom } from "../band/palette.ts";
 import { handoffChip, type ChipTint } from "../band/job-chip.ts";
 import { bodyBackground, onBackground } from "../band/surface.ts";
@@ -32,10 +32,31 @@ export type { MarkdownSource } from "../band/message.ts";
 
 export const REPORT_PREVIEW_LINES = 3;
 export const MESSAGE_PREVIEW_LINES = 8;
-const BODY_INDENT = 3;
+/** Text sits under the band's title, which starts after the row's margin. */
+const BODY_INDENT = 3 + ROW_MARGIN;
 const DONE = Number.POSITIVE_INFINITY;
 
-type RowContext = { state?: unknown; isPartial?: boolean; executionStarted?: boolean; isError?: boolean; expanded?: boolean } | undefined;
+type RowContext = { state?: unknown; isPartial?: boolean; executionStarted?: boolean; argsComplete?: boolean; isError?: boolean; expanded?: boolean } | undefined;
+/** Whether the model is streaming a reply now (lib/run-watch.ts). Absent: always. */
+type Streaming = () => boolean;
+const ALWAYS: Streaming = () => true;
+
+/** Notes, when Pi first builds a call's row, whether the model is writing it now. */
+function noteLive(context: RowContext, streaming: Streaming): void {
+	const state = context?.state as { live?: boolean } | undefined;
+	if (state && typeof state === "object" && state.live === undefined) state.live = streaming();
+}
+
+/**
+ * A call Pi hasn't started: the model is writing it, it waits its turn, or a
+ * resumed session rebuilt it without its result. Only the first spins, as
+ * Tool Display's call rows do.
+ */
+function unstarted(context: RowContext, streaming: Streaming): { phase: BandPhase; margin: true | "blank" } {
+	if (context?.argsComplete) return { phase: { kind: "queued" }, margin: true };
+	const live = (context?.state as { live?: boolean } | undefined)?.live ?? true;
+	return { phase: { kind: "writing" }, margin: live && streaming() ? true : "blank" };
+}
 
 class Lines implements Component {
 	private readonly draw: (width: number) => string[];
@@ -49,8 +70,8 @@ const paintOf = (theme: Theme) => (color: string, text: string): string => {
 };
 const oneLine = (text: unknown): string => String(text ?? "").replace(/\s+/g, " ").trim();
 
-function band(theme: Theme, width: number, phase: BandPhase, segs: Seg[], rail: Seg[]): string {
-	return renderBand(theme, paletteFrom(theme), { width, phase, segs, rail, clockMs: Date.now() });
+function band(theme: Theme, width: number, phase: BandPhase, segs: Seg[], rail: Seg[], margin: true | "blank" = true): string {
+	return renderBand(theme, paletteFrom(theme), { width, phase, segs, rail, clockMs: Date.now(), margin });
 }
 
 /** One line of what an agent is doing, under its band. */
@@ -68,7 +89,8 @@ export function rememberAgent(context: RowContext, details: unknown): void {
 
 const agentOf = (context: RowContext): string | undefined => (context?.state as { agent?: string } | undefined)?.agent;
 
-export function subagentCallRow(args: unknown, theme: Theme, context: RowContext, lookup: (name: string) => AgentRecord | undefined): Component {
+export function subagentCallRow(args: unknown, theme: Theme, context: RowContext, lookup: (name: string) => AgentRecord | undefined, streaming = ALWAYS): Component {
+	noteLive(context, streaming);
 	const input = (args ?? {}) as { task?: unknown; name?: unknown; model?: unknown; thinking?: unknown; wait?: unknown };
 	// Expanded, the row shows the whole task the band cuts short.
 	const task = (width: number) => (context?.expanded && typeof input.task === "string" ? body(theme, width, input.task, "muted", null) : []);
@@ -86,7 +108,10 @@ export function subagentCallRow(args: unknown, theme: Theme, context: RowContext
 		];
 		const compact = record && !record.blocking && input.wait !== true && !context?.expanded && !context?.isError;
 		if (compact) return [agentChip(theme, width, record, segs, now)];
-		if (context?.isPartial && !context.executionStarted) return [band(theme, width, { kind: "writing" }, segs, [])];
+		if (context?.isPartial && !context.executionStarted) {
+			const { phase, margin } = unstarted(context, streaming);
+			return [band(theme, width, phase, segs, [], margin)];
+		}
 		if (context?.isError && !record) return [band(theme, width, { kind: "done", outcome: "fail", sinceMs: DONE }, segs, [{ text: "not started", color: "error" }])];
 		if (!record) return [band(theme, width, { kind: "calm" }, segs, [{ text: "background", color: "dim" }])];
 		if (LIVE_STATES.has(record.state)) {
@@ -138,15 +163,16 @@ export function subagentResultRow(result: unknown, theme: Theme, context: RowCon
 
 const DELIVERED: Record<string, string> = { steered: "delivered", resumed: "resumed it", queued: "queued", inbox: "for its next run", replied: "answered", main: "delivered" };
 
-export function messageCallRow(args: unknown, theme: Theme, context: RowContext): Component {
+export function messageCallRow(args: unknown, theme: Theme, context: RowContext, streaming = ALWAYS): Component {
+	noteLive(context, streaming);
 	const input = (args ?? {}) as { to?: unknown; text?: unknown; expectReply?: unknown };
 	return new Lines((width) => {
 		const segs: Seg[] = [{ text: `→ ${oneLine(input.to)}`, color: "text", bold: true }, { text: `  ${oneLine(input.text)}`, color: "muted" }];
-		if (context?.isPartial && !context.executionStarted) return [renderPurpleBand(theme, { width, phase: { kind: "writing" }, segs, rail: [], clockMs: 0 })];
+		if (context?.isPartial && !context.executionStarted) return [renderPurpleBand(theme, { width, ...unstarted(context, streaming), segs, rail: [], clockMs: Date.now() })];
 		const delivered = (context?.state as { delivered?: string } | undefined)?.delivered;
 		const rail: Seg[] = context?.isError ? [{ text: "not delivered", color: "error" }]
 			: [{ text: (delivered && DELIVERED[delivered]) ?? "", color: "dim" }, ...(input.expectReply ? [{ text: "  awaits answer", color: "warning" }] : [])];
-		return [renderPurpleBand(theme, { width, phase: { kind: "done", outcome: context?.isError ? "fail" : "ok", sinceMs: DONE }, segs, rail, clockMs: 0 })];
+		return [renderPurpleBand(theme, { width, phase: { kind: "done", outcome: context?.isError ? "fail" : "ok", sinceMs: DONE }, segs, rail, clockMs: 0, margin: true })];
 	});
 }
 
@@ -168,7 +194,7 @@ export function createMessageRenderer(markdown?: MarkdownSource): MessageRendere
 		const segs: Seg[] = [{ text: details.from, color: "text", bold: true }, { text: ` → ${to}`, color: "dim" }];
 		const said = question ? "asks" : details.kind === "reply" ? "answers" : details.kind === "relay" ? (details.answered ? "you answered" : "you wrote") : "note";
 		const rail: Seg[] = [{ text: said, color: question ? "warning" : "dim" }];
-		return expandable((width, expanded) => [renderPurpleBand(theme, { width, phase: { kind: "calm" }, segs, rail, clockMs: 0 }),
+		return expandable((width, expanded) => [renderPurpleBand(theme, { width, phase: { kind: "calm" }, segs, rail, clockMs: 0, margin: true }),
 			...body(theme, width, details.text, "text", expanded ? null : MESSAGE_PREVIEW_LINES, markdownOf(markdown), purpleBackground(theme))],
 			options.expanded, message as object, memory);
 	};

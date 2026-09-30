@@ -11,6 +11,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { bgSgr, mix, type Rgb } from "./color.ts";
 import type { BandTheme, Palette } from "./palette.ts";
+import { frameAt, RUNNING, WRITING } from "./spinner.ts";
 
 export type Outcome = "ok" | "fail" | "timeout" | "aborted";
 export type Motion = "full" | "reduced";
@@ -221,6 +222,34 @@ export interface BandSpec {
 	readonly clockMs: number;
 	readonly motion?: Motion;
 	readonly indent?: number;
+	/** A transcript row: the title starts `ROW_MARGIN` columns later, after the call's spinner; `blank` keeps the columns empty. */
+	readonly margin?: boolean | "blank";
+	/** The phase the margin shows, when the band is colored as another (purple rows stay purple while written). */
+	readonly marginPhase?: BandPhase;
+}
+
+/**
+ * The columns a transcript row keeps at its left for a spinner while the model
+ * writes or runs the call. Rows indent their lines by as much, so every row lines up.
+ */
+export const ROW_MARGIN = 2;
+
+const STILL_MARK = "•";
+const BLANK_MARGIN: Seg = { text: " ".repeat(ROW_MARGIN), color: "" };
+
+/**
+ * The margin: a spinner while the call is written or runs, a still dot while
+ * it waits, else blank. Frames follow the clock, not the call, so every
+ * spinner on screen (the phase line's too) turns in step.
+ */
+function marginSeg(phase: BandPhase, clockMs: number, motion: Motion): Seg {
+	const mark = (glyph: string, color: string): Seg => ({ text: `${glyph}${" ".repeat(ROW_MARGIN - 1)}`, color });
+	switch (phase.kind) {
+		case "writing": return mark(motion === "full" ? frameAt(WRITING, clockMs) : STILL_MARK, "mdHeading");
+		case "running": return mark(motion === "full" ? frameAt(RUNNING, clockMs) : STILL_MARK, "toolOutput");
+		case "queued": return mark(STILL_MARK, "dim");
+		default: return BLANK_MARGIN;
+	}
 }
 
 export function renderBand(theme: BandTheme, palette: Palette | undefined, spec: BandSpec): string {
@@ -228,7 +257,7 @@ export function renderBand(theme: BandTheme, palette: Palette | undefined, spec:
 	const bgAt = palette ? bandBackground(palette, spec.phase, spec.width, spec.clockMs, motion) : undefined;
 	return paintLine(theme, palette, {
 		width: spec.width,
-		left: spec.segs,
+		left: spec.margin ? [spec.margin === "blank" ? BLANK_MARGIN : marginSeg(spec.marginPhase ?? spec.phase, spec.clockMs, motion), ...spec.segs] : spec.segs,
 		rail: spec.rail,
 		...(spec.indent !== undefined ? { indent: spec.indent } : {}),
 		...(bgAt ? { bgAt } : {}),
@@ -236,8 +265,9 @@ export function renderBand(theme: BandTheme, palette: Palette | undefined, spec:
 	});
 }
 
-/** Whether a phase still changes on its own, so its row needs animation ticks. */
-export function isAnimated(phase: BandPhase, motion: Motion): boolean {
+/** Whether a phase still changes on its own, so its row needs animation ticks; a `margined` row spins while written. */
+export function isAnimated(phase: BandPhase, motion: Motion, margined = false): boolean {
 	if (phase.kind === "running") return true;
+	if (margined && phase.kind === "writing") return motion === "full";
 	return phase.kind === "done" && motion === "full" && phase.sinceMs < FLASH_MS;
 }

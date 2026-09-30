@@ -98,18 +98,27 @@ export function popupSource(kit: Kit, spec: ToolSpec, row: RowState): PopupSourc
 	};
 }
 
+/** A call row's margin: its spinner, or kept blank for a call that isn't being written now. */
+export function rowMargin(kit: Kit, row: RowState, phase: BandPhase): true | "blank" {
+	// A session resumed after a crash rebuilds a call that never got its result as still being written.
+	const writtenNow = row.live === true && (kit.streaming?.() ?? true);
+	return phase.kind === "writing" && !writtenNow ? "blank" : true;
+}
+
 export function toolRenderers(kit: Kit, spec: ToolSpec) {
 	const open = (row: RowState) => () => (row.context && row.theme ? kit.openPopup(popupSource(kit, spec, row)) : false);
 	return {
 		renderCall(_args: unknown, theme: ThemeLike, context: RenderContext) {
 			const row = rowState(context);
 			row.theme = theme;
+			row.live ??= kit.streaming?.() ?? true;
 			track(row, context, kit.now());
 			return slotFor(context).onClick(open(row)).set((width) => {
 				const view = viewOf(kit, row)!;
 				const input = bandOf(spec, view);
-				animate(row, kit, input.phase, spec.moving?.(view) ?? false);
-				return [band(theme, kit, input, width), ...onBackground(spec.below?.(view, width) ?? [], width, bodyBackground(theme))];
+				const margin = rowMargin(kit, row, input.phase);
+				animate(row, kit, input.phase, spec.moving?.(view) ?? false, margin === true);
+				return [band(theme, kit, input, width, margin), ...onBackground(spec.below?.(view, width) ?? [], width, bodyBackground(theme))];
 			});
 		},
 		renderResult(result: ResultInput, _options: { expanded: boolean; isPartial: boolean }, theme: ThemeLike, context: RenderContext) {

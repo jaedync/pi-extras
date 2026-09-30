@@ -53,7 +53,7 @@ export function createMeshMessageRenderer(markdown?: MarkdownSource): MessageRen
 		const envelope = parseMeshMessage(raw);
 		const segs: Seg[] = envelope ? sender(envelope.from) : [{ text: "mesh → me", color: "customMessageLabel", bold: true }];
 		const rail: Seg[] = [{ text: envelope?.re ? "replies" : "message", color: "dim" }];
-		return expandable((width, expanded) => [renderPurpleBand(theme, { width, phase: { kind: "calm" }, segs, rail, clockMs: 0 }),
+		return expandable((width, expanded) => [renderPurpleBand(theme, { width, phase: { kind: "calm" }, segs, rail, clockMs: 0, margin: true }),
 			...messageBody(theme, width, envelope?.text ?? raw, "text", expanded ? null : PREVIEW_LINES,
 				envelope ? markdownOf(markdown) : undefined, purpleBackground(theme))], options.expanded, message as object, memory);
 	};

@@ -269,7 +269,7 @@ test("the phase line names what runs and what the model writes, and says how to 
 		assistantMessageEvent: { type: "toolcall_delta", delta: "{}" },
 		message: { role: "assistant", content: [{ type: "toolCall", name: "bash" }] },
 	}, 126_400);
-	assert.match(h.queue()[1], / Writing bash call {2}00:00\.0$/);
+	assert.match(h.queue()[1], / Calling bash {2}00:00\.0$/);
 	h.emit("tool_execution_start", { toolCallId: "a", toolName: "bash" }, 127_000);
 	h.emit("tool_execution_start", { toolCallId: "b", toolName: "bash" }, 127_000);
 	assert.match(h.queue(129_900)[1], / Running bash ×2 {2}00:02\.9$/);

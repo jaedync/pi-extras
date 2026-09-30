@@ -1,5 +1,6 @@
 /** Shared Markdown previews and per-message expansion for incoming agent mail. */
 import { Markdown, truncateToWidth, wrapTextWithAnsi, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { ROW_MARGIN } from "./band.ts";
 import type { BandTheme } from "./palette.ts";
 import { bodyBackground, onBackground } from "./surface.ts";
 
@@ -22,6 +23,8 @@ const MARKDOWN_MAX_DEPTH = 16;
 /** The plain fallback keeps this much of a body; an expanded view shows at most MAX_EXPANDED_LINES. */
 const PLAIN_MAX_CHARS = 64_000;
 export const MAX_EXPANDED_LINES = 1_000;
+/** Text sits under the band's title, which starts after the row's margin. */
+const BODY_INDENT = 3 + ROW_MARGIN;
 /** Laid-out bodies kept across redraws, newest last. */
 const LAYOUT_CACHE_SIZE = 32;
 
@@ -87,7 +90,7 @@ export function messageBody(theme: BandTheme, width: number, text: string, color
 	const paint = (key: string, value: string) => {
 		try { return theme.fg(key, value); } catch { return value; }
 	};
-	const pad = " ".repeat(Math.min(3, Math.max(0, width - 1)));
+	const pad = " ".repeat(Math.min(BODY_INDENT, Math.max(0, width - 1)));
 	const inner = Math.max(1, width - pad.length);
 	const entry = layout(theme, trimmed, inner, color, markdown, paint);
 	const frameKey = `${width}\u0000${limit}\u0000${background}`;

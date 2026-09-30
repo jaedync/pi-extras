@@ -14,7 +14,7 @@ import type { Seg } from "../band/band.ts";
 import { renderPurpleBand } from "../band/purple.ts";
 import { sanitize } from "./format.ts";
 import { errorLines, head, more, plural, resultText, textLines, titleSeg, wrapAll } from "./kit.ts";
-import { bandOf, toolRenderers, type ResultInput, type ToolSpec, type View } from "./tool.ts";
+import { bandOf, rowMargin, toolRenderers, type ResultInput, type ToolSpec, type View } from "./tool.ts";
 import { rowState } from "./row.ts";
 import { painter, type Kit } from "./kit.ts";
 
@@ -232,7 +232,8 @@ export function foreignRenderers(kit: Kit, tool: ForeignTool) {
 					// Keep the shared row's timing, animation bookkeeping and click target; replace only its header.
 					const lines = component.render(width);
 					const view: View = { kit, row, context: row.context!, theme, paint: painter(theme), result: row.result as ResultInput | undefined, now: kit.now() };
-					return [renderPurpleBand(theme, { ...bandOf(spec, view), width, clockMs: view.now }), ...lines.slice(1)];
+					const input = bandOf(spec, view);
+					return [renderPurpleBand(theme, { ...input, width, clockMs: view.now, motion: kit.motion(), margin: rowMargin(kit, row, input.phase) }), ...lines.slice(1)];
 				},
 				invalidate: () => component.invalidate(),
 				handleMouse: (event) => component.handleMouse?.(event),

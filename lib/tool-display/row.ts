@@ -9,18 +9,22 @@
  * row asks the shared animation clock for frames and redraws itself.
  */
 import type { TuiMouseEvent, TuiMouseEventResult, Component } from "@earendil-works/pi-tui";
-import { isAnimated, renderBand, timeSeg, formatTime, type BandPhase, type Outcome, type Seg } from "../band/band.ts";
+import { isAnimated, renderBand, ROW_MARGIN, timeSeg, formatTime, type BandPhase, type Outcome, type Seg } from "../band/band.ts";
 import { paletteFrom } from "../band/palette.ts";
 import type { Kit, RenderContext, ThemeLike } from "./kit.ts";
 
-/** Output lines sit under the band's title, two columns in. */
-export const BODY_INDENT = 3;
+/** Output lines sit under the band's title, two columns in; the title starts after the row's margin. */
+export const BODY_INDENT = 3 + ROW_MARGIN;
 
 export interface RowState {
 	startedAt?: number;
 	endedAt?: number;
 	/** Replayed from history: the result was final the first time the row was drawn. */
 	resumed?: boolean;
+	/** Built while the model streamed a reply, so a call still being written is being written now. */
+	live?: boolean;
+	/** The band's phase when the row was last drawn. */
+	drawnAs?: BandPhase["kind"];
 	outcome?: Outcome;
 	context?: RenderContext;
 	theme?: ThemeLike;
@@ -94,14 +98,32 @@ export function rail(phase: BandPhase, took: number | undefined, options: { lead
 	}
 }
 
-/** Keeps a row redrawing while its band (or `alsoMoving`, the row's own lines) moves, and stops once it settles. */
-export function animate(row: RowState, kit: Kit, phase: BandPhase, alsoMoving = false): void {
-	const moving = alsoMoving || isAnimated(phase, kit.motion());
-	if (moving && !row.stopFrames) row.stopFrames = kit.clock.add(() => row.context?.invalidate());
-	else if (!moving && row.stopFrames) {
-		row.stopFrames();
-		row.stopFrames = undefined;
-	}
+/**
+ * Keeps a row redrawing while its band (or `alsoMoving`, the row's own lines)
+ * moves, and stops once it settles; a `margined` band also spins while written.
+ */
+export function animate(row: RowState, kit: Kit, phase: BandPhase, alsoMoving = false, margined = false): void {
+	row.drawnAs = phase.kind;
+	const moving = alsoMoving || isAnimated(phase, kit.motion(), margined);
+	if (moving && !row.stopFrames) row.stopFrames = kit.clock.add(() => (outlived(row, kit) ? stopFrames(row) : row.context?.invalidate()));
+	else if (!moving && row.stopFrames) stopFrames(row);
+}
+
+function stopFrames(row: RowState): void {
+	row.stopFrames?.();
+	row.stopFrames = undefined;
+}
+
+/**
+ * A row whose frames outlived it. Only drawing a row stops its frames, and
+ * Pi rebuilds the transcript on some settings changes mid-run, so a row it
+ * dropped still reads as written after its message ended, or as running
+ * after the run did.
+ */
+function outlived(row: RowState, kit: Kit): boolean {
+	if (row.drawnAs === "writing") return kit.streaming?.() === false;
+	if (row.drawnAs === "running") return kit.busy?.() === false;
+	return false;
 }
 
 export interface BandInput {
@@ -110,8 +132,9 @@ export interface BandInput {
 	readonly phase: BandPhase;
 }
 
-export function band(theme: ThemeLike, kit: Kit, input: BandInput, width: number): string {
-	return renderBand(theme, paletteFrom(theme), { width, phase: input.phase, segs: input.segs, rail: input.rail, clockMs: kit.now(), motion: kit.motion() });
+/** A row's band; `margin` for the transcript, where the call's spinner goes before the title. */
+export function band(theme: ThemeLike, kit: Kit, input: BandInput, width: number, margin: boolean | "blank" = false): string {
+	return renderBand(theme, paletteFrom(theme), { width, phase: input.phase, segs: input.segs, rail: input.rail, clockMs: kit.now(), motion: kit.motion(), margin });
 }
 
 /**

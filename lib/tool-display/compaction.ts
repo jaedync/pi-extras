@@ -118,7 +118,7 @@ function drawRow(self: Internals, width: number, theme: ThemeLike, data: Compact
 	if (shown.length < all.length) body.push(truncateToWidth(more(paint, { moreHint: () => hint } as never, plural(all.length - shown.length, "more line", "more lines")), inner, "…"));
 	const reason = data?.reason === "threshold" ? "auto" : data?.reason;
 	const segs: Seg[] = [{ text: "compaction", color: "customMessageLabel", bold: true }, ...(reason ? [{ text: ` ${reason}`, color: "muted" }] : [])];
-	const header = renderBand(purpleTheme(theme), purplePalette(theme), { width, phase: { kind: "done", outcome: "ok", sinceMs: Infinity }, segs, rail: rail(data, self.message.tokensBefore), clockMs: 0 });
+	const header = renderBand(purpleTheme(theme), purplePalette(theme), { width, phase: { kind: "done", outcome: "ok", sinceMs: Infinity }, segs, rail: rail(data, self.message.tokensBefore), clockMs: 0, margin: true });
 	return [header, ...onBackground(indent(body, pad), width, purpleBackground(theme))];
 }
 

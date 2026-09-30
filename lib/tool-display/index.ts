@@ -42,6 +42,7 @@ import { canAdopt, installAdoption, prepareAdoption, rebuildRow, type RowRendere
 import { computerUseSpec, windowsUseSpec } from "./computer.ts";
 import { codemodeRenderers } from "./codemode.ts";
 import { registerCompaction } from "./compaction.ts";
+import { watchRun } from "../run-watch.ts";
 import { createMeshMessageRenderer, MESH_MESSAGE_TYPE } from "./mesh.ts";
 import { NestedCalls } from "./nested.ts";
 import { editRenderers, readRenderers, writeRenderers } from "./files.ts";
@@ -157,10 +158,14 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	prepareAdoption();
 	prepareThinkingTail();
 
+	const run = watchRun(pi);
+
 	const kit: Kit = {
 		...deps.host,
 		moreHint: () => (fullscreen ? "click for all" : deps.host.expandHint()),
 		motion: () => settings.motion,
+		streaming: run.streaming,
+		busy: run.busy,
 		chains: () => settings.chains,
 		clock,
 		nestedCalls: (id) => nested.get(id),

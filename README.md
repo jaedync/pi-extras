@@ -292,8 +292,11 @@ the right. The band's color says how it went (green done, red failed, amber
 timed out, gray aborted), so there are no status marks, and a failure is named
 in words in the right rail (`exit 1`, `timed out`). While a call runs, the band
 fills toward its timeout and warms as the timeout gets close; a call without a
-timeout sweeps instead. Times of ten seconds or more are drawn in a warmer
-color, so slow calls stand out when you scroll back. Output sits indented under
+timeout sweeps instead. While the model writes a call or it runs, a spinner
+turns at the left of its band, in step with Phase Spinner's line under the
+conversation; a call waiting its turn shows a still dot there. Times of ten
+seconds or more are drawn in a warmer color, so slow calls stand out when you
+scroll back. Output sits indented under
 the band on a gray panel, so each call reads as one block apart from the
 conversation.
 

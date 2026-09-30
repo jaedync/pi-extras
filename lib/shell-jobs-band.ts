@@ -84,6 +84,8 @@ export interface JobBandOptions {
 	readonly motion?: Motion;
 	readonly extra?: readonly Seg[];
 	readonly indent?: number;
+	/** In the transcript, where rows keep a margin for a call's spinner. */
+	readonly margin?: boolean;
 }
 
 export function jobBand(theme: BandTheme, facts: JobFacts, options: JobBandOptions): string {
@@ -95,6 +97,7 @@ export function jobBand(theme: BandTheme, facts: JobFacts, options: JobBandOptio
 		clockMs: options.now,
 		...(options.motion ? { motion: options.motion } : {}),
 		...(options.indent !== undefined ? { indent: options.indent } : {}),
+		...(options.margin ? { margin: true } : {}),
 	});
 }
 

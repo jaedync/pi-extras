@@ -11,7 +11,7 @@
  */
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { keyHint, type MessageRenderer, type Theme } from "@earendil-works/pi-coding-agent";
-import { renderBand, type Seg } from "./band/band.ts";
+import { renderBand, ROW_MARGIN, type Seg } from "./band/band.ts";
 import { paletteFrom } from "./band/palette.ts";
 import { bodyBackground, onBackground } from "./band/surface.ts";
 import { factsOf, jobBand, jobChip, type JobFacts } from "./shell-jobs-band.ts";
@@ -22,8 +22,8 @@ const TITLE_DURATION_SUFFIX = new RegExp(` after ${DURATION_PATTERN}$`);
 
 /** Output lines under a collapsed row; the same as Tool Display's bash row. */
 export const PREVIEW_LINES = 4;
-/** Output sits under the band's title. */
-export const BODY_INDENT = 3;
+/** Output sits under the band's title, which starts after the row's margin. */
+export const BODY_INDENT = 3 + ROW_MARGIN;
 
 export type PaintKey = "toolTitle" | "toolOutput" | "muted" | "dim" | "warning" | "success" | "error" | "accent";
 
@@ -227,7 +227,7 @@ export function renderJobCall(args: unknown, theme: Theme, context?: RowContext,
 		const done = context?.isPartial === false;
 		const phase = done ? { kind: "done" as const, outcome: context?.isError ? "fail" as const : "ok" as const, sinceMs: Number.POSITIVE_INFINITY } : { kind: "queued" as const };
 		const rail: Seg[] = done && context?.isError ? [{ text: "failed", color: "error" }] : [];
-		return [renderBand(theme, paletteFrom(theme), { width, phase, segs: jobCallSegs(args, titleOf), rail, clockMs: now() })];
+		return [renderBand(theme, paletteFrom(theme), { width, phase, segs: jobCallSegs(args, titleOf), rail, clockMs: now(), margin: true })];
 	});
 }
 
@@ -266,7 +266,7 @@ export function createCompletionRenderer(): MessageRenderer {
 		// A message with no title or command names itself: "Job j1 finished: exit 0".
 		const extra: Seg[] = facts.title === view.title ? [] : [{ text: " finished", color: "muted" }];
 		const lines = new Lines((width) => {
-			const band = jobBand(theme, facts, { width, now: 0, view: "calm", extra });
+			const band = jobBand(theme, facts, { width, now: 0, view: "calm", extra, margin: true });
 			if (!isExpanded()) return [band];
 			const pad = " ".repeat(BODY_INDENT);
 			const inner = Math.max(1, width - BODY_INDENT);

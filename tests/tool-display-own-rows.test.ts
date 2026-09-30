@@ -22,10 +22,10 @@ test("a web search row says what was searched and how many results came back, wi
 	search.update({ executionStarted: true, isPartial: false, result: text("five results", details) });
 	assert.deepEqual(search.lines(), [
 		band("web_search rust async site:docs.rs · 5 results", "2.8s"),
-		"   1. Result 1  site1.test",
-		"   2. Result 2  site2.test",
-		"   3. Result 3  site3.test",
-		"   … 2 more results (click for all)",
+		"     1. Result 1  site1.test",
+		"     2. Result 2  site2.test",
+		"     3. Result 3  site3.test",
+		"     … 2 more results (click for all)",
 	]);
 	assert.equal(colorOf(search.raw()[0]!, " rust async"), fgOf(FG.accent!), "the query stands out");
 	search.click();
@@ -46,7 +46,7 @@ test("a web search row names an empty, partial or cached search, and a failure i
 	assert.equal(partial.lines()[0], band("web_search q · 1 result · partial · cached"));
 	const failed = row(toolRenderers(h.kit, webSearchSpec("web_search")) as never, { query: "q" });
 	failed.update({ isPartial: false, isError: true, result: text("Kagi markup is unrecognized.") });
-	assert.deepEqual(failed.lines(), [band("web_search q", "failed"), "   Kagi markup is unrecognized."]);
+	assert.deepEqual(failed.lines(), [band("web_search q", "failed"), "     Kagi markup is unrecognized."]);
 });
 
 const call = (method: string, app: string, detail: string, over: object = {}) => ({ method, app, detail, ms: 120, ok: true, ...over });
@@ -59,8 +59,8 @@ test("a computer use row names the apps, then counts the calls and screenshots o
 	assert.equal(use.lines()[0], band('computer_use await sky.click({ app: "Safari" });', "queued"), "before any call, the script's first line");
 	use.update({ executionStarted: true, result: text("", { calls: [call("get_app_state", "Safari", "full tree")], running: { method: "click", app: "Safari", detail: "element 7" } }) });
 	assert.deepEqual(use.lines().slice(1), [
-		"   get_app_state  Safari full tree  120ms",
-		"   click          Safari element 7  …",
+		"     get_app_state  Safari full tree  120ms",
+		"     click          Safari element 7  …",
 	]);
 	const calls = [
 		call("get_app_state", "Safari", "full tree"),
@@ -73,17 +73,17 @@ test("a computer use row names the apps, then counts the calls and screenshots o
 	const content = [{ type: "text", text: "one\ntwo\nthree\nfour\nfive" }, { type: "image", data: "AA==", mimeType: "image/png" }];
 	use.update({ executionStarted: true, isPartial: false, result: { content, details: { calls, durationMs: 900 } } });
 	const lines = use.lines(80);
-	assert.match(lines[0]!, /^ computer_use Safari, Notes · 6 calls · 1 screenshot +\d+ms$/);
+	assert.match(lines[0]!, /^   computer_use Safari, Notes · 6 calls · 1 screenshot +\d+ms$/);
 	assert.deepEqual(lines.slice(1), [
-		"   … 2 earlier calls (click for all)",
-		"   type_text      Safari \"hello\"  120ms",
-		"   click          Notes element 3  120ms · failed: Element not found",
-		"   press_key      Notes Return  120ms · not allowed",
-		"   get_app_state  Notes diff  120ms",
-		"   one",
-		"   two",
-		"   three",
-		"   … 2 more lines (click for all)",
+		"     … 2 earlier calls (click for all)",
+		"     type_text      Safari \"hello\"  120ms",
+		"     click          Notes element 3  120ms · failed: Element not found",
+		"     press_key      Notes Return  120ms · not allowed",
+		"     get_app_state  Notes diff  120ms",
+		"     one",
+		"     two",
+		"     three",
+		"     … 2 more lines (click for all)",
 	]);
 	assert.ok(!lines.join("\n").match(/[✓✗✔✘]/), "failures are named in words, never marked");
 	use.click();
@@ -107,7 +107,7 @@ test("a usage row answers in its band: each window that applies, amber when clos
 	const usage = row(toolRenderers(h.kit, usageSpec) as never, {});
 	const limits = [limit("5h", 35), limit("7d", 85), limit("7d-opus", 100, { applies: false, status: "exhausted" })];
 	usage.update({ isPartial: false, result: text("{}", report(limits, { notes: ["Snapshot is 10 minutes old."] })) });
-	assert.deepEqual(usage.lines(), [band("usage 5h 35% 7d 85%"), "   Snapshot is 10 minutes old."]);
+	assert.deepEqual(usage.lines(), [band("usage 5h 35% 7d 85%"), "     Snapshot is 10 minutes old."]);
 	assert.equal(colorOf(usage.raw()[0]!, " 7d 85%"), fgOf(FG.warning!));
 	assert.equal(colorOf(usage.raw()[0]!, " 5h 35%"), fgOf(FG.toolOutput!));
 	usage.click();

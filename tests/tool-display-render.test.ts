@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { frameAt, RUNNING, WRITING } from "../lib/band/spinner.ts";
 import { ChainRun } from "../lib/chain/run.ts";
 import { splitChain } from "../lib/chain/split.ts";
 import { editRenderers, readRenderers, writeRenderers } from "../lib/tool-display/files.ts";
@@ -13,28 +14,28 @@ test("a bash row runs against its timeout, then keeps the time and the last line
 	const h = harness();
 	const bash = row(bashRenderers(h.kit), { command: "cd app\nnpm ci\nnpm test\nnpm run lint\necho done", timeout: 120 });
 	bash.update({ argsComplete: false });
-	assert.deepEqual(bash.lines(), [band("$ cd app  +4 lines")]);
+	assert.deepEqual(bash.lines(), [band("$ cd app  +4 lines", "", 60, frameAt(WRITING, h.now()))]);
 	bash.update();
 	assert.deepEqual(bash.lines(), [band("$ cd app  +4 lines", "queued")]);
 	bash.update({ executionStarted: true });
 	h.advance(8_600);
 	bash.update({ executionStarted: true });
-	assert.deepEqual(bash.lines(), [band("$ cd app  +4 lines", "8.6s / 120s")]);
+	assert.deepEqual(bash.lines(), [band("$ cd app  +4 lines", "8.6s / 120s", 60, frameAt(RUNNING, h.now()))]);
 	h.advance(3_400);
 	const output = Array.from({ length: 8 }, (_, index) => `line ${index + 1}`).join("\n");
 	bash.update({ executionStarted: true, isPartial: false, result: text(output) });
 	assert.deepEqual(bash.lines(), [
 		band("$ cd app  +4 lines", "12.0s"),
-		"   … 4 earlier lines (click for all)",
-		"   line 5",
-		"   line 6",
-		"   line 7",
-		"   line 8",
+		"     … 4 earlier lines (click for all)",
+		"     line 5",
+		"     line 6",
+		"     line 7",
+		"     line 8",
 	]);
 	bash.update({ executionStarted: true, isPartial: false, expanded: true, result: text(output) });
 	const expanded = bash.lines();
-	assert.equal(expanded.filter((line) => line.startsWith("   line ")).length, 8);
-	assert.ok(expanded.includes("   echo done"), "expanded, the whole command shows under the band");
+	assert.equal(expanded.filter((line) => line.startsWith("     line ")).length, 8);
+	assert.ok(expanded.includes("     echo done"), "expanded, the whole command shows under the band");
 });
 
 test("a failed bash row says how it ended in the rail, not in the output", () => {
@@ -43,7 +44,7 @@ test("a failed bash row says how it ended in the rail, not in the output", () =>
 	bash.update({ executionStarted: true });
 	h.advance(300);
 	bash.update({ executionStarted: true, isPartial: false, isError: true, result: text("oops\n\nCommand exited with code 1") });
-	assert.deepEqual(bash.lines(), [band("$ false", "exit 1  300ms"), "   oops"]);
+	assert.deepEqual(bash.lines(), [band("$ false", "exit 1  300ms"), "     oops"]);
 	const slow = row(bashRenderers(h.kit), { command: "sleep 99", timeout: 5 });
 	slow.update({ executionStarted: true });
 	h.advance(5_000);
@@ -67,7 +68,7 @@ test("a row replayed from history has no times", () => {
 	const h = harness();
 	const bash = row(bashRenderers(h.kit), { command: "ls" });
 	bash.update({ isPartial: false, result: text("a\nb") });
-	assert.deepEqual(bash.lines(), [band("$ ls"), "   a", "   b"]);
+	assert.deepEqual(bash.lines(), [band("$ ls"), "     a", "     b"]);
 });
 
 test("a chained command gets a line per step, with output under the step that matters", () => {
@@ -88,22 +89,22 @@ test("a chained command gets a line per step, with output under the step that ma
 	h.advance(600);
 	bash.update({ executionStarted: true });
 	assert.deepEqual(bash.lines(), [
-		" $ cd src && npm run lint && npm tes…  2 of 3   2.0s / 120s",
-		"    1  npm run lint                                    1.4s",
-		"    2  npm test                                       600ms",
-		"        ✓ one",
-		"        ✓ two",
-		"        ✓ three",
-		"        ✓ four",
-		"    3  npm run build",
+		` ${frameAt(RUNNING, h.now())} $ cd src && npm run lint && npm t…  2 of 3   2.0s / 120s`,
+		"      1  npm run lint                                  1.4s",
+		"      2  npm test                                     600ms",
+		"          ✓ one",
+		"          ✓ two",
+		"          ✓ three",
+		"          ✓ four",
+		"      3  npm run build",
 	]);
 	run.mark({ kind: "end", step: 2, code: 1 }, h.now());
 	run.finish("fail", h.now());
 	bash.update({ executionStarted: true, isPartial: false, isError: true, result: text("…\n\nCommand exited with code 1") });
 	const done = bash.lines();
 	assert.ok(done[0]!.endsWith("exit 1 at 2 of 3  2.0s"), JSON.stringify(done[0]));
-	assert.ok(done.some((line) => /^ {4}3 +npm run build +skipped$/.test(line)), done.join("\n"));
-	assert.ok(done.some((line) => /^ {4}2 +npm test +exit 1 +600ms$/.test(line)), done.join("\n"));
+	assert.ok(done.some((line) => /^ {6}3 +npm run build +skipped$/.test(line)), done.join("\n"));
+	assert.ok(done.some((line) => /^ {6}2 +npm test +exit 1 +600ms$/.test(line)), done.join("\n"));
 });
 
 test("a || fallback that ran reads as handled, and the chain as a success", () => {
@@ -123,9 +124,9 @@ test("a || fallback that ran reads as handled, and the chain as a success", () =
 	bash.update({ executionStarted: true, isPartial: false, result: text("none") });
 	const lines = bash.lines();
 	assert.ok(lines[0]!.endsWith("2 commands   6ms"), lines[0]);
-	assert.match(lines[1]!, /^ {3} 1 +grep -q NOPE a\.ts +exit 1 +5ms$/);
-	assert.match(lines[2]!, /^ {3} 2 +echo none +1ms$/);
-	assert.equal(lines[3], "        none");
+	assert.match(lines[1]!, /^ {5} 1 +grep -q NOPE a\.ts +exit 1 +5ms$/);
+	assert.match(lines[2]!, /^ {5} 2 +echo none +1ms$/);
+	assert.equal(lines[3], "          none");
 });
 
 test("a running row animates until its finish settles, then stops asking for frames", () => {
@@ -176,10 +177,10 @@ test("a read reports partial reads, images, skills and errors", () => {
 	assert.deepEqual(skill.lines(), [band("skill blender · 1 line")]);
 	const missing = row(readRenderers(h.kit), { path: "nope" });
 	missing.update({ isPartial: false, isError: true, result: text("ENOENT: no such file") });
-	assert.deepEqual(missing.lines(), [band("read nope", "failed"), "   ENOENT: no such file"]);
+	assert.deepEqual(missing.lines(), [band("read nope", "failed"), "     ENOENT: no such file"]);
 	const expanded = row(readRenderers(h.kit), { path: "a.txt" });
 	expanded.update({ isPartial: false, expanded: true, result: text("one\ntwo\n") });
-	assert.deepEqual(expanded.lines(), [band("read a.txt · 2 lines"), "   one", "   two"]);
+	assert.deepEqual(expanded.lines(), [band("read a.txt · 2 lines"), "     one", "     two"]);
 });
 
 test("an edit shows added and removed counts and collapses a long diff", () => {
@@ -191,10 +192,61 @@ test("an edit shows added and removed counts and collapses a long diff", () => {
 	edit.update({ isPartial: false, result: text("ok", { diff }) });
 	const lines = edit.lines();
 	assert.equal(lines[0], band("edit a.ts · +30 −1"));
-	assert.equal(lines.filter((line) => line.startsWith("   +")).length, 20);
-	assert.equal(lines.at(-1), "   … 11 more diff lines (click for all)");
+	assert.equal(lines.filter((line) => line.startsWith("     +")).length, 20);
+	assert.equal(lines.at(-1), "     … 11 more diff lines (click for all)");
 	edit.update({ isPartial: false, expanded: true, result: text("ok", { diff }) });
-	assert.equal(edit.lines().filter((line) => /^ {3}[+-]\d/.test(line)).length, 31);
+	assert.equal(edit.lines().filter((line) => /^ {5}[+-]\d/.test(line)).length, 31);
+});
+
+test("only a call the model is writing now spins; one resumed without a result stays still", () => {
+	const h = harness();
+	let streaming = true;
+	const kit = { ...h.kit, streaming: () => streaming };
+	const live = row(writeRenderers(kit), { path: "a.txt", content: "x" });
+	live.update({ argsComplete: false });
+	assert.equal(live.lines()[0], band("write a.txt · 1 line…", "", 60, frameAt(WRITING, h.now())));
+	assert.equal(h.running(), true, "its spinner turns between argument updates");
+	streaming = false;
+	// A resumed session rebuilds a call whose result never came as a row still being written.
+	const replayed = row(writeRenderers(kit), { path: "b.txt", content: "x" });
+	replayed.update({ argsComplete: false });
+	assert.equal(replayed.lines()[0], band("write b.txt · 1 line…"));
+	h.advance(1_000);
+	assert.equal(replayed.lines()[0], band("write b.txt · 1 line…"), "and stays still");
+	const idle = harness();
+	const still = row(writeRenderers({ ...idle.kit, streaming: () => false }), { path: "c.txt", content: "x" });
+	still.update({ argsComplete: false });
+	still.lines();
+	assert.equal(idle.running(), false, "asking for no frames");
+	const spinning = harness();
+	const writing = row(writeRenderers({ ...spinning.kit, streaming: () => true }), { path: "d.txt", content: "x" });
+	writing.update({ argsComplete: false });
+	writing.lines();
+	assert.equal(spinning.running(), true, "where a call being written now does");
+});
+
+test("frames stop for a row Pi dropped mid-run, once its message or run is over", () => {
+	// Pi rebuilds the transcript when some settings change mid-run; the old rows are never drawn again.
+	const h = harness();
+	let streaming = true;
+	let busy = true;
+	const kit = { ...h.kit, streaming: () => streaming, busy: () => busy };
+	const writing = row(writeRenderers(kit), { path: "a.txt", content: "x" });
+	writing.update({ argsComplete: false });
+	writing.lines();
+	const running = row(bashRenderers(kit), { command: "sleep 9" }, "call-2");
+	running.update({ executionStarted: true });
+	running.lines();
+	assert.equal(h.running(), true);
+	streaming = false;
+	h.tick();
+	const afterMessage = writing.invalidations();
+	h.tick();
+	assert.equal(writing.invalidations(), afterMessage, "the row being written stops once its message ends");
+	assert.equal(h.running(), true, "the running call still turns");
+	busy = false;
+	h.tick();
+	assert.equal(h.running(), false, "and stops once the run is over");
 });
 
 test("a write shows its line count and a preview of the file", () => {
@@ -202,14 +254,14 @@ test("a write shows its line count and a preview of the file", () => {
 	const content = Array.from({ length: 14 }, (_, index) => `row ${index}`).join("\n");
 	const write = row(writeRenderers(h.kit), { path: "out.txt", content });
 	write.update({ argsComplete: false });
-	assert.equal(write.lines()[0], band("write out.txt · 14 lines…"));
+	assert.equal(write.lines()[0], band("write out.txt · 14 lines…", "", 60, frameAt(WRITING, h.now())));
 	write.update({ isPartial: false, result: text("Successfully wrote") });
 	const lines = write.lines();
 	assert.equal(lines[0], band("write out.txt · 14 lines"));
 	// The end of the file, where a streaming write is, with a count of what is above it.
-	assert.deepEqual(lines.slice(1), ["   … 11 earlier lines (click for all)", "   row 11", "   row 12", "   row 13"]);
+	assert.deepEqual(lines.slice(1), ["     … 11 earlier lines (click for all)", "     row 11", "     row 12", "     row 13"]);
 	write.update({ isPartial: false, expanded: true, result: text("Successfully wrote") });
-	assert.equal(write.lines().filter((line) => line.startsWith("   row ")).length, 14);
+	assert.equal(write.lines().filter((line) => line.startsWith("     row ")).length, 14);
 	// A row replayed from a saved session has its result but was never marked complete.
 	const replayed = row(writeRenderers(h.kit), { path: "out.txt", content });
 	replayed.update({ argsComplete: false, isPartial: false, result: text("Successfully wrote") });
@@ -290,7 +342,7 @@ test("a single hidden line is shown in the row its hint would take, never as a h
 	const h = harness();
 	const bash = row(bashRenderers(h.kit), { command: "ls" });
 	bash.update({ isPartial: false, result: text("one\ntwo\nthree\nfour\nfive") });
-	assert.deepEqual(bash.lines().slice(1), ["   one", "   two", "   three", "   four", "   five"]);
+	assert.deepEqual(bash.lines().slice(1), ["     one", "     two", "     three", "     four", "     five"]);
 	bash.update({ isPartial: false, result: text("one\ntwo\nthree\nfour\nfive\nsix") });
-	assert.deepEqual(bash.lines().slice(1), ["   … 2 earlier lines (click for all)", "   three", "   four", "   five", "   six"]);
+	assert.deepEqual(bash.lines().slice(1), ["     … 2 earlier lines (click for all)", "     three", "     four", "     five", "     six"]);
 });

@@ -3,7 +3,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { quiet } from "./support/quiet-theme.ts";
 import assert from "node:assert/strict";
 import { transcriptLines } from "../lib/subagents/transcript.ts";
-import { createMessageRenderer, createReportRenderer, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
+import { createMessageRenderer, createReportRenderer, messageCallRow, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 
 const plain = (_color: string, text: string) => text;
@@ -101,7 +101,7 @@ test("a subagent main waits on shows the task, the full rail and what it is doin
 	const lines = row.render(100).map(strip);
 	assert.match(lines[0]!, /count-lib  gpt-6-luna  Count the files.*ctx 5%  \$0\.0021  3\.0s/);
 	assert.equal(lines.length, 2);
-	assert.match(lines[1]!, /^ {3}bash ls lib/);
+	assert.match(lines[1]!, /^ {5}bash ls lib/);
 	current = { ...record, state: "idle", activity: null, endedAt: record.startedAt! + 47_000 };
 	const done = row.render(100).map(strip);
 	assert.equal(done.length, 1);
@@ -196,4 +196,24 @@ test("a wait that ended early says why in plain words", () => {
 	assert.deepEqual(asked.render(100).map(strip).map((line) => line.trim()), ["It asked you something, so the wait ended. Its report will arrive as a message."]);
 	const escaped = subagentResultRow({ content: [{ type: "text", text: "Stopped waiting. checker keeps running." }], details: { name: "checker", wait: true, detached: true } }, theme, context);
 	assert.deepEqual(escaped.render(100).map(strip).map((line) => line.trim()), ["You stopped waiting. It keeps running, and its report will arrive as a message."]);
+});
+
+test("an unstarted subagent or message call spins only while the model writes it", () => {
+	const rows = {
+		subagent: (context: object, streaming: () => boolean) => subagentCallRow({ task: "Find it" }, theme, context, () => undefined, streaming),
+		message: (context: object, streaming: () => boolean) => messageCallRow({ to: "scout", text: "hi" }, theme, context, streaming),
+	};
+	const margin = (lines: string[]) => strip(lines[0]!).slice(0, 3);
+	for (const [kind, row] of Object.entries(rows)) {
+		const writing = { state: {}, isPartial: true, executionStarted: false, argsComplete: false };
+		assert.match(margin(row(writing, () => true).render(80)), /^ [^\s•] $/, `${kind}: written now, it spins`);
+		assert.equal(margin(row({ ...writing, argsComplete: true }, () => false).render(80)), " • ", `${kind}: written, it waits its turn`);
+		// A resumed session rebuilds a call without its result as unstarted and never completes its arguments.
+		assert.equal(margin(row({ ...writing, state: {} }, () => false).render(80)), "   ", `${kind}: rebuilt from history, it stays still`);
+		// The row keeps what it was built as: one built while streaming stops once the stream ends.
+		let streaming = true;
+		const live = row({ ...writing, state: {} }, () => streaming);
+		streaming = false;
+		assert.equal(margin(live.render(80)), "   ", `${kind}: its message ended`);
+	}
 });

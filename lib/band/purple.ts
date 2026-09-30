@@ -43,6 +43,6 @@ export function purpleTheme(theme: PurpleTheme): PurpleTheme {
 /** Comms keep their identity tint; delivery failures and questions use colored rail words. */
 export function renderPurpleBand(theme: PurpleTheme, spec: BandSpec): string {
 	return renderBand(purpleTheme(theme), purplePalette(theme), {
-		...spec, phase: { kind: "done", outcome: "ok", sinceMs: Infinity },
+		...spec, phase: { kind: "done", outcome: "ok", sinceMs: Infinity }, marginPhase: spec.marginPhase ?? spec.phase,
 	});
 }

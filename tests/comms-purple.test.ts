@@ -67,6 +67,30 @@ test("the foreign comms wrapper preserves time, result styling and the popup cli
 	} finally { h.kit.clock.stop(); }
 });
 
+test("communication rows keep the transcript margin: a spinner while written, text under the title", async () => {
+	const title = /^ {3}\S/;
+	const { createMeshMessageRenderer } = await mesh();
+	const mail = plain(createMeshMessageRenderer(() => getMarkdownTheme())({ content: envelope() } as never, { expanded: false } as never, theme as never)!.render(84));
+	assert.match(mail[0]!, title, "mesh mail");
+	assert.match(mail[1]!, /^ {5}Found three files\./, "its text under the title");
+	const note = plain(createMessageRenderer()({ details: { id: "mail-1", kind: "note", from: "scout", to: "reader", text: "hello" } } as never, { expanded: false } as never, theme as never)!.render(84));
+	assert.match(note[0]!, title, "a subagent note");
+	assert.match(note[1]!, /^ {5}hello/);
+	assert.match(plain(messageCallRow({ to: "scout", text: "hi" }, theme as never, { state: {} }).render(84))[0]!, title, "a delivered message");
+	// Written now: the spinner turns in the margin although the band stays purple.
+	const spinner = /^ [^\s•] \S/;
+	assert.match(plain(messageCallRow({ to: "scout", text: "hi" }, theme as never, { state: {}, isPartial: true, executionStarted: false }).render(84))[0]!, spinner);
+	const h = harness();
+	const renderers = foreignRenderers({ ...h.kit, streaming: () => true }, { name: "agent_send" });
+	const context: RenderContext = { args: { to: "scout", message: "hello" }, toolCallId: "comms-3", state: {}, lastComponent: undefined,
+		cwd: "/workspace", executionStarted: false, argsComplete: false, isPartial: true, expanded: false, isError: false, invalidate() {} };
+	try {
+		const line = renderers.renderCall(context.args, theme, context).render(84)[0]!;
+		assert.ok(line.includes(purpleBand));
+		assert.match(plain([line])[0]!, spinner, "agent_send being written");
+	} finally { h.kit.clock.stop(); }
+});
+
 test("list_peers remains an operational tool, not a purple communication row", () => {
 	const { call } = foreign("list_peers");
 	assert.ok(!call.render(84)[0]!.includes(purpleBand));

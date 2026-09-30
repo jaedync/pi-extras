@@ -22,6 +22,7 @@ import { emptyRunMetrics, updateRunMetrics } from "../lib/phase-metrics.ts";
 import { TopBorderLink } from "../lib/top-border.ts";
 import { EditorSlot, type StatusIndicator, type WrappedEditor } from "../lib/editor-wrapper.ts";
 import { everyFrame } from "../lib/band/clock.ts";
+import { frameAt, RUNNING, WRITING } from "../lib/band/spinner.ts";
 import { TailRow } from "../lib/tail-row.ts";
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
@@ -79,17 +80,16 @@ const PHASE_STYLES: Record<VisualPhase, PhaseStyle> = {
 		frames: ["⡀", "⡄", "⡆", "⡇", "⠇", "⠃", "⠁", "⠃", "⠇", "⡇", "⡆", "⡄"],
 		intervalMs: 70,
 	},
+	// The call's own row spins the same way (band.ts), in the same tones.
 	tool: {
-		label: "Writing a tool call",
+		label: "Calling a tool",
 		tone: "mdHeading",
-		frames: ["⠈", "⠘", "⠸", "⠴", "⠦", "⠇", "⠃", "⠉"],
-		intervalMs: 85,
+		...WRITING,
 	},
 	run: {
 		label: "Running",
 		tone: "toolOutput",
-		frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-		intervalMs: 80,
+		...RUNNING,
 	},
 };
 
@@ -289,13 +289,13 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		return { phase: visualPhase, elapsedMs, style: PHASE_STYLES[visualPhase], alertTone: wait.tone };
 	}
 
-	/** What the agent is doing: `Running bash ×2`, `Writing edit call`, `Thinking`. */
+	/** What the agent is doing: `Running bash ×2`, `Calling edit`, `Thinking`. */
 	function phaseLabel(state: VisualState): string {
 		if (state.phase === "run") {
 			const tools = summarizeRunningTools([...runningTools.values()]);
 			return tools ? `${state.style.label} ${tools}` : state.style.label;
 		}
-		if (state.phase === "tool" && pendingToolName) return `Writing ${pendingToolName} call`;
+		if (state.phase === "tool" && pendingToolName) return `Calling ${pendingToolName}`;
 		return state.style.label;
 	}
 
@@ -305,6 +305,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	}
 
 	function spinnerFrame(state: VisualState): string {
+		// A call's own row spins on the wall clock (band.ts); the same clock keeps the two in step.
+		if (state.phase === "tool" || state.phase === "run") return frameAt(state.style, Date.now());
 		return state.style.frames[Math.floor(state.elapsedMs / state.style.intervalMs) % state.style.frames.length] ?? "⠿";
 	}
 

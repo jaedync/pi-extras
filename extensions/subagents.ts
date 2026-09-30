@@ -21,6 +21,7 @@ import { childInstructions, conversationDigest, rosterText } from "../lib/subage
 import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "../lib/subagents/models.ts";
 import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";
 import { type InspectorHost, openAgentInspector } from "../lib/subagents/inspector.ts";
+import { watchRun } from "../lib/run-watch.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, messageResultRow, rememberAgent, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { offerRows } from "../lib/late-rows.ts";
 import { markRow } from "../lib/tool-row.ts";
@@ -120,12 +121,13 @@ export default function subagents(pi: ExtensionAPI) {
 		},
 	} as Component);
 
+	const run = watchRun(pi);
 	const withRows = (tool: ToolDefinition): ToolDefinition => markRow({
 		...tool,
 		renderShell: "self" as const,
 		renderCall: (args: unknown, theme: Theme, context?: RowContext) => tool.name === "subagent"
-			? clickable(subagentCallRow(args, theme, context, (name) => state?.team.get(name)), context)
-			: messageCallRow(args, theme, context),
+			? clickable(subagentCallRow(args, theme, context, (name) => state?.team.get(name), run.streaming), context)
+			: messageCallRow(args, theme, context, run.streaming),
 		renderResult: (result: unknown, _options: { expanded: boolean }, theme: Theme, context?: RowContext) => {
 			if (tool.name !== "subagent") return messageResultRow(result, theme, context);
 			rememberAgent(context, (result as { details?: unknown } | null)?.details);

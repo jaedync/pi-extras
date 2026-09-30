@@ -154,10 +154,10 @@ test("a resumed session shows the saved steps of a chained command", () => {
 	bash.renderResult({ content: [{ type: "text", text: "FAIL x\n\nCommand exited with code 2" }] }, { expanded: false, isPartial: false }, quiet(), context);
 	const lines = call.render(60).map((line: string) => stripTerminalSequences(line).trimEnd());
 	assert.match(lines[0], /exit 2 at 2 of 3$/, "a resumed row has no total time");
-	assert.match(lines[1], /^ {4}1 +make +1\.2s$/);
-	assert.match(lines[2], /^ {4}2 +make test +exit 2 +300ms$/);
-	assert.equal(lines[3], "        FAIL x");
-	assert.match(lines[4], /^ {4}3 +make dist +skipped$/);
+	assert.match(lines[1], /^ {6}1 +make +1\.2s$/);
+	assert.match(lines[2], /^ {6}2 +make test +exit 2 +300ms$/);
+	assert.equal(lines[3], "          FAIL x");
+	assert.match(lines[4], /^ {6}3 +make dist +skipped$/);
 });
 
 test("/tool-display reports, switches and saves its settings", async () => {
@@ -336,13 +336,14 @@ test("a popup Pi took off screen without closing it doesn't stop a row click fro
 		screen.tui.addChild(row as never);
 		// Laid out first, so the click finds the row.
 		await screen.settle();
-		await screen.click(6, y);
+		// Land on a blank cell so two clicks within Pi's double-click window don't select a word.
+		await screen.click(8, y);
 		assert.equal(screen.tui.hasOverlay(), true, "a click on the row opens its popup");
 		// What Pi does to the top overlay on /reload and session switches: no done, no dispose.
 		// Pi draws again before any real click can arrive, so its hit map no longer has the popup.
 		screen.tui.hideOverlay();
 		await screen.settle();
-		await screen.click(6, y);
+		await screen.click(8, y);
 		assert.equal(screen.tui.hasOverlay(), true, "the next click opens it again");
 	} finally {
 		screen.stop();
@@ -373,7 +374,7 @@ test("rows a reload builds before session start are rebuilt once it runs, tools 
 	offerRows(markRow({ name: "shell_job_start", renderShell: "self", renderCall: () => new Text("\u21b3 make  in background", 0, 0) }, "band"));
 	try {
 		h.start();
-		assert.match(drawn(bash), /^ \$ ls/m, "Tool Display's band");
+		assert.match(drawn(bash), /^   \$ ls/m, "Tool Display's band");
 		assert.match(drawn(bash), /a\.txt/);
 		assert.doesNotMatch(drawn(bash), /pi's own bash row/);
 		assert.match(drawn(job), /\u21b3 make {2}in background/);

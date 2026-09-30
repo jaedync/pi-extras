@@ -22,7 +22,7 @@ export const OUTPUT_PREVIEW_LINES = 4;
 /** Output lines under the focused step of a collapsed chain. */
 export const STEP_PREVIEW_LINES = 3;
 /** Where a step's output starts with one-digit step numbers: under the step's command, past its number. */
-const STEP_OUTPUT_INDENT = 8;
+const STEP_OUTPUT_INDENT = BODY_INDENT + 5;
 
 function commandOf(view: View): { text?: string; invalid: boolean } {
 	const raw = view.context.args && typeof view.context.args === "object" ? (view.context.args as { command?: unknown }).command : undefined;

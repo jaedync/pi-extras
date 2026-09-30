@@ -36,7 +36,7 @@ test("an adopted row's band takes the tool's own call line, and its body the too
 	fetch.update({ executionStarted: true, isPartial: false, result: text("Example Domain\nline 2\nline 3") });
 	assert.deepEqual(fetch.lines(), [
 		band("fetch_content https://example.test/a", "1.2s"),
-		"   Example Domain (2 more)",
+		"     Example Domain (2 more)",
 	], "the tool's short name for itself (`fetch`) is dropped, since the band names the tool");
 });
 
@@ -44,7 +44,7 @@ test("without words of its own, the band shows the argument that says what the c
 	const h = harness();
 	const bare = row(foreignRenderers(h.kit, { name: "agent_send" }) as never, { to: "peer", message: "hello\nthere" });
 	bare.update({ isPartial: false, result: text("Delivered") });
-	assert.deepEqual(bare.lines(), [band("agent_send hello"), "   Delivered"], "no renderers: the key argument and the result's text");
+	assert.deepEqual(bare.lines(), [band("agent_send hello"), "     Delivered"], "no renderers: the key argument and the result's text");
 
 	const throwing = row(foreignRenderers(h.kit, fetchTool({ renderCall: () => { throw new Error("bad"); } })) as never, { url: "https://example.test/b" });
 	throwing.update({ isPartial: false, result: text("Title\nmore") });
@@ -59,11 +59,11 @@ test("a result that only repeats the call, or can't be drawn, shows the result's
 	const h = harness();
 	const echo = row(foreignRenderers(h.kit, { name: "mcp", renderCall: () => plain("mcp search"), renderResult: () => plain("mcp search · 3 lines (Ctrl+O)") } as never) as never, { tool: "search" });
 	echo.update({ isPartial: false, result: text("### Result\n42") });
-	assert.deepEqual(echo.lines(), [band("mcp search"), "   ### Result", "   42"]);
+	assert.deepEqual(echo.lines(), [band("mcp search"), "     ### Result", "     42"]);
 
 	const broken = row(foreignRenderers(h.kit, fetchTool({ renderResult: () => { throw new Error("bad"); } })) as never, { url: "https://example.test/c" });
 	broken.update({ isPartial: false, result: text("raw text") });
-	assert.deepEqual(broken.lines().slice(1), ["   raw text"]);
+	assert.deepEqual(broken.lines().slice(1), ["     raw text"]);
 });
 
 test("a long result shows its first lines and how many more; expanded, all of it", () => {
@@ -72,7 +72,7 @@ test("a long result shows its first lines and how many more; expanded, all of it
 	const long = Array.from({ length: 7 }, (_, index) => `line ${index + 1}`).join("\n");
 	const goal = row(foreignRenderers(h.kit, tool) as never, {});
 	goal.update({ isPartial: false, result: text(long) });
-	assert.deepEqual(goal.lines(), [band("get_goal"), "   line 1", "   line 2", "   line 3", "   line 4", "   … 3 more lines (click for all)"]);
+	assert.deepEqual(goal.lines(), [band("get_goal"), "     line 1", "     line 2", "     line 3", "     line 4", "     … 3 more lines (click for all)"]);
 	goal.update({ isPartial: false, expanded: true, result: text(long) });
 	assert.equal(goal.lines().length, 8);
 });
@@ -81,7 +81,7 @@ test("a failed call says so in the rail and shows its error in red", () => {
 	const h = harness();
 	const fetch = row(foreignRenderers(h.kit, fetchTool()) as never, { url: "https://example.test/d" });
 	fetch.update({ isPartial: false, isError: true, result: text("HTTP 403: Forbidden") });
-	assert.deepEqual(fetch.lines(), [band("fetch_content https://example.test/d", "failed"), "   HTTP 403: Forbidden"]);
+	assert.deepEqual(fetch.lines(), [band("fetch_content https://example.test/d", "failed"), "     HTTP 403: Forbidden"]);
 	assert.equal(colorOf(fetch.raw()[1]!, "HTTP 403"), fgOf(FG.error!), "the error is the theme's error color");
 });
 
@@ -106,7 +106,7 @@ test("the tool's renderers are asked again when Pi has something new, not on eve
 	fetch.lines();
 	assert.deepEqual(tool.calls, { call: before.call + 1, result: before.result + 1 }, "a tool that changed its result in place still shows it soon after");
 	fetch.update({ executionStarted: true, result: text("Loaded\nstep 1\nstep 2") });
-	assert.deepEqual(fetch.lines().slice(1), ["   Loaded (2 more)"], "a new result is drawn at once");
+	assert.deepEqual(fetch.lines().slice(1), ["     Loaded (2 more)"], "a new result is drawn at once");
 });
 
 test("the popup lists every argument and the tool's whole result", () => {

@@ -449,7 +449,7 @@ describe("job rendering", () => {
 		contains(expanded, "[Showing lines 11-20 of 20]");
 		doesNotContain(expanded, "Full output");
 		// Output sits under the band's title.
-		contains(expanded, "\n   line 1");
+		contains(expanded, "\n     line 1");
 	});
 
 	test("a completion band takes the color of how the job ended", () => {
@@ -527,7 +527,7 @@ describe("job rendering", () => {
 		assert.deepStrictEqual(renderStartResult(result, plainTheme as any).render(60), []);
 		const lines = renderStartResult(result, plainTheme as any, { expanded: true }).render(60);
 		assert.strictEqual(lines.length, 2);
-		assert.strictEqual(lines[0]!.startsWith("   Started nap (pid 4) in /tmp"), true);
+		assert.strictEqual(lines[0]!.startsWith("     Started nap (pid 4) in /tmp"), true);
 		contains(lines[1], "log: /tmp/nap.log");
 		const failed = { content: [{ type: "text", text: "Working directory does not exist: /nope" }], details: {} };
 		contains(renderStartResult(failed, plainTheme as any, { isError: true }).render(60).join("\n"), "/nope");
