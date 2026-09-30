@@ -62,6 +62,7 @@ import {
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, reconcileDeliveries } from "../lib/shell-jobs-delivery.ts";
 import { type ClickTarget, clickToInspect, type InspectorHost, openInspector } from "../lib/shell-jobs-inspector.ts";
 import { CWD_PREVIEW_BYTES, errResult, jobTitle, manageJob, okResult, type ToolResult } from "../lib/shell-jobs-manage.ts";
+import { offerRows } from "../lib/late-rows.ts";
 import { markRow } from "../lib/tool-row.ts";
 
 import {
@@ -616,7 +617,7 @@ export default function shellJobs(pi: ExtensionAPI): void {
 				continue;
 			}
 			// Its rows draw their own band, so Tool Display leaves them alone.
-			pi.registerTool(markRow(tool, "band") as never);
+			pi.registerTool(offerRows(markRow(tool, "band")) as never);
 			taken.add(tool.name);
 		}
 		await reconcileDeliveries(runtime, ctx);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
-import { canAdopt, installAdoption, type AdoptHost, type RowRenderers } from "../lib/tool-display/adopt.ts";
+import { canAdopt, installAdoption, rebuildRow, type AdoptHost, type RowRenderers } from "../lib/tool-display/adopt.ts";
 import { foreignRenderers } from "../lib/tool-display/foreign.ts";
 import { harness } from "./support/tool-rows.ts";
 
@@ -106,6 +106,29 @@ test("Pi's tool row still has the lookups Tool Display patches, and draws an ado
 		const other = { ...tool };
 		const left = new ToolExecutionComponent("x_tool", "call-2", {}, {}, other as never, ui as never, "/work");
 		assert.equal((left as unknown as { getCallRenderer(): unknown }).getCallRenderer(), other.renderCall);
+	} finally {
+		undo();
+	}
+});
+
+test("a rebuild takes the host's choice and the container it needs, and leaves a row of another shape alone", () => {
+	const ui = { requestRender() {} };
+	const tool = { name: "y_tool", renderCall: () => new Text("y_tool their call", 0, 0) };
+	let draws = false;
+	const h = harness();
+	const undo = installAdoption({ renderersFor: (definition) => (draws && definition === tool ? (foreignRenderers(h.kit, tool as never) as never) : undefined) });
+	try {
+		const row = new ToolExecutionComponent("y_tool", "call-1", { note: "hi" }, {}, tool as never, ui as never, "/work") as unknown as {
+			getRenderShell(): string; render(width: number): string[]; children: unknown[]; contentBox: unknown; selfRenderContainer: unknown;
+		};
+		assert.equal(row.getRenderShell(), "default");
+		draws = true;
+		assert.equal(row.getRenderShell(), "default", "a built row keeps its choice");
+		assert.equal(rebuildRow(row), true);
+		assert.equal(row.getRenderShell(), "self");
+		assert.ok(row.children.includes(row.selfRenderContainer) && !row.children.includes(row.contentBox), "its own container in place of Pi's");
+		assert.match(stripTerminalSequences(row.render(60).join("\n")), /y_tool their call/);
+		assert.equal(rebuildRow({ children: [] }), false);
 	} finally {
 		undo();
 	}

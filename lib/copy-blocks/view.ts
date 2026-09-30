@@ -14,6 +14,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { draw, paintFrom, type Button, type PaintTheme } from "./draw.ts";
 import { newRecorder, scan, taggedTheme, type Block, type Recorder } from "./scan.ts";
 import { sourceBlocks, sourceCode, type SourceBlock } from "./source.ts";
+import { noteLate } from "../late-rows.ts";
 
 /** How long a label reads "copied" after a click. */
 export const COPIED_MS = 1_500;
@@ -179,29 +180,38 @@ interface Slot {
 }
 
 // Kept on the prototype, so a reloaded copy of this module takes over the one patch instead of stacking another.
-const SLOT = Symbol.for("pi-extras.copy-blocks");
+// Versioned, so an update that changes the patch lays its own over an older one (left passing straight through).
+const SLOT = Symbol.for("pi-extras.copy-blocks.v2");
 
 /**
  * Draws replies' blocks through `host` until the returned undo is called.
  * The patch stays on Pi's prototype, passing straight through, once undone.
  */
 export function installCopyBlocks(host: CopyHost, target: object = AssistantMessageComponent.prototype): () => void {
-	const proto = target as Record<string | symbol, unknown> & { updateContent: Update };
-	let slot = proto[SLOT] as Slot | undefined;
-	if (!slot) {
-		const created: Slot = { host: undefined, updateContent: proto.updateContent };
-		proto[SLOT] = created;
-		proto.updateContent = function (message, isStreaming) {
-			created.updateContent.call(this, message, isStreaming);
-			const active = created.host;
-			if (!active?.enabled()) return;
-			try { adopt(this as Internals, active); } catch { /* Pi's rendering stays */ }
-		};
-		slot = created;
-	}
-	const owned = slot;
+	const owned = slotOf(target);
 	owned.host = host;
 	return () => {
 		if (owned.host === host) owned.host = undefined;
 	};
+}
+
+/** Puts the patch on Pi's message with no host, passing straight through and noting each message it builds (see late-rows.ts). */
+export function prepareCopyBlocks(target: object = AssistantMessageComponent.prototype): void {
+	slotOf(target);
+}
+
+function slotOf(target: object): Slot {
+	const proto = target as Record<string | symbol, unknown> & { updateContent: Update };
+	const found = proto[SLOT] as Slot | undefined;
+	if (found) return found;
+	const created: Slot = { host: undefined, updateContent: proto.updateContent };
+	proto[SLOT] = created;
+	proto.updateContent = function (message, isStreaming) {
+		created.updateContent.call(this, message, isStreaming);
+		const active = created.host;
+		if (!active) noteLate("message", this as object);
+		if (!active?.enabled()) return;
+		try { adopt(this as Internals, active); } catch { /* Pi's rendering stays */ }
+	};
+	return created;
 }

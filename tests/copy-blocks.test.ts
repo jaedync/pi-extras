@@ -8,6 +8,7 @@ import { newRecorder, scan, taggedTheme } from "../lib/copy-blocks/scan.ts";
 import { sourceBlocks, sourceCode } from "../lib/copy-blocks/source.ts";
 import { COPIED_MS, installCopyBlocks, type CopyHost } from "../lib/copy-blocks/view.ts";
 import { installThinkingTail } from "../lib/tool-display/thinking.ts";
+import { forgetLate } from "../lib/late-rows.ts";
 import { quiet } from "./support/quiet-theme.ts";
 
 initTheme("dark");
@@ -245,5 +246,22 @@ test("Pi is asked to draw again once the copied mark is due to go", async (t) =>
 		assert.equal(redraws, 1);
 	} finally {
 		undo();
+	}
+});
+
+test("replies a reload builds before session start get their cards once it runs", async () => {
+	forgetLate();
+	const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+	copyBlocks({ on: (event: string, handler: never) => handlers.set(event, handler), registerCommand: () => undefined } as never, {
+		env: {}, copy: async () => undefined, fullscreen: () => true,
+	});
+	const ctx = { mode: "tui", ui: { theme: quiet(), notify: () => undefined, setStatus: () => undefined } };
+	const reply = new AssistantMessageComponent(message(said(REPLY)), false);
+	assert.equal(rowOf(reply.render(WIDTH), LABEL), -1, "Pi's own drawing, before session start");
+	try {
+		await handlers.get("session_start")!({ type: "session_start", reason: "reload" }, ctx);
+		assert.ok(rowOf(reply.render(WIDTH), LABEL) >= 0, "cards once it runs");
+	} finally {
+		handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
 	}
 });

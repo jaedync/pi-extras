@@ -22,6 +22,7 @@ import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings }
 import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";
 import { type InspectorHost, openAgentInspector } from "../lib/subagents/inspector.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, messageResultRow, rememberAgent, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
+import { offerRows } from "../lib/late-rows.ts";
 import { markRow } from "../lib/tool-row.ts";
 import { appendRunLog, runLogEntry, runLogPath, statsByModel, statsText } from "../lib/subagents/runlog.ts";
 import { formatTime } from "../lib/band/band.ts";
@@ -238,7 +239,7 @@ export default function subagents(pi: ExtensionAPI) {
 				ctx.ui.notify(`subagents: tool name "${tool.name}" is already registered by another extension; skipping it.`, "warning");
 				continue;
 			}
-			pi.registerTool(withRows(tool));
+			pi.registerTool(offerRows(withRows(tool)));
 		}
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui as unknown as InspectorHost : null;
 		if (ctx.hasUI && ctx.mode === "tui") {

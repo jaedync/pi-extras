@@ -17,6 +17,7 @@
 import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { noteLate } from "../late-rows.ts";
 
 export type ThinkingMode = "tail" | "collapsed" | "full";
 export const THINKING_MODES: readonly ThinkingMode[] = ["tail", "collapsed", "full"];
@@ -277,7 +278,8 @@ interface Slot {
 }
 
 // Kept on the prototype, so a reloaded copy of this module takes over the one patch instead of stacking another.
-const SLOT = Symbol.for("pi-extras.thinking-tail");
+// Versioned, so an update that changes the patch lays its own over an older one (left passing straight through).
+const SLOT = Symbol.for("pi-extras.thinking-tail.v2");
 
 function implFor(host: ThinkingHost): Impl {
 	return {
@@ -312,25 +314,35 @@ function implFor(host: ThinkingHost): Impl {
  * The patch stays on Pi's prototype, passing straight through, once undone.
  */
 export function installThinkingTail(host: ThinkingHost, target: object = AssistantMessageComponent.prototype): () => void {
-	const proto = target as Record<string | symbol, unknown> & { updateContent: Update; setHideThinkingBlock: SetHide };
-	let slot = proto[SLOT] as Slot | undefined;
-	if (!slot) {
-		const created: Slot = { impl: undefined, updateContent: proto.updateContent, setHideThinkingBlock: proto.setHideThinkingBlock };
-		proto[SLOT] = created;
-		proto.updateContent = function (message, isStreaming) {
-			if (!created.impl) return created.updateContent.call(this, message, isStreaming);
-			created.impl.update(this as Internals, message, isStreaming, created.updateContent);
-		};
-		proto.setHideThinkingBlock = function (hide) {
-			if (!created.impl) return created.setHideThinkingBlock.call(this, hide);
-			created.impl.setHide(this as Internals, hide, created.setHideThinkingBlock);
-		};
-		slot = created;
-	}
-	const owned = slot;
+	const owned = slotOf(target);
 	const impl = implFor(host);
 	owned.impl = impl;
 	return () => {
 		if (owned.impl === impl) owned.impl = undefined;
 	};
+}
+
+/** Puts the patch on Pi's message with no host, passing straight through and noting each message it builds (see late-rows.ts). */
+export function prepareThinkingTail(target: object = AssistantMessageComponent.prototype): void {
+	slotOf(target);
+}
+
+function slotOf(target: object): Slot {
+	const proto = target as Record<string | symbol, unknown> & { updateContent: Update; setHideThinkingBlock: SetHide };
+	const found = proto[SLOT] as Slot | undefined;
+	if (found) return found;
+	const created: Slot = { impl: undefined, updateContent: proto.updateContent, setHideThinkingBlock: proto.setHideThinkingBlock };
+	proto[SLOT] = created;
+	proto.updateContent = function (message, isStreaming) {
+		if (!created.impl) {
+			noteLate("message", this as object);
+			return created.updateContent.call(this, message, isStreaming);
+		}
+		created.impl.update(this as Internals, message, isStreaming, created.updateContent);
+	};
+	proto.setHideThinkingBlock = function (hide) {
+		if (!created.impl) return created.setHideThinkingBlock.call(this, hide);
+		created.impl.setHide(this as Internals, hide, created.setHideThinkingBlock);
+	};
+	return created;
 }

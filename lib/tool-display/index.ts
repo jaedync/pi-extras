@@ -36,8 +36,9 @@ import { chainOperations, withChains, type ActiveRuns } from "../chain/exec.ts";
 import { CHAIN_ENTRY, CHAIN_EVENT, ChainRun, type SavedChain } from "../chain/run.ts";
 import { splitChain } from "../chain/split.ts";
 import { TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../tool-count.ts";
+import { forgetLate, lateRows, offeredRows, redrawLateMessages } from "../late-rows.ts";
 import { markRow, rowKind, type RowKind } from "../tool-row.ts";
-import { canAdopt, installAdoption, type RowRenderers } from "./adopt.ts";
+import { canAdopt, installAdoption, prepareAdoption, rebuildRow, type RowRenderers } from "./adopt.ts";
 import { computerUseSpec, windowsUseSpec } from "./computer.ts";
 import { editRenderers, readRenderers, writeRenderers } from "./files.ts";
 import { foreignRenderers, type ForeignTool } from "./foreign.ts";
@@ -48,7 +49,7 @@ import { bashRenderers } from "./shell.ts";
 import { toolRenderers, type ToolSpec } from "./tool.ts";
 import { usageSpec } from "./usage.ts";
 import { webSearchSpec } from "./web.ts";
-import { installThinkingTail, THINKING_MODES, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
+import { installThinkingTail, prepareThinkingTail, THINKING_MODES, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
 
 export const TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -142,7 +143,12 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	const saved = new Map<string, unknown>();
 	const restored = new Map<string, ChainRun | null>();
 	const unsaved: SavedChain[] = [];
+	/** What install() last registered under each built-in tool's name. */
+	const registered = new Map<string, object>();
 	const nonce = deps.nonce ?? (() => randomBytes(8).toString("hex"));
+	// In place before a reload rebuilds the transcript, so the rows it builds are noted (see late-rows.ts).
+	prepareAdoption();
+	prepareThinkingTail();
 
 	const kit: Kit = {
 		...deps.host,
@@ -207,11 +213,16 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			if (!tool || (tool.sourceInfo.source !== "builtin" && !owned.has(name))) continue;
 			let definition = session.definitions[name];
 			if (!settings.enabled) {
-				if (owned.has(name)) pi.registerTool(definition);
+				if (owned.has(name)) {
+					pi.registerTool(definition);
+					registered.set(name, definition);
+				}
 				continue;
 			}
 			if (name === "bash") definition = withChains(definition, session.shellPath, active, hooks) as AnyTool;
-			pi.registerTool(withDisplay(definition, renderers[name]));
+			const drawn = withDisplay(definition, renderers[name]);
+			pi.registerTool(drawn);
+			registered.set(name, drawn);
 			owned.add(name);
 		}
 	};
@@ -229,6 +240,19 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			adopted.set(definition, renderers);
 		}
 		return renderers;
+	};
+
+	/**
+	 * Rebuilds the rows a reload built before session_start: tool rows with
+	 * what is registered now, replies with the thinking tail (see late-rows.ts).
+	 */
+	const repairLate = () => {
+		for (const row of lateRows("tool")) {
+			const name = (row as { toolName?: unknown }).toolName;
+			const definition = typeof name === "string" ? registered.get(name) ?? offeredRows(name) : undefined;
+			try { rebuildRow(row, definition); } catch { /* That row stays as Pi drew it. */ }
+		}
+		redrawLateMessages();
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -262,6 +286,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		undoAdoption = installAdoption({ renderersFor });
 		adopting = canAdopt();
 		install();
+		repairLate();
 	});
 
 	pi.on("turn_end", flush);
@@ -269,6 +294,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	pi.on("session_shutdown", () => {
 		flush();
 		clock.stop();
+		forgetLate();
 		undoThinking?.();
 		undoThinking = undefined;
 		undoAdoption?.();

@@ -7,7 +7,8 @@
 import { copyToClipboard, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PaintTheme } from "./draw.ts";
 import { sourceBlocks, type SourceBlock } from "./source.ts";
-import { installCopyBlocks, type CopyHost } from "./view.ts";
+import { forgetLate, redrawLateMessages } from "../late-rows.ts";
+import { installCopyBlocks, prepareCopyBlocks, type CopyHost } from "./view.ts";
 
 const DISABLED = new Set(["0", "off", "false", "no"]);
 const REDRAW_KEY = "pi-extras.copy-blocks";
@@ -60,6 +61,8 @@ export function pickBlock(blocks: readonly SourceBlock[], args: string): { block
 export default function copyBlocks(pi: ExtensionAPI, deps: CopyBlocksDeps = productionDeps()): void {
 	if (!copyBlocksEnabled(deps.env)) return;
 	let undo: (() => void) | undefined;
+	// In place before a reload rebuilds the transcript, so the replies it builds are noted (see late-rows.ts).
+	prepareCopyBlocks();
 
 	pi.on("session_start", async (_event, ctx) => {
 		undo?.();
@@ -83,11 +86,14 @@ export default function copyBlocks(pi: ExtensionAPI, deps: CopyBlocksDeps = prod
 			},
 		};
 		undo = installCopyBlocks(host);
+		// Replies a reload built before now are drawn again, with their cards.
+		redrawLateMessages();
 	});
 
 	pi.on("session_shutdown", () => {
 		undo?.();
 		undo = undefined;
+		forgetLate();
 	});
 
 	pi.registerCommand("copy-block", {

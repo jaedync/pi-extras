@@ -4,10 +4,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
 import { CHAIN_ENTRY, CHAIN_EVENT } from "../lib/chain/run.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount } from "../lib/tool-count.ts";
+import { forgetLate, lateRows, offerRows } from "../lib/late-rows.ts";
 import { markRow, rowKind, TOOL_ROW } from "../lib/tool-row.ts";
 import { applyArgs, countArg, registerToolDisplay, toolDisplayEnabled, TOOL_NAMES, withDisplay, type ToolDisplayDeps } from "../lib/tool-display/index.ts";
 import { DEFAULT_SETTINGS, readSettings, writeSettings, type DisplaySettings } from "../lib/tool-display/settings.ts";
@@ -320,4 +321,41 @@ test("a popup Pi took off screen without closing it doesn't stop a row click fro
 		screen.stop();
 		h.fire("session_shutdown");
 	}
+});
+
+const drawn = (row: { render(width: number): string[] }) => stripTerminalSequences(row.render(60).join("\n"));
+
+test("rows a reload builds before session start are rebuilt once it runs, tools registered then included", () => {
+	forgetLate();
+	// Loading the extension puts its patches in place; Pi's /reload then rebuilds the transcript before session_start.
+	const h = harness();
+	const pisBash = { name: "bash", renderCall: () => new Text("pi's own bash row", 0, 0) };
+	const bash = new ToolExecutionComponent("bash", "call-1", { command: "ls" }, {}, pisBash as never, ui as never, "/work") as unknown as PiRow;
+	bash.updateResult({ content: [{ type: "text", text: "a.txt" }], isError: false }, false);
+	const job = new ToolExecutionComponent("shell_job_start", "call-2", { command: "make" }, {}, undefined, ui as never, "/work") as unknown as PiRow;
+	const theirs = piRow({ name: "fetch_content", renderCall: () => new Text("fetch_content theirs", 0, 0) } as never);
+	const steps = Array.from({ length: 12 }, (_, index) => `step ${index + 1}`).join("\n\n");
+	const reply = new AssistantMessageComponent({ role: "assistant", content: [{ type: "thinking", thinking: steps }, { type: "text", text: "done" }], stopReason: "stop" } as never, false);
+	assert.match(drawn(bash), /pi's own bash row/);
+	assert.match(drawn(job), /"command": "make"/, "no definition yet: Pi's plain fallback");
+	assert.equal(theirs.getRenderShell(), "default");
+	assert.match(drawn(reply), /step 1 *\n/, "thinking in full, a line per step");
+	assert.equal(lateRows("tool").length, 3);
+	assert.equal(lateRows("message").length, 1);
+	// Shell Jobs registers its tools in session_start, before Tool Display's handler runs.
+	offerRows(markRow({ name: "shell_job_start", renderShell: "self", renderCall: () => new Text("\u21b3 make  in background", 0, 0) }, "band"));
+	try {
+		h.start();
+		assert.match(drawn(bash), /^ \$ ls/m, "Tool Display's band");
+		assert.match(drawn(bash), /a\.txt/);
+		assert.doesNotMatch(drawn(bash), /pi's own bash row/);
+		assert.match(drawn(job), /\u21b3 make {2}in background/);
+		assert.equal(theirs.getRenderShell(), "self");
+				assert.match(drawn(reply), /step 11\s· step 12/, "thinking as a tail");
+		piRow({ name: "fetch_content" });
+		assert.equal(lateRows("tool").length, 3, "a row built with the host in place isn't noted");
+	} finally {
+		h.fire("session_shutdown");
+	}
+	assert.equal(lateRows("tool").length, 0, "a session's end starts the list over");
 });
