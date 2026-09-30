@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.12.6 - 2026-09-30
+
+### Fixed
+
+- Usage Guard warnings stop reaching the model once their window resets. A
+  delivered notice such as "5h is at 98%, sleep until the reset" previously
+  stayed in every later request for the same provider, even hours after the
+  reset. It remains in raw history but is omitted from the model's context.
+
 ## 0.12.5 - 2026-09-30
 
 ### Fixed
