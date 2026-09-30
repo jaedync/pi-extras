@@ -288,6 +288,13 @@ them. Custom entries are not sent to the model. Tool Display writes the
 `toolDisplay` section of `pi-extras.json`, and `/tool-display count` writes
 `statusPlus.toolCount`.
 
+## Copy Blocks
+
+Copy Blocks changes only how replies are drawn; nothing it does reaches the
+model or the session file. It writes to the clipboard only when you click a
+`copy` label or run `/copy-block`, through Pi's own clipboard helper (the
+system clipboard, with OSC 52 to the terminal as well). It writes no files.
+
 ## Release Notes
 
 Release Notes reads `CHANGELOG.md` from the installed package and writes the

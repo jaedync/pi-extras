@@ -17,7 +17,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all twelve extensions (computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
+adds all thirteen extensions (computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -35,6 +35,7 @@ can still conflict.
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
 | Windows Use | Opt-in, WSL on a Hyper-V host: a `windows_use` tool that operates Windows VMs through Windows-MCP, which it installs in each guest, and through their consoles |
 | Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; thinking as a live tail of its newest lines |
+| Copy Blocks | Code blocks and quotes in replies drawn on a background of their own with a `copy` label: one click copies the exact text; `/copy-block` does it from the keyboard |
 | Release Notes | What changed in pi-extras, shown once in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
 
@@ -92,6 +93,7 @@ the package. Removing it does not remove your credentials or change other packag
   writes its switches under `toolDisplay` in `pi-extras.json`: `enabled`,
   `others` (default `true`), `chains` (default `true`), `motion` (`full` or
   `reduced`) and `thinking` (`tail`, `collapsed` or `full`; default `tail`).
+- `PI_COPY_BLOCKS=off`: leave code blocks and quotes in replies as Pi draws them.
 - `statusPlus.toolCount` in `pi-extras.json`: `calls` (the default) or `steps`,
   switched by clicking the footer's tool count or with `/tool-display count`.
 - `releaseNotes.seen` in `pi-extras.json`: the last pi-extras version whose
@@ -279,6 +281,25 @@ the one that moves. When it finishes, its completion is one band with how it
 ended and how long it took; click it for the output. Click a running job's row
 or its band above the editor to open its live log; Esc or a click outside
 closes it.
+
+## Copy Blocks
+
+Code blocks and quotes in the agent's replies are drawn as cards on a
+background of their own. A code block's header shows its language and a
+`copy` label; a quote's label sits at the right of its first line that has
+room. Click a code block's header, or a quote's label, and the block's exact
+text goes to the clipboard: the code as written, tabs included, and a quote
+without its `>` markers or the line breaks wrapping added. The label reads
+`✓ copied` for a moment after.
+
+Clicks need Pi's fullscreen mode (`"tuiMode": "fullscreen"`); in the regular
+mode the terminal owns the mouse, so the cards keep their background and
+leave the labels out. `/copy-block` works in both: it copies the last code
+block or quote of the latest reply, and `/copy-block 2` the second.
+
+Drawing the cards relies on how Pi builds an assistant message, which is not
+part of Pi's extension API. If a Pi update changes it, replies are drawn as
+Pi draws them and `/copy-block` still works.
 
 ## Subagents
 
