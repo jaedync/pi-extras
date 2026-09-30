@@ -9,7 +9,8 @@
  *   other become one message and one turn. Children main started in the same
  *   turn form a group, and a report waits (up to `groupWaitMs`) for the rest
  *   of its group, so parallel work lands as one message. A child the user
- *   stopped doesn't wake it.
+ *   stopped doesn't wake it, nor does one from a run that began with main's
+ *   question and already answered it.
  *
  * Everything sent but not yet in the transcript is kept as pending, so the
  * widget can show it queued until Pi appends it.
@@ -156,7 +157,7 @@ export class MainMail {
 		if (records.length === 0) return;
 		for (const record of records) this.pendingItems.delete(`pending-report-${record.name}`);
 		const id = this.nextId();
-		const wakes = records.some((record) => record.state !== "stopped");
+		const wakes = records.some((record) => record.state !== "stopped" && !record.answeredMain);
 		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
 		this.send({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } },
 			wakes ? { triggerTurn: true, deliverAs: "steer" } : { triggerTurn: false });

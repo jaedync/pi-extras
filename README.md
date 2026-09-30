@@ -314,14 +314,17 @@ session. `message` sends a note to an agent by name, or to `all`. A running
 agent reads it after its current tool call; a finished one resumes with its
 context to handle it. A child can ask with `expectReply: true` and wait for the
 answer. Main never waits: a child's question wakes it, and so does the answer
-to anything main asked. Children know each other and can split work directly.
+to anything main asked; the report of a run that answered it doesn't wake main
+a second time. Children know each other and can split work directly.
 Notes that don't need main's attention queue for its next turn instead of
 waking it, and show above the editor until they are in the transcript.
 Reports from children started in the same run arrive together, as one message.
 
 **Seeing it.** Each agent has a band above the editor: its model and thinking
-level, what it is doing right now, how full its context is, what it has cost
-and how long it has run. Children of children sit under their parent. Click a
+level, what it is doing right now, how full its context is (`ctx 12%`), what
+it has cost and how long this run has taken. Children of children sit under
+their parent. A child the agent waits on shows in its `subagent` row instead,
+with what it is doing on the line under it. Click a
 band, a `subagent` row, or run `/subagents` to open the inspector: the agent's
 task and live transcript. Press Enter to write to it (steered in while it
 runs, resuming it when it has finished, answering it when it asked), and `x`

@@ -127,19 +127,21 @@ export class Team {
 			return { ok: true, delivered: "replied" };
 		}
 		const body = options.expectReply ? questionText(from, text) : noteText(from, text);
+		const said = `${options.expectReply ? "Question" : "Message"} from ${from}: ${text}`;
 		// Main never blocks: its question is delivered, and the answer wakes it later.
 		if (from === MAIN && options.expectReply) {
-			const result = this.deliverToChild(from, to, body, true);
+			const result = this.deliverToChild(from, to, body, true, said);
 			if (result.ok) this.owesMain.add(to);
 			return result;
 		}
 		let result: SendResult;
 		if (to === MAIN) {
 			const answering = this.owesMain.delete(from);
+			if (answering && this.records.get(from)?.resumedBy?.from === MAIN) this.patch(from, { answeredMain: true });
 			this.options.deliverToMain(options.expectReply ? { kind: "question", from, text } : answering ? { kind: "reply", from, text } : { kind: "note", from, text });
 			result = { ok: true, delivered: "main" };
 		} else {
-			result = this.deliverToChild(from, to, body, options.expectReply === true);
+			result = this.deliverToChild(from, to, body, options.expectReply === true, said);
 			// Main should never be surprised by work the user asked for directly.
 			if (result.ok && from === USER) this.options.deliverToMain({ kind: "relay", from, to, text, answered: false });
 		}
@@ -264,12 +266,13 @@ export class Team {
 		if (record.parent === MAIN) {
 			if (!record.blocking) this.options.deliverToMain({ kind: "report", record });
 		} else if (!record.blocking) {
-			this.deliverToChild(record.name, record.parent, reportText(record, this.now()), true);
+			this.deliverToChild(record.name, record.parent, reportText(record, this.now()), true, `Report from ${record.name}`);
 		}
 		this.pump();
 	}
 
-	private deliverToChild(from: string, to: string, body: string, wakes: boolean): SendResult {
+	/** `said` is how the report of a run this message starts names it. */
+	private deliverToChild(from: string, to: string, body: string, wakes: boolean, said = body): SendResult {
 		const target = this.records.get(to);
 		if (!target) return { ok: false, error: `No agent named ${to}. ${this.knownNames()}` };
 		if (target.state === "failed" || target.state === "stopped") return { ok: false, error: `${to} has ${target.state}.` };
@@ -280,7 +283,8 @@ export class Team {
 		}
 		const resumes = wakes || from === target.parent || from === USER;
 		if ((target.state === "idle" || target.state === "waiting") && handle && resumes) {
-			if (target.state === "idle") this.patch(to, { resumedBy: { from, text: body } });
+			// A new run: time it on its own and forget what the last one answered.
+			if (target.state === "idle") this.patch(to, { resumedBy: { from, text: said }, startedAt: this.now(), answeredMain: undefined });
 			void this.run(to, [...this.takeInbox(to), body].join("\n\n"));
 			return { ok: true, delivered: "resumed" };
 		}

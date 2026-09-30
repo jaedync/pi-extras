@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { transcriptLines } from "../lib/subagents/transcript.ts";
-import { createMessageRenderer, createReportRenderer, subagentCallRow } from "../lib/subagents/render.ts";
+import { createMessageRenderer, createReportRenderer, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 
 const plain = (_color: string, text: string) => text;
@@ -56,4 +56,28 @@ test("a background subagent row stays calm and says so; a finished one shows cos
 	assert.match(strip(row.render(80)[0]!), /scout  gpt-6-luna  Find it.*in background/);
 	current = { ...record, state: "idle", endedAt: record.startedAt! + 12_000, usage: { ...NO_USAGE, cost: 0.002 } };
 	assert.match(strip(row.render(80)[0]!), /\$0\.0020  12\.0s/);
+});
+
+test("a subagent main waits on shows the task, the full rail and what it is doing", () => {
+	const record: AgentRecord = { name: "count-lib", parent: "main", depth: 1, task: "Count the files", model: "openai-codex/gpt-6-luna", readOnly: true, fork: false,
+		blocking: true, state: "running", createdAt: 0, startedAt: Date.now() - 3_000, activity: "bash ls lib", toolCalls: 1,
+		usage: { ...NO_USAGE, cost: 0.0021 }, contextTokens: 13_600, contextWindow: 272_000, runs: 1 };
+	const context = { state: { agent: "count-lib" }, isPartial: false, executionStarted: true };
+	let current = record;
+	const row = subagentCallRow({ task: "Count the files" }, theme, context, () => current);
+	const lines = row.render(100).map(strip);
+	assert.match(lines[0]!, /count-lib  gpt-6-luna  Count the files.*ctx 5%  \$0\.0021  3\.0s/);
+	assert.equal(lines.length, 2);
+	assert.match(lines[1]!, /^ {3}bash ls lib/);
+	current = { ...record, state: "idle", activity: null, endedAt: record.startedAt! + 47_000 };
+	const done = row.render(100).map(strip);
+	assert.equal(done.length, 1);
+	assert.match(done[0]!, /ctx 5%  \$0\.0021  47\.0s/);
+});
+
+test("while main waits, progress shows only in the call row, not as a partial result", () => {
+	const partial = { content: [{ type: "text", text: "calling a tool" }], details: { name: "count-lib", wait: true, activity: "calling a tool" } };
+	assert.deepEqual(subagentResultRow(partial, theme, { state: {}, isPartial: true, executionStarted: true }).render(100), []);
+	const final = { content: [{ type: "text", text: "Found 15 files." }], details: { name: "count-lib", wait: true } };
+	assert.match(strip(subagentResultRow(final, theme, { state: {}, isPartial: false, executionStarted: true }).render(100).join("\n")), /Found 15 files\./);
 });

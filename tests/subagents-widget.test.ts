@@ -33,7 +33,7 @@ test("more than six agents collapse into a count", () => {
 
 test("the rail shows context share, spend and elapsed time", () => {
 	const busy = record("x", { contextTokens: 50_000, contextWindow: 200_000, usage: { ...NO_USAGE, cost: 0.0123 } });
-	assert.equal(text(rowRail(busy, 66_000)), "25%  $0.012  1m 05s");
+	assert.equal(text(rowRail(busy, 66_000)), "ctx 25%  $0.012  1m 05s");
 	assert.equal(text(rowRail(record("tiny", { usage: { ...NO_USAGE, cost: 0.00041 } }), 2_000)), "$0.00041  1.0s");
 	assert.equal(text(rowRail(record("q", { state: "queued", startedAt: undefined }), 5_000)), "");
 });
@@ -62,4 +62,9 @@ test("queued messages for main show until appended, questions in amber", () => {
 		{ text: "+1 more queued for main", color: "dim" },
 	]);
 	assert.equal(shortModel("anthropic/claude-opus-5-5"), "claude-opus-5-5");
+});
+
+test("a child main is blocked on shows only inline, not in the widget", () => {
+	const records = [record("inline", { blocking: true }), record("bg"), record("nested", { parent: "bg", depth: 2, blocking: true })];
+	assert.deepEqual(selectRows(records, new Set()).rows.map((row) => row.record.name), ["bg", "nested"]);
 });

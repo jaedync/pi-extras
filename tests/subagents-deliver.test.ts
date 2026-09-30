@@ -109,3 +109,12 @@ test("a report of a child the user stopped does not wake main", async () => {
 	assert.equal(sent[0]!.options.triggerTurn, false);
 	assert.match(sent[0]!.message.content, /gamma .* was stopped after/);
 });
+
+test("a report whose run already answered main is appended without waking it", async () => {
+	const { box, sent } = mail(5);
+	box.deliver({ kind: "report", record: record("reader", { answeredMain: true }) });
+	await sleep(20);
+	assert.equal(sent.length, 1);
+	assert.equal(sent[0]!.message.customType, REPORT_TYPE);
+	assert.equal(sent[0]!.options.triggerTurn, false);
+});

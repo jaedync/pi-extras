@@ -3,8 +3,10 @@
  * every other pi-extras row.
  *
  * - A `subagent` row names the agent, its model and task. It stays calm while
- *   the agent works in the background (the widget is what moves), runs while
- *   main waits on it, and takes the final color when it ends.
+ *   the agent works in the background (the widget is what moves). While main
+ *   waits on it, the row is the agent's only row: it runs, carries the widget's
+ *   rail, and shows what the agent is doing under it. It takes the final color
+ *   when it ends.
  * - A `message` row says who it went to and what happened to it.
  * - A message from an agent is a band (amber for a question) over its text.
  * - A report is one band per agent, the first lines of the report under it;
@@ -19,7 +21,7 @@ import { formatMoney } from "../status-plus-logic.ts";
 import type { MailDetails, ReportSummary } from "./deliver.ts";
 import { MAIN } from "./names.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
-import { phaseOf, shortModel } from "./widget.ts";
+import { phaseOf, rowRail, shortModel } from "./widget.ts";
 
 export const REPORT_PREVIEW_LINES = 3;
 export const MESSAGE_PREVIEW_LINES = 8;
@@ -58,6 +60,12 @@ function body(theme: Theme, width: number, text: string, color: string, limit: n
 	return onBackground(lines, width, bodyBackground(theme));
 }
 
+/** One line of what an agent is doing, under its band. */
+function activityLine(theme: Theme, width: number, text: string): string[] {
+	const inner = Math.max(4, width - BODY_INDENT);
+	return onBackground([" ".repeat(BODY_INDENT) + truncateToWidth(paintOf(theme)("muted", oneLine(text)), inner, "…")], width, bodyBackground(theme));
+}
+
 /** A shared row-state slot: the result names the agent, the call row reads it. */
 export function rememberAgent(context: RowContext, details: unknown): void {
 	const state = context?.state;
@@ -83,13 +91,14 @@ export function subagentCallRow(args: unknown, theme: Theme, context: RowContext
 		if (context?.isError && !record) return [band(theme, width, { kind: "done", outcome: "fail", sinceMs: DONE }, segs, [{ text: "not started", color: "error" }])];
 		if (!record) return [band(theme, width, { kind: "calm" }, segs, [{ text: "background", color: "dim" }])];
 		if (LIVE_STATES.has(record.state)) {
-			if (record.blocking) return [band(theme, width, phaseOf(record, now), segs, [{ text: formatTime(now - (record.startedAt ?? now)), color: "text" }])];
+			if (record.blocking) {
+				const head = band(theme, width, phaseOf(record, now), segs, rowRail(record, now));
+				return record.activity ? [head, ...activityLine(theme, width, record.activity)] : [head];
+			}
 			return [band(theme, width, { kind: "calm" }, segs, [{ text: record.state === "asking" ? record.activity ?? "asking" : "in background", color: record.state === "asking" ? "warning" : "dim" }])];
 		}
-		const took = formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt));
-		const cost: Seg[] = record.usage.cost > 0 ? [{ text: `$${formatMoney(record.usage.cost)}`, color: "dim" }, { text: "  ", color: "dim" }] : [];
 		const word: Seg[] = record.state === "idle" ? [] : [{ text: record.state, color: record.state === "failed" ? "error" : "muted" }, { text: "  ", color: "dim" }];
-		return [band(theme, width, phaseOf(record, now), segs, [...word, ...cost, { text: took, color: "text" }])];
+		return [band(theme, width, phaseOf(record, now), segs, [...word, ...rowRail(record, now)])];
 	});
 }
 
@@ -99,6 +108,8 @@ export function subagentResultRow(result: unknown, theme: Theme, context: RowCon
 	const text = ((result as { content?: Array<{ text?: string }> } | null)?.content ?? []).map((part) => part.text ?? "").join("\n");
 	return new Lines((width) => {
 		if (context?.isError) return body(theme, width, text, "error", null);
+		// Progress is drawn live in the call row; a partial result would lag behind it.
+		if (context?.isPartial) return [];
 		if (details?.wait === true) return body(theme, width, text, "toolOutput", context?.expanded ? null : REPORT_PREVIEW_LINES + 2);
 		return context?.expanded ? body(theme, width, text, "muted", null) : [];
 	});

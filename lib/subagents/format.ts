@@ -124,14 +124,14 @@ export function childInstructions(options: {
 	const { name, parent } = options;
 	return [
 		`# You are the subagent "${name}"`,
-		`You work for "${parent}" in a team of Pi agents, in the background. Your final message is your report to ${parent}; nothing else you write reaches it.`,
+		`You work for "${parent}" in a team of Pi agents, in the background. Your final message is your report to ${parent}.`,
 		"",
 		"## Report",
 		"End with a report that leads with the outcome in one or two sentences, then gives evidence (file:line, commands you ran and what they showed), changes you made, open questions, and how confident you are. Be concise; it is read in full.",
 		"",
 		"## Talking to other agents",
 		`Use message({ to, text }). \`to\` is "${MAIN}", an agent's name, or "all".`,
-		`- Send ${parent} a note only when it would change what they are doing. Do not narrate progress.`,
+		`- Send ${parent} a note only when it would change what they are doing. Do not narrate progress or send results early; results belong in your report.`,
 		"- If you are blocked on a decision you should not make alone, ask with expectReply: true and wait for the answer.",
 		"- Coordinate with the other agents directly instead of duplicating their work.",
 		"- Messages to you arrive between your tool calls.",

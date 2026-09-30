@@ -257,3 +257,47 @@ test("main never blocks: its question is delivered and the answer wakes it as a 
 	await h.team.send(name, "main", "also found a stale dep");
 	assert.deepEqual(h.main.at(-1), { kind: "note", from: name, text: "also found a stale dep" });
 });
+
+test("a resumed run is timed on its own and names what started it", async () => {
+	let clock = 0;
+	const h = harness();
+	(h.team as unknown as { now: () => number }).now = () => clock;
+	const name = h.spawn("scan the repo");
+	await tick();
+	clock = 11_000;
+	h.lastCall(name).finish("first");
+	await h.team.whenDone(name);
+	clock = 30_000;
+	await h.team.send("main", name, "Which file?", { expectReply: true });
+	await tick();
+	assert.equal(h.team.get(name)!.startedAt, 30_000);
+	clock = 40_000;
+	h.lastCall(name).finish("second");
+	await tick();
+	const { reportText } = await import("../lib/subagents/format.ts");
+	const text = reportText(h.team.get(name)!, clock);
+	assert.match(text, /finished after 10s\./);
+	assert.match(text, /This run \(2\) handled: Question from main: Which file\?\n/);
+});
+
+test("a report doesn't wake main again once the run answered main's question", async () => {
+	const h = harness();
+	const name = h.spawn("read format.ts");
+	await tick();
+	h.lastCall(name).finish("capReport is 12k");
+	await h.team.whenDone(name);
+	assert.equal((h.main.at(-1) as { record: AgentRecord }).record.answeredMain, undefined);
+	await h.team.send("main", name, "What does noteText return?", { expectReply: true });
+	await tick();
+	await h.team.send(name, "main", "Message from X");
+	assert.equal(h.main.at(-1)?.kind, "reply");
+	h.lastCall(name).finish("Message from X");
+	await tick();
+	assert.equal((h.main.at(-1) as { record: AgentRecord }).record.answeredMain, true);
+	// A later run that main starts with a plain message reports normally.
+	await h.team.send("main", name, "Now check the tests.");
+	await tick();
+	h.lastCall(name).finish("tests fine");
+	await tick();
+	assert.equal((h.main.at(-1) as { record: AgentRecord }).record.answeredMain, undefined);
+});

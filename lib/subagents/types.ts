@@ -55,6 +55,8 @@ export interface AgentRecord {
 	runs: number;
 	/** The message that resumed it, for the report of that run. */
 	resumedBy?: { from: string; text: string };
+	/** This run began with main's question and has already answered it, so its report need not wake main. */
+	answeredMain?: boolean;
 }
 
 export interface SpawnRequest {

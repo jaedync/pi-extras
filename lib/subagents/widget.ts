@@ -27,9 +27,12 @@ export interface AgentRow {
 
 export const shortModel = (ref: string): string => ref.slice(ref.indexOf("/") + 1);
 
-/** Live agents and those whose report is still queued, parents before children. */
+/**
+ * Live agents and those whose report is still queued, parents before children.
+ * A child main is blocked on already has its own row in the transcript.
+ */
 export function selectRows(records: readonly AgentRecord[], reportPending: ReadonlySet<string>): { rows: AgentRow[]; hidden: number } {
-	const visible = records.filter((record) => LIVE_STATES.has(record.state) || reportPending.has(record.name));
+	const visible = records.filter((record) => (LIVE_STATES.has(record.state) || reportPending.has(record.name)) && !(record.parent === MAIN && record.blocking));
 	const byParent = new Map<string, AgentRecord[]>();
 	for (const record of visible) byParent.set(record.parent, [...(byParent.get(record.parent) ?? []), record]);
 	const shown = new Set(visible.map((record) => record.name));
@@ -85,7 +88,7 @@ export function rowSegs(row: AgentRow): Seg[] {
 export function rowRail(record: AgentRecord, now: number): Seg[] {
 	const rail: Seg[] = [];
 	if (record.contextTokens && record.contextWindow) {
-		rail.push({ text: `${Math.round((100 * record.contextTokens) / record.contextWindow)}%`, color: "dim" }, { text: "  ", color: "dim" });
+		rail.push({ text: `ctx ${Math.round((100 * record.contextTokens) / record.contextWindow)}%`, color: "dim" }, { text: "  ", color: "dim" });
 	}
 	if (record.usage.cost > 0) rail.push({ text: `$${formatMoney(record.usage.cost)}`, color: "dim" }, { text: "  ", color: "dim" });
 	if (record.state !== "queued") rail.push({ text: formatTime((record.endedAt ?? now) - (record.startedAt ?? now)), color: "text" });
