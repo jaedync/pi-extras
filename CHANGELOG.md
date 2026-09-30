@@ -2,6 +2,33 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.13.0 - 2026-09-30
+
+### Changed
+
+- pi-extras requires Pi 0.99.2 and from now on follows Pi's latest release.
+  Older Pi versions are no longer tested; update Pi along with pi-extras.
+- Phase Spinner shows what the agent is doing on a line of its own right
+  under the conversation, instead of at the left of the editor border.
+  Messages queued for the agent show below that line, and the border keeps
+  tokens per second, time to first token and the run's time. Phases read as
+  a sentence: Preparing, Sending request, Waiting for first token, Thinking,
+  Writing, Calling `<tool>`, Running `<tools>`. The line relies on Pi's
+  interactive layout; if a Pi update changes it, the phase goes back to the
+  border.
+- Transcript rows (tool calls, background jobs, subagents, agent mail and
+  compaction) keep two columns at their left, and their content moves two
+  columns right. A spinner turns there while the model writes the call or it
+  runs, in step with the phase line; a still dot marks a call waiting its
+  turn.
+- Copy Blocks: code blocks and quotes ten rows or taller have a `copy` label
+  at their foot too, so one is in view from either end.
+
+### Fixed
+
+- Rows in the transcript no longer draw wider than a very narrow terminal,
+  which made Pi stop drawing.
+
 ## 0.12.7 - 2026-09-30
 
 ### Fixed
