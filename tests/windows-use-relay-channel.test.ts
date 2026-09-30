@@ -88,13 +88,16 @@ async function windowsMcp(t: TestContext) {
 
 async function guestRelay(t: TestContext, port: number) {
 	const dir = await mkdtemp(join(tmpdir(), "windows-relay-channel-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
+	// Runs after the relay's own cleanup below: hooks run in the order they were added,
+	// and a relay still logging would leave the directory non-empty.
+	const removeDir = () => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 	const config = join(dir, "config.toml");
 	const marker = join(dir, "restart.txt");
 	await writeFile(config, `[server]\ntransport = "streamable-http"\nhost = "127.0.0.1"\nport = ${port}\nauth_key = "${KEY}"\nstateless_http = true\n`);
 	const child = spawn("python3", [script, "--config", config, "--tcp-test", "--test-restart-log", marker], { stdio: ["ignore", "pipe", "ignore"] });
 	const exited = once(child, "exit");
 	t.after(async () => { if (child.exitCode === null) { child.kill(); await exited; } });
+	t.after(removeDir);
 	const lines = createInterface({ input: child.stdout });
 	t.after(() => lines.close());
 	const [line] = await once(lines, "line");

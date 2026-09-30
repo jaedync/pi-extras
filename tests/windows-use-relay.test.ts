@@ -35,7 +35,9 @@ async function upstream(t: TestContext, handle: (socket: Socket) => void = (sock
 
 async function relay(t: TestContext, port: number, restart = false) {
 	const dir = await mkdtemp(join(tmpdir(), "windows-relay-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
+	// Runs after the relay's own cleanup below: hooks run in the order they were added,
+	// and a relay still logging would leave the directory non-empty.
+	const removeDir = () => rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 	const config = join(dir, "config.toml");
 	const marker = join(dir, "restart.txt");
 	await writeFile(config, configText(port));
@@ -44,6 +46,7 @@ async function relay(t: TestContext, port: number, restart = false) {
 	child.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
 	const exited = once(child, "exit");
 	t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill(); await exited; } });
+	t.after(removeDir);
 	const lines = createInterface({ input: child.stdout });
 	t.after(() => lines.close());
 	const first = await Promise.race([
