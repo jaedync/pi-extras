@@ -588,8 +588,9 @@ from the host, leave `windows_use` working. When the installer comes over
 key-value exchange, setup installs the relay with the server. Otherwise the
 first call that reaches the server over the guest's IP installs it. From then
 on, the relay also restarts a stopped or stalled server and reports the
-desktop session, without the console. A relay update that fails to start is
-rolled back to the previous version. Without a relay, calls use the guest's IP
+desktop session, without the console. A relay that stops is started again
+within a minute or two by its scheduled task. A relay update that fails to
+start is rolled back to the previous version. Without a relay, calls use the guest's IP
 and port as before. The relay changes no guest credentials or password policy.
 
 Live, the test guest ran a full-tunnel VPN that cut the host's route to it.

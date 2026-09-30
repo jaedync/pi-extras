@@ -71,18 +71,24 @@ if (${force ? "$true" : "$false"} -or -not ($current -and $running -and $registe
     $runLevel = try { (Get-ScheduledTask -TaskName '${SERVER_TASK}' -ErrorAction Stop).Principal.RunLevel } catch { 'Limited' }
     $launchTask = "Stop-ScheduledTask -TaskName '${RELAY_TASK}' -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; Start-ScheduledTask -TaskName '${RELAY_TASK}'"
     $kickTask = "\`"$env:WINDIR\\System32\\conhost.exe\`" --headless \`"$env:WINDIR\\System32\\schtasks.exe\`" /run /tn ${RELAY_TASK}"
-    # A task the elevated setup registered is the user's to run but not to change: the same
-    # command line needs no change, and registering it again would fail.
-    if ($task -and $task.Actions[0].Execute -eq $pyw -and $task.Actions[0].Arguments -eq $arguments) { $mode = 'task'; $launch = $launchTask; $kick = $kickTask }
+    $same = $task -and $task.Actions[0].Execute -eq $pyw -and $task.Actions[0].Arguments -eq $arguments
+    $watched = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger' -and "$($_.Repetition.Interval)" -eq 'PT1M' }).Count
+    if ($same -and $watched) { $mode = 'task'; $launch = $launchTask; $kick = $kickTask }
     else { try {
         # Its own task: the server's restart ends the server's task, and must leave the relay running.
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
-        Register-ScheduledTask -TaskName '${RELAY_TASK}' -Action (New-ScheduledTaskAction -Execute $pyw -Argument $arguments) -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $who) -Settings $settings -Principal (New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel $runLevel) -Force | Out-Null
+        # Restart-on-failure never fired for a relay that died (live), nor did a logon trigger's
+        # repetition, which starts only at the next sign-in. A time trigger comes due every
+        # minute from now on; while the relay runs, IgnoreNew makes that a no-op.
+        $every = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
+        Register-ScheduledTask -TaskName '${RELAY_TASK}' -Action (New-ScheduledTaskAction -Execute $pyw -Argument $arguments) -Trigger @((New-ScheduledTaskTrigger -AtLogOn -User $who), $every) -Settings $settings -Principal (New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel $runLevel) -Force | Out-Null
         $mode = 'task'; $launch = $launchTask; $kick = $kickTask
     } catch {
+        # A task the elevated setup registered is the user's to run but not to change; the next setup adds the watchdog.
+        if ($same) { $mode = 'task'; $launch = $launchTask; $kick = $kickTask } else {
         # A user who may not register tasks still starts it at every sign-in.
         $mode = 'runkey'; $launch = "Start-Process -FilePath '$($pyw -replace "'", "''")' -ArgumentList '$($arguments -replace "'", "''")'"
-        $kick = "\`"$pyw\`" $arguments"
+        $kick = "\`"$pyw\`" $arguments" }
     } }
     New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'pi-windows-use-relay' -Value $kick -PropertyType String -Force | Out-Null
     # A new relay that dies at start (a bind race, a script error) is rolled back to the old one.

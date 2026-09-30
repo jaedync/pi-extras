@@ -108,7 +108,24 @@ test("native Windows PowerShell 5.1 parses the bootstrap with the relay's instal
 
 test("an upgrade keeps a relay task the elevated setup registered, which the server may run but not change", () => {
 	const install = relayDeployCommands(true).at(-1)!;
-	const reuse = install.indexOf("if ($task -and $task.Actions[0].Execute -eq $pyw -and $task.Actions[0].Arguments -eq $arguments) { $mode = 'task'; $launch = $launchTask; $kick = $kickTask }");
-	assert.ok(reuse > 0, "the same command line is kept as is");
-	assert.ok(reuse < install.indexOf("Register-ScheduledTask -TaskName"), "checked before registering again");
+	assert.match(install, /\$same = \$task -and \$task\.Actions\[0\]\.Execute -eq \$pyw -and \$task\.Actions\[0\]\.Arguments -eq \$arguments/);
+	assert.match(install, /\$watched = @\(\$task\.Triggers \| Where-Object \{ \$_\.CimClass\.CimClassName -eq 'MSFT_TaskTimeTrigger' -and "\$\(\$_\.Repetition\.Interval\)" -eq 'PT1M' \}\)\.Count/);
+	const reuse = install.indexOf("if ($same -and $watched) { $mode = 'task'");
+	assert.ok(reuse > 0 && reuse < install.indexOf("Register-ScheduledTask -TaskName"), "a current task is kept as is");
+	assert.match(install, /\} catch \{\n[^\n]*\n\s+if \(\$same\) \{ \$mode = 'task'; \$launch = \$launchTask; \$kick = \$kickTask \} else \{/, "one it may not re-register is used as is, not swapped for the Run key");
+});
+
+test("the relay's task comes due every minute, since restart-on-failure never brought a dead relay back", () => {
+	const install = relayDeployCommands(true).at(-1)!;
+	assert.match(install, /\$every = New-ScheduledTaskTrigger -Once -At \(Get-Date\)\.AddMinutes\(1\) -RepetitionInterval \(New-TimeSpan -Minutes 1\)/, "a logon trigger's repetition would wait for the next sign-in");
+	assert.match(install, /-Trigger @\(\(New-ScheduledTaskTrigger -AtLogOn -User \$who\), \$every\) /);
+	assert.match(install, /-MultipleInstances IgnoreNew/, "a relay that runs isn't started twice");
+	assert.ok(relayBootstrapCommand().includes("$every = New-ScheduledTaskTrigger"), "setup's own install too");
+});
+
+test("native Windows PowerShell 5.1 builds a time trigger that repeats every minute with no end", native, () => {
+	const exe = process.platform === "win32" ? "powershell.exe" : WSL_POWERSHELL;
+	// Builds the object only; nothing is registered.
+	const check = "$every = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1); \"$($every.CimClass.CimClassName)|$($every.Repetition.Interval)|$($every.Repetition.Duration)\"";
+	assert.equal(execFileSync(exe, ["-NoProfile", "-NonInteractive", "-Command", check], { encoding: "utf8", timeout: 25_000 }).trim(), "MSFT_TaskTimeTrigger|PT1M|");
 });
