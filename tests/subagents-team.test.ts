@@ -301,3 +301,57 @@ test("a report doesn't wake main again once the run answered main's question", a
 	await tick();
 	assert.equal((h.main.at(-1) as { record: AgentRecord }).record.answeredMain, undefined);
 });
+
+test("a child can wait on two agents at once; each answer settles its own question", async () => {
+	const h = harness({ maxDepth: 2 });
+	const lead = h.spawn("lead the work");
+	await tick();
+	const a = h.spawn("part alpha", { parent: lead });
+	const b = h.spawn("part beta", { parent: lead });
+	await tick();
+	const askA = h.team.send(lead, a, "Done yet?", { expectReply: true });
+	const askB = h.team.send(lead, b, "Done yet?", { expectReply: true });
+	await tick();
+	assert.equal(h.team.get(lead)!.activity, `asking ${a}, ${b}`);
+	await h.team.send(a, lead, "alpha done");
+	assert.deepEqual(await askA, { ok: true, delivered: "replied", reply: "alpha done" });
+	assert.equal(h.team.get(lead)!.state, "asking");
+	assert.equal(h.team.get(lead)!.activity, `asking ${b}`);
+	await h.team.send(b, lead, "beta done");
+	assert.deepEqual(await askB, { ok: true, delivered: "replied", reply: "beta done" });
+	assert.equal(h.team.get(lead)!.state, "running");
+});
+
+test("a child's report answers its parent's open question to it", async () => {
+	const h = harness({ maxDepth: 2 });
+	const lead = h.spawn("lead the work");
+	await tick();
+	const a = h.spawn("part alpha", { parent: lead });
+	await tick();
+	const ask = h.team.send(lead, a, "Report when you are done.", { expectReply: true });
+	await tick();
+	h.lastCall(a).finish("alpha: 3 files");
+	const result = await ask;
+	assert.equal(result.ok, true);
+	assert.match((result as { reply?: string }).reply ?? "", /alpha: 3 files/);
+	assert.ok(!(h.steered.get(lead) ?? []).some((text) => text.includes("alpha: 3 files")), "not delivered a second time");
+});
+
+test("a child its parent waits on can't narrate to it, and asking it ends the wait", async () => {
+	const h = harness();
+	const name = h.spawn("quick check", { blocking: true });
+	await tick();
+	const note = await h.team.send(name, "main", "starting now");
+	assert.equal(note.ok, false);
+	assert.match((note as { error: string }).error, /main is waiting for your report; put this in it/);
+	assert.equal(h.main.length, 0);
+	const asked = h.team.send(name, "main", "Which lockfile?", { expectReply: true });
+	await tick();
+	assert.equal(h.team.get(name)!.blocking, false, "main stops waiting, so it can answer");
+	assert.deepEqual(h.main.at(-1), { kind: "question", from: name, text: "Which lockfile?" });
+	await h.team.send("main", name, "package-lock.json");
+	assert.deepEqual(await asked, { ok: true, delivered: "replied", reply: "package-lock.json" });
+	h.lastCall(name).finish("done");
+	await tick();
+	assert.equal(h.main.at(-1)?.kind, "report", "its report now arrives as a message");
+});

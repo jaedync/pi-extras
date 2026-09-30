@@ -159,7 +159,9 @@ export class MainMail {
 		const id = this.nextId();
 		const wakes = records.some((record) => record.state !== "stopped" && !record.answeredMain);
 		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
-		this.send({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } },
+		// A report that only repeats an answer main already showed stays in its context, off screen.
+		const display = records.some((record) => !record.answeredMain);
+		this.send({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display, details: { id, kind: "report", reports: records.map(summarize) } },
 			wakes ? { triggerTurn: true, deliverAs: "steer" } : { triggerTurn: false });
 	}
 

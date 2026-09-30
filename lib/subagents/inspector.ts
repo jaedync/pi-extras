@@ -6,7 +6,7 @@
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
-	matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi,
+	decodeKittyPrintable, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi,
 	type Component, type Focusable, type OverlayOptions, type TuiMouseEvent, type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { renderBand } from "../band/band.ts";
@@ -14,6 +14,7 @@ import { everyFrame, FRAME_MS } from "../band/clock.ts";
 import { closeOnOutsideClick, OnScreen, type OverlayPresence, type ShownOverlay } from "../band/modal.ts";
 import { paletteFrom } from "../band/palette.ts";
 import { onBackground, panelBackground } from "../band/surface.ts";
+import { moreLines } from "./names.ts";
 import { transcriptLines } from "./transcript.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
 import { phaseOf, rowRail, rowSegs } from "./widget.ts";
@@ -25,7 +26,10 @@ const TASK_LINES = 4;
 const MIN_VIEWPORT_ROWS = 3;
 const FRAME_COLUMNS = 4;
 const NOTICE_MS = 4_000;
-const HINT = "enter message · x stop · ↑↓ PgUp/PgDn g/G scroll · esc close";
+const HINT = "enter send · esc close · ctrl+x stop · ↑↓ PgUp/PgDn scroll";
+const HINT_DRAFT = "enter send · esc clear · ↑↓ PgUp/PgDn scroll";
+const ENDED = "It has ended; it can't take messages.";
+const PASTE_MARKS = /\x1b\[20[01]~/g;
 
 export interface InspectorTui {
 	requestRender(): void;
@@ -48,7 +52,8 @@ export class AgentInspector implements Component, Focusable {
 	private follow = true;
 	private viewport = MIN_VIEWPORT_ROWS;
 	private maxScroll = 0;
-	private composing: string | null = null;
+	/** The message box is always live: an inspector is where you talk to the agent. */
+	private draft = "";
 	private armedStop = false;
 	private notice: { text: string; color: string; at: number } | null = null;
 	private stopFrames: (() => void) | null = null;
@@ -83,35 +88,42 @@ export class AgentInspector implements Component, Focusable {
 	};
 
 	handleInput(data: string): void {
-		if (this.composing !== null) return this.compose(data);
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || data === "q") return this.close();
-		if (data === "x") return void this.stopPressed();
+		if (matchesKey(data, "ctrl+x")) return void this.stopPressed();
 		this.armedStop = false;
-		if (matchesKey(data, "enter") || data === "m") {
-			const record = this.source.record();
-			if (record && record.state !== "failed" && record.state !== "stopped") this.composing = "";
-			else this.flash("It has ended; it can't take messages.", "warning");
-		} else if (matchesKey(data, "up")) this.scrollTo(this.scroll - 1);
+		if (matchesKey(data, "ctrl+c")) return this.close();
+		if (matchesKey(data, "escape")) {
+			if (!this.draft) return this.close();
+			this.draft = "";
+		} else if (matchesKey(data, "enter")) this.send();
+		else if (matchesKey(data, "backspace")) this.draft = this.draft.slice(0, -1);
+		else if (matchesKey(data, "up")) this.scrollTo(this.scroll - 1);
 		else if (matchesKey(data, "down")) this.scrollTo(this.scroll + 1);
 		else if (matchesKey(data, "pageUp")) this.scrollTo(this.scroll - this.viewport);
 		else if (matchesKey(data, "pageDown")) this.scrollTo(this.scroll + this.viewport);
-		else if (matchesKey(data, "home") || data === "g") this.scrollTo(0);
-		else if (matchesKey(data, "end") || data === "G") this.scrollTo(this.maxScroll);
+		else if (matchesKey(data, "home")) this.scrollTo(0);
+		else if (matchesKey(data, "end")) this.scrollTo(this.maxScroll);
+		else this.typed(data);
 		this.tui.requestRender();
 	}
 
-	private compose(data: string): void {
-		const draft = this.composing ?? "";
-		if (matchesKey(data, "escape")) this.composing = null;
-		else if (matchesKey(data, "enter")) {
-			this.composing = null;
-			if (draft.trim()) {
-				this.flash("sending…", "dim");
-				this.source.send(draft.trim()).then((said) => this.flash(said, "success"), (error: Error) => this.flash(error.message, "error"));
-			}
-		} else if (matchesKey(data, "backspace")) this.composing = draft.slice(0, -1);
-		else if (!/[\u0000-\u001f\u007f]/.test(data.replace(/\n/g, " "))) this.composing = draft + data.replace(/\n/g, " ");
-		this.tui.requestRender();
+	/** Keys, pastes (one line), and letters a kitty-protocol terminal encodes. */
+	private typed(data: string): void {
+		const text = (decodeKittyPrintable(data) ?? data).replace(PASTE_MARKS, "").replace(/\r?\n|\r/g, " ");
+		if (text && !/[\u0000-\u001f\u007f]/.test(text) && this.accepts()) this.draft += text;
+	}
+
+	private accepts(): boolean {
+		const record = this.source.record();
+		return record !== undefined && record.state !== "failed" && record.state !== "stopped";
+	}
+
+	private send(): void {
+		const text = this.draft.trim();
+		if (!text) return;
+		if (!this.accepts()) return this.flash(ENDED, "warning");
+		this.draft = "";
+		this.flash("sending…", "dim");
+		this.source.send(text).then((said) => this.flash(said, "success"), (error: Error) => this.flash(error.message, "error"));
 	}
 
 	private async stopPressed(): Promise<void> {
@@ -119,7 +131,7 @@ export class AgentInspector implements Component, Focusable {
 		if (!record || !LIVE_STATES.has(record.state)) return this.flash("It is not running.", "dim");
 		if (!this.armedStop) {
 			this.armedStop = true;
-			return this.flash("Press x again to stop it.", "warning");
+			return this.flash("Press ctrl+x again to stop it.", "warning");
 		}
 		this.armedStop = false;
 		await this.source.stop();
@@ -166,10 +178,10 @@ export class AgentInspector implements Component, Focusable {
 			header.push(row(this.paint("dim", facts)));
 			const task = wrapTextWithAnsi(record.task.replace(/\s+/g, " "), inner);
 			for (const line of task.slice(0, TASK_LINES)) header.push(row(this.paint("muted", line)));
-			if (task.length > TASK_LINES) header.push(row(this.paint("dim", `… ${task.length - TASK_LINES} more lines of task`)));
+			if (task.length > TASK_LINES) header.push(row(this.paint("dim", `… ${moreLines(task.length - TASK_LINES)} of task`)));
 			if (record.error) header.push(row(this.paint("error", record.error)));
 		}
-		const fixed = header.length + 5;
+		const fixed = header.length + 6;
 		const maxRows = Math.max(INSPECTOR_MIN_ROWS, Math.floor(this.tui.terminal.rows * INSPECTOR_HEIGHT_SHARE));
 		this.viewport = Math.max(MIN_VIEWPORT_ROWS, maxRows - fixed);
 		const lines = transcriptLines(this.source.messages(), inner, this.paint, this.source.describe);
@@ -178,21 +190,26 @@ export class AgentInspector implements Component, Focusable {
 		this.scroll = this.follow ? this.maxScroll : clamp(this.scroll, 0, this.maxScroll);
 		const visible = lines.slice(this.scroll, this.scroll + this.viewport);
 		while (visible.length < this.viewport) visible.push("");
-		const frame = [rule("╭", "╮"), ...header, rule("├", "┤"), ...visible.map(row), rule("├", "┤"), row(this.footer(inner, record, lines.length)), rule("╰", "╯")];
+		const frame = [rule("╭", "╮"), ...header, rule("├", "┤"), ...visible.map(row), rule("├", "┤"), row(this.composer(inner, record)), row(this.footer(inner, lines.length)), rule("╰", "╯")];
 		return onBackground(frame, w, panelBackground(this.theme));
 	}
 
-	private footer(inner: number, record: AgentRecord | undefined, total: number): string {
-		if (this.composing !== null) {
-			const label = `message ${record?.name ?? ""}: `;
-			const room = Math.max(4, inner - visibleWidth(label) - 1);
-			const draft = this.composing.length > room ? `…${this.composing.slice(-(room - 1))}` : this.composing;
-			return `${this.paint("accent", label)}${draft}${this.paint("accent", "▏")}`;
-		}
+	private composer(inner: number, record: AgentRecord | undefined): string {
+		if (!record || !this.accepts()) return this.paint("dim", ENDED);
+		const label = `${record.name} ▸ `;
+		const caret = this.paint("accent", "▏");
+		if (!this.draft) return `${this.paint("accent", label)}${caret}${this.paint("dim", record.state === "idle" ? "write to resume it" : "write to it")}`;
+		const room = Math.max(4, inner - visibleWidth(label) - 1);
+		const draft = this.draft.length > room ? `…${this.draft.slice(-(room - 1))}` : this.draft;
+		return `${this.paint("accent", label)}${draft}${caret}`;
+	}
+
+	private footer(inner: number, total: number): string {
 		if (this.notice && Date.now() - this.notice.at < NOTICE_MS) return this.paint(this.notice.color, this.notice.text);
+		const hint = this.draft ? HINT_DRAFT : HINT;
 		const position = `${total === 0 ? 0 : this.scroll + 1}–${Math.min(total, this.scroll + this.viewport)} of ${total}${this.follow ? " · following" : ""}`;
-		const gap = Math.max(1, inner - visibleWidth(HINT) - visibleWidth(position));
-		return this.paint("dim", `${HINT}${" ".repeat(gap)}${position}`);
+		const gap = Math.max(1, inner - visibleWidth(hint) - visibleWidth(position));
+		return this.paint("dim", `${hint}${" ".repeat(gap)}${position}`);
 	}
 
 	private scrollTo(target: number): void {

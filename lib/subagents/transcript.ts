@@ -4,6 +4,7 @@
  * single dim line for thinking. Pure, so it is tested without a terminal.
  */
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { moreLines } from "./names.ts";
 
 export type Painter = (color: string, text: string) => string;
 
@@ -56,7 +57,7 @@ export function transcriptLines(
 			const shown = all.slice(0, RESULT_PREVIEW_LINES);
 			const color = message.isError ? "error" : "dim";
 			for (const line of shown) lines.push(...wrap(line, color, `${INDENT}  `).slice(0, 1));
-			if (all.length > shown.length) lines.push(paint("dim", `${INDENT}  … ${all.length - shown.length} more lines`));
+			if (all.length > shown.length) lines.push(paint("dim", `${INDENT}  … ${moreLines(all.length - shown.length)}`));
 		}
 	}
 	while (lines[0] === "") lines.shift();

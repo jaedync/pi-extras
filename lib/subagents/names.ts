@@ -37,3 +37,17 @@ export function nameFor(requested: string | undefined, task: string, taken: (nam
 		if (!taken(name)) return name;
 	}
 }
+
+/** "1 more line", "3 more lines". */
+export const moreLines = (count: number, noun = "line"): string => `${count} more ${noun}${count === 1 ? "" : "s"}`;
+
+/**
+ * Completions for `/subagents`. None once the text is a whole command: an open
+ * menu takes Enter to re-apply its item, so the command would not run.
+ */
+export function commandCompletions(prefix: string, names: readonly string[]): Array<{ value: string; label: string }> | null {
+	const all = ["guide", "stats", "stop all", ...names, ...names.map((name) => `stop ${name}`)];
+	if (all.includes(prefix)) return null;
+	const matches = all.filter((value) => value.startsWith(prefix));
+	return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
+}

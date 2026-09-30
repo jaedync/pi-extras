@@ -43,9 +43,18 @@ export function reportText(record: AgentRecord, now: number): string {
 		const partial = record.report ? `\nLast message before it stopped:\n${capReport(record.report, record.sessionFile)}` : "";
 		return `${head} was stopped after ${duration(record, now)}.${partial}${session}`;
 	}
-	const report = record.report?.trim() ? capReport(record.report, record.sessionFile) : "(no final message)";
+	const report = record.report?.trim() ? capReport(record.report, record.sessionFile) : noReport(record.state);
 	const why = record.resumedBy && record.runs > 1 ? `\nThis run (${record.runs}) handled: ${oneLine(record.resumedBy.text, 300)}` : "";
 	return `${head} finished after ${duration(record, now)}. Message it to follow up; it keeps its context.${session}${why}\n\n${report}`;
+}
+
+/** What a report says when the agent never wrote a final message. */
+export const noReport = (state: string): string => (state === "stopped" ? "Stopped before it wrote a report." : "(no final message)");
+
+/** The report itself, without the header `reportText` puts on it for the model. */
+export function reportBody(text: string): string {
+	const cut = text.indexOf("\n\n");
+	return cut >= 0 && / finished after /.test(text.slice(0, text.indexOf("\n"))) ? text.slice(cut + 2) : text;
 }
 
 export interface RosterEntry {

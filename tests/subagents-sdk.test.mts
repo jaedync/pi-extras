@@ -1,7 +1,7 @@
 /** Real child sessions from the pinned SDK, driven by Pi's faux provider. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,9 +23,9 @@ const { childInstructions } = await import("../lib/subagents/format.ts");
 
 type Delivery = import("../lib/subagents/types.ts").MainDelivery;
 
-async function setup() {
+async function setup(models: Array<{ id: string; contextWindow: number }> = [{ id: "cheap", contextWindow: 100_000 }]) {
 	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
-	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
+	const faux = ai.fauxProvider({ provider: "faux", models });
 	runtime.registerNativeProvider(faux.provider);
 	const main: Delivery[] = [];
 	let tools: any;
@@ -163,5 +163,41 @@ test("with another extension's subagent tool, Subagents stands down entirely", {
 	} finally {
 		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		session.dispose();
+	}
+});
+
+test("a child compacts its own context when it fills up, and says so while it does", { timeout: 20_000 }, async () => {
+	// Pi's own auto-compaction, from the user's settings, with a small window so three reads fill it.
+	const settingsFile = join(agentDir, "settings.json");
+	writeFileSync(settingsFile, JSON.stringify({ compaction: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 500 } }));
+	for (const part of ["a", "b", "c"]) writeFileSync(join(scratch, `${part}.txt`), `${part} `.repeat(6_000));
+	const { team, faux } = await setup([{ id: "tiny", contextWindow: 8_000 }]);
+	try {
+		let reads = 0;
+		const step = (context: any) => {
+			if (JSON.stringify(context).includes("context summarization assistant")) return ai.fauxAssistantMessage("## Goal\nRead three files.");
+			reads++;
+			return reads <= 3 ? ai.fauxAssistantMessage(ai.fauxToolCall("read", { path: join(scratch, `${"abc"[reads - 1]}.txt`) })) : ai.fauxAssistantMessage("Read all three.");
+		};
+		faux.setResponses(Array.from({ length: 10 }, () => step));
+		const activities: string[] = [];
+		let unknownAfterCompacting = false;
+		team.onChange((record) => {
+			if (record?.activity) activities.push(record.activity);
+			if (activities.includes("compacting context") && record?.contextTokens === undefined && record?.state === "running") unknownAfterCompacting = true;
+		});
+		assert.ok(team.spawn({ task: "Read the files", parent: "main", model: "faux/tiny", readOnly: false, fork: false, blocking: false }).ok);
+		const done = await team.whenDone("read-files");
+		assert.equal(done.state, "idle", done.error);
+		assert.equal(done.report, "Read all three.");
+		const entries = readFileSync(done.sessionFile!, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+		assert.ok(entries.some((entry) => entry.type === "compaction"), "the child session holds a compaction");
+		assert.ok(activities.includes("compacting context"), activities.join(", "));
+		assert.ok(unknownAfterCompacting, "the old context size is dropped when compaction ends");
+		// Three reads alone would overflow the 8k window. When Pi compacts after the last reply, the size is unknown.
+		assert.ok(done.contextTokens === undefined || done.contextTokens < 8_000, `context after compaction: ${done.contextTokens}`);
+	} finally {
+		rmSync(settingsFile, { force: true });
+		await team.close();
 	}
 });

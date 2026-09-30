@@ -79,5 +79,17 @@ test("run stats total each model's runs, outcomes, time and spend", async () => 
 	const line = (model: string, state: string, cost: number, durationMs: number) => JSON.stringify({ model, state, usage: { cost }, durationMs, toolCalls: 2 });
 	const stats = statsByModel([line("a/luna", "idle", 0.001, 4_000), line("a/luna", "failed", 0.003, 6_000), "not json", line("b/sol", "idle", 0.02, 30_000)]);
 	assert.deepEqual(stats.map((s) => [s.model, s.runs, s.ok, s.failed]), [["a/luna", 2, 1, 1], ["b/sol", 1, 1, 0]]);
-	assert.equal(statsText(stats, (ms) => `${ms / 1000}s`, (v) => v.toFixed(4)).split("\n")[0], "a/luna     2 runs (1 failed)  avg 5s, 2.0 tools, $0.0020  total $0.0040");
+	const text = statsText(stats, (ms) => `${ms / 1000}s`, (v) => v.toFixed(4)).split("\n");
+	assert.equal(text[0], "a/luna     2 runs (1 failed)  avg 5s, 2.0 tools, $0.0020  total $0.0040");
+	assert.equal(text[1], "b/sol      1 run   avg 30s, 2.0 tools, $0.0200  total $0.0200");
+});
+
+test("/subagents completions close once the command is complete, so Enter runs it", async () => {
+	const { commandCompletions } = await import("../lib/subagents/names.ts");
+	const values = (prefix: string, names: string[]) => commandCompletions(prefix, names)?.map((item) => item.value) ?? null;
+	assert.deepEqual(values("st", ["long-job"]), ["stats", "stop all", "stop long-job"]);
+	assert.deepEqual(values("stop lo", ["long-job"]), ["stop long-job"]);
+	assert.equal(values("stop long-job", ["long-job", "long-job-2"]), null);
+	assert.equal(values("stats", []), null);
+	assert.equal(values("zzz", []), null);
 });

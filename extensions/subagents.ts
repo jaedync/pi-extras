@@ -19,7 +19,7 @@ import { GUIDE_FILE, loadConfig, readGuide, type SubagentsConfig } from "../lib/
 import { MainMail, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
 import { childInstructions, conversationDigest, rosterText } from "../lib/subagents/format.ts";
 import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "../lib/subagents/models.ts";
-import { MAIN, USER } from "../lib/subagents/names.ts";
+import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";
 import { type InspectorHost, openAgentInspector } from "../lib/subagents/inspector.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, messageResultRow, rememberAgent, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { markRow } from "../lib/tool-row.ts";
@@ -29,7 +29,9 @@ import { formatMoney } from "../lib/status-plus-logic.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
-import { createAgentsWidget } from "../lib/subagents/widget.ts";
+import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
+
+const markdown = () => sdk.getMarkdownTheme();
 
 const RECONCILE_MS = 1_000;
 
@@ -121,13 +123,13 @@ export default function subagents(pi: ExtensionAPI) {
 		renderResult: (result: unknown, _options: { expanded: boolean }, theme: Theme, context?: RowContext) => {
 			if (tool.name !== "subagent") return messageResultRow(result, theme, context);
 			rememberAgent(context, (result as { details?: unknown } | null)?.details);
-			return clickable(subagentResultRow(result, theme, context), context);
+			return clickable(subagentResultRow(result, theme, context, markdown), context);
 		},
 	} as ToolDefinition, "band");
 
 	if (typeof pi.registerMessageRenderer === "function") {
-		pi.registerMessageRenderer(MESSAGE_TYPE, createMessageRenderer());
-		pi.registerMessageRenderer(REPORT_TYPE, createReportRenderer());
+		pi.registerMessageRenderer(MESSAGE_TYPE, createMessageRenderer(markdown));
+		pi.registerMessageRenderer(REPORT_TYPE, createReportRenderer(markdown));
 	}
 
 	const build = (ctx: ExtensionContext): SessionState => {
@@ -284,12 +286,7 @@ export default function subagents(pi: ExtensionAPI) {
 
 	pi.registerCommand("subagents", {
 		description: "Inspect subagents (/subagents [name]), stop them (stop <name> | stop all), edit the model guide (guide), or see runs by model (stats)",
-		getArgumentCompletions: (prefix: string) => {
-			const names = state?.team.list().map((record) => record.name) ?? [];
-			return ["guide", "stats", "stop all", ...names, ...names.map((name) => `stop ${name}`)]
-				.filter((value) => value.startsWith(prefix))
-				.map((value) => ({ value, label: value }));
-		},
+		getArgumentCompletions: (prefix: string) => commandCompletions(prefix, state?.team.list().map((record) => record.name) ?? []),
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const [verb, ...rest] = args.trim().split(/\s+/);
 			if (verb === "guide") return editGuide(ctx);
@@ -312,7 +309,10 @@ export default function subagents(pi: ExtensionAPI) {
 			if (verb && state.team.get(verb) && inspectorUi) return inspect(verb);
 			if (!inspectorUi || records.length === 0) return ctx.ui.notify(listing(records), "info");
 			const width = Math.max(...records.map((record) => record.name.length));
-			const choice = await ctx.ui.select("Subagents", records.slice().reverse().map((record) => `${record.name.padEnd(width)}  ${record.state.padEnd(8)}  ${record.model}`));
+			const now = Date.now();
+			// The picker wraps long lines; one agent per line reads better.
+			const fit = Math.max(40, (process.stdout.columns || 120) - 8);
+			const choice = await ctx.ui.select("Subagents", records.slice().reverse().map((record) => listLabel(record, width, now, fit)));
 			if (choice) inspect(choice.split(/\s+/)[0]!);
 		},
 	});
@@ -330,5 +330,6 @@ export default function subagents(pi: ExtensionAPI) {
 
 function listing(records: readonly AgentRecord[]): string {
 	if (records.length === 0) return "No subagents in this session.";
-	return records.map((record) => `${record.name}  ${record.state}  ${record.model}${record.activity ? `  ${record.activity}` : ""}`).join("\n");
+	const width = Math.max(...records.map((record) => record.name.length));
+	return records.map((record) => listLabel(record, width, Date.now())).join("\n");
 }

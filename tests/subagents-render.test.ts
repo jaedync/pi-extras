@@ -81,3 +81,67 @@ test("while main waits, progress shows only in the call row, not as a partial re
 	const final = { content: [{ type: "text", text: "Found 15 files." }], details: { name: "count-lib", wait: true } };
 	assert.match(strip(subagentResultRow(final, theme, { state: {}, isPartial: false, executionStarted: true }).render(100).join("\n")), /Found 15 files\./);
 });
+
+const md = { heading: (t: string) => t, link: (t: string) => t, linkUrl: (t: string) => t, code: (t: string) => t, codeBlock: (t: string) => t,
+	codeBlockBorder: (t: string) => t, quote: (t: string) => t, quoteBorder: (t: string) => t, hr: (t: string) => t, listBullet: (t: string) => t,
+	bold: (t: string) => t, italic: (t: string) => t, strikethrough: (t: string) => t, underline: (t: string) => t };
+
+test("a waited-on child's result shows only its report, as Markdown", () => {
+	const content = "count-lib (openai-codex/gpt-6-luna, $0.0055) finished after 56s. Message it to follow up; it keeps its context.\nSession: /s/count-lib.jsonl\n\nTotal: **15** `.ts` files";
+	const context = { state: {}, isPartial: false, executionStarted: true };
+	const withReport = subagentResultRow({ content: [{ type: "text", text: content }], details: { name: "count-lib", wait: true, report: "Total: **15** `.ts` files" } }, theme, context, () => md as never);
+	assert.deepEqual(withReport.render(100).map(strip).map((line) => line.trim()), ["Total: 15 .ts files"]);
+	// Sessions saved before details carried the report.
+	const older = subagentResultRow({ content: [{ type: "text", text: content }], details: { name: "count-lib", wait: true } }, theme, context, () => md as never);
+	assert.deepEqual(older.render(100).map(strip).map((line) => line.trim()), ["Total: 15 .ts files"]);
+});
+
+test("report and message bands render Markdown", () => {
+	const report = createReportRenderer(() => md as never)({ details: { id: "2", kind: "report", reports: [
+		{ name: "scout", model: "openai-codex/gpt-6-luna", state: "idle", startedAt: 0, endedAt: 5_000, cost: 0, toolCalls: 0, report: "Found **3** in `lib/`" },
+	] } } as any, { expanded: false } as any, theme)!;
+	assert.equal(strip(report.render(80)[1]!).trim(), "Found 3 in lib/");
+	const message = createMessageRenderer(() => md as never)({ details: { id: "1", kind: "note", from: "scout", text: "see **this**" } } as any, { expanded: false } as any, theme)!;
+	assert.equal(strip(message.render(80)[1]!).trim(), "see this");
+});
+
+test("a queued background child's row says queued", () => {
+	const record: AgentRecord = { name: "job-5", parent: "main", depth: 1, task: "Wait", model: "openai-codex/gpt-6-luna", readOnly: false, fork: false,
+		blocking: false, state: "queued", createdAt: 0, activity: "queued", toolCalls: 0, usage: NO_USAGE, runs: 0 };
+	const row = subagentCallRow({ task: "Wait" }, theme, { state: { agent: "job-5" }, isPartial: false, executionStarted: true }, () => record);
+	assert.match(strip(row.render(80)[0]!), /job-5  gpt-6-luna  Wait.*queued\s*$/);
+});
+
+test("expanding a background row shows its whole task, not the text written for the model", () => {
+	const task = "First run `sleep 12` with bash. Then count all files under /Users/someone/project/tests and report the count in one line.";
+	const record: AgentRecord = { name: "test-scan", parent: "main", depth: 1, task, model: "openai-codex/gpt-6-astra", readOnly: false, fork: false,
+		blocking: false, state: "running", createdAt: 0, startedAt: Date.now(), activity: "bash sleep 12", toolCalls: 0, usage: NO_USAGE, runs: 1 };
+	const context = { state: { agent: "test-scan" }, isPartial: false, executionStarted: true, expanded: true };
+	const call = subagentCallRow({ task }, theme, context, () => record).render(80).map(strip);
+	assert.ok(call.length > 2, "the task wraps under the band");
+	assert.match(call.slice(1).join(" ").replace(/\s+/g, " "), /count all files under \/Users\/someone\/project\/tests and report/);
+	const started = { content: [{ type: "text", text: "Started test-scan on openai-codex/gpt-6-astra. Talk to it with message({ to: \"test-scan\", text })." }], details: { name: "test-scan" } };
+	assert.deepEqual(subagentResultRow(started, theme, context).render(80), []);
+});
+
+test("a stopped child's report band says it was stopped before reporting", () => {
+	const report = createReportRenderer()({ details: { id: "3", kind: "report", reports: [
+		{ name: "long-job", model: "openai-codex/gpt-6-luna", state: "stopped", startedAt: 0, endedAt: 9_600, cost: 0.0004, toolCalls: 1 },
+	] } } as any, { expanded: false } as any, theme)!;
+	assert.equal(strip(report.render(80)[1]!).trim(), "Stopped before it wrote a report.");
+});
+
+test("one hidden line is a line, not lines", () => {
+	const report = createReportRenderer()({ details: { id: "4", kind: "report", reports: [
+		{ name: "digest", model: "openai-codex/gpt-6-luna", state: "idle", startedAt: 0, endedAt: 1_000, cost: 0, toolCalls: 0, report: "a\nb\nc\nd" },
+	] } } as any, { expanded: false } as any, theme)!;
+	assert.match(strip(report.render(80)[4]!), /… 1 more line \(click to show\)/);
+});
+
+test("a wait that ended early says why in plain words", () => {
+	const context = { state: {}, isPartial: false, executionStarted: true };
+	const asked = subagentResultRow({ content: [{ type: "text", text: "Stopped waiting: checker asked you something. Answer with message({ to: \"checker\", text })." }], details: { name: "checker", wait: true, detached: true, asked: true } }, theme, context);
+	assert.deepEqual(asked.render(100).map(strip).map((line) => line.trim()), ["It asked you something, so the wait ended. Its report will arrive as a message."]);
+	const escaped = subagentResultRow({ content: [{ type: "text", text: "Stopped waiting. checker keeps running." }], details: { name: "checker", wait: true, detached: true } }, theme, context);
+	assert.deepEqual(escaped.render(100).map(strip).map((line) => line.trim()), ["You stopped waiting. It keeps running, and its report will arrive as a message."]);
+});

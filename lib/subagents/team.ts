@@ -48,7 +48,8 @@ export class Team {
 	private readonly records = new Map<string, AgentRecord>();
 	private readonly handles = new Map<string, ChildHandle>();
 	private readonly inboxes = new Map<string, string[]>();
-	private readonly questions = new Map<string, Pending>();
+	/** Open questions by asker; a child may wait on several agents at once. */
+	private readonly questions = new Map<string, Pending[]>();
 	private readonly waiters = new Map<string, Array<(record: AgentRecord) => void>>();
 	private readonly listeners = new Set<Listener>();
 	private readonly queue: string[] = [];
@@ -119,12 +120,20 @@ export class Team {
 	async send(from: string, to: string, text: string, options: { expectReply?: boolean; signal?: AbortSignal } = {}): Promise<SendResult> {
 		if (to === from) return { ok: false, error: "That is you." };
 		if (to === EVERYONE) return this.broadcast(from, text, options.expectReply === true);
-		const pending = this.questions.get(to);
 		// The user can answer any question, whoever it was put to.
-		if (pending && (pending.to === from || from === USER)) {
+		const open = this.questions.get(to) ?? [];
+		const pending = from === USER ? open[0] : open.find((question) => question.to === from);
+		if (pending) {
 			pending.resolve(text);
 			if (from === USER) this.options.deliverToMain({ kind: "relay", from, to, text, answered: true });
 			return { ok: true, delivered: "replied" };
+		}
+		// Its parent is blocked on this agent's report: a note would only land after it, and a
+		// question could never be answered, so the question ends the wait instead.
+		const asker = this.records.get(from);
+		if (asker?.blocking && to === asker.parent) {
+			if (!options.expectReply) return { ok: false, error: `${to} is waiting for your report; put this in it instead.` };
+			this.patch(from, { blocking: false });
 		}
 		const body = options.expectReply ? questionText(from, text) : noteText(from, text);
 		const said = `${options.expectReply ? "Question" : "Message"} from ${from}: ${text}`;
@@ -160,7 +169,7 @@ export class Team {
 		if (!record || !LIVE_STATES.has(record.state)) return;
 		for (const child of this.list().filter((entry) => entry.parent === name)) await this.stop(child.name);
 		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
-		this.questions.get(name)?.reject(new Error("stopped"));
+		for (const question of this.questions.get(name) ?? []) question.reject(new Error("stopped"));
 		const handle = this.handles.get(name);
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, report: handle?.lastText() });
 		await handle?.abort().catch(() => undefined);
@@ -263,7 +272,11 @@ export class Team {
 		this.waiters.delete(name);
 		// The report answers anything main was waiting on.
 		this.owesMain.delete(name);
-		if (record.parent === MAIN) {
+		// A parent waiting on this child's answer gets the report as that answer.
+		const asked = this.questions.get(record.parent)?.find((question) => question.to === name);
+		if (asked) {
+			asked.resolve(reportText(record, this.now()));
+		} else if (record.parent === MAIN) {
 			if (!record.blocking) this.options.deliverToMain({ kind: "report", record });
 		} else if (!record.blocking) {
 			this.deliverToChild(record.name, record.parent, reportText(record, this.now()), true, `Report from ${record.name}`);
@@ -301,16 +314,14 @@ export class Team {
 	}
 
 	private awaitReply(from: string, to: string, signal?: AbortSignal): Promise<SendResult> {
-		const asker = this.records.get(from);
-		if (asker) this.patch(from, { state: "asking", askingWho: to, activity: `asking ${to}` });
-		this.pump();
 		return new Promise<SendResult>((resolve) => {
 			const done = (result: SendResult) => {
 				clearTimeout(pending.timer);
 				signal?.removeEventListener("abort", onAbort);
-				this.questions.delete(from);
-				const current = this.records.get(from);
-				if (current?.state === "asking") this.patch(from, { state: "running", askingWho: undefined, activity: "thinking" });
+				const rest = (this.questions.get(from) ?? []).filter((question) => question !== pending);
+				if (rest.length > 0) this.questions.set(from, rest);
+				else this.questions.delete(from);
+				this.showAsking(from);
 				resolve(result);
 			};
 			const onAbort = () => done({ ok: false, error: "Stopped waiting for a reply." });
@@ -323,9 +334,24 @@ export class Team {
 					error: `No reply from ${to} within ${Math.round(this.options.replyTimeoutMs / 60_000)} min. Continue with your best judgment and say so in your report.`,
 				}), this.options.replyTimeoutMs),
 			};
-			this.questions.set(from, pending);
+			this.questions.set(from, [...(this.questions.get(from) ?? []), pending]);
+			this.showAsking(from);
+			// An asking agent frees its slot for a queued one.
+			this.pump();
 			signal?.addEventListener("abort", onAbort, { once: true });
 		});
+	}
+
+	/** An asker's state follows its open questions. */
+	private showAsking(name: string): void {
+		const current = this.records.get(name);
+		if (!current) return;
+		const waitingOn = (this.questions.get(name) ?? []).map((question) => question.to);
+		if (waitingOn.length > 0) {
+			this.patch(name, { state: "asking", askingWho: waitingOn.join(", "), activity: `asking ${waitingOn.join(", ")}` });
+		} else if (current.state === "asking") {
+			this.patch(name, { state: "running", askingWho: undefined, activity: "thinking" });
+		}
 	}
 
 	private takeInbox(name: string): string[] {

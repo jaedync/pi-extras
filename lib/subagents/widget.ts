@@ -13,7 +13,7 @@ import { paletteFrom } from "../band/palette.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import type { PendingItem } from "./deliver.ts";
 import { MAIN } from "./names.ts";
-import { type AgentRecord, LIVE_STATES } from "./types.ts";
+import { type AgentRecord, type AgentState, LIVE_STATES } from "./types.ts";
 
 export const WIDGET_ID = "subagents";
 export const MAX_AGENT_ROWS = 6;
@@ -95,6 +95,22 @@ export function rowRail(record: AgentRecord, now: number): Seg[] {
 	return rail;
 }
 
+export const hiddenLine = (hidden: number): string => `+${hidden} more agent${hidden === 1 ? "" : "s"}`;
+
+const STATE_WORDS: Record<AgentState, string> = {
+	queued: "queued", starting: "starting", running: "running", asking: "asking", waiting: "waiting", idle: "finished", failed: "failed", stopped: "stopped",
+};
+
+/** One line in the /subagents picker, cut to `maxWidth`. The name leads, since the picker reads it back. */
+export function listLabel(record: AgentRecord, nameWidth: number, now: number, maxWidth = Number.POSITIVE_INFINITY): string {
+	const parts = [record.name.padEnd(nameWidth), STATE_WORDS[record.state].padEnd(8), shortModel(record.model)];
+	if (record.usage.cost > 0) parts.push(`$${formatMoney(record.usage.cost)}`);
+	if (record.startedAt !== undefined) parts.push(formatTime((record.endedAt ?? now) - record.startedAt));
+	parts.push(record.task.replace(/\s+/g, " ").trim());
+	const line = parts.join("  ");
+	return line.length > maxWidth ? `${line.slice(0, Math.max(1, maxWidth - 1))}…` : line;
+}
+
 export function pendingLines(items: readonly PendingItem[]): Array<{ text: string; color: string }> {
 	const messages = items.filter((item) => item.kind !== "report");
 	const lines = messages.slice(0, MAX_PENDING_ROWS).map((item) => {
@@ -145,7 +161,7 @@ export function createAgentsWidget(): AgentsWidget {
 					width, phase: phaseOf(row.record, now), segs: rowSegs(row), rail: rowRail(row.record, now), clockMs: now,
 				}));
 				const paint = (color: string, text: string) => { try { return theme.fg(color as never, text); } catch { return text; } };
-				if (hidden > 0) lines.push(`${PAD}${paint("dim", `+${hidden} more agents`)}`);
+				if (hidden > 0) lines.push(`${PAD}${paint("dim", hiddenLine(hidden))}`);
 				for (const line of pendingLines(pending)) lines.push(`${PAD}${paint(line.color, truncate(line.text, width - 2))}`);
 				return lines;
 			},

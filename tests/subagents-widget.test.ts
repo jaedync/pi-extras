@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pendingLines, phaseOf, rowRail, rowSegs, selectRows, shortModel } from "../lib/subagents/widget.ts";
+import { hiddenLine, listLabel, pendingLines, phaseOf, rowRail, rowSegs, selectRows, shortModel } from "../lib/subagents/widget.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 
 function record(name: string, extra: Partial<AgentRecord> = {}): AgentRecord {
@@ -67,4 +67,22 @@ test("queued messages for main show until appended, questions in amber", () => {
 test("a child main is blocked on shows only inline, not in the widget", () => {
 	const records = [record("inline", { blocking: true }), record("bg"), record("nested", { parent: "bg", depth: 2, blocking: true })];
 	assert.deepEqual(selectRows(records, new Set()).rows.map((row) => row.record.name), ["bg", "nested"]);
+});
+
+test("hidden agents are counted in the right number", () => {
+	assert.equal(hiddenLine(1), "+1 more agent");
+	assert.equal(hiddenLine(3), "+3 more agents");
+});
+
+test("the /subagents picker says what each agent is, did and cost", () => {
+	const done = record("reader", { state: "idle", task: "Report the value of REPORT_MAX_CHARS in format.ts", startedAt: 1_000, endedAt: 12_000, usage: { ...NO_USAGE, cost: 0.0012 } });
+	assert.equal(listLabel(done, 8, 20_000), "reader    finished  gpt-6-luna  $0.0012  11.0s  Report the value of REPORT_MAX_CHARS in format.ts");
+	assert.equal(listLabel(record("scan", { state: "queued", startedAt: undefined }), 4, 20_000), "scan  queued    gpt-6-luna  t");
+});
+
+test("a picker line fits the width it is given", () => {
+	const long = record("reader", { state: "idle", task: "Read /Users/someone/project/lib/subagents/format.ts and report the value of REPORT_MAX_CHARS. Be concise.", usage: { ...NO_USAGE, cost: 0.0009 }, endedAt: 5_800 });
+	const line = listLabel(long, 6, 10_000, 60);
+	assert.equal(line.length, 60);
+	assert.ok(line.endsWith("…"));
 });

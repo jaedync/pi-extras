@@ -13,15 +13,22 @@
  *   a click shows all of it.
  */
 import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { Markdown, truncateToWidth, wrapTextWithAnsi, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { formatTime, renderBand, type BandPhase, type Seg } from "../band/band.ts";
 import { paletteFrom } from "../band/palette.ts";
 import { bodyBackground, onBackground } from "../band/surface.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import type { MailDetails, ReportSummary } from "./deliver.ts";
-import { MAIN } from "./names.ts";
+import { noReport, reportBody } from "./format.ts";
+import { MAIN, moreLines } from "./names.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
 import { phaseOf, rowRail, shortModel } from "./widget.ts";
+
+/** Pi's Markdown theme when there is one; reports and messages are Markdown, like assistant text. */
+export type MarkdownSource = () => MarkdownTheme | undefined;
+const markdownOf = (source: MarkdownSource | undefined): MarkdownTheme | undefined => {
+	try { return source?.(); } catch { return undefined; }
+};
 
 export const REPORT_PREVIEW_LINES = 3;
 export const MESSAGE_PREVIEW_LINES = 8;
@@ -47,16 +54,18 @@ function band(theme: Theme, width: number, phase: BandPhase, segs: Seg[], rail: 
 }
 
 /** Text under a band, on the tool background; `limit` lines unless expanded. */
-function body(theme: Theme, width: number, text: string, color: string, limit: number | null): string[] {
+function body(theme: Theme, width: number, text: string, color: string, limit: number | null, markdown?: MarkdownTheme): string[] {
 	const trimmed = text.replace(/\r/g, "").trim();
 	if (!trimmed) return [];
 	const paint = paintOf(theme);
 	const inner = Math.max(4, width - BODY_INDENT);
 	const pad = " ".repeat(BODY_INDENT);
-	const all = wrapTextWithAnsi(trimmed, inner);
+	const all = markdown
+		? new Markdown(trimmed, 0, 0, markdown, { color: (line: string) => paint(color, line) }).render(inner).map((line) => line.trimEnd())
+		: wrapTextWithAnsi(trimmed, inner).map((line) => paint(color, line));
 	const shown = limit === null ? all : all.slice(0, limit);
-	const lines = shown.map((line) => pad + truncateToWidth(paint(color, line), inner, "…"));
-	if (shown.length < all.length) lines.push(pad + paint("dim", `… ${all.length - shown.length} more lines (click to show)`));
+	const lines = shown.map((line) => pad + truncateToWidth(line, inner, "…"));
+	if (shown.length < all.length) lines.push(pad + paint("dim", `… ${moreLines(all.length - shown.length)} (click to show)`));
 	return onBackground(lines, width, bodyBackground(theme));
 }
 
@@ -77,7 +86,11 @@ const agentOf = (context: RowContext): string | undefined => (context?.state as 
 
 export function subagentCallRow(args: unknown, theme: Theme, context: RowContext, lookup: (name: string) => AgentRecord | undefined): Component {
 	const input = (args ?? {}) as { task?: unknown; name?: unknown; model?: unknown; thinking?: unknown; wait?: unknown };
-	return new Lines((width) => {
+	// Expanded, the row shows the whole task the band cuts short.
+	const task = (width: number) => (context?.expanded && typeof input.task === "string" ? body(theme, width, input.task, "muted", null) : []);
+	return new Lines((width) => [...head(width), ...task(width)]);
+
+	function head(width: number): string[] {
 		const now = Date.now();
 		const name = agentOf(context);
 		const record = name ? lookup(name) : undefined;
@@ -95,23 +108,34 @@ export function subagentCallRow(args: unknown, theme: Theme, context: RowContext
 				const head = band(theme, width, phaseOf(record, now), segs, rowRail(record, now));
 				return record.activity ? [head, ...activityLine(theme, width, record.activity)] : [head];
 			}
-			return [band(theme, width, { kind: "calm" }, segs, [{ text: record.state === "asking" ? record.activity ?? "asking" : "in background", color: record.state === "asking" ? "warning" : "dim" }])];
+			const where = record.state === "asking" ? record.activity ?? "asking" : record.state === "queued" ? "queued" : "in background";
+			return [band(theme, width, { kind: "calm" }, segs, [{ text: where, color: record.state === "asking" ? "warning" : "dim" }])];
 		}
 		const word: Seg[] = record.state === "idle" ? [] : [{ text: record.state, color: record.state === "failed" ? "error" : "muted" }, { text: "  ", color: "dim" }];
 		return [band(theme, width, phaseOf(record, now), segs, [...word, ...rowRail(record, now)])];
-	});
+	}
 }
 
-export function subagentResultRow(result: unknown, theme: Theme, context: RowContext): Component {
-	const details = (result as { details?: { wait?: unknown } } | null)?.details;
+export function subagentResultRow(result: unknown, theme: Theme, context: RowContext, markdown?: MarkdownSource): Component {
+	const details = (result as { details?: { wait?: unknown; report?: unknown; detached?: unknown; asked?: unknown } } | null)?.details;
 	rememberAgent(context, details);
 	const text = ((result as { content?: Array<{ text?: string }> } | null)?.content ?? []).map((part) => part.text ?? "").join("\n");
 	return new Lines((width) => {
 		if (context?.isError) return body(theme, width, text, "error", null);
 		// Progress is drawn live in the call row; a partial result would lag behind it.
 		if (context?.isPartial) return [];
-		if (details?.wait === true) return body(theme, width, text, "toolOutput", context?.expanded ? null : REPORT_PREVIEW_LINES + 2);
-		return context?.expanded ? body(theme, width, text, "muted", null) : [];
+		// The band above already says who, model, cost and time; the model's header would repeat it.
+		if (details?.detached === true) {
+			const why = details.asked === true ? "It asked you something, so the wait ended. Its report will arrive as a message."
+				: "You stopped waiting. It keeps running, and its report will arrive as a message.";
+			return body(theme, width, why, "muted", null);
+		}
+		if (details?.wait === true) {
+			const report = typeof details.report === "string" ? details.report : reportBody(text);
+			return body(theme, width, report, "toolOutput", context?.expanded ? null : REPORT_PREVIEW_LINES + 2, markdownOf(markdown));
+		}
+		// What a background start says is for the model; the call row carries everything the user needs.
+		return [];
 	});
 }
 
@@ -155,7 +179,7 @@ function expandable(render: (width: number, expanded: boolean) => string[], glob
 	} as Component;
 }
 
-export function createMessageRenderer(): MessageRenderer {
+export function createMessageRenderer(markdown?: MarkdownSource): MessageRenderer {
 	const memory = { overrides: new WeakMap<object, boolean>(), seen: new WeakMap<object, boolean>() };
 	return (message, options, theme) => {
 		const details = message.details as MailDetails | undefined;
@@ -166,7 +190,7 @@ export function createMessageRenderer(): MessageRenderer {
 		const said = question ? "asks" : details.kind === "reply" ? "answers" : details.kind === "relay" ? (details.answered ? "you answered" : "you wrote") : "note";
 		const rail: Seg[] = [{ text: said, color: question ? "warning" : "dim" }];
 		const phase: BandPhase = question ? { kind: "done", outcome: "timeout", sinceMs: DONE } : { kind: "calm" };
-		return expandable((width, expanded) => [band(theme, width, phase, segs, rail), ...body(theme, width, details.text, "text", expanded ? null : MESSAGE_PREVIEW_LINES)],
+		return expandable((width, expanded) => [band(theme, width, phase, segs, rail), ...body(theme, width, details.text, "text", expanded ? null : MESSAGE_PREVIEW_LINES, markdownOf(markdown))],
 			options.expanded, message as object, memory);
 	};
 }
@@ -176,24 +200,24 @@ function reportPhase(report: ReportSummary): BandPhase {
 	return { kind: "done", outcome, sinceMs: DONE };
 }
 
-function reportLines(theme: Theme, width: number, report: ReportSummary, expanded: boolean): string[] {
+function reportLines(theme: Theme, width: number, report: ReportSummary, expanded: boolean, markdown?: MarkdownTheme): string[] {
 	const paint = paintOf(theme);
 	const took = report.startedAt !== undefined && report.endedAt !== undefined ? formatTime(report.endedAt - report.startedAt) : "";
 	const word = report.state === "idle" ? "finished" : report.state;
 	const segs: Seg[] = [{ text: report.name, color: "text", bold: true }, { text: ` ${word}`, color: report.state === "failed" ? "error" : "muted" }, { text: `  ${shortModel(report.model)}`, color: "dim" }];
 	const rail: Seg[] = [...(report.cost > 0 ? [{ text: `$${formatMoney(report.cost)}`, color: "dim" }, { text: "  ", color: "dim" }] : []), { text: took, color: "text" }];
-	const text = report.state === "failed" ? report.error ?? "failed" : report.report ?? "(no final message)";
-	const under = body(theme, width, text, report.state === "failed" ? "error" : "toolOutput", expanded ? null : REPORT_PREVIEW_LINES);
+	const text = report.state === "failed" ? report.error ?? "failed" : report.report ?? noReport(report.state);
+	const under = body(theme, width, text, report.state === "failed" ? "error" : "toolOutput", expanded ? null : REPORT_PREVIEW_LINES, report.state === "failed" ? undefined : markdown);
 	const session = expanded && report.sessionFile ? onBackground([" ".repeat(BODY_INDENT) + truncateToWidth(paint("dim", `session ${report.sessionFile}`), width - BODY_INDENT, "…")], width, bodyBackground(theme)) : [];
 	return [band(theme, width, reportPhase(report), segs, rail), ...under, ...session];
 }
 
-export function createReportRenderer(): MessageRenderer {
+export function createReportRenderer(markdown?: MarkdownSource): MessageRenderer {
 	const memory = { overrides: new WeakMap<object, boolean>(), seen: new WeakMap<object, boolean>() };
 	return (message, options, theme) => {
 		const details = message.details as MailDetails | undefined;
 		if (!details || details.kind !== "report" || !Array.isArray(details.reports)) return undefined;
-		return expandable((width, expanded) => details.reports.flatMap((report) => reportLines(theme, width, report, expanded)),
+		return expandable((width, expanded) => details.reports.flatMap((report) => reportLines(theme, width, report, expanded, markdownOf(markdown))),
 			options.expanded, message as object, memory);
 	};
 }

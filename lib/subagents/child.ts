@@ -141,6 +141,9 @@ function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: numb
 	const unsubscribe = session.subscribe((event) => {
 		const e = event as { type: string; toolName?: string; args?: unknown; message?: AssistantLike; assistantMessageEvent?: { type?: string } };
 		if (e.type === "tool_execution_start" && e.toolName) setActivity(describeTool(e.toolName, e.args));
+		else if (e.type === "compaction_start") setActivity("compacting context");
+		// Pi's own rule: the size is unknown until a reply after the compaction.
+		else if (e.type === "compaction_end") hooks.update({ contextTokens: undefined });
 		else if (e.type === "tool_execution_end") hooks.update({ toolCalls: ++toolCalls });
 		else if (e.type === "message_update") {
 			const kind = e.assistantMessageEvent?.type ?? "";

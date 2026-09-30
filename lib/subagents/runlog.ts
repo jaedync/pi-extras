@@ -80,6 +80,7 @@ export function statsText(stats: readonly ModelStats[], format: (ms: number) => 
 	const width = Math.max(...stats.map((s) => s.model.length));
 	return stats.map((s) => {
 		const ended = [s.failed && `${s.failed} failed`, s.stopped && `${s.stopped} stopped`].filter(Boolean).join(", ");
-		return `${s.model.padEnd(width)}  ${String(s.runs).padStart(4)} runs${ended ? ` (${ended})` : ""}  avg ${format(s.durationMs / s.runs)}, ${(s.toolCalls / s.runs).toFixed(1)} tools, $${money(s.cost / s.runs)}  total $${money(s.cost)}`;
+		const count = `${String(s.runs).padStart(4)} ${s.runs === 1 ? "run" : "runs"}${ended ? ` (${ended})` : s.runs === 1 ? " " : ""}`;
+		return `${s.model.padEnd(width)}  ${count}  avg ${format(s.durationMs / s.runs)}, ${(s.toolCalls / s.runs).toFixed(1)} tools, $${money(s.cost / s.runs)}  total $${money(s.cost)}`;
 	}).join("\n");
 }

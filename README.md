@@ -347,10 +347,10 @@ it has cost and how long this run has taken. Children of children sit under
 their parent. A child the agent waits on shows in its `subagent` row instead,
 with what it is doing on the line under it. Click a
 band, a `subagent` row, or run `/subagents` to open the inspector: the agent's
-task and live transcript. Press Enter to write to it (steered in while it
-runs, resuming it when it has finished, answering it when it asked), and `x`
-twice to stop it. Main is told what you wrote. Status Plus counts every child
-in its totals.
+task and live transcript, with a message box. Type and press Enter to write to
+it (steered in while it runs, resuming it when it has finished, answering it
+when it asked); ctrl+x twice stops it and Esc closes. Main is told what you
+wrote. Status Plus counts every child in its totals.
 
 **Limits.** At most `maxConcurrent` children run at once; the rest queue. A
 child can't start children of its own. Children stop with the session and on

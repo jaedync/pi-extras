@@ -5,11 +5,11 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { childMessageDescription, mainMessageDescription, subagentDescription } from "./describe.ts";
-import { reportText, rosterText } from "./format.ts";
+import { capReport, reportText, rosterText } from "./format.ts";
 import { isThinking, type ModelChoice, resolveModel, THINKING_LEVELS, type Thinking, thinkingFor, type ThinkingSettings } from "./models.ts";
 import { MAIN } from "./names.ts";
 import type { Team } from "./team.ts";
-import type { AgentRecord } from "./types.ts";
+import { type AgentRecord, LIVE_STATES } from "./types.ts";
 
 export const MAX_TASK_CHARS = 60_000;
 export const MAX_MESSAGE_CHARS = 20_000;
@@ -98,8 +98,13 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 async function waitFor(tc: ToolContext, name: string, details: Record<string, unknown>, signal: AbortSignal | undefined,
 	onUpdate: ((update: Result) => void) | undefined): Promise<Result> {
 	let last = 0;
+	let onDetached: (() => void) | undefined;
+	// The child's question to its waiting parent detaches it (see Team.send); stop waiting so the parent can answer.
+	const detached = new Promise<"detached">((resolve) => { onDetached = () => resolve("detached"); });
 	const stopProgress = tc.team.onChange((record) => {
-		if (!record || record.name !== name || !onUpdate) return;
+		if (!record || record.name !== name) return;
+		if (!record.blocking && LIVE_STATES.has(record.state)) onDetached?.();
+		if (!onUpdate) return;
 		const now = tc.now();
 		if (now - last < PROGRESS_MS) return;
 		last = now;
@@ -112,7 +117,10 @@ async function waitFor(tc: ToolContext, name: string, details: Record<string, un
 		signal?.addEventListener("abort", onAbort, { once: true });
 	});
 	try {
-		const done = await Promise.race([tc.team.whenDone(name), aborted]);
+		const done = await Promise.race([tc.team.whenDone(name), aborted, detached]);
+		if (done === "detached") {
+			return text(`Stopped waiting: ${name} asked you something. Answer with message({ to: "${name}", text }); its report will arrive as a message.`, { ...details, detached: true, asked: true });
+		}
 		if (done === null) {
 			tc.team.detach(name);
 			return text(`Stopped waiting. ${name} keeps running in the background and its report will arrive as a message.`, { ...details, detached: true });
@@ -120,7 +128,7 @@ async function waitFor(tc: ToolContext, name: string, details: Record<string, un
 		// Later runs (after a message resumes it) report as messages.
 		tc.team.detach(name);
 		const failed = done.state !== "idle";
-		const result = text(reportText(done, tc.now()), { ...details, state: done.state });
+		const result = text(reportText(done, tc.now()), { ...details, state: done.state, ...(done.report ? { report: capReport(done.report) } : {}) });
 		if (failed) throw new Error(result.content[0]!.text);
 		return result;
 	} finally {
