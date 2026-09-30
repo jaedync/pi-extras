@@ -44,6 +44,51 @@ async function setup(models: Array<{ id: string; contextWindow: number }> = [{ i
 	return { team, faux, main };
 }
 
+test("a child runs only the extensions that own its tools; another extension's factory never runs with the child's API", { timeout: 20_000 }, async () => {
+	// An extension like remote-pi keeps module-level state that its factory rebinds to whichever
+	// session called it last, so running its factory for a child steals the parent's messages.
+	const extAgentDir = join(scratch, "agent-extensions");
+	const extDir = join(scratch, "extensions");
+	mkdirSync(extDir, { recursive: true });
+	const factory = (label: string, tool: string, text: string) => `export default function (pi) {
+	(globalThis.__childFactoryRuns ??= []).push(${JSON.stringify(label)});
+	pi.registerTool({ name: ${JSON.stringify(tool)}, label: ${JSON.stringify(tool)}, description: "Synthetic test tool.",
+		parameters: { type: "object", properties: {} },
+		async execute() { return { content: [{ type: "text", text: ${JSON.stringify(text)} }], details: {} }; } });
+}
+`;
+	const owner = join(extDir, "owner.js");
+	const bystander = join(extDir, "bystander.js");
+	writeFileSync(owner, factory("owner", "probe_tool", "probe-ok"));
+	writeFileSync(bystander, factory("bystander", "agent_send", "never"));
+	mkdirSync(extAgentDir, { recursive: true });
+	writeFileSync(join(extAgentDir, "settings.json"), JSON.stringify({ extensions: [owner, bystander] }));
+	const runs = ((globalThis as any).__childFactoryRuns = [] as string[]);
+	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
+	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
+	runtime.registerNativeProvider(faux.provider);
+	const team = new Team({
+		maxConcurrent: 1, maxDepth: 1, replyTimeoutMs: 5_000,
+		deliverToMain: () => undefined,
+		launcher: createLauncher({
+			sdk: sdk as never, agentDir: extAgentDir, cwd: scratch, sessionDir: join(extAgentDir, "sessions"),
+			modelRuntime: async () => runtime,
+			toolsFor: () => ({ tools: ["probe_tool"], customTools: [], extensionPaths: [owner] }),
+			instructions: () => "",
+		}),
+	});
+	faux.setResponses([
+		ai.fauxAssistantMessage(ai.fauxToolCall("probe_tool", {})),
+		(context: any) => ai.fauxAssistantMessage(lastToolResult(context)),
+	]);
+	assert.ok(team.spawn({ task: "Probe", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false }).ok);
+	const done = await team.whenDone("probe");
+	assert.equal(done.state, "idle", done.error);
+	assert.equal(done.report, "probe-ok", "the owning extension's tool works in the child");
+	assert.deepEqual(runs, ["owner"], "only the owner's factory ran for the child");
+	await team.close();
+});
+
 const lastToolResult = (context: any): string => {
 	const result = [...context.messages].reverse().find((message: any) => message.role === "toolResult");
 	return result?.content?.map((part: any) => part.text ?? "").join("") ?? "";

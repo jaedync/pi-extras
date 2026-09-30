@@ -23,6 +23,17 @@ const WRITE_TOOLS = new Set(["bash", "edit", "write"]);
 const READ_TOOLS = ["read", "grep", "find", "ls"];
 const SHUTDOWN_TIMEOUT_MS = 2_000;
 
+/**
+ * The extension files that own a child's tools, each once. Built-in, SDK and
+ * inline owners have no file to load; a child gets those some other way or not at all.
+ */
+export function childExtensionPaths(all: readonly { name: string; sourceInfo?: { path?: string } }[], toolNames: readonly string[]): string[] {
+	const wanted = new Set(toolNames);
+	const paths = all.filter((tool) => wanted.has(tool.name)).map((tool) => tool.sourceInfo?.path ?? "")
+		.filter((path) => path !== "" && !path.startsWith("builtin:") && !path.startsWith("<"));
+	return [...new Set(paths)];
+}
+
 /** The tool names a child gets, before its own `message` (and maybe `subagent`). */
 export function childToolNames(parentActive: readonly string[], readOnly: boolean, extraExclude: readonly string[] = []): string[] {
 	const exclude = new Set([...CHILD_TOOL_EXCLUDE, ...extraExclude]);
@@ -86,7 +97,7 @@ export interface LauncherDeps {
 	sessionDir: string | null;
 	modelRuntime(): Promise<ModelRuntime>;
 	/** Tool names and custom tools for this child. */
-	toolsFor(record: AgentRecord): { tools: string[]; customTools: ToolDefinition[] };
+	toolsFor(record: AgentRecord): { tools: string[]; customTools: ToolDefinition[]; extensionPaths?: readonly string[] };
 	instructions(record: AgentRecord): string;
 	onExtensionError?(error: unknown): void;
 }
@@ -98,12 +109,16 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const modelRuntime = await deps.modelRuntime();
 			const resolved = sdk.resolveCliModel({ cliModel: record.model, modelRuntime });
 			if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Unknown model ${record.model}.`);
-			const { tools, customTools } = deps.toolsFor(record);
+			const { tools, customTools, extensionPaths = [] } = deps.toolsFor(record);
 			const wanted = new Set(tools);
 			const guard = createChildRateLimitGuard({ onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
 			const settingsManager = sdk.SettingsManager.create(cwd, agentDir);
 			const loader = new sdk.DefaultResourceLoader({
 				cwd, agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
+				// Load only the files that own the child's tools. Every factory that runs is handed the
+				// child's API, and one that keeps it in module state (remote-pi does) then delivers the
+				// parent's messages to the child, even if the extension is filtered out afterwards.
+				noExtensions: true, additionalExtensionPaths: [...extensionPaths],
 				appendSystemPrompt: [deps.instructions(record)],
 				extensionFactories: [guard.extension],
 				extensionsOverride: (base) => ({

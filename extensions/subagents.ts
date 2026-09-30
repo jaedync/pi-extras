@@ -14,7 +14,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createLauncher, childToolNames, describeTool } from "../lib/subagents/child.ts";
+import { createLauncher, childExtensionPaths, childToolNames, describeTool } from "../lib/subagents/child.ts";
 import { GUIDE_FILE, loadConfig, readGuide, type SubagentsConfig } from "../lib/subagents/config.ts";
 import { MainMail, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
 import { childInstructions, conversationDigest, rosterText } from "../lib/subagents/format.ts";
@@ -177,13 +177,17 @@ export default function subagents(pi: ExtensionAPI) {
 				sdk, agentDir, cwd,
 				sessionDir,
 				modelRuntime: runtimeSource(ctx),
-				toolsFor: (record) => ({
-					tools: childToolNames(pi.getActiveTools(), record.readOnly, config.childToolsExclude),
-					customTools: [
-						childMessageTool(tools, record.name),
-						...(record.depth < config.maxDepth ? [subagentTool(tools, record.name)] : []),
-					],
-				}),
+				toolsFor: (record) => {
+					const names = childToolNames(pi.getActiveTools(), record.readOnly, config.childToolsExclude);
+					return {
+						tools: names,
+						extensionPaths: childExtensionPaths(pi.getAllTools(), names),
+						customTools: [
+							childMessageTool(tools, record.name),
+							...(record.depth < config.maxDepth ? [subagentTool(tools, record.name)] : []),
+						],
+					};
+				},
 				instructions: (record) => childInstructions({
 					name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < config.maxDepth,
 					roster: rosterText(record.name, team.list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model }))),

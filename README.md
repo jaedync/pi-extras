@@ -417,7 +417,9 @@ Pi draws them and `/copy-block` still works.
 The `subagent` tool starts a child agent: a separate Pi session on the model
 the agent picks, with a fresh context, the same working directory and the
 same tools minus a few that make no sense in a child (mesh, goals, desktop
-control, background jobs). It runs in the background and its report arrives
+control, background jobs). Only the extensions that provide those tools load
+in the child, so the rest, such as the remote-pi mesh, keep serving the parent
+session. It runs in the background and its report arrives
 as a message, so the agent keeps working or ends its turn and is woken when it
 matters. `wait: true` blocks instead, for a quick check. `readOnly: true` takes
 away `bash`, `edit` and `write`. `context: "fork"` gives the child a condensed
