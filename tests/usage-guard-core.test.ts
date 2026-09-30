@@ -55,6 +55,18 @@ test("legacy notices infer family scope for every supported quota window base", 
 	}
 });
 
+test("automatic notices lapse once their window resets", () => {
+	const model = { provider: "anthropic", id: "claude-opus-5-5" };
+	const notice = (reset: number | string) => ({ key: `anthropic|five_hour|98|${reset}`, reason: "band" });
+	assert.equal(warningApplies(notice(RESET), model, NOW), true);
+	assert.equal(warningApplies(notice(RESET), model, RESET - 1), true);
+	assert.equal(warningApplies(notice(RESET), model, RESET), false);
+	assert.equal(warningApplies(notice(NOW - 54 * 60_000), model, NOW), false, "delivered after the reset");
+	assert.equal(warningApplies({ key: `anthropic|five_hour|x|${NOW - 1}`, reason: "exhausted" }, model, NOW), false);
+	assert.equal(warningApplies(notice("none"), model, NOW), true, "no known reset keeps the notice");
+	assert.equal(warningApplies(notice(NOW - 1), model), true, "no clock keeps the notice");
+});
+
 test("entry kinds are explicit when set and inferred from shape otherwise", () => {
 	assert.equal(entryKind({ label: "5h", usedPct: 3 }), "window");
 	assert.equal(entryKind({ label: "", remainingText: "$87.50/$100" }), "budget");

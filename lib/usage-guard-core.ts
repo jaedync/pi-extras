@@ -85,11 +85,24 @@ export function entryApplies(entry: LimitEntry, model: ActiveModel): boolean {
 	return tokens.includes(entry.modelFamily.toLowerCase());
 }
 
-/** Recheck automatic notices at request time, including notices queued by older extension versions. */
-export function warningApplies(details: unknown, model: ActiveModel): boolean {
+/** Reset time recorded in a warning key, when the window reported one. */
+function keyResetMs(key: string): number | undefined {
+	const reset = key.slice(key.lastIndexOf("|") + 1);
+	return /^\d+$/.test(reset) ? Number(reset) : undefined;
+}
+
+/**
+ * Recheck automatic notices at request time, including notices queued by older
+ * extension versions. A notice lapses once its window resets: it stays in raw
+ * history but would otherwise keep telling the model to wait out a limit that
+ * no longer exists.
+ */
+export function warningApplies(details: unknown, model: ActiveModel, now?: number): boolean {
 	if (!details || typeof details !== "object") return true;
 	const record = details as Record<string, unknown>;
 	if (typeof record.key !== "string" || !["band", "budget", "exhausted"].includes(String(record.reason))) return true;
+	const resetMs = keyResetMs(record.key);
+	if (now !== undefined && resetMs !== undefined && now >= resetMs) return false;
 	const [legacyProvider, window] = record.key.split("|");
 	const provider = typeof record.provider === "string" ? record.provider : legacyProvider;
 	const modelFamily = typeof record.modelFamily === "string" ? record.modelFamily : quotaKeyParts(window ?? "").family;

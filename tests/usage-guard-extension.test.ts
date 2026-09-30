@@ -300,14 +300,15 @@ test("context omits obsolete automatic warnings but keeps explicit usage snapsho
 	const codex = { ...claude, details: { ...claude.details, key: `openai-codex|primary|95|${RESET}` } };
 	const snapshot = { role: "custom", customType: GUARD_CUSTOM_TYPE, content: "Current usage limits:", details: {} };
 	const unrelated = { role: "custom", customType: "other", content: "keep" };
-	const messages = [claude, fable, codex, snapshot, unrelated];
+	const reset = { ...claude, details: { ...claude.details, key: `anthropic|five_hour|98|${NOW - 60_000}` } };
+	const messages = [claude, fable, codex, snapshot, unrelated, reset];
 	const filter = pi.handlers.get("context")!;
 	assert.ok(filter, "a request boundary must recheck historical and already queued warnings");
 	const forCodex: any = await filter({ messages }, fakeCtx(pi, { provider: "openai-codex", id: "gpt-6.1-sol" }));
 	assert.deepEqual(forCodex.messages, [codex, snapshot, unrelated]);
 	const forSonnet: any = await filter({ messages }, ctx);
-	assert.deepEqual(forSonnet.messages, [claude, snapshot, unrelated]);
-	assert.deepEqual(messages, [claude, fable, codex, snapshot, unrelated], "raw history is unchanged");
+	assert.deepEqual(forSonnet.messages, [claude, snapshot, unrelated], "a notice for an already reset window is stale");
+	assert.deepEqual(messages, [claude, fable, codex, snapshot, unrelated, reset], "raw history is unchanged");
 });
 
 test("budget arguments parse strictly", () => {

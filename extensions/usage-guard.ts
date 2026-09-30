@@ -251,7 +251,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		const notices = evaluate(ctx, true);
 		return {
 			messages: [...event.messages.filter((message) => message.role !== "custom" ||
-				message.customType !== GUARD_CUSTOM_TYPE || warningApplies(message.details, activeModel(ctx))), ...notices],
+				message.customType !== GUARD_CUSTOM_TYPE || warningApplies(message.details, activeModel(ctx), now())), ...notices],
 		};
 	});
 

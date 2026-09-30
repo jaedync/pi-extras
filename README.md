@@ -136,7 +136,8 @@ rate limits taken from response headers are reported but never warned on.
   without changing the system prompt or initiating another request. Idle polls
   do not queue warnings for later delivery: the active provider and model family
   are checked again for manual prompts, automated wakeups and queued follow-ups. Obsolete automatic warnings remain in raw history
-  but are omitted from requests for models they do not govern. Resets reported
+  but are omitted from requests for models they do not govern, and from every
+  request once their window has reset. Resets reported
   within ten minutes of each other
   count as one cycle, since proxies recompute them on every fetch. The first
   band is advance notice only. The final message never cuts short work that

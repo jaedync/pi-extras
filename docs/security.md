@@ -47,7 +47,8 @@ for a future model. Delivery checks the active provider/model family at the shar
 request-context boundary, including automated wakeups and queued follow-ups. New
 notices enter that request immediately and are persisted/displayed at Pi's safe
 turn boundary without steering or starting an extra request. The context projection also omits automatic notices
-that no longer govern the selected model, including older queued notices, while
+that no longer govern the selected model or whose window has since reset,
+including older queued notices, while
 preserving raw session history and explicit requested usage snapshots.
 
 ## Rate-limit Recovery

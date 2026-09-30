@@ -24,7 +24,7 @@ const CLAUDE = "claude-sonnet-5-5";
 const CODEX = "gpt-6.1-sol";
 const FABLE = "claude-fable-5-1";
 
-async function fixture(historical = false, pauseFirst = false) {
+async function fixture(historical: boolean | number = false, pauseFirst = false) {
 	let releaseFirst = () => {};
 	let started!: () => void;
 	const firstStarted = new Promise<void>((resolve) => { started = resolve; });
@@ -58,7 +58,8 @@ async function fixture(historical = false, pauseFirst = false) {
 	await loader.reload();
 	assert.deepEqual(loader.getExtensions().errors, []);
 	const sessionManager = sdk.SessionManager.inMemory(scratch);
-	if (historical) sessionManager.appendCustomMessageEntry(GUARD_CUSTOM_TYPE, "Usage warning: old Claude warning", true, { key: `anthropic|five_hour|95|${RESET}`, reason: "band" });
+	const historicalReset = typeof historical === "number" ? historical : RESET;
+	if (historical !== false) sessionManager.appendCustomMessageEntry(GUARD_CUSTOM_TYPE, "Usage warning: old Claude warning", true, { key: `anthropic|five_hour|95|${historicalReset}`, reason: "band" });
 	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model: model("anthropic", CLAUDE), settingsManager, resourceLoader: loader, sessionManager, noTools: "all" });
 	const errors: unknown[] = [];
 	await session.bindExtensions({ mode: "print", onError: (error: unknown) => errors.push(error) });
@@ -103,6 +104,16 @@ test("old queued-warning history remains on disk but does not instruct another p
 	t.after(() => f.close());
 	await f.session.setModel(f.model("openai-codex", CODEX));
 	await f.session.prompt("Use Codex.");
+	assert.deepEqual(warnings(f.calls[0].messages), []);
+	assert.equal(f.session.sessionManager.getEntries().filter((entry: any) => entry.type === "custom_message" && entry.customType === GUARD_CUSTOM_TYPE).length, 1);
+	assert.deepEqual(f.errors, []);
+});
+
+test("a warning for a window that has since reset stays on disk but leaves the same model's context", { timeout: 10_000 }, async (t) => {
+	const f = await fixture(NOW - 54 * 60_000);
+	t.after(() => f.close());
+	await f.session.prompt("Same Claude session after the reset.");
+	assert.equal(f.calls.length, 1);
 	assert.deepEqual(warnings(f.calls[0].messages), []);
 	assert.equal(f.session.sessionManager.getEntries().filter((entry: any) => entry.type === "custom_message" && entry.customType === GUARD_CUSTOM_TYPE).length, 1);
 	assert.deepEqual(f.errors, []);
