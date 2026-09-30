@@ -65,6 +65,26 @@ test("a cancelled call is reported as cancelled and leaves the host running", as
 	host.close();
 });
 
+test("warming starts the host once, ahead of its first call, and an unused warm host still closes when idle", async () => {
+	let launches = 0;
+	const fake = fakeProcess(() => "ok");
+	const host = new HostSession({ idleMs: 20, launch: () => { launches++; return fake.proc; } });
+	host.warm();
+	host.warm();
+	assert.equal(await host.call("vms"), "ok");
+	assert.equal(launches, 1);
+	await new Promise((resolve) => setTimeout(resolve, 60));
+	assert.equal(fake.killed(), 1);
+	const idle = fakeProcess(() => "ok");
+	const unused = new HostSession({ idleMs: 20, launch: () => idle.proc });
+	unused.warm();
+	await new Promise((resolve) => setTimeout(resolve, 60));
+	assert.equal(idle.killed(), 1);
+	const broken = new HostSession({ idleMs: 20, launch: () => { throw new Error("no powershell.exe"); } });
+	broken.warm();
+	await assert.rejects(broken.call("vms"), /no powershell\.exe/, "a failed warm-up surfaces on the call");
+});
+
 test("the host closes itself after sitting idle", async () => {
 	const fake = fakeProcess(() => "ok");
 	const host = new HostSession({ idleMs: 20, launch: () => fake.proc });
@@ -185,4 +205,10 @@ test("the bootstrap starts the server at every sign-in through the Run key as we
 	assert.match(bootstrap, /CurrentVersion\\Run' -Name 'pi-windows-use'/);
 	assert.match(bootstrap, /schtasks\.exe`" \/run \/tn \$taskName/, "the Run key starts the task, so one definition runs the server");
 	assert.match(bootstrap, /-MultipleInstances IgnoreNew/, "a trigger that does fire can't start a second server");
+});
+
+test("status skips the guest's IP, which Hyper-V takes one to two seconds to report", () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	const status = host.slice(host.indexOf("function Get-Status"), host.indexOf("function Start-Machine"));
+	assert.doesNotMatch(status, /Get-Ipv4/, "every reconnect waits on status; win.vms() still lists IPs");
 });

@@ -39,6 +39,8 @@ export interface HostCallOptions {
 
 export interface HostCalls {
 	call(method: string, params?: Record<string, unknown>, options?: HostCallOptions): Promise<unknown>;
+	/** Starts the host process ahead of its first call. */
+	warm?(): void;
 }
 
 
@@ -344,11 +346,17 @@ export class Guest {
 	private async ensure(signal?: AbortSignal): Promise<void> {
 		// Connected, a VM that went away fails the next call as unsent, which comes back here unconnected.
 		if (!this.connected) {
-			const status = await this.running(signal);
-			const reply = await this.connect(signal);
+			// Both processes start at once; each takes about a second.
+			this.relay?.warm?.();
+			this.host.warm?.();
+			// A relay that answers shows the VM is running. Status is left out then, not just
+			// unawaited: the host runs one call at a time, and the console's next frame would wait.
+			const relay = await this.ping(signal);
+			const status = relay ? undefined : await this.running(signal);
+			const reply = await this.connect(signal, relay ?? null);
 			// Listening and silent: restarting it (ensureAnswering) beats waiting on it or reinstalling.
 			if (reply === "silent") throw new TransportError(`Windows-MCP on ${this.vm} took the connection and answered nothing`, false, true);
-			if (reply === "unreachable") await this.revive(status, signal);
+			if (reply === "unreachable") await this.revive(status ?? await this.running(signal), signal);
 		}
 		// Session moves and disconnects can happen between consecutive calls, even within the old lock TTL.
 		await this.unlock(signal);

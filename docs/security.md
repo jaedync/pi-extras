@@ -165,6 +165,16 @@ the conversation. Anyone who holds it and can reach the
 guest's port gets the guest user's full PowerShell, so treat other VMs on the
 same virtual switch as able to try.
 
+The host's PowerShell scripts run from a copy under
+`%LOCALAPPDATA%\pi-extras\windows-use\scripts\<hash>`, because Windows
+PowerShell starts them about three seconds slower over `\\wsl.localhost`.
+Each version gets its own folder, named for the scripts' content. Before
+every start, the copy is compared with the package's files and rewritten if
+it differs, which undoes a stale or damaged copy. It doesn't stop a process
+running as the same Windows user, which could also change the file between
+the check and the start, or read the key beside it. When no copy can be made, the
+scripts run from the package's folder, and `/windows-use` says why.
+
 With `PI_WINDOWS_USE_ELEVATED=on` the logon task runs Windows-MCP at its
 highest run level: with the administrator rights of a guest user who is an
 administrator, without a UAC prompt. Its PowerShell, its input to elevated

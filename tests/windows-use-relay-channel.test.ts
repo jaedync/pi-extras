@@ -36,14 +36,18 @@ class RoutingTunnel extends EventEmitter implements ClientProcess {
 	readonly stdin: Writable;
 	readonly opens: string[] = [];
 	private readonly sockets = new Map<number, Socket>();
-	constructor(ports: { data: number; control: number } | undefined) {
+	private readonly found: Record<string, string> | null;
+	/** found: the lookup's answer; null never answers, like a hung WMI. */
+	constructor(ports: { data: number; control: number } | undefined, found: Record<string, string> | null = { error: "no Hyper-V in tests" }) {
 		super();
+		this.found = found;
 		const decoder = new FrameDecoder((frame) => {
 			const socket = this.sockets.get(frame.stream);
 			if (frame.type === 1) this.open(frame.stream, JSON.parse(frame.payload.toString()), ports);
 			else if (frame.type === 2) socket?.write(frame.payload);
 			else if (frame.type === 3) socket?.end();
 			else if (frame.type === 4) socket?.destroy();
+			else if (frame.type === 5 && this.found) this.send(0x86, frame.stream, Buffer.from(JSON.stringify(this.found)));
 		});
 		this.stdin = new Writable({ write: (chunk, _encoding, cb) => { decoder.push(chunk); cb(); } });
 		setImmediate(() => this.send(0x80, 0, Buffer.from('{"version":1}')));
@@ -104,7 +108,7 @@ async function guestRelay(t: TestContext, port: number) {
 	return { ports: JSON.parse(String(line)) as { data: number; control: number }, marker };
 }
 
-function channel(t: TestContext, ports: { data: number; control: number } | undefined, key: () => string | Error = () => KEY) {
+function channel(t: TestContext, ports: { data: number; control: number } | undefined, key: () => string | Error = () => KEY, found?: Record<string, string> | null) {
 	const auth: string[] = [];
 	const host: HostCalls = {
 		async call(method, params = {}) {
@@ -116,7 +120,7 @@ function channel(t: TestContext, ports: { data: number; control: number } | unde
 		},
 	};
 	let proc: RoutingTunnel | undefined;
-	const tunnel = new Tunnel({ idleMs: 60_000, launch: () => (proc = new RoutingTunnel(ports)) });
+	const tunnel = new Tunnel({ idleMs: 60_000, launch: () => (proc = new RoutingTunnel(ports, found)) });
 	t.after(() => tunnel.close());
 	return { relay: new RelayChannel({ tunnel, host, vm: "Win11" }), auth, opens: () => proc?.opens ?? [] };
 }
@@ -173,4 +177,26 @@ test("no relay in the guest, or no host to identify the VM, is unsent", async (t
 	assert.deepEqual(failing.opens(), [], "nothing is opened without the VM's id");
 	const unset = channel(t, undefined, () => "");
 	await assert.rejects(unset.relay.control("ping"), unsent(/not set up/));
+});
+
+test("the tunnel's own lookup supplies the VM's id and key, so a first call needs no host process", async (t) => {
+	const mcp = await windowsMcp(t);
+	const { ports } = await guestRelay(t, mcp.port);
+	const { relay, auth } = channel(t, ports, () => new Error("host.ps1 must not be needed"), { id: VM_ID, key: KEY });
+	assert.ok((await relay.control("ping")).ok);
+	assert.deepEqual(auth, []);
+	// A VM that isn't set up (no key) is left to the host, which says so with more context.
+	const unset = channel(t, ports, () => KEY, { id: VM_ID });
+	assert.ok((await unset.relay.control("ping")).ok);
+	assert.deepEqual(unset.auth, ["Win11"]);
+});
+
+test("a lookup that never answers falls back to the host within its limit", async (t) => {
+	const mcp = await windowsMcp(t);
+	const { ports } = await guestRelay(t, mcp.port);
+	const { relay, auth } = channel(t, ports, () => KEY, null);
+	const at = performance.now();
+	assert.ok((await relay.control("ping")).ok);
+	assert.deepEqual(auth, ["Win11"]);
+	assert.ok(performance.now() - at < 4_500, `took ${Math.round(performance.now() - at)} ms`);
 });

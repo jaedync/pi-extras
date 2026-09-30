@@ -25,6 +25,7 @@ class Fake extends EventEmitter implements ClientProcess {
 			if (frame.type === 2) this.send(0x83, frame.stream, frame.payload);
 			if (frame.type === 3) { this.send(0x84, frame.stream); this.send(0x85, frame.stream); }
 			if (frame.type === 4) this.send(0x85, frame.stream);
+			if (frame.type === 5) this.send(0x86, frame.stream, Buffer.from(JSON.stringify({ id: "11111111-2222-3333-4444-555555555555", key: `key-for-${JSON.parse(frame.payload.toString()).vm}` })));
 		});
 		this.stdin = new Writable({ write: (chunk, _encoding, cb) => { decoder.push(chunk); cb(); } });
 		if (hello) setImmediate(() => this.send(0x80, 0, Buffer.from('{"version":1}')));
@@ -249,4 +250,20 @@ test("postMcp returns 202 on headers and rejects invalid JSON with key redaction
 			else await assert.rejects(result, e => e instanceof TransportError && !e.unsent && !e.message.includes("synthetic-key"));
 		} finally { client.destroy(); peer.destroy(); server.close(); }
 	}
+});
+
+test("Tunnel looks up a VM's id and key over its own pipe, and a dead or silent process is unsent", async () => {
+	const proc = new Fake(), tunnel = new Tunnel({ launch: () => proc, idleMs: 1000 });
+	try {
+		assert.deepEqual(await tunnel.lookup("Win11"), { id: "11111111-2222-3333-4444-555555555555", key: "key-for-Win11" });
+		assert.deepEqual(proc.frames.filter(f => f.type === 5).map(f => JSON.parse(f.payload.toString())), [{ vm: "Win11" }]);
+	} finally { tunnel.close(); }
+	const silent = new Fake(false), quiet = new Tunnel({ launch: () => silent, idleMs: 1000 });
+	try { await assert.rejects(quiet.lookup("Win11", { timeoutMs: 20 }), unsent); } finally { quiet.close(); }
+	const dying = new Fake(false), gone = new Tunnel({ launch: () => dying, idleMs: 1000 });
+	try {
+		const pending = gone.lookup("Win11", { timeoutMs: 5000 });
+		await sleep(5); dying.kill();
+		await assert.rejects(pending, unsent);
+	} finally { gone.close(); }
 });

@@ -6,9 +6,11 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Management;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Web.Script.Serialization;
 
@@ -202,8 +204,43 @@ namespace PiWindowsTunnel {
             return true;
         }
         public void Remove(uint id) { Channel discarded; channels.TryRemove(id, out discarded); }
+        // A VM's id and host key, so a first call over the relay needs no host.ps1,
+        // whose startup takes seconds. The key goes back over this private pipe only.
+        static byte[] Lookup(byte[] json) {
+            JavaScriptSerializer serializer = new JavaScriptSerializer();
+            Dictionary<string, object> result = new Dictionary<string, object>();
+            try {
+                Dictionary<string, object> request = serializer.Deserialize<Dictionary<string, object>>(Encoding.UTF8.GetString(json));
+                object value;
+                string vm = request.TryGetValue("vm", out value) ? value as string : null;
+                // WQL escapes with backslashes; names needing escapes go through host.ps1 instead.
+                if (String.IsNullOrEmpty(vm) || vm.IndexOf('\'') >= 0 || vm.IndexOf('\\') >= 0) throw new ArgumentException("unsupported VM name");
+                ObjectQuery query = new ObjectQuery("SELECT Name FROM Msvm_ComputerSystem WHERE Caption='Virtual Machine' AND ElementName='" + vm + "'");
+                // A hung WMI provider would otherwise hold this thread for good.
+                EnumerationOptions options = new EnumerationOptions(); options.Timeout = TimeSpan.FromSeconds(5); options.ReturnImmediately = false;
+                List<string> ids = new List<string>();
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(new ManagementScope(@"root\virtualization\v2"), query, options))
+                using (ManagementObjectCollection found = searcher.Get()) {
+                    foreach (ManagementObject machine in found) { using (machine) { ids.Add((string)machine["Name"]); } }
+                }
+                // Hyper-V allows duplicate names; the key is for one of them, and host.ps1 refuses to guess too.
+                if (ids.Count > 1) throw new ArgumentException("more than one VM has that name");
+                if (ids.Count == 1) {
+                    result.Add("id", ids[0]);
+                    // $env:LOCALAPPDATA, as host.ps1 reads it, so both find the same key file.
+                    string file = Path.Combine(Environment.GetEnvironmentVariable("LOCALAPPDATA") ?? "", "pi-extras", "windows-use", Regex.Replace(vm, @"[^\w-]", "_") + ".key");
+                    if (File.Exists(file)) result.Add("key", File.ReadAllText(file).Trim());
+                }
+            } catch (Exception error) { result.Clear(); result.Add("error", error.Message); }
+            return Encoding.UTF8.GetBytes(serializer.Serialize(result));
+        }
         void Dispatch(byte type, uint id, byte[] payload) {
-            if (id == 0 || type < 1 || type > 4) throw new IOException("Invalid tunnel frame type or stream");
+            if (id == 0 || type < 1 || type > 5) throw new IOException("Invalid tunnel frame type or stream");
+            if (type == 5) {
+                if (!used.Add(id)) throw new IOException("Reused tunnel stream ID");
+                Thread lookup = new Thread(delegate() { Emit(0x86, id, Lookup(payload)); });
+                lookup.IsBackground = true; lookup.Start(); return;
+            }
             if ((type == 3 || type == 4) && payload.Length != 0) throw new IOException("END and CLOSE must be empty");
             if (type == 1) {
                 if (!used.Add(id)) throw new IOException("Reused tunnel stream ID");
@@ -235,7 +272,7 @@ namespace PiWindowsTunnel {
 }
 '@
 try {
-    Add-Type -TypeDefinition $source -ReferencedAssemblies @('System.dll', 'System.Core.dll', 'System.Web.Extensions.dll') | Out-Null
+    Add-Type -TypeDefinition $source -ReferencedAssemblies @('System.dll', 'System.Core.dll', 'System.Management.dll', 'System.Web.Extensions.dll') | Out-Null
     $result = [PiWindowsTunnel.Runner]::Run()
     exit $result
 } catch {

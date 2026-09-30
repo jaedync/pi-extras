@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import test from "node:test";
@@ -135,4 +135,24 @@ test("native tunnel rejects oversized headers and exits cleanly on stdin EOF", n
 			assert.equal((await closed)[0], oversize ? 1 : 0);
 		} finally { await stop(proc); }
 	}
+});
+
+test("native tunnel looks up a VM by name in-process, and reports an unknown one without an id or key", native, async t => {
+	const processes: ReturnType<typeof spawn>[] = [];
+	const tunnel = new Tunnel({ idleMs: 1000, launch: () => { const proc = spawn(exe, [...args, "-File", scriptPath()], { stdio: "pipe" }); processes.push(proc); return proc; } });
+	try {
+		await tunnel.lookup(`synthetic-${randomUUID()}`, { timeoutMs: 20_000 });
+		const at = performance.now();
+		const value = await tunnel.lookup(`synthetic-${randomUUID()}`, { timeoutMs: 20_000 });
+		t.diagnostic(`warm lookup ${(performance.now() - at).toFixed(1)} ms`);
+		assert.deepEqual(value, {});
+		await assert.rejects(tunnel.lookup("bad'name", { timeoutMs: 20_000 }), /can't look up/);
+	} finally { await Promise.all(processes.map(stop)); tunnel.close(); }
+});
+
+test("the lookup refuses a name that more than one VM has, and bounds its WMI query", () => {
+	const source = readFileSync(new URL("../lib/windows-use/tunnel.ps1", import.meta.url), "utf8");
+	assert.match(source, /if \(ids\.Count > 1\) throw/, "Hyper-V allows duplicate names; the key belongs to one of them");
+	assert.match(source, /options\.Timeout = TimeSpan\.FromSeconds\(\d+\)/);
+	assert.match(source, /GetEnvironmentVariable\("LOCALAPPDATA"\)/, "the same key file host.ps1 reads");
 });

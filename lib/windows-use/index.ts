@@ -3,13 +3,10 @@
  * Hyper-V host. PI_WINDOWS_USE=on enables it; nothing is registered otherwise.
  * Scripts batch `win.*` calls like computer_use batches `sky.*` ones.
  */
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { defineTool, highlightCode, keyHint, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { CodeExecutor, type CodeResult } from "../computer-use/executor.ts";
-import type { ClientProcess } from "../computer-use/mcp-link.ts";
 import { painter } from "../computer-use/paint.ts";
 import { renderCall, renderResult, type RowDetails } from "../computer-use/render.ts";
 import { markRow } from "../tool-row.ts";
@@ -17,12 +14,12 @@ import { WIN_API, WinSession, vmAllowlist } from "./api.ts";
 import { Guest } from "./guest.ts";
 import { HostSession } from "./host.ts";
 import { RelayChannel } from "./relay-channel.ts";
+import { launchScript, powershellPath, stageError } from "./launch.ts";
 import { Tunnel } from "./tunnel.ts";
 
 const ENABLED = new Set(["1", "on", "true", "yes"]);
 /** Close the host after this long without a call; restarting it takes a few seconds. */
 const IDLE_MS = 10 * 60_000;
-const WINDOWS_POWERSHELL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
 
 export function isWsl(env: Readonly<Record<string, string | undefined>>, osRelease: () => string = () => readFileSync("/proc/sys/kernel/osrelease", "utf8")): boolean {
 	if (env.WSL_DISTRO_NAME) return true;
@@ -159,33 +156,10 @@ export function registerWindowsUse(pi: ExtensionAPI, deps: WindowsUseDeps): void
 	pi.on("session_shutdown", () => deps.close());
 }
 
-function powershellPath(): string | undefined {
-	for (const dir of (process.env.PATH ?? "").split(":")) {
-		const candidate = `${dir}/powershell.exe`;
-		if (dir && existsSync(candidate)) return candidate;
-	}
-	return existsSync(WINDOWS_POWERSHELL) ? WINDOWS_POWERSHELL : undefined;
-}
-
-/** Starts one of the package's Windows PowerShell scripts on the Hyper-V host. */
-function launchScript(name: string): () => ClientProcess {
-	const script = fileURLToPath(new URL(name, import.meta.url));
-	return () => {
-		const exe = powershellPath();
-		if (!exe) throw new Error("windows_use needs powershell.exe through WSL interop (Windows PowerShell 5.1 on the Hyper-V host)");
-		const windowsPath = execFileSync("wslpath", ["-w", script], { encoding: "utf8" }).trim();
-		// A Windows working directory keeps Windows tools from warning about UNC paths.
-		return spawn(exe, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", windowsPath], {
-			cwd: existsSync("/mnt/c/Windows") ? "/mnt/c/Windows" : undefined,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-	};
-}
-
 export function productionDeps(): WindowsUseDeps {
-	const host = new HostSession({ idleMs: IDLE_MS, launch: launchScript("./host.ps1") });
+	const host = new HostSession({ idleMs: IDLE_MS, launch: launchScript("host.ps1") });
 	// Its own process: a long tool call over it never holds up console input on the host.
-	const tunnel = new Tunnel({ idleMs: IDLE_MS, launch: launchScript("./tunnel.ps1") });
+	const tunnel = new Tunnel({ idleMs: IDLE_MS, launch: launchScript("tunnel.ps1") });
 	const allowed = vmAllowlist(process.env);
 	const elevated = ENABLED.has((process.env.PI_WINDOWS_USE_ELEVATED ?? "").trim().toLowerCase());
 	const session = new WinSession(host, (vm, note) => new Guest({ host, vm, note, elevated, relay: new RelayChannel({ tunnel, host, vm }) }), allowed);
@@ -198,6 +172,8 @@ export function productionDeps(): WindowsUseDeps {
 		status: async () => {
 			const exe = powershellPath();
 			const lines = [exe ? `powershell.exe: ${exe}` : "powershell.exe: not found (needs WSL interop)", `host: ${host.state}`];
+			const staging = stageError();
+			if (staging) lines.push(`scripts run from the package folder, which starts slower: ${staging}`);
 			if (allowed) lines.push(`limited to: ${allowed.join(", ")} (PI_WINDOWS_USE_VMS)`);
 			if (elevated) lines.push("Windows-MCP runs with administrator rights (PI_WINDOWS_USE_ELEVATED)");
 			if (!exe) return lines;

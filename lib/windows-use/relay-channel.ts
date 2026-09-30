@@ -26,6 +26,8 @@ export interface RelayCalls {
 	control(op: ControlOp, options?: RelayCallOptions): Promise<ControlReply>;
 	/** Drops cached credentials, as after setup writes a new key. */
 	forget(): void;
+	/** Starts the tunnel process ahead of the first call, so its startup overlaps the host's. */
+	warm?(): void;
 }
 
 /**
@@ -40,6 +42,8 @@ export const RELAY_CONNECT_MS = 2_500;
  */
 const DATA_HANDSHAKE_MS = 8_000;
 const CONTROL_MS = 15_000;
+/** A warm lookup took 15 ms live; the first one also connects to WMI. */
+const LOOKUP_MS = 3_000;
 const MAX_REPLY = 16 * 1024;
 
 interface Auth { readonly id: string; readonly key: string }
@@ -58,6 +62,10 @@ export class RelayChannel implements RelayCalls {
 
 	forget(): void {
 		this.auth = undefined;
+	}
+
+	warm(): void {
+		this.tunnel.warm();
 	}
 
 	async mcp(message: string, options: RelayCallOptions): Promise<unknown[]> {
@@ -90,7 +98,8 @@ export class RelayChannel implements RelayCalls {
 
 	private credentials(signal?: AbortSignal): Promise<Auth> {
 		this.auth ??= (async () => {
-			let value: { id?: unknown; key?: unknown };
+			let value: { id?: unknown; key?: unknown } = await this.lookup(signal);
+			if (value.id && value.key) return { id: String(value.id), key: String(value.key) };
 			try {
 				value = await this.host.call("relayAuth", { vm: this.vm }, { signal }) as typeof value;
 			} catch (error) {
@@ -106,6 +115,20 @@ export class RelayChannel implements RelayCalls {
 		// A failed lookup (VM off, host restarting) must not stick.
 		pending.catch(() => { if (this.auth === pending) this.auth = undefined; });
 		return pending;
+	}
+
+	/** The tunnel process reads both itself, sparing the host process's seconds-long start. */
+	private async lookup(signal?: AbortSignal): Promise<{ id?: string; key?: string }> {
+		try {
+			// The limit covers the tunnel's startup too, so a slow start can't hold up the host's answer.
+			const limit = AbortSignal.timeout(LOOKUP_MS);
+			const value = await this.tunnel.lookup(this.vm, { signal: signal ? AbortSignal.any([signal, limit]) : limit, timeoutMs: LOOKUP_MS });
+			return typeof value.id === "string" && /^[0-9a-f-]{36}$/i.test(value.id) ? value : {};
+		} catch (error) {
+			if (signal?.aborted) throw error;
+			// An unusual name or an older tunnel: the host still answers.
+			return {};
+		}
 	}
 }
 

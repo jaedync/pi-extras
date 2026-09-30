@@ -4,6 +4,9 @@ import type { ClientProcess } from "../computer-use/mcp-link.ts";
 import { TransportError } from "./transport.ts";
 
 export type TunnelTarget = { readonly vm: string; readonly service: string } | { readonly tcp: string };
+/** A VM's Hyper-V id and windows_use host key; either is missing when there is none. */
+export interface VmLookup { readonly id?: string; readonly key?: string }
+interface PendingLookup { readonly resolve: (value: VmLookup) => void; readonly reject: (error: Error) => void; readonly timer: NodeJS.Timeout }
 export interface TunnelOptions {
 	readonly launch: () => ClientProcess | Promise<ClientProcess>;
 	readonly idleMs: number;
@@ -97,6 +100,7 @@ class Session {
 	readonly ready: Promise<void>;
 	private readonly proc: ClientProcess;
 	private readonly streams = new Map<number, Pending>();
+	private readonly lookups = new Map<number, PendingLookup>();
 	private nextId = 1;
 	private stderr = "";
 	private hello = false;
@@ -151,6 +155,24 @@ class Session {
 			if (options.signal?.aborted) abort();
 		});
 	}
+	lookup(vm: string, timeoutMs: number): Promise<VmLookup> {
+		if (this.error) return Promise.reject(new TransportError(this.error.message, true));
+		const id = this.nextId++;
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => { this.lookups.delete(id); reject(new TransportError("windows_use tunnel lookup timed out", true)); }, timeoutMs);
+			this.lookups.set(id, { resolve, reject, timer });
+			this.send(5, id, Buffer.from(JSON.stringify({ vm })));
+		});
+	}
+	private answer(frame: TunnelFrame): void {
+		const pending = this.lookups.get(frame.stream);
+		// An answer after its timeout finds nobody waiting.
+		if (!pending) return;
+		this.lookups.delete(frame.stream); clearTimeout(pending.timer);
+		const value = JSON.parse(frame.payload.toString()) as Record<string, unknown>;
+		if (typeof value.error === "string") { pending.reject(new TransportError(`windows_use tunnel can't look up the VM: ${value.error}`, true)); return; }
+		pending.resolve({ ...(typeof value.id === "string" ? { id: value.id } : {}), ...(typeof value.key === "string" ? { key: value.key } : {}) });
+	}
 	private send(type: number, id: number, payload: Buffer = EMPTY, cb?: (error?: Error | null) => void): void {
 		if (this.error) { cb?.(this.error); return; }
 		try { this.proc.stdin.write(encodeFrame(type, id, payload), cb); }
@@ -162,6 +184,7 @@ class Session {
 			if (frame.type !== 0x80 || frame.stream !== 0 || JSON.parse(frame.payload.toString()).version !== 1) throw new Error("expected HELLO version 1");
 			this.hello = true; clearTimeout(this.helloTimer); this.resolveHello(); return;
 		}
+		if (frame.type === 0x86 && frame.stream !== 0) { this.answer(frame); return; }
 		if (frame.type < 0x81 || frame.type > 0x85 || frame.stream === 0) throw new Error("invalid tunnel frame");
 		const pending = this.streams.get(frame.stream);
 		if (!pending) throw new Error("unknown tunnel stream");
@@ -198,6 +221,8 @@ class Session {
 	private fail(error: Error): void {
 		if (this.error) return;
 		this.error = error; clearTimeout(this.helloTimer); this.rejectHello(error);
+		for (const pending of this.lookups.values()) { clearTimeout(pending.timer); pending.reject(new TransportError(error.message, true)); }
+		this.lookups.clear();
 		for (const pending of this.streams.values()) {
 			pending.cleanup(); pending.stream.remoteClosed = true;
 			if (pending.opened) pending.stream.destroy(error);
@@ -225,6 +250,22 @@ export class Tunnel {
 			if (error instanceof TransportError) throw error;
 			throw new TransportError(error instanceof Error ? error.message : String(error), true);
 		} finally { this.activeOpens--; this.scheduleIdle(); }
+	}
+	/** A VM's id and host key, read by the tunnel process itself. */
+	async lookup(vm: string, options: OpenOptions = {}): Promise<VmLookup> {
+		if (options.signal?.aborted) throw new TransportError("windows_use tunnel lookup cancelled", true);
+		clearTimeout(this.idleTimer); this.activeOpens++;
+		try {
+			const session = await this.waitForStart(options.signal);
+			return await session.lookup(vm, options.timeoutMs ?? 10_000);
+		} catch (error) {
+			if (error instanceof TransportError) throw error;
+			throw new TransportError(error instanceof Error ? error.message : String(error), true);
+		} finally { this.activeOpens--; this.scheduleIdle(); }
+	}
+	/** Starts the process now; a failure surfaces on the next open. */
+	warm(): void {
+		this.connect().catch(() => {});
 	}
 	close(): void {
 		this.generation++; clearTimeout(this.idleTimer); this.session?.close(); this.session = undefined;

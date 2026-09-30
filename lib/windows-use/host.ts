@@ -54,6 +54,15 @@ export class HostSession implements HostCalls {
 		}
 	}
 
+	/** Starts the process ahead of its first call, which it would otherwise wait on; a failure surfaces on that call. */
+	warm(): void {
+		if (this.active > 0) return;
+		this.connect().catch(() => {});
+		clearTimeout(this.idleTimer);
+		this.idleTimer = setTimeout(() => this.close(), this.options.idleMs);
+		this.idleTimer.unref();
+	}
+
 	close(): void {
 		clearTimeout(this.idleTimer);
 		this.link?.close();

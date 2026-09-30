@@ -89,7 +89,8 @@ function Get-Status([string]$vm) {
     $running = $m.EnabledState -eq 2
     $size = if ($running) { Get-Resolution $m } else { @{ w = 0; h = 0 } }
     $live = if ($running) { Get-Liveness $vm } else { @{ heartbeat = $null; uptime = $null } }
-    [ordered]@{ vm = $vm; state = (Get-StateName $m.EnabledState); running = $running; ip = $(if ($running) { Get-Ipv4 $vm } else { $null }); width = $size.w; height = $size.h; installed = (Test-Path (Get-KeyFile $vm)); heartbeat = $live.heartbeat; uptime = $live.uptime }
+    # No IP here: Get-VMNetworkAdapter takes one to two seconds, and every reconnect waits on status.
+    [ordered]@{ vm = $vm; state = (Get-StateName $m.EnabledState); running = $running; width = $size.w; height = $size.h; installed = (Test-Path (Get-KeyFile $vm)); heartbeat = $live.heartbeat; uptime = $live.uptime }
 }
 function Start-Machine([string]$vm) {
     Start-VM -Name $vm | Out-Null

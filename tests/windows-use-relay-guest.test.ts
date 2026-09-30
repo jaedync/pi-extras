@@ -52,6 +52,8 @@ interface Rig {
 	relayUptime?: number;
 	/** The logon task has the server listening after this many more pings. */
 	serverAfterPings?: number;
+	/** Real milliseconds the host takes to answer status, as host.ps1 does while it starts. */
+	statusDelayMs?: number;
 	/** The restart reply's steps, when not the usual three. */
 	steps?: { step: "end" | "kill" | "run"; code: number }[];
 }
@@ -91,11 +93,14 @@ function rig(overrides: Partial<Rig> = {}) {
 		return text(`Response: ${name} done\nStatus Code: 0`);
 	};
 	const host: HostCalls = {
+		warm() { world.calls.warm = (world.calls.warm ?? 0) + 1; },
 		async call(method, params = {}, options = {}) {
 			if (CONSOLE_INPUT.has(method)) world.log.push(`CONSOLE ${method}`);
 			world.calls[method] = (world.calls[method] ?? 0) + 1;
 			switch (method) {
-				case "status": return { vm: params.vm, running: !world.saved, state: world.saved ? "saved" : "running", installed: true, heartbeat: true, uptime: 3600 };
+				case "status":
+					if (world.statusDelayMs) await new Promise((resolve) => setTimeout(resolve, world.statusDelayMs).unref());
+					return { vm: params.vm, running: !world.saved, state: world.saved ? "saved" : "running", installed: true, heartbeat: true, uptime: 3600 };
 				case "probe": return { reachable: world.ip && world.server, setup: null };
 				case "frame": return hostFrame({ taskbar: true });
 				case "mcp":
@@ -131,6 +136,7 @@ function rig(overrides: Partial<Rig> = {}) {
 			return serve("relay", message, options.timeoutMs);
 		},
 		forget() { world.log.push("relay forget"); },
+		warm() { world.log.push("relay warm"); },
 	};
 	const notes: string[] = [];
 	const guest = new Guest({
@@ -319,7 +325,7 @@ test("at a confirmed basic-session console, a server the relay can't restart sti
 test("once connected, calls don't wait on a Hyper-V status query; a VM that went away still says so", async () => {
 	const { world, guest } = rig();
 	for (let i = 0; i < 4; i++) await guest.tool("Snapshot", {});
-	assert.equal(world.calls.status, 1, "status is for connecting and recovery, not every call");
+	assert.equal(world.calls.status, undefined, "status is for recovery, and connecting without a relay; not every call");
 	world.saved = true;
 	await assert.rejects(guest.tool("Snapshot", {}), /is saved, not running/);
 });
@@ -343,4 +349,34 @@ test("just after sign-in, a server the logon task is still starting gets that ti
 	const { world, guest } = rig({ server: false, relayUptime: 5, serverAfterPings: 8 });
 	assert.equal((await guest.tool("Snapshot", {})).isError, false);
 	assert.equal(world.restarts, 0);
+});
+
+test("a reconnect starts the tunnel ahead of its first relay call", async () => {
+	const { world, guest } = rig();
+	await guest.tool("Snapshot", {});
+	const warm = world.log.indexOf("relay warm");
+	assert.ok(warm >= 0, "the tunnel is warmed on connect");
+	assert.ok(warm < world.log.findIndex((line) => line.startsWith("relay ") && line !== "relay warm"));
+});
+
+test("a relay that answers doesn't wait on the host's status, which takes seconds to start", async () => {
+	const { world, guest } = rig({ statusDelayMs: 3_000 });
+	const at = performance.now();
+	await guest.tool("Snapshot", {});
+	assert.ok(performance.now() - at < 1_500, `took ${Math.round(performance.now() - at)} ms`);
+	assert.ok(world.log.includes("relay ping"));
+	// Not even queued: the host runs one call at a time, and the console's next frame would wait on it.
+	assert.equal(world.calls.status, undefined);
+	assert.equal(world.calls.warm, 1, "the host process starts while the relay answers");
+});
+
+test("a VM that's off still fails with its state, after the relay can't be reached", async () => {
+	const { guest } = rig({ saved: true, relay: false });
+	await assert.rejects(guest.tool("Snapshot", {}), /is saved, not running/);
+});
+
+test("a saved VM with a relay installed reports its state on the first call", async () => {
+	const { world, guest } = rig({ saved: true });
+	await assert.rejects(guest.tool("Snapshot", {}), /is saved, not running/);
+	assert.equal(world.calls.status, 1);
 });
