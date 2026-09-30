@@ -2,6 +2,25 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.12.5 - 2026-09-30
+
+### Fixed
+
+- Usage Guard no longer queues idle warnings that can reach a different model
+  after a switch. Each request checks the active provider and model family,
+  including background-job wakeups and queued follow-ups. Obsolete automatic
+  notices remain in raw history but are omitted from unrelated models' context.
+  Undelivered idle warnings do not count as fired; unknown models fail closed.
+- Codemode no longer reports incomplete call history merely because a large
+  nested-output preview was truncated. Genuinely missing calls or incomplete
+  saved records still show the warning, including during live execution.
+
+### Changed
+
+- Codemode displays a bounded preview of the newest JavaScript lines while
+  arguments stream, including collapsed rows. Before source arrives it shows
+  “Writing JavaScript…”. Draft source never implies calls are queued or running.
+
 ## 0.12.4 - 2026-09-30
 
 ### Added
