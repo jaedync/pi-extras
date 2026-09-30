@@ -43,6 +43,34 @@ snapshots are injected into the model's context as ordinary messages, so they
 are sent to your provider with the next request like any other conversation
 text. They contain window labels, percentages and reset times, not credentials.
 
+## Rate-limit Recovery
+
+Detection reads finalized assistant errors, not credentials. Only structured
+rate-limit types are recognized; numeric `retry_after` values are seconds.
+Provider prose is not executed, injected, logged or repeated in the normalized
+warning. Warnings expose only provider/model identity and reset estimates.
+
+Automatic waiting is off by default and limited to interactive main sessions.
+It uses cancellable in-process timers, not background shell processes or a
+persistent service. The wait budget is at most five hours total per user-started
+run, margins included. Reload, replacement and shutdown cancel; no saved timer
+is restarted. Clock rollback never refunds an already completed timer; its
+resume notice labels elapsed time as a lower bound. Native pi-extras children always load a detection-only guard and
+fail fast, regardless of inherited settings. Other noninteractive sessions
+also never auto-wait.
+
+The `rateLimitRecovery` section of `pi-extras.json` stores policy. Pause metadata
+and the resumed timing message are written to the current session. That message
+enters model context before the resumed request and contains elapsed wall time,
+UTC timestamps and model identities, not the raw error body. The failed assistant
+stays in raw history as a normalized error and is omitted from the retried model
+projection so partial tool calls cannot be replayed. Recognized quota failures
+use Pi's non-transient classification to prevent two retry owners; ordinary
+transient errors are unchanged. A local `rate-limit-recovery.log` in the agent
+directory records only internal failure categories, never provider payloads.
+There are no extra quota polls or authenticated recovery requests beyond the
+resumed model request. Reset estimates are not guarantees of renewed quota.
+
 ## Kagi
 
 Credentials are read locally when a search is requested. Session links are parsed
@@ -271,7 +299,8 @@ Children are Pi sessions in the same process, with your permissions. A child
 gets the parent's active tools except mesh, goal, desktop-control, background
 job and subagent tools, and `childToolsExclude`; read-only children lose
 `bash`, `edit` and `write`. Only the extensions that provide one of its tools
-load into a child. Your context files (`AGENTS.md`) and skills load as they do
+load into a child, plus a detection-only quota guard that never sleeps or
+resumes automatically. Your context files (`AGENTS.md`) and skills load as they do
 for the parent. Children use the parent's model credentials.
 
 Child sessions are written under
@@ -338,6 +367,17 @@ are saved as custom entries in the session file, so a resumed session can show
 them. Custom entries are not sent to the model. Tool Display writes the
 `toolDisplay` section of `pi-extras.json`, and `/tool-display count` writes
 `statusPlus.toolCount`.
+
+**Codemode is not rewritten.** Its numbered call cells observe Pi's nested
+execution events in TUI mode and read the active branch's existing `nestedCalls`
+metadata. They never infer execution from JavaScript or change tool arguments,
+execution, results or model context. Call durations include queue and permission
+waits; overlapping lifetimes are not evidence of parallel execution. Sanitized
+live argument/output previews are bounded in memory and cleared on session
+start/shutdown. No nested output logs or new persistence are created. Existing
+Pi metadata determines what a restored row can show; missing output is labeled
+as missing. `others off` disables adoption for new codemode rows, matching the
+rest of Tool Display.
 
 ## Copy Blocks
 

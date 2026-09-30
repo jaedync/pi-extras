@@ -2,6 +2,29 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.12.0 - 2026-09-30
+
+### Added
+
+- Rate-limit Recovery: detected provider cooldowns fail with reset guidance by
+  default. `/rate-limit-recovery on` opts the main interactive session into
+  cancellable hibernation, with a countdown, a five-hour aggregate ceiling and
+  bounded attempts. Escape/Ctrl+C cancels; Anthropic model switches retain the
+  wait and use the selected model. Before retrying, the agent receives actual
+  elapsed wait and UTC pause/resume timestamps. Ordinary transient retries are
+  unchanged. Subagents never wait: one quota error fails fast with the provider
+  and estimated reset, even if the parent opted in.
+
+### Changed
+
+- Backgrounded subagents use Shell Jobs' compact handoff chips. Blocking waits,
+  expanded tasks and reports retain their full rows.
+- Codemode uses JavaScript tool-call cells marked `ƒ`, with observed status and
+  elapsed time, bounded previews and per-call popup output. Overlapping call
+  lifetimes are labeled `overlap`, not inferred parallel execution. Saved Pi
+  metadata restores calls without inventing missing results. No scripts or
+  tool behavior are changed.
+
 ## 0.11.5 - 2026-09-30
 
 Windows Use for guests behind a VPN, and in the desktop session the user is

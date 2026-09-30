@@ -40,7 +40,9 @@ import { forgetLate, lateRows, offeredRows, redrawLateMessages } from "../late-r
 import { markRow, rowKind, type RowKind } from "../tool-row.ts";
 import { canAdopt, installAdoption, prepareAdoption, rebuildRow, type RowRenderers } from "./adopt.ts";
 import { computerUseSpec, windowsUseSpec } from "./computer.ts";
+import { codemodeRenderers } from "./codemode.ts";
 import { registerCompaction } from "./compaction.ts";
+import { NestedCalls } from "./nested.ts";
 import { editRenderers, readRenderers, writeRenderers } from "./files.ts";
 import { foreignRenderers, type ForeignTool } from "./foreign.ts";
 import type { Kit } from "./kit.ts";
@@ -139,6 +141,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	const owned = new Set<string>();
 	const adopted = new WeakMap<object, RowRenderers>();
 	const clock = new AnimationClock();
+	const nested = new NestedCalls(() => deps.host.now());
 	const active: ActiveRuns = new Map();
 	const live = new Map<string, ChainRun>();
 	const saved = new Map<string, unknown>();
@@ -157,6 +160,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		motion: () => settings.motion,
 		chains: () => settings.chains,
 		clock,
+		nestedCalls: (id) => nested.get(id),
+		watchNested: (id, invalidate) => nested.watch(id, invalidate),
 		chainRun(toolCallId, command) {
 			const run = live.get(toolCallId);
 			if (run) return run;
@@ -243,7 +248,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		if (!own && !settings.others) return undefined;
 		let renderers = adopted.get(definition);
 		if (!renderers) {
-			renderers = (own ? toolRenderers(kit, own(tool.name)) : foreignRenderers(kit, tool)) as unknown as RowRenderers;
+			renderers = (own ? toolRenderers(kit, own(tool.name)) : tool.name === "codemode" ? codemodeRenderers(kit, tool) : foreignRenderers(kit, tool)) as unknown as RowRenderers;
 			adopted.set(definition, renderers);
 		}
 		return renderers;
@@ -265,6 +270,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	pi.on("session_start", (_event, ctx) => {
 		// Rows from the previous session are gone, so nothing of theirs needs to animate.
 		clock.stop();
+		nested.clear();
 		live.clear();
 		saved.clear();
 		restored.clear();
@@ -274,7 +280,11 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		// Rows are only drawn by the terminal UI; print, JSON and RPC runs keep Pi's tools untouched.
 		if (ctx.mode !== "tui") return;
 		ui = ctx.ui as unknown as PopupHost;
-		for (const entry of ctx.sessionManager?.getEntries?.() ?? []) {
+		for (const entry of ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? []) {
+			if (entry.type === "message") {
+				const message = entry.message as { role?: unknown; toolCallId?: unknown; nestedCalls?: unknown };
+				if (message.role === "toolResult" && typeof message.toolCallId === "string") nested.restore(message.toolCallId, message.nestedCalls);
+			}
 			if (entry.type === "custom" && entry.customType === CHAIN_ENTRY) {
 				const data = entry.data as { toolCallId?: unknown } | undefined;
 				if (typeof data?.toolCallId === "string") saved.set(data.toolCallId, data);
@@ -297,11 +307,35 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		repairLate();
 	});
 
+	pi.on("tool_execution_start", (event, ctx) => { if (ctx.mode === "tui") nested.observe(event); });
+	pi.on("tool_execution_update", (event, ctx) => { if (ctx.mode === "tui") nested.observe(event); });
+	pi.on("tool_execution_end", (event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		nested.observe(event);
+		if (!(event as { parentToolCallId?: string }).parentToolCallId) nested.finish(event.toolCallId);
+	});
+	pi.on("message_end", (event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		const message = event.message as { role?: unknown; toolCallId?: unknown; nestedCalls?: unknown };
+		if (message.role === "toolResult" && typeof message.toolCallId === "string") nested.restore(message.toolCallId, message.nestedCalls);
+	});
+
+	const restoreNested = (_event: unknown, ctx: ExtensionContext) => {
+		if (ctx.mode !== "tui") return;
+		for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+			if (entry.type !== "message") continue;
+			const message = entry.message as { role?: unknown; toolCallId?: unknown; nestedCalls?: unknown };
+			if (message.role === "toolResult" && typeof message.toolCallId === "string") nested.restore(message.toolCallId, message.nestedCalls);
+		}
+	};
+	pi.on("session_tree", restoreNested);
+
 	pi.on("turn_end", flush);
 	pi.on("agent_end", flush);
 	pi.on("session_shutdown", () => {
 		flush();
 		clock.stop();
+		nested.clear();
 		forgetLate();
 		compaction.stop();
 		undoThinking?.();

@@ -1,6 +1,6 @@
 /**
- * Transcript rows for the subagent tools and messages, as header bands like
- * every other pi-extras row.
+ * Transcript rows for subagent tools and messages. Background handoffs use
+ * Shell Jobs' still chip; blocking work, expanded tasks and reports use bands.
  *
  * - A `subagent` row names the agent, its model and task. It stays calm while
  *   the agent works in the background (the widget is what moves). While main
@@ -16,6 +16,7 @@ import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown, truncateToWidth, wrapTextWithAnsi, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { formatTime, renderBand, type BandPhase, type Seg } from "../band/band.ts";
 import { paletteFrom } from "../band/palette.ts";
+import { handoffChip, type ChipTint } from "../band/job-chip.ts";
 import { bodyBackground, onBackground } from "../band/surface.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import type { MailDetails, ReportSummary } from "./deliver.ts";
@@ -100,6 +101,8 @@ export function subagentCallRow(args: unknown, theme: Theme, context: RowContext
 			...(model ? [{ text: `  ${model}`, color: "dim" }] : []),
 			{ text: `  ${oneLine(input.task)}`, color: "muted" },
 		];
+		const compact = record && !record.blocking && input.wait !== true && !context?.expanded && !context?.isError;
+		if (compact) return [agentChip(theme, width, record, segs, now)];
 		if (context?.isPartial && !context.executionStarted) return [band(theme, width, { kind: "writing" }, segs, [])];
 		if (context?.isError && !record) return [band(theme, width, { kind: "done", outcome: "fail", sinceMs: DONE }, segs, [{ text: "not started", color: "error" }])];
 		if (!record) return [band(theme, width, { kind: "calm" }, segs, [{ text: "background", color: "dim" }])];
@@ -114,6 +117,17 @@ export function subagentCallRow(args: unknown, theme: Theme, context: RowContext
 		const word: Seg[] = record.state === "idle" ? [] : [{ text: record.state, color: record.state === "failed" ? "error" : "muted" }, { text: "  ", color: "dim" }];
 		return [band(theme, width, phaseOf(record, now), segs, [...word, ...rowRail(record, now)])];
 	}
+}
+
+function agentChip(theme: Theme, width: number, record: AgentRecord, title: Seg[], now: number): string {
+	const live = LIVE_STATES.has(record.state);
+	const phase = phaseOf(record, now);
+	const tint: ChipTint = phase.kind === "done" ? phase.outcome : "running";
+	const word = live ? record.state === "queued" ? "queued" : record.state === "asking" ? "asking" : "in background"
+		: record.state === "idle" ? "done" : record.state;
+	const color = tint === "fail" ? "error" : record.state === "asking" ? "warning" : "muted";
+	const status: Seg[] = [{ text: word, color }, ...(!live ? [{ text: "  ", color: "dim" }, ...rowRail(record, now)] : [])];
+	return handoffChip(theme, { width, title, status, tint, glyphColor: live ? "accent" : tint === "ok" ? "success" : color });
 }
 
 export function subagentResultRow(result: unknown, theme: Theme, context: RowContext, markdown?: MarkdownSource): Component {

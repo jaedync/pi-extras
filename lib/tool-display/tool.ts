@@ -6,6 +6,7 @@
  * band sits on the theme's tool gray, so a call reads as one block apart
  * from the conversation around it.
  */
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Outcome, Seg } from "../band/band.ts";
 import { plainText, UNWRAPPED, type PopupSource } from "../band/popup.ts";
 import type { SheetCopy } from "../band/sheet.ts";
@@ -113,7 +114,8 @@ export function toolRenderers(kit: Kit, spec: ToolSpec) {
 			track(row, context, kit.now(), spec.outcome?.(view));
 			return slotFor(context).onClick(open(row)).set((width) => {
 				const current = viewOf(kit, row)!;
-				return onBackground(indent(spec.body(current, Math.max(1, width - BODY_INDENT))), width, bodyBackground(theme));
+				const lines = indent(spec.body(current, Math.max(1, width - BODY_INDENT))).map((line) => truncateToWidth(line, width, "…"));
+				return onBackground(lines, width, bodyBackground(theme));
 			});
 		},
 	};

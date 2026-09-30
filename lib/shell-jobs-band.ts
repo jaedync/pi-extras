@@ -9,10 +9,10 @@
  * indicator, the widget row above the editor; the chip stays still, saying
  * the job is in the background, and takes the job's outcome when it ends.
  */
-import { visibleWidth } from "@earendil-works/pi-tui";
-import { formatTime, paintLine, renderBand, timeSeg, type BandPhase, type Motion, type Outcome, type Seg } from "./band/band.ts";
-import { mix, type Rgb } from "./band/color.ts";
-import { paletteFrom, type BandTheme, type Palette } from "./band/palette.ts";
+import { formatTime, renderBand, timeSeg, type BandPhase, type Motion, type Outcome, type Seg } from "./band/band.ts";
+import { handoffChip, type ChipTint } from "./band/job-chip.ts";
+import { paletteFrom, type BandTheme } from "./band/palette.ts";
+export { CHIP_INDENT } from "./band/job-chip.ts";
 import { commandPreview, titlePreview } from "./shell-jobs-core.ts";
 import { jobStatusText, type Job } from "./shell-jobs-process.ts";
 
@@ -115,22 +115,7 @@ export function factsOf(job: Job): JobFacts {
 /** How a start chip reads: the job's own state, or the start call's while there is no job yet. */
 export type ChipState = "writing" | "unstarted" | "job";
 
-/** Where a start chip sits: set in from the edge, under the flow of full-width rows. */
-export const CHIP_INDENT = 2;
-const CHIP_GLYPH = "\u21b3 ";
-
-// How far a chip leans from the tool gray toward its hue; stronger than a band's, since a chip is small.
-const CHIP_TINT: Record<"running" | Outcome | "unknown" | "writing", [keyof Palette, number]> = {
-	running: ["accent", 0.16],
-	ok: ["success", 0.22],
-	fail: ["error", 0.26],
-	timeout: ["warning", 0.22],
-	aborted: ["muted", 0.12],
-	unknown: ["muted", 0.08],
-	writing: ["muted", 0.04],
-};
-
-function chipLook(facts: JobFacts, state: ChipState): { tint: keyof typeof CHIP_TINT; glyph: string } {
+function chipLook(facts: JobFacts, state: ChipState): { tint: ChipTint; glyph: string } {
 	if (state === "writing") return { tint: "writing", glyph: "dim" };
 	if (state === "unstarted") return { tint: "fail", glyph: "error" };
 	if (facts.state === "unknown") return { tint: "unknown", glyph: "muted" };
@@ -154,25 +139,6 @@ export function chipStatus(facts: JobFacts, now: number, state: ChipState = "job
 	return facts.state === "stopping" ? [{ text: "stopping", color: "warning" }] : [{ text: "in background", color: "muted" }];
 }
 
-const segsWidth = (segs: readonly Seg[]) => segs.reduce((sum, seg) => sum + visibleWidth(seg.text), 0);
-
-/** Segments cut to `room` columns, the last cut one ending in `…`. */
-function cutSegs(segs: readonly Seg[], room: number): Seg[] {
-	const out: Seg[] = [];
-	let left = room;
-	for (const seg of segs) {
-		const width = visibleWidth(seg.text);
-		if (width <= left) {
-			out.push(seg);
-			left -= width;
-			continue;
-		}
-		if (left > 0) out.push({ ...seg, text: `${[...seg.text].slice(0, Math.max(0, left - 1)).join("")}\u2026` });
-		break;
-	}
-	return out;
-}
-
 export interface JobChipOptions {
 	readonly width: number;
 	readonly now: number;
@@ -186,22 +152,8 @@ export interface JobChipOptions {
 export function jobChip(theme: BandTheme, facts: JobFacts, options: JobChipOptions): string {
 	const state = options.state ?? "job";
 	const look = chipLook(facts, state);
-	const status = chipStatus(facts, options.now, state);
-	const glyph: Seg = { text: CHIP_GLYPH, color: look.glyph, bold: true };
-	const gap: Seg[] = status.length > 0 ? [{ text: "  ", color: "dim" }] : [];
-	const room = Math.max(1, options.width - CHIP_INDENT - 1);
-	// A space either side of the words keeps them off the chip's edges.
-	const fixed = 1 + visibleWidth(CHIP_GLYPH) + segsWidth(gap) + segsWidth(status) + 1;
-	const title = cutSegs(jobSegs(facts), Math.max(1, room - fixed));
-	const segs = cutSegs([{ text: " ", color: "text" }, glyph, ...title, ...gap, ...status, { text: " ", color: "text" }], room);
-	const end = CHIP_INDENT + segsWidth(segs);
-	const palette = paletteFrom(theme);
-	const [hue, amount] = CHIP_TINT[look.tint];
-	const tint: Rgb | undefined = palette ? mix(palette.base, palette[hue] as Rgb, amount) : undefined;
-	return paintLine(theme, palette, {
-		width: options.width,
-		left: segs,
-		indent: CHIP_INDENT,
-		...(tint ? { bgAt: (x: number) => (x >= CHIP_INDENT && x < end ? tint : undefined) } : {}),
+	return handoffChip(theme, {
+		width: options.width, title: jobSegs(facts), status: chipStatus(facts, options.now, state),
+		tint: look.tint, glyphColor: look.glyph,
 	});
 }

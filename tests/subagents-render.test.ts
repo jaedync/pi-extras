@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { quiet } from "./support/quiet-theme.ts";
 import assert from "node:assert/strict";
 import { transcriptLines } from "../lib/subagents/transcript.ts";
 import { createMessageRenderer, createReportRenderer, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
@@ -53,9 +55,9 @@ test("a background subagent row stays calm and says so; a finished one shows cos
 	const context = { state: { agent: "scout" }, isPartial: false, executionStarted: true };
 	let current = record;
 	const row = subagentCallRow({ task: "Find it" }, theme, context, () => current);
-	assert.match(strip(row.render(80)[0]!), /scout  gpt-6-luna  Find it.*in background/);
+	assert.match(strip(row.render(80)[0]!), /^ {3}↳ scout  gpt-6-luna  Find it.*in background/);
 	current = { ...record, state: "idle", endedAt: record.startedAt! + 12_000, usage: { ...NO_USAGE, cost: 0.002 } };
-	assert.match(strip(row.render(80)[0]!), /\$0\.0020  12\.0s/);
+	assert.match(strip(row.render(80)[0]!), /done.*\$0\.0020  12\.0s/);
 });
 
 test("a subagent main waits on shows the task, the full rail and what it is doing", () => {
@@ -109,7 +111,7 @@ test("a queued background child's row says queued", () => {
 	const record: AgentRecord = { name: "job-5", parent: "main", depth: 1, task: "Wait", model: "openai-codex/gpt-6-luna", readOnly: false, fork: false,
 		blocking: false, state: "queued", createdAt: 0, activity: "queued", toolCalls: 0, usage: NO_USAGE, runs: 0 };
 	const row = subagentCallRow({ task: "Wait" }, theme, { state: { agent: "job-5" }, isPartial: false, executionStarted: true }, () => record);
-	assert.match(strip(row.render(80)[0]!), /job-5  gpt-6-luna  Wait.*queued\s*$/);
+	assert.match(strip(row.render(80)[0]!), /^ {3}↳ job-5  gpt-6-luna  Wait.*queued\s*$/);
 });
 
 test("expanding a background row shows its whole task, not the text written for the model", () => {
@@ -136,6 +138,25 @@ test("one hidden line is a line, not lines", () => {
 		{ name: "digest", model: "openai-codex/gpt-6-luna", state: "idle", startedAt: 0, endedAt: 1_000, cost: 0, toolCalls: 0, report: "a\nb\nc\nd" },
 	] } } as any, { expanded: false } as any, theme)!;
 	assert.match(strip(report.render(80)[4]!), /… 1 more line \(click to show\)/);
+});
+
+test("handoff chips keep Shell Jobs' tint only under their words and remain still; restored, error and wait rows stay bands", () => {
+	const record: AgentRecord = { name: "scout", parent: "main", depth: 1, task: "界😀é", model: "openai-codex/luna", readOnly: true, fork: false,
+		blocking: false, state: "running", createdAt: 0, startedAt: 0, activity: "working", toolCalls: 1, usage: NO_USAGE, runs: 1 };
+	const ctx = { state: { agent: "scout" }, isPartial: false, executionStarted: true };
+	const tinted = quiet();
+	const row = subagentCallRow({ task: record.task }, tinted as never, ctx, () => record);
+	const raw = row.render(100)[0]!;
+	assert.equal(raw, row.render(100)[0]!, "no clock or sweep in the chip");
+	assert.match(strip(raw), /^ {3}↳ scout/);
+	assert.match(raw, /\x1b\[49m(?:\x1b\[[0-9;]*m)* {20,}\x1b\[0m$/, "no background under trailing space");
+	for (const width of [1, 2, 4, 8, 20, 40]) assert.ok(row.render(width).every((line) => visibleWidth(line) <= width));
+	for (const [args, context, lookup] of [
+		[{ wait: true }, ctx, () => record],
+		[{}, { ...ctx, isError: true }, () => record],
+		[{}, ctx, () => undefined],
+		[{}, { ...ctx, expanded: true }, () => record],
+	] as const) assert.doesNotMatch(strip(subagentCallRow(args, theme, context, lookup).render(100)[0]!), /↳/);
 });
 
 test("a wait that ended early says why in plain words", () => {

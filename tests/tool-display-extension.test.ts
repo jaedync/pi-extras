@@ -86,7 +86,7 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 	return {
 		registered, notes, writes, counts, commands, appended, emitted,
 		start: (mode = "tui") => handlers.get("session_start")!({ type: "session_start" }, ctx(mode)),
-		fire: (event: string) => handlers.get(event)!({ type: event }, ctx("tui")),
+		fire: (event: string, data: object = {}) => handlers.get(event)!({ type: event, ...data }, ctx("tui")),
 		run: (args: string) => commands.get("tool-display").handler(args, ctx("tui")),
 		latest: (name: string) => registered.filter((tool) => tool.name === name).at(-1),
 	};
@@ -291,6 +291,31 @@ test("other tools' rows get the band, pi-extras's own tools their layouts, and r
 		h.fire("session_shutdown");
 	}
 	assert.equal(piRow(theirs).getRenderShell(), "default", "once the session ends, nothing is adopted");
+});
+
+test("codemode adopts only presentation, observes nested events, restores saved calls, and respects others/off but not shell chains", async () => {
+	const saved = { calls: [{ id: "call-1/1", name: "read", status: "ok", durationMs: 22 }], complete: true };
+	const h = harness({ entries: [{ type: "message", message: { role: "toolResult", toolCallId: "call-1", nestedCalls: saved } }] });
+	const execute = async () => ({ content: [] });
+	const tool = { name: "codemode", execute, renderCall: () => new Text("native JavaScript", 0, 0) };
+	h.start();
+	try {
+		await h.run("chains off");
+		const restored = piRow(tool, { code: "return 1;" });
+		restored.updateResult({ content: [{ type: "text", text: "one" }], isError: false }, false);
+		assert.match(drawn(restored), /ƒ1.*read.*done.*22ms/);
+		const live = new ToolExecutionComponent("codemode", "live", { code: "return 2;" }, {}, tool as never, ui as never, "/work") as unknown as PiRow;
+		h.fire("tool_execution_start", { toolCallId: "live/1", parentToolCallId: "live", toolName: "write", args: { path: "file" } });
+		assert.match(drawn(live), /ƒ1.*write.*running/);
+		h.fire("tool_execution_end", { toolCallId: "live/1", parentToolCallId: "live", toolName: "write", isError: false, result: { content: [] } });
+		assert.match(drawn(live), /ƒ1.*write.*done/);
+		assert.equal(tool.execute, execute);
+		await h.run("others off");
+		assert.equal(piRow(tool).getCallRenderer(), tool.renderCall);
+		await h.run("others on");
+		await h.run("off");
+		assert.equal(piRow(tool).getCallRenderer(), tool.renderCall);
+	} finally { h.fire("session_shutdown"); }
 });
 
 test("print, JSON and RPC runs leave every tool's rows alone", () => {

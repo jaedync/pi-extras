@@ -11,6 +11,7 @@ import type { AnimationClock } from "../band/clock.ts";
 import type { PopupSource, PopupTheme } from "../band/popup.ts";
 import type { ChainRun } from "../chain/run.ts";
 import { sanitize } from "./format.ts";
+import type { CallSnapshot } from "./nested.ts";
 
 export interface Kit {
 	/** How to see the rest of a row: `click for all`, or Pi's expand key outside the fullscreen UI. */
@@ -29,6 +30,9 @@ export interface Kit {
 	readonly clock: AnimationClock;
 	/** The live or saved step record of a bash call. */
 	readonly chainRun: (toolCallId: string, command: string) => ChainRun | undefined;
+	/** Observed or durable nested calls, absent on older Pi versions. */
+	readonly nestedCalls?: (toolCallId: string) => CallSnapshot | undefined;
+	readonly watchNested?: (toolCallId: string, invalidate: () => void) => void;
 	/** Opens a row's popup; false when there is nowhere to show one. */
 	readonly openPopup: (source: PopupSource) => boolean;
 }

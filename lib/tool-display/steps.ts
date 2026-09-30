@@ -7,6 +7,7 @@
  * ends flashes toward its outcome's hue and fades back, so steps finishing
  * in quick succession read as a wave down the list.
  */
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { formatTime, paintLine, timeSeg, type Motion, type Seg } from "../band/band.ts";
 import { mix, parseAnsiColor, type Rgb } from "../band/color.ts";
 import { paletteFrom, type Palette } from "../band/palette.ts";
@@ -126,6 +127,19 @@ function stepRail(run: ChainRun | undefined, index: number, state: ShownState, n
 		case "skipped": return [{ text: "skipped", color: "dim" }];
 		default: return [];
 	}
+}
+
+/** Numbered cells shared by shell steps and observed JavaScript tool calls. */
+export function numberedLine(theme: ThemeLike, label: string, title: readonly Seg[], rail: readonly Seg[], state: ShownState, width: number, options: StepLineOptions): string {
+	const palette = paletteFrom(theme);
+	const start = options.indent;
+	const end = start + visibleWidth(label);
+	const chip = palette ? chipColor(palette, state, 0.5) : undefined;
+	return paintLine(theme, palette, {
+		width, indent: start,
+		left: [{ text: label, color: "accent", bold: true }, { text: " ", color: "text" }, ...title], rail,
+		bgAt: (x) => x >= start && x < end ? chip : undefined,
+	});
 }
 
 export interface StepLineOptions {

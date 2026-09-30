@@ -6,6 +6,7 @@
  */
 import type { AgentSession, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { dirname } from "node:path";
+import { CHILD_GUARD_PATH, childRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, Usage } from "./types.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
@@ -102,9 +103,10 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const loader = new sdk.DefaultResourceLoader({
 				cwd, agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
 				appendSystemPrompt: [deps.instructions(record)],
+				extensionFactories: [childRateLimitGuard],
 				extensionsOverride: (base) => ({
 					...base,
-					extensions: base.extensions.filter((extension) => [...extension.tools.keys()].some((name) => wanted.has(name))),
+					extensions: base.extensions.filter((extension) => extension.path === CHILD_GUARD_PATH || [...extension.tools.keys()].some((name) => wanted.has(name))),
 				}),
 			});
 			await loader.reload();

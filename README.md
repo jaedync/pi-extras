@@ -17,7 +17,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all thirteen extensions (computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
+adds all fourteen extensions (quota hibernation, computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -26,6 +26,7 @@ can still conflict.
 | --- | --- |
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits, optional linked subagent usage |
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
+| Rate-limit Recovery | `/rate-limit-recovery`, opt-in main-session hibernation for provider cooldowns; subagents fail fast with reset guidance |
 | Phase Spinner | Working phases, tokens/sec, time to first token, elapsed time, and compaction/retry status with its own timer in the editor border |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
 | Subagents | `subagent` and `message` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, with a live band per agent |
@@ -68,6 +69,13 @@ the package. Removing it does not remove your credentials or change other packag
   `/usage warnings on|off`. Keys: `enabled` (default `false`), `bands`
   (default `[90, 95]`), `resumeMarginSeconds` (default `180`), `proximityPct`
   (default `10`), `maxWaitSeconds` (default `18000`, five hours).
+- `PI_RATE_LIMIT_RECOVERY=on|off`: override automatic quota waiting for one run.
+  `rateLimitRecovery` in `pi-extras.json`: `autoWait` (default `false`),
+  `resumeMarginSeconds` (default `10`), `maxWaitSeconds` (default and hard maximum
+  `18000`, five hours total per user-started run), `maxRecoveries` (default `3`,
+  maximum `10`). `/rate-limit-recovery on|off` persists the choice; commands
+  take precedence for the current session. `PI_RATE_LIMIT_RECOVERY_ROLE=subagent`
+  marks external child sessions as detection-only.
 - `PI_SUBAGENTS=off`: disable Subagents. `subagents` in `pi-extras.json`, all
   optional: `defaultModel` (a model or short name; default: the session's
   model), `maxConcurrent` (default `4`), `batchMs` (default `2000`),
@@ -138,6 +146,51 @@ rate limits taken from response headers are reported but never warned on.
   persists the toggle.
 - Polling: providers whose window sits within `proximityPct` of a threshold poll
   at their faster cadence; failed polls back off exponentially up to ten minutes.
+
+## Rate-limit Recovery
+
+Usage Guard helps the agent checkpoint before a quota runs out. Rate-limit
+Recovery handles the actual rejection without asking an unavailable model to
+schedule a sleep. Detection is always on; `/rate-limit-recovery on` opts an
+interactive main session into automatic waiting. `/rate-limit-recovery status`
+shows the policy, `off` disables it, and `cancel` stops an active wait.
+
+A structured `rate_limit_error` or `rate_limit_exceeded` with a numeric
+`retry_after` in seconds supplies the reset estimate. The extension waits that
+remaining delay plus its safety margin, shows a countdown, then makes one
+continuation. Escape or Ctrl+C cancels; outside a wait, Pi keeps its usual key
+behavior. Switching between Anthropic models, including compatible aliases,
+retains the cooldown and uses the newly selected model on resume. Switching
+outside that scope cancels. Other providers retain waits across models on the
+same provider.
+
+Before the retried request, a persisted message records the actual elapsed
+wall time and UTC pause/resume timestamps, plus the limited and current models.
+If the system clock moves backward, the notice labels a lower bound from the
+completed timer instead of claiming an exact wall-clock duration. Steering
+queued while waiting reaches the recovery request; explicitly deferred
+follow-ups remain deferred until the original task finishes, as in Pi.
+It is a timing notice, not proof that quota has reset. Each user-started run
+has a shared five-hour maximum wait budget (margins included) and at most three
+recoveries by default. Excessive delays are refused, never shortened to retry
+early. Reload, session replacement and exit cancel; a restarted session never
+silently resumes a previous wait.
+
+Recognized quota errors remain errors and are classified as non-transient so
+Pi does not run a competing short retry loop. This recovery policy is independent
+of Pi's `retry.enabled`; ordinary transient failures retain Pi's native retries.
+If waiting is off, timing is missing, or the budget is exhausted, the session
+fails with reset guidance instead. Provider reset times are estimates.
+
+**Children never hibernate.** The pi-extras child launcher installs an explicit
+detection-only guard, even when the parent has opted in: one quota rejection
+fails the child, frees its slot, and tells the parent the provider, expected
+reset time and time remaining. Print, JSON and RPC sessions likewise never
+auto-wait, so external noninteractive children cannot inherit a long sleep.
+External launchers that disable extensions must explicitly load detection;
+this package cannot intercept requests made outside Pi's extension runtime.
+The extension makes no quota polls of its own and pauses cache warming for
+the limited model scope until the estimated reset.
 
 ## Voice
 
@@ -227,6 +280,16 @@ any failure in the right rail. pi-extras's own tools have layouts of their own:
   call says `failed` or `not allowed` in words.
 - **usage**: each window's use in the band itself, amber from 80% and red when
   a limit is spent.
+- **codemode**: a JavaScript band with numbered `ƒ` tool-call cells, distinct
+  from shell steps. Live statuses and elapsed times come from Pi's nested-call
+  events, never guesses about JavaScript statements. `overlap` means call
+  lifetimes overlap, including queue and permission waits; it does not claim
+  parallel execution. The collapsed row keeps the newest four calls. Expand
+  or click for the full script, individual call output and script result.
+  Restored calls use Pi's saved metadata and say when nested output was not
+  saved. Older/foreign implementations without call metadata retain their own
+  result renderer. `/tool-display others off` leaves codemode's original row;
+  `chains off` affects bash only. Script and tool behavior are unchanged.
 
 Other extensions' tools, such as MCP, subagent and web access tools, keep their
 own words: the band shows the line the tool would draw for its call, and under
@@ -363,7 +426,11 @@ Notes that don't need main's attention queue for its next turn instead of
 waking it, and show above the editor until they are in the transcript.
 Reports from children started in the same run arrive together, as one message.
 
-**Seeing it.** Each agent has a band above the editor: its model and thinking
+**Seeing it.** A backgrounded start leaves a compact, still chip like Shell
+Jobs: `↳ reviewer  opus high  in background`. It takes the final outcome and
+time when the child ends. A blocking `wait: true` call retains its full band
+and activity line; expanding a background call shows its task in full.
+Each agent has a band above the editor: its model and thinking
 level, what it is doing right now, how full its context is (`ctx 12%`), what
 it has cost and how long this run has taken. Children of children sit under
 their parent. A child the agent waits on shows in its `subagent` row instead,
