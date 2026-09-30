@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Cross-agent communication uses a shared purple band: mesh `agent_send` and
+  `agent_request`, subagent `message` calls and incoming mail. Questions and
+  delivery failures keep amber or red rail words; reports keep outcome colors.
+- Incoming remote-pi mesh messages render as expandable Markdown with a readable
+  sender and reply rail, instead of a raw custom-message block. Transport
+  instructions stay in model context but are hidden from the human view.
+- Numbered bash steps and codemode calls keep one cell width past nine, so the
+  chips, commands and step output stay aligned (for example 9 and 10).
+
 ## 0.12.6 - 2026-09-30
 
 ### Fixed

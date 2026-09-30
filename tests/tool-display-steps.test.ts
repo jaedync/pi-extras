@@ -99,6 +99,37 @@ test("a step a timeout cut off flashes from the chain's end; a saved run never m
 	assert.equal(flashing(saved, saved.endedAt!), false);
 });
 
+/** An expanded, finished chain of `count` echo steps, each writing its own line. */
+function finishedChain(count: number): string[] {
+	const h = harness();
+	const command = Array.from({ length: count }, (_, index) => `echo s${index + 1}`).join(" && ");
+	const run = new ChainRun(splitChain(command)!, h.now());
+	h.runs.set("call-1", run);
+	for (let step = 0; step < count; step++) {
+		run.mark({ kind: "start", step }, h.now());
+		run.write(`out${step + 1}\n`);
+		run.mark({ kind: "end", step, code: 0 }, h.now());
+	}
+	run.finish("ok", h.now());
+	const bash = row(bashRenderers(h.kit), { command });
+	bash.update({ executionStarted: true, isPartial: false, expanded: true, result: text("") });
+	return bash.lines(90);
+}
+
+test("step numbers share one width, so commands and output line up past nine steps", () => {
+	const lines = finishedChain(11);
+	const commands = lines.filter((line) => /echo s\d+/.test(line) && !line.includes("&&")).map((line) => line.indexOf("echo"));
+	assert.equal(commands.length, 11);
+	assert.deepEqual(new Set(commands).size, 1, `command columns ${commands}`);
+	assert.match(lines.find((line) => line.includes("echo s1 ") && !line.includes("&&"))! + " ", / 1 {2}echo s1 /, "a one-digit number is right-aligned in a two-digit cell");
+	const outputs = lines.filter((line) => /^\s*out\d+$/.test(line)).map((line) => line.indexOf("out"));
+	assert.equal(outputs.length, 11);
+	assert.equal(new Set(outputs).size, 1, `output columns ${outputs}`);
+	const short = finishedChain(2);
+	assert.equal(outputs[0]! - commands[0]!, short.find((line) => /^\s*out1$/.test(line))!.indexOf("out") - short.find((line) => line.includes("echo s1") && !line.includes("&&"))!.indexOf("echo"),
+		"output sits the same distance from its command however wide the numbers are");
+});
+
 test("the row keeps its frames after the call ends until the last flash has faded", () => {
 	const h = harness();
 	const run = new ChainRun(splitChain("true && true")!, h.now());

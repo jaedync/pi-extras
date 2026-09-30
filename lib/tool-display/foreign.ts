@@ -11,10 +11,12 @@
  */
 import { stripTerminalSequences, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import type { Seg } from "../band/band.ts";
+import { renderPurpleBand } from "../band/purple.ts";
 import { sanitize } from "./format.ts";
 import { errorLines, head, more, plural, resultText, textLines, titleSeg, wrapAll } from "./kit.ts";
-import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
-import type { Kit } from "./kit.ts";
+import { bandOf, toolRenderers, type ResultInput, type ToolSpec, type View } from "./tool.ts";
+import { rowState } from "./row.ts";
+import { painter, type Kit } from "./kit.ts";
 
 /** Result lines shown under the band before `… N more lines`. */
 export const FOREIGN_PREVIEW_LINES = 4;
@@ -212,4 +214,31 @@ export function foreignSpec(tool: ForeignTool): ToolSpec {
 	};
 }
 
-export const foreignRenderers = (kit: Kit, tool: ForeignTool) => toolRenderers(kit, foreignSpec(tool));
+const COMMS_TOOLS = new Set(["agent_send", "agent_request"]);
+
+export function foreignRenderers(kit: Kit, tool: ForeignTool) {
+	const spec = foreignSpec(tool);
+	const renderers = toolRenderers(kit, spec);
+	if (!COMMS_TOOLS.has(tool.name)) return renderers;
+	const wrapped = new WeakMap<object, Component>();
+	return {
+		...renderers,
+		renderCall(args: unknown, theme: Parameters<typeof renderers.renderCall>[1], context: Parameters<typeof renderers.renderCall>[2]) {
+			const lastComponent = context.lastComponent && typeof context.lastComponent === "object" ? wrapped.get(context.lastComponent) : undefined;
+			const component = renderers.renderCall(args, theme, { ...context, lastComponent: lastComponent ?? context.lastComponent });
+			const row = rowState(context);
+			const comms: Component = {
+				render(width) {
+					// Keep the shared row's timing, animation bookkeeping and click target; replace only its header.
+					const lines = component.render(width);
+					const view: View = { kit, row, context: row.context!, theme, paint: painter(theme), result: row.result as ResultInput | undefined, now: kit.now() };
+					return [renderPurpleBand(theme, { ...bandOf(spec, view), width, clockMs: view.now }), ...lines.slice(1)];
+				},
+				invalidate: () => component.invalidate(),
+				handleMouse: (event) => component.handleMouse?.(event),
+			};
+			wrapped.set(comms, component);
+			return comms;
+		},
+	};
+}

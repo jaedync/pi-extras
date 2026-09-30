@@ -7,7 +7,7 @@ import { foreignSpec, type ForeignTool } from "./foreign.ts";
 import { codeLines, more, plural, resultText, stringArg, wrapAll, type Kit } from "./kit.ts";
 import { NESTED_CALL_LIMIT, OMITTED_OUTPUT, readCalls, type CallSnapshot, type NestedCall } from "./nested.ts";
 import { BODY_INDENT } from "./row.ts";
-import { numberedLine, type ShownState } from "./steps.ts";
+import { digitsOf, numberedLine, numberLabel, type ShownState } from "./steps.ts";
 import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
 import { sanitize } from "./format.ts";
 
@@ -73,14 +73,14 @@ function stepKeys(view: View): readonly string[] {
 	return ["codemode:source", "codemode:result", ...keys];
 }
 
-function callLine(view: View, call: NestedCall, index: number, width: number, indent: number): string {
+function callLine(view: View, call: NestedCall, index: number, width: number, indent: number, digits: number): string {
 	const ms = call.status === "running" && call.startedAt !== undefined ? view.now - call.startedAt : call.durationMs;
 	const color = call.status === "error" ? "error" : call.status === "ok" ? "muted" : "dim";
 	const rail: Seg[] = [
 		...(call.overlapping ? [{ text: "overlap  ", color: "dim" }] : []),
 		{ text: WORDS[call.status], color }, ...(ms === undefined ? [] : [{ text: "  ", color: "dim" }, timeSeg(ms)]),
 	];
-	return numberedLine(view.theme, ` ƒ${index + 1} `, [
+	return numberedLine(view.theme, numberLabel(index + 1, digits, "ƒ"), [
 		{ text: flat(call.name), color: "text", bold: true }, ...(call.args ? [{ text: ` ${flat(call.args)}`, color: "muted" }] : []),
 	], rail, STATES[call.status], width, { indent, now: view.now, motion: view.kit.motion() });
 }
@@ -90,21 +90,26 @@ function timeline(view: View, width: number): string[] {
 	if (!snapshot) return [];
 	const hidden = view.context.expanded ? 0 : Math.max(0, snapshot.calls.length - CODEMODE_CALL_PREVIEW);
 	const hint = hidden > 0 ? [" ".repeat(BODY_INDENT) + more(view.paint, view.kit, plural(hidden, "earlier call"))] : [];
-	const lines = snapshot.calls.slice(hidden).map((call, index) => callLine(view, call, index + hidden, width, BODY_INDENT));
+	// Width comes from every call, not just those shown, so expanding keeps each number's cell.
+	const digits = digitsOf(snapshot.calls.length);
+	const lines = snapshot.calls.slice(hidden).map((call, index) => callLine(view, call, index + hidden, width, BODY_INDENT, digits));
 	const incomplete = snapshot.complete ? [] : [" ".repeat(BODY_INDENT) + view.paint.fg("dim", "nested call record incomplete")];
 	return [...hint, ...lines, ...incomplete].map((line) => truncateToWidth(line, width, "…"));
 }
 
 function callOutput(view: View, call: NestedCall, selected: number, width: number): string[] {
-	const lines = [callLine(view, call, selected, width, 0), ...(call.args ? wrapAll([call.args], width) : [])];
+	const lines = [callLine(view, call, selected, width, 0, digitsOf(callsOf(view)?.calls.length ?? 1)), ...(call.args ? wrapAll([call.args], width) : [])];
 	const output = call.output ?? call.error;
 	return [...lines, ...wrapAll([output ?? (call.status === "running" ? "(no output yet)" : "(nested result not saved; see script result)")], width)];
 }
 
 function popupHead(view: View, width: number, selected: number): string[] {
-	const labels = ["script source", "script result", ...(callsOf(view)?.calls ?? []).map((call, index) => `ƒ${index + 1} ${flat(call.name)} · ${WORDS[call.status]}`)];
+	const calls = callsOf(view)?.calls ?? [];
+	const callDigits = digitsOf(calls.length);
+	const labels = ["script source", "script result", ...calls.map((call, index) => `${`ƒ${index + 1}`.padEnd(callDigits + 1)} ${flat(call.name)} · ${WORDS[call.status]}`)];
+	const digits = digitsOf(labels.length);
 	return labels.map((label, index) => {
-		const text = `${index + 1} ${label}`;
+		const text = `${String(index + 1).padStart(digits)} ${label}`;
 		return truncateToWidth(view.paint.fg(index === selected ? "accent" : "muted", index === selected ? view.paint.bold(text) : text), width, "…");
 	});
 }

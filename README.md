@@ -313,6 +313,16 @@ its title bar, or `c` and `o`, copy them whole; text dragged across copies
 what it shows. Esc, `q` or `✕` closes it. ctrl+o still expands every row in
 place.
 
+**Agent communication.** Mesh `agent_send` and `agent_request` rows use purple
+bands, like subagent mail. Delivery failures keep their red rail words rather
+than recoloring the band. `list_peers` keeps the usual operational colors.
+Incoming remote-pi mesh messages show the sender's name and working-directory
+basename, `→ me`, and `message` or `replies`, over a purple Markdown preview.
+Click or ctrl+o expands the body. Transport headers and reply instructions stay
+in model context but are hidden from the human view; unfamiliar envelopes fall
+back to a purple band over their raw text. Tool Display registers this renderer,
+so it works even when Subagents is disabled.
+
 **Other tools.** Every other tool's rows get the same band, with the time and
 any failure in the right rail. pi-extras's own tools have layouts of their own:
 
@@ -481,6 +491,10 @@ directly.
 Messages to main show above the editor until they are in the transcript.
 What you type to a child directly is recorded for main without waking it.
 Reports from children started in the same run arrive together, as one message.
+`message` call rows and incoming notes, questions, replies and relays all use
+purple bands. A question keeps its amber `asks` word; failed deliveries keep
+red words. Incoming mail has a purple Markdown preview, expandable by click
+or ctrl+o. Reports keep their green or red outcome colors.
 
 **Seeing it.** A backgrounded start leaves a compact, still chip like Shell
 Jobs: `↳ reviewer  opus high  in background`. It takes the final outcome and

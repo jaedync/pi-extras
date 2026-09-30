@@ -8,12 +8,14 @@
  *   rail, and shows what the agent is doing under it. It takes the final color
  *   when it ends.
  * - A `message` row says who it went to and what happened to it.
- * - A message from an agent is a band (amber for a question) over its text.
+ * - Agent mail uses purple bands; a question keeps its amber `asks` word.
  * - A report is one band per agent, the first lines of the report under it;
  *   a click shows all of it.
  */
 import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
-import { Markdown, truncateToWidth, wrapTextWithAnsi, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { truncateToWidth, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { expandable, expansionMemory, markdownOf, messageBody as body, type MarkdownSource } from "../band/message.ts";
+import { purpleBackground, renderPurpleBand } from "../band/purple.ts";
 import { formatTime, renderBand, type BandPhase, type Seg } from "../band/band.ts";
 import { paletteFrom } from "../band/palette.ts";
 import { handoffChip, type ChipTint } from "../band/job-chip.ts";
@@ -22,15 +24,11 @@ import { formatMoney } from "../status-plus-logic.ts";
 import { formatTokens } from "../status-plus-render.ts";
 import type { MailDetails, ReportSummary } from "./deliver.ts";
 import { noReport, reportBody } from "./format.ts";
-import { MAIN, moreLines } from "./names.ts";
+import { MAIN } from "./names.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
 import { phaseOf, rowRail, shortModel } from "./widget.ts";
 
-/** Pi's Markdown theme when there is one; reports and messages are Markdown, like assistant text. */
-export type MarkdownSource = () => MarkdownTheme | undefined;
-const markdownOf = (source: MarkdownSource | undefined): MarkdownTheme | undefined => {
-	try { return source?.(); } catch { return undefined; }
-};
+export type { MarkdownSource } from "../band/message.ts";
 
 export const REPORT_PREVIEW_LINES = 3;
 export const MESSAGE_PREVIEW_LINES = 8;
@@ -53,24 +51,6 @@ const oneLine = (text: unknown): string => String(text ?? "").replace(/\s+/g, " 
 
 function band(theme: Theme, width: number, phase: BandPhase, segs: Seg[], rail: Seg[]): string {
 	return renderBand(theme, paletteFrom(theme), { width, phase, segs, rail, clockMs: Date.now() });
-}
-
-/** Text under a band, on the tool background; `limit` lines unless expanded. */
-function body(theme: Theme, width: number, text: string, color: string, limit: number | null, markdown?: MarkdownTheme): string[] {
-	const trimmed = text.replace(/\r/g, "").trim();
-	if (!trimmed) return [];
-	const paint = paintOf(theme);
-	const inner = Math.max(4, width - BODY_INDENT);
-	const pad = " ".repeat(BODY_INDENT);
-	const all = markdown
-		? new Markdown(trimmed, 0, 0, markdown, { color: (line: string) => paint(color, line) }).render(inner).map((line) => line.trimEnd())
-		: wrapTextWithAnsi(trimmed, inner).map((line) => paint(color, line));
-	const shown = limit === null ? all : all.slice(0, limit);
-	const lines = shown.map((line) => pad + truncateToWidth(line, inner, "…"));
-	const hidden = all.length - shown.length;
-	const count = shown.length > 0 ? moreLines(hidden) : `${hidden} line${hidden === 1 ? "" : "s"}`;
-	if (hidden > 0) lines.push(pad + paint("dim", `… ${count} (click to show)`));
-	return onBackground(lines, width, bodyBackground(theme));
 }
 
 /** One line of what an agent is doing, under its band. */
@@ -162,11 +142,11 @@ export function messageCallRow(args: unknown, theme: Theme, context: RowContext)
 	const input = (args ?? {}) as { to?: unknown; text?: unknown; expectReply?: unknown };
 	return new Lines((width) => {
 		const segs: Seg[] = [{ text: `→ ${oneLine(input.to)}`, color: "text", bold: true }, { text: `  ${oneLine(input.text)}`, color: "muted" }];
-		if (context?.isPartial && !context.executionStarted) return [band(theme, width, { kind: "writing" }, segs, [])];
+		if (context?.isPartial && !context.executionStarted) return [renderPurpleBand(theme, { width, phase: { kind: "writing" }, segs, rail: [], clockMs: 0 })];
 		const delivered = (context?.state as { delivered?: string } | undefined)?.delivered;
 		const rail: Seg[] = context?.isError ? [{ text: "not delivered", color: "error" }]
 			: [{ text: (delivered && DELIVERED[delivered]) ?? "", color: "dim" }, ...(input.expectReply ? [{ text: "  awaits answer", color: "warning" }] : [])];
-		return [band(theme, width, { kind: "done", outcome: context?.isError ? "fail" : "ok", sinceMs: DONE }, segs, rail)];
+		return [renderPurpleBand(theme, { width, phase: { kind: "done", outcome: context?.isError ? "fail" : "ok", sinceMs: DONE }, segs, rail, clockMs: 0 })];
 	});
 }
 
@@ -178,26 +158,8 @@ export function messageResultRow(result: unknown, theme: Theme, context: RowCont
 	return new Lines((width) => (context?.isError ? body(theme, width, text, "error", null) : context?.expanded ? body(theme, width, text, "muted", null) : []));
 }
 
-/** Per-message expansion toggled by a click; ctrl+O (the global flag) resets it. */
-function expandable(render: (width: number, expanded: boolean) => string[], globalExpanded: boolean, key: object, memory: { overrides: WeakMap<object, boolean>; seen: WeakMap<object, boolean> }): Component {
-	if (memory.seen.get(key) !== globalExpanded) {
-		memory.overrides.delete(key);
-		memory.seen.set(key, globalExpanded);
-	}
-	const expanded = () => memory.overrides.get(key) ?? globalExpanded;
-	return {
-		render: (width: number) => render(Math.max(1, width), expanded()),
-		invalidate: () => {},
-		handleMouse: (event: { type: string; button: string }) => {
-			if (event.type !== "click" || event.button !== "left") return undefined;
-			memory.overrides.set(key, !expanded());
-			return { handled: true };
-		},
-	} as Component;
-}
-
 export function createMessageRenderer(markdown?: MarkdownSource): MessageRenderer {
-	const memory = { overrides: new WeakMap<object, boolean>(), seen: new WeakMap<object, boolean>() };
+	const memory = expansionMemory();
 	return (message, options, theme) => {
 		const details = message.details as MailDetails | undefined;
 		if (!details || details.kind === "report") return undefined;
@@ -206,8 +168,8 @@ export function createMessageRenderer(markdown?: MarkdownSource): MessageRendere
 		const segs: Seg[] = [{ text: details.from, color: "text", bold: true }, { text: ` → ${to}`, color: "dim" }];
 		const said = question ? "asks" : details.kind === "reply" ? "answers" : details.kind === "relay" ? (details.answered ? "you answered" : "you wrote") : "note";
 		const rail: Seg[] = [{ text: said, color: question ? "warning" : "dim" }];
-		const phase: BandPhase = question ? { kind: "done", outcome: "timeout", sinceMs: DONE } : { kind: "calm" };
-		return expandable((width, expanded) => [band(theme, width, phase, segs, rail), ...body(theme, width, details.text, "text", expanded ? null : MESSAGE_PREVIEW_LINES, markdownOf(markdown))],
+		return expandable((width, expanded) => [renderPurpleBand(theme, { width, phase: { kind: "calm" }, segs, rail, clockMs: 0 }),
+			...body(theme, width, details.text, "text", expanded ? null : MESSAGE_PREVIEW_LINES, markdownOf(markdown), purpleBackground(theme))],
 			options.expanded, message as object, memory);
 	};
 }
@@ -241,7 +203,7 @@ function reportLines(theme: Theme, width: number, report: ReportSummary, expande
 }
 
 export function createReportRenderer(markdown?: MarkdownSource): MessageRenderer {
-	const memory = { overrides: new WeakMap<object, boolean>(), seen: new WeakMap<object, boolean>() };
+	const memory = expansionMemory();
 	return (message, options, theme) => {
 		const details = message.details as MailDetails | undefined;
 		if (!details || details.kind !== "report" || !Array.isArray(details.reports)) return undefined;

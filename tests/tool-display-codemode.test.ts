@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { codemodeRenderers } from "../lib/tool-display/codemode.ts";
 import { NestedCalls } from "../lib/tool-display/nested.ts";
 import { harness, row, text, theme } from "./support/tool-rows.ts";
@@ -14,6 +14,23 @@ const setup = () => {
 	const script = row(codemodeRenderers(kit, { name: "codemode" }), { code: "await tools.read({ path: '界😀/file' });" }, "script");
 	return { ...h, calls, script };
 };
+
+test("call numbers share one width past nine calls, in the row and the popup", () => {
+	const h = setup();
+	for (let index = 1; index <= 11; index++) {
+		h.calls.observe(start(`script/${index}`));
+		h.calls.observe({ ...end(`script/${index}`), toolCallId: `script/${index}` });
+	}
+	h.script.update({ executionStarted: true, isPartial: false, expanded: true, result: text("ok") });
+	const calls = h.script.lines(90).filter((line) => /ƒ\d+/.test(line));
+	assert.equal(calls.length, 11);
+	assert.equal(new Set(calls.map((line) => line.indexOf("read"))).size, 1, "names start in one column");
+	assert.match(calls[0]!, / {2}ƒ1 {2}read/, "the padding sits before ƒ so it hugs its number");
+	assert.ok(h.script.click());
+	const head = h.popups[0]!.head(theme, 80, 0).map((line) => stripTerminalSequences(line));
+	assert.equal(head.length, 13);
+	assert.equal(new Set(head.map((line) => line.search(/[a-zƒ]/))).size, 1, `popup labels align: ${head.join(" | ")}`);
+});
 
 test("codemode observes actual nested calls, overlap and timing, never JS syntax", () => {
 	const h = setup();

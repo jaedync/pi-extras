@@ -129,6 +129,18 @@ function stepRail(run: ChainRun | undefined, index: number, state: ShownState, n
 	}
 }
 
+/** Digits in the widest number of a list of `count` items. */
+export const digitsOf = (count: number): number => String(Math.max(1, Math.floor(count))).length;
+
+/**
+ * A number cell padded to the list's widest number, so a tenth item doesn't
+ * widen its chip and push its text a column right of the ninth. The padding
+ * goes before the prefix so the prefix stays against its number.
+ */
+export function numberLabel(number: number, digits: number, prefix = ""): string {
+	return ` ${`${prefix}${number}`.padStart(prefix.length + digits)} `;
+}
+
 /** Numbered cells shared by shell steps and observed JavaScript tool calls. */
 export function numberedLine(theme: ThemeLike, label: string, title: readonly Seg[], rail: readonly Seg[], state: ShownState, width: number, options: StepLineOptions): string {
 	const palette = paletteFrom(theme);
@@ -146,6 +158,8 @@ export interface StepLineOptions {
 	readonly indent: number;
 	readonly now: number;
 	readonly selected?: boolean;
+	/** Digits in the list's widest step number; 1 when omitted. */
+	readonly digits?: number;
 	/** Reduced motion keeps the running step's tint steady and drops the finish flash. */
 	readonly motion?: Motion;
 }
@@ -153,7 +167,7 @@ export interface StepLineOptions {
 export function stepLine(theme: ThemeLike, chain: Chain, run: ChainRun | undefined, index: number, number: number, width: number, options: StepLineOptions): string {
 	const palette = paletteFrom(theme);
 	const state = stateOf(run, index);
-	const label = ` ${number} `;
+	const label = numberLabel(number, options.digits ?? 1);
 	const quiet = state === "skipped" || state === "waiting";
 	const left: Seg[] = [
 		{ text: label, color: quiet ? "dim" : "text", bold: options.selected === true },

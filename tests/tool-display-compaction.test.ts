@@ -32,6 +32,7 @@ test("compaction is a purple band over a three-line Markdown preview on the comp
 		assert.ok(raw[1]!.startsWith(theme.getBgAnsi("customMessageBg")), "the body keeps Pi's compaction purple, apart from tool rows");
 		// The band leans well into the label's mauve, so it reads as the row's header.
 		const [r, g, b] = /48;2;(\d+);(\d+);(\d+)m/.exec(raw[0]!)!.slice(1).map(Number);
+		assert.deepEqual([r, g, b], [79, 62, 99], "extracting the shared purple palette must not change compaction");
 		assert.ok(r! - 0x30 >= 18 && b! - 0x3e >= 18 && b! > g!, `band ${r},${g},${b}`);
 		assert.ok(raw[0]!.includes(theme.getFgAnsi("mdHeading")), "slow time uses the warm color");
 	} finally { undo(); }

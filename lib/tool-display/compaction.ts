@@ -10,17 +10,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, stripTerminalSequences, truncateToWidth, type MarkdownTheme, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { renderBand, timeSeg, type Seg } from "../band/band.ts";
-import { mix, parseAnsiColor } from "../band/color.ts";
-import { paletteFrom, type Palette } from "../band/palette.ts";
-import { bodyBackground, onBackground } from "../band/surface.ts";
-
-/** Pi's compaction purple, or the tool gray when the theme has none. */
-function purpleBackground(theme: ThemeLike): string | undefined {
-	try {
-		const sgr = theme.getBgAnsi("customMessageBg");
-		return parseAnsiColor(sgr) ? sgr : bodyBackground(theme);
-	} catch { return bodyBackground(theme); }
-}
+import { purpleBackground, purplePalette, purpleTheme } from "../band/purple.ts";
+import { onBackground } from "../band/surface.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import { formatTokens } from "../status-plus-render.ts";
 import { sanitize } from "./format.ts";
@@ -29,8 +20,6 @@ import { BODY_INDENT, indent } from "./row.ts";
 
 export const COMPACTION_ENTRY = "pi-extras.compaction-band";
 const PREVIEW_LINES = 3;
-// How far the band leans from the compaction background toward the label's mauve.
-const PURPLE_TINT = 0.22;
 type Reason = "threshold" | "manual" | "overflow";
 type CompactionSummaryMessage = ConstructorParameters<typeof CompactionSummaryMessageComponent>[0];
 
@@ -88,31 +77,6 @@ export function estimateAfter(messages: readonly Parameters<typeof estimateToken
 	return messages.filter((message) => message.role !== "system").reduce((sum, message) => sum + estimateTokens(message), system ? estimateTokens(system) : 0);
 }
 
-function purple(theme: ThemeLike): Palette | undefined {
-	try {
-		const palette = paletteFrom(theme);
-		const bg = parseAnsiColor(theme.getBgAnsi("customMessageBg"));
-		const hue = parseAnsiColor(theme.getFgAnsi("customMessageLabel"));
-		return palette && bg && hue ? { ...palette, ok: mix(bg, hue, PURPLE_TINT) } : undefined;
-	} catch { return undefined; }
-}
-
-/** renderBand's default finished background is green; its fallback must be the compaction surface instead. */
-function compactionTheme(theme: ThemeLike): ThemeLike {
-	return {
-		...theme,
-		fg: (key, text) => {
-			const painted = theme.fg(key, text);
-			return key === "customMessageLabel" ? theme.bold(painted) : painted;
-		},
-		bg: (key, text) => theme.bg(key === "toolSuccessBg" ? "customMessageBg" : key, text),
-		getFgAnsi: (key) => theme.getFgAnsi(key),
-		getBgAnsi: (key) => theme.getBgAnsi(key),
-		getColorMode: () => theme.getColorMode(),
-		bold: (text) => theme.bold(text),
-	};
-}
-
 function rail(data: CompactionData | undefined, tokensBefore: number): Seg[] {
 	const tokens = `${formatTokens(tokensBefore)}${data?.tokensAfter !== undefined ? ` → ~${formatTokens(data.tokensAfter)}` : ""}`;
 	const parts: Seg[] = [{ text: tokens, color: "muted" }];
@@ -154,7 +118,7 @@ function drawRow(self: Internals, width: number, theme: ThemeLike, data: Compact
 	if (shown.length < all.length) body.push(truncateToWidth(more(paint, { moreHint: () => hint } as never, plural(all.length - shown.length, "more line", "more lines")), inner, "…"));
 	const reason = data?.reason === "threshold" ? "auto" : data?.reason;
 	const segs: Seg[] = [{ text: "compaction", color: "customMessageLabel", bold: true }, ...(reason ? [{ text: ` ${reason}`, color: "muted" }] : [])];
-	const header = renderBand(compactionTheme(theme), purple(theme), { width, phase: { kind: "done", outcome: "ok", sinceMs: Infinity }, segs, rail: rail(data, self.message.tokensBefore), clockMs: 0 });
+	const header = renderBand(purpleTheme(theme), purplePalette(theme), { width, phase: { kind: "done", outcome: "ok", sinceMs: Infinity }, segs, rail: rail(data, self.message.tokensBefore), clockMs: 0 });
 	return [header, ...onBackground(indent(body, pad), width, purpleBackground(theme))];
 }
 

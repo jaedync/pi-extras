@@ -25,7 +25,7 @@ import { pathToFileURL } from "node:url";
 import {
 	createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition,
 	createLocalBashOperations, createLsToolDefinition, createReadToolDefinition, createWriteToolDefinition, getAgentDir,
-	getLanguageFromPath, highlightCode, keyHint, renderDiff, SettingsManager,
+	getLanguageFromPath, getMarkdownTheme, highlightCode, keyHint, renderDiff, SettingsManager,
 	type BashOperations, type ExtensionAPI, type ExtensionContext, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { getCapabilities } from "@earendil-works/pi-tui";
@@ -42,6 +42,7 @@ import { canAdopt, installAdoption, prepareAdoption, rebuildRow, type RowRendere
 import { computerUseSpec, windowsUseSpec } from "./computer.ts";
 import { codemodeRenderers } from "./codemode.ts";
 import { registerCompaction } from "./compaction.ts";
+import { createMeshMessageRenderer, MESH_MESSAGE_TYPE } from "./mesh.ts";
 import { NestedCalls } from "./nested.ts";
 import { editRenderers, readRenderers, writeRenderers } from "./files.ts";
 import { foreignRenderers, type ForeignTool } from "./foreign.ts";
@@ -130,6 +131,8 @@ const OWN_SPECS: Partial<Record<RowKind, (name: string) => ToolSpec>> = {
 };
 
 export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): void {
+	// Pi searches every extension for a renderer; the sender need not own it. Register before transcript replay.
+	if (typeof pi.registerMessageRenderer === "function") pi.registerMessageRenderer(MESH_MESSAGE_TYPE, createMeshMessageRenderer(() => getMarkdownTheme()));
 	let settings: DisplaySettings = DEFAULT_SETTINGS;
 	let ui: PopupHost | undefined;
 	let fullscreen = false;

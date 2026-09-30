@@ -14,14 +14,14 @@ import type { ChainRun } from "../chain/run.ts";
 import { commandLines, parseShellOutput, sanitize, type ShellOutput } from "./format.ts";
 import { codeLines, more, numberArg, plural, resultText, shownPath, tailed, textLines, titleSeg, wrapAll, type Kit, type Paint } from "./kit.ts";
 import { BODY_INDENT } from "./row.ts";
-import { chainTitle, flashing, flat, shownSteps, stateOf, stepLine } from "./steps.ts";
+import { chainTitle, digitsOf, flashing, flat, shownSteps, stateOf, stepLine } from "./steps.ts";
 import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
 
 /** Output lines under a collapsed row. */
 export const OUTPUT_PREVIEW_LINES = 4;
 /** Output lines under the focused step of a collapsed chain. */
 export const STEP_PREVIEW_LINES = 3;
-/** Where a step's output starts: under the step's command, past its number. */
+/** Where a step's output starts with one-digit step numbers: under the step's command, past its number. */
 const STEP_OUTPUT_INDENT = 8;
 
 function commandOf(view: View): { text?: string; invalid: boolean } {
@@ -74,10 +74,12 @@ export function preview(paint: Paint, kit: Kit, lines: readonly string[], max: n
 function chainLines(view: View, run: ChainRun, width: number): string[] {
 	const { shown } = position(run);
 	const focus = run.focus();
-	const pad = " ".repeat(STEP_OUTPUT_INDENT);
-	const inner = Math.max(1, width - STEP_OUTPUT_INDENT);
+	const digits = digitsOf(shown.length);
+	const indent = STEP_OUTPUT_INDENT + digits - 1;
+	const pad = " ".repeat(indent);
+	const inner = Math.max(1, width - indent);
 	return shown.flatMap((index, number) => {
-		const line = stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: BODY_INDENT, now: view.now, motion: view.kit.motion() });
+		const line = stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: BODY_INDENT, now: view.now, digits, motion: view.kit.motion() });
 		const output = stepOutput(run, index);
 		const wanted = view.context.expanded ? output.length > 0 : index === focus && output.length > 0;
 		if (!wanted) return [line];
@@ -151,7 +153,11 @@ export const bashSpec: ToolSpec = {
 	details: (view) => details(view, runOf(view)),
 	head(view, width, selected) {
 		const run = runOf(view);
-		if (run) return position(run).shown.map((index, number) => stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: 0, now: view.now, selected: number === selected, motion: view.kit.motion() }));
+		if (run) {
+			const { shown } = position(run);
+			const digits = digitsOf(shown.length);
+			return shown.map((index, number) => stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: 0, now: view.now, selected: number === selected, digits, motion: view.kit.motion() }));
+		}
 		const lines = commandLines(commandOf(view).text ?? "");
 		const code = codeLines(view.paint, view.kit, lines, "bash");
 		return wrapAll(code.map((line, index) => (index === 0 ? `${view.paint.fg("accent", view.paint.bold("$"))} ${line}` : `  ${line}`)), width);
