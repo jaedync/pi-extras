@@ -94,9 +94,9 @@ export function rail(phase: BandPhase, took: number | undefined, options: { lead
 	}
 }
 
-/** Keeps a row redrawing while its band moves, and stops once it settles. */
-export function animate(row: RowState, kit: Kit, phase: BandPhase): void {
-	const moving = isAnimated(phase, kit.motion());
+/** Keeps a row redrawing while its band (or `alsoMoving`, the row's own lines) moves, and stops once it settles. */
+export function animate(row: RowState, kit: Kit, phase: BandPhase, alsoMoving = false): void {
+	const moving = alsoMoving || isAnimated(phase, kit.motion());
 	if (moving && !row.stopFrames) row.stopFrames = kit.clock.add(() => row.context?.invalidate());
 	else if (!moving && row.stopFrames) {
 		row.stopFrames();

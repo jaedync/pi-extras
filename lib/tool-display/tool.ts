@@ -35,6 +35,8 @@ export interface ToolSpec {
 	/** How a failure reads in the rail, e.g. `exit 1`; the default is `failed`. */
 	failure?(view: View): Seg[] | undefined;
 	outcome?(view: View): Outcome | undefined;
+	/** Whether the row's own lines still move after its band has settled, so it keeps asking for frames. */
+	moving?(view: View): boolean;
 	/** Lines under the band in the call slot, drawn at full width. */
 	below?(view: View, width: number): string[];
 	/** The result slot's lines, drawn indented under the band's title. */
@@ -74,7 +76,7 @@ export function popupSource(kit: Kit, spec: ToolSpec, row: RowState): PopupSourc
 		firstStep: () => spec.firstStep?.(view()) ?? 0,
 		outputLabel: (selected) => spec.outputLabel?.(view(), selected) ?? "output",
 		output: (theme, width, selected) => spec.output({ ...view(), theme, paint: painter(theme) }, width, selected),
-		live: () => row.context?.isPartial ?? false,
+		live: () => (row.context?.isPartial ?? false) || (spec.moving?.(view()) ?? false),
 	};
 }
 
@@ -88,7 +90,7 @@ export function toolRenderers(kit: Kit, spec: ToolSpec) {
 			return slotFor(context).onClick(open(row)).set((width) => {
 				const view = viewOf(kit, row)!;
 				const input = bandOf(spec, view);
-				animate(row, kit, input.phase);
+				animate(row, kit, input.phase, spec.moving?.(view) ?? false);
 				return [band(theme, kit, input, width), ...onBackground(spec.below?.(view, width) ?? [], width, bodyBackground(theme))];
 			});
 		},
