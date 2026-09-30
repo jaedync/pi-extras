@@ -2,6 +2,22 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.10.2 - 2026-09-29
+
+### Fixed
+
+- A subagent the agent waits on (`wait: true`) showed twice, in its tool row
+  and above the editor, and the tool row lacked context, cost and a line for
+  what the child is doing. It now shows once, in the tool row, with all of it.
+- The context share in a subagent's band reads `ctx 12%` instead of a bare
+  percentage.
+- A child resumed by a message reported the time since it was first started;
+  each run is now timed on its own, and its report names the message that
+  started it without the delivery boilerplate.
+- When main asked a finished child a question, the child's answer woke main
+  and then its report woke main again with the same answer. That report is now
+  appended without a new turn.
+
 ## 0.10.1 - 2026-09-29
 
 ### Fixed
