@@ -88,7 +88,8 @@ export function webSearchSpec(name: string): ToolSpec {
 			if (!view.result || view.context.isPartial) return [];
 			const results = resultsOf(view);
 			if (!results) return plainLines(view, width).slice(0, SEARCH_PREVIEW_RESULTS);
-			const shown = view.context.expanded ? results : results.slice(0, SEARCH_PREVIEW_RESULTS);
+			// One result more shows in the row a hint for it would take.
+			const shown = view.context.expanded || results.length <= SEARCH_PREVIEW_RESULTS + 1 ? results : results.slice(0, SEARCH_PREVIEW_RESULTS);
 			const rankWidth = String(Math.max(0, ...shown.map((result) => result.rank))).length;
 			const lines = wrapAll(shown.map((result) => resultLine(view, result, rankWidth)), width);
 			const hidden = results.length - shown.length;

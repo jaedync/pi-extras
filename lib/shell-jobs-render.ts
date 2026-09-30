@@ -75,7 +75,8 @@ export function bodyLines(text: string, paint: Paint, width: number, expanded: b
 	const inner = Math.max(1, width - BODY_INDENT);
 	const pad = " ".repeat(BODY_INDENT);
 	const all = trimmed.split("\n");
-	const shown = expanded ? all : all.slice(-PREVIEW_LINES);
+	// One line more shows in the row a hint for it would take.
+	const shown = expanded || all.length <= PREVIEW_LINES + 1 ? all : all.slice(-PREVIEW_LINES);
 	const hidden = all.length - shown.length;
 	const lines = shown.map((line) => pad + truncateToWidth(paint.fg("toolOutput", line), inner, "\u2026"));
 	if (hidden === 0) return lines;

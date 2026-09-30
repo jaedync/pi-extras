@@ -10,7 +10,7 @@ import type { Seg } from "../band/band.ts";
 import { formatMs } from "../computer-use/describe.ts";
 import type { CallRecord, Progress } from "../computer-use/executor.ts";
 import { sanitize } from "./format.ts";
-import { codeLines, hasImage, more, mutedSeg, plural, resultText, stringArg, textLines, titleSeg, wrapAll, type Paint } from "./kit.ts";
+import { codeLines, hasImage, head, more, mutedSeg, plural, resultText, stringArg, textLines, titleSeg, wrapAll, type Paint } from "./kit.ts";
 import type { ToolSpec, View } from "./tool.ts";
 
 /** Calls listed under the band; earlier ones fold into `… N earlier calls`. */
@@ -106,18 +106,14 @@ export const scriptSpec = (names: ScriptRowNames): ToolSpec => ({
 		const calls = details ? timeline(view.paint, names, details) : [];
 		const text = view.context.isPartial ? [] : emitted(view);
 		if (view.context.expanded) return wrapAll([...calls, ...text], width);
-		const hidden = Math.max(0, calls.length - CALL_PREVIEW_LINES);
+		// One call more shows in the row a hint for it would take.
+		const hidden = calls.length > CALL_PREVIEW_LINES + 1 ? calls.length - CALL_PREVIEW_LINES : 0;
 		const shownCalls = [
 			...(hidden > 0 ? [more(view.paint, view.kit, plural(hidden, "earlier call"))] : []),
 			...calls.slice(hidden),
 		].map((line) => truncateToWidth(line, width, "…"));
-		const shownText = wrapAll(text, width);
-		const extra = shownText.length - EMIT_PREVIEW_LINES;
-		return [
-			...shownCalls,
-			...shownText.slice(0, EMIT_PREVIEW_LINES),
-			...(extra > 0 ? [truncateToWidth(more(view.paint, view.kit, plural(extra, "more line")), width, "…")] : []),
-		];
+		const shownText = head(wrapAll(text, width), EMIT_PREVIEW_LINES, (extra) => truncateToWidth(more(view.paint, view.kit, plural(extra, "more line")), width, "…"));
+		return [...shownCalls, ...shownText];
 	},
 	details(view) {
 		const details = detailsOf(view);

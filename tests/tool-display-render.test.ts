@@ -6,6 +6,7 @@ import { splitChain } from "../lib/chain/split.ts";
 import { editRenderers, readRenderers, writeRenderers } from "../lib/tool-display/files.ts";
 import { searchRenderers } from "../lib/tool-display/search.ts";
 import { bashRenderers } from "../lib/tool-display/shell.ts";
+import { head, tailed } from "../lib/tool-display/kit.ts";
 import { band, harness, row, text, theme } from "./support/tool-rows.ts";
 
 test("a bash row runs against its timeout, then keeps the time and the last lines of output", () => {
@@ -90,7 +91,7 @@ test("a chained command gets a line per step, with output under the step that ma
 		" $ cd src && npm run lint && npm tes…  2 of 3   2.0s / 120s",
 		"    1  npm run lint                                    1.4s",
 		"    2  npm test                                       600ms",
-		"        … 1 earlier line (click for all)",
+		"        ✓ one",
 		"        ✓ two",
 		"        ✓ three",
 		"        ✓ four",
@@ -276,4 +277,20 @@ test("agent text cannot inject terminal escapes into a row", () => {
 		assert.ok(!line.includes("\x1b]0;"), "no title escape");
 		assert.ok(!line.includes("\x1b[2J"), "no clear-screen escape");
 	}
+});
+
+test("a single hidden line is shown in the row its hint would take, never as a hint", () => {
+	const hint = (hidden: number) => `… ${hidden} hidden`;
+	assert.deepEqual(head(["a", "b", "c"], 2, hint), ["a", "b", "c"]);
+	assert.deepEqual(head(["a", "b", "c", "d"], 2, hint), ["a", "b", "… 2 hidden"]);
+	assert.deepEqual(tailed(["a", "b", "c"], 2, 20, hint), ["a", "b", "c"]);
+	assert.deepEqual(tailed(["a", "b", "c", "d"], 2, 20, hint), ["… 2 hidden", "c", "d"]);
+	assert.deepEqual(tailed(["a long first line", "b", "c"], 2, 8, hint).map((line) => stripTerminalSequences(line)), ["a long …", "b", "c"], "the one hidden line is cut to the row");
+
+	const h = harness();
+	const bash = row(bashRenderers(h.kit), { command: "ls" });
+	bash.update({ isPartial: false, result: text("one\ntwo\nthree\nfour\nfive") });
+	assert.deepEqual(bash.lines().slice(1), ["   one", "   two", "   three", "   four", "   five"]);
+	bash.update({ isPartial: false, result: text("one\ntwo\nthree\nfour\nfive\nsix") });
+	assert.deepEqual(bash.lines().slice(1), ["   … 2 earlier lines (click for all)", "   three", "   four", "   five", "   six"]);
 });

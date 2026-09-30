@@ -5,7 +5,7 @@
  */
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
-import { stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Motion, Seg } from "../band/band.ts";
 import type { AnimationClock } from "../band/clock.ts";
 import type { PopupSource, PopupTheme } from "../band/popup.ts";
@@ -79,6 +79,27 @@ export function more(paint: Paint, kit: Kit, text: string): string {
 
 export function wrapAll(lines: readonly string[], width: number): string[] {
 	return lines.flatMap((line) => wrapTextWithAnsi(line, width));
+}
+
+/**
+ * The first `max` lines and a hint for the rest. A hint takes a row of its
+ * own, so one line more is shown instead of a hint that stands for it.
+ */
+export function head(lines: readonly string[], max: number, hint: (hidden: number) => string): string[] {
+	if (lines.length <= max + 1) return [...lines];
+	return [...lines.slice(0, max), hint(lines.length - max)];
+}
+
+/**
+ * The last `max` visual lines at `width`, under a hint for the lines before
+ * them. A single hidden line is shown in the hint's row, cut to fit, since
+ * the hint would take that row anyway.
+ */
+export function tailed(lines: readonly string[], max: number, width: number, hint: (hidden: number) => string): string[] {
+	const shown = tail(lines, max, width);
+	if (shown.skipped === 0) return shown.lines;
+	const top = shown.skipped === 1 ? lines[0]! : hint(shown.skipped);
+	return [truncateToWidth(top, width, "…"), ...shown.lines];
 }
 
 /** The last `max` visual lines of `lines` at `width`, wrapping only what is shown. */

@@ -12,7 +12,7 @@
 import { stripTerminalSequences, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import type { Seg } from "../band/band.ts";
 import { sanitize } from "./format.ts";
-import { errorLines, more, plural, resultText, textLines, titleSeg, wrapAll } from "./kit.ts";
+import { errorLines, head, more, plural, resultText, textLines, titleSeg, wrapAll } from "./kit.ts";
 import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
 import type { Kit } from "./kit.ts";
 
@@ -199,9 +199,8 @@ export function foreignSpec(tool: ForeignTool): ToolSpec {
 		},
 		body(view, width) {
 			const lines = resultLines(tool, view, width, view.context.expanded);
-			if (view.context.expanded || lines.length <= FOREIGN_PREVIEW_LINES) return lines;
-			const hidden = lines.length - FOREIGN_PREVIEW_LINES;
-			return [...lines.slice(0, FOREIGN_PREVIEW_LINES), truncateToWidth(more(view.paint, view.kit, plural(hidden, "more line")), width, "…")];
+			if (view.context.expanded) return lines;
+			return head(lines, FOREIGN_PREVIEW_LINES, (hidden) => truncateToWidth(more(view.paint, view.kit, plural(hidden, "more line")), width, "…"));
 		},
 		details: () => (tool.label && tool.label !== tool.name ? tool.label : ""),
 		head: (view, width) => argumentLines(view, width),

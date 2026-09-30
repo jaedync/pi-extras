@@ -8,7 +8,7 @@ import { basename, dirname } from "node:path";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Seg } from "../band/band.ts";
 import { diffStats, readSummary, sanitize, type ReadSummary } from "./format.ts";
-import { absolutePath, codeLines, errorLines, hasImage, more, mutedSeg, numberArg, pathSeg, plural, resultText, shownPath, stringArg, tail, textLines, titleSeg, wrapAll, type Kit } from "./kit.ts";
+import { absolutePath, codeLines, errorLines, hasImage, more, mutedSeg, numberArg, pathSeg, plural, resultText, shownPath, stringArg, tailed, head, textLines, titleSeg, wrapAll, type Kit } from "./kit.ts";
 import { BODY_INDENT, indent } from "./row.ts";
 import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
 
@@ -118,9 +118,8 @@ export const editSpec: ToolSpec = {
 		const diff = diffOf(view);
 		if (!diff) return [];
 		const lines = diffLines(view.kit, diff);
-		if (view.context.expanded || lines.length <= DIFF_PREVIEW_LINES) return wrapAll(lines, width);
-		const hidden = lines.length - DIFF_PREVIEW_LINES;
-		return [...wrapAll(lines.slice(0, DIFF_PREVIEW_LINES), width), truncateToWidth(more(view.paint, view.kit, plural(hidden, "more diff line")), width, "…")];
+		if (view.context.expanded) return wrapAll(lines, width);
+		return wrapAll(head(lines, DIFF_PREVIEW_LINES, (hidden) => truncateToWidth(more(view.paint, view.kit, plural(hidden, "more diff line")), width, "…")), width);
 	},
 	details: (view) => fileDetails(view, editCount(view.context.args) > 1 ? [plural(editCount(view.context.args), "edit")] : []),
 	outputLabel: () => "diff",
@@ -172,9 +171,7 @@ export const writeSpec: ToolSpec = {
 		const inner = Math.max(1, width - BODY_INDENT);
 		const code = writeLines(view);
 		if (view.context.expanded) return indent(wrapAll(code, inner));
-		const shown = tail(code, WRITE_PREVIEW_LINES, inner);
-		const hint = shown.skipped > 0 ? [truncateToWidth(more(view.paint, view.kit, plural(shown.skipped, "earlier line")), inner, "…")] : [];
-		return indent([...hint, ...shown.lines]);
+		return indent(tailed(code, WRITE_PREVIEW_LINES, inner, (hidden) => more(view.paint, view.kit, plural(hidden, "earlier line"))));
 	},
 	body: (view, width) => errorBody(view, width),
 	details: (view) => fileDetails(view),

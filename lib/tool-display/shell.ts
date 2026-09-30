@@ -7,14 +7,14 @@
  * per step, and the output shows under the step that matters: the one
  * running, else the one that failed, else the last one.
  */
-import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { resolve } from "node:path";
 import type { Outcome, Seg } from "../band/band.ts";
 import type { ChainRun } from "../chain/run.ts";
 import { commandLines, parseShellOutput, sanitize, type ShellOutput } from "./format.ts";
-import { codeLines, more, numberArg, plural, resultText, shownPath, tail, textLines, titleSeg, wrapAll, type Kit, type Paint } from "./kit.ts";
+import { codeLines, more, numberArg, plural, resultText, shownPath, tailed, textLines, titleSeg, wrapAll, type Kit, type Paint } from "./kit.ts";
 import { BODY_INDENT } from "./row.ts";
-import { chainTitle, flat, shownSteps, stateOf, stepLine } from "./steps.ts";
+import { chainTitle, flashing, flat, shownSteps, stateOf, stepLine } from "./steps.ts";
 import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
 
 /** Output lines under a collapsed row. */
@@ -66,11 +66,9 @@ function details(view: View, run: ChainRun | undefined): string {
 	return parts.join(" · ");
 }
 
-/** Output lines with a line saying how many earlier ones are hidden. */
+/** Output lines under a line saying how many earlier ones are hidden. */
 export function preview(paint: Paint, kit: Kit, lines: readonly string[], max: number, width: number): string[] {
-	const shown = tail(lines.map((line) => paint.fg("toolOutput", line)), max, width);
-	const out = shown.skipped > 0 ? [truncateToWidth(more(paint, kit, plural(shown.skipped, "earlier line")), width, "…")] : [];
-	return [...out, ...shown.lines];
+	return tailed(lines.map((line) => paint.fg("toolOutput", line)), max, width, (hidden) => more(paint, kit, plural(hidden, "earlier line")));
 }
 
 function chainLines(view: View, run: ChainRun, width: number): string[] {
@@ -79,7 +77,7 @@ function chainLines(view: View, run: ChainRun, width: number): string[] {
 	const pad = " ".repeat(STEP_OUTPUT_INDENT);
 	const inner = Math.max(1, width - STEP_OUTPUT_INDENT);
 	return shown.flatMap((index, number) => {
-		const line = stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: BODY_INDENT, now: view.now });
+		const line = stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: BODY_INDENT, now: view.now, motion: view.kit.motion() });
 		const output = stepOutput(run, index);
 		const wanted = view.context.expanded ? output.length > 0 : index === focus && output.length > 0;
 		if (!wanted) return [line];
@@ -132,6 +130,7 @@ export const bashSpec: ToolSpec = {
 		return [word, { text: ` at ${at} of ${shown.length}`, color: "muted" }];
 	},
 	outcome: (view) => outcome(parsed(view)),
+	moving: (view) => view.kit.motion() === "full" && flashing(runOf(view), view.now),
 	below(view, width) {
 		const run = runOf(view);
 		if (run) return chainLines(view, run, width);
@@ -152,7 +151,7 @@ export const bashSpec: ToolSpec = {
 	details: (view) => details(view, runOf(view)),
 	head(view, width, selected) {
 		const run = runOf(view);
-		if (run) return position(run).shown.map((index, number) => stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: 0, now: view.now, selected: number === selected }));
+		if (run) return position(run).shown.map((index, number) => stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: 0, now: view.now, selected: number === selected, motion: view.kit.motion() }));
 		const lines = commandLines(commandOf(view).text ?? "");
 		const code = codeLines(view.paint, view.kit, lines, "bash");
 		return wrapAll(code.map((line, index) => (index === 0 ? `${view.paint.fg("accent", view.paint.bold("$"))} ${line}` : `  ${line}`)), width);

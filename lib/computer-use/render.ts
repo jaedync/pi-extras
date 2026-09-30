@@ -47,6 +47,9 @@ interface ResultOptions {
 const sanitize = (text: string) => text.replace(/\r/g, "").replace(/\t/g, "  ").replace(CONTROL, " ");
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
+/** How many of `count` lines to show at most `max`: one more than `max` shows in the row its hint would take. */
+const room = (count: number, max: number) => (count <= max + 1 ? count : max);
+
 function more(hidden: number, options: { paint: Paint; hint: string }): string {
 	return `${options.paint.fg("muted", `… ${plural(hidden, "more line")} (`)}${options.hint}${options.paint.fg("muted", ")")}`;
 }
@@ -58,7 +61,7 @@ export function callLines(args: unknown, options: CallOptions): string[] {
 	if (!code) return [`${title} ${paint.fg("dim", "…")}`];
 	const lines = options.highlight(code);
 	const count = code.split("\n").length;
-	const shown = options.expanded ? lines.slice(0, MAX_EXPANDED_LINES) : lines.slice(0, PREVIEW_CODE_LINES);
+	const shown = lines.slice(0, room(count, options.expanded ? MAX_EXPANDED_LINES : PREVIEW_CODE_LINES));
 	const out = [count > 1 ? `${title} ${paint.fg("muted", plural(count, "line"))}` : title, ...shown.map((line) => `  ${line}`)];
 	if (count > shown.length) out.push(`  ${more(count - shown.length, options)}`);
 	return out;
@@ -112,7 +115,7 @@ export function resultLines(input: { content?: unknown; details?: unknown }, opt
 	const { paint } = options;
 	const text = sanitize(textOf(input.content)).trimEnd();
 	const textLines = text ? text.split("\n") : [];
-	const shownText = options.expanded ? textLines.slice(0, MAX_EXPANDED_LINES) : textLines.slice(0, PREVIEW_TEXT_LINES);
+	const shownText = textLines.slice(0, room(textLines.length, options.expanded ? MAX_EXPANDED_LINES : PREVIEW_TEXT_LINES));
 	const body = shownText.map((line) => paint.fg(options.isError ? "error" : "toolOutput", line));
 	if (textLines.length > shownText.length) body.push(more(textLines.length - shownText.length, options));
 
