@@ -12,6 +12,11 @@ export const LABEL = "copy";
 export const DONE = "✓ copied";
 /** The label's slot fits both words, so a click doesn't shift the header. */
 const SLOT = Math.max(LABEL.length, DONE.length);
+/**
+ * A card this many rows tall gets a label at each end: scrolled part way, one
+ * end is often out of view. Shorter cards fit on screen whole and keep one.
+ */
+export const BOTH_ENDS_ROWS = 10;
 const RESET = "\x1b[0m";
 
 export interface Paint {
@@ -92,12 +97,34 @@ export interface DrawInput {
 }
 
 const same = (a: Block | undefined, b: Block) => !!a && a.kind === b.kind && a.index === b.index;
+const tall = (block: Block) => block.end - block.start + 1 >= BOTH_ENDS_ROWS;
+
+/** Where a label goes: on a row of the block, or on a row added above or below it. */
+type Place = "on" | "above" | "below";
+
+/**
+ * Which rows of a quote carry its label, and whether a row is added above or
+ * below it for one. A short quote takes its first or last line with room,
+ * else a row below; a tall one its first line with room in its top half,
+ * else a row above, and its last line, else a row below.
+ */
+function quoteLabels(block: Block, fits: (row: number) => boolean): { rows: number[]; above: boolean; below: boolean } {
+	const last = fits(block.end) ? block.end : undefined;
+	if (!tall(block)) {
+		const home = fits(block.start) ? block.start : last;
+		return home === undefined ? { rows: [], above: false, below: true } : { rows: [home], above: false, below: false };
+	}
+	const half = block.start + Math.floor((block.end - block.start + 1) / 2);
+	const top = Array.from({ length: half - block.start }, (_, offset) => block.start + offset).find(fits);
+	return { rows: [...(top === undefined ? [] : [top]), ...(last === undefined ? [] : [last])], above: top === undefined, below: last === undefined };
+}
 
 /** The lines with every block drawn as a card, and where each label is. */
 export function draw(input: DrawInput): { lines: string[]; buttons: Button[] } {
 	const rows = [...input.lines];
-	const inserted = new Map<number, string>();
-	const placed: Array<{ row: number; below: boolean; from: number; to: number; block: Block }> = [];
+	const above = new Map<number, string>();
+	const below = new Map<number, string>();
+	const placed: Array<{ row: number; place: Place; from: number; to: number; block: Block }> = [];
 	const right = input.width - input.pad;
 	const label = (block: Block) => padStartVisible(same(input.copied, block) ? input.paint.done(DONE) : input.paint.label(LABEL), SLOT);
 	// Quotes first, so a code block inside one is drawn over it.
@@ -108,20 +135,27 @@ export function draw(input: DrawInput): { lines: string[]; buttons: Button[] } {
 		const region = right - left;
 		if (region < 2) continue;
 		const fits = (row: number) => visibleWidth(plainOf(rows[row]!).trimEnd()) - left + 1 + SLOT + 1 <= region;
-		const home = !input.labels || region < SLOT + 4 ? undefined : [block.start, block.end].find(fits);
+		const labelled = input.labels && region >= SLOT + 4 ? quoteLabels(block, fits) : { rows: [], above: false, below: false };
 		for (let row = block.start; row <= block.end; row++) {
 			const line = rows[row]!;
-			const body = row === home
+			const body = labelled.rows.includes(row)
 				? padTo(sliceByColumn(line, left, region - SLOT - 1), region - SLOT - 1) + label(block) + " "
 				: padTo(sliceByColumn(line, left, region), region);
 			rows[row] = sliceByColumn(line, 0, left) + RESET + onBg(body, bg) + " ".repeat(input.pad);
 		}
-		if (home !== undefined) placed.push({ row: home, below: false, from: right - SLOT - 1, to: right, block });
-		else if (input.labels && region >= SLOT + 4) {
-			const line = rows[block.end]!;
-			const border = sliceByColumn(input.lines[block.end]!, left, 2);
-			inserted.set(block.end, sliceByColumn(line, 0, left) + RESET + onBg(padTo(border, region - SLOT - 1) + RESET + label(block) + " ", bg) + " ".repeat(input.pad));
-			placed.push({ row: block.end, below: true, from: right - SLOT - 1, to: right, block });
+		for (const row of labelled.rows) placed.push({ row, place: "on", from: right - SLOT - 1, to: right, block });
+		// A row of the quote's own: its bar, then the label.
+		const labelRow = (row: number) => {
+			const border = sliceByColumn(input.lines[row]!, left, 2);
+			return sliceByColumn(rows[row]!, 0, left) + RESET + onBg(padTo(border, region - SLOT - 1) + RESET + label(block) + " ", bg) + " ".repeat(input.pad);
+		};
+		if (labelled.above) {
+			above.set(block.start, labelRow(block.start));
+			placed.push({ row: block.start, place: "above", from: right - SLOT - 1, to: right, block });
+		}
+		if (labelled.below) {
+			below.set(block.end, labelRow(block.end));
+			placed.push({ row: block.end, place: "below", from: right - SLOT - 1, to: right, block });
 		}
 	}
 	for (const block of input.blocks.filter((each) => each.kind === "code")) {
@@ -138,24 +172,28 @@ export function draw(input: DrawInput): { lines: string[]; buttons: Button[] } {
 				const head = lang ? " " + input.paint.lang(sliceByColumn(lang, 0, Math.max(0, region - slot - 2))) : "";
 				body = padTo(head, region - slot) + (slot ? label(block) + " " : "");
 			} else if (row === block.end && block.closed) {
-				body = " ".repeat(region);
+				body = slot && tall(block) ? " ".repeat(region - slot) + label(block) + " " : " ".repeat(region);
 			} else {
 				body = padTo(sliceByColumn(line, left, region), region);
 			}
 			rows[row] = sliceByColumn(line, 0, left) + RESET + onBg(body, bg) + " ".repeat(input.pad);
 		}
-		// The whole header is the button, so a click anywhere on it copies.
-		if (slot) placed.push({ row: block.start, below: false, from: left, to: right, block });
+		// The whole header is the button, so a click anywhere on it copies; a tall card's foot too.
+		if (slot) placed.push({ row: block.start, place: "on", from: left, to: right, block });
+		if (slot && block.closed && tall(block)) placed.push({ row: block.end, place: "on", from: left, to: right, block });
 	}
 	const lines: string[] = [];
 	const at: number[] = [];
 	rows.forEach((row, index) => {
+		const before = above.get(index);
+		if (before !== undefined) lines.push(before);
 		at.push(lines.length);
 		lines.push(row);
-		const extra = inserted.get(index);
-		if (extra !== undefined) lines.push(extra);
+		const after = below.get(index);
+		if (after !== undefined) lines.push(after);
 	});
-	const buttons = placed.map(({ row, below, from, to, block }) => ({ row: at[row]! + (below ? 1 : 0), from, to, block }));
+	const shift: Record<Place, number> = { above: -1, on: 0, below: 1 };
+	const buttons = placed.map(({ row, place, from, to, block }) => ({ row: at[row]! + shift[place], from, to, block }));
 	return { lines, buttons };
 }
 

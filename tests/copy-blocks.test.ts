@@ -100,6 +100,96 @@ test("a reply's code blocks and quotes draw as cards with copy labels a click co
 	}
 });
 
+const labelRows = (lines: readonly string[]) => lines.flatMap((line, row) => (plain(line).trimEnd().endsWith(LABEL) ? [row] : []));
+
+test("a tall code block has a copy label at each end, so one is in view from either end", async () => {
+	const copy = host();
+	const undo = installCopyBlocks(copy);
+	try {
+		const code = Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n");
+		const component = new AssistantMessageComponent(message(said(`Tall:\n\n\`\`\`sh\n${code}\n\`\`\`\n\nShort:\n\n\`\`\`sh\nls\n\`\`\``)), false);
+		const lines = component.render(WIDTH);
+		const header = rowOf(lines, "sh");
+		const foot = rowOf(lines, "line 10") + 1;
+		assert.deepEqual(labelRows(lines).slice(0, 2), [header, foot], "the header and the foot of the tall block");
+		assert.equal(labelRows(lines).length, 3, "the one-line block keeps its header label only");
+		click(component, foot, 5);
+		await Promise.resolve();
+		assert.deepEqual(copy.copies, [code], "the whole foot row copies, like the header");
+		assert.ok(plain(component.render(WIDTH)[foot]!).includes(DONE));
+		assert.ok(plain(component.render(WIDTH)[header]!).includes(DONE), "both ends say it was copied");
+	} finally {
+		undo();
+	}
+});
+
+test("a tall quote has a copy label at each end, a row of its own when the last line has no room", async () => {
+	const copy = host();
+	const undo = installCopyBlocks(copy);
+	try {
+		const quoted = (last: string) => [...Array.from({ length: 9 }, (_, index) => `said ${index + 1}`), last];
+		const roomy = new AssistantMessageComponent(message(said(quoted("the end").map((line) => `> ${line}`).join("\n"))), false);
+		const lines = roomy.render(WIDTH);
+		assert.deepEqual(labelRows(lines), [rowOf(lines, "said 1"), rowOf(lines, "the end")]);
+		click(roomy, rowOf(lines, "the end"), WIDTH - 3);
+		await Promise.resolve();
+		assert.deepEqual(copy.copies, [quoted("the end").join("\n")]);
+
+		const long = "y".repeat(WIDTH - 5);
+		const cramped = new AssistantMessageComponent(message(said(quoted(long).map((line) => `> ${line}`).join("\n"))), false).render(WIDTH);
+		assert.deepEqual(labelRows(cramped), [rowOf(cramped, "said 1"), rowOf(cramped, long) + 1]);
+	} finally {
+		undo();
+	}
+});
+
+test("a code card inside a quote takes the clicks on its own rows", async () => {
+	const copy = host();
+	const undo = installCopyBlocks(copy);
+	try {
+		const code = Array.from({ length: 10 }, (_, index) => `step ${index + 1}`).join("\n");
+		const quoted = ["As noted:", "```sh", ...code.split("\n"), "```"].map((line) => `> ${line}`).join("\n");
+		const component = new AssistantMessageComponent(message(said(quoted)), false);
+		const lines = component.render(WIDTH);
+		const foot = rowOf(lines, "step 10") + 1;
+		assert.ok(plain(lines[foot]!).trimEnd().endsWith(LABEL));
+		click(component, foot, WIDTH - 3);
+		await Promise.resolve();
+		assert.deepEqual(copy.copies, [code], "the code card is drawn over the quote, so its label copies the code");
+	} finally {
+		undo();
+	}
+});
+
+test("a tall quote whose first line is full takes its top label on a later line near the top", () => {
+	const undo = installCopyBlocks(host());
+	try {
+		const full = "z".repeat(WIDTH - 5);
+		const lines = new AssistantMessageComponent(message(said([full, ...Array.from({ length: 9 }, (_, index) => `said ${index + 1}`)].map((line) => `> ${line}`).join("\n"))), false).render(WIDTH);
+		assert.deepEqual(labelRows(lines), [rowOf(lines, "said 1"), rowOf(lines, "said 9")]);
+	} finally {
+		undo();
+	}
+});
+
+test("a tall quote full to the edge near its top gets a label row above it", async () => {
+	const copy = host();
+	const undo = installCopyBlocks(copy);
+	try {
+		const quoted = Array.from({ length: 10 }, (_, index) => `${"w".repeat(WIDTH - 8)} ${String(index).padStart(2, "0")}`);
+		const component = new AssistantMessageComponent(message(said(quoted.map((line) => `> ${line}`).join("\n"))), false);
+		const lines = component.render(WIDTH);
+		const top = rowOf(lines, quoted[0]!) - 1;
+		assert.deepEqual(labelRows(lines), [top, rowOf(lines, quoted[9]!) + 1]);
+		assert.ok(plain(lines[top]!).trimStart().startsWith("│"), "the added row is part of the quote");
+		click(component, top, WIDTH - 3);
+		await Promise.resolve();
+		assert.deepEqual(copy.copies, [quoted.join("\n")]);
+	} finally {
+		undo();
+	}
+});
+
 test("a quote with no room for the label gets a row for it", async () => {
 	const copy = host();
 	const undo = installCopyBlocks(copy);

@@ -123,7 +123,8 @@ export class CopyBlocksView implements Component {
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (event.type !== "click" || event.button !== "left") return undefined;
-		const button = this.drawn?.buttons.find((each) => each.row === event.y && event.x >= each.from && event.x < each.to);
+		// A card drawn later lies on top (a code block inside a quote), so its button wins.
+		const button = this.drawn?.buttons.findLast((each) => each.row === event.y && event.x >= each.from && event.x < each.to);
 		if (!button) return undefined;
 		const text = this.textOf(button.block) ?? this.renderedText(button.block);
 		copiedAt.set(this.owner, { part: this.part, block: button.block, at: this.host.now?.() ?? Date.now() });

@@ -435,11 +435,13 @@ or `✕` closes it.
 
 Code blocks and quotes in the agent's replies are drawn as cards on a
 background of their own. A code block's header shows its language and a
-`copy` label; a quote's label sits at the right of its first line that has
-room. Click a code block's header, or a quote's label, and the block's exact
-text goes to the clipboard: the code as written, tabs included, and a quote
-without its `>` markers or the line breaks wrapping added. The label reads
-`✓ copied` for a moment after.
+`copy` label; a quote's label sits at the right of a line near its top that
+has room, or on a row of its own. Click a code block's header, or a quote's
+label, and the block's exact text goes to the clipboard: the code as written,
+tabs included, and a quote without its `>` markers or the line breaks
+wrapping added. The label reads `✓ copied` for a moment after. A card ten
+rows or taller has a label at its foot too (a quote's last line, or a row
+under it), so one is in view from whichever end you scrolled to.
 
 Clicks need Pi's fullscreen mode (`"tuiMode": "fullscreen"`); in the regular
 mode the terminal owns the mouse, so the cards keep their background and
