@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.11.3 - 2026-09-29
+
+### Fixed
+
+- After `/reload` (as after `pi update`), the history above drew in Pi's own
+  style: plain tool boxes, no step lists or job chips, full thinking blocks
+  and no copy labels; only new rows looked right. Pi rebuilds the transcript
+  before extensions start again, so pi-extras now rebuilds the rows drawn in
+  between once it is ready.
+
 ## 0.11.2 - 2026-09-29
 
 ### Changed
