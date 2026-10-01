@@ -1,12 +1,13 @@
 /**
  * Makes child sessions in this Pi process with the SDK. A child gets the
  * parent's tools minus the ones that make no sense below it (mesh, goals,
- * desktop control, background jobs), and only the extensions that provide one
- * of those tools load into it, so status bars, voice and the like stay out.
+ * desktop control, background jobs), tool-owning extensions, Cache Compaction
+ * and a quota guard. Status bars, voice and other UI extensions stay out.
  */
 import type { AgentSession, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, Usage } from "./types.ts";
@@ -23,6 +24,7 @@ export const CHILD_TOOL_EXCLUDE: readonly string[] = [
 const WRITE_TOOLS = new Set(["bash", "edit", "write"]);
 const READ_TOOLS = ["read", "grep", "find", "ls"];
 const SHUTDOWN_TIMEOUT_MS = 2_000;
+export const CHILD_CACHE_COMPACTION_PATH = fileURLToPath(new URL("../../extensions/cache-compaction.ts", import.meta.url));
 
 /**
  * The extension files that own a child's tools, each once. Built-in, SDK and
@@ -120,15 +122,15 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const settingsManager = sdk.SettingsManager.create(cwd, agentDir);
 			const loader = new sdk.DefaultResourceLoader({
 				cwd, agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
-				// Load only the files that own the child's tools. Every factory that runs is handed the
+				// Besides Cache Compaction, load only files that own the child's tools. Every factory is handed the
 				// child's API, and one that keeps it in module state (remote-pi does) then delivers the
 				// parent's messages to the child, even if the extension is filtered out afterwards.
-				noExtensions: true, additionalExtensionPaths: [...extensionPaths],
+				noExtensions: true, additionalExtensionPaths: [...new Set([...extensionPaths, CHILD_CACHE_COMPACTION_PATH])],
 				appendSystemPrompt: [deps.instructions(record)],
 				extensionFactories: [guard.extension],
 				extensionsOverride: (base) => ({
 					...base,
-					extensions: base.extensions.filter((extension) => extension.path === CHILD_GUARD_PATH || [...extension.tools.keys()].some((name) => wanted.has(name))),
+					extensions: base.extensions.filter((extension) => extension.path === CHILD_GUARD_PATH || extension.path === CHILD_CACHE_COMPACTION_PATH || [...extension.tools.keys()].some((name) => wanted.has(name))),
 				}),
 			});
 			await loader.reload();
