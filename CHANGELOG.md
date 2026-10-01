@@ -2,20 +2,26 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## Unreleased
+## 0.18.0 - 2026-10-01
 
 ### Changed
 
-- Removed tool-call folding. Every tool row stays visible after it finishes;
-  Pi's native ctrl+o still expands all rows.
-- Restart Pi after updating from 0.17.0 or earlier; /reload leaves the old folding wrapper in place (inert).
-- Live status now sits in the editor's top divider, with per-mode spinners,
-  shimmer, tokens and one elapsed clock. Narrow widths drop TPS, TTFT, then
-  tokens. Live thinking stays above queued messages; streaming tool rows stay
-  in the transcript. Voice recording keeps its coordinated bottom border.
-- Phase Spinner names the phase descriptively by default. Set `phaseSpinner.verbs`
-  to `"playful"` or a custom list to opt into one verb per prompt. Finished prompts
-  keep `π Worked for 41s, done 9:14 PM`; stopped prompts keep their existing stopped line.
+- Phase Spinner's live status moved into the editor's top divider, for example
+  `⢌⡱⢎ Thinking… ↓ 212 tokens ─── TPS 109.3 ─ TTFT 0.7s ─ Time 00:15.8`.
+  There is one clock, and narrow terminals drop TPS, then TTFT, then tokens.
+  The line under the conversation is gone; live thinking and queued messages
+  stay there.
+- The status names the phase in plain words: `Thinking…`, `Writing bash
+  call…`, `Running bash…`, `Writing reply…`. The pie and π verbs are opt-in
+  with `phaseSpinner.verbs: "playful"` or your own list.
+- A finished prompt ends with `π Worked for 41s, done 9:14 PM`.
+
+### Removed
+
+- Tool-call folding, with `/tool-display fold` and the `fold` setting. Every
+  tool row stays visible; ctrl+o still expands them all. A leftover `fold` key
+  is ignored. Restart Pi after this update: `/reload` leaves the old folding
+  code loaded, though it does nothing.
 
 ## 0.17.0 - 2026-10-01
 
