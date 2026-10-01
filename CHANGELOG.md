@@ -2,6 +2,20 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Tab Status: iTerm2 Session Status dots and details, plus tab progress in
+  iTerm2, WezTerm, Ghostty and Windows Terminal. Working includes background
+  Subagents and Shell Jobs by default; extension dialogs pause progress, failed
+  turns turn it red, and idle or shutdown clears it. Rate-limit Recovery waits
+  pause progress. Pi's own live terminal-progress setting takes precedence.
+  Auto detection requires a supporting terminal version or advertised progress
+  capability. Idle details say `Done`; reply snippets are opt-in with
+  `tabStatus.detail: "reply"`. Settings live under `tabStatus` in
+  `pi-extras.json`.
+
 ## 0.16.0 - 2026-10-01
 
 ### Changed

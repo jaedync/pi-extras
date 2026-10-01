@@ -1,8 +1,9 @@
 /** Abortable timers owned by one active turn. No resources start at factory load. */
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { formatDuration } from "../status-plus-logic.ts";
 import type { CapturedLimit, WaitPlan } from "./core.ts";
+import { announceRateWait } from "../tab-status/events.ts";
 
 export const WIDGET = "rate-limit-recovery";
 export type Wait = (ms: number, signal: AbortSignal, tick: () => void) => Promise<boolean>;
@@ -30,7 +31,7 @@ export function isCancelKey(data: string): boolean {
 }
 
 export function waitUI(ctx: ExtensionContext, limit: Pick<CapturedLimit, "provider">, plan: Pick<WaitPlan, "resumeAtMs"> & Partial<WaitPlan>, now: () => number, cancel: () => void,
-	line: (remaining: string) => string = (remaining) => `Hibernating ${limit.provider} · ${remaining} remaining`): { tick(): void; close(): void } {
+	line: (remaining: string) => string = (remaining) => `Hibernating ${limit.provider} · ${remaining} remaining`, pi?: ExtensionAPI): { tick(): void; close(): void } {
 	let render = () => {};
 	ctx.ui.setWidget(WIDGET, (tui, theme) => {
 		render = () => tui.requestRender();
@@ -55,12 +56,14 @@ export function waitUI(ctx: ExtensionContext, limit: Pick<CapturedLimit, "provid
 		throw error;
 	}
 	let closed = false;
+	if (pi) announceRateWait(pi, ctx, true);
 	return {
 		tick: () => render(),
 		close() {
 			if (closed) return;
-			closed = true; unsubscribe(); render = () => {};
-			ctx.ui.setWidget(WIDGET, undefined);
+			closed = true; render = () => {};
+			try { unsubscribe(); ctx.ui.setWidget(WIDGET, undefined); }
+			finally { if (pi) announceRateWait(pi, ctx, false); }
 		},
 	};
 }

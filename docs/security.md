@@ -31,6 +31,18 @@ Cost totals are recorded usage or catalog estimates, not authoritative invoices.
 TTFT and throughput describe observed request timing, not server-only decoding.
 Do not share diagnostic files without reviewing them for personal paths and data.
 
+## Tab Status
+
+Tab Status sends state, theme colours, tool names, dialog titles and the first
+line of a failed-turn error to the terminal through OSC sequences. Idle says
+`Done` by default. `tabStatus.detail: "reply"` opts in to sending the first 80
+characters of the latest assistant reply, including replies restored from
+history. Control, bidi and invisible formatting characters are stripped, but
+ordinary text can still contain sensitive information. iTerm2 surfaces these
+details in its tabs, Session Status tool, Cockpit and status-change alerts.
+This adds no network request or transcript log. Disable it with
+`tabStatus.enabled: false` if that terminal-facing metadata is unsuitable.
+
 ## Usage Guard
 
 Usage Guard makes no network requests of its own. It reads the snapshots Status

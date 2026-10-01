@@ -64,6 +64,7 @@ import { type ClickTarget, clickToInspect, type InspectorHost, openInspector } f
 import { CWD_PREVIEW_BYTES, errResult, jobTitle, manageJob, okResult, type ToolResult } from "../lib/shell-jobs-manage.ts";
 import { offerRows } from "../lib/late-rows.ts";
 import { markRow } from "../lib/tool-row.ts";
+import { announceBackground, BACKGROUND_REQUEST_EVENT } from "../lib/tab-status/events.ts";
 
 import {
 	createCompletionRenderer,
@@ -407,6 +408,9 @@ export default function shellJobs(pi: ExtensionAPI): void {
 	let runtime: Runtime;
 	let active = false;
 	let started = false;
+	let backgroundCtx: ExtensionContext | undefined;
+	const publishBackground = () => { if (active && backgroundCtx) announceBackground(pi, backgroundCtx, "shell-jobs", [...runtime.jobs.values()].filter((job) => job.state !== "done").length); };
+	pi.events?.on(BACKGROUND_REQUEST_EVENT, publishBackground);
 	// The TUI's UI handle, kept so a click on a transcript row can open the
 	// inspector; null outside the TUI, where no mouse events arrive anyway.
 	let inspectorUi: InspectorUi | null = null;
@@ -606,6 +610,10 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		// Refresh the UI implementation without moving process ownership or callbacks.
 		if (retained) runtime.widget = createJobsWidget();
 		active = true;
+		backgroundCtx = ctx;
+		const widget = runtime.widget;
+		runtime.widget = { ...widget, update() { widget.update(); publishBackground(); } };
+		publishBackground();
 		const delivery = attachDelivery(runtime, pi);
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui : null;
 		if (ctx.hasUI) {
@@ -650,6 +658,8 @@ export default function shellJobs(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async (event, ctx) => {
 		if (!active) return;
 		active = false;
+		if (backgroundCtx && event.reason !== "reload") announceBackground(pi, backgroundCtx, "shell-jobs", 0);
+		backgroundCtx = undefined;
 		inspectorUi = null;
 		inspected = undefined;
 		if (event.reason === "reload") {

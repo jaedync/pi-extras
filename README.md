@@ -124,6 +124,69 @@ the package. Removing it does not remove your credentials or change other packag
 See [security and privacy](docs/security.md) before enabling provider-limit polling
 or supplying search credentials. Extensions execute with your user permissions.
 
+## Tab Status
+
+Tab Status reports Pi's state in terminal tabs. iTerm2 gets a coloured dot,
+subtitle and Session Status detail: accent while working, warning while a dialog
+needs input, dim when idle, and red after a failed turn until the next prompt.
+Working details name the current phase or tools; idle details say `Done`.
+Set `tabStatus.detail: "reply"` to send the first 80 characters of the last
+assistant reply instead, including when restoring history. Blocking extension dialogs use
+Pi's public UI prompt events. Background Subagents and Shell Jobs keep the tab
+working by default, including after main finishes.
+
+Progress animates the tab while working, pauses during dialogs and Rate-limit
+Recovery waits, turns red after a failed turn, and clears at idle. It is on by
+default only with a verified supporting version or advertised `TERM_FEATURES=P`:
+iTerm2 3.6.7+ automatically (Session Status needs 3.7.0+), Ghostty 1.2.0+,
+Windows Terminal 1.6+, or WezTerm nightlies from `20250209-182623-44866cc1`
+onward. WezTerm does not support paused progress; waits remain indeterminate there. Unknown versions
+and older terminals stay off to avoid interpreting progress as notifications.
+If Pi's `terminal.showTerminalProgress` setting is on, Pi owns progress instead;
+its indeterminate-only progress does not include background work or paused/error
+states. iTerm2 detection uses `TERM_PROGRAM=iTerm.app` or `LC_TERMINAL=iTerm2`
+(the latter also works over SSH, but is ignored when another terminal sets
+`TERM_PROGRAM`). iTerm2 3.6.6 supports the progress protocol but normally exports
+`TERM_FEATURES` without `P`, so automatic progress stays off there; 3.6.7 adds
+`P` ([changelog](https://iterm2.com/downloads/stable/iTerm2-3_6_7.changelog)).
+Windows Terminal does not export `TERM_PROGRAM_VERSION`, so its standard
+environment never enables automatic progress. On Windows Terminal 1.6+, set
+`tabStatus.progress: true` to enable it. This override also enables progress in
+iTerm2 3.6.6. Multiplexers need `LC_TERMINAL_VERSION` for version detection;
+their own `TERM_PROGRAM_VERSION` is never used as the outer terminal's version.
+
+Settings in `pi-extras.json`, applied on `/reload`:
+
+```json
+{
+  "tabStatus": {
+    "enabled": true,
+    "sessionStatus": "auto",
+    "progress": "auto",
+    "busyWhileBackground": true,
+    "detail": "done"
+  }
+}
+```
+
+`sessionStatus` and `progress` can also be `true` to force version support or
+`false` to disable them. Session Status still requires iTerm2 identity. Force
+progress only when you know the terminal supports it; older terminals can post
+notifications for every progress update.
+Only the top-level interactive TUI with a TTY writes sequences. Print, JSON,
+RPC and in-process children stay silent. Writes use the TUI's public terminal,
+obtained through a zero-row widget, outside its synchronous render frames.
+Both fields clear on exit and reset on startup. Reload preserves tab metadata
+until the new runtime has its background counts. Disabling Tab Status and
+reloading clears only metadata it previously owned. Uninstalling pi-extras then
+reloading can leave a stale status dot until another program resets it.
+Idle is delayed 1.5 seconds to
+avoid transient completion alerts. A crash can leave a stale tab until the next
+start. Inside tmux, use `set -g allow-passthrough all` so hidden panes can update
+the tab too. Busy status is resent each second; final idle is sent twice.
+Sequences use tmux's DCS wrapper. iTerm2 can show these details in its Cockpit
+and status-change alerts; see [security and privacy](docs/security.md#tab-status).
+
 ## Cache Compaction
 
 On by default. To compact, Pi normally sends the conversation to the model as

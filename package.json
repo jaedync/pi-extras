@@ -30,6 +30,7 @@
   ],
   "pi": {
     "extensions": [
+      "extensions/tab-status.ts",
       "extensions/status-plus.ts",
       "extensions/usage-guard.ts",
       "extensions/rate-limit-recovery.ts",

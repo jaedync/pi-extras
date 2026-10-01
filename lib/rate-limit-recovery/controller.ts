@@ -72,7 +72,7 @@ export class Recovery {
 			wait: this.wait,
 			...(options.random ? { random: options.random } : {}),
 			ui: (ctx, who, resumeAtMs, cancel) => this.role === "main" && ctx.mode === "tui" && ctx.hasUI
-				? waitUI(ctx, { provider: who }, { resumeAtMs }, Date.now, cancel, (remaining) => `Rate limited on ${who} \u00b7 retrying in ${remaining}`) : undefined,
+				? waitUI(ctx, { provider: who }, { resumeAtMs }, Date.now, cancel, (remaining) => `Rate limited on ${who} \u00b7 retrying in ${remaining}`, pi) : undefined,
 			onFailure: (error) => operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `transient wait failed (${error instanceof Error ? error.name : "unknown error"})`),
 		});
 	}
@@ -178,7 +178,7 @@ export class Recovery {
 		let finished = false;
 		try {
 			this.pi.appendEntry(RECOVERY_TYPE, { kind: "paused", provider: limit.provider, model: limit.model, pausedAt: new Date(plan.pausedAtMs).toISOString(), expectedResumeAt: new Date(plan.resumeAtMs).toISOString(), attempt: this.attempts });
-			ui = waitUI(ctx, limit, plan, this.now, () => this.cancel());
+			ui = waitUI(ctx, limit, plan, this.now, () => this.cancel(), undefined, this.pi);
 			finished = await this.wait(plan.delayMs, signal, ui.tick);
 		} catch (error) { this.fail(ctx, error); }
 		finally {

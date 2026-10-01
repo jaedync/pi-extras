@@ -22,6 +22,7 @@ import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings }
 import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";
 import { type InspectorHost, openAgentInspector } from "../lib/subagents/inspector.ts";
 import { watchRun } from "../lib/run-watch.ts";
+import { announceBackground, BACKGROUND_REQUEST_EVENT } from "../lib/tab-status/events.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, messageResultRow, rememberAgent, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { offerRows } from "../lib/late-rows.ts";
 import { markRow } from "../lib/tool-row.ts";
@@ -90,6 +91,10 @@ function runtimeSource(ctx: ExtensionContext): () => Promise<ModelRuntime> {
 export default function subagents(pi: ExtensionAPI) {
 	if (process.env.PI_SUBAGENTS === "off") return;
 	let state: SessionState | null = null;
+	let backgroundCtx: ExtensionContext | undefined;
+	// Resumed children keep `restored` provenance; only their current live state means work.
+	const publishBackground = () => { if (state && backgroundCtx) announceBackground(pi, backgroundCtx, "subagents", state.team.list().filter((r) => LIVE_STATES.has(r.state)).length); };
+	pi.events?.on(BACKGROUND_REQUEST_EVENT, publishBackground);
 	const widget = createAgentsWidget();
 	let mainRun = 0;
 	pi.on("agent_start", async () => { mainRun++; });
@@ -262,6 +267,7 @@ export default function subagents(pi: ExtensionAPI) {
 		catch (error) { ctx.ui.notify(`subagents: could not read run log ${logFile}: ${(error as Error).message}`, "warning"); }
 		const unsubscribe = team.onChange((record) => {
 			widget.update();
+			publishBackground();
 			const saveWarning = (error: unknown) => ctx.ui.notify(`subagents: could not save ${index.file}: ${(error as Error).message}`, "warning");
 			try { index.update(team.list(), saveWarning); }
 			catch (error) { saveWarning(error); }
@@ -333,6 +339,7 @@ export default function subagents(pi: ExtensionAPI) {
 	pi.on("session_start", async (event, ctx) => {
 		await state?.close();
 		state = null;
+		backgroundCtx = undefined;
 		// Two subagent systems in one session would split the model's attention and the user's.
 		if (foreign("subagent")) {
 			ctx.ui.notify("pi-extras Subagents is off: another extension already provides a subagent tool. Remove one of them.", "warning");
@@ -340,6 +347,8 @@ export default function subagents(pi: ExtensionAPI) {
 		}
 		try { state = build(ctx); }
 		catch (error) { ctx.ui.notify(`subagents: ${(error as Error).message}`, "warning"); return; }
+		backgroundCtx = ctx;
+		publishBackground();
 		const current = state;
 		for (const tool of [subagentTool(current.tools, MAIN), mainMessageTool(current.tools)]) {
 			if (foreign(tool.name)) {
@@ -390,6 +399,8 @@ export default function subagents(pi: ExtensionAPI) {
 		reconcileTimer = null;
 		widget.detach();
 		await state?.close(event.reason);
+		if (backgroundCtx && event.reason !== "reload") announceBackground(pi, backgroundCtx, "subagents", 0);
+		backgroundCtx = undefined;
 		state = null;
 	});
 
