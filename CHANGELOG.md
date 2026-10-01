@@ -2,21 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## Unreleased
+## 0.18.1 - 2026-10-01
 
 ### Changed
 
-- Phase Spinner restores a per-step stopwatch beside the status word, while
-  total Time stays on the right. The step clock ticks in tenths and shares the
-  status's alert color, including with reduced motion. Narrow widths drop TPS,
-  TTFT, tokens, then total Time before shortening the step status. Native retry
-  countdowns are kept without an extra step clock.
-- Tab Status progress turns on automatically in Windows Terminal, including
-  WSL, without a version check. Windows Terminal 1.6+ supports it; older
-  versions silently ignore it. `progress: false` still turns it off.
-- Windows Terminal progress packets include explicit percentages for every
-  state. The full yellow warning ring means Pi is waiting for dialog input or
-  for a rate-limit wait to finish.
+- Phase Spinner: a stopwatch beside the status word shows how long the current
+  step has run, such as `Thinking… 00:12.4`, so long thinking or a stalled
+  request is easy to see. `Time` on the right still shows the whole prompt.
+  `1 token` is now singular.
+- Tab Status turns on progress by itself in Windows Terminal, including WSL
+  tabs. Windows Terminal doesn't report its version, but every release since
+  1.6 draws the ring and older ones ignore it. A failed turn fills the ring red,
+  and a full yellow ring means Pi is waiting on you. `tabStatus.progress: false`
+  turns it off.
 
 ## 0.18.0 - 2026-10-01
 

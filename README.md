@@ -152,20 +152,20 @@ older terminals can show every progress update as a notification:
 | iTerm2 | 3.6.7 | 3.6.6 supports progress but doesn't advertise it; set `progress: true` |
 | Ghostty | 1.2.0 | |
 | WezTerm | nightly `20250209-182623-44866cc1` | No paused state, so waits stay indeterminate |
-| Windows Terminal | 1.6 | Automatic without a version check because it doesn't report its version; older versions ignore it |
+| Windows Terminal | 1.6 | It doesn't report its version, so `WT_SESSION` alone turns it on; older versions ignore it |
 
-Unknown terminals and older versions stay off, except Windows Terminal:
-`WT_SESSION` enables progress without a version check. This works in WSL,
-where Windows Terminal passes `WT_SESSION`, but not over SSH, which does not
-pass it by default. An explicit other `TERM_PROGRAM`, such as `vscode`, wins
-over an inherited `WT_SESSION`. iTerm2 is detected from
-`TERM_PROGRAM=iTerm.app`, or from `LC_TERMINAL=iTerm2` (which also works over
-SSH) when no other terminal sets `TERM_PROGRAM`. Inside tmux or screen, the
-version comes from `LC_TERMINAL_VERSION`, never from the multiplexer's own
-version. Windows Terminal needs no version hint. If Pi's
-`terminal.showTerminalProgress` setting is on, Pi owns
-progress instead; Pi's bar is indeterminate only and ignores background work,
-pauses and errors.
+Unknown terminals and older versions stay off. Windows Terminal is the
+exception: `WT_SESSION` turns progress on, in WSL tabs too, since Windows
+Terminal passes it into WSL. SSH sessions don't get `WT_SESSION`, so they stay
+off. Another terminal's `TERM_PROGRAM`, such as `vscode`, wins over an
+inherited `WT_SESSION`. iTerm2 is detected from `TERM_PROGRAM=iTerm.app`, or
+from `LC_TERMINAL=iTerm2` (which also works over SSH) when no other terminal
+sets `TERM_PROGRAM`. Inside tmux or screen, the version comes from
+`LC_TERMINAL_VERSION`, never from the multiplexer's own version.
+
+If Pi's `terminal.showTerminalProgress` setting is on, Pi owns progress
+instead; Pi's bar is indeterminate only and ignores background work, pauses
+and errors.
 
 Inside tmux, add `set -g allow-passthrough all` so hidden panes can update the
 tab. Tab Status wraps its sequences for tmux, resends busy status every second
@@ -483,16 +483,15 @@ The editor's top divider says what the agent is doing:
   a point, a retry drains, and a branch summary walks every row.
 - **Color:** the status turns amber after 10 seconds of thinking, and red when
   no tokens have come for 10 seconds.
-- **The clocks:** a per-step stopwatch sits beside the word, in tenths, and
-  shares its amber/red tone. It restarts for a new request, thinking, reply,
-  tool call or running-tool step; later thinking wordings keep the same clock.
-  Pi's statuses get their own clock, except retries that already show a countdown.
-  Standalone idle statuses show only this clock, without a duplicate total.
-  Reduced motion holds the spinner still but keeps these clocks ticking.
-- **The right side** keeps TPS, time to first token and total `Time`.
-  Narrow terminals drop TPS first, then TTFT, then tokens, then total `Time`
-  and its hidden-line count. Long tool names and playful details retire before
-  the step clock; the word, spinner and step clock go last. The status never wraps.
+- **The clocks:** a stopwatch beside the word shows how long the current step
+  has run, in tenths, in the word's color. It restarts for each new request,
+  thinking, tool call, tool run and reply; `Still thinking` and the later
+  wordings keep counting. `Time` on the right is the whole prompt. Pi's
+  statuses get a stopwatch too, except a retry, whose own text counts down.
+  Reduced motion stops the spinner but not the clocks.
+- **Narrow terminals** drop TPS first, then TTFT, then the token count, then
+  `Time`. Then a long tool name shortens to `Writing…` or `Running…`. The word,
+  the spinner and the stopwatch go last, and the status never wraps.
 
 While the model thinks, its newest three lines show dimly at the bottom of the
 conversation, above queued messages. A tool call the model is still writing
