@@ -47,9 +47,10 @@ cat > "$T/agent/settings.json" <<EOF
   "theme": "quiet", "tuiMode": "fullscreen", "fullscreenScrollbar": "always", "hideThinkingBlock": true,
   "quietStartup": true, "defaultProjectTrust": "always", "lastChangelogVersion": "$("$PI" --version)", "enableInstallTelemetry": false }
 EOF
-# Likewise for pi-extras' own release notes.
+# Likewise for pi-extras' own release notes. One verb, so every render reads the same.
 cat > "$T/agent/pi-extras.json" <<EOF
-{ "releaseNotes": { "seen": "$(node -p "require('$REPO/package.json').version")" } }
+{ "releaseNotes": { "seen": "$(node -p "require('$REPO/package.json').version")" },
+  "phaseSpinner": { "verbs": ["Proofing|Proofed"] } }
 EOF
 cp "$REPO/themes/quiet.json" "$T/agent/themes/"
 cp "$VOICE_HOME/tiers.json" "$T/voice/"
