@@ -5,8 +5,8 @@
  * Children are Pi sessions in this process. Which models they may use comes
  * from the session's scoped models; which model suits what comes from the
  * user's guide file. Both are read at session start and on /reload only, so
- * the tool description never changes mid-session. Children do not survive a
- * restart or reload.
+ * the tool description never changes mid-session. Child transcripts and their
+ * roster survive reloads and restarts, with interrupted work verified on resume.
  */
 import * as sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ModelRuntime, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -31,7 +31,7 @@ import type { ShownOverlay } from "../lib/band/modal.ts";
 import { formatMoney } from "../lib/status-plus-logic.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
-import { ChildIndex, legacyRecords, restoreRecord } from "../lib/subagents/restore.ts";
+import { ChildIndex, legacyRecords, restoreRecord, restorationNotice, shouldResume } from "../lib/subagents/restore.ts";
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
@@ -53,7 +53,8 @@ interface SessionState {
 	mail: MainMail;
 	tools: ToolContext;
 	config: SubagentsConfig;
-	close(): Promise<void>;
+	restore(reason: string): Promise<void>;
+	close(reason?: string): Promise<void>;
 }
 
 function thinkingSettings(cwd: string, agentDir: string): ThinkingSettings {
@@ -234,9 +235,19 @@ export default function subagents(pi: ExtensionAPI) {
 
 		return {
 			team, mail, tools, config,
-			async close() {
+			async restore(reason) {
+				const interrupted = team.list().filter((record) => record.state === "interrupted");
+				if (interrupted.length === 0) return;
+				const resume = shouldResume(reason, config.resumePolicy);
+				if (resume) for (const record of interrupted) await team.send(MAIN, record.name, "Continue your interrupted task and report the outcome.");
+				const notice = restorationNotice(interrupted, resume, reason);
+				pi.sendMessage({ customType: "subagent-restore", content: notice, display: true, details: { reason, resumed: resume, names: interrupted.map((r) => r.name) } }, { triggerTurn: false });
+				ctx.ui.notify(notice, "warning");
+			},
+			async close(reason = "quit") {
 				mail.dispose();
 				await team.close();
+				index.save(team.list(), reason);
 				unsubscribe();
 			},
 		};
@@ -249,7 +260,7 @@ export default function subagents(pi: ExtensionAPI) {
 		return owner !== undefined && !ours(owner.sourceInfo?.path);
 	};
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
 		await state?.close();
 		state = null;
 		// Two subagent systems in one session would split the model's attention and the user's.
@@ -270,6 +281,7 @@ export default function subagents(pi: ExtensionAPI) {
 		if (ctx.hasUI && ctx.mode === "tui") {
 			widget.attach(ctx.ui as never, () => ({ records: current.team.list(), pending: current.mail.pending() }), inspect);
 		}
+		await current.restore(event.reason);
 	});
 
 	// A note appended without waking main raises no event, so look for it.
@@ -302,11 +314,11 @@ export default function subagents(pi: ExtensionAPI) {
 		if (typeof message.details?.id === "string") state?.mail.acknowledge(message.details.id);
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (event) => {
 		if (reconcileTimer) clearInterval(reconcileTimer);
 		reconcileTimer = null;
 		widget.detach();
-		await state?.close();
+		await state?.close(event.reason);
 		state = null;
 	});
 

@@ -22,6 +22,8 @@ export interface SubagentsConfig {
 	groupWaitMs: number;
 	/** Tools a child never gets, on top of the built-in exclusions. */
 	childToolsExclude: string[];
+	/** Reload resumes interrupted runs; other starts notify unless set to always. */
+	resumePolicy: "reload" | "always" | "notify";
 }
 
 export const DEFAULTS: SubagentsConfig = {
@@ -31,6 +33,7 @@ export const DEFAULTS: SubagentsConfig = {
 	batchMs: 2_000,
 	groupWaitMs: 60_000,
 	childToolsExclude: [],
+	resumePolicy: "reload",
 };
 
 export const GUIDE_FILE = "subagent-models.md";
@@ -51,6 +54,7 @@ export function parseConfig(section: Record<string, unknown>): SubagentsConfig {
 		batchMs: positiveInt(section.batchMs, DEFAULTS.batchMs, 30_000),
 		groupWaitMs: positiveInt(section.groupWaitMs, DEFAULTS.groupWaitMs, 30 * 60_000),
 		childToolsExclude: exclude,
+		resumePolicy: section.resumePolicy === "always" || section.resumePolicy === "notify" ? section.resumePolicy : DEFAULTS.resumePolicy,
 	};
 	const model = section.defaultModel;
 	return typeof model === "string" && model.trim().length > 0 ? { ...config, defaultModel: model.trim() } : config;

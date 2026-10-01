@@ -298,6 +298,51 @@ test("an unknown model fails the child, not the session", { timeout: 20_000 }, a
 	await team.close();
 });
 
+test("the real parent SDK reload rebuilds its roster, resumes running children, and appends one notice", { timeout: 20_000 }, async () => {
+	const { fileURLToPath } = await import("node:url");
+	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
+	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
+	runtime.registerNativeProvider(faux.provider);
+	const model = faux.getModel("cheap");
+	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false } });
+	const loader = new sdk.DefaultResourceLoader({ cwd: scratch, agentDir, settingsManager,
+		noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+		additionalExtensionPaths: [fileURLToPath(new URL("../extensions/subagents.ts", import.meta.url))] });
+	await loader.reload();
+	assert.deepEqual(loader.getExtensions().errors, []);
+	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model,
+		resourceLoader: loader, settingsManager, sessionManager: sdk.SessionManager.create(scratch, join(scratch, "parents")) });
+	try {
+		await session.bindExtensions({ mode: "print", onError: (error: unknown) => { throw error; } } as never);
+		const spawn = () => session.agent.state.tools.find((tool: any) => tool.name === "subagent")!;
+		faux.setResponses([ai.fauxAssistantMessage("Finished child report.")]);
+		await spawn().execute("spawn-finished", { name: "finished", task: "Finish now", model: "faux/cheap" }, undefined);
+		const dir = join(agentDir, "sessions", "subagents", session.sessionManager.getSessionId());
+		const index = () => JSON.parse(readFileSync(join(dir, "index.json"), "utf8"));
+		for (let i = 0; i < 200 && index().records[0]?.state !== "idle"; i++) await new Promise((r) => setTimeout(r, 10));
+		assert.equal(index().records[0]?.state, "idle");
+		faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 30" }))]);
+		await spawn().execute("spawn-running", { name: "running", task: "Wait for work", model: "faux/cheap" }, undefined);
+		for (let i = 0; i < 200 && !index().records.some((r: any) => r.activity === "bash sleep 30"); i++) await new Promise((r) => setTimeout(r, 10));
+		assert.ok(index().records.some((r: any) => r.activity === "bash sleep 30"));
+		faux.setResponses([ai.fauxAssistantMessage("Reload resumed me.")]);
+		await session.reload();
+		for (let i = 0; i < 200 && index().records.find((r: any) => r.name === "running")?.state !== "idle"; i++) await new Promise((r) => setTimeout(r, 10));
+		assert.equal(index().records.length, 2);
+		assert.equal(index().records.find((r: any) => r.name === "running")?.report, "Reload resumed me.");
+		const notices = session.messages.filter((m: any) => m.role === "custom" && m.customType === "subagent-restore");
+		assert.equal(notices.length, 1);
+		assert.match(JSON.stringify(notices), /Auto-resuming.*running.*Wait for work.*bash sleep 30/);
+		faux.setResponses([ai.fauxAssistantMessage("Finished child reached.")]);
+		const message = session.agent.state.tools.find((tool: any) => tool.name === "message")!;
+		const result = await message.execute("message-finished", { to: "finished", text: "Answer again" }, undefined);
+		assert.equal((result.details as any).delivered, "resumed");
+	} finally {
+		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+		session.dispose();
+	}
+});
+
 test.after(() => rmSync(scratch, { recursive: true, force: true }));
 
 test("with another extension's subagent tool, Subagents stands down entirely", { timeout: 20_000 }, async () => {

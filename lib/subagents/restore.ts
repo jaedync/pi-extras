@@ -54,7 +54,8 @@ export class ChildIndex {
 	}
 
 	save(records: readonly AgentRecord[], shutdown?: string): void {
-		const data: IndexData = { ...this.data, records: [...records], ...(shutdown ? { shutdown } : {}) };
+		const { shutdown: _previousShutdown, ...previous } = this.data;
+		const data: IndexData = { ...previous, records: [...records], ...(shutdown ? { shutdown } : {}) };
 		mkdirSync(this.dir, { recursive: true });
 		const temporary = `${this.file}.${process.pid}.${randomUUID()}.tmp`;
 		try {
@@ -66,6 +67,18 @@ export class ChildIndex {
 
 	get shutdown(): string | undefined { return this.data.shutdown; }
 	get cwd(): string { return this.data.cwd; }
+}
+
+export function shouldResume(reason: string, policy: "reload" | "always" | "notify"): boolean {
+	return policy === "always" || (policy === "reload" && reason === "reload");
+}
+
+export function restorationNotice(records: readonly AgentRecord[], resumed: boolean, reason: string): string {
+	const line = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 300);
+	const summary = records.map((r) => `${r.name}: task ${line(r.task)}; last activity ${line(r.activity ?? r.state)}`).join("\n");
+	return `Subagents interrupted by ${reason}. ${resumed ? "Auto-resuming" : "Not resumed"}:\n${summary}\n`
+		+ (resumed ? "Their last tool calls may not have completed. Each child will verify before continuing."
+			: 'Resume with message({ to: "<name>", text: "Continue" }) or /subagents resume <name>. Do not wait for their reports until resumed.');
 }
 
 /** Pi's active branch, not abandoned tool calls, determines whether the last run finished. */
