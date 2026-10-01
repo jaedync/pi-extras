@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { BULLET_GLYPH } from "../lib/band/glyph.ts";
 import test from "node:test";
 import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
@@ -102,7 +103,7 @@ test("Pi's tool row still has the lookups Tool Display patches, and draws an ado
 		const adopted = new ToolExecutionComponent("x_tool", "call-1", { note: "hi" }, {}, tool as never, ui as never, "/work");
 		adopted.updateResult({ content: [{ type: "text", text: "done" }], isError: false } as never, false);
 		const lines = adopted.render(60).map((line) => stripTerminalSequences(line).trimEnd()).filter((line) => line !== "");
-		assert.deepEqual(lines, ["   x_tool their call", "     their result"]);
+		assert.deepEqual(lines, [`${BULLET_GLYPH} x_tool their call`, "    their result"]);
 		const other = { ...tool };
 		const left = new ToolExecutionComponent("x_tool", "call-2", {}, {}, other as never, ui as never, "/work");
 		assert.equal((left as unknown as { getCallRenderer(): unknown }).getCallRenderer(), other.renderCall);

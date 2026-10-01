@@ -310,6 +310,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			mode: (): ThinkingMode | undefined => (settings.enabled ? settings.thinking : undefined),
 			hiddenAtStart: () => hiddenAtStart,
 			theme: () => host.theme,
+			gutter: () => true,
 			summary: (message, index) => {
 				const duration = thinkingDuration(message, index);
 				return duration === undefined ? "∴ Thought" : `∴ Thought for ${Math.round(duration / 1_000)}s`;

@@ -28,6 +28,8 @@ export interface View {
 }
 
 export interface ToolSpec {
+	/** Absent means unknown. Titles and user arguments never select an animation. */
+	readonly name?: string;
 	/** The popup's title, e.g. `bash · 3 commands`. */
 	label(view: View): string;
 	title(view: View): Seg[];
@@ -60,12 +62,12 @@ function viewOf(kit: Kit, row: RowState): View | undefined {
 	return { kit, context: row.context, row, theme: row.theme, paint: painter(row.theme), result: row.result as ResultInput | undefined, now: kit.now() };
 }
 
-export function bandOf(spec: ToolSpec, view: View): { segs: Seg[]; rail: Seg[]; phase: BandPhase } {
+export function bandOf(spec: ToolSpec, view: View): { segs: Seg[]; rail: Seg[]; phase: BandPhase; toolName: string } {
 	const phase = phaseOf(view.row, view.context, view.now, spec.timeoutMs?.(view));
 	const failure = spec.failure?.(view);
 	const segs = spec.title(view);
 	const railSegs = rail(phase, tookMs(view.row, view.now), { lead: spec.lead?.(view, phase) ?? [], ...(failure ? { failure } : {}) });
-	return { segs, rail: railSegs, phase };
+	return { segs, rail: railSegs, phase, toolName: spec.name ?? "" };
 }
 
 /** A bash call copies its command, a file tool its path, and every tool its output. */

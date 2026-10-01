@@ -23,7 +23,7 @@ const TITLE_DURATION_SUFFIX = new RegExp(` after ${DURATION_PATTERN}$`);
 /** Output lines under a collapsed row; the same as Tool Display's bash row. */
 export const PREVIEW_LINES = 4;
 /** Output sits under the band's title, which starts after the row's margin. */
-export const BODY_INDENT = 3 + ROW_MARGIN;
+export const BODY_INDENT = 2 + ROW_MARGIN;
 
 export type PaintKey = "toolTitle" | "toolOutput" | "muted" | "dim" | "warning" | "success" | "error" | "accent";
 

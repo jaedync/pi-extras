@@ -54,6 +54,7 @@ function listing(view: View, summary: Summary, width: number): string[] {
 
 export function searchSpec(tool: Tool): ToolSpec {
 	return {
+		name: tool,
 		label: () => tool,
 		title(view) {
 			const summary = summaryOf(view, tool);

@@ -5,6 +5,7 @@ import type { PopupSource } from "../../lib/band/popup.ts";
 import type { ChainRun } from "../../lib/chain/run.ts";
 import type { Kit, RenderContext } from "../../lib/tool-display/kit.ts";
 import { quiet } from "./quiet-theme.ts";
+import { BULLET_GLYPH } from "../../lib/band/glyph.ts";
 
 export const theme = quiet();
 
@@ -74,8 +75,8 @@ export function row(renderers: Renderers, args: unknown, toolCallId = "call-1") 
 }
 
 export const text = (value: string, details?: unknown) => ({ content: [{ type: "text", text: value }], details });
-/** A transcript band: spinner at column 1, title from column 3, rail ending one column before the edge. */
-export const band = (title: string, rail = "", width = 60, spinner = rail === "queued" ? "•" : " ") => ` ${spinner} ${title}${" ".repeat(Math.max(1, width - 4 - title.length - rail.length))}${rail}`.trimEnd();
+/** A transcript band: bullet at column zero, title after its two-column gutter. */
+export const band = (title: string, rail = "", width = 60, mark = BULLET_GLYPH) => `${mark} ${title}${" ".repeat(Math.max(1, width - 3 - title.length - rail.length))}${rail}`.trimEnd();
 
 /** The foreground color escape `piece` is drawn in, the last one set before it. */
 export function colorOf(raw: string, piece: string): string | undefined {

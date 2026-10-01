@@ -72,6 +72,7 @@ function statusText(details: RenderDetails, results: readonly SearchResult[]): s
 
 export function webSearchSpec(name: string): ToolSpec {
 	return {
+		name,
 		label: () => name,
 		title(view) {
 			const query = stringArg(view.context.args, "query");

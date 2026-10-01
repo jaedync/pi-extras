@@ -2,6 +2,7 @@ import { test } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { quiet } from "./support/quiet-theme.ts";
 import assert from "node:assert/strict";
+import { BULLET_GLYPH } from "../lib/band/glyph.ts";
 import { transcriptLines } from "../lib/subagents/transcript.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
@@ -101,7 +102,7 @@ test("a subagent main waits on shows the task, the full rail and what it is doin
 	const lines = row.render(100).map(strip);
 	assert.match(lines[0]!, /count-lib  gpt-6-luna  Count the files.*ctx 5%  \$0\.0021  3\.0s/);
 	assert.equal(lines.length, 2);
-	assert.match(lines[1]!, /^ {5}bash ls lib/);
+	assert.match(lines[1]!, /^ {4}bash ls lib/);
 	current = { ...record, state: "idle", activity: null, endedAt: record.startedAt! + 47_000 };
 	const done = row.render(100).map(strip);
 	assert.equal(done.length, 1);
@@ -215,17 +216,17 @@ test("an unstarted subagent or message call spins only while the model writes it
 		subagent: (context: object, streaming: () => boolean) => subagentCallRow({ task: "Find it" }, theme, context, () => undefined, streaming),
 		message: (context: object, streaming: () => boolean) => messageCallRow({ to: "scout", text: "hi" }, theme, context, streaming),
 	};
-	const margin = (lines: string[]) => strip(lines[0]!).slice(0, 3);
+	const margin = (lines: string[]) => strip(lines[0]!).slice(0, 2);
 	for (const [kind, row] of Object.entries(rows)) {
 		const writing = { state: {}, isPartial: true, executionStarted: false, argsComplete: false };
-		assert.match(margin(row(writing, () => true).render(80)), /^ [^\s•] $/, `${kind}: written now, it spins`);
-		assert.equal(margin(row({ ...writing, argsComplete: true }, () => false).render(80)), " • ", `${kind}: written, it waits its turn`);
+		assert.equal(margin(row(writing, () => true).render(80)), `${BULLET_GLYPH} `, `${kind}: written now, its bullet is dim`);
+		assert.equal(margin(row({ ...writing, argsComplete: true }, () => false).render(80)), `${BULLET_GLYPH} `, `${kind}: written, it waits its turn`);
 		// A resumed session rebuilds a call without its result as unstarted and never completes its arguments.
-		assert.equal(margin(row({ ...writing, state: {} }, () => false).render(80)), "   ", `${kind}: rebuilt from history, it stays still`);
+		assert.equal(margin(row({ ...writing, state: {} }, () => false).render(80)), "  ", `${kind}: rebuilt from history, it stays still`);
 		// The row keeps what it was built as: one built while streaming stops once the stream ends.
 		let streaming = true;
 		const live = row({ ...writing, state: {} }, () => streaming);
 		streaming = false;
-		assert.equal(margin(live.render(80)), "   ", `${kind}: its message ended`);
+		assert.equal(margin(live.render(80)), "  ", `${kind}: its message ended`);
 	}
 });

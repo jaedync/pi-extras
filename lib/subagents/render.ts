@@ -33,7 +33,7 @@ export type { MarkdownSource } from "../band/message.ts";
 export const REPORT_PREVIEW_LINES = 3;
 export const MESSAGE_PREVIEW_LINES = 8;
 /** Text sits under the band's title, which starts after the row's margin. */
-const BODY_INDENT = 3 + ROW_MARGIN;
+const BODY_INDENT = 2 + ROW_MARGIN;
 const DONE = Number.POSITIVE_INFINITY;
 
 type RowContext = { state?: unknown; isPartial?: boolean; executionStarted?: boolean; argsComplete?: boolean; isError?: boolean; expanded?: boolean } | undefined;
@@ -71,7 +71,7 @@ const paintOf = (theme: Theme) => (color: string, text: string): string => {
 const oneLine = (text: unknown): string => String(text ?? "").replace(/\s+/g, " ").trim();
 
 function band(theme: Theme, width: number, phase: BandPhase, segs: Seg[], rail: Seg[], margin: true | "blank" = true): string {
-	return renderBand(theme, paletteFrom(theme), { width, phase, segs, rail, clockMs: Date.now(), margin });
+	return renderBand(theme, paletteFrom(theme), { width, phase, segs, rail, clockMs: Date.now(), margin, toolName: "subagent" });
 }
 
 /** One line of what an agent is doing, under its band. */

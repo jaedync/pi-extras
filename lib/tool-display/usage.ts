@@ -45,6 +45,7 @@ function resetText(limit: UsageReportLimit): string {
 }
 
 export const usageSpec: ToolSpec = {
+	name: "usage",
 	label: () => "usage",
 	title(view) {
 		const report = reportOf(view);

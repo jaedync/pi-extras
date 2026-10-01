@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { BULLET_GLYPH } from "../lib/band/glyph.ts";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -154,10 +155,10 @@ test("a resumed session shows the saved steps of a chained command", () => {
 	bash.renderResult({ content: [{ type: "text", text: "FAIL x\n\nCommand exited with code 2" }] }, { expanded: false, isPartial: false }, quiet(), context);
 	const lines = call.render(60).map((line: string) => stripTerminalSequences(line).trimEnd());
 	assert.match(lines[0], /exit 2 at 2 of 3$/, "a resumed row has no total time");
-	assert.match(lines[1], /^ {6}1 +make +1\.2s$/);
-	assert.match(lines[2], /^ {6}2 +make test +exit 2 +300ms$/);
-	assert.equal(lines[3], "          FAIL x");
-	assert.match(lines[4], /^ {6}3 +make dist +skipped$/);
+	assert.match(lines[1], /^ {4}1 +make +1\.2s$/);
+	assert.match(lines[2], /^ {4}2 +make test +exit 2 +300ms$/);
+	assert.equal(lines[3], "       FAIL x");
+	assert.match(lines[4], /^ {4}3 +make dist +skipped$/);
 });
 
 test("/tool-display reports, switches and saves its settings", async () => {
@@ -374,7 +375,7 @@ test("rows a reload builds before session start are rebuilt once it runs, tools 
 	offerRows(markRow({ name: "shell_job_start", renderShell: "self", renderCall: () => new Text("\u21b3 make  in background", 0, 0) }, "band"));
 	try {
 		h.start();
-		assert.match(drawn(bash), /^   \$ ls/m, "Tool Display's band");
+		assert.ok(drawn(bash).includes(`${BULLET_GLYPH} $ ls`), "Tool Display's band");
 		assert.match(drawn(bash), /a\.txt/);
 		assert.doesNotMatch(drawn(bash), /pi's own bash row/);
 		assert.match(drawn(job), /\u21b3 make {2}in background/);

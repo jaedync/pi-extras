@@ -182,7 +182,7 @@ test("a margined band starts its title after the shared bullet gutter", () => {
 	assert.equal(margined({ kind: "done", outcome: "ok", sinceMs: 5_000 }), `${BULLET_GLYPH} $ ls` + " ".repeat(18));
 	for (const phase of [{ kind: "calm" }, { kind: "writing" }, { kind: "queued" }] as const) assert.equal(margined(phase).slice(0, 6), `${BULLET_GLYPH} $ ls`);
 	assert.equal(margined({ kind: "running", elapsedMs: 250 }, 170).slice(0, 6), `${BULLET_GLYPH} $ ls`);
-	assert.equal(margined({ kind: "running", elapsedMs: 250 }, 500).slice(0, 6), "  $ ls");
+	assert.equal(margined({ kind: "running", elapsedMs: 250 }, 500).slice(0, 6), `${BULLET_GLYPH} $ ls`);
 	assert.equal(margined({ kind: "running", elapsedMs: 250 }, 500, "reduced").slice(0, 6), `${BULLET_GLYPH} $ ls`);
 	assert.equal(stripTerminalSequences(renderBand(quiet(), marginPalette, { width: 24, phase: { kind: "writing" }, segs: MARGIN_SEGS, rail: [], clockMs: 0 })).slice(0, 5), " $ ls", "no margin unless asked");
 });

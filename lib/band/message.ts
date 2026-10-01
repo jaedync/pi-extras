@@ -24,7 +24,7 @@ const MARKDOWN_MAX_DEPTH = 16;
 const PLAIN_MAX_CHARS = 64_000;
 export const MAX_EXPANDED_LINES = 1_000;
 /** Text sits under the band's title, which starts after the row's margin. */
-const BODY_INDENT = 3 + ROW_MARGIN;
+const BODY_INDENT = 2 + ROW_MARGIN;
 /** Laid-out bodies kept across redraws, newest last. */
 const LAYOUT_CACHE_SIZE = 32;
 

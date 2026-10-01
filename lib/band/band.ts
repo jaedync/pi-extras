@@ -8,10 +8,10 @@
  * Lines are built cell by cell so the background can change per column; the
  * foreground colors are the theme's own escapes.
  */
-import { visibleWidth } from "@earendil-works/pi-tui";
-import { bgSgr, mix, type Rgb } from "./color.ts";
+import { foregroundAnsi, rgbColor, visibleWidth } from "@earendil-works/pi-tui";
+import { bgSgr, mix, parseAnsiColor, type Rgb } from "./color.ts";
 import type { BandTheme, Palette } from "./palette.ts";
-import { frameAt, RUNNING, WRITING } from "./spinner.ts";
+import { BULLET_GLYPH, toolIndicator, toolKind } from "./glyph.ts";
 
 export type Outcome = "ok" | "fail" | "timeout" | "aborted";
 export type Motion = "full" | "reduced";
@@ -147,6 +147,7 @@ export interface LineSpec {
 }
 
 function fgCode(theme: BandTheme, color: string): string {
+	if (color.startsWith("\x1b[")) return color;
 	try { return theme.getFgAnsi(color); } catch { return ""; }
 }
 
@@ -207,6 +208,7 @@ export function paintLine(theme: BandTheme, palette: Palette | undefined, spec: 
 }
 
 function safeFg(theme: BandTheme, key: string, text: string): string {
+	if (key.startsWith("\x1b[")) return `${key}${text}\x1b[39m`;
 	try { return theme.fg(key, text); } catch { return text; }
 }
 
@@ -221,6 +223,7 @@ export interface BandSpec {
 	readonly rail: readonly Seg[];
 	readonly clockMs: number;
 	readonly motion?: Motion;
+	readonly toolName?: string;
 	readonly indent?: number;
 	/** A transcript row: the title starts `ROW_MARGIN` columns later, after the call's spinner; `blank` keeps the columns empty. */
 	readonly margin?: boolean | "blank";
@@ -234,7 +237,6 @@ export interface BandSpec {
  */
 export const ROW_MARGIN = 2;
 
-const STILL_MARK = "•";
 const BLANK_MARGIN: Seg = { text: " ".repeat(ROW_MARGIN), color: "" };
 
 /**
@@ -242,13 +244,25 @@ const BLANK_MARGIN: Seg = { text: " ".repeat(ROW_MARGIN), color: "" };
  * it waits, else blank. Frames follow the clock, not the call, so every
  * spinner on screen (the phase line's too) turns in step.
  */
-function marginSeg(phase: BandPhase, clockMs: number, motion: Motion): Seg {
+function indicatorColor(theme: BandTheme, blend: number): string {
+	const dim = parseAnsiColor(fgCode(theme, "dim")), accent = parseAnsiColor(fgCode(theme, "accent"));
+	if (!dim || !accent) return blend < .5 ? "dim" : "accent";
+	const [r,g,b] = mix(dim, accent, blend);
+	return foregroundAnsi(rgbColor(r,g,b), theme.getColorMode?.() ?? "truecolor");
+}
+function marginSeg(theme: BandTheme, phase: BandPhase, motion: Motion, toolName: string): Seg {
 	const mark = (glyph: string, color: string): Seg => ({ text: `${glyph}${" ".repeat(ROW_MARGIN - 1)}`, color });
 	switch (phase.kind) {
-		case "writing": return mark(motion === "full" ? frameAt(WRITING, clockMs) : STILL_MARK, "mdHeading");
-		case "running": return mark(motion === "full" ? frameAt(RUNNING, clockMs) : STILL_MARK, "toolOutput");
-		case "queued": return mark(STILL_MARK, "dim");
-		default: return BLANK_MARGIN;
+		case "writing": return mark(BULLET_GLYPH, "dim");
+		case "running": {
+			if (motion === "reduced") return mark(BULLET_GLYPH, "accent");
+			const fraction = phase.timeoutMs ? phase.elapsedMs / phase.timeoutMs : undefined;
+			const indicator = toolIndicator(phase.elapsedMs, fraction, toolKind(toolName, fraction));
+			return mark(indicator.glyph, indicatorColor(theme, indicator.blend));
+		}
+		case "queued": return mark(BULLET_GLYPH, "dim");
+		case "done": return mark(BULLET_GLYPH, phase.outcome === "ok" ? "success" : phase.outcome === "fail" ? "error" : phase.outcome === "timeout" ? "warning" : "muted");
+		default: return mark(BULLET_GLYPH, "dim");
 	}
 }
 
@@ -257,9 +271,9 @@ export function renderBand(theme: BandTheme, palette: Palette | undefined, spec:
 	const bgAt = palette ? bandBackground(palette, spec.phase, spec.width, spec.clockMs, motion) : undefined;
 	return paintLine(theme, palette, {
 		width: spec.width,
-		left: spec.margin ? [spec.margin === "blank" ? BLANK_MARGIN : marginSeg(spec.marginPhase ?? spec.phase, spec.clockMs, motion), ...spec.segs] : spec.segs,
+		left: spec.margin ? [spec.margin === "blank" ? BLANK_MARGIN : marginSeg(theme, spec.marginPhase ?? spec.phase, motion, spec.toolName ?? ""), ...spec.segs] : spec.segs,
 		rail: spec.rail,
-		...(spec.indent !== undefined ? { indent: spec.indent } : {}),
+		...(spec.indent !== undefined ? { indent: spec.indent } : spec.margin ? { indent: 0 } : {}),
 		...(bgAt ? { bgAt } : {}),
 		fallbackBg: fallbackKey(spec.phase),
 	});
@@ -268,6 +282,6 @@ export function renderBand(theme: BandTheme, palette: Palette | undefined, spec:
 /** Whether a phase still changes on its own, so its row needs animation ticks; a `margined` row spins while written. */
 export function isAnimated(phase: BandPhase, motion: Motion, margined = false): boolean {
 	if (phase.kind === "running") return true;
-	if (margined && phase.kind === "writing") return motion === "full";
+	if (margined && phase.kind === "writing") return false;
 	return phase.kind === "done" && motion === "full" && phase.sinceMs < FLASH_MS;
 }

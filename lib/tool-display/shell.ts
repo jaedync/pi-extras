@@ -22,7 +22,7 @@ export const OUTPUT_PREVIEW_LINES = 4;
 /** Output lines under the focused step of a collapsed chain. */
 export const STEP_PREVIEW_LINES = 3;
 /** Where a step's output starts with one-digit step numbers: under the step's command, past its number. */
-const STEP_OUTPUT_INDENT = BODY_INDENT + 5;
+const STEP_OUTPUT_INDENT = BODY_INDENT + 3;
 
 function commandOf(view: View): { text?: string; invalid: boolean } {
 	const raw = view.context.args && typeof view.context.args === "object" ? (view.context.args as { command?: unknown }).command : undefined;
@@ -79,7 +79,7 @@ function chainLines(view: View, run: ChainRun, width: number): string[] {
 	const pad = " ".repeat(indent);
 	const inner = Math.max(1, width - indent);
 	return shown.flatMap((index, number) => {
-		const line = stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: BODY_INDENT, now: view.now, digits, motion: view.kit.motion() });
+		const line = stepLine(view.theme, run.chain, run, index, number + 1, width, { indent: BODY_INDENT, compact: true, now: view.now, digits, motion: view.kit.motion() });
 		const output = stepOutput(run, index);
 		const wanted = view.context.expanded ? output.length > 0 : index === focus && output.length > 0;
 		if (!wanted) return [line];
@@ -89,6 +89,7 @@ function chainLines(view: View, run: ChainRun, width: number): string[] {
 }
 
 export const bashSpec: ToolSpec = {
+	name: "bash",
 	label(view) {
 		const run = runOf(view);
 		return run ? `bash · ${plural(position(run).shown.length, "command")}` : "bash";

@@ -18,6 +18,8 @@ import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { noteLate } from "../late-rows.ts";
+import { BULLET_GLYPH } from "../band/glyph.ts";
+import { ROW_MARGIN } from "../band/band.ts";
 
 export type ThinkingMode = "tail" | "collapsed" | "full";
 export const THINKING_MODES: readonly ThinkingMode[] = ["tail", "collapsed", "full"];
@@ -39,6 +41,7 @@ export interface ThinkingHost {
 	theme(): ThinkingTheme | undefined;
 	/** Enables spinner-owned live thinking and the transcript's display-only finished label. */
 	summary?(message: Message, run: number): string;
+	gutter?(): boolean;
 }
 
 type Content = { type: string; thinking?: unknown; text?: unknown };
@@ -262,6 +265,18 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 	const regions = children.filter((child): child is Component & { child: Component } => isRegion(child));
 	if (regions.length !== runs.length) return false;
 	const owner = self as object;
+	if (host.gutter?.()) {
+		let first = true;
+		for (let index = 0; index < children.length; index++) {
+			const child = children[index]!;
+			if (child.constructor.name === "Text") {
+				children[index] = assistantText(child, false, host);
+			} else if (child.constructor.name === "Markdown") {
+				children[index] = assistantText(child, first, host);
+				first = false;
+			}
+		}
+	}
 	const hiddenSpacers = new Set<Component>();
 	regions.forEach((region, run) => {
 		const summary = host.summary;
@@ -277,9 +292,9 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 			return;
 		}
 		const view = new ThinkingView({
-			full: region.child,
+			full: host.gutter?.() ? assistantText(region.child, false, host) : region.child,
 			text: runs[run]!,
-			pad: self.outputPad,
+			pad: host.gutter?.() ? summary ? 0 : ROW_MARGIN : self.outputPad,
 			host,
 			view: () => viewFor(summary && host.mode() !== "full" ? "collapsed" : host.mode() ?? mode, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false),
 			label: () => summary?.(message, run) ?? self.hiddenThinkingLabel,
@@ -290,6 +305,26 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 	});
 	if (hiddenSpacers.size) self.contentContainer.children = children.filter((child) => !hiddenSpacers.has(child));
 	return true;
+}
+
+export function assistantText(child: Component, first: boolean, host: ThinkingHost): Component {
+	let cached: { width: number; input: string[]; theme: ThinkingTheme | undefined; lines: string[] } | undefined;
+	return {
+		render(width) {
+			if (width <= 0) return [];
+			const input = child.render(Math.max(1, width - ROW_MARGIN));
+			const theme = host.theme();
+			if (cached?.width === width && cached.input === input && cached.theme === theme) return cached.lines;
+			const lines = input.map((line, index) => {
+				const mark = first && index === 0 ? `${theme?.fg("text", BULLET_GLYPH) ?? BULLET_GLYPH} ` : " ".repeat(ROW_MARGIN);
+				return truncateToWidth(mark + line, width, "");
+			});
+			cached = { width, input, theme, lines };
+			return lines;
+		},
+		invalidate: () => { cached = undefined; child.invalidate(); },
+		handleMouse: (event) => child.handleMouse?.({ ...event, x: event.x - ROW_MARGIN, width: Math.max(1, event.width - ROW_MARGIN) }),
+	};
 }
 
 type Update = (this: unknown, message: Message, isStreaming?: boolean) => void;
@@ -317,6 +352,8 @@ function implFor(host: ThinkingHost): Impl {
 			if (!mode) return original.call(self, message, isStreaming);
 			const hide = self.hideThinkingBlock;
 			const overrides = self.thinkingVisibilityOverrides;
+			const pad = self.outputPad;
+			if (host.gutter?.()) self.outputPad = 0;
 			// Pi builds every block in full; the views pick what to show of it.
 			self.hideThinkingBlock = false;
 			self.thinkingVisibilityOverrides = new Map();
@@ -325,6 +362,7 @@ function implFor(host: ThinkingHost): Impl {
 			} finally {
 				self.hideThinkingBlock = hide;
 				self.thinkingVisibilityOverrides = overrides;
+				self.outputPad = pad;
 			}
 			let styled = false;
 			try { styled = restyle(self, message, host, mode); } catch { styled = false; }

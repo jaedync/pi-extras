@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { BULLET_GLYPH } from "../lib/band/glyph.ts";
 import test from "node:test";
 import { CompactionSummaryMessageComponent, estimateTokens, getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
@@ -24,11 +25,12 @@ test("compaction is a purple band over a three-line Markdown preview on the comp
 		const row = new CompactionSummaryMessageComponent(message);
 		const raw = row.render(84);
 		const lines = plain(raw);
-		assert.match(lines[0]!, /^   compaction auto\s+386k → ~42k\s+\$0.012\s+12.5s$/);
+		assert.ok(lines[0]!.startsWith(`${BULLET_GLYPH} compaction auto`));
+		assert.match(lines[0]!, /386k → ~42k\s+\$0.012\s+12.5s$/);
 		assert.ok(raw[0]!.includes("\x1b[1m"));
 		assert.equal(lines.length, 5);
-		assert.ok(lines[1]!.startsWith("     Goal"));
-		assert.match(lines.at(-1)!, /^     … \d+ more lines \(click for all\)$/);
+		assert.ok(lines[1]!.startsWith("    Goal"));
+		assert.match(lines.at(-1)!, /^    … \d+ more lines \(click for all\)$/);
 		assert.ok(raw[1]!.startsWith(theme.getBgAnsi("customMessageBg")), "the body keeps Pi's compaction purple, apart from tool rows");
 		// The band leans well into the label's mauve, so it reads as the row's header.
 		const [r, g, b] = /48;2;(\d+);(\d+);(\d+)m/.exec(raw[0]!)!.slice(1).map(Number);
@@ -69,7 +71,8 @@ test("old sessions show before tokens without inventing a reason, time or after 
 	const undo = installCompactionBand(host({ lookup: () => undefined }));
 	try {
 		const row = new CompactionSummaryMessageComponent(message);
-		assert.match(plain(row.render(84))[0]!, /^   compaction\s+386k$/);
+		assert.ok(plain(row.render(84))[0]!.startsWith(`${BULLET_GLYPH} compaction`));
+		assert.match(plain(row.render(84))[0]!, /386k$/);
 		for (const width of [1, 2, 3, 8, 20, 40, 84]) assert.ok(row.render(width).every((line) => visibleWidth(line) <= width), `width ${width}`);
 	} finally { undo(); }
 });
@@ -175,7 +178,7 @@ test("branch changes drop abandoned records, and non-terminal sessions keep Pi's
 		h.setBranch([entry, { type: "custom", customType: COMPACTION_ENTRY, data: record }]);
 		assert.match(plain(new CompactionSummaryMessageComponent(message).render(84))[0]!, /compaction auto/);
 		h.setBranch([]);
-		assert.match(plain(new CompactionSummaryMessageComponent(message).render(84))[0]!, /^   compaction\s+386k$/);
+		assert.ok(plain(new CompactionSummaryMessageComponent(message).render(84))[0]!.startsWith(`${BULLET_GLYPH} compaction`));
 		h.display.start({ ...h.ctx, mode: "print" } as never);
 		assert.ok(plain(new CompactionSummaryMessageComponent(message).render(84)).some((line) => line.includes("[compaction]")));
 	} finally { h.display.stop(); }

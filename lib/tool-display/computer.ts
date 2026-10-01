@@ -93,6 +93,7 @@ function emitted(view: View): string[] {
 }
 
 export const scriptSpec = (names: ScriptRowNames): ToolSpec => ({
+	name: names.title,
 	label: () => names.title,
 	title(view) {
 		const details = detailsOf(view);

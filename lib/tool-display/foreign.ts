@@ -194,6 +194,7 @@ function argumentLines(view: View, width: number): string[] {
 
 export function foreignSpec(tool: ForeignTool): ToolSpec {
 	return {
+		name: tool.name,
 		label: () => tool.name,
 		title(view) {
 			const words = callWords(tool, view) ?? keyArg(view.context.args);

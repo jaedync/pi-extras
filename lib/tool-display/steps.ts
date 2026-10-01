@@ -156,6 +156,8 @@ export function numberedLine(theme: ThemeLike, label: string, title: readonly Se
 
 export interface StepLineOptions {
 	readonly indent: number;
+	/** Transcript cells start at the output column without another leading margin. */
+	readonly compact?: boolean;
 	readonly now: number;
 	readonly selected?: boolean;
 	/** Digits in the list's widest step number; 1 when omitted. */
@@ -167,7 +169,8 @@ export interface StepLineOptions {
 export function stepLine(theme: ThemeLike, chain: Chain, run: ChainRun | undefined, index: number, number: number, width: number, options: StepLineOptions): string {
 	const palette = paletteFrom(theme);
 	const state = stateOf(run, index);
-	const label = numberLabel(number, options.digits ?? 1);
+	const numberText = numberLabel(number, options.digits ?? 1);
+	const label = options.compact ? numberText.slice(1) : numberText;
 	const quiet = state === "skipped" || state === "waiting";
 	const left: Seg[] = [
 		{ text: label, color: quiet ? "dim" : "text", bold: options.selected === true },

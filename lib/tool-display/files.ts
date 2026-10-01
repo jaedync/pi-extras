@@ -69,6 +69,7 @@ function readContent(view: View): string[] {
 }
 
 export const readSpec: ToolSpec = {
+	name: "read",
 	label: () => "read",
 	title(view) {
 		const path = pathOf(view);
@@ -101,6 +102,7 @@ function diffOf(view: View): string | undefined {
 const diffLines = (kit: Kit, diff: string) => kit.diff(sanitize(diff)).split("\n");
 
 export const editSpec: ToolSpec = {
+	name: "edit",
 	label: () => "edit",
 	title(view) {
 		const head = [titleSeg("edit"), pathSeg(view.kit, pathOf(view), view.context.cwd)];
@@ -157,6 +159,7 @@ function writeLines(view: View): string[] {
 }
 
 export const writeSpec: ToolSpec = {
+	name: "write",
 	label: () => "write",
 	title(view) {
 		const { raw, lines } = contentOf(view);

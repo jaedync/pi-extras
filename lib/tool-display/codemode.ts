@@ -80,7 +80,8 @@ function callLine(view: View, call: NestedCall, index: number, width: number, in
 		...(call.overlapping ? [{ text: "overlap  ", color: "dim" }] : []),
 		{ text: WORDS[call.status], color }, ...(ms === undefined ? [] : [{ text: "  ", color: "dim" }, timeSeg(ms)]),
 	];
-	return numberedLine(view.theme, numberLabel(index + 1, digits, "ƒ"), [
+	const label = numberLabel(index + 1, digits, "ƒ");
+	return numberedLine(view.theme, indent > 0 ? label.slice(1) : label, [
 		{ text: flat(call.name), color: "text", bold: true }, ...(call.args ? [{ text: ` ${flat(call.args)}`, color: "muted" }] : []),
 	], rail, STATES[call.status], width, { indent, now: view.now, motion: view.kit.motion() });
 }

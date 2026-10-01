@@ -14,7 +14,7 @@ import { paletteFrom } from "../band/palette.ts";
 import type { Kit, RenderContext, ThemeLike } from "./kit.ts";
 
 /** Output lines sit under the band's title, two columns in; the title starts after the row's margin. */
-export const BODY_INDENT = 3 + ROW_MARGIN;
+export const BODY_INDENT = 2 + ROW_MARGIN;
 
 export interface RowState {
 	startedAt?: number;
@@ -127,6 +127,7 @@ function outlived(row: RowState, kit: Kit): boolean {
 }
 
 export interface BandInput {
+	readonly toolName?: string;
 	readonly segs: readonly Seg[];
 	readonly rail: readonly Seg[];
 	readonly phase: BandPhase;
@@ -134,7 +135,7 @@ export interface BandInput {
 
 /** A row's band; `margin` for the transcript, where the call's spinner goes before the title. */
 export function band(theme: ThemeLike, kit: Kit, input: BandInput, width: number, margin: boolean | "blank" = false): string {
-	return renderBand(theme, paletteFrom(theme), { width, phase: input.phase, segs: input.segs, rail: input.rail, clockMs: kit.now(), motion: kit.motion(), margin });
+	return renderBand(theme, paletteFrom(theme), { width, phase: input.phase, segs: input.segs, rail: input.rail, clockMs: kit.now(), motion: kit.motion(), margin, toolName: input.toolName });
 }
 
 /**

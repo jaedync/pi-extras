@@ -95,6 +95,7 @@ export function jobBand(theme: BandTheme, facts: JobFacts, options: JobBandOptio
 		segs: jobSegs(facts, options.extra),
 		rail: jobRail(facts, options.now, options.view),
 		clockMs: options.now,
+		toolName: "bash",
 		...(options.motion ? { motion: options.motion } : {}),
 		...(options.indent !== undefined ? { indent: options.indent } : {}),
 		...(options.margin ? { margin: true } : {}),
