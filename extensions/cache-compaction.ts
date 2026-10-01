@@ -29,17 +29,18 @@ function identity(ctx: ExtensionContext, at: number): RequestIdentity | undefine
 	const model = ctx.model;
 	return model ? { provider: model.provider, id: model.id, api: model.api, baseUrl: model.baseUrl, contextWindow: model.contextWindow, sessionId: ctx.sessionManager.getSessionId(), at } : undefined;
 }
-/** Map canonical messages by complete identity, allowing injected request-local messages, never guessed text. */
-function positionsFor(hashes: readonly string[], requestHashes: readonly string[]): number[] | undefined {
-	const positions: number[] = [];
-	let from = 0;
-	for (const hash of hashes) {
-		const position = requestHashes.indexOf(hash, from);
-		if (position < 0) return undefined;
-		positions.push(position);
-		from = position + 1;
+/** Only custom notices may be omitted; missing conversation messages could be rewritten retained content. */
+function positionsFor(messages: readonly Message[], hashes: readonly string[], requestHashes: readonly string[]): number[] | undefined {
+	const positions = new Array<number>(hashes.length);
+	let next = requestHashes.length;
+	let matched = 0;
+	for (let i = hashes.length - 1; i >= 0; i--) {
+		const position = next > 0 ? requestHashes.lastIndexOf(hashes[i], next - 1) : -1;
+		if (position < 0 && (messages[i].role !== "custom" || requestHashes.includes(hashes[i]))) return undefined;
+		if (position >= 0) { next = position; matched++; }
+		positions[i] = next;
 	}
-	return positions;
+	return matched || !hashes.length ? positions : undefined;
 }
 function entryMessageIndex(projection: SessionProjection, id: string): number | undefined {
 	const index = projection.entries.findIndex((entry) => entry.sourceEntry.id === id);
@@ -85,11 +86,12 @@ function prepareRequest(captured: Captured, event: SessionBeforeCompactEvent, ct
 	const split = startOf(projection.messages, p.turnPrefixMessages, kept, hash);
 	const history = startOf(projection.messages, p.messagesToSummarize, split ?? kept, hash);
 	if ((p.messagesToSummarize.length && history === undefined) || (p.isSplitTurn && split === undefined)) return { fallback: "unknown-boundary" };
-	const visibleKept = projection.messages.findIndex((message, i) => i >= kept && !excluded(message));
+	const present = (canonical: number) => canonical >= count || (captured.positions[canonical] < captured.messages.length && hashes[canonical] === hash(captured.messages[captured.positions[canonical]]));
+	const visibleKept = projection.messages.findIndex((message, i) => i >= kept && present(i) && !excluded(message));
 	const firstVisibleKept = visibleKept < 0 ? kept : visibleKept;
 	const llmMessages = visibleLlm(messages);
 	if (p.previousSummary && !messages.some((message) => message.role === "compactionSummary" && message.summary === p.previousSummary)) return { fallback: "missing-previous-summary" };
-	// Dropped assistant replies and !! output cannot identify a provider-visible boundary.
+	// Request-time omissions, dropped replies and !! output cannot identify a visible boundary.
 	const visiblePosition = (canonical: number) => visibleLlm(messages.slice(0, position(canonical))).length;
 	const instruction = buildInstruction({ messages: llmMessages, boundary: visiblePosition(firstVisibleKept), entryId: p.firstKeptEntryId, historyStart: visiblePosition(history ?? split ?? kept), splitStart: p.isSplitTurn && split !== undefined ? visiblePosition(split) : undefined, previousSummary: p.previousSummary, customInstructions: event.customInstructions, keptMessage: visibleLlm([projection.messages[firstVisibleKept]])[0] ?? { role: projection.messages[kept].role, content: [] }, boundaryInRequest: visibleKept >= 0 && position(firstVisibleKept) < messages.length, boundaryExcluded: visibleKept < 0 });
 	const prompt: Message = { role: "user", content: [{ type: "text", text: instruction }], timestamp: at };
@@ -122,14 +124,16 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 		pending = undefined;
 		captureMiss = undefined;
 		try {
+			// Startup custom messages can precede Pi's first prompt-state entry. Preserve
+			// their order; the provider-prefix guard still verifies the complete replay.
 			if (!policy.enabled) return;
-			if (event.messages[0]?.role !== "system") { captureMiss = "capture-no-system"; return; }
+			if (!event.messages.some((message) => message.role === "system")) { captureMiss = "capture-no-system"; return; }
 			const request = identity(ctx, now());
 			if (!request) { captureMiss = "capture-no-model"; return; }
 			const projection = ctx.sessionManager.buildSessionProjection();
 			const hash = hashOnce();
 			const hashes = projection.messages.map(hash);
-			const positions = positionsFor(hashes, event.messages.map(hash));
+			const positions = positionsFor(projection.messages, hashes, event.messages.map(hash));
 			if (!positions) { captureMiss = "capture-projection"; return; }
 			// Pi and later extensions may mutate these messages after this observational hook.
 			pending = { ...request, ids: ctx.sessionManager.getBranch().map((entry) => entry.id), hashes, positions, messages: structuredClone(event.messages) };
