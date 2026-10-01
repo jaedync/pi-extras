@@ -33,7 +33,7 @@ Do not share diagnostic files without reviewing them for personal paths and data
 
 ## Tab Status
 
-Tab Status sends state, theme colours, tool names, dialog titles and the first
+Tab Status sends state, theme colors, tool names, dialog titles and the first
 line of a failed-turn error to the terminal through OSC sequences. Idle says
 `Done` by default. `tabStatus.detail: "reply"` opts in to sending the first 80
 characters of the latest assistant reply, including replies restored from
