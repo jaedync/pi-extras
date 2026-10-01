@@ -89,6 +89,13 @@ export class Team {
 		return () => this.listeners.delete(listener);
 	}
 
+	/** Restored records reserve names without starting work or replaying reports. */
+	restore(records: readonly AgentRecord[]): void {
+		for (const record of records) {
+			if (!this.records.has(record.name)) this.put({ ...record, blocking: false, usage: { ...record.usage } });
+		}
+	}
+
 	/** Validates depth, names the child, and starts or queues it. */
 	spawn(request: SpawnRequest): { ok: true; record: AgentRecord } | { ok: false; error: string } {
 		if (this.closed) return { ok: false, error: "The session is shutting down." };

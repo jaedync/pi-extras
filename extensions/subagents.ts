@@ -31,6 +31,7 @@ import type { ShownOverlay } from "../lib/band/modal.ts";
 import { formatMoney } from "../lib/status-plus-logic.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
+import { ChildIndex, legacyRecords } from "../lib/subagents/restore.ts";
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
@@ -155,6 +156,7 @@ export default function subagents(pi: ExtensionAPI) {
 		const logFile = runLogPath(agentDir);
 		const sessionDir = join(agentDir, "sessions", "subagents", sessionId);
 		let logFailed = false;
+		const index = new ChildIndex(sessionDir, sessionId, cwd);
 
 		// The team is made below; the mail only asks it once reports arrive.
 		let team!: Team;
@@ -205,9 +207,17 @@ export default function subagents(pi: ExtensionAPI) {
 			currentGroup: () => `run-${mainRun}`,
 		};
 
+		try {
+			const records = index.load();
+			team.restore(records.length > 0 || existsSync(index.file) ? records : legacyRecords(ctx.sessionManager.getBranch(), sessionDir, MAIN, 1));
+		} catch (error) {
+			ctx.ui.notify(`subagents: could not restore ${index.file}: ${(error as Error).message}`, "warning");
+		}
 		const logged = new Set<string>();
 		const unsubscribe = team.onChange((record) => {
 			widget.update();
+			try { index.save(team.list()); }
+			catch (error) { ctx.ui.notify(`subagents: could not save ${index.file}: ${(error as Error).message}`, "warning"); }
 			if (!record || LIVE_STATES.has(record.state)) return;
 			const key = `${record.name}#${record.runs}#${record.state}`;
 			if (logged.has(key)) return;
