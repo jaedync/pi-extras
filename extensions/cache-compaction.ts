@@ -92,7 +92,8 @@ function prepareRequest(captured: Captured, event: SessionBeforeCompactEvent, ct
 	const history = startOf(projection.messages, p.messagesToSummarize, split ?? kept, hash, omitted);
 	const hasVisible = (span: readonly Message[]) => span.some((message) => !omitted.has(hash(message)));
 	if ((hasVisible(p.messagesToSummarize) && history === undefined) || (p.isSplitTurn && split === undefined)) return { fallback: "unknown-boundary" };
-	const visibleKept = projection.messages.findIndex((message, i) => i >= kept && present(i) && !excluded(message));
+	// A folded system checkpoint sits at request position 0; Pi never cuts at system state.
+	const visibleKept = projection.messages.findIndex((message, i) => i >= kept && message.role !== "system" && present(i) && !excluded(message));
 	const firstVisibleKept = visibleKept < 0 ? kept : visibleKept;
 	const llmMessages = visibleLlm(messages);
 	if (p.previousSummary && !messages.some((message) => message.role === "compactionSummary" && message.summary === p.previousSummary)) return { fallback: "missing-previous-summary" };

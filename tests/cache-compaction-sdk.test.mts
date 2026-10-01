@@ -334,17 +334,23 @@ test("real SDK mirrors exact system folding and local-only compaction omissions 
 	assert.deepEqual(f.errors, []);
 });
 
-test("a context handler rewriting user text remains rejected after exact system folding", async (t) => {
+// The control proves the fold itself succeeds here, so the rewrite alone causes the fallback.
+for (const rewrite of [false, true]) test(`a context handler ${rewrite ? "rewriting user text remains rejected" : "that only prunes still shares the prefix"} after exact system folding`, async (t) => {
 	const f = await fixture(); t.after(() => f.close()); await f.warm();
 	f.session.sessionManager.appendMessage({ role: "system", content: "Additional prompt state.", timestamp: 17 });
-	f.setRewriteUser(); await f.session.prompt("Original retained user text.");
-	assert.ok(f.calls.at(-1)!.context.messages.some((message: any) => textOf(message) === "Rewritten user text."));
+	if (rewrite) f.setRewriteUser();
+	else {
+		f.setInternalFilter();
+		await f.session.sendCustomMessage({ customType: "remote-pi:relay-state", content: "local-only-state", display: false }, { triggerTurn: false });
+	}
+	await f.session.prompt("Original retained user text.");
+	assert.equal(f.calls.at(-1)!.context.messages.some((message: any) => textOf(message) === "Rewritten user text."), rewrite);
 	assert.equal(f.captures.at(-1)!.filter((message: any) => message.role === "system").length, 1);
 	assert.ok(f.session.sessionManager.buildSessionProjection().messages.filter((message: any) => message.role === "system").length > 1);
 	const entry = await f.session.compact();
-	assert.notEqual(entry.details?.cachePrefix, true);
-	assert.equal(JSON.parse(readFileSync(f.logFile, "utf8")).fallbackReason, "capture-projection");
-	assert.ok(!f.calls.some((call) => textOf(call.context.messages.at(-1)).includes("COMPACTION CHECKPOINT REQUEST")));
+	assert.equal(entry.details?.cachePrefix === true, !rewrite);
+	assert.equal(JSON.parse(readFileSync(f.logFile, "utf8")).fallbackReason, rewrite ? "capture-projection" : null);
+	assert.equal(f.calls.some((call) => textOf(call.context.messages.at(-1)).includes("COMPACTION CHECKPOINT REQUEST")), !rewrite);
 	assert.deepEqual(f.errors, []);
 });
 
