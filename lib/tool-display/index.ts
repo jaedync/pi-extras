@@ -44,6 +44,7 @@ import { computerUseSpec, windowsUseSpec } from "./computer.ts";
 import { codemodeRenderers } from "./codemode.ts";
 import { registerCompaction } from "./compaction.ts";
 import { watchRun } from "../run-watch.ts";
+import { watchThinking } from "../thinking-watch.ts";
 import { createMeshMessageRenderer, MESH_MESSAGE_TYPE } from "./mesh.ts";
 import { NestedCalls } from "./nested.ts";
 import { editRenderers, readRenderers, writeRenderers } from "./files.ts";
@@ -160,6 +161,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	prepareThinkingTail();
 
 	const run = watchRun(pi);
+	const thinkingDuration = watchThinking(pi, deps.host.now);
 
 	const kit: Kit = {
 		...deps.host,
@@ -308,6 +310,10 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			mode: (): ThinkingMode | undefined => (settings.enabled ? settings.thinking : undefined),
 			hiddenAtStart: () => hiddenAtStart,
 			theme: () => host.theme,
+			summary: (message, index) => {
+				const duration = thinkingDuration(message, index);
+				return duration === undefined ? "∴ Thought" : `∴ Thought for ${Math.round(duration / 1_000)}s`;
+			},
 		});
 		undoAdoption?.();
 		undoAdoption = installAdoption({ renderersFor });

@@ -19,11 +19,17 @@ test("end-of-turn custom entry renders but never reaches the next request or res
  streamSimple(model:any,context:any){
   calls.push(structuredClone(context.messages));
   const stream=new ai.AssistantMessageEventStream();
-  const message={role:"assistant",api:model.api,provider:model.provider,model:model.id,content:[{type:"text",text:"Actual answer."}],stopReason:"stop",timestamp:Date.now(),usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};
+  const message={role:"assistant",api:model.api,provider:model.provider,model:model.id,content:[{type:"thinking",thinking:"Actual private reasoning."},{type:"text",text:"Actual answer."}],stopReason:"stop",timestamp:Date.now(),usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};
+  stream.push({type:"start",partial:{...message,content:[]}});
+  stream.push({type:"thinking_start",contentIndex:0,partial:{...message,content:[message.content[0]]}});
+  stream.push({type:"thinking_delta",contentIndex:0,delta:"Actual private reasoning.",partial:{...message,content:[message.content[0]]}});
+  stream.push({type:"thinking_end",contentIndex:0,content:"Actual private reasoning.",partial:{...message,content:[message.content[0]]}});
+  stream.push({type:"text_start",contentIndex:1,partial:message});
+  stream.push({type:"text_delta",contentIndex:1,delta:"Actual answer.",partial:message});
   stream.push({type:"done",reason:"stop",message});stream.end();return stream;
  }});
  const settingsManager=sdk.SettingsManager.inMemory({compaction:{enabled:false},cacheWarming:"off"});
- const loader=new sdk.DefaultResourceLoader({cwd:scratch,agentDir:process.env.PI_CODING_AGENT_DIR,settingsManager,noExtensions:true,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true,additionalExtensionPaths:[fileURLToPath(new URL("../extensions/phase-spinner.ts",import.meta.url))]});
+ const loader=new sdk.DefaultResourceLoader({cwd:scratch,agentDir:process.env.PI_CODING_AGENT_DIR,settingsManager,noExtensions:true,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true,additionalExtensionPaths:[fileURLToPath(new URL("../extensions/phase-spinner.ts",import.meta.url)),fileURLToPath(new URL("../extensions/tool-display.ts",import.meta.url))]});
  await loader.reload();assert.deepEqual(loader.getExtensions().errors,[]);
  const manager=sdk.SessionManager.inMemory(scratch);
  const {session}=await sdk.createAgentSession({cwd:scratch,agentDir:process.env.PI_CODING_AGENT_DIR,modelRuntime:runtime,model:runtime.getModel("fixture","model"),settingsManager,resourceLoader:loader,sessionManager:manager,noTools:"all"});
@@ -34,11 +40,15 @@ test("end-of-turn custom entry renders but never reaches the next request or res
  const entries=manager.getBranch().filter((entry:any)=>entry.type==="custom"&&entry.customType==="pi-extras.run-end");
  assert.equal(entries.length,1,"one persisted display-only end entry");
  assert.equal(typeof entries[0].data.past,"string");
+ const thinking=manager.getBranch().filter((entry:any)=>entry.type==="custom"&&entry.customType==="pi-extras.thinking-times");
+ assert.equal(thinking.length,1);
+ assert.ok(Array.isArray(thinking[0].data.durations));
  await session.prompt("Second request.");
  assert.deepEqual(errors,[]);
  assert.equal(calls.length,2);
  assert.ok(JSON.stringify(calls[1]).includes("Actual answer."));
  assert.ok(!JSON.stringify(calls[1]).includes(entries[0].data.past));
- assert.doesNotMatch(JSON.stringify(calls[1]),/doneAt|run-end|done \d|Thought for/);
+ assert.ok(JSON.stringify(calls[1]).includes("Actual private reasoning."),"real thinking remains model content");
+ assert.doesNotMatch(JSON.stringify(calls[1]),/doneAt|run-end|thinking-times|durations|done \d|Thought for/);
  assert.doesNotMatch(JSON.stringify(manager.buildSessionContext().messages),/doneAt|run-end|done \d|Thought for/);
 });

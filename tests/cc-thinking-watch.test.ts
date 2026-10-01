@@ -1,0 +1,22 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { watchThinking, THINKING_TIMING_ENTRY } from "../lib/thinking-watch.ts";
+test("thinking times are measured per run and persisted as non-context metadata",()=>{
+ let now=0;
+ const handlers=new Map<string,Function>();
+ const saved:Array<[string,unknown]>=[];
+ const duration=watchThinking({on:(name:string,fn:Function)=>handlers.set(name,fn),appendEntry:(name:string,data:unknown)=>saved.push([name,data])} as never,()=>now);
+ const ctx={mode:"tui",sessionManager:{getBranch:()=>[]}};
+ handlers.get("session_start")!({},ctx);
+ const message={role:"assistant",timestamp:123,content:[{type:"thinking",thinking:"real thinking"}]};
+ const update=(type:string,at:number)=>{now=at;handlers.get("message_update")!({message,assistantMessageEvent:{type,contentIndex:0}},ctx);};
+ update("thinking_start",1000);update("thinking_delta",6000);update("thinking_end",13000);
+ assert.equal(duration(message,0),12000);
+ handlers.get("message_end")!({message},ctx);
+ assert.deepEqual(saved,[],"message_end runs before Pi persists the assistant message");
+ handlers.get("turn_end")!({},ctx);
+ assert.deepEqual(saved,[[THINKING_TIMING_ENTRY,{timestamp:123,durations:[12000]}]]);
+ assert.deepEqual(message.content,[{type:"thinking",thinking:"real thinking"}],"the assistant message was never rewritten");
+ handlers.get("session_start")!({}, {sessionManager:{getBranch:()=>[{type:"custom",customType:THINKING_TIMING_ENTRY,data:saved[0]![1]}]}});
+ assert.equal(duration(message,0),12000,"a resume restores the same label timing");
+});

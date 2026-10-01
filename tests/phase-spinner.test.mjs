@@ -252,9 +252,9 @@ test("a recording borrows the idle top row, but live runs and statuses keep it",
 
 const QUEUED = ["", " Steering: check the logs", " ↳ Alt+Up to edit all queued messages"];
 
-function laidOut(t) {
+function laidOut(t, events) {
 	const layout = piLayout();
-	const h = harness(t, undefined, { layout });
+	const h = harness(t, events, { layout });
 	h.render(); // Pi draws the editor once it is mounted, and the line finds its place then.
 	return { h, layout };
 }
@@ -407,6 +407,38 @@ test("a sign-off wave ends after 760ms, reduced motion skips it, and a new promp
  h.emit("input",{},3100);assert.deepEqual(h.queue(),[]);
  events.emit(DISPLAY_SETTINGS_EVENT,{motion:"reduced"});h.emit("agent_start",{},4000);h.emit("agent_end",{},5000);h.settle();
  assert.deepEqual(h.queue(),[]);assert.equal(h.entries.length,3);
+});
+
+test("live thinking's newest three lines sit below the spinner and above the queue", t => {
+	const events=eventBus();
+	const { h, layout } = laidOut(t,events);
+	events.emit(DISPLAY_SETTINGS_EVENT,{hidesLiveThinking:true});
+	h.emit("agent_start");
+	h.update("thinking_delta", "thought ".repeat(200) + "newest", 100);
+	layout.queue.lines = QUEUED;
+	const lines = h.queue(200);
+	assert.match(lines[1], /thinking/);
+	assert.equal(lines.length, 5 + QUEUED.length);
+	assert.match(lines[2], /^  … /);
+	assert.match(lines[4], /newest$/);
+	assert.deepEqual(lines.slice(5), QUEUED);
+	h.update("thinking_end", undefined, 2100);
+	assert.match(h.queue()[1], /thought for 2s/);
+	assert.deepEqual(h.queue().slice(2), QUEUED);
+});
+
+test("the spinner tail requires a loaded, enabled thinking host and reuses an unchanged tail",t=>{
+ const events=eventBus(),layout=piLayout();let paints=0;
+ const theme={fg:(_key,text)=>text,italic:text=>{paints++;return text;}};
+ const h=harness(t,events,{layout,theme});h.render();h.emit("agent_start");
+ h.update("thinking_delta","thought ".repeat(200),100);
+ assert.equal(h.queue().length,2,"Tool Display absent: native thinking remains in the transcript");
+ events.emit(DISPLAY_SETTINGS_EVENT,{hidesLiveThinking:true});
+ assert.equal(h.queue().length,5);
+ const cached=paints;h.queue(500);h.queue(700);
+ assert.equal(paints,cached,"timer frames reuse the thinking tail");
+ events.emit(DISPLAY_SETTINGS_EVENT,{hidesLiveThinking:false});
+ assert.equal(h.queue().length,2,"Tool Display off: no duplicate tail");
 });
 
 test("an idle agent has no phase line, and the border shows the last run", t => {

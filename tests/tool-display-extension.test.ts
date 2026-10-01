@@ -379,7 +379,7 @@ test("rows a reload builds before session start are rebuilt once it runs, tools 
 		assert.doesNotMatch(drawn(bash), /pi's own bash row/);
 		assert.match(drawn(job), /\u21b3 make {2}in background/);
 		assert.equal(theirs.getRenderShell(), "self");
-				assert.match(drawn(reply), /step 11\s· step 12/, "thinking as a tail");
+				assert.match(drawn(reply), /∴ Thought/, "finished thinking as a display-only summary");
 		piRow({ name: "fetch_content" });
 		assert.equal(lateRows("tool").length, 3, "a row built with the host in place isn't noted");
 	} finally {

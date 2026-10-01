@@ -37,10 +37,12 @@ export interface ThinkingHost {
 	/** Pi's hide-thinking setting when the session started; a message that differs has been toggled. */
 	hiddenAtStart(): boolean;
 	theme(): ThinkingTheme | undefined;
+	/** Enables spinner-owned live thinking and the transcript's display-only finished label. */
+	summary?(message: Message, run: number): string;
 }
 
 type Content = { type: string; thinking?: unknown; text?: unknown };
-type Message = { content: readonly Content[] };
+type Message = { timestamp?: number; content: readonly Content[] };
 
 /** The parts of Pi's component this reads and writes. */
 interface Internals {
@@ -139,6 +141,18 @@ export function tailLines(text: string, width: number, max = THINKING_TAIL_LINES
 	return { lines: narrow.slice(-max), cut: true };
 }
 
+/** Live thinking belongs below the spinner, never inside the model's transcript. */
+export function renderThinkingTail(text: string, width: number, theme: ThinkingTheme | undefined): string[] {
+	if (!text.trim() || width <= 0) return [];
+	const pad = "  ";
+	const tail = tailLines(text, Math.max(1, width - pad.length));
+	return tail.lines.map((line, index) => {
+		const body = `${tail.cut && index === 0 ? TAIL_MARK : ""}${line}`;
+		const colored = theme?.fg("dim", body) ?? body;
+		return truncateToWidth(pad + (theme?.italic?.(colored) ?? colored), width, "");
+	});
+}
+
 export interface ViewOptions {
 	/** Pi's own rendering of the block, in full. */
 	readonly full: Component;
@@ -176,12 +190,13 @@ export class ThinkingView implements Component {
 	}
 
 	render(width: number): string[] {
+		if (width <= 0) return [];
 		const view = this.options.view();
 		const theme = this.options.host.theme();
 		const key = `${width}|${view}|${view === "collapsed" ? this.options.label() : ""}`;
 		const kept = this.memo.drawing;
 		if (kept?.key === key && kept.theme === theme) return kept.lines;
-		const lines = this.draw(width, view, theme);
+		const lines = this.draw(width, view, theme).map((line) => truncateToWidth(line, width, ""));
 		this.memo.drawing = { key, theme, lines };
 		return lines;
 	}
@@ -195,7 +210,7 @@ export class ThinkingView implements Component {
 		const indent = " ".repeat(pad);
 		if (view === "collapsed") {
 			const italic = (text: string) => { try { return theme?.italic?.(text) ?? text; } catch { return text; } };
-			return [indent + truncateToWidth(italic(paint("thinkingText", this.options.label())), Math.max(1, width - pad), "…")];
+			return [indent + truncateToWidth(italic(paint(this.options.host.summary ? "dim" : "thinkingText", this.options.label())), Math.max(1, width - pad), "…")];
 		}
 		// Pi's Markdown keeps `pad` columns on each side; the tail keeps the same margins.
 		const style = (text: string) => { const colored = paint("thinkingText", text); try { return theme?.italic?.(colored) ?? colored; } catch { return colored; } };
@@ -247,19 +262,33 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 	const regions = children.filter((child): child is Component & { child: Component } => isRegion(child));
 	if (regions.length !== runs.length) return false;
 	const owner = self as object;
+	const hiddenSpacers = new Set<Component>();
 	regions.forEach((region, run) => {
+		const summary = host.summary;
+		// Only the final thinking run can still be live. Later text or a call closes it.
+		const last = message.content.at(-1);
+		const live = !!summary && self.isStreaming && run === runs.length - 1 && last?.type === "thinking";
+		if (live) {
+			const at = children.indexOf(region);
+			const spacer = children[at - 1];
+			// Pi's spacer belongs to the hidden block, not to a reserved thinking-tail row.
+			if (spacer?.constructor.name === "Spacer") hiddenSpacers.add(spacer);
+			children[at] = { render: () => [], invalidate() {} };
+			return;
+		}
 		const view = new ThinkingView({
 			full: region.child,
 			text: runs[run]!,
 			pad: self.outputPad,
 			host,
-			view: () => viewFor(host.mode() ?? mode, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false),
-			label: () => self.hiddenThinkingLabel,
+			view: () => viewFor(summary && host.mode() !== "full" ? "collapsed" : host.mode() ?? mode, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false),
+			label: () => summary?.(message, run) ?? self.hiddenThinkingLabel,
 			toggle: () => toggleBlock(owner, run),
 			memo: memoFor(owner, run, runs[run]!, self.isStreaming, self.outputPad),
 		});
 		children[children.indexOf(region)] = view;
 	});
+	if (hiddenSpacers.size) self.contentContainer.children = children.filter((child) => !hiddenSpacers.has(child));
 	return true;
 }
 
