@@ -11,6 +11,12 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   status's alert color, including with reduced motion. Narrow widths drop TPS,
   TTFT, tokens, then total Time before shortening the step status. Native retry
   countdowns are kept without an extra step clock.
+- Tab Status progress turns on automatically in Windows Terminal, including
+  WSL, without a version check. Windows Terminal 1.6+ supports it; older
+  versions silently ignore it. `progress: false` still turns it off.
+- Windows Terminal progress packets include explicit percentages for every
+  state. The full yellow warning ring means Pi is waiting for dialog input or
+  for a rate-limit wait to finish.
 
 ## 0.18.0 - 2026-10-01
 

@@ -17,10 +17,11 @@ export interface TabStatusOptions {
 const KEEPALIVE_MS = 1000;
 const IDLE_DELAY_MS = 1500;
 const WIDGET = "tab-status-terminal";
-const CLEAR_STATUS = statusSequence(), CLEAR_PROGRESS = progressSequence(0);
+const CLEAR_STATUS = statusSequence();
 
 export default function tabStatus(pi: ExtensionAPI, options: TabStatusOptions = {}): void {
 	const env = options.env ?? process.env;
+	const progressBytes = (value: Parameters<typeof progressSequence>[0]) => progressSequence(value, terminalFamily(env) === "windows-terminal");
 	let state = initialState();
 	let ctx: ExtensionContext | undefined;
 	let terminal: Pick<Terminal, "write"> | undefined;
@@ -64,7 +65,7 @@ export default function tabStatus(pi: ExtensionAPI, options: TabStatusOptions = 
 		const colors = { accent: colorToHex(c.accent), warning: colorToHex(c.warning), dim: colorToHex(c.dim), error: colorToHex(c.error) };
 		const shown = view(state, colors, settings.busyWhileBackground, settings.detail);
 		const status = statusSequence(shown);
-		const bar = progressSequence(shown.progress === 4 && terminalFamily(env) === "wezterm" ? 3 : shown.progress);
+		const bar = progressBytes(shown.progress === 4 && terminalFamily(env) === "wezterm" ? 3 : shown.progress);
 		const signature = status + bar;
 		// Reloaded sources report their counts after session_start. Do not briefly announce idle.
 		if (shown.status === "idle" && signature !== last && !idleReady) {
@@ -126,7 +127,7 @@ export default function tabStatus(pi: ExtensionAPI, options: TabStatusOptions = 
 		if (!sessionStatus && !progress && !previous) return;
 		ownedStatus = previous?.sessionStatus ?? false; ownedProgress = previous?.progress ?? false;
 		attach(context);
-		try { write(CLEAR_STATUS, CLEAR_PROGRESS, { sessionStatus: !!previous?.sessionStatus && !sessionStatus, progress: !!previous?.progress && !progress }); }
+		try { write(CLEAR_STATUS, progressBytes(0), { sessionStatus: !!previous?.sessionStatus && !sessionStatus, progress: !!previous?.progress && !progress }); }
 		catch { disableUpdates(); return; }
 		if (!sessionStatus) ownedStatus = false;
 		if (!progress) ownedProgress = false;
@@ -171,7 +172,7 @@ export default function tabStatus(pi: ExtensionAPI, options: TabStatusOptions = 
 			const handoff = { sessionId, sessionStatus: ownedStatus, progress: ownedProgress && !pi.getSettings().terminal?.showTerminalProgress };
 			if (handoff.sessionStatus || handoff.progress) remember(sessionKey, handoff);
 		} else {
-			try { write(CLEAR_STATUS, CLEAR_PROGRESS, { sessionStatus: ownedStatus, progress: ownedProgress }); }
+			try { write(CLEAR_STATUS, progressBytes(0), { sessionStatus: ownedStatus, progress: ownedProgress }); }
 			catch { ctx.ui.notify("Tab Status could not clear the terminal. The next start will reset it.", "warning"); }
 		}
 		detach();

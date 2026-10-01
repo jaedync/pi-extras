@@ -42,8 +42,8 @@ test("H2/M3 minimum versions, unknown versions, features and inherited terminal 
 		{ TERM_PROGRAM: "ghostty", TERM_PROGRAM_VERSION: "1.1.3", TERM_FEATURES: "P" },
 		{ TERM_PROGRAM: "tmux", LC_TERMINAL: "vscode", LC_TERMINAL_VERSION: "1.100.0", WT_SESSION: "id" },
 		{ TERM_PROGRAM: "WezTerm", TERM_PROGRAM_VERSION: "20240203-110809-5046fc22" },
-		{ TERM_PROGRAM: "ghostty", TERM_PROGRAM_VERSION: "1.1.3" }, { WT_SESSION: "id" },
-		{ WT_SESSION: "id", TERM_PROGRAM_VERSION: "1.5.9" },
+		{ TERM_PROGRAM: "ghostty", TERM_PROGRAM_VERSION: "1.1.3" },
+		{ WT_SESSION: "id", TERM_PROGRAM: "vscode" },
 		{ TERM_PROGRAM: "vscode", TERM_PROGRAM_VERSION: "1.100.0", LC_TERMINAL: "iTerm2", LC_TERMINAL_VERSION: "3.7.0", TERM_FEATURES: "P" },
 	]) assert.deepEqual(terminalSupport(env), none);
 	assert.deepEqual(terminalSupport({ TERM_PROGRAM: "iTerm.app", TERM_PROGRAM_VERSION: "3.6.6" }), { sessionStatus: false, progress: true });
@@ -55,7 +55,7 @@ test("H2/M3 minimum versions, unknown versions, features and inherited terminal 
 	for (const TERM_FEATURES of ["Pfake", "fakeP", "1P"]) assert.equal(terminalSupport({ TERM_PROGRAM: "iTerm.app", TERM_FEATURES }).progress, false);
 });
 
-for (const marker of [{ GHOSTTY_RESOURCES_DIR: "/synthetic/ghostty" }, { WT_SESSION: "synthetic" }]) {
+for (const marker of [{ GHOSTTY_RESOURCES_DIR: "/synthetic/ghostty" }]) {
 	test(`multiplexer versions cannot establish terminal progress support ${JSON.stringify(marker)}`, async (t) => {
 		for (const TERM_PROGRAM of ["tmux", "screen"]) assert.deepEqual(terminalSupport({ TERM_PROGRAM, TERM_PROGRAM_VERSION: "3.4", ...marker }), { sessionStatus: false, progress: false });
 		const env = { TERM_PROGRAM: "tmux", TERM_PROGRAM_VERSION: "3.4", ...marker };
@@ -64,6 +64,46 @@ for (const marker of [{ GHOSTTY_RESOURCES_DIR: "/synthetic/ghostty" }, { WT_SESS
 		const forced = harness(t, { env, settings: { progress: true } }, undefined, true);
 		await forced.fire("session_start"); await forced.fire("agent_start");
 		assert.match(forced.writes.at(-1)!, /9;4;3/);
+	});
+}
+
+test("Windows Terminal enables automatic progress without reporting a version", async (t) => {
+	for (const extra of [{}, { TERM_PROGRAM_VERSION: "1.5.9" }, { TERM_FEATURES: "T3B" }]) assert.deepEqual(terminalSupport({ WT_SESSION: "synthetic", ...extra }), { sessionStatus: false, progress: true });
+	const f = harness(t, { env: { WT_SESSION: "synthetic" } });
+	await f.fire("session_start"); await f.fire("agent_start");
+	assert.equal(f.writes.at(-1), "\x1b]9;4;3;0\x07");
+	assert.ok(f.writes.every((w) => !w.includes("21337")));
+});
+
+test("Windows Terminal identity does not override an explicit other terminal", async (t) => {
+	const env = { WT_SESSION: "synthetic", TERM_PROGRAM: "vscode" };
+	assert.deepEqual(terminalSupport(env), { sessionStatus: false, progress: false });
+	const f = harness(t, { env }); await f.fire("session_start"); await f.fire("agent_start");
+	assert.deepEqual(f.writes, []); assert.equal(f.widgets(), 0);
+});
+
+test("Windows Terminal automatic progress respects an explicit false setting", async (t) => {
+	const f = harness(t, { env: { WT_SESSION: "synthetic" }, settings: { progress: false } });
+	await f.fire("session_start"); await f.fire("agent_start");
+	assert.deepEqual(f.writes, []); assert.equal(f.widgets(), 0);
+});
+
+for (const multiplexed of [false, true]) {
+	test(`Windows Terminal pins every progress state${multiplexed ? " through tmux" : " directly"}`, async (t) => {
+		const env = multiplexed ? { WT_SESSION: "synthetic", TERM_PROGRAM: "tmux", TERM_PROGRAM_VERSION: "3.4", TMUX: "synthetic" } : { WT_SESSION: "synthetic" };
+		const expected = (state: number, value: number) => {
+			const bytes = `\x1b]9;4;${state};${value}\x07`;
+			return multiplexed ? `\x1bPtmux;${bytes.replaceAll("\x1b", "\x1b\x1b")}\x1b\\` : bytes;
+		};
+		assert.deepEqual(terminalSupport(env), { sessionStatus: false, progress: true });
+		const f = harness(t, { env }); await f.fire("session_start"); t.mock.timers.tick(1500);
+		assert.equal(f.writes.at(-1), expected(0, 0));
+		await f.fire("agent_start"); assert.equal(f.writes.at(-1), expected(3, 0));
+		await f.fire("ui_prompt_start", { title: "Allow?" }); assert.equal(f.writes.at(-1), expected(4, 100));
+		await f.fire("ui_prompt_end"); assert.equal(f.writes.at(-1), expected(3, 0));
+		await f.fire("message_end", { message: { role: "assistant", content: [], stopReason: "error", errorMessage: "Synthetic failure" } });
+		await f.fire("agent_settled"); assert.equal(f.writes.at(-1), expected(2, 0));
+		await f.fire("session_shutdown", { reason: "quit" }); assert.equal(f.writes.at(-1), expected(0, 0));
 	});
 }
 

@@ -76,6 +76,14 @@ test("sanitize, escape every value, truncate by code point, and clear all fields
 	assert.equal(passthrough(seq, true), `\x1bPtmux;${seq.replaceAll("\x1b", "\x1b\x1b")}\x1b\\`);
 });
 
+for (const state of [0, 2, 3, 4] as const) {
+	test(`Windows Terminal progress state ${state} includes an explicit percentage`, () => {
+		const sequence = `\x1b]9;4;${state};${state === 4 ? 100 : 0}\x07`;
+		assert.equal(progressSequence(state, true), sequence);
+		assert.equal(passthrough(progressSequence(state, true), true), `\x1bPtmux;${sequence.replaceAll("\x1b", "\x1b\x1b")}\x1b\\`);
+	});
+}
+
 test("known terminals, forced progress, setting validation, and interactive guards", () => {
 	for (const env of [{ TERM_PROGRAM: "iTerm.app", TERM_PROGRAM_VERSION: "3.7.0" }, { LC_TERMINAL: "iTerm2", LC_TERMINAL_VERSION: "3.7.0" }]) assert.deepEqual(terminalSupport(env), { sessionStatus: true, progress: true });
 	for (const env of [{ TERM_PROGRAM: "WezTerm", TERM_PROGRAM_VERSION: "20250209-182623-44866cc1" }, { TERM_PROGRAM: "ghostty", TERM_PROGRAM_VERSION: "1.2.0" }, { WT_SESSION: "id", LC_TERMINAL_VERSION: "1.6.0" }]) assert.deepEqual(terminalSupport(env), { sessionStatus: false, progress: true });

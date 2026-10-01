@@ -137,6 +137,8 @@ Tab Status shows Pi's state in the terminal tab.
   instead.
 - **Progress** animates the tab while Pi works, pauses during dialogs and
   Rate-limit Recovery waits, turns red after a failed turn, and clears at idle.
+  A full yellow warning ring means Pi is waiting, either for your input in a
+  dialog or for a rate-limit wait to finish.
 
 Background Subagents and Shell Jobs count as working by default, even after
 main finishes.
@@ -149,13 +151,18 @@ older terminals can show every progress update as a notification:
 | iTerm2 | 3.6.7 | 3.6.6 supports progress but doesn't advertise it; set `progress: true` |
 | Ghostty | 1.2.0 | |
 | WezTerm | nightly `20250209-182623-44866cc1` | No paused state, so waits stay indeterminate |
-| Windows Terminal | never | It doesn't report its version; on 1.6+, set `progress: true` |
+| Windows Terminal | 1.6 | Automatic without a version check because it doesn't report its version; older versions ignore it |
 
-Unknown terminals and older versions stay off. iTerm2 is detected from
+Unknown terminals and older versions stay off, except Windows Terminal:
+`WT_SESSION` enables progress without a version check. This works in WSL,
+where Windows Terminal passes `WT_SESSION`, but not over SSH, which does not
+pass it by default. An explicit other `TERM_PROGRAM`, such as `vscode`, wins
+over an inherited `WT_SESSION`. iTerm2 is detected from
 `TERM_PROGRAM=iTerm.app`, or from `LC_TERMINAL=iTerm2` (which also works over
 SSH) when no other terminal sets `TERM_PROGRAM`. Inside tmux or screen, the
 version comes from `LC_TERMINAL_VERSION`, never from the multiplexer's own
-version. If Pi's `terminal.showTerminalProgress` setting is on, Pi owns
+version. Windows Terminal needs no version hint. If Pi's
+`terminal.showTerminalProgress` setting is on, Pi owns
 progress instead; Pi's bar is indeterminate only and ignores background work,
 pauses and errors.
 

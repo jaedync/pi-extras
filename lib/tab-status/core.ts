@@ -39,7 +39,8 @@ export function statusSequence(value?: Pick<View, "status" | "color" | "detail">
 	return `\x1b]21337;${Object.entries(fields).map(([key, text]) => `${key}=${escapeValue(text)}`).join(";")}\x1b\\`;
 }
 // iTerm2's earlier paused implementation required a percentage; 100 keeps it visible.
-export const progressSequence = (state: Progress): string => `\x1b]9;4;${state}${state === 4 ? ";100" : ""}\x07`;
+// Explicit Windows percentages avoid empty-parameter ambiguity: https://github.com/microsoft/terminal/issues/9960.
+export const progressSequence = (state: Progress, windows = false): string => `\x1b]9;4;${state}${state === 4 ? ";100" : windows ? ";0" : ""}\x07`;
 export const passthrough = (sequence: string, tmux: boolean): string => tmux ? `\x1bPtmux;${sequence.replaceAll("\x1b", "\x1b\x1b")}\x1b\\` : sequence;
 
 export interface State {
