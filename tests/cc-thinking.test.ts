@@ -40,6 +40,10 @@ test("a summary click expands only its thinking, while full mode still hides liv
   const live=new AssistantMessageComponent(undefined,true);
   live.updateContent(msg(),true);
   assert.deepEqual(plain(live),[]);
+  const finished=new AssistantMessageComponent(msg(true),true);
+  assert.ok(plain(finished).includes("First thought."));
+  finished.setHideThinkingBlock(false);
+  assert.deepEqual(plain(finished),finishedRows);
  }finally{undo();}
 });
 test("the dim italic live tail keeps newest three wrapped lines and every row fits",()=>{
@@ -49,6 +53,8 @@ test("the dim italic live tail keeps newest three wrapped lines and every row fi
   assert.ok(lines.length<=3);
   assert.ok(lines.every(line=>visibleWidth(line)<=width),`${width}: ${lines}`);
  }
+ const unsafe=renderThinkingTail("safe\x1b[2J\x1b]0;injected\x07 next",40,theme).join("\n");
+ assert.ok(!unsafe.includes("\x1b"),"streamed model thinking cannot inject terminal controls");
  const lines=renderThinkingTail("thought ".repeat(80)+"newest",40,theme);
  assert.ok(lines[0]?.trimStart().startsWith("… "));
  assert.ok(lines.at(-1)?.endsWith("newest"));

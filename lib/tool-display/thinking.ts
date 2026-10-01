@@ -1,11 +1,8 @@
 /**
- * Thinking blocks as a live tail: the block's text run together on one line
- * (flatThinking), shown whole when it wraps to three lines or fewer, else its
- * newest three, the first opening with `…`. Newlines would spend the tail's
- * few lines on list items and blank gaps, so the tail joins them instead.
- * A click on a block, or Pi's thinking toggle for all of them, switches to
- * the full text and back. The resting style can also be Pi's collapsed label
- * or the full text.
+ * Streaming thinking appears under the spinner as its newest three wrapped
+ * lines. Finished thinking is one measured summary, expandable by click or
+ * Pi's thinking toggle. The full view is Pi's own markdown rendering.
+ * Older hosts retain the original three-view behavior.
  *
  * Pi draws an assistant message with its AssistantMessageComponent and has
  * no hook for thinking blocks, so this wraps the component's `updateContent`.
@@ -16,10 +13,11 @@
  */
 import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { noteLate } from "../late-rows.ts";
 import { BULLET_GLYPH } from "../band/glyph.ts";
 import { ROW_MARGIN } from "../band/band.ts";
+import { sanitize } from "./format.ts";
 
 export type ThinkingMode = "tail" | "collapsed" | "full";
 export const THINKING_MODES: readonly ThinkingMode[] = ["tail", "collapsed", "full"];
@@ -102,7 +100,7 @@ export function flatThinking(text: string): string {
 	let out = "";
 	let fresh = true;
 	let code = false;
-	for (const raw of text.split("\n")) {
+	for (const raw of sanitize(stripTerminalSequences(text)).split("\n")) {
 		if (FENCE.test(raw)) {
 			code = !code;
 			fresh = true;
@@ -135,7 +133,8 @@ export function tailLines(text: string, width: number, max = THINKING_TAIL_LINES
 	const room = Math.max(1, width);
 	const budget = room * max * TAIL_CHARS_PER_LINE;
 	const long = flat.length > budget;
-	const end = long ? flat.slice(flat.indexOf(" ", flat.length - budget) + 1) : flat;
+	const boundary = flat.indexOf(" ", flat.length - budget);
+	const end = long ? flat.slice(boundary < 0 ? flat.length - budget : boundary + 1) : flat;
 	if (!long) {
 		const whole = wrapTextWithAnsi(end, room);
 		if (whole.length <= max) return { lines: whole, cut: false };
@@ -296,7 +295,10 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 			text: runs[run]!,
 			pad: host.gutter?.() ? summary ? 0 : ROW_MARGIN : self.outputPad,
 			host,
-			view: () => viewFor(summary && host.mode() !== "full" ? "collapsed" : host.mode() ?? mode, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false),
+			view: () => {
+				const chosen = viewFor(summary && host.mode() !== "full" ? "collapsed" : host.mode() ?? mode, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false);
+				return summary && chosen === "tail" ? "collapsed" : chosen;
+			},
 			label: () => summary?.(message, run) ?? self.hiddenThinkingLabel,
 			toggle: () => toggleBlock(owner, run),
 			memo: memoFor(owner, run, runs[run]!, self.isStreaming, self.outputPad),

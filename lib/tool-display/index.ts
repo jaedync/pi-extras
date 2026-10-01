@@ -31,6 +31,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { getCapabilities } from "@earendil-works/pi-tui";
 import { AnimationClock } from "../band/clock.ts";
+import { THOUGHT_GLYPH } from "../band/glyph.ts";
 import type { ShownOverlay } from "../band/modal.ts";
 import { openPopup, type PopupHost } from "../band/popup.ts";
 import { chainOperations, withChains, type ActiveRuns } from "../chain/exec.ts";
@@ -49,6 +50,7 @@ import { createMeshMessageRenderer, MESH_MESSAGE_TYPE } from "./mesh.ts";
 import { NestedCalls } from "./nested.ts";
 import { editRenderers, readRenderers, writeRenderers } from "./files.ts";
 import { foreignRenderers, type ForeignTool } from "./foreign.ts";
+import { installToolFolding, prepareToolFolding, ToolGroups } from "./fold.ts";
 import type { Kit } from "./kit.ts";
 import { searchRenderers } from "./search.ts";
 import { DEFAULT_SETTINGS, readSettings, writeSettings, type DisplaySettings } from "./settings.ts";
@@ -99,11 +101,11 @@ export function withDisplay(definition: AnyTool, renderers: Renderers): AnyTool 
 	return markRow({ ...definition, renderShell: "self", renderCall: renderers.renderCall, renderResult: renderers.renderResult }, "band");
 }
 
-const USAGE = "/tool-display on|off · others on|off · chains on|off · motion full|reduced · thinking tail|collapsed|full · count calls|steps";
+const USAGE = "/tool-display on|off · others on|off · chains on|off · motion full|reduced · thinking tail|collapsed|full · fold on|off · count calls|steps";
 
 function describeSettings(settings: DisplaySettings): string {
 	if (!settings.enabled) return "Tool Display is off; every tool draws its own rows.";
-	return `Tool Display is on · other tools' rows ${settings.others ? "on" : "off"} · chain steps ${settings.chains ? "on" : "off"} · motion ${settings.motion} · thinking ${settings.thinking}.`;
+	return `Tool Display is on · other tools' rows ${settings.others ? "on" : "off"} · chain steps ${settings.chains ? "on" : "off"} · motion ${settings.motion} · thinking ${settings.thinking} · fold ${settings.fold ? "on" : "off"}.`;
 }
 
 /** `count calls` or `count steps`, for the Status Plus tool figure. */
@@ -119,6 +121,7 @@ export function applyArgs(settings: DisplaySettings, args: string): DisplaySetti
 	if (words.length === 1 && (first === "on" || first === "off")) return { ...settings, enabled: first === "on" };
 	if (words.length === 2 && first === "others" && (second === "on" || second === "off")) return { ...settings, others: second === "on" };
 	if (words.length === 2 && first === "chains" && (second === "on" || second === "off")) return { ...settings, chains: second === "on" };
+	if (words.length === 2 && first === "fold" && (second === "on" || second === "off")) return { ...settings, fold: second === "on" };
 	if (words.length === 2 && first === "motion" && (second === "full" || second === "reduced")) return { ...settings, motion: second };
 	const thinking = THINKING_MODES.find((mode) => mode === second);
 	if (words.length === 2 && first === "thinking" && thinking) return { ...settings, thinking };
@@ -143,6 +146,10 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	let session: SessionTools | undefined;
 	let undoThinking: (() => void) | undefined;
 	let undoAdoption: (() => void) | undefined;
+	let undoFolding: (() => void) | undefined;
+	let thinkingActive = false;
+	const publishSettings = () => pi.events.emit(DISPLAY_SETTINGS_EVENT, { ...settings, hidesLiveThinking: thinkingActive && settings.enabled });
+	const groups = new ToolGroups();
 	let adopting = false;
 	const owned = new Set<string>();
 	const adopted = new WeakMap<object, RowRenderers>();
@@ -159,6 +166,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	// In place before a reload rebuilds the transcript, so the rows it builds are noted (see late-rows.ts).
 	prepareAdoption();
 	prepareThinkingTail();
+	prepareToolFolding();
 
 	const run = watchRun(pi);
 	const thinkingDuration = watchThinking(pi, deps.host.now);
@@ -289,7 +297,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		clock.setReduced(settings.motion === "reduced");
 		compaction.start(ctx);
 		// Rows are only drawn by the terminal UI; print, JSON and RPC runs keep Pi's tools untouched.
-		if (ctx.mode !== "tui") return;
+		thinkingActive = false;
+		if (ctx.mode !== "tui") { publishSettings(); return; }
 		ui = ctx.ui as unknown as PopupHost;
 		for (const entry of ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? []) {
 			if (entry.type === "message") {
@@ -305,6 +314,9 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		fullscreen = session.fullscreen;
 		const hiddenAtStart = session.hideThinking ?? false;
 		const host = ctx.ui as { theme?: ThinkingTheme };
+		groups.replay(ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? []);
+		undoFolding?.();
+		undoFolding = installToolFolding({ enabled: () => settings.enabled && settings.fold, expanded: () => ctx.ui.getToolsExpanded?.() ?? false, groups, theme: () => host.theme });
 		undoThinking?.();
 		undoThinking = installThinkingTail({
 			mode: (): ThinkingMode | undefined => (settings.enabled ? settings.thinking : undefined),
@@ -313,7 +325,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			gutter: () => true,
 			summary: (message, index) => {
 				const duration = thinkingDuration(message, index);
-				return duration === undefined ? "∴ Thought" : `∴ Thought for ${Math.round(duration / 1_000)}s`;
+				return duration === undefined ? `${THOUGHT_GLYPH} Thought` : `${THOUGHT_GLYPH} Thought for ${Math.floor(duration / 1_000)}s`;
 			},
 		});
 		undoAdoption?.();
@@ -321,23 +333,49 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		adopting = canAdopt();
 		install();
 		repairLate();
+		thinkingActive = true;
+		publishSettings();
 	});
 
-	pi.on("tool_execution_start", (event, ctx) => { if (ctx.mode === "tui") nested.observe(event); });
+	pi.on("message_start", (event, ctx) => {
+		if (ctx.mode === "tui" && event.message.role === "assistant") groups.turn();
+	});
+	pi.on("message_update", (event, ctx) => {
+		if (ctx.mode === "tui" && event.assistantMessageEvent.type === "text_delta" && event.assistantMessageEvent.delta.trim()) groups.moveOn();
+	});
+	pi.on("tool_execution_start", (event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		nested.observe(event);
+		if (!event.parentToolCallId) groups.call(event.toolCallId, event.toolName, event.args);
+	});
 	pi.on("tool_execution_update", (event, ctx) => { if (ctx.mode === "tui") nested.observe(event); });
 	pi.on("tool_execution_end", (event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		nested.observe(event);
-		if (!(event as { parentToolCallId?: string }).parentToolCallId) nested.finish(event.toolCallId);
+		if (!(event as { parentToolCallId?: string }).parentToolCallId) {
+			nested.finish(event.toolCallId);
+			groups.finish(event.toolCallId, event.isError, nested.get(event.toolCallId) ?? event.result?.details);
+		}
 	});
 	pi.on("message_end", (event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		const message = event.message as { role?: unknown; toolCallId?: unknown; nestedCalls?: unknown };
-		if (message.role === "toolResult" && typeof message.toolCallId === "string") nested.restore(message.toolCallId, message.nestedCalls);
+		const message = event.message;
+		if (message.role === "custom" || message.role === "user") groups.boundary();
+		if (message.role === "toolResult") {
+			nested.restore(message.toolCallId, message.nestedCalls);
+			groups.finish(message.toolCallId, message.isError, message.nestedCalls ?? message.details ?? nested.get(message.toolCallId));
+		}
+		if (message.role === "assistant") {
+			for (const part of message.content) {
+				if (part.type === "text" && part.text.trim()) groups.moveOn();
+				if (part.type === "toolCall") groups.call(part.id, part.name, part.arguments);
+			}
+		}
 	});
 
 	const restoreNested = (_event: unknown, ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui") return;
+		groups.replay(ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? []);
 		for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
 			if (entry.type !== "message") continue;
 			const message = entry.message as { role?: unknown; toolCallId?: unknown; nestedCalls?: unknown };
@@ -345,9 +383,10 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		}
 	};
 	pi.on("session_tree", restoreNested);
+	pi.on("session_compact", restoreNested);
 
 	pi.on("turn_end", flush);
-	pi.on("agent_end", flush);
+	pi.on("agent_end", () => { groups.moveOn(); flush(); });
 	pi.on("session_shutdown", () => {
 		flush();
 		clock.stop();
@@ -358,6 +397,11 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		undoThinking = undefined;
 		undoAdoption?.();
 		undoAdoption = undefined;
+		undoFolding?.();
+		undoFolding = undefined;
+		groups.reset();
+		thinkingActive = false;
+		publishSettings();
 	});
 
 	pi.registerCommand("tool-display", {
@@ -375,6 +419,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 				["thinking tail", "Thinking shows its newest three lines"],
 				["thinking collapsed", "Thinking shows only its label"],
 				["thinking full", "Thinking shows everything"],
+				["fold on", "Fold finished tool calls after the model moves on"],
+				["fold off", "Keep finished tool calls visible"],
 				["count calls", "Status Plus counts one per tool call"],
 				["count steps", "Status Plus counts each step a chain ran"],
 			] as const;
@@ -404,7 +450,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			}
 			const toggled = next.enabled !== settings.enabled;
 			settings = next;
-			pi.events.emit(DISPLAY_SETTINGS_EVENT, settings);
+			publishSettings();
 			clock.setReduced(settings.motion === "reduced");
 			let saved = true;
 			try { deps.settings.write(settings); } catch { saved = false; }

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { AssistantMessageComponent, initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
+import { DISPLAY_SETTINGS_EVENT } from "../lib/extras-config.ts";
 import { CHAIN_ENTRY, CHAIN_EVENT } from "../lib/chain/run.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount } from "../lib/tool-count.ts";
 import { forgetLate, lateRows, offerRows } from "../lib/late-rows.ts";
@@ -131,7 +132,7 @@ test("a chained command runs as written for the model, and its steps are saved b
 	h.start();
 	const result = await h.latest("bash").execute("call-1", { command: "echo one && echo two" });
 	assert.equal(result.content[0].text, "one\ntwo\n");
-	assert.deepEqual(h.emitted, [[CHAIN_EVENT, { toolCallId: "call-1", ran: 2 }]]);
+	assert.deepEqual(h.emitted.filter(([event]) => event === CHAIN_EVENT), [[CHAIN_EVENT, { toolCallId: "call-1", ran: 2 }]]);
 	assert.equal(h.appended.length, 0, "nothing is written in the middle of a turn");
 	h.fire("turn_end");
 	assert.equal(h.appended.length, 1);
@@ -161,15 +162,36 @@ test("a resumed session shows the saved steps of a chained command", () => {
 	assert.match(lines[4], /^ {4}3 +make dist +skipped$/);
 });
 
+test("Tool Display publishes live-thinking ownership on start, settings changes, and shutdown", async () => {
+ const h = harness();
+ h.start();
+ assert.deepEqual(h.emitted.at(-1), [DISPLAY_SETTINGS_EVENT, { ...DEFAULT_SETTINGS, hidesLiveThinking: true }]);
+ await h.run("off");
+ assert.equal((h.emitted.at(-1)![1] as any).hidesLiveThinking, false);
+ await h.run("on");
+ assert.equal((h.emitted.at(-1)![1] as any).hidesLiveThinking, true);
+ await h.run("motion reduced");
+ assert.equal((h.emitted.at(-1)![1] as any).hidesLiveThinking, true);
+ h.fire("session_shutdown");
+ assert.equal((h.emitted.at(-1)![1] as any).hidesLiveThinking, false);
+ const off = harness({ settings: { ...DEFAULT_SETTINGS, enabled: false } });
+ off.start();
+ assert.equal((off.emitted.at(-1)![1] as any).hidesLiveThinking, false);
+ off.fire("session_shutdown");
+ const print = harness();
+ print.start("print");
+ assert.equal((print.emitted.at(-1)![1] as any).hidesLiveThinking, false);
+});
+
 test("/tool-display reports, switches and saves its settings", async () => {
 	const h = harness();
 	h.start();
 	await h.run("");
-	assert.match(h.notes.at(-1)![0], /^Tool Display is on · other tools' rows on · chain steps on · motion full · thinking tail\./);
+	assert.match(h.notes.at(-1)![0], /^Tool Display is on · other tools' rows on · chain steps on · motion full · thinking tail · fold on\./);
 	await h.run("motion reduced");
-	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: true, motion: "reduced", thinking: "tail" });
+	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: true, motion: "reduced", thinking: "tail", fold: true });
 	await h.run("chains off");
-	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: false, motion: "reduced", thinking: "tail" });
+	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: false, motion: "reduced", thinking: "tail", fold: true });
 	await h.run("sideways");
 	assert.equal(h.notes.at(-1)![1], "warning");
 	assert.equal(h.writes.length, 2);
@@ -253,8 +275,8 @@ test("the settings persist under toolDisplay in pi-extras.json and keep other se
 		assert.deepEqual(readSettings(file), DEFAULT_SETTINGS, "a missing file reads as the defaults");
 		writeFileSync(file, JSON.stringify({ computerUse: { apps: "all" }, toolDisplay: { density: "compact" } }));
 		assert.deepEqual(readSettings(file), DEFAULT_SETTINGS, "the 0.5 density setting is ignored");
-		writeSettings({ enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed" }, file);
-		assert.deepEqual(readSettings(file), { enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed" });
+		writeSettings({ enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed", fold: false }, file);
+		assert.deepEqual(readSettings(file), { enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed", fold: false });
 		const saved = JSON.parse(readFileSync(file, "utf8"));
 		assert.deepEqual(saved.computerUse, { apps: "all" });
 		writeFileSync(file, "{ not json");

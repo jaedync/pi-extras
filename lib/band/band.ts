@@ -279,9 +279,8 @@ export function renderBand(theme: BandTheme, palette: Palette | undefined, spec:
 	});
 }
 
-/** Whether a phase still changes on its own, so its row needs animation ticks; a `margined` row spins while written. */
-export function isAnimated(phase: BandPhase, motion: Motion, margined = false): boolean {
+/** Writing is steady. Running and the brief finish flash need animation ticks. */
+export function isAnimated(phase: BandPhase, motion: Motion, _margined = false): boolean {
 	if (phase.kind === "running") return true;
-	if (margined && phase.kind === "writing") return false;
 	return phase.kind === "done" && motion === "full" && phase.sinceMs < FLASH_MS;
 }

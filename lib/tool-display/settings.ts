@@ -15,9 +15,10 @@ export interface DisplaySettings {
 	readonly chains: boolean;
 	readonly motion: Motion;
 	readonly thinking: ThinkingMode;
+	readonly fold: boolean;
 }
 
-export const DEFAULT_SETTINGS: DisplaySettings = { enabled: true, others: true, chains: true, motion: "full", thinking: "tail" };
+export const DEFAULT_SETTINGS: DisplaySettings = { enabled: true, others: true, chains: true, motion: "full", thinking: "tail", fold: true };
 const SECTION = "toolDisplay";
 
 export function readSettings(file = CONFIG_FILE): DisplaySettings {
@@ -28,9 +29,10 @@ export function readSettings(file = CONFIG_FILE): DisplaySettings {
 		chains: section.chains !== false,
 		motion: section.motion === "reduced" ? "reduced" : "full",
 		thinking: THINKING_MODES.find((mode) => mode === section.thinking) ?? "tail",
+		fold: section.fold !== false,
 	};
 }
 
 export function writeSettings(settings: DisplaySettings, file = CONFIG_FILE): void {
-	writeSection(SECTION, { enabled: settings.enabled, others: settings.others, chains: settings.chains, motion: settings.motion, thinking: settings.thinking }, file);
+	writeSection(SECTION, { enabled: settings.enabled, others: settings.others, chains: settings.chains, motion: settings.motion, thinking: settings.thinking, fold: settings.fold }, file);
 }

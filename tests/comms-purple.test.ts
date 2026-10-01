@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { BULLET_GLYPH } from "../lib/band/glyph.ts";
 import test from "node:test";
 import { CustomMessageComponent, ExtensionRunner, getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth, type Component } from "@earendil-works/pi-tui";
@@ -67,19 +68,18 @@ test("the foreign comms wrapper preserves time, result styling and the popup cli
 	} finally { h.kit.clock.stop(); }
 });
 
-test("communication rows keep the transcript margin: a spinner while written, text under the title", async () => {
-	const title = /^ {3}\S/;
+test("communication rows keep the shared bullet gutter and text under the title", async () => {
+	const title = (line: string) => assert.ok(line.startsWith(`${BULLET_GLYPH} `));
 	const { createMeshMessageRenderer } = await mesh();
 	const mail = plain(createMeshMessageRenderer(() => getMarkdownTheme())({ content: envelope() } as never, { expanded: false } as never, theme as never)!.render(84));
-	assert.match(mail[0]!, title, "mesh mail");
-	assert.match(mail[1]!, /^ {5}Found three files\./, "its text under the title");
+	title(mail[0]!);
+	assert.match(mail[1]!, /^ {4}Found three files\./, "its text under the title");
 	const note = plain(createMessageRenderer()({ details: { id: "mail-1", kind: "note", from: "scout", to: "reader", text: "hello" } } as never, { expanded: false } as never, theme as never)!.render(84));
-	assert.match(note[0]!, title, "a subagent note");
-	assert.match(note[1]!, /^ {5}hello/);
-	assert.match(plain(messageCallRow({ to: "scout", text: "hi" }, theme as never, { state: {} }).render(84))[0]!, title, "a delivered message");
-	// Written now: the spinner turns in the margin although the band stays purple.
-	const spinner = /^ [^\s•] \S/;
-	assert.match(plain(messageCallRow({ to: "scout", text: "hi" }, theme as never, { state: {}, isPartial: true, executionStarted: false }).render(84))[0]!, spinner);
+	title(note[0]!);
+	assert.match(note[1]!, /^ {4}hello/);
+	title(plain(messageCallRow({ to: "scout", text: "hi" }, theme as never, { state: {} }).render(84))[0]!);
+	// Written now: a dim bullet in the margin, while the band keeps its identity purple.
+	title(plain(messageCallRow({ to: "scout", text: "hi" }, theme as never, { state: {}, isPartial: true, executionStarted: false }).render(84))[0]!);
 	const h = harness();
 	const renderers = foreignRenderers({ ...h.kit, streaming: () => true }, { name: "agent_send" });
 	const context: RenderContext = { args: { to: "scout", message: "hello" }, toolCallId: "comms-3", state: {}, lastComponent: undefined,
@@ -87,7 +87,7 @@ test("communication rows keep the transcript margin: a spinner while written, te
 	try {
 		const line = renderers.renderCall(context.args, theme, context).render(84)[0]!;
 		assert.ok(line.includes(purpleBand));
-		assert.match(plain([line])[0]!, spinner, "agent_send being written");
+		title(plain([line])[0]!);
 	} finally { h.kit.clock.stop(); }
 });
 

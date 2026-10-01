@@ -25,11 +25,21 @@ const modern = typeof sdk.createCodemodeExtension === "function";
 const SCRIPT = "return await Promise.all([tools.fixture_write({cell: 1}), tools.fixture_write({cell: 2})]);";
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const plain = (row: any): string[] => row.render(140).map((line: string) => tui.stripTerminalSequences(line).trimEnd());
+const expansion = new WeakMap<object, boolean>();
+const owners = new WeakMap<object, object>();
+const unfolded = (row: any): string[] => {
+ const session = owners.get(row);
+ assert.ok(session, "fixture row belongs to a session");
+ expansion.set(session, true);
+ row.setExpanded(true);
+ return plain(row);
+};
 const resultOf = (session: any) => session.sessionManager.getBranch().findLast((entry: any) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "codemode")?.message;
 
 function rowFor(session: any, id: string, args: object) {
 	const row = new sdk.ToolExecutionComponent("codemode", id, args, {}, session.getToolDefinition("codemode"), { requestRender() {} }, scratch);
 	row.setArgsComplete();
+	owners.set(row, session);
 	return row;
 }
 
@@ -91,7 +101,7 @@ async function setup(options: { legacy?: boolean; manager?: any; measurements?: 
 	const manager = options.manager ?? sdk.SessionManager.create(scratch, join(agentDir, "sessions"));
 	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model: faux.getModel("offline"), settingsManager, resourceLoader: loader, sessionManager: manager });
 	const errors: unknown[] = [];
-	const ui = { notify() {}, setWidget() {}, custom: async () => undefined };
+	const ui = { notify() {}, setWidget() {}, getToolsExpanded: () => expansion.get(session) ?? false, custom: async () => undefined };
 	await session.bindExtensions({ mode: "tui", uiContext: ui, onError: (error: unknown) => errors.push(error) });
 	assert.deepEqual(errors, []);
 	session.subscribe((event: any) => options.measurements?.observe(event));
@@ -112,7 +122,8 @@ function assertExclusiveRun(f: any, measurements: ReturnType<typeof probe>, live
 	assert.equal(measurements.hookCalls.length, 2, "real nested calls cross extension validation/permission hooks");
 	assert.equal(measurements.hookResults.length, 2, "real nested results cross extension result hooks");
 	assert.ok(measurements.snapshots.some((lines) => lines.filter((line) => /ƒ[12].*overlap.*running/.test(line)).length === 2));
-	const lines = plain(live);
+	assert.match(plain(live).join("\n"), /Called 1 codemode/, "finished root call folds by default");
+	const lines = unfolded(live);
 	assert.match(lines.join("\n"), /ƒ1.*fixture_write.*overlap.*done/);
 	assert.match(lines.join("\n"), /ƒ2.*fixture_write.*overlap.*done/);
 	assert.doesNotMatch(lines.join("\n"), /parallel/i);
@@ -156,7 +167,7 @@ test("native codemode executes exclusive requests serially while cells truthfull
 		assert.deepEqual(persisted.nestedCalls, saved.nestedCalls, "real session storage restores the canonical bounded nestedCalls record");
 		const row = rowFor(restored.session, persisted.toolCallId, { code: SCRIPT });
 		row.updateResult({ content: persisted.content, details: persisted.details, isError: persisted.isError }, false);
-		const lines = plain(row);
+		const lines = unfolded(row);
 		assert.match(lines.join("\n"), /ƒ1.*fixture_write.*done/);
 		assert.match(lines.join("\n"), /ƒ2.*fixture_write.*done/);
 		assert.ok(lines.find((line) => /ƒ2/.test(line))!.endsWith(formatTime(persisted.nestedCalls.calls[1].durationMs)));
@@ -186,7 +197,7 @@ test("native codemode huge nested results truncate UI previews without marking d
 		assert.equal(saved.nestedCalls.complete, true);
 		assert.equal(saved.nestedCalls.calls.length, 2);
 		assert.ok(saved.nestedCalls.calls.every((call: any) => call.status === "ok"));
-		assert.match(plain(live).join("\n"), /ƒ2.*fixture_write.*done/);
+		assert.match(unfolded(live).join("\n"), /ƒ2.*fixture_write.*done/);
 		assert.doesNotMatch(plain(live).join("\n"), /nested call record incomplete/);
 		assert.deepEqual(f.errors, []);
 	} finally { await f.close(); }
@@ -214,7 +225,7 @@ test("native oversized nested arguments reconcile durable incomplete history int
 		assert.equal(saved.nestedCalls.complete, false, "Pi omits durable arguments above 8 KiB");
 		assert.ok(saved.nestedCalls.calls.every((call: any) => call.status === "ok"));
 		assert.equal(durableMessageSeen, true);
-		assert.match(plain(live).join("\n"), /nested call record incomplete/);
+		assert.match(unfolded(live).join("\n"), /nested call record incomplete/);
 		assert.match(plain(live).join("\n"), /ƒ2.*fixture_write.*done/);
 		assert.deepEqual(f.errors, []);
 	} finally { await f.close(); }
@@ -232,7 +243,7 @@ test("legacy foreign codemode keeps its result vocabulary and original execute w
 		});
 		f.faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("codemode", { code: "return 'legacy';" })), ai.fauxAssistantMessage("Finished legacy execution.")]);
 		await f.session.prompt("Run the foreign script.");
-		const lines = plain(row).join("\n");
+		const lines = unfolded(row).join("\n");
 		assert.match(lines, /codemode · JavaScript/);
 		assert.match(lines, /foreign result vocabulary/);
 		assert.doesNotMatch(lines, /ƒ\d|overlap|parallel/);
