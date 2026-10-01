@@ -19,7 +19,8 @@ const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-wo
 const { createLauncher } = await import("../lib/subagents/child.ts");
 const { Team } = await import("../lib/subagents/team.ts");
 const { childMessageTool } = await import("../lib/subagents/tools.ts");
-const { childInstructions } = await import("../lib/subagents/format.ts");
+const { childInstructions, REPORT_MAX_CHARS } = await import("../lib/subagents/format.ts");
+const { MainMail } = await import("../lib/subagents/deliver.ts");
 
 type Delivery = import("../lib/subagents/types.ts").MainDelivery;
 
@@ -116,6 +117,75 @@ test("a child session runs on its model, messages main, and reports", { timeout:
 	assert.ok(existsSync(done.sessionFile!), "the child session is persisted where the spawn said");
 	assert.equal(done.contextWindow, 100_000);
 	await team.close();
+});
+
+test("a long SDK report is saved in full and its completion message names that run's file", { timeout: 20_000 }, async () => {
+	const { team, faux, main } = await setup();
+	const full = "# Review\n\n" + "evidence 🍎\n".repeat(2_000) + "CRITICAL FINAL DETAIL";
+	faux.setResponses([ai.fauxAssistantMessage(full), ai.fauxAssistantMessage("Follow-up complete.")]);
+	try {
+		assert.ok(team.spawn({ name: "long-report", task: "Review", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false }).ok);
+		const first = await team.whenDone("long-report");
+		assert.ok(first.reportFile?.endsWith("long-report.run-1.report.md"), first.reportFile);
+		assert.equal(readFileSync(first.reportFile!, "utf8"), full);
+		let completion = "";
+		const mail = new MainMail({ batchMs: 0, port: { send: (message) => { completion = message.content; } } });
+		mail.deliver(main.at(-1)!);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		mail.dispose();
+		assert.ok(completion.includes(`Report: ${first.reportFile}`));
+		assert.ok(completion.includes(`(report cut at ${REPORT_MAX_CHARS} characters. The whole report is in ${first.reportFile}.)`));
+		assert.ok(!completion.includes("CRITICAL FINAL DETAIL"));
+		await team.send("main", "long-report", "Follow up");
+		const second = await team.whenDone("long-report");
+		assert.ok(second.reportFile?.endsWith("long-report.run-2.report.md"), second.reportFile);
+		assert.equal(readFileSync(second.reportFile!, "utf8"), "Follow-up complete.");
+		assert.equal(readFileSync(first.reportFile!, "utf8"), full, "the older completion's file is unchanged");
+	} finally {
+		await team.close();
+	}
+});
+
+test("/subagents report shows the latest saved path without adding a report tool", { timeout: 20_000 }, async () => {
+	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
+	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
+	runtime.registerNativeProvider(faux.provider);
+	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false }, cacheWarming: "off" });
+	const { default: extension } = await import("../extensions/subagents.ts");
+	const loader = new sdk.DefaultResourceLoader({ cwd: scratch, agentDir, settingsManager, noExtensions: true, noSkills: true,
+		noPromptTemplates: true, noThemes: true, noContextFiles: true, extensionFactories: [extension] });
+	await loader.reload();
+	assert.deepEqual(loader.getExtensions().errors, []);
+	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model: runtime.getModel("faux", "cheap")!,
+		settingsManager, resourceLoader: loader, sessionManager: sdk.SessionManager.inMemory(scratch) });
+	const notices: string[] = [];
+	try {
+		await session.bindExtensions({ mode: "print", uiContext: { notify: (text: string) => notices.push(text) } as never } as never);
+		await session.prompt("/subagents report");
+		assert.equal(notices.at(-1), "Usage: /subagents report <name>");
+		await session.prompt("/subagents report missing");
+		assert.equal(notices.at(-1), "No subagent named missing.");
+		const tool = session.agent.state.tools.find((tool) => tool.name === "subagent")!;
+		assert.ok(tool);
+		assert.ok(!session.agent.state.tools.some((tool) => /report/.test(tool.name)));
+		faux.setResponses([ai.fauxAssistantMessage("Full command report.")]);
+		const result = await tool.execute("spawn", { name: "command-report", task: "Report", wait: true }) as { content: Array<{ text: string }> };
+		const path = result.content[0]!.text.match(/\nReport: (.+)/)?.[1];
+		assert.ok(path, result.content[0]!.text);
+		await session.prompt("/subagents report command-report");
+		assert.equal(notices.at(-1), `Report for command-report: ${path}`);
+		assert.equal(readFileSync(path, "utf8"), "Full command report.");
+		faux.setResponses([ai.fauxAssistantMessage("")]);
+		const restored = await tool.execute("restored", { name: "restored-report", task: "Report", wait: true }) as { details: { sessionFile: string } };
+		const base = restored.details.sessionFile.replace(/\.jsonl$/, "");
+		writeFileSync(`${base}.run-2.report.md`, "older");
+		writeFileSync(`${base}.run-10.report.md`, "latest restored report");
+		await session.prompt("/subagents report restored-report");
+		assert.equal(notices.at(-1), `Report for restored-report: ${base}.run-10.report.md`);
+	} finally {
+		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+		session.dispose();
+	}
 });
 
 test("a child blocks on a question until main answers, then uses the answer", { timeout: 20_000 }, async () => {
@@ -237,6 +307,37 @@ test("with another extension's subagent tool, Subagents stands down entirely", {
 		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		session.dispose();
 	}
+});
+
+test("a resumed SDK run still saves its report after compaction shrinks its messages", { timeout: 20_000 }, async () => {
+	const settingsFile = join(agentDir, "settings.json");
+	writeFileSync(settingsFile, JSON.stringify({ compaction: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 500 } }));
+	for (const part of ["a", "b", "c"]) writeFileSync(join(scratch, `report-${part}.txt`), `${part} `.repeat(6_000));
+	const { team, faux } = await setup([{ id: "report-tiny", contextWindow: 8_000 }]);
+	try {
+		faux.setResponses(Array.from({ length: 12 }, (_, i) => ai.fauxAssistantMessage(`Seed report ${i}.`)));
+		team.spawn({ name: "compact-report", task: "Seed context", parent: "main", model: "faux/report-tiny", readOnly: false, fork: false, blocking: false });
+		await team.whenDone("compact-report");
+		for (let i = 1; i < 12; i++) { await team.send("main", "compact-report", `Seed turn ${i}`); await team.whenDone("compact-report"); }
+		const before = team.messages("compact-report").length;
+		const full = "Final report after compaction, with all critical details.";
+		let reads = 0;
+		const step = (context: any) => {
+			if (JSON.stringify(context).includes("context summarization assistant")) return ai.fauxAssistantMessage("## Goal\nRead three report files.");
+			reads++;
+			return reads <= 3 ? ai.fauxAssistantMessage(ai.fauxToolCall("read", { path: join(scratch, `report-${"abc"[reads - 1]}.txt`) })) : ai.fauxAssistantMessage(full);
+		};
+		faux.setResponses(Array.from({ length: 12 }, () => step));
+		await team.send("main", "compact-report", "Read all three files and report.");
+		const done = await team.whenDone("compact-report");
+		assert.equal(done.state, "idle", done.error);
+		const entries = readFileSync(done.sessionFile!, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+		assert.ok(entries.some((entry) => entry.type === "compaction"));
+		assert.ok(team.messages("compact-report").length < before, "Pi shortened the messages below the run's former start position");
+		assert.equal(done.report, full);
+		assert.ok(done.reportFile?.endsWith(".run-13.report.md"), done.reportFile);
+		assert.equal(readFileSync(done.reportFile!, "utf8"), full);
+	} finally { rmSync(settingsFile, { force: true }); await team.close(); }
 });
 
 test("a child compacts its own context when it fills up, and says so while it does", { timeout: 20_000 }, async () => {

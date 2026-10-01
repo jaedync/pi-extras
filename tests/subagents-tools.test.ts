@@ -13,9 +13,10 @@ function setup() {
 		launcher: {
 			async launch(record: AgentRecord): Promise<ChildHandle> {
 				let last: string | undefined;
+				const messages: unknown[] = [];
 				return {
-					prompt: () => new Promise<void>((resolve) => finishers.set(record.name, (text) => { last = text; resolve(); })),
-					steer: () => undefined, abort: async () => undefined, lastText: () => last, messages: () => [],
+					prompt: () => new Promise<void>((resolve) => finishers.set(record.name, (text) => { last = text; messages.push({ role: "assistant", content: [{ type: "text", text }] }); resolve(); })),
+					steer: () => undefined, abort: async () => undefined, lastText: () => last, messages: () => messages,
 					takeQueued: () => [], dispose: async () => undefined,
 				};
 			},

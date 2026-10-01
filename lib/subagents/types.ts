@@ -49,6 +49,8 @@ export interface AgentRecord {
 	contextTokens?: number;
 	contextWindow?: number;
 	report?: string;
+	/** The full report of the latest completed run, never reused by a later run. */
+	reportFile?: string;
 	error?: string;
 	sessionFile?: string;
 	/** How many runs: 1, then one more per resume. */

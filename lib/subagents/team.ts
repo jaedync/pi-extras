@@ -13,6 +13,7 @@
  */
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
+import { saveReport } from "./reports.ts";
 import {
 	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest,
 } from "./types.ts";
@@ -29,6 +30,7 @@ export interface TeamOptions {
 	 */
 	sessionFileFor?: (name: string) => string | undefined;
 	now?: () => number;
+	warn?: (message: string) => void;
 }
 
 export type SendResult =
@@ -47,6 +49,8 @@ type Listener = (record: AgentRecord | null) => void;
 export class Team {
 	private readonly records = new Map<string, AgentRecord>();
 	private readonly handles = new Map<string, ChildHandle>();
+	/** Pi rebuilds shorter message lists on compaction, but retains message identities. */
+	private readonly runStarts = new Map<string, ReadonlySet<unknown>>();
 	private readonly inboxes = new Map<string, string[]>();
 	/** Open questions by asker; a child may wait on several agents at once. */
 	private readonly questions = new Map<string, Pending[]>();
@@ -181,8 +185,9 @@ export class Team {
 		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
 		for (const question of this.questions.get(name) ?? []) question.reject(new Error("stopped"));
 		const handle = this.handles.get(name);
-		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, report: handle?.lastText() });
+		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, report: this.runText(name) });
 		await handle?.abort().catch(() => undefined);
+		this.patch(name, { report: this.runText(name) });
 		this.finish(name);
 	}
 
@@ -242,6 +247,7 @@ export class Team {
 		const handle = this.handles.get(name);
 		if (!handle) return;
 		const record = this.records.get(name)!;
+		this.runStarts.set(name, new Set(handle.messages()));
 		this.patch(name, { state: "running", activity: "thinking", runs: record.runs + 1, endedAt: undefined });
 		try {
 			let next: string | null = text;
@@ -255,7 +261,7 @@ export class Team {
 			if (this.records.get(name)?.state !== "stopped") this.fail(name, error);
 			return;
 		}
-		this.settle(name, handle.lastText());
+		this.settle(name, this.runText(name));
 	}
 
 	private settle(name: string, report: string | undefined): void {
@@ -272,7 +278,7 @@ export class Team {
 	private fail(name: string, error: unknown): void {
 		const message = error instanceof Error ? error.message : String(error);
 		// A failure after an answer is news main has not heard.
-		this.patch(name, { state: "failed", endedAt: this.now(), activity: null, error: message, answeredMain: undefined });
+		this.patch(name, { state: "failed", endedAt: this.now(), activity: null, error: message, answeredMain: undefined, report: this.runText(name) });
 		this.finish(name);
 	}
 
@@ -306,9 +312,24 @@ export class Team {
 		if (this.records.get(name)?.answeredMain) this.patch(name, { answeredMain: undefined });
 	}
 
+	private runText(name: string): string | undefined {
+		const start = this.runStarts.get(name);
+		if (start === undefined) return undefined;
+		const messages = this.handles.get(name)?.messages().filter((message) => !start.has(message)) ?? [];
+		const last = [...messages].reverse().find((message) => {
+			const entry = message as { role?: unknown; stopReason?: unknown; content?: unknown };
+			return entry.role === "assistant" && !(entry.stopReason === "aborted" && Array.isArray(entry.content) && entry.content.length === 0);
+		}) as { content?: unknown } | undefined;
+		const text = typeof last?.content === "string" ? last.content : Array.isArray(last?.content)
+			? last.content.filter((part) => part.type === "text").map((part) => part.text ?? "").join("") : "";
+		return text.trim() || undefined;
+	}
+
 	/** Hands the report up and frees the slot. */
 	private finish(name: string): void {
-		const record = this.records.get(name)!;
+		const record = saveReport(this.records.get(name)!, this.options.warn ?? console.warn);
+		this.runStarts.delete(name);
+		this.put(record);
 		this.answeredAt.delete(name);
 		this.resumedToAnswer.delete(name);
 		for (const resolve of this.waiters.get(name) ?? []) resolve(record);

@@ -615,6 +615,15 @@ finished, answering it when it asked); ctrl+x twice stops it, Esc or `✕`
 closes, and its title bar copies the task or the report. Main is told what you
 wrote. Status Plus counts every child in its totals.
 
+**Reports.** Each finished run that has a final report saves it in full beside
+its session as `<session base>.run-<n>.report.md`, including failed and stopped
+runs. Completion messages include the path and a preview capped at 12,000
+characters. Main can
+read the file with its normal read tool. `/subagents report <name>` shows the
+latest report path. Older runs keep their own files. Run numbers can have gaps
+when a run ends waiting for a reply. If saving fails, the message still arrives
+and points to the session file as before.
+
 **Limits.** At most `maxConcurrent` children run at once; the rest queue. A
 child can't start children of its own. Children stop with the session and on
 `/reload`. Each run adds a line to `~/.pi/agent/subagents/runs.jsonl` (model,

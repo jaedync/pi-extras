@@ -30,7 +30,11 @@ function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTime
 					prompt: (text) => new Promise<void>((resolve, reject) => {
 						calls.set(record.name, [...(calls.get(record.name) ?? []), {
 							text,
-							finish: (result) => { last = result; resolve(); },
+							finish: (result) => {
+								last = result;
+								transcripts.set(record.name, [...(transcripts.get(record.name) ?? []), { role: "assistant", content: [{ type: "text", text: result }] }]);
+								resolve();
+							},
 							fail: reject,
 						}]);
 					}),

@@ -30,6 +30,7 @@ import { formatTime } from "../lib/band/band.ts";
 import type { ShownOverlay } from "../lib/band/modal.ts";
 import { formatMoney } from "../lib/status-plus-logic.ts";
 import { Team } from "../lib/subagents/team.ts";
+import { latestReportFile } from "../lib/subagents/reports.ts";
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
@@ -170,6 +171,7 @@ export default function subagents(pi: ExtensionAPI) {
 		// The launcher and tools need the team, and the team needs the launcher.
 		let tools!: ToolContext;
 		team = new Team({
+			warn: (message) => ctx.ui.notify(message, "warning"),
 			maxConcurrent: config.maxConcurrent,
 			maxDepth: config.maxDepth,
 			replyTimeoutMs: config.replyTimeoutMs,
@@ -297,7 +299,7 @@ export default function subagents(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("subagents", {
-		description: "Inspect subagents (/subagents [name]), stop them (stop <name> | stop all), edit the model guide (guide), or see runs by model (stats)",
+		description: "Inspect subagents (/subagents [name]), find full reports (report <name>), stop them (stop <name> | stop all), edit the model guide (guide), or see runs by model (stats)",
 		getArgumentCompletions: (prefix: string) => commandCompletions(prefix, state?.team.list().map((record) => record.name) ?? []),
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const [verb, ...rest] = args.trim().split(/\s+/);
@@ -308,6 +310,18 @@ export default function subagents(pi: ExtensionAPI) {
 				return ctx.ui.notify(`Subagent runs by model (${file}):\n${statsText(statsByModel(lines), formatTime, formatMoney)}`, "info");
 			}
 			if (!state) return ctx.ui.notify("Subagents are not active in this session.", "info");
+			if (verb === "report") {
+				const name = rest.join(" ");
+				if (!name) return ctx.ui.notify("Usage: /subagents report <name>", "info");
+				const record = state.team.get(name);
+				if (!record) return ctx.ui.notify(`No subagent named ${name}.`, "warning");
+				try {
+					const file = record.reportFile ?? (record.sessionFile ? latestReportFile(record.sessionFile) : undefined);
+					return ctx.ui.notify(file ? `Report for ${name}: ${file}` : `No saved report for ${name} yet.`, "info");
+				} catch (error) {
+					return ctx.ui.notify(`Could not find the report for ${name}: ${(error as Error).message}`, "warning");
+				}
+			}
 			if (verb === "stop") {
 				const target = rest.join(" ");
 				const names = target === "all" ? state.team.live().map((record) => record.name) : [target];

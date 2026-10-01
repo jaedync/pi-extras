@@ -10,10 +10,13 @@ import type { AgentRecord } from "./types.ts";
 
 export const REPORT_MAX_CHARS = 12_000;
 
-export function capReport(text: string, sessionFile?: string): string {
+export function capReport(text: string, sessionFile?: string, reportFile?: string): string {
 	if (text.length <= REPORT_MAX_CHARS) return text;
-	const where = sessionFile ? ` The whole report is the last assistant message in ${sessionFile}.` : "";
-	return `${text.slice(0, REPORT_MAX_CHARS)}\n\n(report cut at ${REPORT_MAX_CHARS} characters.${where})`;
+	const where = reportFile ? ` The whole report is in ${reportFile}.` : sessionFile ? ` The whole report is the last assistant message in ${sessionFile}.` : "";
+	const end = /[\uD800-\uDBFF]/.test(text[REPORT_MAX_CHARS - 1]!) && /[\uDC00-\uDFFF]/.test(text[REPORT_MAX_CHARS]!) ? REPORT_MAX_CHARS - 1 : REPORT_MAX_CHARS;
+	const preview = text.slice(0, end);
+	const closeFence = (preview.match(/```/g)?.length ?? 0) % 2 === 1 ? "\n```" : "";
+	return `${preview}${closeFence}\n\n(report cut at ${REPORT_MAX_CHARS} characters.${where})`;
 }
 
 const replyHint = (from: string) => `answer with message({ to: "${from}", text })`;
@@ -37,13 +40,13 @@ function duration(record: AgentRecord, now: number): string {
 /** A finished, failed or stopped child, as its parent reads it. */
 export function reportText(record: AgentRecord, now: number): string {
 	const head = `${record.name} (${record.model}${spend(record)})`;
-	const session = record.sessionFile ? `\nSession: ${record.sessionFile}` : "";
-	if (record.state === "failed") return `${head} failed after ${duration(record, now)}: ${record.error ?? "unknown error"}${session}`;
-	if (record.state === "stopped") {
-		const partial = record.report ? `\nLast message before it stopped:\n${capReport(record.report, record.sessionFile)}` : "";
-		return `${head} was stopped after ${duration(record, now)}.${partial}${session}`;
+	const session = `${record.sessionFile ? `\nSession: ${record.sessionFile}` : ""}${record.report && record.reportFile ? `\nReport: ${record.reportFile}` : ""}`;
+	if (record.state === "failed" || record.state === "stopped") {
+		const outcome = record.state === "failed" ? `failed after ${duration(record, now)}: ${record.error ?? "unknown error"}` : `was stopped after ${duration(record, now)}.`;
+		const partial = record.report ? `\nLast message before it ${record.state}:\n${capReport(record.report, record.sessionFile, record.reportFile)}` : "";
+		return `${head} ${outcome}${session}${partial}`;
 	}
-	const report = record.report?.trim() ? capReport(record.report, record.sessionFile) : noReport(record.state);
+	const report = record.report?.trim() ? capReport(record.report, record.sessionFile, record.reportFile) : noReport(record.state);
 	const why = record.resumedBy && record.runs > 1 ? `\nThis run (${record.runs}) handled: ${oneLine(record.resumedBy.text, 300)}` : "";
 	return `${head} finished after ${duration(record, now)}. Message it to follow up; it keeps its context.${session}${why}\n\n${report}`;
 }
