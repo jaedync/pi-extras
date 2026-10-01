@@ -29,7 +29,7 @@ can still conflict.
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
 | Cache Compaction | Prefix-sharing summaries that reuse the session's warm prompt cache, with safe fallback to Pi's default compaction |
 | Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
-| Phase Spinner | A line under the conversation, above any queued messages, saying what the agent is doing (working phase, compaction, retries) with its own timer; tokens/sec, time to first token and elapsed time in the editor border |
+| Phase Spinner | A line under the conversation, above any queued messages, saying what the agent is doing, with a spinner for each kind of work, live thinking under it and a π end line when a prompt finishes; tokens/sec, time to first token and elapsed time in the editor border |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
 | Subagents | `subagent` and `message` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, with a live band per agent |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
@@ -37,7 +37,7 @@ can still conflict.
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
 | Windows Use | Opt-in, WSL on a Hyper-V host: a `windows_use` tool that operates Windows VMs through Windows-MCP, which it installs in each guest, and through their consoles |
-| Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; thinking as a live tail of its newest lines |
+| Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; finished calls folded into one line, ctrl+o shows them all |
 | Copy Blocks | Code blocks and quotes in replies drawn on a background of their own with a `copy` label: one click copies the exact text; `/copy-block` does it from the keyboard |
 | Release Notes | What changed in pi-extras, shown once in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
@@ -107,7 +107,11 @@ the package. Removing it does not remove your credentials or change other packag
 - `PI_TOOL_DISPLAY=off`: leave Pi's own tool rows in place. `/tool-display`
   writes its switches under `toolDisplay` in `pi-extras.json`: `enabled`,
   `others` (default `true`), `chains` (default `true`), `motion` (`full` or
-  `reduced`) and `thinking` (`tail`, `collapsed` or `full`; default `tail`).
+  `reduced`), `thinking` (`tail`, `collapsed` or `full`; default `tail`) and
+  `fold` (default `true`).
+- `phaseSpinner.verbs` in `pi-extras.json`: your own verbs for the spinner
+  line, up to 100 `"Present|Past"` pairs such as `"Simmering|Simmered"`. They
+  replace the built-in list.
 - `PI_COPY_BLOCKS=off`: leave code blocks and quotes in replies as Pi draws them.
 - `statusPlus.toolCount` in `pi-extras.json`: `calls` (the default) or `steps`,
   switched by clicking the footer's tool count or with `/tool-display count`.
@@ -379,6 +383,41 @@ session instead. macOS asks once, on the Mac's screen, to allow
 `ffmpeg` to use the microphone; this needs Homebrew `ffmpeg`. About the first
 half second of each recording is lost while that job starts.
 
+## Phase Spinner
+
+A line under the conversation says what the agent is doing:
+
+```text
+⢌⡱⢎ Proofing… (12s, ↓ 212 tokens, thinking)
+```
+
+The verb is picked for each prompt from a list of pie and π words (Proofing,
+Kneading, Approximating, Squaring the circle, …) and stays until the prompt
+ends. The parentheses say what is happening: `sending request`, `waiting for
+first token`, `thinking` (then `still thinking`, `thinking more`, `deep in
+thought`), `writing bash call`, `running bash` or `running 3 tools`, and a token
+count while the model writes. Pi's own statuses (compacting, retrying,
+summarizing a branch) take the line's place while they run.
+
+Each kind of work has its own spinner, all three cells wide so the verb never
+moves: a ping going out while the request is sent and answered, a helix while
+the model thinks, a print head while it writes a tool call, a comet orbit while
+tools run, two comets while it waits for a subagent's reply, and a wave that
+moves at the stream's speed while it writes the reply. Compaction squeezes to a
+point, a retry drains, and a branch summary walks every row. The line turns
+amber after 10 seconds of thinking and red when no tokens have come for 10
+seconds.
+
+While the model thinks, its newest three lines show dimly under the spinner.
+When a prompt finishes, a dotted π waves in and out, and the transcript keeps an
+end line such as `π Proofed for 41s, done 9:14 PM`, or `π Stopped after 12s`
+when you stopped it. The end line and the thinking rows are only drawn; the
+model never sees them. Messages you queue show below the line.
+`/tool-display motion reduced` holds every spinner on a still frame.
+
+The π, `●`, `∴` and timeout marks are drawn one cell wide. A terminal set to
+draw East Asian ambiguous-width characters two cells wide will misalign them.
+
 ## Tool Display
 
 Tool Display redraws tool rows in the terminal: Pi's built-in tools, and
@@ -390,9 +429,11 @@ the right. The band's color says how it went (green done, red failed, amber
 timed out, gray aborted), so there are no status marks, and a failure is named
 in words in the right rail (`exit 1`, `timed out`). While a call runs, the band
 fills toward its timeout and warms as the timeout gets close; a call without a
-timeout sweeps instead. While the model writes a call or it runs, a spinner
-turns at the left of its band, in step with Phase Spinner's line under the
-conversation; a call waiting its turn shows a still dot there. Times of ten
+timeout sweeps instead. Rows share the bullet column with the agent's text.
+While a call runs, its bullet says what kind of call it is: a shell command
+with a timeout fills `○ ◔ ◑ ◕ ●` as it uses up its timeout, a subagent or peer
+request has a slowly circling dot, a web call breathes, and other calls keep a
+still dot. A call being written or waiting its turn shows a dim dot. Times of ten
 seconds or more are drawn in a warmer color, so slow calls stand out when you
 scroll back. Output sits indented under
 the band on a gray panel, so each call reads as one block apart from the
@@ -404,6 +445,13 @@ conversation.
 - **write**: the file's line count, and its last three lines (where a
   streaming write is).
 - **grep, find, ls**: what was found (`23 matches in 7 files`, `42 files`).
+
+**Folding.** Once a run of calls finishes, it folds into one line such as
+`● Read 2 files, ran 1 shell command`, so the conversation stays readable.
+Running and failed calls, agent mail and subagent rows never fold, and a
+codemode script whose inner calls failed stays open. Click a fold line to open
+that run; ctrl+o opens every row, as before. `/tool-display fold off` turns
+folding off.
 
 Output that doesn't fit ends in a line such as `… 12 earlier lines`; a single
 hidden line is shown instead, since the hint would take its place anyway.
@@ -464,13 +512,13 @@ Drawing other tools' rows relies on how Pi builds a tool row, which is not part
 of Pi's extension API. If a Pi update changes it, those rows are drawn by
 their own tools again; Pi's built-in tools keep the band either way.
 
-**Thinking.** A thinking block shows as one run of text: paragraphs and list
-items are joined with `·` rather than taking lines of their own, so the view
-holds as much of the thinking as fits. Up to three lines show whole; a longer
-block shows only its newest three, the first starting with `…`. Click a block to
-read all of it, and again to go back; ctrl+t does the same for every block. `/tool-display thinking collapsed`
-shows just the label, as Pi does, and `/tool-display thinking full` shows
-everything.
+**Thinking.** While the model thinks, its newest three lines show under the
+spinner line. Paragraphs and list items are joined with `·` rather than taking
+lines of their own, so the three lines hold as much as fits. When thinking
+ends, the transcript keeps one `∴ Thought for 12s` row. Click it to read the
+whole block, and again to go back; ctrl+t does the same for every block.
+`/tool-display thinking collapsed` shows just the label, as Pi does, and
+`/tool-display thinking full` shows everything.
 
 **Compaction.** A purple header band shows the reason (`auto`, `manual` or
 `overflow`), tokens before and estimated tokens after (`~`), cost when known,
@@ -500,9 +548,11 @@ Tool Display can't split safely (heredocs, `if` and `for` blocks, background
 - `/tool-display chains on|off`: break chained commands into steps, or run
   them as written.
 - `/tool-display motion full|reduced`: the reduced setting drops the sweep,
-  the running step's breathing and the finish flashes, and updates times once
-  a second.
+  the running step's breathing and the finish flashes, holds spinners on a
+  still frame, and updates times once a second.
 - `/tool-display thinking tail|collapsed|full`: how thinking blocks rest.
+- `/tool-display fold on|off`: fold finished calls into one line, or leave
+  every row open.
 - `/tool-display count calls|steps`: how Status Plus counts tools (see below).
 
 The choices are saved in `pi-extras.json`. Rows change only in the terminal UI;

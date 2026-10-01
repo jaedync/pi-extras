@@ -2,6 +2,28 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.16.0 - 2026-10-01
+
+### Changed
+
+- Phase Spinner is redesigned: the line under the conversation reads like
+  `⢌⡱⢎ Proofing… (12s, ↓ 212 tokens, thinking)`. The verb comes from a list
+  of pie and π words and lasts the whole prompt; `phaseSpinner.verbs` sets your
+  own. Each kind of work has its own spinner: a ping while the request goes
+  out, a helix while the model thinks, a print head while it writes a tool
+  call, an orbit while tools run, and a wave that follows the token rate while
+  the reply streams. While the model thinks, its newest three lines show under
+  the spinner. When a prompt finishes, a dotted π waves in and out and the
+  transcript keeps `π Proofed for 41s, done 9:14 PM`, or `π Stopped after 12s`.
+  These lines are only drawn; the model never sees them.
+- Tool Display: finished calls fold into one line such as
+  `● Read 2 files, ran 1 shell command`. Click it to open that run; ctrl+o
+  opens every row; `/tool-display fold off` turns folding off. Running and
+  failed calls never fold. Tool rows share the bullet column with the agent's
+  text, a running call's bullet says what kind of call it is, and details are
+  separated by commas instead of `·`. Finished thinking rests as one
+  `∴ Thought for Ns` row.
+
 ## 0.15.1 - 2026-10-01
 
 ### Fixed
