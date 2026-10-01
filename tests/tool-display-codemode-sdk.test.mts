@@ -122,7 +122,7 @@ function assertExclusiveRun(f: any, measurements: ReturnType<typeof probe>, live
 	assert.equal(measurements.hookCalls.length, 2, "real nested calls cross extension validation/permission hooks");
 	assert.equal(measurements.hookResults.length, 2, "real nested results cross extension result hooks");
 	assert.ok(measurements.snapshots.some((lines) => lines.filter((line) => /ƒ[12].*overlap.*running/.test(line)).length === 2));
-	assert.match(plain(live).join("\n"), /Called 1 codemode/, "finished root call folds by default");
+	assert.match(plain(live).join("\n"), /codemode/, "finished root call stays visible by default");
 	const lines = unfolded(live);
 	assert.match(lines.join("\n"), /ƒ1.*fixture_write.*overlap.*done/);
 	assert.match(lines.join("\n"), /ƒ2.*fixture_write.*overlap.*done/);

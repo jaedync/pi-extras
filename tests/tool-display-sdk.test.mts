@@ -76,6 +76,26 @@ test("in the terminal UI the built-in tools gain the new rows and nothing the ag
 	}
 });
 
+test("finished groups retain every native tool row, with native expand-all unchanged",async()=>{
+ const {session,errors}=await start("tui");
+ try{
+  sdk.initTheme("dark");
+  const calls=["first","second"].map(id=>({type:"toolCall" as const,id,name:"read",arguments:{path:`${id}.txt`}}));
+  await session.extensionRunner.emit({type:"message_end",message:{role:"assistant",content:calls}} as never);
+  const rows=calls.map(call=>{
+   const row=new sdk.ToolExecutionComponent("read",call.id,call.arguments,{},session.getToolDefinition("read")!,{requestRender(){}} as never,scratch);
+   row.setArgsComplete();row.markExecutionStarted();row.updateResult({content:[{type:"text",text:`content ${call.id}`}],isError:false} as never,false);return row;
+  });
+  for(const call of calls)await session.extensionRunner.emit({type:"message_end",message:{role:"toolResult",toolCallId:call.id,isError:false,content:[]}} as never);
+  await session.extensionRunner.emit({type:"agent_end",messages:[]} as never);
+  for(const [index,row] of rows.entries()){
+   assert.match(row.render(90).join("\n"),new RegExp(calls[index]!.arguments.path));
+   row.setExpanded(true);assert.match(row.render(90).join("\n"),new RegExp(`content ${calls[index]!.id}`));
+  }
+  assert.deepEqual(errors,[]);
+ }finally{await session.extensionRunner.emit({type:"session_shutdown",reason:"quit"});session.dispose();}
+});
+
 test("outside the terminal UI Pi's own tools stay in place", { timeout: 20_000 }, async () => {
 	const { session, before, errors } = await start("print");
 	try {

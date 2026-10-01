@@ -38,7 +38,7 @@ can still conflict.
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
 | Windows Use | Opt-in, WSL on a Hyper-V host: a `windows_use` tool that operates Windows VMs through Windows-MCP, which it installs in each guest, and through their consoles |
-| Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; finished calls folded into one line, ctrl+o shows them all |
+| Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; every finished row stays visible, ctrl+o expands them all |
 | Copy Blocks | Code blocks and quotes in replies drawn on a background of their own with a `copy` label: one click copies the exact text; `/copy-block` does it from the keyboard |
 | Release Notes | What changed in pi-extras, shown once in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
@@ -108,8 +108,7 @@ the package. Removing it does not remove your credentials or change other packag
 - `PI_TOOL_DISPLAY=off`: leave Pi's own tool rows in place. `/tool-display`
   writes its switches under `toolDisplay` in `pi-extras.json`: `enabled`,
   `others` (default `true`), `chains` (default `true`), `motion` (`full` or
-  `reduced`), `thinking` (`tail`, `collapsed` or `full`; default `tail`) and
-  `fold` (default `true`).
+  `reduced`), and `thinking` (`tail`, `collapsed` or `full`; default `tail`).
 - `phaseSpinner.verbs` in `pi-extras.json`: opt into playful spinner words
   with `"playful"` (the built-in pie and π list), or up to 100 `"Present|Past"`
   pairs such as `["Simmering|Simmered"]`. Without this setting, the line names
@@ -519,12 +518,8 @@ conversation.
   streaming write is).
 - **grep, find, ls**: what was found (`23 matches in 7 files`, `42 files`).
 
-**Folding.** Once a run of calls finishes, it folds into one line such as
-`● Read 2 files, ran 1 shell command`, so the conversation stays readable.
-Running and failed calls, agent mail and subagent rows never fold, and a
-codemode script whose inner calls failed stays open. Click a fold line to open
-that run; ctrl+o opens every row, as before. `/tool-display fold off` turns
-folding off.
+Every tool row stays visible after it finishes. Pi's native ctrl+o expands
+all rows, as before.
 
 Output that doesn't fit ends in a line such as `… 12 earlier lines`; a single
 hidden line is shown instead, since the hint would take its place anyway.
@@ -624,8 +619,6 @@ Tool Display can't split safely (heredocs, `if` and `for` blocks, background
   the running step's breathing and the finish flashes, holds spinners on a
   still frame, and updates times once a second.
 - `/tool-display thinking tail|collapsed|full`: how thinking blocks rest.
-- `/tool-display fold on|off`: fold finished calls into one line, or leave
-  every row open.
 - `/tool-display count calls|steps`: how Status Plus counts tools (see below).
 
 The choices are saved in `pi-extras.json`. Rows change only in the terminal UI;

@@ -6,6 +6,9 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 ### Changed
 
+- Removed tool-call folding. Every tool row stays visible after it finishes;
+  Pi's native ctrl+o still expands all rows.
+- Restart Pi after updating from 0.17.0 or earlier; /reload leaves the old folding wrapper in place (inert).
 - Phase Spinner names the phase descriptively by default. Set `phaseSpinner.verbs`
   to `"playful"` or a custom list to opt into one verb per prompt. Finished prompts
   keep `π Worked for 41s, done 9:14 PM`; stopped prompts keep their existing stopped line.
