@@ -68,11 +68,30 @@ A change that ships to `main` is done when:
    preview:render`) and reviewed: the title, voice row, jobs and footer are
    legible in the 4:3 crop and at README width (`npm run preview:check --
    --open`), and nothing personal is on screen.
-   Commit the WebP and `meta.json` with the release, and upload the rendered
-   `.github/preview/pi-extras.png` (ignored by git) under the repository's
-   Settings > General > Social preview. A contract test fails until the
-   committed image was rendered for the current minor version.
+   Commit the WebP and `meta.json` with the release. A contract test fails
+   until the committed image was rendered for the current minor version.
 
 Before publication, inspect `git ls-files`, run a secret scanner across the full
 history, inspect `npm pack --dry-run --json`, and inspect the actual archive.
 Review licenses and third-party notices when copying or adding dependencies.
+
+## Periodic upkeep
+
+These are not part of any release and never block one. Check them now and then,
+for example after a minor release.
+
+- **Social preview.** GitHub's social preview (Settings > General > Social
+  preview) is uploaded by hand, so it can lag behind the committed WebP. It is
+  due when the image GitHub serves differs from a fresh render. Renders of the
+  same frame are byte-identical, so compare them directly:
+
+  ```sh
+  npm run preview:render -- --reuse && git checkout -- .github/preview/meta.json
+  url=$(curl -sL https://github.com/jaedync/pi-extras | grep -o 'og:image" content="[^"]*' | cut -d'"' -f3)
+  curl -sL "$url" | cmp - .github/preview/pi-extras.png && echo current
+  ```
+
+  When it is due, an agent asks the user for permission to use computer use,
+  then uploads `.github/preview/pi-extras.png` itself in the user's signed-in
+  browser (Edit > Upload an image…; Cmd+Shift+G in the file panel takes a
+  path) and reruns the comparison to confirm GitHub serves the new image.

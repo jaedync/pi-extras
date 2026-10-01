@@ -43,7 +43,7 @@ export async function runChecks({ imageDir = join(root, PREVIEW_DIR), strict = t
 	for (const problem of problems) console.error(`preview: ${problem}`);
 	const paths = await views(imageDir);
 	console.log(`look at these before releasing:\n  ${[join(imageDir, SOCIAL.file), ...paths].join("\n  ")}`);
-	console.log("then upload the 1x image under the repository's Settings > General > Social preview");
+	console.log("the social preview upload is periodic upkeep, not a release step (CONTRIBUTING.md)");
 	if (open && process.platform === "darwin") execFileSync("open", [join(imageDir, SOCIAL.file), ...paths]);
 	if (problems.length) process.exitCode = 1;
 }

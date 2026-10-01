@@ -1087,8 +1087,9 @@ preview:render` stages one against a scripted local endpoint (no model calls)
 with a spoken dictation, then lays the captured terminal onto the card. It needs
 macOS, tmux, ffmpeg and a provisioned voice model. `npm run preview:check --
 --open` shows it as a 4:3 crop and at README width for review. Only the WebP is
-committed; the PNG for GitHub's social preview is written next to it and
-ignored by git.
+committed; the PNG for GitHub's social preview is written next to it,
+ignored by git, and uploaded now and then rather than with each release (see
+[CONTRIBUTING.md](CONTRIBUTING.md#periodic-upkeep)).
 
 Tests use synthetic credentials and isolated homes, not live accounts. The test
 runner bounds each suite to two minutes. The installation smoke test uses Pi's
