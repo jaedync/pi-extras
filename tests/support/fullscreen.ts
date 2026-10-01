@@ -40,7 +40,7 @@ interface CustomOptions {
 
 /** The count of callbacks on pi-extras's shared frame ticker. */
 export function frameSubscribers(): number {
-	const ticker = (globalThis as Record<symbol, { subscribers: Set<unknown> } | undefined>)[Symbol.for("pi-extras.frame-ticker.v1")];
+	const ticker = (globalThis as Record<symbol, { subscribers: Set<unknown> } | undefined>)[Symbol.for("pi-extras.frame-ticker.v5")];
 	return ticker?.subscribers.size ?? 0;
 }
 

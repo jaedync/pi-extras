@@ -4,7 +4,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { ansi256ToRgb, bgSgr, mix, parseAnsiColor, rgbTo256 } from "../lib/band/color.ts";
 import { AnimationClock } from "../lib/band/clock.ts";
 import { bandBackground, easedFill, formatTime, isAnimated, renderBand, type BandPhase, type Motion, type Seg } from "../lib/band/band.ts";
-import { frameAt, RUNNING, WRITING } from "../lib/band/spinner.ts";
+import { BULLET_GLYPH, SPINNER_CYCLE_MS, SPINNER_FRAME_MS, SPINNER_FRAMES, spinnerGlyph } from "../lib/band/glyph.ts";
 import { paletteFrom, type BandTheme } from "../lib/band/palette.ts";
 import { quiet } from "./support/quiet-theme.ts";
 
@@ -159,7 +159,7 @@ test("the animation clock ticks only while something is registered", () => {
 	let ticks = 0;
 	const off = clock.add(() => { ticks++; });
 	assert.equal(timers.length, 1);
-	assert.equal(timers[0]!.ms, 100);
+	assert.equal(timers[0]!.ms, 120);
 	timers[0]!.fn();
 	assert.equal(ticks, 1);
 	clock.add(() => { ticks += 10; });
@@ -178,26 +178,25 @@ const marginPalette = paletteFrom(quiet())!;
 const margined = (phase: BandPhase, clockMs = 0, motion: Motion = "full") =>
 	stripTerminalSequences(renderBand(quiet(), marginPalette, { width: 24, phase, segs: MARGIN_SEGS, rail: [], clockMs, motion, margin: true }));
 
-test("a margined band starts its title two columns in and keeps the margin for the call's spinner", () => {
-	assert.equal(margined({ kind: "done", outcome: "ok", sinceMs: 5_000 }), "   $ ls" + " ".repeat(17));
-	assert.equal(margined({ kind: "calm" }).slice(0, 7), "   $ ls", "a call running out of sight doesn't spin");
-	assert.equal(margined({ kind: "running", elapsedMs: 250 }, 170).slice(0, 7), ` ${frameAt(RUNNING, 170)} $ ls`, "spinners follow the clock, so they turn in step");
-	assert.equal(margined({ kind: "writing" }, 170).slice(0, 7), ` ${frameAt(WRITING, 170)} $ ls`);
-	assert.equal(margined({ kind: "queued" }).slice(0, 7), " • $ ls", "a queued call waits still");
-	assert.equal(margined({ kind: "running", elapsedMs: 250 }, 0, "reduced").slice(0, 7), " • $ ls");
+test("a margined band starts its title after the shared bullet gutter", () => {
+	assert.equal(margined({ kind: "done", outcome: "ok", sinceMs: 5_000 }), `${BULLET_GLYPH} $ ls` + " ".repeat(18));
+	for (const phase of [{ kind: "calm" }, { kind: "writing" }, { kind: "queued" }] as const) assert.equal(margined(phase).slice(0, 6), `${BULLET_GLYPH} $ ls`);
+	assert.equal(margined({ kind: "running", elapsedMs: 250 }, 170).slice(0, 6), `${BULLET_GLYPH} $ ls`);
+	assert.equal(margined({ kind: "running", elapsedMs: 250 }, 500).slice(0, 6), "  $ ls");
+	assert.equal(margined({ kind: "running", elapsedMs: 250 }, 500, "reduced").slice(0, 6), `${BULLET_GLYPH} $ ls`);
 	assert.equal(stripTerminalSequences(renderBand(quiet(), marginPalette, { width: 24, phase: { kind: "writing" }, segs: MARGIN_SEGS, rail: [], clockMs: 0 })).slice(0, 5), " $ ls", "no margin unless asked");
 });
 
 test("spinner frames advance with time and wrap around", () => {
-	assert.equal(frameAt(RUNNING, 0), RUNNING.frames[0]);
-	assert.equal(frameAt(RUNNING, RUNNING.intervalMs * 3), RUNNING.frames[3]);
-	assert.equal(frameAt(RUNNING, RUNNING.intervalMs * RUNNING.frames.length), RUNNING.frames[0]);
-	assert.equal(frameAt(WRITING, -5), WRITING.frames[0]);
+	assert.equal(spinnerGlyph(0), SPINNER_FRAMES[0]);
+	assert.equal(spinnerGlyph(SPINNER_FRAME_MS.slice(0, 3).reduce((a,b)=>a+b,0)), SPINNER_FRAMES[3]);
+	assert.equal(spinnerGlyph(SPINNER_CYCLE_MS), SPINNER_FRAMES[0]);
+	assert.equal(spinnerGlyph(-5), SPINNER_FRAMES[0]);
 });
 
 test("a margined band keeps drawing frames while its call is written", () => {
 	assert.equal(isAnimated({ kind: "writing" }, "full"), false);
-	assert.equal(isAnimated({ kind: "writing" }, "full", true), true);
+	assert.equal(isAnimated({ kind: "writing" }, "full", true), false);
 	assert.equal(isAnimated({ kind: "writing" }, "reduced", true), false);
 	assert.equal(isAnimated({ kind: "queued" }, "full", true), false);
 });

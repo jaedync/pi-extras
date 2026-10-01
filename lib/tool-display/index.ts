@@ -21,6 +21,7 @@
  * extensions' tools with their own words in it (see foreign.ts).
  */
 import { randomBytes } from "node:crypto";
+import { DISPLAY_SETTINGS_EVENT } from "../extras-config.ts";
 import { pathToFileURL } from "node:url";
 import {
 	createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition,
@@ -396,6 +397,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			}
 			const toggled = next.enabled !== settings.enabled;
 			settings = next;
+			pi.events.emit(DISPLAY_SETTINGS_EVENT, settings);
 			clock.setReduced(settings.motion === "reduced");
 			let saved = true;
 			try { deps.settings.write(settings); } catch { saved = false; }

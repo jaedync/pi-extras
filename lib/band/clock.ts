@@ -9,7 +9,8 @@
  * rate running out of step would each cost a full redraw.
  */
 
-export const FRAME_MS = 100;
+export const FRAME_QUANTUM_MS = 40;
+export const FRAME_MS = 120;
 export const REDUCED_FRAME_MS = 1_000;
 
 export interface Timers {
@@ -17,50 +18,53 @@ export interface Timers {
 	clearInterval(timer: unknown): void;
 }
 
+interface Subscriber { readonly fn: () => void; readonly ms: number; readonly elapsed: number }
 interface Ticker {
-	readonly subscribers: Set<{ readonly fn: () => void; readonly every: number; count: number }>;
+	readonly subscribers: Map<symbol, Subscriber>;
 	timer: ReturnType<typeof setInterval> | undefined;
+	period?: number;
+	failures?: number;
+	lastFailure?: string;
 }
 
 // On globalThis because each extension loads its own copy of this module; the shape is versioned so an older copy never shares a different one.
-const TICKER = Symbol.for("pi-extras.frame-ticker.v1");
+const TICKER = Symbol.for("pi-extras.frame-ticker.v5");
 
 function ticker(): Ticker {
 	const global = globalThis as Record<symbol, Ticker | undefined>;
-	return (global[TICKER] ??= { subscribers: new Set(), timer: undefined });
+	return (global[TICKER] ??= { subscribers: new Map(), timer: undefined });
 }
 
-/**
- * Calls `fn` every `ms` (rounded to whole frames) on the shared frame timer,
- * until the returned function is called. Callers in the same frame run in the
- * same turn of the event loop, so Pi draws them in one render.
- */
-export function everyFrame(fn: () => void, ms = FRAME_MS): () => void {
-	const shared = ticker();
-	const entry = { fn, every: Math.max(1, Math.round(ms / FRAME_MS)), count: 0 };
-	shared.subscribers.add(entry);
-	if (!shared.timer) {
-		shared.timer = setInterval(() => {
-			for (const subscriber of [...shared.subscribers]) {
-				subscriber.count++;
-				if (subscriber.count < subscriber.every) continue;
-				subscriber.count = 0;
-				try {
-					subscriber.fn();
-				} catch {
-					// One animation that fails to redraw must not stop the others.
-				}
+const gcd = (a: number, b: number): number => b ? gcd(b, a % b) : a;
+function refreshTicker(shared: Ticker): void {
+	const period = shared.subscribers.size ? [...shared.subscribers.values()].map(entry => entry.ms).reduce(gcd) : undefined;
+	if (shared.period === period) return;
+	if (shared.timer) clearInterval(shared.timer);
+	shared.timer = undefined;
+	shared.period = period;
+	if (period === undefined) return;
+	shared.timer = setInterval(() => {
+		for (const [id, entry] of [...shared.subscribers]) {
+			if (shared.subscribers.get(id) !== entry) continue;
+			const elapsed = entry.elapsed + period;
+			shared.subscribers.set(id, { ...entry, elapsed: elapsed % entry.ms });
+			if (elapsed < entry.ms) continue;
+			try { entry.fn(); } catch (error) {
+				// Keep the owner's handle alive so transient failures recover. Console output would corrupt Pi's screen.
+				shared.failures = Math.min(Number.MAX_SAFE_INTEGER, (shared.failures ?? 0) + 1);
+				shared.lastFailure = error instanceof Error ? error.name.replace(/[^\w.-]/g, "").slice(0, 80) : "NonErrorThrow";
 			}
-		}, FRAME_MS);
-		// Animation alone must never keep the process alive.
-		shared.timer.unref?.();
-	}
-	return () => {
-		shared.subscribers.delete(entry);
-		if (shared.subscribers.size > 0 || !shared.timer) return;
-		clearInterval(shared.timer);
-		shared.timer = undefined;
-	};
+		}
+	}, period);
+	shared.timer.unref?.();
+}
+
+/** Aligned consumers share their coarsest common clock, so slower animations never jitter or reset. */
+export function everyFrame(fn: () => void, ms = FRAME_MS): () => void {
+	const shared = ticker(), id = Symbol("frame");
+	shared.subscribers.set(id, { fn, ms: Math.max(FRAME_QUANTUM_MS, Math.ceil((Number.isFinite(ms) ? ms : FRAME_MS) / FRAME_QUANTUM_MS) * FRAME_QUANTUM_MS), elapsed: 0 });
+	refreshTicker(shared);
+	return () => { shared.subscribers.delete(id); refreshTicker(shared); };
 }
 
 const systemTimers: Timers = {

@@ -23,6 +23,7 @@
 import { statSync } from "node:fs";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { everyFrame } from "./band/clock.ts";
+import { BULLET_GLYPH, FAILURE_GLYPH, JOB_ANIMATION, JOB_STOPPING_ANIMATION, SUCCESS_GLYPH, animationFrameMs, glyphAt } from "./band/glyph.ts";
 import { factsOf, jobBand } from "./shell-jobs-band.ts";
 import { commandPreview } from "./shell-jobs-core.ts";
 import { type Job, jobStatusText } from "./shell-jobs-process.ts";
@@ -37,13 +38,11 @@ export const QUIET_AFTER_MS = 30_000;
 // Frame period of the quiet crawl: still moving, so it cannot be mistaken for
 // a static glyph, but slow enough to read as idle next to a busy row.
 export const QUIET_FRAME_MS = 1000;
-// Pi's own loader frames, so a running job speaks the same visual language.
-export const SPINNER_FRAMES: readonly string[] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-// Teardown lasts at most KILL_WAIT_MS, so this reads as a brief unwinding.
-export const STOPPING_FRAMES: readonly string[] = ["◐", "◓", "◑", "◒"];
-// Static glyphs for RPC rows, where nothing ticks.
-const RUNNING_STATIC = "●";
-const STOPPING_STATIC = "◐";
+export const SPINNER_FRAMES = JOB_ANIMATION.frames;
+export const STOPPING_FRAMES = JOB_STOPPING_ANIMATION.frames;
+// RPC rows carry no animation clock.
+const RUNNING_STATIC = BULLET_GLYPH;
+const STOPPING_STATIC = JOB_STOPPING_ANIMATION.frames[JOB_STOPPING_ANIMATION.still ?? 0]!;
 // Pi wraps string-array widgets in Text(line, 1, 0); a factory component gets raw
 // lines, so it pads itself to sit on the same column as everything else.
 const WIDGET_PAD = " ";
@@ -57,8 +56,13 @@ export type ActivityLookup = (job: Job) => Activity | null;
 export const noActivity: ActivityLookup = () => null;
 
 /** All spinners share one phase, derived from the clock so frames need no state. */
-export function frameAt(frames: readonly string[], now: number, periodMs = WIDGET_REFRESH_MS): string {
-	return frames[Math.floor(now / periodMs) % frames.length];
+export function frameAt(frames: readonly string[], now: number, periodMs?: number): string {
+	const animation = frames === SPINNER_FRAMES ? JOB_ANIMATION : frames === STOPPING_FRAMES ? JOB_STOPPING_ANIMATION : undefined;
+	if (animation) {
+		const scale = periodMs === undefined ? 1 : animationFrameMs(animation) / periodMs;
+		return glyphAt(animation, now * scale);
+	}
+	return frames[Math.floor(now / (periodMs ?? WIDGET_REFRESH_MS)) % frames.length]!;
 }
 
 export type PaintKey = "accent" | "success" | "error" | "warning" | "muted" | "dim";
@@ -122,7 +126,7 @@ function runningParts(job: Job, now: number | null, activity: ActivityLookup): R
 	const seen = activity(job);
 	const quiet = seen !== null && now - seen.changedAt >= QUIET_AFTER_MS;
 	return {
-		icon: frameAt(SPINNER_FRAMES, now, quiet ? QUIET_FRAME_MS : WIDGET_REFRESH_MS),
+		icon: frameAt(SPINNER_FRAMES, now, quiet ? QUIET_FRAME_MS : undefined),
 		key: quiet ? "dim" : "accent",
 		tag: "",
 		tagKey: "muted",
@@ -131,7 +135,7 @@ function runningParts(job: Job, now: number | null, activity: ActivityLookup): R
 
 function rowParts(job: Job, now: number | null, activity: ActivityLookup): RowParts {
 	if (job.deliveryFailed) {
-		return { icon: "✗", key: "warning", tag: `${jobStatusText(job)} · not delivered`, tagKey: "warning" };
+		return { icon: FAILURE_GLYPH, key: "warning", tag: `${jobStatusText(job)} · not delivered`, tagKey: "warning" };
 	}
 	if (job.state === "stopping") {
 		const icon = now === null ? STOPPING_STATIC : frameAt(STOPPING_FRAMES, now);
@@ -140,7 +144,7 @@ function rowParts(job: Job, now: number | null, activity: ActivityLookup): RowPa
 	if (job.state !== "done") return runningParts(job, now, activity);
 	const failed = job.signal !== null || (job.code ?? 0) !== 0;
 	return {
-		icon: failed ? "✗" : "✓",
+		icon: failed ? FAILURE_GLYPH : SUCCESS_GLYPH,
 		key: failed ? "error" : "success",
 		tag: `${jobStatusText(job)} · pending`,
 		tagKey: "muted",

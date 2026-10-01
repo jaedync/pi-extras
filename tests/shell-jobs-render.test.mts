@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { JOB_ANIMATION, JOB_STOPPING_ANIMATION, animationCycle } from "../lib/band/glyph.ts";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatDuration } from "../lib/shell-jobs-core.ts";
@@ -33,7 +34,6 @@ const {
 	SPINNER_FRAMES,
 	STOPPING_FRAMES,
 	WIDGET_MAX_ROWS,
-	WIDGET_REFRESH_MS,
 	createJobsWidget,
 	formatElapsed,
 	frameAt,
@@ -58,12 +58,12 @@ describe("job widget", () => {
 		assert.deepStrictEqual(lines, [`${frameAt(SPINNER_FRAMES, 13000)}  j1  12s    npm test -- --watchAll=false`]);
 	});
 
-	test("spinners advance one frame per refresh and share a phase", () => {
+	test("spinners honor the shared glyph duration table and share a phase", () => {
 		assert.strictEqual(frameAt(SPINNER_FRAMES, 0), SPINNER_FRAMES[0]);
-		assert.strictEqual(frameAt(SPINNER_FRAMES, WIDGET_REFRESH_MS - 1), SPINNER_FRAMES[0]);
-		assert.strictEqual(frameAt(SPINNER_FRAMES, WIDGET_REFRESH_MS), SPINNER_FRAMES[1]);
-		assert.strictEqual(frameAt(SPINNER_FRAMES, WIDGET_REFRESH_MS * SPINNER_FRAMES.length), SPINNER_FRAMES[0]);
-		assert.strictEqual(frameAt(STOPPING_FRAMES, WIDGET_REFRESH_MS * 5), STOPPING_FRAMES[1]);
+		assert.strictEqual(frameAt(SPINNER_FRAMES, JOB_ANIMATION.durationsMs[0]! - 1), SPINNER_FRAMES[0]);
+		assert.strictEqual(frameAt(SPINNER_FRAMES, JOB_ANIMATION.durationsMs[0]!), SPINNER_FRAMES[1]);
+		assert.strictEqual(frameAt(SPINNER_FRAMES, animationCycle(JOB_ANIMATION)), SPINNER_FRAMES[0]);
+		assert.strictEqual(frameAt(STOPPING_FRAMES, JOB_STOPPING_ANIMATION.durationsMs[0]!), STOPPING_FRAMES[1]);
 		// The quiet crawl advances once per QUIET_FRAME_MS instead of once per tick.
 		assert.strictEqual(frameAt(SPINNER_FRAMES, QUIET_FRAME_MS - 1, QUIET_FRAME_MS), SPINNER_FRAMES[0]);
 		assert.strictEqual(frameAt(SPINNER_FRAMES, QUIET_FRAME_MS, QUIET_FRAME_MS), SPINNER_FRAMES[1]);
@@ -119,7 +119,7 @@ describe("job widget", () => {
 	test("RPC rows are static: no elapsed, no spinner, no activity", () => {
 		const lines = renderJobLines([makeJob()], null, plainPaint, () => ({ bytes: 4300, changedAt: 0 }));
 		assert.deepStrictEqual(lines, ["●  j1  npm test -- --watchAll=false"]);
-		assert.deepStrictEqual(renderJobLines([makeJob({ state: "stopping" })], null, plainPaint), ["◐  j1  stopping  npm test -- --watchAll=false"]);
+		assert.deepStrictEqual(renderJobLines([makeJob({ state: "stopping" })], null, plainPaint), [`${JOB_STOPPING_ANIMATION.frames[0]}  j1  stopping  npm test -- --watchAll=false`]);
 	});
 
 	test("shows group teardown and death-by-signal with their own markers", () => {

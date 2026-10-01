@@ -2,7 +2,7 @@ import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { join } from "node:path";
-import { keyText, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import {
 	formatElapsed,
@@ -13,7 +13,6 @@ import {
 	renderPhaseLine,
 	renderPlainBorder,
 	renderRunBorder,
-	summarizeRunningTools,
 	type PhaseAlertTone,
 	type PhaseBorderPaint,
 } from "../lib/phase-status.ts";
@@ -22,8 +21,11 @@ import { emptyRunMetrics, updateRunMetrics } from "../lib/phase-metrics.ts";
 import { TopBorderLink } from "../lib/top-border.ts";
 import { EditorSlot, type StatusIndicator, type WrappedEditor } from "../lib/editor-wrapper.ts";
 import { everyFrame } from "../lib/band/clock.ts";
-import { frameAt, RUNNING, WRITING } from "../lib/band/spinner.ts";
 import { TailRow } from "../lib/tail-row.ts";
+import { DISPLAY_SETTINGS_EVENT, readSection } from "../lib/extras-config.ts";
+import { CHARS_PER_TOKEN, END_ENTRY, parseEndLine, parseVerbs, phaseParts, pickVerb, SEP, renderEndLine, renderPiWave, renderRunLine, runAnimation, smoothTokens, streamRate, type RunLine } from "../lib/cc-phase.ts";
+import { MODE_SPINNERS, PI_WAVE, PI_WAVE_MS, REDUCED_FRAME, isBlockingPeer, slotGlyph, spinnerCadence, type GlyphAnimation } from "../lib/band/glyph.ts";
+import { renderThinkingTail, thinkingRuns } from "../lib/tool-display/thinking.ts";
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 type VisualPhase = ActivePhase | "slow_api" | "stalled";
@@ -33,71 +35,25 @@ type StatusKind = Exclude<StatusIndicator["kind"], "working">;
 interface PhaseStyle {
 	label: string;
 	tone: ThemeTone;
-	frames: readonly string[];
-	intervalMs: number;
 }
 
 const PHASE_STYLES: Record<VisualPhase, PhaseStyle> = {
-	prep: {
-		label: "Preparing",
-		tone: "dim",
-		frames: ["⠁", "⠃", "⠇", "⠧", "⠷", "⠿", "⠷", "⠧", "⠇", "⠃"],
-		intervalMs: 90,
-	},
-	api: {
-		label: "Sending request",
-		tone: "thinkingLow",
-		frames: ["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"],
-		intervalMs: 90,
-	},
-	first_token: {
-		label: "Waiting for first token",
-		tone: "accent",
-		frames: ["⠂", "⠆", "⠇", "⠧", "⠷", "⠿", "⠷", "⠧", "⠇", "⠆"],
-		intervalMs: 150,
-	},
-	slow_api: {
-		label: "Slow response",
-		tone: "warning",
-		frames: ["⠂", "⠆", "⠇", "⠧", "⠷", "⠿", "⠷", "⠧", "⠇", "⠆"],
-		intervalMs: 190,
-	},
-	stalled: {
-		label: "Stalled",
-		tone: "error",
-		frames: ["⠿", "⠷", "⠯", "⠟"],
-		intervalMs: 300,
-	},
-	think: {
-		label: "Thinking",
-		tone: "thinkingMedium",
-		frames: ["⠊", "⠑", "⠈", "⠁", "⠈", "⠑"],
-		intervalMs: 120,
-	},
-	text: {
-		label: "Writing",
-		tone: "thinkingMinimal",
-		frames: ["⡀", "⡄", "⡆", "⡇", "⠇", "⠃", "⠁", "⠃", "⠇", "⡇", "⡆", "⡄"],
-		intervalMs: 70,
-	},
-	// The call's own row spins the same way (band.ts), in the same tones.
-	tool: {
-		label: "Calling a tool",
-		tone: "mdHeading",
-		...WRITING,
-	},
-	run: {
-		label: "Running",
-		tone: "toolOutput",
-		...RUNNING,
-	},
+	prep: { label: "Preparing", tone: "accent" },
+	api: { label: "Sending request", tone: "accent" },
+	first_token: { label: "Waiting for first token", tone: "accent" },
+	slow_api: { label: "Slow response", tone: "warning" },
+	stalled: { label: "Stalled", tone: "error" },
+	think: { label: "Thinking", tone: "accent" },
+	text: { label: "Writing", tone: "accent" },
+	tool: { label: "Calling a tool", tone: "accent" },
+	run: { label: "Running", tone: "accent" },
 };
 
 interface StatusStyle {
+	animation: GlyphAnimation;
 	tone: ThemeTone;
 	alertTone: PhaseAlertTone;
-	frames: readonly string[];
-	intervalMs: number;
+
 }
 
 // Pi's non-working statuses (compaction, retry, branch summary) take the phase
@@ -105,40 +61,41 @@ interface StatusStyle {
 const STATUS_STYLES: Record<StatusKind, StatusStyle> = {
 	// A press squeezing down, then releasing.
 	compaction: {
+		animation: MODE_SPINNERS.compaction,
 		tone: "accent",
 		alertTone: "phase",
-		frames: ["⣿", "⣶", "⣤", "⣀", "⣀", "⣤", "⣶", "⣿"],
-		intervalMs: 110,
+
 	},
 	// A counter-clockwise lap: rewinding for another attempt.
 	retry: {
+		animation: MODE_SPINNERS.retry,
 		tone: "warning",
 		alertTone: "warning",
-		frames: ["⠃", "⠆", "⡄", "⣀", "⢠", "⠰", "⠘", "⠉"],
-		intervalMs: 90,
+
 	},
 	// A stem that grows, then sprouts branches down its side.
 	branchSummary: {
+		animation: MODE_SPINNERS.branchSummary,
 		tone: "mdLink",
 		alertTone: "phase",
-		frames: ["⡀", "⡄", "⡆", "⡇", "⡏", "⡗", "⡧", "⣇"],
-		intervalMs: 120,
+
 	},
 };
 
 // Statuses added by future Pi versions still render, with a generic spinner.
 const FALLBACK_STATUS_STYLE: StatusStyle = {
+	animation: MODE_SPINNERS.fallback,
 	tone: "accent",
 	alertTone: "phase",
-	frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-	intervalMs: 80,
+
 };
 
 // Wide enough that Pi's status text never wraps or truncates while it is read.
 const INDICATOR_TEXT_WIDTH = 1_000;
-const DISPLAY_REFRESH_MS = 100;
+const SEND_REFRESH_MS = 40;
+const DISPLAY_REFRESH_MS = 200;
 /** What Pi's working loader shows while held still; this row draws over it. */
-const STILL_LOADER_FRAME = "⠿";
+const STILL_LOADER_FRAME = REDUCED_FRAME;
 const DEBUG_HEARTBEAT_MS = 5_000;
 const DEBUG_LOG = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "phase-spinner-debug.jsonl");
 const DEBUG_ENABLED = process.env.PHASE_SPINNER_DEBUG === "1";
@@ -173,17 +130,51 @@ function indicatorText(indicator: StatusIndicator): string {
 }
 
 export default function phaseSpinner(pi: ExtensionAPI): void {
+	pi.registerEntryRenderer(END_ENTRY, (entry, _options, theme) => {
+		const data = parseEndLine(entry.data);
+		return data ? { render: (width) => [renderEndLine(data, width, theme)], invalidate() {} } : undefined;
+	});
+	let verb = pickVerb(parseVerbs(undefined));
+	let verbs = parseVerbs(undefined);
+	let reduced = false;
+	let streamedChars = 0;
+	let shownTokens = 0;
+	let tokensAt = 0;
+	let lastTokenAt = 0;
+	let rate = { at: 0, chars: 0, rate: 0, waveMs: 0 };
+	let retryDelayMs: number | undefined;
+	let wave: { at: number; theme: ExtensionContext["ui"]["theme"] } | undefined;
+	let reachedAgentEnd = false;
+	let continuationPending = false;
+	let endReason: string | undefined;
+	let cancelled = false;
+	let liveThinking = "";
+	let thinkingMode: unknown = "tail";
+	let hidesLiveThinking = false;
+	let tailCache: { text: string; width: number; theme: ExtensionContext["ui"]["theme"]; lines: string[] } | undefined;
+	let thoughtMs: number | undefined;
+	let thoughtEndedAt = Number.NEGATIVE_INFINITY;
 	let active = false;
 	let metrics = emptyRunMetrics();
 	let phase: ActivePhase = "prep";
 	let phaseStartedAt = performance.now();
 	let agentStartedAt = phaseStartedAt;
+	let lineStartedAt = phaseStartedAt;
+	let runEnded = true;
 	let renderedPhase: VisualPhase | undefined;
 	let stopFrames: (() => void) | undefined;
+	let frameMs: number | undefined;
+	let lastDrawing: string | undefined;
 	let activeTui: TUI | undefined;
 	let currentContext: ExtensionContext | undefined;
 	let lastDebugAt = performance.now();
-	let runningTools = new Map<string, string>();
+	type RunningTool = { name: string; blocking: boolean; parent?: string };
+	let runningTools = new Map<string, RunningTool>();
+	const leafTools = () => {
+		const tools = [...runningTools.entries()];
+		const parents = new Set(tools.map(([,tool]) => tool.parent).filter(Boolean));
+		return tools.filter(([id]) => !parents.has(id)).map(([,tool]) => tool);
+	};
 	let pendingToolName: string | undefined;
 	let lastTotalElapsedMs: number | undefined;
 	const editorSlot = new EditorSlot();
@@ -203,15 +194,27 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 
 	/** Voice records in the top row only while this is false. */
 	function announceBusy(): void {
-		topBorder?.set(active || statusIndicator !== undefined);
+		topBorder?.set(active || statusIndicator !== undefined || wave !== undefined);
 	}
 
 	function ensureTimer(): void {
-		stopFrames ??= everyFrame(() => tick(), DISPLAY_REFRESH_MS);
+		const now = performance.now();
+		const status = statusView(now);
+		if (!active && !status && !wave) { releaseTimer(); return; }
+		const tools = leafTools();
+		const peer = phase === "run" && tools.length > 0 && tools.every(tool => tool.blocking);
+		const animation = status?.style.animation ?? MODE_SPINNERS[peer ? "peer" : phase];
+		const cadence = spinnerCadence(animation, reduced, rate.rate, !!status && animation.kind === "fraction" && retryDelayMs !== undefined);
+		const shimmer = reduced ? 1000 : !status && phase === "api" ? SEND_REFRESH_MS : DISPLAY_REFRESH_MS;
+		const desired = wave ? PI_WAVE.stepMs : Math.ceil(Math.min(cadence, shimmer));
+		if (stopFrames && frameMs === desired) return;
+		stopFrames?.();
+		frameMs = desired;
+		stopFrames = everyFrame(() => tick(), desired);
 	}
 
 	function releaseTimer(): void {
-		if (!stopFrames || active || statusIndicator) return;
+		if (!stopFrames || active || statusView(performance.now()) || wave) return;
 		stopFrames();
 		stopFrames = undefined;
 	}
@@ -249,6 +252,11 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		endOnDispose(indicator);
 		statusIndicator = indicator;
 		statusShownAt = now;
+		cancelWave();
+		if (indicator.kind === "retry") {
+			const delay = (indicator as StatusIndicator & { delayMs?: unknown }).delayMs;
+			retryDelayMs = typeof delay === "number" && Number.isFinite(delay) && delay > 0 ? delay : undefined;
+		}
 		if (!statusEpisodes.has(indicator.kind)) statusEpisodes = new Map(statusEpisodes).set(indicator.kind, now);
 		ensureTimer();
 		announceBusy();
@@ -259,6 +267,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		statusIndicator = undefined;
 		statusEpisodes = new Map();
 		lastRequestAt = Number.NEGATIVE_INFINITY;
+		retryDelayMs = undefined;
 	}
 
 	function statusView(now: number): StatusView | undefined {
@@ -269,14 +278,9 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const style = (STATUS_STYLES as Partial<Record<string, StatusStyle>>)[indicator.kind] ?? FALLBACK_STATUS_STYLE;
 		const elapsedMs = Math.max(0, now - (statusEpisodes.get(indicator.kind) ?? statusShownAt));
 		const { label, detail } = parseStatusMessage(indicatorText(indicator));
-		const spinner = style.frames[Math.floor(elapsedMs / style.intervalMs) % style.frames.length] ?? "⠿";
+		const fraction = indicator.kind === "retry" && retryDelayMs !== undefined ? Math.max(0, now - statusShownAt) / retryDelayMs : undefined;
+		const spinner = slotGlyph(style.animation, elapsedMs, { reduced, fraction });
 		return { spinner, elapsedMs, label, detail, style };
-	}
-
-	function retryDetail(): string | undefined {
-		if (statusIndicator?.kind !== "retry") return undefined;
-		const { attempt } = parseStatusMessage(indicatorText(statusIndicator));
-		return attempt ? `retry ${attempt}` : undefined;
 	}
 
 	function visualState(now: number): VisualState {
@@ -287,27 +291,6 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const wait = phaseAfterFirstTokenWait(elapsedMs);
 		const visualPhase = wait.tone === "error" ? "stalled" : wait.tone === "warning" ? "slow_api" : "first_token";
 		return { phase: visualPhase, elapsedMs, style: PHASE_STYLES[visualPhase], alertTone: wait.tone };
-	}
-
-	/** What the agent is doing: `Running bash ×2`, `Calling edit`, `Thinking`. */
-	function phaseLabel(state: VisualState): string {
-		if (state.phase === "run") {
-			const tools = summarizeRunningTools([...runningTools.values()]);
-			return tools ? `${state.style.label} ${tools}` : state.style.label;
-		}
-		if (state.phase === "tool" && pendingToolName) return `Calling ${pendingToolName}`;
-		return state.style.label;
-	}
-
-	function phaseHint(state: VisualState): string | undefined {
-		if (state.phase === "stalled") return `${keyText("app.interrupt")} abort`;
-		return retryDetail();
-	}
-
-	function spinnerFrame(state: VisualState): string {
-		// A call's own row spins on the wall clock (band.ts); the same clock keeps the two in step.
-		if (state.phase === "tool" || state.phase === "run") return frameAt(state.style, Date.now());
-		return state.style.frames[Math.floor(state.elapsedMs / state.style.intervalMs) % state.style.frames.length] ?? "⠿";
 	}
 
 	function debugState(event: string, ctx: ExtensionContext, now = performance.now(), details?: Record<string, unknown>): void {
@@ -336,6 +319,13 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	}
 
 	function tick(now = performance.now()): void {
+		if (wave && now - wave.at >= PI_WAVE_MS) {
+			wave = undefined;
+			lastDrawing = undefined;
+			announceBusy();
+			releaseTimer();
+			activeTui?.requestRender();
+		}
 		if (active && currentContext) {
 			const state = visualState(now);
 			if (renderedPhase !== state.phase) {
@@ -345,9 +335,15 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			}
 			if (now - lastDebugAt >= DEBUG_HEARTBEAT_MS) debugState("heartbeat", currentContext, now);
 			if (paintedOver && !stillLoader) holdLoaderStill(currentContext);
-		} else if (!statusIndicator) {
+		} else if (!statusIndicator && !wave) {
 			return;
 		}
+		if (!activeTui) return;
+		const width = activeTui.terminal?.columns ?? 120;
+		const drawing = drawPhaseLine(width, now).join("\n") + borderFingerprint(now, width);
+		ensureTimer();
+		if (drawing === lastDrawing) return;
+		lastDrawing = drawing;
 		activeTui?.requestRender();
 	}
 
@@ -357,6 +353,11 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const previousVisualPhase = visualState(now).phase;
 		currentContext = ctx;
 		if (phase !== next) {
+			if (phase === "think") {
+				thoughtMs = now - phaseStartedAt;
+				thoughtEndedAt = now;
+				liveThinking = "";
+			}
 			phase = next;
 			phaseStartedAt = now;
 			renderedPhase = undefined;
@@ -364,6 +365,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		if (previousPhase !== phase || forceLog) {
 			debugState(cause, ctx, now, { previousPhase, previousVisualPhase, ...details });
 		}
+		if (active || statusIndicator) ensureTimer();
 		tick(now);
 	}
 
@@ -393,7 +395,22 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		}
 	}
 
+	function cancelWave(): void {
+		if (!wave) return;
+		wave = undefined;
+		lastDrawing = undefined;
+		announceBusy();
+		releaseTimer();
+		activeTui?.requestRender();
+	}
+
 	function start(ctx: ExtensionContext): void {
+		if (active && reachedAgentEnd && !continuationPending) finishPrompt(ctx, false);
+		cancelWave();
+		reachedAgentEnd = false;
+		continuationPending = false;
+		endReason = undefined;
+		cancelled = false;
 		const now = performance.now();
 		metrics = updateRunMetrics(metrics, { type: "start" });
 		currentContext = ctx;
@@ -403,17 +420,48 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		runningTools = new Map();
 		pendingToolName = undefined;
 		if (!active) {
+			lineStartedAt = now;
+			runEnded = false;
+			verb = pickVerb(verbs);
+			streamedChars = 0;
+			shownTokens = 0;
+			tokensAt = now;
+			lastTokenAt = now;
+			rate = { at: now, chars: 0, rate: 0, waveMs: 0 };
+			thoughtMs = undefined;
+			liveThinking = "";
+			lastDrawing = undefined;
 			active = true;
 			agentStartedAt = now;
 			lastDebugAt = now;
 			ensureTimer();
 		}
 		debugState("agent_start", ctx, now, { resumedActiveRun: active && agentStartedAt !== now });
+		ensureTimer();
 		announceBusy();
 		tick(now);
 	}
 
+	function finishPrompt(ctx: ExtensionContext, animate = true): void {
+		if (!active || runEnded) return;
+		const stopped = cancelled || endReason === "aborted";
+		const waveTheme = animate && !stopped && !reduced && activeTui ? ctx.ui.theme : undefined;
+		if (ctx.mode === "tui") pi.appendEntry(END_ENTRY, {
+			past: verb.past, elapsedMs: performance.now() - lineStartedAt,
+			doneAt: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+			...(stopped ? { stopped: true } : {}),
+		});
+		runEnded = true;
+		stop(true);
+		if (waveTheme) {
+			wave = { at: performance.now(), theme: waveTheme };
+			announceBusy(); ensureTimer(); tick();
+		}
+	}
+
 	function stop(persistLastRun = false): void {
+		wave = undefined;
+		tailCache = undefined;
 		metrics = updateRunMetrics(metrics, { type: persistLastRun ? "settle" : "reset" });
 		if (active && persistLastRun) lastTotalElapsedMs = performance.now() - agentStartedAt;
 		else if (!persistLastRun) lastTotalElapsedMs = undefined;
@@ -430,18 +478,41 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 
 	type Paint = (tone: ThemeTone) => PhaseBorderPaint;
 
+	function runLine(now: number): RunLine {
+		rate = streamRate(rate, now, streamedChars);
+		const target = Math.round(streamedChars / CHARS_PER_TOKEN);
+		shownTokens = reduced ? target : smoothTokens(shownTokens, target, now - tokensAt);
+		tokensAt += Math.floor(Math.max(0, now - tokensAt) / 50) * 50;
+		return { verb, phase, elapsedMs: now - lineStartedAt, phaseMs: now - phaseStartedAt,
+			tokens: shownTokens, clockMs: now - lineStartedAt, reduced, tools: leafTools().map(tool => tool.name),
+			waitingOnPeers: leafTools().length > 0 && leafTools().every(tool => tool.blocking),
+			pendingTool: pendingToolName, thoughtMs, sinceThoughtMs: now - thoughtEndedAt,
+			idleTokenMs: now - lastTokenAt, waveMs: rate.waveMs, tokensPerSecond: rate.rate };
+	}
+
 	function activeBorder(now: number, width: number, hiddenLineCount: number, paint: Paint): string {
 		const state = visualState(now);
+		const model = runLine(now);
 		return renderPhaseBorder({
-			spinner: spinnerFrame(state),
+			spinner: slotGlyph(runAnimation(model), model.clockMs, { reduced, rateElapsedMs: model.waveMs }),
 			phaseElapsedMs: state.elapsedMs,
 			totalElapsedMs: now - agentStartedAt,
 			metrics,
-			label: phaseLabel(state),
-			detail: phaseHint(state),
+			label: `${verb.present}…`,
+			detail: phaseParts(model).join(SEP),
 			tone: state.alertTone,
 			hiddenLineCount,
 		}, width, paint(state.style.tone));
+	}
+
+	function borderFingerprint(now: number, width: number): string {
+		if (!linePaint) return "";
+		const status = statusView(now);
+		if (active && currentContext) return tailRow.attached
+			? renderRunBorder(now - agentStartedAt, width, linePaint("accent"), 0, metrics)
+			: activeBorder(now, width, 0, linePaint);
+		if (status && !tailRow.attached) return statusBorder(status, now, width, 0, linePaint);
+		return lastTotalElapsedMs === undefined ? "" : renderLastRunBorder(lastTotalElapsedMs, width, linePaint("accent"), 0, metrics);
 	}
 
 	function statusBorder(status: StatusView, now: number, width: number, hiddenLineCount: number, paint: Paint): string {
@@ -464,24 +535,29 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	 * else the live phase, set apart by a blank line like the transcript's
 	 * entries. Nothing while idle.
 	 */
-	function drawPhaseLine(width: number): string[] {
+	function drawPhaseLine(width: number, now = performance.now()): string[] {
 		const paint = linePaint;
 		if (!paint) return [];
-		const now = performance.now();
+		if (wave) {
+			const line = renderPiWave(now - wave.at, wave.theme, width);
+			return line ? ["", line] : [];
+		}
 		const status = statusView(now);
 		if (status) {
 			const { spinner, elapsedMs, label, detail, style } = status;
 			return ["", renderPhaseLine({ spinner, elapsedMs, label, detail, tone: style.alertTone }, width, paint(style.tone))];
 		}
-		if (!active || !currentContext) return [];
-		const state = visualState(now);
-		return ["", renderPhaseLine({
-			spinner: spinnerFrame(state),
-			elapsedMs: state.elapsedMs,
-			label: phaseLabel(state),
-			detail: phaseHint(state),
-			tone: state.alertTone,
-		}, width, paint(state.style.tone))];
+		if (!active || runEnded || !currentContext) return [];
+		const theme = currentContext.ui.theme;
+		return ["", renderRunLine(runLine(now), width, theme),
+			...(hidesLiveThinking && phase === "think" && thinkingMode !== "collapsed" ? thinkingTail(width, theme) : [])];
+	}
+
+	function thinkingTail(width: number, theme: ExtensionContext["ui"]["theme"]): string[] {
+		if (tailCache?.text === liveThinking && tailCache.width === width && tailCache.theme === theme) return tailCache.lines;
+		const lines = renderThinkingTail(liveThinking, width, theme);
+		tailCache = { text: liveThinking, width, theme, lines };
+		return lines;
 	}
 
 	function lastRunRow(lines: string[], width: number, paint: Paint, hiddenLineCount: number): string[] {
@@ -513,6 +589,11 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 				: renderLastRunBorder(lastTotalElapsedMs, width, paint("accent"), hiddenLineCount, metrics);
 			return [summary, ...lines.slice(1)];
 		}
+		if (wave && now - wave.at < PI_WAVE_MS) {
+			const glyph = renderPiWave(now - wave.at, wave.theme, width);
+			const line = truncateToWidth(`─ ${glyph} ${wave.theme.fg("dim", "─".repeat(Math.max(0, width - 7)))}`, width, "");
+			return [line, ...lines.slice(1)];
+		}
 		const status = statusView(now);
 		if (status) return [statusBorder(status, now, width, hiddenLineCount, paint), ...lines.slice(1)];
 		if (active && currentContext) {
@@ -527,6 +608,10 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		topBorder = new TopBorderLink(pi.events, "phase-spinner", () => activeTui?.requestRender());
 		resetStatus();
 		stop();
+		verbs = parseVerbs(readSection("phaseSpinner").verbs);
+		const display = readSection("toolDisplay");
+		reduced = display.motion === "reduced";
+		thinkingMode = display.thinking ?? "tail";
 		tailRow.detach();
 		const painter = (border: (text: string) => string): Paint => (tone) => {
 			const thm = currentContext?.ui.theme ?? ctx.ui.theme;
@@ -547,16 +632,38 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			return {
 				render: (lines, width, editor) => drawTopRow(lines, width, painter((text) => editor.borderColor(text)), editor),
 				onWorkingStatus: noteStatusIndicator,
+				onEscape: () => { if (active && currentContext && !currentContext.isIdle()) cancelled = true; },
 			};
 		});
 		topBorder.hello();
 	});
 
+	pi.events?.on(DISPLAY_SETTINGS_EVENT, (value) => {
+		const settings = value as { motion?: unknown; thinking?: unknown; hidesLiveThinking?: unknown };
+		if (settings?.motion !== undefined) reduced = settings.motion === "reduced";
+		if (reduced) cancelWave();
+		if (settings?.thinking !== undefined) thinkingMode = settings.thinking;
+		if (typeof settings?.hidesLiveThinking === "boolean") hidesLiveThinking = settings.hidesLiveThinking;
+		stopFrames?.();
+		stopFrames = undefined;
+		if (active || statusIndicator || wave) ensureTimer();
+		tick();
+	});
+	pi.on("input", (_event, ctx) => {
+		if (active && ctx.isIdle()) finishPrompt(ctx, false);
+		else if (active) continuationPending = true;
+		cancelWave();
+	});
+	pi.on("before_agent_start", (_event, ctx) => { if (active && ctx.isIdle()) finishPrompt(ctx, false); });
+	// Later boundary handlers can request continuation without adding a queued message.
+	pi.on("agent_before_settle", () => { continuationPending = true; });
+	pi.on("session_before_compact", (event) => { if (event.reason === "overflow") continuationPending = true; });
 	pi.on("agent_start", (_event, ctx) => start(ctx));
 	pi.on("turn_start", (_event, ctx) => setPhase("prep", ctx, "turn_start", true));
 	pi.on("context", (_event, ctx) => setPhase("prep", ctx, "context", true));
 	pi.on("before_provider_request", (_event, ctx) => {
 		lastRequestAt = performance.now();
+		lastTokenAt = lastRequestAt;
 		metrics = updateRunMetrics(metrics, { type: "request", at: lastRequestAt });
 		setPhase("api", ctx, "before_provider_request", true);
 	});
@@ -565,13 +672,23 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		if (event.message.role === "assistant") setPhase("first_token", ctx, "message_start", true);
 	});
 	pi.on("message_update", (event, ctx) => {
+		if (event.message.role !== "assistant") return;
 		const streamEvent = event.assistantMessageEvent;
 		const eventType = streamEvent.type;
+		if ("delta" in streamEvent && typeof streamEvent.delta === "string" && eventType.endsWith("_delta")) {
+			streamedChars += streamEvent.delta.length;
+			lastTokenAt = performance.now();
+		}
 		metrics = updateRunMetrics(metrics, {
 			type: "delta", at: performance.now(), kind: eventType,
 			delta: "delta" in streamEvent ? streamEvent.delta : undefined,
 		});
-		if (eventType.startsWith("thinking_")) setPhase("think", ctx, eventType);
+		if (eventType === "thinking_end") setPhase("prep", ctx, eventType);
+		else if (eventType.startsWith("thinking_")) {
+			const runs = thinkingRuns(event.message.content);
+			liveThinking = runs.at(-1) ?? (liveThinking + ("delta" in streamEvent ? streamEvent.delta : ""));
+			setPhase("think", ctx, eventType);
+		}
 		else if (eventType.startsWith("text_")) setPhase("text", ctx, eventType);
 		else if (eventType.startsWith("toolcall_")) {
 			pendingToolName = latestToolName(event.message);
@@ -579,7 +696,9 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		}
 	});
 	pi.on("message_end", (event, ctx) => {
+		if (event.message.role === "assistant") endReason = event.message.stopReason;
 		if (event.message.role !== "assistant") return;
+		if (phase === "think") setPhase("prep", ctx, "thinking_finished");
 		// Whole-request throughput includes initial wait and final stream metadata.
 		// usage.output already includes reasoning tokens; do not add them again.
 		metrics = updateRunMetrics(metrics, {
@@ -590,7 +709,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		tick();
 	});
 	pi.on("tool_execution_start", (event, ctx) => {
-		runningTools = new Map(runningTools).set(event.toolCallId, event.toolName);
+		runningTools = new Map(runningTools).set(event.toolCallId, { name: event.toolName, blocking: isBlockingPeer(event.toolName, event.args), parent: (event as {parentToolCallId?:string}).parentToolCallId });
 		setPhase("run", ctx, "tool_execution_start", true, { tool: event.toolName });
 	});
 	pi.on("tool_execution_update", (_event, ctx) => setPhase("run", ctx, "tool_execution_update"));
@@ -606,13 +725,20 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	pi.on("turn_end", (_event, ctx) => {
 		if (runningTools.size === 0) setPhase("prep", ctx, "turn_end", true);
 	});
-	pi.on("agent_end", (_event, ctx) => debugState("agent_end", ctx));
+	pi.on("agent_end", (_event, ctx) => {
+		debugState("agent_end", ctx);
+		liveThinking = "";
+		reachedAgentEnd = true;
+		continuationPending = (endReason !== "stop" && endReason !== "toolUse") || ctx.hasPendingMessages();
+		if (cancelled || endReason === "aborted") finishPrompt(ctx);
+	});
 	pi.on("agent_settled", (_event, ctx) => {
 		debugState("agent_settled", ctx);
-		if (ctx.isIdle()) stop(true);
+		if (ctx.isIdle()) finishPrompt(ctx);
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (active) debugState("session_shutdown", ctx);
+		hidesLiveThinking = false;
 		resetStatus();
 		stop();
 		tailRow.detach();

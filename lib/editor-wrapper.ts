@@ -15,6 +15,8 @@ export interface EditorDecoration {
 	render(lines: string[], width: number, editor: WrappedEditor): string[];
 	/** Pi's working status changed; undefined clears it. */
 	onWorkingStatus?(indicator: StatusIndicator | undefined): void;
+	/** Observes Pi's actual cancel action, after overlays and autocomplete have consumed their own Escape. */
+	onEscape?(): void;
 }
 
 export class WrappedEditor extends CustomEditor {
@@ -53,7 +55,10 @@ export class WrappedEditor extends CustomEditor {
 		if ("focused" in focusable) focusable.focused = this.focused;
 		if (!(this.base instanceof CustomEditor)) return;
 		this.base.actionHandlers = this.actionHandlers;
-		this.base.onEscape = this.onEscape;
+		const onEscape = this.onEscape;
+		this.base.onEscape = this.decoration.onEscape ? () => {
+			try { this.decoration.onEscape?.(); } finally { onEscape?.call(this.base); }
+		} : onEscape;
 		this.base.onCtrlD = this.onCtrlD;
 		this.base.onPasteImage = this.onPasteImage;
 		this.base.onExtensionShortcut = this.onExtensionShortcut;

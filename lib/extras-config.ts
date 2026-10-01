@@ -10,6 +10,8 @@ import { dirname, join } from "node:path";
 
 export const CONFIG_FILE = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "pi-extras.json");
 
+export const DISPLAY_SETTINGS_EVENT = "pi-extras:tool-display-settings";
+
 type Json = Record<string, unknown>;
 
 const isObject = (value: unknown): value is Json => !!value && typeof value === "object" && !Array.isArray(value);
