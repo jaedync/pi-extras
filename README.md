@@ -226,28 +226,30 @@ tokens came from cache, on both Claude and Codex. The summaries were
 comparable to Pi's own in a two-model comparison. Results vary by provider and
 workload.
 
-**When it runs.** Main sessions and pi-extras subagents use it. Children always
-load this tool-free extension, even when a package filter excludes it from the
-parent or the parent loads only `subagents.ts` with `-e`. Both use the same
-settings and idle defaults (240 seconds for most routes, including Codex). Set `cacheCompaction.enabled: false` to turn it off
-for children too. It runs for `/compact` and Pi's automatic compaction
-after a turn or before a new prompt, as long as:
+**When it runs.** In the main session and in pi-extras subagents, for
+`/compact` and for Pi's automatic compaction after a turn or before a new
+prompt, as long as:
 
 - the cache is probably still warm (see `idleSeconds` below);
 - the model, session and branch haven't changed since the last request;
 - the summary fits in the context window (see below).
 
 Otherwise Pi's own compaction runs, exactly as it would without this
-extension. The notice says which path ran and why. Each decision also writes
-one JSON line to `PI_CODING_AGENT_DIR/cache-compaction.log` (default
-`~/.pi/agent/cache-compaction.log`). It includes the session ID, provider/model,
-compaction reason, chosen path, fallback category and token estimates.
-Prefix-sharing attempts also record the response's stop reason and token usage.
-No messages, summaries, headers or payloads are logged. Writes are best effort.
-When Tool Display is loaded, the `pi-extras.compaction-band` custom session
-entry also saves `path` and `fallbackReason`, outside model context.
+extension. The notice says which path ran and why.
 
-Capture-miss categories: `capture-no-system`, `capture-no-model`, `capture-projection`, `capture-identity`, `capture-payload`, `capture-no-context`, `capture-headers`, `capture-failed`.
+Subagents always load Cache Compaction, even when a package filter leaves it
+out of the main session. `cacheCompaction.enabled: false` turns it off in both.
+
+**Log.** Each decision adds one JSON line to
+`PI_CODING_AGENT_DIR/cache-compaction.log` (default
+`~/.pi/agent/cache-compaction.log`): the session ID, provider and model, why
+Pi compacted, which path ran, the fallback reason and the token estimates.
+Cache-path attempts also record the stop reason and token usage. It never
+holds messages, summaries, headers or payloads. With Tool Display loaded, the
+session's compaction entry also saves the path and fallback reason, outside
+the model's context. Fallback reasons for a missed capture start with
+`capture-`: `no-system`, `no-model`, `projection`, `identity`, `payload`,
+`no-context`, `headers` and `failed`.
 
 **Room for the summary.** The summary is written inside the same context
 window as the conversation, so it needs room. The extension asks for room for
