@@ -2,15 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## Unreleased
+## 0.14.1 - 2026-09-30
 
 ### Fixed
 
-- Subagent reports are saved in full to a private Markdown file per run beside
-  the child session. Completion previews still stop at 12,000 characters and
-  include the full report path. `/subagents report <name>` shows the latest
-  path. Failed and stopped runs also save any final text; a write failure
-  falls back to the session-file pointer without blocking delivery.
+- Subagents: reports longer than 12,000 characters are no longer cut short.
+  Each finished run saves its full report to a private Markdown file beside
+  the child session, and the completion message gives that path next to the
+  preview. `/subagents report <name>` shows the latest one. Failed and stopped
+  runs save any final text too. If saving fails, the message still arrives
+  and points to the session file as before.
 
 ## 0.14.0 - 2026-09-30
 
