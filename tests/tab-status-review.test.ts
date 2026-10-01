@@ -102,7 +102,7 @@ for (const multiplexed of [false, true]) {
 		await f.fire("ui_prompt_start", { title: "Allow?" }); assert.equal(f.writes.at(-1), expected(4, 100));
 		await f.fire("ui_prompt_end"); assert.equal(f.writes.at(-1), expected(3, 0));
 		await f.fire("message_end", { message: { role: "assistant", content: [], stopReason: "error", errorMessage: "Synthetic failure" } });
-		await f.fire("agent_settled"); assert.equal(f.writes.at(-1), expected(2, 0));
+		await f.fire("agent_settled"); assert.equal(f.writes.at(-1), expected(2, 100));
 		await f.fire("session_shutdown", { reason: "quit" }); assert.equal(f.writes.at(-1), expected(0, 0));
 	});
 }

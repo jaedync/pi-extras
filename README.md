@@ -137,8 +137,9 @@ Tab Status shows Pi's state in the terminal tab.
   instead.
 - **Progress** animates the tab while Pi works, pauses during dialogs and
   Rate-limit Recovery waits, turns red after a failed turn, and clears at idle.
-  A full yellow warning ring means Pi is waiting, either for your input in a
-  dialog or for a rate-limit wait to finish.
+  In Windows Terminal, a full yellow ring means Pi is waiting, either for your
+  input in a dialog or for a rate-limit wait to finish, and a full red ring
+  means the last turn failed.
 
 Background Subagents and Shell Jobs count as working by default, even after
 main finishes.

@@ -78,7 +78,8 @@ test("sanitize, escape every value, truncate by code point, and clear all fields
 
 for (const state of [0, 2, 3, 4] as const) {
 	test(`Windows Terminal progress state ${state} includes an explicit percentage`, () => {
-		const sequence = `\x1b]9;4;${state};${state === 4 ? 100 : 0}\x07`;
+		// Error and paused fill the ring; at 0 Windows Terminal draws only a sliver.
+		const sequence = `\x1b]9;4;${state};${state === 2 || state === 4 ? 100 : 0}\x07`;
 		assert.equal(progressSequence(state, true), sequence);
 		assert.equal(passthrough(progressSequence(state, true), true), `\x1bPtmux;${sequence.replaceAll("\x1b", "\x1b\x1b")}\x1b\\`);
 	});
