@@ -25,10 +25,11 @@ import { watchRun } from "../lib/run-watch.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, messageResultRow, rememberAgent, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { offerRows } from "../lib/late-rows.ts";
 import { markRow } from "../lib/tool-row.ts";
-import { appendRunLog, runLogEntry, runLogPath, statsByModel, statsText } from "../lib/subagents/runlog.ts";
+import { appendRunLog, appendInterruptedRuns, loggedRunKeys, runKey, runLogEntry, runLogPath, statsByModel, statsText } from "../lib/subagents/runlog.ts";
 import { formatTime } from "../lib/band/band.ts";
 import type { ShownOverlay } from "../lib/band/modal.ts";
 import { formatMoney } from "../lib/status-plus-logic.ts";
+import { installSignalRecorder } from "../lib/subagents/signals.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
 import { ChildIndex, discoverOrphans, legacyRecords, restoreRecord, restorationNotice, shouldResume } from "../lib/subagents/restore.ts";
@@ -217,23 +218,35 @@ export default function subagents(pi: ExtensionAPI) {
 		} catch (error) {
 			ctx.ui.notify(`subagents: could not restore ${index.file}: ${(error as Error).message}`, "warning");
 		}
-		const logged = new Set<string>();
+		try {
+			appendInterruptedRuns(logFile, team.list(), sessionId, Date.now());
+			if (team.list().length > 0) index.save(team.list());
+		} catch (error) { ctx.ui.notify(`subagents: could not record restored children: ${(error as Error).message}`, "warning"); }
+		const logged = loggedRunKeys(logFile);
 		const unsubscribe = team.onChange((record) => {
 			widget.update();
 			try { index.save(team.list()); }
 			catch (error) { ctx.ui.notify(`subagents: could not save ${index.file}: ${(error as Error).message}`, "warning"); }
 			if (!record || LIVE_STATES.has(record.state)) return;
-			const key = `${record.name}#${record.runs}#${record.state}`;
+			const entry = runLogEntry(record, Date.now(), sessionId);
+			const key = runKey(entry);
 			if (logged.has(key)) return;
 			logged.add(key);
 			try {
-				appendRunLog(logFile, runLogEntry(record, Date.now(), sessionId));
+				appendRunLog(logFile, entry);
 			} catch (error) {
 				if (!logFailed) ctx.ui.notify(`subagents: could not write the run log ${logFile}: ${(error as Error).message}`, "warning");
 				logFailed = true;
 			}
 		});
 
+		const removeSignals = installSignalRecorder((signal) => {
+			try {
+				team.interrupt();
+				index.save(team.list(), signal);
+				appendInterruptedRuns(logFile, team.list(), sessionId, Date.now());
+			} catch (error) { ctx.ui.notify(`subagents: could not record ${signal}: ${(error as Error).message}`, "warning"); }
+		});
 		return {
 			team, mail, tools, config,
 			async restore(reason) {
@@ -246,6 +259,7 @@ export default function subagents(pi: ExtensionAPI) {
 				ctx.ui.notify(notice, "warning");
 			},
 			async close(reason = "quit") {
+				removeSignals();
 				mail.dispose();
 				await team.close();
 				index.save(team.list(), reason);

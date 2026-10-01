@@ -3,15 +3,16 @@
  * model did what, how long it took, what it cost and how it ended. It is the
  * evidence for tuning the model guide.
  */
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { AgentRecord } from "./types.ts";
+import { NO_USAGE, type AgentRecord } from "./types.ts";
 
 export const TASK_PREVIEW_CHARS = 200;
 
 export const runLogPath = (agentDir: string): string => join(agentDir, "subagents", "runs.jsonl");
 
 export function runLogEntry(record: AgentRecord, now: number, parentSession: string): Record<string, unknown> {
+	const launchFailed = record.state === "interrupted" && !!record.launchError;
 	return {
 		at: new Date(now).toISOString(),
 		parentSession,
@@ -25,11 +26,12 @@ export function runLogEntry(record: AgentRecord, now: number, parentSession: str
 		blocking: record.blocking,
 		task: record.task.slice(0, TASK_PREVIEW_CHARS),
 		state: record.state,
+		...(launchFailed ? { event: "resume_launch_failed", launchAttempt: record.launchFailures } : {}),
 		run: record.runs,
 		durationMs: (record.endedAt ?? now) - (record.startedAt ?? record.createdAt),
-		toolCalls: record.toolCalls,
-		usage: record.usage,
-		reportChars: record.report?.length ?? 0,
+		toolCalls: launchFailed ? 0 : record.toolCalls,
+		usage: launchFailed ? NO_USAGE : record.usage,
+		reportChars: launchFailed ? 0 : record.report?.length ?? 0,
 		error: record.error ?? null,
 		sessionFile: record.sessionFile ?? null,
 	};
@@ -39,6 +41,31 @@ export function runLogEntry(record: AgentRecord, now: number, parentSession: str
 export function appendRunLog(file: string, entry: Record<string, unknown>): void {
 	mkdirSync(dirname(file), { recursive: true });
 	appendFileSync(file, `${JSON.stringify(entry)}\n`);
+}
+
+/** A name can be reused across parents; the session file distinguishes its durable run. */
+export function runKey(entry: Record<string, unknown>): string {
+	return JSON.stringify([entry.parentSession, entry.sessionFile, entry.name, entry.run,
+		...(entry.event === "resume_launch_failed" ? [entry.event, entry.launchAttempt] : [])]);
+}
+
+export function loggedRunKeys(file: string): Set<string> {
+	if (!existsSync(file)) return new Set();
+	return new Set(readFileSync(file, "utf8").split("\n").filter(Boolean).flatMap((line) => {
+		try { return [runKey(JSON.parse(line))]; } catch { return []; }
+	}));
+}
+
+export function appendInterruptedRuns(file: string, records: readonly AgentRecord[], parentSession: string, now: number): void {
+	const logged = loggedRunKeys(file);
+	for (const record of records) {
+		if (record.state !== "interrupted") continue;
+		const entry = runLogEntry(record, now, parentSession);
+		const key = runKey(entry);
+		if (logged.has(key)) continue;
+		appendRunLog(file, entry);
+		logged.add(key);
+	}
 }
 
 export interface ModelStats {
