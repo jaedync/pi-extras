@@ -104,7 +104,7 @@ const STATE_WORDS: Record<AgentState, string> = {
 
 /** One line in the /subagents picker, cut to `maxWidth`. The name leads, since the picker reads it back. */
 export function listLabel(record: AgentRecord, nameWidth: number, now: number, maxWidth = Number.POSITIVE_INFINITY): string {
-	const parts = [record.name.padEnd(nameWidth), STATE_WORDS[record.state].padEnd(8), shortModel(record.model)];
+	const parts = [record.name.padEnd(nameWidth), `${STATE_WORDS[record.state]}${record.orphaned ? " (orphan)" : ""}`.padEnd(8), shortModel(record.model)];
 	if (record.usage.cost > 0) parts.push(`$${formatMoney(record.usage.cost)}`);
 	if (record.startedAt !== undefined) parts.push(formatTime((record.endedAt ?? now) - record.startedAt));
 	parts.push(record.task.replace(/\s+/g, " ").trim());

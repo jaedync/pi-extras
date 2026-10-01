@@ -31,7 +31,7 @@ import type { ShownOverlay } from "../lib/band/modal.ts";
 import { formatMoney } from "../lib/status-plus-logic.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
-import { ChildIndex, legacyRecords, restoreRecord, restorationNotice, shouldResume } from "../lib/subagents/restore.ts";
+import { ChildIndex, discoverOrphans, legacyRecords, restoreRecord, restorationNotice, shouldResume } from "../lib/subagents/restore.ts";
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
@@ -211,8 +211,9 @@ export default function subagents(pi: ExtensionAPI) {
 		try {
 			const records = index.load();
 			const roster = records.length > 0 || existsSync(index.file) ? records : legacyRecords(ctx.sessionManager.getBranch(), sessionDir, MAIN, 1);
-			team.restore(roster.map((record) => restoreRecord(record, record.sessionFile && existsSync(record.sessionFile)
-				? sdk.SessionManager.open(record.sessionFile, sessionDir, cwd).getBranch() : [])));
+			const readBranch = (file: string) => sdk.SessionManager.open(file, sessionDir, cwd).getBranch();
+			team.restore(roster.map((record) => restoreRecord(record, record.sessionFile && existsSync(record.sessionFile) ? readBranch(record.sessionFile) : [])));
+			team.restore(discoverOrphans(sessionDir, team.list(), readBranch));
 		} catch (error) {
 			ctx.ui.notify(`subagents: could not restore ${index.file}: ${(error as Error).message}`, "warning");
 		}
@@ -323,7 +324,7 @@ export default function subagents(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("subagents", {
-		description: "Inspect subagents (/subagents [name]), find full reports (report <name>), stop them (stop <name> | stop all), edit the model guide (guide), or see runs by model (stats)",
+		description: "Inspect subagents (/subagents [name]), find full reports (report <name>), resume them (resume <name>), stop them (stop <name> | stop all), edit the model guide (guide), or see runs by model (stats)",
 		getArgumentCompletions: (prefix: string) => commandCompletions(prefix, state?.team.list().map((record) => record.name) ?? []),
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const [verb, ...rest] = args.trim().split(/\s+/);
@@ -345,6 +346,11 @@ export default function subagents(pi: ExtensionAPI) {
 				} catch (error) {
 					return ctx.ui.notify(`Could not find the report for ${name}: ${(error as Error).message}`, "warning");
 				}
+			}
+			if (verb === "resume") {
+				const name = rest.join(" ");
+				const result = await state.team.send(USER, name, "Continue your task and report the outcome.");
+				return ctx.ui.notify(result.ok ? `${name}: ${result.delivered}.${result.notice ? ` ${result.notice}` : ""}` : result.error, result.ok ? "info" : "warning");
 			}
 			if (verb === "stop") {
 				const target = rest.join(" ");

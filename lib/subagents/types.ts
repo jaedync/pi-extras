@@ -64,6 +64,8 @@ export interface AgentRecord {
 	restoreError?: string;
 	launchFailures?: number;
 	launchError?: string;
+	/** A transcript without matching index or parent spawn metadata. Defaults to read-only. */
+	orphaned?: boolean;
 	/** How many runs: 1, then one more per resume. */
 	runs: number;
 	/** The message that resumed it, for the report of that run. */

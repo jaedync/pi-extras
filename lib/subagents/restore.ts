@@ -1,7 +1,8 @@
 /** Durable roster separate from Pi's transcript, which may not contain a spawn result yet. */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
+import { nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
 import { LIVE_STATES, NO_USAGE, type AgentRecord } from "./types.ts";
 
@@ -67,6 +68,29 @@ export class ChildIndex {
 
 	get shutdown(): string | undefined { return this.data.shutdown; }
 	get cwd(): string { return this.data.cwd; }
+}
+
+/** Unindexed transcripts remain inspectable, even when the old parent never wrote a tool result. */
+export function discoverOrphans(dir: string, known: readonly AgentRecord[], readBranch: (file: string) => readonly unknown[]): AgentRecord[] {
+	if (!existsSync(dir)) return [];
+	const paths = new Set(known.map((r) => r.sessionFile));
+	const names = new Set(known.map((r) => r.name));
+	return readdirSync(dir).filter((file) => file.endsWith(".jsonl") && !paths.has(join(dir, file))).sort().map((file) => {
+		const sessionFile = join(dir, file);
+		const entries = readBranch(sessionFile) as readonly any[];
+		const messages = entries.filter((e) => e.type === "message").map((e) => e.message);
+		const first = messages.find((m) => m.role === "user");
+		const task = Array.isArray(first?.content) ? first.content.filter((p: any) => p.type === "text").map((p: any) => p.text).join("\n") : "Recovered child session";
+		const modelChange = entries.slice().reverse().find((e) => e.type === "model_change");
+		const assistant = messages.slice().reverse().find((m) => m.role === "assistant");
+		const model = modelChange ? `${modelChange.provider}/${modelChange.modelId}` : assistant?.provider && assistant?.model ? `${assistant.provider}/${assistant.model}` : "unknown/unknown";
+		const hint = file.match(/Z_(.+)_[a-f0-9-]+\.jsonl$/)?.[1] ?? file.replace(/\.jsonl$/, "");
+		const name = nameFor(hint, task, (candidate) => names.has(candidate));
+		names.add(name);
+		return restoreRecord({ name, parent: "main", depth: 1, task, model, readOnly: true, fork: false, blocking: false,
+			state: "idle", createdAt: Date.parse(entries[0]?.timestamp ?? "") || Date.now(), activity: "recovered from disk",
+			toolCalls: 0, usage: NO_USAGE, runs: 1, sessionFile, orphaned: true }, entries);
+	});
 }
 
 export function shouldResume(reason: string, policy: "reload" | "always" | "notify"): boolean {
