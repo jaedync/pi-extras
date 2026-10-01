@@ -103,7 +103,9 @@ rotation. Remove it when you no longer need the diagnostic history.
 **Limits.** Cache hits and expiry can't be guaranteed. Anything uncertain uses
 Pi's own compaction. A failed attempt is billed by the provider but not
 counted in the session's totals. Turn it off with
-`cacheCompaction.enabled: false`.
+`cacheCompaction.enabled: false`. This also turns it off in children, which
+always load it even when the parent excludes the extension through a package
+filter or loads only `subagents.ts` with `-e`.
 
 ## Rate-limit Recovery
 
@@ -398,9 +400,10 @@ a default timeout for calls that omit one. Explicit timeouts remain unchanged.
 Children are Pi sessions in the same process, with your permissions. A child
 gets the parent's active tools except mesh, goal, desktop-control, background
 job and subagent tools, and `childToolsExclude`; read-only children lose
-`bash`, `edit` and `write`. Only the extensions that provide one of its tools
-load into a child, plus a quota guard that never hibernates for quotas; it
-waits out short rate limits within the bounded backoff described above. Your context files (`AGENTS.md`) and skills load as they do
+`bash`, `edit` and `write`. Children load the extensions that provide their
+tools, Cache Compaction and a quota guard. The guard never hibernates for
+quotas; it waits out short rate limits within the bounded backoff described
+above. Your context files (`AGENTS.md`) and skills load as they do
 for the parent. Children use the parent's model credentials.
 
 Child sessions are written under

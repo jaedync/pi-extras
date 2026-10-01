@@ -226,15 +226,28 @@ tokens came from cache, on both Claude and Codex. The summaries were
 comparable to Pi's own in a two-model comparison. Results vary by provider and
 workload.
 
-**When it runs.** For `/compact`, and for Pi's automatic compaction after a
-turn or before a new prompt, as long as:
+**When it runs.** Main sessions and pi-extras subagents use it. Children always
+load this tool-free extension, even when a package filter excludes it from the
+parent or the parent loads only `subagents.ts` with `-e`. Both use the same
+settings and idle defaults (240 seconds for most routes, including Codex). Set `cacheCompaction.enabled: false` to turn it off
+for children too. It runs for `/compact` and Pi's automatic compaction
+after a turn or before a new prompt, as long as:
 
 - the cache is probably still warm (see `idleSeconds` below);
 - the model, session and branch haven't changed since the last request;
 - the summary fits in the context window (see below).
 
 Otherwise Pi's own compaction runs, exactly as it would without this
-extension. The notice after each compaction says which one ran and why.
+extension. The notice says which path ran and why. Each decision also writes
+one JSON line to `PI_CODING_AGENT_DIR/cache-compaction.log` (default
+`~/.pi/agent/cache-compaction.log`). It includes the session ID, provider/model,
+compaction reason, chosen path, fallback category and token estimates.
+Prefix-sharing attempts also record the response's stop reason and token usage.
+No messages, summaries, headers or payloads are logged. Writes are best effort.
+When Tool Display is loaded, the `pi-extras.compaction-band` custom session
+entry also saves `path` and `fallbackReason`, outside model context.
+
+Capture-miss categories: `capture-no-system`, `capture-no-model`, `capture-projection`, `capture-identity`, `capture-payload`, `capture-no-context`, `capture-headers`, `capture-failed`.
 
 **Room for the summary.** The summary is written inside the same context
 window as the conversation, so it needs room. The extension asks for room for
@@ -695,9 +708,9 @@ Pi draws them and `/copy-block` still works.
 The `subagent` tool starts a child agent: a separate Pi session on the model
 the agent picks, with a fresh context, the same working directory and the
 same tools minus a few that make no sense in a child (mesh, goals, desktop
-control, background jobs). Only the extensions that provide those tools load
-in the child, so the rest, such as the remote-pi mesh, keep serving the parent
-session. It runs in the background and its report arrives
+control, background jobs). Children load the extensions that provide their
+tools, Cache Compaction and a quota guard. Other extensions, such as the
+remote-pi mesh, keep serving the parent session. It runs in the background and its report arrives
 as a message, so the agent keeps working or ends its turn and is woken when it
 matters. `wait: true` blocks instead, for a quick check. `readOnly: true` takes
 away `bash`, `edit` and `write`. `context: "fork"` gives the child a condensed

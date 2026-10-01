@@ -2,6 +2,28 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Cache Compaction now loads in pi-extras subagents. Children use the same
+  policy, including Codex's 240-second idle limit.
+- Cache Compaction captures requests whose startup custom messages precede
+  Pi's first system message. These previously fell back with `no-request`.
+- Cache Compaction skips request-time omissions such as lapsed Usage Guard
+  warnings when identifying the retained boundary. It still verifies the
+  actual provider prefix before sending.
+- Compaction logs distinguish capture misses and unsent prefix rejections
+  from provider failures. Compaction-band metadata only attaches to the
+  matching result, and its event listener is released on shutdown or reload.
+
+### Added
+
+- Cache Compaction writes every decision to `cache-compaction.log` in the
+  Pi agent directory. It records the path, fallback category, token estimates
+  and prefix-sharing response usage, never message content or payloads.
+  Tool Display's compaction session entry also records the path and category.
+
 ## 0.18.1 - 2026-10-01
 
 ### Changed
