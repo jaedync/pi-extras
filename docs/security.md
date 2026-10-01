@@ -53,41 +53,34 @@ preserving raw session history and explicit requested usage snapshots.
 
 ## Cache Compaction
 
-The latest full request transcript and non-conversation provider payload fields
-are kept in memory only, never persisted or logged. This can include private tool
-output and provider metadata, just like Pi's normal in-memory context. The
-conversation body is not retained a second time inside the payload snapshot.
-Filtered routing headers stay in memory only. Filtering drops authorization-,
-cookie-, token-, key-, secret-, credential- and signature-like header names.
-Other header values can still contain sensitive data; this is name filtering,
-not a guarantee that retained headers contain nothing sensitive.
-Snapshots are replaced on each request and cleared on compaction, session
-start/shutdown/reload, tree navigation, model and thinking-level changes.
+**In memory only.** The extension keeps a copy of the session's most recent
+request: its transcript and its non-conversation provider fields (system
+prompt, tools, reasoning settings and so on). Like Pi's own in-memory context,
+this can include private tool output. It is never written to disk or logged.
+It also keeps that request's routing headers, minus any whose name looks like
+a credential (containing auth, cookie, token, key, secret, credential or
+signature). That filter goes by header name only, so it can't guarantee the
+remaining values hold nothing sensitive. The copy is replaced on every request
+and cleared on compaction, session start, shutdown and reload, tree
+navigation, and model or thinking-level changes.
 
-Summarization sends the captured transcript, finalized replies/tool results, and
-a summary instruction to the same configured model and endpoint with the same
-session ID. Manual `/compact`, after-turn threshold and pre-prompt threshold
-compactions can use this path when there is enough room for the previous summary
-plus growth/reasoning allowances; retained unsent input stays out of the summary
-request. The summary cap is recomputed for that request while cache-affecting
-thinking parameters remain unchanged. It does not read credential files or change ordinary requests.
-Authentication is resolved by Pi for the summary request. Preserved provider
-fields include tool declarations, but the instruction forbids tool use and any summary
-with a tool call is rejected without executing it. Errors are reported only as
-fixed categories, never provider text or request bodies.
+**What it sends.** The summary request goes to the same model and endpoint,
+with the same session ID, and Pi resolves its authentication as usual. It
+contains the copied request, the replies and tool results since, and the
+summary instruction. Tool declarations are kept so the cache matches, but the
+instruction forbids tool use, and a reply that calls a tool is discarded
+without running it. The extension reads no credential files, changes no
+ordinary request, and adds no network destination, telemetry, timer or disk
+cache.
 
-Only summaries, file lists, normal usage and `details.cachePrefix: true` enter
-the session file. No new network destination, telemetry, timer or disk cache is
-created. Cache hits and expiry cannot be guaranteed. Unsafe, cold or unsupported
-requests use Pi's default summarization. Other fallbacks include overflow
-recovery,
-model/branch/session changes, insufficient context-window space, ambiguous
-boundaries and unusable replies. Pi's image-blocking wrapper is private, so
-blocked images conservatively lose prefix eligibility. Only an identical empty
-managed-effort marker can be inserted at the old cached boundary; incompatible
-markers fall back. A failed prefix attempt spends provider usage before that fallback,
-but its usage is not recorded in session totals.
-Disable with `cacheCompaction.enabled: false`.
+**What it saves.** Only what Pi's compaction saves: the summary, file lists
+and usage, plus `details.cachePrefix: true`. Errors are reported as fixed
+categories, never as provider text or request bodies.
+
+**Limits.** Cache hits and expiry can't be guaranteed. Anything uncertain uses
+Pi's own compaction. A failed attempt is billed by the provider but not
+counted in the session's totals. Turn it off with
+`cacheCompaction.enabled: false`.
 
 ## Rate-limit Recovery
 

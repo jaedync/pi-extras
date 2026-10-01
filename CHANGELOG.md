@@ -2,27 +2,21 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## Unreleased
+## 0.14.0 - 2026-09-30
 
 ### Added
 
-- Cache Compaction: compaction summaries reuse the session's warm prompt cache.
-  The summary request is the session's own next request (same system prompt,
-  tools, history, reasoning settings and session ID) with a summarization
-  instruction appended, instead of Pi's standalone summarizer request, which
-  cannot read the cache. Measured locally: about 3x cheaper at 15k tokens of
-  context and 16-17x at 42k (Claude via Meridian and Codex). The two-model A/B
-  produced comparable summaries after the boundary fix, not proven equivalence.
-  Manual `/compact`, after-turn threshold and pre-prompt threshold
-  compactions reuse the prefix when enough summary output room remains.
-  Output caps are sized to the summary context; the minimum room scales with
-  the previous summary. Long-session updates often fall back at the default
-  reserve; 32k-48k reserve leaves more room on large-window models. Retained unsent input stays out of the summary
-  request. Overflow recovery, model/branch/session changes, a cold cache,
-  unsupported APIs, a request that does not fit or an unusable reply fall back
-  to Pi's default compaction. A failed prefix attempt spends provider usage that
-  is not recorded in session totals. Configure
-  `cacheCompaction.enabled` and per-provider `idleSeconds` in `pi-extras.json`.
+- Cache Compaction (on by default): compaction summaries reuse the session's
+  prompt cache. The summary request is the session's next turn with a
+  summarization instruction added, instead of Pi's separate summarization
+  prompt, which pays for the whole context again. In local tests a summary
+  cost a third as much at 15k tokens of context and a sixteenth or less at
+  42k. Automatic compaction needs room in the context window for the summary:
+  at Pi's default `compaction.reserveTokens` (16,384), later compactions in
+  long sessions often don't have it and use Pi's compaction as before, and a
+  reserve of 32,768 gives them room. Anything uncertain falls back to Pi's
+  compaction. Turn it off with `cacheCompaction.enabled: false` in
+  `pi-extras.json`.
 
 ## 0.13.0 - 2026-09-30
 

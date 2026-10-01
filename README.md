@@ -119,108 +119,96 @@ or supplying search credentials. Extensions execute with your user permissions.
 
 ## Cache Compaction
 
-Enabled by default. Pi's usual compaction serializes history into a separate
-summarization prompt, which cannot reuse the session's cached prefix. Cache
-Compaction instead appends an extraction instruction to the last full session
-request plus its finalized assistant replies/tool results, preserving the
-session ID and non-conversation provider payload fields, including
-thinking/reasoning, tools and cache routing. The output limit comes from the
-new summary request, sized to its context instead of replaying a stale cap.
-Manual `/compact`, after-turn threshold and pre-prompt threshold compactions
-use this path only when there is enough room under the context window.
-Retained input not sent yet, including bash output and custom messages, stays
-out of the summary request. The instruction asks for brief reasoning, Pi's structured checkpoint, previous-summary updates,
-and split-turn context. Its retained-boundary identifier includes role,
-content types, tool-call IDs/names and bounded excerpts (capped at 1,800
-characters, including for textless tool calls). Repeated prompts or template
-openings use a bounded preceding-message chain; ambiguous chains fall back.
-Aborted/errored assistant replies cannot identify the boundary because providers
-drop them. Identifiers avoid message numbers, since providers can regroup messages. It identifies the retained boundary and summarizes
-only the history that Pi will discard, not the recent messages Pi keeps verbatim.
+On by default. To compact, Pi normally sends the conversation to the model as
+a new summarization prompt. That prompt can't use the provider's prompt cache,
+so the whole context is paid for again at full price. Cache Compaction sends
+the summary request as the session's next turn instead: the same system
+prompt, tools, history, reasoning settings and session ID, with a
+summarization instruction added at the end. The provider reads almost all of
+it from cache.
 
-A salted ~42k-context recipe probe measured $0.010 vs $0.169 for Sonnet through
-Meridian, and $0.0034 vs $0.055 for Codex (about 94% savings). Smaller live A/B
-runs loading this extension measured Sonnet $0.0149 vs $0.0481 (14,826 cache-read
-tokens) and Codex $0.0065 vs $0.0188 (7,552 cached). These are provider-reported
-catalog costs, not subscription invoices. Savings, latency and summary quality
-vary; the two-model A/B summaries were comparable after the boundary fix, not
-proven equivalent. Post-compaction turns still start with a new, cold summary prefix.
+Measured on this machine (provider-reported costs, not invoices):
 
-Headroom uses Pi's usage-anchored context estimate and a safety margin of
-4,096 tokens plus 60% of the unanchored tail estimate (including the instruction),
-since numeric logs can tokenize more densely than characters/4. The required
-output room is the previous summary's estimated size plus 6,000 tokens for summary growth and 2,000 for reasoning. The request uses the
-full available room (up to the model's output ceiling), not this minimum.
-Codex declares no wire output cap, so the same headroom gate is conservative,
-not an enforceable output ceiling.
-Budget-thinking Anthropic and fixed-budget Google/Vertex requests also need room
-above the unchanged thinking budget plus that summary minimum; otherwise they
-fall back without sending.
+| Context | Model | Pi's compaction | Cache Compaction |
+|---|---|---|---|
+| ~15k | Claude Sonnet via Meridian | $0.048 | $0.015 |
+| ~15k | Codex | $0.019 | $0.0066 |
+| ~42k | Claude Sonnet via Meridian | $0.169 | $0.010 |
+| ~42k | Codex | $0.055 | $0.0034 |
 
-At the default `compaction.reserveTokens: 16384`, automatic threshold compaction
-has roughly 12k tokens minus the new tail/instruction and its skew margin left.
-First summaries usually fit; updated summaries in long sessions usually do not and fall back.
-For large-window models, raising `compaction.reserveTokens` to 32,768 (or
-49,152) leaves more room. 32k is about 3% of a 1M-token window. Manual `/compact`
-earlier in the window normally has ample room, but still checks the same gate.
+In live automatic compactions at a 48k window, about 32k of the 33k input
+tokens came from cache, on both Claude and Codex. The summaries were
+comparable to Pi's own in a two-model comparison. Results vary by provider and
+workload.
 
-A local sample of 183 real compactions (58 first, 125 updated) gave upper-bound
-fit rates of 106/183 (58%) at reserve 16,384, and 183/183 (100%) at both 32,768
-and 49,152. All 58 first summaries fit the default reserve, but only 48 updated
-summaries did. Method: session JSONL files over 200 KB in the local main-session
-and subagent directories; compaction summaries with file-list XML removed;
-size estimated as characters/4; compare reserve minus 4,096 against previous
-summary size plus 8,000. These rates exclude the new tail/instruction and its
-additional skew margin, which reduce available room further. No passing sample's
-actual summary exceeded that room. These observations are not guarantees for other workloads.
+**When it runs.** For `/compact`, and for Pi's automatic compaction after a
+turn or before a new prompt, as long as:
 
-Configure `cacheCompaction` in `PI_CODING_AGENT_DIR/pi-extras.json` (default
+- the cache is probably still warm (see `idleSeconds` below);
+- the model, session and branch haven't changed since the last request;
+- the summary fits in the context window (see below).
+
+Otherwise Pi's own compaction runs, exactly as it would without this
+extension. The notice after each compaction says which one ran and why.
+
+**Room for the summary.** The summary is written inside the same context
+window as the conversation, so it needs room. The extension asks for room for
+the previous summary plus 8,000 tokens (6,000 for new material, 2,000 for
+reasoning), and keeps a safety margin of 4,096 tokens plus 60% of whatever was
+added since the last request, because that part is only estimated.
+
+At Pi's default `compaction.reserveTokens` of 16,384, an automatic compaction
+has about 12k tokens of room before anything added since the last request.
+First summaries fit. Later summaries in long sessions often don't, because
+each one carries the previous summary forward. Out of 183 compactions in local
+sessions, 58% would have had room at the default, and all of them at 32,768 or
+49,152. (Method: the model-written part of each saved summary, at four
+characters per token, against room for the previous summary plus 8,000.) On
+large-window models, raise the reserve in Pi's `settings.json`; 32k is about
+3% of a 1M-token window:
+
+```json
+{ "compaction": { "reserveTokens": 32768 } }
+```
+
+**Settings.** In `PI_CODING_AGENT_DIR/pi-extras.json` (default
 `~/.pi/agent/pi-extras.json`), then `/reload`:
 
 ```json
 {
   "cacheCompaction": {
     "enabled": true,
-    "idleSeconds": {
-      "anthropic": 3300,
-      "openai-codex": 240
-    }
+    "idleSeconds": { "anthropic": 3300, "openai-codex": 240 }
   }
 }
 ```
 
-`enabled` defaults to `true`; `false` leaves Pi's default summarization intact.
-`idleSeconds` optionally overrides the maximum idle time per provider, in whole
-seconds from 0 to 86400. Zero always uses default compaction. Without an override,
-Anthropic on Meridian's loopback port 3456 gets 55 minutes (observed one-hour
-SDK cache writes, minus a five-minute margin). Native Anthropic, Codex and other
-providers get four minutes, conservatively allowing for short cache lifetimes.
-The example's Anthropic override also applies to native Anthropic, so omit it
-unless that route has a long-lived cache. Invalid values use the defaults.
+- `enabled`: `false` leaves Pi's compaction untouched.
+- `idleSeconds`: per provider, how long after the last request the cache
+  counts as warm, from 0 to 86400 (0 means never use the cache path). The
+  default is 55 minutes for Anthropic through Meridian on port 3456, which
+  writes one-hour caches, and 4 minutes for everything else. The example's
+  `anthropic` value also applies to Anthropic's own API, which keeps caches
+  for 5 minutes, so leave it out unless every Anthropic route you use keeps
+  long caches.
 
-Supported APIs: Anthropic Messages, OpenAI Responses/Codex/Azure Responses, and
-Google Generative AI/Vertex. Unsupported APIs and missing capture hooks degrade
-to Pi's default compaction. Tested with Pi 0.99.2. Load this extension after
-extensions that transform `context_with_system`, `before_provider_headers`
-or `before_provider_request`, so its snapshot sees their
-final changes. Incompatible context transformations safely lose eligibility.
+**Providers.** Anthropic Messages, OpenAI Responses (including Codex and
+Azure), Google Generative AI and Vertex. Other APIs use Pi's compaction.
+Tested with Pi 0.99.2. If another extension changes requests in
+`context_with_system`, `before_provider_headers` or `before_provider_request`,
+load it before this one.
 
-Fallbacks include no captured payload, model/provider/API/endpoint or session
-changes, irreconcilable branches/context edits, unsent input in discarded
-history, expired cache, overflow recovery, insufficient context-window headroom,
-ambiguous boundaries, images blocked by Pi (its image-blocking wrapper is not
-public), incompatible managed-effort markers, abort, provider error,
-empty/tool-calling or token-capped summaries. Interactive notices say which path
-ran and why; successful entries save usage, cumulative file lists and
-`details.cachePrefix: true`. Provider errors and payloads are never logged.
-Snapshots and filtered routing headers stay in memory only and are cleared on
-lifecycle changes and compaction. Filtering drops credential-like header names;
-it does not guarantee that other header values contain nothing sensitive.
-Exact-repeat/warmer payloads refresh the capture's age without replacing it.
-The session's transport and provider timeout/retry settings carry over.
-A failed prefix attempt spends provider usage before default compaction runs,
-but that attempt's usage is not recorded in session totals.
-See [security and privacy](docs/security.md#cache-compaction).
+**Also falls back when:** Pi is recovering from a context overflow; the place
+where Pi's kept messages begin can't be identified unambiguously; Pi is
+blocking images in the session; or the reply is an error, empty, a tool call,
+or cut off at the output limit. Codex requests don't declare an output limit,
+so for Codex the room check is the extension's own guard rather than a limit
+the provider enforces.
+
+**Cost of a failed attempt.** If the cached request fails, the provider still
+bills it, but it isn't counted in the session's totals. Pi's compaction then
+runs as usual. See [security and privacy](docs/security.md#cache-compaction)
+for what is kept in memory.
 
 ## Usage Guard
 
