@@ -9,6 +9,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 - Removed tool-call folding. Every tool row stays visible after it finishes;
   Pi's native ctrl+o still expands all rows.
 - Restart Pi after updating from 0.17.0 or earlier; /reload leaves the old folding wrapper in place (inert).
+- Live status now sits in the editor's top divider, with per-mode spinners,
+  shimmer, tokens and one elapsed clock. Narrow widths drop TPS, TTFT, then
+  tokens. Live thinking stays above queued messages; streaming tool rows stay
+  in the transcript. Voice recording keeps its coordinated bottom border.
 - Phase Spinner names the phase descriptively by default. Set `phaseSpinner.verbs`
   to `"playful"` or a custom list to opt into one verb per prompt. Finished prompts
   keep `π Worked for 41s, done 9:14 PM`; stopped prompts keep their existing stopped line.
@@ -112,7 +116,7 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 - Transcript rows (tool calls, background jobs, subagents, agent mail and
   compaction) keep two columns at their left, and their content moves two
   columns right. A spinner turns there while the model writes the call or it
-  runs, in step with the phase line; a still dot marks a call waiting its
+  runs, in step with the main spinner; a still dot marks a call waiting its
   turn.
 - Copy Blocks: code blocks and quotes ten rows or taller have a `copy` label
   at their foot too, so one is in view from either end.

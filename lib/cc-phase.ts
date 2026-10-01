@@ -1,4 +1,4 @@
-import { mixColors, stripTerminalSequences, truncateToWidth, visibleWidth, type Color } from "@earendil-works/pi-tui";
+import { mixColors, stripTerminalSequences, truncateToWidth, type Color } from "@earendil-works/pi-tui";
 import { END_GLYPH, MODE_SPINNERS, SPINNER_SLOT_WIDTH, WAVE_TOKENS_PER_SECOND, piWave, slotGlyph, type GlyphAnimation } from "./band/glyph.ts";
 
 export const SEP = ", ";
@@ -36,24 +36,19 @@ export const seconds = (ms: number): string => `${Math.max(0,Math.floor(ms/1000)
 export function thinkingLabel(ms: number): string {
  return ms >= 45000 ? "deep in thought" : ms >= 30000 ? "thinking some more" : ms >= 20000 ? "thinking more" : ms >= 10000 ? "still thinking" : "thinking";
 }
-const toolLabel = (name: string | undefined): string => stripTerminalSequences(name ?? "tool").replace(/[\x00-\x20\x7f-\x9f]+/g," ").trim() || "tool";
+const toolLabel = (name: string | undefined): string => stripTerminalSequences(name ?? "tool").replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g,"").replace(/[\x00-\x20\x7f-\x9f]+/g," ").trim() || "tool";
 const graphemes = new Intl.Segmenter(undefined,{granularity:"grapheme"});
 export function phaseTitle(model: RunLine): string {
  if(model.verb)return model.verb.present;
  const titles={prep:"Preparing",api:"Sending request",first_token:"Waiting for the model",think:thinkingLabel(model.phaseMs).replace("thinking some more","thinking more"),text:"Writing reply",tool:`Writing ${toolLabel(model.pendingTool)} call`,run:model.tools && model.tools.length>1?`Running ${model.tools.length} tools`:`Running ${toolLabel(model.tools?.[0])}`};
  const title=titles[model.phase];return title[0]!.toUpperCase()+title.slice(1);
 }
-export function phaseParts(model: RunLine): string[] {
- if(!model.verb){
-  const direction=model.phase==="api"?"↑":model.tokens>0 && ["think","text","tool"].includes(model.phase)?`↓ ${Math.round(model.tokens).toLocaleString("en-US")} tokens`:undefined;
-  return [seconds(model.elapsedMs),direction].filter((part):part is string=>!!part);
- }
+function phaseParts(model: RunLine): string[] {
  const detail = model.phase === "api" ? "sending request" : model.phase === "first_token" ? "waiting for first token"
   : model.phase === "tool" ? `writing ${toolLabel(model.pendingTool)} call`
   : model.phase === "run" ? (model.tools && model.tools.length > 1 ? `running ${model.tools.length} tools` : `running ${toolLabel(model.tools?.[0])}`) : undefined;
- const direction = model.phase === "api" ? "↑" : model.tokens > 0 && model.phase !== "run" ? `↓ ${Math.round(model.tokens).toLocaleString("en-US")} tokens` : undefined;
- const thought = model.phase === "think" ? thinkingLabel(model.phaseMs) : model.thoughtMs !== undefined && (model.sinceThoughtMs ?? Infinity) < 2000 ? `thought for ${seconds(model.thoughtMs)}` : undefined;
- return [detail, ...(detail || direction || thought || model.elapsedMs >= 16000 ? [seconds(model.elapsedMs)] : []), direction, thought].filter((part): part is string => !!part);
+ const thought = model.phase === "think" ? thinkingLabel(model.phaseMs) : undefined;
+ return [detail, thought].filter((part): part is string => !!part);
 }
 export function sweepAt(length: number, ms: number, sending: boolean): number {
  const step = Math.floor(ms/(sending ? 50 : 200)) % (length+6);
@@ -93,17 +88,20 @@ function runPainter(model: RunLine, theme: LineTheme): (text: string, highlight?
 export function runAnimation(model: RunLine): GlyphAnimation {
  return MODE_SPINNERS[model.phase==="run" && model.waitingOnPeers ? "peer" : model.phase];
 }
-export function renderRunLine(model: RunLine, width: number, theme: LineTheme, override?: GlyphAnimation): string {
- if(width<=0) return "";
+function runHead(model: RunLine, theme: LineTheme): string {
  const paint=runPainter(model,theme), word=[...graphemes.segment(phaseTitle(model))].map(part=>part.segment);
  const sweep=sweepAt(word.length,model.clockMs,model.phase==="api");
  const pulse=(Math.sin(model.clockMs/1000*Math.PI)+1)/2;
  const title=word.map((ch,i)=>paint(ch,model.reduced ? 0 : model.phase==="run" ? pulse : i>=sweep && i<sweep+3 ? 1 : 0)).join("");
- const parts=phaseParts(model);
- const animation=override ?? runAnimation(model);
- const slot=override ? visibleWidth(animation.frames[0]!) : SPINNER_SLOT_WIDTH;
- const glyph=slotGlyph(animation,model.clockMs,{reduced:model.reduced,rateElapsedMs:model.waveMs ?? 0},slot);
- return truncateToWidth(`${slot ? paint(glyph)+" " : ""}${title}${paint("…")}${parts.length ? theme.fg("dim",` (${parts.join(SEP)})`) : ""}`,width,"");
+ const glyph=slotGlyph(runAnimation(model),model.clockMs,{reduced:model.reduced,rateElapsedMs:model.waveMs ?? 0},SPINNER_SLOT_WIDTH);
+ return `${paint(glyph)} ${title}${paint("…")}`;
+}
+/** The divider owns elapsed time; its left caption never repeats a timer. */
+export function renderRunStatus(model:RunLine,theme:LineTheme,withTokens=true):string {
+ const direction=model.phase==="api"?"↑":withTokens && model.tokens>0 && ["think","text","tool"].includes(model.phase)?`↓ ${Math.round(model.tokens).toLocaleString("en-US")} tokens`:undefined;
+ const detail=model.verb?phaseParts(model):[];
+ const parts=[...detail,...(direction?[direction]:[])];
+ return runHead(model,theme)+(parts.length?theme.fg("dim"," "+parts.join(SEP)):"");
 }
 export interface StreamRate { readonly at: number; readonly chars: number; readonly rate: number; readonly waveMs: number }
 export function streamRate(previous: StreamRate, at: number, chars: number): StreamRate {

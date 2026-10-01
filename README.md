@@ -29,7 +29,7 @@ can still conflict.
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
 | Cache Compaction | Prefix-sharing summaries that reuse the session's warm prompt cache, with safe fallback to Pi's default compaction |
 | Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
-| Phase Spinner | A line under the conversation, above any queued messages, saying what the agent is doing, with a spinner for each kind of work, live thinking under it and a π end line when a prompt finishes; tokens/sec, time to first token and elapsed time in the editor border |
+| Phase Spinner | Descriptive status with a per-mode spinner in the editor's top divider, alongside tokens/sec, time to first token and one elapsed clock; live thinking above queued messages and a π end line when a prompt finishes |
 | Tab Status | Pi's state in the terminal tab: an iTerm2 status dot and detail, and tab progress in iTerm2, Ghostty, WezTerm and Windows Terminal |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
 | Subagents | `subagent` and `message` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, with a live band per agent |
@@ -455,36 +455,41 @@ half second of each recording is lost while that job starts.
 
 ## Phase Spinner
 
-A line under the conversation says what the agent is doing:
+The editor's top divider says what the agent is doing:
 
 ```text
-⢌⡱⢎ Thinking… (9s, ↓ 212 tokens)
+─ ⢌⡱⢎ Thinking… ↓ 212 tokens ──── TPS 109.3 ─ TTFT 0.7s ─ Time 00:15.8 ─
 ```
 
 The main word names the phase: `Sending request`, `Waiting for the model`,
 `Thinking` (then `Still thinking`, `Thinking more`, `Deep in thought`),
 `Writing bash call`, `Running bash` or `Running 3 tools`, and `Writing reply`.
-The parentheses show elapsed time and a token count while the model writes.
+A token count follows the status while the model writes. The divider keeps
+one elapsed clock on the right, alongside TPS and TTFT. Narrow terminals drop
+TPS first, then TTFT, then tokens; the left status wins and never wraps.
 The main word keeps its shimmer. Set `phaseSpinner.verbs` to `"playful"` for
 pie and π words (Proofing, Kneading, Approximating, …), or provide your own
 `"Present|Past"` pairs. Then one verb lasts the whole prompt and the phase
-appears in the parentheses, as before. Pi's own statuses (compacting, retrying,
-summarizing a branch) take the line's place while they run.
+follows it, without another elapsed timer. Pi's own statuses (compacting, retrying,
+summarizing a branch) take the status's place in the divider while they run.
 
 Each kind of work has its own spinner, all three cells wide so the main word never
 moves: a ping going out while the request is sent and answered, a helix while
 the model thinks, a print head while it writes a tool call, a comet orbit while
 tools run, two comets while it waits for a subagent's reply, and a wave that
 moves at the stream's speed while it writes the reply. Compaction squeezes to a
-point, a retry drains, and a branch summary walks every row. The line turns
+point, a retry drains, and a branch summary walks every row. The status turns
 amber after 10 seconds of thinking and red when no tokens have come for 10
 seconds.
 
-While the model thinks, its newest three lines show dimly under the spinner.
-When a prompt finishes, a dotted π waves in and out, and the transcript keeps an
+While the model thinks, its newest three lines show dimly at the bottom of
+the conversation, above queued messages and the divider. A tool call being
+written remains Pi's native streaming transcript row above the status.
+When a prompt finishes, a dotted π waves in and out in the divider, and the transcript keeps an
 end line such as `π Worked for 41s, done 9:14 PM`, or `π Stopped after 12s`
 when you stopped it. The end line and the thinking rows are only drawn; the
-model never sees them. Messages you queue show below the line.
+model never sees them. Voice recording uses the bottom border while the agent
+works, so the live status stays visible. Pi's own working loader stays hidden.
 `/tool-display motion reduced` holds every spinner on a still frame.
 
 The π, `●`, `∴` and timeout marks are drawn one cell wide. A terminal set to
@@ -580,8 +585,8 @@ Drawing other tools' rows relies on how Pi builds a tool row, which is not part
 of Pi's extension API. If a Pi update changes it, those rows are drawn by
 their own tools again; Pi's built-in tools keep the band either way.
 
-**Thinking.** While the model thinks, its newest three lines show under the
-spinner line. Paragraphs and list items are joined with `·` rather than taking
+**Thinking.** While the model thinks, its newest three lines show above queued
+messages and the editor divider. Paragraphs and list items are joined with `·` rather than taking
 lines of their own, so the three lines hold as much as fits. When thinking
 ends, the transcript keeps one `∴ Thought for 12s` row. Click it to read the
 whole block, and again to go back; ctrl+t does the same for every block.

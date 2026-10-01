@@ -1,21 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { colorToHex, rgbColor, stripTerminalSequences, visibleWidth, type Color } from "@earendil-works/pi-tui";
-import { DEFAULT_VERBS, parseVerbs, pickVerb, phaseParts, renderRunLine, runAnimation, streamRate, renderEndLine, parseEndLine, smoothTokens, sweepAt, thinkingLabel, type RunLine } from "../lib/cc-phase.ts";
+import { DEFAULT_VERBS, parseVerbs, pickVerb, renderRunStatus, runAnimation, streamRate, renderEndLine, parseEndLine, smoothTokens, sweepAt, thinkingLabel, type RunLine } from "../lib/cc-phase.ts";
+import { renderStatusDivider } from "../lib/status-divider.ts";
 import { END_GLYPH, MODE_SPINNERS, SPINNER_FRAMES, SPINNER_CYCLE_MS, spinnerGlyph } from "../lib/band/glyph.ts";
 const theme = { fg: (_key: string, text: string) => text };
 const base = { verb: DEFAULT_VERBS[0]!, phase: "text" as const, elapsedMs: 0, phaseMs: 0, tokens: 0, clockMs: 0, reduced: false };
-test("zero- and six-cell heroes use their real widths, including braille",()=>{
- for(const frame of ["","⠁⠂⠄⡀⢀⠠"]){
-  const animation={frames:[frame],durationsMs:[300]};
-  for(let width=0;width<50;width++)assert.ok(visibleWidth(renderRunLine(base,width,theme,animation))<=width);
-  const full=renderRunLine(base,80,theme,animation);
-  assert.ok(full.startsWith(frame ? frame+" "+base.verb.present : base.verb.present));
- }
-});
+const divider=(model:RunLine,width:number)=>renderStatusDivider({status:renderRunStatus(model,theme),withoutTokens:renderRunStatus(model,theme,false),elapsedMs:model.elapsedMs},width,{border:text=>text,total:text=>text});
 test("all mode picks keep the verb at the same terminal column",()=>{
  for(const phase of ["prep","api","first_token","think","text","tool","run"] as const){
-  const line=stripTerminalSequences(renderRunLine({...base,phase,reduced:true},100,theme));
+  const line=stripTerminalSequences(renderRunStatus({...base,phase,reduced:true},theme));
   assert.equal(visibleWidth(line.slice(0,line.indexOf("Proofing"))),4);
  }
 });
@@ -33,14 +27,7 @@ test("verbs validate overrides, keep paired past tenses and pick once", () => {
  assert.deepEqual(parseVerbs([]), []);
  assert.equal(pickVerb(DEFAULT_VERBS, () => 0), DEFAULT_VERBS[0]);
 });
-test("parts add useful detail, elapsed at 16s, direction, thinking progression and recent thought", () => {
- assert.deepEqual(phaseParts(base), []);
- assert.deepEqual(phaseParts({...base, elapsedMs:16000}), ["16s"]);
- assert.deepEqual(phaseParts({...base, phase:"api", elapsedMs:1200}), ["sending request","1s","↑"]);
- assert.deepEqual(phaseParts({...base, phase:"think", phaseMs:21000, elapsedMs:23000, tokens:456}), ["23s","↓ 456 tokens","thinking more"]);
- assert.deepEqual(phaseParts({...base, phase:"run", tools:["bash","read"], elapsedMs:3000}), ["running 2 tools","3s"]);
- assert.ok(phaseParts({...base, thoughtMs:12000, sinceThoughtMs:1999}).includes("thought for 12s"));
- assert.ok(!phaseParts({...base, thoughtMs:12000, sinceThoughtMs:2000}).includes("thought for 12s"));
+test("thinking progression preserves the four duration stages", () => {
  assert.deepEqual([0,10000,20000,30000,45000].map(thinkingLabel), ["thinking","still thinking","thinking more","thinking some more","deep in thought"]);
 });
 test("glyph timing, sweep direction, token easing and reduced motion", () => {
@@ -55,10 +42,10 @@ test("glyph timing, sweep direction, token easing and reduced motion", () => {
 });
 test("custom verbs preserve graphemes and model tool names cannot inject terminal controls",()=>{
  const segments:string[]=[];
- renderRunLine({...base,verb:{present:"👩‍💻🇺🇸",past:"Done"}},80,{...theme,colors:{accent:rgbColor(1,2,3)},style:(text)=>{segments.push(text);return text;}});
+ renderRunStatus({...base,verb:{present:"👩‍💻🇺🇸",past:"Done"}},{...theme,colors:{accent:rgbColor(1,2,3)},style:(text)=>{segments.push(text);return text;}});
  assert.ok(segments.includes("👩‍💻"));assert.ok(segments.includes("🇺🇸"));
  for(const phase of ["tool","run"] as const){
-  const line=stripTerminalSequences(renderRunLine({...base,phase,pendingTool:"\x1b[2Jbad\nname",tools:["\x1b]0;bad\x07shell\nname"]},40,theme));
+  const line=stripTerminalSequences(divider({...base,phase,pendingTool:"\x1b[2Jbad\nname",tools:["\x1b]0;bad\x07shell\nname"]},40));
   assert.ok(!/[\x00-\x1f\x7f]/.test(line));assert.ok(visibleWidth(line)<=40);
  }
 });
@@ -67,7 +54,7 @@ test("theme colors blend during thinking and stalls, tool words pulse, reduced m
  const colors={accent:rgbColor(80,100,180),warning:rgbColor(200,140,30),error:rgbColor(200,40,40),text:rgbColor(240,240,240)};
  let styles:Array<{fg?:Color;bold?:boolean}>=[];
  const painted={...theme,colors,style:(text:string,style:{fg?:Color;bold?:boolean})=>{styles.push(style);return text;}};
- const draw=(over:Partial<RunLine>)=>{styles=[];renderRunLine({...base,...over},100,painted);return styles;};
+ const draw=(over:Partial<RunLine>)=>{styles=[];renderRunStatus({...base,...over},painted);return styles;};
  assert.equal(draw({phase:"think",phaseMs:20000})[0]?.bold,true);
  assert.equal(colorToHex(draw({phase:"think",phaseMs:20000})[0]!.fg!),colorToHex(colors.warning));
  assert.notEqual(colorToHex(draw({phase:"think",phaseMs:15000})[0]!.fg!),colorToHex(colors.warning));
@@ -88,7 +75,7 @@ test("cancelled runs say stopped rather than claiming completion",()=>{
 test("new spinner and end rows fit every width, including Unicode verbs", () => {
  for (let width=0;width<120;width++) {
   for(const reduced of [false,true]) {
-   const line=renderRunLine({...base, verb:{present:"揉むππ",past:"揉んだ"},phase:"think",phaseMs:23000,elapsedMs:32000,tokens:789,reduced},width,theme);
+   const line=divider({...base, verb:{present:"揉むππ",past:"揉んだ"},phase:"think",phaseMs:23000,elapsedMs:32000,tokens:789,reduced},width);
    assert.ok(visibleWidth(line)<=width, `${width}: ${line}`);
   }
   assert.ok(visibleWidth(renderEndLine({past:"Squared the circle",elapsedMs:18000,doneAt:"7:43 PM"},width,theme))<=width);

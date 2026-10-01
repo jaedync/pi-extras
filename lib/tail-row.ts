@@ -1,7 +1,7 @@
 /**
  * Lines right under the transcript, above the messages queued for the agent:
- * where the phase spinner shows what the agent is doing, so the spinner sits
- * where the work is and the queue reads as what comes next.
+ * where the phase spinner shows live thinking. Status stays in the editor's
+ * top divider, and the queue reads as what comes next.
  *
  * Pi has no extension slot there. Widgets go below its queued messages, and
  * its layout is private: the same seven containers in regular and fullscreen

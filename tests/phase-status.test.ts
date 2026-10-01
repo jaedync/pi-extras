@@ -1,42 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stripAnsi } from "../lib/ansi.ts";
-import {
-	formatElapsed,
-	parseStatusMessage,
-	phaseAfterFirstTokenWait,
-	renderLastRunBorder,
-	renderPhaseBorder,
-	renderPhaseLine,
-	renderRunBorder,
-	summarizeRunningTools,
-	type PhaseBorderModel,
-	type PhaseLineModel,
-} from "../lib/phase-status.ts";
-
-function cellWidth(char: string): number {
-	if (/\p{Mark}/u.test(char)) return 0;
-	if (/\p{Extended_Pictographic}/u.test(char) || /[\u3000-\u9fff\uf900-\ufaff]/u.test(char)) return 2;
-	return 1;
-}
-
-function visibleWidth(text: string): number {
-	return [...stripAnsi(text)].reduce((width, char) => width + cellWidth(char), 0);
-}
-
-function truncateToWidth(text: string, width: number, marker = ""): string {
-	if (visibleWidth(text) <= width) return text;
-	const limit = Math.max(0, width - visibleWidth(marker));
-	let result = "";
-	let used = 0;
-	for (const char of stripAnsi(text)) {
-		const nextWidth = cellWidth(char);
-		if (used + nextWidth > limit) break;
-		result += char;
-		used += nextWidth;
-	}
-	return result + marker;
-}
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { formatElapsed, parseStatusMessage, phaseAfterFirstTokenWait, renderLastRunBorder } from "../lib/phase-status.ts";
 
 const identityPaint = {
 	border: (text: string) => text,
@@ -47,74 +12,38 @@ const identityPaint = {
 	measure: visibleWidth,
 	truncate: (text: string, width: number) => truncateToWidth(text, width, ""),
 };
-
-function model(overrides: Partial<PhaseBorderModel> = {}): PhaseBorderModel {
-	return {
-		spinner: "⠹",
-		phaseElapsedMs: 12_400,
-		totalElapsedMs: 227_800,
-		label: "Run",
-		detail: "bash ×2, edit",
-		tone: "phase",
-		...overrides,
-	};
-}
-
 const metrics = { ttftMinMs: 800, ttftMaxMs: 2400, throughput: { outputTokens: 200, requestMs: 3000 } };
 
-test("orders TPS then TTFT with separators painted exactly like the border rail", () => {
-	const paint = {
-		...identityPaint,
-		border: (text: string) => `\x1b[35m${text}\x1b[0m`,
-		dim: (text: string) => `\x1b[2m${text}\x1b[22m`,
-	};
-	const live = renderPhaseBorder(model({ metrics }), 120, paint);
-	const last = renderLastRunBorder(227800, 120, paint, 7, metrics);
-	for (const line of [live, last]) {
-		assert.equal(visibleWidth(line), 120);
-		assert.match(stripAnsi(line), /TPS 66\.7 ─ TTFT 0\.8–2\.4s ─ /);
-		assert.equal(line.split(paint.border(" ─ ")).length - 1, 2);
-		assert.ok(line.startsWith(paint.border("─")));
-		assert.doesNotMatch(line, /•/);
-	}
-	assert.match(stripAnsi(last), /↑ 7 Last 03:47\.8 ─$/);
+test("last-run metrics order TPS then TTFT with separators painted like the rail", () => {
+	const paint = { ...identityPaint, border: (text: string) => `\x1b[35m${text}\x1b[0m` };
+	const row = renderLastRunBorder(227800, 120, paint, 7, metrics);
+	assert.equal(visibleWidth(row), 120);
+	assert.match(stripTerminalSequences(row), /TPS 66\.7 ─ TTFT 0\.8–2\.4s ─ ↑ 7 Last 03:47\.8 ─$/);
+	assert.equal(row.split(paint.border(" ─ ")).length - 1, 2);
+	assert.ok(row.startsWith(paint.border("─")));
 });
-
-test("metrics fall back to timer-only on narrow terminals without overflowing", () => {
+test("last-run metrics fall back to timer-only without overflowing", () => {
 	for (let width = 0; width <= 160; width++) {
-		assert.equal(visibleWidth(renderPhaseBorder(model({ metrics }), width, identityPaint)), width);
 		assert.equal(visibleWidth(renderLastRunBorder(227800, width, identityPaint, 7, metrics)), width);
 	}
-	const line = renderPhaseBorder(model({ metrics }), 34, identityPaint);
-	assert.doesNotMatch(line, /TTFT|TPS/);
-	assert.match(line, /Time 03:47\.8/);
+	const row = renderLastRunBorder(227800, 34, identityPaint, undefined, metrics);
+	assert.doesNotMatch(row, /TTFT|TPS/);
+	assert.match(row, /Last 03:47\.8/);
 });
-
-test("omits unavailable sections and their separators in live and last borders", () => {
-	for (const summary of [
-		{},
-		{ ttftMinMs: 2601, ttftMaxMs: 2640 },
-		{ throughput: { outputTokens: 37, requestMs: 1000 } },
-	]) {
-		for (const line of [
-			renderPhaseBorder(model({ metrics: summary }), 120, identityPaint),
-			renderLastRunBorder(3200, 120, identityPaint, undefined, summary),
-		]) {
-			assert.equal(visibleWidth(line), 120);
-			assert.doesNotMatch(line, /n\/a/i);
-			if ("ttftMinMs" in summary) {
-				assert.match(line, /TTFT 2\.6s ─ (Time|Last)/);
-				assert.doesNotMatch(line, /TPS/);
-			} else if ("throughput" in summary) {
-				assert.match(line, /TPS 37\.0 ─ (Time|Last)/);
-				assert.doesNotMatch(line, /TTFT/);
-			} else {
-				assert.doesNotMatch(line, /TTFT|TPS|•/);
-			}
-		}
+test("last-run borders omit unavailable sections and their separators", () => {
+	for (const summary of [{}, { ttftMinMs: 2601, ttftMaxMs: 2640 }, { throughput: { outputTokens: 37, requestMs: 1000 } }]) {
+		const row = renderLastRunBorder(3200, 120, identityPaint, undefined, summary);
+		assert.equal(visibleWidth(row), 120);
+		assert.doesNotMatch(row, /n\/a/i);
+		if ("ttftMinMs" in summary) {
+			assert.match(row, /TTFT 2\.6s ─ Last/);
+			assert.doesNotMatch(row, /TPS/);
+		} else if ("throughput" in summary) {
+			assert.match(row, /TPS 37\.0 ─ Last/);
+			assert.doesNotMatch(row, /TTFT/);
+		} else assert.doesNotMatch(row, /TTFT|TPS|•/);
 	}
 });
-
 test("formats elapsed time without capping long turns", () => {
 	assert.equal(formatElapsed(0), "00:00.0");
 	assert.equal(formatElapsed(599_999), "09:59.9");
@@ -123,152 +52,31 @@ test("formats elapsed time without capping long turns", () => {
 	assert.equal(formatElapsed(86_400_000), "1d 00:00:00.0");
 	assert.equal(formatElapsed(106_635_967_800), "1234d 05:06:07.8");
 });
-
 test("escalates response-start latency into useful states", () => {
 	assert.deepEqual(phaseAfterFirstTokenWait(0), { label: "Waiting for first token", tone: "phase" });
 	assert.deepEqual(phaseAfterFirstTokenWait(29_999), { label: "Waiting for first token", tone: "phase" });
 	assert.deepEqual(phaseAfterFirstTokenWait(30_000), { label: "Slow response", tone: "warning" });
 	assert.deepEqual(phaseAfterFirstTokenWait(120_000), { label: "Stalled", tone: "error" });
 });
-
-test("summarizes parallel tools with counts and bounded detail", () => {
-	assert.equal(summarizeRunningTools(["bash", "bash", "edit"]), "bash ×2, edit");
-	assert.equal(summarizeRunningTools(["bash", "edit", "read", "write"]), "bash, edit, +2");
-	assert.equal(summarizeRunningTools([]), undefined);
+test("persists completed run time, day count and editor overflow in idle borders", () => {
+	assert.match(renderLastRunBorder(42_700, 64, identityPaint), / Last 00:42\.7 ─$/);
+	assert.match(renderLastRunBorder(106_635_967_800, 64, identityPaint), / Last 1234d 05:06:07\.8 ─$/);
+	assert.match(renderLastRunBorder(42_700, 48, identityPaint, 7), /↑ 7 Last 00:42\.7 ─$/);
 });
-
-test("fills the unused border and right-aligns the total timer", () => {
-	const line = renderPhaseBorder(model(), 80, identityPaint);
-	assert.equal(visibleWidth(line), 80);
-	assert.match(line, /^─ ⠹ 00:12\.4 Run bash ×2, edit ─+/);
-	assert.match(line, /Time 03:47\.8 ─$/);
+test("status labels strip bidi and invisible formatting", () => {
+	const invisible = "\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069";
+	assert.deepEqual(parseStatusMessage(`Com${invisible}pacting... (Esc to cancel)`), { label: "Compacting", detail: "Esc cancel" });
 });
-
-test("preserves the total timer and rail on narrow terminals", () => {
-	const line = renderPhaseBorder(model(), 34, identityPaint);
-	assert.equal(visibleWidth(line), 34);
-	assert.match(line, /─+/);
-	assert.match(line, /03:47\.8 ─$/);
-	assert.doesNotMatch(line, /bash/);
-});
-
-test("renders the total timer with more contrast than dim details", () => {
-	const line = renderPhaseBorder(model(), 80, {
-		...identityPaint,
-		dim: (text: string) => `\x1b[2m${text}\x1b[22m`,
-		total: (text: string) => `\x1b[1m${text}\x1b[22m`,
-	});
-	assert.match(line, /\x1b\[1m Time 03:47\.8 \x1b\[22m/);
-});
-
-test("keeps exact terminal width with ANSI-colored segments", () => {
-	const ansi = (code: number) => (text: string) => `\x1b[${code}m${text}\x1b[0m`;
-	const line = renderPhaseBorder(model({ tone: "warning" }), 72, {
-		...identityPaint,
-		border: ansi(90),
-		phase: ansi(36),
-		dim: ansi(90),
-		warning: ansi(33),
-		error: ansi(31),
-	});
-	assert.equal(visibleWidth(line), 72);
-	assert.match(stripAnsi(line), /Slow response|Run/);
-	assert.match(stripAnsi(line), /Time 03:47\.8 ─$/);
-});
-
-test("uses terminal cells for CJK, emoji, and combining marks", () => {
-	const line = renderPhaseBorder(model({ detail: "工具, 🙂, e\u0301" }), 64, identityPaint);
-	assert.equal(visibleWidth(line), 64);
-	assert.match(line, /Time 03:47\.8 ─$/);
-});
-
-test("adds editor overflow before the anchored total when it fits", () => {
-	const line = renderPhaseBorder(model({ hiddenLineCount: 7 }), 80, identityPaint);
-	assert.equal(visibleWidth(line), 80);
-	assert.match(line, /↑ 7 Time 03:47\.8 ─$/);
-});
-
-test("persists the completed run time in an idle native border", () => {
-	const line = renderLastRunBorder(42_700, 64, identityPaint);
-	assert.equal(visibleWidth(line), 64);
-	assert.match(line, /^─+/);
-	assert.match(line, / Last 00:42\.7 ─$/);
-});
-
-test("keeps an expanding day count right-aligned", () => {
-	const line = renderLastRunBorder(106_635_967_800, 64, identityPaint);
-	assert.equal(visibleWidth(line), 64);
-	assert.match(line, / Last 1234d 05:06:07\.8 ─$/);
-});
-
-test("keeps editor overflow beside the completed run time", () => {
-	const line = renderLastRunBorder(42_700, 48, identityPaint, 7);
-	assert.equal(visibleWidth(line), 48);
-	assert.match(line, /↑ 7 Last 00:42\.7 ─$/);
-});
-
-test("splits Pi status text into a phase label, cancel detail, and retry attempt", () => {
-	assert.deepEqual(parseStatusMessage("Auto-compacting... (Esc to cancel)"), {
-		label: "Auto-compacting",
-		detail: "Esc cancel",
-	});
+test("splits Pi status text into a label, cancel detail and retry attempt", () => {
+	assert.deepEqual(parseStatusMessage("Auto-compacting... (Esc to cancel)"), { label: "Auto-compacting", detail: "Esc cancel" });
 	assert.deepEqual(parseStatusMessage("Context overflow detected, Auto-compacting... (ctrl+c to cancel)"), {
-		label: "Context overflow detected, Auto-compacting",
-		detail: "ctrl+c cancel",
+		label: "Context overflow detected, Auto-compacting", detail: "ctrl+c cancel",
 	});
 	assert.deepEqual(parseStatusMessage(" Retrying (2/3) in 4s…\n(Esc to cancel) "), {
-		label: "Retrying (2/3) in 4s",
-		detail: "Esc cancel",
-		attempt: "2/3",
+		label: "Retrying (2/3) in 4s", detail: "Esc cancel", attempt: "2/3",
 	});
 	assert.deepEqual(parseStatusMessage("Summarizing branch..."), { label: "Summarizing branch" });
-	// Unbound interrupt key: Pi renders an empty key name.
 	assert.deepEqual(parseStatusMessage("Retrying (1/3) in 2s... ( to cancel)"), {
-		label: "Retrying (1/3) in 2s",
-		detail: "cancel",
-		attempt: "1/3",
+		label: "Retrying (1/3) in 2s", detail: "cancel", attempt: "1/3",
 	});
-});
-
-function line(overrides: Partial<PhaseLineModel> = {}): PhaseLineModel {
-	return { spinner: "⠦", elapsedMs: 2_900, label: "Running bash ×2, edit", detail: "retry 1/3", tone: "phase", ...overrides };
-}
-
-test("the phase line reads spinner, what the agent does, its time, then the hint, one column in", () => {
-	assert.equal(renderPhaseLine(line(), 80, identityPaint), " ⠦ Running bash ×2, edit  00:02.9  retry 1/3");
-	assert.equal(renderPhaseLine(line({ detail: undefined }), 80, identityPaint), " ⠦ Running bash ×2, edit  00:02.9");
-});
-
-test("a narrow phase line drops the hint, then the tenths, then cuts the label, never overflowing", () => {
-	assert.equal(renderPhaseLine(line(), 44, identityPaint), " ⠦ Running bash ×2, edit  00:02.9  retry 1/3");
-	assert.equal(renderPhaseLine(line(), 43, identityPaint), " ⠦ Running bash ×2, edit  00:02.9");
-	assert.equal(renderPhaseLine(line(), 32, identityPaint), " ⠦ Running bash ×2, edit  00:02");
-	assert.equal(renderPhaseLine(line(), 16, identityPaint), " ⠦ Running bash…");
-	for (let width = 0; width <= 60; width++) {
-		assert.ok(visibleWidth(renderPhaseLine(line(), width, identityPaint)) <= width, `width ${width}`);
-	}
-});
-
-test("the phase line paints spinner and label in the phase tone, time and hint dim, alerts in their color", () => {
-	const paint = {
-		...identityPaint,
-		phase: (text: string) => `<p>${text}</p>`,
-		dim: (text: string) => `<d>${text}</d>`,
-		warning: (text: string) => `<w>${text}</w>`,
-		error: (text: string) => `<e>${text}</e>`,
-		measure: (text: string) => visibleWidth(text.replace(/<\/?[pdwe]>/g, "")),
-	};
-	assert.equal(renderPhaseLine(line(), 80, paint), " <p>⠦</p> <p>Running bash ×2, edit</p>  <d>00:02.9</d>  <d>retry 1/3</d>");
-	assert.match(renderPhaseLine(line({ tone: "warning", label: "Slow response" }), 80, paint), /<w>⠦<\/w> <w>Slow response<\/w>/);
-	assert.match(renderPhaseLine(line({ tone: "error", label: "Stalled" }), 80, paint), /<e>⠦<\/e> <e>Stalled<\/e>/);
-});
-
-test("the run border keeps only the metrics and total time, with the editor overflow", () => {
-	const run = renderRunBorder(227_800, 120, identityPaint, 7, metrics);
-	assert.equal(visibleWidth(run), 120);
-	assert.match(run, /^─{20,} TPS 66\.7 ─ TTFT 0\.8–2\.4s ─ ↑ 7 Time 03:47\.8 ─$/);
-	for (let width = 0; width <= 160; width++) {
-		assert.equal(visibleWidth(renderRunBorder(227_800, width, identityPaint, 7, metrics)), width);
-	}
-	assert.match(renderRunBorder(227_800, 16, identityPaint), /^─+ Σ 03:47 ─$/);
 });

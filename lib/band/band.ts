@@ -242,7 +242,7 @@ const BLANK_MARGIN: Seg = { text: " ".repeat(ROW_MARGIN), color: "" };
 /**
  * The margin: a spinner while the call is written or runs, a still dot while
  * it waits, else blank. Frames follow the clock, not the call, so every
- * spinner on screen (the phase line's too) turns in step.
+ * spinner on screen (the divider's too) turns in step.
  */
 function indicatorColor(theme: BandTheme, blend: number): string {
 	const dim = parseAnsiColor(fgCode(theme, "dim")), accent = parseAnsiColor(fgCode(theme, "accent"));

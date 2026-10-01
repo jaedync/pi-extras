@@ -56,7 +56,7 @@ const litDots = (line) => [...line].reduce((sum, ch) => {
 
 /**
  * The frame that shows the most at once: both jobs running, the diff on screen, a TPS reading in
- * the editor border, the phase line while the model still thinks, and voice recording. Among
+ * the editor divider with live thinking status, and voice recording. Among
  * those, the most transcribed chunks (◆) win, then a chunk mid-decode (◈), then the fullest
  * level meter.
  */
@@ -69,8 +69,8 @@ export function pickFrame(frames) {
 		const border = lines.findIndex((line) => line.includes("TPS"));
 		const widget = border > 1 ? lines.slice(border - 2, border) : [];
 		const running = (title) => widget.some((line) => line.trimStart().startsWith(title));
-		// Only the default descriptive thinking titles count, not a reply or a quoted thinking fragment.
-		const thinking = lines.slice(0, Math.max(0, border)).some((line) => /^\S+ (?:Thinking|Still thinking|Thinking more|Deep in thought)… \(\d+s(?:, ↓ [\d,]+ tokens)?\)$/.test(line.trim()));
+		// The default descriptive status is in the same divider as TPS, not in transcript text.
+		const thinking = border >= 0 && /^─ \S+ (?:Thinking|Still thinking|Thinking more|Deep in thought)…(?: ↓ [\d,]+ tokens)? ─/.test(lines[border].trim());
 		const ready = voice && thinking && running("Run unit tests") && running("Watch types") && lines.some((l) => l.includes("TAIL_CELL_MIN = 10"));
 		if (!ready) continue;
 		const score = [...voice].filter((ch) => ch === "◆").length * 2000 + (voice.includes("◈") ? 1000 : 0) + litDots(voice);

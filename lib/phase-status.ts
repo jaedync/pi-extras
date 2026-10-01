@@ -2,28 +2,6 @@ import { formatMetrics, type MetricsSummary } from "./phase-metrics.ts";
 
 export type PhaseAlertTone = "phase" | "warning" | "error";
 
-export interface PhaseBorderModel {
-	spinner: string;
-	phaseElapsedMs: number;
-	totalElapsedMs: number;
-	label: string;
-	detail?: string;
-	tone: PhaseAlertTone;
-	hiddenLineCount?: number;
-	metrics?: MetricsSummary;
-}
-
-/** The line under the transcript, e.g. `⠦ Running bash  00:02.9`. */
-export interface PhaseLineModel {
-	spinner: string;
-	elapsedMs: number;
-	/** What the agent is doing, e.g. `Running bash ×2`. */
-	label: string;
-	/** A hint after the time, e.g. `Esc abort`. */
-	detail?: string;
-	tone: PhaseAlertTone;
-}
-
 export interface PhaseBorderPaint {
 	border(text: string): string;
 	phase(text: string): string;
@@ -37,13 +15,9 @@ export interface PhaseBorderPaint {
 
 const FIRST_TOKEN_SLOW_MS = 30_000;
 const FIRST_TOKEN_STALLED_MS = 120_000;
-const MAX_TOOL_GROUPS = 2;
 const BORDER_EDGE_WIDTH = 2;
 const MIN_RAIL_WIDTH = 1;
 const RAIL = "─";
-/** The phase line starts where the transcript's text does. */
-const LINE_INDENT = " ";
-const LINE_GAP = "  ";
 
 function safeElapsed(elapsedMs: number): number {
 	return Math.max(0, Number.isFinite(elapsedMs) ? elapsedMs : 0);
@@ -84,7 +58,7 @@ export function phaseAfterFirstTokenWait(elapsedMs: number): { label: string; to
 }
 
 function cleanInline(text: string): string {
-	return text.replace(/[\r\n\t]/g, " ").replace(/\s+/g, " ").trim();
+	return text.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, "").replace(/[\r\n\t]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 export interface StatusMessage {
@@ -93,10 +67,7 @@ export interface StatusMessage {
 	attempt?: string;
 }
 
-/**
- * Splits Pi's status text ("Retrying (2/3) in 4s... (Esc to cancel)") into the
- * phase border's label and dim detail, so Pi keeps ownership of the wording.
- */
+/** Splits Pi's status text into the divider's label and detail, preserving its wording. */
 export function parseStatusMessage(text: string): StatusMessage {
 	const clean = cleanInline(text);
 	const hint = clean.match(/\s*\(([^()]*?)\s*to cancel\)$/);
@@ -111,74 +82,13 @@ export function parseStatusMessage(text: string): StatusMessage {
 	};
 }
 
-export function summarizeRunningTools(toolNames: readonly string[]): string | undefined {
-	const counts = new Map<string, number>();
-	for (const rawName of toolNames) {
-		const name = cleanInline(rawName);
-		if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
-	}
-	if (counts.size === 0) return undefined;
-	const groups = [...counts.entries()];
-	const shown = groups.slice(0, MAX_TOOL_GROUPS).map(([name, count]) => count > 1 ? `${name} ×${count}` : name);
-	const omitted = groups.slice(MAX_TOOL_GROUPS).reduce((total, [, count]) => total + count, 0);
-	if (omitted > 0) shown.push(`+${omitted}`);
-	return shown.join(", ");
-}
-
-function tonePainter(tone: PhaseAlertTone, paint: Pick<PhaseBorderPaint, "phase" | "warning" | "error">): (text: string) => string {
-	if (tone === "error") return paint.error ?? paint.warning;
-	if (tone === "warning") return paint.warning;
-	return paint.phase;
-}
-
-/**
- * The line under the transcript: the spinner, what the agent is doing, for how
- * long, then any hint. Narrow terminals drop the hint, then the tenths, then
- * cut the label.
- */
-export function renderPhaseLine(model: PhaseLineModel, width: number, paint: Omit<PhaseBorderPaint, "border" | "total">): string {
-	if (width <= 0) return "";
-	const tone = tonePainter(model.tone, paint);
-	const head = `${LINE_INDENT}${tone(model.spinner)} ${tone(cleanInline(model.label))}`;
-	const detail = model.detail ? cleanInline(model.detail) : undefined;
-	const time = paint.dim(formatElapsed(model.elapsedMs));
-	const variants = [
-		...(detail ? [`${head}${LINE_GAP}${time}${LINE_GAP}${paint.dim(detail)}`] : []),
-		`${head}${LINE_GAP}${time}`,
-		`${head}${LINE_GAP}${paint.dim(formatCompactElapsed(model.elapsedMs))}`,
-		head,
-	];
-	return variants.find((text) => paint.measure(text) <= width) ?? `${paint.truncate(head, width - 1)}${paint.dim("…")}`;
-}
-
-function leftVariants(model: PhaseBorderModel, paint: PhaseBorderPaint): string[] {
-	const phasePaint = tonePainter(model.tone, paint);
-	const detail = model.detail ? cleanInline(model.detail) : undefined;
-	const fullCore = `${phasePaint(model.spinner)} ${paint.dim(formatElapsed(model.phaseElapsedMs))} ${phasePaint(model.label)}`;
-	const compactCore = `${phasePaint(model.spinner)} ${paint.dim(formatCompactElapsed(model.phaseElapsedMs))} ${phasePaint(model.label)}`;
-	return [
-		` ${fullCore}${detail ? ` ${paint.dim(detail)}` : ""} `,
-		` ${fullCore} `,
-		` ${compactCore} `,
-		` ${phasePaint(model.spinner)} ${phasePaint(model.label)} `,
-	];
-}
-
-function runVariants(totalElapsedMs: number, hiddenLineCount: number | undefined, paint: PhaseBorderPaint, metrics?: MetricsSummary): string[] {
-	const overflow = hiddenLineCount && hiddenLineCount > 0 ? `↑ ${hiddenLineCount} ` : "";
-	const compactOverflow = hiddenLineCount && hiddenLineCount > 0 ? `↑${hiddenLineCount} ` : "";
-	const full = ` ${overflow}Time ${formatElapsed(totalElapsedMs)} `;
-	const compact = ` ${compactOverflow}Σ ${formatCompactElapsed(totalElapsedMs)} `;
-	return withMetrics([full, compact], metrics, paint);
-}
-
 function withMetrics(timers: readonly [string, string], metrics: MetricsSummary | undefined, paint: PhaseBorderPaint): string[] {
 	const paintedTimers = timers.map((text) => paint.total(text));
 	const sections = metrics ? formatMetrics(metrics) : [];
 	if (sections.length === 0) return paintedTimers;
 	const separator = paint.border(` ${RAIL} `);
 	const prefix = paint.total(" ") + sections.map((text) => paint.total(text)).join(separator);
-	// Keep the original timer-only variants as the narrow-terminal fallback.
+	// Keep timer-only variants as the narrow-terminal fallback.
 	return [prefix + separator + paint.total(timers[0].trimStart()), ...paintedTimers];
 }
 
@@ -197,22 +107,7 @@ function compose(left: string, right: string, width: number, paint: PhaseBorderP
 	return `${paint.border(RAIL)}${left}${paint.border(RAIL.repeat(railWidth))}${right}${paint.border(RAIL)}`;
 }
 
-export function renderPhaseBorder(model: PhaseBorderModel, width: number, paint: PhaseBorderPaint): string {
-	if (width <= 0) return "";
-	const left = leftVariants(model, paint);
-	for (const right of runVariants(model.totalElapsedMs, model.hiddenLineCount, paint, model.metrics)) {
-		for (const candidate of left) {
-			const line = compose(candidate, right, width, paint);
-			if (line) return line;
-		}
-	}
-	const minimalRight = paint.total(`Σ${formatCompactElapsed(model.totalElapsedMs)}`);
-	const roomForLeft = Math.max(0, width - BORDER_EDGE_WIDTH - MIN_RAIL_WIDTH - paint.measure(minimalRight));
-	const clippedLeft = paint.truncate(left[left.length - 1] ?? "", roomForLeft);
-	return compose(clippedLeft, minimalRight, width, paint) ?? paint.border(RAIL.repeat(width));
-}
-
-/** A border that is all rail but for the timers at its right end. */
+/** A border that is all rail but for the last-run metrics at its right end. */
 function timerBorder(variants: readonly string[], minimalRight: string, width: number, paint: PhaseBorderPaint): string {
 	if (width <= 0) return "";
 	for (const right of variants) {
@@ -220,24 +115,6 @@ function timerBorder(variants: readonly string[], minimalRight: string, width: n
 		if (line) return line;
 	}
 	return compose("", minimalRight, width, paint) ?? paint.border(RAIL.repeat(width));
-}
-
-/** A border that is all rail, keeping only the editor's overflow count. */
-export function renderPlainBorder(width: number, paint: PhaseBorderPaint, hiddenLineCount?: number): string {
-	const overflow = hiddenLineCount && hiddenLineCount > 0 ? [paint.total(` ↑ ${hiddenLineCount} `), paint.total(` ↑${hiddenLineCount} `)] : [];
-	return timerBorder(overflow, "", width, paint);
-}
-
-/** The border during a run while the phase has its own line: the metrics and total time only. */
-export function renderRunBorder(
-	totalElapsedMs: number,
-	width: number,
-	paint: PhaseBorderPaint,
-	hiddenLineCount?: number,
-	metrics?: MetricsSummary,
-): string {
-	const variants = runVariants(totalElapsedMs, hiddenLineCount, paint, metrics);
-	return timerBorder(variants, paint.total(`Σ${formatCompactElapsed(totalElapsedMs)}`), width, paint);
 }
 
 export function renderLastRunBorder(

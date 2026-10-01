@@ -9,11 +9,6 @@ import {
 	parseStatusMessage,
 	phaseAfterFirstTokenWait,
 	renderLastRunBorder,
-	renderPhaseBorder,
-	renderPhaseLine,
-	renderPlainBorder,
-	renderRunBorder,
-	type PhaseAlertTone,
 	type PhaseBorderPaint,
 } from "../lib/phase-status.ts";
 
@@ -23,7 +18,8 @@ import { EditorSlot, type StatusIndicator, type WrappedEditor } from "../lib/edi
 import { everyFrame } from "../lib/band/clock.ts";
 import { TailRow } from "../lib/tail-row.ts";
 import { DISPLAY_SETTINGS_EVENT, readSection } from "../lib/extras-config.ts";
-import { CHARS_PER_TOKEN, END_ENTRY, parseEndLine, parseVerbs, phaseParts, phaseTitle, pickVerb, SEP, renderEndLine, renderPiWave, renderRunLine, runAnimation, smoothTokens, streamRate, type RunLine } from "../lib/cc-phase.ts";
+import { renderStatusDivider } from "../lib/status-divider.ts";
+import { CHARS_PER_TOKEN, END_ENTRY, parseEndLine, parseVerbs, pickVerb, renderEndLine, renderPiWave, renderRunStatus, smoothTokens, streamRate, type RunLine } from "../lib/cc-phase.ts";
 import { MODE_SPINNERS, PI_WAVE, PI_WAVE_MS, REDUCED_FRAME, isBlockingPeer, slotGlyph, spinnerCadence, type GlyphAnimation } from "../lib/band/glyph.ts";
 import { renderThinkingTail, thinkingRuns } from "../lib/tool-display/thinking.ts";
 
@@ -32,28 +28,9 @@ type VisualPhase = ActivePhase | "slow_api" | "stalled";
 type ThemeTone = "dim" | "thinkingLow" | "accent" | "thinkingMedium" | "thinkingMinimal" | "mdHeading" | "mdLink" | "toolOutput" | "warning" | "error";
 type StatusKind = Exclude<StatusIndicator["kind"], "working">;
 
-interface PhaseStyle {
-	label: string;
-	tone: ThemeTone;
-}
-
-const PHASE_STYLES: Record<VisualPhase, PhaseStyle> = {
-	prep: { label: "Preparing", tone: "accent" },
-	api: { label: "Sending request", tone: "accent" },
-	first_token: { label: "Waiting for first token", tone: "accent" },
-	slow_api: { label: "Slow response", tone: "warning" },
-	stalled: { label: "Stalled", tone: "error" },
-	think: { label: "Thinking", tone: "accent" },
-	text: { label: "Writing", tone: "accent" },
-	tool: { label: "Calling a tool", tone: "accent" },
-	run: { label: "Running", tone: "accent" },
-};
-
 interface StatusStyle {
 	animation: GlyphAnimation;
 	tone: ThemeTone;
-	alertTone: PhaseAlertTone;
-
 }
 
 // Pi's non-working statuses (compaction, retry, branch summary) take the phase
@@ -63,22 +40,16 @@ const STATUS_STYLES: Record<StatusKind, StatusStyle> = {
 	compaction: {
 		animation: MODE_SPINNERS.compaction,
 		tone: "accent",
-		alertTone: "phase",
-
 	},
 	// A counter-clockwise lap: rewinding for another attempt.
 	retry: {
 		animation: MODE_SPINNERS.retry,
 		tone: "warning",
-		alertTone: "warning",
-
 	},
 	// A stem that grows, then sprouts branches down its side.
 	branchSummary: {
 		animation: MODE_SPINNERS.branchSummary,
 		tone: "mdLink",
-		alertTone: "phase",
-
 	},
 };
 
@@ -86,8 +57,6 @@ const STATUS_STYLES: Record<StatusKind, StatusStyle> = {
 const FALLBACK_STATUS_STYLE: StatusStyle = {
 	animation: MODE_SPINNERS.fallback,
 	tone: "accent",
-	alertTone: "phase",
-
 };
 
 // Wide enough that Pi's status text never wraps or truncates while it is read.
@@ -105,8 +74,6 @@ const DISPOSE_WATCHED = Symbol("phase-spinner.dispose-watched");
 interface VisualState {
 	phase: VisualPhase;
 	elapsedMs: number;
-	style: PhaseStyle;
-	alertTone: PhaseAlertTone;
 }
 
 interface StatusView {
@@ -188,7 +155,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	let paintedOver = false;
 	/** Where Pi's loader was held still, to let it move again when the run ends. */
 	let stillLoader: ExtensionContext | undefined;
-	/** The phase's own line under the transcript; until it finds its place, the phase stays in the border. */
+	/** Live thinking sits above queued messages; status always stays in the divider. */
 	const tailRow = new TailRow();
 	let linePaint: Paint | undefined;
 
@@ -222,7 +189,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	/**
 	 * Ends a status when Pi disposes its indicator. Pi tells only the editor it
 	 * has mounted now; if another extension replaced ours meanwhile, the clear
-	 * never reaches it, and the phase line would show the status for good.
+	 * never reaches it, and the divider would show the status for good.
 	 */
 	function endOnDispose(indicator: StatusIndicator): void {
 		const target = indicator as StatusIndicator & { dispose?: () => void; [DISPOSE_WATCHED]?: true };
@@ -286,11 +253,11 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	function visualState(now: number): VisualState {
 		const elapsedMs = now - phaseStartedAt;
 		if (phase !== "first_token") {
-			return { phase, elapsedMs, style: PHASE_STYLES[phase], alertTone: "phase" };
+			return { phase, elapsedMs };
 		}
 		const wait = phaseAfterFirstTokenWait(elapsedMs);
 		const visualPhase = wait.tone === "error" ? "stalled" : wait.tone === "warning" ? "slow_api" : "first_token";
-		return { phase: visualPhase, elapsedMs, style: PHASE_STYLES[visualPhase], alertTone: wait.tone };
+		return { phase: visualPhase, elapsedMs };
 	}
 
 	function debugState(event: string, ctx: ExtensionContext, now = performance.now(), details?: Record<string, unknown>): void {
@@ -303,7 +270,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			event,
 			phase,
 			visualPhase: state.phase,
-			display: `${formatElapsed(state.elapsedMs)} ${state.style.label}`,
+			display: `${formatElapsed(state.elapsedMs)} ${state.phase}`,
 			phaseElapsedMs: Math.floor(now - phaseStartedAt),
 			totalElapsedMs: Math.floor(now - agentStartedAt),
 			runningTools: runningTools.size,
@@ -340,7 +307,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		}
 		if (!activeTui) return;
 		const width = activeTui.terminal?.columns ?? 120;
-		const drawing = drawPhaseLine(width, now).join("\n") + borderFingerprint(now, width);
+		const drawing = drawThinkingTail(width).join("\n") + borderFingerprint(now, width);
 		ensureTimer();
 		if (drawing === lastDrawing) return;
 		lastDrawing = drawing;
@@ -491,66 +458,49 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	}
 
 	function activeBorder(now: number, width: number, hiddenLineCount: number, paint: Paint): string {
-		const state = visualState(now);
 		const model = runLine(now);
-		return renderPhaseBorder({
-			spinner: slotGlyph(runAnimation(model), model.clockMs, { reduced, rateElapsedMs: model.waveMs }),
-			phaseElapsedMs: state.elapsedMs,
-			totalElapsedMs: now - agentStartedAt,
+		const theme = currentContext!.ui.theme;
+		return renderStatusDivider({
+			status: renderRunStatus(model, theme),
+			withoutTokens: renderRunStatus(model, theme, false),
+			elapsedMs: now - agentStartedAt,
 			metrics,
-			label: `${phaseTitle(model)}…`,
-			detail: phaseParts(model).join(SEP),
-			tone: state.alertTone,
 			hiddenLineCount,
-		}, width, paint(state.style.tone));
+		}, width, paint("accent"));
 	}
 
 	function borderFingerprint(now: number, width: number): string {
 		if (!linePaint) return "";
+		if (wave) return waveBorder(now, width);
 		const status = statusView(now);
-		if (active && currentContext) return tailRow.attached
-			? renderRunBorder(now - agentStartedAt, width, linePaint("accent"), 0, metrics)
-			: activeBorder(now, width, 0, linePaint);
-		if (status && !tailRow.attached) return statusBorder(status, now, width, 0, linePaint);
+		if (status) return statusBorder(status, now, width, 0, linePaint);
+		if (active && currentContext) return activeBorder(now, width, 0, linePaint);
 		return lastTotalElapsedMs === undefined ? "" : renderLastRunBorder(lastTotalElapsedMs, width, linePaint("accent"), 0, metrics);
 	}
 
 	function statusBorder(status: StatusView, now: number, width: number, hiddenLineCount: number, paint: Paint): string {
 		// Idle statuses (manual /compact) have no run span; the event is the whole span.
 		const totalElapsedMs = active ? now - agentStartedAt : status.elapsedMs;
-		return renderPhaseBorder({
-			spinner: status.spinner,
-			phaseElapsedMs: status.elapsedMs,
-			totalElapsedMs,
+		const colors = paint(status.style.tone);
+		const caption = colors.phase(status.spinner + " " + status.label) + (status.detail ? colors.dim(" " + status.detail) : "");
+		return renderStatusDivider({
+			status: caption,
+			withoutTokens: caption,
+			elapsedMs: totalElapsedMs,
 			metrics: active ? metrics : undefined,
-			label: status.label,
-			detail: status.detail,
-			tone: status.style.alertTone,
 			hiddenLineCount,
-		}, width, paint(status.style.tone));
+		}, width, colors);
 	}
 
 	/**
-	 * The line under the transcript, above the queued messages: a Pi status,
-	 * else the live phase, set apart by a blank line like the transcript's
-	 * entries. Nothing while idle.
+	 * Only live thinking belongs between the transcript and queued messages.
+	 * The editor divider owns every status and sign-off animation.
 	 */
-	function drawPhaseLine(width: number, now = performance.now()): string[] {
-		const paint = linePaint;
-		if (!paint) return [];
-		if (wave) {
-			const line = renderPiWave(now - wave.at, wave.theme, width);
-			return line ? ["", line] : [];
-		}
-		const status = statusView(now);
-		if (status) {
-			const { spinner, elapsedMs, label, detail, style } = status;
-			return ["", renderPhaseLine({ spinner, elapsedMs, label, detail, tone: style.alertTone }, width, paint(style.tone))];
-		}
-		if (!active || runEnded || !currentContext) return [];
-		const theme = currentContext.ui.theme;
-		return ["", renderRunLine(runLine(now), width, theme),
-			...(hidesLiveThinking && phase === "think" && thinkingMode !== "collapsed" ? thinkingTail(width, theme) : [])];
+	function drawThinkingTail(width: number): string[] {
+		if (!linePaint || !active || runEnded || !currentContext || !hidesLiveThinking || phase !== "think" || thinkingMode === "collapsed") return [];
+		if (statusView(performance.now())) return [];
+		const lines = thinkingTail(width, currentContext.ui.theme);
+		return lines.length ? ["", ...lines] : [];
 	}
 
 	function thinkingTail(width: number, theme: ExtensionContext["ui"]["theme"]): string[] {
@@ -560,6 +510,12 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		return lines;
 	}
 
+	function waveBorder(now: number, width: number): string {
+		if (!wave) return "";
+		const glyph = renderPiWave(now - wave.at, wave.theme, width);
+		return truncateToWidth(`─ ${glyph} ${wave.theme.fg("dim", "─".repeat(Math.max(0, width - 7)))}`, width, "");
+	}
+
 	function lastRunRow(lines: string[], width: number, paint: Paint, hiddenLineCount: number): string[] {
 		// A recording borrows the idle row; the summary returns when it ends.
 		if (lastTotalElapsedMs === undefined || topBorder?.peerActive) return lines;
@@ -567,33 +523,16 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	}
 
 	/**
-	 * The editor's top row. With the phase line in place: the run's metrics and
-	 * total time, or the last run's. Otherwise the phase or a Pi status is drawn
-	 * here too.
+	 * The editor divider owns status, metrics and the one elapsed clock.
+	 * Voice uses the bottom border while this row is busy.
 	 */
 	function drawTopRow(lines: string[], width: number, paint: Paint, editor: WrappedEditor): string[] {
 		// Pi draws the editor once it is mounted, so its place in Pi's layout is known by now.
-		if (!tailRow.attached && activeTui) tailRow.attach(activeTui, editor, drawPhaseLine);
+		if (!tailRow.attached && activeTui) tailRow.attach(activeTui, editor, drawThinkingTail);
 		const match = stripTerminalSequences(lines[0] ?? "").match(/↑\s*(\d+)/);
 		const hiddenLineCount = match ? Number.parseInt(match[1] ?? "0", 10) : 0;
 		const now = performance.now();
-		if (tailRow.attached) {
-			if (active && currentContext) {
-				paintedOver = true;
-				return [renderRunBorder(now - agentStartedAt, width, paint("accent"), hiddenLineCount, metrics), ...lines.slice(1)];
-			}
-			if (!statusIndicator) return lastRunRow(lines, width, paint, hiddenLineCount);
-			// The phase line shows Pi's status; the editor would draw it in this row as well.
-			const summary = lastTotalElapsedMs === undefined
-				? renderPlainBorder(width, paint("accent"), hiddenLineCount)
-				: renderLastRunBorder(lastTotalElapsedMs, width, paint("accent"), hiddenLineCount, metrics);
-			return [summary, ...lines.slice(1)];
-		}
-		if (wave && now - wave.at < PI_WAVE_MS) {
-			const glyph = renderPiWave(now - wave.at, wave.theme, width);
-			const line = truncateToWidth(`─ ${glyph} ${wave.theme.fg("dim", "─".repeat(Math.max(0, width - 7)))}`, width, "");
-			return [line, ...lines.slice(1)];
-		}
+		if (wave && now - wave.at < PI_WAVE_MS) return [waveBorder(now, width), ...lines.slice(1)];
 		const status = statusView(now);
 		if (status) return [statusBorder(status, now, width, hiddenLineCount, paint), ...lines.slice(1)];
 		if (active && currentContext) {

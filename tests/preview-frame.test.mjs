@@ -6,13 +6,10 @@ const frame = (voice) => [
   ' + 89 const TAIL_CELL_MIN = 10;',
   ' Run unit tests                          in background ┃',
   ' Watch types                             in background ┃',
-  // The phase line under the transcript, then Pi's spacer above the widgets.
-  '',
-  '⢎⡱⣉ Thinking… (9s, ↓ 212 tokens)',
   '',
   ' Run unit tests                                  12.0s ',
   ' Watch types                                     12.0s ',
-  '──────── TPS 109.4 ─ TTFT 0.7s ─ Time 00:12.0 ─',
+  '─ ⢎⡱⣉ Thinking… ↓ 212 tokens ──── TPS 109.4 ─ TTFT 0.7s ─ Time 00:12.0 ─',
   voice,
 ].join('\n');
 
@@ -43,7 +40,7 @@ test('a staged session whose dictation transcribed nothing is rejected', () => {
 test('the preview frame is taken while the model is still thinking', () => {
   const thinking = frame('── ● 0:07  ⠶⠆⠀⠀  ◆◇ ──');
   // The reply has started: the phase line no longer says it is thinking.
-  const replying = frame('── ● 0:07  ⣿⣿⣿⣿  ◆◆ ──').replace('Thinking… (9s, ↓ 212 tokens)', 'Writing reply… (11s, ↓ 1,204 tokens)');
+  const replying = frame('── ● 0:07  ⣿⣿⣿⣿  ◆◆ ──').replace('Thinking… ↓ 212 tokens', 'Writing reply… ↓ 1,204 tokens');
   const later = frame('── ● 0:07  ⠶⠆⠀⠀  ◆◇ ──').replace('Thinking…', 'Still thinking…');
   assert.equal(pickFrame([replying, thinking]), thinking);
   assert.equal(pickFrame([replying, later]), later, 'longer thinking still counts');

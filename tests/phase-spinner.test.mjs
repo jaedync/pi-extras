@@ -21,6 +21,13 @@ const { TopBorderLink } = await jiti.import("../lib/top-border.ts");
 const { MODE_SPINNERS, REDUCED_FRAME, SPINNER_FRAMES, slotGlyph } = await jiti.import("../lib/band/glyph.ts");
 const { DISPLAY_SETTINGS_EVENT } = await jiti.import("../lib/extras-config.ts");
 const { foregroundAnsi } = await jiti.import("@earendil-works/pi-tui");
+const { renderPiWave } = await jiti.import("../lib/cc-phase.ts");
+const waveGlyph = renderPiWave(200, { fg: (_tone, text) => text });
+function assertNoWave(h, at, expected) {
+	const row = h.render(at)[0];
+	assert.ok(!row.startsWith(`─ ${waveGlyph} `), "no PI_WAVE glyph in the divider");
+	assert.match(row, expected);
+}
 
 /** Pi's interactive layout: transcript, queued messages, status, widgets, editor, widgets, footer. */
 function piLayout() {
@@ -86,14 +93,25 @@ function harness(t, events, { layout, nativeStatus = false, theme, verbs = "play
 		get renders() { return renders; },
 		advance: (at, ms) => { now = at; t.mock.timers.tick(ms); },
 		render: (at = now) => { now = at; return editor.render(120); },
+  renderAtWidth: (width,at=now)=>{now=at;return editor.render(width);},
 		queue: (at = now) => { now = at; return layout.queue.render(120); },
 		settle: () => { idle = true; emit("agent_settled"); },
 	};
 }
 
+test("live status stays in the divider while only thinking tail precedes the queue",t=>{
+ const events=eventBus(),layout=piLayout(),h=harness(t,events,{layout,verbs:null});h.render();h.emit("agent_start");
+ h.emit("before_provider_request",{},1000);layout.queue.lines=QUEUED;
+ assert.deepEqual(h.queue(),QUEUED);assert.match(h.render()[0],/Sending request… ↑/);
+ events.emit(DISPLAY_SETTINGS_EVENT,{hidesLiveThinking:true});h.update("thinking_delta","thought ".repeat(200)+"newest",2000);
+ const queue=h.queue();assert.deepEqual(queue.slice(-QUEUED.length),QUEUED);assert.ok(queue.some(line=>line.includes("newest")));
+ assert.ok(!queue.some(line=>line.includes("… (")),"no phase caption in the transcript area");
+ for(const width of [80,130]){const row=h.renderAtWidth(width,15000)[0];assert.match(row,/Still thinking…/);assert.equal((row.match(/Time /g)??[]).length,1);assert.ok(!/\(\d+s/.test(row));}
+});
+
 test("unset verbs selects descriptive phases and worked-for metadata",t=>{
  const layout=piLayout(),h=harness(t,eventBus(),{layout,verbs:null});h.render();h.emit("agent_start");
- h.emit("before_provider_request",{},1000);assert.match(h.queue()[1],/Sending request… \(1s, ↑\)/);
+ h.emit("before_provider_request",{},1000);assert.match(h.render()[0],/Sending request… ↑/);
  h.finish(20,41000);h.emit("agent_end");h.settle();
  assert.equal(h.entries[0].data.past,undefined);assert.equal(h.entries[0].data.elapsedMs,41000);
 });
@@ -184,7 +202,7 @@ test("compaction replaces the phase slot with its own spinner, timer, and Pi's l
 	h.emit("context", {}, 1000);
 	h.show(indicator("compaction", "Auto-compacting... (Esc to cancel)"), 2000);
 	const line = h.render(9300)[0];
-	assert.match(line, / 00:07\.3 Auto-compacting Esc cancel /);
+	assert.match(line, /Auto-compacting Esc cancel /);
 	assert.match(line, /Time 00:09\.3 ─$/);
 	assert.match(line.slice(0, 3), COMPACT_FRAMES);
 	assert.doesNotMatch(line, /⠋|Prep|\.\.\./);
@@ -200,17 +218,17 @@ test("retry keeps one event timer across attempts and yields to live request pha
 	h.show(first, 1000);
 	first.setMessage("Retrying (1/3) in 2s... (Esc to cancel)");
 	let line = h.render(3000)[0];
-	assert.match(line, / 00:02\.0 Retrying \(1\/3\) in 2s Esc cancel /);
+	assert.match(line, /Retrying \(1\/3\) in 2s Esc cancel /);
 	assert.match(line.slice(0, 3), RETRY_FRAMES);
 	h.emit("before_provider_request", {}, 5000);
-	assert.match(h.render(5500)[0], /… sending request, 5s, ↑ /);
+	assert.match(h.render(5500)[0], /… sending request, ↑ /);
 	h.show(indicator("retry", "Retrying (2/3) in 8s... (Esc to cancel)"), 8000);
 	await Promise.resolve();
-	assert.match(h.render(9000)[0], / 00:08\.0 Retrying \(2\/3\) in 8s /);
+	assert.match(h.render(9000)[0], /Retrying \(2\/3\) in 8s /);
 	h.show(undefined, 9500);
 	await Promise.resolve();
 	h.show(indicator("retry", "Retrying (1/3) in 4s... (Esc to cancel)"), 20000);
-	assert.match(h.render(20000)[0], / 00:00\.0 Retrying \(1\/3\)/);
+	assert.match(h.render(20000)[0], /Retrying \(1\/3\)/);
 });
 
 test("manual compaction shows while idle and the working indicator stays hidden", t => {
@@ -220,7 +238,7 @@ test("manual compaction shows while idle and the working indicator stays hidden"
 	assert.doesNotMatch(h.render()[0], /Working/);
 	const compaction = indicator("compaction", "Compacting context... (Esc to cancel)");
 	h.show(compaction, 100);
-	assert.match(h.render(1600)[0], / 00:01\.5 Compacting context Esc cancel /);
+	assert.match(h.render(1600)[0], /Compacting context Esc cancel .*Time 00:01\.5/);
 	assert.equal(h.forwarded.at(-1), compaction);
 });
 
@@ -270,39 +288,34 @@ function laidOut(t, events) {
 	return { h, layout };
 }
 
-test("the phase line sits right under the transcript, above queued messages, and the border keeps the totals", t => {
+test("the divider owns the phase and timer while queued messages remain untouched", t => {
 	const { h, layout } = laidOut(t);
 	h.emit("agent_start");
 	h.emit("turn_start");
 	h.emit("before_provider_request", {}, 100);
 	layout.queue.lines = QUEUED;
 	const top = h.render(1600)[0];
-	assert.match(top, /^─{60,} Time 00:01\.6 ─$/);
-	assert.doesNotMatch(top, /Sending request/);
-	const [blank, line, ...rest] = h.queue(1600);
-	assert.equal(blank, "");
-	assert.ok(SPINNER_FRAMES.some(frame=>line.startsWith(frame+" ")));
-	assert.match(line, /… \(sending request, 1s, ↑\)$/);
-	assert.deepEqual(rest, QUEUED);
+	assert.match(top,/… sending request, ↑ .*Time 00:01\.6 ─$/);
+	assert.deepEqual(h.queue(1600),QUEUED);
 });
 
-test("the phase line names what runs and what the model writes, and says how to abort a stall", t => {
+test("the divider names what runs and what the model writes without duplicate timers", t => {
 	const { h } = laidOut(t);
 	h.emit("agent_start");
 	h.emit("message_start", { message: { role: "assistant" } }, 100);
-	assert.match(h.queue(125_100)[1], /… \(waiting for first token, 125s\)$/);
+	assert.match(h.render(125_100)[0], /… waiting for first token/);
 	h.update("thinking_delta", "hm", 125_200);
-	assert.match(h.queue(126_200)[1], /… \(126s, ↓ \d+ tokens, thinking\)$/);
+	assert.match(h.render(126_200)[0], /… thinking, ↓ \d+ tokens/);
 	h.update("text_delta", "ok", 126_300);
-	assert.match(h.queue()[1], /thought for 1s/);
+	assert.doesNotMatch(h.render()[0], /thought for 1s/);
 	h.emit("message_update", {
 		assistantMessageEvent: { type: "toolcall_delta", delta: "{}" },
 		message: { role: "assistant", content: [{ type: "toolCall", name: "bash" }] },
 	}, 126_400);
-	assert.match(h.queue()[1], /writing bash call/);
+	assert.match(h.render()[0], /writing bash call/);
 	h.emit("tool_execution_start", { toolCallId: "a", toolName: "bash" }, 127_000);
 	h.emit("tool_execution_start", { toolCallId: "b", toolName: "bash" }, 127_000);
-	assert.match(h.queue(129_900)[1], /… \(running 2 tools, 129s\)$/);
+	assert.match(h.render(129_900)[0], /… running 2 tools/);
 });
 
 test("changing Tool Display motion makes the spinner static immediately", t => {
@@ -310,22 +323,22 @@ test("changing Tool Display motion makes the spinner static immediately", t => {
 	const h = harness(t, events, { layout });
 	h.render(); h.emit("agent_start");
 	events.emit(DISPLAY_SETTINGS_EVENT, { motion: "reduced" });
-	assert.ok(h.queue(300)[1].startsWith(slotGlyph(MODE_SPINNERS.prep,0,{reduced:true}) + " "));
-	assert.equal(h.queue(300)[1], h.queue(800)[1]);
+	assert.ok(h.render(300)[0].startsWith("─ "+slotGlyph(MODE_SPINNERS.prep,0,{reduced:true}) + " "));
+	assert.equal(h.render(300)[0].split("─")[1], h.render(800)[0].split("─")[1]);
 });
 
 for (const continuation of ["retry", "overflow recovery", "queued follow-up"]) test(`${continuation} retains one verb and one settled end line per prompt`, t => {
 	t.mock.method(Math, "random", () => 0);
 	const { h } = laidOut(t);
 	h.emit("agent_start");
-	const word = h.queue()[1].match(/^\S+ (.*?)…/)[1];
+	const word = h.render()[0].match(/^─ .{3} (.*?)…/)[1];
 	h.update("text_delta", "answer", 500);
 	h.emit("agent_end", {}, 1500);
 	h.emit("agent_settled", {}, 1600);
 	assert.equal(h.entries.length, 0, "not idle while continuation is pending");
 	t.mock.method(Math, "random", () => .5);
 	h.emit("agent_start", {}, 5000);
-	assert.ok(h.queue()[1].includes(word + "…"));
+	assert.ok(h.render()[0].includes(word + "…"));
 	h.emit("agent_end", {}, 7000);
 	h.settle(); h.settle();
 	assert.equal(h.entries.length, 1);
@@ -365,32 +378,39 @@ test("a failed frame cannot strand a sign-off wave or the voice border",t=>{
 test("a status cancels sign-off immediately and reduced preparation keeps its border clock moving",t=>{
  t.mock.timers.enable({apis:["setInterval"]});const events=eventBus(),h=harness(t,events,{layout:piLayout()});
  events.emit(DISPLAY_SETTINGS_EVENT,{motion:"full"});h.render();h.emit("agent_start");h.emit("agent_end",{},1000);h.settle();
- h.show(indicator("compaction","Compacting context..."),1100);assert.match(h.queue()[1],/Compacting context/);
+ h.show(indicator("compaction","Compacting context..."),1100);assert.match(h.render()[0],/Compacting context/);
  h.show(undefined);h.emit("agent_start",{},2000);events.emit(DISPLAY_SETTINGS_EVENT,{motion:"reduced"});const before=h.renders;
  h.advance(3000,1000);assert.ok(h.renders>before);assert.match(h.render()[0],/Time 00:01\.0/);
 });
 test("idle input closes a delayed prior prompt, busy steering does not, and extension runs start fresh",t=>{
- const {h}=laidOut(t);t.mock.method(Math,"random",()=>0);h.emit("agent_start");const first=h.queue()[1];
+ const {h}=laidOut(t);t.mock.method(Math,"random",()=>0);h.emit("agent_start");const first=h.render()[0];
  h.emit("input",{},500);assert.equal(h.entries.length,0);h.finish(10,1000);h.emit("agent_end");h.setIdle(true);
- h.emit("input",{},1200);assert.equal(h.entries.length,1);t.mock.method(Math,"random",()=>.5);h.emit("agent_start",{},1300);assert.notEqual(h.queue()[1],first);
+ h.emit("input",{},1200);assert.equal(h.entries.length,1);t.mock.method(Math,"random",()=>.5);h.emit("agent_start",{},1300);assert.notEqual(h.render()[0],first);
  h.finish(5,2000);h.emit("agent_end");h.emit("agent_before_settle");h.setIdle(true);h.emit("before_agent_start");h.emit("agent_start",{},2100);assert.equal(h.entries.length,2,"an extension run without input closes the prior finished prompt");
 });
 test("known retry, overflow and queued continuations retain one prompt identity",t=>{
  for(const reason of ["retry","overflow","queued","boundary","length"]){
 
-  const {h}=laidOut(t);h.emit("agent_start");const word=h.queue()[1].match(/^\S+ (.*?)…/)[1];
+  const {h}=laidOut(t);h.emit("agent_start");const word=h.render()[0].match(/^─ .{3} (.*?)…/)[1];
   if(reason==="queued")h.setPending(true);
   h.emit("message_end",{message:{role:"assistant",stopReason:reason==="queued"||reason==="boundary"?"stop":reason==="length"?"length":"error",usage:{output:1}}},1000);h.emit("agent_end");
   if(reason==="boundary")h.emit("agent_before_settle");
-  h.emit("agent_start",{},2000);assert.equal(h.entries.length,0);assert.ok(h.queue()[1].includes(word+"…"));
+  h.emit("agent_start",{},2000);assert.equal(h.entries.length,0);assert.ok(h.render()[0].includes(word+"…"));
   h.setPending(false);h.finish(1,3000);h.emit("agent_end");h.settle();assert.equal(h.entries.length,1);
  }
 });
-test("aborted prompts finish at agent_end with one stopped entry even without agent_settled",t=>{
- const {h}=laidOut(t);h.emit("agent_start");h.emit("message_end",{message:{role:"assistant",stopReason:"aborted",usage:{output:0}}},1200);h.emit("agent_end");
- assert.equal(h.entries.length,1);assert.equal(h.entries[0].data.stopped,true);
- assert.deepEqual(h.queue(1250),[],"an aborted prompt never starts a wave");
- h.settle();assert.equal(h.entries.length,1);assert.deepEqual(h.queue(1300),[]);
+for (const reason of ["aborted", "stopped"]) test(`${reason} prompts finish without a divider wave`, t => {
+	const { h } = laidOut(t);
+	h.emit("agent_start");
+	if (reason === "stopped") h.escape();
+	h.emit("message_end", { message: { role: "assistant", stopReason: reason === "aborted" ? "aborted" : "stop", usage: { output: 0 } } }, 1200);
+	h.emit("agent_end");
+	assert.equal(h.entries.length, 1);
+	assert.equal(h.entries[0].data.stopped, true);
+	assertNoWave(h, 1400, /Last 00:01\.2/);
+	h.settle();
+	assert.equal(h.entries.length, 1);
+	assertNoWave(h, 1500, /Last 00:01\.2/);
 });
 test("Escape during a retry countdown persists stopped metadata without a wave",t=>{
  const {h}=laidOut(t);h.emit("agent_start");
@@ -398,29 +418,70 @@ test("Escape during a retry countdown persists stopped metadata without a wave",
  h.show(indicator("retry","Retrying (1/3) in 4s... (Esc to cancel)"),1500);
  h.escape();h.show(undefined);h.settle();
  assert.equal(h.entries.length,1);assert.equal(h.entries[0].data.stopped,true);
- assert.deepEqual(h.queue(1600),[],"retry cancellation never starts a wave");
+ assertNoWave(h, 1700, /Last 00:01\.5/);
 });
 test("overflow compaction before settlement protects the prompt identity",t=>{
- const {h}=laidOut(t);t.mock.method(Math,"random",()=>0);h.emit("agent_start");const word=h.queue()[1].match(/\S+ (.*?)…/)[1];
+ const {h}=laidOut(t);t.mock.method(Math,"random",()=>0);h.emit("agent_start");const word=h.render()[0].match(/^─ .{3} (.*?)…/)[1];
  h.finish(1,1000);h.emit("agent_end");h.emit("session_before_compact",{reason:"overflow"},1100);
  t.mock.method(Math,"random",()=>.5);h.emit("agent_start",{},2000);
- assert.equal(h.entries.length,0);assert.ok(h.queue()[1].includes(word+"…"));
+ assert.equal(h.entries.length,0);assert.ok(h.render()[0].includes(word+"…"));
  h.finish(1,3000);h.emit("agent_end");h.settle();assert.equal(h.entries.length,1);assert.equal(h.entries[0].data.elapsedMs,3000);
 });
 
-test("a sign-off wave ends after 760ms, reduced motion skips it, and a new prompt cancels it",t=>{
- t.mock.timers.enable({apis:["setInterval"]});
- const events=eventBus(),layout=piLayout(),h=harness(t,events,{layout});
- events.emit(DISPLAY_SETTINGS_EVENT,{motion:"full"});h.render();h.emit("agent_start");h.emit("agent_end",{},1000);h.settle();
- assert.equal(h.entries.length,1);assert.equal(h.queue(1200).length,2);
- h.advance(1760,760);assert.deepEqual(h.queue(),[]);
- h.emit("agent_start",{},2000);h.emit("agent_end",{},3000);h.settle();
- h.emit("input",{},3100);assert.deepEqual(h.queue(),[]);
- events.emit(DISPLAY_SETTINGS_EVENT,{motion:"reduced"});h.emit("agent_start",{},4000);h.emit("agent_end",{},5000);h.settle();
- assert.deepEqual(h.queue(),[]);assert.equal(h.entries.length,3);
+test("a normal prompt plays PI_WAVE in the divider, then restores Last after 760ms", t => {
+	t.mock.timers.enable({ apis: ["setInterval"] });
+	const { h } = laidOut(t);
+	h.emit("agent_start");
+	h.finish(1, 1000);
+	h.emit("agent_end");
+	h.settle();
+	assert.ok(h.render(1200)[0].startsWith(`─ ${waveGlyph} `));
+	assert.doesNotMatch(h.render()[0], /Last/);
+	h.advance(1760, 760);
+	assertNoWave(h, 1760, /Last 00:01\.0/);
+});
+for (const interrupt of ["input", "status", "agent_start", "reduced motion"]) test(`${interrupt} cancels PI_WAVE in the divider immediately`, t => {
+	const events = eventBus();
+	const h = harness(t, events, { layout: piLayout(), verbs: null });
+	h.render();
+	h.emit("agent_start");
+	h.finish(1, 1000);
+	h.emit("agent_end");
+	h.settle();
+	assert.ok(h.render(1200)[0].startsWith(`─ ${waveGlyph} `), "the wave exists before interruption");
+	if (interrupt === "status") h.show(indicator("compaction", "Compacting context..."), 1200);
+	else if (interrupt === "reduced motion") events.emit(DISPLAY_SETTINGS_EVENT, { motion: "reduced" });
+	else h.emit(interrupt, {}, 1200);
+	assertNoWave(h, 1200, interrupt === "status" ? /Compacting context/ : interrupt === "agent_start" ? /Preparing…/ : /Last 00:01\.0/);
+});
+test("reduced motion skips the divider wave when a prompt ends", t => {
+	const events = eventBus();
+	const h = harness(t, events, { layout: piLayout() });
+	h.render();
+	events.emit(DISPLAY_SETTINGS_EVENT, { motion: "reduced" });
+	h.emit("agent_start");
+	h.finish(1, 1000);
+	h.emit("agent_end");
+	h.settle();
+	assertNoWave(h, 1200, /Last 00:01\.0/);
 });
 
-test("live thinking's newest three lines sit below the spinner and above the queue", t => {
+test("a stale retry yields both the divider and thinking tail to the live request", t => {
+	const events = eventBus();
+	const { h } = laidOut(t, events);
+	events.emit(DISPLAY_SETTINGS_EVENT, { hidesLiveThinking: true });
+	h.emit("agent_start");
+	h.show(indicator("retry", "Retrying (1/3) in 4s..."), 1000);
+	h.emit("before_provider_request", {}, 1500);
+	h.update("thinking_delta", "live thought", 1600);
+	assert.match(h.render(1800)[0], /thinking/);
+	assert.ok(h.queue().some(line => line.includes("live thought")));
+	h.show(indicator("compaction", "Compacting context..."), 1900);
+	assert.match(h.render()[0], /Compacting context/);
+	assert.deepEqual(h.queue(), [], "an active status still hides live thinking");
+});
+
+test("live thinking's newest three lines sit above the queue without a phase caption", t => {
 	const events=eventBus();
 	const { h, layout } = laidOut(t,events);
 	events.emit(DISPLAY_SETTINGS_EVENT,{hidesLiveThinking:true});
@@ -428,14 +489,11 @@ test("live thinking's newest three lines sit below the spinner and above the que
 	h.update("thinking_delta", "thought ".repeat(200) + "newest", 100);
 	layout.queue.lines = QUEUED;
 	const lines = h.queue(200);
-	assert.match(lines[1], /thinking/);
-	assert.equal(lines.length, 5 + QUEUED.length);
-	assert.match(lines[2], /^  … /);
-	assert.match(lines[4], /newest$/);
-	assert.deepEqual(lines.slice(5), QUEUED);
-	h.update("thinking_end", undefined, 2100);
-	assert.match(h.queue()[1], /thought for 2s/);
-	assert.deepEqual(h.queue().slice(2), QUEUED);
+	assert.match(h.render()[0],/thinking/);
+	assert.equal(lines.length,4+QUEUED.length);
+	assert.match(lines[1],/^  … /);assert.match(lines[3],/newest$/);
+	assert.deepEqual(lines.slice(4),QUEUED);
+	h.update("thinking_end",undefined,2100);assert.deepEqual(h.queue(),QUEUED);
 });
 
 test("the spinner tail requires a loaded, enabled thinking host and reuses an unchanged tail",t=>{
@@ -443,16 +501,16 @@ test("the spinner tail requires a loaded, enabled thinking host and reuses an un
  const theme={fg:(_key,text)=>text,italic:text=>{paints++;return text;}};
  const h=harness(t,events,{layout,theme});h.render();h.emit("agent_start");
  h.update("thinking_delta","thought ".repeat(200),100);
- assert.equal(h.queue().length,2,"Tool Display absent: native thinking remains in the transcript");
+ assert.equal(h.queue().length,0,"Tool Display absent: native thinking remains in the transcript");
  events.emit(DISPLAY_SETTINGS_EVENT,{hidesLiveThinking:true});
- assert.equal(h.queue().length,5);
+ assert.equal(h.queue().length,4);
  const cached=paints;h.queue(500);h.queue(700);
  assert.equal(paints,cached,"timer frames reuse the thinking tail");
  events.emit(DISPLAY_SETTINGS_EVENT,{hidesLiveThinking:false});
- assert.equal(h.queue().length,2,"Tool Display off: no duplicate tail");
+ assert.equal(h.queue().length,0,"Tool Display off: no duplicate tail");
 });
 
-test("an idle agent has no phase line, and the border shows the last run", t => {
+test("an idle agent has no transcript status, and the divider shows the last run", t => {
 	const { h, layout } = laidOut(t);
 	h.emit("agent_start");
 	h.finish(10, 1000);
@@ -462,25 +520,25 @@ test("an idle agent has no phase line, and the border shows the last run", t => 
 	assert.match(h.render(1760)[0], /Last 00:01\.0 ─$/);
 });
 
-test("Pi's statuses take the phase line, idle or during a run", async t => {
+test("Pi's statuses take the divider, idle or during a run", async t => {
 	const { h } = laidOut(t);
 	h.show(indicator("compaction", "Compacting context... (Esc to cancel)"), 100);
-	assert.match(h.queue(1600)[1], /^ \S+ Compacting context {2}00:01\.5 {2}Esc cancel$/);
-	assert.doesNotMatch(h.render()[0], /Compacting/);
+	assert.match(h.render(1600)[0],/Compacting context Esc cancel .*Time 00:01\.5/);
+	assert.deepEqual(h.queue(),[]);
 	h.show(undefined, 1700);
 	await Promise.resolve();
 	assert.deepEqual(h.queue(), []);
 	h.emit("agent_start", {}, 2000);
 	h.show(indicator("retry", "Retrying (1/3) in 4s... (Esc to cancel)"), 2000);
-	assert.match(h.queue(3000)[1], / Retrying \(1\/3\) in 4s {2}00:01\.0 {2}Esc cancel$/);
+	assert.match(h.render(3000)[0],/Retrying \(1\/3\) in 4s Esc cancel/);
 	assert.match(h.render()[0], /Time 00:01\.0 ─$/);
 });
 
-test("ending the session takes the phase line away and leaves Pi's queue", t => {
+test("ending the session removes the thinking tail and leaves Pi's queue", t => {
 	const { h, layout } = laidOut(t);
 	h.emit("agent_start");
 	layout.queue.lines = QUEUED;
-	assert.equal(h.queue().length, QUEUED.length + 2);
+	assert.deepEqual(h.queue(),QUEUED);
 	h.emit("session_shutdown");
 	assert.deepEqual(h.queue(), QUEUED);
 });
@@ -489,22 +547,23 @@ test("without Pi's layout the phase stays in the editor border", t => {
 	const h = harness(t);
 	h.emit("agent_start");
 	h.emit("before_provider_request", {}, 100);
-	assert.match(h.render(600)[0], /^─ \S+ 00:00\.5 .+… sending request, 0s, ↑ ─+ Time 00:00\.6 ─$/);
+	assert.match(h.render(600)[0], /^─ .+… sending request, ↑ ─+ Time 00:00\.6 ─$/);
 });
 
-test("an idle status shows on the phase line only, never in the border as well", t => {
+test("an idle status shows only in the divider, replacing Pi's native status", async t => {
 	const layout = piLayout();
 	const h = harness(t, undefined, { layout, nativeStatus: true });
 	h.render();
 	h.show(indicator("compaction", "Compacting context... (Esc to cancel)"), 100);
-	assert.match(h.queue(1600)[1], /Compacting context/);
-	assert.equal(h.render()[0], "─".repeat(120), "no run yet: a plain border, not Pi's status");
+	assert.match(h.render(1600)[0],/Compacting context/);
+	assert.deepEqual(h.queue(),[],"idle statuses only draw in the divider");
 	h.show(undefined, 1700);
+ await Promise.resolve();
 	h.emit("agent_start", {}, 2000);
 	h.finish(10, 3000);
 	h.settle();
 	h.show(indicator("compaction", "Compacting context... (Esc to cancel)"), 4000);
-	assert.match(h.render(4500)[0], /^─+ Last 00:01\.0 ─$/, "after a run: the last run's summary");
+	assert.match(h.render(4500)[0],/Compacting context .*Time 00:00\.5/);
 });
 
 test("a status ends when Pi disposes it, even if Pi no longer tells this editor", async t => {
@@ -513,7 +572,7 @@ test("a status ends when Pi disposes it, even if Pi no longer tells this editor"
 	let disposed = 0;
 	compaction.dispose = () => { disposed++; };
 	h.show(compaction, 100);
-	assert.match(h.queue(600)[1], /Compacting context/);
+	assert.match(h.render(600)[0],/Compacting context/);
 	// Another extension replaced the editor: Pi hands the status over, then disposes it when compaction ends.
 	compaction.dispose();
 	await Promise.resolve();
