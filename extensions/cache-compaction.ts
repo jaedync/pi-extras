@@ -5,6 +5,7 @@ import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprin
 import { dirname, join } from "node:path";
 import { operationalLine } from "../lib/operational-log.ts";
 import { COMPACTION_DECISION_EVENT, compactionKey, type CompactionDecision } from "../lib/cache-compaction/decision.ts";
+import { foldProjection } from "../lib/cache-compaction/system-fold.ts";
 import { estimateRequestContext, contextSafetyTokens, summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
 
 type Message = SessionProjection["messages"][number];
@@ -47,10 +48,10 @@ function entryMessageIndex(projection: SessionProjection, id: string): number | 
 	if (index < 0) return undefined;
 	return projection.entries.slice(0, index).reduce((sum, entry) => sum + entry.messages.length, 0);
 }
-function startOf(messages: readonly Message[], span: readonly Message[], end: number, hash: (message: Message) => string): number | undefined {
-	if (!span.length) return undefined;
-	const hashes = span.map(hash);
-	const visible = messages.slice(0, end).flatMap((message, i) => message.role === "system" ? [] : [{ hash: hash(message), index: i }]);
+function startOf(messages: readonly Message[], span: readonly Message[], end: number, hash: (message: Message) => string, omitted: ReadonlySet<string>): number | undefined {
+	const hashes = span.map(hash).filter((value) => !omitted.has(value));
+	if (!hashes.length) return undefined;
+	const visible = messages.slice(0, end).flatMap((message, i) => message.role === "system" || omitted.has(hash(message)) ? [] : [{ hash: hash(message), index: i }]);
 	const matches = visible.flatMap((message, i) => hashes.every((hash, j) => hash === visible[i + j]?.hash) ? [message.index] : []);
 	return matches.length === 1 ? matches[0] : undefined;
 }
@@ -83,10 +84,14 @@ function prepareRequest(captured: Captured, event: SessionBeforeCompactEvent, ct
 	if (sentTail.some((message) => message.role !== "assistant" && message.role !== "toolResult" && !excluded(message))) return { fallback: "unrequested-tail" };
 	const messages = [...captured.messages, ...sentTail];
 	const position = (canonical: number) => canonical < count ? captured.positions[canonical] : captured.messages.length + canonical - count;
-	const split = startOf(projection.messages, p.turnPrefixMessages, kept, hash);
-	const history = startOf(projection.messages, p.messagesToSummarize, split ?? kept, hash);
-	if ((p.messagesToSummarize.length && history === undefined) || (p.isSplitTurn && split === undefined)) return { fallback: "unknown-boundary" };
 	const present = (canonical: number) => canonical >= count || (captured.positions[canonical] < captured.messages.length && hashes[canonical] === hash(captured.messages[captured.positions[canonical]]));
+	// The same local-only custom entries may also be pruned from preparation spans.
+	// Filter only proven request omissions, keeping original indices for the retained suffix.
+	const omitted = new Set(projection.messages.flatMap((message, i) => message.role === "custom" && !present(i) ? [hashes[i]] : []));
+	const split = startOf(projection.messages, p.turnPrefixMessages, kept, hash, omitted);
+	const history = startOf(projection.messages, p.messagesToSummarize, split ?? kept, hash, omitted);
+	const hasVisible = (span: readonly Message[]) => span.some((message) => !omitted.has(hash(message)));
+	if ((hasVisible(p.messagesToSummarize) && history === undefined) || (p.isSplitTurn && split === undefined)) return { fallback: "unknown-boundary" };
 	const visibleKept = projection.messages.findIndex((message, i) => i >= kept && present(i) && !excluded(message));
 	const firstVisibleKept = visibleKept < 0 ? kept : visibleKept;
 	const llmMessages = visibleLlm(messages);
@@ -133,8 +138,12 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 			const projection = ctx.sessionManager.buildSessionProjection();
 			const hash = hashOnce();
 			const hashes = projection.messages.map(hash);
-			const positions = positionsFor(projection.messages, hashes, event.messages.map(hash));
-			if (!positions) { captureMiss = "capture-projection"; return; }
+			// A pruning context hook makes Pi replay system deltas into one leading
+			// checkpoint. Accept only that exact deterministic fold, not arbitrary rewrites.
+			const folded = foldProjection(projection.messages, event.messages, hash);
+			const mapped = positionsFor(folded.messages, folded.messages.map(hash), event.messages.map(hash));
+			if (!mapped) { captureMiss = "capture-projection"; return; }
+			const positions = folded.indices.map((index) => mapped[index]);
 			// Pi and later extensions may mutate these messages after this observational hook.
 			pending = { ...request, ids: ctx.sessionManager.getBranch().map((entry) => entry.id), hashes, positions, messages: structuredClone(event.messages) };
 		} catch { miss("capture-failed"); }

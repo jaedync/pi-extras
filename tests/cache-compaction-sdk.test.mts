@@ -28,6 +28,8 @@ async function fixture(api = "anthropic-messages", enabled = true, automatic?: "
 	let responseMode = "text";
 	let lateTransform = false;
 	let rewriteUser = false;
+	let filterInternal = false;
+	const internal = (message: any) => message.role === "custom" && (message.customType === "remote-pi:received-image" || (message.customType?.startsWith("remote-pi:") && message.display === false));
 	let usageTokens = 102;
 	let simulateWarmer = false;
 	const notices: string[] = [];
@@ -67,9 +69,15 @@ async function fixture(api = "anthropic-messages", enabled = true, automatic?: "
 	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: !!automatic, keepRecentTokens: 1, reserveTokens: automatic ? reserveTokens : 2000 }, cacheWarming: "off", retry: { enabled: false } });
 	const loader = new sdk.DefaultResourceLoader({ cwd: scratch, agentDir, settingsManager, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
 		extensionFactories: [(pi: any) => { pi.on("context", (event: any) => {
-			if (!rewriteUser) return;
-			const lastUser = event.messages.findLastIndex((message: any) => message.role === "user");
-			return { messages: event.messages.map((message: any, index: number) => index === lastUser ? { ...message, content: "Rewritten user text." } : message) };
+			if (!rewriteUser && !filterInternal) return;
+			const messages = filterInternal ? event.messages.filter((message: any) => !internal(message)) : event.messages;
+			const lastUser = rewriteUser ? messages.findLastIndex((message: any) => message.role === "user") : -1;
+			return { messages: messages.map((message: any, index: number) => index === lastUser ? { ...message, content: "Rewritten user text." } : message) };
+		});
+		pi.on("session_before_compact", (event: any) => {
+			if (!filterInternal) return;
+			event.preparation.messagesToSummarize = event.preparation.messagesToSummarize.filter((message: any) => !internal(message));
+			event.preparation.turnPrefixMessages = event.preparation.turnPrefixMessages.filter((message: any) => !internal(message));
 		}); if (withUsageGuard) usageGuard(pi, { configFile, store: createLimitStore(), now: () => now }); cacheCompaction(pi, { configFile, now: () => now, settingsManager }); pi.on("context_with_system", (event: any) => {
 			captures.push(structuredClone(event.messages));
 			if (lateTransform) {
@@ -81,7 +89,7 @@ async function fixture(api = "anthropic-messages", enabled = true, automatic?: "
 	assert.deepEqual(loader.getExtensions().errors, []);
 	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model, thinkingLevel: "off", settingsManager, resourceLoader: loader, sessionManager: sdk.SessionManager.inMemory(scratch), ...(automatic === "large-anthropic" ? { tools: ["tiny"] } : { noTools: "all" }), customTools: automatic === "large-anthropic" ? [{ name: "tiny", label: "tiny", description: "Local small tool result", parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "Small result." }], details: undefined }) }] : [] });
 	await session.bindExtensions({ mode: "tui", uiContext: { notify: (text: string) => { notices.push(text); if (process.env.PREFIX_TEST_DEBUG) console.error(text); } }, onError: (error: unknown) => errors.push(error) });
-	return { session, calls, captures, errors, notices, configFile, logFile: join(agentDir, "cache-compaction.log"), settingsManager, simulateWarmer: () => { simulateWarmer = true; }, setUsage: (tokens: number) => { usageTokens = tokens; }, setLateTransform: () => { lateTransform = true; }, setRewriteUser: () => { rewriteUser = true; }, setTime: (n: number) => { now += n; }, setResponse: (mode: string) => { responseMode = mode; }, async warm() { await session.prompt("Old task: preserve file paths and decision."); await session.prompt("Recent task: next step is run the tests."); }, async close() { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); } };
+	return { session, calls, captures, errors, notices, configFile, logFile: join(agentDir, "cache-compaction.log"), settingsManager, simulateWarmer: () => { simulateWarmer = true; }, setUsage: (tokens: number) => { usageTokens = tokens; }, setLateTransform: () => { lateTransform = true; }, setRewriteUser: () => { rewriteUser = true; }, setInternalFilter: () => { filterInternal = true; }, setTime: (n: number) => { now += n; }, setResponse: (mode: string) => { responseMode = mode; }, async warm() { await session.prompt("Old task: preserve file paths and decision."); await session.prompt("Recent task: next step is run the tests."); }, async close() { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); } };
 }
 
 for (const api of ["anthropic-messages", "openai-codex-responses", "openai-responses", "google-generative-ai"]) {
@@ -294,10 +302,45 @@ test("usage-anchored estimator matches Pi's own compaction helper", async () => 
 		assert.equal(estimateRequestTokens([...messages, { ...assistant, timestamp: 25 }]), estimateContextTokens([...messages, { ...assistant, timestamp: 25 }]).tokens);
 	}
 });
-test("a context handler rewriting user text is not treated as an omission", async (t) => {
+test("real SDK mirrors exact system folding and local-only compaction omissions without resurrecting context edits", async (t) => {
+	const f = await fixture("openai-codex-responses"); t.after(() => f.close()); f.setInternalFilter();
+	await f.session.sendCustomMessage({ customType: "remote-pi:relay-state", content: "local-only-startup", display: false }, { triggerTurn: false });
+	await f.session.prompt("Historical task before prompt changes.");
+	const sm = f.session.sessionManager;
+	const errorIds: string[] = [];
+	for (let index = 0; index < 4; index++) {
+		sm.appendMessage({ role: "system", content: "", sections: { changing: index === 0 ? "x".repeat(60000) : `updated-section-${index}` }, timestamp: 10 + index });
+		if (index % 2 === 0) {
+			const errorId = sm.appendMessage({ ...f.session.messages.at(-1), stopReason: "error", content: [{ type: "text", text: `deleted-assistant-${index}` }], timestamp: 20 + index });
+			errorIds.push(errorId); sm.appendContextEdit(errorId, null);
+		}
+	}
+	await f.session.sendCustomMessage({ customType: "remote-pi:received-image", content: "local-only-image", display: true }, { triggerTurn: false });
+	await f.session.prompt("Later historical work after the omitted preview.");
+	await f.session.sendCustomMessage({ customType: "subagent-report", content: "Visible child report.", display: true }, { triggerTurn: false });
+	await f.session.prompt("Retained recent request.");
+	const canonical = sm.buildSessionProjection();
+	assert.ok(canonical.messages.filter((message: any) => message.role === "system").length >= 5);
+	for (const id of errorIds) assert.ok(!canonical.entries.some((entry: any) => entry.sourceEntry.id === id && entry.messages.length));
+	const captured = f.calls.at(-1)!;
+	assert.equal(f.captures.at(-1)!.filter((message: any) => message.role === "system").length, 1);
+	assert.deepEqual(f.captures.at(-1)![0], ai.getCurrentSystemMessage(canonical.messages));
+	const entry = await f.session.compact();
+	assert.equal(entry.details?.cachePrefix, true);
+	const summary = f.calls.at(-1)!;
+	assert.deepEqual(summary.payload.input.slice(0, captured.payload.input.length), captured.payload.input);
+	assert.doesNotMatch(JSON.stringify(summary.context), /local-only-|deleted-assistant-/);
+	assert.match(JSON.stringify(summary.context), /Visible child report/);
+	assert.deepEqual(f.errors, []);
+});
+
+test("a context handler rewriting user text remains rejected after exact system folding", async (t) => {
 	const f = await fixture(); t.after(() => f.close()); await f.warm();
+	f.session.sessionManager.appendMessage({ role: "system", content: "Additional prompt state.", timestamp: 17 });
 	f.setRewriteUser(); await f.session.prompt("Original retained user text.");
 	assert.ok(f.calls.at(-1)!.context.messages.some((message: any) => textOf(message) === "Rewritten user text."));
+	assert.equal(f.captures.at(-1)!.filter((message: any) => message.role === "system").length, 1);
+	assert.ok(f.session.sessionManager.buildSessionProjection().messages.filter((message: any) => message.role === "system").length > 1);
 	const entry = await f.session.compact();
 	assert.notEqual(entry.details?.cachePrefix, true);
 	assert.equal(JSON.parse(readFileSync(f.logFile, "utf8")).fallbackReason, "capture-projection");

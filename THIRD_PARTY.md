@@ -13,11 +13,19 @@ Selector vocabulary and grouped-result extraction were informed by:
 
 The HTTP safety, bounded client, queue/cache and tests here are new. No upstream credential persistence/login UI was reused. `node-html-parser` 7.0.2 is a locked runtime dependency with its own license in node_modules.
 
+# Pi system folding attribution
+
+The system-state fold in `lib/cache-compaction/system-fold.ts` adapts
+`getCurrentSystemMessage` and `getCurrentTools` from
+https://github.com/earendil-works/pi/blob/v0.99.2/packages/ai/src/utils/transcript.ts,
+MIT, Copyright (c) 2025 Mario Zechner. The entry-position mapping here is new.
+
 ## MIT License notice for the referenced implementations
 
 Copyright (c) 2026 Thomas Mustier
 Copyright (c) 2026 Michael Jakl
 Copyright (c) 2025 Carlo Zottmann
+Copyright (c) 2025 Mario Zechner
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
