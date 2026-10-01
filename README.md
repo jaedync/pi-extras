@@ -123,15 +123,19 @@ Enabled by default. Pi's usual compaction serializes history into a separate
 summarization prompt, which cannot reuse the session's cached prefix. Cache
 Compaction instead appends an extraction instruction to the last full session
 request plus its finalized assistant replies/tool results, preserving the
-session ID and every non-conversation provider payload field, including
-thinking/reasoning, tools, output limits and cache routing. Manual `/compact`,
-after-turn threshold and pre-prompt threshold compactions can use this path.
+session ID and non-conversation provider payload fields, including
+thinking/reasoning, tools and cache routing. The output limit comes from the
+new summary request, sized to its context instead of replaying a stale cap.
+Manual `/compact`, after-turn threshold and pre-prompt threshold compactions
+use this path only when there is enough room under the context window.
 Retained input not sent yet, including bash output and custom messages, stays
 out of the summary request. The instruction asks for brief reasoning, Pi's structured checkpoint, previous-summary updates,
 and split-turn context. Its retained-boundary identifier includes role,
 content types, tool-call IDs/names and bounded excerpts (capped at 1,800
-characters, including for textless tool calls), not message numbers, since
-providers can regroup messages. It identifies the retained boundary and summarizes
+characters, including for textless tool calls). Repeated prompts or template
+openings use a bounded preceding-message chain; ambiguous chains fall back.
+Aborted/errored assistant replies cannot identify the boundary because providers
+drop them. Identifiers avoid message numbers, since providers can regroup messages. It identifies the retained boundary and summarizes
 only the history that Pi will discard, not the recent messages Pi keeps verbatim.
 
 A salted ~42k-context recipe probe measured $0.010 vs $0.169 for Sonnet through
@@ -139,7 +143,34 @@ Meridian, and $0.0034 vs $0.055 for Codex (about 94% savings). Smaller live A/B
 runs loading this extension measured Sonnet $0.0149 vs $0.0481 (14,826 cache-read
 tokens) and Codex $0.0065 vs $0.0188 (7,552 cached). These are provider-reported
 catalog costs, not subscription invoices. Savings, latency and summary quality
-vary; post-compaction turns still start with a new, cold summary prefix.
+vary; the two-model A/B summaries were comparable after the boundary fix, not
+proven equivalent. Post-compaction turns still start with a new, cold summary prefix.
+
+Headroom uses Pi's usage-anchored context estimate and a 4,096-token safety
+margin. The required output room is the previous summary's estimated size plus
+6,000 tokens for summary growth and 2,000 for reasoning. The request uses the
+full available room (up to the model's output ceiling), not this minimum.
+Codex declares no wire output cap, so the same headroom gate is conservative,
+not an enforceable output ceiling.
+Budget-thinking Anthropic requests also need room above the unchanged thinking
+budget plus that summary minimum; otherwise they fall back without sending.
+
+At the default `compaction.reserveTokens: 16384`, automatic threshold compaction
+has roughly 12k tokens minus the new tail/instruction left. First summaries
+usually fit; updated summaries in long sessions usually do not and fall back.
+For large-window models, raising `compaction.reserveTokens` to 32,768 (or
+49,152) leaves more room. 32k is about 3% of a 1M-token window. Manual `/compact`
+earlier in the window normally has ample room, but still checks the same gate.
+
+A local sample of 183 real compactions (58 first, 125 updated) gave upper-bound
+fit rates of 106/183 (58%) at reserve 16,384, and 183/183 (100%) at both 32,768
+and 49,152. All 58 first summaries fit the default reserve, but only 48 updated
+summaries did. Method: session JSONL files over 200 KB in the local main-session
+and subagent directories; compaction summaries with file-list XML removed;
+size estimated as characters/4; compare reserve minus 4,096 against previous
+summary size plus 8,000. These rates exclude the new tail/instruction, which
+reduces available room further. No passing sample's actual summary exceeded
+that room. These observations are not guarantees for other workloads.
 
 Configure `cacheCompaction` in `PI_CODING_AGENT_DIR/pi-extras.json` (default
 `~/.pi/agent/pi-extras.json`), then `/reload`:
@@ -174,12 +205,17 @@ final changes. Incompatible context transformations safely lose eligibility.
 
 Fallbacks include no captured payload, model/provider/API/endpoint or session
 changes, irreconcilable branches/context edits, unsent input in discarded
-history, expired cache, overflow recovery, insufficient context-window headroom, abort, provider error,
+history, expired cache, overflow recovery, insufficient context-window headroom,
+ambiguous boundaries, images blocked by Pi (its image-blocking wrapper is not
+public), incompatible managed-effort markers, abort, provider error,
 empty/tool-calling or token-capped summaries. Interactive notices say which path
 ran and why; successful entries save usage, cumulative file lists and
 `details.cachePrefix: true`. Provider errors and payloads are never logged.
 Snapshots and filtered routing headers stay in memory only and are cleared on
-lifecycle changes and compaction. Credential-like headers are never captured.
+lifecycle changes and compaction. Filtering drops credential-like header names;
+it does not guarantee that other header values contain nothing sensitive.
+Exact-repeat/warmer payloads refresh the capture's age without replacing it.
+The session's transport and provider timeout/retry settings carry over.
 A failed prefix attempt spends provider usage before default compaction runs,
 but that attempt's usage is not recorded in session totals.
 See [security and privacy](docs/security.md#cache-compaction).

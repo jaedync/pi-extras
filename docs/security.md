@@ -57,16 +57,20 @@ The latest full request transcript and non-conversation provider payload fields
 are kept in memory only, never persisted or logged. This can include private tool
 output and provider metadata, just like Pi's normal in-memory context. The
 conversation body is not retained a second time inside the payload snapshot.
-Filtered routing headers stay in memory only. Authorization, cookies, API keys
-and token-, key-, secret- or signature-like header names are never captured.
+Filtered routing headers stay in memory only. Filtering drops authorization-,
+cookie-, token-, key-, secret-, credential- and signature-like header names.
+Other header values can still contain sensitive data; this is name filtering,
+not a guarantee that retained headers contain nothing sensitive.
 Snapshots are replaced on each request and cleared on compaction, session
 start/shutdown/reload, tree navigation, model and thinking-level changes.
 
 Summarization sends the captured transcript, finalized replies/tool results, and
 a summary instruction to the same configured model and endpoint with the same
 session ID. Manual `/compact`, after-turn threshold and pre-prompt threshold
-compactions can use this path; retained unsent input stays out of the summary
-request. It does not read credential files or change ordinary requests.
+compactions can use this path when there is enough room for the previous summary
+plus growth/reasoning allowances; retained unsent input stays out of the summary
+request. The summary cap is recomputed for that request while cache-affecting
+thinking parameters remain unchanged. It does not read credential files or change ordinary requests.
 Authentication is resolved by Pi for the summary request. Preserved provider
 fields include tool declarations, but the instruction forbids tool use and any summary
 with a tool call is rejected without executing it. Errors are reported only as
@@ -77,8 +81,11 @@ the session file. No new network destination, telemetry, timer or disk cache is
 created. Cache hits and expiry cannot be guaranteed. Unsafe, cold or unsupported
 requests use Pi's default summarization. Other fallbacks include overflow
 recovery,
-model/branch/session changes, insufficient context-window space and unusable
-replies. A failed prefix attempt spends provider usage before that fallback,
+model/branch/session changes, insufficient context-window space, ambiguous
+boundaries and unusable replies. Pi's image-blocking wrapper is private, so
+blocked images conservatively lose prefix eligibility. Only an identical empty
+managed-effort marker can be inserted at the old cached boundary; incompatible
+markers fall back. A failed prefix attempt spends provider usage before that fallback,
 but its usage is not recorded in session totals.
 Disable with `cacheCompaction.enabled: false`.
 

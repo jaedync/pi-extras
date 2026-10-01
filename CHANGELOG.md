@@ -11,9 +11,13 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   tools, history, reasoning settings and session ID) with a summarization
   instruction appended, instead of Pi's standalone summarizer request, which
   cannot read the cache. Measured locally: about 3x cheaper at 15k tokens of
-  context and 16-17x at 42k (Claude via Meridian and Codex), with equivalent
-  summaries. Manual `/compact`, after-turn threshold and pre-prompt threshold
-  compactions can reuse the prefix. Retained unsent input stays out of the summary
+  context and 16-17x at 42k (Claude via Meridian and Codex). The two-model A/B
+  produced comparable summaries after the boundary fix, not proven equivalence.
+  Manual `/compact`, after-turn threshold and pre-prompt threshold
+  compactions reuse the prefix when enough summary output room remains.
+  Output caps are sized to the summary context; the minimum room scales with
+  the previous summary. Long-session updates often fall back at the default
+  reserve; 32k-48k reserve leaves more room on large-window models. Retained unsent input stays out of the summary
   request. Overflow recovery, model/branch/session changes, a cold cache,
   unsupported APIs, a request that does not fit or an unusable reply fall back
   to Pi's default compaction. A failed prefix attempt spends provider usage that

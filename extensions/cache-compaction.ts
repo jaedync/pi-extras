@@ -1,6 +1,8 @@
-import { convertToLlm, estimateTokens, type ExtensionAPI, type ExtensionContext, type SessionProjection, type SessionBeforeCompactEvent, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, type ExtensionAPI, type ExtensionContext, type SessionProjection, type SessionBeforeCompactEvent, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { CONFIG_FILE, readSection } from "../lib/extras-config.ts";
-import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, loadConfig, mergePayload, payloadHashes, reconcile, outputAllowance, requestOutputLimit, requestEffort, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
+import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, loadConfig, mergePayload, payloadHashes, reconcile, CONTEXT_SAFETY_TOKENS, requestEffort, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
+
+import { estimateRequestTokens, summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
 
 type Message = SessionProjection["messages"][number];
 interface Captured extends RequestIdentity, Snapshot {
@@ -11,13 +13,13 @@ interface Captured extends RequestIdentity, Snapshot {
 	readonly headers?: Record<string, string>;
 	readonly effort?: RequestEffort;
 }
-type RequestSettings = Pick<SettingsManager, "getProviderRetrySettings" | "getHttpIdleTimeoutMs" | "getWebSocketConnectTimeoutMs">;
+type RequestSettings = Pick<SettingsManager, "getProviderRetrySettings" | "getHttpIdleTimeoutMs" | "getWebSocketConnectTimeoutMs" | "getTransport">;
 export interface CacheCompactionOptions { readonly configFile?: string; readonly now?: () => number; readonly settingsManager?: RequestSettings }
 
 function sessionOptions(settings: RequestSettings) {
 	const retry = settings.getProviderRetrySettings();
 	const idle = settings.getHttpIdleTimeoutMs();
-	return { timeoutMs: retry.timeoutMs ?? (idle === 0 ? 2147483647 : idle), maxRetries: retry.maxRetries, maxRetryDelayMs: retry.maxRetryDelayMs, websocketConnectTimeoutMs: settings.getWebSocketConnectTimeoutMs() };
+	return { timeoutMs: retry.timeoutMs ?? (idle === 0 ? 2147483647 : idle), maxRetries: retry.maxRetries, maxRetryDelayMs: retry.maxRetryDelayMs, websocketConnectTimeoutMs: settings.getWebSocketConnectTimeoutMs(), transport: settings.getTransport() };
 }
 
 function identity(ctx: ExtensionContext, at: number): RequestIdentity | undefined {
@@ -58,9 +60,10 @@ function hashOnce(): (message: Message) => string {
 	const hashes = new WeakMap<Message, string>();
 	return (message) => { const known = hashes.get(message); if (known) return known; const hash = fingerprint(message); hashes.set(message, hash); return hash; };
 }
-const excluded = (message: Message) => message.role === "bashExecution" && message.excludeFromContext;
+const excluded = (message: Message) => (message.role === "bashExecution" && message.excludeFromContext) || (message.role === "assistant" && (message.stopReason === "aborted" || message.stopReason === "error"));
+const visibleLlm = (messages: readonly Message[]) => convertToLlm(messages.filter((message) => !excluded(message)));
 const unsentInput = (message: Message) => message.role === "user" || message.role === "custom" || (message.role === "bashExecution" && !message.excludeFromContext);
-function prepareRequest(captured: Captured, event: SessionBeforeCompactEvent, ctx: ExtensionContext, at: number): { messages: Message[]; estimated: number } | { fallback: string } {
+function prepareRequest(captured: Captured, event: SessionBeforeCompactEvent, ctx: ExtensionContext, at: number): { messages: Message[] } | { fallback: string } {
 	const p = event.preparation;
 	const projection = ctx.sessionManager.buildSessionProjection();
 	const hash = hashOnce();
@@ -81,14 +84,14 @@ function prepareRequest(captured: Captured, event: SessionBeforeCompactEvent, ct
 	if ((p.messagesToSummarize.length && history === undefined) || (p.isSplitTurn && split === undefined)) return { fallback: "unknown-boundary" };
 	const visibleKept = projection.messages.findIndex((message, i) => i >= kept && !excluded(message));
 	const firstVisibleKept = visibleKept < 0 ? kept : visibleKept;
-	const llmMessages = convertToLlm(messages);
-	// !! output is invisible to the provider, including when it precedes the retained boundary.
-	const visiblePosition = (canonical: number) => convertToLlm(messages.slice(0, position(canonical))).length;
-	const instruction = buildInstruction({ messages: llmMessages, boundary: visiblePosition(firstVisibleKept), entryId: p.firstKeptEntryId, historyStart: visiblePosition(history ?? split ?? kept), splitStart: p.isSplitTurn && split !== undefined ? visiblePosition(split) : undefined, previousSummary: p.previousSummary, customInstructions: event.customInstructions, keptMessage: convertToLlm([projection.messages[firstVisibleKept]])[0] ?? { role: projection.messages[kept].role, content: [] }, boundaryInRequest: visibleKept >= 0 && position(firstVisibleKept) < messages.length, boundaryExcluded: visibleKept < 0 });
+	const llmMessages = visibleLlm(messages);
+	if (p.previousSummary && !messages.some((message) => message.role === "compactionSummary" && message.summary === p.previousSummary)) return { fallback: "missing-previous-summary" };
+	// Dropped assistant replies and !! output cannot identify a provider-visible boundary.
+	const visiblePosition = (canonical: number) => visibleLlm(messages.slice(0, position(canonical))).length;
+	const instruction = buildInstruction({ messages: llmMessages, boundary: visiblePosition(firstVisibleKept), entryId: p.firstKeptEntryId, historyStart: visiblePosition(history ?? split ?? kept), splitStart: p.isSplitTurn && split !== undefined ? visiblePosition(split) : undefined, previousSummary: p.previousSummary, customInstructions: event.customInstructions, keptMessage: visibleLlm([projection.messages[firstVisibleKept]])[0] ?? { role: projection.messages[kept].role, content: [] }, boundaryInRequest: visibleKept >= 0 && position(firstVisibleKept) < messages.length, boundaryExcluded: visibleKept < 0 });
 	const prompt: Message = { role: "user", content: [{ type: "text", text: instruction }], timestamp: at };
 	const full = [...messages, prompt];
-	// Include full tool outputs, system/tools, injected messages and the uncached instruction.
-	return { messages: full, estimated: convertToLlm(full).reduce((sum, message) => sum + estimateTokens(message), 0) };
+	return { messages: full };
 }
 
 export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompactionOptions = {}): void {
@@ -111,7 +114,7 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 	pi.on("thinking_level_select", clear);
 
 	pi.on("context_with_system", (event, ctx) => {
-		clear();
+		pending = undefined;
 		try {
 			if (!policy.enabled || event.messages[0]?.role !== "system") return;
 			const request = identity(ctx, now());
@@ -131,7 +134,11 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 	});
 	pi.on("before_provider_request", (event, ctx) => {
 		try {
-			if (requestOutputLimit(event.payload) === 1) return;
+			const hashes = latest ? payloadHashes(latest.api, event.payload) : undefined;
+			if (latest?.payloadPrefix && hashes && hashes.length === latest.payloadPrefix.length && hashes.every((hash, i) => hash === latest!.payloadPrefix![i])) {
+				latest = { ...latest, at: now() };
+				return;
+			}
 			const request = pending;
 			pending = undefined;
 			if (!request) return;
@@ -148,6 +155,7 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 		// A summary changes the request prefix even if a later hook wins or default compaction runs.
 		clear();
 		const fallback = (reason: string) => { report(ctx, `default (${reason})`); return undefined; };
+		let payloadFallback: string | undefined;
 		try {
 			const model = ctx.model;
 			if (!model) return fallback("no-model");
@@ -156,26 +164,35 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 			if (reason || !captured?.payload) return fallback(reason ?? "no-payload");
 			const request = prepareRequest(captured, event, ctx, now());
 			if ("fallback" in request) return fallback(request.fallback);
-			if (request.estimated + outputAllowance(captured.payload, p.settings.reserveTokens, model.maxTokens) > model.contextWindow) return fallback("context-window");
+			const estimated = estimateRequestTokens(convertToLlm(request.messages));
+			const available = model.contextWindow - estimated - CONTEXT_SAFETY_TOKENS;
+			const floor = summaryOutputFloor(p.previousSummary);
+			if (available < floor) return fallback("context-window");
 			if (event.signal.aborted) return fallback("aborted");
 			report(ctx, "prefix-sharing");
 			// ModelRuntime.complete normalizes this context with pi-ai normalizeContext, just as
 			// streamSimple does in Pi's agent loop. Rebuilding any other provider fields misses cache.
 			const response = await ctx.modelRegistry.complete(model, { messages: convertToLlm(request.messages) }, {
 				...requestOptions, headers: captured.headers, effort: captured.effort,
+				// complete() uses native stream(), not streamSimple()'s automatic context clamp.
+				maxTokens: Math.min(model.maxTokens, available),
 				sessionId: captured.sessionId, signal: event.signal,
-				onPayload: (generated: unknown) => mergePayload(model.api, captured.payload!, generated, captured.payloadPrefix),
+				onPayload: (generated: unknown) => {
+					try { return mergePayload(model.api, captured.payload!, generated, captured.payloadPrefix, floor); }
+					catch (error) { if (error instanceof Error && error.message === "thinking-budget") payloadFallback = "thinking-budget"; throw error; }
+				},
 			});
 			const summary = response.content.filter((block) => block.type === "text").map((block) => block.text).join("\n").trim();
 			if (event.signal.aborted || response.stopReason === "aborted") return fallback("aborted");
-			if (response.stopReason === "error" || response.stopReason === "length") return fallback("response-failed");
+			if (response.stopReason === "error" || response.stopReason === "length") return fallback(payloadFallback ?? "response-failed");
 			if (!summary || response.content.some((block) => block.type === "toolCall")) return fallback("unusable-summary");
 			const previous = [...event.branchEntries].reverse().find((entry) => entry.type === "compaction");
 			const files = fileLists(p.fileOps, previous?.type === "compaction" ? previous.details : undefined);
 			return { compaction: { summary: summary + formatFiles(files), firstKeptEntryId: p.firstKeptEntryId, tokensBefore: p.tokensBefore, usage: response.usage, details: { ...files, cachePrefix: true } } };
-		} catch {
-			// Provider errors can contain request text or credentials. Never echo them.
-			return fallback(event.signal.aborted ? "aborted" : "request-failed");
+		} catch (error) {
+			// Only known local sentinel errors are safe to expose, never provider error text.
+			const reason = error instanceof Error && error.message === "ambiguous-boundary" ? error.message : payloadFallback ?? "request-failed";
+			return fallback(event.signal.aborted ? "aborted" : reason);
 		}
 	});
 }

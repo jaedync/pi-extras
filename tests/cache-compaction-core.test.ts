@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
 import { test } from "node:test";
-import { conversationKey, capturePayload, payloadHashes, mergePayload, loadConfig, idleLimitMs, fallbackReason, fileLists, formatFiles, fingerprint, reconcile, buildInstruction, boundaryIdentifier, MAX_BOUNDARY_IDENTIFIER_CHARS, requestOutputLimit, outputAllowance, requestEffort, safeHeaders } from "../lib/cache-compaction/core.ts";
+import { conversationKey, capturePayload, payloadHashes, mergePayload, loadConfig, idleLimitMs, fallbackReason, fileLists, formatFiles, fingerprint, reconcile, buildInstruction, boundaryIdentifier, MAX_BOUNDARY_IDENTIFIER_CHARS, requestOutputLimit, requestEffort, safeHeaders } from "../lib/cache-compaction/core.ts";
 
 for (const [api, key] of [["anthropic-messages", "messages"], ["openai-responses", "input"], ["openai-codex-responses", "input"], ["google-generative-ai", "contents"], ["google-vertex", "contents"]]) {
 	test(`payload replay changes only ${key} for ${api}`, () => {
@@ -8,7 +9,7 @@ for (const [api, key] of [["anthropic-messages", "messages"], ["openai-responses
 		const captured = capturePayload(api, original)!;
 		assert.equal(conversationKey(api), key);
 		assert.equal(key in captured, false, "do not retain a duplicate transcript");
-		const result = mergePayload(api, captured, { [key]: ["new"], reasoning: { effort: "high" } });
+		const result = mergePayload(api, captured, { [key]: ["new"], reasoning: { effort: "high" }, max_tokens: 123 });
 		assert.deepEqual(result, { ...original, [key]: ["new"] });
 		assert.deepEqual(original[key], ["old"]);
 		assert.notEqual(result.reasoning, original.reasoning);
@@ -94,9 +95,10 @@ test("instructions identify kept and history boundaries without provider-depende
 	assert.match(instruction, /Do not call tools/);
 });
 test("update and split-turn instructions separate history from prefix and exclude retained suffix", () => {
-	const messages = [msg("system", "sys"), msg("user", "history"), msg("user", "original request"), msg("assistant", "prefix"), msg("assistant", "suffix")];
+	const messages = [msg("system", "prior facts"), msg("user", "history"), msg("user", "original request"), msg("assistant", "prefix"), msg("assistant", "suffix")];
 	const text = buildInstruction({ messages, boundary: 4, entryId: "suffix-id", historyStart: 1, splitStart: 2, previousSummary: "prior facts", customInstructions: undefined });
-	assert.match(text, /<previous-summary>\nprior facts/);
+	assert.doesNotMatch(text, /prior facts|<previous-summary>/);
+	assert.match(text, /summary already at the start/);
 	assert.match(text, /PRESERVE/);
 	assert.match(text, /<split-turn-request>/);
 	assert.doesNotMatch(text, /messages \d|from the end/);
@@ -112,20 +114,45 @@ for (const api of ["google-generative-ai", "google-vertex"]) test(`${api} replac
  const captured = capturePayload(api, { contents: [], config: { abortSignal: previous.signal, maxOutputTokens: 200, thinkingConfig: { thinkingBudget: 123 } } })!;
  assert.equal("abortSignal" in (captured.config as Record<string, unknown>), false);
  previous.abort();
- const merged = mergePayload(api, captured, { contents: ["new"], config: { abortSignal: current.signal } });
+ const merged = mergePayload(api, captured, { contents: ["new"], config: { abortSignal: current.signal, maxOutputTokens: 200 } });
  assert.equal((merged.config as any).abortSignal, current.signal);
  assert.equal((merged.config as any).abortSignal.aborted, false);
  assert.equal((merged.config as any).maxOutputTokens, 200);
  assert.deepEqual((merged.config as any).thinkingConfig, { thinkingBudget: 123 });
 });
-test("fit uses declared output caps, otherwise Pi's compaction allowance, never model maximum alone", () => {
+test("output limit shapes and evidence-based summary floor", () => {
  assert.equal(requestOutputLimit({ max_tokens: 1 }), 1);
  assert.equal(requestOutputLimit({ max_output_tokens: 800 }), 800);
  assert.equal(requestOutputLimit({ config: { maxOutputTokens: 300 } }), 300);
- assert.equal(outputAllowance({ max_tokens: 2000 }, 16384, 32000), 2000);
- assert.equal(outputAllowance({}, 16384, 100000), 13107);
- assert.equal(outputAllowance({}, 20000, 1000), 1000);
+ assert.equal(summaryOutputFloor(), 8000);
+ assert.equal(summaryOutputFloor("x".repeat(40000)), 18000);
  assert.equal(requestOutputLimit({ max_tokens: "1" }), undefined);
+});
+for (const [api, key, cap] of [["anthropic-messages", "messages", "max_tokens"], ["openai-responses", "input", "max_output_tokens"]]) test(`${api} replays the generated context-clamped output cap, preserving thinking`, () => {
+ const result = mergePayload(api, { [cap]: 16000, thinking: { budget_tokens: 2048 } }, { [key]: [], [cap]: 14000 });
+ assert.equal(result[cap], 14000);
+ assert.deepEqual(result.thinking, { budget_tokens: 2048 });
+ assert.throws(() => mergePayload(api, { [cap]: 16000, thinking: { budget_tokens: 7000 } }, { [key]: [], [cap]: 14000 }), /thinking-budget/);
+});
+test("Google replays only the generated output cap within captured config", () => {
+ assert.deepEqual(mergePayload("google-generative-ai", { config: { maxOutputTokens: 16000, thinkingConfig: { thinkingBudget: 1000 } } }, { contents: [], config: { maxOutputTokens: 8000 } }).config, { maxOutputTokens: 8000, thinkingConfig: { thinkingBudget: 1000 } });
+});
+for (const opening of ["continue", '<skill name="review">' + "x".repeat(300)]) test(`repeated ${opening.slice(0, 20)} boundary adds a unique preceding chain`, () => {
+ const messages = [msg("user", "unique old task"), msg("user", opening), msg("assistant", "unique new task"), msg("user", opening)];
+ const instruction = buildInstruction({ messages, boundary: 3, entryId: "kept", historyStart: 0 });
+ assert.match(instruction, /preceding-message-chain/);
+ assert.match(instruction, /unique new task/);
+});
+test("unresolvable boundary chain falls back within the identifier cap", () => {
+ const messages = Array.from({ length: 30 }, () => msg("user", "continue"));
+ assert.throws(() => buildInstruction({ messages, boundary: 29, entryId: "kept", historyStart: 0 }), /ambiguous-boundary/);
+});
+test("managed effort marker can extend an otherwise exact cached prefix", () => {
+ const marker = { role: "system", content: [], output_config: { effort: "xhigh" } };
+ const first = { role: "user", content: "cached" };
+ const prefix = payloadHashes("anthropic-messages", { messages: [first, marker] })!;
+ const result = mergePayload("anthropic-messages", {}, { messages: [first, { role: "user", content: "instruction" }, marker] }, prefix);
+ assert.deepEqual((result.messages as unknown[]).slice(0, 2), [first, marker]);
 });
 test("headers retain routing but never credential-like names; effort comes from the actual payload", () => {
  assert.deepEqual(safeHeaders({ "x-opencode-session": "same-session", "content-type": "application/json", Authorization: "secret", "x-api-key": "secret", cookie: "secret", "x-access-token": "secret", "X-Custom-Key": "secret", "x-signature": "secret", "x-amz-security-token": "synthetic", "CF-Access-Client-Secret": "synthetic", "x-goog-api-key": "synthetic", "x-aws-signature": "synthetic", "Proxy-Authorization": "synthetic", "Set-Cookie": "synthetic" }), { "x-opencode-session": "same-session", "content-type": "application/json" });

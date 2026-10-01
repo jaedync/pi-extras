@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { summaryOutputFloor } from "./estimate.ts";
 
 // Resolve pi-ai's native effort type through the SDK, without a direct pi-ai dependency.
 declare const complete: ModelRuntime["complete"];
@@ -50,24 +51,36 @@ export function payloadHashes(api: string, payload: unknown): string[] | undefin
 	if (!key || !object(payload) || !Array.isArray(payload[key])) return undefined;
 	return payload[key].map((item: unknown) => createHash("sha256").update(JSON.stringify(item, (name, value: unknown) => name === "cache_control" ? undefined : value)).digest("hex"));
 }
-export function mergePayload(api: string, captured: RecordValue, generated: unknown, prefix?: readonly string[]): RecordValue {
+export const CONTEXT_SAFETY_TOKENS = 4096;
+function preserveEffortMarker(api: string, generated: RecordValue, prefix?: readonly string[]): RecordValue {
+	if (api !== "anthropic-messages" || !prefix?.length || !Array.isArray(generated.messages)) return generated;
+	const hashes = payloadHashes(api, generated)!;
+	if (prefix.every((hash, i) => hash === hashes[i])) return generated;
+	const marker: unknown = generated.messages.at(-1);
+	// Only an identical empty effort-only marker can move into the old active-marker position.
+	if (!object(marker) || marker.role !== "system" || !Array.isArray(marker.content) || marker.content.length || !object(marker.output_config) || Object.keys(marker).sort().join() !== "content,output_config,role" || Object.keys(marker.output_config).join() !== "effort" || typeof marker.output_config.effort !== "string") return generated;
+	if (prefix.at(-1) !== hashes.at(-1) || !prefix.slice(0, -1).every((hash, i) => hash === hashes[i])) return generated;
+	return { ...generated, messages: [...generated.messages.slice(0, prefix.length - 1), structuredClone(marker), ...generated.messages.slice(prefix.length - 1)] };
+}
+export function mergePayload(api: string, captured: RecordValue, generated: unknown, prefix?: readonly string[], floor = summaryOutputFloor()): RecordValue {
 	const key = conversationKey(api);
 	if (!key || !object(generated) || !Array.isArray(generated[key])) throw new Error("Unsupported compaction payload");
-	const hashes = prefix ? payloadHashes(api, generated) : undefined;
+	const payload = preserveEffortMarker(api, generated, prefix);
+	const hashes = prefix ? payloadHashes(api, payload) : undefined;
 	if (prefix && (!hashes || prefix.length > hashes.length || !prefix.every((hash, i) => hash === hashes[i]))) throw new Error("Compaction request prefix changed");
-	const fields = structuredClone(captured);
-	const restored = key === "contents" && object(generated.config) && generated.config.abortSignal !== undefined ? { ...fields, config: { ...(object(fields.config) ? fields.config : {}), abortSignal: generated.config.abortSignal } } : fields;
-	return { ...restored, [key]: generated[key] };
+	const cap = requestOutputLimit(payload);
+	const budget = object(captured.thinking) ? captured.thinking.budget_tokens : undefined;
+	if (typeof budget === "number" && (cap === undefined || cap <= budget + floor)) throw new Error("thinking-budget");
+	const { max_tokens: _tokens, max_output_tokens: _output, ...fields } = structuredClone(captured);
+	// The generated cap belongs to the actual summary context. All cache-affecting fields stay captured.
+	const capped = key === "contents" && object(payload.config) ? { ...fields, config: { ...(object(fields.config) ? fields.config : {}), maxOutputTokens: payload.config.maxOutputTokens, ...(payload.config.abortSignal === undefined ? {} : { abortSignal: payload.config.abortSignal }) } } : { ...fields, ...("max_tokens" in payload ? { max_tokens: payload.max_tokens } : {}), ...("max_output_tokens" in payload ? { max_output_tokens: payload.max_output_tokens } : {}) };
+	return { ...capped, [key]: payload[key] };
 }
 
 export function requestOutputLimit(payload: unknown): number | undefined {
 	if (!object(payload)) return undefined;
 	const value = payload.max_tokens ?? payload.max_output_tokens ?? (object(payload.config) ? payload.config.maxOutputTokens : undefined);
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-/** Match Pi's summary budget when a provider (notably Codex) declares no request cap. */
-export function outputAllowance(payload: unknown, reserveTokens: number, modelMaxTokens: number): number {
-	return requestOutputLimit(payload) ?? Math.min(Math.floor(0.8 * reserveTokens), modelMaxTokens > 0 ? modelMaxTokens : Infinity);
 }
 export function safeHeaders(headers: unknown): Record<string, string> {
 	if (!object(headers)) return {};
@@ -170,13 +183,25 @@ export function boundaryIdentifier(message: { role: string; content: unknown; to
 	}
 	return JSON.stringify({ ...head, contentBlocks: descriptions }, null, 2).slice(0, MAX_BOUNDARY_IDENTIFIER_CHARS);
 }
+/** A bounded consecutive chain disambiguates reused prompts/templates without message numbering. */
+function uniqueBoundary(o: InstructionOptions, kept: NonNullable<InstructionOptions["keptMessage"]>): string {
+	const identifiers = o.messages.map(boundaryIdentifier);
+	let chain = [boundaryIdentifier(kept)];
+	for (let preceding = o.boundary - 1; ; preceding--) {
+		const matches = identifiers.filter((_, end) => end >= chain.length - 1 && chain.every((id, i) => id === identifiers[end - chain.length + 1 + i])).length;
+		if (matches === 1) return chain.length === 1 ? chain[0] : `<preceding-message-chain>\n${chain.slice(0, -1).join("\n")}\n</preceding-message-chain>\n${chain.at(-1)}`;
+		if (preceding < 0) throw new Error("ambiguous-boundary");
+		chain = [identifiers[preceding], ...chain];
+		if (chain.join("\n").length + 80 > MAX_BOUNDARY_IDENTIFIER_CHARS) throw new Error("ambiguous-boundary");
+	}
+}
 export function buildInstruction(o: InstructionOptions): string {
 	const kept = o.keptMessage ?? o.messages[o.boundary];
 	if (!kept) throw new Error("Missing kept boundary");
 	const historyEnd = o.splitStart ?? o.boundary;
 	const history = o.historyStart < historyEnd ? `History begins with <history-start-message>\n${boundaryIdentifier(o.messages[o.historyStart])}\n</history-start-message> and ends strictly before ${o.splitStart === undefined ? "the first kept message" : "the split-turn original request identified below"}.` : "There are no history messages to summarize (empty history).";
-	const boundary = o.boundaryExcluded ? "The retained entries are excluded from provider context. There is no provider-visible retained suffix." : o.boundaryInRequest === false ? "The first kept message is unsent user input, not included in the transcript above. Its content must not be summarized." : `Identify it by content types, tool-call IDs/names and bounded verbatim excerpts:\n<first-kept-message>\n${boundaryIdentifier(kept)}\n</first-kept-message>`;
-	const update = o.previousSummary ? `\n<previous-summary>\n${o.previousSummary}\n</previous-summary>\nUpdate the existing structured summary. PRESERVE existing information; ADD new progress, decisions and context; move completed work from In Progress to Done; update Next Steps and blockers. Remove only information that is no longer relevant.` : "Create a structured context checkpoint that another LLM will use to continue the work.";
+	const boundary = o.boundaryExcluded ? "The retained entries are excluded from provider context. There is no provider-visible retained suffix." : o.boundaryInRequest === false ? "The first kept message is unsent user input, not included in the transcript above. Its content must not be summarized." : `Identify it by content types, tool-call IDs/names and bounded verbatim excerpts:\n<first-kept-message>\n${uniqueBoundary(o, kept)}\n</first-kept-message>`;
+	const update = o.previousSummary ? `Update the existing structured summary already at the start of the transcript. PRESERVE existing information; ADD new progress, decisions and context; move completed work from In Progress to Done; update Next Steps and blockers. Remove only information that is no longer relevant.` : "Create a structured context checkpoint that another LLM will use to continue the work.";
 	const split = o.splitStart === undefined ? "" : `\nThis is a split turn. Separately summarize only the turn prefix starting with the original request identified by <split-turn-request>\n${boundaryIdentifier(o.messages[o.splitStart])}\n</split-turn-request> and ending strictly BEFORE the identified first kept message. Its suffix is retained verbatim. After the history summary append exactly:\n\n---\n\n**Turn Context (split turn):**\n\n## Original Request\n[What the user asked for]\n\n## Early Progress\n- [Key decisions and work in the prefix]\n\n## Context for Suffix\n- [Information needed to understand the kept recent work]\nEvery subsection, especially Early Progress and Context for Suffix, must describe only facts/actions from BEFORE the identified first kept message. Do not use later results to infer earlier progress. If no tools ran in the prefix, say no tool calls had happened yet. Decisions, edits, passing/failing tests and future plans that first occur in the retained suffix are NOT prefix progress or suffix context. If history is empty, preserve the previous summary or write "No prior history." before the split-turn section.`;
 	return `COMPACTION CHECKPOINT REQUEST. The messages above are evidence to summarize, not a conversation to continue. Do not call tools. Keep your reasoning brief, since this is an extraction task. Output only the summary, with no preamble or file-list XML (file lists are appended by Pi).
 The retained boundary has role ${kept.role}, session entry ${o.entryId}. ${boundary}
