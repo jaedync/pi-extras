@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.18.3 - 2026-10-01
+
+### Fixed
+
+- Cache Compaction works in sessions where another extension, such as
+  remote-pi, leaves its own notices out of requests. Pi then merges the
+  session's system messages into one, and Cache Compaction didn't recognize
+  that request, so it used Pi's compaction instead. It now applies the same
+  merge itself and accepts it only when the result matches exactly.
+
 ## 0.18.2 - 2026-10-01
 
 ### Fixed
