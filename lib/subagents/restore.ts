@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { isThinking } from "./models.ts";
 import { LIVE_STATES, NO_USAGE, type AgentRecord } from "./types.ts";
 
-const STATES = new Set([...LIVE_STATES, "idle", "failed", "stopped"]);
+const STATES = new Set([...LIVE_STATES, "idle", "failed", "stopped", "interrupted"]);
 
 interface IndexData {
 	version: 1;
@@ -66,6 +66,18 @@ export class ChildIndex {
 
 	get shutdown(): string | undefined { return this.data.shutdown; }
 	get cwd(): string { return this.data.cwd; }
+}
+
+/** Pi's active branch, not abandoned tool calls, determines whether the last run finished. */
+export function restoreRecord(record: AgentRecord, entries: readonly unknown[]): AgentRecord {
+	const messages = entries.map((entry) => (entry as { message?: any }).message).filter(Boolean);
+	const last = messages.at(-1);
+	const assistant = messages.slice().reverse().find((message) => message.role === "assistant");
+	const interrupted = LIVE_STATES.has(record.state) || record.state === "interrupted" || assistant?.stopReason === "aborted"
+		|| (last && last.role !== "assistant") || assistant?.stopReason === "toolUse";
+	const report = Array.isArray(assistant?.content) ? assistant.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") : record.report;
+	return { ...record, restored: true, blocking: false, state: interrupted ? "interrupted" : record.state,
+		...(report ? { report } : {}), ...(interrupted ? { endedAt: record.endedAt ?? Date.now() } : {}) };
 }
 
 /** Only the active parent branch can claim legacy children. Forks must not inherit them. */

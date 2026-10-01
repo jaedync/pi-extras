@@ -158,7 +158,7 @@ export function mainMessageTool(tc: ToolContext): ToolDefinition {
 			const result = await tc.team.send(MAIN, params.to, params.text, { expectReply: params.expectReply === true });
 			if (!result.ok) throw new Error(result.error);
 			const tail = params.expectReply && result.delivered !== "replied" ? " Its answer will wake you." : "";
-			return text(`${deliveredWords[result.delivered] ?? "Delivered."}${tail}`, { to: params.to, delivered: result.delivered });
+			return text(`${deliveredWords[result.delivered] ?? "Delivered."}${tail}${result.notice ? `\n${result.notice}` : ""}`, { to: params.to, delivered: result.delivered, ...(result.notice ? { notice: result.notice } : {}) });
 		},
 	} as ToolDefinition;
 }
@@ -175,7 +175,7 @@ export function childMessageTool(tc: ToolContext, self: string): ToolDefinition 
 			if (!result.ok) throw new Error(result.error);
 			const roster = rosterText(self, tc.team.list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model })));
 			const head = result.reply !== undefined ? `Reply from ${params.to}:\n${result.reply}` : deliveredWords[result.delivered] ?? "Delivered.";
-			return text(`${head}\n\nTeam now:\n${roster}`, { to: params.to, delivered: result.delivered });
+			return text(`${head}${result.notice ? `\n${result.notice}` : ""}\n\nTeam now:\n${roster}`, { to: params.to, delivered: result.delivered });
 		},
 	} as ToolDefinition;
 }

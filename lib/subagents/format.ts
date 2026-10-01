@@ -37,10 +37,15 @@ function duration(record: AgentRecord, now: number): string {
 	return formatElapsed((record.endedAt ?? now) - (record.startedAt ?? record.createdAt));
 }
 
-/** A finished, failed or stopped child, as its parent reads it. */
+/** A finished, failed, stopped or interrupted child, as its parent reads it. */
 export function reportText(record: AgentRecord, now: number): string {
 	const head = `${record.name} (${record.model}${spend(record)})`;
 	const session = `${record.sessionFile ? `\nSession: ${record.sessionFile}` : ""}${record.report && record.reportFile ? `\nReport: ${record.reportFile}` : ""}`;
+	if (record.state === "interrupted") {
+		const outcome = record.launchError ? `could not resume: ${oneLine(record.launchError, 300)}` : `was interrupted after ${duration(record, now)}.`;
+		const partial = record.report ? `\n\n${record.launchError ? "" : "Last available message:\n"}${capReport(record.report, record.sessionFile, record.reportFile)}` : "";
+		return `${head} ${outcome}${session}\nResume explicitly after checking the current files.${partial}`;
+	}
 	if (record.state === "failed" || record.state === "stopped") {
 		const outcome = record.state === "failed" ? `failed after ${duration(record, now)}: ${record.error ?? "unknown error"}` : `was stopped after ${duration(record, now)}.`;
 		const partial = record.report ? `\nLast message before it ${record.state}:\n${capReport(record.report, record.sessionFile, record.reportFile)}` : "";

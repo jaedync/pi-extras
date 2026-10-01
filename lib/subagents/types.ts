@@ -7,7 +7,7 @@ import type { Thinking } from "./models.ts";
  * own children have not reported yet. idle: finished, and resumable by a
  * message. failed / stopped: ended without a normal report.
  */
-export type AgentState = "queued" | "starting" | "running" | "asking" | "waiting" | "idle" | "failed" | "stopped";
+export type AgentState = "queued" | "starting" | "running" | "asking" | "waiting" | "idle" | "failed" | "stopped" | "interrupted";
 
 export const ACTIVE_STATES: ReadonlySet<AgentState> = new Set(["starting", "running"]);
 export const LIVE_STATES: ReadonlySet<AgentState> = new Set(["queued", "starting", "running", "asking", "waiting"]);
@@ -53,6 +53,17 @@ export interface AgentRecord {
 	reportFile?: string;
 	error?: string;
 	sessionFile?: string;
+	/** Reconstructed from disk, without a live SDK handle yet. */
+	restored?: boolean;
+	interruptedBy?: "reload" | "signal" | "quit";
+	interruptionId?: string;
+	interruptedOwner?: string;
+	interruptionAnnounced?: boolean;
+	autoResumeAttempts?: number;
+	lastActivityAt?: number;
+	restoreError?: string;
+	launchFailures?: number;
+	launchError?: string;
 	/** How many runs: 1, then one more per resume. */
 	runs: number;
 	/** The message that resumed it, for the report of that run. */

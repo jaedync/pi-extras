@@ -32,7 +32,7 @@ export const shortModel = (ref: string): string => ref.slice(ref.indexOf("/") + 
  * A child main is blocked on already has its own row in the transcript.
  */
 export function selectRows(records: readonly AgentRecord[], reportPending: ReadonlySet<string>): { rows: AgentRow[]; hidden: number } {
-	const visible = records.filter((record) => (LIVE_STATES.has(record.state) || reportPending.has(record.name)) && !(record.parent === MAIN && record.blocking));
+	const visible = records.filter((record) => (LIVE_STATES.has(record.state) || record.state === "interrupted" || reportPending.has(record.name)) && !(record.parent === MAIN && record.blocking));
 	const byParent = new Map<string, AgentRecord[]>();
 	for (const record of visible) byParent.set(record.parent, [...(byParent.get(record.parent) ?? []), record]);
 	const shown = new Set(visible.map((record) => record.name));
@@ -56,7 +56,7 @@ export function phaseOf(record: AgentRecord, now: number): BandPhase {
 	switch (record.state) {
 		case "queued": return { kind: "queued" };
 		case "starting": case "running": return { kind: "running", elapsedMs: now - (record.startedAt ?? now) };
-		case "asking": case "waiting": return { kind: "calm" };
+		case "asking": case "waiting": case "interrupted": return { kind: "calm" };
 		case "idle": return { kind: "done", outcome: "ok", sinceMs: Number.POSITIVE_INFINITY };
 		case "failed": return { kind: "done", outcome: "fail", sinceMs: Number.POSITIVE_INFINITY };
 		case "stopped": return { kind: "done", outcome: "aborted", sinceMs: Number.POSITIVE_INFINITY };
@@ -69,6 +69,7 @@ function statusWords(record: AgentRecord): Seg {
 		case "idle": return { text: "report queued", color: "muted" };
 		case "failed": return { text: record.error ? `failed: ${record.error}` : "failed", color: "error" };
 		case "stopped": return { text: "stopped", color: "muted" };
+		case "interrupted": return { text: `interrupted${record.activity ? `: ${record.activity}` : ""}`, color: "warning" };
 		default: return { text: record.activity ?? "", color: "muted" };
 	}
 }
@@ -98,7 +99,7 @@ export function rowRail(record: AgentRecord, now: number): Seg[] {
 export const hiddenLine = (hidden: number): string => `+${hidden} more agent${hidden === 1 ? "" : "s"}`;
 
 const STATE_WORDS: Record<AgentState, string> = {
-	queued: "queued", starting: "starting", running: "running", asking: "asking", waiting: "waiting", idle: "finished", failed: "failed", stopped: "stopped",
+	queued: "queued", starting: "starting", running: "running", asking: "asking", waiting: "waiting", idle: "finished", failed: "failed", stopped: "stopped", interrupted: "interrupted",
 };
 
 /** One line in the /subagents picker, cut to `maxWidth`. The name leads, since the picker reads it back. */

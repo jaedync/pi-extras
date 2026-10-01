@@ -273,6 +273,22 @@ test("a message that lands while the child writes its final answer still gets ha
 	await team.close();
 });
 
+test("a recreated team reopens a finished child session when main messages it", { timeout: 20_000 }, async () => {
+	const first = await setup();
+	first.faux.setResponses([ai.fauxAssistantMessage("Remember restoration-token-42.")]);
+	first.team.spawn({ name: "restore-child", task: "Remember this", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false });
+	const record = await first.team.whenDone("restore-child");
+	await first.team.close();
+	const second = await setup();
+	second.team.restore([{ ...record, restored: true }]);
+	second.faux.setResponses([(context: any) => ai.fauxAssistantMessage(JSON.stringify(context.messages).includes("restoration-token-42") ? "Context restored." : "Context lost.")]);
+	assert.deepEqual(await second.team.send("main", "restore-child", "What do you remember?"), { ok: true, delivered: "resumed" });
+	const done = await second.team.whenDone("restore-child");
+	assert.equal(done.report, "Context restored.");
+	assert.equal(done.runs, 2);
+	await second.team.close();
+});
+
 test("an unknown model fails the child, not the session", { timeout: 20_000 }, async () => {
 	const { team, main } = await setup();
 	team.spawn({ task: "anything", parent: "main", model: "faux/nope", readOnly: false, fork: false, blocking: false });

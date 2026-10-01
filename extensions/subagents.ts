@@ -31,7 +31,7 @@ import type { ShownOverlay } from "../lib/band/modal.ts";
 import { formatMoney } from "../lib/status-plus-logic.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
-import { ChildIndex, legacyRecords } from "../lib/subagents/restore.ts";
+import { ChildIndex, legacyRecords, restoreRecord } from "../lib/subagents/restore.ts";
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
@@ -209,7 +209,9 @@ export default function subagents(pi: ExtensionAPI) {
 
 		try {
 			const records = index.load();
-			team.restore(records.length > 0 || existsSync(index.file) ? records : legacyRecords(ctx.sessionManager.getBranch(), sessionDir, MAIN, 1));
+			const roster = records.length > 0 || existsSync(index.file) ? records : legacyRecords(ctx.sessionManager.getBranch(), sessionDir, MAIN, 1);
+			team.restore(roster.map((record) => restoreRecord(record, record.sessionFile && existsSync(record.sessionFile)
+				? sdk.SessionManager.open(record.sessionFile, sessionDir, cwd).getBranch() : [])));
 		} catch (error) {
 			ctx.ui.notify(`subagents: could not restore ${index.file}: ${(error as Error).message}`, "warning");
 		}
@@ -233,9 +235,9 @@ export default function subagents(pi: ExtensionAPI) {
 		return {
 			team, mail, tools, config,
 			async close() {
-				unsubscribe();
 				mail.dispose();
 				await team.close();
+				unsubscribe();
 			},
 		};
 	};

@@ -11,6 +11,7 @@
  * - A reply to someone blocked on a question resolves that question instead.
  * A child is not done until its own children have reported.
  */
+import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
 import { saveReport } from "./reports.ts";
@@ -31,10 +32,13 @@ export interface TeamOptions {
 	sessionFileFor?: (name: string) => string | undefined;
 	now?: () => number;
 	warn?: (message: string) => void;
+	/** Restored sessions have no handle until resumed, but their inspector still has a transcript. */
+	messagesFor?: (record: AgentRecord) => readonly unknown[];
+	prepareResume?: (record: AgentRecord) => { model: string; note?: string; notice?: string };
 }
 
 export type SendResult =
-	| { ok: true; delivered: "steered" | "resumed" | "queued" | "replied" | "main" | "inbox"; reply?: string }
+	| { ok: true; delivered: "steered" | "resumed" | "queued" | "replied" | "main" | "inbox"; reply?: string; notice?: string }
 	| { ok: false; error: string };
 
 interface Pending {
@@ -64,6 +68,8 @@ export class Team {
 	/** Tool calls a child had finished when it gave that answer. */
 	private readonly answeredAt = new Map<string, number>();
 	private closed = false;
+	private closing: Promise<void> | undefined;
+	private readonly resumePrompts = new Map<string, string>();
 	private readonly now: () => number;
 	private readonly options: TeamOptions;
 
@@ -96,6 +102,8 @@ export class Team {
 		}
 	}
 
+	markRecovery(name: string, patch: Partial<AgentRecord>): void { this.patch(name, patch); }
+
 	/** Validates depth, names the child, and starts or queues it. */
 	spawn(request: SpawnRequest): { ok: true; record: AgentRecord } | { ok: false; error: string } {
 		if (this.closed) return { ok: false, error: "The session is shutting down." };
@@ -108,7 +116,7 @@ export class Team {
 		const record: AgentRecord = {
 			name, parent: request.parent, depth, task: request.task, model: request.model, readOnly: request.readOnly,
 			fork: request.fork, blocking: request.blocking, state: "queued", createdAt: this.now(), activity: "queued",
-			toolCalls: 0, usage: NO_USAGE, runs: 0, ...(request.thinking ? { thinking: request.thinking } : {}),
+			toolCalls: 0, usage: NO_USAGE, runs: 0, autoResumeAttempts: 0, ...(request.thinking ? { thinking: request.thinking } : {}),
 			...(sessionFile ? { sessionFile } : {}),
 			...(request.group ? { group: request.group } : {}),
 		};
@@ -132,7 +140,8 @@ export class Team {
 		if (record?.blocking) this.patch(name, { blocking: false });
 	}
 
-	async send(from: string, to: string, text: string, options: { expectReply?: boolean; signal?: AbortSignal } = {}): Promise<SendResult> {
+	async send(from: string, to: string, text: string, options: { expectReply?: boolean; signal?: AbortSignal; automatic?: boolean } = {}): Promise<SendResult> {
+		if (this.closed) return { ok: false, error: "The session is shutting down." };
 		if (to === from) return { ok: false, error: "That is you." };
 		if (to === EVERYONE) return this.broadcast(from, text, options.expectReply === true);
 		// The user can answer any question, whoever it was put to.
@@ -155,7 +164,7 @@ export class Team {
 		// Main never blocks: its question is delivered, and the answer wakes it later.
 		if (from === MAIN && options.expectReply) {
 			const idle = this.records.get(to)?.state === "idle";
-			const result = this.deliverToChild(from, to, body, true, said);
+			const result = this.deliverToChild(from, to, body, true, said, options.automatic);
 			if (result.ok) this.owesMain.add(to);
 			if (result.ok && idle && result.delivered === "resumed") this.resumedToAnswer.add(to);
 			return result;
@@ -171,7 +180,7 @@ export class Team {
 			this.options.deliverToMain(options.expectReply ? { kind: "question", from, text } : answering ? { kind: "reply", from, text } : { kind: "note", from, text });
 			result = { ok: true, delivered: "main" };
 		} else {
-			result = this.deliverToChild(from, to, body, options.expectReply === true, said);
+			result = this.deliverToChild(from, to, body, options.expectReply === true, said, options.automatic);
 			// Main should never be surprised by work the user asked for directly.
 			if (result.ok && from === USER) this.options.deliverToMain({ kind: "relay", from, to, text, answered: false });
 		}
@@ -198,12 +207,26 @@ export class Team {
 		this.finish(name);
 	}
 
-	/** Stops every child and releases their sessions. */
-	async close(): Promise<void> {
+	/** Freeze records before aborting, so SDK cancellation cannot turn shutdown into a failure. */
+	interrupt(reason: AgentRecord["interruptedBy"] = "quit", owner?: string): void {
 		this.closed = true;
-		for (const record of this.list().filter((entry) => entry.parent === MAIN)) await this.stop(record.name);
-		await Promise.allSettled([...this.handles.values()].map((handle) => handle.dispose()));
-		this.handles.clear();
+		for (const record of this.live()) this.patch(record.name, { state: "interrupted", endedAt: this.now(), blocking: false,
+			interruptedBy: reason, interruptionId: randomUUID(), interruptedOwner: owner, interruptionAnnounced: false,
+			autoResumeAttempts: record.autoResumeAttempts ?? 0 });
+		this.queue.splice(0);
+		for (const questions of this.questions.values()) for (const question of questions) question.reject(new Error("interrupted"));
+		for (const [name, waiters] of this.waiters) for (const resolve of waiters) resolve(this.records.get(name)!);
+		this.waiters.clear();
+	}
+
+	/** Releases sessions without sending misleading stopped reports to the old parent. */
+	close(reason: AgentRecord["interruptedBy"] = "quit", owner?: string): Promise<void> {
+		if (this.closing) return this.closing;
+		this.interrupt(reason, owner);
+		return this.closing = (async () => {
+			await Promise.allSettled([...this.handles.values()].map(async (handle) => { await handle.abort(); await handle.dispose(); }));
+			this.handles.clear();
+		})();
 	}
 
 	private put(record: AgentRecord): void {
@@ -218,7 +241,7 @@ export class Team {
 
 	private pump(): void {
 		let active = this.list().filter((record) => ACTIVE_STATES.has(record.state)).length;
-		while (active < this.options.maxConcurrent && this.queue.length > 0) {
+		while (!this.closed && active < this.options.maxConcurrent && this.queue.length > 0) {
 			const name = this.queue.shift()!;
 			if (this.records.get(name)?.state !== "queued") continue;
 			active++;
@@ -233,21 +256,52 @@ export class Team {
 			handle = await this.options.launcher.launch(this.records.get(name)!, {
 				update: (patch) => {
 					const record = this.records.get(name);
-					if (record && LIVE_STATES.has(record.state)) this.patch(name, this.workedSinceAnswer(name, patch) ? { ...patch, answeredMain: undefined } : patch);
+					if (record && LIVE_STATES.has(record.state)) this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.workedSinceAnswer(name, patch) ? { answeredMain: undefined } : {}) });
 				},
 			});
 		} catch (error) {
-			this.fail(name, error);
+			if (!this.closed) {
+				if (this.resumePrompts.has(name)) this.resumeFailed(name, error);
+				else this.fail(name, error);
+			}
 			return;
 		}
-		if (this.records.get(name)?.state === "stopped") {
+		if (this.closed || this.records.get(name)?.state === "stopped") {
 			await handle.dispose().catch(() => undefined);
 			return;
 		}
 		this.handles.set(name, handle);
 		this.patch(name, handle.sessionFile ? { sessionFile: handle.sessionFile } : {});
 		const inbox = this.takeInbox(name);
-		await this.run(name, [this.records.get(name)!.task, ...inbox].join("\n\n"));
+		const saved = this.records.get(name)!;
+		const resumed = this.resumePrompts.get(name);
+		const unstarted = saved.runs === 0 || !handle.messages().some((message) => (message as { role?: string }).role === "user");
+		const prompt = resumed ? `${unstarted ? `${saved.task}\n\n` : ""}${resumed}` : saved.task;
+		this.resumePrompts.delete(name);
+		await this.run(name, [prompt, ...inbox].join("\n\n"));
+	}
+
+	/** Launch failures are not completed child runs and must not publish over a prior report. */
+	private resumeFailed(name: string, error: unknown): void {
+		const message = error instanceof Error ? error.message : String(error);
+		const previous = this.records.get(name)!;
+		this.resumePrompts.delete(name);
+		this.runStarts.delete(name);
+		this.forgetAnswer(name);
+		this.patch(name, { state: "interrupted", error: message, restoreError: message, launchError: message,
+			launchFailures: (previous.launchFailures ?? 0) + 1, endedAt: this.now(), activity: `resume launch failed: ${message}`,
+			interruptedBy: "quit", interruptionId: randomUUID(), interruptionAnnounced: false });
+		const record = this.records.get(name)!;
+		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
+		this.waiters.delete(name);
+		this.owesMain.delete(name);
+		const failure = { ...record, reportFile: undefined,
+			report: `Resume launch failed: ${message}. The child remains interrupted; fix the problem and resume it again.` };
+		const asked = this.questions.get(record.parent)?.find((question) => question.to === name);
+		if (asked) asked.resolve(reportText(failure, this.now()));
+		else if (record.parent === MAIN) this.options.deliverToMain({ kind: "report", record: failure });
+		else this.deliverToChild(name, record.parent, reportText(failure, this.now()), true);
+		this.pump();
 	}
 
 	private async run(name: string, text: string): Promise<void> {
@@ -260,12 +314,12 @@ export class Team {
 			let next: string | null = text;
 			while (next !== null) {
 				await handle.prompt(next);
-				if (this.records.get(name)?.state === "stopped") return;
+				if (this.closed || this.records.get(name)?.state === "stopped") return;
 				const late = [...handle.takeQueued(), ...this.takeInbox(name)];
 				next = late.length > 0 ? late.join("\n\n") : null;
 			}
 		} catch (error) {
-			if (this.records.get(name)?.state !== "stopped") this.fail(name, error);
+			if (!this.closed && this.records.get(name)?.state !== "stopped") this.fail(name, error);
 			return;
 		}
 		this.settle(name, this.runText(name));
@@ -356,7 +410,7 @@ export class Team {
 	}
 
 	/** `said` is how the report of a run this message starts names it. */
-	private deliverToChild(from: string, to: string, body: string, wakes: boolean, said = body): SendResult {
+	private deliverToChild(from: string, to: string, body: string, wakes: boolean, said = body, automatic = false): SendResult {
 		const target = this.records.get(to);
 		if (!target) return { ok: false, error: `No agent named ${to}. ${this.knownNames()}` };
 		if (target.state === "failed" || target.state === "stopped") return { ok: false, error: `${to} has ${target.state}.` };
@@ -367,9 +421,22 @@ export class Team {
 			return { ok: true, delivered: "steered" };
 		}
 		const resumes = wakes || from === target.parent || from === USER;
+		if (!handle && resumes && (target.state === "idle" || target.state === "waiting" || target.state === "interrupted")) {
+			const warning = target.state === "interrupted" ? "Your previous run was interrupted. Its last tool call may not have completed and files may have changed. Verify the current state before continuing.\n\n" : "";
+			let prepared: { model: string; note?: string; notice?: string } = { model: target.model };
+			try { if (!automatic) prepared = this.options.prepareResume?.(target) ?? prepared; }
+			catch (error) { return { ok: false, error: (error as Error).message }; }
+			this.resumePrompts.set(to, `${warning}${prepared.note ? `${prepared.note}\n\n` : ""}${body}`);
+			this.patch(to, { state: "queued", model: prepared.model, resumedBy: { from, text: said }, startedAt: this.now(), error: undefined, restoreError: undefined, launchError: undefined,
+				...(!automatic ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
+			this.queue.push(to);
+			this.pump();
+			return { ok: true, delivered: "resumed", ...(prepared.notice ? { notice: prepared.notice } : {}) };
+		}
 		if ((target.state === "idle" || target.state === "waiting") && handle && resumes) {
 			// A new run: time it on its own and forget what the last one answered.
-			if (target.state === "idle") this.patch(to, { resumedBy: { from, text: said }, startedAt: this.now() });
+			if (target.state === "idle") this.patch(to, { resumedBy: { from, text: said }, startedAt: this.now(),
+				...(!automatic && (from === MAIN || from === USER) ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
 			void this.run(to, [...this.takeInbox(to), body].join("\n\n"));
 			return { ok: true, delivered: "resumed" };
 		}
