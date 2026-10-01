@@ -294,7 +294,7 @@ large-window models, raise the reserve in Pi's `settings.json`; 32k is about
 
 **Providers.** Anthropic Messages, OpenAI Responses (including Codex and
 Azure), Google Generative AI and Vertex. Other APIs use Pi's compaction.
-Tested with Pi 0.99.2. If another extension changes requests in
+Tested with Pi 1.0.0. If another extension changes requests in
 `context_with_system`, `before_provider_headers` or `before_provider_request`,
 load it before this one.
 
