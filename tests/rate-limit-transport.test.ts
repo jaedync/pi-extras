@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 type Provider = NonNullable<ReturnType<ModelRegistry["getProvider"]>>;
@@ -41,6 +41,13 @@ function fixture(shared?: { native?: any; config?: any; base: any }) {
 async function request(f: ReturnType<typeof fixture>, response: Response, method: "stream" | "streamSimple" = "streamSimple", options: Record<string, unknown> = {}) {
 	const guarded = f.registry.getProvider();
 	return guarded[method](model, context, { ...options, fetch: async () => response }) as Promise<Response>;
+}
+
+async function modelsFileRuntime(sdk: any, ai: any, modelsPath: string, credentials = new ai.InMemoryCredentialStore()) {
+	// modelsPath otherwise selects a sibling FileModelsStore. Pi's unawaitable
+	// registration refreshes can create its cache/lock during fixture cleanup.
+	// Keep real models.json reloads, but give the unrelated catalog cache no disk IO.
+	return sdk.ModelRuntime.create({ credentials, modelsPath, modelsStore: new ai.InMemoryModelsStore(), allowModelNetwork: false, refreshOnCreate: false });
 }
 
 async function builtinPair() {
@@ -333,7 +340,7 @@ for (const kind of ["native", "builtin"] as const) test(`${kind} provider preser
 	const guard = createQuotaTransportGuard();
 	try {
 		await writeFile(modelsPath, JSON.stringify({ providers: {} }));
-		const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath, allowOffline: true, refreshOnCreate: false });
+		const runtime = await modelsFileRuntime(sdk, ai, modelsPath);
 		const registry = new sdk.ModelRegistry(runtime); const original = registry.getProvider("anthropic");
 		if (kind === "native") registry.registerProvider(original);
 		const selected = registry.getAll().find((m: any) => m.provider === "anthropic");
@@ -352,6 +359,43 @@ for (const kind of ["native", "builtin"] as const) test(`${kind} provider preser
 		guard.dispose(); assert.equal(registry.getRegisteredNativeProvider("anthropic"), kind === "native" ? original : undefined);
 		assert.equal(registry.getRegisteredProviderConfig("anthropic"), undefined);
 	} finally { guard.dispose(); await rm(dir, { recursive: true, force: true }); }
+});
+
+for (const kind of ["native", "builtin"] as const) test(`${kind} quota disposal refresh cannot recreate a removed models directory`, { timeout: 10_000 }, async (t) => {
+	const sdk = await import(pathToFileURL(join(agentRoot, "dist/index.js")).href);
+	const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+	const { ModelConfig } = await import(pathToFileURL(join(agentRoot, "dist/core/model-config.js")).href);
+	const dir = await mkdtemp(join(tmpdir(), "quota-models-disposal-")); const modelsPath = join(dir, "models.json");
+	const guard = createQuotaTransportGuard(); const entered = deferred(); const resume = deferred();
+	const refreshes: Promise<unknown>[] = []; let hold = false;
+	const load = ModelConfig.load.bind(ModelConfig);
+	// Registration refreshes are fire-and-forget in Pi 0.99.2. Gate its real config
+	// read so disposal's cache access deterministically lands after directory removal.
+	t.mock.method(ModelConfig, "load", async (path: string) => {
+		const config = await load(path);
+		if (hold && path === modelsPath) { entered.resolve(); await resume.promise; }
+		return config;
+	});
+	try {
+		await writeFile(modelsPath, JSON.stringify({ providers: {} }));
+		const runtime = await modelsFileRuntime(sdk, ai, modelsPath);
+		const refresh = runtime.refresh.bind(runtime);
+		t.mock.method(runtime, "refresh", (options: unknown) => {
+			const pending = refresh(options); refreshes.push(pending); return pending;
+		});
+		const registry = new sdk.ModelRegistry(runtime);
+		if (kind === "native") registry.registerProvider(registry.getProvider("anthropic"));
+		const selected = registry.getAll().find((candidate: any) => candidate.provider === "anthropic");
+		guard.ensure({ modelRegistry: registry, model: selected } as never);
+		await Promise.all(refreshes);
+		hold = true; guard.dispose(); await entered.promise;
+		await rm(dir, { recursive: true, force: true });
+		resume.resolve(); await Promise.all(refreshes);
+		await assert.rejects(stat(dir), { code: "ENOENT" }, "Pi's late refresh must not recreate the removed fixture directory");
+	} finally {
+		hold = false; resume.resolve(); guard.dispose(); await Promise.all(refreshes);
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
 test("gated SDK parent API A retains foreign S and one HTTP attempt while child API B is explicitly unsupported", { timeout: 10_000 }, async () => {
@@ -444,7 +488,7 @@ for (const kind of ["legacy", "native"] as const) test(`${kind} invalid models-f
 		await writeFile(modelsPath, JSON.stringify({ providers: {} }));
 		const credentials = new ai.InMemoryCredentialStore();
 		await credentials.modify("anthropic", async () => ({ type: "api_key", key: "synthetic-not-a-credential" }));
-		const runtime = await sdk.ModelRuntime.create({ credentials, modelsPath, allowModelNetwork: false, refreshOnCreate: false });
+		const runtime = await modelsFileRuntime(sdk, ai, modelsPath, credentials);
 		const registry = new sdk.ModelRegistry(runtime);
 		if (kind === "native") registry.registerProvider(registry.getProvider("anthropic"));
 		else registry.registerProvider("anthropic", { apiKey: "synthetic-not-a-credential", baseUrl: "https://retained.invalid", headers: { retained: "yes" } });

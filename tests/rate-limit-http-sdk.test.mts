@@ -113,7 +113,9 @@ async function nativeRuntime(baseUrl: string, fixture: NativeFixture = anthropic
 	await credentials.modify(fixture.provider, async () => fixture === codex
 		? { type: "oauth", access: codexToken, refresh: "synthetic-never-refresh", expires: Date.now() + 86_400_000 }
 		: { type: "api_key", key: "synthetic-http-test-key" });
-	const runtime = await sdk.ModelRuntime.create({ credentials, modelsPath: options.modelsPath ?? null, allowModelNetwork: false, refreshOnCreate: false });
+	// A real models.json must not opt these fixtures into Pi's background disk
+	// catalog cache: registration/shutdown refreshes can outlive scratch cleanup.
+	const runtime = await sdk.ModelRuntime.create({ credentials, modelsPath: options.modelsPath ?? null, modelsStore: new ai.InMemoryModelsStore(), allowModelNetwork: false, refreshOnCreate: false });
 	// Override only endpoint/auth. Do not replace the native API with a faux stream.
 	runtime.registerProvider(fixture.provider, fixture === codex ? { baseUrl, oauth: {
 		name: "Synthetic native Codex OAuth", isSubscription: true,
