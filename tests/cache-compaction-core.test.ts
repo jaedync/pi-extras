@@ -114,10 +114,10 @@ for (const api of ["google-generative-ai", "google-vertex"]) test(`${api} replac
  const captured = capturePayload(api, { contents: [], config: { abortSignal: previous.signal, maxOutputTokens: 200, thinkingConfig: { thinkingBudget: 123 } } })!;
  assert.equal("abortSignal" in (captured.config as Record<string, unknown>), false);
  previous.abort();
- const merged = mergePayload(api, captured, { contents: ["new"], config: { abortSignal: current.signal, maxOutputTokens: 200 } });
+ const merged = mergePayload(api, captured, { contents: ["new"], config: { abortSignal: current.signal, maxOutputTokens: 10000 } });
  assert.equal((merged.config as any).abortSignal, current.signal);
  assert.equal((merged.config as any).abortSignal.aborted, false);
- assert.equal((merged.config as any).maxOutputTokens, 200);
+ assert.equal((merged.config as any).maxOutputTokens, 10000);
  assert.deepEqual((merged.config as any).thinkingConfig, { thinkingBudget: 123 });
 });
 test("output limit shapes and evidence-based summary floor", () => {
@@ -135,7 +135,13 @@ for (const [api, key, cap] of [["anthropic-messages", "messages", "max_tokens"],
  assert.throws(() => mergePayload(api, { [cap]: 16000, thinking: { budget_tokens: 7000 } }, { [key]: [], [cap]: 14000 }), /thinking-budget/);
 });
 test("Google replays only the generated output cap within captured config", () => {
- assert.deepEqual(mergePayload("google-generative-ai", { config: { maxOutputTokens: 16000, thinkingConfig: { thinkingBudget: 1000 } } }, { contents: [], config: { maxOutputTokens: 8000 } }).config, { maxOutputTokens: 8000, thinkingConfig: { thinkingBudget: 1000 } });
+ assert.deepEqual(mergePayload("google-generative-ai", { config: { maxOutputTokens: 16000, thinkingConfig: { thinkingBudget: 1000 } } }, { contents: [], config: { maxOutputTokens: 10000 } }).config, { maxOutputTokens: 10000, thinkingConfig: { thinkingBudget: 1000 } });
+});
+for (const api of ["google-generative-ai", "google-vertex"]) test(`${api} preserves thinking budget only when generated cap leaves summary room`, () => {
+ const captured = { config: { maxOutputTokens: 32000, thinkingConfig: { thinkingBudget: 7000 } } };
+ assert.throws(() => mergePayload(api, captured, { contents: [], config: { maxOutputTokens: 14000 } }), /thinking-budget/);
+ const result = mergePayload(api, captured, { contents: [], config: { maxOutputTokens: 18000 } });
+ assert.deepEqual(result.config, { maxOutputTokens: 18000, thinkingConfig: { thinkingBudget: 7000 } });
 });
 for (const opening of ["continue", '<skill name="review">' + "x".repeat(300)]) test(`repeated ${opening.slice(0, 20)} boundary adds a unique preceding chain`, () => {
  const messages = [msg("user", "unique old task"), msg("user", opening), msg("assistant", "unique new task"), msg("user", opening)];

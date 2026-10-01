@@ -1,8 +1,8 @@
 import { convertToLlm, type ExtensionAPI, type ExtensionContext, type SessionProjection, type SessionBeforeCompactEvent, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { CONFIG_FILE, readSection } from "../lib/extras-config.ts";
-import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, loadConfig, mergePayload, payloadHashes, reconcile, CONTEXT_SAFETY_TOKENS, requestEffort, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
+import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, loadConfig, mergePayload, payloadHashes, reconcile, requestEffort, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
 
-import { estimateRequestTokens, summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
+import { estimateRequestContext, contextSafetyTokens, summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
 
 type Message = SessionProjection["messages"][number];
 interface Captured extends RequestIdentity, Snapshot {
@@ -141,6 +141,7 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 			}
 			const request = pending;
 			pending = undefined;
+			latest = undefined;
 			if (!request) return;
 			const current = identity(ctx, now());
 			if (!current || current.provider !== request.provider || current.id !== request.id || current.api !== request.api || current.sessionId !== request.sessionId) return;
@@ -164,8 +165,8 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 			if (reason || !captured?.payload) return fallback(reason ?? "no-payload");
 			const request = prepareRequest(captured, event, ctx, now());
 			if ("fallback" in request) return fallback(request.fallback);
-			const estimated = estimateRequestTokens(convertToLlm(request.messages));
-			const available = model.contextWindow - estimated - CONTEXT_SAFETY_TOKENS;
+			const estimated = estimateRequestContext(convertToLlm(request.messages));
+			const available = model.contextWindow - estimated.tokens - contextSafetyTokens(estimated.tailTokens);
 			const floor = summaryOutputFloor(p.previousSummary);
 			if (available < floor) return fallback("context-window");
 			if (event.signal.aborted) return fallback("aborted");
@@ -175,7 +176,7 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 			const response = await ctx.modelRegistry.complete(model, { messages: convertToLlm(request.messages) }, {
 				...requestOptions, headers: captured.headers, effort: captured.effort,
 				// complete() uses native stream(), not streamSimple()'s automatic context clamp.
-				maxTokens: Math.min(model.maxTokens, available),
+				maxTokens: Math.min(model.maxTokens > 0 ? model.maxTokens : Infinity, available),
 				sessionId: captured.sessionId, signal: event.signal,
 				onPayload: (generated: unknown) => {
 					try { return mergePayload(model.api, captured.payload!, generated, captured.payloadPrefix, floor); }

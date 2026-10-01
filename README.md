@@ -146,18 +146,20 @@ catalog costs, not subscription invoices. Savings, latency and summary quality
 vary; the two-model A/B summaries were comparable after the boundary fix, not
 proven equivalent. Post-compaction turns still start with a new, cold summary prefix.
 
-Headroom uses Pi's usage-anchored context estimate and a 4,096-token safety
-margin. The required output room is the previous summary's estimated size plus
-6,000 tokens for summary growth and 2,000 for reasoning. The request uses the
+Headroom uses Pi's usage-anchored context estimate and a safety margin of
+4,096 tokens plus 60% of the unanchored tail estimate (including the instruction),
+since numeric logs can tokenize more densely than characters/4. The required
+output room is the previous summary's estimated size plus 6,000 tokens for summary growth and 2,000 for reasoning. The request uses the
 full available room (up to the model's output ceiling), not this minimum.
 Codex declares no wire output cap, so the same headroom gate is conservative,
 not an enforceable output ceiling.
-Budget-thinking Anthropic requests also need room above the unchanged thinking
-budget plus that summary minimum; otherwise they fall back without sending.
+Budget-thinking Anthropic and fixed-budget Google/Vertex requests also need room
+above the unchanged thinking budget plus that summary minimum; otherwise they
+fall back without sending.
 
 At the default `compaction.reserveTokens: 16384`, automatic threshold compaction
-has roughly 12k tokens minus the new tail/instruction left. First summaries
-usually fit; updated summaries in long sessions usually do not and fall back.
+has roughly 12k tokens minus the new tail/instruction and its skew margin left.
+First summaries usually fit; updated summaries in long sessions usually do not and fall back.
 For large-window models, raising `compaction.reserveTokens` to 32,768 (or
 49,152) leaves more room. 32k is about 3% of a 1M-token window. Manual `/compact`
 earlier in the window normally has ample room, but still checks the same gate.
@@ -168,9 +170,9 @@ and 49,152. All 58 first summaries fit the default reserve, but only 48 updated
 summaries did. Method: session JSONL files over 200 KB in the local main-session
 and subagent directories; compaction summaries with file-list XML removed;
 size estimated as characters/4; compare reserve minus 4,096 against previous
-summary size plus 8,000. These rates exclude the new tail/instruction, which
-reduces available room further. No passing sample's actual summary exceeded
-that room. These observations are not guarantees for other workloads.
+summary size plus 8,000. These rates exclude the new tail/instruction and its
+additional skew margin, which reduce available room further. No passing sample's
+actual summary exceeded that room. These observations are not guarantees for other workloads.
 
 Configure `cacheCompaction` in `PI_CODING_AGENT_DIR/pi-extras.json` (default
 `~/.pi/agent/pi-extras.json`), then `/reload`:

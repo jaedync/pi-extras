@@ -51,7 +51,6 @@ export function payloadHashes(api: string, payload: unknown): string[] | undefin
 	if (!key || !object(payload) || !Array.isArray(payload[key])) return undefined;
 	return payload[key].map((item: unknown) => createHash("sha256").update(JSON.stringify(item, (name, value: unknown) => name === "cache_control" ? undefined : value)).digest("hex"));
 }
-export const CONTEXT_SAFETY_TOKENS = 4096;
 function preserveEffortMarker(api: string, generated: RecordValue, prefix?: readonly string[]): RecordValue {
 	if (api !== "anthropic-messages" || !prefix?.length || !Array.isArray(generated.messages)) return generated;
 	const hashes = payloadHashes(api, generated)!;
@@ -69,7 +68,8 @@ export function mergePayload(api: string, captured: RecordValue, generated: unkn
 	const hashes = prefix ? payloadHashes(api, payload) : undefined;
 	if (prefix && (!hashes || prefix.length > hashes.length || !prefix.every((hash, i) => hash === hashes[i]))) throw new Error("Compaction request prefix changed");
 	const cap = requestOutputLimit(payload);
-	const budget = object(captured.thinking) ? captured.thinking.budget_tokens : undefined;
+	const config = object(captured.config) ? captured.config : undefined;
+	const budget = key === "contents" && config && object(config.thinkingConfig) ? config.thinkingConfig.thinkingBudget : object(captured.thinking) ? captured.thinking.budget_tokens : undefined;
 	if (typeof budget === "number" && (cap === undefined || cap <= budget + floor)) throw new Error("thinking-budget");
 	const { max_tokens: _tokens, max_output_tokens: _output, ...fields } = structuredClone(captured);
 	// The generated cap belongs to the actual summary context. All cache-affecting fields stay captured.

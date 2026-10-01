@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentRoot } from "./support/pi-runtime.mjs";
 import cacheCompaction from "../extensions/cache-compaction.ts";
-import { estimateRequestTokens } from "../lib/cache-compaction/estimate.ts";
+import { estimateRequestTokens, estimateRequestContext, contextSafetyTokens } from "../lib/cache-compaction/estimate.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "prefix-sdk-"));
 const originalFetch = globalThis.fetch;
@@ -16,7 +16,7 @@ const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-wo
 const usage = { input: 10, output: 2, cacheRead: 90, cacheWrite: 0, totalTokens: 102, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 } };
 const textOf = (message: any) => typeof message.content === "string" ? message.content : (message.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n");
 
-async function fixture(api = "anthropic-messages", enabled = true, automatic?: "after" | "pre" | "codex", reserveTokens = 16384) {
+async function fixture(api = "anthropic-messages", enabled = true, automatic?: "after" | "pre" | "codex", reserveTokens = 16384, modelMaxTokens?: number) {
 	const agentDir = mkdtempSync(join(scratch, "agent-"));
 	mkdirSync(agentDir, { recursive: true });
 	const configFile = join(agentDir, "pi-extras.json");
@@ -32,7 +32,7 @@ async function fixture(api = "anthropic-messages", enabled = true, automatic?: "
 	const errors: unknown[] = [];
 	const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
 	const key = api.includes("responses") ? "input" : api.startsWith("google") ? "contents" : "messages";
-	runtime.registerProvider("fixture", { api, apiKey: "synthetic-not-a-credential", baseUrl: "http://127.0.0.1:1", models: [{ id: "model", name: "model", reasoning: false, input: ["text"], contextWindow: automatic ? 200000 : 100000, maxTokens: automatic ? 32000 : 2000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+	runtime.registerProvider("fixture", { api, apiKey: "synthetic-not-a-credential", baseUrl: "http://127.0.0.1:1", models: [{ id: "model", name: "model", reasoning: false, input: ["text"], contextWindow: automatic ? 200000 : 100000, maxTokens: modelMaxTokens ?? (automatic ? 32000 : 2000), cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
 		streamSimple(model: any, context: any, options: any) {
 			const stream = new ai.AssistantMessageEventStream();
 			void (async () => {
@@ -244,6 +244,33 @@ for (const stopReason of ["aborted", "error"]) for (const suffix of ["visible", 
 	assert.equal(result.compaction.details.cachePrefix, true);
 	const instruction = textOf(f.calls.at(-1)!.context.messages.at(-1)); assert.doesNotMatch(instruction, /invisible-kept-content/);
 	assert.match(instruction, suffix === "visible" ? /visible-kept-content/ : /unsent user input/);
+});
+test("skew margin covers only the unanchored tail, including the instruction", () => {
+	const messages: any[] = [{ role: "assistant", content: [], timestamp: 1, stopReason: "stop", usage: { ...usage, totalTokens: 84000 } }, { role: "assistant", content: [{ type: "text", text: "1234567890 ".repeat(728) }], timestamp: 2, stopReason: "stop", usage: { ...usage, input: 0, output: 0, cacheRead: 0, totalTokens: 0 } }, { role: "user", content: "x".repeat(2800), timestamp: 3 }];
+	const estimate = estimateRequestContext(messages); assert.equal(estimate.tailTokens, 2702); assert.equal(estimate.tokens, 86702);
+	assert.ok(100000 - estimate.tokens - 4096 >= 8000);
+	assert.ok(100000 - estimate.tokens - contextSafetyTokens(estimate.tailTokens) < 8000);
+	assert.equal(estimateRequestContext(messages.slice(1)).tailTokens, 2702, "without usage, all input is unanchored");
+});
+test("dense unanchored tail falls back despite fitting the old fixed margin", { timeout: 15000 }, async (t) => {
+	const f = await fixture(); t.after(() => f.close()); f.setUsage(84000); await f.warm();
+	const last = f.session.messages.at(-1);
+	f.session.sessionManager.appendMessage({ ...last, content: [{ type: "text", text: "1234567890 ".repeat(728) }], timestamp: last.timestamp + 1, usage: { ...usage, input: 0, output: 0, cacheRead: 0, totalTokens: 0 } }); f.session.refreshContext();
+	const entry = await f.session.compact();
+	assert.notEqual(entry.details?.cachePrefix, true); assert.ok(f.notices.includes("Compaction: default (context-window)"));
+	assert.ok(!f.calls.some((call) => textOf(call.context.messages.at(-1)).includes("COMPACTION CHECKPOINT REQUEST")), "no oversized prefix request was sent");
+});
+for (const mode of ["no-pending", "invalid-context", "invalid-payload"]) test(`uncaptured new ${mode} request invalidates the old capture`, { timeout: 15000 }, async (t) => {
+	const f = await fixture(); t.after(() => f.close()); await f.warm();
+	if (mode !== "no-pending") await f.session.extensionRunner.emit({ type: "context_with_system", messages: mode === "invalid-context" ? [] : f.captures.at(-1) });
+	const payload = mode === "invalid-payload" ? { model: "uncaptured" } : { ...f.calls.at(-1)!.payload, messages: [...f.calls.at(-1)!.payload.messages, { role: "user", content: "new real request" }] };
+	await f.session.extensionRunner.emit({ type: "before_provider_request", payload });
+	const entry = await f.session.compact(); assert.notEqual(entry.details?.cachePrefix, true); assert.ok(f.notices.includes("Compaction: default (no-request)"));
+});
+test("zero model output limit means uncapped, never a zero-token summary request", { timeout: 15000 }, async (t) => {
+	const f = await fixture("anthropic-messages", true, undefined, 16384, 0); t.after(() => f.close()); await f.warm();
+	const entry = await f.session.compact(); assert.equal(entry.details.cachePrefix, true);
+	assert.ok(f.calls.at(-1)!.payload.max_tokens > 8000);
 });
 test("usage-anchored estimator matches Pi's own compaction helper", async () => {
 	const { estimateContextTokens } = await import(pathToFileURL(join(agentRoot, "dist/core/compaction/compaction.js")).href);
