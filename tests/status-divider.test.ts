@@ -14,3 +14,11 @@ test("divider keeps one timer and drops TPS, TTFT, then tokens, without wrapping
   if(!row.includes("tokens")&&width>=30)assert.match(row,/Thinking…/);
  }
 });
+test("the editor's hidden-line count sits beside Time and retires with it",()=>{
+ const scrolled={...model,hiddenLineCount:3};
+ assert.match(renderStatusDivider(scrolled,130,paint),/↑ 3 Time 00:15\.8 ─$/);
+ for(let width=0;width<=150;width++){
+  const row=renderStatusDivider(scrolled,width,paint);assert.ok(visibleWidth(row)<=width);
+  assert.equal(row.includes("↑ 3"),row.includes("Time "),`width ${width}: ${row}`);
+ }
+});
