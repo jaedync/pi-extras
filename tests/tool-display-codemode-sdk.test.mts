@@ -244,7 +244,7 @@ test("legacy foreign codemode keeps its result vocabulary and original execute w
 		f.faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("codemode", { code: "return 'legacy';" })), ai.fauxAssistantMessage("Finished legacy execution.")]);
 		await f.session.prompt("Run the foreign script.");
 		const lines = unfolded(row).join("\n");
-		assert.match(lines, /codemode · JavaScript/);
+		assert.match(lines, /codemode, JavaScript/);
 		assert.match(lines, /foreign result vocabulary/);
 		assert.doesNotMatch(lines, /ƒ\d|overlap|parallel/);
 		assert.equal(f.session.getToolDefinition("codemode").execute, execute);

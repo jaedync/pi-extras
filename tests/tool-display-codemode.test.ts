@@ -35,7 +35,7 @@ test("call numbers share one width past nine calls, in the row and the popup", (
 test("codemode observes actual nested calls, overlap and timing, never JS syntax", () => {
 	const h = setup();
 	h.script.update({ executionStarted: true });
-	assert.match(h.script.lines()[0]!, /\{\} codemode · JavaScript/);
+	assert.match(h.script.lines()[0]!, /\{\} codemode, JavaScript/);
 	assert.equal(h.script.lines().length, 1, "does not guess execution from JS source");
 	h.calls.observe(start("script/1"));
 	h.advance(120);

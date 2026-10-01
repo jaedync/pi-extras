@@ -187,7 +187,7 @@ test("/tool-display reports, switches and saves its settings", async () => {
 	const h = harness();
 	h.start();
 	await h.run("");
-	assert.match(h.notes.at(-1)![0], /^Tool Display is on · other tools' rows on · chain steps on · motion full · thinking tail · fold on\./);
+	assert.match(h.notes.at(-1)![0], /^Tool Display is on, other tools' rows on, chain steps on, motion full, thinking tail, fold on\./);
 	await h.run("motion reduced");
 	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: true, motion: "reduced", thinking: "tail", fold: true });
 	await h.run("chains off");
@@ -304,7 +304,7 @@ test("other tools' rows get the band, pi-extras's own tools their layouts, and r
 		assert.equal(piRow(banded).getCallRenderer(), banded.renderCall);
 		const row = piRow(search, { query: "rust async" });
 		row.updateResult({ content: [{ type: "text", text: "" }], details: { resultCount: 0 }, isError: false }, false);
-		assert.match(stripTerminalSequences(row.render(60).join("\n")), /web_search rust async · no results/);
+		assert.match(stripTerminalSequences(row.render(60).join("\n")), /web_search rust async, no results/);
 		await h.run("others off");
 		assert.equal(piRow(theirs).getCallRenderer(), theirs.renderCall, "others off: their own renderers");
 		assert.notEqual(piRow(search).getCallRenderer(), search.renderCall, "pi-extras's own tools keep the band");

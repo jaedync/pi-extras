@@ -30,7 +30,7 @@ export interface View {
 export interface ToolSpec {
 	/** Absent means unknown. Titles and user arguments never select an animation. */
 	readonly name?: string;
-	/** The popup's title, e.g. `bash · 3 commands`. */
+	/** The popup's title, e.g. `bash, 3 commands`. */
 	label(view: View): string;
 	title(view: View): Seg[];
 	timeoutMs?(view: View): number | undefined;

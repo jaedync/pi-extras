@@ -158,7 +158,7 @@ test("a click on a row opens its popup with the whole command and output", () =>
 	assert.deepEqual(bash.click(), { handled: true });
 	const source = h.popups[0]!;
 	assert.equal(source.label(), "bash");
-	assert.match(source.details(), /^in \/work · timeout 60s · started \d\d:\d\d:\d\d$/);
+	assert.match(source.details(), /^in \/work, timeout 60s, started \d\d:\d\d:\d\d$/);
 	assert.deepEqual(source.head(theme, 40, 0).map((line) => stripTerminalSequences(line)), ["$ npm ci", "  npm test"]);
 	assert.equal(source.output(theme, 40, 0).length, 30);
 	assert.equal(source.stepCount(), 0);
@@ -169,19 +169,19 @@ test("a read reports partial reads, images, skills and errors", () => {
 	const h = harness();
 	const partial = row(readRenderers(h.kit), { path: "big.ts", offset: 1, limit: 2 });
 	partial.update({ isPartial: false, result: text("a\nb\n\n[98 more lines in file. Use offset=3 to continue.]") });
-	assert.deepEqual(partial.lines(), [band("read big.ts:1-2 · 2 of 100 lines")]);
+	assert.deepEqual(partial.lines(), [band("read big.ts:1-2, 2 of 100 lines")]);
 	const image = row(readRenderers(h.kit), { path: "shot.png" });
 	image.update({ isPartial: false, result: { content: [{ type: "text", text: "Read image file [image/png]" }, { type: "image", data: "", mimeType: "image/png" }] } });
-	assert.deepEqual(image.lines(), [band("read shot.png · image")]);
+	assert.deepEqual(image.lines(), [band("read shot.png, image")]);
 	const skill = row(readRenderers(h.kit), { path: "/skills/blender/SKILL.md" });
 	skill.update({ isPartial: false, result: text("x") });
-	assert.deepEqual(skill.lines(), [band("skill blender · 1 line")]);
+	assert.deepEqual(skill.lines(), [band("skill blender, 1 line")]);
 	const missing = row(readRenderers(h.kit), { path: "nope" });
 	missing.update({ isPartial: false, isError: true, result: text("ENOENT: no such file") });
 	assert.deepEqual(missing.lines(), [band("read nope", "failed"), "    ENOENT: no such file"]);
 	const expanded = row(readRenderers(h.kit), { path: "a.txt" });
 	expanded.update({ isPartial: false, expanded: true, result: text("one\ntwo\n") });
-	assert.deepEqual(expanded.lines(), [band("read a.txt · 2 lines"), "    one", "    two"]);
+	assert.deepEqual(expanded.lines(), [band("read a.txt, 2 lines"), "    one", "    two"]);
 });
 
 test("an edit shows added and removed counts and collapses a long diff", () => {
@@ -189,10 +189,10 @@ test("an edit shows added and removed counts and collapses a long diff", () => {
 	const diff = Array.from({ length: 30 }, (_, index) => `+${index + 1} new ${index}`).concat(["-31 old"]).join("\n");
 	const edit = row(editRenderers(h.kit), { path: "a.ts", edits: [{ oldText: "x", newText: "y" }, { oldText: "p", newText: "q" }] });
 	edit.update();
-	assert.equal(edit.lines()[0], band("edit a.ts · 2 edits", "queued"));
+	assert.equal(edit.lines()[0], band("edit a.ts, 2 edits", "queued"));
 	edit.update({ isPartial: false, result: text("ok", { diff }) });
 	const lines = edit.lines();
-	assert.equal(lines[0], band("edit a.ts · +30 −1"));
+	assert.equal(lines[0], band("edit a.ts, +30 −1"));
 	assert.equal(lines.filter((line) => line.startsWith("    +")).length, 20);
 	assert.equal(lines.at(-1), "    … 11 more diff lines (click for all)");
 	edit.update({ isPartial: false, expanded: true, result: text("ok", { diff }) });
@@ -205,15 +205,15 @@ test("only a call the model is writing now spins; one resumed without a result s
 	const kit = { ...h.kit, streaming: () => streaming };
 	const live = row(writeRenderers(kit), { path: "a.txt", content: "x" });
 	live.update({ argsComplete: false });
-	assert.equal(live.lines()[0], band("write a.txt · 1 line…", "", 60, BULLET_GLYPH));
+	assert.equal(live.lines()[0], band("write a.txt, 1 line…", "", 60, BULLET_GLYPH));
 	assert.equal(h.running(), false, "a dim writing bullet needs no frames between argument updates");
 	streaming = false;
 	// A resumed session rebuilds a call whose result never came as a row still being written.
 	const replayed = row(writeRenderers(kit), { path: "b.txt", content: "x" });
 	replayed.update({ argsComplete: false });
-	assert.equal(replayed.lines()[0], band("write b.txt · 1 line…", "", 60, " "));
+	assert.equal(replayed.lines()[0], band("write b.txt, 1 line…", "", 60, " "));
 	h.advance(1_000);
-	assert.equal(replayed.lines()[0], band("write b.txt · 1 line…", "", 60, " "), "and stays still");
+	assert.equal(replayed.lines()[0], band("write b.txt, 1 line…", "", 60, " "), "and stays still");
 	const idle = harness();
 	const still = row(writeRenderers({ ...idle.kit, streaming: () => false }), { path: "c.txt", content: "x" });
 	still.update({ argsComplete: false });
@@ -255,10 +255,10 @@ test("a write shows its line count and a preview of the file", () => {
 	const content = Array.from({ length: 14 }, (_, index) => `row ${index}`).join("\n");
 	const write = row(writeRenderers(h.kit), { path: "out.txt", content });
 	write.update({ argsComplete: false });
-	assert.equal(write.lines()[0], band("write out.txt · 14 lines…", "", 60, BULLET_GLYPH));
+	assert.equal(write.lines()[0], band("write out.txt, 14 lines…", "", 60, BULLET_GLYPH));
 	write.update({ isPartial: false, result: text("Successfully wrote") });
 	const lines = write.lines();
-	assert.equal(lines[0], band("write out.txt · 14 lines"));
+	assert.equal(lines[0], band("write out.txt, 14 lines"));
 	// The end of the file, where a streaming write is, with a count of what is above it.
 	assert.deepEqual(lines.slice(1), ["    … 11 earlier lines (click for all)", "    row 11", "    row 12", "    row 13"]);
 	write.update({ isPartial: false, expanded: true, result: text("Successfully wrote") });
@@ -266,7 +266,7 @@ test("a write shows its line count and a preview of the file", () => {
 	// A row replayed from a saved session has its result but was never marked complete.
 	const replayed = row(writeRenderers(h.kit), { path: "out.txt", content });
 	replayed.update({ argsComplete: false, isPartial: false, result: text("Successfully wrote") });
-	assert.equal(replayed.lines()[0], band("write out.txt · 14 lines"));
+	assert.equal(replayed.lines()[0], band("write out.txt, 14 lines"));
 });
 
 test("everything under a band sits on the theme's tool gray, padded to the full width", () => {
@@ -291,18 +291,18 @@ test("grep, find and ls summarize what they found and list it only when expanded
 	const found = text("src/a.ts:1: foo\nsrc/b.ts:2: foo\nsrc/b.ts:9: foo");
 	const grep = row(searchRenderers(h.kit, "grep"), { pattern: "foo", path: "src", glob: "*.ts" });
 	grep.update({ isPartial: false, result: found });
-	assert.deepEqual(grep.lines(), [band("grep /foo/ in src (*.ts) · 3 matches in 2 files")]);
+	assert.deepEqual(grep.lines(), [band("grep /foo/ in src (*.ts), 3 matches in 2 files")]);
 	grep.update({ isPartial: false, expanded: true, result: found });
 	assert.equal(grep.lines().length, 1 + 3);
 	const none = row(searchRenderers(h.kit, "grep"), { pattern: "zzz" });
 	none.update({ isPartial: false, result: text("No matches found") });
-	assert.equal(none.lines()[0], band("grep /zzz/ in . · no matches"));
+	assert.equal(none.lines()[0], band("grep /zzz/ in ., no matches"));
 	const find = row(searchRenderers(h.kit, "find"), { pattern: "*.md" });
 	find.update({ isPartial: false, result: text("a.md\nb.md\n\n[2 results limit reached]") });
-	assert.equal(find.lines()[0], band("find *.md in . · 2 files · limit reached"));
+	assert.equal(find.lines()[0], band("find *.md in ., 2 files, limit reached"));
 	const ls = row(searchRenderers(h.kit, "ls"), {});
 	ls.update({ isPartial: false, result: text("a/\nb.ts\nc/") });
-	assert.equal(ls.lines()[0], band("ls . · 3 entries (2 dirs)"));
+	assert.equal(ls.lines()[0], band("ls ., 3 entries (2 dirs)"));
 });
 
 test("bands are colored by status: green done, red failed", () => {

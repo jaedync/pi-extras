@@ -22,7 +22,7 @@ test("a web search row says what was searched and how many results came back, wi
 	const details = { resultCount: 5, requestedCount: 8, pagesFetched: 2, durationMs: 2_800, status: "complete", results: searchResults(5) };
 	search.update({ executionStarted: true, isPartial: false, result: text("five results", details) });
 	assert.deepEqual(search.lines(), [
-		band("web_search rust async site:docs.rs · 5 results", "2.8s"),
+		band("web_search rust async site:docs.rs, 5 results", "2.8s"),
 		"    1. Result 1  site1.test",
 		"    2. Result 2  site2.test",
 		"    3. Result 3  site3.test",
@@ -31,20 +31,20 @@ test("a web search row says what was searched and how many results came back, wi
 	assert.equal(colorOf(search.raw()[0]!, " rust async"), fgOf(FG.accent!), "the query stands out");
 	search.click();
 	const popup = h.popups.at(-1)!;
-	assert.equal(popup.details(), "Kagi search · limit 8 · took 2.8s");
+	assert.equal(popup.details(), "Kagi search, limit 8, took 2.8s");
 	const output = strip(popup.output(theme, 60, 0));
 	assert.deepEqual(output.slice(0, 4), ["1. Result 1  site1.test", "   https://www.site1.test/page", "   Snippet 1", ""]);
-	assert.equal(output.at(-1), "5 results · of 8 requested · 2 pages");
+	assert.equal(output.at(-1), "5 results, of 8 requested, 2 pages");
 });
 
 test("a web search row names an empty, partial or cached search, and a failure in words", () => {
 	const h = harness();
 	const empty = row(toolRenderers(h.kit, webSearchSpec("kagi_search")) as never, { query: "nothing" });
 	empty.update({ isPartial: false, result: text("No results", { resultCount: 0 }) });
-	assert.deepEqual(empty.lines(), [band("kagi_search nothing · no results")]);
+	assert.deepEqual(empty.lines(), [band("kagi_search nothing, no results")]);
 	const partial = row(toolRenderers(h.kit, webSearchSpec("web_search")) as never, { query: "q" });
 	partial.update({ isPartial: false, result: text("", { resultCount: 1, status: "partial", cached: true, results: searchResults(1) }) });
-	assert.equal(partial.lines()[0], band("web_search q · 1 result · partial · cached"));
+	assert.equal(partial.lines()[0], band("web_search q, 1 result, partial, cached"));
 	const failed = row(toolRenderers(h.kit, webSearchSpec("web_search")) as never, { query: "q" });
 	failed.update({ isPartial: false, isError: true, result: text("Kagi markup is unrecognized.") });
 	assert.deepEqual(failed.lines(), [band("web_search q", "failed"), "    Kagi markup is unrecognized."]);
@@ -74,13 +74,13 @@ test("a computer use row names the apps, then counts the calls and screenshots o
 	const content = [{ type: "text", text: "one\ntwo\nthree\nfour\nfive" }, { type: "image", data: "AA==", mimeType: "image/png" }];
 	use.update({ executionStarted: true, isPartial: false, result: { content, details: { calls, durationMs: 900 } } });
 	const lines = use.lines(80);
-	assert.ok(lines[0]!.startsWith(`${BULLET_GLYPH} computer_use Safari, Notes · 6 calls · 1 screenshot`));
+	assert.ok(lines[0]!.startsWith(`${BULLET_GLYPH} computer_use Safari, Notes, 6 calls, 1 screenshot`));
 	assert.match(lines[0]!, /\d+ms$/);
 	assert.deepEqual(lines.slice(1), [
 		"    … 2 earlier calls (click for all)",
 		"    type_text      Safari \"hello\"  120ms",
-		"    click          Notes element 3  120ms · failed: Element not found",
-		"    press_key      Notes Return  120ms · not allowed",
+		"    click          Notes element 3  120ms, failed: Element not found",
+		"    press_key      Notes Return  120ms, not allowed",
 		"    get_app_state  Notes diff  120ms",
 		"    one",
 		"    two",
@@ -90,7 +90,7 @@ test("a computer use row names the apps, then counts the calls and screenshots o
 	assert.ok(!lines.join("\n").match(/[✓✗✔✘]/), "failures are named in words, never marked");
 	use.click();
 	const popup = h.popups.at(-1)!;
-	assert.equal(popup.details(), "6 Computer Use calls · took 900ms");
+	assert.equal(popup.details(), "6 Computer Use calls, took 900ms");
 	assert.deepEqual(strip(popup.head(theme, 80, 0)), code.split("\n"));
 	assert.equal(strip(popup.output(theme, 80, 0)).length, 6 + 1 + 5, "every call, a gap, then everything the script emitted");
 });
@@ -117,11 +117,11 @@ test("a usage row answers in its band: each window that applies, amber when clos
 	assert.deepEqual(output.slice(0, 3), [
 		"5h        35%  resets in 3h 32m (Tue 3:40 PM)",
 		"7d        85%  resets in 3h 32m (Tue 3:40 PM)",
-		"7d-opus  100%  other model · resets in 3h 32m (Tue 3:40 PM)",
+		"7d-opus  100%  other model, resets in 3h 32m (Tue 3:40 PM)",
 	]);
 
 	const spent = row(toolRenderers(h.kit, usageSpec) as never, { setBudget: { window: "5h", pct: 90 } });
 	spent.update({ isPartial: false, result: text("{}", report([limit("5h", 100, { status: "exhausted" })], { budget: { window: "5h", pct: 90 } })) });
-	assert.equal(spent.lines()[0], band("usage 5h 100% · budget 5h at 90%"));
+	assert.equal(spent.lines()[0], band("usage 5h 100%, budget 5h at 90%"));
 	assert.equal(colorOf(spent.raw()[0]!, " 5h 100%"), fgOf(FG.error!));
 });

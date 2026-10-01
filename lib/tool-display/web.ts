@@ -3,6 +3,7 @@
  * searched and how many results came back; under it sit the first results,
  * and the popup lists every result with its address and excerpt.
  */
+import { SEP } from "../cc-phase.ts";
 import type { Seg } from "../band/band.ts";
 import type { SearchResult } from "../kagi/parser.ts";
 import { formatDuration, link, type RenderDetails } from "../kagi/render.ts";
@@ -43,9 +44,9 @@ function summary(view: View): Seg[] {
 	const results = resultsOf(view);
 	if (!details || !results) return [];
 	const count = details.resultCount ?? results.length;
-	const segs: Seg[] = [mutedSeg(` · ${count === 0 ? "no results" : plural(count, "result")}`)];
-	if (details.status === "partial") segs.push({ text: " · partial", color: "warning" });
-	if (details.cached) segs.push(mutedSeg(" · cached"));
+	const segs: Seg[] = [mutedSeg(`${SEP}${count === 0 ? "no results" : plural(count, "result")}`)];
+	if (details.status === "partial") segs.push({ text: `${SEP}partial`, color: "warning" });
+	if (details.cached) segs.push(mutedSeg(`${SEP}cached`));
 	return segs;
 }
 
@@ -67,7 +68,7 @@ function statusText(details: RenderDetails, results: readonly SearchResult[]): s
 	if (details.status === "partial") parts.push("partial");
 	if (details.cached) parts.push("cached");
 	if (typeof details.pagesFetched === "number" && details.pagesFetched > 1) parts.push(`${details.pagesFetched} pages`);
-	return parts.join(" · ");
+	return parts.join(SEP);
 }
 
 export function webSearchSpec(name: string): ToolSpec {
@@ -99,7 +100,7 @@ export function webSearchSpec(name: string): ToolSpec {
 		details(view) {
 			const limit = numberArg(view.context.args, "limit");
 			const took = detailsOf(view)?.durationMs;
-			return ["Kagi search", ...(limit !== undefined ? [`limit ${limit}`] : []), ...(typeof took === "number" ? [`took ${formatDuration(took)}`] : [])].join(" · ");
+			return ["Kagi search", ...(limit !== undefined ? [`limit ${limit}`] : []), ...(typeof took === "number" ? [`took ${formatDuration(took)}`] : [])].join(SEP);
 		},
 		head(view, width) {
 			const query = stringArg(view.context.args, "query");

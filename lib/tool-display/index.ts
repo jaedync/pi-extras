@@ -30,6 +30,7 @@ import {
 	type BashOperations, type ExtensionAPI, type ExtensionContext, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { getCapabilities } from "@earendil-works/pi-tui";
+import { SEP } from "../cc-phase.ts";
 import { AnimationClock } from "../band/clock.ts";
 import { THOUGHT_GLYPH } from "../band/glyph.ts";
 import type { ShownOverlay } from "../band/modal.ts";
@@ -101,11 +102,11 @@ export function withDisplay(definition: AnyTool, renderers: Renderers): AnyTool 
 	return markRow({ ...definition, renderShell: "self", renderCall: renderers.renderCall, renderResult: renderers.renderResult }, "band");
 }
 
-const USAGE = "/tool-display on|off · others on|off · chains on|off · motion full|reduced · thinking tail|collapsed|full · fold on|off · count calls|steps";
+const USAGE = ["/tool-display on|off", "others on|off", "chains on|off", "motion full|reduced", "thinking tail|collapsed|full", "fold on|off", "count calls|steps"].join(SEP);
 
 function describeSettings(settings: DisplaySettings): string {
 	if (!settings.enabled) return "Tool Display is off; every tool draws its own rows.";
-	return `Tool Display is on · other tools' rows ${settings.others ? "on" : "off"} · chain steps ${settings.chains ? "on" : "off"} · motion ${settings.motion} · thinking ${settings.thinking} · fold ${settings.fold ? "on" : "off"}.`;
+	return `Tool Display is on${SEP}other tools' rows ${settings.others ? "on" : "off"}${SEP}chain steps ${settings.chains ? "on" : "off"}${SEP}motion ${settings.motion}${SEP}thinking ${settings.thinking}${SEP}fold ${settings.fold ? "on" : "off"}.`;
 }
 
 /** `count calls` or `count steps`, for the Status Plus tool figure. */

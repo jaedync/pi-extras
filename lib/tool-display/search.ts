@@ -3,6 +3,7 @@
  * 7 files`) instead of listing the first lines; the popup and Pi's expand key
  * show the full listing.
  */
+import { SEP } from "../cc-phase.ts";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Seg } from "../band/band.ts";
 import { grepSummary, listSummary, sanitize, type GrepSummary, type ListSummary } from "./format.ts";
@@ -34,7 +35,7 @@ export function summaryText(tool: Tool, summary: Summary): Seg[] {
 	else if (summary.entries === 0) text = tool === "ls" ? "empty" : "no files";
 	else if (tool === "ls") text = plural(summary.entries, "entry", "entries") + (summary.dirs > 0 ? ` (${plural(summary.dirs, "dir")})` : "");
 	else text = plural(summary.entries, "file");
-	return summary.notice ? [mutedSeg(` · ${text}`), { text: " · limit reached", color: "warning" }] : [mutedSeg(` · ${text}`)];
+	return summary.notice ? [mutedSeg(`${SEP}${text}`), { text: `${SEP}limit reached`, color: "warning" }] : [mutedSeg(`${SEP}${text}`)];
 }
 
 function summaryOf(view: View, tool: Tool): Summary | undefined {

@@ -7,6 +7,7 @@
  * per step, and the output shows under the step that matters: the one
  * running, else the one that failed, else the last one.
  */
+import { SEP } from "../cc-phase.ts";
 import { stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { resolve } from "node:path";
 import type { Outcome, Seg } from "../band/band.ts";
@@ -63,7 +64,7 @@ function details(view: View, run: ChainRun | undefined): string {
 	const parts = [`in ${shownPath(where)}`];
 	if (timeout !== undefined) parts.push(`timeout ${timeout}s`);
 	if (view.row.startedAt !== undefined) parts.push(`started ${new Date(view.row.startedAt).toLocaleTimeString("en-GB", { hour12: false })}`);
-	return parts.join(" · ");
+	return parts.join(SEP);
 }
 
 /** Output lines under a line saying how many earlier ones are hidden. */
@@ -92,7 +93,7 @@ export const bashSpec: ToolSpec = {
 	name: "bash",
 	label(view) {
 		const run = runOf(view);
-		return run ? `bash · ${plural(position(run).shown.length, "command")}` : "bash";
+		return run ? `bash${SEP}${plural(position(run).shown.length, "command")}` : "bash";
 	},
 	title(view) {
 		const command = commandOf(view);
@@ -178,7 +179,7 @@ export const bashSpec: ToolSpec = {
 		if (index === undefined) return "output";
 		const state = stateOf(run, index);
 		const text = flat(run.chain.steps[index]!.text);
-		return `output of ${selected + 1} · ${text}${state === "skipped" ? " (skipped)" : ""}`;
+		return `output of ${selected + 1}${SEP}${text}${state === "skipped" ? " (skipped)" : ""}`;
 	},
 	output(view, width, selected) {
 		const run = runOf(view);

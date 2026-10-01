@@ -4,6 +4,7 @@
  * no content, a diff shows its first lines, and a new file its last few
  * (where a streaming write is); the popup and Pi's expand key show everything.
  */
+import { SEP } from "../cc-phase.ts";
 import { basename, dirname } from "node:path";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Seg } from "../band/band.ts";
@@ -28,7 +29,7 @@ function errorBody(view: View, width: number): string[] {
 
 function fileDetails(view: View, extra: string[] = []): string {
 	const path = pathOf(view);
-	return [path ? shownPath(absolutePath(path, view.context.cwd)) : "(no path)", ...extra].join(" · ");
+	return [path ? shownPath(absolutePath(path, view.context.cwd)) : "(no path)", ...extra].join(SEP);
 }
 
 // ── read ──
@@ -56,10 +57,10 @@ function readFacts(view: View): ReadSummary | "image" | undefined {
 
 export function readText(summary: ReadSummary | "image" | undefined): Seg[] {
 	if (summary === undefined) return [];
-	if (summary === "image") return [mutedSeg(" · image")];
-	if (summary.longLine) return [{ text: " · line over the size limit", color: "warning" }];
+	if (summary === "image") return [mutedSeg(`${SEP}image`)];
+	if (summary.longLine) return [{ text: `${SEP}line over the size limit`, color: "warning" }];
 	const count = summary.total !== undefined ? `${summary.lines.toLocaleString("en-US")} of ${plural(summary.total, "line")}` : plural(summary.lines, "line");
-	return [mutedSeg(` · ${count}`)];
+	return [mutedSeg(`${SEP}${count}`)];
 }
 
 function readContent(view: View): string[] {
@@ -110,10 +111,10 @@ export const editSpec: ToolSpec = {
 		if (diff) {
 			const stats = diffStats(diff);
 			// The two counts read as one figure, `+12 −3`, not two parts.
-			return [...head, mutedSeg(" · "), { text: `+${stats.added}`, color: "success" }, { text: ` −${stats.removed}`, color: "error" }];
+			return [...head, mutedSeg(SEP), { text: `+${stats.added}`, color: "success" }, { text: ` −${stats.removed}`, color: "error" }];
 		}
 		const count = editCount(view.context.args);
-		return view.context.isPartial && count > 1 ? [...head, mutedSeg(` · ${plural(count, "edit")}`)] : head;
+		return view.context.isPartial && count > 1 ? [...head, mutedSeg(`${SEP}${plural(count, "edit")}`)] : head;
 	},
 	body(view, width) {
 		if (failed(view)) return errorBody(view, width);
@@ -165,8 +166,8 @@ export const writeSpec: ToolSpec = {
 		const { raw, lines } = contentOf(view);
 		const head = [titleSeg("write"), pathSeg(view.kit, pathOf(view), view.context.cwd)];
 		if (raw === undefined) return head;
-		if (typeof raw !== "string") return [...head, { text: " · [invalid content]", color: "error" }];
-		return [...head, mutedSeg(` · ${plural(lines.length, "line")}${argsDone(view) ? "" : "…"}`)];
+		if (typeof raw !== "string") return [...head, { text: `${SEP}[invalid content]`, color: "error" }];
+		return [...head, mutedSeg(`${SEP}${plural(lines.length, "line")}${argsDone(view) ? "" : "…"}`)];
 	},
 	below(view, width) {
 		const { lines } = contentOf(view);

@@ -3,6 +3,7 @@
  * model with how much of it is used, and the session budget when the call
  * set one. The popup lists every limit with when it resets.
  */
+import { SEP } from "../cc-phase.ts";
 import type { Seg } from "../band/band.ts";
 import type { UsageReport, UsageReportLimit } from "../usage-guard-core.ts";
 import { sanitize } from "./format.ts";
@@ -30,9 +31,9 @@ const pct = (value: number) => `${Math.round(value)}%`;
 
 function budgetSegs(view: View, report: UsageReport | undefined): Seg[] {
 	const args = (view.context.args ?? {}) as { setBudget?: { window?: unknown; pct?: unknown }; clearBudget?: unknown };
-	if (args.clearBudget === true) return [mutedSeg(" · budget cleared")];
+	if (args.clearBudget === true) return [mutedSeg(`${SEP}budget cleared`)];
 	const budget = report?.budget ?? (typeof args.setBudget?.window === "string" && typeof args.setBudget.pct === "number" ? { window: args.setBudget.window, pct: args.setBudget.pct } : null);
-	return args.setBudget && budget ? [mutedSeg(` · budget ${flat(budget.window)} at ${pct(budget.pct)}`)] : [];
+	return args.setBudget && budget ? [mutedSeg(`${SEP}budget ${flat(budget.window)} at ${pct(budget.pct)}`)] : [];
 }
 
 function resetText(limit: UsageReportLimit): string {
@@ -62,7 +63,7 @@ export const usageSpec: ToolSpec = {
 	},
 	details(view) {
 		const model = reportOf(view)?.model;
-		return model?.provider ? [model.provider, model.id].filter(Boolean).join(" · ") : "";
+		return model?.provider ? [model.provider, model.id].filter(Boolean).join(SEP) : "";
 	},
 	outputLabel: () => "limits",
 	output(view, width) {
@@ -72,7 +73,7 @@ export const usageSpec: ToolSpec = {
 		const labelWidth = Math.max(0, ...report.limits.map((limit) => flat(limit.window).length));
 		const rows = report.limits.map((limit) => {
 			const used = limit.usedPct !== undefined ? pct(limit.usedPct).padStart(4) : (limit.remaining ? flat(limit.remaining) : "").padStart(4);
-			const note = [limit.applies ? "" : "other model", limit.budgetPct !== undefined ? `budget ${pct(limit.budgetPct)}` : "", resetText(limit)].filter(Boolean).join(" · ");
+			const note = [limit.applies ? "" : "other model", limit.budgetPct !== undefined ? `budget ${pct(limit.budgetPct)}` : "", resetText(limit)].filter(Boolean).join(SEP);
 			return `${view.paint.fg("toolOutput", flat(limit.window).padEnd(labelWidth))}  ${view.paint.fg(tone(limit), used)}  ${view.paint.fg("muted", note)}`;
 		});
 		const notes = report.notes.map((note) => view.paint.fg("muted", flat(note)));

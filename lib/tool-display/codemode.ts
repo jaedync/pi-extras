@@ -1,4 +1,5 @@
 /** JavaScript is not a shell chain. Only observed calls receive numbered execution cells. */
+import { SEP } from "../cc-phase.ts";
 import { stripVTControlCharacters } from "node:util";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { timeSeg, type Seg } from "../band/band.ts";
@@ -107,7 +108,7 @@ function callOutput(view: View, call: NestedCall, selected: number, width: numbe
 function popupHead(view: View, width: number, selected: number): string[] {
 	const calls = callsOf(view)?.calls ?? [];
 	const callDigits = digitsOf(calls.length);
-	const labels = ["script source", "script result", ...calls.map((call, index) => `${`ƒ${index + 1}`.padEnd(callDigits + 1)} ${flat(call.name)} · ${WORDS[call.status]}`)];
+	const labels = ["script source", "script result", ...calls.map((call, index) => `${`ƒ${index + 1}`.padEnd(callDigits + 1)} ${flat(call.name)}${SEP}${WORDS[call.status]}`)];
 	const digits = digitsOf(labels.length);
 	return labels.map((label, index) => {
 		const text = `${String(index + 1).padStart(digits)} ${label}`;
@@ -155,11 +156,11 @@ export function codemodeSpec(tool: ForeignTool): ToolSpec {
 	const fallback = foreignSpec(tool);
 	return {
 		...fallback,
-		label: () => "codemode · JavaScript tool calls",
+		label: () => `codemode${SEP}JavaScript tool calls`,
 		title(view) {
 			const calls = callsOf(view)?.calls;
-			return [{ text: "{} ", color: "accent", bold: true }, { text: "codemode · JavaScript", color: "text", bold: true },
-				...(calls?.length ? [{ text: ` · ${plural(calls.length, "call")}`, color: "muted" }] : [])];
+			return [{ text: "{} ", color: "accent", bold: true }, { text: `codemode${SEP}JavaScript`, color: "text", bold: true },
+				...(calls?.length ? [{ text: `${SEP}${plural(calls.length, "call")}`, color: "muted" }] : [])];
 		},
 		below(view, width) {
 			if (writingSource(view)) return [...scriptPreview(view, width), ...timeline(view, width)];
@@ -173,7 +174,7 @@ export function codemodeSpec(tool: ForeignTool): ToolSpec {
 			const result = { ...view.result, details: details && typeof details === "object" ? { ...details, calls: [] } : details };
 			return fallback.body({ ...view, result }, width);
 		},
-		details: (view) => callsOf(view)?.complete === false ? "JavaScript · nested call record incomplete" : "JavaScript · call elapsed includes queue and permission waits",
+		details: (view) => callsOf(view)?.complete === false ? `JavaScript${SEP}nested call record incomplete` : `JavaScript${SEP}call elapsed includes queue and permission waits`,
 		head: popupHead,
 		steps: (view) => (callsOf(view)?.calls.length ?? 0) + CALL_VIEW_OFFSET,
 		firstStep: () => SOURCE_VIEW,

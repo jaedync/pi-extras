@@ -5,6 +5,7 @@
  * emitted. The popup has the script, highlighted, and every call and line of
  * output.
  */
+import { SEP } from "../cc-phase.ts";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Seg } from "../band/band.ts";
 import { formatMs } from "../computer-use/describe.ts";
@@ -51,7 +52,7 @@ function summary(view: View, details: RowDetails): Seg[] {
 	const calls = details.calls ?? [];
 	if (view.context.isPartial || calls.length === 0) return [];
 	const shots = view.result && hasImage(view.result) ? (view.result.content as { type?: string }[]).filter((block) => block?.type === "image").length : 0;
-	return [mutedSeg(` · ${plural(calls.length, "call")}${shots > 0 ? ` · ${plural(shots, "screenshot")}` : ""}`)];
+	return [mutedSeg(`${SEP}${plural(calls.length, "call")}${shots > 0 ? `${SEP}${plural(shots, "screenshot")}` : ""}`)];
 }
 
 function approvalNote(paint: Paint, call: CallRecord): string | undefined {
@@ -78,7 +79,7 @@ function callLine(paint: Paint, names: ScriptRowNames, call: CallRecord, methodW
 	if (approval) notes.push(approval);
 	if (call.approval === "deny") notes.push(paint.fg("warning", "not allowed"));
 	else if (!call.ok) notes.push(paint.fg("error", `failed${call.error ? `: ${flat(call.error.split("\n")[0] ?? "")}` : ""}`));
-	return `${head}  ${notes.join(paint.fg("dim", " · "))}`;
+	return `${head}  ${notes.join(paint.fg("dim", SEP))}`;
 }
 
 function timeline(paint: Paint, names: ScriptRowNames, details: RowDetails): string[] {
@@ -120,7 +121,7 @@ export const scriptSpec = (names: ScriptRowNames): ToolSpec => ({
 		const details = detailsOf(view);
 		const calls = details?.calls?.length ?? 0;
 		const took = details?.durationMs;
-		return [plural(calls, names.call), ...(typeof took === "number" ? [`took ${formatMs(took)}`] : [])].join(" · ");
+		return [plural(calls, names.call), ...(typeof took === "number" ? [`took ${formatMs(took)}`] : [])].join(SEP);
 	},
 	head(view, width) {
 		const code = codeOf(view);
