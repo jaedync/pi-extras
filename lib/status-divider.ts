@@ -23,7 +23,8 @@ export function renderStatusDivider(model: StatusDivider, width: number, paint: 
 	const tps = metrics.find(part => part.startsWith("TPS"));
 	const ttft = metrics.find(part => part.startsWith("TTFT"));
 	const overflow = model.hiddenLineCount ? `↑ ${model.hiddenLineCount} ` : "";
-	const time = model.elapsedMs === undefined ? undefined : `${overflow}Time ${formatElapsed(model.elapsedMs)}`;
+	// An idle status has no prompt total, but the editor's hidden-line count still belongs here.
+	const time = model.elapsedMs === undefined ? overflow.trim() || undefined : `${overflow}Time ${formatElapsed(model.elapsedMs)}`;
 	const choices = [
 		[model.status, [tps, ttft, time]],
 		[model.status, [ttft, time]],

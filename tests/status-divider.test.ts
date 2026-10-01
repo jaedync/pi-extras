@@ -43,3 +43,9 @@ test("the editor's hidden-line count sits beside Time and retires with it",()=>{
   assert.equal(row.includes("↑ 3"),row.includes("Time "),`width ${width}: ${row}`);
  }
 });
+test("an idle status without a prompt total still shows the hidden-line count",()=>{
+ const idle={status:"⢎⡱⣉ Compacting context 00:01.5",withoutTokens:"⢎⡱⣉ Compacting context 00:01.5",hiddenLineCount:3};
+ const row=renderStatusDivider(idle,130,paint);
+ assert.match(row,/↑ 3 ─$/);assert.doesNotMatch(row,/Time /);
+ assert.doesNotMatch(renderStatusDivider({...idle,hiddenLineCount:0},130,paint),/↑|Time /);
+});
