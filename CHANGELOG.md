@@ -2,16 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## Unreleased
+## 0.15.0 - 2026-10-01
 
 ### Added
 
-- Subagents survive reloads and restarts. An atomic child index restores names,
-  tasks, settings and run counts. Reload auto-resumes interrupted runs; startup
-  and resume after a crash notify only. `subagents.resumePolicy` changes this
-  policy. `message` and `/subagents resume <name>` reopen saved children, with
-  verification guidance after unfinished tools. Orphan sessions appear in
-  `/subagents`; signal shutdown and restoration record interrupted runs.
+- Subagents survive `/reload`, restarts and crashes. A saved index brings back
+  each child's name, task, settings and run count, so `message` reaches
+  finished children again. Children that a `/reload` interrupted resume on
+  their own, once; after a restart or crash they come back paused and main
+  gets one notice. `/subagents resume <name>` continues a paused child, and
+  `/subagents` lists orphaned child sessions. Change the policy with
+  `subagents.resumePolicy` (`"reload"`, `"always"` or `"notify"`).
 
 ## 0.14.1 - 2026-09-30
 

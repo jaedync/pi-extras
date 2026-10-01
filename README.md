@@ -84,10 +84,10 @@ the package. Removing it does not remove your credentials or change other packag
   optional: `defaultModel` (a model or short name; default: the session's
   model), `maxConcurrent` (default `4`), `batchMs` (default `2000`),
   `groupWaitMs` (default `60000`), `replyTimeoutMs` (default `600000`) and
-  `childToolsExclude` (tool names children never get), `resumePolicy` (default
-  `"reload"`: auto-resume after reload, notify only after restart; `"always"`
-  permits one automatic attempt after other interruptions too; `"notify"`
-  never auto-resumes). The model guide is
+  `childToolsExclude` (tool names children never get) and `resumePolicy`
+  (`"reload"`, the default, resumes children a `/reload` interrupted;
+  `"always"` also allows one automatic attempt after a restart or crash;
+  `"notify"` never resumes on its own). The model guide is
   `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
   project. See below.
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
@@ -629,26 +629,22 @@ message still arrives and points to the session file as before.
 **Limits.** At most `maxConcurrent` children run at once; the rest queue. A
 child can't start children of its own by default.
 
-**Restoration.** `/reload` restores the roster and auto-resumes direct children
-interrupted by that reload. Previously paused children, legacy sessions,
-orphans and grandchildren never auto-resume just because you reload. Startup and resume after an exit or crash restore them without
-starting work. Main gets one notice with their tasks and last activity.
-`message` or `/subagents resume <name>` reopens a saved child with its context;
-interrupted children are told to verify files because their last tool call may
-not have completed. `/subagents` also lists unindexed sessions as orphans,
-restored read-only when their original permissions are unknown. An atomic
-`index.json` beside the child sessions keeps names, settings, states and run
-counts. A second parent cannot own the same roster concurrently. Forks do not
-inherit children, and tree navigation keeps the same session's roster.
-If the workspace moved, automatic resume pauses until you inspect and resume
-children explicitly. Set `subagents.resumePolicy` to `"notify"` to disable
-auto-resume, or `"always"` to permit one automatic attempt after restarts too.
-An interruption is announced once. If an automatic attempt is interrupted,
-it stays paused until an explicit resume. Out-of-scope models require an
-explicit resume, which uses the current default model and explains the change
-to both main and the user. A failed resume launch stays interrupted and can be
-retried after the problem is fixed; the launch failure has its own run-log entry.
-`/subagents resume` only accepts interrupted children; message finished ones.
+**Restoration.** Children survive `/reload`, restarts and crashes. An
+`index.json` beside their sessions keeps each child's name, settings, state and
+run count, so `message` reaches them again after a restart. Children that a
+`/reload` interrupted resume on their own, once. After a restart or crash they
+come back paused, and main gets one notice listing them with their task and
+last activity. `/subagents resume <name>` continues a paused child; message
+finished ones instead. A resumed child is told to check files first, because
+its last tool call may not have finished.
+
+Some children never resume on their own: ones paused earlier, grandchildren,
+sessions from before 0.15.0, orphans (child sessions missing from the index,
+listed in `/subagents` and restored read-only), children whose workspace moved,
+and children whose model is no longer allowed (resuming one of those by hand
+uses the current default model and says so). An automatic resume that is
+itself interrupted stays paused, and a failed resume can be retried. Only one
+Pi process at a time can own a session's children; forks start without them.
 
 Each run adds a line to `~/.pi/agent/subagents/runs.jsonl` (model,
 task opening, time, tool calls, cost, how it ended); `/subagents stats` sums it
