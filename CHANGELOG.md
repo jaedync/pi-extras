@@ -2,6 +2,14 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.15.1 - 2026-10-01
+
+### Fixed
+
+- Failure-log lines (for example `rate-limit-recovery.log`) are written before
+  the call returns, so a line logged during shutdown is no longer lost. This
+  also ends an intermittent test failure on CI.
+
 ## 0.15.0 - 2026-10-01
 
 ### Added
