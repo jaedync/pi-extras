@@ -23,7 +23,7 @@ import { EditorSlot, type StatusIndicator, type WrappedEditor } from "../lib/edi
 import { everyFrame } from "../lib/band/clock.ts";
 import { TailRow } from "../lib/tail-row.ts";
 import { DISPLAY_SETTINGS_EVENT, readSection } from "../lib/extras-config.ts";
-import { CHARS_PER_TOKEN, END_ENTRY, parseEndLine, parseVerbs, phaseParts, pickVerb, SEP, renderEndLine, renderPiWave, renderRunLine, runAnimation, smoothTokens, streamRate, type RunLine } from "../lib/cc-phase.ts";
+import { CHARS_PER_TOKEN, END_ENTRY, parseEndLine, parseVerbs, phaseParts, phaseTitle, pickVerb, SEP, renderEndLine, renderPiWave, renderRunLine, runAnimation, smoothTokens, streamRate, type RunLine } from "../lib/cc-phase.ts";
 import { MODE_SPINNERS, PI_WAVE, PI_WAVE_MS, REDUCED_FRAME, isBlockingPeer, slotGlyph, spinnerCadence, type GlyphAnimation } from "../lib/band/glyph.ts";
 import { renderThinkingTail, thinkingRuns } from "../lib/tool-display/thinking.ts";
 
@@ -134,7 +134,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const data = parseEndLine(entry.data);
 		return data ? { render: (width) => [renderEndLine(data, width, theme)], invalidate() {} } : undefined;
 	});
-	let verb = pickVerb(parseVerbs(undefined));
+	let verb: RunLine["verb"];
 	let verbs = parseVerbs(undefined);
 	let reduced = false;
 	let streamedChars = 0;
@@ -422,7 +422,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		if (!active) {
 			lineStartedAt = now;
 			runEnded = false;
-			verb = pickVerb(verbs);
+			verb = verbs.length ? pickVerb(verbs) : undefined;
 			streamedChars = 0;
 			shownTokens = 0;
 			tokensAt = now;
@@ -447,7 +447,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const stopped = cancelled || endReason === "aborted";
 		const waveTheme = animate && !stopped && !reduced && activeTui ? ctx.ui.theme : undefined;
 		if (ctx.mode === "tui") pi.appendEntry(END_ENTRY, {
-			past: verb.past, elapsedMs: performance.now() - lineStartedAt,
+			...(verb ? { past: verb.past } : {}), elapsedMs: performance.now() - lineStartedAt,
 			doneAt: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
 			...(stopped ? { stopped: true } : {}),
 		});
@@ -498,7 +498,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			phaseElapsedMs: state.elapsedMs,
 			totalElapsedMs: now - agentStartedAt,
 			metrics,
-			label: `${verb.present}…`,
+			label: `${phaseTitle(model)}…`,
 			detail: phaseParts(model).join(SEP),
 			tone: state.alertTone,
 			hiddenLineCount,

@@ -39,7 +39,7 @@ test("end-of-turn custom entry renders but never reaches the next request or res
  await session.prompt("First request.");
  const entries=manager.getBranch().filter((entry:any)=>entry.type==="custom"&&entry.customType==="pi-extras.run-end");
  assert.equal(entries.length,1,"one persisted display-only end entry");
- assert.equal(typeof entries[0].data.past,"string");
+ assert.equal(entries[0].data.past,undefined,"default end metadata is descriptive");
  const thinking=manager.getBranch().filter((entry:any)=>entry.type==="custom"&&entry.customType==="pi-extras.thinking-times");
  assert.equal(thinking.length,1);
  assert.ok(Array.isArray(thinking[0].data.durations));

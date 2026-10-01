@@ -30,7 +30,7 @@ test("blocking peer waits alone select Twin, and stream-rate smoothing decays wi
 test("verbs validate overrides, keep paired past tenses and pick once", () => {
  assert.equal(DEFAULT_VERBS.length, 30);
  assert.deepEqual(parseVerbs(["Mixing|Mixed", {present: "Baking", past: "Baked"}, "bad", {present: "\x1b[31m", past: "x"}]), [{present:"Mixing",past:"Mixed"},{present:"Baking",past:"Baked"}]);
- assert.equal(parseVerbs([]), DEFAULT_VERBS);
+ assert.deepEqual(parseVerbs([]), []);
  assert.equal(pickVerb(DEFAULT_VERBS, () => 0), DEFAULT_VERBS[0]);
 });
 test("parts add useful detail, elapsed at 16s, direction, thinking progression and recent thought", () => {

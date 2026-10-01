@@ -2,6 +2,14 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Changed
+
+- Phase Spinner names the phase descriptively by default. Set `phaseSpinner.verbs`
+  to `"playful"` or a custom list to opt into one verb per prompt. Finished prompts
+  keep `π Worked for 41s, done 9:14 PM`; stopped prompts keep their existing stopped line.
+
 ## 0.17.0 - 2026-10-01
 
 ### Added

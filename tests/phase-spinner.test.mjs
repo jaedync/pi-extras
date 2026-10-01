@@ -10,6 +10,8 @@ import { agentRoot } from './support/pi-runtime.mjs';
 const { createJiti } = createRequire(join(agentRoot, "package.json"))("jiti");
 const jiti = createJiti(import.meta.url, {
 	alias: {
+		"../lib/extras-config.ts": fileURLToPath(new URL("./fixtures/phase-config.mjs", import.meta.url)),
+		[fileURLToPath(new URL("../lib/extras-config.ts", import.meta.url))]: fileURLToPath(new URL("./fixtures/phase-config.mjs", import.meta.url)),
 		"@earendil-works/pi-coding-agent": fileURLToPath(new URL("./fixtures/phase-editor-api.mjs", import.meta.url)),
 		"@earendil-works/pi-tui": createRequire(join(agentRoot, "package.json")).resolve("@earendil-works/pi-tui"),
 	},
@@ -27,7 +29,9 @@ function piLayout() {
 	return { children, queue: children[1], editorBox: children[4] };
 }
 
-function harness(t, events, { layout, nativeStatus = false, theme } = {}) {
+const {setVerbs}=await import("./fixtures/phase-config.mjs");
+function harness(t, events, { layout, nativeStatus = false, theme, verbs = "playful" } = {}) {
+ setVerbs(verbs);
 	let now = 0;
 	let idle = false;
 	let pending = false;
@@ -86,6 +90,13 @@ function harness(t, events, { layout, nativeStatus = false, theme } = {}) {
 		settle: () => { idle = true; emit("agent_settled"); },
 	};
 }
+
+test("unset verbs selects descriptive phases and worked-for metadata",t=>{
+ const layout=piLayout(),h=harness(t,eventBus(),{layout,verbs:null});h.render();h.emit("agent_start");
+ h.emit("before_provider_request",{},1000);assert.match(h.queue()[1],/Sending request… \(1s, ↑\)/);
+ h.finish(20,41000);h.emit("agent_end");h.settle();
+ assert.equal(h.entries[0].data.past,undefined);assert.equal(h.entries[0].data.elapsedMs,41000);
+});
 
 test("real extension wires stream timing to the live and retained editor border", t => {
 	const h = harness(t);

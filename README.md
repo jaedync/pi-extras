@@ -110,9 +110,10 @@ the package. Removing it does not remove your credentials or change other packag
   `others` (default `true`), `chains` (default `true`), `motion` (`full` or
   `reduced`), `thinking` (`tail`, `collapsed` or `full`; default `tail`) and
   `fold` (default `true`).
-- `phaseSpinner.verbs` in `pi-extras.json`: your own verbs for the spinner
-  line, up to 100 `"Present|Past"` pairs such as `"Simmering|Simmered"`. They
-  replace the built-in list.
+- `phaseSpinner.verbs` in `pi-extras.json`: opt into playful spinner words
+  with `"playful"` (the built-in pie and π list), or up to 100 `"Present|Past"`
+  pairs such as `["Simmering|Simmered"]`. Without this setting, the line names
+  the phase descriptively.
 - `PI_COPY_BLOCKS=off`: leave code blocks and quotes in replies as Pi draws them.
 - `statusPlus.toolCount` in `pi-extras.json`: `calls` (the default) or `steps`,
   switched by clicking the footer's tool count or with `/tool-display count`.
@@ -458,18 +459,20 @@ half second of each recording is lost while that job starts.
 A line under the conversation says what the agent is doing:
 
 ```text
-⢌⡱⢎ Proofing… (12s, ↓ 212 tokens, thinking)
+⢌⡱⢎ Thinking… (9s, ↓ 212 tokens)
 ```
 
-The verb is picked for each prompt from a list of pie and π words (Proofing,
-Kneading, Approximating, Squaring the circle, …) and stays until the prompt
-ends. The parentheses say what is happening: `sending request`, `waiting for
-first token`, `thinking` (then `still thinking`, `thinking more`, `deep in
-thought`), `writing bash call`, `running bash` or `running 3 tools`, and a token
-count while the model writes. Pi's own statuses (compacting, retrying,
+The main word names the phase: `Sending request`, `Waiting for the model`,
+`Thinking` (then `Still thinking`, `Thinking more`, `Deep in thought`),
+`Writing bash call`, `Running bash` or `Running 3 tools`, and `Writing reply`.
+The parentheses show elapsed time and a token count while the model writes.
+The main word keeps its shimmer. Set `phaseSpinner.verbs` to `"playful"` for
+pie and π words (Proofing, Kneading, Approximating, …), or provide your own
+`"Present|Past"` pairs. Then one verb lasts the whole prompt and the phase
+appears in the parentheses, as before. Pi's own statuses (compacting, retrying,
 summarizing a branch) take the line's place while they run.
 
-Each kind of work has its own spinner, all three cells wide so the verb never
+Each kind of work has its own spinner, all three cells wide so the main word never
 moves: a ping going out while the request is sent and answered, a helix while
 the model thinks, a print head while it writes a tool call, a comet orbit while
 tools run, two comets while it waits for a subagent's reply, and a wave that
@@ -480,7 +483,7 @@ seconds.
 
 While the model thinks, its newest three lines show dimly under the spinner.
 When a prompt finishes, a dotted π waves in and out, and the transcript keeps an
-end line such as `π Proofed for 41s, done 9:14 PM`, or `π Stopped after 12s`
+end line such as `π Worked for 41s, done 9:14 PM`, or `π Stopped after 12s`
 when you stopped it. The end line and the thinking rows are only drawn; the
 model never sees them. Messages you queue show below the line.
 `/tool-display motion reduced` holds every spinner on a still frame.

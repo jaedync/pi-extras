@@ -16,17 +16,18 @@ export const DEFAULT_VERBS: readonly Verb[] = [
 ].map(pair => { const [present,past] = pair.split("|"); return {present:present!,past:past!}; });
 const valid = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && value.length <= 100 && !/[\x00-\x1f\x7f-\x9f]/.test(value);
 export function parseVerbs(value: unknown): readonly Verb[] {
- if (!Array.isArray(value)) return DEFAULT_VERBS;
+ if (value === "playful") return DEFAULT_VERBS;
+ if (!Array.isArray(value)) return [];
  const verbs = value.slice(0,100).flatMap(item => {
   const pair = typeof item === "string" ? item.split("|") : [item?.present,item?.past];
   return pair.length === 2 && valid(pair[0]) && valid(pair[1]) ? [{present:pair[0].trim(),past:pair[1].trim()}] : [];
  });
- return verbs.length ? verbs : DEFAULT_VERBS;
+ return verbs;
 }
 export const pickVerb = (verbs: readonly Verb[], random = Math.random): Verb => verbs[Math.min(verbs.length-1,Math.max(0,Math.floor(random()*verbs.length)))] ?? DEFAULT_VERBS[0]!;
 export type RunPhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 export interface RunLine {
- readonly verb: Verb; readonly phase: RunPhase; readonly elapsedMs: number; readonly phaseMs: number;
+ readonly verb?: Verb; readonly phase: RunPhase; readonly elapsedMs: number; readonly phaseMs: number;
  readonly tokens: number; readonly clockMs: number; readonly reduced: boolean; readonly tools?: readonly string[];
  readonly pendingTool?: string; readonly thoughtMs?: number; readonly sinceThoughtMs?: number; readonly idleTokenMs?: number;
  readonly waveMs?: number; readonly tokensPerSecond?: number; readonly waitingOnPeers?: boolean;
@@ -37,7 +38,16 @@ export function thinkingLabel(ms: number): string {
 }
 const toolLabel = (name: string | undefined): string => stripTerminalSequences(name ?? "tool").replace(/[\x00-\x20\x7f-\x9f]+/g," ").trim() || "tool";
 const graphemes = new Intl.Segmenter(undefined,{granularity:"grapheme"});
+export function phaseTitle(model: RunLine): string {
+ if(model.verb)return model.verb.present;
+ const titles={prep:"Preparing",api:"Sending request",first_token:"Waiting for the model",think:thinkingLabel(model.phaseMs).replace("thinking some more","thinking more"),text:"Writing reply",tool:`Writing ${toolLabel(model.pendingTool)} call`,run:model.tools && model.tools.length>1?`Running ${model.tools.length} tools`:`Running ${toolLabel(model.tools?.[0])}`};
+ const title=titles[model.phase];return title[0]!.toUpperCase()+title.slice(1);
+}
 export function phaseParts(model: RunLine): string[] {
+ if(!model.verb){
+  const direction=model.phase==="api"?"↑":model.tokens>0 && ["think","text","tool"].includes(model.phase)?`↓ ${Math.round(model.tokens).toLocaleString("en-US")} tokens`:undefined;
+  return [seconds(model.elapsedMs),direction].filter((part):part is string=>!!part);
+ }
  const detail = model.phase === "api" ? "sending request" : model.phase === "first_token" ? "waiting for first token"
   : model.phase === "tool" ? `writing ${toolLabel(model.pendingTool)} call`
   : model.phase === "run" ? (model.tools && model.tools.length > 1 ? `running ${model.tools.length} tools` : `running ${toolLabel(model.tools?.[0])}`) : undefined;
@@ -85,7 +95,7 @@ export function runAnimation(model: RunLine): GlyphAnimation {
 }
 export function renderRunLine(model: RunLine, width: number, theme: LineTheme, override?: GlyphAnimation): string {
  if(width<=0) return "";
- const paint=runPainter(model,theme), word=[...graphemes.segment(model.verb.present)].map(part=>part.segment);
+ const paint=runPainter(model,theme), word=[...graphemes.segment(phaseTitle(model))].map(part=>part.segment);
  const sweep=sweepAt(word.length,model.clockMs,model.phase==="api");
  const pulse=(Math.sin(model.clockMs/1000*Math.PI)+1)/2;
  const title=word.map((ch,i)=>paint(ch,model.reduced ? 0 : model.phase==="run" ? pulse : i>=sweep && i<sweep+3 ? 1 : 0)).join("");
@@ -117,13 +127,13 @@ export function renderPiWave(elapsedMs: number, theme: LineTheme, width = SPINNE
  const left=Math.max(0,Math.floor((SPINNER_SLOT_WIDTH-3)/2));
  return truncateToWidth(" ".repeat(left)+cells+" ".repeat(Math.max(0,SPINNER_SLOT_WIDTH-3-left)),width,"");
 }
-export interface EndLine { readonly past: string; readonly elapsedMs: number; readonly doneAt: string; readonly stopped?: boolean }
+export interface EndLine { readonly past?: string; readonly elapsedMs: number; readonly doneAt: string; readonly stopped?: boolean }
 export const END_ENTRY = "pi-extras.run-end";
 export function parseEndLine(value: unknown): EndLine | undefined {
  if(!value || typeof value!=="object")return undefined;
  const model=value as EndLine;
- return valid(model.past) && valid(model.doneAt) && Number.isFinite(model.elapsedMs) && model.elapsedMs>=0 && (model.stopped===undefined || typeof model.stopped==="boolean") ? {past:model.past,elapsedMs:model.elapsedMs,doneAt:model.doneAt,...(model.stopped?{stopped:true}:{})} : undefined;
+ return (model.past===undefined || valid(model.past)) && valid(model.doneAt) && Number.isFinite(model.elapsedMs) && model.elapsedMs>=0 && (model.stopped===undefined || typeof model.stopped==="boolean") ? {...(model.past!==undefined?{past:model.past}:{}),elapsedMs:model.elapsedMs,doneAt:model.doneAt,...(model.stopped?{stopped:true}:{})} : undefined;
 }
 export function renderEndLine(model: EndLine,width:number,theme:LineTheme): string {
- return truncateToWidth(theme.fg("accent",END_GLYPH)+" "+theme.fg("dim",model.stopped ? `Stopped after ${seconds(model.elapsedMs)}` : `${model.past} for ${seconds(model.elapsedMs)}${SEP}done ${model.doneAt}`),Math.max(0,width),"");
+ return truncateToWidth(theme.fg("accent",END_GLYPH)+" "+theme.fg("dim",model.stopped ? `Stopped after ${seconds(model.elapsedMs)}` : model.past ? `${model.past} for ${seconds(model.elapsedMs)}${SEP}done ${model.doneAt}` : `Worked for ${seconds(model.elapsedMs)}${SEP}done ${model.doneAt}`),Math.max(0,width),"");
 }
