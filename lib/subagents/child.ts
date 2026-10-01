@@ -5,6 +5,7 @@
  * of those tools load into it, so status bars, voice and the like stay out.
  */
 import type { AgentSession, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
@@ -96,6 +97,7 @@ export interface LauncherDeps {
 	/** Where child sessions are written; null keeps them in memory. */
 	sessionDir: string | null;
 	modelRuntime(): Promise<ModelRuntime>;
+	modelAllowed?(model: string): boolean;
 	/** Tool names and custom tools for this child. */
 	toolsFor(record: AgentRecord): { tools: string[]; customTools: ToolDefinition[]; extensionPaths?: readonly string[] };
 	instructions(record: AgentRecord): string;
@@ -106,6 +108,9 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 	return {
 		async launch(record: AgentRecord, hooks: ChildHooks): Promise<ChildHandle> {
 			const { sdk, agentDir, cwd } = deps;
+			if (!existsSync(cwd)) throw new Error(`The child workspace no longer exists: ${cwd}. Reopen the parent in its current workspace before resuming.`);
+			if (record.restored && record.runs > 0 && record.sessionFile && !existsSync(record.sessionFile)) throw new Error(`The saved child session is missing: ${record.sessionFile}. Locate its transcript before resuming.`);
+			if (deps.modelAllowed && !deps.modelAllowed(record.model)) throw new Error(`The child's model ${record.model} is out of scope. Resume explicitly on the current default model.`);
 			const modelRuntime = await deps.modelRuntime();
 			const resolved = sdk.resolveCliModel({ cliModel: record.model, modelRuntime });
 			if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Unknown model ${record.model}.`);
@@ -138,7 +143,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				customTools,
 			}).catch((error) => { guard.dispose(); throw error; });
 			await bindChild(session, guard, deps.onExtensionError);
-			return handleFor(session, hooks, resolved.model.contextWindow, guard);
+			return handleFor(session, hooks, resolved.model.contextWindow, guard, record);
 		},
 	};
 }
@@ -148,9 +153,9 @@ async function bindChild(session: AgentSession, guard: ReturnType<typeof createC
 	catch (error) { guard.dispose(); session.dispose(); throw error; }
 }
 
-function watchChild(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined): () => void {
-	let usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-	let toolCalls = 0;
+function watchChild(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined, record: AgentRecord): () => void {
+	let usage: Usage = { ...record.usage };
+	let toolCalls = record.toolCalls;
 	let activity: string | null = null;
 	const setActivity = (next: string) => {
 		if (next === activity) return;
@@ -199,8 +204,8 @@ function childDisposer(session: AgentSession, unsubscribe: () => void, guard: Re
 	})();
 }
 
-function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined, guard: ReturnType<typeof createChildRateLimitGuard>): ChildHandle {
-	const dispose = childDisposer(session, watchChild(session, hooks, contextWindow), guard);
+function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined, guard: ReturnType<typeof createChildRateLimitGuard>, record: AgentRecord): ChildHandle {
+	const dispose = childDisposer(session, watchChild(session, hooks, contextWindow, record), guard);
 	return {
 		sessionFile: session.sessionFile,
 		async prompt(text) {

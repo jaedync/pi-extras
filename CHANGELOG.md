@@ -2,6 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Subagents survive reloads and restarts. An atomic child index restores names,
+  tasks, settings and run counts. Reload auto-resumes interrupted runs; startup
+  and resume after a crash notify only. `subagents.resumePolicy` changes this
+  policy. `message` and `/subagents resume <name>` reopen saved children, with
+  verification guidance after unfinished tools. Orphan sessions appear in
+  `/subagents`; signal shutdown and restoration record interrupted runs.
+
 ## 0.14.1 - 2026-09-30
 
 ### Fixed

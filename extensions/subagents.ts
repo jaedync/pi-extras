@@ -29,10 +29,13 @@ import { appendRunLog, appendInterruptedRuns, loggedRunKeys, runKey, runLogEntry
 import { formatTime } from "../lib/band/band.ts";
 import type { ShownOverlay } from "../lib/band/modal.ts";
 import { formatMoney } from "../lib/status-plus-logic.ts";
+import { acquireParent } from "../lib/subagents/ownership.ts";
 import { installSignalRecorder } from "../lib/subagents/signals.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
-import { ChildIndex, discoverOrphans, legacyRecords, restoreRecord, restorationNotice, shouldResume } from "../lib/subagents/restore.ts";
+import { recoveryOwner, recoveryDecision } from "../lib/subagents/recovery.ts";
+import { createSessionScanner } from "../lib/subagents/session-scan.ts";
+import { ChildIndex, legacyRecords, recoverRoster } from "../lib/subagents/restore.ts";
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
@@ -153,12 +156,29 @@ export default function subagents(pi: ExtensionAPI) {
 		const parentRef = ctx.model ? refOf(ctx.model) : null;
 		const configured = config.defaultModel ? resolveModel(config.defaultModel, allowed) : null;
 		if (configured && !configured.ok) ctx.ui.notify(`subagents.defaultModel: ${configured.error}`, "warning");
-		const fallbackModel = configured?.ok ? configured.choice.ref : parentRef;
+		const fallbackModel = configured?.ok ? configured.choice.ref : parentRef && allowed.some((choice) => choice.ref === parentRef) ? parentRef : allowed[0]?.ref ?? null;
 		const sessionId = ctx.sessionManager.getSessionId();
+		const owner = recoveryOwner(ctx.sessionManager);
 		const logFile = runLogPath(agentDir);
 		const sessionDir = join(agentDir, "sessions", "subagents", sessionId);
 		let logFailed = false;
+		const warn = (message: string) => ctx.ui.notify(message, "warning");
 		const index = new ChildIndex(sessionDir, sessionId, cwd);
+		const releaseParent = acquireParent(sessionDir);
+		const scanner = createSessionScanner(sdk.parseSessionEntries, sdk.migrateSessionEntries);
+		const badFiles = new Set<string>();
+		const readBranch = (file: string) => {
+			try { return scanner.branch(file); }
+			catch (error) {
+				if (!badFiles.has(file)) ctx.ui.notify(`subagents: skipping ${file}: ${(error as Error).message}`, "warning");
+				badFiles.add(file);
+				throw error;
+			}
+		};
+		let workspaceMoved = false;
+		let previousShutdown: string | undefined;
+		let previousOwner: string | undefined;
+		let signalReason: string | undefined;
 
 		// The team is made below; the mail only asks it once reports arrive.
 		let team!: Team;
@@ -175,16 +195,27 @@ export default function subagents(pi: ExtensionAPI) {
 		// The launcher and tools need the team, and the team needs the launcher.
 		let tools!: ToolContext;
 		team = new Team({
-			warn: (message) => ctx.ui.notify(message, "warning"),
+			warn,
 			maxConcurrent: config.maxConcurrent,
 			maxDepth: config.maxDepth,
 			replyTimeoutMs: config.replyTimeoutMs,
+			messagesFor: (record) => record.sessionFile && existsSync(record.sessionFile) && !record.restoreError ? scanner.messages(record.sessionFile) : [],
+			prepareResume: (record) => {
+				const model = allowed.some((choice) => choice.ref === record.model) ? record.model : fallbackModel;
+				if (!model) throw new Error("No current default model is available for this child. Scope a model before resuming.");
+				const notes = [model !== record.model ? `Your previous model ${record.model} is out of scope. You are continuing on the current default ${model}.` : "",
+					workspaceMoved ? `Your workspace moved from ${index.cwd} to ${cwd}. Verify files in the parent's current workspace before continuing.` : ""].filter(Boolean);
+				const notice = model !== record.model ? `Model ${record.model} is not available now, running on ${model}.` : undefined;
+				if (notice) ctx.ui.notify(notice, "warning");
+				return { model, note: notes.join("\n"), ...(notice ? { notice } : {}) };
+			},
 			sessionFileFor: (name) => join(sessionDir, `${new Date().toISOString().replace(/[:.]/g, "-")}_${name}_${randomUUID().slice(0, 8)}.jsonl`),
 			deliverToMain: (delivery) => mail.deliver(delivery),
 			launcher: createLauncher({
 				sdk, agentDir, cwd,
 				sessionDir,
 				modelRuntime: runtimeSource(ctx),
+				modelAllowed: (model) => allowed.some((choice) => choice.ref === model),
 				toolsFor: (record) => {
 					const names = childToolNames(pi.getActiveTools(), record.readOnly, config.childToolsExclude);
 					return {
@@ -210,30 +241,37 @@ export default function subagents(pi: ExtensionAPI) {
 		};
 
 		try {
-			const records = index.load();
-			const roster = records.length > 0 || existsSync(index.file) ? records : legacyRecords(ctx.sessionManager.getBranch(), sessionDir, MAIN, 1);
-			const readBranch = (file: string) => sdk.SessionManager.open(file, sessionDir, cwd).getBranch();
-			team.restore(roster.map((record) => restoreRecord(record, record.sessionFile && existsSync(record.sessionFile) ? readBranch(record.sessionFile) : [])));
-			team.restore(discoverOrphans(sessionDir, team.list(), readBranch));
+			const records = index.load(warn);
+			previousShutdown = index.shutdown;
+			previousOwner = index.shutdownOwner;
+			const roster = records.length > 0 || existsSync(index.file) ? records : legacyRecords(ctx.sessionManager.getBranch(), sessionDir, MAIN, 1, readBranch, warn);
+			workspaceMoved = index.cwd !== cwd;
+			team.restore(recoverRoster(roster, sessionDir, readBranch, warn));
+			if (workspaceMoved && index.markWorkspaceNotice(cwd)) ctx.ui.notify(`subagents: workspace changed from ${index.cwd} to ${cwd}. Auto-resume is paused; inspect and resume children explicitly.`, "warning");
 		} catch (error) {
-			ctx.ui.notify(`subagents: could not restore ${index.file}: ${(error as Error).message}`, "warning");
+			mail.dispose();
+			releaseParent();
+			throw new Error(`Could not restore ${index.file}: ${(error as Error).message}. The index has been left unchanged.`);
 		}
 		try {
 			appendInterruptedRuns(logFile, team.list(), sessionId, Date.now());
 			if (team.list().length > 0) index.save(team.list());
 		} catch (error) { ctx.ui.notify(`subagents: could not record restored children: ${(error as Error).message}`, "warning"); }
-		const logged = loggedRunKeys(logFile);
+		let logged = new Set<string>();
+		try { logged = loggedRunKeys(logFile); }
+		catch (error) { ctx.ui.notify(`subagents: could not read run log ${logFile}: ${(error as Error).message}`, "warning"); }
 		const unsubscribe = team.onChange((record) => {
 			widget.update();
-			try { index.save(team.list()); }
-			catch (error) { ctx.ui.notify(`subagents: could not save ${index.file}: ${(error as Error).message}`, "warning"); }
+			const saveWarning = (error: unknown) => ctx.ui.notify(`subagents: could not save ${index.file}: ${(error as Error).message}`, "warning");
+			try { index.update(team.list(), saveWarning); }
+			catch (error) { saveWarning(error); }
 			if (!record || LIVE_STATES.has(record.state)) return;
 			const entry = runLogEntry(record, Date.now(), sessionId);
 			const key = runKey(entry);
 			if (logged.has(key)) return;
-			logged.add(key);
 			try {
 				appendRunLog(logFile, entry);
+				logged.add(key);
 			} catch (error) {
 				if (!logFailed) ctx.ui.notify(`subagents: could not write the run log ${logFile}: ${(error as Error).message}`, "warning");
 				logFailed = true;
@@ -242,28 +280,45 @@ export default function subagents(pi: ExtensionAPI) {
 
 		const removeSignals = installSignalRecorder((signal) => {
 			try {
-				team.interrupt();
-				index.save(team.list(), signal);
+				signalReason = signal;
+				team.interrupt("signal", owner);
+				index.save(team.list(), signal, owner);
 				appendInterruptedRuns(logFile, team.list(), sessionId, Date.now());
 			} catch (error) { ctx.ui.notify(`subagents: could not record ${signal}: ${(error as Error).message}`, "warning"); }
 		});
 		return {
 			team, mail, tools, config,
 			async restore(reason) {
-				const interrupted = team.list().filter((record) => record.state === "interrupted");
+				const interrupted = team.list().filter((record) => record.state === "interrupted" && !record.interruptionAnnounced);
 				if (interrupted.length === 0) return;
-				const resume = shouldResume(reason, config.resumePolicy);
-				if (resume) for (const record of interrupted) await team.send(MAIN, record.name, "Continue your interrupted task and report the outcome.");
-				const notice = restorationNotice(interrupted, resume, reason);
-				pi.sendMessage({ customType: "subagent-restore", content: notice, display: true, details: { reason, resumed: resume, names: interrupted.map((r) => r.name) } }, { triggerTurn: false });
+				const lines: string[] = [];
+				const resumed: string[] = [];
+				for (const record of interrupted) {
+					const decision = recoveryDecision(record, { reason, policy: config.resumePolicy, shutdown: previousShutdown, shutdownOwner: previousOwner,
+						owner, allowed: new Set(allowed.map((choice) => choice.ref)), moved: workspaceMoved });
+					if (decision.resume) team.markRecovery(record.name, { autoResumeAttempts: (record.autoResumeAttempts ?? 0) + 1, interruptedBy: undefined });
+					let action = decision.why;
+					if (decision.resume) {
+						const sent = await team.send(MAIN, record.name, "Continue your interrupted task and report the outcome.", { automatic: true });
+						if (sent.ok && sent.delivered === "resumed") resumed.push(record.name);
+						else action = `Paused: ${sent.ok ? sent.delivered : sent.error}`;
+					}
+					const short = (text: string) => text.replace(/\s+/g, " ").slice(0, 300);
+					lines.push(`${record.name}: task ${short(record.task)}; last activity ${short(record.activity ?? record.state)}. ${action}`);
+				}
+				const notice = `Subagents restored after ${reason}. ${resumed.length ? "Auto-resuming eligible children." : "Not resumed."}\n${lines.join("\n")}\nPaused children require message from their parent or /subagents resume <name>.`;
+				pi.sendMessage({ customType: "subagent-restore", content: notice, display: true, details: { reason, resumed, names: interrupted.map((r) => r.name) } }, { triggerTurn: false });
+				for (const record of interrupted) team.markRecovery(record.name, { interruptionAnnounced: true });
+				index.save(team.list());
 				ctx.ui.notify(notice, "warning");
 			},
 			async close(reason = "quit") {
 				removeSignals();
 				mail.dispose();
-				await team.close();
-				index.save(team.list(), reason);
-				unsubscribe();
+				try {
+					await team.close(signalReason ? "signal" : reason === "reload" ? "reload" : "quit", owner);
+					index.save(team.list(), signalReason ?? reason, owner);
+				} finally { unsubscribe(); releaseParent(); }
 			},
 		};
 	};
@@ -283,7 +338,8 @@ export default function subagents(pi: ExtensionAPI) {
 			ctx.ui.notify("pi-extras Subagents is off: another extension already provides a subagent tool. Remove one of them.", "warning");
 			return;
 		}
-		state = build(ctx);
+		try { state = build(ctx); }
+		catch (error) { ctx.ui.notify(`subagents: ${(error as Error).message}`, "warning"); return; }
 		const current = state;
 		for (const tool of [subagentTool(current.tools, MAIN), mainMessageTool(current.tools)]) {
 			if (foreign(tool.name)) {
@@ -363,12 +419,16 @@ export default function subagents(pi: ExtensionAPI) {
 			}
 			if (verb === "resume") {
 				const name = rest.join(" ");
+				const record = state.team.get(name);
+				if (!record) return ctx.ui.notify(`No subagent named ${name}.`, "warning");
+				if (LIVE_STATES.has(record.state)) return ctx.ui.notify(`${name} is already running.`, "info");
+				if (record.state !== "interrupted") return ctx.ui.notify(`${name} is not interrupted. Message it to start new work.`, "info");
 				const result = await state.team.send(USER, name, "Continue your task and report the outcome.");
 				return ctx.ui.notify(result.ok ? `${name}: ${result.delivered}.${result.notice ? ` ${result.notice}` : ""}` : result.error, result.ok ? "info" : "warning");
 			}
 			if (verb === "stop") {
 				const target = rest.join(" ");
-				const names = target === "all" ? state.team.live().map((record) => record.name) : [target];
+				const names = target === "all" ? state.team.list().filter((record) => LIVE_STATES.has(record.state) || record.state === "interrupted").map((record) => record.name) : [target];
 				for (const name of names) {
 					if (!state.team.get(name)) { ctx.ui.notify(`No subagent named ${name}.`, "warning"); continue; }
 					await state.team.stop(name);

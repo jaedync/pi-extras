@@ -5,7 +5,8 @@ import type { Thinking } from "./models.ts";
  * queued: over the concurrency limit. starting: its session is being made.
  * running: working. asking: blocked on a reply. waiting: its run ended but its
  * own children have not reported yet. idle: finished, and resumable by a
- * message. failed / stopped: ended without a normal report.
+ * message. interrupted: paused after shutdown or unfinished tools, resumable.
+ * failed / stopped: ended without a normal report.
  */
 export type AgentState = "queued" | "starting" | "running" | "asking" | "waiting" | "idle" | "failed" | "stopped" | "interrupted";
 

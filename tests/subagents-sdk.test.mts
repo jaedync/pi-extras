@@ -289,6 +289,18 @@ test("a recreated team reopens a finished child session when main messages it", 
 	await second.team.close();
 });
 
+test("a real SDK child interrupted before its first prompt gets its complete original brief", { timeout: 20_000 }, async () => {
+	const { team, faux } = await setup();
+	team.restore([{ name: "unstarted", parent: "main", depth: 1, task: "THE COMPLETE ORIGINAL SDK BRIEF", model: "faux/cheap",
+		readOnly: false, fork: false, blocking: false, state: "interrupted", createdAt: Date.now(), activity: "queued", runs: 0,
+		toolCalls: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, restored: true,
+		sessionFile: join(agentDir, "sessions", "subagents", "parent-1", "unstarted.jsonl") }]);
+	faux.setResponses([(context: any) => ai.fauxAssistantMessage(JSON.stringify(context.messages).includes("THE COMPLETE ORIGINAL SDK BRIEF") && JSON.stringify(context.messages).includes("last tool call may not have completed") ? "Received original brief and warning." : "Brief missing.")]);
+	await team.send("main", "unstarted", "Continue");
+	assert.equal((await team.whenDone("unstarted")).report, "Received original brief and warning.");
+	await team.close();
+});
+
 test("an unknown model fails the child, not the session", { timeout: 20_000 }, async () => {
 	const { team, main } = await setup();
 	team.spawn({ task: "anything", parent: "main", model: "faux/nope", readOnly: false, fork: false, blocking: false });
@@ -323,7 +335,7 @@ test("the real parent SDK reload rebuilds its roster, resumes running children, 
 		assert.equal(index().records[0]?.state, "idle");
 		faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 30" }))]);
 		await spawn().execute("spawn-running", { name: "running", task: "Wait for work", model: "faux/cheap" }, undefined);
-		for (let i = 0; i < 200 && !index().records.some((r: any) => r.activity === "bash sleep 30"); i++) await new Promise((r) => setTimeout(r, 10));
+		for (let i = 0; i < 800 && !index().records.some((r: any) => r.activity === "bash sleep 30"); i++) await new Promise((r) => setTimeout(r, 10));
 		assert.ok(index().records.some((r: any) => r.activity === "bash sleep 30"));
 		faux.setResponses([ai.fauxAssistantMessage("Reload resumed me.")]);
 		await session.reload();

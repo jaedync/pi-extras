@@ -381,7 +381,24 @@ waits out short rate limits within the bounded backoff described above. Your con
 for the parent. Children use the parent's model credentials.
 
 Child sessions are written under
-`PI_CODING_AGENT_DIR/sessions/subagents/<parent session id>/`. The run log,
+`PI_CODING_AGENT_DIR/sessions/subagents/<parent session id>/`. An atomic
+`index.json` there stores the complete tasks, model settings, state, session
+paths and run counts. A local process lease prevents concurrent parents from
+resuming the same child. Reload auto-resumes interrupted children by default;
+startup after an exit or crash only notifies. A later reload does not resume
+older paused work. Orphans and grandchildren never auto-resume. Each
+interruption permits at most one automatic attempt and one main notice;
+interruption during that attempt stays paused. `subagents.resumePolicy: "notify"`
+disables automatic resume. Interrupted children are warned to verify files
+before continuing, because aborted tools may have changed them. Unknown
+orphan sessions restore read-only. A moved workspace pauses auto-resume and
+explicit resume explains the new cwd. An out-of-scope model cannot auto-resume;
+explicit resume uses the current scoped default model and announces the switch
+to main and the user. Leases refuse a different hostname and normalize process
+birth checks to UTC with the C locale, so network or timezone changes cannot
+justify stealing a live parent's lease. Transcript scans are
+parse-only and do not rewrite empty or invalid files.
+The run log,
 `PI_CODING_AGENT_DIR/subagents/runs.jsonl`, keeps the first 200 characters of
 each task, the model, timings, tool-call counts, usage, the session path and
 any error. Delete either whenever you like. Nothing is sent anywhere except

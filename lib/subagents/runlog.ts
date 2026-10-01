@@ -74,6 +74,7 @@ export interface ModelStats {
 	ok: number;
 	failed: number;
 	stopped: number;
+	interrupted: number;
 	cost: number;
 	durationMs: number;
 	toolCalls: number;
@@ -86,7 +87,7 @@ export function statsByModel(lines: readonly string[]): ModelStats[] {
 		let entry: Record<string, unknown>;
 		try { entry = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
 		if (typeof entry.model !== "string") continue;
-		const stats = byModel.get(entry.model) ?? { model: entry.model, runs: 0, ok: 0, failed: 0, stopped: 0, cost: 0, durationMs: 0, toolCalls: 0 };
+		const stats = byModel.get(entry.model) ?? { model: entry.model, runs: 0, ok: 0, failed: 0, stopped: 0, interrupted: 0, cost: 0, durationMs: 0, toolCalls: 0 };
 		const usage = (entry.usage ?? {}) as { cost?: unknown };
 		byModel.set(entry.model, {
 			...stats,
@@ -94,6 +95,7 @@ export function statsByModel(lines: readonly string[]): ModelStats[] {
 			ok: stats.ok + (entry.state === "idle" ? 1 : 0),
 			failed: stats.failed + (entry.state === "failed" ? 1 : 0),
 			stopped: stats.stopped + (entry.state === "stopped" ? 1 : 0),
+			interrupted: stats.interrupted + (entry.state === "interrupted" ? 1 : 0),
 			cost: stats.cost + (typeof usage.cost === "number" ? usage.cost : 0),
 			durationMs: stats.durationMs + (typeof entry.durationMs === "number" ? entry.durationMs : 0),
 			toolCalls: stats.toolCalls + (typeof entry.toolCalls === "number" ? entry.toolCalls : 0),
@@ -106,7 +108,7 @@ export function statsText(stats: readonly ModelStats[], format: (ms: number) => 
 	if (stats.length === 0) return "No subagent runs logged yet.";
 	const width = Math.max(...stats.map((s) => s.model.length));
 	return stats.map((s) => {
-		const ended = [s.failed && `${s.failed} failed`, s.stopped && `${s.stopped} stopped`].filter(Boolean).join(", ");
+		const ended = [s.failed && `${s.failed} failed`, s.stopped && `${s.stopped} stopped`, s.interrupted && `${s.interrupted} interrupted`].filter(Boolean).join(", ");
 		const count = `${String(s.runs).padStart(4)} ${s.runs === 1 ? "run" : "runs"}${ended ? ` (${ended})` : s.runs === 1 ? " " : ""}`;
 		return `${s.model.padEnd(width)}  ${count}  avg ${format(s.durationMs / s.runs)}, ${(s.toolCalls / s.runs).toFixed(1)} tools, $${money(s.cost / s.runs)}  total $${money(s.cost)}`;
 	}).join("\n");

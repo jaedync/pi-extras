@@ -5,6 +5,7 @@ import { Team } from "../lib/subagents/team.ts";
 import { restoreRecord, shouldResume, restorationNotice } from "../lib/subagents/restore.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 
+const warn = (message: string) => assert.fail(message);
 const record = (state: AgentRecord["state"] = "idle"): AgentRecord => ({ name: "helper", parent: "main", depth: 1,
 	model: "faux/cheap", task: "Check files", readOnly: false, fork: false, blocking: false, state, createdAt: 1,
 	activity: "write notes.txt", runs: 1, toolCalls: 0, usage: NO_USAGE, sessionFile: "/sessions/helper.jsonl" });
@@ -21,10 +22,11 @@ test("reload defaults to resuming while startup only notifies, with explicit ove
 });
 
 test("aborted, running and unfinished tool sessions restore interrupted, not failed", () => {
-	assert.equal(restoreRecord(record(), [message({ role: "assistant", stopReason: "aborted", content: [] })]).state, "interrupted");
-	assert.equal(restoreRecord(record("running"), [message({ role: "assistant", stopReason: "stop", content: [] })]).state, "interrupted");
-	assert.equal(restoreRecord(record(), [message({ role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "call", name: "write" }] })]).state, "interrupted");
-	assert.equal(restoreRecord(record(), [message({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] })]).state, "idle");
+	assert.equal(restoreRecord(record(), [message({ role: "assistant", stopReason: "aborted", content: [] })], warn).state, "interrupted");
+	assert.equal(restoreRecord(record("running"), [message({ role: "assistant", stopReason: "stop", content: [] })], warn).state, "interrupted");
+	assert.equal(restoreRecord(record(), [message({ role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "call", name: "write" }] })], warn).state, "interrupted");
+	assert.equal(restoreRecord(record(), [message({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] })], warn).state, "idle");
+	assert.equal(restoreRecord(record("stopped"), [message({ role: "assistant", stopReason: "aborted", content: [] })], warn).state, "stopped", "reload must not restart a user-stopped child");
 });
 
 test("messaging a restored interrupted child reopens once and includes a verification warning", async () => {
@@ -60,6 +62,33 @@ test("an interrupted queued child with no user transcript receives its original 
 	assert.ok(prompts[0]?.startsWith("THE ORIGINAL COMPLETE BRIEF\n\n"));
 	assert.match(prompts[0]!, /last tool call may not have completed/);
 	await team.close();
+});
+
+test("a restored interrupted child can be stopped before any automatic resume", async () => {
+	const team = new Team({ maxConcurrent: 1, maxDepth: 1, replyTimeoutMs: 100, deliverToMain() {}, launcher: { async launch() { throw new Error("must not run"); } } });
+	team.restore([record("interrupted")]);
+	await team.stop("helper");
+	assert.equal(team.get("helper")?.state, "stopped");
+});
+
+test("close waits for an in-flight launcher to dispose before a new parent can reopen its transcript", async () => {
+	let release!: () => void;
+	let disposed = false;
+	let closed = false;
+	const team = new Team({ maxConcurrent: 1, maxDepth: 1, replyTimeoutMs: 100, deliverToMain() {}, launcher: {
+		async launch() {
+			await new Promise<void>((resolve) => { release = resolve; });
+			return { async prompt() { assert.fail("closed launch must not prompt"); }, steer() {}, async abort() {}, lastText: () => "",
+				messages: () => [], takeQueued: () => [], async dispose() { disposed = true; } };
+		},
+	} });
+	team.spawn({ task: "Opening", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false });
+	const closing = team.close().then(() => { closed = true; });
+	await tick();
+	assert.equal(closed, false);
+	release();
+	await closing;
+	assert.equal(disposed, true);
 });
 
 test("shutdown freezes running records as interrupted and emits no stopped report", async () => {

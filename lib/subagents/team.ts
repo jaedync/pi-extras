@@ -55,6 +55,7 @@ export class Team {
 	private readonly handles = new Map<string, ChildHandle>();
 	/** Pi rebuilds shorter message lists on compaction, but retains message identities. */
 	private readonly runStarts = new Map<string, ReadonlySet<unknown>>();
+	private readonly opening = new Set<Promise<ChildHandle | null>>();
 	private readonly inboxes = new Map<string, string[]>();
 	/** Open questions by asker; a child may wait on several agents at once. */
 	private readonly questions = new Map<string, Pending[]>();
@@ -190,15 +191,17 @@ export class Team {
 
 	/** The child's messages so far; empty before it starts. */
 	messages(name: string): readonly unknown[] {
-		return this.handles.get(name)?.messages() ?? [];
+		const record = this.records.get(name);
+		return this.handles.get(name)?.messages() ?? (record ? this.options.messagesFor?.(record) ?? [] : []);
 	}
 
 	/** Stops a child and everything under it. */
 	async stop(name: string): Promise<void> {
 		const record = this.records.get(name);
-		if (!record || !LIVE_STATES.has(record.state)) return;
+		if (!record || (!LIVE_STATES.has(record.state) && record.state !== "interrupted")) return;
 		for (const child of this.list().filter((entry) => entry.parent === name)) await this.stop(child.name);
 		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
+		this.resumePrompts.delete(name);
 		for (const question of this.questions.get(name) ?? []) question.reject(new Error("stopped"));
 		const handle = this.handles.get(name);
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, report: this.runText(name) });
@@ -224,7 +227,12 @@ export class Team {
 		if (this.closing) return this.closing;
 		this.interrupt(reason, owner);
 		return this.closing = (async () => {
-			await Promise.allSettled([...this.handles.values()].map(async (handle) => { await handle.abort(); await handle.dispose(); }));
+			await Promise.all([
+				Promise.allSettled([...this.handles.values()].map(async (handle) => {
+					try { await handle.abort(); } finally { await handle.dispose(); }
+				})),
+				Promise.allSettled([...this.opening]),
+			]);
 			this.handles.clear();
 		})();
 	}
@@ -251,26 +259,18 @@ export class Team {
 
 	private async start(name: string): Promise<void> {
 		this.patch(name, { state: "starting", startedAt: this.now(), activity: "starting" });
-		let handle: ChildHandle;
-		try {
-			handle = await this.options.launcher.launch(this.records.get(name)!, {
-				update: (patch) => {
-					const record = this.records.get(name);
-					if (record && LIVE_STATES.has(record.state)) this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.workedSinceAnswer(name, patch) ? { answeredMain: undefined } : {}) });
-				},
-			});
-		} catch (error) {
+		const opening = this.open(name);
+		this.opening.add(opening);
+		let handle: ChildHandle | null;
+		try { handle = await opening; }
+		catch (error) {
 			if (!this.closed) {
 				if (this.resumePrompts.has(name)) this.resumeFailed(name, error);
 				else this.fail(name, error);
 			}
 			return;
-		}
-		if (this.closed || this.records.get(name)?.state === "stopped") {
-			await handle.dispose().catch(() => undefined);
-			return;
-		}
-		this.handles.set(name, handle);
+		} finally { this.opening.delete(opening); }
+		if (!handle || this.closed) return;
 		this.patch(name, handle.sessionFile ? { sessionFile: handle.sessionFile } : {});
 		const inbox = this.takeInbox(name);
 		const saved = this.records.get(name)!;
@@ -302,6 +302,22 @@ export class Team {
 		else if (record.parent === MAIN) this.options.deliverToMain({ kind: "report", record: failure });
 		else this.deliverToChild(name, record.parent, reportText(failure, this.now()), true);
 		this.pump();
+	}
+
+	/** Shutdown must wait for launchers too, or they can write into a newly reopened transcript. */
+	private async open(name: string): Promise<ChildHandle | null> {
+		const handle = await this.options.launcher.launch(this.records.get(name)!, {
+			update: (patch) => {
+				const record = this.records.get(name);
+				if (record && LIVE_STATES.has(record.state)) this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.workedSinceAnswer(name, patch) ? { answeredMain: undefined } : {}) });
+			},
+		});
+		if (this.closed || this.records.get(name)?.state === "stopped") {
+			await handle.dispose();
+			return null;
+		}
+		this.handles.set(name, handle);
+		return handle;
 	}
 
 	private async run(name: string, text: string): Promise<void> {

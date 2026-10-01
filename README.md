@@ -84,7 +84,10 @@ the package. Removing it does not remove your credentials or change other packag
   optional: `defaultModel` (a model or short name; default: the session's
   model), `maxConcurrent` (default `4`), `batchMs` (default `2000`),
   `groupWaitMs` (default `60000`), `replyTimeoutMs` (default `600000`) and
-  `childToolsExclude` (tool names children never get). The model guide is
+  `childToolsExclude` (tool names children never get), `resumePolicy` (default
+  `"reload"`: auto-resume after reload, notify only after restart; `"always"`
+  permits one automatic attempt after other interruptions too; `"notify"`
+  never auto-resumes). The model guide is
   `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
   project. See below.
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
@@ -624,11 +627,33 @@ numbers can skip when a run ends waiting for a reply. If saving fails, the
 message still arrives and points to the session file as before.
 
 **Limits.** At most `maxConcurrent` children run at once; the rest queue. A
-child can't start children of its own. Children stop with the session and on
-`/reload`. Each run adds a line to `~/.pi/agent/subagents/runs.jsonl` (model,
+child can't start children of its own by default.
+
+**Restoration.** `/reload` restores the roster and auto-resumes direct children
+interrupted by that reload. Previously paused children, legacy sessions,
+orphans and grandchildren never auto-resume just because you reload. Startup and resume after an exit or crash restore them without
+starting work. Main gets one notice with their tasks and last activity.
+`message` or `/subagents resume <name>` reopens a saved child with its context;
+interrupted children are told to verify files because their last tool call may
+not have completed. `/subagents` also lists unindexed sessions as orphans,
+restored read-only when their original permissions are unknown. An atomic
+`index.json` beside the child sessions keeps names, settings, states and run
+counts. A second parent cannot own the same roster concurrently. Forks do not
+inherit children, and tree navigation keeps the same session's roster.
+If the workspace moved, automatic resume pauses until you inspect and resume
+children explicitly. Set `subagents.resumePolicy` to `"notify"` to disable
+auto-resume, or `"always"` to permit one automatic attempt after restarts too.
+An interruption is announced once. If an automatic attempt is interrupted,
+it stays paused until an explicit resume. Out-of-scope models require an
+explicit resume, which uses the current default model and explains the change
+to both main and the user. A failed resume launch stays interrupted and can be
+retried after the problem is fixed; the launch failure has its own run-log entry.
+`/subagents resume` only accepts interrupted children; message finished ones.
+
+Each run adds a line to `~/.pi/agent/subagents/runs.jsonl` (model,
 task opening, time, tool calls, cost, how it ended); `/subagents stats` sums it
 by model, which is what to tune the guide on. `/subagents stop <name>` or
-`stop all` stops children.
+`stop all` stops children, including paused interrupted ones.
 
 If another extension already has a `subagent` tool, such as pi-subagents,
 Subagents stays off for the session and says so; remove one of the two. A
