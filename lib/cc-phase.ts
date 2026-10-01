@@ -1,4 +1,5 @@
 import { mixColors, stripTerminalSequences, truncateToWidth, type Color } from "@earendil-works/pi-tui";
+import { formatElapsed } from "./phase-status.ts";
 import { END_GLYPH, MODE_SPINNERS, SPINNER_SLOT_WIDTH, WAVE_TOKENS_PER_SECOND, piWave, slotGlyph, type GlyphAnimation } from "./band/glyph.ts";
 
 export const SEP = ", ";
@@ -88,20 +89,22 @@ function runPainter(model: RunLine, theme: LineTheme): (text: string, highlight?
 export function runAnimation(model: RunLine): GlyphAnimation {
  return MODE_SPINNERS[model.phase==="run" && model.waitingOnPeers ? "peer" : model.phase];
 }
-function runHead(model: RunLine, theme: LineTheme): string {
- const paint=runPainter(model,theme), word=[...graphemes.segment(phaseTitle(model))].map(part=>part.segment);
+function runHead(model: RunLine, theme: LineTheme, compact=false): string {
+ const label=compact && !model.verb && ["tool","run"].includes(model.phase)?model.phase==="tool"?"Writing":"Running":phaseTitle(model);
+ const paint=runPainter(model,theme), word=[...graphemes.segment(label)].map(part=>part.segment);
  const sweep=sweepAt(word.length,model.clockMs,model.phase==="api");
  const pulse=(Math.sin(model.clockMs/1000*Math.PI)+1)/2;
  const title=word.map((ch,i)=>paint(ch,model.reduced ? 0 : model.phase==="run" ? pulse : i>=sweep && i<sweep+3 ? 1 : 0)).join("");
  const glyph=slotGlyph(runAnimation(model),model.clockMs,{reduced:model.reduced,rateElapsedMs:model.waveMs ?? 0},SPINNER_SLOT_WIDTH);
  return `${paint(glyph)} ${title}${paint("…")}`;
 }
-/** The divider owns elapsed time; its left caption never repeats a timer. */
-export function renderRunStatus(model:RunLine,theme:LineTheme,withTokens=true):string {
- const direction=model.phase==="api"?"↑":withTokens && model.tokens>0 && ["think","text","tool"].includes(model.phase)?`↓ ${Math.round(model.tokens).toLocaleString("en-US")} tokens`:undefined;
- const detail=model.verb?phaseParts(model):[];
- const parts=[...detail,...(direction?[direction]:[])];
- return runHead(model,theme)+(parts.length?theme.fg("dim"," "+parts.join(SEP)):"");
+/** The step clock shares the word's alert tone; the divider keeps total time separately. */
+export function renderRunStatus(model:RunLine,theme:LineTheme,withTokens=true,compact=false):string {
+ const tokens=Math.round(model.tokens);
+ const direction=model.phase==="api"?"↑":withTokens && model.tokens>0 && ["think","text","tool"].includes(model.phase)?`↓ ${tokens.toLocaleString("en-US")} ${tokens===1?"token":"tokens"}`:undefined;
+ const detail=model.verb && !compact?phaseParts(model):[];
+ const clock=runPainter(model,theme)(formatElapsed(model.phaseMs));
+ return runHead(model,theme,compact)+(detail.length?theme.fg("dim"," "+detail.join(SEP)):"")+" "+clock+(direction?theme.fg("dim"," "+direction):"");
 }
 export interface StreamRate { readonly at: number; readonly chars: number; readonly rate: number; readonly waveMs: number }
 export function streamRate(previous: StreamRate, at: number, chars: number): StreamRate {

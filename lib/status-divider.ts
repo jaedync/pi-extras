@@ -5,7 +5,8 @@ import { formatMetrics, type MetricsSummary } from "./phase-metrics.ts";
 export interface StatusDivider {
 	readonly status: string;
 	readonly withoutTokens: string;
-	readonly elapsedMs: number;
+	readonly elapsedMs?: number;
+	readonly compactStatus?: string;
 	readonly metrics?: MetricsSummary;
 	readonly hiddenLineCount?: number;
 }
@@ -15,20 +16,21 @@ export interface DividerPaint {
 	total(text: string): string;
 }
 
-/** Preserve the left status first. Metrics retire in TPS, TTFT, tokens order. */
+/** The step clock stays with status; retire TPS, TTFT, tokens, then total Time. */
 export function renderStatusDivider(model: StatusDivider, width: number, paint: DividerPaint): string {
 	if (width <= 0) return "";
 	const metrics = model.metrics ? formatMetrics(model.metrics) : [];
 	const tps = metrics.find(part => part.startsWith("TPS"));
 	const ttft = metrics.find(part => part.startsWith("TTFT"));
 	const overflow = model.hiddenLineCount ? `↑ ${model.hiddenLineCount} ` : "";
-	const time = `${overflow}Time ${formatElapsed(model.elapsedMs)}`;
+	const time = model.elapsedMs === undefined ? undefined : `${overflow}Time ${formatElapsed(model.elapsedMs)}`;
 	const choices = [
 		[model.status, [tps, ttft, time]],
 		[model.status, [ttft, time]],
 		[model.status, [time]],
 		[model.withoutTokens, [time]],
 		[model.withoutTokens, []],
+		[model.compactStatus ?? model.withoutTokens, []],
 	] as const;
 	for (const [status, sections] of choices) {
 		const right = sections.flatMap(part => part ? [paint.total(part)] : []).join(paint.border(" ─ "));
@@ -37,5 +39,5 @@ export function renderStatusDivider(model: StatusDivider, width: number, paint: 
 		if (space < 1) continue;
 		return left + paint.border(" " + "─".repeat(space)) + (right ? " " + right + paint.border(" ─") : "");
 	}
-	return truncateToWidth(paint.border("─ ") + model.withoutTokens, width, "");
+	return truncateToWidth(paint.border("─ ") + (model.compactStatus ?? model.withoutTokens), width, "");
 }

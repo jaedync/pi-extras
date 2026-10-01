@@ -9,7 +9,7 @@ const frame = (voice) => [
   '',
   ' Run unit tests                                  12.0s ',
   ' Watch types                                     12.0s ',
-  '─ ⢎⡱⣉ Thinking… ↓ 212 tokens ──── TPS 109.4 ─ TTFT 0.7s ─ Time 00:12.0 ─',
+  '─ ⢎⡱⣉ Thinking… 00:09.7 ↓ 212 tokens ──── TPS 109.4 ─ TTFT 0.7s ─ Time 00:12.0 ─',
   voice,
 ].join('\n');
 
@@ -37,10 +37,15 @@ test('a staged session whose dictation transcribed nothing is rejected', () => {
   assert.throws(() => pickFrame([silent, loading]), /transcribed nothing/);
 });
 
+test('the preview selector accepts a singular token in the thinking divider', () => {
+  const oneToken = frame('── ● 0:07  ⠶⠆⠀⠀  ◆◇ ──').replace('212 tokens', '1 token');
+  assert.equal(pickFrame([oneToken]), oneToken);
+});
+
 test('the preview frame is taken while the model is still thinking', () => {
   const thinking = frame('── ● 0:07  ⠶⠆⠀⠀  ◆◇ ──');
-  // The reply has started: the phase line no longer says it is thinking.
-  const replying = frame('── ● 0:07  ⣿⣿⣿⣿  ◆◆ ──').replace('Thinking… ↓ 212 tokens', 'Writing reply… ↓ 1,204 tokens');
+  // The reply has started: the divider no longer says it is thinking.
+  const replying = frame('── ● 0:07  ⣿⣿⣿⣿  ◆◆ ──').replace('Thinking… 00:09.7 ↓ 212 tokens', 'Writing reply… 00:01.2 ↓ 1,204 tokens');
   const later = frame('── ● 0:07  ⠶⠆⠀⠀  ◆◇ ──').replace('Thinking…', 'Still thinking…');
   assert.equal(pickFrame([replying, thinking]), thinking);
   assert.equal(pickFrame([replying, later]), later, 'longer thinking still counts');

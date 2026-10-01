@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Changed
+
+- Phase Spinner restores a per-step stopwatch beside the status word, while
+  total Time stays on the right. The step clock ticks in tenths and shares the
+  status's alert color, including with reduced motion. Narrow widths drop TPS,
+  TTFT, tokens, then total Time before shortening the step status. Native retry
+  countdowns are kept without an extra step clock.
+
 ## 0.18.0 - 2026-10-01
 
 ### Changed

@@ -70,7 +70,7 @@ export function pickFrame(frames) {
 		const widget = border > 1 ? lines.slice(border - 2, border) : [];
 		const running = (title) => widget.some((line) => line.trimStart().startsWith(title));
 		// The default descriptive status is in the same divider as TPS, not in transcript text.
-		const thinking = border >= 0 && /^─ \S+ (?:Thinking|Still thinking|Thinking more|Deep in thought)…(?: ↓ [\d,]+ tokens)? ─/.test(lines[border].trim());
+		const thinking = border >= 0 && /^─ \S+ (?:Thinking|Still thinking|Thinking more|Deep in thought)… (?:\d+d )?\d+:\d\d(?::\d\d)?\.\d(?: ↓ [\d,]+ tokens?)? ─/.test(lines[border].trim());
 		const ready = voice && thinking && running("Run unit tests") && running("Watch types") && lines.some((l) => l.includes("TAIL_CELL_MIN = 10"));
 		if (!ready) continue;
 		const score = [...voice].filter((ch) => ch === "◆").length * 2000 + (voice.includes("◈") ? 1000 : 0) + litDots(voice);

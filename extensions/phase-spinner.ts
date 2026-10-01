@@ -63,6 +63,8 @@ const FALLBACK_STATUS_STYLE: StatusStyle = {
 const INDICATOR_TEXT_WIDTH = 1_000;
 const SEND_REFRESH_MS = 40;
 const DISPLAY_REFRESH_MS = 200;
+// An 80ms shared-grid poll sees every tenth without redrawing unchanged clocks.
+const STEP_CLOCK_REFRESH_MS = 80;
 /** What Pi's working loader shows while held still; this row draws over it. */
 const STILL_LOADER_FRAME = REDUCED_FRAME;
 const DEBUG_HEARTBEAT_MS = 5_000;
@@ -77,6 +79,7 @@ interface VisualState {
 }
 
 interface StatusView {
+	kind: StatusIndicator["kind"];
 	spinner: string;
 	elapsedMs: number;
 	label: string;
@@ -124,6 +127,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	let active = false;
 	let metrics = emptyRunMetrics();
 	let phase: ActivePhase = "prep";
+	let stepKey = "prep";
 	let phaseStartedAt = performance.now();
 	let agentStartedAt = phaseStartedAt;
 	let lineStartedAt = phaseStartedAt;
@@ -173,7 +177,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const animation = status?.style.animation ?? MODE_SPINNERS[peer ? "peer" : phase];
 		const cadence = spinnerCadence(animation, reduced, rate.rate, !!status && animation.kind === "fraction" && retryDelayMs !== undefined);
 		const shimmer = reduced ? 1000 : !status && phase === "api" ? SEND_REFRESH_MS : DISPLAY_REFRESH_MS;
-		const desired = wave ? PI_WAVE.stepMs : Math.ceil(Math.min(cadence, shimmer));
+		const desired = wave ? PI_WAVE.stepMs : Math.ceil(Math.min(cadence, shimmer, STEP_CLOCK_REFRESH_MS));
 		if (stopFrames && frameMs === desired) return;
 		stopFrames?.();
 		frameMs = desired;
@@ -247,7 +251,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const { label, detail } = parseStatusMessage(indicatorText(indicator));
 		const fraction = indicator.kind === "retry" && retryDelayMs !== undefined ? Math.max(0, now - statusShownAt) / retryDelayMs : undefined;
 		const spinner = slotGlyph(style.animation, elapsedMs, { reduced, fraction });
-		return { spinner, elapsedMs, label, detail, style };
+		return { kind: indicator.kind, spinner, elapsedMs, label, detail, style };
 	}
 
 	function visualState(now: number): VisualState {
@@ -314,18 +318,27 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		activeTui?.requestRender();
 	}
 
+	function stepIdentity(next: ActivePhase): string {
+		if (next === "tool") return `tool:${pendingToolName ?? "tool"}`;
+		if (next !== "run") return next;
+		const tools = leafTools();
+		return tools.length > 1 ? `run:count:${tools.length}` : `run:name:${tools[0]?.name ?? "tool"}`;
+	}
+
 	function setPhase(next: ActivePhase, ctx: ExtensionContext, cause: string, forceLog = false, details?: Record<string, unknown>): void {
 		const now = performance.now();
 		const previousPhase = phase;
 		const previousVisualPhase = visualState(now).phase;
 		currentContext = ctx;
-		if (phase !== next) {
-			if (phase === "think") {
+		const nextKey = stepIdentity(next);
+		if (phase !== next || stepKey !== nextKey || cause === "before_provider_request" || cause === "toolcall_start") {
+			if (phase === "think" && next !== "think") {
 				thoughtMs = now - phaseStartedAt;
 				thoughtEndedAt = now;
 				liveThinking = "";
 			}
 			phase = next;
+			stepKey = nextKey;
 			phaseStartedAt = now;
 			renderedPhase = undefined;
 		}
@@ -382,6 +395,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		metrics = updateRunMetrics(metrics, { type: "start" });
 		currentContext = ctx;
 		phase = "prep";
+		stepKey = "prep";
 		phaseStartedAt = now;
 		renderedPhase = undefined;
 		runningTools = new Map();
@@ -463,6 +477,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		return renderStatusDivider({
 			status: renderRunStatus(model, theme),
 			withoutTokens: renderRunStatus(model, theme, false),
+			compactStatus: renderRunStatus(model, theme, false, true),
 			elapsedMs: now - agentStartedAt,
 			metrics,
 			hiddenLineCount,
@@ -479,14 +494,16 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	}
 
 	function statusBorder(status: StatusView, now: number, width: number, hiddenLineCount: number, paint: Paint): string {
-		// Idle statuses (manual /compact) have no run span; the event is the whole span.
-		const totalElapsedMs = active ? now - agentStartedAt : status.elapsedMs;
+		// An idle status has no prompt total; only its left event clock belongs here.
 		const colors = paint(status.style.tone);
-		const caption = colors.phase(status.spinner + " " + status.label) + (status.detail ? colors.dim(" " + status.detail) : "");
+		// Pi 0.99.2 owns retry countdown text. Do not put a second clock beside it.
+		const countdown = status.kind === "retry" && /\bin\s+\d+(?:\.\d+)?s\b/.test(status.label);
+		const clock = countdown ? "" : " " + colors.phase(formatElapsed(status.elapsedMs));
+		const caption = colors.phase(status.spinner + " " + status.label) + clock + (status.detail ? colors.dim(" " + status.detail) : "");
 		return renderStatusDivider({
 			status: caption,
 			withoutTokens: caption,
-			elapsedMs: totalElapsedMs,
+			elapsedMs: active ? now - agentStartedAt : undefined,
 			metrics: active ? metrics : undefined,
 			hiddenLineCount,
 		}, width, colors);

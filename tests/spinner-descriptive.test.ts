@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { formatElapsed } from "../lib/phase-status.ts";
 import { DEFAULT_VERBS, parseVerbs, renderRunStatus, renderEndLine, parseEndLine, type RunLine } from "../lib/cc-phase.ts";
 const theme = { fg: (_key: string, text: string) => text };
 const base = { elapsedMs: 12000, phaseMs: 12000, tokens: 212, clockMs: 0, reduced: true };
@@ -27,12 +28,26 @@ test("divider captions cover every descriptive and playful phase, with and witho
 		for (const verb of [undefined, DEFAULT_VERBS[0]]) {
 			for (const withTokens of [false, true]) {
 				const direction = tokenDetail === "↑" || withTokens ? tokenDetail : "";
-				const details = [...(verb && playful ? [playful] : []), ...(direction ? [direction] : [])];
-				const expected = (verb ? "Proofing" : descriptive) + "…" + (details.length ? " " + details.join(", ") : "");
+				const expected = (verb ? "Proofing" : descriptive) + "…" + (verb && playful ? " " + playful : "") + " " + formatElapsed("phaseMs" in extra ? extra.phaseMs : base.phaseMs) + (direction ? " " + direction : "");
 				assert.equal(renderRunStatus({ ...base, phase, ...extra, verb } as RunLine, theme, withTokens).slice(4), expected);
 			}
 		}
 	}
+});
+test("token labels use the displayed rounded count for singular and plural", () => {
+ for(const [tokens,label] of [[0.6,"1 token"],[1,"1 token"],[1.4,"1 token"],[1.6,"2 tokens"],[2,"2 tokens"]] as const){
+  const row=renderRunStatus({...base,phase:"text",tokens},theme);
+  assert.ok(row.endsWith(`↓ ${label}`));
+ }
+});
+test("the step clock shares the status's amber/red tone, including reduced motion", () => {
+ const painted={fg:(key:string,text:string)=>`<${key}>${text}</${key}>`};
+ for(const reduced of [false,true]){
+  const thinking=renderRunStatus({...base,phase:"think",phaseMs:20000,reduced},painted);
+  const stalled=renderRunStatus({...base,phase:"api",phaseMs:20100,idleTokenMs:20100,reduced},painted);
+  assert.ok(thinking.includes("<warning>00:20.0</warning>"));
+  assert.ok(stalled.includes("<error>00:20.1</error>"));
+ }
 });
 test("tool names strip bidi and invisible formatting in descriptive and playful divider captions", () => {
 	const invisible = "\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069";

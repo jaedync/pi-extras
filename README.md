@@ -29,7 +29,7 @@ can still conflict.
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
 | Cache Compaction | Prefix-sharing summaries that reuse the session's warm prompt cache, with safe fallback to Pi's default compaction |
 | Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
-| Phase Spinner | Descriptive status with a per-mode spinner in the editor's top divider, alongside tokens/sec, time to first token and one elapsed clock; live thinking above queued messages and a π end line when a prompt finishes |
+| Phase Spinner | Descriptive status with a per-mode spinner in the editor's top divider, with a per-step stopwatch, alongside tokens/sec, time to first token and total elapsed time; live thinking above queued messages and a π end line when a prompt finishes |
 | Tab Status | Pi's state in the terminal tab: an iTerm2 status dot and detail, and tab progress in iTerm2, Ghostty, WezTerm and Windows Terminal |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
 | Subagents | `subagent` and `message` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, with a live band per agent |
@@ -458,7 +458,7 @@ half second of each recording is lost while that job starts.
 The editor's top divider says what the agent is doing:
 
 ```text
-─ ⢌⡱⢎ Thinking… ↓ 212 tokens ──── TPS 109.3 ─ TTFT 0.7s ─ Time 00:15.8 ─
+─ ⢌⡱⢎ Thinking… 00:12.4 ↓ 212 tokens ──── TPS 109.3 ─ TTFT 0.7s ─ Time 00:15.8 ─
 ```
 
 - **The word** names the phase: `Sending request`, `Waiting for the model`,
@@ -475,9 +475,16 @@ The editor's top divider says what the agent is doing:
   a point, a retry drains, and a branch summary walks every row.
 - **Color:** the status turns amber after 10 seconds of thinking, and red when
   no tokens have come for 10 seconds.
-- **The right side** keeps TPS, time to first token and one elapsed clock.
-  Narrow terminals drop TPS first, then TTFT, then the token count. The status
-  never wraps.
+- **The clocks:** a per-step stopwatch sits beside the word, in tenths, and
+  shares its amber/red tone. It restarts for a new request, thinking, reply,
+  tool call or running-tool step; later thinking wordings keep the same clock.
+  Pi's statuses get their own clock, except retries that already show a countdown.
+  Standalone idle statuses show only this clock, without a duplicate total.
+  Reduced motion holds the spinner still but keeps these clocks ticking.
+- **The right side** keeps TPS, time to first token and total `Time`.
+  Narrow terminals drop TPS first, then TTFT, then tokens, then total `Time`
+  and its hidden-line count. Long tool names and playful details retire before
+  the step clock; the word, spinner and step clock go last. The status never wraps.
 
 While the model thinks, its newest three lines show dimly at the bottom of the
 conversation, above queued messages. A tool call the model is still writing
