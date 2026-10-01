@@ -92,7 +92,8 @@ export function rowRail(record: AgentRecord, now: number): Seg[] {
 		rail.push({ text: `ctx ${Math.round((100 * record.contextTokens) / record.contextWindow)}%`, color: "dim" }, { text: "  ", color: "dim" });
 	}
 	if (record.usage.cost > 0) rail.push({ text: `$${formatMoney(record.usage.cost)}`, color: "dim" }, { text: "  ", color: "dim" });
-	if (record.state !== "queued") rail.push({ text: formatTime((record.endedAt ?? now) - (record.startedAt ?? now)), color: "text" });
+	// Restored records saved before run starts were kept have only createdAt, as in format.ts.
+	if (record.state !== "queued") rail.push({ text: formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt)), color: "text" });
 	return rail;
 }
 
@@ -106,7 +107,7 @@ const STATE_WORDS: Record<AgentState, string> = {
 export function listLabel(record: AgentRecord, nameWidth: number, now: number, maxWidth = Number.POSITIVE_INFINITY): string {
 	const parts = [record.name.padEnd(nameWidth), `${STATE_WORDS[record.state]}${record.orphaned ? " (orphan)" : ""}`.padEnd(8), shortModel(record.model)];
 	if (record.usage.cost > 0) parts.push(`$${formatMoney(record.usage.cost)}`);
-	if (record.startedAt !== undefined) parts.push(formatTime((record.endedAt ?? now) - record.startedAt));
+	if (record.state !== "queued") parts.push(formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt)));
 	parts.push(record.task.replace(/\s+/g, " ").trim());
 	const line = parts.join("  ");
 	return line.length > maxWidth ? `${line.slice(0, Math.max(1, maxWidth - 1))}…` : line;

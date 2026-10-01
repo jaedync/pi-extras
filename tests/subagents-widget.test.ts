@@ -86,3 +86,10 @@ test("a picker line fits the width it is given", () => {
 	assert.equal(line.length, 60);
 	assert.ok(line.endsWith("…"));
 });
+
+test("a restored record without a run start times its run from creation, never from now", () => {
+	// Records restored from before run starts were saved carry only createdAt and endedAt.
+	const legacy = record("old", { state: "interrupted", createdAt: 1_000, startedAt: undefined, endedAt: 195_855 });
+	assert.equal(text(rowRail(legacy, 50_000_000)), "3m 14s");
+	assert.match(listLabel(legacy, 4, 50_000_000), /interrupted.*3m 14s/);
+});
