@@ -1,4 +1,4 @@
-/** Content-free, throttled failure notes for Pi extensions. */
+/** Content-free operational notes for Pi extensions. */
 import { appendFileSync } from "node:fs";
 
 const lastWrite = new Map<string, number>();
@@ -14,8 +14,13 @@ export function operationalError(logFile: string, tag: string, message: string):
 	const now = Date.now();
 	if (now - (lastWrite.get(logFile) ?? 0) < THROTTLE_MS) return;
 	lastWrite.set(logFile, now);
+	operationalLine(logFile, `[${tag}] ${new Date().toISOString()} ${message}`);
+}
+
+/** Decisions need one record each, even when several sessions compact together. */
+export function operationalLine(logFile: string, line: string): void {
 	try {
-		appendFileSync(logFile, `[${tag}] ${new Date().toISOString()} ${message}\n`, { mode: 0o600 });
+		appendFileSync(logFile, `${line}\n`, { mode: 0o600 });
 	} catch {
 		// Logging is best effort; a missing or unwritable directory must not break the caller.
 	}

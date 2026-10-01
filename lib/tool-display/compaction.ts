@@ -17,13 +17,14 @@ import { formatTokens } from "../status-plus-render.ts";
 import { sanitize } from "./format.ts";
 import { more, painter, plural, type ThemeLike } from "./kit.ts";
 import { BODY_INDENT, indent } from "./row.ts";
+import { COMPACTION_DECISION_EVENT, compactionKey, readCompactionPath, type CompactionNotice, type CompactionPath } from "../cache-compaction/decision.ts";
 
 export const COMPACTION_ENTRY = "pi-extras.compaction-band";
 const PREVIEW_LINES = 3;
 type Reason = "threshold" | "manual" | "overflow";
 type CompactionSummaryMessage = ConstructorParameters<typeof CompactionSummaryMessageComponent>[0];
 
-interface SavedCompaction {
+interface SavedCompaction extends Partial<CompactionPath> {
 	readonly entryId: string;
 	readonly reason: Reason;
 	readonly startedAt?: number;
@@ -53,6 +54,7 @@ function savedRecord(data: unknown): SavedCompaction | undefined {
 	if ([record.startedAt, record.durationMs, record.tokensAfter].some((value) => value !== undefined && !finite(value))) return undefined;
 	return {
 		entryId: record.entryId, reason: record.reason,
+		...readCompactionPath(record),
 		...(record.startedAt !== undefined ? { startedAt: record.startedAt } : {}),
 		...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
 		...(record.tokensAfter !== undefined ? { tokensAfter: record.tokensAfter } : {}),
@@ -189,31 +191,43 @@ interface SessionHost {
 /** Records are custom entries, outside model context, and reconstructed only from the active branch. */
 export function registerCompaction(pi: ExtensionAPI, host: SessionHost): { start(ctx: ExtensionContext): void; stop(): void } {
 	let context: ExtensionContext | undefined;
+	let decision: CompactionNotice | undefined;
+	let unsubscribe: (() => void) | undefined;
+	const receive = (data: unknown) => {
+		const path = readCompactionPath(data);
+		const value = data as CompactionNotice | undefined;
+		if (context && path && value?.sessionId === context.sessionManager.getSessionId()) decision = { ...path, sessionId: value.sessionId, ...(typeof value.compactionKey === "string" ? { compactionKey: value.compactionKey } : {}) };
+	};
 	let started: { readonly at: number; readonly signal: AbortSignal } | undefined;
 	let live: readonly SessionEntry[] = [];
 	let undo: (() => void) | undefined;
 	const branch = () => context?.sessionManager?.getBranch?.() ?? [];
-	const stop = () => { undo?.(); undo = undefined; context = undefined; started = undefined; live = []; };
+	const stop = () => { unsubscribe?.(); unsubscribe = undefined; undo?.(); undo = undefined; context = undefined; started = undefined; decision = undefined; live = []; };
 	const start = (ctx: ExtensionContext) => {
 		stop();
 		if (ctx.mode !== "tui") return;
 		context = ctx;
+		unsubscribe = pi.events.on(COMPACTION_DECISION_EVENT, receive);
 		undo = installCompactionBand({
 			...host, theme: () => ctx.ui.theme as unknown as ThemeLike,
 			lookup: (message) => matchCompaction(message, [...branch(), ...live]),
 		});
 	};
+	pi.on("session_shutdown", stop);
 	pi.on("session_before_compact", (event) => { if (context) started = { at: host.now(), signal: event.signal }; });
-	pi.on("session_compact_failed", () => { started = undefined; });
+	pi.on("session_compact_failed", () => { started = undefined; decision = undefined; });
 	pi.on("session_compact", (event, ctx) => {
 		if (!context) return;
 		const timing = started;
 		started = undefined;
+		const entry = event.compactionEntry;
+		const own = decision?.sessionId === ctx.sessionManager.getSessionId() && (decision.path === "default" ? entry.fromHook !== true : entry.fromHook === true && (entry.details as { cachePrefix?: boolean } | undefined)?.cachePrefix === true && decision.compactionKey === compactionKey(entry));
 		const data: SavedCompaction = {
-			entryId: event.compactionEntry.id, reason: event.reason,
+			entryId: entry.id, reason: event.reason, ...(own && decision ? { path: decision.path, fallbackReason: decision.fallbackReason } : {}),
 			...(timing && !timing.signal.aborted ? { startedAt: timing.at, durationMs: Math.max(0, host.now() - timing.at) } : {}),
 			tokensAfter: estimateAfter(ctx.sessionManager.buildSessionProjection().messages),
 		};
+		decision = undefined;
 		try {
 			pi.appendEntry(COMPACTION_ENTRY, data);
 		} catch {

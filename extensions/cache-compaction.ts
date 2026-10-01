@@ -2,6 +2,9 @@ import { convertToLlm, type ExtensionAPI, type ExtensionContext, type SessionPro
 import { CONFIG_FILE, readSection } from "../lib/extras-config.ts";
 import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, loadConfig, mergePayload, payloadHashes, reconcile, requestEffort, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
 
+import { dirname, join } from "node:path";
+import { operationalLine } from "../lib/operational-log.ts";
+import { COMPACTION_DECISION_EVENT, compactionKey, type CompactionDecision } from "../lib/cache-compaction/decision.ts";
 import { estimateRequestContext, contextSafetyTokens, summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
 
 type Message = SessionProjection["messages"][number];
@@ -101,7 +104,9 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 	let requestOptions: ReturnType<typeof sessionOptions> | undefined;
 	let pending: Captured | undefined;
 	let latest: Captured | undefined;
-	const clear = () => { pending = undefined; latest = undefined; };
+	let captureMiss: string | undefined;
+	const clear = () => { pending = undefined; latest = undefined; captureMiss = undefined; };
+	const miss = (reason: string) => { clear(); captureMiss = reason; };
 	pi.on("session_start", (_event, ctx) => {
 		clear();
 		try { policy = loadConfig(readSection("cacheCompaction", configFile)); requestOptions = sessionOptions(options.settingsManager ?? SettingsManager.create(ctx.cwd, getAgentDir(), { projectTrusted: ctx.isProjectTrusted() })); }
@@ -115,22 +120,24 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 
 	pi.on("context_with_system", (event, ctx) => {
 		pending = undefined;
+		captureMiss = undefined;
 		try {
-			if (!policy.enabled || event.messages[0]?.role !== "system") return;
+			if (!policy.enabled) return;
+			if (event.messages[0]?.role !== "system") { captureMiss = "capture-no-system"; return; }
 			const request = identity(ctx, now());
-			if (!request) return;
+			if (!request) { captureMiss = "capture-no-model"; return; }
 			const projection = ctx.sessionManager.buildSessionProjection();
 			const hash = hashOnce();
 			const hashes = projection.messages.map(hash);
 			const positions = positionsFor(hashes, event.messages.map(hash));
-			if (!positions) return;
+			if (!positions) { captureMiss = "capture-projection"; return; }
 			// Pi and later extensions may mutate these messages after this observational hook.
 			pending = { ...request, ids: ctx.sessionManager.getBranch().map((entry) => entry.id), hashes, positions, messages: structuredClone(event.messages) };
-		} catch { clear(); }
+		} catch { miss("capture-failed"); }
 	});
 	pi.on("before_provider_headers", (event) => {
 		try { if (pending) pending = { ...pending, headers: safeHeaders(event.headers) }; }
-		catch { clear(); }
+		catch { miss("capture-headers"); }
 	});
 	pi.on("before_provider_request", (event, ctx) => {
 		try {
@@ -142,32 +149,45 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 			const request = pending;
 			pending = undefined;
 			latest = undefined;
-			if (!request) return;
+			if (!request) { captureMiss ??= "capture-no-context"; return; }
 			const current = identity(ctx, now());
-			if (!current || current.provider !== request.provider || current.id !== request.id || current.api !== request.api || current.sessionId !== request.sessionId) return;
+			if (!current || current.provider !== request.provider || current.id !== request.id || current.api !== request.api || current.baseUrl !== request.baseUrl || current.sessionId !== request.sessionId) { captureMiss = "capture-identity"; return; }
 			const payload = capturePayload(request.api, event.payload);
 			const payloadPrefix = payloadHashes(request.api, event.payload);
-			if (payload && payloadPrefix) latest = { ...request, at: now(), payload, payloadPrefix, effort: request.api === "anthropic-messages" ? requestEffort(event.payload) : undefined };
-		} catch { clear(); }
+			if (payload && payloadPrefix) { latest = { ...request, at: now(), payload, payloadPrefix, effort: request.api === "anthropic-messages" ? requestEffort(event.payload) : undefined }; captureMiss = undefined; }
+			else captureMiss = "capture-payload";
+		} catch { miss("capture-payload"); }
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {
 		const captured = latest;
+		const missed = captureMiss;
 		// A summary changes the request prefix even if a later hook wins or default compaction runs.
 		clear();
-		const fallback = (reason: string) => { report(ctx, `default (${reason})`); return undefined; };
+		let metrics: Pick<CompactionDecision, "estimate" | "available" | "tailTokens"> = { estimate: null, available: null, tailTokens: null };
+		let outcome: Pick<CompactionDecision, "stopReason" | "usage"> = { stopReason: null, usage: null };
+		const floor = summaryOutputFloor(event.preparation.previousSummary);
+		const record = (path: CompactionDecision["path"], fallbackReason: string | null, key?: string) => {
+			// This allowlist deliberately excludes response content, diagnostics and provider errors.
+			try {
+				const decision: CompactionDecision = { time: new Date(now()).toISOString(), sessionId: ctx.sessionManager.getSessionId(), provider: ctx.model?.provider ?? null, model: ctx.model?.id ?? null, reason: event.reason, path, fallbackReason, tokensBefore: event.preparation.tokensBefore, ...metrics, floor, ...outcome };
+				operationalLine(join(dirname(configFile), "cache-compaction.log"), JSON.stringify(decision));
+				pi.events.emit(COMPACTION_DECISION_EVENT, { path, fallbackReason, sessionId: decision.sessionId, ...(key ? { compactionKey: key } : {}) });
+			} catch { /* Best-effort diagnostics must never replace the compaction decision. */ }
+		};
+		const fallback = (reason: string) => { record("default", reason); report(ctx, `default (${reason})`); return undefined; };
 		let payloadFallback: string | undefined;
 		try {
 			const model = ctx.model;
 			if (!model) return fallback("no-model");
 			const p = event.preparation;
 			const reason = fallbackReason({ enabled: policy.enabled, captured, model, sessionId: ctx.sessionManager.getSessionId(), now: now(), idleMs: idleLimitMs(policy, model), reason: event.reason, aborted: event.signal.aborted });
-			if (reason || !captured?.payload) return fallback(reason ?? "no-payload");
+			if (reason || !captured?.payload) return fallback(reason === "no-request" ? missed ?? reason : reason ?? "no-payload");
 			const request = prepareRequest(captured, event, ctx, now());
 			if ("fallback" in request) return fallback(request.fallback);
 			const estimated = estimateRequestContext(convertToLlm(request.messages));
 			const available = model.contextWindow - estimated.tokens - contextSafetyTokens(estimated.tailTokens);
-			const floor = summaryOutputFloor(p.previousSummary);
+			metrics = { estimate: estimated.tokens, available, tailTokens: estimated.tailTokens };
 			if (available < floor) return fallback("context-window");
 			if (event.signal.aborted) return fallback("aborted");
 			report(ctx, "prefix-sharing");
@@ -180,16 +200,19 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 				sessionId: captured.sessionId, signal: event.signal,
 				onPayload: (generated: unknown) => {
 					try { return mergePayload(model.api, captured.payload!, generated, captured.payloadPrefix, floor); }
-					catch (error) { if (error instanceof Error && error.message === "thinking-budget") payloadFallback = "thinking-budget"; throw error; }
+					catch (error) { if (error instanceof Error && ["thinking-budget", "prefix-changed"].includes(error.message)) payloadFallback = error.message; throw error; }
 				},
 			});
+			outcome = { stopReason: response.stopReason, usage: { input: response.usage.input, cacheRead: response.usage.cacheRead, cacheWrite: response.usage.cacheWrite, output: response.usage.output } };
 			const summary = response.content.filter((block) => block.type === "text").map((block) => block.text).join("\n").trim();
 			if (event.signal.aborted || response.stopReason === "aborted") return fallback("aborted");
-			if (response.stopReason === "error" || response.stopReason === "length") return fallback(payloadFallback ?? "response-failed");
+			if (response.stopReason === "error" || response.stopReason === "length") return fallback(payloadFallback ?? (response.stopReason === "length" ? "length" : "response-failed"));
 			if (!summary || response.content.some((block) => block.type === "toolCall")) return fallback("unusable-summary");
 			const previous = [...event.branchEntries].reverse().find((entry) => entry.type === "compaction");
 			const files = fileLists(p.fileOps, previous?.type === "compaction" ? previous.details : undefined);
-			return { compaction: { summary: summary + formatFiles(files), firstKeptEntryId: p.firstKeptEntryId, tokensBefore: p.tokensBefore, usage: response.usage, details: { ...files, cachePrefix: true } } };
+			const compaction = { summary: summary + formatFiles(files), firstKeptEntryId: p.firstKeptEntryId, tokensBefore: p.tokensBefore, usage: response.usage, details: { ...files, cachePrefix: true } };
+			record("prefix-sharing", null, compactionKey(compaction));
+			return { compaction };
 		} catch (error) {
 			// Only known local sentinel errors are safe to expose, never provider error text.
 			const reason = error instanceof Error && error.message === "ambiguous-boundary" ? error.message : payloadFallback ?? "request-failed";

@@ -85,9 +85,20 @@ without running it. The extension reads no credential files, changes no
 ordinary request, and adds no network destination, telemetry, timer or disk
 cache.
 
-**What it saves.** Only what Pi's compaction saves: the summary, file lists
-and usage, plus `details.cachePrefix: true`. Errors are reported as fixed
-categories, never as provider text or request bodies.
+**What it saves.** Pi saves the summary, file lists and usage, plus
+`details.cachePrefix: true` on prefix-sharing success. The compaction band's
+custom session entry also records the chosen path and fallback category when
+Tool Display is loaded.
+
+Each decision appends one JSON line to `cache-compaction.log` in the Pi agent
+directory. It records time, session ID, provider/model, Pi's compaction reason,
+the chosen path, a fixed fallback category and token estimates. Attempted
+prefix-sharing responses also record stop reason and input, cache-read,
+cache-write and output usage. Unknown estimates are `null`. The file is created
+with mode `0600`. Log writes are best effort and never block compaction on an
+unwritable file. The log has no message content, summaries, headers, payloads
+or provider error text. It is local, is not uploaded and has no automatic
+rotation. Remove it when you no longer need the diagnostic history.
 
 **Limits.** Cache hits and expiry can't be guaranteed. Anything uncertain uses
 Pi's own compaction. A failed attempt is billed by the provider but not

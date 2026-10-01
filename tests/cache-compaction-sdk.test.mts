@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test, after } from "node:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -72,7 +72,7 @@ async function fixture(api = "anthropic-messages", enabled = true, automatic?: "
 	assert.deepEqual(loader.getExtensions().errors, []);
 	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model, thinkingLevel: "off", settingsManager, resourceLoader: loader, sessionManager: sdk.SessionManager.inMemory(scratch), noTools: "all" });
 	await session.bindExtensions({ mode: "tui", uiContext: { notify: (text: string) => { notices.push(text); if (process.env.PREFIX_TEST_DEBUG) console.error(text); } }, onError: (error: unknown) => errors.push(error) });
-	return { session, calls, captures, errors, notices, configFile, settingsManager, simulateWarmer: () => { simulateWarmer = true; }, setUsage: (tokens: number) => { usageTokens = tokens; }, setLateTransform: () => { lateTransform = true; }, setTime: (n: number) => { now += n; }, setResponse: (mode: string) => { responseMode = mode; }, async warm() { await session.prompt("Old task: preserve file paths and decision."); await session.prompt("Recent task: next step is run the tests."); }, async close() { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); } };
+	return { session, calls, captures, errors, notices, configFile, logFile: join(agentDir, "cache-compaction.log"), settingsManager, simulateWarmer: () => { simulateWarmer = true; }, setUsage: (tokens: number) => { usageTokens = tokens; }, setLateTransform: () => { lateTransform = true; }, setTime: (n: number) => { now += n; }, setResponse: (mode: string) => { responseMode = mode; }, async warm() { await session.prompt("Old task: preserve file paths and decision."); await session.prompt("Recent task: next step is run the tests."); }, async close() { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); } };
 }
 
 for (const api of ["anthropic-messages", "openai-codex-responses", "openai-responses", "google-generative-ai"]) {
@@ -139,6 +139,7 @@ test("real SDK provider-prefix validation rejects later context mutation before 
 	assert.notEqual(entry.details.cachePrefix, true);
 	assert.ok(!f.calls.some((call) => textOf(call.context.messages.at(-1)).includes("COMPACTION CHECKPOINT REQUEST")), "mismatched full-context request was not sent");
 	assert.ok(f.calls.some((call) => call.cacheRetention === "none"));
+	assert.equal(JSON.parse(readFileSync(f.logFile, "utf8")).fallbackReason, "prefix-changed");
 });
 test("real SDK repeated hook compactions carry cumulative files in details and summary XML", { timeout: 15000 }, async (t) => {
 	const f = await fixture(); t.after(() => f.close()); await f.session.prompt("Old file work.");
@@ -262,10 +263,12 @@ test("dense unanchored tail falls back despite fitting the old fixed margin", { 
 });
 for (const mode of ["no-pending", "invalid-context", "invalid-payload"]) test(`uncaptured new ${mode} request invalidates the old capture`, { timeout: 15000 }, async (t) => {
 	const f = await fixture(); t.after(() => f.close()); await f.warm();
-	if (mode !== "no-pending") await f.session.extensionRunner.emit({ type: "context_with_system", messages: mode === "invalid-context" ? [] : f.captures.at(-1) });
+	if (mode !== "no-pending") await f.session.extensionRunner.emit({ type: "context_with_system", messages: mode === "invalid-context" ? [] : f.session.sessionManager.buildSessionProjection().messages });
 	const payload = mode === "invalid-payload" ? { model: "uncaptured" } : { ...f.calls.at(-1)!.payload, messages: [...f.calls.at(-1)!.payload.messages, { role: "user", content: "new real request" }] };
 	await f.session.extensionRunner.emit({ type: "before_provider_request", payload });
-	const entry = await f.session.compact(); assert.notEqual(entry.details?.cachePrefix, true); assert.ok(f.notices.includes("Compaction: default (no-request)"));
+	const entry = await f.session.compact(); assert.notEqual(entry.details?.cachePrefix, true);
+	const expected = mode === "invalid-context" ? "capture-no-system" : mode === "invalid-payload" ? "capture-payload" : "capture-no-context";
+	assert.equal(JSON.parse(readFileSync(f.logFile, "utf8")).fallbackReason, expected);
 });
 test("zero model output limit means uncapped, never a zero-token summary request", { timeout: 15000 }, async (t) => {
 	const f = await fixture("anthropic-messages", true, undefined, 16384, 0); t.after(() => f.close()); await f.warm();
@@ -281,5 +284,34 @@ test("usage-anchored estimator matches Pi's own compaction helper", async () => 
 		assert.equal(estimateRequestTokens(messages), estimateContextTokens(messages).tokens);
 		assert.equal(estimateRequestTokens([...messages, { ...assistant, timestamp: 25 }]), estimateContextTokens([...messages, { ...assistant, timestamp: 25 }]).tokens);
 	}
+});
+test("every decision is durable, unthrottled and content-free, including failed prefix responses", async (t) => {
+	const f = await fixture(); t.after(() => f.close()); await f.warm();
+	await f.session.compact("private-focus-marker");
+	await f.session.prompt("private-request-marker"); f.setResponse("length");
+	await f.session.compact();
+	const lines = readFileSync(f.logFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+	assert.equal(lines.length, 2);
+	assert.equal(statSync(f.logFile).mode & 0o777, 0o600);
+	for (const line of lines) {
+		assert.ok(Number.isFinite(Date.parse(line.time)));
+		assert.equal(line.sessionId, f.session.sessionId);
+		assert.equal(line.provider, "fixture"); assert.equal(line.model, "model"); assert.equal(line.reason, "manual");
+		for (const key of ["tokensBefore", "estimate", "available", "floor", "tailTokens"]) assert.equal(typeof line[key], "number", key);
+		assert.deepEqual(line.usage, { input: 10, cacheRead: 90, cacheWrite: 0, output: 2 });
+	}
+	assert.equal(lines[0].path, "prefix-sharing"); assert.equal(lines[0].fallbackReason, null); assert.equal(lines[0].stopReason, "stop");
+	assert.equal(lines[1].path, "default"); assert.equal(lines[1].fallbackReason, "length"); assert.equal(lines[1].stopReason, "length");
+	assert.doesNotMatch(readFileSync(f.logFile, "utf8"), /private-|checkpoint|headers|payload|summary|Fixture reply/);
+});
+test("early default decisions record unknown estimates and logging cannot break compaction", async (t) => {
+	const f = await fixture("anthropic-messages", false); t.after(() => f.close()); await f.warm();
+	await f.session.compact();
+	const line = JSON.parse(readFileSync(f.logFile, "utf8"));
+	assert.equal(line.fallbackReason, "disabled"); assert.equal(line.path, "default"); assert.equal(line.estimate, null); assert.equal(line.available, null); assert.equal(line.tailTokens, null); assert.equal(line.floor, 8000);
+	rmSync(f.logFile); mkdirSync(f.logFile);
+	await f.session.prompt("Next work");
+	await assert.doesNotReject(() => f.session.compact());
+	assert.deepEqual(f.errors, []);
 });
 after(() => { globalThis.fetch = originalFetch; rmSync(scratch, { recursive: true, force: true }); });

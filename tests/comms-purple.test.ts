@@ -187,7 +187,7 @@ test("unparseable mesh content falls back to a purple band and sanitized raw tex
 
 test("Tool Display registers mesh rendering before session_start", () => {
 	const renderers = new Map<string, unknown>();
-	registerToolDisplay({ on() {}, registerMessageRenderer: (type: string, render: unknown) => renderers.set(type, render), registerCommand() {} } as never,
+	registerToolDisplay({ on() {}, events: { on() {} }, registerMessageRenderer: (type: string, render: unknown) => renderers.set(type, render), registerCommand() {} } as never,
 		{ host: {}, settings: {} } as never);
 	assert.equal(typeof renderers.get("remote-pi:mesh-message"), "function");
 });

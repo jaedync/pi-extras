@@ -66,7 +66,7 @@ export function mergePayload(api: string, captured: RecordValue, generated: unkn
 	if (!key || !object(generated) || !Array.isArray(generated[key])) throw new Error("Unsupported compaction payload");
 	const payload = preserveEffortMarker(api, generated, prefix);
 	const hashes = prefix ? payloadHashes(api, payload) : undefined;
-	if (prefix && (!hashes || prefix.length > hashes.length || !prefix.every((hash, i) => hash === hashes[i]))) throw new Error("Compaction request prefix changed");
+	if (prefix && (!hashes || prefix.length > hashes.length || !prefix.every((hash, i) => hash === hashes[i]))) throw new Error("prefix-changed");
 	const cap = requestOutputLimit(payload);
 	const config = object(captured.config) ? captured.config : undefined;
 	const budget = key === "contents" && config && object(config.thinkingConfig) ? config.thinkingConfig.thinkingBudget : object(captured.thinking) ? captured.thinking.budget_tokens : undefined;

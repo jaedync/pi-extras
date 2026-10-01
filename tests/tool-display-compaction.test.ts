@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { BULLET_GLYPH } from "../lib/band/glyph.ts";
 import test from "node:test";
+import { EventEmitter } from "node:events";
+import { fingerprint } from "../lib/cache-compaction/core.ts";
+import { COMPACTION_DECISION_EVENT } from "../lib/cache-compaction/decision.ts";
 import { CompactionSummaryMessageComponent, estimateTokens, getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { COMPACTION_ENTRY, estimateAfter, installCompactionBand, matchCompaction, registerCompaction, type CompactionHost } from "../lib/tool-display/compaction.ts";
@@ -150,11 +153,12 @@ function harness() {
 	const notices: string[] = [];
 	const appended: unknown[] = [];
 	let failSave = false;
-	const pi = { on: (event: string, handler: Function) => handlers.set(event, handler), appendEntry: (customType: string, data: unknown) => { if (failSave) throw new Error("read-only"); const saved = { type: "custom", customType, data }; appended.push(saved); branch = [...branch, saved]; } };
-	const ctx = { mode: "tui", ui: { theme, notify: (text: string) => notices.push(text) }, sessionManager: { getBranch: () => branch, buildSessionProjection: () => ({ messages: [{ role: "user", content: "post-compaction context" }] }) } };
+	const events = new EventEmitter();
+	const pi = { events: { on: (name: string, handler: (...args: any[]) => void) => { events.on(name, handler); return () => events.off(name, handler); } }, on: (event: string, handler: Function) => handlers.set(event, handler), appendEntry: (customType: string, data: unknown) => { if (failSave) throw new Error("read-only"); const saved = { type: "custom", customType, data }; appended.push(saved); branch = [...branch, saved]; } };
+	const ctx = { mode: "tui", ui: { theme, notify: (text: string) => notices.push(text) }, sessionManager: { getSessionId: () => "fixture", getBranch: () => branch, buildSessionProjection: () => ({ messages: [{ role: "user", content: "post-compaction context" }] }) } };
 	const display = registerCompaction(pi as never, { enabled: () => true, now: () => now, moreHint: () => "click for all" });
 	display.start(ctx as never);
-	return { display, appended, notices, ctx, fire: (name: string, event: object = {}) => handlers.get(name)!(event, ctx), setNow: (value: number) => { now = value; }, setBranch: (value: unknown[]) => { branch = value; }, failSave: () => { failSave = true; } };
+	return { display, appended, notices, ctx, listeners: () => events.listenerCount(COMPACTION_DECISION_EVENT), decision: (data: object) => events.emit(COMPACTION_DECISION_EVENT, { sessionId: "fixture", ...data }), fire: (name: string, event: object = {}) => handlers.get(name)!(event, ctx), setNow: (value: number) => { now = value; }, setBranch: (value: unknown[]) => { branch = value; }, failSave: () => { failSave = true; } };
 }
 
 test("success saves start, duration, reason and estimated after size, then resume restores them", () => {
@@ -170,6 +174,55 @@ test("success saves start, duration, reason and estimated after size, then resum
 		h.display.start(h.ctx as never);
 		assert.match(plain(new CompactionSummaryMessageComponent(message).render(84))[0]!, /compaction manual\s+386k → ~6\s+\$0.012\s+2.5s/);
 	} finally { h.display.stop(); }
+});
+
+test("the band persists the compaction path and fallback category without stale decisions", () => {
+	const h = harness();
+	try {
+		h.fire("session_before_compact", { signal: new AbortController().signal });
+		h.decision({ path: "default", fallbackReason: "cold-cache", content: "private" });
+		h.fire("session_compact", { compactionEntry: entry, reason: "threshold" });
+		const saved = h.appended[0] as { data: Record<string, unknown> };
+		assert.equal(saved.data.path, "default"); assert.equal(saved.data.fallbackReason, "cold-cache"); assert.equal(saved.data.content, undefined);
+		assert.equal(matchCompaction(message, [entry, h.appended[0]] as never)?.path, "default");
+		h.fire("session_before_compact", { signal: new AbortController().signal });
+		h.fire("session_compact", { compactionEntry: entry, reason: "manual" });
+		assert.equal((h.appended[1] as { data: Record<string, unknown> }).data.path, undefined);
+	} finally { h.display.stop(); }
+});
+
+test("decisions attach only to their own compaction, never another hook's result", () => {
+	const h = harness();
+	const key = fingerprint({ summary: entry.summary, firstKeptEntryId: entry.firstKeptEntryId, tokensBefore: entry.tokensBefore });
+	try {
+		for (const [notice, compacted, expected] of [
+			[{ path: "default", fallbackReason: "cold-cache" }, { ...entry, fromHook: true }, undefined],
+			[{ path: "prefix-sharing", fallbackReason: null, compactionKey: key }, { ...entry, summary: "Another hook", fromHook: true, details: { cachePrefix: true } }, undefined],
+			[{ path: "prefix-sharing", fallbackReason: null, compactionKey: key }, { ...entry, fromHook: true, details: { cachePrefix: true } }, "prefix-sharing"],
+			[{ path: "default", fallbackReason: "cold-cache", sessionId: "other-session" }, entry, undefined],
+		] as const) {
+			h.decision(notice);
+			h.fire("session_compact", { compactionEntry: compacted, reason: "manual" });
+			assert.equal((h.appended.at(-1) as { data: { path?: string } }).data.path, expected);
+		}
+	} finally { h.display.stop(); }
+});
+
+test("decision subscription is released on shutdown and replaced once on restart", () => {
+	const h = harness();
+	assert.equal(h.listeners(), 1);
+	h.fire("session_shutdown"); assert.equal(h.listeners(), 0);
+	h.display.start(h.ctx as never); assert.equal(h.listeners(), 1);
+	h.display.stop(); assert.equal(h.listeners(), 0);
+});
+
+test("untrusted saved fallback categories must be strings or null", () => {
+	for (const fallbackReason of [42, {}, []]) {
+		const saved = { type: "custom", customType: COMPACTION_ENTRY, data: { ...record, path: "default", fallbackReason } };
+		const data = matchCompaction(message, [entry, saved] as never);
+		assert.equal(data?.path, undefined); assert.equal(data?.fallbackReason, undefined);
+		assert.equal(data?.durationMs, record.durationMs);
+	}
 });
 
 test("branch changes drop abandoned records, and non-terminal sessions keep Pi's renderer", () => {
