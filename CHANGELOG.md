@@ -2,6 +2,30 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.19.1 - 2026-10-02
+
+### Added
+
+- A view of every subagent at once. The widget's `(view)` or `/subagents`
+  opens it over the full terminal: each agent's live row with its task under
+  it, children under their parents, and a count of what they are doing and
+  what they have cost on top. Use ↑↓ and Enter, or click, to open an agent's
+  inspector; Esc there comes back to the list. It replaces the plain-text
+  picker `/subagents` used to open.
+
+### Changed
+
+- The subagents widget shows up to four agents. A fifth turns the last row
+  into `+2 more subagents · 2 working  (view)  (expand)` instead of a
+  `+N more` line that did nothing when clicked, and it never says `+1 more`.
+  The rows kept are the agents that need you first (asking, failed,
+  interrupted), then those still working; finished ones give way first.
+  `(expand)` shows as many rows as fit, up to all of them, while the
+  transcript keeps at least half of the room the editor and footer leave;
+  `(collapse)` takes them back.
+- `/subagents <name>` with a name that isn't an agent says so instead of
+  opening the list.
+
 ## 0.19.0 - 2026-10-02
 
 ### Changed
