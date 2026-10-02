@@ -8,6 +8,26 @@ test("the shared store is one instance per process", () => {
 	assert.equal((globalThis as unknown as Record<symbol, unknown>)[key], sharedLimitStore());
 });
 
+test("reload upgrades an older shared store and keeps snapshots and hot flags", () => {
+	const key = Symbol.for("pi-extras.limit-store");
+	const host = globalThis as unknown as Record<symbol, unknown>;
+	const saved = host[key];
+	const old = createLimitStore();
+	old.set("anthropic", { entries: [{ label: "5h", usedPct: 3 }], atMs: 1, source: "poll" });
+	old.setHot("anthropic", true);
+	const { recordSuccess, recordRejection, ...legacy } = old;
+	host[key] = legacy;
+	try {
+		const upgraded = sharedLimitStore();
+		assert.notEqual(upgraded, legacy);
+		assert.equal(typeof upgraded.recordSuccess, "function");
+		assert.equal(typeof upgraded.recordRejection, "function");
+		assert.deepEqual(upgraded.get("anthropic"), old.get("anthropic"));
+		assert.equal(upgraded.isHot("anthropic"), true);
+		assert.equal(sharedLimitStore(), upgraded);
+	} finally { host[key] = saved; }
+});
+
 test("set notifies subscribers and survives a throwing listener", () => {
 	const store = createLimitStore();
 	const seen: string[] = [];

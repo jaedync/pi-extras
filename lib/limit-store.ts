@@ -85,6 +85,15 @@ export function createLimitStore(): LimitStore {
 
 export function sharedLimitStore(): LimitStore {
 	const host = globalThis as unknown as Record<symbol, LimitStore | undefined>;
-	host[STORE_KEY] ??= createLimitStore();
-	return host[STORE_KEY];
+	const existing = host[STORE_KEY];
+	if (!existing || typeof existing.recordSuccess !== "function" || typeof existing.recordRejection !== "function") {
+		// /reload retains globals from the installed version. Upgrade its API before new handlers use it.
+		const next = createLimitStore();
+		for (const [provider, snapshot] of existing?.entries() ?? []) {
+			next.set(provider, snapshot);
+			next.setHot(provider, existing!.isHot(provider));
+		}
+		host[STORE_KEY] = next;
+	}
+	return host[STORE_KEY]!;
 }
