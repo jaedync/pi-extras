@@ -162,14 +162,29 @@ interface Internals {
 	contentContainer: { children: Component[] };
 }
 
-/** Swaps each text block Pi built for a view; thinking sits inside a MouseRegion, so only replies are direct Markdown children. */
+/** Tool Display's bullet gutter (AssistantText in tool-display/thinking.ts), when it holds a reply's Markdown. */
+const gutterOf = (child: unknown): { child: Component } | undefined => {
+	const wrapper = child as { constructor?: { name?: string }; child?: unknown } | undefined;
+	return wrapper?.constructor?.name === "AssistantText" && isMarkdown(wrapper.child) ? (wrapper as { child: Component }) : undefined;
+};
+
+/**
+ * Swaps each text block Pi built for a view, inside Tool Display's gutter when
+ * that patch ran first. Thinking sits inside a MouseRegion or a thinking view,
+ * so only replies are direct children.
+ */
 export function adopt(self: Internals, host: CopyHost): void {
 	const children = self.contentContainer.children;
 	let part = 0;
 	children.forEach((child, index) => {
-		if (!isMarkdown(child)) return;
+		const gutter = gutterOf(child);
+		const markdown = gutter?.child ?? child;
+		if (!isMarkdown(markdown)) return;
 		const at = part++;
-		if (HAS_BLOCK.test(child.text)) children[index] = new CopyBlocksView(child, host, self, at);
+		if (!HAS_BLOCK.test(markdown.text)) return;
+		const view = new CopyBlocksView(markdown, host, self, at);
+		if (gutter) gutter.child = view;
+		else children[index] = view;
 	});
 }
 

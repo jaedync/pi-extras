@@ -267,6 +267,29 @@ test("thinking tails and copy cards share the assistant message", async () => {
 	}
 });
 
+// Tool Display draws replies in a bullet gutter (gutter: () => true in production); a fresh subclass fixes which patch runs first.
+for (const first of ["tool display", "copy blocks"] as const) {
+	test(`copy cards survive Tool Display's bullet gutter when ${first} patches first`, async () => {
+		class Message extends AssistantMessageComponent {}
+		const thinking = () => installThinkingTail({ mode: () => "tail", hiddenAtStart: () => false, theme: () => undefined, gutter: () => true }, Message.prototype);
+		const copy = host();
+		const undos = first === "tool display" ? [thinking(), installCopyBlocks(copy, Message.prototype)] : [installCopyBlocks(copy, Message.prototype), thinking()];
+		try {
+			const component = new Message(message(said("Run:\n\n```sh\necho hi\n```")), false);
+			const lines = component.render(WIDTH);
+			assert.match(plain(lines.find((line) => plain(line).trim() !== "")!), /^● Run:/, "the reply keeps its bullet");
+			assert.ok(!lines.some((line) => plain(line).includes("```")), "the fence is drawn as a card");
+			const row = rowOf(lines, LABEL);
+			assert.ok(row >= 0, "the card has a copy label");
+			click(component, row, plain(lines[row]!).indexOf(LABEL));
+			await Promise.resolve();
+			assert.deepEqual(copy.copies, ["echo hi"]);
+		} finally {
+			for (const undo of undos.reverse()) undo();
+		}
+	});
+}
+
 test("/copy-block copies the last block of the latest reply, or the nth", async () => {
 	assert.equal(copyBlocksEnabled({ PI_COPY_BLOCKS: "off" }), false);
 	assert.equal(copyBlocksEnabled({}), true);

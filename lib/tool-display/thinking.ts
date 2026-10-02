@@ -270,7 +270,8 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 			const child = children[index]!;
 			if (child.constructor.name === "Text") {
 				children[index] = assistantText(child, false, host);
-			} else if (child.constructor.name === "Markdown") {
+			// Copy Blocks may have swapped a reply's Markdown for its card view before this runs.
+			} else if (child.constructor.name === "Markdown" || child.constructor.name === "CopyBlocksView") {
 				children[index] = assistantText(child, first, host);
 				first = false;
 			}
@@ -309,24 +310,48 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 	return true;
 }
 
+/**
+ * A reply's rows in the bullet gutter. `child` stays writable: Copy Blocks
+ * swaps a Markdown it finds here for its card view (see copy-blocks/view.ts).
+ */
+export class AssistantText implements Component {
+	private cached?: { width: number; input: string[]; theme: ThinkingTheme | undefined; lines: string[] };
+	child: Component;
+	private readonly first: boolean;
+	private readonly host: ThinkingHost;
+
+	constructor(child: Component, first: boolean, host: ThinkingHost) {
+		this.child = child;
+		this.first = first;
+		this.host = host;
+	}
+
+	render(width: number): string[] {
+		if (width <= 0) return [];
+		const input = this.child.render(Math.max(1, width - ROW_MARGIN));
+		const theme = this.host.theme();
+		const cached = this.cached;
+		if (cached?.width === width && cached.input === input && cached.theme === theme) return cached.lines;
+		const lines = input.map((line, index) => {
+			const mark = this.first && index === 0 ? `${theme?.fg("text", BULLET_GLYPH) ?? BULLET_GLYPH} ` : " ".repeat(ROW_MARGIN);
+			return truncateToWidth(mark + line, width, "");
+		});
+		this.cached = { width, input, theme, lines };
+		return lines;
+	}
+
+	invalidate(): void {
+		this.cached = undefined;
+		this.child.invalidate();
+	}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		return this.child.handleMouse?.({ ...event, x: event.x - ROW_MARGIN, width: Math.max(1, event.width - ROW_MARGIN) });
+	}
+}
+
 export function assistantText(child: Component, first: boolean, host: ThinkingHost): Component {
-	let cached: { width: number; input: string[]; theme: ThinkingTheme | undefined; lines: string[] } | undefined;
-	return {
-		render(width) {
-			if (width <= 0) return [];
-			const input = child.render(Math.max(1, width - ROW_MARGIN));
-			const theme = host.theme();
-			if (cached?.width === width && cached.input === input && cached.theme === theme) return cached.lines;
-			const lines = input.map((line, index) => {
-				const mark = first && index === 0 ? `${theme?.fg("text", BULLET_GLYPH) ?? BULLET_GLYPH} ` : " ".repeat(ROW_MARGIN);
-				return truncateToWidth(mark + line, width, "");
-			});
-			cached = { width, input, theme, lines };
-			return lines;
-		},
-		invalidate: () => { cached = undefined; child.invalidate(); },
-		handleMouse: (event) => child.handleMouse?.({ ...event, x: event.x - ROW_MARGIN, width: Math.max(1, event.width - ROW_MARGIN) }),
-	};
+	return new AssistantText(child, first, host);
 }
 
 type Update = (this: unknown, message: Message, isStreaming?: boolean) => void;
