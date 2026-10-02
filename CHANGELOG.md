@@ -2,6 +2,78 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.19.0 - 2026-10-02
+
+### Changed
+
+- Shell jobs and subagents no longer look alike. Before, both started as the
+  same `↳ name  in background` chip, ran as the same gray band above the
+  editor and finished as the same green band.
+  - A running shell job's band now fills with its real progress. A command
+    that starts with `sleep N` fills over those N seconds. A meter in the
+    job's newest output line (curl, wget, rsync with `--info=progress2`, git
+    with `--progress`, tqdm, ninja, pip or cargo when they draw one, or a
+    percentage drawn beside a bar) fills it with what the meter says: the
+    percentage, then time left (written the same for every tool), size and
+    speed. A bare percentage counts only while it climbs, and a finished
+    meter stops filling, since the job may still be working. Jobs with no
+    known progress sweep and show their latest output line. The start row is a still gray band,
+    `Title  $ command  ⇢ background`, that takes `✓ exit 0 · 29.9s`,
+    `✗ exit 2` or `■ stopped` when the job ends, and the completion shows the
+    last output lines in a gutter under its band. A job's details sit side by
+    side, its title first, instead of across the line.
+  - Subagents read like someone in a conversation, with no band behind them:
+    a `◆` and name in the provider color the footer uses for its model
+    (purple for a provider without one), then what the agent is doing and
+    its facts close beside them. A start reads `◆ name joined  model  working`
+    with the task under it, a report `◆ name reported  1m12s  model`, and mail
+    `◆ name → main  asks`. The row above the editor shows its run time, what
+    it is doing (with the same animation main's spinner uses for that work:
+    thinking and writing in the agent's color, a tool call in the tool color, compacting, or how it
+    ended), then its model, cost and context. Names and times line up, so
+    what each agent is doing starts in one column. A child main waits on
+    shows the same row in its `subagent` call.
+  - Both inspectors keep the sheet's own background; only the title takes the
+    tool color or the agent's color. A subagent's inspector shows the
+    messages it received as those same rows (`→ name  you wrote`,
+    `→ name  main asks`, `◆ sender → name  note`, `◆ child reported`)
+    instead of the `Message from main:` and `Question from main, who is
+    waiting for your reply` text its model reads.
+- Times read the same on every row: `8.6s`, then `24m23s` and `1h50m`. Tool,
+  job and subagent rows break into hours instead of reading `62m 05s`, and a
+  bash call's timeout is in the same units as the time beside it, so
+  `20m 02s / 1800s` is now `20m02s / 30m00s`. Job completions, Kagi and
+  Computer Use rows use the same shape.
+- While the model writes a `write` call, the phase line, the terminal tab and
+  a subagent's row say `Writing main.md` instead of `Writing write call`, and
+  an `edit` reads `Editing cc-phase.ts`; the file shows once its path has
+  streamed in. Other calls still read `Writing bash call`, and a subagent's
+  row now says that too instead of `calling a tool`.
+
+### Added
+
+- Usage Guard reports pace. When a window's length and exact reset time are
+  known, the `usage` tool, its popup and its warnings say whether use is
+  `on pace` (heading for 90% to 110% at reset), `above pace` or
+  `below pace`, from the average rate since the window began. An above-pace
+  limit also gives when it is expected to reach 100%. Under 5% into a window,
+  or under 1% used, it says `too early to tell`. Pace doesn't change warning
+  thresholds.
+
+### Fixed
+
+- A proxy quota rejection no longer keeps blocking after the quota resets. A
+  later reset cycle, or a successful response from the model it applies to,
+  clears it below 95% used; a newer quota error brings it back. Cleared
+  warnings stay in history but no longer reach later requests, and a reload
+  after an update keeps the stored limits and flags.
+- `/tool-display motion reduced` now also holds the shell job and subagent
+  spinners still, including those in their inspectors.
+- A subagent's inspector no longer says `report queued` after the report has
+  reached main.
+- Colored job output no longer leaves codes like `[32m` in the line above the
+  editor or in the completion's output lines.
+
 ## 0.18.3 - 2026-10-01
 
 ### Fixed
