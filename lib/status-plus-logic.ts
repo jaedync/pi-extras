@@ -165,7 +165,8 @@ const QUOTA_WINDOW_SECONDS: Record<string, number> = {
 
 /** Anthropic window names have fixed durations, including model-family buckets. */
 export function quotaWindowSeconds(type: string): number | undefined {
-	return QUOTA_WINDOW_SECONDS[quotaKeyParts(type).base];
+	const seconds = QUOTA_WINDOW_SECONDS[quotaKeyParts(type).base];
+	return typeof seconds === "number" ? seconds : undefined;
 }
 
 export function quotaLabel(type: string): string {

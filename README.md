@@ -353,6 +353,10 @@ rate limits taken from response headers are reported but never warned on.
   days away or a session budget asks for a clean checkpoint and a summary. A
   model-scoped window notes that other models are unaffected. Fired keys and the budget persist with the
   session, so a resumed session does not repeat them.
+- Proxy rejection flags can remain after a quota reset.
+  A later reset cycle or a successful response from the applicable model clears that flag below 95% used.
+  A new structured quota error restores the block. A rejection without newer evidence stays blocked.
+  Cleared block warnings remain in history but do not enter later model requests.
 - `/usage` queues the current snapshot for the next turn; `/usage budget 7d 60`
   and `/usage budget clear` manage the session budget; `/usage warnings on|off`
   persists the toggle.

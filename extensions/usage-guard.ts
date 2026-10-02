@@ -16,6 +16,7 @@ import { Type } from "typebox";
 import { sharedLimitStore, type LimitStore } from "../lib/limit-store.ts";
 import { operationalError } from "../lib/operational-log.ts";
 import { markRow } from "../lib/tool-row.ts";
+import { parseRateLimit } from "../lib/rate-limit-recovery/core.ts";
 import {
 	hotProviders,
 	normalizeGuardConfig,
@@ -242,8 +243,11 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 
 	pi.on("message_end", async (event) => {
 		const message = event.message;
-		if (message.role !== "assistant" || !["stop", "toolUse"].includes(message.stopReason)) return;
-		store.recordSuccess(message.provider, message.model, now());
+		if (message.role !== "assistant") return;
+		if (["stop", "toolUse"].includes(message.stopReason)) store.recordSuccess(message.provider, message.model, now());
+		else if (message.stopReason === "error" && parseRateLimit(message.errorMessage)) {
+			store.recordRejection(message.provider, message.model, now());
+		}
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {

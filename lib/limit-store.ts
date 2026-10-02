@@ -24,6 +24,8 @@ export interface LimitStore {
 	set(provider: string, snapshot: LimitSnapshot): void;
 	/** Successful assistant completion is newer evidence than a cached proxy rejection. */
 	recordSuccess(provider: string, modelId: string, atMs: number): void;
+	/** A structured quota error overrides earlier successful-response evidence. */
+	recordRejection(provider: string, modelId: string, atMs: number): void;
 	subscribe(listener: (provider: string) => void): () => void;
 	/** Installed by the poller owner; absent when no poller extension is loaded. */
 	setRefresher(refresher: LimitRefresher | undefined): void;
@@ -58,6 +60,12 @@ export function createLimitStore(): LimitStore {
 			if (!snapshot) return;
 			rejections.succeed(provider, modelId, snapshot.entries, atMs);
 			// Preserve the quota's sample time. A model response does not refresh its utilization.
+			this.set(provider, snapshot);
+		},
+		recordRejection(provider, modelId, atMs) {
+			const snapshot = snapshots.get(provider);
+			if (!snapshot) return;
+			rejections.reject(provider, modelId, snapshot.entries, atMs);
 			this.set(provider, snapshot);
 		},
 		subscribe(listener) {

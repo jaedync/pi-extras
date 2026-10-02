@@ -4,7 +4,7 @@ const RESET_DRIFT_MS = 10 * 60_000;
 const NEAR_FULL_PCT = 95;
 
 interface Rejection {
-	firstSeenMs: number;
+	evidenceAtMs: number;
 	resetMs?: number;
 	cleared: boolean;
 }
@@ -13,6 +13,17 @@ interface Rejection {
 export function createRejectionTracker() {
 	const rejections = new Map<string, Rejection>();
 	const keyFor = (provider: string, entry: LimitEntry) => `${provider}|${entry.key ?? entry.label}`;
+	function observe(provider: string, modelId: string, entries: LimitEntry[], atMs: number, accepted: boolean): void {
+		const tokens = modelId.toLowerCase().split(/[^a-z0-9]+/);
+		for (const entry of entries) {
+			if (entry.modelFamily && !tokens.includes(entry.modelFamily.toLowerCase())) continue;
+			const key = keyFor(provider, entry);
+			const prior = rejections.get(key);
+			if (!prior || atMs < prior.evidenceAtMs || (accepted && atMs === prior.evidenceAtMs)) continue;
+			// An actual quota error is newer than a prior success, even if the quota poll is cached.
+			rejections.set(key, accepted ? { ...prior, evidenceAtMs: atMs, cleared: true } : { evidenceAtMs: atMs, resetMs: entry.resetMs, cleared: false });
+		}
+	}
 	return {
 		reconcile(provider: string, entries: LimitEntry[], now: number): LimitEntry[] {
 			return entries.map((entry) => {
@@ -21,11 +32,11 @@ export function createRejectionTracker() {
 					rejections.delete(key);
 					return { ...entry };
 				}
-				const prior = rejections.get(key) ?? { firstSeenMs: now, resetMs: entry.resetMs, cleared: false };
+				const prior = rejections.get(key) ?? { evidenceAtMs: now, resetMs: entry.resetMs, cleared: false };
 				const rollover = prior.resetMs !== undefined && entry.resetMs !== undefined &&
 					prior.resetMs <= now && entry.resetMs - prior.resetMs > RESET_DRIFT_MS;
 				const cleared = prior.cleared || rollover;
-				rejections.set(key, { ...prior, cleared });
+				rejections.set(key, { ...prior, cleared, evidenceAtMs: rollover ? Math.max(now, prior.evidenceAtMs) : prior.evidenceAtMs });
 				// A proxy can refresh utilization and reset time but retain its last rejection.
 				// New-cycle or successful-response evidence ends that rejection, not a low percentage alone.
 				// Keep near-full buckets blocked because the new window can also genuinely be exhausted.
@@ -33,14 +44,7 @@ export function createRejectionTracker() {
 				return { ...entry, exhausted: !(cleared && headroom) };
 			});
 		},
-		succeed(provider: string, modelId: string, entries: LimitEntry[], atMs: number): void {
-			const tokens = modelId.toLowerCase().split(/[^a-z0-9]+/);
-			for (const entry of entries) {
-				if (entry.modelFamily && !tokens.includes(entry.modelFamily.toLowerCase())) continue;
-				const key = keyFor(provider, entry);
-				const prior = rejections.get(key);
-				if (prior && atMs > prior.firstSeenMs) rejections.set(key, { ...prior, cleared: true });
-			}
-		},
+		succeed: (provider: string, modelId: string, entries: LimitEntry[], atMs: number) => observe(provider, modelId, entries, atMs, true),
+		reject: (provider: string, modelId: string, entries: LimitEntry[], atMs: number) => observe(provider, modelId, entries, atMs, false),
 	};
 }

@@ -51,6 +51,16 @@ test("a successful response clears a low proxy rejection, including later cached
 	assert.equal(store.get("anthropic")?.entries[0].exhausted, true);
 });
 
+test("new rejection evidence respects model scope and cannot override a newer success", () => {
+	const store = createLimitStore();
+	store.set("anthropic", { entries: [...quota(0.03), ...quota(0.2, "09:10:00", "rejected", "seven_day_sonnet")], atMs: at("04:11:00"), source: "poll" });
+	store.recordSuccess("anthropic", MODEL.id, at("04:11:43"));
+	store.recordRejection("anthropic", MODEL.id, at("04:11:42"));
+	assert.deepEqual(store.get("anthropic")?.entries.map((entry) => entry.exhausted), [false, true]);
+	store.recordRejection("anthropic", "claude-sonnet-5", at("04:11:44"));
+	assert.deepEqual(store.get("anthropic")?.entries.map((entry) => entry.exhausted), [true, true]);
+});
+
 test("success evidence respects model family, source, provider, and time", () => {
 	const store = createLimitStore();
 	store.set("anthropic", { entries: [...quota(0.03), ...quota(0.2, "09:10:00", "rejected", "seven_day_sonnet")], atMs: at("04:11:00"), source: "poll" });

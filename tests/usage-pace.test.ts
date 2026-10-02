@@ -65,6 +65,7 @@ test("missing, approximate, expired, non-window, and invalid timing do not inven
 		{ ...five(50), windowSeconds: NaN },
 		{ ...five(50), usedPct: NaN },
 		{ ...five(50), usedPct: -1 },
+		{ ...five(50), usedPct: Number.MAX_VALUE },
 	]) assert.equal(limit(entry).pace, undefined);
 });
 
@@ -79,8 +80,8 @@ test("100 percent and overage do not suggest negative waiting times", () => {
 });
 
 test("known Anthropic and named Go windows carry duration; Codex uses its reported duration", () => {
-	const proxy = parseProxyQuota({ buckets: ["five_hour", "seven_day", "seven_day_opus", "unknown"].map((type) => ({ type, utilization: 0.2, resetsAt: RESET })) });
-	assert.deepEqual(proxy.map((entry) => entry.windowSeconds), [18000, 604800, 604800, undefined]);
+	const proxy = parseProxyQuota({ buckets: ["five_hour", "seven_day", "seven_day_opus", "unknown", "constructor", "__proto__"].map((type) => ({ type, utilization: 0.2, resetsAt: RESET })) });
+	assert.deepEqual(proxy.map((entry) => entry.windowSeconds), [18000, 604800, 604800, undefined, undefined, undefined]);
 	assert.deepEqual(parseAnthropicLimits({
 		"anthropic-ratelimit-unified-5h-utilization": "0.1",
 		"anthropic-ratelimit-unified-7d-utilization": "0.2",

@@ -86,6 +86,20 @@ test("only successful assistant responses clear stale proxy blocks and remove th
 	assert.equal(report.limits[0].status, "ok");
 });
 
+test("a newer structured quota error overrides old successful-response evidence", async () => {
+	const { pi, store, ctx } = setup();
+	const entries = parseProxyQuota({ buckets: [{ type: "five_hour", utilization: 0.03, resetsAt: RESET, status: "rejected" }] });
+	store.set("anthropic", { entries, atMs: NOW - 1000, source: "poll" });
+	await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason: "stop" } }, ctx);
+	assert.equal(store.get("anthropic")?.entries[0].exhausted, false);
+	await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason: "error", errorMessage: "connection closed" } }, ctx);
+	assert.equal(store.get("anthropic")?.entries[0].exhausted, false, "transport errors are not quota evidence");
+	await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason: "error", errorMessage: '{"error":{"type":"rate_limit_error","retry_after":7200}}' } }, ctx);
+	assert.equal(store.get("anthropic")?.entries[0].exhausted, true);
+	store.set("anthropic", { entries, atMs: NOW + 1000, source: "poll" });
+	assert.equal(store.get("anthropic")?.entries[0].exhausted, true, "a cached status cannot restore old success evidence");
+});
+
 test("the usage tool is marked for Tool Display, which draws its rows with a layout of its own", () => {
 	const { pi } = setup();
 	assert.equal(rowKind(pi.tool), "usage");

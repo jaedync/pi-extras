@@ -18,6 +18,7 @@ const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).
 const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
 const { default: usageGuard, GUARD_CUSTOM_TYPE } = await import("../extensions/usage-guard.ts");
 const { createLimitStore } = await import("../lib/limit-store.ts");
+const { parseProxyQuota } = await import("../lib/status-plus-logic.ts");
 const NOW = 1_800_000_000_000;
 const RESET = NOW + 3_600_000;
 const CLAUDE = "claude-sonnet-5-5";
@@ -77,6 +78,18 @@ function poll(f: Awaited<ReturnType<typeof fixture>>, fableOnly = false) {
 }
 const textOf = (message: any): string => typeof message.content === "string" ? message.content : message.content.map((block: any) => block.type === "text" ? block.text : "").join("\n");
 const warnings = (messages: any[]) => messages.filter((message) => /^Usage (notice|warning):/.test(textOf(message)));
+
+test("a real SDK completion clears a cached proxy rejection before the next request", { timeout: 10_000 }, async (t) => {
+	const f = await fixture();
+	t.after(() => f.close());
+	f.store.set("anthropic", { entries: parseProxyQuota({ buckets: [{ type: "five_hour", utilization: 0.03, resetsAt: RESET, status: "rejected" }] }), atMs: NOW - 1, source: "poll" });
+	await f.session.prompt("Use Claude.");
+	assert.equal(warnings(f.calls[0].messages).length, 1, "no evidence clears the initial rejection");
+	assert.equal(f.store.get("anthropic")?.entries[0].exhausted, false);
+	await f.session.prompt("Continue after the successful response.");
+	assert.deepEqual(warnings(f.calls[1].messages), []);
+	assert.deepEqual(f.errors, []);
+});
 
 test("an idle Claude warning cannot follow a user model switch to Codex, and no extra calls start", { timeout: 10_000 }, async (t) => {
 	const f = await fixture();

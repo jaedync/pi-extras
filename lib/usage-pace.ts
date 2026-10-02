@@ -25,7 +25,7 @@ const roundPct = (value: number) => Math.round(value * 10) / 10;
 
 export function usagePace(entry: LimitEntry, now: number, timeZone?: string): UsagePace | undefined {
 	const { windowSeconds: duration, resetMs, usedPct } = entry;
-	if (entry.kind && entry.kind !== "window" || entry.resetApprox) return undefined;
+	if ((entry.kind && entry.kind !== "window") || entry.resetApprox) return undefined;
 	if (duration === undefined || !Number.isFinite(duration) || duration <= 0 || !Number.isFinite(now)) return undefined;
 	if (resetMs === undefined || !Number.isFinite(new Date(resetMs).getTime()) || resetMs <= now) return undefined;
 	if (usedPct === undefined || !Number.isFinite(usedPct) || usedPct < 0) return undefined;
@@ -38,6 +38,7 @@ export function usagePace(entry: LimitEntry, now: number, timeZone?: string): Us
 		return { ...base, state: "too early to tell" };
 	}
 	const projected = usedPct / elapsedFraction;
+	if (!Number.isFinite(projected * 10)) return undefined;
 	const state: PaceState = projected > 100 + PACE_TOLERANCE_PCT ? "above pace"
 		: projected < 100 - PACE_TOLERANCE_PCT ? "below pace" : "on pace";
 	const result = { ...base, projectedUsagePct: roundPct(projected), state };
