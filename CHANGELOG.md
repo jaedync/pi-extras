@@ -2,6 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.19.3 - 2026-10-02
+
+### Fixed
+
+- Copy Blocks: code blocks and quotes in replies are cards with a `copy`
+  label again. Since Tool Display began to draw replies in a shared bullet
+  gutter (0.16.0), the gutter hid each reply from Copy Blocks, so replies
+  showed plain fences and no labels. Only `/copy-block` still worked. Copy
+  Blocks now finds the reply inside the gutter, and the reply keeps its
+  bullet in either load order.
+
 ## 0.19.2 - 2026-10-02
 
 ### Fixed
