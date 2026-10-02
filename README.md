@@ -324,6 +324,16 @@ rate limits taken from response headers are reported but never warned on.
   reset is exact and within `maxWaitSeconds`. `setBudget` records a
   session budget ("work until 60% of the weekly limit"); `all` includes other
   providers and non-governing windows.
+- Known window durations and exact reset times add a `pace` object to each limit.
+  It gives the elapsed fraction, expected usage at even pace, and projected usage at reset.
+  A projection from 90% through 110% is `on pace`.
+  This band allows small request bursts and percentage rounding.
+  Higher projections are `above pace`; lower projections are `below pace`.
+  Above-pace limits also give the estimated time to 100%, in ISO and local time.
+  Before 5% of the window passes, or below 1% used, the state is `too early to tell`.
+  These early limits omit the projection and the time estimate.
+  The tool rows, popup, and warning text show pace. Pace does not change warning thresholds.
+  Estimates use the average rate since the window began, not the last request.
 - Warnings are off by default: only a session budget warns, once, when its
   window is reached. `/usage warnings on` adds band warnings (90 and 95 by
   default) and provider blocks. Each fires once per window, threshold and reset

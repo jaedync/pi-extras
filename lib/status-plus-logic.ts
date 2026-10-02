@@ -25,6 +25,8 @@ export interface LimitEntry {
 	/** Provider says requests still go through (Codex reports 100% while allowed). */
 	allowed?: boolean;
 	usedPct?: number;
+	/** Full quota duration. Do not infer Codex durations from its primary/secondary slots. */
+	windowSeconds?: number;
 	remainingText?: string;
 	resetApprox?: boolean;
 	resetMs?: number;
@@ -156,6 +158,16 @@ export function quotaKeyParts(type: string): { base: string; family?: string } {
 	return { base: type };
 }
 
+const QUOTA_WINDOW_SECONDS: Record<string, number> = {
+	five_hour: 5 * 3600, seven_day: 7 * 86400, one_day: 86400, thirty_day: 30 * 86400,
+	"5h": 5 * 3600, "7d": 7 * 86400,
+};
+
+/** Anthropic window names have fixed durations, including model-family buckets. */
+export function quotaWindowSeconds(type: string): number | undefined {
+	return QUOTA_WINDOW_SECONDS[quotaKeyParts(type).base];
+}
+
 export function quotaLabel(type: string): string {
 	const { base, family } = quotaKeyParts(type);
 	const baseLabel = QUOTA_BASE_LABELS[base] ?? base.replaceAll("_", "-");
@@ -197,6 +209,7 @@ export function parseProxyQuota(body: unknown): LimitEntry[] {
 				key: bucket.type,
 				...(family ? { modelFamily: family } : {}),
 				usedPct: bucket.utilization <= 1 ? bucket.utilization * 100 : bucket.utilization,
+				...(quotaWindowSeconds(bucket.type) !== undefined ? { windowSeconds: quotaWindowSeconds(bucket.type) } : {}),
 				resetMs,
 				exhausted: bucket.status === "rejected",
 				...(bucket.status === "rejected" ? { proxyRejected: true } : {}),

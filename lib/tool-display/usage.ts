@@ -6,6 +6,7 @@
 import { SEP } from "../cc-phase.ts";
 import type { Seg } from "../band/band.ts";
 import type { UsageReport, UsageReportLimit } from "../usage-guard-core.ts";
+import { paceText } from "../usage-pace.ts";
 import { sanitize } from "./format.ts";
 import { errorLines, mutedSeg, resultText, titleSeg, wrapAll, type PaintKey } from "./kit.ts";
 import type { ToolSpec, View } from "./tool.ts";
@@ -53,7 +54,7 @@ export const usageSpec: ToolSpec = {
 		const windows = (report?.limits ?? []).filter((limit) => limit.applies && limit.usedPct !== undefined);
 		return [
 			titleSeg("usage"),
-			...windows.map((limit): Seg => ({ text: ` ${flat(limit.window)} ${pct(limit.usedPct!)}`, color: tone(limit) })),
+			...windows.map((limit): Seg => ({ text: ` ${flat(limit.window)} ${pct(limit.usedPct!)}${limit.pace ? ` (${flat(limit.pace.state)})` : ""}`, color: tone(limit) })),
 			...budgetSegs(view, report),
 		];
 	},
@@ -73,7 +74,7 @@ export const usageSpec: ToolSpec = {
 		const labelWidth = Math.max(0, ...report.limits.map((limit) => flat(limit.window).length));
 		const rows = report.limits.map((limit) => {
 			const used = limit.usedPct !== undefined ? pct(limit.usedPct).padStart(4) : (limit.remaining ? flat(limit.remaining) : "").padStart(4);
-			const note = [limit.applies ? "" : "other model", limit.budgetPct !== undefined ? `budget ${pct(limit.budgetPct)}` : "", resetText(limit)].filter(Boolean).join(SEP);
+			const note = [limit.applies ? "" : "other model", limit.budgetPct !== undefined ? `budget ${pct(limit.budgetPct)}` : "", resetText(limit), paceText(limit.pace, limit.reset?.resetsInSeconds)].filter(Boolean).join(SEP);
 			return `${view.paint.fg("toolOutput", flat(limit.window).padEnd(labelWidth))}  ${view.paint.fg(tone(limit), used)}  ${view.paint.fg("muted", note)}`;
 		});
 		const notes = report.notes.map((note) => view.paint.fg("muted", flat(note)));

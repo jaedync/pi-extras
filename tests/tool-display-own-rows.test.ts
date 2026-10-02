@@ -104,6 +104,21 @@ function report(limits: object[], over: object = {}) {
 	return { asOf: "", model: { provider: "anthropic", id: "claude-x" }, warnings: "on", budget: null, snapshotAgeSeconds: {}, limits, notes: [], ...over };
 }
 
+test("usage renders pace in each window's band and popup, including early windows", () => {
+	const h = harness();
+	const usage = row(toolRenderers(h.kit, usageSpec) as never, {});
+	const limits = [
+		limit("5h", 60, { pace: { state: "above pace", reaches100InSeconds: 4800 } }),
+		limit("7d", 3, { pace: { state: "too early to tell" } }),
+	];
+	usage.update({ isPartial: false, result: text("{}", report(limits)) });
+	assert.match(usage.lines(160)[0]!, /5h 60% \(above pace\).*7d 3% \(too early to tell\)/);
+	usage.click();
+	const output = strip(h.popups.at(-1)!.output(theme, 160, 0)).join("\n");
+	assert.match(output, /above pace: 100% in about 1h20m, before the reset in 3h32m/);
+	assert.match(output, /too early to tell/);
+});
+
 test("a usage row answers in its band: each window that applies, amber when close and red when spent", () => {
 	const h = harness();
 	const usage = row(toolRenderers(h.kit, usageSpec) as never, {});

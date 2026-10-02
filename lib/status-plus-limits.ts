@@ -16,6 +16,7 @@ import {
 	proxyQuotaUrl,
 	quotaKeyParts,
 	quotaLabel,
+	quotaWindowSeconds,
 	toEpochMs,
 	windowLabel,
 	type LimitEntry,
@@ -84,6 +85,7 @@ export function parseCodexLimits(headers: Record<string, string>, now = Date.now
 			parseNumberHeader(headers[`x-codex-${kind}-reset-after-seconds`]);
 		entries.push({
 			label: windowMinutes ? windowLabel(windowMinutes) : fallbackLabel,
+			...(windowMinutes !== undefined && windowMinutes > 0 ? { windowSeconds: windowMinutes * 60 } : {}),
 			usedPct,
 			resetMs: resetSeconds !== undefined ? now + resetSeconds * 1000 : undefined,
 		});
@@ -106,6 +108,7 @@ export function parseAnthropicLimits(headers: Record<string, string>): LimitEntr
 		if (!Number.isFinite(raw)) continue;
 		unified.push({
 			label: match[1],
+			...(quotaWindowSeconds(match[1]) !== undefined ? { windowSeconds: quotaWindowSeconds(match[1]) } : {}),
 			usedPct: raw <= 1 ? raw * 100 : raw,
 			resetMs: parseResetHeader(headers[`anthropic-ratelimit-unified-${match[1]}-reset`]) ?? unifiedReset,
 		});
@@ -161,6 +164,7 @@ export function codexEntries(usage: ProviderUsage): LimitEntry[] {
 	return usage.windows.map((window) => ({
 		label: window.windowSeconds ? windowLabel(window.windowSeconds / 60) : KEY_LABELS[window.key] ?? window.key,
 		key: window.key,
+		...(window.windowSeconds !== undefined ? { windowSeconds: window.windowSeconds } : {}),
 		usedPct: window.pct,
 		resetMs: window.resetsAtMs,
 		...(usage.limitReached !== undefined ? { exhausted: usage.limitReached } : {}),
@@ -173,6 +177,7 @@ export function openCodeGoEntries(usage: ProviderUsage): LimitEntry[] {
 	return usage.windows.map((window) => ({
 		label: KEY_LABELS[window.key] ?? window.key,
 		key: window.key,
+		...(window.windowSeconds !== undefined ? { windowSeconds: window.windowSeconds } : {}),
 		usedPct: window.pct,
 		resetMs: window.resetsAtMs,
 		exhausted: window.exhausted === true,
@@ -223,6 +228,7 @@ export async function pollAnthropicUsage(ctx: PollerContext): Promise<LimitEntry
 		entries.push({
 			label: quotaLabel(key),
 			key,
+			windowSeconds: quotaWindowSeconds(key),
 			...(family ? { modelFamily: family } : {}),
 			usedPct: window.utilization,
 			resetMs: typeof window.resets_at === "string" ? Date.parse(window.resets_at) || undefined : undefined,

@@ -25,7 +25,7 @@ test("codex headers map to window labels and absolute resets", () => {
 		"x-codex-secondary-reset-after-seconds": "86400",
 	}, NOW);
 	assert.deepEqual(entries, [
-		{ label: "5h", usedPct: 35, resetMs: NOW + 600_000 },
+		{ label: "5h", windowSeconds: 18000, usedPct: 35, resetMs: NOW + 600_000 },
 		{ label: "7d", usedPct: 80, resetMs: NOW + 86_400_000 },
 	]);
 });
@@ -38,8 +38,8 @@ test("anthropic unified headers win over api-key triplets and drop overage", () 
 		"anthropic-ratelimit-unified-reset": "2000000000",
 	});
 	assert.deepEqual(unified, [
-		{ label: "7d", usedPct: 60, resetMs: 2_000_000_000_000 },
-		{ label: "5h", usedPct: 25, resetMs: 2_000_000_000_000 },
+		{ label: "7d", windowSeconds: 604800, usedPct: 60, resetMs: 2_000_000_000_000 },
+		{ label: "5h", windowSeconds: 18000, usedPct: 25, resetMs: 2_000_000_000_000 },
 	]);
 	const triplets = parseAnthropicLimits({
 		"anthropic-ratelimit-tokens-limit": "1000",
@@ -70,11 +70,11 @@ test("shared poller windows become footer entries with short labels", () => {
 			{ key: "primary", pct: 42, windowSeconds: 18000, resetsAtMs: 1 },
 			{ key: "secondary", pct: 7, resetsAtMs: 2 },
 		],
-	}), [{ label: "5h", key: "primary", usedPct: 42, resetMs: 1 }, { label: "7d", key: "secondary", usedPct: 7, resetMs: 2 }]);
+	}), [{ label: "5h", key: "primary", windowSeconds: 18000, usedPct: 42, resetMs: 1 }, { label: "7d", key: "secondary", usedPct: 7, resetMs: 2 }]);
 	assert.deepEqual(codexEntries({
 		provider: "codex", allowed: true, limitReached: false,
 		windows: [{ key: "primary", pct: 100, windowSeconds: 604800, resetsAtMs: 9 }],
-	}), [{ label: "7d", key: "primary", usedPct: 100, resetMs: 9, exhausted: false, allowed: true }]);
+	}), [{ label: "7d", key: "primary", windowSeconds: 604800, usedPct: 100, resetMs: 9, exhausted: false, allowed: true }]);
 	assert.deepEqual(openCodeGoEntries({
 		provider: "opencode-go",
 		windows: [
@@ -82,8 +82,8 @@ test("shared poller windows become footer entries with short labels", () => {
 			{ key: "monthly", pct: 9, windowSeconds: 2_592_000, exhausted: false },
 		],
 	}), [
-		{ label: "5h", key: "rolling", usedPct: 100, resetMs: 3, exhausted: true },
-		{ label: "mo", key: "monthly", usedPct: 9, resetMs: undefined, exhausted: false },
+		{ label: "5h", key: "rolling", windowSeconds: 18000, usedPct: 100, resetMs: 3, exhausted: true },
+		{ label: "mo", key: "monthly", windowSeconds: 2592000, usedPct: 9, resetMs: undefined, exhausted: false },
 	]);
 });
 

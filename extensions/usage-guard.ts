@@ -165,7 +165,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		label: "Usage limits",
 		description:
 			"Report subscription usage limits for the active model: rolling windows (5h, 7d, model-specific weekly), " +
-			"percent used, thresholds, reset time, seconds until reset and a resume delay. " +
+			"percent used, thresholds, reset time, seconds until reset, a resume delay, and usage pace. " +
+			"Pace estimates usage at reset from the average rate since the window began; early windows omit the projection. " +
 			"Balances (budget, credits) are reported but never warned on. " +
 			"setBudget records a session budget so a wrap-up warning fires once when that window reaches pct.",
 		promptSnippet: "Check subscription usage limits, resets, and the session usage budget",

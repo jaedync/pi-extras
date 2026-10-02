@@ -4,8 +4,10 @@
  * `usage` tool returns. No I/O; the extension wires this to Pi.
  */
 import type { LimitSnapshot } from "./limit-store.ts";
-import { STATUS_TIME_ZONE, formatDuration, quotaKeyParts, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
-import { dateFormat } from "./date-format.ts";
+import { formatDuration, quotaKeyParts, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
+import { localTime } from "./usage-time.ts";
+import { paceText, usagePace, type UsagePace } from "./usage-pace.ts";
+export { localTime } from "./usage-time.ts";
 
 export interface GuardConfig {
 	/** Band and provider-block warnings. Off by default; a session budget always warns. */
@@ -255,12 +257,6 @@ export function hotProviders(
 	return hot;
 }
 
-export function localTime(epochMs: number, timeZone = STATUS_TIME_ZONE): string {
-	return dateFormat("local", timeZone, {
-		weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
-	}).format(new Date(epochMs));
-}
-
 export interface ResetTiming {
 	resetsAt: string;
 	resetsAtLocal: string;
@@ -272,7 +268,7 @@ export interface ResetTiming {
 }
 
 export function resetTiming(entry: LimitEntry, config: GuardConfig, now: number, timeZone?: string): ResetTiming | undefined {
-	if (entry.resetMs === undefined) return undefined;
+	if (entry.resetMs === undefined || !Number.isFinite(new Date(entry.resetMs).getTime())) return undefined;
 	const resetsInSeconds = Math.max(0, Math.ceil((entry.resetMs - now) / 1000));
 	return {
 		resetsAt: new Date(entry.resetMs).toISOString(),
@@ -323,6 +319,8 @@ export function warningMessage(warning: Warning, config: GuardConfig, now: numbe
 	const reset = timing
 		? ` Resets ${timing.resetsAtLocal} (in ${formatDuration(timing.resetsInSeconds * 1000, false)}).`
 		: "";
+	const paceClause = paceText(usagePace(entry, now, timeZone), timing?.resetsInSeconds);
+	const pace = paceClause ? ` Pace: ${paceClause}.` : "";
 	const cause = reason === "exhausted"
 		? `${name} is blocked by the provider (${pct}% used).`
 		: reason === "budget"
@@ -332,9 +330,9 @@ export function warningMessage(warning: Warning, config: GuardConfig, now: numbe
 		? " The provider still accepts requests; the percentage is capped at 100."
 		: "";
 	if (!final) {
-		return `Usage notice: ${cause}${reset}${codexNote} Advance notice only: keep working normally. Use the usage tool for details.`;
+		return `Usage notice: ${cause}${reset}${pace}${codexNote} Advance notice only: keep working normally. Use the usage tool for details.`;
 	}
-	return `Usage warning: ${cause}${reset}${codexNote} ${guidance(warning, timing, config)}${scopeNote(warning)}`;
+	return `Usage warning: ${cause}${reset}${pace}${codexNote} ${guidance(warning, timing, config)}${scopeNote(warning)}`;
 }
 
 export interface UsageReportLimit {
@@ -351,6 +349,7 @@ export interface UsageReportLimit {
 	headroomPct?: number;
 	budgetPct?: number;
 	reset?: ResetTiming;
+	pace?: UsagePace;
 }
 
 export interface UsageReport {
@@ -387,6 +386,7 @@ function reportLimit(
 		status,
 	};
 	const reset = resetTiming(entry, config, now, timeZone);
+	const pace = usagePace(entry, now, timeZone);
 	if (kind !== "window" || pct === undefined) return { ...base, ...(reset ? { reset } : {}) };
 	const thresholds = thresholdsFor(entry, config, budget);
 	const next = thresholds.filter((threshold) => threshold > pct).sort((a, b) => a - b)[0];
@@ -396,6 +396,7 @@ function reportLimit(
 		...(next !== undefined ? { nextThreshold: next, headroomPct: Math.round((next - pct) * 10) / 10 } : {}),
 		...(budgetMatches(entry, budget) ? { budgetPct: budget!.pct } : {}),
 		...(reset ? { reset } : {}),
+		...(pace ? { pace } : {}),
 	};
 }
 
