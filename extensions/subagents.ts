@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 import { createLauncher, childExtensionPaths, childToolNames, describeTool } from "../lib/subagents/child.ts";
 import { GUIDE_FILE, loadConfig, readGuide, type SubagentsConfig } from "../lib/subagents/config.ts";
 import { MainMail, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
+import { watchMain } from "../lib/subagents/main-watch.ts";
 import { childInstructions, conversationDigest, rosterText } from "../lib/subagents/format.ts";
 import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "../lib/subagents/models.ts";
 import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";
@@ -102,6 +103,7 @@ export default function subagents(pi: ExtensionAPI) {
 	const widget = createAgentsWidget(motion);
 	let mainRun = 0;
 	pi.on("agent_start", async () => { mainRun++; });
+	const mainWatch = watchMain(pi, () => state?.mail);
 	let inspectorUi: InspectorHost | null = null;
 	let inspected: ShownOverlay | undefined;
 
@@ -228,6 +230,7 @@ export default function subagents(pi: ExtensionAPI) {
 			groupWaitMs: config.groupWaitMs,
 			groupBusy: (group, except) => team.list().some((r) => r.group === group && r.name !== except && LIVE_STATES.has(r.state)),
 			port: { send: (message, options) => pi.sendMessage(message, options) },
+			route: () => mainWatch.route(ctx),
 			onChange: () => {
 				widget.update();
 				watchPending(ctx);

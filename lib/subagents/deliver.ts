@@ -2,7 +2,8 @@
  * How the team's messages reach the main session.
  *
  * - A note, a question, or the answer to something main asked wakes main:
- *   steered in while it works, a new turn when it is idle. Children send notes
+ *   read at its next turn boundary while it works, a new turn when it is
+ *   idle (see `Route` below). Children send notes
  *   only when they would change what main is doing, so none may wait for a
  *   report. Notes landing together share the turn the first one started.
  * - What the user said to a child directly is recorded for main without
@@ -17,14 +18,38 @@
  *
  * Everything sent but not yet in the transcript is kept as pending, so the
  * widget can show it queued until Pi appends it.
+ *
+ * When main can take it decides how mail goes (`Route`). Mail never waits in
+ * Pi's steering queue, which Esc clears to put the user's own queued text
+ * back in the editor: while main works, a message lands at its next turn
+ * boundary instead, and main is kept from settling until it has replied
+ * after it (`owed`). While main is idle but compacting, mail waits, since a
+ * turn started then would run on the context being summarized. A /compact
+ * stops main's turn first, so mail that landed in it gets a reminder that
+ * wakes main once the compaction is done (`remind`).
  */
-import { noteText, questionText, reportText } from "./format.ts";
+import { noteText, questionText, reminderText, reportText } from "./format.ts";
 import type { AgentRecord, MainDelivery } from "./types.ts";
 
 export const MESSAGE_TYPE = "subagent-message";
 export const REPORT_TYPE = "subagent-report";
 /** How far back a reconcile looks; pending messages are always recent. */
 export const RECONCILE_WINDOW = 200;
+/** How often held mail checks whether main can take it, between the events that say so. */
+const HOLD_RETRY_MS = 250;
+
+/**
+ * Where main is, for its mail: `wake` when idle (the mail starts a turn),
+ * `queue` while it works (the mail lands at its next turn boundary), `hold`
+ * while it is idle but compacting or summarizing a branch.
+ */
+export type Route = "wake" | "queue" | "hold";
+
+/** Main's context as Pi sees it at a boundary: what is in it, and what lands next. */
+export interface MainContext {
+	readonly contextMessages: readonly unknown[];
+	readonly pendingMessages: readonly unknown[];
+}
 
 export interface OutgoingMessage {
 	customType: string;
@@ -36,7 +61,8 @@ export interface OutgoingMessage {
 export type MailDetails =
 	| { id: string; kind: "note" | "question" | "reply"; from: string; text: string }
 	| { id: string; kind: "relay"; from: string; to: string; text: string; answered: boolean }
-	| { id: string; kind: "report"; reports: ReportSummary[] };
+	| { id: string; kind: "report"; reports: ReportSummary[] }
+	| { id: string; kind: "reminder"; from: string };
 
 export interface ReportSummary {
 	name: string;
@@ -82,6 +108,24 @@ export function summarize(record: AgentRecord): ReportSummary {
 	};
 }
 
+/** Who sent mail, as a reminder names them: the sender, or every agent whose report it carries. */
+function ownerOf(details: MailDetails): string {
+	return details.kind === "report" ? details.reports.map((report) => report.name).join(", ") : details.from;
+}
+
+/** An assistant message main finished, rather than one that was stopped or failed. */
+function isReply(entry: unknown): boolean {
+	const e = entry as { type?: string; message?: { role?: string; stopReason?: string } };
+	return e.type === "message" && e.message?.role === "assistant" && e.message.stopReason !== "aborted" && e.message.stopReason !== "error";
+}
+
+/** The id of a subagent message or report, as Pi holds it; undefined for anything else. */
+function mailId(message: unknown): string | undefined {
+	const m = message as { role?: string; customType?: string; details?: { id?: unknown } } | undefined;
+	const ours = m?.role === "custom" && (m.customType === MESSAGE_TYPE || m.customType === REPORT_TYPE);
+	return ours && typeof m.details?.id === "string" ? m.details.id : undefined;
+}
+
 export function reportsText(records: readonly AgentRecord[], now: number): string {
 	return records.map((record) => reportText(record, now)).join("\n\n---\n\n");
 }
@@ -93,6 +137,13 @@ export class MainMail {
 	private readonly held = new Map<string, { records: AgentRecord[]; timer: ReturnType<typeof setTimeout> }>();
 	private seq = 0;
 	private closed = false;
+	/** Mail not yet handed to Pi, oldest first; it waits while main can't take it. */
+	private outbox: Array<{ message: OutgoingMessage; wakes: boolean }> = [];
+	private retryTimer: ReturnType<typeof setTimeout> | null = null;
+	/** Mail that landed while main worked and that main has not replied after yet: id to who sent it. */
+	private readonly owing = new Map<string, string>();
+	private readonly route: () => Route;
+	private readonly retryMs: number;
 	private readonly port: MainPort;
 	private readonly batchMs: number;
 	private readonly groupWaitMs: number;
@@ -108,8 +159,13 @@ export class MainMail {
 		groupBusy?: (group: string, except: string) => boolean;
 		now?: () => number;
 		onChange?: () => void;
+		/** Where main is now; without it, mail always goes as if main were idle. */
+		route?: () => Route;
+		retryMs?: number;
 	}) {
 		this.port = options.port;
+		this.route = options.route ?? (() => "wake");
+		this.retryMs = options.retryMs ?? HOLD_RETRY_MS;
 		this.batchMs = options.batchMs;
 		this.groupWaitMs = options.groupWaitMs ?? 0;
 		this.groupBusy = options.groupBusy ?? (() => false);
@@ -139,14 +195,13 @@ export class MainMail {
 		if (delivery.kind === "relay") {
 			const said = delivery.answered ? `The user answered ${delivery.to}'s question directly:` : `The user messaged ${delivery.to} directly:`;
 			this.remember({ id, kind: "relay", from: delivery.from, text: `to ${delivery.to}: ${delivery.text}`, at: this.now() });
-			this.send({ customType: MESSAGE_TYPE, content: `${said}\n${delivery.text}`, display: true, details: { id, ...delivery } }, { triggerTurn: false });
+			this.post({ customType: MESSAGE_TYPE, content: `${said}\n${delivery.text}`, display: true, details: { id, ...delivery } }, false);
 			return;
 		}
 		const content = delivery.kind === "question" ? questionText(delivery.from, delivery.text) : delivery.kind === "reply"
 			? `Answer from ${delivery.from}:\n${delivery.text}` : noteText(delivery.from, delivery.text);
 		this.remember({ id, kind: delivery.kind, from: delivery.from, text: delivery.text, at: this.now() });
-		this.send({ customType: MESSAGE_TYPE, content, display: true, details: { id, kind: delivery.kind, from: delivery.from, text: delivery.text } },
-			{ triggerTurn: true, deliverAs: "steer" });
+		this.post({ customType: MESSAGE_TYPE, content, display: true, details: { id, kind: delivery.kind, from: delivery.from, text: delivery.text } }, true);
 	}
 
 	/** Moves a group's held reports into the batch. */
@@ -171,8 +226,66 @@ export class MainMail {
 		const wakes = records.some((record) => record.state !== "stopped" && !record.answeredMain);
 		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
 		// Every report shows its header; one that only repeats an answer keeps its text folded.
-		this.send({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } },
-			wakes ? { triggerTurn: true, deliverAs: "steer" } : { triggerTurn: false });
+		this.post({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } }, wakes);
+	}
+
+	/** Hands Pi what waits, oldest first, for as long as main can take it. */
+	retry(): void {
+		if (this.retryTimer) clearTimeout(this.retryTimer);
+		this.retryTimer = null;
+		while (this.outbox.length > 0 && !this.closed) {
+			const route = this.where();
+			if (route === "hold") break;
+			const { message, wakes } = this.outbox.shift()!;
+			this.dispatch(message, wakes, route);
+		}
+		if (this.outbox.length > 0 && !this.closed) this.retryTimer = setTimeout(() => this.retry(), this.retryMs);
+	}
+
+	/**
+	 * Whether main still owes a reply to mail that landed while it worked:
+	 * some is still waiting to land, or landed after main's last reply. Main
+	 * reads everything before its next reply, so one settles it; mail that is
+	 * gone from the context (compacted away) is settled too, so it can't loop.
+	 */
+	owed(context: MainContext): boolean {
+		if (this.owing.size === 0) return false;
+		const waiting = new Set(context.pendingMessages.map(mailId));
+		const lastReply = context.contextMessages.findLastIndex((message) => (message as { role?: string }).role === "assistant");
+		const unread = new Set(context.contextMessages.slice(lastReply + 1).map(mailId));
+		for (const id of [...this.owing.keys()]) if (!waiting.has(id) && !unread.has(id)) this.owing.delete(id);
+		return this.owing.size > 0;
+	}
+
+	/**
+	 * Drops owed mail main has replied after, read from the branch as a turn
+	 * ends, so a reminder never names mail main already handled. A reply that
+	 * was stopped or failed is no reply.
+	 */
+	answered(entries: readonly unknown[]): void {
+		if (this.owing.size === 0) return;
+		const recent = entries.slice(-RECONCILE_WINDOW);
+		const lastReply = recent.findLastIndex(isReply);
+		for (const entry of recent.slice(0, Math.max(0, lastReply))) {
+			const e = entry as { type?: string; customType?: string; details?: unknown };
+			if (e.type === "custom_message") {
+				const id = mailId({ role: "custom", customType: e.customType, details: e.details });
+				if (id) this.owing.delete(id);
+			}
+		}
+	}
+
+	/**
+	 * Wakes main for mail it still owes a reply after a /compact stopped the
+	 * turn the mail landed in; Pi doesn't continue a turn it stopped. Hidden,
+	 * since the user already sees the mail it points at, so it is not kept as
+	 * pending for the widget either, and sent once.
+	 */
+	remind(): void {
+		if (this.owing.size === 0 || this.closed) return;
+		const from = [...new Set(this.owing.values())].join(", ");
+		this.owing.clear();
+		this.post({ customType: MESSAGE_TYPE, content: reminderText(from), display: false, details: { id: this.nextId(), kind: "reminder", from } }, true);
 	}
 
 	/**
@@ -201,6 +314,10 @@ export class MainMail {
 
 	dispose(): void {
 		this.closed = true;
+		if (this.retryTimer) clearTimeout(this.retryTimer);
+		this.retryTimer = null;
+		this.outbox = [];
+		this.owing.clear();
 		for (const held of this.held.values()) clearTimeout(held.timer);
 		this.held.clear();
 		if (this.timer) clearTimeout(this.timer);
@@ -214,7 +331,25 @@ export class MainMail {
 		this.onChange();
 	}
 
-	private send(message: OutgoingMessage, options: { triggerTurn: boolean; deliverAs?: "steer" }): void {
+	/** Queues mail behind anything already waiting, so Pi is handed it in the order it came. */
+	private post(message: OutgoingMessage, wakes: boolean): void {
+		this.outbox.push({ message, wakes });
+		this.retry();
+	}
+
+	private where(): Route {
+		try {
+			return this.route();
+		} catch {
+			// A stale context after session replacement, the one way asking fails; sending then fails the same way and leaves it pending.
+			return "wake";
+		}
+	}
+
+	private dispatch(message: OutgoingMessage, wakes: boolean, route: "wake" | "queue"): void {
+		// Steered mail would sit in the queue Esc clears; mail sent without a turn lands at Pi's next turn boundary.
+		const options = route === "wake" && wakes ? { triggerTurn: true, deliverAs: "steer" as const } : { triggerTurn: false };
+		if (route === "queue" && wakes) this.owing.set(message.details.id, ownerOf(message.details));
 		try {
 			this.port.send(message, options);
 		} catch {

@@ -779,6 +779,13 @@ second time. More work, new input or a failure after the answer does, so a
 report is never silently missed. Children know each other and can split work
 directly.
 Messages to main show above the editor until they are in the transcript.
+One that arrives while main works lands at its next turn boundary, and main
+takes one more turn before it stops if it hasn't replied since. Esc doesn't
+drop it: it stays in the transcript for main's next turn. While main
+compacts, mail waits and wakes main once the compaction is done, so no turn
+starts on the context being summarized. A `/compact` that stops main's turn
+leaves the mail that landed in it unanswered, so once the compaction is done
+a hidden reminder naming who wrote wakes main to reply.
 What you type to a child directly is recorded for main without waking it.
 Reports from children started in the same run arrive together, as one message.
 `message` call rows and incoming notes, questions, replies and relays read

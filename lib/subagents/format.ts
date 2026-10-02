@@ -25,6 +25,11 @@ export function noteText(from: string, text: string): string {
 	return `Message from ${from}:\n${text}`;
 }
 
+/** What wakes main after a /compact stopped the turn mail landed in; the mail itself is above it or in the summary. */
+export function reminderText(from: string): string {
+	return `Your last turn was stopped before you replied to ${from}. Their message is above or in the summary; handle it now.`;
+}
+
 export function questionText(from: string, text: string): string {
 	return `Question from ${from}, who is waiting for your reply (${replyHint(from)}):\n${text}`;
 }

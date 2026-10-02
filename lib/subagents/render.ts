@@ -185,7 +185,8 @@ export function createMessageRenderer(markdown?: MarkdownSource, lookup: Lookup 
 	const memory = expansionMemory();
 	return (message, options, theme) => {
 		const details = message.details as MailDetails | undefined;
-		if (!details || details.kind === "report") return undefined;
+		// A reminder is hidden: it only points main at mail already on screen.
+		if (!details || details.kind === "report" || details.kind === "reminder") return undefined;
 		const question = details.kind === "question";
 		const to = details.kind === "relay" ? details.to : MAIN;
 		const said = question ? "asks" : details.kind === "reply" ? "answers" : details.kind === "relay" ? (details.answered ? "you answered" : "you wrote") : "note";
