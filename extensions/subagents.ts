@@ -21,6 +21,7 @@ import { childInstructions, conversationDigest, rosterText } from "../lib/subage
 import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "../lib/subagents/models.ts";
 import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";
 import { type InspectorHost, openAgentInspector } from "../lib/subagents/inspector.ts";
+import { openTeamView } from "../lib/subagents/team-view.ts";
 import { watchRun } from "../lib/run-watch.ts";
 import { announceBackground, BACKGROUND_REQUEST_EVENT } from "../lib/tab-status/events.ts";
 import { agentHue } from "../lib/band/agent-look.ts";
@@ -104,8 +105,12 @@ export default function subagents(pi: ExtensionAPI) {
 	let inspectorUi: InspectorHost | null = null;
 	let inspected: ShownOverlay | undefined;
 
-	/** One at a time, as the other sheets are; one Pi took off screen without closing it no longer counts. */
-	const inspect = (name: string): void => {
+	/**
+	 * One at a time, as the other sheets are; one Pi took off screen without
+	 * closing it no longer counts. `back` runs once the inspector closes, to
+	 * return to the agents view it was opened from.
+	 */
+	const inspect = (name: string, back?: () => void): void => {
 		const current = state;
 		if (!inspectorUi || !current || inspected?.isOpen()) return;
 		const shown = openAgentInspector(inspectorUi, {
@@ -122,7 +127,33 @@ export default function subagents(pi: ExtensionAPI) {
 			},
 		});
 		inspected = shown;
-		shown.closed.catch(() => undefined).finally(() => { if (inspected === shown) inspected = undefined; });
+		shown.closed.catch(() => undefined).finally(() => {
+			if (inspected === shown) inspected = undefined;
+			// No input handler is around this to catch it; a stale UI after a switch has nothing to go back to.
+			try { back?.(); } catch { /* stale context after a session switch */ }
+		});
+	};
+
+	/** Every agent at once; choosing one opens its inspector, and closing that comes back here, on it. */
+	const viewAll = (selected?: string): void => {
+		const current = state;
+		if (!inspectorUi || !current || inspected?.isOpen()) return;
+		let chosen: string | undefined;
+		const shown = openTeamView(inspectorUi, {
+			records: () => current.team.list(),
+			pending: () => current.mail.pending(),
+			open: (name) => { chosen = name; },
+			motion,
+			...(selected ? { selected } : {}),
+		});
+		inspected = shown;
+		shown.closed.catch(() => undefined).finally(() => {
+			if (inspected === shown) inspected = undefined;
+			// Only within the session it was opened in: after a switch there is nothing to go back to.
+			try {
+				if (chosen && state === current) inspect(chosen, () => { if (state === current) viewAll(chosen); });
+			} catch { /* stale context after a session switch */ }
+		});
 	};
 
 	type RowContext = Parameters<typeof subagentCallRow>[2];
@@ -364,7 +395,7 @@ export default function subagents(pi: ExtensionAPI) {
 		}
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui as unknown as InspectorHost : null;
 		if (ctx.hasUI && ctx.mode === "tui") {
-			widget.attach(ctx.ui as never, () => ({ records: current.team.list(), pending: current.mail.pending() }), inspect);
+			widget.attach(ctx.ui as never, () => ({ records: current.team.list(), pending: current.mail.pending() }), inspect, () => viewAll());
 		}
 		await current.restore(event.reason);
 	});
@@ -410,7 +441,7 @@ export default function subagents(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("subagents", {
-		description: "Inspect subagents (/subagents [name]), find full reports (report <name>), resume them (resume <name>), stop them (stop <name> | stop all), edit the model guide (guide), or see runs by model (stats)",
+		description: "See every subagent (/subagents) or inspect one (/subagents <name>), find full reports (report <name>), resume them (resume <name>), stop them (stop <name> | stop all), edit the model guide (guide), or see runs by model (stats)",
 		getArgumentCompletions: (prefix: string) => commandCompletions(prefix, state?.team.list().map((record) => record.name) ?? []),
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const [verb, ...rest] = args.trim().split(/\s+/);
@@ -452,14 +483,11 @@ export default function subagents(pi: ExtensionAPI) {
 				return;
 			}
 			const records = state.team.list();
-			if (verb && state.team.get(verb) && inspectorUi) return inspect(verb);
+			// Every word above is a subcommand, so anything else names an agent, and a name that isn't one is a typo.
+			if (verb && !state.team.get(verb)) return ctx.ui.notify(`No subagent named ${verb}.`, "warning");
+			if (verb && inspectorUi) return inspect(verb);
 			if (!inspectorUi || records.length === 0) return ctx.ui.notify(listing(records), "info");
-			const width = Math.max(...records.map((record) => record.name.length));
-			const now = Date.now();
-			// The picker wraps long lines; one agent per line reads better.
-			const fit = Math.max(40, (process.stdout.columns || 120) - 8);
-			const choice = await ctx.ui.select("Subagents", records.slice().reverse().map((record) => listLabel(record, width, now, fit)));
-			if (choice) inspect(choice.split(/\s+/)[0]!);
+			viewAll();
 		},
 	});
 

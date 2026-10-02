@@ -59,6 +59,14 @@ export interface SheetSource {
 	body(width: number): string[];
 	/** Names what the body shows; when it changes (another step), the view goes back to following the end. */
 	bodyKey?(): unknown;
+	/** A click on a body line, counted from the body's first line; true when it did something. */
+	pickBody?(line: number): boolean;
+	/**
+	 * Body lines to keep in view, such as a selected item. While a source names
+	 * some, its body stays put instead of following the end, and scrolls only
+	 * as far as it must when they change.
+	 */
+	focus?(): { readonly line: number; readonly rows: number } | undefined;
 	/** Lines between the body and the footer, e.g. a composer. */
 	foot?(width: number): string[];
 	copies?(): readonly SheetCopy[];
@@ -129,6 +137,7 @@ export class Sheet implements Component, Focusable {
 	private maxScroll = 0;
 	private total = 0;
 	private shownKey: unknown;
+	private shownFocus: string | undefined;
 	private hover: Hover = null;
 	private drag: { grab: number } | null = null;
 	private readonly copiedAt = new Map<number, number>();
@@ -268,6 +277,11 @@ export class Sheet implements Component, Focusable {
 			this.tui.requestRender();
 			return { handled: true };
 		}
+		const row = event.y - hits.bodyTop;
+		if (row >= 0 && row < hits.bodyRows && event.x < hits.bar && this.source.pickBody?.(this.scroll + row)) {
+			this.tui.requestRender();
+			return { handled: true };
+		}
 		return undefined;
 	}
 
@@ -328,6 +342,11 @@ export class Sheet implements Component, Focusable {
 		this.stopTimer();
 	}
 
+	/** A source asking for its own sheet to close; openSheet hands it this. */
+	requestClose(): void {
+		this.close();
+	}
+
 	private close(): void {
 		if (this.closed) return;
 		this.dispose();
@@ -377,6 +396,7 @@ export class Sheet implements Component, Focusable {
 		this.total = lines.length;
 		this.viewport = Math.max(1, rows);
 		this.maxScroll = Math.max(0, lines.length - rows);
+		this.keepFocus();
 		this.scroll = this.follow ? this.maxScroll : clamp(this.scroll, 0, this.maxScroll);
 		const overflow = rows > 0 && lines.length > rows;
 		// Pi's scrollbar geometry, so both bars move alike.
@@ -392,6 +412,21 @@ export class Sheet implements Component, Focusable {
 			return `${inThumb ? colors.thumb : colors.track} \x1b[49m`;
 		};
 		return Array.from({ length: rows }, (_, row) => ` ${truncateToWidth(lines[this.scroll + row] ?? "", inner, "…", true)} ${cell(row)}`);
+	}
+
+	/**
+	 * Scrolls just far enough to show the lines the source names, once each
+	 * time they change. Scrolling to the bottom would otherwise set the view
+	 * following again, and new lines would carry the focus out of sight.
+	 */
+	private keepFocus(): void {
+		const focus = this.source.focus?.();
+		const key = focus ? `${focus.line}:${focus.rows}` : undefined;
+		if (focus) this.follow = false;
+		if (focus && key !== this.shownFocus) {
+			this.scroll = clamp(clamp(this.scroll, focus.line + focus.rows - this.viewport, focus.line), 0, this.maxScroll);
+		}
+		this.shownFocus = key;
 	}
 
 	/** The scrollbar's backgrounds, from the colors Pi's own scrollbar uses; brighter while held or hovered. */
@@ -469,11 +504,16 @@ export interface SheetHost {
 	): Promise<T>;
 }
 
-/** Shows a sheet over the whole terminal; `make` builds its source once Pi hands over the theme. */
-export function openSheet(ui: SheetHost, make: (theme: SheetTheme, tui: SheetTui) => SheetSource, options: SheetOptions = {}): ShownOverlay {
+/**
+ * Shows a sheet over the whole terminal; `make` builds its source once Pi
+ * hands over the theme, with a `close` for a source that ends its own sheet,
+ * as a list does when it opens one of its items.
+ */
+export function openSheet(ui: SheetHost, make: (theme: SheetTheme, tui: SheetTui, close: () => void) => SheetSource, options: SheetOptions = {}): ShownOverlay {
 	let sheet: Sheet | undefined;
+	const close = () => sheet?.requestClose();
 	const closed = ui.custom<void>(
-		(tui, theme, _keybindings, done) => (sheet = new Sheet(tui, theme, make(theme, tui), () => done(undefined), options)),
+		(tui, theme, _keybindings, done) => (sheet = new Sheet(tui, theme, make(theme, tui, close), () => done(undefined), options)),
 		{ overlay: true, overlayOptions: SHEET_OVERLAY, onHandle: (handle) => sheet?.attach(handle) },
 	);
 	return { closed, isOpen: () => sheet?.isOpen() ?? false };

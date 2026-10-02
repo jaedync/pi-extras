@@ -10,6 +10,8 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 // How far a popup panel leans from the tool body gray toward the muted text color.
 const PANEL_LIFT = 0.1;
+// How far a selected row leans the same way when the theme names no selection color.
+const SELECTED_LIFT = 0.12;
 
 const RESET = /\x1b\[0?m|\x1b\[49m/g;
 
@@ -41,6 +43,14 @@ function themeBg(theme: BandTheme, key: string): string | undefined {
 /** The gray under a tool row's body; undefined when the theme leaves it to the terminal. */
 export function bodyBackground(theme: BandTheme): string | undefined {
 	return themeBg(theme, "toolPendingBg");
+}
+
+/** Behind a selected item in a list: the theme's own selection color, else a step up from the base. */
+export function selectedBackground(theme: BandTheme): string | undefined {
+	const own = themeBg(theme, "selectedBg");
+	if (own) return own;
+	const palette = paletteFrom(theme);
+	return palette ? bgSgr(mix(palette.base, palette.muted, SELECTED_LIFT), palette.mode) : undefined;
 }
 
 /** A popup's panel: a step lighter than tool bodies, so it reads as above them. */

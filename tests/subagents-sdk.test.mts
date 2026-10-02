@@ -165,6 +165,8 @@ test("/subagents report shows the latest saved path without adding a report tool
 		assert.equal(notices.at(-1), "Usage: /subagents report <name>");
 		await session.prompt("/subagents report missing");
 		assert.equal(notices.at(-1), "No subagent named missing.");
+		await session.prompt("/subagents nobody");
+		assert.equal(notices.at(-1), "No subagent named nobody.", "a name that isn't an agent is a typo, not a request for the list");
 		const tool = session.agent.state.tools.find((tool) => tool.name === "subagent")!;
 		assert.ok(tool);
 		assert.ok(!session.agent.state.tools.some((tool) => /report/.test(tool.name)));

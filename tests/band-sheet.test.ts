@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { COPIED, Sheet, type SheetSource } from "../lib/band/sheet.ts";
+import { COPIED, openSheet, Sheet, type SheetSource } from "../lib/band/sheet.ts";
 import { frameSubscribers } from "./support/fullscreen.ts";
 import { quiet } from "./support/quiet-theme.ts";
 
@@ -249,4 +249,54 @@ test("head and composer lines too long for the width end in …, never cut mid-w
 	const lines = sheet(src, { columns: 30, rows: 12 }).lines();
 	assert.equal(lines[2], " in /private/tmp/a/very/long… ", "a column of margin on each side");
 	assert.equal(lines.at(-2), " a composer line much longer… ");
+});
+
+test("a click on a body line goes to the source, counted from the top of the body", () => {
+	const picked: number[] = [];
+	const s = sheet({ ...source({ lines: 200 }), pickBody: (line) => { picked.push(line); return true; } });
+	const lines = s.lines();
+	const top = lines.findIndex((line) => line.trim() === "line 190");
+	assert.ok(top > 0, "following the end");
+	assert.deepEqual(s.view.handleMouse(mouse("click", 3, top)), { handled: true });
+	assert.deepEqual(picked, [189]);
+	// The scrollbar column is the scrollbar's, not a line's.
+	assert.equal(s.view.handleMouse(mouse("click", 59, top)), undefined);
+	assert.equal(sheet(source({ lines: 200 })).view.handleMouse(mouse("click", 3, top)), undefined, "a source without pickBody leaves it to Pi");
+});
+
+test("a source that names a line keeps it in view instead of following the end, and doesn't fight the wheel", () => {
+	let focus = { line: 0, rows: 2 };
+	const s = sheet({ ...source({ lines: 200 }), focus: () => focus });
+	const shown = () => s.lines().map((line) => line.trim()).filter((line) => /^line \d+$/.test(line));
+	assert.equal(shown()[0], "line 1");
+	focus = { line: 150, rows: 2 };
+	assert.equal(shown().at(-1), "line 152", "scrolled just far enough to show both lines");
+	s.view.handleMouse(mouse("wheel", 3, 8, { wheelDelta: -5 }));
+	assert.equal(shown().at(-1), "line 147", "the wheel still scrolls while the focus stays put");
+	focus = { line: 10, rows: 2 };
+	assert.equal(shown()[0], "line 11");
+});
+
+test("a source that names a line never goes back to following the end, even scrolled to the bottom", () => {
+	let count = 200;
+	const s = sheet({ ...source(), body: () => Array.from({ length: count }, (_, index) => `line ${index + 1}`), focus: () => ({ line: 150, rows: 2 }) });
+	const shown = () => s.lines().map((line) => line.trim()).filter((line) => /^line \d+$/.test(line));
+	s.lines();
+	s.view.handleInput("G");
+	assert.equal(shown().at(-1), "line 200");
+	count = 300;
+	assert.equal(shown().at(-1), "line 200", "new lines below don't pull the view down");
+});
+
+test("openSheet gives the source a way to close its own sheet", async () => {
+	let close: () => void = () => undefined;
+	const ui = {
+		custom: <T>(make: (tui: unknown, theme: unknown, keys: unknown, done: (value: T) => void) => unknown) => new Promise<T>((resolve) => {
+			make({ requestRender: () => undefined, terminal: { rows: 20, columns: 60 } }, quiet(), {}, resolve);
+		}),
+	};
+	const shown = openSheet(ui as never, (_theme, _tui, closeSheet) => { close = closeSheet; return source(); });
+	close();
+	await shown.closed;
+	assert.equal(shown.isOpen(), false);
 });

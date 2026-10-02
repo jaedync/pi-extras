@@ -807,9 +807,26 @@ line up, so what each agent is doing starts in one column; once it has ended,
 main's own spinner does for the same work, so thinking, writing, a tool call (in the tool color)
 or a compaction look alike everywhere; a question waits in amber. Children of
 children sit under their parent. A child the agent waits on (`wait: true`)
-shows the same row in its `subagent` call instead. Click a row, a `subagent`
-row, or run `/subagents` to open the inspector over the full terminal: its
-task and live transcript, with a message box. What the agent was told reads as
+shows the same row in its `subagent` call instead.
+
+Up to four agents show whole. A fifth turns the last row into a control line,
+`+7 more subagents · 1 asking · 6 working  (view)  (expand)`, so the rows stay
+four lines and never say `+1 more`. The rows kept are the ones that need you
+first (asking, failed, interrupted), then those still working; finished ones
+give way first. `(expand)` shows as many rows as fit, up to all of them,
+taking at most half of what the editor and footer leave so the transcript
+keeps the rest, and `(collapse)` takes them back; the rows stay expanded until
+then or until the widget empties, once every agent is done and its report has
+reached main. A terminal too short to give the rows more room shows no
+`(expand)`. `(view)`, a click on `+7 more subagents`, or `/subagents` opens
+every agent over the full terminal: the same live rows,
+children under parents, each with its task under it and a count of what they
+are doing on top. Use ↑↓ and Enter, or click either line, to open one; Esc in
+its inspector comes back to the list.
+
+Click a row, a `subagent` row, or pick one in the agents view to open the
+inspector over the full terminal: its task and live transcript, with a message
+box. What the agent was told reads as
 the same conversation rows, not as the text its model reads: `→ reviewer  you
 wrote` or `main asks` over the message, `◆ finder → reviewer  note` in the
 sender's color, and `◆ lead-a reported` for a report from one of its own

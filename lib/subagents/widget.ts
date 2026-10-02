@@ -7,7 +7,9 @@
  * work), then its model, what it has cost and how full its context is. Names
  * and times line up across rows, so what each agent is doing starts in one
  * column; nothing else is padded, so no row has a hole in it. A finished
- * agent keeps its row until its report is in the transcript.
+ * agent keeps its row until its report is in the transcript. Past four
+ * agents, the last line is a control line that opens the agents view or
+ * expands the rows (overflow.ts).
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { formatTime, type Motion, type Seg } from "../band/band.ts";
@@ -16,10 +18,10 @@ import { everyFrame } from "../band/clock.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import type { PendingItem } from "./deliver.ts";
 import { MAIN } from "./names.ts";
+import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount, type ControlLine, type Span } from "./overflow.ts";
 import { type AgentRecord, type AgentState, LIVE_STATES } from "./types.ts";
 
 export const WIDGET_ID = "subagents";
-export const MAX_AGENT_ROWS = 6;
 export const MAX_PENDING_ROWS = 3;
 
 export interface AgentRow {
@@ -35,8 +37,14 @@ export const shortModel = (ref: string): string => ref.slice(ref.indexOf("/") + 
  * Live agents and those whose report is still queued, parents before children.
  * A child main is blocked on already has its own row in the transcript.
  */
-export function selectRows(records: readonly AgentRecord[], reportPending: ReadonlySet<string>): { rows: AgentRow[]; hidden: number } {
-	const visible = records.filter((record) => (LIVE_STATES.has(record.state) || record.state === "interrupted" || reportPending.has(record.name)) && !(record.parent === MAIN && record.blocking));
+export function agentRows(records: readonly AgentRecord[], reportPending: ReadonlySet<string>): AgentRow[] {
+	return treeRows(records.filter((record) => (LIVE_STATES.has(record.state) || record.state === "interrupted" || reportPending.has(record.name)) && !(record.parent === MAIN && record.blocking)), reportPending);
+}
+
+/** Every agent in the session, parents before children, for the agents view. */
+export const teamRows = (records: readonly AgentRecord[], reportPending: ReadonlySet<string>): AgentRow[] => treeRows(records, reportPending);
+
+function treeRows(visible: readonly AgentRecord[], reportPending: ReadonlySet<string>): AgentRow[] {
 	const byParent = new Map<string, AgentRecord[]>();
 	for (const record of visible) byParent.set(record.parent, [...(byParent.get(record.parent) ?? []), record]);
 	const shown = new Set(visible.map((record) => record.name));
@@ -54,7 +62,7 @@ export function selectRows(records: readonly AgentRecord[], reportPending: Reado
 		ordered.push(rowOf(record, 0));
 		walk(record.name, 1);
 	}
-	return { rows: ordered.slice(0, MAX_AGENT_ROWS), hidden: Math.max(0, ordered.length - MAX_AGENT_ROWS) };
+	return ordered;
 }
 
 function statusWords(record: AgentRecord, reportQueued: boolean): Seg {
@@ -134,13 +142,11 @@ export function presenceLine(theme: Theme, row: AgentRow, width: number, now: nu
 	return agentLine(theme, rowSegs(row, now, motion, columns), width);
 }
 
-export const hiddenLine = (hidden: number): string => `+${hidden} more agent${hidden === 1 ? "" : "s"}`;
-
 const STATE_WORDS: Record<AgentState, string> = {
 	queued: "queued", starting: "starting", running: "running", asking: "asking", waiting: "waiting", idle: "finished", failed: "failed", stopped: "stopped", interrupted: "interrupted",
 };
 
-/** One line in the /subagents picker, cut to `maxWidth`. The name leads, since the picker reads it back. */
+/** One line of the plain list `/subagents` prints where there is no full-terminal view, cut to `maxWidth`. */
 export function listLabel(record: AgentRecord, nameWidth: number, now: number, maxWidth = Number.POSITIVE_INFINITY): string {
 	const parts = [record.name.padEnd(nameWidth), `${STATE_WORDS[record.state]}${record.orphaned ? " (orphan)" : ""}`.padEnd(8), shortModel(record.model)];
 	if (record.usage.cost > 0) parts.push(`$${formatMoney(record.usage.cost)}`);
@@ -162,12 +168,21 @@ export function pendingLines(items: readonly PendingItem[]): Array<{ text: strin
 	return lines;
 }
 
-interface TuiHost { requestRender(): void }
+interface TuiHost { requestRender(): void; readonly terminal?: { readonly rows?: number } }
 interface WidgetUi { setWidget(id: string, content: unknown, options?: unknown): void }
-interface MouseEvent { type: string; button: string; y: number }
+interface MouseEvent { type: string; button: string; x: number; y: number }
+
+/** What the last frame drew where, so a click lands on what was under it. */
+interface Layout {
+	readonly rows: readonly AgentRow[];
+	readonly control: (ControlLine & { readonly y: number }) | null;
+}
+
+const inSpan = (x: number, span: Span) => x >= span[0] && x < span[1];
 
 export interface AgentsWidget {
-	attach(ui: WidgetUi, source: () => { records: AgentRecord[]; pending: PendingItem[] }, onSelect?: (name: string) => void): void;
+	/** `onSelect` opens one agent's inspector; `onView` opens the view of them all. */
+	attach(ui: WidgetUi, source: () => { records: AgentRecord[]; pending: PendingItem[] }, onSelect?: (name: string) => void, onView?: () => void): void;
 	update(): void;
 	detach(): void;
 }
@@ -178,10 +193,13 @@ export function createAgentsWidget(motion: () => Motion = () => "full"): AgentsW
 	let ui: WidgetUi | null = null;
 	let source: (() => { records: AgentRecord[]; pending: PendingItem[] }) | null = null;
 	let onSelect: ((name: string) => void) | null = null;
+	let onView: (() => void) | null = null;
 	let tui: TuiHost | null = null;
 	let shown = false;
+	// Until collapsed again or every agent is gone; the next batch starts collapsed.
+	let expanded = false;
 	let stopFrames: (() => void) | null = null;
-	let lastRows: AgentRow[] = [];
+	let layout: Layout = { rows: [], control: null };
 
 	const snapshot = () => source?.() ?? { records: [], pending: [] };
 	const reportPending = (pending: readonly PendingItem[]) =>
@@ -192,23 +210,42 @@ export function createAgentsWidget(motion: () => Motion = () => "full"): AgentsW
 		return {
 			render: (width: number) => {
 				const { records, pending } = snapshot();
-				const { rows, hidden } = selectRows(records, reportPending(pending));
-				lastRows = rows;
+				const all = agentRows(records, reportPending(pending));
+				const mail = pendingLines(pending);
+				const budget = expandedBudget(host.terminal?.rows ?? process.stdout.rows ?? 40, mail.length);
+				// A terminal too short to give the rows more room has nothing to expand into.
+				const roomy = shownCount(all.length, true, budget) !== shownCount(all.length, false, budget);
+				const { shown: rows, hidden } = fitRows(all, shownCount(all.length, expanded && roomy, budget));
 				const now = Date.now();
 				const columns = rowColumns(rows, now);
 				const lines = rows.map((row) => presenceLine(theme, row, width, now, motion(), columns));
-				if (hidden > 0) lines.push(agentLine(theme, [{ text: hiddenLine(hidden), color: "dim" }], width));
+				const toggle = roomy ? (expanded ? "collapse" : "expand") : null;
+				const control = all.length > COLLAPSED_ROWS ? { ...controlLine(hidden, all.length, toggle, width), y: lines.length } : null;
+				if (control) lines.push(agentLine(theme, control.segs, width));
+				layout = { rows, control };
 				// Mail still on its way to main, cut to the width like any agent line.
-				for (const line of pendingLines(pending)) lines.push(agentLine(theme, [{ text: line.text, color: line.color }], width));
+				for (const line of mail) lines.push(agentLine(theme, [{ text: line.text, color: line.color }], width));
 				return lines;
 			},
 			invalidate: () => {},
 			handleMouse: (event: MouseEvent) => {
-				if (event.type !== "click" || event.button !== "left" || !onSelect) return undefined;
-				const row = lastRows[event.y];
-				if (!row) return undefined;
-				onSelect(row.record.name);
-				return { handled: true };
+				if (event.type !== "click" || event.button !== "left") return undefined;
+				const row = layout.rows[event.y];
+				if (row && onSelect) {
+					onSelect(row.record.name);
+					return { handled: true };
+				}
+				const control = layout.control;
+				if (!control || event.y !== control.y) return undefined;
+				if (control.toggle && inSpan(event.x, control.toggle)) {
+					expanded = !expanded;
+					return { handled: true, render: true };
+				}
+				if (onView && (inSpan(event.x, control.view) || inSpan(event.x, control.more))) {
+					onView();
+					return { handled: true };
+				}
+				return undefined;
 			},
 		};
 	};
@@ -219,19 +256,22 @@ export function createAgentsWidget(motion: () => Motion = () => "full"): AgentsW
 	const stopTimer = () => { stopFrames?.(); stopFrames = null; };
 
 	return {
-		attach(nextUi, nextSource, select) {
+		attach(nextUi, nextSource, select, view) {
 			ui = nextUi;
 			source = nextSource;
 			onSelect = select ?? null;
+			onView = view ?? null;
 			shown = false;
+			expanded = false;
 			stopTimer();
 			this.update();
 		},
 		update() {
 			if (!ui || !source) return;
 			const { records, pending } = snapshot();
-			const anything = selectRows(records, reportPending(pending)).rows.length > 0 || pendingLines(pending).length > 0;
+			const anything = agentRows(records, reportPending(pending)).length > 0 || pendingLines(pending).length > 0;
 			if (!anything) {
+				expanded = false;
 				if (shown) setWidget(undefined);
 				shown = false;
 				stopTimer();
@@ -257,7 +297,9 @@ export function createAgentsWidget(motion: () => Motion = () => "full"): AgentsW
 			source = null;
 			tui = null;
 			onSelect = null;
-			lastRows = [];
+			onView = null;
+			expanded = false;
+			layout = { rows: [], control: null };
 		},
 	};
 }
