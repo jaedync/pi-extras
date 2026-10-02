@@ -1,5 +1,7 @@
 /** One-line summaries of Computer Use calls for the tool row. Pure, so the renderer and the executor agree. */
 
+import { minutesAndUp } from "../duration.ts";
+
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
 const MAX_TEXT = 48;
 
@@ -52,6 +54,5 @@ export function formatMs(ms: number): string {
 	const value = Math.max(0, Number.isFinite(ms) ? ms : 0);
 	if (Math.round(value) < 1000) return `${Math.round(value)}ms`;
 	if (value < 60_000) return `${(value / 1000).toFixed(1)}s`;
-	const seconds = Math.floor(value / 1000);
-	return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+	return minutesAndUp(value / 1000);
 }

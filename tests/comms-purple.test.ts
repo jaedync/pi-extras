@@ -68,18 +68,17 @@ test("the foreign comms wrapper preserves time, result styling and the popup cli
 	} finally { h.kit.clock.stop(); }
 });
 
-test("communication rows keep the shared bullet gutter and text under the title", async () => {
+test("mesh rows keep their bullet; subagent communication uses a margin with bodies at column four", async () => {
 	const title = (line: string) => assert.ok(line.startsWith(`${BULLET_GLYPH} `));
 	const { createMeshMessageRenderer } = await mesh();
 	const mail = plain(createMeshMessageRenderer(() => getMarkdownTheme())({ content: envelope() } as never, { expanded: false } as never, theme as never)!.render(84));
 	title(mail[0]!);
 	assert.match(mail[1]!, /^ {4}Found three files\./, "its text under the title");
 	const note = plain(createMessageRenderer()({ details: { id: "mail-1", kind: "note", from: "scout", to: "reader", text: "hello" } } as never, { expanded: false } as never, theme as never)!.render(84));
-	title(note[0]!);
+	assert.match(note[0]!, /^ {2}◆ scout → main  note/);
 	assert.match(note[1]!, /^ {4}hello/);
-	title(plain(messageCallRow({ to: "scout", text: "hi" }, theme as never, { state: {} }).render(84))[0]!);
-	// Written now: a dim bullet in the margin, while the band keeps its identity purple.
-	title(plain(messageCallRow({ to: "scout", text: "hi" }, theme as never, { state: {}, isPartial: true, executionStarted: false }).render(84))[0]!);
+	assert.match(plain(messageCallRow({ to: "scout", text: "hi" }, theme as never, { state: {} }).render(84))[0]!, /^ {2}→ scout/);
+	assert.match(plain(messageCallRow({ to: "scout", text: "hi" }, theme as never, { state: {}, isPartial: true, executionStarted: false }).render(84))[0]!, /^ {2}→ scout/);
 	const h = harness();
 	const renderers = foreignRenderers({ ...h.kit, streaming: () => true }, { name: "agent_send" });
 	const context: RenderContext = { args: { to: "scout", message: "hello" }, toolCallId: "comms-3", state: {}, lastComponent: undefined,
@@ -96,27 +95,53 @@ test("list_peers remains an operational tool, not a purple communication row", (
 	assert.ok(!call.render(84)[0]!.includes(purpleBand));
 });
 
-test("message call rows use purple, including failed deliveries", () => {
+test("message call rows use purple foreground without background; delivery status precedes text", () => {
 	for (const isError of [false, true]) {
 		const line = messageCallRow({ to: "scout", text: "hello" }, theme as never, { state: {}, isError }).render(84)[0]!;
-		assert.ok(line.includes(purpleBand));
-		if (isError) assert.match(stripTerminalSequences(line), /not delivered/);
+		assert.ok(line.includes(purpleFg));
+		assert.doesNotMatch(line, /\x1b\[48;|▍/);
+		assert.equal(visibleWidth(line), 84);
+		assert.match(stripTerminalSequences(line), isError ? /^ {2}→ scout  not delivered  hello/ : /^ {2}→ scout  hello/);
+		if (isError) {
+			assert.match(stripTerminalSequences(line), /not delivered/);
+			assert.ok(line.includes(base.getFgAnsi("error")));
+		}
 	}
 });
 
-test("subagent notes and questions share a purple band; asks keeps its amber word", () => {
+test("message status precedes long text, including awaits answer, and keeps all delivery meanings", () => {
+	for (const [delivered, word] of Object.entries({ steered: "delivered", resumed: "resumed it", queued: "queued", inbox: "for its next run", replied: "answered", main: "delivered" })) {
+		const row = messageCallRow({ to: "scout", text: "hello world", expectReply: true }, theme as never, { state: { delivered } });
+		assert.equal(plain(row.render(100))[0], `  → scout  ${word} · awaits answer  hello world`);
+		const narrow = plain(row.render(55))[0]!;
+		assert.ok(narrow.includes(`${word} · awaits answer`), narrow);
+		assert.doesNotMatch(row.render(100)[0]!, /\x1b\[48;|▍/);
+	}
+});
+
+test("subagent mail uses purple foreground with no background or rail; asks stays amber", () => {
 	for (const kind of ["note", "question", "reply", "relay"]) {
 		const row = createMessageRenderer()({ details: { id: "mail-1", kind, from: "scout", to: "reader", text: "hello" } } as never, { expanded: false } as never, theme as never)!;
-		assert.ok(row.render(84)[0]!.includes(purpleBand), kind);
-		assert.ok(row.render(84)[1]!.startsWith(purpleBg), "mail body uses the same purple surface as mesh mail");
+		assert.ok(row.render(84)[0]!.includes(purpleFg), kind);
+		for (const line of row.render(84)) assert.doesNotMatch(line, /\x1b\[48;|▍/, kind);
+		assert.match(plain(row.render(84))[1]!, /^ {4}hello/);
+		assert.equal(visibleWidth(row.render(84)[0]!), 84);
+		assert.match(plain(row.render(84))[0]!, kind === "question" ? /asks\s*$/ : kind === "reply" ? /answers\s*$/ : kind === "relay" ? /you wrote\s*$/ : /note\s*$/);
 		if (kind === "question") assert.ok(row.render(84)[0]!.includes(base.getFgAnsi("warning")));
 	}
 });
 
-test("reports retain outcome colors instead of turning purple", () => {
+test("reports have no background or rail while failed status and body retain error colors", () => {
 	for (const state of ["idle", "failed"]) {
 		const report = createReportRenderer()({ details: { kind: "report", reports: [{ name: "scout", model: "model", state, cost: 0, report: "Done" }] } } as never, { expanded: false } as never, theme as never)!;
-		assert.ok(!report.render(84)[0]!.includes(purpleBand));
+		const lines = report.render(84);
+		assert.ok(lines[0]!.includes(purpleFg));
+		for (const line of lines) assert.doesNotMatch(line, /\x1b\[48;|▍/);
+		assert.match(plain(lines)[0]!, new RegExp(`^ {2}◆ scout ${state === "idle" ? "reported" : "✗ failed"}`));
+		if (state === "failed") {
+			assert.ok(lines[0]!.includes(base.getFgAnsi("error")));
+			assert.ok(lines[1]!.includes(base.getFgAnsi("error")));
+		}
 	}
 });
 

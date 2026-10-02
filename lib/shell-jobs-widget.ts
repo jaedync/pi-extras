@@ -1,32 +1,43 @@
 /**
- * shell-jobs-widget: the background-job indicator above the editor.
+ * shell-jobs-widget: the background-job rows above the editor.
  *
- * One keyed widget, one line per visible job, no header. Visible means: still
- * running, stopping, waiting on an undelivered completion, or failed to
- * deliver. Delivered jobs disappear so the widget only ever shows work that
- * still needs attention.
+ * One keyed widget. In the TUI each visible job is a live band (liveRow in
+ * shell-jobs-band.ts): visible means still running, stopping, waiting on an
+ * undelivered completion, or failed to deliver. Delivered jobs disappear so
+ * the rows only ever show work that still needs attention. A click on a row
+ * opens its job.
  *
  * In TUI mode it installs a factory component so it can read the live job map,
  * honor the terminal width, and use theme colors. While a job is running or
- * stopping, a timer samples each log's size and asks for a render; motion is
- * limited to that window, and a row that is only waiting for delivery is
- * static. In RPC mode a plain string array is used because a component factory
- * is not serializable, so those rows carry no spinner, elapsed or activity.
+ * stopping, a timer samples each log's size and latest line and asks for a
+ * render; motion is limited to that window, and a job that is only waiting
+ * for delivery is static. In RPC mode a plain string array is used because a
+ * component factory is not serializable, so those rows carry no spinner,
+ * elapsed or activity.
  *
- * A running row answers "is it still going?" with the spinner alone. While the
- * log is growing it runs at full speed in the accent colour; once the log has
- * not grown for QUIET_AFTER_MS it slows to one frame a second and dims. The
- * process is still alive either way (a dead one leaves the row), so the crawl
- * says "alive but silent", which is the one cue that separates a slow build
- * from a hung one, without a number the reader would have to interpret.
+ * A running job answers "how far along?" with its band's fill, when its
+ * command (a leading sleep) or its latest output (a curl or rsync meter, say)
+ * tells (shell-jobs-progress.ts). Otherwise the band sweeps and the latest
+ * output line says what it is doing. Its spinner answers "is it still
+ * going?": full speed in the accent colour while the log grows, a dim
+ * one-frame-a-second crawl once it has not grown for QUIET_AFTER_MS. The
+ * process is alive either way (a dead one leaves the rows), so the crawl
+ * says "alive but silent", the one cue that separates a slow build from a
+ * hung one.
  */
-import { statSync } from "node:fs";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { everyFrame } from "./band/clock.ts";
+import { truncateToWidth } from "@earendil-works/pi-tui";
+import type { Motion } from "./band/band.ts";
+import { FRAME_MS, everyFrame } from "./band/clock.ts";
 import { BULLET_GLYPH, FAILURE_GLYPH, JOB_ANIMATION, JOB_STOPPING_ANIMATION, SUCCESS_GLYPH, animationFrameMs, glyphAt } from "./band/glyph.ts";
-import { factsOf, jobBand } from "./shell-jobs-band.ts";
-import { commandPreview } from "./shell-jobs-core.ts";
+import { lastLine } from "./band/job-look.ts";
+import { statSync } from "node:fs";
+import { QUIET_FRAME_MS, liveRow } from "./shell-jobs-band.ts";
+export { QUIET_FRAME_MS };
+import { commandPreview, readLogEnd } from "./shell-jobs-core.ts";
+import { minutesAndUp } from "./duration.ts";
 import { type Job, jobStatusText } from "./shell-jobs-process.ts";
+import { nextProgress, progressNow, sleepProgress, type Progress, type ProgressState } from "./shell-jobs-progress.ts";
 
 export const WIDGET_ID = "shell-jobs";
 export const WIDGET_MAX_ROWS = 4;
@@ -35,23 +46,21 @@ export const WIDGET_COMMAND_BYTES = 64;
 export const WIDGET_REFRESH_MS = 250;
 // No log growth for this long puts the spinner into its quiet crawl.
 export const QUIET_AFTER_MS = 30_000;
-// Frame period of the quiet crawl: still moving, so it cannot be mistaken for
-// a static glyph, but slow enough to read as idle next to a busy row.
-export const QUIET_FRAME_MS = 1000;
 export const SPINNER_FRAMES = JOB_ANIMATION.frames;
 export const STOPPING_FRAMES = JOB_STOPPING_ANIMATION.frames;
 // RPC rows carry no animation clock.
 const RUNNING_STATIC = BULLET_GLYPH;
 const STOPPING_STATIC = JOB_STOPPING_ANIMATION.frames[JOB_STOPPING_ANIMATION.still ?? 0]!;
-// Pi wraps string-array widgets in Text(line, 1, 0); a factory component gets raw
-// lines, so it pads itself to sit on the same column as everything else.
-const WIDGET_PAD = " ";
 
-/** Log growth seen for a live job: its size and when it last changed. */
+/** Log growth seen for a live job: its size, when it last changed, its latest line and what that says about progress. */
 export interface Activity {
 	readonly bytes: number;
 	readonly changedAt: number;
+	readonly tail?: string;
+	readonly progress?: ProgressState;
 }
+/** How much of a log's end is read for its latest line. */
+const TAIL_READ_BYTES = 2048;
 export type ActivityLookup = (job: Job) => Activity | null;
 export const noActivity: ActivityLookup = () => null;
 
@@ -71,11 +80,7 @@ export const plainPaint: Paint = (_key, text) => text;
 
 export function formatElapsed(ms: number): string {
 	const totalSec = Math.max(0, Math.floor(ms / 1000));
-	if (totalSec < 60) return `${totalSec}s`;
-	const min = Math.floor(totalSec / 60);
-	const sec = totalSec % 60;
-	if (min < 60) return `${min}m${sec.toString().padStart(2, "0")}s`;
-	return `${Math.floor(min / 60)}h${(min % 60).toString().padStart(2, "0")}m`;
+	return totalSec < 60 ? `${totalSec}s` : minutesAndUp(totalSec);
 }
 
 export function isVisible(job: Job): boolean {
@@ -107,6 +112,12 @@ export function selectRows(jobs: Iterable<Job>): { rows: Job[]; hidden: number }
 	}
 	const rows = all.filter((job) => keep.has(job));
 	return { rows, hidden: all.length - rows.length };
+}
+
+/** Failed deliveries first, then running jobs oldest first, then finished ones waiting to be delivered. */
+export function rowOrder(jobs: Iterable<Job>): Job[] {
+	const rank = (job: Job) => (job.deliveryFailed ? 0 : job.state !== "done" ? 1 : 2);
+	return [...jobs].sort((a, b) => rank(a) - rank(b) || (rank(a) === 2 ? (a.endedAt ?? 0) - (b.endedAt ?? 0) : a.startedAt - b.startedAt));
 }
 
 interface RowParts {
@@ -177,6 +188,10 @@ export function renderJobLines(jobs: Iterable<Job>, now: number | null, paint: P
 	return lines;
 }
 
+function paintDim(theme: Theme, text: string): string {
+	try { return theme.fg("dim", text); } catch { return text; }
+}
+
 export interface WidgetUi {
 	setWidget(id: string, content: unknown, options?: unknown): void;
 }
@@ -190,6 +205,10 @@ export interface JobsWidget {
 	attach(ui: WidgetUi, tuiMode: boolean, jobs: () => Iterable<Job>, onSelect?: (job: Job) => void): void;
 	update(): void;
 	detach(): void;
+	/** How far along a running job is, when its output or command says; the inspector shows the same. */
+	progressOf(job: Job, now: number): Progress | undefined;
+	/** Whether a running job's log has gone quiet, as its row shows; the inspector shows the same. */
+	isQuiet(job: Job, now: number): boolean;
 }
 
 interface WidgetMouseEvent {
@@ -198,14 +217,15 @@ interface WidgetMouseEvent {
 	y: number;
 }
 
-export function createJobsWidget(): JobsWidget {
+/** `motion` is Tool Display's setting, read each frame: reduced holds the spinners still. */
+export function createJobsWidget(motion: () => Motion = () => "full"): JobsWidget {
 	let ui: WidgetUi | null = null;
 	let listJobs: (() => Iterable<Job>) | null = null;
 	let tui: TuiHost | null = null;
 	let tuiMode = false;
 	let shown = false;
 	let onSelect: ((job: Job) => void) | null = null;
-	// The jobs behind the rows last painted, so a click's row maps to a job.
+	// The jobs in the rows last painted, so a click's row maps to a job.
 	let lastRows: Job[] = [];
 	let stopFrames: (() => void) | null = null;
 	const activity = new Map<string, Activity>();
@@ -226,12 +246,18 @@ export function createJobsWidget(): JobsWidget {
 			try {
 				bytes = statSync(job.logPath).size;
 			} catch {
-				// Between spawn and the first write, or after a log was removed: leave the row plain.
+				// Between spawn and the first write, or after a log was removed: leave the job plain.
 				continue;
 			}
 			const seen = activity.get(job.id);
-			if (seen === undefined) activity.set(job.id, { bytes, changedAt: bytes > 0 ? now : job.startedAt });
-			else if (seen.bytes !== bytes) activity.set(job.id, { bytes, changedAt: now });
+			// Only a log that grew is read again; most ticks cost one stat per job.
+			if (seen !== undefined && seen.bytes === bytes) continue;
+			const line = lastLine(readLogEnd(job.logPath, TAIL_READ_BYTES));
+			// A window with nothing to show (a run of blanks) keeps the line and progress shown before.
+			const tail = line ?? seen?.tail;
+			const progress = line === undefined ? seen?.progress ?? {} : nextProgress(seen?.progress ?? {}, line, now);
+			const changedAt = seen === undefined ? (bytes > 0 ? now : job.startedAt) : now;
+			activity.set(job.id, { bytes, changedAt, progress, ...(tail !== undefined ? { tail } : {}) });
 		}
 		for (const id of [...activity.keys()]) if (!live.has(id)) activity.delete(id);
 	};
@@ -241,15 +267,9 @@ export function createJobsWidget(): JobsWidget {
 		return job.state === "running" && seen !== null && now - seen.changedAt >= QUIET_AFTER_MS;
 	};
 	let sampledAt = 0;
-
-	const paintWith = (theme: Theme): Paint => (key, text) => {
-		try {
-			return theme.fg(key, text);
-		} catch {
-			// A user theme missing a key should degrade to plain text, not break the widget.
-			return text;
-		}
-	};
+	// What the output shows first; a leading sleep only while the output says nothing.
+	const progressOf = (job: Job, now: number): Progress | undefined =>
+		job.state === "running" ? progressNow(activity.get(job.id)?.progress ?? {}, now) ?? sleepProgress(job.command, now - job.startedAt) : undefined;
 
 	// Captured by the TUI: the factory runs inside pi's render loop, so `tui`
 	// and `theme` are only available from here.
@@ -257,19 +277,20 @@ export function createJobsWidget(): JobsWidget {
 		tui = host;
 		return {
 			render: (width: number) => {
-				const jobs = snapshot();
-				const { rows, hidden } = selectRows(jobs);
-				lastRows = rows;
-				if (rows.length === 0) return [];
+				const { rows, hidden } = selectRows(snapshot());
+				lastRows = rowOrder(rows);
 				const now = Date.now();
-				// One band per job, like a tool row; a quiet log stills the sweep to a tint.
-				const bands = rows.map((job) => jobBand(theme, factsOf(job), { width, now, view: "live", quiet: isQuiet(job, now) }));
-				const more = hidden > 0 ? [`${WIDGET_PAD}${paintWith(theme)("dim", `+${hidden} more`)}`] : [];
+				const look = motion();
 				// Pi already puts a blank line between the transcript and the widgets.
-				return [...bands, ...more];
+				const lines = lastRows.map((job) => {
+					const progress = progressOf(job, now);
+					const tail = lookup(job)?.tail;
+					return liveRow(theme, job, { width, now, motion: look, quiet: isQuiet(job, now), ...(progress ? { progress } : {}), ...(tail ? { tail } : {}) });
+				});
+				if (hidden > 0) lines.push(truncateToWidth(`  ${paintDim(theme, `+${hidden} more`)}`, Math.max(1, width), "…"));
+				return lines;
 			},
 			invalidate: () => {},
-			// One band per job in painted order; the `+N more` line is no job.
 			handleMouse: (event: WidgetMouseEvent) => {
 				if (event.type !== "click" || event.button !== "left" || onSelect === null) return undefined;
 				const job = lastRows[event.y];
@@ -333,7 +354,8 @@ export function createJobsWidget(): JobsWidget {
 					stopFrames = everyFrame(() => {
 						const now = Date.now();
 						// Bands move at the animation rate; the logs are sampled less often.
-						if (now - sampledAt >= WIDGET_REFRESH_MS) {
+						// Half a frame early, or frames at FRAME_MS would stretch each wait to the next frame after it.
+						if (now - sampledAt >= WIDGET_REFRESH_MS - FRAME_MS / 2) {
 							sample(now);
 							sampledAt = now;
 						}
@@ -356,5 +378,7 @@ export function createJobsWidget(): JobsWidget {
 			onSelect = null;
 			lastRows = [];
 		},
+		progressOf,
+		isQuiet,
 	};
 }

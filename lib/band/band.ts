@@ -9,7 +9,8 @@
  * foreground colors are the theme's own escapes.
  */
 import { foregroundAnsi, rgbColor, visibleWidth } from "@earendil-works/pi-tui";
-import { bgSgr, mix, parseAnsiColor, type Rgb } from "./color.ts";
+import { minutesAndUp } from "../duration.ts";
+import { bgSgr, fgSgr, mix, parseAnsiColor, type Rgb } from "./color.ts";
 import type { BandTheme, Palette } from "./palette.ts";
 import { BULLET_GLYPH, toolIndicator, toolKind } from "./glyph.ts";
 
@@ -22,6 +23,8 @@ export type BandPhase =
 	/** Running out of sight, in the background: a steady tint that doesn't draw the eye. */
 	| { readonly kind: "calm" }
 	| { readonly kind: "running"; readonly elapsedMs: number; readonly timeoutMs?: number }
+	/** Running with a known share done (a download's percent, a sleep's time): a linear fill, no heat. */
+	| { readonly kind: "progress"; readonly share: number }
 	| { readonly kind: "done"; readonly outcome: Outcome; readonly sinceMs: number };
 
 export interface Seg {
@@ -52,11 +55,23 @@ export function easedFill(share: number, strength = EASE): number {
 	return Math.log1p(strength * clamp(share)) / Math.log1p(strength);
 }
 
+/**
+ * One way to write a time on every row (tools, steps, jobs, agents): `40ms`,
+ * `8.6s`, then the two coarsest units run together, `24m23s`, `1h50m`.
+ */
 export function formatTime(ms: number): string {
 	if (ms < 1_000) return `${Math.max(1, Math.round(ms))}ms`;
 	if (ms < 60_000) return `${(Math.floor(ms / 100) / 10).toFixed(1)}s`;
-	const seconds = Math.floor(ms / 1_000);
-	return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+	return minutesAndUp(Math.floor(ms / 1_000));
+}
+
+/**
+ * A limit or a time left in the same units, but in whole seconds, rounded up
+ * so it never reads 0s while something is left: `30s`, `30m00s`, `1h30m`.
+ */
+export function formatWhole(ms: number): string {
+	const seconds = Math.max(1, Math.ceil(ms / 1_000));
+	return seconds < 60 ? `${seconds}s` : minutesAndUp(seconds);
 }
 
 /** A finished time for the rail, warm when the call was slow. */
@@ -76,6 +91,17 @@ export function bandBackground(palette: Palette, phase: BandPhase, width: number
 			if (motion === "reduced" || phase.sinceMs >= FLASH_MS) return () => settled;
 			const flashed = mix(settled, palette[HUE[phase.outcome]] as Rgb, 0.3 * (1 - phase.sinceMs / FLASH_MS));
 			return () => flashed;
+		}
+		case "progress": {
+			// The cell the fill is crossing takes the fraction of it that is done, so a long
+			// job visibly creeps instead of holding still for the half minute a cell can take.
+			const exact = clamp(phase.share) * width;
+			const whole = Math.floor(exact);
+			const filled = mix(base, accent, RUN_TINT.fill);
+			const rest = mix(base, accent, RUN_TINT.rest);
+			const lead = mix(base, accent, RUN_TINT.lead + (motion === "full" ? RUN_TINT.pulse * wave(clockMs, 1_000) : 0));
+			const crossing = mix(rest, lead, exact - whole);
+			return (x) => (x < whole ? filled : x === whole ? crossing : rest);
 		}
 		case "running": {
 			if (!phase.timeoutMs) {
@@ -97,7 +123,7 @@ export function bandBackground(palette: Palette, phase: BandPhase, width: number
 }
 
 /** The theme background a band uses when the palette can't be derived. */
-function fallbackKey(phase: BandPhase): string {
+export function fallbackKey(phase: BandPhase): string {
 	if (phase.kind !== "done") return "toolPendingBg";
 	return phase.outcome === "ok" ? "toolSuccessBg" : phase.outcome === "aborted" ? "toolPendingBg" : "toolErrorBg";
 }
@@ -146,10 +172,19 @@ export interface LineSpec {
 	readonly fallbackBg?: string;
 }
 
+/**
+ * A segment color is a theme key, a raw escape, or `#rrggbb` for a color
+ * that means the same in every theme (a provider's), set in whatever color
+ * mode the terminal uses.
+ */
 function fgCode(theme: BandTheme, color: string): string {
 	if (color.startsWith("\x1b[")) return color;
+	const fixed = HEX.exec(color);
+	if (fixed) return fgSgr([1, 2, 3].map((group) => parseInt(fixed[group]!, 16)) as unknown as Rgb, theme.getColorMode?.() ?? "truecolor");
 	try { return theme.getFgAnsi(color); } catch { return ""; }
 }
+
+const HEX = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i;
 
 const OSC8 = (url: string) => `\x1b]8;;${url}\x1b\\`;
 
@@ -182,7 +217,7 @@ export function paintLine(theme: BandTheme, palette: Palette | undefined, spec: 
 	const flush = () => {
 		if (!runText) return;
 		const text = runLink ? `${OSC8(runLink)}${runText}${OSC8("")}` : runText;
-		out += withPalette ? text : runColor ? safeFg(theme, runColor, text) : text;
+		out += withPalette ? text : runColor ? paintFg(theme, runColor, text) : text;
 		runText = "";
 	};
 	for (let x = 0; x < width; x++) {
@@ -207,8 +242,9 @@ export function paintLine(theme: BandTheme, palette: Palette | undefined, spec: 
 	return `${out}\x1b[0m`;
 }
 
-function safeFg(theme: BandTheme, key: string, text: string): string {
-	if (key.startsWith("\x1b[")) return `${key}${text}\x1b[39m`;
+/** Text in a segment color, outside a painted line; an unknown theme key leaves it plain. */
+export function paintFg(theme: BandTheme, key: string, text: string): string {
+	if (key.startsWith("\x1b[") || HEX.test(key)) return `${fgCode(theme, key)}${text}\x1b[39m`;
 	try { return theme.fg(key, text); } catch { return text; }
 }
 
@@ -281,6 +317,6 @@ export function renderBand(theme: BandTheme, palette: Palette | undefined, spec:
 
 /** Writing is steady. Running and the brief finish flash need animation ticks. */
 export function isAnimated(phase: BandPhase, motion: Motion, _margined = false): boolean {
-	if (phase.kind === "running") return true;
+	if (phase.kind === "running" || phase.kind === "progress") return true;
 	return phase.kind === "done" && motion === "full" && phase.sinceMs < FLASH_MS;
 }

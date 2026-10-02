@@ -31,6 +31,21 @@ export function readSection(name: string, file = CONFIG_FILE): Json {
 	return isObject(value) ? value : {};
 }
 
+export type MotionSetting = "full" | "reduced";
+
+/**
+ * Tool Display's motion choice (`/tool-display motion`), for everything that
+ * animates: read once, then kept current from the settings event.
+ */
+export function watchMotion(events?: { on(name: string, handler: (value: unknown) => void): unknown }): () => MotionSetting {
+	let motion: MotionSetting = readSection("toolDisplay").motion === "reduced" ? "reduced" : "full";
+	events?.on(DISPLAY_SETTINGS_EVENT, (value) => {
+		const next = (value as { motion?: unknown } | undefined)?.motion;
+		if (next === "reduced" || next === "full") motion = next;
+	});
+	return () => motion;
+}
+
 /** Merges `patch` into a section, keeping everything else in the file. */
 export function writeSection(name: string, patch: Json, file = CONFIG_FILE): void {
 	const config = readConfig(file);

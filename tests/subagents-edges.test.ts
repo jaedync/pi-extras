@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { acquireParent } from "../lib/subagents/ownership.ts";
 import { ChildIndex, recoverRoster, reportRunFloor } from "../lib/subagents/restore.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
-import { phaseOf, selectRows } from "../lib/subagents/widget.ts";
+import { doingOf } from "../lib/band/agent-look.ts";
+import { selectRows } from "../lib/subagents/widget.ts";
 
 const warn = (message: string) => assert.fail(message);
 const r = (name: string, patch: Partial<AgentRecord> = {}): AgentRecord => ({ name, parent: "main", depth: 1, model: "faux/cheap",
@@ -74,5 +75,5 @@ test("a saved running record with no transcript is still interrupted and reserve
 test("interrupted restored children remain visible and calm rather than failed", () => {
 	const interrupted = r("helper", { state: "interrupted", restored: true });
 	assert.equal(selectRows([interrupted], new Set()).rows.length, 1);
-	assert.deepEqual(phaseOf(interrupted, Date.now()), { kind: "calm" });
+	assert.equal(doingOf(interrupted), "done", "an interrupted child has no live activity animation");
 });

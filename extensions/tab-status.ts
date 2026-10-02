@@ -2,6 +2,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { colorToHex, type Terminal } from "@earendil-works/pi-tui";
 import { readSection } from "../lib/extras-config.ts";
+import { callPhrase } from "../lib/tool-phrase.ts";
 import { initialState, loadSettings, passthrough, progressSequence, shouldRun, statusSequence, terminalSupport, transition, view, type Action, type Settings } from "../lib/tab-status/core.ts";
 import { terminalFamily } from "../lib/tab-status/terminal.ts";
 import { remember, take, forget } from "../lib/tab-status/handoff.ts";
@@ -147,7 +148,7 @@ export default function tabStatus(pi: ExtensionAPI, options: TabStatusOptions = 
 		if (event.message.role !== "assistant") return;
 		const update = event.assistantMessageEvent;
 		const block = "contentIndex" in update ? event.message.content[update.contentIndex] : undefined;
-		apply({ type: "phase", text: update.type.startsWith("toolcall") && block?.type === "toolCall" ? `writing ${block.name} call` : update.type.startsWith("text") ? "writing" : "thinking" });
+		apply({ type: "phase", text: update.type.startsWith("toolcall") && block?.type === "toolCall" ? callPhrase(block.name, block.arguments) : update.type.startsWith("text") ? "writing" : "thinking" });
 	});
 	pi.on("message_end", (event) => {
 		if (event.message.role !== "assistant") return;

@@ -21,7 +21,7 @@ test("a bash row runs against its timeout, then keeps the time and the last line
 	bash.update({ executionStarted: true });
 	h.advance(8_600);
 	bash.update({ executionStarted: true });
-	assert.deepEqual(bash.lines(), [band("$ cd app  +4 lines", "8.6s / 120s", 60, runningMark(h.now()))]);
+	assert.deepEqual(bash.lines(), [band("$ cd app  +4 lines", "8.6s / 2m00s", 60, runningMark(h.now()))]);
 	h.advance(3_400);
 	const output = Array.from({ length: 8 }, (_, index) => `line ${index + 1}`).join("\n");
 	bash.update({ executionStarted: true, isPartial: false, result: text(output) });
@@ -90,7 +90,7 @@ test("a chained command gets a line per step, with output under the step that ma
 	h.advance(600);
 	bash.update({ executionStarted: true });
 	assert.deepEqual(bash.lines(), [
-		`${runningMark(h.now())} $ cd src && npm run lint && npm te…  2 of 3   2.0s / 120s`,
+		`${runningMark(h.now())} $ cd src && npm run lint && npm t…  2 of 3   2.0s / 2m00s`,
 		"    1  npm run lint                                    1.4s",
 		"    2  npm test                                       600ms",
 		"       ✓ one",

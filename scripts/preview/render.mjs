@@ -65,10 +65,11 @@ export function pickFrame(frames) {
 	for (const text of frames) {
 		const lines = plain(text).split("\n");
 		const voice = lines.find((line) => /^── ● \d+:\d\d /.test(line));
-		// The jobs widget sits right above the editor border, one band per running job.
+		// Job bands sit right above the editor border, one line per running job: a spinner, then `Title  $ command`.
 		const border = lines.findIndex((line) => line.includes("TPS"));
-		const widget = border > 1 ? lines.slice(border - 2, border) : [];
-		const running = (title) => widget.some((line) => line.trimStart().startsWith(title));
+		const above = [];
+		for (let i = border - 1; i >= 0 && lines[i].trim() !== ""; i--) above.push(lines[i].trimStart());
+		const running = (title) => above.some((line) => line.startsWith(`${line[0]} ${title}  $ `));
 		// The default descriptive status is in the same divider as TPS, not in transcript text.
 		const thinking = border >= 0 && /^─ \S+ (?:Thinking|Still thinking|Thinking more|Deep in thought)… (?:\d+d )?\d+:\d\d(?::\d\d)?\.\d(?: ↓ [\d,]+ tokens?)? ─/.test(lines[border].trim());
 		const ready = voice && thinking && running("Run unit tests") && running("Watch types") && lines.some((l) => l.includes("TAIL_CELL_MIN = 10"));

@@ -25,5 +25,6 @@ test("durations read as milliseconds under a second and seconds above", () => {
 	assert.equal(formatMs(46), "46ms");
 	assert.equal(formatMs(999.6), "1.0s");
 	assert.equal(formatMs(1234), "1.2s");
-	assert.equal(formatMs(75_000), "1m 15s");
+	assert.equal(formatMs(75_000), "1m15s");
+	assert.equal(formatMs(5_430_000), "1h30m");
 });

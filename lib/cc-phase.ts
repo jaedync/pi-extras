@@ -1,5 +1,6 @@
-import { mixColors, stripTerminalSequences, truncateToWidth, type Color } from "@earendil-works/pi-tui";
+import { mixColors, truncateToWidth, type Color } from "@earendil-works/pi-tui";
 import { formatElapsed } from "./phase-status.ts";
+import { callPhrase, toolLabel } from "./tool-phrase.ts";
 import { END_GLYPH, MODE_SPINNERS, SPINNER_SLOT_WIDTH, WAVE_TOKENS_PER_SECOND, piWave, slotGlyph, type GlyphAnimation } from "./band/glyph.ts";
 
 export const SEP = ", ";
@@ -30,23 +31,22 @@ export type RunPhase = "prep" | "api" | "first_token" | "think" | "text" | "tool
 export interface RunLine {
  readonly verb?: Verb; readonly phase: RunPhase; readonly elapsedMs: number; readonly phaseMs: number;
  readonly tokens: number; readonly clockMs: number; readonly reduced: boolean; readonly tools?: readonly string[];
- readonly pendingTool?: string; readonly thoughtMs?: number; readonly sinceThoughtMs?: number; readonly idleTokenMs?: number;
+ readonly pendingTool?: string; readonly pendingArgs?: unknown; readonly thoughtMs?: number; readonly sinceThoughtMs?: number; readonly idleTokenMs?: number;
  readonly waveMs?: number; readonly tokensPerSecond?: number; readonly waitingOnPeers?: boolean;
 }
 export const seconds = (ms: number): string => `${Math.max(0,Math.floor(ms/1000))}s`;
 export function thinkingLabel(ms: number): string {
  return ms >= 45000 ? "deep in thought" : ms >= 30000 ? "thinking some more" : ms >= 20000 ? "thinking more" : ms >= 10000 ? "still thinking" : "thinking";
 }
-const toolLabel = (name: string | undefined): string => stripTerminalSequences(name ?? "tool").replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g,"").replace(/[\x00-\x20\x7f-\x9f]+/g," ").trim() || "tool";
 const graphemes = new Intl.Segmenter(undefined,{granularity:"grapheme"});
 export function phaseTitle(model: RunLine): string {
  if(model.verb)return model.verb.present;
- const titles={prep:"Preparing",api:"Sending request",first_token:"Waiting for the model",think:thinkingLabel(model.phaseMs).replace("thinking some more","thinking more"),text:"Writing reply",tool:`Writing ${toolLabel(model.pendingTool)} call`,run:model.tools && model.tools.length>1?`Running ${model.tools.length} tools`:`Running ${toolLabel(model.tools?.[0])}`};
+ const titles={prep:"Preparing",api:"Sending request",first_token:"Waiting for the model",think:thinkingLabel(model.phaseMs).replace("thinking some more","thinking more"),text:"Writing reply",tool:callPhrase(model.pendingTool,model.pendingArgs),run:model.tools && model.tools.length>1?`Running ${model.tools.length} tools`:`Running ${toolLabel(model.tools?.[0])}`};
  const title=titles[model.phase];return title[0]!.toUpperCase()+title.slice(1);
 }
 function phaseParts(model: RunLine): string[] {
  const detail = model.phase === "api" ? "sending request" : model.phase === "first_token" ? "waiting for first token"
-  : model.phase === "tool" ? `writing ${toolLabel(model.pendingTool)} call`
+  : model.phase === "tool" ? callPhrase(model.pendingTool, model.pendingArgs)
   : model.phase === "run" ? (model.tools && model.tools.length > 1 ? `running ${model.tools.length} tools` : `running ${toolLabel(model.tools?.[0])}`) : undefined;
  const thought = model.phase === "think" ? thinkingLabel(model.phaseMs) : undefined;
  return [detail, thought].filter((part): part is string => !!part);

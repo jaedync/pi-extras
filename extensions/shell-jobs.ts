@@ -60,6 +60,7 @@ import {
 	takeReload,
 } from "../lib/shell-jobs-process.ts";
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, reconcileDeliveries } from "../lib/shell-jobs-delivery.ts";
+import { watchMotion } from "../lib/extras-config.ts";
 import { type ClickTarget, clickToInspect, type InspectorHost, openInspector } from "../lib/shell-jobs-inspector.ts";
 import { CWD_PREVIEW_BYTES, errResult, jobTitle, manageJob, okResult, type ToolResult } from "../lib/shell-jobs-manage.ts";
 import { offerRows } from "../lib/late-rows.ts";
@@ -405,6 +406,7 @@ export const __testing = {
 };
 
 export default function shellJobs(pi: ExtensionAPI): void {
+	const motion = watchMotion(pi.events);
 	let runtime: Runtime;
 	let active = false;
 	let started = false;
@@ -426,7 +428,7 @@ export default function shellJobs(pi: ExtensionAPI): void {
 	const inspect = (id: string): void => {
 		const ui = inspectorUi;
 		if (ui === null || inspected?.isOpen() || !runtime.jobs.has(id)) return;
-		const shown = openInspector(ui, () => runtime.jobs.get(id));
+		const shown = openInspector(ui, () => runtime.jobs.get(id), motion, (job, now) => ({ progress: runtime.widget.progressOf(job, now), quiet: runtime.widget.isQuiet(job, now) }));
 		inspected = shown;
 		shown.closed
 			.catch((error: unknown) => ui.notify(`shell-jobs: could not open the inspector: ${(error as Error).message}`, "error"))
@@ -606,9 +608,9 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		if (started) return;
 		started = true;
 		const retained = event.reason === "reload" ? takeReload(ctx.sessionManager) : undefined;
-		runtime = retained ?? createRuntime(createJobsWidget());
+		runtime = retained ?? createRuntime(createJobsWidget(motion));
 		// Refresh the UI implementation without moving process ownership or callbacks.
-		if (retained) runtime.widget = createJobsWidget();
+		if (retained) runtime.widget = createJobsWidget(motion);
 		active = true;
 		backgroundCtx = ctx;
 		const widget = runtime.widget;

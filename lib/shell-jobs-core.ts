@@ -4,6 +4,7 @@
  * unit tested without a session.
  */
 import { closeSync, createReadStream, openSync, readSync, statSync } from "node:fs";
+import { minutesAndUp } from "./duration.ts";
 
 export const MAX_LIVE = 8;
 export const MAX_RETAINED = 128;
@@ -302,22 +303,17 @@ export function tailText(text: string, maxBytes: number, maxLines: number): Tail
 
 /** Human-readable size, matching the built-in tool formatting. */
 /**
- * Elapsed time for tool rows and completion messages, in the same shape as
- * Pi's built-in bash footer (0.86+): seconds under a minute, then minutes and
- * hours, so a long job never reads as thousands of seconds.
+ * Elapsed time for tool rows and completion messages: tenths under a minute,
+ * then the shape every row shares (`24m23s`, `1h50m`), so a long job never
+ * reads as thousands of seconds.
  */
 export function formatDuration(ms: number): string {
 	const seconds = Math.max(0, Number.isFinite(ms) ? ms : 0) / 1000;
-	if (seconds < 60) return `${seconds.toFixed(1)}s`;
-	const totalSeconds = Math.floor(seconds);
-	const minutes = Math.floor(totalSeconds / 60);
-	const remainder = totalSeconds % 60;
-	if (minutes < 60) return `${minutes}m ${remainder}s`;
-	return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
+	return seconds < 60 ? `${seconds.toFixed(1)}s` : minutesAndUp(seconds);
 }
 
-/** Matches a duration produced by formatDuration, old bare-seconds form included. */
-export const DURATION_PATTERN = "(?:\\d+h )?(?:\\d+m )?\\d+(?:\\.\\d+)?s";
+/** Matches a duration produced by formatDuration, and the spaced and bare-seconds forms older transcripts hold. */
+export const DURATION_PATTERN = "(?:\\d+h ?\\d+m(?: ?\\d+s)?|(?:\\d+m ?)?\\d+(?:\\.\\d+)?s)";
 
 export function formatSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes}B`;
@@ -372,6 +368,27 @@ export interface LogWindow {
 	/** True when the log is longer than the window and earlier output was left out. */
 	truncated: boolean;
 	totalBytes: number;
+}
+
+/**
+ * The raw last maxBytes of a log, colors and controls kept, for display code
+ * that strips them itself (stripping controls first would orphan escape
+ * sequences into visible `[32m` text). Not cut to a line boundary, so a long
+ * carriage-return progress line still shows. A missing log reads as empty.
+ */
+export function readLogEnd(logPath: string, maxBytes: number): string {
+	let totalBytes: number;
+	try {
+		totalBytes = statSync(logPath).size;
+	} catch {
+		return "";
+	}
+	const start = Math.max(0, totalBytes - maxBytes);
+	try {
+		return readRange(logPath, start, totalBytes - start).toString("utf8").replace(/^\uFFFD+|\uFFFD+$/g, "");
+	} catch {
+		return "";
+	}
 }
 
 /**

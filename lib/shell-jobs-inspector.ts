@@ -1,11 +1,11 @@
 /**
  * shell-jobs-inspector: the live job view.
  *
- * A click on a job's transcript row, a widget row, or `/jobs` opens one of
- * these over the whole terminal (see band/sheet.ts). It shows the whole story
- * of one job: its band, id and pid, the full command (not the flattened
- * preview), cwd and log path, then the tail of the log, re-read every frame
- * while the process is alive. It reads the runtime's job record through a
+ * A click on a job's transcript row, its row above the editor, or `/jobs`
+ * opens one of these over the whole terminal (see band/sheet.ts): the job's
+ * live band (its progress, as above the editor), id and pid, the full
+ * command (not the flattened preview), cwd and log path, then the tail of
+ * the log, re-read every frame while the process is alive. It reads the runtime's job record through a
  * lookup on every frame, so it follows the job through running, stopping and
  * done, and notices when the record is evicted.
  *
@@ -15,12 +15,15 @@
  */
 import { statSync } from "node:fs";
 import { copyToClipboard, type Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { ShownOverlay } from "./band/modal.ts";
+import type { Motion } from "./band/band.ts";
 import { openSheet, type SheetCopy, type SheetHost, type SheetKey, type SheetSource } from "./band/sheet.ts";
-import { factsOf, jobBand } from "./shell-jobs-band.ts";
-import { readLogWindow, sanitizeControl } from "./shell-jobs-core.ts";
+import { overwritten } from "./band/job-look.ts";
+import { factsOf, jobRow, liveRow } from "./shell-jobs-band.ts";
+import { commandPreview, readLogWindow, sanitizeControl } from "./shell-jobs-core.ts";
 import { type Job, jobStatusText } from "./shell-jobs-process.ts";
+import type { Progress } from "./shell-jobs-progress.ts";
 import { formatElapsed } from "./shell-jobs-widget.ts";
 
 // Enough for a build's last few screens; the log path is shown for the rest.
@@ -29,6 +32,7 @@ export const INSPECTOR_TAIL_BYTES = 64 * 1024;
 export const INSPECTOR_COPY_BYTES = 4 * 1024 * 1024;
 // A command block is capped so a pasted script cannot push the output away.
 export const INSPECTOR_COMMAND_LINES = 8;
+const INSPECTOR_FLAT_BYTES = 4096;
 const OMITTED_MARKER = "\u2026 earlier output omitted; read the log for the rest";
 const KEYS: readonly SheetKey[] = [
 	{ key: "esc", label: "close" },
@@ -40,6 +44,8 @@ const KEYS: readonly SheetKey[] = [
 
 /** Reads the current record of the job on every refresh; undefined once evicted. */
 export type JobLookup = () => Job | undefined;
+/** How far along a running job is and whether it has gone quiet, as its row above the editor shows it. */
+export type ProgressLookup = (job: Job, now: number) => { readonly progress?: Progress; readonly quiet?: boolean };
 
 type PaintKey = "accent" | "border" | "dim" | "muted" | "success" | "error" | "warning" | "toolTitle" | "toolOutput";
 
@@ -77,11 +83,15 @@ export class JobView implements SheetSource {
 	private readonly theme: Theme;
 	private readonly lookup: JobLookup;
 	private readonly now: () => number;
+	private readonly motion: () => Motion;
+	private readonly progressOf: ProgressLookup;
 
-	constructor(theme: Theme, lookup: JobLookup, now: () => number = Date.now) {
+	constructor(theme: Theme, lookup: JobLookup, now: () => number = Date.now, motion: () => Motion = () => "full", progressOf: ProgressLookup = () => ({})) {
 		this.theme = theme;
 		this.lookup = lookup;
 		this.now = now;
+		this.motion = motion;
+		this.progressOf = progressOf;
 		this.refresh();
 	}
 
@@ -109,7 +119,8 @@ export class JobView implements SheetSource {
 		}
 		if (bytes !== this.logBytes || job.state !== this.lastState) {
 			const window = readLogWindow(job.logPath, INSPECTOR_TAIL_BYTES);
-			this.text = window.text.endsWith("\n") ? window.text.slice(0, -1) : window.text;
+			const shown = overwritten(window.text);
+			this.text = shown.endsWith("\n") ? shown.slice(0, -1) : shown;
 			this.truncated = window.truncated;
 			this.logBytes = bytes;
 			this.version += 1;
@@ -118,13 +129,18 @@ export class JobView implements SheetSource {
 	}
 
 	title(): string {
-		return this.job ? `Shell job \u00b7 ${this.job.id}` : "Shell job";
+		return this.job ? `${this.job.title ?? this.job.id} \u00b7 shell job` : "Shell job";
 	}
 
+	/** The live band while this session runs the job; the transcript's still one once it no longer does. */
 	band(width: number): string {
 		const job = this.job;
 		if (job === undefined) return this.fg("warning", truncateToWidth(" no job", width)).padEnd(width);
-		return jobBand(this.theme, factsOf(job), { width, now: this.now(), view: this.tracked ? "live" : "calm" });
+		const now = this.now();
+		if (!this.tracked) return jobRow(this.theme, factsOf(job), { width, now });
+		// No output line on the band: the log is right under it.
+		const { progress, quiet } = this.progressOf(job, now);
+		return liveRow(this.theme, job, { width, now, motion: this.motion(), ...(progress ? { progress } : {}), ...(quiet ? { quiet } : {}) });
 	}
 
 	head(width: number, rows: number): string[] {
@@ -136,8 +152,11 @@ export class JobView implements SheetSource {
 			this.fg("muted", `cwd ${fitTail(job.cwd, width - 4)}`),
 			this.fg("muted", `log ${fitTail(job.logPath, width - 4)}`),
 		];
-		// The command gets the rows the facts leave, up to its own cap.
-		const command = this.commandLines(job, width, Math.max(1, Math.min(INSPECTOR_COMMAND_LINES, rows - fixed.length)));
+		// The band above shows a command that fits on its line; a longer one gets the rows the facts leave, up to its own cap.
+		// Whether the band line above (drawn at the sheet's full width) shows the whole command, uncut.
+		const flat = commandPreview(job.command, INSPECTOR_FLAT_BYTES);
+		const whole = !/\n/.test(job.command.trim()) && flat === sanitizeControl(job.command).trim() && stripTerminalSequences(this.band(width + 2)).includes(`$ ${flat} `);
+		const command = whole ? [] : this.commandLines(job, width, Math.max(1, Math.min(INSPECTOR_COMMAND_LINES, rows - fixed.length)));
 		return [fixed[0]!, ...command, fixed[1]!, fixed[2]!].slice(0, rows);
 	}
 
@@ -186,8 +205,8 @@ export class JobView implements SheetSource {
 }
 
 /** Show the inspector over the whole terminal. */
-export function openInspector(ui: SheetHost, lookup: JobLookup): ShownOverlay {
-	return openSheet(ui, (theme) => new JobView(theme as unknown as Theme, lookup), { copy: copyToClipboard });
+export function openInspector(ui: SheetHost, lookup: JobLookup, motion?: () => Motion, progressOf?: ProgressLookup): ShownOverlay {
+	return openSheet(ui, (theme) => new JobView(theme as unknown as Theme, lookup, Date.now, motion, progressOf), { copy: copyToClipboard });
 }
 
 export type InspectorHost = SheetHost;

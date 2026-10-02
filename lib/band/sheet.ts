@@ -21,6 +21,7 @@ import {
 	decodeKittyPrintable, matchesKey, truncateToWidth, visibleWidth,
 	type Component, type Focusable, type OverlayOptions, type TuiMouseEvent, type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import { paintFg } from "./band.ts";
 import { everyFrame } from "./clock.ts";
 import { bgSgr, mix, parseAnsiColor, type Rgb } from "./color.ts";
 import { OnScreen, type OverlayPresence, type ShownOverlay } from "./modal.ts";
@@ -71,6 +72,8 @@ export interface SheetSource {
 	key?(data: string): boolean;
 	/** Letters are text for the view, so q, j, k, g, G and the copy letters are not shortcuts. */
 	readonly typing?: boolean;
+	/** The title's color, when it isn't the tool color: a theme key or `#rrggbb` (an agent's provider color). */
+	titleColor?(): string;
 }
 
 export interface SheetTheme extends BandTheme {
@@ -170,7 +173,7 @@ export class Sheet implements Component, Focusable {
 	}
 
 	private fg(key: string, text: string): string {
-		try { return this.theme.fg(key, text); } catch { return text; }
+		return paintFg(this.theme, key, text);
 	}
 
 	private bold(text: string): string {
@@ -418,7 +421,7 @@ export class Sheet implements Component, Focusable {
 		const rightWidth = () => shown.reduce((sum, button) => sum + button.width + GAP.length, 0) + visibleWidth(CLOSE) + 1;
 		while (shown.length > 0 && 1 + visibleWidth(label) + 2 + rightWidth() > w) shown = shown.slice(0, -1);
 		const titleRoom = Math.max(0, w - 1 - rightWidth() - 1);
-		const title = this.fg("toolTitle", this.bold(truncateToWidth(label, titleRoom, "…")));
+		const title = this.fg(this.source.titleColor?.() ?? "toolTitle", this.bold(truncateToWidth(label, titleRoom, "…")));
 		let x = w - rightWidth();
 		const hits: Hits["buttons"] = [];
 		for (const button of shown) {

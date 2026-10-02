@@ -9,7 +9,7 @@
  * row asks the shared animation clock for frames and redraws itself.
  */
 import type { TuiMouseEvent, TuiMouseEventResult, Component } from "@earendil-works/pi-tui";
-import { isAnimated, renderBand, ROW_MARGIN, timeSeg, formatTime, type BandPhase, type Outcome, type Seg } from "../band/band.ts";
+import { isAnimated, renderBand, ROW_MARGIN, timeSeg, formatTime, formatWhole, type BandPhase, type Outcome, type Seg } from "../band/band.ts";
 import { paletteFrom } from "../band/palette.ts";
 import type { Kit, RenderContext, ThemeLike } from "./kit.ts";
 
@@ -83,11 +83,11 @@ export function rail(phase: BandPhase, took: number | undefined, options: { lead
 	switch (phase.kind) {
 		case "writing": return [];
 		case "queued": return [{ text: "queued", color: "dim" }];
-		case "calm": return [...lead];
+		case "calm": case "progress": return [...lead];
 		case "running": {
 			const time: Seg[] = [{ text: formatTime(phase.elapsedMs), color: "text" }];
-			// The timeout reads as the model set it, in whole seconds.
-			if (phase.timeoutMs) time.push({ text: ` / ${phase.timeoutMs % 1_000 === 0 ? `${phase.timeoutMs / 1_000}s` : formatTime(phase.timeoutMs)}`, color: "dim" });
+			// The timeout in the same units as the time beside it, so `20m02s / 30m00s` compare at a glance.
+			if (phase.timeoutMs) time.push({ text: ` / ${formatWhole(phase.timeoutMs)}`, color: "dim" });
 			return [...gap(lead), ...time];
 		}
 		case "done": {

@@ -12,7 +12,8 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Job } from "../lib/shell-jobs-process.ts";
 import { cleanup, contains, doesNotContain, fakeTui, inspector, makeJob, sheet, sleep, tempDir, tui } from "./support/shell-jobs-harness.mts";
-import { quiet } from "./support/quiet-theme.ts";
+import { fgOf, quiet } from "./support/quiet-theme.ts";
+import { factsOf, jobRow, liveRow } from "../lib/shell-jobs-band.ts";
 
 const { INSPECTOR_TAIL_BYTES, JobView, openInspector } = inspector;
 const { Sheet, SHEET_OVERLAY } = sheet;
@@ -53,24 +54,26 @@ function open(live: ReturnType<typeof liveJob>, rows = 40, columns = 80) {
 }
 
 describe("job inspector", () => {
-	test("covers the terminal: title bar, band, id and pid, command, cwd, log, output, keys", () => {
+	test("covers the terminal: named title, terminal row, facts, cwd, log, output and keys", () => {
 		const live = liveJob({ id: "run-unit-tests", command: "npm test -- --watchAll=false", cwd: "/repo", pid: 4321 });
 		const { lines, frame } = open(live);
 		const shown = lines();
 		assert.equal(shown.length, 40);
 		assert.ok(shown.every((line) => visibleWidth(line) === 80), shown.join("\n"));
-		assert.match(shown[0], /^ Shell job · run-unit-tests .*copy command {3}copy output {3}✕ $/);
-		// The band names the job by title and shows the elapsed time in its rail.
+		assert.match(shown[0], /^ Run unit tests · shell job .*copy command {3}copy output {3}✕ $/);
+		// The terminal row shows the command once, with title and live status at the right.
 		contains(shown[1], "Run unit tests");
 		contains(shown[1], "12.0s");
 		contains(shown[2], "run-unit-tests");
 		contains(shown[2], "pid 4321");
-		contains(shown[3], "$ npm test -- --watchAll=false");
-		contains(shown[4], "cwd /repo");
+		contains(shown[1], "$ npm test -- --watchAll=false");
+		doesNotContain(shown[1], "⇢ background");
+		contains(shown[3], "cwd /repo");
 		// A long temp path keeps its file name, so the start is what gets cut.
-		contains(shown[5], "log ");
-		contains(shown[5], "run-unit-tests.log");
-		assert.match(shown[6], /^─ output ─+ 3 lines ─$/);
+		contains(shown[4], "log ");
+		contains(shown[4], "run-unit-tests.log");
+		assert.match(shown[5], /^─ output ─+ 3 lines ─$/);
+		assert.strictEqual(shown.filter((line) => line.includes("$ npm test")).length, 1);
 		const text = shown.join("\n");
 		contains(text, "one");
 		contains(text, "three");
@@ -78,7 +81,41 @@ describe("job inspector", () => {
 		frame.dispose();
 	});
 
-	test("an untitled job's band shows its command, and a finished one its exit in words", () => {
+	test("the inspector uses only a tool-colored title and a live band, not a darkened body", () => {
+		const live = liveJob();
+		const { view, frame } = open(live);
+		assert.equal((view as { titleColor?: unknown }).titleColor, undefined, "the sheet's own tool-colored title");
+		assert.equal(view.band(80), liveRow(quiet(), live.current!, { width: 80, now: NOW }));
+		assert.match(frame.render(80)[1]!, /\x1b\[48;/, "the live row has a band background");
+		frame.dispose();
+	});
+
+	test("a quiet job crawls in the inspector as it does above the editor", () => {
+		const live = liveJob();
+		const band = (lookup: () => { quiet?: boolean }) => new JobView(quiet() as never, live.lookup, () => NOW, () => "full", lookup).band(100);
+		// The spinner in the margin is the line's first color: dim for the crawl, the accent while busy.
+		const firstColor = (line: string) => /\x1b\[38;[\d;]*m/.exec(line)?.[0];
+		assert.equal(firstColor(band(() => ({ quiet: true }))), fgOf("#5f5d58"));
+		assert.equal(firstColor(band(() => ({}))), fgOf("#8fb4c8"));
+	});
+
+	test("the inspector band shares progress from the widget lookup and reverts to a still row when evicted", () => {
+		const live = liveJob();
+		const calls: Array<[Job, number]> = [];
+		const view = new JobView(quiet() as never, live.lookup, () => NOW, () => "reduced", (job, now) => {
+			calls.push([job, now]);
+			return { progress: { share: .45, parts: ["31s left", "312M/690M"] } };
+		});
+		assert.match(stripTerminalSequences(view.band(100)), /45% · 31s left · 312M\/690M/);
+		assert.deepEqual(calls, [[live.current, NOW]]);
+		const last = live.current!;
+		live.set(undefined);
+		view.frame();
+		assert.equal(view.band(100), jobRow(quiet(), factsOf(last), { width: 100, now: NOW }));
+		assert.equal(calls.length, 1);
+	});
+
+	test("an untitled job's terminal row shows its command, final exit and elapsed time", () => {
 		const live = liveJob({ title: null, state: "done", code: 2, endedAt: NOW - 1000, startedAt: NOW - 6000 });
 		const { lines, frame } = open(live);
 		const shown = lines();
@@ -150,7 +187,7 @@ describe("job inspector", () => {
 		await sleep(FRAME_MS * 2 + 50);
 		contains(text(), "exit 0");
 		contains(text(), "last words");
-		// Finished: after one last frame so the band settles, nothing repaints on its own.
+		// One final frame settles the status, then a finished job stops repainting.
 		await sleep(FRAME_MS * 2);
 		const settled = host.renders.length;
 		await sleep(FRAME_MS * 2 + 50);
@@ -175,7 +212,7 @@ describe("job inspector", () => {
 		assert.ok(filler.join("\n").length > INSPECTOR_TAIL_BYTES);
 		const { text, lines, frame } = open(live, 30);
 		contains(text(), "row 4000");
-		assert.match(lines()[6], /output · last 64 KB/);
+		assert.match(lines()[5], /output · last 64 KB/);
 		frame.handleInput("g");
 		contains(text(), "earlier output omitted");
 		doesNotContain(text(), "row 1 ");

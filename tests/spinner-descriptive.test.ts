@@ -21,6 +21,9 @@ test("divider captions cover every descriptive and playful phase, with and witho
 		["think", { phaseMs: 31000 }, "Thinking more", "thinking some more", "↓ 212 tokens"],
 		["think", { phaseMs: 46000 }, "Deep in thought", "deep in thought", "↓ 212 tokens"],
 		["tool", { pendingTool: "bash", tokens: 486 }, "Writing bash call", "writing bash call", "↓ 486 tokens"],
+		// A write being written is writing the file, never "Writing write call".
+		["tool", { pendingTool: "write", pendingArgs: { path: "docs/main.md" }, tokens: 486 }, "Writing main.md", "writing main.md", "↓ 486 tokens"],
+		["tool", { pendingTool: "edit", tokens: 486 }, "Editing", "editing", "↓ 486 tokens"],
 		["run", { tools: ["bash"] }, "Running bash", "running bash", ""],
 		["run", { tools: ["read", "read", "bash"] }, "Running 3 tools", "running 3 tools", ""],
 		["text", { tokens: 1204, thoughtMs: 1000, sinceThoughtMs: 100 }, "Writing reply", "", "↓ 1,204 tokens"],

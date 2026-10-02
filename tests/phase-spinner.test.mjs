@@ -131,6 +131,8 @@ test("the step stopwatch resets at phase/call/tool-title boundaries, not thinkin
 	assert.match(h.render(52600)[0], /Writing bash call… 00:00\.6/);
 	call("toolcall_start", "bash", 53000);
 	assert.match(h.render(53200)[0], /Writing bash call… 00:00\.2/);
+	h.emit("message_update", { assistantMessageEvent: { type: "toolcall_delta", delta: "{}" }, message: { role: "assistant", content: [{ type: "toolCall", name: "write", arguments: { path: "docs/main.md" } }] } }, 53300);
+	assert.match(h.render(53400)[0], /Writing main\.md… /);
 	h.emit("tool_execution_start", { toolCallId: "a", toolName: "bash" }, 54000);
 	assert.match(h.render(56000)[0], /Running bash… 00:02\.0/);
 	h.emit("tool_execution_start", { toolCallId: "b", toolName: "read" }, 57000);

@@ -32,7 +32,7 @@ can still conflict.
 | Phase Spinner | Descriptive status with a per-mode spinner in the editor's top divider, with a per-step stopwatch, alongside tokens/sec, time to first token and total elapsed time; live thinking above queued messages and a π end line when a prompt finishes |
 | Tab Status | Pi's state in the terminal tab: an iTerm2 status dot and detail, and tab progress in iTerm2, Ghostty, WezTerm and Windows Terminal |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
-| Subagents | `subagent` and `message` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, with a live band per agent |
+| Subagents | `subagent` and `message` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, each with a live row above the editor |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
@@ -500,6 +500,7 @@ The editor's top divider says what the agent is doing:
 
 - **The word** names the phase: `Sending request`, `Waiting for the model`,
   `Thinking` (then `Still thinking`, `Thinking more` and `Deep in thought`),
+  `Writing main.md` (a write; an edit reads `Editing cc-phase.ts`),
   `Writing bash call`, `Running bash` or `Running 3 tools`, and
   `Writing reply`. A token count follows it while the model writes. Pi's own
   statuses (compacting, retrying, summarizing a branch) take its place while
@@ -554,7 +555,9 @@ the right. The band's color says how it went (green done, red failed, amber
 timed out, gray aborted), so there are no status marks, and a failure is named
 in words in the right rail (`exit 1`, `timed out`). While a call runs, the band
 fills toward its timeout and warms as the timeout gets close; a call without a
-timeout sweeps instead. Rows share the bullet column with the agent's text.
+timeout sweeps instead. Times read the same on every row: `8.6s`, then
+`24m23s` and `1h50m`, and a timeout beside one is in the same units
+(`20m02s / 30m00s`). Rows share the bullet column with the agent's text.
 While a call runs, its bullet says what kind of call it is: a shell command
 with a timeout fills `○ ◔ ◑ ◕ ●` as it uses up its timeout, a subagent or peer
 request has a slowly circling dot, a web call breathes, and other calls keep a
@@ -584,8 +587,8 @@ what it shows. Esc, `q` or `✕` closes it. ctrl+o still expands every row in
 place.
 
 **Agent communication.** Mesh `agent_send` and `agent_request` rows use purple
-bands, like subagent mail. Delivery failures keep their red rail words rather
-than recoloring the band. `list_peers` keeps the usual operational colors.
+bands. Delivery failures keep their red rail words rather than recoloring the
+band. `list_peers` keeps the usual operational colors.
 Incoming remote-pi mesh messages show the sender's name and working-directory
 basename, `→ me`, and `message` or `replies`, over a purple Markdown preview.
 Click or ctrl+o expands the body. Transport headers and reply instructions stay
@@ -685,18 +688,33 @@ count in the footer to count each step of a chained command instead; the
 count brightens to show it, and the choice is saved. Where the terminal sends
 no clicks to the footer, `/tool-display count steps` does the same.
 
-**Shell Jobs** use the same bands. A job is named after its title
-(`Run unit tests` becomes `run-unit-tests`), and the model is asked to call it
-by its title when talking to you. Starting a job leaves a small chip in the
-transcript rather than a full-width row, `↳ Run unit tests  in background`,
-so handing work off reads apart from calls that ran in place. The chip stays
-still; the job's band above the editor is the one that moves. When the job
-ends the chip takes its outcome (green `done`, red `exit 2`, gray `stopped`)
-and time, and its completion is one band with how it ended and how long it
-took; click it for the output. Click a running job's row
-or its band above the editor to open its live log over the full terminal,
-with buttons (or `c` and `o`) to copy the command and the whole log; Esc, `q`
-or `✕` closes it.
+**Shell Jobs** are bands, like any call, and a running job's band fills with
+its progress. A job is named after its title (`Run unit tests` becomes
+`run-unit-tests`), and the model is asked to call it by its title when talking
+to you. Starting a job leaves a still gray band in the transcript:
+`Run unit tests  $ npm test  ⇢ background`, its title first, then the
+command and status side by side. When the job ends the band takes how it ended and how long it
+took (green `✓ exit 0 · 29.9s`, red `✗ exit 2`, gray `■ stopped`), and its
+completion repeats the band with the last output lines in a gutter under it;
+click it, or ctrl+o, for the log and the rest.
+
+Each running job has a live band above the editor. When the job's progress
+can be known, the band fills with it: a command that starts with
+`sleep 30` fills over those 30 seconds, and a meter in its newest output line
+fills it with what the meter says, as in
+`Download ISO  $ curl -LO …  26.1s  45% · 32s left · 312M/690M · 12.1M/s`.
+The meters read are the ones tools draw into a log: curl, wget, rsync
+(`--info=progress2`), git (`--progress`), tqdm, ninja, and pip or cargo when
+they draw one, as well as any percentage drawn beside a bar. Time left reads
+the same for all of them (`32s left`). A bare percentage counts only while it
+climbs, so `coverage 85%` never fakes a bar, and a finished meter stops
+filling, since the job may still have work after it. When nothing says how
+far along it is, a sweep crosses the band and its latest output line shows
+instead (`▸ 212 passing`). The spinner at its start dims
+to a slow crawl once a log goes quiet. Four jobs fit; the rest give way to
+`+2 more`. Click a job's band to open its live log over the full terminal,
+with the same band at the top and buttons (or `c` and `o`) to copy the
+command and the whole log; Esc, `q` or `✕` closes it.
 
 ## Copy Blocks
 
@@ -763,28 +781,42 @@ directly.
 Messages to main show above the editor until they are in the transcript.
 What you type to a child directly is recorded for main without waking it.
 Reports from children started in the same run arrive together, as one message.
-`message` call rows and incoming notes, questions, replies and relays all use
-purple bands. A question keeps its amber `asks` word; failed deliveries keep
-red words. Incoming mail has a purple Markdown preview, expandable by click
-or ctrl+o. Reports keep their green or red outcome colors.
+`message` call rows and incoming notes, questions, replies and relays read
+like the conversation they are: `◆ reviewer → main  asks` over what it said.
+A question keeps its amber `asks` word; failed deliveries keep red words.
+Incoming mail has a Markdown preview, expandable by click or ctrl+o.
 
-**Seeing it.** A backgrounded start leaves a compact, still chip like Shell
-Jobs: `↳ reviewer  opus high  in background`. It takes the final outcome and
-time when the child ends. A blocking `wait: true` call retains its full band
-and activity line; expanding a background call shows its task in full. A
-report's band shows the run's cost, tokens (`in` counts cached prompt tokens
-too) and time. When its answer is already on screen, the report stays one band
-and a click unfolds its text.
-Each agent has a band above the editor: its model and thinking
-level, what it is doing right now, how full its context is (`ctx 12%`), what
-it has cost and how long this run has taken. Children of children sit under
-their parent. A child the agent waits on shows in its `subagent` row instead,
-with what it is doing on the line under it. Click a
-band, a `subagent` row, or run `/subagents` to open the inspector over the full
-terminal: the agent's task and live transcript, with a message box. Type and
-press Enter to write to it (steered in while it runs, resuming it when it has
-finished, answering it when it asked); ctrl+x twice stops it, Esc or `✕`
-closes, and its title bar copies the task or the report. Main is told what you
+**Seeing it.** An agent reads like someone in a conversation, with no band
+behind it: a `◆` and its name in its provider's color, the one the footer
+gives that provider (Anthropic orange, Codex blue), or purple for a provider
+with none. What it is doing and the facts about it sit close beside them, and what it says set in under its name. Shell Jobs are
+bands instead, so the two are easy to tell apart. A backgrounded start reads
+`◆ reviewer joined  opus high  working`, with its task under it; the last word
+says where it is (`working`, an amber question, `finished · 1m12s`, red
+`✗ failed`), and expanding the row shows the whole task. Its report is the
+agent speaking last: `◆ reviewer reported  1m12s  opus`, then the run's cost
+and tokens (`in` counts cached prompt tokens too), and the first lines of the
+report under it. When its answer is already on screen, the report stays one
+line and a click unfolds its text.
+Each agent has a row above the editor:
+`◆ reviewer  1m02s  ∴ thinking  opus high · $0.21 · ctx 8%`, its name, how
+long this run has taken, what it is doing right now, then its model and
+thinking level, what it has cost and how full its context is. Names and times
+line up, so what each agent is doing starts in one column; once it has ended,
+`✓`, `✗` or `■` takes the spinner's place. What it is doing moves the way
+main's own spinner does for the same work, so thinking, writing, a tool call (in the tool color)
+or a compaction look alike everywhere; a question waits in amber. Children of
+children sit under their parent. A child the agent waits on (`wait: true`)
+shows the same row in its `subagent` call instead. Click a row, a `subagent`
+row, or run `/subagents` to open the inspector over the full terminal: its
+task and live transcript, with a message box. What the agent was told reads as
+the same conversation rows, not as the text its model reads: `→ reviewer  you
+wrote` or `main asks` over the message, `◆ finder → reviewer  note` in the
+sender's color, and `◆ lead-a reported` for a report from one of its own
+children. Type and press Enter to write
+to it (steered in while it runs, resuming it when it has finished, answering
+it when it asked); ctrl+x twice stops it, Esc or `✕` closes, and its title
+bar copies the task or the report. Main is told what you
 wrote. Status Plus counts every child in its totals.
 
 **Reports.** Each finished run that has a final report saves it in full beside

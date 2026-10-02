@@ -1,19 +1,20 @@
 /**
  * The agent inspector: one agent over the whole terminal (see band/sheet.ts),
- * with its band, what it was asked to do, its live transcript, and a message
- * box to write to it. It scrolls, follows the tail and closes like the other
+ * its name in its provider's color, with its presence line, what it was asked to do, its live
+ * transcript, and a message box to write to it. It scrolls, follows the tail and closes like the other
  * sheets; letters go to the message box, so it has no letter shortcuts.
  */
 import { copyToClipboard, type Theme } from "@earendil-works/pi-coding-agent";
 import { decodeKittyPrintable, matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { renderBand } from "../band/band.ts";
+import { AVATAR, agentHue } from "../band/agent-look.ts";
+import { paintFg } from "../band/band.ts";
+import type { Motion } from "../band/band.ts";
 import type { ShownOverlay } from "../band/modal.ts";
-import { paletteFrom } from "../band/palette.ts";
 import { openSheet, type SheetCopy, type SheetHost, type SheetKey, type SheetSource } from "../band/sheet.ts";
 import { moreLines } from "./names.ts";
-import { transcriptLines } from "./transcript.ts";
+import { transcriptLines, type Voices } from "./transcript.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
-import { phaseOf, rowRail, rowSegs } from "./widget.ts";
+import { presenceLine } from "./widget.ts";
 
 const TASK_LINES = 4;
 const NOTICE_MS = 4_000;
@@ -30,6 +31,10 @@ export interface InspectorSource {
 	send(text: string): Promise<string>;
 	stop(): Promise<void>;
 	describe(tool: string, args: unknown): string;
+	/** Tool Display's motion setting; reduced holds what the agent is doing still. */
+	motion?(): Motion;
+	/** Another agent's color by name, for messages it sent this one; absent, others keep the purple. */
+	hue?(name: string): string;
 }
 
 export class AgentView implements SheetSource {
@@ -49,20 +54,22 @@ export class AgentView implements SheetSource {
 		this.redraw = redraw;
 	}
 
-	private paint = (color: string, text: string): string => {
-		try { return this.theme.fg(color as never, text); } catch { return text; }
-	};
+	private paint = (color: string, text: string): string => paintFg(this.theme, color, text);
 
 	title(): string {
 		const record = this.source.record();
-		return record ? `Subagent · ${record.name}` : "Subagent";
+		return record ? `${AVATAR} ${record.name} · subagent` : "Subagent";
+	}
+
+	/** The sheet's own ground; only the title takes the agent's color. */
+	titleColor(): string {
+		return agentHue(this.source.record()?.model);
 	}
 
 	band(width: number): string {
 		const record = this.source.record();
-		const now = Date.now();
 		if (!record) return ` ${this.paint("warning", "This agent is gone.")}`;
-		return renderBand(this.theme, paletteFrom(this.theme), { width, phase: phaseOf(record, now), segs: rowSegs({ record, depth: 0 }), rail: rowRail(record, now), clockMs: now });
+		return presenceLine(this.theme, { record, depth: 0 }, width, Date.now(), this.source.motion?.() ?? "full");
 	}
 
 	head(width: number, rows: number): string[] {
@@ -88,7 +95,9 @@ export class AgentView implements SheetSource {
 		const messages = this.source.messages();
 		const cached = this.cached;
 		if (cached && cached.messages === messages && cached.count === messages.length && cached.width === width) return cached.lines;
-		const lines = transcriptLines(messages, width, this.paint, this.source.describe);
+		const record = this.source.record();
+		const voices: Voices = { self: record?.name ?? "", hue: (name) => this.source.hue?.(name) ?? agentHue(name === record?.name ? record.model : undefined) };
+		const lines = transcriptLines(messages, width, this.paint, this.source.describe, voices);
 		if (lines.length === 0) lines.push(this.paint("dim", this.source.record()?.state === "queued" ? "(queued; not started yet)" : "(nothing yet)"));
 		this.cached = { messages, count: messages.length, width, lines };
 		return lines;
@@ -111,7 +120,7 @@ export class AgentView implements SheetSource {
 		return this.shownNotice && Date.now() - this.shownNotice.at < NOTICE_MS ? this.shownNotice : undefined;
 	}
 
-	/** Always redraws: the band moves while it runs, and a message can resume it at any time. */
+	/** Always redraws: its row moves while it runs, and a message can resume it at any time. */
 	live(): boolean {
 		return true;
 	}
@@ -173,12 +182,13 @@ export class AgentView implements SheetSource {
 	private composer(width: number): string {
 		const record = this.source.record();
 		if (!record || !this.accepts()) return this.paint("dim", ENDED);
-		const label = `${record.name} ▸ `;
-		const caret = this.paint("accent", "▏");
-		if (!this.draft) return `${this.paint("accent", label)}${caret}${this.paint("dim", record.state === "idle" ? "write to resume it" : "write to it")}`;
+		const label = `→ ${record.name} `;
+		const hue = agentHue(record.model);
+		const caret = this.paint(hue, "▏");
+		if (!this.draft) return `${this.paint(hue, label)}${caret}${this.paint("dim", record.state === "idle" ? "write to resume it" : "write to it")}`;
 		const room = Math.max(4, width - visibleWidth(label) - 1);
 		const draft = this.draft.length > room ? `…${this.draft.slice(-(room - 1))}` : this.draft;
-		return `${this.paint("accent", label)}${draft}${caret}`;
+		return `${this.paint(hue, label)}${draft}${caret}`;
 	}
 }
 

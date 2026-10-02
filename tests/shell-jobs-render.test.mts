@@ -9,10 +9,13 @@
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { JOB_ANIMATION, JOB_STOPPING_ANIMATION, animationCycle } from "../lib/band/glyph.ts";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatDuration } from "../lib/shell-jobs-core.ts";
-import { quiet } from "./support/quiet-theme.ts";
+import { quiet, fgOf } from "./support/quiet-theme.ts";
+import { colorOf } from "./support/tool-rows.ts";
+import { liveRow } from "../lib/shell-jobs-band.ts";
+import { METER_HOLD_MS } from "../lib/shell-jobs-progress.ts";
 import {
 	band,
 	cleanup,
@@ -199,7 +202,7 @@ describe("job widget", () => {
 		assert.deepStrictEqual(renderJobLines([job], 2000, plainPaint), [`${frameAt(SPINNER_FRAMES, 2000)}  j1  1s     cd app && make [31mall[0m`]);
 	});
 
-	test("the TUI widget draws one band per job, named by title", async () => {
+	test("the TUI widget draws one live band per job, title then command and progress", async () => {
 		const app = createFakePi([], "tui");
 		shellJobs(app.pi as any);
 		await fire(app.handlers, "session_start", app.ctx);
@@ -210,12 +213,107 @@ describe("job widget", () => {
 		// Pi puts the blank line above widgets itself.
 		assert.strictEqual(lines.length, 2);
 		contains(lines[0], "$ sleep 30");
-		// A titled job shows its title alone; ids are for the model.
-		contains(lines[1], "Nap");
-		doesNotContain(lines[1], "sleep 31");
-		doesNotContain(lines.join("\n"), "sleep-30");
+		contains(lines[1], "Nap  $ sleep 31");
+		contains(lines[0], "%");
+		doesNotContain(lines[0], "Nap");
 		for (const line of lines) assert.ok(visibleWidth(line) <= 40, line);
 		await fire(app.handlers, "session_shutdown", app.ctx);
+	});
+
+	test("widget progress uses the sampled meter before sleep, with bare percentages only after a rise", (t) => {
+		const now = 1_800_000_000_000;
+		t.mock.timers.enable({ apis: ["Date"], now });
+		const dir = tempDir();
+		const meterLog = join(dir, "meter.log"), sleepLog = join(dir, "sleep.log"), bareLog = join(dir, "bare.log");
+		writeFileSync(meterLog, "45 690M 45 312M 0 0 10M 0 0:01:09 0:00:38 0:00:31 10M\n");
+		writeFileSync(sleepLog, "");
+		writeFileSync(bareLog, "coverage 20%\n");
+		const meter = makeJob({ id: "meter", command: "sleep 30; curl", logPath: meterLog, startedAt: now - 15_000 });
+		const sleeping = makeJob({ id: "sleep", command: "sleep 30", logPath: sleepLog, startedAt: now - 15_000 });
+		const bareJob = makeJob({ id: "bare", command: "build", logPath: bareLog, startedAt: now - 1000 });
+		const jobs = [meter, sleeping, bareJob];
+		let factory: any;
+		const jobsWidget = createJobsWidget();
+		try {
+			jobsWidget.attach({ setWidget: (_id, content) => { factory = content; } }, true, () => jobs);
+			assert.deepStrictEqual(jobsWidget.progressOf(meter, now), { share: .45, parts: ["31s left", "312M/690M", "10M/s"] });
+			assert.deepStrictEqual(jobsWidget.progressOf(sleeping, now), { share: .5, parts: ["15s left"] });
+			assert.strictEqual(jobsWidget.progressOf(sleeping, now + 15_000), undefined);
+			assert.strictEqual(jobsWidget.progressOf(bareJob, now), undefined);
+			const component = factory({ requestRender() {} }, quiet());
+			const lines = bare(component.render(120));
+			contains(lines[0], "45% · 31s left · 312M/690M · 10M/s");
+			doesNotContain(lines[0], "▸");
+			contains(lines[1], "50% · 15s left");
+			contains(lines[2], "▸ coverage 20%");
+			appendFileSync(bareLog, "coverage 20%\n");
+			jobsWidget.update();
+			assert.strictEqual(jobsWidget.progressOf(bareJob, now), undefined);
+			appendFileSync(bareLog, "progress 21%\n");
+			jobsWidget.update();
+			assert.deepStrictEqual(jobsWidget.progressOf(bareJob, now), { share: .21, parts: [] });
+			contains(bare(component.render(120))[2], "21%");
+			doesNotContain(bare(component.render(120))[2], "▸");
+			appendFileSync(bareLog, "plain output\n");
+			jobsWidget.update();
+			// The bar holds through a line between updates, then gives way to the output line.
+			assert.deepStrictEqual(jobsWidget.progressOf(bareJob, now), { share: .21, parts: [] });
+			assert.strictEqual(jobsWidget.progressOf(bareJob, now + METER_HOLD_MS), undefined);
+			t.mock.timers.tick(METER_HOLD_MS);
+			contains(bare(component.render(120))[2], "▸ plain output");
+			for (const state of ["done", "stopping"] as const) assert.strictEqual(jobsWidget.progressOf({ ...meter, state }, now), undefined);
+		} finally { jobsWidget.detach(); }
+	});
+
+	test("TUI rows cap at four, order failed delivery then oldest live then pending, and click by row", (t) => {
+		const now = 1_800_000_000_000;
+		t.mock.timers.enable({ apis: ["Date"], now });
+		let jobs = [
+			makeJob({ id: "pending", title: "Pending", state: "done", code: 0, attempts: 1, endedAt: now - 1000 }),
+			makeJob({ id: "new", title: "Newest", startedAt: now - 1000 }),
+			makeJob({ id: "old", title: "Older", startedAt: now - 5000 }),
+			makeJob({ id: "lost", title: "Lost", state: "done", deliveryFailed: true, endedAt: now - 2000 }),
+		];
+		let factory: any;
+		const selected: string[] = [];
+		const jobsWidget = createJobsWidget();
+		try {
+			jobsWidget.attach({ setWidget: (_id, content) => { factory = content; } }, true, () => jobs, (job) => selected.push(job.id));
+			const component = factory({ requestRender() {} }, quiet());
+			const lines = component.render(100);
+			assert.strictEqual(lines.length, 4);
+			for (const [index, title] of ["Lost", "Older", "Newest", "Pending"].entries()) {
+				contains(bare(lines)[index], title);
+				assert.match(lines[index]!, /\x1b\[48;/);
+				assert.deepStrictEqual(component.handleMouse({ type: "click", button: "left", y: index }), { handled: true });
+			}
+			assert.deepStrictEqual(selected, ["lost", "old", "new", "pending"]);
+			jobs = [...jobs, makeJob({ id: "fifth" }), makeJob({ id: "sixth" })];
+			const capped = component.render(100);
+			assert.strictEqual(capped.length, WIDGET_MAX_ROWS + 1);
+			assert.strictEqual(bare(capped).at(-1), "  +2 more");
+			contains(bare(capped)[0], "Lost");
+			assert.strictEqual(colorOf(capped.at(-1)!, "+2 more"), fgOf("#5f5d58"));
+			for (const y of [-1, 4, 99]) assert.strictEqual(component.handleMouse({ type: "click", button: "left", y }), undefined);
+			assert.strictEqual(component.handleMouse({ type: "move", button: "left", y: 0 }), undefined);
+			assert.strictEqual(component.handleMouse({ type: "click", button: "right", y: 0 }), undefined);
+		} finally { jobsWidget.detach(); }
+	});
+
+	test("widget reads reduced motion each render and holds its running spinner still", (t) => {
+		t.mock.timers.enable({ apis: ["Date"], now: 10_000 });
+		let factory: any;
+		let motion: "full" | "reduced" = "reduced";
+		const jobsWidget = createJobsWidget(() => motion);
+		try {
+			jobsWidget.attach({ setWidget: (_id, content) => { factory = content; } }, true, () => [makeJob()]);
+			const component = factory({ requestRender() {} }, quiet());
+			const first = bare(component.render(80))[0]![0];
+			t.mock.timers.tick(JOB_ANIMATION.durationsMs[0]!);
+			assert.strictEqual(bare(component.render(80))[0]![0], first);
+			motion = "full";
+			assert.strictEqual(bare(component.render(80))[0]![0], frameAt(SPINNER_FRAMES, Date.now()));
+		} finally { jobsWidget.detach(); }
 	});
 
 	test("sampling dates a silent log from the job start and a written log from its growth", (t) => {
@@ -225,7 +323,7 @@ describe("job widget", () => {
 		const silentLog = join(dir, "j1.log");
 		const busyLog = join(dir, "j2.log");
 		writeFileSync(silentLog, "");
-		writeFileSync(busyLog, "hello\n");
+		writeFileSync(busyLog, "hello from the live log\n");
 		const startedAt = now - QUIET_AFTER_MS - 1000;
 		const jobs = [makeJob({ id: "j1", logPath: silentLog, startedAt }), makeJob({ id: "j2", logPath: busyLog, startedAt })];
 		type Factory = (host: unknown, theme: unknown) => { render(width: number): string[] };
@@ -233,24 +331,37 @@ describe("job widget", () => {
 		const jobsWidget = createJobsWidget();
 		jobsWidget.attach({ setWidget: (_id, content) => { factory = content as Factory; } }, true, () => jobs);
 		const theme = quiet();
-		const lines = factory!({ requestRender: () => {} }, theme).render(80);
-		// j1 never printed, so its first sample is dated from its start and its band is
-		// already still; j2 has output, so it sweeps.
-		const bandOf = (job: (typeof jobs)[number], isQuiet: boolean) => band.jobBand(theme, band.factsOf(job), { width: 80, now, view: "live", quiet: isQuiet });
-		assert.strictEqual(lines[0], bandOf(jobs[0]!, true));
-		assert.strictEqual(lines[1], bandOf(jobs[1]!, false));
-		assert.notStrictEqual(bandOf(jobs[1]!, true), bandOf(jobs[1]!, false));
+		const component = factory!({ requestRender: () => {} }, theme);
+		const lines = component.render(80);
+		// A silent log is quiet from its start; a written log has a fresh sample and tail.
+		const bands = (busyQuiet: boolean) => jobs.map((job) => liveRow(theme, job, { width: 80, now, ...(job.id === "j2" ? { tail: "hello from the live log" } : {}), quiet: job.id === "j1" || busyQuiet }));
+		assert.deepStrictEqual(lines, bands(false));
+		assert.notStrictEqual(bands(true)[1], bands(false)[1]);
+		assert.strictEqual(colorOf(lines[0]!, frameAt(SPINNER_FRAMES, now, QUIET_FRAME_MS)), fgOf("#5f5d58"));
+		contains(bare(lines)[1], "▸ hello from the live log");
+		appendFileSync(busyLog, "newest output from the live log\n");
+		jobsWidget.update();
+		const grown = bare(component.render(80))[1]!;
+		contains(grown, "▸ newest output from the live log");
+		doesNotContain(grown, "hello from the live log");
+		// Colored output reaches the band as its words, not as leftover codes.
+		appendFileSync(busyLog, "\x1b[32m✓\x1b[39m 212 passing\n");
+		jobsWidget.update();
+		const colored = bare(component.render(120))[1]!;
+		contains(colored, "▸ ✓ 212 passing");
+		doesNotContain(colored, "[32m");
+		// A progress bar redrawn in place, with no newline in the window read, still shows.
+		appendFileSync(busyLog, `\r[${"=".repeat(3000)}`);
+		jobsWidget.update();
+		contains(bare(component.render(120))[1]!, "▸ ====");
+		// A window with nothing to show keeps the line shown before.
+		appendFileSync(busyLog, `\n${" ".repeat(3000)}`);
+		jobsWidget.update();
+		contains(bare(component.render(120))[1]!, "▸ ====");
 		jobsWidget.detach();
 	});
 });
 const plainTheme = { fg: (_key: string, text: string) => text, bold: (text: string) => text };
-// Marks the background so a test can see which key was applied to which line.
-const bgTheme = {
-	fg: (_key: string, text: string) => text,
-	bg: (key: string, text: string) => `<${key}>${text}</>`,
-	bold: (text: string) => text,
-};
-
 function completionMessage(body: string, details: Record<string, unknown>) {
 	return {
 		customType: "shell-job-complete",
@@ -260,15 +371,15 @@ function completionMessage(body: string, details: Record<string, unknown>) {
 }
 const plainRender = { expanded: false, outputPad: 1 };
 describe("job rendering", () => {
-	test("a start row is one band: the title alone, or the command without one", () => {
+	test("a start row shows its command followed closely by title and status", () => {
 		const row = (args: unknown, context?: object) => bare(render.renderStartCall(args, plainTheme as any, context).render(60));
 		const [titled] = row({ command: "npm test -- --watchAll=false", title: "Run unit tests" });
 		contains(titled, "Run unit tests");
-		doesNotContain(titled, "npm test");
+		contains(titled, "$ npm test");
 		// Without its job (a resumed row), it says only where the job ran.
-		contains(titled, "background job");
+		contains(titled, "\u21e2 background");
 		contains(row({ command: "sleep 30" })[0], "$ sleep 30");
-		// The model's raw title may carry newlines or control bytes; the band is one line.
+		// Raw titles are flattened to keep the terminal row on one line.
 		contains(row({ command: "make", title: " Build\n\tall \u001b[1m" })[0], "Build all [1m");
 		// An empty or non-string title falls back to the command.
 		contains(row({ command: "make", title: "  " })[0], "$ make");
@@ -277,20 +388,20 @@ describe("job rendering", () => {
 		contains(row({ command: "make" }, { isPartial: false, isError: true })[0], "not started");
 	});
 
-	test("a start row follows its job: calm in the background, then its outcome and time", () => {
+	test("a terminal start row stays still in the background, then shows its outcome and time", () => {
 		const theme = quiet();
 		let job = makeJob({ title: "Build", startedAt: 1000 });
 		const component = render.renderStartCall({ command: "make" }, theme as any, {}, () => job, () => 9000);
 		const running = bare(component.render(60))[0]!;
 		contains(running, "Build");
-		contains(running, "in background");
+		contains(running, "⇢ background");
 		// Still: the widget is the job's one live indicator.
 		assert.strictEqual(component.render(60)[0], render.renderStartCall({ command: "make" }, theme as any, {}, () => job, () => 9700).render(60)[0]);
 		job = makeJob({ title: "Build", startedAt: 1000, state: "done", code: 2, endedAt: 4000 });
 		const failed = bare(component.render(60))[0]!;
 		contains(failed, "exit 2");
 		contains(failed, "3.0s");
-		doesNotContain(failed, "in background");
+		doesNotContain(failed, "⇢ background");
 		// A kill the model asked for is stopped, gray, not a failure.
 		job = makeJob({ title: "Build", startedAt: 1000, state: "done", signal: "SIGTERM", claimed: true, endedAt: 4000 });
 		const stopped = component.render(60)[0]!;
@@ -299,38 +410,56 @@ describe("job rendering", () => {
 		assert.strictEqual(band.jobOutcome(job), "aborted");
 	});
 
-	test("a start row is a chip set in from the edge, as wide as its words, tinted by the job's state", () => {
+	test("a start row has a bullet in a two-column margin and a band; status colors carry its outcome", () => {
 		const theme = quiet();
-		const bgStart = (line: string) => [...line.matchAll(/\x1b\[48;2;[\d;]+m/g)].map((match) => match[0]);
-		const lastTinted = (line: string) => {
-			// Columns up to the last one drawn on a tint: the chip's right edge.
-			let column = 0, edge = -1, tinted = false;
-			for (const piece of line.split(/(\x1b\[[\d;]*m)/)) {
-				if (piece.startsWith("\x1b")) { if (piece.startsWith("\x1b[48;")) tinted = true; else if (piece === "\x1b[49m" || piece === "\x1b[0m") tinted = false; continue; }
-				for (const _ of piece) { if (tinted) edge = column; column++; }
-			}
-			return edge;
-		};
-		const job = makeJob({ title: "Run unit tests", startedAt: 1000 });
-		const running = render.renderStartCall({ command: "npm test" }, theme as any, {}, () => job, () => 9000).render(80)[0]!;
-		const words = bare([running])[0]!;
-		assert.ok(words.startsWith("   \u21b3 Run unit tests  in background"), JSON.stringify(words));
-		assert.strictEqual(lastTinted(running), band.CHIP_INDENT + " \u21b3 Run unit tests  in background ".length - 1, "the tint ends with the words");
-		assert.strictEqual(new Set(bgStart(running)).size, 1, "one tint across the chip");
-		const tintOf = (over: object) => bgStart(render.renderStartCall({ command: "npm test" }, theme as any, {}, () => makeJob({ title: "Run unit tests", startedAt: 1000, ...over }), () => 9000).render(80)[0]!)[0];
-		const ok = tintOf({ state: "done", code: 0, endedAt: 40_000 });
-		const failed = tintOf({ state: "done", code: 2, endedAt: 4000 });
-		assert.ok(new Set([bgStart(running)[0], ok, failed]).size === 3, "running, done and failed chips differ");
-		contains(bare(render.renderStartCall({ command: "npm test" }, theme as any, {}, () => makeJob({ title: "Run unit tests", startedAt: 1000, state: "done", code: 0, endedAt: 40_000 }), () => 90_000).render(80))[0], "done  39.0s");
+		const lineOf = (over: object) => render.renderStartCall({}, theme as any, {}, () => makeJob({ title: "Run unit tests", command: "npm test", startedAt: 1000, ...over }), () => 9000).render(80)[0]!;
+		const running = lineOf({});
+		assert.ok(bare([running])[0]!.startsWith("● Run unit tests  $ npm test"));
+		assert.strictEqual(colorOf(running, "$"), fgOf("#8fb4c8"));
+		assert.strictEqual(colorOf(running, "Run unit tests"), fgOf("#cfcdc6"));
+		assert.strictEqual(colorOf(running, "⇢ background"), fgOf("#8a8882"));
+		for (const [over, status, color] of [
+			[{ state: "done", code: 0, endedAt: 40_000 }, "✓ exit 0", "#8fae7a"],
+			[{ state: "done", code: 2, endedAt: 4000 }, "✗ exit 2", "#c97a72"],
+			[{ state: "done", signal: "SIGTERM", claimed: true, endedAt: 4000 }, "■ stopped", "#8a8882"],
+		] as const) {
+			const line = lineOf(over);
+			assert.strictEqual(colorOf(line, status), fgOf(color));
+			assert.match(line, /\x1b\[48;/, "a colored band for every outcome");
+		}
+		assert.match(running, /\x1b\[48;/);
+		contains(bare([lineOf({ state: "done", code: 0, endedAt: 40_000 })])[0], "✓ exit 0 · 39.0s");
 	});
 
-	test("a narrow chip cuts its title and keeps its status whole", () => {
-		const job = makeJob({ title: "Run the whole integration suite against staging", startedAt: 1000, state: "done", code: 2, endedAt: 4000 });
-		const line = bare(render.renderStartCall({ command: "x" }, quiet() as any, {}, () => job, () => 9000).render(40))[0]!;
-		assert.ok(line.includes("\u2026") && line.trimEnd().endsWith("exit 2  3.0s"), JSON.stringify(line));
-		assert.ok(line.trimEnd().length <= 39);
+	test("a long title is cut, then left out, after the command reaches its minimum and the status stays whole", () => {
+		const title = "Run the whole integration suite against staging";
+		const row = (width: number) => bare(render.renderStartCall({ command: "x" }, quiet() as any, {}, () => makeJob({ title, command: "npm run integration", startedAt: 1000, state: "done", code: 2, endedAt: 4000 }), () => 9000).render(width))[0]!;
+		for (const width of [40, 60, 80, 160]) {
+			const line = row(width);
+			assert.ok(visibleWidth(line) <= width, `${width}: ${line}`);
+			assert.ok(line.trimEnd().endsWith("✗ exit 2 · 3.0s"), `${width}: ${line}`);
+			assert.ok(line.includes("$ npm run"), `${width}: ${line}`);
+		}
+		assert.ok(row(40).startsWith("● $ npm run"), "too little room: the title is left out");
+		assert.ok(row(80).startsWith("● Run the") && row(80).includes("\u2026  $ npm run"), "some room: the title is cut, still first");
+		assert.ok(row(160).startsWith(`● ${title}  $ npm run integration`), "room enough: the whole title");
+		const untitled = bare(render.renderStartCall({}, quiet() as any, {}, () => makeJob({ title: null, command: "x".repeat(80), state: "done", code: 2, startedAt: 1000, endedAt: 4000 })).render(40))[0]!;
+		assert.ok(untitled.trimEnd().endsWith("✗ exit 2 · 3.0s"), untitled);
+	});
+
+	test("a writing terminal row uses a dim bullet and command while keeping the title", () => {
 		const writing = bare(render.renderStartCall({ command: "make", title: "Build" }, quiet() as any, { isPartial: true, executionStarted: false }).render(40))[0]!;
-		assert.strictEqual(writing.trim(), "\u21b3 Build");
+		assert.strictEqual(writing.trimEnd(), "● Build  $ make");
+		const raw = render.renderStartCall({ command: "make" }, quiet() as any, { isPartial: true, executionStarted: false }).render(40)[0]!;
+		assert.strictEqual(colorOf(raw, "●"), fgOf("#5f5d58"));
+		assert.strictEqual(colorOf(raw, "make"), fgOf("#5f5d58"));
+	});
+
+	test("a title without a command is bold on the left", () => {
+		const line = render.renderStartCall({ title: "Build" }, quiet() as any).render(40)[0]!;
+		assert.ok(bare([line])[0]!.startsWith("● Build"));
+		assert.match(line, /\x1b\[1mBuild/);
+		doesNotContain(bare([line])[0], "$ ");
 	});
 
 	test("a shell_job row names the operation and the job by title when it knows it", () => {
@@ -380,17 +509,18 @@ describe("job rendering", () => {
 	test("long durations break into minutes and hours in the title and the footer", () => {
 		const hours = completionView("Job j1 finished: exit 0 after 1h 2m 3s\n\noutput", { code: 0, durationMs: 3_723_000 });
 		assert.strictEqual(hours.title, "Job j1 finished: exit 0");
-		assert.strictEqual(hours.took, "1h 2m 3s");
+		assert.strictEqual(hours.took, "1h02m");
 		const minutes = completionView("Job j1 finished: exit 0 after 12m 5s\n\noutput", { code: 0, durationMs: 725_000 });
 		assert.strictEqual(minutes.title, "Job j1 finished: exit 0");
-		assert.strictEqual(minutes.took, "12m 5s");
+		assert.strictEqual(minutes.took, "12m05s");
 		// A transcript written before durations were unit-broken still strips cleanly.
 		assert.strictEqual(completionView("Job j1 finished: exit 0 after 3421.5s\n\noutput", { code: 0 }).title, "Job j1 finished: exit 0");
+		for (const old of ["1m 1s", "1h 30m 32s", "1h30m"]) assert.strictEqual(completionView(`Job j1 finished: exit 0 after ${old}\n\noutput`, { code: 0 }).title, "Job j1 finished: exit 0");
 	});
 
-	test("formatDuration matches Pi's bash footer shape", () => {
+	test("formatDuration keeps tenths under a minute, then the compact shape every row shares", () => {
 		assert.deepStrictEqual([0, 912, 45_400, 61_000, 725_000, 3_600_000, 5_432_000, -5, Number.NaN].map(formatDuration), [
-			"0.0s", "0.9s", "45.4s", "1m 1s", "12m 5s", "1h 0m 0s", "1h 30m 32s", "0.0s", "0.0s",
+			"0.0s", "0.9s", "45.4s", "1m01s", "12m05s", "1h00m", "1h30m", "0.0s", "0.0s",
 		]);
 	});
 
@@ -416,26 +546,46 @@ describe("job rendering", () => {
 		assert.deepStrictEqual(untitled.meta, ["log: /tmp/j1.log"]);
 	});
 
-	test("a completion is one band: the title, finished, and the outcome and time on the right", async () => {
+	test("a completion repeats the terminal command and final status, then previews output in its gutter", async () => {
 		const app = createFakePi();
 		shellJobs(app.pi as any);
 		await fire(app.handlers, "session_start", app.ctx);
 		const renderer = app.renderers.get("shell-job-complete")!;
 		const message = completionMessage("output", { code: 0, durationMs: 1000, title: "Run unit tests", command: "npm test" });
 		const lines = bare(renderer(message, plainRender, plainTheme)!.render(80));
-		assert.strictEqual(lines.length, 1);
-		contains(lines[0], "Run unit tests finished");
-		contains(lines[0], "1.0s");
-		doesNotContain(lines[0], "exit 0");
+		assert.strictEqual(lines.length, 2);
+		contains(lines[0], "$ npm test");
+		contains(lines[0], "Run unit tests");
+		contains(lines[0], "✓ exit 0 · 1.0s");
+		assert.strictEqual(lines[1], "  │ output");
 		const untitled = bare(renderer(completionMessage("output", { code: 3, durationMs: 1000, command: "npm test" }), plainRender, plainTheme)!.render(80))[0]!;
-		contains(untitled, "$ npm test finished");
+		contains(untitled, "$ npm test");
 		contains(untitled, "exit 3");
 		// An older message with neither names itself by its first line.
 		contains(bare(renderer(completionMessage("output", { code: 0 }), plainRender, plainTheme)!.render(80))[0], "Job j1 finished: exit 0");
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});
 
-	test("an expanded completion shows the command, log, whole output and notice under the band", () => {
+	test("a completion previews four output lines without a hint, otherwise the last three", () => {
+		const app = createFakePi();
+		shellJobs(app.pi as any);
+		const renderer = app.renderers.get("shell-job-complete")!;
+		const draw = (count: number) => bare(renderer(completionMessage(Array.from({ length: count }, (_, i) => `row ${i + 1}`).join("\n"), { code: 0, command: "seq", durationMs: 1000 }), plainRender, plainTheme)!.render(80));
+		assert.deepStrictEqual(draw(4).slice(1), ["  │ row 1", "  │ row 2", "  │ row 3", "  │ row 4"]);
+		assert.deepStrictEqual(draw(5).slice(1), ["  │ … 2 earlier lines (ctrl+o to expand)", "  │ row 3", "  │ row 4", "  │ row 5"]);
+	});
+
+	test("a collapsed completion with an earlier-lines hint fits even the narrowest terminal", () => {
+		const app = createFakePi();
+		shellJobs(app.pi as any);
+		const renderer = app.renderers.get("shell-job-complete")!;
+		const component = renderer(completionMessage("one\ntwo\nthree\nfour\nfive", { code: 0, command: "seq", durationMs: 1000 }), plainRender, plainTheme)!;
+		for (let width = 1; width <= 40; width++) {
+			for (const line of component.render(width)) assert.ok(visibleWidth(line) <= width, `width ${width}: ${line}`);
+		}
+	});
+
+	test("an expanded completion shows metadata, all output and its notice in the terminal gutter", () => {
 		const app = createFakePi();
 		shellJobs(app.pi as any);
 		const renderer = app.renderers.get("shell-job-complete")!;
@@ -448,8 +598,9 @@ describe("job rendering", () => {
 		contains(expanded, "line 20");
 		contains(expanded, "[Showing lines 11-20 of 20]");
 		doesNotContain(expanded, "Full output");
-		// Output sits under the band's title.
-		contains(expanded, "\n    line 1");
+		// Metadata and output share the terminal gutter, with no repeated command block.
+		contains(expanded, "\n  │ line 1");
+		assert.strictEqual(expanded.match(/\$ seq 1 20/g)?.length, 1);
 	});
 
 	test("an expanded completion never draws wider than the terminal, however narrow", () => {
@@ -465,18 +616,24 @@ describe("job rendering", () => {
 		}
 	});
 
-	test("a completion band takes the color of how the job ended", () => {
+	test("completion headers are outcome-colored bands; gutter output and metadata keep their own colors", () => {
 		const app = createFakePi();
 		shellJobs(app.pi as any);
 		const renderer = app.renderers.get("shell-job-complete")!;
-		const ok = renderer(completionMessage("output", { code: 0, durationMs: 1000 }), plainRender, bgTheme)!;
-		contains(ok.render(60).join("\n"), "<toolSuccessBg>");
-		const failed = renderer(completionMessage("output", { code: 1, durationMs: 1000 }), plainRender, bgTheme)!;
-		contains(failed.render(60).join("\n"), "<toolErrorBg>");
-		// A signal that reached the transcript was not the user's kill.
-		const killed = renderer(completionMessage("output", { signal: "SIGKILL", durationMs: 1000 }), plainRender, bgTheme)!.render(60).join("\n");
-		contains(killed, "<toolErrorBg>");
-		contains(killed, "signal SIGKILL");
+		for (const [details, status, color] of [
+			[{ code: 0, durationMs: 1000 }, "✓ exit 0", "#8fae7a"],
+			[{ code: 1, durationMs: 1000 }, "✗ exit 1", "#c97a72"],
+			[{ signal: "SIGKILL", durationMs: 1000 }, "✗ signal SIGKILL", "#c97a72"],
+		] as const) {
+			const lines = renderer(completionMessage("output", details), { expanded: true, outputPad: 1 }, quiet())!.render(100);
+			assert.strictEqual(colorOf(lines[0]!, status), fgOf(color));
+			assert.match(lines[0]!, /\x1b\[48;/, "completion head is a band");
+			assert.ok(lines.slice(1).every((line) => !/\x1b\[48;/.test(line)), "gutter has no body background");
+			assert.strictEqual(colorOf(lines[1]!, "log:"), fgOf("#5f5d58"));
+			assert.strictEqual(colorOf(lines[2]!, "│"), fgOf("#3a3936"));
+			assert.strictEqual(colorOf(lines[2]!, "output"), fgOf("#a8a69f"));
+			assert.strictEqual(colorOf(lines[3]!, "[Showing"), fgOf("#ecb64e"));
+		}
 	});
 
 	test("clicking the completion expands and collapses it", () => {
@@ -485,13 +642,15 @@ describe("job rendering", () => {
 		const renderer = app.renderers.get("shell-job-complete")!;
 		const body = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
 		const component = renderer(completionMessage(body, { code: 0, durationMs: 12100 }), plainRender, plainTheme)!;
-		assert.strictEqual(component.render(80).length, 1);
+		assert.strictEqual(component.render(80).length, 5);
+		contains(bare(component.render(80))[1], "… 17 earlier lines (ctrl+o to expand)");
+		assert.deepStrictEqual(bare(component.render(80)).slice(2), ["  │ line 18", "  │ line 19", "  │ line 20"]);
 		// pi routes a left click to the region pi's own tool rows use to expand.
 		const click = { type: "click", button: "left", x: 3, y: 0, width: 80, height: 24 };
 		assert.deepStrictEqual(component.handleMouse!(click), { handled: true });
 		contains(component.render(80).join("\n"), "line 1\n");
 		assert.deepStrictEqual(component.handleMouse!(click), { handled: true });
-		assert.strictEqual(component.render(80).length, 1);
+		assert.strictEqual(component.render(80).length, 5);
 		assert.strictEqual(component.handleMouse!({ ...click, button: "right" }), undefined);
 		assert.strictEqual(component.handleMouse!({ ...click, type: "move" }), undefined);
 	});
@@ -504,13 +663,15 @@ describe("job rendering", () => {
 		const build = (expanded: boolean) => renderer(message, { expanded, outputPad: 1 }, plainTheme)!;
 		const first = build(false);
 		first.handleMouse!({ type: "click", button: "left", x: 1, y: 0, width: 80, height: 24 });
-		assert.ok(build(false).render(80).length > 1);
-		// ctrl+O wins over the clicked state, and clearing it restores the collapse.
-		assert.ok(build(true).render(80).length > 1);
-		assert.strictEqual(build(false).render(80).length, 1);
+		contains(bare(build(false).render(80)).join("\n"), "log: /tmp/j1.log");
+		// ctrl+O wins over the clicked state, and clearing it restores the preview.
+		contains(bare(build(true).render(80)).join("\n"), "log: /tmp/j1.log");
+		const collapsed = bare(build(false).render(80));
+		assert.strictEqual(collapsed.length, 2);
+		doesNotContain(collapsed.join("\n"), "log: /tmp/j1.log");
 	});
 
-	test("both tools draw their own bands", async () => {
+	test("both tools render their own shell: a terminal start line and an operational manage band", async () => {
 		const app = createFakePi();
 		shellJobs(app.pi as any);
 		await fire(app.handlers, "session_start", app.ctx);
@@ -535,7 +696,7 @@ describe("job rendering", () => {
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});
 
-	test("the start result shows only when expanded or failed, indented under the band", () => {
+	test("the start result shows only when expanded or failed, indented under the terminal row", () => {
 		const result = { content: [{ type: "text", text: "Started nap (pid 4) in /tmp\nlog: /tmp/nap.log\n" }], details: {} };
 		assert.deepStrictEqual(renderStartResult(result, plainTheme as any).render(60), []);
 		const lines = renderStartResult(result, plainTheme as any, { expanded: true }).render(60);

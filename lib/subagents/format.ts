@@ -65,6 +65,78 @@ export function reportBody(text: string): string {
 	return cut >= 0 && / finished after /.test(text.slice(0, text.indexOf("\n"))) ? text.slice(cut + 2) : text;
 }
 
+type ReportState = "idle" | "failed" | "stopped" | "interrupted";
+
+/** One delivery to an agent, read back from the text its model was given. */
+export type Envelope =
+	| { readonly kind: "prompt"; readonly text: string }
+	| { readonly kind: "note" | "question"; readonly from: string; readonly text: string }
+	| { readonly kind: "report"; readonly from: string; readonly model: string; readonly state: ReportState; readonly took?: string; readonly text: string };
+
+// Readers for the writers above, so the inspector shows a delivery as the
+// conversation it was rather than the plumbing its model reads. Every writer
+// is read back in tests/subagents-envelopes.test.ts, so the two can't drift.
+const NAME = "[a-z0-9][a-z0-9-]*";
+const MESSAGES = [
+	["note", new RegExp(`^Message from (${NAME}):(?:\\n|$)`)],
+	["question", new RegExp(`^Question from (${NAME}), who is waiting for your reply \\(.*?\\):(?:\\n|$)`)],
+] as const;
+const REPORT_HEAD = new RegExp(`^(${NAME}) \\(([^\\s(),]+)(?:, \\$[^\\s)]+)?\\) (.*)$`);
+const OUTCOMES: ReadonlyArray<readonly [ReportState, RegExp]> = [
+	["idle", /^finished after (?<took>\S+?)\. Message it to follow up/],
+	["failed", /^failed after (?<took>\S+?): (?<error>.*)$/],
+	["stopped", /^was stopped after (?<took>\S+?)\.$/],
+	["interrupted", /^was interrupted after (?<took>\S+?)\.$/],
+	["interrupted", /^could not resume: (?<error>.*)$/],
+];
+/** Lines a report's header carries for the model: where its files are, what the run handled, what to do next. */
+const REPORT_META = /^(?:Session|Report): |^This run \(\d+\) handled: |^Resume explicitly after checking the current files\.$/;
+const LAST_MESSAGE = /^Last (?:available message|message before it \w+):$/;
+
+const said = (text: string): string => text.replace(/^\n+/, "").trimEnd();
+
+function message(segment: string): Envelope | undefined {
+	for (const [kind, head] of MESSAGES) {
+		const match = head.exec(segment);
+		if (match) return { kind, from: match[1]!, text: said(segment.slice(match[0].length)) };
+	}
+	return undefined;
+}
+
+function report(segment: string): Envelope | undefined {
+	const [first = "", ...after] = segment.split("\n");
+	const head = REPORT_HEAD.exec(first);
+	for (const [state, outcome] of head ? OUTCOMES : []) {
+		const match = outcome.exec(head![3]!);
+		if (!match) continue;
+		// The header runs to the first blank line or the `Last message` marker; what follows is what the agent said.
+		const end = after.findIndex((line) => line === "" || LAST_MESSAGE.test(line));
+		const body = (end < 0 ? [] : after.slice(end + 1)).filter((line, index) => index > 0 || !LAST_MESSAGE.test(line));
+		const error = [match.groups?.error, ...(end < 0 ? after : after.slice(0, end)).filter((line) => !REPORT_META.test(line))].filter(Boolean).join("\n");
+		const took = match.groups?.took;
+		return { kind: "report", from: head![1]!, model: head![2]!, state, ...(took ? { took } : {}), text: [error, said(body.join("\n"))].filter(Boolean).join("\n\n") };
+	}
+	return undefined;
+}
+
+const opening = (segment: string): Envelope | undefined => message(segment) ?? report(segment);
+
+/**
+ * What a user message in an agent's session says, part by part. Deliveries
+ * that arrive together are joined by blank lines (team.ts), so a new part
+ * starts only at a paragraph that opens like one; anything before the first
+ * is a plain prompt, such as the task or a resume notice.
+ */
+export function readEnvelopes(text: string): Envelope[] {
+	const segments = text.split("\n\n").reduce<string[]>((all, paragraph) =>
+		(all.length === 0 || opening(paragraph) ? [...all, paragraph] : [...all.slice(0, -1), `${all.at(-1)}\n\n${paragraph}`]), []);
+	return segments.flatMap((segment): Envelope[] => {
+		const envelope = opening(segment);
+		if (envelope) return [envelope];
+		return segment.trim() ? [{ kind: "prompt", text: said(segment) }] : [];
+	});
+}
+
 export interface RosterEntry {
 	name: string;
 	task: string;

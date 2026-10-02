@@ -13,7 +13,7 @@
  *   of its group, so parallel work lands as one message. A child the user
  *   stopped doesn't wake it, nor does one from a run that began with main's
  *   question, answered it and did no more work. That report still shows its
- *   band, so the run's time, cost and tokens are on screen.
+ *   header, so the run's time, cost and tokens are on screen.
  *
  * Everything sent but not yet in the transcript is kept as pending, so the
  * widget can show it queued until Pi appends it.
@@ -170,7 +170,7 @@ export class MainMail {
 		const id = this.nextId();
 		const wakes = records.some((record) => record.state !== "stopped" && !record.answeredMain);
 		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
-		// Every report shows its band; one that only repeats an answer keeps its text folded.
+		// Every report shows its header; one that only repeats an answer keeps its text folded.
 		this.send({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } },
 			wakes ? { triggerTurn: true, deliverAs: "steer" } : { triggerTurn: false });
 	}

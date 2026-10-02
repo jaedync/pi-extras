@@ -7,6 +7,7 @@ export const BULLET_GLYPH = "●";
 export const THOUGHT_GLYPH = "∴";
 export const SUCCESS_GLYPH = "✓";
 export const FAILURE_GLYPH = "✗";
+export const STOPPED_GLYPH = "■";
 export interface GlyphAnimation {
 	readonly frames: readonly string[];
 	readonly durationsMs: readonly number[];

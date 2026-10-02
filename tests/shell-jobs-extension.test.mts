@@ -575,9 +575,10 @@ describe("extension integration", () => {
 		);
 		const lines = component.render(24);
 		assert.strictEqual(lines.length, 1);
-		contains(lines[0], "$ sleep 30");
+		contains(lines[0], "$ sleep");
+		contains(lines[0], "%");
 		assert.ok(visibleWidth(lines[0]) <= 24);
-		// 24 columns is narrower than the row, so the command must be truncated.
+		// The command gives way before the elapsed time and percentage.
 		doesNotContain(lines[0], "watchAll");
 		const widgetCalls = app.widgets.length;
 		await sleep(WIDGET_REFRESH_MS + 500);
@@ -590,7 +591,8 @@ describe("extension integration", () => {
 			{ fg: () => { throw new Error("no such theme key"); } },
 		);
 		const fallback = degrade.render(24);
-		contains(fallback[0], "$ sleep 30");
+		contains(fallback[0], "$ sleep");
+		contains(fallback[0], "%");
 		assert.ok(visibleWidth(fallback[0]) <= 24);
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});
@@ -742,22 +744,30 @@ describe("inspector hooks", () => {
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});
 
-	test("clicking a widget row opens that job", async () => {
+	test("clicking a widget row opens its job regardless of column; non-job rows fall through", async () => {
 		const app = await startApp();
 		const start = app.tools.get("shell_job_start");
 		await start.execute("c1", { command: "sleep 30", title: "Nap" }, undefined, undefined, app.ctx);
 		await start.execute("c2", { command: "sleep 31", title: "Second" }, undefined, undefined, app.ctx);
 		const factory = app.widgets.at(-1)?.value as (host: unknown, theme: unknown) => any;
 		const rows = factory({ requestRender: () => {} }, plainTheme);
-		rows.render(80);
-		assert.deepStrictEqual(rows.handleMouse({ ...click, y: 1 }), { handled: true });
+		const bands = rows.render(80);
+		assert.strictEqual(bands.length, 2);
+		contains(tui.stripTerminalSequences(bands[1]!), "Second");
+		assert.deepStrictEqual(rows.handleMouse({ ...click, x: 0, y: 1 }), { handled: true });
 		const shown = lastOverlay(app);
 		contains(shown.text(), "Second");
 		await closeOverlay(shown.component);
-		// Past the last row, or not a left click: nothing.
+		assert.strictEqual(rows.handleMouse({ ...click, y: 2 }), undefined);
 		assert.strictEqual(rows.handleMouse({ ...click, y: 7 }), undefined);
+		assert.strictEqual(rows.handleMouse({ ...click, y: -1 }), undefined);
 		assert.strictEqual(rows.handleMouse({ ...click, y: 0, button: "middle" }), undefined);
-		assert.strictEqual(app.overlays.length, 1);
+		assert.strictEqual(rows.handleMouse({ ...click, y: 0, type: "move" }), undefined);
+		assert.deepStrictEqual(rows.handleMouse({ ...click, x: 79, y: 0 }), { handled: true });
+		const first = lastOverlay(app);
+		contains(first.text(), "Nap");
+		await closeOverlay(first.component);
+		assert.strictEqual(app.overlays.length, 2);
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});
 

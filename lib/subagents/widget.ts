@@ -1,15 +1,18 @@
 /**
- * The subagents widget above the editor: one band per agent, children nested
+ * The subagents widget above the editor: one row per agent, children nested
  * under their parent, then any messages queued for main that Pi has not
- * appended yet. A band says who it is, which model, what it is doing right now,
- * and on the right how full its context is, what it has cost, and how long it
- * has run. A finished agent keeps its band until its report is in the
- * transcript.
+ * appended yet. A row is the agent's presence, its ◆ and name in its color with
+ * no band behind it (band/agent-look.ts): who it is, how long it has run,
+ * what it is doing right now (moving as main's spinner does for the same
+ * work), then its model, what it has cost and how full its context is. Names
+ * and times line up across rows, so what each agent is doing starts in one
+ * column; nothing else is padded, so no row has a hole in it. A finished
+ * agent keeps its row until its report is in the transcript.
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { formatTime, renderBand, type BandPhase, type Seg } from "../band/band.ts";
+import { formatTime, type Motion, type Seg } from "../band/band.ts";
+import { agentHue, agentLine, avatarOf, doingGlyph, doingOf, endGlyph, spaced } from "../band/agent-look.ts";
 import { everyFrame } from "../band/clock.ts";
-import { paletteFrom } from "../band/palette.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import type { PendingItem } from "./deliver.ts";
 import { MAIN } from "./names.ts";
@@ -18,11 +21,12 @@ import { type AgentRecord, type AgentState, LIVE_STATES } from "./types.ts";
 export const WIDGET_ID = "subagents";
 export const MAX_AGENT_ROWS = 6;
 export const MAX_PENDING_ROWS = 3;
-const PAD = " ";
 
 export interface AgentRow {
 	record: AgentRecord;
 	depth: number;
+	/** Finished, with its report not yet delivered to main. */
+	reportQueued?: boolean;
 }
 
 export const shortModel = (ref: string): string => ref.slice(ref.indexOf("/") + 1);
@@ -37,64 +41,97 @@ export function selectRows(records: readonly AgentRecord[], reportPending: Reado
 	for (const record of visible) byParent.set(record.parent, [...(byParent.get(record.parent) ?? []), record]);
 	const shown = new Set(visible.map((record) => record.name));
 	const ordered: AgentRow[] = [];
+	const rowOf = (record: AgentRecord, depth: number): AgentRow => ({ record, depth, reportQueued: reportPending.has(record.name) });
 	const walk = (parent: string, depth: number) => {
 		for (const record of byParent.get(parent) ?? []) {
-			ordered.push({ record, depth });
+			ordered.push(rowOf(record, depth));
 			walk(record.name, depth + 1);
 		}
 	};
 	walk(MAIN, 0);
 	// A visible child whose parent is not shown still gets a row.
 	for (const record of visible) if (record.parent !== MAIN && !shown.has(record.parent)) {
-		ordered.push({ record, depth: 0 });
+		ordered.push(rowOf(record, 0));
 		walk(record.name, 1);
 	}
 	return { rows: ordered.slice(0, MAX_AGENT_ROWS), hidden: Math.max(0, ordered.length - MAX_AGENT_ROWS) };
 }
 
-export function phaseOf(record: AgentRecord, now: number): BandPhase {
-	switch (record.state) {
-		case "queued": return { kind: "queued" };
-		case "starting": case "running": return { kind: "running", elapsedMs: now - (record.startedAt ?? now) };
-		case "asking": case "waiting": case "interrupted": return { kind: "calm" };
-		case "idle": return { kind: "done", outcome: "ok", sinceMs: Number.POSITIVE_INFINITY };
-		case "failed": return { kind: "done", outcome: "fail", sinceMs: Number.POSITIVE_INFINITY };
-		case "stopped": return { kind: "done", outcome: "aborted", sinceMs: Number.POSITIVE_INFINITY };
-	}
-}
-
-function statusWords(record: AgentRecord): Seg {
+function statusWords(record: AgentRecord, reportQueued: boolean): Seg {
 	switch (record.state) {
 		case "asking": return { text: record.activity ?? `asking ${record.askingWho ?? ""}`, color: "warning" };
-		case "idle": return { text: "report queued", color: "muted" };
+		// Only the widget knows whether the report has reached main; elsewhere, finished is what is sure.
+		case "idle": return { text: reportQueued ? "report queued" : "finished", color: "muted" };
 		case "failed": return { text: record.error ? `failed: ${record.error}` : "failed", color: "error" };
 		case "stopped": return { text: "stopped", color: "muted" };
 		case "interrupted": return { text: `interrupted${record.activity ? `: ${record.activity}` : ""}`, color: "warning" };
-		default: return { text: record.activity ?? "", color: "muted" };
+		// A running agent with no tool or text under way is thinking, as its spinner says.
+		default: return { text: record.activity ?? (record.state === "running" ? "thinking" : ""), color: "muted" };
 	}
 }
 
-export function rowSegs(row: AgentRow): Seg[] {
-	const { record } = row;
-	const model = `${shortModel(record.model)}${record.thinking ? ` ${record.thinking}` : ""}`;
+const nestText = (depth: number) => (depth > 0 ? `${"  ".repeat(depth - 1)}└ ` : "");
+
+/** `◆ name` in its provider's color, hollow until it has begun; children sit under their parent. `width` pads the name for a column. */
+export function nameSegs(record: AgentRecord, depth = 0, width = 0): Seg[] {
+	const nest = nestText(depth);
+	const hue = agentHue(record.model);
 	return [
-		...(row.depth > 0 ? [{ text: `${"  ".repeat(row.depth - 1)}└ `, color: "dim" }] : []),
-		{ text: record.name, color: "text", bold: true },
-		{ text: `  ${model}`, color: "dim" },
-		{ text: "  ", color: "dim" },
-		statusWords(record),
+		...(nest ? [{ text: nest, color: "dim" }] : []),
+		{ text: `${avatarOf(record)} `, color: hue, bold: true },
+		{ text: record.name.padEnd(Math.max(0, width - nest.length)), color: hue, bold: true },
 	];
 }
 
-export function rowRail(record: AgentRecord, now: number): Seg[] {
-	const rail: Seg[] = [];
-	if (record.contextTokens && record.contextWindow) {
-		rail.push({ text: `ctx ${Math.round((100 * record.contextTokens) / record.contextWindow)}%`, color: "dim" }, { text: "  ", color: "dim" });
-	}
-	if (record.usage.cost > 0) rail.push({ text: `$${formatMoney(record.usage.cost)}`, color: "dim" }, { text: "  ", color: "dim" });
+/** Column widths that line rows up: the widest nested name and run time among them. */
+export interface RowColumns {
+	readonly name: number;
+	readonly time: number;
+}
+
+export function rowColumns(rows: readonly AgentRow[], now = 0): RowColumns {
+	return {
+		name: Math.max(0, ...rows.map((row) => nestText(row.depth).length + row.record.name.length)),
+		time: Math.max(0, ...rows.map((row) => runTime(row.record, now)?.length ?? 0)),
+	};
+}
+
+/** How long an agent has run; none before it starts. */
+export function runTime(record: AgentRecord, now: number): string | undefined {
 	// Restored records saved before run starts were kept have only createdAt, as in format.ts.
-	if (record.state !== "queued") rail.push({ text: formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt)), color: "text" });
-	return rail;
+	return record.state === "queued" ? undefined : formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt));
+}
+
+/** Its model, what it has cost and how full its context is, quiet after the rest. */
+export function factSegs(record: AgentRecord): Seg[] {
+	const parts: Seg[] = [{ text: modelText(record), color: "dim" }];
+	if (record.usage.cost > 0) parts.push({ text: `$${formatMoney(record.usage.cost)}`, color: "dim" });
+	if (record.contextTokens && record.contextWindow) parts.push({ text: `ctx ${Math.round((100 * record.contextTokens) / record.contextWindow)}%`, color: "dim" });
+	return parts.flatMap((part, index) => (index === 0 ? [part] : [{ text: " · ", color: "dim" }, part]));
+}
+
+export const modelText = (record: AgentRecord): string => `${shortModel(record.model)}${record.thinking ? ` ${record.thinking}` : ""}`;
+
+/**
+ * Who, how long, what it is doing (a glyph that moves for the work, or how
+ * it ended, and the words), then its model and spend. Read left to right with
+ * no gaps to cross; past the width the model and spend go first, then the words.
+ */
+export function rowSegs(row: AgentRow, now = 0, motion: Motion = "full", columns: RowColumns = { name: 0, time: 0 }): Seg[] {
+	const { record } = row;
+	const doing = endGlyph(record.state) ?? doingGlyph(doingOf(record), now, motion, agentHue(record.model));
+	const time = runTime(record, now) ?? "";
+	return spaced(
+		nameSegs(record, row.depth, columns.name),
+		time || columns.time ? [{ text: time.padStart(columns.time), color: "text" }] : [],
+		[{ text: doing.glyph, color: doing.color }, { text: " ", color: "dim" }, statusWords(record, row.reportQueued === true)],
+		factSegs(record),
+	);
+}
+
+/** One agent's presence line; `columns` lines it up with the rows around it. */
+export function presenceLine(theme: Theme, row: AgentRow, width: number, now: number, motion: Motion = "full", columns?: RowColumns): string {
+	return agentLine(theme, rowSegs(row, now, motion, columns), width);
 }
 
 export const hiddenLine = (hidden: number): string => `+${hidden} more agent${hidden === 1 ? "" : "s"}`;
@@ -135,9 +172,9 @@ export interface AgentsWidget {
 	detach(): void;
 }
 
-const truncate = (text: string, width: number) => (text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text);
 
-export function createAgentsWidget(): AgentsWidget {
+/** `motion` is Tool Display's setting, read each frame: reduced holds what agents are doing still. */
+export function createAgentsWidget(motion: () => Motion = () => "full"): AgentsWidget {
 	let ui: WidgetUi | null = null;
 	let source: (() => { records: AgentRecord[]; pending: PendingItem[] }) | null = null;
 	let onSelect: ((name: string) => void) | null = null;
@@ -158,13 +195,11 @@ export function createAgentsWidget(): AgentsWidget {
 				const { rows, hidden } = selectRows(records, reportPending(pending));
 				lastRows = rows;
 				const now = Date.now();
-				const palette = paletteFrom(theme);
-				const lines = rows.map((row) => renderBand(theme, palette, {
-					width, phase: phaseOf(row.record, now), segs: rowSegs(row), rail: rowRail(row.record, now), clockMs: now,
-				}));
-				const paint = (color: string, text: string) => { try { return theme.fg(color as never, text); } catch { return text; } };
-				if (hidden > 0) lines.push(`${PAD}${paint("dim", hiddenLine(hidden))}`);
-				for (const line of pendingLines(pending)) lines.push(`${PAD}${paint(line.color, truncate(line.text, width - 2))}`);
+				const columns = rowColumns(rows, now);
+				const lines = rows.map((row) => presenceLine(theme, row, width, now, motion(), columns));
+				if (hidden > 0) lines.push(agentLine(theme, [{ text: hiddenLine(hidden), color: "dim" }], width));
+				// Mail still on its way to main, cut to the width like any agent line.
+				for (const line of pendingLines(pending)) lines.push(agentLine(theme, [{ text: line.text, color: line.color }], width));
 				return lines;
 			},
 			invalidate: () => {},

@@ -83,8 +83,11 @@ function render(text: string, inner: number, color: string, markdown: MarkdownTh
 	}
 }
 
-/** `null` shows the whole body, up to MAX_EXPANDED_LINES; a preview keeps enough room for its expansion hint. */
-export function messageBody(theme: BandTheme, width: number, text: string, color: string, limit: number | null, markdown?: MarkdownTheme, background = bodyBackground(theme)): string[] {
+/**
+ * `null` shows the whole body, up to MAX_EXPANDED_LINES; a preview keeps enough room for its expansion hint.
+ * A `null` background leaves the terminal's own.
+ */
+export function messageBody(theme: BandTheme, width: number, text: string, color: string, limit: number | null, markdown?: MarkdownTheme, background: string | null | undefined = bodyBackground(theme)): string[] {
 	const trimmed = text.replace(/\r/g, "").trim();
 	if (!trimmed) return [];
 	const paint = (key: string, value: string) => {
@@ -104,7 +107,7 @@ export function messageBody(theme: BandTheme, width: number, text: string, color
 	// Past the expanded cap a click would only collapse the body, so don't offer one.
 	const hint = limit === null ? `… ${count} not shown` : `… ${count} (click to show)`;
 	if (hidden > 0) lines.push(pad + truncateToWidth(paint("dim", hint), inner, "…"));
-	const result = onBackground(lines, width, background);
+	const result = onBackground(lines, width, background ?? undefined);
 	entry.framed.set(frameKey, result);
 	return [...result];
 }

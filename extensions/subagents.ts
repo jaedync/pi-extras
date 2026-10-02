@@ -1,6 +1,6 @@
 /**
  * subagents: background child agents on the model of your choice, which talk
- * to main and to each other, with a live band per agent above the editor.
+ * to main and to each other, with a live row per agent above the editor.
  *
  * Children are Pi sessions in this process. Which models they may use comes
  * from the session's scoped models; which model suits what comes from the
@@ -23,6 +23,7 @@ import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";
 import { type InspectorHost, openAgentInspector } from "../lib/subagents/inspector.ts";
 import { watchRun } from "../lib/run-watch.ts";
 import { announceBackground, BACKGROUND_REQUEST_EVENT } from "../lib/tab-status/events.ts";
+import { agentHue } from "../lib/band/agent-look.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, messageResultRow, rememberAgent, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { offerRows } from "../lib/late-rows.ts";
 import { markRow } from "../lib/tool-row.ts";
@@ -40,6 +41,7 @@ import { ChildIndex, legacyRecords, recoverRoster } from "../lib/subagents/resto
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
+import { watchMotion } from "../lib/extras-config.ts";
 
 const markdown = () => sdk.getMarkdownTheme();
 
@@ -95,7 +97,8 @@ export default function subagents(pi: ExtensionAPI) {
 	// Resumed children keep `restored` provenance; only their current live state means work.
 	const publishBackground = () => { if (state && backgroundCtx) announceBackground(pi, backgroundCtx, "subagents", state.team.list().filter((r) => LIVE_STATES.has(r.state)).length); };
 	pi.events?.on(BACKGROUND_REQUEST_EVENT, publishBackground);
-	const widget = createAgentsWidget();
+	const motion = watchMotion(pi.events);
+	const widget = createAgentsWidget(motion);
 	let mainRun = 0;
 	pi.on("agent_start", async () => { mainRun++; });
 	let inspectorUi: InspectorHost | null = null;
@@ -109,6 +112,8 @@ export default function subagents(pi: ExtensionAPI) {
 			record: () => current.team.get(name),
 			messages: () => current.team.messages(name),
 			describe: describeTool,
+			motion,
+			hue: (other) => agentHue(current.team.get(other)?.model),
 			stop: () => current.team.stop(name),
 			async send(text) {
 				const result = await current.team.send(USER, name, text);
@@ -138,8 +143,8 @@ export default function subagents(pi: ExtensionAPI) {
 		...tool,
 		renderShell: "self" as const,
 		renderCall: (args: unknown, theme: Theme, context?: RowContext) => tool.name === "subagent"
-			? clickable(subagentCallRow(args, theme, context, (name) => state?.team.get(name), run.streaming), context)
-			: messageCallRow(args, theme, context, run.streaming),
+			? clickable(subagentCallRow(args, theme, context, (name) => state?.team.get(name), run.streaming, motion), context)
+			: messageCallRow(args, theme, context, run.streaming, (name) => state?.team.get(name)),
 		renderResult: (result: unknown, _options: { expanded: boolean }, theme: Theme, context?: RowContext) => {
 			if (tool.name !== "subagent") return messageResultRow(result, theme, context);
 			rememberAgent(context, (result as { details?: unknown } | null)?.details);
@@ -148,7 +153,7 @@ export default function subagents(pi: ExtensionAPI) {
 	} as ToolDefinition, "band");
 
 	if (typeof pi.registerMessageRenderer === "function") {
-		pi.registerMessageRenderer(MESSAGE_TYPE, createMessageRenderer(markdown));
+		pi.registerMessageRenderer(MESSAGE_TYPE, createMessageRenderer(markdown, (name) => state?.team.get(name)));
 		pi.registerMessageRenderer(REPORT_TYPE, createReportRenderer(markdown));
 	}
 

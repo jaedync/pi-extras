@@ -3,7 +3,7 @@ import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { ansi256ToRgb, bgSgr, mix, parseAnsiColor, rgbTo256 } from "../lib/band/color.ts";
 import { AnimationClock } from "../lib/band/clock.ts";
-import { bandBackground, easedFill, formatTime, isAnimated, renderBand, type BandPhase, type Motion, type Seg } from "../lib/band/band.ts";
+import { bandBackground, easedFill, formatTime, formatWhole, isAnimated, renderBand, type BandPhase, type Motion, type Seg } from "../lib/band/band.ts";
 import { BULLET_GLYPH, SPINNER_CYCLE_MS, SPINNER_FRAME_MS, SPINNER_FRAMES, spinnerGlyph } from "../lib/band/glyph.ts";
 import { paletteFrom, type BandTheme } from "../lib/band/palette.ts";
 import { quiet } from "./support/quiet-theme.ts";
@@ -26,14 +26,25 @@ test("colors mix linearly and map to the nearest 256-color entry", () => {
 	assert.equal(bgSgr([255, 0, 0], "256color"), "\x1b[48;5;196m");
 });
 
-test("times read as milliseconds, tenths of a second, then minutes", () => {
+test("times read as milliseconds, tenths of a second, then compact minutes and hours", () => {
 	assert.equal(formatTime(0), "1ms");
 	assert.equal(formatTime(40), "40ms");
 	assert.equal(formatTime(999), "999ms");
 	assert.equal(formatTime(8_640), "8.6s");
 	assert.equal(formatTime(59_960), "59.9s");
-	assert.equal(formatTime(134_000), "2m 14s");
-	assert.equal(formatTime(3_725_000), "62m 05s");
+	assert.equal(formatTime(134_000), "2m14s");
+	assert.equal(formatTime(1_202_000), "20m02s");
+	assert.equal(formatTime(3_599_999), "59m59s");
+	assert.equal(formatTime(3_725_000), "1h02m");
+	assert.equal(formatTime(6_600_000), "1h50m");
+});
+
+test("a limit or a time left reads in the same units, in whole seconds", () => {
+	assert.equal(formatWhole(30_000), "30s");
+	assert.equal(formatWhole(120_000), "2m00s");
+	assert.equal(formatWhole(1_800_000), "30m00s");
+	assert.equal(formatWhole(5_400_000), "1h30m");
+	assert.equal(formatWhole(500), "1s", "never 0s while something is left");
 });
 
 test("eased fill moves fast early and reaches the end with the timeout", () => {

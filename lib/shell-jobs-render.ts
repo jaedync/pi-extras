@@ -1,20 +1,20 @@
 /**
  * Presentation for the shell job tools and completion messages.
  *
- * Every row is a header band, as Tool Display draws a tool call: the start
- * row names the job (its title, or the command without one) and stays calm
- * while it runs in the background, the widget being the one that moves; the
- * completion message is the same band in the job's final color; a shell_job
- * row names the operation and the job it addressed. Output is hidden until
- * clicked or expanded, then sits indented under the band on the theme's
- * tool gray.
+ * A job is a band (band/job-look.ts): the start row is `$ command`, its
+ * title and where it is, side by side on a band that holds still, gray while
+ * the job runs and the color it ended in once it has. The completion is the
+ * same band with its last output lines in a gutter under it. What moves is
+ * the job's band above the editor (shell-jobs-widget.ts). A shell_job row is
+ * an ordinary call, a band like any other tool's.
  */
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { keyHint, type MessageRenderer, type Theme } from "@earendil-works/pi-coding-agent";
 import { renderBand, ROW_MARGIN, type Seg } from "./band/band.ts";
 import { paletteFrom } from "./band/palette.ts";
 import { bodyBackground, onBackground } from "./band/surface.ts";
-import { factsOf, jobBand, jobChip, type JobFacts } from "./shell-jobs-band.ts";
+import { GUTTER, gutterLines, overwritten } from "./band/job-look.ts";
+import { factsOf, jobRow, type JobFacts } from "./shell-jobs-band.ts";
 import { DURATION_PATTERN, formatDuration, sanitizeControl, titlePreview } from "./shell-jobs-core.ts";
 import type { Job } from "./shell-jobs-process.ts";
 
@@ -22,6 +22,8 @@ const TITLE_DURATION_SUFFIX = new RegExp(` after ${DURATION_PATTERN}$`);
 
 /** Output lines under a collapsed row; the same as Tool Display's bash row. */
 export const PREVIEW_LINES = 4;
+/** Output lines a collapsed completion keeps in its gutter: enough to see how it ended. */
+export const COMPLETION_PREVIEW_LINES = 3;
 /** Output sits under the band's title, which starts after the row's margin. */
 export const BODY_INDENT = 2 + ROW_MARGIN;
 
@@ -70,7 +72,7 @@ class Lines implements Component {
 
 /** Output under a band: its last lines while collapsed, all of it expanded. */
 export function bodyLines(text: string, paint: Paint, width: number, expanded: boolean): string[] {
-	const trimmed = text.replace(/\r/g, "").replace(/\n+$/, "");
+	const trimmed = overwritten(text).replace(/\n+$/, "");
 	if (trimmed.trim() === "") return [];
 	const inner = Math.max(1, width - BODY_INDENT);
 	const pad = " ".repeat(BODY_INDENT);
@@ -130,7 +132,7 @@ export function splitCompletionText(text: string): { head: string; body: string;
 }
 
 export function completionView(content: unknown, details: unknown): CompletionView {
-	const text = textOf(content).replace(/\r/g, "");
+	const text = overwritten(textOf(content));
 	const { head: headBlock, body, notice } = splitCompletionText(text);
 	const head = headBlock.split("\n");
 	const record = (details ?? {}) as { code?: unknown; signal?: unknown; durationMs?: unknown; command?: unknown; title?: unknown };
@@ -176,18 +178,19 @@ function startFacts(args: unknown): JobFacts {
 }
 
 /**
- * The `shell_job_start` row: a chip naming the job (jobChip). It follows the
- * job it started while this session owns it; a resumed row, whose job
- * belongs to an earlier session, just says it ran in the background.
+ * The `shell_job_start` row: `$ command`, the job's title and where it is
+ * (jobRow). It follows the job it started while this session owns it; a
+ * resumed row, whose job belongs to an earlier session, just says it ran in
+ * the background.
  */
 export function renderStartCall(args: unknown, theme: Theme, context?: RowContext, job: () => Job | undefined = () => undefined, now: () => number = Date.now): Component {
 	return new Lines((width) => {
 		const live = job();
-		if (live !== undefined) return [jobChip(theme, factsOf(live), { width, now: now() })];
+		if (live !== undefined) return [jobRow(theme, factsOf(live), { width, now: now() })];
 		const facts = startFacts(args);
-		if (context?.isPartial && !context.executionStarted) return [jobChip(theme, facts, { width, now: now(), state: "writing" })];
-		if (context?.isError) return [jobChip(theme, facts, { width, now: now(), state: "unstarted" })];
-		return [jobChip(theme, facts, { width, now: now() })];
+		if (context?.isPartial && !context.executionStarted) return [jobRow(theme, facts, { width, now: now(), state: "writing" })];
+		if (context?.isError) return [jobRow(theme, facts, { width, now: now(), state: "unstarted" })];
+		return [jobRow(theme, facts, { width, now: now() })];
 	});
 }
 
@@ -239,11 +242,10 @@ export function renderJobResult(result: unknown, options: { expanded: boolean },
 }
 
 /**
- * Renderer for `shell-job-complete` messages: the job's band in its final
- * color, `finished` after its name, how it ended and how long it took on the
- * right. The command, log and output stay hidden until the message is
- * clicked (or everything is expanded), since the band already answers
- * whether it worked.
+ * Renderer for `shell-job-complete` messages: the job's terminal line with
+ * how it ended and how long it took, and its last output lines in a gutter
+ * under it. A click (or expanding everything) shows the log, the rest of the
+ * output and any notice.
  *
  * Expansion is tracked per message because the interactive mode owns the
  * global expand flag; toggling that flag (ctrl+O) clears the per-message
@@ -263,16 +265,20 @@ export function createCompletionRenderer(): MessageRenderer {
 		const isExpanded = (): boolean => overrides.get(key) ?? options.expanded;
 		const paint = painter(theme);
 		const facts = completionFacts(view, message.details);
-		// A message with no title or command names itself: "Job j1 finished: exit 0".
-		const extra: Seg[] = facts.title === view.title ? [] : [{ text: " finished", color: "muted" }];
+		const output = view.body.replace(/\n+$/, "");
+		const all = output.trim() === "" ? [] : output.split("\n");
 		const lines = new Lines((width) => {
-			const band = jobBand(theme, facts, { width, now: 0, view: "calm", extra, margin: true });
-			if (!isExpanded()) return [band];
-			const pad = " ".repeat(BODY_INDENT);
-			const inner = Math.max(1, width - BODY_INDENT);
-			const under = [...(view.command.length > 0 ? [`$ ${view.command}`] : []), ...view.meta].map((line) => pad + truncateToWidth(paint.fg("muted", line), inner, "\u2026"));
-			const notice = view.notice.length > 0 ? [pad + truncateToWidth(paint.fg("warning", view.notice), inner, "\u2026")] : [];
-			return [band, ...onBackground([...under, ...bodyLines(view.body, paint, width, true), ...notice], width, bodyBackground(theme))];
+			const head = jobRow(theme, facts, { width, now: 0 });
+			if (!isExpanded()) {
+				// One line more shows in the row a hint for it would take.
+				const shown = all.length <= COMPLETION_PREVIEW_LINES + 1 ? all : all.slice(-COMPLETION_PREVIEW_LINES);
+				const hidden = all.length - shown.length;
+				const said = `${paint.fg("muted", `\u2026 ${hidden} earlier line${hidden === 1 ? "" : "s"} (`)}${paint.fg("dim", expandHint())}${paint.fg("muted", ")")}`;
+				const hint = hidden === 0 ? [] : [truncateToWidth(`${" ".repeat(ROW_MARGIN)}${theme.fg("border", GUTTER)} ${truncateToWidth(said, Math.max(1, width - BODY_INDENT), "\u2026")}`, width, "\u2026")];
+				return [head, ...hint, ...gutterLines(theme, shown, width)];
+			}
+			const notice = view.notice.length > 0 ? gutterLines(theme, [view.notice], width, "warning") : [];
+			return [head, ...gutterLines(theme, view.meta, width, "dim"), ...gutterLines(theme, all, width), ...notice];
 		});
 		return {
 			render: (width: number) => lines.render(width),

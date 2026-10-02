@@ -31,6 +31,7 @@ import {
 	jsonEscapedBytes,
 	parseJobId,
 	readLogPage,
+	readLogEnd,
 	readLogTail,
 	readLogWindow,
 	resolveShellPath,
@@ -385,6 +386,19 @@ function makeRuntime(residualPids: Set<number>): Runtime {
 		outbox: new Set(),
 		delivery: null,
 		// The reaper never touches the widget; a stub keeps this file free of pi-tui.
-		widget: { attach() {}, update() {}, detach() {} },
+		widget: { attach() {}, update() {}, detach() {}, progressOf: () => undefined, isQuiet: () => false },
 	};
 }
+
+describe("raw log end", () => {
+	test("keeps colors and controls for display code to strip, and is not cut to a line", () => {
+		const dir = mkdtempSync(join(tmpdir(), "log-end-"));
+		tempDirs.push(dir);
+		const log = join(dir, "j.log");
+		writeFileSync(log, `old line\n\x1b[32mok\x1b[39m\r${"=".repeat(50)}`);
+		const end = readLogEnd(log, 40);
+		assert.equal(end, "=".repeat(40));
+		assert.ok(readLogEnd(log, 1000).includes("\x1b[32mok\x1b[39m\r"));
+		assert.equal(readLogEnd(join(dir, "missing.log"), 100), "");
+	});
+});

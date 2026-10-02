@@ -5,8 +5,8 @@ const hex = (value: string) => [1, 3, 5].map((index) => parseInt(value.slice(ind
 const fgOf = (value: string) => { const [r, g, b] = hex(value); return `\x1b[38;2;${r};${g};${b}m`; };
 const bgOf = (value: string) => { const [r, g, b] = hex(value); return `\x1b[48;2;${r};${g};${b}m`; };
 
-export const FG: Record<string, string> = { accent: "#8fb4c8", success: "#8fae7a", error: "#c97a72", warning: "#ecb64e", muted: "#8a8882", dim: "#5f5d58", text: "#cfcdc6", toolTitle: "#8fb4c8", toolOutput: "#a8a69f", mdHeading: "#d8c89a", border: "#3a3936" };
-export const BG: Record<string, string> = { toolPendingBg: "#232326", toolSuccessBg: "#212823", toolErrorBg: "#2b2224", selectedBg: "#2d2d31" };
+export const FG: Record<string, string> = { accent: "#8fb4c8", success: "#8fae7a", error: "#c97a72", warning: "#ecb64e", muted: "#8a8882", dim: "#5f5d58", text: "#cfcdc6", toolTitle: "#8fb4c8", toolOutput: "#a8a69f", mdHeading: "#d8c89a", border: "#3a3936", customMessageLabel: "#b294b0", customMessageText: "#cfcdc6" };
+export const BG: Record<string, string> = { toolPendingBg: "#232326", toolSuccessBg: "#212823", toolErrorBg: "#2b2224", selectedBg: "#2d2d31", customMessageBg: "#26242f" };
 
 export { bgOf, fgOf };
 

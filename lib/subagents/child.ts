@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
+import { callPhrase } from "../tool-phrase.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, Usage } from "./types.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
@@ -76,6 +77,7 @@ export function describeTool(name: string, args: unknown): string {
 
 interface AssistantLike {
 	role?: string;
+	content?: unknown;
 	stopReason?: string;
 	errorMessage?: string;
 	usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } };
@@ -155,6 +157,20 @@ async function bindChild(session: AgentSession, guard: ReturnType<typeof createC
 	catch (error) { guard.dispose(); session.dispose(); throw error; }
 }
 
+/**
+ * What a streaming reply says an agent is doing: thinking, writing, or the
+ * call it is writing, in the words main's phase line uses (tool-phrase.ts).
+ */
+export function streamingActivity(update: { type?: string; contentIndex?: number }, message: { content?: unknown } | undefined): string | undefined {
+	const kind = update.type ?? "";
+	if (kind.startsWith("thinking")) return "thinking";
+	if (kind.startsWith("text")) return "writing";
+	if (!kind.startsWith("toolcall")) return undefined;
+	const blocks = Array.isArray(message?.content) ? message.content as Array<{ type?: string; name?: unknown; arguments?: unknown }> : [];
+	const block = update.contentIndex === undefined ? undefined : blocks[update.contentIndex];
+	return block?.type === "toolCall" && typeof block.name === "string" ? callPhrase(block.name, block.arguments) : callPhrase(undefined);
+}
+
 function watchChild(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined, record: AgentRecord): () => void {
 	let usage: Usage = { ...record.usage };
 	let toolCalls = record.toolCalls;
@@ -165,17 +181,15 @@ function watchChild(session: AgentSession, hooks: ChildHooks, contextWindow: num
 		hooks.update({ activity: next });
 	};
 	return session.subscribe((event) => {
-		const e = event as { type: string; toolName?: string; args?: unknown; message?: AssistantLike; assistantMessageEvent?: { type?: string } };
+		const e = event as { type: string; toolName?: string; args?: unknown; message?: AssistantLike; assistantMessageEvent?: { type?: string; contentIndex?: number } };
 		if (e.type === "tool_execution_start" && e.toolName) setActivity(describeTool(e.toolName, e.args));
 		else if (e.type === "compaction_start") setActivity("compacting context");
 		// Pi's own rule: the size is unknown until a reply after the compaction.
 		else if (e.type === "compaction_end") hooks.update({ contextTokens: undefined });
 		else if (e.type === "tool_execution_end") hooks.update({ toolCalls: ++toolCalls });
 		else if (e.type === "message_update") {
-			const kind = e.assistantMessageEvent?.type ?? "";
-			if (kind.startsWith("thinking")) setActivity("thinking");
-			else if (kind.startsWith("text")) setActivity("writing");
-			else if (kind.startsWith("toolcall")) setActivity("calling a tool");
+			const next = streamingActivity(e.assistantMessageEvent ?? {}, e.message);
+			if (next) setActivity(next);
 		} else if (e.type === "message_end" && e.message?.role === "assistant") {
 			usage = addUsage(usage, e.message.usage);
 			const u = e.message.usage;

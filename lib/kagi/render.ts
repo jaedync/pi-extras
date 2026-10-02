@@ -6,6 +6,7 @@
  */
 import { Text, type Component } from '@earendil-works/pi-tui';
 import type { Theme } from '@earendil-works/pi-coding-agent';
+import { minutesAndUp } from '../duration.ts';
 import type { SearchResult } from './parser.js';
 
 export const PREVIEW_RESULTS = 5;
@@ -59,15 +60,10 @@ export function link(text: string, url: string): string {
   return `\x1b]8;;${target.href}\x1b\\${text}\x1b]8;;\x1b\\`;
 }
 
-/** Same shape as Pi's built-in bash footer, so tool rows agree with each other. */
+/** Tenths under a minute, then the shape every tool row shares, so they agree with each other. */
 export function formatDuration(ms: number): string {
   const seconds = Math.max(0, Number.isFinite(ms) ? ms : 0) / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const totalSeconds = Math.floor(seconds);
-  const minutes = Math.floor(totalSeconds / 60);
-  const remainder = totalSeconds % 60;
-  if (minutes < 60) return `${minutes}m ${remainder}s`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
+  return seconds < 60 ? `${seconds.toFixed(1)}s` : minutesAndUp(seconds);
 }
 
 export function callLine(name: string, args: unknown, paint: Paint): string {

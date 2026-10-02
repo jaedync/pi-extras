@@ -87,9 +87,10 @@ interface StatusView {
 	style: StatusStyle;
 }
 
-function latestToolName(message: object): string | undefined {
-	const content = "content" in message && Array.isArray(message.content) ? (message.content as { type?: string; name?: string }[]) : [];
-	return [...content].reverse().find((part) => part.type === "toolCall" && part.name)?.name;
+/** The call the model is writing now, with as much of its arguments as has streamed in. */
+function latestToolCall(message: object): { name?: string; arguments?: unknown } | undefined {
+	const content = "content" in message && Array.isArray(message.content) ? (message.content as { type?: string; name?: string; arguments?: unknown }[]) : [];
+	return [...content].reverse().find((part) => part.type === "toolCall" && part.name);
 }
 
 /** Pi's status text without Pi's own spinner frame. */
@@ -147,6 +148,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		return tools.filter(([id]) => !parents.has(id)).map(([,tool]) => tool);
 	};
 	let pendingToolName: string | undefined;
+	let pendingToolArgs: unknown;
 	let lastTotalElapsedMs: number | undefined;
 	const editorSlot = new EditorSlot();
 	let statusIndicator: StatusIndicator | undefined;
@@ -400,6 +402,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		renderedPhase = undefined;
 		runningTools = new Map();
 		pendingToolName = undefined;
+		pendingToolArgs = undefined;
 		if (!active) {
 			lineStartedAt = now;
 			runEnded = false;
@@ -450,6 +453,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		currentContext = undefined;
 		runningTools = new Map();
 		pendingToolName = undefined;
+		pendingToolArgs = undefined;
 		renderedPhase = undefined;
 		releaseLoader();
 		releaseTimer();
@@ -467,7 +471,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		return { verb, phase, elapsedMs: now - lineStartedAt, phaseMs: now - phaseStartedAt,
 			tokens: shownTokens, clockMs: now - lineStartedAt, reduced, tools: leafTools().map(tool => tool.name),
 			waitingOnPeers: leafTools().length > 0 && leafTools().every(tool => tool.blocking),
-			pendingTool: pendingToolName, thoughtMs, sinceThoughtMs: now - thoughtEndedAt,
+			pendingTool: pendingToolName, pendingArgs: pendingToolArgs, thoughtMs, sinceThoughtMs: now - thoughtEndedAt,
 			idleTokenMs: now - lastTokenAt, waveMs: rate.waveMs, tokensPerSecond: rate.rate };
 	}
 
@@ -647,7 +651,9 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		}
 		else if (eventType.startsWith("text_")) setPhase("text", ctx, eventType);
 		else if (eventType.startsWith("toolcall_")) {
-			pendingToolName = latestToolName(event.message);
+			const call = latestToolCall(event.message);
+			pendingToolName = call?.name;
+			pendingToolArgs = call?.arguments;
 			setPhase("tool", ctx, eventType);
 		}
 	});

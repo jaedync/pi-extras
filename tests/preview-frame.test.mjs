@@ -4,11 +4,11 @@ import { pickFrame } from '../scripts/preview/render.mjs';
 
 const frame = (voice) => [
   ' + 89 const TAIL_CELL_MIN = 10;',
-  ' Run unit tests                          in background ┃',
-  ' Watch types                             in background ┃',
+  '● Run unit tests  $ npm test  ⇢ background                                   ┃',
+  '● Watch types  $ npx tsc -p . --watch  ⇢ background                          ┃',
   '',
-  ' Run unit tests                                  12.0s ',
-  ' Watch types                                     12.0s ',
+  '⠋ Run unit tests  $ npm test  12.0s  ▸ 212 passing',
+  '⠙ Watch types  $ npx tsc -p . --watch  12.0s',
   '─ ⢎⡱⣉ Thinking… 00:09.7 ↓ 212 tokens ──── TPS 109.4 ─ TTFT 0.7s ─ Time 00:12.0 ─',
   voice,
 ].join('\n');
@@ -24,8 +24,9 @@ test('the preview frame prefers a chunk mid-decode, then the fullest level meter
 });
 
 test('a staged session that never showed everything at once is rejected', () => {
+  // The transcript's start rows name both jobs too, but only the bands above the editor say they run.
   // Watch types has finished, so the widget above the editor border no longer shows it.
-  const noJobs = frame('── ● 0:07  ⣿⣿  ◆ ──').replace(/ Watch types +12\.0s \n/, '');
+  const noJobs = frame('── ● 0:07  ⣿⣿  ◆ ──').replace('⠙ Watch types  $ npx tsc -p . --watch  12.0s\n', '');
   const notRecording = frame('────────────────');
   assert.throws(() => pickFrame([noJobs, notRecording]), /re-run the stage/);
 });

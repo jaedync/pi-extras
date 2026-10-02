@@ -55,7 +55,7 @@ describe('result rows', () => {
   });
   it('formats elapsed time in the largest sensible unit', () => {
     expect([0, 912, 45400, 61000, 725000, 3600000, 5432000, Number.NaN].map(formatDuration))
-      .toEqual(['0.0s', '0.9s', '45.4s', '1m 1s', '12m 5s', '1h 0m 0s', '1h 30m 32s', '0.0s']);
+      .toEqual(['0.0s', '0.9s', '45.4s', '1m01s', '12m05s', '1h00m', '1h30m', '0.0s']);
   });
   it('links only http(s) targets and never leaks control bytes into the link', () => {
     expect(link('t', 'https://e.test/a?b=1')).toBe(osc('t', 'https://e.test/a?b=1'));
