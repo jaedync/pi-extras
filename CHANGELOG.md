@@ -2,6 +2,22 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.19.2 - 2026-10-02
+
+### Fixed
+
+- Subagent mail to main is no longer lost or raced around Esc and
+  compaction. A note, question or report that arrived while main worked was
+  steered into Pi's queue, which Esc clears, so pressing Esc dropped it, and
+  `/compact` mid-run left it stuck there until something else woke main. It
+  now lands at main's next turn boundary, main takes one more turn before it
+  stops if it hasn't replied since, and Esc leaves it in the transcript.
+  After a `/compact` that stopped main's turn, a hidden reminder naming who
+  wrote wakes main to reply. Mail that arrived during a manual `/compact`
+  started a turn on the uncompacted context while the summary was being
+  written; it now waits and wakes main once the compaction is done, after
+  any prompt you typed during it.
+
 ## 0.19.1 - 2026-10-02
 
 ### Added
