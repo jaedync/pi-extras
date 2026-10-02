@@ -20,6 +20,8 @@ export interface LimitEntry {
 	modelFamily?: string;
 	/** Provider says the window is blocking regardless of the percentage. */
 	exhausted?: boolean;
+	/** Raw proxy status, retained so cached rejection polls can be reconciled with newer evidence. */
+	proxyRejected?: boolean;
 	/** Provider says requests still go through (Codex reports 100% while allowed). */
 	allowed?: boolean;
 	usedPct?: number;
@@ -197,6 +199,7 @@ export function parseProxyQuota(body: unknown): LimitEntry[] {
 				usedPct: bucket.utilization <= 1 ? bucket.utilization * 100 : bucket.utilization,
 				resetMs,
 				exhausted: bucket.status === "rejected",
+				...(bucket.status === "rejected" ? { proxyRejected: true } : {}),
 				...(bucket.status === "allowed" ? { allowed: true } : {}),
 			});
 		}

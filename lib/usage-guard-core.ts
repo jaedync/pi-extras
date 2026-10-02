@@ -97,7 +97,7 @@ function keyResetMs(key: string): number | undefined {
  * history but would otherwise keep telling the model to wait out a limit that
  * no longer exists.
  */
-export function warningApplies(details: unknown, model: ActiveModel, now?: number): boolean {
+export function warningApplies(details: unknown, model: ActiveModel, now?: number, snapshot?: LimitSnapshot): boolean {
 	if (!details || typeof details !== "object") return true;
 	const record = details as Record<string, unknown>;
 	if (typeof record.key !== "string" || !["band", "budget", "exhausted"].includes(String(record.reason))) return true;
@@ -106,6 +106,11 @@ export function warningApplies(details: unknown, model: ActiveModel, now?: numbe
 	const [legacyProvider, window] = record.key.split("|");
 	const provider = typeof record.provider === "string" ? record.provider : legacyProvider;
 	const modelFamily = typeof record.modelFamily === "string" ? record.modelFamily : quotaKeyParts(window ?? "").family;
+	if (record.reason === "exhausted" && provider === model.provider) {
+		const current = snapshot?.entries.find((entry) => (entry.key ?? entry.label) === window);
+		// Keep raw history, but do not carry a disproved block into another model request.
+		if (current?.exhausted === false) return false;
+	}
 	return !!model.provider && provider === model.provider && entryApplies({ label: "", modelFamily }, model);
 }
 

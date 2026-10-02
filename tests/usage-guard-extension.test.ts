@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLimitStore, type LimitStore } from "../lib/limit-store.ts";
-import type { LimitEntry } from "../lib/status-plus-logic.ts";
+import { parseProxyQuota, type LimitEntry } from "../lib/status-plus-logic.ts";
 import { rowKind } from "../lib/tool-row.ts";
 import usageGuard, { GUARD_CUSTOM_TYPE, loadGuardConfig, parseBudgetArgs, saveGuardConfig } from "../extensions/usage-guard.ts";
 
@@ -67,6 +67,24 @@ function setup(model = { provider: "anthropic", id: "claude-sonnet-5" }, idle = 
 	const ctx = fakeCtx(pi, model, idle);
 	return { pi, store, ctx, configFile };
 }
+
+test("only successful assistant responses clear stale proxy blocks and remove the old notice", async () => {
+	const { pi, store, ctx } = setup();
+	const entries = parseProxyQuota({ buckets: [{ type: "five_hour", utilization: 0.03, resetsAt: RESET, status: "rejected" }] });
+	store.set("anthropic", { entries, atMs: NOW - 1000, source: "poll" });
+	const blocked = await request(pi, ctx);
+	assert.match(blocked.messages[0].content, /blocked by the provider/);
+	for (const stopReason of ["error", "aborted"]) {
+		await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason } }, ctx);
+		assert.equal(store.get("anthropic")?.entries[0].exhausted, true);
+	}
+	await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: ctx.model.id, stopReason: "toolUse" } }, ctx);
+	assert.equal(store.get("anthropic")?.entries[0].exhausted, false);
+	assert.equal(store.get("anthropic")?.atMs, NOW - 1000);
+	assert.deepEqual((await request(pi, ctx, blocked.messages)).messages, []);
+	const report = JSON.parse((await pi.tool!.execute("t", {}, undefined, undefined, ctx)).content[0].text);
+	assert.equal(report.limits[0].status, "ok");
+});
 
 test("the usage tool is marked for Tool Display, which draws its rows with a layout of its own", () => {
 	const { pi } = setup();

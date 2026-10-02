@@ -239,6 +239,12 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		evaluate(ctx);
 	});
 
+	pi.on("message_end", async (event) => {
+		const message = event.message;
+		if (message.role !== "assistant" || !["stop", "toolUse"].includes(message.stopReason)) return;
+		store.recordSuccess(message.provider, message.model, now());
+	});
+
 	pi.on("turn_end", async (_event, ctx) => {
 		latestCtx = ctx;
 		evaluate(ctx);
@@ -251,7 +257,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		const notices = evaluate(ctx, true);
 		return {
 			messages: [...event.messages.filter((message) => message.role !== "custom" ||
-				message.customType !== GUARD_CUSTOM_TYPE || warningApplies(message.details, activeModel(ctx), now())), ...notices],
+				message.customType !== GUARD_CUSTOM_TYPE || warningApplies(message.details, activeModel(ctx), now(), store.get(ctx.model?.provider ?? ""))), ...notices],
 		};
 	});
 

@@ -8,6 +8,7 @@
  * still see one store.
  */
 import type { LimitEntry } from "./status-plus-logic.ts";
+import { createRejectionTracker } from "./limit-rejection.ts";
 
 export interface LimitSnapshot {
 	entries: LimitEntry[];
@@ -21,6 +22,8 @@ export interface LimitStore {
 	get(provider: string): LimitSnapshot | undefined;
 	entries(): Array<[string, LimitSnapshot]>;
 	set(provider: string, snapshot: LimitSnapshot): void;
+	/** Successful assistant completion is newer evidence than a cached proxy rejection. */
+	recordSuccess(provider: string, modelId: string, atMs: number): void;
 	subscribe(listener: (provider: string) => void): () => void;
 	/** Installed by the poller owner; absent when no poller extension is loaded. */
 	setRefresher(refresher: LimitRefresher | undefined): void;
@@ -37,15 +40,25 @@ export function createLimitStore(): LimitStore {
 	const hot = new Set<string>();
 	const listeners = new Set<(provider: string) => void>();
 	let refresher: LimitRefresher | undefined;
+	const rejections = createRejectionTracker();
 	return {
 		get: (provider) => snapshots.get(provider),
 		entries: () => [...snapshots.entries()],
 		set(provider, snapshot) {
-			snapshots.set(provider, snapshot);
+			const prior = snapshots.get(provider);
+			if (prior && snapshot.atMs < prior.atMs) return;
+			snapshots.set(provider, { ...snapshot, entries: rejections.reconcile(provider, snapshot.entries, snapshot.atMs) });
 			for (const listener of listeners) {
 				// A listener fault must not break the poller that published the snapshot.
 				try { listener(provider); } catch { /* reported by the listener's owner */ }
 			}
+		},
+		recordSuccess(provider, modelId, atMs) {
+			const snapshot = snapshots.get(provider);
+			if (!snapshot) return;
+			rejections.succeed(provider, modelId, snapshot.entries, atMs);
+			// Preserve the quota's sample time. A model response does not refresh its utilization.
+			this.set(provider, snapshot);
 		},
 		subscribe(listener) {
 			listeners.add(listener);
