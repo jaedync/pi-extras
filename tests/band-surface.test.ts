@@ -14,6 +14,13 @@ test("a background covers the whole width and comes back after a reset inside th
 	assert.deepEqual(onBackground(["x"], 4, undefined), ["x"], "no background leaves the lines alone");
 });
 
+test("a background comes back after any code that clears it, not after colors that merely contain a 0 or 49", () => {
+	const [mixed] = onBackground(["a\x1b[0;3mb\x1b[39;49mc\x1b[mdone"], 10, BG);
+	assert.equal(mixed, `${BG}a\x1b[0;3m${BG}b\x1b[39;49m${BG}c\x1b[m${BG}done   \x1b[49m`);
+	const colors = "\x1b[38;2;0;49;0mx\x1b[48;5;0my\x1b[38;5;49mz";
+	assert.equal(onBackground([colors], 3, BG)[0], `${BG}${colors}\x1b[49m`, "color values are not resets");
+});
+
 test("a line wider than its row is cut to fit, with or without a background", () => {
 	// Pi stops drawing, and throws, on a line wider than the terminal.
 	const wide = "     indented text past the edge";

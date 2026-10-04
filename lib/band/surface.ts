@@ -13,7 +13,22 @@ const PANEL_LIFT = 0.1;
 // How far a selected row leans the same way when the theme names no selection color.
 const SELECTED_LIFT = 0.12;
 
-const RESET = /\x1b\[0?m|\x1b\[49m/g;
+const SGR = /\x1b\[([0-9;:]*)m/g;
+
+/**
+ * Whether an SGR sequence leaves the default background behind: a full reset
+ * (`0`, or no parameters) or `49`, alone or among others. Color values after
+ * 38 or 48 are skipped, so `38;2;0;49;0` is a color, not a reset.
+ */
+function clearsBackground(params: string): boolean {
+	const list = params === "" ? [0] : params.split(/[;:]/).map(Number);
+	for (let i = 0; i < list.length; i++) {
+		const code = list[i];
+		if (code === 38 || code === 48 || code === 58) i += list[i + 1] === 5 ? 2 : list[i + 1] === 2 ? 4 : 0;
+		else if (code === 0 || code === 49) return true;
+	}
+	return false;
+}
 
 /** A line cut to `width`: Pi stops drawing, and throws, on a line wider than the terminal. */
 const fitted = (line: string, width: number) => (visibleWidth(line) > width ? truncateToWidth(line, Math.max(0, width), "…") : line);
@@ -27,7 +42,7 @@ export function onBackground(lines: readonly string[], width: number, sgr: strin
 	return lines.map((wide) => {
 		const line = fitted(wide, width);
 		const pad = " ".repeat(Math.max(0, width - visibleWidth(line)));
-		return `${sgr}${line.replace(RESET, (reset) => (reset === "\x1b[49m" ? sgr : `${reset}${sgr}`))}${pad}\x1b[49m`;
+		return `${sgr}${line.replace(SGR, (code, params: string) => (code === "\x1b[49m" ? sgr : clearsBackground(params) ? `${code}${sgr}` : code))}${pad}\x1b[49m`;
 	});
 }
 
