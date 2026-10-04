@@ -4,38 +4,22 @@ import { fgOf, quiet } from "./support/quiet-theme.ts";
 import { colorOf } from "./support/tool-rows.ts";
 import { agentHue } from "../lib/band/agent-look.ts";
 import assert from "node:assert/strict";
-import { transcriptLines, type Voices } from "../lib/subagents/transcript.ts";
-import { noteText, questionText, reportText } from "../lib/subagents/format.ts";
+import { envelopeLines, type Painter, type Voices } from "../lib/subagents/transcript.ts";
+import { noteText, questionText, readEnvelopes, reportText } from "../lib/subagents/format.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 
 const plain = (_color: string, text: string) => text;
-const describe = (tool: string, args: any) => `${tool} ${args?.command ?? args?.path ?? ""}`.trim();
 const strip = (text: string) => text.replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\/g, "");
 const theme = quiet() as any;
 const bodyText = (line: string) => line.trim();
 const voices: Voices = { self: "surveyor", hue: (name) => agentHue(name === "finder" ? "anthropic/claude-sonnet-5-5" : name === "surveyor" ? "openai-codex/gpt-6-luna" : undefined) };
 
-test("transcript shows prompts, text, one line per tool call and short results", () => {
-	const lines = transcriptLines([
-		{ role: "system", content: "hidden" },
-		{ role: "user", content: "Count files" },
-		{ role: "assistant", content: [{ type: "thinking", thinking: "Let me\nthink" }, { type: "toolCall", name: "bash", arguments: { command: "ls" } }] },
-		{ role: "toolResult", content: [{ type: "text", text: "a\nb\nc\nd\ne" }] },
-		{ role: "toolResult", isError: true, content: [{ type: "text", text: "boom\x1b[31m" }] },
-		{ role: "assistant", content: [{ type: "text", text: "Found 5." }] },
-	], 60, plain, describe, voices);
-	assert.deepEqual(lines.map((line) => line.trimEnd()), [
-		"▸ Count files",
-		"  thinking: Let me",
-		"  ⚙ bash ls",
-		"    a", "    b", "    c",
-		"    … 2 more lines",
-		"    boom",
-		"",
-		"Found 5.",
-	]);
-});
+/** What an agent was told, as the inspector sets each delivery: a blank line, then its rows; a plain prompt is Pi's user message, so it is left out here. */
+function told(messages: Array<{ content: unknown }>, width: number, paint: Painter): string[] {
+	const text = (content: unknown) => typeof content === "string" ? content : (content as Array<{ text?: string }>).map((block) => block.text ?? "").join("\n");
+	return messages.flatMap((message) => readEnvelopes(text(message.content)).flatMap((part) => (part.kind === "prompt" ? [] : ["", ...envelopeLines(part, width, paint, voices)])));
+}
 
 test("agent mail names its sender and asks; a report previews its first lines", () => {
 	const message = createMessageRenderer()({ details: { id: "1", kind: "question", from: "scout", text: "Delete it?" } } as any, { expanded: false } as any, theme)!;
@@ -281,14 +265,13 @@ test("what an agent was told reads as the conversation main shows: arrows from y
 	const child: AgentRecord = { name: "lead-a", parent: "surveyor", depth: 2, task: "t", model: "opencode-go/deepseek-v4.1-flash", readOnly: false, fork: false, blocking: false,
 		state: "idle", createdAt: 0, startedAt: 0, endedAt: 16_000, activity: null, toolCalls: 1, usage: NO_USAGE, runs: 1, report: "Found 3." };
 	const batch = [noteText("user", "Also say which is longer."), questionText("main", "Which file?"), noteText("finder", "lib/x.ts")].join("\n\n");
-	const lines = transcriptLines([
-		{ role: "user", content: "Survey the files" },
-		{ role: "user", content: [{ type: "text", text: batch }] },
-		{ role: "user", content: reportText(child, 0) },
-		{ role: "user", content: reportText({ ...child, state: "failed", error: "rate limited", report: undefined }, 0) },
-	], 100, tag, describe, voices); // The tags count as visible width; terminal escapes don't.
+	const lines = told([
+		{ content: "Survey the files" },
+		{ content: [{ type: "text", text: batch }] },
+		{ content: reportText(child, 0) },
+		{ content: reportText({ ...child, state: "failed", error: "rate limited", report: undefined }, 0) },
+	], 100, tag); // The tags count as visible width; terminal escapes don't.
 	assert.deepEqual(lines.map((line) => strip(line).replace(/<[^>]+>/g, "").trimEnd()), [
-		"▸ Survey the files",
 		"",
 		"→ surveyor  you wrote",
 		"  Also say which is longer.",
@@ -314,5 +297,5 @@ test("what an agent was told reads as the conversation main shows: arrows from y
 	assert.equal(lines[lines.indexOf(line("◆ lead-a ✗")) + 1], "  <error>rate limited");
 	assert.equal(lines[lines.indexOf(line("◆ finder")) + 1], "  <customMessageText>lib/x.ts");
 	// A header is cut to the width; only the text under it wraps.
-	assert.ok(visibleWidth(transcriptLines([{ role: "user", content: noteText("finder", "x") }], 12, plain, describe, voices)[0]!) <= 12);
+	assert.ok(visibleWidth(told([{ content: noteText("finder", "x") }], 12, plain)[1]!) <= 12);
 });

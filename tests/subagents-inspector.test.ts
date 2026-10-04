@@ -1,59 +1,177 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { quiet, fgOf } from "./support/quiet-theme.ts";
 import { colorOf } from "./support/tool-rows.ts";
 import { Sheet } from "../lib/band/sheet.ts";
+import { bgSgr } from "../lib/band/color.ts";
 import { AgentView, type InspectorSource } from "../lib/subagents/inspector.ts";
 import { noteText } from "../lib/subagents/format.ts";
-import { agentHue } from "../lib/band/agent-look.ts";
+import { agentGround, agentHue } from "../lib/band/agent-look.ts";
+import { shareDrawnTools } from "../lib/tool-row.ts";
 import { NO_USAGE, type AgentRecord, type AgentState } from "../lib/subagents/types.ts";
 
+// Pi's chat components draw with Pi's own theme.
+initTheme("dark");
 const theme = quiet() as any;
 const strip = (text: string) => text.replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\/g, "");
+const tui = { requestRender() {}, terminal: { rows: 40, columns: 100 } };
 
 function open(state: AgentState = "running", messages: unknown[] = [], extra: Partial<InspectorSource> = {}) {
 	const record: AgentRecord = { name: "surveyor", parent: "main", depth: 1, task: "Survey the files", model: "openai-codex/gpt-6-luna", readOnly: false,
 		fork: false, blocking: false, state, createdAt: 0, startedAt: Date.now(), activity: "bash sleep 20", toolCalls: 0, usage: NO_USAGE, runs: 1 };
-	const log = { sent: [] as string[], stopped: 0, closed: 0, copied: [] as string[] };
+	const log = { sent: [] as string[], stopped: 0, closed: 0 };
 	const source = new AgentView(theme, {
 		record: () => record,
 		messages: () => messages,
 		send: async (text) => { log.sent.push(text); return "delivered"; },
 		stop: async () => { log.stopped++; },
-		describe: (tool) => tool,
+		cwd: "/work",
 		...extra,
-	});
-	const view = new Sheet({ requestRender() {}, terminal: { rows: 40, columns: 100 } }, theme, source, () => { log.closed++; }, { copy: async (text) => { log.copied.push(text); } });
+	}, tui as never);
+	const view = new Sheet(tui, theme, source, () => { log.closed++; });
 	const lines = () => view.render(100).map(strip);
 	const screen = () => lines().join("\n");
 	const type = (text: string) => { for (const ch of text) view.handleInput(ch); };
 	return { view, source, log, screen, lines, type, record };
 }
 
-test("it covers the terminal: colleague title, presence, facts, task, transcript, composer and keys", () => {
-	const { view, lines } = open();
+test("it reads as a chat: its live row on top, the chat, a message box between rules, and keys", () => {
+	const { view, lines } = open("running", [{ role: "user", content: "Survey the files" }]);
 	const shown = lines();
 	assert.equal(shown.length, 40);
-	assert.match(shown[0]!, /^ ◆ surveyor · subagent +copy task {3}copy report {3}✕ $/);
-	assert.match(shown[1]!, /surveyor/);
-	assert.match(shown[2]!, /^ running · openai-codex\/gpt-6-luna · 0 tool calls/);
-	assert.match(shown[3]!, /^ Survey the files/);
-	assert.match(shown[4]!, /^─ transcript ─+ 1 line ─$/);
-	assert.match(shown.at(-2)!, /^ → surveyor ▏write to it/);
+	assert.match(shown[0]!, /^ ◆ surveyor  \S+  gpt-6-luna  \S{3} bash sleep 20 +✕ $/);
+	assert.doesNotMatch(shown.join("\n"), /· subagent|copy task|copy report|─ transcript/);
+	assert.ok(shown.slice(1, 5).some((line) => line.includes("Survey the files")), "the task is its first message, at the top");
+	assert.match(shown.at(-4)!, /^─+ 0 tool calls ─$/);
+	assert.match(shown.at(-3)!, /^ → surveyor ▏write to it/);
+	assert.match(shown.at(-2)!, /^─+$/);
 	assert.match(shown.at(-1)!, /^ enter send · esc close · ctrl\+x stop · ↑↓ PgUp\/PgDn scroll/);
 	view.dispose();
 });
 
-test("the inspector colors only its title and composer, in the agent's provider color, over an unfilled presence", () => {
-	const { view, source } = open();
+test("the whole view sits on a wash of the agent's color, its bars a step above it", () => {
+	const { view, source } = open("running", [{ role: "assistant", content: [{ type: "text", text: "Found 5." }], stopReason: "stop" }]);
+	const raw = view.render(100);
+	const ground = agentGround(theme, "openai-codex/gpt-6-luna")!;
+	assert.deepEqual(source.ground(), ground);
+	const sgr = bgSgr(ground, "truecolor");
+	const body = raw.find((line) => strip(line).includes("Found 5."))!;
+	assert.ok(body.startsWith(sgr), "the chat sits on the ground");
+	assert.ok(raw.at(-3)!.startsWith(sgr), "so does the message box");
+	assert.ok(!raw[0]!.startsWith(sgr) && /^\x1b\[48;/.test(raw[0]!), "the title bar sits a step above it");
+	const claude = agentGround(theme, "anthropic/claude-opus-5-5")!;
+	assert.notDeepEqual(claude, ground, "each provider washes its own color");
+	view.dispose();
+});
+
+test("the inspector colors its name, rules and composer in the agent's provider color", () => {
+	const { view } = open();
 	const raw = view.render(100);
 	const codex = agentHue("openai-codex/gpt-6-luna");
-	assert.equal(source.titleColor(), codex);
 	assert.equal(colorOf(raw[0]!, "◆ surveyor"), fgOf(codex));
-	assert.equal(colorOf(raw.at(-2)!, "→ surveyor"), fgOf(codex));
-	assert.match(strip(raw[1]!), /^ {2}◆ surveyor  .*gpt-6-luna/);
-	assert.doesNotMatch(raw[1]!, /\x1b\[48;|▍/);
-	assert.equal(colorOf(raw.at(-2)!, "▏"), fgOf(codex));
+	assert.equal(colorOf(raw.at(-3)!, "→ surveyor"), fgOf(codex));
+	assert.equal(colorOf(raw.at(-3)!, "▏"), fgOf(codex));
+	assert.equal(colorOf(raw.at(-2)!, "─"), fgOf(codex));
+	view.dispose();
+});
+
+test("the chat is Pi's own: user and assistant messages, thinking, and tool rows with their results", () => {
+	const messages = [
+		{ role: "user", content: "Count the files" },
+		{ role: "assistant", content: [{ type: "thinking", thinking: "Let me look" }, { type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls lib" } }], stopReason: "toolUse" },
+		{ role: "toolResult", toolCallId: "c1", toolName: "bash", content: [{ type: "text", text: "alpha.ts\nbeta.ts" }], isError: false },
+		{ role: "assistant", content: [{ type: "text", text: "There are **2** files." }], stopReason: "stop" },
+	];
+	const { view, screen } = open("idle", messages);
+	const shown = screen();
+	for (const said of ["Count the files", "Let me look", "ls lib", "alpha.ts", "There are 2 files."]) assert.ok(shown.includes(said), said);
+	assert.ok(shown.indexOf("Count the files") < shown.indexOf("ls lib") && shown.indexOf("ls lib") < shown.indexOf("There are 2 files."));
+	view.dispose();
+});
+
+test("the reply being written shows as it streams, and once it ends it is drawn once", () => {
+	const messages: unknown[] = [{ role: "user", content: "Go" }];
+	let streaming: unknown = { role: "assistant", content: [{ type: "text", text: "Half a tho" }] };
+	const { view, screen } = open("running", messages, { streaming: () => streaming });
+	assert.ok(screen().includes("Half a tho"));
+	streaming = { role: "assistant", content: [{ type: "text", text: "Half a thought, now whole." }] };
+	assert.ok(screen().includes("Half a thought, now whole."));
+	const done = { role: "assistant", content: [{ type: "text", text: "Half a thought, now whole." }], stopReason: "stop" };
+	messages.push(done);
+	streaming = done;
+	assert.equal(screen().split("Half a thought, now whole.").length, 2, "drawn once, not twice");
+	view.dispose();
+});
+
+test("a call left without a result says so once the agent can't finish it", () => {
+	const messages = [{ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "sleep 99" } }], stopReason: "toolUse" }];
+	const running = open("running", messages);
+	assert.doesNotMatch(running.screen(), /Stopped before this call returned/);
+	running.view.dispose();
+	const stopped = open("stopped", messages);
+	assert.match(stopped.screen(), /Stopped before this call returned/);
+	stopped.view.dispose();
+});
+
+test("tool rows are drawn as main draws them: Tool Display's own definition first, then the agent's", () => {
+	const messages = [
+		{ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } }, { type: "toolCall", id: "c2", name: "lookup", arguments: {} }], stopReason: "toolUse" },
+	];
+	const drawn = (label: string) => ({ renderCall: () => new Text(label, 0, 0), renderResult: () => new Text("", 0, 0) });
+	shareDrawnTools((name) => (name === "bash" ? drawn("MAIN'S BASH ROW") : undefined));
+	try {
+		const { view, screen } = open("running", messages, { tool: (name) => (name === "lookup" ? drawn("THE AGENT'S LOOKUP ROW") : undefined) });
+		assert.match(screen(), /MAIN'S BASH ROW/);
+		assert.match(screen(), /THE AGENT'S LOOKUP ROW/);
+		view.dispose();
+	} finally {
+		shareDrawnTools(undefined);
+	}
+});
+
+test("a click on the chat reaches the row under it, as in main's transcript", () => {
+	let clicks: Array<{ x: number; y: number }> = [];
+	const row = { render: () => ["CLICK ME", "SECOND LINE"], invalidate() {}, handleMouse: (event: { x: number; y: number }) => { clicks.push({ x: event.x, y: event.y }); return { handled: true }; } };
+	shareDrawnTools((name) => (name === "bash" ? { renderCall: () => row, renderResult: () => new Text("", 0, 0) } : undefined));
+	try {
+		const messages = [{ role: "user", content: "Go" }, { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } }], stopReason: "toolUse" }];
+		const { view, lines } = open("running", messages);
+		const y = lines().findIndex((line) => line.includes("SECOND LINE"));
+		const x = lines()[y]!.indexOf("SECOND LINE") + 3;
+		const result = view.handleMouse({ type: "click", button: "left", x, y, screenX: x, screenY: y, width: 100, height: 40, shift: false, alt: false, ctrl: false });
+		assert.deepEqual(result, { handled: true });
+		assert.equal(clicks.length, 1);
+		assert.equal(clicks[0]!.y, 1, "the row's own second line");
+		clicks = [];
+		view.handleMouse({ type: "click", button: "left", x: 5, y: 0, screenX: 5, screenY: 0, width: 100, height: 40, shift: false, alt: false, ctrl: false });
+		assert.equal(clicks.length, 0, "the title bar is not the chat");
+		view.dispose();
+	} finally {
+		shareDrawnTools(undefined);
+	}
+});
+
+test("a queued agent shows its task until it starts", () => {
+	const { view, screen } = open("queued");
+	assert.match(screen(), /Queued; it hasn't started yet\. Its task:/);
+	assert.match(screen(), /Survey the files/);
+	view.dispose();
+});
+
+test("a failure from outside its replies shows under the chat, once (the row names it too)", () => {
+	const failed = open("failed");
+	failed.record.error = "Quota exceeded until 14:00.";
+	const chat = failed.lines().slice(1).join("\n");
+	assert.equal(chat.split("Quota exceeded until 14:00.").length, 2);
+	failed.view.dispose();
+});
+
+test("the top rule carries the facts the row leaves out", () => {
+	const { view, record, lines } = open();
+	Object.assign(record, { contextTokens: 50_000, contextWindow: 200_000, toolCalls: 1, runs: 2, readOnly: true, parent: "lead" });
+	assert.match(lines().at(-4)!, /─ ctx 25% · 1 tool call · 2 runs · read-only · under lead ─$/);
 	view.dispose();
 });
 
@@ -66,22 +184,6 @@ test("arrows scroll the transcript while letters type", () => {
 	view.handleInput("\x1b[5~");
 	assert.notEqual(screen().replace(/→ surveyor k▏/, ""), before.replace(/→ surveyor ▏write to it/, ""));
 	assert.match(screen(), /→ surveyor k▏/);
-	view.dispose();
-});
-
-test("its buttons copy the task, and the report once there is one", async () => {
-	const { view, log, lines, record } = open("idle");
-	const title = lines()[0]!;
-	const click = (x: number) => view.handleMouse({ type: "click", button: "left", x, y: 0, screenX: x, screenY: 0, width: 100, height: 40, shift: false, alt: false, ctrl: false });
-	click(title.indexOf("copy task") + 1);
-	click(title.indexOf("copy report") + 1);
-	await new Promise((resolve) => setTimeout(resolve, 0));
-	assert.deepEqual(log.copied, ["Survey the files"]);
-	assert.match(lines().at(-1)!, /Nothing to copy yet/);
-	record.report = "All done.";
-	click(title.indexOf("copy report") + 1);
-	await new Promise((resolve) => setTimeout(resolve, 0));
-	assert.deepEqual(log.copied, ["Survey the files", "All done."]);
 	view.dispose();
 });
 
@@ -146,8 +248,8 @@ test("an agent that ended says it can't take messages", () => {
 test("a finished agent's inspector says it finished, not that its report waits", () => {
 	// The rows above the editor keep a finished agent only while its report is queued; the inspector can't tell, so it says what is sure.
 	const { view, lines } = open("idle");
-	assert.match(lines()[1]!, /finished/);
-	assert.doesNotMatch(lines()[1]!, /report queued/);
+	assert.match(lines()[0]!, /finished/);
+	assert.doesNotMatch(lines()[0]!, /report queued/);
 	view.dispose();
 });
 

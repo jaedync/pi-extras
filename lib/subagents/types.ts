@@ -103,6 +103,10 @@ export interface ChildHandle {
 	takeQueued(): string[];
 	/** The session's messages so far, for the inspector. */
 	messages(): readonly unknown[];
+	/** The reply being written now, before it joins the messages; for the inspector. */
+	streaming?(): unknown;
+	/** The definition of one of its tools, which the inspector draws its rows with. */
+	tool?(name: string): object | undefined;
 	dispose(): Promise<void>;
 	sessionFile?: string;
 }

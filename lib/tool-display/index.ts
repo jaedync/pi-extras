@@ -40,7 +40,7 @@ import { CHAIN_ENTRY, CHAIN_EVENT, ChainRun, type SavedChain } from "../chain/ru
 import { splitChain } from "../chain/split.ts";
 import { TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../tool-count.ts";
 import { forgetLate, lateRows, offeredRows, redrawLateMessages } from "../late-rows.ts";
-import { markRow, rowKind, type RowKind } from "../tool-row.ts";
+import { markRow, rowKind, shareDrawnTools, type RowKind } from "../tool-row.ts";
 import { canAdopt, installAdoption, prepareAdoption, rebuildRow, type RowRenderers } from "./adopt.ts";
 import { computerUseSpec, windowsUseSpec } from "./computer.ts";
 import { codemodeRenderers } from "./codemode.ts";
@@ -325,6 +325,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		undoAdoption = installAdoption({ renderersFor });
 		adopting = canAdopt();
 		install();
+		shareDrawnTools((name) => registered.get(name));
 		repairLate();
 		thinkingActive = true;
 		publishSettings();
@@ -371,6 +372,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		undoThinking = undefined;
 		undoAdoption?.();
 		undoAdoption = undefined;
+		shareDrawnTools(undefined);
 		thinkingActive = false;
 		publishSettings();
 	});

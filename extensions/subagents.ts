@@ -81,6 +81,16 @@ function thinkingSettings(cwd: string, agentDir: string): ThinkingSettings {
 	}
 }
 
+/** How main's chat is drawn, so an agent's chat in the inspector matches it. */
+function chatSettings(cwd: string): { hideThinking?: boolean; outputPad?: number } {
+	try {
+		const settings = sdk.SettingsManager.create(cwd, sdk.getAgentDir()) as unknown as { getHideThinkingBlock?: () => boolean; getOutputPad?: () => number };
+		return { hideThinking: settings.getHideThinkingBlock?.(), outputPad: settings.getOutputPad?.() };
+	} catch {
+		return {};
+	}
+}
+
 /** The parent's model runtime when Pi exposes it, so children share auth and providers. */
 function runtimeSource(ctx: ExtensionContext): () => Promise<ModelRuntime> {
 	let own: Promise<ModelRuntime> | null = null;
@@ -105,6 +115,7 @@ export default function subagents(pi: ExtensionAPI) {
 	pi.on("agent_start", async () => { mainRun++; });
 	const mainWatch = watchMain(pi, () => state?.mail);
 	let inspectorUi: InspectorHost | null = null;
+	let inspectorCwd = process.cwd();
 	let inspected: ShownOverlay | undefined;
 
 	/**
@@ -118,7 +129,10 @@ export default function subagents(pi: ExtensionAPI) {
 		const shown = openAgentInspector(inspectorUi, {
 			record: () => current.team.get(name),
 			messages: () => current.team.messages(name),
-			describe: describeTool,
+			streaming: () => current.team.streaming(name),
+			tool: (toolName) => current.team.tool(name, toolName),
+			cwd: inspectorCwd,
+			...chatSettings(inspectorCwd),
 			motion,
 			hue: (other) => agentHue(current.team.get(other)?.model),
 			stop: () => current.team.stop(name),
@@ -397,6 +411,7 @@ export default function subagents(pi: ExtensionAPI) {
 			pi.registerTool(offerRows(withRows(tool)));
 		}
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui as unknown as InspectorHost : null;
+		inspectorCwd = ctx.cwd;
 		if (ctx.hasUI && ctx.mode === "tui") {
 			widget.attach(ctx.ui as never, () => ({ records: current.team.list(), pending: current.mail.pending() }), inspect, () => viewAll());
 		}

@@ -16,6 +16,10 @@
  * scrollbar is colored spaces rather than glyphs: a copied line ends in
  * spaces, which the copy trims. The content knows nothing about the frame: a source
  * supplies each part, read again every frame so a running call stays live.
+ *
+ * A source can drop the band, head and rule to read as a plain conversation
+ * (the agent inspector), and can set one ground color for the whole view so
+ * it doesn't read as main's transcript.
  */
 import {
 	decodeKittyPrintable, matchesKey, truncateToWidth, visibleWidth,
@@ -47,20 +51,22 @@ export interface SheetSource {
 	frame?(): void;
 	/** What this is, bold at the left of the title bar: `bash · 3 commands`, `Shell job`. */
 	title(): string;
-	/** The row's live band, across the full width under the title bar. */
-	band(width: number): string;
+	/** The row's live band, across the full width under the title bar; none when absent. */
+	band?(width: number): string;
 	/** Lines that stay put under the band (facts, the command, steps, a task), at most `rows`. */
 	head(width: number, rows: number): string[];
 	/** A click on a head line, counted from 0; true when it did something. */
 	pick?(line: number): boolean;
-	/** The label on the rule above the body: `output`, `output of 2 · npm test`. */
-	bodyLabel(): string;
+	/** The label on the rule above the body: `output`, `output of 2 · npm test`. No rule when absent. */
+	bodyLabel?(): string;
 	/** Every body line, styled and wrapped to `width`. */
 	body(width: number): string[];
 	/** Names what the body shows; when it changes (another step), the view goes back to following the end. */
 	bodyKey?(): unknown;
 	/** A click on a body line, counted from the body's first line; true when it did something. */
 	pickBody?(line: number): boolean;
+	/** A click on the body for components drawn in it: `y` counts from the body's first line, `x` from where its lines start. */
+	bodyMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined;
 	/**
 	 * Body lines to keep in view, such as a selected item. While a source names
 	 * some, its body stays put instead of following the end, and scrolls only
@@ -82,6 +88,12 @@ export interface SheetSource {
 	readonly typing?: boolean;
 	/** The title's color, when it isn't the tool color: a theme key or `#rrggbb` (an agent's provider color). */
 	titleColor?(): string;
+	/** A styled line that takes the title's place, cut to `width`, such as an agent's live row. */
+	titleLine?(width: number): string;
+	/** One color the whole view sits on; the title bar and footer sit a step above it. */
+	ground?(): Rgb | undefined;
+	/** Body and foot lines bring their own margins, as Pi's chat components do, so the view adds none. */
+	readonly flush?: boolean;
 }
 
 export interface SheetTheme extends BandTheme {
@@ -107,6 +119,8 @@ const HEAD_MAX = 12;
 const MIN_BODY = 3;
 const GAP = "   ";
 const CLOSE = "✕";
+// How far a ground's bars lean toward the muted text color, so they read as frame.
+const GROUND_BAR_LIFT = 0.08;
 // Below these heights the title bar, then the footer, then the rule give their row to the body.
 const TITLE_ROWS = 8;
 const FOOTER_ROWS = 5;
@@ -121,6 +135,8 @@ interface Hits {
 	headRows: number;
 	bodyTop: number;
 	bodyRows: number;
+	bodyLeft: number;
+	bodyWidth: number;
 	bar: number;
 	thumb: { top: number; height: number } | null;
 }
@@ -142,7 +158,7 @@ export class Sheet implements Component, Focusable {
 	private drag: { grab: number } | null = null;
 	private readonly copiedAt = new Map<number, number>();
 	private flash: { text: string; color: string; at: number } | null = null;
-	private hits: Hits = { title: -1, buttons: [], close: null, headTop: 0, headRows: 0, bodyTop: 0, bodyRows: 0, bar: -1, thumb: null };
+	private hits: Hits = { title: -1, buttons: [], close: null, headTop: 0, headRows: 0, bodyTop: 0, bodyRows: 0, bodyLeft: 0, bodyWidth: 0, bar: -1, thumb: null };
 	private stopFrames: (() => void) | null = null;
 	private closed = false;
 	private readonly screen = new OnScreen();
@@ -278,11 +294,12 @@ export class Sheet implements Component, Focusable {
 			return { handled: true };
 		}
 		const row = event.y - hits.bodyTop;
-		if (row >= 0 && row < hits.bodyRows && event.x < hits.bar && this.source.pickBody?.(this.scroll + row)) {
-			this.tui.requestRender();
-			return { handled: true };
-		}
-		return undefined;
+		if (row < 0 || row >= hits.bodyRows || event.x >= hits.bar) return undefined;
+		const used = this.source.bodyMouse?.({ ...event, x: event.x - hits.bodyLeft, y: this.scroll + row, width: hits.bodyWidth, height: this.total }) !== undefined
+			|| this.source.pickBody?.(this.scroll + row) === true;
+		if (!used) return undefined;
+		this.tui.requestRender();
+		return { handled: true };
 	}
 
 	private hoverAt(x: number, y: number, onBar: boolean): Hover {
@@ -361,17 +378,17 @@ export class Sheet implements Component, Focusable {
 		const w = Math.max(1, width);
 		const h = Math.max(1, this.tui.terminal.rows);
 		const now = Date.now();
-		const shows = { title: h >= TITLE_ROWS, footer: h >= FOOTER_ROWS, rule: h >= RULE_ROWS };
-		const foot = this.source.foot?.(Math.max(1, w - 2)) ?? [];
-		const fixed = 1 + foot.length + Number(shows.title) + Number(shows.footer) + Number(shows.rule);
+		const flush = this.source.flush === true;
+		const shows = { title: h >= TITLE_ROWS, footer: h >= FOOTER_ROWS, rule: h >= RULE_ROWS && this.source.bodyLabel !== undefined, band: this.source.band !== undefined };
+		const foot = this.source.foot?.(Math.max(1, flush ? w : w - 2)) ?? [];
+		const fixed = Number(shows.band) + foot.length + Number(shows.title) + Number(shows.footer) + Number(shows.rule);
 		const headRoom = clamp(h - fixed - MIN_BODY, 0, HEAD_MAX);
 		const head = this.source.head(Math.max(1, w - 2), headRoom).slice(0, headRoom);
 		const bodyRows = Math.max(0, h - fixed - head.length);
-		const chrome = panelBackground(this.theme);
-		const gray = bodyBackground(this.theme);
+		const { chrome, gray, ground } = this.backgrounds();
 		const out: string[] = [];
 		const title = shows.title ? out.push(...onBackground([this.titleBar(w, now)], w, chrome)) - 1 : -1;
-		out.push(this.source.band(w));
+		if (shows.band) out.push(this.source.band!(w));
 		const headTop = out.length;
 		// Lines the source didn't fit end in an ellipsis rather than a cut word.
 		const fit = (line: string) => ` ${truncateToWidth(line, Math.max(1, w - 2), "…")}`;
@@ -379,16 +396,26 @@ export class Sheet implements Component, Focusable {
 		const body = this.body(w, bodyRows);
 		if (shows.rule) out.push(this.rule(w));
 		const bodyTop = out.length;
-		out.push(...body);
-		out.push(...onBackground(foot.map(fit), w, gray));
+		out.push(...(ground ? onBackground(body, w, ground) : body));
+		out.push(...onBackground(flush ? foot.map((line) => truncateToWidth(line, w, "…")) : foot.map(fit), w, gray));
 		if (shows.footer) out.push(...onBackground([this.footer(w, now)], w, chrome));
 		this.hits = { ...this.hits, title, headTop, headRows: head.length, bodyTop, bodyRows };
 		return out.slice(0, h).map((line) => truncateToWidth(line, w, "", true));
 	}
 
+	/** Behind the bars, the head and foot, and the body: the theme's grays, or the source's ground and a step above it. */
+	private backgrounds(): { chrome: string | undefined; gray: string | undefined; ground: string | undefined } {
+		const rgb = this.source.ground?.();
+		const palette = rgb ? paletteFrom(this.theme) : undefined;
+		if (!rgb || !palette) return { chrome: panelBackground(this.theme), gray: bodyBackground(this.theme), ground: undefined };
+		const ground = bgSgr(rgb, palette.mode);
+		return { chrome: bgSgr(mix(rgb, palette.muted, GROUND_BAR_LIFT), palette.mode), gray: ground, ground };
+	}
+
 	/** The body's rows at the current scroll, each with its scrollbar cell. */
 	private body(w: number, rows: number): string[] {
-		const inner = Math.max(1, w - 3);
+		const margin = this.source.flush === true ? "" : " ";
+		const inner = Math.max(1, w - 2 - margin.length);
 		const key = this.source.bodyKey?.();
 		if (key !== this.shownKey) this.follow = true;
 		this.shownKey = key;
@@ -402,7 +429,7 @@ export class Sheet implements Component, Focusable {
 		// Pi's scrollbar geometry, so both bars move alike.
 		const height = overflow ? Math.max(Math.min(2, rows), Math.min(rows, Math.round((rows * rows) / lines.length))) : 0;
 		const thumb = overflow ? { top: this.maxScroll === 0 ? 0 : Math.round((this.scroll / this.maxScroll) * (rows - height)), height } : null;
-		this.hits = { ...this.hits, bar: w - 1, thumb };
+		this.hits = { ...this.hits, bar: w - 1, thumb, bodyLeft: margin.length, bodyWidth: inner };
 		const colors = thumb ? this.barColors(this.drag !== null || this.hover?.kind === "bar") : undefined;
 		const cell = (row: number) => {
 			if (!thumb) return " ";
@@ -411,7 +438,7 @@ export class Sheet implements Component, Focusable {
 			if (!colors) return this.fg(inThumb ? "scrollbarThumb" : "scrollbarTrack", inThumb ? "┃" : "│");
 			return `${inThumb ? colors.thumb : colors.track} \x1b[49m`;
 		};
-		return Array.from({ length: rows }, (_, row) => ` ${truncateToWidth(lines[this.scroll + row] ?? "", inner, "…", true)} ${cell(row)}`);
+		return Array.from({ length: rows }, (_, row) => `${margin}${truncateToWidth(lines[this.scroll + row] ?? "", inner, "…", true)} ${cell(row)}`);
 	}
 
 	/**
@@ -450,13 +477,15 @@ export class Sheet implements Component, Focusable {
 			return { index, width: visibleWidth(text), painted: this.fg(done ? "success" : hovered ? "accent" : "muted", text) };
 		});
 		const close = this.fg(this.hover?.kind === "close" ? "accent" : "muted", CLOSE);
-		const label = this.source.title();
+		const line = this.source.titleLine;
+		const label = line ? "" : this.source.title();
 		// Buttons give way from the end before the title is cut; the close button stays.
 		let shown = buttons;
 		const rightWidth = () => shown.reduce((sum, button) => sum + button.width + GAP.length, 0) + visibleWidth(CLOSE) + 1;
 		while (shown.length > 0 && 1 + visibleWidth(label) + 2 + rightWidth() > w) shown = shown.slice(0, -1);
 		const titleRoom = Math.max(0, w - 1 - rightWidth() - 1);
-		const title = this.fg(this.source.titleColor?.() ?? "toolTitle", this.bold(truncateToWidth(label, titleRoom, "…")));
+		const title = line ? truncateToWidth(line.call(this.source, titleRoom), titleRoom, "…")
+			: this.fg(this.source.titleColor?.() ?? "toolTitle", this.bold(truncateToWidth(label, titleRoom, "…")));
 		let x = w - rightWidth();
 		const hits: Hits["buttons"] = [];
 		for (const button of shown) {
@@ -476,7 +505,7 @@ export class Sheet implements Component, Focusable {
 			: this.total <= rows ? `${this.total} ${this.total === 1 ? "line" : "lines"}`
 			: `${this.scroll + 1}–${Math.min(this.total, this.scroll + rows)} of ${this.total}${this.follow && this.source.live() ? " · following" : ""}`;
 		const right = position ? ` ${position} ` : "";
-		const label = truncateToWidth(this.source.bodyLabel(), Math.max(0, w - 4 - visibleWidth(right)), "…");
+		const label = truncateToWidth(this.source.bodyLabel?.() ?? "", Math.max(0, w - 4 - visibleWidth(right)), "…");
 		const fill = Math.max(1, w - 3 - visibleWidth(label) - visibleWidth(right) - 1);
 		return `${this.fg("border", "─")} ${this.fg("dim", label)} ${this.fg("border", "─".repeat(fill))}${this.fg("dim", right)}${this.fg("border", "─")}`;
 	}

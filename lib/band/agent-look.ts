@@ -18,6 +18,7 @@ import { FAILURE_GLYPH, MODE_SPINNERS, SPINNER_SLOT_WIDTH, STOPPED_GLYPH, SUCCES
 import { providerColor } from "../status-plus-render.ts";
 import { messageBody } from "./message.ts";
 import { paletteFrom, type BandTheme } from "./palette.ts";
+import { mix, parseAnsiColor, type Rgb } from "./color.ts";
 
 export const AVATAR = "◆";
 /** An agent that hasn't begun: queued, or its call still being written. */
@@ -31,6 +32,35 @@ export function agentHue(model: string | undefined): string {
 	const rgb = slash > 0 ? providerColor(model!.slice(0, slash)) : undefined;
 	return rgb ? `#${rgb.map((value) => value.toString(16).padStart(2, "0")).join("")}` : AGENT_HUE;
 }
+// Themes don't name the terminal's own background. A tool row's gray is a step
+// up from it on a dark theme and a step down on a light one, so step back.
+const PAGE_STEP = 0.25;
+// How much of the agent's color washes over that, enough to tell its chat from main's.
+const GROUND_TINT = 0.11;
+const BLACK: Rgb = [0, 0, 0];
+const WHITE: Rgb = [255, 255, 255];
+const luminance = ([r, g, b]: Rgb): number => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+/** An agent's color as RGB, from a `#rrggbb` hue or a theme key. */
+function hueRgb(theme: BandTheme, hue: string): Rgb | undefined {
+	const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hue);
+	if (hex) return [parseInt(hex[1]!, 16), parseInt(hex[2]!, 16), parseInt(hex[3]!, 16)];
+	try { return parseAnsiColor(theme.getFgAnsi(hue)); } catch { return undefined; }
+}
+
+/**
+ * What an agent's own chat sits on: about the terminal's background, washed
+ * with the agent's color, so its chat never reads as main's. Undefined when
+ * the theme's colors can't be read back.
+ */
+export function agentGround(theme: BandTheme, model: string | undefined): Rgb | undefined {
+	const palette = paletteFrom(theme);
+	const tint = hueRgb(theme, agentHue(model));
+	if (!palette || !tint) return undefined;
+	const page = mix(palette.base, luminance(palette.base) < 0.5 ? BLACK : WHITE, PAGE_STEP);
+	return mix(page, tint, GROUND_TINT);
+}
+
 /** Between an agent's name, what it is doing and the facts about it. */
 export const GAP: Seg = { text: "  ", color: "dim" };
 

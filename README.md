@@ -833,16 +833,21 @@ are doing on top. Use ↑↓ and Enter, or click either line, to open one; Esc i
 its inspector comes back to the list.
 
 Click a row, a `subagent` row, or pick one in the agents view to open the
-inspector over the full terminal: its task and live transcript, with a message
-box. What the agent was told reads as
-the same conversation rows, not as the text its model reads: `→ reviewer  you
-wrote` or `main asks` over the message, `◆ finder → reviewer  note` in the
-sender's color, and `◆ lead-a reported` for a report from one of its own
-children. Type and press Enter to write
-to it (steered in while it runs, resuming it when it has finished, answering
-it when it asked); ctrl+x twice stops it, Esc or `✕` closes, and its title
-bar copies the task or the report. Main is told what you
-wrote. Status Plus counts every child in its totals.
+inspector over the full terminal: the agent's chat, drawn as Pi draws main's.
+Its task is the first message, then its replies, thinking and tool rows, with
+the same look Tool Display, Copy Blocks and the thinking tail give main, and
+the reply it is writing streams in. A click on a row works as it does in main.
+The chat sits on a wash of the agent's provider color, so it never reads as
+main. Its live row is the title bar, and a message box sits between two rules
+in the agent's color, as Pi's editor does; the top rule carries its context
+fill, tool calls, runs, and whether it is read-only. What other agents, you
+or main told it reads as conversation rows, not as the text its model reads:
+`→ reviewer  you wrote` or `main asks` over the message, `◆ finder → reviewer
+note` in the sender's color, and `◆ lead-a reported` for a report from one
+of its own children. Type and press Enter to write to it (steered in while it
+runs, resuming it when it has finished, answering it when it asked); ctrl+x
+twice stops it, and Esc or `✕` closes. Main is told what you wrote. Status
+Plus counts every child in its totals.
 
 **Reports.** Each finished run that has a final report saves it in full beside
 its session as `<session base>.run-<n>.report.md`, including failed and stopped

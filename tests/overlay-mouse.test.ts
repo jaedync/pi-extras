@@ -52,7 +52,6 @@ const overlays: Record<string, (ui: unknown) => ShownOverlay> = {
 		messages: () => [],
 		send: async () => "sent",
 		stop: async () => undefined,
-		describe: (tool) => tool,
 	}),
 };
 

@@ -220,8 +220,21 @@ function childDisposer(session: AgentSession, unsubscribe: () => void, guard: Re
 	})();
 }
 
+/** The assistant message being streamed, until it ends and joins the session's messages. */
+function watchStreaming(session: AgentSession): { current: () => unknown; stop: () => void } {
+	let current: unknown;
+	const stop = session.subscribe((event) => {
+		const e = event as { type: string; message?: { role?: string } };
+		if ((e.type === "message_start" || e.type === "message_update") && e.message?.role === "assistant") current = e.message;
+		else if (e.type === "message_end" || e.type === "agent_end") current = undefined;
+	});
+	return { current: () => current, stop };
+}
+
 function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined, guard: ReturnType<typeof createChildRateLimitGuard>, record: AgentRecord): ChildHandle {
-	const dispose = childDisposer(session, watchChild(session, hooks, contextWindow, record), guard);
+	const streaming = watchStreaming(session);
+	const unwatch = watchChild(session, hooks, contextWindow, record);
+	const dispose = childDisposer(session, () => { streaming.stop(); unwatch(); }, guard);
 	return {
 		sessionFile: session.sessionFile,
 		async prompt(text) {
@@ -237,6 +250,8 @@ function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: numb
 		abort: () => session.abort(),
 		lastText: () => session.getLastAssistantText(),
 		messages: () => session.messages,
+		streaming: streaming.current,
+		tool: (name) => session.getToolDefinition(name),
 		takeQueued() {
 			const agent = session.agent as { hasQueuedMessages?: () => boolean };
 			if (agent.hasQueuedMessages?.() !== true) return [];

@@ -195,6 +195,16 @@ export class Team {
 		return this.handles.get(name)?.messages() ?? (record ? this.options.messagesFor?.(record) ?? [] : []);
 	}
 
+	/** The reply a live child is writing now; none for a child with no session in this process. */
+	streaming(name: string): unknown {
+		return this.handles.get(name)?.streaming?.();
+	}
+
+	/** A live child's own definition of one of its tools. */
+	tool(name: string, toolName: string): object | undefined {
+		return this.handles.get(name)?.tool?.(toolName);
+	}
+
 	/** Stops a child and everything under it. */
 	async stop(name: string): Promise<void> {
 		const record = this.records.get(name);
