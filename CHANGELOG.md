@@ -2,6 +2,52 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.20.0 - 2026-10-04
+
+### Added
+
+- Subagents: a `stop_subagent` tool. Main can stop a subagent and
+  everything it started, and a child that may start subagents can stop its
+  own. The call returns how the child ended and its last message, so no
+  report follows. A message resumes it later with its context.
+- Subagents: `isolation: "worktree"` gives a child its own git worktree at
+  `<repo>.worktrees/<name>` on branch `subagent/<name>`. It starts from the
+  parent's current files, uncommitted changes included, and links
+  `node_modules`. The parent's files and index stay unchanged. The report
+  counts the changed files and gives the commands to apply the changes and
+  then remove the worktree. Worktrees stay until you remove them.
+- Subagents: a failed or stopped child resumes when main, its parent or you
+  write to it, and it is told first how its last run ended.
+
+### Changed
+
+- Subagents: only one writer at a time works in the shared checkout. A child
+  is a writer unless `readOnly` is true. A second writer is refused with its
+  options: `readOnly`, `isolation: "worktree"`, or wait for the first one's
+  report. A writer's own helpers can share its checkout.
+- Subagents: a child waits only on questions to main or its parent. A
+  question to a peer or to its own subagent returns at once. The answer
+  arrives as a message that wakes the asker, and its report waits until
+  every agent it asked answers or ends, so agents can no longer wait on each
+  other in a loop.
+- Subagents: a child's session leaves memory when the child ends: at once
+  when it failed or was stopped, after two quiet minutes when it finished.
+  A message reloads it from its session file.
+- Subagents: the inspector shows a child as a normal Pi chat on a tinted
+  background, with live replies and clickable tool rows.
+- Subagent rows show the name, time, cost and model before what the child is
+  doing. The context percentage left the row.
+- Rate limit recovery: `maxRecoveries` is 10 per run by default (was 3).
+
+### Fixed
+
+- Subagents: `pi -p` and `--mode json` no longer exit before background
+  children report. Main waits for them, reads their reports, questions and
+  notes, and answers a child's question so that the child can continue.
+- Full-screen sheets, such as the subagent inspector, keep their background
+  color after styled text that ends with a combined reset code such as
+  `ESC[0;3m`.
+
 ## 0.19.3 - 2026-10-02
 
 ### Fixed
