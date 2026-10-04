@@ -229,6 +229,23 @@ export class MainMail {
 		this.post({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } }, wakes);
 	}
 
+	/** Whether mail that wakes main waits to be handed over. */
+	waiting(): boolean {
+		return this.outbox.some((item) => item.wakes);
+	}
+
+	/**
+	 * Everything not yet handed to Pi, reports still batched or held included,
+	 * taken out to be appended at a boundary instead (headless.ts). `wakes` says
+	 * whether any of it asks main for a turn.
+	 */
+	takeAll(): { messages: OutgoingMessage[]; wakes: boolean } {
+		for (const group of [...this.held.keys()]) this.release(group, false);
+		this.flush();
+		const taken = this.outbox.splice(0);
+		return { messages: taken.map((item) => item.message), wakes: taken.some((item) => item.wakes) };
+	}
+
 	/** Hands Pi what waits, oldest first, for as long as main can take it. */
 	retry(): void {
 		if (this.retryTimer) clearTimeout(this.retryTimer);

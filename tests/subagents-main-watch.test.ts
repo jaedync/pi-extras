@@ -4,14 +4,14 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { watchMain } from "../lib/subagents/main-watch.ts";
 
 /** watchMain over a fake event bus and clock, with a mail that records what it was asked. */
-function harness() {
+function harness(hold?: () => Promise<{ entries: never[]; wakes: boolean } | undefined>) {
 	const handlers = new Map<string, Array<(event: object, ctx: object) => unknown>>();
 	const pi = { on: (name: string, handler: (event: object, ctx: object) => unknown) => { handlers.set(name, [...(handlers.get(name) ?? []), handler]); } };
 	let time = 0;
 	let idle = true;
 	const calls: string[] = [];
 	const mail = { retry: () => calls.push("retry"), owed: () => false, remind: () => calls.push("remind"), answered: () => calls.push("answered") };
-	const watch = watchMain(pi as never, () => mail as never, () => time);
+	const watch = watchMain(pi as never, () => mail as never, () => time, hold);
 	const emit = async (name: string, event: object = {}, ctx: object = {}) => {
 		const results = [];
 		for (const handler of handlers.get(name) ?? []) results.push(await handler({ type: name, ...event }, ctx));
@@ -121,5 +121,26 @@ test("input from long ago doesn't hold mail after every later compaction", async
 	h.at(400_000);
 	await h.emit("session_compact", { reason: "manual" });
 	h.at(400_100);
+	assert.equal(h.route(), "wake");
+});
+
+test("a headless hold keeps main from settling, holds its mail, and hands the mail over as the check's entries", async () => {
+	let release: (handover: { entries: never[]; wakes: boolean } | undefined) => void = () => undefined;
+	let routeDuringHold: string | undefined;
+	const h = harness(() => new Promise((resolve) => { routeDuringHold = h.route(); release = resolve as never; }));
+	h.idle(false);
+	await h.emit("agent_start");
+	const settling = h.emit("agent_before_settle", { context: {} });
+	await sleep(1);
+	assert.equal(routeDuringHold, "hold", "mail waits to go in as entries, not as a message Pi might not run");
+	const report = { type: "custom_message", customType: "subagent-report", content: "r", display: true, details: {} };
+	release({ entries: [report as never], wakes: true });
+	assert.deepEqual(await settling, [{ entries: [report], continue: true }], "one more turn to read it");
+	await h.emit("agent_start");
+	const quiet = h.emit("agent_before_settle", { context: {} });
+	await sleep(1);
+	release({ entries: [], wakes: false });
+	assert.deepEqual(await quiet, [undefined], "nothing more: main settles");
+	h.idle(true);
 	assert.equal(h.route(), "wake");
 });

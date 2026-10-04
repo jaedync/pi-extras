@@ -860,6 +860,12 @@ message still arrives and points to the session file as before.
 **Limits.** At most `maxConcurrent` children run at once; the rest queue. A
 child can't start children of its own by default.
 
+**Headless runs.** `pi -p` and `--mode json` end when main settles, so main
+waits there for its background children. Their reports, questions and notes
+go into main's context as it would otherwise settle, with one more turn to
+read them; a child's question to main gets main's answer and the child goes
+on. Main settles once no child is working and nothing waits for it.
+
 **Restoration.** Children survive `/reload`, restarts and crashes. An
 `index.json` beside their sessions keeps each child's name, settings, state and
 run count, so `message` reaches them again after a restart. Children that a

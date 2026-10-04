@@ -13,6 +13,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { MainMail, Route } from "./deliver.ts";
+import type { Handover } from "./headless.ts";
 
 /**
  * How long mail waits for a prompt the user sent while main looked idle.
@@ -53,9 +54,16 @@ function lastSaid(ctx: { sessionManager?: { getBranch(): readonly unknown[] } })
 	}
 }
 
-export function watchMain(pi: Pick<ExtensionAPI, "on">, mail: () => MainMail | null | undefined, now: () => number = Date.now): MainWatch {
+/**
+ * `hold` runs at main's settle check before anything else. Headless runs use
+ * it to wait for their children: Pi exits once main settles, so a report that
+ * comes later would be lost. Mail waits meanwhile and is handed over as the
+ * check's entries, with a turn to read it when it wakes main.
+ */
+export function watchMain(pi: Pick<ExtensionAPI, "on">, mail: () => MainMail | null | undefined, now: () => number = Date.now, hold?: () => Promise<Handover | undefined>): MainWatch {
 	let running = false;
 	let settling = false;
+	let holding = false;
 	let inputAt = Number.NEGATIVE_INFINITY;
 	let stoppedRun = false;
 	/** Whether this run reached the settle check; Pi skips it only for a run that was stopped. */
@@ -93,6 +101,12 @@ export function watchMain(pi: Pick<ExtensionAPI, "on">, mail: () => MainMail | n
 	});
 	pi.on("agent_before_settle", async (event) => {
 		checked = true;
+		if (hold) {
+			holding = true;
+			let handover: Handover | undefined;
+			try { handover = await hold(); } finally { holding = false; }
+			if (handover && handover.entries.length > 0) return { entries: [...handover.entries], continue: handover.wakes };
+		}
 		if (mail()?.owed(event.context)) return { continue: true };
 		settling = true;
 		return undefined;
@@ -128,6 +142,8 @@ export function watchMain(pi: Pick<ExtensionAPI, "on">, mail: () => MainMail | n
 	pi.on("session_tree", async () => retrySoon());
 	return {
 		route(ctx) {
+			// Headless main waiting on its children takes their mail as the settle check's entries.
+			if (holding) return "hold";
 			if (ctx.isIdle()) return now() - inputAt < INPUT_GRACE_MS ? "hold" : "wake";
 			return running && !settling ? "queue" : "hold";
 		},

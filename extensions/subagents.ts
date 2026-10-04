@@ -43,6 +43,7 @@ import { ChildIndex, legacyRecords, recoverRoster } from "../lib/subagents/resto
 import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
+import { awaitChildren, isHeadless } from "../lib/subagents/headless.ts";
 import { watchMotion } from "../lib/extras-config.ts";
 
 const markdown = () => sdk.getMarkdownTheme();
@@ -113,7 +114,9 @@ export default function subagents(pi: ExtensionAPI) {
 	const widget = createAgentsWidget(motion);
 	let mainRun = 0;
 	pi.on("agent_start", async () => { mainRun++; });
-	const mainWatch = watchMain(pi, () => state?.mail);
+	// Headless runs end once main settles; main waits for its children there instead (headless.ts).
+	let headless = false;
+	const mainWatch = watchMain(pi, () => state?.mail, Date.now, async () => (headless && state ? awaitChildren(state.team, state.mail) : undefined));
 	let inspectorUi: InspectorHost | null = null;
 	let inspectorCwd = process.cwd();
 	let inspected: ShownOverlay | undefined;
@@ -393,6 +396,7 @@ export default function subagents(pi: ExtensionAPI) {
 		await state?.close();
 		state = null;
 		backgroundCtx = undefined;
+		headless = isHeadless(ctx.mode);
 		// Two subagent systems in one session would split the model's attention and the user's.
 		if (foreign("subagent")) {
 			ctx.ui.notify("pi-extras Subagents is off: another extension already provides a subagent tool. Remove one of them.", "warning");

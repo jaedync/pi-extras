@@ -357,6 +357,40 @@ test("the real parent SDK reload rebuilds its roster, resumes running children, 
 	}
 });
 
+test("a headless parent waits at its settle check for a background child and reads its report before the prompt returns", { timeout: 20_000 }, async () => {
+	const { fileURLToPath } = await import("node:url");
+	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
+	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
+	runtime.registerNativeProvider(faux.provider);
+	const model = faux.getModel("cheap");
+	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false } });
+	const loader = new sdk.DefaultResourceLoader({ cwd: scratch, agentDir, settingsManager,
+		noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+		additionalExtensionPaths: [fileURLToPath(new URL("../extensions/subagents.ts", import.meta.url))] });
+	await loader.reload();
+	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model,
+		resourceLoader: loader, settingsManager, sessionManager: sdk.SessionManager.create(scratch, join(scratch, "headless-parents")) });
+	// Parent and child share the faux queue, in whatever order they ask; each answer looks at who is asking.
+	const said = (context: any) => JSON.stringify(context.messages);
+	const answer = (context: any) => {
+		if (said(context).includes("You are the subagent")) return ai.fauxAssistantMessage("Child report: 3 files.");
+		if (said(context).includes("Child report: 3 files.")) return ai.fauxAssistantMessage("Main read the report.");
+		if (said(context).includes("Started scout")) return ai.fauxAssistantMessage("The scout is on it.");
+		return ai.fauxAssistantMessage(ai.fauxToolCall("subagent", { name: "scout", task: "Count the files", model: "faux/cheap" }));
+	};
+	faux.setResponses([answer, answer, answer, answer]);
+	try {
+		await session.bindExtensions({ mode: "print", onError: (error: unknown) => { throw error; } } as never);
+		await session.prompt("Send a scout");
+		const last = session.messages.filter((m: any) => m.role === "assistant").at(-1) as any;
+		assert.equal(last.content.find((block: any) => block.type === "text")?.text, "Main read the report.");
+		assert.ok(session.messages.some((m: any) => m.role === "custom" && m.customType === "subagent-report"), "the report is in main's context");
+	} finally {
+		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+		session.dispose();
+	}
+});
+
 test.after(() => rmSync(scratch, { recursive: true, force: true }));
 
 test("with another extension's subagent tool, Subagents stands down entirely", { timeout: 20_000 }, async () => {
