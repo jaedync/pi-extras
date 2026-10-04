@@ -6,10 +6,11 @@ import { awaitChildren, isHeadless } from "../lib/subagents/headless.ts";
 /** A team whose live list and change listeners the test drives, and mail that records what was taken. */
 function fakes() {
 	let live: unknown[] = [{ name: "scout" }];
+	let stopping = false;
 	const listeners = new Set<(record: null) => void>();
 	let waiting = false;
 	const taken: string[] = [];
-	const team = { live: () => live as never, onChange: (listener: (record: null) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+	const team = { live: () => live as never, stopping: () => stopping, onChange: (listener: (record: null) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
 	const mail = {
 		waiting: () => waiting,
 		takeAll: () => {
@@ -20,6 +21,8 @@ function fakes() {
 	return {
 		team, mail, taken, listeners,
 		finish: () => { live = []; for (const listener of listeners) listener(null); },
+		stopStarts: () => { live = []; stopping = true; for (const listener of listeners) listener(null); },
+		stopEnds: () => { stopping = false; for (const listener of listeners) listener(null); },
 		mailArrives: () => { waiting = true; },
 	};
 }
@@ -47,4 +50,15 @@ test("mail for main ends the wait while children still work, so a child asking m
 	const result = await handover;
 	assert.equal(result.wakes, true);
 	assert.deepEqual(f.taken, ["all"]);
+});
+
+test("a stop still under way keeps main waiting, so the stopped child's report is not left behind", async () => {
+	const f = fakes();
+	let settled = false;
+	const handover = awaitChildren(f.team, f.mail).then((value) => { settled = true; return value; });
+	f.stopStarts();
+	await sleep(20);
+	assert.equal(settled, false, "the record says stopped, but its report is not in the mail yet");
+	f.stopEnds();
+	assert.equal((await handover).entries.length, 1);
 });

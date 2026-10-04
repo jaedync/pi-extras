@@ -227,3 +227,16 @@ test("a sibling's note can't resume a failed child; it says who can", async () =
 	assert.match(!note.ok ? note.error : "", /fails has failed; only main or the user can resume it/);
 	await h.team.close();
 });
+
+test("the team says a stop is under way until the stopped child's report is handed up", async () => {
+	const h = harness();
+	const name = h.spawn("Survey everything");
+	await tick();
+	const stopping = h.team.stop(name);
+	assert.equal(h.team.get(name)?.state, "stopped");
+	assert.equal(h.team.stopping(), true, "its abort is still running");
+	await stopping;
+	assert.equal(h.team.stopping(), false);
+	assert.equal(h.main.filter((delivery) => delivery.kind === "report").length, 1);
+	await h.team.close();
+});

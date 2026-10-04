@@ -32,13 +32,14 @@ export interface Handover {
 	readonly wakes: boolean;
 }
 
-export function awaitChildren(team: Pick<Team, "live" | "onChange">, mail: Pick<MainMail, "waiting" | "takeAll">): Promise<Handover> {
+export function awaitChildren(team: Pick<Team, "live" | "onChange" | "stopping">, mail: Pick<MainMail, "waiting" | "takeAll">): Promise<Handover> {
 	return new Promise((resolve) => {
 		let stop: (() => void) | undefined;
 		let done = false;
 		const timer = setInterval(() => check(), LOOK_MS);
 		const check = () => {
-			if (done || (team.live().length > 0 && !mail.waiting())) return;
+			// A stopped record is no longer live before its report reaches the mail.
+			if (done || ((team.live().length > 0 || team.stopping()) && !mail.waiting())) return;
 			done = true;
 			stop?.();
 			clearInterval(timer);

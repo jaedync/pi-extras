@@ -96,6 +96,8 @@ export class Team {
 	private readonly owesMain = new Set<string>();
 	/** Who owes each child an answer to a question that did not block it; their message to it wakes it. */
 	private readonly owed = new Map<string, ReadonlySet<string>>();
+	/** Stops between marking the record stopped and handing its report up. */
+	private readonly ending = new Set<string>();
 	/** Children main resumed from idle with a question: only that answer can stand in for the run's report. */
 	private readonly resumedToAnswer = new Set<string>();
 	/** Tool calls a child had finished when it gave that answer. */
@@ -289,11 +291,17 @@ export class Team {
 		this.resumePrompts.delete(name);
 		for (const question of this.questions.get(name) ?? []) question.reject(new Error("stopped"));
 		const handle = this.handles.get(name);
+		this.ending.add(name);
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.runText(name) });
 		await handle?.abort().catch(() => undefined);
 		this.patch(name, { report: this.runText(name) });
 		this.finish(name);
 		return this.records.get(name);
+	}
+
+	/** Whether a stop is still aborting a child whose report has not been handed up yet. */
+	stopping(): boolean {
+		return this.ending.size > 0;
 	}
 
 	/** Whether `name` is `ancestor` or sits anywhere under it. */
@@ -516,6 +524,7 @@ export class Team {
 
 	/** Hands the report up and frees the slot. */
 	private finish(name: string): void {
+		this.ending.delete(name);
 		const record = saveReport(this.records.get(name)!, this.options.warn ?? console.warn);
 		this.runStarts.delete(name);
 		this.put(record);
