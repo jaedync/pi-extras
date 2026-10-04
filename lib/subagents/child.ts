@@ -4,7 +4,7 @@
  * desktop control, background jobs), tool-owning extensions, Cache Compaction
  * and a quota guard. Status bars, voice and other UI extensions stay out.
  */
-import type { AgentSession, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, InlineExtension, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,10 @@ export const CHILD_TOOL_EXCLUDE: readonly string[] = [
 	"shell_job_start", "shell_job", "computer_use", "windows_use", "usage", "codemode", "tool_search",
 ];
 const WRITE_TOOLS = new Set(["bash", "edit", "write"]);
+/** The calls the edit guard checks; `bash` can change files too, but its targets can't be read from its input. */
+const EDIT_TOOLS = new Set(["edit", "write"]);
+const EDIT_GUARD_NAME = "subagent-edit-guard";
+const EDIT_GUARD_PATH = `<inline:${EDIT_GUARD_NAME}>`;
 const READ_TOOLS = ["read", "grep", "find", "ls"];
 const SHUTDOWN_TIMEOUT_MS = 2_000;
 export const CHILD_CACHE_COMPACTION_PATH = fileURLToPath(new URL("../../extensions/cache-compaction.ts", import.meta.url));
@@ -107,6 +111,22 @@ export interface LauncherDeps {
 	toolsFor(record: AgentRecord): { tools: string[]; customTools: ToolDefinition[]; extensionPaths?: readonly string[] };
 	instructions(record: AgentRecord): string;
 	onExtensionError?(error: unknown): void;
+	/** Before each `edit` or `write` call: takes the child's workspace lock, or says why it can't edit now. */
+	claimEdit?(name: string): string | undefined;
+}
+
+/** Blocks, before it runs, an edit the child may not make; the reason is the call's result. */
+export function editGuard(check: () => string | undefined): InlineExtension {
+	return {
+		name: EDIT_GUARD_NAME,
+		factory(pi) {
+			pi.on("tool_call", (event) => {
+				if (!EDIT_TOOLS.has(event.toolName)) return undefined;
+				const reason = check();
+				return reason ? { block: true, reason } : undefined;
+			});
+		},
+	};
 }
 
 export function createLauncher(deps: LauncherDeps): Launcher {
@@ -132,10 +152,11 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				// parent's messages to the child, even if the extension is filtered out afterwards.
 				noExtensions: true, additionalExtensionPaths: [...new Set([...extensionPaths, CHILD_CACHE_COMPACTION_PATH])],
 				appendSystemPrompt: [deps.instructions(record)],
-				extensionFactories: [guard.extension],
+				extensionFactories: [guard.extension, ...(deps.claimEdit ? [editGuard(() => deps.claimEdit!(record.name))] : [])],
 				extensionsOverride: (base) => ({
 					...base,
-					extensions: base.extensions.filter((extension) => extension.path === CHILD_GUARD_PATH || extension.path === CHILD_CACHE_COMPACTION_PATH || [...extension.tools.keys()].some((name) => wanted.has(name))),
+					extensions: base.extensions.filter((extension) => [CHILD_GUARD_PATH, EDIT_GUARD_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
+						|| [...extension.tools.keys()].some((name) => wanted.has(name))),
 				}),
 			});
 			await loader.reload();

@@ -872,10 +872,16 @@ The call returns how it ended and its last message, so no report follows; a
 message resumes it later. `/subagents stop <name>`, `stop all` and ctrl+x in
 the inspector stop children for you, and then main gets the stopped report.
 
-**Writers.** Only one unrelated child can write in the shared checkout at a
-time. Its own helpers can share it. Other children must use `readOnly: true`,
-wait for its report, or use `isolation: "worktree"`. Worktree isolation needs a
-git repository. It copies the parent's current files, including uncommitted
+**Writers.** The first child to edit files in the shared checkout holds it
+until its run ends. It keeps it while it waits on its own subagents, and lets
+it go when it finishes, fails, is stopped or is interrupted. Its ancestors and
+its own subagents can edit beside it. Any other child's `edit` or `write` call
+there is refused before it runs, with a message that names the holder. That
+child can then do work that does not edit files, or ask its parent for a
+worktree. Main never takes or checks the lock. `bash` is not covered, so a
+child's shell commands can still change files. Use `isolation: "worktree"` for
+parallel edits. Each worktree has its own lock, shared by the helpers that
+inherit it. Worktree isolation needs a git repository. It copies the parent's current files, including uncommitted
 changes and untracked files that Git does not ignore, into a separate checkout.
 The parent keeps its files and index unchanged. The report gives the worktree,
 branch, change counts, and commands to apply changes and remove it after merging.

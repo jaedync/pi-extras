@@ -34,8 +34,9 @@ test("the subagent tool forwards isolation and states the writer rule", async (t
 		return { ok: false, error: "spawn fixture" };
 	});
 	assert.match(tool.description, /^Start a subagent/);
-	assert.match(tool.description, /Only one writer at a time can work in the shared checkout, and a child is a writer unless readOnly is true\. Set readOnly: true/);
-	assert.match(tool.description, /Set readOnly: true for research, review/);
+	assert.match(tool.description, /The first child to edit files in the shared checkout holds it until its run ends/);
+	assert.match(tool.description, /Use isolation: "worktree" for parallel edits/);
+	assert.doesNotMatch(tool.description, /a child is a writer unless readOnly/);
 	await assert.rejects((tool.execute as any)("id", { task: "Write a file", isolation: "worktree" }, undefined, undefined), /spawn fixture/);
 	await team.close();
 });
@@ -91,7 +92,7 @@ test("stop_subagent with all stops every live agent you started, and says when t
 	const stop = stopTool({ team } as never, "main");
 	assert.match((await (stop.execute as any)("id", { name: "all" }, undefined, undefined)).content[0].text, /No subagents of yours are running\./);
 	await (tool.execute as any)("id", { task: "one", name: "one" }, undefined, undefined);
-	await (tool.execute as any)("id", { task: "two", name: "two", readOnly: true }, undefined, undefined);
+	await (tool.execute as any)("id", { task: "two", name: "two" }, undefined, undefined);
 	await tick();
 	await tick();
 	const result = await (stop.execute as any)("id", { name: "all" }, undefined, undefined);

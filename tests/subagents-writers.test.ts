@@ -6,6 +6,8 @@ import { NO_USAGE, type AgentRecord, type SpawnRequest } from "../lib/subagents/
 
 const request = (patch: Partial<SpawnRequest> = {}): SpawnRequest => ({ name: "scout", task: "Write a file", parent: "main", model: "test/model", readOnly: false, fork: false, blocking: false, ...patch });
 const record = (patch: Partial<AgentRecord> = {}): AgentRecord => ({ ...request(), name: "scout", depth: 1, state: "idle", activity: null, runs: 1, createdAt: 1, toolCalls: 0, usage: NO_USAGE, ...patch });
+const worktree = (name: string) => ({ path: `/tmp/repo.worktrees/${name}`, branch: `subagent/${name}`, base: "a".repeat(40) });
+const LOCKED = /^scout is editing files in this checkout until its run ends\. Do work that does not edit files, or tell main you need a worktree \(isolation: "worktree"\)\.$/;
 
 function harness(maxConcurrent = 4) {
 	const finishes = new Map<string, () => void>();
@@ -18,66 +20,107 @@ function harness(maxConcurrent = 4) {
 	return { team, finishes };
 }
 
-test("a second shared writer is refused even when the first is queued", async () => {
-	const { team } = harness(0);
+test("two children that may edit start side by side; the lock waits for the first edit", async () => {
+	const { team } = harness();
 	assert.ok(team.spawn(request()).ok);
-	const refused = team.spawn(request({ name: "other" }));
-	assert.equal(refused.ok, false);
-	assert.match(!refused.ok ? refused.error : "", /scout is already writing.*isolation: "worktree".*readOnly.*report/);
-	assert.equal(team.get("other"), undefined);
+	assert.ok(team.spawn(request({ name: "other" })).ok, "no refusal at spawn any more");
+	await tick();
+	assert.equal(team.claimEdit("scout"), undefined, "the first edit takes the free lock");
+	assert.equal(team.claimEdit("scout"), undefined, "its holder edits again");
+	assert.match(team.claimEdit("other") ?? "", LOCKED);
 	await team.close();
 });
 
 for (const state of ["queued", "starting", "running", "asking", "waiting"] as const) {
-	test(`a ${state} writer owns the shared checkout`, async () => {
+	test(`a ${state} holder keeps the lock`, async () => {
 		const { team } = harness();
-		team.restore([record({ state })]);
-		assert.equal(team.spawn(request({ name: "other" })).ok, false);
-		assert.ok(team.spawn(request({ name: "reader", readOnly: true })).ok);
+		team.restore([record({ state: "running" }), record({ name: "other", state: "running" })]);
+		assert.equal(team.claimEdit("scout"), undefined);
+		team.markRecovery("scout", { state });
+		assert.match(team.claimEdit("other") ?? "", LOCKED);
 		await team.close();
 	});
 }
 
-test("a completed writer frees the checkout for another writer", async () => {
+for (const state of ["idle", "failed", "stopped", "interrupted"] as const) {
+	test(`a holder that becomes ${state} frees the lock`, async () => {
+		const { team } = harness();
+		team.restore([record({ state: "running" }), record({ name: "other", state: "running" })]);
+		assert.equal(team.claimEdit("scout"), undefined);
+		team.markRecovery("scout", { state });
+		assert.equal(team.claimEdit("other"), undefined);
+		team.markRecovery("scout", { state: "running" });
+		assert.match(team.claimEdit("scout") ?? "", /^other is editing files in this checkout/, "resuming does not take the lock back");
+		await team.close();
+	});
+}
+
+test("a finished run frees the lock for another child", async () => {
 	const { team, finishes } = harness();
 	assert.ok(team.spawn(request()).ok);
+	assert.ok(team.spawn(request({ name: "other" })).ok);
 	await tick();
+	assert.equal(team.claimEdit("scout"), undefined);
 	finishes.get("scout")!();
 	await team.whenDone("scout");
-	assert.ok(team.spawn(request({ name: "other" })).ok);
+	assert.equal(team.claimEdit("other"), undefined);
 	await team.close();
 });
 
-test("writing siblings are not ancestors or descendants", async () => {
+test("a holder's own helpers edit beside it; its siblings' helpers do not", async () => {
 	const { team } = harness();
-	assert.ok(team.spawn(request()).ok);
-	assert.ok(team.spawn(request({ name: "first", parent: "scout" })).ok);
-	assert.equal(team.spawn(request({ name: "second", parent: "scout" })).ok, false);
+	team.restore([
+		record({ state: "running" }),
+		record({ name: "helper", parent: "scout", depth: 2, state: "running" }),
+		record({ name: "nested", parent: "helper", depth: 3, state: "running" }),
+		record({ name: "other", state: "running" }),
+		record({ name: "cousin", parent: "other", depth: 2, state: "running" }),
+	]);
+	assert.equal(team.claimEdit("scout"), undefined);
+	assert.equal(team.claimEdit("helper"), undefined);
+	assert.equal(team.claimEdit("nested"), undefined);
+	assert.match(team.claimEdit("cousin") ?? "", /^scout is editing files in this checkout .* tell other you need a worktree/);
 	await team.close();
 });
 
-test("read-only and worktree records never count as shared writers", async () => {
+test("an ancestor that edits after its helper takes the lock, so the helper ending does not free it", async () => {
 	const { team } = harness();
-	team.restore([record({ name: "isolated", state: "running", worktree: { path: "/tmp/isolated", branch: "subagent/isolated", base: "a".repeat(40) } })]);
-	assert.ok(team.spawn(request()).ok);
-	assert.ok(team.spawn(request({ name: "reader", readOnly: true })).ok);
+	team.restore([
+		record({ state: "running" }),
+		record({ name: "helper", parent: "scout", depth: 2, state: "running" }),
+		record({ name: "other", state: "running" }),
+	]);
+	assert.equal(team.claimEdit("helper"), undefined);
+	assert.equal(team.claimEdit("scout"), undefined);
+	team.markRecovery("helper", { state: "idle" });
+	assert.match(team.claimEdit("other") ?? "", LOCKED);
 	await team.close();
 });
 
-test("a writer can start descendants and resume an ancestor beside its live descendant", async () => {
+test("each worktree has its own lock, shared by the helpers that inherit it", async () => {
 	const { team } = harness();
-	assert.ok(team.spawn(request()).ok);
-	assert.ok(team.spawn(request({ name: "helper", parent: "scout" })).ok);
-	assert.ok(team.spawn(request({ name: "nested", parent: "helper" })).ok);
-	await tick();
-	team.markRecovery("scout", { state: "idle" });
-	assert.ok((await team.send("main", "scout", "Continue")).ok);
-	assert.ok((await team.send("main", "scout", "Keep going")).ok);
+	team.restore([
+		record({ state: "running" }),
+		record({ name: "isolated", state: "running", worktree: worktree("isolated") }),
+		record({ name: "first", parent: "isolated", depth: 2, state: "running", worktree: worktree("isolated") }),
+		record({ name: "second", parent: "isolated", depth: 2, state: "running", worktree: worktree("isolated") }),
+		record({ name: "apart", state: "running", worktree: worktree("apart") }),
+	]);
+	assert.equal(team.claimEdit("scout"), undefined);
+	assert.equal(team.claimEdit("first"), undefined, "the shared checkout's holder does not lock a worktree");
+	assert.match(team.claimEdit("second") ?? "", /^first is editing files in this worktree until its run ends\. .* tell isolated you need a worktree/);
+	assert.equal(team.claimEdit("apart"), undefined);
+	await team.close();
+});
+
+test("an agent the team does not know cannot take a lock", async () => {
+	const { team } = harness();
+	assert.match(team.claimEdit("ghost") ?? "", /No agent named ghost/);
 	await team.close();
 });
 
 for (const held of [true, false]) {
-	test(`a ${held ? "held" : "released"} idle writer cannot resume beside another writer`, async () => {
+	test(`a ${held ? "held" : "released"} idle child resumes beside another live child`, async () => {
 		const { team, finishes } = harness();
 		if (held) {
 			assert.ok(team.spawn(request()).ok);
@@ -86,23 +129,18 @@ for (const held of [true, false]) {
 			await team.whenDone("scout");
 		} else team.restore([record()]);
 		assert.ok(team.spawn(request({ name: "other" })).ok);
-		const before = team.get("scout");
-		const refused = await team.send("main", "scout", "Continue", { expectReply: true });
-		assert.equal(refused.ok, false);
-		assert.match(!refused.ok ? refused.error : "", /other is already writing/);
-		assert.equal(team.get("scout"), before, "a refused resume must not replace the record");
+		const resumed = await team.send("main", "scout", "Continue", { expectReply: true });
+		assert.ok(resumed.ok, !resumed.ok ? resumed.error : "");
 		await team.close();
 	});
 }
 
 for (const state of ["failed", "stopped", "interrupted"] as const) {
-	test(`a ${state} shared writer cannot resume beside a live writer`, async () => {
+	test(`a ${state} child resumes beside a live child`, async () => {
 		const { team } = harness();
-		team.restore([record({ state, answeredMain: true })]);
+		team.restore([record({ state })]);
 		assert.ok(team.spawn(request({ name: "other" })).ok);
-		const before = team.get("scout");
-		assert.equal((await team.send("main", "scout", "Continue")).ok, false);
-		assert.equal(team.get("scout"), before);
+		assert.ok((await team.send("main", "scout", "Continue")).ok);
 		await team.close();
 	});
 }

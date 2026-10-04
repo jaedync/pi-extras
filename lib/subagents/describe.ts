@@ -11,7 +11,7 @@ export function subagentDescription(options: { models: string; defaultModel: str
 		"",
 		"Delegate bounded work that benefits from its own context, a different model's strengths, or an independent second opinion. Do it yourself when a few tool calls would. Start several at once only for work that is truly independent, and prefer one well-briefed subagent over many.",
 		"",
-		'Only one writer at a time can work in the shared checkout, and a child is a writer unless readOnly is true. Set readOnly: true for research, review and other work that does not edit files. For a second writer, or to leave your checkout unchanged, use isolation: "worktree": a separate git checkout of your current files, uncommitted changes included, whose report says how to apply its changes.',
+		'The first child to edit files in the shared checkout holds it until its run ends; another child\'s edits there are refused meanwhile, though its own subagents can edit beside it. Use isolation: "worktree" for parallel edits, or to leave your checkout unchanged: a separate git checkout of your current files, uncommitted changes included, whose report says how to apply its changes. Set readOnly: true for research and review.',
 		"",
 		"Each run has a time budget (maxMinutes) and maybe a cost budget (maxCost, US dollars); the defaults come from config. A run over either is stopped with its subagents, and its report says so. Raise them for long work; a message resumes it with a fresh budget.",
 		"",

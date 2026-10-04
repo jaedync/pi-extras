@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
 import { budgetError, RunBudgets, type RunLimits } from "./budget.ts";
+import { EditLocks } from "./edit-lock.ts";
 import { saveReport } from "./reports.ts";
 import { createWorktree, workspaceError } from "./worktree.ts";
 import {
@@ -104,6 +105,7 @@ export class Team {
 	private readonly stoppedByParent = new Set<string>();
 	private readonly releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly budgets: RunBudgets;
+	private readonly locks = new EditLocks(this);
 	private readonly now: () => number;
 	private readonly options: TeamOptions;
 
@@ -152,8 +154,6 @@ export class Team {
 		if (badBudget) return { ok: false, error: badBudget };
 		const maxMinutes = request.maxMinutes ?? this.options.runBudget?.minutes;
 		const maxCost = request.maxCost ?? this.options.runBudget?.cost;
-		const conflict = request.isolation === "worktree" ? undefined : this.sharedWriterError({ name, parent: request.parent, readOnly: request.readOnly, worktree: parent?.worktree });
-		if (conflict) return { ok: false, error: conflict };
 		let worktree = parent?.worktree;
 		if (request.isolation === "worktree") {
 			const cwd = parent?.worktree?.path ?? this.options.cwd;
@@ -178,13 +178,9 @@ export class Team {
 		return { ok: true, record: this.records.get(name)! };
 	}
 
-	/** A writer coordinates its own helpers; unrelated writers must use separate checkouts. */
-	private sharedWriterError(candidate: Pick<AgentRecord, "name" | "parent" | "readOnly" | "worktree">): string | undefined {
-		if (candidate.readOnly || candidate.worktree) return undefined;
-		const writer = this.live().find((record) => !record.readOnly && !record.worktree
-			&& record.name !== candidate.name && record.name !== candidate.parent
-			&& !this.under(candidate.parent, record.name) && !this.under(record.name, candidate.name));
-		return writer ? `${writer.name} is already writing in this checkout. Start this one with isolation: "worktree", make it readOnly, or wait for ${writer.name}'s report.` : undefined;
+	/** Before a child's `edit` or `write` call: takes its workspace's lock, or says who holds it (edit-lock.ts). */
+	claimEdit(name: string): string | undefined {
+		return this.locks.claim(name);
 	}
 
 	/** Resolves once the child reaches idle, failed or stopped. */
@@ -337,6 +333,7 @@ export class Team {
 	private put(record: AgentRecord): void {
 		this.records.set(record.name, record);
 		this.budgets.follow(record.name, record.state);
+		this.locks.follow(record);
 		for (const listener of this.listeners) listener(record);
 	}
 
@@ -598,10 +595,8 @@ export class Team {
 		// An ended run's session is on disk, so its parent or the user can take it up again; a peer can't.
 		const ended = target.state === "failed" || target.state === "stopped";
 		if (ended && !(from === target.parent || from === USER)) return { ok: false, error: `${to} has ${target.state}; only ${target.parent} or the user can resume it.` };
-		if (resumes && !LIVE_STATES.has(target.state)) {
-			const error = (target.worktree ? workspaceError(target.worktree.path) : undefined) ?? this.sharedWriterError(target);
-			if (error) return { ok: false, error };
-		}
+		const missing = resumes && !LIVE_STATES.has(target.state) && target.worktree ? workspaceError(target.worktree.path) : undefined;
+		if (missing) return { ok: false, error: missing };
 		this.forgetAnswer(to);
 		const handle = this.handles.get(to);
 		if ((target.state === "running" || target.state === "asking") && handle) {
