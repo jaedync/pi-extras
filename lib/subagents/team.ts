@@ -84,6 +84,8 @@ export class Team {
 	private readonly queue: string[] = [];
 	/** Children that owe main an answer; their next message to main wakes it. */
 	private readonly owesMain = new Set<string>();
+	/** Who owes each child an answer to a question that did not block it; their message to it wakes it. */
+	private readonly owed = new Map<string, ReadonlySet<string>>();
 	/** Children main resumed from idle with a question: only that answer can stand in for the run's report. */
 	private readonly resumedToAnswer = new Set<string>();
 	/** Tool calls a child had finished when it gave that answer. */
@@ -183,11 +185,15 @@ export class Team {
 			if (!options.expectReply) return { ok: false, error: `${to} is waiting for your report; put this in it instead.` };
 			this.patch(from, { blocking: false });
 		}
+		// A child waits only on main and its parent: they never wait on it, so no loop of waiting
+		// agents can form. Anyone else answers by message, which wakes it.
+		const waits = options.expectReply === true && (to === MAIN || to === asker?.parent);
 		const body = options.expectReply ? questionText(from, text) : noteText(from, text);
 		const said = `${options.expectReply ? "Question" : "Message"} from ${from}: ${text}`;
-		if (options.expectReply && from !== MAIN && from !== USER) {
-			const loop = this.waitLoop(from, to);
-			if (loop) return { ok: false, error: loop };
+		if (options.expectReply && !waits && asker) {
+			const result = this.deliverToChild(from, to, body, true, said, options.automatic);
+			if (result.ok) this.owed.set(from, new Set([...(this.owed.get(from) ?? []), to]));
+			return result;
 		}
 		// Main never blocks: its question is delivered, and the answer wakes it later.
 		if (from === MAIN && options.expectReply) {
@@ -208,7 +214,8 @@ export class Team {
 			this.options.deliverToMain(options.expectReply ? { kind: "question", from, text } : answering ? { kind: "reply", from, text } : { kind: "note", from, text });
 			result = { ok: true, delivered: "main" };
 		} else {
-			result = this.deliverToChild(from, to, body, options.expectReply === true, said, options.automatic);
+			const answers = this.payOwed(to, from);
+			result = this.deliverToChild(from, to, body, options.expectReply === true || answers, said, options.automatic);
 			// Main should never be surprised by work the user asked for directly.
 			if (result.ok && from === USER) this.options.deliverToMain({ kind: "relay", from, to, text, answered: false });
 		}
@@ -397,8 +404,11 @@ export class Team {
 
 	private settle(name: string, report: string | undefined): void {
 		const hasLiveChildren = this.list().some((entry) => entry.parent === name && LIVE_STATES.has(entry.state));
-		if (hasLiveChildren) {
-			this.patch(name, { state: "waiting", activity: "waiting on its subagents", report });
+		const owing = [...(this.owed.get(name) ?? [])];
+		if (hasLiveChildren || owing.length > 0) {
+			// Its report waits for what it is still owed; that arrival resumes it.
+			const activity = hasLiveChildren ? "waiting on its subagents" : `waiting for ${owing.join(", ")} to answer`;
+			this.patch(name, { state: "waiting", activity, report });
 			this.pump();
 			return;
 		}
@@ -467,6 +477,10 @@ export class Team {
 		this.waiters.delete(name);
 		// The report answers anything main was waiting on.
 		this.owesMain.delete(name);
+		// Answers still owed to it die with its run; a message resumes it to ask again.
+		this.owed.delete(name);
+		const unanswered: string[] = [];
+		for (const asker of [...this.owed.keys()]) if (this.payOwed(asker, name) && asker !== record.parent) unanswered.push(asker);
 		// A parent waiting on this child's answer gets the report as that answer.
 		const asked = this.questions.get(record.parent)?.find((question) => question.to === name);
 		const silent = this.stoppedByParent.delete(name);
@@ -479,6 +493,8 @@ export class Team {
 		} else if (!record.blocking) {
 			this.deliverToChild(record.name, record.parent, reportText(record, this.now()), true, `Report from ${record.name}`);
 		}
+		// Its parent has the report; anyone else it owed an answer gets how its run ended instead.
+		for (const asker of unanswered) this.deliverToChild(name, asker, `${name} ended without answering you. ${reportText(record, this.now())}`, true, `Report from ${name}`);
 		// Anyone else waiting on it would wait out the whole timeout for an answer that can't come.
 		for (const [asker, questions] of this.questions) {
 			if (asker === record.parent) continue;
@@ -518,28 +534,14 @@ export class Team {
 		catch (error) { (this.options.warn ?? console.warn)(`subagents: releasing ${name}'s session failed: ${(error as Error).message}`); }
 	}
 
-	/**
-	 * Why `from` must not wait on `to`: `to` already waits, through a chain of
-	 * open questions, on `from`, which could never answer while it waits.
-	 * Undefined when there is no such loop.
-	 */
-	private waitLoop(from: string, to: string): string | undefined {
-		const path = [to];
-		const seen = new Set<string>();
-		const walk = (agent: string): boolean => {
-			if (agent === from) return true;
-			if (seen.has(agent)) return false;
-			seen.add(agent);
-			for (const question of this.questions.get(agent) ?? []) {
-				path.push(question.to);
-				if (walk(question.to)) return true;
-				path.pop();
-			}
-			return false;
-		};
-		if (!walk(to)) return undefined;
-		const chain = path.slice(0, -1).map((agent, index) => `${agent} is waiting on ${path[index + 1] === from ? `you (${from})` : path[index + 1]}`).join(", ");
-		return `Asking ${to} would close a waiting loop: ${chain}. Answer its question first with message({ to: "${path.at(-2)}", text }) without expectReply, or send this as a note.`;
+	/** Settles what `from` owed `asker`; true when it owed it an answer. */
+	private payOwed(asker: string, from: string): boolean {
+		const owing = this.owed.get(asker);
+		if (!owing?.has(from)) return false;
+		const rest = [...owing].filter((agent) => agent !== from);
+		if (rest.length > 0) this.owed.set(asker, new Set(rest));
+		else this.owed.delete(asker);
+		return true;
 	}
 
 	/** `said` is how the report of a run this message starts names it. */

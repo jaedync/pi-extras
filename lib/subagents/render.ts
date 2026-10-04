@@ -89,7 +89,7 @@ function joinStatus(record: AgentRecord, now: number): Seg[] {
 		case "queued": return [{ text: "queued", color: "dim" }];
 		case "starting": case "running": return [{ text: "working", color: "muted" }];
 		case "asking": return [{ text: record.activity ?? "asking", color: "warning" }];
-		case "waiting": return [{ text: "waiting on its subagents", color: "muted" }];
+		case "waiting": return [{ text: record.activity ?? "waiting on its subagents", color: "muted" }];
 		case "interrupted": return [{ text: "interrupted", color: "warning" }];
 		// Not "reported": its report can still be on its way to main, and this row can't tell.
 		case "idle": return [{ text: "finished", color: "muted" }, ...took];

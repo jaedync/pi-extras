@@ -118,36 +118,71 @@ test("a message before the quiet spell ends keeps the session and cancels the re
 	assert.equal(h.launches.get(name), 1);
 });
 
-test("a peer's question to an agent that ends without answering returns at once, not after the timeout", async () => {
+test("a question to a peer returns at once, and the peer's answer wakes the asker", async () => {
 	const h = harness();
-	const asker = h.spawn("Asker");
-	const target = h.spawn("Target");
+	const asker = h.spawn("Asker", { name: "asker" });
+	const target = h.spawn("Target", { name: "target" });
 	await tick();
-	const asked = h.team.send(asker, target, "Which file?", { expectReply: true });
-	await tick();
-	assert.equal(h.team.get(asker)?.state, "asking");
-	h.lastCall(target).finish("Never saw it.");
-	const result = await asked;
-	assert.equal(result.ok, false);
-	assert.match(!result.ok ? result.error : "", /target ended without answering/i);
+	const asked = await h.team.send(asker, target, "Which file?", { expectReply: true });
+	assert.deepEqual(asked, { ok: true, delivered: "steered" }, "no reply in the result: it never waited");
 	assert.equal(h.team.get(asker)?.state, "running");
+	h.lastCall(asker).finish("Asked target; nothing else to do.");
+	await tick();
+	assert.equal(h.team.get(asker)?.state, "waiting", "it owes no report until its question is answered");
+	assert.match(h.team.get(asker)?.activity ?? "", /waiting for target to answer/);
+	assert.equal(h.main.filter((delivery) => delivery.kind === "report").length, 0);
+	await h.team.send(target, asker, "lib/x.ts");
+	await tick();
+	assert.equal(h.team.get(asker)?.state, "running", "the answer resumes it");
+	assert.match(h.lastCall(asker).text, /Message from target:\nlib\/x\.ts/);
+	h.lastCall(asker).finish("The file is lib/x.ts.");
+	await tick();
+	assert.equal(h.team.get(asker)?.state, "idle");
+	await h.team.close();
 });
 
-test("a question that would close a waiting loop is refused, with how to break it", async () => {
+test("a peer that ends without answering hands the asker how its run ended", async () => {
 	const h = harness();
-	const a = h.spawn("Alpha work", { name: "alpha" });
-	const b = h.spawn("Beta work", { name: "beta" });
-	const c = h.spawn("Gamma work", { name: "gamma" });
+	const asker = h.spawn("Asker", { name: "asker" });
+	const target = h.spawn("Target", { name: "target" });
 	await tick();
-	void h.team.send(a, b, "Can I edit x?", { expectReply: true });
-	void h.team.send(b, c, "Is y done?", { expectReply: true });
+	await h.team.send(asker, target, "Which file?", { expectReply: true });
+	h.lastCall(asker).finish("Waiting on target.");
 	await tick();
-	const loop = await h.team.send(c, a, "What about z?", { expectReply: true });
-	assert.equal(loop.ok, false);
-	assert.match(!loop.ok ? loop.error : "", /waiting loop: alpha is waiting on beta, beta is waiting on you \(gamma\)\. Answer its question first with message\(\{ to: "beta"/);
-	// A note never waits, so it is never refused.
-	const note = await h.team.send(c, a, "FYI z is done.");
-	assert.ok(note.ok);
+	h.lastCall(target).finish("Never saw the question.");
+	await tick();
+	assert.equal(h.team.get(asker)?.state, "running");
+	assert.match(h.lastCall(asker).text, /target ended without answering you[\s\S]*Never saw the question\./);
+	await h.team.close();
+});
+
+test("a parent's question to its own subagent doesn't block it either", async () => {
+	const h = harness();
+	const lead = h.spawn("Lead", { name: "lead" });
+	await tick();
+	const helper = h.spawn("Helper", { name: "helper", parent: lead });
+	await tick();
+	assert.deepEqual(await h.team.send(lead, helper, "Done yet?", { expectReply: true }), { ok: true, delivered: "steered" });
+	h.lastCall(lead).finish("Asked helper.");
+	await tick();
+	assert.equal(h.team.get(lead)?.state, "waiting");
+	h.lastCall(helper).finish("helper: 3 files");
+	await tick();
+	assert.match(h.lastCall(lead).text, /helper: 3 files/, "its report is the answer");
+	await h.team.close();
+});
+
+test("a question up the tree still waits for the answer", async () => {
+	const h = harness();
+	const lead = h.spawn("Lead", { name: "lead" });
+	await tick();
+	const helper = h.spawn("Helper", { name: "helper", parent: lead });
+	await tick();
+	const asked = h.team.send(helper, lead, "npm or pnpm?", { expectReply: true });
+	await tick();
+	assert.equal(h.team.get(helper)?.state, "asking");
+	await h.team.send(lead, helper, "npm");
+	assert.deepEqual(await asked, { ok: true, delivered: "replied", reply: "npm" });
 	await h.team.close();
 });
 

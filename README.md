@@ -773,11 +773,14 @@ session. `message` sends a note to an agent by name, or to `all`. A running
 agent reads it after its current tool call; a finished one resumes with its
 context to handle it. A failed or stopped one resumes too when main, its
 parent or you write to it, and is told first how its last run ended; a peer's
-note can't wake it. A child can ask with `expectReply: true` and wait for the
-answer. A question to an agent that ends without answering returns at once,
-not after the timeout, and a question that would close a loop of agents
-waiting on each other is refused with who waits on whom. Main never waits: a child's note or question wakes it, and so does the
-answer to anything main asked. When main's question resumes a finished child that
+note can't wake it. A child asks with `expectReply: true`. A question up the
+tree, to main or its parent, waits for the answer, which comes fast because
+the question wakes them. A question to anyone else, a peer or its own
+subagent, returns at once: the answer arrives as a message that wakes the
+asker, and its report waits until every agent it asked answers or ends. One
+that ends without answering hands the asker how its run ended. So agents never
+wait on each other in a loop. Main never waits: a child's note or question
+wakes it, and so does the answer to anything main asked. When main's question resumes a finished child that
 answers and then just writes its final text, the report doesn't wake main a
 second time. More work, new input or a failure after the answer does, so a
 report is never silently missed. Children know each other and can split work

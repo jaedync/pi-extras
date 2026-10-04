@@ -208,7 +208,8 @@ export function childMessageTool(tc: ToolContext, self: string): ToolDefinition 
 			if (!result.ok) throw new Error(result.error);
 			const roster = rosterText(self, tc.team.list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model })));
 			const head = result.reply !== undefined ? `Reply from ${params.to}:\n${result.reply}` : deliveredWords[result.delivered] ?? "Delivered.";
-			return text(`${head}${result.notice ? `\n${result.notice}` : ""}\n\nTeam now:\n${roster}`, { to: params.to, delivered: result.delivered });
+			const tail = params.expectReply && result.reply === undefined ? " Its answer will arrive as a message; keep working." : "";
+			return text(`${head}${tail}${result.notice ? `\n${result.notice}` : ""}\n\nTeam now:\n${roster}`, { to: params.to, delivered: result.delivered });
 		},
 	} as ToolDefinition;
 }

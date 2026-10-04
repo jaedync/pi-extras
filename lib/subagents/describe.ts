@@ -44,7 +44,8 @@ export function stopDescription(forChild: boolean): string {
 export function childMessageDescription(replyTimeoutMs: number): string {
 	return [
 		`Send a message to "${MAIN}", another agent by name, or "all".`,
-		`With expectReply: true this call waits up to ${Math.round(replyTimeoutMs / 60_000)} minutes and returns the answer.`,
+		`With expectReply: true to "${MAIN}" or your parent, this call waits up to ${Math.round(replyTimeoutMs / 60_000)} minutes and returns the answer.`,
+		"A question to anyone else returns at once: the answer arrives as a message, and your report waits until it answers or ends.",
 		"Keep messages short and only send what changes the recipient's work.",
 	].join(" ");
 }

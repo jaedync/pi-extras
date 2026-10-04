@@ -152,12 +152,12 @@ test("a sibling's note to a finished child waits in its inbox; a question resume
 	await h.team.whenDone(b);
 	assert.deepEqual(await h.team.send(a, b, "fyi: touched lib/x.ts"), { ok: true, delivered: "inbox" });
 	assert.equal(h.calls.get(b)!.length, 1);
-	const asked = h.team.send(a, b, "Which file had the bug?", { expectReply: true });
+	assert.deepEqual(await h.team.send(a, b, "Which file had the bug?", { expectReply: true }), { ok: true, delivered: "resumed" });
 	await tick();
 	assert.equal(h.team.get(b)!.state, "running");
 	assert.match(h.lastCall(b).text, /fyi: touched lib\/x.ts[\s\S]*Question from alpha-work/);
-	await h.team.send(b, a, "lib/y.ts:40");
-	assert.deepEqual(await asked, { ok: true, delivered: "replied", reply: "lib/y.ts:40" });
+	assert.deepEqual(await h.team.send(b, a, "lib/y.ts:40"), { ok: true, delivered: "steered" }, "the answer comes as a message");
+	assert.match(h.steered.get(a)!.at(-1)!, /Message from beta-work:\nlib\/y.ts:40/);
 });
 
 test("steering that lands as a run ends starts another run instead of being lost", async () => {
@@ -442,24 +442,25 @@ test("a run that fails after answering main still wakes main with the failure", 
 	assert.equal(report.answeredMain, undefined);
 });
 
-test("a child can wait on two agents at once; each answer settles its own question", async () => {
+test("a child asking two of its subagents goes on working, and waits for both answers before it reports", async () => {
 	const h = harness({ maxDepth: 2 });
 	const lead = h.spawn("lead the work");
 	await tick();
 	const a = h.spawn("part alpha", { parent: lead });
 	const b = h.spawn("part beta", { parent: lead });
 	await tick();
-	const askA = h.team.send(lead, a, "Done yet?", { expectReply: true });
-	const askB = h.team.send(lead, b, "Done yet?", { expectReply: true });
-	await tick();
-	assert.equal(h.team.get(lead)!.activity, `asking ${a}, ${b}`);
+	assert.equal((await h.team.send(lead, a, "Done yet?", { expectReply: true })).ok, true);
+	assert.equal((await h.team.send(lead, b, "Done yet?", { expectReply: true })).ok, true);
+	assert.equal(h.team.get(lead)!.state, "running", "it never blocks on them");
 	await h.team.send(a, lead, "alpha done");
-	assert.deepEqual(await askA, { ok: true, delivered: "replied", reply: "alpha done" });
-	assert.equal(h.team.get(lead)!.state, "asking");
-	assert.equal(h.team.get(lead)!.activity, `asking ${b}`);
+	assert.match(h.steered.get(lead)!.at(-1)!, /alpha done/);
+	h.lastCall(lead).finish("asked both");
+	await tick();
+	assert.equal(h.team.get(lead)!.state, "waiting");
 	await h.team.send(b, lead, "beta done");
-	assert.deepEqual(await askB, { ok: true, delivered: "replied", reply: "beta done" });
-	assert.equal(h.team.get(lead)!.state, "running");
+	await tick();
+	assert.equal(h.team.get(lead)!.state, "running", "the last answer resumes it");
+	assert.match(h.lastCall(lead).text, /beta done/);
 });
 
 test("a child's report answers its parent's open question to it", async () => {
@@ -468,13 +469,13 @@ test("a child's report answers its parent's open question to it", async () => {
 	await tick();
 	const a = h.spawn("part alpha", { parent: lead });
 	await tick();
-	const ask = h.team.send(lead, a, "Report when you are done.", { expectReply: true });
-	await tick();
+	assert.equal((await h.team.send(lead, a, "Report when you are done.", { expectReply: true })).ok, true);
 	h.lastCall(a).finish("alpha: 3 files");
-	const result = await ask;
-	assert.equal(result.ok, true);
-	assert.match((result as { reply?: string }).reply ?? "", /alpha: 3 files/);
-	assert.ok(!(h.steered.get(lead) ?? []).some((text) => text.includes("alpha: 3 files")), "not delivered a second time");
+	await tick();
+	assert.equal((h.steered.get(lead) ?? []).filter((text) => text.includes("alpha: 3 files")).length, 1, "delivered once, as the report");
+	h.lastCall(lead).finish("done");
+	await tick();
+	assert.equal(h.team.get(lead)!.state, "idle", "nothing is owed any more");
 });
 
 test("a child its parent waits on can't narrate to it, and asking it ends the wait", async () => {
