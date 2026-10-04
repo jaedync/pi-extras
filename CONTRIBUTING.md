@@ -70,28 +70,18 @@ A change that ships to `main` is done when:
    --open`), and nothing personal is on screen.
    Commit the WebP and `meta.json` with the release. A contract test fails
    until the committed image was rendered for the current minor version.
+7. After the push, `npm run preview:upload` brings GitHub's social preview
+   (Settings > General > Social preview) up to date. GitHub has no API for it,
+   so the script renders `.github/preview/pi-extras.png` from the committed
+   frame, compares it with the image GitHub serves, and only when they differ
+   uploads it through the settings page in headless Chromium, then confirms
+   GitHub serves it. `-- --check` only reports whether an upload is due.
+   The script uses a saved GitHub web session in
+   `~/.local/state/pi-extras/github-session.json` (mode 0600, outside the
+   repository; treat it as a credential). Each upload renews it. When it is
+   missing or expired, the script says so, and the user logs in once with
+   `npm run preview:upload -- --login`, which opens a browser window.
 
 Before publication, inspect `git ls-files`, run a secret scanner across the full
 history, inspect `npm pack --dry-run --json`, and inspect the actual archive.
 Review licenses and third-party notices when copying or adding dependencies.
-
-## Periodic upkeep
-
-These are not part of any release and never block one. Check them now and then,
-for example after a minor release.
-
-- **Social preview.** GitHub's social preview (Settings > General > Social
-  preview) is uploaded by hand, so it can lag behind the committed WebP. It is
-  due when the image GitHub serves differs from a fresh render. Renders of the
-  same frame are byte-identical, so compare them directly:
-
-  ```sh
-  npm run preview:render -- --reuse && git checkout -- .github/preview/meta.json
-  url=$(curl -sL https://github.com/jaedync/pi-extras | grep -o 'og:image" content="[^"]*' | cut -d'"' -f3)
-  curl -sL "$url" | cmp - .github/preview/pi-extras.png && echo current
-  ```
-
-  When it is due, an agent asks the user for permission to use computer use,
-  then uploads `.github/preview/pi-extras.png` itself in the user's signed-in
-  browser (Edit > Upload an image…; Cmd+Shift+G in the file panel takes a
-  path) and reruns the comparison to confirm GitHub serves the new image.

@@ -59,7 +59,8 @@
     "test:install": "node scripts/install-smoke.mjs",
     "audit:package": "node scripts/audit-package.mjs",
     "preview:render": "node scripts/preview/render.mjs",
-    "preview:check": "node scripts/preview/check.mjs"
+    "preview:check": "node scripts/preview/check.mjs",
+    "preview:upload": "node scripts/preview/upload.mjs"
   },
   "dependencies": {
     "@picovoice/pvrecorder-node": "1.2.1",

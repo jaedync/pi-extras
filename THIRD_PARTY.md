@@ -20,9 +20,20 @@ The system-state fold in `lib/cache-compaction/system-fold.ts` adapts
 https://github.com/earendil-works/pi/blob/v0.99.2/packages/ai/src/utils/transcript.ts,
 MIT, Copyright (c) 2025 Mario Zechner. The entry-position mapping here is new.
 
+# Social preview upload attribution
+
+`scripts/preview/upload.mjs` follows the GitHub settings-page flow of
+https://github.com/ibrews/gh-social-upload, MIT, Copyright (c) 2026 Alex
+Coulombe: the Social preview selectors, the upload-completion signal and the
+saved Playwright session. That tool adapts
+https://github.com/AnswerDotAI/gh-social-preview (ISC, Jeremy Howard), whose
+renewal of the saved session after each upload is followed here too. The due
+check, rendering, confirmation and session file handling here are new.
+
 ## MIT License notice for the referenced implementations
 
 Copyright (c) 2026 Thomas Mustier
+Copyright (c) 2026 Alex Coulombe
 Copyright (c) 2026 Michael Jakl
 Copyright (c) 2025 Carlo Zottmann
 Copyright (c) 2025 Mario Zechner
