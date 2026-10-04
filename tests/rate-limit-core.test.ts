@@ -58,7 +58,7 @@ test("planning includes the safety margin and never clamps an excessive wait", (
 	});
 	const atCap = captureLimit(model, { retryAfterSeconds: 18_000 }, NOW);
 	assert.equal(planWait(atCap, config, 0, 0, NOW), "too-long");
-	assert.equal(planWait(captured(), config, 0, 3, NOW), "attempt-limit");
+	assert.equal(planWait(captured(), config, 0, config.maxRecoveries, NOW), "attempt-limit");
 	assert.equal(planWait(captured(), config, 10_000_000, 1, NOW), "wait-budget");
 	assert.equal(planWait(captureLimit(model, {}, NOW), config, 0, 0, NOW), "unknown-reset");
 });
@@ -88,6 +88,8 @@ test("configuration is opt-in and bounded, with defensive immutable defaults", (
 	assert.equal(normalizeConfig({ maxWaitSeconds: 18_001 }).maxWaitSeconds, 18_000);
 	assert.equal(normalizeConfig({ maxWaitSeconds: 604_800 }).maxWaitSeconds, 18_000);
 	assert.equal(normalizeConfig({ maxRecoveries: 0 }).maxRecoveries, 0);
+	assert.equal(normalizeConfig({}).maxRecoveries, 10);
+	assert.equal(normalizeConfig({ maxRecoveries: 11 }).maxRecoveries, 10);
 	assert.notEqual(normalizeConfig({}), DEFAULT_CONFIG);
 });
 

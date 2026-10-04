@@ -18,7 +18,7 @@ export interface RecoveryConfig {
 
 export const SECTION = "rateLimitRecovery";
 export const DEFAULT_CONFIG: RecoveryConfig = Object.freeze({
-	autoWait: false, resumeMarginSeconds: 10, maxWaitSeconds: 18_000, maxRecoveries: 3,
+	autoWait: false, resumeMarginSeconds: 10, maxWaitSeconds: 18_000, maxRecoveries: 10,
 	anthropicFirstEventSeconds: DEFAULT_FIRST_EVENT_SECONDS,
 	transientMaxWaitSeconds: 180,
 });

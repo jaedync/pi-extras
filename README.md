@@ -75,7 +75,7 @@ the package. Removing it does not remove your credentials or change other packag
 - `PI_RATE_LIMIT_RECOVERY=on|off`: override automatic quota waiting for one run.
   `rateLimitRecovery` in `pi-extras.json`: `autoWait` (default `false`),
   `resumeMarginSeconds` (default `10`), `maxWaitSeconds` (default and hard maximum
-  `18000`, five hours total per user-started run), `maxRecoveries` (default `3`,
+  `18000`, five hours total per user-started run), `maxRecoveries` (default and
   maximum `10`), `anthropicFirstEventSeconds` (default `45`, `10` to `600`, `0`
   disables the Anthropic stall retry), `transientMaxWaitSeconds` (default `180`,
   `10` to `900`, `0` leaves short rate limits to Pi's own retry). `/rate-limit-recovery on|off` persists the choice; commands
@@ -387,7 +387,7 @@ completed timer instead of claiming an exact wall-clock duration. Steering
 queued while waiting reaches the recovery request; explicitly deferred
 follow-ups remain deferred until the original task finishes, as in Pi.
 It is a timing notice, not proof that quota has reset. Each user-started run
-has a shared five-hour maximum wait budget (margins included) and at most three
+has a shared five-hour maximum wait budget (margins included) and at most ten
 recoveries by default. Excessive delays are refused, never shortened to retry
 early. Reload, session replacement and exit cancel; a restarted session never
 silently resumes a previous wait.
