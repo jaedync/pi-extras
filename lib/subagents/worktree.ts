@@ -1,8 +1,9 @@
 /** Isolated child workspaces retain the parent's current files without changing its index. */
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Worktree } from "./types.ts";
 
 const GIT_TIMEOUT_MS = 30_000;
@@ -82,6 +83,28 @@ export function createWorktree(cwd: string, name: string): Worktree {
 
 export function workspaceError(path: string): string | undefined {
 	return existsSync(path) ? undefined : `The child workspace no longer exists: ${path}. Restore this workspace before resuming.`;
+}
+
+/** A tool's path as Pi's edit and write tools read it: an `@` prefix dropped, `~` and file URLs expanded. */
+function toolPath(path: string): string {
+	const bare = path.startsWith("@") ? path.slice(1) : path;
+	if (bare === "~") return homedir();
+	if (bare.startsWith("~/")) return join(homedir(), bare.slice(2));
+	return bare.startsWith("file://") ? fileURLToPath(bare) : bare;
+}
+
+/**
+ * Why an edit of `path` would leave the child's worktree, or undefined. The
+ * check is lexical: a symlink inside the worktree (such as `node_modules`)
+ * is not followed.
+ */
+export function outsideWorktree(worktree: Worktree, cwd: string, path: unknown): string | undefined {
+	// The tool refuses a missing or malformed path itself.
+	if (typeof path !== "string") return undefined;
+	const target = resolve(cwd, toolPath(path));
+	const rel = relative(worktree.path, target);
+	if (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) return undefined;
+	return `${target} is outside your worktree ${worktree.path}. Edit only files inside it; your parent applies your changes to its checkout from your report.`;
 }
 
 /** Persisted paths are used as command arguments and prompt text, never shell input. */

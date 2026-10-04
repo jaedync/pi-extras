@@ -83,3 +83,29 @@ test("a child's write runs and takes the free lock", { timeout: 20_000 }, async 
 	assert.equal(team.claimEdit("other"), undefined, "released once its run ended");
 	await team.close();
 });
+
+test("a worktree child's write outside its worktree is blocked; inside it runs", { timeout: 20_000 }, async () => {
+	const cwd = mkdtempSync(join(scratch, "parent-"));
+	const tree = mkdtempSync(join(scratch, "tree-"));
+	const { team, faux } = await setup(cwd);
+	team.restore([{ ...holder, name: "isolated", state: "idle", runs: 0, worktree: { path: tree, branch: "subagent/isolated", base: "a".repeat(40) } }]);
+	const results: string[] = [];
+	faux.setResponses([
+		ai.fauxAssistantMessage(ai.fauxToolCall("write", { path: join(cwd, "escape.txt"), content: "out" })),
+		(context: any) => {
+			results.push(lastToolResult(context));
+			return ai.fauxAssistantMessage(ai.fauxToolCall("write", { path: "inside.txt", content: "in" }));
+		},
+		(context: any) => {
+			results.push(lastToolResult(context));
+			return ai.fauxAssistantMessage("Done.");
+		},
+	]);
+	assert.ok((await team.send("main", "isolated", "Write the files.")).ok);
+	const done = await team.whenDone("isolated");
+	assert.equal(done.state, "idle", done.error);
+	assert.match(results[0] ?? "", new RegExp(`escape\\.txt is outside your worktree ${tree.replace(/[.]/g, "\\.")}\\.`));
+	assert.equal(existsSync(join(cwd, "escape.txt")), false, "the blocked call never ran");
+	assert.equal(readFileSync(join(tree, "inside.txt"), "utf8"), "in");
+	await team.close();
+});

@@ -881,7 +881,11 @@ child can then do work that does not edit files, or ask its parent for a
 worktree. Main never takes or checks the lock. `bash` is not covered, so a
 child's shell commands can still change files. Use `isolation: "worktree"` for
 parallel edits. Each worktree has its own lock, shared by the helpers that
-inherit it. Worktree isolation needs a git repository. It copies the parent's current files, including uncommitted
+inherit it. A worktree child's `edit` and `write` calls outside its worktree
+are refused before they run. The check reads the path as written and does not
+follow symlinks. For `bash`, the boundary is only the child's working
+directory, which is the worktree, and its instructions. Worktree isolation
+needs a git repository. It copies the parent's current files, including uncommitted
 changes and untracked files that Git does not ignore, into a separate checkout.
 The parent keeps its files and index unchanged. The report gives the worktree,
 branch, change counts, and commands to apply changes and remove it after merging.

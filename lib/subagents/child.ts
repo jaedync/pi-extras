@@ -12,7 +12,7 @@ import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, Usage } from "./types.ts";
-import { workspaceError } from "./worktree.ts";
+import { outsideWorktree, workspaceError } from "./worktree.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
 
@@ -116,13 +116,13 @@ export interface LauncherDeps {
 }
 
 /** Blocks, before it runs, an edit the child may not make; the reason is the call's result. */
-export function editGuard(check: () => string | undefined): InlineExtension {
+export function editGuard(check: (path: unknown) => string | undefined): InlineExtension {
 	return {
 		name: EDIT_GUARD_NAME,
 		factory(pi) {
 			pi.on("tool_call", (event) => {
 				if (!EDIT_TOOLS.has(event.toolName)) return undefined;
-				const reason = check();
+				const reason = check((event.input as { path?: unknown }).path);
 				return reason ? { block: true, reason } : undefined;
 			});
 		},
@@ -152,7 +152,8 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				// parent's messages to the child, even if the extension is filtered out afterwards.
 				noExtensions: true, additionalExtensionPaths: [...new Set([...extensionPaths, CHILD_CACHE_COMPACTION_PATH])],
 				appendSystemPrompt: [deps.instructions(record)],
-				extensionFactories: [guard.extension, ...(deps.claimEdit ? [editGuard(() => deps.claimEdit!(record.name))] : [])],
+				// Outside its worktree is refused before the lock is taken, so a refused edit holds nothing.
+				extensionFactories: [guard.extension, editGuard((path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name))],
 				extensionsOverride: (base) => ({
 					...base,
 					extensions: base.extensions.filter((extension) => [CHILD_GUARD_PATH, EDIT_GUARD_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
