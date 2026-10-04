@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate as tick } from "node:timers/promises";
+import { EditLocks } from "../lib/subagents/edit-lock.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { NO_USAGE, type AgentRecord, type SpawnRequest } from "../lib/subagents/types.ts";
 
@@ -144,3 +145,19 @@ for (const state of ["failed", "stopped", "interrupted"] as const) {
 		await team.close();
 	});
 }
+
+test("a lock whose holder is gone or no longer working never blocks an edit", () => {
+	const records = new Map<string, AgentRecord>();
+	const add = (name: string, state: AgentRecord["state"]) => records.set(name, { name, parent: "main", state } as AgentRecord);
+	const locks = new EditLocks({ get: (name) => records.get(name), under: () => false });
+	add("first", "running");
+	add("second", "running");
+	assert.equal(locks.claim("first"), undefined);
+	assert.match(locks.claim("second") ?? "", /first is editing files in this checkout/);
+	// The holder ends without its change reaching follow(), or its record is dropped.
+	add("first", "idle");
+	assert.equal(locks.claim("second"), undefined, "an ended holder lets go");
+	records.delete("second");
+	add("third", "running");
+	assert.equal(locks.claim("third"), undefined, "a vanished holder lets go");
+});

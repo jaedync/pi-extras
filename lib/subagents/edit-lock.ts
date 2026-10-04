@@ -37,7 +37,10 @@ export class EditLocks {
 		const record = this.family.get(name);
 		if (!record) return `No agent named ${name}.`;
 		const workspace = workspaceOf(record);
-		const holder = this.holders.get(workspace);
+		const held = this.holders.get(workspace);
+		// follow() normally lets go first; a holder that ended or vanished unseen must not block forever.
+		const holderState = held === undefined ? undefined : this.family.get(held)?.state;
+		const holder = holderState !== undefined && LIVE_STATES.has(holderState) ? held : undefined;
 		if (holder === undefined || holder === name) {
 			this.holders.set(workspace, name);
 			return undefined;
