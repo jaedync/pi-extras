@@ -2,6 +2,31 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.21.0 - 2026-10-05
+
+### Added
+
+- Subagents: run budgets. Each run of a child stops after `maxRunMinutes`
+  (default 60) and, when you set it, `maxRunCost` (US dollars). The
+  `subagent` call can set `maxMinutes` and `maxCost` for one child. Time
+  pauses while the child waits for an answer. A child stopped over its
+  budget tells its parent so in its report, and a message resumes it with a
+  fresh budget. A hung child no longer keeps `pi -p` open.
+
+### Changed
+
+- Subagents: the one-writer rule now starts at the first edit, not at the
+  start of a child. The first child that calls `edit` or `write` in the
+  shared checkout, or in one worktree, holds it until its run ends. An edit
+  there by another child is refused with what to do instead. The holder's
+  own subagents and parents can edit beside it. Children no longer need
+  `readOnly: true` to run in parallel. `bash` is not covered.
+- Subagents: a worktree child's `edit` and `write` calls must stay inside its
+  worktree.
+- Subagents: when a peer's message starts a new run of a finished child,
+  the report of that run reaches the parent without waking it. Main reads it
+  at its next turn.
+
 ## 0.20.0 - 2026-10-04
 
 ### Added
