@@ -57,7 +57,8 @@ function reportSummary(record: AgentRecord, now: number): string {
 		return `${head} ${outcome}${session}\nResume explicitly after checking the current files.${partial}`;
 	}
 	if (record.state === "failed" || record.state === "stopped") {
-		const outcome = record.state === "failed" ? `failed after ${duration(record, now)}: ${record.error ?? "unknown error"}` : `was stopped after ${duration(record, now)}.`;
+		const outcome = record.state === "failed" ? `failed after ${duration(record, now)}: ${record.error ?? "unknown error"}`
+			: `was stopped after ${duration(record, now)}${record.stopReason ? `: ${record.stopReason}` : ""}.`;
 		const partial = record.report ? `\nLast message before it ${record.state}:\n${capReport(record.report, record.sessionFile, record.reportFile)}` : "";
 		return `${head} ${outcome}${session}${partial}`;
 	}
@@ -95,7 +96,7 @@ const REPORT_HEAD = new RegExp(`^(${NAME}) \\(([^\\s(),]+)(?:, \\$[^\\s)]+)?\\) 
 const OUTCOMES: ReadonlyArray<readonly [ReportState, RegExp]> = [
 	["idle", /^finished after (?<took>\S+?)\. Message it to follow up/],
 	["failed", /^failed after (?<took>\S+?): (?<error>.*)$/],
-	["stopped", /^was stopped after (?<took>\S+?)\.$/],
+	["stopped", /^was stopped after (?<took>\S+?)(?:: (?<error>.*))?\.$/],
 	["interrupted", /^was interrupted after (?<took>\S+?)\.$/],
 	["interrupted", /^could not resume: (?<error>.*)$/],
 ];

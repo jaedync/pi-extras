@@ -63,6 +63,11 @@ export interface AgentRecord {
 	/** The full report of the latest completed run, never reused by a later run. */
 	reportFile?: string;
 	error?: string;
+	/** Minutes one run may work, and dollars it may spend, before it is stopped; fixed at spawn so resumes keep them. */
+	maxMinutes?: number;
+	maxCost?: number;
+	/** Why its last run was stopped, when it was not by request: `over its 60-minute budget`. */
+	stopReason?: string;
 	sessionFile?: string;
 	/** Reconstructed from disk, without a live SDK handle yet. */
 	restored?: boolean;
@@ -100,6 +105,8 @@ export interface SpawnRequest {
 	fork: boolean;
 	blocking: boolean;
 	group?: string;
+	maxMinutes?: number;
+	maxCost?: number;
 }
 
 /** What the team needs from a running child session. */

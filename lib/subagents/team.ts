@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
+import { budgetError, RunBudgets, type RunLimits } from "./budget.ts";
 import { saveReport } from "./reports.ts";
 import { createWorktree, workspaceError } from "./worktree.ts";
 import {
@@ -45,6 +46,8 @@ export interface TeamOptions {
 	prepareResume?: (record: AgentRecord) => { model: string; note?: string; notice?: string };
 	/** How long a finished child keeps its session in memory before it is released; default IDLE_RELEASE_MS. */
 	idleReleaseMs?: number;
+	/** Each run's limits when the spawn names none; without them a run has no limit. */
+	runBudget?: RunLimits;
 }
 
 /** A follow-up to a report usually comes within a minute or two; after that a relaunch costs less than holding the session. */
@@ -69,6 +72,7 @@ const CHECK_FIRST = "Its last tool call may not have completed and files may hav
 function resumeWarning(target: AgentRecord): string {
 	if (target.state === "interrupted") return `Your previous run was interrupted. ${CHECK_FIRST}\n\n`;
 	if (target.state === "failed") return `Your previous run failed: ${target.error ?? "unknown error"}. ${CHECK_FIRST}\n\n`;
+	if (target.state === "stopped" && target.stopReason) return `Your previous run was stopped ${target.stopReason}. This run has a fresh budget. ${CHECK_FIRST}\n\n`;
 	if (target.state === "stopped") return `Your previous run was stopped. ${CHECK_FIRST}\n\n`;
 	return "";
 }
@@ -99,12 +103,14 @@ export class Team {
 	/** Stopped by their own parent, which already knows; no report goes up. */
 	private readonly stoppedByParent = new Set<string>();
 	private readonly releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private readonly budgets: RunBudgets;
 	private readonly now: () => number;
 	private readonly options: TeamOptions;
 
 	constructor(options: TeamOptions) {
 		this.options = options;
 		this.now = options.now ?? Date.now;
+		this.budgets = new RunBudgets({ now: this.now, over: (name, reason) => void this.stop(name, { reason }) });
 	}
 
 	get(name: string): AgentRecord | undefined {
@@ -142,6 +148,10 @@ export class Team {
 		if (depth > this.options.maxDepth) return { ok: false, error: `Subagents cannot start subagents here (depth limit ${this.options.maxDepth}).` };
 		const name = nameFor(request.name, request.task, (candidate) => this.records.has(candidate));
 		if (request.isolation !== undefined && request.isolation !== "shared" && request.isolation !== "worktree") return { ok: false, error: "Unknown isolation. Use shared or worktree." };
+		const badBudget = budgetError("maxMinutes", request.maxMinutes) ?? budgetError("maxCost", request.maxCost);
+		if (badBudget) return { ok: false, error: badBudget };
+		const maxMinutes = request.maxMinutes ?? this.options.runBudget?.minutes;
+		const maxCost = request.maxCost ?? this.options.runBudget?.cost;
 		const conflict = request.isolation === "worktree" ? undefined : this.sharedWriterError({ name, parent: request.parent, readOnly: request.readOnly, worktree: parent?.worktree });
 		if (conflict) return { ok: false, error: conflict };
 		let worktree = parent?.worktree;
@@ -159,6 +169,8 @@ export class Team {
 			...(sessionFile ? { sessionFile } : {}),
 			...(request.group ? { group: request.group } : {}),
 			...(worktree ? { worktree: { ...worktree } } : {}),
+			...(maxMinutes !== undefined ? { maxMinutes } : {}),
+			...(maxCost !== undefined ? { maxCost } : {}),
 		};
 		this.put(record);
 		this.queue.push(name);
@@ -265,9 +277,10 @@ export class Team {
 	/**
 	 * Stops a child and everything under it, and returns it as it ended;
 	 * undefined when it had already ended. Stopped `by` its own parent, no
-	 * report goes up: the parent asked for it and has the record.
+	 * report goes up: the parent asked for it and has the record. A `reason`
+	 * (a run over its budget) goes into that report.
 	 */
-	async stop(name: string, options: { by?: string } = {}): Promise<AgentRecord | undefined> {
+	async stop(name: string, options: { by?: string; reason?: string } = {}): Promise<AgentRecord | undefined> {
 		const record = this.records.get(name);
 		if (!record || (!LIVE_STATES.has(record.state) && record.state !== "interrupted")) return undefined;
 		if (options.by !== undefined && options.by === record.parent) this.stoppedByParent.add(name);
@@ -276,7 +289,7 @@ export class Team {
 		this.resumePrompts.delete(name);
 		for (const question of this.questions.get(name) ?? []) question.reject(new Error("stopped"));
 		const handle = this.handles.get(name);
-		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, report: this.runText(name) });
+		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.runText(name) });
 		await handle?.abort().catch(() => undefined);
 		this.patch(name, { report: this.runText(name) });
 		this.finish(name);
@@ -307,6 +320,7 @@ export class Team {
 	close(reason: AgentRecord["interruptedBy"] = "quit", owner?: string): Promise<void> {
 		if (this.closing) return this.closing;
 		this.interrupt(reason, owner);
+		this.budgets.clear();
 		for (const timer of this.releaseTimers.values()) clearTimeout(timer);
 		this.releaseTimers.clear();
 		return this.closing = (async () => {
@@ -322,6 +336,7 @@ export class Team {
 
 	private put(record: AgentRecord): void {
 		this.records.set(record.name, record);
+		this.budgets.follow(record.name, record.state);
 		for (const listener of this.listeners) listener(record);
 	}
 
@@ -392,7 +407,9 @@ export class Team {
 		const handle = await this.options.launcher.launch(this.records.get(name)!, {
 			update: (patch) => {
 				const record = this.records.get(name);
-				if (record && LIVE_STATES.has(record.state)) this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.workedSinceAnswer(name, patch) ? { answeredMain: undefined } : {}) });
+				if (!record || !LIVE_STATES.has(record.state)) return;
+				this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.workedSinceAnswer(name, patch) ? { answeredMain: undefined } : {}) });
+				if (patch.usage) this.budgets.spent(name, patch.usage.cost);
 			},
 		});
 		if (this.closed || this.records.get(name)?.state === "stopped") {
@@ -410,6 +427,7 @@ export class Team {
 		const record = this.records.get(name)!;
 		this.runStarts.set(name, new Set(handle.messages()));
 		this.patch(name, { state: "running", activity: "thinking", runs: record.runs + 1, endedAt: undefined });
+		this.budgets.start(name, this.limits(record), record.usage.cost);
 		try {
 			let next: string | null = text;
 			while (next !== null) {
@@ -423,6 +441,11 @@ export class Team {
 			return;
 		}
 		this.settle(name, this.runText(name));
+	}
+
+	/** Limits fixed at spawn; records saved before budgets existed get today's defaults. */
+	private limits(record: AgentRecord): RunLimits {
+		return { minutes: record.maxMinutes ?? this.options.runBudget?.minutes, cost: record.maxCost ?? this.options.runBudget?.cost };
 	}
 
 	private settle(name: string, report: string | undefined): void {
@@ -593,7 +616,7 @@ export class Team {
 			try { if (!automatic) prepared = this.options.prepareResume?.(target) ?? prepared; }
 			catch (error) { return { ok: false, error: (error as Error).message }; }
 			this.resumePrompts.set(to, `${warning}${prepared.note ? `${prepared.note}\n\n` : ""}${body}`);
-			this.patch(to, { state: "queued", model: prepared.model, resumedBy: { from, text: said }, startedAt: this.now(), error: undefined, restoreError: undefined, launchError: undefined,
+			this.patch(to, { state: "queued", model: prepared.model, resumedBy: { from, text: said }, startedAt: this.now(), error: undefined, stopReason: undefined, restoreError: undefined, launchError: undefined,
 				...(!automatic ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
 			this.queue.push(to);
 			this.pump();

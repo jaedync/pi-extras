@@ -7,6 +7,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readSection } from "../extras-config.ts";
+import { MAX_RUN_MINUTES } from "./budget.ts";
 
 export interface SubagentsConfig {
 	/** A model reference or short name; unset means the parent's model. */
@@ -24,6 +25,10 @@ export interface SubagentsConfig {
 	childToolsExclude: string[];
 	/** Reload resumes interrupted runs; other starts notify unless set to always. */
 	resumePolicy: "reload" | "always" | "notify";
+	/** How long one run of a child may work before it is stopped; a spawn can set its own. */
+	maxRunMinutes: number;
+	/** Dollars one run may spend before it is stopped; null for no limit. */
+	maxRunCost: number | null;
 }
 
 export const DEFAULTS: SubagentsConfig = {
@@ -34,6 +39,8 @@ export const DEFAULTS: SubagentsConfig = {
 	groupWaitMs: 60_000,
 	childToolsExclude: [],
 	resumePolicy: "reload",
+	maxRunMinutes: 60,
+	maxRunCost: null,
 };
 
 export const GUIDE_FILE = "subagent-models.md";
@@ -41,6 +48,8 @@ export const GUIDE_MAX_CHARS = 4_000;
 
 const positiveInt = (value: unknown, fallback: number, max: number): number =>
 	typeof value === "number" && Number.isInteger(value) && value >= 1 ? Math.min(value, max) : fallback;
+
+const positive = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
 
 /** Invalid values fall back to defaults rather than failing the session. */
 export function parseConfig(section: Record<string, unknown>): SubagentsConfig {
@@ -55,6 +64,8 @@ export function parseConfig(section: Record<string, unknown>): SubagentsConfig {
 		groupWaitMs: positiveInt(section.groupWaitMs, DEFAULTS.groupWaitMs, 30 * 60_000),
 		childToolsExclude: exclude,
 		resumePolicy: section.resumePolicy === "always" || section.resumePolicy === "notify" ? section.resumePolicy : DEFAULTS.resumePolicy,
+		maxRunMinutes: positive(section.maxRunMinutes) ? Math.min(section.maxRunMinutes, MAX_RUN_MINUTES) : DEFAULTS.maxRunMinutes,
+		maxRunCost: positive(section.maxRunCost) ? section.maxRunCost : DEFAULTS.maxRunCost,
 	};
 	const model = section.defaultModel;
 	return typeof model === "string" && model.trim().length > 0 ? { ...config, defaultModel: model.trim() } : config;

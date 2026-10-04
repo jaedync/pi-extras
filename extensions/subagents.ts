@@ -260,6 +260,7 @@ export default function subagents(pi: ExtensionAPI) {
 			maxConcurrent: config.maxConcurrent,
 			maxDepth: config.maxDepth,
 			replyTimeoutMs: config.replyTimeoutMs,
+			runBudget: { minutes: config.maxRunMinutes, ...(config.maxRunCost !== null ? { cost: config.maxRunCost } : {}) },
 			messagesFor: (record) => record.sessionFile && existsSync(record.sessionFile) && !record.restoreError ? scanner.messages(record.sessionFile) : [],
 			prepareResume: (record) => {
 				const model = allowed.some((choice) => choice.ref === record.model) ? record.model : fallbackModel;

@@ -68,7 +68,9 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.lastActivityAt === undefined || Number.isFinite(r.lastActivityAt))
 		&& (r.restoreError === undefined || typeof r.restoreError === "string")
 		&& (r.launchFailures === undefined || (Number.isInteger(r.launchFailures) && r.launchFailures >= 0))
-		&& (r.launchError === undefined || typeof r.launchError === "string");
+		&& (r.launchError === undefined || typeof r.launchError === "string")
+		&& [r.maxMinutes, r.maxCost].every((limit) => limit === undefined || (typeof limit === "number" && Number.isFinite(limit) && limit > 0))
+		&& (r.stopReason === undefined || typeof r.stopReason === "string");
 }
 
 export class ChildIndex {

@@ -78,6 +78,8 @@ export interface ReportSummary {
 	answered?: true;
 	report?: string;
 	error?: string;
+	/** Why it was stopped when no one asked: a run over its budget. */
+	stopReason?: string;
 	sessionFile?: string;
 }
 
@@ -104,6 +106,7 @@ export function summarize(record: AgentRecord): ReportSummary {
 		...(record.endedAt !== undefined ? { endedAt: record.endedAt } : {}),
 		...(record.report !== undefined ? { report: record.report } : {}),
 		...(record.error !== undefined ? { error: record.error } : {}),
+		...(record.stopReason !== undefined ? { stopReason: record.stopReason } : {}),
 		...(record.sessionFile !== undefined ? { sessionFile: record.sessionFile } : {}),
 	};
 }
@@ -223,7 +226,8 @@ export class MainMail {
 		if (records.length === 0) return;
 		for (const record of records) this.pendingItems.delete(`pending-report-${record.name}`);
 		const id = this.nextId();
-		const wakes = records.some((record) => record.state !== "stopped" && !record.answeredMain);
+		// A stop someone asked for is no news; a run stopped over its budget is.
+		const wakes = records.some((record) => (record.state !== "stopped" || record.stopReason !== undefined) && !record.answeredMain);
 		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
 		// Every report shows its header; one that only repeats an answer keeps its text folded.
 		this.post({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } }, wakes);

@@ -84,7 +84,9 @@ the package. Removing it does not remove your credentials or change other packag
 - `PI_SUBAGENTS=off`: disable Subagents. `subagents` in `pi-extras.json`, all
   optional: `defaultModel` (a model or short name; default: the session's
   model), `maxConcurrent` (default `4`), `batchMs` (default `2000`),
-  `groupWaitMs` (default `60000`), `replyTimeoutMs` (default `600000`) and
+  `groupWaitMs` (default `60000`), `replyTimeoutMs` (default `600000`),
+  `maxRunMinutes` (default `60`, at most `1440`) and `maxRunCost` (US dollars,
+  default `null` for no limit), the budget of each run of a child,
   `childToolsExclude` (tool names children never get) and `resumePolicy`
   (`"reload"`, the default, resumes children a `/reload` interrupted;
   `"always"` also allows one automatic attempt after a restart or crash;
@@ -884,6 +886,17 @@ deletes its branch. Check that you kept all needed files first.
 
 **Limits.** At most `maxConcurrent` children run at once; the rest queue. A
 child can't start children of its own by default.
+Each run of a child has a time budget, `maxRunMinutes` (default 60), and an
+optional cost budget, `maxRunCost` (no limit by default). The `subagent` call
+can set its own with `maxMinutes` and `maxCost`, and the child keeps them
+when it resumes. Time counts only while the run works, not while it waits
+for an answer from main or its parent. Cost counts only what this run spent.
+A run over either budget is stopped with its subagents, like `stop_subagent`,
+but its parent gets a report that says why, for example `stopped after 1h00m:
+over its 60-minute budget`, with its last message. A report to main wakes it.
+So a hung child can't keep a `pi -p` run open forever. A message to the child
+resumes it with a fresh budget, and it is told that its last run was stopped
+over its budget.
 
 **Memory.** A child's session is released when it ends: at once when it
 failed or was stopped, after two quiet minutes when it finished, since a
