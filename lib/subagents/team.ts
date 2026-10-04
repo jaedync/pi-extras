@@ -9,7 +9,9 @@
  * - To a finished child: a question or anything from its parent resumes it;
  *   a sibling's note waits in its inbox for the next run.
  * - A reply to someone blocked on a question resolves that question instead.
- * A child is not done until its own children have reported.
+ * A child is not done until its own children have reported. A run that a
+ * peer's message started and that ends idle reports to its parent without
+ * waking it: main reads it at its next turn, a child parent at its next run.
  *
  * Sessions are released once a child ends: at once when it failed or was
  * stopped, after a quiet spell when it finished, since a follow-up often
@@ -101,6 +103,8 @@ export class Team {
 	private closed = false;
 	private closing: Promise<void> | undefined;
 	private readonly resumePrompts = new Map<string, string>();
+	/** Runs a peer's message started; main, its parent or the user writing to it during the run makes it theirs. */
+	private readonly peerRuns = new Set<string>();
 	/** Stopped by their own parent, which already knows; no report goes up. */
 	private readonly stoppedByParent = new Set<string>();
 	private readonly releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -382,6 +386,7 @@ export class Team {
 		const previous = this.records.get(name)!;
 		this.resumePrompts.delete(name);
 		this.runStarts.delete(name);
+		this.peerRuns.delete(name);
 		this.forgetAnswer(name);
 		this.patch(name, { state: "interrupted", error: message, restoreError: message, launchError: message,
 			launchFailures: (previous.launchFailures ?? 0) + 1, endedAt: this.now(), activity: `resume launch failed: ${message}`,
@@ -519,11 +524,18 @@ export class Team {
 		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
 		this.waiters.delete(name);
 		// The report answers anything main was waiting on.
-		this.owesMain.delete(name);
+		const owedMain = this.owesMain.delete(name);
 		// Answers still owed to it die with its run; a message resumes it to ask again.
 		this.owed.delete(name);
 		const unanswered: string[] = [];
-		for (const asker of [...this.owed.keys()]) if (this.payOwed(asker, name) && asker !== record.parent) unanswered.push(asker);
+		let parentAsked = false;
+		for (const asker of [...this.owed.keys()]) {
+			if (!this.payOwed(asker, name)) continue;
+			if (asker === record.parent) parentAsked = true;
+			else unanswered.push(asker);
+		}
+		// A peer's run that ended quietly is news for the parent's next turn, unless it answers the parent or main.
+		const quiet = this.peerRuns.delete(name) && record.state === "idle" && !parentAsked && !owedMain;
 		// A parent waiting on this child's answer gets the report as that answer.
 		const asked = this.questions.get(record.parent)?.find((question) => question.to === name);
 		const silent = this.stoppedByParent.delete(name);
@@ -532,9 +544,9 @@ export class Team {
 		} else if (silent) {
 			// Its parent stopped it and has the record from that call.
 		} else if (record.parent === MAIN) {
-			if (!record.blocking) this.options.deliverToMain({ kind: "report", record });
+			if (!record.blocking) this.options.deliverToMain({ kind: "report", record, ...(quiet ? { quiet } : {}) });
 		} else if (!record.blocking) {
-			this.deliverToChild(record.name, record.parent, reportText(record, this.now()), true, `Report from ${record.name}`);
+			this.deliverToChild(record.name, record.parent, reportText(record, this.now()), !quiet, `Report from ${record.name}`);
 		}
 		// Its parent has the report; anyone else it owed an answer gets how its run ended instead.
 		for (const asker of unanswered) this.deliverToChild(name, asker, `${name} ended without answering you. ${reportText(record, this.now())}`, true, `Report from ${name}`);
@@ -597,6 +609,8 @@ export class Team {
 		if (ended && !(from === target.parent || from === USER)) return { ok: false, error: `${to} has ${target.state}; only ${target.parent} or the user can resume it.` };
 		const missing = resumes && !LIVE_STATES.has(target.state) && target.worktree ? workspaceError(target.worktree.path) : undefined;
 		if (missing) return { ok: false, error: missing };
+		const peer = from !== MAIN && from !== USER && from !== target.parent && !this.under(from, to);
+		if (from === MAIN || from === USER || from === target.parent) this.peerRuns.delete(to);
 		this.forgetAnswer(to);
 		const handle = this.handles.get(to);
 		if ((target.state === "running" || target.state === "asking") && handle) {
@@ -611,6 +625,7 @@ export class Team {
 			try { if (!automatic) prepared = this.options.prepareResume?.(target) ?? prepared; }
 			catch (error) { return { ok: false, error: (error as Error).message }; }
 			this.resumePrompts.set(to, `${warning}${prepared.note ? `${prepared.note}\n\n` : ""}${body}`);
+			if (target.state !== "waiting") this.startedBy(to, peer);
 			this.patch(to, { state: "queued", model: prepared.model, resumedBy: { from, text: said }, startedAt: this.now(), error: undefined, stopReason: undefined, restoreError: undefined, launchError: undefined,
 				...(!automatic ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
 			this.queue.push(to);
@@ -619,13 +634,22 @@ export class Team {
 		}
 		if ((target.state === "idle" || target.state === "waiting") && handle && resumes) {
 			// A new run: time it on its own and forget what the last one answered.
-			if (target.state === "idle") this.patch(to, { resumedBy: { from, text: said }, startedAt: this.now(),
-				...(!automatic && (from === MAIN || from === USER) ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
+			if (target.state === "idle") {
+				this.startedBy(to, peer);
+				this.patch(to, { resumedBy: { from, text: said }, startedAt: this.now(),
+					...(!automatic && (from === MAIN || from === USER) ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
+			}
 			void this.run(to, [...this.takeInbox(to), body].join("\n\n"));
 			return { ok: true, delivered: "resumed" };
 		}
 		this.inboxes.set(to, [...(this.inboxes.get(to) ?? []), body]);
 		return { ok: true, delivered: target.state === "queued" || target.state === "starting" ? "queued" : "inbox" };
+	}
+
+	/** A new run from idle or interrupted; a peer started it unless main, its parent, the user or its own subagent did. */
+	private startedBy(name: string, peer: boolean): void {
+		if (peer) this.peerRuns.add(name);
+		else this.peerRuns.delete(name);
 	}
 
 	private async broadcast(from: string, text: string, expectReply: boolean): Promise<SendResult> {

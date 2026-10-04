@@ -145,4 +145,5 @@ export type MainDelivery =
 	| { kind: "reply"; from: string; text: string }
 	/** The user wrote to a child directly; main is told but not woken. */
 	| { kind: "relay"; from: string; to: string; text: string; answered: boolean }
-	| { kind: "report"; record: AgentRecord };
+	/** `quiet`: a run a peer started ended idle; main reads it at its next turn instead of being woken. */
+	| { kind: "report"; record: AgentRecord; quiet?: boolean };

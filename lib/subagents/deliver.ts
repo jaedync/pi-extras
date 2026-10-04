@@ -14,7 +14,9 @@
  *   of its group, so parallel work lands as one message. A child the user
  *   stopped doesn't wake it, nor does one from a run that began with main's
  *   question, answered it and did no more work. That report still shows its
- *   header, so the run's time, cost and tokens are on screen.
+ *   header, so the run's time, cost and tokens are on screen. A report of a
+ *   run that another child's message started, and that ended quietly, is
+ *   posted at once without waking main; main reads it at its next turn.
  *
  * Everything sent but not yet in the transcript is kept as pending, so the
  * widget can show it queued until Pi appends it.
@@ -181,6 +183,8 @@ export class MainMail {
 		if (this.closed) return;
 		if (delivery.kind === "report") {
 			const { record } = delivery;
+			// Nothing waits on it, so it neither joins a batch nor waits for its group.
+			if (delivery.quiet) return this.postReports([record], false);
 			this.remember({ id: `pending-report-${record.name}`, kind: "report", from: record.name, text: "report", at: this.now() });
 			const group = record.group;
 			if (group && this.groupWaitMs > 0 && this.groupBusy(group, record.name)) {
@@ -225,9 +229,13 @@ export class MainMail {
 		this.batch = [];
 		if (records.length === 0) return;
 		for (const record of records) this.pendingItems.delete(`pending-report-${record.name}`);
-		const id = this.nextId();
 		// A stop someone asked for is no news; a run stopped over its budget is.
-		const wakes = records.some((record) => (record.state !== "stopped" || record.stopReason !== undefined) && !record.answeredMain);
+		this.postReports(records, records.some((record) => (record.state !== "stopped" || record.stopReason !== undefined) && !record.answeredMain));
+	}
+
+	/** Reports sent together, as one message. */
+	private postReports(records: readonly AgentRecord[], wakes: boolean): void {
+		const id = this.nextId();
 		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
 		// Every report shows its header; one that only repeats an answer keeps its text folded.
 		this.post({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } }, wakes);

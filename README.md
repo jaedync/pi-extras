@@ -781,7 +781,11 @@ the question wakes them. A question to anyone else, a peer or its own
 subagent, returns at once: the answer arrives as a message that wakes the
 asker, and its report waits until every agent it asked answers or ends. One
 that ends without answering hands the asker how its run ended. So agents never
-wait on each other in a loop. Main never waits: a child's note or question
+wait on each other in a loop. When a peer's message resumes a finished child
+and that run ends normally, its report goes to its parent without waking it:
+main reads it at its next turn, and a child parent at its next run. A run that
+fails or goes over its budget still wakes the parent, and so does one that
+main, the parent or you wrote to while it ran. Main never waits: a child's note or question
 wakes it, and so does the answer to anything main asked. When main's question resumes a finished child that
 answers and then just writes its final text, the report doesn't wake main a
 second time. More work, new input or a failure after the answer does, so a
