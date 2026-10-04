@@ -10,6 +10,11 @@
  *   a sibling's note waits in its inbox for the next run.
  * - A reply to someone blocked on a question resolves that question instead.
  * A child is not done until its own children have reported.
+ *
+ * Sessions are released once a child ends: at once when it failed or was
+ * stopped, after a quiet spell when it finished, since a follow-up often
+ * comes quickly. A message to a released child relaunches it from its
+ * session file with its context, so a long session's memory stays bounded.
  */
 import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
@@ -35,7 +40,12 @@ export interface TeamOptions {
 	/** Restored sessions have no handle until resumed, but their inspector still has a transcript. */
 	messagesFor?: (record: AgentRecord) => readonly unknown[];
 	prepareResume?: (record: AgentRecord) => { model: string; note?: string; notice?: string };
+	/** How long a finished child keeps its session in memory before it is released; default IDLE_RELEASE_MS. */
+	idleReleaseMs?: number;
 }
+
+/** A follow-up to a report usually comes within a minute or two; after that a relaunch costs less than holding the session. */
+export const IDLE_RELEASE_MS = 120_000;
 
 export type SendResult =
 	| { ok: true; delivered: "steered" | "resumed" | "queued" | "replied" | "main" | "inbox"; reply?: string; notice?: string }
@@ -49,6 +59,16 @@ interface Pending {
 }
 
 type Listener = (record: AgentRecord | null) => void;
+
+const CHECK_FIRST = "Its last tool call may not have completed and files may have changed. Verify the current state before continuing.";
+
+/** What a resumed agent is told first about how its last run ended, when that run did not finish. */
+function resumeWarning(target: AgentRecord): string {
+	if (target.state === "interrupted") return `Your previous run was interrupted. ${CHECK_FIRST}\n\n`;
+	if (target.state === "failed") return `Your previous run failed: ${target.error ?? "unknown error"}. ${CHECK_FIRST}\n\n`;
+	if (target.state === "stopped") return `Your previous run was stopped. ${CHECK_FIRST}\n\n`;
+	return "";
+}
 
 export class Team {
 	private readonly records = new Map<string, AgentRecord>();
@@ -71,6 +91,9 @@ export class Team {
 	private closed = false;
 	private closing: Promise<void> | undefined;
 	private readonly resumePrompts = new Map<string, string>();
+	/** Stopped by their own parent, which already knows; no report goes up. */
+	private readonly stoppedByParent = new Set<string>();
+	private readonly releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly now: () => number;
 	private readonly options: TeamOptions;
 
@@ -162,6 +185,10 @@ export class Team {
 		}
 		const body = options.expectReply ? questionText(from, text) : noteText(from, text);
 		const said = `${options.expectReply ? "Question" : "Message"} from ${from}: ${text}`;
+		if (options.expectReply && from !== MAIN && from !== USER) {
+			const loop = this.waitLoop(from, to);
+			if (loop) return { ok: false, error: loop };
+		}
 		// Main never blocks: its question is delivered, and the answer wakes it later.
 		if (from === MAIN && options.expectReply) {
 			const idle = this.records.get(to)?.state === "idle";
@@ -205,11 +232,16 @@ export class Team {
 		return this.handles.get(name)?.tool?.(toolName);
 	}
 
-	/** Stops a child and everything under it. */
-	async stop(name: string): Promise<void> {
+	/**
+	 * Stops a child and everything under it, and returns it as it ended;
+	 * undefined when it had already ended. Stopped `by` its own parent, no
+	 * report goes up: the parent asked for it and has the record.
+	 */
+	async stop(name: string, options: { by?: string } = {}): Promise<AgentRecord | undefined> {
 		const record = this.records.get(name);
-		if (!record || (!LIVE_STATES.has(record.state) && record.state !== "interrupted")) return;
-		for (const child of this.list().filter((entry) => entry.parent === name)) await this.stop(child.name);
+		if (!record || (!LIVE_STATES.has(record.state) && record.state !== "interrupted")) return undefined;
+		if (options.by !== undefined && options.by === record.parent) this.stoppedByParent.add(name);
+		for (const child of this.list().filter((entry) => entry.parent === name)) await this.stop(child.name, { by: name });
 		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
 		this.resumePrompts.delete(name);
 		for (const question of this.questions.get(name) ?? []) question.reject(new Error("stopped"));
@@ -218,6 +250,15 @@ export class Team {
 		await handle?.abort().catch(() => undefined);
 		this.patch(name, { report: this.runText(name) });
 		this.finish(name);
+		return this.records.get(name);
+	}
+
+	/** Whether `name` is `ancestor` or sits anywhere under it. */
+	under(name: string, ancestor: string): boolean {
+		for (let current = this.records.get(name); current; current = this.records.get(current.parent)) {
+			if (current.parent === ancestor) return true;
+		}
+		return false;
 	}
 
 	/** Freeze records before aborting, so SDK cancellation cannot turn shutdown into a failure. */
@@ -236,6 +277,8 @@ export class Team {
 	close(reason: AgentRecord["interruptedBy"] = "quit", owner?: string): Promise<void> {
 		if (this.closing) return this.closing;
 		this.interrupt(reason, owner);
+		for (const timer of this.releaseTimers.values()) clearTimeout(timer);
+		this.releaseTimers.clear();
 		return this.closing = (async () => {
 			await Promise.all([
 				Promise.allSettled([...this.handles.values()].map(async (handle) => {
@@ -333,6 +376,7 @@ export class Team {
 	private async run(name: string, text: string): Promise<void> {
 		const handle = this.handles.get(name);
 		if (!handle) return;
+		this.keep(name);
 		const record = this.records.get(name)!;
 		this.runStarts.set(name, new Set(handle.messages()));
 		this.patch(name, { state: "running", activity: "thinking", runs: record.runs + 1, endedAt: undefined });
@@ -425,30 +469,97 @@ export class Team {
 		this.owesMain.delete(name);
 		// A parent waiting on this child's answer gets the report as that answer.
 		const asked = this.questions.get(record.parent)?.find((question) => question.to === name);
+		const silent = this.stoppedByParent.delete(name);
 		if (asked) {
 			asked.resolve(reportText(record, this.now()));
+		} else if (silent) {
+			// Its parent stopped it and has the record from that call.
 		} else if (record.parent === MAIN) {
 			if (!record.blocking) this.options.deliverToMain({ kind: "report", record });
 		} else if (!record.blocking) {
 			this.deliverToChild(record.name, record.parent, reportText(record, this.now()), true, `Report from ${record.name}`);
 		}
+		// Anyone else waiting on it would wait out the whole timeout for an answer that can't come.
+		for (const [asker, questions] of this.questions) {
+			if (asker === record.parent) continue;
+			for (const question of questions.filter((open) => open.to === name)) question.reject(new Error(`${name} ended without answering (${record.state}). Continue without its answer, or message it again: a finished agent resumes to handle a message.`));
+		}
+		this.scheduleRelease(name, record.state);
 		this.pump();
+	}
+
+	/** A failed or stopped child's session goes at once; a finished one's after a quiet spell. */
+	private scheduleRelease(name: string, state: AgentRecord["state"]): void {
+		if (!this.handles.has(name)) return;
+		if (state === "failed" || state === "stopped") return void this.release(name);
+		if (state !== "idle") return;
+		this.keep(name);
+		const timer = setTimeout(() => {
+			this.releaseTimers.delete(name);
+			if (this.records.get(name)?.state === "idle") void this.release(name);
+		}, this.options.idleReleaseMs ?? IDLE_RELEASE_MS);
+		timer.unref?.();
+		this.releaseTimers.set(name, timer);
+	}
+
+	/** A new run keeps the session it is about to use. */
+	private keep(name: string): void {
+		const timer = this.releaseTimers.get(name);
+		if (timer) clearTimeout(timer);
+		this.releaseTimers.delete(name);
+	}
+
+	private async release(name: string): Promise<void> {
+		const handle = this.handles.get(name);
+		if (!handle) return;
+		this.handles.delete(name);
+		this.keep(name);
+		try { await handle.dispose(); }
+		catch (error) { (this.options.warn ?? console.warn)(`subagents: releasing ${name}'s session failed: ${(error as Error).message}`); }
+	}
+
+	/**
+	 * Why `from` must not wait on `to`: `to` already waits, through a chain of
+	 * open questions, on `from`, which could never answer while it waits.
+	 * Undefined when there is no such loop.
+	 */
+	private waitLoop(from: string, to: string): string | undefined {
+		const path = [to];
+		const seen = new Set<string>();
+		const walk = (agent: string): boolean => {
+			if (agent === from) return true;
+			if (seen.has(agent)) return false;
+			seen.add(agent);
+			for (const question of this.questions.get(agent) ?? []) {
+				path.push(question.to);
+				if (walk(question.to)) return true;
+				path.pop();
+			}
+			return false;
+		};
+		if (!walk(to)) return undefined;
+		const chain = path.slice(0, -1).map((agent, index) => `${agent} is waiting on ${path[index + 1] === from ? `you (${from})` : path[index + 1]}`).join(", ");
+		return `Asking ${to} would close a waiting loop: ${chain}. Answer its question first with message({ to: "${path.at(-2)}", text }) without expectReply, or send this as a note.`;
 	}
 
 	/** `said` is how the report of a run this message starts names it. */
 	private deliverToChild(from: string, to: string, body: string, wakes: boolean, said = body, automatic = false): SendResult {
 		const target = this.records.get(to);
 		if (!target) return { ok: false, error: `No agent named ${to}. ${this.knownNames()}` };
-		if (target.state === "failed" || target.state === "stopped") return { ok: false, error: `${to} has ${target.state}.` };
+		const resumes = wakes || from === target.parent || from === USER;
+		// An ended run's session is on disk, so its parent or the user can take it up again; a peer can't.
+		const ended = target.state === "failed" || target.state === "stopped";
+		if (ended && !(from === target.parent || from === USER)) return { ok: false, error: `${to} has ${target.state}; only ${target.parent} or the user can resume it.` };
 		this.forgetAnswer(to);
 		const handle = this.handles.get(to);
 		if ((target.state === "running" || target.state === "asking") && handle) {
 			handle.steer(body);
 			return { ok: true, delivered: "steered" };
 		}
-		const resumes = wakes || from === target.parent || from === USER;
-		if (!handle && resumes && (target.state === "idle" || target.state === "waiting" || target.state === "interrupted")) {
-			const warning = target.state === "interrupted" ? "Your previous run was interrupted. Its last tool call may not have completed and files may have changed. Verify the current state before continuing.\n\n" : "";
+		// Released when it ended; should it still be held, let it go before a fresh launch takes its place.
+		if (ended && handle) void this.release(to);
+		if ((!handle || ended) && resumes && (target.state === "idle" || target.state === "waiting" || target.state === "interrupted" || ended)) {
+			const warning = resumeWarning(target);
 			let prepared: { model: string; note?: string; notice?: string } = { model: target.model };
 			try { if (!automatic) prepared = this.options.prepareResume?.(target) ?? prepared; }
 			catch (error) { return { ok: false, error: (error as Error).message }; }

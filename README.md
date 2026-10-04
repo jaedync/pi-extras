@@ -32,7 +32,7 @@ can still conflict.
 | Phase Spinner | Descriptive status with a per-mode spinner in the editor's top divider, with a per-step stopwatch, alongside tokens/sec, time to first token and total elapsed time; live thinking above queued messages and a π end line when a prompt finishes |
 | Tab Status | Pi's state in the terminal tab: an iTerm2 status dot and detail, and tab progress in iTerm2, Ghostty, WezTerm and Windows Terminal |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
-| Subagents | `subagent` and `message` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, each with a live row above the editor |
+| Subagents | `subagent`, `message` and `stop_subagent` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, each with a live row above the editor |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
@@ -771,8 +771,12 @@ agent to.
 **Talking.** Every agent has a name made from its task, and `main` is the
 session. `message` sends a note to an agent by name, or to `all`. A running
 agent reads it after its current tool call; a finished one resumes with its
-context to handle it. A child can ask with `expectReply: true` and wait for the
-answer. Main never waits: a child's note or question wakes it, and so does the
+context to handle it. A failed or stopped one resumes too when main, its
+parent or you write to it, and is told first how its last run ended; a peer's
+note can't wake it. A child can ask with `expectReply: true` and wait for the
+answer. A question to an agent that ends without answering returns at once,
+not after the timeout, and a question that would close a loop of agents
+waiting on each other is refused with who waits on whom. Main never waits: a child's note or question wakes it, and so does the
 answer to anything main asked. When main's question resumes a finished child that
 answers and then just writes its final text, the report doesn't wake main a
 second time. More work, new input or a failure after the answer does, so a
@@ -845,7 +849,7 @@ or main told it reads as conversation rows, not as the text its model reads:
 `→ reviewer  you wrote` or `main asks` over the message, `◆ finder → reviewer
 note` in the sender's color, and `◆ lead-a reported` for a report from one
 of its own children. Type and press Enter to write to it (steered in while it
-runs, resuming it when it has finished, answering it when it asked); ctrl+x
+runs, resuming it when it has ended, answering it when it asked); ctrl+x
 twice stops it, and Esc or `✕` closes. Main is told what you wrote. Status
 Plus counts every child in its totals.
 
@@ -857,8 +861,20 @@ characters; main reads the rest with its normal read tool. `/subagents report
 numbers can skip when a run ends waiting for a reply. If saving fails, the
 message still arrives and points to the session file as before.
 
+**Stopping.** `stop_subagent` stops a subagent and everything it started:
+main can stop any, and a child that may start subagents can stop its own.
+The call returns how it ended and its last message, so no report follows; a
+message resumes it later. `/subagents stop <name>`, `stop all` and ctrl+x in
+the inspector stop children for you, and then main gets the stopped report.
+
 **Limits.** At most `maxConcurrent` children run at once; the rest queue. A
 child can't start children of its own by default.
+
+**Memory.** A child's session is released when it ends: at once when it
+failed or was stopped, after two quiet minutes when it finished, since a
+follow-up often comes soon. A message to a released child relaunches it from
+its session file with its context, and its inspector reads that file, so a
+long session with many children keeps only the working ones in memory.
 
 **Headless runs.** `pi -p` and `--mode json` end when main settles, so main
 waits there for its background children. Their reports, questions and notes
@@ -886,7 +902,7 @@ Pi process at a time can own a session's children; forks start without them.
 Each run adds a line to `~/.pi/agent/subagents/runs.jsonl` (model,
 task opening, time, tool calls, cost, how it ended); `/subagents stats` sums it
 by model, which is what to tune the guide on. `/subagents stop <name>` or
-`stop all` stops children, including paused interrupted ones.
+`stop all` also stops paused interrupted children.
 
 If another extension already has a `subagent` tool, such as pi-subagents,
 Subagents stays off for the session and says so; remove one of the two. A

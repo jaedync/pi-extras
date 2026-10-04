@@ -28,8 +28,16 @@ export function subagentDescription(options: { models: string; defaultModel: str
 export function mainMessageDescription(): string {
 	return [
 		`Send a message to a subagent by name, or to "all" of them.`,
-		"A running subagent reads it after its current tool call. A finished one resumes with its context intact to handle it.",
+		"A running subagent reads it after its current tool call. A finished, failed or stopped one resumes with its context intact to handle it.",
 		"With expectReply: true its answer wakes you when it arrives. You never wait on this call.",
+	].join(" ");
+}
+
+export function stopDescription(forChild: boolean): string {
+	return [
+		`Stop a subagent you started, and everything it started, when its work is no longer needed or it is going wrong.`,
+		`Pass its name, or "all" for every one of yours that is still working. The result says how it ended and gives its last message; no report follows. A message to it later resumes it with its context.`,
+		forChild ? "You can stop only your own subagents." : "A finished subagent has nothing to stop; message it instead.",
 	].join(" ");
 }
 

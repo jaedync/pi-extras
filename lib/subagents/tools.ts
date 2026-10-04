@@ -4,10 +4,10 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { childMessageDescription, mainMessageDescription, subagentDescription } from "./describe.ts";
+import { childMessageDescription, mainMessageDescription, stopDescription, subagentDescription } from "./describe.ts";
 import { capReport, reportText, rosterText } from "./format.ts";
 import { isThinking, type ModelChoice, resolveModel, THINKING_LEVELS, type Thinking, thinkingFor, type ThinkingSettings } from "./models.ts";
-import { MAIN } from "./names.ts";
+import { EVERYONE, MAIN } from "./names.ts";
 import type { Team } from "./team.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
 
@@ -48,6 +48,10 @@ const messageParams = Type.Object({
 	to: Type.String({ minLength: 1, description: "An agent's name, or \"all\"." }),
 	text: Type.String({ minLength: 1, maxLength: MAX_MESSAGE_CHARS }),
 	expectReply: Type.Optional(Type.Boolean({ description: "Ask for an answer." })),
+}, { additionalProperties: false });
+
+const stopParams = Type.Object({
+	name: Type.String({ minLength: 1, description: "The subagent's name, or \"all\" for every one of yours still working." }),
 }, { additionalProperties: false });
 
 interface SubagentInput { task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; context?: string; wait?: boolean }
@@ -161,6 +165,35 @@ export function mainMessageTool(tc: ToolContext): ToolDefinition {
 			return text(`${deliveredWords[result.delivered] ?? "Delivered."}${tail}${result.notice ? `\n${result.notice}` : ""}`, { to: params.to, delivered: result.delivered, ...(result.notice ? { notice: result.notice } : {}) });
 		},
 	} as ToolDefinition;
+}
+
+/** Stops a subagent `self` started (or one under it); main can stop any. */
+export function stopTool(tc: Pick<ToolContext, "team">, self: string): ToolDefinition {
+	return {
+		name: "stop_subagent",
+		label: "Stop subagent",
+		description: stopDescription(self !== MAIN),
+		promptSnippet: "Stop a subagent whose work is no longer needed",
+		parameters: stopParams,
+		async execute(_id, raw) {
+			const { name } = raw as { name: string };
+			if (name === EVERYONE) return stopAll(tc.team, self);
+			const record = tc.team.get(name);
+			if (!record) throw new Error(`No agent named ${name}.`);
+			if (!tc.team.under(name, self)) throw new Error(`${name} is not one of your subagents; you can stop only agents you started.`);
+			const stopped = await tc.team.stop(name, { by: self });
+			if (!stopped) return text(`${name} had already ${record.state === "idle" ? "finished" : record.state}; nothing to stop.`, { name, state: record.state });
+			return text(`Stopped ${name}. ${reportText(stopped, Date.now())}\n\nMessage it to resume it with its context.`, { name, state: stopped.state, ...(stopped.sessionFile ? { sessionFile: stopped.sessionFile } : {}) });
+		},
+	} as ToolDefinition;
+}
+
+async function stopAll(team: Team, self: string): Promise<Result> {
+	const mine = team.list().filter((record) => record.parent === self && (LIVE_STATES.has(record.state) || record.state === "interrupted"));
+	if (mine.length === 0) return text("No subagents of yours are running.", { stopped: [] });
+	const stopped: string[] = [];
+	for (const record of mine) if (await team.stop(record.name, { by: self })) stopped.push(record.name);
+	return text(`Stopped ${stopped.length} ${stopped.length === 1 ? "subagent" : "subagents"}: ${stopped.join(", ")}. Their last messages are in their sessions; no reports follow.`, { stopped });
 }
 
 export function childMessageTool(tc: ToolContext, self: string): ToolDefinition {

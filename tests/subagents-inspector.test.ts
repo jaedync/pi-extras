@@ -236,13 +236,16 @@ test("letters a terminal sends in the kitty protocol are typed", () => {
 	view.dispose();
 });
 
-test("an agent that ended says it can't take messages", () => {
-	const { view, log, screen, type } = open("failed");
-	assert.match(screen(), /It has ended; it can't take messages\./);
-	type("hello");
-	view.handleInput("\r");
-	assert.deepEqual(log.sent, []);
-	view.dispose();
+test("a failed or stopped agent takes a message, which resumes it", async () => {
+	for (const state of ["failed", "stopped"] as const) {
+		const { view, log, screen, type } = open(state);
+		assert.match(screen(), /→ surveyor ▏write to resume it/);
+		type("try again");
+		view.handleInput("\r");
+		await Promise.resolve();
+		assert.deepEqual(log.sent, ["try again"]);
+		view.dispose();
+	}
 });
 
 test("a finished agent's inspector says it finished, not that its report waits", () => {

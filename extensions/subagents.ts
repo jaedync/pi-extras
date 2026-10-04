@@ -40,7 +40,7 @@ import { latestReportFile } from "../lib/subagents/reports.ts";
 import { recoveryOwner, recoveryDecision } from "../lib/subagents/recovery.ts";
 import { createSessionScanner } from "../lib/subagents/session-scan.ts";
 import { ChildIndex, legacyRecords, recoverRoster } from "../lib/subagents/restore.ts";
-import { childMessageTool, mainMessageTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
+import { childMessageTool, mainMessageTool, stopTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
 import { awaitChildren, isHeadless } from "../lib/subagents/headless.ts";
@@ -138,7 +138,7 @@ export default function subagents(pi: ExtensionAPI) {
 			...chatSettings(inspectorCwd),
 			motion,
 			hue: (other) => agentHue(current.team.get(other)?.model),
-			stop: () => current.team.stop(name),
+			stop: async () => { await current.team.stop(name); },
 			async send(text) {
 				const result = await current.team.send(USER, name, text);
 				if (!result.ok) throw new Error(result.error);
@@ -284,7 +284,7 @@ export default function subagents(pi: ExtensionAPI) {
 						extensionPaths: childExtensionPaths(pi.getAllTools(), names),
 						customTools: [
 							childMessageTool(tools, record.name),
-							...(record.depth < config.maxDepth ? [subagentTool(tools, record.name)] : []),
+							...(record.depth < config.maxDepth ? [subagentTool(tools, record.name), stopTool(tools, record.name)] : []),
 						],
 					};
 				},
@@ -407,7 +407,7 @@ export default function subagents(pi: ExtensionAPI) {
 		backgroundCtx = ctx;
 		publishBackground();
 		const current = state;
-		for (const tool of [subagentTool(current.tools, MAIN), mainMessageTool(current.tools)]) {
+		for (const tool of [subagentTool(current.tools, MAIN), mainMessageTool(current.tools), stopTool(current.tools, MAIN)]) {
 			if (foreign(tool.name)) {
 				ctx.ui.notify(`subagents: tool name "${tool.name}" is already registered by another extension; skipping it.`, "warning");
 				continue;

@@ -17,7 +17,7 @@ type Sdk = typeof import("@earendil-works/pi-coding-agent");
 
 /** Never given to a child, whatever the parent has. */
 export const CHILD_TOOL_EXCLUDE: readonly string[] = [
-	"subagent", "message", "subagents_enable", "bg_wait", "subagent_supervisor",
+	"subagent", "message", "stop_subagent", "subagents_enable", "bg_wait", "subagent_supervisor",
 	"agent_send", "agent_request", "list_peers",
 	"get_goal", "create_goal", "propose_goal_draft", "complete_goal", "update_goal_progress",
 	"shell_job_start", "shell_job", "computer_use", "windows_use", "usage", "codemode", "tool_search",

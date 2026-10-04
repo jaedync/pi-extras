@@ -309,19 +309,32 @@ for (const fixture of [anthropic, codex]) test(`main shutdown restores native ${
 	assertRequests(http, 1);
 });
 
-for (const fixture of [anthropic, codex]) test(`actual child close restores native ${fixture.provider} stream functions`, { timeout: 10_000 }, async (t) => {
+for (const fixture of [anthropic, codex]) test(`an actual child's end restores native ${fixture.provider} stream functions`, { timeout: 10_000 }, async (t) => {
 	const http = await endpoint({ retryAfter: "0.1" }, fixture);
 	t.after(() => http.close());
 	const f = await childSession(http.baseUrl, fixture, configuredRetry, true);
 	t.after(() => f.close());
 	t.after(() => t.diagnostic(`Native HTTP requests: ${http.requests.length}; child restoration checked`));
+	// Checked while the request is in flight: the child's session is released as soon as it ends.
+	let wrapped = false;
+	http.observe(() => {
+		try { f.assertWrapped(); wrapped = true; } catch { /* reported below */ }
+		return [];
+	});
 	assert.equal(f.team.spawn({ name: "lease", task: "Exercise child native provider lease.", parent: "main", model: `${f.model.provider}/${f.model.id}`, readOnly: false, fork: false, blocking: false }).ok, true);
 	await bounded(f.team.whenDone("lease"), () => f.team.close());
-	f.assertWrapped();
+	assert.ok(wrapped, "Quota guard wrapped the native provider during the child's request");
+	for (let i = 0; i < 100 && runtimeWrapped(f); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+	f.assertRestored();
 	await f.team.close();
 	f.assertRestored();
 	assertRequests(http, 1);
 });
+
+/** Whether the guard is still wrapped, without failing; release is asynchronous. */
+function runtimeWrapped(f: { assertWrapped(): void }): boolean {
+	try { f.assertWrapped(); return true; } catch { return false; }
+}
 
 test("ordinary native HTTP 500 retains Pi session retry ownership", { timeout: 10_000 }, async (t) => {
 	const http = await endpoint({ status: 500, recover: true });

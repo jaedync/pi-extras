@@ -26,7 +26,7 @@ const KEYS: readonly SheetKey[] = [
 	{ key: "enter", label: "send" }, { key: "esc", label: "close" }, { key: "ctrl+x", label: "stop" }, { key: "↑↓ PgUp/PgDn", label: "scroll" },
 ];
 const KEYS_DRAFT: readonly SheetKey[] = [{ key: "enter", label: "send" }, { key: "esc", label: "clear" }, { key: "↑↓ PgUp/PgDn", label: "scroll" }];
-const ENDED = "It has ended; it can't take messages.";
+const GONE = "This agent is gone; it can't take messages.";
 const PASTE_MARKS = /\x1b\[20[01]~/g;
 
 export interface InspectorSource {
@@ -179,15 +179,15 @@ export class AgentView implements SheetSource {
 		return true;
 	}
 
+	/** Any agent takes a message: a finished, failed or stopped one resumes from its session to handle it. */
 	private accepts(): boolean {
-		const record = this.source.record();
-		return record !== undefined && record.state !== "failed" && record.state !== "stopped";
+		return this.source.record() !== undefined;
 	}
 
 	private send(): void {
 		const text = this.draft.trim();
 		if (!text) return;
-		if (!this.accepts()) return this.flash(ENDED, "warning");
+		if (!this.accepts()) return this.flash(GONE, "warning");
 		this.draft = "";
 		this.flash("sending…", "dim");
 		this.source.send(text).then((said) => this.flash(said, "success"), (error: Error) => this.flash(error.message, "error"));
@@ -212,11 +212,12 @@ export class AgentView implements SheetSource {
 
 	private composer(width: number): string {
 		const record = this.source.record();
-		if (!record || !this.accepts()) return this.paint("dim", ENDED);
+		if (!record) return this.paint("dim", GONE);
 		const label = `→ ${record.name} `;
 		const hue = agentHue(record.model);
 		const caret = this.paint(hue, "▏");
-		if (!this.draft) return `${this.paint(hue, label)}${caret}${this.paint("dim", record.state === "idle" ? "write to resume it" : "write to it")}`;
+		const ended = !LIVE_STATES.has(record.state);
+		if (!this.draft) return `${this.paint(hue, label)}${caret}${this.paint("dim", ended ? "write to resume it" : "write to it")}`;
 		const room = Math.max(4, width - visibleWidth(label) - 1);
 		const draft = this.draft.length > room ? `…${this.draft.slice(-(room - 1))}` : this.draft;
 		return `${this.paint(hue, label)}${draft}${caret}`;

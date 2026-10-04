@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
-import { subagentTool } from "../lib/subagents/tools.ts";
+import { stopTool, subagentTool } from "../lib/subagents/tools.ts";
 import type { AgentRecord, ChildHandle } from "../lib/subagents/types.ts";
 
 /** A team whose children finish when the test says, behind the real `subagent` tool. */
@@ -49,5 +49,40 @@ test("a waited-on child's report is the tool result, with the report in details"
 	const result = await call;
 	assert.equal(result.details.report, "**3** files");
 	assert.match(result.content[0].text, /counter \(openai-codex\/gpt-6-luna\) finished after/);
+	await team.close();
+});
+
+test("stop_subagent stops one of yours and returns how it ended, and refuses agents that aren't yours", async () => {
+	const { team, tool, finishers } = setup();
+	const stop = stopTool({ team } as never, "main");
+	await (tool.execute as any)("id", { task: "survey the repo", name: "surveyor" }, undefined, undefined);
+	await tick();
+	await tick();
+	const stopped = await (stop.execute as any)("id", { name: "surveyor" }, undefined, undefined);
+	assert.match(stopped.content[0].text, /^Stopped surveyor\. surveyor \(openai-codex\/gpt-6-luna\) was stopped after/);
+	assert.equal(stopped.details.state, "stopped");
+	assert.equal(team.get("surveyor")?.state, "stopped");
+	const again = await (stop.execute as any)("id", { name: "surveyor" }, undefined, undefined);
+	assert.match(again.content[0].text, /surveyor had already stopped; nothing to stop\./);
+	await assert.rejects((stop.execute as any)("id", { name: "ghost" }, undefined, undefined), /No agent named ghost/);
+	// A child can stop only agents under it.
+	const childStop = stopTool({ team } as never, "surveyor");
+	await (tool.execute as any)("id", { task: "another job", name: "other" }, undefined, undefined);
+	await assert.rejects((childStop.execute as any)("id", { name: "other" }, undefined, undefined), /other is not one of your subagents/);
+	finishers.get("other")?.("done");
+	await team.close();
+});
+
+test("stop_subagent with all stops every live agent you started, and says when there are none", async () => {
+	const { team, tool } = setup();
+	const stop = stopTool({ team } as never, "main");
+	assert.match((await (stop.execute as any)("id", { name: "all" }, undefined, undefined)).content[0].text, /No subagents of yours are running\./);
+	await (tool.execute as any)("id", { task: "one", name: "one" }, undefined, undefined);
+	await (tool.execute as any)("id", { task: "two", name: "two" }, undefined, undefined);
+	await tick();
+	await tick();
+	const result = await (stop.execute as any)("id", { name: "all" }, undefined, undefined);
+	assert.match(result.content[0].text, /^Stopped 2 subagents: one, two\./);
+	assert.deepEqual([team.get("one")?.state, team.get("two")?.state], ["stopped", "stopped"]);
 	await team.close();
 });
