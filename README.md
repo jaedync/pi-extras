@@ -806,11 +806,12 @@ and tokens (`in` counts cached prompt tokens too), and the first lines of the
 report under it. When its answer is already on screen, the report stays one
 line and a click unfolds its text.
 Each agent has a row above the editor:
-`◆ reviewer  1m02s  ∴ thinking  opus high · $0.21 · ctx 8%`, its name, how
-long this run has taken, what it is doing right now, then its model and
-thinking level, what it has cost and how full its context is. Names and times
-line up, so what each agent is doing starts in one column; once it has ended,
-`✓`, `✗` or `■` takes the spinner's place. What it is doing moves the way
+`◆ reviewer  1m02s  $0.21  opus high  ∴ thinking`, its name, how long this run
+has taken, what it has cost, its model and thinking level, then what it is
+doing right now. What it is doing comes last, so a narrow terminal cuts it
+and keeps the cost and model. Names, times, costs and models line up, so what
+each agent is doing starts in one column; once it has ended, `✓`, `✗` or `■`
+takes the spinner's place. What it is doing moves the way
 main's own spinner does for the same work, so thinking, writing, a tool call (in the tool color)
 or a compaction look alike everywhere; a question waits in amber. Children of
 children sit under their parent. A child the agent waits on (`wait: true`)

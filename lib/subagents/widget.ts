@@ -3,10 +3,11 @@
  * under their parent, then any messages queued for main that Pi has not
  * appended yet. A row is the agent's presence, its ◆ and name in its color with
  * no band behind it (band/agent-look.ts): who it is, how long it has run,
- * what it is doing right now (moving as main's spinner does for the same
- * work), then its model, what it has cost and how full its context is. Names
- * and times line up across rows, so what each agent is doing starts in one
- * column; nothing else is padded, so no row has a hole in it. A finished
+ * what it has cost and its model, then what it is doing right now (moving as
+ * main's spinner does for the same work). What it is doing comes last because
+ * it is the only part whose length has no bound, so a narrow terminal cuts it
+ * and keeps the rest. Name, time, spend and model line up across rows, so
+ * what each agent is doing starts in one column. A finished
  * agent keeps its row until its report is in the transcript. Past four
  * agents, the last line is a control line that opens the agents view or
  * expands the rows (overflow.ts).
@@ -91,16 +92,23 @@ export function nameSegs(record: AgentRecord, depth = 0, width = 0): Seg[] {
 	];
 }
 
-/** Column widths that line rows up: the widest nested name and run time among them. */
+/** Column widths that line rows up: the widest nested name, run time, spend and model among them. */
 export interface RowColumns {
 	readonly name: number;
 	readonly time: number;
+	readonly cost: number;
+	readonly model: number;
 }
 
+const NO_COLUMNS: RowColumns = { name: 0, time: 0, cost: 0, model: 0 };
+
 export function rowColumns(rows: readonly AgentRow[], now = 0): RowColumns {
+	const widest = (width: (row: AgentRow) => number) => Math.max(0, ...rows.map(width));
 	return {
-		name: Math.max(0, ...rows.map((row) => nestText(row.depth).length + row.record.name.length)),
-		time: Math.max(0, ...rows.map((row) => runTime(row.record, now)?.length ?? 0)),
+		name: widest((row) => nestText(row.depth).length + row.record.name.length),
+		time: widest((row) => runTime(row.record, now)?.length ?? 0),
+		cost: widest((row) => costText(row.record).length),
+		model: widest((row) => modelText(row.record).length),
 	};
 }
 
@@ -110,30 +118,29 @@ export function runTime(record: AgentRecord, now: number): string | undefined {
 	return record.state === "queued" ? undefined : formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt));
 }
 
-/** Its model, what it has cost and how full its context is, quiet after the rest. */
-export function factSegs(record: AgentRecord): Seg[] {
-	const parts: Seg[] = [{ text: modelText(record), color: "dim" }];
-	if (record.usage.cost > 0) parts.push({ text: `$${formatMoney(record.usage.cost)}`, color: "dim" });
-	if (record.contextTokens && record.contextWindow) parts.push({ text: `ctx ${Math.round((100 * record.contextTokens) / record.contextWindow)}%`, color: "dim" });
-	return parts.flatMap((part, index) => (index === 0 ? [part] : [{ text: " · ", color: "dim" }, part]));
-}
+/** What it has cost so far; empty while it is free. */
+export const costText = (record: AgentRecord): string => (record.usage.cost > 0 ? `$${formatMoney(record.usage.cost)}` : "");
 
 export const modelText = (record: AgentRecord): string => `${shortModel(record.model)}${record.thinking ? ` ${record.thinking}` : ""}`;
 
+/** One column's cell: empty when neither this row nor any other has a value, so no row opens a hole. */
+const cell = (text: string, width: number, color: string, align: "left" | "right"): Seg[] =>
+	text || width ? [{ text: align === "right" ? text.padStart(width) : text.padEnd(width), color }] : [];
+
 /**
- * Who, how long, what it is doing (a glyph that moves for the work, or how
- * it ended, and the words), then its model and spend. Read left to right with
- * no gaps to cross; past the width the model and spend go first, then the words.
+ * Who, how long, what it has cost and its model, then what it is doing (a
+ * glyph that moves for the work, or how it ended, and the words). Past the
+ * width the words go first, so the facts always show.
  */
-export function rowSegs(row: AgentRow, now = 0, motion: Motion = "full", columns: RowColumns = { name: 0, time: 0 }): Seg[] {
+export function rowSegs(row: AgentRow, now = 0, motion: Motion = "full", columns: RowColumns = NO_COLUMNS): Seg[] {
 	const { record } = row;
 	const doing = endGlyph(record.state) ?? doingGlyph(doingOf(record), now, motion, agentHue(record.model));
-	const time = runTime(record, now) ?? "";
 	return spaced(
 		nameSegs(record, row.depth, columns.name),
-		time || columns.time ? [{ text: time.padStart(columns.time), color: "text" }] : [],
+		cell(runTime(record, now) ?? "", columns.time, "text", "right"),
+		cell(costText(record), columns.cost, "dim", "right"),
+		cell(modelText(record), columns.model, "dim", "left"),
 		[{ text: doing.glyph, color: doing.color }, { text: " ", color: "dim" }, statusWords(record, row.reportQueued === true)],
-		factSegs(record),
 	);
 }
 

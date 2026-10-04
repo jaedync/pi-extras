@@ -2,7 +2,7 @@ import { test } from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { quiet } from "./support/quiet-theme.ts";
 import assert from "node:assert/strict";
-import { agentRows, createAgentsWidget, listLabel, nameSegs, pendingLines, rowColumns, factSegs, runTime, presenceLine, rowSegs, shortModel } from "../lib/subagents/widget.ts";
+import { agentRows, createAgentsWidget, costText, listLabel, nameSegs, pendingLines, rowColumns, runTime, presenceLine, rowSegs, shortModel } from "../lib/subagents/widget.ts";
 import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount } from "../lib/subagents/overflow.ts";
 import { AGENT_HUE, agentHue, doingGlyph, doingOf } from "../lib/band/agent-look.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
@@ -25,12 +25,12 @@ test("rows show live agents and finished ones whose report is queued, children u
 	const rows = agentRows(records, new Set(["reported-soon"]));
 	assert.deepEqual(rows.map((row) => [row.record.name, row.depth]), [["lead", 0], ["helper", 1], ["reported-soon", 0]]);
 	const columns = rowColumns(rows, 66_000);
-	assert.deepEqual(columns, { name: 13, time: 5 });
+	assert.deepEqual(columns, { name: 13, time: 5, cost: 0, model: 15 });
 	const glyph = doingGlyph("tool", 0, "reduced").glyph;
-	// Names and times line up; what each is doing starts in one column; the model trails, unpadded, with the facts.
-	assert.equal(text(rowSegs(rows[0]!, 66_000, "reduced", columns)), `◆ ${"lead".padEnd(columns.name)}  1m05s  ${glyph} bash npm test  gpt-6-luna high`);
-	assert.equal(text(rowSegs(rows[1]!, 66_000, "reduced", columns)), `└ ◆ ${"helper".padEnd(columns.name - 2)}  1m05s  ${glyph} bash npm test  gpt-6-luna`);
-	assert.equal(text(rowSegs(rows[2]!, 66_000, "reduced", columns)), `◆ ${"reported-soon".padEnd(columns.name)}  1m05s   ✓  report queued  gpt-6-luna`);
+	// Name, time and model line up, so what each is doing starts in one column, last, where a narrow terminal cuts it.
+	assert.equal(text(rowSegs(rows[0]!, 66_000, "reduced", columns)), `◆ ${"lead".padEnd(columns.name)}  1m05s  gpt-6-luna high  ${glyph} bash npm test`);
+	assert.equal(text(rowSegs(rows[1]!, 66_000, "reduced", columns)), `└ ◆ ${"helper".padEnd(columns.name - 2)}  1m05s  ${"gpt-6-luna".padEnd(15)}  ${glyph} bash npm test`);
+	assert.equal(text(rowSegs(rows[2]!, 66_000, "reduced", columns)), `◆ ${"reported-soon".padEnd(columns.name)}  1m05s  ${"gpt-6-luna".padEnd(15)}   ✓  report queued`);
 });
 
 test("up to four agents show whole; a fifth turns the last row into the control line, so it never says +1 more", () => {
@@ -93,15 +93,37 @@ test("the control line says how many more and what they are doing, then offers v
 	assert.equal(fixed.toggle, null);
 });
 
-test("presence orders time, doing, then model and spend before context, with no background or rail", () => {
+test("presence orders name, time, spend and model before what it is doing, with no background or rail", () => {
 	const busy = record("x", { contextTokens: 50_000, contextWindow: 200_000, usage: { ...NO_USAGE, cost: 0.0123 } });
-	assert.equal(text(factSegs(busy)), "gpt-6-luna · $0.012 · ctx 25%");
+	assert.equal(costText(busy), "$0.012");
 	assert.equal(runTime(busy, 66_000), "1m05s");
-	assert.equal(text(factSegs(record("tiny", { usage: { ...NO_USAGE, cost: 0.00041 } }))), "gpt-6-luna · $0.00041");
+	assert.equal(costText(record("tiny", { usage: { ...NO_USAGE, cost: 0.00041 } })), "$0.00041");
+	assert.equal(costText(record("free")), "");
 	assert.equal(runTime(record("q", { state: "queued", startedAt: undefined }), 5_000), undefined);
 	const line = presenceLine(quiet() as never, { record: busy, depth: 0 }, 100, 66_000, "reduced");
-	assert.equal(stripTerminalSequences(line).trimEnd(), `  ◆ x  1m05s  ${doingGlyph("tool", 66_000, "reduced").glyph} bash npm test  gpt-6-luna · $0.012 · ctx 25%`);
+	assert.equal(stripTerminalSequences(line).trimEnd(), `  ◆ x  1m05s  $0.012  gpt-6-luna  ${doingGlyph("tool", 66_000, "reduced").glyph} bash npm test`);
 	assert.doesNotMatch(line, /\x1b\[48;|▍/);
+});
+
+test("a narrow row cuts what the agent is doing, never its spend or model", () => {
+	const busy = record("x", { activity: "bash npm run a-very-long-script-name --with --many --flags", usage: { ...NO_USAGE, cost: 1.5 } });
+	const line = stripTerminalSequences(presenceLine(quiet() as never, { record: busy, depth: 0 }, 40, 66_000, "reduced"));
+	assert.match(line, /^  ◆ x  1m05s  \$1\.50  gpt-6-luna  /);
+	assert.doesNotMatch(line, /--flags/);
+});
+
+test("spend lines up on the right and model on the left, so what each does starts in one column", () => {
+	const rows = [
+		{ record: record("cheap", { usage: { ...NO_USAGE, cost: 0.04 } }), depth: 0 },
+		{ record: record("dear", { model: "anthropic/claude-opus-5-5", thinking: "high", usage: { ...NO_USAGE, cost: 12.5 } }), depth: 0 },
+		{ record: record("free"), depth: 0 },
+	];
+	const columns = rowColumns(rows, 60_000);
+	assert.deepEqual({ cost: columns.cost, model: columns.model }, { cost: 6, model: 20 });
+	const lines = rows.map((row) => stripTerminalSequences(presenceLine(quiet() as never, row, 120, 60_000, "reduced", columns)));
+	assert.match(lines[0]!, / {2}\$0\.040 {2}gpt-6-luna {12}/);
+	assert.match(lines[1]!, / \$12\.50 {2}claude-opus-5-5 high {2}/);
+	assert.equal(new Set(lines.map((line) => line.indexOf("bash npm test"))).size, 1);
 });
 
 test("a running agent with no activity says thinking; times align right so what each does starts in one column", () => {
@@ -109,7 +131,7 @@ test("a running agent with no activity says thinking; times align right so what 
 	const columns = rowColumns(rows, 60_000);
 	assert.equal(columns.time, 5);
 	const lines = rows.map((row) => stripTerminalSequences(presenceLine(quiet() as never, row, 100, 60_000, "reduced", columns)));
-	assert.match(lines[0]!, /59\.0s  \S{3} thinking  gpt-6-luna/);
+	assert.match(lines[0]!, /59\.0s  gpt-6-luna  \S{3} thinking/);
 	assert.equal(lines[0]!.indexOf("thinking") , lines[1]!.indexOf("bash npm test"));
 });
 
@@ -178,9 +200,9 @@ test("an agent's name and its own spinner wear its provider's color; tool work k
 	const codex = agentHue("openai-codex/gpt-6-luna");
 	assert.deepEqual(nameSegs(record("lead")).map((seg) => seg.color), [codex, codex]);
 	assert.deepEqual(nameSegs(record("local", { model: "redarch-lora/qwen3" })).map((seg) => seg.color), [AGENT_HUE, AGENT_HUE]);
-	const thinking = rowSegs({ record: record("lead", { activity: null }), depth: 0 }, 5_000, "reduced", { name: 4, time: 4 });
+	const thinking = rowSegs({ record: record("lead", { activity: null }), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, cost: 0, model: 0 });
 	assert.equal(thinking.find((seg) => seg.text === doingGlyph("thinking", 5_000, "reduced").glyph)?.color, codex);
-	const tool = rowSegs({ record: record("lead"), depth: 0 }, 5_000, "reduced", { name: 4, time: 4 });
+	const tool = rowSegs({ record: record("lead"), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, cost: 0, model: 0 });
 	assert.equal(tool.find((seg) => seg.text === doingGlyph("tool", 5_000, "reduced").glyph)?.color, "accent");
 });
 

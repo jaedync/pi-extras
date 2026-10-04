@@ -55,11 +55,11 @@ test("every agent shows as its live row with its task under it, children under t
 	assert.match(shown[0]!, /^ Subagents · 4 /);
 	assert.match(shown[1]!, /^ {2}1 failed · 2 working · 1 finished · \$0\.25/);
 	const body = shown.map((line) => line.trimEnd()).filter((line) => /◆|Task|Help/.test(line));
-	assert.match(body[0]!, /^ {3}◆ lead +\S+ +\S+ +bash npm test/);
+	assert.match(body[0]!, /^ {3}◆ lead +\S+ +gpt-6-luna +\S+ +bash npm test/);
 	assert.equal(body[1], "     Task for lead");
 	assert.match(body[2]!, /^ {3}└ ◆ helper/);
 	assert.equal(body[3], "       Help the lead", "the task is one line, set in under the name");
-	assert.match(body[4]!, /^ {3}◆ done +\S+ +✓ +finished/);
+	assert.match(body[4]!, /^ {3}◆ done +\S+ +\$0\.25 +gpt-6-luna +✓ +finished/);
 	assert.match(body[6]!, /^ {3}◆ broke .*failed: rate limited/);
 	assert.match(shown.at(-1)!, /↑↓ select · enter open · esc close/);
 	sheet.dispose();
