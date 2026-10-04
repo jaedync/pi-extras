@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { AgentRecord } from "./types.ts";
+import { worktreeFooter } from "./worktree.ts";
 
 type ReportIO = Pick<typeof fs, "statSync" | "openSync" | "writeFileSync" | "fsyncSync" | "closeSync" | "linkSync" | "unlinkSync">;
 type Warn = (message: string) => void;
@@ -58,12 +59,14 @@ export function writeReport(sessionFile: string, run: number, text: string, io: 
 
 /** Disk trouble must not prevent delivery of the report or leave a stale path in it. */
 export function saveReport(record: AgentRecord, warn: Warn = console.warn): AgentRecord {
-	if (!record.report || !record.sessionFile) return { ...record };
+	// Counts belong to this run; later display must not stage files from a resumed run.
+	const completed = record.worktree ? { ...record, worktreeReport: worktreeFooter(record.worktree) } : record;
+	if (!record.report || !record.sessionFile) return { ...completed };
 	try {
-		return { ...record, reportFile: writeReport(record.sessionFile, record.runs, record.report, fs, warn) };
+		return { ...completed, reportFile: writeReport(record.sessionFile, record.runs, record.report, fs, warn) };
 	} catch (error) {
 		warnSafely(warn, `subagents: could not write report for ${record.name}, run ${record.runs}: ${error instanceof Error ? error.message : String(error)}`);
-		return { ...record, reportFile: undefined };
+		return { ...completed, reportFile: undefined };
 	}
 }
 

@@ -256,7 +256,7 @@ export default function subagents(pi: ExtensionAPI) {
 		// The launcher and tools need the team, and the team needs the launcher.
 		let tools!: ToolContext;
 		team = new Team({
-			warn,
+			warn, cwd,
 			maxConcurrent: config.maxConcurrent,
 			maxDepth: config.maxDepth,
 			replyTimeoutMs: config.replyTimeoutMs,
@@ -290,6 +290,7 @@ export default function subagents(pi: ExtensionAPI) {
 				},
 				instructions: (record) => childInstructions({
 					name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < config.maxDepth,
+					...(record.worktree ? { worktree: record.worktree } : {}),
 					roster: rosterText(record.name, team.list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model }))),
 					...(record.fork ? { conversation: conversationDigest(ctx.sessionManager.getBranch(), describeTool) } : {}),
 				}),

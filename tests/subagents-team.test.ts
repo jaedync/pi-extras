@@ -49,7 +49,7 @@ function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTime
 		},
 	});
 	const spawn = (task: string, extra: Partial<SpawnRequest> = {}) => {
-		const result = team.spawn({ task, parent: "main", model: "openai-codex/gpt-6-luna", readOnly: false, fork: false, blocking: false, ...extra });
+		const result = team.spawn({ task, parent: "main", model: "openai-codex/gpt-6-luna", readOnly: true, fork: false, blocking: false, ...extra });
 		assert.ok(result.ok, !result.ok ? result.error : "");
 		return result.record.name;
 	};

@@ -20,12 +20,15 @@ import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
 import { saveReport } from "./reports.ts";
+import { createWorktree, workspaceError } from "./worktree.ts";
 import {
 	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest,
 } from "./types.ts";
 
 export interface TeamOptions {
 	launcher: Launcher;
+	/** Main's checkout; helpers inherit their parent's isolated workspace. */
+	cwd?: string;
 	deliverToMain(delivery: MainDelivery): void;
 	maxConcurrent: number;
 	maxDepth: number;
@@ -138,6 +141,16 @@ export class Team {
 		const depth = (parent?.depth ?? 0) + 1;
 		if (depth > this.options.maxDepth) return { ok: false, error: `Subagents cannot start subagents here (depth limit ${this.options.maxDepth}).` };
 		const name = nameFor(request.name, request.task, (candidate) => this.records.has(candidate));
+		if (request.isolation !== undefined && request.isolation !== "shared" && request.isolation !== "worktree") return { ok: false, error: "Unknown isolation. Use shared or worktree." };
+		const conflict = request.isolation === "worktree" ? undefined : this.sharedWriterError({ name, parent: request.parent, readOnly: request.readOnly, worktree: parent?.worktree });
+		if (conflict) return { ok: false, error: conflict };
+		let worktree = parent?.worktree;
+		if (request.isolation === "worktree") {
+			const cwd = parent?.worktree?.path ?? this.options.cwd;
+			if (!cwd) return { ok: false, error: "Worktree isolation needs a git repository in the parent's workspace." };
+			try { worktree = createWorktree(cwd, name); }
+			catch (error) { return { ok: false, error: (error as Error).message }; }
+		}
 		const sessionFile = this.options.sessionFileFor?.(name);
 		const record: AgentRecord = {
 			name, parent: request.parent, depth, task: request.task, model: request.model, readOnly: request.readOnly,
@@ -145,11 +158,21 @@ export class Team {
 			toolCalls: 0, usage: NO_USAGE, runs: 0, autoResumeAttempts: 0, ...(request.thinking ? { thinking: request.thinking } : {}),
 			...(sessionFile ? { sessionFile } : {}),
 			...(request.group ? { group: request.group } : {}),
+			...(worktree ? { worktree: { ...worktree } } : {}),
 		};
 		this.put(record);
 		this.queue.push(name);
 		this.pump();
 		return { ok: true, record: this.records.get(name)! };
+	}
+
+	/** A writer coordinates its own helpers; unrelated writers must use separate checkouts. */
+	private sharedWriterError(candidate: Pick<AgentRecord, "name" | "parent" | "readOnly" | "worktree">): string | undefined {
+		if (candidate.readOnly || candidate.worktree) return undefined;
+		const writer = this.live().find((record) => !record.readOnly && !record.worktree
+			&& record.name !== candidate.name && record.name !== candidate.parent
+			&& !this.under(candidate.parent, record.name) && !this.under(record.name, candidate.name));
+		return writer ? `${writer.name} is already writing in this checkout. Start this one with isolation: "worktree", make it readOnly, or wait for ${writer.name}'s report.` : undefined;
 	}
 
 	/** Resolves once the child reaches idle, failed or stopped. */
@@ -552,6 +575,10 @@ export class Team {
 		// An ended run's session is on disk, so its parent or the user can take it up again; a peer can't.
 		const ended = target.state === "failed" || target.state === "stopped";
 		if (ended && !(from === target.parent || from === USER)) return { ok: false, error: `${to} has ${target.state}; only ${target.parent} or the user can resume it.` };
+		if (resumes && !LIVE_STATES.has(target.state)) {
+			const error = (target.worktree ? workspaceError(target.worktree.path) : undefined) ?? this.sharedWriterError(target);
+			if (error) return { ok: false, error };
+		}
 		this.forgetAnswer(to);
 		const handle = this.handles.get(to);
 		if ((target.state === "running" || target.state === "asking") && handle) {

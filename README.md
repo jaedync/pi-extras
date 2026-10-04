@@ -870,6 +870,18 @@ The call returns how it ended and its last message, so no report follows; a
 message resumes it later. `/subagents stop <name>`, `stop all` and ctrl+x in
 the inspector stop children for you, and then main gets the stopped report.
 
+**Writers.** Only one unrelated child can write in the shared checkout at a
+time. Its own helpers can share it. Other children must use `readOnly: true`,
+wait for its report, or use `isolation: "worktree"`. Worktree isolation needs a
+git repository. It copies the parent's current files, including uncommitted
+changes and untracked files that Git does not ignore, into a separate checkout.
+The parent keeps its files and index unchanged. The report gives the worktree,
+branch, change counts, and commands to apply changes and remove it after merging.
+Untracked `node_modules` are linked, not copied or included in the changes.
+Worktrees stay until you remove them. Resumed children keep the same workspace.
+After you apply the changes, the cleanup command force-removes the worktree and
+deletes its branch. Check that you kept all needed files first.
+
 **Limits.** At most `maxConcurrent` children run at once; the rest queue. A
 child can't start children of its own by default.
 

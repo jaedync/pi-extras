@@ -12,6 +12,7 @@ import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, Usage } from "./types.ts";
+import { workspaceError } from "./worktree.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
 
@@ -111,8 +112,10 @@ export interface LauncherDeps {
 export function createLauncher(deps: LauncherDeps): Launcher {
 	return {
 		async launch(record: AgentRecord, hooks: ChildHooks): Promise<ChildHandle> {
-			const { sdk, agentDir, cwd } = deps;
-			if (!existsSync(cwd)) throw new Error(`The child workspace no longer exists: ${cwd}. Reopen the parent in its current workspace before resuming.`);
+			const { sdk, agentDir } = deps;
+			const cwd = record.worktree?.path ?? deps.cwd;
+			const missing = workspaceError(cwd);
+			if (missing) throw new Error(missing);
 			if (record.restored && record.runs > 0 && record.sessionFile && !existsSync(record.sessionFile)) throw new Error(`The saved child session is missing: ${record.sessionFile}. Locate its transcript before resuming.`);
 			if (deps.modelAllowed && !deps.modelAllowed(record.model)) throw new Error(`The child's model ${record.model} is out of scope. Resume explicitly on the current default model.`);
 			const modelRuntime = await deps.modelRuntime();

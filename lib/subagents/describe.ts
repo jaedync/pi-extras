@@ -7,9 +7,11 @@ import { MAIN } from "./names.ts";
 
 export function subagentDescription(options: { models: string; defaultModel: string | null; guide: string; forChild: boolean }): string {
 	const lines = [
-		"Start a subagent: a separate Pi session on the model you choose, with a fresh context, the same working directory and similar tools. It runs in the background and its report reaches you as a message when it finishes; meanwhile keep working or end your turn. Pass wait: true only for a short check whose answer you need before your next step.",
+		"Start a subagent: a separate Pi session on the model you choose, with a fresh context, the parent's working directory by default and similar tools. It runs in the background and its report reaches you as a message when it finishes; meanwhile keep working or end your turn. Pass wait: true only for a short check whose answer you need before your next step.",
 		"",
 		"Delegate bounded work that benefits from its own context, a different model's strengths, or an independent second opinion. Do it yourself when a few tool calls would. Start several at once only for work that is truly independent, and prefer one well-briefed subagent over many.",
+		"",
+		'Only one writer at a time can work in the shared checkout, and a child is a writer unless readOnly is true. Set readOnly: true for research, review and other work that does not edit files. For a second writer, or to leave your checkout unchanged, use isolation: "worktree": a separate git checkout of your current files, uncommitted changes included, whose report says how to apply its changes.',
 		"",
 		"The task is the subagent's whole brief: it has not seen this conversation (unless context is \"fork\"). State the goal, the relevant files and facts, constraints such as read-only, and what the report must contain.",
 		"",

@@ -70,7 +70,7 @@ test("a quota-blocked child promptly frees the only slot for queued work", { tim
 	try {
 		const base = { parent: "main", model: "child-quota-fixture/claude-opus", readOnly: false, fork: false, blocking: false };
 		assert.equal(team.spawn({ ...base, name: "limited", task: "Quota-blocked work." }).ok, true);
-		assert.equal(team.spawn({ ...base, name: "queued", task: "Queued work." }).ok, true);
+		assert.equal(team.spawn({ ...base, name: "queued", task: "Queued work.", readOnly: true }).ok, true);
 		assert.equal(team.get("queued")?.state, "queued");
 		const [limited, queued] = await Promise.all([team.whenDone("limited"), team.whenDone("queued")]);
 		assert.equal(limited.state, "failed");

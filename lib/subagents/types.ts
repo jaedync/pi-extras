@@ -23,6 +23,12 @@ export interface Usage {
 
 export const NO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 
+export interface Worktree {
+	path: string;
+	branch: string;
+	base: string;
+}
+
 export interface AgentRecord {
 	name: string;
 	/** `main` or another agent's name. */
@@ -32,6 +38,10 @@ export interface AgentRecord {
 	model: string;
 	thinking?: Thinking;
 	readOnly: boolean;
+	/** An isolated workspace, also inherited by helpers sharing their parent's checkout. */
+	worktree?: Worktree;
+	/** Captured when a run ends, so reading its report does not stage a later run's files. */
+	worktreeReport?: string;
 	fork: boolean;
 	/** The parent's tool call waits for the report instead of a message. */
 	blocking: boolean;
@@ -81,6 +91,7 @@ export interface AgentRecord {
 
 export interface SpawnRequest {
 	name?: string;
+	isolation?: "shared" | "worktree";
 	task: string;
 	parent: string;
 	model: string;

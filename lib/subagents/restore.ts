@@ -6,6 +6,7 @@ import { isReserved, nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
 import { latestReportFile, reportFilePath } from "./reports.ts";
 import { LIVE_STATES, NO_USAGE, type AgentRecord } from "./types.ts";
+import { validWorktree } from "./worktree.ts";
 
 const STATES = new Set([...LIVE_STATES, "idle", "failed", "stopped", "interrupted"]);
 const DIRECTORY_WARNING_LIMIT = 64;
@@ -56,6 +57,8 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& [r.usage.input, r.usage.output, r.usage.cacheRead, r.usage.cacheWrite, r.usage.cost].every((value) => Number.isFinite(value) && value >= 0)
 		&& (r.startedAt === undefined || Number.isFinite(r.startedAt)) && (r.endedAt === undefined || Number.isFinite(r.endedAt))
 		&& (r.sessionFile === undefined || typeof r.sessionFile === "string")
+		&& (r.worktree === undefined || validWorktree(r.worktree))
+		&& (r.worktreeReport === undefined || typeof r.worktreeReport === "string")
 		&& (r.thinking === undefined || isThinking(r.thinking))
 		&& (r.interruptedBy === undefined || ["reload", "signal", "quit"].includes(r.interruptedBy))
 		&& (r.interruptionId === undefined || typeof r.interruptionId === "string")
@@ -256,6 +259,7 @@ export function legacyRecords(entries: readonly unknown[], dir: string, parent: 
 		records.push({ name: details.name, parent, depth, model: details.model, task: args.task, readOnly: args.readOnly === true,
 			fork: args.context === "fork", blocking: false, state: "idle", createdAt: Date.parse(entry.timestamp ?? "") || Date.now(),
 			activity: null, runs: 1, toolCalls: 0, usage: NO_USAGE, sessionFile: details.sessionFile,
+			...(validWorktree(details.worktree) ? { worktree: { ...details.worktree } } : {}),
 			...(isThinking(details.thinking) ? { thinking: details.thinking } : isThinking(args.thinking) ? { thinking: args.thinking } : {}),
 		});
 		calls.delete(message.toolCallId);

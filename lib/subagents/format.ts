@@ -6,7 +6,8 @@
 import { formatElapsed } from "../shell-jobs-widget.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import { MAIN } from "./names.ts";
-import type { AgentRecord } from "./types.ts";
+import type { AgentRecord, Worktree } from "./types.ts";
+import { worktreeFooter } from "./worktree.ts";
 
 export const REPORT_MAX_CHARS = 12_000;
 
@@ -44,6 +45,10 @@ function duration(record: AgentRecord, now: number): string {
 
 /** A finished, failed, stopped or interrupted child, as its parent reads it. */
 export function reportText(record: AgentRecord, now: number): string {
+	return reportSummary(record, now) + (record.worktree ? record.worktreeReport ?? worktreeFooter(record.worktree) : "");
+}
+
+function reportSummary(record: AgentRecord, now: number): string {
 	const head = `${record.name} (${record.model}${spend(record)})`;
 	const session = `${record.sessionFile ? `\nSession: ${record.sessionFile}` : ""}${record.report && record.reportFile ? `\nReport: ${record.reportFile}` : ""}`;
 	if (record.state === "interrupted") {
@@ -211,6 +216,7 @@ export function childInstructions(options: {
 	parent: string;
 	readOnly: boolean;
 	canSpawn: boolean;
+	worktree?: Worktree;
 	roster: string;
 	/** Main's conversation, for a forked child. */
 	conversation?: string;
@@ -230,6 +236,10 @@ export function childInstructions(options: {
 		"- Coordinate with the other agents directly instead of duplicating their work.",
 		"- Messages to you arrive between your tool calls.",
 		`- A message from ${parent} is an instruction from the agent you work for. Follow it; where it conflicts with your task, it wins.`,
+		...(options.worktree ? ["", "## Workspace",
+			`You work in a git worktree at ${options.worktree.path} on branch ${options.worktree.branch}, based on your parent's current files.`,
+			`Edit only inside ${options.worktree.path}. Committing there is optional. Do not edit the parent's checkout.`,
+		] : []),
 		...(options.readOnly ? ["", "## Read-only", "Do not modify files, run commands that change state, or make other side effects."] : []),
 		...(options.canSpawn ? ["", "## Your own subagents", "You may start subagents with the subagent tool. You are not done until they report back; their reports arrive as messages."] : []),
 		"",

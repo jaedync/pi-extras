@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
 import { stopTool, subagentTool } from "../lib/subagents/tools.ts";
-import type { AgentRecord, ChildHandle } from "../lib/subagents/types.ts";
+import type { AgentRecord, ChildHandle, SpawnRequest } from "../lib/subagents/types.ts";
 
 /** A team whose children finish when the test says, behind the real `subagent` tool. */
 function setup() {
@@ -26,6 +26,19 @@ function setup() {
 	const tool = subagentTool({ team, allowed: [luna as never], fallbackModel: luna.ref, thinking: {}, modelTable: "", guide: "", replyTimeoutMs: 60_000, now: Date.now }, "main");
 	return { team, tool, finishers };
 }
+
+test("the subagent tool forwards isolation and states the writer rule", async (t) => {
+	const { team, tool } = setup();
+	t.mock.method(team, "spawn", (request: SpawnRequest) => {
+		assert.equal(request.isolation, "worktree");
+		return { ok: false, error: "spawn fixture" };
+	});
+	assert.match(tool.description, /^Start a subagent/);
+	assert.match(tool.description, /Only one writer at a time can work in the shared checkout, and a child is a writer unless readOnly is true\. Set readOnly: true/);
+	assert.match(tool.description, /Set readOnly: true for research, review/);
+	await assert.rejects((tool.execute as any)("id", { task: "Write a file", isolation: "worktree" }, undefined, undefined), /spawn fixture/);
+	await team.close();
+});
 
 test("a waited-on child that asks main a question ends the wait instead of deadlocking", async () => {
 	const { team, tool, finishers } = setup();
@@ -78,7 +91,7 @@ test("stop_subagent with all stops every live agent you started, and says when t
 	const stop = stopTool({ team } as never, "main");
 	assert.match((await (stop.execute as any)("id", { name: "all" }, undefined, undefined)).content[0].text, /No subagents of yours are running\./);
 	await (tool.execute as any)("id", { task: "one", name: "one" }, undefined, undefined);
-	await (tool.execute as any)("id", { task: "two", name: "two" }, undefined, undefined);
+	await (tool.execute as any)("id", { task: "two", name: "two", readOnly: true }, undefined, undefined);
 	await tick();
 	await tick();
 	const result = await (stop.execute as any)("id", { name: "all" }, undefined, undefined);

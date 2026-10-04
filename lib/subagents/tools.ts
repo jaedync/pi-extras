@@ -40,6 +40,7 @@ const subagentParams = Type.Object({
 	model: Type.Optional(Type.String({ description: "Model reference or unique short name from the list above." })),
 	thinking: Type.Optional(thinkingSchema),
 	readOnly: Type.Optional(Type.Boolean({ description: "No file edits or shell commands." })),
+	isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")], { description: "Default shared. Use worktree for a separate git checkout based on the parent's current files." })),
 	context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")], { description: "fork gives it this conversation so far; default fresh." })),
 	wait: Type.Optional(Type.Boolean({ description: "Block until it finishes and return its report. Only for short checks." })),
 }, { additionalProperties: false });
@@ -54,7 +55,7 @@ const stopParams = Type.Object({
 	name: Type.String({ minLength: 1, description: "The subagent's name, or \"all\" for every one of yours still working." }),
 }, { additionalProperties: false });
 
-interface SubagentInput { task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; context?: string; wait?: boolean }
+interface SubagentInput { task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; isolation?: "shared" | "worktree"; context?: string; wait?: boolean }
 interface MessageInput { to: string; text: string; expectReply?: boolean }
 
 function spawnSummary(record: AgentRecord): string {
@@ -83,6 +84,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 			const group = parent === MAIN ? tc.currentGroup?.() : undefined;
 			const spawned = tc.team.spawn({
 				...(group ? { group } : {}),
+				...(params.isolation ? { isolation: params.isolation } : {}),
 				task: params.task.trim(), parent, model: resolved.choice.ref, readOnly: params.readOnly === true, fork,
 				blocking: params.wait === true, ...(params.name ? { name: params.name } : {}), ...(thinking ? { thinking } : {}),
 			});
@@ -92,6 +94,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 			const details = {
 				name: record.name, model: record.model, thinking: record.thinking ?? null, wait: params.wait === true,
 				...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+				...(record.worktree ? { worktree: { ...record.worktree } } : {}),
 			};
 			if (params.wait !== true) return text(spawnSummary(record), details);
 			return await waitFor(tc, record.name, details, signal, onUpdate as ((update: Result) => void) | undefined);
