@@ -78,8 +78,10 @@ A change that ships to `main` is done when:
    GitHub serves it. `-- --check` only reports whether an upload is due.
    The script uses a saved GitHub web session in
    `~/.local/state/pi-extras/github-session.json` (mode 0600, outside the
-   repository; treat it as a credential). Each upload renews it. When it is
-   missing or expired, the script says so, and the user logs in once with
+   repository; treat it as a credential). GitHub ends the session two weeks
+   after the login, and a visit did not extend it, so every run, and the
+   preview review in step 6, prints when it expires and warns 5 days before.
+   Then, or when it is missing or expired, the user logs in again with
    `npm run preview:upload -- --login`, which opens a browser window.
 
 Before publication, inspect `git ls-files`, run a secret scanner across the full

@@ -5,11 +5,12 @@
 //   npm run preview:check [-- --open]
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { PREVIEW_DIR, previewProblems, README_IMAGE, SOCIAL, socialProblems } from "./image-facts.mjs";
+import { savedSessionExpiry, sessionFile, sessionNote } from "./upload.mjs";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)), "../..");
 const README_WIDTH = 880; // GitHub's README column on a desktop browser
@@ -44,6 +45,7 @@ export async function runChecks({ imageDir = join(root, PREVIEW_DIR), strict = t
 	const paths = await views(imageDir);
 	console.log(`look at these before releasing:\n  ${[join(imageDir, SOCIAL.file), ...paths].join("\n  ")}`);
 	console.log("after the push, npm run preview:upload updates GitHub's social preview (CONTRIBUTING.md)");
+	console.log(sessionNote(savedSessionExpiry(sessionFile(process.env, homedir())), Date.now()));
 	if (open && process.platform === "darwin") execFileSync("open", [join(imageDir, SOCIAL.file), ...paths]);
 	if (problems.length) process.exitCode = 1;
 }
