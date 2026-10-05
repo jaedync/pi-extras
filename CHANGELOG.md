@@ -2,6 +2,42 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.22.0 - 2026-10-05
+
+### Added
+
+- Subagents: model fallback. When a child's model can't serve its run
+  (quota or usage limit, a rate limit, an overloaded provider, missing
+  credentials, a model that is gone), the run goes on from the child's
+  session on the next model of `fallbackModels`. The default is the default
+  subagent model, and `[]` turns fallback off. The report says which model
+  failed and which one ran, because the fallback can cost more.
+- Subagents: a `tools` list on the `subagent` call gives a child only the
+  tools it names. A child's own subagents never get more tools than it has.
+- Subagents: a worktree child's `bash` commands run in an OS sandbox
+  (`sandbox-exec` on macOS, `bwrap` on Linux when it is installed), so they
+  can't write into your checkout or install into the linked `node_modules`.
+  The worktree's git data and tool caches stay writable.
+
+### Changed
+
+- Subagents: a child's `bash` call that changes files in a checkout now
+  takes its edit lock, as `edit` and `write` do. When another child holds
+  the lock, the call's result says what it changed. This is found after the
+  command ran; it can't be prevented.
+- Subagents: the edit lock belongs to the git checkout or worktree of the
+  edited file, not to the folder the child started in, so children that edit
+  in different repositories or worktrees no longer block each other.
+- Subagents: mail for a child that is not running, answers it is owed, and
+  messages it has not read yet survive a restart or a crash. Before, unread
+  messages were lost even when a run only failed or was stopped.
+- Subagents: the subagents of a read-only child are read-only too.
+
+### Fixed
+
+- Subagents: `isolation: "worktree"` failed in a repository that has a
+  `node_modules` folder and lists it in `.gitignore` (since 0.20.0).
+
 ## 0.21.0 - 2026-10-05
 
 ### Added
