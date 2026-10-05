@@ -1,7 +1,9 @@
 /**
- * One child at a time edits files in each workspace: the shared checkout, or
- * one worktree, which the helpers that inherit it share. A child takes its
- * workspace's lock with its first `edit` or `write` call, and keeps it while it
+ * One child at a time edits files in each workspace: the git work tree that
+ * holds the edited file (a checkout or one worktree), or, for a file outside
+ * any work tree, the child's own workspace: the shared checkout, or the
+ * worktree its helpers inherit. A child takes a workspace's lock with its
+ * first `edit` or `write` call there, and keeps it while it
  * is live, waiting on its own subagents included, since they may edit for it.
  * Its ancestors and descendants edit beside it: they coordinate through
  * reports. Main, the user's own session, never takes or checks a lock. A
@@ -48,40 +50,43 @@ export class EditLocks {
 		this.family = family;
 	}
 
-	/** The live holder of `record`'s workspace. */
-	private liveHolder(record: AgentRecord): string | undefined {
-		const held = this.holders.get(workspaceOf(record));
+	/** The live holder of `workspace`. */
+	private liveHolder(workspace: string): string | undefined {
+		const held = this.holders.get(workspace);
 		// follow() normally lets go first; a holder that ended or vanished unseen must not block forever.
 		const holderState = held === undefined ? undefined : this.family.get(held)?.state;
 		return holderState !== undefined && LIVE_STATES.has(holderState) ? held : undefined;
 	}
 
-	/** Who holds `name`'s workspace lock now, if anyone. */
-	holder(name: string): string | undefined {
+	/** Who holds the lock of `workspace` (by default `name`'s own) now, if anyone. */
+	holder(name: string, workspace?: string): string | undefined {
 		const record = this.family.get(name);
-		return record ? this.liveHolder(record) : undefined;
+		return record ? this.liveHolder(workspace ?? workspaceOf(record)) : undefined;
 	}
 
-	/** Whether `name` edits now without taking anything: it holds its workspace, or works for the holder. */
-	holds(name: string): boolean {
-		const holder = this.holder(name);
+	/** Whether `name` edits in `workspace` now without taking anything: it holds the lock, or works for the holder. */
+	holds(name: string, workspace?: string): boolean {
+		const holder = this.holder(name, workspace);
 		return holder !== undefined && (holder === name || this.family.under(name, holder));
 	}
 
-	/** Takes `name`'s workspace lock for an edit; the error says who holds it when it can't. */
-	claim(name: string): string | undefined {
+	/**
+	 * Takes the lock of `workspace`, a work tree's top level, for an edit by
+	 * `name`; without one, of its own workspace. The error says who holds it.
+	 */
+	claim(name: string, workspace?: string): string | undefined {
 		const record = this.family.get(name);
 		if (!record) return `No agent named ${name}.`;
-		const workspace = workspaceOf(record);
-		const holder = this.liveHolder(record);
+		const key = workspace ?? workspaceOf(record);
+		const holder = this.liveHolder(key);
 		if (holder === undefined || holder === name) {
-			this.holders.set(workspace, name);
+			this.holders.set(key, name);
 			return undefined;
 		}
 		if (this.family.under(name, holder)) return undefined;
 		// A helper can end before the ancestor that now edits too, so the lock moves up to it.
 		if (this.family.under(holder, name)) {
-			this.holders.set(workspace, name);
+			this.holders.set(key, name);
 			return undefined;
 		}
 		return lockedError(holder, record);

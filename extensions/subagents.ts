@@ -285,10 +285,10 @@ export default function subagents(pi: ExtensionAPI) {
 				sessionDir,
 				modelRuntime: runtimeSource(ctx),
 				modelAllowed: (model) => allowed.some((choice) => choice.ref === model),
-				claimEdit: (name) => team.claimEdit(name),
+				claimEdit: (name, target) => team.claimEdit(name, target),
 				warn, activity,
-				mayEdit: (name) => team.mayEdit(name),
-				bashChanged: (name, paths) => team.bashChanged(name, paths),
+				mayEdit: (name, root) => team.mayEdit(name, root),
+				bashChanged: (name, paths, root) => team.bashChanged(name, paths, root),
 				toolsFor: (record) => {
 					const names = allowedTools(childToolNames(pi.getActiveTools(), record.readOnly, config.childToolsExclude), record.tools);
 					return {

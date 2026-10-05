@@ -114,16 +114,16 @@ export interface LauncherDeps {
 	toolsFor(record: AgentRecord): { tools: string[]; customTools: ToolDefinition[]; extensionPaths?: readonly string[] };
 	instructions(record: AgentRecord): string;
 	onExtensionError?(error: unknown): void;
-	/** Before each `edit` or `write` call: takes the child's workspace lock, or says why it can't edit now. */
-	claimEdit?(name: string): string | undefined;
+	/** Before each `edit` or `write` call of the resolved `target`: takes its workspace's lock, or says why the child can't edit now. */
+	claimEdit?(name: string, target?: string): string | undefined;
 	/** Problems the user should see, such as a sandbox tool that does not work here. */
 	warn?(message: string): void;
 	/** Every agent's running edit and bash calls; with `bashChanged`, a child's bash call that changes files takes the lock. */
 	activity?: ToolActivity;
-	/** Whether the child may edit now without taking the lock. */
-	mayEdit?(name: string): boolean;
-	/** After a bash call changed files: takes the lock, or returns a note for the call's result. */
-	bashChanged?(name: string, paths: readonly string[]): string | undefined;
+	/** Whether the child may edit in the work tree `root` now without taking its lock. */
+	mayEdit?(name: string, root: string): boolean;
+	/** After a bash call changed files in the work tree `root`: takes its lock, or returns a note for the call's result. */
+	bashChanged?(name: string, paths: readonly string[], root: string): string | undefined;
 }
 
 /**
@@ -139,8 +139,8 @@ function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: Age
 	const { activity, bashChanged } = deps;
 	const changes = activity && bashChanged ? {
 		cwd, agent: record.name, activity, warn,
-		mayEdit: () => deps.mayEdit?.(record.name) ?? false,
-		changed: (paths: readonly string[]) => bashChanged(record.name, paths),
+		mayEdit: (root: string) => deps.mayEdit?.(record.name, root) ?? false,
+		changed: (paths: readonly string[], root: string) => bashChanged(record.name, paths, root),
 	} : undefined;
 	const shellPath = settings.getShellPath();
 	const definition = sdk.createBashToolDefinition(cwd, {
@@ -213,7 +213,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				noExtensions: true, additionalExtensionPaths: [...new Set([...extensionPaths, CHILD_CACHE_COMPACTION_PATH])],
 				appendSystemPrompt: [deps.instructions(record)],
 				// Outside its worktree is refused before the lock is taken, so a refused edit holds nothing.
-				extensionFactories: [guard.extension, editGuard((path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name),
+				extensionFactories: [guard.extension, editGuard((path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name, editTarget(cwd, path)),
 					editTracker(deps.activity, record.name, cwd))],
 				extensionsOverride: (base) => ({
 					...base,

@@ -85,7 +85,7 @@ function harness(root: string) {
 	team.restore([record("writer"), record("holder"), record("other")]);
 	const activity = new ToolActivity();
 	const bash = (name: string, cwd = root, during?: () => void) => {
-		const watch: ChangeWatch = { cwd, agent: name, activity, mayEdit: () => team.mayEdit(name), changed: (paths) => team.bashChanged(name, paths), warn: (message) => warnings.push(message) };
+		const watch: ChangeWatch = { cwd, agent: name, activity, mayEdit: (top) => team.mayEdit(name, top), changed: (paths, top) => team.bashChanged(name, paths, top), warn: (message) => warnings.push(message) };
 		const definition = guardBash({ name: "bash", label: "bash", description: "", parameters: {} as never,
 			async execute(_id: string, params: { command: string }, _signal?: unknown, _onUpdate?: unknown, _ctx?: unknown) {
 				const result = spawnSync("/bin/bash", ["-c", params.command], { cwd, encoding: "utf8" });
@@ -102,7 +102,7 @@ test("a bash call that changes files takes the free lock silently", async (t) =>
 	const root = repository(t);
 	const { team, warnings, bash } = harness(root);
 	assert.equal(await bash("writer")("echo new > new.txt && echo ok"), "ok\n");
-	assert.match(team.claimEdit("other") ?? "", /^writer is editing files in this checkout/);
+	assert.match(team.claimEdit("other", join(root, "other.txt")) ?? "", /^writer is editing files in this checkout/);
 	assert.deepEqual(warnings, []);
 	await team.close();
 });
@@ -110,10 +110,10 @@ test("a bash call that changes files takes the free lock silently", async (t) =>
 test("a bash call that changes files while another child holds the lock gets a note; the holder keeps it", async (t) => {
 	const root = repository(t);
 	const { team, warnings, bash } = harness(root);
-	assert.equal(team.claimEdit("holder"), undefined);
+	assert.equal(team.claimEdit("holder", join(root, "held.txt")), undefined);
 	const text = await bash("writer")("for n in 1 2 3 4 5 6 7; do echo $n > f$n.txt; done; echo done");
 	assert.equal(text, "done\nThis command changed f1.txt, f2.txt, f3.txt, f4.txt, f5.txt and 2 more in this checkout while holder holds its edit lock. Don't change files here; tell main if you need a worktree (isolation: \"worktree\").");
-	assert.match(team.claimEdit("other") ?? "", /^holder is editing files in this checkout/, "the holder keeps the lock");
+	assert.match(team.claimEdit("other", join(root, "other.txt")) ?? "", /^holder is editing files in this checkout/, "the holder keeps the lock");
 	assert.deepEqual(warnings, ["subagents: writer's bash command changed f1.txt, f2.txt, f3.txt, f4.txt, f5.txt and 2 more in the shared checkout while holder holds its edit lock."]);
 	await team.close();
 });
@@ -125,7 +125,7 @@ test("a bash call that only reads, or writes only ignored files, takes nothing",
 	const writer = bash("writer");
 	assert.equal(await writer("cat tracked.txt dirty.txt && git status --short >/dev/null"), "committed\ndirty\n");
 	assert.equal(await writer("mkdir -p build && echo out > build/out.js"), "(no output)");
-	assert.equal(team.claimEdit("other"), undefined, "the lock was still free");
+	assert.equal(team.claimEdit("other", join(root, "other.txt")), undefined, "the lock was still free");
 	assert.deepEqual(warnings, []);
 	await team.close();
 });
@@ -137,7 +137,7 @@ test("a workspace that is not a git repository skips detection and warns once", 
 	const writer = bash("writer", dir);
 	assert.equal(await writer("echo a > a.txt && echo ok"), "ok\n");
 	assert.equal(await writer("echo b > b.txt && echo ok"), "ok\n");
-	assert.equal(team.claimEdit("other"), undefined);
+	assert.equal(team.claimEdit("other", join(dir, "other.txt")), undefined);
 	assert.equal(warnings.length, 1);
 	assert.match(warnings[0]!, new RegExp(`^subagents: can't tell which files bash commands change in ${dir.replace(/[.]/g, "\\.")}, so they don't take the edit lock there\\. .*not a git repository`, "i"));
 	await team.close();
@@ -146,7 +146,7 @@ test("a workspace that is not a git repository skips detection and warns once", 
 test("paths an edit or write call targeted during the bash call are not the command's changes", async (t) => {
 	const root = repository(t);
 	const { team, warnings, activity, bash } = harness(root);
-	assert.equal(team.claimEdit("holder"), undefined);
+	assert.equal(team.claimEdit("holder", join(root, "held.txt")), undefined);
 	const edited = join(root, "edited by main.txt");
 	const text = await bash("writer", root, () => {
 		activity.editStart("main:call-1", edited);
@@ -167,7 +167,7 @@ test("paths an edit or write call targeted during the bash call are not the comm
 test("another agent's shell in the same checkout at the same time makes the changes unattributable, so nothing happens", async (t) => {
 	const root = repository(t);
 	const { team, warnings, activity, bash } = harness(root);
-	assert.equal(team.claimEdit("holder"), undefined);
+	assert.equal(team.claimEdit("holder", join(root, "held.txt")), undefined);
 	activity.shellStart("main:call-1", root);
 	assert.equal(await bash("writer")("echo x > x.txt && echo ok"), "ok\n");
 	activity.end("main:call-1");
@@ -176,13 +176,17 @@ test("another agent's shell in the same checkout at the same time makes the chan
 });
 
 test("a child that already holds the lock, or works for its holder, is not fingerprinted", async (t) => {
-	const dir = realpathSync(mkdtempSync(join(tmpdir(), "subagent-no-git-")));
-	t.after(() => rmSync(dir, { recursive: true, force: true }));
-	const { team, warnings, bash } = harness(dir);
+	const root = repository(t);
+	const { team, warnings, activity, bash } = harness(root);
+	const watched: string[] = [];
+	const watch = activity.watch.bind(activity);
+	activity.watch = (id, cwd) => { watched.push(id); return watch(id, cwd); };
 	team.restore([record("helper", { parent: "holder", depth: 2 })]);
-	assert.equal(team.claimEdit("holder"), undefined);
-	await bash("holder", dir)("echo ok");
-	await bash("helper", dir)("echo ok");
-	assert.deepEqual(warnings, [], "no git was run, so nothing failed");
+	assert.equal(team.claimEdit("holder", join(root, "held.txt")), undefined);
+	await bash("holder")("echo a > a.txt");
+	await bash("helper")("echo b > b.txt");
+	await bash("other")("echo ok");
+	assert.deepEqual(watched, ["other:call-1"], "only the child that may not edit was watched");
+	assert.deepEqual(warnings, []);
 	await team.close();
 });

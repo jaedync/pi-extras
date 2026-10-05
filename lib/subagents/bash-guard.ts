@@ -18,10 +18,10 @@ export interface ChangeWatch {
 	/** The child's name, which keeps its call ids apart from other agents' in `activity`. */
 	agent: string;
 	activity: ToolActivity;
-	/** True while the child may edit anyway: it or an agent it works for holds the lock. */
-	mayEdit(): boolean;
-	/** Paths relative to the work tree; takes the lock, or returns a note for the call's result. */
-	changed(paths: readonly string[]): string | undefined;
+	/** True while the child may edit in the work tree `root` anyway: it or an agent it works for holds its lock. */
+	mayEdit(root: string): boolean;
+	/** Paths relative to the work tree `root`; takes its lock, or returns a note for the call's result. */
+	changed(paths: readonly string[], root: string): string | undefined;
 	warn(message: string): void;
 }
 
@@ -55,17 +55,24 @@ function skip(watch: ChangeWatch, error: unknown): undefined {
 
 interface Before { root: string; print: Fingerprint; stop(): Watched }
 
-async function before(watch: ChangeWatch, id: string): Promise<Before | undefined> {
-	if (watch.mayEdit()) return undefined;
+async function before(watch: ChangeWatch, id: string, rootOf: () => Promise<string>): Promise<Before | undefined> {
+	let root: string;
+	try { root = await rootOf(); }
+	catch (error) { return skip(watch, error); }
+	if (watch.mayEdit(root)) return undefined;
 	// Watch first: an edit that lands while the fingerprint is taken must not count either.
 	const stop = watch.activity.watch(`${watch.agent}:${id}`, watch.cwd);
-	try {
-		const root = await gitRoot(watch.cwd);
-		return { root, print: await fingerprint(root), stop };
-	} catch (error) {
+	try { return { root, print: await fingerprint(root), stop }; }
+	catch (error) {
 		stop();
 		return skip(watch, error);
 	}
+}
+
+/** The work tree of `cwd`, looked up once it is found; a failure is tried again on the next call. */
+function rootLookup(cwd: string): () => Promise<string> {
+	let found: string | undefined;
+	return async () => found ??= await gitRoot(cwd);
 }
 
 async function after(watch: ChangeWatch, start: Before): Promise<string | undefined> {
@@ -76,16 +83,17 @@ async function after(watch: ChangeWatch, start: Before): Promise<string | undefi
 	// Another agent's command ran here meanwhile, so these changes may be its.
 	if (shared) return undefined;
 	const paths = changedPaths(start.print, print).filter((path) => !edited.has(path));
-	return paths.length > 0 ? watch.changed(paths.map((path) => relative(start.root, path))) : undefined;
+	return paths.length > 0 ? watch.changed(paths.map((path) => relative(start.root, path)), start.root) : undefined;
 }
 
 export function guardBash<T extends ToolDefinition<any, any, any>>(definition: T, options: BashGuardOptions): T {
 	const { sandbox, changes } = options;
 	if (!sandbox && !changes) return definition;
+	const rootOf = changes ? rootLookup(changes.cwd) : undefined;
 	return {
 		...definition,
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			const start = changes ? await before(changes, toolCallId) : undefined;
+			const start = changes && rootOf ? await before(changes, toolCallId, rootOf) : undefined;
 			let result: AgentToolResult<unknown>;
 			try { result = await definition.execute(toolCallId, params, signal, onUpdate, ctx); }
 			catch (error) {

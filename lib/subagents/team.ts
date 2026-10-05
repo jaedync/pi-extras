@@ -30,6 +30,7 @@ import { bashChangeNotes, EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
 import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { saveReport } from "./reports.ts";
+import { WorkTrees } from "./work-trees.ts";
 import { createWorktree, workspaceError } from "./worktree.ts";
 import {
 	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest,
@@ -119,6 +120,7 @@ export class Team {
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
 	private readonly budgets: RunBudgets;
 	private readonly locks = new EditLocks(this);
+	private readonly workTrees = new WorkTrees();
 	private readonly now: () => number;
 	private readonly options: TeamOptions;
 
@@ -195,21 +197,21 @@ export class Team {
 		return { ok: true, record: this.records.get(name)! };
 	}
 
-	/** Before a child's `edit` or `write` call: takes its workspace's lock, or says who holds it (edit-lock.ts). */
-	claimEdit(name: string): string | undefined {
-		return this.locks.claim(name);
+	/** Before a child's `edit` or `write` of the absolute `target`: takes the lock of its work tree, or says who holds it (edit-lock.ts). */
+	claimEdit(name: string, target?: string): string | undefined {
+		return this.locks.claim(name, target === undefined ? undefined : this.workTrees.topOf(target));
 	}
 
-	/** Whether `name` may edit now without taking the lock; its bash calls are not checked then. */
-	mayEdit(name: string): boolean {
-		return this.locks.holds(name);
+	/** Whether `name` may edit in the work tree `root` now without taking its lock; its bash calls there are not checked then. */
+	mayEdit(name: string, root?: string): boolean {
+		return this.locks.holds(name, root);
 	}
 
-	/** After `name`'s bash call changed `paths`: takes the lock as an edit would, or warns and returns a note for the call's result. */
-	bashChanged(name: string, paths: readonly string[]): string | undefined {
+	/** After `name`'s bash call changed `paths` in the work tree `root`: takes its lock as an edit would, or warns and returns a note for the call's result. */
+	bashChanged(name: string, paths: readonly string[], root?: string): string | undefined {
 		const record = this.records.get(name);
-		if (!record || this.locks.claim(name) === undefined) return undefined;
-		const holder = this.locks.holder(name);
+		if (!record || this.locks.claim(name, root) === undefined) return undefined;
+		const holder = this.locks.holder(name, root);
 		if (holder === undefined) return undefined;
 		const { note, warning } = bashChangeNotes(record, holder, paths);
 		(this.options.warn ?? console.warn)(warning);

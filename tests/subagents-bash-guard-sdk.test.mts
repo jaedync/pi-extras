@@ -55,10 +55,10 @@ async function setup(cwd: string) {
 			modelRuntime: async () => runtime,
 			toolsFor: () => ({ tools: ["bash", "write"], customTools: [] }),
 			instructions: () => "",
-			claimEdit: (name) => team.claimEdit(name),
+			claimEdit: (name, target) => team.claimEdit(name, target),
 			activity: new ToolActivity(),
-			mayEdit: (name) => team.mayEdit(name),
-			bashChanged: (name, paths) => team.bashChanged(name, paths),
+			mayEdit: (name, top) => team.mayEdit(name, top),
+			bashChanged: (name, paths, top) => team.bashChanged(name, paths, top),
 		}),
 	});
 	return { team, faux, warnings };
@@ -113,7 +113,7 @@ test("a shared child's bash call that changes files takes the free lock", { time
 	faux.setResponses([
 		ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "echo new > new.txt" })),
 		() => {
-			assert.match(team.claimEdit("other") ?? "", /^shell is editing files in this checkout/);
+			assert.match(team.claimEdit("other", join(root, "other.txt")) ?? "", /^shell is editing files in this checkout/);
 			return ai.fauxAssistantMessage("Done.");
 		},
 	]);
@@ -128,7 +128,7 @@ test("a shared child's bash call that changes files beside the holder gets a not
 	const root = repository();
 	const { team, faux, warnings } = await setup(root);
 	team.restore([running("holder")]);
-	assert.equal(team.claimEdit("holder"), undefined);
+	assert.equal(team.claimEdit("holder", join(root, "held.txt")), undefined);
 	const results: string[] = [];
 	faux.setResponses([
 		ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "echo changed > tracked.txt && echo wrote" })),
@@ -142,6 +142,6 @@ test("a shared child's bash call that changes files beside the holder gets a not
 	assert.equal(done.state, "idle", done.error);
 	assert.equal(results[0], "wrote\nThis command changed tracked.txt in this checkout while holder holds its edit lock. Don't change files here; tell main if you need a worktree (isolation: \"worktree\").");
 	assert.deepEqual(warnings, ["subagents: shell's bash command changed tracked.txt in the shared checkout while holder holds its edit lock."]);
-	assert.match(team.claimEdit("shell") ?? "", /^holder is editing/, "the holder keeps the lock");
+	assert.match(team.claimEdit("shell", join(root, "other.txt")) ?? "", /^holder is editing/, "the holder keeps the lock");
 	await team.close();
 });

@@ -885,9 +885,13 @@ The call returns how it ended and its last message, so no report follows; a
 message resumes it later. `/subagents stop <name>`, `stop all` and ctrl+x in
 the inspector stop children for you, and then main gets the stopped report.
 
-**Writers.** The first child to edit files in the shared checkout holds it
-until its run ends. It keeps it while it waits on its own subagents, and lets
-it go when it finishes, fails, is stopped or is interrupted. Its ancestors and
+**Writers.** The first child to edit files in a checkout holds that checkout
+until its run ends. The checkout is the git work tree that contains the edited
+file: a repository or one of its worktrees. For a file outside any git work
+tree, it is the child's own workspace. So children that edit different
+repositories or worktrees never block each other. The holder keeps the checkout
+while it waits on its own subagents, and lets it go when it finishes, fails, is
+stopped or is interrupted. Its ancestors and
 its own subagents can edit beside it. Any other child's `edit` or `write` call
 there is refused before it runs, with a message that names the holder. That
 child can then do work that does not edit files, or ask its parent for a
@@ -895,9 +899,10 @@ worktree. Main never takes or checks the lock. A child's `bash` command can't
 be checked before it runs, so the check comes after it: the child's `git status`
 (with the size and modification time of each listed file) is compared before
 and after each call. Ignored files do not count. A command that changed files
-takes the lock as an edit would. When another child holds it, the changes stay,
-the command's result tells the child to stop and ask for a worktree, and you get
-a warning. This is detection after the fact, not prevention. Files that an
+takes the lock of the child's work tree as an edit would. When another child
+holds it, the changes stay, the command's result tells the child to stop and ask
+for a worktree, and you get a warning. This is detection after the fact, not
+prevention. Files that an
 `edit` or `write` call of any agent, main included, targets during the command
 do not count. When another agent's `bash` command runs in the same place at the
 same time, the changes can't be told apart, so that call is not checked. Outside
