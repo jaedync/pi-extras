@@ -73,7 +73,7 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.launchError === undefined || typeof r.launchError === "string")
 		&& [r.maxMinutes, r.maxCost].every((limit) => limit === undefined || (typeof limit === "number" && Number.isFinite(limit) && limit > 0))
 		&& (r.stopReason === undefined || typeof r.stopReason === "string")
-		&& strings(r.inbox) && strings(r.owed) && strings(r.unread);
+		&& strings(r.inbox) && strings(r.owed) && strings(r.unread) && strings(r.tools);
 }
 
 export class ChildIndex {

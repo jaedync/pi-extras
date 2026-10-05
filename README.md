@@ -749,8 +749,14 @@ tools, Cache Compaction and a quota guard. Other extensions, such as the
 remote-pi mesh, keep serving the parent session. It runs in the background and its report arrives
 as a message, so the agent keeps working or ends its turn and is woken when it
 matters. `wait: true` blocks instead, for a quick check. `readOnly: true` takes
-away `bash`, `edit` and `write`. `context: "fork"` gives the child a condensed
-copy of the conversation so far.
+away `bash`, `edit` and `write`. `tools` gives the child only the named tools
+of the ones it would get, for example `["read", "grep", "web_search"]`. It
+always keeps `message`, and `subagent` and `stop_subagent` when it may start
+subagents. The call is refused, with a list of the tools the child can have,
+for an empty list, a name it can't have, or `bash`, `edit` or `write` with
+`readOnly: true`. Its own subagents get no more tools than it has, and a
+resume or a restore keeps the same tools. `context: "fork"` gives the child a
+condensed copy of the conversation so far.
 
 **Models.** A child may run on any of the session's scoped models
 (`enabledModels`, the list `/scoped-models` shows); short names such as `luna`

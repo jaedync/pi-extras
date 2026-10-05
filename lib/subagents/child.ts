@@ -23,7 +23,7 @@ export const CHILD_TOOL_EXCLUDE: readonly string[] = [
 	"get_goal", "create_goal", "propose_goal_draft", "complete_goal", "update_goal_progress",
 	"shell_job_start", "shell_job", "computer_use", "windows_use", "usage", "codemode", "tool_search",
 ];
-const WRITE_TOOLS = new Set(["bash", "edit", "write"]);
+export const WRITE_TOOLS: ReadonlySet<string> = new Set(["bash", "edit", "write"]);
 /** The calls the edit guard checks; `bash` can change files too, but its targets can't be read from its input. */
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const EDIT_GUARD_NAME = "subagent-edit-guard";

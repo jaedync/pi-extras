@@ -14,6 +14,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { allowedTools } from "../lib/subagents/allowlist.ts";
 import { createLauncher, childExtensionPaths, childToolNames, describeTool } from "../lib/subagents/child.ts";
 import { GUIDE_FILE, loadConfig, readGuide, type SubagentsConfig } from "../lib/subagents/config.ts";
 import { MainMail, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
@@ -280,7 +281,7 @@ export default function subagents(pi: ExtensionAPI) {
 				modelAllowed: (model) => allowed.some((choice) => choice.ref === model),
 				claimEdit: (name) => team.claimEdit(name),
 				toolsFor: (record) => {
-					const names = childToolNames(pi.getActiveTools(), record.readOnly, config.childToolsExclude);
+					const names = allowedTools(childToolNames(pi.getActiveTools(), record.readOnly, config.childToolsExclude), record.tools);
 					return {
 						tools: names,
 						extensionPaths: childExtensionPaths(pi.getAllTools(), names),
@@ -302,6 +303,7 @@ export default function subagents(pi: ExtensionAPI) {
 			team, allowed, fallbackModel, thinking, modelTable: modelTable(allowed, thinking),
 			guide: readGuide(agentDir, cwd).text, replyTimeoutMs: config.replyTimeoutMs, now: Date.now,
 			currentGroup: () => `run-${mainRun}`,
+			childTools: (readOnly) => childToolNames(pi.getActiveTools(), readOnly, config.childToolsExclude),
 		};
 
 		try {

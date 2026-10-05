@@ -176,6 +176,7 @@ export class Team {
 			toolCalls: 0, usage: NO_USAGE, runs: 0, autoResumeAttempts: 0, ...(request.thinking ? { thinking: request.thinking } : {}),
 			...(sessionFile ? { sessionFile } : {}),
 			...(request.group ? { group: request.group } : {}),
+			...(request.tools ? { tools: [...request.tools] } : {}),
 			...(worktree ? { worktree: { ...worktree } } : {}),
 			...(maxMinutes !== undefined ? { maxMinutes } : {}),
 			...(maxCost !== undefined ? { maxCost } : {}),

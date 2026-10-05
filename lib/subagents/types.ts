@@ -38,6 +38,8 @@ export interface AgentRecord {
 	model: string;
 	thinking?: Thinking;
 	readOnly: boolean;
+	/** Its tool allowlist, fixed at spawn so resumes keep it; unset, it gets every tool it could have. */
+	tools?: string[];
 	/** An isolated workspace, also inherited by helpers sharing their parent's checkout. */
 	worktree?: Worktree;
 	/** Captured when a run ends, so reading its report does not stage a later run's files. */
@@ -108,6 +110,7 @@ export interface SpawnRequest {
 	model: string;
 	thinking?: Thinking;
 	readOnly: boolean;
+	tools?: string[];
 	fork: boolean;
 	blocking: boolean;
 	group?: string;

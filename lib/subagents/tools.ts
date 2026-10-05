@@ -4,6 +4,7 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { allowedTools, checkAllowlist } from "./allowlist.ts";
 import { MAX_RUN_MINUTES } from "./budget.ts";
 import { childMessageDescription, mainMessageDescription, stopDescription, subagentDescription } from "./describe.ts";
 import { capReport, reportText, rosterText } from "./format.ts";
@@ -28,6 +29,8 @@ export interface ToolContext {
 	now(): number;
 	/** Main's current run; children it starts in one run report together. */
 	currentGroup?(): string | undefined;
+	/** The tools a child could have before any allowlist: the parent's active tools minus the exclusions. */
+	childTools?(readOnly: boolean): string[];
 }
 
 type Result = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> | undefined };
@@ -41,6 +44,7 @@ const subagentParams = Type.Object({
 	model: Type.Optional(Type.String({ description: "Model reference or unique short name from the list above." })),
 	thinking: Type.Optional(thinkingSchema),
 	readOnly: Type.Optional(Type.Boolean({ description: "No file edits or shell commands." })),
+	tools: Type.Optional(Type.Array(Type.String(), { description: "Give it only these of the tools it would get; message always stays. Omit for all of them." })),
 	isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")], { description: "Default shared. Use worktree for a separate git checkout based on the parent's current files." })),
 	context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")], { description: "fork gives it this conversation so far; default fresh." })),
 	wait: Type.Optional(Type.Boolean({ description: "Block until it finishes and return its report. Only for short checks." })),
@@ -60,9 +64,19 @@ const stopParams = Type.Object({
 
 interface SubagentInput {
 	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; isolation?: "shared" | "worktree"; context?: string; wait?: boolean;
-	maxMinutes?: number; maxCost?: number;
+	maxMinutes?: number; maxCost?: number; tools?: string[];
 }
 interface MessageInput { to: string; text: string; expectReply?: boolean }
+
+/** The allowlist for a new child of `parent`: the one asked for, else its parent's, since a restricted parent can't pass on more than it has. */
+function spawnTools(tc: ToolContext, parent: string, requested: readonly string[] | undefined, readOnly: boolean): string[] | undefined {
+	const limit = tc.team.get(parent)?.tools;
+	const available = allowedTools(tc.childTools?.(readOnly) ?? [], limit);
+	if (requested === undefined) return limit ? available : undefined;
+	const checked = checkAllowlist(requested, available, readOnly);
+	if (!checked.ok) throw new Error(checked.error);
+	return checked.tools;
+}
 
 function spawnSummary(record: AgentRecord): string {
 	const thinking = record.thinking ? `, thinking ${record.thinking}` : "";
@@ -87,12 +101,14 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 			const thinking = thinkingFor(resolved.choice, params.thinking as Thinking | undefined, tc.thinking);
 			const fork = params.context === "fork";
 			if (fork && parent !== MAIN) throw new Error("Only the main session can fork its context.");
+			const tools = spawnTools(tc, parent, params.tools, params.readOnly === true);
 			const group = parent === MAIN ? tc.currentGroup?.() : undefined;
 			const spawned = tc.team.spawn({
 				...(group ? { group } : {}),
 				...(params.isolation ? { isolation: params.isolation } : {}),
 				...(params.maxMinutes !== undefined ? { maxMinutes: params.maxMinutes } : {}),
 				...(params.maxCost !== undefined ? { maxCost: params.maxCost } : {}),
+				...(tools ? { tools } : {}),
 				task: params.task.trim(), parent, model: resolved.choice.ref, readOnly: params.readOnly === true, fork,
 				blocking: params.wait === true, ...(params.name ? { name: params.name } : {}), ...(thinking ? { thinking } : {}),
 			});
