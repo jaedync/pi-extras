@@ -1,8 +1,8 @@
 /** Isolated child workspaces retain the parent's current files without changing its index. */
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worktree } from "./types.ts";
 
@@ -109,18 +109,53 @@ function toolPath(path: string): string {
 	return bare.startsWith("file://") ? fileURLToPath(bare) : bare;
 }
 
+const ADVICE = "Edit only files inside it; your parent applies your changes to its checkout from your report.";
+
+function within(dir: string, target: string): boolean {
+	const rel = relative(dir, target);
+	return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+const errorCode = (error: unknown): string | undefined => (error as NodeJS.ErrnoException).code;
+
 /**
- * Why an edit of `path` would leave the child's worktree, or undefined. The
- * check is lexical: a symlink inside the worktree (such as `node_modules`)
- * is not followed.
+ * Where a write to the absolute `path` lands: the symlinks of its nearest
+ * existing ancestor resolved, and a dangling final link followed, as the OS
+ * does. A path that can't be resolved (a link loop, no permission) is
+ * returned as written; the write fails there anyway.
+ */
+export function realTarget(path: string): string {
+	try { return realpathSync(path); }
+	catch (error) {
+		if (errorCode(error) !== "ENOENT" && errorCode(error) !== "ENOTDIR") return path;
+	}
+	const parent = dirname(path);
+	if (parent === path) return path;
+	let link: string | undefined;
+	try { link = lstatSync(path).isSymbolicLink() ? readlinkSync(path) : undefined; }
+	catch (error) { if (errorCode(error) !== "ENOENT" && errorCode(error) !== "ENOTDIR") return path; }
+	return link === undefined ? join(realTarget(parent), basename(path)) : realTarget(resolve(parent, link));
+}
+
+/**
+ * Why an edit of `path` would leave the child's worktree, or undefined. A
+ * path inside it that resolves outside, through the `node_modules` link into
+ * the parent's checkout for one, is refused too.
  */
 export function outsideWorktree(worktree: Worktree, cwd: string, path: unknown): string | undefined {
 	// The tool refuses a missing or malformed path itself.
 	if (typeof path !== "string") return undefined;
 	const target = resolve(cwd, toolPath(path));
-	const rel = relative(worktree.path, target);
-	if (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) return undefined;
-	return `${target} is outside your worktree ${worktree.path}. Edit only files inside it; your parent applies your changes to its checkout from your report.`;
+	if (!within(worktree.path, target)) return `${target} is outside your worktree ${worktree.path}. ${ADVICE}`;
+	const real = realTarget(target);
+	if (within(realTarget(worktree.path), real)) return undefined;
+	return `${target} resolves to ${real}, outside your worktree ${worktree.path}. ${ADVICE}`;
+}
+
+/** The checkout `path` was made from, when it is a subagent worktree (`<root>.worktrees/<name>`). */
+export function sourceCheckout(path: string): string | undefined {
+	const container = dirname(path);
+	return container.endsWith(WORKTREE_SUFFIX) && container.length > WORKTREE_SUFFIX.length ? container.slice(0, -WORKTREE_SUFFIX.length) : undefined;
 }
 
 /** Persisted paths are used as command arguments and prompt text, never shell input. */
@@ -141,9 +176,8 @@ export function worktreeFooter(worktree: Worktree): string {
 		git(path, ["add", "-A", ...paths]);
 		const files = git(path, ["diff", "--cached", "--name-only", "-z", base, ...paths]).split("\0").filter(Boolean).length;
 		const commits = git(path, ["rev-list", "--count", `${base}..HEAD`]).trim();
-		const container = dirname(path);
-		if (!container.endsWith(WORKTREE_SUFFIX)) throw new Error("The saved worktree path has no source checkout.");
-		const root = container.slice(0, -WORKTREE_SUFFIX.length);
+		const root = sourceCheckout(path);
+		if (root === undefined) throw new Error("The saved worktree path has no source checkout.");
 		const pathspec = paths.length ? ` ${paths.map(quote).join(" ")}` : "";
 		return `\n\nWorktree: ${path} (${branch}); ${files} ${files === 1 ? "file differs" : "files differ"} from base, ${commits} ${commits === "1" ? "commit" : "commits"}.\n`
 			+ `Apply: git -C ${quote(path)} add -A${pathspec} && git -C ${quote(path)} diff --binary --cached ${base}${pathspec} | git -C ${quote(root)} apply\n`

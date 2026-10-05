@@ -895,9 +895,21 @@ worktree. Main never takes or checks the lock. `bash` is not covered, so a
 child's shell commands can still change files. Use `isolation: "worktree"` for
 parallel edits. Each worktree has its own lock, shared by the helpers that
 inherit it. A worktree child's `edit` and `write` calls outside its worktree
-are refused before they run. The check reads the path as written and does not
-follow symlinks. For `bash`, the boundary is only the child's working
-directory, which is the worktree, and its instructions. Worktree isolation
+are refused before they run. The check follows symlinks, so an edit through the
+worktree's `node_modules` link into the parent's checkout is refused too. A
+worktree child's `bash` commands run in an OS sandbox that blocks writes into
+the parent's checkout (and, for a worktree made from a worktree, into each
+checkout it came from). Two exceptions stay writable: the checkout's `.git`
+directory, where commits in the worktree go, and the dot-entries directly in its
+`node_modules`, such as `.cache`. The packages in `node_modules` are not
+writable, so an install in a worktree can't change the parent's dependencies.
+When a command fails on a blocked write, its result names the parent's
+checkout. The transcript shows the child's own command, not the sandbox around
+it. macOS uses `sandbox-exec`. Linux uses `bwrap` when it is on `PATH`; there,
+only the `node_modules` dot-entries that exist when the child starts are
+writable. Without `bwrap`, and on Windows, there is no sandbox: the boundary for
+`bash` is only the child's working directory, which is the worktree, and its
+instructions. Worktree isolation
 needs a git repository. It copies the parent's current files, including uncommitted
 changes and untracked files that Git does not ignore, into a separate checkout.
 The parent keeps its files and index unchanged. The report gives the worktree,

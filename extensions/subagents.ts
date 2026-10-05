@@ -282,6 +282,7 @@ export default function subagents(pi: ExtensionAPI) {
 				modelRuntime: runtimeSource(ctx),
 				modelAllowed: (model) => allowed.some((choice) => choice.ref === model),
 				claimEdit: (name) => team.claimEdit(name),
+				warn,
 				toolsFor: (record) => {
 					const names = allowedTools(childToolNames(pi.getActiveTools(), record.readOnly, config.childToolsExclude), record.tools);
 					return {

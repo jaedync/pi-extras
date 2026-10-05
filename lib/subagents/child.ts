@@ -4,13 +4,15 @@
  * desktop control, background jobs), tool-owning extensions, Cache Compaction
  * and a quota guard. Status bars, voice and other UI extensions stay out.
  */
-import type { AgentSession, InlineExtension, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, InlineExtension, ModelRuntime, SettingsManager, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
+import { guardBash } from "./bash-guard.ts";
+import { confine, sandboxFor } from "./sandbox.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, Usage } from "./types.ts";
 import { outsideWorktree, workspaceError } from "./worktree.ts";
 
@@ -113,6 +115,26 @@ export interface LauncherDeps {
 	onExtensionError?(error: unknown): void;
 	/** Before each `edit` or `write` call: takes the child's workspace lock, or says why it can't edit now. */
 	claimEdit?(name: string): string | undefined;
+	/** Problems the user should see, such as a sandbox tool that does not work here. */
+	warn?(message: string): void;
+}
+
+/**
+ * Pi's bash tool with the parent's shell settings, replacing whichever bash
+ * the child would get. A spawn hook confines a worktree child's commands, so
+ * its transcript keeps the command it wrote.
+ */
+function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, warn: LauncherDeps["warn"]): ToolDefinition {
+	const sandbox = record.worktree
+		? sandboxFor(record.worktree.path, (why) => warn?.(`subagents: bash in worktrees runs without a sandbox, so it can write into your checkout. ${why}`))
+		: undefined;
+	const shellPath = settings.getShellPath();
+	const definition = sdk.createBashToolDefinition(cwd, {
+		commandPrefix: settings.getShellCommandPrefix(),
+		...(shellPath ? { shellPath } : {}),
+		...(sandbox ? { spawnHook: confine(sandbox.prefix) } : {}),
+	});
+	return guardBash(definition, sandbox ? { sandbox } : {}) as ToolDefinition;
 }
 
 /** Blocks, before it runs, an edit the child may not make; the reason is the call's result. */
@@ -141,10 +163,12 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const modelRuntime = await deps.modelRuntime();
 			const resolved = sdk.resolveCliModel({ cliModel: record.model, modelRuntime });
 			if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Unknown model ${record.model}.`);
-			const { tools, customTools, extensionPaths = [] } = deps.toolsFor(record);
+			const { tools, customTools: listed, extensionPaths = [] } = deps.toolsFor(record);
 			const wanted = new Set(tools);
 			const guard = createChildRateLimitGuard({ configFile: join(agentDir, "pi-extras.json"), onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
 			const settingsManager = sdk.SettingsManager.create(cwd, agentDir);
+			// An SDK tool wins over a built-in or extension tool of the same name.
+			const customTools = wanted.has("bash") ? [...listed, childBash(sdk, cwd, settingsManager, record, deps.warn)] : listed;
 			const loader = new sdk.DefaultResourceLoader({
 				cwd, agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
 				// Besides Cache Compaction, load only files that own the child's tools. Every factory is handed the
