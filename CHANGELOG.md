@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.23.0 - 2026-10-05
+
+### Added
+
+- Herdr Hold: inside Herdr, the pane stays working while subagents, shell
+  jobs or a rate-limit wait still run after main's turn ends. Herdr's done
+  sound then plays once, when all work is done, not each time main stops.
+  Herdr's own Pi integration still does the reporting, unchanged.
+  `PI_HERDR_HOLD=off` turns it off.
+
 ## 0.22.0 - 2026-10-05
 
 ### Added
