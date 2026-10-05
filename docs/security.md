@@ -43,16 +43,6 @@ details in its tabs, Session Status tool, Cockpit and status-change alerts.
 This adds no network request or transcript log. Disable it with
 `tabStatus.enabled: false` if that terminal-facing metadata is unsuitable.
 
-## Herdr Hold
-
-Herdr Hold sends no data of its own and makes no network requests. Inside a
-Herdr pane, it wraps Node's `net.createConnection` in the Pi process. The
-wrapper reads only the requests written to Herdr's local socket
-(`HERDR_SOCKET_PATH`). It holds one request type: an idle report from Herdr's
-Pi integration for this pane. Later it sends those bytes, unchanged, to the
-same socket. It keeps a held report only in memory. Other connections and
-other requests are not read or changed. `PI_HERDR_HOLD=off` disables it.
-
 ## Usage Guard
 
 Usage Guard makes no network requests of its own. It reads the snapshots Status

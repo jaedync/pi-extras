@@ -5,11 +5,11 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-test('package explicitly exports seventeen extensions and one theme', () => {
+test('package explicitly exports sixteen extensions and one theme', () => {
   const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
   assert.deepEqual(pkg.pi.extensions, [
     'extensions/tab-status.ts', 'extensions/status-plus.ts', 'extensions/usage-guard.ts', 'extensions/rate-limit-recovery.ts', 'extensions/phase-spinner.ts',
-    'extensions/shell-jobs.ts', 'extensions/subagents.ts', 'extensions/herdr-hold.ts', 'extensions/bash-default-timeout.ts',
+    'extensions/shell-jobs.ts', 'extensions/subagents.ts', 'extensions/bash-default-timeout.ts',
     'extensions/kagi-search.ts', 'extensions/voice.ts', 'extensions/computer-use.ts', 'extensions/windows-use.ts',
     'extensions/tool-display.ts', 'extensions/copy-blocks.ts', 'extensions/release-notes.ts', 'extensions/cache-compaction.ts',
   ]);

@@ -37,7 +37,6 @@
       "extensions/phase-spinner.ts",
       "extensions/shell-jobs.ts",
       "extensions/subagents.ts",
-      "extensions/herdr-hold.ts",
       "extensions/bash-default-timeout.ts",
       "extensions/kagi-search.ts",
       "extensions/voice.ts",
