@@ -18,7 +18,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all sixteen extensions (quota hibernation, computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
+adds all seventeen extensions (quota hibernation, computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -31,6 +31,7 @@ can still conflict.
 | Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
 | Phase Spinner | Descriptive status with a per-mode spinner in the editor's top divider, with a per-step stopwatch, alongside tokens/sec, time to first token and total elapsed time; live thinking above queued messages and a π end line when a prompt finishes |
 | Tab Status | Pi's state in the terminal tab: an iTerm2 status dot and detail, and tab progress in iTerm2, Ghostty, WezTerm and Windows Terminal |
+| Herdr Hold | Inside [Herdr](https://herdr.dev), the pane stays working while subagents or shell jobs run after main's turn ends, so Herdr's done sound plays once, when all work is done |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
 | Subagents | `subagent`, `message` and `stop_subagent` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, each with a live row above the editor |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
@@ -95,6 +96,8 @@ the package. Removing it does not remove your credentials or change other packag
   default model; `[]` turns fallback off). The model guide is
   `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
   project. See below.
+- `PI_HERDR_HOLD=off`: let Herdr's Pi integration report idle when main's
+  turn ends, as it does without pi-extras.
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
   Explicit per-call timeouts are preserved.
 - `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
@@ -205,6 +208,36 @@ only in a terminal you know supports it.
 
 iTerm2 can show these details in its Cockpit and in status-change alerts; see
 [security and privacy](docs/security.md#tab-status).
+
+## Herdr Hold
+
+[Herdr](https://herdr.dev) plays a done sound when an agent pane changes
+from working to idle. Herdr's Pi integration reports idle when main's turn
+ends, also when subagents or shell jobs still run. Their completions then
+start more turns, so you hear the sound more than once and too early.
+
+Herdr Hold keeps the pane working until all background work ends:
+
+- While Subagents, Shell Jobs or a Rate-limit Recovery wait still run, the
+  idle report from Herdr's integration does not go to Herdr.
+- When the work ends, a completion usually starts a new turn, and Herdr's
+  integration reports idle again at its end.
+- If no turn starts within 2 seconds (for example, you stopped the job), the
+  held report goes to Herdr unchanged.
+
+Herdr's integration does all the reporting, and its file stays as Herdr
+installed it. Herdr Hold has an effect only when Pi runs in a Herdr pane,
+only in the interactive session, and only on Herdr's own Pi reports. It
+holds a report by wrapping Node's `net.createConnection` for connections to
+`HERDR_SOCKET_PATH`. Connections to other endpoints are not changed. If
+Herdr changes how its integration reports, the reports go through unchanged
+and Herdr works as it does without Herdr Hold.
+
+- While the pane is working, `herdr agent wait --until idle` also waits for
+  the background work.
+- A `/reload` keeps a held report. If no new copy takes it within 10 seconds,
+  it goes to Herdr.
+- `PI_HERDR_HOLD=off` turns Herdr Hold off.
 
 ## Cache Compaction
 
