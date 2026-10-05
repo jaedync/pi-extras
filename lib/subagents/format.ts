@@ -48,9 +48,15 @@ export function reportText(record: AgentRecord, now: number): string {
 	return reportSummary(record, now) + (record.worktree ? record.worktreeReport ?? worktreeFooter(record.worktree) : "");
 }
 
+/** This run's switches to fallback models, said plainly, since a fallback may cost more than the model its parent chose. */
+function fallbackLines(record: AgentRecord): string {
+	return (record.fallbacks ?? []).filter((step) => step.run === record.runs)
+		.map((step) => `\nRan on ${step.to} after ${step.from} failed: ${step.reason}.`).join("");
+}
+
 function reportSummary(record: AgentRecord, now: number): string {
 	const head = `${record.name} (${record.model}${spend(record)})`;
-	const session = `${record.sessionFile ? `\nSession: ${record.sessionFile}` : ""}${record.report && record.reportFile ? `\nReport: ${record.reportFile}` : ""}`;
+	const session = `${record.sessionFile ? `\nSession: ${record.sessionFile}` : ""}${record.report && record.reportFile ? `\nReport: ${record.reportFile}` : ""}${fallbackLines(record)}`;
 	if (record.state === "interrupted") {
 		const outcome = record.launchError ? `could not resume: ${oneLine(record.launchError, 300)}` : `was interrupted after ${duration(record, now)}.`;
 		const partial = record.report ? `\n\n${record.launchError ? "" : "Last available message:\n"}${capReport(record.report, record.sessionFile, record.reportFile)}` : "";

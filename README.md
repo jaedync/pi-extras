@@ -90,7 +90,9 @@ the package. Removing it does not remove your credentials or change other packag
   `childToolsExclude` (tool names children never get) and `resumePolicy`
   (`"reload"`, the default, resumes children a `/reload` interrupted;
   `"always"` also allows one automatic attempt after a restart or crash;
-  `"notify"` never resumes on its own). The model guide is
+  `"notify"` never resumes on its own), and `fallbackModels` (models, in
+  order, that a run moves to when its model can't serve it; default: the
+  default model; `[]` turns fallback off). The model guide is
   `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
   project. See below.
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
@@ -917,6 +919,23 @@ over its 60-minute budget`, with its last message. A report to main wakes it.
 So a hung child can't keep a `pi -p` run open forever. A message to the child
 resumes it with a fresh budget, and it is told that its last run was stopped
 over its budget.
+
+**Fallback.** Sometimes a child's model can't serve its run: its quota or
+usage limit is used up, a rate limit lasts longer than the automatic wait,
+the provider is overloaded or unavailable, the credentials are missing or
+expired, or the model is gone. Then the run does not fail. It continues from
+the child's session on the next model of `fallbackModels`, by default the
+default subagent model. The child is told first that its model failed and
+why, and to check the files before it continues. The fallback skips the model
+that failed and models outside the scoped models. After a quota, usage-limit
+or credentials failure, it also skips the other models of that provider. Each
+model gets at most one try per run. The row shows the new model, and the
+report says what happened, for example `Ran on anthropic/claude-opus-5-5 after
+openai-codex/gpt-6.1-sol failed: usage limit reached.` A fallback model can
+cost more than the model main chose. The run keeps its budget: the time and
+cost it used before the switch still count. When no model is left, the run
+fails and its error says so. Other failures, such as a full context or a bad
+request, fail as before.
 
 **Memory.** A child's session is released when it ends: at once when it
 failed or was stopped, after two quiet minutes when it finished, since a

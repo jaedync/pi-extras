@@ -11,7 +11,7 @@ import { createQuotaTransportGuard, type QuotaTransportOptions } from "./transpo
 
 export const CHILD_GUARD_NAME = "rate-limit-child-warning";
 export const CHILD_GUARD_PATH = `<inline:${CHILD_GUARD_NAME}>`;
-const SETUP_FAILURE = "Child quota retry protection could not be initialized. Check models.json and custom provider configuration, then reload Pi before retrying.";
+export const SETUP_FAILURE = "Child quota retry protection could not be initialized. Check models.json and custom provider configuration, then reload Pi before retrying.";
 
 function warn(options: QuotaTransportOptions, code: string): void {
 	try {

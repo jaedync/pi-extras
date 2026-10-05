@@ -29,6 +29,8 @@ export interface SubagentsConfig {
 	maxRunMinutes: number;
 	/** Dollars one run may spend before it is stopped; null for no limit. */
 	maxRunCost: number | null;
+	/** Models a run goes on with when its model can't serve it, in order; unset means the default model, [] turns fallback off. */
+	fallbackModels?: string[];
 }
 
 export const DEFAULTS: SubagentsConfig = {
@@ -67,8 +69,11 @@ export function parseConfig(section: Record<string, unknown>): SubagentsConfig {
 		maxRunMinutes: positive(section.maxRunMinutes) ? Math.min(section.maxRunMinutes, MAX_RUN_MINUTES) : DEFAULTS.maxRunMinutes,
 		maxRunCost: positive(section.maxRunCost) ? section.maxRunCost : DEFAULTS.maxRunCost,
 	};
+	const fallbacks = Array.isArray(section.fallbackModels)
+		? { fallbackModels: section.fallbackModels.filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0).map((ref) => ref.trim()) }
+		: {};
 	const model = section.defaultModel;
-	return typeof model === "string" && model.trim().length > 0 ? { ...config, defaultModel: model.trim() } : config;
+	return { ...config, ...fallbacks, ...(typeof model === "string" && model.trim().length > 0 ? { defaultModel: model.trim() } : {}) };
 }
 
 /** `PI_SUBAGENTS_MAX_DEPTH` overrides the file for one run; nesting is experimental. */

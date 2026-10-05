@@ -17,6 +17,7 @@ import { dirname, join } from "node:path";
 import { allowedTools } from "../lib/subagents/allowlist.ts";
 import { createLauncher, childExtensionPaths, childToolNames, describeTool } from "../lib/subagents/child.ts";
 import { GUIDE_FILE, loadConfig, readGuide, type SubagentsConfig } from "../lib/subagents/config.ts";
+import { fallbackChain } from "../lib/subagents/fallback.ts";
 import { MainMail, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
 import { watchMain } from "../lib/subagents/main-watch.ts";
 import { childInstructions, conversationDigest, rosterText } from "../lib/subagents/format.ts";
@@ -262,6 +263,7 @@ export default function subagents(pi: ExtensionAPI) {
 			maxDepth: config.maxDepth,
 			replyTimeoutMs: config.replyTimeoutMs,
 			runBudget: { minutes: config.maxRunMinutes, ...(config.maxRunCost !== null ? { cost: config.maxRunCost } : {}) },
+			fallbackModels: fallbackChain(config.fallbackModels, fallbackModel, allowed, warn),
 			messagesFor: (record) => record.sessionFile && existsSync(record.sessionFile) && !record.restoreError ? scanner.messages(record.sessionFile) : [],
 			prepareResume: (record) => {
 				const model = allowed.some((choice) => choice.ref === record.model) ? record.model : fallbackModel;

@@ -34,6 +34,16 @@ export function isTransientRateLimit(message: Failure): boolean {
 	return RATE_LIMITED.test(text) && !NOT_TRANSIENT.test(text) && parseRateLimit(text) === undefined;
 }
 
+/** Long-lived limits and billing, which no short wait clears. */
+export function isQuotaError(text: string): boolean {
+	return text.length <= MAX_ERROR_CHARS && NOT_TRANSIENT.test(text) && !isTemporaryLimitReport(text);
+}
+
+/** This backoff's own report of a temporary limit it waited on or gave up on; it reads as a quota error on purpose (see PREFIX). */
+export function isTemporaryLimitReport(text: string): boolean {
+	return text.startsWith(PREFIX) && text.includes(`: ${TEMPORARY}.`);
+}
+
 export function planTransient(streak: Streak, budgetMs: number, random: () => number, hintSeconds?: number): TransientPlan | TransientRefusal {
 	if (streak.attempts >= MAX_ATTEMPTS) return "attempts";
 	const remainingMs = budgetMs - streak.spentMs;
@@ -57,17 +67,18 @@ function duration(ms: number): string {
 // "Request quota exceeded" is Pi's non-transient class. Without it, Pi's own short retry loop
 // would run alongside this wait. Provider prose is omitted, as for structured quota errors.
 const PREFIX = "Request quota exceeded for";
+const TEMPORARY = "a temporary provider rate limit";
 
 export function waitingMessage(who: string, plan: TransientPlan, budgetMs: number): string {
-	return `${PREFIX} ${who}: a temporary provider rate limit. Waiting ${duration(plan.delayMs)} before sending the request again (retry ${plan.attempt}, at most ${duration(budgetMs)} of waiting in total). Esc cancels.`;
+	return `${PREFIX} ${who}: ${TEMPORARY}. Waiting ${duration(plan.delayMs)} before sending the request again (retry ${plan.attempt}, at most ${duration(budgetMs)} of waiting in total). Esc cancels.`;
 }
 
 export function exhaustedMessage(who: string, refusal: TransientRefusal, streak: Streak, hintSeconds?: number): string {
 	const retries = `${streak.attempts} automatic ${streak.attempts === 1 ? "retry" : "retries"}`;
-	if (refusal === "attempts") return `${PREFIX} ${who}: a temporary provider rate limit. It persisted through the automatic retry limit of ${MAX_ATTEMPTS} over ${duration(streak.spentMs)}. Send the request again later or switch models.`;
+	if (refusal === "attempts") return `${PREFIX} ${who}: ${TEMPORARY}. It persisted through the automatic retry limit of ${MAX_ATTEMPTS} over ${duration(streak.spentMs)}. Send the request again later or switch models.`;
 	const why = refusal === "hint-too-long" ? `The provider asked to wait ${Math.ceil(hintSeconds ?? 0)} seconds, longer than the automatic wait allows.`
 		: `It persisted after ${retries} over ${duration(streak.spentMs)}.`;
-	return `${PREFIX} ${who}: a temporary provider rate limit. ${why} Send the request again later, switch models, or raise rateLimitRecovery.transientMaxWaitSeconds.`;
+	return `${PREFIX} ${who}: ${TEMPORARY}. ${why} Send the request again later, switch models, or raise rateLimitRecovery.transientMaxWaitSeconds.`;
 }
 
 export interface TransientDeps {

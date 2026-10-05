@@ -3,7 +3,8 @@
  * or runaway child can't keep a headless `pi -p` open forever or spend without
  * bound. Time counts only while the run works: a child blocked on an answer
  * spends nothing, and the one answering it has its own budget. Cost counts
- * only what this run spent. A new run starts with a fresh budget.
+ * only what this run spent. A new run starts with a fresh budget; a run that
+ * goes on on a fallback model is the same run and keeps what it has used.
  */
 import { formatMoney } from "../status-plus-logic.ts";
 import type { AgentState } from "./types.ts";
@@ -14,6 +15,12 @@ export const MAX_RUN_MINUTES = 24 * 60;
 export interface RunLimits {
 	minutes?: number;
 	cost?: number;
+}
+
+/** What a run has used of its budget so far. */
+export interface BudgetUse {
+	readonly costAtStart: number;
+	readonly usedMs: number;
 }
 
 interface Clock {
@@ -47,12 +54,19 @@ export class RunBudgets {
 		this.over = options.over;
 	}
 
-	/** A run began working; `cost` is what the child had spent before it. */
-	start(name: string, limits: RunLimits, cost: number): void {
+	/** A run began working; `cost` is what the child had spent before it. A run that goes on carries what it had `used`. */
+	start(name: string, limits: RunLimits, cost: number, used?: BudgetUse): void {
 		this.end(name);
 		if (limits.minutes === undefined && limits.cost === undefined) return;
-		this.clocks.set(name, { limits, costAtStart: cost, usedMs: 0, since: undefined, timer: undefined });
+		this.clocks.set(name, { limits, costAtStart: used?.costAtStart ?? cost, usedMs: used?.usedMs ?? 0, since: undefined, timer: undefined });
 		this.resume(name);
+	}
+
+	/** What the run has used so far; undefined when it has no budget. */
+	used(name: string): BudgetUse | undefined {
+		const clock = this.clocks.get(name);
+		if (!clock) return undefined;
+		return { costAtStart: clock.costAtStart, usedMs: clock.usedMs + (clock.since === undefined ? 0 : this.now() - clock.since) };
 	}
 
 	/** Follows the child's state: asking pauses the clock, running resumes it, anything else ends the run. */

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { isReserved, nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
 import { latestReportFile, reportFilePath } from "./reports.ts";
-import { LIVE_STATES, NO_USAGE, type AgentRecord } from "./types.ts";
+import { LIVE_STATES, NO_USAGE, type AgentRecord, type FallbackStep } from "./types.ts";
 import { validWorktree } from "./worktree.ts";
 
 const STATES = new Set([...LIVE_STATES, "idle", "failed", "stopped", "interrupted"]);
@@ -46,6 +46,12 @@ interface IndexData {
 
 const strings = (value: unknown): boolean => value === undefined || (Array.isArray(value) && value.every((item) => typeof item === "string"));
 
+const validSteps = (value: unknown): boolean => value === undefined || (Array.isArray(value) && value.every((step) => {
+	const s = step as FallbackStep | null;
+	return !!s && Number.isInteger(s.run) && typeof s.from === "string" && typeof s.to === "string" && typeof s.kind === "string"
+		&& typeof s.reason === "string" && Number.isFinite(s.at);
+}));
+
 function validRecord(value: unknown): value is AgentRecord {
 	if (!value || typeof value !== "object") return false;
 	const r = value as AgentRecord;
@@ -73,7 +79,7 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.launchError === undefined || typeof r.launchError === "string")
 		&& [r.maxMinutes, r.maxCost].every((limit) => limit === undefined || (typeof limit === "number" && Number.isFinite(limit) && limit > 0))
 		&& (r.stopReason === undefined || typeof r.stopReason === "string")
-		&& strings(r.inbox) && strings(r.owed) && strings(r.unread) && strings(r.tools);
+		&& strings(r.inbox) && strings(r.owed) && strings(r.unread) && strings(r.tools) && validSteps(r.fallbacks);
 }
 
 export class ChildIndex {

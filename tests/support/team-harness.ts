@@ -10,8 +10,15 @@ export interface Call { text: string; model: string; finish(result: string): voi
 
 const user = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
 
-export function teamHarness(options: Partial<TeamOptions> & { sessionDir?: string; transcripts?: Map<string, unknown[]> } = {}) {
-	const { sessionDir = "/sessions", transcripts = new Map<string, unknown[]>(), ...teamOptions } = options;
+type HarnessOptions = Partial<TeamOptions> & {
+	sessionDir?: string;
+	transcripts?: Map<string, unknown[]>;
+	/** A launch error for this record, as a model the runtime can't resolve gives. */
+	refuse?: (record: AgentRecord) => Error | undefined;
+};
+
+export function teamHarness(options: HarnessOptions = {}) {
+	const { sessionDir = "/sessions", transcripts = new Map<string, unknown[]>(), refuse, ...teamOptions } = options;
 	const calls = new Map<string, Call[]>();
 	const steered = new Map<string, string[]>();
 	const hooks = new Map<string, ChildHooks>();
@@ -25,6 +32,8 @@ export function teamHarness(options: Partial<TeamOptions> & { sessionDir?: strin
 		launcher: {
 			async launch(record: AgentRecord, childHooks: ChildHooks): Promise<ChildHandle> {
 				launched.push({ name: record.name, model: record.model });
+				const refused = refuse?.(record);
+				if (refused) throw refused;
 				hooks.set(record.name, childHooks);
 				return {
 					sessionFile: `${sessionDir}/${record.name}.jsonl`,

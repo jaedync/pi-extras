@@ -11,6 +11,8 @@
  * - A reply to someone blocked on a question resolves that question instead.
  * The inbox, the answers a child is owed and what was steered into it unread
  * live on its record, so the index keeps them across a restart or crash.
+ * A run whose model can't serve it goes on, as the same run, on a fallback
+ * model (fallback.ts).
  * A child is not done until its own children have reported. A run that a
  * peer's message started and that ends idle reports to its parent without
  * waking it: main reads it at its next turn, a child parent at its next run.
@@ -23,8 +25,9 @@
 import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
-import { budgetError, RunBudgets, type RunLimits } from "./budget.ts";
+import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import { EditLocks } from "./edit-lock.ts";
+import { fallbackNote, planFallback } from "./fallback.ts";
 import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { saveReport } from "./reports.ts";
 import { createWorktree, workspaceError } from "./worktree.ts";
@@ -54,6 +57,8 @@ export interface TeamOptions {
 	idleReleaseMs?: number;
 	/** Each run's limits when the spawn names none; without them a run has no limit. */
 	runBudget?: RunLimits;
+	/** Model references a run goes on with, in order, when its model can't serve it (fallback.ts); unset or empty turns fallback off. */
+	fallbackModels?: readonly string[];
 }
 
 /** A follow-up to a report usually comes within a minute or two; after that a relaunch costs less than holding the session. */
@@ -110,6 +115,8 @@ export class Team {
 	/** Stopped by their own parent, which already knows; no report goes up. */
 	private readonly stoppedByParent = new Set<string>();
 	private readonly releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Runs moving to a fallback model, with what they had used of their budget: the same run goes on. */
+	private readonly continuing = new Map<string, BudgetUse | undefined>();
 	private readonly budgets: RunBudgets;
 	private readonly locks = new EditLocks(this);
 	private readonly now: () => number;
@@ -368,14 +375,17 @@ export class Team {
 	}
 
 	private async start(name: string): Promise<void> {
-		this.patch(name, { state: "starting", startedAt: this.now(), activity: "starting" });
+		const startedAt = this.continuing.has(name) ? this.records.get(name)?.startedAt : undefined;
+		this.patch(name, { state: "starting", startedAt: startedAt ?? this.now(), activity: "starting" });
 		const opening = this.open(name);
 		this.opening.add(opening);
 		let handle: ChildHandle | null;
 		try { handle = await opening; }
 		catch (error) {
 			if (!this.closed) {
-				if (this.resumePrompts.has(name)) this.resumeFailed(name, error);
+				// A fallback model that can't launch is one more model that can't serve the run.
+				if (this.continuing.has(name)) this.failOrFallBack(name, error);
+				else if (this.resumePrompts.has(name)) this.resumeFailed(name, error);
 				else this.fail(name, error);
 			}
 			return;
@@ -440,8 +450,10 @@ export class Team {
 		this.keep(name);
 		const record = this.records.get(name)!;
 		this.runStarts.set(name, new Set(handle.messages()));
-		this.patch(name, { state: "running", activity: "thinking", runs: record.runs + 1, endedAt: undefined });
-		this.budgets.start(name, this.limits(record), record.usage.cost);
+		const used = this.continuing.get(name);
+		const continued = this.continuing.delete(name);
+		this.patch(name, { state: "running", activity: "thinking", runs: continued ? record.runs : record.runs + 1, endedAt: undefined });
+		this.budgets.start(name, this.limits(record), record.usage.cost, used);
 		try {
 			let next: string | null = text;
 			while (next !== null) {
@@ -451,10 +463,33 @@ export class Team {
 				next = late.length > 0 ? late.join("\n\n") : null;
 			}
 		} catch (error) {
-			if (!this.closed && this.records.get(name)?.state !== "stopped") this.fail(name, error);
+			if (!this.closed && this.records.get(name)?.state !== "stopped") this.failOrFallBack(name, error);
 			return;
 		}
 		this.settle(name, this.runText(name));
+	}
+
+	/**
+	 * A run its model can't serve goes on from its session on the next fallback
+	 * model, the way a resume does, and stays the same run; any other failure, or
+	 * one with no fallback left, ends it.
+	 */
+	private failOrFallBack(name: string, error: unknown): void {
+		const record = this.records.get(name)!;
+		const plan = planFallback(record, error instanceof Error ? error.message : String(error), this.options.fallbackModels ?? [], this.now());
+		if (!plan.ok) {
+			this.continuing.delete(name);
+			this.resumePrompts.delete(name);
+			return this.fail(name, plan.error);
+		}
+		const { step } = plan;
+		// Read before the state change below ends the clock; a launch that failed has none left to read.
+		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
+		this.resumePrompts.set(name, fallbackNote(step));
+		this.patch(name, { ...this.unreadLeft(name), state: "queued", model: step.to, fallbacks: [...(record.fallbacks ?? []), step], activity: `switching to ${step.to}` });
+		void this.release(name);
+		this.queue.push(name);
+		this.pump();
 	}
 
 	/** Limits fixed at spawn; records saved before budgets existed get today's defaults. */
@@ -550,6 +585,7 @@ export class Team {
 	/** Hands the report up and frees the slot. */
 	private finish(name: string): void {
 		this.ending.delete(name);
+		this.continuing.delete(name);
 		// Answers still owed to it die with its run; a message resumes it to ask again.
 		const record = saveReport({ ...this.records.get(name)!, owed: undefined }, this.options.warn ?? console.warn);
 		this.runStarts.delete(name);

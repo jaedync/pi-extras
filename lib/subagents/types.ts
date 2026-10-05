@@ -23,6 +23,21 @@ export interface Usage {
 
 export const NO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 
+/** Why a model could not serve a run: the failures a fallback model can get past (fallback.ts). */
+export type FailureKind = "quota" | "rate-limit" | "overloaded" | "credentials" | "not-found";
+
+/** One switch of a run to a fallback model. */
+export interface FallbackStep {
+	/** The run it happened in; a report names only its own run's switches. */
+	run: number;
+	from: string;
+	to: string;
+	kind: FailureKind;
+	/** A few words: `usage limit reached`. */
+	reason: string;
+	at: number;
+}
+
 export interface Worktree {
 	path: string;
 	branch: string;
@@ -100,6 +115,8 @@ export interface AgentRecord {
 	owed?: string[];
 	/** Steered into its run but not read yet; Pi holds these only in memory (mailbox.ts). */
 	unread?: string[];
+	/** Every switch to a fallback model, oldest first; `model` is the one it runs on now. */
+	fallbacks?: FallbackStep[];
 }
 
 export interface SpawnRequest {
