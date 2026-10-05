@@ -926,7 +926,12 @@ on. Main settles once no child is working and nothing waits for it.
 
 **Restoration.** Children survive `/reload`, restarts and crashes. An
 `index.json` beside their sessions keeps each child's name, settings, state and
-run count, so `message` reaches them again after a restart. Children that a
+run count, so `message` reaches them again after a restart. It also keeps mail
+that has not reached a child yet: notes in its inbox, the answers it is owed,
+and messages steered into its run that it had not read. After a restart, its
+next run gets that mail first, and an answer it is owed still resumes it.
+A run that fails or is stopped keeps its unread messages for the next run
+too. Children that a
 `/reload` interrupted resume on their own, once. After a restart or crash they
 come back paused, and main gets one notice listing them with their task and
 last activity. `/subagents resume <name>` continues a paused child; message

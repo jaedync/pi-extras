@@ -92,6 +92,12 @@ export interface AgentRecord {
 	 * report need not wake main.
 	 */
 	answeredMain?: boolean;
+	/** Messages for its next run. On the record, so the index keeps them across a restart. */
+	inbox?: string[];
+	/** Who owes it an answer to a question that did not block it; their message to it wakes it. */
+	owed?: string[];
+	/** Steered into its run but not read yet; Pi holds these only in memory (mailbox.ts). */
+	unread?: string[];
 }
 
 export interface SpawnRequest {

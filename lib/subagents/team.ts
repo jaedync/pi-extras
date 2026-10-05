@@ -9,6 +9,8 @@
  * - To a finished child: a question or anything from its parent resumes it;
  *   a sibling's note waits in its inbox for the next run.
  * - A reply to someone blocked on a question resolves that question instead.
+ * The inbox, the answers a child is owed and what was steered into it unread
+ * live on its record, so the index keeps them across a restart or crash.
  * A child is not done until its own children have reported. A run that a
  * peer's message started and that ends idle reports to its parent without
  * waking it: main reads it at its next turn, a child parent at its next run.
@@ -23,6 +25,7 @@ import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
 import { budgetError, RunBudgets, type RunLimits } from "./budget.ts";
 import { EditLocks } from "./edit-lock.ts";
+import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { saveReport } from "./reports.ts";
 import { createWorktree, workspaceError } from "./worktree.ts";
 import {
@@ -86,7 +89,6 @@ export class Team {
 	/** Pi rebuilds shorter message lists on compaction, but retains message identities. */
 	private readonly runStarts = new Map<string, ReadonlySet<unknown>>();
 	private readonly opening = new Set<Promise<ChildHandle | null>>();
-	private readonly inboxes = new Map<string, string[]>();
 	/** Open questions by asker; a child may wait on several agents at once. */
 	private readonly questions = new Map<string, Pending[]>();
 	private readonly waiters = new Map<string, Array<(record: AgentRecord) => void>>();
@@ -94,8 +96,6 @@ export class Team {
 	private readonly queue: string[] = [];
 	/** Children that owe main an answer; their next message to main wakes it. */
 	private readonly owesMain = new Set<string>();
-	/** Who owes each child an answer to a question that did not block it; their message to it wakes it. */
-	private readonly owed = new Map<string, ReadonlySet<string>>();
 	/** Stops between marking the record stopped and handing its report up. */
 	private readonly ending = new Set<string>();
 	/** Children main resumed from idle with a question: only that answer can stand in for the run's report. */
@@ -138,10 +138,12 @@ export class Team {
 		return () => this.listeners.delete(listener);
 	}
 
-	/** Restored records reserve names without starting work or replaying reports. */
+	/** Restored records reserve names without starting work or replaying reports; what they were steered and never read waits for their next run. */
 	restore(records: readonly AgentRecord[]): void {
 		for (const record of records) {
-			if (!this.records.has(record.name)) this.put({ ...record, blocking: false, usage: { ...record.usage } });
+			if (this.records.has(record.name)) continue;
+			const unread = record.unread?.length ? unreadToInbox(record, this.options.messagesFor?.(record) ?? []) : {};
+			this.put({ ...record, blocking: false, usage: { ...record.usage }, ...unread });
 		}
 	}
 
@@ -229,7 +231,7 @@ export class Team {
 		const said = `${options.expectReply ? "Question" : "Message"} from ${from}: ${text}`;
 		if (options.expectReply && !waits && asker) {
 			const result = this.deliverToChild(from, to, body, true, said, options.automatic);
-			if (result.ok) this.owed.set(from, new Set([...(this.owed.get(from) ?? []), to]));
+			if (result.ok) this.patch(from, { owed: [...new Set([...(this.records.get(from)?.owed ?? []), to])] });
 			return result;
 		}
 		// Main never blocks: its question is delivered, and the answer wakes it later.
@@ -292,7 +294,7 @@ export class Team {
 		for (const question of this.questions.get(name) ?? []) question.reject(new Error("stopped"));
 		const handle = this.handles.get(name);
 		this.ending.add(name);
-		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.runText(name) });
+		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.runText(name), ...this.unreadLeft(name) });
 		await handle?.abort().catch(() => undefined);
 		this.patch(name, { report: this.runText(name) });
 		this.finish(name);
@@ -420,6 +422,7 @@ export class Team {
 				if (!record || !LIVE_STATES.has(record.state)) return;
 				this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.workedSinceAnswer(name, patch) ? { answeredMain: undefined } : {}) });
 				if (patch.usage) this.budgets.spent(name, patch.usage.cost);
+				this.forgetRead(name);
 			},
 		});
 		if (this.closed || this.records.get(name)?.state === "stopped") {
@@ -458,25 +461,46 @@ export class Team {
 		return { minutes: record.maxMinutes ?? this.options.runBudget?.minutes, cost: record.maxCost ?? this.options.runBudget?.cost };
 	}
 
+	/** A run that ended normally read everything steered into it, or took it as its last prompt. */
 	private settle(name: string, report: string | undefined): void {
 		const hasLiveChildren = this.list().some((entry) => entry.parent === name && LIVE_STATES.has(entry.state));
-		const owing = [...(this.owed.get(name) ?? [])];
+		const owing = this.records.get(name)?.owed ?? [];
 		if (hasLiveChildren || owing.length > 0) {
 			// Its report waits for what it is still owed; that arrival resumes it.
 			const activity = hasLiveChildren ? "waiting on its subagents" : `waiting for ${owing.join(", ")} to answer`;
-			this.patch(name, { state: "waiting", activity, report });
+			this.patch(name, { state: "waiting", activity, report, unread: undefined });
 			this.pump();
 			return;
 		}
-		this.patch(name, { state: "idle", endedAt: this.now(), activity: null, report });
+		this.patch(name, { state: "idle", endedAt: this.now(), activity: null, report, unread: undefined });
 		this.finish(name);
 	}
 
 	private fail(name: string, error: unknown): void {
 		const message = error instanceof Error ? error.message : String(error);
 		// A failure after an answer is news main has not heard.
-		this.patch(name, { state: "failed", endedAt: this.now(), activity: null, error: message, answeredMain: undefined, report: this.runText(name) });
+		this.patch(name, { state: "failed", endedAt: this.now(), activity: null, error: message, answeredMain: undefined, report: this.runText(name), ...this.unreadLeft(name) });
 		this.finish(name);
+	}
+
+	/** This run's messages, which are where a steered message shows up once the child reads it. */
+	private runMessages(name: string): readonly unknown[] {
+		const start = this.runStarts.get(name);
+		return this.handles.get(name)?.messages().filter((message) => !start?.has(message)) ?? [];
+	}
+
+	/** Drops from `unread` what the child has now read. */
+	private forgetRead(name: string): void {
+		const unread = this.records.get(name)?.unread;
+		if (!unread?.length) return;
+		const left = stillUnread(unread, this.runMessages(name));
+		if (left.length < unread.length) this.patch(name, { unread: left.length > 0 ? left : undefined });
+	}
+
+	/** For a run that ends early: its session's queue goes with it, so what it never read waits in its inbox. */
+	private unreadLeft(name: string): Partial<AgentRecord> {
+		const record = this.records.get(name);
+		return record ? unreadToInbox(record, this.runMessages(name)) : {};
 	}
 
 	/**
@@ -525,7 +549,8 @@ export class Team {
 	/** Hands the report up and frees the slot. */
 	private finish(name: string): void {
 		this.ending.delete(name);
-		const record = saveReport(this.records.get(name)!, this.options.warn ?? console.warn);
+		// Answers still owed to it die with its run; a message resumes it to ask again.
+		const record = saveReport({ ...this.records.get(name)!, owed: undefined }, this.options.warn ?? console.warn);
 		this.runStarts.delete(name);
 		this.put(record);
 		this.answeredAt.delete(name);
@@ -534,11 +559,9 @@ export class Team {
 		this.waiters.delete(name);
 		// The report answers anything main was waiting on.
 		const owedMain = this.owesMain.delete(name);
-		// Answers still owed to it die with its run; a message resumes it to ask again.
-		this.owed.delete(name);
 		const unanswered: string[] = [];
 		let parentAsked = false;
-		for (const asker of [...this.owed.keys()]) {
+		for (const asker of this.list().filter((entry) => entry.owed?.includes(name)).map((entry) => entry.name)) {
 			if (!this.payOwed(asker, name)) continue;
 			if (asker === record.parent) parentAsked = true;
 			else unanswered.push(asker);
@@ -600,11 +623,10 @@ export class Team {
 
 	/** Settles what `from` owed `asker`; true when it owed it an answer. */
 	private payOwed(asker: string, from: string): boolean {
-		const owing = this.owed.get(asker);
-		if (!owing?.has(from)) return false;
-		const rest = [...owing].filter((agent) => agent !== from);
-		if (rest.length > 0) this.owed.set(asker, new Set(rest));
-		else this.owed.delete(asker);
+		const owing = this.records.get(asker)?.owed;
+		if (!owing?.includes(from)) return false;
+		const rest = owing.filter((agent) => agent !== from);
+		this.patch(asker, { owed: rest.length > 0 ? rest : undefined });
 		return true;
 	}
 
@@ -624,6 +646,7 @@ export class Team {
 		const handle = this.handles.get(to);
 		if ((target.state === "running" || target.state === "asking") && handle) {
 			handle.steer(body);
+			this.patch(to, { unread: [...(this.records.get(to)?.unread ?? []), body] });
 			return { ok: true, delivered: "steered" };
 		}
 		// Released when it ended; should it still be held, let it go before a fresh launch takes its place.
@@ -651,7 +674,7 @@ export class Team {
 			void this.run(to, [...this.takeInbox(to), body].join("\n\n"));
 			return { ok: true, delivered: "resumed" };
 		}
-		this.inboxes.set(to, [...(this.inboxes.get(to) ?? []), body]);
+		this.patch(to, { inbox: [...(this.records.get(to)?.inbox ?? []), body] });
 		return { ok: true, delivered: target.state === "queued" || target.state === "starting" ? "queued" : "inbox" };
 	}
 
@@ -711,8 +734,8 @@ export class Team {
 	}
 
 	private takeInbox(name: string): string[] {
-		const inbox = this.inboxes.get(name) ?? [];
-		this.inboxes.delete(name);
+		const inbox = this.records.get(name)?.inbox ?? [];
+		if (inbox.length > 0) this.patch(name, { inbox: undefined });
 		return inbox;
 	}
 
