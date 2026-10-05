@@ -137,6 +137,11 @@ export function realTarget(path: string): string {
 	return link === undefined ? join(realTarget(parent), basename(path)) : realTarget(resolve(parent, link));
 }
 
+/** Where an `edit` or `write` call's `path`, read from `cwd`, lands; undefined for a malformed path. */
+export function editTarget(cwd: string, path: unknown): string | undefined {
+	return typeof path === "string" ? realTarget(resolve(cwd, toolPath(path))) : undefined;
+}
+
 /**
  * Why an edit of `path` would leave the child's worktree, or undefined. A
  * path inside it that resolves outside, through the `node_modules` link into

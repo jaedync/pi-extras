@@ -19,6 +19,8 @@ const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).
 const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href) as any;
 const { createLauncher } = await import("../lib/subagents/child.ts");
 const { Team } = await import("../lib/subagents/team.ts");
+const { ToolActivity } = await import("../lib/subagents/tool-activity.ts");
+const { NO_USAGE } = await import("../lib/subagents/types.ts");
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 10_000 });
 const lastToolResult = (context: any): string => {
@@ -54,6 +56,9 @@ async function setup(cwd: string) {
 			toolsFor: () => ({ tools: ["bash", "write"], customTools: [] }),
 			instructions: () => "",
 			claimEdit: (name) => team.claimEdit(name),
+			activity: new ToolActivity(),
+			mayEdit: (name) => team.mayEdit(name),
+			bashChanged: (name, paths) => team.bashChanged(name, paths),
 		}),
 	});
 	return { team, faux, warnings };
@@ -95,5 +100,48 @@ test("a worktree child's transcript keeps its own bash command; a write into the
 		assert.match(results[1] ?? "", /Operation not permitted[\s\S]*Command exited with code 1\nWrites outside your worktree are blocked\. .* is your parent's checkout/);
 	}
 	assert.doesNotMatch(JSON.stringify(team.messages("isolated")), /PI_SUBAGENT_SANDBOX|sandbox-exec/);
+	await team.close();
+});
+
+const running = (name: string) => ({ name, parent: "main", depth: 1, task: "Edit", model: "faux/cheap", readOnly: false, fork: false, blocking: false,
+	state: "running" as const, createdAt: 1, activity: null, toolCalls: 0, usage: NO_USAGE, runs: 1 });
+
+test("a shared child's bash call that changes files takes the free lock", { timeout: 30_000 }, async () => {
+	const root = repository();
+	const { team, faux, warnings } = await setup(root);
+	team.restore([running("other")]);
+	faux.setResponses([
+		ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "echo new > new.txt" })),
+		() => {
+			assert.match(team.claimEdit("other") ?? "", /^shell is editing files in this checkout/);
+			return ai.fauxAssistantMessage("Done.");
+		},
+	]);
+	assert.ok(spawn(team, "shell").ok);
+	const done = await team.whenDone("shell");
+	assert.equal(done.state, "idle", done.error);
+	assert.deepEqual(warnings, []);
+	await team.close();
+});
+
+test("a shared child's bash call that changes files beside the holder gets a note, and the user a warning", { timeout: 30_000 }, async () => {
+	const root = repository();
+	const { team, faux, warnings } = await setup(root);
+	team.restore([running("holder")]);
+	assert.equal(team.claimEdit("holder"), undefined);
+	const results: string[] = [];
+	faux.setResponses([
+		ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "echo changed > tracked.txt && echo wrote" })),
+		(context: any) => {
+			results.push(lastToolResult(context));
+			return ai.fauxAssistantMessage("Done.");
+		},
+	]);
+	assert.ok(spawn(team, "shell").ok);
+	const done = await team.whenDone("shell");
+	assert.equal(done.state, "idle", done.error);
+	assert.equal(results[0], "wrote\nThis command changed tracked.txt in this checkout while holder holds its edit lock. Don't change files here; tell main if you need a worktree (isolation: \"worktree\").");
+	assert.deepEqual(warnings, ["subagents: shell's bash command changed tracked.txt in the shared checkout while holder holds its edit lock."]);
+	assert.match(team.claimEdit("shell") ?? "", /^holder is editing/, "the holder keeps the lock");
 	await team.close();
 });

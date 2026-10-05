@@ -891,8 +891,18 @@ it go when it finishes, fails, is stopped or is interrupted. Its ancestors and
 its own subagents can edit beside it. Any other child's `edit` or `write` call
 there is refused before it runs, with a message that names the holder. That
 child can then do work that does not edit files, or ask its parent for a
-worktree. Main never takes or checks the lock. `bash` is not covered, so a
-child's shell commands can still change files. Use `isolation: "worktree"` for
+worktree. Main never takes or checks the lock. A child's `bash` command can't
+be checked before it runs, so the check comes after it: the child's `git status`
+(with the size and modification time of each listed file) is compared before
+and after each call. Ignored files do not count. A command that changed files
+takes the lock as an edit would. When another child holds it, the changes stay,
+the command's result tells the child to stop and ask for a worktree, and you get
+a warning. This is detection after the fact, not prevention. Files that an
+`edit` or `write` call of any agent, main included, targets during the command
+do not count. When another agent's `bash` command runs in the same place at the
+same time, the changes can't be told apart, so that call is not checked. Outside
+a git repository, or when `git` fails or takes more than 10 seconds, calls are
+not checked, and you get one warning. Use `isolation: "worktree"` for
 parallel edits. Each worktree has its own lock, shared by the helpers that
 inherit it. A worktree child's `edit` and `write` calls outside its worktree
 are refused before they run. The check follows symlinks, so an edit through the

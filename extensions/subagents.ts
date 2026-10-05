@@ -38,6 +38,8 @@ import { formatMoney } from "../lib/status-plus-logic.ts";
 import { acquireParent } from "../lib/subagents/ownership.ts";
 import { installSignalRecorder } from "../lib/subagents/signals.ts";
 import { Team } from "../lib/subagents/team.ts";
+import { ToolActivity } from "../lib/subagents/tool-activity.ts";
+import { editTarget } from "../lib/subagents/worktree.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
 import { recoveryOwner, recoveryDecision } from "../lib/subagents/recovery.ts";
 import { createSessionScanner } from "../lib/subagents/session-scan.ts";
@@ -108,6 +110,8 @@ function runtimeSource(ctx: ExtensionContext): () => Promise<ModelRuntime> {
 export default function subagents(pi: ExtensionAPI) {
 	if (process.env.PI_SUBAGENTS === "off") return;
 	let state: SessionState | null = null;
+	/** Main's and every child's running edit and bash calls, so a child's bash call isn't blamed for their changes. */
+	const activity = new ToolActivity();
 	let backgroundCtx: ExtensionContext | undefined;
 	// Resumed children keep `restored` provenance; only their current live state means work.
 	const publishBackground = () => { if (state && backgroundCtx) announceBackground(pi, backgroundCtx, "subagents", state.team.list().filter((r) => LIVE_STATES.has(r.state)).length); };
@@ -282,7 +286,9 @@ export default function subagents(pi: ExtensionAPI) {
 				modelRuntime: runtimeSource(ctx),
 				modelAllowed: (model) => allowed.some((choice) => choice.ref === model),
 				claimEdit: (name) => team.claimEdit(name),
-				warn,
+				warn, activity,
+				mayEdit: (name) => team.mayEdit(name),
+				bashChanged: (name, paths) => team.bashChanged(name, paths),
 				toolsFor: (record) => {
 					const names = allowedTools(childToolNames(pi.getActiveTools(), record.readOnly, config.childToolsExclude), record.tools);
 					return {
@@ -453,6 +459,16 @@ export default function subagents(pi: ExtensionAPI) {
 	pi.on("turn_end", async (_event, ctx) => reconcile(ctx));
 	pi.on("agent_end", async (_event, ctx) => reconcile(ctx));
 	pi.on("agent_settled", async (_event, ctx) => reconcile(ctx));
+
+	// Main's own calls, seen here, not in a child's session.
+	pi.on("tool_call", (event, ctx) => {
+		const id = `${MAIN}:${event.toolCallId}`;
+		if (event.toolName === "bash") activity.shellStart(id, ctx.cwd);
+		if (event.toolName !== "edit" && event.toolName !== "write") return;
+		const target = editTarget(ctx.cwd, (event.input as { path?: unknown }).path);
+		if (target !== undefined) activity.editStart(id, target);
+	});
+	pi.on("tool_execution_end", (event) => activity.end(`${MAIN}:${event.toolCallId}`));
 
 	pi.on("message_end", (event) => {
 		const message = (event as { message?: { role?: string; customType?: string; details?: { id?: unknown } } }).message;

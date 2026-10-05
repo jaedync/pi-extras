@@ -26,7 +26,7 @@ import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
-import { EditLocks } from "./edit-lock.ts";
+import { bashChangeNotes, EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
 import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { saveReport } from "./reports.ts";
@@ -198,6 +198,22 @@ export class Team {
 	/** Before a child's `edit` or `write` call: takes its workspace's lock, or says who holds it (edit-lock.ts). */
 	claimEdit(name: string): string | undefined {
 		return this.locks.claim(name);
+	}
+
+	/** Whether `name` may edit now without taking the lock; its bash calls are not checked then. */
+	mayEdit(name: string): boolean {
+		return this.locks.holds(name);
+	}
+
+	/** After `name`'s bash call changed `paths`: takes the lock as an edit would, or warns and returns a note for the call's result. */
+	bashChanged(name: string, paths: readonly string[]): string | undefined {
+		const record = this.records.get(name);
+		if (!record || this.locks.claim(name) === undefined) return undefined;
+		const holder = this.locks.holder(name);
+		if (holder === undefined) return undefined;
+		const { note, warning } = bashChangeNotes(record, holder, paths);
+		(this.options.warn ?? console.warn)(warning);
+		return note;
 	}
 
 	/** Resolves once the child reaches idle, failed or stopped. */

@@ -13,8 +13,9 @@ import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from ".
 import { callPhrase } from "../tool-phrase.ts";
 import { guardBash } from "./bash-guard.ts";
 import { confine, sandboxFor } from "./sandbox.ts";
+import type { ToolActivity } from "./tool-activity.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, Usage } from "./types.ts";
-import { outsideWorktree, workspaceError } from "./worktree.ts";
+import { editTarget, outsideWorktree, workspaceError } from "./worktree.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
 
@@ -26,7 +27,7 @@ export const CHILD_TOOL_EXCLUDE: readonly string[] = [
 	"shell_job_start", "shell_job", "computer_use", "windows_use", "usage", "codemode", "tool_search",
 ];
 export const WRITE_TOOLS: ReadonlySet<string> = new Set(["bash", "edit", "write"]);
-/** The calls the edit guard checks; `bash` can change files too, but its targets can't be read from its input. */
+/** The calls the edit guard checks; `bash` can change files too, but its targets can't be read from its input (bash-guard.ts checks after it). */
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const EDIT_GUARD_NAME = "subagent-edit-guard";
 const EDIT_GUARD_PATH = `<inline:${EDIT_GUARD_NAME}>`;
@@ -117,6 +118,12 @@ export interface LauncherDeps {
 	claimEdit?(name: string): string | undefined;
 	/** Problems the user should see, such as a sandbox tool that does not work here. */
 	warn?(message: string): void;
+	/** Every agent's running edit and bash calls; with `bashChanged`, a child's bash call that changes files takes the lock. */
+	activity?: ToolActivity;
+	/** Whether the child may edit now without taking the lock. */
+	mayEdit?(name: string): boolean;
+	/** After a bash call changed files: takes the lock, or returns a note for the call's result. */
+	bashChanged?(name: string, paths: readonly string[]): string | undefined;
 }
 
 /**
@@ -124,30 +131,59 @@ export interface LauncherDeps {
  * the child would get. A spawn hook confines a worktree child's commands, so
  * its transcript keeps the command it wrote.
  */
-function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, warn: LauncherDeps["warn"]): ToolDefinition {
+function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, deps: LauncherDeps): ToolDefinition {
+	const warn = (message: string) => deps.warn?.(message);
 	const sandbox = record.worktree
-		? sandboxFor(record.worktree.path, (why) => warn?.(`subagents: bash in worktrees runs without a sandbox, so it can write into your checkout. ${why}`))
+		? sandboxFor(record.worktree.path, (why) => warn(`subagents: bash in worktrees runs without a sandbox, so it can write into your checkout. ${why}`))
 		: undefined;
+	const { activity, bashChanged } = deps;
+	const changes = activity && bashChanged ? {
+		cwd, agent: record.name, activity, warn,
+		mayEdit: () => deps.mayEdit?.(record.name) ?? false,
+		changed: (paths: readonly string[]) => bashChanged(record.name, paths),
+	} : undefined;
 	const shellPath = settings.getShellPath();
 	const definition = sdk.createBashToolDefinition(cwd, {
 		commandPrefix: settings.getShellCommandPrefix(),
 		...(shellPath ? { shellPath } : {}),
 		...(sandbox ? { spawnHook: confine(sandbox.prefix) } : {}),
 	});
-	return guardBash(definition, sandbox ? { sandbox } : {}) as ToolDefinition;
+	return guardBash(definition, { ...(sandbox ? { sandbox } : {}), ...(changes ? { changes } : {}) }) as ToolDefinition;
+}
+
+/** The child's edit calls that run, by call id, so its own and other agents' bash calls don't count their changes. */
+export interface EditTracker {
+	start(id: string, path: unknown): void;
+	end(id: string): void;
 }
 
 /** Blocks, before it runs, an edit the child may not make; the reason is the call's result. */
-export function editGuard(check: (path: unknown) => string | undefined): InlineExtension {
+export function editGuard(check: (path: unknown) => string | undefined, track?: EditTracker): InlineExtension {
 	return {
 		name: EDIT_GUARD_NAME,
 		factory(pi) {
 			pi.on("tool_call", (event) => {
 				if (!EDIT_TOOLS.has(event.toolName)) return undefined;
-				const reason = check((event.input as { path?: unknown }).path);
-				return reason ? { block: true, reason } : undefined;
+				const path = (event.input as { path?: unknown }).path;
+				const reason = check(path);
+				if (reason) return { block: true, reason };
+				track?.start(event.toolCallId, path);
+				return undefined;
 			});
+			// Also sent for a call another handler blocked, unlike tool_result.
+			pi.on("tool_execution_end", (event) => track?.end(event.toolCallId));
 		},
+	};
+}
+
+function editTracker(activity: ToolActivity | undefined, agent: string, cwd: string): EditTracker | undefined {
+	if (!activity) return undefined;
+	return {
+		start(id, path) {
+			const target = editTarget(cwd, path);
+			if (target !== undefined) activity.editStart(`${agent}:${id}`, target);
+		},
+		end: (id) => activity.end(`${agent}:${id}`),
 	};
 }
 
@@ -168,7 +204,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const guard = createChildRateLimitGuard({ configFile: join(agentDir, "pi-extras.json"), onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
 			const settingsManager = sdk.SettingsManager.create(cwd, agentDir);
 			// An SDK tool wins over a built-in or extension tool of the same name.
-			const customTools = wanted.has("bash") ? [...listed, childBash(sdk, cwd, settingsManager, record, deps.warn)] : listed;
+			const customTools = wanted.has("bash") ? [...listed, childBash(sdk, cwd, settingsManager, record, deps)] : listed;
 			const loader = new sdk.DefaultResourceLoader({
 				cwd, agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
 				// Besides Cache Compaction, load only files that own the child's tools. Every factory is handed the
@@ -177,7 +213,8 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				noExtensions: true, additionalExtensionPaths: [...new Set([...extensionPaths, CHILD_CACHE_COMPACTION_PATH])],
 				appendSystemPrompt: [deps.instructions(record)],
 				// Outside its worktree is refused before the lock is taken, so a refused edit holds nothing.
-				extensionFactories: [guard.extension, editGuard((path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name))],
+				extensionFactories: [guard.extension, editGuard((path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name),
+					editTracker(deps.activity, record.name, cwd))],
 				extensionsOverride: (base) => ({
 					...base,
 					extensions: base.extensions.filter((extension) => [CHILD_GUARD_PATH, EDIT_GUARD_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
