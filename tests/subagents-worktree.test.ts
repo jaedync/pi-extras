@@ -143,3 +143,25 @@ test("tracked node_modules are not replaced with a symlink", (t) => {
 	const worktree = createWorktree(root, "scout");
 	assert.equal(lstatSync(join(worktree.path, "node_modules")).isSymbolicLink(), false);
 });
+
+for (const [layout, ignore] of [["node_modules", "node_modules\n"], ["node_modules/", "node_modules/\n"], ["no entry", ""]] as const) {
+	test(`with a real node_modules and .gitignore ${layout}, the worktree, its report and the apply command leave dependencies alone`, (t) => {
+		const root = repository(t);
+		writeFileSync(join(root, ".gitignore"), `ignored.txt\n${ignore}`);
+		git(root, "add", "-A");
+		git(root, "commit", "-qm", "ignore rules", "--allow-empty");
+		mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
+		writeFileSync(join(root, "node_modules", "pkg", "index.js"), "dependency\n");
+		const worktree = createWorktree(root, "scout");
+		assert.equal(git(worktree.path, "ls-tree", "-r", "--name-only", worktree.base).includes("node_modules"), false, "the base leaves dependencies out");
+		assert.equal(lstatSync(join(worktree.path, "node_modules")).isSymbolicLink(), true);
+		writeFileSync(join(worktree.path, "tracked.txt"), "child edit\n");
+		const footer = worktreeFooter(worktree);
+		assert.match(footer, /1 file differs from base, 0 commits/);
+		const apply = footer.split("\n").find((line) => line.startsWith("Apply: "))!.slice("Apply: ".length);
+		execFileSync("/bin/bash", ["-c", apply], { timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] });
+		assert.equal(readFileSync(join(root, "tracked.txt"), "utf8"), "child edit\n");
+		assert.equal(lstatSync(join(root, "node_modules")).isDirectory(), true, "the parent's node_modules is still a directory");
+		assert.equal(readFileSync(join(root, "node_modules", "pkg", "index.js"), "utf8"), "dependency\n");
+	});
+}

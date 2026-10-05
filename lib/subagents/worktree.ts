@@ -25,10 +25,26 @@ function git(cwd: string, args: readonly string[], index?: string): string {
 	}
 }
 
-/** Dependencies stay shared; never commit an untracked directory or apply its symlink over the source. */
-function dependencyPaths(root: string, base?: string): string[] {
-	const tracked = git(root, [...(base ? ["ls-tree", "-z", base] : ["ls-files", "-z"]), "--", "node_modules"]);
-	return tracked ? [] : ["--", ".", EXCLUDE_DEPENDENCIES];
+/** Whether `tree`'s ignore rules cover its own `node_modules`; git exits 1 for "not ignored". */
+function dependenciesIgnored(tree: string): boolean {
+	try {
+		execFileSync("git", ["-C", tree, "check-ignore", "-q", "node_modules"], { timeout: GIT_TIMEOUT_MS, stdio: "ignore" });
+		return true;
+	} catch (error) {
+		if ((error as { status?: unknown }).status === 1) return false;
+		throw new Error(`Git check-ignore failed: ${(error as Error).message.replace(/\s+/g, " ").trim().slice(0, 300)}`);
+	}
+}
+
+/**
+ * Dependencies stay shared; never commit an untracked directory or apply its symlink over the source.
+ * Git refuses a pathspec that names an ignored path, so the exclusion is left out where the tree
+ * ignores `node_modules` already. Each tree is asked: `node_modules/` ignores the source's directory
+ * but not the worktree's symlink.
+ */
+function dependencyPaths(tree: string, base?: string): string[] {
+	const tracked = git(tree, [...(base ? ["ls-tree", "-z", base] : ["ls-files", "-z"]), "--", "node_modules"]);
+	return tracked || dependenciesIgnored(tree) ? [] : ["--", ".", EXCLUDE_DEPENDENCIES];
 }
 
 function snapshot(root: string, name: string): string {
