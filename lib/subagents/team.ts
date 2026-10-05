@@ -177,8 +177,9 @@ export class Team {
 			catch (error) { return { ok: false, error: (error as Error).message }; }
 		}
 		const sessionFile = this.options.sessionFileFor?.(name);
+		// A read-only agent can't get write tools through a subagent of its own: its subagents are read-only too.
 		const record: AgentRecord = {
-			name, parent: request.parent, depth, task: request.task, model: request.model, readOnly: request.readOnly,
+			name, parent: request.parent, depth, task: request.task, model: request.model, readOnly: request.readOnly || parent?.readOnly === true,
 			fork: request.fork, blocking: request.blocking, state: "queued", createdAt: this.now(), activity: "queued",
 			toolCalls: 0, usage: NO_USAGE, runs: 0, autoResumeAttempts: 0, ...(request.thinking ? { thinking: request.thinking } : {}),
 			...(sessionFile ? { sessionFile } : {}),

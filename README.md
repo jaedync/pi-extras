@@ -756,8 +756,9 @@ of the ones it would get, for example `["read", "grep", "web_search"]`. It
 always keeps `message`, and `subagent` and `stop_subagent` when it may start
 subagents. The call is refused, with a list of the tools the child can have,
 for an empty list, a name it can't have, or `bash`, `edit` or `write` with
-`readOnly: true`. Its own subagents get no more tools than it has, and a
-resume or a restore keeps the same tools. `context: "fork"` gives the child a
+`readOnly: true`. Its own subagents get no more tools than it has, the
+subagents of a read-only child are read-only too, and a resume or a restore
+keeps the same tools. `context: "fork"` gives the child a
 condensed copy of the conversation so far.
 
 **Models.** A child may run on any of the session's scoped models

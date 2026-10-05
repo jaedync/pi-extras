@@ -77,3 +77,14 @@ test("the allowlist survives the index, so a resume or a restore keeps the same 
 		assert.throws(() => new ChildIndex(dir, "p", dir).load(warn), /invalid/i);
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a read-only child's own subagents are read-only too, whatever its spawn asks", async () => {
+	const h = teamHarness();
+	const reviewer = h.spawn("Review the plan", { name: "reviewer", readOnly: true });
+	await tick();
+	const helper = h.spawn("Fix what you find", { name: "helper", parent: reviewer, readOnly: false });
+	assert.equal(h.team.get(helper)?.readOnly, true, "readOnly can't be shed by starting a subagent");
+	const free = h.spawn("Unrelated work", { name: "free", readOnly: false });
+	assert.equal(h.team.get(free)?.readOnly, false);
+	await h.team.close();
+});
