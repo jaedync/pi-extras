@@ -69,17 +69,20 @@ const run = async (definition: ReturnType<typeof guardBash>) => definition.execu
 const sandbox: Sandbox = { root: "/x/repo", prefix: ["/usr/bin/sandbox-exec"] };
 const DENIED_NOTE = "Writes outside your worktree are blocked. /x/repo is your parent's checkout, and node_modules links into it. Change files only in your worktree, or tell your parent what to change there.";
 
-test("a failed sandboxed command that hit a denied write gets one line naming the parent's checkout", async () => {
+test("a sandboxed command that hit a denied write gets one line naming the parent's checkout, whatever its exit code", async () => {
 	const denied = await run(guardBash(fakeBash({ content: [{ type: "text", text: "touch: /x/repo/a: Operation not permitted\n\nCommand exited with code 1" }], details: undefined, isError: true }), { sandbox }));
 	assert.equal(denied.content.at(-1)?.text, `touch: /x/repo/a: Operation not permitted\n\nCommand exited with code 1\n${DENIED_NOTE}`);
 	assert.equal(denied.isError, true);
 	const readOnly = await run(guardBash(fakeBash({ content: [{ type: "text", text: "Read-only file system" }], details: undefined, isError: true }), { sandbox }));
 	assert.equal(readOnly.content[0]!.text, `Read-only file system\n${DENIED_NOTE}`);
+	const wentOn = await run(guardBash(fakeBash({ content: [{ type: "text", text: "Operation not permitted\ndone" }], details: undefined }), { sandbox }));
+	assert.equal(wentOn.content[0]!.text, `Operation not permitted\ndone\n${DENIED_NOTE}`, "a script that went on and exited 0");
+	assert.equal(wentOn.isError, undefined);
 });
 
 test("other results are left alone", async () => {
-	const ok: Result = { content: [{ type: "text", text: "Operation not permitted" }], details: undefined };
-	assert.deepEqual(await run(guardBash(fakeBash(ok), { sandbox })), ok, "a command that exited 0");
+	const ok: Result = { content: [{ type: "text", text: "all fine" }], details: undefined };
+	assert.deepEqual(await run(guardBash(fakeBash(ok), { sandbox })), ok, "no denied write");
 	const failed: Result = { content: [{ type: "text", text: "no such file" }], details: undefined, isError: true };
 	assert.deepEqual(await run(guardBash(fakeBash(failed), { sandbox })), failed, "a failure that is not a denied write");
 	const unconfined: Result = { content: [{ type: "text", text: "Operation not permitted" }], details: undefined, isError: true };

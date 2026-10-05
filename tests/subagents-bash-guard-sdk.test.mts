@@ -70,7 +70,7 @@ const spawn = (team: InstanceType<typeof Team>, name: string, isolation?: "workt
 const commandsOf = (messages: readonly any[]): string[] => messages.flatMap((message) => message.role === "assistant" && Array.isArray(message.content)
 	? message.content.filter((part: any) => part.type === "toolCall" && part.name === "bash").map((part: any) => part.arguments.command) : []);
 
-test("a worktree child's transcript keeps its own bash command; a write into the parent's checkout fails with a note", { timeout: 30_000 }, async () => {
+test("a worktree child's transcript keeps its own bash command; a write into the parent's checkout fails with a note, also when the command goes on", { timeout: 30_000 }, async () => {
 	const root = repository();
 	const { team, faux } = await setup(root);
 	const escape = `echo out > '${join(root, "escape.txt")}'`;
@@ -80,6 +80,11 @@ test("a worktree child's transcript keeps its own bash command; a write into the
 		(context: any) => {
 			results.push(lastToolResult(context));
 			return ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: escape }));
+		},
+		(context: any) => {
+			results.push(lastToolResult(context));
+			// A script often carries on after a failed write and exits 0.
+			return ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: `${escape}; echo still-going` }));
 		},
 		(context: any) => {
 			results.push(lastToolResult(context));
@@ -93,11 +98,12 @@ test("a worktree child's transcript keeps its own bash command; a write into the
 	const tree = spawned.record.worktree!.path;
 	assert.equal(readFileSync(join(tree, "inside.txt"), "utf8"), "inside\n");
 	assert.equal(results[0], "ran\n");
-	assert.deepEqual(commandsOf(team.messages("isolated")), ["echo inside > inside.txt && echo ran", escape]);
+	assert.deepEqual(commandsOf(team.messages("isolated")), ["echo inside > inside.txt && echo ran", escape, `${escape}; echo still-going`]);
 	const sandboxed = process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec");
 	if (sandboxed) {
 		assert.equal(existsSync(join(root, "escape.txt")), false, "the sandbox refused the write");
 		assert.match(results[1] ?? "", /Operation not permitted[\s\S]*Command exited with code 1\nWrites outside your worktree are blocked\. .* is your parent's checkout/);
+		assert.match(results[2] ?? "", /Operation not permitted[\s\S]*still-going[\s\S]*Writes outside your worktree are blocked\./);
 	}
 	assert.doesNotMatch(JSON.stringify(team.messages("isolated")), /PI_SUBAGENT_SANDBOX|sandbox-exec/);
 	await team.close();

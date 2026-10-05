@@ -112,7 +112,7 @@ export function confine(prefix: readonly string[]): (context: BashSpawnContext) 
 
 const DENIED_WRITE = /Operation not permitted|Read-only file system/;
 
-/** The line a failed command's result gets when its output shows the sandbox denied a write. */
+/** The line a command's result gets when its output shows the sandbox denied a write, whatever its exit code. */
 export function deniedWriteNote(sandbox: Sandbox, output: string): string | undefined {
 	if (!DENIED_WRITE.test(output)) return undefined;
 	return `Writes outside your worktree are blocked. ${sandbox.root} is your parent's checkout, and node_modules links into it. Change files only in your worktree, or tell your parent what to change there.`;

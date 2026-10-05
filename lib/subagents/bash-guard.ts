@@ -101,7 +101,8 @@ export function guardBash<T extends ToolDefinition<any, any, any>>(definition: T
 				const note = start ? await after(changes!, start) : undefined;
 				throw note ? new Error(`${(error as Error).message}\n${note}`) : error;
 			}
-			const denied = sandbox && result.isError ? deniedWriteNote(sandbox, textOf(result.content)) : undefined;
+			// Judged by the output, not the exit code: a script often goes on after a write the sandbox refused.
+			const denied = sandbox ? deniedWriteNote(sandbox, textOf(result.content)) : undefined;
 			const changed = start ? await after(changes!, start) : undefined;
 			return [denied, changed].reduce((current, note) => (note ? withLine(current, note) : current), result);
 		},
