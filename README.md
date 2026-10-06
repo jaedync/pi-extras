@@ -653,21 +653,23 @@ turns it on. Then the transcript shows no tool rows and no thinking. Each run
 of work between two replies becomes one line:
 
 ```
-▸ Ran 3 commands, read 1 file, edited 1 file · 1.4k tokens · $0.23 · 8.9s
+● Ran 4 commands, read 1 file, edited 1 file, ↑875k ↓1.4k tokens, 8.8s
 ```
 
-The words count the calls by kind. After them come the output tokens and cost
-of the replies that made the calls, and the time.
+The words count the calls by kind. Each step of a chained command counts as a
+command, and the calls in a codemode script count in its place. After the
+words come the tokens that the replies sent (`↑`, cache included) and received
+(`↓`), and the time. The cost shows only on the end line of the prompt.
 While the model works, the line is live: a spinner turns, the kind that runs
 now reads `running 1 command`, and the figures count up. When the model
 thinks between calls, the line ends with `thinking`. A reply that thinks
 and then writes keeps its thinking in a line above its words: the line of the
-calls before it, or a line of its own such as `▸ Thought for 2.5s`. The
+calls before it, or a line of its own such as `● Thought for 2.5s`. The
 live thinking tail
 above the editor is not shown. Click a line to open its run and see every row
 and thinking block. Click it again to close the run. ctrl+o opens every run.
 The end line of a prompt also shows the totals of the prompt:
-`π Worked for 11s, 5 tools, 1.6k tokens, $0.30, done 1:26 PM`, in the same
+`π Worked for 11s, 5 tools, ↑1.2M ↓1.6k tokens, $0.30, done 1:26 PM`, in the same
 lighter gray as the folded lines. A cost of
 zero (a free model) is not shown. The subagent inspector is not folded.
 

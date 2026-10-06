@@ -75,6 +75,7 @@ function stage(options: { mode?: string; layout?: boolean } = {}) {
 		busy: () => busy,
 		now: () => 9_000,
 		thoughtMs: () => undefined,
+		nestedOf: () => undefined,
 		frames: (tick) => {
 			ticks.push(tick);
 			return () => { stopped++; };
@@ -92,16 +93,16 @@ function stage(options: { mode?: string; layout?: boolean } = {}) {
 
 const plain = (lines: readonly string[]) => lines.map((line) => stripTerminalSequences(line).replace(/ {2,}/g, "  ").trimEnd());
 
-test("a session folds Pi's transcript, pricing replies from the model when Pi recorded no cost", () => {
+test("a session folds Pi's transcript, with the tokens its replies sent and received", () => {
 	const s = stage();
 	s.fire("session_start");
 	assert.equal(s.widgets.length, 0, "nothing of Pi's is touched before folded mode is on");
 	assert.equal(s.fold.refresh(), true);
 	assert.equal(s.fold.active(), true);
 	assert.deepEqual(s.widgets.map(([key, factory]) => [key, typeof factory]), [["pi-extras.fold-probe", "function"], ["pi-extras.fold-probe", "undefined"]], "the probe widget comes down at once");
-	assert.deepEqual(plain(s.chat.render(100)), ["", "▸ Read 1 file · 10 tokens · $2.00 · 3.0s"], "the end time comes from the saved result");
+	assert.deepEqual(plain(s.chat.render(100)), ["", "● Read 1 file, ↑1.0M ↓10 tokens, 3.0s"], "the end time comes from the saved result");
 	s.fire("message_end", { message: { role: "toolResult", toolCallId: "a", timestamp: 6_000 } });
-	assert.match(plain(s.chat.render(100))[1]!, /· 5\.0s$/, "a new result moves it");
+	assert.match(plain(s.chat.render(100))[1]!, /, 5\.0s$/, "a new result moves it");
 	const builds = s.rows.reply.invalidated;
 	s.chat.render(100);
 	assert.equal(s.rows.reply.invalidated, builds, "a reply the thinking patch never asks about is not built again every frame");

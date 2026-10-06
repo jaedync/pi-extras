@@ -5,7 +5,7 @@ import { foldPhrase as phrase, foldStats, phraseText, type FoldFacts } from "../
 const foldPhrase = (facts: FoldFacts) => phraseText(phrase(facts));
 
 const tool = (name: string, running = false, failed = false) => ({ name, running, failed });
-const facts = (over: Partial<FoldFacts> = {}): FoldFacts => ({ tools: [], live: false, tokens: 0, cost: 0, ...over });
+const facts = (over: Partial<FoldFacts> = {}): FoldFacts => ({ tools: [], live: false, tokens: 0, ...over });
 
 test("finished calls are counted by kind, in the order they first ran", () => {
 	const text = foldPhrase(facts({ tools: [tool("grep"), tool("read"), tool("read"), tool("bash"), tool("edit"), tool("bash")] }));
@@ -42,10 +42,16 @@ test("pi-extras and Pi tools share their kinds", () => {
 	assert.equal(text, "Started 1 background job, started 1 subagent, fetched 2 pages, ran 1 script, wrote 1 file, listed 1 folder, searched for 1 pattern");
 });
 
-test("stats give tokens, cost and time; zero cost and unknown time are left out", () => {
-	assert.deepEqual(foldStats(facts({ tools: [tool("read"), tool("bash", false, true)], tokens: 1_620, cost: 0.214, elapsedMs: 8_400 })), ["1.6k tokens", "$0.21", "8.4s"], "the words count the calls already");
-	assert.deepEqual(foldStats(facts({ tools: [tool("read")], tokens: 12 })), ["12 tokens"]);
-	assert.deepEqual(foldStats(facts({ tools: [tool("read")], cost: 0.0042 })), ["$0.0042"]);
+test("stats give tokens sent and received, and time; an unknown time is left out", () => {
+	assert.deepEqual(foldStats(facts({ tools: [tool("read"), tool("bash", false, true)], sent: 288_214, tokens: 1_620, elapsedMs: 8_400 })), ["↑288k ↓1.6k tokens", "8.4s"], "the words count the calls already");
+	assert.deepEqual(foldStats(facts({ tools: [tool("read")], tokens: 12 })), ["↓12 tokens"]);
+	assert.deepEqual(foldStats(facts({ tools: [tool("read")], sent: 1 })), ["↑1 token"]);
+	assert.deepEqual(foldStats(facts({ tools: [tool("read")] })), [], "cost shows only on the end line");
 	assert.deepEqual(foldStats(facts({ live: true, elapsedMs: 441 })), ["0.4s"]);
-	assert.deepEqual(foldStats(facts({ tokens: 30, elapsedMs: 2_500 })), ["30 tokens"], "a Thought line says its time in its words");
+	assert.deepEqual(foldStats(facts({ tokens: 30, elapsedMs: 2_500 })), ["↓30 tokens"], "a Thought line says its time in its words");
+});
+
+test("a call can count as several: each step of a chained command, each call inside a script", () => {
+	const text = foldPhrase(facts({ tools: [{ ...tool("bash"), count: 3 }, tool("read"), { ...tool("codemode", false, true), count: 0 }] }));
+	assert.equal(text, "Ran 3 commands, read 1 file, 1 failed", "a script whose calls are counted is not counted again, but its failure is");
 });

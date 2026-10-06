@@ -194,6 +194,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		now: () => deps.host.now(),
 		frames: (tick) => foldClock.add(tick),
 		thoughtMs: (message) => thoughtFor(message, thinkingDuration),
+		nestedOf: (id) => nested.get(id)?.calls,
 	});
 
 	const kit: Kit = {

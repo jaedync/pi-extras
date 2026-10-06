@@ -1,11 +1,10 @@
 /**
  * Folded mode for a session: finds Pi's transcript, draws it through a
  * FoldView, and keeps what the folded lines need (when each call ended, what
- * each reply cost) current from Pi's events. Tool Display owns the switch.
+ * each reply thought) current from Pi's events. Tool Display owns the switch.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { replyCost } from "../reply-cost.ts";
-import { findTranscript, FoldView, installFold, type FoldTheme, type ReplyMessage } from "./transcript.ts";
+import { findTranscript, FoldView, installFold, type FoldTheme, type NestedFact, type ReplyMessage } from "./transcript.ts";
 
 export interface FoldDeps {
 	enabled(): boolean;
@@ -16,6 +15,8 @@ export interface FoldDeps {
 	frames(tick: () => void): () => void;
 	/** How long a reply thought, if known. */
 	thoughtMs(message: ReplyMessage): number | undefined;
+	/** The calls a script made inside a call, as Tool Display keeps them. */
+	nestedOf(toolCallId: string): readonly NestedFact[] | undefined;
 }
 
 interface Tui {
@@ -77,7 +78,6 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 			if (entry.type === "message") noteResult(entry.message);
 		}
 	};
-	const costOf = (message: ReplyMessage): number => replyCost(ctx, message);
 	const animate = (live: boolean) => {
 		if (live && !stopFrames && tui) {
 			const screen = tui;
@@ -115,9 +115,9 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 			busy: deps.busy,
 			now: deps.now,
 			reduced: deps.reduced,
-			costOf,
 			toolEndedAt: (id) => ended.get(id),
 			thoughtMs: deps.thoughtMs,
+			nestedOf: deps.nestedOf,
 			animate,
 			redraw: () => found.requestRender(),
 		});

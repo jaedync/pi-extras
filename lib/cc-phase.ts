@@ -1,7 +1,7 @@
 import { mixColors, truncateToWidth, type Color } from "@earendil-works/pi-tui";
 import { formatElapsed } from "./phase-status.ts";
 import { callPhrase, toolLabel } from "./tool-phrase.ts";
-import { formatTokens } from "./status-plus-render.ts";
+import { tokenFigure } from "./fold/summary.ts";
 import { formatMoney } from "./status-plus-logic.ts";
 import { END_GLYPH, MODE_SPINNERS, SPINNER_SLOT_WIDTH, WAVE_TOKENS_PER_SECOND, piWave, slotGlyph, type GlyphAnimation } from "./band/glyph.ts";
 
@@ -132,8 +132,8 @@ export function renderPiWave(elapsedMs: number, theme: LineTheme, width = SPINNE
 }
 export interface EndLine {
  readonly past?: string; readonly elapsedMs: number; readonly doneAt: string; readonly stopped?: boolean;
- /** The run's totals, shown in folded mode: top-level tool calls, output tokens and dollars. */
- readonly tools?: number; readonly tokens?: number; readonly cost?: number;
+ /** The run's totals, shown in folded mode: top-level tool calls, output and input tokens, and dollars. */
+ readonly tools?: number; readonly tokens?: number; readonly sent?: number; readonly cost?: number;
 }
 export const END_ENTRY = "pi-extras.run-end";
 const count = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -142,13 +142,13 @@ export function parseEndLine(value: unknown): EndLine | undefined {
  const model=value as EndLine;
  if(!((model.past===undefined || valid(model.past)) && valid(model.doneAt) && Number.isFinite(model.elapsedMs) && model.elapsedMs>=0 && (model.stopped===undefined || typeof model.stopped==="boolean"))) return undefined;
  return {...(model.past!==undefined?{past:model.past}:{}),elapsedMs:model.elapsedMs,doneAt:model.doneAt,...(model.stopped?{stopped:true}:{}),
-  ...(count(model.tools)?{tools:Math.round(model.tools)}:{}),...(count(model.tokens)?{tokens:model.tokens}:{}),...(count(model.cost)?{cost:model.cost}:{})};
+  ...(count(model.tools)?{tools:Math.round(model.tools)}:{}),...(count(model.tokens)?{tokens:model.tokens}:{}),...(count(model.sent)?{sent:model.sent}:{}),...(count(model.cost)?{cost:model.cost}:{})};
 }
 function endTotals(model: EndLine): string[] {
  const tools=model.tools ?? 0, tokens=Math.round(model.tokens ?? 0);
  return [
   ...(tools>0?[`${tools} ${tools===1?"tool":"tools"}`]:[]),
-  ...(tokens>0?[`${formatTokens(tokens)} ${tokens===1?"token":"tokens"}`]:[]),
+  ...tokenFigure(model.sent ?? 0,tokens),
   ...((model.cost ?? 0)>0?[`$${formatMoney(model.cost!)}`]:[]),
  ];
 }

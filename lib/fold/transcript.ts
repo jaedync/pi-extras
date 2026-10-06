@@ -10,11 +10,12 @@
  * are dropped. The container's mouse layout is written to match the lines,
  * so clicks land on the rows drawn. Any other layout is left alone.
  */
-import { Spacer, Text, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { glyphAt, JOB_ANIMATION } from "../band/glyph.ts";
+import { Spacer, stripTerminalSequences, Text, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { BULLET_GLYPH, glyphAt, JOB_ANIMATION } from "../band/glyph.ts";
 import { planFold, type FoldGroup, type PlanItem } from "./plan.ts";
 import { foldPhrase, foldStats, type FoldFacts, type ToolFact } from "./summary.ts";
 import { CHARS_PER_TOKEN } from "../cc-phase.ts";
+import { splitChain } from "../chain/split.ts";
 
 export interface FoldTheme {
 	fg(key: string, text: string): string;
@@ -22,11 +23,18 @@ export interface FoldTheme {
 
 export interface ReplyMessage {
 	readonly content: readonly { readonly type: string; readonly text?: unknown; readonly thinking?: unknown; readonly arguments?: unknown }[];
-	readonly usage?: { readonly output?: number; readonly cost?: { readonly total?: number } };
+	readonly usage?: { readonly input?: number; readonly output?: number; readonly cacheRead?: number; readonly cacheWrite?: number };
 	readonly timestamp?: number;
 	readonly stopReason?: string;
 	readonly provider?: string;
 	readonly model?: string;
+}
+
+/** A call made inside another call, as Tool Display keeps it: `args` is the arguments as JSON text. */
+export interface NestedFact {
+	readonly name: string;
+	readonly status: string;
+	readonly args?: string;
 }
 
 export interface FoldHost {
@@ -36,11 +44,12 @@ export interface FoldHost {
 	busy(): boolean;
 	now(): number;
 	reduced(): boolean;
-	costOf(message: ReplyMessage): number;
 	/** When a call's result arrived, if known. */
 	toolEndedAt(toolCallId: string): number | undefined;
 	/** How long a reply thought, if known. */
 	thoughtMs(message: ReplyMessage): number | undefined;
+	/** The calls a script (codemode) made inside a call, if any are known. */
+	nestedOf(toolCallId: string): readonly NestedFact[] | undefined;
 	/** Frames are wanted while a line is live, and not after. */
 	animate(live: boolean): void;
 	redraw(): void;
@@ -57,6 +66,7 @@ interface ToolRow extends Component {
 	readonly toolName: string;
 	readonly toolCallId: string;
 	readonly isPartial: boolean;
+	readonly args?: unknown;
 	readonly expanded?: boolean;
 	readonly result?: { readonly isError?: boolean };
 }
@@ -117,6 +127,41 @@ function classify(child: Component, height: number): PlanItem {
 	return { kind: "visible", height };
 }
 
+/** Input tokens a reply sent: fresh input and cache reads and writes. */
+export function sentOf(message: ReplyMessage): number {
+	const usage = message.usage;
+	const sum = (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
+	return Number.isFinite(sum) && sum > 0 ? sum : 0;
+}
+
+/** How many commands a shell call ran: each step of a chained command; a leading `cd` is a place, not a step. */
+export function commandsIn(args: unknown): number {
+	let command: unknown = (args as { command?: unknown } | null | undefined)?.command;
+	if (command === undefined && typeof args === "string") {
+		try { command = (JSON.parse(args) as { command?: unknown } | null)?.command; } catch { command = undefined; }
+	}
+	if (typeof command !== "string") return 1;
+	const steps = splitChain(command)?.steps.filter((step) => !step.cd).length ?? 1;
+	return Math.max(1, steps);
+}
+
+const isShell = (name: string) => name === "bash" || name.endsWith("__bash");
+
+/** One call as the words count it: a script's own calls in its place, and a chain's steps. */
+export function factsOfCall(name: string, args: unknown, running: boolean, failed: boolean, nested: readonly NestedFact[] | undefined): ToolFact[] {
+	if (nested && nested.length > 0) {
+		const inner = nested.map((call): ToolFact => ({
+			name: call.name,
+			running: call.status === "running",
+			failed: call.status === "error",
+			count: isShell(call.name) ? commandsIn(call.args) : 1,
+		}));
+		// The script is counted through its calls; it still says when it runs on or fails itself.
+		return running || failed ? [...inner, { name, running, failed, count: 0 }] : inner;
+	}
+	return [{ name, running, failed, ...(isShell(name) ? { count: commandsIn(args) } : {}) }];
+}
+
 /** Output tokens: the reported count, or an estimate from the characters while it streams. */
 export function tokensOf(message: ReplyMessage, streaming: boolean): number {
 	const reported = message.usage?.output ?? 0;
@@ -130,17 +175,44 @@ export function tokensOf(message: ReplyMessage, streaming: boolean): number {
 	return Math.max(reported, chars / CHARS_PER_TOKEN);
 }
 
-const OPEN_GLYPH = "▾";
-const CLOSED_GLYPH = "▸";
-const STATS_JOIN = " · ";
+const STATS_JOIN = ", ";
 /** Columns the words keep before the figures give way. */
 const MIN_WORDS = 16;
+
+interface Segment {
+	readonly key: string;
+	readonly text: string;
+}
+
+/** Segments cut to `room` columns, ending `…` without a dangling comma or space when cut. */
+export function cut(segments: readonly Segment[], room: number): Segment[] {
+	const plain = segments.map((segment) => segment.text).join("");
+	if (visibleWidth(plain) <= room) return [...segments];
+	const out: Segment[] = [];
+	let left = Math.max(0, room - 1);
+	for (const segment of segments) {
+		if (left <= 0) break;
+		// Pi's cut adds a color reset; the segments are plain text and get their color after.
+		const text = stripTerminalSequences(truncateToWidth(segment.text, left, ""));
+		out.push({ key: segment.key, text });
+		left -= visibleWidth(text);
+	}
+	while (out.length > 0) {
+		const last = out.at(-1)!;
+		const trimmed = last.text.replace(/[\s,]+$/u, "");
+		if (trimmed) {
+			out[out.length - 1] = { key: last.key, text: `${trimmed}…` };
+			return out;
+		}
+		out.pop();
+	}
+	return [{ key: segments[0]?.key ?? "text", text: "…" }];
+}
 
 /** One group's line: a blank line above, as Pi's rows have, then the summary. */
 export class FoldRow implements Component {
 	open = false;
-	private facts: FoldFacts = { tools: [], live: false, tokens: 0, cost: 0 };
-	private shown = false;
+	private facts: FoldFacts = { tools: [], live: false, tokens: 0 };
 	private drawing?: { key: string; facts: FoldFacts; theme: FoldTheme | undefined; lines: string[] };
 	private readonly host: FoldHost;
 
@@ -148,16 +220,15 @@ export class FoldRow implements Component {
 		this.host = host;
 	}
 
-	update(facts: FoldFacts, shown: boolean): void {
+	update(facts: FoldFacts): void {
 		this.facts = facts;
-		this.shown = shown;
 	}
 
 	/** Kept while the facts (the same object while a group is settled), width, glyph and theme are unchanged. */
 	render(width: number): string[] {
 		const theme = this.host.theme();
 		const { live } = this.facts;
-		const glyph = live ? glyphAt(JOB_ANIMATION, this.host.now(), { reduced: this.host.reduced() }) : this.shown ? OPEN_GLYPH : CLOSED_GLYPH;
+		const glyph = live ? glyphAt(JOB_ANIMATION, this.host.now(), { reduced: this.host.reduced() }) : BULLET_GLYPH;
 		const key = `${width}|${glyph}`;
 		const kept = this.drawing;
 		if (kept?.key === key && kept.facts === this.facts && kept.theme === theme) return kept.lines;
@@ -167,9 +238,10 @@ export class FoldRow implements Component {
 	}
 
 	/**
-	 * One block on the left: the glyph, the words, then the figures after a
-	 * `·`, as the end line reads. On a narrow line the words are cut first;
-	 * the figures go only when even short words wouldn't fit beside them.
+	 * One block on the left, as the end line reads: the bullet (a spinner while
+	 * live), the words, then the figures, all joined by commas. On a narrow
+	 * line the words are cut first; the figures go only when even short words
+	 * wouldn't fit beside them.
 	 */
 	private draw(width: number, glyph: string, theme: FoldTheme | undefined): string[] {
 		const paint = (key: string, text: string) => {
@@ -179,14 +251,16 @@ export class FoldRow implements Component {
 		const stats = foldStats(this.facts).join(STATS_JOIN);
 		const phrase = foldPhrase(this.facts);
 		const tone = live ? "text" : "toolOutput";
-		const words = paint(tone, phrase.said)
-			+ (phrase.failed ? paint(tone, ", ") + paint("error", phrase.failed) : "")
-			+ paint(tone, `${phrase.after ? `, ${phrase.after}` : ""}${live ? "…" : ""}`);
+		const words: Segment[] = [
+			{ key: tone, text: phrase.said },
+			...(phrase.failed ? [{ key: tone, text: ", " }, { key: "error", text: phrase.failed }] : []),
+			...(phrase.after ? [{ key: tone, text: `, ${phrase.after}` }] : []),
+		];
 		const tail = stats ? `${STATS_JOIN}${stats}` : "";
 		const room = width - 3 - visibleWidth(tail);
 		const fits = room >= MIN_WORDS;
-		const left = truncateToWidth(words, Math.max(1, fits ? room : width - 3), "…");
-		const line = `${paint(live ? "accent" : "muted", glyph)} ${left}${fits ? paint("muted", tail) : ""}`;
+		const left = cut(words, Math.max(1, fits ? room : width - 3)).map((segment) => paint(segment.key, segment.text)).join("");
+		const line = `${paint(live ? "accent" : "toolOutput", glyph)} ${left}${fits ? paint("muted", tail) : ""}`;
 		return ["", truncateToWidth(line, width, "")];
 	}
 
@@ -268,7 +342,7 @@ export class FoldView {
 			const facts = this.factsFor(row, children, group);
 			live ||= facts.live;
 			if (!shown[entry.group] && !facts.live && facts.tools.length === 0 && facts.tokens === 0) continue;
-			row.update(facts, shown[entry.group]!);
+			row.update(facts);
 			put(row, row.render(width));
 			if (!shown[entry.group]) continue;
 			for (const index of [...group.members, ...group.dropped].sort((a, b) => a - b)) put(children[index]!, drawn[index]!);
@@ -313,7 +387,8 @@ export class FoldView {
 			const child = children[index]!;
 			if (isToolRow(child)) {
 				changing ||= child.isPartial;
-				key += `${child.isPartial ? "p" : child.result?.isError ? "e" : "d"}${this.host.toolEndedAt(child.toolCallId) ?? ""},`;
+				const nested = this.nestedOf(child.toolCallId);
+				key += `${child.isPartial ? "p" : child.result?.isError ? "e" : "d"}${this.host.toolEndedAt(child.toolCallId) ?? ""}${nested ? `n${nested.map((call) => call.status[0]).join("")}` : ""},`;
 			} else if (isReply(child)) {
 				changing ||= child.isStreaming;
 				key += child.isStreaming ? "s," : "r,";
@@ -328,6 +403,10 @@ export class FoldView {
 		if (live) this.settled.delete(row);
 		else this.settled.set(row, { key, facts });
 		return facts;
+	}
+
+	private nestedOf(toolCallId: string): readonly NestedFact[] | undefined {
+		try { return this.host.nestedOf(toolCallId); } catch { return undefined; }
 	}
 
 	private thoughtOf(message: ReplyMessage): number | undefined {
@@ -352,7 +431,7 @@ export class FoldView {
 			if (owner && speaks(owner.lastMessage) && thought(owner.lastMessage)) callers.add(owner);
 			else if (owner) replies.add(owner);
 			const running = child.isPartial && busy;
-			tools.push({ name: child.toolName, running, failed: !child.isPartial && child.result?.isError === true });
+			tools.push(...factsOfCall(child.toolName, child.args, running, !child.isPartial && child.result?.isError === true, this.nestedOf(child.toolCallId)));
 			const at = this.host.toolEndedAt(child.toolCallId);
 			if (at !== undefined) ended = Math.max(ended ?? at, at);
 		}
@@ -361,7 +440,7 @@ export class FoldView {
 			if (isReply(child)) replies.add(child);
 		}
 		let tokens = 0;
-		let cost = 0;
+		let sent = 0;
 		let started: number | undefined;
 		for (const caller of callers) {
 			const message = caller.lastMessage;
@@ -373,7 +452,7 @@ export class FoldView {
 			const message = reply.lastMessage;
 			if (!message) continue;
 			tokens += tokensOf(message, reply.isStreaming);
-			try { cost += this.host.costOf(message); } catch { /* A reply without a price adds nothing. */ }
+			sent += sentOf(message);
 			if (typeof message.timestamp !== "number") continue;
 			started = Math.min(started ?? message.timestamp, message.timestamp);
 			// A reply ends its share of the work when it stops thinking; without a time, where it started.
@@ -383,7 +462,7 @@ export class FoldView {
 		}
 		const end = live ? this.host.now() : ended;
 		const elapsedMs = started !== undefined && end !== undefined && end > started ? end - started : undefined;
-		return { tools, live, tokens, cost, ...(elapsedMs !== undefined ? { elapsedMs } : {}) };
+		return { tools, live, tokens, sent, ...(elapsedMs !== undefined ? { elapsedMs } : {}) };
 	}
 }
 

@@ -5,7 +5,6 @@
  */
 import { formatTime } from "../band/band.ts";
 import { formatTokens } from "../status-plus-render.ts";
-import { formatMoney } from "../status-plus-logic.ts";
 import { cleanLabel } from "../tool-phrase.ts";
 
 export interface ToolFact {
@@ -13,16 +12,18 @@ export interface ToolFact {
 	/** Still being written or run. */
 	readonly running: boolean;
 	readonly failed: boolean;
+	/** How many it counts as: the steps of a chained command; 0 for a script whose own calls are counted. Default 1. */
+	readonly count?: number;
 }
 
 export interface FoldFacts {
 	readonly tools: readonly ToolFact[];
 	/** The model is still working inside this group. */
 	readonly live: boolean;
-	/** Output tokens of the replies that made the calls. */
+	/** Output tokens of the replies that made the calls (received). */
 	readonly tokens: number;
-	/** Dollars those replies cost. */
-	readonly cost: number;
+	/** Input tokens those replies sent, cache reads and writes included. */
+	readonly sent?: number;
 	readonly elapsedMs?: number;
 }
 
@@ -76,11 +77,11 @@ function tallies(tools: readonly ToolFact[]): Tally[] {
 		// Kinds that share wording (grep and find) share a count.
 		const label = kind ? `${kind.past}|${kind.one}` : name;
 		const tally = byLabel.get(label) ?? { label, kind, count: 0, running: false };
-		tally.count++;
+		tally.count += tool.count ?? 1;
 		tally.running ||= tool.running;
 		byLabel.set(label, tally);
 	}
-	return [...byLabel.values()];
+	return [...byLabel.values()].filter((tally) => tally.count > 0);
 }
 
 function says(tally: Tally): string {
@@ -122,17 +123,27 @@ export function phraseText(phrase: FoldPhrase): string {
 	return [phrase.said, phrase.failed, phrase.after].filter(Boolean).join(", ");
 }
 
+/** `↑288k ↓1.6k tokens`: what the replies sent and what came back. */
+export function tokenFigure(sent: number, received: number): string[] {
+	const up = Math.round(sent);
+	const down = Math.round(received);
+	const parts = [...(up > 0 ? [`↑${formatTokens(up)}`] : []), ...(down > 0 ? [`↓${formatTokens(down)}`] : [])];
+	if (parts.length === 0) return [];
+	const one = (up > 0 ? up : 0) + (down > 0 ? down : 0) === 1;
+	return [`${parts.join(" ")} ${one ? "token" : "tokens"}`];
+}
+
 /** Tenths below a second too, so a live time doesn't flicker through milliseconds. */
 const elapsed = (ms: number) => (ms < 1_000 ? `${(Math.floor(ms / 100) / 10).toFixed(1)}s` : formatTime(ms));
 
 /**
  * Figures after the words. The words count the calls already, and a Thought
- * line says its time; a zero cost (a free model) and an unknown time are left out.
+ * line says its time; an unknown time is left out. Cost shows only on the
+ * end line of a prompt.
  */
 export function foldStats(facts: FoldFacts): string[] {
 	return [
-		...(facts.tokens > 0 ? [`${formatTokens(Math.round(facts.tokens))} ${Math.round(facts.tokens) === 1 ? "token" : "tokens"}`] : []),
-		...(facts.cost > 0 ? [`$${formatMoney(facts.cost)}`] : []),
+		...tokenFigure(facts.sent ?? 0, facts.tokens),
 		...(facts.elapsedMs !== undefined && facts.elapsedMs > 0 && !saysTime(facts) ? [elapsed(facts.elapsedMs)] : []),
 	];
 }

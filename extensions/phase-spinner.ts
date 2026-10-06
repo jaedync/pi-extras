@@ -108,7 +108,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	});
 	/** Tool Display's folded mode: no live thinking, and the end line carries the run's totals. */
 	let folds = false;
-	let totals = { tools: 0, tokens: 0, cost: 0 };
+	let totals = { tools: 0, tokens: 0, sent: 0, cost: 0 };
 	let verb: RunLine["verb"];
 	let verbs = parseVerbs(undefined);
 	let reduced = false;
@@ -419,7 +419,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			thoughtMs = undefined;
 			liveThinking = "";
 			lastDrawing = undefined;
-			totals = { tools: 0, tokens: 0, cost: 0 };
+			totals = { tools: 0, tokens: 0, sent: 0, cost: 0 };
 			active = true;
 			agentStartedAt = now;
 			lastDebugAt = now;
@@ -670,7 +670,14 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const output = event.message.usage?.output;
 		let cost = 0;
 		try { cost = replyCost(ctx, event.message); } catch { /* The end line leaves out a cost it can't price. */ }
-		totals = { ...totals, tokens: totals.tokens + (Number.isFinite(output) && output! > 0 ? output! : 0), cost: totals.cost + cost };
+		const usage = event.message.usage;
+		const sent = (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
+		totals = {
+			...totals,
+			tokens: totals.tokens + (Number.isFinite(output) && output! > 0 ? output! : 0),
+			sent: totals.sent + (Number.isFinite(sent) && sent > 0 ? sent : 0),
+			cost: totals.cost + cost,
+		};
 		if (phase === "think") setPhase("prep", ctx, "thinking_finished");
 		// Whole-request throughput includes initial wait and final stream metadata.
 		// usage.output already includes reasoning tokens; do not add them again.
