@@ -2,6 +2,20 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.22.4 - 2026-10-06
+
+### Changed
+
+- Tool Display, folded mode: a folded line starts with the same `●` as the
+  other rows (a spinner while it is live), and its parts are joined by
+  commas: `● Ran 4 commands, read 1 file, ↑875k ↓1.4k tokens, 8.8s`.
+- Tool Display, folded mode: lines show the tokens sent (`↑`, cache included)
+  and received (`↓`). The cost moves to the end line of the prompt only, which
+  also shows `↑` and `↓`.
+- Tool Display, folded mode: each step of a chained command counts as a
+  command, and the calls in a codemode script count in its place.
+- Tool Display, folded mode: a cut line ends in `…` without a comma before it.
+
 ## 0.22.3 - 2026-10-06
 
 ### Changed
