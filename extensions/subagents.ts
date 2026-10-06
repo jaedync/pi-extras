@@ -40,6 +40,7 @@ import { installSignalRecorder } from "../lib/subagents/signals.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { ToolActivity } from "../lib/subagents/tool-activity.ts";
 import { editTarget } from "../lib/subagents/worktree.ts";
+import { checkoutOf } from "../lib/subagents/checkout.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
 import { recoveryOwner, recoveryDecision } from "../lib/subagents/recovery.ts";
 import { createSessionScanner } from "../lib/subagents/session-scan.ts";
@@ -140,7 +141,7 @@ export default function subagents(pi: ExtensionAPI) {
 			messages: () => current.team.messages(name),
 			streaming: () => current.team.streaming(name),
 			tool: (toolName) => current.team.tool(name, toolName),
-			cwd: inspectorCwd,
+			cwd: current.team.get(name)?.cwd ?? current.team.get(name)?.worktree?.path ?? inspectorCwd,
 			...chatSettings(inspectorCwd),
 			motion,
 			hue: (other) => agentHue(current.team.get(other)?.model),
@@ -273,7 +274,8 @@ export default function subagents(pi: ExtensionAPI) {
 				const model = allowed.some((choice) => choice.ref === record.model) ? record.model : fallbackModel;
 				if (!model) throw new Error("No current default model is available for this child. Scope a model before resuming.");
 				const notes = [model !== record.model ? `Your previous model ${record.model} is out of scope. You are continuing on the current default ${model}.` : "",
-					workspaceMoved ? `Your workspace moved from ${index.cwd} to ${cwd}. Verify files in the parent's current workspace before continuing.` : ""].filter(Boolean);
+					// A child with a cwd of its own keeps it when main's directory moves.
+					workspaceMoved && !record.cwd ? `Your workspace moved from ${index.cwd} to ${cwd}. Verify files in the parent's current workspace before continuing.` : ""].filter(Boolean);
 				const notice = model !== record.model ? `Model ${record.model} is not available now, running on ${model}.` : undefined;
 				if (notice) ctx.ui.notify(notice, "warning");
 				return { model, note: notes.join("\n"), ...(notice ? { notice } : {}) };
@@ -460,10 +462,13 @@ export default function subagents(pi: ExtensionAPI) {
 	pi.on("agent_end", async (_event, ctx) => reconcile(ctx));
 	pi.on("agent_settled", async (_event, ctx) => reconcile(ctx));
 
-	// Main's own calls, seen here, not in a child's session.
+	// Main's own calls, seen here, not in a child's session. Its bash calls are named by work tree,
+	// as a child's bash watch names its own (bash-guard.ts); looked up once per directory.
+	let mainTree: { cwd: string; root: string } | undefined;
+	const treeOf = (cwd: string): string => (mainTree?.cwd === cwd ? mainTree : (mainTree = { cwd, root: checkoutOf(cwd) })).root;
 	pi.on("tool_call", (event, ctx) => {
 		const id = `${MAIN}:${event.toolCallId}`;
-		if (event.toolName === "bash") activity.shellStart(id, ctx.cwd);
+		if (event.toolName === "bash") activity.shellStart(id, treeOf(ctx.cwd));
 		if (event.toolName !== "edit" && event.toolName !== "write") return;
 		const target = editTarget(ctx.cwd, (event.input as { path?: unknown }).path);
 		if (target !== undefined) activity.editStart(id, target);

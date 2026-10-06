@@ -404,12 +404,23 @@ job and subagent tools, and `childToolsExclude`; read-only children lose
 tools, Cache Compaction and a quota guard. The guard never hibernates for
 quotas; it waits out short rate limits within the bounded backoff described
 above. Your context files (`AGENTS.md`) and skills load as they do
-for the parent. Children use the parent's model credentials.
+for the parent. A child started with `cwd` works in that directory instead: its
+`AGENTS.md` and relative paths come from there, as when you start Pi there.
+That directory's project settings and resources (`.pi/`, such as `shellPath`
+and `shellCommandPrefix`) load only as Pi would decide at a start with no one
+to ask: nothing there needs trust, you trusted the directory before, or
+`defaultProjectTrust` is `"always"`. Otherwise they are not loaded. A worktree
+made from a `cwd` takes the trust of the directory it was made from. A child
+without a `cwd` loads project settings as before. The path must name an
+existing directory without control characters; it is resolved to its real
+path before use and is never passed to a shell. A read-only child's subagents
+can't make a worktree from a `cwd`, because `git worktree add` runs that
+repository's hooks. Children use the parent's model credentials.
 
 Child sessions are written under
 `PI_CODING_AGENT_DIR/sessions/subagents/<parent session id>/`. An `index.json`
 there, readable only by you, stores each child's full task, model settings,
-state, session path and run count. A lease stops two Pi processes from driving
+state, session path, run count, `cwd` and checkout path. A lease stops two Pi processes from driving
 the same children, and a lease held under another hostname is never taken
 over. By default only a `/reload` resumes interrupted children on its own, at
 most once each; a restart or crash only notifies. Orphans, grandchildren,

@@ -45,7 +45,8 @@ const subagentParams = Type.Object({
 	thinking: Type.Optional(thinkingSchema),
 	readOnly: Type.Optional(Type.Boolean({ description: "No file edits or shell commands." })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Give it only these of the tools it would get; message always stays. Omit for all of them." })),
-	isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")], { description: "Default shared. Use worktree for a separate git checkout based on the parent's current files." })),
+	cwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Directory it starts in, absolute or ~/: its tools, AGENTS.md and session work there. Default: your working directory." })),
+	isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")], { description: "Default shared. Use worktree for a separate git worktree of the repository at cwd (default: your working directory), with its current files." })),
 	context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")], { description: "fork gives it this conversation so far; default fresh." })),
 	wait: Type.Optional(Type.Boolean({ description: "Block until it finishes and return its report. Only for short checks." })),
 	maxMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: MAX_RUN_MINUTES, description: "Minutes one run may work before it is stopped; default from config." })),
@@ -63,7 +64,7 @@ const stopParams = Type.Object({
 }, { additionalProperties: false });
 
 interface SubagentInput {
-	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; isolation?: "shared" | "worktree"; context?: string; wait?: boolean;
+	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; isolation?: "shared" | "worktree"; cwd?: string; context?: string; wait?: boolean;
 	maxMinutes?: number; maxCost?: number; tools?: string[];
 }
 interface MessageInput { to: string; text: string; expectReply?: boolean }
@@ -81,7 +82,8 @@ function spawnTools(tc: ToolContext, parent: string, requested: readonly string[
 function spawnSummary(record: AgentRecord): string {
 	const thinking = record.thinking ? `, thinking ${record.thinking}` : "";
 	const where = record.state === "queued" ? "It is queued behind other subagents and starts when a slot frees." : "It is running in the background.";
-	return `Started ${record.name} on ${record.model}${thinking}. ${where} Its report will arrive as a message. Talk to it with message({ to: "${record.name}", text }).`;
+	const place = record.worktree ? ` in the worktree ${record.worktree.path}` : record.cwd ? ` in ${record.cwd}` : "";
+	return `Started ${record.name} on ${record.model}${thinking}${place}. ${where} Its report will arrive as a message. Talk to it with message({ to: "${record.name}", text }).`;
 }
 
 export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
@@ -106,6 +108,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 			const spawned = tc.team.spawn({
 				...(group ? { group } : {}),
 				...(params.isolation ? { isolation: params.isolation } : {}),
+				...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
 				...(params.maxMinutes !== undefined ? { maxMinutes: params.maxMinutes } : {}),
 				...(params.maxCost !== undefined ? { maxCost: params.maxCost } : {}),
 				...(tools ? { tools } : {}),
@@ -119,6 +122,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 				name: record.name, model: record.model, thinking: record.thinking ?? null, wait: params.wait === true,
 				...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
 				...(record.worktree ? { worktree: { ...record.worktree } } : {}),
+				...(record.cwd ? { cwd: record.cwd } : {}),
 			};
 			if (params.wait !== true) return text(spawnSummary(record), details);
 			return await waitFor(tc, record.name, details, signal, onUpdate as ((update: Result) => void) | undefined);

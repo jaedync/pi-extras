@@ -788,7 +788,15 @@ for an empty list, a name it can't have, or `bash`, `edit` or `write` with
 `readOnly: true`. Its own subagents get no more tools than it has, the
 subagents of a read-only child are read-only too, and a resume or a restore
 keeps the same tools. `context: "fork"` gives the child a
-condensed copy of the conversation so far.
+condensed copy of the conversation so far. `cwd` starts the child in another
+directory, as an absolute path or one that starts with `~/`, for example
+`{ task, cwd: "~/dev/app" }`. Its tools, `AGENTS.md` and the paths it edits
+then start from that directory. That directory's project settings and
+resources (`.pi/`) load only as Pi would load them without a prompt: when
+nothing there needs trust, when you trusted the directory, or when
+`defaultProjectTrust` is `"always"`. The directory must exist; links in its
+path are resolved. The child's own subagents start there too unless they name
+a `cwd` of their own. A resume or a restore keeps it.
 
 **Models.** A child may run on any of the session's scoped models
 (`enabledModels`, the list `/scoped-models` shows); short names such as `luna`
@@ -917,12 +925,19 @@ the inspector stop children for you, and then main gets the stopped report.
 **Writers.** The first child to edit files in a checkout holds that checkout
 until its run ends. The checkout is the git work tree that contains the edited
 file: a repository or one of its worktrees. For a file outside any git work
-tree, it is the child's own workspace. So children that edit different
-repositories or worktrees never block each other. The holder keeps the checkout
+tree, it is the child's own checkout: its worktree, else git's top level of its
+`cwd`, else that directory itself. Children without a `cwd` share the parent's
+checkout for these files. Paths are compared after links are resolved, so two
+paths to one directory are one checkout. So children that edit different
+repositories, worktrees or directories never block each other, even when the
+parent works in a directory that is not a repository. Outside git the lock
+follows the child, not the file: a child with `cwd: "~/notes"` and a child
+without a `cwd` in `~` do not block each other, even for the same file. The holder keeps the checkout
 while it waits on its own subagents, and lets it go when it finishes, fails, is
 stopped or is interrupted. Its ancestors and
 its own subagents can edit beside it. Any other child's `edit` or `write` call
-there is refused before it runs, with a message that names the holder. That
+there is refused before it runs, with a message that names the holder and the
+checkout. That
 child can then do work that does not edit files, or ask its parent for a
 worktree. Main never takes or checks the lock. A child's `bash` command can't
 be checked before it runs, so the check comes after it: the child's `git status`
@@ -934,7 +949,8 @@ for a worktree, and you get a warning. This is detection after the fact, not
 prevention. Files that an
 `edit` or `write` call of any agent, main included, targets during the command
 do not count. When another agent's `bash` command runs in the same place at the
-same time, the changes can't be told apart, so that call is not checked. Outside
+same time, the changes can't be told apart, so that call is not checked. The
+same place means the same git work tree, from any directory in it. Outside
 a git repository, or when `git` fails or takes more than 10 seconds, calls are
 not checked, and you get one warning. Use `isolation: "worktree"` for
 parallel edits. Each worktree has its own lock, shared by the helpers that
@@ -954,7 +970,13 @@ only the `node_modules` dot-entries that exist when the child starts are
 writable. Without `bwrap`, and on Windows, there is no sandbox: the boundary for
 `bash` is only the child's working directory, which is the worktree, and its
 instructions. Worktree isolation
-needs a git repository. It copies the parent's current files, including uncommitted
+needs a git repository: the one at the child's `cwd`, else the one the parent
+works in. So `{ task, cwd: "~/dev/app", isolation: "worktree" }` works when
+the parent's directory is not a repository. The child starts in the same
+directory of its worktree as its `cwd` (or, for a subagent's own worktree, its
+parent's) is in the repository. A read-only
+child's subagents can't make a worktree from a `cwd`, because making one runs
+that repository's git hooks. It copies that repository's current files, including uncommitted
 changes and untracked files that Git does not ignore, into a separate checkout.
 The parent keeps its files and index unchanged. The report gives the worktree,
 branch, change counts, and commands to apply changes and remove it after merging.

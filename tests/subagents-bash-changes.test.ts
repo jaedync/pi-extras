@@ -102,7 +102,7 @@ test("a bash call that changes files takes the free lock silently", async (t) =>
 	const root = repository(t);
 	const { team, warnings, bash } = harness(root);
 	assert.equal(await bash("writer")("echo new > new.txt && echo ok"), "ok\n");
-	assert.match(team.claimEdit("other", join(root, "other.txt")) ?? "", /^writer is editing files in this checkout/);
+	assert.match(team.claimEdit("other", join(root, "other.txt")) ?? "", /^writer is editing files in the checkout /);
 	assert.deepEqual(warnings, []);
 	await team.close();
 });
@@ -112,9 +112,9 @@ test("a bash call that changes files while another child holds the lock gets a n
 	const { team, warnings, bash } = harness(root);
 	assert.equal(team.claimEdit("holder", join(root, "held.txt")), undefined);
 	const text = await bash("writer")("for n in 1 2 3 4 5 6 7; do echo $n > f$n.txt; done; echo done");
-	assert.equal(text, "done\nThis command changed f1.txt, f2.txt, f3.txt, f4.txt, f5.txt and 2 more in this checkout while holder holds its edit lock. Don't change files here; tell main if you need a worktree (isolation: \"worktree\").");
-	assert.match(team.claimEdit("other", join(root, "other.txt")) ?? "", /^holder is editing files in this checkout/, "the holder keeps the lock");
-	assert.deepEqual(warnings, ["subagents: writer's bash command changed f1.txt, f2.txt, f3.txt, f4.txt, f5.txt and 2 more in the shared checkout while holder holds its edit lock."]);
+	assert.equal(text, `done\nThis command changed f1.txt, f2.txt, f3.txt, f4.txt, f5.txt and 2 more in the checkout ${realpathSync(root)} while holder holds its edit lock. Don't change files here; tell main if you need a worktree (isolation: "worktree").`);
+	assert.match(team.claimEdit("other", join(root, "other.txt")) ?? "", /^holder is editing files in the checkout /, "the holder keeps the lock");
+	assert.deepEqual(warnings, [`subagents: writer's bash command changed f1.txt, f2.txt, f3.txt, f4.txt, f5.txt and 2 more in the checkout ${realpathSync(root)} while holder holds its edit lock.`]);
 	await team.close();
 });
 
@@ -159,7 +159,7 @@ test("paths an edit or write call targeted during the bash call are not the comm
 		writeFileSync(join(root, "holder.txt"), "holder\n");
 		activity.end("holder:call-9");
 	})("echo mine > mine.txt");
-	assert.match(both, /This command changed mine\.txt in this checkout while holder holds/);
+	assert.match(both, /This command changed mine\.txt in the checkout \S+ while holder holds/);
 	assert.equal(warnings.length, 1);
 	await team.close();
 });
@@ -168,10 +168,23 @@ test("another agent's shell in the same checkout at the same time makes the chan
 	const root = repository(t);
 	const { team, warnings, activity, bash } = harness(root);
 	assert.equal(team.claimEdit("holder", join(root, "held.txt")), undefined);
-	activity.shellStart("main:call-1", root);
+	// Callers name the work tree as git gives its top level.
+	activity.shellStart("main:call-1", realpathSync(root));
 	assert.equal(await bash("writer")("echo x > x.txt && echo ok"), "ok\n");
 	activity.end("main:call-1");
 	assert.deepEqual(warnings, []);
+	await team.close();
+});
+
+test("a shell in the same work tree started from another directory makes the changes unattributable too", async (t) => {
+	const root = repository(t);
+	mkdirSync(join(root, "sub"));
+	const { team, warnings, activity, bash } = harness(root);
+	assert.equal(team.claimEdit("holder", join(root, "held.txt")), undefined);
+	activity.shellStart("other:call-1", realpathSync(root));
+	assert.equal(await bash("writer", join(root, "sub"))("echo x > x.txt && echo ok"), "ok\n");
+	activity.end("other:call-1");
+	assert.deepEqual(warnings, [], "a child in a subdirectory shares the work tree with an agent at its top");
 	await team.close();
 });
 

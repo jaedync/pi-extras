@@ -6,7 +6,8 @@
  */
 interface Window {
 	readonly id: string;
-	readonly cwd: string;
+	/** The git work tree's top level, as git gives it, or the directory outside git. */
+	readonly root: string;
 	readonly edited: Set<string>;
 	shared: boolean;
 }
@@ -14,7 +15,7 @@ interface Window {
 export interface Watched {
 	/** Resolved paths an `edit` or `write` call targeted during the watch. */
 	edited: ReadonlySet<string>;
-	/** Whether another agent's bash call ran in the same workspace during the watch. */
+	/** Whether another agent's bash call ran in the same work tree during the watch. */
 	shared: boolean;
 }
 
@@ -29,10 +30,10 @@ export class ToolActivity {
 		for (const window of this.windows) window.edited.add(path);
 	}
 
-	/** A bash call in `cwd` starts. */
-	shellStart(id: string, cwd: string): void {
-		this.shells.set(id, cwd);
-		for (const window of this.windows) if (window.id !== id && window.cwd === cwd) window.shared = true;
+	/** A bash call in the work tree `root` starts. */
+	shellStart(id: string, root: string): void {
+		this.shells.set(id, root);
+		for (const window of this.windows) if (window.id !== id && window.root === root) window.shared = true;
 	}
 
 	/** The call `id` ended, whatever it was. */
@@ -41,11 +42,11 @@ export class ToolActivity {
 		this.shells.delete(id);
 	}
 
-	/** A bash call `id` in `cwd` starts; the returned function ends it and tells what else ran meanwhile. */
-	watch(id: string, cwd: string): () => Watched {
-		const shared = [...this.shells].some(([other, where]) => other !== id && where === cwd);
-		const window: Window = { id, cwd, edited: new Set(this.edits.values()), shared };
-		this.shellStart(id, cwd);
+	/** A bash call `id` in the work tree `root` starts; the returned function ends it and tells what else ran meanwhile. */
+	watch(id: string, root: string): () => Watched {
+		const shared = [...this.shells].some(([other, where]) => other !== id && where === root);
+		const window: Window = { id, root, edited: new Set(this.edits.values()), shared };
+		this.shellStart(id, root);
 		this.windows.add(window);
 		return () => {
 			this.windows.delete(window);

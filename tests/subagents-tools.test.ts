@@ -34,10 +34,25 @@ test("the subagent tool forwards isolation and states the writer rule", async (t
 		return { ok: false, error: "spawn fixture" };
 	});
 	assert.match(tool.description, /^Start a subagent/);
-	assert.match(tool.description, /The first child to edit files in the shared checkout holds it until its run ends/);
-	assert.match(tool.description, /Use isolation: "worktree" for parallel edits/);
+	assert.match(tool.description, /The first child to edit files in a checkout \(the file's git repository; outside git, its cwd's, or yours without one\) holds it until its run ends/);
+	assert.match(tool.description, /isolation: "worktree"/);
 	assert.doesNotMatch(tool.description, /a child is a writer unless readOnly/);
 	await assert.rejects((tool.execute as any)("id", { task: "Write a file", isolation: "worktree" }, undefined, undefined), /spawn fixture/);
+	await team.close();
+});
+
+test("the subagent tool passes cwd on, and its schema and description explain cwd and isolation", async (t) => {
+	const { team, tool } = setup();
+	const properties = (tool.parameters as { properties: Record<string, { description?: string }> }).properties;
+	assert.match(properties.cwd?.description ?? "", /absolute or ~\//);
+	assert.match(properties.isolation?.description ?? "", /repository at cwd/);
+	assert.match(tool.description, /cwd/);
+	assert.match(tool.description, /\{ task, cwd: "~\/dev\/app", isolation: "worktree" \}/, "one short example");
+	t.mock.method(team, "spawn", (request: SpawnRequest) => {
+		assert.equal(request.cwd, "~/dev/app", "the team resolves it");
+		return { ok: false, error: "spawn fixture" };
+	});
+	await assert.rejects((tool.execute as any)("id", { task: "Write a file", cwd: "~/dev/app" }, undefined, undefined), /spawn fixture/);
 	await team.close();
 });
 

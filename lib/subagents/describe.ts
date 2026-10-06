@@ -7,13 +7,13 @@ import { MAIN } from "./names.ts";
 
 export function subagentDescription(options: { models: string; defaultModel: string | null; guide: string; forChild: boolean }): string {
 	const lines = [
-		"Start a subagent: a separate Pi session on the model you choose, with a fresh context, the parent's working directory by default and similar tools. It runs in the background and its report reaches you as a message when it finishes; meanwhile keep working or end your turn. Pass wait: true only for a short check whose answer you need before your next step.",
+		"Start a subagent: a separate Pi session on the model you choose, with a fresh context and similar tools. It runs in the background and its report reaches you as a message when it finishes; meanwhile keep working or end your turn. Pass wait: true only for a short check whose answer you need before your next step.",
 		"",
 		"Delegate bounded work that benefits from its own context, a different model's strengths, or an independent second opinion. Do it yourself when a few tool calls would. Start several at once only for work that is truly independent, and prefer one well-briefed subagent over many.",
 		"",
-		'The first child to edit files in the shared checkout holds it until its run ends; another child\'s edits there are refused meanwhile, though its own subagents can edit beside it. Use isolation: "worktree" for parallel edits, or to leave your checkout unchanged: a separate git checkout of your current files, uncommitted changes included, whose report says how to apply its changes. Set readOnly: true for research and review. Pass tools to give it only the named tools; its message tool always stays.',
+		'cwd (absolute or ~/) starts it in another directory or repository. The first child to edit files in a checkout (the file\'s git repository; outside git, its cwd\'s, or yours without one) holds it until its run ends: other children\'s edits there are refused, except its own subagents\'. isolation: "worktree" gives it its own git worktree of the repository at cwd, with uncommitted changes, for parallel edits; its report says how to apply them. Example: { task, cwd: "~/dev/app", isolation: "worktree" }. Set readOnly: true for research and review. Pass tools to give it only the named tools; its message tool always stays.',
 		"",
-		"Each run has a time budget (maxMinutes) and maybe a cost budget (maxCost, US dollars); the defaults come from config. A run over either is stopped with its subagents, and its report says so. Raise them for long work; a message resumes it with a fresh budget.",
+		"Each run has a time budget (maxMinutes) and maybe a cost budget (maxCost, US dollars), with defaults from config. A run over either is stopped with its subagents and its report says so; a message resumes it with a fresh budget. Raise them for long work.",
 		"",
 		"The task is the subagent's whole brief: it has not seen this conversation (unless context is \"fork\"). State the goal, the relevant files and facts, constraints such as read-only, and what the report must contain.",
 		"",

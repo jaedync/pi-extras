@@ -15,7 +15,7 @@ import { guardBash } from "./bash-guard.ts";
 import { confine, sandboxFor } from "./sandbox.ts";
 import type { ToolActivity } from "./tool-activity.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, Usage } from "./types.ts";
-import { editTarget, outsideWorktree, workspaceError } from "./worktree.ts";
+import { editTarget, outsideWorktree, sourcePlace, workspaceError } from "./worktree.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
 
@@ -102,6 +102,23 @@ export function addUsage(total: Usage, usage: AssistantLike["usage"]): Usage {
 	};
 }
 
+/**
+ * Whether a child may load the project settings and resources of `dir`, a
+ * directory a spawn named, decided as Pi decides at a start with no one to
+ * ask: nothing there needs trust, or you trusted it, or defaultProjectTrust
+ * is "always". A Pi without these checks trusts nothing there.
+ */
+export function projectTrusted(sdk: Sdk, agentDir: string, dir: string, fallback: string): boolean {
+	if (typeof sdk.hasTrustRequiringProjectResources !== "function" || typeof sdk.ProjectTrustStore !== "function") return false;
+	try {
+		if (!sdk.hasTrustRequiringProjectResources(dir)) return true;
+		return new sdk.ProjectTrustStore(agentDir).get(dir) ?? fallback === "always";
+	} catch {
+		// A trust file that can't be read trusts nothing, as no answer would.
+		return false;
+	}
+}
+
 export interface LauncherDeps {
 	sdk: Sdk;
 	agentDir: string;
@@ -127,8 +144,8 @@ export interface LauncherDeps {
 }
 
 /**
- * Pi's bash tool with the parent's shell settings, replacing whichever bash
- * the child would get. A spawn hook confines a worktree child's commands, so
+ * Pi's bash tool with the shell settings of the child's directory (main's,
+ * unless a spawn named one), replacing whichever bash the child would get. A spawn hook confines a worktree child's commands, so
  * its transcript keeps the command it wrote.
  */
 function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, deps: LauncherDeps): ToolDefinition {
@@ -191,7 +208,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 	return {
 		async launch(record: AgentRecord, hooks: ChildHooks): Promise<ChildHandle> {
 			const { sdk, agentDir } = deps;
-			const cwd = record.worktree?.path ?? deps.cwd;
+			const cwd = record.cwd ?? record.worktree?.path ?? deps.cwd;
 			const missing = workspaceError(cwd);
 			if (missing) throw new Error(missing);
 			if (record.restored && record.runs > 0 && record.sessionFile && !existsSync(record.sessionFile)) throw new Error(`The saved child session is missing: ${record.sessionFile}. Locate its transcript before resuming.`);
@@ -202,7 +219,12 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const { tools, customTools: listed, extensionPaths = [] } = deps.toolsFor(record);
 			const wanted = new Set(tools);
 			const guard = createChildRateLimitGuard({ configFile: join(agentDir, "pi-extras.json"), onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
-			const settingsManager = sdk.SettingsManager.create(cwd, agentDir);
+			// A directory a spawn named is used as Pi would use it with no one to ask; main's own keeps today's settings.
+			const settingsManager = record.cwd ? sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: false }) : sdk.SettingsManager.create(cwd, agentDir);
+			if (record.cwd) {
+				const place = record.worktree ? sourcePlace(record.worktree, record.cwd) : record.cwd;
+				settingsManager.setProjectTrusted(projectTrusted(sdk, agentDir, place, settingsManager.getDefaultProjectTrust()));
+			}
 			// An SDK tool wins over a built-in or extension tool of the same name.
 			const customTools = wanted.has("bash") ? [...listed, childBash(sdk, cwd, settingsManager, record, deps)] : listed;
 			const loader = new sdk.DefaultResourceLoader({

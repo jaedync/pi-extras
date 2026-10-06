@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -119,7 +119,7 @@ test("a shared child's bash call that changes files takes the free lock", { time
 	faux.setResponses([
 		ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "echo new > new.txt" })),
 		() => {
-			assert.match(team.claimEdit("other", join(root, "other.txt")) ?? "", /^shell is editing files in this checkout/);
+			assert.match(team.claimEdit("other", join(root, "other.txt")) ?? "", /^shell is editing files in the checkout /);
 			return ai.fauxAssistantMessage("Done.");
 		},
 	]);
@@ -146,8 +146,8 @@ test("a shared child's bash call that changes files beside the holder gets a not
 	assert.ok(spawn(team, "shell").ok);
 	const done = await team.whenDone("shell");
 	assert.equal(done.state, "idle", done.error);
-	assert.equal(results[0], "wrote\nThis command changed tracked.txt in this checkout while holder holds its edit lock. Don't change files here; tell main if you need a worktree (isolation: \"worktree\").");
-	assert.deepEqual(warnings, ["subagents: shell's bash command changed tracked.txt in the shared checkout while holder holds its edit lock."]);
+	assert.equal(results[0], `wrote\nThis command changed tracked.txt in the checkout ${realpathSync(root)} while holder holds its edit lock. Don't change files here; tell main if you need a worktree (isolation: "worktree").`);
+	assert.deepEqual(warnings, [`subagents: shell's bash command changed tracked.txt in the checkout ${realpathSync(root)} while holder holds its edit lock.`]);
 	assert.match(team.claimEdit("shell", join(root, "other.txt")) ?? "", /^holder is editing/, "the holder keeps the lock");
 	await team.close();
 });

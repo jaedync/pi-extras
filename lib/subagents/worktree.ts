@@ -1,6 +1,6 @@
 /** Isolated child workspaces retain the parent's current files without changing its index. */
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,11 +83,12 @@ function linkDependencies(root: string, path: string): void {
 	symlinkSync(source, join(path, "node_modules"), "dir");
 }
 
-export function createWorktree(cwd: string, name: string): Worktree {
+/** A worktree of the repository at `cwd`; `named` is a cwd the spawn gave, which an error names instead of the parent's workspace. */
+export function createWorktree(cwd: string, name: string, named?: string): Worktree {
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error("Invalid subagent worktree name.");
 	let root: string;
 	try { root = git(cwd, ["rev-parse", "--show-toplevel"]).trim(); }
-	catch (error) { throw new Error(`Worktree isolation needs a git repository in the parent's workspace. ${(error as Error).message}`); }
+	catch (error) { throw new Error(`Worktree isolation needs a git repository in ${named ?? "the parent's workspace"}. ${(error as Error).message}`); }
 	const location = available(root, name);
 	const base = snapshot(root, name);
 	mkdirSync(dirname(location.path), { recursive: true });
@@ -155,6 +156,21 @@ export function outsideWorktree(worktree: Worktree, cwd: string, path: unknown):
 	const real = realTarget(target);
 	if (within(realTarget(worktree.path), real)) return undefined;
 	return `${target} resolves to ${real}, outside your worktree ${worktree.path}. ${ADVICE}`;
+}
+
+/** Where `dir`, a directory of the checkout `root`, is in the worktree `tree` made from it; the worktree's top when it has no such directory. */
+export function placeInWorktree(tree: string, root: string, dir: string): string {
+	if (!within(root, dir)) return tree;
+	const place = join(tree, relative(root, dir));
+	try { return statSync(place).isDirectory() ? place : tree; }
+	// An ignored directory is not copied into the worktree.
+	catch { return tree; }
+}
+
+/** Where `path`, inside the worktree, is in the checkout it was made from; `path` itself outside it. */
+export function sourcePlace(worktree: Worktree, path: string): string {
+	const source = sourceCheckout(worktree.path);
+	return source !== undefined && within(worktree.path, path) ? join(source, relative(worktree.path, path)) : path;
 }
 
 /** The checkout `path` was made from, when it is a subagent worktree (`<root>.worktrees/<name>`). */

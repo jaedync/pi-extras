@@ -61,7 +61,8 @@ async function before(watch: ChangeWatch, id: string, rootOf: () => Promise<stri
 	catch (error) { return skip(watch, error); }
 	if (watch.mayEdit(root)) return undefined;
 	// Watch first: an edit that lands while the fingerprint is taken must not count either.
-	const stop = watch.activity.watch(`${watch.agent}:${id}`, watch.cwd);
+	// By work tree, not directory: agents that start in different directories of one tree change the same files.
+	const stop = watch.activity.watch(`${watch.agent}:${id}`, root);
 	try { return { root, print: await fingerprint(root), stop }; }
 	catch (error) {
 		stop();

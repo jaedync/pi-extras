@@ -26,19 +26,20 @@ import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
+import { checkoutOf, resolveCwd } from "./checkout.ts";
 import { bashChangeNotes, EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
 import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { saveReport } from "./reports.ts";
 import { WorkTrees } from "./work-trees.ts";
-import { createWorktree, workspaceError } from "./worktree.ts";
+import { createWorktree, placeInWorktree, workspaceError } from "./worktree.ts";
 import {
 	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest,
 } from "./types.ts";
 
 export interface TeamOptions {
 	launcher: Launcher;
-	/** Main's checkout; helpers inherit their parent's isolated workspace. */
+	/** Main's working directory; children start there unless a spawn names a cwd, and helpers inherit their parent's. */
 	cwd?: string;
 	deliverToMain(delivery: MainDelivery): void;
 	maxConcurrent: number;
@@ -121,6 +122,8 @@ export class Team {
 	private readonly budgets: RunBudgets;
 	private readonly locks = new EditLocks(this);
 	private readonly workTrees = new WorkTrees();
+	/** The checkout of main's working directory, looked up at the first need; undefined without one. */
+	private mainCheckout: { value: string | undefined } | undefined;
 	private readonly now: () => number;
 	private readonly options: TeamOptions;
 
@@ -152,7 +155,10 @@ export class Team {
 		for (const record of records) {
 			if (this.records.has(record.name)) continue;
 			const unread = record.unread?.length ? unreadToInbox(record, this.options.messagesFor?.(record) ?? []) : {};
-			this.put({ ...record, blocking: false, usage: { ...record.usage }, ...unread });
+			// A checkout follows where the child works: its worktree, its own cwd, or main's directory now,
+			// where one without a cwd resumes (child.ts) even when main moved since it was saved.
+			const checkout = record.worktree?.path ?? (record.cwd ? record.checkout ?? checkoutOf(record.cwd) : this.sessionCheckout());
+			this.put({ ...record, blocking: false, usage: { ...record.usage }, ...unread, ...(checkout ? { checkout } : {}) });
 		}
 	}
 
@@ -171,13 +177,33 @@ export class Team {
 		if (badBudget) return { ok: false, error: badBudget };
 		const maxMinutes = request.maxMinutes ?? this.options.runBudget?.minutes;
 		const maxCost = request.maxCost ?? this.options.runBudget?.cost;
+		let cwd: string | undefined;
+		if (request.cwd !== undefined) {
+			try { cwd = resolveCwd(request.cwd); }
+			catch (error) { return { ok: false, error: (error as Error).message }; }
+			// Its edits are held to the worktree it would inherit (child.ts), wherever it started.
+			if (parent?.worktree && request.isolation !== "worktree") {
+				return { ok: false, error: `${parent.name}'s subagents work in its worktree ${parent.worktree.path}. Leave out cwd, or add isolation: "worktree" for a worktree of the repository at cwd.` };
+			}
+			// Making a worktree runs the repository's git hooks, which a read-only agent must not choose.
+			if (parent?.readOnly && request.isolation === "worktree") {
+				return { ok: false, error: `${parent.name} is read-only, so its subagents can't make a worktree from a cwd. Leave out cwd or isolation.` };
+			}
+		}
+		// The directory a new worktree is made from and mirrors: the one named, else the parent's own; unset without a cwd anywhere.
+		const origin = cwd ?? parent?.cwd;
 		let worktree = parent?.worktree;
 		if (request.isolation === "worktree") {
-			const cwd = parent?.worktree?.path ?? this.options.cwd;
-			if (!cwd) return { ok: false, error: "Worktree isolation needs a git repository in the parent's workspace." };
-			try { worktree = createWorktree(cwd, name); }
+			const source = origin ?? parent?.worktree?.path ?? this.options.cwd;
+			if (!source) return { ok: false, error: "Worktree isolation needs a git repository in the parent's workspace." };
+			try { worktree = createWorktree(source, name, cwd); }
 			catch (error) { return { ok: false, error: (error as Error).message }; }
 		}
+		// A worktree starts in the same directory of it as its origin; a helper starts where its parent does unless told where.
+		const startsIn = request.isolation === "worktree"
+			? (origin && worktree ? placeInWorktree(worktree.path, checkoutOf(origin), origin) : undefined)
+			: cwd ?? parent?.cwd;
+		const checkout = worktree?.path ?? (cwd ? checkoutOf(cwd) : parent ? parent.checkout : this.sessionCheckout());
 		const sessionFile = this.options.sessionFileFor?.(name);
 		// A read-only agent can't get write tools through a subagent of its own: its subagents are read-only too.
 		const record: AgentRecord = {
@@ -188,6 +214,8 @@ export class Team {
 			...(request.group ? { group: request.group } : {}),
 			...(request.tools ? { tools: [...request.tools] } : {}),
 			...(worktree ? { worktree: { ...worktree } } : {}),
+			...(startsIn ? { cwd: startsIn } : {}),
+			...(checkout ? { checkout } : {}),
 			...(maxMinutes !== undefined ? { maxMinutes } : {}),
 			...(maxCost !== undefined ? { maxCost } : {}),
 		};
@@ -208,12 +236,12 @@ export class Team {
 	}
 
 	/** After `name`'s bash call changed `paths` in the work tree `root`: takes its lock as an edit would, or warns and returns a note for the call's result. */
-	bashChanged(name: string, paths: readonly string[], root?: string): string | undefined {
+	bashChanged(name: string, paths: readonly string[], root: string): string | undefined {
 		const record = this.records.get(name);
 		if (!record || this.locks.claim(name, root) === undefined) return undefined;
 		const holder = this.locks.holder(name, root);
 		if (holder === undefined) return undefined;
-		const { note, warning } = bashChangeNotes(record, holder, paths);
+		const { note, warning } = bashChangeNotes(record, holder, paths, root);
 		(this.options.warn ?? console.warn)(warning);
 		return note;
 	}
@@ -694,7 +722,8 @@ export class Team {
 		// An ended run's session is on disk, so its parent or the user can take it up again; a peer can't.
 		const ended = target.state === "failed" || target.state === "stopped";
 		if (ended && !(from === target.parent || from === USER)) return { ok: false, error: `${to} has ${target.state}; only ${target.parent} or the user can resume it.` };
-		const missing = resumes && !LIVE_STATES.has(target.state) && target.worktree ? workspaceError(target.worktree.path) : undefined;
+		const place = target.cwd ?? target.worktree?.path;
+		const missing = resumes && !LIVE_STATES.has(target.state) && place ? workspaceError(place) : undefined;
 		if (missing) return { ok: false, error: missing };
 		const peer = from !== MAIN && from !== USER && from !== target.parent && !this.under(from, to);
 		if (from === MAIN || from === USER || from === target.parent) this.peerRuns.delete(to);
@@ -793,6 +822,11 @@ export class Team {
 		const inbox = this.records.get(name)?.inbox ?? [];
 		if (inbox.length > 0) this.patch(name, { inbox: undefined });
 		return inbox;
+	}
+
+	private sessionCheckout(): string | undefined {
+		this.mainCheckout ??= { value: this.options.cwd ? checkoutOf(this.options.cwd) : undefined };
+		return this.mainCheckout.value;
 	}
 
 	private knownNames(): string {

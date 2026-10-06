@@ -69,7 +69,7 @@ test("children that edit the same checkout still block each other", async (t) =>
 	const { dir } = repository(t);
 	const crew = team(dir);
 	assert.equal(crew.claimEdit("a", join(dir, "one", "file.txt")), undefined);
-	assert.match(crew.claimEdit("b", join(dir, "one", "sub", "other.txt")) ?? "", /^a is editing files in this checkout until its run ends/);
+	assert.match(crew.claimEdit("b", join(dir, "one", "sub", "other.txt")) ?? "", /^a is editing files in the checkout \S+\/one until its run ends/);
 	await crew.close();
 });
 

@@ -57,6 +57,14 @@ export interface AgentRecord {
 	tools?: string[];
 	/** An isolated workspace, also inherited by helpers sharing their parent's checkout. */
 	worktree?: Worktree;
+	/**
+	 * The directory it starts in when a spawn named one (a real path; for a
+	 * worktree made from a cwd, the same directory inside the worktree), also
+	 * inherited by its helpers; unset, its worktree's top or the parent session's.
+	 */
+	cwd?: string;
+	/** Its checkout (checkout.ts): its worktree, or git's top level of where it starts, or that directory outside git. */
+	checkout?: string;
 	/** Captured when a run ends, so reading its report does not stage a later run's files. */
 	worktreeReport?: string;
 	fork: boolean;
@@ -122,6 +130,8 @@ export interface AgentRecord {
 export interface SpawnRequest {
 	name?: string;
 	isolation?: "shared" | "worktree";
+	/** Where it starts, as the caller wrote it: absolute or under `~/`. */
+	cwd?: string;
 	task: string;
 	parent: string;
 	model: string;

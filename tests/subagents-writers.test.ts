@@ -8,7 +8,7 @@ import { NO_USAGE, type AgentRecord, type SpawnRequest } from "../lib/subagents/
 const request = (patch: Partial<SpawnRequest> = {}): SpawnRequest => ({ name: "scout", task: "Write a file", parent: "main", model: "test/model", readOnly: false, fork: false, blocking: false, ...patch });
 const record = (patch: Partial<AgentRecord> = {}): AgentRecord => ({ ...request(), name: "scout", depth: 1, state: "idle", activity: null, runs: 1, createdAt: 1, toolCalls: 0, usage: NO_USAGE, ...patch });
 const worktree = (name: string) => ({ path: `/tmp/repo.worktrees/${name}`, branch: `subagent/${name}`, base: "a".repeat(40) });
-const LOCKED = /^scout is editing files in this checkout until its run ends\. Do work that does not edit files, or tell main you need a worktree \(isolation: "worktree"\)\.$/;
+const LOCKED = /^scout is editing files outside git until its run ends\. Do work that does not edit files, or tell main you need a cwd of your own\.$/;
 
 function harness(maxConcurrent = 4) {
 	const finishes = new Map<string, () => void>();
@@ -51,7 +51,7 @@ for (const state of ["idle", "failed", "stopped", "interrupted"] as const) {
 		team.markRecovery("scout", { state });
 		assert.equal(team.claimEdit("other"), undefined);
 		team.markRecovery("scout", { state: "running" });
-		assert.match(team.claimEdit("scout") ?? "", /^other is editing files in this checkout/, "resuming does not take the lock back");
+		assert.match(team.claimEdit("scout") ?? "", /^other is editing files outside git/, "resuming does not take the lock back");
 		await team.close();
 	});
 }
@@ -80,7 +80,7 @@ test("a holder's own helpers edit beside it; its siblings' helpers do not", asyn
 	assert.equal(team.claimEdit("scout"), undefined);
 	assert.equal(team.claimEdit("helper"), undefined);
 	assert.equal(team.claimEdit("nested"), undefined);
-	assert.match(team.claimEdit("cousin") ?? "", /^scout is editing files in this checkout .* tell other you need a worktree/);
+	assert.match(team.claimEdit("cousin") ?? "", /^scout is editing files outside git .* tell other you need a cwd of your own/);
 	await team.close();
 });
 
@@ -109,7 +109,7 @@ test("each worktree has its own lock, shared by the helpers that inherit it", as
 	]);
 	assert.equal(team.claimEdit("scout"), undefined);
 	assert.equal(team.claimEdit("first"), undefined, "the shared checkout's holder does not lock a worktree");
-	assert.match(team.claimEdit("second") ?? "", /^first is editing files in this worktree until its run ends\. .* tell isolated you need a worktree/);
+	assert.match(team.claimEdit("second") ?? "", /^first is editing files in the worktree \/tmp\/repo\.worktrees\/isolated until its run ends\. .* tell isolated you need a worktree/);
 	assert.equal(team.claimEdit("apart"), undefined);
 	await team.close();
 });
@@ -153,7 +153,7 @@ test("a lock whose holder is gone or no longer working never blocks an edit", ()
 	add("first", "running");
 	add("second", "running");
 	assert.equal(locks.claim("first"), undefined);
-	assert.match(locks.claim("second") ?? "", /first is editing files in this checkout/);
+	assert.match(locks.claim("second") ?? "", /first is editing files outside git/);
 	// The holder ends without its change reaching follow(), or its record is dropped.
 	add("first", "idle");
 	assert.equal(locks.claim("second"), undefined, "an ended holder lets go");

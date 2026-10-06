@@ -1,12 +1,13 @@
 /** Durable roster separate from Pi's transcript, which may not contain a spawn result yet. */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, openSync, fsyncSync, closeSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isReserved, nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
 import { latestReportFile, reportFilePath } from "./reports.ts";
 import { LIVE_STATES, NO_USAGE, type AgentRecord, type FallbackStep } from "./types.ts";
 import { validWorktree } from "./worktree.ts";
+import { CONTROL } from "./checkout.ts";
 
 const STATES = new Set([...LIVE_STATES, "idle", "failed", "stopped", "interrupted"]);
 const DIRECTORY_WARNING_LIMIT = 64;
@@ -44,6 +45,9 @@ interface IndexData {
 	workspaceNotice?: string;
 }
 
+/** Saved paths are used as tool and git arguments and shown in prompts, never as shell input. */
+const savedPath = (value: unknown): boolean => typeof value === "string" && isAbsolute(value) && !CONTROL.test(value);
+
 const strings = (value: unknown): boolean => value === undefined || (Array.isArray(value) && value.every((item) => typeof item === "string"));
 
 const validSteps = (value: unknown): boolean => value === undefined || (Array.isArray(value) && value.every((step) => {
@@ -66,6 +70,7 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.startedAt === undefined || Number.isFinite(r.startedAt)) && (r.endedAt === undefined || Number.isFinite(r.endedAt))
 		&& (r.sessionFile === undefined || typeof r.sessionFile === "string")
 		&& (r.worktree === undefined || validWorktree(r.worktree))
+		&& (r.cwd === undefined || savedPath(r.cwd)) && (r.checkout === undefined || savedPath(r.checkout))
 		&& (r.worktreeReport === undefined || typeof r.worktreeReport === "string")
 		&& (r.thinking === undefined || isThinking(r.thinking))
 		&& (r.interruptedBy === undefined || ["reload", "signal", "quit"].includes(r.interruptedBy))

@@ -59,7 +59,7 @@ test("a child's write is blocked, not run, while another child holds the checkou
 	assert.ok(team.spawn({ name: "writer", task: "Write notes", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false }).ok);
 	const done = await team.whenDone("writer");
 	assert.equal(done.state, "idle", done.error);
-	assert.match(done.report ?? "", /holder is editing files in this checkout until its run ends\. Do work that does not edit files, or tell main you need a worktree/);
+	assert.match(done.report ?? "", /holder is editing files outside git, for the workspace \S+, until its run ends\. Do work that does not edit files, or tell main you need a cwd of your own/);
 	assert.equal(existsSync(join(cwd, "notes.txt")), false, "the blocked call never ran");
 	await team.close();
 });
@@ -72,7 +72,7 @@ test("a child's write runs and takes the free lock", { timeout: 20_000 }, async 
 		ai.fauxAssistantMessage(ai.fauxToolCall("write", { path: "notes.txt", content: "mine" })),
 		() => {
 			// Still inside the writer's run: it holds the checkout now.
-			assert.match(team.claimEdit("other") ?? "", /^writer is editing files in this checkout/);
+			assert.match(team.claimEdit("other") ?? "", /^writer is editing files outside git, for the workspace /);
 			return ai.fauxAssistantMessage("Wrote notes.");
 		},
 	]);

@@ -13,7 +13,7 @@ const GIT_TIMEOUT_MS = 10_000;
 const MAX_CACHED = 2_000;
 
 /** git's top level for the directory `dir`, or undefined outside a work tree or when git fails. */
-function gitTopLevel(dir: string): string | undefined {
+export function gitTopLevel(dir: string): string | undefined {
 	try {
 		return execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined;
 	} catch {

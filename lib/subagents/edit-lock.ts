@@ -1,8 +1,11 @@
 /**
  * One child at a time edits files in each workspace: the git work tree that
  * holds the edited file (a checkout or one worktree), or, for a file outside
- * any work tree, the child's own workspace: the shared checkout, or the
- * worktree its helpers inherit. A child takes a workspace's lock with its
+ * any work tree, the child's own workspace: the worktree its helpers inherit,
+ * else its checkout (checkout.ts), kept apart from the work trees' keys so a
+ * child's edits outside git never lock the repository it was started in.
+ * Children without a cwd of their own share the parent session's checkout,
+ * and with it one lock for files outside git. A child takes a workspace's lock with its
  * first `edit` or `write` call there, and keeps it while it
  * is live, waiting on its own subagents included, since they may edit for it.
  * Its ancestors and descendants edit beside it: they coordinate through
@@ -12,32 +15,42 @@
  */
 import { LIVE_STATES, type AgentRecord } from "./types.ts";
 
-const SHARED_CHECKOUT = "";
+/** Begins the key of a child's edits outside any git work tree; no path does. */
+const OUTSIDE = "outside:";
 
 interface Family {
 	get(name: string): AgentRecord | undefined;
 	under(name: string, ancestor: string): boolean;
 }
 
-const workspaceOf = (record: AgentRecord): string => record.worktree?.path ?? SHARED_CHECKOUT;
+const workspaceOf = (record: AgentRecord): string => record.worktree?.path ?? `${OUTSIDE}${record.checkout ?? ""}`;
 
 const MAX_LISTED = 5;
 
-function lockedError(holder: string, record: AgentRecord): string {
-	const where = record.worktree ? "this worktree" : "this checkout";
-	return `${holder} is editing files in ${where} until its run ends. Do work that does not edit files, or tell ${record.parent} you need a worktree (isolation: "worktree").`;
+/** The place a lock key stands for, as a refusal names it. */
+function placeOf(key: string, record: AgentRecord): string {
+	return key === record.worktree?.path ? `the worktree ${key}` : `the checkout ${key}`;
+}
+
+function lockedError(holder: string, record: AgentRecord, key: string): string {
+	if (!key.startsWith(OUTSIDE)) {
+		return `${holder} is editing files in ${placeOf(key, record)} until its run ends. Do work that does not edit files, or tell ${record.parent} you need a worktree (isolation: "worktree").`;
+	}
+	const checkout = key.slice(OUTSIDE.length);
+	return `${holder} is editing files outside git${checkout ? `, for the workspace ${checkout},` : ""} until its run ends. Do work that does not edit files, or tell ${record.parent} you need a cwd of your own.`;
 }
 
 const listed = (paths: readonly string[]): string => paths.length > MAX_LISTED
 	? `${paths.slice(0, MAX_LISTED).join(", ")} and ${paths.length - MAX_LISTED} more`
 	: paths.join(", ");
 
-/** What a child whose bash call changed `paths` beside the holder is told, and what the user is told. */
-export function bashChangeNotes(record: AgentRecord, holder: string, paths: readonly string[]): { note: string; warning: string } {
+/** What a child whose bash call changed `paths` in the work tree `root` beside the holder is told, and what the user is told. */
+export function bashChangeNotes(record: AgentRecord, holder: string, paths: readonly string[], root: string): { note: string; warning: string } {
 	const files = listed(paths);
+	const place = placeOf(root, record);
 	return {
-		note: `This command changed ${files} in ${record.worktree ? "this worktree" : "this checkout"} while ${holder} holds its edit lock. Don't change files here; tell ${record.parent} if you need a worktree (isolation: "worktree").`,
-		warning: `subagents: ${record.name}'s bash command changed ${files} in ${record.worktree ? `the worktree ${record.worktree.path}` : "the shared checkout"} while ${holder} holds its edit lock.`,
+		note: `This command changed ${files} in ${place} while ${holder} holds its edit lock. Don't change files here; tell ${record.parent} if you need a worktree (isolation: "worktree").`,
+		warning: `subagents: ${record.name}'s bash command changed ${files} in ${place} while ${holder} holds its edit lock.`,
 	};
 }
 
@@ -89,7 +102,7 @@ export class EditLocks {
 			this.holders.set(key, name);
 			return undefined;
 		}
-		return lockedError(holder, record);
+		return lockedError(holder, record, key);
 	}
 
 	/** Called on every record change: a holder that is no longer live lets go. */
