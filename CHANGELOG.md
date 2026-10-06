@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.22.1 - 2026-10-06
+
+### Added
+
+- Tool Display: folded mode, off by default. `/tool-display folded on` hides
+  tool rows and thinking. Each run of work between two replies becomes one
+  line, for example `▸ Ran 3 commands, read 1 file, edited 1 file`, with the
+  number of calls, output tokens, cost and time at the right. While the model
+  works, the line is live and its figures count up. Click a line to open its
+  run; ctrl+o opens every run. The end line of a prompt adds the prompt's
+  tools, tokens and cost. The setting is `toolDisplay.folded`. The `fold` key
+  of the folding that 0.18.0 removed does not turn it on.
+
 ## 0.22.0 - 2026-10-05
 
 ### Added
