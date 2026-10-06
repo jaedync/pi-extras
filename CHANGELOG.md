@@ -2,6 +2,22 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.22.6 - 2026-10-06
+
+### Changed
+
+- Tool Display, folded mode: the folded lines use the darker grays of 0.22.1
+  again. The words are `muted`, and the bullet and figures are `dim`.
+- Phase Spinner: the end line no longer shows the prompt's tools, tokens and
+  cost in folded mode. It is the same in both views:
+  `π Worked for 2m04s, done 4:13 PM`. A prompt of one minute or more now reads
+  in minutes, in place of only seconds (`124s`).
+
+### Removed
+
+- The end line no longer saves totals in its custom entry. Totals that 0.22
+  saved are ignored.
+
 ## 0.22.5 - 2026-10-06
 
 ### Changed
