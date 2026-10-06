@@ -2,6 +2,42 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.22.7 - 2026-10-06
+
+### Added
+
+- Subagents: a `cwd` option on `subagent`, as an absolute path or one that
+  starts with `~/`. The child starts in that directory: its tools,
+  `AGENTS.md` and relative paths work from there. Its own subagents start
+  there too, and a resume or a restore keeps it. A path that does not exist,
+  is not a directory or has control characters is refused with what is
+  wrong.
+- Subagents: that directory's project settings and resources load only as
+  Pi would load them without a prompt: nothing there needs trust, you
+  trusted it, or `defaultProjectTrust` is `"always"`.
+- Subagents: `isolation: "worktree"` makes the worktree from the repository
+  at `cwd`, and the child starts in the same directory of the worktree. So a
+  parent whose directory is not a repository, such as `~`, can start
+  worktree children. A read-only child's subagents can't do this, because it
+  runs that repository's git hooks.
+
+### Changed
+
+- Subagents: for files outside git, the edit lock belongs to the child's
+  checkout: git's top level of its `cwd`, or that directory. Before, one lock
+  covered these files for all children. Children without `cwd` still share
+  the parent's. Links are resolved, so two paths to one directory are one
+  checkout.
+- Subagents: a refused edit names the holder and the checkout or worktree
+  path, and so does the note on a `bash` command that changed files there.
+- Subagents: two agents' `bash` commands that run at the same time in one git
+  work tree, from different directories of it, count as one place, so
+  neither one's changes are blamed on the other.
+- Subagents: the inspector draws a child's tool rows against its own
+  directory (its `cwd` or worktree), not the parent's.
+- Subagents: the `subagent` description and schema explain `cwd` and
+  `isolation`, with one example.
+
 ## 0.22.6 - 2026-10-06
 
 ### Changed
