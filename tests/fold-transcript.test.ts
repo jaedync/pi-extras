@@ -98,7 +98,7 @@ test("a run of work between replies draws as one line, with every row still rend
 	const chat = chatOf([new Spacer(1), user, first, read, thinking, bash, answer]);
 	const { value } = host();
 	const lines = viewOf(value).render(chat, 100);
-	assert.deepEqual(text(lines), ["", "", " prompt", "", "● said", "", "● Read 1 file, ran 1 command, ↓150 tokens, 4.5s", "", "● said"]);
+	assert.deepEqual(text(lines), ["", "", " prompt", "", "● said", "", "● Read 1 file, ran 1 command, ↓150 4.5s", "", "● said"]);
 	assert.ok([read, bash].every((row) => row.renders === 1), "folded rows keep their own render running");
 	assert.equal(thinking.renders, 2, "a reply Pi built before it was in the transcript is built again, without its thinking");
 	assert.equal(thinking.folded, true);
@@ -114,7 +114,7 @@ test("the last group is live while the agent runs, and asks for frames", () => {
 	const chat = chatOf([new Reply(said({ timestamp: 1 })), new ToolRow("edit", "c", true), streaming]);
 	const lines = text(viewOf(value).render(chat, 100));
 	// The reply that made the call counts too; reduced motion holds the spinner's first frame.
-	assert.equal(lines.at(-1), "⠋ Editing 1 file, ↓150 tokens, 9.9s");
+	assert.equal(lines.at(-1), "⠋ Editing 1 file, ↓150 9.9s");
 	assert.deepEqual(calls.animate, [true]);
 	const { value: idle, calls: idleCalls } = host();
 	viewOf(idle).render(chat, 100);
@@ -135,7 +135,7 @@ test("a click opens a group, showing its rows and its replies' thinking, and ano
 	assert.deepEqual(row.handleMouse({ type: "click", button: "left", y: 1 } as never), { handled: true });
 	assert.equal(calls.redraws, 1);
 	const open = text(view.render(chat, 80));
-	assert.deepEqual(open.slice(0, 5), ["", "● Read 1 file, ↓100 tokens, 2.0s", "", "∴ Thought", ""]);
+	assert.deepEqual(open.slice(0, 5), ["", "● Read 1 file, ↓100 2.0s", "", "∴ Thought", ""]);
 	assert.equal(thinking.folded, false, "the reply is built again with its thinking");
 	const builds = thinking.invalidations;
 	view.render(chat, 80);
@@ -263,7 +263,7 @@ const thinkingThenWords = (over: Partial<ReplyMessage> = {}): ReplyMessage => ({
 test("a reply that thought and then spoke keeps a Thought line above its words", () => {
 	const { value } = host({ thoughtMs: () => 2_500 });
 	const chat = chatOf([new Row(["", " prompt"]), new Reply(thinkingThenWords())]);
-	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt", "", "● Thought for 2.5s, ↓30 tokens", "", "● said"]);
+	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt", "", "● Thought for 2.5s, ↓30", "", "● said"]);
 });
 
 test("its thinking counts once: in the Thought line, not again in the line of the calls it made", () => {
@@ -271,7 +271,7 @@ test("its thinking counts once: in the Thought line, not again in the line of th
 	const narrating = new Reply(thinkingThenWords({ content: [{ type: "thinking", thinking: "plan" }, { type: "text", text: "looking" }, { type: "toolCall" }] }));
 	const chat = chatOf([narrating, new ToolRow("read", "a"), new Reply(said())]);
 	const lines = text(viewOf(value).render(chat, 80));
-	assert.equal(lines[1], "● Thought for 0.5s, ↓30 tokens");
+	assert.equal(lines[1], "● Thought for 0.5s, ↓30");
 	assert.equal(lines[5], "● Read 1 file, 1.5s", "no reply of its own to count; its time starts when the reply stopped thinking (1.0s + 0.5s) and runs to the result (3.0s)");
 });
 
@@ -288,13 +288,14 @@ test("a settled line uses the theme's brighter grays", () => {
 	assert.deepEqual([...new Set(keys)].sort(), ["muted", "toolOutput"]);
 });
 
-test("on a narrow line the words are cut before the figures, and the figures go last", () => {
+test("on a narrow line the words become the total count, then the figures go, then the words are cut", () => {
 	const { value } = host();
 	const chat = chatOf([new Reply(said({ timestamp: 1 })), new ToolRow("read", "a"), new ToolRow("bash", "b"), new ToolRow("edit", "c")]);
 	const at = (width: number) => text(viewOf(value).render(chat, width))[3]!;
-	assert.equal(at(100), "● Read 1 file, ran 1 command, edited 1 file, ↓50 tokens, 5.4s");
-	assert.equal(at(50), "● Read 1 file, ran 1 command…, ↓50 tokens, 5.4s", "no comma is left before the ellipsis");
-	assert.equal(at(30), "● Read 1 file, ran 1 command…", "too narrow for both: the words win");
+	assert.equal(at(100), "● Read 1 file, ran 1 command, edited 1 file, ↓50 5.4s");
+	assert.equal(at(50), "● Used 3 tools, ↓50 5.4s", "every kind doesn't fit: the total count");
+	assert.equal(at(20), "● Used 3 tools", "too narrow for both: the words win");
+	assert.equal(at(10), "● Used 3…");
 });
 
 test("a cut keeps each part's color and leaves no comma or space before the ellipsis", () => {

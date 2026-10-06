@@ -100,9 +100,9 @@ test("a session folds Pi's transcript, with the tokens its replies sent and rece
 	assert.equal(s.fold.refresh(), true);
 	assert.equal(s.fold.active(), true);
 	assert.deepEqual(s.widgets.map(([key, factory]) => [key, typeof factory]), [["pi-extras.fold-probe", "function"], ["pi-extras.fold-probe", "undefined"]], "the probe widget comes down at once");
-	assert.deepEqual(plain(s.chat.render(100)), ["", "● Read 1 file, ↑1.0M ↓10 tokens, 3.0s"], "the end time comes from the saved result");
+	assert.deepEqual(plain(s.chat.render(100)), ["", "● Read 1 file, ↑1.0M ↓10 3.0s"], "the end time comes from the saved result");
 	s.fire("message_end", { message: { role: "toolResult", toolCallId: "a", timestamp: 6_000 } });
-	assert.match(plain(s.chat.render(100))[1]!, /, 5\.0s$/, "a new result moves it");
+	assert.match(plain(s.chat.render(100))[1]!, /↓10 5\.0s$/, "a new result moves it");
 	const builds = s.rows.reply.invalidated;
 	s.chat.render(100);
 	assert.equal(s.rows.reply.invalidated, builds, "a reply the thinking patch never asks about is not built again every frame");

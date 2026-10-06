@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { foldPhrase as phrase, foldStats, phraseText, type FoldFacts } from "../lib/fold/summary.ts";
 
-const foldPhrase = (facts: FoldFacts) => phraseText(phrase(facts));
+const foldPhrase = (facts: FoldFacts, brief = false) => phraseText(phrase(facts, brief));
 
 const tool = (name: string, running = false, failed = false) => ({ name, running, failed });
 const facts = (over: Partial<FoldFacts> = {}): FoldFacts => ({ tools: [], live: false, tokens: 0, ...over });
@@ -33,7 +33,8 @@ test("finished work with no calls was thinking", () => {
 });
 
 test("other tools are named, and names are cleaned", () => {
-	assert.equal(foldPhrase(facts({ tools: [tool("usage"), tool("usage"), tool("x\x1b[31m")] })), "Called usage 2 times, called x");
+	assert.equal(foldPhrase(facts({ tools: [tool("usage"), tool("usage")] })), "Called usage 2 times");
+	assert.equal(foldPhrase(facts({ tools: [tool("x\x1b[31m")] })), "Called x");
 	assert.equal(foldPhrase(facts({ tools: [tool("mcp__oc__web_search")] })), "Searched the web 1 time");
 });
 
@@ -43,15 +44,30 @@ test("pi-extras and Pi tools share their kinds", () => {
 });
 
 test("stats give tokens sent and received, and time; an unknown time is left out", () => {
-	assert.deepEqual(foldStats(facts({ tools: [tool("read"), tool("bash", false, true)], sent: 288_214, tokens: 1_620, elapsedMs: 8_400 })), ["↑288k ↓1.6k tokens", "8.4s"], "the words count the calls already");
-	assert.deepEqual(foldStats(facts({ tools: [tool("read")], tokens: 12 })), ["↓12 tokens"]);
-	assert.deepEqual(foldStats(facts({ tools: [tool("read")], sent: 1 })), ["↑1 token"]);
+	assert.deepEqual(foldStats(facts({ tools: [tool("read"), tool("bash", false, true)], sent: 288_214, tokens: 1_620, elapsedMs: 8_400 })), ["↑288k ↓1.6k", "8.4s"], "the words count the calls already");
+	assert.deepEqual(foldStats(facts({ tools: [tool("read")], tokens: 12 })), ["↓12"]);
+	assert.deepEqual(foldStats(facts({ tools: [tool("read")], sent: 1 })), ["↑1"]);
 	assert.deepEqual(foldStats(facts({ tools: [tool("read")] })), [], "cost shows only on the end line");
 	assert.deepEqual(foldStats(facts({ live: true, elapsedMs: 441 })), ["0.4s"]);
-	assert.deepEqual(foldStats(facts({ tokens: 30, elapsedMs: 2_500 })), ["↓30 tokens"], "a Thought line says its time in its words");
+	assert.deepEqual(foldStats(facts({ tokens: 30, elapsedMs: 2_500 })), ["↓30"], "a Thought line says its time in its words");
 });
 
 test("a call can count as several: each step of a chained command, each call inside a script", () => {
 	const text = foldPhrase(facts({ tools: [{ ...tool("bash"), count: 3 }, tool("read"), { ...tool("codemode", false, true), count: 0 }] }));
 	assert.equal(text, "Ran 3 commands, read 1 file, 1 failed", "a script whose calls are counted is not counted again, but its failure is");
+});
+
+test("other tools are counted together when they are many or their names are long", () => {
+	const many = Array.from({ length: 22 }, () => [tool("mcp__playwright__browser_navigate"), tool("mcp__playwright__browser_evaluate")]).flat();
+	assert.equal(foldPhrase(facts({ tools: many })), "Used 44 tools");
+	assert.equal(foldPhrase(facts({ tools: [tool("mcp__playwright__browser_navigate")] })), "Used 1 tool", "a long name is not spelled out");
+	assert.equal(foldPhrase(facts({ tools: [tool("read"), tool("usage"), tool("agent_request")] })), "Read 1 file, used 2 other tools");
+	assert.equal(foldPhrase(facts({ live: true, tools: [tool("usage"), tool("agent_request", true)] })), "Using 2 tools");
+});
+
+test("the brief form is the total count of calls", () => {
+	const tools = [{ ...tool("bash"), count: 3 }, tool("read"), tool("edit", true), tool("bash", false, true)];
+	assert.deepEqual(phrase(facts({ live: true, tools }), true), { said: "Using 6 tools", failed: "1 failed" });
+	assert.equal(foldPhrase(facts({ tools: [tool("read")] }), true), "Used 1 tool");
+	assert.equal(foldPhrase(facts({ elapsedMs: 900 }), true), "Thought for 0.9s", "no calls: nothing to count");
 });

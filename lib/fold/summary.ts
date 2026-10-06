@@ -81,7 +81,30 @@ function tallies(tools: readonly ToolFact[]): Tally[] {
 		tally.running ||= tool.running;
 		byLabel.set(label, tally);
 	}
-	return [...byLabel.values()].filter((tally) => tally.count > 0);
+	return lumpOthers([...byLabel.values()].filter((tally) => tally.count > 0));
+}
+
+/** The longest name of another tool spelled out (`called usage`); MCP names run far longer. */
+const NAME_MAX = 20;
+const TOOLS = kind("used", "using", "tool");
+const OTHER_TOOLS = kind("used", "using", "other tool");
+
+/**
+ * Tools without wording of their own are named only when there is one such
+ * tool with a short name. Several, or a long name, become one count where the
+ * first of them was: `used 44 tools`, or `used 2 other tools` beside known kinds.
+ */
+function lumpOthers(tallies: Tally[]): Tally[] {
+	const others = tallies.filter((tally) => !tally.kind);
+	if (others.length === 0 || (others.length === 1 && others[0]!.label.length <= NAME_MAX)) return tallies;
+	const lumped: Tally = {
+		label: "|tools",
+		kind: others.length === tallies.length ? TOOLS : OTHER_TOOLS,
+		count: others.reduce((sum, tally) => sum + tally.count, 0),
+		running: others.some((tally) => tally.running),
+	};
+	const at = tallies.indexOf(others[0]!);
+	return [...tallies.slice(0, at), lumped, ...tallies.slice(at).filter((tally) => tally.kind)];
 }
 
 function says(tally: Tally): string {
@@ -102,8 +125,12 @@ export interface FoldPhrase {
 	readonly after?: string;
 }
 
-export function foldPhrase(facts: FoldFacts): FoldPhrase {
-	const parts = tallies(facts.tools).map(says);
+/** `brief`: the total count of calls (`Used 12 tools`), for a line too narrow for every kind. */
+export function foldPhrase(facts: FoldFacts, brief = false): FoldPhrase {
+	const counted = tallies(facts.tools);
+	const total = counted.reduce((sum, tally) => sum + tally.count, 0);
+	const running = counted.some((tally) => tally.running);
+	const parts = brief && total > 0 ? [says({ label: "|tools", kind: TOOLS, count: total, running })] : counted.map(says);
 	const text = parts.length > 0 ? parts.join(", ") : facts.live ? "thinking" : thoughtFor(facts);
 	const failures = facts.tools.filter((tool) => tool.failed).length;
 	const thinking = facts.live && parts.length > 0 && !facts.tools.some((tool) => tool.running);
@@ -123,14 +150,12 @@ export function phraseText(phrase: FoldPhrase): string {
 	return [phrase.said, phrase.failed, phrase.after].filter(Boolean).join(", ");
 }
 
-/** `↑288k ↓1.6k tokens`: what the replies sent and what came back. */
+/** `↑288k ↓1.6k`: the tokens the replies sent and the tokens that came back. */
 export function tokenFigure(sent: number, received: number): string[] {
 	const up = Math.round(sent);
 	const down = Math.round(received);
 	const parts = [...(up > 0 ? [`↑${formatTokens(up)}`] : []), ...(down > 0 ? [`↓${formatTokens(down)}`] : [])];
-	if (parts.length === 0) return [];
-	const one = (up > 0 ? up : 0) + (down > 0 ? down : 0) === 1;
-	return [`${parts.join(" ")} ${one ? "token" : "tokens"}`];
+	return parts.length > 0 ? [parts.join(" ")] : [];
 }
 
 /** Tenths below a second too, so a live time doesn't flicker through milliseconds. */

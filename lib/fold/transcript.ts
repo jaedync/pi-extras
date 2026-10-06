@@ -175,7 +175,6 @@ export function tokensOf(message: ReplyMessage, streaming: boolean): number {
 	return Math.max(reported, chars / CHARS_PER_TOKEN);
 }
 
-const STATS_JOIN = ", ";
 /** Columns the words keep before the figures give way. */
 const MIN_WORDS = 16;
 
@@ -238,31 +237,38 @@ export class FoldRow implements Component {
 	}
 
 	/**
-	 * One block on the left, as the end line reads: the bullet (a spinner while
-	 * live), the words, then the figures, all joined by commas. On a narrow
-	 * line the words are cut first; the figures go only when even short words
-	 * wouldn't fit beside them.
+	 * One block on the left: the bullet (a spinner while live), the words, a
+	 * comma, then the figures with spaces between them (`↑681k ↓6.9k 2m21s`).
+	 * Words too long for the line become the total count of calls; on a
+	 * narrower line they are cut, and the figures go only when even short
+	 * words wouldn't fit beside them.
 	 */
 	private draw(width: number, glyph: string, theme: FoldTheme | undefined): string[] {
 		const paint = (key: string, text: string) => {
 			try { return theme ? theme.fg(key, text) : text; } catch { return text; }
 		};
 		const { live } = this.facts;
-		const stats = foldStats(this.facts).join(STATS_JOIN);
-		const phrase = foldPhrase(this.facts);
-		const tone = live ? "text" : "toolOutput";
-		const words: Segment[] = [
-			{ key: tone, text: phrase.said },
-			...(phrase.failed ? [{ key: tone, text: ", " }, { key: "error", text: phrase.failed }] : []),
-			...(phrase.after ? [{ key: tone, text: `, ${phrase.after}` }] : []),
-		];
-		const tail = stats ? `${STATS_JOIN}${stats}` : "";
+		const stats = foldStats(this.facts).join(" ");
+		const tail = stats ? `, ${stats}` : "";
 		const room = width - 3 - visibleWidth(tail);
 		const fits = room >= MIN_WORDS;
-		const left = cut(words, Math.max(1, fits ? room : width - 3)).map((segment) => paint(segment.key, segment.text)).join("");
+		const space = Math.max(1, fits ? room : width - 3);
+		const tone = live ? "text" : "toolOutput";
+		const segments = (brief: boolean): Segment[] => {
+			const phrase = foldPhrase(this.facts, brief);
+			return [
+				{ key: tone, text: phrase.said },
+				...(phrase.failed ? [{ key: tone, text: ", " }, { key: "error", text: phrase.failed }] : []),
+				...(phrase.after ? [{ key: tone, text: `, ${phrase.after}` }] : []),
+			];
+		};
+		const full = segments(false);
+		const words = visibleWidth(full.map((segment) => segment.text).join("")) <= space ? full : segments(true);
+		const left = cut(words, space).map((segment) => paint(segment.key, segment.text)).join("");
 		const line = `${paint(live ? "accent" : "toolOutput", glyph)} ${left}${fits ? paint("muted", tail) : ""}`;
 		return ["", truncateToWidth(line, width, "")];
 	}
+
 
 
 	invalidate(): void {
