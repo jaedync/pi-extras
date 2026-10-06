@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.22.3 - 2026-10-06
+
+### Changed
+
+- Tool Display, folded mode: a folded line is one block on the left. The
+  figures follow the words after a `·`, as the end line reads, instead of
+  sitting at the right edge. The number of calls is left out, because the
+  words count them already.
+- Tool Display, folded mode: a line of thinking alone says how long, for
+  example `▸ Thought for 2.5s · 180 tokens · $0.07`.
+- Tool Display, folded mode: the end line of a prompt uses the folded lines'
+  lighter gray.
+
 ## 0.22.2 - 2026-10-06
 
 ### Changed
