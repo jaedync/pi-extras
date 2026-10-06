@@ -1,8 +1,7 @@
 import { mixColors, truncateToWidth, type Color } from "@earendil-works/pi-tui";
 import { formatElapsed } from "./phase-status.ts";
 import { callPhrase, toolLabel } from "./tool-phrase.ts";
-import { tokenFigure } from "./fold/summary.ts";
-import { formatMoney } from "./status-plus-logic.ts";
+import { minutesAndUp } from "./duration.ts";
 import { END_GLYPH, MODE_SPINNERS, SPINNER_SLOT_WIDTH, WAVE_TOKENS_PER_SECOND, piWave, slotGlyph, type GlyphAnimation } from "./band/glyph.ts";
 
 export const SEP = ", ";
@@ -132,30 +131,18 @@ export function renderPiWave(elapsedMs: number, theme: LineTheme, width = SPINNE
 }
 export interface EndLine {
  readonly past?: string; readonly elapsedMs: number; readonly doneAt: string; readonly stopped?: boolean;
- /** The run's totals, shown in folded mode: top-level tool calls, output and input tokens, and dollars. */
- readonly tools?: number; readonly tokens?: number; readonly sent?: number; readonly cost?: number;
 }
 export const END_ENTRY = "pi-extras.run-end";
-const count = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 export function parseEndLine(value: unknown): EndLine | undefined {
  if(!value || typeof value!=="object")return undefined;
  const model=value as EndLine;
  if(!((model.past===undefined || valid(model.past)) && valid(model.doneAt) && Number.isFinite(model.elapsedMs) && model.elapsedMs>=0 && (model.stopped===undefined || typeof model.stopped==="boolean"))) return undefined;
- return {...(model.past!==undefined?{past:model.past}:{}),elapsedMs:model.elapsedMs,doneAt:model.doneAt,...(model.stopped?{stopped:true}:{}),
-  ...(count(model.tools)?{tools:Math.round(model.tools)}:{}),...(count(model.tokens)?{tokens:model.tokens}:{}),...(count(model.sent)?{sent:model.sent}:{}),...(count(model.cost)?{cost:model.cost}:{})};
+ return {...(model.past!==undefined?{past:model.past}:{}),elapsedMs:model.elapsedMs,doneAt:model.doneAt,...(model.stopped?{stopped:true}:{})};
 }
-function endTotals(model: EndLine): string[] {
- const tools=model.tools ?? 0, tokens=Math.round(model.tokens ?? 0);
- return [
-  ...(tools>0?[`${tools} ${tools===1?"tool":"tools"}`]:[]),
-  ...tokenFigure(model.sent ?? 0,tokens),
-  ...((model.cost ?? 0)>0?[`$${formatMoney(model.cost!)}`]:[]),
- ];
-}
-/** `folded` adds the run's totals before the time it finished, in the folded lines' lighter gray. */
-export function renderEndLine(model: EndLine,width:number,theme:LineTheme,folded=false): string {
- const totals=folded?endTotals(model):[];
- const head=model.stopped ? `Stopped after ${seconds(model.elapsedMs)}` : `${model.past ?? "Worked"} for ${seconds(model.elapsedMs)}`;
- const parts=[head,...totals,...(model.stopped?[]:[`done ${model.doneAt}`])];
- return truncateToWidth(theme.fg("accent",END_GLYPH)+" "+theme.fg(folded?"toolOutput":"dim",parts.join(SEP)),Math.max(0,width),"");
+/** Whole seconds under a minute, then minutes and up (`2m04s`), as the fold lines read. */
+const runTime = (ms: number): string => ms < 60_000 ? seconds(ms) : minutesAndUp(Math.floor(ms/1000));
+export function renderEndLine(model: EndLine,width:number,theme:LineTheme): string {
+ const head=model.stopped ? `Stopped after ${runTime(model.elapsedMs)}` : `${model.past ?? "Worked"} for ${runTime(model.elapsedMs)}`;
+ const parts=[head,...(model.stopped?[]:[`done ${model.doneAt}`])];
+ return truncateToWidth(theme.fg("accent",END_GLYPH)+" "+theme.fg("dim",parts.join(SEP)),Math.max(0,width),"");
 }

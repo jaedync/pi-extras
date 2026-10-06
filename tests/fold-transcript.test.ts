@@ -281,11 +281,11 @@ test("a reply streaming its words below a finished Thought line does not keep th
 	assert.match(text(viewOf(value).render(chat, 80))[1]!, /^● Read 1 file, /);
 });
 
-test("a settled line uses the theme's brighter grays", () => {
+test("a settled line uses the theme's darker grays", () => {
 	const keys: string[] = [];
 	const { value } = host({ theme: () => ({ fg: (key: string, text: string) => { keys.push(key); return text; } }) });
 	viewOf(value).render(chatOf([new ToolRow("read", "a")]), 80);
-	assert.deepEqual([...new Set(keys)].sort(), ["muted", "toolOutput"]);
+	assert.deepEqual(keys, ["muted", "dim", "dim"], "the words muted; the bullet and the figures dim");
 });
 
 test("on a narrow line the words become the total count, then the figures go, then the words are cut", () => {

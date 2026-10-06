@@ -533,7 +533,8 @@ shows as Pi's own row in the conversation.
 
 When a prompt finishes, a dotted π waves in and out in the divider, and the
 conversation keeps an end line such as `π Worked for 41s, done 9:14 PM`, or
-`π Stopped after 12s` when you stopped it. The end line and the thinking rows
+`π Stopped after 12s` when you stopped it. A prompt of one minute or more
+reads in minutes, for example `π Worked for 2m04s, done 4:13 PM`. The end line and the thinking rows
 are only drawn; the model never sees them.
 
 Set `phaseSpinner.verbs` to `"playful"` for pie and π words (Proofing,
@@ -663,8 +664,8 @@ or `used 2 other tools` after the known kinds. Only one such tool with a short
 name is named (`called usage 2 times`). When the words do not fit the width,
 the line shows the total count, for example `● Used 45 tools`. After the words
 come the tokens that the replies sent (`↑`, cache included) and received
-(`↓`), and the time. The cost shows only on the end line of the prompt.
-While the model works, the line is live: a spinner turns, the kind that runs
+(`↓`), and the time. The words are gray and the bullet and figures are a
+darker gray. While the model works, the line is live: a spinner turns, the kind that runs
 now reads `running 1 command`, and the figures count up. When the model
 thinks between calls, the line ends with `thinking`. A reply that thinks
 and then writes keeps its thinking in a line above its words: the line of the
@@ -672,10 +673,8 @@ calls before it, or a line of its own such as `● Thought for 2.5s`. The
 live thinking tail
 above the editor is not shown. Click a line to open its run and see every row
 and thinking block. Click it again to close the run. ctrl+o opens every run.
-The end line of a prompt also shows the totals of the prompt:
-`π Worked for 11s, 5 tools, ↑1.2M ↓1.6k, $0.30, done 1:26 PM`, in the same
-lighter gray as the folded lines. A cost of
-zero (a free model) is not shown. The subagent inspector is not folded.
+The end line of a prompt is the same as in the unfolded view. The subagent
+inspector is not folded.
 
 **Compaction.** A purple header band shows the reason (`auto`, `manual` or
 `overflow`), tokens before and estimated tokens after (`~`), cost when known,

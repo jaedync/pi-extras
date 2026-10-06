@@ -82,24 +82,19 @@ test("new spinner and end rows fit every width, including Unicode verbs", () => 
  }
  assert.equal(stripTerminalSequences(renderEndLine({past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM"},80,theme)), `${END_GLYPH} Proofed for 18s, done 7:43 PM`);
 });
-test("folded mode adds the run's tools, tokens and cost to the end line", () => {
- const end={past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM",tools:5,tokens:1620,cost:0.3};
- assert.deepEqual(parseEndLine(end),end);
- assert.equal(stripTerminalSequences(renderEndLine(end,100,theme)), `${END_GLYPH} Proofed for 18s, done 7:43 PM`, "totals show only when folded");
- assert.equal(stripTerminalSequences(renderEndLine(end,100,theme,true)), `${END_GLYPH} Proofed for 18s, 5 tools, ↓1.6k, $0.30, done 7:43 PM`);
- assert.equal(stripTerminalSequences(renderEndLine({...end,tools:1,tokens:0,cost:0},100,theme,true)), `${END_GLYPH} Proofed for 18s, 1 tool, done 7:43 PM`);
- assert.equal(stripTerminalSequences(renderEndLine({...end,stopped:true},100,theme,true)), `${END_GLYPH} Stopped after 18s, 5 tools, ↓1.6k, $0.30`);
- assert.deepEqual(parseEndLine({...end,tools:-1,tokens:Number.NaN,cost:"1"}),{past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM"}, "bad totals are dropped, the line kept");
+test("the end line says only how long the run took and when it finished", () => {
+ const saved={past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM",tools:5,tokens:1620,sent:2_000_000,cost:0.3};
+ assert.deepEqual(parseEndLine(saved),{past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM"}, "totals that 0.22 saved are dropped");
+ assert.equal(stripTerminalSequences(renderEndLine(saved,100,theme)), `${END_GLYPH} Proofed for 18s, done 7:43 PM`);
 });
-test("folded mode draws the end line in the folded lines' lighter gray", () => {
+test("a run of a minute or more reads in minutes", () => {
+ assert.equal(stripTerminalSequences(renderEndLine({elapsedMs:59_900,doneAt:"4:13 PM"},100,theme)), `${END_GLYPH} Worked for 59s, done 4:13 PM`);
+ assert.equal(stripTerminalSequences(renderEndLine({elapsedMs:124_900,doneAt:"4:13 PM"},100,theme)), `${END_GLYPH} Worked for 2m04s, done 4:13 PM`);
+ assert.equal(stripTerminalSequences(renderEndLine({elapsedMs:3_720_000,doneAt:"4:13 PM",stopped:true},100,theme)), `${END_GLYPH} Stopped after 1h02m`);
+});
+test("the end line is dim after its glyph", () => {
  const keys: string[] = [];
  const spy = { ...theme, fg: (key: string, text: string) => { keys.push(key); return text; } } as typeof theme;
  renderEndLine({elapsedMs:1000,doneAt:"7 PM"},80,spy);
- renderEndLine({elapsedMs:1000,doneAt:"7 PM"},80,spy,true);
- assert.deepEqual(keys, ["accent", "dim", "accent", "toolOutput"]);
-});
-test("the end line shows the tokens a run sent and received", () => {
- const end={past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM",tools:5,tokens:1620,sent:2_000_000,cost:0.3};
- assert.deepEqual(parseEndLine(end),end);
- assert.equal(stripTerminalSequences(renderEndLine(end,100,theme,true)), `${END_GLYPH} Proofed for 18s, 5 tools, ↑2.0M ↓1.6k, $0.30, done 7:43 PM`);
+ assert.deepEqual(keys, ["accent", "dim"]);
 });

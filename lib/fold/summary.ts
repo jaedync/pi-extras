@@ -151,7 +151,7 @@ export function phraseText(phrase: FoldPhrase): string {
 }
 
 /** `↑288k ↓1.6k`: the tokens the replies sent and the tokens that came back. */
-export function tokenFigure(sent: number, received: number): string[] {
+function tokenFigure(sent: number, received: number): string[] {
 	const up = Math.round(sent);
 	const down = Math.round(received);
 	const parts = [...(up > 0 ? [`↑${formatTokens(up)}`] : []), ...(down > 0 ? [`↓${formatTokens(down)}`] : [])];

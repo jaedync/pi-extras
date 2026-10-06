@@ -253,7 +253,7 @@ export class FoldRow implements Component {
 		const room = width - 3 - visibleWidth(tail);
 		const fits = room >= MIN_WORDS;
 		const space = Math.max(1, fits ? room : width - 3);
-		const tone = live ? "text" : "toolOutput";
+		const tone = live ? "text" : "muted";
 		const segments = (brief: boolean): Segment[] => {
 			const phrase = foldPhrase(this.facts, brief);
 			return [
@@ -265,7 +265,7 @@ export class FoldRow implements Component {
 		const full = segments(false);
 		const words = visibleWidth(full.map((segment) => segment.text).join("")) <= space ? full : segments(true);
 		const left = cut(words, space).map((segment) => paint(segment.key, segment.text)).join("");
-		const line = `${paint(live ? "accent" : "toolOutput", glyph)} ${left}${fits ? paint("muted", tail) : ""}`;
+		const line = `${paint(live ? "accent" : "dim", glyph)} ${left}${fits ? paint("dim", tail) : ""}`;
 		return ["", truncateToWidth(line, width, "")];
 	}
 
