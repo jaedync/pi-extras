@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.22.2 - 2026-10-06
+
+### Changed
+
+- Tool Display, folded mode: a reply that thinks and then writes keeps its
+  thinking in a folded line, so the live `Thinking…` line no longer goes
+  away when the words start. Without calls before it, the reply gets a
+  `▸ Thought` line of its own, with its tokens, cost and thinking time.
+- Tool Display, folded mode: folded lines use brighter grays.
+- Tool Display, folded mode: a line's time also counts thinking after the
+  last call, and a run of calls starts its time where the reply that made
+  them stopped thinking.
+
 ## 0.22.1 - 2026-10-06
 
 ### Added
