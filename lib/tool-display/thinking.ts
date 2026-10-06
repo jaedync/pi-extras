@@ -40,6 +40,8 @@ export interface ThinkingHost {
 	/** Enables spinner-owned live thinking and the transcript's display-only finished label. */
 	summary?(message: Message, run: number): string;
 	gutter?(): boolean;
+	/** Fold mode: this reply shows no thinking at all, and no spacing for it. */
+	folds?(reply: object): boolean;
 }
 
 type Content = { type: string; thinking?: unknown; text?: unknown };
@@ -277,6 +279,10 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 			}
 		}
 	}
+	if (host.folds?.(owner)) {
+		foldThinking(self, regions);
+		return true;
+	}
 	const hiddenSpacers = new Set<Component>();
 	regions.forEach((region, run) => {
 		const summary = host.summary;
@@ -308,6 +314,20 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 	});
 	if (hiddenSpacers.size) self.contentContainer.children = children.filter((child) => !hiddenSpacers.has(child));
 	return true;
+}
+
+const isSpacer = (child: Component | undefined) => child?.constructor.name === "Spacer";
+
+/** Takes out each thinking block, the spacer Pi put after it, and a spacer left doubled. */
+function foldThinking(self: Internals, regions: readonly Component[]): void {
+	const children = self.contentContainer.children;
+	const drop = new Set<Component>(regions);
+	for (const region of regions) {
+		const next = children[children.indexOf(region) + 1];
+		if (isSpacer(next)) drop.add(next!);
+	}
+	const kept = children.filter((child) => !drop.has(child));
+	self.contentContainer.children = kept.filter((child, index) => !(isSpacer(child) && (isSpacer(kept[index + 1]) || index === kept.length - 1)));
 }
 
 /**

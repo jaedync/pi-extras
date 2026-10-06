@@ -82,3 +82,12 @@ test("new spinner and end rows fit every width, including Unicode verbs", () => 
  }
  assert.equal(stripTerminalSequences(renderEndLine({past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM"},80,theme)), `${END_GLYPH} Proofed for 18s, done 7:43 PM`);
 });
+test("folded mode adds the run's tools, tokens and cost to the end line", () => {
+ const end={past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM",tools:5,tokens:1620,cost:0.3};
+ assert.deepEqual(parseEndLine(end),end);
+ assert.equal(stripTerminalSequences(renderEndLine(end,100,theme)), `${END_GLYPH} Proofed for 18s, done 7:43 PM`, "totals show only when folded");
+ assert.equal(stripTerminalSequences(renderEndLine(end,100,theme,true)), `${END_GLYPH} Proofed for 18s, 5 tools, 1.6k tokens, $0.30, done 7:43 PM`);
+ assert.equal(stripTerminalSequences(renderEndLine({...end,tools:1,tokens:0,cost:0},100,theme,true)), `${END_GLYPH} Proofed for 18s, 1 tool, done 7:43 PM`);
+ assert.equal(stripTerminalSequences(renderEndLine({...end,stopped:true},100,theme,true)), `${END_GLYPH} Stopped after 18s, 5 tools, 1.6k tokens, $0.30`);
+ assert.deepEqual(parseEndLine({...end,tools:-1,tokens:Number.NaN,cost:"1"}),{past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM"}, "bad totals are dropped, the line kept");
+});

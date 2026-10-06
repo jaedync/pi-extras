@@ -58,6 +58,7 @@ import { bashRenderers } from "./shell.ts";
 import { toolRenderers, type ToolSpec } from "./tool.ts";
 import { usageSpec } from "./usage.ts";
 import { webSearchSpec } from "./web.ts";
+import { watchFold } from "../fold/index.ts";
 import { installThinkingTail, prepareThinkingTail, THINKING_MODES, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
 
 export const TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
@@ -101,11 +102,13 @@ export function withDisplay(definition: AnyTool, renderers: Renderers): AnyTool 
 	return markRow({ ...definition, renderShell: "self", renderCall: renderers.renderCall, renderResult: renderers.renderResult }, "band");
 }
 
-const USAGE = ["/tool-display on|off", "others on|off", "chains on|off", "motion full|reduced", "thinking tail|collapsed|full", "count calls|steps"].join(SEP);
+const FOLD_MISSING = "Folded mode can't find Pi's transcript in this session, so every row shows.";
+
+const USAGE = ["/tool-display on|off", "others on|off", "chains on|off", "motion full|reduced", "thinking tail|collapsed|full", "folded on|off", "count calls|steps"].join(SEP);
 
 function describeSettings(settings: DisplaySettings): string {
 	if (!settings.enabled) return "Tool Display is off; every tool draws its own rows.";
-	return `Tool Display is on${SEP}other tools' rows ${settings.others ? "on" : "off"}${SEP}chain steps ${settings.chains ? "on" : "off"}${SEP}motion ${settings.motion}${SEP}thinking ${settings.thinking}.`;
+	return `Tool Display is on${SEP}other tools' rows ${settings.others ? "on" : "off"}${SEP}chain steps ${settings.chains ? "on" : "off"}${SEP}motion ${settings.motion}${SEP}thinking ${settings.thinking}${SEP}folded ${settings.folded ? "on" : "off"}.`;
 }
 
 /** `count calls` or `count steps`, for the Status Plus tool figure. */
@@ -122,6 +125,7 @@ export function applyArgs(settings: DisplaySettings, args: string): DisplaySetti
 	if (words.length === 2 && first === "others" && (second === "on" || second === "off")) return { ...settings, others: second === "on" };
 	if (words.length === 2 && first === "chains" && (second === "on" || second === "off")) return { ...settings, chains: second === "on" };
 	if (words.length === 2 && first === "motion" && (second === "full" || second === "reduced")) return { ...settings, motion: second };
+	if (words.length === 2 && first === "folded" && (second === "on" || second === "off")) return { ...settings, folded: second === "on" };
 	const thinking = THINKING_MODES.find((mode) => mode === second);
 	if (words.length === 2 && first === "thinking" && thinking) return { ...settings, thinking };
 	return undefined;
@@ -146,7 +150,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	let undoThinking: (() => void) | undefined;
 	let undoAdoption: (() => void) | undefined;
 	let thinkingActive = false;
-	const publishSettings = () => pi.events.emit(DISPLAY_SETTINGS_EVENT, { ...settings, hidesLiveThinking: thinkingActive && settings.enabled });
+	const folding = () => settings.enabled && settings.folded;
+	const publishSettings = () => pi.events.emit(DISPLAY_SETTINGS_EVENT, { ...settings, hidesLiveThinking: thinkingActive && settings.enabled, folds: thinkingActive && fold.active() });
 	let adopting = false;
 	const owned = new Set<string>();
 	const adopted = new WeakMap<object, RowRenderers>();
@@ -166,6 +171,15 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 
 	const run = watchRun(pi);
 	const thinkingDuration = watchThinking(pi, deps.host.now);
+	// Its own clock: Tool Display stops `clock` at each session start, which would strand a live line's frames.
+	const foldClock = new AnimationClock();
+	const fold = watchFold(pi, {
+		enabled: folding,
+		reduced: () => settings.motion === "reduced",
+		busy: run.busy,
+		now: () => deps.host.now(),
+		frames: (tick) => foldClock.add(tick),
+	});
 
 	const kit: Kit = {
 		...deps.host,
@@ -291,6 +305,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		restored.clear();
 		settings = deps.settings.read();
 		clock.setReduced(settings.motion === "reduced");
+		foldClock.setReduced(settings.motion === "reduced");
 		compaction.start(ctx);
 		// Rows are only drawn by the terminal UI; print, JSON and RPC runs keep Pi's tools untouched.
 		thinkingActive = false;
@@ -316,6 +331,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			hiddenAtStart: () => hiddenAtStart,
 			theme: () => host.theme,
 			gutter: () => true,
+			folds: (reply) => fold.foldsThinking(reply),
 			summary: (message, index) => {
 				const duration = thinkingDuration(message, index);
 				return duration === undefined ? `${THOUGHT_GLYPH} Thought` : `${THOUGHT_GLYPH} Thought for ${Math.floor(duration / 1_000)}s`;
@@ -328,6 +344,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		shareDrawnTools((name) => registered.get(name));
 		repairLate();
 		thinkingActive = true;
+		if (folding() && !fold.refresh()) ctx.ui.notify(FOLD_MISSING, "warning");
 		publishSettings();
 	});
 
@@ -392,6 +409,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 				["thinking tail", "Thinking shows its newest three lines"],
 				["thinking collapsed", "Thinking shows only its label"],
 				["thinking full", "Thinking shows everything"],
+				["folded on", "Each run of work between replies is one line"],
+				["folded off", "Show every tool row and thinking block"],
 				["count calls", "Status Plus counts one per tool call"],
 				["count steps", "Status Plus counts each step a chain ran"],
 			] as const;
@@ -420,14 +439,19 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 				return;
 			}
 			const toggled = next.enabled !== settings.enabled;
+			const wasFolding = folding();
 			settings = next;
+			const refolded = folding() !== wasFolding;
+			const folds = refolded ? fold.refresh() : fold.active();
 			publishSettings();
 			clock.setReduced(settings.motion === "reduced");
+			foldClock.setReduced(settings.motion === "reduced");
 			let saved = true;
 			try { deps.settings.write(settings); } catch { saved = false; }
 			if (toggled) install();
 			const note = saved ? "" : " Could not save the setting, so it applies to this session only.";
-			const reach = !toggled && next.enabled && owned.size === 0 && !adopting ? " No tool rows are drawn by Tool Display in this session." : "";
+			const reach = folding() && !folds ? ` ${FOLD_MISSING}`
+				: !toggled && next.enabled && owned.size === 0 && !adopting ? " No tool rows are drawn by Tool Display in this session." : "";
 			ctx.ui.notify(`${describeSettings(settings)}${reach}${note}`, saved && !reach ? "info" : "warning");
 		},
 	});

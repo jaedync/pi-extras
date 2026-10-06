@@ -205,3 +205,19 @@ test("installing again replaces the host rather than stacking patches", () => {
 		second();
 	}
 });
+
+test("in folded mode a reply leaves out its thinking and the spacing around it", () => {
+	let folds = true;
+	const undo = installThinkingTail(host({ gutter: () => true, summary: () => "∴ Thought", folds: () => folds }));
+	try {
+		const reply = new AssistantMessageComponent(message(thinking(LONG), said("done")), true);
+		assert.deepEqual(reply.render(60).map((line) => stripTerminalSequences(line).trimEnd()), ["", "● done"], "one blank line, then the reply");
+		const quiet = new AssistantMessageComponent(message(thinking(LONG)), true);
+		assert.deepEqual(quiet.render(60), [], "a reply of thinking alone draws nothing");
+		folds = false;
+		quiet.invalidate();
+		assert.deepEqual(plain(quiet.render(60)), ["∴ Thought"], "an open group shows it again");
+	} finally {
+		undo();
+	}
+});

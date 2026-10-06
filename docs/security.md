@@ -448,6 +448,15 @@ under the band. When one throws, the row shows the call's arguments and the
 result's text instead, stripped of terminal control sequences.
 `/tool-display others off` stops this for other extensions' tools.
 
+Folded mode (`/tool-display folded on`, off by default) wraps the render of
+Pi's chat container, which it finds in Pi's layout through a widget that draws
+nothing and is removed at once. Each row still renders; the lines of folded
+rows are not drawn. The figures on a folded line come from Pi's saved messages
+(token counts, costs and timestamps). When Pi recorded no cost, the cost is
+estimated from the model's prices, as Status Plus does. Nothing is sent or
+saved, and the model's context is unchanged. The end line of each prompt saves
+the prompt's tool count, output tokens and cost in its custom entry.
+
 **Chained bash commands are rewritten before they run.** When a command is a
 list of steps joined by `&&`, `||`, `;` or newlines, and the shell is `bash`,
 `sh`, `zsh`, `dash`, `ksh` or `mksh`, Tool Display runs a rewritten

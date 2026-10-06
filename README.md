@@ -648,6 +648,25 @@ whole block, and again to go back; ctrl+t does the same for every block.
 `/tool-display thinking collapsed` shows just the label, as Pi does, and
 `/tool-display thinking full` shows everything.
 
+**Folded mode.** Folded mode is off by default. `/tool-display folded on`
+turns it on. Then the transcript shows no tool rows and no thinking. Each run
+of work between two replies becomes one line:
+
+```
+▸ Ran 3 commands, read 1 file, edited 1 file      5 tools · 960 tokens · $0.22 · 8.5s
+```
+
+The left side counts the calls by kind. The right side shows the number of
+calls, the output tokens and cost of the replies that made them, and the time.
+While the model works, the line is live: a spinner turns, the kind that runs
+now reads `running 1 command`, and the figures count up. When the model
+thinks between calls, the line ends with `thinking`. The live thinking tail
+above the editor is not shown. Click a line to open its run and see every row
+and thinking block. Click it again to close the run. ctrl+o opens every run.
+The end line of a prompt also shows the totals of the prompt:
+`π Worked for 11s, 5 tools, 1.6k tokens, $0.30, done 1:26 PM`. A cost of
+zero (a free model) is not shown. The subagent inspector is not folded.
+
 **Compaction.** A purple header band shows the reason (`auto`, `manual` or
 `overflow`), tokens before and estimated tokens after (`~`), cost when known,
 and elapsed time. The first three summary lines sit under it on Pi's
@@ -679,6 +698,7 @@ Tool Display can't split safely (heredocs, `if` and `for` blocks, background
   the running step's breathing and the finish flashes, holds spinners on a
   still frame, and updates times once a second.
 - `/tool-display thinking tail|collapsed|full`: how thinking blocks rest.
+- `/tool-display folded on|off`: one line for each run of work (see above).
 - `/tool-display count calls|steps`: how Status Plus counts tools (see below).
 
 The choices are saved in `pi-extras.json`. Rows change only in the terminal UI;

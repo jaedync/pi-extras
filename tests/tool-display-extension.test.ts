@@ -165,7 +165,7 @@ test("a resumed session shows the saved steps of a chained command", () => {
 test("Tool Display publishes live-thinking ownership on start, settings changes, and shutdown", async () => {
  const h = harness();
  h.start();
- assert.deepEqual(h.emitted.at(-1), [DISPLAY_SETTINGS_EVENT, { ...DEFAULT_SETTINGS, hidesLiveThinking: true }]);
+ assert.deepEqual(h.emitted.at(-1), [DISPLAY_SETTINGS_EVENT, { ...DEFAULT_SETTINGS, hidesLiveThinking: true, folds: false }]);
  await h.run("off");
  assert.equal((h.emitted.at(-1)![1] as any).hidesLiveThinking, false);
  await h.run("on");
@@ -187,19 +187,39 @@ test("/tool-display reports, switches and saves its settings", async () => {
 	const h = harness();
 	h.start();
 	await h.run("");
-	assert.match(h.notes.at(-1)![0], /^Tool Display is on, other tools' rows on, chain steps on, motion full, thinking tail\./);
+	assert.match(h.notes.at(-1)![0], /^Tool Display is on, other tools' rows on, chain steps on, motion full, thinking tail, folded off\./);
 	await h.run("motion reduced");
-	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: true, motion: "reduced", thinking: "tail" });
+	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: true, motion: "reduced", thinking: "tail", folded: false });
 	await h.run("chains off");
-	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: false, motion: "reduced", thinking: "tail" });
+	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: false, motion: "reduced", thinking: "tail", folded: false });
 	await h.run("sideways");
 	assert.equal(h.notes.at(-1)![1], "warning");
 	assert.equal(h.writes.length, 2);
 });
 
-test("fold commands and completions are removed",async()=>{
+test("the removed 0.17 fold commands stay removed",async()=>{
  const h=harness();h.start();assert.equal(applyArgs(DEFAULT_SETTINGS,"fold on"),undefined);
- await h.run("");assert.doesNotMatch(h.notes.at(-1)![0],/fold/);
+ await h.run("");assert.doesNotMatch(h.notes.at(-1)![0],/\bfold\b/);
+});
+
+test("/tool-display folded switches folded mode and saves it, and says so when Pi's transcript is missing", async () => {
+	// This harness keeps one handler per event, so the fold never sees the session: as when Pi's layout is unknown.
+	const h = harness();
+	h.start();
+	assert.deepEqual(applyArgs(DEFAULT_SETTINGS, "folded on"), { ...DEFAULT_SETTINGS, folded: true });
+	assert.equal(applyArgs(DEFAULT_SETTINGS, "folded"), undefined);
+	await h.run("folded on");
+	assert.equal(h.writes.at(-1)!.folded, true);
+	assert.equal((h.emitted.at(-1)![1] as any).folds, false, "the phase spinner keeps its thinking tail when nothing folds");
+	assert.deepEqual(h.notes.at(-1), ["Tool Display is on, other tools' rows on, chain steps on, motion full, thinking tail, folded on. Folded mode can't find Pi's transcript in this session, so every row shows.", "warning"]);
+	await h.run("folded off");
+	assert.equal(h.notes.at(-1)![1], "info");
+	const restart = harness({ settings: { ...DEFAULT_SETTINGS, folded: true } });
+	restart.start();
+	assert.deepEqual(restart.notes.at(-1), ["Folded mode can't find Pi's transcript in this session, so every row shows.", "warning"]);
+	const quiet = harness();
+	quiet.start();
+	assert.equal(quiet.notes.length, 0, "nothing is said while folded mode is off");
 });
 
 test("/tool-display off gives the tools back to Pi, and on takes them again", async () => {
@@ -282,8 +302,9 @@ test("the settings persist under toolDisplay in pi-extras.json and keep other se
 		assert.deepEqual(readSettings(file), DEFAULT_SETTINGS, "the 0.5 density setting is ignored");
   writeFileSync(file,JSON.stringify({computerUse:{apps:"all"},toolDisplay:{fold:true}}));
   assert.equal(Object.hasOwn(readSettings(file),"fold"),false,"legacy fold keys are silently ignored");
-		writeSettings({ enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed" }, file);
-		assert.deepEqual(readSettings(file), { enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed" });
+  assert.equal(readSettings(file).folded,false,"the 0.17 fold key does not opt in to folded mode");
+		writeSettings({ enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed", folded: true }, file);
+		assert.deepEqual(readSettings(file), { enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed", folded: true });
 		const saved = JSON.parse(readFileSync(file, "utf8"));
 		assert.deepEqual(saved.computerUse, { apps: "all" });
 		writeFileSync(file, "{ not json");

@@ -22,6 +22,7 @@ import { renderStatusDivider } from "../lib/status-divider.ts";
 import { CHARS_PER_TOKEN, END_ENTRY, parseEndLine, parseVerbs, pickVerb, renderEndLine, renderPiWave, renderRunStatus, smoothTokens, streamRate, type RunLine } from "../lib/cc-phase.ts";
 import { MODE_SPINNERS, PI_WAVE, PI_WAVE_MS, REDUCED_FRAME, isBlockingPeer, slotGlyph, spinnerCadence, type GlyphAnimation } from "../lib/band/glyph.ts";
 import { renderThinkingTail, thinkingRuns } from "../lib/tool-display/thinking.ts";
+import { replyCost } from "../lib/reply-cost.ts";
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 type VisualPhase = ActivePhase | "slow_api" | "stalled";
@@ -103,8 +104,11 @@ function indicatorText(indicator: StatusIndicator): string {
 export default function phaseSpinner(pi: ExtensionAPI): void {
 	pi.registerEntryRenderer(END_ENTRY, (entry, _options, theme) => {
 		const data = parseEndLine(entry.data);
-		return data ? { render: (width) => [renderEndLine(data, width, theme)], invalidate() {} } : undefined;
+		return data ? { render: (width) => [renderEndLine(data, width, theme, folds)], invalidate() {} } : undefined;
 	});
+	/** Tool Display's folded mode: no live thinking, and the end line carries the run's totals. */
+	let folds = false;
+	let totals = { tools: 0, tokens: 0, cost: 0 };
 	let verb: RunLine["verb"];
 	let verbs = parseVerbs(undefined);
 	let reduced = false;
@@ -415,6 +419,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			thoughtMs = undefined;
 			liveThinking = "";
 			lastDrawing = undefined;
+			totals = { tools: 0, tokens: 0, cost: 0 };
 			active = true;
 			agentStartedAt = now;
 			lastDebugAt = now;
@@ -434,6 +439,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			...(verb ? { past: verb.past } : {}), elapsedMs: performance.now() - lineStartedAt,
 			doneAt: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
 			...(stopped ? { stopped: true } : {}),
+			...totals,
 		});
 		runEnded = true;
 		stop(true);
@@ -518,7 +524,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	 * The editor divider owns every status and sign-off animation.
 	 */
 	function drawThinkingTail(width: number): string[] {
-		if (!linePaint || !active || runEnded || !currentContext || !hidesLiveThinking || phase !== "think" || thinkingMode === "collapsed") return [];
+		if (!linePaint || !active || runEnded || !currentContext || !hidesLiveThinking || folds || phase !== "think" || thinkingMode === "collapsed") return [];
 		if (statusView(performance.now())) return [];
 		const lines = thinkingTail(width, currentContext.ui.theme);
 		return lines.length ? ["", ...lines] : [];
@@ -599,11 +605,12 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	});
 
 	pi.events?.on(DISPLAY_SETTINGS_EVENT, (value) => {
-		const settings = value as { motion?: unknown; thinking?: unknown; hidesLiveThinking?: unknown };
+		const settings = value as { motion?: unknown; thinking?: unknown; hidesLiveThinking?: unknown; folds?: unknown };
 		if (settings?.motion !== undefined) reduced = settings.motion === "reduced";
 		if (reduced) cancelWave();
 		if (settings?.thinking !== undefined) thinkingMode = settings.thinking;
 		if (typeof settings?.hidesLiveThinking === "boolean") hidesLiveThinking = settings.hidesLiveThinking;
+		if (typeof settings?.folds === "boolean") folds = settings.folds;
 		stopFrames?.();
 		stopFrames = undefined;
 		if (active || statusIndicator || wave) ensureTimer();
@@ -660,6 +667,10 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	pi.on("message_end", (event, ctx) => {
 		if (event.message.role === "assistant") endReason = event.message.stopReason;
 		if (event.message.role !== "assistant") return;
+		const output = event.message.usage?.output;
+		let cost = 0;
+		try { cost = replyCost(ctx, event.message); } catch { /* The end line leaves out a cost it can't price. */ }
+		totals = { ...totals, tokens: totals.tokens + (Number.isFinite(output) && output! > 0 ? output! : 0), cost: totals.cost + cost };
 		if (phase === "think") setPhase("prep", ctx, "thinking_finished");
 		// Whole-request throughput includes initial wait and final stream metadata.
 		// usage.output already includes reasoning tokens; do not add them again.
@@ -676,6 +687,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	});
 	pi.on("tool_execution_update", (_event, ctx) => setPhase("run", ctx, "tool_execution_update"));
 	pi.on("tool_execution_end", (event, ctx) => {
+		// Calls a codemode script made inside another call are part of that one.
+		if (!(event as { parentToolCallId?: string }).parentToolCallId) totals = { ...totals, tools: totals.tools + 1 };
 		const nextTools = new Map(runningTools);
 		nextTools.delete(event.toolCallId);
 		runningTools = nextTools;
