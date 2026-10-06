@@ -93,7 +93,7 @@ function says(tally: Tally): string {
 }
 
 export interface FoldPhrase {
-	/** The calls by kind: `Read 2 files, ran 1 command`; `Thinking` or `Thought` when there were none. */
+	/** The calls by kind: `Read 2 files, ran 1 command`; `Thinking`, or `Thought for 2.5s`, when there were none. */
 	readonly said: string;
 	/** `1 failed`, drawn in the error color. */
 	readonly failed?: string;
@@ -103,7 +103,7 @@ export interface FoldPhrase {
 
 export function foldPhrase(facts: FoldFacts): FoldPhrase {
 	const parts = tallies(facts.tools).map(says);
-	const text = parts.length > 0 ? parts.join(", ") : facts.live ? "thinking" : "thought";
+	const text = parts.length > 0 ? parts.join(", ") : facts.live ? "thinking" : thoughtFor(facts);
 	const failures = facts.tools.filter((tool) => tool.failed).length;
 	const thinking = facts.live && parts.length > 0 && !facts.tools.some((tool) => tool.running);
 	return {
@@ -113,6 +113,10 @@ export function foldPhrase(facts: FoldFacts): FoldPhrase {
 	};
 }
 
+/** A settled line of thinking alone says how long, as Claude Code's does. */
+const saysTime = (facts: FoldFacts) => !facts.live && facts.tools.length === 0 && facts.elapsedMs !== undefined && facts.elapsedMs > 0;
+const thoughtFor = (facts: FoldFacts) => (saysTime(facts) ? `thought for ${elapsed(facts.elapsedMs!)}` : "thought");
+
 /** The phrase as one line of plain text. */
 export function phraseText(phrase: FoldPhrase): string {
 	return [phrase.said, phrase.failed, phrase.after].filter(Boolean).join(", ");
@@ -121,14 +125,14 @@ export function phraseText(phrase: FoldPhrase): string {
 /** Tenths below a second too, so a live time doesn't flicker through milliseconds. */
 const elapsed = (ms: number) => (ms < 1_000 ? `${(Math.floor(ms / 100) / 10).toFixed(1)}s` : formatTime(ms));
 
-const plural = (count: number, one: string) => `${count} ${count === 1 ? one : `${one}s`}`;
-
-/** Figures for the right of the line; a zero cost (a free model) and an unknown time are left out. */
+/**
+ * Figures after the words. The words count the calls already, and a Thought
+ * line says its time; a zero cost (a free model) and an unknown time are left out.
+ */
 export function foldStats(facts: FoldFacts): string[] {
 	return [
-		...(facts.tools.length > 0 ? [plural(facts.tools.length, "tool")] : []),
 		...(facts.tokens > 0 ? [`${formatTokens(Math.round(facts.tokens))} ${Math.round(facts.tokens) === 1 ? "token" : "tokens"}`] : []),
 		...(facts.cost > 0 ? [`$${formatMoney(facts.cost)}`] : []),
-		...(facts.elapsedMs !== undefined && facts.elapsedMs > 0 ? [elapsed(facts.elapsedMs)] : []),
+		...(facts.elapsedMs !== undefined && facts.elapsedMs > 0 && !saysTime(facts) ? [elapsed(facts.elapsedMs)] : []),
 	];
 }

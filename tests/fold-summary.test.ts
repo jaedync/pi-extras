@@ -29,6 +29,7 @@ test("failures come before what the model does now", () => {
 
 test("finished work with no calls was thinking", () => {
 	assert.equal(foldPhrase(facts()), "Thought");
+	assert.equal(foldPhrase(facts({ elapsedMs: 2_500 })), "Thought for 2.5s", "the time moves into the words");
 });
 
 test("other tools are named, and names are cleaned", () => {
@@ -41,9 +42,10 @@ test("pi-extras and Pi tools share their kinds", () => {
 	assert.equal(text, "Started 1 background job, started 1 subagent, fetched 2 pages, ran 1 script, wrote 1 file, listed 1 folder, searched for 1 pattern");
 });
 
-test("stats give tools, tokens, cost and time; zero cost and unknown time are left out", () => {
-	assert.deepEqual(foldStats(facts({ tools: [tool("read"), tool("bash", false, true)], tokens: 1_620, cost: 0.214, elapsedMs: 8_400 })), ["2 tools", "1.6k tokens", "$0.21", "8.4s"]);
-	assert.deepEqual(foldStats(facts({ tools: [tool("read")], tokens: 12 })), ["1 tool", "12 tokens"]);
-	assert.deepEqual(foldStats(facts({ cost: 0.0042 })), ["$0.0042"]);
-	assert.deepEqual(foldStats(facts({ elapsedMs: 441 })), ["0.4s"]);
+test("stats give tokens, cost and time; zero cost and unknown time are left out", () => {
+	assert.deepEqual(foldStats(facts({ tools: [tool("read"), tool("bash", false, true)], tokens: 1_620, cost: 0.214, elapsedMs: 8_400 })), ["1.6k tokens", "$0.21", "8.4s"], "the words count the calls already");
+	assert.deepEqual(foldStats(facts({ tools: [tool("read")], tokens: 12 })), ["12 tokens"]);
+	assert.deepEqual(foldStats(facts({ tools: [tool("read")], cost: 0.0042 })), ["$0.0042"]);
+	assert.deepEqual(foldStats(facts({ live: true, elapsedMs: 441 })), ["0.4s"]);
+	assert.deepEqual(foldStats(facts({ tokens: 30, elapsedMs: 2_500 })), ["30 tokens"], "a Thought line says its time in its words");
 });

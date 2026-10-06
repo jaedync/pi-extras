@@ -34,13 +34,13 @@ test("Pi's rows fold into one line, its replies lose their thinking, and a real 
 	const undo = installFold(chat as unknown as Box, view, () => enabled);
 	try {
 		const folded = plain(chat.render(80));
-		assert.deepEqual(folded, ["", "", "▸ Read 1 file  1 tool · 49 tokens · $0.010 · 4.0s", "", "● a is 1."]);
+		assert.deepEqual(folded, ["", "", "▸ Read 1 file · 49 tokens · $0.010 · 4.0s", "", "● a is 1."]);
 		assert.ok(!folded.some((line) => line.includes("Thought")), "the answer's thinking is left out");
 		const at = folded.indexOf(folded.find((line) => line.startsWith("▸"))!);
 		const result = chat.handleMouse({ type: "click", button: "left", x: 4, y: at, width: 80, height: folded.length } as never);
 		assert.ok(result, "Pi's container sends the click to the folded line");
 		const open = plain(chat.render(80));
-		assert.equal(open[2], "▾ Read 1 file  1 tool · 49 tokens · $0.010 · 4.0s", "the answer thought after the read, so its thinking is in this run");
+		assert.equal(open[2], "▾ Read 1 file · 49 tokens · $0.010 · 4.0s", "the answer thought after the read, so its thinking is in this run");
 		assert.equal(open.filter((line) => line === "∴ Thought").length, 2, "the open run shows the thinking of both replies");
 		assert.ok(open.some((line) => line.includes("export const a = 1;")), "and Pi's tool row");
 		enabled = false;

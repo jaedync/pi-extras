@@ -91,3 +91,10 @@ test("folded mode adds the run's tools, tokens and cost to the end line", () => 
  assert.equal(stripTerminalSequences(renderEndLine({...end,stopped:true},100,theme,true)), `${END_GLYPH} Stopped after 18s, 5 tools, 1.6k tokens, $0.30`);
  assert.deepEqual(parseEndLine({...end,tools:-1,tokens:Number.NaN,cost:"1"}),{past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM"}, "bad totals are dropped, the line kept");
 });
+test("folded mode draws the end line in the folded lines' lighter gray", () => {
+ const keys: string[] = [];
+ const spy = { ...theme, fg: (key: string, text: string) => { keys.push(key); return text; } } as typeof theme;
+ renderEndLine({elapsedMs:1000,doneAt:"7 PM"},80,spy);
+ renderEndLine({elapsedMs:1000,doneAt:"7 PM"},80,spy,true);
+ assert.deepEqual(keys, ["accent", "dim", "accent", "toolOutput"]);
+});

@@ -68,7 +68,7 @@ export function smoothTokens(shown: number, target: number, elapsedMs: number): 
  return next;
 }
 export interface LineTheme {
- fg(key: "accent" | "dim" | "warning" | "error", text: string): string;
+ fg(key: "accent" | "dim" | "toolOutput" | "warning" | "error", text: string): string;
  colors?: Readonly<Record<string,Color>>;
  style?(text: string, options: {fg?: Color; bold?: boolean}): string;
 }
@@ -152,10 +152,10 @@ function endTotals(model: EndLine): string[] {
   ...((model.cost ?? 0)>0?[`$${formatMoney(model.cost!)}`]:[]),
  ];
 }
-/** `folded` adds the run's totals before the time it finished. */
+/** `folded` adds the run's totals before the time it finished, in the folded lines' lighter gray. */
 export function renderEndLine(model: EndLine,width:number,theme:LineTheme,folded=false): string {
  const totals=folded?endTotals(model):[];
  const head=model.stopped ? `Stopped after ${seconds(model.elapsedMs)}` : `${model.past ?? "Worked"} for ${seconds(model.elapsedMs)}`;
  const parts=[head,...totals,...(model.stopped?[]:[`done ${model.doneAt}`])];
- return truncateToWidth(theme.fg("accent",END_GLYPH)+" "+theme.fg("dim",parts.join(SEP)),Math.max(0,width),"");
+ return truncateToWidth(theme.fg("accent",END_GLYPH)+" "+theme.fg(folded?"toolOutput":"dim",parts.join(SEP)),Math.max(0,width),"");
 }

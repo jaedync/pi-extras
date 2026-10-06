@@ -99,7 +99,7 @@ test("a session folds Pi's transcript, pricing replies from the model when Pi re
 	assert.equal(s.fold.refresh(), true);
 	assert.equal(s.fold.active(), true);
 	assert.deepEqual(s.widgets.map(([key, factory]) => [key, typeof factory]), [["pi-extras.fold-probe", "function"], ["pi-extras.fold-probe", "undefined"]], "the probe widget comes down at once");
-	assert.deepEqual(plain(s.chat.render(100)), ["", "▸ Read 1 file  1 tool · 10 tokens · $2.00 · 3.0s"], "the end time comes from the saved result");
+	assert.deepEqual(plain(s.chat.render(100)), ["", "▸ Read 1 file · 10 tokens · $2.00 · 3.0s"], "the end time comes from the saved result");
 	s.fire("message_end", { message: { role: "toolResult", toolCallId: "a", timestamp: 6_000 } });
 	assert.match(plain(s.chat.render(100))[1]!, /· 5\.0s$/, "a new result moves it");
 	const builds = s.rows.reply.invalidated;

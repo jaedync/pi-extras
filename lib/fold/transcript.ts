@@ -133,6 +133,8 @@ export function tokensOf(message: ReplyMessage, streaming: boolean): number {
 const OPEN_GLYPH = "▾";
 const CLOSED_GLYPH = "▸";
 const STATS_JOIN = " · ";
+/** Columns the words keep before the figures give way. */
+const MIN_WORDS = 16;
 
 /** One group's line: a blank line above, as Pi's rows have, then the summary. */
 export class FoldRow implements Component {
@@ -164,24 +166,30 @@ export class FoldRow implements Component {
 		return lines;
 	}
 
+	/**
+	 * One block on the left: the glyph, the words, then the figures after a
+	 * `·`, as the end line reads. On a narrow line the words are cut first;
+	 * the figures go only when even short words wouldn't fit beside them.
+	 */
 	private draw(width: number, glyph: string, theme: FoldTheme | undefined): string[] {
 		const paint = (key: string, text: string) => {
 			try { return theme ? theme.fg(key, text) : text; } catch { return text; }
 		};
 		const { live } = this.facts;
-		const right = foldStats(this.facts).join(STATS_JOIN);
-		const rightWidth = visibleWidth(right);
-		const room = Math.max(1, width - 3 - (rightWidth ? rightWidth + 2 : 0));
+		const stats = foldStats(this.facts).join(STATS_JOIN);
 		const phrase = foldPhrase(this.facts);
 		const tone = live ? "text" : "toolOutput";
 		const words = paint(tone, phrase.said)
 			+ (phrase.failed ? paint(tone, ", ") + paint("error", phrase.failed) : "")
 			+ paint(tone, `${phrase.after ? `, ${phrase.after}` : ""}${live ? "…" : ""}`);
-		const left = truncateToWidth(words, room, "…");
-		const gap = Math.max(1, width - 1 - 2 - visibleWidth(left) - rightWidth);
-		const line = `${paint(live ? "accent" : "muted", glyph)} ${left}${" ".repeat(gap)}${paint("muted", right)}`;
+		const tail = stats ? `${STATS_JOIN}${stats}` : "";
+		const room = width - 3 - visibleWidth(tail);
+		const fits = room >= MIN_WORDS;
+		const left = truncateToWidth(words, Math.max(1, fits ? room : width - 3), "…");
+		const line = `${paint(live ? "accent" : "muted", glyph)} ${left}${fits ? paint("muted", tail) : ""}`;
 		return ["", truncateToWidth(line, width, "")];
 	}
+
 
 	invalidate(): void {
 		this.drawing = undefined;
