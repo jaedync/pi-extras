@@ -55,3 +55,13 @@ test("a notice Pi adds during a run stays in place but does not split the group"
 	const before = planFold([item("note", 1), item("tool")]);
 	assert.deepEqual(before.entries, [{ kind: "item", index: 0 }, { kind: "group", group: 0 }]);
 });
+
+test("a reply that thought and then spoke puts its thinking in a group but still shows", () => {
+	const alone = planFold([item("visible"), item("said"), item("tool")]);
+	assert.deepEqual(alone.groups.map((group) => [group.members, group.said]), [[[], [1]], [[2], []]]);
+	assert.deepEqual(alone.entries, [{ kind: "item", index: 0 }, { kind: "group", group: 0 }, { kind: "item", index: 1 }, { kind: "group", group: 1 }]);
+	assert.equal(alone.groups[0]!.last, false);
+	const after = planFold([item("tool"), item("said")]);
+	assert.deepEqual(after.groups.map((group) => [group.members, group.said]), [[[0], [1]]], "thinking after the calls joins their group");
+	assert.deepEqual(after.entries, [{ kind: "group", group: 0 }, { kind: "item", index: 1 }]);
+});

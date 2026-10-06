@@ -74,6 +74,7 @@ function stage(options: { mode?: string; layout?: boolean } = {}) {
 		reduced: () => true,
 		busy: () => busy,
 		now: () => 9_000,
+		thoughtMs: () => undefined,
 		frames: (tick) => {
 			ticks.push(tick);
 			return () => { stopped++; };

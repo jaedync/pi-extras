@@ -39,6 +39,8 @@ export interface FoldHost {
 	costOf(message: ReplyMessage): number;
 	/** When a call's result arrived, if known. */
 	toolEndedAt(toolCallId: string): number | undefined;
+	/** How long a reply thought, if known. */
+	thoughtMs(message: ReplyMessage): number | undefined;
 	/** Frames are wanted while a line is live, and not after. */
 	animate(live: boolean): void;
 	redraw(): void;
@@ -90,6 +92,11 @@ export function findTranscript(tui: unknown): Box | undefined {
 	return document.children[CHAT_AT] as unknown as Box;
 }
 
+/** Whether a reply thought (and so has thinking to fold). */
+export function thought(message: ReplyMessage | undefined): boolean {
+	return !!message?.content.some((part) => part.type === "thinking" && typeof part.thinking === "string" && part.thinking.trim() !== "");
+}
+
 /** Whether a reply shows anything but thinking: text, or a notice Pi adds for how it ended. */
 export function speaks(message: ReplyMessage | undefined): boolean {
 	if (!message) return false;
@@ -100,7 +107,10 @@ export function speaks(message: ReplyMessage | undefined): boolean {
 
 function classify(child: Component, height: number): PlanItem {
 	if (isToolRow(child)) return { kind: "tool", height };
-	if (isReply(child)) return { kind: speaks(child.lastMessage) ? "visible" : "work", height };
+	if (isReply(child)) {
+		const message = child.lastMessage;
+		return { kind: !speaks(message) ? "work" : thought(message) ? "said" : "visible", height };
+	}
 	if (child instanceof Spacer) return { kind: "spacer", height };
 	// Pi's status lines and notices (ThemedText extends Text) arrive mid-run and must not split a group.
 	if (child instanceof Text) return { kind: "note", height };
@@ -163,13 +173,13 @@ export class FoldRow implements Component {
 		const rightWidth = visibleWidth(right);
 		const room = Math.max(1, width - 3 - (rightWidth ? rightWidth + 2 : 0));
 		const phrase = foldPhrase(this.facts);
-		const tone = live ? "text" : "muted";
+		const tone = live ? "text" : "toolOutput";
 		const words = paint(tone, phrase.said)
 			+ (phrase.failed ? paint(tone, ", ") + paint("error", phrase.failed) : "")
 			+ paint(tone, `${phrase.after ? `, ${phrase.after}` : ""}${live ? "…" : ""}`);
 		const left = truncateToWidth(words, room, "…");
 		const gap = Math.max(1, width - 1 - 2 - visibleWidth(left) - rightWidth);
-		const line = `${paint(live ? "accent" : "dim", glyph)} ${left}${" ".repeat(gap)}${paint("dim", right)}`;
+		const line = `${paint(live ? "accent" : "muted", glyph)} ${left}${" ".repeat(gap)}${paint("muted", right)}`;
 		return ["", truncateToWidth(line, width, "")];
 	}
 
@@ -185,6 +195,9 @@ export class FoldRow implements Component {
 		return { handled: true };
 	}
 }
+
+/** The group's first row, folded or not: its line is kept by it. */
+const firstOf = (group: FoldGroup): number => Math.min(group.members[0] ?? Infinity, group.said[0] ?? Infinity);
 
 /** The reply each tool row belongs to: Pi adds a reply's rows right after it. */
 function ownerOf(children: readonly Component[], index: number): Reply | undefined {
@@ -226,10 +239,10 @@ export class FoldView {
 		const plan = planFold(children.map((child, index) => classify(child, drawn[index]!.length)));
 		// A click flips a group from what Pi's expand key (ctrl+o) chose for every row.
 		const shown = plan.groups.map((group) => {
-			const row = this.rowFor(children[group.members[0]!]!);
+			const row = this.rowFor(children[firstOf(group)]!);
 			return row.open !== group.members.some((index) => (children[index] as Partial<ToolRow>).expanded === true);
 		});
-		this.rebuild(children, drawn, plan.groups.flatMap((group, at) => (shown[at] ? group.members : [])), width);
+		this.rebuild(children, drawn, plan.groups.flatMap((group, at) => (shown[at] ? [...group.members, ...group.said] : [])), width);
 		const lines: string[] = [];
 		const layout: Array<{ component: Component; height: number }> = [];
 		const put = (component: Component, rows: readonly string[]) => {
@@ -243,7 +256,7 @@ export class FoldView {
 				continue;
 			}
 			const group = plan.groups[entry.group]!;
-			const row = this.rowFor(children[group.members[0]!]!);
+			const row = this.rowFor(children[firstOf(group)]!);
 			const facts = this.factsFor(row, children, group);
 			live ||= facts.live;
 			if (!shown[entry.group] && !facts.live && facts.tools.length === 0 && facts.tokens === 0) continue;
@@ -298,6 +311,8 @@ export class FoldView {
 				key += child.isStreaming ? "s," : "r,";
 			}
 		}
+		// A reply streaming its words below the line has finished the group's work, so it doesn't keep the line live.
+		for (const index of group.said) key += (children[index] as Partial<Reply>).isStreaming ? "S," : "R,";
 		const live = busy && (group.last || changing);
 		const kept = this.settled.get(row);
 		if (!live && kept?.key === key) return kept.facts;
@@ -307,9 +322,14 @@ export class FoldView {
 		return facts;
 	}
 
+	private thoughtOf(message: ReplyMessage): number | undefined {
+		try { return this.host.thoughtMs(message); } catch { return undefined; }
+	}
+
 	private facts(children: readonly Component[], group: FoldGroup, live: boolean, busy: boolean): FoldFacts {
 		const tools: ToolFact[] = [];
 		const replies = new Set<Reply>();
+		const callers = new Set<Reply>();
 		let ended: number | undefined;
 		for (const index of group.members) {
 			const child = children[index]!;
@@ -319,24 +339,39 @@ export class FoldView {
 			}
 			if (!isToolRow(child)) continue;
 			const owner = ownerOf(children, index);
-			if (owner) replies.add(owner);
+			// A reply that thought and spoke counts once, in the group that holds its thinking;
+			// here its calls start when it stopped thinking.
+			if (owner && speaks(owner.lastMessage) && thought(owner.lastMessage)) callers.add(owner);
+			else if (owner) replies.add(owner);
 			const running = child.isPartial && busy;
 			tools.push({ name: child.toolName, running, failed: !child.isPartial && child.result?.isError === true });
 			const at = this.host.toolEndedAt(child.toolCallId);
 			if (at !== undefined) ended = Math.max(ended ?? at, at);
 		}
+		for (const index of group.said) {
+			const child = children[index];
+			if (isReply(child)) replies.add(child);
+		}
 		let tokens = 0;
 		let cost = 0;
 		let started: number | undefined;
+		for (const caller of callers) {
+			const message = caller.lastMessage;
+			if (typeof message?.timestamp !== "number") continue;
+			const at = message.timestamp + (this.thoughtOf(message) ?? 0);
+			started = Math.min(started ?? at, at);
+		}
 		for (const reply of replies) {
 			const message = reply.lastMessage;
 			if (!message) continue;
 			tokens += tokensOf(message, reply.isStreaming);
 			try { cost += this.host.costOf(message); } catch { /* A reply without a price adds nothing. */ }
-			if (typeof message.timestamp === "number") {
-				started = Math.min(started ?? message.timestamp, message.timestamp);
-				if (!live && reply.isStreaming === false && ended === undefined) ended = message.timestamp;
-			}
+			if (typeof message.timestamp !== "number") continue;
+			started = Math.min(started ?? message.timestamp, message.timestamp);
+			// A reply ends its share of the work when it stops thinking; without a time, where it started.
+			const thoughtFor = this.thoughtOf(message);
+			const at = message.timestamp + (thoughtFor ?? 0);
+			if (!reply.isStreaming || thoughtFor !== undefined) ended = Math.max(ended ?? at, at);
 		}
 		const end = live ? this.host.now() : ended;
 		const elapsedMs = started !== undefined && end !== undefined && end > started ? end - started : undefined;

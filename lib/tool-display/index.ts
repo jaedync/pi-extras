@@ -131,6 +131,20 @@ export function applyArgs(settings: DisplaySettings, args: string): DisplaySetti
 	return undefined;
 }
 
+/** How long a reply thought in all: the sum of its timed thinking runs, or undefined when none was timed. */
+export function thoughtFor(message: { timestamp?: number; content: readonly { type: string }[] }, duration: (message: never, run: number) => number | undefined): number | undefined {
+	let runs = 0;
+	message.content.forEach((part, index) => {
+		if (part.type === "thinking" && message.content[index - 1]?.type !== "thinking") runs++;
+	});
+	let total: number | undefined;
+	for (let run = 0; run < runs; run++) {
+		const ms = duration(message as never, run);
+		if (ms !== undefined) total = (total ?? 0) + ms;
+	}
+	return total;
+}
+
 /** Layouts for pi-extras's own tools, by the mark on their definitions. */
 const OWN_SPECS: Partial<Record<RowKind, (name: string) => ToolSpec>> = {
 	kagi: webSearchSpec,
@@ -179,6 +193,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		busy: run.busy,
 		now: () => deps.host.now(),
 		frames: (tick) => foldClock.add(tick),
+		thoughtMs: (message) => thoughtFor(message, thinkingDuration),
 	});
 
 	const kit: Kit = {

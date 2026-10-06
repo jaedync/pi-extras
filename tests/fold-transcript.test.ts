@@ -67,6 +67,7 @@ function host(over: Partial<FoldHost> = {}) {
 		reduced: () => true,
 		costOf: (message) => message.usage?.cost?.total ?? 0,
 		toolEndedAt: (id) => ({ a: 3_000, b: 5_500 } as Record<string, number>)[id],
+		thoughtMs: () => undefined,
 		animate: (live) => { calls.animate.push(live); },
 		redraw: () => { calls.redraws++; },
 		...over,
@@ -255,4 +256,34 @@ test("a settled group is not worked out again on every frame", () => {
 	const count = priced;
 	assert.deepEqual(view.render(chat, 80), first);
 	assert.equal(priced, count);
+});
+
+const thinkingThenWords = (over: Partial<ReplyMessage> = {}): ReplyMessage => ({ content: [{ type: "thinking", thinking: "plan" }, { type: "text", text: "ok" }], usage: { output: 30, cost: { total: 0.02 } }, timestamp: 1_000, ...over });
+
+test("a reply that thought and then spoke keeps a Thought line above its words", () => {
+	const { value } = host({ thoughtMs: () => 2_500 });
+	const chat = chatOf([new Row(["", " prompt"]), new Reply(thinkingThenWords())]);
+	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt", "", "▸ Thought  30 tokens · $0.020 · 2.5s", "", "● said"]);
+});
+
+test("its thinking counts once: in the Thought line, not again in the line of the calls it made", () => {
+	const { value } = host({ thoughtMs: () => 500 });
+	const narrating = new Reply(thinkingThenWords({ content: [{ type: "thinking", thinking: "plan" }, { type: "text", text: "looking" }, { type: "toolCall" }] }));
+	const chat = chatOf([narrating, new ToolRow("read", "a"), new Reply(said())]);
+	const lines = text(viewOf(value).render(chat, 80));
+	assert.equal(lines[1], "▸ Thought  30 tokens · $0.020 · 0.5s");
+	assert.equal(lines[5], "▸ Read 1 file  1 tool · 1.5s", "no reply of its own to count; its time starts when the reply stopped thinking (1.0s + 0.5s) and runs to the result (3.0s)");
+});
+
+test("a reply streaming its words below a finished Thought line does not keep the line live", () => {
+	const { value } = host({ busy: () => true });
+	const chat = chatOf([new ToolRow("read", "a"), new Reply(thinkingThenWords(), true)]);
+	assert.match(text(viewOf(value).render(chat, 80))[1]!, /^▸ Read 1 file  /);
+});
+
+test("a settled line uses the theme's brighter grays", () => {
+	const keys: string[] = [];
+	const { value } = host({ theme: () => ({ fg: (key: string, text: string) => { keys.push(key); return text; } }) });
+	viewOf(value).render(chatOf([new ToolRow("read", "a")]), 80);
+	assert.deepEqual([...new Set(keys)].sort(), ["muted", "toolOutput"]);
 });

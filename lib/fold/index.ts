@@ -14,6 +14,8 @@ export interface FoldDeps {
 	now(): number;
 	/** Calls `tick` on every frame until the returned function is called. */
 	frames(tick: () => void): () => void;
+	/** How long a reply thought, if known. */
+	thoughtMs(message: ReplyMessage): number | undefined;
 }
 
 interface Tui {
@@ -115,6 +117,7 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 			reduced: deps.reduced,
 			costOf,
 			toolEndedAt: (id) => ended.get(id),
+			thoughtMs: deps.thoughtMs,
 			animate,
 			redraw: () => found.requestRender(),
 		});

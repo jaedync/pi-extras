@@ -660,7 +660,9 @@ The left side counts the calls by kind. The right side shows the number of
 calls, the output tokens and cost of the replies that made them, and the time.
 While the model works, the line is live: a spinner turns, the kind that runs
 now reads `running 1 command`, and the figures count up. When the model
-thinks between calls, the line ends with `thinking`. The live thinking tail
+thinks between calls, the line ends with `thinking`. A reply that thinks
+and then writes keeps its thinking in a line above its words: the line of the
+calls before it, or a `▸ Thought` line of its own. The live thinking tail
 above the editor is not shown. Click a line to open its run and see every row
 and thinking block. Click it again to close the run. ctrl+o opens every run.
 The end line of a prompt also shows the totals of the prompt:

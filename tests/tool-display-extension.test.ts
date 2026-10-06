@@ -12,7 +12,7 @@ import { CHAIN_ENTRY, CHAIN_EVENT } from "../lib/chain/run.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount } from "../lib/tool-count.ts";
 import { forgetLate, lateRows, offerRows } from "../lib/late-rows.ts";
 import { markRow, rowKind, TOOL_ROW } from "../lib/tool-row.ts";
-import { applyArgs, countArg, registerToolDisplay, toolDisplayEnabled, TOOL_NAMES, withDisplay, type ToolDisplayDeps } from "../lib/tool-display/index.ts";
+import { applyArgs, countArg, registerToolDisplay, thoughtFor, toolDisplayEnabled, TOOL_NAMES, withDisplay, type ToolDisplayDeps } from "../lib/tool-display/index.ts";
 import { DEFAULT_SETTINGS, readSettings, writeSettings, type DisplaySettings } from "../lib/tool-display/settings.ts";
 import { fullscreen } from "./support/fullscreen.ts";
 import { quiet } from "./support/quiet-theme.ts";
@@ -437,4 +437,11 @@ test("rows a reload builds before session start are rebuilt once it runs, tools 
 		h.fire("session_shutdown");
 	}
 	assert.equal(lateRows("tool").length, 0, "a session's end starts the list over");
+});
+
+test("a reply's thinking time is the sum of its timed runs", () => {
+	const message = { timestamp: 1, content: [{ type: "thinking" }, { type: "thinking" }, { type: "text" }, { type: "thinking" }] };
+	assert.equal(thoughtFor(message, (_m, run) => [1_000, 500][run]), 1_500);
+	assert.equal(thoughtFor(message, () => undefined), undefined);
+	assert.equal(thoughtFor({ content: [{ type: "text" }] }, () => 9), undefined);
 });
