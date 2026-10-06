@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.22.5 - 2026-10-06
+
+### Changed
+
+- Tool Display, folded mode: tools without a kind of their own, such as MCP
+  tools, are counted together (`used 44 tools`, or `used 2 other tools` after
+  the known kinds). Only one such tool with a short name is named. When the
+  words do not fit the width, the line shows the total count:
+  `● Used 45 tools, ↑681k ↓6.9k 2m21s`.
+- Tool Display, folded mode: the figures follow one comma, with spaces between
+  them, and without the word "tokens". The end line drops "tokens" too:
+  `π Worked for 11s, 5 tools, ↑1.2M ↓1.6k, $0.30, done 1:26 PM`.
+
 ## 0.22.4 - 2026-10-06
 
 ### Changed
