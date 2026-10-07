@@ -865,11 +865,15 @@ and tokens (`in` counts cached prompt tokens too), and the first lines of the
 report under it. When its answer is already on screen, the report stays one
 line and a click unfolds its text.
 Each agent has a row above the editor:
-`◆ reviewer  1m02s  $0.21  opus high  ∴ thinking`, its name, how long this run
-has taken, what it has cost, its model and thinking level, then what it is
-doing right now. What it is doing comes last, so a narrow terminal cuts it
-and keeps the cost and model. Names, times, costs and models line up, so what
-each agent is doing starts in one column; once it has ended, `✓`, `✗` or `■`
+`◆ reviewer  1m02s  48k 24%  $0.21  opus high  ∴ thinking`, its name, how
+long this run has taken, its context (the size after its last reply and that
+size's share of the model's window), what it has cost, its model and thinking
+level, then what it is doing right now. The percent turns amber above 70 and
+red above 90, as the footer does for main's context. After a compaction the
+size is `?` until the next reply, and a finished agent keeps its last size,
+which is where a resume starts. What it is doing comes last, so a narrow
+terminal cuts it and keeps the other facts. Names, times, context figures,
+costs and models line up, so what each agent is doing starts in one column; once it has ended, `✓`, `✗` or `■`
 takes the spinner's place. What it is doing moves the way
 main's own spinner does for the same work, so thinking, writing, a tool call (in the tool color)
 or a compaction look alike everywhere; a question waits in amber. Children of
@@ -898,9 +902,10 @@ the same look Tool Display, Copy Blocks and the thinking tail give main, and
 the reply it is writing streams in. A click on a row works as it does in main.
 The chat sits on a wash of the agent's provider color, so it never reads as
 main. Its live row is the title bar, and a message box sits between two rules
-in the agent's color, as Pi's editor does; the top rule carries its context
-fill, tool calls, runs, and whether it is read-only. What other agents, you
-or main told it reads as conversation rows, not as the text its model reads:
+in the agent's color, as Pi's editor does; the top rule carries its tool
+calls, runs, and whether it is read-only (its context is in the title bar).
+What other agents, you or main told it reads as conversation rows, not as the
+text its model reads:
 `→ reviewer  you wrote` or `main asks` over the message, `◆ finder → reviewer
 note` in the sender's color, and `◆ lead-a reported` for a report from one
 of its own children. Type and press Enter to write to it (steered in while it

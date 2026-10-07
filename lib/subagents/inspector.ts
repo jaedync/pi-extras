@@ -85,7 +85,7 @@ export class AgentView implements SheetSource {
 		return this.source.record()?.name ?? "Subagent";
 	}
 
-	/** Its live row: who, how long, spend, model, then what it is doing. */
+	/** Its live row: who, how long, how full, spend, model, then what it is doing. */
 	titleLine(width: number): string {
 		const record = this.source.record();
 		if (!record) return this.paint("warning", "This agent is gone.");
@@ -138,9 +138,9 @@ export class AgentView implements SheetSource {
 	}
 
 	private facts(record: AgentRecord): string {
-		const context = record.contextTokens && record.contextWindow ? `ctx ${Math.round((100 * record.contextTokens) / record.contextWindow)}%` : "";
+		// Its context is in the row above.
 		const calls = `${record.toolCalls} tool ${record.toolCalls === 1 ? "call" : "calls"}`;
-		return [context, calls, record.runs > 1 && `${record.runs} runs`, record.readOnly && "read-only", record.parent !== "main" && `under ${record.parent}`].filter(Boolean).join(" · ");
+		return [calls, record.runs > 1 && `${record.runs} runs`, record.readOnly && "read-only", record.parent !== "main" && `under ${record.parent}`].filter(Boolean).join(" · ");
 	}
 
 	keys(): readonly SheetKey[] {

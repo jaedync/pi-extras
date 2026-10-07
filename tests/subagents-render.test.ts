@@ -93,7 +93,7 @@ test("a waited agent shows one compact presence line with animated activity, the
 	let current = record;
 	const row = subagentCallRow({ task: "Count the files" }, theme, context, () => current);
 	const lines = row.render(100).map(strip);
-	assert.match(lines[0]!, /^ {2}◆ count-lib  3\.0s  \$0\.0021  gpt-6-luna  \S{3} bash ls lib/);
+	assert.match(lines[0]!, /^ {2}◆ count-lib  3\.0s  14k 5%  \$0\.0021  gpt-6-luna  \S{3} bash ls lib/);
 	assert.equal(lines.length, 1);
 	assert.doesNotMatch(row.render(100)[0]!, /\x1b\[48;|▍/);
 	assert.doesNotMatch(lines.join("\n"), /Count the files/);

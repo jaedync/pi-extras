@@ -2,7 +2,8 @@ import { test } from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { quiet } from "./support/quiet-theme.ts";
 import assert from "node:assert/strict";
-import { agentRows, createAgentsWidget, costText, listLabel, nameSegs, pendingLines, rowColumns, runTime, presenceLine, rowSegs, shortModel } from "../lib/subagents/widget.ts";
+import { agentRows, contextFigures, createAgentsWidget, costText, listLabel, nameSegs, pendingLines, rowColumns, runTime, presenceLine, rowSegs, shortModel } from "../lib/subagents/widget.ts";
+import { contextHeat } from "../lib/status-plus-render.ts";
 import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount } from "../lib/subagents/overflow.ts";
 import { AGENT_HUE, agentHue, doingGlyph, doingOf } from "../lib/band/agent-look.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
@@ -25,7 +26,7 @@ test("rows show live agents and finished ones whose report is queued, children u
 	const rows = agentRows(records, new Set(["reported-soon"]));
 	assert.deepEqual(rows.map((row) => [row.record.name, row.depth]), [["lead", 0], ["helper", 1], ["reported-soon", 0]]);
 	const columns = rowColumns(rows, 66_000);
-	assert.deepEqual(columns, { name: 13, time: 5, cost: 0, model: 15 });
+	assert.deepEqual(columns, { name: 13, time: 5, tokens: 0, percent: 0, cost: 0, model: 15 });
 	const glyph = doingGlyph("tool", 0, "reduced").glyph;
 	// Name, time and model line up, so what each is doing starts in one column, last, where a narrow terminal cuts it.
 	assert.equal(text(rowSegs(rows[0]!, 66_000, "reduced", columns)), `◆ ${"lead".padEnd(columns.name)}  1m05s  gpt-6-luna high  ${glyph} bash npm test`);
@@ -93,7 +94,7 @@ test("the control line says how many more and what they are doing, then offers v
 	assert.equal(fixed.toggle, null);
 });
 
-test("presence orders name, time, spend and model before what it is doing, with no background or rail", () => {
+test("presence orders name, time, context, spend and model before what it is doing, with no background or rail", () => {
 	const busy = record("x", { contextTokens: 50_000, contextWindow: 200_000, usage: { ...NO_USAGE, cost: 0.0123 } });
 	assert.equal(costText(busy), "$0.012");
 	assert.equal(runTime(busy, 66_000), "1m05s");
@@ -101,8 +102,42 @@ test("presence orders name, time, spend and model before what it is doing, with 
 	assert.equal(costText(record("free")), "");
 	assert.equal(runTime(record("q", { state: "queued", startedAt: undefined }), 5_000), undefined);
 	const line = presenceLine(quiet() as never, { record: busy, depth: 0 }, 100, 66_000, "reduced");
-	assert.equal(stripTerminalSequences(line).trimEnd(), `  ◆ x  1m05s  $0.012  gpt-6-luna  ${doingGlyph("tool", 66_000, "reduced").glyph} bash npm test`);
+	assert.equal(stripTerminalSequences(line).trimEnd(), `  ◆ x  1m05s  50k 25%  $0.012  gpt-6-luna  ${doingGlyph("tool", 66_000, "reduced").glyph} bash npm test`);
 	assert.doesNotMatch(line, /\x1b\[48;|▍/);
+});
+
+test("context is its size after the last reply and its share of the window, warming as main's footer does", () => {
+	assert.deepEqual([contextHeat(70), contextHeat(70.5), contextHeat(90), contextHeat(90.5)], ["dim", "warning", "warning", "error"]);
+	assert.deepEqual(contextFigures(record("a", { contextTokens: 48_200, contextWindow: 200_000 })), { tokens: "48k", percent: "24%", heat: "dim" });
+	assert.deepEqual(contextFigures(record("b", { contextTokens: 158_000, contextWindow: 200_000 })), { tokens: "158k", percent: "79%", heat: "warning" });
+	assert.deepEqual(contextFigures(record("c", { contextTokens: 247_000, contextWindow: 272_000 })), { tokens: "247k", percent: "91%", heat: "error" });
+	// Pi's rule: after a compaction the size is unknown until the next reply.
+	assert.deepEqual(contextFigures(record("d", { contextWindow: 200_000 })), { tokens: "?", percent: "", heat: "dim" });
+	assert.deepEqual(contextFigures(record("e", { contextTokens: 9_400 })), { tokens: "9.4k", percent: "", heat: "dim" }, "no window, no share");
+	assert.equal(contextFigures(record("f")), undefined, "nothing before its first reply");
+	assert.deepEqual(contextFigures(record("g", { state: "idle", contextTokens: 31_000, contextWindow: 200_000 }))?.percent, "16%", "a finished agent keeps its last size");
+});
+
+test("context sits between time and spend, its tokens and percent each lined up on the right", () => {
+	const cost = (dollars: number) => ({ ...NO_USAGE, cost: dollars });
+	const rows = [
+		{ record: record("lead", { contextTokens: 48_200, contextWindow: 200_000, usage: cost(2.15) }), depth: 0 },
+		{ record: record("aide", { contextTokens: 12_100, contextWindow: 200_000, usage: cost(0.31) }), depth: 0 },
+		{ record: record("full", { contextTokens: 247_000, contextWindow: 272_000, usage: cost(9.12) }), depth: 0 },
+		{ record: record("packed", { contextWindow: 200_000, usage: cost(6.4) }), depth: 0 },
+		{ record: record("fresh"), depth: 0 },
+	];
+	const columns = rowColumns(rows, 60_000);
+	assert.deepEqual({ tokens: columns.tokens, percent: columns.percent }, { tokens: 4, percent: 3 });
+	const lines = rows.map((row) => stripTerminalSequences(presenceLine(quiet() as never, row, 120, 60_000, "reduced", columns)));
+	assert.match(lines[0]!, /59\.0s {3}48k 24% {2}\$2\.15 {2}gpt-6-luna/);
+	assert.match(lines[1]!, /59\.0s {3}12k {2}6% {2}\$0\.31/);
+	assert.match(lines[2]!, /59\.0s {2}247k 91% {2}\$9\.12/);
+	assert.match(lines[3]!, /59\.0s {5}\? {6}\$6\.40/);
+	assert.equal(new Set(lines.slice(0, 3).map((line) => line.indexOf("%"))).size, 1);
+	assert.equal(new Set(lines.map((line) => line.indexOf("gpt-6-luna"))).size, 1, "an agent with no size yet opens no hole");
+	const heatOf = (index: number, text: string) => rowSegs(rows[index]!, 60_000, "reduced", columns).find((seg) => seg.text.trim() === text)?.color;
+	assert.deepEqual([heatOf(0, "24%"), heatOf(2, "91%"), heatOf(0, "48k")], ["dim", "error", "dim"]);
 });
 
 test("a narrow row cuts what the agent is doing, never its spend or model", () => {
@@ -180,6 +215,7 @@ test("the /subagents picker says what each agent is, did and cost", () => {
 	const done = record("reader", { state: "idle", task: "Report the value of REPORT_MAX_CHARS in format.ts", startedAt: 1_000, endedAt: 12_000, usage: { ...NO_USAGE, cost: 0.0012 } });
 	assert.equal(listLabel(done, 8, 20_000), "reader    finished  gpt-6-luna  $0.0012  11.0s  Report the value of REPORT_MAX_CHARS in format.ts");
 	assert.equal(listLabel(record("scan", { state: "queued", startedAt: undefined }), 4, 20_000), "scan  queued    gpt-6-luna  t");
+	assert.equal(listLabel(record("big", { state: "idle", endedAt: 12_000, contextTokens: 48_200, contextWindow: 200_000 }), 3, 20_000), "big  finished  gpt-6-luna  11.0s  48k 24%  t");
 });
 
 test("a picker line fits the width it is given", () => {
@@ -200,9 +236,9 @@ test("an agent's name and its own spinner wear its provider's color; tool work k
 	const codex = agentHue("openai-codex/gpt-6-luna");
 	assert.deepEqual(nameSegs(record("lead")).map((seg) => seg.color), [codex, codex]);
 	assert.deepEqual(nameSegs(record("local", { model: "redarch-lora/qwen3" })).map((seg) => seg.color), [AGENT_HUE, AGENT_HUE]);
-	const thinking = rowSegs({ record: record("lead", { activity: null }), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, cost: 0, model: 0 });
+	const thinking = rowSegs({ record: record("lead", { activity: null }), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, tokens: 0, percent: 0, cost: 0, model: 0 });
 	assert.equal(thinking.find((seg) => seg.text === doingGlyph("thinking", 5_000, "reduced").glyph)?.color, codex);
-	const tool = rowSegs({ record: record("lead"), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, cost: 0, model: 0 });
+	const tool = rowSegs({ record: record("lead"), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, tokens: 0, percent: 0, cost: 0, model: 0 });
 	assert.equal(tool.find((seg) => seg.text === doingGlyph("tool", 5_000, "reduced").glyph)?.color, "accent");
 });
 

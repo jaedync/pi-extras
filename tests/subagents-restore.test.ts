@@ -27,6 +27,22 @@ test("the child index atomically preserves records and refuses another parent", 
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("the index keeps each child's context size and drops one it can't use", () => {
+	const dir = mkdtempSync(join(tmpdir(), "child-index-"));
+	try {
+		const file = join(dir, "index.json");
+		new ChildIndex(dir, "parent-1", dir).save([record({ contextTokens: 48_200, contextWindow: 200_000 })]);
+		const [kept] = new ChildIndex(dir, "parent-1", dir).load(warn);
+		assert.deepEqual([kept?.contextTokens, kept?.contextWindow], [48_200, 200_000]);
+		const data = JSON.parse(readFileSync(file, "utf8"));
+		data.records[0] = { ...data.records[0], contextTokens: "lots", contextWindow: -5 };
+		writeFileSync(file, JSON.stringify(data));
+		const [dropped] = new ChildIndex(dir, "parent-1", dir).load(warn);
+		assert.equal(dropped?.name, "helper", "the child itself is still restored");
+		assert.deepEqual(["contextTokens" in dropped!, "contextWindow" in dropped!], [false, false]);
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("legacy restoration joins tool arguments to result names and session files", () => {
 	const records = legacyRecords([
 		{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "subagent", arguments: { task: "Check the files", name: "hard-tasks", model: "cheap", thinking: "high", readOnly: true } }] } },

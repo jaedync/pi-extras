@@ -21,6 +21,7 @@ import {
 	cacheState as _cacheState,
 	compareProviderIds,
 	contextBar,
+	contextHeat,
 	fadeFg,
 	formatTokens,
 	limitText,
@@ -108,12 +109,12 @@ function fieldSeparator(compact: boolean): string {
 	return compact ? " " : " · ";
 }
 
-/** Everything is dim unless it needs attention; the context figure turns at 70 and 90 percent. */
+/** Everything is dim unless it needs attention; the context figure turns at 70 and 90 percent (contextHeat). */
 function contextText(paint: Painter, model: FooterModel): string {
 	const used = model.context.usedTokens === undefined ? "?" : formatTokens(model.context.usedTokens);
 	const text = `${used} / ${formatTokens(model.context.windowTokens)}`;
 	const pct = model.context.percent ?? 0;
-	return paint.fg(pct > 90 ? "error" : pct > 70 ? "warning" : "dim", text);
+	return paint.fg(contextHeat(pct), text);
 }
 
 /**

@@ -3,11 +3,12 @@
  * under their parent, then any messages queued for main that Pi has not
  * appended yet. A row is the agent's presence, its ◆ and name in its color with
  * no band behind it (band/agent-look.ts): who it is, how long it has run,
- * what it has cost and its model, then what it is doing right now (moving as
+ * how full its context is, what it has cost and its model, then what it is
+ * doing right now (moving as
  * main's spinner does for the same work). What it is doing comes last because
  * it is the only part whose length has no bound, so a narrow terminal cuts it
- * and keeps the rest. Name, time, spend and model line up across rows, so
- * what each agent is doing starts in one column. A finished
+ * and keeps the rest. Name, time, context, spend and model line up across
+ * rows, so what each agent is doing starts in one column. A finished
  * agent keeps its row until its report is in the transcript. Past four
  * agents, the last line is a control line that opens the agents view or
  * expands the rows (overflow.ts).
@@ -17,6 +18,7 @@ import { formatTime, type Motion, type Seg } from "../band/band.ts";
 import { agentHue, agentLine, avatarOf, doingGlyph, doingOf, endGlyph, spaced } from "../band/agent-look.ts";
 import { everyFrame } from "../band/clock.ts";
 import { formatMoney } from "../status-plus-logic.ts";
+import { contextHeat, formatTokens } from "../status-plus-render.ts";
 import type { PendingItem } from "./deliver.ts";
 import { MAIN } from "./names.ts";
 import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount, type ControlLine, type Span } from "./overflow.ts";
@@ -92,21 +94,25 @@ export function nameSegs(record: AgentRecord, depth = 0, width = 0): Seg[] {
 	];
 }
 
-/** Column widths that line rows up: the widest nested name, run time, spend and model among them. */
+/** Column widths that line rows up: the widest nested name, run time, context tokens and percent, spend and model among them. */
 export interface RowColumns {
 	readonly name: number;
 	readonly time: number;
+	readonly tokens: number;
+	readonly percent: number;
 	readonly cost: number;
 	readonly model: number;
 }
 
-const NO_COLUMNS: RowColumns = { name: 0, time: 0, cost: 0, model: 0 };
+const NO_COLUMNS: RowColumns = { name: 0, time: 0, tokens: 0, percent: 0, cost: 0, model: 0 };
 
 export function rowColumns(rows: readonly AgentRow[], now = 0): RowColumns {
 	const widest = (width: (row: AgentRow) => number) => Math.max(0, ...rows.map(width));
 	return {
 		name: widest((row) => nestText(row.depth).length + row.record.name.length),
 		time: widest((row) => runTime(row.record, now)?.length ?? 0),
+		tokens: widest((row) => contextFigures(row.record)?.tokens.length ?? 0),
+		percent: widest((row) => contextFigures(row.record)?.percent.length ?? 0),
 		cost: widest((row) => costText(row.record).length),
 		model: widest((row) => modelText(row.record).length),
 	};
@@ -116,6 +122,37 @@ export function rowColumns(rows: readonly AgentRow[], now = 0): RowColumns {
 export function runTime(record: AgentRecord, now: number): string | undefined {
 	// Restored records saved before run starts were kept have only createdAt, as in format.ts.
 	return record.state === "queued" ? undefined : formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt));
+}
+
+export interface ContextFigures {
+	readonly tokens: string;
+	readonly percent: string;
+	readonly heat: "dim" | "warning" | "error";
+}
+
+/**
+ * Its context size after the last reply and that size's share of the model's
+ * window, colored as main's footer colors its own: `?` after a compaction
+ * until the next reply sizes it, nothing before its first reply. A finished
+ * agent keeps its last size, which is what a resume starts from.
+ */
+export function contextFigures(record: Pick<AgentRecord, "contextTokens" | "contextWindow">): ContextFigures | undefined {
+	const { contextTokens: tokens, contextWindow: window } = record;
+	if (!tokens) return window ? { tokens: "?", percent: "", heat: "dim" } : undefined;
+	if (!window) return { tokens: formatTokens(tokens), percent: "", heat: "dim" };
+	const share = (100 * tokens) / window;
+	return { tokens: formatTokens(tokens), percent: `${Math.round(share)}%`, heat: contextHeat(share) };
+}
+
+/** Tokens and percent, each right-aligned in its own column so the digits line up; only the percent warms. */
+function contextCell(record: AgentRecord, columns: RowColumns): Seg[] {
+	const figures = contextFigures(record);
+	if (!figures && !columns.tokens) return [];
+	const percent = (figures?.percent ?? "").padStart(columns.percent);
+	return [
+		{ text: (figures?.tokens ?? "").padStart(columns.tokens), color: "dim" },
+		...(percent ? [{ text: " ", color: "dim" }, { text: percent, color: figures?.heat ?? "dim" }] : []),
+	];
 }
 
 /** What it has cost so far; empty while it is free. */
@@ -128,7 +165,7 @@ const cell = (text: string, width: number, color: string, align: "left" | "right
 	text || width ? [{ text: align === "right" ? text.padStart(width) : text.padEnd(width), color }] : [];
 
 /**
- * Who, how long, what it has cost and its model, then what it is doing (a
+ * Who, how long, how full, what it has cost and its model, then what it is doing (a
  * glyph that moves for the work, or how it ended, and the words). Past the
  * width the words go first, so the facts always show.
  */
@@ -138,6 +175,7 @@ export function rowSegs(row: AgentRow, now = 0, motion: Motion = "full", columns
 	return spaced(
 		nameSegs(record, row.depth, columns.name),
 		cell(runTime(record, now) ?? "", columns.time, "text", "right"),
+		contextCell(record, columns),
 		cell(costText(record), columns.cost, "dim", "right"),
 		cell(modelText(record), columns.model, "dim", "left"),
 		[{ text: doing.glyph, color: doing.color }, { text: " ", color: "dim" }, statusWords(record, row.reportQueued === true)],
@@ -158,6 +196,8 @@ export function listLabel(record: AgentRecord, nameWidth: number, now: number, m
 	const parts = [record.name.padEnd(nameWidth), `${STATE_WORDS[record.state]}${record.orphaned ? " (orphan)" : ""}`.padEnd(8), shortModel(record.model)];
 	if (record.usage.cost > 0) parts.push(`$${formatMoney(record.usage.cost)}`);
 	if (record.state !== "queued") parts.push(formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt)));
+	const context = contextFigures(record);
+	if (context) parts.push([context.tokens, context.percent].filter(Boolean).join(" "));
 	parts.push(record.task.replace(/\s+/g, " ").trim());
 	const line = parts.join("  ");
 	return line.length > maxWidth ? `${line.slice(0, Math.max(1, maxWidth - 1))}…` : line;

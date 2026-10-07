@@ -46,6 +46,14 @@ interface IndexData {
 }
 
 /** Saved paths are used as tool and git arguments and shown in prompts, never as shell input. */
+const usableSize = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
+
+/** A saved context size is only drawn, so one that is not a positive number is dropped, not the child. */
+function usableContext(record: AgentRecord): AgentRecord {
+	const { contextTokens, contextWindow, ...rest } = record;
+	return { ...rest, ...(usableSize(contextTokens) ? { contextTokens } : {}), ...(usableSize(contextWindow) ? { contextWindow } : {}) };
+}
+
 const savedPath = (value: unknown): boolean => typeof value === "string" && isAbsolute(value) && !CONTROL.test(value);
 
 const strings = (value: unknown): boolean => value === undefined || (Array.isArray(value) && value.every((item) => typeof item === "string"));
@@ -117,7 +125,7 @@ export class ChildIndex {
 		if (data.records.some((r) => r.parent === "main" ? r.depth !== 1 : byName.get(r.parent)?.depth !== r.depth - 1)) throw new Error("Invalid child parent or depth.");
 		if (data.records.some((r) => r.sessionFile && dirname(resolve(r.sessionFile)) !== resolve(this.dir))) throw new Error("Invalid child session path.");
 		this.data = data;
-		return data.records.map((r) => ({ ...r, usage: { ...r.usage } }));
+		return data.records.map((r) => ({ ...usableContext(r), usage: { ...r.usage } }));
 	}
 
 	update(records: readonly AgentRecord[], onError: (error: unknown) => void): void {

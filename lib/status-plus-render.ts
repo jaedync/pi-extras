@@ -172,6 +172,9 @@ export function toneForPct(pct: number): "dim" | "warning" | "error" {
 	return "dim";
 }
 
+/** How a context figure is colored: dim until it needs attention, warning above 70 percent of the window, error above 90. */
+export const contextHeat = (percent: number): "dim" | "warning" | "error" => (percent > 90 ? "error" : percent > 70 ? "warning" : "dim");
+
 export function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
