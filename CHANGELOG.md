@@ -2,6 +2,25 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.22.8 - 2026-10-07
+
+### Added
+
+- Subagents: each agent's row shows its context as `48k 24%`: the size after
+  its last reply and that size's share of the model's window. The percent
+  turns amber above 70 and red above 90, as the footer does for main. After
+  a compaction the size is `?` until the next reply, and a finished agent
+  keeps its last size. The widget, the agents view, the inspector's title
+  bar, the row of a child main waits on and the plain `/subagents` list all
+  show it.
+
+### Changed
+
+- Subagents: the inspector's top rule no longer shows `ctx N%`, because its
+  title bar shows the context.
+- Subagents: a restore drops a saved context size that is not a positive
+  number, and keeps the child.
+
 ## 0.22.7 - 2026-10-06
 
 ### Added
