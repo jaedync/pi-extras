@@ -2,6 +2,23 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.23.2 - 2026-10-08
+
+### Changed
+
+- Every provider that pi-extras has no color for, such as a local or
+  self-hosted server, now shares one muted olive. The footer uses it for the
+  provider's row and for the model name, and the subagent views use it for
+  the agent's `◆` and name. Before, the footer drew these providers in dim
+  gray and the subagent views in Pi's custom-message purple. An agent whose
+  model names no provider is still purple.
+
+### Fixed
+
+- Status Plus: a free provider's row shows only after it sent or made
+  tokens. A request that failed before its first token no longer adds a
+  `0 in · 0 out` row.
+
 ## 0.23.1 - 2026-10-08
 
 ### Fixed
