@@ -10,7 +10,7 @@
  * context, and this file only lays it out. Everything renders dim except the
  * model, the session total, and figures that need attention. A provider whose
  * models all cost nothing (a local or self-hosted server) gets a $0.00 row
- * after the paid ones once it has done work. Narrow terminals
+ * after the paid ones once it has used tokens. Narrow terminals
  * remove decorative dots first, then shorten the place, drop the row token
  * column, the reset column, airtime and fourth grid column. Reported token classes never merge;
  * when necessary the tokens get their own line before truncation.
@@ -318,10 +318,10 @@ export function renderFooter(model: FooterModel, width: number, paint: Painter):
 	return footerLayout(model, width, paint).lines;
 }
 
-/** A paid provider shows once it costs something; a free one once it has done work, even unreported. */
+/** A paid provider shows once it costs something; a free one once it has sent or made tokens (a failed request made none). */
 function shown(row: FooterRow): boolean {
 	if (row.cost > 0) return true;
-	return Boolean(row.free) && (row.airtimeMs > 0 || row.tokens.input > 0 || row.tokens.output > 0);
+	return Boolean(row.free) && (row.tokens.input > 0 || row.tokens.output > 0);
 }
 
 /** The footer's lines and where its tool figure landed, so a click on it can be recognized. */

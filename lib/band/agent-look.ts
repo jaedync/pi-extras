@@ -2,8 +2,9 @@
  * How a subagent looks wherever it shows: like someone talking in a
  * conversation, with no band behind it. A ◆ and its name in its provider's
  * color, the one the footer gives that provider, so whose model an agent runs
- * on reads before its model does; Pi's custom-message purple when the footer
- * has none. Then what it is doing and the facts about it, close together on
+ * on reads before its model does: the shared olive for a provider the footer
+ * has no color of its own for, and Pi's custom-message purple when the model
+ * names no provider. Then what it is doing and the facts about it, close together on
  * one line, and what it says set in under its name. Shell jobs are bands
  * that fill with their progress
  * (job-look.ts), so the two never read alike at a glance.
@@ -23,7 +24,7 @@ import { mix, parseAnsiColor, type Rgb } from "./color.ts";
 export const AVATAR = "◆";
 /** An agent that hasn't begun: queued, or its call still being written. */
 export const AVATAR_HOLLOW = "◇";
-/** The theme key an agent is drawn in when its provider has no color of its own. */
+/** The theme key an agent is drawn in when its model names no provider. */
 export const AGENT_HUE = "customMessageLabel";
 
 /** An agent's color from its `provider/model` ref, as a segment color. */

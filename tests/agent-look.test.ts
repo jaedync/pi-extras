@@ -4,7 +4,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { AGENT_HUE, AVATAR, agentBody, agentHue, agentLine, doingGlyph, doingOf, spaced } from "../lib/band/agent-look.ts";
 import { paintFg } from "../lib/band/band.ts";
 import { fgSgr } from "../lib/band/color.ts";
-import { providerColor } from "../lib/status-plus-render.ts";
+import { OTHER_PROVIDER, providerColor } from "../lib/status-plus-render.ts";
 import { MODE_SPINNERS, glyphAt } from "../lib/band/glyph.ts";
 import { colorOf } from "./support/tool-rows.ts";
 import { fgOf, quiet } from "./support/quiet-theme.ts";
@@ -73,12 +73,14 @@ test("reduced motion holds every glyph still", () => {
 	assert.equal(doingGlyph("thinking", 0, "reduced").glyph, doingGlyph("thinking", 777, "reduced").glyph);
 });
 
-test("an agent takes its provider's identity color from the footer, purple when the provider has none", () => {
+test("an agent takes its provider's identity color from the footer, the shared one for other providers, purple with no provider", () => {
 	const hex = (rgb: readonly number[]) => `#${rgb.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
 	assert.equal(agentHue("anthropic/claude-opus-5-5"), hex(providerColor("anthropic")!));
 	assert.equal(agentHue("openai-codex/gpt-6-luna"), hex(providerColor("openai-codex")!));
 	assert.notEqual(agentHue("anthropic/x"), agentHue("openai-codex/x"));
-	for (const model of [undefined, "", "gpt-6-luna", "redarch-lora/qwen3", "/x"]) assert.equal(agentHue(model), AGENT_HUE, String(model));
+	assert.equal(agentHue("redarch-lora/qwen3"), hex(OTHER_PROVIDER));
+	assert.equal(agentHue("fw01-halogen/halogen-qwen3.8-flash-next"), hex(OTHER_PROVIDER));
+	for (const model of [undefined, "", "gpt-6-luna", "/x"]) assert.equal(agentHue(model), AGENT_HUE, String(model));
 });
 
 test("a fixed color is set in the terminal's color mode, on a line and in plain text", () => {

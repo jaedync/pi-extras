@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { stripAnsi, visibleWidth } from "../lib/ansi.ts";
 import { formatIncrement } from "../lib/status-plus-spend.ts";
+import { OTHER_PROVIDER } from "../lib/status-plus-render.ts";
 import { footerLayout, renderFooter, type FooterModel, type FooterRow } from "../lib/status-plus-footer.ts";
 
 const paint = { fg: (_tone: string, text: string) => `\x1b[2m${text}\x1b[22m` };
@@ -239,9 +240,12 @@ test("model id wears its provider colour and the effort level Pi's thinking tone
 	const toned = { fg: (tone: string, text: string) => `<${tone}>${text}</${tone}>` };
 	const line = renderFooter(model({ rows: [], providerId: "anthropic", modelName: "claude-fable-5-1", thinkingLevel: "high" }), 200, toned)[0];
 	assert.match(line, /\x1b\[38;2;\d+;\d+;\d+mclaude-fable-5-1\x1b\[39m <thinkingHigh>high<\/thinkingHigh>/, line);
-	// Unknown provider falls back to the text tone; unknown level to dim.
-	const plain = renderFooter(model({ rows: [], providerId: "kimi-coding", modelName: "k2", thinkingLevel: "turbo" }), 200, toned)[0];
-	assert.ok(plain.includes("<text>k2</text> <dim>turbo</dim>"), plain);
+	// Another provider wears the shared color for other providers; an unknown level is dim.
+	const other = renderFooter(model({ rows: [], providerId: "kimi-coding", modelName: "k2", thinkingLevel: "turbo" }), 200, toned)[0];
+	assert.ok(other.includes(`\x1b[38;2;${OTHER_PROVIDER.join(";")}mk2\x1b[39m <dim>turbo</dim>`), other);
+	// With no model at all there is no provider to show.
+	const none = renderFooter(model({ rows: [], providerId: undefined, modelName: "no-model", thinkingLevel: undefined }), 200, toned)[0];
+	assert.ok(none.includes("<text>no-model</text>"), none);
 	assert.equal(columns(stripAnsi(line)).length, 3, "colouring never widens the cell");
 });
 
@@ -360,12 +364,14 @@ test("a free provider gets its own row after the paid ones: $0.00, its airtime a
 		...model().rows.slice(0, 2),
 		// No request yet: nothing to show.
 		{ ...FREE, id: "sparky", airtimeMs: 0, tokens: { input: 0, output: 0 } },
+		// A request that failed before any token: time, but no work.
 		{ ...FREE, id: "fw01", airtimeMs: 4_000, tokens: { input: 0, output: 0 } },
+		{ ...FREE, id: "fw01-halogen", airtimeMs: 41_000, tokens: { input: 9_318, output: 117 } },
 	];
 	const plain = renderFooter(model({ rows }), 200, paint).map(stripAnsi);
-	assert.deepEqual(plain.slice(2).map((line) => line.split(/\s+/)[0]), ["Ant", "Cdx", "aaa-local", "fw01"], plain.join("\n"));
+	assert.deepEqual(plain.slice(2).map((line) => line.split(/\s+/)[0]), ["Ant", "Cdx", "aaa-local", "fw01-halogen"], plain.join("\n"));
 	const local = plain.find((line) => line.startsWith("aaa-local"))!;
-	assert.match(local, /^aaa-local {2}\$0\.00 · +2m10s │ 120k in · 8\.0k out$/);
+	assert.match(local, /^aaa-local {2,}\$0\.00 · +2m10s │ 120k in · 8\.0k out$/);
 	// Its cells line up with the paid rows, and it has no empty limit cell after them.
 	assert.equal(local.indexOf("│"), plain[2]!.indexOf("│"), plain.join("\n"));
 	assert.equal(local.indexOf("$"), plain[2]!.indexOf("$"), plain.join("\n"));

@@ -70,6 +70,13 @@ export const PROVIDERS: Record<string, { label: string; color: Rgb }> = {
 	opencode: { label: "Zen", color: mutedRgb(150) }, // green
 };
 
+/**
+ * Every provider without an entry above (a local or self-hosted server, or any
+ * other custom one) shares this olive, in the hue gap between Ant and Zen and
+ * clear of the theme's amber warning, rose error and blue accent.
+ */
+export const OTHER_PROVIDER: Rgb = mutedRgb(110);
+
 const PROVIDER_ORDER = Object.keys(PROVIDERS);
 const WARN_PCT = 70;
 const CRITICAL_PCT = 90;
@@ -150,7 +157,7 @@ export function fadeFg(paint: Painter, hot: string, rest: string, t: number, tex
 
 /** The provider's identity colour, for anything that should read as "belongs to this provider". */
 export function providerColor(id: string | undefined): Rgb | undefined {
-	return id ? PROVIDERS[id]?.color : undefined;
+	return id ? PROVIDERS[id]?.color ?? OTHER_PROVIDER : undefined;
 }
 
 /** Pi's own thinking-level theme token for a level string, so the effort reads in the theme's ramp. */
@@ -161,9 +168,8 @@ export function thinkingTone(level: string | undefined): string {
 	return `thinking${key[0].toUpperCase()}${key.slice(1)}`;
 }
 
-export function providerTag(paint: Painter, id: string): string {
-	const known = PROVIDERS[id];
-	return known ? rgb(known.label, known.color) : paint.fg("dim", id);
+export function providerTag(_paint: Painter, id: string): string {
+	return rgb(PROVIDERS[id]?.label ?? id, providerColor(id) ?? OTHER_PROVIDER);
 }
 
 export function toneForPct(pct: number): "dim" | "warning" | "error" {

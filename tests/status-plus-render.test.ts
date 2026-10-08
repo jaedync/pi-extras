@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { stripAnsi } from "../lib/ansi.ts";
-import { PROVIDERS, barGradient, cacheState, cacheTtl, contextBar, fadeFg, formatTokens, limitText, mixRgb, providerTag, resetLabel, toneForPct, toneRgb } from "../lib/status-plus-render.ts";
+import { OTHER_PROVIDER, PROVIDERS, barGradient, cacheState, cacheTtl, contextBar, fadeFg, formatTokens, limitText, mixRgb, providerTag, resetLabel, toneForPct, toneRgb } from "../lib/status-plus-render.ts";
 
 const paint = { fg: (tone: string, text: string) => `<${tone}>${text}</${tone}>` };
 const NOON = Date.parse("2026-07-01T17:00:00Z"); // 12:00 Central, a Wednesday
@@ -88,7 +88,14 @@ test("token counts and provider tags", () => {
 	assert.equal(formatTokens(48_200), "48k");
 	assert.equal(formatTokens(1_234_567), "1.2M");
 	assert.equal(stripAnsi(providerTag(paint, "anthropic")), "Ant");
-	assert.equal(providerTag(paint, "kimi-coding"), "<dim>kimi-coding</dim>");
+	// Any provider pi-extras has no color for shares one, so a local server is not the gray of everything else.
+	assert.equal(providerTag(paint, "kimi-coding"), `\x1b[38;2;${OTHER_PROVIDER.join(";")}mkimi-coding\x1b[39m`);
+	assert.equal(providerTag(paint, "fw01-halogen"), providerTag(paint, "kimi-coding").replace("kimi-coding", "fw01-halogen"));
+});
+
+test("the color for other providers stands apart from every known provider", () => {
+	const distance = (a: readonly number[], b: readonly number[]) => Math.hypot(...a.map((value, i) => value - b[i]!));
+	for (const { color } of Object.values(PROVIDERS)) assert.ok(distance(OTHER_PROVIDER, color) > 40, String(color));
 });
 
 test("tone colours are read back from the painter and blended in linear light", () => {
