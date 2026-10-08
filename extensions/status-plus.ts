@@ -233,7 +233,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	}
 
 	function toolCounters(stats: SessionStats): FooterModel["counters"] {
-		const toolCalls = toolCount === "calls" ? stats.toolCalls : splitCount(stats.toolCalls, new Map([...liveChains, ...stats.chains]));
+		const toolCalls = toolCount === "calls" ? stats.toolCalls : splitCount(stats.toolCalls, stats.plans, new Map([...liveChains, ...stats.chains]));
 		return { prompts: stats.prompts, turns: stats.turns, toolCalls };
 	}
 

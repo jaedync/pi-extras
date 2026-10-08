@@ -251,7 +251,7 @@ test("/tool-display count switches the Status Plus tool count and tells it", asy
 	await h.run("count steps");
 	assert.deepEqual(h.counts, ["steps"]);
 	assert.deepEqual(h.emitted.at(-1), [TOOL_COUNT_EVENT, "steps"]);
-	assert.match(h.notes.at(-1)![0], /each step a chained command ran/);
+	assert.match(h.notes.at(-1)![0], /each step of a chained command and each call a script made/);
 	await h.run("COUNT calls");
 	assert.deepEqual(h.emitted.at(-1), [TOOL_COUNT_EVENT, "calls"]);
 	// It is not a Tool Display setting.
@@ -281,7 +281,9 @@ test("the tool count persists under statusPlus, and a split count adds the steps
 		rmSync(dir, { recursive: true, force: true });
 	}
 	// Three steps add two; a chain that ran none is still the one call it was.
-	assert.equal(splitCount(5, new Map([["a", 3], ["b", 1], ["c", 0]])), 7);
+	const plans = new Map([["a", [{ id: "a", planned: 3 }]], ["b", [{ id: "b", planned: 2 }]], ["c", [{ id: "c", planned: 4 }]]]);
+	assert.equal(splitCount(5, plans, new Map([["b", 1], ["c", 0]])), 7);
+	assert.equal(splitCount(5, plans, new Map()), 11);
 });
 
 test("/tool-display arguments", () => {

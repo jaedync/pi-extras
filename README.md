@@ -715,9 +715,12 @@ print, JSON and RPC runs keep Pi's tools untouched. If another extension
 already replaces one of Pi's built-in tools, Tool Display leaves that tool's
 definition alone and draws its rows as it does any other extension's.
 
-**Tool count.** Status Plus counts each step of a chained command as a tool,
-and every other call that ran as one; calls in a failed or aborted reply
-never run and are left out. Click the count in the footer to count one per
+**Tool count.** Status Plus counts tools as the folded lines do: each step
+of a chained command, each call a codemode script made, and every other call
+that ran as one. Subagents' calls count the same way. Where Tool Display saved
+the steps a chain ran, the count uses them, so a chain that stopped early
+counts what it ran; elsewhere it counts the steps in the command text. Calls
+in a failed or aborted reply never run and are left out. Click the count in the footer to count one per
 call instead, as Pi does, and click again to go back. The choice is saved.
 Where the terminal sends no clicks to the footer, `/tool-display count calls`
 does the same.

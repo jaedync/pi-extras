@@ -12,6 +12,7 @@ import { addChild, messageIdentity, supplementChild } from "./status-plus-usage.
 import { toEpochMs } from "./status-plus-logic.ts";
 import { CHAIN_ENTRY, savedRan } from "./chain/run.ts";
 import { EMPTY_PROVIDER, type ProviderStats } from "./status-plus-render.ts";
+import { commandsIn, isShell, type StepUnit } from "./tool-count.ts";
 
 export const BILLING_SOURCE_ENTRY = "status-plus-billing-source";
 
@@ -68,6 +69,12 @@ export interface SessionStats {
 	toolCalls: number;
 	/** Steps each chained bash call ran, by tool call id, from Tool Display's saved chains. */
 	chains: Map<string, number>;
+	/**
+	 * The parts of each counted call that is more than one step, by tool call id:
+	 * a chained shell call, or a script with the calls it made. Subagents and
+	 * scripts save no chains, so this is what their steps are counted from.
+	 */
+	plans: Map<string, readonly StepUnit[]>;
 	turns: number;
 	providers: Map<string, ProviderStats>;
 	tokens: TokenTotals;
@@ -80,6 +87,39 @@ export interface SessionStats {
 	cacheLongRetention?: boolean;
 	/** Newest compaction/branch summary; the old prompt-prefix cache is unreachable after it. */
 	lastContextResetMs?: number;
+}
+
+interface ToolCallBlock {
+	type: string;
+	id?: unknown;
+	name?: unknown;
+	arguments?: unknown;
+}
+
+// Saved entries never change and Pi hands back the same objects on each walk;
+// splitting every command again was most of a walk's cost after hashing.
+const shellPlans = new WeakMap<object, number>();
+const scriptPlans = new WeakMap<object, StepUnit[] | undefined>();
+
+function shellPlan(block: ToolCallBlock): number {
+	let planned = shellPlans.get(block);
+	if (planned === undefined) shellPlans.set(block, planned = commandsIn(block.arguments));
+	return planned;
+}
+
+/** The calls a script made, from the nestedCalls Pi saves on its result. */
+function scriptPlan(result: { toolCallId?: unknown; nestedCalls?: unknown }): StepUnit[] | undefined {
+	if (scriptPlans.has(result)) return scriptPlans.get(result);
+	const calls = (result.nestedCalls as { calls?: unknown } | undefined)?.calls;
+	const units = Array.isArray(calls) && calls.length > 0
+		? calls.map((raw, index): StepUnit => {
+			const call = (raw ?? {}) as { id?: unknown; name?: unknown; arguments?: unknown; args?: unknown };
+			const id = typeof call.id === "string" ? call.id : `${String(result.toolCallId)}/${index}`;
+			return { id, planned: typeof call.name === "string" && isShell(call.name) ? commandsIn(call.arguments ?? call.args) : 1 };
+		})
+		: undefined;
+	scriptPlans.set(result, units);
+	return units;
 }
 
 function providerStats(stats: SessionStats, id: string): ProviderStats {
@@ -142,7 +182,7 @@ function chargeOffTurn(stats: SessionStats, source: TranscriptSource, model: { p
 
 function collectEntries(source: TranscriptSource): SessionStats {
 	const stats: SessionStats = {
-		prompts: 0, toolCalls: 0, chains: new Map(), turns: 0, providers: new Map(),
+		prompts: 0, toolCalls: 0, chains: new Map(), plans: new Map(), turns: 0, providers: new Map(),
 		tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	};
 	const branch = source.getBranch();
@@ -151,6 +191,8 @@ function collectEntries(source: TranscriptSource): SessionStats {
 	let active = { provider: "unknown", id: "" };
 	// Cache lifetime evidence only describes the provider that wrote it.
 	let retentionProvider: string | undefined;
+	/** Tool calls this walk counted, so a script's result can add the calls it made. */
+	const counted = new Set<string>();
 
 	for (const entry of branch) {
 		if (entry.type === "model_change" && typeof entry.provider === "string") {
@@ -185,6 +227,13 @@ function collectEntries(source: TranscriptSource): SessionStats {
 			stats.prompts++;
 			continue;
 		}
+		if (entry.message.role === "toolResult") {
+			const result = entry.message as { toolCallId?: unknown; nestedCalls?: unknown };
+			// Only for a call this walk counted: a copied or failed reply's results add nothing.
+			const units = typeof result.toolCallId === "string" && counted.has(result.toolCallId) ? scriptPlan(result) : undefined;
+			if (units) stats.plans.set(result.toolCallId as string, units);
+			continue;
+		}
 		if (entry.message.role !== "assistant") continue;
 
 		const message = entry.message as AssistantLike;
@@ -192,7 +241,14 @@ function collectEntries(source: TranscriptSource): SessionStats {
 		stats.turns++;
 		// A failed or aborted reply's tool calls are never run.
 		const ran = message.stopReason !== "error" && message.stopReason !== "aborted";
-		for (const block of ran && Array.isArray(message.content) ? message.content : []) if (block.type === "toolCall") stats.toolCalls++;
+		for (const block of ran && Array.isArray(message.content) ? message.content as ToolCallBlock[] : []) {
+			if (block.type !== "toolCall") continue;
+			stats.toolCalls++;
+			if (typeof block.id !== "string") continue;
+			counted.add(block.id);
+			const planned = typeof block.name === "string" && isShell(block.name) ? shellPlan(block) : 1;
+			if (planned > 1) stats.plans.set(block.id, [{ id: block.id, planned }]);
+		}
 		const usage = message.usage ?? { cost: { total: 0 } };
 		stats.tokens = addTokens(stats.tokens, usage);
 		const promptTokens = promptTokensOf(usage);

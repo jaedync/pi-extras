@@ -15,11 +15,11 @@ const { TOOL_COUNT_EVENT } = await import("../lib/tool-count.ts");
 const START = 1_750_000_000_000;
 const step = { at: 1, ms: 5 };
 
-function assistant(toolCalls) {
+function assistant(commands) {
 	return { type: "message", timestamp: new Date(START).toISOString(), message: {
 		role: "assistant", provider: "test-provider", model: "test", timestamp: START - 1000,
 		usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
-		content: Array.from({ length: toolCalls }, () => ({ type: "toolCall" })),
+		content: commands.map((command, index) => ({ type: "toolCall", id: `c${index + 1}`, name: "bash", arguments: { command } })),
 	} };
 }
 
@@ -57,22 +57,23 @@ function app(branch) {
 
 test("the tool figure counts chain steps by default; a click counts calls, is saved, and a second click counts steps again", async (t) => {
 	t.after(() => rmSync(agentDir, { recursive: true, force: true }));
-	const branch = [assistant(3), { type: "custom", timestamp: new Date(START).toISOString(), customType: CHAIN_ENTRY, data: { v: 1, toolCallId: "c1", steps: [step, step, step] } }];
+	// c1 ran its three steps; c2 plans four and is still running; c3 is one command.
+	const branch = [assistant(["a && b && c", "w && x && y && z", "ls"]), { type: "custom", timestamp: new Date(START).toISOString(), customType: CHAIN_ENTRY, data: { v: 1, toolCallId: "c1", steps: [step, step, step] } }];
 	const first = app(branch);
 	await first.start();
 	try {
-		assert.equal(first.tools(), "5");
-		assert.ok(first.dimTools());
-		// A chain that finished this turn counts before it reaches the transcript.
-		first.emit(CHAIN_EVENT, { toolCallId: "c2", ran: 4 });
 		assert.equal(first.tools(), "8");
+		assert.ok(first.dimTools());
+		// c2 stopped after two steps; that counts before its record reaches the transcript.
+		first.emit(CHAIN_EVENT, { toolCallId: "c2", ran: 2 });
+		assert.equal(first.tools(), "6");
 		assert.deepEqual(first.click(), { handled: true });
 		assert.equal(first.tools(), "3");
 		assert.ok(first.dimTools());
 		assert.equal(JSON.parse(readFileSync(join(agentDir, "pi-extras.json"), "utf8")).statusPlus.toolCount, "calls");
 		// Elsewhere on the footer, or not a left click: nothing.
 		assert.equal(first.click(-5), undefined);
-		assert.equal(first.click(0) && first.tools(), "8");
+		assert.equal(first.click(0) && first.tools(), "6");
 	} finally {
 		await first.stop();
 	}
@@ -80,7 +81,7 @@ test("the tool figure counts chain steps by default; a click counts calls, is sa
 	const second = app(branch);
 	await second.start();
 	try {
-		assert.equal(second.tools(), "5");
+		assert.equal(second.tools(), "8");
 		second.emit(TOOL_COUNT_EVENT, "calls");
 		assert.equal(second.tools(), "3");
 		second.emit(TOOL_COUNT_EVENT, "sideways");

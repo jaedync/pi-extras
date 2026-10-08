@@ -175,3 +175,59 @@ test("a message's identity is hashed once: the footer walks the same entries eve
 	const ownerless = { type: "message", timestamp: "", message: { ...message, responseId: undefined, content: [] } } as never;
 	assert.notEqual(messageIdentity(ownerless, true, "one"), messageIdentity(ownerless, true, "two"));
 });
+
+function call(id: string, name: string, args: unknown) {
+	return { type: "toolCall", id, name, arguments: args };
+}
+
+function reply(content: unknown[]) {
+	return { type: "message", timestamp: iso(T0 + 1000), message: {
+		role: "assistant", provider: "anthropic", model: "m", timestamp: T0, usage: { cost: { total: 0 } }, content,
+	} };
+}
+
+test("chained commands count their steps from the command text, as the folded lines do, when no chain was saved", async () => {
+	const { splitCount } = await import("../lib/tool-count.ts");
+	const step = { at: 1, ms: 5 };
+	const branch = [
+		// A subagent runs without Tool Display, so its chains are never saved.
+		reply([call("plain", "bash", { command: "npm ci && npm test && npm run lint" }), call("one", "bash", { command: "cd lib && npm test" })]),
+		reply([call("script", "codemode", { code: "..." }), call("ran", "bash", { command: "a && b && c" }), call("file", "read", { path: "x" })]),
+		{ type: "message", timestamp: iso(T0 + 2000), message: { role: "toolResult", toolName: "codemode", toolCallId: "script", nestedCalls: { complete: true, calls: [
+			{ id: "script/1", name: "read", status: "ok", arguments: { path: "a" } },
+			{ id: "script/2", name: "bash", status: "ok", arguments: { command: "git status; git diff" } },
+		] } } },
+		// The saved chain says what ran: the third step never did.
+		{ type: "custom", timestamp: iso(T0 + 2000), customType: CHAIN_ENTRY, data: { v: 1, toolCallId: "ran", steps: [step, step, {}] } },
+	];
+	const stats = collect({ getBranch: () => branch, getSessionDir: () => "/nowhere", costOf: () => 0 });
+	assert.equal(stats.toolCalls, 5);
+	// plain 3, one 1 (a leading cd is a place), script 1 + 2, ran 2, file 1.
+	assert.equal(splitCount(stats.toolCalls, stats.plans, stats.chains), 10);
+	// A chain that finished this turn, before its record is saved, counts what it ran.
+	assert.equal(splitCount(stats.toolCalls, stats.plans, new Map([["plain", 1], ...stats.chains])), 8);
+	// A record for a call this branch does not count, such as another branch's, adds nothing.
+	assert.equal(splitCount(stats.toolCalls, stats.plans, new Map([["elsewhere", 9], ...stats.chains])), 10);
+	// One for a script's inner call says what that call ran.
+	assert.equal(splitCount(stats.toolCalls, stats.plans, new Map([["script/2", 1], ...stats.chains])), 9);
+});
+
+test("a command is split once: the footer walks the same entries every 30 seconds", () => {
+	let reads = 0;
+	const block = { type: "toolCall", id: "c", name: "bash", get arguments() { reads++; return { command: "a && b" }; } };
+	const branch = [reply([block])];
+	const source = { getBranch: () => branch, getSessionDir: () => "/nowhere", costOf: () => 0 };
+	assert.deepEqual([...collect(source).plans], [["c", [{ id: "c", planned: 2 }]]]);
+	collect(source);
+	assert.equal(reads, 1);
+});
+
+test("a subagent's planned steps reach the parent's totals", async () => {
+	const { addChild } = await import("../lib/status-plus-usage.ts");
+	const empty = () => collect({ getBranch: () => [], getSessionDir: () => "/nowhere", costOf: () => 0 });
+	const parent = empty();
+	const child = collect({ getBranch: () => [reply([call("k", "bash", { command: "a; b; c" })])], getSessionDir: () => "/nowhere", costOf: () => 0 });
+	addChild(parent, child);
+	assert.equal(parent.toolCalls, 1);
+	assert.deepEqual(parent.plans.get("k"), [{ id: "k", planned: 3 }]);
+});

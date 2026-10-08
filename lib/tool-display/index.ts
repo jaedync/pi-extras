@@ -427,7 +427,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 				["thinking full", "Thinking shows everything"],
 				["folded on", "Each run of work between replies is one line"],
 				["folded off", "Show every tool row and thinking block"],
-				["count steps", "Status Plus counts each step a chain ran (default)"],
+				["count steps", "Status Plus counts each chain step and script call (default)"],
 				["count calls", "Status Plus counts one per tool call"],
 			] as const;
 			const wanted = prefix.trim().toLowerCase();
@@ -445,7 +445,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 				let saved = true;
 				try { deps.writeToolCount(count); } catch { saved = false; }
 				pi.events.emit(TOOL_COUNT_EVENT, count);
-				const what = count === "steps" ? "each step a chained command ran" : "one per tool call";
+				const what = count === "steps" ? "each step of a chained command and each call a script made" : "one per tool call";
 				ctx.ui.notify(`The Status Plus tool count now counts ${what}.${saved ? "" : " Could not save the setting, so it applies to this session only."}`, saved ? "info" : "warning");
 				return;
 			}

@@ -15,7 +15,9 @@ import { BULLET_GLYPH, glyphAt, JOB_ANIMATION } from "../band/glyph.ts";
 import { planFold, type FoldGroup, type PlanItem } from "./plan.ts";
 import { foldPhrase, foldStats, type FoldFacts, type ToolFact } from "./summary.ts";
 import { CHARS_PER_TOKEN } from "../cc-phase.ts";
-import { splitChain } from "../chain/split.ts";
+import { commandsIn, isShell } from "../tool-count.ts";
+
+export { commandsIn };
 
 export interface FoldTheme {
 	fg(key: string, text: string): string;
@@ -133,19 +135,6 @@ export function sentOf(message: ReplyMessage): number {
 	const sum = (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
 	return Number.isFinite(sum) && sum > 0 ? sum : 0;
 }
-
-/** How many commands a shell call ran: each step of a chained command; a leading `cd` is a place, not a step. */
-export function commandsIn(args: unknown): number {
-	let command: unknown = (args as { command?: unknown } | null | undefined)?.command;
-	if (command === undefined && typeof args === "string") {
-		try { command = (JSON.parse(args) as { command?: unknown } | null)?.command; } catch { command = undefined; }
-	}
-	if (typeof command !== "string") return 1;
-	const steps = splitChain(command)?.steps.filter((step) => !step.cd).length ?? 1;
-	return Math.max(1, steps);
-}
-
-const isShell = (name: string) => name === "bash" || name.endsWith("__bash");
 
 /** One call as the words count it: a script's own calls in its place, and a chain's steps. */
 export function factsOfCall(name: string, args: unknown, running: boolean, failed: boolean, nested: readonly NestedFact[] | undefined): ToolFact[] {
