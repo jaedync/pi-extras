@@ -859,7 +859,7 @@ Incoming mail has a Markdown preview, expandable by click or ctrl+o.
 **Seeing it.** An agent reads like someone in a conversation, with no band
 behind it: a `◆` and its name in its provider's color, the one the footer
 gives that provider (Anthropic orange, Codex blue). Every other provider, such
-as a local or self-hosted server, shares one olive, in the footer too. An
+as a local or self-hosted server, shares one mint, in the footer too. An
 agent whose model names no provider is purple. What it is doing and the facts about it sit close beside them, and what it says set in under its name. Shell Jobs are
 bands instead, so the two are easy to tell apart. A backgrounded start reads
 `◆ reviewer joined  opus high  working`, with its task under it; the last word

@@ -2,7 +2,7 @@
  * How a subagent looks wherever it shows: like someone talking in a
  * conversation, with no band behind it. A ◆ and its name in its provider's
  * color, the one the footer gives that provider, so whose model an agent runs
- * on reads before its model does: the shared olive for a provider the footer
+ * on reads before its model does: the shared mint for a provider the footer
  * has no color of its own for, and Pi's custom-message purple when the model
  * names no provider. Then what it is doing and the facts about it, close together on
  * one line, and what it says set in under its name. Shell jobs are bands

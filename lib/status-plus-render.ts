@@ -72,10 +72,10 @@ export const PROVIDERS: Record<string, { label: string; color: Rgb }> = {
 
 /**
  * Every provider without an entry above (a local or self-hosted server, or any
- * other custom one) shares this olive, in the hue gap between Ant and Zen and
- * clear of the theme's amber warning, rose error and blue accent.
+ * other custom one) shares this mint. It is lighter and softer than the
+ * provider hues, so it sits apart from Zen's green and Go's teal.
  */
-export const OTHER_PROVIDER: Rgb = mutedRgb(110);
+export const OTHER_PROVIDER: Rgb = mutedRgb(165, 0.06, 0.82);
 
 const PROVIDER_ORDER = Object.keys(PROVIDERS);
 const WARN_PCT = 70;
