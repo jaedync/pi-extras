@@ -2,6 +2,20 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.23.1 - 2026-10-08
+
+### Fixed
+
+- Status Plus: the tool count counts each step of a chained command in a
+  subagent, and each call a codemode script made. Before, it counted only
+  the chains Tool Display saved, and Tool Display saves none in a subagent
+  or inside a script, so the count fell further behind as a session used
+  more subagents. It now counts as the folded lines do. A saved chain still
+  counts the steps it ran; any other chain counts the steps in its command
+  text. On a long session with subagents, the count went from 3,686 to 3,870.
+- Status Plus: a chained command counts its steps while it runs, not only
+  after it ends.
+
 ## 0.23.0 - 2026-10-08
 
 ### Changed
