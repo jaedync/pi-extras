@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { stripAnsi, visibleWidth } from "../lib/ansi.ts";
 import { formatIncrement } from "../lib/status-plus-spend.ts";
-import { footerLayout, renderFooter, type FooterModel } from "../lib/status-plus-footer.ts";
+import { footerLayout, renderFooter, type FooterModel, type FooterRow } from "../lib/status-plus-footer.ts";
 
 const paint = { fg: (_tone: string, text: string) => `\x1b[2m${text}\x1b[22m` };
 const NOON = Date.parse("2026-07-01T17:00:00Z"); // 12:00 Central
@@ -345,10 +345,46 @@ test("the footer reports where its tool figure landed, wide or on a line of its 
 	}
 });
 
-test("a split tool count draws its figure brighter than the other counters", () => {
+test("the tool figure is as dim as the other counters", () => {
 	const toned = { fg: (tone: string, text: string) => `<${tone}>${text}` };
-	const calls = renderFooter(model(), 200, toned)[1]!;
-	assert.ok(calls.includes("<dim>12 prompts · 31 turns · 48 tools"), calls);
-	const split = renderFooter(model({ counters: { prompts: 12, turns: 31, toolCalls: 52, split: true } }), 200, toned)[1]!;
-	assert.ok(split.includes("<dim>12 prompts · 31 turns · <text>52 tools"), split);
+	const line = renderFooter(model(), 200, toned)[1]!;
+	assert.ok(line.includes("<dim>12 prompts · 31 turns · 48 tools<dim> │"), line);
+	assert.ok(!line.includes("<text>"), line);
+});
+
+const FREE: Pick<FooterRow, "cost" | "entries" | "free"> = { cost: 0, entries: [], free: true };
+
+test("a free provider gets its own row after the paid ones: $0.00, its airtime and its tokens", () => {
+	const rows = [
+		{ ...FREE, id: "aaa-local", airtimeMs: 130_000, tokens: { input: 120_000, output: 8_000 } },
+		...model().rows.slice(0, 2),
+		// No request yet: nothing to show.
+		{ ...FREE, id: "sparky", airtimeMs: 0, tokens: { input: 0, output: 0 } },
+		{ ...FREE, id: "fw01", airtimeMs: 4_000, tokens: { input: 0, output: 0 } },
+	];
+	const plain = renderFooter(model({ rows }), 200, paint).map(stripAnsi);
+	assert.deepEqual(plain.slice(2).map((line) => line.split(/\s+/)[0]), ["Ant", "Cdx", "aaa-local", "fw01"], plain.join("\n"));
+	const local = plain.find((line) => line.startsWith("aaa-local"))!;
+	assert.match(local, /^aaa-local {2}\$0\.00 · +2m10s │ 120k in · 8\.0k out$/);
+	// Its cells line up with the paid rows, and it has no empty limit cell after them.
+	assert.equal(local.indexOf("│"), plain[2]!.indexOf("│"), plain.join("\n"));
+	assert.equal(local.indexOf("$"), plain[2]!.indexOf("$"), plain.join("\n"));
+	// A long id does not push the paid rows across the screen.
+	const long = renderFooter(model({ rows: [...model().rows.slice(0, 1), { ...FREE, id: "a-very-long-self-hosted-provider", airtimeMs: 1_000, tokens: { input: 10, output: 1 } }] }), 200, paint).map(stripAnsi);
+	assert.ok(long[2]!.startsWith("Ant ") && long[3]!.startsWith("a-very-long-se…"), long.join("\n"));
+	assert.equal(long[2]!.indexOf("$"), long[3]!.indexOf("$"), long.join("\n"));
+});
+
+test("limit windows keep one order on screen, whatever order they arrive in", () => {
+	const DAY = 86_400_000;
+	const fable = { label: "7d-fable", modelFamily: "fable", windowSeconds: 604_800, usedPct: 0, resetMs: NOON + 2 * DAY };
+	const week = { label: "7d", windowSeconds: 604_800, usedPct: 17, resetMs: NOON + 3 * DAY };
+	const hours = { label: "5h", windowSeconds: 18_000, usedPct: 29, resetMs: NOON + 3 * 3_600_000 };
+	const budget = { label: "", kind: "budget" as const, remainingText: "$87/$100" };
+	const render = (entries: FooterRow["entries"]) => stripAnsi(renderFooter(model({ rows: [{ ...model().rows[0]!, entries }] }), 200, paint)[2]!);
+	const first = render([fable, budget, week, hours]);
+	assert.match(first, /│ 5h 29% · 7d 17% · 7d-fable 0% · \$87\/\$100 left │ 3pm · Sat 12pm · Fri 12pm$/);
+	for (const entries of [[hours, week, fable, budget], [week, fable, hours, budget], [budget, hours, fable, week]]) {
+		assert.equal(render(entries), first);
+	}
 });

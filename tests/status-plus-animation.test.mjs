@@ -5,6 +5,8 @@ import { stripAnsi } from "../lib/ansi.ts";
 import { TWEEN_MS, HOLD_MS, FALL_MS } from "../lib/status-plus-tween.ts";
 
 const START = 1_750_000_000_000;
+/** Pi saves a reply after extensions see its message_end; Status Plus counts it on the next tick. */
+const saved = () => new Promise((resolve) => setImmediate(resolve));
 function entry(cost, timestamp) {
 	return { type: "message", timestamp: new Date(timestamp).toISOString(), message: {
 		role: "assistant", provider: "test-provider", model: "test", timestamp,
@@ -38,11 +40,13 @@ test("message charges render immediately, expire on scheduled frames, and reset 
 		for (const [cost, label] of [[0.043, "+$0.043"], [0.00093, "+$0.00093"]]) {
 			t.mock.timers.tick(100);
 			const added = entry(cost, Date.now());
-			branch = [...branch, added];
 			await fire("message_end", { message: added.message });
+			branch = [...branch, added];
+			await saved();
 			assert.ok(line.includes(label), line);
 			assert.ok(!line.includes("· 0m"), line);
 			await fire("turn_end");
+			await saved();
 			assert.ok(line.includes(label), "unchanged totals retain the delta");
 		}
 		t.mock.timers.tick(TWEEN_MS + HOLD_MS + FALL_MS + 50);
@@ -85,8 +89,9 @@ test("a provider request outside a turn, like a cache refresh, never ticks airti
 		render();
 		assert.match(line, /\$0\.00 · 2m/, "a turn's request ticks while it runs");
 		const reply = entry(0.5, Date.now());
-		branch = [reply];
 		await fire("message_end", { message: reply.message });
+		branch = [reply];
+		await saved();
 		// A long tool call: Pi refreshes the prompt cache with a request of its own.
 		await fire("before_provider_request");
 		t.mock.timers.tick(5 * 60_000);

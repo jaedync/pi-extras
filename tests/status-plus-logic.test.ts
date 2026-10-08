@@ -6,6 +6,8 @@ import {
 	formatDuration,
 	formatMoney,
 	formatMoneyLike,
+	freeProviders,
+	orderLimits,
 	hhmm,
 	parseProxyQuota,
 	proxyQuotaUrl,
@@ -98,4 +100,38 @@ test("recovered cost prices one-hour cache writes at twice the input rate, as Pi
 	assert.ok(Math.abs(hour - (0.1494675 - 2_665 * 12.5 / 1e6 + 2_665 * 20 / 1e6)) < 1e-8);
 	const split = estimateUsageCost({ ...usage, cacheWrite1h: 665 }, rates);
 	assert.ok(Math.abs(split - (0.1494675 - 665 * 12.5 / 1e6 + 665 * 20 / 1e6)) < 1e-8);
+});
+
+test("limit windows have one fixed order: shortest window first, its model-family window next, then rates, budgets and credits", () => {
+	// Meridian lists the window it saw last first, and header parses sort by pressure.
+	const arrived = [
+		{ label: "", kind: "budget" as const, remainingText: "$87/$100" },
+		{ label: "7d-fable", key: "seven_day_fable", modelFamily: "fable", windowSeconds: 604_800, usedPct: 0 },
+		{ label: "req", kind: "rate" as const, usedPct: 4 },
+		{ label: "7d", key: "seven_day", windowSeconds: 604_800, usedPct: 17 },
+		{ label: "5h", key: "five_hour", windowSeconds: 18_000, usedPct: 29 },
+	];
+	assert.deepEqual(orderLimits(arrived).map((entry) => entry.label || entry.kind), ["5h", "7d", "7d-fable", "req", "budget"]);
+	assert.deepEqual(orderLimits([...arrived].reverse()).map((entry) => entry.label || entry.kind), ["5h", "7d", "7d-fable", "req", "budget"]);
+	// Labels alone are enough: header parses and Go's fixed windows carry no duration.
+	assert.deepEqual(orderLimits([{ label: "mo" }, { label: "7d" }, { label: "7d_fable" }, { label: "5h" }, { label: "45m" }]).map((entry) => entry.label),
+		["45m", "5h", "7d", "7d_fable", "mo"]);
+	// A copy: the snapshot in the shared store is left as it was.
+	assert.equal(arrived[0].kind, "budget");
+});
+
+test("a provider is free when every model it lists costs nothing", () => {
+	const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+	const free = freeProviders([
+		{ provider: "redarch-bonsai", cost: zero },
+		{ provider: "fw01", cost: zero },
+		{ provider: "fw01", cost: zero },
+		{ provider: "anthropic", cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 } },
+		// One priced model makes the whole provider metered.
+		{ provider: "openrouter", cost: zero },
+		{ provider: "openrouter", cost: { ...zero, output: 0.6 } },
+		{ provider: "tiered", cost: { ...zero, tiers: [{ inputTokensAbove: 200_000, ...zero, input: 1 }] } },
+		{ provider: "no-cost-field" },
+	]);
+	assert.deepEqual([...free].sort(), ["fw01", "no-cost-field", "redarch-bonsai"]);
 });

@@ -118,6 +118,65 @@ export function formatDuration(ms: number, withSeconds: boolean): string {
 	return h ? `${days}d${h}h` : `${days}d`;
 }
 
+const KIND_RANK: Record<LimitKind, number> = { window: 0, rate: 1, budget: 2, credits: 3 };
+const UNIT_SECONDS: Record<string, number> = { m: 60, h: 3600, d: 86_400, w: 604_800 };
+const MONTH_SECONDS = 30 * 86_400;
+
+/** An entry with no kind and no percent is a balance, not a window. */
+const kindRank = (entry: LimitEntry): number => KIND_RANK[entry.kind ?? (entry.usedPct === undefined ? "budget" : "window")];
+
+/** A window's length, from the provider when it says, else from its label ("5h", "7d_fable", "mo"). */
+function windowSpan(entry: LimitEntry): number {
+	if (entry.windowSeconds) return entry.windowSeconds;
+	if (entry.label === "mo") return MONTH_SECONDS;
+	const match = /^(\d+)([mhdw])/.exec(entry.label);
+	return match ? Number(match[1]) * UNIT_SECONDS[match[2]] : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Limits in one fixed order, so a row never reshuffles: windows shortest
+ * first, each window before its model-family twin (7d, then 7d-fable), then
+ * rate limits, budgets and credits. Sources disagree on order: Meridian lists
+ * the window it saw last first, and header parses sort by pressure.
+ */
+export function orderLimits(entries: readonly LimitEntry[]): LimitEntry[] {
+	return [...entries].sort((a, b) =>
+		kindRank(a) - kindRank(b)
+		|| (windowSpan(a) === windowSpan(b) ? 0 : windowSpan(a) < windowSpan(b) ? -1 : 1)
+		|| Number(Boolean(a.modelFamily)) - Number(Boolean(b.modelFamily))
+		|| a.label.localeCompare(b.label));
+}
+
+/** The cost fields of a registry model this module reads. */
+export interface PricedModel {
+	provider: string;
+	cost?: Partial<ModelCost>;
+}
+
+function priced(cost: Partial<ModelCost> | undefined): boolean {
+	if (!cost) return false;
+	const rates = (r: Partial<CostRates>) => [r.input, r.output, r.cacheRead, r.cacheWrite].some((rate) => (rate ?? 0) > 0);
+	return rates(cost) || (cost.tiers ?? []).some(rates);
+}
+
+/**
+ * Providers whose every listed model costs nothing, such as local and
+ * self-hosted servers. One priced model makes a provider metered.
+ */
+export function freeProviders(models: Iterable<PricedModel>): Set<string> {
+	const free = new Set<string>();
+	const metered = new Set<string>();
+	for (const model of models) {
+		if (priced(model.cost)) {
+			metered.add(model.provider);
+			free.delete(model.provider);
+		} else if (!metered.has(model.provider)) {
+			free.add(model.provider);
+		}
+	}
+	return free;
+}
+
 /** Tolerate seconds or milliseconds epochs. */
 export function toEpochMs(timestamp: number): number {
 	return timestamp < 1e12 ? timestamp * 1000 : timestamp;

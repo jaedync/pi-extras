@@ -25,7 +25,7 @@ can still conflict.
 
 | Component | Behavior |
 | --- | --- |
-| Status Plus | Usage/cost grid, context and cache indicators, per-provider limits, optional linked subagent usage |
+| Status Plus | Usage/cost grid, context and cache indicators, per-provider limits in a fixed order, $0.00 rows for free local providers, optional linked subagent usage |
 | Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
 | Cache Compaction | Prefix-sharing summaries that reuse the session's warm prompt cache, with safe fallback to Pi's default compaction |
 | Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
@@ -118,7 +118,7 @@ the package. Removing it does not remove your credentials or change other packag
   pairs such as `["Simmering|Simmered"]`. Without this setting, the status names
   the phase descriptively.
 - `PI_COPY_BLOCKS=off`: leave code blocks and quotes in replies as Pi draws them.
-- `statusPlus.toolCount` in `pi-extras.json`: `calls` (the default) or `steps`,
+- `statusPlus.toolCount` in `pi-extras.json`: `steps` (the default) or `calls`,
   switched by clicking the footer's tool count or with `/tool-display count`.
 - `releaseNotes.seen` in `pi-extras.json`: the last pi-extras version whose
   notes were shown.
@@ -715,11 +715,12 @@ print, JSON and RPC runs keep Pi's tools untouched. If another extension
 already replaces one of Pi's built-in tools, Tool Display leaves that tool's
 definition alone and draws its rows as it does any other extension's.
 
-**Tool count.** Status Plus counts one tool per call that ran; calls in a
-failed or aborted reply never run and are left out. Click the
-count in the footer to count each step of a chained command instead; the
-count brightens to show it, and the choice is saved. Where the terminal sends
-no clicks to the footer, `/tool-display count steps` does the same.
+**Tool count.** Status Plus counts each step of a chained command as a tool,
+and every other call that ran as one; calls in a failed or aborted reply
+never run and are left out. Click the count in the footer to count one per
+call instead, as Pi does, and click again to go back. The choice is saved.
+Where the terminal sends no clicks to the footer, `/tool-display count calls`
+does the same.
 
 **Shell Jobs** are bands, like any call, and a running job's band fills with
 its progress. A job is named after its title (`Run unit tests` becomes

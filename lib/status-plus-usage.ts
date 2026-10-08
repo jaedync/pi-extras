@@ -4,10 +4,28 @@ import type { ChildEvidence } from "./status-plus-children.ts";
 import type { BranchEntry, SessionStats } from "./status-plus-transcript.ts";
 import { EMPTY_PROVIDER } from "./status-plus-render.ts";
 
+/**
+ * Hashes by entry and variant. Pi hands back the same entry objects on every
+ * walk and never changes a saved one, and hashing every message again was most
+ * of the footer's refresh time in a long session. Weak keys let child entries
+ * read from disk go with their walk.
+ */
+const identities = new WeakMap<BranchEntry, Map<string, string>>();
+
 export function messageIdentity(entry: BranchEntry, includeEntryId = true, owner = "parent"): string | undefined {
 	const message = entry.message as any;
 	if (!message || !["assistant", "user"].includes(message.role)) return;
 	if (message.timestamp === undefined && !entry.id) return;
+	const variant = includeEntryId ? `id:${owner}` : "copy";
+	let known = identities.get(entry);
+	if (known?.has(variant)) return known.get(variant);
+	const identity = hashIdentity(entry, message, includeEntryId, owner);
+	if (!known) identities.set(entry, known = new Map());
+	known.set(variant, identity);
+	return identity;
+}
+
+function hashIdentity(entry: BranchEntry, message: any, includeEntryId: boolean, owner: string): string {
 	// Native forks/resumes retain row IDs. Keep those IDs across children so
 	// independent identical parallel prompts aren't collapsed. Within a child,
 	// artifact copies lack row IDs and are matched by the request fingerprint.

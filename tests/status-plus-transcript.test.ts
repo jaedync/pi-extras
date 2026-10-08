@@ -160,3 +160,18 @@ test("cache lifetime evidence belongs to the provider that wrote it", () => {
 	assert.equal(collect(source([hour, codexWrite])).cacheLongRetention, undefined);
 	assert.equal(collect(source([codexWrite])).cacheLongRetention, undefined);
 });
+
+test("a message's identity is hashed once: the footer walks the same entries every 30 seconds", async () => {
+	const { messageIdentity } = await import("../lib/status-plus-usage.ts");
+	let reads = 0;
+	const message = { role: "assistant", provider: "p", model: "m", timestamp: 1, responseId: "r1", get content() { reads++; return [{ type: "text", text: "hi" }]; } };
+	const entry = { type: "message", id: "a", timestamp: "", message } as never;
+	const first = [messageIdentity(entry), messageIdentity(entry, false), messageIdentity(entry, true, "child")];
+	assert.equal(reads, 3);
+	assert.deepEqual([messageIdentity(entry), messageIdentity(entry, false), messageIdentity(entry, true, "child")], first);
+	assert.equal(reads, 3);
+	// Each variant is its own hash: the row id and the owner change it.
+	assert.notEqual(first[0], first[1]);
+	const ownerless = { type: "message", timestamp: "", message: { ...message, responseId: undefined, content: [] } } as never;
+	assert.notEqual(messageIdentity(ownerless, true, "one"), messageIdentity(ownerless, true, "two"));
+});

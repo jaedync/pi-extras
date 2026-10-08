@@ -270,10 +270,12 @@ test("the tool count persists under statusPlus, and a split count adds the steps
 	const dir = mkdtempSync(join(tmpdir(), "tool-count-"));
 	try {
 		const file = join(dir, "pi-extras.json");
-		assert.equal(readToolCount(file), "calls");
-		writeFileSync(file, JSON.stringify({ toolDisplay: { chains: false } }));
-		writeToolCount("steps", file);
+		// Each step a chained command ran counts unless the user chose calls.
 		assert.equal(readToolCount(file), "steps");
+		writeFileSync(file, JSON.stringify({ toolDisplay: { chains: false }, statusPlus: { toolCount: "sideways" } }));
+		assert.equal(readToolCount(file), "steps");
+		writeToolCount("calls", file);
+		assert.equal(readToolCount(file), "calls");
 		assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).toolDisplay, { chains: false });
 	} finally {
 		rmSync(dir, { recursive: true, force: true });

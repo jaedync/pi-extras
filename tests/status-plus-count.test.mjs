@@ -32,7 +32,8 @@ function app(branch) {
 		sessionManager: { getBranch: () => branch, getSessionDir: () => "/nonexistent-status-plus-test", getSessionFile: () => undefined, getCwd: () => "~", getSessionName: () => undefined },
 		getContextUsage: () => undefined,
 		ui: { setWidget() {}, setStatus() {}, setFooter(factory) {
-			component = factory({ requestRender() {} }, { fg: (_tone, text) => text }, {
+			// Dim figures are wrapped in SGR 2 and anything brighter in SGR 1, so a test can tell them apart.
+			component = factory({ requestRender() {} }, { fg: (tone, text) => `\x1b[${tone === "dim" ? 2 : 1}m${text}\x1b[22m` }, {
 				getGitBranch: () => null, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {},
 			});
 		} },
@@ -43,6 +44,8 @@ function app(branch) {
 		stop: () => handlers.get("session_shutdown")({}, ctx),
 		emit: (name, data) => listeners.get(name)(data),
 		tools: () => /(\d+) tools/.exec(stripAnsi(component.render(200).join("\n")))[1],
+		/** The counters line as drawn: the figure must be as dim as the counts before it. */
+		dimTools: () => /\x1b\[2m\s*\d+ prompts · \d+ turns · \d+ tools\x1b\[22m/.test(component.render(200).join("\n")),
 		click(offset = 0) {
 			const lines = component.render(200).map(stripAnsi);
 			const y = lines.findIndex((line) => line.includes(" tools"));
@@ -52,22 +55,24 @@ function app(branch) {
 	};
 }
 
-test("a click on the tool figure counts chain steps, is saved, and a second click counts calls again", async (t) => {
+test("the tool figure counts chain steps by default; a click counts calls, is saved, and a second click counts steps again", async (t) => {
 	t.after(() => rmSync(agentDir, { recursive: true, force: true }));
 	const branch = [assistant(3), { type: "custom", timestamp: new Date(START).toISOString(), customType: CHAIN_ENTRY, data: { v: 1, toolCallId: "c1", steps: [step, step, step] } }];
 	const first = app(branch);
 	await first.start();
 	try {
-		assert.equal(first.tools(), "3");
-		assert.deepEqual(first.click(), { handled: true });
 		assert.equal(first.tools(), "5");
-		assert.equal(JSON.parse(readFileSync(join(agentDir, "pi-extras.json"), "utf8")).statusPlus.toolCount, "steps");
+		assert.ok(first.dimTools());
 		// A chain that finished this turn counts before it reaches the transcript.
 		first.emit(CHAIN_EVENT, { toolCallId: "c2", ran: 4 });
 		assert.equal(first.tools(), "8");
+		assert.deepEqual(first.click(), { handled: true });
+		assert.equal(first.tools(), "3");
+		assert.ok(first.dimTools());
+		assert.equal(JSON.parse(readFileSync(join(agentDir, "pi-extras.json"), "utf8")).statusPlus.toolCount, "calls");
 		// Elsewhere on the footer, or not a left click: nothing.
 		assert.equal(first.click(-5), undefined);
-		assert.equal(first.click(0) && first.tools(), "3");
+		assert.equal(first.click(0) && first.tools(), "8");
 	} finally {
 		await first.stop();
 	}
@@ -75,11 +80,11 @@ test("a click on the tool figure counts chain steps, is saved, and a second clic
 	const second = app(branch);
 	await second.start();
 	try {
+		assert.equal(second.tools(), "5");
+		second.emit(TOOL_COUNT_EVENT, "calls");
 		assert.equal(second.tools(), "3");
-		second.emit(TOOL_COUNT_EVENT, "steps");
-		assert.equal(second.tools(), "5");
 		second.emit(TOOL_COUNT_EVENT, "sideways");
-		assert.equal(second.tools(), "5");
+		assert.equal(second.tools(), "3");
 	} finally {
 		await second.stop();
 	}

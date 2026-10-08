@@ -427,8 +427,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 				["thinking full", "Thinking shows everything"],
 				["folded on", "Each run of work between replies is one line"],
 				["folded off", "Show every tool row and thinking block"],
+				["count steps", "Status Plus counts each step a chain ran (default)"],
 				["count calls", "Status Plus counts one per tool call"],
-				["count steps", "Status Plus counts each step a chain ran"],
 			] as const;
 			const wanted = prefix.trim().toLowerCase();
 			const items = options.filter(([value]) => value.startsWith(wanted)).map(([value, description]) => ({ value, label: value, description }));

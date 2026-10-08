@@ -8,13 +8,15 @@
  *
  * The renderer is pure: the extension assembles a FooterModel from Pi's
  * context, and this file only lays it out. Everything renders dim except the
- * model, the session total, and figures that need attention. Narrow terminals
+ * model, the session total, and figures that need attention. A provider whose
+ * models all cost nothing (a local or self-hosted server) gets a $0.00 row
+ * after the paid ones once it has done work. Narrow terminals
  * remove decorative dots first, then shorten the place, drop the row token
  * column, the reset column, airtime and fourth grid column. Reported token classes never merge;
  * when necessary the tokens get their own line before truncation.
  */
 import { overlayVisible, padEndVisible, padStartVisible, truncateStart, truncateVisible, visibleWidth } from "./ansi.ts";
-import { formatDuration, formatMoney, hhmm, type LimitEntry } from "./status-plus-logic.ts";
+import { formatDuration, formatMoney, hhmm, orderLimits, type LimitEntry } from "./status-plus-logic.ts";
 import { spendText } from "./status-plus-spend.ts";
 import { meshText, type MeshState } from "./status-plus-mesh.ts";
 import {
@@ -46,6 +48,8 @@ export interface FooterRow {
 	billingNote?: string;
 	/** Shown instead of limits when a provider exposes none. */
 	note?: string;
+	/** Every model of the provider costs nothing: its row shows at $0.00 once it has done work. */
+	free?: boolean;
 }
 
 export interface FooterModel {
@@ -71,8 +75,7 @@ export interface FooterModel {
 	 * A positive `delta` overpaints airtime and neighboring cells without resizing the grid.
 	 */
 	spend?: { cost: number; airtimeMs: number; flash: number; delta?: number };
-	/** `split` means a chain counts each step it ran; the figure is then drawn brighter. */
-	counters: { prompts: number; turns: number; toolCalls: number; split?: boolean };
+	counters: { prompts: number; turns: number; toolCalls: number };
 	cwd: string;
 	gitBranch?: string | null;
 	sessionName?: string | null;
@@ -92,6 +95,8 @@ const TAIL_CELL_MIN = 8;
 /** Decoration is optional: keep it only with a full layout and breathing room. */
 const DECORATION_SPARE = 8;
 const ELLIPSIS = "…";
+/** A custom provider's id is its tag; past this width it is cut, so one long id can't push every row across. */
+const TAG_MAX = 15;
 /** Each variant also drops everything the earlier ones dropped. */
 type RowVariant = "full" | "no-tokens" | "no-resets" | "no-airtime";
 const ROW_VARIANTS: RowVariant[] = ["full", "no-tokens", "no-resets", "no-airtime"];
@@ -142,12 +147,9 @@ function toolsText(model: FooterModel): string {
 	return `${model.counters.toolCalls} tools`;
 }
 
-/** The counters, dim, with the tool figure brighter while it counts chain steps. */
+/** The counters, dim like the rest; a click on the tool figure changes how it counts, not how it looks. */
 function countersCell(paint: Painter, model: FooterModel, compact: boolean): string {
-	const text = countersText(model, compact);
-	if (!model.counters.split) return paint.fg("dim", text);
-	const tools = toolsText(model);
-	return `${paint.fg("dim", text.slice(0, -tools.length))}${paint.fg("text", tools)}`;
+	return paint.fg("dim", countersText(model, compact));
 }
 
 /** Where the tool figure was drawn: a row of the footer and its columns, end exclusive. */
@@ -258,18 +260,19 @@ interface RowCells {
 
 function rowCells(row: FooterRow, paint: Painter, now: number, variant: RowVariant, compact: boolean): RowCells {
 	const inline = !rowKeeps(variant, "resets");
-	const limitParts = row.entries.map((entry) => limitText(paint, entry, now, inline)).filter(Boolean);
+	const entries = orderLimits(row.entries);
+	const limitParts = entries.map((entry) => limitText(paint, entry, now, inline)).filter(Boolean);
 	let limits = limitParts.length ? limitParts.join(paint.fg("dim", fieldSeparator(compact))) : paint.fg("dim", row.note ?? "");
 	if (row.billingNote) limits += `   ${paint.fg("warning", row.billingNote)}`;
 	// Windows often share a reset (7d and 7d-fable); say it once.
 	const resets = rowKeeps(variant, "resets")
-		? [...new Set(row.entries
+		? [...new Set(entries
 			.filter((entry) => entry.resetMs && entry.resetMs > now)
 			.map((entry) => resetLabel(entry.resetMs as number, now, entry.resetApprox)))]
 			.join(fieldSeparator(compact))
 		: "";
 	return {
-		tag: providerTag(paint, row.id),
+		tag: truncateVisible(providerTag(paint, row.id), TAG_MAX, ELLIPSIS),
 		cost: paint.fg("dim", `$${formatMoney(row.cost)}`),
 		airtime: rowKeeps(variant, "airtime") ? paint.fg("dim", formatDuration(row.airtimeMs, true)) : "",
 		tokens: rowKeeps(variant, "tokens")
@@ -294,6 +297,8 @@ function rowLines(rows: FooterRow[], paint: Painter, now: number, variant: RowVa
 		let line = `${padEndVisible(cell.tag, tagWidth)}  ${padStartVisible(cell.cost, costWidth)}`;
 		if (rowKeeps(variant, "airtime")) line += `${fieldSep}${padStartVisible(cell.airtime, airWidth)}`;
 		if (rowKeeps(variant, "tokens")) line += `${joiner(paint)}${padEndVisible(cell.tokens, tokensWidth)}`;
+		// A row with no limits and no resets (a local server) ends here, without empty cells.
+		if (!visibleWidth(cell.limits) && !visibleWidth(cell.resets)) return line.trimEnd();
 		line += `${joiner(paint)}${padEndVisible(cell.limits, limitsWidth)}`;
 		if (anyResets) line += visibleWidth(cell.resets) ? `${joiner(paint)}${cell.resets}` : paint.fg("dim", " │");
 		return line.trimEnd();
@@ -313,11 +318,17 @@ export function renderFooter(model: FooterModel, width: number, paint: Painter):
 	return footerLayout(model, width, paint).lines;
 }
 
+/** A paid provider shows once it costs something; a free one once it has done work, even unreported. */
+function shown(row: FooterRow): boolean {
+	if (row.cost > 0) return true;
+	return Boolean(row.free) && (row.airtimeMs > 0 || row.tokens.input > 0 || row.tokens.output > 0);
+}
+
 /** The footer's lines and where its tool figure landed, so a click on it can be recognized. */
 export function footerLayout(model: FooterModel, width: number, paint: Painter): { lines: string[]; tools: Span } {
-	const rows = [...model.rows]
-		.filter((row) => row.cost > 0)
-		.sort((left, right) => compareProviderIds(left.id, right.id));
+	const rows = model.rows
+		.filter(shown)
+		.sort((left, right) => Number(Boolean(left.free)) - Number(Boolean(right.free)) || compareProviderIds(left.id, right.id));
 	// Decoration is negotiated from the resting grid, never from the temporary overpaint.
 	const settledModel = model.spend ? { ...model, spend: { ...model.spend, delta: undefined } } : model;
 	const decorated = [...gridLines(settledModel, paint, Infinity, false).lines, ...rowLines(rows, paint, model.nowMs, "full", false)];

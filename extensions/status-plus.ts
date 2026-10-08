@@ -19,7 +19,7 @@ import { footerLayout, type FooterModel, type FooterRow, type Span } from "../li
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
 import { sharedLimitStore } from "../lib/limit-store.ts";
 import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, REFRESH_INTERVAL_MS, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
-import { estimateUsageCost, toEpochMs } from "../lib/status-plus-logic.ts";
+import { estimateUsageCost, freeProviders, toEpochMs, type PricedModel } from "../lib/status-plus-logic.ts";
 import { splitMeshStatuses } from "../lib/status-plus-mesh.ts";
 import { TWEEN_FRAME_MS, flashIntensity, incrementAt, isActive, retarget, valueAt, type Tween } from "../lib/status-plus-tween.ts";
 import { EMPTY_PROVIDER, cacheState, cacheTtl } from "../lib/status-plus-render.ts";
@@ -91,20 +91,33 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	let latestCtx: ExtensionContext | undefined;
 
 	/**
-	 * Transcript totals, refreshed on events and the 30s timer rather than per
-	 * frame: the TUI calls every component's render on each frame, and the
-	 * spinner drives frames at up to 14/s while a turn runs, so walking the
-	 * transcript and child evidence there would scale with session length.
+	 * Transcript totals, refreshed when the branch gains an entry and on the 30s
+	 * timer rather than per frame: the TUI calls every component's render on each
+	 * frame, and the spinner drives frames at up to 14/s while a turn runs, so
+	 * walking the transcript and child evidence there would scale with session
+	 * length. Limits and the in-flight request only need a repaint.
 	 */
 	let transcriptStats: SessionStats | undefined;
+	/** The leaf the last walk saw; an event that left it unchanged has nothing new to count. */
+	let walkedLeaf: string | undefined;
+	let pendingRefresh: ReturnType<typeof setImmediate> | undefined;
+	/** Providers whose models all cost nothing, read from the registry with each walk. */
+	let free = new Set<string>();
 	/** Chains that finished since the transcript last saved them; Tool Display saves between turns. */
 	const liveChains = new Map<string, number>();
-	let toolCount: ToolCount = "calls";
+	let toolCount: ToolCount = "steps";
 	let toolsSpan: Span | undefined;
 
+	function leafOf(ctx: ExtensionContext): string | undefined {
+		return typeof ctx.sessionManager.getLeafId === "function" ? ctx.sessionManager.getLeafId() ?? undefined : undefined;
+	}
+
 	function refreshStats(ctx: ExtensionContext): SessionStats {
+		walkedLeaf = leafOf(ctx);
 		transcriptStats = collect(transcriptSource(ctx));
 		for (const id of transcriptStats.providers.keys()) seenProviders.add(id);
+		const registry = ctx.modelRegistry as { getAll?: () => PricedModel[] } | undefined;
+		free = typeof registry?.getAll === "function" ? freeProviders(registry.getAll()) : new Set();
 		return transcriptStats;
 	}
 
@@ -146,6 +159,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			entries: providerLimits.get(id)?.entries ?? [],
 			...(id === "opencode-go" && openCodeGoUsesZenBalance() ? { billingNote: GO_BILLING_NOTE } : {}),
 			...(id === "opencode" ? { note: ZEN_NOTE } : {}),
+			...(free.has(id) ? { free: true } : {}),
 		}));
 	}
 
@@ -219,9 +233,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	}
 
 	function toolCounters(stats: SessionStats): FooterModel["counters"] {
-		const counters = { prompts: stats.prompts, turns: stats.turns, toolCalls: stats.toolCalls };
-		if (toolCount === "calls") return counters;
-		return { ...counters, toolCalls: splitCount(stats.toolCalls, new Map([...liveChains, ...stats.chains])), split: true };
+		const toolCalls = toolCount === "calls" ? stats.toolCalls : splitCount(stats.toolCalls, new Map([...liveChains, ...stats.chains]));
+		return { prompts: stats.prompts, turns: stats.turns, toolCalls };
 	}
 
 	/** A click on the tool figure switches how it counts, and the choice is kept for later sessions. */
@@ -280,10 +293,26 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		return true;
 	}
 
+	/** Walk the transcript again and repaint. The timer always walks: subagents add spend in files of their own. */
 	function update(ctx: ExtensionContext): void {
 		sessionFacts = undefined;
 		refreshStats(ctx);
 		requestFooterRender?.();
+	}
+
+	/**
+	 * After an event that may add an entry. Pi tells extensions about a reply
+	 * before it saves it, so the walk waits for that, and several events in one
+	 * tick share it. If the branch gained nothing, a repaint is enough.
+	 */
+	function scheduleRefresh(ctx: ExtensionContext): void {
+		if (pendingRefresh) return;
+		pendingRefresh = setImmediate(() => {
+			pendingRefresh = undefined;
+			const leaf = leafOf(ctx);
+			if (leaf !== undefined && leaf === walkedLeaf) requestFooterRender?.();
+			else update(ctx);
+		});
 	}
 
 	async function refreshProviderLimits(provider: string, ctx: ExtensionContext, force = false): Promise<void> {
@@ -304,7 +333,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			}
 			pollFailures.set(provider, 0);
 			providerLimits.set(provider, { entries, atMs: Date.now(), source: "poll" });
-			update(ctx);
+			requestFooterRender?.();
 		} catch (error) {
 			pollFailures.set(provider, failures + 1);
 			// Best-effort: a failed poll must never fail Pi, but it should be findable.
@@ -329,7 +358,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		const existing = providerLimits.get(provider);
 		if (existing?.source === "poll" && Date.now() - existing.atMs < POLL_FRESH_MS) return;
 		providerLimits.set(provider, { entries, atMs: Date.now(), source: "headers" });
-		update(ctx);
+		requestFooterRender?.();
 	});
 
 	pi.on("turn_start", async () => {
@@ -346,7 +375,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		}
 		const billingProvider = sourceProvider === "opencode-go" && openCodeGoUsesZenBalance() ? "opencode" : sourceProvider;
 		inflight = { provider: billingProvider, startedMs: Date.now() };
-		update(ctx);
+		requestFooterRender?.();
 	});
 
 	pi.on("message_end", async (event, ctx) => {
@@ -359,18 +388,18 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			} satisfies BillingSourceEntry);
 		}
 		if (inflight && !inflight.endedMs) inflight.endedMs = Date.now();
-		update(ctx);
+		scheduleRefresh(ctx);
 		schedulePolls(ctx);
 	});
 
 	// A compaction is billed but ends no turn; show its charge now rather than on the next timer tick.
-	pi.on("session_compact", async (_event, ctx) => update(ctx));
+	pi.on("session_compact", async (_event, ctx) => scheduleRefresh(ctx));
 
 	pi.on("turn_end", async (_event, ctx) => {
 		// Close a dangling interval (e.g. aborted request with no message_end).
 		awaitingReply = false;
 		if (inflight && !inflight.endedMs) inflight.endedMs = Date.now();
-		update(ctx);
+		scheduleRefresh(ctx);
 	});
 
 	// Tool Display announces each chain as it finishes; it reaches the transcript between turns.
@@ -415,6 +444,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async () => {
+		if (pendingRefresh) clearImmediate(pendingRefresh);
+		pendingRefresh = undefined;
 		providerLimits.setRefresher(undefined);
 		latestCtx = undefined;
 		if (timer) clearInterval(timer);
