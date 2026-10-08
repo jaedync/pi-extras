@@ -2,6 +2,38 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.23.0 - 2026-10-08
+
+### Changed
+
+- Status Plus: the tool count counts each step of a chained command by
+  default, and it is as dim as the other counters in both modes. A click or
+  `/tool-display count calls` still counts one per call, and a saved choice
+  stays.
+- Status Plus: limit windows keep one order: the shortest window first, each
+  window before its model-family window (`5h · 7d · 7d-fable`), then rate
+  limits, budgets and credits. The resets follow the same order. Before,
+  they took the order of their source, and Meridian lists the window it saw
+  last first.
+- Status Plus: the footer walks the transcript only when the branch gains an
+  entry, and on its 30 s timer. A request's start, its limit headers and a
+  limit poll only repaint. A walk no longer hashes each message again: on a
+  4,000-entry session with subagents it takes 5 ms, not 47 ms.
+
+### Added
+
+- Status Plus: a provider whose models all cost nothing in Pi's model list,
+  such as a local or self-hosted server, gets its own row after the paid
+  ones once it has done work: `$0.00`, its airtime and its tokens. A row with
+  no limits ends after its tokens, and a provider id longer than 15
+  characters is cut.
+
+### Fixed
+
+- Status Plus: a reply's cost shows when Pi saves the reply. Before, it
+  showed only after the reply's tools ran or at the next 30 s tick, because
+  Pi tells extensions about a reply before it saves it.
+
 ## 0.22.8 - 2026-10-07
 
 ### Added
