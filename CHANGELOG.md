@@ -2,6 +2,13 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.23.3 - 2026-10-08
+
+### Changed
+
+- The shared color for local and other custom providers is now a soft mint,
+  not olive, in the footer and the subagent views.
+
 ## 0.23.2 - 2026-10-08
 
 ### Changed
