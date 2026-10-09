@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.23.7 - 2026-10-09
+
+### Changed
+
+- Phase Spinner: TPS in the editor divider is live. While the model streams,
+  it counts the tokens that came in the latest second and changes on every
+  frame, at least 12 times a second. A burst after a silence, such as a tool
+  call that the provider held back, counts as if it came evenly over that
+  silence, so it does not show as a false spike. When no tokens came in the
+  latest second, between responses and when idle, TPS shows the prompt's
+  average as before. The end line keeps the average:
+  `π Worked for 41s, done 9:14 PM, avg TPS 98.1`.
+
 ## 0.23.6 - 2026-10-09
 
 ### Fixed
