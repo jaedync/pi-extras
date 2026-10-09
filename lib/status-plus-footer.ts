@@ -11,12 +11,13 @@
  * model, the session total, and figures that need attention. A provider whose
  * models all cost nothing (a local or self-hosted server) gets a $0.00 row
  * after the paid ones once it has used tokens. Narrow terminals
- * remove decorative dots first, then shorten the place, drop the row token
- * column, the reset column, airtime and fourth grid column. Reported token classes never merge;
+ * remove decorative dots first, then shorten the place, drop the row reset
+ * column, the token column, airtime and fourth grid column. A model-family
+ * window at 0% (7d-fable) is not shown. Reported token classes never merge;
  * when necessary the tokens get their own line before truncation.
  */
 import { overlayVisible, padEndVisible, padStartVisible, truncateStart, truncateVisible, visibleWidth } from "./ansi.ts";
-import { formatDuration, formatMoney, hhmm, orderLimits, type LimitEntry } from "./status-plus-logic.ts";
+import { formatDuration, formatMoney, hhmm, shownLimits, type LimitEntry } from "./status-plus-logic.ts";
 import { spendText } from "./status-plus-spend.ts";
 import { meshText, type MeshState } from "./status-plus-mesh.ts";
 import {
@@ -98,11 +99,12 @@ const ELLIPSIS = "…";
 /** A custom provider's id is its tag; past this width it is cut, so one long id can't push every row across. */
 const TAG_MAX = 15;
 /** Each variant also drops everything the earlier ones dropped. */
-type RowVariant = "full" | "no-tokens" | "no-resets" | "no-airtime";
-const ROW_VARIANTS: RowVariant[] = ["full", "no-tokens", "no-resets", "no-airtime"];
+// Reset times go first: a hot window keeps an inline countdown, while the tokens have no stand-in.
+type RowVariant = "full" | "no-resets" | "no-tokens" | "no-airtime";
+const ROW_VARIANTS: RowVariant[] = ["full", "no-resets", "no-tokens", "no-airtime"];
 
 function rowKeeps(variant: RowVariant, cell: "tokens" | "resets" | "airtime"): boolean {
-	const dropped = { tokens: 1, resets: 2, airtime: 3 }[cell];
+	const dropped = { resets: 1, tokens: 2, airtime: 3 }[cell];
 	return ROW_VARIANTS.indexOf(variant) < dropped;
 }
 
@@ -260,7 +262,7 @@ interface RowCells {
 
 function rowCells(row: FooterRow, paint: Painter, now: number, variant: RowVariant, compact: boolean): RowCells {
 	const inline = !rowKeeps(variant, "resets");
-	const entries = orderLimits(row.entries);
+	const entries = shownLimits(row.entries);
 	const limitParts = entries.map((entry) => limitText(paint, entry, now, inline)).filter(Boolean);
 	let limits = limitParts.length ? limitParts.join(paint.fg("dim", fieldSeparator(compact))) : paint.fg("dim", row.note ?? "");
 	if (row.billingNote) limits += `   ${paint.fg("warning", row.billingNote)}`;

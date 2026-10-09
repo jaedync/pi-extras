@@ -8,6 +8,7 @@ import {
 	formatMoneyLike,
 	freeProviders,
 	orderLimits,
+	shownLimits,
 	hhmm,
 	parseProxyQuota,
 	proxyQuotaUrl,
@@ -134,4 +135,17 @@ test("a provider is free when every model it lists costs nothing", () => {
 		{ provider: "no-cost-field" },
 	]);
 	assert.deepEqual([...free].sort(), ["fw01", "no-cost-field", "redarch-bonsai"]);
+});
+
+test("a model-family window shows only once it has a real percent", () => {
+	const shown = (entries: Parameters<typeof shownLimits>[0]) => shownLimits(entries).map((entry) => entry.label);
+	const hours = { label: "5h", key: "five_hour", windowSeconds: 18_000, usedPct: 0 };
+	const fable = (usedPct: number, extra = {}) => ({ label: "7d-fable", key: "seven_day_fable", modelFamily: "fable", windowSeconds: 604_800, usedPct, ...extra });
+	// A plain window at 0% still says something; a family window at 0% (as shown, so 0.4 too) does not.
+	assert.deepEqual(shown([fable(0), hours]), ["5h"]);
+	assert.deepEqual(shown([fable(0.4), hours]), ["5h"]);
+	assert.deepEqual(shown([fable(1), hours]), ["5h", "7d-fable"]);
+	// A blocked window always shows, and so do family windows the header parser names by label alone.
+	assert.deepEqual(shown([fable(0, { exhausted: true }), hours]), ["5h", "7d-fable"]);
+	assert.deepEqual(shown([{ label: "7d_fable", usedPct: 0 }, { label: "7d", usedPct: 3 }]), ["7d"]);
 });

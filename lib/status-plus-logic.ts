@@ -147,6 +147,21 @@ export function orderLimits(entries: readonly LimitEntry[]): LimitEntry[] {
 		|| a.label.localeCompare(b.label));
 }
 
+/** A window that governs only one model family: `seven_day_fable`, or by label alone `7d_fable` or `7d-fable`. */
+function familyWindow(entry: LimitEntry): boolean {
+	return entry.modelFamily !== undefined || /^\d+[mhdw][-_]\S/.test(entry.label);
+}
+
+/**
+ * The limits a row shows, in order. A model-family window at 0% as shown
+ * (7d-fable while the family goes unused) is left out unless it blocks; a
+ * plain window at 0% still says how much room there is.
+ */
+export function shownLimits(entries: readonly LimitEntry[]): LimitEntry[] {
+	return orderLimits(entries).filter((entry) =>
+		!familyWindow(entry) || entry.exhausted === true || entry.usedPct === undefined || Math.round(entry.usedPct) > 0);
+}
+
 /** The cost fields of a registry model this module reads. */
 export interface PricedModel {
 	provider: string;

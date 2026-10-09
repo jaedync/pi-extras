@@ -97,7 +97,7 @@ test("row columns align with mixed cost and airtime widths", () => {
 	assert.ok(lines.some((l) => /Zen .*│ balance not exposed by OpenCode\s+│$/.test(l)), lines.join("\n"));
 });
 
-test("narrow terminal drops tokens, then resets, then airtime, and never exceeds the width", () => {
+test("narrow terminal drops resets, then tokens, then airtime, and never exceeds the width", () => {
 	for (const width of [110, 100, 84, 76, 64, 60, 50]) {
 		const lines = renderFooter(model(), width, paint);
 		for (const line of lines) assert.ok(visibleWidth(line) <= width, `${width}: ${stripAnsi(line)}`);
@@ -108,12 +108,22 @@ test("narrow terminal drops tokens, then resets, then airtime, and never exceeds
 	assert.ok(at100[1].endsWith("92% 2m warm"), at100[1]);
 	assert.ok(at100.some((l) => l.includes("Sun 12:47am")), "rows still fit with resets at 100");
 	assert.ok(at100.some((l) => /9\.4M in 41k out/.test(l)), "rows still carry tokens at 100");
+	// Reset times go before token counts: a row never shows resets once its tokens are gone.
+	let tokensWithoutResets = 0;
+	for (let width = 150; width >= 50; width--) {
+		const rows = renderFooter(model(), width, paint).map(stripAnsi).filter((l) => /^Ant /.test(l));
+		const tokens = rows.some((l) => /9\.4M in/.test(l));
+		const resets = rows.some((l) => l.includes("Sun 12:47am"));
+		assert.ok(tokens || !resets, `${width}: ${rows.join("\n")}`);
+		if (tokens && !resets) tokensWithoutResets++;
+	}
+	assert.ok(tokensWithoutResets > 0, "some width keeps the tokens after the resets are gone");
 	const at84 = renderFooter(model(), 84, paint).map(stripAnsi);
-	assert.ok(at84.some((l) => l.includes("Sun 12:47am")), "removing dots keeps resets longer");
-	assert.ok(!at84.some((l) => l.includes("41k out")), "row tokens go before resets");
+	assert.ok(at84.some((l) => /9\.4M in 41k out/.test(l)), "row tokens outlast resets: " + at84.join("\n"));
+	assert.ok(!at84.some((l) => l.includes("Sun 12:47am")), "reset column dropped first");
+	assert.ok(at84.some((l) => /7d 78% 3d/.test(l)), "hot windows keep an inline countdown");
 	const at76 = renderFooter(model(), 76, paint).map(stripAnsi);
-	assert.ok(!at76.some((l) => l.includes("Sun 12:47am")), "reset column dropped");
-	assert.ok(at76.some((l) => /7d 78% 3d/.test(l)), "hot windows keep an inline countdown");
+	assert.ok(!at76.some((l) => l.includes("41k out")), "tokens go next");
 	const at64 = renderFooter(model(), 64, paint).map(stripAnsi);
 	assert.ok(at64.some((l) => l.includes("12m05s")), "removing dots keeps airtime longer");
 	const at50 = renderFooter(model(), 50, paint).map(stripAnsi);
@@ -381,15 +391,25 @@ test("a free provider gets its own row after the paid ones: $0.00, its airtime a
 	assert.equal(long[2]!.indexOf("$"), long[3]!.indexOf("$"), long.join("\n"));
 });
 
+test("a model-family window at 0% is hidden; at a real percent it shows", () => {
+	const DAY = 86_400_000;
+	const week = { label: "7d", windowSeconds: 604_800, usedPct: 17, resetMs: NOON + 3 * DAY };
+	const render = (entries: FooterRow["entries"]) => stripAnsi(renderFooter(model({ rows: [{ ...model().rows[0]!, entries }] }), 200, paint)[2]!);
+	const idle = render([week, { label: "7d-fable", modelFamily: "fable", windowSeconds: 604_800, usedPct: 0.3, resetMs: NOON + 2 * DAY }]);
+	assert.match(idle, /│ 7d 17% │ Sat 12pm$/, idle);
+	const used = render([week, { label: "7d-fable", modelFamily: "fable", windowSeconds: 604_800, usedPct: 4, resetMs: NOON + 2 * DAY }]);
+	assert.match(used, /│ 7d 17% · 7d-fable 4% │ Sat 12pm · Fri 12pm$/, used);
+});
+
 test("limit windows keep one order on screen, whatever order they arrive in", () => {
 	const DAY = 86_400_000;
-	const fable = { label: "7d-fable", modelFamily: "fable", windowSeconds: 604_800, usedPct: 0, resetMs: NOON + 2 * DAY };
+	const fable = { label: "7d-fable", modelFamily: "fable", windowSeconds: 604_800, usedPct: 6, resetMs: NOON + 2 * DAY };
 	const week = { label: "7d", windowSeconds: 604_800, usedPct: 17, resetMs: NOON + 3 * DAY };
 	const hours = { label: "5h", windowSeconds: 18_000, usedPct: 29, resetMs: NOON + 3 * 3_600_000 };
 	const budget = { label: "", kind: "budget" as const, remainingText: "$87/$100" };
 	const render = (entries: FooterRow["entries"]) => stripAnsi(renderFooter(model({ rows: [{ ...model().rows[0]!, entries }] }), 200, paint)[2]!);
 	const first = render([fable, budget, week, hours]);
-	assert.match(first, /│ 5h 29% · 7d 17% · 7d-fable 0% · \$87\/\$100 left │ 3pm · Sat 12pm · Fri 12pm$/);
+	assert.match(first, /│ 5h 29% · 7d 17% · 7d-fable 6% · \$87\/\$100 left │ 3pm · Sat 12pm · Fri 12pm$/);
 	for (const entries of [[hours, week, fable, budget], [week, fable, hours, budget], [budget, hours, fable, week]]) {
 		assert.equal(render(entries), first);
 	}
