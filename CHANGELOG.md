@@ -2,6 +2,24 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.23.6 - 2026-10-09
+
+### Fixed
+
+- Status Plus: the Anthropic monthly budget shows again when several Pi
+  sessions use one account. Anthropic limits how often its usage endpoint
+  answers one account, and each session polled it on its own clock, so most
+  polls got HTTP 429 and the footer showed no dollars. The Pi sessions of one
+  agent directory now poll once between them and share the result in
+  `status-plus-limits/`, so a new session shows the last budget at once. A
+  shared result older than 15 minutes gives only its budget, not its windows.
+- Status Plus: when response headers update the 5h and 7d windows, the
+  budget that the last poll found stays on screen until its month ends.
+  Before, it went away 15 minutes after the last good poll.
+- Status Plus: a refused limit poll now writes a line such as
+  `anthropic limit poll failed: HTTP 429` to `status-plus.log`, and polling
+  waits as long as the provider's `Retry-After` asks, for at most an hour.
+
 ## 0.23.5 - 2026-10-09
 
 ### Fixed
