@@ -92,7 +92,7 @@ async function fixture(api = "anthropic-messages", enabled = true, automatic?: "
 	return { session, calls, captures, errors, notices, configFile, logFile: join(agentDir, "cache-compaction.log"), settingsManager, simulateWarmer: () => { simulateWarmer = true; }, setUsage: (tokens: number) => { usageTokens = tokens; }, setLateTransform: () => { lateTransform = true; }, setRewriteUser: () => { rewriteUser = true; }, setInternalFilter: () => { filterInternal = true; }, setTime: (n: number) => { now += n; }, setResponse: (mode: string) => { responseMode = mode; }, async warm() { await session.prompt("Old task: preserve file paths and decision."); await session.prompt("Recent task: next step is run the tests."); }, async close() { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); } };
 }
 
-for (const api of ["anthropic-messages", "openai-codex-responses", "openai-responses", "google-generative-ai"]) {
+for (const api of ["anthropic-messages", "openai-completions", "openai-codex-responses", "openai-responses", "google-generative-ai"]) {
 	test(`real SDK ${api}: same sessionId, exact non-conversation payload, captured + last assistant + instruction`, { timeout: 15000 }, async (t) => {
 		const f = await fixture(api); t.after(() => f.close());
 		await f.warm();
@@ -120,7 +120,7 @@ for (const api of ["anthropic-messages", "openai-codex-responses", "openai-respo
 }
 for (const condition of ["disabled", "cold", "model-change", "empty", "tool", "error", "length", "branch-edit", "unsupported", "unrequested-prefix", "no-capture"]) {
 	test(`real SDK fallback ${condition} yields Pi's default compaction`, { timeout: 15000 }, async (t) => {
-		const f = await fixture(condition === "unsupported" ? "openai-completions" : "anthropic-messages", condition !== "disabled"); t.after(() => f.close());
+		const f = await fixture(condition === "unsupported" ? "mistral-conversations" : "anthropic-messages", condition !== "disabled"); t.after(() => f.close());
 		await f.warm();
 		if (condition === "cold") f.setTime(61000);
 		if (condition === "model-change") await f.session.extensionRunner.emit({ type: "model_select", model: f.session.model, previousModel: f.session.model, source: "set" });

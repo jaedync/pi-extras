@@ -2,6 +2,32 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Cache Compaction: supports Pi's `openai-completions` API (OpenAI chat
+  completions), which local engines such as llama.cpp, vLLM and other
+  OpenAI-compatible servers use. Before, these sessions always fell back to
+  Pi's own compaction with `unsupported-api`, which is a cold prefill on a
+  local engine. The summary request keeps the system message, `tools`,
+  `tool_choice`, `reasoning_effort`, the template arguments and every earlier
+  message byte-identical, adds the instruction as a new user message, and
+  sets only the output limit (`max_tokens` or `max_completion_tokens`). On a
+  local OpenAI-compatible engine (Qwen3.8-Flash-Next), 18,311 of 19,229
+  prompt tokens came from the cache. A cache marker that Pi moves to the last
+  message does not count as a change.
+- Cache Compaction: chat completions on a local engine (a loopback, private
+  or Tailscale address, or a LAN-only host name) count as warm for 25
+  minutes, not 4. `idleSeconds` still sets the limit per provider. Engines
+  that unload an idle model on a timer, such as Ollama (`OLLAMA_KEEP_ALIVE`,
+  5 minutes by default) and LM Studio (idle TTL), need a shorter
+  `idleSeconds`.
+- Cache Compaction: a thinking budget field in a chat-completions request
+  (`thinking_token_budget` and similar) gets the same check as Anthropic
+  and Google budgets. When the budget leaves no room for the summary, Pi's
+  own compaction runs with `thinking-budget`.
+
 ## 0.23.7 - 2026-10-09
 
 ### Changed

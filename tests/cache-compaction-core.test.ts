@@ -3,7 +3,7 @@ import { summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
 import { test } from "node:test";
 import { conversationKey, capturePayload, payloadHashes, mergePayload, loadConfig, idleLimitMs, fallbackReason, fileLists, formatFiles, fingerprint, reconcile, buildInstruction, boundaryIdentifier, MAX_BOUNDARY_IDENTIFIER_CHARS, requestOutputLimit, requestEffort, safeHeaders } from "../lib/cache-compaction/core.ts";
 
-for (const [api, key] of [["anthropic-messages", "messages"], ["openai-responses", "input"], ["openai-codex-responses", "input"], ["google-generative-ai", "contents"], ["google-vertex", "contents"]]) {
+for (const [api, key] of [["anthropic-messages", "messages"], ["openai-completions", "messages"], ["openai-responses", "input"], ["openai-codex-responses", "input"], ["google-generative-ai", "contents"], ["google-vertex", "contents"]]) {
 	test(`payload replay changes only ${key} for ${api}`, () => {
 		const original = { [key]: ["old"], reasoning: { effort: "low", summary: "auto" }, tools: [{ name: "read" }], max_tokens: 123, metadata: { user_id: "session" }, prompt_cache_key: "session" };
 		const captured = capturePayload(api, original)!;

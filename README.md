@@ -244,6 +244,53 @@ prompt, as long as:
 Otherwise Pi's own compaction runs, exactly as it would without this
 extension. The notice says which path ran and why.
 
+**Supported APIs.** Anthropic Messages (`anthropic-messages`), OpenAI
+Responses (`openai-responses`, `openai-codex-responses`,
+`azure-openai-responses`), Google (`google-generative-ai`, `google-vertex`)
+and OpenAI chat completions (`openai-completions`). Local engines such as
+llama.cpp, vLLM and other OpenAI-compatible servers use chat completions. For
+other APIs, Pi's own compaction runs with the reason `unsupported-api`.
+
+**Local engines.** Many local engines keep a prompt prefix in memory until
+they need the space. For `openai-completions` models with a local `baseUrl`,
+the default idle limit is 25 minutes. A local `baseUrl` is a loopback, private
+or Tailscale (`100.64.0.0/10`) address, a host name without a dot, or a name
+that ends in `.local`, `.lan`, `.internal`, `.home.arpa` or `.ts.net`. This
+stays under a typical gateway idle window. When the cache is cold, the summary
+request is a full prefill of the conversation, which is larger than Pi's own
+summary prompt. Set `idleSeconds` for the provider if your engine evicts
+sooner, or if the local `baseUrl` is a proxy to a cloud API.
+
+Some local engines do use a timer. Ollama unloads an idle model after
+`OLLAMA_KEEP_ALIVE` (5 minutes by default), and LM Studio can unload a model
+after an idle TTL. The cache goes with the model. For these engines, set
+`idleSeconds` for the provider to a value below that timer, for example
+`"ollama": 240`.
+
+Measured on a local OpenAI-compatible engine (Qwen3.8-Flash-Next, one
+synthetic session of 18k tokens with two tool calls): the summary request had
+19,229 prompt tokens, and 18,311 of them came from the cache. Only the
+918-token instruction was new, and the first token came after 1.2 s.
+
+**Chat templates.** A chat-completions engine renders the messages with the
+model's chat template. The summary request keeps every field that changes the
+rendered prompt: the messages, `tools`, `tool_choice`, `reasoning_effort` and
+the template arguments. Only the output limit (`max_tokens` or
+`max_completion_tokens`, as the request used) changes, and the instruction is
+a new user message at the end. The extension does not set
+`tool_choice: "none"`, because some engines then render the prompt without
+the tool list, and the cache misses from the first system token. If the
+model calls a tool in the summary turn, the tool does not run, and Pi's own
+compaction runs with the reason `unusable-summary`.
+
+Some templates, such as recent Qwen3 templates, keep the reasoning of earlier
+turns by default. With them, the new user message does not change how earlier
+turns render. If a client sends
+`chat_template_kwargs: { "preserve_thinking": false }`, the template removes
+the reasoning of all turns before the last user message. Then the cache
+covers the conversation only up to the first assistant message after the
+previous user message (36% of the prompt in a synthetic check).
+
 Subagents always load Cache Compaction, even when a package filter leaves it
 out of the main session. `cacheCompaction.enabled: false` turns it off in both.
 
@@ -278,6 +325,13 @@ large-window models, raise the reserve in Pi's `settings.json`; 32k is about
 { "compaction": { "reserveTokens": 32768 } }
 ```
 
+With a 258,048-token window and a `reserveTokens` of 24,576, an automatic
+compaction at the trigger has about 18k tokens of room. A first summary fits.
+An update fits while the previous summary is below about 10k tokens. Each
+token that the context goes past the trigger removes one token of room. When
+the room is too small, Pi's own compaction runs with the reason
+`context-window`.
+
 **Settings.** In `PI_CODING_AGENT_DIR/pi-extras.json` (default
 `~/.pi/agent/pi-extras.json`), then `/reload`:
 
@@ -294,7 +348,8 @@ large-window models, raise the reserve in Pi's `settings.json`; 32k is about
 - `idleSeconds`: per provider, how long after the last request the cache
   counts as warm, from 0 to 86400 (0 means never use the cache path). The
   default is 55 minutes for Anthropic through Meridian on port 3456, which
-  writes one-hour caches, and 4 minutes for everything else. The example's
+  writes one-hour caches, 25 minutes for chat completions on a local engine
+  (see above), and 4 minutes for everything else. The example's
   `anthropic` value also applies to Anthropic's own API, which keeps caches
   for 5 minutes, so leave it out unless every Anthropic route you use keeps
   long caches.

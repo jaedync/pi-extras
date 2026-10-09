@@ -18,18 +18,36 @@ export function loadConfig(section: RecordValue): Config {
 	return { enabled: typeof section.enabled === "boolean" ? section.enabled : true, idleSeconds };
 }
 
+export const LOCAL_ENGINE_IDLE_MINUTES = 25;
+/** Loopback, private (RFC 1918, ULA, link-local), Tailscale CGNAT and LAN-only names: a self-hosted engine, not a cloud API. */
+export function isLocalEngineUrl(baseUrl: string | undefined): boolean {
+	let host: string;
+	try { host = new URL(baseUrl ?? "").hostname.toLowerCase().replace(/^\[|\]$/g, ""); }
+	catch { return false; }
+	if (!host.includes(".") && !host.includes(":")) return host.length > 0;
+	if (/(^|\.)(localhost|local|lan|internal|home\.arpa|ts\.net)$/.test(host)) return true;
+	if (host.includes(":")) return host === "::1" || /^f[cd][0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host);
+	const octets = host.split(".").map(Number);
+	if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+	const [a, b] = octets;
+	return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+}
+
 export function idleLimitMs(config: Config, model: Pick<ModelIdentity, "provider" | "api" | "baseUrl">): number {
 	const override = config.idleSeconds[model.provider];
 	if (override !== undefined) return override * 1000;
 	// Meridian's SDK writes one-hour caches. Leave five minutes for expiry/routing skew.
 	// Native Anthropic's usual five-minute TTL and Codex's shorter retention get a one-minute margin.
 	const meridian = model.api === "anthropic-messages" && /^http:\/\/(127\.0\.0\.1|localhost):3456(?:\/|$)/.test(model.baseUrl ?? "");
-	return (meridian ? 55 : 4) * 60000;
+	// Local engines usually keep a prefix until memory pressure evicts it. A miss here is a cold prefill of the whole
+	// conversation, larger than Pi's own summary prompt, so stay under a typical gateway idle window.
+	const local = model.api === "openai-completions" && isLocalEngineUrl(model.baseUrl);
+	return (meridian ? 55 : local ? LOCAL_ENGINE_IDLE_MINUTES : 4) * 60000;
 }
 
 export function conversationKey(api: string): "messages" | "input" | "contents" | undefined {
 	switch (api) {
-		case "anthropic-messages": return "messages";
+		case "anthropic-messages": case "openai-completions": return "messages";
 		case "openai-responses": case "openai-codex-responses": case "azure-openai-responses": return "input";
 		case "google-generative-ai": case "google-vertex": return "contents";
 		default: return undefined;
@@ -45,11 +63,18 @@ export function capturePayload(api: string, payload: unknown): RecordValue | und
 	return structuredClone(clean);
 }
 
+/** pi-ai's Anthropic-format marker turns the last string content into one text part; templates render both the same. */
+function markedText(value: unknown): string | undefined {
+	if (!Array.isArray(value) || value.length !== 1 || !object(value[0])) return undefined;
+	const part = value[0];
+	return part.type === "text" && typeof part.text === "string" && object(part.cache_control) && Object.keys(part).every((name) => ["type", "text", "cache_control"].includes(name)) ? part.text : undefined;
+}
 /** Cache breakpoints move to the new suffix on normal turns; all conversation content must still match. */
 export function payloadHashes(api: string, payload: unknown): string[] | undefined {
 	const key = conversationKey(api);
 	if (!key || !object(payload) || !Array.isArray(payload[key])) return undefined;
-	return payload[key].map((item: unknown) => createHash("sha256").update(JSON.stringify(item, (name, value: unknown) => name === "cache_control" ? undefined : value)).digest("hex"));
+	const collapse = api === "openai-completions";
+	return payload[key].map((item: unknown) => createHash("sha256").update(JSON.stringify(item, (name, value: unknown) => name === "cache_control" ? undefined : collapse && name === "content" ? markedText(value) ?? value : value)).digest("hex"));
 }
 function preserveEffortMarker(api: string, generated: RecordValue, prefix?: readonly string[]): RecordValue {
 	if (api !== "anthropic-messages" || !prefix?.length || !Array.isArray(generated.messages)) return generated;
@@ -68,18 +93,29 @@ export function mergePayload(api: string, captured: RecordValue, generated: unkn
 	const hashes = prefix ? payloadHashes(api, payload) : undefined;
 	if (prefix && (!hashes || prefix.length > hashes.length || !prefix.every((hash, i) => hash === hashes[i]))) throw new Error("prefix-changed");
 	const cap = requestOutputLimit(payload);
-	const config = object(captured.config) ? captured.config : undefined;
-	const budget = key === "contents" && config && object(config.thinkingConfig) ? config.thinkingConfig.thinkingBudget : object(captured.thinking) ? captured.thinking.budget_tokens : undefined;
-	if (typeof budget === "number" && (cap === undefined || cap <= budget + floor)) throw new Error("thinking-budget");
-	const { max_tokens: _tokens, max_output_tokens: _output, ...fields } = structuredClone(captured);
-	// The generated cap belongs to the actual summary context. All cache-affecting fields stay captured.
-	const capped = key === "contents" && object(payload.config) ? { ...fields, config: { ...(object(fields.config) ? fields.config : {}), maxOutputTokens: payload.config.maxOutputTokens, ...(payload.config.abortSignal === undefined ? {} : { abortSignal: payload.config.abortSignal }) } } : { ...fields, ...("max_tokens" in payload ? { max_tokens: payload.max_tokens } : {}), ...("max_output_tokens" in payload ? { max_output_tokens: payload.max_output_tokens } : {}) };
+	const budget = thinkingBudget(key, captured);
+	if (budget !== undefined && (cap === undefined || cap <= budget + floor)) throw new Error("thinking-budget");
+	const { max_tokens: _tokens, max_output_tokens: _output, max_completion_tokens: _completion, ...fields } = structuredClone(captured);
+	// The generated cap belongs to the actual summary context. All cache-affecting fields stay captured,
+	// including chat-completions tool_choice: an engine may render tool_choice "none" as a prompt without tools.
+	const capped = key === "contents" && object(payload.config) ? { ...fields, config: { ...(object(fields.config) ? fields.config : {}), maxOutputTokens: payload.config.maxOutputTokens, ...(payload.config.abortSignal === undefined ? {} : { abortSignal: payload.config.abortSignal }) } } : { ...fields, ...Object.fromEntries(OUTPUT_LIMIT_FIELDS.filter((name) => name in payload).map((name) => [name, payload[name]])) };
 	return { ...capped, [key]: payload[key] };
+}
+
+const OUTPUT_LIMIT_FIELDS = ["max_tokens", "max_output_tokens", "max_completion_tokens"] as const;
+// pi-ai's default thinkingTokenBudgetField plus the names OpenAI-compatible engines accept.
+const COMPLETIONS_BUDGET_FIELDS = ["thinking_token_budget", "thinking_budget_tokens", "thinking_budget", "max_thinking_tokens"] as const;
+function thinkingBudget(key: string, captured: RecordValue): number | undefined {
+	const config = object(captured.config) ? captured.config : undefined;
+	const budget = key === "contents" && config && object(config.thinkingConfig) ? config.thinkingConfig.thinkingBudget
+		: object(captured.thinking) && captured.thinking.budget_tokens !== undefined ? captured.thinking.budget_tokens
+		: COMPLETIONS_BUDGET_FIELDS.map((name) => captured[name]).find((value) => typeof value === "number");
+	return typeof budget === "number" ? budget : undefined;
 }
 
 export function requestOutputLimit(payload: unknown): number | undefined {
 	if (!object(payload)) return undefined;
-	const value = payload.max_tokens ?? payload.max_output_tokens ?? (object(payload.config) ? payload.config.maxOutputTokens : undefined);
+	const value = payload.max_tokens ?? payload.max_output_tokens ?? payload.max_completion_tokens ?? (object(payload.config) ? payload.config.maxOutputTokens : undefined);
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 export function safeHeaders(headers: unknown): Record<string, string> {
