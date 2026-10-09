@@ -2,6 +2,23 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.23.5 - 2026-10-09
+
+### Fixed
+
+- Status Plus: the session cost no longer goes up and down by itself when
+  the subagents of a session have more than 64 MB of transcripts. Before,
+  each walk of the transcript could read only 64 MB of child sessions that
+  were not in its cache, so two walks in a row counted different children.
+  On a session with 83 MB of child sessions, the total changed by dollars
+  every 30 seconds. The footer now keeps only the parts of each child
+  session that it counts (1 to 12% of the file), reads a growing session
+  from where it stopped, and keeps a child's earlier records when a walk
+  cannot read it yet.
+- Status Plus: when one walk cannot read all the child sessions, as after a
+  resume of a very large session, the footer reads the rest 250 ms later,
+  not on the next 30 s walk. It does not show that catch-up as a new charge.
+
 ## 0.23.4 - 2026-10-08
 
 ### Changed
