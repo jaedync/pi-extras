@@ -2,6 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.23.4 - 2026-10-08
+
+### Changed
+
+- Status Plus: when a provider row does not fit, it drops the reset times
+  first and keeps the token counts. A window above 70% still shows its
+  countdown inline. Before, the token counts went first.
+- Status Plus: a model-family window at 0%, such as `7d-fable` while that
+  family goes unused, is not shown, and neither is its reset time. It shows
+  again at 1% or more, or when it blocks.
+
 ## 0.23.3 - 2026-10-08
 
 ### Changed
