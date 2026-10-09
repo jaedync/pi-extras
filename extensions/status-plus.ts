@@ -18,8 +18,9 @@ import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
 import { sharedLimitStore } from "../lib/limit-store.ts";
-import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, REFRESH_INTERVAL_MS, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
-import { estimateUsageCost, freeProviders, toEpochMs, type PricedModel } from "../lib/status-plus-logic.ts";
+import { nextPollMs, readShared, writeShared, type SharedPoll } from "../lib/limit-share.ts";
+import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, PollRefused, REFRESH_INTERVAL_MS, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
+import { estimateUsageCost, freeProviders, toEpochMs, withPolledBalances, type PricedModel } from "../lib/status-plus-logic.ts";
 import { splitMeshStatuses } from "../lib/status-plus-mesh.ts";
 import { TWEEN_FRAME_MS, flashIntensity, incrementAt, isActive, retarget, valueAt, type Tween } from "../lib/status-plus-tween.ts";
 import { EMPTY_PROVIDER, cacheState, cacheTtl } from "../lib/status-plus-render.ts";
@@ -34,7 +35,10 @@ import {
 } from "../lib/status-plus-transcript.ts";
 
 const LONG_CACHE = process.env.PI_CACHE_RETENTION === "long";
-const LOG_FILE = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "status-plus.log");
+const AGENT_DIR = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+const LOG_FILE = join(AGENT_DIR, "status-plus.log");
+/** Limit polls shared by the Pi processes of this agent directory (lib/limit-share.ts). */
+const SHARE_DIR = join(AGENT_DIR, "status-plus-limits");
 const ZEN_NOTE = "balance not exposed by OpenCode";
 /** Pause before reading the child evidence a walk could not afford: input and frames get through between walks. */
 const CATCH_UP_MS = 250;
@@ -89,8 +93,11 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	/** Providers with activity on this branch; gates which pollers may run. */
 	const seenProviders = new Set<string>();
 	const lastPollMs = new Map<string, number>();
-	/** Consecutive failed polls per provider, for backoff. */
+	/** Consecutive failed polls per provider, for backoff when the shared poll file is out of reach. */
 	const pollFailures = new Map<string, number>();
+	/** When the newest poll result this process applied ended, its own or another process's. */
+	const polledAtMs = new Map<string, number>();
+	let shareFailed = false;
 	/** Context of the latest event, so forced refreshes from other extensions can poll. */
 	let latestCtx: ExtensionContext | undefined;
 
@@ -345,30 +352,73 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		});
 	}
 
+	/** Best effort: an agent directory that cannot be written polls on its own, as before. */
+	function share(provider: string, poll: SharedPoll): void {
+		try {
+			writeShared(SHARE_DIR, provider, poll);
+		} catch (error) {
+			if (!shareFailed) operationalError(LOG_FILE, "status-plus", `could not share the ${provider} limit poll: ${(error as Error).message}`);
+			shareFailed = true;
+		}
+	}
+
+	/**
+	 * A fresh poll by another Pi process stands in for one of our own. Otherwise it
+	 * lends only its balances: windows move by the minute and headers carry them,
+	 * while a monthly budget moves slowly and only a poll reports it.
+	 */
+	function adoptShared(provider: string, shared: SharedPoll | undefined): void {
+		if (!shared?.atMs || !shared.entries?.length || shared.atMs <= (polledAtMs.get(provider) ?? 0)) return;
+		polledAtMs.set(provider, shared.atMs);
+		const now = Date.now();
+		const existing = providerLimits.get(provider);
+		const fresh = now - shared.atMs < POLL_FRESH_MS;
+		providerLimits.set(provider, fresh && (!existing || shared.atMs > existing.atMs)
+			? { entries: shared.entries, atMs: shared.atMs, source: "poll" }
+			: { atMs: shared.atMs, source: "poll", ...existing, entries: withPolledBalances(existing?.entries ?? [], shared.entries, now) });
+		requestFooterRender?.();
+	}
+
+	/**
+	 * Poll a provider's limits at most once a gap across every Pi process of this
+	 * agent directory: Anthropic rate-limits its usage endpoint per account, and
+	 * processes that each polled on their own clock got 429s and no budget.
+	 */
 	async function refreshProviderLimits(provider: string, ctx: ExtensionContext, force = false): Promise<void> {
 		if (process.env.PI_OFFLINE || process.env.STATUS_PLUS_POLL_LIMITS === "0") return;
 		const poller = LIMIT_POLLERS[provider];
 		if (!poller) return;
-		const last = lastPollMs.get(provider) ?? 0;
-		const failures = pollFailures.get(provider) ?? 0;
+		const shared = readShared(SHARE_DIR, provider);
+		adoptShared(provider, shared);
+		const failures = shared?.failures ?? pollFailures.get(provider) ?? 0;
 		const gap = force ? FORCED_POLL_FLOOR_MS : pollGapMs(poller.interval(ctx), failures, providerLimits.isHot(provider));
-		if (Date.now() - last < gap) return;
-		lastPollMs.set(provider, Date.now());
+		const triedAtMs = Date.now();
+		if (triedAtMs < nextPollMs(lastPollMs.get(provider) ?? 0, shared, gap)) return;
+		lastPollMs.set(provider, triedAtMs);
+		// Claim the try first, so the other processes wait for its result instead of asking too.
+		const claimed: SharedPoll = { ...(readShared(SHARE_DIR, provider) ?? shared), triedAtMs, failures };
+		share(provider, claimed);
 		try {
 			const entries = await poller.poll(ctx);
-			if (!entries || entries.length === 0) {
-				// No credentials or a non-2xx: back off rather than retry every interval.
-				pollFailures.set(provider, failures + 1);
-				return;
-			}
+			// No credentials or no data: back off rather than retry every interval.
+			if (!entries || entries.length === 0) return pollFailed(provider, claimed);
+			const atMs = Date.now();
 			pollFailures.set(provider, 0);
-			providerLimits.set(provider, { entries, atMs: Date.now(), source: "poll" });
+			polledAtMs.set(provider, atMs);
+			providerLimits.set(provider, { entries, atMs, source: "poll" });
+			share(provider, { atMs, entries, triedAtMs, failures: 0 });
 			requestFooterRender?.();
 		} catch (error) {
-			pollFailures.set(provider, failures + 1);
+			const refusal = error instanceof PollRefused ? error : undefined;
+			pollFailed(provider, refusal?.retryAfterMs ? { ...claimed, retryAtMs: triedAtMs + refusal.retryAfterMs } : claimed);
 			// Best-effort: a failed poll must never fail Pi, but it should be findable.
-			operationalError(LOG_FILE, "status-plus", `${provider} limit poll failed: ${(error as Error)?.name ?? "error"}`);
+			operationalError(LOG_FILE, "status-plus", `${provider} limit poll failed: ${refusal?.message ?? (error as Error)?.name ?? "error"}`);
 		}
+	}
+
+	function pollFailed(provider: string, claimed: SharedPoll): void {
+		pollFailures.set(provider, claimed.failures + 1);
+		share(provider, { ...claimed, failures: claimed.failures + 1 });
 	}
 
 	function schedulePolls(ctx: ExtensionContext): void {
@@ -387,7 +437,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		// Headers must not clobber a fresh, richer poll snapshot between polls.
 		const existing = providerLimits.get(provider);
 		if (existing?.source === "poll" && Date.now() - existing.atMs < POLL_FRESH_MS) return;
-		providerLimits.set(provider, { entries, atMs: Date.now(), source: "headers" });
+		// Headers carry windows but never money: keep the balance the last poll found.
+		providerLimits.set(provider, { entries: withPolledBalances(entries, existing?.entries, Date.now()), atMs: Date.now(), source: "headers" });
 		requestFooterRender?.();
 	});
 

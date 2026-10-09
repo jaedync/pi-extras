@@ -65,6 +65,9 @@ the package. Removing it does not remove your credentials or change other packag
   to the system timezone.
 - `STATUS_PLUS_POLL_LIMITS=0`: disable authenticated quota polling while retaining
   recorded usage and response-header limits. `PI_OFFLINE` also suppresses polling.
+  Pi processes that share an agent directory poll each provider once between them
+  and share the result in `PI_CODING_AGENT_DIR/status-plus-limits/`, so a new
+  session shows the last budget at once.
 - `PI_EXTRAS_USAGE_GUARD=1` or `0`: turn band warnings on or off for one run.
   See below for the persistent setting.
 - `PI_CODING_AGENT_DIR/pi-extras.json` (default `~/.pi/agent/pi-extras.json`):
@@ -366,6 +369,8 @@ rate limits taken from response headers are reported but never warned on.
   persists the toggle.
 - Polling: providers whose window sits within `proximityPct` of a threshold poll
   at their faster cadence; failed polls back off exponentially up to ten minutes.
+  The Pi processes of one agent directory share one poll and one backoff, and a
+  provider's `Retry-After` is obeyed for up to an hour.
 
 ## Rate-limit Recovery
 

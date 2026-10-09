@@ -162,6 +162,19 @@ export function shownLimits(entries: readonly LimitEntry[]): LimitEntry[] {
 		!familyWindow(entry) || entry.exhausted === true || entry.usedPct === undefined || Math.round(entry.usedPct) > 0);
 }
 
+/** A budget or credit balance, which only a poll reports; a kindless entry with no percent is one too. */
+const isBalance = (entry: LimitEntry): boolean => kindRank(entry) >= KIND_RANK.budget;
+
+/**
+ * Header windows with the balances an earlier poll found. Response headers carry
+ * windows but never money, so a budget shown once must not vanish when headers
+ * update the windows between polls. A budget whose month has ended is dropped.
+ */
+export function withPolledBalances(windows: readonly LimitEntry[], polled: readonly LimitEntry[] | undefined, now: number): LimitEntry[] {
+	const balances = (polled ?? []).filter((entry) => isBalance(entry) && !(entry.resetMs !== undefined && entry.resetMs <= now));
+	return [...windows.filter((entry) => !isBalance(entry)), ...balances];
+}
+
 /** The cost fields of a registry model this module reads. */
 export interface PricedModel {
 	provider: string;

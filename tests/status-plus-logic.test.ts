@@ -14,6 +14,7 @@ import {
 	proxyQuotaUrl,
 	toEpochMs,
 	windowLabel,
+	withPolledBalances,
 } from "../lib/status-plus-logic.ts";
 
 test("the clock renders in Central time regardless of the host zone", () => {
@@ -148,4 +149,16 @@ test("a model-family window shows only once it has a real percent", () => {
 	// A blocked window always shows, and so do family windows the header parser names by label alone.
 	assert.deepEqual(shown([fable(0, { exhausted: true }), hours]), ["5h", "7d-fable"]);
 	assert.deepEqual(shown([{ label: "7d_fable", usedPct: 0 }, { label: "7d", usedPct: 3 }]), ["7d"]);
+});
+
+test("headers update the windows but keep the balance a poll found, until its month ends", () => {
+	const now = Date.UTC(2026, 9, 9);
+	const budget = { label: "", kind: "budget" as const, remainingText: "$1106.83/$2000.00", resetMs: Date.UTC(2026, 10, 1), resetApprox: true };
+	const polled = [{ label: "5h", usedPct: 10 }, { label: "7d_fable", modelFamily: "fable", usedPct: 3 }, budget];
+	const headers = [{ label: "5h", usedPct: 14 }, { label: "7d", usedPct: 31 }];
+	assert.deepEqual(withPolledBalances(headers, polled, now), [...headers, budget]);
+	assert.deepEqual(withPolledBalances(headers, polled, Date.UTC(2026, 10, 1)), headers);
+	assert.deepEqual(withPolledBalances(headers, undefined, now), headers);
+	const credits = { label: "", kind: "credits" as const, remainingText: "$4.20 credits" };
+	assert.deepEqual(withPolledBalances([], [credits], now), [credits]);
 });

@@ -21,6 +21,12 @@ Provider-limit polling can send authenticated requests to:
 Set `STATUS_PLUS_POLL_LIMITS=0` to disable polling. `PI_OFFLINE` also disables it;
 recorded usage and response-header limits remain available.
 
+Status Plus saves the newest poll result for each provider in
+`status-plus-limits/<provider>.json` in the Pi agent directory, with mode
+`0600`: window percentages, reset times, a budget or credit balance, and when
+the last poll was tried. The Pi processes that share the agent directory read
+it, so they poll each provider once between them. It holds no credentials.
+
 It uses your existing provider authentication. Codex fallback reads only the
 configured Pi agent directory's `auth.json` (default `~/.pi/agent/auth.json`),
 or the explicit `PI_CODEX_ACCESS_TOKEN` / `PI_CODEX_ACCOUNT_ID` overrides.

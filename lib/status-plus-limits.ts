@@ -184,6 +184,31 @@ export function openCodeGoEntries(usage: ProviderUsage): LimitEntry[] {
 	}));
 }
 
+/** The longest wait a provider's Retry-After can impose; a wrong header must not stop polling for days. */
+const MAX_RETRY_AFTER_MS = 60 * 60_000;
+
+/** A poll the provider answered with an error status, such as 429 when its usage endpoint is rate-limited. */
+export class PollRefused extends Error {
+	readonly status: number;
+	readonly retryAfterMs: number | undefined;
+	constructor(status: number, retryAfterMs?: number) {
+		super(`HTTP ${status}`);
+		this.name = "PollRefused";
+		this.status = status;
+		this.retryAfterMs = retryAfterMs;
+	}
+}
+
+/** Retry-After in milliseconds, from delta seconds or an HTTP date; undefined when absent, zero or unreadable. */
+export function retryAfterMs(value: string | null | undefined, now = Date.now()): number | undefined {
+	if (!value) return undefined;
+	const seconds = Number(value);
+	const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - now;
+	return Number.isFinite(ms) && ms > 0 ? Math.min(ms, MAX_RETRY_AFTER_MS) : undefined;
+}
+
+const refused = (response: Response): PollRefused => new PollRefused(response.status, retryAfterMs(response.headers.get("retry-after")));
+
 /** Anthropic OAuth windows are keyed five_hour, seven_day, seven_day_<family>. */
 const OAUTH_WINDOW_KEY = /^(five_hour|seven_day)(_[a-z0-9_]+)?$/;
 
@@ -206,7 +231,7 @@ export async function pollAnthropicUsage(ctx: PollerContext): Promise<LimitEntry
 	const quotaUrl = proxyQuotaUrl(providerBaseUrl(ctx));
 	if (quotaUrl) {
 		const response = await fetch(quotaUrl, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) });
-		if (!response.ok) return undefined;
+		if (!response.ok) throw refused(response);
 		const entries = parseProxyQuota(await response.json());
 		return entries.length > 0 ? entries : undefined;
 	}
@@ -217,7 +242,7 @@ export async function pollAnthropicUsage(ctx: PollerContext): Promise<LimitEntry
 		headers: { authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" },
 		signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
 	});
-	if (!response.ok) return undefined;
+	if (!response.ok) throw refused(response);
 	const body = (await response.json()) as Record<string, unknown>;
 	const entries: LimitEntry[] = [];
 	for (const [key, raw] of Object.entries(body)) {
