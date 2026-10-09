@@ -87,6 +87,8 @@ export interface SessionStats {
 	cacheLongRetention?: boolean;
 	/** Newest compaction/branch summary; the old prompt-prefix cache is unreachable after it. */
 	lastContextResetMs?: number;
+	/** Some child evidence waited for a later walk's reads, so the totals are still catching up. */
+	partial?: boolean;
 }
 
 interface ToolCallBlock {
@@ -291,6 +293,7 @@ export function collect(source: TranscriptSource): SessionStats {
 	const children = new ChildEvidenceCollector(source.getSessionDir(), source.getSessionFile?.());
 	children.scanBranch(branch, source.getSessionFile?.() ?? "parent");
 	const resolved = children.resolve();
+	if (children.partial) stats.partial = true;
 	if (resolved.length === 0) return stats;
 	// Hashing every message is only needed to tell a child's copies apart from the parent's.
 	const seen = new Set(branch.map(entry => messageIdentity(entry)).filter((id): id is string => !!id));

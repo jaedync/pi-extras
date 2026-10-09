@@ -2,7 +2,8 @@
  * UUID/prose searches. Results, workflow inventory and notifications are aliases
  * for the same run/index; native sessions take precedence over artifact copies. */
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { evidenceFiles, evidenceJson, evidenceLines } from "./status-plus-evidence.ts";
+import { evidenceFiles, evidenceJson, evidenceLines, type EvidenceBudget } from "./status-plus-evidence.ts";
+import { slimRecord } from "./status-plus-slim.ts";
 import type { BranchEntry } from "./status-plus-transcript.ts";
 
 type RecordValue = Record<string, any>;
@@ -75,7 +76,7 @@ export class ChildEvidenceCollector {
 	private readonly visited = new Set<string>();
 	private readonly expanded = new Set<string>();
 	private budget = 512;
-	private readonly ioBudget = { bytes: 64 * 1024 * 1024 };
+	private readonly ioBudget: EvidenceBudget = { bytes: 64 * 1024 * 1024 };
 
 	constructor(sessionDir: string, sessionFile?: string) {
 		this.artifactDirs.add(join(sessionDir, "subagent-artifacts"));
@@ -175,9 +176,14 @@ export class ChildEvidenceCollector {
 		});
 	}
 
+	/** Some evidence waited for a later walk's reads, so the children's totals are still loading. */
+	get partial(): boolean {
+		return this.ioBudget.deferred === true;
+	}
+
 	private read(path: string, lines = false): any {
 		if (this.budget-- <= 0) return;
-		return lines ? evidenceLines(path, this.ioBudget) : evidenceJson(path, this.ioBudget);
+		return lines ? evidenceLines(path, this.ioBudget, slimRecord) : evidenceJson(path, this.ioBudget);
 	}
 
 	private files(path: string): string[] {

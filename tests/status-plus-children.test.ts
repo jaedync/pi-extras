@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collect } from "../lib/status-plus-transcript.ts";
@@ -337,4 +337,20 @@ test("one child reachable under two run ids is charged once", () => {
 		assert.deepEqual([stats.prompts, stats.turns, stats.toolCalls], [1, 2, 2]);
 		assert.equal(stats.providers.get("openai")?.cost, 1);
 	}
+});
+
+test("children too big for one walk's reads reach their full total, then keep it on every walk", (t) => {
+	const f = fixture();
+	t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+	// Ten 7 MB children are more than one walk reads or the cache once held: walks alternated $4.50 and $5.00.
+	const output = [{ type: "text", text: "x".repeat(7 * 1024 * 1024) }];
+	const branch = Array.from({ length: 10 }, (_, i) => {
+		const sessionFile = join(f.dir, `child-${i}.jsonl`);
+		const read = { type: "message", id: `out-${i}`, timestamp: iso(T), message: { role: "toolResult", toolCallId: `read-${i}`, toolName: "read", content: output } };
+		writeFileSync(sessionFile, [prompt(`task-${i}`), read, reply(`child-${i}`)].map(e => JSON.stringify(e)).join("\n") + "\n");
+		return result({ name: `child-${i}`, sessionFile }, "subagent", `spawn-${i}`);
+	});
+	const walks = Array.from({ length: 4 }, () => f.stats(branch));
+	assert.equal(walks[0].partial, true);
+	assert.deepEqual(walks.slice(1).map(s => [s.providers.get("anthropic")?.cost, s.partial ?? false]), [[5, false], [5, false], [5, false]]);
 });

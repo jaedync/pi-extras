@@ -167,9 +167,10 @@ test("a message's identity is hashed once: the footer walks the same entries eve
 	const message = { role: "assistant", provider: "p", model: "m", timestamp: 1, responseId: "r1", get content() { reads++; return [{ type: "text", text: "hi" }]; } };
 	const entry = { type: "message", id: "a", timestamp: "", message } as never;
 	const first = [messageIdentity(entry), messageIdentity(entry, false), messageIdentity(entry, true, "child")];
-	assert.equal(reads, 3);
+	// The content is hashed once for all three variants.
+	assert.equal(reads, 1);
 	assert.deepEqual([messageIdentity(entry), messageIdentity(entry, false), messageIdentity(entry, true, "child")], first);
-	assert.equal(reads, 3);
+	assert.equal(reads, 1);
 	// Each variant is its own hash: the row id and the owner change it.
 	assert.notEqual(first[0], first[1]);
 	const ownerless = { type: "message", timestamp: "", message: { ...message, responseId: undefined, content: [] } } as never;

@@ -36,6 +36,10 @@ import {
 const LONG_CACHE = process.env.PI_CACHE_RETENTION === "long";
 const LOG_FILE = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "status-plus.log");
 const ZEN_NOTE = "balance not exposed by OpenCode";
+/** Pause before reading the child evidence a walk could not afford: input and frames get through between walks. */
+const CATCH_UP_MS = 250;
+/** Follow-up walks in a row: enough for 320 MB of children; a cache too small for them could otherwise keep going. */
+const MAX_CATCH_UPS = 4;
 const GO_BILLING_NOTE = "billing Zen";
 
 interface FooterData {
@@ -101,6 +105,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	/** The leaf the last walk saw; an event that left it unchanged has nothing new to count. */
 	let walkedLeaf: string | undefined;
 	let pendingRefresh: ReturnType<typeof setImmediate> | undefined;
+	let catchUpTimer: ReturnType<typeof setTimeout> | undefined;
+	let catchUps = 0;
 	/** Providers whose models all cost nothing, read from the registry with each walk. */
 	let free = new Set<string>();
 	/** Chains that finished since the transcript last saved them; Tool Display saves between turns. */
@@ -114,11 +120,35 @@ export default function statusPlus(pi: ExtensionAPI): void {
 
 	function refreshStats(ctx: ExtensionContext): SessionStats {
 		walkedLeaf = leafOf(ctx);
+		const loading = transcriptStats?.partial === true;
 		transcriptStats = collect(transcriptSource(ctx));
+		// What the last walk could not read yet is loading, not spend: no animation for it.
+		if (loading) costTween = undefined;
+		catchUp(ctx, transcriptStats.partial === true);
 		for (const id of transcriptStats.providers.keys()) seenProviders.add(id);
 		const registry = ctx.modelRegistry as { getAll?: () => PricedModel[] } | undefined;
 		free = typeof registry?.getAll === "function" ? freeProviders(registry.getAll()) : new Set();
 		return transcriptStats;
+	}
+
+	/** After a walk that ran out of reads, read the rest soon rather than on the 30 s timer. */
+	function catchUp(ctx: ExtensionContext, partial: boolean): void {
+		if (!partial) {
+			catchUps = 0;
+			return;
+		}
+		if (catchUpTimer || catchUps >= MAX_CATCH_UPS) return;
+		catchUps++;
+		catchUpTimer = setTimeout(() => {
+			catchUpTimer = undefined;
+			update(ctx);
+		}, CATCH_UP_MS);
+	}
+
+	function stopCatchUp(): void {
+		if (catchUpTimer) clearTimeout(catchUpTimer);
+		catchUpTimer = undefined;
+		catchUps = 0;
 	}
 
 	/** A copy of the cached totals with the in-flight request folded in; cheap enough for every frame. */
@@ -423,6 +453,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		});
 		// New or resumed session: its first total is the baseline, not a change to animate.
 		costTween = undefined;
+		stopCatchUp();
 		if (frameTimer) clearTimeout(frameTimer);
 		frameTimer = undefined;
 		// Clear leftovers from previous versions of this extension; the grid
@@ -446,6 +477,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async () => {
 		if (pendingRefresh) clearImmediate(pendingRefresh);
 		pendingRefresh = undefined;
+		stopCatchUp();
 		providerLimits.setRefresher(undefined);
 		latestCtx = undefined;
 		if (timer) clearInterval(timer);

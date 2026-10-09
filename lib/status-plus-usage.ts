@@ -3,12 +3,13 @@ import { createHash } from "node:crypto";
 import type { ChildEvidence } from "./status-plus-children.ts";
 import type { BranchEntry, SessionStats } from "./status-plus-transcript.ts";
 import { EMPTY_PROVIDER } from "./status-plus-render.ts";
+import { CONTENT_HASH, contentHash } from "./status-plus-slim.ts";
 
 /**
- * Hashes by entry and variant. Pi hands back the same entry objects on every
- * walk and never changes a saved one, and hashing every message again was most
- * of the footer's refresh time in a long session. Weak keys let child entries
- * read from disk go with their walk.
+ * Hashes by entry and variant, and each entry's content hash under "content". Pi
+ * hands back the same entry objects on every walk and never changes a saved one,
+ * and hashing every message again was most of the footer's refresh time in a long
+ * session. Weak keys let child entries read from disk go with their walk.
  */
 const identities = new WeakMap<BranchEntry, Map<string, string>>();
 
@@ -19,19 +20,25 @@ export function messageIdentity(entry: BranchEntry, includeEntryId = true, owner
 	const variant = includeEntryId ? `id:${owner}` : "copy";
 	let known = identities.get(entry);
 	if (known?.has(variant)) return known.get(variant);
-	const identity = hashIdentity(entry, message, includeEntryId, owner);
 	if (!known) identities.set(entry, known = new Map());
+	// A slim child record carries the hash of the content it no longer holds; a full one is hashed here, once.
+	let content = known.get("content");
+	if (content === undefined) {
+		content = (message[CONTENT_HASH] as string | undefined) ?? contentHash(message.content);
+		known.set("content", content);
+	}
+	const identity = hashIdentity(entry, message, includeEntryId, owner, content);
 	known.set(variant, identity);
 	return identity;
 }
 
-function hashIdentity(entry: BranchEntry, message: any, includeEntryId: boolean, owner: string): string {
+function hashIdentity(entry: BranchEntry, message: any, includeEntryId: boolean, owner: string, content: string): string {
 	// Native forks/resumes retain row IDs. Keep those IDs across children so
 	// independent identical parallel prompts aren't collapsed. Within a child,
 	// artifact copies lack row IDs and are matched by the request fingerprint.
 	return createHash("sha256").update(JSON.stringify([
 		includeEntryId ? entry.id ?? (message.responseId ? undefined : owner) : undefined, message.responseId,
-		message.role, message.timestamp ?? entry.id, message.provider, message.model, message.content,
+		message.role, message.timestamp ?? entry.id, message.provider, message.model, content,
 	])).digest("hex");
 }
 
