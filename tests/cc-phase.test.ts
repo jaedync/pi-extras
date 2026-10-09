@@ -98,3 +98,11 @@ test("the end line is dim after its glyph", () => {
  renderEndLine({elapsedMs:1000,doneAt:"7 PM"},80,spy);
  assert.deepEqual(keys, ["accent", "dim"]);
 });
+test("the end line adds the prompt's average TPS last, so a narrow row drops it first",()=>{
+ const line=(model:Parameters<typeof renderEndLine>[0])=>stripTerminalSequences(renderEndLine(model,80,theme));
+ assert.equal(line({past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM",tps:98.14}),`${END_GLYPH} Proofed for 18s, done 7:43 PM, avg TPS 98.1`);
+ assert.equal(line({past:"Proofed",elapsedMs:9200,doneAt:"7:43 PM",stopped:true,tps:98.14}),`${END_GLYPH} Stopped after 9s, avg TPS 98.1`);
+ assert.equal(stripTerminalSequences(renderEndLine({past:"Proofed",elapsedMs:18000,doneAt:"7:43 PM",tps:98.14},31,theme)),`${END_GLYPH} Proofed for 18s, done 7:43 PM`);
+ assert.deepEqual(parseEndLine({past:"Done",elapsedMs:1000,doneAt:"7 PM",tps:98.14}),{past:"Done",elapsedMs:1000,doneAt:"7 PM",tps:98.14});
+ for(const tps of [0,-1,null,"9"])assert.deepEqual(parseEndLine({past:"Done",elapsedMs:1000,doneAt:"7 PM",tps}),{past:"Done",elapsedMs:1000,doneAt:"7 PM"});
+});

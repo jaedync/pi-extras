@@ -528,6 +528,15 @@ The editor's top divider says what the agent is doing:
   wordings keep counting. `Time` on the right is the whole prompt. Pi's
   statuses get a stopwatch too, except a retry, whose own text counts down.
   Reduced motion stops the spinner but not the clocks.
+- **TPS** shows how fast tokens come. While the model streams, it counts the
+  tokens that came in the latest second, and it changes on every frame (at
+  least 12 times a second), so it rises and falls with the stream. Some
+  providers hold a tool call back and send it in one piece at the end. Such a
+  burst counts as if it came evenly over the silence before it, so it does
+  not show as a false spike. When no tokens came in the latest second, TPS
+  shows the prompt's average: the output tokens that the provider reported,
+  divided by the time of the requests. The live count uses 4 characters a
+  token, as the token count beside the word does.
 - **Narrow terminals** drop TPS first, then TTFT, then the token count, then
   `Time`. Then a long tool name shortens to `Writing…` or `Running…`. The word,
   the spinner and the stopwatch go last, and the status never wraps.
@@ -537,9 +546,11 @@ conversation, above queued messages. A tool call the model is still writing
 shows as Pi's own row in the conversation.
 
 When a prompt finishes, a dotted π waves in and out in the divider, and the
-conversation keeps an end line such as `π Worked for 41s, done 9:14 PM`, or
+conversation keeps an end line such as
+`π Worked for 41s, done 9:14 PM, avg TPS 98.1`, or
 `π Stopped after 12s` when you stopped it. A prompt of one minute or more
-reads in minutes, for example `π Worked for 2m04s, done 4:13 PM`. The end line and the thinking rows
+reads in minutes, for example `π Worked for 2m04s, done 4:13 PM`. The average
+TPS shows when at least one response completed. The end line and the thinking rows
 are only drawn; the model never sees them.
 
 Set `phaseSpinner.verbs` to `"playful"` for pie and π words (Proofing,

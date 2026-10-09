@@ -218,6 +218,22 @@ test("real extension wires stream timing to the live and retained editor border"
 	assert.doesNotMatch(h.render()[0], /TTFT|Decode|TPS|•/);
 });
 
+test("TPS follows the stream while it flows, then the prompt's average, which the end line keeps", t => {
+	const h = harness(t);
+	h.emit("agent_start");
+	h.emit("turn_start");
+	h.emit("before_provider_request", {}, 0);
+	for (let at = 1000; at <= 3000; at += 20) h.update("text_delta", "x".repeat(12), at);
+	assert.match(h.render(3000)[0], /TPS 150\.0 ─ TTFT 1\.0s/, "the latest second: 12 characters every 20 ms");
+	for (let at = 3100; at <= 4000; at += 100) h.update("text_delta", "x".repeat(12), at);
+	assert.match(h.render(4000)[0], /TPS {2}30\.0 ─ TTFT/, "it falls as soon as the stream slows");
+	assert.doesNotMatch(h.render(5100)[0], /TPS/, "after a silent second it shows the average, and there is none yet");
+	h.finish(600, 5200);
+	assert.match(h.render(5200)[0], /TPS 115\.4 ─ TTFT/, "600 tokens over the 5.2 s request");
+	h.settle();
+	assert.ok(Math.abs(h.entries.at(-1).data.tps - 600 / 5.2) < 1e-9, "the end line keeps the average");
+});
+
 test("Pi's working loader is held still only once this row covers it, and moves again after the run", t => {
 	const h = harness(t);
 	h.emit("agent_start");

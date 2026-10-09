@@ -80,15 +80,26 @@ export function updateRunMetrics(state: RunMetrics, event: MetricsEvent): RunMet
 	return state;
 }
 
+/** The prompt's average: reported output tokens over the time of the requests that produced them. */
+export function averageTps(summary: MetricsSummary | undefined): number | undefined {
+	const outputTokens = summary?.throughput?.outputTokens ?? 0;
+	const requestMs = summary?.throughput?.requestMs ?? 0;
+	return Number.isFinite(requestMs) && Number.isFinite(outputTokens) && requestMs > 0 && outputTokens > 0
+		? outputTokens / (requestMs / MS_PER_SECOND) : undefined;
+}
+
+/** `digits` pads the number, so a rate that changes on every frame does not move the text after it. */
+export function formatTps(tokensPerSecond: number, digits = 0): string {
+	return `TPS ${tokensPerSecond.toFixed(1).padStart(digits)}`;
+}
+
 export function formatMetrics(summary: MetricsSummary): readonly string[] {
-	const { ttftMinMs: min, ttftMaxMs: max, throughput } = summary;
-	const outputTokens = throughput?.outputTokens ?? 0;
-	const requestMs = throughput?.requestMs ?? 0;
+	const { ttftMinMs: min, ttftMaxMs: max } = summary;
 	const minText = min !== undefined ? (min / MS_PER_SECOND).toFixed(1) : undefined;
 	const maxText = max !== undefined ? (max / MS_PER_SECOND).toFixed(1) : undefined;
 	const ttft = minText !== undefined && maxText !== undefined
 		? `TTFT ${minText === maxText ? minText : `${minText}–${maxText}`}s` : undefined;
-	const rate = Number.isFinite(requestMs) && Number.isFinite(outputTokens) && requestMs > 0 && outputTokens > 0
-		? `TPS ${(outputTokens / (requestMs / MS_PER_SECOND)).toFixed(1)}` : undefined;
+	const average = averageTps(summary);
+	const rate = average !== undefined ? formatTps(average) : undefined;
 	return [rate, ttft].filter((section): section is string => section !== undefined);
 }

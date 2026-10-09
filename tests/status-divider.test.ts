@@ -49,3 +49,11 @@ test("an idle status without a prompt total still shows the hidden-line count",(
  assert.match(row,/↑ 3 ─$/);assert.doesNotMatch(row,/Time /);
  assert.doesNotMatch(renderStatusDivider({...idle,hiddenLineCount:0},130,paint),/↑|Time /);
 });
+test("a live rate replaces the average and keeps one width, so the rail does not jump",()=>{
+ const fast=renderStatusDivider({...model,liveTps:150.04},130,paint),slow=renderStatusDivider({...model,liveTps:9.5},130,paint);
+ assert.match(fast,/TPS 150\.0 ─ TTFT/);assert.doesNotMatch(fast,/109\.3/);
+ assert.match(slow,/TPS {3}9\.5 ─ TTFT/);
+ assert.equal(slow.indexOf("TPS"),fast.indexOf("TPS"));
+ assert.match(renderStatusDivider({...model,metrics:undefined,liveTps:80},130,paint),/TPS {2}80\.0 ─ Time/);
+ assert.match(renderStatusDivider(model,130,paint),/TPS 109\.3/);
+});

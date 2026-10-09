@@ -131,18 +131,23 @@ export function renderPiWave(elapsedMs: number, theme: LineTheme, width = SPINNE
 }
 export interface EndLine {
  readonly past?: string; readonly elapsedMs: number; readonly doneAt: string; readonly stopped?: boolean;
+ /** The prompt's average output tokens per second, when a request completed. */
+ readonly tps?: number;
 }
 export const END_ENTRY = "pi-extras.run-end";
 export function parseEndLine(value: unknown): EndLine | undefined {
  if(!value || typeof value!=="object")return undefined;
  const model=value as EndLine;
  if(!((model.past===undefined || valid(model.past)) && valid(model.doneAt) && Number.isFinite(model.elapsedMs) && model.elapsedMs>=0 && (model.stopped===undefined || typeof model.stopped==="boolean"))) return undefined;
- return {...(model.past!==undefined?{past:model.past}:{}),elapsedMs:model.elapsedMs,doneAt:model.doneAt,...(model.stopped?{stopped:true}:{})};
+ // An end line saved before TPS existed, or with a bad rate, still shows the rest.
+ const tps=typeof model.tps==="number" && Number.isFinite(model.tps) && model.tps>0 ? model.tps : undefined;
+ return {...(model.past!==undefined?{past:model.past}:{}),elapsedMs:model.elapsedMs,doneAt:model.doneAt,...(model.stopped?{stopped:true}:{}),...(tps!==undefined?{tps}:{})};
 }
 /** Whole seconds under a minute, then minutes and up (`2m04s`), as the fold lines read. */
 const runTime = (ms: number): string => ms < 60_000 ? seconds(ms) : minutesAndUp(Math.floor(ms/1000));
 export function renderEndLine(model: EndLine,width:number,theme:LineTheme): string {
  const head=model.stopped ? `Stopped after ${runTime(model.elapsedMs)}` : `${model.past ?? "Worked"} for ${runTime(model.elapsedMs)}`;
- const parts=[head,...(model.stopped?[]:[`done ${model.doneAt}`])];
+ // The average goes last, so a narrow row drops it before the time it was done.
+ const parts=[head,...(model.stopped?[]:[`done ${model.doneAt}`]),...(model.tps?[`avg TPS ${model.tps.toFixed(1)}`]:[])];
  return truncateToWidth(theme.fg("accent",END_GLYPH)+" "+theme.fg("dim",parts.join(SEP)),Math.max(0,width),"");
 }

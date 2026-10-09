@@ -12,7 +12,8 @@ import {
 	type PhaseBorderPaint,
 } from "../lib/phase-status.ts";
 
-import { emptyRunMetrics, updateRunMetrics } from "../lib/phase-metrics.ts";
+import { averageTps, emptyRunMetrics, updateRunMetrics } from "../lib/phase-metrics.ts";
+import { emptyLiveRate, liveTokensPerSecond, noteArrival, type LiveRate } from "../lib/live-rate.ts";
 import { TopBorderLink } from "../lib/top-border.ts";
 import { EditorSlot, type StatusIndicator, type WrappedEditor } from "../lib/editor-wrapper.ts";
 import { everyFrame } from "../lib/band/clock.ts";
@@ -115,6 +116,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	let tokensAt = 0;
 	let lastTokenAt = 0;
 	let rate = { at: 0, chars: 0, rate: 0, waveMs: 0 };
+	// The divider's TPS while a response streams; between responses it shows the prompt's average.
+	let live: LiveRate | undefined;
 	let retryDelayMs: number | undefined;
 	let wave: { at: number; theme: ExtensionContext["ui"]["theme"] } | undefined;
 	let reachedAgentEnd = false;
@@ -432,10 +435,12 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		if (!active || runEnded) return;
 		const stopped = cancelled || endReason === "aborted";
 		const waveTheme = animate && !stopped && !reduced && activeTui ? ctx.ui.theme : undefined;
+		const tps = averageTps(metrics);
 		if (ctx.mode === "tui") pi.appendEntry(END_ENTRY, {
 			...(verb ? { past: verb.past } : {}), elapsedMs: performance.now() - lineStartedAt,
 			doneAt: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
 			...(stopped ? { stopped: true } : {}),
+			...(tps !== undefined ? { tps } : {}),
 		});
 		runEnded = true;
 		stop(true);
@@ -448,6 +453,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	function stop(persistLastRun = false): void {
 		wave = undefined;
 		tailCache = undefined;
+		live = undefined;
 		metrics = updateRunMetrics(metrics, { type: persistLastRun ? "settle" : "reset" });
 		if (active && persistLastRun) lastTotalElapsedMs = performance.now() - agentStartedAt;
 		else if (!persistLastRun) lastTotalElapsedMs = undefined;
@@ -486,6 +492,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			compactStatus: renderRunStatus(model, theme, false, true),
 			elapsedMs: now - agentStartedAt,
 			metrics,
+			liveTps: liveTokensPerSecond(live, now),
 			hiddenLineCount,
 		}, width, paint("accent"));
 	}
@@ -628,6 +635,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		lastRequestAt = performance.now();
 		lastTokenAt = lastRequestAt;
 		metrics = updateRunMetrics(metrics, { type: "request", at: lastRequestAt });
+		live = emptyLiveRate(lastRequestAt);
 		setPhase("api", ctx, "before_provider_request", true);
 	});
 	pi.on("after_provider_response", (event, ctx) => setPhase("first_token", ctx, "after_provider_response", true, { status: event.status }));
@@ -641,6 +649,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		if ("delta" in streamEvent && typeof streamEvent.delta === "string" && eventType.endsWith("_delta")) {
 			streamedChars += streamEvent.delta.length;
 			lastTokenAt = performance.now();
+			if (live) live = noteArrival(live, lastTokenAt, streamEvent.delta.length);
 		}
 		metrics = updateRunMetrics(metrics, {
 			type: "delta", at: performance.now(), kind: eventType,
@@ -663,6 +672,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	pi.on("message_end", (event, ctx) => {
 		if (event.message.role === "assistant") endReason = event.message.stopReason;
 		if (event.message.role !== "assistant") return;
+		live = undefined;
 		if (phase === "think") setPhase("prep", ctx, "thinking_finished");
 		// Whole-request throughput includes initial wait and final stream metadata.
 		// usage.output already includes reasoning tokens; do not add them again.

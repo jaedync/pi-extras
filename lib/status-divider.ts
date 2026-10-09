@@ -1,6 +1,9 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed } from "./phase-status.ts";
-import { formatMetrics, type MetricsSummary } from "./phase-metrics.ts";
+import { formatMetrics, formatTps, type MetricsSummary } from "./phase-metrics.ts";
+
+/** Room for 999.9: a live rate changes on every frame, and TTFT and Time must stay still beside it. */
+const LIVE_TPS_DIGITS = 5;
 
 export interface StatusDivider {
 	readonly status: string;
@@ -8,6 +11,8 @@ export interface StatusDivider {
 	readonly elapsedMs?: number;
 	readonly compactStatus?: string;
 	readonly metrics?: MetricsSummary;
+	/** Tokens per second over the latest second; the average shows when no tokens came in it. */
+	readonly liveTps?: number;
 	readonly hiddenLineCount?: number;
 }
 
@@ -20,7 +25,7 @@ export interface DividerPaint {
 export function renderStatusDivider(model: StatusDivider, width: number, paint: DividerPaint): string {
 	if (width <= 0) return "";
 	const metrics = model.metrics ? formatMetrics(model.metrics) : [];
-	const tps = metrics.find(part => part.startsWith("TPS"));
+	const tps = model.liveTps !== undefined ? formatTps(model.liveTps, LIVE_TPS_DIGITS) : metrics.find(part => part.startsWith("TPS"));
 	const ttft = metrics.find(part => part.startsWith("TTFT"));
 	const overflow = model.hiddenLineCount ? `↑ ${model.hiddenLineCount} ` : "";
 	// An idle status has no prompt total, but the editor's hidden-line count still belongs here.
