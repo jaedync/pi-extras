@@ -11,6 +11,8 @@ import { dirname, join } from "node:path";
 export const CONFIG_FILE = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "pi-extras.json");
 
 export const DISPLAY_SETTINGS_EVENT = "pi-extras:tool-display-settings";
+/** Tool Display's folded mode: `{ live }`, when a folded line starts or stops moving, so the phase spinner yields its motion to it. */
+export const FOLD_LIVE_EVENT = "pi-extras:fold-live";
 
 type Json = Record<string, unknown>;
 

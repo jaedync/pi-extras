@@ -283,11 +283,13 @@ test("the spinner, not the words, shows what the model does now", () => {
 });
 
 test("a live run with no calls draws once the model thinks, and says how long it has thought", () => {
-	const { value } = host({ busy: () => true, thoughtMs: (_message, live) => (live ? 1_500 : undefined) });
+	const { value, calls } = host({ busy: () => true, thoughtMs: (_message, live) => (live ? 1_500 : undefined) });
 	const prompt = new Row(["", " prompt"]);
 	const reply = new Reply({ content: [], timestamp: 9_000 }, true);
 	const chat = chatOf([prompt, reply]);
-	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt"], "nothing is done yet, and the phase spinner shows the wait");
+	const view = viewOf(value);
+	assert.deepEqual(text(view.render(chat, 80)), ["", " prompt"], "nothing is done yet, and the phase spinner shows the wait");
+	assert.deepEqual(calls.animate, [false], "no line drawn is no line live: the status line keeps its spinner");
 	reply.lastMessage = { content: [{ type: "thinking", thinking: "plan the change" }], usage: { input: 2_000 }, timestamp: 9_000 };
 	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt", "", `${THINK} Thought for 1.5s, ↑2.0k ↓4`], "the time is in the words, so the figures leave it out; at the left edge the words start 2 columns further in");
 });

@@ -21,7 +21,7 @@
  * extensions' tools with their own words in it (see foreign.ts).
  */
 import { randomBytes } from "node:crypto";
-import { DISPLAY_SETTINGS_EVENT } from "../extras-config.ts";
+import { DISPLAY_SETTINGS_EVENT, FOLD_LIVE_EVENT } from "../extras-config.ts";
 import { pathToFileURL } from "node:url";
 import {
 	createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition,
@@ -195,6 +195,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		thoughtMs: (message, live) => thoughtFor(message, (reply, index) => thinkingDuration(reply, index, live)),
 		nestedOf: (id) => nested.get(id)?.calls,
 		written: run.written,
+		live: (live) => pi.events.emit(FOLD_LIVE_EVENT, { live }),
 	});
 
 	const kit: Kit = {

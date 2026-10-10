@@ -67,6 +67,7 @@ function stage(options: { mode?: string; layout?: boolean } = {}) {
 	};
 	let enabled = true;
 	let busy = false;
+	const lives: boolean[] = [];
 	const ticks: Array<() => void> = [];
 	let stopped = 0;
 	const fold = watchFold(pi as never, {
@@ -76,6 +77,7 @@ function stage(options: { mode?: string; layout?: boolean } = {}) {
 		now: () => 9_000,
 		thoughtMs: () => undefined,
 		nestedOf: () => undefined,
+		live: (value) => { lives.push(value); },
 		frames: (tick) => {
 			ticks.push(tick);
 			return () => { stopped++; };
@@ -84,7 +86,7 @@ function stage(options: { mode?: string; layout?: boolean } = {}) {
 	const rows = { reply: new Reply(reply), row: new Row("read", "a") };
 	chat.children = [rows.reply, rows.row];
 	return {
-		fold, fire, chat, widgets, rows, ticks, notes,
+		fold, fire, chat, widgets, rows, ticks, notes, lives,
 		breakTheme: () => { broken = true; },
 		renders: () => renders, stopped: () => stopped,
 		set: (next: { enabled?: boolean; busy?: boolean }) => { enabled = next.enabled ?? enabled; busy = next.busy ?? busy; },
@@ -158,4 +160,23 @@ test("a view that throws leaves Pi's rows, stops its frames, and warns once", ()
 	assert.equal(s.stopped(), 1);
 	assert.equal(s.notes.length, 1);
 	assert.match(s.notes[0]!, /could not draw the transcript/);
+});
+
+test("the status line hears when a folded line becomes live and when it settles, once each", () => {
+	const s = stage();
+	s.fire("session_start");
+	s.fold.refresh();
+	s.chat.render(100);
+	assert.deepEqual(s.lives, [], "settled from the start: nothing to say");
+	s.set({ busy: true });
+	s.chat.render(100);
+	s.chat.render(100);
+	assert.deepEqual(s.lives, [true]);
+	s.set({ busy: false });
+	s.chat.render(100);
+	assert.deepEqual(s.lives, [true, false]);
+	s.set({ busy: true });
+	s.chat.render(100);
+	s.fire("session_shutdown");
+	assert.deepEqual(s.lives, [true, false, true, false], "a session that ends takes the line down");
 });

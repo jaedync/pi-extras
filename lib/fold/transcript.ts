@@ -556,10 +556,11 @@ export class FoldView {
 			}
 			const group = plan.groups[entry.group]!;
 			const { row, facts, open: shown } = groups[entry.group]!;
-			live ||= facts.live;
 			if (!shown && !facts.live && facts.tools.length === 0 && facts.tokens === 0) continue;
 			// Live with nothing done yet: no call and no thinking. The phase spinner shows the wait.
 			if (facts.live && facts.tools.length === 0 && facts.thoughtMs === undefined && facts.phase !== "think") continue;
+			// Only a line drawn is live: the phase spinner yields its motion to it.
+			live ||= facts.live;
 			put(row, row.render(width));
 			if (thoughtOnly(facts)) for (const index of group.said) tucked.add(index);
 			if (shown) this.drawRun(row, [...group.members, ...group.dropped].sort((a, b) => a - b), children, rows, width, put);

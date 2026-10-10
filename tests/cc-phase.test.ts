@@ -63,6 +63,18 @@ test("theme colors blend during thinking and stalls, tool words pulse, reduced m
  const pulses=[0,250,500].map(clockMs=>colorToHex(draw({phase:"run",clockMs})[1]!.fg!));
  assert.equal(new Set(pulses).size,3,"the pulse blends, rather than flashing between two colors");
 });
+test("a status line that yields its motion keeps the word's column, with no spinner and no shimmer", () => {
+ const colors={accent:rgbColor(80,100,180),text:rgbColor(240,240,240)};
+ let styles:string[]=[];
+ const painted={...theme,colors,style:(text:string,style:{fg?:Color})=>{styles.push(colorToHex(style.fg!));return text;}};
+ const word=(over:Partial<RunLine>)=>{styles=[];const line=stripTerminalSequences(renderRunStatus({...base,verb:undefined,phase:"think",...over},painted));return {line,styles};};
+ const moving=word({clockMs:1000});
+ const still=word({clockMs:1000,yields:true});
+ assert.equal(still.line.indexOf("Thinking"),moving.line.indexOf("Thinking"),"the word keeps its column");
+ assert.match(still.line,/^ {3} Thinking… /,"a blank slot where the spinner was");
+ assert.equal(new Set(still.styles).size,1,"every letter in the accent: no sweep");
+ assert.ok(new Set(moving.styles).size>1,"without it, the sweep lights some letters");
+});
 test("untrusted restored end metadata cannot inject controls or invalid timing", () => {
  assert.equal(parseEndLine(null),undefined);
  assert.equal(parseEndLine({past:"\x1b[2J",elapsedMs:1,doneAt:"7 PM"}),undefined);

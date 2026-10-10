@@ -650,7 +650,10 @@ The editor's top divider says what the agent is doing:
   thinks, a print head while it writes a tool call, a comet orbit while tools
   run, two comets while it waits for a subagent's reply, and a wave that
   follows the stream's speed while it writes the reply. Compaction squeezes to
-  a point, a retry drains, and a branch summary walks every row.
+  a point, a retry drains, and a branch summary walks every row. With Tool
+  Display's folded mode, only one place moves at a time: while a folded line
+  is live, it shows the spinner, and the status line has an empty slot and a
+  word that holds still. Its words, clocks and colors stay.
 - **Color:** the status turns amber after 10 seconds of thinking, and red when
   no tokens have come for 10 seconds. Some providers, Meridian among them,
   send the start of a tool call and hold its arguments until the model has
@@ -846,7 +849,9 @@ phase spinner's own spinner, 3 cells wide, takes the bullet's place and
 tells what the model does now: the ping while it waits for the model, the
 helix while thinking text streams, the print head while it writes a call,
 the comet while a call runs, and the two comets while every running call
-waits on another agent. A line under a reply has room for it in its margin,
+waits on another agent. While the line is live, the phase spinner's status
+line above the editor shows no spinner, so only one spinner moves. A line
+under a reply has room for it in its margin,
 so its words stay where they settle. A line at the left edge has no margin,
 so its words start 2 columns further in while it is live. The words of a
 live line keep the same gray, and a soft band of light crosses them from

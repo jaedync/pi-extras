@@ -18,7 +18,7 @@ import { TopBorderLink } from "../lib/top-border.ts";
 import { EditorSlot, type StatusIndicator, type WrappedEditor } from "../lib/editor-wrapper.ts";
 import { everyFrame } from "../lib/band/clock.ts";
 import { TailRow } from "../lib/tail-row.ts";
-import { DISPLAY_SETTINGS_EVENT, readSection } from "../lib/extras-config.ts";
+import { DISPLAY_SETTINGS_EVENT, FOLD_LIVE_EVENT, readSection } from "../lib/extras-config.ts";
 import { renderStatusDivider } from "../lib/status-divider.ts";
 import { CHARS_PER_TOKEN, END_ENTRY, parseEndLine, parseVerbs, pickVerb, renderEndLine, renderPiWave, renderRunStatus, smoothTokens, streamRate, type RunLine } from "../lib/cc-phase.ts";
 import { MODE_SPINNERS, PI_WAVE, PI_WAVE_MS, REDUCED_FRAME, isBlockingPeer, slotGlyph, spinnerCadence, type GlyphAnimation } from "../lib/band/glyph.ts";
@@ -116,6 +116,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	});
 	/** Tool Display's folded mode: no live thinking. */
 	let folds = false;
+	/** A folded line moves for what happens now, so the run line's spinner and word hold back. */
+	let foldLive = false;
 	let verb: RunLine["verb"];
 	let verbs = parseVerbs(undefined);
 	let reduced = false;
@@ -220,7 +222,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const animation = status?.style.animation ?? MODE_SPINNERS[peer ? "peer" : phase];
 		const cadence = spinnerCadence(animation, reduced, rate.rate, !!status && animation.kind === "fraction" && retryDelayMs !== undefined);
 		const shimmer = reduced ? 1000 : !status && phase === "api" ? SEND_REFRESH_MS : DISPLAY_REFRESH_MS;
-		const desired = wave ? PI_WAVE.stepMs : Math.ceil(Math.min(cadence, shimmer, STEP_CLOCK_REFRESH_MS));
+		// Yielding to a folded line, only the clock moves.
+		const desired = wave ? PI_WAVE.stepMs : !status && foldLive ? STEP_CLOCK_REFRESH_MS : Math.ceil(Math.min(cadence, shimmer, STEP_CLOCK_REFRESH_MS));
 		if (stopFrames && frameMs === desired) return;
 		stopFrames?.();
 		frameMs = desired;
@@ -517,7 +520,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			tokens: shownTokens, clockMs: now - lineStartedAt, reduced, tools: leafTools().map(tool => tool.name),
 			waitingOnPeers: leafTools().length > 0 && leafTools().every(tool => tool.blocking),
 			pendingTool: pendingToolName, pendingArgs: pendingToolArgs, thoughtMs, sinceThoughtMs: now - thoughtEndedAt,
-			idleTokenMs: now - lastTokenAt, waveMs: rate.waveMs, tokensPerSecond: rate.rate, heldCall: phase === "tool" && callArgsChars === 0 };
+			idleTokenMs: now - lastTokenAt, waveMs: rate.waveMs, tokensPerSecond: rate.rate, heldCall: phase === "tool" && callArgsChars === 0,
+			...(foldLive ? { yields: true } : {}) };
 	}
 
 	function activeBorder(now: number, width: number, hiddenLineCount: number, paint: Paint): string {
@@ -617,6 +621,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		topBorder = new TopBorderLink(pi.events, "phase-spinner", () => activeTui?.requestRender());
 		resetStatus();
 		stop();
+		foldLive = false;
 		verbs = parseVerbs(readSection("phaseSpinner").verbs);
 		const display = readSection("toolDisplay");
 		reduced = display.motion === "reduced";
@@ -654,6 +659,15 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		if (settings?.thinking !== undefined) thinkingMode = settings.thinking;
 		if (typeof settings?.hidesLiveThinking === "boolean") hidesLiveThinking = settings.hidesLiveThinking;
 		if (typeof settings?.folds === "boolean") folds = settings.folds;
+		stopFrames?.();
+		stopFrames = undefined;
+		if (active || statusIndicator || wave) ensureTimer();
+		tick();
+	});
+	pi.events?.on(FOLD_LIVE_EVENT, (value) => {
+		const live = (value as { live?: unknown } | undefined)?.live === true;
+		if (live === foldLive) return;
+		foldLive = live;
 		stopFrames?.();
 		stopFrames = undefined;
 		if (active || statusIndicator || wave) ensureTimer();

@@ -19,6 +19,8 @@ export interface FoldDeps {
 	nestedOf(toolCallId: string): readonly NestedFact[] | undefined;
 	/** The model has written this call of the reply it streams. */
 	written?(toolCallId: string): boolean;
+	/** A drawn folded line became live, or the last live one settled. */
+	live?(live: boolean): void;
 }
 
 interface Tui {
@@ -81,6 +83,7 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 			if (entry.type === "message") noteResult(entry.message);
 		}
 	};
+	let shownLive = false;
 	const animate = (live: boolean) => {
 		if (live && !stopFrames && tui) {
 			const screen = tui;
@@ -89,6 +92,9 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 			stopFrames();
 			stopFrames = undefined;
 		}
+		if (live === shownLive) return;
+		shownLive = live;
+		try { deps.live?.(live); } catch { /* The status line keeps its own motion. */ }
 	};
 	const failed = () => {
 		animate(false);

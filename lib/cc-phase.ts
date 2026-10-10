@@ -40,6 +40,8 @@ export interface RunLine {
  readonly waveMs?: number; readonly tokensPerSecond?: number; readonly waitingOnPeers?: boolean;
  /** A tool call has started, but none of its arguments came yet. */
  readonly heldCall?: boolean;
+ /** A folded line in the transcript shows what happens now, moving: no spinner here, and the word holds still. */
+ readonly yields?: boolean;
 }
 export const seconds = (ms: number): string => `${Math.max(0,Math.floor(ms/1000))}s`;
 export function thinkingLabel(ms: number): string {
@@ -102,8 +104,10 @@ function runHead(model: RunLine, theme: LineTheme, compact=false): string {
  const paint=runPainter(model,theme), word=[...graphemes.segment(label)].map(part=>part.segment);
  const sweep=sweepAt(word.length,model.clockMs,model.phase==="api");
  const pulse=(Math.sin(model.clockMs/1000*Math.PI)+1)/2;
- const title=word.map((ch,i)=>paint(ch,model.reduced ? 0 : model.phase==="run" ? pulse : i>=sweep && i<sweep+3 ? 1 : 0)).join("");
- const glyph=slotGlyph(runAnimation(model),model.clockMs,{reduced:model.reduced,rateElapsedMs:model.waveMs ?? 0},SPINNER_SLOT_WIDTH);
+ const still=model.reduced || model.yields;
+ const title=word.map((ch,i)=>paint(ch,still ? 0 : model.phase==="run" ? pulse : i>=sweep && i<sweep+3 ? 1 : 0)).join("");
+ // A blank slot, not a still frame, so the word keeps its column.
+ const glyph=model.yields ? " ".repeat(SPINNER_SLOT_WIDTH) : slotGlyph(runAnimation(model),model.clockMs,{reduced:model.reduced,rateElapsedMs:model.waveMs ?? 0},SPINNER_SLOT_WIDTH);
  return `${paint(glyph)} ${title}${paint("…")}`;
 }
 /** The step clock shares the word's alert tone; the divider keeps total time separately. */
