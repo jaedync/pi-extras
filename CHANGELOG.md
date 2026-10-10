@@ -2,6 +2,14 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.8 - 2026-10-10
+
+### Fixed
+
+- Phase Spinner: while a folded line is live, the status line no longer
+  keeps an empty slot where its spinner was. Its word starts right after the
+  dash, and moves back when the spinner returns.
+
 ## 0.24.7 - 2026-10-10
 
 ### Changed
