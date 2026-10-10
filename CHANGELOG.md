@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.5 - 2026-10-10
+
+### Fixed
+
+- Usage Guard: `usage` with `all: true` now polls the providers of the
+  session's scoped models that have no limit data yet. Before, a parent on
+  Claude saw no OpenCode Go dollars, so it could not budget a Go subagent.
+  The poll keeps the shared gap between polls.
+
 ## 0.24.4 - 2026-10-10
 
 ### Changed
