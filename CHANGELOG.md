@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.6 - 2026-10-10
+
+### Changed
+
+- Usage Guard, tool row: the band adds the dollars left for the active
+  provider (`usage 7d 59%, $1,896 left`). The popup shows each limit's
+  dollar figures under its row and names the provider when the report has
+  more than one. It ends with the spend today and the dollars left per
+  provider. `j` copies the JSON that the model received.
+
 ## 0.24.5 - 2026-10-10
 
 ### Fixed
