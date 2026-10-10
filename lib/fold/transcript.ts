@@ -12,10 +12,11 @@
  * are dropped. The container's mouse layout is written to match the lines,
  * so clicks land on the rows drawn. Any other layout is left alone.
  */
-import { Spacer, stripTerminalSequences, Text, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { Spacer, stripTerminalSequences, Text, truncateToWidth, visibleWidth, type Color, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { ROW_MARGIN } from "../band/band.ts";
 import { BULLET_GLYPH, glyphAt, JOB_ANIMATION, THOUGHT_GLYPH } from "../band/glyph.ts";
 import { planFold, type FoldGroup, type FoldPlan, type PlanEntry, type PlanItem } from "./plan.ts";
+import { shimmerWords } from "./shimmer.ts";
 import { foldPhrase, foldStats, thoughtOnly, type FoldFacts, type ToolFact } from "./summary.ts";
 import { CHARS_PER_TOKEN } from "../cc-phase.ts";
 import { commandsIn, isShell } from "../tool-count.ts";
@@ -26,6 +27,9 @@ export { commandsIn };
 export interface FoldTheme {
 	fg(key: string, text: string): string;
 	italic?(text: string): string;
+	/** The theme's colors and a painter for any color: a live line's words shimmer with them. */
+	readonly colors?: Readonly<Record<string, Color | undefined>>;
+	style?(text: string, options: { fg?: Color }): string;
 }
 
 export interface ReplyMessage {
@@ -307,8 +311,9 @@ export class FoldRow implements Component {
 	render(width: number): string[] {
 		const theme = this.host.theme();
 		const { live } = this.facts;
-		const glyph = live ? glyphAt(JOB_ANIMATION, this.host.now(), { reduced: this.host.reduced() }) : BULLET_GLYPH;
-		const key = `${width}|${glyph}|${this.look.hung}|${this.look.open}`;
+		const now = this.host.now();
+		const glyph = live ? glyphAt(JOB_ANIMATION, now, { reduced: this.host.reduced() }) : BULLET_GLYPH;
+		const key = `${width}|${glyph}|${this.look.hung}|${this.look.open}|${live && !this.host.reduced() ? now : ""}`;
 		const kept = this.drawing;
 		if (kept?.key === key && kept.facts === this.facts && kept.theme === theme) return kept.lines;
 		const lines = this.draw(width, glyph, theme);
@@ -344,7 +349,8 @@ export class FoldRow implements Component {
 		const room = width - 3 - indent.length - visibleWidth(tail);
 		const fits = room >= MIN_WORDS;
 		const space = Math.max(1, fits ? room : width - 3 - indent.length);
-		const tone = live || open ? "text" : "muted";
+		// A live line rests on the settled gray and shimmers; an open one is brighter.
+		const tone = open && !live ? "text" : "muted";
 		const segments = (brief: boolean): Segment[] => {
 			const phrase = foldPhrase(this.facts, brief);
 			return [
@@ -355,8 +361,14 @@ export class FoldRow implements Component {
 		};
 		const full = segments(false);
 		const words = visibleWidth(full.map((segment) => segment.text).join("")) <= space ? full : segments(true);
-		const left = cut(words, space).map((segment) => paint(segment.key, segment.text)).join("");
+		const shown = cut(words, space);
+		const left = (live && theme ? this.shimmer(shown, tone, theme) : undefined) ?? shown.map((segment) => paint(segment.key, segment.text)).join("");
 		return placed(`${indent}${paint(live ? "accent" : open ? "muted" : "dim", glyph)} ${left}${fits ? paint("dim", tail) : ""}`);
+	}
+
+	private shimmer(segments: readonly Segment[], tone: string, theme: FoldTheme): string | undefined {
+		if (this.host.reduced()) return undefined;
+		try { return shimmerWords(segments, tone, this.host.now(), theme); } catch { return undefined; }
 	}
 
 	invalidate(): void {

@@ -769,7 +769,10 @@ come the tokens that the replies sent (`↑`, cache included) and received
 darker gray. While the model works, the line is live: a spinner turns, the kind that runs
 now reads `running 1 command`, and the figures count up. While the model
 still writes a call, the line names the call, for example
-`writing subagent call`, and a file tool names its file. When the model
+`writing subagent call`, and a file tool names its file. The words of a live
+line keep the same gray, and a soft band of light crosses them from left to
+right, as on the phase spinner's word. With `/tool-display motion reduced`,
+the words do not move. When the model
 thinks between calls, the line ends with `thinking`. A reply that thinks
 and then writes keeps its thinking in a line above its words: the line of the
 calls before it, or a line of its own directly above the words, such as

@@ -297,6 +297,30 @@ test("a reply streaming its words below a finished Thought line does not keep th
 	assert.match(text(viewOf(value).render(chat, 80))[1]!, /^● Read 1 file, /);
 });
 
+test("a live line is no brighter than a settled one: its words rest on the settled gray", () => {
+	const keys: string[] = [];
+	const { value } = host({ busy: () => true, theme: () => ({ fg: (key: string, text: string) => { keys.push(key); return text; } }) });
+	viewOf(value).render(chatOf([new ToolRow("bash", "a", true)]), 80);
+	assert.deepEqual(keys, ["muted", "accent", "dim"], "the words muted, the spinner in the accent, the figures dim");
+});
+
+test("a live line's words shimmer as time passes, and hold still with reduced motion", () => {
+	const theme = (styled: string[]) => ({
+		fg: (_key: string, text: string) => text,
+		colors: { muted: { kind: "rgb", r: 100, g: 100, b: 100 }, text: { kind: "rgb", r: 200, g: 200, b: 200 } },
+		style: (text: string, options: { fg?: { r: number } }) => { styled.push(`${Math.round(options.fg!.r)}:${text}`); return text; },
+	}) as never;
+	const frames = (reduced: boolean) => [0, 400, 800].map((now) => {
+		const styled: string[] = [];
+		const { value } = host({ busy: () => true, now: () => now, reduced: () => reduced, theme: () => theme(styled) });
+		viewOf(value).render(chatOf([new ToolRow("bash", "a", true)]), 80);
+		return styled.join("|");
+	});
+	const moving = frames(false);
+	assert.equal(new Set(moving).size, 3, `each frame lights other columns: ${moving.join(" / ")}`);
+	assert.ok(frames(true).every((frame) => frame === ""), "reduced motion: the words in plain muted, nothing styled");
+});
+
 test("a settled line uses the theme's darker grays", () => {
 	const keys: string[] = [];
 	const { value } = host({ theme: () => ({ fg: (key: string, text: string) => { keys.push(key); return text; } }) });
