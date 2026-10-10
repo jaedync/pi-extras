@@ -475,6 +475,10 @@ a top-level `dollars` summary.
   UTC month start is used (`resetApprox`).
 - **OpenRouter:** the credit balance, the key's spend for the current UTC day,
   the key limit that remains, and the budget that blocks first.
+- **Tool row:** the band adds the dollars left for the active provider. The
+  popup shows each limit's dollars under its row, names the provider when
+  there is more than one, and ends with the summary. Press `j` in the popup
+  to copy the JSON that the model received.
 - **Summary:** `dollars.providers.<provider>` gives `spentTodayUsd`, and
   `remainingUsd` with `bindingWindow` for the tightest window. For OpenCode Go,
   it gives `remainingUsdByModel`. `unsizedWindows` names the windows with no

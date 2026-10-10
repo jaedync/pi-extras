@@ -1,13 +1,16 @@
 /**
  * The usage row. The band carries the answer: each window that governs the
- * model with how much of it is used, and the session budget when the call
- * set one. The popup lists every limit with when it resets.
+ * model with how much of it is used, the dollars left, and the session budget
+ * when the call set one. The popup lists every limit with when it resets and
+ * its dollars, then the dollar summary, and copies the JSON the model got.
  */
+import { plainText, UNWRAPPED } from "../band/popup.ts";
 import { SEP } from "../cc-phase.ts";
 import type { Seg } from "../band/band.ts";
 import type { UsageReport, UsageReportLimit } from "../usage-guard-core.ts";
 import { paceText } from "../usage-pace.ts";
 import { sanitize } from "./format.ts";
+import { limitDollarLines, summaryLines, wholeDollars } from "./usage-dollars.ts";
 import { errorLines, mutedSeg, resultText, titleSeg, wrapAll, type PaintKey } from "./kit.ts";
 import type { ToolSpec, View } from "./tool.ts";
 
@@ -37,6 +40,16 @@ function budgetSegs(view: View, report: UsageReport | undefined): Seg[] {
 	return args.setBudget && budget ? [mutedSeg(`${SEP}budget ${flat(budget.window)} at ${pct(budget.pct)}`)] : [];
 }
 
+function dollarsLeftSegs(report: UsageReport | undefined): Seg[] {
+	const left = report?.model.provider ? report.dollars?.providers[report.model.provider]?.remainingUsd : undefined;
+	return left !== undefined ? [mutedSeg(`${SEP}${wholeDollars(left)} left`)] : [];
+}
+
+/** With several providers in one report, "5h" alone could be any of them. */
+function rowLabel(limit: UsageReportLimit, named: boolean): string {
+	return flat(named ? `${limit.provider} ${limit.window}` : limit.window).trim();
+}
+
 function resetText(limit: UsageReportLimit): string {
 	const seconds = limit.reset?.resetsInSeconds;
 	if (seconds === undefined) return "";
@@ -55,6 +68,7 @@ export const usageSpec: ToolSpec = {
 		return [
 			titleSeg("usage"),
 			...windows.map((limit): Seg => ({ text: ` ${flat(limit.window)} ${pct(limit.usedPct!)}${limit.pace ? ` (${flat(limit.pace.state)})` : ""}`, color: tone(limit) })),
+			...dollarsLeftSegs(report),
 			...budgetSegs(view, report),
 		];
 	},
@@ -71,13 +85,25 @@ export const usageSpec: ToolSpec = {
 		if (failed(view)) return wrapAll(errorLines(view.paint, resultText(view.result)), width);
 		const report = reportOf(view);
 		if (!report) return [view.paint.fg("dim", view.context.isPartial ? "(reading…)" : "(no report)")];
-		const labelWidth = Math.max(0, ...report.limits.map((limit) => flat(limit.window).length));
-		const rows = report.limits.map((limit) => {
+		const named = new Set(report.limits.map((limit) => limit.provider)).size > 1;
+		const labelWidth = Math.max(0, ...report.limits.map((limit) => rowLabel(limit, named).length));
+		// Dollar lines start under the note column: label, two spaces, the percent, two spaces.
+		const indent = " ".repeat(labelWidth + 8);
+		const rows = report.limits.flatMap((limit) => {
 			const used = limit.usedPct !== undefined ? pct(limit.usedPct).padStart(4) : (limit.remaining ? flat(limit.remaining) : "").padStart(4);
 			const note = [limit.applies ? "" : "other model", limit.budgetPct !== undefined ? `budget ${pct(limit.budgetPct)}` : "", resetText(limit), paceText(limit.pace, limit.reset?.resetsInSeconds)].filter(Boolean).join(SEP);
-			return `${view.paint.fg("toolOutput", flat(limit.window).padEnd(labelWidth))}  ${view.paint.fg(tone(limit), used)}  ${view.paint.fg("muted", note)}`;
+			const head = `${view.paint.fg("toolOutput", rowLabel(limit, named).padEnd(labelWidth))}  ${view.paint.fg(tone(limit), used)}  ${view.paint.fg("muted", note)}`;
+			return [head, ...limitDollarLines(limit.dollars).map((line) => `${indent}${view.paint.fg("dim", flat(line))}`)];
 		});
-		const notes = report.notes.map((note) => view.paint.fg("muted", flat(note)));
-		return wrapAll([...rows, ...(notes.length > 0 ? ["", ...notes] : [])], width);
+		const summary = report.dollars ? summaryLines(report.dollars) : undefined;
+		const summaryBlock = summary ? ["", view.paint.fg("toolOutput", flat(summary.heading)), ...summary.lines.map((line) => view.paint.fg("muted", flat(line)))] : [];
+		const notes = [...report.notes, ...(report.dollars?.notes ?? [])].map((note) => view.paint.fg("muted", flat(note)));
+		return wrapAll([...rows, ...summaryBlock, ...(notes.length > 0 ? ["", ...notes] : [])], width);
+	},
+	copies(view) {
+		return [
+			{ label: "copy output", key: "o", text: () => plainText(usageSpec.output(view, UNWRAPPED, 0)) || undefined },
+			{ label: "copy JSON", key: "j", text: () => resultText(view.result) || undefined },
+		];
 	},
 };
