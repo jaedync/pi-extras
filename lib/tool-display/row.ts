@@ -10,6 +10,7 @@
  */
 import type { TuiMouseEvent, TuiMouseEventResult, Component } from "@earendil-works/pi-tui";
 import { isAnimated, renderBand, ROW_MARGIN, timeSeg, formatTime, formatWhole, type BandPhase, type Outcome, type Seg } from "../band/band.ts";
+import { flowing, noteDraft, writingRail, type Draft } from "../band/draft.ts";
 import { paletteFrom } from "../band/palette.ts";
 import type { Kit, RenderContext, ThemeLike } from "./kit.ts";
 
@@ -26,6 +27,8 @@ export interface RowState {
 	/** The band's phase when the row was last drawn. */
 	drawnAs?: BandPhase["kind"];
 	outcome?: Outcome;
+	/** A call written now: its arguments so far, for the pen, the rail and the preview. */
+	draft?: Draft;
 	context?: RenderContext;
 	theme?: ThemeLike;
 	stopFrames?: () => void;
@@ -42,6 +45,8 @@ export function track(row: RowState, context: RenderContext, now: number, outcom
 	row.context = context;
 	const done = !context.isPartial;
 	if (!done && context.executionStarted && row.startedAt === undefined) row.startedAt = now;
+	// Only a call written now gets a draft; one rebuilt from history has no clock to show.
+	if (row.live && !done && !context.executionStarted && !context.argsComplete) row.draft = noteDraft(row.draft, context.args, now);
 	if (done) {
 		if (row.startedAt === undefined && row.endedAt === undefined) row.resumed = true;
 		if (row.endedAt === undefined && !row.resumed) row.endedAt = now;
@@ -56,7 +61,9 @@ export function phaseOf(row: RowState, context: RenderContext, now: number, time
 			const elapsedMs = now - (row.startedAt ?? now);
 			return timeoutMs ? { kind: "running", elapsedMs, timeoutMs } : { kind: "running", elapsedMs };
 		}
-		return context.argsComplete ? { kind: "queued" } : { kind: "writing" };
+		if (context.argsComplete) return { kind: "queued" };
+		const draft = row.draft;
+		return draft ? { kind: "writing", elapsedMs: now - draft.startedAt, chars: draft.chars, flowing: flowing(draft, now) } : { kind: "writing" };
 	}
 	const sinceMs = row.resumed || row.endedAt === undefined ? Number.POSITIVE_INFINITY : now - row.endedAt;
 	return { kind: "done", outcome: row.outcome ?? (context.isError ? "fail" : "ok"), sinceMs };
@@ -81,7 +88,7 @@ export function rail(phase: BandPhase, took: number | undefined, options: { lead
 	const lead = options.lead ?? [];
 	const gap = (segs: readonly Seg[]) => (segs.length > 0 ? [...segs, { text: "   ", color: "dim" }] : []);
 	switch (phase.kind) {
-		case "writing": return [];
+		case "writing": return phase.elapsedMs === undefined ? [] : writingRail(phase.chars ?? 0, phase.elapsedMs);
 		case "queued": return [{ text: "queued", color: "dim" }];
 		case "calm": case "progress": return [...lead];
 		case "running": {

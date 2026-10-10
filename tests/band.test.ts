@@ -4,7 +4,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { ansi256ToRgb, bgSgr, mix, parseAnsiColor, rgbTo256 } from "../lib/band/color.ts";
 import { AnimationClock } from "../lib/band/clock.ts";
 import { bandBackground, easedFill, formatTime, formatWhole, isAnimated, renderBand, type BandPhase, type Motion, type Seg } from "../lib/band/band.ts";
-import { BULLET_GLYPH, SPINNER_CYCLE_MS, SPINNER_FRAME_MS, SPINNER_FRAMES, spinnerGlyph } from "../lib/band/glyph.ts";
+import { BULLET_GLYPH, PEN_FRAME_MS, PEN_FRAMES, PEN_HELD_SLOWER, SPINNER_CYCLE_MS, SPINNER_FRAME_MS, SPINNER_FRAMES, spinnerGlyph } from "../lib/band/glyph.ts";
 import { paletteFrom, type BandTheme } from "../lib/band/palette.ts";
 import { quiet } from "./support/quiet-theme.ts";
 
@@ -210,4 +210,20 @@ test("a margined band keeps drawing frames while its call is written", () => {
 	assert.equal(isAnimated({ kind: "writing" }, "full", true), false);
 	assert.equal(isAnimated({ kind: "writing" }, "reduced", true), false);
 	assert.equal(isAnimated({ kind: "queued" }, "full", true), false);
+	// A call written now has a clock in its rail, so it ticks even with reduced motion.
+	assert.equal(isAnimated({ kind: "writing", elapsedMs: 300 }, "full", true), true);
+	assert.equal(isAnimated({ kind: "writing", elapsedMs: 300 }, "reduced", true), true);
+	assert.equal(isAnimated({ kind: "writing", elapsedMs: 300 }, "full"), false, "not margined: not written now");
+});
+
+test("a call written now has a pen that runs while arguments flow, and slows and dims while they wait", () => {
+	const glyphAt = (phase: BandPhase, motion: Motion = "full") => margined(phase, 0, motion).slice(0, 1);
+	const flowingAt = (elapsedMs: number) => glyphAt({ kind: "writing", elapsedMs, flowing: true });
+	assert.equal(flowingAt(0), PEN_FRAMES[0]);
+	assert.equal(flowingAt(PEN_FRAME_MS), PEN_FRAMES[1]);
+	assert.equal(glyphAt({ kind: "writing", elapsedMs: PEN_FRAME_MS, flowing: false }), PEN_FRAMES[0], "held: slower");
+	assert.equal(glyphAt({ kind: "writing", elapsedMs: PEN_FRAME_MS * PEN_HELD_SLOWER, flowing: false }), PEN_FRAMES[1]);
+	assert.equal(glyphAt({ kind: "writing", elapsedMs: 500, flowing: true }, "reduced"), BULLET_GLYPH);
+	const color = (flowing: boolean) => renderBand(quiet(), marginPalette, { width: 24, phase: { kind: "writing", elapsedMs: 0, flowing }, segs: MARGIN_SEGS, rail: [], clockMs: 0, motion: "full", margin: true });
+	assert.notEqual(color(true).split(PEN_FRAMES[0]!)[0], color(false).split(PEN_FRAMES[0]!)[0], "flowing and held pens differ in color");
 });

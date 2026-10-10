@@ -17,6 +17,7 @@ import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@eare
 import { noteLate } from "../late-rows.ts";
 import { BULLET_GLYPH, THOUGHT_GLYPH } from "../band/glyph.ts";
 import { ROW_MARGIN } from "../band/band.ts";
+import { glowing, glowLines, type GlowTheme, type Trail } from "../band/glow.ts";
 import { sanitize } from "./format.ts";
 
 export type ThinkingMode = "tail" | "collapsed" | "full";
@@ -154,14 +155,22 @@ export function tailLines(text: string, width: number, max = THINKING_TAIL_LINES
 	return { lines: narrow.slice(-max), cut: true };
 }
 
-/** Live thinking belongs below the spinner, never inside the model's transcript. */
-export function renderThinkingTail(text: string, width: number, theme: ThinkingTheme | undefined): string[] {
+/** New characters of a streamed text, and the time to draw them at. */
+export interface TailGlow { readonly trail: Trail | undefined; readonly now: number }
+
+/**
+ * Live thinking belongs below the spinner, never inside the model's
+ * transcript. With `glow`, new characters show brighter, then fade; the trail
+ * counts the raw text, so a collapsed space in the tail shifts it a column.
+ */
+export function renderThinkingTail(text: string, width: number, theme: (ThinkingTheme & Partial<GlowTheme>) | undefined, glow?: TailGlow): string[] {
 	if (!text.trim() || width <= 0) return [];
 	const pad = "  ";
 	const tail = tailLines(text, Math.max(1, width - pad.length));
+	const lit = glow && theme && glowing(glow.trail, glow.now) ? glowLines(tail.lines, text.length, glow.trail, glow.now, theme, "dim") : undefined;
 	return tail.lines.map((line, index) => {
-		const body = `${tail.cut && index === 0 ? TAIL_MARK : ""}${line}`;
-		const colored = theme?.fg("dim", body) ?? body;
+		const mark = tail.cut && index === 0 ? TAIL_MARK : "";
+		const colored = lit ? (mark ? theme!.fg("dim", mark) : "") + lit[index]! : theme?.fg("dim", mark + line) ?? mark + line;
 		return truncateToWidth(pad + (theme?.italic?.(colored) ?? colored), width, "");
 	});
 }

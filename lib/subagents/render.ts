@@ -19,8 +19,10 @@ import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { AGENT_HUE, AVATAR, AVATAR_HOLLOW, agentBody, agentHue, agentLine, avatarOf, spaced } from "../band/agent-look.ts";
 import { expandable, expansionMemory, markdownOf, type MarkdownSource } from "../band/message.ts";
-import { formatTime, timeSeg, type Motion, type Seg } from "../band/band.ts";
-import { FAILURE_GLYPH } from "../band/glyph.ts";
+import { formatTime, ROW_MARGIN, timeSeg, type Motion, type Seg } from "../band/band.ts";
+import { everyFrame } from "../band/clock.ts";
+import { draftPreview, draftRail, flowing, noteDraft, type Draft } from "../band/draft.ts";
+import { BULLET_GLYPH, FAILURE_GLYPH, penGlyph } from "../band/glyph.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import { formatTokens } from "../status-plus-render.ts";
 import type { MailDetails, ReportSummary } from "./deliver.ts";
@@ -39,7 +41,7 @@ const SEP: Seg = { text: " · ", color: "dim" };
 type Lookup = (name: string) => AgentRecord | undefined;
 const NOBODY: Lookup = () => undefined;
 
-type RowContext = { state?: unknown; isPartial?: boolean; executionStarted?: boolean; argsComplete?: boolean; isError?: boolean; expanded?: boolean } | undefined;
+type RowContext = { state?: unknown; isPartial?: boolean; executionStarted?: boolean; argsComplete?: boolean; isError?: boolean; expanded?: boolean; invalidate?(): void } | undefined;
 /** Whether the model is streaming a reply now (lib/run-watch.ts). Absent: always. */
 type Streaming = () => boolean;
 const ALWAYS: Streaming = () => true;
@@ -48,6 +50,38 @@ const ALWAYS: Streaming = () => true;
 function noteLive(context: RowContext, streaming: Streaming): void {
 	const state = context?.state as { live?: boolean } | undefined;
 	if (state && typeof state === "object" && state.live === undefined) state.live = streaming();
+}
+
+/** Where text under an agent's name starts: the margin, then two columns. */
+const TEXT_INDENT = ROW_MARGIN + 2;
+
+type DraftState = { live?: boolean; draft?: Draft; stopFrames?: () => void };
+
+/**
+ * A call the model writes now: its arguments so far, kept in the row's state.
+ * The row asks for frames, for its pen and clock, until the call is complete
+ * or the message ends; a call rebuilt from history has no draft.
+ */
+function draftOf(context: RowContext, args: unknown, streaming: Streaming): Draft | undefined {
+	const state = context?.state as DraftState | undefined;
+	if (!state || typeof state !== "object") return undefined;
+	const stop = () => { state.stopFrames?.(); state.stopFrames = undefined; };
+	if (state.live !== true || !context?.isPartial || context.executionStarted || context.argsComplete !== false) {
+		stop();
+		return undefined;
+	}
+	state.draft = noteDraft(state.draft, args, Date.now());
+	state.stopFrames ??= everyFrame(() => (streaming() ? context.invalidate?.() : stop()));
+	return state.draft;
+}
+
+/** The row's line with a pen in its margin and `writing   1,204 chars   6.2s` in its rail, then the newest lines of the text. */
+function draftRows(theme: Theme, segs: readonly Seg[], draft: Draft, width: number, now: number, motion: Motion): string[] {
+	const moving = flowing(draft, now);
+	const margin: Seg = motion === "reduced" ? { text: `${BULLET_GLYPH} `, color: "dim" }
+		: { text: `${penGlyph(now - draft.startedAt, moving)} `, color: moving ? "accent" : "dim" };
+	const preview = draftPreview(draft, width - TEXT_INDENT, now, theme, motion).map((line) => " ".repeat(TEXT_INDENT) + line);
+	return [agentLine(theme, segs, width, { margin, rail: draftRail(draft, now) }), ...preview];
 }
 
 class Lines implements Component {
@@ -101,6 +135,7 @@ function joinStatus(record: AgentRecord, now: number): Seg[] {
 export function subagentCallRow(args: unknown, theme: Theme, context: RowContext, lookup: Lookup, streaming = ALWAYS, motion: () => Motion = () => "full"): Component {
 	noteLive(context, streaming);
 	const input = (args ?? {}) as { task?: unknown; name?: unknown; model?: unknown; thinking?: unknown; wait?: unknown };
+	const draft = draftOf(context, args, streaming);
 	return new Lines((width) => {
 		const now = Date.now();
 		const name = agentOf(context);
@@ -117,7 +152,9 @@ export function subagentCallRow(args: unknown, theme: Theme, context: RowContext
 			return text ? [under(theme, width, [{ text: oneLine(text), color: "muted" }])] : [];
 		};
 		if (context?.isPartial && !context.executionStarted) {
-			return [agentLine(theme, spaced(who(title, undefined, [], AVATAR_HOLLOW, hue), model), width), ...task()];
+			const head = spaced(who(title, undefined, [], AVATAR_HOLLOW, hue), model);
+			// Its message can end before Pi draws the row again; then it is no longer written now.
+			return draft && streaming() ? draftRows(theme, head, draft, width, now, motion()) : [agentLine(theme, head, width), ...task()];
 		}
 		if (!record) {
 			const where: Seg[] = context?.isError ? [{ text: `${FAILURE_GLYPH} not started`, color: "error" }] : [{ text: "background", color: "dim" }];
@@ -157,12 +194,15 @@ export function subagentResultRow(result: unknown, theme: Theme, context: RowCon
 
 const DELIVERED: Record<string, string> = { steered: "delivered", resumed: "resumed it", queued: "queued", inbox: "for its next run", replied: "answered", main: "delivered" };
 
-export function messageCallRow(args: unknown, theme: Theme, context: RowContext, streaming = ALWAYS, lookup: Lookup = NOBODY): Component {
+export function messageCallRow(args: unknown, theme: Theme, context: RowContext, streaming = ALWAYS, lookup: Lookup = NOBODY, motion: () => Motion = () => "full"): Component {
 	noteLive(context, streaming);
 	const input = (args ?? {}) as { to?: unknown; text?: unknown; expectReply?: unknown };
+	const draft = draftOf(context, args, streaming);
 	return new Lines((width) => {
 		const to = arrowTo(oneLine(input.to), agentHue(lookup(oneLine(input.to))?.model));
 		const text: Seg[] = [{ text: oneLine(input.text), color: "muted" }];
+		// While written, the text goes under the line, as its newest lines.
+		if (draft && streaming()) return draftRows(theme, draft.text ? to : spaced(to, text), draft, width, Date.now(), motion());
 		if (context?.isPartial && !context.executionStarted) return [agentLine(theme, spaced(to, text), width)];
 		const delivered = (context?.state as { delivered?: string } | undefined)?.delivered;
 		const word = (delivered && DELIVERED[delivered]) || "";

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { BULLET_GLYPH } from "../lib/band/glyph.ts";
+import { BULLET_GLYPH, PEN_FRAMES } from "../lib/band/glyph.ts";
 import test from "node:test";
 import { CustomMessageComponent, ExtensionRunner, getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth, type Component } from "@earendil-works/pi-tui";
@@ -86,7 +86,8 @@ test("mesh rows keep their bullet; subagent communication uses a margin with bod
 	try {
 		const line = renderers.renderCall(context.args, theme, context).render(84)[0]!;
 		assert.ok(line.includes(purpleBand));
-		title(plain([line])[0]!);
+		// Written now, the bullet's column holds the pen.
+		assert.ok(PEN_FRAMES.includes(plain([line])[0]![0]!) && plain([line])[0]![1] === " ");
 	} finally { h.kit.clock.stop(); }
 });
 

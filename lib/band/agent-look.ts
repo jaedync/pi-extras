@@ -70,10 +70,12 @@ export type Doing = "queued" | "starting" | "thinking" | "writing" | "tool" | "c
 /**
  * One line of an agent, on the terminal's own background. It starts after
  * the margin transcript rows keep, so the ◆ lines up with a tool row's title;
- * whatever runs past the width is cut from the end.
+ * whatever runs past the width is cut from the end. A call written now puts
+ * its pen in the margin and its clock in the rail.
  */
-export function agentLine(theme: BandTheme, segs: readonly Seg[], width: number): string {
-	return paintLine(theme, paletteFrom(theme), { width, left: [{ text: " ".repeat(ROW_MARGIN), color: "" }, ...segs], indent: 0 });
+export function agentLine(theme: BandTheme, segs: readonly Seg[], width: number, options: { readonly margin?: Seg; readonly rail?: readonly Seg[] } = {}): string {
+	const margin = options.margin ?? { text: " ".repeat(ROW_MARGIN), color: "" };
+	return paintLine(theme, paletteFrom(theme), { width, left: [margin, ...segs], indent: 0, ...(options.rail ? { rail: options.rail } : {}) });
 }
 
 /** Groups of segments with a gap between each, skipping empty ones. */

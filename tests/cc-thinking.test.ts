@@ -3,6 +3,7 @@ import test from "node:test";
 import { AssistantMessageComponent, initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { installThinkingTail, renderThinkingTail, thoughtLabel, type ThinkingHost } from "../lib/tool-display/thinking.ts";
+import { GLOW_MS, noteText } from "../lib/band/glow.ts";
 initTheme("dark");
 const text="First thought.\n\nSecond thought.\n\nLast thought.";
 const msg=(answer=false)=>({role:"assistant",content:[{type:"thinking",thinking:text},...(answer?[{type:"text",text:"Answer."}]:[])],stopReason:"stop"}) as never;
@@ -58,6 +59,18 @@ test("the dim italic live tail keeps newest three wrapped lines and every row fi
  const lines=renderThinkingTail("thought ".repeat(80)+"newest",40,theme);
  assert.ok(lines[0]?.trimStart().startsWith("… "));
  assert.ok(lines.at(-1)?.endsWith("newest"));
+});
+
+test("new thinking shows brighter for a moment, then fades to the tail's dim",()=>{
+ const theme={fg:(key:string,text:string)=>`<${key}>${text}`,italic:(text:string)=>text,
+  getFgAnsi:(key:string)=>key==="text"?"\x1b[38;2;240;240;240m":"\x1b[38;2;100;100;100m",getColorMode:()=>"truecolor" as const};
+ const old="thought ".repeat(3), now=old+"newest";
+ const trail=noteText(noteText(undefined,"thinking",old.length,0),"thinking",now.length,1000);
+ const lit=renderThinkingTail(now,60,theme,{trail,now:1000}).join("");
+ assert.match(lit,/\x1b\[38;2;240;240;240mnewest\x1b\[39m/,"the six new characters, at full brightness");
+ assert.ok(lit.includes("<dim>thought"),"the old ones keep the dim");
+ const faded=renderThinkingTail(now,60,theme,{trail,now:1000+GLOW_MS});
+ assert.deepEqual(faded,renderThinkingTail(now,60,theme),"faded: the same as without a glow");
 });
 
 test("the label keeps tenths below a second, so a fast model never thought for 0s",()=>{

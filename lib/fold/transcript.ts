@@ -74,6 +74,9 @@ interface ToolRow extends Component {
 	readonly toolCallId: string;
 	readonly isPartial: boolean;
 	readonly args?: unknown;
+	/** Pi's own flags; absent in an older Pi, where a call never reads as written. */
+	readonly argsComplete?: boolean;
+	readonly executionStarted?: boolean;
 	readonly expanded?: boolean;
 	readonly result?: { readonly isError?: boolean };
 }
@@ -171,7 +174,7 @@ function namesOf(name: string, args: unknown, failed: boolean): Pick<ToolFact, "
 }
 
 /** One call as the words count it: a script's own calls in its place, and a chain's steps. */
-export function factsOfCall(name: string, args: unknown, running: boolean, failed: boolean, nested: readonly NestedFact[] | undefined): ToolFact[] {
+export function factsOfCall(name: string, args: unknown, running: boolean, failed: boolean, nested: readonly NestedFact[] | undefined, writing = false): ToolFact[] {
 	if (nested && nested.length > 0) {
 		const inner = nested.map((call): ToolFact => ({
 			name: call.name,
@@ -183,7 +186,7 @@ export function factsOfCall(name: string, args: unknown, running: boolean, faile
 		// The script is counted through its calls; it still says when it runs on or fails itself.
 		return running || failed ? [...inner, { name, running, failed, count: 0 }] : inner;
 	}
-	return [{ name, running, failed, ...(isShell(name) ? { count: commandsIn(args) } : {}), ...namesOf(name, args, failed) }];
+	return [{ name, running, failed, ...(writing ? { writing } : {}), ...(isShell(name) ? { count: commandsIn(args) } : {}), ...namesOf(name, args, failed) }];
 }
 
 /** Output tokens: the reported count, or an estimate from the characters while it streams. */
@@ -649,7 +652,8 @@ export class FoldView {
 			if (owner && speaks(owner.lastMessage) && thought(owner.lastMessage)) callers.add(owner);
 			else if (owner) replies.add(owner);
 			const running = child.isPartial && busy;
-			tools.push(...factsOfCall(child.toolName, child.args, running, !child.isPartial && child.result?.isError === true, this.nestedOf(child.toolCallId)));
+			const writing = running && child.argsComplete === false && child.executionStarted !== true;
+			tools.push(...factsOfCall(child.toolName, child.args, running, !child.isPartial && child.result?.isError === true, this.nestedOf(child.toolCallId), writing));
 			const at = this.host.toolEndedAt(child.toolCallId);
 			if (at !== undefined) ended = Math.max(ended ?? at, at);
 		}

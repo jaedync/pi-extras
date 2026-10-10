@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { BULLET_GLYPH, toolIndicator } from "../lib/band/glyph.ts";
+import { PEN_FRAMES, toolIndicator } from "../lib/band/glyph.ts";
 const runningMark = (ms: number) => toolIndicator(ms, ms / 120_000, "timeout").glyph;
 import { ChainRun } from "../lib/chain/run.ts";
 import { splitChain } from "../lib/chain/split.ts";
@@ -15,7 +15,7 @@ test("a bash row runs against its timeout, then keeps the time and the last line
 	const h = harness();
 	const bash = row(bashRenderers(h.kit), { command: "cd app\nnpm ci\nnpm test\nnpm run lint\necho done", timeout: 120 });
 	bash.update({ argsComplete: false });
-	assert.deepEqual(bash.lines(), [band("$ cd app  +4 lines", "", 60, BULLET_GLYPH)]);
+	assert.deepEqual(bash.lines(), [band("$ cd app  +4 lines", "writing   77 chars   1ms", 60, PEN_FRAMES[0]), "    npm run lint", "    echo done▍"], "written now: a pen, the size, the time and the newest lines");
 	bash.update();
 	assert.deepEqual(bash.lines(), [band("$ cd app  +4 lines", "queued")]);
 	bash.update({ executionStarted: true });
@@ -205,8 +205,8 @@ test("only a call the model is writing now spins; one resumed without a result s
 	const kit = { ...h.kit, streaming: () => streaming };
 	const live = row(writeRenderers(kit), { path: "a.txt", content: "x" });
 	live.update({ argsComplete: false });
-	assert.equal(live.lines()[0], band("write a.txt, 1 line…", "", 60, BULLET_GLYPH));
-	assert.equal(h.running(), false, "a dim writing bullet needs no frames between argument updates");
+	assert.equal(live.lines()[0], band("write a.txt, 1 line…", "writing   30 chars   1ms", 60, PEN_FRAMES[0]));
+	assert.equal(h.running(), true, "its pen and clock need frames between argument updates");
 	streaming = false;
 	// A resumed session rebuilds a call whose result never came as a row still being written.
 	const replayed = row(writeRenderers(kit), { path: "b.txt", content: "x" });
@@ -223,7 +223,7 @@ test("only a call the model is writing now spins; one resumed without a result s
 	const writing = row(writeRenderers({ ...spinning.kit, streaming: () => true }), { path: "d.txt", content: "x" });
 	writing.update({ argsComplete: false });
 	writing.lines();
-	assert.equal(spinning.running(), false, "a call being written now also stays dim");
+	assert.equal(spinning.running(), true, "a call being written now moves");
 });
 
 test("frames stop for a row Pi dropped mid-run, once its message or run is over", () => {
@@ -255,7 +255,8 @@ test("a write shows its line count and a preview of the file", () => {
 	const content = Array.from({ length: 14 }, (_, index) => `row ${index}`).join("\n");
 	const write = row(writeRenderers(h.kit), { path: "out.txt", content });
 	write.update({ argsComplete: false });
-	assert.equal(write.lines()[0], band("write out.txt, 14 lines…", "", 60, BULLET_GLYPH));
+	assert.equal(write.lines()[0], band("write out.txt, 14 lines…", "writing   131 chars   1ms", 60, PEN_FRAMES[0]));
+	assert.ok(!write.lines().some((line) => line.endsWith("▍")), "a write previews the file itself, not a draft");
 	write.update({ isPartial: false, result: text("Successfully wrote") });
 	const lines = write.lines();
 	assert.equal(lines[0], band("write out.txt, 14 lines"));

@@ -602,7 +602,8 @@ The editor's top divider says what the agent is doing:
   the spinner and the stopwatch go last, and the status never wraps.
 
 While the model thinks, its newest three lines show dimly at the bottom of the
-conversation, above queued messages. A tool call the model is still writing
+conversation, above queued messages. New characters show brighter for a moment,
+then fade, unless motion is reduced. A tool call the model is still writing
 shows as Pi's own row in the conversation.
 
 When a prompt finishes, a dotted π waves in and out in the divider, and the
@@ -642,7 +643,15 @@ timeout sweeps instead. Times read the same on every row: `8.6s`, then
 While a call runs, its bullet says what kind of call it is: a shell command
 with a timeout fills `○ ◔ ◑ ◕ ●` as it uses up its timeout, a subagent or peer
 request has a slowly circling dot, a web call breathes, and other calls keep a
-still dot. A call being written or waiting its turn shows a dim dot. Times of ten
+still dot. While the model writes a call, a pen moves in the bullet column, and
+the right rail shows `writing`, the size of the arguments so far and the time,
+for example `writing   1,204 chars   6.2s`. Under the band, the newest 2 lines
+of the text the model writes now show, with a caret after the last. New
+characters show brighter for a moment, then fade. The preview goes when the
+arguments are complete. Some providers hold a call's arguments until the model
+has written them all. Then the pen moves slowly and dimly, and the rail shows
+only the time. Subagent and message rows show the same pen, rail and lines. A
+call that waits its turn, or one rebuilt from history, shows a dim dot. Times of ten
 seconds or more are drawn in a warmer color, so slow calls stand out when you
 scroll back. Output sits indented under
 the band on a gray panel, so each call reads as one block apart from the
@@ -749,7 +758,9 @@ the line shows the total count, for example `● Used 45 tools`. After the words
 come the tokens that the replies sent (`↑`, cache included) and received
 (`↓`), and the time. The words are gray and the bullet and figures are a
 darker gray. While the model works, the line is live: a spinner turns, the kind that runs
-now reads `running 1 command`, and the figures count up. When the model
+now reads `running 1 command`, and the figures count up. While the model
+still writes a call, the line names the call, for example
+`writing subagent call`, and a file tool names its file. When the model
 thinks between calls, the line ends with `thinking`. A reply that thinks
 and then writes keeps its thinking in a line above its words: the line of the
 calls before it, or a line of its own directly above the words, such as

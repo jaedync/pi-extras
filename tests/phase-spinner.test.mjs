@@ -109,6 +109,21 @@ test("live status stays in the divider while only thinking tail precedes the que
  for(const width of [80,130]){const row=h.renderAtWidth(width,15000)[0];assert.match(row,/Still thinking…/);assert.equal((row.match(/Time /g)??[]).length,1);assert.ok(!/\(\d+s/.test(row));}
 });
 
+test("new characters of the live thinking tail show brighter, then fade; reduced motion keeps them dim", t => {
+	const theme = { fg: (_tone, text) => text, getFgAnsi: key => (key === "text" ? "\x1b[38;2;240;240;240m" : "\x1b[38;2;100;100;100m"), getColorMode: () => "truecolor" };
+	const bright = "\x1b[38;2;240;240;240m";
+	for (const motion of ["full", "reduced"]) {
+		const events = eventBus(), layout = piLayout(), h = harness(t, events, { layout, verbs: null, theme });
+		h.render(); h.emit("agent_start"); h.emit("before_provider_request", {}, 1000);
+		events.emit(DISPLAY_SETTINGS_EVENT, { hidesLiveThinking: true, motion });
+		h.update("thinking_delta", "thought thought ", 2000);
+		h.update("thinking_delta", "newest", 2100);
+		const lit = h.queue(2100).join("\n");
+		assert.equal(lit.includes(`${bright}newest`), motion === "full", `${motion}: ${JSON.stringify(lit.slice(-60))}`);
+		assert.ok(!h.queue(5000).join("\n").includes(bright), `${motion}: faded`);
+	}
+});
+
 test("the step stopwatch resets at phase/call/tool-title boundaries, not thinking wordings", t => {
 	const h = harness(t, eventBus(), { layout: piLayout(), verbs: null });
 	h.render(); h.emit("agent_start");

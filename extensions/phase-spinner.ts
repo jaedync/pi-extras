@@ -23,6 +23,7 @@ import { renderStatusDivider } from "../lib/status-divider.ts";
 import { CHARS_PER_TOKEN, END_ENTRY, parseEndLine, parseVerbs, pickVerb, renderEndLine, renderPiWave, renderRunStatus, smoothTokens, streamRate, type RunLine } from "../lib/cc-phase.ts";
 import { MODE_SPINNERS, PI_WAVE, PI_WAVE_MS, REDUCED_FRAME, isBlockingPeer, slotGlyph, spinnerCadence, type GlyphAnimation } from "../lib/band/glyph.ts";
 import { renderThinkingTail, thinkingRuns } from "../lib/tool-display/thinking.ts";
+import { glowing, noteText, type Trail } from "../lib/band/glow.ts";
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 type VisualPhase = ActivePhase | "slow_api" | "stalled";
@@ -128,6 +129,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	let thinkingMode: unknown = "tail";
 	let hidesLiveThinking = false;
 	let tailCache: { text: string; width: number; theme: ExtensionContext["ui"]["theme"]; lines: string[] } | undefined;
+	/** When the live thinking grew, so its new characters show brighter for a moment. */
+	let thinkingTrail: Trail | undefined;
 	let thoughtMs: number | undefined;
 	let thoughtEndedAt = Number.NEGATIVE_INFINITY;
 	let active = false;
@@ -536,6 +539,9 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	}
 
 	function thinkingTail(width: number, theme: ExtensionContext["ui"]["theme"]): string[] {
+		const now = performance.now();
+		// While new characters fade, each frame draws them dimmer; the cache holds once they have.
+		if (!reduced && typeof theme.getFgAnsi === "function" && glowing(thinkingTrail, now)) return renderThinkingTail(liveThinking, width, theme, { trail: thinkingTrail, now });
 		if (tailCache?.text === liveThinking && tailCache.width === width && tailCache.theme === theme) return tailCache.lines;
 		const lines = renderThinkingTail(liveThinking, width, theme);
 		tailCache = { text: liveThinking, width, theme, lines };
@@ -661,6 +667,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		else if (eventType.startsWith("thinking_")) {
 			const runs = thinkingRuns(event.message.content);
 			liveThinking = runs.at(-1) ?? (liveThinking + ("delta" in streamEvent ? streamEvent.delta : ""));
+			thinkingTrail = noteText(thinkingTrail, "thinking", liveThinking.length, performance.now());
 			setPhase("think", ctx, eventType);
 		}
 		else if (eventType.startsWith("text_")) setPhase("text", ctx, eventType);

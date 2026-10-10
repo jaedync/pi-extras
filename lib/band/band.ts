@@ -12,13 +12,14 @@ import { foregroundAnsi, rgbColor, visibleWidth } from "@earendil-works/pi-tui";
 import { minutesAndUp } from "../duration.ts";
 import { bgSgr, fgSgr, mix, parseAnsiColor, type Rgb } from "./color.ts";
 import type { BandTheme, Palette } from "./palette.ts";
-import { BULLET_GLYPH, toolIndicator, toolKind } from "./glyph.ts";
+import { BULLET_GLYPH, penGlyph, toolIndicator, toolKind } from "./glyph.ts";
 
 export type Outcome = "ok" | "fail" | "timeout" | "aborted";
 export type Motion = "full" | "reduced";
 
 export type BandPhase =
-	| { readonly kind: "writing" }
+	/** A call written now has a clock, a size so far, and whether its arguments still flow; one rebuilt from history has none. */
+	| { readonly kind: "writing"; readonly elapsedMs?: number; readonly chars?: number; readonly flowing?: boolean }
 	| { readonly kind: "queued" }
 	/** Running out of sight, in the background: a steady tint that doesn't draw the eye. */
 	| { readonly kind: "calm" }
@@ -289,7 +290,9 @@ function indicatorColor(theme: BandTheme, blend: number): string {
 function marginSeg(theme: BandTheme, phase: BandPhase, motion: Motion, toolName: string): Seg {
 	const mark = (glyph: string, color: string): Seg => ({ text: `${glyph}${" ".repeat(ROW_MARGIN - 1)}`, color });
 	switch (phase.kind) {
-		case "writing": return mark(BULLET_GLYPH, "dim");
+		case "writing":
+			if (phase.elapsedMs === undefined || motion === "reduced") return mark(BULLET_GLYPH, "dim");
+			return mark(penGlyph(phase.elapsedMs, phase.flowing === true), phase.flowing ? "accent" : "dim");
 		case "running": {
 			if (motion === "reduced") return mark(BULLET_GLYPH, "accent");
 			const fraction = phase.timeoutMs ? phase.elapsedMs / phase.timeoutMs : undefined;
@@ -315,8 +318,9 @@ export function renderBand(theme: BandTheme, palette: Palette | undefined, spec:
 	});
 }
 
-/** Writing is steady. Running and the brief finish flash need animation ticks. */
-export function isAnimated(phase: BandPhase, motion: Motion, _margined = false): boolean {
+/** Running, a call written now (its clock ticks) and the brief finish flash need animation ticks. */
+export function isAnimated(phase: BandPhase, motion: Motion, margined = false): boolean {
 	if (phase.kind === "running" || phase.kind === "progress") return true;
+	if (phase.kind === "writing") return margined && phase.elapsedMs !== undefined;
 	return phase.kind === "done" && motion === "full" && phase.sinceMs < FLASH_MS;
 }

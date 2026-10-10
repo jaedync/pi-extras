@@ -11,6 +11,8 @@ export interface ToolFact {
 	readonly name: string;
 	/** Still being written or run. */
 	readonly running: boolean;
+	/** The model still writes its arguments; it hasn't run. */
+	readonly writing?: boolean;
 	readonly failed: boolean;
 	/** How many it counts as: the steps of a chained command; 0 for a script whose own calls are counted. Default 1. */
 	readonly count?: number;
@@ -72,8 +74,12 @@ function keyOf(name: string): string | undefined {
 interface Tally {
 	readonly label: string;
 	readonly kind: Kind | undefined;
+	/** The first call's tool name, for `writing subagent call`. */
+	readonly tool: string;
 	count: number;
 	running: boolean;
+	/** Every call of the kind is still being written. */
+	writing: boolean;
 	readonly files: Set<string>;
 	/** A call of this kind whose file is not known. */
 	unnamed: boolean;
@@ -87,9 +93,10 @@ function tallies(tools: readonly ToolFact[]): Tally[] {
 		const kind = key ? KINDS[key] : undefined;
 		// Kinds that share wording (grep and find) share a count.
 		const label = kind ? `${kind.past}|${kind.one}` : name;
-		const tally = byLabel.get(label) ?? { label, kind, count: 0, running: false, files: new Set<string>(), unnamed: false };
+		const tally = byLabel.get(label) ?? { label, kind, tool: name.replace(/^.*(?:__|\.)/, ""), count: 0, running: false, writing: true, files: new Set<string>(), unnamed: false };
 		tally.count += tool.count ?? 1;
 		tally.running ||= tool.running;
+		tally.writing &&= tool.running && tool.writing === true;
 		if (tool.file) tally.files.add(tool.file);
 		else tally.unnamed = true;
 		byLabel.set(label, tally);
@@ -114,7 +121,9 @@ function lumpOthers(tallies: Tally[]): Tally[] {
 		label: "|tools",
 		kind: others.length === tallies.length ? TOOLS : OTHER_TOOLS,
 		count: others.reduce((sum, tally) => sum + tally.count, 0),
+		tool: "",
 		running: others.some((tally) => tally.running),
+		writing: false,
 		files: new Set(),
 		unnamed: true,
 	};
@@ -123,6 +132,8 @@ function lumpOthers(tallies: Tally[]): Tally[] {
 }
 
 function says(tally: Tally): string {
+	// What a call will do is not happening yet; a file tool still names its file.
+	if (tally.writing && tally.tool && !tally.kind?.names) return tally.count === 1 ? `writing ${tally.tool} call` : `writing ${tally.count} ${tally.tool} calls`;
 	if (!tally.kind) {
 		const verb = tally.running ? "calling" : "called";
 		return tally.count === 1 ? `${verb} ${tally.label}` : `${verb} ${tally.label} ${tally.count} times`;
@@ -147,7 +158,7 @@ export function foldPhrase(facts: FoldFacts, brief = false): FoldPhrase {
 	const counted = tallies(facts.tools);
 	const total = counted.reduce((sum, tally) => sum + tally.count, 0);
 	const running = counted.some((tally) => tally.running);
-	const parts = brief && total > 0 ? [says({ label: "|tools", kind: TOOLS, count: total, running, files: new Set(), unnamed: true })] : counted.map(says);
+	const parts = brief && total > 0 ? [says({ label: "|tools", kind: TOOLS, tool: "", count: total, running, writing: false, files: new Set(), unnamed: true })] : counted.map(says);
 	const text = parts.length > 0 ? parts.join(", ") : facts.live ? "thinking" : thoughtFor(facts);
 	const failures = facts.tools.filter((tool) => tool.failed);
 	const named = !brief && failures.length === 1 ? failures[0]!.label : undefined;

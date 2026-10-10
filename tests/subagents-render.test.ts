@@ -8,6 +8,7 @@ import { envelopeLines, type Painter, type Voices } from "../lib/subagents/trans
 import { noteText, questionText, readEnvelopes, reportText } from "../lib/subagents/format.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
+import { PEN_FRAMES } from "../lib/band/glyph.ts";
 
 const plain = (_color: string, text: string) => text;
 const strip = (text: string) => text.replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\/g, "");
@@ -219,7 +220,8 @@ test("unstarted agent calls use a hollow avatar; message calls keep their arrow 
 	for (const [kind, row] of Object.entries(rows)) {
 		const writing = { state: {}, isPartial: true, executionStarted: false, argsComplete: false };
 		const expected = kind === "subagent" ? "  ◇ " : "  → ";
-		assert.equal(identity(row(writing, () => true).render(80)), expected, `${kind}: being written`);
+		const written = identity(row(writing, () => true).render(80));
+		assert.ok(PEN_FRAMES.includes(written[0]!) && written.slice(1) === expected.slice(1), `${kind}: being written, a pen in the margin, not ${written}`);
 		assert.equal(identity(row({ ...writing, argsComplete: true }, () => false).render(80)), expected, `${kind}: waiting its turn`);
 		// A resumed session rebuilds a call without its result as unstarted and never completes its arguments.
 		assert.equal(identity(row({ ...writing, state: {} }, () => false).render(80)), expected, `${kind}: rebuilt from history`);
@@ -298,4 +300,31 @@ test("what an agent was told reads as the conversation main shows: arrows from y
 	assert.equal(lines[lines.indexOf(line("◆ finder")) + 1], "  <customMessageText>lib/x.ts");
 	// A header is cut to the width; only the text under it wraps.
 	assert.ok(visibleWidth(told([{ content: noteText("finder", "x") }], 12, plain)[1]!) <= 12);
+});
+
+test("a subagent or message call written now has a pen, its size and time, and the newest lines of its text", (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_800_000_000_000 });
+	const task = "Review the byte-range support in this small file server and report each fault with a line number.";
+	const context = { state: {}, isPartial: true, executionStarted: false, argsComplete: false };
+	const args = { name: "range-review", model: "opus", task };
+	let row = subagentCallRow({}, theme, context, () => undefined);
+	t.mock.timers.tick(4_100);
+	let lines = row.render(60).map((line) => strip(line).trimEnd());
+	assert.equal(lines.length, 1, "nothing to preview yet");
+	assert.ok(PEN_FRAMES.includes(lines[0]![0]!), `a pen in the margin, not ${lines[0]![0]}`);
+	assert.match(lines[0]!, /writing   4\.1s$/);
+	row = subagentCallRow(args, theme, context, () => undefined);
+	t.mock.timers.tick(200);
+	lines = row.render(60).map((line) => strip(line).trimEnd());
+	assert.match(lines[0]!, new RegExp(`◇ range-review  opus .*writing   ${JSON.stringify(args).length} chars   4\\.3s$`));
+	assert.deepEqual(lines.slice(1).map((line) => line.trimEnd()), ["    Review the byte-range support in this small file server", "    and report each fault with a line number.▍"]);
+	lines = subagentCallRow(args, theme, { ...context, argsComplete: true }, () => undefined).render(60).map((line) => strip(line).trimEnd());
+	assert.match(lines[0]!, /^ {2}◇ range-review  opus$/, "complete: the old row, without the rail");
+	assert.equal(lines.length, 2);
+	const message = messageCallRow({ to: "scout", text: task }, theme, { state: {}, isPartial: true, executionStarted: false, argsComplete: false }).render(60).map((line) => strip(line).trimEnd());
+	assert.ok(PEN_FRAMES.includes(message[0]![0]!));
+	assert.match(message[0]!, /→ scout .*writing   \d+ chars   1ms$/);
+	assert.equal(message[2]!.trimEnd().endsWith("▍"), true, "the text goes under the line while it is written");
+	const replayed = subagentCallRow(args, theme, { ...context, state: {} }, () => undefined, () => false).render(60).map((line) => strip(line).trimEnd());
+	assert.match(replayed[0]!, /^ {2}◇ range-review  opus$/, "a call rebuilt from history has no draft");
 });

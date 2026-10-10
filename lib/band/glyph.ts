@@ -51,6 +51,14 @@ export const MODE_SPINNERS: Readonly<Record<SpinnerMode,GlyphAnimation>> = {
 };
 export const WAVE_TOKENS_PER_SECOND = 34;
 export const HERO_ANIMATION = SONAR;
+/** A call being written: a pen tip that runs down one column and up the next. */
+export const PEN_FRAMES: readonly string[] = [..."⡀⠄⠂⠁⠂⠄⡀⢀⠠⠐⠈⠐⠠⢀"];
+export const PEN_FRAME_MS = 70;
+/** While a call's arguments wait, its pen moves this many times slower. */
+export const PEN_HELD_SLOWER = 4;
+export const penGlyph = (elapsedMs: number, flowing: boolean): string =>
+	PEN_FRAMES[Math.floor(Math.max(0, elapsedMs) / (PEN_FRAME_MS * (flowing ? 1 : PEN_HELD_SLOWER))) % PEN_FRAMES.length]!;
+
 export const SPINNER_FRAMES = SONAR.frames;
 export const SPINNER_FRAME_MS = SONAR.durationsMs;
 export const SPINNER_PING_PONG = false;

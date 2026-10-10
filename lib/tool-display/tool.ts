@@ -9,6 +9,7 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Outcome, Seg } from "../band/band.ts";
 import { plainText, UNWRAPPED, type PopupSource } from "../band/popup.ts";
+import { draftPreview } from "../band/draft.ts";
 import type { SheetCopy } from "../band/sheet.ts";
 import { bodyBackground, onBackground } from "../band/surface.ts";
 import { painter, type Kit, type Paint, type RenderContext, type ThemeLike } from "./kit.ts";
@@ -117,10 +118,16 @@ export function toolRenderers(kit: Kit, spec: ToolSpec) {
 			track(row, context, kit.now());
 			return slotFor(context).onClick(open(row)).set((width) => {
 				const view = viewOf(kit, row)!;
-				const input = bandOf(spec, view);
-				const margin = rowMargin(kit, row, input.phase);
+				const drawn = bandOf(spec, view);
+				const margin = rowMargin(kit, row, drawn.phase);
+				// A call no longer written now (its message ended) keeps no clock.
+				const input = margin === "blank" ? { ...drawn, phase: { kind: "writing" } as const, rail: [] } : drawn;
 				animate(row, kit, input.phase, spec.moving?.(view) ?? false, margin === true);
-				return [band(theme, kit, input, width, margin), ...onBackground(spec.below?.(view, width) ?? [], width, bodyBackground(theme))];
+				const own = spec.below?.(view, width) ?? [];
+				// A row that draws nothing of its own while written shows the newest lines of what the model writes.
+				const draft = own.length === 0 && input.phase.kind === "writing" && margin === true && row.draft
+					? indent(draftPreview(row.draft, width - BODY_INDENT, view.now, theme, kit.motion())) : [];
+				return [band(theme, kit, input, width, margin), ...onBackground([...own, ...draft], width, bodyBackground(theme))];
 			});
 		},
 		renderResult(result: ResultInput, _options: { expanded: boolean; isPartial: boolean }, theme: ThemeLike, context: RenderContext) {

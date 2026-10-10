@@ -96,3 +96,13 @@ test("the brief form is the total count of calls", () => {
 	assert.equal(foldPhrase(facts({ tools: [tool("read")] }), true), "Used 1 tool");
 	assert.equal(foldPhrase(facts({ elapsedMs: 900 }), true), "Thought for 0.9s", "no calls: nothing to count");
 });
+
+test("a call the model still writes says so, not what it will do once it runs", () => {
+	const writing = (name: string, file?: string) => ({ name, running: true, failed: false, writing: true, ...(file ? { file } : {}) });
+	assert.equal(foldPhrase(facts({ live: true, tools: [writing("subagent")] })), "Writing subagent call");
+	assert.equal(foldPhrase(facts({ live: true, tools: [tool("read"), writing("artifact_publish")] })), "Read 1 file, writing artifact_publish call");
+	assert.equal(foldPhrase(facts({ live: true, tools: [writing("bash"), writing("bash")] })), "Writing 2 bash calls");
+	assert.equal(foldPhrase(facts({ live: true, tools: [tool("bash", true), writing("bash")] })), "Running 2 commands", "one runs already");
+	assert.equal(foldPhrase(facts({ live: true, tools: [writing("edit", "a.ts")] })), "Editing a.ts", "a file tool names its file");
+	assert.equal(foldPhrase(facts({ live: true, tools: [writing("subagent")] }), true), "Using 1 tool", "brief");
+});

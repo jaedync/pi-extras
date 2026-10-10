@@ -201,7 +201,7 @@ export default function subagents(pi: ExtensionAPI) {
 		renderShell: "self" as const,
 		renderCall: (args: unknown, theme: Theme, context?: RowContext) => tool.name === "subagent"
 			? clickable(subagentCallRow(args, theme, context, (name) => state?.team.get(name), run.streaming, motion), context)
-			: messageCallRow(args, theme, context, run.streaming, (name) => state?.team.get(name)),
+			: messageCallRow(args, theme, context, run.streaming, (name) => state?.team.get(name), motion),
 		renderResult: (result: unknown, _options: { expanded: boolean }, theme: Theme, context?: RowContext) => {
 			if (tool.name !== "subagent") return messageResultRow(result, theme, context);
 			rememberAgent(context, (result as { details?: unknown } | null)?.details);

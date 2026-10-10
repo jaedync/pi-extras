@@ -239,6 +239,15 @@ test("a group with a call still running stays live when a reply follows it", () 
 	assert.match(text(viewOf(value).render(chat, 100))[1]!, /^⠋ Running 1 command/);
 });
 
+test("a call the model still writes reads as written, then by its kind once its arguments are complete", () => {
+	const { value } = host({ busy: () => true });
+	const call = Object.assign(new ToolRow("subagent", "a", true), { argsComplete: false, executionStarted: false });
+	const chat = chatOf([call, new Reply(said())]);
+	assert.match(text(viewOf(value).render(chat, 100))[1]!, /^⠋ Writing subagent call/);
+	call.argsComplete = true;
+	assert.match(text(viewOf(value).render(chat, 100))[1]!, /^⠋ Starting 1 subagent/);
+});
+
 test("with ctrl+o's rows expanded, a click closes a group; an open group keeps its spacers", () => {
 	const { value } = host();
 	const read = new ToolRow("read", "a");
