@@ -577,7 +577,11 @@ The editor's top divider says what the agent is doing:
   follows the stream's speed while it writes the reply. Compaction squeezes to
   a point, a retry drains, and a branch summary walks every row.
 - **Color:** the status turns amber after 10 seconds of thinking, and red when
-  no tokens have come for 10 seconds.
+  no tokens have come for 10 seconds. Some providers, Meridian among them,
+  send the start of a tool call and hold its arguments until the model has
+  written them all. While a call has started but none of its arguments came,
+  the status stays calm for 2 minutes, as it does while it waits for a first
+  token. Once arguments come, the 10-second rule applies again.
 - **The clocks:** a stopwatch beside the word shows how long the current step
   has run, in tenths, in the word's color. It restarts for each new request,
   thinking, tool call, tool run and reply; `Still thinking` and the later

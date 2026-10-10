@@ -7,6 +7,10 @@ import { END_GLYPH, MODE_SPINNERS, SPINNER_SLOT_WIDTH, WAVE_TOKENS_PER_SECOND, p
 export const SEP = ", ";
 export const CHARS_PER_TOKEN = 4;
 const RATE_SMOOTH_MS = 500;
+const STALL_MS = 10_000;
+// Some providers send a call's start, then hold its arguments until the model has written them all.
+// Silence then means a long call, not a stall, so it waits as long as a first token may.
+const HELD_CALL_STALL_MS = 120_000;
 export interface Verb { readonly present: string; readonly past: string }
 export const DEFAULT_VERBS: readonly Verb[] = [
  "Proofing|Proofed", "Kneading|Kneaded", "Crimping|Crimped", "Docking|Docked", "Blind-baking|Blind-baked",
@@ -34,6 +38,8 @@ export interface RunLine {
  readonly tokens: number; readonly clockMs: number; readonly reduced: boolean; readonly tools?: readonly string[];
  readonly pendingTool?: string; readonly pendingArgs?: unknown; readonly thoughtMs?: number; readonly sinceThoughtMs?: number; readonly idleTokenMs?: number;
  readonly waveMs?: number; readonly tokensPerSecond?: number; readonly waitingOnPeers?: boolean;
+ /** A tool call has started, but none of its arguments came yet. */
+ readonly heldCall?: boolean;
 }
 export const seconds = (ms: number): string => `${Math.max(0,Math.floor(ms/1000))}s`;
 export function thinkingLabel(ms: number): string {
@@ -74,7 +80,8 @@ export interface LineTheme {
 function runPainter(model: RunLine, theme: LineTheme): (text: string, highlight?: number) => string {
  const warning = model.phase === "think" ? Math.max(0,Math.min(1,(model.phaseMs-10000)/10000)) : 0;
  const waiting = !["run","prep","think"].includes(model.phase);
- const stalled = waiting ? Math.max(0,Math.min(1,((model.idleTokenMs ?? 0)-10000)/10000)) : 0;
+ const stallAfter = model.heldCall ? HELD_CALL_STALL_MS : STALL_MS;
+ const stalled = waiting ? Math.max(0,Math.min(1,((model.idleTokenMs ?? 0)-stallAfter)/10000)) : 0;
  const intensity = Math.max(warning,stalled);
  const key = stalled > 0 ? "error" : warning > 0 ? "warning" : "accent";
  return (text,highlight=0) => {

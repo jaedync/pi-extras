@@ -106,3 +106,12 @@ test("the end line adds the prompt's average TPS last, so a narrow row drops it 
  assert.deepEqual(parseEndLine({past:"Done",elapsedMs:1000,doneAt:"7 PM",tps:98.14}),{past:"Done",elapsedMs:1000,doneAt:"7 PM",tps:98.14});
  for(const tps of [0,-1,null,"9"])assert.deepEqual(parseEndLine({past:"Done",elapsedMs:1000,doneAt:"7 PM",tps}),{past:"Done",elapsedMs:1000,doneAt:"7 PM"});
 });
+test("a started call with no arguments yet is held by the provider: it turns red only after two minutes",()=>{
+ const colors={accent:rgbColor(80,100,180),warning:rgbColor(200,140,30),error:rgbColor(200,40,40),text:rgbColor(240,240,240)};
+ let styles:Array<{fg?:Color;bold?:boolean}>=[];
+ const painted={...theme,colors,style:(text:string,style:{fg?:Color;bold?:boolean})=>{styles.push(style);return text;}};
+ const hex=(over:Partial<RunLine>)=>{styles=[];renderRunStatus({...base,phase:"tool",reduced:true,...over},painted);return colorToHex(styles[0]!.fg!);};
+ assert.equal(hex({idleTokenMs:30000,heldCall:true}),colorToHex(colors.accent),"held for 30 s is calm");
+ assert.equal(hex({idleTokenMs:130000,heldCall:true}),colorToHex(colors.error),"held for over two minutes is a stall");
+ assert.equal(hex({idleTokenMs:20000}),colorToHex(colors.error),"arguments that stop for 10 s still read as a stall");
+});

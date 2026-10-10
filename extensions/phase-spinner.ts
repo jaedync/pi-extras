@@ -154,6 +154,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	};
 	let pendingToolName: string | undefined;
 	let pendingToolArgs: unknown;
+	// Argument characters of the newest tool call; 0 while its provider holds them back.
+	let callArgsChars = 0;
 	let lastTotalElapsedMs: number | undefined;
 	const editorSlot = new EditorSlot();
 	let statusIndicator: StatusIndicator | undefined;
@@ -480,7 +482,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			tokens: shownTokens, clockMs: now - lineStartedAt, reduced, tools: leafTools().map(tool => tool.name),
 			waitingOnPeers: leafTools().length > 0 && leafTools().every(tool => tool.blocking),
 			pendingTool: pendingToolName, pendingArgs: pendingToolArgs, thoughtMs, sinceThoughtMs: now - thoughtEndedAt,
-			idleTokenMs: now - lastTokenAt, waveMs: rate.waveMs, tokensPerSecond: rate.rate };
+			idleTokenMs: now - lastTokenAt, waveMs: rate.waveMs, tokensPerSecond: rate.rate, heldCall: phase === "tool" && callArgsChars === 0 };
 	}
 
 	function activeBorder(now: number, width: number, hiddenLineCount: number, paint: Paint): string {
@@ -663,6 +665,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		}
 		else if (eventType.startsWith("text_")) setPhase("text", ctx, eventType);
 		else if (eventType.startsWith("toolcall_")) {
+			if (eventType === "toolcall_start") callArgsChars = 0;
+			else if (eventType === "toolcall_delta" && "delta" in streamEvent && typeof streamEvent.delta === "string") callArgsChars += streamEvent.delta.length;
 			const call = latestToolCall(event.message);
 			pendingToolName = call?.name;
 			pendingToolArgs = call?.arguments;

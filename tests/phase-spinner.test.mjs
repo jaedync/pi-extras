@@ -234,6 +234,18 @@ test("TPS follows the stream while it flows, then the prompt's average, which th
 	assert.ok(Math.abs(h.entries.at(-1).data.tps - 600 / 5.2) < 1e-9, "the end line keeps the average");
 });
 
+test("a tool call whose arguments the provider holds stays calm, and turns red once its arguments stop", t => {
+	const red = "\x1b[31m", h = harness(t, undefined, { verbs: [], theme: { fg: (tone, text) => (tone === "error" ? red : "") + text } });
+	h.emit("agent_start");
+	h.emit("turn_start");
+	h.emit("before_provider_request", {}, 0);
+	h.update("text_delta", "I'll start a reviewer.", 1000);
+	h.update("toolcall_start", undefined, 1200);
+	assert.ok(!h.render(31000)[0].includes(red), "30 s with a started call and no arguments is not a stall");
+	h.update("toolcall_delta", "{\"name\":\"range", 31500);
+	assert.ok(h.render(42000)[0].includes(red), "arguments that stop for 10 s are a stall again");
+});
+
 test("Pi's working loader is held still only once this row covers it, and moves again after the run", t => {
 	const h = harness(t);
 	h.emit("agent_start");
