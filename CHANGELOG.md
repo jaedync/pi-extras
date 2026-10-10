@@ -2,6 +2,28 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.3 - 2026-10-10
+
+### Added
+
+- Usage Guard: the `usage` tool now gives dollar figures, so that an agent
+  can budget work and subagents in money. Each limit gets a `dollars`
+  object, and the report gets a `dollars` summary with the spend today
+  (local time zone) and the dollars left per provider.
+  - Claude and Codex windows: the window size is the spend in the window
+    divided by the percent used. With the new `usageDollars.tokenfold`
+    setting, Claude windows use Tokenfold's spend for all personal machines.
+    Without it, they use the spend on this machine.
+    Below 5% used, the last size seen for that window stands in, and the
+    summary names any window that has no size yet.
+  - OpenCode Go: the dollars left per model, from the published per-model
+    caps for the `go` or `go-plus` plan (`usageDollars.opencodeGo`).
+  - Monthly meters (Claude Enterprise, extra usage): business days left
+    until the reset, a share per business day, the meter's growth today and
+    what is left of today's share.
+  - OpenRouter: the key's spend for the UTC day, the key limit that remains
+    and the budget that blocks first.
+
 ## 0.24.2 - 2026-10-10
 
 ### Changed
