@@ -111,7 +111,7 @@ test("live status stays in the divider while only thinking tail precedes the que
  for(const width of [80,130]){const row=h.renderAtWidth(width,15000)[0];assert.match(row,/Still thinking…/);assert.equal((row.match(/Time /g)??[]).length,1);assert.ok(!/\(\d+s/.test(row));}
 });
 
-test("while a folded line is live, the status line drops its spinner and its word holds still; it takes them back when the line settles", t => {
+test("while a folded line is live, the status line drops its spinner and the space it took, and its word holds still; it takes them back when the line settles", t => {
 	const events = eventBus(), h = harness(t, events, { verbs: null });
 	h.render(); h.emit("agent_start"); h.emit("before_provider_request", {}, 1000);
 	h.update("thinking_delta", "plan", 2000);
@@ -121,7 +121,7 @@ test("while a folded line is live, the status line drops its spinner and its wor
 	const yielded = h.render()[0];
 	assert.match(yielded, /Thinking… 00:0/, "its words and clock stay");
 	assert.doesNotMatch(slot(yielded), /[\u2800-\u28ff]/, "no spinner, not even a still one");
-	assert.equal(slot(yielded).length, slot(h.render()[0]).length, "the word keeps its column");
+	assert.match(slot(yielded), /─ $/, "the word follows the divider's dash, with no blank slot");
 	events.emit(FOLD_LIVE_EVENT, { live: false });
 	assert.match(slot(h.render()[0]), /[\u2801-\u28ff]/, "the line settled: the helix is back");
 });

@@ -652,8 +652,9 @@ The editor's top divider says what the agent is doing:
   follows the stream's speed while it writes the reply. Compaction squeezes to
   a point, a retry drains, and a branch summary walks every row. With Tool
   Display's folded mode, only one place moves at a time: while a folded line
-  is live, it shows the spinner, and the status line has an empty slot and a
-  word that holds still. Its words, clocks and colors stay.
+  is live, it shows the spinner. The status line then has no spinner and no
+  space for one: its word starts right after the dash and holds still. Its
+  words, clocks and colors stay.
 - **Color:** the status turns amber after 10 seconds of thinking, and red when
   no tokens have come for 10 seconds. Some providers, Meridian among them,
   send the start of a tool call and hold its arguments until the model has
