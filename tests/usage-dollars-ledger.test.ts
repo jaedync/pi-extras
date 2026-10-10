@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSpendLedger } from "../lib/usage-dollars/ledger.ts";
@@ -121,4 +121,25 @@ test("refreshes closer together than the minimum reuse the last read", async () 
 	assert.equal(ledger.sum({ provider: "anthropic", ...all }), 1);
 	await ledger.refresh(NOW + 61_000);
 	assert.equal(ledger.sum({ provider: "anthropic", sinceMs: 0, untilMs: NOW + 61_000 }), 3);
+});
+
+test("a file replaced by a larger one is read again from the start", async () => {
+	const dir = root();
+	const file = join(dir, "a.jsonl");
+	writeFileSync(file, line({ cost: 1, responseId: "msg_old" }));
+	const ledger = ledgerAt(dir);
+	await ledger.refresh(NOW);
+	const next = join(dir, "next.tmp");
+	writeFileSync(next, line({ cost: 5, responseId: "msg_n1" }) + line({ cost: 6, responseId: "msg_n2" }));
+	renameSync(next, file);
+	await ledger.refresh(NOW);
+	assert.equal(ledger.sum({ provider: "anthropic", ...all }), 11);
+});
+
+test("a chunk of many short lines is read without a stack overflow", async () => {
+	const dir = root();
+	writeFileSync(join(dir, "a.jsonl"), "{}\n".repeat(300_000) + line({ cost: 2, responseId: "msg_end" }));
+	const ledger = ledgerAt(dir);
+	await ledger.refresh(NOW);
+	assert.equal(ledger.sum({ provider: "anthropic", ...all }), 2);
 });

@@ -35,8 +35,15 @@ export interface SpendLedger {
 }
 
 interface FileState {
+	/** A rename over the path (Pi rewrites a session that way) gives a new inode. */
+	ino: number;
 	offset: number;
-	records: SpendRecord[];
+	records: readonly SpendRecord[];
+}
+
+interface FileInfo {
+	size: number;
+	ino: number;
 }
 
 const CHUNK_BYTES = 8 * 1024 * 1024;
@@ -72,33 +79,41 @@ export function parseSpendLine(text: string): SpendRecord | undefined {
 	return { ts, provider, model, cost: rawCost, id };
 }
 
-async function sessionFiles(dir: string, sinceMs: number, found: Map<string, number> = new Map()): Promise<Map<string, number>> {
+/**
+ * Session files touched since `sinceMs`. A directory's mtime moves only when
+ * files are added or removed, not when a session grows, so every directory is
+ * listed; the stats run in parallel.
+ */
+async function sessionFiles(dir: string, sinceMs: number): Promise<Map<string, FileInfo>> {
 	let entries;
 	try {
 		entries = await readdir(dir, { withFileTypes: true });
 	} catch {
-		return found;
+		return new Map();
 	}
-	for (const entry of entries) {
-		const path = join(dir, entry.name);
-		if (entry.isDirectory()) {
-			await sessionFiles(path, sinceMs, found);
-		} else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+	const nested = await Promise.all(entries.filter((entry) => entry.isDirectory())
+		.map((entry) => sessionFiles(join(dir, entry.name), sinceMs)));
+	const own = await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+		.map(async (entry): Promise<[string, FileInfo] | undefined> => {
+			const path = join(dir, entry.name);
 			try {
 				const info = await stat(path);
-				if (info.mtimeMs >= sinceMs) found.set(path, info.size);
+				return info.mtimeMs >= sinceMs ? [path, { size: info.size, ino: info.ino }] : undefined;
 			} catch {
-				// Removed between listing and stat.
+				return undefined; // Removed between listing and stat.
 			}
-		}
-	}
-	return found;
+		}));
+	return new Map([...nested.flatMap((found) => [...found]), ...own.filter((pair) => !!pair)]);
 }
 
-/** Complete lines appended since `offset`; a trailing partial line is left for the next read. */
-async function readAppended(path: string, offset: number, size: number): Promise<{ lines: string[]; offset: number }> {
+/**
+ * Spend records in the complete lines appended since `offset`, parsed chunk by
+ * chunk so a large session never sits in memory as text. A trailing partial
+ * line is left for the next read.
+ */
+async function readAppended(path: string, offset: number, size: number): Promise<{ records: SpendRecord[]; offset: number }> {
 	const handle = await open(path, "r");
-	const lines: string[] = [];
+	const records: SpendRecord[] = [];
 	let position = offset;
 	let carry = Buffer.alloc(0);
 	try {
@@ -109,17 +124,17 @@ async function readAppended(path: string, offset: number, size: number): Promise
 			position += bytesRead;
 			const data = carry.length ? Buffer.concat([carry, chunk.subarray(0, bytesRead)]) : chunk.subarray(0, bytesRead);
 			const last = data.lastIndexOf(NEWLINE);
-			if (last < 0) {
-				carry = data;
-				continue;
+			carry = last < 0 ? data : data.subarray(last + 1);
+			if (last < 0) continue;
+			for (const text of data.subarray(0, last).toString("utf8").split("\n")) {
+				const record = parseSpendLine(text);
+				if (record) records.push(record);
 			}
-			lines.push(...data.subarray(0, last).toString("utf8").split("\n"));
-			carry = data.subarray(last + 1);
 		}
 	} finally {
 		await handle.close();
 	}
-	return { lines, offset: position - carry.length };
+	return { records, offset: position - carry.length };
 }
 
 export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
@@ -127,27 +142,26 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 	let lastRefresh = -Infinity;
 	let pending: Promise<void> | undefined;
 
-	async function readFile(path: string, size: number, cutoff: number): Promise<void> {
+	async function readFile(path: string, info: FileInfo, cutoff: number): Promise<void> {
 		const known = files.get(path);
-		// A file that shrank was rewritten; its old records no longer describe it.
-		const state = known && size >= known.offset ? known : { offset: 0, records: [] };
-		if (size > state.offset) {
-			const read = await readAppended(path, state.offset, size);
-			const added = read.lines.map(parseSpendLine).filter((record): record is SpendRecord => !!record);
-			state.records = [...state.records, ...added];
-			state.offset = read.offset;
-		}
-		state.records = state.records.filter((record) => record.ts >= cutoff);
-		files.set(path, state);
+		// A replaced or shrunken file was rewritten; its old records no longer describe it.
+		const same = known && known.ino === info.ino && info.size >= known.offset;
+		const base: FileState = same ? known : { ino: info.ino, offset: 0, records: [] };
+		const read = info.size > base.offset ? await readAppended(path, base.offset, info.size) : { records: [], offset: base.offset };
+		files.set(path, {
+			ino: info.ino,
+			offset: read.offset,
+			records: [...base.records, ...read.records].filter((record) => record.ts >= cutoff),
+		});
 	}
 
 	async function doRefresh(now: number): Promise<void> {
 		const cutoff = now - options.maxAgeMs;
 		const found = await sessionFiles(options.root, cutoff);
 		for (const path of [...files.keys()]) if (!found.has(path)) files.delete(path);
-		for (const [path, size] of found) {
+		for (const [path, info] of found) {
 			try {
-				await readFile(path, size, cutoff);
+				await readFile(path, info, cutoff);
 			} catch {
 				// An unreadable file counts as no spend rather than failing the report.
 				files.delete(path);

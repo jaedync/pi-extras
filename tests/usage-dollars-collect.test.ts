@@ -91,7 +91,8 @@ test("OpenRouter's key endpoint is read only when there is an OpenRouter key", a
 	});
 	await collector.collect(context());
 	assert.equal(calls.length, 0);
-	const { inputs } = await collector.collect(context({ getApiKey: async (provider: string) => (provider === "openrouter" ? "or-key" : undefined), force: true }));
+	const openrouter: Array<[string, LimitSnapshot]> = [["openrouter", { atMs: NOW, source: "poll", entries: [{ label: "", kind: "credits", balanceUsd: 5 }] }]];
+	const { inputs } = await collector.collect(context({ snapshots: openrouter, getApiKey: async (provider: string) => (provider === "openrouter" ? "or-key" : undefined), force: true }));
 	assert.deepEqual(calls, ["https://openrouter.ai/api/v1/key"]);
 	assert.equal(inputs.openRouterKey?.usageDailyUsd, 2);
 });
@@ -108,4 +109,41 @@ test("meter readings anchor the day in a shared file, and later readings measure
 	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 30, sinceMs: NOW } });
 	const stored = JSON.parse(readFileSync(join(dir, "usage-dollars", "meter-day.json"), "utf8"));
 	assert.deepEqual(stored.anthropic, { date: "2026-10-10", usedUsd: 1100, atMs: NOW });
+});
+
+test("a meter reading taken before local midnight does not anchor today", async () => {
+	const dir = agentDir({});
+	const meter = (usedUsd: number, atMs: number): Array<[string, LimitSnapshot]> =>
+		[["anthropic", { atMs, source: "poll", entries: [{ label: "", kind: "budget", usedUsd, limitUsd: 2000 }] }]];
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
+	// 17:00 UTC is noon in Chicago; a snapshot from 20 hours earlier is yesterday's.
+	collector.observe(meter(1000, NOW - 20 * HOUR), NOW);
+	collector.observe(meter(1100, NOW - HOUR), NOW);
+	const { inputs } = await collector.collect(context({ snapshots: meter(1130, NOW), now: NOW }));
+	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 30, sinceMs: NOW - HOUR } });
+});
+
+test("OpenRouter is not asked without an OpenRouter snapshot, and Tokenfold is asked once for concurrent calls", async () => {
+	const dir = agentDir({});
+	writeFileSync(join(dir, "pi-extras.json"), JSON.stringify({ usageDollars: { tokenfold: { url: "https://t.example", keyFile: join(dir, "read-key") } } }));
+	const calls: string[] = [];
+	const collector = createDollarsCollector({
+		agentDir: dir, timeZone: TZ,
+		fetch: async (url) => { calls.push(String(url)); return new Response(JSON.stringify(HA)); },
+	});
+	const withKey = { getApiKey: async () => "or-key" };
+	await Promise.all([collector.collect(context(withKey)), collector.collect(context(withKey))]);
+	assert.deepEqual(calls, ["https://t.example/api/ha"]);
+});
+
+test("a window's implied size is kept for the start of the next cycle", async () => {
+	const dir = agentDir({});
+	const window = (usedPct: number, resetMs: number): Array<[string, LimitSnapshot]> =>
+		[["anthropic", { atMs: NOW, source: "poll", entries: [{ label: "5h", key: "five_hour", usedPct, windowSeconds: 18000, resetMs }] }]];
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
+	// $10 of local spend at 20% gives a $50 window.
+	await collector.collect(context({ snapshots: window(20, NOW + HOUR) }));
+	const later = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
+	const { inputs } = await later.collect(context({ snapshots: window(1, NOW + 6 * HOUR), now: NOW + 2 * HOUR }));
+	assert.deepEqual(inputs.lastSizes?.["anthropic|five_hour"], { limitUsd: 50, atMs: NOW, source: "local" });
 });

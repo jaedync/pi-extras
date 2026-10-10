@@ -69,6 +69,8 @@ test("Tokenfold's /api/ha maps to windows; a null implied limit stays absent", (
 test("the Tokenfold fetch sends the read key and reports a refusal without detail", async () => {
 	const seen: Array<{ url: string; key: string | null }> = [];
 	const ok = await fetchTokenfold({ url: "https://t.example", keyFile: "/k" }, "secret-key-value-123456", NOW, async (url, init) => {
+		// A redirect could carry the custom key header to another host.
+		assert.equal(init?.redirect, "error");
 		seen.push({ url: String(url), key: new Headers(init?.headers).get("x-api-key") });
 		return new Response(JSON.stringify(HA));
 	});
@@ -92,7 +94,10 @@ test("OpenRouter's key endpoint gives today's spend, the key limit and the bindi
 		effectiveBudget: { limitUsd: 50, spendUsd: 40, remainingUsd: 10, resetInterval: "weekly", resetsAt: "2026-10-12T00:00:00.000Z" },
 	});
 	assert.deepEqual(parseOpenRouterKey({ data: { usage_daily: 1, limit_remaining: null, effective_budget: null } }), { usageDailyUsd: 1 });
-	const fetched = await fetchOpenRouterKey("or-key", async () => new Response(JSON.stringify(body)));
+	const fetched = await fetchOpenRouterKey("or-key", async (_url, init) => {
+		assert.equal(init?.redirect, "error");
+		return new Response(JSON.stringify(body));
+	});
 	assert.equal(fetched?.usageDailyUsd, 3.2);
 	assert.equal(await fetchOpenRouterKey("or-key", async () => new Response("", { status: 500 })), undefined);
 });

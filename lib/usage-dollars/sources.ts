@@ -107,6 +107,8 @@ export async function fetchTokenfold(config: TokenfoldConfig, key: string, now: 
 	try {
 		const response = await fetchImpl(`${config.url}/api/ha`, {
 			headers: { "x-api-key": key },
+			// fetch drops Authorization on a cross-origin redirect but keeps a custom header.
+			redirect: "error",
 			signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS),
 		});
 		if (!response.ok) return { error: `Tokenfold refused the request (HTTP ${response.status}).` };
@@ -144,6 +146,7 @@ export async function fetchOpenRouterKey(apiKey: string, fetchImpl: FetchLike = 
 	try {
 		const response = await fetchImpl(OPENROUTER_KEY_URL, {
 			headers: { authorization: `Bearer ${apiKey}` },
+			redirect: "error",
 			signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS),
 		});
 		return response.ok ? parseOpenRouterKey(await response.json()) : undefined;

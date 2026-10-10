@@ -194,3 +194,47 @@ test("the summary names the tightest window and today's spend per provider", () 
 	assert.equal(summary.providers.fw01, undefined);
 	assert.ok(summary.notes.some((note) => /list price/i.test(note)));
 });
+
+test("a model-family window never sets a provider's summary unless it governs the active model", () => {
+	const summary = dollarsSummary([
+		{ provider: "anthropic", window: "5h", applies: false, dollars: { basis: "implied", source: "local", remainingUsd: 120 } },
+		{ provider: "anthropic", window: "7d-fable", applies: false, dollars: { basis: "implied", source: "local", modelFamily: "fable", remainingUsd: 5 } },
+	], inputs());
+	assert.deepEqual(summary.providers.anthropic, { remainingUsd: 120, bindingWindow: "5h" });
+	const fable = dollarsSummary([
+		{ provider: "anthropic", window: "7d-fable", applies: true, dollars: { basis: "implied", source: "local", modelFamily: "fable", remainingUsd: 5 } },
+	], inputs());
+	assert.deepEqual(fable.providers.anthropic, { remainingUsd: 5, bindingWindow: "7d-fable" });
+});
+
+test("a family window's dollars name the family", () => {
+	const fable: LimitEntry = { ...seven(10), label: "7d-fable", key: "seven_day_fable", modelFamily: "fable" };
+	assert.equal(figures("anthropic", fable, inputs({ spend: () => 30 }))?.modelFamily, "fable");
+});
+
+test("a meter reset outside the date range falls back to the next UTC month", () => {
+	const dollars = figures("anthropic", { label: "", kind: "budget", usedUsd: 1, limitUsd: 10, resetMs: 1e20 }, inputs());
+	assert.equal(dollars?.resetsAt, new Date(Date.UTC(2026, 10, 1)).toISOString());
+});
+
+test("under five percent used, an earlier window's size stands in", () => {
+	const lastSizes = { "anthropic|five_hour": { limitUsd: 790, atMs: SAT - 3 * HOUR, source: "tokenfold" as const } };
+	const dollars = figures("anthropic", five(1), inputs({
+		tokenfold: { fetchedAtMs: SAT, fiveHour: { pctUsed: 1, spendUsd: 1.65, resetsAtMs: SAT + HOUR } },
+		lastSizes,
+	}));
+	assert.equal(dollars?.limitUsd, 790);
+	assert.equal(dollars?.remainingUsd, 782.1);
+	assert.equal(dollars?.sizeFrom, "earlier window");
+	// A size older than the longest window plus a day is not trusted.
+	const stale = figures("anthropic", five(1), inputs({ spend: () => 1, lastSizes: { "anthropic|five_hour": { limitUsd: 790, atMs: SAT - 9 * 24 * HOUR, source: "local" as const } } }));
+	assert.equal(stale?.limitUsd, undefined);
+});
+
+test("the summary names windows that have no dollar size yet", () => {
+	const summary = dollarsSummary([
+		{ provider: "anthropic", window: "5h", applies: true, dollars: { basis: "implied", source: "tokenfold", spentUsd: 2.5 } },
+		{ provider: "anthropic", window: "7d", applies: true, dollars: { basis: "implied", source: "tokenfold", remainingUsd: 1959 } },
+	], inputs());
+	assert.deepEqual(summary.providers.anthropic, { remainingUsd: 1959, bindingWindow: "7d", unsizedWindows: ["5h"] });
+});

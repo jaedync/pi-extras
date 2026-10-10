@@ -382,8 +382,17 @@ function reportLimit(
 	dollarInputs?: DollarInputs,
 ): UsageReportLimit {
 	const limit = reportLimitFigures(provider, entry, model, config, budget, now, timeZone);
-	const dollars = dollarInputs ? entryDollars(provider, entry, dollarInputs) : undefined;
+	const dollars = dollarInputs ? safely(() => entryDollars(provider, entry, dollarInputs)) : undefined;
 	return dollars ? { ...limit, dollars } : limit;
+}
+
+/** Dollar figures are extra: a fault there must not cost the agent its percent report. */
+function safely<T>(compute: () => T): T | undefined {
+	try {
+		return compute();
+	} catch {
+		return undefined;
+	}
 }
 
 function reportLimitFigures(
@@ -466,7 +475,7 @@ export function usageReport(
 		limits,
 		notes,
 	};
-	if (!dollars) return report;
-	const summary = dollarsSummary(limits, dollars.inputs);
+	const summary = dollars ? safely(() => dollarsSummary(limits, dollars.inputs)) : undefined;
+	if (!dollars || !summary) return report;
 	return { ...report, dollars: { ...summary, notes: [...summary.notes, ...dollars.notes] } };
 }

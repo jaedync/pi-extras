@@ -64,12 +64,19 @@ export function calendarDaysLeft(nowMs: number, resetMs: number, timeZone: strin
 	return daysUntil(nowMs, resetMs, timeZone).length;
 }
 
-/** Monday to Friday, today included when it is one. Holidays are not known. */
+const isWeekday = (day: number): boolean => {
+	const weekday = new Date(day * DAY_MS).getUTCDay();
+	return weekday !== 0 && weekday !== 6;
+};
+
+/** Monday to Friday in the local time zone. Holidays are not known. */
+export function isBusinessDay(epochMs: number, timeZone: string): boolean {
+	return isWeekday(localDayNumber(epochMs, timeZone));
+}
+
+/** Monday to Friday, today included when it is one. */
 export function businessDaysLeft(nowMs: number, resetMs: number, timeZone: string): number {
-	return daysUntil(nowMs, resetMs, timeZone).filter((day) => {
-		const weekday = new Date(day * DAY_MS).getUTCDay();
-		return weekday !== 0 && weekday !== 6;
-	}).length;
+	return daysUntil(nowMs, resetMs, timeZone).filter(isWeekday).length;
 }
 
 /** Monthly provider meters that report no reset are assumed to roll over with the UTC month. */

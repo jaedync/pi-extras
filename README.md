@@ -445,13 +445,20 @@ a top-level `dollars` summary.
 - **Subscription windows (Claude 5h and 7d, Codex):** a provider reports only
   a percent. The tool divides the spend in the window by the percent used to
   get the window size in dollars (`basis: "implied"`). Then it gives the
-  dollars that remain. Below 5% used, the tool gives only the spend. The
-  figure changes with the model mix, so use it as an estimate.
+  dollars that remain. Below 5% used, the tool uses the last size it saw for
+  that window in the last 8 days (`sizeFrom: "earlier window"`). Without
+  one, it gives only the spend. The figure changes with the model mix, so
+  use it as an estimate.
 - **Tokenfold:** when `usageDollars.tokenfold` is set, Claude windows use
   Tokenfold's spend for all machines on the account (`source: "tokenfold"`).
   Without it, the tool counts the spend on this machine only. Then use on
   other machines makes the limit read low, which is the safe direction. A
-  Tokenfold window with a different reset is ignored.
+  Tokenfold window with a different reset is ignored. The tool matches a
+  Tokenfold window to this account by its reset time only, so set Tokenfold
+  only on machines that use the account Tokenfold tracks.
+- **Model-family windows (such as `7d-fable`):** the dollars count only that
+  family's spend and carry `modelFamily`. They set a provider's summary only
+  when they govern the active model.
 - **OpenCode Go:** the caps are dollars per model, from the OpenCode Go docs
   (read 2026-10-10). The 5h window allows 20% of a model's monthly cap and
   the weekly window 50%. The tool gives the remaining dollars per model
@@ -469,7 +476,8 @@ a top-level `dollars` summary.
   the key limit that remains, and the budget that blocks first.
 - **Summary:** `dollars.providers.<provider>` gives `spentTodayUsd`, and
   `remainingUsd` with `bindingWindow` for the tightest window. For OpenCode Go,
-  it gives `remainingUsdByModel`.
+  it gives `remainingUsdByModel`. `unsizedWindows` names the windows with no
+  dollar size yet; `remainingUsd` does not cover them, so plan less spend.
 
 Settings, in `~/.pi/agent/pi-extras.json`:
 

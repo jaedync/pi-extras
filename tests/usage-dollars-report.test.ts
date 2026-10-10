@@ -41,3 +41,13 @@ test("dollar inputs add figures to each limit and a summary with the collector's
 	assert.deepEqual(report.dollars?.providers["opencode-go"], { remainingUsdByModel: { "glm-5.3": 3 } });
 	assert.ok(report.dollars?.notes.includes("Tokenfold is not set up."));
 });
+
+test("a dollar failure drops the dollars and keeps the percent report", () => {
+	const report = usageReport(snapshots, MODEL, DEFAULT_GUARD_CONFIG, undefined, NOW, true, "UTC", {
+		inputs: { now: NOW, timeZone: "Not/AZone", spend: () => { throw new Error("boom"); } },
+		notes: [],
+	});
+	assert.equal(report.limits.length, 3);
+	assert.equal(report.limits.some((limit) => "dollars" in limit), false);
+	assert.equal(report.limits[0]?.usedPct, 20);
+});
