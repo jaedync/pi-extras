@@ -18,7 +18,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all sixteen extensions (quota hibernation, computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
+adds all seventeen extensions (quota hibernation, computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -39,6 +39,7 @@ can still conflict.
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
 | Windows Use | Opt-in, WSL on a Hyper-V host: a `windows_use` tool that operates Windows VMs through Windows-MCP, which it installs in each guest, and through their consoles |
 | Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; every finished row stays visible, ctrl+o expands them all |
+| Pull Link | `pull_link` tool: give it a link to read posts with their threads, replies and images (X, Bluesky, Threads, Mastodon, Reddit, Hacker News, LinkedIn), GitHub pages, images, any web page, and videos with transcript, thumbnail, comments and frames on request (YouTube, TikTok, Instagram, Vimeo and more) |
 | Copy Blocks | Code blocks and quotes in replies drawn on a background of their own with a `copy` label: one click copies the exact text; `/copy-block` does it from the keyboard |
 | Release Notes | What changed in pi-extras, shown once in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
@@ -855,6 +856,128 @@ block or quote of the latest reply, and `/copy-block 2` the second.
 Drawing the cards relies on how Pi builds an assistant message, which is not
 part of Pi's extension API. If a Pi update changes it, replies are drawn as
 Pi draws them and `/copy-block` still works.
+
+## Pull Link
+
+`pull_link` reads a link and gives the agent its content as markdown. Paste a
+link into the prompt, and the agent can read it with one tool call.
+
+| Link | What you get |
+| --- | --- |
+| X/Twitter | The post, its quoted post, media and polls, and the posts above it in the thread, through the public FxTwitter API. Replies need an X login, so they are not included. |
+| Bluesky | The post, the posts above it and the replies (most liked first), through the public AppView API. |
+| Threads | The post text and image from the page's preview tags. Replies need a login. |
+| Mastodon | The post, the posts above it and the replies, through the server's public API. Any server with `/@user/<id>` links works. |
+| Reddit | The post and its comment tree, through the JSON view of `old.reddit.com`. Share links (`/s/...`) work. |
+| Hacker News | The story or comment and its comment tree, through the Algolia API. |
+| LinkedIn | The post and its top comments from the page's JSON-LD. |
+| GitHub | A repository and its README, issues and pull requests with comments, files, folders, commits, releases and gists. Set `GITHUB_TOKEN` or `GH_TOKEN` for more than 60 requests an hour. |
+| YouTube, TikTok, Instagram, Vimeo, Twitch and [other yt-dlp sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) | Title, channel, date, counts, description, chapters, the thumbnail, a transcript with time stamps, top comments (`comments`) and frames on request (`at`, `frames`). |
+| An image (`.jpg`, `.png`, `.webp`, `.gif`, imgur, `i.redd.it`) | The image. |
+| Any other page | Title, author, date, description and the readable text of the page. |
+
+The photos of a post come back as images. Image links in a post or comment
+(imgur, `i.redd.it` and direct image files) also come back as images, up to 6
+images in one result. An imgur album needs imgur's API, so it stays a link.
+
+A video result is text and one thumbnail. It has no frames, so a long video
+does not fill the context. The transcript ends with a hint: to see a moment
+that the transcript mentions, call the tool again with `at`.
+
+Arguments:
+
+- `at`: frames at exact times, for example `["4:05", "1:02:30", "95"]` (up
+  to 12). This call returns only the frames, with a short heading. Set
+  `transcript: true` to get the transcript too. A video of 10 minutes or
+  less is downloaded once at 720p and kept for later calls. For a longer
+  video, the tool cuts a 2-second clip at each time, so it does not
+  download the full video.
+- `frames`: the number of frames to sample evenly over the video or the
+  `range` (0 to 48). The tool sends 1 to 4 frames as separate images. It
+  puts more frames on contact sheets of 12, each frame with its time stamp.
+- For `at` and `frames`, the tool keeps each frame at full size, and the
+  result gives the folder for the `read` tool.
+- `range`: a part of a video, for example `12:30-15:00`, `90-` or `-0:45`.
+  The transcript and the sampled frames use only this part.
+- `comments`: the number of replies or comments (default 20 for posts, 0
+  for videos).
+- `transcript`: for a video link, the default is on. For a post that has a
+  video (X, Bluesky, Mastodon), set `transcript: true` or `frames` to read
+  the video too.
+- `images`: send photos, image links and the video thumbnail as images
+  (default on).
+- `offset`: a result longer than 40,000 characters comes in pages. The
+  result gives the offset for the next page. The tool keeps the result for
+  30 minutes, so the next page does not send new requests.
+
+The tool reads only public `http` and `https` links. It refuses local and
+private addresses and links with credentials. It checks each redirect of its
+own requests in the same way, and it sends a GitHub token only to GitHub's
+API. It does not resolve DNS, so a public name that points to a private
+address passes. yt-dlp follows redirects itself, so the tool checks only
+the first address of a video link.
+
+A shared YouTube link with `&list=` reads only its one video, not the
+playlist.
+
+### Video tools
+
+The first video link installs the media tools into
+`~/.cache/pi-extras/link-context` (or `$XDG_CACHE_HOME/pi-extras/link-context`,
+or `PI_LINK_CONTEXT_HOME`). This takes 20 to 60 seconds. It needs `git` and
+`npm` for the token provider. If they are missing, the tool tries again after
+a day, and captions and other sites still work. It does not need sudo,
+a browser or a desktop, so it also works on a headless Linux host. The tools are:
+
+- A private Python (from `uv`) with `yt-dlp`, `youtube-transcript-api`, a
+  static ffmpeg (`imageio-ffmpeg`) and Pillow. The tool uses the system
+  ffmpeg when there is one: the static build can crash on network input,
+  which yt-dlp uses to cut clips. Pillow draws the time stamps on the frames,
+  so no system fonts are necessary.
+- The [bgutil PO-token provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider),
+  built with the Node that runs Pi. Without PO tokens, YouTube refuses most
+  downloads and captions. The tool installs the latest release, and the yt-dlp
+  plugin of the same version.
+
+Video sites often change and stop old versions of these tools, so the tool
+updates them every `refreshDays` days. If an update fails, the tool continues
+to use the installed version.
+
+The transcript comes from the captions of the video. If the video has no
+captions, the tool downloads the audio and transcribes it on this machine. It
+uses `mlx-whisper` (whisper-large-v3-turbo) on Apple silicon and
+`faster-whisper` (small, CPU) on other hosts. The first transcription installs
+the package and downloads the model.
+
+YouTube blocks most datacenter IP addresses ("Sign in to confirm you're not a
+bot"). Then the result has the title and channel from YouTube's oEmbed, the
+captions if the caption client can still get them, and a note. On a cloud
+host, set `cookies` to a `cookies.txt` file from a signed-in browser, or set
+`proxy`. yt-dlp writes its cookie jar back when it stops, so the tool gives it
+a copy of the file in the pull folder, not the file itself.
+
+The install steps and the media commands get a minimal environment: the path,
+the home folder, the locale, proxy and certificate settings, and `UV_`,
+`PIP_` and `npm_config_` settings. They do not get other variables, such as
+API keys.
+
+### Settings
+
+Put these in the `linkContext` section of `pi-extras.json`:
+
+- `refreshDays` (default `3`): the days between updates of the video tools.
+  `0` stops updates.
+- `proxy`: a proxy URL for yt-dlp and the YouTube transcript client, for
+  example `socks5://host:1080`.
+- `cookies`: the path to a Netscape `cookies.txt` file for yt-dlp.
+- `asrModel`: a different speech-to-text model, for example
+  `mlx-community/whisper-small-mlx` or `medium`.
+- `userAgents`: a different list of user agents for an adapter, for example
+  `{"reddit": ["..."]}`. The adapters are `x`, `bluesky`, `threads`,
+  `mastodon`, `reddit`, `hackernews`, `linkedin` and `web`. Each adapter tries
+  its agents in sequence until a site gives a usable answer. Reddit sends a
+  plain client to a login page but answers a link-preview agent, so the
+  Reddit adapter tries `facebookexternalhit` first.
 
 ## Subagents
 

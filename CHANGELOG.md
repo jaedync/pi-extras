@@ -2,6 +2,34 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Pull Link: a new `pull_link` tool. Give it a link, and it returns the
+  content as markdown for the agent. It reads posts with their threads and
+  replies from X, Bluesky, Threads, Mastodon, Reddit, Hacker News and
+  LinkedIn, GitHub repositories, issues, pull requests, files, commits,
+  releases and gists, and the readable text of any other page. A post's
+  photos come back as images.
+- Pull Link: video links (YouTube, TikTok, Instagram, Vimeo and the other
+  yt-dlp sites) give the description, chapters, a transcript with time
+  stamps, the thumbnail and top comments. The transcript comes from the
+  captions, or from speech-to-text on this machine when there are no
+  captions. Frames are on request, so a video does not fill the context:
+  `at` gives the frames at exact times (from 2-second clips on a long
+  video), and `frames` samples frames evenly, as images or as contact sheets
+  of 12 with time stamps. `range` limits the transcript and the sampled
+  frames to part of a video.
+- Pull Link: image links in posts and comments (imgur, `i.redd.it`, direct
+  image files) come back as images, and a direct image link returns the
+  image.
+- Pull Link: the first video link installs the media tools into the user
+  cache, with no sudo and no browser, so the tool also works on headless
+  Linux hosts. This includes the bgutil PO-token provider, which YouTube now
+  needs for downloads and captions. The tools update every 3 days
+  (`linkContext.refreshDays`).
+
 ## 0.23.9 - 2026-10-10
 
 ### Changed

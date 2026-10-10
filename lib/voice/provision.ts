@@ -155,9 +155,9 @@ export function acquireLock(home: string): { release(): void } | undefined {
 
 const PROGRESS_STEP = 0.01;
 
-export async function downloadVerified(asset: Asset, dest: string, onFraction: (fraction: number) => void): Promise<void> {
+export async function downloadVerified(asset: Asset, dest: string, onFraction: (fraction: number) => void, signal?: AbortSignal): Promise<void> {
 	const part = `${dest}.part`;
-	const response = await fetch(asset.url, { redirect: "follow" });
+	const response = await fetch(asset.url, { redirect: "follow", signal });
 	if (!response.ok || !response.body) throw new Error(`download failed: HTTP ${response.status} for ${asset.url}`);
 	const hash = createHash("sha256");
 	const file = await open(part, "w", 0o600);

@@ -45,7 +45,8 @@
       "extensions/tool-display.ts",
       "extensions/copy-blocks.ts",
       "extensions/release-notes.ts",
-      "extensions/cache-compaction.ts"
+      "extensions/cache-compaction.ts",
+      "extensions/link-context.ts"
     ],
     "themes": [
       "themes/quiet.json"
