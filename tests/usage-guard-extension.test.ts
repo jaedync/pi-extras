@@ -351,3 +351,26 @@ test("budget arguments parse strictly", () => {
 	assert.equal(parseBudgetArgs(["7d", "101"]), undefined);
 	assert.equal(parseBudgetArgs(["7d", "sixty"]), undefined);
 });
+
+test("all: true polls the scoped models' providers that have no snapshot, so a Go subagent can be budgeted", async () => {
+	const { pi, store, ctx } = setup();
+	const scoped = { ...ctx, scopedModels: [
+		{ model: { provider: "opencode-go", id: "glm-5.3" } },
+		{ model: { provider: "anthropic", id: "claude-sonnet-5" } },
+	] };
+	anthropicSnapshot(store, 40);
+	const refreshed: Array<[string, boolean]> = [];
+	store.setRefresher(async (provider, force) => {
+		refreshed.push([provider, force]);
+		store.set(provider, { entries: [{ label: "5h", key: "rolling", usedPct: 50, windowSeconds: 18000, resetMs: RESET }], atMs: NOW, source: "poll" });
+	});
+	await pi.handlers.get("session_start")!({}, scoped);
+	await pi.tool!.execute("t0", {}, undefined, undefined, scoped);
+	assert.deepEqual(refreshed, []);
+	const report = JSON.parse((await pi.tool!.execute("t1", { all: true }, undefined, undefined, scoped)).content[0].text);
+	// Not forced: the shared poll gap still applies; anthropic already has a snapshot.
+	assert.deepEqual(refreshed, [["opencode-go", false]]);
+	const go = report.limits.find((limit: { provider: string }) => limit.provider === "opencode-go");
+	assert.deepEqual(go.dollars.perModel, { "glm-5.3": { limitUsd: 3, remainingUsd: 1.5 } });
+	assert.deepEqual(report.dollars.providers["opencode-go"].remainingUsdByModel, { "glm-5.3": 1.5 });
+});

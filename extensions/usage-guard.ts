@@ -223,6 +223,14 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 				if (model.provider && !providers.includes(model.provider)) providers.push(model.provider);
 				await Promise.all(providers.map((provider) => store.refresh(provider, true)));
 			}
+			if (params.all) {
+				// Status Plus polls only providers this session has used; a subagent may run on
+				// any scoped model, so its limits must be known before it starts. Not forced:
+				// the shared poll gap still holds, and a provider with no poller is skipped.
+				const known = new Set(store.entries().map(([provider]) => provider));
+				const scoped = new Set((ctx.scopedModels ?? []).map((entry) => entry.model.provider));
+				await Promise.all([...scoped].filter((provider) => !known.has(provider)).map((provider) => store.refresh(provider, false)));
+			}
 			const collected = await collectDollars(ctx, params.refresh === true);
 			const report = usageReport(store.entries(), model, config, budget, now(), params.all === true, undefined, collected);
 			return { content: [{ type: "text", text: JSON.stringify(report, null, 1) }], details: report };

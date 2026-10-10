@@ -463,7 +463,8 @@ a top-level `dollars` summary.
   (read 2026-10-10). The 5h window allows 20% of a model's monthly cap and
   the weekly window 50%. The tool gives the remaining dollars per model
   (`perModel`) for the scoped models, the active model, and the models used
-  in the last 7 days. The usage endpoint does not report the plan, so set it.
+  in the last 7 days. With `all: true`, the tool polls a scoped model's
+  provider that this session has not used yet. The usage endpoint does not report the plan, so set it.
 - **Monthly meters (Claude Enterprise, extra usage):** the provider's own
   spend and limit, the calendar days and business days (Monday to Friday,
   local time zone) until the reset, and `perBusinessDayUsd`. That share
