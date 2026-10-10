@@ -12,7 +12,8 @@ const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || 
 try {
   for (const command of ['test:unit', 'test:kagi']) {
     const args = ['run', command, ...(serial && command === 'test:unit' ? ['--', '--test-concurrency=1'] : [])];
-    const timeout = serial ? 600000 : 120000;
+    // The unit tests can run past 2 minutes on GitHub's macOS runners, so CI gets more room; locally a hang still shows in 2 minutes.
+    const timeout = serial ? 600000 : process.env.CI ? 300000 : 120000;
     const result = spawnSync('npm', args, { env, stdio: 'inherit', timeout });
     if (result.error || result.status !== 0) {
       console.error(`${command} failed or exceeded the ${timeout / 1000}-second limit`);
