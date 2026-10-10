@@ -715,24 +715,31 @@ their own tools again; Pi's built-in tools keep the band either way.
 **Thinking.** While the model thinks, its newest three lines show above queued
 messages and the editor divider. Paragraphs and list items are joined with `·`
 rather than taking lines of their own, so the three lines hold as much as fits. When thinking
-ends, the transcript keeps one `∴ Thought for 12s` row. Click it to read the
+ends, the transcript keeps one `∴ Thought for 12s` row. Thinking shorter than
+one second shows tenths, such as `∴ Thought for 0.4s`. Click the row to read the
 whole block, and again to go back; ctrl+t does the same for every block.
 `/tool-display thinking collapsed` shows just the label, as Pi does, and
 `/tool-display thinking full` shows everything.
 
 **Folded mode.** Folded mode is off by default. `/tool-display folded on`
 turns it on. Then the transcript shows no tool rows and no thinking. Each run
-of work between two replies becomes one line:
+of work between two replies becomes one line. The line hangs under the reply
+that made the calls, set in two columns with no blank line between them:
 
 ```
-● Ran 4 commands, read 1 file, edited 1 file, ↑875k ↓1.4k 8.8s
+● I'll find where the footer sets the model cell width.
+  ● Ran 4 commands, read 1 file, edited footer.ts, ↑875k ↓1.4k 8.8s
 ```
 
 The words count the calls by kind. Each step of a chained command counts as a
-command, and the calls in a codemode script count in its place. Tools without
+command, and the calls in a codemode script count in its place. When all the
+edits (or all the writes) in a run are to one file, the line names that file
+(`edited footer.ts`). Tools without
 a kind of their own, such as MCP tools, are counted together: `used 44 tools`,
 or `used 2 other tools` after the known kinds. Only one such tool with a short
-name is named (`called usage 2 times`). When the words do not fit the width,
+name is named (`called usage 2 times`). One failed call is named in red
+(`ls node_modules failed`); two or more are counted (`2 failed`). When the
+words do not fit the width,
 the line shows the total count, for example `● Used 45 tools`. After the words
 come the tokens that the replies sent (`↑`, cache included) and received
 (`↓`), and the time. The words are gray and the bullet and figures are a
@@ -740,10 +747,14 @@ darker gray. While the model works, the line is live: a spinner turns, the kind 
 now reads `running 1 command`, and the figures count up. When the model
 thinks between calls, the line ends with `thinking`. A reply that thinks
 and then writes keeps its thinking in a line above its words: the line of the
-calls before it, or a line of its own such as `● Thought for 2.5s`. The
+calls before it, or a line of its own directly above the words, such as
+`∴ Thought for 2.5s`. That line looks like a finished thinking block in the
+unfolded view and has no figures. The
 live thinking tail
-above the editor is not shown. Click a line to open its run and see every row
-and thinking block. Click it again to close the run. ctrl+o opens every run.
+above the editor is not shown. Click a line to open its run. Its rows and
+thinking blocks show inside a rule under the line, the line gets brighter, and
+the rule ends with `╰─ close`. Click the line or `close` to close the run. A
+`∴ Thought` line opens to the full thinking text. ctrl+o opens every run.
 The end line of a prompt is the same as in the unfolded view. The subagent
 inspector is not folded.
 

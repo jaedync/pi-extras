@@ -49,6 +49,7 @@ type Entry = { type?: string; message?: { role?: string; toolCallId?: unknown; t
 
 export interface Fold {
 	foldsThinking(reply: object): boolean;
+	expandsThinking(reply: object): boolean;
 	/** The transcript is drawn folded: the switch is on and Pi's transcript was found. */
 	active(): boolean;
 	/** The switch changed, or the session started: put the view in place if it is on, draw again, and say whether it is active. */
@@ -142,6 +143,7 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 	const active = () => view !== undefined && deps.enabled();
 	return {
 		foldsThinking: (reply) => view?.foldsThinking(reply) ?? false,
+		expandsThinking: (reply) => view?.expandsThinking(reply) ?? false,
 		active,
 		refresh: () => {
 			install();

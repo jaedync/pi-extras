@@ -32,7 +32,6 @@ import {
 import { getCapabilities } from "@earendil-works/pi-tui";
 import { SEP } from "../cc-phase.ts";
 import { AnimationClock } from "../band/clock.ts";
-import { THOUGHT_GLYPH } from "../band/glyph.ts";
 import type { ShownOverlay } from "../band/modal.ts";
 import { openPopup, type PopupHost } from "../band/popup.ts";
 import { chainOperations, withChains, type ActiveRuns } from "../chain/exec.ts";
@@ -59,7 +58,7 @@ import { toolRenderers, type ToolSpec } from "./tool.ts";
 import { usageSpec } from "./usage.ts";
 import { webSearchSpec } from "./web.ts";
 import { watchFold } from "../fold/index.ts";
-import { installThinkingTail, prepareThinkingTail, THINKING_MODES, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
+import { installThinkingTail, prepareThinkingTail, THINKING_MODES, thoughtLabel, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
 
 export const TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -348,10 +347,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			theme: () => host.theme,
 			gutter: () => true,
 			folds: (reply) => fold.foldsThinking(reply),
-			summary: (message, index) => {
-				const duration = thinkingDuration(message, index);
-				return duration === undefined ? `${THOUGHT_GLYPH} Thought` : `${THOUGHT_GLYPH} Thought for ${Math.floor(duration / 1_000)}s`;
-			},
+			expands: (reply) => fold.expandsThinking(reply),
+			summary: (message, index) => thoughtLabel(thinkingDuration(message, index)),
 		});
 		undoAdoption?.();
 		undoAdoption = installAdoption({ renderersFor });

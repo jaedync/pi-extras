@@ -14,6 +14,10 @@ export interface ToolFact {
 	readonly failed: boolean;
 	/** How many it counts as: the steps of a chained command; 0 for a script whose own calls are counted. Default 1. */
 	readonly count?: number;
+	/** The file it works on, by name, once its path is known. */
+	readonly file?: string;
+	/** What it ran, short (`ls node_modules`, `read b.ts`), to name it when it is the one call that failed. */
+	readonly label?: string;
 }
 
 export interface FoldFacts {
@@ -32,16 +36,20 @@ interface Kind {
 	readonly present: string;
 	readonly one: string;
 	readonly many: string;
+	/** Says the file's name when every call of the kind worked on one file. */
+	readonly names?: boolean;
 }
 
 const kind = (past: string, present: string, one: string, many = `${one}s`): Kind => ({ past, present, one, many });
+/** A change to a file is worth its name; a read is not. */
+const naming = (base: Kind): Kind => ({ ...base, names: true });
 
 const FILE_READ = kind("read", "reading", "file");
 const SEARCH = kind("searched for", "searching for", "pattern");
 const KINDS: Readonly<Record<string, Kind>> = {
 	read: FILE_READ,
-	edit: kind("edited", "editing", "file"),
-	write: kind("wrote", "writing", "file"),
+	edit: naming(kind("edited", "editing", "file")),
+	write: naming(kind("wrote", "writing", "file")),
 	bash: kind("ran", "running", "command"),
 	grep: SEARCH,
 	find: SEARCH,
@@ -66,6 +74,9 @@ interface Tally {
 	readonly kind: Kind | undefined;
 	count: number;
 	running: boolean;
+	readonly files: Set<string>;
+	/** A call of this kind whose file is not known. */
+	unnamed: boolean;
 }
 
 function tallies(tools: readonly ToolFact[]): Tally[] {
@@ -76,9 +87,11 @@ function tallies(tools: readonly ToolFact[]): Tally[] {
 		const kind = key ? KINDS[key] : undefined;
 		// Kinds that share wording (grep and find) share a count.
 		const label = kind ? `${kind.past}|${kind.one}` : name;
-		const tally = byLabel.get(label) ?? { label, kind, count: 0, running: false };
+		const tally = byLabel.get(label) ?? { label, kind, count: 0, running: false, files: new Set<string>(), unnamed: false };
 		tally.count += tool.count ?? 1;
 		tally.running ||= tool.running;
+		if (tool.file) tally.files.add(tool.file);
+		else tally.unnamed = true;
 		byLabel.set(label, tally);
 	}
 	return lumpOthers([...byLabel.values()].filter((tally) => tally.count > 0));
@@ -102,6 +115,8 @@ function lumpOthers(tallies: Tally[]): Tally[] {
 		kind: others.length === tallies.length ? TOOLS : OTHER_TOOLS,
 		count: others.reduce((sum, tally) => sum + tally.count, 0),
 		running: others.some((tally) => tally.running),
+		files: new Set(),
+		unnamed: true,
 	};
 	const at = tallies.indexOf(others[0]!);
 	return [...tallies.slice(0, at), lumped, ...tallies.slice(at).filter((tally) => tally.kind)];
@@ -113,13 +128,15 @@ function says(tally: Tally): string {
 		return tally.count === 1 ? `${verb} ${tally.label}` : `${verb} ${tally.label} ${tally.count} times`;
 	}
 	const verb = tally.running ? tally.kind.present : tally.kind.past;
+	const [file] = tally.files;
+	if (tally.kind.names && file !== undefined && tally.files.size === 1 && !tally.unnamed) return `${verb} ${file}`;
 	return `${verb} ${tally.count} ${tally.count === 1 ? tally.kind.one : tally.kind.many}`;
 }
 
 export interface FoldPhrase {
 	/** The calls by kind: `Read 2 files, ran 1 command`; `Thinking`, or `Thought for 2.5s`, when there were none. */
 	readonly said: string;
-	/** `1 failed`, drawn in the error color. */
+	/** `ls node_modules failed` for one failed call, `2 failed` for more, drawn in the error color. */
 	readonly failed?: string;
 	/** `thinking`, when the model works between calls. */
 	readonly after?: string;
@@ -130,19 +147,22 @@ export function foldPhrase(facts: FoldFacts, brief = false): FoldPhrase {
 	const counted = tallies(facts.tools);
 	const total = counted.reduce((sum, tally) => sum + tally.count, 0);
 	const running = counted.some((tally) => tally.running);
-	const parts = brief && total > 0 ? [says({ label: "|tools", kind: TOOLS, count: total, running })] : counted.map(says);
+	const parts = brief && total > 0 ? [says({ label: "|tools", kind: TOOLS, count: total, running, files: new Set(), unnamed: true })] : counted.map(says);
 	const text = parts.length > 0 ? parts.join(", ") : facts.live ? "thinking" : thoughtFor(facts);
-	const failures = facts.tools.filter((tool) => tool.failed).length;
+	const failures = facts.tools.filter((tool) => tool.failed);
+	const named = !brief && failures.length === 1 ? failures[0]!.label : undefined;
 	const thinking = facts.live && parts.length > 0 && !facts.tools.some((tool) => tool.running);
 	return {
 		said: text[0]!.toUpperCase() + text.slice(1),
-		...(failures > 0 ? { failed: `${failures} failed` } : {}),
+		...(failures.length > 0 ? { failed: named ? `${named} failed` : `${failures.length} failed` } : {}),
 		...(thinking ? { after: "thinking" } : {}),
 	};
 }
 
-/** A settled line of thinking alone says how long, as Claude Code's does. */
-const saysTime = (facts: FoldFacts) => !facts.live && facts.tools.length === 0 && facts.elapsedMs !== undefined && facts.elapsedMs > 0;
+/** A settled line of thinking alone: `∴ Thought for 0.6s`, with no figures. */
+export const thoughtOnly = (facts: FoldFacts): boolean => !facts.live && facts.tools.length === 0;
+/** It says how long, as Claude Code's does. */
+const saysTime = (facts: FoldFacts) => thoughtOnly(facts) && facts.elapsedMs !== undefined && facts.elapsedMs > 0;
 const thoughtFor = (facts: FoldFacts) => (saysTime(facts) ? `thought for ${elapsed(facts.elapsedMs!)}` : "thought");
 
 /** The phrase as one line of plain text. */
@@ -158,17 +178,18 @@ function tokenFigure(sent: number, received: number): string[] {
 	return parts.length > 0 ? [parts.join(" ")] : [];
 }
 
-/** Tenths below a second too, so a live time doesn't flicker through milliseconds. */
-const elapsed = (ms: number) => (ms < 1_000 ? `${(Math.floor(ms / 100) / 10).toFixed(1)}s` : formatTime(ms));
+/** Tenths below a second too, so a live time doesn't flicker through milliseconds; never 0.0s for a time that passed. */
+export const elapsed = (ms: number): string => (ms < 1_000 ? `${(Math.max(1, Math.floor(ms / 100)) / 10).toFixed(1)}s` : formatTime(ms));
 
 /**
  * Figures after the words. The words count the calls already, and a Thought
- * line says its time; an unknown time is left out. Cost shows only on the
- * end line of a prompt.
+ * line says its time and nothing more; an unknown time is left out. Cost
+ * shows only on the end line of a prompt.
  */
 export function foldStats(facts: FoldFacts): string[] {
+	if (thoughtOnly(facts)) return [];
 	return [
 		...tokenFigure(facts.sent ?? 0, facts.tokens),
-		...(facts.elapsedMs !== undefined && facts.elapsedMs > 0 && !saysTime(facts) ? [elapsed(facts.elapsedMs)] : []),
+		...(facts.elapsedMs !== undefined && facts.elapsedMs > 0 ? [elapsed(facts.elapsedMs)] : []),
 	];
 }

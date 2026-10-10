@@ -15,7 +15,7 @@ import { AssistantMessageComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { noteLate } from "../late-rows.ts";
-import { BULLET_GLYPH } from "../band/glyph.ts";
+import { BULLET_GLYPH, THOUGHT_GLYPH } from "../band/glyph.ts";
 import { ROW_MARGIN } from "../band/band.ts";
 import { sanitize } from "./format.ts";
 
@@ -42,6 +42,15 @@ export interface ThinkingHost {
 	gutter?(): boolean;
 	/** Fold mode: this reply shows no thinking at all, and no spacing for it. */
 	folds?(reply: object): boolean;
+	/** Fold mode: this reply's thinking was opened from its Thought line, so it rests in full. */
+	expands?(reply: object): boolean;
+}
+
+/** The glyph, then `Thought for 12s`; tenths below a second, so a fast model never thought for 0s. */
+export function thoughtLabel(ms: number | undefined): string {
+	if (ms === undefined) return `${THOUGHT_GLYPH} Thought`;
+	const time = ms < 1_000 ? `${(Math.max(1, Math.floor(ms / 100)) / 10).toFixed(1)}s` : `${Math.floor(ms / 1_000)}s`;
+	return `${THOUGHT_GLYPH} Thought for ${time}`;
 }
 
 type Content = { type: string; thinking?: unknown; text?: unknown };
@@ -303,7 +312,8 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 			pad: host.gutter?.() ? summary ? 0 : ROW_MARGIN : self.outputPad,
 			host,
 			view: () => {
-				const chosen = viewFor(summary && host.mode() !== "full" ? "collapsed" : host.mode() ?? mode, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false);
+				const resting = host.expands?.(owner) ? "full" : summary && host.mode() !== "full" ? "collapsed" : host.mode() ?? mode;
+				const chosen = viewFor(resting, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false);
 				return summary && chosen === "tail" ? "collapsed" : chosen;
 			},
 			label: () => summary?.(message, run) ?? self.hiddenThinkingLabel,

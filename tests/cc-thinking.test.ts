@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { AssistantMessageComponent, initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { installThinkingTail, renderThinkingTail, type ThinkingHost } from "../lib/tool-display/thinking.ts";
+import { installThinkingTail, renderThinkingTail, thoughtLabel, type ThinkingHost } from "../lib/tool-display/thinking.ts";
 initTheme("dark");
 const text="First thought.\n\nSecond thought.\n\nLast thought.";
 const msg=(answer=false)=>({role:"assistant",content:[{type:"thinking",thinking:text},...(answer?[{type:"text",text:"Answer."}]:[])],stopReason:"stop"}) as never;
@@ -58,4 +58,20 @@ test("the dim italic live tail keeps newest three wrapped lines and every row fi
  const lines=renderThinkingTail("thought ".repeat(80)+"newest",40,theme);
  assert.ok(lines[0]?.trimStart().startsWith("… "));
  assert.ok(lines.at(-1)?.endsWith("newest"));
+});
+
+test("the label keeps tenths below a second, so a fast model never thought for 0s",()=>{
+ assert.equal(thoughtLabel(undefined),"∴ Thought");
+ assert.equal(thoughtLabel(430),"∴ Thought for 0.4s");
+ assert.equal(thoughtLabel(30),"∴ Thought for 0.1s");
+ assert.equal(thoughtLabel(12_300),"∴ Thought for 12s");
+});
+test("a reply that folded mode expands shows its thinking in full, and a click folds it to the label",()=>{
+ const undo=installThinkingTail({...host,expands:()=>true});
+ try{
+  const component=new AssistantMessageComponent(msg(true),true);
+  assert.ok(plain(component).includes("Last thought."));
+  component.handleMouse({type:"click",button:"left",x:2,y:1,screenX:2,screenY:1,width:60,height:20} as never);
+  assert.deepEqual(plain(component),finishedRows);
+ }finally{undo();}
 });

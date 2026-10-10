@@ -49,7 +49,32 @@ test("stats give tokens sent and received, and time; an unknown time is left out
 	assert.deepEqual(foldStats(facts({ tools: [tool("read")], sent: 1 })), ["↑1"]);
 	assert.deepEqual(foldStats(facts({ tools: [tool("read")] })), [], "cost shows only on the end line");
 	assert.deepEqual(foldStats(facts({ live: true, elapsedMs: 441 })), ["0.4s"]);
-	assert.deepEqual(foldStats(facts({ tokens: 30, elapsedMs: 2_500 })), ["↓30"], "a Thought line says its time in its words");
+	assert.deepEqual(foldStats(facts({ tokens: 30, sent: 288_000, elapsedMs: 2_500 })), [], "a settled Thought line says its time in its words, and shows no figures");
+	assert.deepEqual(foldStats(facts({ live: true, tokens: 30, sent: 288_000, elapsedMs: 2_500 })), ["↑288k ↓30", "2.5s"], "live thinking still counts up");
+});
+
+test("a time below a second keeps its tenths and never reads 0.0s", () => {
+	assert.equal(foldPhrase(facts({ elapsedMs: 40 })), "Thought for 0.1s");
+	assert.deepEqual(foldStats(facts({ live: true, elapsedMs: 40 })), ["0.1s"]);
+});
+
+test("an edit or write names its file when every call of the kind touched one file", () => {
+	const file = (name: string, path?: string) => ({ ...tool(name), ...(path ? { file: path } : {}) });
+	assert.equal(foldPhrase(facts({ tools: [tool("bash"), file("edit", "footer.ts")] })), "Ran 1 command, edited footer.ts");
+	assert.equal(foldPhrase(facts({ tools: [file("edit", "footer.ts"), file("edit", "footer.ts")] })), "Edited footer.ts", "two edits of one file");
+	assert.equal(foldPhrase(facts({ tools: [file("edit", "a.ts"), file("edit", "b.ts")] })), "Edited 2 files");
+	assert.equal(foldPhrase(facts({ tools: [file("write", "a.ts"), file("write")] })), "Wrote 2 files", "a call whose path is not known yet");
+	assert.equal(foldPhrase(facts({ tools: [file("read", "a.ts")] })), "Read 1 file", "reads are counted, not named");
+	assert.equal(foldPhrase(facts({ live: true, tools: [{ ...file("edit", "a.ts"), running: true }] })), "Editing a.ts");
+	assert.equal(foldPhrase(facts({ tools: [file("edit", "a.ts"), tool("read")] }), true), "Used 2 tools", "the brief form still counts");
+});
+
+test("one failed call is named; more are counted", () => {
+	const failed = (label?: string) => ({ ...tool("bash", false, true), ...(label ? { label } : {}) });
+	assert.deepEqual(phrase(facts({ tools: [failed("ls node_modules"), tool("read")] })).failed, "ls node_modules failed");
+	assert.deepEqual(phrase(facts({ tools: [failed("a"), failed("b")] })).failed, "2 failed");
+	assert.deepEqual(phrase(facts({ tools: [failed()] })).failed, "1 failed", "no label known");
+	assert.deepEqual(phrase(facts({ tools: [failed("ls node_modules")] }), true).failed, "1 failed", "the brief form counts");
 });
 
 test("a call can count as several: each step of a chained command, each call inside a script", () => {

@@ -41,12 +41,34 @@ test("Pi's rows fold into one line, its replies lose their thinking, and a real 
 		assert.ok(result, "Pi's container sends the click to the folded line");
 		const open = plain(chat.render(80));
 		assert.equal(open[2], "● Read 1 file, ↓49 4.0s", "the answer thought after the read, so its thinking is in this run");
-		assert.equal(open.filter((line) => line === "∴ Thought").length, 2, "the open run shows the thinking of both replies");
+		assert.equal(open.filter((line) => line.endsWith("∴ Thought")).length, 2, "the open run shows the thinking of both replies");
+		assert.equal(open[3], "│ ∴ Thought", "its rows in a rule, the first without its blank line");
+		assert.ok(open.includes("╰─ close"));
 		assert.ok(open.some((line) => line.includes("export const a = 1;")), "and Pi's tool row");
 		enabled = false;
 		answer.invalidate();
 		chat.children.forEach((child) => child.invalidate());
 		assert.deepEqual(plain(chat.render(80)), pi, "off draws what Pi drew before");
+	} finally {
+		undo();
+		undoThinking();
+	}
+});
+
+test("a real reply's Thought line opens to its thinking in full, right under the line", () => {
+	const view = new FoldView({
+		enabled: () => true, theme: () => undefined, busy: () => false, now: () => 9_000, reduced: () => true,
+		toolEndedAt: () => undefined, thoughtMs: () => 400, nestedOf: () => undefined, animate() {}, redraw() {},
+	});
+	const undoThinking = installThinkingTail({ mode: () => "tail", hiddenAtStart: () => true, theme: () => undefined, gutter: () => true, summary: () => "∴ Thought", folds: (reply) => view.foldsThinking(reply), expands: (reply) => view.expandsThinking(reply) });
+	const { chat, answer } = transcript();
+	chat.children = [new Spacer(1), answer];
+	const undo = installFold(chat as unknown as Box, view, () => true);
+	try {
+		const folded = plain(chat.render(80));
+		assert.deepEqual(folded, ["", "", "∴ Thought for 0.4s", "● a is 1."]);
+		chat.handleMouse({ type: "click", button: "left", x: 2, y: 2, width: 80, height: folded.length } as never);
+		assert.deepEqual(plain(chat.render(80)), ["", "", "∴ Thought for 0.4s", "  Answer now.", "", "● a is 1."], "set in, as a reply's words are");
 	} finally {
 		undo();
 		undoThinking();

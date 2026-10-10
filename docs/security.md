@@ -468,8 +468,9 @@ result's text instead, stripped of terminal control sequences.
 Folded mode (`/tool-display folded on`, off by default) wraps the render of
 Pi's chat container, which it finds in Pi's layout through a widget that draws
 nothing and is removed at once. Each row still renders; the lines of folded
-rows are not drawn. The figures on a folded line come from Pi's saved messages
-(token counts and timestamps). Nothing is sent or saved, and the model's
+rows are not drawn, and the rows of an open run are drawn inside a rule. The
+figures on a folded line come from Pi's saved messages (token counts and
+timestamps). Nothing is sent or saved, and the model's
 context is unchanged.
 
 **Chained bash commands are rewritten before they run.** When a command is a

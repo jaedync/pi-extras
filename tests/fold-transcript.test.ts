@@ -1,19 +1,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Container, Spacer, stripTerminalSequences, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Container, Spacer, stripTerminalSequences, Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { commandsIn, cut, factsOfCall, findTranscript, FoldRow, FoldView, installFold, speaks, tokensOf, type Box, type FoldHost, type ReplyMessage } from "../lib/fold/transcript.ts";
 
 /** A stand-in row: fixed lines, counting renders. */
 class Row implements Component {
 	renders = 0;
 	invalidations = 0;
+	/** The width of each render. */
+	readonly widths: number[] = [];
 	private readonly lines: string[];
 	constructor(lines: string[]) {
 		this.lines = lines;
 	}
-	render(): string[] {
+	render(width: number): string[] {
 		this.renders++;
-		return this.lines;
+		this.widths.push(width);
+		return this.lines.map((line) => (visibleWidth(line) > width ? truncateToWidth(line, width, "") : line));
 	}
 	invalidate(): void {
 		this.invalidations++;
@@ -98,9 +101,10 @@ test("a run of work between replies draws as one line, with every row still rend
 	const chat = chatOf([new Spacer(1), user, first, read, thinking, bash, answer]);
 	const { value } = host();
 	const lines = viewOf(value).render(chat, 100);
-	assert.deepEqual(text(lines), ["", "", " prompt", "", "● said", "", "● Read 1 file, ran 1 command, ↓150 4.5s", "", "● said"]);
+	assert.deepEqual(text(lines), ["", "", " prompt", "", "● said", "  ● Read 1 file, ran 1 command, ↓150 4.5s", "", "● said"], "the line hangs under the reply that made the calls");
 	assert.ok([read, bash].every((row) => row.renders === 1), "folded rows keep their own render running");
-	assert.equal(thinking.renders, 2, "a reply Pi built before it was in the transcript is built again, without its thinking");
+	assert.deepEqual([read.widths, bash.widths], [[96], [96]], "at the width they have when the run opens");
+	assert.deepEqual([thinking.invalidations, thinking.renders], [1, 1], "a reply Pi built before it was in the transcript is built again, without its thinking, before it draws");
 	assert.equal(thinking.folded, true);
 	const layout = chat.mouseLayout!;
 	assert.equal(layout.children.reduce((sum, child) => sum + child.height, 0), lines.length, "the mouse layout matches the lines");
@@ -114,7 +118,7 @@ test("the last group is live while the agent runs, and asks for frames", () => {
 	const chat = chatOf([new Reply(said({ timestamp: 1 })), new ToolRow("edit", "c", true), streaming]);
 	const lines = text(viewOf(value).render(chat, 100));
 	// The reply that made the call counts too; reduced motion holds the spinner's first frame.
-	assert.equal(lines.at(-1), "⠋ Editing 1 file, ↓150 9.9s");
+	assert.equal(lines.at(-1), "  ⠋ Editing 1 file, ↓150 9.9s");
 	assert.deepEqual(calls.animate, [true]);
 	const { value: idle, calls: idleCalls } = host();
 	viewOf(idle).render(chat, 100);
@@ -135,7 +139,7 @@ test("a click opens a group, showing its rows and its replies' thinking, and ano
 	assert.deepEqual(row.handleMouse({ type: "click", button: "left", y: 1 } as never), { handled: true });
 	assert.equal(calls.redraws, 1);
 	const open = text(view.render(chat, 80));
-	assert.deepEqual(open.slice(0, 5), ["", "● Read 1 file, ↓100 2.0s", "", "∴ Thought", ""]);
+	assert.deepEqual(open.slice(0, 6), ["", "● Read 1 file, ↓100 2.0s", "│ ∴ Thought", "│", "│ ● read", "╰─ close"], "its rows in a rule, without the first one's blank line");
 	assert.equal(thinking.folded, false, "the reply is built again with its thinking");
 	const builds = thinking.invalidations;
 	view.render(chat, 80);
@@ -153,7 +157,7 @@ test("Pi's expand key opens every group through the rows it expands", () => {
 	const view = viewOf(value);
 	assert.equal(view.render(chat, 80).length, 4);
 	read.expanded = true;
-	assert.deepEqual(text(view.render(chat, 80)).slice(0, 4), ["", "● Read 1 file", "", "● read"]);
+	assert.deepEqual(text(view.render(chat, 80)).slice(0, 4), ["", "● Read 1 file", "│ ● read", "╰─ close"]);
 });
 
 test("failed calls are counted in the error color's words, and a narrow line still fits", () => {
@@ -225,8 +229,8 @@ test("a notice Pi adds mid-run, such as ctrl+o's status line, neither splits the
 	const later = new ToolRow("read", "b", true);
 	const chat = chatOf([new Reply(said({ timestamp: 1 })), new ToolRow("bash", "a"), new Spacer(1), note, later]);
 	const lines = text(viewOf(value).render(chat, 100));
-	assert.match(lines[3]!, /^⠋ Ran 1 command, reading 1 file/);
-	assert.deepEqual(lines.slice(4), ["", " Tool output: expanded"]);
+	assert.match(lines[2]!, /^  ⠋ Ran 1 command, reading 1 file/);
+	assert.deepEqual(lines.slice(3), ["", " Tool output: expanded"]);
 });
 
 test("a group with a call still running stays live when a reply follows it", () => {
@@ -241,7 +245,7 @@ test("with ctrl+o's rows expanded, a click closes a group; an open group keeps i
 	read.expanded = true;
 	const chat = chatOf([read, new Spacer(1), new ToolRow("bash", "b"), new Reply(said())]);
 	const view = viewOf(value);
-	assert.deepEqual(text(view.render(chat, 80)).slice(1, 6), ["● Read 1 file, ran 1 command", "", "● read", "", ""], "the spacer between the rows stays");
+	assert.deepEqual(text(view.render(chat, 80)).slice(1, 7), ["● Read 1 file, ran 1 command", "│ ● read", "│", "│", "│ ● bash", "╰─ close"], "the spacer between the rows stays");
 	const row = chat.mouseLayout!.children[0]!.component as FoldRow;
 	row.handleMouse({ type: "click", button: "left", y: 1 } as never);
 	assert.deepEqual(text(view.render(chat, 80)), ["", "● Read 1 file, ran 1 command", "", "● said"]);
@@ -263,7 +267,7 @@ const thinkingThenWords = (over: Partial<ReplyMessage> = {}): ReplyMessage => ({
 test("a reply that thought and then spoke keeps a Thought line above its words", () => {
 	const { value } = host({ thoughtMs: () => 2_500 });
 	const chat = chatOf([new Row(["", " prompt"]), new Reply(thinkingThenWords())]);
-	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt", "", "● Thought for 2.5s, ↓30", "", "● said"]);
+	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt", "", "∴ Thought for 2.5s", "● said"], "right above its words, with no figures");
 });
 
 test("its thinking counts once: in the Thought line, not again in the line of the calls it made", () => {
@@ -271,8 +275,8 @@ test("its thinking counts once: in the Thought line, not again in the line of th
 	const narrating = new Reply(thinkingThenWords({ content: [{ type: "thinking", thinking: "plan" }, { type: "text", text: "looking" }, { type: "toolCall" }] }));
 	const chat = chatOf([narrating, new ToolRow("read", "a"), new Reply(said())]);
 	const lines = text(viewOf(value).render(chat, 80));
-	assert.equal(lines[1], "● Thought for 0.5s, ↓30");
-	assert.equal(lines[5], "● Read 1 file, 1.5s", "no reply of its own to count; its time starts when the reply stopped thinking (1.0s + 0.5s) and runs to the result (3.0s)");
+	assert.equal(lines[1], "∴ Thought for 0.5s");
+	assert.equal(lines[3], "  ● Read 1 file, 1.5s", "no reply of its own to count; its time starts when the reply stopped thinking (1.0s + 0.5s) and runs to the result (3.0s)");
 });
 
 test("a reply streaming its words below a finished Thought line does not keep the line live", () => {
@@ -291,11 +295,11 @@ test("a settled line uses the theme's darker grays", () => {
 test("on a narrow line the words become the total count, then the figures go, then the words are cut", () => {
 	const { value } = host();
 	const chat = chatOf([new Reply(said({ timestamp: 1 })), new ToolRow("read", "a"), new ToolRow("bash", "b"), new ToolRow("edit", "c")]);
-	const at = (width: number) => text(viewOf(value).render(chat, width))[3]!;
-	assert.equal(at(100), "● Read 1 file, ran 1 command, edited 1 file, ↓50 5.4s");
-	assert.equal(at(50), "● Used 3 tools, ↓50 5.4s", "every kind doesn't fit: the total count");
-	assert.equal(at(20), "● Used 3 tools", "too narrow for both: the words win");
-	assert.equal(at(10), "● Used 3…");
+	const at = (width: number) => text(viewOf(value).render(chat, width))[2]!;
+	assert.equal(at(100), "  ● Read 1 file, ran 1 command, edited 1 file, ↓50 5.4s");
+	assert.equal(at(50), "  ● Used 3 tools, ↓50 5.4s", "every kind doesn't fit: the total count");
+	assert.equal(at(20), "  ● Used 3 tools", "too narrow for both: the words win");
+	assert.equal(at(12), "  ● Used 3…");
 });
 
 test("a cut keeps each part's color and leaves no comma or space before the ellipsis", () => {
@@ -320,12 +324,89 @@ test("a script counts the calls it made in its place, and still says when it run
 	const nested = [{ name: "bash", status: "ok", args: '{"command":"a && b"}' }, { name: "read", status: "error" }];
 	assert.deepEqual(factsOfCall("codemode", {}, false, false, nested), [
 		{ name: "bash", running: false, failed: false, count: 2 },
-		{ name: "read", running: false, failed: true, count: 1 },
+		{ name: "read", running: false, failed: true, count: 1, label: "read" },
 	]);
-	assert.deepEqual(factsOfCall("codemode", {}, false, true, []), [{ name: "codemode", running: false, failed: true }], "no calls known: the script itself");
+	assert.deepEqual(factsOfCall("codemode", {}, false, true, []), [{ name: "codemode", running: false, failed: true, label: "codemode" }], "no calls known: the script itself");
 	assert.deepEqual(factsOfCall("codemode", {}, true, false, nested).at(-1), { name: "codemode", running: true, failed: false, count: 0 });
 	const { value } = host({ nestedOf: (id) => (id === "s" ? nested : undefined) });
 	const chat = chatOf([new ToolRow("codemode", "s"), new ToolRow("bash", "b")]);
 	(chat.children[1] as unknown as { args: unknown }).args = { command: "ls; pwd; date" };
-	assert.match(text(viewOf(value).render(chat, 100))[1]!, /^● Ran 5 commands, read 1 file, 1 failed/);
+	assert.match(text(viewOf(value).render(chat, 100))[1]!, /^● Ran 5 commands, read 1 file, read failed/, "the one failed call is named");
+});
+
+/** A tool row that notes the clicks it gets. */
+class ClickRow extends ToolRow {
+	readonly events: Array<{ x: number; y: number; width: number }> = [];
+	handleMouse(event: { x: number; y: number; width: number }) {
+		this.events.push({ x: event.x, y: event.y, width: event.width });
+		return { handled: true };
+	}
+}
+
+const click = (chat: Box, y: number, x = 6, width = 80) =>
+	(chat as unknown as Container).handleMouse({ type: "click", button: "left", x, y, width, height: 100, screenX: x, screenY: y, shift: false, alt: false, ctrl: false } as never);
+
+test("an open run hangs its rows in a rule under its line, and the rule's end closes it", () => {
+	const { value } = host();
+	const read = new ClickRow("read", "a");
+	const chat = chatOf([new Reply(said({ content: [{ type: "text", text: "looking" }, { type: "toolCall" }], timestamp: 1_000 })), read, new Reply(said())]);
+	const view = viewOf(value);
+	view.render(chat, 80);
+	const row = chat.mouseLayout!.children[1]!.component as FoldRow;
+	assert.equal(row.handleMouse({ type: "click", button: "left", y: 0 } as never)?.handled, true, "a hung line has no blank line above it");
+	const lines = view.render(chat, 80);
+	assert.deepEqual(text(lines), ["", "● said", "  ● Read 1 file, ↓50 2.0s", "  │ ● read", "  ╰─ close", "", "● said"]);
+	assert.ok(lines.every((line) => visibleWidth(line) <= 80));
+	assert.deepEqual(read.widths.at(-1), 76);
+	click(chat, 3, 6);
+	assert.deepEqual(read.events, [{ x: 2, y: 1, width: 76 }], "a click on a row reaches it where the row drew it");
+	click(chat, 4);
+	assert.deepEqual(text(view.render(chat, 80)), ["", "● said", "  ● Read 1 file, ↓50 2.0s", "", "● said"], "closed");
+	for (const width of [1, 3, 5, 20]) {
+		row.open = true;
+		assert.ok(view.render(chat, width).every((line) => visibleWidth(line) <= width), `${width}`);
+	}
+});
+
+test("an open run's line is brighter than a closed one", () => {
+	const keys: string[] = [];
+	const { value } = host({ theme: () => ({ fg: (key: string, text: string) => { keys.push(key); return text; } }) });
+	const chat = chatOf([new ToolRow("read", "a")]);
+	const view = viewOf(value);
+	view.render(chat, 80);
+	(chat.mouseLayout!.children[0]!.component as FoldRow).open = true;
+	keys.length = 0;
+	view.render(chat, 80);
+	assert.deepEqual(keys.slice(0, 3), ["text", "muted", "dim"], "the words in the text color, the bullet muted, the figures dim");
+});
+
+test("an open Thought line shows the reply's thinking in full right under it", () => {
+	const { value } = host({ thoughtMs: () => 2_500 });
+	const reply = new Reply(thinkingThenWords(), false, ["", "  plan", "", "● said"]);
+	const chat = chatOf([new Row(["", " prompt"]), reply]);
+	const view = viewOf(value);
+	view.render(chat, 80);
+	assert.equal(view.expandsThinking(reply), false);
+	const row = chat.mouseLayout!.children[1]!.component as FoldRow;
+	row.handleMouse({ type: "click", button: "left", y: 1 } as never);
+	assert.deepEqual(text(view.render(chat, 80)), ["", " prompt", "", "∴ Thought for 2.5s", "  plan", "", "● said"], "no rule: the thinking is the reply's own");
+	assert.equal(view.expandsThinking(reply), true);
+	assert.equal(reply.folded, false);
+});
+
+test("a call names its file and, when it fails, what it ran", () => {
+	assert.deepEqual(factsOfCall("edit", { path: "lib/status/footer.ts" }, false, false, undefined), [{ name: "edit", running: false, failed: false, file: "footer.ts" }]);
+	assert.deepEqual(factsOfCall("bash", { command: "ls node_modules\npwd" }, false, true, undefined), [{ name: "bash", running: false, failed: true, count: 2, label: "ls node_modules pwd" }]);
+	assert.equal(factsOfCall("bash", { command: "x".repeat(80) }, false, true, undefined)[0]!.label, `${"x".repeat(31)}…`);
+	assert.equal(factsOfCall("mcp__oc__web_search", {}, false, true, undefined)[0]!.label, "web_search");
+	assert.equal(factsOfCall("read", { path: "a/b.ts" }, false, true, undefined)[0]!.label, "read b.ts");
+	assert.equal(factsOfCall("bash", {}, false, true, undefined)[0]!.label, undefined, "a shell call without its command");
+	const nested = [{ name: "write", status: "error", args: '{"path":"x/y.md"}' }];
+	assert.deepEqual(factsOfCall("codemode", {}, false, false, nested), [{ name: "write", running: false, failed: true, count: 1, file: "y.md", label: "write y.md" }]);
+});
+
+test("calls after a reply that draws nothing keep their own blank line, as nothing is there to hang under", () => {
+	const { value } = host();
+	const chat = chatOf([new Row(["", " prompt"]), new Reply(said({ timestamp: 1_000 }), false, []), new ToolRow("read", "a")]);
+	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt", "", "● Read 1 file, ↓50 2.0s"]);
 });

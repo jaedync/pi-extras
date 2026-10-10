@@ -20,7 +20,7 @@ export function cleanLabel(text: string): string {
 export const toolLabel = (name: string | undefined): string => cleanLabel(name ?? "") || "tool";
 
 /** The file a call's `path` names, once enough of it has streamed in. */
-function fileOf(args: unknown): string {
+export function fileOf(args: unknown): string {
 	const path = (args as { path?: unknown } | null | undefined)?.path;
 	if (typeof path !== "string") return "";
 	const name = cleanLabel(path).split(/[\\/]/).at(-1) ?? "";

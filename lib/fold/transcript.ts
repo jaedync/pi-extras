@@ -1,7 +1,9 @@
 /**
  * Fold mode: the transcript shows each run of work between replies as one
- * line (see plan.ts and summary.ts). A click on the line, or Pi's expand key
- * (ctrl+o), opens the group and shows its rows as usual.
+ * line (see plan.ts and summary.ts). A run of calls hangs under the reply
+ * that made them; a reply's thinking alone sits right above its words. A
+ * click on the line, or Pi's expand key (ctrl+o), opens the group: its rows
+ * show in a rule under the line, and the rule's end closes it again.
  *
  * Pi has no hook for the transcript as a whole, so this wraps the render of
  * Pi's chat container, the third child of the document Pi mounts first. Every
@@ -11,16 +13,19 @@
  * so clicks land on the rows drawn. Any other layout is left alone.
  */
 import { Spacer, stripTerminalSequences, Text, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { BULLET_GLYPH, glyphAt, JOB_ANIMATION } from "../band/glyph.ts";
-import { planFold, type FoldGroup, type PlanItem } from "./plan.ts";
-import { foldPhrase, foldStats, type FoldFacts, type ToolFact } from "./summary.ts";
+import { ROW_MARGIN } from "../band/band.ts";
+import { BULLET_GLYPH, glyphAt, JOB_ANIMATION, THOUGHT_GLYPH } from "../band/glyph.ts";
+import { planFold, type FoldGroup, type FoldPlan, type PlanEntry, type PlanItem } from "./plan.ts";
+import { foldPhrase, foldStats, thoughtOnly, type FoldFacts, type ToolFact } from "./summary.ts";
 import { CHARS_PER_TOKEN } from "../cc-phase.ts";
 import { commandsIn, isShell } from "../tool-count.ts";
+import { cleanLabel, fileOf } from "../tool-phrase.ts";
 
 export { commandsIn };
 
 export interface FoldTheme {
 	fg(key: string, text: string): string;
+	italic?(text: string): string;
 }
 
 export interface ReplyMessage {
@@ -117,23 +122,52 @@ export function speaks(message: ReplyMessage | undefined): boolean {
 	return message.stopReason === "length" || (!calls && (message.stopReason === "aborted" || message.stopReason === "error"));
 }
 
-function classify(child: Component, height: number): PlanItem {
-	if (isToolRow(child)) return { kind: "tool", height };
+function kindOf(child: Component): PlanItem["kind"] {
+	if (isToolRow(child)) return "tool";
 	if (isReply(child)) {
 		const message = child.lastMessage;
-		return { kind: !speaks(message) ? "work" : thought(message) ? "said" : "visible", height };
+		return !speaks(message) ? "work" : thought(message) ? "said" : "visible";
 	}
-	if (child instanceof Spacer) return { kind: "spacer", height };
+	if (child instanceof Spacer) return "spacer";
 	// Pi's status lines and notices (ThemedText extends Text) arrive mid-run and must not split a group.
-	if (child instanceof Text) return { kind: "note", height };
-	return { kind: "visible", height };
+	if (child instanceof Text) return "note";
+	return "visible";
 }
+
+/** Kinds whose rows join a group; they are drawn once the plan says how wide. */
+const FOLDING = new Set<PlanItem["kind"]>(["tool", "work", "said"]);
 
 /** Input tokens a reply sent: fresh input and cache reads and writes. */
 export function sentOf(message: ReplyMessage): number {
 	const usage = message.usage;
 	const sum = (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
 	return Number.isFinite(sum) && sum > 0 ? sum : 0;
+}
+
+/** The longest name a failed call gets on the line. */
+const LABEL_MAX = 32;
+
+/** A call's arguments as an object: a nested call's come as JSON text. */
+function argsOf(args: unknown): unknown {
+	if (typeof args !== "string") return args;
+	try { return JSON.parse(args) as unknown; } catch { return undefined; }
+}
+
+/** What a call ran, short enough for the line (`ls node_modules`, `read b.ts`); undefined for a shell call without its command. */
+export function callLabel(name: string, args: unknown): string | undefined {
+	const given = argsOf(args) as { command?: unknown } | null | undefined;
+	const tool = cleanLabel(name).split(/__|\./).at(-1) ?? "";
+	const file = fileOf(given);
+	const text = isShell(name) ? (typeof given?.command === "string" ? cleanLabel(given.command) : "") : file ? `${tool} ${file}` : tool;
+	if (!text) return undefined;
+	return text.length > LABEL_MAX ? `${text.slice(0, LABEL_MAX - 1)}…` : text;
+}
+
+/** The file a call works on, and what it ran when it failed. */
+function namesOf(name: string, args: unknown, failed: boolean): Pick<ToolFact, "file" | "label"> {
+	const file = fileOf(argsOf(args));
+	const label = failed ? callLabel(name, args) : undefined;
+	return { ...(file ? { file } : {}), ...(label ? { label } : {}) };
 }
 
 /** One call as the words count it: a script's own calls in its place, and a chain's steps. */
@@ -144,11 +178,12 @@ export function factsOfCall(name: string, args: unknown, running: boolean, faile
 			running: call.status === "running",
 			failed: call.status === "error",
 			count: isShell(call.name) ? commandsIn(call.args) : 1,
+			...namesOf(call.name, call.args, call.status === "error"),
 		}));
 		// The script is counted through its calls; it still says when it runs on or fails itself.
 		return running || failed ? [...inner, { name, running, failed, count: 0 }] : inner;
 	}
-	return [{ name, running, failed, ...(isShell(name) ? { count: commandsIn(args) } : {}) }];
+	return [{ name, running, failed, ...(isShell(name) ? { count: commandsIn(args) } : {}), ...namesOf(name, args, failed) }];
 }
 
 /** Output tokens: the reported count, or an estimate from the characters while it streams. */
@@ -197,27 +232,78 @@ export function cut(segments: readonly Segment[], room: number): Segment[] {
 	return [{ key: segments[0]?.key ?? "text", text: "…" }];
 }
 
-/** One group's line: a blank line above, as Pi's rows have, then the summary. */
+/** Where a group's line sits and how it reads. */
+export interface FoldLook {
+	/** Under the reply that made the calls: set in by the reply's margin, with no blank line above. */
+	readonly hung: boolean;
+	/** Its rows show. */
+	readonly open: boolean;
+}
+
+const RULE = "│";
+const RULE_END = "╰─ ";
+const CLOSE = "close";
+/** Columns the rule takes: its glyph and a space. */
+const RULE_WIDTH = 2;
+
+/** What a line holds that a terminal draws as an image; a rule in front would move it. */
+const isImage = (line: string) => line.includes("\x1b_G") || line.includes("\x1b]1337;File=");
+
+const paintWith = (theme: FoldTheme | undefined) => (key: string, text: string) => {
+	try { return theme ? theme.fg(key, text) : text; } catch { return text; }
+};
+
+/** One group's line: a blank line above, as Pi's rows have, then the summary; a hung line has no blank line. */
 export class FoldRow implements Component {
 	open = false;
 	private facts: FoldFacts = { tools: [], live: false, tokens: 0 };
+	private look: FoldLook = { hung: false, open: false };
 	private drawing?: { key: string; facts: FoldFacts; theme: FoldTheme | undefined; lines: string[] };
 	private readonly host: FoldHost;
+	/** The rule's end under an open group; a click on it closes the group. */
+	readonly end: Component;
 
 	constructor(host: FoldHost) {
 		this.host = host;
+		this.end = new FoldEnd(this);
 	}
 
-	update(facts: FoldFacts): void {
+	update(facts: FoldFacts, look: FoldLook = this.look): void {
 		this.facts = facts;
+		this.look = look;
 	}
 
-	/** Kept while the facts (the same object while a group is settled), width, glyph and theme are unchanged. */
+	/** Opens or closes the group. */
+	toggle(): void {
+		this.open = !this.open;
+		this.host.redraw();
+	}
+
+	private indent(): string {
+		return this.look.hung ? " ".repeat(ROW_MARGIN) : "";
+	}
+
+	/** Columns in front of an open group's rows. */
+	ruleWidth(): number {
+		return this.indent().length + RULE_WIDTH;
+	}
+
+	/** What goes in front of each of an open group's rows. */
+	rule(): string {
+		return `${this.indent()}${paintWith(this.host.theme())("borderMuted", RULE)} `;
+	}
+
+	endLine(width: number): string {
+		const paint = paintWith(this.host.theme());
+		return truncateToWidth(`${this.indent()}${paint("borderMuted", RULE_END)}${paint("dim", CLOSE)}`, width, "");
+	}
+
+	/** Kept while the facts (the same object while a group is settled), width, glyph, look and theme are unchanged. */
 	render(width: number): string[] {
 		const theme = this.host.theme();
 		const { live } = this.facts;
 		const glyph = live ? glyphAt(JOB_ANIMATION, this.host.now(), { reduced: this.host.reduced() }) : BULLET_GLYPH;
-		const key = `${width}|${glyph}`;
+		const key = `${width}|${glyph}|${this.look.hung}|${this.look.open}`;
 		const kept = this.drawing;
 		if (kept?.key === key && kept.facts === this.facts && kept.theme === theme) return kept.lines;
 		const lines = this.draw(width, glyph, theme);
@@ -233,16 +319,27 @@ export class FoldRow implements Component {
 	 * words wouldn't fit beside them.
 	 */
 	private draw(width: number, glyph: string, theme: FoldTheme | undefined): string[] {
-		const paint = (key: string, text: string) => {
-			try { return theme ? theme.fg(key, text) : text; } catch { return text; }
-		};
+		const paint = paintWith(theme);
 		const { live } = this.facts;
+		const { hung, open } = this.look;
+		const indent = this.indent();
+		const placed = (line: string) => {
+			const fitted = truncateToWidth(line, width, "");
+			return hung ? [fitted] : ["", fitted];
+		};
+		if (thoughtOnly(this.facts)) {
+			// Drawn as Tool Display draws a finished thinking block, so the two views agree.
+			const label = paint(open ? "muted" : "dim", truncateToWidth(`${THOUGHT_GLYPH} ${foldPhrase(this.facts).said}`, Math.max(1, width - indent.length), "…"));
+			let italic = label;
+			try { italic = theme?.italic?.(label) ?? label; } catch { /* Plain is fine. */ }
+			return placed(indent + italic);
+		}
 		const stats = foldStats(this.facts).join(" ");
 		const tail = stats ? `, ${stats}` : "";
-		const room = width - 3 - visibleWidth(tail);
+		const room = width - 3 - indent.length - visibleWidth(tail);
 		const fits = room >= MIN_WORDS;
-		const space = Math.max(1, fits ? room : width - 3);
-		const tone = live ? "text" : "muted";
+		const space = Math.max(1, fits ? room : width - 3 - indent.length);
+		const tone = live || open ? "text" : "muted";
 		const segments = (brief: boolean): Segment[] => {
 			const phrase = foldPhrase(this.facts, brief);
 			return [
@@ -254,11 +351,8 @@ export class FoldRow implements Component {
 		const full = segments(false);
 		const words = visibleWidth(full.map((segment) => segment.text).join("")) <= space ? full : segments(true);
 		const left = cut(words, space).map((segment) => paint(segment.key, segment.text)).join("");
-		const line = `${paint(live ? "accent" : "dim", glyph)} ${left}${fits ? paint("dim", tail) : ""}`;
-		return ["", truncateToWidth(line, width, "")];
+		return placed(`${indent}${paint(live ? "accent" : open ? "muted" : "dim", glyph)} ${left}${fits ? paint("dim", tail) : ""}`);
 	}
-
-
 
 	invalidate(): void {
 		this.drawing = undefined;
@@ -266,11 +360,74 @@ export class FoldRow implements Component {
 
 	/** A click on the summary line, not the blank line above it, opens or closes the group. */
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		if (event.type !== "click" || event.button !== "left" || event.y !== 1) return undefined;
-		this.open = !this.open;
-		this.host.redraw();
+		if (event.type !== "click" || event.button !== "left" || event.y !== (this.look.hung ? 0 : 1)) return undefined;
+		this.toggle();
 		return { handled: true };
 	}
+}
+
+/** The end of an open group's rule: `╰─ close`. */
+class FoldEnd implements Component {
+	private readonly row: FoldRow;
+
+	constructor(row: FoldRow) {
+		this.row = row;
+	}
+
+	render(width: number): string[] {
+		return [this.row.endLine(width)];
+	}
+
+	invalidate(): void {}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		this.row.toggle();
+		return { handled: true };
+	}
+}
+
+/**
+ * A row drawn `dx` columns to the right, without its first `dy` lines (a
+ * blank line dropped): clicks reach it where it drew them.
+ */
+class Placed implements Component {
+	private readonly child: Component;
+	private readonly dx: number;
+	private readonly dy: number;
+
+	constructor(child: Component, dx: number, dy: number) {
+		this.child = child;
+		this.dx = dx;
+		this.dy = dy;
+	}
+
+	render(width: number): string[] {
+		return this.child.render(Math.max(1, width - this.dx)).slice(this.dy);
+	}
+
+	invalidate(): void {
+		this.child.invalidate();
+	}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		return this.child.handleMouse?.({ ...event, x: event.x - this.dx, y: event.y + this.dy, width: Math.max(1, event.width - this.dx), height: event.height + this.dy });
+	}
+}
+
+/** Lines without a blank first line; what that line held that draws nothing (Pi's zone marks) moves to the next. */
+function withoutLead(lines: readonly string[]): { lines: string[]; dropped: number } {
+	const head = lines[0];
+	if (lines.length < 2 || head === undefined || visibleWidth(head) !== 0 || isImage(head)) return { lines: [...lines], dropped: 0 };
+	return { lines: [head + lines[1]!, ...lines.slice(2)], dropped: 1 };
+}
+
+/** What the view draws for one group this frame. */
+interface Drawn {
+	readonly row: FoldRow;
+	readonly facts: FoldFacts;
+	readonly open: boolean;
+	readonly hung: boolean;
 }
 
 /** The group's first row, folded or not: its line is kept by it. */
@@ -293,6 +450,8 @@ export class FoldView {
 	private readonly ours = new WeakSet<object>();
 	/** Replies whose group is open, so their thinking shows. */
 	private readonly opened = new WeakSet<object>();
+	/** Replies whose open group is a line of thinking alone, so their thinking shows in full. */
+	private readonly revealed = new WeakSet<object>();
 	/** What each reply was last built with: true when without its thinking. */
 	private readonly built = new WeakMap<object, boolean>();
 	/** A settled group's facts, kept until one of its rows changes. */
@@ -309,42 +468,103 @@ export class FoldView {
 		return folds;
 	}
 
+	/** Asked as a reply's thinking draws: show it in full? Yes when its open group is a line of thinking alone. */
+	expandsThinking(reply: object): boolean {
+		return this.host.enabled() && this.revealed.has(reply);
+	}
+
 	render(chat: Box, width: number): string[] {
 		const children = chat.children;
 		for (const child of children) if (isReply(child)) this.ours.add(child);
-		const drawn = children.map((child) => child.render(width));
-		const plan = planFold(children.map((child, index) => classify(child, drawn[index]!.length)));
-		// A click flips a group from what Pi's expand key (ctrl+o) chose for every row.
-		const shown = plan.groups.map((group) => {
-			const row = this.rowFor(children[firstOf(group)]!);
-			return row.open !== group.members.some((index) => (children[index] as Partial<ToolRow>).expanded === true);
+		const kinds = children.map(kindOf);
+		// Rows that fold are drawn once the plan says how wide; the rest now, since their height can split a group.
+		const drawn: Array<string[] | undefined> = children.map((child, index) => (FOLDING.has(kinds[index]!) ? undefined : child.render(width)));
+		const plan = planFold(kinds.map((kind, index) => ({ kind, height: drawn[index]?.length ?? 0 })));
+		const groups = this.groups(children, plan, drawn);
+		groups.forEach((group, at) => this.reveal(children, plan.groups[at]!, group.open && thoughtOnly(group.facts)));
+		const open = plan.groups.flatMap((group, at) => (groups[at]!.open ? [...group.members, ...group.said] : []));
+		for (const index of this.rebuild(children, open)) drawn[index] = undefined;
+		// A group's rows keep the width they have when it opens, so opening it draws nothing again.
+		const widths = new Map<number, number>();
+		groups.forEach((group, at) => {
+			const { members, dropped } = plan.groups[at]!;
+			for (const index of [...members, ...dropped]) widths.set(index, Math.max(1, width - group.row.ruleWidth()));
 		});
-		this.rebuild(children, drawn, plan.groups.flatMap((group, at) => (shown[at] ? [...group.members, ...group.said] : [])), width);
+		const rows = children.map((child, index) => drawn[index] ?? child.render(widths.get(index) ?? width));
 		const lines: string[] = [];
 		const layout: Array<{ component: Component; height: number }> = [];
-		const put = (component: Component, rows: readonly string[]) => {
-			layout.push({ component, height: rows.length });
-			for (const row of rows) lines.push(row);
+		const put = (component: Component, drawnRows: readonly string[]) => {
+			layout.push({ component, height: drawnRows.length });
+			for (const row of drawnRows) lines.push(row);
 		};
+		/** Replies right under a line of their thinking alone, which lose their blank line. */
+		const tucked = new Set<number>();
 		let live = false;
 		for (const entry of plan.entries) {
 			if (entry.kind === "item") {
-				put(children[entry.index]!, drawn[entry.index]!);
+				const child = children[entry.index]!;
+				const tight = tucked.has(entry.index) ? withoutLead(rows[entry.index]!) : undefined;
+				if (tight?.dropped) put(new Placed(child, 0, tight.dropped), tight.lines);
+				else put(child, rows[entry.index]!);
 				continue;
 			}
 			const group = plan.groups[entry.group]!;
-			const row = this.rowFor(children[firstOf(group)]!);
-			const facts = this.factsFor(row, children, group);
+			const { row, facts, open: shown } = groups[entry.group]!;
 			live ||= facts.live;
-			if (!shown[entry.group] && !facts.live && facts.tools.length === 0 && facts.tokens === 0) continue;
-			row.update(facts);
+			if (!shown && !facts.live && facts.tools.length === 0 && facts.tokens === 0) continue;
 			put(row, row.render(width));
-			if (!shown[entry.group]) continue;
-			for (const index of [...group.members, ...group.dropped].sort((a, b) => a - b)) put(children[index]!, drawn[index]!);
+			if (thoughtOnly(facts)) for (const index of group.said) tucked.add(index);
+			if (shown) this.drawRun(row, [...group.members, ...group.dropped].sort((a, b) => a - b), children, rows, width, put);
 		}
 		chat.mouseLayout = { width, children: layout };
 		this.host.animate(live);
 		return lines;
+	}
+
+	/** Each group's line, facts and look. A click flips a group from what Pi's expand key (ctrl+o) chose for every row. */
+	private groups(children: readonly Component[], plan: FoldPlan, drawn: ReadonlyArray<string[] | undefined>): Drawn[] {
+		const before = new Map<number, PlanEntry | undefined>();
+		plan.entries.forEach((entry, at) => { if (entry.kind === "group") before.set(entry.group, plan.entries[at - 1]); });
+		return plan.groups.map((group, at) => {
+			const row = this.rowFor(children[firstOf(group)]!);
+			const expanded = group.members.some((index) => (children[index] as Partial<ToolRow>).expanded === true);
+			// Calls right after the reply that made them hang under it, when it shows.
+			const prior = before.get(at);
+			const head = children[group.members[0] ?? -1];
+			const hung = !!head && isToolRow(head) && prior?.kind === "item" && isReply(children[prior.index]) && drawn[prior.index]?.length !== 0;
+			const facts = this.factsFor(row, children, group);
+			const open = row.open !== expanded;
+			row.update(facts, { hung, open });
+			return { row, facts, open, hung };
+		});
+	}
+
+	private reveal(children: readonly Component[], group: FoldGroup, shows: boolean): void {
+		for (const index of [...group.members, ...group.said]) {
+			const child = children[index];
+			if (!isReply(child)) continue;
+			if (shows) this.revealed.add(child);
+			else this.revealed.delete(child);
+		}
+	}
+
+	/** An open group's rows in a rule under its line, the first without its blank line, then the rule's end. */
+	private drawRun(row: FoldRow, members: readonly number[], children: readonly Component[], rows: readonly string[][], width: number, put: (component: Component, lines: readonly string[]) => void): void {
+		if (members.length === 0) return;
+		const rule = row.rule();
+		const dx = row.ruleWidth();
+		const ruled = (line: string) => {
+			if (isImage(line)) return line;
+			return width > dx ? rule + line : truncateToWidth(rule + line, width, "");
+		};
+		let first = true;
+		for (const index of members) {
+			const own = rows[index]!;
+			const tight = first && own.length > 0 ? withoutLead(own) : { lines: own, dropped: 0 };
+			if (own.length > 0) first = false;
+			put(new Placed(children[index]!, dx, tight.dropped), tight.lines.map(ruled));
+		}
+		put(row.end, row.end.render(width));
 	}
 
 	private rowFor(first: Component): FoldRow {
@@ -355,10 +575,12 @@ export class FoldView {
 
 	/**
 	 * Builds again each reply whose thinking should now show or hide: one in a
-	 * group that opened or closed, or one Pi built before it was in the transcript.
+	 * group that opened or closed, or one Pi built before it was in the
+	 * transcript. Returns where they are, to be drawn again.
 	 */
-	private rebuild(children: readonly Component[], drawn: string[][], open: readonly number[], width: number): void {
+	private rebuild(children: readonly Component[], open: readonly number[]): number[] {
 		const opening = new Set(open.map((index) => children[index]));
+		const rebuilt: number[] = [];
 		children.forEach((child, index) => {
 			if (!isReply(child)) return;
 			if (opening.has(child)) this.opened.add(child);
@@ -368,8 +590,9 @@ export class FoldView {
 			// Noted first: a reply the thinking patch passes over (an unexpected shape) is then not built again every frame.
 			this.built.set(child, folds);
 			child.invalidate();
-			drawn[index] = child.render(width);
+			rebuilt.push(index);
 		});
+		return rebuilt;
 	}
 
 	/** The facts again only while the group is live or one of its rows changed; a long transcript has many settled groups. */
