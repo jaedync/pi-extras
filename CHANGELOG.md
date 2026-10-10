@@ -2,6 +2,24 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.23.9 - 2026-10-10
+
+### Changed
+
+- Tool Display, folded mode: a run of calls hangs under the reply that made
+  them, set in two columns with no blank line between them. A reply's
+  thinking alone reads `∴ Thought for 0.6s` directly above its words, as in
+  the unfolded view, with no figures.
+- Tool Display, folded mode: when all the edits (or all the writes) in a run
+  are to one file, the line names that file (`edited footer.ts`). When one
+  call fails, the line names it in red (`ls node_modules failed`); two or
+  more are counted (`2 failed`).
+- Tool Display, folded mode: an open run shows its rows inside a rule under
+  a brighter line. The rule ends with `╰─ close`, and a click on it closes
+  the run. An open `∴ Thought` line shows the full thinking text.
+- Tool Display: a thinking label shorter than one second shows tenths
+  (`∴ Thought for 0.4s`) instead of `0s`.
+
 ## 0.23.8 - 2026-10-09
 
 ### Added
