@@ -76,7 +76,7 @@ test("Proxy quota maps fractional utilization and extra usage", () => {
 	assert.deepEqual(entries, [
 		{ label: "5h", key: "five_hour", usedPct: 47, windowSeconds: 18000, resetMs: 1_788_372_000_073, exhausted: false, allowed: true },
 		{ label: "7d-fable", key: "seven_day_fable", modelFamily: "fable", usedPct: 8, windowSeconds: 604800, resetMs: 1_788_422_400_073, exhausted: true, proxyRejected: true },
-		{ label: "", kind: "budget", remainingText: "$87.50/$100" },
+		{ label: "", kind: "budget", remainingText: "$87.50/$100", usedUsd: 12.5, limitUsd: 100 },
 	]);
 });
 

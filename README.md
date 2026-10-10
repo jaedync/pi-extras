@@ -377,8 +377,10 @@ for what is kept in memory.
 
 ## Usage Guard
 
-Usage Guard reads the limit snapshots Status Plus polls; it never fetches on its
-own except when the `usage` tool is called with `refresh: true`. Only windows that
+Usage Guard reads the limit snapshots Status Plus polls; it never polls limits on its
+own except when the `usage` tool is called with `refresh: true`. For dollar
+figures, a `usage` call also reads local session files and, when set up,
+Tokenfold and OpenRouter (see [Dollar figures](#dollar-figures)). Only windows that
 govern the active model count: provider-wide windows always, model-specific ones
 (such as an Anthropic `seven_day_fable` bucket) only when the active model id
 carries that family. Balances (Enterprise spend, prepaid credits) and per-minute
@@ -429,6 +431,64 @@ rate limits taken from response headers are reported but never warned on.
   at their faster cadence; failed polls back off exponentially up to ten minutes.
   The Pi processes of one agent directory share one poll and one backoff, and a
   provider's `Retry-After` is obeyed for up to an hour.
+
+### Dollar figures
+
+The `usage` tool also gives money, so that an agent can budget work and
+subagents in dollars. Each limit gets a `dollars` object, and the report gets
+a top-level `dollars` summary.
+
+- **Spend today:** the summary gives the spend on this machine since local
+  midnight, by provider. With Tokenfold, it also gives the spend on all
+  personal machines. Spend is the API list price of the tokens, from the model
+  catalog. It is not a bill.
+- **Subscription windows (Claude 5h and 7d, Codex):** a provider reports only
+  a percent. The tool divides the spend in the window by the percent used to
+  get the window size in dollars (`basis: "implied"`). Then it gives the
+  dollars that remain. Below 5% used, the tool gives only the spend. The
+  figure changes with the model mix, so use it as an estimate.
+- **Tokenfold:** when `usageDollars.tokenfold` is set, Claude windows use
+  Tokenfold's spend for all machines on the account (`source: "tokenfold"`).
+  Without it, the tool counts the spend on this machine only. Then use on
+  other machines makes the limit read low, which is the safe direction. A
+  Tokenfold window with a different reset is ignored.
+- **OpenCode Go:** the caps are dollars per model, from the OpenCode Go docs
+  (read 2026-10-10). The 5h window allows 20% of a model's monthly cap and
+  the weekly window 50%. The tool gives the remaining dollars per model
+  (`perModel`) for the scoped models, the active model, and the models used
+  in the last 7 days. The usage endpoint does not report the plan, so set it.
+- **Monthly meters (Claude Enterprise, extra usage):** the provider's own
+  spend and limit, the calendar days and business days (Monday to Friday,
+  local time zone) until the reset, and `perBusinessDayUsd`. That share
+  includes today's spend, so it does not change during the day.
+  `spentTodayUsd` is the meter's growth since the first reading of the local
+  day, and `leftTodayUsd` is today's share minus that spend. A negative value
+  means today is over its share. With no reset from the provider, the next
+  UTC month start is used (`resetApprox`).
+- **OpenRouter:** the credit balance, the key's spend for the current UTC day,
+  the key limit that remains, and the budget that blocks first.
+- **Summary:** `dollars.providers.<provider>` gives `spentTodayUsd`, and
+  `remainingUsd` with `bindingWindow` for the tightest window. For OpenCode Go,
+  it gives `remainingUsdByModel`.
+
+Settings, in `~/.pi/agent/pi-extras.json`:
+
+```json
+{
+  "usageDollars": {
+    "tokenfold": { "url": "https://usage.example.com", "keyFile": "~/.config/tokenfold-read-key" },
+    "opencodeGo": { "plan": "go", "monthlyCaps": { "glm-5.3": 15 } }
+  }
+}
+```
+
+- `tokenfold.url` must use `https`, or `http` to this machine only. The key
+  file holds a read-only key that Tokenfold accepts on `GET /api/ha`. The tool
+  never shows the key or the key file path.
+- `opencodeGo.plan` is `go` (the default) or `go-plus`. `monthlyCaps`
+  replaces the cap of a model when OpenCode changes it.
+- Remote answers are kept for one minute. `refresh: true` reads them again.
+  When a source fails, the report gives a note and the other figures.
 
 ## Rate-limit Recovery
 

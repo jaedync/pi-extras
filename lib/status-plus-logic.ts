@@ -28,6 +28,11 @@ export interface LimitEntry {
 	/** Full quota duration. Do not infer Codex durations from its primary/secondary slots. */
 	windowSeconds?: number;
 	remainingText?: string;
+	/** Budget meters: spend so far and the cap, in USD, for the usage tool's dollar figures. */
+	usedUsd?: number;
+	limitUsd?: number;
+	/** Prepaid credits left, in USD. */
+	balanceUsd?: number;
 	resetApprox?: boolean;
 	resetMs?: number;
 }
@@ -320,6 +325,8 @@ export function parseProxyQuota(body: unknown): LimitEntry[] {
 			label: "",
 			kind: "budget",
 			remainingText: `${prefix}${formatMoney(extra.monthlyLimit - extra.usedCredits)}/${prefix}${formatMoney(extra.monthlyLimit)}`,
+			// Dollar fields only for USD, so a sum never mixes currencies.
+			...(prefix === "$" ? { usedUsd: extra.usedCredits, limitUsd: extra.monthlyLimit } : {}),
 		});
 	}
 

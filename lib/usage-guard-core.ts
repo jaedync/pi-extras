@@ -7,6 +7,7 @@ import type { LimitSnapshot } from "./limit-store.ts";
 import { formatDuration, quotaKeyParts, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
 import { localTime } from "./usage-time.ts";
 import { paceText, usagePace, type UsagePace } from "./usage-pace.ts";
+import { dollarsSummary, entryDollars, type DollarInputs, type DollarsSummary, type EntryDollars } from "./usage-dollars/core.ts";
 export { localTime } from "./usage-time.ts";
 
 export interface GuardConfig {
@@ -350,6 +351,13 @@ export interface UsageReportLimit {
 	budgetPct?: number;
 	reset?: ResetTiming;
 	pace?: UsagePace;
+	dollars?: EntryDollars;
+}
+
+/** What the usage tool gathered for dollar figures, and why any source is missing. */
+export interface CollectedDollars {
+	inputs: DollarInputs;
+	notes: string[];
 }
 
 export interface UsageReport {
@@ -360,9 +368,25 @@ export interface UsageReport {
 	snapshotAgeSeconds: Record<string, number>;
 	limits: UsageReportLimit[];
 	notes: string[];
+	dollars?: DollarsSummary;
 }
 
 function reportLimit(
+	provider: string,
+	entry: LimitEntry,
+	model: ActiveModel,
+	config: GuardConfig,
+	budget: SessionBudget | undefined,
+	now: number,
+	timeZone?: string,
+	dollarInputs?: DollarInputs,
+): UsageReportLimit {
+	const limit = reportLimitFigures(provider, entry, model, config, budget, now, timeZone);
+	const dollars = dollarInputs ? entryDollars(provider, entry, dollarInputs) : undefined;
+	return dollars ? { ...limit, dollars } : limit;
+}
+
+function reportLimitFigures(
 	provider: string,
 	entry: LimitEntry,
 	model: ActiveModel,
@@ -408,6 +432,7 @@ export function usageReport(
 	now: number,
 	includeAll = false,
 	timeZone?: string,
+	dollars?: CollectedDollars,
 ): UsageReport {
 	const limits: UsageReportLimit[] = [];
 	const snapshotAgeSeconds: Record<string, number> = {};
@@ -418,7 +443,7 @@ export function usageReport(
 		if (!active && !includeAll) continue;
 		snapshotAgeSeconds[provider] = Math.max(0, Math.round((now - snapshot.atMs) / 1000));
 		for (const entry of snapshot.entries) {
-			const limit = reportLimit(provider, entry, model, config, budget, now, timeZone);
+			const limit = reportLimit(provider, entry, model, config, budget, now, timeZone, dollars?.inputs);
 			if (limit.applies || includeAll) limits.push(limit);
 		}
 	}
@@ -432,7 +457,7 @@ export function usageReport(
 	if (budget && !limits.some((limit) => limit.budgetPct !== undefined)) {
 		notes.push(`Session budget targets window "${budget.window}", which no applicable limit matches; it will not fire.`);
 	}
-	return {
+	const report: UsageReport = {
 		asOf: new Date(now).toISOString(),
 		model,
 		warnings: config.enabled ? "on" : "off",
@@ -441,4 +466,7 @@ export function usageReport(
 		limits,
 		notes,
 	};
+	if (!dollars) return report;
+	const summary = dollarsSummary(limits, dollars.inputs);
+	return { ...report, dollars: { ...summary, notes: [...summary.notes, ...dollars.notes] } };
 }

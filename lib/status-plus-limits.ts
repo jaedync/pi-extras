@@ -278,6 +278,8 @@ export async function pollAnthropicUsage(ctx: PollerContext): Promise<LimitEntry
 				label: "",
 				kind: "budget",
 				remainingText: `$${formatMoney(limit - used)}/$${formatMoney(limit)}`,
+				usedUsd: used,
+				limitUsd: limit,
 				resetMs: Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth() + 1, 1),
 				resetApprox: true,
 			});
@@ -299,7 +301,7 @@ export async function pollOpenRouterCredits(ctx: PollerContext): Promise<LimitEn
 	const total = body.data?.total_credits;
 	const used = body.data?.total_usage;
 	if (typeof total !== "number" || typeof used !== "number") return undefined;
-	return [{ label: "", kind: "credits", remainingText: `$${formatMoney(total - used)} credits` }];
+	return [{ label: "", kind: "credits", remainingText: `$${formatMoney(total - used)} credits`, balanceUsd: total - used }];
 }
 
 async function pollCodexEntries(ctx: PollerContext): Promise<LimitEntry[] | undefined> {

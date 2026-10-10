@@ -17,6 +17,7 @@ import { sharedLimitStore, type LimitStore } from "../lib/limit-store.ts";
 import { operationalError } from "../lib/operational-log.ts";
 import { markRow } from "../lib/tool-row.ts";
 import { parseRateLimit } from "../lib/rate-limit-recovery/core.ts";
+import { createDollarsCollector, type DollarsCollector } from "../lib/usage-dollars/collect.ts";
 import {
 	hotProviders,
 	normalizeGuardConfig,
@@ -25,6 +26,7 @@ import {
 	warningApplies,
 	warningMessage,
 	type ActiveModel,
+	type CollectedDollars,
 	type GuardConfig,
 	type SessionBudget,
 } from "../lib/usage-guard-core.ts";
@@ -93,6 +95,8 @@ export interface UsageGuardOptions {
 	store?: LimitStore;
 	configFile?: string;
 	now?: () => number;
+	/** Defaults to one that reads the agent directory holding configFile. */
+	dollars?: DollarsCollector;
 }
 
 export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions = {}): void {
@@ -100,6 +104,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	const configFile = options.configFile ?? CONFIG_FILE;
 	const now = options.now ?? Date.now;
 	let config = loadGuardConfig(configFile);
+	// pi-extras.json sits in the agent directory, next to the sessions the ledger reads.
+	const dollars = options.dollars ?? createDollarsCollector({ agentDir: dirname(configFile), configFile });
 	let fired = new Set<string>();
 	let budget: SessionBudget | undefined;
 	let latestCtx: ExtensionContext | undefined;
@@ -129,6 +135,23 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			{ customType: GUARD_CUSTOM_TYPE, content, display: true, ...(details !== undefined ? { details } : {}) },
 			{ deliverAs },
 		);
+	}
+
+	/** Dollar figures fail open: the percent report still goes out without them. */
+	async function collectDollars(ctx: ExtensionContext, force: boolean): Promise<CollectedDollars | undefined> {
+		try {
+			return await dollars.collect({
+				snapshots: store.entries(),
+				model: activeModel(ctx),
+				scopedModels: (ctx.scopedModels ?? []).map((scoped) => ({ provider: scoped.model.provider, id: scoped.model.id })),
+				getApiKey: async (provider) => ctx.modelRegistry?.getApiKeyForProvider(provider),
+				now: now(),
+				force,
+			});
+		} catch (error) {
+			operationalError(LOG_FILE, "usage-guard", `dollars failed: ${(error as Error)?.message ?? "error"}`);
+			return undefined;
+		}
 	}
 
 	function evaluate(ctx: ExtensionContext, deliverWarnings = false): CustomMessage[] {
@@ -169,11 +192,16 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			"percent used, thresholds, reset time, seconds until reset, a resume delay, and usage pace. " +
 			"Pace estimates usage at reset from the average rate since the window began; early windows omit the projection. " +
 			"Balances (budget, credits) are reported but never warned on. " +
+			"Dollar figures: each limit's `dollars` gives spend, size and remaining USD (implied for subscription windows, " +
+			"plan caps per model for OpenCode Go, the provider's own meter or balance otherwise); a monthly meter adds " +
+			"business days left and a per-business-day share. The top-level `dollars` gives spend today in the local time zone " +
+			"and the tightest remaining USD per provider. " +
 			"setBudget records a session budget so a wrap-up warning fires once when that window reaches pct.",
 		promptSnippet: "Check subscription usage limits, resets, and the session usage budget",
 		promptGuidelines: [
 			"Use usage before long autonomous work and whenever the user sets a usage budget (for example: work until 60% of the weekly limit); pass setBudget so a warning fires at that point.",
 			"Usage warnings are not a reason to cut work short: finish tasks that fit in the remaining headroom.",
+			"Before starting subagents, call usage with all: true and size each run's maxCost from dollars.providers.<provider>.remainingUsd (remainingUsdByModel for OpenCode Go) and, for a monthly meter, leftTodayUsd. Treat implied figures as estimates and leave margin.",
 			"When a window near its limit is waitable (resets within a few hours) and work remains, keep going past it: at a clean checkpoint start a background shell job running `sleep <resumeAfterSeconds>` titled \"Wait for usage reset\", end the turn, and continue the task when it completes. Stop and report only at a user-set budget or when the reset is too far away to wait for.",
 		],
 		parameters: Type.Object({
@@ -195,7 +223,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 				if (model.provider && !providers.includes(model.provider)) providers.push(model.provider);
 				await Promise.all(providers.map((provider) => store.refresh(provider, true)));
 			}
-			const report = usageReport(store.entries(), model, config, budget, now(), params.all === true);
+			const collected = await collectDollars(ctx, params.refresh === true);
+			const report = usageReport(store.entries(), model, config, budget, now(), params.all === true, undefined, collected);
 			return { content: [{ type: "text", text: JSON.stringify(report, null, 1) }], details: report };
 		},
 	}), "usage"));
@@ -223,7 +252,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 				return ctx.ui.notify(parsed ? `Session budget: ${parsed.window} at ${parsed.pct}%` : "Session budget cleared", "info");
 			}
 			if (words.length) return ctx.ui.notify(USAGE_HELP, "warning");
-			const report = usageReport(store.entries(), activeModel(ctx), config, budget, now(), false);
+			const collected = await collectDollars(ctx, false);
+			const report = usageReport(store.entries(), activeModel(ctx), config, budget, now(), false, undefined, collected);
 			deliver(`Current usage limits:\n${JSON.stringify(report, null, 1)}`, idle(ctx) ? "nextTurn" : "steer", report);
 			ctx.ui.notify(idle(ctx) ? "Usage snapshot queued for the next turn" : "Usage snapshot queued for the agent", "info");
 		},
@@ -269,6 +299,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	// Idle polls still select faster polling near a threshold, but never persist
 	// a fired key or queue model-facing text before the next prompt chooses its model.
 	const unsubscribe = store.subscribe(() => {
+		// The first meter reading of the day anchors "spent today" for every process.
+		try { dollars.observe(store.entries(), now()); } catch { /* the report recomputes it */ }
 		const ctx = latestCtx;
 		if (ctx && idle(ctx)) evaluate(ctx);
 	});
