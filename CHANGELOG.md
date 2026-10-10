@@ -2,6 +2,31 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.4 - 2026-10-10
+
+### Changed
+
+- Tool Display, folded mode: a live line now shows the phase spinner's own
+  spinner for what the model does now, 3 cells wide: the ping while it
+  waits for the model, the helix while thinking text streams, the print head
+  while it writes a call, the comet while a call runs, and the two comets
+  while every running call waits on another agent. A line under a reply
+  keeps its words in place; a line at the left edge moves its words 2
+  columns in while it is live.
+- Tool Display, folded mode: the words tell only what the model did. They
+  no longer end with `thinking`, which also showed while the model had sent
+  no thinking text yet, and no longer say `running` or `writing ... call`: a
+  call counts in the past tense as soon as it shows. A run with no calls yet
+  shows no line until thinking text comes, then says how long the model has
+  thought (`Thought for 1.5s`).
+- Subagents: an agent's spinner and words have every state main's phase
+  spinner has. It waits for its model (the ping, `waiting for the model`)
+  when a run starts and after its tools are done, instead of `thinking`.
+  Thinking and writing start with their first text. A tool that runs shows
+  the comet, a call being written the print head, a tool that only waits on
+  another agent the two comets, and a retry the drain, in amber
+  (`retrying, attempt 2 of 3`).
+
 ## 0.24.3 - 2026-10-10
 
 ### Added
