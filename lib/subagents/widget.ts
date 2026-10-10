@@ -22,7 +22,7 @@ import { contextHeat, formatTokens } from "../status-plus-render.ts";
 import type { PendingItem } from "./deliver.ts";
 import { MAIN } from "./names.ts";
 import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount, type ControlLine, type Span } from "./overflow.ts";
-import { type AgentRecord, type AgentState, LIVE_STATES } from "./types.ts";
+import { type AgentRecord, type AgentState, LIVE_STATES, WAITING_FOR_MODEL } from "./types.ts";
 
 export const WIDGET_ID = "subagents";
 export const MAX_PENDING_ROWS = 3;
@@ -76,8 +76,8 @@ function statusWords(record: AgentRecord, reportQueued: boolean): Seg {
 		case "failed": return { text: record.error ? `failed: ${record.error}` : "failed", color: "error" };
 		case "stopped": return { text: "stopped", color: "muted" };
 		case "interrupted": return { text: `interrupted${record.activity ? `: ${record.activity}` : ""}`, color: "warning" };
-		// A running agent with no tool or text under way is thinking, as its spinner says.
-		default: return { text: record.activity ?? (record.state === "running" ? "thinking" : ""), color: "muted" };
+		// A running agent whose session has reported nothing yet waits for its model, as its spinner says.
+		default: return { text: record.activity ?? (record.state === "running" ? WAITING_FOR_MODEL.activity : ""), color: "muted" };
 	}
 }
 

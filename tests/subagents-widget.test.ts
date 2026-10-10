@@ -161,13 +161,13 @@ test("spend lines up on the right and model on the left, so what each does start
 	assert.equal(new Set(lines.map((line) => line.indexOf("bash npm test"))).size, 1);
 });
 
-test("a running agent with no activity says thinking; times align right so what each does starts in one column", () => {
+test("a running agent with no activity waits for its model; times align right so what each does starts in one column", () => {
 	const rows = [{ record: record("short", { activity: null }), depth: 0 }, { record: record("longer", { startedAt: 0 }), depth: 0 }];
 	const columns = rowColumns(rows, 60_000);
 	assert.equal(columns.time, 5);
 	const lines = rows.map((row) => stripTerminalSequences(presenceLine(quiet() as never, row, 100, 60_000, "reduced", columns)));
-	assert.match(lines[0]!, /59\.0s  gpt-6-luna  \S{3} thinking/);
-	assert.equal(lines[0]!.indexOf("thinking") , lines[1]!.indexOf("bash npm test"));
+	assert.match(lines[0]!, /59\.0s  gpt-6-luna  \S{3} waiting for the model/);
+	assert.equal(lines[0]!.indexOf("waiting for the model"), lines[1]!.indexOf("bash npm test"));
 });
 
 test("an ended agent's glyph slot says how it ended, in the slot's three cells", () => {
@@ -240,7 +240,7 @@ test("an agent's name and its own spinner wear its provider's color; tool work k
 	assert.notEqual(local, AGENT_HUE);
 	assert.deepEqual(nameSegs(record("local", { model: "redarch-lora/qwen3" })).map((seg) => seg.color), [local, local]);
 	assert.deepEqual(nameSegs(record("bare", { model: "qwen3" })).map((seg) => seg.color), [AGENT_HUE, AGENT_HUE]);
-	const thinking = rowSegs({ record: record("lead", { activity: null }), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, tokens: 0, percent: 0, cost: 0, model: 0 });
+	const thinking = rowSegs({ record: record("lead", { activity: "thinking", work: "thinking" }), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, tokens: 0, percent: 0, cost: 0, model: 0 });
 	assert.equal(thinking.find((seg) => seg.text === doingGlyph("thinking", 5_000, "reduced").glyph)?.color, codex);
 	const tool = rowSegs({ record: record("lead"), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, tokens: 0, percent: 0, cost: 0, model: 0 });
 	assert.equal(tool.find((seg) => seg.text === doingGlyph("tool", 5_000, "reduced").glyph)?.color, "accent");

@@ -36,7 +36,11 @@ test("a theme without colors still gets the margin and words", () => {
 
 test("what an agent is doing comes from its state and activity words", () => {
 	assert.equal(doingOf({ state: "running", activity: "thinking" }), "thinking");
-	assert.equal(doingOf({ state: "running", activity: null }), "thinking");
+	assert.equal(doingOf({ state: "running", activity: null }), "model", "no words yet: it waits for its model");
+	for (const work of ["model", "thinking", "writing", "call", "tool", "peer", "compacting", "retrying"] as const) {
+		assert.equal(doingOf({ state: "running", activity: "bash npm test", work }), work, "its session's state wins over the words");
+	}
+	assert.equal(doingOf({ state: "asking", activity: "asking main", work: "tool" }), "asking", "a state of the team wins over its session's");
 	assert.equal(doingOf({ state: "running", activity: "writing" }), "writing");
 	assert.equal(doingOf({ state: "running", activity: "compacting context" }), "compacting");
 	assert.equal(doingOf({ state: "running", activity: "calling a tool" }), "tool");
@@ -52,11 +56,19 @@ test("what an agent is doing comes from its state and activity words", () => {
 test("an agent moves the way main's spinner does for the same work", () => {
 	assert.equal(doingGlyph("thinking", 300).glyph, glyphAt(MODE_SPINNERS.think, 300));
 	assert.equal(doingGlyph("writing", 300).glyph, glyphAt(MODE_SPINNERS.text, 300, { rateElapsedMs: 300 }));
-	assert.equal(doingGlyph("tool", 300).glyph, glyphAt(MODE_SPINNERS.tool, 300));
+	assert.equal(doingGlyph("model", 300).glyph, glyphAt(MODE_SPINNERS.first_token, 300));
+	assert.equal(doingGlyph("call", 300).glyph, glyphAt(MODE_SPINNERS.tool, 300));
+	assert.equal(doingGlyph("tool", 300).glyph, glyphAt(MODE_SPINNERS.run, 300));
+	assert.equal(doingGlyph("peer", 300).glyph, glyphAt(MODE_SPINNERS.peer, 300));
+	assert.equal(doingGlyph("retrying", 300).glyph, glyphAt(MODE_SPINNERS.retry, 300));
 	assert.equal(doingGlyph("compacting", 300).glyph, glyphAt(MODE_SPINNERS.compaction, 300));
 	assert.equal(doingGlyph("asking", 300).glyph, glyphAt(MODE_SPINNERS.peer, 300));
 	// Tool work is drawn in the tool color, the rest in the agent's own.
 	assert.equal(doingGlyph("tool", 0).color, "accent");
+	assert.equal(doingGlyph("call", 0).color, "accent");
+	assert.equal(doingGlyph("peer", 0).color, "accent");
+	assert.equal(doingGlyph("model", 0).color, "customMessageLabel");
+	assert.equal(doingGlyph("retrying", 0).color, "warning");
 	assert.equal(doingGlyph("thinking", 0).color, "customMessageLabel");
 	assert.equal(doingGlyph("asking", 0).color, "warning");
 });

@@ -23,6 +23,16 @@ export interface Usage {
 
 export const NO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 
+/**
+ * What a running agent's session does now, as main's phase spinner names it:
+ * waits for its model, thinks, writes, writes a call, runs a tool, waits on
+ * another agent through a tool, compacts, or retries a failed request.
+ */
+export type AgentWork = "model" | "thinking" | "writing" | "call" | "tool" | "peer" | "compacting" | "retrying";
+
+/** A running agent between replies: its model is asked next. */
+export const WAITING_FOR_MODEL = { activity: "waiting for the model", work: "model" } as const satisfies Pick<AgentRecord, "activity" | "work">;
+
 /** Why a model could not serve a run: the failures a fallback model can get past (fallback.ts). */
 export type FailureKind = "quota" | "rate-limit" | "overloaded" | "credentials" | "not-found";
 
@@ -78,6 +88,8 @@ export interface AgentRecord {
 	endedAt?: number;
 	/** What it is doing now, in a few words: `bash npm test`, `thinking`. */
 	activity: string | null;
+	/** What its session does now, for its spinner; unset before its session reports. */
+	work?: AgentWork;
 	/** Who it is waiting on while `asking`. */
 	askingWho?: string;
 	toolCalls: number;
@@ -166,7 +178,7 @@ export interface ChildHandle {
 }
 
 export interface ChildHooks {
-	update(patch: Partial<Pick<AgentRecord, "activity" | "toolCalls" | "usage" | "contextTokens" | "contextWindow">>): void;
+	update(patch: Partial<Pick<AgentRecord, "activity" | "work" | "toolCalls" | "usage" | "contextTokens" | "contextWindow">>): void;
 }
 
 export interface Launcher {

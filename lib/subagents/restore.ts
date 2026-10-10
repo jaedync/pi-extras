@@ -137,7 +137,7 @@ export class ChildIndex {
 	}
 
 	private stateSignature(records: readonly AgentRecord[]): string {
-		return JSON.stringify(records.map(({ activity: _activity, lastActivityAt: _at, toolCalls: _calls, usage: _usage, contextTokens: _tokens, contextWindow: _window, ...state }) => state));
+		return JSON.stringify(records.map(({ activity: _activity, work: _work, lastActivityAt: _at, toolCalls: _calls, usage: _usage, contextTokens: _tokens, contextWindow: _window, ...state }) => state));
 	}
 
 	save(records: readonly AgentRecord[], shutdown?: string, shutdownOwner?: string): void {

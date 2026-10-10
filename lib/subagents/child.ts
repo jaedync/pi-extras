@@ -8,13 +8,14 @@ import type { AgentSession, InlineExtension, ModelRuntime, SettingsManager, Tool
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isBlockingPeer } from "../band/glyph.ts";
 import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
 import { guardBash } from "./bash-guard.ts";
 import { confine, sandboxFor } from "./sandbox.ts";
 import type { ToolActivity } from "./tool-activity.ts";
-import type { AgentRecord, ChildHandle, ChildHooks, Launcher, Usage } from "./types.ts";
+import { WAITING_FOR_MODEL, type AgentRecord, type AgentWork, type ChildHandle, type ChildHooks, type Launcher, type Usage } from "./types.ts";
 import { editTarget, outsideWorktree, sourcePlace, workspaceError } from "./worktree.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
@@ -269,36 +270,85 @@ async function bindChild(session: AgentSession, guard: ReturnType<typeof createC
  * What a streaming reply says an agent is doing: thinking, writing, or the
  * call it is writing, in the words main's phase line uses (tool-phrase.ts).
  */
-export function streamingActivity(update: { type?: string; contentIndex?: number }, message: { content?: unknown } | undefined): string | undefined {
+export function streamingActivity(update: { type?: string; contentIndex?: number }, message: { content?: unknown } | undefined): Activity | undefined {
 	const kind = update.type ?? "";
-	if (kind.startsWith("thinking")) return "thinking";
-	if (kind.startsWith("text")) return "writing";
+	// A block that has opened but sent no text yet is still the wait for the model.
+	if (kind === "thinking_delta") return { activity: "thinking", work: "thinking" };
+	if (kind === "text_delta") return { activity: "writing", work: "writing" };
 	if (!kind.startsWith("toolcall")) return undefined;
 	const blocks = Array.isArray(message?.content) ? message.content as Array<{ type?: string; name?: unknown; arguments?: unknown }> : [];
 	const block = update.contentIndex === undefined ? undefined : blocks[update.contentIndex];
-	return block?.type === "toolCall" && typeof block.name === "string" ? callPhrase(block.name, block.arguments) : callPhrase(undefined);
+	const activity = block?.type === "toolCall" && typeof block.name === "string" ? callPhrase(block.name, block.arguments) : callPhrase(undefined);
+	return { activity, work: "call" };
+}
+
+/** What an agent does now, in words and as its spinner's state. */
+export interface Activity {
+	readonly activity: string;
+	readonly work: AgentWork;
+}
+
+/** The parts of a child session's events that say what it does. */
+export interface ChildEvent {
+	readonly type: string;
+	readonly toolCallId?: string;
+	readonly toolName?: string;
+	readonly args?: unknown;
+	readonly attempt?: number;
+	readonly maxAttempts?: number;
+	readonly message?: { content?: unknown };
+	readonly assistantMessageEvent?: { type?: string; contentIndex?: number };
+}
+
+/**
+ * Follows a child session's events to what it does now, with the states main's
+ * phase spinner has: a tool runs, or only waits on other agents; its model is
+ * asked once every tool is done; a compaction; a retry. Undefined: unchanged.
+ */
+export function activityWatch(): (event: ChildEvent) => Activity | undefined {
+	const running = new Map<string, { readonly words: string; readonly peer: boolean }>();
+	const runningNow = (): Activity | undefined => {
+		const calls = [...running.values()];
+		const last = calls.at(-1);
+		return last ? { activity: last.words, work: calls.every((call) => call.peer) ? "peer" : "tool" } : undefined;
+	};
+	return (event) => {
+		switch (event.type) {
+			case "tool_execution_start":
+				running.set(event.toolCallId ?? `call ${running.size}`, { words: describeTool(event.toolName ?? "", event.args), peer: isBlockingPeer(event.toolName ?? "", event.args) });
+				return runningNow();
+			case "tool_execution_end":
+				running.delete(event.toolCallId ?? "");
+				return runningNow() ?? WAITING_FOR_MODEL;
+			case "compaction_start": return { activity: "compacting context", work: "compacting" };
+			case "auto_retry_start": {
+				const { attempt, maxAttempts } = event;
+				const counted = Number.isInteger(attempt) && Number.isInteger(maxAttempts) ? `, attempt ${attempt} of ${maxAttempts}` : "";
+				return { activity: `retrying${counted}`, work: "retrying" };
+			}
+			case "compaction_end": case "auto_retry_end": return WAITING_FOR_MODEL;
+			case "message_update": return streamingActivity(event.assistantMessageEvent ?? {}, event.message);
+			default: return undefined;
+		}
+	};
 }
 
 function watchChild(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined, record: AgentRecord): () => void {
 	let usage: Usage = { ...record.usage };
 	let toolCalls = record.toolCalls;
-	let activity: string | null = null;
-	const setActivity = (next: string) => {
-		if (next === activity) return;
-		activity = next;
-		hooks.update({ activity: next });
-	};
+	const watch = activityWatch();
+	let shown: Activity | undefined;
 	return session.subscribe((event) => {
-		const e = event as { type: string; toolName?: string; args?: unknown; message?: AssistantLike; assistantMessageEvent?: { type?: string; contentIndex?: number } };
-		if (e.type === "tool_execution_start" && e.toolName) setActivity(describeTool(e.toolName, e.args));
-		else if (e.type === "compaction_start") setActivity("compacting context");
+		const e = event as ChildEvent & { message?: AssistantLike };
+		const next = watch(e);
+		if (next && (next.activity !== shown?.activity || next.work !== shown?.work)) {
+			shown = next;
+			hooks.update({ activity: next.activity, work: next.work });
+		}
 		// Pi's own rule: the size is unknown until a reply after the compaction.
-		else if (e.type === "compaction_end") hooks.update({ contextTokens: undefined });
+		if (e.type === "compaction_end") hooks.update({ contextTokens: undefined });
 		else if (e.type === "tool_execution_end") hooks.update({ toolCalls: ++toolCalls });
-		else if (e.type === "message_update") {
-			const next = streamingActivity(e.assistantMessageEvent ?? {}, e.message);
-			if (next) setActivity(next);
-		} else if (e.type === "message_end" && e.message?.role === "assistant") {
+		else if (e.type === "message_end" && e.message?.role === "assistant") {
 			usage = addUsage(usage, e.message.usage);
 			const u = e.message.usage;
 			const contextTokens = u ? (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0) + (u.output ?? 0) : undefined;

@@ -1187,8 +1187,12 @@ which is where a resume starts. What it is doing comes last, so a narrow
 terminal cuts it and keeps the other facts. Names, times, context figures,
 costs and models line up, so what each agent is doing starts in one column; once it has ended, `✓`, `✗` or `■`
 takes the spinner's place. What it is doing moves the way
-main's own spinner does for the same work, so thinking, writing, a tool call (in the tool color)
-or a compaction look alike everywhere; a question waits in amber. Children of
+main's own spinner does for the same work, so the wait for its model,
+thinking, writing, a tool call being written, a tool that runs, a wait on
+another agent through a tool (these three in the tool color), a compaction
+and a retry (in amber) look alike everywhere; a question waits in amber. The
+words say the same: `waiting for the model` until its model sends thinking
+text, words or a call, and again after its tools are done. Children of
 children sit under their parent. A child the agent waits on (`wait: true`)
 shows the same row in its `subagent` call instead.
 

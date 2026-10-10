@@ -10,10 +10,12 @@
  * (job-look.ts), so the two never read alike at a glance.
  *
  * What an agent is doing moves the way main's own spinner does for the same
- * work, so thinking, writing, a tool call or a compaction look alike on every
- * agent and on main.
+ * work, so the wait for a model, thinking, writing, a call being written, a
+ * tool that runs, a wait on another agent, a compaction or a retry look alike
+ * on every agent and on main.
  */
 import type { MarkdownTheme } from "@earendil-works/pi-tui";
+import type { AgentWork } from "../subagents/types.ts";
 import { paintLine, ROW_MARGIN, type Motion, type Seg } from "./band.ts";
 import { FAILURE_GLYPH, MODE_SPINNERS, SPINNER_SLOT_WIDTH, STOPPED_GLYPH, SUCCESS_GLYPH, slotGlyph, type GlyphAnimation } from "./glyph.ts";
 import { providerColor } from "../status-plus-render.ts";
@@ -65,7 +67,8 @@ export function agentGround(theme: BandTheme, model: string | undefined): Rgb | 
 /** Between an agent's name, what it is doing and the facts about it. */
 export const GAP: Seg = { text: "  ", color: "dim" };
 
-export type Doing = "queued" | "starting" | "thinking" | "writing" | "tool" | "compacting" | "asking" | "waiting" | "done";
+/** Its session's work while it runs (AgentWork), or the team's state for it. */
+export type Doing = AgentWork | "queued" | "starting" | "asking" | "waiting" | "done";
 
 /**
  * One line of an agent, on the terminal's own background. It starts after
@@ -85,8 +88,8 @@ export const spaced = (...groups: ReadonlyArray<readonly Seg[]>): Seg[] =>
 /** `◆`, or hollow `◇` while an agent waits its turn. */
 export const avatarOf = (record: { readonly state: string }): string => (record.state === "queued" ? AVATAR_HOLLOW : AVATAR);
 
-/** What an agent is doing, from its state and the activity words its session reports. */
-export function doingOf(record: { readonly state: string; readonly activity: string | null }): Doing {
+/** What an agent is doing: the team's state, then what its session reports; a record from before that reported only words. */
+export function doingOf(record: { readonly state: string; readonly activity: string | null; readonly work?: AgentWork }): Doing {
 	switch (record.state) {
 		case "queued": return "queued";
 		case "starting": return "starting";
@@ -95,8 +98,10 @@ export function doingOf(record: { readonly state: string; readonly activity: str
 		case "running": break;
 		default: return "done";
 	}
+	if (record.work) return record.work;
 	switch (record.activity) {
-		case null: case "thinking": return "thinking";
+		case null: return "model";
+		case "thinking": return "thinking";
 		case "writing": return "writing";
 		case "compacting context": return "compacting";
 		case "starting": return "starting";
@@ -106,10 +111,14 @@ export function doingOf(record: { readonly state: string; readonly activity: str
 
 /** `null` is the agent's own color: work that is the agent itself rather than a tool or a wait. */
 const MOTION: Record<Doing, { readonly animation?: GlyphAnimation; readonly color: string | null; readonly still?: string }> = {
+	model: { animation: MODE_SPINNERS.first_token, color: null },
 	thinking: { animation: MODE_SPINNERS.think, color: null },
 	writing: { animation: MODE_SPINNERS.text, color: null },
-	tool: { animation: MODE_SPINNERS.tool, color: "accent" },
+	call: { animation: MODE_SPINNERS.tool, color: "accent" },
+	tool: { animation: MODE_SPINNERS.run, color: "accent" },
+	peer: { animation: MODE_SPINNERS.peer, color: "accent" },
 	compacting: { animation: MODE_SPINNERS.compaction, color: null },
+	retrying: { animation: MODE_SPINNERS.retry, color: "warning" },
 	starting: { animation: MODE_SPINNERS.prep, color: "muted" },
 	asking: { animation: MODE_SPINNERS.peer, color: "warning" },
 	waiting: { animation: MODE_SPINNERS.peer, color: "muted" },

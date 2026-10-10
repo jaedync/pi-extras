@@ -34,7 +34,7 @@ import { saveReport } from "./reports.ts";
 import { WorkTrees } from "./work-trees.ts";
 import { createWorktree, placeInWorktree, workspaceError } from "./worktree.ts";
 import {
-	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest,
+	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
 } from "./types.ts";
 
 export interface TeamOptions {
@@ -499,7 +499,7 @@ export class Team {
 		this.runStarts.set(name, new Set(handle.messages()));
 		const used = this.continuing.get(name);
 		const continued = this.continuing.delete(name);
-		this.patch(name, { state: "running", activity: "thinking", runs: continued ? record.runs : record.runs + 1, endedAt: undefined });
+		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined });
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
 		try {
 			let next: string | null = text;
@@ -814,7 +814,7 @@ export class Team {
 		if (waitingOn.length > 0) {
 			this.patch(name, { state: "asking", askingWho: waitingOn.join(", "), activity: `asking ${waitingOn.join(", ")}` });
 		} else if (current.state === "asking") {
-			this.patch(name, { state: "running", askingWho: undefined, activity: "thinking" });
+			this.patch(name, { state: "running", askingWho: undefined, ...WAITING_FOR_MODEL });
 		}
 	}
 
