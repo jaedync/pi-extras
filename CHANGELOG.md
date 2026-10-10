@@ -2,6 +2,18 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.7 - 2026-10-10
+
+### Changed
+
+- Phase Spinner and Tool Display's folded mode: only one spinner moves at a
+  time. While a folded line is live, it shows the spinner for what the model
+  does now, and the status line above the editor shows an empty slot and a
+  word that does not shimmer. Its words, clocks and colors stay. When no
+  folded line is live (before the first one, or while the reply streams its
+  words), the status line moves as before. Compaction, retry and branch
+  summary statuses always move.
+
 ## 0.24.6 - 2026-10-10
 
 ### Changed
