@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.2 - 2026-10-10
+
+### Changed
+
+- Tool Display, folded mode: the words of a live line are no longer
+  brighter than the other lines. They keep the gray of a settled line, and a
+  soft band of light crosses them from left to right, as on the phase
+  spinner's word. With `/tool-display motion reduced`, the words do not move.
+
 ## 0.24.1 - 2026-10-10
 
 ### Added
