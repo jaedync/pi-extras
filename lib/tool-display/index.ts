@@ -192,7 +192,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		busy: run.busy,
 		now: () => deps.host.now(),
 		frames: (tick) => foldClock.add(tick),
-		thoughtMs: (message) => thoughtFor(message, thinkingDuration),
+		thoughtMs: (message, live) => thoughtFor(message, (reply, index) => thinkingDuration(reply, index, live)),
 		nestedOf: (id) => nested.get(id)?.calls,
 		written: run.written,
 	});

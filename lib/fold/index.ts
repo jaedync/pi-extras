@@ -13,8 +13,8 @@ export interface FoldDeps {
 	now(): number;
 	/** Calls `tick` on every frame until the returned function is called. */
 	frames(tick: () => void): () => void;
-	/** How long a reply thought, if known. */
-	thoughtMs(message: ReplyMessage): number | undefined;
+	/** How long a reply thought, if known; `live`: with a run still going, its time so far. */
+	thoughtMs(message: ReplyMessage, live?: boolean): number | undefined;
 	/** The calls a script made inside a call, as Tool Display keeps them. */
 	nestedOf(toolCallId: string): readonly NestedFact[] | undefined;
 	/** The model has written this call of the reply it streams. */

@@ -3,7 +3,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 export const THINKING_TIMING_ENTRY = "pi-extras.thinking-times";
 interface Timing { readonly timestamp: number; readonly durations: readonly number[] }
 interface Message { timestamp?: number; content?: readonly {type:string}[] }
-export function watchThinking(pi: ExtensionAPI, now = Date.now): (message: Message, run: number) => number | undefined {
+/** `live`: a run still going gives its time so far. */
+export function watchThinking(pi: ExtensionAPI, now = Date.now): (message: Message, run: number, live?: boolean) => number | undefined {
  let timings = new Map<number,readonly number[]>();
  let pending = new Map<number,readonly number[]>();
  const flush = (ctx: ExtensionContext) => {
@@ -52,5 +53,9 @@ export function watchThinking(pi: ExtensionAPI, now = Date.now): (message: Messa
  });
  pi.on("turn_end",(_event,ctx)=>flush(ctx));
  pi.on("agent_end",(_event,ctx)=>{finish();flush(ctx);});
- return (message,run)=>typeof message.timestamp==="number" ? timings.get(message.timestamp)?.[run] : undefined;
+ return (message,run,live=false)=>{
+  if(typeof message.timestamp!=="number") return undefined;
+  if(live && active?.timestamp===message.timestamp && active.run===run) return Math.max(0,now()-active.startedAt);
+  return timings.get(message.timestamp)?.[run];
+ };
 }

@@ -20,3 +20,20 @@ test("thinking times are measured per run and persisted as non-context metadata"
  handlers.get("session_start")!({}, {sessionManager:{getBranch:()=>[{type:"custom",customType:THINKING_TIMING_ENTRY,data:saved[0]![1]}]}});
  assert.equal(duration(message,0),12000,"a resume restores the same label timing");
 });
+test("a run still going gives its time so far only when asked",()=>{
+ let now=0;
+ const handlers=new Map<string,Function>();
+ const duration=watchThinking({on:(name:string,fn:Function)=>handlers.set(name,fn),appendEntry:()=>{}} as never,()=>now);
+ const ctx={mode:"tui",sessionManager:{getBranch:()=>[]}};
+ handlers.get("session_start")!({},ctx);
+ const done={role:"assistant",timestamp:123,content:[{type:"thinking",thinking:"first"}]};
+ const going={role:"assistant",timestamp:456,content:[{type:"thinking",thinking:"more"}]};
+ const update=(message:object,type:string,at:number)=>{now=at;handlers.get("message_update")!({message,assistantMessageEvent:{type,contentIndex:0}},ctx);};
+ update(done,"thinking_start",1000);update(done,"thinking_end",3000);
+ update(going,"thinking_start",20000);
+ now=21500;
+ assert.equal(duration(going,0),undefined,"a label waits for the run's end");
+ assert.equal(duration(going,0,true),1500);
+ assert.equal(duration(done,0,true),2000,"a finished run keeps its time");
+ assert.equal(duration(going,1,true),undefined,"another run of the same reply has none yet");
+});

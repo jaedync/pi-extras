@@ -14,10 +14,10 @@
  */
 import { Spacer, stripTerminalSequences, Text, truncateToWidth, visibleWidth, type Color, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { ROW_MARGIN } from "../band/band.ts";
-import { BULLET_GLYPH, glyphAt, JOB_ANIMATION, THOUGHT_GLYPH } from "../band/glyph.ts";
+import { BULLET_GLYPH, isBlockingPeer, MODE_SPINNERS, slotGlyph, THOUGHT_GLYPH, type GlyphAnimation } from "../band/glyph.ts";
 import { planFold, type FoldGroup, type FoldPlan, type PlanEntry, type PlanItem } from "./plan.ts";
 import { shimmerWords } from "./shimmer.ts";
-import { foldPhrase, foldStats, thoughtOnly, type FoldFacts, type ToolFact } from "./summary.ts";
+import { foldPhrase, foldStats, thoughtOnly, type FoldFacts, type FoldPhase, type ToolFact } from "./summary.ts";
 import { CHARS_PER_TOKEN } from "../cc-phase.ts";
 import { commandsIn, isShell } from "../tool-count.ts";
 import { cleanLabel, fileOf } from "../tool-phrase.ts";
@@ -57,8 +57,8 @@ export interface FoldHost {
 	reduced(): boolean;
 	/** When a call's result arrived, if known. */
 	toolEndedAt(toolCallId: string): number | undefined;
-	/** How long a reply thought, if known. */
-	thoughtMs(message: ReplyMessage): number | undefined;
+	/** How long a reply thought, if known; `live`: with a run still going, its time so far. */
+	thoughtMs(message: ReplyMessage, live?: boolean): number | undefined;
 	/** The calls a script (codemode) made inside a call, if any are known. */
 	nestedOf(toolCallId: string): readonly NestedFact[] | undefined;
 	/** The model has written this call, though Pi completes its arguments only when the reply ends. */
@@ -180,19 +180,18 @@ function namesOf(name: string, args: unknown, failed: boolean): Pick<ToolFact, "
 }
 
 /** One call as the words count it: a script's own calls in its place, and a chain's steps. */
-export function factsOfCall(name: string, args: unknown, running: boolean, failed: boolean, nested: readonly NestedFact[] | undefined, writing = false): ToolFact[] {
+export function factsOfCall(name: string, args: unknown, failed: boolean, nested: readonly NestedFact[] | undefined): ToolFact[] {
 	if (nested && nested.length > 0) {
 		const inner = nested.map((call): ToolFact => ({
 			name: call.name,
-			running: call.status === "running",
 			failed: call.status === "error",
 			count: isShell(call.name) ? commandsIn(call.args) : 1,
 			...namesOf(call.name, call.args, call.status === "error"),
 		}));
-		// The script is counted through its calls; it still says when it runs on or fails itself.
-		return running || failed ? [...inner, { name, running, failed, count: 0 }] : inner;
+		// The script is counted through its calls; it still says when it fails itself.
+		return failed ? [...inner, { name, failed, count: 0 }] : inner;
 	}
-	return [{ name, running, failed, ...(writing ? { writing } : {}), ...(isShell(name) ? { count: commandsIn(args) } : {}), ...namesOf(name, args, failed) }];
+	return [{ name, failed, ...(isShell(name) ? { count: commandsIn(args) } : {}), ...namesOf(name, args, failed) }];
 }
 
 /** Output tokens: the reported count, or an estimate from the characters while it streams. */
@@ -312,7 +311,7 @@ export class FoldRow implements Component {
 		const theme = this.host.theme();
 		const { live } = this.facts;
 		const now = this.host.now();
-		const glyph = live ? glyphAt(JOB_ANIMATION, now, { reduced: this.host.reduced() }) : BULLET_GLYPH;
+		const glyph = live ? slotGlyph(SPINNERS[this.facts.phase ?? "wait"], now, { reduced: this.host.reduced() }) : BULLET_GLYPH;
 		const key = `${width}|${glyph}|${this.look.hung}|${this.look.open}|${live && !this.host.reduced() ? now : ""}`;
 		const kept = this.drawing;
 		if (kept?.key === key && kept.facts === this.facts && kept.theme === theme) return kept.lines;
@@ -322,11 +321,13 @@ export class FoldRow implements Component {
 	}
 
 	/**
-	 * One block on the left: the bullet (a spinner while live), the words, a
-	 * comma, then the figures with spaces between them (`↑681k ↓6.9k 2m21s`).
-	 * Words too long for the line become the total count of calls; on a
-	 * narrower line they are cut, and the figures go only when even short
-	 * words wouldn't fit beside them.
+	 * One block on the left: the bullet, the words, a comma, then the figures
+	 * with spaces between them (`↑681k ↓6.9k 2m21s`). Words too long for the
+	 * line become the total count of calls; on a narrower line they are cut,
+	 * and the figures go only when even short words wouldn't fit beside them.
+	 * While live, the phase spinner's own spinner for what the model does now
+	 * takes the bullet's place and the margin before it, so a hung line's
+	 * words stay where they settle.
 	 */
 	private draw(width: number, glyph: string, theme: FoldTheme | undefined): string[] {
 		const paint = paintWith(theme);
@@ -346,9 +347,12 @@ export class FoldRow implements Component {
 		}
 		const stats = foldStats(this.facts).join(" ");
 		const tail = stats ? `, ${stats}` : "";
-		const room = width - 3 - indent.length - visibleWidth(tail);
+		const lead = live ? "" : indent;
+		// The glyph, a space, and a column to spare.
+		const before = lead.length + visibleWidth(glyph) + 2;
+		const room = width - before - visibleWidth(tail);
 		const fits = room >= MIN_WORDS;
-		const space = Math.max(1, fits ? room : width - 3 - indent.length);
+		const space = Math.max(1, fits ? room : width - before);
 		// A live line rests on the settled gray and shimmers; an open one is brighter.
 		const tone = open && !live ? "text" : "muted";
 		const segments = (brief: boolean): Segment[] => {
@@ -356,14 +360,13 @@ export class FoldRow implements Component {
 			return [
 				{ key: tone, text: phrase.said },
 				...(phrase.failed ? [{ key: tone, text: ", " }, { key: "error", text: phrase.failed }] : []),
-				...(phrase.after ? [{ key: tone, text: `, ${phrase.after}` }] : []),
 			];
 		};
 		const full = segments(false);
 		const words = visibleWidth(full.map((segment) => segment.text).join("")) <= space ? full : segments(true);
 		const shown = cut(words, space);
 		const left = (live && theme ? this.shimmer(shown, tone, theme) : undefined) ?? shown.map((segment) => paint(segment.key, segment.text)).join("");
-		return placed(`${indent}${paint(live ? "accent" : open ? "muted" : "dim", glyph)} ${left}${fits ? paint("dim", tail) : ""}`);
+		return placed(`${lead}${paint(live ? "accent" : open ? "muted" : "dim", glyph)} ${left}${fits ? paint("dim", tail) : ""}`);
 	}
 
 	private shimmer(segments: readonly Segment[], tone: string, theme: FoldTheme): string | undefined {
@@ -450,6 +453,32 @@ interface Drawn {
 /** The group's first row, folded or not: its line is kept by it. */
 const firstOf = (group: FoldGroup): number => Math.min(group.members[0] ?? Infinity, group.said[0] ?? Infinity);
 
+/** The phase spinner's spinner for each, 3 cells wide (SPINNER_SLOT_WIDTH): its sonar for every wait before the first token. */
+const SPINNERS: Readonly<Record<FoldPhase, GlyphAnimation>> = {
+	wait: MODE_SPINNERS.first_token, think: MODE_SPINNERS.think, tool: MODE_SPINNERS.tool, run: MODE_SPINNERS.run, peer: MODE_SPINNERS.peer,
+};
+
+/** A call that is written: whether it waits on another agent, and whether Pi has started it. */
+interface Run {
+	readonly peer: boolean;
+	readonly started: boolean;
+}
+
+/**
+ * What the model does now in a live group, as the phase spinner names it: a
+ * call that runs; else a call it writes, though calls it wrote before wait
+ * for the reply to end; else one about to run; else whether its newest reply
+ * thinks. Thinking counts once it has text; until then it waits.
+ */
+function phaseOf(runs: readonly Run[], writes: boolean, streaming: Reply | undefined): FoldPhase {
+	const started = runs.filter((run) => run.started);
+	const shown = started.length > 0 || writes ? started : runs;
+	if (shown.length > 0) return shown.every((run) => run.peer) ? "peer" : "run";
+	if (writes) return "tool";
+	const last = streaming?.lastMessage?.content.at(-1);
+	return last?.type === "thinking" && typeof last.thinking === "string" && last.thinking.trim() !== "" ? "think" : "wait";
+}
+
 /** The reply each tool row belongs to: Pi adds a reply's rows right after it. */
 function ownerOf(children: readonly Component[], index: number): Reply | undefined {
 	for (let at = index - 1; at >= 0; at--) {
@@ -529,6 +558,8 @@ export class FoldView {
 			const { row, facts, open: shown } = groups[entry.group]!;
 			live ||= facts.live;
 			if (!shown && !facts.live && facts.tools.length === 0 && facts.tokens === 0) continue;
+			// Live with nothing done yet: no call and no thinking. The phase spinner shows the wait.
+			if (facts.live && facts.tools.length === 0 && facts.thoughtMs === undefined && facts.phase !== "think") continue;
 			put(row, row.render(width));
 			if (thoughtOnly(facts)) for (const index of group.said) tucked.add(index);
 			if (shown) this.drawRun(row, [...group.members, ...group.dropped].sort((a, b) => a - b), children, rows, width, put);
@@ -644,19 +675,26 @@ export class FoldView {
 		try { return this.host.nestedOf(toolCallId); } catch { return undefined; }
 	}
 
-	private thoughtOf(message: ReplyMessage): number | undefined {
-		try { return this.host.thoughtMs(message); } catch { return undefined; }
+	private thoughtOf(message: ReplyMessage, live = false): number | undefined {
+		try { return this.host.thoughtMs(message, live); } catch { return undefined; }
 	}
 
 	private facts(children: readonly Component[], group: FoldGroup, live: boolean, busy: boolean): FoldFacts {
 		const tools: ToolFact[] = [];
 		const replies = new Set<Reply>();
 		const callers = new Set<Reply>();
+		/** The group's own replies, as against those whose calls it holds; the newest one streaming. */
+		const own: Reply[] = [];
+		let streaming: Reply | undefined;
+		const runs: Run[] = [];
+		let writes = false;
 		let ended: number | undefined;
 		for (const index of group.members) {
 			const child = children[index]!;
 			if (isReply(child)) {
 				replies.add(child);
+				own.push(child);
+				if (child.isStreaming) streaming = child;
 				continue;
 			}
 			if (!isToolRow(child)) continue;
@@ -667,7 +705,10 @@ export class FoldView {
 			else if (owner) replies.add(owner);
 			const running = child.isPartial && busy;
 			const writing = running && child.argsComplete === false && child.executionStarted !== true && this.host.written?.(child.toolCallId) !== true;
-			tools.push(...factsOfCall(child.toolName, child.args, running, !child.isPartial && child.result?.isError === true, this.nestedOf(child.toolCallId), writing));
+			// An older Pi has no executionStarted; its written calls read as started.
+			if (running && !writing) runs.push({ peer: isBlockingPeer(child.toolName, child.args), started: child.executionStarted !== false });
+			writes ||= writing;
+			tools.push(...factsOfCall(child.toolName, child.args, !child.isPartial && child.result?.isError === true, this.nestedOf(child.toolCallId)));
 			const at = this.host.toolEndedAt(child.toolCallId);
 			if (at !== undefined) ended = Math.max(ended ?? at, at);
 		}
@@ -698,7 +739,21 @@ export class FoldView {
 		}
 		const end = live ? this.host.now() : ended;
 		const elapsedMs = started !== undefined && end !== undefined && end > started ? end - started : undefined;
-		return { tools, live, tokens, sent, ...(elapsedMs !== undefined ? { elapsedMs } : {}) };
+		if (!live) return { tools, live, tokens, sent, ...(elapsedMs !== undefined ? { elapsedMs } : {}) };
+		const thoughtMs = this.thinkingSoFar(own);
+		return { tools, live, tokens, sent, ...(elapsedMs !== undefined ? { elapsedMs } : {}), phase: phaseOf(runs, writes, streaming), ...(thoughtMs !== undefined ? { thoughtMs } : {}) };
+	}
+
+	/** How long the replies have thought, counting only thinking with text: a provider can open a block and send none. */
+	private thinkingSoFar(replies: readonly Reply[]): number | undefined {
+		let total: number | undefined;
+		for (const reply of replies) {
+			const message = reply.lastMessage;
+			if (!message || !thought(message)) continue;
+			const ms = this.thoughtOf(message, true);
+			if (ms !== undefined) total = (total ?? 0) + ms;
+		}
+		return total;
 	}
 }
 

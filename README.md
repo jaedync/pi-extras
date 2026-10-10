@@ -834,14 +834,21 @@ words do not fit the width,
 the line shows the total count, for example `● Used 45 tools`. After the words
 come the tokens that the replies sent (`↑`, cache included) and received
 (`↓`), and the time. The words are gray and the bullet and figures are a
-darker gray. While the model works, the line is live: a spinner turns, the kind that runs
-now reads `running 1 command`, and the figures count up. While the model
-still writes a call, the line names the call, for example
-`writing subagent call`, and a file tool names its file. The words of a live
-line keep the same gray, and a soft band of light crosses them from left to
-right, as on the phase spinner's word. With `/tool-display motion reduced`,
-the words do not move. When the model
-thinks between calls, the line ends with `thinking`. A reply that thinks
+darker gray. While the model works, the line is live and its figures count
+up. The words tell only what the model did: a call counts as soon as it
+shows, in the past tense, so the words never change when the run ends. The
+phase spinner's own spinner, 3 cells wide, takes the bullet's place and
+tells what the model does now: the ping while it waits for the model, the
+helix while thinking text streams, the print head while it writes a call,
+the comet while a call runs, and the two comets while every running call
+waits on another agent. A line under a reply has room for it in its margin,
+so its words stay where they settle. A line at the left edge has no margin,
+so its words start 2 columns further in while it is live. The words of a
+live line keep the same gray, and a soft band of light crosses them from
+left to right, as on the phase spinner's word. With
+`/tool-display motion reduced`, the words and the spinner do not move. A run
+with no calls yet shows no line until thinking text comes. Then the line
+says how long the model has thought, for example `Thought for 2.5s`. A reply that thinks
 and then writes keeps its thinking in a line above its words: the line of the
 calls before it, or a line of its own directly above the words, such as
 `∴ Thought for 2.5s`. That line looks like a finished thinking block in the

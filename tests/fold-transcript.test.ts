@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Container, Spacer, stripTerminalSequences, Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { glyphAt, MODE_SPINNERS, type SpinnerMode } from "../lib/band/glyph.ts";
 import { commandsIn, cut, factsOfCall, findTranscript, FoldRow, FoldView, installFold, speaks, tokensOf, type Box, type FoldHost, type ReplyMessage } from "../lib/fold/transcript.ts";
 
 /** A stand-in row: fixed lines, counting renders. */
@@ -78,6 +79,14 @@ function host(over: Partial<FoldHost> = {}) {
 	return { value, calls };
 }
 
+/** The phase spinner's still frame for a mode: what a live line shows with reduced motion. */
+const still = (mode: SpinnerMode) => glyphAt(MODE_SPINNERS[mode], 0, { reduced: true });
+const RUN = still("run");
+const WAIT = still("first_token");
+const THINK = still("think");
+const WRITE = still("tool");
+const PEER = still("peer");
+
 const text = (lines: readonly string[]) => lines.map((line) => stripTerminalSequences(line).replace(/ {2,}/g, "  ").trimEnd());
 
 function chatOf(children: Component[]): Box {
@@ -117,8 +126,9 @@ test("the last group is live while the agent runs, and asks for frames", () => {
 	const streaming = new Reply(quiet({ content: [{ type: "thinking", thinking: "x".repeat(400) }], usage: { output: 1 }, timestamp: 9_000 }), true);
 	const chat = chatOf([new Reply(said({ timestamp: 1 })), new ToolRow("edit", "c", true), streaming]);
 	const lines = text(viewOf(value).render(chat, 100));
-	// The reply that made the call counts too; reduced motion holds the spinner's first frame.
-	assert.equal(lines.at(-1), "  ⠋ Editing 1 file, ↓150 9.9s");
+	// The reply that made the call counts too; reduced motion holds the run spinner's still frame, in the margin and the bullet's place.
+	assert.equal(lines.at(-1), `${RUN} Edited 1 file, ↓150 9.9s`);
+	assert.equal(lines.at(-1)!.indexOf("Edited"), "  ● ".length, "a hung line's words start where they settle");
 	assert.deepEqual(calls.animate, [true]);
 	const { value: idle, calls: idleCalls } = host();
 	viewOf(idle).render(chat, 100);
@@ -229,26 +239,57 @@ test("a notice Pi adds mid-run, such as ctrl+o's status line, neither splits the
 	const later = new ToolRow("read", "b", true);
 	const chat = chatOf([new Reply(said({ timestamp: 1 })), new ToolRow("bash", "a"), new Spacer(1), note, later]);
 	const lines = text(viewOf(value).render(chat, 100));
-	assert.match(lines[2]!, /^  ⠋ Ran 1 command, reading 1 file/);
+	assert.ok(lines[2]!.startsWith(`${RUN} Ran 1 command, read 1 file`), lines[2]);
 	assert.deepEqual(lines.slice(3), ["", " Tool output: expanded"]);
 });
 
 test("a group with a call still running stays live when a reply follows it", () => {
 	const { value } = host({ busy: () => true });
 	const chat = chatOf([new ToolRow("bash", "a", true), new Reply(said())]);
-	assert.match(text(viewOf(value).render(chat, 100))[1]!, /^⠋ Running 1 command/);
+	assert.equal(text(viewOf(value).render(chat, 100))[1]!, `${RUN} Ran 1 command`);
 });
 
 test("a call the model still writes reads as written, then by its kind once its arguments are complete", () => {
 	const { value } = host({ busy: () => true });
 	const call = Object.assign(new ToolRow("subagent", "a", true), { argsComplete: false, executionStarted: false });
 	const chat = chatOf([call, new Reply(said())]);
-	assert.match(text(viewOf(value).render(chat, 100))[1]!, /^⠋ Writing subagent call/);
+	assert.equal(text(viewOf(value).render(chat, 100))[1]!, `${WRITE} Started 1 subagent`, "counted by its kind; the spinner says it is still written");
 	call.argsComplete = true;
-	assert.match(text(viewOf(value).render(chat, 100))[1]!, /^⠋ Starting 1 subagent/);
+	assert.equal(text(viewOf(value).render(chat, 100))[1]!, `${RUN} Started 1 subagent`);
 	const written = host({ busy: () => true, written: (id: string) => id === "c" }).value;
 	const second = Object.assign(new ToolRow("subagent", "c", true), { argsComplete: false, executionStarted: false });
-	assert.match(text(viewOf(written).render(chatOf([second, new Reply(said())]), 100))[1]!, /^⠋ Starting 1 subagent/, "its toolcall_end came");
+	assert.equal(text(viewOf(written).render(chatOf([second, new Reply(said())]), 100))[1]!, `${RUN} Started 1 subagent`, "its toolcall_end came");
+});
+
+test("the spinner, not the words, shows what the model does now", () => {
+	const { value } = host({ busy: () => true });
+	const line = (...children: Component[]) => text(viewOf(value).render(chatOf(children), 100))[1]!;
+	const glyph = (...children: Component[]) => line(...children).slice(0, 3);
+	const streaming = (content: ReplyMessage["content"]) => new Reply({ content, timestamp: 9_000 }, true);
+	assert.equal(line(new ToolRow("bash", "a")), `${WAIT} Ran 1 command`, "the calls are done and no reply has come: it waits for the model");
+	assert.equal(glyph(new ToolRow("bash", "a"), streaming([])), WAIT, "a reply with nothing in it yet still waits");
+	assert.equal(glyph(new ToolRow("bash", "a"), streaming([{ type: "thinking", thinking: "" }])), WAIT, "thinking that has no text yet is no thinking to show");
+	assert.equal(glyph(new ToolRow("bash", "a"), streaming([{ type: "thinking", thinking: "next" }])), THINK, "it thinks");
+	assert.equal(glyph(new ToolRow("bash", "a"), streaming([{ type: "thinking", thinking: "next" }, { type: "text", text: "" }])), WAIT, "what it streams last is what it does now");
+	const asking = Object.assign(new ToolRow("subagent", "b", true), { args: { task: "x", wait: true } });
+	assert.equal(line(asking), `${PEER} Started 1 subagent`, "a call that waits on another agent");
+	assert.equal(glyph(asking, new ToolRow("bash", "c", true)), RUN, "unless a call of its own runs too");
+	const waiting = Object.assign(new ToolRow("bash", "d", true), { argsComplete: true, executionStarted: false });
+	const writing = Object.assign(new ToolRow("read", "e", true), { argsComplete: false, executionStarted: false });
+	assert.equal(glyph(waiting, writing), WRITE, "a written call waits for the reply to end, so the model writes");
+	assert.equal(glyph(waiting), RUN, "and then it is about to run");
+	assert.equal(new Set([WAIT, THINK, WRITE, RUN, PEER]).size, 5);
+	assert.ok(!line(new ToolRow("bash", "a"), streaming([{ type: "thinking", thinking: "next" }])).includes("thinking"), "the words never say thinking");
+});
+
+test("a live run with no calls draws once the model thinks, and says how long it has thought", () => {
+	const { value } = host({ busy: () => true, thoughtMs: (_message, live) => (live ? 1_500 : undefined) });
+	const prompt = new Row(["", " prompt"]);
+	const reply = new Reply({ content: [], timestamp: 9_000 }, true);
+	const chat = chatOf([prompt, reply]);
+	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt"], "nothing is done yet, and the phase spinner shows the wait");
+	reply.lastMessage = { content: [{ type: "thinking", thinking: "plan the change" }], usage: { input: 2_000 }, timestamp: 9_000 };
+	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt", "", `${THINK} Thought for 1.5s, ↑2.0k ↓4`], "the time is in the words, so the figures leave it out; at the left edge the words start 2 columns further in");
 });
 
 test("with ctrl+o's rows expanded, a click closes a group; an open group keeps its spacers", () => {
@@ -356,14 +397,14 @@ test("a chained command counts each step, and a leading cd is a place, not a ste
 	assert.equal(commandsIn(undefined), 1);
 });
 
-test("a script counts the calls it made in its place, and still says when it runs or fails", () => {
+test("a script counts the calls it made in its place, and still says when it fails", () => {
 	const nested = [{ name: "bash", status: "ok", args: '{"command":"a && b"}' }, { name: "read", status: "error" }];
-	assert.deepEqual(factsOfCall("codemode", {}, false, false, nested), [
-		{ name: "bash", running: false, failed: false, count: 2 },
-		{ name: "read", running: false, failed: true, count: 1, label: "read" },
+	assert.deepEqual(factsOfCall("codemode", {}, false, nested), [
+		{ name: "bash", failed: false, count: 2 },
+		{ name: "read", failed: true, count: 1, label: "read" },
 	]);
-	assert.deepEqual(factsOfCall("codemode", {}, false, true, []), [{ name: "codemode", running: false, failed: true, label: "codemode" }], "no calls known: the script itself");
-	assert.deepEqual(factsOfCall("codemode", {}, true, false, nested).at(-1), { name: "codemode", running: true, failed: false, count: 0 });
+	assert.deepEqual(factsOfCall("codemode", {}, true, []), [{ name: "codemode", failed: true, label: "codemode" }], "no calls known: the script itself");
+	assert.deepEqual(factsOfCall("codemode", {}, true, nested).at(-1), { name: "codemode", failed: true, count: 0 });
 	const { value } = host({ nestedOf: (id) => (id === "s" ? nested : undefined) });
 	const chat = chatOf([new ToolRow("codemode", "s"), new ToolRow("bash", "b")]);
 	(chat.children[1] as unknown as { args: unknown }).args = { command: "ls; pwd; date" };
@@ -431,14 +472,14 @@ test("an open Thought line shows the reply's thinking in full right under it", (
 });
 
 test("a call names its file and, when it fails, what it ran", () => {
-	assert.deepEqual(factsOfCall("edit", { path: "lib/status/footer.ts" }, false, false, undefined), [{ name: "edit", running: false, failed: false, file: "footer.ts" }]);
-	assert.deepEqual(factsOfCall("bash", { command: "ls node_modules\npwd" }, false, true, undefined), [{ name: "bash", running: false, failed: true, count: 2, label: "ls node_modules pwd" }]);
-	assert.equal(factsOfCall("bash", { command: "x".repeat(80) }, false, true, undefined)[0]!.label, `${"x".repeat(31)}…`);
-	assert.equal(factsOfCall("mcp__oc__web_search", {}, false, true, undefined)[0]!.label, "web_search");
-	assert.equal(factsOfCall("read", { path: "a/b.ts" }, false, true, undefined)[0]!.label, "read b.ts");
-	assert.equal(factsOfCall("bash", {}, false, true, undefined)[0]!.label, undefined, "a shell call without its command");
+	assert.deepEqual(factsOfCall("edit", { path: "lib/status/footer.ts" }, false, undefined), [{ name: "edit", failed: false, file: "footer.ts" }]);
+	assert.deepEqual(factsOfCall("bash", { command: "ls node_modules\npwd" }, true, undefined), [{ name: "bash", failed: true, count: 2, label: "ls node_modules pwd" }]);
+	assert.equal(factsOfCall("bash", { command: "x".repeat(80) }, true, undefined)[0]!.label, `${"x".repeat(31)}…`);
+	assert.equal(factsOfCall("mcp__oc__web_search", {}, true, undefined)[0]!.label, "web_search");
+	assert.equal(factsOfCall("read", { path: "a/b.ts" }, true, undefined)[0]!.label, "read b.ts");
+	assert.equal(factsOfCall("bash", {}, true, undefined)[0]!.label, undefined, "a shell call without its command");
 	const nested = [{ name: "write", status: "error", args: '{"path":"x/y.md"}' }];
-	assert.deepEqual(factsOfCall("codemode", {}, false, false, nested), [{ name: "write", running: false, failed: true, count: 1, file: "y.md", label: "write y.md" }]);
+	assert.deepEqual(factsOfCall("codemode", {}, false, nested), [{ name: "write", failed: true, count: 1, file: "y.md", label: "write y.md" }]);
 });
 
 test("calls after a reply that draws nothing keep their own blank line, as nothing is there to hang under", () => {
