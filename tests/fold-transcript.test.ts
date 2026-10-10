@@ -246,6 +246,9 @@ test("a call the model still writes reads as written, then by its kind once its 
 	assert.match(text(viewOf(value).render(chat, 100))[1]!, /^⠋ Writing subagent call/);
 	call.argsComplete = true;
 	assert.match(text(viewOf(value).render(chat, 100))[1]!, /^⠋ Starting 1 subagent/);
+	const written = host({ busy: () => true, written: (id: string) => id === "c" }).value;
+	const second = Object.assign(new ToolRow("subagent", "c", true), { argsComplete: false, executionStarted: false });
+	assert.match(text(viewOf(written).render(chatOf([second, new Reply(said())]), 100))[1]!, /^⠋ Starting 1 subagent/, "its toolcall_end came");
 });
 
 test("with ctrl+o's rows expanded, a click closes a group; an open group keeps its spacers", () => {

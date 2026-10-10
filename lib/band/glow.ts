@@ -9,6 +9,7 @@ import { fgSgr, mix, parseAnsiColor, type ColorMode, type Rgb } from "./color.ts
 export const GLOW_MS = 700;
 // Brightness steps: few enough that a line keeps few color runs, enough that the fade looks smooth.
 const LEVELS = 6;
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface Mark { readonly length: number; readonly at: number }
 export interface Trail {
@@ -65,15 +66,16 @@ export function glowLines(lines: readonly string[], length: number, trail: Trail
 	let end = length;
 	const painted: string[] = [];
 	for (let k = lines.length - 1; k >= 0; k--) {
-		const chars = [...lines[k]!];
-		const start = end - chars.length;
+		// Positions count the text's UTF-16 units, as its length does; a grapheme takes one color.
+		const line = lines[k]!;
+		const start = end - line.length;
 		let out = "", run = "", level = -1;
-		chars.forEach((ch, i) => {
-			const next = Math.round(freshness(trail, start + i, now) * LEVELS);
+		for (const { segment, index } of GRAPHEMES.segment(line)) {
+			const next = Math.round(freshness(trail, start + index, now) * LEVELS);
 			if (next !== level && run) { out += paint(level, run); run = ""; }
 			level = next;
-			run += ch;
-		});
+			run += segment;
+		}
 		painted.unshift(run ? out + paint(level, run) : out);
 		end = start - 1;
 	}

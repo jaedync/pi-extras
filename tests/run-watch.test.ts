@@ -31,3 +31,16 @@ test("a run is busy from agent_start to agent_end and streams only during assist
 	pi.emit("session_start");
 	assert.deepEqual([run.busy(), run.streaming()], [false, false], "a new session starts idle");
 });
+
+test("a call is written once its toolcall_end arrives, though Pi completes its arguments only at message_end", () => {
+	const pi = fakePi();
+	const run = watchRun(pi as never);
+	const update = (type: string, id: string) => pi.emit("message_update", { message: { role: "assistant" }, assistantMessageEvent: { type, toolCall: { id } } });
+	pi.emit("message_start", { message: { role: "assistant" } });
+	update("toolcall_delta", "call-1");
+	assert.equal(run.written("call-1"), false);
+	update("toolcall_end", "call-1");
+	assert.deepEqual([run.written("call-1"), run.written("call-2")], [true, false]);
+	pi.emit("message_start", { message: { role: "assistant" } });
+	assert.equal(run.written("call-1"), false, "a new reply starts with no calls written");
+});

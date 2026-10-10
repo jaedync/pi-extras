@@ -4,7 +4,7 @@ import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprin
 
 import { dirname, join } from "node:path";
 import { operationalLine } from "../lib/operational-log.ts";
-import { COMPACTION_DECISION_EVENT, compactionKey, type CompactionDecision } from "../lib/cache-compaction/decision.ts";
+import { COMPACTION_DECISION_EVENT, COMPACTION_PROGRESS_EVENT, PROGRESS_TAIL_CHARS, compactionKey, type CompactionDecision } from "../lib/cache-compaction/decision.ts";
 import { foldProjection } from "../lib/cache-compaction/system-fold.ts";
 import { estimateRequestContext, contextSafetyTokens, summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
 
@@ -59,6 +59,24 @@ function report(ctx: ExtensionContext, path: string): void {
 	try {
 		if (ctx.mode === "tui") ctx.ui.notify(`Compaction: ${path}`, "info");
 	} catch { /* A missing or disposed UI must not stop default compaction. */ }
+}
+
+type Registry = ExtensionContext["modelRegistry"];
+/**
+ * `complete()` is `stream().result()`, so streaming sends the same request and
+ * hits the same cache; the text deltas feed the live band as they come.
+ */
+type Complete = Parameters<Registry["complete"]>;
+async function streamed(registry: Registry, model: Complete[0], context: Complete[1], options: Complete[2], onText: (text: string) => void) {
+	if (typeof registry.stream !== "function") return registry.complete(model, context, options);
+	const stream = registry.stream(model, context, options);
+	let text = "";
+	for await (const event of stream) {
+		if (event.type !== "text_delta") continue;
+		text += event.delta;
+		onText(text);
+	}
+	return stream.result();
 }
 
 function hashOnce(): (message: Message) => string {
@@ -207,16 +225,21 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 			report(ctx, "prefix-sharing");
 			// ModelRuntime.complete normalizes this context with pi-ai normalizeContext, just as
 			// streamSimple does in Pi's agent loop. Rebuilding any other provider fields misses cache.
-			const response = await ctx.modelRegistry.complete(model, { messages: convertToLlm(request.messages) }, {
+			const sessionId = ctx.sessionManager.getSessionId();
+			const progress = (text: string) => {
+				try { pi.events.emit(COMPACTION_PROGRESS_EVENT, { sessionId, text: text.slice(-PROGRESS_TAIL_CHARS), chars: text.length }); }
+				catch { /* The live band is display only; it must never stop the compaction. */ }
+			};
+			const response = await streamed(ctx.modelRegistry, model, { messages: convertToLlm(request.messages) }, {
 				...requestOptions, headers: captured.headers, effort: captured.effort,
-				// complete() uses native stream(), not streamSimple()'s automatic context clamp.
+				// Native stream(), not streamSimple(), so there is no automatic context clamp.
 				maxTokens: Math.min(model.maxTokens > 0 ? model.maxTokens : Infinity, available),
 				sessionId: captured.sessionId, signal: event.signal,
 				onPayload: (generated: unknown) => {
 					try { return mergePayload(model.api, captured.payload!, generated, captured.payloadPrefix, floor); }
 					catch (error) { if (error instanceof Error && ["thinking-budget", "prefix-changed"].includes(error.message)) payloadFallback = error.message; throw error; }
 				},
-			});
+			}, progress);
 			outcome = { stopReason: response.stopReason, usage: { input: response.usage.input, cacheRead: response.usage.cacheRead, cacheWrite: response.usage.cacheWrite, output: response.usage.output } };
 			const summary = response.content.filter((block) => block.type === "text").map((block) => block.text).join("\n").trim();
 			if (event.signal.aborted || response.stopReason === "aborted") return fallback("aborted");

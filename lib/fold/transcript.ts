@@ -57,6 +57,8 @@ export interface FoldHost {
 	thoughtMs(message: ReplyMessage): number | undefined;
 	/** The calls a script (codemode) made inside a call, if any are known. */
 	nestedOf(toolCallId: string): readonly NestedFact[] | undefined;
+	/** The model has written this call, though Pi completes its arguments only when the reply ends. */
+	written?(toolCallId: string): boolean;
 	/** Frames are wanted while a line is live, and not after. */
 	animate(live: boolean): void;
 	redraw(): void;
@@ -652,7 +654,7 @@ export class FoldView {
 			if (owner && speaks(owner.lastMessage) && thought(owner.lastMessage)) callers.add(owner);
 			else if (owner) replies.add(owner);
 			const running = child.isPartial && busy;
-			const writing = running && child.argsComplete === false && child.executionStarted !== true;
+			const writing = running && child.argsComplete === false && child.executionStarted !== true && this.host.written?.(child.toolCallId) !== true;
 			tools.push(...factsOfCall(child.toolName, child.args, running, !child.isPartial && child.result?.isError === true, this.nestedOf(child.toolCallId), writing));
 			const at = this.host.toolEndedAt(child.toolCallId);
 			if (at !== undefined) ended = Math.max(ended ?? at, at);

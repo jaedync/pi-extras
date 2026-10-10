@@ -24,6 +24,13 @@ import { CHARS_PER_TOKEN, END_ENTRY, parseEndLine, parseVerbs, pickVerb, renderE
 import { MODE_SPINNERS, PI_WAVE, PI_WAVE_MS, REDUCED_FRAME, isBlockingPeer, slotGlyph, spinnerCadence, type GlyphAnimation } from "../lib/band/glyph.ts";
 import { renderThinkingTail, thinkingRuns } from "../lib/tool-display/thinking.ts";
 import { glowing, noteText, type Trail } from "../lib/band/glow.ts";
+import { cancelLive, liveCompactionLines, liveShown, noteProgress, startLive, type LiveCompaction } from "../lib/compaction-live.ts";
+import { COMPACTION_PROGRESS_EVENT, readProgress } from "../lib/cache-compaction/decision.ts";
+import type { ThemeLike } from "../lib/tool-display/kit.ts";
+
+function sessionIdOf(ctx: ExtensionContext): string | undefined {
+	try { return ctx.sessionManager?.getSessionId?.(); } catch { return undefined; }
+}
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 type VisualPhase = ActivePhase | "slow_api" | "stalled";
@@ -174,6 +181,30 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	/** Live thinking sits above queued messages; status always stays in the divider. */
 	const tailRow = new TailRow();
 	let linePaint: Paint | undefined;
+	/** A compaction while it runs, drawn as a live band above the queue; its session and theme. */
+	let compaction: LiveCompaction | undefined;
+	let compactionSession: string | undefined;
+	let compactionTheme: ExtensionContext["ui"]["theme"] | undefined;
+
+	function compactionShown(now: number): boolean {
+		if (compaction && !liveShown(compaction, now)) compaction = undefined;
+		return compaction !== undefined;
+	}
+
+	function compactionTail(width: number): string[] {
+		const now = performance.now();
+		if (!compactionShown(now) || !compactionTheme) return [];
+		return ["", ...liveCompactionLines(compaction!, width, compactionTheme as unknown as ThemeLike, now, reduced ? "reduced" : "full")];
+	}
+
+	/** The lines above Pi's queued messages: a running compaction, then the live thinking. */
+	const drawTail = (width: number): string[] => [...compactionTail(width), ...drawThinkingTail(width)];
+
+	function endCompaction(cancelled: boolean): void {
+		compaction = cancelled && compaction ? cancelLive(compaction, performance.now()) : undefined;
+		lastDrawing = undefined;
+		activeTui?.requestRender();
+	}
 
 	/** Voice records in the top row only while this is false. */
 	function announceBusy(): void {
@@ -183,7 +214,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	function ensureTimer(): void {
 		const now = performance.now();
 		const status = statusView(now);
-		if (!active && !status && !wave) { releaseTimer(); return; }
+		if (!active && !status && !wave && !compactionShown(now)) { releaseTimer(); return; }
 		const tools = leafTools();
 		const peer = phase === "run" && tools.length > 0 && tools.every(tool => tool.blocking);
 		const animation = status?.style.animation ?? MODE_SPINNERS[peer ? "peer" : phase];
@@ -197,7 +228,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	}
 
 	function releaseTimer(): void {
-		if (!stopFrames || active || statusView(performance.now()) || wave) return;
+		if (!stopFrames || active || statusView(performance.now()) || wave || compactionShown(performance.now())) return;
 		stopFrames();
 		stopFrames = undefined;
 	}
@@ -318,12 +349,13 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 			}
 			if (now - lastDebugAt >= DEBUG_HEARTBEAT_MS) debugState("heartbeat", currentContext, now);
 			if (paintedOver && !stillLoader) holdLoaderStill(currentContext);
-		} else if (!statusIndicator && !wave) {
+		} else if (!statusIndicator && !wave && !compactionShown(now)) {
+			releaseTimer();
 			return;
 		}
 		if (!activeTui) return;
 		const width = activeTui.terminal?.columns ?? 120;
-		const drawing = drawThinkingTail(width).join("\n") + borderFingerprint(now, width);
+		const drawing = drawTail(width).join("\n") + borderFingerprint(now, width);
 		ensureTimer();
 		if (drawing === lastDrawing) return;
 		lastDrawing = drawing;
@@ -566,7 +598,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	 */
 	function drawTopRow(lines: string[], width: number, paint: Paint, editor: WrappedEditor): string[] {
 		// Pi draws the editor once it is mounted, so its place in Pi's layout is known by now.
-		if (!tailRow.attached && activeTui) tailRow.attach(activeTui, editor, drawThinkingTail);
+		if (!tailRow.attached && activeTui) tailRow.attach(activeTui, editor, drawTail);
 		const match = stripTerminalSequences(lines[0] ?? "").match(/↑\s*(\d+)/);
 		const hiddenLineCount = match ? Number.parseInt(match[1] ?? "0", 10) : 0;
 		const now = performance.now();
@@ -635,7 +667,23 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", (_event, ctx) => { if (active && ctx.isIdle()) finishPrompt(ctx, false); });
 	// Later boundary handlers can request continuation without adding a queued message.
 	pi.on("agent_before_settle", () => { continuationPending = true; });
-	pi.on("session_before_compact", (event) => { if (event.reason === "overflow") continuationPending = true; });
+	// Extensions' handlers run in load order, so this one starts the band before Cache Compaction's request.
+	pi.on("session_before_compact", (event, ctx) => {
+		if (event.reason === "overflow") continuationPending = true;
+		const tokens = event.preparation?.tokensBefore;
+		if (ctx.mode !== "tui" || typeof tokens !== "number") return;
+		compaction = startLive(event.reason, tokens, performance.now());
+		compactionSession = sessionIdOf(ctx);
+		compactionTheme = ctx.ui.theme;
+		ensureTimer();
+	});
+	pi.on("session_compact", () => endCompaction(false));
+	pi.on("session_compact_failed", (event) => endCompaction(event.aborted === true));
+	pi.events?.on(COMPACTION_PROGRESS_EVENT, (data) => {
+		const progress = readProgress(data);
+		if (!compaction || !progress || (compactionSession !== undefined && progress.sessionId !== compactionSession)) return;
+		compaction = noteProgress(compaction, progress.text, progress.chars, performance.now());
+	});
 	pi.on("agent_start", (_event, ctx) => start(ctx));
 	pi.on("turn_start", (_event, ctx) => setPhase("prep", ctx, "turn_start", true));
 	pi.on("context", (_event, ctx) => setPhase("prep", ctx, "context", true));
@@ -674,6 +722,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		else if (eventType.startsWith("toolcall_")) {
 			if (eventType === "toolcall_start") callArgsChars = 0;
 			else if (eventType === "toolcall_delta" && "delta" in streamEvent && typeof streamEvent.delta === "string") callArgsChars += streamEvent.delta.length;
+			// A provider may send the arguments only in the call's end; after it, silence is a stall again.
+			else if (eventType === "toolcall_end") callArgsChars = Math.max(callArgsChars, 1);
 			const call = latestToolCall(event.message);
 			pendingToolName = call?.name;
 			pendingToolArgs = call?.arguments;
@@ -725,6 +775,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (active) debugState("session_shutdown", ctx);
 		hidesLiveThinking = false;
+		compaction = undefined;
 		resetStatus();
 		stop();
 		tailRow.detach();

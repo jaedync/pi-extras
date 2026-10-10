@@ -199,9 +199,14 @@ export default function subagents(pi: ExtensionAPI) {
 	const withRows = (tool: ToolDefinition): ToolDefinition => markRow({
 		...tool,
 		renderShell: "self" as const,
-		renderCall: (args: unknown, theme: Theme, context?: RowContext) => tool.name === "subagent"
-			? clickable(subagentCallRow(args, theme, context, (name) => state?.team.get(name), run.streaming, motion), context)
-			: messageCallRow(args, theme, context, run.streaming, (name) => state?.team.get(name), motion),
+		renderCall: (args: unknown, theme: Theme, context?: RowContext) => {
+			// Written now: the reply streams and has not finished this call; Pi completes calls only when the reply ends.
+			const id = String((context as { toolCallId?: unknown } | undefined)?.toolCallId ?? "");
+			const writtenNow = () => run.streaming() && !run.written(id);
+			return tool.name === "subagent"
+				? clickable(subagentCallRow(args, theme, context, (name) => state?.team.get(name), writtenNow, motion), context)
+				: messageCallRow(args, theme, context, writtenNow, (name) => state?.team.get(name), motion);
+		},
 		renderResult: (result: unknown, _options: { expanded: boolean }, theme: Theme, context?: RowContext) => {
 			if (tool.name !== "subagent") return messageResultRow(result, theme, context);
 			rememberAgent(context, (result as { details?: unknown } | null)?.details);

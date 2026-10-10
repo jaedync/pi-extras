@@ -46,3 +46,17 @@ test("a row that shows its own lines while written keeps them, and a call rebuil
 	cut.update({ argsComplete: false, args: { path: "a.ts", edits: [{ oldText: "a", newText: brief }] } });
 	assert.deepEqual(cut.lines(40), ["  edit a.ts"], "its message ended: no pen, clock or preview");
 });
+
+test("an earlier call of a message reads as queued once the model has written it, while it writes the next", () => {
+	const h = harness();
+	const done = new Set<string>();
+	const kit = { ...h.kit, written: (id: string) => done.has(id) };
+	const first = row(toolRenderers(kit, editSpec) as never, {}, "call-1");
+	first.update({ argsComplete: false, args: { path: "a.ts", edits: [{ oldText: "a", newText: brief }] } });
+	assert.equal(first.lines(40).length, 3);
+	done.add("call-1");
+	h.advance(1_000);
+	h.tick();
+	assert.deepEqual(first.lines(40), [first.lines(40)[0]!], "no preview");
+	assert.match(first.lines(40)[0]!, /^● edit a\.ts +queued$/);
+});

@@ -22,6 +22,8 @@ const { MODE_SPINNERS, REDUCED_FRAME, SPINNER_FRAMES, slotGlyph } = await jiti.i
 const { DISPLAY_SETTINGS_EVENT } = await jiti.import("../lib/extras-config.ts");
 const { foregroundAnsi } = await jiti.import("@earendil-works/pi-tui");
 const { renderPiWave } = await jiti.import("../lib/cc-phase.ts");
+const quietTheme = await jiti.import("./support/quiet-theme.ts");
+const decision = await jiti.import("../lib/cache-compaction/decision.ts");
 const waveGlyph = renderPiWave(200, { fg: (_tone, text) => text });
 function assertNoWave(h, at, expected) {
 	const row = h.render(at)[0];
@@ -121,6 +123,29 @@ test("new characters of the live thinking tail show brighter, then fade; reduced
 		const lit = h.queue(2100).join("\n");
 		assert.equal(lit.includes(`${bright}newest`), motion === "full", `${motion}: ${JSON.stringify(lit.slice(-60))}`);
 		assert.ok(!h.queue(5000).join("\n").includes(bright), `${motion}: faded`);
+	}
+});
+
+test("a compaction shows a live purple band above the queue, then hands off, or turns gray for a moment when cancelled", t => {
+	const { quiet } = quietTheme;
+	const { COMPACTION_PROGRESS_EVENT } = decision;
+	const plain = lines => lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).filter(Boolean);
+	for (const end of ["done", "cancelled"]) {
+		const events = eventBus(), layout = piLayout(), h = harness(t, events, { layout, verbs: null, theme: quiet() });
+		h.render();
+		h.emit("session_before_compact", { reason: "threshold", preparation: { tokensBefore: 182_000 }, signal: new AbortController().signal }, 1000);
+		assert.match(plain(h.queue(7200))[0], /compaction auto +182k   6\.2s$/);
+		events.emit(COMPACTION_PROGRESS_EVENT, { sessionId: "s", text: "## Goal\nShip it.", chars: 16 });
+		assert.ok(plain(h.queue(7300)).some(line => line.endsWith("Ship it.▍")), "the newest summary lines");
+		if (end === "done") {
+			h.emit("session_compact", { reason: "threshold", compactionEntry: {} }, 8000);
+			assert.deepEqual(h.queue(8000), [], "the final band in the transcript takes its place");
+		} else {
+			h.emit("session_compact_failed", { reason: "threshold", aborted: true }, 8000);
+			assert.match(plain(h.queue(8100))[0], /compaction auto +cancelled   7\.0s$/);
+			assert.equal(plain(h.queue(8100)).length, 1);
+			assert.deepEqual(h.queue(10_100), [], "gone after a moment");
+		}
 	}
 });
 
@@ -259,6 +284,9 @@ test("a tool call whose arguments the provider holds stays calm, and turns red o
 	assert.ok(!h.render(31000)[0].includes(red), "30 s with a started call and no arguments is not a stall");
 	h.update("toolcall_delta", "{\"name\":\"range", 31500);
 	assert.ok(h.render(42000)[0].includes(red), "arguments that stop for 10 s are a stall again");
+	h.update("toolcall_start", undefined, 43000);
+	h.update("toolcall_end", undefined, 44000);
+	assert.ok(h.render(55000)[0].includes(red), "a call whose arguments came whole in its end, then silence, is a stall");
 });
 
 test("Pi's working loader is held still only once this row covers it, and moves again after the run", t => {

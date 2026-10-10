@@ -243,7 +243,9 @@ prompt, as long as:
 - the summary fits in the context window (see below).
 
 Otherwise Pi's own compaction runs, exactly as it would without this
-extension. The notice says which path ran and why.
+extension. The notice says which path ran and why. The summary request
+streams, so the Phase Spinner can show its newest lines while it is written.
+The request is the same as one sent without streaming.
 
 **Supported APIs.** Anthropic Messages (`anthropic-messages`), OpenAI
 Responses (`openai-responses`, `openai-codex-responses`,
@@ -605,6 +607,13 @@ While the model thinks, its newest three lines show dimly at the bottom of the
 conversation, above queued messages. New characters show brighter for a moment,
 then fade, unless motion is reduced. A tool call the model is still writing
 shows as Pi's own row in the conversation.
+
+While a compaction runs, a purple band at the bottom of the conversation shows
+why it runs, the size of the context before it, and the time, with a sweep.
+With Cache Compaction, the band also counts the tokens of the summary so far
+and shows its newest 2 lines as they stream. When the compaction is done, the
+final compaction band in the conversation takes its place. A cancelled
+compaction turns the band gray for 2 seconds.
 
 When a prompt finishes, a dotted π waves in and out in the divider, and the
 conversation keeps an end line such as

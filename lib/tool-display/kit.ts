@@ -27,6 +27,8 @@ export interface Kit {
 	readonly motion: () => Motion;
 	/** Whether the model is streaming a reply now; a row built then spins while its call is written. Absent: always. */
 	readonly streaming?: () => boolean;
+	/** The model has written this call, though Pi completes its arguments only when the reply ends (lib/run-watch.ts). */
+	readonly written?: (toolCallId: string) => boolean;
 	/** Whether an agent run is going; a call can run only then. Absent: always. */
 	readonly busy?: () => boolean;
 	/** Whether bash commands are broken into steps. */

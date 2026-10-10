@@ -140,7 +140,17 @@ export function flatThinking(text: string): string {
  * else its newest `max` with the first opening with `…`. Only the end of a
  * long block is wrapped.
  */
-export function tailLines(text: string, width: number, max = THINKING_TAIL_LINES): { lines: string[]; cut: boolean } {
+export function tailLines(text: string, width: number, max = THINKING_TAIL_LINES): { readonly lines: string[]; readonly cut: boolean } {
+	// While new characters glow, every frame draws the tail; flattening the whole block again each time is the cost.
+	if (lastTail?.text === text && lastTail.width === width && lastTail.max === max) return lastTail.tail;
+	const tail = wrappedTail(text, width, max);
+	lastTail = { text, width, max, tail };
+	return tail;
+}
+
+let lastTail: { readonly text: string; readonly width: number; readonly max: number; readonly tail: { readonly lines: string[]; readonly cut: boolean } } | undefined;
+
+function wrappedTail(text: string, width: number, max: number): { lines: string[]; cut: boolean } {
 	const flat = flatThinking(text);
 	const room = Math.max(1, width);
 	const budget = room * max * TAIL_CHARS_PER_LINE;

@@ -46,7 +46,9 @@ export function track(row: RowState, context: RenderContext, now: number, outcom
 	const done = !context.isPartial;
 	if (!done && context.executionStarted && row.startedAt === undefined) row.startedAt = now;
 	// Only a call written now gets a draft; one rebuilt from history has no clock to show.
-	if (row.live && !done && !context.executionStarted && !context.argsComplete) row.draft = noteDraft(row.draft, context.args, now);
+	if (row.live && !done && !context.executionStarted && context.argsComplete === false) row.draft = noteDraft(row.draft, context.args, now);
+	// A complete call keeps no second copy of its arguments.
+	else row.draft = undefined;
 	if (done) {
 		if (row.startedAt === undefined && row.endedAt === undefined) row.resumed = true;
 		if (row.endedAt === undefined && !row.resumed) row.endedAt = now;
@@ -55,13 +57,14 @@ export function track(row: RowState, context: RenderContext, now: number, outcom
 	}
 }
 
-export function phaseOf(row: RowState, context: RenderContext, now: number, timeoutMs?: number): BandPhase {
+/** `written`: the model has written the call, though Pi completes its arguments only when the reply ends. */
+export function phaseOf(row: RowState, context: RenderContext, now: number, timeoutMs?: number, written = false): BandPhase {
 	if (context.isPartial) {
 		if (context.executionStarted) {
 			const elapsedMs = now - (row.startedAt ?? now);
 			return timeoutMs ? { kind: "running", elapsedMs, timeoutMs } : { kind: "running", elapsedMs };
 		}
-		if (context.argsComplete) return { kind: "queued" };
+		if (context.argsComplete || written) return { kind: "queued" };
 		const draft = row.draft;
 		return draft ? { kind: "writing", elapsedMs: now - draft.startedAt, chars: draft.chars, flowing: flowing(draft, now) } : { kind: "writing" };
 	}

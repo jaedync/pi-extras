@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { draftRail, draftPreview, flowing, noteDraft, writingText } from "../lib/band/draft.ts";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { draftRail, draftPreview, flowing, noteDraft, wrapTail, writingText } from "../lib/band/draft.ts";
 
 const theme = { fg: (_key: string, text: string) => text };
 const plain = (segs: ReadonlyArray<{ text: string }>) => segs.map((seg) => seg.text).join("");
@@ -39,4 +39,20 @@ test("the preview is the newest lines of the text, with a caret after the last",
 	assert.deepEqual(lines, ["seven eight", "nine ten▍"]);
 	assert.deepEqual(draftPreview(noteDraft(undefined, {}, 0), 40, 0, theme, "full"), [], "nothing to show yet");
 	assert.equal(draftPreview(noteDraft(undefined, { task: "a\x1b[2Jb\tc" }, 0), 40, 0, theme, "full")[0], "ab  c▍", "control characters go");
+});
+
+test("a long text wraps only its tail, and every preview line fits", () => {
+	const long = "word ".repeat(40_000) + "end";
+	const draft = noteDraft(undefined, { content: long }, 0);
+	const tail = wrapTail(long, 39, 2);
+	assert.ok(tail.length < 1_000, "no wrap of 200 KB");
+	assert.ok(tail.startsWith("word "), "cut at a space, so the first word stays whole");
+	assert.equal(wrapTail(`${long} more`, 39, 2), `${tail} more`, "the cut stays put while the text grows, so lines keep their breaks");
+	const paragraph = "last ".repeat(100);
+	assert.equal(wrapTail(`${long}\n${paragraph}`, 39, 2), paragraph, "from the start of the paragraph, the wrap is exact");
+	const lines = draftPreview(draft, 40, 0, theme, "full").map(stripTerminalSequences);
+	assert.equal(lines.length, 2);
+	assert.ok(lines[1]!.endsWith("end▍"));
+	const wide = draftPreview(noteDraft(undefined, { task: "日本語" }, 0), 2, 0, theme, "full");
+	assert.ok(wide.every((line) => visibleWidth(line) <= 2), JSON.stringify(wide));
 });

@@ -38,3 +38,13 @@ test("new characters at the end of the last line are painted brighter; the rest 
 	assert.deepEqual(glowLines(["abcd"], 4, trail, 1000 + GLOW_MS, theme, "muted"), ["<muted>abcd"], "faded");
 	assert.deepEqual(glowLines(["ijkl"], 12, trail, 1000, { fg: theme.fg }, "muted"), ["<muted>ijkl"], "a theme without colors");
 });
+
+test("the glow counts the text's own units and keeps a grapheme in one color", () => {
+	let trail = noteText(undefined, "t", 1, 0);
+	trail = noteText(trail, "t", 4, 1000);
+	const [line] = glowLines(["a😀b"], 4, trail, 1000, theme, "muted");
+	assert.ok(line!.startsWith("<muted>a"), `only the emoji and b are new: ${JSON.stringify(line)}`);
+	const coder = "👩‍💻";
+	const [whole] = glowLines([`x${coder}`], 1 + coder.length, noteText(noteText(undefined, "t", 2, 0), "t", 1 + coder.length, 1000), 1000, theme, "muted");
+	assert.ok(whole!.includes(coder), "no color change inside a joined emoji");
+});

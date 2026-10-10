@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { AssistantMessageComponent, initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { installThinkingTail, renderThinkingTail, thoughtLabel, type ThinkingHost } from "../lib/tool-display/thinking.ts";
+import { installThinkingTail, renderThinkingTail, tailLines, thoughtLabel, type ThinkingHost } from "../lib/tool-display/thinking.ts";
 import { GLOW_MS, noteText } from "../lib/band/glow.ts";
 initTheme("dark");
 const text="First thought.\n\nSecond thought.\n\nLast thought.";
@@ -69,6 +69,7 @@ test("new thinking shows brighter for a moment, then fades to the tail's dim",()
  const lit=renderThinkingTail(now,60,theme,{trail,now:1000}).join("");
  assert.match(lit,/\x1b\[38;2;240;240;240mnewest\x1b\[39m/,"the six new characters, at full brightness");
  assert.ok(lit.includes("<dim>thought"),"the old ones keep the dim");
+ assert.equal(tailLines(now,58),tailLines(now,58),"each glowing frame reuses the wrapped tail");
  const faded=renderThinkingTail(now,60,theme,{trail,now:1000+GLOW_MS});
  assert.deepEqual(faded,renderThinkingTail(now,60,theme),"faded: the same as without a glow");
 });

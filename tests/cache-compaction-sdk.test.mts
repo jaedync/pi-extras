@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentRoot } from "./support/pi-runtime.mjs";
 import cacheCompaction from "../extensions/cache-compaction.ts";
+import { COMPACTION_PROGRESS_EVENT } from "../lib/cache-compaction/decision.ts";
 import usageGuard, { GUARD_CUSTOM_TYPE } from "../extensions/usage-guard.ts";
 import { createLimitStore } from "../lib/limit-store.ts";
 import { estimateRequestTokens, estimateRequestContext, contextSafetyTokens } from "../lib/cache-compaction/estimate.ts";
@@ -33,6 +34,7 @@ async function fixture(api = "anthropic-messages", enabled = true, automatic?: "
 	let usageTokens = 102;
 	let simulateWarmer = false;
 	const notices: string[] = [];
+	const progress: any[] = [];
 	const calls: Array<{ context: any; payload: any; sessionId: string; cacheRetention?: string }> = [];
 	const captures: any[][] = [];
 	const errors: unknown[] = [];
@@ -57,6 +59,10 @@ async function fixture(api = "anthropic-messages", enabled = true, automatic?: "
 					const stopReason = automatic === "large-anthropic" && !isPrefix && calls.length === 2 ? "toolUse" : !isPrefix && responseMode === "aborted" ? "aborted" : isPrefix && responseMode === "error" ? "error" : isPrefix && responseMode === "length" ? "length" : "stop";
 					if (automatic === "large-anthropic" && calls.length > 2) usageTokens = 102;
 					const message = { role: "assistant", api: model.api, provider: model.provider, model: model.id, content, stopReason, timestamp: now, usage: isPrefix ? usage : { ...usage, cacheRead: usageTokens - 12, totalTokens: usageTokens } };
+					// The summary streams in two pieces, as a provider's text deltas would.
+					const first: any = content[0];
+					const text = isPrefix && first?.type === "text" ? first.text : "";
+					for (const piece of text ? [text.slice(0, 7), text.slice(7)] : []) stream.push({ type: "text_delta", contentIndex: 0, delta: piece, partial: message });
 					stream.push({ type: "done", reason: stopReason, message }); stream.end();
 				} catch (error) {
 					stream.push({ type: "error", reason: "error", error: { role: "assistant", api: model.api, provider: model.provider, model: model.id, content: [], stopReason: "error", errorMessage: String(error), timestamp: now, usage } }); stream.end();
@@ -78,7 +84,7 @@ async function fixture(api = "anthropic-messages", enabled = true, automatic?: "
 			if (!filterInternal) return;
 			event.preparation.messagesToSummarize = event.preparation.messagesToSummarize.filter((message: any) => !internal(message));
 			event.preparation.turnPrefixMessages = event.preparation.turnPrefixMessages.filter((message: any) => !internal(message));
-		}); if (withUsageGuard) usageGuard(pi, { configFile, store: createLimitStore(), now: () => now }); cacheCompaction(pi, { configFile, now: () => now, settingsManager }); pi.on("context_with_system", (event: any) => {
+		}); if (withUsageGuard) usageGuard(pi, { configFile, store: createLimitStore(), now: () => now }); cacheCompaction(pi, { configFile, now: () => now, settingsManager }); pi.events.on(COMPACTION_PROGRESS_EVENT, (data: any) => progress.push(data)); pi.on("context_with_system", (event: any) => {
 			captures.push(structuredClone(event.messages));
 			if (lateTransform) {
 				const last = event.messages.at(-1);
@@ -89,7 +95,7 @@ async function fixture(api = "anthropic-messages", enabled = true, automatic?: "
 	assert.deepEqual(loader.getExtensions().errors, []);
 	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model, thinkingLevel: "off", settingsManager, resourceLoader: loader, sessionManager: sdk.SessionManager.inMemory(scratch), ...(automatic === "large-anthropic" ? { tools: ["tiny"] } : { noTools: "all" }), customTools: automatic === "large-anthropic" ? [{ name: "tiny", label: "tiny", description: "Local small tool result", parameters: Type.Object({}), execute: async () => ({ content: [{ type: "text", text: "Small result." }], details: undefined }) }] : [] });
 	await session.bindExtensions({ mode: "tui", uiContext: { notify: (text: string) => { notices.push(text); if (process.env.PREFIX_TEST_DEBUG) console.error(text); } }, onError: (error: unknown) => errors.push(error) });
-	return { session, calls, captures, errors, notices, configFile, logFile: join(agentDir, "cache-compaction.log"), settingsManager, simulateWarmer: () => { simulateWarmer = true; }, setUsage: (tokens: number) => { usageTokens = tokens; }, setLateTransform: () => { lateTransform = true; }, setRewriteUser: () => { rewriteUser = true; }, setInternalFilter: () => { filterInternal = true; }, setTime: (n: number) => { now += n; }, setResponse: (mode: string) => { responseMode = mode; }, async warm() { await session.prompt("Old task: preserve file paths and decision."); await session.prompt("Recent task: next step is run the tests."); }, async close() { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); } };
+	return { session, calls, captures, errors, notices, progress, configFile, logFile: join(agentDir, "cache-compaction.log"), settingsManager, simulateWarmer: () => { simulateWarmer = true; }, setUsage: (tokens: number) => { usageTokens = tokens; }, setLateTransform: () => { lateTransform = true; }, setRewriteUser: () => { rewriteUser = true; }, setInternalFilter: () => { filterInternal = true; }, setTime: (n: number) => { now += n; }, setResponse: (mode: string) => { responseMode = mode; }, async warm() { await session.prompt("Old task: preserve file paths and decision."); await session.prompt("Recent task: next step is run the tests."); }, async close() { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); } };
 }
 
 for (const api of ["anthropic-messages", "openai-completions", "openai-codex-responses", "openai-responses", "google-generative-ai"]) {
@@ -118,6 +124,14 @@ for (const api of ["anthropic-messages", "openai-completions", "openai-codex-res
 		assert.deepEqual(f.errors, []);
 	});
 }
+test("real SDK: a cache compaction sends its summary as it streams, for the live band", { timeout: 15000 }, async (t) => {
+	const f = await fixture(); t.after(() => f.close());
+	await f.warm();
+	await f.session.compact();
+	assert.deepEqual(f.progress.map((item: any) => [item.text, item.chars]), [["## Goal", 7], ["## Goal\nPrefix checkpoint.", 26]]);
+	assert.ok(f.progress.every((item: any) => item.sessionId === f.session.sessionId));
+	assert.deepEqual(f.errors, []);
+});
 for (const condition of ["disabled", "cold", "model-change", "empty", "tool", "error", "length", "branch-edit", "unsupported", "unrequested-prefix", "no-capture"]) {
 	test(`real SDK fallback ${condition} yields Pi's default compaction`, { timeout: 15000 }, async (t) => {
 		const f = await fixture(condition === "unsupported" ? "mistral-conversations" : "anthropic-messages", condition !== "disabled"); t.after(() => f.close());

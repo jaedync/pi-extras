@@ -20,7 +20,7 @@ import { type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { AGENT_HUE, AVATAR, AVATAR_HOLLOW, agentBody, agentHue, agentLine, avatarOf, spaced } from "../band/agent-look.ts";
 import { expandable, expansionMemory, markdownOf, type MarkdownSource } from "../band/message.ts";
 import { formatTime, ROW_MARGIN, timeSeg, type Motion, type Seg } from "../band/band.ts";
-import { everyFrame } from "../band/clock.ts";
+import { everyFrame, FRAME_MS, REDUCED_FRAME_MS } from "../band/clock.ts";
 import { draftPreview, draftRail, flowing, noteDraft, type Draft } from "../band/draft.ts";
 import { BULLET_GLYPH, FAILURE_GLYPH, penGlyph } from "../band/glyph.ts";
 import { formatMoney } from "../status-plus-logic.ts";
@@ -62,16 +62,18 @@ type DraftState = { live?: boolean; draft?: Draft; stopFrames?: () => void };
  * The row asks for frames, for its pen and clock, until the call is complete
  * or the message ends; a call rebuilt from history has no draft.
  */
-function draftOf(context: RowContext, args: unknown, streaming: Streaming): Draft | undefined {
+function draftOf(context: RowContext, args: unknown, streaming: Streaming, motion: () => Motion): Draft | undefined {
 	const state = context?.state as DraftState | undefined;
 	if (!state || typeof state !== "object") return undefined;
 	const stop = () => { state.stopFrames?.(); state.stopFrames = undefined; };
 	if (state.live !== true || !context?.isPartial || context.executionStarted || context.argsComplete !== false) {
 		stop();
+		// A complete call keeps no second copy of its arguments.
+		state.draft = undefined;
 		return undefined;
 	}
 	state.draft = noteDraft(state.draft, args, Date.now());
-	state.stopFrames ??= everyFrame(() => (streaming() ? context.invalidate?.() : stop()));
+	state.stopFrames ??= everyFrame(() => (streaming() ? context.invalidate?.() : stop()), motion() === "reduced" ? REDUCED_FRAME_MS : FRAME_MS);
 	return state.draft;
 }
 
@@ -135,7 +137,7 @@ function joinStatus(record: AgentRecord, now: number): Seg[] {
 export function subagentCallRow(args: unknown, theme: Theme, context: RowContext, lookup: Lookup, streaming = ALWAYS, motion: () => Motion = () => "full"): Component {
 	noteLive(context, streaming);
 	const input = (args ?? {}) as { task?: unknown; name?: unknown; model?: unknown; thinking?: unknown; wait?: unknown };
-	const draft = draftOf(context, args, streaming);
+	const draft = draftOf(context, args, streaming, motion);
 	return new Lines((width) => {
 		const now = Date.now();
 		const name = agentOf(context);
@@ -197,7 +199,7 @@ const DELIVERED: Record<string, string> = { steered: "delivered", resumed: "resu
 export function messageCallRow(args: unknown, theme: Theme, context: RowContext, streaming = ALWAYS, lookup: Lookup = NOBODY, motion: () => Motion = () => "full"): Component {
 	noteLive(context, streaming);
 	const input = (args ?? {}) as { to?: unknown; text?: unknown; expectReply?: unknown };
-	const draft = draftOf(context, args, streaming);
+	const draft = draftOf(context, args, streaming, motion);
 	return new Lines((width) => {
 		const to = arrowTo(oneLine(input.to), agentHue(lookup(oneLine(input.to))?.model));
 		const text: Seg[] = [{ text: oneLine(input.text), color: "muted" }];

@@ -114,8 +114,8 @@ for (const room of ["enough", "too-small"]) test(`real HTTP openai-completions a
 	const notices: string[] = [];
 	const { session, runtime } = await startSession(t, baseUrl, 258048, { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 24576 } }, notices);
 	const estimator = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/utils/estimate.js")).href);
-	const complete = runtime.complete.bind(runtime);
-	runtime.complete = (m: any, context: any, opts: any) => { if (JSON.stringify(context).includes("COMPACTION CHECKPOINT REQUEST")) { summaryEstimate = estimator.estimateContextTokens(ai.normalizeContext(context)).tokens; summaryMargin = contextSafetyTokens(estimateRequestContext(context.messages).tailTokens); } return complete(m, context, opts); };
+	const stream = runtime.stream.bind(runtime);
+	runtime.stream = (m: any, context: any, opts: any) => { if (JSON.stringify(context).includes("COMPACTION CHECKPOINT REQUEST")) { summaryEstimate = estimator.estimateContextTokens(ai.normalizeContext(context)).tokens; summaryMargin = contextSafetyTokens(estimateRequestContext(context.messages).tailTokens); } return stream(m, context, opts); };
 	await session.prompt("Earlier discarded task."); await session.prompt("Retained synthetic log: " + "abcd ".repeat(2400));
 	const entry = session.sessionManager.getEntries().filter((e: any) => e.type === "compaction").at(-1); assert.ok(entry); assert.ok(entry.tokensBefore > 258048 - 24576);
 	if (room === "enough") {

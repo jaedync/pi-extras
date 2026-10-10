@@ -194,6 +194,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		frames: (tick) => foldClock.add(tick),
 		thoughtMs: (message) => thoughtFor(message, thinkingDuration),
 		nestedOf: (id) => nested.get(id)?.calls,
+		written: run.written,
 	});
 
 	const kit: Kit = {
@@ -201,6 +202,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		moreHint: () => (fullscreen ? "click for all" : deps.host.expandHint()),
 		motion: () => settings.motion,
 		streaming: run.streaming,
+		written: run.written,
 		busy: run.busy,
 		chains: () => settings.chains,
 		clock,

@@ -53,7 +53,7 @@ for (const mode of ["anthropic-adaptive", "anthropic-managed", "anthropic-manage
 			try {
 				const body = JSON.parse(Buffer.concat(chunks).toString());
 				requests.push({ body, routing: req.headers["x-compaction-route"] as string });
-				// A single provider retry proves complete() didn't silently use default zero retries.
+				// A single provider retry proves the summary request didn't silently use default zero retries.
 				if (requests.length === 3) { res.writeHead(500, { "content-type": "application/json", "retry-after-ms": "1" }); res.end(JSON.stringify({ error: { type: "api_error", message: "Synthetic retry" } })); }
 				else success(res, api, body.model);
 			} catch (error) { errors.push(error); res.writeHead(500).end(); }
@@ -84,8 +84,8 @@ for (const mode of ["anthropic-adaptive", "anthropic-managed", "anthropic-manage
 		const last = session.sessionManager.getBranch().filter((entry: any) => entry.type === "message").at(-1);
 		session.sessionManager.appendContextEdit(last.id, { ...last.message, stopReason: "aborted" }); session.refreshContext();
 	}
-	const complete = runtime.complete.bind(runtime); let options: any;
-	runtime.complete = (m: any, context: any, opts: any) => { options = opts; return complete(m, context, opts); };
+	const stream = runtime.stream.bind(runtime); let options: any;
+	runtime.stream = (m: any, context: any, opts: any) => { options = opts; return stream(m, context, opts); };
 	const entry = await session.compact();
 	assert.equal(entry.details.cachePrefix, true);
 	assert.equal(requests.length, 4, "one prefix attempt plus one configured retry, no native fallback");
@@ -130,7 +130,7 @@ for (const api of ["anthropic-messages", "openai-responses"]) for (const room of
  const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model, thinkingLevel: "off", settingsManager, resourceLoader: loader, sessionManager: sdk.SessionManager.inMemory(scratch), noTools: "all" });
  t.after(() => session.dispose()); await session.bindExtensions({ mode: "tui", uiContext: { notify: (text: string) => notices.push(text) } });
  const estimator = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/utils/estimate.js")).href);
- const complete = runtime.complete.bind(runtime); runtime.complete = (m: any, context: any, opts: any) => { if (JSON.stringify(context).includes("COMPACTION CHECKPOINT REQUEST")) { summaryEstimate = estimator.estimateContextTokens(ai.normalizeContext(context)).tokens; summaryMargin = contextSafetyTokens(estimateRequestContext(context.messages).tailTokens); } return complete(m, context, opts); };
+ const stream = runtime.stream.bind(runtime); runtime.stream = (m: any, context: any, opts: any) => { if (JSON.stringify(context).includes("COMPACTION CHECKPOINT REQUEST")) { summaryEstimate = estimator.estimateContextTokens(ai.normalizeContext(context)).tokens; summaryMargin = contextSafetyTokens(estimateRequestContext(context.messages).tailTokens); } return stream(m, context, opts); };
  await session.prompt("Earlier discarded task."); await session.prompt("Retained salted log: " + "abcd ".repeat(2400));
  const entry = session.sessionManager.getEntries().filter((e: any) => e.type === "compaction").at(-1); assert.ok(entry); assert.ok(entry.tokensBefore > 200000 - 16384);
  if (room === "enough") {

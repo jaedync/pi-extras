@@ -64,7 +64,7 @@ function viewOf(kit: Kit, row: RowState): View | undefined {
 }
 
 export function bandOf(spec: ToolSpec, view: View): { segs: Seg[]; rail: Seg[]; phase: BandPhase; toolName: string } {
-	const phase = phaseOf(view.row, view.context, view.now, spec.timeoutMs?.(view));
+	const phase = phaseOf(view.row, view.context, view.now, spec.timeoutMs?.(view), view.kit.written?.(view.context.toolCallId) === true);
 	const failure = spec.failure?.(view);
 	const segs = spec.title(view);
 	const railSegs = rail(phase, tookMs(view.row, view.now), { lead: spec.lead?.(view, phase) ?? [], ...(failure ? { failure } : {}) });

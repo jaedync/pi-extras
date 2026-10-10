@@ -2,6 +2,16 @@ import { fingerprint } from "./core.ts";
 
 /** Fixed decision metadata only. Never pass provider text or request fields here. */
 export const COMPACTION_DECISION_EVENT = "pi-extras:compaction-decision";
+/** A cache compaction's summary as it streams: the newest characters and how many came in all. */
+export const COMPACTION_PROGRESS_EVENT = "pi-extras:compaction-progress";
+/** The summary text one progress event carries: more than a live band's preview needs at any width. */
+export const PROGRESS_TAIL_CHARS = 2_048;
+export interface CompactionProgress { readonly sessionId: string; readonly text: string; readonly chars: number }
+export function readProgress(data: unknown): CompactionProgress | undefined {
+	const value = data as Partial<CompactionProgress> | undefined;
+	if (!value || typeof value !== "object" || typeof value.sessionId !== "string" || typeof value.text !== "string") return undefined;
+	return typeof value.chars === "number" && Number.isFinite(value.chars) && value.chars >= 0 ? { sessionId: value.sessionId, text: value.text, chars: value.chars } : undefined;
+}
 export interface CompactionPath {
 	readonly path: "prefix-sharing" | "default";
 	readonly fallbackReason: string | null;

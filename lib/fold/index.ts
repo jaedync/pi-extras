@@ -17,6 +17,8 @@ export interface FoldDeps {
 	thoughtMs(message: ReplyMessage): number | undefined;
 	/** The calls a script made inside a call, as Tool Display keeps them. */
 	nestedOf(toolCallId: string): readonly NestedFact[] | undefined;
+	/** The model has written this call of the reply it streams. */
+	written?(toolCallId: string): boolean;
 }
 
 interface Tui {
@@ -119,6 +121,7 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 			toolEndedAt: (id) => ended.get(id),
 			thoughtMs: deps.thoughtMs,
 			nestedOf: deps.nestedOf,
+			...(deps.written ? { written: deps.written } : {}),
 			animate,
 			redraw: () => found.requestRender(),
 		});
