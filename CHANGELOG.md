@@ -2,6 +2,42 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.1 - 2026-10-10
+
+### Added
+
+- Tool Display: a call the model is writing now shows it. A pen moves in
+  the bullet column while the arguments arrive, and the rail shows
+  `writing`, the size so far and the time (`writing   1,204 chars   6.2s`).
+  The newest 2 lines of the text being written show under the band, with a
+  caret. Subagent and message rows show the same pen, rail and lines. When
+  a provider holds the arguments until the end, the pen moves slowly and
+  dimly and the rail shows only the time.
+- Tool Display and Phase Spinner: new characters of a call's preview and of
+  the live thinking tail show brighter for a moment, then fade. Reduced
+  motion keeps them still.
+- Phase Spinner: a compaction shows a live purple band at the bottom of the
+  conversation, with why it runs, the size before and the time. With Cache
+  Compaction, the band also counts the summary's tokens and shows its
+  newest 2 lines as they stream. The final compaction band takes its place,
+  and a cancelled compaction turns gray for 2 seconds.
+
+### Changed
+
+- Cache Compaction streams its summary request. The request is the same as
+  before; the text deltas feed the live band.
+- Tool Display, folded mode: a call that the model still writes reads
+  `Writing subagent call`, not what it will do once it runs.
+- Tool Display: an earlier call of a reply reads `queued` once the model has
+  written it, although Pi completes a reply's calls only when the reply
+  ends.
+
+### Fixed
+
+- Phase Spinner: a tool call whose arguments the provider holds no longer
+  turns the status red after 10 seconds. It waits 2 minutes, as for a first
+  token. Once arguments come, or the call ends, the 10-second rule applies.
+
 ## 0.24.0 - 2026-10-10
 
 ### Added
