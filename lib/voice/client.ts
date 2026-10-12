@@ -7,8 +7,11 @@ import { LineDecoder, encodeMessage, parseDaemonEvent, type ClientMessage, type 
 
 export interface DaemonClientOptions {
 	readonly socketPath: string;
-	/** Starts a daemon in the background. Called at most once per connect(). */
-	readonly spawnDaemon: () => void;
+	/**
+	 * Starts a daemon in the background. Called at most once per connect().
+	 * `failed` ends that connect() with the error at once, not at its deadline.
+	 */
+	readonly spawnDaemon: (failed: (error: Error) => void) => void;
 	readonly connectTimeoutMs?: number;
 }
 
@@ -54,6 +57,8 @@ export class DaemonClient {
 		const deadline = Date.now() + (this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
 		let spawned = false;
 		let delay = RETRY_START_MS;
+		let failure: Error | undefined;
+		let wake: (() => void) | undefined;
 		for (;;) {
 			try {
 				this.adopt(await attempt(this.options.socketPath));
@@ -61,12 +66,22 @@ export class DaemonClient {
 			} catch (error) {
 				const code = (error as NodeJS.ErrnoException).code ?? "";
 				if (!RETRYABLE.has(code)) throw error;
+				if (failure) throw failure;
 				if (Date.now() >= deadline) throw new Error(`voice daemon did not start (${code})`);
 				if (!spawned) {
 					spawned = true;
-					this.options.spawnDaemon();
+					this.options.spawnDaemon((error) => {
+						failure = error;
+						wake?.();
+					});
 				}
-				await new Promise((done) => setTimeout(done, delay));
+				await new Promise<void>((done) => {
+					const timer = setTimeout(done, delay);
+					wake = () => {
+						clearTimeout(timer);
+						done();
+					};
+				});
 				delay = Math.min(RETRY_MAX_MS, delay * 2);
 			}
 		}

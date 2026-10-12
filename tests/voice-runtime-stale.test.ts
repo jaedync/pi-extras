@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readTiers, writeTiers, type ProvisionOptions } from "../lib/voice/provision.ts";
+import { DaemonClient } from "../lib/voice/client.ts";
 
 const home = mkdtempSync(join(tmpdir(), "voice-stale-"));
 process.env.PI_VOICE_HOME = home;
@@ -124,6 +125,17 @@ test("choosing a model keeps what setup wrote while the menu was open", async ()
 	} finally {
 		handlers.get("session_shutdown")!({}, ctx);
 	}
+});
+
+// The connect timeout is 20 s; a spawn that already failed has nothing to wait for.
+test("a daemon spawn that fails ends the connect wait at once with its cause", async () => {
+	const client = new DaemonClient({
+		socketPath: join(home, "no-daemon.sock"),
+		spawnDaemon: (failed) => setTimeout(() => failed(new Error("voice daemon could not start: EACCES")), 30),
+	});
+	const started = Date.now();
+	await assert.rejects(client.connect(), /could not start: EACCES/);
+	assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
 });
 
 test.after(() => rmSync(home, { recursive: true, force: true }));

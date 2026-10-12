@@ -276,8 +276,6 @@ class VoiceRuntime {
 	private timer?: ReturnType<typeof setInterval>;
 	/** Set by dispose: the session's ctx may be stale from then on. */
 	private disposed = false;
-	/** Why the last daemon spawn failed, for the connect error. */
-	private spawnError?: string;
 
 	constructor(ctx: ExtensionContext, useBorder: boolean, requestRender: () => void, onShown: (shown: boolean) => void = () => {}) {
 		this.ctx = ctx;
@@ -298,18 +296,13 @@ class VoiceRuntime {
 			onFinish: (failure, refused) => this.onSetupFinished(failure, refused),
 			onCallbackError: (error) => this.logError("setup callback", error),
 		});
-		this.client = new DaemonClient({ socketPath: join(this.home, "daemon.sock"), spawnDaemon: () => this.spawnDaemon() });
+		this.client = new DaemonClient({ socketPath: join(this.home, "daemon.sock"), spawnDaemon: (failed) => this.spawnDaemon(failed) });
 		const link: DaemonLink = {
 			onEvent: () => {},
 			onClose: () => {},
 			connect: async () => {
 				this.pythonPath = await this.setup.ready();
-				this.spawnError = undefined;
-				try {
-					await this.client.connect();
-				} catch (error) {
-					throw this.spawnError ? new Error(`voice daemon could not start: ${this.spawnError} (see daemon.log)`) : error;
-				}
+				await this.client.connect();
 			},
 			send: (message) => this.client.send(message),
 		};
@@ -370,8 +363,8 @@ class VoiceRuntime {
 		return { state: this.view, setup };
 	}
 
-	private spawnDaemon(): void {
-		spawnVoiceDaemon(this.pythonPath, this.home, (message) => (this.spawnError = message));
+	private spawnDaemon(failed: (error: Error) => void): void {
+		spawnVoiceDaemon(this.pythonPath, this.home, (message) => failed(new Error(`voice daemon could not start: ${message} (see daemon.log)`)));
 	}
 
 	/**
