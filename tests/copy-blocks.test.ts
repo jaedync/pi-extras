@@ -67,6 +67,44 @@ test("source blocks keep tabs, fence indentation rules and quote paragraphs", ()
 	assert.deepEqual(sourceBlocks("```\n> not a quote\n```"), [{ kind: "code", text: "> not a quote" }]);
 });
 
+test("source blocks follow Pi's Markdown rules, so block numbers match the cards", () => {
+	const inline = "```bash npm test``` runs the tests.\n\nFirst:\n\n```sh\nnpm ci\n```\n\nThen:\n\n```sh\nnpm test\n```";
+	assert.deepEqual(sourceBlocks(inline), [{ kind: "code", text: "npm ci" }, { kind: "code", text: "npm test" }], "a backtick in a backtick fence's info string makes inline code, not a fence");
+	const continued = "Paragraph\n    ```\n    not code\n    ```\nmore\n\n```\nreal\n```";
+	assert.deepEqual(sourceBlocks(continued), [{ kind: "code", text: "real" }], "lines indented 4 spaces after a paragraph continue it");
+	assert.deepEqual(sourceBlocks("intro\n\n    four spaces\n    of code\n\n```\nfenced\n```"), [
+		{ kind: "code", text: "four spaces\nof code" },
+		{ kind: "code", text: "fenced" },
+	], "Pi draws an indented code block as a card too");
+	assert.deepEqual(sourceBlocks("````\nkeep\n```\nstill code\n````"), [{ kind: "code", text: "keep\n```\nstill code" }], "a shorter fence does not close a longer one");
+	assert.deepEqual(sourceBlocks("```\nx\n```  \nafter"), [{ kind: "code", text: "x" }], "a closing fence may have trailing spaces");
+	assert.deepEqual(sourceBlocks("> a\n> b\nlazy line\n\n```\nx\n```"), [
+		{ kind: "quote", text: "a\nb\nlazy line" },
+		{ kind: "code", text: "x" },
+	], "a lazy line continues its quote");
+	assert.deepEqual(sourceBlocks("```\nstreaming\n``"), [{ kind: "code", text: "streaming" }], "a closing fence that is still arriving is not code, as Pi trims it");
+	assert.deepEqual(sourceBlocks("```\nfirst\n\t```\nsecond\n```"), [{ kind: "code", text: "first" }, { kind: "code", text: "" }], "Pi expands a tab to three spaces, so this fence closes and the last one opens");
+	assert.deepEqual(sourceBlocks("```go\n\tx := 1\n```"), [{ kind: "code", text: "\tx := 1" }], "a tab Pi reads the same way is kept");
+});
+
+test("source blocks and Pi's drawn blocks agree in number, kind and code", () => {
+	const replies = [
+		"```bash npm test``` runs the tests.\n\n```sh\nnpm ci\n```\n\n> said\n\n```sh\nnpm test\n```",
+		"Paragraph\n    ```\n    not code\n    ```\nmore\n\n```\nreal\n```",
+		"intro\n\n    indented\n\n- item\n\n  ~~~\n  nested\n  ~~~\n\n> a\nlazy",
+		"```\nfirst\n\t```\nsecond\n```",
+		"````\nkeep\n```\n````\n\n```\nopen\n``",
+	];
+	for (const reply of replies) {
+		const recorder = newRecorder();
+		const raw = new Markdown(reply, 0, 0, taggedTheme(getMarkdownTheme(), recorder)).render(60);
+		const drawn = scan(raw).blocks.map((block) => block.kind);
+		const source = sourceBlocks(reply);
+		assert.deepEqual(source.map((block) => block.kind), drawn, JSON.stringify(reply));
+		assert.deepEqual(source.filter((block) => block.kind === "code").map((block) => block.text.replace(/\t/g, "   ")), recorder.pending!.map((code) => code.code), JSON.stringify(reply));
+	}
+});
+
 test("a reply's code blocks and quotes draw as cards with copy labels a click copies exactly", async () => {
 	const copy = host();
 	const undo = installCopyBlocks(copy);
