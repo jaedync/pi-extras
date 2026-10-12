@@ -109,7 +109,8 @@ the package. Removing it does not remove your credentials or change other packag
   that session is not current). The model guide is
   `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
   project. See below.
-- `PI_BASH_DEFAULT_TIMEOUT`: seconds, at most 2147483.647; `0` or `off` disables the injected timeout.
+- `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
+  A value above 2147483.647 (the longest timer Pi can set) falls back to 120.
   Explicit per-call timeouts are preserved.
 - `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
   transcript doesn't say. Anthropic replies report hour-long cache writes and
@@ -947,7 +948,7 @@ To time each step, Tool Display adds a marker line around each step before the
 command runs and removes the markers from the output before Pi or the model
 sees it. The model's command and the output it reads are unchanged. Commands
 Tool Display can't split safely (heredocs, `if` and `for` blocks, background
-`&`, `exit`, `set`, aliases, or a pipeline continued on the next line) run
+`&`, `exit`, `set`, `alias`, `eval`, or a pipeline continued on the next line) run
 exactly as written. See
 [security and privacy](docs/security.md#tool-display) for what the rewrite does.
 

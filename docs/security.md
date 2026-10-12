@@ -416,15 +416,16 @@ Agent scripts run in the same isolated V8 context as computer use.
 
 ## Shell Jobs
 
-Commands execute locally without stdin or a TTY, in the shell and environment of
-Pi's bash tool: `shellPath`, `shellCommandPrefix`, Pi's bin directory first in
-`PATH`, and the `PI_` session variables of this session, not of a parent Pi.
-Jobs use process groups so they
+Commands execute locally without stdin or a TTY. They use the shell and
+environment of Pi's bash tool. That is `shellPath` and `shellCommandPrefix`,
+Pi's bin directory first in `PATH`, and the `PI_` session variables of this
+session, not of a parent Pi. Jobs use process groups so they
 can be cancelled; do not detach again inside a job. When a job's command exits,
-the extension stops the processes still in its group, and the completion says
-how many it stopped. Logs live in temporary files
-and may contain whatever a command prints, including secrets. Bounded completion
-snippets and requested logs enter the conversation. Do not use these tools for
+the extension stops the processes still in its group. The completion then says
+that it stopped them, with their number when `pgrep` can count them. Logs live
+in temporary files and may contain whatever a command prints, including
+secrets. Bounded completion snippets and requested logs enter the conversation.
+Do not use these tools for
 commands that print credentials. A job's id, and its log file's name, is made
 from its title or command. `/reload` retains managed jobs; leaving the
 session stops them according to the extension lifecycle.
@@ -551,19 +552,28 @@ command in its place so it can time each step:
 - Each step is wrapped in a `{ }` group, not a subshell, so `cd` and variables
   carry over as before. The group prints a marker line before and after the
   step, and restores the exit status so `$?`, `&&` and `||` behave as written.
-  The restore never trips `set -e`, from Pi's `shellCommandPrefix` or anywhere
-  else, so errexit ends the script only where it would end it without the rewrite.
+  The restore cannot cause an exit under `set -e`, also when `set -e` comes from
+  Pi's `shellCommandPrefix`. Errexit stops the script only where it would stop it
+  without the rewrite.
+- Steps joined by `;` stay on one line, and steps on separate lines stay on
+  separate lines. Bash skips the rest of a line after an arithmetic error. With
+  this rule, the rewritten command skips the same commands.
 - A marker line is a record separator byte, `PI:`, a random nonce made for that
   call, and the step number and exit code. Markers are printed to stdout and
   removed from the output before Pi, the model or the row sees it. Only markers
   with the call's own nonce are removed, so a program that prints something
   similar is left alone.
 
-The splitter is conservative: heredocs, `if`, `for`, `while` and `case`
-blocks, background `&`, function definitions, `exit`, `set` and other commands
-that depend on the shell's own state, aliases, a pipeline continued on the next
-line, a step that ends in a bare backslash, and lists longer than 12 steps run
-exactly as written. `/tool-display chains off` turns the rewrite off, and
+The splitter is conservative. These commands run exactly as written:
+
+- heredocs, `if`, `for`, `while` and `case` blocks, and background `&`
+- function definitions, and `exit`, `set` and other commands that depend on the
+  shell's own state
+- any mention of `alias` or `eval`
+- a pipeline continued on the next line, and a step that ends in a bare backslash
+- lists longer than 12 steps
+
+`/tool-display chains off` turns the rewrite off, and
 `/tool-display off` or `PI_TOOL_DISPLAY=off` turns off Tool Display entirely.
 
 Because stdout and stderr arrive through separate pipes, a line of stderr can
