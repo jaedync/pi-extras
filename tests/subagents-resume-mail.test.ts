@@ -69,3 +69,17 @@ test("a helper's report to a waiting lead waits in its inbox when the lead's rel
 	assert.equal(lead.state, "interrupted");
 	assert.ok((lead.inbox ?? []).some((message) => message.includes("pool.ts:88")), "the helper's report waits for the lead's next run");
 });
+
+test("main resumes a grandchild as its parent would: a note to an idle one, and a message to a stopped or paused one", async () => {
+	const h = teamHarness();
+	h.team.restore([saved({ name: "lead" }), saved({ name: "idle-helper", parent: "lead", depth: 2 }),
+		saved({ name: "stopped-helper", parent: "lead", depth: 2, state: "stopped" }),
+		saved({ name: "paused-helper", parent: "lead", depth: 2, state: "interrupted", interruptionId: "i", interruptedBy: "quit" })]);
+	for (const name of ["idle-helper", "stopped-helper", "paused-helper"]) {
+		const sent = await h.team.send("main", name, "Please also check parser.ts");
+		assert.equal(sent.ok && sent.delivered, "resumed", name);
+	}
+	await flush();
+	assert.deepEqual(h.launched.map((launch) => launch.name).sort(), ["idle-helper", "paused-helper", "stopped-helper"]);
+	assert.equal(h.team.get("lead")!.state, "idle", "its parent stays as it was");
+});

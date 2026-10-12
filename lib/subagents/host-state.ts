@@ -347,7 +347,7 @@ async function restoreInterrupted(context: RestoreContext, reason: string): Prom
 	if (interrupted.length === 0) return;
 	const { actions, resumed } = await resumeAllowed(context, interrupted, reason);
 	const lines = interrupted.map((record) => `${record.name}: task ${short(record.task)}; last activity ${short(record.activity ?? record.state)}. ${actions.get(record.name)}`);
-	const notice = `Subagents restored after ${reason}. ${resumed.length ? "Auto-resuming eligible children." : "Not resumed."}\n${lines.join("\n")}\nPaused children require message from their parent or /subagents resume <name>.`;
+	const notice = `Subagents restored after ${reason}. ${resumed.length ? "Auto-resuming eligible children." : "Not resumed."}\n${lines.join("\n")}\nPaused children resume on a message from their parent or main, or on /subagents resume <name>.`;
 	ports.send({ customType: "subagent-restore", content: notice, display: true, details: { reason, resumed, names: interrupted.map((record) => record.name) } }, { triggerTurn: false });
 	for (const record of interrupted) team.markRecovery(record.name, { interruptionAnnounced: true });
 	context.index.save(team.list());

@@ -2,7 +2,7 @@
  * Where a message goes (team.ts `send`):
  * - To `main`: handed to `deliverToMain`, which decides whether it wakes.
  * - To a running child: steered in after its current tool call.
- * - To a finished child: a question or anything from its parent resumes it;
+ * - To a finished child: a question or anything from its parent or main resumes it;
  *   a sibling's note waits in its inbox for the next run.
  * - A reply to someone blocked on a question resolves that question instead.
  * The inbox, the answers a child is owed and what was steered into it unread
@@ -211,10 +211,12 @@ export class Routing {
 			host.patch(to, { inbox: [...(target.inbox ?? []), body] });
 			return { ok: true, delivered: "inbox", notice: `${to} is paused, and resumePolicy is "notify", so it reads this when it resumes. Message it again, or run /subagents resume ${to}, to resume it now.` };
 		}
-		const resumes = wakes || from === target.parent || from === USER;
-		// An ended run's session is on disk, so its parent or the user can take it up again; a peer can't.
+		// Main stands above every agent, so it resumes any of them as a parent does.
+		const above = from === target.parent || from === MAIN || from === USER;
+		const resumes = wakes || above;
+		// An ended run's session is on disk, so its parent, main or the user can take it up again; a peer can't.
 		const ended = target.state === "failed" || target.state === "stopped";
-		if (ended && !(from === target.parent || from === USER)) return { ok: false, error: `${to} has ${target.state}; only ${target.parent} or the user can resume it.` };
+		if (ended && !above) return { ok: false, error: `${to} has ${target.state}; only ${target.parent === MAIN ? "" : `${target.parent}, `}main or the user can resume it.` };
 		const place = target.cwd ?? target.worktree?.path;
 		const missing = resumes && !LIVE_STATES.has(target.state) && place ? workspaceError(place) : undefined;
 		if (missing) return { ok: false, error: missing };

@@ -26,7 +26,7 @@ interface RecoveryContext {
 
 export function recoveryDecision(record: AgentRecord, context: RecoveryContext): { resume: boolean; why: string } {
 	if (record.restoreError) return { resume: false, why: record.restoreError };
-	if (record.parent !== "main") return { resume: false, why: `Paused. Its parent ${record.parent} or /subagents resume ${record.name} can resume it.` };
+	if (record.parent !== "main") return { resume: false, why: `Paused. A message from its parent ${record.parent} or from main, or /subagents resume ${record.name}, resumes it.` };
 	if (context.moved) return { resume: false, why: "Paused. The workspace moved; inspect and resume explicitly in the current workspace." };
 	if (!context.allowed.has(record.model)) return { resume: false, why: "Paused. Its model is out of scope; explicit resume uses the current default model." };
 	if (record.orphaned || !record.interruptionId || !record.interruptedBy) return { resume: false, why: "Paused. Legacy and orphan interruptions require explicit resume." };

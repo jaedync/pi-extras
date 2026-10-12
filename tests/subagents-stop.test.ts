@@ -215,8 +215,8 @@ test("stopOrder puts agents that have not started first", () => {
 test("a refused message leaves the target's check as it was; a delivered one sets it", async () => {
 	const h = teamHarness({ maxDepth: 3 });
 	h.spawn("lead", { name: "lead" }); await flush();
-	h.spawn("leaf", { name: "leaf", parent: "lead" }); await flush();
-	h.lastCall("leaf").fail(new Error("boom")); await flush();
+	// Its workspace is gone, so a message can't resume it.
+	h.team.restore([restored({ name: "leaf", parent: "lead", depth: 2, state: "idle", cwd: "/nonexistent/pi-extras-test-workspace" })]);
 	const refused = await h.team.send("main", "leaf", "Retry.", { check: { command: "make", fixUntilPass: 2 } });
 	assert.equal(refused.ok, false);
 	assert.equal(h.team.get("leaf")!.check, undefined);
