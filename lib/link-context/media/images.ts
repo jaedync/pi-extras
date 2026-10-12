@@ -2,16 +2,23 @@
  * Images for the model: a post's photos, image links in posts and comments
  * (imgur, i.redd.it, direct files), and video thumbnails. Capped in count and
  * size, and fetched through the same checked redirects as every other request.
- * An image that fails to load stays in the text as a link.
+ * The type and pixel size come from the bytes; Pi's own resizeImage scales a
+ * large image down as Pi's read tool does. An image that fails to load stays
+ * in the text as a link.
  */
+import { resizeImage } from "@earendil-works/pi-coding-agent";
 import { deadline, PLAIN_UA, readBytes, request, type Fetcher } from "../http.ts";
 import type { ImageBlock } from "../types.ts";
 import { IMGUR_ID } from "../url.ts";
+import { sniffImage } from "./image-bytes.ts";
 
 export const MAX_IMAGES = 6;
 /** Base64 adds a third; this keeps each image under the 5 MB that providers accept for one image. */
 export const MAX_IMAGE_BYTES = 3_700_000;
-const TYPES = /^image\/(jpeg|png|webp|gif)\b/i;
+/** The side that resizeImage scales to by default, which Pi's read tool uses: providers refuse larger sides in requests with many images. */
+export const MAX_IMAGE_SIDE = 2000;
+/** Decoding needs 4 bytes a pixel; a small file can claim a huge size, so larger claims are never decoded. */
+export const MAX_DECODE_PIXELS = 50_000_000;
 const IMAGE_FILE = /\.(?:jpe?g|png|webp|gif)$/i;
 const IMAGE_HOSTS = new Set(["i.imgur.com", "i.redd.it", "preview.redd.it", "pbs.twimg.com", "media.giphy.com", "i.giphy.com"]);
 
@@ -48,16 +55,28 @@ export function imageLinks(text: string): string[] {
 	return [...new Set(found)];
 }
 
+/**
+ * The image for the model: JPEG, PNG, GIF or WebP by its bytes, scaled to fit
+ * the providers' limits. Without Pi's image library only an image already
+ * inside the limits is sent; anything else is dropped.
+ */
+export async function prepareImage(bytes: Buffer, resize: typeof resizeImage = resizeImage): Promise<ImageBlock | undefined> {
+	const header = sniffImage(bytes);
+	if (!header || header.width * header.height > MAX_DECODE_PIXELS) return undefined;
+	const resized = await resize(bytes, header.mimeType, { maxWidth: MAX_IMAGE_SIDE, maxHeight: MAX_IMAGE_SIDE });
+	if (resized) return { type: "image", data: resized.data, mimeType: resized.mimeType };
+	if (header.width > MAX_IMAGE_SIDE || header.height > MAX_IMAGE_SIDE) return undefined;
+	return { type: "image", data: bytes.toString("base64"), mimeType: header.mimeType };
+}
+
 async function one(url: string, fetcher: Fetcher | undefined, signal: AbortSignal): Promise<ImageBlock | undefined> {
 	const { response, url: final } = await request(sized(url), { agent: PLAIN_UA, headers: { Accept: "image/webp,image/jpeg,image/png,image/*;q=0.8" }, signal, fetcher });
-	const type = response.headers.get("content-type") ?? "";
-	// imgur answers a deleted image with a placeholder instead of an error.
-	if (!response.ok || !TYPES.test(type) || /\/removed\.png$/.test(final)) {
+	// imgur answers a deleted image with a placeholder instead of an error. The bytes decide the type, not the label.
+	if (!response.ok || /\/removed\.png$/.test(final)) {
 		void response.body?.cancel();
 		return undefined;
 	}
-	const bytes = await readBytes(response, MAX_IMAGE_BYTES);
-	return { type: "image", data: bytes.toString("base64"), mimeType: type.split(";")[0].trim().toLowerCase() };
+	return prepareImage(await readBytes(response, MAX_IMAGE_BYTES));
 }
 
 export async function fetchImages(urls: readonly string[], options: { fetcher?: Fetcher; signal?: AbortSignal; max?: number } = {}): Promise<ImageBlock[]> {

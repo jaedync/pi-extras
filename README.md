@@ -1049,6 +1049,9 @@ link into the prompt, and the agent can read it with one tool call.
 The photos of a post come back as images. Image links in a post or comment
 (imgur, `i.redd.it` and direct image files) also come back as images, up to 6
 images in one result. An imgur album needs imgur's API, so it stays a link.
+The tool gets the type and the size of each image from its bytes, not from the
+server's label. It sends only JPEG, PNG, GIF and WebP files of 3.7 MB or less,
+and it makes an image larger than 2000 pixels on a side smaller.
 
 A video result is text and one thumbnail. It has no frames, so a long video
 does not fill the context. The transcript ends with a hint: to see a moment

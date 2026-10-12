@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { sampleTimes, sheetColumns } from "../lib/link-context/media/frames.ts";
-import { sized } from "../lib/link-context/media/images.ts";
-import { imageLink, imageLinks } from "../lib/link-context/media/images.ts";
+import { sniffImage } from "../lib/link-context/media/image-bytes.ts";
+import { fetchImages, imageLink, imageLinks, prepareImage, sized } from "../lib/link-context/media/images.ts";
 import { asrPlan, bgutilDue, HELPER, packagesDue, PACKAGES, readState, toolEnv, writeState } from "../lib/link-context/media/provision.ts";
 import { clipFor, HOST_BLOCKED, keyName, formatTranscript, header, prunePulls, pullDir, pullVideo, sampleFor, thumbnailUrl, validTimes, videoComments, youtubeId, type VideoDeps, type VideoInfo } from "../lib/link-context/media/video.ts";
 import { writeFileSync } from "node:fs";
+import { gifHeader, jpegHeader, png, pngClaiming, webpHeader } from "./support/image-bytes.ts";
 import { context } from "./support/link-fetch.ts";
 
 test("frame times are spread evenly and centred in their slots", () => {
@@ -317,4 +318,33 @@ test("video: an abort during the transcript stops the pull instead of reporting 
 	} finally {
 		rmSync(home, { recursive: true, force: true });
 	}
+});
+
+test("images: the type and size come from the bytes, not the server's label", () => {
+	assert.deepEqual(sniffImage(png(3, 2)), { mimeType: "image/png", width: 3, height: 2 });
+	assert.deepEqual(sniffImage(jpegHeader(640, 480)), { mimeType: "image/jpeg", width: 640, height: 480 });
+	assert.deepEqual(sniffImage(gifHeader(5, 7)), { mimeType: "image/gif", width: 5, height: 7 });
+	assert.deepEqual(sniffImage(webpHeader(1024, 768)), { mimeType: "image/webp", width: 1024, height: 768 });
+	assert.equal(sniffImage(Buffer.from("<html><body>Access denied</body></html>")), undefined);
+	assert.equal(sniffImage(Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBPVP8 "), Buffer.alloc(20)])), undefined, "a WebP with no readable size");
+	assert.equal(sniffImage(Buffer.from([0xff, 0xd8, 0xff, 0xf7, 0, 0])), undefined, "JPEG-LS");
+	assert.equal(sniffImage(new Uint8Array(10)), undefined);
+});
+
+test("images: a mislabelled image is sent as its real type, a fake one is dropped, a huge one is scaled or dropped", async () => {
+	const bodies: Record<string, Buffer> = {
+		"https://cdn.test/a.jpg": png(4, 4),
+		"https://cdn.test/b.jpg": Buffer.from("<html><body>Access denied</body></html>"),
+		"https://cdn.test/wide.png": png(3000, 10),
+		"https://cdn.test/bomb.png": pngClaiming(20_000, 20_000),
+	};
+	const fetcher = (async (url: string) => new Response(new Uint8Array(bodies[String(url)]), { headers: { "content-type": "image/jpeg" } })) as unknown as typeof fetch;
+	const images = await fetchImages(Object.keys(bodies), { fetcher });
+	assert.equal(images.length, 2);
+	assert.equal(images[0].mimeType, "image/png");
+	const wide = sniffImage(Buffer.from(images[1].data, "base64"));
+	assert.ok(wide && wide.width <= 2000 && wide.height >= 1, `scaled with Pi's resizeImage: ${JSON.stringify(wide)}`);
+	// Without Photon, an image inside every limit still goes as it is, and a larger one does not.
+	assert.equal((await prepareImage(png(4, 4), async () => null))?.mimeType, "image/png");
+	assert.equal(await prepareImage(png(3000, 10), async () => null), undefined);
 });

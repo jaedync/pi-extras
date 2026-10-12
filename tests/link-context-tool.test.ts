@@ -5,6 +5,7 @@ import { cacheKey, callLine, clean, page, parseTimes, registerLinkTool, resolveO
 import { fetchImages, MAX_IMAGE_BYTES } from "../lib/link-context/media/images.ts";
 import { pull, type PullDeps } from "../lib/link-context/pull.ts";
 import type { Pulled } from "../lib/link-context/types.ts";
+import { png as pngBytes } from "./support/image-bytes.ts";
 import { context, fakeFetch, html, json } from "./support/link-fetch.ts";
 
 const plain = { fg: (_key: string, text: string) => text, bold: (text: string) => text } as never;
@@ -91,7 +92,7 @@ test("the tool pages long results from its cache and sends images only on the fi
 });
 
 test("image fetches check every redirect, skip imgur's placeholder and cap the size", async () => {
-	const png = (bytes = 10) => new Response(new Uint8Array(bytes), { headers: { "content-type": "image/png" } });
+	const png = (padding = 0) => new Response(Buffer.concat([pngBytes(2, 2), Buffer.alloc(padding)]), { headers: { "content-type": "image/png" } });
 	const routes = fakeFetch(
 		(url) => (url === "https://e.test/ok.png" ? png() : undefined),
 		(url) => (url === "https://e.test/hop.png" ? new Response(null, { status: 302, headers: { location: "http://10.0.0.5/cam.jpg" } }) : undefined),
