@@ -190,12 +190,22 @@ export function validWorktree(value: unknown): value is Worktree {
 
 const quote = (value: string): string => /^[a-zA-Z0-9_./-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 
+/** Runs `count` against a temporary index of the worktree's files as they are, so the child's own staging stays as it was. */
+function withTemporaryIndex<T>(path: string, paths: readonly string[], count: (index: string) => T): T {
+	const temporary = mkdtempSync(join(tmpdir(), "pi-subagent-index-"));
+	const index = join(temporary, "index");
+	try {
+		git(path, ["read-tree", "HEAD"], index);
+		git(path, ["add", "-A", ...paths], index);
+		return count(index);
+	} finally { rmSync(temporary, { recursive: true, force: true }); }
+}
+
 export function worktreeFooter(worktree: Worktree): string {
 	const { path, branch, base } = worktree;
 	try {
 		const paths = dependencyPaths(path, base);
-		git(path, ["add", "-A", ...paths]);
-		const files = git(path, ["diff", "--cached", "--name-only", "-z", base, ...paths]).split("\0").filter(Boolean).length;
+		const files = withTemporaryIndex(path, paths, (index) => git(path, ["diff", "--cached", "--name-only", "-z", base, ...paths], index).split("\0").filter(Boolean).length);
 		const commits = git(path, ["rev-list", "--count", `${base}..HEAD`]).trim();
 		const root = sourceCheckout(path);
 		if (root === undefined) throw new Error("The saved worktree path has no source checkout.");
