@@ -222,6 +222,19 @@ test("color codes whose ESC was stripped upstream don't show as text; ordinary b
 	assert.equal(cleanOutput("items[0] = [1, 2] and [see docs]"), "items[0] = [1, 2] and [see docs]");
 });
 
+test("8-bit C1 controls and the sequences they start never reach the terminal", () => {
+	for (let code = 0x80; code <= 0x9f; code++) {
+		assert.doesNotMatch(cleanOutput(`a${String.fromCharCode(code)}b`), /[\u0080-\u009f]/, code.toString(16));
+	}
+	assert.equal(cleanOutput("a\u009b2Jb"), "ab");
+	assert.equal(cleanOutput("x\u009b31mred\u009b0m"), "xred");
+	assert.equal(cleanOutput("x\u009d0;pwned\u009cy"), "xy");
+	assert.equal(cleanOutput("x\u0090q1\u009cy"), "xy");
+	const [line] = gutterLines(theme, ["x\u009b2J\u009d0;pwned\u009c done"], 40);
+	assert.doesNotMatch(line!, /[\u0080-\u009f]/);
+	assert.equal(plain(line!).trimEnd(), `  ${GUTTER} x done`);
+});
+
 test("a gutter line never runs past a terminal narrower than the gutter", () => {
 	for (const width of [1, 2, 3, 4, 5]) for (const line of gutterLines(theme, ["output"], width)) assert.ok(visibleWidth(line) <= width, `${width}: ${line}`);
 });

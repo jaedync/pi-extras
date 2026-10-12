@@ -96,7 +96,14 @@ export function jobBand(theme: BandTheme, spec: JobBandSpec): string {
 	return paintLine(theme, palette, { width: spec.width, left: [margin, ...body, ...facts, ...tail], indent: 0, ...(bgAt ? { bgAt } : {}), fallbackBg: fallbackKey(spec.phase) });
 }
 
-const CONTROLS = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
+// C0 and C1 controls: a terminal acts on the 8-bit forms (U+0080-U+009F) as it does on ESC sequences.
+const CONTROLS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
+/**
+ * The 8-bit forms of CSI (U+009B) and of the string sequences OSC, DCS, SOS,
+ * PM and APC, which run to ST (U+009C) or BEL. Removed whole, so no parameters
+ * are left behind as text.
+ */
+const C1_SEQUENCE = /\u009b[0-?]*[ -/]*[@-~]|[\u0090\u0098\u009d-\u009f][^\u0007\u009c]*[\u0007\u009c]?/g;
 /**
  * What is left of a color or erase sequence after its ESC was stripped
  * upstream (job completions carry text sanitized for the model): `[32m`,
@@ -104,7 +111,7 @@ const CONTROLS = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
  */
 const ORPHANED_SEQUENCE = /\[[0-9;?]*[mKJ]/g;
 /** Output as it reads on a terminal: colors and controls gone, one line. */
-export const cleanOutput = (line: string): string => stripTerminalSequences(line).replace(CONTROLS, "").replace(ORPHANED_SEQUENCE, "").replace(/\s+$/, "");
+export const cleanOutput = (line: string): string => stripTerminalSequences(line).replace(C1_SEQUENCE, "").replace(CONTROLS, "").replace(ORPHANED_SEQUENCE, "").replace(/\s+$/, "");
 
 /**
  * Output as a terminal leaves it: each line shows what its last carriage
