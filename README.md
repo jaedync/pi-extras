@@ -1354,7 +1354,9 @@ be an agent of the team. A name is refused when that agent can't end before
 the agent that starts the child, because each would wait for the other.
 Examples are the agent that starts the child, an agent above it, and a queued
 child that waits for one of these. `index.json` keeps the names, so a restore
-or a `/reload` keeps the wait. Only the first run waits; a resume does not. A
+or a `/reload` keeps the wait. A restore resumes a queued child after the
+agents it waits for. So when one of these agents resumes too, the child waits
+for it again. An agent that stays paused counts as ended. Only the first run waits; a resume does not. A
 stop removes a queued child before it starts. When a run ends normally and a
 queued child of the same parent waits for it, its report does not wake the
 parent. The parent reads it with the report of the queued child. A run that

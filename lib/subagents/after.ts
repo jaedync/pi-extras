@@ -105,6 +105,27 @@ export function waitingFor(record: AgentRecord, get: Lookup): string[] {
 	return record.after.filter((name) => live(get(name)));
 }
 
+/**
+ * `records` in an order where a spawn that has not run comes after the agents
+ * among them that its first run waits for. Resumed in this order, a spawn
+ * finds each of those agents live again when it resumes too, and waits.
+ */
+export function afterOrder<T extends Pick<AgentRecord, "name" | "runs" | "after">>(records: readonly T[]): T[] {
+	const byName = new Map(records.map((record) => [record.name, record]));
+	const ordered: T[] = [];
+	const placed = new Set<string>();
+	const place = (record: T, path: ReadonlySet<string>): void => {
+		// A loop of after names is refused at spawn; should one be here anyway, the index's order breaks it.
+		if (placed.has(record.name) || path.has(record.name)) return;
+		const before = record.runs === 0 ? (record.after ?? []).map((name) => byName.get(name)).filter((found): found is T => found !== undefined) : [];
+		for (const other of before) place(other, new Set([...path, record.name]));
+		placed.add(record.name);
+		ordered.push(record);
+	};
+	for (const record of records) place(record, new Set());
+	return ordered;
+}
+
 /** Queued only because an agent it names has not ended. */
 export const heldAfter = (record: AgentRecord, get: Lookup): boolean => record.state === "queued" && waitingFor(record, get).length > 0;
 

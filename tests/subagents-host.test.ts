@@ -1,6 +1,6 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import type { HostState, ParkedHost } from "../lib/subagents/contract.ts";
@@ -428,4 +428,45 @@ test("under resumePolicy notify, an answer is held only while the child is still
 	const later = await reopened.team.send("main", name, "One more thing.");
 	assert.equal(later.ok && later.delivered, "resumed", "not held in its inbox as if it were still paused");
 	assert.equal(later.ok && later.notice, undefined);
+});
+
+/** A spawn that waits for impl, both interrupted by a /reload, with the index listing them in `order` and impl's record changed by `impl`. */
+async function heldAcrossReload(order: "spawn first" | "impl first", impl: Record<string, unknown> = {}) {
+	const h = setup();
+	const host = h.open(h.portsFor("first"));
+	h.spawn(host, "Implement", { name: "impl" });
+	h.spawn(host, "Review", { name: "review", after: ["impl"] });
+	await tick();
+	await host.close("reload");
+	const saved = JSON.parse(readFileSync(h.indexFile, "utf8"));
+	const records = saved.records.map((record: { name: string }) => (record.name === "impl" ? { ...record, ...impl } : record));
+	writeFileSync(h.indexFile, JSON.stringify({ ...saved, records: order === "spawn first" ? records.reverse() : records }));
+	const next = h.portsFor("next");
+	const reopened = h.open(next);
+	cleanups.push(() => reopened.close());
+	await reopened.restore("reload");
+	await sleep(20);
+	return { h, next, reopened };
+}
+
+for (const order of ["spawn first", "impl first"] as const) {
+	test(`after a restore, a spawn waits for an after agent that resumes too, in whatever order the index lists them (${order})`, async () => {
+		const { h, next, reopened } = await heldAcrossReload(order);
+		assert.deepEqual(next.launched, ["impl"], "only impl starts");
+		assert.equal(reopened.team.get("review")?.state, "queued");
+		assert.equal(reopened.team.get("review")?.activity, "after impl");
+		const notice = next.sent.find(({ message }) => message.customType === "subagent-restore")!.message.content;
+		assert.match(notice, order === "spawn first" ? /review: task Review[\s\S]*impl: task Implement/ : /impl: task Implement[\s\S]*review: task Review/, "the notice keeps the index's order");
+		h.call("impl").finish("Implemented.");
+		await sleep(20);
+		assert.deepEqual(next.launched, ["impl", "review"]);
+		assert.match(h.call("review").text, /- impl finished\./);
+	});
+}
+
+test("after a restore, an after agent that stays paused still counts as ended", async () => {
+	const { h, next, reopened } = await heldAcrossReload("spawn first", { autoResumeAttempts: 1 });
+	assert.equal(reopened.team.get("impl")?.state, "interrupted", "its one automatic resume was used");
+	assert.deepEqual(next.launched, ["review"]);
+	assert.match(h.call("review").text, /- impl was interrupted; that counts as ended/);
 });

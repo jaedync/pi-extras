@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { busyInGroup } from "./after.ts";
+import { afterOrder, busyInGroup } from "./after.ts";
 import { stillWorking } from "./status.ts";
 import { HOST_VERSION, type HeldMail, type HostActivity, type HostPorts, type HostState } from "./contract.ts";
 import type { SubagentsConfig } from "./config.ts";
@@ -25,7 +25,7 @@ import type { createSessionScanner } from "./session-scan.ts";
 import { installSignalRecorder } from "./signals.ts";
 import { Team } from "./team.ts";
 import { ToolActivity } from "./tool-activity.ts";
-import { LIVE_STATES } from "./types.ts";
+import { type AgentRecord, LIVE_STATES } from "./types.ts";
 
 export interface HostInputs {
 	readonly generation: number;
@@ -328,29 +328,41 @@ interface RestoreContext {
 
 /** Announces children an earlier shutdown interrupted, once, and resumes those the policy allows. */
 async function restoreInterrupted(context: RestoreContext, reason: string): Promise<void> {
-	const { team, config, ports } = context;
+	const { team, ports } = context;
 	const interrupted = team.list().filter((record) => record.state === "interrupted" && !record.interruptionAnnounced);
 	if (interrupted.length === 0) return;
-	const allowed = new Set(ports.models().allowed.map((choice) => choice.ref));
-	const lines: string[] = [];
-	const resumed: string[] = [];
-	for (const record of interrupted) {
-		const decision = recoveryDecision(record, { reason, policy: config.resumePolicy, shutdown: context.previousShutdown, shutdownOwner: context.previousOwner,
-			owner: context.owner, allowed, moved: context.place.moved() });
-		if (decision.resume) team.markRecovery(record.name, { autoResumeAttempts: (record.autoResumeAttempts ?? 0) + 1, interruptedBy: undefined });
-		let action = decision.why;
-		if (decision.resume) {
-			const sent = await team.send(MAIN, record.name, "Continue your interrupted task and report the outcome.", { automatic: true });
-			if (sent.ok && sent.delivered === "resumed") resumed.push(record.name);
-			else action = `Paused: ${sent.ok ? sent.delivered : sent.error}`;
-		}
-		lines.push(`${record.name}: task ${short(record.task)}; last activity ${short(record.activity ?? record.state)}. ${action}`);
-	}
+	const { actions, resumed } = await resumeAllowed(context, interrupted, reason);
+	const lines = interrupted.map((record) => `${record.name}: task ${short(record.task)}; last activity ${short(record.activity ?? record.state)}. ${actions.get(record.name)}`);
 	const notice = `Subagents restored after ${reason}. ${resumed.length ? "Auto-resuming eligible children." : "Not resumed."}\n${lines.join("\n")}\nPaused children require message from their parent or /subagents resume <name>.`;
 	ports.send({ customType: "subagent-restore", content: notice, display: true, details: { reason, resumed, names: interrupted.map((record) => record.name) } }, { triggerTurn: false });
 	for (const record of interrupted) team.markRecovery(record.name, { interruptionAnnounced: true });
 	context.index.save(team.list());
 	ports.notify(notice, "warning");
+}
+
+/**
+ * Resumes the children the policy allows, each decided before any resumes. A
+ * spawn that waits for its after agents resumes after those that resume too
+ * (after.ts `afterOrder`), so it waits for them again; one that stays paused
+ * counts as ended. Returns what became of each, and which resumed.
+ */
+async function resumeAllowed(context: RestoreContext, interrupted: readonly AgentRecord[], reason: string): Promise<{ actions: Map<string, string>; resumed: string[] }> {
+	const { team, config, ports } = context;
+	const allowed = new Set(ports.models().allowed.map((choice) => choice.ref));
+	const decisions = new Map(interrupted.map((record) => [record.name, recoveryDecision(record, { reason, policy: config.resumePolicy,
+		shutdown: context.previousShutdown, shutdownOwner: context.previousOwner, owner: context.owner, allowed, moved: context.place.moved() })]));
+	const actions = new Map<string, string>();
+	const resumed: string[] = [];
+	for (const record of afterOrder(interrupted)) {
+		const decision = decisions.get(record.name)!;
+		actions.set(record.name, decision.why);
+		if (!decision.resume) continue;
+		team.markRecovery(record.name, { autoResumeAttempts: (record.autoResumeAttempts ?? 0) + 1, interruptedBy: undefined });
+		const sent = await team.send(MAIN, record.name, "Continue your interrupted task and report the outcome.", { automatic: true });
+		if (sent.ok && sent.delivered === "resumed") resumed.push(record.name);
+		else actions.set(record.name, `Paused: ${sent.ok ? sent.delivered : sent.error}`);
+	}
+	return { actions, resumed };
 }
 
 const short = (text: string) => text.replace(/\s+/g, " ").slice(0, 300);
