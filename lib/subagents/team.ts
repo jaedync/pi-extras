@@ -24,6 +24,7 @@ import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText, resumeWarning } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
+import { checkActivity, checkError, fixPrompt, mergeCheck, runCheck } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
 import { bashChangeNotes, EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
@@ -35,7 +36,7 @@ import { WorkTrees } from "./work-trees.ts";
 import { placeChild } from "./placement.ts";
 import { workspaceError } from "./worktree.ts";
 import {
-	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
+	ACTIVE_STATES, type AgentRecord, type CheckUpdate, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
 } from "./types.ts";
 
 export interface TeamOptions {
@@ -97,6 +98,10 @@ export class Team implements HostTeam {
 	private readonly heldAnswers = new Set<string>();
 	/** Runs moving to a fallback model, with what they had used of their budget: the same run goes on. */
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
+	/** Checks running now, which a stop or a close aborts with their process groups. */
+	private readonly checking = new Map<string, AbortController>();
+	/** Fix rounds each run has had; a run that goes on on a fallback model keeps its count. */
+	private readonly fixRounds = new Map<string, number>();
 	private readonly budgets: RunBudgets;
 	private readonly locks = new EditLocks(this);
 	private readonly workTrees = new WorkTrees();
@@ -169,6 +174,8 @@ export class Team implements HostTeam {
 		const badAfter = request.after?.length ? afterError(request.after, request.parent, this.lookup, () => this.knownNames()) : undefined;
 		if (badAfter) return { ok: false, error: badAfter };
 		const after = request.after?.length ? [...new Set(request.after)] : undefined;
+		const badCheck = request.check ? checkError(request.check, { readOnly: request.readOnly || parent?.readOnly === true }) : undefined;
+		if (badCheck) return { ok: false, error: badCheck };
 		const maxMinutes = request.maxMinutes ?? this.options.runBudget?.minutes;
 		const maxCost = request.maxCost ?? this.options.runBudget?.cost;
 		const placed = placeChild(request, parent ?? null, name, { ...(this.options.cwd ? { cwd: this.options.cwd } : {}), checkout: () => this.sessionCheckout() });
@@ -189,6 +196,7 @@ export class Team implements HostTeam {
 			...(maxMinutes !== undefined ? { maxMinutes } : {}),
 			...(maxCost !== undefined ? { maxCost } : {}),
 			...(after ? { after } : {}),
+			...(request.check ? { check: mergeCheck(request.check) } : {}),
 		};
 		this.put(record);
 		this.queue.push(name);
@@ -231,9 +239,11 @@ export class Team implements HostTeam {
 		if (record?.blocking) this.patch(name, { blocking: false });
 	}
 
-	async send(from: string, to: string, text: string, options: { expectReply?: boolean; signal?: AbortSignal; automatic?: boolean } = {}): Promise<SendResult> {
+	async send(from: string, to: string, text: string, options: { expectReply?: boolean; signal?: AbortSignal; automatic?: boolean; check?: CheckUpdate } = {}): Promise<SendResult> {
 		if (this.closed) return { ok: false, error: "The session is shutting down." };
 		if (to === from) return { ok: false, error: "That is you." };
+		const badCheck = options.check ? this.setCheck(from, to, options.check) : undefined;
+		if (badCheck) return { ok: false, error: badCheck };
 		if (to === EVERYONE) return this.broadcast(from, text, options.expectReply === true);
 		// The user can answer any question, whoever it was put to.
 		const open = this.questions.of(to);
@@ -291,6 +301,21 @@ export class Team implements HostTeam {
 		return this.questions.ask(from, to, options.signal);
 	}
 
+	/**
+	 * A message's check replaces the stored one, and applies when the run under
+	 * way or the next one ends. Only main or an agent above `to` may set it: a
+	 * check runs in `to`'s directory and sandbox, which a peer must not choose.
+	 */
+	private setCheck(from: string, to: string, update: CheckUpdate): string | undefined {
+		const target = this.records.get(to);
+		if (!target) return `No agent named ${to}. ${this.knownNames()}`;
+		if (from !== MAIN && !this.under(to, from)) return `Only main or an agent ${to} works for can set its check.`;
+		const error = checkError(update, target);
+		if (error) return error;
+		this.patch(to, { check: mergeCheck(update, target.check) });
+		return undefined;
+	}
+
 	/** The child's messages so far; empty before it starts. */
 	messages(name: string): readonly unknown[] {
 		const record = this.records.get(name);
@@ -321,6 +346,7 @@ export class Team implements HostTeam {
 		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
 		this.resumePrompts.delete(name);
 		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
+		this.checking.get(name)?.abort();
 		const handle = this.sessions.get(name);
 		this.ending.add(name);
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.sessions.runText(name), ...this.unreadLeft(name) });
@@ -370,6 +396,7 @@ export class Team implements HostTeam {
 		if (this.closing) return this.closing;
 		this.interrupt(reason, owner);
 		this.budgets.clear();
+		for (const check of this.checking.values()) check.abort();
 		this.sessions.stopTimers();
 		return this.closing = (async () => {
 			await Promise.all([
@@ -503,19 +530,62 @@ export class Team implements HostTeam {
 		const continued = this.continuing.delete(name);
 		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined });
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
+		if (!continued) this.fixRounds.set(name, 0);
 		try {
-			let next: string | null = text;
-			while (next !== null) {
-				await handle.prompt(next);
-				if (this.closed || this.records.get(name)?.state === "stopped") return;
-				const late = [...handle.takeQueued(), ...this.takeInbox(name)];
-				next = late.length > 0 ? late.join("\n\n") : null;
-			}
+			if (!(await this.work(name, handle, text))) return;
 		} catch (error) {
-			if (!this.closed && this.records.get(name)?.state !== "stopped") this.failOrFallBack(name, error);
+			if (!this.gone(name)) this.failOrFallBack(name, error);
 			return;
 		}
 		this.settle(name, this.sessions.runText(name));
+	}
+
+	/**
+	 * Prompts until the run has read everything sent to it and, when it would
+	 * end idle, its check passed or used its fix rounds (checks.ts). False when
+	 * it was stopped or the team closed meanwhile.
+	 */
+	private async work(name: string, handle: ChildHandle, text: string): Promise<boolean> {
+		let next: string | null = text;
+		while (next !== null) {
+			await handle.prompt(next);
+			if (this.gone(name)) return false;
+			next = this.late(name, handle);
+			if (next !== null || this.waitsFor(name)) continue;
+			const fix = await this.check(name, handle);
+			if (this.gone(name)) return false;
+			// Mail that came during the check goes first; the check runs again after it.
+			next = this.late(name, handle) ?? fix;
+		}
+		return true;
+	}
+
+	private gone(name: string): boolean {
+		return this.closed || this.records.get(name)?.state === "stopped";
+	}
+
+	/** Steering that came too late for the prompt that just ended, and the inbox, as the run's next prompt. */
+	private late(name: string, handle: ChildHandle): string | null {
+		const late = [...handle.takeQueued(), ...this.takeInbox(name)];
+		return late.length > 0 ? late.join("\n\n") : null;
+	}
+
+	/** Runs the check, if there is one: the prompt of a fix round when it failed and the run has one left. */
+	private async check(name: string, handle: ChildHandle): Promise<string | null> {
+		const record = this.records.get(name)!;
+		if (!record.check) return null;
+		const controller = new AbortController();
+		const fixes = this.fixRounds.get(name) ?? 0;
+		this.checking.set(name, controller);
+		this.patch(name, { activity: checkActivity(record.check.command), work: "tool" });
+		let result;
+		try { result = await runCheck(handle, record, fixes + 1, controller.signal, this.now); }
+		finally { this.checking.delete(name); }
+		if (this.gone(name)) return null;
+		this.patch(name, { checked: result, ...WAITING_FOR_MODEL });
+		if (result.exitCode === 0 || fixes >= record.check.fixUntilPass) return null;
+		this.fixRounds.set(name, fixes + 1);
+		return fixPrompt(result);
 	}
 
 	/**
@@ -546,13 +616,18 @@ export class Team implements HostTeam {
 		return { minutes: record.maxMinutes ?? this.options.runBudget?.minutes, cost: record.maxCost ?? this.options.runBudget?.cost };
 	}
 
+	/** What a run that ends now would still wait for: its live subagents, or answers it is owed; undefined when nothing. */
+	private waitsFor(name: string): string | undefined {
+		if (this.list().some((entry) => entry.parent === name && LIVE_STATES.has(entry.state))) return "waiting on its subagents";
+		const owing = this.records.get(name)?.owed ?? [];
+		return owing.length > 0 ? `waiting for ${owing.join(", ")} to answer` : undefined;
+	}
+
 	/** A run that ended normally read everything steered into it, or took it as its last prompt. */
 	private settle(name: string, report: string | undefined): void {
-		const hasLiveChildren = this.list().some((entry) => entry.parent === name && LIVE_STATES.has(entry.state));
-		const owing = this.records.get(name)?.owed ?? [];
-		if (hasLiveChildren || owing.length > 0) {
+		const activity = this.waitsFor(name);
+		if (activity) {
 			// Its report waits for what it is still owed; that arrival resumes it.
-			const activity = hasLiveChildren ? "waiting on its subagents" : `waiting for ${owing.join(", ")} to answer`;
 			this.patch(name, { state: "waiting", activity, report, unread: undefined });
 			this.pump();
 			return;
@@ -605,6 +680,7 @@ export class Team implements HostTeam {
 	private finish(name: string): void {
 		this.ending.delete(name);
 		this.continuing.delete(name);
+		this.fixRounds.delete(name);
 		// Answers still owed to it die with its run; a message resumes it to ask again.
 		const record = saveReport({ ...this.records.get(name)!, owed: undefined }, this.options.warn ?? console.warn);
 		this.sessions.endRun(name);

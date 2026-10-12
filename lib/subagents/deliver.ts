@@ -31,6 +31,7 @@
  * wakes main once the compaction is done (`remind`).
  */
 import type { HeldMail, HostMail } from "./contract.ts";
+import { reportWithCheck } from "./checks.ts";
 import { noteText, questionText, reminderText, reportText } from "./format.ts";
 import type { AgentRecord, MainDelivery } from "./types.ts";
 
@@ -107,7 +108,8 @@ export function summarize(record: AgentRecord): ReportSummary {
 		...(record.answeredMain ? { answered: true as const } : {}),
 		...(record.startedAt !== undefined ? { startedAt: record.startedAt } : {}),
 		...(record.endedAt !== undefined ? { endedAt: record.endedAt } : {}),
-		...(record.report !== undefined ? { report: record.report } : {}),
+		// The user's report row shows the run's check after the agent's words.
+		...(reportWithCheck(record) !== undefined ? { report: reportWithCheck(record) } : {}),
 		...(record.error !== undefined ? { error: record.error } : {}),
 		...(record.stopReason !== undefined ? { stopReason: record.stopReason } : {}),
 		...(record.sessionFile !== undefined ? { sessionFile: record.sessionFile } : {}),

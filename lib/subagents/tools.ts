@@ -5,6 +5,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MAX_AFTER, waitingFor } from "./after.ts";
+import { CHECK_TIMEOUT_MINUTES, MAX_CHECK_CHARS, MAX_CHECK_TIMEOUT_MINUTES, MAX_FIX_ROUNDS, mergeCheck } from "./checks.ts";
 import { allowedTools, checkAllowlist } from "./allowlist.ts";
 import { MAX_RUN_MINUTES } from "./budget.ts";
 import { childMessageDescription, mainMessageDescription, stopDescription, subagentDescription } from "./describe.ts";
@@ -12,7 +13,7 @@ import { capReport, reportText, rosterText } from "./format.ts";
 import { isThinking, type ModelChoice, resolveModel, THINKING_LEVELS, type Thinking, thinkingFor, type ThinkingSettings } from "./models.ts";
 import { EVERYONE, MAIN } from "./names.ts";
 import type { HostTeam } from "./contract.ts";
-import { type AgentRecord, LIVE_STATES } from "./types.ts";
+import { type AgentRecord, type CheckUpdate, LIVE_STATES } from "./types.ts";
 
 export const MAX_TASK_CHARS = 60_000;
 export const MAX_MESSAGE_CHARS = 20_000;
@@ -40,6 +41,13 @@ const text = (value: string, details?: Record<string, unknown>): Result => ({ co
 
 const thinkingSchema = Type.Union(THINKING_LEVELS.map((level) => Type.Literal(level)), { description: "Reasoning level; omit for the model's usual level." });
 
+/** A check's fields, on `subagent` and on `message`; `check` itself says what it does there. */
+const checkFields = (check: string) => ({
+	check: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_CHECK_CHARS, description: check })),
+	fixUntilPass: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_FIX_ROUNDS, description: "With check: how many times a failure goes back to it to fix before it reports. Default 0." })),
+	checkTimeoutMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: MAX_CHECK_TIMEOUT_MINUTES, description: `With check: minutes the command may run. Default ${CHECK_TIMEOUT_MINUTES}.` })),
+});
+
 const subagentParams = Type.Object({
 	task: Type.String({ minLength: 1, maxLength: MAX_TASK_CHARS, description: "The complete brief: goal, relevant files and facts, constraints, and what the report must contain." }),
 	name: Type.Optional(Type.String({ maxLength: 40, description: "Short name that says what it does, like auth-review or count-md. You, the user and other agents address it by this name." })),
@@ -54,23 +62,43 @@ const subagentParams = Type.Object({
 	maxMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: MAX_RUN_MINUTES, description: "Minutes one run may work before it is stopped; default from config." })),
 	maxCost: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "US dollars one run may spend before it is stopped; default from config." })),
 	after: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 40 }), { minItems: 1, maxItems: MAX_AFTER, description: "Agents that must end first. It waits queued, then starts with the paths of their reports." })),
+	...checkFields("Shell command the harness runs in its directory when a run ends normally, before the report goes up. The report shows the command, exit code and last output lines. Later runs keep it."),
 }, { additionalProperties: false });
 
 const messageParams = Type.Object({
 	to: Type.String({ minLength: 1, description: "An agent's name, or \"all\"." }),
 	text: Type.String({ minLength: 1, maxLength: MAX_MESSAGE_CHARS }),
 	expectReply: Type.Optional(Type.Boolean({ description: "Ask for an answer." })),
+	...checkFields("A new check for one of your subagents: a shell command the harness runs when its run ends normally. Replaces the one it has."),
 }, { additionalProperties: false });
 
 const stopParams = Type.Object({
 	name: Type.String({ minLength: 1, description: "The subagent's name, or \"all\" for every one of yours still working." }),
 }, { additionalProperties: false });
 
-interface SubagentInput {
+interface SubagentInput extends CheckInput {
 	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; isolation?: "shared" | "worktree"; cwd?: string; context?: string; wait?: boolean;
 	maxMinutes?: number; maxCost?: number; tools?: string[]; after?: string[];
 }
-interface MessageInput { to: string; text: string; expectReply?: boolean }
+interface CheckInput { check?: string; fixUntilPass?: number; checkTimeoutMinutes?: number }
+interface MessageInput extends CheckInput { to: string; text: string; expectReply?: boolean }
+
+/** Whether `self` could run a shell command itself: main, or a child that is not read-only and has bash. */
+function runsBash(tc: ToolContext, self: string): boolean {
+	if (self === MAIN) return true;
+	const record = tc.team.get(self);
+	return !!record && !record.readOnly && allowedTools(tc.childTools?.(false) ?? [], record.tools).includes("bash");
+}
+
+/** The check a call sets, if any. A check runs a command, so only an agent that could run it itself may set one. */
+function checkInput(tc: ToolContext, self: string, params: CheckInput): CheckUpdate | undefined {
+	if (params.check === undefined) {
+		if (params.fixUntilPass !== undefined || params.checkTimeoutMinutes !== undefined) throw new Error("fixUntilPass and checkTimeoutMinutes go with check.");
+		return undefined;
+	}
+	if (!runsBash(tc, self)) throw new Error("Only an agent that can run bash commands itself can set a check, and you can't.");
+	return { command: params.check, ...(params.fixUntilPass !== undefined ? { fixUntilPass: params.fixUntilPass } : {}), ...(params.checkTimeoutMinutes !== undefined ? { timeoutMinutes: params.checkTimeoutMinutes } : {}) };
+}
 
 /** The allowlist for a new child of `parent`: the one asked for, else its parent's, since a restricted parent can't pass on more than it has. */
 function spawnTools(tc: ToolContext, parent: string, requested: readonly string[] | undefined, readOnly: boolean): string[] | undefined {
@@ -88,7 +116,8 @@ function spawnSummary(record: AgentRecord, team: HostTeam): string {
 	const where = waits.length > 0 ? `It waits for ${waits.join(", ")} to end, then starts.`
 		: record.state === "queued" ? "It is queued behind other subagents and starts when a slot frees." : "It is running in the background.";
 	const place = record.worktree ? ` in the worktree ${record.worktree.path}` : record.cwd ? ` in ${record.cwd}` : "";
-	return `Started ${record.name} on ${record.model}${thinking}${place}. ${where} Its report will arrive as a message. Talk to it with message({ to: "${record.name}", text }).`;
+	const checked = record.check ? " Its report will end with the harness's check." : "";
+	return `Started ${record.name} on ${record.model}${thinking}${place}. ${where} Its report will arrive as a message.${checked} Talk to it with message({ to: "${record.name}", text }).`;
 }
 
 export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
@@ -109,6 +138,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 			const fork = params.context === "fork";
 			if (fork && parent !== MAIN) throw new Error("Only the main session can fork its context.");
 			const tools = spawnTools(tc, parent, params.tools, params.readOnly === true);
+			const check = checkInput(tc, parent, params);
 			const group = parent === MAIN ? tc.currentGroup?.() : undefined;
 			const spawned = tc.team.spawn({
 				...(group ? { group } : {}),
@@ -118,6 +148,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 				...(params.maxCost !== undefined ? { maxCost: params.maxCost } : {}),
 				...(tools ? { tools } : {}),
 				...(params.after ? { after: params.after } : {}),
+				...(check ? { check: mergeCheck(check) } : {}),
 				task: params.task.trim(), parent, model: resolved.choice.ref, readOnly: params.readOnly === true, fork,
 				blocking: params.wait === true, ...(params.name ? { name: params.name } : {}), ...(thinking ? { thinking } : {}),
 			});
@@ -178,6 +209,13 @@ async function waitFor(tc: ToolContext, name: string, details: Record<string, un
 	}
 }
 
+/** A message's check is for the one agent it goes to. */
+function messageCheck(tc: ToolContext, self: string, params: MessageInput): CheckUpdate | undefined {
+	const check = checkInput(tc, self, params);
+	if (check && params.to === EVERYONE) throw new Error("A check is for one agent; name it in to.");
+	return check;
+}
+
 const deliveredWords: Record<string, string> = {
 	replied: "Answered; it continues with your reply.",
 	steered: "Delivered; it reads it after its current tool call.",
@@ -196,7 +234,8 @@ export function mainMessageTool(tc: ToolContext): ToolDefinition {
 		parameters: messageParams,
 		async execute(_id, raw) {
 			const params = raw as MessageInput;
-			const result = await tc.team.send(MAIN, params.to, params.text, { expectReply: params.expectReply === true });
+			const check = messageCheck(tc, MAIN, params);
+			const result = await tc.team.send(MAIN, params.to, params.text, { expectReply: params.expectReply === true, ...(check ? { check } : {}) });
 			if (!result.ok) throw new Error(result.error);
 			const tail = params.expectReply && result.delivered !== "replied" ? " Its answer will wake you." : "";
 			return text(`${deliveredWords[result.delivered] ?? "Delivered."}${tail}${result.notice ? `\n${result.notice}` : ""}`, { to: params.to, delivered: result.delivered, ...(result.notice ? { notice: result.notice } : {}) });
@@ -241,7 +280,8 @@ export function childMessageTool(tc: ToolContext, self: string): ToolDefinition 
 		parameters: messageParams,
 		async execute(_id, raw, signal) {
 			const params = raw as MessageInput;
-			const result = await tc.team.send(self, params.to, params.text, { expectReply: params.expectReply === true, ...(signal ? { signal } : {}) });
+			const check = messageCheck(tc, self, params);
+			const result = await tc.team.send(self, params.to, params.text, { expectReply: params.expectReply === true, ...(signal ? { signal } : {}), ...(check ? { check } : {}) });
 			if (!result.ok) throw new Error(result.error);
 			const roster = rosterText(self, tc.team.list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model })));
 			const head = result.reply !== undefined ? `Reply from ${params.to}:\n${result.reply}` : deliveredWords[result.delivered] ?? "Delivered.";

@@ -5,7 +5,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isReserved, nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
 import { latestReportFile, reportFilePath } from "./reports.ts";
-import { LIVE_STATES, NO_USAGE, type AgentRecord, type FallbackStep } from "./types.ts";
+import { LIVE_STATES, NO_USAGE, type AgentRecord, type CheckResult, type CheckSpec, type FallbackStep } from "./types.ts";
+import { checkError } from "./checks.ts";
 import { validWorktree } from "./worktree.ts";
 import { CONTROL } from "./checkout.ts";
 import type { HeldMail } from "./contract.ts";
@@ -80,6 +81,19 @@ const validSteps = (value: unknown): boolean => value === undefined || (Array.is
 		&& typeof s.reason === "string" && Number.isFinite(s.at);
 }));
 
+/** A saved check runs again on the next run, so it must be one a spawn could have set. */
+const validCheck = (value: unknown): boolean => {
+	const check = value as CheckSpec | null;
+	return !!check && typeof check === "object" && checkError(check, { readOnly: false }) === undefined && Number.isInteger(check.fixUntilPass);
+};
+
+const validChecked = (value: unknown): boolean => {
+	const c = value as CheckResult | null;
+	return !!c && Number.isInteger(c.run) && typeof c.command === "string" && (c.exitCode === null || Number.isInteger(c.exitCode))
+		&& Number.isFinite(c.durationMs) && typeof c.tail === "string" && Number.isInteger(c.attempt) && Number.isInteger(c.attempts)
+		&& (c.timedOut === undefined || typeof c.timedOut === "boolean");
+};
+
 function validRecord(value: unknown): value is AgentRecord {
 	if (!value || typeof value !== "object") return false;
 	const r = value as AgentRecord;
@@ -108,7 +122,8 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.launchError === undefined || typeof r.launchError === "string")
 		&& [r.maxMinutes, r.maxCost].every((limit) => limit === undefined || (typeof limit === "number" && Number.isFinite(limit) && limit > 0))
 		&& (r.stopReason === undefined || typeof r.stopReason === "string")
-		&& strings(r.inbox) && strings(r.owed) && strings(r.unread) && strings(r.tools) && validSteps(r.fallbacks) && strings(r.after);
+		&& strings(r.inbox) && strings(r.owed) && strings(r.unread) && strings(r.tools) && validSteps(r.fallbacks) && strings(r.after)
+		&& (r.check === undefined || validCheck(r.check)) && (r.checked === undefined || validChecked(r.checked));
 }
 
 export class ChildIndex {

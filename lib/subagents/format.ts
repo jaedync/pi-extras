@@ -5,6 +5,7 @@
  */
 import { formatElapsed } from "../shell-jobs-widget.ts";
 import { formatMoney } from "../status-plus-logic.ts";
+import { checkBlock, checkOf } from "./checks.ts";
 import { MAIN } from "./names.ts";
 import type { AgentRecord, Worktree } from "./types.ts";
 import { worktreeFooter } from "./worktree.ts";
@@ -76,7 +77,13 @@ function fallbackLines(record: AgentRecord): string {
 		.map((step) => `\nRan on ${step.to} after ${step.from} failed: ${step.reason}.`).join("");
 }
 
+/** A report ends with its run's check, if one ran: evidence from the harness after the agent's own words. */
 function reportSummary(record: AgentRecord, now: number): string {
+	const check = checkOf(record);
+	return `${reportCore(record, now)}${check ? `\n\n${checkBlock(check)}` : ""}`;
+}
+
+function reportCore(record: AgentRecord, now: number): string {
 	const head = `${record.name} (${record.model}${spend(record)})`;
 	const session = `${record.sessionFile ? `\nSession: ${record.sessionFile}` : ""}${record.report && record.reportFile ? `\nReport: ${record.reportFile}` : ""}${fallbackLines(record)}`;
 	if (record.state === "interrupted") {

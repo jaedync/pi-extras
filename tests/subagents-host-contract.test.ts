@@ -14,7 +14,7 @@ import { MainMail } from "../lib/subagents/deliver.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { ToolActivity } from "../lib/subagents/tool-activity.ts";
 
-const PINNED = { version: 2, digest: "bb835aee255c606214ca177abd188cc11195aa50ef6cf6df8f89ab2407a8885f" };
+const PINNED = { version: 2, digest: "b4957e706627d991e47d65c8ecb5cbe72318bd0c81ad45ede35c00af21ee1533" };
 
 /**
  * Every declaration that crosses from one evaluation to the next, by the file
@@ -25,7 +25,7 @@ const PINNED = { version: 2, digest: "bb835aee255c606214ca177abd188cc11195aa50ef
  */
 const CONTRACT: Record<string, readonly string[]> = {
 	"lib/subagents/contract.ts": ["HostTeam", "HostMail", "HostActivity", "HeldMail", "HostMessage", "ModelScope", "HostPorts", "HostState", "ParkedHost"],
-	"lib/subagents/types.ts": ["AgentState", "ACTIVE_STATES", "LIVE_STATES", "Usage", "AgentWork", "FailureKind", "FallbackStep", "Worktree", "AgentRecord", "SpawnRequest", "ChildHandle", "ChildHooks", "Launcher"],
+	"lib/subagents/types.ts": ["AgentState", "ACTIVE_STATES", "LIVE_STATES", "Usage", "AgentWork", "FailureKind", "FallbackStep", "Worktree", "AgentRecord", "CheckSpec", "CheckUpdate", "CheckResult", "CheckRun", "SpawnRequest", "ChildHandle", "ChildHooks", "Launcher"],
 	"lib/subagents/team.ts": ["SendResult"],
 	"lib/subagents/deliver.ts": ["MESSAGE_TYPE", "REPORT_TYPE", "Route", "MainContext", "OutgoingMessage", "MailDetails", "ReportSummary", "PendingItem"],
 	"lib/subagents/tool-activity.ts": ["Watched"],

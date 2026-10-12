@@ -22,7 +22,7 @@ import type { MainContext, OutgoingMessage, PendingItem, Route } from "./deliver
 import type { ModelChoice } from "./models.ts";
 import type { SendResult } from "./team.ts";
 import type { Watched } from "./tool-activity.ts";
-import type { AgentRecord, Launcher, SpawnRequest } from "./types.ts";
+import type { AgentRecord, CheckUpdate, Launcher, SpawnRequest } from "./types.ts";
 
 export const HOST_VERSION = 2;
 
@@ -33,7 +33,7 @@ export interface HostTeam {
 	live(): AgentRecord[];
 	onChange(listener: (record: AgentRecord | null) => void): () => void;
 	spawn(request: SpawnRequest): { ok: true; record: AgentRecord } | { ok: false; error: string };
-	send(from: string, to: string, text: string, options?: { expectReply?: boolean; signal?: AbortSignal; automatic?: boolean }): Promise<SendResult>;
+	send(from: string, to: string, text: string, options?: { expectReply?: boolean; signal?: AbortSignal; automatic?: boolean; check?: CheckUpdate }): Promise<SendResult>;
 	stop(name: string, options?: { by?: string; reason?: string }): Promise<AgentRecord | undefined>;
 	stopping(): boolean;
 	under(name: string, ancestor: string): boolean;

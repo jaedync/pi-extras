@@ -13,6 +13,7 @@ import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
 import { guardBash } from "./bash-guard.ts";
+import { bashCheck } from "./checks.ts";
 import type { HostActivity } from "./contract.ts";
 import { confine, sandboxFor } from "./sandbox.ts";
 import { freshModels, piModelsCheck } from "./fresh-models.ts";
@@ -235,7 +236,11 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const guard = createChildRateLimitGuard({ configFile: join(agentDir, "pi-extras.json"), onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
 			const settingsManager = childSettings(deps, cwd, record);
 			// An SDK tool wins over a built-in or extension tool of the same name.
-			const customTools = wanted.has("bash") ? [...listed, childBash(sdk, cwd, settingsManager, record, deps)] : listed;
+			const bash = wanted.has("bash") ? childBash(sdk, cwd, settingsManager, record, deps) : undefined;
+			const customTools = bash ? [...listed, bash] : listed;
+			// A check runs as the child's own bash would; a child without bash gets one made the same way when it needs it.
+			let checkBash = bash;
+			const check: ChildHandle["check"] = (command, options) => bashCheck(checkBash ??= childBash(sdk, cwd, settingsManager, record, deps), command, options);
 			const loader = childLoader(deps, record, { cwd, settingsManager, guard, wanted, loaded });
 			await loader.reload();
 			const stamp = withFiles(settled, resourceFiles(loader), begun);
@@ -250,7 +255,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				customTools,
 			}).catch((error) => { guard.dispose(); throw error; });
 			await bindChild(session, guard, deps.onExtensionError);
-			return { ...handleFor(session, hooks, model.contextWindow, guard, record), stamp };
+			return { ...handleFor(session, hooks, model.contextWindow, guard, record), stamp, check };
 		},
 		current: (handle) => !handle.stamp || stampCurrent(handle.stamp, generation),
 	};

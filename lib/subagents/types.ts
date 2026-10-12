@@ -140,6 +140,47 @@ export interface AgentRecord {
 	fallbacks?: FallbackStep[];
 	/** Agents that must end before its first run starts (after.ts); on the record, so a restore or /reload keeps the wait. */
 	after?: string[];
+	/** The command the harness runs when a run ends normally, before its report goes up (checks.ts); kept for later runs. */
+	check?: CheckSpec;
+	/** What the latest check found; a report shows only its own run's. */
+	checked?: CheckResult;
+}
+
+/** A check as a spawn or a message set it (checks.ts). */
+export interface CheckSpec {
+	command: string;
+	/** How many times a failed check goes back to the agent to fix, 0 to 5. */
+	fixUntilPass: number;
+	/** How long the command may run; unset, CHECK_TIMEOUT_MINUTES. */
+	timeoutMinutes?: number;
+}
+
+/** A message's new check: what it leaves out stays as stored. */
+export type CheckUpdate = Pick<CheckSpec, "command"> & Partial<Pick<CheckSpec, "fixUntilPass" | "timeoutMinutes">>;
+
+/** What one check found. */
+export interface CheckResult {
+	/** The run it belongs to. */
+	run: number;
+	command: string;
+	/** Null when it timed out or could not run. */
+	exitCode: number | null;
+	timedOut?: boolean;
+	durationMs: number;
+	/** The last lines of its combined output, bounded. */
+	tail: string;
+	/** 1 for the run's first check, one more for each fix round. */
+	attempt: number;
+	/** The most the run gets: fixUntilPass + 1. */
+	attempts: number;
+}
+
+/** What a check command did, as the agent's own bash tool reports it. */
+export interface CheckRun {
+	exitCode: number | null;
+	/** Its combined output as the agent's bash shows it, notes included. */
+	output: string;
+	timedOut?: boolean;
 }
 
 export interface SpawnRequest {
@@ -160,6 +201,7 @@ export interface SpawnRequest {
 	maxCost?: number;
 	/** Agents that must end before it starts (after.ts). */
 	after?: string[];
+	check?: CheckSpec;
 }
 
 /** What the team needs from a running child session. */
@@ -182,6 +224,8 @@ export interface ChildHandle {
 	sessionFile?: string;
 	/** What its launch read (stamp.ts); a launcher compares it with what a launch now would read. */
 	stamp?: LaunchStamp;
+	/** Runs a check command as the child's bash would, in its directory and with its shell settings and sandbox. */
+	check?(command: string, options: { timeoutMs: number; signal: AbortSignal; id: string }): Promise<CheckRun>;
 }
 
 export interface ChildHooks {

@@ -1,0 +1,312 @@
+/** `check`: the harness runs a command when a run ends normally, and the report carries what it found. */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
+import { createBashToolDefinition, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { bashCheck, checkBlock, fixPrompt, reportWithCheck, tailOf } from "../lib/subagents/checks.ts";
+import { reportText } from "../lib/subagents/format.ts";
+import { ChildIndex } from "../lib/subagents/restore.ts";
+import type { CheckResult, CheckRun, MainDelivery } from "../lib/subagents/types.ts";
+import { teamHarness } from "./support/team-harness.ts";
+
+const reports = (main: readonly MainDelivery[]) => main.filter((delivery): delivery is Extract<MainDelivery, { kind: "report" }> => delivery.kind === "report");
+
+/** Check results the test hands out one by one, with the calls that asked for them. After `hold()`, the next check waits for `go()` or an abort. */
+function scripted(...runs: CheckRun[]) {
+	const asked: Array<{ name: string; command: string; timeoutMs: number; signal: AbortSignal }> = [];
+	let gate: { promise: Promise<void>; open(): void } | undefined;
+	return {
+		asked,
+		hold() { let open!: () => void; const promise = new Promise<void>((resolve) => { open = resolve; }); gate = { promise, open }; },
+		go() { gate?.open(); },
+		check: async (record: { name: string }, command: string, options: { timeoutMs: number; signal: AbortSignal }) => {
+			asked.push({ name: record.name, command, timeoutMs: options.timeoutMs, signal: options.signal });
+			const next = runs.shift() ?? { exitCode: 0, output: "ok" };
+			const waiting = gate;
+			if (waiting) await Promise.race([waiting.promise, new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }))]);
+			if (gate === waiting) gate = undefined;
+			return options.signal.aborted ? { exitCode: null, output: "Command aborted" } : next;
+		},
+	};
+}
+
+const settled = async () => { for (let i = 0; i < 6; i++) await tick(); };
+
+test("a check that passes runs once as part of the run, and the report carries its block", async () => {
+	const script = scripted({ exitCode: 0, output: "# pass 12\n# fail 0" });
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("make the tests pass", { name: "impl", check: { command: "npm test", fixUntilPass: 0 } });
+	await tick();
+	script.hold();
+	h.lastCall(name).finish("Done. Tests pass.");
+	await settled();
+	assert.equal(h.team.get(name)!.state, "running", "the check is part of the run");
+	assert.equal(h.team.get(name)!.activity, "check: npm test");
+	assert.equal(reports(h.main).length, 0, "nothing goes up while it runs");
+	script.go();
+	const done = await h.team.whenDone(name);
+	assert.equal(done.state, "idle");
+	assert.deepEqual(script.asked.map((call) => [call.name, call.command, call.timeoutMs]), [["impl", "npm test", 600_000]]);
+	assert.equal(done.checked?.exitCode, 0);
+	assert.equal(done.runs, 1);
+	const text = reportText(done, Date.now());
+	assert.match(text, /Done\. Tests pass\.\n\nCheck run by the harness, not by the agent: passed \(exit 0\) in \d+s\.\nCommand: npm test\nLast lines of output:\n```\n# pass 12\n# fail 0\n```/);
+	assert.equal(reports(h.main).length, 1);
+	await h.team.close();
+});
+
+test("a failed check goes back to the child as the same run, and the parent hears only the last result", async () => {
+	const script = scripted({ exitCode: 1, output: "FAIL test/a.test.ts\nexpected 2, got 3" }, { exitCode: 0, output: "all green" });
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("fix the bug", { name: "impl", check: { command: "npm test", fixUntilPass: 2, timeoutMinutes: 2 } });
+	await tick();
+	h.lastCall(name).finish("Fixed.");
+	await settled();
+	const fix = h.lastCall(name).text;
+	assert.match(fix, /^The harness ran your check when your run ended, and it failed\./);
+	assert.match(fix, /fix round 1 of 2/);
+	assert.match(fix, /failed \(exit 1\)[\s\S]*expected 2, got 3/);
+	assert.equal(h.team.get(name)!.runs, 1, "a fix round is the same run");
+	assert.equal(reports(h.main).length, 0);
+	h.lastCall(name).finish("Fixed for real. Report: ...");
+	const done = await h.team.whenDone(name);
+	assert.equal(script.asked.length, 2);
+	assert.equal(script.asked[0]!.timeoutMs, 120_000);
+	assert.equal(done.checked?.attempt, 2);
+	assert.equal(done.report, "Fixed for real. Report: ...");
+	assert.match(reportText(done, Date.now()), /passed \(exit 0\) in \d+s, attempt 2 of 3\./);
+	assert.equal(reports(h.main).length, 1, "one report, one wake");
+	await h.team.close();
+});
+
+test("a check that keeps failing ends the run after its fix rounds with the last failure", async () => {
+	const script = scripted({ exitCode: 1, output: "one" }, { exitCode: 2, output: "two" });
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("try", { name: "impl", check: { command: "make check", fixUntilPass: 1 } });
+	await tick();
+	h.lastCall(name).finish("First try.");
+	await settled();
+	h.lastCall(name).finish("Second try.");
+	const done = await h.team.whenDone(name);
+	assert.equal(done.state, "idle");
+	assert.equal(script.asked.length, 2);
+	assert.match(reportText(done, Date.now()), /failed \(exit 2\) in \d+s, attempt 2 of 2\.[\s\S]*two/);
+	await h.team.close();
+});
+
+test("without fix rounds a failure goes straight into the report", async () => {
+	const script = scripted({ exitCode: 1, output: "broken" });
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("try", { name: "impl", check: { command: "make check", fixUntilPass: 0 } });
+	await tick();
+	h.lastCall(name).finish("Claimed done.");
+	const done = await h.team.whenDone(name);
+	assert.equal(h.calls.get(name)!.length, 1);
+	assert.match(reportText(done, Date.now()), /Claimed done\.\n\nCheck run by the harness, not by the agent: failed \(exit 1\)/);
+	await h.team.close();
+});
+
+test("a stop during the check aborts it, and a failed run skips it", async () => {
+	const script = scripted();
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("long", { name: "impl", check: { command: "sleep 100", fixUntilPass: 3 } });
+	await tick();
+	script.hold();
+	h.lastCall(name).finish("Done.");
+	await settled();
+	assert.equal(script.asked.length, 1);
+	const stopped = await h.team.stop(name, { by: "main" });
+	assert.equal(script.asked[0]!.signal.aborted, true, "the command's process group goes with the stop");
+	await settled();
+	assert.equal(stopped?.state, "stopped");
+	assert.equal(h.team.get(name)!.state, "stopped");
+	assert.equal(h.calls.get(name)!.length, 1, "no fix round after a stop");
+	const other = h.spawn("other", { name: "other", check: { command: "true", fixUntilPass: 0 } });
+	await tick();
+	h.lastCall(other).fail(new Error("model error"));
+	assert.equal((await h.team.whenDone(other)).state, "failed");
+	assert.equal(script.asked.length, 1, "a failed run is not checked");
+	await h.team.close();
+});
+
+test("a run over its budget during the check is stopped and its check aborted", async () => {
+	const script = scripted();
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("slow check", { name: "impl", maxMinutes: 0.001, check: { command: "sleep 100", fixUntilPass: 0 } });
+	await tick();
+	script.hold();
+	h.lastCall(name).finish("Done.");
+	const done = await h.team.whenDone(name);
+	assert.equal(done.state, "stopped");
+	assert.match(done.stopReason ?? "", /budget/);
+	assert.equal(script.asked[0]?.signal.aborted, true);
+	await h.team.close();
+});
+
+test("a child waiting on its subagents is checked only when it would end idle", async () => {
+	const script = scripted();
+	const h = teamHarness({ check: script.check });
+	const lead = h.spawn("lead", { name: "lead", check: { command: "npm test", fixUntilPass: 0 } });
+	await tick();
+	assert.ok(h.team.spawn({ name: "helper", task: "help", parent: lead, model: "m", readOnly: false, fork: false, blocking: false }).ok);
+	await tick();
+	h.lastCall(lead).finish("Started a helper.");
+	await settled();
+	assert.equal(h.team.get(lead)!.state, "waiting");
+	assert.equal(script.asked.length, 0);
+	h.lastCall("helper").finish("Helped.");
+	await settled();
+	h.lastCall(lead).finish("All done.");
+	await h.team.whenDone(lead);
+	assert.deepEqual(script.asked.map((call) => call.name), ["lead"]);
+	await h.team.close();
+});
+
+test("mail that arrives during the check is read first, then the check runs again", async () => {
+	const script = scripted({ exitCode: 0, output: "first" }, { exitCode: 0, output: "second" });
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("impl", { name: "impl", check: { command: "npm test", fixUntilPass: 0 } });
+	await tick();
+	script.hold();
+	h.lastCall(name).finish("Done.");
+	await settled();
+	h.late.set(name, ["Message from main:\nAlso update the README."]);
+	script.go();
+	await settled();
+	assert.equal(h.lastCall(name).text, "Message from main:\nAlso update the README.");
+	assert.equal(h.team.get(name)!.state, "running");
+	h.lastCall(name).finish("Done, README too.");
+	const done = await h.team.whenDone(name);
+	assert.equal(script.asked.length, 2, "the README change is checked too");
+	assert.equal(done.report, "Done, README too.");
+	assert.equal(reports(h.main).length, 1);
+	await h.team.close();
+});
+
+test("a message's check replaces the stored one for the runs it starts; only main or an agent above may set it", async () => {
+	const script = scripted();
+	const h = teamHarness({ check: script.check, maxDepth: 2 });
+	const lead = h.spawn("lead", { name: "lead" });
+	const peer = h.spawn("peer", { name: "peer" });
+	await tick();
+	assert.ok(h.team.spawn({ name: "helper", task: "help", parent: lead, model: "m", readOnly: false, fork: false, blocking: false, check: { command: "make a", fixUntilPass: 2 } }).ok);
+	await tick();
+	h.lastCall("helper").finish("Helped.");
+	await settled();
+	const refused = await h.team.send(peer, "helper", "Check this too.", { check: { command: "rm -rf build" } });
+	assert.equal(refused.ok, false);
+	assert.match(refused.ok ? "" : refused.error, /Only main or an agent helper works for can set its check\./);
+	assert.equal(h.team.get("helper")!.check?.command, "make a");
+	assert.ok((await h.team.send(lead, "helper", "Now b.", { check: { command: "make b" } })).ok);
+	assert.deepEqual(h.team.get("helper")!.check, { command: "make b", fixUntilPass: 2 }, "fixUntilPass stays when left out");
+	await settled();
+	h.lastCall("helper").finish("Did b.");
+	await settled();
+	assert.equal(script.asked.at(-1)?.command, "make b");
+	assert.ok((await h.team.send("main", "peer", "Verify.", { check: { command: "true", fixUntilPass: 0, timeoutMinutes: 5 } })).ok);
+	const readOnly = h.spawn("reader", { name: "reader", readOnly: true });
+	const fix = await h.team.send("main", readOnly, "x", { check: { command: "npm test", fixUntilPass: 1 } });
+	assert.match(fix.ok ? "" : fix.error, /read-only agent can't fix a failed check/);
+	const bad = h.team.spawn({ task: "x", parent: "main", model: "m", readOnly: false, fork: false, blocking: false, check: { command: " ", fixUntilPass: 0 } });
+	assert.match(bad.ok ? "" : bad.error, /check must be a shell command/);
+	const many = h.team.spawn({ task: "x", parent: "main", model: "m", readOnly: false, fork: false, blocking: false, check: { command: "true", fixUntilPass: 6 } });
+	assert.match(many.ok ? "" : many.error, /fixUntilPass must be a whole number from 0 to 5/);
+	await h.team.close();
+});
+
+test("the check runs through the agent's bash tool: exit codes, output, and a timeout that kills its process group", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "subagents-check-"));
+	try {
+		const bash = createBashToolDefinition(dir) as unknown as ToolDefinition;
+		const signal = new AbortController().signal;
+		const passed = await bashCheck(bash, "echo hello; pwd", { timeoutMs: 10_000, signal, id: "c1" });
+		assert.equal(passed.exitCode, 0);
+		assert.match(passed.output, /hello/);
+		assert.ok(passed.output.includes(dir.split("/").at(-1)!), "it runs in the agent's directory");
+		const failed = await bashCheck(bash, "echo broken >&2; exit 3", { timeoutMs: 10_000, signal, id: "c2" });
+		assert.equal(failed.exitCode, 3);
+		assert.match(failed.output, /broken/);
+		assert.doesNotMatch(failed.output, /Command exited with code/, "the block says the exit code itself");
+		const pidFile = join(dir, "pid");
+		const started = Date.now();
+		const timedOut = await bashCheck(bash, `sleep 30 & echo $! > ${pidFile}; wait`, { timeoutMs: 500, signal, id: "c3" });
+		assert.equal(timedOut.exitCode, null);
+		assert.equal(timedOut.timedOut, true);
+		assert.ok(Date.now() - started < 10_000);
+		const pid = Number(readFileSync(pidFile, "utf8"));
+		await sleep(100);
+		assert.throws(() => process.kill(pid, 0), "the background process went with its group");
+		const stop = new AbortController();
+		const aborted = bashCheck(bash, "sleep 30", { timeoutMs: 60_000, signal: stop.signal, id: "c4" });
+		setTimeout(() => stop.abort(), 100);
+		const result = await aborted;
+		assert.equal(result.exitCode, null);
+		assert.match(result.output, /aborted/);
+		const input = await bashCheck(bash, "cat; echo end", { timeoutMs: 10_000, signal, id: "c5" });
+		assert.equal(input.exitCode, 0, "no stdin: cat reads nothing and ends");
+		writeFileSync(join(dir, "x"), "");
+		assert.ok(existsSync(join(dir, "x")));
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the block is bounded, fenced past any backticks, and shows the exact command", () => {
+	const lines = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
+	assert.equal(tailOf(lines, { lines: 40, chars: 4_000 }).split("\n").length, 40);
+	assert.equal(tailOf("x".repeat(9_000), { lines: 40, chars: 4_000 }).length, 4_000);
+	const result: CheckResult = { run: 1, command: "npm test -- --grep 'a b'", exitCode: 1, durationMs: 65_000, tail: "```\ncode\n```", attempt: 1, attempts: 1 };
+	const block = checkBlock(result);
+	assert.match(block, /^Check run by the harness, not by the agent: failed \(exit 1\) in 1m05s\.\nCommand: npm test -- --grep 'a b'\nLast lines of output:\n````\n```\ncode\n```\n````$/);
+	assert.match(checkBlock({ ...result, command: "a\nb" }), /Command:\n```\na\nb\n```/);
+	assert.match(checkBlock({ ...result, exitCode: null, timedOut: true }), /timed out after 1m05s/);
+	assert.match(checkBlock({ ...result, exitCode: null, tail: "" }), /could not run\.[\s\S]*No output\./);
+	assert.match(fixPrompt({ ...result, attempts: 3 }), /fix round 1 of 2/);
+	assert.equal(reportWithCheck({ report: "r", runs: 2, checked: result }), "r", "a report shows only its own run's check");
+	assert.match(reportWithCheck({ report: undefined, runs: 1, checked: result })!, /^Check run by the harness/);
+});
+
+test("check and its result are kept in the index", () => {
+	const dir = mkdtempSync(join(tmpdir(), "subagents-check-index-"));
+	try {
+		const record = { name: "impl", parent: "main", depth: 1, task: "t", model: "m", readOnly: false, fork: false, blocking: false, state: "idle" as const, createdAt: 1, activity: null, toolCalls: 0,
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, runs: 1, check: { command: "npm test", fixUntilPass: 2, timeoutMinutes: 5 },
+			checked: { run: 1, command: "npm test", exitCode: 0, durationMs: 10, tail: "ok", attempt: 1, attempts: 3 } };
+		new ChildIndex(dir, "parent", dir).save([record]);
+		const [loaded] = new ChildIndex(dir, "parent", dir).load(() => undefined);
+		assert.deepEqual(loaded?.check, record.check);
+		assert.deepEqual(loaded?.checked, record.checked);
+		writeFileSync(join(dir, "index.json"), JSON.stringify({ version: 1, parentSession: "parent", cwd: dir, records: [{ ...record, check: { command: 5, fixUntilPass: 0 } }] }));
+		assert.throws(() => new ChildIndex(dir, "parent", dir).load(() => undefined), /Invalid child index/);
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("only an agent that can run bash itself may set a check, and a message's check is for one agent", async () => {
+	const { childMessageTool, mainMessageTool, subagentTool } = await import("../lib/subagents/tools.ts");
+	const h = teamHarness({ maxDepth: 2 });
+	const luna = { ref: "openai-codex/gpt-6-luna", model: { provider: "openai-codex", id: "gpt-6-luna", name: "GPT-6 Luna" } };
+	const tc = { team: h.team, allowed: [luna as never], fallbackModel: luna.ref, thinking: {}, modelTable: "", guide: "", replyTimeoutMs: 60_000, now: Date.now,
+		childTools: (readOnly: boolean) => (readOnly ? ["read", "grep"] : ["read", "bash", "edit"]) };
+	const run = (tool: { execute: unknown }, params: object) => (tool.execute as any)("id", params, undefined, undefined);
+	const spawned = await run(subagentTool(tc, "main"), { task: "Fix it", name: "impl", check: "npm test", fixUntilPass: 2, checkTimeoutMinutes: 3 });
+	assert.match(spawned.content[0].text, /Its report will end with the harness's check\./);
+	assert.deepEqual(h.team.get("impl")?.check, { command: "npm test", fixUntilPass: 2, timeoutMinutes: 3 });
+	await assert.rejects(run(subagentTool(tc, "main"), { task: "x", fixUntilPass: 1 }), /fixUntilPass and checkTimeoutMinutes go with check/);
+	h.spawn("reader", { name: "reader", readOnly: true });
+	h.spawn("no-shell", { name: "no-shell", tools: ["read", "edit"] });
+	await tick();
+	for (const self of ["reader", "no-shell"]) {
+		await assert.rejects(run(subagentTool(tc, self), { task: "x", check: "make" }), /Only an agent that can run bash commands itself can set a check/);
+		await assert.rejects(run(childMessageTool(tc, self), { to: "impl", text: "x", check: "make" }), /Only an agent that can run bash commands itself can set a check/);
+	}
+	const helper = await run(subagentTool(tc, "impl"), { task: "Help", name: "helper", check: "make lint" });
+	assert.ok(helper);
+	assert.deepEqual(h.team.get("helper")?.check, { command: "make lint", fixUntilPass: 0 });
+	await run(childMessageTool(tc, "impl"), { to: "helper", text: "Also types.", check: "make types" });
+	assert.equal(h.team.get("helper")?.check?.command, "make types");
+	await assert.rejects(run(mainMessageTool(tc), { to: "all", text: "x", check: "make" }), /A check is for one agent/);
+	await run(mainMessageTool(tc), { to: "reader", text: "Verify the build.", check: "npm run build" });
+	assert.equal(h.team.get("reader")?.check?.command, "npm run build", "main may check a read-only agent's work");
+	await h.team.close();
+});

@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { Team, type TeamOptions } from "../../lib/subagents/team.ts";
-import type { AgentRecord, ChildHandle, ChildHooks, MainDelivery, SpawnRequest } from "../../lib/subagents/types.ts";
+import type { AgentRecord, ChildHandle, ChildHooks, CheckRun, MainDelivery, SpawnRequest } from "../../lib/subagents/types.ts";
 
 export interface Call { text: string; model: string; finish(result: string): void; fail(error: Error): void }
 
@@ -15,14 +15,18 @@ type HarnessOptions = Partial<TeamOptions> & {
 	transcripts?: Map<string, unknown[]>;
 	/** A launch error for this record, as a model the runtime can't resolve gives. */
 	refuse?: (record: AgentRecord) => Error | undefined;
+	/** How a child runs its check; without it, its sessions can't run checks. */
+	check?: (record: AgentRecord, command: string, options: { timeoutMs: number; signal: AbortSignal; id: string }) => Promise<CheckRun>;
 };
 
 export function teamHarness(options: HarnessOptions = {}) {
-	const { sessionDir = "/sessions", transcripts = new Map<string, unknown[]>(), refuse, ...teamOptions } = options;
+	const { sessionDir = "/sessions", transcripts = new Map<string, unknown[]>(), refuse, check, ...teamOptions } = options;
 	const calls = new Map<string, Call[]>();
 	const steered = new Map<string, string[]>();
 	const hooks = new Map<string, ChildHooks>();
 	const launched: Array<{ name: string; model: string }> = [];
+	/** Steering that reaches a child as its run ends, which takeQueued hands back. */
+	const late = new Map<string, string[]>();
 	const main: MainDelivery[] = [];
 	const say = (name: string, message: unknown) => transcripts.set(name, [...(transcripts.get(name) ?? []), message]);
 	const team = new Team({
@@ -48,8 +52,9 @@ export function teamHarness(options: HarnessOptions = {}) {
 					abort: async () => undefined,
 					lastText: () => undefined,
 					messages: () => transcripts.get(record.name) ?? [],
-					takeQueued: () => [],
+					takeQueued: () => { const queued = late.get(record.name) ?? []; late.delete(record.name); return queued; },
 					dispose: async () => undefined,
+					...(check ? { check: (command: string, checkOptions: { timeoutMs: number; signal: AbortSignal; id: string }) => check(record, command, checkOptions) } : {}),
 				};
 			},
 		},
@@ -68,5 +73,5 @@ export function teamHarness(options: HarnessOptions = {}) {
 		steered.set(name, queue.slice(count));
 		hooks.get(name)?.update({ activity: "thinking" });
 	};
-	return { team, calls, steered, hooks, launched, main, transcripts, spawn, lastCall, read };
+	return { team, calls, steered, hooks, launched, late, main, transcripts, spawn, lastCall, read };
 }

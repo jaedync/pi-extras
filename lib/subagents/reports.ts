@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { reportWithCheck } from "./checks.ts";
 import type { AgentRecord } from "./types.ts";
 import { worktreeFooter } from "./worktree.ts";
 
@@ -61,9 +62,11 @@ export function writeReport(sessionFile: string, run: number, text: string, io: 
 export function saveReport(record: AgentRecord, warn: Warn = console.warn): AgentRecord {
 	// Counts belong to this run; later display must not stage files from a resumed run.
 	const completed = record.worktree ? { ...record, worktreeReport: worktreeFooter(record.worktree) } : record;
-	if (!record.report || !record.sessionFile) return { ...completed };
+	// The file is the report as the parent reads it: the agent's text, then its run's check.
+	const text = reportWithCheck(record);
+	if (!text || !record.sessionFile) return { ...completed };
 	try {
-		return { ...completed, reportFile: writeReport(record.sessionFile, record.runs, record.report, fs, warn) };
+		return { ...completed, reportFile: writeReport(record.sessionFile, record.runs, text, fs, warn) };
 	} catch (error) {
 		warnSafely(warn, `subagents: could not write report for ${record.name}, run ${record.runs}: ${error instanceof Error ? error.message : String(error)}`);
 		return { ...completed, reportFile: undefined };
