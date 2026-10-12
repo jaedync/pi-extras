@@ -97,7 +97,11 @@ export const checkActivity = (command: string): string => `check: ${command.repl
 export const checkOf = (record: Pick<AgentRecord, "checked" | "runs">): CheckResult | undefined => (record.checked?.run === record.runs ? record.checked : undefined);
 
 /** Whether `record`'s latest run had a check that did not pass: news its parent must hear, whoever started the run. */
-export const checkFailed = (record: Pick<AgentRecord, "checked" | "runs">): boolean => (checkOf(record)?.exitCode ?? 0) !== 0;
+export function checkFailed(record: Pick<AgentRecord, "checked" | "runs">): boolean {
+	// A null exit code is a check that timed out or could not run: not a pass.
+	const checked = checkOf(record);
+	return checked !== undefined && checked.exitCode !== 0;
+}
 
 /** How a check ended, in a few words: `failed (exit 1)`, `timed out`. */
 export function checkVerdict(result: Pick<CheckResult, "exitCode" | "timedOut">): string {

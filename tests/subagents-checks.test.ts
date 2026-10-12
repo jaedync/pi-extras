@@ -380,3 +380,17 @@ test("only the trailing exit status leaves the output; a line of the command's o
 		assert.equal(run.output, "Command exited with code 7\nreal-output");
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a check that timed out or could not run is news too, and the spawn after it hears which", async () => {
+	for (const [run, said] of [[{ exitCode: null, output: "Command timed out after 600 seconds", timedOut: true }, "timed out"], [{ exitCode: null, output: "no shell" }, "could not run"]] as const) {
+		const h = teamHarness({ check: async () => ({ ...run }), warn: () => undefined });
+		h.spawn("impl", { name: "impl", check: { command: "npm test", fixUntilPass: 0 } });
+		h.spawn("review", { name: "review", after: ["impl"] });
+		await tick();
+		h.lastCall("impl").finish("Done.");
+		await settled();
+		assert.equal(reports(h.main).at(-1)?.quiet, undefined, `a check that ${said} wakes main`);
+		assert.ok(h.lastCall("review").text.includes(`- impl finished, but the harness's check ${said}. `), h.lastCall("review").text);
+		await h.team.close();
+	}
+});
