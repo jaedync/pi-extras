@@ -1353,8 +1353,8 @@ parent. The parent reads it with the report of the queued child. A run that
 fails, is stopped or has a failed check still wakes the parent. A child can't
 ask a queued child a question, because the answer can come only after the
 start. Such a question could also make a loop of agents that wait for each
-other. A note is possible, and the queued child reads it when it starts. A queued child does not keep the
-reports of its group waiting.
+other. A note is possible, and the queued child reads it when it starts. A
+queued child does not keep the reports of its group waiting.
 
 **Writers.** The first child to edit files in a checkout holds that checkout
 until its run ends. The checkout is the git work tree that contains the edited
