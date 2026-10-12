@@ -426,10 +426,10 @@ repository's hooks. Children use the parent's model credentials. When
 before it picks the child's model, as `/model` does. First, Pi's own loader
 checks the file in a separate model list with no credentials. That list also
 gets each provider that an extension registered from a configuration, because
-`models.json` can change those providers too. A file with an error is not
+`models.json` can also change those providers. A file with an error is not
 read, so a half-saved file can't remove a custom provider of the parent. A
-provider that an extension made in code keeps its own definition, whatever
-the file says.
+provider that an extension made in code keeps its own definition when the
+file has an error for it.
 
 Child sessions are written under
 `PI_CODING_AGENT_DIR/sessions/subagents/<parent session id>/`. An `index.json`
@@ -449,7 +449,7 @@ Restoring only reads transcripts and never rewrites them. The run log,
 each task, the model, timings, tool-call counts, usage, the session path and
 any error. `PI_CODING_AGENT_DIR/subagents/reload.log` gets one line, with no
 task text, when a `/reload` could not keep the children or did not take them
-over in time. The warnings of that interruption go there too, such as a run
+over in time. The warnings of that interruption also go there, such as a run
 log or index that can't be written. The index also keeps mail to main that a
 `/reload` could not hand over, until the next session start posts it. Delete
 these files whenever you like. Nothing is sent anywhere except the child's own
