@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { overlayVisible, padEndVisible, padStartVisible, stripAnsi, truncateVisible, visibleWidth } from "../lib/ansi.ts";
+import { visibleWidth as cellWidth } from "@earendil-works/pi-tui";
+import { overlayVisible, padEndVisible, padStartVisible, stripAnsi, truncateStart, truncateVisible, visibleWidth } from "../lib/ansi.ts";
 
 const red = (t: string) => `\x1b[31m${t}\x1b[39m`;
 
@@ -31,4 +32,47 @@ test("truncation keeps escapes balanced and appends the marker", () => {
 	const cut = truncateVisible(red("abcdefgh"), 5, "…");
 	assert.equal(stripAnsi(cut), "abcd…");
 	assert.equal(visibleWidth(cut), 5);
+});
+
+const link = (url: string, text: string) => `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
+
+test("width counts terminal cells: wide characters take two, escapes and OSC 8 links none", () => {
+	assert.equal(visibleWidth("日本語"), 6);
+	assert.equal(visibleWidth("👍x"), 3);
+	assert.equal(visibleWidth("👨‍👩‍👧"), 2);
+	assert.equal(visibleWidth(red("日本")), 4);
+	assert.equal(visibleWidth(link("https://example.com", "docs")), 4);
+	assert.equal(stripAnsi(link("https://example.com", "docs")), "docs");
+});
+
+test("truncation of wide characters never passes the width", () => {
+	for (let width = 1; width <= 12; width++) {
+		for (const text of ["日本語".repeat(5), red("ab日本cd語"), `${link("https://example.com", "日本語のリンク")} tail`, "👨‍👩‍👧👍🎙️x".repeat(3)]) {
+			const cut = truncateVisible(text, width, "…");
+			assert.ok(cellWidth(cut) <= width, `${JSON.stringify(text)} at ${width}: ${cellWidth(cut)}`);
+		}
+	}
+	assert.equal(stripAnsi(truncateVisible("日本語", 4, "…")), "日…");
+	// A link that is cut keeps its closing sequence, so the rest of the line is not a link.
+	const cut = truncateVisible(`${link("https://example.com", "abcdef")}`, 4, "…");
+	assert.ok(cut.endsWith("\x1b]8;;\x07"), JSON.stringify(cut));
+});
+
+test("a marker wider than the room is left out", () => {
+	assert.ok(cellWidth(truncateVisible("abcdef", 1, "……")) <= 1);
+});
+
+test("overlay over wide characters keeps the suffix in its columns", () => {
+	const base = "日本語 tail";
+	const result = overlayVisible(base, 1, "x");
+	assert.equal(cellWidth(result), cellWidth(base));
+	assert.equal(stripAnsi(result).slice(-4), "tail");
+	const over = overlayVisible("abcdef", 2, "日");
+	assert.equal(stripAnsi(over), "ab日ef");
+});
+
+test("keeping the tail of a path counts wide characters", () => {
+	const path = "~/プロジェクト/日本語のリポジトリ";
+	for (let width = 1; width <= 20; width++) assert.ok(cellWidth(truncateStart(path, width)) <= width, `${width}`);
+	assert.equal(truncateStart("~/ab", 10), "~/ab");
 });

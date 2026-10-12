@@ -414,3 +414,22 @@ test("limit windows keep one order on screen, whatever order they arrive in", ()
 		assert.equal(render(entries), first);
 	}
 });
+
+// Pi's TUI throws on a line wider than the terminal, and that ends Pi.
+test("wide characters and links in the place, model, statuses and tags never make a line wider than the terminal", async () => {
+	const { visibleWidth: cells } = await import("@earendil-works/pi-tui");
+	const wide = model({
+		cwd: "~/プロジェクト/日本語のリポジトリ名前",
+		gitBranch: "機能/新しいブランチ",
+		sessionName: "テスト🎙️",
+		modelName: "模型-日本語-测试",
+		extensionStatuses: [
+			"🎙️ 録音中 — 音声入力がアクティブです。".repeat(3),
+			`\x1b]8;;https://example.com\x07${"リンク".repeat(20)}\x1b]8;;\x07`,
+		],
+		rows: [{ id: "日本語プロバイダー", cost: 1, airtimeMs: 1000, tokens: { input: 1, output: 1 }, entries: [{ label: "５時間", usedPct: 50, resetMs: NOON + 3_600_000 }] }],
+	});
+	for (let width = 20; width <= 200; width += 3) {
+		for (const line of footerLayout(wide, width, paint).lines) assert.ok(cells(line) <= width, `${width}: ${cells(line)} ${JSON.stringify(stripAnsi(line))}`);
+	}
+});

@@ -16,6 +16,7 @@
  * window at 0% (7d-fable) is not shown. Reported token classes never merge;
  * when necessary the tokens get their own line before truncation.
  */
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { overlayVisible, padEndVisible, padStartVisible, truncateStart, truncateVisible, visibleWidth } from "./ansi.ts";
 import { formatDuration, formatMoney, hhmm, shownLimits, type LimitEntry } from "./status-plus-logic.ts";
 import { spendText } from "./status-plus-spend.ts";
@@ -349,7 +350,9 @@ export function footerLayout(model: FooterModel, width: number, paint: Painter):
 		.map((text) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim())
 		.filter(Boolean)
 		.map((text) => truncateVisible(text, width, paint.fg("dim", ELLIPSIS)));
-	return { lines: [...grid, ...meshLine, ...rowBlock, ...statuses], tools };
+	// The cells above are sized to fit; this is the last guard, since Pi exits on a line wider than the terminal.
+	const lines = [...grid, ...meshLine, ...rowBlock, ...statuses].map((line) => truncateToWidth(line, width, ""));
+	return { lines, tools };
 }
 
 export { _cacheState as cacheState };
