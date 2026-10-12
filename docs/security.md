@@ -232,7 +232,11 @@ Setup downloads, into `PI_VOICE_HOME` (default `~/.cache/pi-extras/voice`):
 
 `PI_OFFLINE=1`, `true` or `yes` skips setup; voice then uses only what is
 already installed.
-Nothing downloads on hosts without an audio input until you start a dictation.
+Setup starts on its own only when Pi finds a microphone. On Linux, that is an
+ALSA capture device, or a PulseAudio or PipeWire source that is not a monitor.
+On macOS, a child process lists the input devices, and Pi keeps the result for
+one day in `PI_VOICE_HOME`. When Pi finds no microphone, nothing downloads until
+you start a dictation or run `/voice setup`.
 
 Sessions talk to the daemon over a Unix socket in `PI_VOICE_HOME` that only your
 user can open. The daemon exits when it goes unused or no Pi session is open.

@@ -5,9 +5,10 @@
  * macOS over SSH has no terminal to attribute to; see desktop-capture.ts.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+
+/** Whether to set up voice without being asked; see audio-input.ts. */
+export { hasAudioInput, probeAudioInput, type AudioProbe } from "./audio-input.ts";
 
 export const FRAME_SAMPLES = 1600; // 100 ms at 16 kHz
 
@@ -30,12 +31,6 @@ export interface CaptureCallbacks {
 	onError(error: Error): void;
 }
 
-type Env = Readonly<Record<string, string | undefined>>;
-interface Probe {
-	exists(path: string): boolean;
-	read(path: string): string;
-}
-
 const RAW_16K = ["-ac", "1", "-ar", "16000", "-f", "s16le", "-loglevel", "error", "-"];
 
 /** avfoundation input spec: ":<name>" selects an audio device by name, ":default" the system default. */
@@ -54,16 +49,6 @@ export function captureCommands(platform: NodeJS.Platform, has: (bin: string) =>
 					{ command: "arecord", args: ["-q", "-t", "raw", "-f", "S16_LE", "-r", "16000", "-c", "1"] },
 				];
 	return candidates.filter((c) => has(c.command));
-}
-
-/** Cheap check so headless servers never download speech models. */
-export function hasAudioInput(platform: NodeJS.Platform, env: Env, probe: Probe = { exists: existsSync, read: (p) => readFileSync(p, "utf8") }): boolean {
-	if (platform === "darwin") return true;
-	if (platform !== "linux") return false;
-	if (env.PULSE_SERVER || probe.exists("/mnt/wslg/PulseServer")) return true;
-	if (env.XDG_RUNTIME_DIR && probe.exists(join(env.XDG_RUNTIME_DIR, "pulse", "native"))) return true;
-	if (!probe.exists("/proc/asound/cards")) return false;
-	return /^\s*\d+\s*\[/m.test(probe.read("/proc/asound/cards"));
 }
 
 /** Regroups a little-endian s16 byte stream into fixed-size frames. */

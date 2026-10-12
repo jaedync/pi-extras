@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FrameChunker, captureCommands, hasAudioInput } from "../lib/voice/capture.ts";
+import { FrameChunker, captureCommands, hasAudioInput, probeAudioInput, type AudioProbe } from "../lib/voice/capture.ts";
+import { runDeviceProbe } from "../lib/voice/audio-input.ts";
 import { joinDictation, splitForPaste } from "../lib/voice/insert.ts";
 
 test("Linux prefers PulseAudio tools, then ALSA", () => {
@@ -36,16 +37,131 @@ test("chunker regroups arbitrary byte chunks into fixed frames", () => {
 	assert.deepEqual(frames.map((f) => [...f]), [[1, 2, 3, 4], [5, -1, 7, 8]]);
 });
 
-test("audio input detection: WSLg pulse, pulse socket, ALSA card, or nothing", () => {
-	const none = { exists: () => false, read: () => "" };
-	assert.equal(hasAudioInput("linux", {}, none), false);
-	assert.equal(hasAudioInput("linux", {}, { exists: (p) => p === "/mnt/wslg/PulseServer", read: () => "" }), true);
-	assert.equal(hasAudioInput("linux", { XDG_RUNTIME_DIR: "/run/user/1" }, { exists: (p) => p === "/run/user/1/pulse/native", read: () => "" }), true);
-	assert.equal(hasAudioInput("linux", { PULSE_SERVER: "tcp:host" }, none), true);
-	assert.equal(hasAudioInput("linux", {}, { exists: (p) => p === "/proc/asound/cards", read: () => " 0 [PCH ]: HDA-Intel" }), true);
-	assert.equal(hasAudioInput("linux", {}, { exists: (p) => p === "/proc/asound/cards", read: () => "--- no soundcards ---" }), false);
-	assert.equal(hasAudioInput("darwin", {}, none), true);
-	assert.equal(hasAudioInput("win32", {}, none), false);
+const PCM = "/proc/asound/pcm";
+const OUTPUT_ONLY = "00-00: bcm2835 Headphones : bcm2835 Headphones : playback 8\n01-00: MAI PCM i2s-hifi-0 : MAI PCM i2s-hifi-0 : playback 1\n";
+const WITH_MIC = "00-00: ALC892 Analog : ALC892 Analog : playback 1 : capture 1\n00-03: HDMI 0 : HDMI 0 : playback 1\n";
+
+function linuxProbe(files: Record<string, string>, sources?: readonly string[]): AudioProbe & { asked: number } {
+	const probe = {
+		asked: 0,
+		exists: (path: string) => path in files,
+		read: (path: string) => files[path] ?? "",
+		sources: () => {
+			probe.asked++;
+			return sources;
+		},
+		now: () => 0,
+	};
+	return probe;
+}
+
+test("Linux audio input needs a capture stream or a PulseAudio source, not just a sound card", () => {
+	assert.equal(hasAudioInput("linux", {}, linuxProbe({})), false);
+	assert.equal(hasAudioInput("linux", {}, linuxProbe({ [PCM]: OUTPUT_ONLY, "/proc/asound/cards": " 0 [Headphones ]: bcm2835" })), false, "an output-only card is no microphone");
+	assert.equal(hasAudioInput("linux", {}, linuxProbe({ [PCM]: WITH_MIC })), true);
+	const wslg = { "/mnt/wslg/PulseServer": "" };
+	assert.equal(hasAudioInput("linux", {}, linuxProbe(wslg, ["RDPSink.monitor", "RDPSource"])), true, "WSLg's source is an input");
+	assert.equal(hasAudioInput("linux", {}, linuxProbe(wslg, ["RDPSink.monitor"])), false, "a sink's monitor is output");
+	assert.equal(hasAudioInput("linux", {}, linuxProbe(wslg, undefined)), false, "no answer from pactl decides nothing");
+	const socket = linuxProbe({ "/run/user/1/pulse/native": "" }, ["alsa_input.usb-mic"]);
+	assert.equal(hasAudioInput("linux", { XDG_RUNTIME_DIR: "/run/user/1" }, socket), true);
+	assert.equal(hasAudioInput("linux", { PULSE_SERVER: "tcp:host" }, linuxProbe({}, ["auto_null.monitor"])), false);
+	const quiet = linuxProbe({ [PCM]: OUTPUT_ONLY }, ["alsa_input.usb-mic"]);
+	assert.equal(hasAudioInput("linux", {}, quiet), false);
+	assert.equal(quiet.asked, 0, "without a PulseAudio socket, pactl is never run, so it cannot start a daemon");
+	assert.equal(hasAudioInput("win32", {}, linuxProbe({ [PCM]: WITH_MIC })), false);
+});
+
+const HOME = "/voice";
+const VERDICT = `${HOME}/audio-input.json`;
+const DAY = 24 * 60 * 60 * 1000;
+
+function macProbe(cache: string | undefined, now = 10 * DAY): AudioProbe {
+	return { exists: (path) => path === VERDICT && cache !== undefined, read: () => cache ?? "", sources: () => undefined, now: () => now };
+}
+
+test("macOS trusts only a fresh probe verdict, and otherwise decides nothing", () => {
+	const env = { PI_VOICE_HOME: HOME };
+	assert.equal(hasAudioInput("darwin", env, macProbe(undefined)), false, "no verdict yet: no automatic download");
+	assert.equal(hasAudioInput("darwin", env, macProbe(JSON.stringify({ input: true, at: 10 * DAY - 1_000 }))), true);
+	assert.equal(hasAudioInput("darwin", env, macProbe(JSON.stringify({ input: false, at: 10 * DAY - 1_000 }))), false);
+	assert.equal(hasAudioInput("darwin", env, macProbe(JSON.stringify({ input: true, at: 8 * DAY }))), false, "a verdict older than a day is stale");
+	assert.equal(hasAudioInput("darwin", env, macProbe(JSON.stringify({ input: true, at: 11 * DAY }))), false, "a verdict from the future is stale");
+	assert.equal(hasAudioInput("darwin", env, macProbe("{not json")), false);
+	assert.equal(hasAudioInput("darwin", env, macProbe(JSON.stringify({ input: "yes", at: 10 * DAY }))), false);
+});
+
+function probeDeps(cache?: string) {
+	const written: Array<{ path: string; text: string }> = [];
+	let done: ((devices: number | undefined) => void) | undefined;
+	const deps = {
+		...macProbe(cache),
+		runs: 0,
+		killed: 0,
+		written,
+		finish: (devices: number | undefined) => done!(devices),
+		write: (path: string, text: string) => { written.push({ path, text }); },
+		run: (callback: (devices: number | undefined) => void) => {
+			deps.runs++;
+			done = callback;
+			return () => { deps.killed++; };
+		},
+	};
+	return deps;
+}
+
+test("a macOS probe in the background saves its verdict and starts setup when it finds a microphone", () => {
+	const env = { PI_VOICE_HOME: HOME };
+	const found = probeDeps();
+	let starts = 0;
+	probeAudioInput("darwin", env, () => starts++, found);
+	assert.equal(found.runs, 1, "no verdict: the probe starts");
+	found.finish(2);
+	assert.equal(starts, 1);
+	assert.deepEqual(found.written.map((entry) => [entry.path, JSON.parse(entry.text)]), [[VERDICT, { input: true, at: 10 * DAY }]]);
+
+	const none = probeDeps();
+	probeAudioInput("darwin", env, () => starts++, none);
+	none.finish(0);
+	assert.equal(starts, 1, "no microphone: no setup");
+	assert.deepEqual(JSON.parse(none.written[0]!.text), { input: false, at: 10 * DAY });
+
+	const failed = probeDeps();
+	probeAudioInput("darwin", env, () => starts++, failed);
+	failed.finish(undefined);
+	assert.equal(starts, 1);
+	assert.deepEqual(failed.written, [], "a probe that fails or times out decides nothing and saves nothing");
+});
+
+test("a macOS probe is skipped with a fresh verdict, off macOS, and ends with the session", () => {
+	const env = { PI_VOICE_HOME: HOME };
+	const fresh = probeDeps(JSON.stringify({ input: false, at: 10 * DAY - 1_000 }));
+	probeAudioInput("darwin", env, () => assert.fail("no setup"), fresh);
+	assert.equal(fresh.runs, 0);
+	const linux = probeDeps();
+	probeAudioInput("linux", env, () => assert.fail("no setup"), linux);
+	assert.equal(linux.runs, 0);
+
+	const ended = probeDeps(JSON.stringify({ input: true, at: 0 }));
+	const stop = probeAudioInput("darwin", env, () => assert.fail("no setup after the session ends"), ended);
+	assert.equal(ended.runs, 1, "a stale verdict is probed again");
+	stop();
+	assert.equal(ended.killed, 1);
+	ended.finish(1);
+	assert.deepEqual(ended.written, []);
+});
+
+test("the device probe child reports its count, and is killed at its timeout", async () => {
+	const count = await new Promise<number | undefined>((resolve) => runDeviceProbe(resolve, { command: process.execPath, args: ["-e", "process.stdout.write('3')"] }));
+	assert.equal(count, 3);
+	const garbage = await new Promise<number | undefined>((resolve) => runDeviceProbe(resolve, { command: process.execPath, args: ["-e", "process.stdout.write('lots')"] }));
+	assert.equal(garbage, undefined);
+	const started = Date.now();
+	const hung = await new Promise<number | undefined>((resolve) => runDeviceProbe(resolve, { command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] }, 300));
+	assert.equal(hung, undefined);
+	assert.ok(Date.now() - started < 5_000, "the timeout ends a hung probe");
+	const missing = await new Promise<number | undefined>((resolve) => runDeviceProbe(resolve, { command: "/nonexistent/pi-extras-probe", args: [] }));
+	assert.equal(missing, undefined);
 });
 
 test("dictation joins existing text with a single space", () => {
