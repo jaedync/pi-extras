@@ -119,7 +119,7 @@ export class Team implements HostTeam {
 		this.sessions = new OpenSessions({ launcher: options.launcher, idle: (name) => this.records.get(name)?.state === "idle", warn: options.warn ?? console.warn,
 			...(options.idleReleaseMs !== undefined ? { idleReleaseMs: options.idleReleaseMs } : {}) });
 		this.routing = this.router();
-		this.handUpHost = { questions: this.questions, routing: this.routing, list: () => this.list(), deliverToMain: (delivery) => options.deliverToMain(delivery), now: () => this.now() };
+		this.handUpHost = { questions: this.questions, routing: this.routing, list: () => this.list(), get: this.lookup, deliverToMain: (delivery) => options.deliverToMain(delivery), now: () => this.now() };
 	}
 
 	/** Routing's view of the team (routing.ts). */
@@ -640,6 +640,8 @@ export class Team implements HostTeam {
 		// A failure after an answer is news main has not heard.
 		this.patch(name, { state: "failed", endedAt: this.now(), activity: null, error: message, answeredMain: undefined, report: this.sessions.runText(name), ...this.unreadLeft(name) });
 		this.finish(name);
+		// Its subagents stop as a stop's would, but each report goes on up (hand-up.ts), since this one can't read it.
+		for (const child of this.list().filter((entry) => entry.parent === name)) void this.stop(child.name, { reason: `because its parent ${name} failed` });
 	}
 
 	/** This run's messages, which are where a steered message shows up once the child reads it. */

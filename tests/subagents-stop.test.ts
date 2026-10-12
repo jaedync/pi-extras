@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
+import { teamHarness } from "./support/team-harness.ts";
 import { type AgentRecord, type ChildHandle, type ChildHooks, type MainDelivery, NO_USAGE, type SpawnRequest } from "../lib/subagents/types.ts";
 
 const flush = async (rounds = 4) => { for (let i = 0; i < rounds; i++) await tick(); };
@@ -162,4 +163,30 @@ test("the usage of the request a stop aborts reaches the record", async () => {
 	const stopped = await team.stop("big");
 	assert.equal(stopped!.usage.cost, 0.92);
 	assert.equal(stopped!.state, "stopped");
+});
+
+test("an agent that fails stops its subagents, and their reports go to main instead of being lost", async () => {
+	const h = teamHarness({ maxDepth: 3 });
+	h.spawn("mid", { name: "mid" }); await flush();
+	h.spawn("leaf", { name: "leaf", parent: "mid" }); await flush();
+	h.lastCall("mid").fail(new Error("invalid_request_error: something the model did"));
+	await flush();
+	assert.equal(h.team.get("mid")!.state, "failed");
+	const leaf = h.team.get("leaf")!;
+	assert.equal(leaf.state, "stopped");
+	assert.match(leaf.stopReason ?? "", /mid failed/);
+	assert.deepEqual(h.main.flatMap((delivery) => delivery.kind === "report" ? [delivery.record.name] : []), ["mid", "leaf"]);
+});
+
+test("the report of a subagent whose parent failed goes to the nearest live ancestor", async () => {
+	const h = teamHarness({ maxDepth: 3 });
+	h.spawn("top", { name: "top" }); await flush();
+	h.spawn("mid", { name: "mid", parent: "top" }); await flush();
+	h.spawn("leaf", { name: "leaf", parent: "mid" }); await flush();
+	h.lastCall("mid").fail(new Error("invalid_request_error: something the model did"));
+	await flush();
+	const toTop = (h.steered.get("top") ?? []).join("\n");
+	assert.match(toTop, /mid \(/, "top hears of its own child's failure");
+	assert.match(toTop, /leaf's parent mid has ended/, "and gets leaf's report too");
+	assert.equal(h.main.filter((delivery) => delivery.kind === "report").length, 0);
 });

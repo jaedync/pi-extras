@@ -10,12 +10,13 @@ import { reportText } from "./format.ts";
 import { MAIN } from "./names.ts";
 import type { OpenQuestions } from "./questions.ts";
 import type { Routing } from "./routing.ts";
-import type { AgentRecord, MainDelivery } from "./types.ts";
+import { type AgentRecord, LIVE_STATES, type MainDelivery } from "./types.ts";
 
 export interface HandUpHost {
 	readonly questions: OpenQuestions;
 	readonly routing: Routing;
 	list(): AgentRecord[];
+	get(name: string): AgentRecord | undefined;
 	deliverToMain(delivery: MainDelivery): void;
 	now(): number;
 }
@@ -55,9 +56,23 @@ function payOwed(host: HandUpHost, record: AgentRecord): { parentAsked: boolean;
 	return { parentAsked, unanswered };
 }
 
-/** The report to its parent, which a blocking parent gets from its wait instead. */
+/**
+ * The report to its parent, which a blocking parent gets from its wait
+ * instead. A parent that failed or was stopped can't read it, so it goes to
+ * the nearest live ancestor, or main: no report is lost.
+ */
 function reportUp(host: HandUpHost, record: AgentRecord, quiet: boolean): void {
-	if (record.blocking) return;
-	if (record.parent === MAIN) return host.deliverToMain({ kind: "report", record, ...(quiet ? { quiet } : {}) });
-	host.routing.deliver(record.name, record.parent, reportText(record, host.now()), !quiet, `Report from ${record.name}`);
+	const to = reportTarget(host, record);
+	const orphan = to !== record.parent;
+	if (record.blocking && !orphan) return;
+	if (to === MAIN) return host.deliverToMain({ kind: "report", record, ...(quiet && !orphan ? { quiet } : {}) });
+	const why = orphan ? `${record.name}'s parent ${record.parent} has ended, so its report comes to you.\n` : "";
+	host.routing.deliver(record.name, to, `${why}${reportText(record, host.now())}`, !quiet || orphan, `Report from ${record.name}`);
+}
+
+function reportTarget(host: HandUpHost, record: AgentRecord): string {
+	const parent = host.get(record.parent);
+	if (!parent || (parent.state !== "failed" && parent.state !== "stopped")) return record.parent;
+	for (let above = host.get(parent.parent); above; above = host.get(above.parent)) if (LIVE_STATES.has(above.state)) return above.name;
+	return MAIN;
 }
