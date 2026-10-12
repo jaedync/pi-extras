@@ -35,10 +35,11 @@ function scripted(...runs: CheckRun[]) {
 
 const settled = async () => { for (let i = 0; i < 6; i++) await tick(); };
 
-/** The child calls these tools in the run under way, as an assistant message in its transcript. */
+/** The child calls these tools in the run under way: its session reports each call as it starts, and its transcript shows them. */
 const calls = (h: ReturnType<typeof teamHarness>, name: string, ...tools: string[]) => {
 	const parts = tools.map((tool, i) => ({ type: "toolCall", id: `${tool}-${i}`, name: tool, arguments: {} }));
 	h.transcripts.set(name, [...(h.transcripts.get(name) ?? []), { role: "assistant", content: parts }]);
+	for (const tool of tools) h.hooks.get(name)?.toolCalled?.(tool);
 };
 
 test("a check that passes runs once as part of the run, and the report carries its block", async () => {
@@ -252,6 +253,65 @@ test("a run that called no tool that can change files since the last check skips
 	await run("Lint too.", ["message"], { check: { command: "npm run lint" } });
 	assert.equal(script.asked.length, 5, "a new check command has not run yet");
 	assert.equal(script.asked.at(-1)?.command, "npm run lint");
+	await h.team.close();
+});
+
+test("an edit counts as a change even when a compaction took it out of the context before the check", async () => {
+	const script = scripted();
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("impl", { name: "impl", check: { command: "npm test", fixUntilPass: 0 } });
+	await tick();
+	calls(h, name, "edit");
+	h.lastCall(name).finish("Implemented.");
+	await h.team.whenDone(name);
+	assert.ok((await h.team.send("main", name, "Do more work.")).ok);
+	await settled();
+	calls(h, name, "edit");
+	// Pi compacts: the context now holds a summary and the last read only.
+	h.transcripts.set(name, [{ role: "compactionSummary", summary: "edited a.ts" }, { role: "assistant", content: [{ type: "toolCall", id: "r", name: "read", arguments: {} }] }]);
+	h.lastCall(name).finish("More done.");
+	const done = await h.team.whenDone(name);
+	assert.equal(script.asked.length, 2, "the check runs again");
+	assert.equal(done.checkSkipped, undefined);
+	await h.team.close();
+});
+
+test("a change by an agent's own subagent, even one a message resumed, counts as its change; a peer's does not", async () => {
+	const script = scripted();
+	const h = teamHarness({ check: script.check, maxDepth: 2 });
+	const lead = h.spawn("lead", { name: "lead", check: { command: "npm test", fixUntilPass: 0 } });
+	const peer = h.spawn("peer", { name: "peer" });
+	await tick();
+	calls(h, lead, "edit");
+	h.lastCall(lead).finish("Done.");
+	await h.team.whenDone(lead);
+	assert.equal(script.asked.length, 1);
+	assert.ok(h.team.spawn({ name: "helper", task: "help", parent: lead, model: "m", readOnly: false, fork: false, blocking: false }).ok);
+	await tick();
+	h.lastCall("helper").finish("Ready.");
+	await settled();
+	assert.ok((await h.team.send("main", lead, "Have your helper fix b.ts.")).ok);
+	await settled();
+	calls(h, lead, "message");
+	assert.ok((await h.team.send(lead, "helper", "Fix b.ts.")).ok);
+	h.lastCall(lead).finish("Asked the helper.");
+	await settled();
+	assert.equal(h.team.get(lead)!.state, "waiting");
+	calls(h, "helper", "edit");
+	h.lastCall("helper").finish("Fixed b.ts.");
+	await settled();
+	h.lastCall(lead).finish("The helper fixed b.ts.");
+	await h.team.whenDone(lead);
+	assert.equal(script.asked.length, 2, "its helper's edit is its work");
+	calls(h, peer, "edit");
+	h.lastCall(peer).finish("Edited c.ts.");
+	await settled();
+	assert.ok((await h.team.send("main", lead, "Anything else?")).ok);
+	await settled();
+	calls(h, lead, "message");
+	h.lastCall(lead).finish("No.");
+	assert.equal((await h.team.whenDone(lead)).checkSkipped, h.team.get(lead)!.runs, "a peer's edit is not its work");
+	assert.equal(script.asked.length, 2);
 	await h.team.close();
 });
 

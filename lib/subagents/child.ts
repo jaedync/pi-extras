@@ -451,6 +451,7 @@ function watchChild(session: AgentSession, hooks: ChildHooks, contextWindow: num
 		}
 		// Pi's own rule: the size is unknown until a reply after the compaction.
 		if (e.type === "compaction_end") hooks.update({ contextTokens: undefined });
+		else if (e.type === "tool_execution_start") hooks.toolCalled?.(e.toolName ?? "");
 		else if (e.type === "tool_execution_end") hooks.update({ toolCalls: ++toolCalls });
 		else if (e.type === "message_end" && e.message?.role === "assistant") {
 			usage = addUsage(usage, e.message.usage);

@@ -240,6 +240,8 @@ export interface ChildHooks {
 	 * there, and the team moves the run to a new session (swap.ts).
 	 */
 	turnEnded?(): boolean;
+	/** A tool call starts, with the tool's name: the team counts the calls that can change files (checks.ts). */
+	toolCalled?(tool: string): void;
 }
 
 export interface Launcher {

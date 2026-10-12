@@ -24,8 +24,8 @@ const FAILED_TAIL = { lines: 40, chars: 4_000 };
 export const SKIPPED_LINE = "Check skipped: no changes since the last check.";
 /**
  * Tools that can't change files: Pi's tools that only read, and this
- * extension's messages and stops. Any other tool can: `subagent`, whose
- * subagents may change files for the caller, and every tool not named here.
+ * extension's messages and stops. Any other tool can, `subagent` too, and
+ * a subagent's calls count for each agent above it (`RunChecks.called`).
  */
 const UNCHANGING_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "find", "ls", "message", "stop_subagent"]);
 const PASSED_TAIL = { lines: 10, chars: 1_000 };
@@ -133,18 +133,6 @@ const fenced = (text: string): string => {
 	return `${fence}\n${text}\n${fence}`;
 };
 
-/** Whether an assistant message among `messages` calls a tool that can change files. */
-export function changesFiles(messages: readonly unknown[]): boolean {
-	return messages.some((message) => {
-		const entry = message as { role?: unknown; content?: unknown };
-		if (entry.role !== "assistant" || !Array.isArray(entry.content)) return false;
-		return entry.content.some((part) => {
-			const call = part as { type?: unknown; name?: unknown };
-			return call.type === "toolCall" && !(typeof call.name === "string" && UNCHANGING_TOOLS.has(call.name));
-		});
-	});
-}
-
 /** The block a report ends with: the exact command, how it ended and the last lines of its output. */
 export function checkBlock(result: CheckResult): string {
 	const command = result.command.includes("\n") ? `Command:\n${fenced(result.command)}` : `Command: ${result.command}`;
@@ -181,8 +169,6 @@ export interface CheckHost {
 	under(name: string, ancestor: string): boolean;
 	/** Whether the run ended some other way meanwhile: it was stopped, or the team closed. */
 	gone(name: string): boolean;
-	/** What its run has said so far, in its session now. */
-	messages(name: string): readonly unknown[];
 	now(): number;
 	/** Every agent's name, for an error about one that is not there. */
 	known(): string;
@@ -192,14 +178,16 @@ export interface CheckHost {
  * The team's checks: the ones running now, the fix rounds of each run, the
  * checks messages set, and which agents changed nothing since their last
  * check. That is kept in memory only: after a restart the next check runs.
+ * Calls are counted as they start (child.ts), not read from the session's
+ * messages, which a compaction can take out of its context.
  */
 export class RunChecks {
 	private readonly running = new Map<string, AbortController>();
 	private readonly rounds = new Map<string, number>();
-	/** Agents whose last check covers every call they made that can change files. */
-	private readonly clean = new Set<string>();
-	/** The messages of each run that `seen` has looked at. */
-	private readonly marks = new Map<string, ReadonlySet<unknown>>();
+	/** How many calls that can change files each agent and the subagents under it made. */
+	private readonly changes = new Map<string, number>();
+	/** How many of those calls each agent's last check came after. */
+	private readonly checkedAt = new Map<string, number>();
 	private readonly host: CheckHost;
 
 	constructor(host: CheckHost) {
@@ -212,21 +200,21 @@ export class RunChecks {
 	 * a move to another session.
 	 */
 	end(name: string): void {
-		this.seen(name);
 		this.rounds.delete(name);
-		this.marks.delete(name);
 	}
 
 	/**
-	 * Looks at what `name`'s run said since the last look: a call that can
-	 * change files means its last check no longer covers its work. Called
-	 * before the run's messages go: it waits, ends or moves to a new session.
+	 * `name` starts a call of `tool`. One that can change files is work its
+	 * last check did not see, and work of each agent above it: a subagent that
+	 * `subagent` started or a message resumed changes files for its caller.
 	 */
-	seen(name: string): void {
-		const messages = this.host.messages(name);
-		const mark = this.marks.get(name);
-		if (changesFiles(mark ? messages.filter((message) => !mark.has(message)) : messages)) this.clean.delete(name);
-		this.marks.set(name, new Set(messages));
+	called(name: string, tool: string): void {
+		if (UNCHANGING_TOOLS.has(tool)) return;
+		const counted = new Set<string>();
+		for (let record = this.host.get(name); record && !counted.has(record.name); record = this.host.get(record.parent)) {
+			counted.add(record.name);
+			this.changes.set(record.name, (this.changes.get(record.name) ?? 0) + 1);
+		}
 	}
 
 	/** Aborts `name`'s running check, or every one, which kills its process group. */
@@ -253,13 +241,14 @@ export class RunChecks {
 	async run(name: string, handle: Pick<ChildHandle, "check">): Promise<string | null> {
 		const record = this.host.get(name);
 		if (!record?.check) return null;
-		this.seen(name);
 		// Nothing to check: a run that only answered or sent messages. Should the last check have failed, it would fail again.
 		if (this.covered(record)) {
 			this.host.patch(name, { checkSkipped: record.runs });
 			return null;
 		}
 		const controller = new AbortController();
+		// A subagent's call during the check comes after what the check sees.
+		const changes = this.changes.get(name) ?? 0;
 		const fixes = this.rounds.get(name) ?? 0;
 		this.running.set(name, controller);
 		this.host.patch(name, { activity: checkActivity(record.check.command), work: "tool" });
@@ -269,7 +258,7 @@ export class RunChecks {
 		if (this.host.gone(name)) return null;
 		// A failed check is news main has not heard, even when the run only answered main.
 		this.host.patch(name, { checked: result, checkSkipped: undefined, ...WAITING_FOR_MODEL, ...(result.exitCode !== 0 ? { answeredMain: undefined } : {}) });
-		this.clean.add(name);
+		this.checkedAt.set(name, changes);
 		// A check that could not run is the harness's problem, which no fix round of the child repairs.
 		const fixable = result.exitCode !== 0 && (result.exitCode !== null || result.timedOut === true);
 		if (!fixable || fixes >= record.check.fixUntilPass) return null;
@@ -280,6 +269,6 @@ export class RunChecks {
 	/** Whether its last check ran this command, and it called nothing that can change files since. */
 	private covered(record: AgentRecord): boolean {
 		const last = record.checked;
-		return this.clean.has(record.name) && last !== undefined && last.exitCode !== null && last.command === record.check?.command;
+		return this.checkedAt.get(record.name) === (this.changes.get(record.name) ?? 0) && last !== undefined && last.exitCode !== null && last.command === record.check?.command;
 	}
 }

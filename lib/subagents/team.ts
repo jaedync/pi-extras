@@ -93,7 +93,7 @@ export class Team implements HostTeam {
 	private readonly swaps = new TurnSwaps();
 	private readonly checks = new RunChecks({
 		get: (name) => this.records.get(name), patch: (name, patch) => this.patch(name, patch), under: (name, ancestor) => this.under(name, ancestor),
-		gone: (name) => this.gone(name), now: () => this.now(), known: () => this.knownNames(), messages: (name) => this.sessions.runMessages(name),
+		gone: (name) => this.gone(name), now: () => this.now(), known: () => this.knownNames(),
 	});
 	private readonly budgets: RunBudgets;
 	private readonly locks = new EditLocks(this);
@@ -437,6 +437,7 @@ export class Team implements HostTeam {
 	private async open(name: string): Promise<ChildHandle | null> {
 		const handle = await this.options.launcher.launch(this.records.get(name)!, {
 			turnEnded: () => this.turnEnded(name),
+			toolCalled: (tool) => this.checks.called(name, tool),
 			update: (patch) => {
 				const record = this.records.get(name);
 				if (!record || !LIVE_STATES.has(record.state)) return;
@@ -542,7 +543,6 @@ export class Team implements HostTeam {
 		// Read before the state change in start() ends the clock.
 		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
 		this.resumePrompts.set(name, prompt);
-		this.checks.seen(name);
 		this.patch(name, { ...(carriesUnread ? {} : this.unreadLeft(name)), activity: swapActivity(causes) });
 		void this.sessions.release(name);
 		void this.start(name);
@@ -578,7 +578,6 @@ export class Team implements HostTeam {
 		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
 		this.resumePrompts.set(name, fallbackNote(step));
 		this.patch(name, { ...this.unreadLeft(name), state: "queued", model: step.to, fallbacks: [...(record.fallbacks ?? []), step], activity: `switching to ${step.to}` });
-		this.checks.seen(name);
 		void this.sessions.release(name);
 		this.queue.push(name);
 		this.pump();
@@ -600,8 +599,7 @@ export class Team implements HostTeam {
 	private settle(name: string, report: string | undefined): void {
 		const activity = this.waitsFor(name);
 		if (activity) {
-			// Its report waits for what it is still owed; that arrival resumes it. Its next part starts a new list of messages.
-			this.checks.seen(name);
+			// Its report waits for what it is still owed; that arrival resumes it.
 			this.patch(name, { state: "waiting", activity, report, unread: undefined });
 			this.pump();
 			return;

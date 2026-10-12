@@ -76,11 +76,17 @@ function harness(options: Partial<TeamOptions> & { files?: (name: string) => Arr
 	};
 	const sessionsOf = (name: string) => sessions.filter((session) => session.name === name);
 	const current = (name: string) => sessionsOf(name).at(-1)!;
+	/** `name` calls `tool`: its transcript shows the call, and its session reports it as it starts. */
+	const call = (name: string, tool: string): string => {
+		const id = `call-${(transcripts.get(name) ?? []).length}`;
+		say(name, { role: "assistant", content: [{ type: "toolCall", id, name: tool, arguments: {} }] });
+		current(name).hooks.toolCalled?.(tool);
+		return id;
+	};
 	/** A turn of `name` ended with its tool results in: the session asks the team, and ends its prompt when told to. */
 	const boundary = (name: string): boolean => {
 		const session = current(name);
-		const id = `call-${(transcripts.get(name) ?? []).length}`;
-		say(name, { role: "assistant", content: [{ type: "toolCall", id, name: "bash", arguments: {} }] });
+		const id = call(name, "bash");
 		say(name, { role: "toolResult", toolCallId: id, content: [{ type: "text", text: "ok" }] });
 		const ends = session.hooks.turnEnded?.() ?? false;
 		if (ends) session.resolve!();
@@ -91,7 +97,7 @@ function harness(options: Partial<TeamOptions> & { files?: (name: string) => Arr
 		current(name).resolve!();
 	};
 	const reports = () => main.filter((delivery) => delivery.kind === "report");
-	return { team, main, logged, transcripts, spawn, sessionsOf, current, boundary, finish, reports, say, reload: () => { generation++; } };
+	return { team, main, logged, transcripts, spawn, sessionsOf, current, call, boundary, finish, reports, say, reload: () => { generation++; } };
 }
 
 test("a stale session moves to a new session at its next turn boundary, as the same run; a current one never moves", async () => {
@@ -252,7 +258,7 @@ test("a run that swaps keeps its fix rounds, and a stale session goes before the
 	const h = harness({ check: failing });
 	const name = h.spawn("impl", { check: { command: "npm test", fixUntilPass: 2 } });
 	await settled();
-	h.say(name, { role: "assistant", content: [{ type: "toolCall", id: "e1", name: "edit", arguments: {} }] });
+	h.call(name, "edit");
 	h.reload();
 	h.finish(name, "Done.");
 	await settled();
@@ -260,7 +266,7 @@ test("a run that swaps keeps its fix rounds, and a stale session goes before the
 	assert.equal(first!.prompts.length, 1, "the fix round goes to the new session");
 	assert.match(second!.prompts[0] ?? "", /^The harness ran your check[\s\S]*fix round 1 of 2/);
 	assert.doesNotMatch(second!.prompts[0] ?? "", /moved to current code/, "a real prompt needs no note");
-	h.say(name, { role: "assistant", content: [{ type: "toolCall", id: "e2", name: "edit", arguments: {} }] });
+	h.call(name, "edit");
 	h.finish(name, "Fixed.");
 	await settled();
 	assert.match(h.current(name).prompts.at(-1) ?? "", /fix round 2 of 2/, "the count went on across the swap");
