@@ -211,11 +211,20 @@ export class Setup {
 		}
 	}
 
-	/** Resolves with the interpreter to run, once dictation can work. */
+	/**
+	 * Resolves with the interpreter to run, once dictation can work. A host that
+	 * was never set up (it could not tell it has a microphone) starts setup here,
+	 * once, unless offline or after a failure.
+	 */
 	async ready(): Promise<string> {
+		let started = false;
 		for (;;) {
 			const tiers = readTiers(this.home);
 			if (floorReady(tiers)) return tiers.python!;
+			if (!this.running && !started && !this.failure && !isOffline()) {
+				started = true;
+				this.start();
+			}
 			if (!this.running) throw new Error(this.failure ? `voice setup failed: ${this.failure}` : "voice is not set up yet (/voice setup)");
 			await Promise.race([this.running, sleep(BUSY_POLL_MS)]);
 		}

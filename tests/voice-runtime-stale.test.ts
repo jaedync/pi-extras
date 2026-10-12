@@ -138,4 +138,54 @@ test("a daemon spawn that fails ends the connect wait at once with its cause", a
 	assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
 });
 
+/** A home of its own, so tiers written by one test do not satisfy the next. */
+function freshHome(): string {
+	return mkdtempSync(join(home, "ready-"));
+}
+
+/** A provision run that installs the floor: the interpreter, the VAD and the small model. */
+function floorProvision(setupHome: string, runs: { count: number }) {
+	return async (): Promise<"done" | "busy"> => {
+		runs.count++;
+		const python = join(setupHome, "python");
+		writeFileSync(python, "");
+		writeTiers(setupHome, { python, vad: join(setupHome, "vad.onnx"), "cpu-small": { ready: true, dir: setupHome } });
+		return "done";
+	};
+}
+
+function withOnline<T>(run: () => Promise<T>): Promise<T> {
+	const offline = process.env.PI_OFFLINE;
+	delete process.env.PI_OFFLINE;
+	return run().finally(() => (process.env.PI_OFFLINE = offline));
+}
+
+// Hosts that could not tell whether they have a microphone do not set up at session start; a dictation must.
+test("a dictation on a host that was never set up starts setup and waits for it", () => withOnline(async () => {
+	const setupHome = freshHome();
+	const runs = { count: 0 };
+	const setup = new Setup({ home: setupHome, provision: floorProvision(setupHome, runs), onProgress() {}, onFinish() {}, onCallbackError() {} });
+	assert.equal(await setup.ready(), join(setupHome, "python"));
+	assert.equal(runs.count, 1);
+}));
+
+test("a failed setup still fails the dictation, and setup that installs no floor is not restarted", () => withOnline(async () => {
+	const failedHome = freshHome();
+	const failed = new Setup({ home: failedHome, provision: async () => { throw new Error("disk full"); }, onProgress() {}, onFinish() {}, onCallbackError() {} });
+	await assert.rejects(failed.ready(), /voice setup failed: disk full/);
+	const emptyHome = freshHome();
+	let runs = 0;
+	const empty = new Setup({ home: emptyHome, provision: async () => { runs++; return "done"; }, onProgress() {}, onFinish() {}, onCallbackError() {} });
+	await assert.rejects(empty.ready(), /not set up yet/);
+	assert.equal(runs, 1);
+}));
+
+test("offline, a dictation does not start setup", async () => {
+	const offlineHome = freshHome();
+	const runs = { count: 0 };
+	const setup = new Setup({ home: offlineHome, provision: floorProvision(offlineHome, runs), onProgress() {}, onFinish() {}, onCallbackError() {} });
+	await assert.rejects(setup.ready(), /not set up yet/);
+	assert.equal(runs.count, 0);
+});
+
 test.after(() => rmSync(home, { recursive: true, force: true }));

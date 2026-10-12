@@ -658,7 +658,7 @@ installation, and `/voice unload` frees the model's memory.
 
 **Platforms.** macOS, and Linux with PulseAudio or ALSA (including WSLg).
 Linux has had less testing than macOS. Windows is not supported. Hosts without
-an audio input never download anything.
+an audio input download nothing until you start a dictation.
 
 **First run.** On a machine with a microphone, the first Pi session installs
 voice in the background: a private [uv](https://github.com/astral-sh/uv),
@@ -667,7 +667,8 @@ Python 3.12, the `sherpa-onnx` speech runtime, and NVIDIA Parakeet models. The
 487 MB multilingual Parakeet v3 follows and becomes the default. On Apple
 Silicon, `/voice model` also offers an MLX build of Parakeet v3 (about 2.5 GB).
 A model is skipped when the disk has less than twice its size free. Setup
-never blocks Pi; a dictation started before it finishes waits for it.
+never blocks Pi; a dictation started before it finishes waits for it. If setup
+did not start with the session, the first dictation starts it, except offline.
 
 **Background process.** One daemon per user holds the model and serves every
 Pi session. It starts on the first dictation, exits 15 minutes after the last

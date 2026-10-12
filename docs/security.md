@@ -230,7 +230,7 @@ Setup downloads, into `PI_VOICE_HOME` (default `~/.cache/pi-extras/voice`):
 
 `PI_OFFLINE=1`, `true` or `yes` skips setup; voice then uses only what is
 already installed.
-Nothing downloads on hosts without an audio input.
+Nothing downloads on hosts without an audio input until you start a dictation.
 
 Sessions talk to the daemon over a Unix socket in `PI_VOICE_HOME` that only your
 user can open. The daemon exits when it goes unused or no Pi session is open.
