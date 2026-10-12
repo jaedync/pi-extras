@@ -6,13 +6,13 @@
  */
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { LimitSnapshot } from "../limit-store.ts";
 import { STATUS_TIME_ZONE } from "../status-plus-logic.ts";
 import { localDateKey, localDayStartMs } from "./calendar.ts";
 import { entryDollars, sizeKey, type DollarInputs, type OpenRouterKeyInfo, type TokenfoldSnapshot, type WindowSize } from "./core.ts";
 import { createSpendLedger, type SpendLedger } from "./ledger.ts";
-import { advanceReading, isWindowReading, type GrantedReset, type WindowReading } from "./resets.ts";
+import { advanceReading, evidenceOf, isWindowReading, mergeReadings, type WindowEvidence, type WindowReading } from "./resets.ts";
 import {
 	advanceMeterDay,
 	fetchOpenRouterKey,
@@ -100,16 +100,26 @@ function readReadings(file: string): Readings {
 	return Object.fromEntries(Object.entries(raw).filter((pair): pair is [string, WindowReading] => isWindowReading(pair[1])));
 }
 
-function writeJson(file: string, value: unknown): void {
-	mkdirSync(join(file, ".."), { recursive: true, mode: 0o700 });
+/** False when the file could not be saved; the caller reports it. */
+function writeJson(file: string, value: unknown): boolean {
 	const temp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
 	try {
+		mkdirSync(join(file, ".."), { recursive: true, mode: 0o700 });
 		writeFileSync(temp, `${JSON.stringify(value)}\n`, { mode: 0o600 });
 		renameSync(temp, file);
+		return true;
 	} catch {
 		rmSync(temp, { force: true });
+		return false;
 	}
 }
+
+/** What each state file is for, for the note when it cannot be saved. */
+const STATE_FILES: Record<string, string> = {
+	"meter-day.json": "spent today can count from the wrong reading",
+	"window-readings.json": "granted resets can be missed, and window sizes can read high",
+	"window-sizes-v2.json": "the start of the next cycle can have no dollar size",
+};
 
 function meterReadings(snapshots: Array<[string, LimitSnapshot]>): MeterReading[] {
 	const readings: MeterReading[] = [];
@@ -138,6 +148,18 @@ export function createDollarsCollector(options: CollectorOptions) {
 	const ledger: SpendLedger = createSpendLedger({
 		root: join(options.agentDir, "sessions"), maxAgeMs: LEDGER_MAX_AGE_MS, minRefreshMs: LEDGER_MIN_REFRESH_MS,
 	});
+	// File names whose last save failed; collect() reports them, and a later successful save clears them.
+	let failedSaves = new Set<string>();
+	function save(file: string, value: unknown): void {
+		const name = basename(file);
+		const saved = writeJson(file, value);
+		if (saved === failedSaves.has(name)) {
+			const next = new Set(failedSaves);
+			if (saved) next.delete(name);
+			else next.add(name);
+			failedSaves = next;
+		}
+	}
 	let tokenfold: Cached<{ snapshot?: TokenfoldSnapshot; error?: string }> | undefined;
 	let openRouter: Cached<OpenRouterKeyInfo | undefined> | undefined;
 
@@ -146,7 +168,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 	 * already have. A reading taken before local midnight (a stored snapshot
 	 * loaded at startup) would put yesterday's spend into today.
 	 */
-	function observe(snapshots: Array<[string, LimitSnapshot]>, now: number): Anchors {
+	function observeMeters(snapshots: Array<[string, LimitSnapshot]>, now: number): Anchors {
 		const dayStart = localDayStartMs(now, timeZone);
 		const stored = readAnchors(anchorFile);
 		let next = stored;
@@ -155,28 +177,49 @@ export function createDollarsCollector(options: CollectorOptions) {
 			const anchor = advanceMeterDay(next[reading.provider], reading.usedUsd, reading.atMs, timeZone);
 			if (anchor !== next[reading.provider]) next = { ...next, [reading.provider]: anchor };
 		}
-		if (next !== stored) writeJson(anchorFile, next);
+		if (next !== stored) save(anchorFile, next);
 		return next;
+	}
+
+	/**
+	 * Record what the polls show, for every process: the first meter reading
+	 * of each day and the last reading of each window. The poll hook calls
+	 * this, so a granted reset is found at the first poll after it, not at the
+	 * next usage call.
+	 */
+	function observe(snapshots: Array<[string, LimitSnapshot]>, now: number): { anchors: Anchors; resetEvidence: Record<string, WindowEvidence> } {
+		return { anchors: observeMeters(snapshots, now), resetEvidence: observeWindows(snapshots, now) };
 	}
 
 	/**
 	 * Keep the last reading of each subscription window, shared by processes,
 	 * to see granted mid-window resets. Returns the granted resets by sizeKey().
 	 */
-	function observeWindows(snapshots: Array<[string, LimitSnapshot]>, now: number): Record<string, GrantedReset> {
+	function observeWindows(snapshots: Array<[string, LimitSnapshot]>, now: number): Record<string, WindowEvidence> {
 		const stored = readReadings(readingsFile);
 		let next = stored;
+		const changed: string[] = [];
 		for (const [provider, snapshot] of snapshots) {
 			if (!Number.isFinite(snapshot.atMs) || snapshot.atMs > now) continue;
 			for (const entry of snapshot.entries) {
 				if ((entry.kind ?? "window") !== "window" || !Number.isFinite(entry.usedPct) || !Number.isFinite(entry.resetMs)) continue;
 				const key = sizeKey(provider, entry);
 				const record = advanceReading(next[key], { pct: entry.usedPct as number, resetMs: entry.resetMs as number, atMs: snapshot.atMs });
-				if (record !== next[key]) next = { ...next, [key]: record };
+				if (record !== next[key]) {
+					next = { ...next, [key]: record };
+					changed.push(key);
+				}
 			}
 		}
-		if (next !== stored) writeJson(readingsFile, next);
-		return Object.fromEntries(Object.entries(next).flatMap(([key, record]) => (record.grant ? [[key, record.grant]] : [])));
+		if (changed.length) {
+			// Read again just before the write: another process may have saved newer readings since.
+			next = mergeReadings(readReadings(readingsFile), next, changed);
+			save(readingsFile, next);
+		}
+		return Object.fromEntries(Object.entries(next).flatMap(([key, record]) => {
+			const seen = evidenceOf(record);
+			return seen ? [[key, seen]] : [];
+		}));
 	}
 
 	async function tokenfoldFor(config: ReturnType<typeof normalizeDollarsConfig>, now: number, force: boolean, notes: string[]) {
@@ -215,13 +258,14 @@ export function createDollarsCollector(options: CollectorOptions) {
 		for (const [provider, snapshot] of snapshots) {
 			for (const entry of snapshot.entries) {
 				const dollars = entryDollars(provider, entry, inputs);
-				if (!dollars || dollars.basis !== "implied" || dollars.sizeFrom || dollars.limitUsd === undefined) continue;
+				// A start found after a gap in the readings misses spend: that size reads low and must not carry to the next cycle.
+				if (!dollars || dollars.basis !== "implied" || dollars.sizeFrom || dollars.spendStartApprox || dollars.limitUsd === undefined) continue;
 				const key = sizeKey(provider, entry);
 				if (stored[key]?.limitUsd === dollars.limitUsd) continue;
 				next = { ...next, [key]: { limitUsd: dollars.limitUsd, atMs: inputs.now, source: dollars.source === "tokenfold" ? "tokenfold" : "local" } };
 			}
 		}
-		if (next !== stored) writeJson(sizesFile, next);
+		if (next !== stored) save(sizesFile, next);
 		return next;
 	}
 
@@ -240,8 +284,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 			ledger.refresh(context.now).then(() => true, () => false),
 		]);
 		if (!ledgerOk) notes.push("Local session files could not be read; spend on this machine is missing.");
-		const anchors = observe(context.snapshots, context.now);
-		const grants = observeWindows(context.snapshots, context.now);
+		const { anchors, resetEvidence } = observe(context.snapshots, context.now);
 		const today = localDateKey(context.now, timeZone);
 		const meterToday = Object.fromEntries(meterReadings(context.snapshots)
 			.filter((reading) => anchors[reading.provider]?.date === today)
@@ -256,10 +299,11 @@ export function createDollarsCollector(options: CollectorOptions) {
 			...(snapshot ? { tokenfold: snapshot } : {}),
 			...(Object.keys(meterToday).length ? { meterToday } : {}),
 			...(openRouterKey ? { openRouterKey } : {}),
-			...(Object.keys(grants).length ? { grants } : {}),
+			...(Object.keys(resetEvidence).length ? { resetEvidence } : {}),
 			openCodeGo: { ...config.openCodeGo, models: openCodeGoModels(context) },
 		};
 		const lastSizes = rememberSizes(context.snapshots, inputs);
+		for (const name of failedSaves) notes.push(`Could not save ${name} in the usage-dollars folder, so ${STATE_FILES[name] ?? "a figure can be wrong"}.`);
 		return { inputs: Object.keys(lastSizes).length ? { ...inputs, lastSizes } : inputs, notes };
 	}
 

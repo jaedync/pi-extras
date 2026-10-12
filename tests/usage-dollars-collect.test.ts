@@ -161,19 +161,34 @@ function agentDirWithTurns(turns: Array<[atMs: number, cost: number]>): string {
 
 const weekly = (usedPct: number, atMs: number, resetMs = NOW + 3 * 24 * HOUR): Array<[string, LimitSnapshot]> =>
 	[["anthropic", { atMs, source: "poll", entries: [{ label: "7d", key: "seven_day", usedPct, windowSeconds: 7 * 86400, resetMs }] }]];
+const MIN = 60_000;
+const noFetch = async () => new Response("{}");
 
-test("a granted reset seen across calls moves the local start, and the kept size comes from the corrected spend", async () => {
+test("polls record window readings, so a granted reset starts at the poll that saw it", async () => {
 	// $10 before the grant, $4 after it.
-	const dir = agentDirWithTurns([[NOW - 3 * HOUR, 10], [NOW - 30 * 60_000, 4]]);
-	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
-	await collector.collect(context({ snapshots: weekly(97, NOW - 2 * HOUR), now: NOW - 2 * HOUR }));
-	await collector.collect(context({ snapshots: weekly(0, NOW - HOUR), now: NOW - HOUR }));
+	const dir = agentDirWithTurns([[NOW - 3 * HOUR, 10], [NOW - 30 * MIN, 4]]);
+	const poller = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch });
+	// The poll hook only observes; no usage call happens until later.
+	poller.observe(weekly(97, NOW - HOUR - 5 * MIN), NOW - HOUR - 5 * MIN);
+	poller.observe(weekly(0, NOW - HOUR), NOW - HOUR);
+	poller.observe(weekly(1, NOW - 55 * MIN), NOW - 55 * MIN);
 	// Another process shares the readings file.
-	const later = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
-	const { inputs } = await later.collect(context({ snapshots: weekly(8, NOW), now: NOW }));
-	assert.equal(inputs.grants?.["anthropic|seven_day"]?.startMs, NOW - HOUR);
+	const later = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch });
+	const { inputs, notes } = await later.collect(context({ snapshots: weekly(8, NOW), now: NOW }));
+	assert.equal(inputs.resetEvidence?.["anthropic|seven_day"]?.grant?.startMs, NOW - HOUR);
 	// $4 at 8% is a $50 window; from the cycle start it would read $175.
 	assert.deepEqual(inputs.lastSizes?.["anthropic|seven_day"], { limitUsd: 50, atMs: NOW, source: "local" });
+	assert.deepEqual(notes, ["Tokenfold is not set up (usageDollars.tokenfold in pi-extras.json), so Claude window dollars count this machine's spend only."]);
+});
+
+test("a granted reset found after a long gap in the readings keeps no size", async () => {
+	const dir = agentDirWithTurns([[NOW - 3 * HOUR, 10], [NOW - 30 * MIN, 4]]);
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch });
+	collector.observe(weekly(97, NOW - 5 * HOUR), NOW - 5 * HOUR);
+	collector.observe(weekly(0, NOW - HOUR), NOW - HOUR);
+	const { inputs } = await collector.collect(context({ snapshots: weekly(8, NOW), now: NOW }));
+	assert.equal(inputs.resetEvidence?.["anthropic|seven_day"]?.grant?.approximate, true);
+	assert.equal(inputs.lastSizes?.["anthropic|seven_day"], undefined);
 });
 
 test("sizes kept before granted resets were handled are not used", async () => {
@@ -181,7 +196,16 @@ test("sizes kept before granted resets were handled are not used", async () => {
 	mkdirSync(join(dir, "usage-dollars"), { recursive: true });
 	writeFileSync(join(dir, "usage-dollars", "window-sizes.json"),
 		JSON.stringify({ "anthropic|seven_day": { limitUsd: 52051, atMs: NOW - HOUR, source: "tokenfold" } }));
-	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch });
 	const { inputs } = await collector.collect(context({ snapshots: weekly(1, NOW), now: NOW }));
 	assert.equal(inputs.lastSizes?.["anthropic|seven_day"], undefined);
+});
+
+test("a state file that cannot be saved becomes a note", async () => {
+	const dir = agentDirWithTurns([[NOW - HOUR, 1]]);
+	// A directory in the file's place makes the rename fail.
+	mkdirSync(join(dir, "usage-dollars", "window-readings.json", "blocker"), { recursive: true });
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch });
+	const { notes } = await collector.collect(context({ snapshots: weekly(10, NOW), now: NOW }));
+	assert.ok(notes.some((note) => /window-readings\.json/.test(note) && /granted resets/.test(note)), notes.join(" | "));
 });

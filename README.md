@@ -458,11 +458,23 @@ a top-level `dollars` summary.
   only on machines that use the account Tokenfold tracks.
 - **Granted resets:** a provider can reset a window before its reset time.
   The usage before that reset does not count, so the spend in the window
-  starts at the reset. Tokenfold gives this start (`window_start`). The tool
-  also finds a granted reset itself: the percent falls by 10 points or more,
-  and the reset time does not change. When Tokenfold does not give the start
-  and the tool found a granted reset, the tool uses the spend on this machine
-  from the reset, and a note tells you this.
+  starts at the reset. Tokenfold gives this start (`window_start`).
+  - The tool also finds granted resets. It keeps a reading of each window at
+    each limit poll. Polls occur only while Pi runs.
+  - A fall of 10 points or more, or a fall to 0%, with the same reset time is
+    a granted reset. If the next reading is at 80% or more of the earlier
+    level, the tool cancels the reset.
+  - The spend starts at the latest of these times: the cycle start, the
+    Tokenfold start, and a granted reset that the tool found.
+  - Sometimes the tool finds a granted reset that is later than the Tokenfold
+    start. Then the tool uses the spend on this machine from the reset. A note
+    tells you this.
+  - A model-family window uses the Tokenfold start only when its own percent
+    also fell at that time. Otherwise it uses only the resets in its own
+    readings.
+  - Sometimes a reset comes after a gap of more than 20 minutes in the
+    readings. Then the tool does not count the spend in the gap
+    (`spendStartApprox`), and it does not keep that size for the next cycle.
 - **Model-family windows (such as `7d-fable`):** the dollars count only that
   family's spend and carry `modelFamily`. They set a provider's summary only
   when they govern the active model.

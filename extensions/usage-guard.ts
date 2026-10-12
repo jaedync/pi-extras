@@ -307,7 +307,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	// Idle polls still select faster polling near a threshold, but never persist
 	// a fired key or queue model-facing text before the next prompt chooses its model.
 	const unsubscribe = store.subscribe(() => {
-		// The first meter reading of the day anchors "spent today" for every process.
+		// The first meter reading of the day anchors "spent today", and each window reading can show a
+		// granted reset, for every process. Only polls see every reading; usage calls come too late.
 		try { dollars.observe(store.entries(), now()); } catch { /* the report recomputes it */ }
 		const ctx = latestCtx;
 		if (ctx && idle(ctx)) evaluate(ctx);
