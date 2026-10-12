@@ -14,32 +14,41 @@ import { MainMail } from "../lib/subagents/deliver.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { ToolActivity } from "../lib/subagents/tool-activity.ts";
 
-const PINNED = { version: 1, digest: "63b54ad3f6e403ac8facecf8738f60e3ceab3933f44279f7d4ebf1cebf119c56" };
+const PINNED = { version: 1, digest: "a0608750c565e7c17541e155759f1ae248915e08b25602211a4487ff6b0c57dc" };
 
-/** Every declaration that crosses from one evaluation to the next, by the file that declares it. */
+/**
+ * Every declaration that crosses from one evaluation to the next, by the file
+ * that declares it: the shapes either side calls, the values both sides match
+ * on (a renamed message type would leave old mail pending for good), the
+ * globalThis slots and what they hold, and the mail the index keeps for a
+ * start of another version.
+ */
 const CONTRACT: Record<string, readonly string[]> = {
-	"lib/subagents/contract.ts": ["HostTeam", "HostMail", "HostActivity", "HostMessage", "ModelScope", "HostPorts", "HostState", "ParkedHost"],
-	"lib/subagents/types.ts": ["AgentState", "Usage", "AgentWork", "FailureKind", "FallbackStep", "Worktree", "AgentRecord", "SpawnRequest", "ChildHandle", "ChildHooks", "Launcher"],
+	"lib/subagents/contract.ts": ["HostTeam", "HostMail", "HostActivity", "HeldMail", "HostMessage", "ModelScope", "HostPorts", "HostState", "ParkedHost"],
+	"lib/subagents/types.ts": ["AgentState", "ACTIVE_STATES", "LIVE_STATES", "Usage", "AgentWork", "FailureKind", "FallbackStep", "Worktree", "AgentRecord", "SpawnRequest", "ChildHandle", "ChildHooks", "Launcher"],
 	"lib/subagents/team.ts": ["SendResult"],
-	"lib/subagents/deliver.ts": ["Route", "MainContext", "OutgoingMessage", "MailDetails", "ReportSummary", "PendingItem"],
+	"lib/subagents/deliver.ts": ["MESSAGE_TYPE", "REPORT_TYPE", "Route", "MainContext", "OutgoingMessage", "MailDetails", "ReportSummary", "PendingItem"],
 	"lib/subagents/tool-activity.ts": ["Watched"],
 	"lib/subagents/models.ts": ["THINKING_LEVELS", "Thinking", "ModelLike", "ModelChoice"],
 	"lib/subagents/stamp.ts": ["LaunchStamp"],
+	"lib/subagents/host.ts": ["Registry", "REGISTRY"],
+	"lib/subagents/fresh-models.ts": ["ModelsRead", "READS"],
 };
 
-/** The text of `export interface`, `type` or `const` `name` up to where it closes, with comments and spacing dropped. */
+/** The text of the interface, type or const `name`, exported or not, up to where it closes, with comments and spacing dropped. */
 function declaration(text: string, file: string, name: string): string {
 	// Comments go first: a brace in one would count.
 	const source = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-	const start = source.search(new RegExp(`^export (interface|type|const) ${name}\\b`, "m"));
-	assert.ok(start >= 0, `${file} no longer declares ${name}; update CONTRACT and bump HOST_VERSION`);
+	const found = new RegExp(`^(?:export )?(interface|type|const) ${name}\\b`, "m").exec(source);
+	assert.ok(found, `${file} no longer declares ${name}; update CONTRACT and bump HOST_VERSION`);
+	const start = found.index;
 	let depth = 0;
 	for (let i = start; i < source.length; i++) {
 		const char = source[i];
 		if (char === "{" || char === "(" || char === "[") depth++;
 		else if (char === "}" || char === ")" || char === "]") {
 			depth--;
-			if (depth === 0 && source.startsWith("interface", start + "export ".length)) return normalize(source.slice(start, i + 1));
+			if (depth === 0 && found[1] === "interface") return normalize(source.slice(start, i + 1));
 		} else if (char === ";" && depth === 0) return normalize(source.slice(start, i + 1));
 	}
 	assert.fail(`${name} in ${file} does not close`);

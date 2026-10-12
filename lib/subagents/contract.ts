@@ -4,12 +4,16 @@
  * Pi evaluates the package again on /reload. A session's subagents outlive
  * that (host.ts), so the new module calls the team, the mail and the tool
  * activity that an older evaluation made, and the older team calls the new
- * module's ports and launcher. These interfaces, and the shapes they name,
- * are that contract, and `HOST_VERSION` names it. Change any of them, or what
- * one of their methods means, and bump it: a module that finds a parked host
- * of another version closes it with that host's own code and starts as a
- * reload did before (children interrupted, then resumed). A contract test
- * pins the declarations to the version, so a change can't slip past.
+ * module's ports and launcher. These interfaces, the shapes they name, the
+ * values both sides match on (message types, live states) and the globalThis
+ * slots (host.ts, fresh-models.ts) are that contract, and `HOST_VERSION`
+ * names it. Change any of them, or what one of their methods means, and bump
+ * it: a module that finds a parked host of another version closes it with
+ * that host's own code and starts as a reload did before (children
+ * interrupted, then resumed). A contract test pins the declarations to the
+ * version, so a change can't slip past. The registry's key and `ParkedHost`
+ * never change at all: a module that can't find or close a parked host
+ * leaves it to its timeout.
  *
  * Records follow the index's rule (restore.ts): a new field is optional, so
  * code of either side reads a record the other made.
