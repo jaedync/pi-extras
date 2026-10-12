@@ -22,6 +22,17 @@ export function capReport(text: string, sessionFile?: string, reportFile?: strin
 
 const replyHint = (from: string) => `answer with message({ to: "${from}", text })`;
 
+const CHECK_FIRST = "Its last tool call may not have completed and files may have changed. Verify the current state before continuing.";
+
+/** What a resumed agent is told first about how its last run ended, when that run did not finish. */
+export function resumeWarning(target: AgentRecord): string {
+	if (target.state === "interrupted") return `Your previous run was interrupted. ${CHECK_FIRST}\n\n`;
+	if (target.state === "failed") return `Your previous run failed: ${target.error ?? "unknown error"}. ${CHECK_FIRST}\n\n`;
+	if (target.state === "stopped" && target.stopReason) return `Your previous run was stopped ${target.stopReason}. This run has a fresh budget. ${CHECK_FIRST}\n\n`;
+	if (target.state === "stopped") return `Your previous run was stopped. ${CHECK_FIRST}\n\n`;
+	return "";
+}
+
 export function noteText(from: string, text: string): string {
 	return `Message from ${from}:\n${text}`;
 }

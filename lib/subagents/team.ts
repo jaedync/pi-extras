@@ -16,18 +16,11 @@
  * A child is not done until its own children have reported. A run that a
  * peer's message started and that ends idle reports to its parent without
  * waking it: main reads it at its next turn, a child parent at its next run.
- *
- * Sessions are released once a child ends: at once when it failed or was
- * stopped, after a quiet spell when it finished, since a follow-up often
- * comes quickly. A message to a released child relaunches it from its
- * session file with its context, so a long session's memory stays bounded.
- * A session the launcher says a launch now would not make (new code after a
- * /reload, edited settings) goes at the child's next pause, so its next run
- * starts on what is current; a running child keeps it until then.
+ * When a child's session is held and when it goes is sessions.ts's to say.
  */
 import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
-import { noteText, questionText, reportText } from "./format.ts";
+import { noteText, questionText, reportText, resumeWarning } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
 import { checkoutOf, resolveCwd } from "./checkout.ts";
@@ -35,6 +28,7 @@ import { bashChangeNotes, EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
 import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { saveReport } from "./reports.ts";
+import { OpenSessions } from "./sessions.ts";
 import { WorkTrees } from "./work-trees.ts";
 import { createWorktree, placeInWorktree, workspaceError } from "./worktree.ts";
 import {
@@ -59,16 +53,13 @@ export interface TeamOptions {
 	/** Restored sessions have no handle until resumed, but their inspector still has a transcript. */
 	messagesFor?: (record: AgentRecord) => readonly unknown[];
 	prepareResume?: (record: AgentRecord) => { model: string; note?: string; notice?: string };
-	/** How long a finished child keeps its session in memory before it is released; default IDLE_RELEASE_MS. */
+	/** How long a finished child keeps its session in memory before it is released; default IDLE_RELEASE_MS (sessions.ts). */
 	idleReleaseMs?: number;
 	/** Each run's limits when the spawn names none; without them a run has no limit. */
 	runBudget?: RunLimits;
 	/** Model references a run goes on with, in order, when its model can't serve it (fallback.ts); unset or empty turns fallback off. */
 	fallbackModels?: readonly string[];
 }
-
-/** A follow-up to a report usually comes within a minute or two; after that a relaunch costs less than holding the session. */
-export const IDLE_RELEASE_MS = 120_000;
 
 export type SendResult =
 	| { ok: true; delivered: "steered" | "resumed" | "queued" | "replied" | "main" | "inbox"; reply?: string; notice?: string }
@@ -83,22 +74,9 @@ interface Pending {
 
 type Listener = (record: AgentRecord | null) => void;
 
-const CHECK_FIRST = "Its last tool call may not have completed and files may have changed. Verify the current state before continuing.";
-
-/** What a resumed agent is told first about how its last run ended, when that run did not finish. */
-function resumeWarning(target: AgentRecord): string {
-	if (target.state === "interrupted") return `Your previous run was interrupted. ${CHECK_FIRST}\n\n`;
-	if (target.state === "failed") return `Your previous run failed: ${target.error ?? "unknown error"}. ${CHECK_FIRST}\n\n`;
-	if (target.state === "stopped" && target.stopReason) return `Your previous run was stopped ${target.stopReason}. This run has a fresh budget. ${CHECK_FIRST}\n\n`;
-	if (target.state === "stopped") return `Your previous run was stopped. ${CHECK_FIRST}\n\n`;
-	return "";
-}
-
 export class Team implements HostTeam {
 	private readonly records = new Map<string, AgentRecord>();
-	private readonly handles = new Map<string, ChildHandle>();
-	/** Pi rebuilds shorter message lists on compaction, but retains message identities. */
-	private readonly runStarts = new Map<string, ReadonlySet<unknown>>();
+	private readonly sessions: OpenSessions;
 	private readonly opening = new Set<Promise<ChildHandle | null>>();
 	/** Open questions by asker; a child may wait on several agents at once. */
 	private readonly questions = new Map<string, Pending[]>();
@@ -120,7 +98,6 @@ export class Team implements HostTeam {
 	private readonly peerRuns = new Set<string>();
 	/** Stopped by their own parent, which already knows; no report goes up. */
 	private readonly stoppedByParent = new Set<string>();
-	private readonly releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	/** Runs moving to a fallback model, with what they had used of their budget: the same run goes on. */
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
 	private readonly budgets: RunBudgets;
@@ -135,6 +112,8 @@ export class Team implements HostTeam {
 		this.options = options;
 		this.now = options.now ?? Date.now;
 		this.budgets = new RunBudgets({ now: this.now, over: (name, reason) => void this.stop(name, { reason }) });
+		this.sessions = new OpenSessions({ launcher: options.launcher, idle: (name) => this.records.get(name)?.state === "idle", warn: options.warn ?? console.warn,
+			...(options.idleReleaseMs !== undefined ? { idleReleaseMs: options.idleReleaseMs } : {}) });
 	}
 
 	get(name: string): AgentRecord | undefined {
@@ -305,7 +284,7 @@ export class Team implements HostTeam {
 		if (to === MAIN) {
 			const answering = this.owesMain.delete(from);
 			const answerer = this.records.get(from);
-			if (answering && answerer && this.resumedToAnswer.delete(from) && this.answerStandsAlone(from)) {
+			if (answering && answerer && this.resumedToAnswer.delete(from) && this.sessions.onlyMessageCall(from)) {
 				this.answeredAt.set(from, answerer.toolCalls);
 				this.patch(from, { answeredMain: true });
 			}
@@ -324,17 +303,17 @@ export class Team implements HostTeam {
 	/** The child's messages so far; empty before it starts. */
 	messages(name: string): readonly unknown[] {
 		const record = this.records.get(name);
-		return this.handles.get(name)?.messages() ?? (record ? this.options.messagesFor?.(record) ?? [] : []);
+		return this.sessions.get(name)?.messages() ?? (record ? this.options.messagesFor?.(record) ?? [] : []);
 	}
 
 	/** The reply a live child is writing now; none for a child with no session in this process. */
 	streaming(name: string): unknown {
-		return this.handles.get(name)?.streaming?.();
+		return this.sessions.get(name)?.streaming?.();
 	}
 
 	/** A live child's own definition of one of its tools. */
 	tool(name: string, toolName: string): object | undefined {
-		return this.handles.get(name)?.tool?.(toolName);
+		return this.sessions.get(name)?.tool?.(toolName);
 	}
 
 	/**
@@ -351,11 +330,11 @@ export class Team implements HostTeam {
 		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
 		this.resumePrompts.delete(name);
 		for (const question of this.questions.get(name) ?? []) question.reject(new Error("stopped"));
-		const handle = this.handles.get(name);
+		const handle = this.sessions.get(name);
 		this.ending.add(name);
-		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.runText(name), ...this.unreadLeft(name) });
+		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.sessions.runText(name), ...this.unreadLeft(name) });
 		await handle?.abort().catch(() => undefined);
-		this.patch(name, { report: this.runText(name) });
+		this.patch(name, { report: this.sessions.runText(name) });
 		this.finish(name);
 		return this.records.get(name);
 	}
@@ -400,16 +379,15 @@ export class Team implements HostTeam {
 		if (this.closing) return this.closing;
 		this.interrupt(reason, owner);
 		this.budgets.clear();
-		for (const timer of this.releaseTimers.values()) clearTimeout(timer);
-		this.releaseTimers.clear();
+		this.sessions.stopTimers();
 		return this.closing = (async () => {
 			await Promise.all([
-				Promise.allSettled([...this.handles.values()].map(async (handle) => {
+				Promise.allSettled(this.sessions.all().map(async (handle) => {
 					try { await handle.abort(); } finally { await handle.dispose(); }
 				})),
 				Promise.allSettled([...this.opening]),
 			]);
-			this.handles.clear();
+			this.sessions.clear();
 		})();
 	}
 
@@ -467,7 +445,7 @@ export class Team implements HostTeam {
 		const message = error instanceof Error ? error.message : String(error);
 		const previous = this.records.get(name)!;
 		this.resumePrompts.delete(name);
-		this.runStarts.delete(name);
+		this.sessions.endRun(name);
 		this.peerRuns.delete(name);
 		this.forgetAnswer(name);
 		this.patch(name, { state: "interrupted", error: message, restoreError: message, launchError: message,
@@ -501,16 +479,15 @@ export class Team implements HostTeam {
 			await handle.dispose();
 			return null;
 		}
-		this.handles.set(name, handle);
+		this.sessions.hold(name, handle);
 		return handle;
 	}
 
 	private async run(name: string, text: string): Promise<void> {
-		const handle = this.handles.get(name);
+		const handle = this.sessions.get(name);
 		if (!handle) return;
-		this.keep(name);
+		this.sessions.startRun(name, handle);
 		const record = this.records.get(name)!;
-		this.runStarts.set(name, new Set(handle.messages()));
 		const used = this.continuing.get(name);
 		const continued = this.continuing.delete(name);
 		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined });
@@ -527,7 +504,7 @@ export class Team implements HostTeam {
 			if (!this.closed && this.records.get(name)?.state !== "stopped") this.failOrFallBack(name, error);
 			return;
 		}
-		this.settle(name, this.runText(name));
+		this.settle(name, this.sessions.runText(name));
 	}
 
 	/**
@@ -548,7 +525,7 @@ export class Team implements HostTeam {
 		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
 		this.resumePrompts.set(name, fallbackNote(step));
 		this.patch(name, { ...this.unreadLeft(name), state: "queued", model: step.to, fallbacks: [...(record.fallbacks ?? []), step], activity: `switching to ${step.to}` });
-		void this.release(name);
+		void this.sessions.release(name);
 		this.queue.push(name);
 		this.pump();
 	}
@@ -576,28 +553,23 @@ export class Team implements HostTeam {
 	private fail(name: string, error: unknown): void {
 		const message = error instanceof Error ? error.message : String(error);
 		// A failure after an answer is news main has not heard.
-		this.patch(name, { state: "failed", endedAt: this.now(), activity: null, error: message, answeredMain: undefined, report: this.runText(name), ...this.unreadLeft(name) });
+		this.patch(name, { state: "failed", endedAt: this.now(), activity: null, error: message, answeredMain: undefined, report: this.sessions.runText(name), ...this.unreadLeft(name) });
 		this.finish(name);
 	}
 
 	/** This run's messages, which are where a steered message shows up once the child reads it. */
-	private runMessages(name: string): readonly unknown[] {
-		const start = this.runStarts.get(name);
-		return this.handles.get(name)?.messages().filter((message) => !start?.has(message)) ?? [];
-	}
-
 	/** Drops from `unread` what the child has now read. */
 	private forgetRead(name: string): void {
 		const unread = this.records.get(name)?.unread;
 		if (!unread?.length) return;
-		const left = stillUnread(unread, this.runMessages(name));
+		const left = stillUnread(unread, this.sessions.runMessages(name));
 		if (left.length < unread.length) this.patch(name, { unread: left.length > 0 ? left : undefined });
 	}
 
 	/** For a run that ends early: its session's queue goes with it, so what it never read waits in its inbox. */
 	private unreadLeft(name: string): Partial<AgentRecord> {
 		const record = this.records.get(name);
-		return record ? unreadToInbox(record, this.runMessages(name)) : {};
+		return record ? unreadToInbox(record, this.sessions.runMessages(name)) : {};
 	}
 
 	/**
@@ -611,36 +583,11 @@ export class Team implements HostTeam {
 		return true;
 	}
 
-	/**
-	 * Whether the response carrying the answer made only this `message` call. Its
-	 * other calls may finish before the answer is sent (sequential execution) or
-	 * run inside another tool, so neither shows up as work after the answer.
-	 */
-	private answerStandsAlone(name: string): boolean {
-		const messages = this.handles.get(name)?.messages() ?? [];
-		const last = [...messages].reverse().find((message) => (message as { role?: unknown }).role === "assistant") as { content?: unknown } | undefined;
-		const calls = Array.isArray(last?.content) ? last.content.filter((part) => (part as { type?: unknown }).type === "toolCall") : [];
-		return calls.length === 1 && (calls[0] as { name?: unknown }).name === "message";
-	}
-
 	/** Anything delivered to a child (steering, a note, a subagent's report, a resume) is new work its report must tell main about. */
 	private forgetAnswer(name: string): void {
 		this.resumedToAnswer.delete(name);
 		this.answeredAt.delete(name);
 		if (this.records.get(name)?.answeredMain) this.patch(name, { answeredMain: undefined });
-	}
-
-	private runText(name: string): string | undefined {
-		const start = this.runStarts.get(name);
-		if (start === undefined) return undefined;
-		const messages = this.handles.get(name)?.messages().filter((message) => !start.has(message)) ?? [];
-		const last = [...messages].reverse().find((message) => {
-			const entry = message as { role?: unknown; stopReason?: unknown; content?: unknown };
-			return entry.role === "assistant" && !(entry.stopReason === "aborted" && Array.isArray(entry.content) && entry.content.length === 0);
-		}) as { content?: unknown } | undefined;
-		const text = typeof last?.content === "string" ? last.content : Array.isArray(last?.content)
-			? last.content.filter((part) => part.type === "text").map((part) => part.text ?? "").join("") : "";
-		return text.trim() || undefined;
 	}
 
 	/** Hands the report up and frees the slot. */
@@ -649,7 +596,7 @@ export class Team implements HostTeam {
 		this.continuing.delete(name);
 		// Answers still owed to it die with its run; a message resumes it to ask again.
 		const record = saveReport({ ...this.records.get(name)!, owed: undefined }, this.options.warn ?? console.warn);
-		this.runStarts.delete(name);
+		this.sessions.endRun(name);
 		this.put(record);
 		this.answeredAt.delete(name);
 		this.resumedToAnswer.delete(name);
@@ -685,49 +632,8 @@ export class Team implements HostTeam {
 			if (asker === record.parent) continue;
 			for (const question of questions.filter((open) => open.to === name)) question.reject(new Error(`${name} ended without answering (${record.state}). Continue without its answer, or message it again: a finished agent resumes to handle a message.`));
 		}
-		this.scheduleRelease(name, record.state);
+		this.sessions.ended(name, record.state);
 		this.pump();
-	}
-
-	/**
-	 * A failed or stopped child's session goes at once; a finished one's after a
-	 * quiet spell, or at once when a launch now would not make it, so its next
-	 * run starts on today's code and settings.
-	 */
-	private scheduleRelease(name: string, state: AgentRecord["state"]): void {
-		const handle = this.handles.get(name);
-		if (!handle) return;
-		if (state === "failed" || state === "stopped") return void this.release(name);
-		if (state !== "idle") return;
-		if (!this.current(handle)) return void this.release(name);
-		this.keep(name);
-		const timer = setTimeout(() => {
-			this.releaseTimers.delete(name);
-			if (this.records.get(name)?.state === "idle") void this.release(name);
-		}, this.options.idleReleaseMs ?? IDLE_RELEASE_MS);
-		timer.unref?.();
-		this.releaseTimers.set(name, timer);
-	}
-
-	/** Whether a launch now would make the session `handle` is (types.ts `Launcher.current`). */
-	private current(handle: ChildHandle): boolean {
-		return this.options.launcher.current?.(handle) ?? true;
-	}
-
-	/** A new run keeps the session it is about to use. */
-	private keep(name: string): void {
-		const timer = this.releaseTimers.get(name);
-		if (timer) clearTimeout(timer);
-		this.releaseTimers.delete(name);
-	}
-
-	private async release(name: string): Promise<void> {
-		const handle = this.handles.get(name);
-		if (!handle) return;
-		this.handles.delete(name);
-		this.keep(name);
-		try { await handle.dispose(); }
-		catch (error) { (this.options.warn ?? console.warn)(`subagents: releasing ${name}'s session failed: ${(error as Error).message}`); }
 	}
 
 	/** Settles what `from` owed `asker`; true when it owed it an answer. */
@@ -753,35 +659,19 @@ export class Team implements HostTeam {
 		const peer = from !== MAIN && from !== USER && from !== target.parent && !this.under(from, to);
 		if (from === MAIN || from === USER || from === target.parent) this.peerRuns.delete(to);
 		this.forgetAnswer(to);
-		const handle = this.handles.get(to);
+		const handle = this.sessions.get(to);
 		if ((target.state === "running" || target.state === "asking") && handle) {
 			handle.steer(body);
 			this.patch(to, { unread: [...(this.records.get(to)?.unread ?? []), body] });
 			return { ok: true, delivered: "steered" };
 		}
 		// Released when it ended; should it still be held, let it go before a fresh launch takes its place.
-		if (ended && handle) void this.release(to);
+		if (ended && handle) void this.sessions.release(to);
 		// A paused child's session that a launch now would not make goes too, so its next run starts on today's code and settings.
-		const stale = !ended && handle !== undefined && (target.state === "idle" || target.state === "waiting") && !this.current(handle);
+		const stale = !ended && (target.state === "idle" || target.state === "waiting") && this.sessions.stale(to);
 		if ((!handle || ended || stale) && resumes && (target.state === "idle" || target.state === "waiting" || target.state === "interrupted" || ended)) {
-			const warning = resumeWarning(target);
-			let prepared: { model: string; note?: string; notice?: string } | undefined = { model: target.model };
-			try { if (!automatic) prepared = this.options.prepareResume?.(target) ?? prepared; }
-			catch (error) {
-				// A stale session still takes the message, where no session would lose it.
-				if (!stale) return { ok: false, error: (error as Error).message };
-				prepared = undefined;
-			}
-			if (prepared) {
-				if (stale) void this.release(to);
-				this.resumePrompts.set(to, `${warning}${prepared.note ? `${prepared.note}\n\n` : ""}${body}`);
-				if (target.state !== "waiting") this.startedBy(to, peer);
-				this.patch(to, { state: "queued", model: prepared.model, resumedBy: { from, text: said }, startedAt: this.now(), error: undefined, stopReason: undefined, restoreError: undefined, launchError: undefined,
-					...(!automatic ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
-				this.queue.push(to);
-				this.pump();
-				return { ok: true, delivered: "resumed", ...(prepared.notice ? { notice: prepared.notice } : {}) };
-			}
+			const relaunched = this.relaunch(target, { from, body, said, automatic, peer, stale });
+			if (relaunched) return relaunched;
 		}
 		if ((target.state === "idle" || target.state === "waiting") && handle && resumes) {
 			// A new run: time it on its own and forget what the last one answered.
@@ -795,6 +685,26 @@ export class Team implements HostTeam {
 		}
 		this.patch(to, { inbox: [...(this.records.get(to)?.inbox ?? []), body] });
 		return { ok: true, delivered: target.state === "queued" || target.state === "starting" ? "queued" : "inbox" };
+	}
+
+	/**
+	 * Queues a run of `target` from its session file, which a message started.
+	 * Undefined when a held session that is only stale should take the message
+	 * instead: a resume that can't go would otherwise lose it.
+	 */
+	private relaunch(target: AgentRecord, why: { from: string; body: string; said: string; automatic: boolean; peer: boolean; stale: boolean }): SendResult | undefined {
+		const { name } = target;
+		let prepared: { model: string; note?: string; notice?: string } = { model: target.model };
+		try { if (!why.automatic) prepared = this.options.prepareResume?.(target) ?? prepared; }
+		catch (error) { return why.stale ? undefined : { ok: false, error: (error as Error).message }; }
+		if (why.stale) void this.sessions.release(name);
+		this.resumePrompts.set(name, `${resumeWarning(target)}${prepared.note ? `${prepared.note}\n\n` : ""}${why.body}`);
+		if (target.state !== "waiting") this.startedBy(name, why.peer);
+		this.patch(name, { state: "queued", model: prepared.model, resumedBy: { from: why.from, text: why.said }, startedAt: this.now(), error: undefined, stopReason: undefined, restoreError: undefined, launchError: undefined,
+			...(!why.automatic ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
+		this.queue.push(name);
+		this.pump();
+		return { ok: true, delivered: "resumed", ...(prepared.notice ? { notice: prepared.notice } : {}) };
 	}
 
 	/** A new run from idle or interrupted; a peer started it unless main, its parent, the user or its own subagent did. */
