@@ -26,13 +26,40 @@ class RawJson { [string]$Text; RawJson([string]$text) { $this.Text = $text } }
 $stateNames = @{ 2 = 'running'; 3 = 'off'; 4 = 'shutting down'; 6 = 'saved'; 10 = 'starting'; 32768 = 'paused'; 32769 = 'saved'; 32770 = 'starting'; 32773 = 'saving'; 32774 = 'stopping'; 32776 = 'pausing'; 32777 = 'resuming' }
 function Get-StateName($state) { $n = $stateNames[[int]$state]; if ($n) { $n } else { "state $state" } }
 function Get-SafeName([string]$vm) { $vm -replace '[^\w-]', '_' }
-function Get-KeyFile([string]$vm) { Join-Path $dataDir ((Get-SafeName $vm) + '.key') }
+# Key files are named by VM id. Names were not unique enough: 'Win 11' and 'Win.11'
+# made the same file name, NTFS ignores case, and one VM got the other's key.
+function Get-KeyFile([string]$vm, [string]$id) {
+    if (-not $id) { $id = (Get-Machine $vm).Name }
+    $file = Join-Path $dataDir ('vm-' + $id.ToLowerInvariant() + '.key')
+    if (-not (Test-Path $file)) { Move-NamedKey $vm $file }
+    $file
+}
+# A key file from before, named by VM name, moves to the id name on first use. When
+# other VMs' names map to the same file name, the file may hold any of their keys,
+# so none of them gets it: setup makes a new key instead.
+$script:keyWarnings = @{}
+function Move-NamedKey([string]$vm, [string]$file) {
+    $safe = Get-SafeName $vm
+    $old = Join-Path $dataDir ($safe + '.key')
+    if (-not (Test-Path $old)) { return }
+    $sharing = @(Get-VM | Where-Object { (Get-SafeName $_.Name) -eq $safe })
+    if ($sharing.Count -ne 1) {
+        if (-not $script:keyWarnings[$file]) {
+            $script:keyWarnings[$file] = $true
+            [Console]::Error.WriteLine("key file '$old' could belong to any of these VMs: $(@($sharing | ForEach-Object { $_.Name }) -join ', '). '$vm' does not use it; its next setup makes a new key.")
+        }
+        return
+    }
+    Move-Item -Path $old -Destination $file
+}
 
 function Get-Machine([string]$vm) {
     if (-not $vm) { throw 'vm is required' }
-    $m = Get-CimInstance -Namespace $ns -ClassName Msvm_ComputerSystem -Filter "Caption='Virtual Machine' AND ElementName='$($vm -replace "'", "''")'"
-    if (-not $m) { throw "There is no Hyper-V VM named '$vm'" }
-    @($m)[0]
+    $m = @(Get-CimInstance -Namespace $ns -ClassName Msvm_ComputerSystem -Filter "Caption='Virtual Machine' AND ElementName='$($vm -replace "'", "''")'")
+    if (-not $m.Count) { throw "There is no Hyper-V VM named '$vm'" }
+    # Hyper-V allows one name twice. Picking one could send its key to the other's IP.
+    if ($m.Count -gt 1) { throw "$($m.Count) Hyper-V VMs are named '$vm'. Rename all but one, so windows_use can tell them apart." }
+    $m[0]
 }
 # The Hyper-V module's object for the VM with exactly this name. The module's -Name and
 # -VMName parameters take wildcards: Start-VM -Name 'Win*' starts every VM whose name starts with Win.
@@ -51,8 +78,9 @@ function Get-Resolution($machine) {
     $head = Get-CimAssociatedInstance -InputObject $machine -ResultClassName Msvm_VideoHead | Select-Object -First 1
     @{ w = [int](@($head.CurrentHorizontalResolution)[0]); h = [int](@($head.CurrentVerticalResolution)[0]) }
 }
-function Get-Ipv4([string]$vm) {
-    (Get-VMNetworkAdapter -VM (Get-ExactVm $vm)).IPAddresses |
+function Get-Ipv4([string]$vm) { Get-VmIpv4 (Get-ExactVm $vm) }
+function Get-VmIpv4($hv) {
+    (Get-VMNetworkAdapter -VM $hv).IPAddresses |
         Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' -and $_ -notmatch '^169\.254\.' } | Select-Object -First 1
 }
 # Hyper-V's method return codes, named so errors say what went wrong.
@@ -73,9 +101,10 @@ function Invoke-Checked($obj, [string]$method, $arguments) {
 
 function Get-Vms {
     $list = @(Get-VM | Sort-Object Name | ForEach-Object {
-        $vm = $_.Name
-        $running = $_.State -eq 'Running'
-        [ordered]@{ name = $vm; state = "$($_.State)".ToLowerInvariant(); running = $running; installed = (Test-Path (Get-KeyFile $vm)); ip = $(if ($running) { Get-Ipv4 $vm } else { $null }) }
+        $hv = $_
+        $vm = $hv.Name
+        $running = $hv.State -eq 'Running'
+        [ordered]@{ name = $vm; state = "$($hv.State)".ToLowerInvariant(); running = $running; installed = (Test-Path (Get-KeyFile $vm "$($hv.Id)")); ip = $(if ($running) { Get-VmIpv4 $hv } else { $null }) }
     })
     , $list
 }
@@ -93,7 +122,7 @@ function Get-Status([string]$vm) {
     $size = if ($running) { Get-Resolution $m } else { @{ w = 0; h = 0 } }
     $live = if ($running) { Get-Liveness $m } else { @{ heartbeat = $null; uptime = $null } }
     # No IP here: Get-VMNetworkAdapter takes one to two seconds, and every reconnect waits on status.
-    [ordered]@{ vm = $vm; state = (Get-StateName $m.EnabledState); running = $running; width = $size.w; height = $size.h; installed = (Test-Path (Get-KeyFile $vm)); heartbeat = $live.heartbeat; uptime = $live.uptime }
+    [ordered]@{ vm = $vm; state = (Get-StateName $m.EnabledState); running = $running; width = $size.w; height = $size.h; installed = (Test-Path (Get-KeyFile $vm $m.Name)); heartbeat = $live.heartbeat; uptime = $live.uptime }
 }
 function Start-Machine([string]$vm) {
     Start-VM -VM (Get-ExactVm $vm) | Out-Null
@@ -510,9 +539,10 @@ function Send-Mcp([string]$vm, [int]$port, [string]$message) {
 # What the Hyper-V socket route needs: the VM's id, which addresses it, and the
 # server's key. Both go back over this private pipe only, never a command line.
 function Get-RelayAuth([string]$vm) {
-    $keyFile = Get-KeyFile $vm
+    $id = [string](Get-Machine $vm).Name
+    $keyFile = Get-KeyFile $vm $id
     $key = if (Test-Path $keyFile) { (Get-Content -Path $keyFile -Raw).Trim() } else { $null }
-    [ordered]@{ id = [string](Get-Machine $vm).Name; key = $key }
+    [ordered]@{ id = $id; key = $key }
 }
 
 # ---- Protocol ------------------------------------------------------------------

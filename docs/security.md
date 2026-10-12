@@ -324,8 +324,12 @@ under the user's `Run` key, since the task's logon trigger proved unreliable
 after restarts), and adds an inbound firewall rule
 (`pi-windows-use`) for its TCP port from the local subnet only. The server
 requires a bearer key: 32 random bytes generated on the host, kept in
-`%LOCALAPPDATA%\pi-extras\windows-use\<vm>.key` for the Windows user, and in
-the guest user's `%USERPROFILE%\.windows-mcp\config.toml`. The key is typed
+`%LOCALAPPDATA%\pi-extras\windows-use\vm-<VM id>.key` for the Windows user, and in
+the guest user's `%USERPROFILE%\.windows-mcp\config.toml`. The file name comes
+from the VM's Hyper-V id, not its name, so two VMs never share a key. An older
+key file named for the VM moves to the new name on first use. When the old name
+fits more than one VM, no VM uses that file, and the next setup makes a new key.
+Two VMs with the same name are refused until one is renamed. The key is typed
 into the guest inside the bootstrap, only after Windows OCR on the host reads
 an administrator's PowerShell window on the console (without OCR it is typed
 unchecked). When the VM's key-value exchange works, the bootstrap itself goes

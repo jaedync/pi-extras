@@ -131,6 +131,32 @@ test("native win.start starts the VM with exactly the name given, never every VM
 	assert.deepEqual(out.started, ["a0000000-0000-0000-0000-000000000002"]);
 });
 
+test("native key files move to VM ids, and a name-based file that two VMs share goes to neither", native, () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	const lookup = host.slice(host.indexOf("function Get-SafeName"), host.indexOf("function Get-RunningMachine"));
+	const keys = host.slice(host.indexOf("function New-Key"), host.indexOf("# Opens an administrator's PowerShell"));
+	const id = (n: number) => `a0000000-0000-0000-0000-00000000000${n}`;
+	const vm = (name: string, n: number) => `[pscustomobject]@{ Name='${name}'; ElementName='${name}'; Id='${id(n)}' }`;
+	const out = JSON.parse(powershell(`$ErrorActionPreference='Stop'; $dataDir=Join-Path $env:TEMP ('pi-wu-keys-'+[Guid]::NewGuid().ToString('N')); $null=New-Item -ItemType Directory $dataDir
+		$log=New-Object IO.StringWriter; [Console]::SetError($log)
+		$vms=@(${vm("Win 11", 1)}, ${vm("Dev (test)", 2)}, ${vm("dev _test_", 3)}, ${vm("Twin", 4)}, ${vm("Twin", 5)})
+		${FAKE_VMS}
+		${lookup}
+		${keys}
+		try {
+			Set-Content (Join-Path $dataDir 'Win_11.key') 'single' -NoNewline
+			Set-Content (Join-Path $dataDir 'Dev__test_.key') 'shared' -NoNewline
+			$single=Get-Key 'Win 11' $false; $a=Get-Key 'Dev (test)' $false; $b=Get-Key 'dev _test_' $false
+			$twin=$null; try { $null=Get-KeyFile 'Twin' } catch { $twin=$_.Exception.Message }
+			@{ single=$single; a=$a; b=$b; twin=$twin; log=$log.ToString(); files=@(Get-ChildItem $dataDir -Name | Sort-Object) } | ConvertTo-Json -Compress
+		} finally { [IO.Directory]::Delete($dataDir, $true) }`));
+	assert.equal(out.single, "single", "the only VM that maps to an old file takes it over");
+	assert.ok(out.a !== "shared" && out.b !== "shared" && out.a !== out.b, "VMs that share an old file get new keys of their own");
+	assert.match(out.log, /could belong to any of these VMs: Dev \(test\), dev _test_/);
+	assert.match(out.twin, /2 Hyper-V VMs are named 'Twin'/);
+	assert.deepEqual(out.files, ["Dev__test_.key", `vm-${id(1)}.key`, `vm-${id(2)}.key`, `vm-${id(3)}.key`]);
+});
+
 test("native setup prepares its shell and commits the key only after complete typing", native, () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	const code = host.slice(host.indexOf("# ---- Setup payload"), host.indexOf("# The \"<run> <status>\""));

@@ -209,6 +209,19 @@ test("VMs are found by their exact name, never through the Hyper-V cmdlets' wild
 	assert.match(host, /function Get-Machine[\s\S]*?ElementName='\$\(\$vm -replace/, "Get-Machine matches the name with WQL =, which has no wildcards");
 });
 
+test("each VM's key file is named by its VM id, so VMs whose names differ in case or punctuation never share a key", () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	const keyFile = host.slice(host.indexOf("function Get-KeyFile"), host.indexOf("function Get-Machine"));
+	assert.match(keyFile, /function Get-KeyFile\(\[string\]\$vm, \[string\]\$id\) \{\s*if \(-not \$id\) \{ \$id = \(Get-Machine \$vm\)\.Name \}\s*\$file = Join-Path \$dataDir \('vm-' \+ \$id\.ToLowerInvariant\(\) \+ '\.key'\)/);
+	// A name-based file from before moves only when exactly one VM's name maps to it.
+	assert.match(keyFile, /\$sharing = @\(Get-VM \| Where-Object \{ \(Get-SafeName \$_\.Name\) -eq \$safe \}\)\s*if \(\$sharing\.Count -ne 1\) \{[\s\S]*?\[Console\]::Error\.WriteLine[\s\S]*?return\s*\}\s*Move-Item -Path \$old -Destination \$file/);
+	const vms = host.slice(host.indexOf("function Get-Vms"), host.indexOf("# Heartbeat:"));
+	assert.match(vms, /Get-KeyFile \$vm "\$\(\$hv\.Id\)"/, "the list names each VM's file from its own id, not by a name lookup");
+	assert.match(vms, /Get-VmIpv4 \$hv/);
+	const machine = host.slice(host.indexOf("function Get-Machine"), host.indexOf("function Get-ExactVm"));
+	assert.match(machine, /if \(\$m\.Count -gt 1\) \{ throw/, "two VMs with one name can't be told apart, so neither gets the other's key or IP");
+});
+
 test("Hyper-V's in-between states have names, since a restart inside Windows passes through them", () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	assert.match(host, /4 = 'shutting down'/);
