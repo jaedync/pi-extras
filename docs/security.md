@@ -427,7 +427,9 @@ to ask: nothing there needs trust, you trusted the directory before, or
 `defaultProjectTrust` is `"always"`. Otherwise they are not loaded. A worktree
 made from a `cwd` takes the trust of the directory it was made from. A child
 without a `cwd` follows the parent's trust decision. It loads the project's
-`.pi/` settings and resources only when the parent trusts the project. A
+`.pi/` settings and resources only when the parent trusts the project. The
+same rule applies to the project's thinking settings for children and to
+how the agent inspector shows a chat. A
 `cwd` must name an existing directory without control characters; it is
 resolved to its real path before use and is never passed to a shell. A
 read-only child's subagents can't make a worktree from a `cwd`, because `git worktree add` runs that
