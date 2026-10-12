@@ -1,11 +1,29 @@
 /**
  * One JSON line per finished run in `<agentDir>/subagents/runs.jsonl`: which
  * model did what, how long it took, what it cost and how it ended. It is the
- * evidence for tuning the model guide.
+ * evidence for tuning the model guide. Lines of format 2 hold the run's own
+ * usage and tool calls. Lines with no format, written before it or for a
+ * record saved before runs kept their start, hold the child's totals so far.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { NO_USAGE, type AgentRecord } from "./types.ts";
+import { NO_USAGE, type AgentRecord, type Usage } from "./types.ts";
+
+/** Lines whose usage and tool calls are the run's own. */
+export const RUN_LOG_FORMAT = 2;
+
+const since = (total: Usage, start: Usage): Usage => ({
+	input: Math.max(0, total.input - start.input), output: Math.max(0, total.output - start.output),
+	cacheRead: Math.max(0, total.cacheRead - start.cacheRead), cacheWrite: Math.max(0, total.cacheWrite - start.cacheWrite),
+	cost: Math.max(0, total.cost - start.cost),
+});
+
+/** The run's own usage and tool calls, when the record knows where the run began. */
+function runUse(record: AgentRecord): { format?: number; usage: Usage; toolCalls: number } {
+	const start = record.runStart;
+	if (!start) return { usage: record.usage, toolCalls: record.toolCalls };
+	return { format: RUN_LOG_FORMAT, usage: since(record.usage, start.usage), toolCalls: Math.max(0, record.toolCalls - start.toolCalls) };
+}
 
 export const TASK_PREVIEW_CHARS = 200;
 
@@ -13,7 +31,9 @@ export const runLogPath = (agentDir: string): string => join(agentDir, "subagent
 
 export function runLogEntry(record: AgentRecord, now: number, parentSession: string): Record<string, unknown> {
 	const launchFailed = record.state === "interrupted" && !!record.launchError;
+	const use = runUse(record);
 	return {
+		...(use.format !== undefined ? { format: use.format } : {}),
 		at: new Date(now).toISOString(),
 		parentSession,
 		name: record.name,
@@ -29,18 +49,19 @@ export function runLogEntry(record: AgentRecord, now: number, parentSession: str
 		...(launchFailed ? { event: "resume_launch_failed", launchAttempt: record.launchFailures } : {}),
 		run: record.runs,
 		durationMs: (record.endedAt ?? now) - (record.startedAt ?? record.createdAt),
-		toolCalls: launchFailed ? 0 : record.toolCalls,
-		usage: launchFailed ? NO_USAGE : record.usage,
+		toolCalls: launchFailed ? 0 : use.toolCalls,
+		usage: launchFailed ? NO_USAGE : use.usage,
 		reportChars: launchFailed ? 0 : record.report?.length ?? 0,
 		error: record.error ?? null,
 		sessionFile: record.sessionFile ?? null,
 	};
 }
 
-/** Throws on a write failure so the caller can say so once. */
+/** Throws on a write failure so the caller can say so once. Tasks are private, so the log is the user's alone. */
 export function appendRunLog(file: string, entry: Record<string, unknown>): void {
-	mkdirSync(dirname(file), { recursive: true });
-	appendFileSync(file, `${JSON.stringify(entry)}\n`);
+	mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+	appendFileSync(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+	if ((statSync(file).mode & 0o077) !== 0) chmodSync(file, 0o600);
 }
 
 /** A name can be reused across parents; the session file distinguishes its durable run. */
@@ -80,7 +101,12 @@ export interface ModelStats {
 	toolCalls: number;
 }
 
-/** Totals per model from the run log's lines; unreadable lines are skipped. */
+/**
+ * Totals per model from the run log's lines; unreadable lines are skipped.
+ * Lines with no format hold a child's totals so far, not its run's own, so a
+ * child with many runs counts too much there. They are read as they are: what
+ * each run used can't be told from them.
+ */
 export function statsByModel(lines: readonly string[]): ModelStats[] {
 	const byModel = new Map<string, ModelStats>();
 	for (const line of lines) {

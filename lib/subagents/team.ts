@@ -509,7 +509,7 @@ export class Team implements HostTeam {
 		// A spawn group gathers its first runs' reports (deliver.ts); a later run reports on its own.
 		const leavesGroup = !continued && record.runs > 0 && record.group !== undefined;
 		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined,
-			...(continued ? {} : { runCost: record.usage.cost }), ...(leavesGroup ? { group: undefined } : {}) });
+			...(continued ? {} : { runCost: record.usage.cost, runStart: { usage: { ...record.usage }, toolCalls: record.toolCalls } }), ...(leavesGroup ? { group: undefined } : {}) });
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
 		try {
 			if (!(await this.work(name, handle, text, launch))) return;

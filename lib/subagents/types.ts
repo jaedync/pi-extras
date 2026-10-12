@@ -148,6 +148,8 @@ export interface AgentRecord {
 	checked?: CheckResult;
 	/** What it had spent when its current run began, so main's status lines show the run's own cost (status.ts). */
 	runCost?: number;
+	/** Its usage and tool calls when its current run began, so the run log holds the run's own (runlog.ts). */
+	runStart?: { usage: Usage; toolCalls: number };
 	/** The run whose check the harness skipped: it called nothing that can change files since the last check (checks.ts). */
 	checkSkipped?: number;
 }

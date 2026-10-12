@@ -71,6 +71,12 @@ function usableContext(record: AgentRecord): AgentRecord {
 	return { ...rest, ...(usableSize(contextTokens) ? { contextTokens } : {}), ...(usableSize(contextWindow) ? { contextWindow } : {}) };
 }
 
+const validRunStart = (value: unknown): boolean => {
+	const start = value as AgentRecord["runStart"] | null;
+	return !!start && Number.isInteger(start.toolCalls) && start.toolCalls >= 0 && !!start.usage
+		&& [start.usage.input, start.usage.output, start.usage.cacheRead, start.usage.cacheWrite, start.usage.cost].every((n) => Number.isFinite(n) && n >= 0);
+};
+
 const savedPath = (value: unknown): boolean => typeof value === "string" && isAbsolute(value) && !CONTROL.test(value);
 
 const strings = (value: unknown): boolean => value === undefined || (Array.isArray(value) && value.every((item) => typeof item === "string"));
@@ -126,6 +132,7 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& strings(r.inbox) && strings(r.owed) && strings(r.unread) && strings(r.tools) && validSteps(r.fallbacks) && strings(r.after)
 		&& (r.check === undefined || validCheck(r.check)) && (r.checked === undefined || validChecked(r.checked))
 		&& (r.runCost === undefined || (Number.isFinite(r.runCost) && r.runCost >= 0))
+		&& (r.runStart === undefined || validRunStart(r.runStart))
 		&& (r.checkSkipped === undefined || (Number.isInteger(r.checkSkipped) && r.checkSkipped >= 0));
 }
 
