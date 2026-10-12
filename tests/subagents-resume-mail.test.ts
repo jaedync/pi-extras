@@ -92,3 +92,16 @@ test("a relaunch reads older inbox mail before the message that started it, afte
 	assert.match(prompt, /Your previous run was stopped\.[\s\S]*OLD[\s\S]*NEW/);
 	assert.equal(h.team.get("dev")!.inbox, undefined);
 });
+
+test("a spawn group holds only its first run's reports: a later run leaves the group", async () => {
+	const h = teamHarness();
+	h.spawn("Quick", { name: "quick", group: "run-0-1" });
+	h.spawn("Long", { name: "long", group: "run-0-1" });
+	await flush();
+	assert.equal(h.team.get("quick")!.group, "run-0-1");
+	h.lastCall("quick").finish("quick done"); await flush();
+	assert.equal(h.team.get("quick")!.group, "run-0-1", "its first report still waits for the group");
+	await h.team.send("main", "quick", "Which file was it?", { expectReply: true }); await flush();
+	assert.equal(h.team.get("quick")!.group, undefined);
+	assert.equal(h.team.get("long")!.group, "run-0-1");
+});

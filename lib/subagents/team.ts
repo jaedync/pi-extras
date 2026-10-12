@@ -506,7 +506,10 @@ export class Team implements HostTeam {
 		const waking = record.state === "waiting";
 		const used = this.continuing.get(name) ?? this.woken.get(name) ?? (waking ? this.budgets.used(name) : undefined);
 		const continued = [this.continuing.delete(name), this.woken.delete(name), waking].some(Boolean);
-		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined, ...(continued ? {} : { runCost: record.usage.cost }) });
+		// A spawn group gathers its first runs' reports (deliver.ts); a later run reports on its own.
+		const leavesGroup = !continued && record.runs > 0 && record.group !== undefined;
+		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined,
+			...(continued ? {} : { runCost: record.usage.cost }), ...(leavesGroup ? { group: undefined } : {}) });
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
 		try {
 			if (!(await this.work(name, handle, text, launch))) return;
