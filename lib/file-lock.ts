@@ -168,10 +168,11 @@ function sleepSync(ms: number): void {
 
 /**
  * Runs `work` while holding `${file}.lock`: for one read, change and replace
- * of a small file that Pi processes share. Waits up to 3 s for the lock.
+ * of a small file that Pi processes share. Waits up to `waitMs` (3 s unless
+ * given) for the lock, then throws.
  */
-export function withFileLock<T>(file: string, work: () => T): T {
-	const lock = waitForLock(`${file}.lock`, SHORT_WAIT_MS, { staleMs: SHORT_STALE_MS, settleMs: SHORT_STALE_MS });
+export function withFileLock<T>(file: string, work: () => T, waitMs = SHORT_WAIT_MS): T {
+	const lock = waitForLock(`${file}.lock`, waitMs, { staleMs: SHORT_STALE_MS, settleMs: SHORT_STALE_MS });
 	try {
 		return work();
 	} finally {

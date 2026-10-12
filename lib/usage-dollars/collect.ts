@@ -30,6 +30,13 @@ const REMOTE_TTL_MS = 60_000;
 const LEDGER_MAX_AGE_MS = 8 * 86_400_000;
 const LEDGER_MIN_REFRESH_MS = 5_000;
 const RECENT_MODELS_MS = 7 * 86_400_000;
+/**
+ * Polls and response events observe on Pi's main thread, so a busy state-file
+ * lock is skipped quickly; the next observation records the change. A usage
+ * call, which the user asked for, waits longer.
+ */
+const OBSERVE_LOCK_WAIT_MS = 100;
+const COLLECT_LOCK_WAIT_MS = 3_000;
 
 export interface CollectContext {
 	snapshots: Array<[string, LimitSnapshot]>;
@@ -171,26 +178,35 @@ export function createDollarsCollector(options: CollectorOptions) {
 		mark(basename(file), writeJson(file, value));
 	}
 	/**
-	 * Read, change and save a shared state file under its lock, so processes
-	 * that observe at the same time keep each other's changes. When the lock
-	 * cannot be taken, the change still counts for this call and the report
-	 * names the file; an error from `change` itself goes to the caller.
+	 * Change a shared state file, so processes that observe at the same time
+	 * keep each other's changes. Nothing new takes no lock. A change takes the
+	 * lock, reads the file again and saves. When the lock stays busy for
+	 * `waitMs`, the change still counts for this call, the write is skipped,
+	 * and the report names the file. An error from `change` goes to the caller.
 	 */
-	function update<T>(file: string, read: (file: string) => T, change: (current: T) => T): T {
+	function update<T>(file: string, read: (file: string) => T, change: (current: T) => T, waitMs: number): T {
+		const current = read(file);
+		const next = change(current);
+		if (next === current) {
+			// The file already holds this, so a note about an earlier skipped write no longer applies.
+			mark(basename(file), true);
+			return current;
+		}
 		let locked = false;
 		try {
 			mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 			return withFileLock(file, () => {
 				locked = true;
-				const current = read(file);
-				const next = change(current);
-				if (next !== current) save(file, next);
-				return next;
-			});
+				const fresh = read(file);
+				const merged = change(fresh);
+				if (merged !== fresh) save(file, merged);
+				else mark(basename(file), true);
+				return merged;
+			}, waitMs);
 		} catch (error) {
 			if (locked) throw error;
 			mark(basename(file), false);
-			return change(read(file));
+			return next;
 		}
 	}
 	/** Each observer runs on its own, so one failing step does not stop the other at every poll. */
@@ -219,7 +235,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 		return update(anchorFile, readAnchors, (stored) => readings.reduce((next, reading) => {
 			const anchor = advanceMeterDay(next[reading.provider], reading.usedUsd, reading.atMs, timeZone);
 			return anchor === next[reading.provider] ? next : { ...next, [reading.provider]: anchor };
-		}, stored));
+		}, stored), OBSERVE_LOCK_WAIT_MS);
 	}
 
 	/**
@@ -251,7 +267,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 		const next = update(readingsFile, readReadings, (stored) => readings.reduce((current, { key, ...reading }) => {
 			const record = advanceReading(current[key], reading);
 			return record === current[key] ? current : { ...current, [key]: record };
-		}, stored));
+		}, stored), OBSERVE_LOCK_WAIT_MS);
 		return evidenceMap(next);
 	}
 
@@ -297,7 +313,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 		}
 		if (sizes.length === 0) return readSizes(sizesFile);
 		return update(sizesFile, readSizes, (stored) => sizes.reduce((next, [key, size]) =>
-			next[key]?.limitUsd === size.limitUsd ? next : { ...next, [key]: size }, stored));
+			next[key]?.limitUsd === size.limitUsd ? next : { ...next, [key]: size }, stored), COLLECT_LOCK_WAIT_MS);
 	}
 
 	function openCodeGoModels(context: CollectContext): string[] {

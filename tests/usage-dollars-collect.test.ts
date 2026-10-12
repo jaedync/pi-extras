@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LimitSnapshot } from "../lib/limit-store.ts";
@@ -247,7 +247,8 @@ test("Pi processes that observe at the same time keep each other's meter anchors
 	const script = `const { createDollarsCollector } = await import(${JSON.stringify(module)});
 const [agentDir, id, now] = process.argv.slice(1);
 const collector = createDollarsCollector({ agentDir, timeZone: ${JSON.stringify(TZ)}, fetch: async () => new Response("{}") });
-for (let i = 0; i < 30; i++) {
+// A poll skips a lock busy for over 100 ms and records at the next poll; the later passes are those polls.
+for (let pass = 0; pass < 3; pass++) for (let i = 0; i < 30; i++) {
 	const atMs = Number(now);
 	collector.observe([[id + "-" + i, { atMs, source: "poll", entries: [
 		{ label: "", kind: "budget", usedUsd: 1, limitUsd: 10 },
@@ -270,4 +271,45 @@ test("a state file whose lock another live process keeps becomes a note", async 
 	const { notes } = await collector.collect(context({ snapshots: weekly(10, NOW), now: NOW }));
 	assert.ok(notes.some((note) => /window-readings\.json/.test(note)), notes.join(" | "));
 	assert.equal(readFileSync(join(dir, "usage-dollars", "window-readings.json.lock"), "utf8"), String(process.pid), "the holder's lock is left alone");
+});
+
+const meterAndWeekly = (usedUsd: number, usedPct: number, atMs: number): Array<[string, LimitSnapshot]> =>
+	[["anthropic", { atMs, source: "poll", entries: [
+		{ label: "", kind: "budget", usedUsd, limitUsd: 2000 },
+		{ label: "7d", key: "seven_day", usedPct, windowSeconds: 7 * 86400, resetMs: NOW + 3 * 24 * HOUR },
+	] }]];
+
+function holdLocks(dir: string, ...names: string[]): void {
+	mkdirSync(join(dir, "usage-dollars"), { recursive: true });
+	for (const name of names) writeFileSync(join(dir, "usage-dollars", `${name}.lock`), String(process.pid));
+}
+
+test("an observation with nothing new takes no lock, and a busy lock never stalls a poll", async () => {
+	const dir = agentDirWithTurns([[NOW - HOUR, 1]]);
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch });
+	collector.observe(meterAndWeekly(1100, 10, NOW - MIN), NOW - MIN);
+	// Another live session holds both locks, as a suspended Pi would.
+	holdLocks(dir, "meter-day.json", "window-readings.json");
+	const same = Date.now();
+	collector.observe(meterAndWeekly(1100, 10, NOW - MIN), NOW);
+	assert.ok(Date.now() - same < 50, "nothing new: no lock and no wait");
+	const quiet = await collector.collect(context({ snapshots: meterAndWeekly(1100, 10, NOW - MIN), now: NOW }));
+	assert.ok(!quiet.notes.some((note) => /meter-day|window-readings/.test(note)), quiet.notes.join(" | "));
+	const changed = Date.now();
+	collector.observe(meterAndWeekly(1150, 12, NOW), NOW);
+	assert.ok(Date.now() - changed < 1_000, `a busy lock is skipped quickly, not waited for (${Date.now() - changed} ms)`);
+	const { notes } = await collector.collect(context({ snapshots: meterAndWeekly(1150, 12, NOW), now: NOW }));
+	assert.ok(notes.some((note) => /window-readings\.json/.test(note)), notes.join(" | "));
+});
+
+test("the note for a busy lock clears when the file already holds the reading", async () => {
+	const dir = agentDirWithTurns([[NOW - HOUR, 1]]);
+	const first = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch });
+	holdLocks(dir, "window-readings.json");
+	first.observe(weekly(10, NOW - MIN), NOW - MIN);
+	rmSync(join(dir, "usage-dollars", "window-readings.json.lock"));
+	// Another session records the same reading.
+	createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch }).observe(weekly(10, NOW - MIN), NOW - MIN);
+	const { notes } = await first.collect(context({ snapshots: weekly(10, NOW - MIN), now: NOW }));
+	assert.ok(!notes.some((note) => /window-readings\.json/.test(note)), notes.join(" | "));
 });
