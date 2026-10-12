@@ -254,10 +254,16 @@ export function utf8Tail(text: string, maxBytes: number): string {
 export function jsonEscapedBytes(text: string): number {
 	let bytes = 0;
 	for (const char of text) {
-		bytes += char === '"' || char === "\\" || char === "\n" || char === "\r" || char === "\t" ? 2 : Buffer.byteLength(char, "utf8");
+		const code = char.codePointAt(0)!;
+		// JSON writes a lone surrogate or another control as a six-byte `\uXXXX`.
+		if (SHORT_ESCAPES.has(char)) bytes += 2;
+		else if (code < 0x20 || (code >= 0xd800 && code <= 0xdfff)) bytes += 6;
+		else bytes += Buffer.byteLength(char, "utf8");
 	}
 	return bytes;
 }
+
+const SHORT_ESCAPES = new Set(['"', "\\", "\n", "\r", "\t", "\b", "\f"]);
 
 export interface TailResult {
 	text: string;
@@ -308,7 +314,8 @@ export function tailText(text: string, maxBytes: number, maxLines: number): Tail
  * reads as thousands of seconds.
  */
 export function formatDuration(ms: number): string {
-	const seconds = Math.max(0, Number.isFinite(ms) ? ms : 0) / 1000;
+	// Rounded to tenths first, so 59.99 seconds reads as a minute rather than as 60.0s.
+	const seconds = Math.round(Math.max(0, Number.isFinite(ms) ? ms : 0) / 100) / 10;
 	return seconds < 60 ? `${seconds.toFixed(1)}s` : minutesAndUp(seconds);
 }
 

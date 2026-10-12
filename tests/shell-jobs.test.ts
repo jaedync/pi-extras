@@ -23,6 +23,7 @@ import {
 	capPayload,
 	commandPreview,
 	countLogLines,
+	formatDuration,
 	formatJobId,
 	isJobId,
 	jobIdFor,
@@ -472,5 +473,17 @@ describe("log edges", () => {
 		const file = log("\x1b[32m✓ 12 passed\x1b[39m\n\x1b[31m✗ 1 failed\x1b[0m\n\x1b]8;;http://x\x07link\x1b]8;;\x07\n");
 		assert.strictEqual((await readLogTail(file, NOTIFY_TAIL_BYTES, 30)).text, "✓ 12 passed\n✗ 1 failed\nlink\n");
 		assert.strictEqual(readLogPage(file, { offset: 0, bytes: 4096, tail: false }).text, "✓ 12 passed\n✗ 1 failed\nlink\n");
+	});
+
+	test("a duration just under a minute does not read as 60.0s", () => {
+		assert.strictEqual(formatDuration(59_999), "1m00s");
+		assert.strictEqual(formatDuration(59_940), "59.9s");
+		assert.strictEqual(formatDuration(1_250), "1.3s");
+	});
+
+	test("escaped size counts what JSON writes for a lone surrogate and a control", () => {
+		for (const text of ["\"a\udc00\na", "x\ud800", "\b\f\u0001", "plain é 😀"]) {
+			assert.strictEqual(jsonEscapedBytes(text), Buffer.byteLength(JSON.stringify(text).slice(1, -1)), JSON.stringify(text));
+		}
 	});
 });
