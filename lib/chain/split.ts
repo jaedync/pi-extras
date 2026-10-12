@@ -7,7 +7,7 @@
  * The splitter is deliberately conservative. Its output decides how a command
  * is rewritten before it runs, so whatever it doesn't fully understand
  * (heredocs, compound commands like `if` and `for`, background `&`, function
- * definitions, a pipeline continued on the next line, and commands
+ * definitions, a pipeline continued on the next line, aliases, and commands
  * whose meaning depends on the shell's own state, like `exit`, `set` or
  * `$LINENO`) returns undefined and the command runs untouched.
  */
@@ -41,7 +41,12 @@ const UNSAFE_FIRST_WORDS = new Set([
 	"function", "coproc", "exit", "exec", "return", "trap", "set",
 ]);
 // Values the rewrite would change: the step wrapper runs commands of its own and moves line numbers.
-const SHELL_STATE = /\$\{?(?:PIPESTATUS|LINENO|BASH_LINENO|BASH_COMMAND)\b|\$_(?![A-Za-z0-9_])|\$\{_\}/;
+// Any mention counts, since arithmetic reads them without a `$`; `$_` also as `${_:-x}` or `${#_}`.
+const SHELL_STATE = /\b(?:PIPESTATUS|LINENO|BASH_LINENO|BASH_COMMAND)\b|\$_(?![A-Za-z0-9_])|\$\{[#!]?_(?![A-Za-z0-9_])/;
+// An alias defined on a line applies only from the next line on, and the rewrite puts each step on a line of its own.
+const ALIASES = /(?:^|[\s;&|({`])(?:un)?alias(?=\s|$)|\bexpand_aliases\b/;
+// A backslash that escapes nothing: before the wrapper's newline it would join the step to the wrapper.
+const TRAILING_BACKSLASH = /(?:^|[^\\])(?:\\\\)*\\$/;
 const CD = /^cd\s+(?:"([^"$`\\]*)"|'([^']*)'|([^\s"'$`\\;&|()<>]+))$/;
 const WORD_BREAK = /[\s;&|()]/;
 
@@ -52,7 +57,7 @@ const fail = (): never => {
 };
 
 export function splitChain(command: string): Chain | undefined {
-	if (SHELL_STATE.test(command)) return undefined;
+	if (SHELL_STATE.test(command) || ALIASES.test(command)) return undefined;
 	try {
 		return scan(command);
 	} catch (error) {
@@ -78,6 +83,8 @@ function scan(s: string): Chain | undefined {
 			if (next === "&&" || next === "||") fail();
 			return;
 		}
+		// The trim above can also take a space a backslash escaped, which leaves the backslash bare.
+		if (TRAILING_BACKSLASH.test(text)) fail();
 		steps.push({ op: steps.length === 0 ? null : pending, text, start: stepStart + lead, end: stepStart + body.length });
 		pending = next;
 	};

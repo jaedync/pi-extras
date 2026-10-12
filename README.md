@@ -947,7 +947,8 @@ To time each step, Tool Display adds a marker line around each step before the
 command runs and removes the markers from the output before Pi or the model
 sees it. The model's command and the output it reads are unchanged. Commands
 Tool Display can't split safely (heredocs, `if` and `for` blocks, background
-`&`, `exit` or `set`) run exactly as written. See
+`&`, `exit`, `set`, aliases, or a pipeline continued on the next line) run
+exactly as written. See
 [security and privacy](docs/security.md#tool-display) for what the rewrite does.
 
 `/tool-display` switches it:

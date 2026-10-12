@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { instrument, MarkStripper, supportedShell, type Mark } from "../lib/chain/instrument.ts";
 import { splitChain } from "../lib/chain/split.ts";
@@ -53,6 +55,66 @@ for (const shell of ["/bin/bash", "/bin/sh", "/bin/zsh"]) {
 		}
 	});
 }
+
+/** As `compare`, with Pi's shellCommandPrefix on the line before and an environment of its own. */
+function compareUnder(shell: string, command: string, prefix: string, env: NodeJS.ProcessEnv = {}) {
+	const chain = splitChain(command);
+	assert.ok(chain, `splits: ${command}`);
+	const run = (script: string) => spawnSync(shell, ["-c", prefix ? `${prefix}\n${script}` : script], { encoding: "buffer", cwd: "/", env: { PATH: process.env.PATH, ...env } });
+	const original = run(command);
+	const rewritten = run(instrument(chain, NONCE));
+	const stripper = new MarkStripper(NONCE);
+	const clean = Buffer.concat([...stripper.push(rewritten.stdout), ...stripper.flush()].filter((piece): piece is Buffer => Buffer.isBuffer(piece))).toString();
+	return {
+		original: { stdout: original.stdout.toString(), stderr: original.stderr.toString(), code: original.status },
+		rewritten: { stdout: clean, stderr: rewritten.stderr.toString(), code: rewritten.status },
+	};
+}
+
+// Recovery with || and &&, steps whose failure errexit ignores, and steps that end the script.
+const ERREXIT_COMMANDS = [
+	"ls /nonexistent || echo missing; echo done",
+	"grep -q zzz /etc/hosts || true\necho after",
+	"test -f nope && echo yes || echo no; echo end",
+	"false || echo recovered; echo next",
+	"false && echo never; echo after",
+	"! true; echo after",
+	"true && ! true; echo after",
+	"{ false && true; }; echo after",
+	"echo a && (exit 3) || echo \"got $?\"; echo b",
+	"false; echo unreachable",
+	"false || false; echo unreachable",
+	"echo a; (exit 4)",
+];
+
+for (const [shell, prefix] of [["/bin/bash", ""], ["/bin/bash", "set -euo pipefail"], ["/bin/sh", "set -e"], ["/bin/zsh", "set -e"]] as const) {
+	test(`errexit from a ${prefix || "missing"} prefix decides as it would without the rewrite in ${shell}`, { skip: !existsSync(shell) }, () => {
+		for (const command of ERREXIT_COMMANDS) {
+			const { original, rewritten } = compareUnder(shell, command, prefix);
+			assert.deepEqual(rewritten, original, command);
+		}
+	});
+}
+
+test("errexit set inside the command, from SHELLOPTS or from BASH_ENV changes nothing either", { skip: !existsSync("/bin/bash") }, () => {
+	for (const command of ["shopt -so errexit; false || echo recovered; echo next", "builtin set -e; ls /nonexistent || echo missing; echo done", "shopt -so errexit; ! true; echo after"]) {
+		const { original, rewritten } = compareUnder("/bin/bash", command, "");
+		assert.deepEqual(rewritten, original, command);
+	}
+	const dir = mkdtempSync(join(tmpdir(), "chain-errexit-"));
+	try {
+		const bashEnv = join(dir, "env.sh");
+		writeFileSync(bashEnv, "set -e\n");
+		for (const env of [{ SHELLOPTS: "errexit" }, { BASH_ENV: bashEnv }]) {
+			for (const command of ERREXIT_COMMANDS) {
+				const { original, rewritten } = compareUnder("/bin/bash", command, "", env);
+				assert.deepEqual(rewritten, original, `${JSON.stringify(env)} ${command}`);
+			}
+		}
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 test("each step reports its start and its exit status", { skip: !existsSync("/bin/bash") }, () => {
 	const { marks } = compare("/bin/bash", "echo a && false || echo c; (exit 4)");

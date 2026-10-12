@@ -94,6 +94,30 @@ test("a pipeline continued on the next line is left alone", () => {
 	assert.deepEqual(steps("a ||\n b; c"), [[null, "a"], ["||", "b"], [";", "c"]]);
 });
 
+test("a step that ends in an unescaped backslash is left alone", () => {
+	for (const command of ["echo a; echo b\\", "echo a\\ ; echo b", "echo a; echo b\\ ", "echo a\\\t&& echo b"]) {
+		assert.equal(splitChain(command), undefined, JSON.stringify(command));
+	}
+	assert.deepEqual(steps("echo a\\\\; echo b"), [[null, "echo a\\\\"], [";", "echo b"]]);
+});
+
+test("the shell's own state in any form, and aliases, leave a command alone", () => {
+	for (const command of [
+		"echo hello; echo ${_:-none}",
+		"a; echo ${#_}",
+		"echo $((LINENO)); echo b",
+		"(( LINENO > 1 )) && echo b",
+		"echo hi; echo $(( PIPESTATUS[0] ))",
+		"shopt -s expand_aliases; alias e=echo; e hi",
+		"alias e=echo; e hi",
+		"unalias e; e hi",
+		"shopt -s expand_aliases\ne hi",
+	]) {
+		assert.equal(splitChain(command), undefined, command);
+	}
+	assert.deepEqual(steps("echo $MY_LINENO && echo ${_x}"), [[null, "echo $MY_LINENO"], ["&&", "echo ${_x}"]]);
+});
+
 test("very long scripts are left alone", () => {
 	const script = Array.from({ length: MAX_STEPS + 1 }, (_, index) => `echo ${index}`).join("\n");
 	assert.equal(splitChain(script), undefined);

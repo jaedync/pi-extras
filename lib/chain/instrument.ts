@@ -9,6 +9,13 @@
  * `||` decide exactly as they would have. A step's text is followed by a
  * newline, never a `;`, so a trailing comment can't swallow the wrapper.
  *
+ * Each status restore is `__pi_r "$__pi_s" && :`. A failure that is not the
+ * last command of an `&&`/`||` list never trips errexit (POSIX, and bash and
+ * zsh alike), so restoring a failed status can't end a script that runs
+ * under `set -e`, wherever that came from: Pi's shellCommandPrefix, the
+ * command itself, `SHELLOPTS` or `BASH_ENV`. The step itself keeps the
+ * errexit context it had, so a step that would end the script still does.
+ *
  * Marks are single lines on stdout: a record separator byte, `PI:`, a random
  * nonce and the mark. The stripper recognises only its own nonce, so a
  * program that prints something similar passes through untouched.
@@ -38,7 +45,7 @@ export function instrument(chain: Chain, nonce: string): string {
 	let body = "";
 	chain.steps.forEach((step, index) => {
 		const n = index + 1;
-		const group = `{ __pi_m s ${n}; __pi_r "$__pi_s"; ${step.text}\n__pi_s=$?; __pi_m e ${n} "$__pi_s"; __pi_r "$__pi_s"; }`;
+		const group = `{ __pi_m s ${n}; __pi_r "$__pi_s" && :; ${step.text}\n__pi_s=$?; __pi_m e ${n} "$__pi_s"; __pi_r "$__pi_s" && :; }`;
 		if (index === 0) body = group;
 		else body += step.op === ";" ? `\n${group}` : ` ${step.op} ${group}`;
 	});

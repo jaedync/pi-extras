@@ -549,6 +549,8 @@ command in its place so it can time each step:
 - Each step is wrapped in a `{ }` group, not a subshell, so `cd` and variables
   carry over as before. The group prints a marker line before and after the
   step, and restores the exit status so `$?`, `&&` and `||` behave as written.
+  The restore never trips `set -e`, from Pi's `shellCommandPrefix` or anywhere
+  else, so errexit ends the script only where it would end it without the rewrite.
 - A marker line is a record separator byte, `PI:`, a random nonce made for that
   call, and the step number and exit code. Markers are printed to stdout and
   removed from the output before Pi, the model or the row sees it. Only markers
@@ -557,7 +559,8 @@ command in its place so it can time each step:
 
 The splitter is conservative: heredocs, `if`, `for`, `while` and `case`
 blocks, background `&`, function definitions, `exit`, `set` and other commands
-that depend on the shell's own state, and lists longer than 12 steps run
+that depend on the shell's own state, aliases, a pipeline continued on the next
+line, a step that ends in a bare backslash, and lists longer than 12 steps run
 exactly as written. `/tool-display chains off` turns the rewrite off, and
 `/tool-display off` or `PI_TOOL_DISPLAY=off` turns off Tool Display entirely.
 
