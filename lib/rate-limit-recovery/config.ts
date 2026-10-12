@@ -1,6 +1,4 @@
 /** Long waits are separate from Usage Guard and Pi's short transient retries. */
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { CONFIG_FILE, readSection, writeSection } from "../extras-config.ts";
 import { DEFAULT_FIRST_EVENT_SECONDS } from "./first-event.ts";
 
@@ -32,31 +30,31 @@ const MAX_FIRST_EVENT_SECONDS = 600;
 const MIN_TRANSIENT_SECONDS = 10;
 const MAX_TRANSIENT_SECONDS = 900;
 
-function bounded(value: unknown, fallback: number, max: number, integer = false): number {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= max && (!integer || Number.isInteger(value)) ? value : fallback;
+/**
+ * A number of seconds or a count, moved into [min, max] as the README
+ * documents. Anything that is not a finite number, and any negative value,
+ * reads as the default: a stray minus must not turn waiting off.
+ */
+function bounded(value: unknown, fallback: number, min: number, max: number, integer = false): number {
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return fallback;
+	const clamped = Math.min(max, Math.max(min, value));
+	return integer ? Math.floor(clamped) : clamped;
 }
 
-function firstEventSeconds(value: unknown): number {
-	if (value === 0) return 0;
-	const seconds = bounded(value, DEFAULT_CONFIG.anthropicFirstEventSeconds, MAX_FIRST_EVENT_SECONDS);
-	return seconds >= MIN_FIRST_EVENT_SECONDS ? seconds : DEFAULT_CONFIG.anthropicFirstEventSeconds;
-}
-
-function transientSeconds(value: unknown): number {
-	if (value === 0) return 0;
-	const seconds = bounded(value, DEFAULT_CONFIG.transientMaxWaitSeconds, MAX_TRANSIENT_SECONDS);
-	return seconds >= MIN_TRANSIENT_SECONDS ? seconds : DEFAULT_CONFIG.transientMaxWaitSeconds;
+/** 0 turns the feature off; any other number is moved into [min, max]. */
+function optional(value: unknown, fallback: number, min: number, max: number): number {
+	return value === 0 ? 0 : bounded(value, fallback, min, max);
 }
 
 export function normalizeConfig(raw: unknown): RecoveryConfig {
 	const r = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
 	return {
 		autoWait: r.autoWait === true,
-		resumeMarginSeconds: bounded(r.resumeMarginSeconds, DEFAULT_CONFIG.resumeMarginSeconds, MAX_MARGIN_SECONDS),
-		maxWaitSeconds: bounded(r.maxWaitSeconds, DEFAULT_CONFIG.maxWaitSeconds, MAX_WAIT_SECONDS),
-		maxRecoveries: bounded(r.maxRecoveries, DEFAULT_CONFIG.maxRecoveries, MAX_RECOVERIES, true),
-		anthropicFirstEventSeconds: firstEventSeconds(r.anthropicFirstEventSeconds),
-		transientMaxWaitSeconds: transientSeconds(r.transientMaxWaitSeconds),
+		resumeMarginSeconds: bounded(r.resumeMarginSeconds, DEFAULT_CONFIG.resumeMarginSeconds, 0, MAX_MARGIN_SECONDS),
+		maxWaitSeconds: bounded(r.maxWaitSeconds, DEFAULT_CONFIG.maxWaitSeconds, 0, MAX_WAIT_SECONDS),
+		maxRecoveries: bounded(r.maxRecoveries, DEFAULT_CONFIG.maxRecoveries, 0, MAX_RECOVERIES, true),
+		anthropicFirstEventSeconds: optional(r.anthropicFirstEventSeconds, DEFAULT_CONFIG.anthropicFirstEventSeconds, MIN_FIRST_EVENT_SECONDS, MAX_FIRST_EVENT_SECONDS),
+		transientMaxWaitSeconds: optional(r.transientMaxWaitSeconds, DEFAULT_CONFIG.transientMaxWaitSeconds, MIN_TRANSIENT_SECONDS, MAX_TRANSIENT_SECONDS),
 	};
 }
 
@@ -67,9 +65,10 @@ export function loadConfig(file = CONFIG_FILE, env: NodeJS.ProcessEnv = process.
 	return config;
 }
 
+/**
+ * Saves only the keys in `patch`, so the user's own values in the section stay
+ * as written. Throws `UnreadableJsonError`, and keeps the file, when it does not parse.
+ */
 export function saveConfig(patch: Partial<RecoveryConfig>, file = CONFIG_FILE): RecoveryConfig {
-	const config = normalizeConfig({ ...readSection(SECTION, file), ...patch });
-	mkdirSync(dirname(file), { recursive: true });
-	writeSection(SECTION, { ...config }, file);
-	return config;
+	return normalizeConfig(writeSection(SECTION, { ...patch }, file));
 }

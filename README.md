@@ -78,12 +78,16 @@ the package. Removing it does not remove your credentials or change other packag
   (default `10`), `maxWaitSeconds` (default `18000`, five hours).
 - `PI_RATE_LIMIT_RECOVERY=on|off`: override automatic quota waiting for one run.
   `rateLimitRecovery` in `pi-extras.json`: `autoWait` (default `false`),
-  `resumeMarginSeconds` (default `10`), `maxWaitSeconds` (default and hard maximum
-  `18000`, five hours total per user-started run), `maxRecoveries` (default and
-  maximum `10`), `anthropicFirstEventSeconds` (default `45`, `10` to `600`, `0`
-  disables the Anthropic stall retry), `transientMaxWaitSeconds` (default `180`,
-  `10` to `900`, `0` leaves short rate limits to Pi's own retry). `/rate-limit-recovery on|off` persists the choice; commands
-  take precedence for the current session. `PI_RATE_LIMIT_RECOVERY_ROLE=subagent`
+  `resumeMarginSeconds` (default `10`, `0` to `3600`), `maxWaitSeconds` (default
+  and hard maximum `18000`, five hours total per user-started run),
+  `maxRecoveries` (default and maximum `10`), `anthropicFirstEventSeconds`
+  (default `45`, `10` to `600`, `0` disables the Anthropic stall retry),
+  `transientMaxWaitSeconds` (default `180`, `10` to `900`, `0` leaves short rate
+  limits to Pi's own retry). A number out of range moves to the nearest limit. A
+  negative number, or a value that is not a number, uses the default. A count
+  with a fraction rounds down.
+  `/rate-limit-recovery on|off` saves only `autoWait`; commands take precedence
+  for the current session. `PI_RATE_LIMIT_RECOVERY_ROLE=subagent`
   marks external child sessions as detection-only.
 - `PI_SUBAGENTS=off`: disable Subagents. `subagents` in `pi-extras.json`, all
   optional: `defaultModel` (a model or short name; default: the session's

@@ -361,6 +361,21 @@ test("cancellation winning the deadline race never injects a resumed notice", as
 	} finally { f.close(); }
 });
 
+test("/rate-limit-recovery on|off saves only autoWait, and says why when it cannot save", async () => {
+	const own = { autoWait: false, resumeMarginSeconds: 7200, maxWaitSeconds: 99_999, transientMaxWaitSeconds: 5, extra: "kept" };
+	const f = fixture(own);
+	try {
+		await f.command("on");
+		assert.deepEqual(JSON.parse(readFileSync(f.file, "utf8")).rateLimitRecovery, { ...own, autoWait: true }, "the user's own values stay as written");
+		const broken = `{ "rateLimitRecovery": { "autoWait": true }, }`;
+		writeFileSync(f.file, broken);
+		await f.command("off");
+		assert.equal(readFileSync(f.file, "utf8"), broken);
+		assert.match(f.notices.at(-1) ?? "", /^Automatic quota waiting off for this session only\. pi-extras\.json could not be read/);
+		assert.doesNotMatch(f.notices.at(-1) ?? "", /permissions/);
+	} finally { f.close(); }
+});
+
 test("shutdown clears an active wait and commands preserve unrelated config", async () => {
 	const f = fixture({ autoWait: true }, "tui", true);
 	try {

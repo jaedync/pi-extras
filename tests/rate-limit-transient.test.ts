@@ -132,7 +132,9 @@ test("transient waiting is on by default, bounded, and 0 disables it", () => {
 	assert.equal(normalizeConfig({ transientMaxWaitSeconds: 0 }).transientMaxWaitSeconds, 0);
 	assert.equal(normalizeConfig({ transientMaxWaitSeconds: 10 }).transientMaxWaitSeconds, 10);
 	assert.equal(normalizeConfig({ transientMaxWaitSeconds: 900 }).transientMaxWaitSeconds, 900);
-	for (const invalid of [5, 901, -1, "60", Infinity, null]) assert.equal(normalizeConfig({ transientMaxWaitSeconds: invalid }).transientMaxWaitSeconds, 180);
+	assert.equal(normalizeConfig({ transientMaxWaitSeconds: 5 }).transientMaxWaitSeconds, 10);
+	assert.equal(normalizeConfig({ transientMaxWaitSeconds: 901 }).transientMaxWaitSeconds, 900);
+	for (const invalid of [-1, "60", Infinity, null]) assert.equal(normalizeConfig({ transientMaxWaitSeconds: invalid }).transientMaxWaitSeconds, 180);
 });
 
 function backoff(options: { budgetMs?: number; wait?: (ms: number, signal: AbortSignal) => Promise<boolean> } = {}) {

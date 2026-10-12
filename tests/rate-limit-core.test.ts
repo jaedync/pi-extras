@@ -83,13 +83,18 @@ test("the resume notice reports measured elapsed time and both unambiguous times
 test("configuration is opt-in and bounded, with defensive immutable defaults", () => {
 	assert.equal(normalizeConfig({}).autoWait, false);
 	assert.deepEqual(normalizeConfig({ autoWait: true, resumeMarginSeconds: 0 }), { ...DEFAULT_CONFIG, autoWait: true, resumeMarginSeconds: 0 });
+	// Values that are not a number of seconds, or are negative, use the default.
 	assert.deepEqual(normalizeConfig({ maxWaitSeconds: -1, maxRecoveries: Infinity, resumeMarginSeconds: "10" }), DEFAULT_CONFIG);
-	assert.equal(normalizeConfig({ maxWaitSeconds: Number.MAX_VALUE }).maxWaitSeconds, DEFAULT_CONFIG.maxWaitSeconds);
+	assert.equal(normalizeConfig({ maxWaitSeconds: Number.MAX_VALUE }).maxWaitSeconds, 18_000);
 	assert.equal(normalizeConfig({ maxWaitSeconds: 18_001 }).maxWaitSeconds, 18_000);
 	assert.equal(normalizeConfig({ maxWaitSeconds: 604_800 }).maxWaitSeconds, 18_000);
 	assert.equal(normalizeConfig({ maxRecoveries: 0 }).maxRecoveries, 0);
 	assert.equal(normalizeConfig({}).maxRecoveries, 10);
 	assert.equal(normalizeConfig({ maxRecoveries: 11 }).maxRecoveries, 10);
+	// A number out of range moves to the nearest limit, not back to the default.
+	assert.equal(normalizeConfig({ resumeMarginSeconds: 7200 }).resumeMarginSeconds, 3600);
+	assert.equal(normalizeConfig({ resumeMarginSeconds: 3600 }).resumeMarginSeconds, 3600);
+	assert.equal(normalizeConfig({ maxRecoveries: 2.7 }).maxRecoveries, 2);
 	assert.notEqual(normalizeConfig({}), DEFAULT_CONFIG);
 });
 
@@ -98,5 +103,7 @@ test("the Anthropic stall watchdog is on by default, bounded, and 0 disables it"
 	assert.equal(normalizeConfig({ anthropicFirstEventSeconds: 0 }).anthropicFirstEventSeconds, 0);
 	assert.equal(normalizeConfig({ anthropicFirstEventSeconds: 10 }).anthropicFirstEventSeconds, 10);
 	assert.equal(normalizeConfig({ anthropicFirstEventSeconds: 600 }).anthropicFirstEventSeconds, 600);
-	for (const invalid of [5, 601, -1, "30", Infinity, null]) assert.equal(normalizeConfig({ anthropicFirstEventSeconds: invalid }).anthropicFirstEventSeconds, 45);
+	assert.equal(normalizeConfig({ anthropicFirstEventSeconds: 5 }).anthropicFirstEventSeconds, 10);
+	assert.equal(normalizeConfig({ anthropicFirstEventSeconds: 601 }).anthropicFirstEventSeconds, 600);
+	for (const invalid of [-1, "30", Infinity, null]) assert.equal(normalizeConfig({ anthropicFirstEventSeconds: invalid }).anthropicFirstEventSeconds, 45);
 });
