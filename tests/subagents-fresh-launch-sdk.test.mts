@@ -194,4 +194,31 @@ test("a session stops being current when a context file, SYSTEM.md or a skill it
 	}
 });
 
+test("an overlay for a provider an extension registered from config is checked as main would compose it", { timeout: 20_000 }, async () => {
+	const { freshModels, piModelsCheck } = await import("../lib/subagents/fresh-models.ts");
+	const e1 = { id: "e1", name: "e1", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1_000, maxTokens: 100 };
+	const cases: Array<[string, unknown, boolean]> = [
+		["an api that does not exist", { providers: { ext: { api: "no-such-api" } } }, false],
+		["models with no api of their own", { providers: { ext: { models: [{ id: "e2" }] } } }, false],
+		["a good modelOverrides", { providers: { ext: { modelOverrides: { e1: { contextWindow: 5_000 } } } } }, true],
+	];
+	for (const [label, overlay, good] of cases) {
+		writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: {} }));
+		const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
+		// No base provider in main: only its config, so an overlay that breaks it would take it away.
+		runtime.registerProvider("ext", { baseUrl: "http://127.0.0.1:9/v1", api: "openai-completions", apiKey: "unused", models: [e1] } as never);
+		const warnings: string[] = [];
+		await freshModels(runtime, join(agentDir, "models.json"), piModelsCheck(sdk, runtime), (message) => warnings.push(message));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		writeFileSync(join(agentDir, "models.json"), JSON.stringify(overlay));
+		await freshModels(runtime, join(agentDir, "models.json"), piModelsCheck(sdk, runtime), (message) => warnings.push(message));
+		assert.ok(runtime.getProvider("ext"), `${label}: main keeps the provider`);
+		assert.ok(runtime.getModel("ext", "e1"), `${label}: and its model`);
+		if (good) {
+			assert.deepEqual(warnings, [], `${label}: read`);
+			assert.equal(runtime.getModel("ext", "e1")?.contextWindow, 5_000, `${label}: and applied`);
+		} else assert.equal(warnings.length, 1, `${label}: told once (${warnings.join(" | ")})`);
+	}
+});
+
 test.after(() => rmSync(scratch, { recursive: true, force: true }));

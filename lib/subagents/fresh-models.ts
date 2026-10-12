@@ -48,21 +48,37 @@ const NO_CATALOG: NonNullable<CreateModelRuntimeOptions["modelsStore"]> = {
 	delete: async () => undefined,
 };
 
+/** What main's runtime says about the providers extensions registered with it. */
+interface Registered {
+	getRegisteredProviderIds(): readonly string[];
+	getRegisteredProviderConfig(id: string): object | undefined;
+}
+
 /**
  * Pi's own loader, in a runtime of its own that main never sees: its parse,
- * its schema and how it composes each provider. Providers that extensions
- * registered with main's runtime are not in that runtime, so its complaints
- * about them say nothing about the file.
+ * its schema and how it composes each provider. A provider an extension
+ * registered from config is registered there too, since an overlay that
+ * breaks it would take it away from main. One an extension built itself
+ * (native) is not, and its complaints are ignored: main keeps that one's own
+ * base whatever the overlay does.
  */
 export function piModelsCheck(sdk: Sdk, runtime: object): ModelsCheck {
 	return async (path) => {
 		const probe = await sdk.ModelRuntime.create({ modelsPath: path, credentials: NO_CREDENTIALS, modelsStore: NO_CATALOG, refreshOnCreate: false });
-		const registered = new Set((runtime as { getRegisteredProviderIds?(): readonly string[] }).getRegisteredProviderIds?.() ?? []);
+		const main = runtime as Partial<Registered>;
+		const native = new Set<string>();
+		const problems: string[] = [];
+		for (const id of main.getRegisteredProviderIds?.() ?? []) {
+			const config = main.getRegisteredProviderConfig?.(id);
+			if (!config) { native.add(id); continue; }
+			try { probe.registerProvider(id, config as Parameters<typeof probe.registerProvider>[1]); }
+			catch (error) { problems.push(`Provider "${id}": ${(error as Error).message}`); }
+		}
 		// Pi joins its problems with blank lines, and names a provider's own as `Provider "<id>": ...`.
-		const problems = (probe.getError() ?? "").split("\n\n").filter((part) => {
+		problems.push(...(probe.getError() ?? "").split("\n\n").filter((part) => {
 			const provider = /^Provider "([^"]+)": /.exec(part)?.[1];
-			return part.trim() !== "" && !(provider && registered.has(provider));
-		});
+			return part.trim() !== "" && !(provider && native.has(provider));
+		}));
 		return problems.length > 0 ? problems.join("\n\n") : undefined;
 	};
 }

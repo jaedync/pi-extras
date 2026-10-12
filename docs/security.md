@@ -424,9 +424,12 @@ can't make a worktree from a `cwd`, because `git worktree add` runs that
 repository's hooks. Children use the parent's model credentials. When
 `models.json` changed, a child launch reads it into the parent's model list
 before it picks the child's model, as `/model` does. First, Pi's own loader
-checks the file in a separate model list with no credentials. A file with an
-error is not read, so a half-saved file can't remove the parent's custom
-models.
+checks the file in a separate model list with no credentials. That list also
+gets each provider that an extension registered from a configuration, because
+`models.json` can change those providers too. A file with an error is not
+read, so a half-saved file can't remove a custom provider of the parent. A
+provider that an extension made in code keeps its own definition, whatever
+the file says.
 
 Child sessions are written under
 `PI_CODING_AGENT_DIR/sessions/subagents/<parent session id>/`. An `index.json`
