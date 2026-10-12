@@ -198,3 +198,24 @@ test("the subagent tool passes after on and says the spawn waits", async () => {
 	await assert.rejects((tool.execute as any)("id", { task: "x", after: ["nobody"] }, undefined, undefined), /"nobody", which is not an agent/);
 	await h.team.close();
 });
+
+test("wait: true with after blocks until the spawn has waited, run and reported", async () => {
+	const { subagentTool } = await import("../lib/subagents/tools.ts");
+	const h = teamHarness();
+	const luna = { ref: "openai-codex/gpt-6-luna", model: { provider: "openai-codex", id: "gpt-6-luna", name: "GPT-6 Luna" } };
+	const tool = subagentTool({ team: h.team, allowed: [luna as never], fallbackModel: luna.ref, thinking: {}, modelTable: "", guide: "", replyTimeoutMs: 60_000, now: Date.now }, "main");
+	h.spawn("impl", { name: "impl" });
+	let returned = false;
+	const waited = (tool.execute as any)("id", { task: "Check impl", name: "check", after: ["impl"], wait: true }, undefined, undefined).then((result: any) => { returned = true; return result; });
+	await tick(); await tick();
+	assert.equal(h.team.get("check")!.state, "queued");
+	assert.equal(returned, false);
+	h.lastCall("impl").finish("Implemented.");
+	await tick(); await tick();
+	assert.equal(h.team.get("check")!.state, "running");
+	h.lastCall("check").finish("Checked.");
+	const result = await waited;
+	assert.match(result.content[0].text, /check \(openai-codex\/gpt-6-luna\) finished[\s\S]*Checked\./);
+	assert.equal(reports(h.main).some((delivery) => delivery.record.name === "check"), false, "the call returned its report");
+	await h.team.close();
+});
