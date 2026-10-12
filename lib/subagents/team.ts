@@ -86,6 +86,8 @@ export class Team implements HostTeam {
 	private closed = false;
 	private closing: Promise<void> | undefined;
 	private readonly resumePrompts = new Map<string, string>();
+	/** Each child's latest launch: a launch or run from before a stop and a relaunch is stale, and ends quietly. */
+	private readonly launches = new Map<string, number>();
 	/** Stopped by their own parent, which already knows; no report goes up. */
 	private readonly stoppedByParent = new Set<string>();
 	/** Runs going on in a new session, on a fallback model or after a swap, with what they had used of their budget: the same run goes on. */
@@ -280,9 +282,16 @@ export class Team implements HostTeam {
 		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
 		this.checks.abort(name);
 		const handle = this.sessions.get(name);
+		const launch = this.launches.get(name);
 		this.ending.add(name);
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.sessions.runText(name), ...this.unreadLeft(name) });
 		await handle?.abort().catch(() => undefined);
+		// A message relaunched it during the abort: the new run is what its parent hears of.
+		if (this.launches.get(name) !== launch) {
+			this.ending.delete(name);
+			this.stoppedByParent.delete(name);
+			return this.records.get(name);
+		}
 		this.patch(name, { report: this.sessions.runText(name) });
 		this.finish(name);
 		return this.records.get(name);
@@ -383,12 +392,14 @@ export class Team implements HostTeam {
 		const startedAt = this.continuing.has(name) ? this.records.get(name)?.startedAt : undefined;
 		// The same run going on keeps saying why it moves: a fallback model, or a swap.
 		this.patch(name, { state: "starting", startedAt: startedAt ?? this.now(), activity: startedAt !== undefined ? this.records.get(name)?.activity ?? "starting" : "starting" });
-		const opening = this.open(name);
+		const launch = (this.launches.get(name) ?? 0) + 1;
+		this.launches.set(name, launch);
+		const opening = this.open(name, launch);
 		this.opening.add(opening);
 		let handle: ChildHandle | null;
 		try { handle = await opening; }
 		catch (error) {
-			if (!this.closed) {
+			if (!this.gone(name, launch)) {
 				// A fallback model that can't launch is one more model that can't serve the run.
 				if (this.continuing.has(name)) this.failOrFallBack(name, error);
 				else if (this.resumePrompts.has(name)) this.resumeFailed(name, error);
@@ -396,7 +407,7 @@ export class Team implements HostTeam {
 			}
 			return;
 		} finally { this.opening.delete(opening); }
-		if (!handle || this.closed) return;
+		if (!handle || this.gone(name, launch)) return;
 		this.patch(name, handle.sessionFile ? { sessionFile: handle.sessionFile } : {});
 		const inbox = this.takeInbox(name);
 		const saved = this.records.get(name)!;
@@ -434,19 +445,19 @@ export class Team implements HostTeam {
 	}
 
 	/** Shutdown must wait for launchers too, or they can write into a newly reopened transcript. */
-	private async open(name: string): Promise<ChildHandle | null> {
+	private async open(name: string, launch: number): Promise<ChildHandle | null> {
 		const handle = await this.options.launcher.launch(this.records.get(name)!, {
 			turnEnded: () => this.turnEnded(name),
 			toolCalled: (tool) => this.checks.called(name, tool),
 			update: (patch) => {
 				const record = this.records.get(name);
-				if (!record || !LIVE_STATES.has(record.state)) return;
+				if (!record || !LIVE_STATES.has(record.state) || this.launches.get(name) !== launch) return;
 				this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.answers.workedSince(name, patch.toolCalls) ? { answeredMain: undefined } : {}) });
 				if (patch.usage) this.budgets.spent(name, patch.usage.cost);
 				this.forgetRead(name);
 			},
 		});
-		if (this.closed || this.records.get(name)?.state === "stopped") {
+		if (this.gone(name, launch)) {
 			await handle.dispose();
 			return null;
 		}
@@ -458,15 +469,16 @@ export class Team implements HostTeam {
 		const handle = this.sessions.get(name);
 		if (!handle) return;
 		this.sessions.startRun(name, handle);
+		const launch = this.launches.get(name);
 		const record = this.records.get(name)!;
 		const used = this.continuing.get(name);
 		const continued = this.continuing.delete(name);
 		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined, ...(continued ? {} : { runCost: record.usage.cost }) });
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
 		try {
-			if (!(await this.work(name, handle, text))) return;
+			if (!(await this.work(name, handle, text, launch))) return;
 		} catch (error) {
-			if (!this.gone(name)) this.failOrFallBack(name, error);
+			if (!this.gone(name, launch)) this.failOrFallBack(name, error);
 			return;
 		}
 		this.settle(name, this.sessions.runText(name));
@@ -475,13 +487,13 @@ export class Team implements HostTeam {
 	/**
 	 * Prompts until the run has read everything sent to it and, when it would
 	 * end idle, its check passed or used its fix rounds (checks.ts). False when
-	 * it was stopped or the team closed meanwhile.
+	 * it was stopped, relaunched or the team closed meanwhile.
 	 */
-	private async work(name: string, handle: ChildHandle, text: string): Promise<boolean> {
+	private async work(name: string, handle: ChildHandle, text: string, launch: number | undefined): Promise<boolean> {
 		let next: string | null = text;
 		while (next !== null) {
 			await handle.prompt(next);
-			if (this.gone(name)) return false;
+			if (this.gone(name, launch)) return false;
 			// Its session ended the prompt at a turn boundary to move; what it had not read goes along. Should Pi have
 			// gone on after the end (to compact) to an answer, the run ends here instead, and its session goes at the end.
 			const causes = this.swaps.take(name);
@@ -490,7 +502,7 @@ export class Team implements HostTeam {
 			if (next !== null && this.swapBefore(name, next)) return false;
 			if (next !== null || this.waitsFor(name)) continue;
 			const fix = await this.checks.run(name, handle);
-			if (this.gone(name)) return false;
+			if (this.gone(name, launch)) return false;
 			// Mail that came during the check goes first, with a fix round's prompt; the check runs again after it.
 			const late = this.late(name, handle);
 			next = late !== null && fix !== null ? `${late}\n\n${fix}` : late ?? fix;
@@ -549,8 +561,9 @@ export class Team implements HostTeam {
 		return false;
 	}
 
-	private gone(name: string): boolean {
-		return this.closed || this.records.get(name)?.state === "stopped";
+	/** Whether the team closed, `name` was stopped, or a later launch than `launch` took its place. */
+	private gone(name: string, launch?: number): boolean {
+		return this.closed || this.records.get(name)?.state === "stopped" || (launch !== undefined && this.launches.get(name) !== launch);
 	}
 
 	/** Steering that came too late for the prompt that just ended, and the inbox, as the run's next prompt. */
