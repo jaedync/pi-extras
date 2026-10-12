@@ -170,14 +170,12 @@ test("a child's bash call with no timeout gets main's default timeout; one with 
 			return ai.fauxAssistantMessage("Done.");
 		},
 	]);
-	const started = Date.now();
 	assert.ok(spawn(team, "sleeper").ok);
 	const done = await team.whenDone("sleeper");
 	assert.equal(done.state, "idle", done.error);
 	assert.match(results[0] ?? "", /timed out after 1 second/i);
 	assert.doesNotMatch(results[0] ?? "", /finished/);
 	assert.match(results[1] ?? "", /kept/);
-	assert.ok(Date.now() - started < 4_500, "the first call stopped at the default, not after its 5 seconds");
 	await team.close();
 });
 

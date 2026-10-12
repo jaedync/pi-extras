@@ -1,7 +1,7 @@
 /** A child's edit and write calls pass through its edit guard in a real SDK session, driven by Pi's faux provider. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -36,7 +36,7 @@ async function setup(cwd: string, customTools: unknown[] = []) {
 		launcher: createLauncher({
 			sdk: sdk as never, agentDir, cwd, sessionDir: null,
 			modelRuntime: async () => runtime,
-			toolsFor: () => ({ tools: ["write", ...customTools.map((tool) => (tool as { name: string }).name)], customTools: customTools as never }),
+			toolsFor: () => ({ tools: ["write", "edit", ...customTools.map((tool) => (tool as { name: string }).name)], customTools: customTools as never }),
 			instructions: () => "",
 			claimEdit: (name) => team.claimEdit(name),
 		}),
@@ -110,22 +110,30 @@ test("a worktree child's write outside its worktree is blocked; inside it runs",
 	await team.close();
 });
 
-test("a worktree child's write is checked again as it runs, after an earlier call of the same reply made a link out", { timeout: 20_000 }, async () => {
-	const cwd = mkdtempSync(join(scratch, "parent-"));
-	const tree = mkdtempSync(join(scratch, "tree-"));
-	// Stands for a bash call before the write in one reply: Pi checks every call of a reply before any of them runs.
-	const link = { name: "link", label: "link", description: "Makes a link.", parameters: { type: "object", properties: {} },
-		execute: async () => { symlinkSync(cwd, join(tree, "out"), "dir"); return { content: [{ type: "text", text: "linked" }], details: undefined }; } };
-	const { team, faux } = await setup(cwd, [link]);
-	team.restore([{ ...holder, name: "isolated", state: "idle", runs: 0, worktree: { path: tree, branch: "subagent/isolated", base: "a".repeat(40) } }]);
-	faux.setResponses([
-		ai.fauxAssistantMessage([ai.fauxToolCall("link", {}), ai.fauxToolCall("write", { path: "out/escape.txt", content: "out" })]),
-		(context: any) => ai.fauxAssistantMessage(lastToolResult(context)),
-	]);
-	assert.ok((await team.send("main", "isolated", "Write the file.")).ok);
-	const done = await team.whenDone("isolated");
-	assert.equal(done.state, "idle", done.error);
-	assert.equal(existsSync(join(cwd, "escape.txt")), false, "the write never landed in the parent's folder");
-	assert.match(done.report ?? "", /out\/escape\.txt resolves to .*escape\.txt, outside your worktree/);
-	await team.close();
-});
+const edits = {
+	write: { path: "out/doc.txt", content: "out" },
+	edit: { path: "out/doc.txt", edits: [{ oldText: "parent's", newText: "child's" }] },
+} as const;
+
+for (const tool of ["write", "edit"] as const) {
+	test(`a worktree child's ${tool} is checked again as it runs, after an earlier call of the same reply made a link out`, { timeout: 20_000 }, async () => {
+		const cwd = mkdtempSync(join(scratch, "parent-"));
+		writeFileSync(join(cwd, "doc.txt"), "parent's\n");
+		const tree = mkdtempSync(join(scratch, "tree-"));
+		// Stands for a bash call before the edit in one reply: Pi checks every call of a reply before any of them runs.
+		const link = { name: "link", label: "link", description: "Makes a link.", parameters: { type: "object", properties: {} },
+			execute: async () => { symlinkSync(cwd, join(tree, "out"), "dir"); return { content: [{ type: "text", text: "linked" }], details: undefined }; } };
+		const { team, faux } = await setup(cwd, [link]);
+		team.restore([{ ...holder, name: "isolated", state: "idle", runs: 0, worktree: { path: tree, branch: "subagent/isolated", base: "a".repeat(40) } }]);
+		faux.setResponses([
+			ai.fauxAssistantMessage([ai.fauxToolCall("link", {}), ai.fauxToolCall(tool, edits[tool])]),
+			(context: any) => ai.fauxAssistantMessage(lastToolResult(context)),
+		]);
+		assert.ok((await team.send("main", "isolated", "Change the file.")).ok);
+		const done = await team.whenDone("isolated");
+		assert.equal(done.state, "idle", done.error);
+		assert.equal(readFileSync(join(cwd, "doc.txt"), "utf8"), "parent's\n", "the parent's file is unchanged");
+		assert.match(done.report ?? "", /out\/doc\.txt resolves to .*doc\.txt, outside your worktree/);
+		await team.close();
+	});
+}
