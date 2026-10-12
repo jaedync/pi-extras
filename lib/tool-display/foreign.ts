@@ -9,7 +9,7 @@
  * When a renderer is missing or throws, the row falls back to the arguments
  * and the result's text.
  */
-import { stripTerminalSequences, truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import type { Seg } from "../band/band.ts";
 import { renderPurpleBand } from "../band/purple.ts";
 import { sanitize } from "./format.ts";
@@ -56,7 +56,8 @@ interface Borrowed {
 	expandedLines?: Memo<string[]>;
 }
 
-const flat = (text: string) => sanitize(stripTerminalSequences(text)).replace(/\s+/g, " ").trim();
+const clean = (text: string) => sanitize(stripTerminalSequences(text));
+const flat = (text: string) => clean(text).replace(/\s+/g, " ").trim();
 const failed = (view: View) => !view.context.isPartial && view.context.isError;
 
 function borrowed(view: View): Borrowed {
@@ -179,14 +180,15 @@ function drawnResult(tool: ForeignTool, view: View, own: Borrowed, width: number
 function argumentLines(view: View, width: number): string[] {
 	const args = view.context.args;
 	if (!args || typeof args !== "object" || Array.isArray(args)) return [];
-	const entries = Object.entries(args as Record<string, unknown>);
-	const keyWidth = Math.max(0, ...entries.map(([key]) => key.length));
+	// Keys come from the model as much as values do, so both lose their escapes, and JSON keeps C1 controls.
+	const entries = Object.entries(args as Record<string, unknown>).map(([key, value]) => [clean(key).replace(/\n/g, " "), value] as const);
+	const keyWidth = Math.max(0, ...entries.map(([key]) => visibleWidth(key)));
 	return entries.flatMap(([key, value]) => {
-		const text = typeof value === "string" ? sanitize(stripTerminalSequences(value)) : JSON.stringify(value, null, 2) ?? String(value);
+		const text = clean(typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? String(value));
 		const [first = "", ...rest] = text.replace(/\n+$/, "").split("\n");
 		const pad = " ".repeat(keyWidth + 2);
 		return wrapAll([
-			`${view.paint.fg("muted", key.padEnd(keyWidth))}  ${view.paint.fg("toolOutput", first)}`,
+			`${view.paint.fg("muted", key + " ".repeat(keyWidth - visibleWidth(key)))}  ${view.paint.fg("toolOutput", first)}`,
 			...rest.map((line) => `${pad}${view.paint.fg("toolOutput", line)}`),
 		], width);
 	});
@@ -195,17 +197,17 @@ function argumentLines(view: View, width: number): string[] {
 export function foreignSpec(tool: ForeignTool): ToolSpec {
 	return {
 		name: tool.name,
-		label: () => tool.name,
+		label: () => flat(tool.name),
 		title(view) {
 			const words = callWords(tool, view) ?? keyArg(view.context.args);
-			return [titleSeg(tool.name), ...(words ? [{ text: ` ${words}`, color: "toolOutput" } satisfies Seg] : [])];
+			return [titleSeg(flat(tool.name)), ...(words ? [{ text: ` ${words}`, color: "toolOutput" } satisfies Seg] : [])];
 		},
 		body(view, width) {
 			const lines = resultLines(tool, view, width, view.context.expanded);
 			if (view.context.expanded) return lines;
 			return head(lines, FOREIGN_PREVIEW_LINES, (hidden) => truncateToWidth(more(view.paint, view.kit, plural(hidden, "more line")), width, "…"));
 		},
-		details: () => (tool.label && tool.label !== tool.name ? tool.label : ""),
+		details: () => (tool.label && tool.label !== tool.name ? flat(tool.label) : ""),
 		head: (view, width) => argumentLines(view, width),
 		output(view, width) {
 			const lines = resultLines(tool, view, width, true);

@@ -133,3 +133,28 @@ test("the key argument is the most telling one that reads as text", () => {
 	assert.equal(keyArg({ count: 3 }), undefined);
 	assert.equal(keyArg("text"), undefined);
 });
+
+test("the popup's argument keys are stripped of terminal sequences and padded by their shown width", () => {
+	const h = harness();
+	const args = { "q\x1b]52;c;aGFja2Vk\x07\x1b]0;pwned\x07": "value", "名前": "wide", nested: { "k\u009b31m": "v\u009b2J" } };
+	const fetch = row(foreignRenderers(h.kit, { name: "some_mcp_tool" }) as never, args);
+	fetch.update({ isPartial: false, result: text("ok") });
+	fetch.click();
+	const lines = h.popups.at(-1)!.head(theme, 60, 0);
+	for (const line of lines) {
+		assert.doesNotMatch(line, /\x1b\]|\x07|\u009b/, "no OSC, BEL or C1 control from the model reaches the terminal");
+	}
+	assert.deepEqual(strip(lines), [
+		"q       value",
+		"名前    wide",
+		"nested  {",
+		"          \"k31m\": \"v2J\"",
+		"        }",
+	]);
+	const named = row(foreignRenderers(h.kit, { name: "evil\x1b]0;t\x07", label: "Evil\x1b]0;t\x07" }) as never, {});
+	named.update({ isPartial: false, result: text("ok") });
+	named.click();
+	const popup = h.popups.at(-1)!;
+	assert.doesNotMatch(named.lines()[0]!, /\x1b\]0|\x07/, "a tool's own name is shown without its escapes");
+	assert.deepEqual([popup.label(), popup.details()], ["evil", "Evil"]);
+});
