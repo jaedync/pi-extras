@@ -7,8 +7,10 @@ remote management service, credential provisioning, or automatic updater.
 Saves to `pi-extras.json` keep the file's permissions and write through a
 symbolic link to its target. A new `pi-extras.json` gets mode `0600`. A save
 never writes over a file that does not parse, so a typo cannot erase the
-other settings. Voice's `settings.json` and the Pull Link media `state.json`
-follow the same rules.
+other settings. Voice's `settings.json` follows the same rules. The Pull Link
+media `state.json` is a cache of what is installed, not a settings file. The
+tool moves a broken one to `state.json.corrupt-<time>`, logs it in
+`provision.log`, and writes a new one after the next install.
 
 ## Status Plus
 
