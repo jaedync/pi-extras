@@ -216,7 +216,7 @@ test("yt-dlp: a redirect to a loopback host is refused, and the second server ge
 	});
 	const request = { url: `http://127.0.0.1:${first.port}/watch`, kind: "video", dir, sections: [[0, 1]], testAllowTargets: [`127.0.0.1:${first.port}`] };
 	for (const command of ["info", "download"]) {
-		const result = await runPython(mediaPython, ["-I", "-B", HELPER, command], JSON.stringify(request));
+		const result = await runPython(mediaPython as string, ["-I", "-B", HELPER, command], JSON.stringify(request));
 		assert.equal(result.code, 1, `${command}: ${result.stdout}`);
 		assert.match(JSON.parse(result.stdout).error, /^Refusing a private or local address: 127\.0\.0\.1/, command);
 	}
@@ -271,9 +271,10 @@ with socket.create_connection(("127.0.0.1", int(proxy.rsplit(":", 1)[1])), timeo
 test("yt-dlp: an ftp:// video, or HLS segments on ftp://, never reach ffmpeg's FTP client", { skip: SKIP_YTDLP }, async (t) => {
 	const ftp = await rawListener();
 	const page = await listen((path, res) => {
-		if (path === "/direct") return res.writeHead(200, { "content-type": "text/html" }).end(`<html><head><title>t</title></head><body><video src="ftp://127.0.0.1:${ftp.port}/v.mp4"></video></body></html>`);
-		if (path === "/hls") return res.writeHead(200, { "content-type": "text/html" }).end(`<html><head><title>t</title></head><body><video src="http://127.0.0.1:${page.port}/list.m3u8"></video></body></html>`);
-		res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" }).end(`#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nftp://127.0.0.1:${ftp.port}/seg.ts\n#EXT-X-ENDLIST\n`);
+		const html = (src: string) => res.writeHead(200, { "content-type": "text/html" }).end(`<html><head><title>t</title></head><body><video src="${src}"></video></body></html>`);
+		if (path === "/direct") html(`ftp://127.0.0.1:${ftp.port}/v.mp4`);
+		else if (path === "/hls") html(`http://127.0.0.1:${page.port}/list.m3u8`);
+		else res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" }).end(`#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nftp://127.0.0.1:${ftp.port}/seg.ts\n#EXT-X-ENDLIST\n`);
 	});
 	const dir = mkdtempSync(join(tmpdir(), "link-guard-"));
 	t.after(async () => {
