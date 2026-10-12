@@ -273,7 +273,38 @@ def download_limits(kind):
             raise RuntimeError("this is a live stream, and pull_link does not download live streams")
         return None
 
-    return {"max_filesize": limit, "progress_hooks": [size_guard], "match_filter": refuse_live}
+    # ffmpeg reads clips itself; only HTTP through the guard proxy (and HLS's encrypted and inline parts) may reach it.
+    ffmpeg_input = ["-protocol_whitelist", FFMPEG_PROTOCOLS]
+    return {"max_filesize": limit, "progress_hooks": [size_guard], "match_filter": refuse_live, "external_downloader_args": {"ffmpeg_i": ffmpeg_input}}
+
+
+FFMPEG_PROTOCOLS = "http,https,tls,tcp,crypto,data,httpproxy"
+URL_SCHEMES = ("http", "https", "data")
+URL_KEYS = ("url", "manifest_url", "fragment_base_url")
+
+
+def other_scheme_urls(info):
+    """URLs of the chosen formats that are not http, https or data: ffmpeg would open an ftp:// or rtsp:// URL directly, around the proxy."""
+    found = []
+    for fmt in info.get("requested_formats") or [info]:
+        urls = [fmt.get(key) for key in URL_KEYS] + [f.get("url") for f in fmt.get("fragments") or []]
+        found += [u for u in urls if isinstance(u, str) and "://" in u[:12] and u.split(":", 1)[0].lower() not in URL_SCHEMES]
+    return found
+
+
+def http_only(ydl):
+    """A before_dl step that stops the download when a chosen format is not on http or https."""
+    from yt_dlp.postprocessor.common import PostProcessor
+    from yt_dlp.utils import PostProcessingError
+
+    class HttpOnly(PostProcessor):
+        def run(self, info):
+            other = other_scheme_urls(info)
+            if other:
+                raise PostProcessingError(f"pull_link downloads only http and https media, not {other[0].split(':', 1)[0]}://")
+            return [], info
+
+    return HttpOnly(ydl)
 
 
 def cmd_download(req):
@@ -300,6 +331,7 @@ def cmd_download(req):
         extra["download_ranges"] = download_range_func(None, sections)
         extra["force_keyframes_at_cuts"] = True
     with yt_dlp.YoutubeDL(ydl_options(req, logger, extra)) as ydl:
+        ydl.add_post_processor(http_only(ydl), when="before_dl")
         info = ydl.extract_info(req["url"], download=True)
         downloads = info.get("requested_downloads") or [{"filepath": ydl.prepare_filename(info)}]
     files = [{"path": d.get("filepath"), "start": float(d.get("section_start") or 0)} for d in downloads]

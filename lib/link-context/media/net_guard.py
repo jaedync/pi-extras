@@ -172,6 +172,9 @@ class Handler(socketserver.BaseRequestHandler):
         if len(parts) != 3:
             return self.reply("400 Bad Request", "pull_link's proxy could not read the request")
         method, target, version = parts
+        if method != "CONNECT" and not target.lower().startswith("http://"):
+            # urllib sends ftp:// through an HTTP proxy too; only plain http is forwarded here.
+            return self.reply("403 Forbidden", f"pull_link's proxy forwards only http, not {target.split(':', 1)[0][:20]}")
         try:
             url = None if method == "CONNECT" else urlsplit(target)
             host, port = split_target(target, 443) if url is None else (url.hostname or "", url.port or 80)

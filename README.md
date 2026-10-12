@@ -1090,10 +1090,12 @@ own requests in the same way, and it sends a GitHub token only to GitHub's
 API. It does not resolve DNS for its own requests, so a public name that
 points to a private address passes.
 
-The video tools (yt-dlp, its HTTP libraries and ffmpeg) send each request
+The video tools (yt-dlp, its HTTP libraries and ffmpeg) send each HTTP request
 through a small proxy in the media helper. This includes redirects, manifests
 and fragments. The proxy resolves the name and refuses private, loopback,
-link-local, metadata and reserved addresses. When you set `linkContext.proxy`
+link-local, metadata and reserved addresses. The tool does not download media
+on other protocols, such as `ftp://` or `rtsp://`, and ffmpeg can read only
+HTTP. When you set `linkContext.proxy`
 or a proxy variable (`HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY`), the tool
 uses your proxy instead. Then your proxy decides which hosts the video tools
 can reach.

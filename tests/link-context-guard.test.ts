@@ -6,13 +6,20 @@ import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { HELPER, mediaHome } from "../lib/link-context/media/provision.ts";
+import { HELPER } from "../lib/link-context/media/provision.ts";
 
 // Every server here listens on 127.0.0.1 only; no request goes to a real private or metadata address.
-const python = ["python3", "python"].find((bin) => spawnSync(bin, ["--version"]).status === 0);
-const mediaPython = join(mediaHome(), "env", "bin", "python");
-const hasYtDlp = existsSync(mediaPython) && spawnSync(mediaPython, ["-I", "-c", "import yt_dlp"]).status === 0;
-const NO_PROXY_ENV = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(?:https?|all|no)_proxy$/i.test(name)));
+const systemPython = ["python3", "python"].find((bin) => spawnSync(bin, ["--version"]).status === 0);
+// The yt-dlp tests run only with an explicit media Python (PI_LINK_TEST_MEDIA_PYTHON=~/.cache/pi-extras/link-context/env/bin/python),
+// never the user's install by default; each child gets a temporary HOME and cache.
+const mediaPython = process.env.PI_LINK_TEST_MEDIA_PYTHON;
+const hasYtDlp = !!mediaPython && existsSync(mediaPython) && spawnSync(mediaPython, ["-I", "-B", "-c", "import yt_dlp"]).status === 0;
+const SKIP_YTDLP = hasYtDlp ? false : "set PI_LINK_TEST_MEDIA_PYTHON to a Python with yt-dlp";
+const childHome = mkdtempSync(join(tmpdir(), "link-guard-home-"));
+process.on("exit", () => rmSync(childHome, { recursive: true, force: true }));
+// The guard runs on the media Python (3.12); the system one is the fallback for its address and proxy tests.
+const python = hasYtDlp ? mediaPython : systemPython;
+const NO_PROXY_ENV = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(?:https?|all|no)_proxy$/i.test(name))), HOME: childHome, XDG_CACHE_HOME: join(childHome, ".cache") };
 
 interface Local { readonly port: number; readonly hits: string[]; readonly close: () => Promise<void> }
 
@@ -67,7 +74,7 @@ test("guard: private, loopback, link-local, metadata and embedded-IPv4 addresses
 	const allowed = ["93.184.216.34", "8.8.8.8", "2606:4700::1111"];
 	const code = `import sys, json; sys.path.insert(0, sys.argv[1]); import net_guard
 print(json.dumps({a: net_guard.private_address(a) for a in sys.argv[2:]}))`;
-	const result = spawnSync(python as string, ["-I", "-B", "-c", code, dirname(HELPER), ...refused, ...allowed], { encoding: "utf8" });
+	const result = spawnSync(python as string, ["-I", "-B", "-c", code, dirname(HELPER), ...refused, ...allowed], { encoding: "utf8", env: NO_PROXY_ENV });
 	assert.equal(result.status, 0, result.stderr);
 	const verdicts = JSON.parse(result.stdout) as Record<string, boolean>;
 	for (const address of refused) assert.equal(verdicts[address], true, address);
@@ -198,7 +205,7 @@ print(json.dumps(out))`;
 	assert.equal(out.queue, 128);
 });
 
-test("yt-dlp: a redirect to a loopback host is refused, and the second server gets no request", { skip: hasYtDlp ? false : "the media tools are not installed" }, async (t) => {
+test("yt-dlp: a redirect to a loopback host is refused, and the second server gets no request", { skip: SKIP_YTDLP }, async (t) => {
 	const second = await listen((_path, res) => res.writeHead(200, { "content-type": "video/mp4" }).end("not a video"));
 	const first = await listen((_path, res) => res.writeHead(302, { location: `http://127.0.0.1:${second.port}/internal/video.mp4` }).end());
 	const dir = mkdtempSync(join(tmpdir(), "link-guard-"));
@@ -215,4 +222,70 @@ test("yt-dlp: a redirect to a loopback host is refused, and the second server ge
 	}
 	assert.ok(first.hits.length >= 2);
 	assert.deepEqual(second.hits, [], "the redirect target was never requested");
+});
+
+/** A bare TCP listener that records any connection, with an FTP banner so an FTP client sends its first command. */
+async function rawListener(): Promise<Local> {
+	const hits: string[] = [];
+	const server = createNetServer((socket) => {
+		socket.on("error", () => {});
+		socket.write("220 hi\r\n");
+		socket.once("data", (chunk) => hits.push(chunk.toString("latin1").slice(0, 40)));
+		hits.push("connect");
+		setTimeout(() => socket.destroy(), 500);
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	return { port: (server.address() as { port: number }).port, hits, close: () => new Promise((resolve) => { server.close(() => resolve()); }) };
+}
+
+test("helper: formats on other schemes are refused before a download, and ffmpeg reads only HTTP", { skip: systemPython ? false : "python3 not available" }, () => {
+	const code = `import sys, json; sys.path.insert(0, sys.argv[1]); import helper
+info = {"requested_formats": [{"url": "https://cdn.test/v.mp4"}, {"url": "ftp://10.0.0.5/a.m4a"}]}
+plain = {"url": "http://cdn.test/v.mp4", "fragments": [{"url": "rtsp://10.0.0.5/f1"}]}
+safe = {"url": "https://cdn.test/v.m3u8", "manifest_url": "https://cdn.test/v.m3u8", "fragments": [{"path": "seg1.ts"}, {"url": "data:video/mp2t;base64,AA=="}]}
+print(json.dumps({"mixed": helper.other_scheme_urls(info), "fragment": helper.other_scheme_urls(plain), "safe": helper.other_scheme_urls(safe),
+    "ffmpeg": helper.download_limits("video")["external_downloader_args"]}))`;
+	const result = spawnSync(systemPython as string, ["-I", "-B", "-c", code, dirname(HELPER)], { encoding: "utf8", env: NO_PROXY_ENV });
+	assert.equal(result.status, 0, result.stderr);
+	const out = JSON.parse(result.stdout) as { mixed: string[]; fragment: string[]; safe: string[]; ffmpeg: Record<string, string[]> };
+	assert.deepEqual(out.mixed, ["ftp://10.0.0.5/a.m4a"]);
+	assert.deepEqual(out.fragment, ["rtsp://10.0.0.5/f1"]);
+	assert.deepEqual(out.safe, []);
+	assert.deepEqual(out.ffmpeg, { ffmpeg_i: ["-protocol_whitelist", "http,https,tls,tcp,crypto,data,httpproxy"] });
+});
+
+test("guard proxy: an ftp:// request sent through it is refused", { skip: python ? false : "python3 not available" }, async (t) => {
+	const ftp = await rawListener();
+	t.after(ftp.close);
+	const code = `import sys, socket; sys.path.insert(0, sys.argv[1]); import net_guard
+proxy = net_guard.start([f"127.0.0.1:{sys.argv[2]}"])
+with socket.create_connection(("127.0.0.1", int(proxy.rsplit(":", 1)[1])), timeout=10) as s:
+    s.sendall(f"GET ftp://127.0.0.1:{sys.argv[2]}/v.mp4 HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\n\\r\\n".encode())
+    print(s.recv(200).decode().split("\\r\\n")[0])`;
+	const result = await runPython(python as string, ["-I", "-B", "-c", code, dirname(HELPER), String(ftp.port)]);
+	assert.equal(result.code, 0, result.stderr);
+	assert.match(result.stdout, /^HTTP\/1\.1 403/);
+	assert.deepEqual(ftp.hits, [], "even an allowed host gets no ftp request");
+});
+
+test("yt-dlp: an ftp:// video, or HLS segments on ftp://, never reach ffmpeg's FTP client", { skip: SKIP_YTDLP }, async (t) => {
+	const ftp = await rawListener();
+	const page = await listen((path, res) => {
+		if (path === "/direct") return res.writeHead(200, { "content-type": "text/html" }).end(`<html><head><title>t</title></head><body><video src="ftp://127.0.0.1:${ftp.port}/v.mp4"></video></body></html>`);
+		if (path === "/hls") return res.writeHead(200, { "content-type": "text/html" }).end(`<html><head><title>t</title></head><body><video src="http://127.0.0.1:${page.port}/list.m3u8"></video></body></html>`);
+		res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" }).end(`#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nftp://127.0.0.1:${ftp.port}/seg.ts\n#EXT-X-ENDLIST\n`);
+	});
+	const dir = mkdtempSync(join(tmpdir(), "link-guard-"));
+	t.after(async () => {
+		await ftp.close();
+		await page.close();
+		rmSync(dir, { recursive: true, force: true });
+	});
+	for (const [path, kind] of [["/direct", "video"], ["/direct", "audio"], ["/hls", "video"]]) {
+		const request = { url: `http://127.0.0.1:${page.port}${path}`, kind, dir, sections: [[0, 1]], testAllowTargets: [`127.0.0.1:${page.port}`] };
+		const result = await runPython(mediaPython as string, ["-I", "-B", HELPER, "download"], JSON.stringify(request));
+		assert.equal(result.code, 1, `${path} ${kind}: ${result.stdout}`);
+	}
+	await new Promise((resolve) => setTimeout(resolve, 600));
+	assert.deepEqual(ftp.hits, [], "the FTP listener got no connection");
 });
