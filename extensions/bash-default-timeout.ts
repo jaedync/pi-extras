@@ -1,7 +1,7 @@
 /**
  * Default bash timeout. Pi runs shell commands with no timeout unless the
  * model passes one, so a runaway `find /` blocks the turn until someone aborts
- * it. This patches a default onto every bash call that omits
+ * it. This patches a default onto every bash and powershell call that omits
  * `timeout`; an explicit value is left alone, also an invalid one, so Pi
  * reports it. Metadata-only and fail-open: no data leaves the box.
  *
@@ -11,6 +11,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_TIMEOUT_SECONDS = 120;
+/** Pi's shell tools that take a `timeout` in seconds. */
+export const TIMEOUT_TOOLS: ReadonlySet<string> = new Set(["bash", "powershell"]);
 /** The longest timer Node (and so Pi's shell tools) can set: 2^31 - 1 ms. */
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000;
 const DISABLED = new Set(["0", "off", "false", "none"]);
@@ -39,7 +41,7 @@ export default function bashDefaultTimeout(pi: ExtensionAPI): void {
 	const seconds = resolveDefaultSeconds(process.env.PI_BASH_DEFAULT_TIMEOUT);
 	if (seconds === undefined) return;
 	pi.on("tool_call", async (event) => {
-		if (event.toolName !== "bash") return;
+		if (!TIMEOUT_TOOLS.has(event.toolName)) return;
 		applyDefaultTimeout(event.input, seconds);
 	});
 }

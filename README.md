@@ -34,7 +34,7 @@ can still conflict.
 | Tab Status | Pi's state in the terminal tab: an iTerm2 status dot and detail, and tab progress in iTerm2, Ghostty, WezTerm and Windows Terminal |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
 | Subagents | `subagent`, `message` and `stop_subagent` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, each with a live row above the editor |
-| Bash Default Timeout | Adds a 120-second timeout only when a bash call omitted one |
+| Bash Default Timeout | Adds a 120-second timeout only when a bash or powershell call omitted one |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
@@ -109,7 +109,7 @@ the package. Removing it does not remove your credentials or change other packag
   that session is not current). The model guide is
   `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
   project. See below.
-- `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
+- `PI_BASH_DEFAULT_TIMEOUT`: seconds, at most 2147483.647; `0` or `off` disables the injected timeout.
   Explicit per-call timeouts are preserved.
 - `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
   transcript doesn't say. Anthropic replies report hour-long cache writes and

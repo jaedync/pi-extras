@@ -73,6 +73,13 @@ test("a default above the longest timer Pi can set is invalid, so the built-in d
 	assert.equal(resolveDefaultSeconds("Infinity"), DEFAULT_TIMEOUT_SECONDS);
 });
 
+test("Pi's powershell tool gets the default too", async () => {
+	const handler = install(undefined)!;
+	const powershell = { toolName: "powershell", input: { command: "Get-ChildItem" } as Record<string, unknown> };
+	await handler(powershell, {});
+	assert.equal(powershell.input.timeout, DEFAULT_TIMEOUT_SECONDS);
+});
+
 test("PI_BASH_DEFAULT_TIMEOUT=off registers nothing", () => {
 	assert.equal(install("off"), undefined);
 	const custom = install("30");
