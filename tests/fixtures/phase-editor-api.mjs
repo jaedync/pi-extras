@@ -7,3 +7,5 @@ import { agentRoot as root } from '../support/pi-runtime.mjs';
 const components = join(root, "dist/modes/interactive/components");
 export const { CustomEditor } = await import(pathToFileURL(join(components, "custom-editor.js")).href);
 export const { keyText } = await import(pathToFileURL(join(components, "keybinding-hints.js")).href);
+// Pi's own agent folder rule (PI_CODING_AGENT_DIR with ~ expanded), as the extensions read it.
+export const { getAgentDir } = await import(pathToFileURL(join(root, "dist/config.js")).href);

@@ -1,8 +1,7 @@
 import { appendFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { performance } from "node:perf_hooks";
 import { join } from "node:path";
-import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import {
 	formatElapsed,
@@ -77,7 +76,7 @@ const STEP_CLOCK_REFRESH_MS = 80;
 /** What Pi's working loader shows while held still; this row draws over it. */
 const STILL_LOADER_FRAME = REDUCED_FRAME;
 const DEBUG_HEARTBEAT_MS = 5_000;
-const DEBUG_LOG = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "phase-spinner-debug.jsonl");
+const DEBUG_LOG = join(getAgentDir(), "phase-spinner-debug.jsonl");
 const DEBUG_ENABLED = process.env.PHASE_SPINNER_DEBUG === "1";
 /** Marks an indicator whose dispose this copy of the extension already watches. */
 const DISPOSE_WATCHED = Symbol("phase-spinner.dispose-watched");

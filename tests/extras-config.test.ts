@@ -141,3 +141,18 @@ for (let i = 0; i < Number(count); i++) writeSection(name, { ["k" + i]: i }, fil
 	const saved = JSON.parse(readFileSync(file, "utf8"));
 	for (let index = 0; index < writers; index++) assert.equal(Object.keys(saved[`s${index}`] ?? {}).length, writes, `section s${index} kept every write`);
 });
+
+test("pi-extras.json follows Pi's agent folder, with ~ in PI_CODING_AGENT_DIR expanded as Pi does", async (t) => {
+	const home = scratch(t);
+	const modules = ["../lib/extras-config.ts", "../extensions/usage-guard.ts"].map((path) => new URL(path, import.meta.url).href);
+	const script = `for (const url of ${JSON.stringify(modules)}) console.log((await import(url)).CONFIG_FILE);`;
+	const child = spawn(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, HOME: home, PI_CODING_AGENT_DIR: "~/.pi-alt/agent" }, stdio: ["ignore", "pipe", "pipe"] });
+	let out = "";
+	let err = "";
+	child.stdout.on("data", (chunk: Buffer) => { out += chunk.toString(); });
+	child.stderr.on("data", (chunk: Buffer) => { err += chunk.toString(); });
+	const code = await new Promise((resolve) => child.on("close", resolve));
+	assert.equal(code, 0, err);
+	const expected = join(home, ".pi-alt", "agent", "pi-extras.json");
+	assert.deepEqual(out.trim().split("\n"), [expected, expected]);
+});

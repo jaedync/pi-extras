@@ -7,14 +7,14 @@
  * the save throws `UnreadableJsonError` instead of replacing every setting.
  */
 import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dirname, join } from "node:path";
 import { withFileLock } from "./file-lock.ts";
 import { readJsonObject, resolveTarget, writeJsonAtomic } from "./json-file.ts";
 
 export { UnreadableJsonError } from "./json-file.ts";
 
-export const CONFIG_FILE = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "pi-extras.json");
+export const CONFIG_FILE = join(getAgentDir(), "pi-extras.json");
 
 export const DISPLAY_SETTINGS_EVENT = "pi-extras:tool-display-settings";
 /** Tool Display's folded mode: `{ live }`, when a folded line starts or stops moving, so the phase spinner yields its motion to it. */

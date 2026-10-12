@@ -8,9 +8,8 @@
  * for a model the user may switch away from. Fired keys and the session budget persist
  * as custom session entries; a resumed session does not repeat them.
  */
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { defineTool, type ContextEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { defineTool, getAgentDir, type ContextEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readSection, updateSection } from "../lib/extras-config.ts";
 import { sharedLimitStore, type LimitStore } from "../lib/limit-store.ts";
@@ -31,7 +30,7 @@ import {
 	type SessionBudget,
 } from "../lib/usage-guard-core.ts";
 
-const AGENT_DIR = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+const AGENT_DIR = getAgentDir();
 export const CONFIG_FILE = join(AGENT_DIR, "pi-extras.json");
 const LOG_FILE = join(AGENT_DIR, "usage-guard.log");
 const CONFIG_KEY = "usageGuard";
