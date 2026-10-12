@@ -423,8 +423,9 @@ path before use and is never passed to a shell. A read-only child's subagents
 can't make a worktree from a `cwd`, because `git worktree add` runs that
 repository's hooks. Children use the parent's model credentials. When
 `models.json` changed, a child launch reads it into the parent's model list
-before it picks the child's model, as `/model` does; a file that does not
-parse is not read, so a half-saved file can't remove the parent's custom
+before it picks the child's model, as `/model` does. First, Pi's own loader
+checks the file in a separate model list with no credentials. A file with an
+error is not read, so a half-saved file can't remove the parent's custom
 models.
 
 Child sessions are written under

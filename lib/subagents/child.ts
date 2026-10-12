@@ -15,7 +15,8 @@ import { callPhrase } from "../tool-phrase.ts";
 import { guardBash } from "./bash-guard.ts";
 import type { HostActivity } from "./contract.ts";
 import { confine, sandboxFor } from "./sandbox.ts";
-import { freshModels, launchFiles, stampCurrent, stampOf } from "./stamp.ts";
+import { freshModels, piModelsCheck } from "./fresh-models.ts";
+import { launchFiles, stampCurrent, stampOf } from "./stamp.ts";
 import { WAITING_FOR_MODEL, type AgentRecord, type AgentWork, type ChildHandle, type ChildHooks, type Launcher, type Usage } from "./types.ts";
 import { editTarget, outsideWorktree, sourcePlace, workspaceError } from "./worktree.ts";
 
@@ -223,7 +224,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			// Taken before anything is read, so a file that changes during the launch makes this session stale, never current.
 			const stamp = stampOf(generation, launchFiles(agentDir, cwd, sdk.CONFIG_DIR_NAME ?? ".pi", loaded));
 			const modelRuntime = await deps.modelRuntime();
-			await freshModels(modelRuntime, join(agentDir, "models.json"), (message) => deps.warn?.(message));
+			await freshModels(modelRuntime, join(agentDir, "models.json"), piModelsCheck(sdk, modelRuntime), (message) => deps.warn?.(message));
 			const resolved = sdk.resolveCliModel({ cliModel: record.model, modelRuntime });
 			if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Unknown model ${record.model}.`);
 			const wanted = new Set(tools);

@@ -1162,8 +1162,9 @@ Each launch of a child reads Pi's `settings.json`, the project's
 `.pi/settings.json`, `models.json` and `pi-extras.json` again. Thus a change to
 `compaction.reserveTokens` or to a model's `contextWindow` applies to the next
 child that starts. When `models.json` changed, the launch first reads it into
-the model list that main and its children share, as `/model` does. If the
-file does not parse, the launch uses the models from before and tells you.
+the model list that main and its children share, as `/model` does. Before
+that, Pi's own loader checks the file. If it finds an error, the launch uses
+the models from before and tells you one time for each version of the file.
 
 **Talking.** Every agent has a name made from its task, and `main` is the
 session. `message` sends a note to an agent by name, or to `all`. A running
