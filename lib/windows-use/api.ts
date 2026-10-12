@@ -15,6 +15,7 @@ import { answerUac, captureFailure, checkAltF4, SCREEN_GRAB_FAILED, shortcutKeys
 import { textOf, textResult } from "./result.ts";
 import { pickApp, START_APPS } from "./apps.ts";
 import { compactSnapshot } from "./snapshot.ts";
+import { checkImages } from "./image-check.ts";
 
 export const GUEST_METHODS = ["snapshot", "screenshot", "click", "type", "scroll", "move", "key", "app", "wait_for", "powershell", "call"] as const;
 export const CONSOLE_METHODS = ["console.screenshot", "console.ocr", "console.click", "console.move", "console.drag", "console.scroll", "console.type", "console.key", "console.cad"] as const;
@@ -295,6 +296,9 @@ export class WinSession {
 				return this.console("key", { vm, keys: args.keys }, signal);
 			}
 			case "console.cad": return this.console("cad", { vm }, signal);
+			// The guest's server sends these images; the console's are made here, from Hyper-V's pixels.
+			case "snapshot":
+			case "screenshot": return checkImages(await this.guestTool(vm, method, args, signal));
 			case "type":
 				if (args.label === undefined && !hasPoint(args)) return typeAtFocus(this.guest(vm), args, signal);
 				return this.guestTool(vm, method, args, signal);

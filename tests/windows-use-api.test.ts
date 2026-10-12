@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CodeExecutor } from "../lib/computer-use/executor.ts";
 import { WIN_API, WinSession, describeWinCall, toMcp, vmAllowlist } from "../lib/windows-use/api.ts";
+import { readFrame, toPng } from "../lib/windows-use/frame.ts";
 import type { Guest, HostCalls } from "../lib/windows-use/guest.ts";
 import { hostFrame } from "./support/windows-frames.ts";
 
@@ -47,6 +48,9 @@ function fakeHost(): { host: HostCalls; calls: [string, Record<string, unknown>]
 	};
 }
 
+/** A real PNG: snapshot images are checked by their bytes. */
+const IMG = toPng(readFrame(hostFrame({ taskbar: false, width: 8, height: 6 }))).toString("base64");
+
 function fakeGuest(log: string[]): (vm: string, note: (text: string) => void) => Guest {
 	return (vm, note) => ({
 		vm,
@@ -55,7 +59,7 @@ function fakeGuest(log: string[]): (vm: string, note: (text: string) => void) =>
 			if (name === "Snapshot") note(`${vm}: installing Windows-MCP`);
 			if (name === "Clipboard" && args.mode === "get") return { content: [{ type: "text", text: vm === "A" ? "Clipboard content:\nold" : "Clipboard is empty or contains non-text data." }], isError: false };
 			return name === "Snapshot"
-				? { content: [{ type: "text", text: "tree" }, { type: "image", data: "IMG", mimeType: "image/png" }], isError: false }
+				? { content: [{ type: "text", text: "tree" }, { type: "image", data: IMG, mimeType: "image/png" }], isError: false }
 				: { content: [{ type: "text", text: `${name} done` }], isError: false };
 		},
 		async login() { log.push(`${vm} login`); },
@@ -89,7 +93,7 @@ test("scripts batch host and guest calls through one executor", async () => {
 	assert.equal(result.error, undefined, JSON.stringify(result.content));
 	assert.deepEqual(result.content.slice(0, 3), [
 		{ type: "text", text: "tree" },
-		{ type: "image", data: "IMG", mimeType: "image/png" },
+		{ type: "image", data: IMG, mimeType: "image/png" },
 		{ type: "text", text: '{"width":64,"height":48}' },
 	]);
 	const png = result.content[3];

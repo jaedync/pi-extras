@@ -311,7 +311,12 @@ per-VM approval: opting in
 covers every VM, unless `PI_WINDOWS_USE_VMS` names the only ones the tool may
 list or act on. That limit binds the tool, not an agent that also has a shell,
 which can run `powershell.exe` itself. Screenshots and guest text enter the conversation only when
-the agent's script emits them.
+the agent's script emits them. The images that `win.snapshot` and `win.screenshot`
+return come from the guest, so windows_use checks each one before the script
+sees it. The type comes from the image bytes, not from the label. An image that
+is not a JPEG, PNG, GIF or WebP, or that claims more than 50 million pixels, is
+replaced by a note. An image over 2000 px on a side or 4.5 MB is made smaller
+with Pi's `resizeImage`, as Pi's read tool does.
 
 Setting up a VM installs uv and Windows-MCP for the signed-in guest user,
 registers a logon task that runs it (also started by a `pi-windows-use` value
