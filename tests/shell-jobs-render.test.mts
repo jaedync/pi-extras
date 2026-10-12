@@ -189,6 +189,15 @@ describe("job widget", () => {
 		assert.strictEqual(hidden, 2);
 	});
 
+	test("keeps running jobs ahead of completions that wait for delivery", () => {
+		const pending = Array.from({ length: 4 }, (_, i) => makeJob({ id: `p${i + 1}`, state: "done", code: 0, attempts: 1, endedAt: 2000 }));
+		const running = [makeJob({ id: "r1" }), makeJob({ id: "r2" })];
+		const { rows, hidden } = selectRows([...running, ...pending]);
+		assert.deepStrictEqual(rows.filter((job) => job.state !== "done").map((job) => job.id), ["r1", "r2"]);
+		assert.strictEqual(rows.length, WIDGET_MAX_ROWS);
+		assert.strictEqual(hidden, 2);
+	});
+
 	test("formats elapsed times compactly", () => {
 		assert.strictEqual(formatElapsed(0), "0s");
 		assert.strictEqual(formatElapsed(65000), "1m05s");

@@ -91,8 +91,9 @@ export function isVisible(job: Job): boolean {
 
 /**
  * Keep at most WIDGET_MAX_ROWS visible jobs. Failures are never dropped,
- * because nothing else reports them; running rows go oldest-first, then
- * pending completions, and everything dropped is counted in `hidden`.
+ * because nothing else reports them; running jobs come next (the newest when
+ * they do not all fit), then pending completions, which a message is about to
+ * report anyway. Everything dropped is counted in `hidden`.
  */
 export function selectRows(jobs: Iterable<Job>): { rows: Job[]; hidden: number } {
 	const all = [...jobs].filter(isVisible);
@@ -104,11 +105,11 @@ export function selectRows(jobs: Iterable<Job>): { rows: Job[]; hidden: number }
 	}
 	for (const job of [...all].reverse()) {
 		if (keep.size >= WIDGET_MAX_ROWS) break;
-		if (job.state === "done" && !job.deliveryFailed) keep.add(job);
+		if (job.state !== "done") keep.add(job);
 	}
 	for (const job of [...all].reverse()) {
 		if (keep.size >= WIDGET_MAX_ROWS) break;
-		if (job.state !== "done") keep.add(job);
+		if (job.state === "done" && !job.deliveryFailed) keep.add(job);
 	}
 	const rows = all.filter((job) => keep.has(job));
 	return { rows, hidden: all.length - rows.length };
