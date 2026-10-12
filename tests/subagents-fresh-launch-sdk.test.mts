@@ -146,7 +146,7 @@ test("a models.json that adds a model to a provider an extension registered is r
 	} finally { await handle.dispose(); }
 });
 
-test("a session stops being current when a context file, SYSTEM.md or a skill its loader read changes, not when an extension file or a file it did not read does", { timeout: 20_000 }, async () => {
+test("a child reads APPEND_SYSTEM.md before its own instructions, and a session stops being current when a context file, SYSTEM.md, APPEND_SYSTEM.md or a skill changes, not an extension file", { timeout: 20_000 }, async () => {
 	writeFileSync(join(agentDir, "models.json"), "{}");
 	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
 	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
@@ -155,22 +155,24 @@ test("a session stops being current when a context file, SYSTEM.md or a skill it
 	const inputs = {
 		context: join(agentDir, "AGENTS.md"),
 		system: join(agentDir, "SYSTEM.md"),
+		append: join(agentDir, "APPEND_SYSTEM.md"),
 		skill: join(agentDir, "skills", "demo", "SKILL.md"),
 	};
 	writeFileSync(inputs.context, "Be brief.\n");
 	writeFileSync(inputs.system, "You help.\n");
+	writeFileSync(inputs.append, "Say thanks.\n");
 	writeFileSync(inputs.skill, "---\nname: demo\ndescription: A demo skill.\n---\nDo the demo.\n");
-	// A child's own instructions take the place of APPEND_SYSTEM.md in Pi's loader, so a child never reads it.
-	const append = join(agentDir, "APPEND_SYSTEM.md");
-	writeFileSync(append, "Say thanks.\n");
 	// An extension that owns a tool: Pi's extension cache decides when its code reaches a child, so its file is no input.
 	const extension = join(scratch, "owner-extension.ts");
 	writeFileSync(extension, "export default function (pi: any) { pi.registerTool({ name: 'owned', label: 'owned', description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: [] }) }); }\n");
+	// What each launch appended to the system prompt.
+	const appended: string[][] = [];
+	const watched = { ...sdk, createAgentSession: (options: any) => { appended.push(options.resourceLoader.getAppendSystemPrompt()); return sdk.createAgentSession(options); } };
 	const launcher = createLauncher({
-		sdk, agentDir, cwd: scratch, sessionDir: null, generation: 1,
+		sdk: watched as never, agentDir, cwd: scratch, sessionDir: null, generation: 1,
 		modelRuntime: async () => runtime,
 		toolsFor: () => ({ tools: ["read", "owned"], customTools: [], extensionPaths: [extension] }),
-		instructions: () => "",
+		instructions: () => "You are the subagent.",
 	});
 	// A file written in the millisecond a launch begins counts as read during it, so each launch starts a little later.
 	const launch = async () => (await new Promise((resolve) => setTimeout(resolve, 5)), launcher.launch({ name: "reader", task: "Look", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false, state: "starting", runs: 0, depth: 1, startedAt: Date.now() } as never, { onEvent: () => undefined } as never));
@@ -179,10 +181,9 @@ test("a session stops being current when a context file, SYSTEM.md or a skill it
 		const stamped = first.stamp!.files.map(([path]) => path);
 		for (const path of Object.values(inputs)) assert.ok(stamped.includes(path), `${path} is in the stamp`);
 		assert.ok(!stamped.includes(extension), "the extension file is not");
-		assert.ok(!stamped.includes(append), "nor a file the loader did not read");
+		assert.deepEqual(appended[0]?.map((text) => text.trim()), ["Say thanks.", "You are the subagent."], "APPEND_SYSTEM.md, then the child's instructions");
 		writeFileSync(extension, readFileSync(extension, "utf8") + "// edited\n");
-		writeFileSync(append, "Say thanks twice.\n");
-		assert.equal(launcher.current!(first), true, "so editing them leaves the session current");
+		assert.equal(launcher.current!(first), true, "so editing it leaves the session current");
 	} finally { await first.dispose(); }
 	for (const [input, path] of Object.entries(inputs)) {
 		const handle = await launch();
@@ -191,6 +192,38 @@ test("a session stops being current when a context file, SYSTEM.md or a skill it
 			writeFileSync(path, readFileSync(path, "utf8") + "More.\n");
 			assert.equal(launcher.current!(handle), false, `an edited ${input} file makes it stale`);
 		} finally { await handle.dispose(); }
+	}
+});
+
+test("a child in a project of its own reads that project's APPEND_SYSTEM.md only when Pi would trust the project", { timeout: 20_000 }, async () => {
+	writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: {} }));
+	writeFileSync(join(agentDir, "APPEND_SYSTEM.md"), "Global append.\n");
+	const project = mkdtempSync(join(scratch, "project-"));
+	mkdirSync(join(project, ".pi"));
+	writeFileSync(join(project, ".pi", "APPEND_SYSTEM.md"), "Project append.\n");
+	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
+	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
+	runtime.registerNativeProvider(faux.provider);
+	const appended: string[][] = [];
+	const watched = { ...sdk, createAgentSession: (options: any) => { appended.push(options.resourceLoader.getAppendSystemPrompt()); return sdk.createAgentSession(options); } };
+	const launcher = createLauncher({
+		sdk: watched as never, agentDir, cwd: scratch, sessionDir: null, generation: 1,
+		modelRuntime: async () => runtime,
+		toolsFor: () => ({ tools: ["read"], customTools: [] }),
+		instructions: () => "You are the subagent.",
+	});
+	const launch = async () => {
+		const handle = await launcher.launch({ name: "visitor", task: "Look", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false, state: "starting", runs: 0, depth: 1, startedAt: Date.now(), cwd: project, checkout: project } as never, { onEvent: () => undefined } as never);
+		await handle.dispose();
+		return appended.at(-1)?.map((text) => text.trim());
+	};
+	try {
+		assert.deepEqual(await launch(), ["Global append.", "You are the subagent."], "no one trusted the project, and no one is there to ask");
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "always" }));
+		assert.deepEqual(await launch(), ["Project append.", "You are the subagent."], "a trusted project's file wins, as for main");
+	} finally {
+		rmSync(join(agentDir, "settings.json"), { force: true });
+		rmSync(join(agentDir, "APPEND_SYSTEM.md"), { force: true });
 	}
 });
 

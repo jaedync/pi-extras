@@ -286,7 +286,9 @@ function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInpu
 		// child's API, and one that keeps it in module state (remote-pi does) then delivers the
 		// parent's messages to the child, even if the extension is filtered out afterwards.
 		noExtensions: true, additionalExtensionPaths: [...loaded],
-		appendSystemPrompt: [deps.instructions(record)],
+		// After APPEND_SYSTEM.md, which Pi finds as it finds SYSTEM.md, project trust and all; a plain
+		// appendSystemPrompt would take its place.
+		appendSystemPromptOverride: (base) => [...base, deps.instructions(record)],
 		// Outside its worktree is refused before the lock is taken, so a refused edit holds nothing.
 		extensionFactories: [guard.extension, editGuard((path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name, editTarget(cwd, path)),
 			editTracker(deps.activity, record.name, cwd))],

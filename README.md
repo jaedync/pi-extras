@@ -1160,7 +1160,10 @@ agent to.
 
 Each launch of a child reads Pi's `settings.json`, the project's
 `.pi/settings.json` and `models.json` again. It also reads the context files
-(`AGENTS.md`), `SYSTEM.md` and skills that Pi gives a child. The child's
+(`AGENTS.md`), `SYSTEM.md`, `APPEND_SYSTEM.md` and skills that Pi gives a
+child. The text of `APPEND_SYSTEM.md` comes before the child's own
+instructions, and a project's file applies only when Pi trusts the project, as
+for main. The child's
 extensions also read their own sections of `pi-extras.json`, such as
 `cacheCompaction` and `rateLimitRecovery`, at each launch. The `subagents`
 section applies at the next session start or `/reload`, because it also sets

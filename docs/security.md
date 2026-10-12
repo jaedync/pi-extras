@@ -409,8 +409,8 @@ job and subagent tools, and `childToolsExclude`; read-only children lose
 `bash`, `edit` and `write`. Children load the extensions that provide their
 tools, Cache Compaction and a quota guard. The guard never hibernates for
 quotas; it waits out short rate limits within the bounded backoff described
-above. Your context files (`AGENTS.md`) and skills load as they do
-for the parent. A child started with `cwd` works in that directory instead: its
+above. Your context files (`AGENTS.md`), `SYSTEM.md`, `APPEND_SYSTEM.md` and
+skills load as they do for the parent. A child started with `cwd` works in that directory instead: its
 `AGENTS.md` and relative paths come from there, as when you start Pi there.
 That directory's project settings and resources (`.pi/`, such as `shellPath`
 and `shellCommandPrefix`) load only as Pi would decide at a start with no one
