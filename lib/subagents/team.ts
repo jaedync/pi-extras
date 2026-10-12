@@ -8,16 +8,17 @@
  * its next turn boundary (swap.ts).
  * A child is not done until its own children have reported. A run that a
  * peer's message started and that ends idle reports to its parent without
- * waking it: main reads it at its next turn, a child parent at its next run.
+ * waking it: main reads it at its next turn, a child parent at its next run
+ * (hand-up.ts).
  * When a child's session is held and when it goes is sessions.ts's to say.
  */
 import { randomUUID } from "node:crypto";
-import { afterBlock, afterError, awaited, queuedActivity, waitingFor } from "./after.ts";
+import { afterBlock, afterError, queuedActivity, waitingFor } from "./after.ts";
 import { MAIN, nameFor } from "./names.ts";
 import { reportText } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
-import { checkError, checkFailed, mergeCheck, RunChecks } from "./checks.ts";
+import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
 import { EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
@@ -25,6 +26,7 @@ import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
 import { ResumePrompts } from "./resume-prompts.ts";
+import { handUp, type HandUpHost } from "./hand-up.ts";
 import { saveReport } from "./reports.ts";
 import { causeWords, staleCauses, SWAP_NOTE, swapActivity, swapDue, TurnSwaps } from "./swap.ts";
 import { Routing, type SendOptions } from "./routing.ts";
@@ -102,6 +104,7 @@ export class Team implements HostTeam {
 	private readonly locks = new EditLocks(this);
 	private readonly workTrees = new WorkTrees();
 	private readonly routing: Routing;
+	private readonly handUpHost: HandUpHost;
 	/** The checkout of main's working directory, looked up at the first need; undefined without one. */
 	private mainCheckout: { value: string | undefined } | undefined;
 	private readonly now: () => number;
@@ -116,6 +119,7 @@ export class Team implements HostTeam {
 		this.sessions = new OpenSessions({ launcher: options.launcher, idle: (name) => this.records.get(name)?.state === "idle", warn: options.warn ?? console.warn,
 			...(options.idleReleaseMs !== undefined ? { idleReleaseMs: options.idleReleaseMs } : {}) });
 		this.routing = this.router();
+		this.handUpHost = { questions: this.questions, routing: this.routing, list: () => this.list(), deliverToMain: (delivery) => options.deliverToMain(delivery), now: () => this.now() };
 	}
 
 	/** Routing's view of the team (routing.ts). */
@@ -672,38 +676,7 @@ export class Team implements HostTeam {
 		this.answers.forget(name);
 		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
 		this.waiters.delete(name);
-		// The report answers anything main was waiting on.
-		const { owedMain, peerRun } = this.routing.ended(name);
-		const unanswered: string[] = [];
-		let parentAsked = false;
-		for (const asker of this.list().filter((entry) => entry.owed?.includes(name)).map((entry) => entry.name)) {
-			if (!this.routing.payOwed(asker, name)) continue;
-			if (asker === record.parent) parentAsked = true;
-			else unanswered.push(asker);
-		}
-		// A peer's run that ended quietly is news for the parent's next turn, unless it answers the parent or main.
-		// So is one that a spawn of the same parent waits for: the parent hears of it through that spawn's report.
-		// A check that did not pass is news either way.
-		const quiet = (peerRun || awaited(record, this.list())) && record.state === "idle" && !checkFailed(record) && !parentAsked && !owedMain;
-		// A parent waiting on this child's answer gets the report as that answer.
-		const asked = this.questions.of(record.parent).find((question) => question.to === name);
-		const silent = this.stoppedByParent.delete(name);
-		if (asked) {
-			asked.resolve(reportText(record, this.now()));
-		} else if (silent) {
-			// Its parent stopped it and has the record from that call.
-		} else if (record.parent === MAIN) {
-			if (!record.blocking) this.options.deliverToMain({ kind: "report", record, ...(quiet ? { quiet } : {}) });
-		} else if (!record.blocking) {
-			this.routing.deliver(record.name, record.parent, reportText(record, this.now()), !quiet, `Report from ${record.name}`);
-		}
-		// Its parent has the report; anyone else it owed an answer gets how its run ended instead.
-		for (const asker of unanswered) this.routing.deliver(name, asker, `${name} ended without answering you. ${reportText(record, this.now())}`, true, `Report from ${name}`);
-		// Anyone else waiting on it would wait out the whole timeout for an answer that can't come.
-		for (const [asker, questions] of this.questions.entries()) {
-			if (asker === record.parent) continue;
-			for (const question of questions.filter((open) => open.to === name)) question.reject(new Error(`${name} ended without answering (${record.state}). Continue without its answer, or message it again: a finished agent resumes to handle a message.`));
-		}
+		handUp(this.handUpHost, record, this.stoppedByParent.delete(name));
 		this.sessions.ended(name, record.state);
 		this.pump();
 	}
