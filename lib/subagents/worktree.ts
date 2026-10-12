@@ -55,17 +55,16 @@ function dependencyPaths(tree: string, base?: string, call: GitCall = PLAIN): st
 	return tracked || dependenciesIgnored(tree, call) ? [] : ["--", ".", EXCLUDE_DEPENDENCIES];
 }
 
-function snapshot(root: string, name: string): string {
+function snapshot(root: string, name: string, call: GitCall): string {
 	const temporary = mkdtempSync(join(tmpdir(), "pi-subagent-index-"));
 	const index = join(temporary, "index");
 	try {
 		let head: string;
-		try { head = git(root, ["rev-parse", "--verify", "HEAD"]).trim(); }
+		try { head = git(root, ["rev-parse", "--verify", "HEAD"], undefined, call).trim(); }
 		catch (error) { throw new Error(`Worktree isolation needs an initial commit (HEAD). ${(error as Error).message}`); }
-		git(root, ["read-tree", head], index);
-		git(root, ["add", "-A", ...dependencyPaths(root)], index);
-		const tree = git(root, ["write-tree"], index).trim();
-		return git(root, ["commit-tree", tree, "-p", head, "-m", `subagent ${name}: base (main's uncommitted changes)`], index).trim();
+		git(root, ["read-tree", head], index, call);
+		const tree = treeOf(root, dependencyPaths(root, undefined, call), call, index);
+		return git(root, ["commit-tree", tree, "-p", head, "-m", `subagent ${name}: base (main's uncommitted changes)`], index, call).trim();
 	} finally { rmSync(temporary, { recursive: true, force: true }); }
 }
 
@@ -74,8 +73,8 @@ function pathExists(path: string): boolean {
 	catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
 }
 
-function available(root: string, name: string): { path: string; branch: string } {
-	const branches = new Set(git(root, ["for-each-ref", "--format=%(refname)", "refs/heads/subagent/"]).trim().split("\n"));
+function available(root: string, name: string, call: GitCall): { path: string; branch: string } {
+	const branches = new Set(git(root, ["for-each-ref", "--format=%(refname)", "refs/heads/subagent/"], undefined, call).trim().split("\n"));
 	for (let suffix = 1; suffix <= MAX_NAMES; suffix++) {
 		const candidate = suffix === 1 ? name : `${name}-${suffix}`;
 		const path = join(`${root}${WORKTREE_SUFFIX}`, candidate);
@@ -85,23 +84,29 @@ function available(root: string, name: string): { path: string; branch: string }
 	throw new Error(`No free worktree name for ${name}. Remove unused subagent worktrees and branches first.`);
 }
 
-function linkDependencies(root: string, path: string): void {
+function linkDependencies(root: string, path: string, call: GitCall): void {
 	const source = join(root, "node_modules");
-	if (!existsSync(source) || git(root, ["ls-files", "-z", "--", "node_modules"]) || pathExists(join(path, "node_modules"))) return;
+	if (!existsSync(source) || git(root, ["ls-files", "-z", "--", "node_modules"], undefined, call) || pathExists(join(path, "node_modules"))) return;
 	symlinkSync(source, join(path, "node_modules"), "dir");
 }
 
-/** A worktree of the repository at `cwd`; `named` is a cwd the spawn gave, which an error names instead of the parent's workspace. */
-export function createWorktree(cwd: string, name: string, named?: string): Worktree {
+/**
+ * A worktree of the repository at `cwd`; `named` is a cwd the spawn gave,
+ * which an error names instead of the parent's workspace. `from` is the
+ * worktree of the child that spawns, which the new one is made from: main
+ * runs git there only through its verified git folders (`gitCall`).
+ */
+export function createWorktree(cwd: string, name: string, named?: string, from?: Worktree): Worktree {
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error("Invalid subagent worktree name.");
+	const call = gitCall(from);
 	let root: string;
-	try { root = git(cwd, ["rev-parse", "--show-toplevel"]).trim(); }
+	try { root = from?.path ?? git(cwd, ["rev-parse", "--show-toplevel"]).trim(); }
 	catch (error) { throw new Error(`Worktree isolation needs a git repository in ${named ?? "the parent's workspace"}. ${(error as Error).message}`); }
-	const location = available(root, name);
-	const base = snapshot(root, name);
+	const location = available(root, name, call);
+	const base = snapshot(root, name, call);
 	mkdirSync(dirname(location.path), { recursive: true });
-	git(root, ["worktree", "add", "-b", location.branch, location.path, base]);
-	try { linkDependencies(root, location.path); }
+	git(root, ["worktree", "add", "-b", location.branch, location.path, base], undefined, call);
+	try { linkDependencies(root, location.path, call); }
 	catch (error) { throw new Error(`Could not link node_modules: ${(error as Error).message}. Worktree retained at ${location.path} on ${location.branch}.`); }
 	return { ...location, base };
 }
@@ -252,19 +257,36 @@ const SAFE_CONFIG = ["core.fsmonitor=false", `core.hooksPath=${devNull}`, "diff.
 	.flatMap((setting) => ["-c", setting]);
 
 /**
- * How main runs git in the work tree `path`. In a subagent worktree, git gets
- * the worktree's own folder and the shared one, so it reads neither the `.git`
- * nor the `commondir` file, which the child can write; elsewhere only the safe
- * config. Throws when a worktree's git folder can't be told.
+ * The checkout that the worktree at `path` comes from at the end of its
+ * chain: a nested worktree's parent worktree is a child's to write, its
+ * first checkout is not.
  */
-export function gitCall(path: string): GitCall {
+export function firstCheckout(path: string): string | undefined {
 	const source = sourceCheckout(path);
-	if (source === undefined || !existsSync(source)) return { args: SAFE_CONFIG, env: {} };
-	const common = commonGitDir(realpathSync(source));
+	return source === undefined ? undefined : firstCheckout(source) ?? source;
+}
+
+/**
+ * How main runs git in a child's `worktree` (a record's): with the worktree's
+ * own git folder and the shared one, so git reads neither the `.git` nor the
+ * `commondir` file, which the child can write. Without a worktree, only the
+ * safe config. Throws when the worktree's git folder can't be told.
+ */
+export function gitCall(worktree: Pick<Worktree, "path"> | undefined): GitCall {
+	if (!worktree) return { args: SAFE_CONFIG, env: {} };
+	const first = firstCheckout(worktree.path);
+	if (first === undefined || !existsSync(first)) throw new Error(`${worktree.path} has no source checkout on disk.`);
+	const common = commonGitDir(realpathSync(first));
 	if ("why" in common) throw new Error(common.why);
-	const own = worktreeGitDir(path, common.dir);
+	const own = worktreeGitDir(worktree.path, common.dir);
 	if ("why" in own) throw new Error(own.why);
-	return { args: ["--git-dir", own.dir, "--work-tree", path, ...SAFE_CONFIG], env: { GIT_COMMON_DIR: common.dir } };
+	return { args: ["--git-dir", own.dir, "--work-tree", worktree.path, ...SAFE_CONFIG], env: { GIT_COMMON_DIR: common.dir } };
+}
+
+/** The tree of the work tree's files now: `git add -A` into the index, then `write-tree`, both with `call` and `index`. */
+function treeOf(path: string, paths: readonly string[], call: GitCall, index?: string): string {
+	git(path, ["add", "-A", ...paths], index, call);
+	return git(path, ["write-tree"], index, call).trim();
 }
 
 /** Persisted paths are used as command arguments and prompt text, never shell input. */
@@ -292,15 +314,20 @@ function withTemporaryIndex<T>(path: string, paths: readonly string[], call: Git
 export function worktreeFooter(worktree: Worktree): string {
 	const { path, branch, base } = worktree;
 	try {
-		const call = gitCall(path);
+		const call = gitCall(worktree);
 		const paths = dependencyPaths(path, base, call);
-		const files = withTemporaryIndex(path, paths, call, (index) => git(path, ["diff", "--cached", "--name-only", "-z", base, ...paths], index, call).split("\0").filter(Boolean).length);
+		// One temporary index: the child's own staging stays as it was, and the tree is the snapshot the counts describe.
+		const { files, tree } = withTemporaryIndex(path, paths, call, (index) => ({
+			files: git(path, ["diff", "--cached", "--name-only", "-z", base, ...paths], index, call).split("\0").filter(Boolean).length,
+			tree: git(path, ["write-tree"], index, call).trim(),
+		}));
 		const commits = git(path, ["rev-list", "--count", `${base}..HEAD`], undefined, call).trim();
 		const root = sourceCheckout(path);
 		if (root === undefined) throw new Error("The saved worktree path has no source checkout.");
 		const pathspec = paths.length ? ` ${paths.map(quote).join(" ")}` : "";
 		return `\n\nWorktree: ${path} (${branch}); ${files} ${files === 1 ? "file differs" : "files differ"} from base, ${commits} ${commits === "1" ? "commit" : "commits"}.\n`
-			+ `Apply: git -C ${quote(path)} add -A${pathspec} && git -C ${quote(path)} diff --binary --cached ${base}${pathspec} | git -C ${quote(root)} apply\n`
+			// Git runs only in the parent's checkout, on the tree written above, so main's bash never reads the child's git data.
+			+ `Apply: git -C ${quote(root)} diff --binary --no-ext-diff --no-textconv ${base} ${tree}${pathspec} | git -C ${quote(root)} apply\n`
 			+ `After you applied the changes (deletes this worktree): git worktree remove --force ${quote(path)} && git branch -D ${quote(branch)}`;
 	} catch (error) {
 		return `\n\nWorktree report unavailable: ${String((error as Error).message).replace(/\s+/g, " ").slice(0, 300)} (${path}, ${branch}).`;

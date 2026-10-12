@@ -166,7 +166,6 @@ test("a worktree comes from the repository at cwd, even when the parent's folder
 	assert.equal(isolated.checkout, tree);
 	assert.equal(isolated.cwd, join(tree, "sub"), "it starts in the same directory of its worktree");
 	assert.equal(spawned(team, request("top", { cwd: one, isolation: "worktree" })).cwd, join(`${one}.worktrees`, "top"));
-	assert.equal(spawned(team, request("deep", { cwd: join(one, "sub"), isolation: "worktree", parent: "iso" })).cwd, join(`${one}.worktrees`, "deep", "sub"));
 	assert.equal(spawned(team, request("aide", { parent: "iso" })).cwd, join(tree, "sub"), "a helper starts where its parent does");
 	const nest = spawned(team, request("nest", { parent: "iso", isolation: "worktree" }));
 	assert.deepEqual([nest.worktree?.path, nest.cwd], [join(`${tree}.worktrees`, "nest"), join(`${tree}.worktrees`, "nest", "sub")],
@@ -176,10 +175,14 @@ test("a worktree comes from the repository at cwd, even when the parent's folder
 	assert.match(parentless.ok ? "" : parentless.error, /^Worktree isolation needs a git repository in the parent's workspace\./, "no cwd: today's rule");
 	const plain = team.spawn(request("plain", { cwd: notes, isolation: "worktree" }));
 	assert.match(plain.ok ? "" : plain.error, literal(`Worktree isolation needs a git repository in ${notes}.`));
+	const inTree = `iso's subagents work in its worktree ${isolated.worktree?.path}. Leave out cwd.`;
 	const stray = team.spawn(request("stray", { parent: "iso", cwd: two }));
-	assert.match(stray.ok ? "" : stray.error, literal(`iso's subagents work in its worktree ${isolated.worktree?.path}.`));
-	const own = spawned(team, request("own", { parent: "iso", cwd: two, isolation: "worktree" }));
-	assert.equal(own.worktree?.path, join(`${two}.worktrees`, "own"), "a worktree of its own may come from anywhere");
+	assert.match(stray.ok ? "" : stray.error, literal(inTree));
+	// Main makes a worktree with git and no sandbox, so a sandboxed child may not choose the repository.
+	for (const cwd of [two, join(one, "sub")]) {
+		const own = team.spawn(request("own", { parent: "iso", cwd, isolation: "worktree" }));
+		assert.match(own.ok ? "" : own.error, literal(inTree), cwd);
+	}
 	spawned(team, request("reader", { readOnly: true }));
 	const hooks = team.spawn(request("hooks", { parent: "reader", readOnly: true, cwd: two, isolation: "worktree" }));
 	assert.match(hooks.ok ? "" : hooks.error, /^reader is read-only, so its subagents can't make a worktree from a cwd\./, "git would run that repository's hooks");

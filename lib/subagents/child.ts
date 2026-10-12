@@ -182,7 +182,7 @@ function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: Age
 		: undefined;
 	const { activity, bashChanged } = deps;
 	const changes = activity && bashChanged ? {
-		cwd, agent: record.name, activity, warn,
+		cwd, agent: record.name, activity, warn, ...(record.worktree ? { worktree: record.worktree } : {}),
 		mayEdit: (root: string) => deps.mayEdit?.(record.name, root) ?? false,
 		changed: (paths: readonly string[], root: string) => bashChanged(record.name, paths, root),
 	} : undefined;

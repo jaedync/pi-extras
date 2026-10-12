@@ -11,11 +11,14 @@ import { changedPaths, fingerprint, gitRoot, type Fingerprint } from "./fingerpr
 import { deniedWriteNote, type Sandbox } from "./sandbox.ts";
 import type { HostActivity } from "./contract.ts";
 import type { Watched } from "./tool-activity.ts";
+import type { Worktree } from "./types.ts";
 
 /** How a child's bash call reports the files it changed. */
 export interface ChangeWatch {
 	/** The child's workspace; changes are looked for in its git work tree. */
 	cwd: string;
+	/** The child's worktree, whose top is its work tree; never looked up there, where the child can put a link to a repository of its own. */
+	readonly worktree?: Worktree;
 	/** The child's name, which keeps its call ids apart from other agents' in `activity`. */
 	agent: string;
 	activity: HostActivity;
@@ -64,7 +67,7 @@ async function before(watch: ChangeWatch, id: string, rootOf: () => Promise<stri
 	// Watch first: an edit that lands while the fingerprint is taken must not count either.
 	// By work tree, not directory: agents that start in different directories of one tree change the same files.
 	const stop = watch.activity.watch(`${watch.agent}:${id}`, root);
-	try { return { root, print: await fingerprint(root), stop }; }
+	try { return { root, print: await fingerprint(root, watch.worktree), stop }; }
 	catch (error) {
 		stop();
 		return skip(watch, error);
@@ -72,14 +75,14 @@ async function before(watch: ChangeWatch, id: string, rootOf: () => Promise<stri
 }
 
 /** The work tree of `cwd`, looked up once it is found; a failure is tried again on the next call. */
-function rootLookup(cwd: string): () => Promise<string> {
-	let found: string | undefined;
+function rootLookup(cwd: string, fixed?: string): () => Promise<string> {
+	let found = fixed;
 	return async () => found ??= await gitRoot(cwd);
 }
 
 async function after(watch: ChangeWatch, start: Before): Promise<string | undefined> {
 	let print: Fingerprint;
-	try { print = await fingerprint(start.root); }
+	try { print = await fingerprint(start.root, watch.worktree); }
 	catch (error) { start.stop(); return skip(watch, error); }
 	const { edited, shared } = start.stop();
 	// Another agent's command ran here meanwhile, so these changes may be its.
@@ -91,7 +94,7 @@ async function after(watch: ChangeWatch, start: Before): Promise<string | undefi
 export function guardBash<T extends ToolDefinition<any, any, any>>(definition: T, options: BashGuardOptions): T {
 	const { sandbox, changes } = options;
 	if (!sandbox && !changes) return definition;
-	const rootOf = changes ? rootLookup(changes.cwd) : undefined;
+	const rootOf = changes ? rootLookup(changes.cwd, changes.worktree?.path) : undefined;
 	return {
 		...definition,
 		async execute(toolCallId, params, signal, onUpdate, ctx) {

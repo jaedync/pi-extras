@@ -88,15 +88,20 @@ test("reports count files and child commits and give quoted apply and cleanup co
 	writeFileSync(join(worktree.path, "new file.txt"), "new\n");
 	const footer = worktreeFooter(worktree);
 	assert.match(footer, /2 files.*1 commit/);
-	assert.ok(footer.includes(`git -C '${worktree.path}' add -A -- . ':(exclude)node_modules' && git -C '${worktree.path}' diff --binary --cached ${worktree.base} -- . ':(exclude)node_modules' | git -C '${realpathSync(root)}' apply`));
+	// The line runs git only in the parent's checkout, on a tree main wrote with the worktree's verified git folder.
+	const tree = /diff --binary --no-ext-diff --no-textconv \S+ ([0-9a-f]{40,64}) /.exec(footer)?.[1] ?? "";
+	assert.equal(git(worktree.path, "diff", "--cached", "--name-only"), "", "the report stages nothing in the worktree");
+	git(worktree.path, "add", "-A");
+	assert.equal(git(worktree.path, "rev-parse", `${tree}^{tree}`).trim(), git(worktree.path, "write-tree").trim(), "the tree of the worktree's files now");
+	const quoted = `'${realpathSync(root)}'`;
+	assert.ok(footer.includes(`\nApply: git -C ${quoted} diff --binary --no-ext-diff --no-textconv ${worktree.base} ${tree} -- . ':(exclude)node_modules' | git -C ${quoted} apply\n`), footer);
+	assert.ok(!footer.includes(`git -C '${worktree.path}'`), "nothing runs git in the child's worktree");
 	assert.ok(footer.includes(`git worktree remove --force '${worktree.path}'`));
 	assert.ok(footer.includes("git branch -D subagent/scout"));
 	assert.ok(existsSync(worktree.path));
 	const baseContent = git(worktree.path, "show", `${worktree.base}:tracked.txt`);
 	assert.equal(baseContent, "main uncommitted\n");
-	// As the Apply line says: the report stages nothing, so the parent stages, then applies.
-	git(worktree.path, "add", "-A");
-	execFileSync("git", ["-C", root, "apply"], { input: git(worktree.path, "diff", "--binary", "--cached", worktree.base), timeout: 10_000, stdio: ["pipe", "pipe", "pipe"] });
+	execFileSync("/bin/bash", ["-c", /\nApply: (.*)\n/.exec(footer)![1]!], { timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] });
 	assert.equal(readFileSync(join(root, "tracked.txt"), "utf8"), "child edit\n");
 	assert.equal(readFileSync(join(root, "new file.txt"), "utf8"), "new\n");
 	assert.match(worktreeFooter({ ...worktree, path: join(root, "missing") }), /Worktree report unavailable:/);
@@ -235,18 +240,45 @@ test("main's git commands in a child's worktree use the worktree's own git folde
 	assert.deepEqual(ran(marker), [], footer);
 	assert.match(footer, /; \d+ files differ from base, 0 commits\./, "the worktree's own index and HEAD, not the planted folder's");
 	const { fingerprint } = await import("../lib/subagents/fingerprint.ts");
-	assert.ok((await fingerprint(worktree.path)).has(join(worktree.path, "new.txt")));
+	assert.ok((await fingerprint(worktree.path, worktree)).has(join(worktree.path, "new.txt")));
 	assert.deepEqual(ran(marker), []);
-	// The worktree's own git folder is the child's to write too; its commondir file is never read.
-	const own = join(realpathSync(root), ".git", "worktrees", "scout");
+	writeFileSync(join(worktree.path, "other.txt"), "other\n");
+	const last = worktreeFooter(worktree);
+	assert.match(last, /\nApply: /, last);
+	// Main's bash runs the Apply line too.
+	execFileSync("/bin/bash", ["-c", /\nApply: (.*)\n/.exec(last)![1]!], { timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] });
+	assert.deepEqual(ran(marker), []);
+	assert.equal(readFileSync(join(root, "other.txt"), "utf8"), "other\n");
+	// A subagent of the child that gets its own worktree: main makes it from the child's worktree.
+	const nested = createWorktree(worktree.path, "nested", undefined, worktree);
+	assert.deepEqual(ran(marker), []);
+	assert.equal(nested.path, join(`${worktree.path}.worktrees`, "nested"));
+	assert.equal(readFileSync(join(nested.path, "other.txt"), "utf8"), "other\n", "with the child's uncommitted files");
+	assert.match(git(realpathSync(root), "worktree", "list"), /scout\.worktrees\/nested /);
+	// The nested worktree's git folder is found from the first checkout, never through the child's .git or its folder.
+	writeFileSync(join(nested.path, "deep.txt"), "deep\n");
+	assert.match(worktreeFooter(nested), /; \d+ files? differs? from base, 0 commits\./);
+	assert.deepEqual(ran(marker), []);
+	// The worktree's own git folder is the child's to write too. Git takes the config from GIT_COMMON_DIR, not its commondir
+	// file, but reads the worktree's refs through that file, so the report fails there; nothing runs.
 	const fake = join(worktree.path, ".fake");
 	git(worktree.path, "init", "-q", "--bare", fake);
 	writeFileSync(join(fake, "config"), `[core]\n\tbare = false\n[filter "x"]\n\tclean = "echo filter > '${marker}.filter'; cat"\n`);
-	writeFileSync(join(own, "commondir"), `${fake}\n`);
-	writeFileSync(join(worktree.path, "other.txt"), "other\n");
+	writeFileSync(join(realpathSync(root), ".git", "worktrees", "scout", "commondir"), `${fake}\n`);
 	worktreeFooter(worktree);
-	await fingerprint(worktree.path);
+	await fingerprint(worktree.path, worktree);
+	assert.throws(() => createWorktree(worktree.path, "again", undefined, worktree));
 	assert.deepEqual(ran(marker), []);
+});
+
+test("main's change check outside a subagent worktree runs with the safe config only, also in a clone that sits where a worktree would", async (t) => {
+	const root = realpathSync(repository(t));
+	const clone = join(`${root}.worktrees`, "clone");
+	git(root, "clone", "-q", root, clone);
+	writeFileSync(join(clone, "new.txt"), "new\n");
+	const { fingerprint } = await import("../lib/subagents/fingerprint.ts");
+	assert.ok((await fingerprint(clone)).has(join(clone, "new.txt")));
+	t.after(() => rmSync(`${root}.worktrees`, { recursive: true, force: true }));
 });
 
 test("main's change check runs no fsmonitor or hook that a repository's config sets, also outside subagent worktrees", async (t) => {

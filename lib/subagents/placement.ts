@@ -30,8 +30,9 @@ function namedCwd(request: Pick<SpawnRequest, "cwd" | "isolation">, parent: Agen
 	try { cwd = resolveCwd(request.cwd); }
 	catch (error) { return { ok: false, error: (error as Error).message }; }
 	// Its edits are held to the worktree it would inherit (child.ts), wherever it started.
-	if (parent?.worktree && request.isolation !== "worktree") {
-		return { ok: false, error: `${parent.name}'s subagents work in its worktree ${parent.worktree.path}. Leave out cwd, or add isolation: "worktree" for a worktree of the repository at cwd.` };
+	// Also with isolation: "worktree": main makes it with git and no sandbox, in a repository the sandboxed child could have made.
+	if (parent?.worktree) {
+		return { ok: false, error: `${parent.name}'s subagents work in its worktree ${parent.worktree.path}. Leave out cwd.` };
 	}
 	// Making a worktree runs the repository's git hooks, which a read-only agent must not choose.
 	if (parent?.readOnly && request.isolation === "worktree") {
@@ -53,7 +54,7 @@ export function placeChild(request: Pick<SpawnRequest, "cwd" | "isolation">, par
 		if (!source) return { ok: false, error: "Worktree isolation needs a git repository in the parent's workspace." };
 		// The child index refuses such paths, so it could not keep the worktree (restore.ts).
 		if (CONTROL.test(source)) return { ok: false, error: "Worktree isolation needs a repository path without control characters." };
-		try { worktree = createWorktree(source, name, cwd); }
+		try { worktree = createWorktree(source, name, cwd, parent?.worktree); }
 		catch (error) { return { ok: false, error: (error as Error).message }; }
 	}
 	// A worktree starts in the same directory of it as its origin; a helper starts where its parent does unless told where.

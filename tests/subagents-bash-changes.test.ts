@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -202,4 +202,32 @@ test("a child that already holds the lock, or works for its holder, is not finge
 	assert.deepEqual(watched, ["other:call-1"], "only the child that may not edit was watched");
 	assert.deepEqual(warnings, []);
 	await team.close();
+});
+
+test("a worktree child's change check stays in its worktree, also after the child put a link to a repository of its own there", async (t) => {
+	const root = repository(t);
+	const { createWorktree } = await import("../lib/subagents/worktree.ts");
+	const worktree = createWorktree(root, "scout");
+	t.after(() => rmSync(`${root}.worktrees`, { recursive: true, force: true }));
+	// What the child can do from its sandbox: <repo>.worktrees and /tmp are not the parent's checkout.
+	const evil = join(root, "..", "evil");
+	const marker = join(root, "..", "ran");
+	mkdirSync(evil);
+	git(evil, "init", "-q");
+	writeFileSync(join(evil, ".gitattributes"), "* filter=x\n");
+	writeFileSync(join(evil, "t.txt"), "1\n");
+	git(evil, "-c", "user.name=a", "-c", "user.email=a@b", "add", "-A");
+	git(evil, "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-qm", "i");
+	git(evil, "config", "filter.x.clean", `touch '${marker}'; cat`);
+	writeFileSync(join(evil, "t.txt"), "22\n");
+	renameSync(worktree.path, `${worktree.path}-moved`);
+	symlinkSync(evil, worktree.path, "dir");
+	const activity = new ToolActivity();
+	const warnings: string[] = [];
+	const watch: ChangeWatch = { cwd: worktree.path, worktree, agent: "scout", activity, mayEdit: () => false, changed: () => undefined, warn: (message) => warnings.push(message) };
+	const definition = guardBash({ name: "bash", label: "bash", description: "", parameters: {} as never,
+		execute: async (_id: string, _params: unknown, _signal?: unknown, _onUpdate?: unknown, _ctx?: unknown) => ({ content: [{ type: "text" as const, text: "ok" }], details: undefined }) }, { changes: watch });
+	await definition.execute("call-1", { command: "true" } as never, undefined, undefined, {} as never);
+	assert.equal(existsSync(marker), false, "the link's repository config never ran");
+	assert.deepEqual(warnings, [], "git ran with the worktree's own git folder");
 });

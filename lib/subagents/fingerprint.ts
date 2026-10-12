@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import type { Worktree } from "./types.ts";
 import { gitCall, type GitCall } from "./worktree.ts";
 
 const run = promisify(execFile);
@@ -61,9 +62,9 @@ async function stamp(path: string): Promise<string> {
 	}
 }
 
-export async function fingerprint(root: string): Promise<Fingerprint> {
-	// The child can write the work tree's git data: gitCall keeps git from running what the child put there.
-	const listed = statusPaths(await git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], gitCall(root)));
+/** `worktree` is the child's, when `root` is its worktree: the child can write its git data, and gitCall keeps git from running what it put there. */
+export async function fingerprint(root: string, worktree?: Worktree): Promise<Fingerprint> {
+	const listed = statusPaths(await git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], gitCall(worktree)));
 	const states = await Promise.all([...listed].map(async ([path, code]) => {
 		const absolute = join(root, path);
 		return [absolute, `${code} ${await stamp(absolute)}`] as const;
