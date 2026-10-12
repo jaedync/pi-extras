@@ -20,7 +20,7 @@ export function checkAllowlist(requested: readonly string[], available: readonly
 	const wanted = [...new Set(requested.map((name) => name.trim()))].filter((name) => !TEAM_TOOLS.has(name));
 	const writes = readOnly ? wanted.filter((name) => !READ_ONLY_TOOLS.has(name)) : [];
 	if (writes.length > 0) {
-		return { ok: false, error: `readOnly: true gives only tools that can't change files or run commands, so tools cannot list ${writes.join(", ")}. Remove ${writes.length === 1 ? "it" : "them"} from tools, or leave out readOnly. ${can}` };
+		return { ok: false, error: `readOnly: true gives only tools that can't change your files or run commands that the model chooses, so tools cannot list ${writes.join(", ")}. Remove ${writes.length === 1 ? "it" : "them"} from tools, or leave out readOnly. ${can}` };
 	}
 	const missing = wanted.filter((name) => !available.includes(name));
 	if (missing.length > 0) {

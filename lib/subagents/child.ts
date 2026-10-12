@@ -32,9 +32,9 @@ export const CHILD_TOOL_EXCLUDE: readonly string[] = [
 	"shell_job_start", "shell_job", "computer_use", "windows_use", "usage", "codemode", "tool_search",
 ];
 /**
- * All a read-only child may have: tools known not to write files or run
- * commands. Pi's read tools, then this package's and common search and fetch
- * tools. Any other tool, an extension's or an MCP server's, could write, so it
+ * All a read-only child may have: tools that can't change the user's files or
+ * run commands that the model chooses. Pi's read tools, then this package's and
+ * common search and fetch tools (`pull_link` runs only its own media tools). Any other tool, an extension's or an MCP server's, could write, so it
  * is left out; an allowlist, not a list of the tools that write.
  */
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
