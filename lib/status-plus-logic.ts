@@ -61,9 +61,9 @@ export interface ModelCost extends CostRates {
 	tiers?: CostTier[];
 }
 
-const SYSTEM_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
-/** For a system zone no formatter accepts: with TZ="" ICU reports Etc/Unknown. */
+/** For a system zone no formatter accepts: TZ="" gives Etc/Unknown, and an unknown TZ name gives none. */
 const FALLBACK_TIME_ZONE = "UTC";
+const SYSTEM_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone ?? FALLBACK_TIME_ZONE;
 
 function knownTimeZone(timeZone: string): boolean {
 	try {
@@ -311,7 +311,7 @@ interface ProxyExtraUsage {
 }
 
 /** Normalize fractional proxy quotas into the percentage-based footer format. */
-export function parseProxyQuota(body: unknown): LimitEntry[] {
+export function parseProxyQuota(body: unknown, now = Date.now()): LimitEntry[] {
 	if (!body || typeof body !== "object") return [];
 	const record = body as { buckets?: unknown; extraUsage?: unknown };
 	const entries: LimitEntry[] = [];
@@ -322,7 +322,7 @@ export function parseProxyQuota(body: unknown): LimitEntry[] {
 			const bucket = raw as ProxyQuotaBucket;
 			if (typeof bucket.type !== "string" || typeof bucket.utilization !== "number") continue;
 			if (!Number.isFinite(bucket.utilization)) continue;
-			const resetMs = typeof bucket.resetsAt === "number" ? resetTimeMs(bucket.resetsAt) : undefined;
+			const resetMs = typeof bucket.resetsAt === "number" ? resetTimeMs(bucket.resetsAt, now) : undefined;
 			const { family } = quotaKeyParts(bucket.type);
 			entries.push({
 				label: quotaLabel(bucket.type),

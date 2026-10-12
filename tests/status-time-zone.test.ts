@@ -69,11 +69,14 @@ test("a system zone no formatter accepts falls back to UTC", () => {
 			hhmm(now); localTime(now); resetLabel(now + 3_600_000, now);
 			console.log(STATUS_TIME_ZONE);
 		`;
-		const env: NodeJS.ProcessEnv = { ...process.env, TZ: "", PI_CODING_AGENT_DIR: agentDir };
-		delete env.STATUSLINE_TZ;
-		const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env });
-		assert.equal(result.status, 0, result.stderr);
-		assert.equal(result.stdout.trim(), "UTC");
+		// TZ="" gives Etc/Unknown; an unknown TZ name gives no zone at all.
+		for (const tz of ["", "Not/AZone"]) {
+			const env: NodeJS.ProcessEnv = { ...process.env, TZ: tz, PI_CODING_AGENT_DIR: agentDir };
+			delete env.STATUSLINE_TZ;
+			const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env });
+			assert.equal(result.status, 0, result.stderr);
+			assert.equal(result.stdout.trim(), "UTC", `TZ=${JSON.stringify(tz)}`);
+		}
 	} finally {
 		rmSync(agentDir, { recursive: true, force: true });
 	}

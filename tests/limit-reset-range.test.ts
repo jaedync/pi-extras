@@ -105,6 +105,9 @@ test("an epoch reset more than 400 days ahead is dropped as a misread unit", () 
 	assert.equal(parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "3", "x-ratelimit-reset": micro }, NOW)[0].resetMs, undefined);
 	assert.equal(parseAnthropicLimits({ "anthropic-ratelimit-unified-5h-utilization": "0.5", "anthropic-ratelimit-unified-5h-reset": micro }, NOW)[0].resetMs, undefined);
 	assert.equal(parseProxyQuota({ buckets: [{ type: "five_hour", utilization: 0.5, resetsAt: NOW * 1000 }] })[0].resetMs, undefined);
+	// The horizon counts from the caller's clock.
+	const later = 2_000_000_000_000;
+	assert.equal(parseProxyQuota({ buckets: [{ type: "five_hour", utilization: 0.5, resetsAt: later }] }, later - 3_600_000)[0].resetMs, later);
 	// A monthly reset a month ahead stays.
 	const month = String(Math.round((NOW + 31 * 86_400_000) / 1000));
 	assert.equal(parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "3", "x-ratelimit-reset": month }, NOW)[0].resetMs, Number(month) * 1000);
