@@ -21,7 +21,7 @@ import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
 import { EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
-import { stillUnread, unreadToInbox } from "./mailbox.ts";
+import { messagesSince, stillUnread, unreadToInbox } from "./mailbox.ts";
 import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
 import { launchPrompt, ResumePrompts } from "./resume-prompts.ts";
@@ -167,7 +167,7 @@ export class Team implements HostTeam {
 	restore(records: readonly AgentRecord[]): void {
 		for (const record of records) {
 			if (this.records.has(record.name)) continue;
-			const unread = record.unread?.length ? unreadToInbox(record, this.options.messagesFor?.(record) ?? []) : {};
+			const unread = record.unread?.length ? unreadToInbox(record, messagesSince(this.options.messagesFor?.(record) ?? [], record.startedAt)) : {};
 			// A checkout follows where the child works: its worktree, its own cwd, or main's directory now,
 			// where one without a cwd resumes (child.ts) even when main moved since it was saved.
 			const checkout = record.worktree?.path ?? (record.cwd ? record.checkout ?? checkoutOf(record.cwd) : this.sessionCheckout());

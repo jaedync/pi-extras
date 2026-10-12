@@ -20,6 +20,19 @@ export function stillUnread(unread: readonly string[], messages: readonly unknow
 	return unread.filter((text) => !said.some((message) => message.includes(text)));
 }
 
+/**
+ * The messages of the run that began at `startedAt`, read from a whole
+ * session at a restore: an earlier run that read the same text did not read
+ * this run's copy. Messages with no time stay, as before.
+ */
+export function messagesSince(messages: readonly unknown[], startedAt: number | undefined): unknown[] {
+	if (startedAt === undefined) return [...messages];
+	return messages.filter((message) => {
+		const at = (message as { timestamp?: unknown }).timestamp;
+		return typeof at !== "number" || at >= startedAt;
+	});
+}
+
 /** A run that ended without reading what was steered into it: its session's queue is gone, so the next run gets the rest first. */
 export function unreadToInbox(record: AgentRecord, messages: readonly unknown[]): Partial<AgentRecord> {
 	if (!record.unread?.length) return {};

@@ -94,3 +94,20 @@ test("a restored run that was stopped or failed before its first reply keeps no 
 	const idle = restoreRecord(savedRecord({ name: "fixer", state: "idle", runs: 1, report: undefined }), entries.slice(0, 2), () => undefined);
 	assert.equal(idle.report, "RUN 1 REPORT: all tests pass.", "an index that lags the session still gets the last answer");
 });
+
+test("a restore keeps an unread message although an earlier run read the same text", () => {
+	const note = "Message from main:\nPost a status update.";
+	const session = [
+		{ role: "user", content: "Task", timestamp: 1_000 },
+		{ role: "user", content: note, timestamp: 1_100 },
+		{ role: "assistant", content: [{ type: "text", text: "Status: halfway." }], timestamp: 1_200 },
+		{ role: "user", content: "Message from main:\nKeep going.", timestamp: 2_000 },
+	];
+	const team = new Team({ maxConcurrent: 1, maxDepth: 1, replyTimeoutMs: 1000, deliverToMain: () => undefined,
+		launcher: { launch: async () => { throw new Error("unused"); } }, messagesFor: () => session });
+	// Run 2, which started at 2000, was steered the same request again and had not read it when Pi quit.
+	team.restore([savedRecord({ name: "dev", state: "interrupted", startedAt: 2_000, unread: [note] }),
+		savedRecord({ name: "read-it", state: "interrupted", startedAt: 1_000, unread: [note] })]);
+	assert.deepEqual(team.get("dev")!.inbox, [note]);
+	assert.equal(team.get("read-it")!.inbox, undefined, "a run that read it does not get it again");
+});
