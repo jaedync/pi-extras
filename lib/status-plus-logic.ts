@@ -1,6 +1,6 @@
 /** Pure helpers for status-plus: money, time, quota shapes, catalog cost. */
 
-import { dateFormat } from "./date-format.ts";
+import { dateFormat, dateMs } from "./date-format.ts";
 
 /**
  * "window": a percentage against a rolling quota with a hard reset.
@@ -89,6 +89,7 @@ export function formatMoneyLike(value: number, reference: number): string {
 let lastClock: { minute: number; timeZone: string; text: string } | undefined;
 
 export function hhmm(epochMs: number, timeZone = STATUS_TIME_ZONE): string {
+	if (dateMs(epochMs) === undefined) return "--:--";
 	const minute = Math.floor(epochMs / 60_000);
 	if (lastClock?.minute === minute && lastClock.timeZone === timeZone) return lastClock.text;
 	const text = dateFormat("hhmm", timeZone, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(epochMs));
@@ -293,9 +294,7 @@ export function parseProxyQuota(body: unknown): LimitEntry[] {
 			const bucket = raw as ProxyQuotaBucket;
 			if (typeof bucket.type !== "string" || typeof bucket.utilization !== "number") continue;
 			if (!Number.isFinite(bucket.utilization)) continue;
-			const resetMs = typeof bucket.resetsAt === "number" && Number.isFinite(bucket.resetsAt)
-				? bucket.resetsAt
-				: undefined;
+			const resetMs = typeof bucket.resetsAt === "number" ? dateMs(bucket.resetsAt) : undefined;
 			const { family } = quotaKeyParts(bucket.type);
 			entries.push({
 				label: quotaLabel(bucket.type),

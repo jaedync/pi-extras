@@ -4,7 +4,7 @@
  * matters, an explicit clock value, so output is deterministic.
  */
 import { STATUS_TIME_ZONE, formatDuration, type LimitEntry } from "./status-plus-logic.ts";
-import { dateFormat } from "./date-format.ts";
+import { dateFormat, dateMs } from "./date-format.ts";
 
 export interface Painter {
 	fg(tone: string, text: string): string;
@@ -326,8 +326,8 @@ export function limitText(paint: Painter, entry: LimitEntry, now: number, inline
 	if (entry.usedPct !== undefined) {
 		text += `${Math.round(entry.usedPct)}%`;
 		if (entry.remainingText) text += ` (${entry.remainingText})`;
-		else if (inlineCountdown && entry.usedPct >= WARN_PCT && entry.resetMs && entry.resetMs > now) {
-			text += ` ${formatDuration(entry.resetMs - now, false)}`;
+		else if (inlineCountdown && entry.usedPct >= WARN_PCT && (dateMs(entry.resetMs) ?? 0) > now) {
+			text += ` ${formatDuration(entry.resetMs! - now, false)}`;
 		}
 		return paint.fg(toneForPct(entry.usedPct), text);
 	}
@@ -363,8 +363,9 @@ function formatParts(ms: number, timeZone: string): DateParts {
 	return { day: get("day"), weekday: get("weekday"), month: get("month"), hour: get("hour"), minute: get("minute"), period: get("dayPeriod").toLowerCase() };
 }
 
-/** Reset moments stay compact nearby; distant resets include their exact date and time. */
+/** Reset moments stay compact nearby; distant resets include their exact date and time. A time no Date can hold has no label. */
 export function resetLabel(resetMs: number, now: number, approx = false, timeZone = STATUS_TIME_ZONE): string {
+	if (dateMs(resetMs) === undefined || dateMs(now) === undefined) return "";
 	const target = dateParts(resetMs, timeZone);
 	const today = dateParts(now, timeZone);
 	const clock = target.minute === "00" ? `${target.hour}${target.period}` : `${target.hour}:${target.minute}${target.period}`;

@@ -21,6 +21,7 @@ import {
 	windowLabel,
 	type LimitEntry,
 } from "./status-plus-logic.ts";
+import { dateMs } from "./date-format.ts";
 
 export interface PollerContext {
 	model?: { provider: string; baseUrl?: string };
@@ -59,11 +60,11 @@ function parseNumberHeader(value: string | undefined): number | undefined {
 	return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-/** Tolerate epoch seconds, epoch ms, or ISO timestamps in reset headers. */
+/** Tolerate epoch seconds, epoch ms, or ISO timestamps in reset headers; a time no Date can hold is no reset. */
 function parseResetHeader(value: string | undefined): number | undefined {
 	if (!value) return undefined;
 	const numeric = Number(value);
-	if (Number.isFinite(numeric)) return toEpochMs(numeric);
+	if (Number.isFinite(numeric)) return dateMs(toEpochMs(numeric));
 	const iso = Date.parse(value);
 	return Number.isFinite(iso) ? iso : undefined;
 }
@@ -87,7 +88,7 @@ export function parseCodexLimits(headers: Record<string, string>, now = Date.now
 			label: windowMinutes ? windowLabel(windowMinutes) : fallbackLabel,
 			...(windowMinutes !== undefined && windowMinutes > 0 ? { windowSeconds: windowMinutes * 60 } : {}),
 			usedPct,
-			resetMs: resetSeconds !== undefined ? now + resetSeconds * 1000 : undefined,
+			resetMs: resetSeconds !== undefined ? dateMs(now + resetSeconds * 1000) : undefined,
 		});
 	}
 	return entries;

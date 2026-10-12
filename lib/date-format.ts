@@ -14,3 +14,8 @@ export function dateFormat(style: string, timeZone: string, options: Intl.DateTi
 	}
 	return format;
 }
+
+/** `ms` when a Date can hold it: a time past the Date range (8.64e15 ms) makes every formatter throw. */
+export function dateMs(ms: number | undefined): number | undefined {
+	return ms !== undefined && Number.isFinite(new Date(ms).getTime()) ? ms : undefined;
+}

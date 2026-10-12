@@ -270,7 +270,8 @@ function rowCells(row: FooterRow, paint: Painter, now: number, variant: RowVaria
 	const resets = rowKeeps(variant, "resets")
 		? [...new Set(entries
 			.filter((entry) => entry.resetMs && entry.resetMs > now)
-			.map((entry) => resetLabel(entry.resetMs as number, now, entry.resetApprox)))]
+			.map((entry) => resetLabel(entry.resetMs as number, now, entry.resetApprox))
+			.filter(Boolean))]
 			.join(fieldSeparator(compact))
 		: "";
 	return {

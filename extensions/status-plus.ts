@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { operationalError } from "../lib/operational-log.ts";
-import type { TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
@@ -45,6 +45,14 @@ const CATCH_UP_MS = 250;
 /** Follow-up walks in a row: enough for 320 MB of children; a cache too small for them could otherwise keep going. */
 const MAX_CATCH_UPS = 4;
 const GO_BILLING_NOTE = "billing Zen";
+const FOOTER_FAILED = "status-plus: footer failed, see status-plus.log";
+/** Enough of an error to find its cause in the log. */
+const ERROR_TEXT_MAX = 200;
+
+function errorText(error: unknown): string {
+	const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+	return text.slice(0, ERROR_TEXT_MAX);
+}
 
 interface FooterData {
 	getGitBranch(): string | null;
@@ -314,11 +322,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 				tui.requestRender();
 			});
 			return {
-				render: (width: number) => {
-					const layout = footerLayout(footerModel(ctx, footerData as FooterData), width, theme);
-					toolsSpan = layout.tools;
-					return layout.lines;
-				},
+				render: (width: number) => renderFooter(ctx, footerData as FooterData, width, theme),
 				handleMouse: toggleToolCount,
 				invalidate() {},
 				dispose() {
@@ -328,6 +332,22 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			};
 		});
 		return true;
+	}
+
+	/**
+	 * Pi's TUI does not catch a footer's render, and a throw there ends Pi. A
+	 * figure the footer cannot draw costs the grid for that frame, not the session.
+	 */
+	function renderFooter(ctx: ExtensionContext, footerData: FooterData, width: number, theme: Parameters<typeof footerLayout>[2]): string[] {
+		try {
+			const layout = footerLayout(footerModel(ctx, footerData), width, theme);
+			toolsSpan = layout.tools;
+			return layout.lines;
+		} catch (error) {
+			toolsSpan = undefined;
+			operationalError(LOG_FILE, "status-plus", `footer render failed: ${errorText(error)}`);
+			return [truncateToWidth(FOOTER_FAILED, width, "")];
+		}
 	}
 
 	/** Walk the transcript again and repaint. The timer always walks: subagents add spend in files of their own. */

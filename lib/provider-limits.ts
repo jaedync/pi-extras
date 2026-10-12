@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { dateMs } from "./date-format.ts";
 
 export type UsageWindowKey = "primary" | "secondary" | "rolling" | "weekly" | "monthly";
 
@@ -128,7 +129,7 @@ export function parseCodexUsage(body: unknown): ProviderUsage | undefined {
 			key,
 			pct: window.used_percent,
 			...(typeof window.limit_window_seconds === "number" ? { windowSeconds: window.limit_window_seconds } : {}),
-			...(typeof window.reset_at === "number" ? { resetsAtMs: window.reset_at * 1000 } : {}),
+			...(typeof window.reset_at === "number" && dateMs(window.reset_at * 1000) !== undefined ? { resetsAtMs: window.reset_at * 1000 } : {}),
 		});
 	}
 	if (!windows.length) return undefined;
