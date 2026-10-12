@@ -410,3 +410,67 @@ describe("raw log end", () => {
 		assert.equal(readLogEnd(join(dir, "missing.log"), 100), "");
 	});
 });
+
+describe("log edges", () => {
+	const log = (content: string | Buffer) => {
+		const file = join(tempDir(), "edge.log");
+		writeFileSync(file, content);
+		return file;
+	};
+
+	test("a tail window with no newline in it still shows the end of the output", async () => {
+		const file = log(`start\n${"progress 50%\r".repeat(6000)}ERROR: failed`);
+		const tail = await readLogTail(file, NOTIFY_TAIL_BYTES, 30);
+		assert.ok(tail.text.endsWith("ERROR: failed"), JSON.stringify(tail.text.slice(-40)));
+		assert.strictEqual(tail.totalLines, 2);
+	});
+
+	test("a huge last line that ends in a newline still shows, and its size is named", async () => {
+		const big = log(`first line\n${"E".repeat(70000)}\n`);
+		const tail = await readLogTail(big, NOTIFY_TAIL_BYTES, 30);
+		assert.strictEqual(tail.text, "E".repeat(NOTIFY_TAIL_BYTES));
+		contains(tail.notice, "of line 2 (line is 68.4KB)");
+		const small = log(`x\n${"Q".repeat(5000)}\n`);
+		contains((await readLogTail(small, NOTIFY_TAIL_BYTES, 30)).notice, "(line is 4.9KB)");
+		assert.deepStrictEqual(await countLogLines(small), { totalLines: 2, lastLineBytes: 5000 });
+	});
+
+	test("paging forward never loses a character cut by a page boundary", () => {
+		const file = log(`${"a".repeat(4095)}é€😀XYZ`);
+		let offset = 0;
+		let joined = "";
+		for (let page = 0; page < 10; page++) {
+			const read = readLogPage(file, { offset, bytes: 4096, tail: false });
+			joined += read.text;
+			offset = read.nextOffset;
+			if (read.eof) break;
+		}
+		assert.strictEqual(joined, `${"a".repeat(4095)}é€😀XYZ`);
+		const small = log("é€😀");
+		joined = "";
+		offset = 0;
+		for (let page = 0; page < 20; page++) {
+			// Four bytes hold any one character, so even pages this small lose nothing.
+			const read = readLogPage(small, { offset, bytes: 4, tail: false });
+			joined += read.text;
+			offset = read.nextOffset;
+			if (read.eof) break;
+		}
+		assert.strictEqual(joined, "é€😀");
+	});
+
+	test("a tail page starts on a whole character and keeps a real U+FFFD", () => {
+		const file = log("\uFFFDhead\nmid\ntail\uFFFD");
+		const page = readLogPage(file, { offset: 0, bytes: 4096, tail: false });
+		assert.strictEqual(page.text, "\uFFFDhead\nmid\ntail\uFFFD");
+		const tail = readLogPage(log(`xé${"b".repeat(10)}`), { offset: 0, bytes: 11, tail: true });
+		assert.strictEqual(tail.text, "b".repeat(10));
+		assert.strictEqual(tail.offset, 3);
+	});
+
+	test("color codes leave no visible remains in the tail or a page", async () => {
+		const file = log("\x1b[32m✓ 12 passed\x1b[39m\n\x1b[31m✗ 1 failed\x1b[0m\n\x1b]8;;http://x\x07link\x1b]8;;\x07\n");
+		assert.strictEqual((await readLogTail(file, NOTIFY_TAIL_BYTES, 30)).text, "✓ 12 passed\n✗ 1 failed\nlink\n");
+		assert.strictEqual(readLogPage(file, { offset: 0, bytes: 4096, tail: false }).text, "✓ 12 passed\n✗ 1 failed\nlink\n");
+	});
+});

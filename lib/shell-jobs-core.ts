@@ -331,6 +331,8 @@ export async function countLogLines(logPath: string): Promise<LogLineCount> {
 	let newlines = 0;
 	let totalBytes = 0;
 	let currentLineBytes = 0;
+	// A final newline ends the last line rather than starting an empty one, so the line it ended is the one measured.
+	let endedLineBytes = 0;
 	let endsWithNewline = false;
 	for await (const chunk of createReadStream(logPath)) {
 		const buffer = chunk as Buffer;
@@ -338,6 +340,7 @@ export async function countLogLines(logPath: string): Promise<LogLineCount> {
 		for (const byte of buffer) {
 			if (byte === 0x0a) {
 				newlines += 1;
+				endedLineBytes = currentLineBytes;
 				currentLineBytes = 0;
 				endsWithNewline = true;
 			} else {
@@ -346,7 +349,7 @@ export async function countLogLines(logPath: string): Promise<LogLineCount> {
 			}
 		}
 	}
-	return { totalLines: totalBytes === 0 ? 0 : newlines + (endsWithNewline ? 0 : 1), lastLineBytes: currentLineBytes };
+	return { totalLines: totalBytes === 0 ? 0 : newlines + (endsWithNewline ? 0 : 1), lastLineBytes: endsWithNewline ? endedLineBytes : currentLineBytes };
 }
 
 /**
@@ -404,10 +407,14 @@ export function readLogWindow(logPath: string, maxBytes: number): LogWindow {
 		return { text: "", truncated: false, totalBytes: 0 };
 	}
 	const windowStart = Math.max(0, totalBytes - maxBytes);
-	let text = decodeWindow(readRange(logPath, windowStart, totalBytes - windowStart));
+	const buffer = readRange(logPath, windowStart, totalBytes - windowStart);
+	const whole = wholeCharacters(buffer);
+	let text = decodeWindow(buffer.subarray(whole.skip, whole.skip + whole.length));
 	if (windowStart > 0 && text.length > 0) {
+		// A window that lies inside the last line keeps it: that is the end of the
+		// output (a carriage-return meter, a huge final line), and dropping it left nothing.
 		const newline = text.indexOf("\n");
-		text = newline === -1 ? "" : text.slice(newline + 1);
+		if (newline !== -1 && newline < text.length - 1) text = text.slice(newline + 1);
 	}
 	return { text, truncated: windowStart > 0, totalBytes };
 }
@@ -465,9 +472,34 @@ function readRange(logPath: string, position: number, length: number): Buffer {
 	}
 }
 
+// CSI, OSC, the string sequences (DCS, SOS, PM, APC) and two-byte escapes. Stripping
+// only their ESC, as sanitizeControl does, would leave `[32m` behind as visible text.
+const TERMINAL_SEQUENCE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[PX^_][^\x1b]*(?:\x1b\\)?|[ -/]*[0-~])/g;
+
 function decodeWindow(buffer: Buffer): string {
-	// A window can begin or end mid-character; drop the replacement chars at the edges.
-	return sanitizeControl(buffer.toString("utf8")).replace(/^\uFFFD+|\uFFFD+$/g, "");
+	return sanitizeControl(buffer.toString("utf8").replace(TERMINAL_SEQUENCE, ""));
+}
+
+const isContinuation = (byte: number) => (byte & 0xc0) === 0x80;
+const sequenceLength = (byte: number) => (byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1);
+
+/**
+ * The part of a window that holds whole UTF-8 characters: continuation bytes at
+ * the start belong to the page before, and a character cut at the end belongs to
+ * the page after. A real U+FFFD in the log is kept. A window too small for one
+ * whole character is kept as it is, so paging still moves forward.
+ */
+function wholeCharacters(buffer: Buffer): { skip: number; length: number } {
+	let skip = 0;
+	while (skip < Math.min(3, buffer.length) && isContinuation(buffer[skip]!)) skip++;
+	let end = buffer.length;
+	for (let back = 1; back <= Math.min(4, end - skip); back++) {
+		const byte = buffer[end - back]!;
+		if (isContinuation(byte)) continue;
+		if (sequenceLength(byte) > back) end -= back;
+		break;
+	}
+	return end > skip ? { skip, length: end - skip } : { skip: 0, length: buffer.length };
 }
 
 /**
@@ -476,15 +508,19 @@ function decodeWindow(buffer: Buffer): string {
  * byte clamp alone cannot guarantee the budget, and the shrink has to happen
  * before offsets are reported or pagination skips the bytes that were dropped.
  */
-function readFittingWindow(logPath: string, start: number, length: number, fromEnd: boolean): { text: string; length: number } {
+function readFittingWindow(logPath: string, start: number, length: number, fromEnd: boolean): { text: string; start: number; end: number } {
 	let size = length;
-	let text = decodeWindow(readRange(logPath, start, size));
-	while (jsonEscapedBytes(text) > TEXT_BUDGET_BYTES && size > 1) {
-		size = Math.max(1, Math.floor(size / 2));
+	for (;;) {
 		const windowStart = fromEnd ? start + length - size : start;
-		text = decodeWindow(readRange(logPath, windowStart, size));
+		const buffer = readRange(logPath, windowStart, size);
+		const whole = wholeCharacters(buffer);
+		const text = decodeWindow(buffer.subarray(whole.skip, whole.skip + whole.length));
+		if (jsonEscapedBytes(text) <= TEXT_BUDGET_BYTES || size <= 1) {
+			// A forward page owns the orphaned bytes it skipped; a tail starts after them.
+			return { text, start: windowStart + (fromEnd ? whole.skip : 0), end: windowStart + whole.skip + whole.length };
+		}
+		size = Math.max(1, Math.floor(size / 2));
 	}
-	return { text, length: size };
 }
 
 export function readLogPage(logPath: string, options: { offset: number; bytes: number; tail: boolean }): LogPage {
@@ -494,13 +530,13 @@ export function readLogPage(logPath: string, options: { offset: number; bytes: n
 		const length = Math.min(budget, totalBytes);
 		if (length === 0) return { text: "", offset: totalBytes, nextOffset: totalBytes, eof: true, totalBytes };
 		const fitted = readFittingWindow(logPath, totalBytes - length, length, true);
-		return { text: fitted.text, offset: totalBytes - fitted.length, nextOffset: totalBytes, eof: true, totalBytes };
+		return { text: fitted.text, offset: fitted.start, nextOffset: fitted.end, eof: true, totalBytes };
 	}
 	const start = Math.min(options.offset, totalBytes);
 	const length = Math.min(budget, totalBytes - start);
 	if (length === 0) return { text: "", offset: start, nextOffset: start, eof: true, totalBytes };
 	const fitted = readFittingWindow(logPath, start, length, false);
-	const nextOffset = start + fitted.length;
+	const nextOffset = fitted.end;
 	return {
 		text: fitted.text,
 		offset: start,
