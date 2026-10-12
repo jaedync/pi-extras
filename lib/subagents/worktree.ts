@@ -1,7 +1,7 @@
 /** Isolated child workspaces retain the parent's current files without changing its index. */
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { devNull, homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worktree } from "./types.ts";
@@ -12,11 +12,19 @@ const WORKTREE_SUFFIX = ".worktrees";
 const MAX_NAMES = 10_000;
 const EXCLUDE_DEPENDENCIES = ":(exclude)node_modules";
 
-function git(cwd: string, args: readonly string[], index?: string): string {
+/** How main runs git in a work tree (`gitCall`): arguments before the command, and environment. */
+export interface GitCall {
+	readonly args: readonly string[];
+	readonly env: Readonly<Record<string, string>>;
+}
+
+const PLAIN: GitCall = { args: [], env: {} };
+
+function git(cwd: string, args: readonly string[], index?: string, call: GitCall = PLAIN): string {
 	try {
-		return execFileSync("git", ["-C", cwd, ...args], {
+		return execFileSync("git", ["-C", cwd, ...call.args, ...args], {
 			encoding: "utf8", timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER,
-			...(index ? { env: { ...process.env, GIT_INDEX_FILE: index } } : {}),
+			env: { ...process.env, ...call.env, ...(index ? { GIT_INDEX_FILE: index } : {}) },
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 	} catch (error) {
@@ -26,9 +34,9 @@ function git(cwd: string, args: readonly string[], index?: string): string {
 }
 
 /** Whether `tree`'s ignore rules cover its own `node_modules`; git exits 1 for "not ignored". */
-function dependenciesIgnored(tree: string): boolean {
+function dependenciesIgnored(tree: string, call: GitCall): boolean {
 	try {
-		execFileSync("git", ["-C", tree, "check-ignore", "-q", "node_modules"], { timeout: GIT_TIMEOUT_MS, stdio: "ignore" });
+		execFileSync("git", ["-C", tree, ...call.args, "check-ignore", "-q", "node_modules"], { timeout: GIT_TIMEOUT_MS, stdio: "ignore", env: { ...process.env, ...call.env } });
 		return true;
 	} catch (error) {
 		if ((error as { status?: unknown }).status === 1) return false;
@@ -42,9 +50,9 @@ function dependenciesIgnored(tree: string): boolean {
  * ignores `node_modules` already. Each tree is asked: `node_modules/` ignores the source's directory
  * but not the worktree's symlink.
  */
-function dependencyPaths(tree: string, base?: string): string[] {
-	const tracked = git(tree, [...(base ? ["ls-tree", "-z", base] : ["ls-files", "-z"]), "--", "node_modules"]);
-	return tracked || dependenciesIgnored(tree) ? [] : ["--", ".", EXCLUDE_DEPENDENCIES];
+function dependencyPaths(tree: string, base?: string, call: GitCall = PLAIN): string[] {
+	const tracked = git(tree, [...(base ? ["ls-tree", "-z", base] : ["ls-files", "-z"]), "--", "node_modules"], undefined, call);
+	return tracked || dependenciesIgnored(tree, call) ? [] : ["--", ".", EXCLUDE_DEPENDENCIES];
 }
 
 function snapshot(root: string, name: string): string {
@@ -221,6 +229,30 @@ export function worktreeGitDir(path: string, common: string): { dir: string } | 
 	} catch (error) { return { why: `${refused} ${oneLine(error)}` }; }
 }
 
+/**
+ * Config for main's git commands in a work tree that a child can write: no
+ * fsmonitor program, no hooks, no automatic gc, and no look into submodules,
+ * whose git folders the child can write too. A `-c` wins over every config file.
+ */
+const SAFE_CONFIG = ["core.fsmonitor=false", `core.hooksPath=${devNull}`, "diff.ignoreSubmodules=all", "submodule.recurse=false", "gc.auto=0", "maintenance.auto=false"]
+	.flatMap((setting) => ["-c", setting]);
+
+/**
+ * How main runs git in the work tree `path`. In a subagent worktree, git gets
+ * the worktree's own folder and the shared one, so it reads neither the `.git`
+ * nor the `commondir` file, which the child can write; elsewhere only the safe
+ * config. Throws when a worktree's git folder can't be told.
+ */
+export function gitCall(path: string): GitCall {
+	const source = sourceCheckout(path);
+	if (source === undefined || !existsSync(source)) return { args: SAFE_CONFIG, env: {} };
+	const common = commonGitDir(realpathSync(source));
+	if ("why" in common) throw new Error(common.why);
+	const own = worktreeGitDir(path, common.dir);
+	if ("why" in own) throw new Error(own.why);
+	return { args: ["--git-dir", own.dir, "--work-tree", path, ...SAFE_CONFIG], env: { GIT_COMMON_DIR: common.dir } };
+}
+
 /** Persisted paths are used as command arguments and prompt text, never shell input. */
 export function validWorktree(value: unknown): value is Worktree {
 	if (!value || typeof value !== "object") return false;
@@ -233,12 +265,12 @@ export function validWorktree(value: unknown): value is Worktree {
 const quote = (value: string): string => /^[a-zA-Z0-9_./-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 
 /** Runs `count` against a temporary index of the worktree's files as they are, so the child's own staging stays as it was. */
-function withTemporaryIndex<T>(path: string, paths: readonly string[], count: (index: string) => T): T {
+function withTemporaryIndex<T>(path: string, paths: readonly string[], call: GitCall, count: (index: string) => T): T {
 	const temporary = mkdtempSync(join(tmpdir(), "pi-subagent-index-"));
 	const index = join(temporary, "index");
 	try {
-		git(path, ["read-tree", "HEAD"], index);
-		git(path, ["add", "-A", ...paths], index);
+		git(path, ["read-tree", "HEAD"], index, call);
+		git(path, ["add", "-A", ...paths], index, call);
 		return count(index);
 	} finally { rmSync(temporary, { recursive: true, force: true }); }
 }
@@ -246,9 +278,10 @@ function withTemporaryIndex<T>(path: string, paths: readonly string[], count: (i
 export function worktreeFooter(worktree: Worktree): string {
 	const { path, branch, base } = worktree;
 	try {
-		const paths = dependencyPaths(path, base);
-		const files = withTemporaryIndex(path, paths, (index) => git(path, ["diff", "--cached", "--name-only", "-z", base, ...paths], index).split("\0").filter(Boolean).length);
-		const commits = git(path, ["rev-list", "--count", `${base}..HEAD`]).trim();
+		const call = gitCall(path);
+		const paths = dependencyPaths(path, base, call);
+		const files = withTemporaryIndex(path, paths, call, (index) => git(path, ["diff", "--cached", "--name-only", "-z", base, ...paths], index, call).split("\0").filter(Boolean).length);
+		const commits = git(path, ["rev-list", "--count", `${base}..HEAD`], undefined, call).trim();
 		const root = sourceCheckout(path);
 		if (root === undefined) throw new Error("The saved worktree path has no source checkout.");
 		const pathspec = paths.length ? ` ${paths.map(quote).join(" ")}` : "";

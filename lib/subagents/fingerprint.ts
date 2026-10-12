@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { gitCall, type GitCall } from "./worktree.ts";
 
 const run = promisify(execFile);
 const GIT_TIMEOUT_MS = 10_000;
@@ -16,10 +17,12 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 /** State by absolute path. */
 export type Fingerprint = ReadonlyMap<string, string>;
 
-async function git(cwd: string, args: readonly string[]): Promise<string> {
+async function git(cwd: string, args: readonly string[], call?: GitCall): Promise<string> {
 	try {
 		// No optional locks: status must not take index.lock while the child's own git commands run.
-		const { stdout } = await run("git", ["--no-optional-locks", "-C", cwd, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER });
+		const { stdout } = await run("git", ["--no-optional-locks", "-C", cwd, ...call?.args ?? [], ...args], {
+			encoding: "utf8", timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER, ...(call ? { env: { ...process.env, ...call.env } } : {}),
+		});
 		return stdout;
 	} catch (error) {
 		const failure = error as { stderr?: string; killed?: boolean; message: string };
@@ -59,7 +62,8 @@ async function stamp(path: string): Promise<string> {
 }
 
 export async function fingerprint(root: string): Promise<Fingerprint> {
-	const listed = statusPaths(await git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]));
+	// The child can write the work tree's git data: gitCall keeps git from running what the child put there.
+	const listed = statusPaths(await git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], gitCall(root)));
 	const states = await Promise.all([...listed].map(async ([path, code]) => {
 		const absolute = join(root, path);
 		return [absolute, `${code} ${await stamp(absolute)}`] as const;

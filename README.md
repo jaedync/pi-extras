@@ -1513,8 +1513,10 @@ the child's own `subagent/<name>` branch. The hooks, the config, `info/` and
 the other branches stay read-only. In `node_modules`, only `.cache` is
 writable. The packages, `.bin` and the other dot-entries are not, so an
 install in a worktree can't change the parent's dependencies.
-When a command fails on a blocked write, its result names the parent's
-checkout. The transcript shows the child's own command, not the sandbox around
+The sandbox stops unintended writes into the parent's checkout. It is not a
+boundary against a hostile child: the child can still write outside the
+repository, for example `~/.gitconfig`. When a command fails on a blocked
+write, its result names the parent's checkout. The transcript shows the child's own command, not the sandbox around
 it. macOS uses `sandbox-exec`. Linux uses `bwrap` when it is on `PATH`; there,
 only the paths that exist when the child starts are writable, and the child
 can also change the other `subagent/` branches. Without `bwrap`, and on Windows, there is no sandbox: the boundary for

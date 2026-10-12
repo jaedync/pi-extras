@@ -207,3 +207,55 @@ test("a helper in its lead's worktree reports without the lead's worktree footer
 	assert.match(reportText(team.get("lead")!, Date.now()), /Worktree: /, "the lead's own report keeps it");
 	await team.close();
 });
+
+/** What a child in a worktree can write without leaving it: a git folder of its own that runs `marker`'s command, named by the worktree's .git file. */
+function plantGitFolder(worktree: string, root: string, marker: string): void {
+	const evil = join(worktree, ".evil");
+	git(worktree, "init", "-q", "--bare", evil);
+	writeFileSync(join(evil, "objects", "info", "alternates"), `${join(root, ".git", "objects")}\n`);
+	mkdirSync(join(evil, "hooks"), { recursive: true });
+	writeFileSync(join(evil, "hooks", "post-index-change"), `#!/bin/sh\necho hook > '${marker}.hook'\n`, { mode: 0o755 });
+	writeFileSync(join(evil, "config"), [
+		"[core]", "\tbare = false", `\tfsmonitor = "echo fsmonitor > '${marker}.fsmonitor'; false"`,
+		`[filter "x"]`, `\tclean = "echo filter > '${marker}.filter'; cat"`,
+	].join("\n"));
+	writeFileSync(join(worktree, ".gitattributes"), "* filter=x\n");
+	writeFileSync(join(worktree, ".git"), "gitdir: .evil\n");
+}
+
+const ran = (marker: string): string[] => ["hook", "fsmonitor", "filter"].filter((kind) => existsSync(`${marker}.${kind}`));
+
+test("main's git commands in a child's worktree use the worktree's own git folder and run nothing the child set up", async (t) => {
+	const root = repository(t);
+	const worktree = createWorktree(realpathSync(root), "scout");
+	const marker = join(realpathSync(root), "..", "ran");
+	writeFileSync(join(worktree.path, "new.txt"), "new\n");
+	plantGitFolder(worktree.path, realpathSync(root), marker);
+	const footer = worktreeFooter(worktree);
+	assert.deepEqual(ran(marker), [], footer);
+	assert.match(footer, /; \d+ files differ from base, 0 commits\./, "the worktree's own index and HEAD, not the planted folder's");
+	const { fingerprint } = await import("../lib/subagents/fingerprint.ts");
+	assert.ok((await fingerprint(worktree.path)).has(join(worktree.path, "new.txt")));
+	assert.deepEqual(ran(marker), []);
+	// The worktree's own git folder is the child's to write too; its commondir file is never read.
+	const own = join(realpathSync(root), ".git", "worktrees", "scout");
+	const fake = join(worktree.path, ".fake");
+	git(worktree.path, "init", "-q", "--bare", fake);
+	writeFileSync(join(fake, "config"), `[core]\n\tbare = false\n[filter "x"]\n\tclean = "echo filter > '${marker}.filter'; cat"\n`);
+	writeFileSync(join(own, "commondir"), `${fake}\n`);
+	writeFileSync(join(worktree.path, "other.txt"), "other\n");
+	worktreeFooter(worktree);
+	await fingerprint(worktree.path);
+	assert.deepEqual(ran(marker), []);
+});
+
+test("main's change check runs no fsmonitor or hook that a repository's config sets, also outside subagent worktrees", async (t) => {
+	const root = realpathSync(repository(t));
+	const marker = join(root, "..", "ran");
+	git(root, "config", "core.fsmonitor", `echo fsmonitor > '${marker}.fsmonitor'; false`);
+	writeFileSync(join(root, ".git", "hooks", "post-index-change"), `#!/bin/sh\necho hook > '${marker}.hook'\n`, { mode: 0o755 });
+	writeFileSync(join(root, "new.txt"), "new\n");
+	const { fingerprint } = await import("../lib/subagents/fingerprint.ts");
+	assert.ok((await fingerprint(root)).has(join(root, "new.txt")));
+	assert.deepEqual(ran(marker), []);
+});

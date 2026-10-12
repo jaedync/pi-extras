@@ -496,6 +496,15 @@ read, so a half-saved file can't remove a custom provider of the parent. A
 provider that an extension made in code keeps its own definition when the
 file has an error for it.
 
+A worktree child's `bash` commands run in an OS sandbox on macOS and on Linux
+with `bwrap`. The sandbox stops unintended writes into the parent's checkout.
+It is not a boundary against a hostile child. The child can still write
+outside the repository, for example `~/.gitconfig`, and it runs with your
+permissions. When main runs git in a child's worktree (for the report and the
+change check), it gives git the worktree's own git folder. It also turns off
+fsmonitor, hooks, automatic gc and submodules. Then git does not run a program
+that the child put in the worktree's git data.
+
 Child sessions are written under
 `PI_CODING_AGENT_DIR/sessions/subagents/<parent session id>/`. An `index.json`
 there, readable only by you, stores each child's full task, model settings,
