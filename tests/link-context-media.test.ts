@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -404,4 +404,31 @@ test("PI_OFFLINE: no install, no update, no release lookup; an installed toolcha
 
 test("the token provider installs its packages without their install scripts", () => {
 	assert.ok(NPM_CI_ARGS.includes("--ignore-scripts"));
+});
+
+test("video: two pulls of one link at the same time each get the download, and only one folder is kept", async () => {
+	const home = mkdtempSync(join(tmpdir(), "link-video-"));
+	try {
+		const deps = fakeDeps(home, { info: { id: "1", title: "Clip", extractor_key: "Generic", duration: 30, has_video: true }, ffmpeg: { path: "/ff" } });
+		const run = deps.run;
+		// Like yt-dlp: a fixed file name, written as .part and renamed at the end; a second writer in the same folder fails.
+		const racing = { ...deps, run: (async (tools: never, command: string, request: Record<string, unknown>, options: never) => {
+			if (command !== "download") return run(tools, command, request as never, options);
+			const part = join(String(request.dir), "video.mp4.part");
+			if (existsSync(part)) throw new Error(`Unable to rename file: ${part}`);
+			writeFileSync(part, "data");
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			const path = join(String(request.dir), "video.mp4");
+			renameSync(part, path);
+			return { files: [{ path, start: 0 }] };
+		}) as VideoDeps["run"] };
+		const both = await Promise.all([0, 1].map(() => pullVideo("https://e.test/clip.mp4", "file", context(fetch, { frames: 1 }), racing)));
+		for (const pulled of both) assert.doesNotMatch(pulled.markdown, /Frames failed/);
+		const pullFolder = pullDir(home, "https://e.test/clip.mp4");
+		assert.deepEqual(readdirSync(pullFolder).filter((name) => name.startsWith("video-")), ["video-h720-all"]);
+		const kept = JSON.parse(readFileSync(join(pullFolder, "video-h720-all", "files.json"), "utf8")) as { path: string }[];
+		assert.ok(kept.every((file) => existsSync(file.path) && file.path.startsWith(join(pullFolder, "video-h720-all"))));
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
 });

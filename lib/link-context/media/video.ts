@@ -5,9 +5,9 @@
  * Downloads are kept per URL for a while, so asking for frames after the
  * transcript does not fetch the video twice.
  */
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import { renderReplies, type Reply } from "../post.ts";
 import { clock, cutIndex, isoDate, stats, type Range } from "../text.ts";
 import type { AdapterContext, ImageBlock, Pulled } from "../types.ts";
@@ -164,6 +164,37 @@ function cached<T>(file: string): T | undefined {
 	}
 }
 
+/** A download folder's files, when its record names files that are all still there. */
+function keptFiles(dir: string): MediaFile[] | undefined {
+	const files = cached<MediaFile[]>(join(dir, "files.json"));
+	return files?.length && files.every((file) => existsSync(file.path)) ? files : undefined;
+}
+
+/** A new, empty folder beside `dir` for one call's own files. */
+function uniqueDir(dir: string): string {
+	const staging = `${dir}.part-${process.pid}-${randomBytes(4).toString("hex")}`;
+	mkdirSync(staging, { recursive: true });
+	return staging;
+}
+
+/**
+ * Moves a finished download into place. When another pull finished first, its
+ * files are used; a folder left by a failed call is replaced.
+ */
+function publish(staging: string, dir: string): MediaFile[] | undefined {
+	try {
+		renameSync(staging, dir);
+		return undefined;
+	} catch (error) {
+		if (!["ENOTEMPTY", "EEXIST", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+	}
+	const theirs = keptFiles(dir);
+	if (theirs) return theirs;
+	rmSync(dir, { recursive: true, force: true });
+	renameSync(staging, dir);
+	return undefined;
+}
+
 const rangeKey = (range: Range | undefined) => (range ? `${range.start}-${range.end ?? ""}` : "all");
 
 type Section = readonly [number, number | undefined];
@@ -215,18 +246,27 @@ class VideoJob {
 		return info;
 	}
 
-	/** Kept per kind, height and sections in the pull folder, so a later call reuses it. */
+	/**
+	 * Kept per kind, height and sections in the pull folder, so a later call
+	 * reuses it. Each call downloads into its own staging folder and renames it
+	 * into place: yt-dlp's fixed file names fail when two pulls of one link
+	 * write the same folder.
+	 */
 	async download(kind: "video" | "audio", sections: readonly Section[] | undefined, maxHeight: number): Promise<MediaFile[]> {
 		const key = sections ? sections.map(([a, b]) => `${a}-${b ?? ""}`).join("_") : "all";
 		const dir = join(this.dir, kind === "video" ? keyName(`video-h${maxHeight}`, key) : keyName("audio", key));
-		const record = join(dir, "files.json");
-		const hit = cached<MediaFile[]>(record);
-		if (hit?.length && hit.every((file) => existsSync(file.path))) return hit;
-		mkdirSync(dir, { recursive: true });
-		this.ctx.progress(`downloading ${kind}${sections ? ` (${sections.length === 1 ? `${clock(sections[0][0])}-${sections[0][1] !== undefined ? clock(sections[0][1]) : "end"}` : `${sections.length} clips`})` : ""}`);
-		const result = await this.run<{ files: MediaFile[] }>("download", { url: this.url, kind, maxHeight, dir, sections }, 900_000);
-		writeFileSync(record, JSON.stringify(result.files));
-		return result.files;
+		const hit = keptFiles(dir);
+		if (hit) return hit;
+		const staging = uniqueDir(dir);
+		try {
+			this.ctx.progress(`downloading ${kind}${sections ? ` (${sections.length === 1 ? `${clock(sections[0][0])}-${sections[0][1] !== undefined ? clock(sections[0][1]) : "end"}` : `${sections.length} clips`})` : ""}`);
+			const result = await this.run<{ files: MediaFile[] }>("download", { url: this.url, kind, maxHeight, dir: staging, sections }, 900_000);
+			const files = result.files.map((file) => ({ ...file, path: join(dir, relative(staging, file.path)) }));
+			writeFileSync(join(staging, "files.json"), JSON.stringify(files));
+			return publish(staging, dir) ?? files;
+		} finally {
+			rmSync(staging, { recursive: true, force: true });
+		}
 	}
 
 	/** A whole video already downloaded by an earlier call, at any height. */
@@ -244,9 +284,9 @@ class VideoJob {
 		if (hit?.segments.length) return hit;
 		this.ctx.progress("reading captions");
 		const youtube = info.extractor_key === "Youtube";
-		const captionsDir = join(this.dir, "captions");
-		mkdirSync(captionsDir, { recursive: true });
-		let transcript = await this.run<Transcript>("captions", { url: this.url, videoId: youtube ? info.id : undefined, dir: captionsDir }, 180_000);
+		// The helper reads back every caption file in the folder, so each call gets its own.
+		const captionsDir = uniqueDir(join(this.dir, "captions"));
+		let transcript = await this.run<Transcript>("captions", { url: this.url, videoId: youtube ? info.id : undefined, dir: captionsDir }, 180_000).finally(() => rmSync(captionsDir, { recursive: true, force: true }));
 		if (!transcript.segments.length) {
 			const range = this.ctx.options.range;
 			const span = (range?.end ?? info.duration ?? 0) - (range?.start ?? 0);
