@@ -1531,10 +1531,13 @@ the parent's directory is not a repository. The child starts in the same
 directory of its worktree as its `cwd` (or, for a subagent's own worktree, its
 parent's) is in the repository. A read-only
 child's subagents can't make a worktree from a `cwd`, because making one runs
-that repository's git hooks. It copies that repository's current files, including uncommitted
+that repository's git hooks. A worktree child's subagents can't name a `cwd`
+at all. It copies that repository's current files, including uncommitted
 changes and untracked files that Git does not ignore, into a separate checkout.
 The parent keeps its files and index unchanged. The report gives the worktree,
 branch, change counts, and commands to apply changes and remove it after merging.
+The apply command runs git only in the parent's checkout, on a snapshot of the
+worktree's files that main wrote when the child ended.
 Untracked `node_modules` are linked, not copied or included in the changes.
 Worktrees stay until you remove them. Resumed children keep the same workspace.
 After you apply the changes, the cleanup command force-removes the worktree and

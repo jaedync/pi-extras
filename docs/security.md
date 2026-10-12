@@ -503,10 +503,27 @@ A worktree child's `bash` commands run in an OS sandbox on macOS and on Linux
 with `bwrap`. The sandbox stops unintended writes into the parent's checkout.
 It is not a boundary against a hostile child. The child can still write
 outside the repository, for example `~/.gitconfig`, and it runs with your
-permissions. When main runs git in a child's worktree (for the report and the
-change check), it gives git the worktree's own git folder. It also turns off
-fsmonitor, hooks, automatic gc and submodules. Then git does not run a program
-that the child put in the worktree's git data.
+permissions.
+
+Main also runs git in a child's worktree: for the report, for the check of
+which files a `bash` call changed, and to make a worktree for the child's own
+subagent. There, main gives git the worktree's own git folder and the
+repository's shared git folder, and never follows the worktree's `.git` file.
+It also turns off fsmonitor, hooks, automatic gc and submodules. Git then
+reads its config only from your own config files and the parent's repository.
+The sandbox keeps those read-only, and also the worktree's `config.worktree`.
+The report's apply command runs git only in the parent's checkout, on a
+snapshot that main wrote. A worktree child can't name a `cwd` for its
+subagents, so main never makes a worktree in a repository that the child
+chose. So git in main does not run a program that the child put in the git
+data or in its worktree. These are the limits:
+- Your own config. A hostile child can write `~/.gitconfig`, and git in main
+  then reads it.
+- Systems with no sandbox (Windows, or Linux without `bwrap`). There, the
+  child can also write the parent's git data.
+- The edit guard has the same limit as the sandbox. A command that the child
+  leaves running in the background can change a link between the check of an
+  `edit` or `write` path and the write.
 
 Child sessions are written under
 `PI_CODING_AGENT_DIR/sessions/subagents/<parent session id>/`. An `index.json`
