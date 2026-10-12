@@ -81,6 +81,19 @@ test("anything the splitter doesn't fully understand is left alone", () => {
 	}
 });
 
+test("a pipeline continued on the next line is left alone", () => {
+	for (const command of [
+		"echo hello |\n  tr a-z A-Z && echo done",
+		"printf 'b\\na\\n' |\n sort; echo end",
+		"echo x | \n cat ; echo y",
+		"echo x |&\n cat; echo y",
+		"echo x | # a note\n cat; echo y",
+	]) {
+		assert.equal(splitChain(command), undefined, command);
+	}
+	assert.deepEqual(steps("a ||\n b; c"), [[null, "a"], ["||", "b"], [";", "c"]]);
+});
+
 test("very long scripts are left alone", () => {
 	const script = Array.from({ length: MAX_STEPS + 1 }, (_, index) => `echo ${index}`).join("\n");
 	assert.equal(splitChain(script), undefined);

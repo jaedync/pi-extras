@@ -7,9 +7,9 @@
  * The splitter is deliberately conservative. Its output decides how a command
  * is rewritten before it runs, so whatever it doesn't fully understand
  * (heredocs, compound commands like `if` and `for`, background `&`, function
- * definitions, and commands whose meaning depends on the shell's own state,
- * like `exit`, `set` or `$LINENO`) returns undefined and the command runs
- * untouched.
+ * definitions, a pipeline continued on the next line, and commands
+ * whose meaning depends on the shell's own state, like `exit`, `set` or
+ * `$LINENO`) returns undefined and the command runs untouched.
  */
 
 export type ChainOp = "&&" | "||" | ";";
@@ -88,6 +88,13 @@ function scan(s: string): Chain | undefined {
 		while (j >= 0 && (s[j] === " " || s[j] === "\t")) j--;
 		return j < 0 ? "" : s[j]!;
 	};
+	// A line that ends in `|` or `|&` continues its pipeline on the next line, where the rewrite would end the step.
+	const pipeBefore = (i: number) => {
+		let j = i - 1;
+		while (j >= 0 && (s[j] === " " || s[j] === "\t")) j--;
+		if (s[j] === "&") return s[j - 1] === "|";
+		return s[j] === "|" && s[j - 1] !== "|";
+	};
 
 	let i = 0;
 	while (i < s.length) {
@@ -135,6 +142,7 @@ function scan(s: string): Chain | undefined {
 		if (ch === "$" && next === "(") { stack.push("paren"); i += 2; continue; }
 		if (ch === "$" && next === "{") { stack.push("brace"); i += 2; continue; }
 		if (ch === "#" && wordStart(i)) {
+			if (stack.length === 0 && pipeBefore(i)) fail();
 			while (i < s.length && s[i] !== "\n") i++;
 			continue;
 		}
@@ -194,6 +202,7 @@ function scan(s: string): Chain | undefined {
 			continue;
 		}
 		if (ch === "\n") {
+			if (pipeBefore(i)) fail();
 			finish(i, ";");
 			stepStart = ++i;
 			continue;
