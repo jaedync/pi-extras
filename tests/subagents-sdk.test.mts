@@ -312,7 +312,7 @@ test("an unknown model fails the child, not the session", { timeout: 20_000 }, a
 	await team.close();
 });
 
-test("the real parent SDK reload rebuilds its roster, resumes running children, and appends one notice", { timeout: 20_000 }, async () => {
+test("a real parent SDK reload keeps a running child running, its report reaches main once, and a finished child still resumes", { timeout: 20_000, skip: process.platform === "win32" }, async () => {
 	const { fileURLToPath } = await import("node:url");
 	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
 	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
@@ -326,31 +326,48 @@ test("the real parent SDK reload rebuilds its roster, resumes running children, 
 	assert.deepEqual(loader.getExtensions().errors, []);
 	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model,
 		resourceLoader: loader, settingsManager, sessionManager: sdk.SessionManager.create(scratch, join(scratch, "parents")) });
+	const flag = join(scratch, "release-running");
+	// Parent and children share the faux queue; each answer looks at who asks.
+	const answer = (context: any) => {
+		const said = JSON.stringify(context);
+		if (!said.includes("You are the subagent")) return ai.fauxAssistantMessage("Main read it.");
+		if (said.includes('You are the subagent \\"finished\\"')) return ai.fauxAssistantMessage(said.includes("Answer again") ? "Finished child reached." : "Finished child report.");
+		return context.messages.at(-1)?.role === "toolResult" ? ai.fauxAssistantMessage("Finished after the reload.")
+			: ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: `until [ -f ${flag} ]; do sleep 0.05; done; echo released` }));
+	};
+	faux.setResponses(Array.from({ length: 12 }, () => answer));
+	const notices: string[] = [];
 	try {
-		await session.bindExtensions({ mode: "print", onError: (error: unknown) => { throw error; } } as never);
+		await session.bindExtensions({ mode: "print", uiContext: { notify: (text: string) => notices.push(text) }, onError: (error: unknown) => { throw error; } } as never);
 		const spawn = () => session.agent.state.tools.find((tool: any) => tool.name === "subagent")!;
-		faux.setResponses([ai.fauxAssistantMessage("Finished child report.")]);
 		await spawn().execute("spawn-finished", { name: "finished", task: "Finish now", model: "faux/cheap" }, undefined);
 		const dir = join(agentDir, "sessions", "subagents", session.sessionManager.getSessionId());
 		const index = () => JSON.parse(readFileSync(join(dir, "index.json"), "utf8"));
-		for (let i = 0; i < 200 && index().records[0]?.state !== "idle"; i++) await new Promise((r) => setTimeout(r, 10));
-		assert.equal(index().records[0]?.state, "idle");
-		faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 30" }))]);
+		const record = (name: string) => index().records.find((r: any) => r.name === name);
+		for (let i = 0; i < 200 && record("finished")?.state !== "idle"; i++) await new Promise((r) => setTimeout(r, 10));
+		assert.equal(record("finished")?.state, "idle");
 		await spawn().execute("spawn-running", { name: "running", task: "Wait for work", model: "faux/cheap" }, undefined);
-		for (let i = 0; i < 800 && !index().records.some((r: any) => r.activity === "bash sleep 30"); i++) await new Promise((r) => setTimeout(r, 10));
-		assert.ok(index().records.some((r: any) => r.activity === "bash sleep 30"));
-		faux.setResponses([ai.fauxAssistantMessage("Reload resumed me.")]);
+		// The index saves a new activity alone within 5 s (restore.ts), so this can take that long.
+		for (let i = 0; i < 800 && !record("running")?.activity?.startsWith("bash until"); i++) await new Promise((r) => setTimeout(r, 10));
+		assert.match(record("running")?.activity ?? "", /^bash until/);
 		await session.reload();
-		for (let i = 0; i < 200 && index().records.find((r: any) => r.name === "running")?.state !== "idle"; i++) await new Promise((r) => setTimeout(r, 10));
-		assert.equal(index().records.length, 2);
-		assert.equal(index().records.find((r: any) => r.name === "running")?.report, "Reload resumed me.");
-		const notices = session.messages.filter((m: any) => m.role === "custom" && m.customType === "subagent-restore");
-		assert.equal(notices.length, 1);
-		assert.match(JSON.stringify(notices), /Auto-resuming.*running.*Wait for work.*bash sleep 30/);
-		faux.setResponses([ai.fauxAssistantMessage("Finished child reached.")]);
+		assert.equal(record("running")?.state, "running", "the reload interrupts nothing");
+		assert.equal(record("running")?.interruptedBy, undefined);
+		writeFileSync(flag, "");
+		for (let i = 0; i < 500 && record("running")?.state !== "idle"; i++) await new Promise((r) => setTimeout(r, 10));
+		assert.equal(record("running")?.report, "Finished after the reload.");
+		assert.equal(record("running")?.runs, 1, "the same run went on");
+		const reports = () => session.messages.filter((m: any) => m.role === "custom" && m.customType === "subagent-report" && JSON.stringify(m.details).includes('"running"'));
+		for (let i = 0; i < 300 && reports().length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+		assert.equal(reports().length, 1, "its report reaches main once");
+		assert.equal(session.messages.filter((m: any) => m.role === "custom" && m.customType === "subagent-restore").length, 0, "nothing was interrupted, so nothing is announced");
 		const message = session.agent.state.tools.find((tool: any) => tool.name === "message")!;
 		const result = await message.execute("message-finished", { to: "finished", text: "Answer again" }, undefined);
 		assert.equal((result.details as any).delivered, "resumed");
+		for (let i = 0; i < 500 && record("finished")?.report !== "Finished child reached."; i++) await new Promise((r) => setTimeout(r, 10));
+		assert.equal(record("finished")?.report, "Finished child reached.");
+		assert.equal(reports().length, 1, "still once");
+		assert.deepEqual(notices.filter((notice) => /reload|interrupted/.test(notice)), [], "the reload took the children over without a warning");
 	} finally {
 		await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		session.dispose();

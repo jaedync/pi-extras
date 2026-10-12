@@ -10,7 +10,7 @@ import { childMessageDescription, mainMessageDescription, stopDescription, subag
 import { capReport, reportText, rosterText } from "./format.ts";
 import { isThinking, type ModelChoice, resolveModel, THINKING_LEVELS, type Thinking, thinkingFor, type ThinkingSettings } from "./models.ts";
 import { EVERYONE, MAIN } from "./names.ts";
-import type { Team } from "./team.ts";
+import type { HostTeam } from "./contract.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
 
 export const MAX_TASK_CHARS = 60_000;
@@ -18,7 +18,8 @@ export const MAX_MESSAGE_CHARS = 20_000;
 const PROGRESS_MS = 1_000;
 
 export interface ToolContext {
-	team: Team;
+	/** Read at each call: after a /reload, the team may change once it is quiet (host.ts). */
+	readonly team: HostTeam;
 	allowed: readonly ModelChoice[];
 	/** Used when the call names no model: the configured default, else the parent's. */
 	fallbackModel: string | null;
@@ -219,7 +220,7 @@ export function stopTool(tc: Pick<ToolContext, "team">, self: string): ToolDefin
 	} as ToolDefinition;
 }
 
-async function stopAll(team: Team, self: string): Promise<Result> {
+async function stopAll(team: HostTeam, self: string): Promise<Result> {
 	const mine = team.list().filter((record) => record.parent === self && (LIVE_STATES.has(record.state) || record.state === "interrupted"));
 	if (mine.length === 0) return text("No subagents of yours are running.", { stopped: [] });
 	const stopped: string[] = [];

@@ -13,9 +13,9 @@ import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
 import { guardBash } from "./bash-guard.ts";
+import type { HostActivity } from "./contract.ts";
 import { confine, sandboxFor } from "./sandbox.ts";
 import { freshModels, launchFiles, stampCurrent, stampOf } from "./stamp.ts";
-import type { ToolActivity } from "./tool-activity.ts";
 import { WAITING_FOR_MODEL, type AgentRecord, type AgentWork, type ChildHandle, type ChildHooks, type Launcher, type Usage } from "./types.ts";
 import { editTarget, outsideWorktree, sourcePlace, workspaceError } from "./worktree.ts";
 
@@ -140,7 +140,7 @@ export interface LauncherDeps {
 	/** Problems the user should see, such as a sandbox tool that does not work here. */
 	warn?(message: string): void;
 	/** Every agent's running edit and bash calls; with `bashChanged`, a child's bash call that changes files takes the lock. */
-	activity?: ToolActivity;
+	activity?: HostActivity;
 	/** Whether the child may edit in the work tree `root` now without taking its lock. */
 	mayEdit?(name: string, root: string): boolean;
 	/** After a bash call changed files in the work tree `root`: takes its lock, or returns a note for the call's result. */
@@ -197,7 +197,7 @@ export function editGuard(check: (path: unknown) => string | undefined, track?: 
 	};
 }
 
-function editTracker(activity: ToolActivity | undefined, agent: string, cwd: string): EditTracker | undefined {
+function editTracker(activity: HostActivity | undefined, agent: string, cwd: string): EditTracker | undefined {
 	if (!activity) return undefined;
 	return {
 		start(id, path) {

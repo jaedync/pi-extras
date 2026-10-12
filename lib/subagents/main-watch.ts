@@ -12,7 +12,8 @@
  * miss it, and goes out as a new turn once main has settled instead.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { MainMail, Route } from "./deliver.ts";
+import type { HostMail } from "./contract.ts";
+import type { Route } from "./deliver.ts";
 import type { Handover } from "./headless.ts";
 
 /**
@@ -60,7 +61,7 @@ function lastSaid(ctx: { sessionManager?: { getBranch(): readonly unknown[] } })
  * comes later would be lost. Mail waits meanwhile and is handed over as the
  * check's entries, with a turn to read it when it wakes main.
  */
-export function watchMain(pi: Pick<ExtensionAPI, "on">, mail: () => MainMail | null | undefined, now: () => number = Date.now, hold?: () => Promise<Handover | undefined>): MainWatch {
+export function watchMain(pi: Pick<ExtensionAPI, "on">, mail: () => HostMail | null | undefined, now: () => number = Date.now, hold?: () => Promise<Handover | undefined>): MainWatch {
 	let running = false;
 	let settling = false;
 	let holding = false;

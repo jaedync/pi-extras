@@ -181,6 +181,8 @@ test("real SDK restored paused children stay idle, resumed restored children cou
 	const snapshots: any[] = [];
 	const sessionId = f.session.sessionManager.getSessionId();
 	const index = new ChildIndex(join(sdk.getAgentDir(), "sessions", "subagents", sessionId), sessionId, scratch);
+	// A restart, then a start that reads the index: a reload alone keeps the session's children as they are.
+	await f.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 	await f.session.reload({ beforeSessionStart: async () => {
 		f.registerProvider();
 		f.bus.on(BACKGROUND_EVENT, (value: any) => snapshots.push(value));

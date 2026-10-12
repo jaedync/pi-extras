@@ -4,6 +4,8 @@
  * made at the same time. Ids are `<agent>:<tool call id>`: call ids are only
  * unique within one session.
  */
+import type { HostActivity } from "./contract.ts";
+
 interface Window {
 	readonly id: string;
 	/** The git work tree's top level, as git gives it, or the directory outside git. */
@@ -19,7 +21,7 @@ export interface Watched {
 	shared: boolean;
 }
 
-export class ToolActivity {
+export class ToolActivity implements HostActivity {
 	private readonly edits = new Map<string, string>();
 	private readonly shells = new Map<string, string>();
 	private readonly windows = new Set<Window>();

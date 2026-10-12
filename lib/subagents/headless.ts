@@ -7,8 +7,7 @@
  * turn to read it. A child asking main blocks on main's answer, so mail ends
  * the wait rather than the child.
  */
-import type { MainMail } from "./deliver.ts";
-import type { Team } from "./team.ts";
+import type { HostMail, HostTeam } from "./contract.ts";
 
 // A note to main changes no record, so the wait also looks now and then.
 const LOOK_MS = 250;
@@ -32,7 +31,7 @@ export interface Handover {
 	readonly wakes: boolean;
 }
 
-export function awaitChildren(team: Pick<Team, "live" | "onChange" | "stopping">, mail: Pick<MainMail, "waiting" | "takeAll">): Promise<Handover> {
+export function awaitChildren(team: Pick<HostTeam, "live" | "onChange" | "stopping">, mail: Pick<HostMail, "waiting" | "takeAll">): Promise<Handover> {
 	return new Promise((resolve) => {
 		let stop: (() => void) | undefined;
 		let done = false;

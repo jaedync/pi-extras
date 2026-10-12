@@ -9,7 +9,8 @@ import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-
 import { relative } from "node:path";
 import { changedPaths, fingerprint, gitRoot, type Fingerprint } from "./fingerprint.ts";
 import { deniedWriteNote, type Sandbox } from "./sandbox.ts";
-import type { ToolActivity, Watched } from "./tool-activity.ts";
+import type { HostActivity } from "./contract.ts";
+import type { Watched } from "./tool-activity.ts";
 
 /** How a child's bash call reports the files it changed. */
 export interface ChangeWatch {
@@ -17,7 +18,7 @@ export interface ChangeWatch {
 	cwd: string;
 	/** The child's name, which keeps its call ids apart from other agents' in `activity`. */
 	agent: string;
-	activity: ToolActivity;
+	activity: HostActivity;
 	/** True while the child may edit in the work tree `root` anyway: it or an agent it works for holds its lock. */
 	mayEdit(root: string): boolean;
 	/** Paths relative to the work tree `root`; takes its lock, or returns a note for the call's result. */

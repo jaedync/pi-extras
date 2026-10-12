@@ -30,6 +30,7 @@
  * stops main's turn first, so mail that landed in it gets a reminder that
  * wakes main once the compaction is done (`remind`).
  */
+import type { HostMail } from "./contract.ts";
 import { noteText, questionText, reminderText, reportText } from "./format.ts";
 import type { AgentRecord, MainDelivery } from "./types.ts";
 
@@ -135,7 +136,7 @@ export function reportsText(records: readonly AgentRecord[], now: number): strin
 	return records.map((record) => reportText(record, now)).join("\n\n---\n\n");
 }
 
-export class MainMail {
+export class MainMail implements HostMail {
 	private readonly pendingItems = new Map<string, PendingItem>();
 	private batch: AgentRecord[] = [];
 	private timer: ReturnType<typeof setTimeout> | null = null;
@@ -239,6 +240,14 @@ export class MainMail {
 		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
 		// Every report shows its header; one that only repeats an answer keeps its text folded.
 		this.post({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } }, wakes);
+	}
+
+	/**
+	 * Nothing waits to reach main or to show in its transcript, and main owes
+	 * no reply: another mail could take over and lose nothing.
+	 */
+	idle(): boolean {
+		return this.pendingItems.size === 0 && this.batch.length === 0 && this.held.size === 0 && this.outbox.length === 0 && this.owing.size === 0;
 	}
 
 	/** Whether mail that wakes main waits to be handed over. */

@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
+import type { HostTeam } from "./contract.ts";
 import { checkoutOf, resolveCwd } from "./checkout.ts";
 import { bashChangeNotes, EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
@@ -90,7 +91,7 @@ function resumeWarning(target: AgentRecord): string {
 	return "";
 }
 
-export class Team {
+export class Team implements HostTeam {
 	private readonly records = new Map<string, AgentRecord>();
 	private readonly handles = new Map<string, ChildHandle>();
 	/** Pi rebuilds shorter message lists on compaction, but retains message identities. */
@@ -359,6 +360,16 @@ export class Team {
 	/** Whether a stop is still aborting a child whose report has not been handed up yet. */
 	stopping(): boolean {
 		return this.ending.size > 0;
+	}
+
+	/**
+	 * No child works, starts, stops or waits on an answer, so closing the team
+	 * would interrupt no one. What the team holds beside its records (owed
+	 * answers, peer runs, budgets) belongs to live runs, so the index keeps all
+	 * that is left.
+	 */
+	quiet(): boolean {
+		return !this.closed && this.live().length === 0 && this.opening.size === 0 && this.ending.size === 0 && this.questions.size === 0;
 	}
 
 	/** Whether `name` is `ancestor` or sits anywhere under it. */

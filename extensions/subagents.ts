@@ -5,23 +5,20 @@
  * Children are Pi sessions in this process. Which models they may use comes
  * from the session's scoped models; which model suits what comes from the
  * user's guide file. Both are read at session start and on /reload only, so
- * the tool description never changes mid-session. Child transcripts and their
- * roster survive reloads and restarts, with interrupted work verified on resume.
+ * the tool description never changes mid-session. Children keep running
+ * through a /reload (serve.ts, host.ts); their transcripts and roster survive
+ * restarts, with interrupted work verified on resume.
  */
 import * as sdk from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ModelRuntime, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { allowedTools } from "../lib/subagents/allowlist.ts";
-import { createLauncher, childExtensionPaths, childToolNames, describeTool } from "../lib/subagents/child.ts";
-import { GUIDE_FILE, loadConfig, readGuide, type SubagentsConfig } from "../lib/subagents/config.ts";
-import { fallbackChain } from "../lib/subagents/fallback.ts";
-import { MainMail, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
+import { GUIDE_FILE } from "../lib/subagents/config.ts";
+import type { HostState } from "../lib/subagents/contract.ts";
+import { MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
+import { nextGeneration, takeParked } from "../lib/subagents/host.ts";
 import { watchMain } from "../lib/subagents/main-watch.ts";
-import { childInstructions, conversationDigest, rosterText } from "../lib/subagents/format.ts";
-import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "../lib/subagents/models.ts";
 import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";
 import { type InspectorHost, openAgentInspector } from "../lib/subagents/inspector.ts";
 import { openTeamView } from "../lib/subagents/team-view.ts";
@@ -31,21 +28,15 @@ import { agentHue } from "../lib/band/agent-look.ts";
 import { createMessageRenderer, createReportRenderer, messageCallRow, messageResultRow, rememberAgent, subagentCallRow, subagentResultRow } from "../lib/subagents/render.ts";
 import { offerRows } from "../lib/late-rows.ts";
 import { markRow } from "../lib/tool-row.ts";
-import { appendRunLog, appendInterruptedRuns, loggedRunKeys, runKey, runLogEntry, runLogPath, statsByModel, statsText } from "../lib/subagents/runlog.ts";
+import { runLogPath, statsByModel, statsText } from "../lib/subagents/runlog.ts";
 import { formatTime } from "../lib/band/band.ts";
 import type { ShownOverlay } from "../lib/band/modal.ts";
 import { formatMoney } from "../lib/status-plus-logic.ts";
-import { acquireParent } from "../lib/subagents/ownership.ts";
-import { installSignalRecorder } from "../lib/subagents/signals.ts";
-import { Team } from "../lib/subagents/team.ts";
-import { ToolActivity } from "../lib/subagents/tool-activity.ts";
 import { editTarget } from "../lib/subagents/worktree.ts";
 import { checkoutOf } from "../lib/subagents/checkout.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
-import { recoveryOwner, recoveryDecision } from "../lib/subagents/recovery.ts";
-import { createSessionScanner } from "../lib/subagents/session-scan.ts";
-import { ChildIndex, legacyRecords, recoverRoster } from "../lib/subagents/restore.ts";
-import { childMessageTool, mainMessageTool, stopTool, subagentTool, type ToolContext } from "../lib/subagents/tools.ts";
+import { type Served, serveSession } from "../lib/subagents/serve.ts";
+import { mainMessageTool, stopTool, subagentTool } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
 import { awaitChildren, isHeadless } from "../lib/subagents/headless.ts";
@@ -63,30 +54,6 @@ and on /reload. Edit freely.
 - (model): (when to use it)
 `;
 
-interface SessionState {
-	team: Team;
-	mail: MainMail;
-	tools: ToolContext;
-	config: SubagentsConfig;
-	restore(reason: string): Promise<void>;
-	close(reason?: string): Promise<void>;
-}
-
-function thinkingSettings(cwd: string, agentDir: string): ThinkingSettings {
-	try {
-		const settings = sdk.SettingsManager.create(cwd, agentDir) as unknown as {
-			getAllModelThinkingLevels?: () => ThinkingSettings["modelThinkingLevels"];
-			getDefaultThinkingLevel?: () => string | undefined;
-		};
-		return {
-			modelThinkingLevels: settings.getAllModelThinkingLevels?.() ?? {},
-			...(settings.getDefaultThinkingLevel?.() ? { defaultThinkingLevel: settings.getDefaultThinkingLevel!()! } : {}),
-		};
-	} catch {
-		return {};
-	}
-}
-
 /** How main's chat is drawn, so an agent's chat in the inspector matches it. */
 function chatSettings(cwd: string): { hideThinking?: boolean; outputPad?: number } {
 	try {
@@ -97,25 +64,19 @@ function chatSettings(cwd: string): { hideThinking?: boolean; outputPad?: number
 	}
 }
 
-/** The parent's model runtime when Pi exposes it, so children share auth and providers. */
-function runtimeSource(ctx: ExtensionContext): () => Promise<ModelRuntime> {
-	let own: Promise<ModelRuntime> | null = null;
-	const parent = (ctx.modelRegistry as unknown as { runtime?: ModelRuntime }).runtime;
-	return () => {
-		if (parent && typeof (parent as { refresh?: unknown }).refresh === "function") return Promise.resolve(parent);
-		own ??= sdk.ModelRuntime.create();
-		return own;
-	};
-}
-
 export default function subagents(pi: ExtensionAPI) {
 	if (process.env.PI_SUBAGENTS === "off") return;
-	let state: SessionState | null = null;
-	/** Main's and every child's running edit and bash calls, so a child's bash call isn't blamed for their changes. */
-	const activity = new ToolActivity();
+	/** This evaluation of the package; a /reload makes the next one, and children it launched are told apart by it. */
+	const generation = nextGeneration();
+	/** The session this module serves, and through it the host: the team, mail and index. */
+	let served: Served | null = null;
+	const host = (): HostState | null => served?.host() ?? null;
 	let backgroundCtx: ExtensionContext | undefined;
 	// Resumed children keep `restored` provenance; only their current live state means work.
-	const publishBackground = () => { if (state && backgroundCtx) announceBackground(pi, backgroundCtx, "subagents", state.team.list().filter((r) => LIVE_STATES.has(r.state)).length); };
+	const publishBackground = () => {
+		const current = host();
+		if (current && backgroundCtx) announceBackground(pi, backgroundCtx, "subagents", current.team.list().filter((r) => LIVE_STATES.has(r.state)).length);
+	};
 	pi.events?.on(BACKGROUND_REQUEST_EVENT, publishBackground);
 	const motion = watchMotion(pi.events);
 	const widget = createAgentsWidget(motion);
@@ -123,7 +84,10 @@ export default function subagents(pi: ExtensionAPI) {
 	pi.on("agent_start", async () => { mainRun++; });
 	// Headless runs end once main settles; main waits for its children there instead (headless.ts).
 	let headless = false;
-	const mainWatch = watchMain(pi, () => state?.mail, Date.now, async () => (headless && state ? awaitChildren(state.team, state.mail) : undefined));
+	const mainWatch = watchMain(pi, () => host()?.mail, Date.now, async () => {
+		const current = host();
+		return headless && current ? awaitChildren(current.team, current.mail) : undefined;
+	});
 	let inspectorUi: InspectorHost | null = null;
 	let inspectorCwd = process.cwd();
 	let inspected: ShownOverlay | undefined;
@@ -134,20 +98,22 @@ export default function subagents(pi: ExtensionAPI) {
 	 * return to the agents view it was opened from.
 	 */
 	const inspect = (name: string, back?: () => void): void => {
-		const current = state;
+		const current = served;
 		if (!inspectorUi || !current || inspected?.isOpen()) return;
+		// Read at each call: once an adopted team is quiet after a /reload, a new one takes its place.
+		const team = () => current.host().team;
 		const shown = openAgentInspector(inspectorUi, {
-			record: () => current.team.get(name),
-			messages: () => current.team.messages(name),
-			streaming: () => current.team.streaming(name),
-			tool: (toolName) => current.team.tool(name, toolName),
-			cwd: current.team.get(name)?.cwd ?? current.team.get(name)?.worktree?.path ?? inspectorCwd,
+			record: () => team().get(name),
+			messages: () => team().messages(name),
+			streaming: () => team().streaming(name),
+			tool: (toolName) => team().tool(name, toolName),
+			cwd: team().get(name)?.cwd ?? team().get(name)?.worktree?.path ?? inspectorCwd,
 			...chatSettings(inspectorCwd),
 			motion,
-			hue: (other) => agentHue(current.team.get(other)?.model),
-			stop: async () => { await current.team.stop(name); },
+			hue: (other) => agentHue(team().get(other)?.model),
+			stop: async () => { await team().stop(name); },
 			async send(text) {
-				const result = await current.team.send(USER, name, text);
+				const result = await team().send(USER, name, text);
 				if (!result.ok) throw new Error(result.error);
 				return result.delivered === "replied" ? "Answered its question." : result.delivered === "resumed" ? "It resumed to handle your message." : "Delivered after its current step.";
 			},
@@ -162,12 +128,12 @@ export default function subagents(pi: ExtensionAPI) {
 
 	/** Every agent at once; choosing one opens its inspector, and closing that comes back here, on it. */
 	const viewAll = (selected?: string): void => {
-		const current = state;
+		const current = served;
 		if (!inspectorUi || !current || inspected?.isOpen()) return;
 		let chosen: string | undefined;
 		const shown = openTeamView(inspectorUi, {
-			records: () => current.team.list(),
-			pending: () => current.mail.pending(),
+			records: () => current.host().team.list(),
+			pending: () => current.host().mail.pending(),
 			open: (name) => { chosen = name; },
 			motion,
 			...(selected ? { selected } : {}),
@@ -177,7 +143,7 @@ export default function subagents(pi: ExtensionAPI) {
 			if (inspected === shown) inspected = undefined;
 			// Only within the session it was opened in: after a switch there is nothing to go back to.
 			try {
-				if (chosen && state === current) inspect(chosen, () => { if (state === current) viewAll(chosen); });
+				if (chosen && served === current) inspect(chosen, () => { if (served === current) viewAll(chosen); });
 			} catch { /* stale context after a session switch */ }
 		});
 	};
@@ -189,7 +155,7 @@ export default function subagents(pi: ExtensionAPI) {
 		invalidate: () => component.invalidate(),
 		handleMouse: (event: { type: string; button: string }) => {
 			const name = (context?.state as { agent?: string } | undefined)?.agent;
-			if (event.type !== "click" || event.button !== "left" || !name || !state?.team.get(name) || !inspectorUi) return undefined;
+			if (event.type !== "click" || event.button !== "left" || !name || !host()?.team.get(name) || !inspectorUi) return undefined;
 			inspect(name);
 			return { handled: true };
 		},
@@ -204,8 +170,8 @@ export default function subagents(pi: ExtensionAPI) {
 			const id = String((context as { toolCallId?: unknown } | undefined)?.toolCallId ?? "");
 			const writtenNow = () => run.streaming() && !run.written(id);
 			return tool.name === "subagent"
-				? clickable(subagentCallRow(args, theme, context, (name) => state?.team.get(name), writtenNow, motion), context)
-				: messageCallRow(args, theme, context, writtenNow, (name) => state?.team.get(name), motion);
+				? clickable(subagentCallRow(args, theme, context, (name) => host()?.team.get(name), writtenNow, motion), context)
+				: messageCallRow(args, theme, context, writtenNow, (name) => host()?.team.get(name), motion);
 		},
 		renderResult: (result: unknown, _options: { expanded: boolean }, theme: Theme, context?: RowContext) => {
 			if (tool.name !== "subagent") return messageResultRow(result, theme, context);
@@ -215,196 +181,9 @@ export default function subagents(pi: ExtensionAPI) {
 	} as ToolDefinition, "band");
 
 	if (typeof pi.registerMessageRenderer === "function") {
-		pi.registerMessageRenderer(MESSAGE_TYPE, createMessageRenderer(markdown, (name) => state?.team.get(name)));
+		pi.registerMessageRenderer(MESSAGE_TYPE, createMessageRenderer(markdown, (name) => host()?.team.get(name)));
 		pi.registerMessageRenderer(REPORT_TYPE, createReportRenderer(markdown));
 	}
-
-	const build = (ctx: ExtensionContext): SessionState => {
-		const agentDir = sdk.getAgentDir();
-		const cwd = ctx.cwd;
-		const config = loadConfig();
-		const thinking = thinkingSettings(cwd, agentDir);
-		const allowed = allowedModels(ctx.scopedModels ?? [], ctx.model);
-		const parentRef = ctx.model ? refOf(ctx.model) : null;
-		const configured = config.defaultModel ? resolveModel(config.defaultModel, allowed) : null;
-		if (configured && !configured.ok) ctx.ui.notify(`subagents.defaultModel: ${configured.error}`, "warning");
-		const fallbackModel = configured?.ok ? configured.choice.ref : parentRef && allowed.some((choice) => choice.ref === parentRef) ? parentRef : allowed[0]?.ref ?? null;
-		const sessionId = ctx.sessionManager.getSessionId();
-		const owner = recoveryOwner(ctx.sessionManager);
-		const logFile = runLogPath(agentDir);
-		const sessionDir = join(agentDir, "sessions", "subagents", sessionId);
-		let logFailed = false;
-		const warn = (message: string) => ctx.ui.notify(message, "warning");
-		const index = new ChildIndex(sessionDir, sessionId, cwd);
-		const releaseParent = acquireParent(sessionDir);
-		const scanner = createSessionScanner(sdk.parseSessionEntries, sdk.migrateSessionEntries);
-		const badFiles = new Set<string>();
-		const readBranch = (file: string) => {
-			try { return scanner.branch(file); }
-			catch (error) {
-				if (!badFiles.has(file)) ctx.ui.notify(`subagents: skipping ${file}: ${(error as Error).message}`, "warning");
-				badFiles.add(file);
-				throw error;
-			}
-		};
-		let workspaceMoved = false;
-		let previousShutdown: string | undefined;
-		let previousOwner: string | undefined;
-		let signalReason: string | undefined;
-
-		// The team is made below; the mail only asks it once reports arrive.
-		let team!: Team;
-		const mail = new MainMail({
-			batchMs: config.batchMs,
-			groupWaitMs: config.groupWaitMs,
-			groupBusy: (group, except) => team.list().some((r) => r.group === group && r.name !== except && LIVE_STATES.has(r.state)),
-			port: { send: (message, options) => pi.sendMessage(message, options) },
-			route: () => mainWatch.route(ctx),
-			onChange: () => {
-				widget.update();
-				watchPending(ctx);
-			},
-		});
-		// The launcher and tools need the team, and the team needs the launcher.
-		let tools!: ToolContext;
-		team = new Team({
-			warn, cwd,
-			maxConcurrent: config.maxConcurrent,
-			maxDepth: config.maxDepth,
-			replyTimeoutMs: config.replyTimeoutMs,
-			runBudget: { minutes: config.maxRunMinutes, ...(config.maxRunCost !== null ? { cost: config.maxRunCost } : {}) },
-			fallbackModels: fallbackChain(config.fallbackModels, fallbackModel, allowed, warn),
-			messagesFor: (record) => record.sessionFile && existsSync(record.sessionFile) && !record.restoreError ? scanner.messages(record.sessionFile) : [],
-			prepareResume: (record) => {
-				const model = allowed.some((choice) => choice.ref === record.model) ? record.model : fallbackModel;
-				if (!model) throw new Error("No current default model is available for this child. Scope a model before resuming.");
-				const notes = [model !== record.model ? `Your previous model ${record.model} is out of scope. You are continuing on the current default ${model}.` : "",
-					// A child with a cwd of its own keeps it when main's directory moves.
-					workspaceMoved && !record.cwd ? `Your workspace moved from ${index.cwd} to ${cwd}. Verify files in the parent's current workspace before continuing.` : ""].filter(Boolean);
-				const notice = model !== record.model ? `Model ${record.model} is not available now, running on ${model}.` : undefined;
-				if (notice) ctx.ui.notify(notice, "warning");
-				return { model, note: notes.join("\n"), ...(notice ? { notice } : {}) };
-			},
-			sessionFileFor: (name) => join(sessionDir, `${new Date().toISOString().replace(/[:.]/g, "-")}_${name}_${randomUUID().slice(0, 8)}.jsonl`),
-			deliverToMain: (delivery) => mail.deliver(delivery),
-			launcher: createLauncher({
-				sdk, agentDir, cwd,
-				sessionDir,
-				modelRuntime: runtimeSource(ctx),
-				modelAllowed: (model) => allowed.some((choice) => choice.ref === model),
-				claimEdit: (name, target) => team.claimEdit(name, target),
-				warn, activity,
-				mayEdit: (name, root) => team.mayEdit(name, root),
-				bashChanged: (name, paths, root) => team.bashChanged(name, paths, root),
-				toolsFor: (record) => {
-					const names = allowedTools(childToolNames(pi.getActiveTools(), record.readOnly, config.childToolsExclude), record.tools);
-					return {
-						tools: names,
-						extensionPaths: childExtensionPaths(pi.getAllTools(), names),
-						customTools: [
-							childMessageTool(tools, record.name),
-							...(record.depth < config.maxDepth ? [subagentTool(tools, record.name), stopTool(tools, record.name)] : []),
-						],
-					};
-				},
-				instructions: (record) => childInstructions({
-					name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < config.maxDepth,
-					...(record.worktree ? { worktree: record.worktree } : {}),
-					roster: rosterText(record.name, team.list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model }))),
-					...(record.fork ? { conversation: conversationDigest(ctx.sessionManager.getBranch(), describeTool) } : {}),
-				}),
-			}),
-		});
-		tools = {
-			team, allowed, fallbackModel, thinking, modelTable: modelTable(allowed, thinking),
-			guide: readGuide(agentDir, cwd).text, replyTimeoutMs: config.replyTimeoutMs, now: Date.now,
-			currentGroup: () => `run-${mainRun}`,
-			childTools: (readOnly) => childToolNames(pi.getActiveTools(), readOnly, config.childToolsExclude),
-		};
-
-		try {
-			const records = index.load(warn);
-			previousShutdown = index.shutdown;
-			previousOwner = index.shutdownOwner;
-			const roster = records.length > 0 || existsSync(index.file) ? records : legacyRecords(ctx.sessionManager.getBranch(), sessionDir, MAIN, 1, readBranch, warn);
-			workspaceMoved = index.cwd !== cwd;
-			team.restore(recoverRoster(roster, sessionDir, readBranch, warn));
-			if (workspaceMoved && index.markWorkspaceNotice(cwd)) ctx.ui.notify(`subagents: workspace changed from ${index.cwd} to ${cwd}. Auto-resume is paused; inspect and resume children explicitly.`, "warning");
-		} catch (error) {
-			mail.dispose();
-			releaseParent();
-			throw new Error(`Could not restore ${index.file}: ${(error as Error).message}. The index has been left unchanged.`);
-		}
-		try {
-			appendInterruptedRuns(logFile, team.list(), sessionId, Date.now());
-			if (team.list().length > 0) index.save(team.list());
-		} catch (error) { ctx.ui.notify(`subagents: could not record restored children: ${(error as Error).message}`, "warning"); }
-		let logged = new Set<string>();
-		try { logged = loggedRunKeys(logFile); }
-		catch (error) { ctx.ui.notify(`subagents: could not read run log ${logFile}: ${(error as Error).message}`, "warning"); }
-		const unsubscribe = team.onChange((record) => {
-			widget.update();
-			publishBackground();
-			const saveWarning = (error: unknown) => ctx.ui.notify(`subagents: could not save ${index.file}: ${(error as Error).message}`, "warning");
-			try { index.update(team.list(), saveWarning); }
-			catch (error) { saveWarning(error); }
-			if (!record || LIVE_STATES.has(record.state)) return;
-			const entry = runLogEntry(record, Date.now(), sessionId);
-			const key = runKey(entry);
-			if (logged.has(key)) return;
-			try {
-				appendRunLog(logFile, entry);
-				logged.add(key);
-			} catch (error) {
-				if (!logFailed) ctx.ui.notify(`subagents: could not write the run log ${logFile}: ${(error as Error).message}`, "warning");
-				logFailed = true;
-			}
-		});
-
-		const removeSignals = installSignalRecorder((signal) => {
-			try {
-				signalReason = signal;
-				team.interrupt("signal", owner);
-				index.save(team.list(), signal, owner);
-				appendInterruptedRuns(logFile, team.list(), sessionId, Date.now());
-			} catch (error) { ctx.ui.notify(`subagents: could not record ${signal}: ${(error as Error).message}`, "warning"); }
-		});
-		return {
-			team, mail, tools, config,
-			async restore(reason) {
-				const interrupted = team.list().filter((record) => record.state === "interrupted" && !record.interruptionAnnounced);
-				if (interrupted.length === 0) return;
-				const lines: string[] = [];
-				const resumed: string[] = [];
-				for (const record of interrupted) {
-					const decision = recoveryDecision(record, { reason, policy: config.resumePolicy, shutdown: previousShutdown, shutdownOwner: previousOwner,
-						owner, allowed: new Set(allowed.map((choice) => choice.ref)), moved: workspaceMoved });
-					if (decision.resume) team.markRecovery(record.name, { autoResumeAttempts: (record.autoResumeAttempts ?? 0) + 1, interruptedBy: undefined });
-					let action = decision.why;
-					if (decision.resume) {
-						const sent = await team.send(MAIN, record.name, "Continue your interrupted task and report the outcome.", { automatic: true });
-						if (sent.ok && sent.delivered === "resumed") resumed.push(record.name);
-						else action = `Paused: ${sent.ok ? sent.delivered : sent.error}`;
-					}
-					const short = (text: string) => text.replace(/\s+/g, " ").slice(0, 300);
-					lines.push(`${record.name}: task ${short(record.task)}; last activity ${short(record.activity ?? record.state)}. ${action}`);
-				}
-				const notice = `Subagents restored after ${reason}. ${resumed.length ? "Auto-resuming eligible children." : "Not resumed."}\n${lines.join("\n")}\nPaused children require message from their parent or /subagents resume <name>.`;
-				pi.sendMessage({ customType: "subagent-restore", content: notice, display: true, details: { reason, resumed, names: interrupted.map((r) => r.name) } }, { triggerTurn: false });
-				for (const record of interrupted) team.markRecovery(record.name, { interruptionAnnounced: true });
-				index.save(team.list());
-				ctx.ui.notify(notice, "warning");
-			},
-			async close(reason = "quit") {
-				removeSignals();
-				mail.dispose();
-				try {
-					await team.close(signalReason ? "signal" : reason === "reload" ? "reload" : "quit", owner);
-					index.save(team.list(), signalReason ?? reason, owner);
-				} finally { unsubscribe(); releaseParent(); }
-			},
-		};
-	};
 
 	const ours = (path: unknown) => /[/\\]extensions[/\\]subagents\.ts$/.test(String(path ?? ""));
 	/** Another extension owns the tool name; Pi keeps the first registration's rows and behavior. */
@@ -414,20 +193,31 @@ export default function subagents(pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", async (event, ctx) => {
-		await state?.close();
-		state = null;
+		await served?.close();
+		served = null;
 		backgroundCtx = undefined;
 		headless = isHeadless(ctx.mode);
+		// A host a /reload left running, for this module to take over (host.ts).
+		const parked = event.reason === "reload" ? takeParked(ctx.sessionManager) : undefined;
 		// Two subagent systems in one session would split the model's attention and the user's.
 		if (foreign("subagent")) {
 			ctx.ui.notify("pi-extras Subagents is off: another extension already provides a subagent tool. Remove one of them.", "warning");
+			await parked?.close("reload");
 			return;
 		}
-		try { state = build(ctx); }
-		catch (error) { ctx.ui.notify(`subagents: ${(error as Error).message}`, "warning"); return; }
+		try {
+			served = await serveSession({
+				sdk, pi, ctx, generation, parked,
+				route: () => mainWatch.route(ctx),
+				teamChanged: () => { widget.update(); publishBackground(); },
+				mailChanged: () => { widget.update(); watchPending(ctx); },
+				// Numbered by generation too: a child from before a /reload may still report with its group.
+				currentGroup: () => `run-${generation}-${mainRun}`,
+			});
+		} catch (error) { ctx.ui.notify(`subagents: ${(error as Error).message}`, "warning"); return; }
 		backgroundCtx = ctx;
 		publishBackground();
-		const current = state;
+		const current = served;
 		for (const tool of [subagentTool(current.tools, MAIN), mainMessageTool(current.tools), stopTool(current.tools, MAIN)]) {
 			if (foreign(tool.name)) {
 				ctx.ui.notify(`subagents: tool name "${tool.name}" is already registered by another extension; skipping it.`, "warning");
@@ -438,26 +228,31 @@ export default function subagents(pi: ExtensionAPI) {
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui as unknown as InspectorHost : null;
 		inspectorCwd = ctx.cwd;
 		if (ctx.hasUI && ctx.mode === "tui") {
-			widget.attach(ctx.ui as never, () => ({ records: current.team.list(), pending: current.mail.pending() }), inspect, () => viewAll());
+			widget.attach(ctx.ui as never, () => ({ records: current.host().team.list(), pending: current.host().mail.pending() }), inspect, () => viewAll());
 		}
-		await current.restore(event.reason);
+		if (current.adopted) {
+			// Mail sent before the reload may still wait for Pi to show it.
+			watchPending(ctx);
+			current.lookForQuiet();
+		} else await current.host().restore(event.reason);
 	});
 
 	// A note appended without waking main raises no event, so look for it.
 	let reconcileTimer: ReturnType<typeof setInterval> | null = null;
 	const reconcile = (ctx: ExtensionContext) => {
-		if (!state) return;
+		const current = host();
+		if (!current) return;
 		try {
-			state.mail.reconcile(ctx.sessionManager.getBranch());
+			current.mail.reconcile(ctx.sessionManager.getBranch());
 		} catch {
 			// A stale context after a session switch; the next session starts clean.
 		}
 	};
 	const watchPending = (ctx: ExtensionContext) => {
-		if (reconcileTimer || !state || state.mail.pending().length === 0) return;
+		if (reconcileTimer || !host() || host()!.mail.pending().length === 0) return;
 		reconcileTimer = setInterval(() => {
 			reconcile(ctx);
-			if (!state || state.mail.pending().length === 0) {
+			if (!host() || host()!.mail.pending().length === 0) {
 				if (reconcileTimer) clearInterval(reconcileTimer);
 				reconcileTimer = null;
 			}
@@ -473,32 +268,37 @@ export default function subagents(pi: ExtensionAPI) {
 	const treeOf = (cwd: string): string => (mainTree?.cwd === cwd ? mainTree : (mainTree = { cwd, root: checkoutOf(cwd) })).root;
 	pi.on("tool_call", (event, ctx) => {
 		const id = `${MAIN}:${event.toolCallId}`;
+		const activity = host()?.activity;
+		if (!activity) return;
 		if (event.toolName === "bash") activity.shellStart(id, treeOf(ctx.cwd));
 		if (event.toolName !== "edit" && event.toolName !== "write") return;
 		const target = editTarget(ctx.cwd, (event.input as { path?: unknown }).path);
 		if (target !== undefined) activity.editStart(id, target);
 	});
-	pi.on("tool_execution_end", (event) => activity.end(`${MAIN}:${event.toolCallId}`));
+	pi.on("tool_execution_end", (event) => host()?.activity.end(`${MAIN}:${event.toolCallId}`));
 
 	pi.on("message_end", (event) => {
 		const message = (event as { message?: { role?: string; customType?: string; details?: { id?: unknown } } }).message;
 		if (message?.role !== "custom" || (message.customType !== MESSAGE_TYPE && message.customType !== REPORT_TYPE)) return;
-		if (typeof message.details?.id === "string") state?.mail.acknowledge(message.details.id);
+		if (typeof message.details?.id === "string") host()?.mail.acknowledge(message.details.id);
 	});
 
-	pi.on("session_shutdown", async (event) => {
+	pi.on("session_shutdown", async (event, ctx) => {
 		if (reconcileTimer) clearInterval(reconcileTimer);
 		reconcileTimer = null;
 		widget.detach();
-		await state?.close(event.reason);
+		const current = served;
+		served = null;
+		// The children keep running; the module Pi loads next takes them over (host.ts). Quick, as Pi waits for it.
+		if (event.reason === "reload") current?.park(ctx.sessionManager);
+		else await current?.close(event.reason);
 		if (backgroundCtx && event.reason !== "reload") announceBackground(pi, backgroundCtx, "subagents", 0);
 		backgroundCtx = undefined;
-		state = null;
 	});
 
 	pi.registerCommand("subagents", {
 		description: "See every subagent (/subagents) or inspect one (/subagents <name>), find full reports (report <name>), resume them (resume <name>), stop them (stop <name> | stop all), edit the model guide (guide), or see runs by model (stats)",
-		getArgumentCompletions: (prefix: string) => commandCompletions(prefix, state?.team.list().map((record) => record.name) ?? []),
+		getArgumentCompletions: (prefix: string) => commandCompletions(prefix, host()?.team.list().map((record) => record.name) ?? []),
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const [verb, ...rest] = args.trim().split(/\s+/);
 			if (verb === "guide") return editGuide(ctx);
@@ -507,6 +307,7 @@ export default function subagents(pi: ExtensionAPI) {
 				const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
 				return ctx.ui.notify(`Subagent runs by model (${file}):\n${statsText(statsByModel(lines), formatTime, formatMoney)}`, "info");
 			}
+			const state = host();
 			if (!state) return ctx.ui.notify("Subagents are not active in this session.", "info");
 			if (verb === "report") {
 				const name = rest.join(" ");
