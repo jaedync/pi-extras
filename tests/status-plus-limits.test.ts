@@ -35,11 +35,11 @@ test("anthropic unified headers win over api-key triplets and drop overage", () 
 		"anthropic-ratelimit-unified-5h-utilization": "0.25",
 		"anthropic-ratelimit-unified-7d-utilization": "60",
 		"anthropic-ratelimit-unified-overage-utilization": "0.9",
-		"anthropic-ratelimit-unified-reset": "2000000000",
-	});
+		"anthropic-ratelimit-unified-reset": "1800003600",
+	}, NOW);
 	assert.deepEqual(unified, [
-		{ label: "7d", windowSeconds: 604800, usedPct: 60, resetMs: 2_000_000_000_000 },
-		{ label: "5h", windowSeconds: 18000, usedPct: 25, resetMs: 2_000_000_000_000 },
+		{ label: "7d", windowSeconds: 604800, usedPct: 60, resetMs: 1_800_003_600_000 },
+		{ label: "5h", windowSeconds: 18000, usedPct: 25, resetMs: 1_800_003_600_000 },
 	]);
 	const triplets = parseAnthropicLimits({
 		"anthropic-ratelimit-tokens-limit": "1000",

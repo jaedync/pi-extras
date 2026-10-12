@@ -1,6 +1,6 @@
 /** Pure helpers for status-plus: money, time, quota shapes, catalog cost. */
 
-import { dateFormat, dateMs } from "./date-format.ts";
+import { dateFormat, dateMs, resetTimeMs } from "./date-format.ts";
 
 /**
  * "window": a percentage against a rolling quota with a hard reset.
@@ -322,7 +322,7 @@ export function parseProxyQuota(body: unknown): LimitEntry[] {
 			const bucket = raw as ProxyQuotaBucket;
 			if (typeof bucket.type !== "string" || typeof bucket.utilization !== "number") continue;
 			if (!Number.isFinite(bucket.utilization)) continue;
-			const resetMs = typeof bucket.resetsAt === "number" ? dateMs(bucket.resetsAt) : undefined;
+			const resetMs = typeof bucket.resetsAt === "number" ? resetTimeMs(bucket.resetsAt) : undefined;
 			const { family } = quotaKeyParts(bucket.type);
 			entries.push({
 				label: quotaLabel(bucket.type),

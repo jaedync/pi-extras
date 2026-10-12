@@ -81,8 +81,8 @@ test("a small numeric reset is a countdown in seconds, not a time in 1970", () =
 	}, NOW);
 	assert.equal(pair.resetMs, NOW + 500);
 	// Epoch seconds and milliseconds keep their meaning.
-	const [epoch] = parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "3", "x-ratelimit-reset": "2000000000" }, NOW);
-	assert.equal(epoch.resetMs, 2_000_000_000_000);
+	const [epoch] = parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "3", "x-ratelimit-reset": "1800003600" }, NOW);
+	assert.equal(epoch.resetMs, 1_800_003_600_000);
 	const [negative] = parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "3", "x-ratelimit-reset": "-5" }, NOW);
 	assert.equal(negative.resetMs, undefined);
 });
@@ -97,4 +97,22 @@ test("a remaining count outside 0..limit gives no percentage", () => {
 	}
 	const [full] = parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "100" }, NOW);
 	assert.equal(full.usedPct, 0);
+});
+
+// An epoch in microseconds (about 1.8e15) is a valid Date some 56,000 years ahead.
+test("an epoch reset more than 400 days ahead is dropped as a misread unit", () => {
+	const micro = String(NOW * 1000);
+	assert.equal(parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "3", "x-ratelimit-reset": micro }, NOW)[0].resetMs, undefined);
+	assert.equal(parseAnthropicLimits({ "anthropic-ratelimit-unified-5h-utilization": "0.5", "anthropic-ratelimit-unified-5h-reset": micro }, NOW)[0].resetMs, undefined);
+	assert.equal(parseProxyQuota({ buckets: [{ type: "five_hour", utilization: 0.5, resetsAt: NOW * 1000 }] })[0].resetMs, undefined);
+	// A monthly reset a month ahead stays.
+	const month = String(Math.round((NOW + 31 * 86_400_000) / 1000));
+	assert.equal(parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "3", "x-ratelimit-reset": month }, NOW)[0].resetMs, Number(month) * 1000);
+});
+
+test("header percentages stay within 0..100", () => {
+	const unified = parseAnthropicLimits({ "anthropic-ratelimit-unified-5h-utilization": "-0.5", "anthropic-ratelimit-unified-7d-utilization": "250" }, NOW);
+	assert.deepEqual(unified.map((entry) => entry.usedPct).sort((a, b) => (a ?? 0) - (b ?? 0)), [0, 100]);
+	const codex = parseCodexLimits({ "x-codex-primary-used-percent": "-3", "x-codex-secondary-used-percent": "140" }, NOW);
+	assert.deepEqual(codex.map((entry) => entry.usedPct), [0, 100]);
 });

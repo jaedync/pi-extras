@@ -21,7 +21,7 @@ import {
 	windowLabel,
 	type LimitEntry,
 } from "./status-plus-logic.ts";
-import { dateMs } from "./date-format.ts";
+import { dateMs, resetTimeMs } from "./date-format.ts";
 
 export interface PollerContext {
 	model?: { provider: string; baseUrl?: string };
@@ -72,7 +72,8 @@ function parseResetHeader(value: string | undefined, now: number): number | unde
 	const numeric = Number(value);
 	if (Number.isFinite(numeric)) {
 		if (numeric < 0) return undefined;
-		return dateMs(numeric < DELTA_SECONDS_MAX ? now + numeric * 1000 : toEpochMs(numeric));
+		// An epoch's unit is a guess; a countdown's is not.
+		return numeric < DELTA_SECONDS_MAX ? dateMs(now + numeric * 1000) : resetTimeMs(toEpochMs(numeric), now);
 	}
 	const iso = Date.parse(value);
 	return Number.isFinite(iso) ? iso : undefined;
@@ -81,7 +82,12 @@ function parseResetHeader(value: string | undefined, now: number): number | unde
 /** Used share of a limit/remaining pair; a remaining count outside 0..limit is not a reading. */
 function pairUsedPct(limit: number, remaining: number): number | undefined {
 	if (!(limit > 0) || remaining < 0 || remaining > limit) return undefined;
-	return Math.min(100, Math.max(0, ((limit - remaining) / limit) * 100));
+	return clampPct(((limit - remaining) / limit) * 100);
+}
+
+/** A header that reads -3 or 140 means the window is unused or spent, not more. */
+function clampPct(pct: number): number {
+	return Math.min(100, Math.max(0, pct));
 }
 
 /** Highest-pressure entries first, capped to keep the line compact. */
@@ -93,8 +99,9 @@ export function topEntries(entries: LimitEntry[], max = 3): LimitEntry[] {
 export function parseCodexLimits(headers: Record<string, string>, now = Date.now()): LimitEntry[] {
 	const entries: LimitEntry[] = [];
 	for (const [kind, fallbackLabel] of [["primary", "5h"], ["secondary", "7d"]] as const) {
-		const usedPct = parseNumberHeader(headers[`x-codex-${kind}-used-percent`]);
-		if (usedPct === undefined) continue;
+		const reported = parseNumberHeader(headers[`x-codex-${kind}-used-percent`]);
+		if (reported === undefined) continue;
+		const usedPct = clampPct(reported);
 		const windowMinutes = parseNumberHeader(headers[`x-codex-${kind}-window-minutes`]);
 		const resetSeconds =
 			parseNumberHeader(headers[`x-codex-${kind}-resets-in-seconds`]) ??
@@ -125,7 +132,7 @@ export function parseAnthropicLimits(headers: Record<string, string>, now = Date
 		unified.push({
 			label: match[1],
 			...(quotaWindowSeconds(match[1]) !== undefined ? { windowSeconds: quotaWindowSeconds(match[1]) } : {}),
-			usedPct: raw <= 1 ? raw * 100 : raw,
+			usedPct: clampPct(raw <= 1 ? raw * 100 : raw),
 			resetMs: parseResetHeader(headers[`anthropic-ratelimit-unified-${match[1]}-reset`], now) ?? unifiedReset,
 		});
 	}
