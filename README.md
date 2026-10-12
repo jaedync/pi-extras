@@ -1130,16 +1130,20 @@ host, set `cookies` to a `cookies.txt` file from a signed-in browser, or set
 a copy of the file in the pull folder, not the file itself.
 
 The install steps and the media commands get a minimal environment: the path,
-the home folder, the locale, proxy and certificate settings, and `UV_`,
-`PIP_` and `npm_config_` settings. They do not get other variables, such as
-API keys.
+the home folder, the locale, and the proxy and certificate settings. They do
+not get other variables, such as API keys. Only the installers (`uv`, `pip`,
+`git` and `npm`) also get the `UV_`, `PIP_`, `npm_config_` and `NPM_CONFIG_`
+settings, because a private package index needs them. yt-dlp, the media helper
+and the token provider do not get a variable whose name contains `TOKEN`,
+`PASSWORD`, `AUTH`, `SECRET` or `KEY`.
 
 ### Settings
 
 Put these in the `linkContext` section of `pi-extras.json`:
 
 - `refreshDays` (default `3`): the days between updates of the video tools.
-  `0` stops updates.
+  `0` stops the scheduled updates. A new pi-extras version that changes the
+  list of video packages still installs them again.
 - `proxy`: a proxy URL for yt-dlp and the YouTube transcript client, for
   example `socks5://host:1080`.
 - `cookies`: the path to a Netscape `cookies.txt` file for yt-dlp.

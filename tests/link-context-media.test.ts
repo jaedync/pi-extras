@@ -7,7 +7,7 @@ import test from "node:test";
 import { sampleTimes, sheetColumns } from "../lib/link-context/media/frames.ts";
 import { sniffImage } from "../lib/link-context/media/image-bytes.ts";
 import { fetchImages, imageLink, imageLinks, prepareImage, sized } from "../lib/link-context/media/images.ts";
-import { asrPlan, bgutilDue, ensureMedia, HELPER, packagesDue, PACKAGES, readState, toolEnv, writeState } from "../lib/link-context/media/provision.ts";
+import { asrPlan, bgutilDue, ensureMedia, HELPER, packagesDue, PACKAGES, readState, toolEnv, installEnv, writeState } from "../lib/link-context/media/provision.ts";
 import { clipFor, HOST_BLOCKED, keyName, formatTranscript, header, prunePulls, pullDir, pullVideo, sampleFor, thumbnailUrl, validTimes, videoComments, youtubeId, type VideoDeps, type VideoInfo } from "../lib/link-context/media/video.ts";
 import { writeFileSync } from "node:fs";
 import { gifHeader, jpegHeader, png, pngClaiming, webpHeader } from "./support/image-bytes.ts";
@@ -247,8 +247,11 @@ test("provisioning state: token-provider retry, tag check, child environment", (
 	} finally {
 		rmSync(home, { recursive: true, force: true });
 	}
-	const env = toolEnv({ PATH: "/bin", HOME: "/h", HTTPS_PROXY: "http://p", ANTHROPIC_API_KEY: "k", GITHUB_TOKEN: "t", UV_INDEX_URL: "u", AWS_SECRET_ACCESS_KEY: "s" });
-	assert.deepEqual(env, { PATH: "/bin", HOME: "/h", HTTPS_PROXY: "http://p", UV_INDEX_URL: "u" });
+	const parent = { PATH: "/bin", HOME: "/h", HTTPS_PROXY: "http://p", ANTHROPIC_API_KEY: "k", GITHUB_TOKEN: "t", UV_INDEX_URL: "u", UV_INDEX_PRIVATE_PASSWORD: "pw", PIP_INDEX_URL: "i", npm_config__authToken: "nt", NPM_CONFIG_REGISTRY: "r", AWS_SECRET_ACCESS_KEY: "s", XDG_AUTH_DIR: "/a", HF_HOME: "/hf" };
+	// Private package indexes need their credentials, so only the installers get them.
+	assert.deepEqual(installEnv(parent), { PATH: "/bin", HOME: "/h", HTTPS_PROXY: "http://p", UV_INDEX_URL: "u", UV_INDEX_PRIVATE_PASSWORD: "pw", PIP_INDEX_URL: "i", npm_config__authToken: "nt", NPM_CONFIG_REGISTRY: "r", XDG_AUTH_DIR: "/a", HF_HOME: "/hf" });
+	// yt-dlp, the helper and the token script read pages from the internet; they get no installer settings and no names that look like secrets.
+	assert.deepEqual(toolEnv(parent), { PATH: "/bin", HOME: "/h", HTTPS_PROXY: "http://p", HF_HOME: "/hf" });
 });
 
 test("provisioning state: a broken state file is moved aside and logged; a missing one starts empty", () => {

@@ -56,14 +56,24 @@ export function mediaHome(env: Env = process.env, home = homedir()): string {
 
 export const HELPER = join(dirname(fileURLToPath(import.meta.url)), "helper.py");
 
-/**
- * The environment for yt-dlp, the token script and installers: what they need
- * to run and reach the network, not the API keys in Pi's own environment.
- */
-const PASS_ENV = /^(?:PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_\w+|TZ|TMPDIR|TMP|TEMP|XDG_\w+|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|NODE_EXTRA_CA_CERTS|HF_HOME|HF_HUB_CACHE|UV_\w+|PIP_\w+|npm_config_\w+|NPM_CONFIG_\w+)$/;
+/** What every media process needs to run and reach the network, not the API keys in Pi's own environment. */
+const PASS_ENV = /^(?:PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_\w+|TZ|TMPDIR|TMP|TEMP|XDG_\w+|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|NODE_EXTRA_CA_CERTS|HF_HOME|HF_HUB_CACHE)$/;
+/** Installer settings; a private package index keeps its credentials in them. */
+const INSTALLER_ENV = /^(?:UV_\w+|PIP_\w+|npm_config_\w+|NPM_CONFIG_\w+)$/;
+/** yt-dlp, the helper and the token script read untrusted pages, so no name that looks like a secret reaches them. */
+const SECRET_NAME = /TOKEN|PASSWORD|AUTH|SECRET|KEY/i;
 
+const pick = (env: Env, keep: (name: string) => boolean): Record<string, string> =>
+	Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => keep(entry[0]) && typeof entry[1] === "string"));
+
+/** For uv, pip, git and npm: the base names and the installer settings. */
+export function installEnv(env: Env = process.env): Record<string, string> {
+	return pick(env, (name) => PASS_ENV.test(name) || INSTALLER_ENV.test(name));
+}
+
+/** For the media helper, yt-dlp and the token script: the base names, without any that look like a secret. */
 export function toolEnv(env: Env = process.env): Record<string, string> {
-	return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => PASS_ENV.test(entry[0]) && typeof entry[1] === "string"));
+	return pick(env, (name) => PASS_ENV.test(name) && !SECRET_NAME.test(name));
 }
 
 // The tag reaches git and pip as an argument, so only a plain version passes.
@@ -129,7 +139,7 @@ class Installer {
 		writeFileSync(this.log, `${new Date().toISOString()} $ ${command} ${args.join(" ")}\n`, { flag: "a", mode: 0o600 });
 		const fd = openSync(this.log, "a", 0o600);
 		return new Promise<void>((resolve, reject) => {
-			const env = { ...toolEnv(), ...this.uvEnv(), PATH: nodePath(), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", npm_config_update_notifier: "false" };
+			const env = { ...installEnv(), ...this.uvEnv(), PATH: nodePath(), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", npm_config_update_notifier: "false" };
 			const child = spawn(command, [...args], { cwd: options.cwd, detached: true, stdio: ["ignore", fd, fd], env });
 			const untrack = track(child.pid);
 			let why: string | undefined;
