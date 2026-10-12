@@ -203,3 +203,12 @@ export function afterBlock(record: AgentRecord, get: Lookup): string {
 	const lines = (record.after ?? []).map((name) => endedLine(name, get(name)));
 	return ["## Agents you started after", "You started when these had ended. Read their reports as you need them.", ...lines].join("\n");
 }
+
+/**
+ * The order to stop several agents in: those that have not started go first.
+ * Stopping an agent a held spawn waits for would launch that spawn, only for
+ * the next stop to end it.
+ */
+export function stopOrder<T extends Pick<AgentRecord, "state">>(records: readonly T[]): T[] {
+	return [...records.filter((record) => record.state === "queued"), ...records.filter((record) => record.state !== "queued")];
+}

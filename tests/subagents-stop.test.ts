@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
+import { stopOrder } from "../lib/subagents/after.ts";
+import { stopTool } from "../lib/subagents/tools.ts";
 import { teamHarness } from "./support/team-harness.ts";
 import { type AgentRecord, type ChildHandle, type ChildHooks, type MainDelivery, NO_USAGE, type SpawnRequest } from "../lib/subagents/types.ts";
 
@@ -189,4 +191,23 @@ test("the report of a subagent whose parent failed goes to the nearest live ance
 	assert.match(toTop, /mid \(/, "top hears of its own child's failure");
 	assert.match(toTop, /leaf's parent mid has ended/, "and gets leaf's report too");
 	assert.equal(h.main.filter((delivery) => delivery.kind === "report").length, 0);
+});
+
+test("stop all and a parent's stop end a held after spawn before what it waits for, so it never launches", async () => {
+	const h = teamHarness({ maxDepth: 3 });
+	h.spawn("impl", { name: "impl" }); await flush();
+	h.spawn("review", { name: "review", after: ["impl"] }); await flush();
+	assert.equal(h.team.get("review")!.state, "queued");
+	const all = await (stopTool({ team: h.team }, "main").execute as any)("id", { name: "all" }, undefined, undefined);
+	assert.deepEqual(all.details.stopped.sort(), ["impl", "review"]);
+	h.spawn("lead", { name: "lead" }); await flush();
+	h.spawn("build", { name: "build", parent: "lead" }); await flush();
+	h.spawn("check", { name: "check", parent: "lead", after: ["build"] }); await flush();
+	await h.team.stop("lead");
+	assert.deepEqual(h.launched.map((launch) => launch.name), ["impl", "lead", "build"]);
+});
+
+test("stopOrder puts agents that have not started first", () => {
+	const order = stopOrder([{ name: "a", state: "running" }, { name: "b", state: "queued" }, { name: "c", state: "waiting" }, { name: "d", state: "queued" }] as const);
+	assert.deepEqual(order.map((record) => record.name), ["b", "d", "a", "c"]);
 });

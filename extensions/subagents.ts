@@ -14,6 +14,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme, To
 import type { Component } from "@earendil-works/pi-tui";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { stopOrder } from "../lib/subagents/after.ts";
 import { GUIDE_FILE } from "../lib/subagents/config.ts";
 import type { HostState } from "../lib/subagents/contract.ts";
 import { MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
@@ -325,7 +326,7 @@ export default function subagents(pi: ExtensionAPI) {
 			}
 			if (verb === "stop") {
 				const target = rest.join(" ");
-				const names = target === "all" ? state.team.list().filter((record) => LIVE_STATES.has(record.state) || record.state === "interrupted").map((record) => record.name) : [target];
+				const names = target === "all" ? stopOrder(state.team.list().filter((record) => LIVE_STATES.has(record.state) || record.state === "interrupted")).map((record) => record.name) : [target];
 				for (const name of names) {
 					if (!state.team.get(name)) { ctx.ui.notify(`No subagent named ${name}.`, "warning"); continue; }
 					await state.team.stop(name);

@@ -13,7 +13,7 @@
  * When a child's session is held and when it goes is sessions.ts's to say.
  */
 import { randomUUID } from "node:crypto";
-import { afterBlock, afterError, queuedActivity, waitingFor } from "./after.ts";
+import { afterBlock, afterError, queuedActivity, stopOrder, waitingFor } from "./after.ts";
 import { MAIN, nameFor } from "./names.ts";
 import { reportText } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
@@ -294,7 +294,7 @@ export class Team implements HostTeam {
 		// An interrupted child has no run in this process; its last report stays.
 		const report = () => this.sessions.runText(name) ?? (record.state === "interrupted" ? record.report : undefined);
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: report(), ...this.unreadLeft(name) });
-		for (const child of this.list().filter((entry) => entry.parent === name)) await this.stop(child.name, { by: name });
+		for (const child of stopOrder(this.list().filter((entry) => entry.parent === name))) await this.stop(child.name, { by: name });
 		await handle?.abort().catch(() => undefined);
 		// A message relaunched it during the abort: the new run is what its parent hears of.
 		if (this.launches.get(name) !== launch) {

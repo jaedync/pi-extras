@@ -4,7 +4,7 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { MAX_AFTER, waitingFor } from "./after.ts";
+import { MAX_AFTER, stopOrder, waitingFor } from "./after.ts";
 import { CHECK_TIMEOUT_MINUTES, MAX_CHECK_CHARS, MAX_CHECK_TIMEOUT_MINUTES, MAX_FIX_ROUNDS, mergeCheck } from "./checks.ts";
 import { allowedTools, checkAllowlist } from "./allowlist.ts";
 import { MAX_RUN_MINUTES } from "./budget.ts";
@@ -279,7 +279,7 @@ async function stopAll(team: HostTeam, self: string): Promise<Result> {
 	const mine = team.list().filter((record) => record.parent === self && (LIVE_STATES.has(record.state) || record.state === "interrupted"));
 	if (mine.length === 0) return text("No subagents of yours are running.", { stopped: [] });
 	const stopped: string[] = [];
-	for (const record of mine) if (await team.stop(record.name, { by: self })) stopped.push(record.name);
+	for (const record of stopOrder(mine)) if (await team.stop(record.name, { by: self })) stopped.push(record.name);
 	return text(`Stopped ${stopped.length} ${stopped.length === 1 ? "subagent" : "subagents"}: ${stopped.join(", ")}. Their last messages are in their sessions; no reports follow.`, { stopped });
 }
 
