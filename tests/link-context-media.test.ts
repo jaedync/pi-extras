@@ -12,6 +12,7 @@ import { clipFor, HOST_BLOCKED, keyName, formatTranscript, header, prunePulls, p
 import { writeFileSync } from "node:fs";
 import { gifHeader, jpegHeader, png, pngClaiming, webpHeader } from "./support/image-bytes.ts";
 import { fakeMediaTools } from "./support/fake-media-tools.ts";
+import { runHelper } from "../lib/link-context/media/run.ts";
 import { context } from "./support/link-fetch.ts";
 
 test("frame times are spread evenly and centred in their slots", () => {
@@ -297,22 +298,46 @@ test("ensureMedia with a broken state file installs once, saves the new state, a
 
 const python = ["python3", "python"].find((bin) => spawnSync(bin, ["--version"]).status === 0);
 
-test("helper copies cookies owner-only and removes the copy after the call", { skip: python ? false : "python3 not available" }, () => {
+/** A stand-in for the helper's Python: it records the cookies file it was given, then answers or hangs. */
+function fakePython(dir: string, hang: boolean): string {
+	const script = join(dir, "python");
+	writeFileSync(script, `#!${process.execPath}
+const fs = require("node:fs");
+let body = "";
+process.stdin.on("data", (chunk) => (body += chunk));
+process.stdin.on("end", () => {
+	const request = JSON.parse(body);
+	const stat = fs.statSync(request.cookies);
+	fs.writeFileSync(${JSON.stringify(join(dir, "seen.json"))}, JSON.stringify({ path: request.cookies, mode: (stat.mode & 0o777).toString(8), text: fs.readFileSync(request.cookies, "utf8") }));
+	if (${hang}) setInterval(() => {}, 1000);
+	else process.stdout.write("{}");
+});
+`, { mode: 0o755 });
+	return script;
+}
+
+test("the helper gets a private copy of the cookies, removed when it ends, also when it is killed", { skip: process.platform === "win32" ? "POSIX scripts" : false }, async () => {
 	const dir = mkdtempSync(join(tmpdir(), "link-cookies-"));
 	try {
-		writeFileSync(join(dir, "cookies.txt"), "# Netscape HTTP Cookie File\n");
-		const code = `import sys, os, json; sys.path.insert(0, sys.argv[1]); import helper
-def probe(req):
-    path = helper.private_cookies(req)
-    return {"mode": oct(os.stat(path).st_mode & 0o777), "path": path}
-helper.COMMANDS["probe"] = probe
-sys.argv = ["helper.py", "probe"]
-helper.main()`;
-		const result = spawnSync(python as string, ["-I", "-c", code, dirname(HELPER)], { input: JSON.stringify({ cookies: join(dir, "cookies.txt"), dir }), encoding: "utf8" });
-		assert.equal(result.status, 0, result.stderr);
-		const reply = JSON.parse(result.stdout);
-		assert.equal(reply.mode, "0o600");
-		assert.equal(existsSync(reply.path), false);
+		const jar = join(dir, "cookies.txt");
+		writeFileSync(jar, "# Netscape HTTP Cookie File\n");
+		const seen = () => JSON.parse(readFileSync(join(dir, "seen.json"), "utf8")) as { path: string; mode: string; text: string };
+		const tools = (hang: boolean) => ({ python: fakePython(dir, hang), helper: "helper.py", node: process.execPath, home: dir });
+		await runHelper(tools(false), "info", { cookies: jar }, { timeoutMs: 10_000, cwd: dir });
+		const copy = seen();
+		assert.notEqual(copy.path, jar);
+		assert.equal(copy.mode, "600");
+		assert.equal(copy.text, "# Netscape HTTP Cookie File\n");
+		assert.ok(!copy.path.startsWith(dir), "not in the pull folder");
+		assert.equal(existsSync(dirname(copy.path)), false, "the copy and its folder are gone");
+		rmSync(join(dir, "seen.json"));
+		const controller = new AbortController();
+		const call = runHelper(tools(true), "download", { cookies: jar }, { signal: controller.signal, timeoutMs: 10_000, cwd: dir });
+		while (!existsSync(join(dir, "seen.json"))) await new Promise((resolve) => setTimeout(resolve, 20));
+		controller.abort();
+		await assert.rejects(call);
+		assert.equal(existsSync(dirname(seen().path)), false, "a killed helper leaves no copy");
+		assert.equal(readFileSync(jar, "utf8"), "# Netscape HTTP Cookie File\n", "the user's file is never written");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

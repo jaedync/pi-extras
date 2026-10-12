@@ -55,23 +55,6 @@ class QuietLogger:
         self.warnings.append(str(msg))
 
 
-COOKIE_COPIES = []
-
-
-def private_cookies(req):
-    """A copy of the cookies file: yt-dlp writes its jar back on exit.
-
-    Made owner-only from the start, and removed when the call ends (main()).
-    """
-    source = os.path.expanduser(req["cookies"])
-    target = os.path.join(req.get("dir") or os.getcwd(), f".cookies-{os.getpid()}.txt")
-    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as out, open(source, "rb") as src:
-        shutil.copyfileobj(src, out)
-    COOKIE_COPIES.append(target)
-    return target
-
-
 def ydl_options(req, logger, extra=None):
     opts = {
         "quiet": True,
@@ -90,7 +73,8 @@ def ydl_options(req, logger, extra=None):
     if req.get("proxy"):
         opts["proxy"] = req["proxy"]
     if req.get("cookies"):
-        opts["cookiefile"] = private_cookies(req)
+        # A private copy that the caller (run.ts) made and removes; yt-dlp writes the jar back to it.
+        opts["cookiefile"] = req["cookies"]
     if extra:
         opts.update(extra)
     return opts
@@ -403,12 +387,6 @@ def main():
     except Exception as error:
         message = str(error).strip().splitlines()
         reply, code = {"error": f"{type(error).__name__}: {message[0][:500] if message else ''}"}, 1
-    finally:
-        for path in COOKIE_COPIES:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
     emit(reply, code)
 
 

@@ -1130,7 +1130,8 @@ bot"). Then the result has the title and channel from YouTube's oEmbed, the
 captions if the caption client can still get them, and a note. On a cloud
 host, set `cookies` to a `cookies.txt` file from a signed-in browser, or set
 `proxy`. yt-dlp writes its cookie jar back when it stops, so the tool gives it
-a copy of the file in the pull folder, not the file itself.
+a private copy of the file in a temporary folder, not the file itself. The tool
+removes the copy when the media helper stops, also when it kills the helper.
 
 The install steps and the media commands get a minimal environment: the path,
 the home folder, the locale, and the proxy and certificate settings. They do

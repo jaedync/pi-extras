@@ -1,12 +1,41 @@
 /** Runs one helper.py command: JSON in on stdin, JSON out on stdout, killed with its children on abort or timeout. */
 import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { killGroup, track } from "./children.ts";
 import { nodePath, toolEnv, type Toolchain } from "./provision.ts";
 
 const MAX_STDOUT = 64 * 1024 * 1024;
 
+interface CookieCopy { readonly path: string; readonly remove: () => void }
+
+/**
+ * yt-dlp writes its cookie jar back when it stops, so it gets a copy, owner-only
+ * in a private temporary folder. This side removes the folder when the helper
+ * ends, so a killed helper leaves no copy behind.
+ */
+function copyCookies(source: string): CookieCopy {
+	const file = source.startsWith("~/") ? join(homedir(), source.slice(2)) : source;
+	let text: Buffer;
+	try {
+		text = readFileSync(file);
+	} catch (error) {
+		throw new Error(`linkContext.cookies could not be read: ${(error as Error).message}`);
+	}
+	const dir = mkdtempSync(join(tmpdir(), "pi-link-cookies-"));
+	const path = join(dir, "cookies.txt");
+	writeFileSync(path, text, { mode: 0o600 });
+	return { path, remove: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
 export async function runHelper<T>(toolchain: Toolchain, command: string, request: Record<string, unknown>, options: { signal?: AbortSignal; timeoutMs: number; cwd: string }): Promise<T> {
-	const body = JSON.stringify({ node: toolchain.node, serverHome: toolchain.serverHome, ...request });
+	const cookies = typeof request.cookies === "string" ? copyCookies(request.cookies) : undefined;
+	const body = JSON.stringify({ node: toolchain.node, serverHome: toolchain.serverHome, ...request, cookies: cookies?.path });
+	return spawnHelper<T>(toolchain, command, body, options).finally(() => cookies?.remove());
+}
+
+function spawnHelper<T>(toolchain: Toolchain, command: string, body: string, options: { signal?: AbortSignal; timeoutMs: number; cwd: string }): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		// -I keeps the working directory and user site-packages off sys.path; it also ignores PYTHON*
 		// variables, hence -B and -X utf8 as flags. Its own process group, so a kill reaches the ffmpeg
