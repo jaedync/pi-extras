@@ -53,3 +53,28 @@ test("with an unknown STATUSLINE_TZ the clock, reset labels, usage report and fo
 		rmSync(agentDir, { recursive: true, force: true });
 	}
 });
+
+// With TZ="" ICU reports Etc/Unknown, a zone no formatter accepts.
+test("a system zone no formatter accepts falls back to UTC", () => {
+	assert.deepEqual(resolveTimeZone(undefined, "Etc/Unknown"), { timeZone: "UTC", problem: "the system time zone is not a known time zone; times use UTC" });
+	assert.equal(resolveTimeZone("Not/AZone", "Etc/Unknown").timeZone, "UTC");
+	assert.deepEqual(resolveTimeZone("America/Chicago", "Etc/Unknown"), { timeZone: "America/Chicago" });
+	const agentDir = mkdtempSync(join(tmpdir(), "status-tz-"));
+	try {
+		const script = `
+			const { hhmm, STATUS_TIME_ZONE } = await import(${JSON.stringify(new URL("../lib/status-plus-logic.ts", import.meta.url).href)});
+			const { localTime } = await import(${JSON.stringify(new URL("../lib/usage-time.ts", import.meta.url).href)});
+			const { resetLabel } = await import(${JSON.stringify(new URL("../lib/status-plus-render.ts", import.meta.url).href)});
+			const now = Date.now();
+			hhmm(now); localTime(now); resetLabel(now + 3_600_000, now);
+			console.log(STATUS_TIME_ZONE);
+		`;
+		const env: NodeJS.ProcessEnv = { ...process.env, TZ: "", PI_CODING_AGENT_DIR: agentDir };
+		delete env.STATUSLINE_TZ;
+		const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env });
+		assert.equal(result.status, 0, result.stderr);
+		assert.equal(result.stdout.trim(), "UTC");
+	} finally {
+		rmSync(agentDir, { recursive: true, force: true });
+	}
+});

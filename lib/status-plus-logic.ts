@@ -62,25 +62,34 @@ export interface ModelCost extends CostRates {
 }
 
 const SYSTEM_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+/** For a system zone no formatter accepts: with TZ="" ICU reports Etc/Unknown. */
+const FALLBACK_TIME_ZONE = "UTC";
+
+function knownTimeZone(timeZone: string): boolean {
+	try {
+		new Intl.DateTimeFormat(undefined, { timeZone });
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 /**
- * The zone to show times in, and why a requested one was not used. Every
+ * The zone to show times in, and why the wanted one was not used. Every
  * formatter throws on an unknown zone, and the footer formats on each frame.
  */
-export function resolveTimeZone(requested: string | undefined): { timeZone: string; problem?: string } {
-	if (!requested) return { timeZone: SYSTEM_TIME_ZONE };
-	try {
-		new Intl.DateTimeFormat(undefined, { timeZone: requested });
-		return { timeZone: requested };
-	} catch {
-		return { timeZone: SYSTEM_TIME_ZONE, problem: `STATUSLINE_TZ is not a known time zone; times use ${SYSTEM_TIME_ZONE}` };
-	}
+export function resolveTimeZone(requested: string | undefined, system = SYSTEM_TIME_ZONE): { timeZone: string; problem?: string } {
+	if (requested && knownTimeZone(requested)) return { timeZone: requested };
+	const fallback = knownTimeZone(system) ? system : FALLBACK_TIME_ZONE;
+	if (requested) return { timeZone: fallback, problem: `STATUSLINE_TZ is not a known time zone; times use ${fallback}` };
+	if (fallback !== system) return { timeZone: fallback, problem: `the system time zone is not a known time zone; times use ${fallback}` };
+	return { timeZone: system };
 }
 
 const statusZone = resolveTimeZone(process.env.STATUSLINE_TZ);
 /** Keep clock and reset labels in the user's zone unless explicitly overridden. */
 export const STATUS_TIME_ZONE = statusZone.timeZone;
-/** Why STATUSLINE_TZ was not used, for status-plus to log. */
+/** Why STATUSLINE_TZ or the system zone was not used, for status-plus to log. */
 export const STATUS_TIME_ZONE_PROBLEM = statusZone.problem;
 
 /** At least two decimals; small amounts keep two significant digits ($0.0012). */

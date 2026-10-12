@@ -64,7 +64,8 @@ the package. Removing it does not remove your credentials or change other packag
 
 - `STATUSLINE_TZ`: optional IANA timezone for footer clock/reset labels; defaults
   to the system timezone. An unknown name also gives the system timezone, and
-  Status Plus writes a note in `status-plus.log`.
+  Status Plus writes a note in `status-plus.log`. If the system timezone is not
+  known (for example, with `TZ=""`), times use UTC.
 - `STATUS_PLUS_POLL_LIMITS=0`: disable authenticated quota polling while retaining
   recorded usage and response-header limits. `PI_OFFLINE` also suppresses polling.
   As in Pi, only `PI_OFFLINE=1`, `true` or `yes` turns offline mode on.
