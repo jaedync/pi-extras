@@ -18,7 +18,7 @@ import { HOST_VERSION, type HostActivity, type HostPorts, type HostState, type H
 import type { Route } from "./deliver.ts";
 import type { Launcher } from "./types.ts";
 import { childInstructions, conversationDigest, rosterText } from "./format.ts";
-import { parkHost } from "./host.ts";
+import { closingHost, parkHost } from "./host.ts";
 import { openHost } from "./host-state.ts";
 import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "./models.ts";
 import { recoveryOwner } from "./recovery.ts";
@@ -285,7 +285,11 @@ async function serve(options: ServeOptions): Promise<Served> {
 			await parked!.close("reload");
 		}
 	}
-	if (!adopted) host = open();
+	if (!adopted) {
+		// A host an earlier reload left that timed out may still be letting its children go, and holds the lease until then.
+		await closingHost(ctx.sessionManager);
+		host = open();
+	}
 	return {
 		host: () => host,
 		adopted,

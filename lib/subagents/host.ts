@@ -14,13 +14,17 @@ import type { AgentRecord, ChildHandle, ChildHooks, Launcher } from "./types.ts"
 
 /** How long a parked host waits for the next module; a reload takes well under a second. */
 export const PARK_TIMEOUT_MS = 30_000;
+/** How long a start waits for a parked host that closes on its own; past it, the start goes on and may find the lease still held. */
+const CLOSE_WAIT_MS = 15_000;
 /** Notices kept while parked; any past these are counted, not kept. */
 const HELD_NOTICES = 20;
 
 /** Shared by every evaluation of this package in the process; its members never change shape. */
-interface Registry {
+export interface Registry {
 	generation: number;
 	parked: WeakMap<object, ParkedHost>;
+	/** Parked hosts that closed on their own (timeout, exit), until they have let go of the lease. */
+	closing: WeakMap<object, Promise<void>>;
 }
 
 const REGISTRY = Symbol.for("pi-extras.subagents.host");
@@ -30,6 +34,7 @@ function registry(): Registry {
 	const found = holder[REGISTRY] ??= {};
 	found.generation ??= 0;
 	found.parked ??= new WeakMap();
+	found.closing ??= new WeakMap();
 	return found as Registry;
 }
 
@@ -46,6 +51,21 @@ export function takeParked(session: object): ParkedHost | undefined {
 	return entry;
 }
 
+/**
+ * Settles once the host a reload parked for `session` and nobody claimed has
+ * closed, or after a bound: its close aborts children first and releases the
+ * lease last, so a start that opened the index sooner would find it owned.
+ */
+export async function closingHost(session: object): Promise<void> {
+	const closing = registry().closing.get(session);
+	if (!closing) return;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const bound = new Promise<void>((resolve) => { timer = setTimeout(resolve, CLOSE_WAIT_MS); timer.unref?.(); });
+	// Its own failure is logged where it closed; this start only needs it over.
+	try { await Promise.race([closing.catch(() => undefined), bound]); }
+	finally { clearTimeout(timer); }
+}
+
 /** Leaves `host` for the module Pi loads next; `log` records what happens to it when no module claims it. */
 export function parkHost(session: object, host: HostState, options: { timeoutMs?: number; log(message: string): void }): void {
 	const { parked } = registry();
@@ -58,9 +78,14 @@ export function parkHost(session: object, host: HostState, options: { timeoutMs?
 		process.off("exit", onExit);
 		if (parked.get(session) === entry) parked.delete(session);
 	};
-	const close = async (reason: string) => {
+	const close = (reason: string): Promise<void> => {
 		settle();
-		await host.close(reason);
+		const closing = host.close(reason);
+		const { closing: shelf } = registry();
+		shelf.set(session, closing);
+		const forget = () => { if (shelf.get(session) === closing) shelf.delete(session); };
+		closing.then(forget, forget);
+		return closing;
 	};
 	const timer = setTimeout(() => {
 		options.log(`no module took over the subagents within ${timeoutMs / 1000} s of a /reload, so they were interrupted`);

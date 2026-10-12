@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import type { HostState, ParkedHost } from "../lib/subagents/contract.ts";
 import { HOST_VERSION } from "../lib/subagents/contract.ts";
-import { parkHost, takeParked } from "../lib/subagents/host.ts";
+import { closingHost, parkHost, takeParked } from "../lib/subagents/host.ts";
 import { serveSession } from "../lib/subagents/serve.ts";
 import { hostHarness } from "./support/host-harness.ts";
 
@@ -289,4 +289,25 @@ test("a host that closes while bound hands main the mail it still holds, without
 	assert.equal(h.reports(first, name).length, 1);
 	assert.deepEqual(h.reports(first, name)[0]!.options, { triggerTurn: false }, "a session that ends starts no turn");
 	assert.equal(h.reports(await nextStart(h, "next"), name).length, 0);
+});
+
+test("a start after a parked host timed out waits for its close to let go of the lease, so it can open the index", async () => {
+	const h = setup();
+	const first = h.portsFor("first");
+	// A child whose abort takes a while, as a tool that cleans up does.
+	const launch = first.ports.launcher.launch;
+	const slow = { ...first.ports, launcher: { ...first.ports.launcher, launch: async (...args: Parameters<typeof launch>) => ({ ...(await launch(...args)), abort: () => sleep(150) }) } };
+	const host = h.open({ ...first, ports: slow });
+	h.spawn(host, "Slow to stop");
+	await tick();
+	host.park();
+	const session = {};
+	parkHost(session, host, { timeoutMs: 10, log: () => undefined });
+	await sleep(40);
+	assert.equal(takeParked(session), undefined, "the timeout took it off the shelf");
+	assert.throws(() => h.open(h.portsFor("too-soon")), /already owned/, "its close still holds the lease");
+	await closingHost(session);
+	const next = h.open(h.portsFor("next"));
+	cleanups.push(() => next.close());
+	assert.equal(next.team.list()[0]?.state, "interrupted");
 });

@@ -257,6 +257,26 @@ test("a takeover that throws closes the parked host with its own code, and its c
 	} finally { await p.close(); }
 });
 
+test("a start just after a parked host timed out waits for it to let go of its children, then resumes them", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
+	const p = await parent(copyPackage().root);
+	try {
+		await p.spawn("late", "Work when the reload stalls");
+		await waitingInBash(p, "late");
+		await p.session.reload({ beforeSessionStart: async () => {
+			// What the timeout does: off the shelf, then closed with its own code, still under way as the next start begins.
+			const parked = shelf().get(p.session.sessionManager);
+			shelf().delete(p.session.sessionManager);
+			void parked.close("reload");
+		} });
+		assert.doesNotMatch(p.notices.join("\n"), /owned/);
+		const notice = p.session.messages.filter((m: any) => m.customType === "subagent-restore");
+		assert.equal(notice.length, 1);
+		assert.match(JSON.stringify(notice), /Auto-resuming.*late/);
+		p.release("late");
+		await until("late finishes its resumed run", () => p.record("late")?.state === "idle");
+	} finally { await p.close(); }
+});
+
 test("a shutdown other than a reload interrupts children as before", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
 	const p = await parent(copyPackage().root);
 	await p.spawn("quitter", "Work when Pi quits");
