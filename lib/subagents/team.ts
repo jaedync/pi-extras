@@ -28,6 +28,7 @@ import { checkoutOf } from "./checkout.ts";
 import { bashChangeNotes, EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
 import { stillUnread, unreadToInbox } from "./mailbox.ts";
+import { OpenQuestions } from "./questions.ts";
 import { saveReport } from "./reports.ts";
 import { OpenSessions } from "./sessions.ts";
 import { WorkTrees } from "./work-trees.ts";
@@ -67,21 +68,13 @@ export type SendResult =
 	| { ok: true; delivered: "steered" | "resumed" | "queued" | "replied" | "main" | "inbox"; reply?: string; notice?: string }
 	| { ok: false; error: string };
 
-interface Pending {
-	to: string;
-	resolve(reply: string): void;
-	reject(error: Error): void;
-	timer: ReturnType<typeof setTimeout>;
-}
-
 type Listener = (record: AgentRecord | null) => void;
 
 export class Team implements HostTeam {
 	private readonly records = new Map<string, AgentRecord>();
 	private readonly sessions: OpenSessions;
 	private readonly opening = new Set<Promise<ChildHandle | null>>();
-	/** Open questions by asker; a child may wait on several agents at once. */
-	private readonly questions = new Map<string, Pending[]>();
+	private readonly questions: OpenQuestions;
 	private readonly waiters = new Map<string, Array<(record: AgentRecord) => void>>();
 	private readonly listeners = new Set<Listener>();
 	private readonly queue: string[] = [];
@@ -115,6 +108,8 @@ export class Team implements HostTeam {
 	constructor(options: TeamOptions) {
 		this.options = options;
 		this.now = options.now ?? Date.now;
+		// An asking agent frees its slot for a queued one.
+		this.questions = new OpenQuestions({ replyTimeoutMs: options.replyTimeoutMs, changed: (asker, waitingOn) => { this.showAsking(asker, waitingOn); this.pump(); } });
 		this.budgets = new RunBudgets({ now: this.now, over: (name, reason) => void this.stop(name, { reason }) });
 		this.sessions = new OpenSessions({ launcher: options.launcher, idle: (name) => this.records.get(name)?.state === "idle", warn: options.warn ?? console.warn,
 			...(options.idleReleaseMs !== undefined ? { idleReleaseMs: options.idleReleaseMs } : {}) });
@@ -241,7 +236,7 @@ export class Team implements HostTeam {
 		if (to === from) return { ok: false, error: "That is you." };
 		if (to === EVERYONE) return this.broadcast(from, text, options.expectReply === true);
 		// The user can answer any question, whoever it was put to.
-		const open = this.questions.get(to) ?? [];
+		const open = this.questions.of(to);
 		const pending = from === USER ? open[0] : open.find((question) => question.to === from);
 		if (pending) {
 			pending.resolve(text);
@@ -293,7 +288,7 @@ export class Team implements HostTeam {
 			if (result.ok && from === USER) this.options.deliverToMain({ kind: "relay", from, to, text, answered: false });
 		}
 		if (!result.ok || !options.expectReply) return result;
-		return this.awaitReply(from, to, options.signal);
+		return this.questions.ask(from, to, options.signal);
 	}
 
 	/** The child's messages so far; empty before it starts. */
@@ -325,7 +320,7 @@ export class Team implements HostTeam {
 		for (const child of this.list().filter((entry) => entry.parent === name)) await this.stop(child.name, { by: name });
 		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
 		this.resumePrompts.delete(name);
-		for (const question of this.questions.get(name) ?? []) question.reject(new Error("stopped"));
+		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
 		const handle = this.sessions.get(name);
 		this.ending.add(name);
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.sessions.runText(name), ...this.unreadLeft(name) });
@@ -365,7 +360,7 @@ export class Team implements HostTeam {
 			interruptedBy: reason, interruptionId: randomUUID(), interruptedOwner: owner, interruptionAnnounced: false,
 			autoResumeAttempts: record.autoResumeAttempts ?? 0 });
 		this.queue.splice(0);
-		for (const questions of this.questions.values()) for (const question of questions) question.reject(new Error("interrupted"));
+		this.questions.rejectAll(new Error("interrupted"));
 		for (const [name, waiters] of this.waiters) for (const resolve of waiters) resolve(this.records.get(name)!);
 		this.waiters.clear();
 	}
@@ -473,7 +468,7 @@ export class Team implements HostTeam {
 		this.owesMain.delete(name);
 		const failure = { ...record, reportFile: undefined,
 			report: `Resume launch failed: ${message}. The child remains interrupted; fix the problem and resume it again.` };
-		const asked = this.questions.get(record.parent)?.find((question) => question.to === name);
+		const asked = this.questions.of(record.parent).find((question) => question.to === name);
 		if (asked) asked.resolve(reportText(failure, this.now()));
 		else if (record.parent === MAIN) this.options.deliverToMain({ kind: "report", record: failure });
 		else this.deliverToChild(name, record.parent, reportText(failure, this.now()), true);
@@ -632,7 +627,7 @@ export class Team implements HostTeam {
 		const peerRun = this.peerRuns.delete(name);
 		const quiet = (peerRun || awaited(record, this.list())) && record.state === "idle" && !parentAsked && !owedMain;
 		// A parent waiting on this child's answer gets the report as that answer.
-		const asked = this.questions.get(record.parent)?.find((question) => question.to === name);
+		const asked = this.questions.of(record.parent).find((question) => question.to === name);
 		const silent = this.stoppedByParent.delete(name);
 		if (asked) {
 			asked.resolve(reportText(record, this.now()));
@@ -646,7 +641,7 @@ export class Team implements HostTeam {
 		// Its parent has the report; anyone else it owed an answer gets how its run ended instead.
 		for (const asker of unanswered) this.deliverToChild(name, asker, `${name} ended without answering you. ${reportText(record, this.now())}`, true, `Report from ${name}`);
 		// Anyone else waiting on it would wait out the whole timeout for an answer that can't come.
-		for (const [asker, questions] of this.questions) {
+		for (const [asker, questions] of this.questions.entries()) {
 			if (asker === record.parent) continue;
 			for (const question of questions.filter((open) => open.to === name)) question.reject(new Error(`${name} ended without answering (${record.state}). Continue without its answer, or message it again: a finished agent resumes to handle a message.`));
 		}
@@ -743,40 +738,10 @@ export class Team implements HostTeam {
 		return { ok: true, delivered: "steered" };
 	}
 
-	private awaitReply(from: string, to: string, signal?: AbortSignal): Promise<SendResult> {
-		return new Promise<SendResult>((resolve) => {
-			const done = (result: SendResult) => {
-				clearTimeout(pending.timer);
-				signal?.removeEventListener("abort", onAbort);
-				const rest = (this.questions.get(from) ?? []).filter((question) => question !== pending);
-				if (rest.length > 0) this.questions.set(from, rest);
-				else this.questions.delete(from);
-				this.showAsking(from);
-				resolve(result);
-			};
-			const onAbort = () => done({ ok: false, error: "Stopped waiting for a reply." });
-			const pending: Pending = {
-				to,
-				resolve: (reply) => done({ ok: true, delivered: "replied", reply }),
-				reject: (error) => done({ ok: false, error: error.message }),
-				timer: setTimeout(() => done({
-					ok: false,
-					error: `No reply from ${to} within ${Math.round(this.options.replyTimeoutMs / 60_000)} min. Continue with your best judgment and say so in your report.`,
-				}), this.options.replyTimeoutMs),
-			};
-			this.questions.set(from, [...(this.questions.get(from) ?? []), pending]);
-			this.showAsking(from);
-			// An asking agent frees its slot for a queued one.
-			this.pump();
-			signal?.addEventListener("abort", onAbort, { once: true });
-		});
-	}
-
 	/** An asker's state follows its open questions. */
-	private showAsking(name: string): void {
+	private showAsking(name: string, waitingOn: readonly string[]): void {
 		const current = this.records.get(name);
 		if (!current) return;
-		const waitingOn = (this.questions.get(name) ?? []).map((question) => question.to);
 		if (waitingOn.length > 0) {
 			this.patch(name, { state: "asking", askingWho: waitingOn.join(", "), activity: `asking ${waitingOn.join(", ")}` });
 		} else if (current.state === "asking") {
