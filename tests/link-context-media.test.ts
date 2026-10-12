@@ -436,8 +436,24 @@ test("PI_OFFLINE: no install, no update, no release lookup; an installed toolcha
 	assert.equal(readState(home).packagesAt, 1);
 });
 
-test("the token provider installs its packages without their install scripts", () => {
+test("the token provider installs its packages without their install scripts", { skip: process.platform === "win32" ? "POSIX shell scripts" : false }, async (t) => {
 	assert.ok(NPM_CI_ARGS.includes("--ignore-scripts"));
+	const dir = mkdtempSync(join(tmpdir(), "link-npm-"));
+	const tools = fakeMediaTools(dir, { cloneWorks: true });
+	t.after(() => {
+		tools.restore();
+		rmSync(dir, { recursive: true, force: true });
+	});
+	t.mock.method(globalThis, "fetch", async () => Response.json({ tag_name: "2.0.2" }));
+	const home = join(dir, "media");
+	mkdirSync(join(home, "env", "bin"), { recursive: true });
+	writeFileSync(join(home, "env", "bin", "python"), "");
+	writeState(home, { packagesAt: Date.now(), packages: PACKAGES.join(" "), bgutilTag: "2.0.2" });
+	const toolchain = await ensureMedia({ refreshDays: 3, progress: () => {}, home });
+	assert.equal(toolchain.serverHome, undefined, "the build stopped at npm ci, which has no lock file to install");
+	const log = readFileSync(join(home, "provision.log"), "utf8");
+	assert.match(log, /\$ \S*npm ci --ignore-scripts --no-audit --no-fund --loglevel=error\n/);
+	assert.match(readState(home).bgutilError ?? "", /npm ci/);
 });
 
 test("video: two pulls of one link at the same time each get the download, and only one folder is kept", async () => {
