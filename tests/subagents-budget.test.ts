@@ -1,12 +1,25 @@
-import { test } from "node:test";
+import { type TestContext, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import { Team, type TeamOptions } from "../lib/subagents/team.ts";
 import { reportText } from "../lib/subagents/format.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, MainDelivery, SpawnRequest, Usage } from "../lib/subagents/types.ts";
 
-/** A budget of this many minutes runs out in about 60 ms. */
+/** A budget of this many minutes runs out after 60 ms of work. */
 const SHORT = 0.001;
+const SHORT_MS = 60;
+
+/**
+ * The budget's clock and timers, faked: a loaded machine can't fire a real
+ * 60 ms timer late, so each test moves time itself. Promises still settle.
+ */
+function fakeClock(t: TestContext): (ms: number) => Promise<void> {
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+	return async (ms) => {
+		t.mock.timers.tick(ms);
+		for (let i = 0; i < 6; i++) await tick();
+	};
+}
 const usage = (cost: number): Usage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost });
 
 /** Children that work until stopped; the test drives their usage and transcript. */
@@ -51,12 +64,15 @@ function harness(options: Partial<TeamOptions> = {}) {
 	return { team, hooks, prompts, aborted, main, spawn, say, finish };
 }
 
-test("a run over its time budget is stopped, and main gets a report that says why", async () => {
+test("a run over its time budget is stopped, and main gets a report that says why", async (t) => {
+	const pass = fakeClock(t);
 	const h = harness();
 	const name = h.spawn("slow", { maxMinutes: SHORT });
 	await tick(); await tick();
 	h.say(name, "Halfway through the survey.");
-	await sleep(150);
+	await pass(SHORT_MS - 1);
+	assert.equal(h.team.get(name)!.state, "running", "not yet over");
+	await pass(1);
 	const record = h.team.get(name)!;
 	assert.equal(record.state, "stopped");
 	assert.equal(record.stopReason, `over its ${SHORT}-minute budget`);
@@ -68,17 +84,21 @@ test("a run over its time budget is stopped, and main gets a report that says wh
 	assert.match(text, /Last message before it stopped:\nHalfway through the survey\./);
 });
 
-test("time spent asking does not count against the budget", async () => {
+test("time spent asking does not count against the budget", async (t) => {
+	const pass = fakeClock(t);
 	const h = harness();
 	const name = h.spawn("asker", { maxMinutes: SHORT });
 	await tick(); await tick();
+	await pass(SHORT_MS / 2);
 	const asked = h.team.send(name, "main", "Which branch?", { expectReply: true });
-	await sleep(150);
+	await pass(SHORT_MS * 10);
 	assert.equal(h.team.get(name)?.state, "asking", "blocked on main, so its clock is paused");
 	await h.team.send("main", name, "main");
 	assert.ok((await asked).ok);
 	assert.equal(h.team.get(name)?.state, "running");
-	await sleep(150);
+	await pass(SHORT_MS / 2 - 1);
+	assert.equal(h.team.get(name)?.state, "running", "the time before the question still counts");
+	await pass(1);
 	assert.equal(h.team.get(name)?.state, "stopped", "the clock runs again once it works");
 });
 
@@ -104,20 +124,25 @@ test("a run over its cost budget is stopped; cost counts this run only", async (
 	await h.team.close();
 });
 
-test("a resumed run gets a fresh time budget", async () => {
+test("a resumed run gets a fresh time budget", async (t) => {
+	const pass = fakeClock(t);
 	const h = harness();
 	const name = h.spawn("again", { maxMinutes: SHORT });
-	await sleep(150);
+	await tick(); await tick();
+	await pass(SHORT_MS);
 	assert.equal(h.team.get(name)?.state, "stopped");
 	assert.ok((await h.team.send("main", name, "Continue.")).ok);
 	await tick(); await tick();
 	assert.equal(h.team.get(name)?.state, "running");
-	await sleep(150);
+	await pass(SHORT_MS - 1);
+	assert.equal(h.team.get(name)?.state, "running", "the new run's clock starts at zero");
+	await pass(1);
 	assert.equal(h.team.get(name)?.state, "stopped");
 	assert.equal(h.main.filter((delivery) => delivery.kind === "report").length, 2);
 });
 
-test("over budget stops its subagents silently and wakes its own parent with the report", async () => {
+test("over budget stops its subagents silently and wakes its own parent with the report", async (t) => {
+	const pass = fakeClock(t);
 	const h = harness();
 	const lead = h.spawn("lead");
 	await tick(); await tick();
@@ -126,7 +151,7 @@ test("over budget stops its subagents silently and wakes its own parent with the
 	const nested = h.spawn("nested", { parent: helper });
 	await tick(); await tick();
 	h.say(helper, "Found two of three.");
-	await sleep(150);
+	await pass(SHORT_MS);
 	assert.equal(h.team.get(helper)?.state, "stopped");
 	assert.equal(h.team.get(nested)?.state, "stopped");
 	assert.equal(h.team.get(nested)?.stopReason, undefined, "stopped by its parent, not by its own budget");
@@ -135,7 +160,8 @@ test("over budget stops its subagents silently and wakes its own parent with the
 	await h.team.close();
 });
 
-test("a parent waiting on its subagents is woken by one's over-budget report", async () => {
+test("a parent waiting on its subagents is woken by one's over-budget report", async (t) => {
+	const pass = fakeClock(t);
 	const h = harness();
 	const lead = h.spawn("lead");
 	await tick(); await tick();
@@ -144,7 +170,7 @@ test("a parent waiting on its subagents is woken by one's over-budget report", a
 	h.finish(lead);
 	await tick();
 	assert.equal(h.team.get(lead)?.state, "waiting");
-	await sleep(150);
+	await pass(SHORT_MS);
 	assert.equal(h.team.get(helper)?.state, "stopped");
 	assert.equal(h.team.get(lead)?.state, "running", "the report resumes it");
 	assert.match(h.prompts.get(lead)!.at(-1)!, /helper \(test\/model\) was stopped after \d+s: over its 0\.001-minute budget\./);
