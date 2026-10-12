@@ -138,6 +138,8 @@ export interface AgentRecord {
 	unread?: string[];
 	/** Every switch to a fallback model, oldest first; `model` is the one it runs on now. */
 	fallbacks?: FallbackStep[];
+	/** Agents that must end before its first run starts (after.ts); on the record, so a restore or /reload keeps the wait. */
+	after?: string[];
 }
 
 export interface SpawnRequest {
@@ -156,6 +158,8 @@ export interface SpawnRequest {
 	group?: string;
 	maxMinutes?: number;
 	maxCost?: number;
+	/** Agents that must end before it starts (after.ts). */
+	after?: string[];
 }
 
 /** What the team needs from a running child session. */

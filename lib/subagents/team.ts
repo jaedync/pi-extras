@@ -19,6 +19,7 @@
  * When a child's session is held and when it goes is sessions.ts's to say.
  */
 import { randomUUID } from "node:crypto";
+import { afterActivity, afterBlock, afterError, awaited, waitingFor, waitsOnAsker } from "./after.ts";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText, resumeWarning } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
@@ -123,6 +124,8 @@ export class Team implements HostTeam {
 		return this.records.get(name);
 	}
 
+	private readonly lookup = (name: string): AgentRecord | undefined => this.records.get(name);
+
 	list(): AgentRecord[] {
 		return [...this.records.values()];
 	}
@@ -168,6 +171,9 @@ export class Team implements HostTeam {
 		if (request.isolation !== undefined && request.isolation !== "shared" && request.isolation !== "worktree") return { ok: false, error: "Unknown isolation. Use shared or worktree." };
 		const badBudget = budgetError("maxMinutes", request.maxMinutes) ?? budgetError("maxCost", request.maxCost);
 		if (badBudget) return { ok: false, error: badBudget };
+		const badAfter = request.after?.length ? afterError(request.after, request.parent, this.lookup, () => this.knownNames()) : undefined;
+		if (badAfter) return { ok: false, error: badAfter };
+		const after = request.after?.length ? [...new Set(request.after)] : undefined;
 		const maxMinutes = request.maxMinutes ?? this.options.runBudget?.minutes;
 		const maxCost = request.maxCost ?? this.options.runBudget?.cost;
 		const placed = placeChild(request, parent ?? null, name, { ...(this.options.cwd ? { cwd: this.options.cwd } : {}), checkout: () => this.sessionCheckout() });
@@ -187,6 +193,7 @@ export class Team implements HostTeam {
 			...(checkout ? { checkout } : {}),
 			...(maxMinutes !== undefined ? { maxMinutes } : {}),
 			...(maxCost !== undefined ? { maxCost } : {}),
+			...(after ? { after } : {}),
 		};
 		this.put(record);
 		this.queue.push(name);
@@ -254,6 +261,9 @@ export class Team implements HostTeam {
 		const body = options.expectReply ? questionText(from, text) : noteText(from, text);
 		const said = `${options.expectReply ? "Question" : "Message"} from ${from}: ${text}`;
 		if (options.expectReply && !waits && asker) {
+			const target = this.records.get(to);
+			const waitsOn = target ? waitsOnAsker(target, from, this.lookup, (name, ancestor) => this.under(name, ancestor)) : [];
+			if (waitsOn.length > 0) return { ok: false, error: `${to} starts after ${waitsOn.join(", ")} ${waitsOn.length === 1 ? "ends" : "end"}, so it can't answer you first. Send a note instead (no expectReply); it reads it when it starts.` };
 			const result = this.deliverToChild(from, to, body, true, said, options.automatic);
 			if (result.ok) this.patch(from, { owed: [...new Set([...(this.records.get(from)?.owed ?? []), to])] });
 			return result;
@@ -393,11 +403,28 @@ export class Team implements HostTeam {
 
 	private pump(): void {
 		let active = this.list().filter((record) => ACTIVE_STATES.has(record.state)).length;
+		const held: string[] = [];
 		while (!this.closed && active < this.options.maxConcurrent && this.queue.length > 0) {
 			const name = this.queue.shift()!;
-			if (this.records.get(name)?.state !== "queued") continue;
+			const record = this.records.get(name);
+			if (record?.state !== "queued") continue;
+			// A spawn waiting for its after agents keeps its place in line but holds no slot.
+			if (waitingFor(record, this.lookup).length > 0) { held.push(name); continue; }
 			active++;
 			void this.start(name);
+		}
+		this.queue.unshift(...held);
+		this.showWaits();
+	}
+
+	/** A queued spawn says which after agents it still waits for, as the widget shows it. */
+	private showWaits(): void {
+		for (const name of this.queue) {
+			const record = this.records.get(name);
+			if (record?.state !== "queued") continue;
+			const waits = waitingFor(record, this.lookup);
+			const activity = waits.length > 0 ? afterActivity(waits) : record.activity?.startsWith("after ") ? "queued" : record.activity;
+			if (activity !== record.activity) this.patch(name, { activity });
 		}
 	}
 
@@ -423,7 +450,8 @@ export class Team implements HostTeam {
 		const saved = this.records.get(name)!;
 		const resumed = this.resumePrompts.get(name);
 		const unstarted = saved.runs === 0 || !handle.messages().some((message) => (message as { role?: string }).role === "user");
-		const prompt = resumed ? `${unstarted ? `${saved.task}\n\n` : ""}${resumed}` : saved.task;
+		const first = saved.runs === 0 && saved.after?.length ? `\n\n${afterBlock(saved, this.lookup)}` : "";
+		const prompt = `${resumed ? `${unstarted ? `${saved.task}\n\n` : ""}${resumed}` : saved.task}${first}`;
 		this.resumePrompts.delete(name);
 		await this.run(name, [prompt, ...inbox].join("\n\n"));
 	}
@@ -600,7 +628,9 @@ export class Team implements HostTeam {
 			else unanswered.push(asker);
 		}
 		// A peer's run that ended quietly is news for the parent's next turn, unless it answers the parent or main.
-		const quiet = this.peerRuns.delete(name) && record.state === "idle" && !parentAsked && !owedMain;
+		// So is one that a spawn of the same parent waits for: the parent hears of it through that spawn's report.
+		const peerRun = this.peerRuns.delete(name);
+		const quiet = (peerRun || awaited(record, this.list())) && record.state === "idle" && !parentAsked && !owedMain;
 		// A parent waiting on this child's answer gets the report as that answer.
 		const asked = this.questions.get(record.parent)?.find((question) => question.to === name);
 		const silent = this.stoppedByParent.delete(name);

@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { busyInGroup } from "./after.ts";
 import { HOST_VERSION, type HeldMail, type HostActivity, type HostPorts, type HostState } from "./contract.ts";
 import type { SubagentsConfig } from "./config.ts";
 import { MainMail } from "./deliver.ts";
@@ -146,7 +147,7 @@ function mailFor(config: SubagentsConfig, ports: HostPorts, team: () => Team): M
 	return new MainMail({
 		batchMs: config.batchMs,
 		groupWaitMs: config.groupWaitMs,
-		groupBusy: (group, except) => team().list().some((r) => r.group === group && r.name !== except && LIVE_STATES.has(r.state)),
+		groupBusy: (group, except) => busyInGroup(team().list(), group, except),
 		port: { send: (message, options) => ports.send(message, options) },
 		route: () => ports.route(),
 		onChange: () => ports.mailChanged(),

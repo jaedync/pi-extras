@@ -4,6 +4,7 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { MAX_AFTER, waitingFor } from "./after.ts";
 import { allowedTools, checkAllowlist } from "./allowlist.ts";
 import { MAX_RUN_MINUTES } from "./budget.ts";
 import { childMessageDescription, mainMessageDescription, stopDescription, subagentDescription } from "./describe.ts";
@@ -52,6 +53,7 @@ const subagentParams = Type.Object({
 	wait: Type.Optional(Type.Boolean({ description: "Block until it finishes and return its report. Only for short checks." })),
 	maxMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: MAX_RUN_MINUTES, description: "Minutes one run may work before it is stopped; default from config." })),
 	maxCost: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "US dollars one run may spend before it is stopped; default from config." })),
+	after: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 40 }), { minItems: 1, maxItems: MAX_AFTER, description: "Agents that must end first. It waits queued, then starts with the paths of their reports." })),
 }, { additionalProperties: false });
 
 const messageParams = Type.Object({
@@ -66,7 +68,7 @@ const stopParams = Type.Object({
 
 interface SubagentInput {
 	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; isolation?: "shared" | "worktree"; cwd?: string; context?: string; wait?: boolean;
-	maxMinutes?: number; maxCost?: number; tools?: string[];
+	maxMinutes?: number; maxCost?: number; tools?: string[]; after?: string[];
 }
 interface MessageInput { to: string; text: string; expectReply?: boolean }
 
@@ -80,9 +82,11 @@ function spawnTools(tc: ToolContext, parent: string, requested: readonly string[
 	return checked.tools;
 }
 
-function spawnSummary(record: AgentRecord): string {
+function spawnSummary(record: AgentRecord, team: HostTeam): string {
 	const thinking = record.thinking ? `, thinking ${record.thinking}` : "";
-	const where = record.state === "queued" ? "It is queued behind other subagents and starts when a slot frees." : "It is running in the background.";
+	const waits = waitingFor(record, (name) => team.get(name));
+	const where = waits.length > 0 ? `It waits for ${waits.join(", ")} to end, then starts.`
+		: record.state === "queued" ? "It is queued behind other subagents and starts when a slot frees." : "It is running in the background.";
 	const place = record.worktree ? ` in the worktree ${record.worktree.path}` : record.cwd ? ` in ${record.cwd}` : "";
 	return `Started ${record.name} on ${record.model}${thinking}${place}. ${where} Its report will arrive as a message. Talk to it with message({ to: "${record.name}", text }).`;
 }
@@ -113,6 +117,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 				...(params.maxMinutes !== undefined ? { maxMinutes: params.maxMinutes } : {}),
 				...(params.maxCost !== undefined ? { maxCost: params.maxCost } : {}),
 				...(tools ? { tools } : {}),
+				...(params.after ? { after: params.after } : {}),
 				task: params.task.trim(), parent, model: resolved.choice.ref, readOnly: params.readOnly === true, fork,
 				blocking: params.wait === true, ...(params.name ? { name: params.name } : {}), ...(thinking ? { thinking } : {}),
 			});
@@ -125,7 +130,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 				...(record.worktree ? { worktree: { ...record.worktree } } : {}),
 				...(record.cwd ? { cwd: record.cwd } : {}),
 			};
-			if (params.wait !== true) return text(spawnSummary(record), details);
+			if (params.wait !== true) return text(spawnSummary(record, tc.team), details);
 			return await waitFor(tc, record.name, details, signal, onUpdate as ((update: Result) => void) | undefined);
 		},
 	} as ToolDefinition;
