@@ -228,13 +228,17 @@ export class RunChecks {
 	 * check runs in `to`'s directory and sandbox, which a peer must not choose.
 	 */
 	set(from: string, to: string, update: CheckUpdate): string | undefined {
+		const error = this.refusal(from, to, update);
+		if (!error) this.host.patch(to, { check: mergeCheck(update, this.host.get(to)!.check) });
+		return error;
+	}
+
+	/** Why `from` may not set this check on `to`; undefined when it may. A message checks this first and sets the check only once it is delivered. */
+	refusal(from: string, to: string, update: CheckUpdate): string | undefined {
 		const target = this.host.get(to);
 		if (!target) return `No agent named ${to}. ${this.host.known()}`;
 		if (from !== MAIN && !this.host.under(to, from)) return `Only main or an agent ${to} works for can set its check.`;
-		const error = checkError(update, target);
-		if (error) return error;
-		this.host.patch(to, { check: mergeCheck(update, target.check) });
-		return undefined;
+		return checkError(update, target);
 	}
 
 	/** Runs `name`'s check, if it has one: the prompt of a fix round when it failed and the run has one left. */

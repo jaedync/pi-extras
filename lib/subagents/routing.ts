@@ -86,10 +86,15 @@ export class Routing {
 		const { host } = this;
 		if (host.closed()) return { ok: false, error: "The session is shutting down." };
 		if (to === from) return { ok: false, error: "That is you." };
-		const badCheck = options.check ? host.checks.set(from, to, options.check) : undefined;
+		const badCheck = options.check ? host.checks.refusal(from, to, options.check) : undefined;
 		if (badCheck) return { ok: false, error: badCheck };
+		// A message that is refused leaves the target's check as it was.
+		const keepCheck = (result: SendResult): SendResult => {
+			if (result.ok && options.check) host.checks.set(from, to, options.check);
+			return result;
+		};
 		if (to === EVERYONE) return this.broadcast(from, text, options.expectReply === true);
-		if (this.answers(from, to, text)) return { ok: true, delivered: "replied" };
+		if (this.answers(from, to, text)) return keepCheck({ ok: true, delivered: "replied" });
 		// Its parent is blocked on this agent's report: a note would only land after it, and a
 		// question could never be answered, so the question ends the wait instead.
 		const asker = host.get(from);
@@ -100,9 +105,9 @@ export class Routing {
 		// A child waits only on main and its parent: they never wait on it, so no loop of waiting
 		// agents can form. Anyone else answers by message, which wakes it.
 		const waits = options.expectReply === true && (to === MAIN || to === asker?.parent);
-		if (options.expectReply && !waits && asker) return this.askPeer(from, to, text, options.automatic);
-		if (from === MAIN && options.expectReply) return this.mainAsks(to, text, options.automatic);
-		const result = to === MAIN ? this.toMain(from, text, options.expectReply === true) : this.toChild(from, to, text, options.expectReply === true, options.automatic);
+		if (options.expectReply && !waits && asker) return keepCheck(this.askPeer(from, to, text, options.automatic));
+		if (from === MAIN && options.expectReply) return keepCheck(this.mainAsks(to, text, options.automatic));
+		const result = keepCheck(to === MAIN ? this.toMain(from, text, options.expectReply === true) : this.toChild(from, to, text, options.expectReply === true, options.automatic));
 		if (!result.ok || !options.expectReply) return result;
 		return host.questions.ask(from, to, options.signal);
 	}

@@ -211,3 +211,16 @@ test("stopOrder puts agents that have not started first", () => {
 	const order = stopOrder([{ name: "a", state: "running" }, { name: "b", state: "queued" }, { name: "c", state: "waiting" }, { name: "d", state: "queued" }] as const);
 	assert.deepEqual(order.map((record) => record.name), ["b", "d", "a", "c"]);
 });
+
+test("a refused message leaves the target's check as it was; a delivered one sets it", async () => {
+	const h = teamHarness({ maxDepth: 3 });
+	h.spawn("lead", { name: "lead" }); await flush();
+	h.spawn("leaf", { name: "leaf", parent: "lead" }); await flush();
+	h.lastCall("leaf").fail(new Error("boom")); await flush();
+	const refused = await h.team.send("main", "leaf", "Retry.", { check: { command: "make", fixUntilPass: 2 } });
+	assert.equal(refused.ok, false);
+	assert.equal(h.team.get("leaf")!.check, undefined);
+	const sent = await h.team.send("main", "lead", "Also run the tests.", { check: { command: "make test" } });
+	assert.equal(sent.ok, true);
+	assert.equal(h.team.get("lead")!.check?.command, "make test");
+});
