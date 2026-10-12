@@ -10,7 +10,7 @@ import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -49,6 +49,7 @@ import {
 	registry,
 	scheduleResidualReaper,
 	stopGroup,
+	groupSize,
 } from "../lib/shell-jobs-process.ts";
 import type { Runtime } from "../lib/shell-jobs-process.ts";
 
@@ -362,6 +363,21 @@ describe("process layer", () => {
 		assert.strictEqual(runtime.residualPids.size, 0);
 		assert.strictEqual(runtime.residualTimer, null);
 		assert.strictEqual(registry().runtimes.has(runtime), false);
+	});
+
+	test("a pgrep that cannot look (BusyBox has no -g) gives an unknown count, not zero", async () => {
+		const bin = tempDir();
+		const fake = join(bin, "pgrep");
+		writeFileSync(fake, "#!/bin/sh\necho 'pgrep: unrecognized option: g' >&2\nexit 1\n");
+		chmodSync(fake, 0o755);
+		const previous = process.env.PATH;
+		process.env.PATH = `${bin}:${previous}`;
+		try {
+			assert.strictEqual(await groupSize(process.pid), null);
+		} finally {
+			process.env.PATH = previous;
+		}
+		assert.strictEqual(await groupSize(await deadPgid()), 0);
 	});
 
 	test("a runtime parked for a reload that never claims it is handed to its shutdown", async () => {

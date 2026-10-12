@@ -205,9 +205,10 @@ async function waitForGroupGone(pgid: number, ms: number): Promise<boolean> {
 /** How many processes a group still has, or null when `pgrep` cannot tell. */
 export function groupSize(pgid: number): Promise<number | null> {
 	return new Promise((resolve) => {
-		execFile("pgrep", ["-g", String(pgid)], { timeout: 2000 }, (error, stdout) => {
-			// pgrep exits 1 when nothing matches; anything else is a failure to look.
-			if (error && (error as { code?: unknown }).code !== 1) resolve(null);
+		execFile("pgrep", ["-g", String(pgid)], { timeout: 2000 }, (error, stdout, stderr) => {
+			// pgrep exits 1, silent, when nothing matches. Anything else is a failure to look,
+			// such as BusyBox, which has no -g and exits 1 with its usage text.
+			if (error && ((error as { code?: unknown }).code !== 1 || stderr.trim().length > 0)) resolve(null);
 			else resolve(stdout.split("\n").filter((line) => line.trim().length > 0).length);
 		});
 	});
