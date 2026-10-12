@@ -67,6 +67,16 @@ test("time spent inside a Computer Use call does not count against the code", as
 	assert.deepEqual(result.content, [{ type: "text", text: "slow ok" }]);
 });
 
+test("a call that ends while another is still running does not start the time slice", async () => {
+	const { session } = fakeSession(async (tool) => { await new Promise((resolve) => setTimeout(resolve, tool === "list_apps" ? 400 : 20)); return text(`${tool} ok`); });
+	const executor = new CodeExecutor({ session, sliceMs: 100 });
+	const result = await executor.execute(`const [a, b] = await Promise.all([sky.list_apps(), sky.press_key({ app: "X", key: "a" })]); emit(a + " " + b);`, { approve });
+	assert.equal(result.error, undefined);
+	assert.deepEqual(result.content, [{ type: "text", text: "list_apps ok press_key ok" }]);
+	const runaway = await executor.execute(`await Promise.all([sky.list_apps(), sky.press_key({ app: "X", key: "a" })]); while (true) {}`, { approve });
+	assert.match(runaway.error ?? "", /100 ms between Computer Use calls/, "the slice starts again when the last call ends");
+});
+
 test("the caller's signal cancels a run", async () => {
 	const executor = new CodeExecutor({ session: fakeSession().session });
 	const controller = new AbortController();

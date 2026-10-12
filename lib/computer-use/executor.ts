@@ -173,6 +173,8 @@ class Run {
 	private readonly calls: CallRecord[] = [];
 	/** Counted at the start of each call: records only land when calls finish. */
 	private startedCalls = 0;
+	/** Calls not yet answered: the slice runs only while none is, since the script is waiting on them. */
+	private inFlight = 0;
 	private readonly now: () => number;
 	private readonly started: number;
 	private readonly sliceMs: number;
@@ -242,6 +244,7 @@ class Run {
 	private async call(message: Extract<WorkerMessage, { type: "call" }>): Promise<void> {
 		if (++this.startedCalls > MAX_CALLS) return this.reply(message.id, { error: `the code made more than ${MAX_CALLS} ${this.api.label} calls` });
 		clearTimeout(this.timer);
+		this.inFlight++;
 		let raw: unknown = {};
 		try { raw = JSON.parse(message.args); } catch { /* reported by the call below */ }
 		const args = this.api.args ? this.api.args(message.method, raw) : raw as Record<string, unknown>;
@@ -270,7 +273,7 @@ class Run {
 			record(reason);
 			this.reply(message.id, { error: reason });
 		} finally {
-			if (!this.settled) this.startTimer(this.sliceMs, this.sliceReason());
+			if (--this.inFlight === 0 && !this.settled) this.startTimer(this.sliceMs, this.sliceReason());
 		}
 	}
 
