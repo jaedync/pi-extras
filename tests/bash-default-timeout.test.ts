@@ -38,9 +38,9 @@ test("default is applied only when the model omitted a usable timeout", () => {
 	assert.equal(applyDefaultTimeout(explicit, 120), false);
 	assert.equal(explicit.timeout, 900);
 
-	const junk: Record<string, unknown> = { command: "ls", timeout: "soon" };
-	assert.equal(applyDefaultTimeout(junk, 120), true);
-	assert.equal(junk.timeout, 120);
+	const unset: Record<string, unknown> = { command: "ls", timeout: null };
+	assert.equal(applyDefaultTimeout(unset, 120), true);
+	assert.equal(unset.timeout, 120);
 
 	assert.equal(applyDefaultTimeout(null, 120), false);
 	assert.equal(applyDefaultTimeout("ls", 120), false);
@@ -56,6 +56,14 @@ test("extension patches bash calls in place and ignores other tools", async () =
 	const read = { toolName: "read", input: { path: "x" } as Record<string, unknown> };
 	await handler(read, {});
 	assert.equal(read.input.timeout, undefined);
+});
+
+test("an explicit timeout passes through unchanged, also an invalid one, so Pi reports it", () => {
+	for (const timeout of [0, -5, Number.NaN, "soon", 3_000_000]) {
+		const input: Record<string, unknown> = { command: "ls", timeout };
+		assert.equal(applyDefaultTimeout(input, 120), false, String(timeout));
+		assert.equal(input.timeout, timeout);
+	}
 });
 
 test("a default above the longest timer Pi can set is invalid, so the built-in default applies", () => {

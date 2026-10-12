@@ -430,7 +430,8 @@ from its title or command. `/reload` retains managed jobs; leaving the
 session stops them according to the extension lifecycle.
 
 The Bash Default Timeout extension does not sandbox commands. It only supplies
-a default timeout for calls that omit one. Explicit timeouts remain unchanged.
+a default timeout for calls that omit one. Explicit timeouts remain unchanged,
+also an invalid one such as `0`, so Pi reports the problem.
 
 ## Subagents
 
