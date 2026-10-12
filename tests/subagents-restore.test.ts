@@ -64,3 +64,24 @@ test("restoring a roster reserves its names without launching or delivering repo
 	assert.equal(team.spawn({ name: "helper", task: "New work", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: true }).ok, true);
 	assert.ok(team.get("helper-2"));
 });
+
+test("mail a closing host keeps is saved with the index, read back once, and anything malformed is left out with a warning", () => {
+	const dir = mkdtempSync(join(tmpdir(), "subagents-mail-"));
+	try {
+		const report = { message: { customType: "subagent-report", content: "Report", display: true, details: { id: "sa-1", kind: "report" as const, reports: [] } }, wakes: true };
+		const index = new ChildIndex(dir, "parent", dir);
+		index.keepMail([report]);
+		index.save([], "reload", "owner");
+		const saved = JSON.parse(readFileSync(join(dir, "index.json"), "utf8"));
+		assert.deepEqual(saved.mail, [report]);
+		writeFileSync(join(dir, "index.json"), JSON.stringify({ ...saved, mail: [...saved.mail, { message: { customType: "other", content: "x", display: true, details: { id: "x", kind: "note" } }, wakes: true }] }));
+		const warnings: string[] = [];
+		const next = new ChildIndex(dir, "parent", dir);
+		next.load((message) => warnings.push(message));
+		assert.equal(warnings.length, 1);
+		assert.deepEqual(next.takeMail(), [report]);
+		assert.deepEqual(next.takeMail(), [], "taken once");
+		next.save([]);
+		assert.equal(JSON.parse(readFileSync(join(dir, "index.json"), "utf8")).mail, undefined);
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});

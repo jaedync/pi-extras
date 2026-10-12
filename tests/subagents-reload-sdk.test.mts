@@ -179,6 +179,45 @@ test("a second /reload while the adopted team still works hands the same childre
 /** What a reload leaves for the next module, by session (host.ts). */
 const shelf = () => (globalThis as any)[Symbol.for("pi-extras.subagents.host")].parked as WeakMap<object, any>;
 
+/** Lets `name` finish while Pi reloads, before the next module starts, and checks its report waits. */
+async function finishWhileParked(p: Parent, name: string): Promise<void> {
+	p.release(name);
+	await until(`${name} finishes while parked`, () => p.record(name)?.state === "idle");
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	assert.equal(p.reports(`${name} done`), 0, "nothing reaches main while parked");
+}
+
+test("a report that comes while Pi reloads reaches main once, after the reload", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
+	const p = await parent(copyPackage().root);
+	try {
+		await p.spawn("mid", "Finish during the reload");
+		await waitingInBash(p, "mid");
+		await p.session.reload({ beforeSessionStart: () => finishWhileParked(p, "mid") });
+		await until("its report reaches main", () => p.reports("mid done") > 0);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.equal(p.reports("mid done"), 1);
+		assert.deepEqual(reloadWarnings(p), []);
+	} finally { await p.close(); }
+});
+
+test("a report that comes while Pi reloads reaches main once when the next module can't take the children over", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
+	const p = await parent(copyPackage().root);
+	try {
+		await p.spawn("early", "Finish during the reload");
+		await waitingInBash(p, "early");
+		await p.session.reload({ beforeSessionStart: async () => {
+			await finishWhileParked(p, "early");
+			const parked = shelf().get(p.session.sessionManager);
+			shelf().set(p.session.sessionManager, { ...parked, version: parked.version + 1 });
+		} });
+		await until("its report reaches main", () => p.reports("early done") > 0);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.equal(p.reports("early done"), 1);
+		assert.equal(p.record("early")?.state, "idle", "it finished; nothing to resume");
+		assert.equal(p.session.messages.filter((m: any) => m.customType === "subagent-restore").length, 0);
+	} finally { await p.close(); }
+});
+
 test("a parked host of another version is closed with its own code, and its children resume as after a reload before", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
 	const p = await parent(copyPackage().root);
 	try {

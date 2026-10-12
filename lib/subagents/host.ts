@@ -99,7 +99,7 @@ export class PortBinding {
 		this.ports = {
 			send: (message, options) => {
 				if (this.bound) this.bound.send(message, options);
-				else this.sends.push([message, options]);
+				else if (!this.closed) this.sends.push([message, options]);
 			},
 			route: () => this.bound?.route() ?? "hold",
 			notify: (message, level) => this.notify(message, level),
@@ -132,13 +132,23 @@ export class PortBinding {
 		this.bound = undefined;
 	}
 
-	/** Launches still waiting fail; notices go to the ports still bound, if any. */
-	close(): void {
+	/**
+	 * Launches still waiting fail, and nothing reaches a module after: a late
+	 * notice from a host that is gone would use a `ctx` Pi has replaced.
+	 * Returns the ports that were bound, for the closing host's last words.
+	 */
+	close(): HostPorts | undefined {
+		const bound = this.bound;
 		this.closed = true;
+		this.bound = undefined;
+		this.sends = [];
+		this.notices = [];
 		for (const waiter of this.waiting.splice(0)) waiter.reject(new Error("The session is shutting down."));
+		return bound;
 	}
 
 	private notify(message: string, level: "info" | "warning"): void {
+		if (this.closed) return;
 		if (this.bound) return this.bound.notify(message, level);
 		if (this.notices.length < HELD_NOTICES) this.notices.push({ message, level });
 		else this.dropped++;

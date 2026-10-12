@@ -30,7 +30,7 @@
  * stops main's turn first, so mail that landed in it gets a reminder that
  * wakes main once the compaction is done (`remind`).
  */
-import type { HostMail } from "./contract.ts";
+import type { HeldMail, HostMail } from "./contract.ts";
 import { noteText, questionText, reminderText, reportText } from "./format.ts";
 import type { AgentRecord, MainDelivery } from "./types.ts";
 
@@ -265,6 +265,29 @@ export class MainMail implements HostMail {
 		this.flush();
 		const taken = this.outbox.splice(0);
 		return { messages: taken.map((item) => item.message), wakes: taken.some((item) => item.wakes) };
+	}
+
+	/**
+	 * Everything not yet handed to Pi, item by item, reports still batched or
+	 * held included, for a host that closes (host-state.ts); the mail takes
+	 * nothing more after. The host first makes its route hold, so a report
+	 * flushed here is not sent on its own.
+	 */
+	drain(): HeldMail[] {
+		for (const group of [...this.held.keys()]) this.release(group, false);
+		this.flush();
+		const taken = this.outbox.splice(0);
+		this.dispose();
+		return taken;
+	}
+
+	/** Mail an earlier host could not hand over, posted again in the order it came (`drain`). */
+	resend(items: readonly HeldMail[]): void {
+		for (const { message, wakes } of items) {
+			const { details } = message;
+			if (details.kind !== "reminder") this.remember({ id: details.id, kind: details.kind, from: ownerOf(details), text: "text" in details ? details.text : "report", at: this.now() });
+			this.post(message, wakes);
+		}
 	}
 
 	/** Hands Pi what waits, oldest first, for as long as main can take it. */

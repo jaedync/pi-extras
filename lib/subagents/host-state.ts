@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { HOST_VERSION, type HostActivity, type HostPorts, type HostState } from "./contract.ts";
+import { HOST_VERSION, type HeldMail, type HostActivity, type HostPorts, type HostState } from "./contract.ts";
 import type { SubagentsConfig } from "./config.ts";
 import { MainMail } from "./deliver.ts";
 import { fallbackChain } from "./fallback.ts";
@@ -205,23 +205,52 @@ export function openHost(inputs: HostInputs): HostState {
 			// Quiet, so closing interrupts no one: it only lets the idle sessions go.
 			await team.close("reload", owner);
 		},
-		restore: (reason) => restoreInterrupted({ team, index, config, owner, ports, place, previousShutdown, previousOwner }, reason),
+		async restore(reason) {
+			postKeptMail(index, team, mail, notify);
+			await restoreInterrupted({ team, index, config, owner, ports, place, previousShutdown, previousOwner }, reason);
+		},
 		async close(reason = "quit") {
 			if (closed) return;
 			closed = true;
 			removeSignals();
-			binding.close();
-			mail.dispose();
+			const live = binding.close();
+			index.keepMail(handOverMail(mail.drain(), live));
 			// The team marks its live children interrupted at once, and the run log records them as it does.
 			const closing = team.close(signalReason ? "signal" : reason === "reload" ? "reload" : "quit", owner);
 			unsubscribe();
-			// Saved before anything is awaited, so an exit during the close still finds its children interrupted.
+			// Saved before anything is awaited, so an exit during the close still finds its children interrupted and its mail kept.
+			let unsaved: string | undefined;
 			try { index.save(team.list(), signalReason ?? reason, owner); }
-			catch (error) { notify(`subagents: could not save ${index.file}: ${(error as Error).message}`); }
+			catch (error) { unsaved = `subagents: could not save ${index.file}: ${(error as Error).message}`; }
 			try { await closing; }
 			finally { if (!leaseHandedOver) releaseLease(); }
+			// A parked host has no one to tell; whoever closed it says it (host.ts logs it, a session start shows it).
+			if (unsaved && live) live.notify(unsaved, "warning");
+			else if (unsaved) throw new Error(unsaved);
 		},
 	};
+}
+
+/**
+ * Mail a closing host still holds goes to main now when a module serves the
+ * session, as a quiet note in its transcript: the session is ending, so it
+ * starts no turn. What can't go is kept in the index for the next start.
+ */
+function handOverMail(items: readonly HeldMail[], live: HostPorts | undefined): HeldMail[] {
+	if (!live) return [...items];
+	return items.filter(({ message }) => {
+		try { live.send(message, { triggerTurn: false }); return false; }
+		catch { return true; }
+	});
+}
+
+/** Posts the mail an earlier host kept for main, once: the index forgets it before it goes. */
+function postKeptMail(index: ChildIndex, team: Team, mail: MainMail, notify: (message: string) => void): void {
+	const kept = index.takeMail();
+	if (kept.length === 0) return;
+	try { index.save(team.list()); }
+	catch (error) { notify(`subagents: could not save ${index.file}; mail it kept for main may come twice: ${(error as Error).message}`); }
+	mail.resend(kept);
 }
 
 interface RestoreContext {

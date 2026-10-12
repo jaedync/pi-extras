@@ -64,6 +64,17 @@ export interface HostActivity {
 	watch(id: string, root: string): () => Watched;
 }
 
+/**
+ * Mail to main that a closing host could not hand over: the index keeps it
+ * (restore.ts) and the next start of the session posts it, whatever version
+ * of this package that start runs.
+ */
+export interface HeldMail {
+	readonly message: OutgoingMessage;
+	/** Whether it asks main for a turn. */
+	readonly wakes: boolean;
+}
+
 /** A custom message for main's session. */
 export interface HostMessage {
 	readonly customType: string;

@@ -8,6 +8,8 @@ import { latestReportFile, reportFilePath } from "./reports.ts";
 import { LIVE_STATES, NO_USAGE, type AgentRecord, type FallbackStep } from "./types.ts";
 import { validWorktree } from "./worktree.ts";
 import { CONTROL } from "./checkout.ts";
+import type { HeldMail } from "./contract.ts";
+import { MESSAGE_TYPE, REPORT_TYPE } from "./deliver.ts";
 
 const STATES = new Set([...LIVE_STATES, "idle", "failed", "stopped", "interrupted"]);
 const DIRECTORY_WARNING_LIMIT = 64;
@@ -43,6 +45,18 @@ interface IndexData {
 	shutdown?: string;
 	shutdownOwner?: string;
 	workspaceNotice?: string;
+	/** Mail a closing host could not hand to main; the next start posts it once (host-state.ts). */
+	mail?: HeldMail[];
+}
+
+/** Held mail as a closing host saved it; anything else is left out, since it would reach main's context. */
+function validMail(value: unknown): value is HeldMail {
+	const item = value as HeldMail | null;
+	const message = item?.message;
+	const details = message?.details as { id?: unknown; kind?: unknown } | undefined;
+	return !!item && typeof item.wakes === "boolean" && !!message && (message.customType === MESSAGE_TYPE || message.customType === REPORT_TYPE)
+		&& typeof message.content === "string" && typeof message.display === "boolean"
+		&& typeof details?.id === "string" && ["note", "question", "reply", "relay", "report", "reminder"].includes(details.kind as string);
 }
 
 /** Saved paths are used as tool and git arguments and shown in prompts, never as shell input. */
@@ -124,7 +138,10 @@ export class ChildIndex {
 		const byName = new Map(data.records.map((r) => [r.name, r]));
 		if (data.records.some((r) => r.parent === "main" ? r.depth !== 1 : byName.get(r.parent)?.depth !== r.depth - 1)) throw new Error("Invalid child parent or depth.");
 		if (data.records.some((r) => r.sessionFile && dirname(resolve(r.sessionFile)) !== resolve(this.dir))) throw new Error("Invalid child session path.");
-		this.data = data;
+		const saved: unknown = data.mail;
+		const mail = Array.isArray(saved) ? saved.filter(validMail) : [];
+		if (saved !== undefined && (!Array.isArray(saved) || mail.length !== saved.length)) warn(`subagents: ${this.file} holds mail for main that can't be read; it is left out.`);
+		this.data = { ...data, mail: mail.length > 0 ? mail : undefined };
 		return data.records.map((r) => ({ ...usableContext(r), usage: { ...r.usage } }));
 	}
 
@@ -159,6 +176,18 @@ export class ChildIndex {
 			this.signature = this.stateSignature(records);
 			this.lastWrite = Date.now();
 		} finally { rmSync(temporary, { force: true }); }
+	}
+
+	/** Keeps mail for the next start, after any kept before it; written by the next `save`. */
+	keepMail(items: readonly HeldMail[]): void {
+		if (items.length > 0) this.data = { ...this.data, mail: [...(this.data.mail ?? []), ...items] };
+	}
+
+	/** Takes the kept mail out; the next `save` writes the index without it. */
+	takeMail(): HeldMail[] {
+		const mail = this.data.mail ?? [];
+		if (mail.length > 0) this.data = { ...this.data, mail: undefined };
+		return mail;
 	}
 
 	markWorkspaceNotice(cwd: string): boolean {

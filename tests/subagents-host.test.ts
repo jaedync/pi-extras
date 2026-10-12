@@ -223,3 +223,70 @@ test("a session start that fails before it takes over a parked host interrupts i
 	await assert.rejects(serveSession({ sdk, pi: {}, ctx, generation: 1, parked, route: () => "hold", teamChanged() {}, mailChanged() {}, currentGroup: () => "run-1-0" } as never), /no scoped models/);
 	assert.deepEqual(closes, ["reload"]);
 });
+
+/** A child finishes while its host is parked, so its report waits for a module that never takes the host over. */
+async function reportWhileParked(h: ReturnType<typeof setup>, timeoutMs?: number) {
+	const first = h.portsFor("first");
+	const host = h.open(first);
+	const name = h.spawn(host, "Count files");
+	await tick();
+	host.park();
+	const session = {};
+	parkHost(session, host, { log: () => undefined, ...(timeoutMs ? { timeoutMs } : {}) });
+	h.call(name).finish("Counted 3.");
+	await host.team.whenDone(name);
+	await sleep(20);
+	assert.deepEqual(h.reports(first, name), [], "held while parked");
+	return { first, host, name, session };
+}
+
+/** The next start of the session, as after a fallback: it opens the index and restores; its mail is `module`'s. */
+async function nextStart(h: ReturnType<typeof setup>, label: string) {
+	const module = h.portsFor(label);
+	const host = h.open(module);
+	await host.restore("reload");
+	await sleep(20);
+	await host.close();
+	return module;
+}
+
+for (const [fallback, end] of [
+	["a closing fallback (version mismatch, failed takeover, failed start)", async (_host: HostState, session: object) => { await takeParked(session)!.close("reload"); }],
+	["an exit", async () => { (process.listeners("exit").at(-1) as () => void)(); await sleep(10); }],
+] as const) {
+	test(`mail held while parked reaches main once after ${fallback}`, async () => {
+		const h = setup();
+		const { name, host, session } = await reportWhileParked(h);
+		await end(host, session);
+		const next = await nextStart(h, "next");
+		assert.equal(h.reports(next, name).length, 1, "the next start posts it");
+		assert.equal(h.reports(next, name)[0]!.options.triggerTurn, true, "and wakes main, as the report would have");
+		const later = await nextStart(h, "later");
+		assert.equal(h.reports(later, name).length, 0, "only once");
+	});
+}
+
+test("mail held while parked reaches main once after the parked host times out", async () => {
+	const h = setup();
+	const { name } = await reportWhileParked(h, 10);
+	await sleep(60);
+	const next = await nextStart(h, "next");
+	assert.equal(h.reports(next, name).length, 1);
+	assert.equal(h.reports(await nextStart(h, "later"), name).length, 0);
+});
+
+test("a host that closes while bound hands main the mail it still holds, without waking it, and keeps none of it", async () => {
+	const h = hostHarness({ batchMs: 60_000 });
+	cleanups.push(h.cleanup);
+	const first = h.portsFor("first");
+	const host = h.open(first);
+	const name = h.spawn(host, "Count files");
+	await tick();
+	h.call(name).finish("Counted 3.");
+	await host.team.whenDone(name);
+	assert.equal(h.reports(first, name).length, 0, "still batched");
+	await host.close("quit");
+	assert.equal(h.reports(first, name).length, 1);
+	assert.deepEqual(h.reports(first, name)[0]!.options, { triggerTurn: false }, "a session that ends starts no turn");
+	assert.equal(h.reports(await nextStart(h, "next"), name).length, 0);
+});
