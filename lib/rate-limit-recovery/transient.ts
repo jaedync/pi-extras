@@ -115,7 +115,7 @@ export function proxyExhaustedMessage(streak: Streak): string {
 }
 
 export interface TransientDeps {
-	/** Total wait per streak of consecutive limits; 0 leaves these errors to Pi. */
+	/** Total wait per streak of consecutive rate limits; 0 leaves them to Pi. Proxy retries ignore it. */
 	readonly budgetMs: () => number;
 	readonly random?: () => number;
 	readonly wait?: Wait;
@@ -165,9 +165,11 @@ export class TransientBackoff {
 			if (message.stopReason !== "aborted") this.streaks = NO_STREAKS;
 			return undefined;
 		}
+		if (!ctx.signal || ctx.signal.aborted) return undefined;
 		const budgetMs = this.deps.budgetMs();
-		if (budgetMs <= 0 || !ctx.signal || ctx.signal.aborted) return undefined;
-		const kind: TransientKind | undefined = isProxyTurnLimit(message) ? "proxy" : isTransientRateLimit(message) ? "rate-limit" : undefined;
+		// The budget only covers rate limits, which Pi can retry itself. Pi never retries the
+		// proxy's failure, and its fixed schedule is already bounded.
+		const kind: TransientKind | undefined = isProxyTurnLimit(message) ? "proxy" : budgetMs > 0 && isTransientRateLimit(message) ? "rate-limit" : undefined;
 		if (!kind) return undefined;
 		const limit = captureLimit(message, {}, Date.now());
 		const who = `${limit.provider}/${limit.model}`;

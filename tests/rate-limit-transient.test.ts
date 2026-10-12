@@ -319,9 +319,12 @@ test("a failure whose turn ran tools is never sent again", async () => {
 	assert.deepEqual(f.waits, []);
 });
 
-test("transientMaxWaitSeconds 0 also leaves proxy failures to Pi", () => {
+test("transientMaxWaitSeconds 0 leaves rate limits to Pi but still retries proxy failures, which Pi never retries", async () => {
 	const off = backoff({ budgetMs: 0 });
-	assert.equal(off.b.messageEnd(failed(MERIDIAN) as never, off.ctx), undefined);
+	assert.equal(off.b.messageEnd(failed(LUNA) as never, off.ctx), undefined);
+	assert.match(off.b.messageEnd(failed(MERIDIAN) as never, off.ctx)!.errorMessage!, /retry 1 of 3/);
+	assert.ok(await off.b.turnEnd(off.turn("z"), off.ctx));
+	assert.deepEqual(off.waits, [2_000]);
 	const f = backoff();
 	assert.equal(f.b.messageEnd(failed(MERIDIAN) as never, {} as never), undefined, "no run signal to cancel a wait");
 });
