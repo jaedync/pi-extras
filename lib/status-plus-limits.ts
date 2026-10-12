@@ -60,13 +60,28 @@ function parseNumberHeader(value: string | undefined): number | undefined {
 	return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-/** Tolerate epoch seconds, epoch ms, or ISO timestamps in reset headers; a time no Date can hold is no reset. */
-function parseResetHeader(value: string | undefined): number | undefined {
+/** Below this a numeric reset is a countdown in seconds ("60"): as epoch seconds it would be before 2001. */
+const DELTA_SECONDS_MAX = 1e9;
+
+/**
+ * Tolerate a countdown in seconds, epoch seconds, epoch ms, or ISO timestamps
+ * in reset headers. A time no Date can hold is no reset.
+ */
+function parseResetHeader(value: string | undefined, now: number): number | undefined {
 	if (!value) return undefined;
 	const numeric = Number(value);
-	if (Number.isFinite(numeric)) return dateMs(toEpochMs(numeric));
+	if (Number.isFinite(numeric)) {
+		if (numeric < 0) return undefined;
+		return dateMs(numeric < DELTA_SECONDS_MAX ? now + numeric * 1000 : toEpochMs(numeric));
+	}
 	const iso = Date.parse(value);
 	return Number.isFinite(iso) ? iso : undefined;
+}
+
+/** Used share of a limit/remaining pair; a remaining count outside 0..limit is not a reading. */
+function pairUsedPct(limit: number, remaining: number): number | undefined {
+	if (!(limit > 0) || remaining < 0 || remaining > limit) return undefined;
+	return Math.min(100, Math.max(0, ((limit - remaining) / limit) * 100));
 }
 
 /** Highest-pressure entries first, capped to keep the line compact. */
@@ -99,9 +114,9 @@ export function parseCodexLimits(headers: Record<string, string>, now = Date.now
  * orgs send limit/remaining/reset triplets. The overage bucket is dollar
  * spend and renders from the poller with amounts, so it is skipped here.
  */
-export function parseAnthropicLimits(headers: Record<string, string>): LimitEntry[] {
+export function parseAnthropicLimits(headers: Record<string, string>, now = Date.now()): LimitEntry[] {
 	const unified: LimitEntry[] = [];
-	const unifiedReset = parseResetHeader(headers["anthropic-ratelimit-unified-reset"]);
+	const unifiedReset = parseResetHeader(headers["anthropic-ratelimit-unified-reset"], now);
 	for (const [key, value] of Object.entries(headers)) {
 		const match = key.match(/^anthropic-ratelimit-unified-(.+)-utilization$/);
 		if (!match || match[1] === "overage") continue;
@@ -111,7 +126,7 @@ export function parseAnthropicLimits(headers: Record<string, string>): LimitEntr
 			label: match[1],
 			...(quotaWindowSeconds(match[1]) !== undefined ? { windowSeconds: quotaWindowSeconds(match[1]) } : {}),
 			usedPct: raw <= 1 ? raw * 100 : raw,
-			resetMs: parseResetHeader(headers[`anthropic-ratelimit-unified-${match[1]}-reset`]) ?? unifiedReset,
+			resetMs: parseResetHeader(headers[`anthropic-ratelimit-unified-${match[1]}-reset`], now) ?? unifiedReset,
 		});
 	}
 	if (unified.length > 0) return topEntries(unified);
@@ -122,38 +137,40 @@ export function parseAnthropicLimits(headers: Record<string, string>): LimitEntr
 		if (!match || match[1] === "overage") continue;
 		const limit = Number(value);
 		const remaining = parseNumberHeader(headers[`anthropic-ratelimit-${match[1]}-remaining`]);
-		if (!Number.isFinite(limit) || limit <= 0 || remaining === undefined) continue;
+		const usedPct = remaining === undefined ? undefined : pairUsedPct(limit, remaining);
+		if (usedPct === undefined) continue;
 		pairs.push({
 			label: match[1],
 			kind: "rate",
-			usedPct: ((limit - remaining) / limit) * 100,
-			resetMs: parseResetHeader(headers[`anthropic-ratelimit-${match[1]}-reset`]),
+			usedPct,
+			resetMs: parseResetHeader(headers[`anthropic-ratelimit-${match[1]}-reset`], now),
 		});
 	}
 	return topEntries(pairs);
 }
 
 /** Generic fallback: plain x-ratelimit-limit/remaining/reset. */
-export function parseGenericLimits(headers: Record<string, string>): LimitEntry[] {
+export function parseGenericLimits(headers: Record<string, string>, now = Date.now()): LimitEntry[] {
 	const limit = parseNumberHeader(headers["x-ratelimit-limit"]);
 	const remaining = parseNumberHeader(headers["x-ratelimit-remaining"]);
-	if (limit === undefined || limit <= 0 || remaining === undefined) return [];
+	const usedPct = limit === undefined || remaining === undefined ? undefined : pairUsedPct(limit, remaining);
+	if (usedPct === undefined) return [];
 	return [{
 		label: "req",
 		kind: "rate",
-		usedPct: ((limit - remaining) / limit) * 100,
-		resetMs: parseResetHeader(headers["x-ratelimit-reset"]),
+		usedPct,
+		resetMs: parseResetHeader(headers["x-ratelimit-reset"], now),
 	}];
 }
 
-const LIMIT_HEADER_PARSERS: Record<string, (headers: Record<string, string>) => LimitEntry[]> = {
-	"openai-codex": (headers) => parseCodexLimits(headers),
+const LIMIT_HEADER_PARSERS: Record<string, (headers: Record<string, string>, now: number) => LimitEntry[]> = {
+	"openai-codex": parseCodexLimits,
 	anthropic: parseAnthropicLimits,
 };
 
-export function parseLimitHeaders(provider: string, headers: Record<string, string>): LimitEntry[] {
-	const parsed = LIMIT_HEADER_PARSERS[provider]?.(headers) ?? [];
-	return parsed.length > 0 ? parsed : parseGenericLimits(headers);
+export function parseLimitHeaders(provider: string, headers: Record<string, string>, now = Date.now()): LimitEntry[] {
+	const parsed = LIMIT_HEADER_PARSERS[provider]?.(headers, now) ?? [];
+	return parsed.length > 0 ? parsed : parseGenericLimits(headers, now);
 }
 
 /**

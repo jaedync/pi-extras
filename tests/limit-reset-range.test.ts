@@ -70,3 +70,31 @@ test("a footer row whose snapshot holds an out-of-range reset still renders", ()
 	const paint = { fg: (_tone: string, text: string) => text };
 	for (const width of [200, 60]) assert.doesNotThrow(() => footerLayout(model, width, paint));
 });
+
+test("a small numeric reset is a countdown in seconds, not a time in 1970", () => {
+	const [generic] = parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "3", "x-ratelimit-reset": "60" }, NOW);
+	assert.equal(generic.resetMs, NOW + 60_000);
+	const [pair] = parseAnthropicLimits({
+		"anthropic-ratelimit-tokens-limit": "100",
+		"anthropic-ratelimit-tokens-remaining": "50",
+		"anthropic-ratelimit-tokens-reset": "0.5",
+	}, NOW);
+	assert.equal(pair.resetMs, NOW + 500);
+	// Epoch seconds and milliseconds keep their meaning.
+	const [epoch] = parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "3", "x-ratelimit-reset": "2000000000" }, NOW);
+	assert.equal(epoch.resetMs, 2_000_000_000_000);
+	const [negative] = parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "3", "x-ratelimit-reset": "-5" }, NOW);
+	assert.equal(negative.resetMs, undefined);
+});
+
+test("a remaining count outside 0..limit gives no percentage", () => {
+	for (const [limit, remaining] of [["100", "150"], ["5e-324", "1e308"], ["100", "-1"]]) {
+		assert.deepEqual(parseGenericLimits({ "x-ratelimit-limit": limit, "x-ratelimit-remaining": remaining }, NOW), [], `${limit}/${remaining}`);
+		assert.deepEqual(parseAnthropicLimits({
+			"anthropic-ratelimit-requests-limit": limit,
+			"anthropic-ratelimit-requests-remaining": remaining,
+		}, NOW), [], `${limit}/${remaining}`);
+	}
+	const [full] = parseGenericLimits({ "x-ratelimit-limit": "100", "x-ratelimit-remaining": "100" }, NOW);
+	assert.equal(full.usedPct, 0);
+});
