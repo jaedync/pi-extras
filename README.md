@@ -1159,12 +1159,17 @@ description busts the prompt cache. `/subagents guide` edits it, or ask the
 agent to.
 
 Each launch of a child reads Pi's `settings.json`, the project's
-`.pi/settings.json`, `models.json` and `pi-extras.json` again. Thus a change to
-`compaction.reserveTokens` or to a model's `contextWindow` applies to the next
-child that starts. When `models.json` changed, the launch first reads it into
-the model list that main and its children share, as `/model` does. Before
-that, Pi's own loader checks the file. If it finds an error, the launch uses
-the models from before and tells you one time for each version of the file.
+`.pi/settings.json` and `models.json` again. It also reads the context files
+(`AGENTS.md`), `SYSTEM.md` and skills that Pi gives a child. The child's
+extensions read their own sections of `pi-extras.json`, such as
+`cacheCompaction` and `rateLimitRecovery`, at each launch too. The `subagents`
+section applies at the next session start or `/reload`, because it also sets
+main's tools. Thus a change to `compaction.reserveTokens` or to a model's
+`contextWindow` applies to the next child that starts. When `models.json`
+changed, the launch first reads it into the model list that main and its
+children share, as `/model` does. Before that, Pi's own loader checks the
+file. If it finds an error, the launch uses the models from before and tells
+you one time for each version of the file.
 
 **Talking.** Every agent has a name made from its task, and `main` is the
 session. `message` sends a note to an agent by name, or to `all`. A running
@@ -1382,10 +1387,9 @@ follow-up often comes soon. A message to a released child relaunches it from
 its session file with its context, and its inspector reads that file, so a
 long session with many children keeps only the working ones in memory. A
 message within the two minutes uses the open session only when a launch now
-would make the same session. After a `/reload`, or after a change to one of
-the files that a launch reads or to an extension that the child loads, the
-child relaunches from its file instead. A finished child whose session is not
-current any more releases it at once.
+would make the same session. After a `/reload`, or after a change to a file
+that the launch read, the child relaunches from its session file instead. A
+finished child whose session is not current any more releases it at once.
 
 **Headless runs.** `pi -p` and `--mode json` end when main settles, so main
 waits there for its background children. Their reports, questions and notes
@@ -1399,8 +1403,9 @@ code. A child that starts after the reload uses the new code. Mail to main
 waits during the reload and then arrives one time. When no child works and
 all mail is in main's transcript, a team from the new code takes over from
 `index.json`. Until then, team settings from `pi-extras.json`, such as
-`maxConcurrent`, run budgets and `batchMs`, stay as they were. A change to the
-code of an extension gets to children after `/reload`, as it gets to main.
+`maxConcurrent`, run budgets and `batchMs`, stay as they were. New code of an
+extension gets to children at the latest after `/reload`. A new context file
+or skill gets to children at the latest after `/reload` too.
 
 Some reloads must interrupt children: a new version of pi-extras that can't
 take over from the old one, a takeover that fails, and a reload that does not

@@ -16,7 +16,7 @@ import { guardBash } from "./bash-guard.ts";
 import type { HostActivity } from "./contract.ts";
 import { confine, sandboxFor } from "./sandbox.ts";
 import { freshModels, piModelsCheck } from "./fresh-models.ts";
-import { launchFiles, stampCurrent, stampOf } from "./stamp.ts";
+import { launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "./stamp.ts";
 import { WAITING_FOR_MODEL, type AgentRecord, type AgentWork, type ChildHandle, type ChildHooks, type Launcher, type Usage } from "./types.ts";
 import { editTarget, outsideWorktree, sourcePlace, workspaceError } from "./worktree.ts";
 
@@ -222,7 +222,8 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const { tools, customTools: listed, extensionPaths = [] } = deps.toolsFor(record);
 			const loaded = [...new Set([...extensionPaths, CHILD_CACHE_COMPACTION_PATH])];
 			// Taken before anything is read, so a file that changes during the launch makes this session stale, never current.
-			const stamp = stampOf(generation, launchFiles(agentDir, cwd, sdk.CONFIG_DIR_NAME ?? ".pi", loaded));
+			const begun = Date.now();
+			const settled = stampOf(generation, launchFiles(agentDir, cwd, sdk.CONFIG_DIR_NAME ?? ".pi"));
 			const modelRuntime = await deps.modelRuntime();
 			await freshModels(modelRuntime, join(agentDir, "models.json"), piModelsCheck(sdk, modelRuntime), (message) => deps.warn?.(message));
 			const resolved = sdk.resolveCliModel({ cliModel: record.model, modelRuntime });
@@ -254,6 +255,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				}),
 			});
 			await loader.reload();
+			const stamp = withFiles(settled, resourceFiles(loader), begun);
 			// A path fixed at spawn opens as a new session written there.
 			const sessionManager = record.sessionFile ? sdk.SessionManager.open(record.sessionFile, dirname(record.sessionFile), cwd)
 				: deps.sessionDir ? sdk.SessionManager.create(cwd, deps.sessionDir) : sdk.SessionManager.inMemory(cwd);

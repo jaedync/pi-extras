@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileIdentity, launchFiles, stampCurrent, stampOf } from "../lib/subagents/stamp.ts";
+import { fileIdentity, launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "../lib/subagents/stamp.ts";
 
 const scratch = () => mkdtempSync(join(tmpdir(), "subagents-stamp-"));
 
@@ -38,8 +38,33 @@ test("a stamp is current only for the same generation and unchanged files", () =
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("a launch reads global and project settings, models, pi-extras.json and its extensions", () => {
-	assert.deepEqual(launchFiles("/agent", "/work", ".pi", ["/ext/owner.ts"]), [
-		"/agent/settings.json", "/work/.pi/settings.json", "/agent/models.json", "/agent/pi-extras.json", "/ext/owner.ts",
+test("before its resources, a launch reads global and project settings, models and pi-extras.json", () => {
+	assert.deepEqual(launchFiles("/agent", "/work", ".pi"), [
+		"/agent/settings.json", "/work/.pi/settings.json", "/agent/models.json", "/agent/pi-extras.json",
 	]);
+});
+
+test("the resources a loader read are its context files, system prompt files and skills", () => {
+	assert.deepEqual(resourceFiles({
+		getAgentsFiles: () => ({ agentsFiles: [{ path: "/agent/AGENTS.md" }, { path: "/work/AGENTS.md" }] }),
+		getSystemPromptSource: () => undefined,
+		getAppendSystemPromptSources: () => [{ path: "/agent/APPEND_SYSTEM.md" }],
+		getSkills: () => ({ skills: [{ filePath: "/agent/skills/demo/SKILL.md" }] }),
+	}), ["/agent/AGENTS.md", "/work/AGENTS.md", "/agent/APPEND_SYSTEM.md", "/agent/skills/demo/SKILL.md"]);
+});
+
+test("a file read during the launch that changed after it began leaves the session stale, whichever version was read", () => {
+	const dir = scratch();
+	try {
+		const before = join(dir, "AGENTS.md");
+		const during = join(dir, "SKILL.md");
+		writeFileSync(before, "old");
+		writeFileSync(during, "old");
+		utimesSync(before, new Date(1_000_000), new Date(1_000_000));
+		const begun = Date.now() - 60_000;
+		const stamp = withFiles(stampOf(1, []), [before, during, before], begun);
+		assert.equal(stamp.files.length, 2);
+		assert.equal(stampCurrent(stamp, 1), false, "the file written after the launch began may have been read before its change");
+		assert.equal(stampCurrent(withFiles(stampOf(1, []), [before], begun), 1), true, "one untouched since the launch began stays current");
+	} finally { rmSync(dir, { recursive: true, force: true }); }
 });

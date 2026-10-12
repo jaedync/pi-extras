@@ -1,7 +1,7 @@
 /** A child launch reads settings.json and models.json as they are now; real SDK sessions, Pi's faux provider. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -144,6 +144,54 @@ test("a models.json that adds a model to a provider an extension registered is r
 		assert.ok(runtime.getModel("faux", "extra"), "main's runtime has the added model");
 		assert.deepEqual(warnings, []);
 	} finally { await handle.dispose(); }
+});
+
+test("a session stops being current when a context file, SYSTEM.md or a skill its loader read changes, not when an extension file or a file it did not read does", { timeout: 20_000 }, async () => {
+	writeFileSync(join(agentDir, "models.json"), "{}");
+	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
+	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
+	runtime.registerNativeProvider(faux.provider);
+	mkdirSync(join(agentDir, "skills", "demo"), { recursive: true });
+	const inputs = {
+		context: join(agentDir, "AGENTS.md"),
+		system: join(agentDir, "SYSTEM.md"),
+		skill: join(agentDir, "skills", "demo", "SKILL.md"),
+	};
+	writeFileSync(inputs.context, "Be brief.\n");
+	writeFileSync(inputs.system, "You help.\n");
+	writeFileSync(inputs.skill, "---\nname: demo\ndescription: A demo skill.\n---\nDo the demo.\n");
+	// A child's own instructions take the place of APPEND_SYSTEM.md in Pi's loader, so a child never reads it.
+	const append = join(agentDir, "APPEND_SYSTEM.md");
+	writeFileSync(append, "Say thanks.\n");
+	// An extension that owns a tool: Pi's extension cache decides when its code reaches a child, so its file is no input.
+	const extension = join(scratch, "owner-extension.ts");
+	writeFileSync(extension, "export default function (pi: any) { pi.registerTool({ name: 'owned', label: 'owned', description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: [] }) }); }\n");
+	const launcher = createLauncher({
+		sdk, agentDir, cwd: scratch, sessionDir: null, generation: 1,
+		modelRuntime: async () => runtime,
+		toolsFor: () => ({ tools: ["read", "owned"], customTools: [], extensionPaths: [extension] }),
+		instructions: () => "",
+	});
+	// A file written in the millisecond a launch begins counts as read during it, so each launch starts a little later.
+	const launch = async () => (await new Promise((resolve) => setTimeout(resolve, 5)), launcher.launch({ name: "reader", task: "Look", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false, state: "starting", runs: 0, depth: 1, startedAt: Date.now() } as never, { onEvent: () => undefined } as never));
+	const first = await launch();
+	try {
+		const stamped = first.stamp!.files.map(([path]) => path);
+		for (const path of Object.values(inputs)) assert.ok(stamped.includes(path), `${path} is in the stamp`);
+		assert.ok(!stamped.includes(extension), "the extension file is not");
+		assert.ok(!stamped.includes(append), "nor a file the loader did not read");
+		writeFileSync(extension, readFileSync(extension, "utf8") + "// edited\n");
+		writeFileSync(append, "Say thanks twice.\n");
+		assert.equal(launcher.current!(first), true, "so editing them leaves the session current");
+	} finally { await first.dispose(); }
+	for (const [input, path] of Object.entries(inputs)) {
+		const handle = await launch();
+		try {
+			assert.equal(launcher.current!(handle), true);
+			writeFileSync(path, readFileSync(path, "utf8") + "More.\n");
+			assert.equal(launcher.current!(handle), false, `an edited ${input} file makes it stale`);
+		} finally { await handle.dispose(); }
+	}
 });
 
 test.after(() => rmSync(scratch, { recursive: true, force: true }));
