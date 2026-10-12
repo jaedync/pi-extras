@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import statusPlus from '../extensions/status-plus.ts';
+
+// The poll path shares its claims through the agent directory: it must be this file's own.
+const agentDir = mkdtempSync(join(tmpdir(), 'status-plus-offline-'));
+process.env.PI_CODING_AGENT_DIR = agentDir;
+const { default: statusPlus } = await import('../extensions/status-plus.ts');
+test.after(() => rmSync(agentDir, { recursive: true, force: true }));
 
 for (const setting of ['PI_OFFLINE', 'STATUS_PLUS_POLL_LIMITS']) {
   test(`${setting} suppresses credential lookups for usage polling`, async () => {
@@ -58,8 +64,7 @@ for (const value of ['0', 'false']) {
       if (old === undefined) delete process.env.PI_OFFLINE; else process.env.PI_OFFLINE = old;
       if (poll === undefined) delete process.env.STATUS_PLUS_POLL_LIMITS; else process.env.STATUS_PLUS_POLL_LIMITS = poll;
       // The poll's claim is shared through the agent directory; the next case must not wait on it.
-      // Only an isolated agent directory (npm test sets one) is cleaned.
-      if (process.env.PI_CODING_AGENT_DIR) rmSync(join(process.env.PI_CODING_AGENT_DIR, 'status-plus-limits'), { recursive: true, force: true });
+      rmSync(join(agentDir, 'status-plus-limits'), { recursive: true, force: true });
     }
   });
 }
