@@ -2,6 +2,39 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.12 - 2026-10-12
+
+### Added
+
+- Subagents: a child that works through a `/reload`, or after a change to a
+  file that its launch read, moves to a new session at its next turn
+  boundary. The move keeps the same run, budget, check and report. A run
+  moves for changed files one time; new code always moves it. The child does
+  not move while it waits for an answer or for a `wait: true` subagent. Set
+  `subagents.swapAtTurn` to `false` to turn this off. Each move writes a line
+  to `~/.pi/agent/subagents/swaps.log`.
+- Rate Limit Recovery: when the Claude Code proxy (Meridian) fails a turn
+  with "Reached maximum number of turns", the extension sends the request
+  again after 2, 5 and 10 seconds. It does this for main and for subagents,
+  only when the failed turn ran no tool. Before, Pi did not retry this
+  failure, and a subagent run stopped.
+
+### Changed
+
+- Subagents: the handover contract for `/reload` is now version 3. The
+  first `/reload` after you update interrupts children and resumes them.
+- Subagents: a run that changed no files since its last check skips the
+  check, and its report says this. Fix rounds now count for the whole run.
+
+### Fixed
+
+- Subagents: a question that would wait forever on a held spawn is refused.
+- Subagents: after a restart, a held spawn starts after the agents it waits
+  for resume and end.
+- Subagents: children's thinking settings and the inspector's look follow
+  main's project-trust decision.
+- Kagi Search: a cache test no longer fails on a slow machine.
+
 ## 0.24.11 - 2026-10-12
 
 ### Added
