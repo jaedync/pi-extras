@@ -1,16 +1,8 @@
 /**
  * The team: every child agent's record, the concurrency queue, nesting, and
- * message routing between `main`, children and siblings. Sessions are made by
- * an injected launcher, so all of this runs in tests without a model.
- *
- * Delivery rules:
- * - To `main`: handed to `deliverToMain`, which decides whether it wakes.
- * - To a running child: steered in after its current tool call.
- * - To a finished child: a question or anything from its parent resumes it;
- *   a sibling's note waits in its inbox for the next run.
- * - A reply to someone blocked on a question resolves that question instead.
- * The inbox, the answers a child is owed and what was steered into it unread
- * live on its record, so the index keeps them across a restart or crash.
+ * the runs of its children. Messages between `main`, children and siblings go
+ * where routing.ts says. Sessions are made by an injected launcher, so all of
+ * this runs in tests without a model.
  * A run whose model can't serve it goes on, as the same run, on a fallback
  * model (fallback.ts).
  * A child is not done until its own children have reported. A run that a
@@ -19,9 +11,9 @@
  * When a child's session is held and when it goes is sessions.ts's to say.
  */
 import { randomUUID } from "node:crypto";
-import { afterBlock, afterError, askError, awaited, queuedActivity, waitingFor } from "./after.ts";
-import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
-import { noteText, questionText, reportText, resumeWarning } from "./format.ts";
+import { afterBlock, afterError, awaited, queuedActivity, waitingFor } from "./after.ts";
+import { MAIN, nameFor } from "./names.ts";
+import { reportText } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
 import { checkError, checkFailed, mergeCheck, RunChecks } from "./checks.ts";
@@ -32,12 +24,12 @@ import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
 import { saveReport } from "./reports.ts";
+import { Routing, type SendOptions } from "./routing.ts";
 import { OpenSessions } from "./sessions.ts";
 import { WorkTrees } from "./work-trees.ts";
 import { placeChild } from "./placement.ts";
-import { workspaceError } from "./worktree.ts";
 import {
-	ACTIVE_STATES, type AgentRecord, type CheckUpdate, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
+	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
 } from "./types.ts";
 
 export interface TeamOptions {
@@ -80,20 +72,14 @@ export class Team implements HostTeam {
 	private readonly waiters = new Map<string, Array<(record: AgentRecord) => void>>();
 	private readonly listeners = new Set<Listener>();
 	private readonly queue: string[] = [];
-	/** Children that owe main an answer; their next message to main wakes it. */
-	private readonly owesMain = new Set<string>();
 	/** Stops between marking the record stopped and handing its report up. */
 	private readonly ending = new Set<string>();
 	private readonly answers = new MainAnswers();
 	private closed = false;
 	private closing: Promise<void> | undefined;
 	private readonly resumePrompts = new Map<string, string>();
-	/** Runs a peer's message started; main, its parent or the user writing to it during the run makes it theirs. */
-	private readonly peerRuns = new Set<string>();
 	/** Stopped by their own parent, which already knows; no report goes up. */
 	private readonly stoppedByParent = new Set<string>();
-	/** Interrupted children whose next message from main waits in their inbox (`holdAnswer`). */
-	private readonly heldAnswers = new Set<string>();
 	/** Runs moving to a fallback model, with what they had used of their budget: the same run goes on. */
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
 	private readonly checks = new RunChecks({
@@ -103,6 +89,7 @@ export class Team implements HostTeam {
 	private readonly budgets: RunBudgets;
 	private readonly locks = new EditLocks(this);
 	private readonly workTrees = new WorkTrees();
+	private readonly routing: Routing;
 	/** The checkout of main's working directory, looked up at the first need; undefined without one. */
 	private mainCheckout: { value: string | undefined } | undefined;
 	private readonly now: () => number;
@@ -116,6 +103,23 @@ export class Team implements HostTeam {
 		this.budgets = new RunBudgets({ now: this.now, over: (name, reason) => void this.stop(name, { reason }) });
 		this.sessions = new OpenSessions({ launcher: options.launcher, idle: (name) => this.records.get(name)?.state === "idle", warn: options.warn ?? console.warn,
 			...(options.idleReleaseMs !== undefined ? { idleReleaseMs: options.idleReleaseMs } : {}) });
+		this.routing = this.router();
+	}
+
+	/** Routing's view of the team (routing.ts). */
+	private router(): Routing {
+		const { options } = this;
+		return new Routing({
+			questions: this.questions, answers: this.answers, sessions: this.sessions, checks: this.checks,
+			closed: () => this.closed, get: this.lookup, list: () => this.list(), patch: (name, patch) => this.patch(name, patch),
+			under: (name, ancestor) => this.under(name, ancestor), now: () => this.now(), known: () => this.knownNames(),
+			deliverToMain: (delivery) => options.deliverToMain(delivery),
+			...(options.prepareResume ? { prepareResume: (record: AgentRecord) => options.prepareResume!(record) } : {}),
+			resumeWith: (name, prompt) => { this.resumePrompts.set(name, prompt); },
+			forgetAnswer: (name) => this.forgetAnswer(name), takeInbox: (name) => this.takeInbox(name),
+			enqueue: (name) => { this.queue.push(name); this.pump(); },
+			run: (name, text) => { void this.run(name, text); },
+		});
 	}
 
 	get(name: string): AgentRecord | undefined {
@@ -156,7 +160,7 @@ export class Team implements HostTeam {
 	 * of resuming it: main is answering what it asked before an interruption,
 	 * and the policy leaves resuming to the user (host-state.ts).
 	 */
-	holdAnswer(name: string): void { this.heldAnswers.add(name); }
+	holdAnswer(name: string): void { this.routing.holdAnswer(name); }
 
 	/** Validates depth, names the child, and starts or queues it. */
 	spawn(request: SpawnRequest): { ok: true; record: AgentRecord } | { ok: false; error: string } {
@@ -231,62 +235,8 @@ export class Team implements HostTeam {
 		if (record?.blocking) this.patch(name, { blocking: false });
 	}
 
-	async send(from: string, to: string, text: string, options: { expectReply?: boolean; signal?: AbortSignal; automatic?: boolean; check?: CheckUpdate } = {}): Promise<SendResult> {
-		if (this.closed) return { ok: false, error: "The session is shutting down." };
-		if (to === from) return { ok: false, error: "That is you." };
-		const badCheck = options.check ? this.checks.set(from, to, options.check) : undefined;
-		if (badCheck) return { ok: false, error: badCheck };
-		if (to === EVERYONE) return this.broadcast(from, text, options.expectReply === true);
-		// The user can answer any question, whoever it was put to.
-		const open = this.questions.of(to);
-		const pending = from === USER ? open[0] : open.find((question) => question.to === from);
-		if (pending) {
-			pending.resolve(text);
-			if (from === USER) this.options.deliverToMain({ kind: "relay", from, to, text, answered: true });
-			return { ok: true, delivered: "replied" };
-		}
-		// Its parent is blocked on this agent's report: a note would only land after it, and a
-		// question could never be answered, so the question ends the wait instead.
-		const asker = this.records.get(from);
-		if (asker?.blocking && to === asker.parent) {
-			if (!options.expectReply) return { ok: false, error: `${to} is waiting for your report; put this in it instead.` };
-			this.patch(from, { blocking: false });
-		}
-		// A child waits only on main and its parent: they never wait on it, so no loop of waiting
-		// agents can form. Anyone else answers by message, which wakes it.
-		const waits = options.expectReply === true && (to === MAIN || to === asker?.parent);
-		const body = options.expectReply ? questionText(from, text) : noteText(from, text);
-		const said = `${options.expectReply ? "Question" : "Message"} from ${from}: ${text}`;
-		if (options.expectReply && !waits && asker) {
-			const early = askError(this.records.get(to), this.lookup);
-			if (early) return { ok: false, error: early };
-			const result = this.deliverToChild(from, to, body, true, said, options.automatic);
-			if (result.ok) this.patch(from, { owed: [...new Set([...(this.records.get(from)?.owed ?? []), to])] });
-			return result;
-		}
-		// Main never blocks: its question is delivered, and the answer wakes it later.
-		if (from === MAIN && options.expectReply) {
-			const idle = this.records.get(to)?.state === "idle";
-			const result = this.deliverToChild(from, to, body, true, said, options.automatic);
-			if (result.ok) this.owesMain.add(to);
-			if (result.ok && idle && result.delivered === "resumed") this.answers.resumedToAnswer(to);
-			return result;
-		}
-		let result: SendResult;
-		if (to === MAIN) {
-			const answering = this.owesMain.delete(from);
-			const answerer = this.records.get(from);
-			if (answering && answerer && this.answers.answers(from, answerer.toolCalls, () => this.sessions.onlyMessageCall(from))) this.patch(from, { answeredMain: true });
-			this.options.deliverToMain(options.expectReply ? { kind: "question", from, text } : answering ? { kind: "reply", from, text } : { kind: "note", from, text });
-			result = { ok: true, delivered: "main" };
-		} else {
-			const answers = this.payOwed(to, from);
-			result = this.deliverToChild(from, to, body, options.expectReply === true || answers, said, options.automatic);
-			// Main should never be surprised by work the user asked for directly.
-			if (result.ok && from === USER) this.options.deliverToMain({ kind: "relay", from, to, text, answered: false });
-		}
-		if (!result.ok || !options.expectReply) return result;
-		return this.questions.ask(from, to, options.signal);
+	send(from: string, to: string, text: string, options: SendOptions = {}): Promise<SendResult> {
+		return this.routing.send(from, to, text, options);
 	}
 
 	/** The child's messages so far; empty before it starts. */
@@ -385,7 +335,7 @@ export class Team implements HostTeam {
 	private put(record: AgentRecord): void {
 		this.records.set(record.name, record);
 		// A held answer is for the paused child that asked; once anything resumes it, main's messages work as usual.
-		if (record.state !== "interrupted") this.heldAnswers.delete(record.name);
+		if (record.state !== "interrupted") this.routing.unhold(record.name);
 		this.budgets.follow(record.name, record.state);
 		this.locks.follow(record);
 		for (const listener of this.listeners) listener(record);
@@ -454,7 +404,7 @@ export class Team implements HostTeam {
 		const previous = this.records.get(name)!;
 		this.resumePrompts.delete(name);
 		this.sessions.endRun(name);
-		this.peerRuns.delete(name);
+		this.routing.ended(name);
 		this.forgetAnswer(name);
 		this.patch(name, { state: "interrupted", error: message, restoreError: message, launchError: message,
 			launchFailures: (previous.launchFailures ?? 0) + 1, endedAt: this.now(), activity: `resume launch failed: ${message}`,
@@ -462,13 +412,12 @@ export class Team implements HostTeam {
 		const record = this.records.get(name)!;
 		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
 		this.waiters.delete(name);
-		this.owesMain.delete(name);
 		const failure = { ...record, reportFile: undefined,
 			report: `Resume launch failed: ${message}. The child remains interrupted; fix the problem and resume it again.` };
 		const asked = this.questions.of(record.parent).find((question) => question.to === name);
 		if (asked) asked.resolve(reportText(failure, this.now()));
 		else if (record.parent === MAIN) this.options.deliverToMain({ kind: "report", record: failure });
-		else this.deliverToChild(name, record.parent, reportText(failure, this.now()), true);
+		else this.routing.deliver(name, record.parent, reportText(failure, this.now()), true);
 		this.pump();
 	}
 
@@ -630,17 +579,16 @@ export class Team implements HostTeam {
 		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
 		this.waiters.delete(name);
 		// The report answers anything main was waiting on.
-		const owedMain = this.owesMain.delete(name);
+		const { owedMain, peerRun } = this.routing.ended(name);
 		const unanswered: string[] = [];
 		let parentAsked = false;
 		for (const asker of this.list().filter((entry) => entry.owed?.includes(name)).map((entry) => entry.name)) {
-			if (!this.payOwed(asker, name)) continue;
+			if (!this.routing.payOwed(asker, name)) continue;
 			if (asker === record.parent) parentAsked = true;
 			else unanswered.push(asker);
 		}
 		// A peer's run that ended quietly is news for the parent's next turn, unless it answers the parent or main.
 		// So is one that a spawn of the same parent waits for: the parent hears of it through that spawn's report.
-		const peerRun = this.peerRuns.delete(name);
 		// A check that did not pass is news either way.
 		const quiet = (peerRun || awaited(record, this.list())) && record.state === "idle" && !checkFailed(record) && !parentAsked && !owedMain;
 		// A parent waiting on this child's answer gets the report as that answer.
@@ -653,10 +601,10 @@ export class Team implements HostTeam {
 		} else if (record.parent === MAIN) {
 			if (!record.blocking) this.options.deliverToMain({ kind: "report", record, ...(quiet ? { quiet } : {}) });
 		} else if (!record.blocking) {
-			this.deliverToChild(record.name, record.parent, reportText(record, this.now()), !quiet, `Report from ${record.name}`);
+			this.routing.deliver(record.name, record.parent, reportText(record, this.now()), !quiet, `Report from ${record.name}`);
 		}
 		// Its parent has the report; anyone else it owed an answer gets how its run ended instead.
-		for (const asker of unanswered) this.deliverToChild(name, asker, `${name} ended without answering you. ${reportText(record, this.now())}`, true, `Report from ${name}`);
+		for (const asker of unanswered) this.routing.deliver(name, asker, `${name} ended without answering you. ${reportText(record, this.now())}`, true, `Report from ${name}`);
 		// Anyone else waiting on it would wait out the whole timeout for an answer that can't come.
 		for (const [asker, questions] of this.questions.entries()) {
 			if (asker === record.parent) continue;
@@ -664,95 +612,6 @@ export class Team implements HostTeam {
 		}
 		this.sessions.ended(name, record.state);
 		this.pump();
-	}
-
-	/** Settles what `from` owed `asker`; true when it owed it an answer. */
-	private payOwed(asker: string, from: string): boolean {
-		const owing = this.records.get(asker)?.owed;
-		if (!owing?.includes(from)) return false;
-		const rest = owing.filter((agent) => agent !== from);
-		this.patch(asker, { owed: rest.length > 0 ? rest : undefined });
-		return true;
-	}
-
-	/** `said` is how the report of a run this message starts names it. */
-	private deliverToChild(from: string, to: string, body: string, wakes: boolean, said = body, automatic = false): SendResult {
-		const target = this.records.get(to);
-		if (!target) return { ok: false, error: `No agent named ${to}. ${this.knownNames()}` };
-		if (from === MAIN && this.heldAnswers.delete(to) && target.state === "interrupted") {
-			this.patch(to, { inbox: [...(target.inbox ?? []), body] });
-			return { ok: true, delivered: "inbox", notice: `${to} is paused, and resumePolicy is "notify", so it reads this when it resumes. Message it again, or run /subagents resume ${to}, to resume it now.` };
-		}
-		const resumes = wakes || from === target.parent || from === USER;
-		// An ended run's session is on disk, so its parent or the user can take it up again; a peer can't.
-		const ended = target.state === "failed" || target.state === "stopped";
-		if (ended && !(from === target.parent || from === USER)) return { ok: false, error: `${to} has ${target.state}; only ${target.parent} or the user can resume it.` };
-		const place = target.cwd ?? target.worktree?.path;
-		const missing = resumes && !LIVE_STATES.has(target.state) && place ? workspaceError(place) : undefined;
-		if (missing) return { ok: false, error: missing };
-		const peer = from !== MAIN && from !== USER && from !== target.parent && !this.under(from, to);
-		if (from === MAIN || from === USER || from === target.parent) this.peerRuns.delete(to);
-		this.forgetAnswer(to);
-		const handle = this.sessions.get(to);
-		if ((target.state === "running" || target.state === "asking") && handle) {
-			handle.steer(body);
-			this.patch(to, { unread: [...(this.records.get(to)?.unread ?? []), body] });
-			return { ok: true, delivered: "steered" };
-		}
-		// Released when it ended; should it still be held, let it go before a fresh launch takes its place.
-		if (ended && handle) void this.sessions.release(to);
-		// A paused child's session that a launch now would not make goes too, so its next run starts on today's code and settings.
-		const stale = !ended && (target.state === "idle" || target.state === "waiting") && this.sessions.stale(to);
-		if ((!handle || ended || stale) && resumes && (target.state === "idle" || target.state === "waiting" || target.state === "interrupted" || ended)) {
-			const relaunched = this.relaunch(target, { from, body, said, automatic, peer, stale });
-			if (relaunched) return relaunched;
-		}
-		if ((target.state === "idle" || target.state === "waiting") && handle && resumes) {
-			// A new run: time it on its own and forget what the last one answered.
-			if (target.state === "idle") {
-				this.startedBy(to, peer);
-				this.patch(to, { resumedBy: { from, text: said }, startedAt: this.now(),
-					...(!automatic && (from === MAIN || from === USER) ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
-			}
-			void this.run(to, [...this.takeInbox(to), body].join("\n\n"));
-			return { ok: true, delivered: "resumed" };
-		}
-		this.patch(to, { inbox: [...(this.records.get(to)?.inbox ?? []), body] });
-		return { ok: true, delivered: target.state === "queued" || target.state === "starting" ? "queued" : "inbox" };
-	}
-
-	/**
-	 * Queues a run of `target` from its session file, which a message started.
-	 * Undefined when a held session that is only stale should take the message
-	 * instead: a resume that can't go would otherwise lose it.
-	 */
-	private relaunch(target: AgentRecord, why: { from: string; body: string; said: string; automatic: boolean; peer: boolean; stale: boolean }): SendResult | undefined {
-		const { name } = target;
-		let prepared: { model: string; note?: string; notice?: string } = { model: target.model };
-		try { if (!why.automatic) prepared = this.options.prepareResume?.(target) ?? prepared; }
-		catch (error) { return why.stale ? undefined : { ok: false, error: (error as Error).message }; }
-		if (why.stale) void this.sessions.release(name);
-		this.resumePrompts.set(name, `${resumeWarning(target)}${prepared.note ? `${prepared.note}\n\n` : ""}${why.body}`);
-		if (target.state !== "waiting") this.startedBy(name, why.peer);
-		this.patch(name, { state: "queued", model: prepared.model, resumedBy: { from: why.from, text: why.said }, startedAt: this.now(), error: undefined, stopReason: undefined, restoreError: undefined, launchError: undefined,
-			...(!why.automatic ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
-		this.queue.push(name);
-		this.pump();
-		return { ok: true, delivered: "resumed", ...(prepared.notice ? { notice: prepared.notice } : {}) };
-	}
-
-	/** A new run from idle or interrupted; a peer started it unless main, its parent, the user or its own subagent did. */
-	private startedBy(name: string, peer: boolean): void {
-		if (peer) this.peerRuns.add(name);
-		else this.peerRuns.delete(name);
-	}
-
-	private async broadcast(from: string, text: string, expectReply: boolean): Promise<SendResult> {
-		if (expectReply) return { ok: false, error: `Ask one agent at a time; "${EVERYONE}" cannot reply.` };
-		const others = this.list().filter((record) => record.name !== from && LIVE_STATES.has(record.state));
-		for (const record of others) this.deliverToChild(from, record.name, noteText(from, text), false);
-		if (from !== MAIN) this.options.deliverToMain({ kind: "note", from, text });
-		return { ok: true, delivered: "steered" };
 	}
 
 	/** An asker's state follows its open questions. */
