@@ -201,8 +201,8 @@ class Host implements HostState {
 		next.mailChanged();
 	}
 
-	park(): void {
-		this.binding.park();
+	park(log?: (message: string) => void): void {
+		this.binding.park(log);
 	}
 
 	quiet(): boolean {
@@ -236,20 +236,21 @@ class Host implements HostState {
 		if (this.closed) return;
 		this.closed = true;
 		this.removeSignals();
-		const live = this.binding.close();
+		// Mail and launches stop here; until the close ends, notices reach the module bound now, else the park log.
+		const live = this.binding.beginClose();
 		this.index.keepMail(handOverMail(this.mail.drain(), live));
 		// The team marks its live children interrupted at once, and the run log records them as it does.
 		const closing = this.team.close(this.signalReason ? "signal" : reason === "reload" ? "reload" : "quit", this.inputs.owner);
 		this.unsubscribe();
 		// Saved before anything is awaited, so an exit during the close still finds its children interrupted and its mail kept.
-		let unsaved: string | undefined;
+		// A failure is told, as a close told it before handovers: the next start opens the index as it is.
 		try { this.index.save(this.team.list(), this.signalReason ?? reason, this.inputs.owner); }
-		catch (error) { unsaved = `subagents: could not save ${this.index.file}: ${(error as Error).message}`; }
+		catch (error) { this.notify(`subagents: could not save ${this.index.file}: ${(error as Error).message}`); }
 		try { await closing; }
-		finally { if (!this.leaseHandedOver) this.releaseLease(); }
-		// A parked host has no one to tell; whoever closed it says it (host.ts logs it, a session start shows it).
-		if (unsaved && live) live.notify(unsaved, "warning");
-		else if (unsaved) throw new Error(unsaved);
+		finally {
+			if (!this.leaseHandedOver) this.releaseLease();
+			this.binding.close();
+		}
 	}
 
 	/** Puts the saved roster back; when it can't, lets go of what this host took and leaves the index as it was. */

@@ -55,14 +55,15 @@ export function takeParked(session: object): ParkedHost | undefined {
  * Settles once the host a reload parked for `session` and nobody claimed has
  * closed, or after a bound: its close aborts children first and releases the
  * lease last, so a start that opened the index sooner would find it owned.
+ * False when the bound came first and that host may still hold the lease.
  */
-export async function closingHost(session: object): Promise<void> {
+export async function closingHost(session: object, waitMs = CLOSE_WAIT_MS): Promise<boolean> {
 	const closing = registry().closing.get(session);
-	if (!closing) return;
+	if (!closing) return true;
 	let timer: ReturnType<typeof setTimeout> | undefined;
-	const bound = new Promise<void>((resolve) => { timer = setTimeout(resolve, CLOSE_WAIT_MS); timer.unref?.(); });
+	const bound = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), waitMs); timer.unref?.(); });
 	// Its own failure is logged where it closed; this start only needs it over.
-	try { await Promise.race([closing.catch(() => undefined), bound]); }
+	try { return await Promise.race([closing.then(() => true, () => true), bound]); }
 	finally { clearTimeout(timer); }
 }
 
@@ -116,6 +117,9 @@ export class PortBinding {
 	private dropped = 0;
 	private sends: Array<Parameters<HostPorts["send"]>> = [];
 	private waiting: Array<{ resolve(launcher: Launcher): void; reject(error: Error): void }> = [];
+	/** Where notices go that no module will see: those of a host that closes while parked. */
+	private log: ((message: string) => void) | undefined;
+	private closing = false;
 	private closed = false;
 
 	constructor(ports: HostPorts) {
@@ -123,10 +127,12 @@ export class PortBinding {
 		this.scope = ports.models();
 		this.ports = {
 			send: (message, options) => {
+				if (this.closing || this.closed) return;
 				if (this.bound) this.bound.send(message, options);
-				else if (!this.closed) this.sends.push([message, options]);
+				else this.sends.push([message, options]);
 			},
-			route: () => this.bound?.route() ?? "hold",
+			// A closing host hands its mail over itself (host-state.ts), so none goes out on its own.
+			route: () => this.closing || !this.bound ? "hold" : this.bound.route(),
 			notify: (message, level) => this.notify(message, level),
 			teamChanged: () => this.bound?.teamChanged(),
 			mailChanged: () => this.bound?.mailChanged(),
@@ -140,7 +146,7 @@ export class PortBinding {
 	}
 
 	bind(ports: HostPorts): void {
-		if (this.closed) throw new Error("This session's subagents are closed.");
+		if (this.closing || this.closed) throw new Error("This session's subagents are closed.");
 		this.bound = ports;
 		this.scope = ports.models();
 		for (const [message, options] of this.sends.splice(0)) {
@@ -153,37 +159,45 @@ export class PortBinding {
 		for (const waiter of this.waiting.splice(0)) waiter.resolve(ports.launcher);
 	}
 
-	park(): void {
+	park(log?: (message: string) => void): void {
 		this.bound = undefined;
+		this.log = log;
 	}
 
 	/**
-	 * Launches still waiting fail, and nothing reaches a module after: a late
-	 * notice from a host that is gone would use a `ctx` Pi has replaced.
-	 * Returns the ports that were bound, for the closing host's last words.
+	 * The host begins to close: mail and launches stop, and notices still go
+	 * to the module bound now, else to the park log, until `close`. Notices
+	 * kept for a module that will not come go to that log now. Returns the
+	 * ports bound now, which the closing host hands its mail to.
 	 */
-	close(): HostPorts | undefined {
-		const bound = this.bound;
+	beginClose(): HostPorts | undefined {
+		this.closing = true;
+		this.sends = [];
+		for (const waiter of this.waiting.splice(0)) waiter.reject(new Error("The session is shutting down."));
+		for (const { message } of this.notices.splice(0)) this.log?.(message);
+		if (this.dropped > 0) this.log?.(`${this.dropped} more notices came while the subagents were parked.`);
+		this.dropped = 0;
+		return this.bound;
+	}
+
+	/** Nothing reaches a module after this: a late notice from a host that is gone would use a `ctx` Pi has replaced. */
+	close(): void {
+		this.beginClose();
 		this.closed = true;
 		this.bound = undefined;
-		this.sends = [];
-		this.notices = [];
-		for (const waiter of this.waiting.splice(0)) waiter.reject(new Error("The session is shutting down."));
-		return bound;
 	}
 
 	private notify(message: string, level: "info" | "warning"): void {
-		if (this.closed) return;
+		if (this.closed) return void this.log?.(message);
 		if (this.bound) return this.bound.notify(message, level);
+		if (this.closing) return void this.log?.(message);
 		if (this.notices.length < HELD_NOTICES) this.notices.push({ message, level });
 		else this.dropped++;
 	}
 
 	private async launch(record: AgentRecord, hooks: ChildHooks): Promise<ChildHandle> {
-		const launcher = this.bound?.launcher ?? await new Promise<Launcher>((resolve, reject) => {
-			if (this.closed) reject(new Error("The session is shutting down."));
-			else this.waiting.push({ resolve, reject });
-		});
+		if (this.closing || this.closed) throw new Error("The session is shutting down.");
+		const launcher = this.bound?.launcher ?? await new Promise<Launcher>((resolve, reject) => { this.waiting.push({ resolve, reject }); });
 		return launcher.launch(record, hooks);
 	}
 }

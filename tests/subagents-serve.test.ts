@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as tick } from "node:timers/promises";
 import { HOST_VERSION, type HostPorts, type HostState, type ParkedHost } from "../lib/subagents/contract.ts";
-import { takeParked } from "../lib/subagents/host.ts";
+import { parkHost, takeParked } from "../lib/subagents/host.ts";
 import { serveSession } from "../lib/subagents/serve.ts";
 import { ToolActivity } from "../lib/subagents/tool-activity.ts";
 
@@ -27,7 +27,7 @@ function fakePi(dir = mkdtempSync(join(tmpdir(), "subagents-serve-"))) {
 	const sdk = { getAgentDir: () => join(dir, "agent"), CONFIG_DIR_NAME: ".pi", parseSessionEntries: () => [], migrateSessionEntries: () => undefined };
 	const ctx = { cwd: dir, scopedModels: [], model: undefined, modelRegistry: {}, sessionManager, ui: { notify: (message: string) => { live(notices).push(message); } } };
 	const pi = { getActiveTools: () => live([]), getAllTools: () => live([]), sendMessage: () => live(undefined) };
-	const serve = (parked?: ParkedHost) => serveSession({ sdk, pi, ctx, generation: 2, parked, route: () => "wake", teamChanged() {}, mailChanged() {}, currentGroup: () => "run-2-0" } as never);
+	const serve = (parked?: ParkedHost, extra: object = {}) => serveSession({ sdk, pi, ctx, generation: 2, parked, route: () => "wake", teamChanged() {}, mailChanged() {}, currentGroup: () => "run-2-0", ...extra } as never);
 	return { dir, notices, sessionManager, serve, replace: () => { replaced = true; }, index: join(dir, "agent", "sessions", "subagents", "parent-serve", "index.json") };
 }
 
@@ -80,4 +80,19 @@ test("a park that fails closes the host as a reload did before, so the lease is 
 	const second = await fakePi(pi.dir).serve();
 	cleanups.push(() => second.close());
 	assert.equal(second.adopted, false);
+});
+
+test("a start that waits too long for a host still closing says to run /reload again, not that the lease is owned", async () => {
+	const pi = fakePi();
+	const served = await pi.serve();
+	const host = served.host();
+	// Its close never ends, as one whose child won't abort.
+	let finish!: () => void;
+	const stuck = { ...host, close: () => new Promise<void>((resolve) => { finish = resolve; }) } as HostState;
+	parkHost(pi.sessionManager, stuck, { timeoutMs: 5, log: () => undefined });
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	// The same session, as after a reload, whose start finds that close still under way.
+	await assert.rejects(pi.serve(undefined, { closeWaitMs: 20 }), /still closing\. Run \/reload again/);
+	finish();
+	await host.close();
 });

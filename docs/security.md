@@ -449,8 +449,9 @@ Restoring only reads transcripts and never rewrites them. The run log,
 each task, the model, timings, tool-call counts, usage, the session path and
 any error. `PI_CODING_AGENT_DIR/subagents/reload.log` gets one line, with no
 task text, when a `/reload` could not keep the children or did not take them
-over in time. The index also keeps mail to main that a `/reload` could not
-hand over, until the next session start posts it. Delete
+over in time. The warnings of that interruption go there too, such as a run
+log or index that can't be written. The index also keeps mail to main that a
+`/reload` could not hand over, until the next session start posts it. Delete
 these files whenever you like. Nothing is sent anywhere except the child's own
 model requests.
 

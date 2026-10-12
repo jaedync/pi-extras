@@ -121,8 +121,12 @@ export interface HostState {
 	readonly ports: HostPorts;
 	/** The module that serves the session now binds its ports; throws once the host is closed. */
 	rebind(ports: HostPorts): void;
-	/** Pi reloads: launches wait for the next module's launcher, mail to main is held, notices are queued. */
-	park(): void;
+	/**
+	 * Pi reloads: launches wait for the next module's launcher, mail to main is
+	 * held, notices are queued. Should the host close before a module binds,
+	 * its notices go to `log`.
+	 */
+	park(log?: (message: string) => void): void;
 	/** No child works, starts, stops or waits, and all mail has reached main: the host can go without interrupting anything. */
 	quiet(): boolean;
 	/** Saves the index for the host that replaces this one, and gives it the lease to release. */

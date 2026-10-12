@@ -1,6 +1,7 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import type { HostState, ParkedHost } from "../lib/subagents/contract.ts";
 import { HOST_VERSION } from "../lib/subagents/contract.ts";
@@ -380,4 +381,38 @@ test("under resumePolicy always, the child resumes after a restart, and its kept
 	await sleep(20);
 	const answer = await reopened.team.send("main", name, "release/2.0");
 	assert.equal(answer.ok && answer.delivered, "steered");
+});
+
+/** A run log that can't be written, so the interruptions a close records each give a warning. */
+function brokenRunLog(h: ReturnType<typeof setup>): void {
+	mkdirSync(join(h.dir, "agent", "subagents", "runs.jsonl"), { recursive: true });
+}
+
+test("warnings while a bound host closes still reach the module that serves it", async () => {
+	const h = setup();
+	const first = h.portsFor("first");
+	const host = h.open(first);
+	h.spawn(host, "Working at the quit");
+	await tick();
+	brokenRunLog(h);
+	await host.close("quit");
+	assert.match(first.notices.join("\n"), /could not write the run log/);
+});
+
+test("warnings while a parked host closes go to its log, and an index it can't save does not fail the close", async () => {
+	const h = setup();
+	const host = h.open(h.portsFor("first"));
+	h.spawn(host, "Working at the fallback");
+	await tick();
+	const logged: string[] = [];
+	host.park((message) => logged.push(message));
+	const session = {};
+	parkHost(session, host, { log: (message) => logged.push(message) });
+	brokenRunLog(h);
+	// The index can't be replaced: its path is a directory now.
+	rmSync(h.indexFile, { force: true });
+	mkdirSync(h.indexFile);
+	await takeParked(session)!.close("reload");
+	assert.match(logged.join("\n"), /could not write the run log/);
+	assert.match(logged.join("\n"), /could not save/);
 });

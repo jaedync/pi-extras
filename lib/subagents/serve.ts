@@ -178,6 +178,8 @@ export interface ServeOptions {
 	readonly mailChanged: () => void;
 	/** Main's current run; children it starts in one run report together. */
 	readonly currentGroup: () => string;
+	/** How long a start waits for a host from before a /reload that is still closing; host.ts sets the default. */
+	readonly closeWaitMs?: number;
 }
 
 export interface Served {
@@ -295,8 +297,12 @@ class Service implements Served {
 			}
 		}
 		// A host an earlier reload left that timed out may still be letting its children go, and holds the lease until then.
-		await closingHost(this.options.ctx.sessionManager);
-		this.current = this.open();
+		const closed = await closingHost(this.options.ctx.sessionManager, this.options.closeWaitMs);
+		try { this.current = this.open(); }
+		catch (error) {
+			if (!closed) throw new Error("The subagents from before the /reload are still closing. Run /reload again.");
+			throw error;
+		}
 	}
 
 	lookForQuiet(): void {
@@ -309,7 +315,7 @@ class Service implements Served {
 		this.stop();
 		const log = reloadLog(this.options.sdk.getAgentDir());
 		try {
-			this.current.park();
+			this.current.park(log);
 			this.live.freeze();
 			parkHost(session, this.current, { log });
 		} catch (error) {

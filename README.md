@@ -1418,9 +1418,11 @@ next session start resumes them, as `resumePolicy` allows. Mail to main that
 waited during the reload stays in `index.json`, and the next session start
 sends it one time, after its restore notice. A question from a child that
 stays paused does not wake main. Under `resumePolicy: "notify"`, main's answer
-to it goes to the child's inbox and does not resume the child. A reload that does not finish, or that can't keep the
-children, writes a line to `~/.pi/agent/subagents/reload.log`. For the other
-cases, Pi shows a notice.
+to it goes to the child's inbox and does not resume the child. A reload that
+does not finish, or that can't keep the children, writes a line to
+`~/.pi/agent/subagents/reload.log`. The warnings of that interruption go to the
+same file, because no session can show them. For the other cases, Pi shows a
+notice.
 
 **Restoration.** Children survive `/reload`, restarts and crashes. An
 `index.json` beside their sessions keeps each child's name, settings, state and
