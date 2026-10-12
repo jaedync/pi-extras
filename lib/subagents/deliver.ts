@@ -314,7 +314,7 @@ export class MainMail implements HostMail {
 		const waiting = new Set(context.pendingMessages.map(mailId));
 		const lastReply = context.contextMessages.findLastIndex((message) => (message as { role?: string }).role === "assistant");
 		const unread = new Set(context.contextMessages.slice(lastReply + 1).map(mailId));
-		for (const id of [...this.owing.keys()]) if (!waiting.has(id) && !unread.has(id)) this.owing.delete(id);
+		this.settle(() => { for (const id of [...this.owing.keys()]) if (!waiting.has(id) && !unread.has(id)) this.owing.delete(id); });
 		return this.owing.size > 0;
 	}
 
@@ -327,13 +327,15 @@ export class MainMail implements HostMail {
 		if (this.owing.size === 0) return;
 		const recent = entries.slice(-RECONCILE_WINDOW);
 		const lastReply = recent.findLastIndex(isReply);
-		for (const entry of recent.slice(0, Math.max(0, lastReply))) {
-			const e = entry as { type?: string; customType?: string; details?: unknown };
-			if (e.type === "custom_message") {
-				const id = mailId({ role: "custom", customType: e.customType, details: e.details });
-				if (id) this.owing.delete(id);
+		this.settle(() => {
+			for (const entry of recent.slice(0, Math.max(0, lastReply))) {
+				const e = entry as { type?: string; customType?: string; details?: unknown };
+				if (e.type === "custom_message") {
+					const id = mailId({ role: "custom", customType: e.customType, details: e.details });
+					if (id) this.owing.delete(id);
+				}
 			}
-		}
+		});
 	}
 
 	/**
@@ -345,7 +347,7 @@ export class MainMail implements HostMail {
 	remind(): void {
 		if (this.owing.size === 0 || this.closed) return;
 		const from = [...new Set(this.owing.values())].join(", ");
-		this.owing.clear();
+		this.settle(() => this.owing.clear());
 		this.post({ customType: MESSAGE_TYPE, content: reminderText(from), display: false, details: { id: this.nextId(), kind: "reminder", from } }, true);
 	}
 
@@ -385,6 +387,16 @@ export class MainMail implements HostMail {
 		this.timer = null;
 		this.batch = [];
 		this.pendingItems.clear();
+	}
+
+	/**
+	 * Runs `change` to what main owes, and reports it when main owes less: a
+	 * host waiting for quiet (serve.ts) has no other event for main's reply.
+	 */
+	private settle(change: () => void): void {
+		const before = this.owing.size;
+		change();
+		if (this.owing.size < before) this.onChange();
 	}
 
 	private remember(item: PendingItem): void {

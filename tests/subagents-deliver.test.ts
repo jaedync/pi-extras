@@ -263,3 +263,35 @@ test("mail main has replied after, as a turn ends, is no longer owed, so a remin
 	assert.match(sent.at(-1)!.message.content, /before you replied to worker\./, "an aborted reply is no reply");
 	assert.doesNotMatch(sent.at(-1)!.message.content, /scout/);
 });
+
+test("main's reply to mail it owed is a change, however it is seen, so a host waiting for quiet looks again", () => {
+	let route: Route = "queue";
+	let changes = 0;
+	const sent: OutgoingMessage[] = [];
+	const box = new MainMail({ port: { send: (message) => sent.push(message) }, batchMs: 5, route: () => route, onChange: () => { changes++; } });
+	const owe = (text: string) => {
+		box.deliver({ kind: "note", from: "scout", text });
+		const { id } = sent.at(-1)!.details;
+		box.acknowledge(id);
+		return id;
+	};
+	const settled = () => { const before = changes; return () => changes - before; };
+	const viaContext = owe("one");
+	let count = settled();
+	assert.equal(box.owed({ contextMessages: [user, custom(viaContext), reply], pendingMessages: [] }), false);
+	assert.equal(count(), 1, "the context shows main replied");
+	assert.equal(box.idle(), true);
+	const viaBranch = owe("two");
+	count = settled();
+	box.answered([{ type: "custom_message", customType: MESSAGE_TYPE, details: { id: viaBranch } }, { type: "message", message: { role: "assistant", stopReason: "stop" } }]);
+	assert.equal(count(), 1, "the branch shows main replied");
+	owe("three");
+	route = "wake";
+	count = settled();
+	box.remind();
+	assert.equal(count(), 1, "a reminder settles what main owed");
+	count = settled();
+	box.answered([]);
+	assert.equal(box.owed({ contextMessages: [], pendingMessages: [] }), false);
+	assert.equal(count(), 0, "nothing owed, nothing changed");
+});
