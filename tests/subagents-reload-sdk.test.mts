@@ -86,7 +86,7 @@ async function parent(packageRoot: string): Promise<Parent> {
 	await session.bindExtensions({ mode: "print", uiContext: { notify: (text: string) => notices.push(text) } } as never);
 	const dir = join(agentDir, "sessions", "subagents", session.sessionManager.getSessionId());
 	const record = (name: string) => JSON.parse(readFileSync(join(dir, "index.json"), "utf8")).records.find((r: any) => r.name === name);
-	const tool = (name: string) => session.agent.state.tools.find((t: any) => t.name === name);
+	const tool = (name: string) => session.agent.state.tools.find((t: any) => t.name === name)!;
 	return {
 		session, notices, flags, record,
 		transcript: (name) => { const file = record(name)?.sessionFile; return file && existsSync(file) ? readFileSync(file, "utf8") : ""; },
@@ -176,8 +176,8 @@ test("a second /reload while the adopted team still works hands the same childre
 	} finally { await p.close(); }
 });
 
-/** What the reload before `session_start` left on the shelf for this session. */
-const shelf = (p: Parent) => (globalThis as any)[Symbol.for("pi-extras.subagents.host")].parked as WeakMap<object, any>;
+/** What a reload leaves for the next module, by session (host.ts). */
+const shelf = () => (globalThis as any)[Symbol.for("pi-extras.subagents.host")].parked as WeakMap<object, any>;
 
 test("a parked host of another version is closed with its own code, and its children resume as after a reload before", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
 	const p = await parent(copyPackage().root);
@@ -185,9 +185,9 @@ test("a parked host of another version is closed with its own code, and its chil
 		await p.spawn("old", "Work when the version changes");
 		await waitingInBash(p, "old");
 		await p.session.reload({ beforeSessionStart: async () => {
-			const parked = shelf(p).get(p.session.sessionManager);
+			const parked = shelf().get(p.session.sessionManager);
 			assert.ok(parked, "the reload parked the host");
-			shelf(p).set(p.session.sessionManager, { ...parked, version: parked.version + 1 });
+			shelf().set(p.session.sessionManager, { ...parked, version: parked.version + 1 });
 		} });
 		const notice = p.session.messages.filter((m: any) => m.customType === "subagent-restore");
 		assert.equal(notice.length, 1);
@@ -205,8 +205,8 @@ test("a takeover that throws closes the parked host with its own code, and its c
 		await p.spawn("fragile", "Work when the takeover fails");
 		await waitingInBash(p, "fragile");
 		await p.session.reload({ beforeSessionStart: async () => {
-			const parked = shelf(p).get(p.session.sessionManager);
-			shelf(p).set(p.session.sessionManager, { ...parked, claim: () => ({ ...parked.claim(), rebind() { throw new Error("synthetic takeover failure"); } }) });
+			const parked = shelf().get(p.session.sessionManager);
+			shelf().set(p.session.sessionManager, { ...parked, claim: () => ({ ...parked.claim(), rebind() { throw new Error("synthetic takeover failure"); } }) });
 		} });
 		assert.match(p.notices.join("\n"), /could not take over.*synthetic takeover failure/);
 		const notice = p.session.messages.filter((m: any) => m.customType === "subagent-restore");
@@ -225,7 +225,7 @@ test("a shutdown other than a reload interrupts children as before", { timeout: 
 	await p.close();
 	assert.equal(p.record("quitter")?.state, "interrupted");
 	assert.equal(p.record("quitter")?.interruptedBy, "quit");
-	assert.equal(shelf(p).get(p.session.sessionManager), undefined, "nothing is parked");
+	assert.equal(shelf().get(p.session.sessionManager), undefined, "nothing is parked");
 });
 
 test.after(() => rmSync(scratch, { recursive: true, force: true }));

@@ -8,13 +8,15 @@
  * main; then a host from this module's code takes over, quietly.
  */
 import type { ExtensionAPI, ExtensionContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { operationalError } from "../operational-log.ts";
 import { allowedTools } from "./allowlist.ts";
 import { childExtensionPaths, childToolNames, createLauncher, describeTool } from "./child.ts";
 import { loadConfig, readGuide, type SubagentsConfig } from "./config.ts";
 import { HOST_VERSION, type HostActivity, type HostPorts, type HostState, type HostTeam, type ModelScope, type ParkedHost } from "./contract.ts";
 import type { Route } from "./deliver.ts";
+import type { Launcher } from "./types.ts";
 import { childInstructions, conversationDigest, rosterText } from "./format.ts";
 import { parkHost } from "./host.ts";
 import { openHost } from "./host-state.ts";
@@ -93,6 +95,62 @@ function livePi(pi: ExtensionAPI, ctx: ExtensionContext): LivePi {
 	};
 }
 
+/** Main's tools' context, fixed for the session start but for the team, which is read at each call. */
+function mainToolContext(scope: Scope, live: LivePi, team: () => HostTeam, currentGroup: () => string): ToolContext {
+	return {
+		get team() { return team(); },
+		allowed: scope.allowed, fallbackModel: scope.fallbackModel, thinking: scope.thinking, modelTable: modelTable(scope.allowed, scope.thinking),
+		guide: scope.guide, replyTimeoutMs: scope.config.replyTimeoutMs, now: Date.now, currentGroup,
+		childTools: (readOnly) => childToolNames(live.activeTools(), readOnly, scope.config.childToolsExclude),
+	};
+}
+
+interface LauncherInputs {
+	readonly sdk: Sdk;
+	readonly ctx: ExtensionContext;
+	readonly generation: number;
+	readonly scope: Scope;
+	readonly live: LivePi;
+	readonly team: () => HostTeam;
+	readonly tools: ToolContext;
+	readonly activity: HostActivity;
+	readonly warn: (message: string) => void;
+}
+
+/** Makes children with this module's code: its instructions, its tools for them, its launch. */
+function childLauncher(inputs: LauncherInputs): Launcher {
+	const { sdk, ctx, scope, live, team, tools } = inputs;
+	const agentDir = sdk.getAgentDir();
+	return createLauncher({
+		sdk, agentDir, cwd: ctx.cwd, generation: inputs.generation,
+		sessionDir: join(agentDir, "sessions", "subagents", ctx.sessionManager.getSessionId()),
+		modelRuntime: runtimeSource(sdk, ctx),
+		modelAllowed: (model) => scope.allowed.some((choice) => choice.ref === model),
+		claimEdit: (name, target) => team().claimEdit(name, target),
+		warn: inputs.warn,
+		activity: inputs.activity,
+		mayEdit: (name, root) => team().mayEdit(name, root),
+		bashChanged: (name, paths, root) => team().bashChanged(name, paths, root),
+		toolsFor: (record) => {
+			const names = allowedTools(childToolNames(live.activeTools(), record.readOnly, scope.config.childToolsExclude), record.tools);
+			return {
+				tools: names,
+				extensionPaths: childExtensionPaths(live.allTools(), names),
+				customTools: [
+					childMessageTool(tools, record.name),
+					...(record.depth < scope.config.maxDepth ? [subagentTool(tools, record.name), stopTool(tools, record.name)] : []),
+				],
+			};
+		},
+		instructions: (record) => childInstructions({
+			name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < scope.config.maxDepth,
+			...(record.worktree ? { worktree: record.worktree } : {}),
+			roster: rosterText(record.name, team().list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model }))),
+			...(record.fork ? { conversation: conversationDigest(live.branch(), describeTool) } : {}),
+		}),
+	});
+}
+
 export interface ServeOptions {
 	readonly sdk: Sdk;
 	readonly pi: ExtensionAPI;
@@ -142,42 +200,9 @@ export async function serveSession(options: ServeOptions): Promise<Served> {
 	let serving = true;
 	let renewFailed = false;
 	const team = (): HostTeam => host.team;
-	const tools: ToolContext = {
-		get team() { return team(); },
-		allowed: scope.allowed, fallbackModel: scope.fallbackModel, thinking: scope.thinking, modelTable: modelTable(scope.allowed, scope.thinking),
-		guide: scope.guide, replyTimeoutMs: scope.config.replyTimeoutMs, now: Date.now,
-		currentGroup: options.currentGroup,
-		childTools: (readOnly) => childToolNames(live.activeTools(), readOnly, scope.config.childToolsExclude),
-	};
-	const launcher = createLauncher({
-		sdk, agentDir, cwd: ctx.cwd, generation,
-		sessionDir: join(agentDir, "sessions", "subagents", ctx.sessionManager.getSessionId()),
-		modelRuntime: runtimeSource(sdk, ctx),
-		modelAllowed: (model) => scope.allowed.some((choice) => choice.ref === model),
-		claimEdit: (name, target) => team().claimEdit(name, target),
-		// Through the host, so a warning from a launch still under way when Pi reloads waits for the next module.
-		warn: (message) => host.ports.notify(message, "warning"),
-		activity,
-		mayEdit: (name, root) => team().mayEdit(name, root),
-		bashChanged: (name, paths, root) => team().bashChanged(name, paths, root),
-		toolsFor: (record) => {
-			const names = allowedTools(childToolNames(live.activeTools(), record.readOnly, scope.config.childToolsExclude), record.tools);
-			return {
-				tools: names,
-				extensionPaths: childExtensionPaths(live.allTools(), names),
-				customTools: [
-					childMessageTool(tools, record.name),
-					...(record.depth < scope.config.maxDepth ? [subagentTool(tools, record.name), stopTool(tools, record.name)] : []),
-				],
-			};
-		},
-		instructions: (record) => childInstructions({
-			name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < scope.config.maxDepth,
-			...(record.worktree ? { worktree: record.worktree } : {}),
-			roster: rosterText(record.name, team().list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model }))),
-			...(record.fork ? { conversation: conversationDigest(live.branch(), describeTool) } : {}),
-		}),
-	});
+	const tools = mainToolContext(scope, live, team, options.currentGroup);
+	// Through the host, so a warning from a launch still under way when Pi reloads waits for the next module.
+	const launcher = childLauncher({ sdk, ctx, generation, scope, live, team, tools, activity, warn: (message) => host.ports.notify(message, "warning") });
 	const lookForQuiet = () => {
 		if (looking || !serving || renewFailed || host.generation === generation) return;
 		// After the change that called this has finished: a report is handed to the mail after its record changes.
@@ -239,7 +264,15 @@ export async function serveSession(options: ServeOptions): Promise<Served> {
 			looking = undefined;
 			live.freeze();
 			host.park();
-			parkHost(session, host, { log: (message) => operationalError(join(agentDir, "subagents", "reload.log"), "subagents", message) });
+			const logFile = join(agentDir, "subagents", "reload.log");
+			parkHost(session, host, {
+				log(message) {
+					// No module is left to show a notice, and the next start announces the interrupted children itself,
+					// so this log is best effort, as operational-log.ts is: a directory it can't make loses only the line.
+					try { mkdirSync(dirname(logFile), { recursive: true }); } catch { /* the append below fails the same way, quietly */ }
+					operationalError(logFile, "subagents", message);
+				},
+			});
 		},
 		async close(reason) {
 			serving = false;
