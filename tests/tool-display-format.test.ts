@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { commandLines, diffStats, grepSummary, listSummary, parseShellOutput, readSummary } from "../lib/tool-display/format.ts";
+import { commandLines, diffStats, grepSummary, listSummary, parseShellOutput, readSummary, sanitize } from "../lib/tool-display/format.ts";
 
 test("a successful shell result keeps its output and drops the empty-output placeholder", () => {
 	assert.deepEqual(parseShellOutput("hello\nworld", false), { body: "hello\nworld", outcome: { kind: "ok" } });
@@ -33,6 +33,21 @@ test("command lines are split, stripped of control bytes and have tabs expanded"
 	assert.deepEqual(commandLines("a\tb\r\nc\x1b[31m\n"), ["a  b", "c[31m"]);
 	assert.deepEqual(commandLines(""), []);
 	assert.deepEqual(commandLines("  \n  "), []);
+});
+
+test("sanitize drops bidi and zero-width controls but keeps the joiner that emoji sequences need", () => {
+	assert.equal(sanitize("admin\u202e\u2066txt.exe\u2069\u202c"), "admintxt.exe", "no Trojan Source reordering");
+	assert.equal(sanitize("a\u202ab\u202bc\u202dd\u2067e\u2068f\u200eg\u200fh"), "abcdefgh");
+	assert.equal(sanitize("zero\u200bwidth\u2060joiner\ufeff"), "zerowidthjoiner");
+	const family = "\u{1f468}\u200d\u{1f469}\u200d\u{1f467}";
+	assert.equal(sanitize(family), family, "the zero-width joiner stays");
+});
+
+test("sanitize treats a lone carriage return as a return to the line start, as a terminal does", () => {
+	assert.equal(sanitize("10%\r50%\r100%\ndone"), "100%\ndone", "progress output keeps only its last frame");
+	assert.equal(sanitize("a\r\nb\r\n"), "a\nb\n", "Windows line ends are still line ends");
+	assert.equal(sanitize("loading\r"), "loading", "a trailing return with nothing after it keeps the line");
+	assert.equal(sanitize("one\rtwo\r\nthree"), "two\nthree");
 });
 
 test("diff stats count added and removed lines, not context", () => {

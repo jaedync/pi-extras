@@ -24,6 +24,12 @@ const SHELL_NOTICE = /(?:^|\n\n)\[(Showing [^\n]*Full output: [^\n]*)\]$/;
 const TRAILING_NOTICE = /\n\n\[([^\n]*)\]$/;
 /** C0 controls except tab and newline, DEL and C1: an escape in agent text must not reach the terminal. */
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+/**
+ * Bidi embeddings, overrides, isolates and marks, which can reorder what a
+ * title shows (Trojan Source), and zero-width spaces, which hide text. The
+ * zero-width joiner (U+200D) stays: emoji sequences need it.
+ */
+const INVISIBLE = /[\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g;
 
 function shellOutcome(match: RegExpExecArray): ShellOutcome {
 	if (match[1] !== undefined) return { kind: "exit", code: Number(match[1]) };
@@ -47,8 +53,16 @@ export function parseShellOutput(text: string, isError: boolean): ShellOutput {
 	return notice ? { body, outcome, notice: notice[1]! } : { body, outcome };
 }
 
+/** A line as a terminal leaves it: a lone `\r` goes back to the line start, so progress output keeps its last frame. */
+function lastFrame(line: string): string {
+	if (!line.includes("\r")) return line;
+	return line.split("\r").findLast((frame) => frame !== "") ?? "";
+}
+
 export function sanitize(text: string): string {
-	return text.replace(/\r\n?/g, "\n").replace(/\t/g, "  ").replace(CONTROL, "");
+	const unix = text.replace(/\r\n/g, "\n");
+	const lines = unix.includes("\r") ? unix.split("\n").map(lastFrame).join("\n") : unix;
+	return lines.replace(/\t/g, "  ").replace(CONTROL, "").replace(INVISIBLE, "");
 }
 
 /** A command as display lines, without trailing blank lines. */
