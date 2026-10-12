@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ProvisionOptions } from "../lib/voice/provision.ts";
+import { readTiers, writeTiers, type ProvisionOptions } from "../lib/voice/provision.ts";
 
 const home = mkdtempSync(join(tmpdir(), "voice-stale-"));
 process.env.PI_VOICE_HOME = home;
@@ -93,6 +93,37 @@ test("a new session replaces a runtime whose ctx went stale without a throw", as
 	stale = true;
 	assert.doesNotThrow(() => handlers.get("session_start")!({}, { hasUI: true, mode: "tui", ui }));
 	handlers.get("session_shutdown")!({}, { ui });
+});
+
+// Background setup marks a tier ready while the user looks at the model menu.
+test("choosing a model keeps what setup wrote while the menu was open", async () => {
+	const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+	let command: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+	voice({
+		on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, handler),
+		registerCommand: (_name: string, options: { handler: typeof command }) => (command = options.handler),
+		events: { on: () => () => {}, emit() {} },
+	} as never);
+	writeTiers(home, { "cpu-small": { ready: true, dir: home }, preferred: "cpu-small" });
+	const ui = {
+		setStatus() {}, notify() {}, onTerminalInput: () => () => {}, theme: { fg: (_: string, text: string) => text },
+		select: async (_title: string, labels: string[]) => {
+			writeTiers(home, { ...readTiers(home), vad: join(home, "vad.onnx"), python: join(home, "python") });
+			return labels.find((label) => label.includes("Automatic"));
+		},
+	};
+	const ctx = { hasUI: true, mode: "tui", ui };
+	handlers.get("session_start")!({}, ctx);
+	try {
+		await command!("model", ctx);
+		const tiers = readTiers(home);
+		assert.equal(tiers.preferred, "auto");
+		assert.equal(tiers.vad, join(home, "vad.onnx"));
+		assert.equal(tiers.python, join(home, "python"));
+		assert.deepEqual(tiers["cpu-small"], { ready: true, dir: home });
+	} finally {
+		handlers.get("session_shutdown")!({}, ctx);
+	}
 });
 
 test.after(() => rmSync(home, { recursive: true, force: true }));

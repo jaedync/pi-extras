@@ -496,9 +496,12 @@ class VoiceRuntime {
 		const picked = await ctx.ui.select("Speech model", choices.map((choice) => choice.label));
 		const choice = choices.find((candidate) => candidate.label === picked);
 		if (!choice || choice.value === (tiers.preferred ?? "auto")) return;
-		const updated = { ...tiers, preferred: choice.value };
-		writeTiers(this.home, updated);
-		const option = backendOptions(facts, tiers).find((candidate) => candidate.tier === choice.value);
+		// Read again: background setup may have marked a tier ready while the menu was open.
+		// Only the preference changes on disk; what is installed is read through the prune, as above.
+		const written = { ...readTiers(this.home), preferred: choice.value };
+		writeTiers(this.home, written);
+		const updated = pruneMissingTiers(written);
+		const option = backendOptions(facts, updated).find((candidate) => candidate.tier === choice.value);
 		if (option && !option.ready) {
 			this.setup.start([option.tier]);
 			ctx.ui.notify(
