@@ -6,6 +6,7 @@
  */
 import { sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { bgSgr, mix, parseAnsiColor, type ColorMode, type Rgb } from "../band/color.ts";
+import { reopenBackground } from "../band/surface.ts";
 import type { Block } from "./scan.ts";
 
 export const LABEL = "copy";
@@ -70,7 +71,7 @@ export function paintFrom(theme: PaintTheme): Paint {
 /** Text on a background that survives the resets inside it. */
 export function onBg(text: string, bg: string): string {
 	if (!bg) return text;
-	return `${bg}${text.replace(/\x1b\[0?m/g, (reset) => reset + bg).replace(/\x1b\[49m/g, bg)}\x1b[49m`;
+	return `${bg}${reopenBackground(text, bg)}\x1b[49m`;
 }
 
 const padTo = (text: string, width: number) => text + " ".repeat(Math.max(0, width - visibleWidth(text)));

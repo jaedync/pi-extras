@@ -3,7 +3,7 @@ import test from "node:test";
 import { AssistantMessageComponent, getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import { Markdown, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import copyBlocks, { copyBlocksEnabled, latestReply, pickBlock } from "../lib/copy-blocks/index.ts";
-import { DONE, LABEL } from "../lib/copy-blocks/draw.ts";
+import { DONE, LABEL, onBg } from "../lib/copy-blocks/draw.ts";
 import { newRecorder, scan, taggedTheme } from "../lib/copy-blocks/scan.ts";
 import { sourceBlocks, sourceCode } from "../lib/copy-blocks/source.ts";
 import { COPIED_MS, installCopyBlocks, type CopyHost } from "../lib/copy-blocks/view.ts";
@@ -377,4 +377,13 @@ test("replies a reload builds before session start get their cards once it runs"
 	} finally {
 		handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx);
 	}
+});
+
+test("a card's background comes back after any code that clears it, not after colors that merely contain a 0 or 49", () => {
+	const BG = "\x1b[48;2;30;30;30m";
+	assert.equal(onBg("a\x1b[0mb\x1b[49mc", BG), `${BG}a\x1b[0m${BG}b${BG}c\x1b[49m`);
+	assert.equal(onBg("a\x1b[0;3mb\x1b[39;49mc\x1b[mdone", BG), `${BG}a\x1b[0;3m${BG}b\x1b[39;49m${BG}c\x1b[m${BG}done\x1b[49m`);
+	const colors = "\x1b[38;2;0;49;0mx\x1b[48;5;0my\x1b[38;5;49mz";
+	assert.equal(onBg(colors, BG), `${BG}${colors}\x1b[49m`, "color values are not resets");
+	assert.equal(onBg("plain", ""), "plain", "no background leaves the text alone");
 });

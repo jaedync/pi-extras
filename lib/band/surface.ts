@@ -30,6 +30,11 @@ function clearsBackground(params: string): boolean {
 	return false;
 }
 
+/** `text` with `sgr` set again after every code inside it that clears the background. */
+export function reopenBackground(text: string, sgr: string): string {
+	return text.replace(SGR, (code, params: string) => (code === "\x1b[49m" ? sgr : clearsBackground(params) ? `${code}${sgr}` : code));
+}
+
 /** A line cut to `width`: Pi stops drawing, and throws, on a line wider than the terminal. */
 const fitted = (line: string, width: number) => (visibleWidth(line) > width ? truncateToWidth(line, Math.max(0, width), "…") : line);
 
@@ -42,7 +47,7 @@ export function onBackground(lines: readonly string[], width: number, sgr: strin
 	return lines.map((wide) => {
 		const line = fitted(wide, width);
 		const pad = " ".repeat(Math.max(0, width - visibleWidth(line)));
-		return `${sgr}${line.replace(SGR, (code, params: string) => (code === "\x1b[49m" ? sgr : clearsBackground(params) ? `${code}${sgr}` : code))}${pad}\x1b[49m`;
+		return `${sgr}${reopenBackground(line, sgr)}${pad}\x1b[49m`;
 	});
 }
 
