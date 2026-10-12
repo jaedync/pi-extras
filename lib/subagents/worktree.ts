@@ -1,6 +1,6 @@
 /** Isolated child workspaces retain the parent's current files without changing its index. */
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -181,6 +181,44 @@ export function sourcePlace(worktree: Worktree, path: string): string {
 export function sourceCheckout(path: string): string | undefined {
 	const container = dirname(path);
 	return container.endsWith(WORKTREE_SUFFIX) && container.length > WORKTREE_SUFFIX.length ? container.slice(0, -WORKTREE_SUFFIX.length) : undefined;
+}
+
+const oneLine = (error: unknown): string => String((error as { stderr?: unknown }).stderr || (error as Error).message).replace(/\s+/g, " ").trim().slice(0, 200);
+
+/** The repository's shared git folder, real, as the checkout `root` names it; or why not. */
+export function commonGitDir(root: string): { dir: string } | { why: string } {
+	try {
+		const out = execFileSync("git", ["-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
+		return { dir: realpathSync(out.trim()) };
+	} catch (error) { return { why: `git can't find the git folder of ${root}: ${oneLine(error)}` }; }
+}
+
+/** Whether the folder `dir` is a real folder whose `gitdir` file names `want`, compared as text. */
+function namesWorktree(dir: string, want: string): boolean {
+	try {
+		if (!lstatSync(dir).isDirectory()) return false;
+		return resolve(dir, readFileSync(join(dir, "gitdir"), "utf8").trim()) === want;
+	} catch (error) {
+		if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") return false;
+		throw error;
+	}
+}
+
+/**
+ * The git folder in `common/worktrees` of the worktree at `path` (its real
+ * path, as `createWorktree` saved it), or why not. The worktree's `.git` and
+ * its own git folder are the child's to write, so neither is followed: the
+ * folder is the one real folder whose `gitdir` text names this worktree. A
+ * child can rewrite only its own folder's, which then names nothing or makes
+ * a second match, and both are refused.
+ */
+export function worktreeGitDir(path: string, common: string): { dir: string } | { why: string } {
+	const folder = join(common, "worktrees");
+	const refused = `No folder in ${folder} is ${join(path, ".git")}'s alone.`;
+	try {
+		const found = readdirSync(folder).map((name) => join(folder, name)).filter((dir) => namesWorktree(dir, join(path, ".git")));
+		return found.length === 1 ? { dir: found[0]! } : { why: refused };
+	} catch (error) { return { why: `${refused} ${oneLine(error)}` }; }
 }
 
 /** Persisted paths are used as command arguments and prompt text, never shell input. */

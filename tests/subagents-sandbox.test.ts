@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -83,14 +83,23 @@ test("a worktree's git writes are its own git folder, the object store and its b
 		trees: [join(common, "worktrees", "scout"), join(common, "objects")],
 		files: [join(common, "refs", "heads", "subagent", "scout"), join(common, "logs", "refs", "heads", "subagent", "scout")],
 	});
-	// The worktree's .git file is the child's to write: one that points at the repository's own git folder, or another worktree's, gets nothing.
+	// The worktree's .git file is the child's to write, so it is never read: a file or a link that points at the repository's own
+	// git folder, or at another worktree's, changes nothing.
 	const other = createWorktree(root, "other");
-	const refused = new RegExp(`^${join(worktree.path, ".git").replace(/[.]/g, "\\.")} does not point to a folder of its own in ${join(common, "worktrees").replace(/[.]/g, "\\.")}\\.`);
+	const own = { trees: [join(common, "worktrees", "scout"), join(common, "objects")], files: (gitWrites(worktree, realpathSync(root)) as GitWrites).files };
 	writeFileSync(join(worktree.path, ".git"), `gitdir: ${common}\n`);
-	assert.match(String(gitWrites(worktree, realpathSync(root))), refused);
-	writeFileSync(join(worktree.path, ".git"), `gitdir: ${join(common, "worktrees", "other")}\n`);
-	assert.match(String(gitWrites(worktree, realpathSync(root))), refused);
-	assert.ok(existsSync(other.path));
+	assert.deepEqual(gitWrites(worktree, realpathSync(root)), own);
+	rmSync(join(worktree.path, ".git"));
+	symlinkSync(join(other.path, ".git"), join(worktree.path, ".git"));
+	assert.deepEqual(gitWrites(worktree, realpathSync(root)), own, "a link to another worktree's .git file");
+	// Its own git folder is the child's to write too. A folder that names another worktree, or a link in its place, gets nothing.
+	const refused = (path: string) => new RegExp(`^No folder in ${join(common, "worktrees").replace(/[.]/g, "\\.")} is ${join(path, ".git").replace(/[.]/g, "\\.")}'s alone\\.`);
+	writeFileSync(join(common, "worktrees", "scout", "gitdir"), `${join(other.path, ".git")}\n`);
+	assert.match(String(gitWrites(worktree, realpathSync(root))), refused(worktree.path));
+	assert.match(String(gitWrites(other, realpathSync(root))), refused(other.path), "two folders name the other worktree");
+	rmSync(join(common, "worktrees", "scout"), { recursive: true });
+	symlinkSync(join(common, "worktrees", "other"), join(common, "worktrees", "scout"), "dir");
+	assert.match(String(gitWrites(worktree, realpathSync(root))), refused(worktree.path), "a link in place of its folder");
 	assert.match(String(gitWrites(worktree, join(realpathSync(root), "..", "missing"))), /^git can't find the git folder of /);
 });
 

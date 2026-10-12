@@ -5,16 +5,15 @@
  * installed; elsewhere commands run unconfined, as before.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 import type { BashSpawnContext } from "@earendil-works/pi-coding-agent";
 import type { Worktree } from "./types.ts";
-import { sourceCheckout } from "./worktree.ts";
+import { commonGitDir, sourceCheckout, worktreeGitDir } from "./worktree.ts";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 const BWRAP = "bwrap";
 const PROBE_TIMEOUT_MS = 5_000;
-const GIT_TIMEOUT_MS = 10_000;
 /** The one node_modules entry a worktree child may write: tool caches. The packages, `.bin` shims and package-manager files stay the parent's. */
 const CACHE_DIR = join("node_modules", ".cache");
 const ARG_VARIABLE = "PI_SUBAGENT_SANDBOX_ARG_";
@@ -46,32 +45,6 @@ export interface GitWrites {
 
 export const NO_GIT_WRITES: GitWrites = { trees: [], files: [] };
 
-const oneLine = (error: unknown): string => String((error as { stderr?: unknown }).stderr || (error as Error).message).replace(/\s+/g, " ").trim().slice(0, 200);
-
-/** The repository's shared git folder, as `root`, the checkout the worktree was made from, names it; or why not. */
-function commonDir(root: string): { dir: string } | { why: string } {
-	try {
-		const out = execFileSync("git", ["-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
-		return { dir: realpathSync(out.trim()) };
-	} catch (error) { return { why: `git can't find the git folder of ${root}: ${oneLine(error)}` }; }
-}
-
-/**
- * The worktree's own git folder in `common`, or why not. The child can
- * rewrite its `.git` file, so the folder counts only when it is one of
- * `common/worktrees` and its `gitdir` file points back at this worktree.
- */
-function ownGitDir(path: string, common: string): { dir: string } | { why: string } {
-	const wrong = { why: `${join(path, ".git")} does not point to a folder of its own in ${join(common, "worktrees")}.` };
-	try {
-		const link = /^gitdir: (.+)$/m.exec(readFileSync(join(path, ".git"), "utf8"))?.[1]?.trim();
-		if (!link) return wrong;
-		const dir = realpathSync(resolve(path, link));
-		const back = realpathSync(resolve(dir, readFileSync(join(dir, "gitdir"), "utf8").trim()));
-		return dirname(dir) === join(common, "worktrees") && back === realpathSync(join(path, ".git")) ? { dir } : wrong;
-	} catch (error) { return { why: `${wrong.why} ${oneLine(error)}` }; }
-}
-
 /**
  * What git needs to write for `git add`, `git commit` and `git status` in
  * the worktree, read from `root`, its real source checkout; or why it can't
@@ -79,9 +52,9 @@ function ownGitDir(path: string, common: string): { dir: string } | { why: strin
  * the child can move.
  */
 export function gitWrites(worktree: Pick<Worktree, "path" | "branch">, root: string): GitWrites | string {
-	const common = commonDir(root);
+	const common = commonGitDir(root);
 	if ("why" in common) return common.why;
-	const own = ownGitDir(worktree.path, common.dir);
+	const own = worktreeGitDir(worktree.path, common.dir);
 	if ("why" in own) return own.why;
 	const ref = join("refs", "heads", worktree.branch);
 	return { trees: [own.dir, join(common.dir, "objects")], files: [join(common.dir, ref), join(common.dir, "logs", ref)] };
