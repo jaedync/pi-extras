@@ -12,6 +12,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isOffline } from "../lib/offline.ts";
 import { operationalError, operationalLine } from "../lib/operational-log.ts";
 import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
@@ -408,7 +409,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	 * processes that each polled on their own clock got 429s and no budget.
 	 */
 	async function refreshProviderLimits(provider: string, ctx: ExtensionContext, force = false): Promise<void> {
-		if (process.env.PI_OFFLINE || process.env.STATUS_PLUS_POLL_LIMITS === "0") return;
+		if (isOffline() || process.env.STATUS_PLUS_POLL_LIMITS === "0") return;
 		const poller = LIMIT_POLLERS[provider];
 		if (!poller) return;
 		const shared = readShared(SHARE_DIR, provider);

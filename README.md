@@ -67,6 +67,7 @@ the package. Removing it does not remove your credentials or change other packag
   Status Plus writes a note in `status-plus.log`.
 - `STATUS_PLUS_POLL_LIMITS=0`: disable authenticated quota polling while retaining
   recorded usage and response-header limits. `PI_OFFLINE` also suppresses polling.
+  As in Pi, only `PI_OFFLINE=1`, `true` or `yes` turns offline mode on.
   Pi processes that share an agent directory poll each provider once between them
   and share the result in `PI_CODING_AGENT_DIR/status-plus-limits/`, so a new
   session shows the last budget at once.

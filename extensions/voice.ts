@@ -41,6 +41,7 @@ import {
 } from "../lib/voice/indicator.ts";
 import { TopBorderLink, voiceRow } from "../lib/top-border.ts";
 import { EditorSlot } from "../lib/editor-wrapper.ts";
+import { isOffline } from "../lib/offline.ts";
 import { backendOptions, backendSummary, CUDA_NOTE, type HardwareFacts, type TierId } from "../lib/voice/plan.ts";
 import {
 	floorReady,
@@ -258,7 +259,7 @@ class VoiceRuntime {
 		});
 		this.unsubscribe = ctx.ui.onTerminalInput((data) => this.controller.handleInput(data));
 		// Headless hosts never download models; offline sessions use whatever is already installed.
-		if (!process.env.PI_OFFLINE && hasAudioInput(process.platform, process.env) && !provisioningComplete(readTiers(this.home), hardwareFacts())) {
+		if (!isOffline() && hasAudioInput(process.platform, process.env) && !provisioningComplete(readTiers(this.home), hardwareFacts())) {
 			this.setup.start();
 		}
 	}

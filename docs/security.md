@@ -25,7 +25,8 @@ Provider-limit polling can send authenticated requests to:
 - `openrouter.ai` for remaining credits.
 
 Set `STATUS_PLUS_POLL_LIMITS=0` to disable polling. `PI_OFFLINE` also disables it;
-recorded usage and response-header limits remain available.
+recorded usage and response-header limits remain available. As in Pi, only
+`PI_OFFLINE=1`, `true` or `yes` turns offline mode on.
 
 Status Plus saves the newest poll result for each provider in
 `status-plus-limits/<provider>.json` in the Pi agent directory, with mode
