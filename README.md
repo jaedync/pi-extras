@@ -1224,9 +1224,9 @@ agent, the line gives the time and cost of its current run, and the agent it
 waits for. It shows 8 agents at most, then `+3 more`. Subagents makes the line
 when Pi gets the message, not when the message goes into the queue. When no
 other agent works, the message has no line. The results of main's `message`
-and `stop_subagent` calls end with `Team now:`, the agents that work or are
-interrupted, and the number of agents that ended. So main does not use a turn
-to ask for the status of its team.
+and `stop_subagent` calls end with `Team now:`. It gives the agents that work
+or are interrupted, and the number of agents that ended. So main does not use
+a turn to ask for the status of its team.
 
 **Seeing it.** An agent reads like someone in a conversation, with no band
 behind it: a `◆` and its name in its provider's color, the one the footer
@@ -1310,13 +1310,16 @@ child's directory, with the same shell settings and worktree sandbox. It gets
 no input. A timeout stops it after 10 minutes, or after
 `checkTimeoutMinutes` (60 at most). The run stays live while the check runs,
 and the row of the child shows `check: npm test`. Then the report ends with
-the command, the exit code, the time and the last lines of the output: 40
-lines or 4,000 characters for a failure, 10 lines or 1,000 characters for a
-pass. The report file has the same text. So the parent gets data from the
-harness, not only what the child says. With `fixUntilPass` (0 to 5, default
-0), a failed check goes back to the child as more of the same run. The child
-repairs the cause, and the check runs again. The run keeps its budget, and the
-parent gets only the last result. A run that fails, is stopped or goes over
+the command, the exit code, the time and the last lines of the output. For a
+failure, these are 40 lines or 4,000 characters at most. For a pass, they are
+10 lines or 1,000 characters at most. The report file has the same text. So
+the parent gets data from the harness, not only what the child says. A report
+with a check that did not pass always wakes the parent. With `fixUntilPass` (0
+to 5, default 0), a failed check goes back to the child as more of the same
+run. Messages that came during the check go with it. The child repairs the
+cause, and the check runs again. The run keeps its budget, and the parent gets
+only the last result. A check that could not run gets no fix rounds, because
+the child can't repair the harness. A run that fails, is stopped or goes over
 its budget gets no check. The child keeps its check for its later runs. A
 `message` with `check` replaces it. When that message does not give
 `fixUntilPass` or `checkTimeoutMinutes`, the old values stay. Only main, or a
@@ -1332,22 +1335,26 @@ the inspector stop children for you, and then main gets the stopped report.
 
 **Order.** `after` on `subagent` gives the agents that must end before the
 new child starts, for example `{ task, after: ["impl"] }`. The call records
-the child and returns. The child stays queued until each of these agents is
-idle, failed, stopped or interrupted. It does not use a `maxConcurrent` slot
-while it waits, and its row shows `after impl`. Its time budget starts when it
-starts. Its first prompt then tells how each agent ended and gives the path
-of each report, but not the report text. Each name must be an agent of the
-team. A child can't wait for the agent that starts it, or for an agent above
-that one, because each would wait for the other. `index.json` keeps the names,
-so a restore or a `/reload` keeps the wait. Only the first run waits; a
-resume does not. A stop removes a queued child before it starts. When a run
-ends normally and a queued child of the same parent waits for it, its report
-does not wake the parent. The parent reads it with the report of the queued
-child. A run that fails or is stopped still wakes the parent. An agent that
-the queued child waits for can't ask it a question, because the answer can
-come only after the start. The subagents of that agent can't either. They can
-send a note, which the queued child reads when it starts. A queued child does
-not keep the reports of its group waiting.
+the child and returns. `wait: true` can't go with `after`, because the agents
+before the child could need an answer from the caller. The child stays queued
+until each of these agents is idle, failed, stopped or interrupted. It does
+not use a `maxConcurrent` slot while it waits, and its row shows `after impl`.
+Its time budget starts when it starts. Its first prompt then tells how each
+agent ended and gives the path of each report, but not the report text. It
+also tells when an agent finished but its check did not pass. Each name must
+be an agent of the team. A name is refused when that agent can't end before
+the agent that starts the child, because each would wait for the other.
+Examples are the agent that starts the child, an agent above it, and a queued
+child that waits for one of these. `index.json` keeps the names, so a restore
+or a `/reload` keeps the wait. Only the first run waits; a resume does not. A
+stop removes a queued child before it starts. When a run ends normally and a
+queued child of the same parent waits for it, its report does not wake the
+parent. The parent reads it with the report of the queued child. A run that
+fails, is stopped or has a failed check still wakes the parent. A child can't
+ask a queued child a question, because the answer can come only after the
+start. Such a question could also make a loop of agents that wait for each
+other. A note is possible, and the queued child reads it when it starts. A queued child does not keep the
+reports of its group waiting.
 
 **Writers.** The first child to edit files in a checkout holds that checkout
 until its run ends. The checkout is the git work tree that contains the edited
