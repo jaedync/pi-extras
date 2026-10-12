@@ -1,5 +1,6 @@
 /** Shared shapes for the subagents team. Records are replaced, never mutated. */
 import type { Thinking } from "./models.ts";
+import type { LaunchStamp } from "./stamp.ts";
 
 /**
  * queued: over the concurrency limit. starting: its session is being made.
@@ -175,6 +176,8 @@ export interface ChildHandle {
 	tool?(name: string): object | undefined;
 	dispose(): Promise<void>;
 	sessionFile?: string;
+	/** What its launch read (stamp.ts); a launcher compares it with what a launch now would read. */
+	stamp?: LaunchStamp;
 }
 
 export interface ChildHooks {
@@ -183,6 +186,11 @@ export interface ChildHooks {
 
 export interface Launcher {
 	launch(record: AgentRecord, hooks: ChildHooks): Promise<ChildHandle>;
+	/**
+	 * Whether a launch now would make the session `handle` is: the same code,
+	 * settings, models and extensions. Without it every open session is current.
+	 */
+	current?(handle: ChildHandle): boolean;
 }
 
 /** Something the team hands to the main session. */

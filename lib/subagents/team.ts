@@ -675,11 +675,17 @@ export class Team {
 		this.pump();
 	}
 
-	/** A failed or stopped child's session goes at once; a finished one's after a quiet spell. */
+	/**
+	 * A failed or stopped child's session goes at once; a finished one's after a
+	 * quiet spell, or at once when a launch now would not make it, so its next
+	 * run starts on today's code and settings.
+	 */
 	private scheduleRelease(name: string, state: AgentRecord["state"]): void {
-		if (!this.handles.has(name)) return;
+		const handle = this.handles.get(name);
+		if (!handle) return;
 		if (state === "failed" || state === "stopped") return void this.release(name);
 		if (state !== "idle") return;
+		if (!this.current(handle)) return void this.release(name);
 		this.keep(name);
 		const timer = setTimeout(() => {
 			this.releaseTimers.delete(name);
@@ -687,6 +693,11 @@ export class Team {
 		}, this.options.idleReleaseMs ?? IDLE_RELEASE_MS);
 		timer.unref?.();
 		this.releaseTimers.set(name, timer);
+	}
+
+	/** Whether a launch now would make the session `handle` is (types.ts `Launcher.current`). */
+	private current(handle: ChildHandle): boolean {
+		return this.options.launcher.current?.(handle) ?? true;
 	}
 
 	/** A new run keeps the session it is about to use. */
@@ -736,18 +747,27 @@ export class Team {
 		}
 		// Released when it ended; should it still be held, let it go before a fresh launch takes its place.
 		if (ended && handle) void this.release(to);
-		if ((!handle || ended) && resumes && (target.state === "idle" || target.state === "waiting" || target.state === "interrupted" || ended)) {
+		// A paused child's session that a launch now would not make goes too, so its next run starts on today's code and settings.
+		const stale = !ended && handle !== undefined && (target.state === "idle" || target.state === "waiting") && !this.current(handle);
+		if ((!handle || ended || stale) && resumes && (target.state === "idle" || target.state === "waiting" || target.state === "interrupted" || ended)) {
 			const warning = resumeWarning(target);
-			let prepared: { model: string; note?: string; notice?: string } = { model: target.model };
+			let prepared: { model: string; note?: string; notice?: string } | undefined = { model: target.model };
 			try { if (!automatic) prepared = this.options.prepareResume?.(target) ?? prepared; }
-			catch (error) { return { ok: false, error: (error as Error).message }; }
-			this.resumePrompts.set(to, `${warning}${prepared.note ? `${prepared.note}\n\n` : ""}${body}`);
-			if (target.state !== "waiting") this.startedBy(to, peer);
-			this.patch(to, { state: "queued", model: prepared.model, resumedBy: { from, text: said }, startedAt: this.now(), error: undefined, stopReason: undefined, restoreError: undefined, launchError: undefined,
-				...(!automatic ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
-			this.queue.push(to);
-			this.pump();
-			return { ok: true, delivered: "resumed", ...(prepared.notice ? { notice: prepared.notice } : {}) };
+			catch (error) {
+				// A stale session still takes the message, where no session would lose it.
+				if (!stale) return { ok: false, error: (error as Error).message };
+				prepared = undefined;
+			}
+			if (prepared) {
+				if (stale) void this.release(to);
+				this.resumePrompts.set(to, `${warning}${prepared.note ? `${prepared.note}\n\n` : ""}${body}`);
+				if (target.state !== "waiting") this.startedBy(to, peer);
+				this.patch(to, { state: "queued", model: prepared.model, resumedBy: { from, text: said }, startedAt: this.now(), error: undefined, stopReason: undefined, restoreError: undefined, launchError: undefined,
+					...(!automatic ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
+				this.queue.push(to);
+				this.pump();
+				return { ok: true, delivered: "resumed", ...(prepared.notice ? { notice: prepared.notice } : {}) };
+			}
 		}
 		if ((target.state === "idle" || target.state === "waiting") && handle && resumes) {
 			// A new run: time it on its own and forget what the last one answered.

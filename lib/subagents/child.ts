@@ -14,6 +14,7 @@ import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from ".
 import { callPhrase } from "../tool-phrase.ts";
 import { guardBash } from "./bash-guard.ts";
 import { confine, sandboxFor } from "./sandbox.ts";
+import { freshModels, launchFiles, stampCurrent, stampOf } from "./stamp.ts";
 import type { ToolActivity } from "./tool-activity.ts";
 import { WAITING_FOR_MODEL, type AgentRecord, type AgentWork, type ChildHandle, type ChildHooks, type Launcher, type Usage } from "./types.ts";
 import { editTarget, outsideWorktree, sourcePlace, workspaceError } from "./worktree.ts";
@@ -124,6 +125,8 @@ export interface LauncherDeps {
 	sdk: Sdk;
 	agentDir: string;
 	cwd: string;
+	/** The module evaluation this launcher came from; a session another one launched is not current (stamp.ts). Default 0. */
+	generation?: number;
 	/** Where child sessions are written; null keeps them in memory. */
 	sessionDir: string | null;
 	modelRuntime(): Promise<ModelRuntime>;
@@ -206,6 +209,7 @@ function editTracker(activity: ToolActivity | undefined, agent: string, cwd: str
 }
 
 export function createLauncher(deps: LauncherDeps): Launcher {
+	const generation = deps.generation ?? 0;
 	return {
 		async launch(record: AgentRecord, hooks: ChildHooks): Promise<ChildHandle> {
 			const { sdk, agentDir } = deps;
@@ -214,10 +218,14 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			if (missing) throw new Error(missing);
 			if (record.restored && record.runs > 0 && record.sessionFile && !existsSync(record.sessionFile)) throw new Error(`The saved child session is missing: ${record.sessionFile}. Locate its transcript before resuming.`);
 			if (deps.modelAllowed && !deps.modelAllowed(record.model)) throw new Error(`The child's model ${record.model} is out of scope. Resume explicitly on the current default model.`);
+			const { tools, customTools: listed, extensionPaths = [] } = deps.toolsFor(record);
+			const loaded = [...new Set([...extensionPaths, CHILD_CACHE_COMPACTION_PATH])];
+			// Taken before anything is read, so a file that changes during the launch makes this session stale, never current.
+			const stamp = stampOf(generation, launchFiles(agentDir, cwd, sdk.CONFIG_DIR_NAME ?? ".pi", loaded));
 			const modelRuntime = await deps.modelRuntime();
+			await freshModels(modelRuntime, join(agentDir, "models.json"), (message) => deps.warn?.(message));
 			const resolved = sdk.resolveCliModel({ cliModel: record.model, modelRuntime });
 			if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Unknown model ${record.model}.`);
-			const { tools, customTools: listed, extensionPaths = [] } = deps.toolsFor(record);
 			const wanted = new Set(tools);
 			const guard = createChildRateLimitGuard({ configFile: join(agentDir, "pi-extras.json"), onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
 			// A directory a spawn named is used as Pi would use it with no one to ask; main's own keeps today's settings.
@@ -233,7 +241,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				// Besides Cache Compaction, load only files that own the child's tools. Every factory is handed the
 				// child's API, and one that keeps it in module state (remote-pi does) then delivers the
 				// parent's messages to the child, even if the extension is filtered out afterwards.
-				noExtensions: true, additionalExtensionPaths: [...new Set([...extensionPaths, CHILD_CACHE_COMPACTION_PATH])],
+				noExtensions: true, additionalExtensionPaths: loaded,
 				appendSystemPrompt: [deps.instructions(record)],
 				// Outside its worktree is refused before the lock is taken, so a refused edit holds nothing.
 				extensionFactories: [guard.extension, editGuard((path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name, editTarget(cwd, path)),
@@ -256,8 +264,9 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				customTools,
 			}).catch((error) => { guard.dispose(); throw error; });
 			await bindChild(session, guard, deps.onExtensionError);
-			return handleFor(session, hooks, resolved.model.contextWindow, guard, record);
+			return { ...handleFor(session, hooks, resolved.model.contextWindow, guard, record), stamp };
 		},
+		current: (handle) => !handle.stamp || stampCurrent(handle.stamp, generation),
 	};
 }
 
