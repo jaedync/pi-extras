@@ -196,6 +196,26 @@ export interface Served {
 
 /** Serves the session `ctx` starts: takes over what a reload left running, else opens the index as a start does. */
 export async function serveSession(options: ServeOptions): Promise<Served> {
+	const { parked } = options;
+	let closed = false;
+	const closeOnce: ParkedHost | undefined = parked && {
+		version: parked.version,
+		claim: () => parked.claim(),
+		close: (reason) => { closed = true; return parked.close(reason); },
+	};
+	try { return await serve({ ...options, ...(closeOnce ? { parked: closeOnce } : {}) }); }
+	catch (error) {
+		// Not taken over: its children would run unserved until its timeout. Serving never fails once it adopted the host.
+		if (parked && !closed) {
+			await parked.close("reload").catch((closeError: unknown) => {
+				throw new Error(`${(error as Error).message} Interrupting the children the /reload left running failed too: ${(closeError as Error).message}`);
+			});
+		}
+		throw error;
+	}
+}
+
+async function serve(options: ServeOptions): Promise<Served> {
 	const { sdk, pi, ctx, generation, parked } = options;
 	const agentDir = sdk.getAgentDir();
 	const scope = sessionScope(sdk, ctx);

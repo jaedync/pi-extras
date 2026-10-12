@@ -5,6 +5,7 @@ import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises"
 import type { HostState, ParkedHost } from "../lib/subagents/contract.ts";
 import { HOST_VERSION } from "../lib/subagents/contract.ts";
 import { parkHost, takeParked } from "../lib/subagents/host.ts";
+import { serveSession } from "../lib/subagents/serve.ts";
 import { hostHarness } from "./support/host-harness.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -212,4 +213,13 @@ test("a host the next module can't use is closed with its own code", async () =>
 	await parked.close("reload");
 	assert.equal(index(h.indexFile).records[0]?.interruptedBy, "reload");
 	assert.equal((parked.claim() as HostState).quiet(), false, "closed");
+});
+
+test("a session start that fails before it takes over a parked host interrupts its children at once, not at the timeout", async () => {
+	const closes: string[] = [];
+	const parked: ParkedHost = { version: HOST_VERSION, claim: () => assert.fail("nothing is taken over"), close: async (reason) => { closes.push(reason); } };
+	const ctx = { cwd: process.cwd(), get scopedModels(): never { throw new Error("no scoped models"); } };
+	const sdk = { getAgentDir: () => process.cwd() };
+	await assert.rejects(serveSession({ sdk, pi: {}, ctx, generation: 1, parked, route: () => "hold", teamChanged() {}, mailChanged() {}, currentGroup: () => "run-1-0" } as never), /no scoped models/);
+	assert.deepEqual(closes, ["reload"]);
 });
