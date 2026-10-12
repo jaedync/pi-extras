@@ -17,23 +17,56 @@ type Lookup = (name: string) => AgentRecord | undefined;
 
 const live = (record: AgentRecord | undefined): boolean => record !== undefined && LIVE_STATES.has(record.state);
 
-/** Whether `name` is an agent `spawner` sits under: it is not done until the spawner's subagents report. */
-function above(name: string, spawner: string, get: Lookup): boolean {
-	for (let current = get(spawner); current; current = get(current.parent)) if (current.parent === name) return true;
+/**
+ * The agents `record` can't end before: its live subagents, whose reports it
+ * waits for; the agents that owe it an answer; and, while it waits to start,
+ * its live after agents. A conservative graph: an owed answer may come
+ * without its giver ending, but nothing makes it come.
+ */
+function blockers(record: AgentRecord, children: ReadonlyMap<string, readonly string[]>, get: Lookup): string[] {
+	return [...(children.get(record.name) ?? []), ...(record.owed ?? []), ...(record.state === "queued" ? waitingFor(record, get) : [])];
+}
+
+/** Whether `name` can't end before `target` does, directly or through other agents. */
+export function dependsOn(name: string, target: string, records: readonly AgentRecord[]): boolean {
+	const byName = new Map(records.map((record) => [record.name, record]));
+	const get: Lookup = (other) => byName.get(other);
+	const children = new Map<string, string[]>();
+	for (const record of records) if (live(record)) children.set(record.parent, [...(children.get(record.parent) ?? []), record.name]);
+	const seen = new Set<string>();
+	const next = [name];
+	while (next.length > 0) {
+		const current = next.pop()!;
+		if (current === target) return true;
+		if (seen.has(current)) continue;
+		seen.add(current);
+		const record = get(current);
+		if (record) next.push(...blockers(record, children, get));
+	}
 	return false;
 }
 
+export interface AfterRequest {
+	readonly after: readonly string[];
+	/** The spawner: this spawn's parent, which is not done until it reports. */
+	readonly parent: string;
+	readonly blocking: boolean;
+}
+
 /**
- * Why a spawn by `spawner` can't wait for `names`, or undefined. Every agent
- * can address every other, so any name in the team is visible. The spawner
- * and the agents above it wait for this spawn, so neither would ever end.
+ * Why a spawn can't wait for its after agents, or undefined. Every agent can
+ * address every other, so any name in the team is visible. An agent that
+ * can't end before the spawner does would never let this spawn start, and
+ * the spawner waits for this spawn: neither would end. A caller blocked in
+ * wait: true could not answer a question from one of them either.
  */
-export function afterError(names: readonly string[], spawner: string, get: Lookup, known: () => string): string | undefined {
-	if (names.length > MAX_AFTER) return `after can name at most ${MAX_AFTER} agents.`;
-	for (const name of names) {
-		if (name === spawner) return `after can't name ${name}: that is you, and you are not done until this subagent reports.`;
-		if (!get(name)) return `after names ${JSON.stringify(name)}, which is not an agent. ${known()}`;
-		if (above(name, spawner, get)) return `after can't name ${name}: it waits for you, so neither would end.`;
+export function afterError(request: AfterRequest, records: readonly AgentRecord[], known: () => string): string | undefined {
+	if (request.blocking) return "wait: true can't go with after: the agents it waits for may need an answer from you first. Leave out wait; its report arrives as a message.";
+	if (request.after.length > MAX_AFTER) return `after can name at most ${MAX_AFTER} agents.`;
+	for (const name of request.after) {
+		if (name === request.parent) return `after can't name ${name}: that is you, and you are not done until this subagent reports.`;
+		if (!records.some((record) => record.name === name)) return `after names ${JSON.stringify(name)}, which is not an agent. ${known()}`;
+		if (dependsOn(name, request.parent, records)) return `after can't name ${name}: it waits for you, directly or through other agents, so neither would end.`;
 	}
 	return undefined;
 }
@@ -68,13 +101,16 @@ export function awaited(record: AgentRecord, records: readonly AgentRecord[]): b
 }
 
 /**
- * Why `asker` can't ask `target` a question: `target` waits to start until
- * `asker`, or an agent `asker` works for, ends, so neither would.
+ * Why an agent can't ask `target` a question: `target` waits to start for its
+ * after agents, and a message can't start it. The asker's report would wait
+ * for the answer, and when the asker is, or waits through others on, one of
+ * those agents, nothing would end. A question asked first can close that loop
+ * later, so every question to a held spawn is refused; a note waits for it.
  */
-export function askError(target: AgentRecord | undefined, asker: string, get: Lookup, under: (name: string, ancestor: string) => boolean): string | undefined {
+export function askError(target: AgentRecord | undefined, get: Lookup): string | undefined {
 	const waits = target?.state === "queued" ? waitingFor(target, get) : [];
-	if (!waits.some((name) => name === asker || under(asker, name))) return undefined;
-	return `${target!.name} starts after ${waits.join(", ")} ${waits.length === 1 ? "ends" : "end"}, so it can't answer you first. Send a note instead (no expectReply); it reads it when it starts.`;
+	if (waits.length === 0) return undefined;
+	return `${target!.name} has not started: it starts after ${waits.join(", ")} ${waits.length === 1 ? "ends" : "end"}. Send a note instead (no expectReply); it reads it when it starts.`;
 }
 
 /** What a queued spawn shows: the after agents it still waits for, then plain `queued`; any other activity stays. */

@@ -68,6 +68,23 @@ test("after is checked: unknown names, the spawner, and agents the spawner waits
 	await h.team.close();
 });
 
+test("after is refused when the named agent can't end before the spawner does, through held spawns, subagents or owed answers", async () => {
+	const h = teamHarness({ maxDepth: 2 });
+	const impl = h.spawn("impl", { name: "impl" });
+	h.spawn("review", { name: "review", after: [impl] });
+	await tick();
+	const docs = h.team.spawn({ name: "docs", task: "docs", parent: impl, model: "m", readOnly: false, fork: false, blocking: false, after: ["review"] });
+	assert.match(docs.ok ? "" : docs.error, /after can't name review: it waits for you, directly or through other agents, so neither would end\./);
+	const [x, a] = [h.spawn("x", { name: "x" }), h.spawn("a", { name: "a" })];
+	h.spawn("q", { name: "q", after: [x] });
+	await tick();
+	assert.ok((await h.team.send(x, a, "What is the port?", { expectReply: true })).ok);
+	const helper = h.team.spawn({ name: "helper", task: "help", parent: a, model: "m", readOnly: false, fork: false, blocking: false, after: ["q"] });
+	assert.match(helper.ok ? "" : helper.error, /after can't name q: it waits for you/, "q waits for x, which waits for a's answer");
+	assert.ok(h.team.spawn({ name: "fine", task: "f", parent: a, model: "m", readOnly: false, fork: false, blocking: false, after: [impl] }).ok, "impl does not wait for a");
+	await h.team.close();
+});
+
 test("a failed, stopped or interrupted agent counts as ended, and the block says how each ended", () => {
 	const base = { parent: "main", depth: 1, task: "t", model: "m", readOnly: false, fork: false, blocking: false, createdAt: 0, activity: null, toolCalls: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, runs: 1 } as const;
 	const records = new Map<string, AgentRecord>([
@@ -132,19 +149,34 @@ test("an idle report that a waiting spawn of the same parent picks up does not w
 	await h.team.close();
 });
 
-test("a dependency, or one of its subagents, can't ask the waiting spawn a question it could only answer later", async () => {
+test("no agent can ask a spawn that waits for its after agents a question; a note waits for its start", async () => {
 	const h = teamHarness({ maxDepth: 2 });
 	const impl = h.spawn("impl", { name: "impl" });
+	const other = h.spawn("other", { name: "other" });
 	h.spawn("review", { name: "review", after: [impl] });
 	await tick();
 	assert.ok(h.team.spawn({ name: "helper", task: "help", parent: impl, model: "m", readOnly: false, fork: false, blocking: false }).ok);
 	await tick();
-	for (const asker of [impl, "helper"]) {
+	for (const asker of [impl, "helper", other]) {
 		const asked = await h.team.send(asker, "review", "Is this right?", { expectReply: true });
 		assert.equal(asked.ok, false);
-		assert.match(asked.ok ? "" : asked.error, /review starts after impl ends, so it can't answer you first\. Send a note instead/);
+		assert.match(asked.ok ? "" : asked.error, /review has not started: it starts after impl ends\. Send a note instead \(no expectReply\); it reads it when it starts\./);
 	}
-	assert.deepEqual(await h.team.send(impl, "review", "fyi: see lib/x.ts"), { ok: true, delivered: "queued" }, "a note waits for its start");
+	assert.deepEqual(await h.team.send(impl, "review", "fyi: see lib/x.ts"), { ok: true, delivered: "queued" });
+	assert.deepEqual(await h.team.send("main", "review", "What will you check first?", { expectReply: true }), { ok: true, delivered: "queued" }, "main never waits, so it may ask");
+	await h.team.close();
+});
+
+test("a question chain through a peer can't end at a waiting spawn, in either order", async () => {
+	const h = teamHarness({ maxDepth: 2 });
+	const [x, a] = [h.spawn("x", { name: "x" }), h.spawn("a", { name: "a" })];
+	h.spawn("q", { name: "q", after: [x] });
+	await tick();
+	assert.ok((await h.team.send(x, a, "What is the port?", { expectReply: true })).ok);
+	assert.equal((await h.team.send(a, "q", "What will you review?", { expectReply: true })).ok, false, "a waits for q, q for x, x for a");
+	const b = h.spawn("b", { name: "b" });
+	await tick();
+	assert.equal((await h.team.send(b, "q", "What will you review?", { expectReply: true })).ok, false, "asked first, then x could ask b");
 	await h.team.close();
 });
 
@@ -199,23 +231,14 @@ test("the subagent tool passes after on and says the spawn waits", async () => {
 	await h.team.close();
 });
 
-test("wait: true with after blocks until the spawn has waited, run and reported", async () => {
+test("wait: true with after is refused: the caller could not answer a question from an agent the spawn waits for", async () => {
 	const { subagentTool } = await import("../lib/subagents/tools.ts");
 	const h = teamHarness();
 	const luna = { ref: "openai-codex/gpt-6-luna", model: { provider: "openai-codex", id: "gpt-6-luna", name: "GPT-6 Luna" } };
 	const tool = subagentTool({ team: h.team, allowed: [luna as never], fallbackModel: luna.ref, thinking: {}, modelTable: "", guide: "", replyTimeoutMs: 60_000, now: Date.now }, "main");
 	h.spawn("impl", { name: "impl" });
-	let returned = false;
-	const waited = (tool.execute as any)("id", { task: "Check impl", name: "check", after: ["impl"], wait: true }, undefined, undefined).then((result: any) => { returned = true; return result; });
-	await tick(); await tick();
-	assert.equal(h.team.get("check")!.state, "queued");
-	assert.equal(returned, false);
-	h.lastCall("impl").finish("Implemented.");
-	await tick(); await tick();
-	assert.equal(h.team.get("check")!.state, "running");
-	h.lastCall("check").finish("Checked.");
-	const result = await waited;
-	assert.match(result.content[0].text, /check \(openai-codex\/gpt-6-luna\) finished[\s\S]*Checked\./);
-	assert.equal(reports(h.main).some((delivery) => delivery.record.name === "check"), false, "the call returned its report");
+	await assert.rejects((tool.execute as any)("id", { task: "Check impl", name: "check", after: ["impl"], wait: true }, undefined, undefined),
+		/wait: true can't go with after: the agents it waits for may need an answer from you first\. Leave out wait; its report arrives as a message\./);
+	assert.equal(h.team.get("check"), undefined, "nothing was recorded");
 	await h.team.close();
 });

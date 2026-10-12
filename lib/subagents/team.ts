@@ -169,7 +169,7 @@ export class Team implements HostTeam {
 		if (request.isolation !== undefined && request.isolation !== "shared" && request.isolation !== "worktree") return { ok: false, error: "Unknown isolation. Use shared or worktree." };
 		const badBudget = budgetError("maxMinutes", request.maxMinutes) ?? budgetError("maxCost", request.maxCost);
 		if (badBudget) return { ok: false, error: badBudget };
-		const badAfter = request.after?.length ? afterError(request.after, request.parent, this.lookup, () => this.knownNames()) : undefined;
+		const badAfter = request.after?.length ? afterError({ ...request, after: request.after }, this.list(), () => this.knownNames()) : undefined;
 		if (badAfter) return { ok: false, error: badAfter };
 		const after = request.after?.length ? [...new Set(request.after)] : undefined;
 		const badCheck = request.check ? checkError(request.check, { readOnly: request.readOnly || parent?.readOnly === true }) : undefined;
@@ -258,8 +258,8 @@ export class Team implements HostTeam {
 		const body = options.expectReply ? questionText(from, text) : noteText(from, text);
 		const said = `${options.expectReply ? "Question" : "Message"} from ${from}: ${text}`;
 		if (options.expectReply && !waits && asker) {
-			const cycle = askError(this.records.get(to), from, this.lookup, (name, ancestor) => this.under(name, ancestor));
-			if (cycle) return { ok: false, error: cycle };
+			const early = askError(this.records.get(to), this.lookup);
+			if (early) return { ok: false, error: early };
 			const result = this.deliverToChild(from, to, body, true, said, options.automatic);
 			if (result.ok) this.patch(from, { owed: [...new Set([...(this.records.get(from)?.owed ?? []), to])] });
 			return result;
