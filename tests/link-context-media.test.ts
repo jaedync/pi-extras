@@ -401,9 +401,16 @@ test("images: a mislabelled image is sent as its real type, a fake one is droppe
 	assert.equal(images[0].mimeType, "image/png");
 	const wide = sniffImage(Buffer.from(images[1].data, "base64"));
 	assert.ok(wide && wide.width <= 2000 && wide.height >= 1, `scaled with Pi's resizeImage: ${JSON.stringify(wide)}`);
-	// Without Photon, an image inside every limit still goes as it is, and a larger one does not.
-	assert.equal((await prepareImage(png(4, 4), async () => null))?.mimeType, "image/png");
-	assert.equal(await prepareImage(png(3000, 10), async () => null), undefined);
+	// resizeImage gives null when it cannot decode the image (or cannot load Photon); as in Pi's processImage, the image is dropped.
+	assert.equal(await prepareImage(png(4, 4), async () => null), undefined);
+});
+
+test("images: a valid header over a broken body is dropped, never sent", async () => {
+	const corruptJpeg = Buffer.concat([jpegHeader(64, 64), Buffer.alloc(200, 0x41)]);
+	const truncatedPng = png(64, 64).subarray(0, 33);
+	assert.ok(sniffImage(corruptJpeg) && sniffImage(truncatedPng), "both headers look valid");
+	assert.equal(await prepareImage(corruptJpeg), undefined);
+	assert.equal(await prepareImage(truncatedPng), undefined);
 });
 
 test("PI_OFFLINE: no install, no update, no release lookup; an installed toolchain still works", { skip: process.platform === "win32" ? "POSIX shell scripts" : false }, async (t) => {

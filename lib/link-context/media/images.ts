@@ -17,8 +17,11 @@ export const MAX_IMAGES = 6;
 export const MAX_IMAGE_BYTES = 3_700_000;
 /** The side that resizeImage scales to by default, which Pi's read tool uses: providers refuse larger sides in requests with many images. */
 export const MAX_IMAGE_SIDE = 2000;
-/** Decoding needs 4 bytes a pixel; a small file can claim a huge size, so larger claims are never decoded. */
-export const MAX_DECODE_PIXELS = 50_000_000;
+/**
+ * Decoding needs 4 bytes a pixel, and up to 6 images decode at the same time;
+ * a small file can claim a huge size, so larger claims (about 100 MB decoded) are never decoded.
+ */
+export const MAX_DECODE_PIXELS = 25_000_000;
 const IMAGE_FILE = /\.(?:jpe?g|png|webp|gif)$/i;
 const IMAGE_HOSTS = new Set(["i.imgur.com", "i.redd.it", "preview.redd.it", "pbs.twimg.com", "media.giphy.com", "i.giphy.com"]);
 
@@ -56,17 +59,17 @@ export function imageLinks(text: string): string[] {
 }
 
 /**
- * The image for the model: JPEG, PNG, GIF or WebP by its bytes, scaled to fit
- * the providers' limits. Without Pi's image library only an image already
- * inside the limits is sent; anything else is dropped.
+ * The image for the model: JPEG, PNG, GIF or WebP by its bytes, decoded and
+ * scaled to fit the providers' limits. resizeImage gives null when it cannot
+ * decode the bytes (or cannot load its image library); a valid header over a
+ * broken body would make the provider refuse the whole request, so the image
+ * is dropped, as Pi's own processImage does.
  */
 export async function prepareImage(bytes: Buffer, resize: typeof resizeImage = resizeImage): Promise<ImageBlock | undefined> {
 	const header = sniffImage(bytes);
 	if (!header || header.width * header.height > MAX_DECODE_PIXELS) return undefined;
 	const resized = await resize(bytes, header.mimeType, { maxWidth: MAX_IMAGE_SIDE, maxHeight: MAX_IMAGE_SIDE });
-	if (resized) return { type: "image", data: resized.data, mimeType: resized.mimeType };
-	if (header.width > MAX_IMAGE_SIDE || header.height > MAX_IMAGE_SIDE) return undefined;
-	return { type: "image", data: bytes.toString("base64"), mimeType: header.mimeType };
+	return resized ? { type: "image", data: resized.data, mimeType: resized.mimeType } : undefined;
 }
 
 async function one(url: string, fetcher: Fetcher | undefined, signal: AbortSignal): Promise<ImageBlock | undefined> {
