@@ -112,3 +112,16 @@ test("the meter anchor starts each local day at the first reading", () => {
 	// The meter rolled over to a new month during the day: count from zero.
 	assert.deepEqual(advanceMeterDay(first, 20, NOW + 3_600_000, TZ), { date: "2026-10-10", usedUsd: 0, atMs: NOW });
 });
+
+test("Tokenfold's window_start says where a window's spend starts; a bad one stays absent", () => {
+	const snapshot = parseTokenfoldHa({
+		...HA,
+		five_hour: { ...HA.five_hour, window_start: "nonsense" },
+		weekly: { ...HA.weekly, window_start: "2026-10-12T02:22:00+00:00" },
+	}, NOW);
+	assert.equal(snapshot?.weekly?.windowStartMs, Date.UTC(2026, 9, 12, 2, 22));
+	assert.equal(snapshot?.fiveHour && "windowStartMs" in snapshot.fiveHour, false);
+	// A start after the reset cannot be this window's.
+	const late = parseTokenfoldHa({ weekly: { ...HA.weekly, window_start: "2026-10-16T00:00:00+00:00" } }, NOW);
+	assert.equal(late?.weekly && "windowStartMs" in late.weekly, false);
+});

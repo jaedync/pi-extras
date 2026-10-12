@@ -76,11 +76,14 @@ function tokenfoldWindow(raw: unknown): TokenfoldWindow | undefined {
 	if (!isObject(raw) || !finite(raw.pct_used) || !finite(raw.spend_usd) || typeof raw.resets_at !== "string") return undefined;
 	const resetsAtMs = Date.parse(raw.resets_at);
 	if (!Number.isFinite(resetsAtMs)) return undefined;
+	// Optional: older Tokenfold versions omit it. A start at or after the reset is not this window's.
+	const windowStartMs = typeof raw.window_start === "string" ? Date.parse(raw.window_start) : NaN;
 	return {
 		pctUsed: raw.pct_used,
 		spendUsd: raw.spend_usd,
 		...(finite(raw.implied_limit_usd) && raw.implied_limit_usd > 0 ? { impliedLimitUsd: raw.implied_limit_usd } : {}),
 		resetsAtMs,
+		...(Number.isFinite(windowStartMs) && windowStartMs < resetsAtMs ? { windowStartMs } : {}),
 	};
 }
 

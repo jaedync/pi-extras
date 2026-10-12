@@ -147,3 +147,41 @@ test("a window's implied size is kept for the start of the next cycle", async ()
 	const { inputs } = await later.collect(context({ snapshots: window(1, NOW + 6 * HOUR), now: NOW + 2 * HOUR }));
 	assert.deepEqual(inputs.lastSizes?.["anthropic|five_hour"], { limitUsd: 50, atMs: NOW, source: "local" });
 });
+
+/** Anthropic turns at the given times, with their list-price cost. */
+function agentDirWithTurns(turns: Array<[atMs: number, cost: number]>): string {
+	const dir = agentDir({});
+	const lines = turns.map(([atMs, cost], index) => JSON.stringify({
+		type: "message", timestamp: new Date(atMs).toISOString(),
+		message: { role: "assistant", provider: "anthropic", model: "claude-opus-5-5", responseId: `t${index}`, timestamp: atMs, usage: { totalTokens: 1, cost: { total: cost } } },
+	}));
+	writeFileSync(join(dir, "sessions", "--cwd--", "s.jsonl"), lines.join("\n") + "\n");
+	return dir;
+}
+
+const weekly = (usedPct: number, atMs: number, resetMs = NOW + 3 * 24 * HOUR): Array<[string, LimitSnapshot]> =>
+	[["anthropic", { atMs, source: "poll", entries: [{ label: "7d", key: "seven_day", usedPct, windowSeconds: 7 * 86400, resetMs }] }]];
+
+test("a granted reset seen across calls moves the local start, and the kept size comes from the corrected spend", async () => {
+	// $10 before the grant, $4 after it.
+	const dir = agentDirWithTurns([[NOW - 3 * HOUR, 10], [NOW - 30 * 60_000, 4]]);
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
+	await collector.collect(context({ snapshots: weekly(97, NOW - 2 * HOUR), now: NOW - 2 * HOUR }));
+	await collector.collect(context({ snapshots: weekly(0, NOW - HOUR), now: NOW - HOUR }));
+	// Another process shares the readings file.
+	const later = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
+	const { inputs } = await later.collect(context({ snapshots: weekly(8, NOW), now: NOW }));
+	assert.equal(inputs.grants?.["anthropic|seven_day"]?.startMs, NOW - HOUR);
+	// $4 at 8% is a $50 window; from the cycle start it would read $175.
+	assert.deepEqual(inputs.lastSizes?.["anthropic|seven_day"], { limitUsd: 50, atMs: NOW, source: "local" });
+});
+
+test("sizes kept before granted resets were handled are not used", async () => {
+	const dir = agentDirWithTurns([[NOW - HOUR, 1]]);
+	mkdirSync(join(dir, "usage-dollars"), { recursive: true });
+	writeFileSync(join(dir, "usage-dollars", "window-sizes.json"),
+		JSON.stringify({ "anthropic|seven_day": { limitUsd: 52051, atMs: NOW - HOUR, source: "tokenfold" } }));
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
+	const { inputs } = await collector.collect(context({ snapshots: weekly(1, NOW), now: NOW }));
+	assert.equal(inputs.lastSizes?.["anthropic|seven_day"], undefined);
+});

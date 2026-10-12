@@ -5,13 +5,20 @@
  * them into per-limit figures and a per-provider summary.
  *
  * Subscription windows report percent only. Their dollar size is implied by
- * spend in the window divided by the percent used, the same arithmetic
- * Tokenfold uses (app/ha.py), so both agree when both are present.
+ * spend in the window divided by the percent used. Spend counts from the start
+ * of the current cycle: the reset minus the window length, or a later granted
+ * mid-window reset, because the provider no longer counts the usage before
+ * it. That start comes from Tokenfold's window_start for the same cycle, else
+ * from a reset this machine saw (resets.ts). Tokenfold's /api/ha uses the same
+ * window and arithmetic (app/ha.py) when it sends window_start; an older
+ * Tokenfold counts from the cycle start, so its spend is not used when this
+ * machine saw a granted reset.
  */
 import type { LimitEntry } from "../status-plus-logic.ts";
 import { businessDaysLeft, calendarDaysLeft, isBusinessDay, localDateKey, nextUtcMonthStartMs } from "./calendar.ts";
 import { OPENCODE_GO_WINDOW_SHARE, openCodeGoMonthlyCap, type OpenCodeGoPlan } from "./opencode-go.ts";
 import { localTime } from "../usage-time.ts";
+import { sameReset, type GrantedReset } from "./resets.ts";
 
 /** Below this, the provider's rounding of the percent swamps the estimate (Tokenfold uses the same floor). */
 export const MIN_PCT_FOR_IMPLIED = 5;
@@ -36,6 +43,8 @@ export interface TokenfoldWindow {
 	spendUsd: number;
 	impliedLimitUsd?: number;
 	resetsAtMs: number;
+	/** Where spendUsd starts; later than the cycle start after a granted reset. Older Tokenfold versions omit it. */
+	windowStartMs?: number;
 }
 
 export interface TokenfoldSnapshot {
@@ -82,6 +91,8 @@ export interface DollarInputs {
 	openCodeGo?: { plan: OpenCodeGoPlan; caps: Record<string, number>; models: string[] };
 	/** By sizeKey(); covers the start of a cycle, before 5% is used. */
 	lastSizes?: Record<string, WindowSize>;
+	/** By sizeKey(): the latest granted mid-window reset this machine saw. */
+	grants?: Record<string, GrantedReset>;
 }
 
 export interface ModelDollars {
@@ -189,17 +200,54 @@ function fromTokenfold(window: TokenfoldWindow, pct: number, inputs: DollarInput
 	};
 }
 
-function fromLocal(provider: string, entry: LimitEntry, inputs: DollarInputs, mismatch: boolean, last: WindowSize | undefined): WindowDollars | undefined {
+/**
+ * Tokenfold's window for this entry's cycle, family windows included: a
+ * granted reset is account-wide, so its start applies to every window of the
+ * same length and reset.
+ */
+function tokenfoldCycle(provider: string, entry: LimitEntry, inputs: DollarInputs): TokenfoldWindow | undefined {
+	if (provider !== "anthropic" || !inputs.tokenfold || !finite(entry.resetMs)) return undefined;
+	const window = entry.windowSeconds === FIVE_HOURS_S ? inputs.tokenfold.fiveHour
+		: entry.windowSeconds === SEVEN_DAYS_S ? inputs.tokenfold.weekly : undefined;
+	return window && Math.abs(window.resetsAtMs - entry.resetMs) <= TOKENFOLD_RESET_TOLERANCE_MS ? window : undefined;
+}
+
+/** The latest granted reset this machine saw in this entry's cycle. */
+function detectedGrant(provider: string, entry: LimitEntry, inputs: DollarInputs): GrantedReset | undefined {
+	const grant = inputs.grants?.[sizeKey(provider, entry)];
+	return grant && finite(entry.resetMs) && sameReset(grant.resetMs, entry.resetMs) ? grant : undefined;
+}
+
+/**
+ * Where local spend starts: Tokenfold's window_start for this cycle, else a
+ * granted reset seen here, else the cycle start. grantedAtMs is set only for
+ * a start well after the cycle start: Tokenfold also moves its start by a
+ * poll or two at a normal rollover, which is not a granted reset.
+ */
+function localStart(provider: string, entry: LimitEntry, inputs: DollarInputs): { sinceMs: number; grantedAtMs?: number } {
+	const base = (entry.resetMs as number) - (entry.windowSeconds as number) * 1000;
+	const start = tokenfoldCycle(provider, entry, inputs)?.windowStartMs ?? detectedGrant(provider, entry, inputs)?.startMs;
+	if (start === undefined || start <= base) return { sinceMs: base };
+	return { sinceMs: start, ...(start - base > TOKENFOLD_RESET_TOLERANCE_MS ? { grantedAtMs: start } : {}) };
+}
+
+type LocalReason = "tokenfold other cycle" | "tokenfold before grant" | undefined;
+
+function fromLocal(provider: string, entry: LimitEntry, inputs: DollarInputs, reason: LocalReason, last: WindowSize | undefined): WindowDollars | undefined {
 	const { windowSeconds, resetMs, usedPct } = entry;
 	if (!inputs.spend || !finite(windowSeconds) || !finite(resetMs) || !finite(usedPct)) return undefined;
+	const { sinceMs, grantedAtMs } = localStart(provider, entry, inputs);
 	const query: SpendQuery = {
-		provider, sinceMs: resetMs - windowSeconds * 1000, untilMs: inputs.now,
+		provider, sinceMs, untilMs: inputs.now,
 		...(entry.modelFamily ? { family: entry.modelFamily } : {}),
 	};
 	const spentUsd = money(inputs.spend(query));
 	const { note, ...size } = sizing(impliedLimitUsd(spentUsd, usedPct), usedPct, last, inputs.now);
+	const grantedAt = grantedAtMs !== undefined ? localTime(grantedAtMs, inputs.timeZone) : "";
 	const notes = [
-		mismatch ? "Tokenfold reports another window cycle, so this uses local spend." : "",
+		reason === "tokenfold other cycle" ? "Tokenfold reports another window cycle, so this uses local spend." : "",
+		reason === "tokenfold before grant" ? `Tokenfold counts spend from before the granted reset at ${localTime(sinceMs, inputs.timeZone)}, so this uses local spend since then.` : "",
+		reason !== "tokenfold before grant" && grantedAt ? `Counts spend since the granted reset at ${grantedAt}.` : "",
 		note ?? "",
 		size.limitUsd !== undefined ? "Counts spend on this machine only; use on other machines makes the limit read low." : "",
 	].filter(Boolean);
@@ -244,8 +292,12 @@ function windowDollars(provider: string, entry: LimitEntry, inputs: DollarInputs
 	const window = tokenfoldWindow(provider, entry, inputs);
 	const matches = !!window && finite(entry.resetMs) && Math.abs(window.resetsAtMs - entry.resetMs) <= TOKENFOLD_RESET_TOLERANCE_MS;
 	const last = inputs.lastSizes?.[sizeKey(provider, entry)];
-	if (window && matches) return fromTokenfold(window, entry.usedPct, inputs, last);
-	return fromLocal(provider, entry, inputs, !!window, last);
+	if (window && matches) {
+		// Without window_start, Tokenfold counts from the cycle start, so its spend includes usage a granted reset voided.
+		if (window.windowStartMs !== undefined || !detectedGrant(provider, entry, inputs)) return fromTokenfold(window, entry.usedPct, inputs, last);
+		return fromLocal(provider, entry, inputs, "tokenfold before grant", last);
+	}
+	return fromLocal(provider, entry, inputs, window ? "tokenfold other cycle" : undefined, last);
 }
 
 function budgetDollars(provider: string, entry: LimitEntry, inputs: DollarInputs): BudgetDollars | undefined {

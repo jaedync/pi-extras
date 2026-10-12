@@ -12,6 +12,7 @@ import { STATUS_TIME_ZONE } from "../status-plus-logic.ts";
 import { localDateKey, localDayStartMs } from "./calendar.ts";
 import { entryDollars, sizeKey, type DollarInputs, type OpenRouterKeyInfo, type TokenfoldSnapshot, type WindowSize } from "./core.ts";
 import { createSpendLedger, type SpendLedger } from "./ledger.ts";
+import { advanceReading, isWindowReading, type GrantedReset, type WindowReading } from "./resets.ts";
 import {
 	advanceMeterDay,
 	fetchOpenRouterKey,
@@ -62,6 +63,7 @@ interface MeterReading {
 
 type Anchors = Record<string, MeterAnchor>;
 type Sizes = Record<string, WindowSize>;
+type Readings = Record<string, WindowReading>;
 
 function readJson(file: string): unknown {
 	try {
@@ -90,6 +92,12 @@ function readSizes(file: string): Sizes {
 		return !!size && Number.isFinite(size.limitUsd) && size.limitUsd > 0 && Number.isFinite(size.atMs)
 			&& (size.source === "tokenfold" || size.source === "local");
 	}));
+}
+
+function readReadings(file: string): Readings {
+	const raw = readJson(file);
+	if (!raw || typeof raw !== "object") return {};
+	return Object.fromEntries(Object.entries(raw).filter((pair): pair is [string, WindowReading] => isWindowReading(pair[1])));
 }
 
 function writeJson(file: string, value: unknown): void {
@@ -121,7 +129,10 @@ function cached<T>(entry: Cached<T> | undefined, key: string, now: number, force
 export function createDollarsCollector(options: CollectorOptions) {
 	const configFile = options.configFile ?? join(options.agentDir, "pi-extras.json");
 	const anchorFile = join(options.agentDir, "usage-dollars", "meter-day.json");
-	const sizesFile = join(options.agentDir, "usage-dollars", "window-sizes.json");
+	// v2: sizes kept before granted resets were handled can be several times too large, and early in a
+	// later cycle (under 5% used) nothing would replace them. Ignore the old file instead.
+	const sizesFile = join(options.agentDir, "usage-dollars", "window-sizes-v2.json");
+	const readingsFile = join(options.agentDir, "usage-dollars", "window-readings.json");
 	const timeZone = options.timeZone ?? STATUS_TIME_ZONE;
 	const fetchImpl = options.fetch ?? fetch;
 	const ledger: SpendLedger = createSpendLedger({
@@ -146,6 +157,26 @@ export function createDollarsCollector(options: CollectorOptions) {
 		}
 		if (next !== stored) writeJson(anchorFile, next);
 		return next;
+	}
+
+	/**
+	 * Keep the last reading of each subscription window, shared by processes,
+	 * to see granted mid-window resets. Returns the granted resets by sizeKey().
+	 */
+	function observeWindows(snapshots: Array<[string, LimitSnapshot]>, now: number): Record<string, GrantedReset> {
+		const stored = readReadings(readingsFile);
+		let next = stored;
+		for (const [provider, snapshot] of snapshots) {
+			if (!Number.isFinite(snapshot.atMs) || snapshot.atMs > now) continue;
+			for (const entry of snapshot.entries) {
+				if ((entry.kind ?? "window") !== "window" || !Number.isFinite(entry.usedPct) || !Number.isFinite(entry.resetMs)) continue;
+				const key = sizeKey(provider, entry);
+				const record = advanceReading(next[key], { pct: entry.usedPct as number, resetMs: entry.resetMs as number, atMs: snapshot.atMs });
+				if (record !== next[key]) next = { ...next, [key]: record };
+			}
+		}
+		if (next !== stored) writeJson(readingsFile, next);
+		return Object.fromEntries(Object.entries(next).flatMap(([key, record]) => (record.grant ? [[key, record.grant]] : [])));
 	}
 
 	async function tokenfoldFor(config: ReturnType<typeof normalizeDollarsConfig>, now: number, force: boolean, notes: string[]) {
@@ -210,6 +241,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 		]);
 		if (!ledgerOk) notes.push("Local session files could not be read; spend on this machine is missing.");
 		const anchors = observe(context.snapshots, context.now);
+		const grants = observeWindows(context.snapshots, context.now);
 		const today = localDateKey(context.now, timeZone);
 		const meterToday = Object.fromEntries(meterReadings(context.snapshots)
 			.filter((reading) => anchors[reading.provider]?.date === today)
@@ -224,6 +256,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 			...(snapshot ? { tokenfold: snapshot } : {}),
 			...(Object.keys(meterToday).length ? { meterToday } : {}),
 			...(openRouterKey ? { openRouterKey } : {}),
+			...(Object.keys(grants).length ? { grants } : {}),
 			openCodeGo: { ...config.openCodeGo, models: openCodeGoModels(context) },
 		};
 		const lastSizes = rememberSizes(context.snapshots, inputs);

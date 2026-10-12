@@ -456,6 +456,13 @@ a top-level `dollars` summary.
   Tokenfold window with a different reset is ignored. The tool matches a
   Tokenfold window to this account by its reset time only, so set Tokenfold
   only on machines that use the account Tokenfold tracks.
+- **Granted resets:** a provider can reset a window before its reset time.
+  The usage before that reset does not count, so the spend in the window
+  starts at the reset. Tokenfold gives this start (`window_start`). The tool
+  also finds a granted reset itself: the percent falls by 10 points or more,
+  and the reset time does not change. When Tokenfold does not give the start
+  and the tool found a granted reset, the tool uses the spend on this machine
+  from the reset, and a note tells you this.
 - **Model-family windows (such as `7d-fable`):** the dollars count only that
   family's spend and carry `modelFamily`. They set a provider's summary only
   when they govern the active model.

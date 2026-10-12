@@ -238,3 +238,77 @@ test("the summary names windows that have no dollar size yet", () => {
 	], inputs());
 	assert.deepEqual(summary.providers.anthropic, { remainingUsd: 1959, bindingWindow: "7d", unsizedWindows: ["5h"] });
 });
+
+// A granted mid-window reset voids the usage before it, so spend from before
+// it must not size the window (Tokenfold's window_start, else one seen here).
+const RESET7 = SAT + 100 * HOUR;
+const grantAt = (startMs: number, resetMs = RESET7) =>
+	({ "anthropic|seven_day": { startMs, resetMs, beforePct: 97, confirmed: true } });
+
+test("local spend starts at a granted reset this machine saw", () => {
+	const queries: SpendQuery[] = [];
+	const dollars = figures("anthropic", seven(10), inputs({
+		spend: (query) => { queries.push(query); return 50; },
+		grants: grantAt(SAT - 2 * HOUR),
+	}));
+	assert.equal(queries[0]?.sinceMs, SAT - 2 * HOUR);
+	assert.equal(dollars?.limitUsd, 500);
+	assert.match(dollars?.note ?? "", /granted reset/);
+});
+
+test("a granted reset from another cycle does not move the start", () => {
+	const queries: SpendQuery[] = [];
+	const dollars = figures("anthropic", seven(10), inputs({
+		spend: (query) => { queries.push(query); return 50; },
+		grants: grantAt(SAT - 2 * HOUR, RESET7 - 7 * 24 * HOUR),
+	}));
+	assert.equal(queries[0]?.sinceMs, RESET7 - 7 * 24 * HOUR);
+	assert.doesNotMatch(dollars?.note ?? "", /granted reset/);
+});
+
+test("Tokenfold without window_start counts spend from before a granted reset, so local spend is used", () => {
+	const queries: SpendQuery[] = [];
+	const dollars = figures("anthropic", seven(10), inputs({
+		tokenfold: { fetchedAtMs: SAT, weekly: { pctUsed: 10, spendUsd: 5200, impliedLimitUsd: 52000, resetsAtMs: RESET7 } },
+		spend: (query) => { queries.push(query); return 50; },
+		grants: grantAt(SAT - 2 * HOUR),
+	}));
+	assert.equal(queries[0]?.sinceMs, SAT - 2 * HOUR);
+	assert.equal(dollars?.source, "local");
+	assert.equal(dollars?.spentUsd, 50);
+	assert.equal(dollars?.limitUsd, 500);
+	assert.match(dollars?.note ?? "", /Tokenfold counts spend from before the granted reset/);
+});
+
+test("Tokenfold with window_start is trusted over a granted reset seen here", () => {
+	const dollars = figures("anthropic", seven(10), inputs({
+		tokenfold: { fetchedAtMs: SAT, weekly: { pctUsed: 10, spendUsd: 60, resetsAtMs: RESET7, windowStartMs: SAT - 3 * HOUR } },
+		spend: () => { throw new Error("local spend is not needed"); },
+		grants: grantAt(SAT - 2 * HOUR),
+	}));
+	assert.equal(dollars?.source, "tokenfold");
+	assert.equal(dollars?.spentUsd, 60);
+	assert.equal(dollars?.limitUsd, 600);
+});
+
+test("a family window in Tokenfold's weekly cycle starts at Tokenfold's window_start", () => {
+	const queries: SpendQuery[] = [];
+	const fable: LimitEntry = { ...seven(10), label: "7d-fable", key: "seven_day_fable", modelFamily: "fable" };
+	const dollars = figures("anthropic", fable, inputs({
+		tokenfold: { fetchedAtMs: SAT, weekly: { pctUsed: 10, spendUsd: 60, resetsAtMs: RESET7 - 40_000, windowStartMs: SAT - 3 * HOUR } },
+		spend: (query) => { queries.push(query); return 20; },
+		// Tokenfold's start is trusted over one seen here.
+		grants: { "anthropic|seven_day_fable": { startMs: SAT - HOUR, resetMs: RESET7, beforePct: 50, confirmed: true } },
+	}));
+	assert.equal(queries[0]?.sinceMs, SAT - 3 * HOUR);
+	assert.equal(queries[0]?.family, "fable");
+	assert.equal(dollars?.source, "local");
+	assert.equal(dollars?.limitUsd, 200);
+	// A window_start at the cycle start (no grant) keeps today's start.
+	queries.length = 0;
+	figures("anthropic", fable, inputs({
+		tokenfold: { fetchedAtMs: SAT, weekly: { pctUsed: 10, spendUsd: 60, resetsAtMs: RESET7, windowStartMs: RESET7 - 7 * 24 * HOUR - 40_000 } },
+		spend: (query) => { queries.push(query); return 20; },
+	}));
+	assert.equal(queries[0]?.sinceMs, RESET7 - 7 * 24 * HOUR);
+});
