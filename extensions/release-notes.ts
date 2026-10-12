@@ -28,7 +28,7 @@ function installed(): { version: string; entries: NotesEntry[] } | undefined {
 
 /** Release notes start every new session, so they are first to see a broken pi-extras.json and say so. */
 function unreadableNotice(error: UnreadableJsonError): string {
-	return `pi-extras could not read ${error.file} (${error.reason}). Every pi-extras setting is at its default, and no setting can be saved. Fix or remove the file.`;
+	return `pi-extras could not read ${error.file} (${error.reason}). Every setting in pi-extras.json is at its default, and no setting in it can be saved. Fix or remove the file.`;
 }
 
 function collapsed(ctx: ExtensionContext): boolean {

@@ -102,7 +102,7 @@ test("a pi-extras.json that does not parse is left alone at startup, and the use
 		assert.equal(session.appended.length, 0);
 		assert.equal(session.notices.length, 1);
 		assert.equal(session.notices[0][1], "warning");
-		assert.match(session.notices[0][0], /^pi-extras could not read .*pi-extras\.json \(.*\)\. Every pi-extras setting is at its default/);
+		assert.match(session.notices[0][0], /^pi-extras could not read .*pi-extras\.json \(.*\)\. Every setting in pi-extras\.json is at its default, and no setting in it can be saved\. Fix or remove the file\.$/);
 	} finally {
 		rmSync(CONFIG, { force: true });
 	}

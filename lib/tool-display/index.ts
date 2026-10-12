@@ -21,7 +21,7 @@
  * extensions' tools with their own words in it (see foreign.ts).
  */
 import { randomBytes } from "node:crypto";
-import { DISPLAY_SETTINGS_EVENT, FOLD_LIVE_EVENT } from "../extras-config.ts";
+import { DISPLAY_SETTINGS_EVENT, FOLD_LIVE_EVENT, UnreadableJsonError } from "../extras-config.ts";
 import { pathToFileURL } from "node:url";
 import {
 	createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition,
@@ -116,7 +116,9 @@ function trySave(write: () => void): string {
 		write();
 		return "";
 	} catch (error) {
-		return ` Not saved, so it applies to this session only. ${error instanceof Error ? error.message : String(error)}`;
+		// The unreadable-file message already says that nothing was saved.
+		const reason = error instanceof UnreadableJsonError ? error.message : `Could not save it: ${error instanceof Error ? error.message : String(error)}.`;
+		return ` It applies to this session only. ${reason}`;
 	}
 }
 

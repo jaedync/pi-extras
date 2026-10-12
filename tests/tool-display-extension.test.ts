@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { AssistantMessageComponent, initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
-import { DISPLAY_SETTINGS_EVENT } from "../lib/extras-config.ts";
+import { DISPLAY_SETTINGS_EVENT, UnreadableJsonError } from "../lib/extras-config.ts";
 import { CHAIN_ENTRY, CHAIN_EVENT } from "../lib/chain/run.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount } from "../lib/tool-count.ts";
 import { forgetLate, lateRows, offerRows } from "../lib/late-rows.ts";
@@ -33,7 +33,7 @@ const shell: Ops = {
 	}),
 };
 
-function harness(options: { sources?: Record<string, string>; settings?: DisplaySettings; failWrite?: boolean; entries?: unknown[]; ui?: object } = {}) {
+function harness(options: { sources?: Record<string, string>; settings?: DisplaySettings; failWrite?: boolean | Error; entries?: unknown[]; ui?: object } = {}) {
 	const registered: any[] = [];
 	const notes: Array<[string, string | undefined]> = [];
 	const appended: Array<[string, unknown]> = [];
@@ -60,7 +60,7 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 		settings: {
 			read: () => settings,
 			write: (next) => {
-				if (options.failWrite) throw new Error("read-only");
+				if (options.failWrite) throw options.failWrite instanceof Error ? options.failWrite : new Error("read-only");
 				writes.push(next);
 				settings = { ...settings, ...next };
 			},
@@ -262,10 +262,16 @@ test("a pi-extras.json that does not parse is kept, and /tool-display says why t
 	const h = harness({ failWrite: true });
 	h.start();
 	await h.run("motion reduced");
-	assert.match(h.notes.at(-1)![0], /this session only\. read-only$/);
+	assert.match(h.notes.at(-1)![0], /It applies to this session only\. Could not save it: read-only\.$/);
 	await h.run("count calls");
-	assert.match(h.notes.at(-1)![0], /this session only\. read-only$/);
+	assert.match(h.notes.at(-1)![0], /It applies to this session only\. Could not save it: read-only\.$/);
 	assert.equal(h.notes.at(-1)![1], "warning");
+	// The unreadable-file message already says nothing was saved; the note does not say it twice.
+	const unreadable = harness({ failWrite: new UnreadableJsonError("/agent/pi-extras.json", "Unexpected token") });
+	unreadable.start();
+	await unreadable.run("chains off");
+	assert.match(unreadable.notes.at(-1)![0], /folded off\. It applies to this session only\. pi-extras\.json could not be read \(Unexpected token\), so nothing was saved\. Fix or remove/);
+	assert.doesNotMatch(unreadable.notes.at(-1)![0], /Could not save/);
 });
 
 test("/tool-display count switches the Status Plus tool count and tells it", async () => {
