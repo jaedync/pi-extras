@@ -4,7 +4,7 @@
  * `GITHUB_TOKEN` or `GH_TOKEN` raises the anonymous limit of 60 requests an
  * hour; nothing else is read for credentials. Other pages go to the web adapter.
  */
-import { get, getJson, PLAIN_UA } from "../http.ts";
+import { get, getJson, HttpError, PLAIN_UA } from "../http.ts";
 import { renderThread, type Reply } from "../post.ts";
 import { cutIndex, isoDate, stats } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
@@ -12,6 +12,8 @@ import type { AdapterContext, Pulled } from "../types.ts";
 const API = "https://api.github.com";
 const MAX_FILE_CHARS = 200_000;
 const MAX_PATCH_CHARS = 4_000;
+/** Path parts tried as the ref of a `blob/` or `tree/` link; branch names rarely hold more slashes. */
+const MAX_REF_PARTS = 4;
 
 export class NotHandled extends Error {}
 
@@ -96,13 +98,29 @@ export async function pullGist(id: string, ctx: AdapterContext): Promise<Pulled>
 	return { platform: "github", title: `Gist ${data.description || id}`, url: data.html_url ?? "", markdown: `# ${data.description || "Gist"}\nby ${data.owner?.login ?? "anonymous"}\n\n${files.join("\n\n")}` };
 }
 
+/**
+ * A `blob/` or `tree/` link does not say where the ref ends: `release/1.0/README.md`
+ * may be ref `release` or `release/1.0`. Shorter refs go first; a 404 tries the
+ * next, and when none fits the web adapter reads the page.
+ */
+async function atRef(parts: readonly string[], minPath: number, read: (ref: string, path: string) => Promise<Pulled>): Promise<Pulled> {
+	for (let size = 1; size <= Math.min(MAX_REF_PARTS, parts.length - minPath); size++) {
+		try {
+			return await read(parts.slice(0, size).join("/"), parts.slice(size).join("/"));
+		} catch (error) {
+			if (!(error instanceof HttpError) || error.status !== 404) throw error;
+		}
+	}
+	throw new NotHandled();
+}
+
 export async function pullGithub(owner: string, repo: string, rest: readonly string[], ctx: AdapterContext): Promise<Pulled> {
 	const [section, a, ...more] = rest;
 	if (!NAME.test(owner) || !NAME.test(repo) || /^\.{1,2}$/.test(owner) || /^\.{1,2}$/.test(repo)) throw new NotHandled();
 	if (!section) return repository(owner, repo, ctx);
 	if ((section === "issues" || section === "pull") && a && /^\d+$/.test(a)) return issue(owner, repo, a, ctx);
-	if (section === "blob" && a && more.length) return file(owner, repo, a, more.join("/"), ctx);
-	if (section === "tree" && a) return directory(owner, repo, a, more.join("/"), ctx);
+	if (section === "blob" && a && more.length) return atRef([a, ...more], 1, (ref, path) => file(owner, repo, ref, path, ctx));
+	if (section === "tree" && a) return atRef([a, ...more], 0, (ref, path) => directory(owner, repo, ref, path, ctx));
 	if (section === "commit" && a && /^[0-9a-f]{7,40}$/i.test(a)) return commit(owner, repo, a, ctx);
 	if (section === "releases" && a === "tag" && more[0]) return release(owner, repo, more.join("/"), ctx);
 	throw new NotHandled();

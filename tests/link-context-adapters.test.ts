@@ -9,7 +9,8 @@ import { linkedinFromHtml, threadsFromHtml } from "../lib/link-context/adapters/
 import { mainText, webFromHtml } from "../lib/link-context/adapters/web.ts";
 import { pullX, videoFile } from "../lib/link-context/adapters/x.ts";
 import { PLAIN_UA, PREVIEW_UA } from "../lib/link-context/http.ts";
-import { context, fakeFetch, json } from "./support/link-fetch.ts";
+import { pull } from "../lib/link-context/pull.ts";
+import { context, fakeFetch, html, json, type Route } from "./support/link-fetch.ts";
 
 const author = (name: string) => ({ name, screen_name: name.toLowerCase() });
 
@@ -148,4 +149,19 @@ test("web pages: a bad og:image, null JSON-LD and an entity in the title do not 
 	assert.match(webFromHtml(`<script type="application/ld+json">{"articleBody":"body","author":null}</script><p>hi</p>`, url).markdown, /^# example\.com\nhttps/);
 	assert.equal(webFromHtml(`<title>Tom &amp; Jerry</title><p>hello</p>`, url).title, "Tom & Jerry");
 	assert.deepEqual(webFromHtml(`<meta property="og:image" content="/img/a.png"><p>hello</p>`, url).photos, ["https://example.com/img/a.png"]);
+});
+
+test("GitHub: a branch name with a slash is found on a 404, and an unknown ref goes to the web page", async () => {
+	const raw = (match: string, body: string): Route => (url) => (url.endsWith(match) ? new Response(body, { headers: { "content-type": "text/plain" } }) : undefined);
+	const { fetcher, calls } = fakeFetch(raw("/contents/README.md?ref=release%2F1.0", "the file"), json("/contents/src?ref=feat%2Fa%2Fb", [{ name: "x.ts", type: "file", size: 3 }]));
+	const file = await pullGithub("o", "r", ["blob", "release", "1.0", "README.md"], context(fetcher));
+	assert.match(file.markdown, /^# README\.md\no\/r at release\/1\.0\n\n````md\nthe file\n````$/);
+	assert.deepEqual(calls.map((c) => c.url.replace("https://api.github.com/repos/o/r", "")), ["/contents/1.0/README.md?ref=release", "/contents/README.md?ref=release%2F1.0"]);
+	const dir = await pullGithub("o", "r", ["tree", "feat", "a", "b", "src"], context(fetcher));
+	assert.equal(dir.url, "https://github.com/o/r/tree/feat/a/b/src");
+	await assert.rejects(pullGithub("o", "r", ["blob", "a", "b", "c", "d", "e", "f.txt"], context(fetcher)), NotHandled);
+	assert.equal(calls.filter((c) => c.url.includes("f.txt")).length, 4, "at most four path parts are tried as the ref");
+	const page = await pull("https://github.com/o/r/blob/nope/x.md", context(fakeFetch(html("github.com/o/r/blob", "<title>x.md</title><article><p>page text</p></article>")).fetcher));
+	assert.equal(page.platform, "web");
+	assert.match(page.markdown, /page text/);
 });
