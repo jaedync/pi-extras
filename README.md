@@ -1205,7 +1205,8 @@ for an empty list, a name it can't have, or `bash`, `edit` or `write` with
 `readOnly: true`. Its own subagents get no more tools than it has, the
 subagents of a read-only child are read-only too, and a resume or a restore
 keeps the same tools. `context: "fork"` gives the child a
-condensed copy of the conversation so far. `cwd` starts the child in another
+condensed copy of the conversation up to the spawn, with mesh messages main
+got. A relaunch gets the same copy, not what came later. `cwd` starts the child in another
 directory, as an absolute path or one that starts with `~/`, for example
 `{ task, cwd: "~/dev/app" }`. Its tools, `AGENTS.md` and the paths it edits
 then start from that directory. That directory's project settings and

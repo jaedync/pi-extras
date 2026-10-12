@@ -206,6 +206,20 @@ export function rosterText(self: string, entries: readonly RosterEntry[]): strin
 
 export const DIGEST_MAX_CHARS = 40_000;
 const DIGEST_ENTRY_CHARS = 4_000;
+/** What another agent on the mesh sent main (remote-pi); a fork made to handle it needs to see it. */
+const MESH_MESSAGE_TYPE = "remote-pi:mesh-message";
+
+/**
+ * Main's session entries up to `at`, a fork's spawn: each launch of the fork,
+ * a relaunch after a restart included, sees main's conversation as it was
+ * when it was forked, not what came later (its own reports among it).
+ */
+export function entriesUntil(entries: readonly unknown[], at: number): unknown[] {
+	return entries.filter((entry) => {
+		const time = Date.parse(String((entry as { timestamp?: unknown }).timestamp ?? ""));
+		return !Number.isFinite(time) || time <= at;
+	});
+}
 
 /**
  * Main's conversation for a forked child: what was said, and one line per tool
@@ -218,8 +232,10 @@ export function conversationDigest(entries: readonly unknown[], describe: (tool:
 	for (const entry of entries) {
 		const e = entry as { type?: string; customType?: string; content?: unknown; message?: { role?: string; content?: unknown } };
 		const cap = (text: string) => (text.length > DIGEST_ENTRY_CHARS ? `${text.slice(0, DIGEST_ENTRY_CHARS)}…` : text);
-		if (e.type === "custom_message" && String(e.customType ?? "").startsWith("subagent")) {
-			parts.push(cap(typeof e.content === "string" ? e.content : ""));
+		if (e.type === "custom_message" && (String(e.customType ?? "").startsWith("subagent") || e.customType === MESH_MESSAGE_TYPE)) {
+			const text = typeof e.content === "string" ? e.content : Array.isArray(e.content)
+				? (e.content as Array<{ type?: unknown; text?: unknown }>).filter((part) => part.type === "text").map((part) => String(part.text ?? "")).join("\n") : "";
+			if (text) parts.push(cap(text));
 			continue;
 		}
 		if (e.type !== "message" || !e.message) continue;

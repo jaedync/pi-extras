@@ -17,7 +17,7 @@ import { loadConfig, readGuide, type SubagentsConfig } from "./config.ts";
 import { HOST_VERSION, type HostActivity, type HostPorts, type HostState, type HostTeam, type ModelScope, type ParkedHost } from "./contract.ts";
 import type { Route } from "./deliver.ts";
 import type { Launcher } from "./types.ts";
-import { childInstructions, conversationDigest, rosterText } from "./format.ts";
+import { childInstructions, conversationDigest, entriesUntil, rosterText } from "./format.ts";
 import { closingHost, parkHost } from "./host.ts";
 import { openHost } from "./host-state.ts";
 import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "./models.ts";
@@ -176,7 +176,7 @@ function childLauncher(inputs: LauncherInputs): Launcher {
 			name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < scope.config.maxDepth,
 			...(record.worktree ? { worktree: record.worktree } : {}),
 			roster: rosterText(record.name, team().list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model }))),
-			...(record.fork ? { conversation: conversationDigest(live.branch(), describeTool) } : {}),
+			...(record.fork ? { conversation: conversationDigest(entriesUntil(live.branch(), record.createdAt), describeTool) } : {}),
 		}),
 	});
 }

@@ -74,6 +74,20 @@ test("a fork digest keeps what was said and one line per tool call, newest first
 	assert.equal(conversationDigest(entries, describe, 30), "(2 earlier entries omitted)\n\nscout finished");
 });
 
+test("a fork digest is main's conversation as it was at the spawn, with the mesh messages main got", async () => {
+	const { conversationDigest, entriesUntil } = await import("../lib/subagents/format.ts");
+	const describe = (tool: string) => tool;
+	const at = (iso: string) => ({ timestamp: iso });
+	const entries = [
+		{ type: "message", ...at("2026-10-12T10:00:00.000Z"), message: { role: "user", content: "Handle the peer's request" } },
+		{ type: "custom_message", ...at("2026-10-12T10:00:01.000Z"), customType: "remote-pi:mesh-message", content: "[agent-network] message from peer: rotate the keys" },
+		{ type: "message", ...at("2026-10-12T10:00:05.000Z"), message: { role: "user", content: "A later request" } },
+		{ type: "custom_message", ...at("2026-10-12T10:00:06.000Z"), customType: "subagent-report", content: "the fork's own report" },
+	];
+	const digest = conversationDigest(entriesUntil(entries, Date.parse("2026-10-12T10:00:02.000Z")), describe);
+	assert.equal(digest, "User: Handle the peer's request\n\n[agent-network] message from peer: rotate the keys");
+});
+
 test("run stats total each model's runs, outcomes, time and spend", async () => {
 	const { statsByModel, statsText } = await import("../lib/subagents/runlog.ts");
 	const line = (model: string, state: string, cost: number, durationMs: number) => JSON.stringify({ model, state, usage: { cost }, durationMs, toolCalls: 2 });
