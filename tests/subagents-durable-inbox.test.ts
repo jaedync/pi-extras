@@ -40,7 +40,7 @@ test("a note waiting in an idle child's inbox survives a restart and reaches its
 		assert.deepEqual(second.team.get("alpha")?.inbox, ["Message from beta:\nFYI the schema changed"]);
 		assert.equal((await second.team.send("main", "alpha", "Go on")).ok, true);
 		await settle();
-		assert.match(second.lastCall("alpha").text, /Go on[\s\S]*FYI the schema changed/);
+		assert.match(second.lastCall("alpha").text, /FYI the schema changed[\s\S]*Go on/, "older mail first");
 		assert.equal(second.team.get("alpha")?.inbox, undefined, "taken once it is delivered");
 		second.lastCall("alpha").finish("ok");
 		await second.team.whenDone("alpha");
@@ -106,7 +106,7 @@ test("a message steered into a child that fails before reading it reaches its ne
 	assert.deepEqual(h.team.get(name)?.inbox, ["Message from main:\nUse port 9000"]);
 	await h.team.send("main", name, "Try again");
 	await settle();
-	assert.match(h.lastCall(name).text, /Try again[\s\S]*Use port 9000/);
+	assert.match(h.lastCall(name).text, /Use port 9000[\s\S]*Try again/, "older mail first");
 	await h.team.close();
 });
 

@@ -24,7 +24,7 @@ import { fallbackNote, planFallback } from "./fallback.ts";
 import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
-import { ResumePrompts } from "./resume-prompts.ts";
+import { launchPrompt, ResumePrompts } from "./resume-prompts.ts";
 import { Slots } from "./slots.ts";
 import { handUp, handUpFailure, type HandUpHost } from "./hand-up.ts";
 import { saveReport } from "./reports.ts";
@@ -445,9 +445,8 @@ export class Team implements HostTeam {
 		const saved = this.records.get(name)!;
 		const resumed = this.resumePrompts.take(name);
 		const unstarted = saved.runs === 0 || !handle.messages().some((message) => (message as { role?: string }).role === "user");
-		const first = saved.runs === 0 && saved.after?.length ? `\n\n${afterBlock(saved, this.lookup)}` : "";
-		const prompt = `${resumed ? `${unstarted ? `${saved.task}\n\n` : ""}${resumed}` : saved.task}${first}`;
-		await this.run(name, [prompt, ...inbox].join("\n\n"));
+		const after = saved.runs === 0 && saved.after?.length ? `\n\n${afterBlock(saved, this.lookup)}` : "";
+		await this.run(name, launchPrompt({ ...(!resumed || unstarted ? { task: saved.task } : {}), after, ...(resumed ? { resumed } : {}), inbox }));
 	}
 
 	/** Launch failures are not completed child runs and must not publish over a prior report. */

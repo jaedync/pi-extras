@@ -83,3 +83,12 @@ test("main resumes a grandchild as its parent would: a note to an idle one, and 
 	assert.deepEqual(h.launched.map((launch) => launch.name).sort(), ["idle-helper", "paused-helper", "stopped-helper"]);
 	assert.equal(h.team.get("lead")!.state, "idle", "its parent stays as it was");
 });
+
+test("a relaunch reads older inbox mail before the message that started it, after the resume note", async () => {
+	const h = teamHarness();
+	h.team.restore([saved({ name: "dev", state: "stopped", inbox: ["Message from peer:\nOLD: use the v1 API."] })]);
+	await h.team.send("main", "dev", "NEW: v1 is gone, use the v2 API."); await flush();
+	const prompt = h.lastCall("dev").text;
+	assert.match(prompt, /Your previous run was stopped\.[\s\S]*OLD[\s\S]*NEW/);
+	assert.equal(h.team.get("dev")!.inbox, undefined);
+});

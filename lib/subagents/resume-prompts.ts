@@ -11,6 +11,16 @@ export interface ResumePrompt {
 	readonly message?: string;
 }
 
+/**
+ * A launch's first prompt: the task when the session has not started it, or
+ * the note; then mail that waited in the inbox, oldest first; then the
+ * message that resumed it, which is the newest.
+ */
+export function launchPrompt(parts: { task?: string; after: string; resumed?: ResumePrompt; inbox: readonly string[] }): string {
+	const head = [parts.task, parts.resumed?.note.trimEnd()].filter(Boolean).join("\n\n");
+	return [`${head}${parts.after}`, ...parts.inbox, parts.resumed?.message].filter(Boolean).join("\n\n");
+}
+
 export class ResumePrompts {
 	private readonly prompts = new Map<string, ResumePrompt>();
 
@@ -27,13 +37,11 @@ export class ResumePrompts {
 		return this.prompts.get(name)?.message;
 	}
 
-	/** The launch's prompt, and it is used: the note, then the message. */
-	take(name: string): string | undefined {
+	/** The launch's prompt, which it now uses. */
+	take(name: string): ResumePrompt | undefined {
 		const prompt = this.prompts.get(name);
 		this.prompts.delete(name);
-		if (!prompt) return undefined;
-		if (prompt.message === undefined) return prompt.note;
-		return prompt.note ? `${prompt.note.trimEnd()}\n\n${prompt.message}` : prompt.message;
+		return prompt;
 	}
 
 	/** The launch will not go: its message, if any, for the inbox. */
