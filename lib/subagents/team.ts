@@ -23,14 +23,15 @@ import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText, resumeWarning } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
-import { checkoutOf, resolveCwd } from "./checkout.ts";
+import { checkoutOf } from "./checkout.ts";
 import { bashChangeNotes, EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
 import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { saveReport } from "./reports.ts";
 import { OpenSessions } from "./sessions.ts";
 import { WorkTrees } from "./work-trees.ts";
-import { createWorktree, placeInWorktree, workspaceError } from "./worktree.ts";
+import { placeChild } from "./placement.ts";
+import { workspaceError } from "./worktree.ts";
 import {
 	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
 } from "./types.ts";
@@ -169,33 +170,9 @@ export class Team implements HostTeam {
 		if (badBudget) return { ok: false, error: badBudget };
 		const maxMinutes = request.maxMinutes ?? this.options.runBudget?.minutes;
 		const maxCost = request.maxCost ?? this.options.runBudget?.cost;
-		let cwd: string | undefined;
-		if (request.cwd !== undefined) {
-			try { cwd = resolveCwd(request.cwd); }
-			catch (error) { return { ok: false, error: (error as Error).message }; }
-			// Its edits are held to the worktree it would inherit (child.ts), wherever it started.
-			if (parent?.worktree && request.isolation !== "worktree") {
-				return { ok: false, error: `${parent.name}'s subagents work in its worktree ${parent.worktree.path}. Leave out cwd, or add isolation: "worktree" for a worktree of the repository at cwd.` };
-			}
-			// Making a worktree runs the repository's git hooks, which a read-only agent must not choose.
-			if (parent?.readOnly && request.isolation === "worktree") {
-				return { ok: false, error: `${parent.name} is read-only, so its subagents can't make a worktree from a cwd. Leave out cwd or isolation.` };
-			}
-		}
-		// The directory a new worktree is made from and mirrors: the one named, else the parent's own; unset without a cwd anywhere.
-		const origin = cwd ?? parent?.cwd;
-		let worktree = parent?.worktree;
-		if (request.isolation === "worktree") {
-			const source = origin ?? parent?.worktree?.path ?? this.options.cwd;
-			if (!source) return { ok: false, error: "Worktree isolation needs a git repository in the parent's workspace." };
-			try { worktree = createWorktree(source, name, cwd); }
-			catch (error) { return { ok: false, error: (error as Error).message }; }
-		}
-		// A worktree starts in the same directory of it as its origin; a helper starts where its parent does unless told where.
-		const startsIn = request.isolation === "worktree"
-			? (origin && worktree ? placeInWorktree(worktree.path, checkoutOf(origin), origin) : undefined)
-			: cwd ?? parent?.cwd;
-		const checkout = worktree?.path ?? (cwd ? checkoutOf(cwd) : parent ? parent.checkout : this.sessionCheckout());
+		const placed = placeChild(request, parent ?? null, name, { ...(this.options.cwd ? { cwd: this.options.cwd } : {}), checkout: () => this.sessionCheckout() });
+		if (!placed.ok) return placed;
+		const { worktree, cwd: startsIn, checkout } = placed.place;
 		const sessionFile = this.options.sessionFileFor?.(name);
 		// A read-only agent can't get write tools through a subagent of its own: its subagents are read-only too.
 		const record: AgentRecord = {
