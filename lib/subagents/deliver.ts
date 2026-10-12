@@ -102,14 +102,15 @@ export interface PendingItem {
 export function summarize(record: AgentRecord): ReportSummary {
 	const { input, output, cacheRead, cacheWrite } = record.usage;
 	const prompt = input + cacheRead + cacheWrite;
+	// The user's report row shows the run's check after the agent's words.
+	const report = reportWithCheck(record);
 	return {
 		name: record.name, model: record.model, state: record.state, cost: record.usage.cost, toolCalls: record.toolCalls,
 		...(prompt + output > 0 ? { tokens: { input: prompt, output } } : {}),
 		...(record.answeredMain ? { answered: true as const } : {}),
 		...(record.startedAt !== undefined ? { startedAt: record.startedAt } : {}),
 		...(record.endedAt !== undefined ? { endedAt: record.endedAt } : {}),
-		// The user's report row shows the run's check after the agent's words.
-		...(reportWithCheck(record) !== undefined ? { report: reportWithCheck(record) } : {}),
+		...(report !== undefined ? { report } : {}),
 		...(record.error !== undefined ? { error: record.error } : {}),
 		...(record.stopReason !== undefined ? { stopReason: record.stopReason } : {}),
 		...(record.sessionFile !== undefined ? { sessionFile: record.sessionFile } : {}),
@@ -443,9 +444,13 @@ export class MainMail implements HostMail {
 	private withStatus(message: OutgoingMessage): OutgoingMessage {
 		const { details } = message;
 		if (details.kind === "reminder") return message;
+		const about = details.kind === "report" ? details.reports.map((report) => report.name) : details.kind === "relay" ? [details.to] : [details.from];
 		let line: string | undefined;
-		try { line = this.status(details.kind === "report" ? details.reports.map((report) => report.name) : details.kind === "relay" ? [details.to] : [details.from]); }
-		catch { line = undefined; /* A team that is going away has nothing to add; the mail goes without it. */ }
+		try { line = this.status(about); }
+		catch {
+			// A team that is going away has nothing to add; the mail goes without the line.
+			line = undefined;
+		}
 		return line ? { ...message, content: `${message.content}\n\n${line}` } : message;
 	}
 
