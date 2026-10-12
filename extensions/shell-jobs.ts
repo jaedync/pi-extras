@@ -111,18 +111,29 @@ function sessionFacts(ctx: ExtensionContext): SessionFacts {
 	return Object.fromEntries(Object.entries(facts).filter(([, value]) => typeof value === "string" && value.length > 0));
 }
 
-/** The shell, arguments and environment Pi's bash tool would use for this command in this session. */
-function launchFor(ctx: ExtensionContext, sessionCwd: string, command: string): Launch {
-	const agentDir = getAgentDir();
+/** Pi's shell settings for a session. Pi's bash tool reads them when the session (or a reload) starts, and so does a job. */
+interface ShellSettings {
+	readonly shellPath: string | undefined;
+	readonly prefix: string | undefined;
+}
+
+function readShellSettings(ctx: ExtensionContext, sessionCwd: string): ShellSettings {
 	const trusted = typeof ctx.isProjectTrusted === "function" && ctx.isProjectTrusted();
-	const settings = SettingsManager.create(sessionCwd, agentDir, { projectTrusted: trusted });
-	const config = getShellConfig(settings.getShellPath());
+	const settings = SettingsManager.create(sessionCwd, getAgentDir(), { projectTrusted: trusted });
+	return { shellPath: settings.getShellPath(), prefix: settings.getShellCommandPrefix() };
+}
+
+/** The shell, arguments and environment Pi's bash tool would use for this command in this session. */
+function launchFor(ctx: ExtensionContext, shell: ShellSettings, command: string): Launch {
+	const config = getShellConfig(shell.shellPath);
 	return {
 		shell: config.shell,
-		args: launchArgs(config, command, settings.getShellCommandPrefix()),
-		env: jobEnv(process.env, join(agentDir, "bin"), sessionFacts(ctx)),
+		args: launchArgs(config, command, shell.prefix),
+		env: jobEnv(process.env, join(getAgentDir(), "bin"), sessionFacts(ctx)),
 	};
 }
+
+const sessionCwdOf = (ctx: ExtensionContext): string => (typeof ctx?.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd());
 
 /** The render context pi passes to tool renderers; older cores pass nothing. */
 type RowContext = { toolCallId?: unknown; expanded?: boolean; state?: unknown; isPartial?: boolean; executionStarted?: boolean; isError?: boolean } | undefined;
@@ -463,6 +474,7 @@ export default function shellJobs(pi: ExtensionAPI): void {
 	let active = false;
 	let started = false;
 	let backgroundCtx: ExtensionContext | undefined;
+	let shellSettings: ShellSettings | undefined;
 	const publishBackground = () => { if (active && backgroundCtx) announceBackground(pi, backgroundCtx, "shell-jobs", [...runtime.jobs.values()].filter((job) => job.state !== "done").length); };
 	pi.events?.on(BACKGROUND_REQUEST_EVENT, publishBackground);
 	// The TUI's UI handle, kept so a click on a transcript row can open the
@@ -550,7 +562,7 @@ export default function shellJobs(pi: ExtensionAPI): void {
 			if (!active) return errResult("This shell-jobs attachment is inactive; use the tools from the current session.");
 			const validation = validateStartParams(params);
 			if (!validation.ok) return errResult(validation.error);
-			const sessionCwd = typeof ctx?.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
+			const sessionCwd = sessionCwdOf(ctx);
 			// A relative path is the session's, not Pi's process directory, as it would be in Pi's bash tool.
 			const cwd = resolveJobCwd(validation.cwd, sessionCwd, homedir());
 			try {
@@ -561,7 +573,9 @@ export default function shellJobs(pi: ExtensionAPI): void {
 			if (runtime.closing) return errResult("This session is shutting down; cannot start new jobs.");
 			let launch: Launch;
 			try {
-				launch = launchFor(ctx, sessionCwd, validation.command);
+				// Read at session start; read here only when that read failed.
+				shellSettings ??= readShellSettings(ctx, sessionCwd);
+				launch = launchFor(ctx, shellSettings, validation.command);
 			} catch (error) {
 				return errResult(`Could not prepare the shell: ${(error as Error).message}. Pi's shellPath setting chooses it.`);
 			}
@@ -672,6 +686,11 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		if (retained) runtime.widget = jobsWidget(motion);
 		active = true;
 		backgroundCtx = ctx;
+		try {
+			shellSettings = readShellSettings(ctx, sessionCwdOf(ctx));
+		} catch (error) {
+			logError("could not read Pi's shell settings; the first job start tries again", error);
+		}
 		const widget = runtime.widget;
 		runtime.widget = { ...widget, update() { widget.update(); publishBackground(); } };
 		publishBackground();

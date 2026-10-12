@@ -137,6 +137,19 @@ describe("shell and environment, as Pi's bash tool has them", () => {
 		});
 	});
 
+	test("shell settings are read when the session starts, as Pi's bash tool reads them, not at each job", async () => {
+		await withAgentDir(async (dir) => {
+			const settings = join(dir, "settings.json");
+			writeFileSync(settings, JSON.stringify({ shellCommandPrefix: "export JOB_PREFIX=first" }));
+			const app = await started();
+			writeFileSync(settings, JSON.stringify({ shellCommandPrefix: "export JOB_PREFIX=second" }));
+			assert.strictEqual(await output(app, "echo $JOB_PREFIX"), "first");
+			// A reload loads the extension again, and the new load reads the settings again.
+			const reloaded = await started();
+			assert.strictEqual(await output(reloaded, "echo $JOB_PREFIX"), "second");
+		});
+	});
+
 	test("a shellPath that does not exist fails the start with Pi's reason", async () => {
 		await withAgentDir(async (dir) => {
 			writeFileSync(join(dir, "settings.json"), JSON.stringify({ shellPath: join(dir, "no-such-shell") }));
