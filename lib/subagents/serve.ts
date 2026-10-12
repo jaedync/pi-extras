@@ -87,7 +87,7 @@ export function sessionScope(sdk: Sdk, ctx: ExtensionContext): Scope {
 	if (configured && !configured.ok) ctx.ui.notify(`subagents.defaultModel: ${configured.error}`, "warning");
 	const fallbackModel = configured?.ok ? configured.choice.ref : parentRef && allowed.some((choice) => choice.ref === parentRef) ? parentRef : allowed[0]?.ref ?? null;
 	const projectTrusted = mainTrust(ctx);
-	return { config, allowed, fallbackModel, thinking: thinkingSettings(sdk, ctx.cwd, agentDir, projectTrusted), guide: readGuide(agentDir, ctx.cwd).text, projectTrusted };
+	return { config, allowed, fallbackModel, thinking: thinkingSettings(sdk, ctx.cwd, agentDir, projectTrusted), guide: readGuide(agentDir, ctx.cwd, projectTrusted).text, projectTrusted };
 }
 
 /** The parent's model runtime when Pi exposes it, so children share auth and providers. */

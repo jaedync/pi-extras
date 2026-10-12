@@ -108,7 +108,7 @@ the package. Removing it does not remove your credentials or change other packag
   `false` keeps a working child on its session until its run ends, also when
   that session is not current). The model guide is
   `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
-  project. See below.
+  project that main trusts. See below.
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
   A value above 2147483.647 (the longest timer Pi can set) falls back to 120.
   Explicit per-call timeouts are preserved.

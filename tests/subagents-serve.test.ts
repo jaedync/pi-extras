@@ -107,6 +107,7 @@ test("main's thinking levels and chat look come from its project's settings only
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(join(project, ".pi"), { recursive: true });
 	writeFileSync(join(project, ".pi", "settings.json"), JSON.stringify({ defaultThinkingLevel: "high", modelThinkingLevels: { "faux/cheap": "low" }, hideThinkingBlock: true, outputPad: 0 }));
+	writeFileSync(join(project, ".pi", "subagent-models.md"), "- project guide\n");
 	assert.deepEqual(thinkingSettings(sdk, project, agentDir, false), { modelThinkingLevels: {} });
 	assert.deepEqual(chatSettings(sdk, project, agentDir, false), { hideThinking: false, outputPad: 1 });
 	assert.deepEqual(thinkingSettings(sdk, project, agentDir, true), { modelThinkingLevels: { "faux/cheap": "low" }, defaultThinkingLevel: "high" });
@@ -116,4 +117,6 @@ test("main's thinking levels and chat look come from its project's settings only
 	assert.equal(scoped(false).projectTrusted, false);
 	assert.equal(scoped(false).thinking.defaultThinkingLevel, undefined, "main's decision, not Pi's default, which trusts");
 	assert.equal(scoped(true).thinking.defaultThinkingLevel, "high");
+	assert.equal(scoped(false).guide, "", "an untrusted project's guide never reaches main's tool description");
+	assert.equal(scoped(true).guide, "- project guide");
 });

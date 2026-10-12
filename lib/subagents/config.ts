@@ -98,11 +98,16 @@ function readCapped(path: string): string | null {
 	return text.length > GUIDE_MAX_CHARS ? `${text.slice(0, GUIDE_MAX_CHARS)}\n(guide truncated at ${GUIDE_MAX_CHARS} characters)` : text;
 }
 
-/** The user's guide, then the project's, each optional. */
-export function readGuide(agentDir: string, cwd: string): { text: string; sources: string[] } {
+/**
+ * The user's guide, then the project's, each optional. The project's goes into
+ * main's tool description, so it loads only when main trusts the project
+ * (`projectTrusted` false skips it; undefined is a Pi without project trust).
+ */
+export function readGuide(agentDir: string, cwd: string, projectTrusted: boolean | undefined): { text: string; sources: string[] } {
 	const parts: string[] = [];
 	const sources: string[] = [];
-	for (const path of [join(agentDir, GUIDE_FILE), join(cwd, ".pi", GUIDE_FILE)]) {
+	const project = projectTrusted === false ? [] : [join(cwd, ".pi", GUIDE_FILE)];
+	for (const path of [join(agentDir, GUIDE_FILE), ...project]) {
 		const text = readCapped(path);
 		if (text === null) continue;
 		parts.push(text);
