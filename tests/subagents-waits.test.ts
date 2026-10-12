@@ -3,9 +3,9 @@
  * an asker waits only on agents that can still answer, and a question that
  * would close a loop of waiting agents is refused.
  */
-import { test } from "node:test";
+import { type TestContext, test } from "node:test";
 import assert from "node:assert/strict";
-import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
+import { setImmediate as tick } from "node:timers/promises";
 import { type AgentRecord, NO_USAGE } from "../lib/subagents/types.ts";
 import { teamHarness } from "./support/team-harness.ts";
 
@@ -100,20 +100,27 @@ test("a question to an agent that does not wait for the asker still goes", async
 	assert.equal((await h.team.send("mid", "peer", "Which port?", { expectReply: true })).ok, true);
 });
 
-test("a parent woken from waiting goes on with the same run and the budget it has left", async () => {
+test("a parent woken from waiting goes on with the same run and the budget it has left", async (t: TestContext) => {
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+	const pass = async (ms: number) => { t.mock.timers.tick(ms); await flush(); };
 	const h = teamHarness();
-	h.spawn("Coordinate", { name: "lead", maxMinutes: 0.01 }); await flush();
+	// 0.001 minutes = 60 ms of work.
+	h.spawn("Coordinate", { name: "lead", maxMinutes: 0.001 }); await flush();
 	for (let i = 1; i <= 3; i++) {
 		h.spawn("Help", { name: `helper-${i}`, parent: "lead" }); await flush();
-		await sleep(150);
+		await pass(15);
 		h.lastCall("lead").finish("waiting"); await flush();
 		assert.equal(h.team.get("lead")!.state, "waiting");
+		await pass(1000);
+		assert.equal(h.team.get("lead")!.state, "waiting", "time spent waiting does not count");
 		h.lastCall(`helper-${i}`).finish(`helper-${i} done`); await flush();
 	}
 	assert.equal(h.team.get("lead")!.state, "running");
-	await sleep(250);
+	await pass(14);
+	assert.equal(h.team.get("lead")!.state, "running");
+	await pass(1);
 	const lead = h.team.get("lead")!;
 	assert.equal(lead.runs, 1, "one run, woken three times");
-	assert.equal(lead.state, "stopped", "about 450 ms, then 250 ms more, of work against a 600 ms budget");
+	assert.equal(lead.state, "stopped", "45 ms before the wakes and 15 after: its 60 ms are used");
 	assert.match(lead.stopReason ?? "", /budget/);
 });
