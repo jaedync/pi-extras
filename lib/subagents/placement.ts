@@ -3,7 +3,7 @@
  * inherits, and the checkout its edit lock follows (checkout.ts). Making a
  * worktree is the only side effect, so a spawn checks everything else first.
  */
-import { checkoutOf, resolveCwd } from "./checkout.ts";
+import { checkoutOf, CONTROL, resolveCwd } from "./checkout.ts";
 import type { AgentRecord, SpawnRequest, Worktree } from "./types.ts";
 import { createWorktree, placeInWorktree } from "./worktree.ts";
 
@@ -51,6 +51,8 @@ export function placeChild(request: Pick<SpawnRequest, "cwd" | "isolation">, par
 	if (request.isolation === "worktree") {
 		const source = origin ?? parent?.worktree?.path ?? main.cwd;
 		if (!source) return { ok: false, error: "Worktree isolation needs a git repository in the parent's workspace." };
+		// The child index refuses such paths, so it could not keep the worktree (restore.ts).
+		if (CONTROL.test(source)) return { ok: false, error: "Worktree isolation needs a repository path without control characters." };
 		try { worktree = createWorktree(source, name, cwd); }
 		catch (error) { return { ok: false, error: (error as Error).message }; }
 	}

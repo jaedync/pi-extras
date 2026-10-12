@@ -129,6 +129,18 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.checkSkipped === undefined || (Number.isInteger(r.checkSkipped) && r.checkSkipped >= 0));
 }
 
+/**
+ * A checkout is only where a child's edit lock lives, and a restore looks it
+ * up again (team.ts `restore`). One with a control character, as main's
+ * directory with a tab in its name gives, is left out, not the whole index.
+ */
+function trustedCheckout<T>(record: T): T {
+	const checkout = (record as { checkout?: unknown } | null)?.checkout;
+	if (typeof checkout !== "string" || !isAbsolute(checkout) || !CONTROL.test(checkout)) return record;
+	const { checkout: _checkout, ...rest } = record as { checkout?: unknown };
+	return rest as T;
+}
+
 export class ChildIndex {
 	readonly file: string;
 	private data: IndexData;
@@ -151,8 +163,9 @@ export class ChildIndex {
 			if (file.startsWith("index.json.") && file.endsWith(".tmp")) rmSync(join(this.dir, file), { force: true });
 		}
 		if (!existsSync(this.file)) return [];
-		const data = JSON.parse(readFileSync(this.file, "utf8")) as IndexData;
-		if (data.parentSession !== this.parentSession) throw new Error("Child index belongs to another parent session.");
+		const read = JSON.parse(readFileSync(this.file, "utf8")) as IndexData;
+		if (read.parentSession !== this.parentSession) throw new Error("Child index belongs to another parent session.");
+		const data: IndexData = Array.isArray(read.records) ? { ...read, records: read.records.map(trustedCheckout) } : read;
 		if (data.version !== 1 || typeof data.cwd !== "string" || !Array.isArray(data.records) || !data.records.every(validRecord)
 			|| new Set(data.records.map((r) => r.name)).size !== data.records.length) throw new Error("Invalid child index.");
 		const byName = new Map(data.records.map((r) => [r.name, r]));
@@ -183,7 +196,7 @@ export class ChildIndex {
 		const { shutdown: _previousShutdown, shutdownOwner: _previousOwner, ...previous } = this.data;
 		const data: IndexData = { ...previous, records: records.map((record) => {
 			const { reportFile: _reportFile, ...durable } = record as AgentRecord & { reportFile?: string };
-			return durable;
+			return trustedCheckout(durable);
 		}), ...(shutdown ? { shutdown, shutdownOwner } : {}) };
 		mkdirSync(this.dir, { recursive: true });
 		const temporary = `${this.file}.${process.pid}.${randomUUID()}.tmp`;

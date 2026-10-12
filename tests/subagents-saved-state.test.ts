@@ -5,8 +5,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parkHost, takeParked } from "../lib/subagents/host.ts";
+import { ChildIndex } from "../lib/subagents/restore.ts";
+import { Team } from "../lib/subagents/team.ts";
+import { type AgentRecord, NO_USAGE } from "../lib/subagents/types.ts";
 import { hostHarness } from "./support/host-harness.ts";
+
+const savedRecord = (over: Partial<AgentRecord>): AgentRecord => ({ name: "x", parent: "main", depth: 1, task: "T", model: "m", readOnly: false, fork: false,
+	blocking: false, state: "idle", createdAt: 1, activity: null, toolCalls: 0, usage: { ...NO_USAGE }, runs: 1, ...over });
 
 test("a held answer stays held when a quiet host is renewed after a /reload", async () => {
 	const h = hostHarness({ resumePolicy: "notify" });
@@ -34,4 +43,40 @@ test("a held answer stays held when a quiet host is renewed after a /reload", as
 		assert.equal(renewed.team.get(name)?.state, "interrupted");
 		await renewed.close();
 	} finally { h.cleanup(); }
+});
+
+test("a main directory whose name has a tab still leaves a readable index", () => {
+	const base = realpathSync(mkdtempSync(join(tmpdir(), "pi-extras-index-")));
+	try {
+		const mainCwd = join(base, "client\tnotes");
+		mkdirSync(mainCwd);
+		const team = new Team({ cwd: mainCwd, maxConcurrent: 0, maxDepth: 1, replyTimeoutMs: 1000, deliverToMain: () => undefined,
+			launcher: { launch: async () => { throw new Error("unused"); } } });
+		assert.ok(team.spawn({ task: "Look", parent: "main", model: "m", readOnly: false, fork: false, blocking: false }).ok);
+		const dir = join(base, "sessions");
+		new ChildIndex(dir, "s1", mainCwd).save(team.list());
+		const warnings: string[] = [];
+		const loaded = new ChildIndex(dir, "s1", mainCwd).load((message) => warnings.push(message));
+		assert.deepEqual(loaded.map((record) => record.name), ["look"]);
+		assert.equal(loaded[0]!.checkout, undefined, "a checkout with a control character is looked up again, not trusted");
+	} finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test("an index saved with a checkout that has a control character loads, and the checkout is looked up again", () => {
+	const base = realpathSync(mkdtempSync(join(tmpdir(), "pi-extras-index-")));
+	try {
+		writeFileSync(join(base, "index.json"), JSON.stringify({ version: 1, parentSession: "s1", cwd: base,
+			records: [savedRecord({ name: "ok", checkout: "/tmp/client\tnotes" })] }));
+		const loaded = new ChildIndex(base, "s1", base).load(() => undefined);
+		assert.deepEqual(loaded.map((record) => record.name), ["ok"]);
+		assert.equal(loaded[0]!.checkout, undefined);
+	} finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test("a worktree spawn from a directory with a control character is refused before git runs", () => {
+	const team = new Team({ cwd: "/tmp/client\tnotes", maxConcurrent: 0, maxDepth: 1, replyTimeoutMs: 1000, deliverToMain: () => undefined,
+		launcher: { launch: async () => { throw new Error("unused"); } } });
+	const spawned = team.spawn({ task: "Look", parent: "main", model: "m", readOnly: false, fork: false, blocking: false, isolation: "worktree" });
+	assert.equal(spawned.ok, false);
+	assert.match(!spawned.ok ? spawned.error : "", /control character/);
 });
