@@ -6,6 +6,7 @@
  * the `exit` crash net. No Pi API lives here so this layer stays testable and
  * out of the extension's way.
  */
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, unlinkSync } from "node:fs";
 import { TERM_GRACE_MS } from "./shell-jobs-core.ts";
@@ -35,6 +36,12 @@ export interface Job {
 	readonly deliveryFailed: boolean;
 	readonly cleanupError: string | null;
 	readonly runtimeId: string;
+	/**
+	 * Processes still in the group when the shell exited, which the exit cleanup
+	 * stopped: a count, null when there were some but the count is unknown, and
+	 * absent or 0 when there were none (a job parked by an older version has no field).
+	 */
+	readonly stoppedBackground?: number | null;
 }
 
 export interface Deferred {
@@ -172,6 +179,17 @@ async function waitForGroupGone(pgid: number, ms: number): Promise<boolean> {
 		if (!groupExists(pgid)) return true;
 	}
 	return !groupExists(pgid);
+}
+
+/** How many processes a group still has, or null when `pgrep` cannot tell. */
+export function groupSize(pgid: number): Promise<number | null> {
+	return new Promise((resolve) => {
+		execFile("pgrep", ["-g", String(pgid)], { timeout: 2000 }, (error, stdout) => {
+			// pgrep exits 1 when nothing matches; anything else is a failure to look.
+			if (error && (error as { code?: unknown }).code !== 1) resolve(null);
+			else resolve(stdout.split("\n").filter((line) => line.trim().length > 0).length);
+		});
+	});
 }
 
 /** TERM the group, wait up to the grace period for it to drain, then KILL. */

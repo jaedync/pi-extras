@@ -152,3 +152,28 @@ describe("shell and environment, as Pi's bash tool has them", () => {
 		}));
 	});
 });
+
+describe("background processes at exit", () => {
+	test("the completion says how many background processes were still running and were stopped", async () => {
+		await withAgentDir(async () => {
+			const app = await started();
+			const start = app.tools.get("shell_job_start");
+			const daemon = await start.execute("t1", { command: "sleep 30 & sleep 30 & echo server started", title: "Start server" }, undefined, undefined, app.ctx);
+			const plain = await start.execute("t2", { command: "echo plain", title: "Plain" }, undefined, undefined, app.ctx);
+			const completion = async (id: string) => {
+				for (let waited = 0; waited < 4000; waited += 50) {
+					const found = app.messages.find((m) => m.message.details?.id === id);
+					if (found) return found.message.content;
+					await sleep(50);
+				}
+				throw new Error(`no completion for ${id}`);
+			};
+			const text = await completion(daemon.details.id);
+			assert.match(text, /^stopped: 2 background processes that were still running when the command exited$/m);
+			assert.doesNotMatch(await completion(plain.details.id), /background process/);
+			let alive = true;
+			try { process.kill(-daemon.details.pid, 0); } catch { alive = false; }
+			assert.strictEqual(alive, false, "the group is still stopped at exit");
+		});
+	});
+});

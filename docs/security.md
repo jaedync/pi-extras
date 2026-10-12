@@ -420,7 +420,9 @@ Commands execute locally without stdin or a TTY, in the shell and environment of
 Pi's bash tool: `shellPath`, `shellCommandPrefix`, Pi's bin directory first in
 `PATH`, and the `PI_` session variables of this session, not of a parent Pi.
 Jobs use process groups so they
-can be cancelled; do not detach again inside a job. Logs live in temporary files
+can be cancelled; do not detach again inside a job. When a job's command exits,
+the extension stops the processes still in its group, and the completion says
+how many it stopped. Logs live in temporary files
 and may contain whatever a command prints, including secrets. Bounded completion
 snippets and requested logs enter the conversation. Do not use these tools for
 commands that print credentials. A job's id, and its log file's name, is made

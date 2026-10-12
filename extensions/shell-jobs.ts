@@ -49,6 +49,8 @@ import {
 	createRuntime,
 	discardLog,
 	EXIT_KILL_DELAY_MS,
+	groupExists,
+	groupSize,
 	type Job,
 	jobStatusText,
 	parkForReload,
@@ -155,6 +157,9 @@ async function finalize(runtime: Runtime, id: string, code: number | null, signa
 	const current = runtime.jobs.get(id);
 	if (!current || current.state === "done") return;
 	runtime.jobs.set(id, { ...current, state: "stopping" });
+	// The shell has exited, so whatever is left in its group is background work it
+	// started. It is stopped below, as it always was; the completion now says so.
+	const left = groupExists(current.pid) ? await groupSize(current.pid) : 0;
 	const cleanup = await stopGroup(current.pid);
 	// Re-read after the await: an explicit kill may have claimed this job while
 	// the group was draining, and that claim must win over the earlier snapshot.
@@ -166,6 +171,7 @@ async function finalize(runtime: Runtime, id: string, code: number | null, signa
 		signal,
 		endedAt: Date.now(),
 		cleanupError: cleanup.cleaned ? null : "could not terminate the whole process group",
+		stoppedBackground: left,
 	};
 	const suppressed = runtime.closing || done.epoch !== runtime.epoch || done.claimed || done.delivered;
 	// Record the delivery attempt before painting. `isVisible` treats a finished

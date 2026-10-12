@@ -80,6 +80,8 @@ async function sendCompletion(runtime: Runtime, binding: Delivery, pi: Extension
 	if (title !== null) lines.push(`title: ${title}`);
 	lines.push(`log: ${job.logPath}`);
 	if (job.cleanupError !== null) lines.push(`warning: ${job.cleanupError}`);
+	const stopped = stoppedLine(job.stoppedBackground);
+	if (stopped !== null) lines.push(stopped);
 	lines.push("", tail.text.length > 0 ? tail.text : "(no output)");
 	if (tail.notice !== null) lines.push("", tail.notice);
 	// Removing before send prevents reentrant acknowledgements/settles from
@@ -103,6 +105,13 @@ async function sendCompletion(runtime: Runtime, binding: Delivery, pi: Extension
 	} catch {
 		// Pi reports API failures; the unacknowledged job remains visible and retryable.
 	}
+}
+
+/** Background work the exit cleanup stopped; the exit status alone reads as if all of it finished. */
+function stoppedLine(count: number | null | undefined): string | null {
+	if (count === undefined || count === 0) return null;
+	const what = count === null ? "background processes" : `${count} background process${count === 1 ? "" : "es"}`;
+	return `stopped: ${what} that ${count === 1 ? "was" : "were"} still running when the command exited`;
 }
 
 /** Recover discarded messages only once Pi has drained its existing queue. */
