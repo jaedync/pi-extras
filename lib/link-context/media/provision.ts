@@ -9,11 +9,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, openSync, closeSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PYTHON_VERSION, uvAsset } from "../../voice/assets.ts";
 import { acquireLock, downloadVerified, parseUvVersion, uvIsRecentEnough } from "../../voice/provision.ts";
-import { readJsonObject, writeJsonAtomic } from "../../json-file.ts";
+import { readJsonObject, UnreadableJsonError, writeJsonAtomic } from "../../json-file.ts";
+import { operationalLine } from "../../operational-log.ts";
 import { deadline } from "../http.ts";
 import { killGroup, track } from "./children.ts";
 
@@ -69,19 +70,27 @@ export function toolEnv(env: Env = process.env): Record<string, string> {
 const checked = (state: MediaState): MediaState =>
 	typeof state.bgutilTag === "string" && !TAG.test(state.bgutilTag) ? { ...state, bgutilTag: undefined } : state;
 
-/** A missing or broken state file reads as empty, so the next call installs again. */
+/**
+ * The state is a cache of what is installed, not a user setting: a missing
+ * file reads as empty, and a broken one is moved aside (kept for a look) and
+ * logged, so the next install can save a new one.
+ */
 export function readState(home: string): MediaState {
+	const file = join(home, STATE_FILE);
 	try {
-		return checked(readJsonObject(join(home, STATE_FILE)) as MediaState);
-	} catch {
-		// Deliberate: the next writeState throws and the error names the file.
+		return checked(readJsonObject(file) as MediaState);
+	} catch (error) {
+		if (!(error instanceof UnreadableJsonError)) throw error;
+		const aside = `${file}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+		// A file that cannot be moved would make every call install and then fail to save, so stop here.
+		renameSync(file, aside);
+		operationalLine(join(home, "provision.log"), `${new Date().toISOString()} ${STATE_FILE} could not be read (${error.reason}); moved it to ${basename(aside)} and started again`);
 		return {};
 	}
 }
 
-/** Throws `UnreadableJsonError`, and keeps the file, when it exists but does not parse. */
 export function writeState(home: string, patch: Partial<MediaState>): MediaState {
-	const next = { ...checked(readJsonObject(join(home, STATE_FILE)) as MediaState), ...patch };
+	const next = { ...readState(home), ...patch };
 	writeJsonAtomic(join(home, STATE_FILE), next);
 	return next;
 }

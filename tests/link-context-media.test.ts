@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { sampleTimes, sheetColumns } from "../lib/link-context/media/frames.ts";
 import { sniffImage } from "../lib/link-context/media/image-bytes.ts";
 import { fetchImages, imageLink, imageLinks, prepareImage, sized } from "../lib/link-context/media/images.ts";
-import { asrPlan, bgutilDue, HELPER, packagesDue, PACKAGES, readState, toolEnv, writeState } from "../lib/link-context/media/provision.ts";
+import { asrPlan, bgutilDue, ensureMedia, HELPER, packagesDue, PACKAGES, readState, toolEnv, writeState } from "../lib/link-context/media/provision.ts";
 import { clipFor, HOST_BLOCKED, keyName, formatTranscript, header, prunePulls, pullDir, pullVideo, sampleFor, thumbnailUrl, validTimes, videoComments, youtubeId, type VideoDeps, type VideoInfo } from "../lib/link-context/media/video.ts";
 import { writeFileSync } from "node:fs";
 import { gifHeader, jpegHeader, png, pngClaiming, webpHeader } from "./support/image-bytes.ts";
+import { fakeMediaTools } from "./support/fake-media-tools.ts";
 import { context } from "./support/link-fetch.ts";
 
 test("frame times are spread evenly and centred in their slots", () => {
@@ -250,7 +251,7 @@ test("provisioning state: token-provider retry, tag check, child environment", (
 	assert.deepEqual(env, { PATH: "/bin", HOME: "/h", HTTPS_PROXY: "http://p", UV_INDEX_URL: "u" });
 });
 
-test("provisioning state: a broken state file is kept and the write says why; a missing one starts empty", () => {
+test("provisioning state: a broken state file is moved aside and logged; a missing one starts empty", () => {
 	const home = mkdtempSync(join(tmpdir(), "link-state-"));
 	try {
 		assert.deepEqual(writeState(home, { asr: "mlx-whisper" }), { asr: "mlx-whisper" });
@@ -258,11 +259,37 @@ test("provisioning state: a broken state file is kept and the write says why; a 
 		assert.deepEqual(writeState(home, { packagesAt: 7 }), { asr: "mlx-whisper", packagesAt: 7 });
 		writeFileSync(join(home, "state.json"), "{ \"asr\": ");
 		assert.deepEqual(readState(home), {});
-		assert.throws(() => writeState(home, { packagesAt: 8 }), /state\.json could not be read .*Fix or remove/);
-		assert.equal(readFileSync(join(home, "state.json"), "utf8"), "{ \"asr\": ");
+		assert.equal(existsSync(join(home, "state.json")), false);
+		const aside = readdirSync(home).filter((name) => /^state\.json\.corrupt-\d{4}-\d\d-\d\dT[\d-]+Z$/.test(name));
+		assert.equal(aside.length, 1);
+		assert.equal(readFileSync(join(home, aside[0]), "utf8"), "{ \"asr\": ", "the broken file is kept for a look");
+		assert.match(readFileSync(join(home, "provision.log"), "utf8"), /state\.json could not be read .*moved it to state\.json\.corrupt-/);
+		assert.deepEqual(writeState(home, { packagesAt: 8 }), { packagesAt: 8 });
 	} finally {
 		rmSync(home, { recursive: true, force: true });
 	}
+});
+
+test("ensureMedia with a broken state file installs once, saves the new state, and the next call installs nothing", { skip: process.platform === "win32" ? "POSIX shell scripts" : false }, async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "link-ensure-"));
+	const tools = fakeMediaTools(dir);
+	t.after(() => {
+		tools.restore();
+		rmSync(dir, { recursive: true, force: true });
+	});
+	t.mock.method(globalThis, "fetch", async () => Response.json({ tag_name: "2.0.2" }));
+	const home = join(dir, "media");
+	mkdirSync(join(home, "env", "bin"), { recursive: true });
+	writeFileSync(join(home, "env", "bin", "python"), "");
+	writeFileSync(join(home, "state.json"), "{ truncated");
+	const toolchain = await ensureMedia({ refreshDays: 3, progress: () => {}, home });
+	assert.equal(toolchain.python, join(home, "env", "bin", "python"));
+	const state = readState(home);
+	assert.equal(typeof state.packagesAt, "number");
+	assert.equal(state.packages, PACKAGES.join(" "));
+	assert.equal(tools.calls().filter((line) => line.startsWith("pip install")).length, 1);
+	await ensureMedia({ refreshDays: 3, progress: () => {}, home });
+	assert.equal(tools.calls().filter((line) => line.startsWith("pip install")).length, 1, "the saved state stops a second install");
 });
 
 const python = ["python3", "python"].find((bin) => spawnSync(bin, ["--version"]).status === 0);
