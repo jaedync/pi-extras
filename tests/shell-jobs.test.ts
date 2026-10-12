@@ -43,6 +43,8 @@ import {
 import {
 	RESIDUAL_RECHECK_MS,
 	discardLog,
+	parkForReload,
+	takeReload,
 	recordResidual,
 	registry,
 	scheduleResidualReaper,
@@ -360,6 +362,23 @@ describe("process layer", () => {
 		assert.strictEqual(runtime.residualPids.size, 0);
 		assert.strictEqual(runtime.residualTimer, null);
 		assert.strictEqual(registry().runtimes.has(runtime), false);
+	});
+
+	test("a runtime parked for a reload that never claims it is handed to its shutdown", async () => {
+		const session = {};
+		const runtime = { ...makeRuntime(new Set()), closing: false };
+		registry().runtimes.add(runtime);
+		let abandoned = 0;
+		parkForReload(session, runtime, () => { abandoned += 1; }, 30);
+		await sleep(120);
+		assert.strictEqual(abandoned, 1);
+		assert.strictEqual(takeReload(session), undefined);
+
+		const claimed = {};
+		parkForReload(claimed, runtime, () => { abandoned += 1; }, 30);
+		assert.strictEqual(takeReload(claimed), runtime);
+		await sleep(120);
+		assert.strictEqual(abandoned, 1, "a claimed runtime is not shut down");
 	});
 });
 

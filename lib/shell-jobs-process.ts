@@ -69,6 +69,8 @@ export interface Runtime {
 	readonly outbox: Set<string>;
 	delivery: Delivery | null;
 	widget: JobsWidget;
+	/** Set while parked for a reload; absent on a runtime an older version parked. */
+	reloadTimer?: ReturnType<typeof setTimeout> | null;
 }
 
 interface GlobalRegistry {
@@ -81,6 +83,8 @@ export const EXIT_KILL_DELAY_MS = 25;
 export const KILL_POLL_MS = 400;
 export const RESIDUAL_RECHECK_MS = 2000;
 export const RESIDUAL_DEADLINE_MS = 30000;
+/** A reload that has not claimed its parked runtime by now did not load shell-jobs again. */
+export const RELOAD_CLAIM_MS = 60_000;
 
 const REGISTRY_KEY = Symbol.for("pi.shell-jobs.registry");
 
@@ -119,13 +123,30 @@ export function createRuntime(widget: JobsWidget): Runtime {
 export function takeReload(session: object): Runtime | undefined {
 	const runtime = registry().reloads.get(session);
 	registry().reloads.delete(session);
+	if (runtime?.reloadTimer) clearTimeout(runtime.reloadTimer);
+	if (runtime) runtime.reloadTimer = null;
 	return runtime && !runtime.closing && registry().runtimes.has(runtime) ? runtime : undefined;
 }
 
-export function parkForReload(session: object, runtime: Runtime): void {
+/**
+ * Hold a runtime for the next load of this extension. When the reload does not
+ * load shell-jobs again, nothing claims it, so after `claimMs` it goes to
+ * `abandon` (the old load's shutdown) rather than running until Pi exits.
+ */
+export function parkForReload(session: object, runtime: Runtime, abandon: () => void, claimMs = RELOAD_CLAIM_MS): void {
 	runtime.delivery = null;
 	runtime.widget.detach();
 	registry().reloads.set(session, runtime);
+	if (runtime.reloadTimer) clearTimeout(runtime.reloadTimer);
+	const timer = setTimeout(() => {
+		runtime.reloadTimer = null;
+		if (registry().reloads.get(session) !== runtime) return;
+		registry().reloads.delete(session);
+		abandon();
+	}, claimMs);
+	// Pi's exit is not held up: the exit net kills the groups then.
+	timer.unref?.();
+	runtime.reloadTimer = timer;
 }
 
 /** `exit 0`, `signal SIGKILL`, or the live state while a job has no outcome yet. */

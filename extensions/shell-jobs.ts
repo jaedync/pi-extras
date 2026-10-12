@@ -724,7 +724,8 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		inspectorUi = null;
 		inspected = undefined;
 		if (event.reason === "reload") {
-			parkForReload(ctx.sessionManager, runtime);
+			const parked = runtime;
+			parkForReload(ctx.sessionManager, parked, () => void shutdown(parked));
 			return;
 		}
 		await shutdown(runtime);
