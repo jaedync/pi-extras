@@ -138,3 +138,14 @@ test("Bluesky: shortened link text becomes the full URL from its facet", () => {
 	assert.equal(expandLinks(text, facets), "café see https://example.com/a-long-path and [docs](https://docs.test/)");
 	assert.equal(expandLinks(text, undefined), text);
 });
+
+test("web pages: a bad og:image, null JSON-LD and an entity in the title do not fail the pull", () => {
+	const url = "https://example.com/page";
+	for (const image of ["https://", "http://exa mple.com/a.jpg"]) assert.deepEqual(webFromHtml(`<meta property="og:image" content="${image}"><p>hello</p>`, url).photos, [], image);
+	assert.equal(webFromHtml(`<script type="application/ld+json">null</script><p>hello</p>`, url).title, "example.com");
+	const authors = webFromHtml(`<script type="application/ld+json">{"articleBody":"a long body text here","author":[null,{"name":"Kim"}]}</script><p>hi</p>`, url);
+	assert.match(authors.markdown, /^# example\.com\nKim\n/);
+	assert.match(webFromHtml(`<script type="application/ld+json">{"articleBody":"body","author":null}</script><p>hi</p>`, url).markdown, /^# example\.com\nhttps/);
+	assert.equal(webFromHtml(`<title>Tom &amp; Jerry</title><p>hello</p>`, url).title, "Tom & Jerry");
+	assert.deepEqual(webFromHtml(`<meta property="og:image" content="/img/a.png"><p>hello</p>`, url).photos, ["https://example.com/img/a.png"]);
+});

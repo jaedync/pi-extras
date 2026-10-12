@@ -127,13 +127,13 @@ export function metaTags(html: string): Map<string, string> {
 	return found;
 }
 
-/** JSON-LD blocks that parse; malformed ones are skipped. */
+/** JSON-LD blocks that parse to objects; malformed ones and bare values such as `null` are skipped. */
 export function jsonLd(html: string): unknown[] {
 	const blocks: unknown[] = [];
 	for (const match of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
 		try {
 			const value = JSON.parse(match[1]) as unknown;
-			blocks.push(...(Array.isArray(value) ? value : [value]));
+			blocks.push(...(Array.isArray(value) ? value : [value]).filter((block) => !!block && typeof block === "object"));
 		} catch {
 			// Sites ship broken JSON-LD often enough; the page's other metadata still applies.
 		}
