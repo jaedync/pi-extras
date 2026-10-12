@@ -1196,6 +1196,11 @@ answers and then just writes its final text, the report doesn't wake main a
 second time. More work, new input or a failure after the answer does, so a
 report is never silently missed. Children know each other and can split work
 directly.
+For a review or fix loop, tell the agents to send messages to each other by
+name. Tell them to report to you only at the end. The reviewer asks with
+`expectReply: true`, so its report waits for the answer. A message from a
+peer started the run of the other agent, so its report does not wake you. Two
+agents can do many rounds, and main wakes one time, for the last report.
 Messages to main show above the editor until they are in the transcript.
 One that arrives while main works lands at its next turn boundary, and main
 takes one more turn before it stops if it hasn't replied since. Esc doesn't
@@ -1210,6 +1215,18 @@ Reports from children started in the same run arrive together, as one message.
 like the conversation they are: `◆ reviewer → main  asks` over what it said.
 A question keeps its amber `asks` word; failed deliveries keep red words.
 Incoming mail has a Markdown preview, expandable by click or ctrl+o.
+
+**What main sees.** Each message to main ends with one line about the other
+agents that still work, for example
+`Still working: impl 37m $17.20, review queued after impl`. This applies to
+reports, notes, questions, answers and relays. For each
+agent, the line gives the time and cost of its current run, and the agent it
+waits for. It shows 8 agents at most, then `+3 more`. Subagents makes the line
+when Pi gets the message, not when the message goes into the queue. When no
+other agent works, the message has no line. The results of main's `message`
+and `stop_subagent` calls end with `Team now:`, the agents that work or are
+interrupted, and the number of agents that ended. So main does not use a turn
+to ask for the status of its team.
 
 **Seeing it.** An agent reads like someone in a conversation, with no band
 behind it: a `◆` and its name in its provider's color, the one the footer
@@ -1285,11 +1302,52 @@ characters; main reads the rest with its normal read tool. `/subagents report
 numbers can skip when a run ends waiting for a reply. If saving fails, the
 message still arrives and points to the session file as before.
 
+**Checks.** `check` on `subagent` or `message` is a shell command, for
+example `{ task, check: "npm test", fixUntilPass: 2 }`. When a run of the
+child ends normally, the harness runs the command before the report goes to
+the parent. The command runs through the child's own `bash` tool, in the
+child's directory, with the same shell settings and worktree sandbox. It gets
+no input. A timeout stops it after 10 minutes, or after
+`checkTimeoutMinutes` (60 at most). The run stays live while the check runs,
+and the row of the child shows `check: npm test`. Then the report ends with
+the command, the exit code, the time and the last lines of the output: 40
+lines or 4,000 characters for a failure, 10 lines or 1,000 characters for a
+pass. The report file has the same text. So the parent gets data from the
+harness, not only what the child says. With `fixUntilPass` (0 to 5, default
+0), a failed check goes back to the child as more of the same run. The child
+repairs the cause, and the check runs again. The run keeps its budget, and the
+parent gets only the last result. A run that fails, is stopped or goes over
+its budget gets no check. The child keeps its check for its later runs. A
+`message` with `check` replaces it. When that message does not give
+`fixUntilPass` or `checkTimeoutMinutes`, the old values stay. Only main, or a
+child that can run `bash` itself, can set a check. A message can set a check
+only on one of the sender's own subagents. A read-only child can have a check,
+but not `fixUntilPass`.
+
 **Stopping.** `stop_subagent` stops a subagent and everything it started:
 main can stop any, and a child that may start subagents can stop its own.
 The call returns how it ended and its last message, so no report follows; a
 message resumes it later. `/subagents stop <name>`, `stop all` and ctrl+x in
 the inspector stop children for you, and then main gets the stopped report.
+
+**Order.** `after` on `subagent` gives the agents that must end before the
+new child starts, for example `{ task, after: ["impl"] }`. The call records
+the child and returns. The child stays queued until each of these agents is
+idle, failed, stopped or interrupted. It does not use a `maxConcurrent` slot
+while it waits, and its row shows `after impl`. Its time budget starts when it
+starts. Its first prompt then tells how each agent ended and gives the path
+of each report, but not the report text. Each name must be an agent of the
+team. A child can't wait for the agent that starts it, or for an agent above
+that one, because each would wait for the other. `index.json` keeps the names,
+so a restore or a `/reload` keeps the wait. Only the first run waits; a
+resume does not. A stop removes a queued child before it starts. When a run
+ends normally and a queued child of the same parent waits for it, its report
+does not wake the parent. The parent reads it with the report of the queued
+child. A run that fails or is stopped still wakes the parent. An agent that
+the queued child waits for can't ask it a question, because the answer can
+come only after the start. The subagents of that agent can't either. They can
+send a note, which the queued child reads when it starts. A queued child does
+not keep the reports of its group waiting.
 
 **Writers.** The first child to edit files in a checkout holds that checkout
 until its run ends. The checkout is the git work tree that contains the edited

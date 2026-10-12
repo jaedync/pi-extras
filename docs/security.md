@@ -437,7 +437,8 @@ file has an error for it.
 Child sessions are written under
 `PI_CODING_AGENT_DIR/sessions/subagents/<parent session id>/`. An `index.json`
 there, readable only by you, stores each child's full task, model settings,
-state, session path, run count, `cwd` and checkout path. A lease stops two Pi processes from driving
+state, session path, run count, `cwd`, checkout path, the names in `after`,
+the `check` command and the last check result. A lease stops two Pi processes from driving
 the same children, and a lease held under another hostname is never taken
 over. A `/reload` keeps children running: the new copy of the extension takes
 them over in the same process and keeps the lease. When it can't, it
@@ -460,6 +461,21 @@ model requests.
 
 A forked child's system prompt carries a condensed copy of the conversation:
 user and assistant text and one line per tool call, not tool output.
+
+A check is a shell command that Subagents runs for a child when a run of the
+child ends normally. Only main, or a child that can run `bash` itself, can set
+one. That child must not be read-only and must have `bash` in its tools. A
+`message` can set a check only on one of the sender's own subagents. So a
+child in a worktree sandbox can't run a command in the directory of another
+agent. The check runs through the child's own `bash` tool, in the child's
+directory. It uses the `shellPath` and `shellCommandPrefix` that the child's
+settings and project trust give, and the child's worktree sandbox. It gets no
+stdin. A timeout stops it after 10 minutes, or after `checkTimeoutMinutes`
+(60 at most). A timeout, a stop or the end of the session kills its full
+process group. The files that it changes count as changes from the child's
+`bash` for the edit lock. `index.json` keeps the command, so the next run of
+the child runs it again. The last lines of its output go into the report and
+the report file, and from there into the context of the parent.
 
 ## Tool Display
 
