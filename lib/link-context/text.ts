@@ -13,6 +13,12 @@ export function decodeEntities(text: string): string {
 	});
 }
 
+/** `end`, moved back one unit when it would split a surrogate pair, so a cut never leaves half an emoji. */
+export function cutIndex(text: string, end: number): number {
+	const before = text.charCodeAt(end - 1);
+	return end > 0 && end < text.length && before >= 0xd800 && before <= 0xdbff ? end - 1 : end;
+}
+
 const BLOCK = new Set(["p", "div", "br", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote", "tr", "section", "article", "header", "footer", "table"]);
 
 function walk(node: HTMLElement, out: string[]): void {

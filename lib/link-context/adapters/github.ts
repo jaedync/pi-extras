@@ -6,7 +6,7 @@
  */
 import { get, getJson, PLAIN_UA } from "../http.ts";
 import { renderThread, type Reply } from "../post.ts";
-import { isoDate, stats } from "../text.ts";
+import { cutIndex, isoDate, stats } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
 const API = "https://api.github.com";
@@ -37,7 +37,7 @@ function ghFetch(ctx: AdapterContext) {
 	};
 }
 
-const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n… (${text.length - max} more characters)` : text);
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, cutIndex(text, max))}\n… (${text.length - max} more characters)` : text);
 
 async function issue(owner: string, repo: string, number: string, ctx: AdapterContext): Promise<Pulled> {
 	const gh = ghFetch(ctx);

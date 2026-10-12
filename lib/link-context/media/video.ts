@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderReplies, type Reply } from "../post.ts";
-import { clock, isoDate, stats, type Range } from "../text.ts";
+import { clock, cutIndex, isoDate, stats, type Range } from "../text.ts";
 import type { AdapterContext, ImageBlock, Pulled } from "../types.ts";
 import { extractFrames, sampleTimes, type FrameResult, type FrameSource } from "./frames.ts";
 import { fetchImages } from "./images.ts";
@@ -75,7 +75,7 @@ export function header(info: VideoInfo, url: string): string {
 	const counts = stats([["views", info.view_count], ["likes", info.like_count], ["comments", info.comment_count]]);
 	const lines = [`# ${info.title ?? "Untitled video"}`, facts, counts, info.webpage_url ?? url].filter(Boolean);
 	const description = (info.description ?? "").trim();
-	if (description) lines.push("", "## Description", "", description.length > MAX_DESCRIPTION ? `${description.slice(0, MAX_DESCRIPTION)}…` : description);
+	if (description) lines.push("", "## Description", "", description.length > MAX_DESCRIPTION ? `${description.slice(0, cutIndex(description, MAX_DESCRIPTION))}…` : description);
 	if (info.chapters?.length) lines.push("", "## Chapters", "", ...info.chapters.map((c) => `- ${clock(c.start_time ?? 0)} ${c.title ?? ""}`));
 	return lines.join("\n");
 }

@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseConfig, agentsFor } from "../lib/link-context/config.ts";
 import { get, getJson, PLAIN_UA, PREVIEW_UA } from "../lib/link-context/http.ts";
+import { page } from "../lib/link-context/index.ts";
 import { classify, isPrivateHost, parseUrl } from "../lib/link-context/url.ts";
 import { fakeFetch } from "./support/link-fetch.ts";
-import { clock, decodeEntities, htmlToText, jsonLd, metaTags, parseClock, parseRange } from "../lib/link-context/text.ts";
+import { clock, cutIndex, decodeEntities, htmlToText, jsonLd, metaTags, parseClock, parseRange } from "../lib/link-context/text.ts";
 
 const kind = (url: string) => classify(parseUrl(url));
 
@@ -126,4 +127,14 @@ test("bodies over the cap are refused", async () => {
 test("site-local IPv6, cluster service names and every documentation range are private", () => {
 	for (const host of ["fec0::1", "[fec0::1]", "feff::1", "api.default.svc", "198.51.100.1", "203.0.113.1"]) assert.equal(isPrivateHost(host), true, host);
 	for (const host of ["198.51.101.1", "203.0.114.1", "service.example.com"]) assert.equal(isPrivateHost(host), false, host);
+});
+
+test("cuts never split a surrogate pair", () => {
+	const text = `${"x".repeat(39_999)}😀 more text`;
+	const first = page(text, 0);
+	assert.equal(first.next, 39_999);
+	assert.equal(first.text + page(text, first.next ?? 0).text, text);
+	assert.equal(cutIndex("ab😀", 3), 2);
+	assert.equal(cutIndex("ab😀", 4), 4);
+	assert.equal(cutIndex("abc", 2), 2);
 });

@@ -10,7 +10,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { loadConfig } from "./config.ts";
 import { pull, type PullDeps } from "./pull.ts";
-import { parseClock, parseRange } from "./text.ts";
+import { cutIndex, parseClock, parseRange } from "./text.ts";
 import type { LinkConfig, Pulled, PullOptions } from "./types.ts";
 import { classify, parseUrl } from "./url.ts";
 
@@ -93,7 +93,7 @@ export function page(text: string, offset: number, limit = PAGE_CHARS): Page {
 	const paragraph = window.lastIndexOf("\n\n");
 	const line = window.lastIndexOf("\n");
 	const cut = paragraph > limit * 0.6 ? paragraph : line > limit * 0.6 ? line : -1;
-	const stop = cut > 0 ? offset + cut : end;
+	const stop = cut > 0 ? offset + cut : cutIndex(text, end);
 	return { text: text.slice(offset, stop), next: stop };
 }
 
@@ -182,7 +182,7 @@ function safe(theme: Theme, key: Parameters<Theme["fg"]>[0], text: string): stri
 /** Text from links and pages goes on one row with no terminal escapes: titles come from untrusted sites. */
 export function clean(value: unknown, max = 160): string {
 	const text = String(value ?? "").replace(/[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim();
-	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+	return text.length > max ? `${text.slice(0, cutIndex(text, max - 1))}…` : text;
 }
 
 export function callLine(args: Partial<Params>, theme: Theme): string {
