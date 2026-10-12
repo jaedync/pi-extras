@@ -318,7 +318,9 @@ export function restoreRecord(record: AgentRecord, entries: readonly unknown[], 
 	}
 	const interrupted = record.state !== "stopped" && record.state !== "failed" && (pending.size > 0 || LIVE_STATES.has(record.state) || record.state === "interrupted" || assistant?.stopReason === "aborted"
 		|| (last && last.role !== "assistant") || assistant?.stopReason === "toolUse");
-	const report = textContent(assistant?.content) || record.report;
+	// A stop or failure saved the run's own report, unset when it said nothing; the session's last answer may be an older run's.
+	const ended = record.state === "stopped" || record.state === "failed";
+	const report = ended ? record.report : textContent(assistant?.content) || record.report;
 	const hardKill = LIVE_STATES.has(record.state);
 	const at = [...entries].reverse().map((entry) => Date.parse((entry as Entry).timestamp ?? "")).find(Number.isFinite);
 	return { ...record, restored: true, blocking: false, state: interrupted ? "interrupted" : record.state, runs: reportRunFloor(record.sessionFile, record.runs, warn),

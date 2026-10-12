@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parkHost, takeParked } from "../lib/subagents/host.ts";
-import { ChildIndex } from "../lib/subagents/restore.ts";
+import { ChildIndex, restoreRecord } from "../lib/subagents/restore.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { type AgentRecord, NO_USAGE } from "../lib/subagents/types.ts";
 import { hostHarness } from "./support/host-harness.ts";
@@ -79,4 +79,18 @@ test("a worktree spawn from a directory with a control character is refused befo
 	const spawned = team.spawn({ task: "Look", parent: "main", model: "m", readOnly: false, fork: false, blocking: false, isolation: "worktree" });
 	assert.equal(spawned.ok, false);
 	assert.match(!spawned.ok ? spawned.error : "", /control character/);
+});
+
+test("a restored run that was stopped or failed before its first reply keeps no older run's report", () => {
+	const entries = [
+		{ type: "message", message: { role: "user", content: "Task" } },
+		{ type: "message", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "RUN 1 REPORT: all tests pass." }] } },
+		{ type: "message", message: { role: "user", content: "Message from main:\nNow fix the lint errors." } },
+	];
+	for (const state of ["stopped", "failed"] as const) {
+		const restored = restoreRecord(savedRecord({ name: "fixer", state, runs: 2, report: undefined }), entries, () => undefined);
+		assert.equal(restored.report, undefined, state);
+	}
+	const idle = restoreRecord(savedRecord({ name: "fixer", state: "idle", runs: 1, report: undefined }), entries.slice(0, 2), () => undefined);
+	assert.equal(idle.report, "RUN 1 REPORT: all tests pass.", "an index that lags the session still gets the last answer");
 });
