@@ -45,6 +45,26 @@ test("an unreadable or empty lock counts as held while it is new", (t) => {
 	assert.equal(existsSync(path), false);
 });
 
+test("a lock dated far in the future counts as stale, so a clock change cannot hold it for all time", (t) => {
+	const path = join(scratch(t), "x.lock");
+	const future = new Date(Date.now() + 3_600_000);
+	writeFileSync(path, String(process.pid));
+	utimesSync(path, future, future);
+	const lock = tryLock(path, { staleMs: 5_000 });
+	assert.ok(lock, "a live pid with an mtime an hour ahead");
+	lock.release();
+	writeFileSync(path, "");
+	utimesSync(path, future, future);
+	const empty = tryLock(path, { settleMs: 5_000 });
+	assert.ok(empty, "an empty lock with an mtime an hour ahead");
+	empty.release();
+	// A small skew, as between a client and its network file system, is not stale.
+	writeFileSync(path, String(process.pid));
+	const soon = new Date(Date.now() + 1_000);
+	utimesSync(path, soon, soon);
+	assert.equal(tryLock(path, { staleMs: 5_000 }), undefined);
+});
+
 test("waitForLock gives up with a clear message while another holder keeps the lock", (t) => {
 	const dir = scratch(t);
 	const path = join(dir, "pi-extras.json.lock");

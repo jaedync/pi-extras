@@ -47,8 +47,23 @@ function writeExclusive(file: string, text: string): void {
 	const fd = openSync(file, "wx", 0o600);
 	try {
 		writeFileSync(fd, text);
-	} finally {
+	} catch (error) {
 		closeSync(fd);
+		unlinkSync(file);
+		throw error;
+	}
+	closeSync(fd);
+}
+
+/** True when linked, false when the lock exists, undefined when the file system has no hard links. */
+function linkInto(temp: string, path: string): boolean | undefined {
+	try {
+		linkSync(temp, path);
+		return true;
+	} catch (error) {
+		if (errorCode(error) === "EEXIST") return false;
+		if (NO_HARD_LINKS.has(errorCode(error) ?? "")) return undefined;
+		throw error;
 	}
 }
 
@@ -56,15 +71,20 @@ function writeExclusive(file: string, text: string): void {
 function publish(path: string, token: string): boolean {
 	const temp = `${path}.${token.replace(" ", ".")}.tmp`;
 	writeExclusive(temp, token);
+	let linked: boolean | undefined;
 	try {
-		linkSync(temp, path);
-		return true;
+		linked = linkInto(temp, path);
 	} catch (error) {
-		if (errorCode(error) === "EEXIST") return false;
-		if (!NO_HARD_LINKS.has(errorCode(error) ?? "")) throw error;
-	} finally {
 		unlinkSync(temp);
+		throw error;
 	}
+	try {
+		unlinkSync(temp);
+	} catch (error) {
+		// Throwing now would hide a lock this call holds; a stray temporary file only costs space.
+		if (!linked) throw error;
+	}
+	if (linked !== undefined) return linked;
 	try {
 		writeExclusive(path, token);
 		return true;
@@ -96,7 +116,8 @@ function readHolder(path: string): { readonly seen: Stats; readonly text: string
 function inspect(path: string, options: LockOptions): Holder {
 	const holder = readHolder(path);
 	if (!holder) return { state: "gone" };
-	const age = (options.now ?? Date.now)() - holder.seen.mtimeMs;
+	// A clock change or a network file system can date a lock in the future; count that distance as age too.
+	const age = Math.abs((options.now ?? Date.now)() - holder.seen.mtimeMs);
 	const pid = Number.parseInt(holder.text ?? "", 10);
 	if (!Number.isInteger(pid) || pid <= 0) return age < (options.settleMs ?? DEFAULT_SETTLE_MS) ? { state: "held" } : { state: "stale", seen: holder.seen };
 	if (options.staleMs !== undefined && age > options.staleMs) return { state: "stale", seen: holder.seen };
