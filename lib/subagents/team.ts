@@ -405,6 +405,7 @@ export class Team implements HostTeam {
 		this.resumePrompts.delete(name);
 		this.sessions.endRun(name);
 		this.routing.ended(name);
+		this.checks.end(name);
 		this.forgetAnswer(name);
 		this.patch(name, { state: "interrupted", error: message, restoreError: message, launchError: message,
 			launchFailures: (previous.launchFailures ?? 0) + 1, endedAt: this.now(), activity: `resume launch failed: ${message}`,
@@ -449,7 +450,6 @@ export class Team implements HostTeam {
 		const continued = this.continuing.delete(name);
 		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined, ...(continued ? {} : { runCost: record.usage.cost }) });
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
-		if (!continued) this.checks.begin(name);
 		try {
 			if (!(await this.work(name, handle, text))) return;
 		} catch (error) {

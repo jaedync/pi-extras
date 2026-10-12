@@ -165,6 +165,47 @@ test("a child waiting on its subagents is checked only when it would end idle", 
 	await h.team.close();
 });
 
+test("fix rounds count across the whole run: one that waited on its subagents or on an answer goes on counting", async () => {
+	const script = scripted({ exitCode: 1, output: "one" }, { exitCode: 1, output: "two" }, { exitCode: 1, output: "three" }, { exitCode: 1, output: "four" }, { exitCode: 1, output: "five" });
+	const h = teamHarness({ check: script.check });
+	const lead = h.spawn("lead", { name: "lead", check: { command: "npm test", fixUntilPass: 3 } });
+	const peer = h.spawn("peer", { name: "peer" });
+	await tick();
+	h.lastCall(lead).finish("First try.");
+	await settled();
+	assert.match(h.lastCall(lead).text, /fix round 1 of 3/);
+	assert.ok(h.team.spawn({ name: "helper", task: "help", parent: lead, model: "m", readOnly: false, fork: false, blocking: false }).ok);
+	await tick();
+	h.lastCall(lead).finish("A helper fixes it.");
+	await settled();
+	assert.equal(h.team.get(lead)!.state, "waiting");
+	h.lastCall("helper").finish("Fixed.");
+	await settled();
+	h.lastCall(lead).finish("Second try.");
+	await settled();
+	assert.match(h.lastCall(lead).text, /fix round 2 of 3/, "the wait on its subagent did not start the count again");
+	assert.ok((await h.team.send(lead, peer, "Which flag?", { expectReply: true })).ok);
+	h.lastCall(lead).finish("Waiting for peer.");
+	await settled();
+	assert.equal(h.team.get(lead)!.state, "waiting");
+	assert.ok((await h.team.send(peer, lead, "Use --strict.")).ok);
+	await settled();
+	h.lastCall(lead).finish("Third try.");
+	await settled();
+	assert.match(h.lastCall(lead).text, /fix round 3 of 3/, "nor did the wait for an answer");
+	h.lastCall(lead).finish("Last try.");
+	const done = await h.team.whenDone(lead);
+	assert.equal(script.asked.length, 4);
+	assert.equal(done.checked?.attempt, 4);
+	assert.match(reportText(done, Date.now()), /failed \(exit 1\) in \d+s, attempt 4 of 4\./);
+	assert.ok((await h.team.send("main", lead, "Try once more.")).ok);
+	await settled();
+	h.lastCall(lead).finish("New run.");
+	await settled();
+	assert.match(h.lastCall(lead).text, /fix round 1 of 3/, "a new run starts its own count");
+	await h.team.close();
+});
+
 test("mail that arrives during the check is read first, then the check runs again", async () => {
 	const script = scripted({ exitCode: 0, output: "first" }, { exitCode: 0, output: "second" });
 	const h = teamHarness({ check: script.check });

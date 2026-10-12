@@ -169,11 +169,11 @@ export class RunChecks {
 		this.host = host;
 	}
 
-	/** A new run has had no fix rounds; one that goes on on a fallback model keeps its count. */
-	begin(name: string): void {
-		this.rounds.set(name, 0);
-	}
-
+	/**
+	 * The run ended: its next one starts its count of fix rounds again. Until
+	 * then the count goes on, across a wait for its subagents or an answer and
+	 * a move to another session.
+	 */
 	end(name: string): void {
 		this.rounds.delete(name);
 	}

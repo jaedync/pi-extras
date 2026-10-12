@@ -1318,7 +1318,8 @@ with a check that did not pass always wakes the parent. With `fixUntilPass` (0
 to 5, default 0), a failed check goes back to the child as more of the same
 run. Messages that came during the check go with it. The child repairs the
 cause, and the check runs again. The run keeps its budget, and the parent gets
-only the last result. A check that could not run gets no fix rounds, because
+only the last result. The fix rounds count across the whole run, also when the
+run waits for its subagents or for an answer. The next run starts again at 0. A check that could not run gets no fix rounds, because
 the child can't repair the harness. A run that fails, is stopped or goes over
 its budget gets no check. The child keeps its check for its later runs. A
 `message` with `check` replaces it. When that message does not give
