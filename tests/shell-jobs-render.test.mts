@@ -309,6 +309,22 @@ describe("job widget", () => {
 		} finally { jobsWidget.detach(); }
 	});
 
+	test("a throw while drawing the rows is reported and drawn as one line, never thrown to Pi", () => {
+		let factory: any;
+		const errors: unknown[] = [];
+		const jobsWidget = createJobsWidget(() => { throw new Error("boom"); }, (error) => errors.push(error));
+		try {
+			jobsWidget.attach({ setWidget: (_id, content) => { factory = content; } }, true, () => [makeJob({ id: "a", startedAt: Date.now() })]);
+			const component = factory({ requestRender() {} }, quiet());
+			const lines = component.render(30);
+			assert.strictEqual(lines.length, 1);
+			assert.ok(visibleWidth(lines[0]!) <= 30);
+			contains(lines[0], "shell-jobs");
+			assert.strictEqual((errors[0] as Error).message, "boom");
+			assert.strictEqual(component.handleMouse({ type: "click", button: "left", y: 0 }), undefined, "a failed frame maps no row to a job");
+		} finally { jobsWidget.detach(); }
+	});
+
 	test("widget reads reduced motion each render and holds its running spinner still", (t) => {
 		t.mock.timers.enable({ apis: ["Date"], now: 10_000 });
 		let factory: any;

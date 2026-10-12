@@ -46,6 +46,8 @@ export const WIDGET_COMMAND_BYTES = 64;
 export const WIDGET_REFRESH_MS = 250;
 // No log growth for this long puts the spinner into its quiet crawl.
 export const QUIET_AFTER_MS = 30_000;
+/** What the widget draws for a frame it could not draw; the error itself goes to the operational log. */
+export const WIDGET_FAILED = "shell-jobs: the job rows failed to draw; see shell-jobs.log";
 export const SPINNER_FRAMES = JOB_ANIMATION.frames;
 export const STOPPING_FRAMES = JOB_STOPPING_ANIMATION.frames;
 // RPC rows carry no animation clock.
@@ -218,8 +220,11 @@ interface WidgetMouseEvent {
 	y: number;
 }
 
-/** `motion` is Tool Display's setting, read each frame: reduced holds the spinners still. */
-export function createJobsWidget(motion: () => Motion = () => "full"): JobsWidget {
+/**
+ * `motion` is Tool Display's setting, read each frame: reduced holds the spinners still.
+ * `onError` hears a render that threw: Pi's TUI does not catch a widget's render, and a throw there ends Pi.
+ */
+export function createJobsWidget(motion: () => Motion = () => "full", onError: (error: unknown) => void = () => {}): JobsWidget {
 	let ui: WidgetUi | null = null;
 	let listJobs: (() => Iterable<Job>) | null = null;
 	let tui: TuiHost | null = null;
@@ -276,20 +281,29 @@ export function createJobsWidget(motion: () => Motion = () => "full"): JobsWidge
 	// and `theme` are only available from here.
 	const factory = (host: TuiHost, theme: Theme) => {
 		tui = host;
+		const draw = (width: number): string[] => {
+			const { rows, hidden } = selectRows(snapshot());
+			lastRows = rowOrder(rows);
+			const now = Date.now();
+			const look = motion();
+			// Pi already puts a blank line between the transcript and the widgets.
+			const lines = lastRows.map((job) => {
+				const progress = progressOf(job, now);
+				const tail = lookup(job)?.tail;
+				return liveRow(theme, job, { width, now, motion: look, quiet: isQuiet(job, now), ...(progress ? { progress } : {}), ...(tail ? { tail } : {}) });
+			});
+			if (hidden > 0) lines.push(truncateToWidth(`  ${paintDim(theme, `+${hidden} more`)}`, Math.max(1, width), "…"));
+			return lines;
+		};
 		return {
 			render: (width: number) => {
-				const { rows, hidden } = selectRows(snapshot());
-				lastRows = rowOrder(rows);
-				const now = Date.now();
-				const look = motion();
-				// Pi already puts a blank line between the transcript and the widgets.
-				const lines = lastRows.map((job) => {
-					const progress = progressOf(job, now);
-					const tail = lookup(job)?.tail;
-					return liveRow(theme, job, { width, now, motion: look, quiet: isQuiet(job, now), ...(progress ? { progress } : {}), ...(tail ? { tail } : {}) });
-				});
-				if (hidden > 0) lines.push(truncateToWidth(`  ${paintDim(theme, `+${hidden} more`)}`, Math.max(1, width), "…"));
-				return lines;
+				try {
+					return draw(width);
+				} catch (error) {
+					lastRows = [];
+					onError(error);
+					return [truncateToWidth(WIDGET_FAILED, Math.max(1, width), "")];
+				}
 			},
 			invalidate: () => {},
 			handleMouse: (event: WidgetMouseEvent) => {

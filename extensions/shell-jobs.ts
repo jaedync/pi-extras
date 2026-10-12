@@ -22,9 +22,10 @@ import { once } from "node:events";
 import { closeSync, existsSync, mkdtempSync, openSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import type { Motion } from "../lib/band/band.ts";
 import type { ShownOverlay } from "../lib/band/modal.ts";
 import {
 	KILL_WAIT_MS,
@@ -62,6 +63,7 @@ import {
 } from "../lib/shell-jobs-process.ts";
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, reconcileDeliveries } from "../lib/shell-jobs-delivery.ts";
 import { watchMotion } from "../lib/extras-config.ts";
+import { operationalError } from "../lib/operational-log.ts";
 import { type ClickTarget, clickToInspect, type InspectorHost, openInspector } from "../lib/shell-jobs-inspector.ts";
 import { CWD_PREVIEW_BYTES, errResult, jobTitle, manageJob, okResult, type ToolResult } from "../lib/shell-jobs-manage.ts";
 import { offerRows } from "../lib/late-rows.ts";
@@ -85,6 +87,14 @@ import {
 const MAX_UNDELIVERED = 32;
 // The `/jobs` picker is one line per job, so its command preview is short.
 const OPTION_COMMAND_BYTES = 60;
+
+/** Content-free notes about failures no row can show, such as a widget frame that threw. */
+function logError(what: string, error: unknown): void {
+	const message = error instanceof Error ? error.message : String(error);
+	operationalError(join(getAgentDir(), "shell-jobs.log"), "shell-jobs", `${what}: ${message}`);
+}
+
+const jobsWidget = (motion: () => Motion) => createJobsWidget(motion, (error) => logError("widget render failed", error));
 
 /** The render context pi passes to tool renderers; older cores pass nothing. */
 type RowContext = { toolCallId?: unknown; expanded?: boolean; state?: unknown; isPartial?: boolean; executionStarted?: boolean; isError?: boolean } | undefined;
@@ -611,9 +621,9 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		if (started) return;
 		started = true;
 		const retained = event.reason === "reload" ? takeReload(ctx.sessionManager) : undefined;
-		runtime = retained ?? createRuntime(createJobsWidget(motion));
+		runtime = retained ?? createRuntime(jobsWidget(motion));
 		// Refresh the UI implementation without moving process ownership or callbacks.
-		if (retained) runtime.widget = createJobsWidget(motion);
+		if (retained) runtime.widget = jobsWidget(motion);
 		active = true;
 		backgroundCtx = ctx;
 		const widget = runtime.widget;
