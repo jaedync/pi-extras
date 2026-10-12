@@ -5,7 +5,7 @@
  * installed; elsewhere commands run unconfined, as before.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import type { BashSpawnContext } from "@earendil-works/pi-coding-agent";
 import type { Worktree } from "./types.ts";
@@ -41,9 +41,14 @@ export interface GitWrites {
 	readonly trees: readonly string[];
 	/** Its branch's ref and reflog, each replaced through a lock file beside it, in a folder git may have to make again. */
 	readonly files: readonly string[];
+	/**
+	 * Files in the trees above that stay read-only: the worktree's `config.worktree`, which git reads as config,
+	 * also for main's git commands, when the repository turns on extensions.worktreeConfig (git sparse-checkout does).
+	 */
+	readonly readOnly: readonly string[];
 }
 
-export const NO_GIT_WRITES: GitWrites = { trees: [], files: [] };
+export const NO_GIT_WRITES: GitWrites = { trees: [], files: [], readOnly: [] };
 
 /**
  * What git needs to write for `git add`, `git commit` and `git status` in
@@ -57,7 +62,7 @@ export function gitWrites(worktree: Pick<Worktree, "path" | "branch">, root: str
 	const own = worktreeGitDir(worktree.path, common.dir);
 	if ("why" in own) return own.why;
 	const ref = join("refs", "heads", worktree.branch);
-	return { trees: [own.dir, join(common.dir, "objects")], files: [join(common.dir, ref), join(common.dir, "logs", ref)] };
+	return { trees: [own.dir, join(common.dir, "objects")], files: [join(common.dir, ref), join(common.dir, "logs", ref)], readOnly: [join(own.dir, "config.worktree")] };
 }
 
 const seatbeltString = (text: string): string => `"${text.replace(/[\\"]/g, "\\$&")}"`;
@@ -74,6 +79,8 @@ export function seatbeltProfile(roots: readonly string[], git: GitWrites): strin
 		// Only the folder itself, so git can make it again after `git pack-refs` removed it; nothing in it beyond the files above.
 		...folders(git.files).map((folder) => `(allow file-write* (literal ${seatbeltString(folder)}))`),
 		...roots.map((root) => `(allow file-write* (subpath ${seatbeltString(join(root, CACHE_DIR))}))`),
+		// After the allows, which it narrows.
+		...git.readOnly.map((file) => `(deny file-write* (literal ${seatbeltString(file)}))`),
 	];
 	return ["(version 1)", "(allow default)", ...denials, ...exceptions].join("\n");
 }
@@ -86,8 +93,11 @@ export function seatbeltProfile(roots: readonly string[], git: GitWrites): strin
  */
 export function bwrapPrefix(roots: readonly string[], git: GitWrites): string[] {
 	for (const folder of folders(git.files)) mkdirSync(folder, { recursive: true });
+	// A read-only bind needs a file to bind; an empty config changes nothing for git.
+	for (const file of git.readOnly) if (!existsSync(file)) writeFileSync(file, "", { flag: "wx" });
 	const writable = [...git.trees, ...folders(git.files), ...roots.map((root) => join(root, CACHE_DIR))].filter((path) => existsSync(path));
-	return [BWRAP, "--dev-bind", "/", "/", ...roots.flatMap((root) => ["--ro-bind", root, root]), ...writable.flatMap((path) => ["--bind", path, path])];
+	return [BWRAP, "--dev-bind", "/", "/", ...roots.flatMap((root) => ["--ro-bind", root, root]), ...writable.flatMap((path) => ["--bind", path, path]),
+		...git.readOnly.flatMap((file) => ["--ro-bind", file, file])];
 }
 
 const onPath = (name: string): boolean => (process.env.PATH ?? "").split(delimiter).some((dir) => dir !== "" && existsSync(join(dir, name)));
@@ -119,7 +129,8 @@ function probe(prefix: readonly string[]): string | undefined {
 export function sandboxFor(worktree: Pick<Worktree, "path" | "branch">, onUnavailable?: (why: string) => void, onNoGit?: (why: string) => void): Sandbox | undefined {
 	const roots = protectedRoots(worktree.path).filter((root) => existsSync(root)).map((root) => realpathSync(root));
 	const git = (): GitWrites => {
-		const found = gitWrites(worktree, roots[0]!);
+		// The first checkout, not a parent worktree, whose .git the parent child can write.
+		const found = gitWrites(worktree, roots.at(-1)!);
 		if (typeof found !== "string") return found;
 		onNoGit?.(found);
 		return NO_GIT_WRITES;

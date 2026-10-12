@@ -19,6 +19,7 @@ test("the protected checkouts are every source the worktree was made from", () =
 const GIT: GitWrites = {
 	trees: ["/x/my.repo/.git/worktrees/scout", "/x/my.repo/.git/objects"],
 	files: ["/x/my.repo/.git/refs/heads/subagent/scout", "/x/my.repo/.git/logs/refs/heads/subagent/scout"],
+	readOnly: ["/x/my.repo/.git/worktrees/scout/config.worktree"],
 };
 
 test("the seatbelt profile denies writes under each checkout except the worktree's git data, its branch and node_modules/.cache", () => {
@@ -33,20 +34,22 @@ test("the seatbelt profile denies writes under each checkout except the worktree
 		"(allow file-write* (literal \"/x/my.repo/.git/refs/heads/subagent\"))",
 		"(allow file-write* (literal \"/x/my.repo/.git/logs/refs/heads/subagent\"))",
 		"(allow file-write* (subpath \"/x/my.repo/node_modules/.cache\"))",
+		// With extensions.worktreeConfig (git sparse-checkout sets it), git reads this file as config for main's git commands too.
+		"(deny file-write* (literal \"/x/my.repo/.git/worktrees/scout/config.worktree\"))",
 	].join("\n"));
 	assert.equal(seatbeltProfile(["/x/my.repo"], NO_GIT_WRITES).split("\n").filter((line) => line.includes(".git")).length, 0, "no git data writable when it can't be found");
 });
 
 test("the seatbelt profile escapes quotes, backslashes and regex characters", () => {
 	const root = "/x/a\"b\\c(d)+[e]";
-	const profile = seatbeltProfile([root], { trees: [], files: [`${root}/.git/refs/heads/subagent/s`] });
+	const profile = seatbeltProfile([root], { trees: [], files: [`${root}/.git/refs/heads/subagent/s`], readOnly: [] });
 	assert.ok(profile.includes(String.raw`(deny file-write* (subpath "/x/a\"b\\c(d)+[e]"))`), profile);
 	assert.ok(profile.includes(String.raw`(regex "^/x/a\"b\\\\c\\(d\\)\\+\\[e\\]/\\.git/refs/heads/subagent/s(\\.lock)?$")`), profile);
 });
 
 test("all denials come before the exceptions, so a second checkout can't undo the first one's", () => {
 	const lines = seatbeltProfile(["/x/a.worktrees/b", "/x/a"], GIT).split("\n");
-	const lastDeny = lines.findLastIndex((line) => line.startsWith("(deny"));
+	const lastDeny = lines.findLastIndex((line) => line.startsWith("(deny file-write* (subpath"));
 	const firstAllow = lines.findIndex((line) => line.startsWith("(allow file-write*"));
 	assert.ok(lastDeny < firstAllow);
 });
@@ -63,6 +66,7 @@ test("bwrap binds everything writable, each checkout read-only, then the worktre
 	const writes: GitWrites = {
 		trees: [join(git, "worktrees", "scout"), join(git, "objects")],
 		files: [join(git, "refs", "heads", "subagent", "scout"), join(git, "logs", "refs", "heads", "subagent", "scout")],
+		readOnly: [join(git, "worktrees", "scout", "config.worktree")],
 	};
 	const bind = (path: string) => ["--bind", path, path];
 	assert.deepEqual(bwrapPrefix([root, "/missing"], writes), [
@@ -73,8 +77,11 @@ test("bwrap binds everything writable, each checkout read-only, then the worktre
 		// A bind over a file would break git's rename of the lock file onto it, so the branch's folder is bound.
 		...bind(join(git, "refs", "heads", "subagent")), ...bind(join(git, "logs", "refs", "heads", "subagent")),
 		...bind(join(root, "node_modules", ".cache")),
+		// An empty file, bound read-only over the writable folder.
+		"--ro-bind", join(git, "worktrees", "scout", "config.worktree"), join(git, "worktrees", "scout", "config.worktree"),
 	]);
 	assert.ok(existsSync(join(git, "refs", "heads", "subagent")) && existsSync(join(git, "logs", "refs", "heads", "subagent")), "made before the bind");
+	assert.equal(readFileSync(join(git, "worktrees", "scout", "config.worktree"), "utf8"), "");
 });
 
 test("a worktree's git writes are its own git folder, the object store and its branch, read from the source checkout", (t) => {
@@ -84,11 +91,12 @@ test("a worktree's git writes are its own git folder, the object store and its b
 	assert.deepEqual(gitWrites(worktree, realpathSync(root)), {
 		trees: [join(common, "worktrees", "scout"), join(common, "objects")],
 		files: [join(common, "refs", "heads", "subagent", "scout"), join(common, "logs", "refs", "heads", "subagent", "scout")],
+		readOnly: [join(common, "worktrees", "scout", "config.worktree")],
 	});
 	// The worktree's .git file is the child's to write, so it is never read: a file or a link that points at the repository's own
 	// git folder, or at another worktree's, changes nothing.
 	const other = createWorktree(root, "other");
-	const own = { trees: [join(common, "worktrees", "scout"), join(common, "objects")], files: (gitWrites(worktree, realpathSync(root)) as GitWrites).files };
+	const own = gitWrites(worktree, realpathSync(root));
 	writeFileSync(join(worktree.path, ".git"), `gitdir: ${common}\n`);
 	assert.deepEqual(gitWrites(worktree, realpathSync(root)), own);
 	rmSync(join(worktree.path, ".git"));
@@ -212,6 +220,7 @@ test("a real sandbox lets a worktree child commit on its branch, but not change 
 		[`git -C '${root}' branch evil`, "a new branch"],
 		[`echo evil > '${join(root, "node_modules", ".bin", "vitest")}'`, "a node_modules/.bin shim"],
 		[`echo x > '${join(worktree.path, "node_modules", ".package-lock.json")}'`, "another node_modules dot-entry"],
+		[`git config --worktree core.fsmonitor 'touch /tmp/x' || echo '[core]' > '${join(gitDir, "worktrees", "scout", "config.worktree")}'`, "its own config.worktree"],
 	] as const;
 	for (const [command, what] of refused) assert.notEqual(shell(command).status, 0, what);
 	assert.equal(existsSync(join(gitDir, "hooks", "pre-commit")), false);
@@ -219,6 +228,7 @@ test("a real sandbox lets a worktree child commit on its branch, but not change 
 	assert.equal(git(root, "rev-parse", parentBranch).trim(), parentHead);
 	assert.equal(existsSync(join(root, "node_modules", ".bin", "vitest")), false);
 	assert.equal(existsSync(join(root, "node_modules", ".package-lock.json")), false);
+	assert.equal(existsSync(join(gitDir, "worktrees", "scout", "config.worktree")), false);
 });
 
 test("no sandbox for a workspace with no source checkout on disk", () => {
