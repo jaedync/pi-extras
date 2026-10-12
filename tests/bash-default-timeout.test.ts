@@ -58,6 +58,13 @@ test("extension patches bash calls in place and ignores other tools", async () =
 	assert.equal(read.input.timeout, undefined);
 });
 
+test("a default above the longest timer Pi can set is invalid, so the built-in default applies", () => {
+	assert.equal(resolveDefaultSeconds("2147483.647"), 2147483.647);
+	assert.equal(resolveDefaultSeconds("2147483.648"), DEFAULT_TIMEOUT_SECONDS);
+	assert.equal(resolveDefaultSeconds("1e12"), DEFAULT_TIMEOUT_SECONDS);
+	assert.equal(resolveDefaultSeconds("Infinity"), DEFAULT_TIMEOUT_SECONDS);
+});
+
 test("PI_BASH_DEFAULT_TIMEOUT=off registers nothing", () => {
 	assert.equal(install("off"), undefined);
 	const custom = install("30");

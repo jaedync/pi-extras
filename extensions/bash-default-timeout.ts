@@ -10,6 +10,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_TIMEOUT_SECONDS = 120;
+/** The longest timer Node (and so Pi's shell tools) can set: 2^31 - 1 ms. */
+const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000;
 const DISABLED = new Set(["0", "off", "false", "none"]);
 
 /** Seconds to apply, or undefined when the operator disabled the default. */
@@ -18,7 +20,8 @@ export function resolveDefaultSeconds(raw: string | undefined): number | undefin
 	if (value === undefined || value === "") return DEFAULT_TIMEOUT_SECONDS;
 	if (DISABLED.has(value)) return undefined;
 	const seconds = Number(value);
-	return Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_TIMEOUT_SECONDS;
+	// A value Pi would refuse would fail every call that omits a timeout, so it counts as unset.
+	return Number.isFinite(seconds) && seconds > 0 && seconds <= MAX_TIMEOUT_SECONDS ? seconds : DEFAULT_TIMEOUT_SECONDS;
 }
 
 /** Mutates the tool input in place, as Pi's tool_call contract requires. Returns true when a default was applied. */
