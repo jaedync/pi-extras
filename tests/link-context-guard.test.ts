@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -36,6 +37,29 @@ function runPython(bin: string, args: string[], input = ""): Promise<{ code: num
 		child.on("close", (code) => resolve({ code, stdout, stderr }));
 		child.stdin.end(input);
 	});
+}
+
+/** A hostile server: it ignores "Connection: close" and answers every request on a connection, as the first host would. */
+async function keepAlive(name: string): Promise<Local> {
+	const hits: string[] = [];
+	const server = createNetServer((socket) => {
+		let buffer = "";
+		socket.on("data", (chunk) => {
+			buffer += chunk.toString("latin1");
+			let end = buffer.indexOf("\r\n\r\n");
+			while (end >= 0) {
+				const head = buffer.slice(0, end);
+				buffer = buffer.slice(end + 4);
+				hits.push(head.split("\r\n")[0].split(" ")[1] ?? "");
+				socket.write(`HTTP/1.1 200 OK\r\nContent-Length: ${name.length}\r\nConnection: keep-alive\r\nKeep-Alive: timeout=60\r\n\r\n${name}`);
+				end = buffer.indexOf("\r\n\r\n");
+			}
+		});
+		socket.on("error", () => {});
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const port = (server.address() as { port: number }).port;
+	return { port, hits, close: () => new Promise((resolve) => { server.close(() => resolve()); }) };
 }
 
 test("guard: private, loopback, link-local, metadata and embedded-IPv4 addresses are refused", { skip: python ? false : "python3 not available" }, () => {
@@ -77,6 +101,101 @@ print(json.dumps({"get": get(strict), "connect": connect(strict), "allowed": get
 	assert.equal(out.allowed, "secret");
 	assert.deepEqual(target.hits, ["/x"], "only the allowed request reached the server");
 	assert.deepEqual(out.refused, ["127.0.0.1", "127.0.0.1"]);
+});
+
+test("guard proxy: one plain request per connection, so a reused connection never carries a request to the first host", { skip: python ? false : "python3 not available" }, async (t) => {
+	const bodies: string[] = [];
+	const first = await keepAlive("first");
+	const second = await keepAlive("second");
+	const poster = createServer((req, res) => {
+		let body = "";
+		req.on("data", (chunk) => (body += chunk));
+		req.on("end", () => {
+			bodies.push(body);
+			res.end("posted");
+		});
+	});
+	await new Promise<void>((resolve) => poster.listen(0, "127.0.0.1", resolve));
+	const posterPort = (poster.address() as { port: number }).port;
+	t.after(async () => {
+		await first.close();
+		await second.close();
+		await new Promise((resolve) => poster.close(resolve));
+	});
+	const code = `import sys, json, socket; sys.path.insert(0, sys.argv[1]); import net_guard
+a, b, p = sys.argv[2], sys.argv[3], sys.argv[4]
+proxy = net_guard.start([f"127.0.0.1:{a}", f"127.0.0.1:{b}", f"127.0.0.1:{p}"])
+port = int(proxy.rsplit(":", 1)[1])
+def read_response(s):
+    data = b""
+    while b"\\r\\n\\r\\n" not in data:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    head, _, rest = data.partition(b"\\r\\n\\r\\n")
+    length = int([l.split(b":")[1] for l in head.split(b"\\r\\n") if l.lower().startswith(b"content-length")][0])
+    while len(rest) < length:
+        rest += s.recv(4096)
+    return head.decode(), rest[:length].decode()
+with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+    s.sendall(f"GET http://127.0.0.1:{a}/x HTTP/1.1\\r\\nHost: 127.0.0.1:{a}\\r\\nConnection: keep-alive\\r\\n\\r\\n".encode())
+    head, body = read_response(s)
+    try:
+        s.sendall(f"GET http://127.0.0.1:{b}/y HTTP/1.1\\r\\nHost: 127.0.0.1:{b}\\r\\nCookie: session=secret\\r\\n\\r\\n".encode())
+        after = s.recv(4096).decode()
+    except OSError as error:
+        after = type(error).__name__
+with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+    s.sendall(f"POST http://127.0.0.1:{p}/form HTTP/1.1\\r\\nHost: 127.0.0.1:{p}\\r\\nContent-Length: 5\\r\\n\\r\\nhello".encode())
+    posted = read_response(s)[1]
+print(json.dumps({"head": head, "body": body, "after": after, "posted": posted}))`;
+	const result = await runPython(python as string, ["-I", "-B", "-c", code, dirname(HELPER), String(first.port), String(second.port), String(posterPort)]);
+	assert.equal(result.code, 0, result.stderr);
+	const out = JSON.parse(result.stdout) as { head: string; body: string; after: string; posted: string };
+	assert.equal(out.body, "first");
+	assert.match(out.head, /\r\nConnection: close(\r\n|$)/i);
+	assert.doesNotMatch(out.head, /keep-alive/i);
+	assert.equal(out.after.startsWith("HTTP"), false, `the closed connection answered: ${out.after}`);
+	assert.deepEqual(first.hits, ["/x"], "the second request never reached the first host");
+	assert.deepEqual(second.hits, []);
+	assert.equal(out.posted, "posted");
+	assert.deepEqual(bodies, ["hello"]);
+});
+
+test("guard proxy: a DNS failure is a 502, NAT64 is checked by its IPv4 address, and each checked address is tried", { skip: python ? false : "python3 not available" }, async (t) => {
+	const target = await listen((_path, res) => res.end("reached"));
+	t.after(target.close);
+	const code = `import sys, json, socket, urllib.request; sys.path.insert(0, sys.argv[1]); import net_guard
+port = int(sys.argv[2])
+real = socket.getaddrinfo
+def fake(host, *args, **kwargs):
+    if host == "nowhere.test":
+        raise socket.gaierror(socket.EAI_NONAME, "no such name")
+    if host == "two.test":
+        # The server listens on 127.0.0.1 only, so the first address refuses the connection.
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", port, 0, 0)), (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
+    return real(host, *args, **kwargs)
+socket.getaddrinfo = fake
+proxy = net_guard.start([f"two.test:{port}"])
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy}))
+def get(url):
+    try:
+        return opener.open(url, timeout=10).read().decode()
+    except urllib.error.HTTPError as error:
+        return f"{error.code} {error.read().decode().strip()}"
+out = {"dns": get("http://nowhere.test/"), "two": get(f"http://two.test:{port}/"), "refused": net_guard.REFUSED,
+       "nat64": [net_guard.private_address(a) for a in ("64:ff9b::808:808", "64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe", "64:ff9b:1::1")],
+       "queue": net_guard.Server.request_queue_size}
+print(json.dumps(out))`;
+	const result = await runPython(python as string, ["-I", "-B", "-c", code, dirname(HELPER), String(target.port)]);
+	assert.equal(result.code, 0, result.stderr);
+	const out = JSON.parse(result.stdout) as { dns: string; two: string; refused: string[]; nat64: boolean[]; queue: number };
+	assert.match(out.dns, /^502 .*could not resolve nowhere\.test/);
+	assert.deepEqual(out.refused, [], "a DNS failure is not reported as a private address");
+	assert.equal(out.two, "reached");
+	assert.deepEqual(out.nat64, [false, true, true, true]);
+	assert.equal(out.queue, 128);
 });
 
 test("yt-dlp: a redirect to a loopback host is refused, and the second server gets no request", { skip: hasYtDlp ? false : "the media tools are not installed" }, async (t) => {
