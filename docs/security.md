@@ -451,18 +451,21 @@ session stops them according to the extension lifecycle.
 The Bash Default Timeout extension does not sandbox commands. It only supplies
 a default timeout for bash and powershell calls that omit one. Explicit
 timeouts remain unchanged, also an invalid one such as `0`, so Pi reports the
-problem. Subagent children get the same default for their `bash` and
-`powershell` calls.
+problem. Subagent children always apply this default to their `bash` and
+`powershell` calls. They do so also when a package filter turns off the
+extension for main.
 
 ## Subagents
 
 Children are Pi sessions in the same process, with your permissions. A child
 gets the parent's active tools except mesh, goal, desktop-control, background
 job and subagent tools, and `childToolsExclude`. A read-only child keeps only
-tools known not to write files or run commands: Pi's `read`, `grep`, `find`
-and `ls`, and the search and fetch tools `pull_link`, `kagi_search`,
-`web_search`, `fetch_content`, `get_search_content` and `web_fetch`. Every
-other tool is dropped, also `bash`, `edit`, `write`, `powershell` and unknown
+tools that can't change your files or run commands that the model chooses.
+These are Pi's `read`, `grep`, `find` and `ls`, and the search and fetch tools
+`pull_link`, `kagi_search`, `web_search`, `fetch_content`,
+`get_search_content` and `web_fetch`. `pull_link` can install and run its
+media tools, and `fetch_content` can clone a repository into a temporary
+folder. Every other tool is dropped, also `bash`, `edit`, `write`, `powershell` and unknown
 extension and MCP tools. A spawn with `readOnly: true` that lists another tool
 in `tools` is refused. Children load the extensions that provide their
 tools, Cache Compaction and a quota guard. The guard never hibernates for
@@ -480,9 +483,9 @@ without a `cwd` follows the parent's trust decision. It loads the project's
 worktree child without a `cwd` starts at the top of its worktree. When that
 top is not the parent's directory, the child takes the trust of the
 repository's top, by the rule for a `cwd`. The
-same rule applies to the project's thinking settings for children, to
-the project's model guide (`.pi/subagent-models.md`) and to how the agent
-inspector shows a chat. A
+same rule applies to the project's thinking settings for children and to
+the project's model guide (`.pi/subagent-models.md`). It also applies to how
+the agent inspector shows a chat. A
 `cwd` must name an existing directory without control characters; it is
 resolved to its real path before use and is never passed to a shell. A
 read-only child's subagents can't make a worktree from a `cwd`, because `git worktree add` runs that

@@ -111,8 +111,9 @@ the package. Removing it does not remove your credentials or change other packag
   project that main trusts. See below.
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
   A value above 2147483.647 (the longest timer Pi can set) falls back to 120.
-  Explicit per-call timeouts are preserved. Subagent children get the same
-  default for their `bash` and `powershell` calls.
+  Explicit per-call timeouts are preserved. Subagent children always apply this
+  default to their `bash` and `powershell` calls. They do so also when a
+  package filter turns off the Bash Default Timeout extension for main.
 - `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
   transcript doesn't say. Anthropic replies report hour-long cache writes and
   Status Plus follows them, so a proxy that always writes them, such as
@@ -1198,10 +1199,10 @@ tools, Cache Compaction and a quota guard. Other extensions, such as the
 remote-pi mesh, keep serving the parent session. It runs in the background and its report arrives
 as a message, so the agent keeps working or ends its turn and is woken when it
 matters. `wait: true` blocks instead, for a quick check. `readOnly: true` keeps
-only tools known not to write files or run commands: `read`, `grep`, `find`,
-`ls`, `pull_link`, `kagi_search`, `web_search`, `fetch_content`,
-`get_search_content` and `web_fetch`. It drops every other tool, also
-`powershell` and unknown extension and MCP tools. `tools` gives the child only the named tools
+only tools that can't change your files or run commands that the model
+chooses: `read`, `grep`, `find`, `ls`, `pull_link`, `kagi_search`,
+`web_search`, `fetch_content`, `get_search_content` and `web_fetch`. It
+drops every other tool, also `powershell` and unknown extension and MCP tools. `tools` gives the child only the named tools
 of the ones it would get, for example `["read", "grep", "web_search"]`. It
 always keeps `message`, and `subagent` and `stop_subagent` when it may start
 subagents. The call is refused, with a list of the tools the child can have,
@@ -1506,20 +1507,22 @@ check follows symlinks, so an edit through the
 worktree's `node_modules` link into the parent's checkout is refused too. A
 worktree child's `bash` commands run in an OS sandbox that blocks writes into
 the parent's checkout (and, for a worktree made from a worktree, into each
-checkout it came from). Some exceptions stay writable, so `git add`, `git commit`
-and `git status` work in the worktree: in the repository's `.git`, the
-worktree's own folder in `worktrees/`, `objects/`, and the ref and reflog of
-the child's own `subagent/<name>` branch. The hooks, the config, `info/` and
-the other branches stay read-only. In `node_modules`, only `.cache` is
-writable. The packages, `.bin` and the other dot-entries are not, so an
-install in a worktree can't change the parent's dependencies.
+checkout it came from). Some exceptions stay writable, so `git add`,
+`git commit` and `git status` work in the worktree. In the repository's `.git`,
+these are the worktree's own folder in `worktrees/` and `objects/`. They are
+also the ref and reflog of the child's own `subagent/<name>` branch. The
+hooks, the config, `info/` and the other branches stay read-only. In
+`node_modules`, only `.cache` is writable, so that tools such as babel-loader
+and webpack can keep their caches. Note that a cache can hold build output
+that your own tools run later. The packages, `.bin` and the other dot-entries are not writable, so
+an install in a worktree can't change the parent's dependencies.
 The sandbox stops unintended writes into the parent's checkout. It is not a
 boundary against a hostile child: the child can still write outside the
 repository, for example `~/.gitconfig`. When a command fails on a blocked
 write, its result names the parent's checkout. The transcript shows the child's own command, not the sandbox around
-it. macOS uses `sandbox-exec`. Linux uses `bwrap` when it is on `PATH`; there,
-only the paths that exist when the child starts are writable, and the child
-can also change the other `subagent/` branches. Without `bwrap`, and on Windows, there is no sandbox: the boundary for
+it. macOS uses `sandbox-exec`. Linux uses `bwrap` when it is on `PATH`. There,
+only the paths that exist when the child starts are writable. The child can
+also change the other `subagent/` branches. Without `bwrap`, and on Windows, there is no sandbox: the boundary for
 `bash` is only the child's working directory, which is the worktree, and its
 instructions. Worktree isolation
 needs a git repository: the one at the child's `cwd`, else the one the parent
