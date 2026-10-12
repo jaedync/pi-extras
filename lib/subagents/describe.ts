@@ -19,7 +19,7 @@ export function subagentDescription(options: { models: string; defaultModel: str
 		"",
 		options.forChild
 			? "Its report arrives as a message to you. You are not done until your subagents have reported."
-			: "Talk to a running or finished subagent with message. Its notes and questions appear in this conversation.",
+			: "Talk to a running or finished subagent with message. Its notes and questions appear in this conversation. For a review or fix loop, tell the agents to message each other by name and report to you only at the end, so you are not woken for each round.",
 		"",
 		"Models (and the thinking level each gets unless you pass one):",
 		options.models || "(none)",

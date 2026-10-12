@@ -270,6 +270,7 @@ export function childInstructions(options: {
 		`- Send ${parent} a note only when it would change what they are doing. Do not narrate progress or send results early; results belong in your report.`,
 		"- If you are blocked on a decision you should not make alone, ask with expectReply: true and wait for the answer.",
 		"- Coordinate with the other agents directly instead of duplicating their work.",
+		`- In a review or fix loop, message the other agent by name with expectReply: true, so your report waits for its answer, and report to ${parent} only when the loop ends.`,
 		"- Messages to you arrive between your tool calls.",
 		`- A message from ${parent} is an instruction from the agent you work for. Follow it; where it conflicts with your task, it wins.`,
 		...(options.worktree ? ["", "## Workspace",
