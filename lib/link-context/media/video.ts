@@ -195,6 +195,17 @@ function publish(staging: string, dir: string): MediaFile[] | undefined {
 	return undefined;
 }
 
+/** Seconds between the range's ends, or to the video's end; undefined when nothing bounds it. */
+export function knownSpan(range: Range | undefined, duration: number | undefined): number | undefined {
+	const end = range?.end ?? (duration && duration > 0 ? duration : undefined);
+	return end === undefined ? undefined : end - (range?.start ?? 0);
+}
+
+/** A live stream has no end, so no download of it can finish. */
+function refuseLive(info: VideoInfo): void {
+	if (info.live_status === "is_live") throw new Error("This is a live stream, and pull_link does not download live streams.");
+}
+
 const rangeKey = (range: Range | undefined) => (range ? `${range.start}-${range.end ?? ""}` : "all");
 
 type Section = readonly [number, number | undefined];
@@ -289,7 +300,9 @@ class VideoJob {
 		let transcript = await this.run<Transcript>("captions", { url: this.url, videoId: youtube ? info.id : undefined, dir: captionsDir }, 180_000).finally(() => rmSync(captionsDir, { recursive: true, force: true }));
 		if (!transcript.segments.length) {
 			const range = this.ctx.options.range;
-			const span = (range?.end ?? info.duration ?? 0) - (range?.start ?? 0);
+			const span = knownSpan(range, info.duration);
+			refuseLive(info);
+			if (span === undefined) return { ...transcript, errors: [...(transcript.errors ?? []), "No captions, and the length of this video is unknown; pass a range with an end, of 3 hours or less, to transcribe it."] };
 			if (span > MAX_ASR_SECONDS) return { ...transcript, errors: [...(transcript.errors ?? []), `No captions, and ${clock(span)} is too long to transcribe in one call; pass a range of 3 hours or less.`] };
 			const [audio] = await this.download("audio", range ? [[range.start, range.end]] : undefined, 0);
 			const plan = await this.deps.ensureAsr(this.tools, this.ctx.progress, this.ctx.signal);
@@ -308,13 +321,14 @@ class VideoJob {
 	 * so a few frames of a long video never download all of it.
 	 */
 	private async sources(info: VideoInfo, times: readonly number[]): Promise<FrameSource[]> {
+		refuseLive(info);
 		const duration = info.duration ?? 0;
 		const whole = this.wholeVideo() ?? (duration > 0 && duration <= WHOLE_VIDEO_SECONDS ? (await this.download("video", undefined, INSPECT_HEIGHT))[0] : undefined);
 		if (whole) return times.map((at) => ({ video: whole.path, at, offset: 0 }));
 		const sections = times.map((at) => [Math.max(0, at - CLIP_BEFORE), at + CLIP_AFTER] as const);
 		const clips = await this.download("video", sections, INSPECT_HEIGHT).catch(async (error: Error) => {
 			// Cutting clips needs an ffmpeg that can read from the network; without one, fetch the video once, small.
-			if (duration > MAX_WHOLE_FALLBACK_SECONDS) throw error;
+			if (!duration || duration > MAX_WHOLE_FALLBACK_SECONDS) throw error;
 			this.ctx.progress("clips failed; downloading the whole video at 360p");
 			return this.download("video", undefined, 360);
 		});

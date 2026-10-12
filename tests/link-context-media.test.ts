@@ -457,3 +457,67 @@ test("video: two pulls of one link at the same time each get the download, and o
 		rmSync(home, { recursive: true, force: true });
 	}
 });
+
+test("video: an unknown length or a live stream is never downloaded whole or transcribed", async () => {
+	const home = mkdtempSync(join(tmpdir(), "link-unbounded-"));
+	try {
+		const noCaptions = { segments: [], errors: ["no captions"] };
+		const asr = { source: "speech-to-text", language: "en", segments: [{ start: 1, end: 2, text: "Said." }] };
+		const stream = (info: Record<string, unknown>, seen: Recorded) => fakeDeps(home, { info: { title: "Stream", has_video: true, ...info }, captions: noCaptions, asr, ffmpeg: { path: "/ff" } }, seen);
+		const unknown: Recorded = { log: [], downloads: [], sources: [], images: [] };
+		const pulled = await pullVideo("https://e.test/endless.mp4", "file", context(fetch, { transcript: true }), stream({}, unknown));
+		assert.match(pulled.markdown, /No transcript: .*the length of this video is unknown; pass a range with an end/);
+		assert.deepEqual(unknown.downloads, []);
+		const ranged: Recorded = { log: [], downloads: [], sources: [], images: [] };
+		await pullVideo("https://e.test/endless2.mp4", "file", context(fetch, { transcript: true, range: { start: 0, end: 60 } }), stream({}, ranged));
+		assert.deepEqual(ranged.downloads.map((d) => d.sections), [[[0, 60]]], "a range with an end bounds the download");
+		const open: Recorded = { log: [], downloads: [], sources: [], images: [] };
+		await pullVideo("https://e.test/endless3.mp4", "file", context(fetch, { transcript: true, range: { start: 60 } }), stream({}, open));
+		assert.deepEqual(open.downloads, [], "a range with no end does not bound an unknown length");
+		const live: Recorded = { log: [], downloads: [], sources: [], images: [] };
+		const onAir = await pullVideo("https://e.test/live.m3u8.mp4", "file", context(fetch, { transcript: true, frames: 2 }), stream({ duration: 120, live_status: "is_live" }, live));
+		assert.deepEqual(live.downloads, []);
+		assert.match(onAir.markdown, /No transcript: .*live stream/);
+		assert.match(onAir.markdown, /Frames failed: .*live stream/);
+		// Clips that fail on a video of unknown length are not replaced by the whole file.
+		const clipsFail: Recorded = { log: [], downloads: [], sources: [], images: [] };
+		const base = stream({}, clipsFail);
+		const run = (async (tools: never, command: string, request: Record<string, unknown>, options: never) => {
+			if (command === "download" && request.sections) throw new Error("ERROR: ffmpeg exited with code -11");
+			return base.run(tools, command, request, options);
+		}) as VideoDeps["run"];
+		const failed = await pullVideo("https://e.test/endless4.mp4", "file", context(fetch, { transcript: false, at: [30] }), { ...base, run });
+		assert.deepEqual(clipsFail.downloads, []);
+		assert.match(failed.markdown, /Frames failed: ERROR: ffmpeg/);
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
+test("helper caps the download size and refuses live streams", { skip: python ? false : "python3 not available" }, () => {
+	const code = `import sys, json; sys.path.insert(0, sys.argv[1]); import helper
+out = {"video": helper.MAX_BYTES["video"], "audio": helper.MAX_BYTES["audio"]}
+opts = helper.download_limits("audio")
+out["max_filesize"] = opts["max_filesize"]
+hook = opts["progress_hooks"][0]
+hook({"downloaded_bytes": 10})
+try:
+    hook({"downloaded_bytes": helper.MAX_BYTES["audio"] + 1}); out["hook"] = "passed"
+except Exception as error:
+    out["hook"] = str(error)
+try:
+    opts["match_filter"]({"is_live": True}); out["live"] = "passed"
+except Exception as error:
+    out["live"] = str(error)
+out["vod"] = opts["match_filter"]({"live_status": "was_live"})
+print(json.dumps(out))`;
+	const result = spawnSync(python as string, ["-I", "-c", code, dirname(HELPER)], { encoding: "utf8" });
+	assert.equal(result.status, 0, result.stderr);
+	const out = JSON.parse(result.stdout);
+	assert.equal(out.video, 2 * 1024 ** 3);
+	assert.equal(out.audio, 1024 ** 3);
+	assert.equal(out.max_filesize, 1024 ** 3);
+	assert.match(out.hook, /1 GiB/);
+	assert.match(out.live, /live stream/);
+	assert.equal(out.vod, null);
+});

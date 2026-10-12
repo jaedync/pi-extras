@@ -43,7 +43,9 @@ class QuietLogger:
         self.warnings = []
 
     def debug(self, msg):
-        pass
+        # yt-dlp says why it skipped a file too large for max_filesize only on its info channel.
+        if "max-filesize" in str(msg):
+            self.warnings.append(str(msg).strip())
 
     def info(self, msg):
         pass
@@ -253,6 +255,27 @@ def cmd_captions(req):
     return {"segments": [], "errors": errors}
 
 
+# Caps on one download. yt-dlp checks the size a server announces (max_filesize);
+# the progress hook also stops a stream that announces none.
+MAX_BYTES = {"video": 2 * 1024 ** 3, "audio": 1 * 1024 ** 3}
+
+
+def download_limits(kind):
+    limit = MAX_BYTES["audio" if kind == "audio" else "video"]
+
+    def size_guard(progress):
+        if (progress.get("downloaded_bytes") or 0) > limit:
+            raise RuntimeError(f"the download passed {limit // 1024 ** 3} GiB, so it was stopped")
+
+    def refuse_live(info, *, incomplete=False):
+        # A live stream has no end, so no download of it can finish.
+        if info.get("is_live") or info.get("live_status") == "is_live":
+            raise RuntimeError("this is a live stream, and pull_link does not download live streams")
+        return None
+
+    return {"max_filesize": limit, "progress_hooks": [size_guard], "match_filter": refuse_live}
+
+
 def cmd_download(req):
     """The whole file, or clips for `sections` ([[start, end], ...], end may be null).
 
@@ -272,7 +295,7 @@ def cmd_download(req):
         fmt = f"bv*[height<={height}][ext=mp4]/bv*[height<={height}]/b[height<={height}]/bv*/b"
     sections = [(float(a or 0), float(b) if b is not None else float("inf")) for a, b in req.get("sections") or []]
     name = f"{kind}-%(section_start)s.%(ext)s" if sections else f"{kind}.%(ext)s"
-    extra = {"format": fmt, "outtmpl": os.path.join(req["dir"], name), "overwrites": True}
+    extra = {"format": fmt, "outtmpl": os.path.join(req["dir"], name), "overwrites": True, **download_limits(kind)}
     if sections:
         extra["download_ranges"] = download_range_func(None, sections)
         extra["force_keyframes_at_cuts"] = True

@@ -1125,6 +1125,10 @@ uses `mlx-whisper` (whisper-large-v3-turbo) on Apple silicon and
 `faster-whisper` (small, CPU) on other hosts. The first transcription installs
 the package and downloads the model.
 
+The tool does not download live streams. One download stops at 2 GiB of video
+or 1 GiB of audio. When the length of a video is not known, the tool does not
+download all of it or transcribe it. Give a `range` with an end to read a part.
+
 YouTube blocks most datacenter IP addresses ("Sign in to confirm you're not a
 bot"). Then the result has the title and channel from YouTube's oEmbed, the
 captions if the caption client can still get them, and a note. On a cloud
