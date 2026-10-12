@@ -19,7 +19,7 @@ import { confine, sandboxFor } from "./sandbox.ts";
 import { freshModels, piModelsCheck } from "./fresh-models.ts";
 import { launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "./stamp.ts";
 import { WAITING_FOR_MODEL, type AgentRecord, type AgentWork, type ChildHandle, type ChildHooks, type Launcher, type Usage } from "./types.ts";
-import { editTarget, outsideWorktree, sourcePlace, workspaceError } from "./worktree.ts";
+import { editTarget, outsideWorktree, realTarget, sourcePlace, workspaceError } from "./worktree.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
 
@@ -274,14 +274,15 @@ async function childModel(deps: LauncherDeps, record: AgentRecord) {
 /** A directory a spawn named is used as Pi would use it with no one to ask; main's own as main uses it. */
 function childSettings(deps: LauncherDeps, cwd: string, record: AgentRecord): SettingsManager {
 	const { sdk, agentDir } = deps;
+	const place = record.worktree ? sourcePlace(record.worktree, cwd) : cwd;
 	// Main's decision, never Pi's default, which trusts: an untrusted repository's .pi/ (a shellCommandPrefix, a
-	// SYSTEM.md) would reach the child where main refused it.
-	const settingsManager = record.cwd ? sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: false })
-		: sdk.SettingsManager.create(cwd, agentDir, deps.projectTrusted === undefined ? {} : { projectTrusted: deps.projectTrusted });
-	if (record.cwd) {
-		const place = record.worktree ? sourcePlace(record.worktree, record.cwd) : record.cwd;
-		settingsManager.setProjectTrusted(projectTrusted(sdk, agentDir, place, settingsManager.getDefaultProjectTrust()));
+	// SYSTEM.md) would reach the child where main refused it. It covers main's own directory only: a worktree child
+	// of main in /repo/sub starts at the worktree's top, a copy of /repo, whose .pi/ main never weighed.
+	if (!record.cwd && realTarget(place) === realTarget(deps.cwd)) {
+		return sdk.SettingsManager.create(cwd, agentDir, deps.projectTrusted === undefined ? {} : { projectTrusted: deps.projectTrusted });
 	}
+	const settingsManager = sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+	settingsManager.setProjectTrusted(projectTrusted(sdk, agentDir, place, settingsManager.getDefaultProjectTrust()));
 	return settingsManager;
 }
 

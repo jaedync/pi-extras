@@ -303,3 +303,23 @@ test("a child with a cwd of its own uses that directory's project settings only 
 	assert.deepEqual(isolated.directories, [join(tree, "sub"), join(tree, "sub"), join(tree, "sub"), join(tree, "sub")]);
 	await inTree.dispose();
 });
+
+test("a worktree child of main follows main's trust only when its worktree mirrors main's own directory", async (t) => {
+	const { one } = places(t);
+	const tree = join(`${one}.worktrees`, "iso");
+	mkdirSync(tree, { recursive: true });
+	const worktree = { path: tree, branch: "subagent/iso", base: "a".repeat(40) };
+	const launch = async (mainCwd: string) => {
+		const harness = sdkHarness();
+		const child = await createLauncher({ sdk: harness.sdk as never, agentDir: one, cwd: mainCwd, sessionDir: null, projectTrusted: true,
+			modelRuntime: async () => ({}) as never, toolsFor: () => ({ tools: [], customTools: [] }), instructions: () => "" })
+			.launch(record("iso", { checkout: tree, worktree }), { update() {} });
+		await child.dispose();
+		return harness;
+	};
+	// Main trusts /repo/sub, where nothing needs trust; the worktree's top is a copy of /repo, which the user never trusted.
+	const fromSub = await launch(join(one, "sub"));
+	assert.deepEqual([fromSub.settings, fromSub.asked], [[{ created: false, set: false }], [one, `store ${one}`]], "the repository's own trust, as a named cwd gets");
+	const fromTop = await launch(one);
+	assert.deepEqual([fromTop.settings, fromTop.asked], [[{ created: true }], []], "main's decision for main's own directory");
+});

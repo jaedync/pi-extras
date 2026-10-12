@@ -18,7 +18,7 @@ function sdkHarness() {
 	const directories: string[] = [];
 	const session = { sessionFile: undefined, bindExtensions: async () => {}, subscribe: () => () => {}, dispose() {} };
 	const sdk = {
-		SettingsManager: { create: (cwd: string) => { directories.push(cwd); return {}; } },
+		SettingsManager: { create: (cwd: string) => { directories.push(cwd); return { getDefaultProjectTrust: () => "ask", setProjectTrusted() {} }; } },
 		SessionManager: { inMemory: (cwd: string) => { directories.push(cwd); return {}; },
 			open: (_file: string, _dir: string, cwd: string) => { directories.push(cwd); return {}; } },
 		DefaultResourceLoader: class { constructor(options: { cwd: string }) { directories.push(options.cwd); } async reload() {} },

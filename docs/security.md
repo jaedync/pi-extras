@@ -470,7 +470,10 @@ to ask: nothing there needs trust, you trusted the directory before, or
 `defaultProjectTrust` is `"always"`. Otherwise they are not loaded. A worktree
 made from a `cwd` takes the trust of the directory it was made from. A child
 without a `cwd` follows the parent's trust decision. It loads the project's
-`.pi/` settings and resources only when the parent trusts the project. The
+`.pi/` settings and resources only when the parent trusts the project. A
+worktree child without a `cwd` starts at the top of its worktree. When that
+top is not the parent's directory, the child takes the trust of the
+repository's top, by the rule for a `cwd`. The
 same rule applies to the project's thinking settings for children, to
 the project's model guide (`.pi/subagent-models.md`) and to how the agent
 inspector shows a chat. A
