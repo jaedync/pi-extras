@@ -457,8 +457,13 @@ problem.
 
 Children are Pi sessions in the same process, with your permissions. A child
 gets the parent's active tools except mesh, goal, desktop-control, background
-job and subagent tools, and `childToolsExclude`; read-only children lose
-`bash`, `edit` and `write`. Children load the extensions that provide their
+job and subagent tools, and `childToolsExclude`. A read-only child keeps only
+tools known not to write files or run commands: Pi's `read`, `grep`, `find`
+and `ls`, and the search and fetch tools `pull_link`, `kagi_search`,
+`web_search`, `fetch_content`, `get_search_content` and `web_fetch`. Every
+other tool is dropped, also `bash`, `edit`, `write`, `powershell` and unknown
+extension and MCP tools. A spawn with `readOnly: true` that lists another tool
+in `tools` is refused. Children load the extensions that provide their
 tools, Cache Compaction and a quota guard. The guard never hibernates for
 quotas; it waits out short rate limits within the bounded backoff described
 above. Your context files (`AGENTS.md`), `SYSTEM.md`, `APPEND_SYSTEM.md` and

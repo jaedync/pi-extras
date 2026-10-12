@@ -4,7 +4,7 @@
  * `stop_subagent` when it may start subagents) are always kept, so naming
  * them is allowed and changes nothing.
  */
-import { WRITE_TOOLS } from "./child.ts";
+import { READ_ONLY_TOOLS } from "./child.ts";
 
 const TEAM_TOOLS: ReadonlySet<string> = new Set(["message", "subagent", "stop_subagent"]);
 
@@ -18,9 +18,9 @@ export function checkAllowlist(requested: readonly string[], available: readonly
 	const can = `It can have: ${available.join(", ") || "(none)"}.`;
 	if (requested.length === 0) return { ok: false, error: `tools is empty. List the tools the subagent needs, or leave tools out to give it all of them. ${can}` };
 	const wanted = [...new Set(requested.map((name) => name.trim()))].filter((name) => !TEAM_TOOLS.has(name));
-	const writes = wanted.filter((name) => WRITE_TOOLS.has(name));
-	if (readOnly && writes.length > 0) {
-		return { ok: false, error: `readOnly: true takes away bash, edit and write, so tools cannot list ${writes.join(", ")}. Remove ${writes.length === 1 ? "it" : "them"} from tools, or leave out readOnly.` };
+	const writes = readOnly ? wanted.filter((name) => !READ_ONLY_TOOLS.has(name)) : [];
+	if (writes.length > 0) {
+		return { ok: false, error: `readOnly: true gives only tools that can't change files or run commands, so tools cannot list ${writes.join(", ")}. Remove ${writes.length === 1 ? "it" : "them"} from tools, or leave out readOnly. ${can}` };
 	}
 	const missing = wanted.filter((name) => !available.includes(name));
 	if (missing.length > 0) {

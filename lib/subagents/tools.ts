@@ -55,7 +55,7 @@ const subagentParams = Type.Object({
 	name: Type.Optional(Type.String({ maxLength: 40, description: "Short name that says what it does, like auth-review or count-md. You, the user and other agents address it by this name." })),
 	model: Type.Optional(Type.String({ description: "Model reference or unique short name from the list above." })),
 	thinking: Type.Optional(thinkingSchema),
-	readOnly: Type.Optional(Type.Boolean({ description: "No file edits or shell commands." })),
+	readOnly: Type.Optional(Type.Boolean({ description: "Only tools that can't change files or run commands: read, grep, find, ls and known search and fetch tools. Other tools are dropped." })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Give it only these of the tools it would get; message always stays. Omit for all of them." })),
 	cwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Directory it starts in, absolute or ~/: its tools, AGENTS.md and session work there. Default: your working directory." })),
 	isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")], { description: "Default shared. Use worktree for a separate git worktree of the repository at cwd (default: your working directory), with its current files." })),

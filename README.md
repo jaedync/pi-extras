@@ -1196,12 +1196,15 @@ control, background jobs). Children load the extensions that provide their
 tools, Cache Compaction and a quota guard. Other extensions, such as the
 remote-pi mesh, keep serving the parent session. It runs in the background and its report arrives
 as a message, so the agent keeps working or ends its turn and is woken when it
-matters. `wait: true` blocks instead, for a quick check. `readOnly: true` takes
-away `bash`, `edit` and `write`. `tools` gives the child only the named tools
+matters. `wait: true` blocks instead, for a quick check. `readOnly: true` keeps
+only tools known not to write files or run commands: `read`, `grep`, `find`,
+`ls`, `pull_link`, `kagi_search`, `web_search`, `fetch_content`,
+`get_search_content` and `web_fetch`. It drops every other tool, also
+`powershell` and unknown extension and MCP tools. `tools` gives the child only the named tools
 of the ones it would get, for example `["read", "grep", "web_search"]`. It
 always keeps `message`, and `subagent` and `stop_subagent` when it may start
 subagents. The call is refused, with a list of the tools the child can have,
-for an empty list, a name it can't have, or `bash`, `edit` or `write` with
+for an empty list, a name it can't have, or a tool outside that list with
 `readOnly: true`. Its own subagents get no more tools than it has, the
 subagents of a read-only child are read-only too, and a resume or a restore
 keeps the same tools. `context: "fork"` gives the child a

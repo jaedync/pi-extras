@@ -30,7 +30,16 @@ export const CHILD_TOOL_EXCLUDE: readonly string[] = [
 	"get_goal", "create_goal", "propose_goal_draft", "complete_goal", "update_goal_progress",
 	"shell_job_start", "shell_job", "computer_use", "windows_use", "usage", "codemode", "tool_search",
 ];
-export const WRITE_TOOLS: ReadonlySet<string> = new Set(["bash", "edit", "write"]);
+/**
+ * All a read-only child may have: tools known not to write files or run
+ * commands. Pi's read tools, then this package's and common search and fetch
+ * tools. Any other tool, an extension's or an MCP server's, could write, so it
+ * is left out; an allowlist, not a list of the tools that write.
+ */
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+	"read", "grep", "find", "ls",
+	"pull_link", "kagi_search", "web_search", "fetch_content", "get_search_content", "web_fetch",
+]);
 /** The calls the edit guard checks; `bash` can change files too, but its targets can't be read from its input (bash-guard.ts checks after it). */
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const EDIT_GUARD_NAME = "subagent-edit-guard";
@@ -53,7 +62,7 @@ export function childExtensionPaths(all: readonly { name: string; sourceInfo?: {
 /** The tool names a child gets, before its own `message` (and maybe `subagent`). */
 export function childToolNames(parentActive: readonly string[], readOnly: boolean, extraExclude: readonly string[] = []): string[] {
 	const exclude = new Set([...CHILD_TOOL_EXCLUDE, ...extraExclude]);
-	const kept = parentActive.filter((name) => !exclude.has(name) && !(readOnly && WRITE_TOOLS.has(name)));
+	const kept = parentActive.filter((name) => !exclude.has(name) && (!readOnly || READ_ONLY_TOOLS.has(name)));
 	const withRead = readOnly ? [...READ_TOOLS, ...kept] : kept;
 	return [...new Set(withRead)];
 }

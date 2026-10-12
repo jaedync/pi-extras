@@ -40,7 +40,19 @@ test("an allowlist that can't be met says what the child can have", () => {
 	const unknown = checkAllowlist(["read", "computer_use", "lint"], available, false);
 	assert.ok(!unknown.ok && /computer_use, lint are not available to this subagent\. It can have: read, bash/.test(unknown.error));
 	const writes = checkAllowlist(["read", "bash", "edit"], childToolNames(ACTIVE, true), true);
-	assert.ok(!writes.ok && /readOnly: true takes away bash, edit and write, so tools cannot list bash, edit\./.test(writes.error));
+	assert.ok(!writes.ok && /readOnly: true gives only tools that can't change files or run commands, so tools cannot list bash, edit\. Remove them from tools, or leave out readOnly\./.test(writes.error), !writes.ok ? writes.error : "");
+});
+
+test("readOnly keeps only tools known not to write files or run commands; unknown extension and MCP tools are dropped", () => {
+	const parent = ["read", "powershell", "bash", "edit", "write", "grep", "find", "ls", "web_search", "kagi_search", "fetch_content", "get_search_content",
+		"pull_link", "web_fetch", "mcp__db__query", "deploy", "subagent", "message"];
+	assert.deepEqual(childToolNames(parent, true), ["read", "grep", "find", "ls", "web_search", "kagi_search", "fetch_content", "get_search_content", "pull_link", "web_fetch"]);
+	assert.deepEqual(childToolNames(["bash"], true), ["read", "grep", "find", "ls"], "the read tools come even when the parent lacks them");
+	for (const name of ["powershell", "mcp__db__query", "deploy"]) {
+		const refused = checkAllowlist(["read", name], childToolNames(parent, true), true);
+		assert.ok(!refused.ok && refused.error.startsWith(`readOnly: true gives only tools that can't change files or run commands, so tools cannot list ${name}. Remove it from tools`), name);
+	}
+	assert.deepEqual(checkAllowlist(["read", "web_search"], childToolNames(parent, true), true), { ok: true, tools: ["read", "web_search"] });
 });
 
 test("the subagent tool puts the allowlist on the record, and refuses one it can't meet at spawn", async () => {
@@ -51,7 +63,7 @@ test("the subagent tool puts the allowlist on the record, and refuses one it can
 	await call("main", { task: "do anything", name: "anything" });
 	assert.equal(h.team.get("anything")?.tools, undefined, "no allowlist: every tool it could have");
 	await assert.rejects(call("main", { task: "x", tools: [] }), /tools is empty/);
-	await assert.rejects(call("main", { task: "x", tools: ["bash"], readOnly: true }), /readOnly: true takes away/);
+	await assert.rejects(call("main", { task: "x", tools: ["bash"], readOnly: true }), /readOnly: true gives only tools that can't change files or run commands/);
 	await assert.rejects(call("main", { task: "x", tools: ["lint"] }), /lint is not available to this subagent\. It can have: read, bash/);
 	await h.team.close();
 });
