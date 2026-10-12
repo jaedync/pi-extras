@@ -256,8 +256,15 @@ async function startJob(
 		const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
 			child.once("exit", (code, signal) => resolve({ code, signal }));
 		});
+		// A started child can still emit 'error' (a signal it could not deliver, say).
+		// With no listener Node throws it, and that ends Pi; a failed start is the catch below.
+		let spawned = false;
+		child.on("error", (error) => {
+			if (spawned) logError(`job ${id} process error`, error);
+		});
 		try {
 			await once(child, "spawn");
+			spawned = true;
 		} catch (error) {
 			discardLog(logPath, fd);
 			return errResult(`Could not start ${shell}: ${(error as Error).message}`);
