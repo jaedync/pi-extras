@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { KagiClient } from '../../lib/kagi/client.js';
 import { parseResults } from '../../lib/kagi/parser.js';
 import { formatOutput } from '../../lib/kagi/output.js';
@@ -33,13 +33,17 @@ describe('security regressions', () => {
     await expect(create(vi.fn(async () => new Response(null, { headers: { 'content-type': 'text/html' } }))).search({ query: 'x' })).rejects.toThrow('markup');
   });
   it('separates credential identity, expiration and capacity while reformatting cached queries by limit', async () => {
+    // The cache TTL reads Date.now(). On a busy machine 15 ms could pass between the last
+    // two searches and expire the entry early, so only the explicit step moves the clock.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    onTestFinished(() => { vi.useRealTimers(); });
     let token = 'identity-a';
     const f = vi.fn(async () => response());
     const c = create(f, { credential: async () => token, ttlMs: 15, cacheSize: 1 });
     await c.search({ query: 'a' }); token = 'identity-b'; await c.search({ query: 'a' });
     await c.search({ query: 'b' }); await c.search({ query: 'a' });
     expect(f).toHaveBeenCalledTimes(4);
-    await new Promise(r => setTimeout(r, 20)); await c.search({ query: 'a' });
+    vi.setSystemTime(Date.now() + 20); await c.search({ query: 'a' });
     await c.search({ query: 'a', limit: 1 }); expect(f).toHaveBeenCalledTimes(5);
   });
   it('bounds queue and honors cancellation in helpers', async () => {
