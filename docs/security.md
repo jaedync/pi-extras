@@ -40,6 +40,9 @@ or the explicit `PI_CODEX_ACCESS_TOKEN` / `PI_CODEX_ACCOUNT_ID` overrides.
 Provider endpoints are not guaranteed stable. Missing credentials, unavailable
 quotas and provider errors should not prevent Pi from running.
 
+If the footer cannot draw a frame, it shows one short line in its place.
+The error name and message go to `status-plus.log` in the Pi agent directory.
+
 Cost totals are recorded usage or catalog estimates, not authoritative invoices.
 TTFT and throughput describe observed request timing, not server-only decoding.
 Do not share diagnostic files without reviewing them for personal paths and data.
@@ -225,7 +228,8 @@ Setup downloads, into `PI_VOICE_HOME` (default `~/.cache/pi-extras/voice`):
   `mlx-community/parakeet-tdt-0.6b-v3` on Hugging Face at a pinned revision.
   Every model file is SHA-256 checked before use.
 
-`PI_OFFLINE` skips setup; voice then uses only what is already installed.
+`PI_OFFLINE=1`, `true` or `yes` skips setup; voice then uses only what is
+already installed.
 Nothing downloads on hosts without an audio input.
 
 Sessions talk to the daemon over a Unix socket in `PI_VOICE_HOME` that only your
@@ -234,6 +238,10 @@ Over SSH on macOS, capture runs as a per-dictation launchd job in your GUI
 session that streams audio over another user-only socket; the job is removed
 when the dictation ends, and jobs left by a crashed session are cleaned up on
 the next start. macOS asks you to allow `ffmpeg` to use the microphone.
+
+Voice writes local logs in `PI_VOICE_HOME`: `provision.log`, `daemon.log` and
+`voice.log`. They hold status lines and error messages. They do not record
+audio or transcripts.
 
 ## Computer Use
 

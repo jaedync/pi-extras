@@ -673,6 +673,12 @@ Pi session. It starts on the first dictation, exits 15 minutes after the last
 one, and exits sooner once no Pi session is open. The next dictation starts it
 again and loses no audio while it loads.
 
+**Logs.** `PI_VOICE_HOME` keeps three local logs. `provision.log` records
+setup, and `daemon.log` records the daemon. A daemon that cannot start (for
+example, a Python file without execute permission) is also noted in
+`daemon.log`, and the dictation shows the cause. `voice.log` records errors
+that voice could not show, for example after `/reload` or `/new`.
+
 **macOS over SSH.** macOS gives SSH sessions a silent microphone, so when Pi
 runs over SSH, recording runs as a short-lived launchd job in your desktop
 session instead. macOS asks once, on the Mac's screen, to allow
