@@ -25,11 +25,41 @@ const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-wo
 const SECOND_BUILD = "[second build]";
 const repo = fileURLToPath(new URL("..", import.meta.url));
 
+/**
+ * Where a test holds the copied code still: a child's launch before it picks
+ * its model, and an old team's retire before it lets its sessions go.
+ */
+const GATES = {
+	launch: { file: join("lib", "subagents", "child.ts"), at: "const { modelRuntime, model } = await childModel(deps, record);", key: "pi-extras.test.launch-gate", with: "record.name" },
+	retire: { file: join("lib", "subagents", "host-state.ts"), at: 'await this.team.close("reload", this.inputs.owner);', key: "pi-extras.test.retire-gate", with: "" },
+} as const;
+
+/** Holds the copied code at `gate` until `open` is called; `held` says whether anything waits there now. */
+function hold(gate: keyof typeof GATES, only?: string) {
+	let open!: () => void;
+	const opened = new Promise<void>((resolve) => { open = resolve; });
+	let held = 0;
+	(globalThis as any)[Symbol.for(GATES[gate].key)] = async (name?: string) => {
+		if (only !== undefined && name !== only) return;
+		held++;
+		await opened;
+		held--;
+	};
+	return { open, held: () => held > 0, done: () => { delete (globalThis as any)[Symbol.for(GATES[gate].key)]; } };
+}
+
 /** This package's code, copied so the test can change it under a running session. */
 function copyPackage(): { root: string; rebuild(): void } {
 	const root = mkdtempSync(join(scratch, "package-"));
 	for (const dir of ["lib", "extensions"]) cpSync(join(repo, dir), join(root, dir), { recursive: true, filter: (path) => !path.includes("__pycache__") });
 	writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module" }));
+	for (const gate of Object.values(GATES)) {
+		const file = join(root, gate.file);
+		const source = readFileSync(file, "utf8");
+		const gated = source.replace(gate.at, `await (globalThis as any)[Symbol.for(${JSON.stringify(gate.key)})]?.(${gate.with}); ${gate.at}`);
+		assert.notEqual(gated, source, `the copy's ${gate.file} has a gate`);
+		writeFileSync(file, gated);
+	}
 	const format = join(root, "lib", "subagents", "format.ts");
 	return {
 		root,
@@ -275,6 +305,67 @@ test("a start just after a parked host timed out waits for it to let go of its c
 		p.release("late");
 		await until("late finishes its resumed run", () => p.record("late")?.state === "idle");
 	} finally { await p.close(); }
+});
+
+test("a launch under way when Pi reloads ends on the code it began with, runs, reports once, and its next run uses the new code", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
+	const code = copyPackage();
+	const p = await parent(code.root);
+	const gate = hold("launch", "slow");
+	try {
+		await p.spawn("slow", "Start while Pi reloads");
+		await until("slow's launch waits at the gate", gate.held);
+		code.rebuild();
+		await p.session.reload();
+		assert.equal(p.record("slow")?.state, "starting", "the reload interrupts no launch");
+		gate.open();
+		await waitingInBash(p, "slow");
+		p.release("slow");
+		await until("slow finishes", () => p.record("slow")?.state === "idle");
+		assert.equal(p.record("slow")?.report, "slow done on build 1", "the launch finished with the code it began with");
+		await until("its report reaches main", () => p.reports("slow done") > 0);
+		await p.session.agent.state.tools.find((t: any) => t.name === "message").execute("again", { to: "slow", text: "Once more" }, undefined);
+		await until("its next run", () => p.record("slow")?.report === "slow done on build 2");
+		await until("that report reaches main", () => p.reports("slow done on build 2") > 0);
+		assert.equal(p.reports("slow done on build 1"), 1);
+		assert.equal(p.reports("slow done on build 2"), 1);
+		assert.deepEqual(reloadWarnings(p), []);
+	} finally {
+		gate.open();
+		gate.done();
+		await p.close();
+	}
+});
+
+test("a /reload while the old team is still letting its sessions go hands the new team on, and nothing is lost or sent twice", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
+	const code = copyPackage();
+	const p = await parent(code.root);
+	const gate = hold("retire");
+	try {
+		p.release("first");
+		await p.spawn("first", "Finish before the reloads");
+		await until("first finishes", () => p.record("first")?.state === "idle");
+		await until("its report reaches main", () => p.reports("first done") > 0);
+		await p.session.reload();
+		// Quiet at once: the new module's team takes over, and the old one waits at the gate to let first's session go.
+		await until("the old team retires", gate.held);
+		assert.equal(p.record("first")?.restored, true, "the new team opened from the index");
+		code.rebuild();
+		await p.session.reload();
+		assert.ok(gate.held(), "still retiring through the second reload");
+		gate.open();
+		await until("the old team is gone", () => !gate.held());
+		await p.session.agent.state.tools.find((t: any) => t.name === "message").execute("again", { to: "first", text: "Once more" }, undefined);
+		await until("first's second run, from its file", () => p.record("first")?.report === "first done on build 2");
+		await until("that report reaches main", () => p.reports("first done on build 2") > 0);
+		assert.equal(p.record("first")?.runs, 2);
+		assert.equal(p.reports("first done on build 1"), 1);
+		assert.equal(p.reports("first done on build 2"), 1);
+		assert.deepEqual(reloadWarnings(p), []);
+	} finally {
+		gate.open();
+		gate.done();
+		await p.close();
+	}
 });
 
 test("a shutdown other than a reload interrupts children as before", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
