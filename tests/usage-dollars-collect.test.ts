@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -229,4 +230,44 @@ test("a failing meter observer does not stop the window readings, and the report
 	// The next good observation clears the note.
 	const again = await collector.collect(context({ snapshots: weekly(2, NOW + MIN), now: NOW + MIN, force: true }));
 	assert.ok(!again.notes.some((note) => /meter readings/.test(note)), again.notes.join(" | "));
+});
+
+function runNode(script: string, args: string[]): Promise<{ code: number | null; stderr: string }> {
+	return new Promise((resolve) => {
+		const child = spawn(process.execPath, ["--input-type=module", "-e", script, ...args], { stdio: ["ignore", "ignore", "pipe"] });
+		let stderr = "";
+		child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+		child.on("close", (code) => resolve({ code, stderr }));
+	});
+}
+
+test("Pi processes that observe at the same time keep each other's meter anchors and window readings", async () => {
+	const dir = agentDir({});
+	const module = new URL("../lib/usage-dollars/collect.ts", import.meta.url).href;
+	const script = `const { createDollarsCollector } = await import(${JSON.stringify(module)});
+const [agentDir, id, now] = process.argv.slice(1);
+const collector = createDollarsCollector({ agentDir, timeZone: ${JSON.stringify(TZ)}, fetch: async () => new Response("{}") });
+for (let i = 0; i < 30; i++) {
+	const atMs = Number(now);
+	collector.observe([[id + "-" + i, { atMs, source: "poll", entries: [
+		{ label: "", kind: "budget", usedUsd: 1, limitUsd: 10 },
+		{ label: "7d", key: "seven_day", usedPct: 10, resetMs: atMs + 3600000 },
+	] }]], atMs);
+}`;
+	const results = await Promise.all(["a", "b", "c", "d"].map((id) => runNode(script, [dir, id, String(NOW)])));
+	for (const result of results) assert.equal(result.code, 0, result.stderr);
+	const anchors = JSON.parse(readFileSync(join(dir, "usage-dollars", "meter-day.json"), "utf8"));
+	const readings = JSON.parse(readFileSync(join(dir, "usage-dollars", "window-readings.json"), "utf8"));
+	assert.equal(Object.keys(anchors).length, 120, "every provider's first reading of the day is kept");
+	assert.equal(Object.keys(readings).length, 120, "every window's reading is kept");
+});
+
+test("a state file whose lock another live process keeps becomes a note", async () => {
+	const dir = agentDirWithTurns([[NOW - HOUR, 1]]);
+	mkdirSync(join(dir, "usage-dollars"), { recursive: true });
+	writeFileSync(join(dir, "usage-dollars", "window-readings.json.lock"), String(process.pid));
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch });
+	const { notes } = await collector.collect(context({ snapshots: weekly(10, NOW), now: NOW }));
+	assert.ok(notes.some((note) => /window-readings\.json/.test(note)), notes.join(" | "));
+	assert.equal(readFileSync(join(dir, "usage-dollars", "window-readings.json.lock"), "utf8"), String(process.pid), "the holder's lock is left alone");
 });

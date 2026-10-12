@@ -29,6 +29,9 @@ export interface FileLock {
 }
 
 const DEFAULT_SETTLE_MS = 10_000;
+/** A short lock is held for a few milliseconds; a holder this old has stopped. */
+const SHORT_STALE_MS = 5_000;
+const SHORT_WAIT_MS = 3_000;
 const ATTEMPTS = 4;
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EXDEV"]);
 
@@ -161,6 +164,19 @@ export function tryLock(path: string, options: LockOptions = {}): FileLock | und
 
 function sleepSync(ms: number): void {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Runs `work` while holding `${file}.lock`: for one read, change and replace
+ * of a small file that Pi processes share. Waits up to 3 s for the lock.
+ */
+export function withFileLock<T>(file: string, work: () => T): T {
+	const lock = waitForLock(`${file}.lock`, SHORT_WAIT_MS, { staleMs: SHORT_STALE_MS, settleMs: SHORT_STALE_MS });
+	try {
+		return work();
+	} finally {
+		lock.release();
+	}
 }
 
 /**

@@ -6,13 +6,14 @@
  */
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { withFileLock } from "../file-lock.ts";
 import type { LimitSnapshot } from "../limit-store.ts";
 import { STATUS_TIME_ZONE } from "../status-plus-logic.ts";
 import { localDateKey, localDayStartMs } from "./calendar.ts";
 import { entryDollars, sizeKey, type DollarInputs, type OpenRouterKeyInfo, type TokenfoldSnapshot, type WindowSize } from "./core.ts";
 import { createSpendLedger, type SpendLedger } from "./ledger.ts";
-import { advanceReading, evidenceOf, isWindowReading, mergeReadings, type WindowEvidence, type WindowReading } from "./resets.ts";
+import { advanceReading, evidenceOf, isWindowReading, type WindowEvidence, type WindowReading } from "./resets.ts";
 import {
 	advanceMeterDay,
 	fetchOpenRouterKey,
@@ -169,6 +170,29 @@ export function createDollarsCollector(options: CollectorOptions) {
 	function save(file: string, value: unknown): void {
 		mark(basename(file), writeJson(file, value));
 	}
+	/**
+	 * Read, change and save a shared state file under its lock, so processes
+	 * that observe at the same time keep each other's changes. When the lock
+	 * cannot be taken, the change still counts for this call and the report
+	 * names the file; an error from `change` itself goes to the caller.
+	 */
+	function update<T>(file: string, read: (file: string) => T, change: (current: T) => T): T {
+		let locked = false;
+		try {
+			mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+			return withFileLock(file, () => {
+				locked = true;
+				const current = read(file);
+				const next = change(current);
+				if (next !== current) save(file, next);
+				return next;
+			});
+		} catch (error) {
+			if (locked) throw error;
+			mark(basename(file), false);
+			return change(read(file));
+		}
+	}
 	/** Each observer runs on its own, so one failing step does not stop the other at every poll. */
 	function attempt<T>(name: string, run: () => T, fallback: () => T): T {
 		try {
@@ -190,15 +214,12 @@ export function createDollarsCollector(options: CollectorOptions) {
 	 */
 	function observeMeters(snapshots: Array<[string, LimitSnapshot]>, now: number): Anchors {
 		const dayStart = localDayStartMs(now, timeZone);
-		const stored = readAnchors(anchorFile);
-		let next = stored;
-		for (const reading of meterReadings(snapshots)) {
-			if (reading.atMs < dayStart || reading.atMs > now) continue;
+		const readings = meterReadings(snapshots).filter((reading) => reading.atMs >= dayStart && reading.atMs <= now);
+		if (readings.length === 0) return readAnchors(anchorFile);
+		return update(anchorFile, readAnchors, (stored) => readings.reduce((next, reading) => {
 			const anchor = advanceMeterDay(next[reading.provider], reading.usedUsd, reading.atMs, timeZone);
-			if (anchor !== next[reading.provider]) next = { ...next, [reading.provider]: anchor };
-		}
-		if (next !== stored) save(anchorFile, next);
-		return next;
+			return anchor === next[reading.provider] ? next : { ...next, [reading.provider]: anchor };
+		}, stored));
 	}
 
 	/**
@@ -219,26 +240,18 @@ export function createDollarsCollector(options: CollectorOptions) {
 	 * to see granted mid-window resets. Returns the granted resets by sizeKey().
 	 */
 	function observeWindows(snapshots: Array<[string, LimitSnapshot]>, now: number): Record<string, WindowEvidence> {
-		const stored = readReadings(readingsFile);
-		let next = stored;
-		const changed: string[] = [];
-		for (const [provider, snapshot] of snapshots) {
-			if (!Number.isFinite(snapshot.atMs) || snapshot.atMs > now) continue;
-			for (const entry of snapshot.entries) {
-				if ((entry.kind ?? "window") !== "window" || !Number.isFinite(entry.usedPct) || !Number.isFinite(entry.resetMs)) continue;
-				const key = sizeKey(provider, entry);
-				const record = advanceReading(next[key], { pct: entry.usedPct as number, resetMs: entry.resetMs as number, atMs: snapshot.atMs });
-				if (record !== next[key]) {
-					next = { ...next, [key]: record };
-					changed.push(key);
-				}
-			}
-		}
-		if (changed.length) {
-			// Read again just before the write: another process may have saved newer readings since.
-			next = mergeReadings(readReadings(readingsFile), next, changed);
-			save(readingsFile, next);
-		}
+		const readings = snapshots.flatMap(([provider, snapshot]) => {
+			if (!Number.isFinite(snapshot.atMs) || snapshot.atMs > now) return [];
+			return snapshot.entries
+				.filter((entry) => (entry.kind ?? "window") === "window" && Number.isFinite(entry.usedPct) && Number.isFinite(entry.resetMs))
+				.map((entry) => ({ key: sizeKey(provider, entry), pct: entry.usedPct as number, resetMs: entry.resetMs as number, atMs: snapshot.atMs }));
+		});
+		if (readings.length === 0) return evidenceMap(readReadings(readingsFile));
+		// Read under the lock, so another process's newer readings are the base.
+		const next = update(readingsFile, readReadings, (stored) => readings.reduce((current, { key, ...reading }) => {
+			const record = advanceReading(current[key], reading);
+			return record === current[key] ? current : { ...current, [key]: record };
+		}, stored));
 		return evidenceMap(next);
 	}
 
@@ -273,20 +286,18 @@ export function createDollarsCollector(options: CollectorOptions) {
 	 * next cycle (under 5% used) still has a dollar size. Shared by processes.
 	 */
 	function rememberSizes(snapshots: Array<[string, LimitSnapshot]>, inputs: DollarInputs): Sizes {
-		const stored = readSizes(sizesFile);
-		let next = stored;
+		const sizes: Array<[string, WindowSize]> = [];
 		for (const [provider, snapshot] of snapshots) {
 			for (const entry of snapshot.entries) {
 				const dollars = entryDollars(provider, entry, inputs);
 				// A start found after a gap in the readings misses spend: that size reads low and must not carry to the next cycle.
 				if (!dollars || dollars.basis !== "implied" || dollars.sizeFrom || dollars.spendStartApprox || dollars.limitUsd === undefined) continue;
-				const key = sizeKey(provider, entry);
-				if (stored[key]?.limitUsd === dollars.limitUsd) continue;
-				next = { ...next, [key]: { limitUsd: dollars.limitUsd, atMs: inputs.now, source: dollars.source === "tokenfold" ? "tokenfold" : "local" } };
+				sizes.push([sizeKey(provider, entry), { limitUsd: dollars.limitUsd, atMs: inputs.now, source: dollars.source === "tokenfold" ? "tokenfold" : "local" }]);
 			}
 		}
-		if (next !== stored) save(sizesFile, next);
-		return next;
+		if (sizes.length === 0) return readSizes(sizesFile);
+		return update(sizesFile, readSizes, (stored) => sizes.reduce((next, [key, size]) =>
+			next[key]?.limitUsd === size.limitUsd ? next : { ...next, [key]: size }, stored));
 	}
 
 	function openCodeGoModels(context: CollectContext): string[] {
