@@ -24,6 +24,7 @@ import { fallbackNote, planFallback } from "./fallback.ts";
 import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
+import { ResumePrompts } from "./resume-prompts.ts";
 import { saveReport } from "./reports.ts";
 import { causeWords, staleCauses, SWAP_NOTE, swapActivity, swapDue, TurnSwaps } from "./swap.ts";
 import { Routing, type SendOptions } from "./routing.ts";
@@ -85,7 +86,7 @@ export class Team implements HostTeam {
 	private readonly answers = new MainAnswers();
 	private closed = false;
 	private closing: Promise<void> | undefined;
-	private readonly resumePrompts = new Map<string, string>();
+	private readonly resumePrompts = new ResumePrompts();
 	/** Each child's latest launch: a launch or run from before a stop and a relaunch is stale, and ends quietly. */
 	private readonly launches = new Map<string, number>();
 	/** Stopped by their own parent, which already knows; no report goes up. */
@@ -126,7 +127,7 @@ export class Team implements HostTeam {
 			under: (name, ancestor) => this.under(name, ancestor), now: () => this.now(), known: () => this.knownNames(),
 			deliverToMain: (delivery) => options.deliverToMain(delivery),
 			...(options.prepareResume ? { prepareResume: (record: AgentRecord) => options.prepareResume!(record) } : {}),
-			resumeWith: (name, prompt) => { this.resumePrompts.set(name, prompt); },
+			resumeWith: (name, note, message) => { this.resumePrompts.set(name, { note, message }); },
 			forgetAnswer: (name) => this.forgetAnswer(name), takeInbox: (name) => this.takeInbox(name),
 			enqueue: (name) => { this.queue.push(name); this.pump(); },
 			run: (name, text) => { void this.run(name, text); },
@@ -281,7 +282,7 @@ export class Team implements HostTeam {
 		// Ending before its subagents stop: it can't start another meanwhile, and a second stop finds it ending.
 		this.ending.add(name);
 		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
-		this.resumePrompts.delete(name);
+		this.parkResume(name);
 		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
 		this.checks.abort(name);
 		const handle = this.sessions.get(name);
@@ -328,6 +329,7 @@ export class Team implements HostTeam {
 	/** Freeze records before aborting, so SDK cancellation cannot turn shutdown into a failure. */
 	interrupt(reason: AgentRecord["interruptedBy"] = "quit", owner?: string): void {
 		this.closed = true;
+		for (const name of this.resumePrompts.names()) this.parkResume(name);
 		for (const record of this.live()) this.patch(record.name, { state: "interrupted", endedAt: this.now(), blocking: false,
 			interruptedBy: reason, interruptionId: randomUUID(), interruptedOwner: owner, interruptionAnnounced: false,
 			autoResumeAttempts: record.autoResumeAttempts ?? 0 });
@@ -416,11 +418,10 @@ export class Team implements HostTeam {
 		this.patch(name, handle.sessionFile ? { sessionFile: handle.sessionFile } : {});
 		const inbox = this.takeInbox(name);
 		const saved = this.records.get(name)!;
-		const resumed = this.resumePrompts.get(name);
+		const resumed = this.resumePrompts.take(name);
 		const unstarted = saved.runs === 0 || !handle.messages().some((message) => (message as { role?: string }).role === "user");
 		const first = saved.runs === 0 && saved.after?.length ? `\n\n${afterBlock(saved, this.lookup)}` : "";
 		const prompt = `${resumed ? `${unstarted ? `${saved.task}\n\n` : ""}${resumed}` : saved.task}${first}`;
-		this.resumePrompts.delete(name);
 		await this.run(name, [prompt, ...inbox].join("\n\n"));
 	}
 
@@ -428,7 +429,7 @@ export class Team implements HostTeam {
 	private resumeFailed(name: string, error: unknown): void {
 		const message = error instanceof Error ? error.message : String(error);
 		const previous = this.records.get(name)!;
-		this.resumePrompts.delete(name);
+		this.parkResume(name);
 		this.checks.end(name);
 		this.swaps.end(name);
 		this.sessions.endRun(name);
@@ -562,7 +563,8 @@ export class Team implements HostTeam {
 		this.options.log?.(`${name}: run ${this.records.get(name)!.runs} moved to a new session at a turn boundary (${causeWords(causes)})`);
 		// Read before the state change in start() ends the clock.
 		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
-		this.resumePrompts.set(name, prompt);
+		// A prompt that carries mail or a fix round is a message, which a launch that can't go keeps.
+		this.resumePrompts.set(name, carriesUnread ? { note: "", message: prompt } : { note: prompt });
 		this.patch(name, { ...(carriesUnread ? {} : this.unreadLeft(name)), activity: swapActivity(causes) });
 		void this.sessions.release(name);
 		void this.start(name);
@@ -590,14 +592,14 @@ export class Team implements HostTeam {
 		const plan = planFallback(record, error instanceof Error ? error.message : String(error), this.options.fallbackModels ?? [], this.now());
 		if (!plan.ok) {
 			this.continuing.delete(name);
-			this.resumePrompts.delete(name);
+			this.parkResume(name);
 			return this.fail(name, plan.error);
 		}
 		const { step } = plan;
 		this.swaps.take(name);
 		// Read before the state change below ends the clock; a launch that failed has none left to read.
 		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
-		this.resumePrompts.set(name, fallbackNote(step));
+		this.resumePrompts.set(name, { note: fallbackNote(step), message: this.resumePrompts.message(name) });
 		this.patch(name, { ...this.unreadLeft(name), state: "queued", model: step.to, fallbacks: [...(record.fallbacks ?? []), step], activity: `switching to ${step.to}` });
 		void this.sessions.release(name);
 		this.queue.push(name);
@@ -715,6 +717,13 @@ export class Team implements HostTeam {
 		} else if (current.state === "asking") {
 			this.patch(name, { state: "running", askingWho: undefined, ...WAITING_FOR_MODEL });
 		}
+	}
+
+	/** A launch that will not go keeps the message that asked for it in the child's inbox, for its next run (resume-prompts.ts). */
+	private parkResume(name: string): void {
+		const message = this.resumePrompts.park(name);
+		const record = this.records.get(name);
+		if (message !== undefined && record) this.patch(name, { inbox: [...(record.inbox ?? []), message] });
 	}
 
 	private takeInbox(name: string): string[] {

@@ -35,6 +35,7 @@ interface Session {
 function harness(options: Partial<TeamOptions> & { files?: (name: string) => Array<[string, string]>; check?: () => Promise<CheckRun> } = {}) {
 	const { files, check, ...teamOptions } = options;
 	let generation = 1;
+	let refusing = false;
 	const sessions: Session[] = [];
 	const transcripts = new Map<string, unknown[]>();
 	const main: MainDelivery[] = [];
@@ -46,6 +47,7 @@ function harness(options: Partial<TeamOptions> & { files?: (name: string) => Arr
 		log: (message) => logged.push(message),
 		launcher: {
 			async launch(record: AgentRecord, hooks: ChildHooks): Promise<ChildHandle> {
+				if (refusing) throw new Error("Extension error while loading the child's tools.");
 				const session: Session = { name: record.name, hooks, prompts: [], queue: [], disposed: false };
 				sessions.push(session);
 				return {
@@ -98,7 +100,7 @@ function harness(options: Partial<TeamOptions> & { files?: (name: string) => Arr
 		current(name).resolve!();
 	};
 	const reports = () => main.filter((delivery) => delivery.kind === "report");
-	return { team, main, logged, transcripts, spawn, sessionsOf, current, call, boundary, finish, reports, say, reload: () => { generation++; } };
+	return { team, main, logged, transcripts, spawn, sessionsOf, current, call, boundary, finish, reports, say, reload: () => { generation++; }, refuse: () => { refusing = true; } };
 }
 
 test("a stale session moves to a new session at its next turn boundary, as the same run; a current one never moves", async () => {
@@ -288,6 +290,22 @@ test("a run that swaps keeps its fix rounds, and a stale session goes before the
 	await settled();
 	assert.match(h.current(name).prompts.at(-1) ?? "", /fix round 2 of 2/, "the count went on across the swap");
 	assert.equal(h.team.get(name)!.runs, 1);
+	await h.team.close();
+});
+
+test("a fix round whose new session can't launch waits in the failed child's inbox", async () => {
+	const failing = async (): Promise<CheckRun> => ({ exitCode: 1, output: "broken" });
+	const h = harness({ check: failing });
+	const name = h.spawn("impl", { check: { command: "npm test", fixUntilPass: 2 } });
+	await settled();
+	h.call(name, "edit");
+	h.reload();
+	h.refuse();
+	h.finish(name, "Done.");
+	await settled();
+	const record = h.team.get(name)!;
+	assert.equal(record.state, "failed");
+	assert.match((record.inbox ?? []).join("\n"), /fix round 1 of 2/, "its next run gets the fix round");
 	await h.team.close();
 });
 

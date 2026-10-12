@@ -44,8 +44,8 @@ export interface RouteHost {
 	known(): string;
 	deliverToMain(delivery: MainDelivery): void;
 	prepareResume?(record: AgentRecord): { model: string; note?: string; notice?: string };
-	/** What the next launch of `name` is prompted with instead of its task. */
-	resumeWith(name: string, prompt: string): void;
+	/** What the next launch of `name` is prompted with instead of its task: a note, then the message that resumes it. */
+	resumeWith(name: string, note: string, message: string): void;
 	forgetAnswer(name: string): void;
 	takeInbox(name: string): string[];
 	/** Puts `name`, now queued, in line to start. */
@@ -261,7 +261,7 @@ export class Routing {
 		try { if (!why.automatic) prepared = host.prepareResume?.(target) ?? prepared; }
 		catch (error) { return why.stale ? undefined : { ok: false, error: (error as Error).message }; }
 		if (why.stale) void host.sessions.release(name);
-		host.resumeWith(name, `${resumeWarning(target)}${prepared.note ? `${prepared.note}\n\n` : ""}${why.body}`);
+		host.resumeWith(name, `${resumeWarning(target)}${prepared.note ? `${prepared.note}\n\n` : ""}`, why.body);
 		if (target.state !== "waiting") this.startedBy(name, why.peer);
 		host.patch(name, { state: "queued", model: prepared.model, resumedBy: { from: why.from, text: why.said }, startedAt: host.now(), error: undefined, stopReason: undefined, restoreError: undefined, launchError: undefined,
 			...(!why.automatic ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
