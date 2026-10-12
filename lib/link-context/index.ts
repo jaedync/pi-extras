@@ -125,6 +125,12 @@ function compose(pulled: Pulled, params: Params): { content: ({ type: "text"; te
 
 export function registerLinkTool(pi: ExtensionAPI, options: LinkToolOptions = {}): void {
 	const cache = new Map<string, Entry>();
+	const recall = (key: string): Pulled | undefined => {
+		const entry = cache.get(key);
+		if (entry && Date.now() - entry.at <= CACHE_MS) return entry.pulled;
+		cache.delete(key);
+		return undefined;
+	};
 	const remember = (key: string, pulled: Pulled) => {
 		const now = Date.now();
 		for (const [k, entry] of cache) if (now - entry.at > CACHE_MS) cache.delete(k);
@@ -139,7 +145,7 @@ export function registerLinkTool(pi: ExtensionAPI, options: LinkToolOptions = {}
 		async execute(_id, params: Params, signal, onUpdate) {
 			const started = performance.now();
 			const key = cacheKey(params);
-			let pulled = cache.get(key)?.pulled;
+			let pulled = recall(key);
 			const cached = !!pulled;
 			if (!pulled) {
 				const url = parseUrl(params.url);

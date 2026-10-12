@@ -138,3 +138,21 @@ test("rows show the link, options and a one-line result", () => {
 	assert.equal(resultLine({ progress: "reading captions" }, plain), "reading captions…");
 	assert.equal(resultLine(undefined, plain), "");
 });
+
+type ToolUnderTest = { execute: (...args: unknown[]) => Promise<{ content: { type: string; text?: string }[]; details: Record<string, unknown> }> };
+
+test("a cached result older than 30 minutes is read again", async (t) => {
+	const tools: ToolUnderTest[] = [];
+	let version = 0;
+	const fetcher = (async () => new Response(`<title>v${++version}</title><article><p>body</p></article>`, { headers: { "content-type": "text/html" } })) as unknown as typeof fetch;
+	registerLinkTool({ registerTool: (tool: never) => tools.push(tool) } as never, { fetcher, config: () => parseConfig({}), deps: fakeDeps({}, []) });
+	const start = Date.now();
+	t.mock.method(Date, "now", () => start);
+	assert.equal((await tools[0].execute("1", { url: "https://e.test/page" }, undefined, undefined)).details.title, "v1");
+	t.mock.method(Date, "now", () => start + 29 * 60_000);
+	assert.equal((await tools[0].execute("2", { url: "https://e.test/page" }, undefined, undefined)).details.cached, true);
+	t.mock.method(Date, "now", () => start + 3 * 3_600_000);
+	const late = await tools[0].execute("3", { url: "https://e.test/page" }, undefined, undefined);
+	assert.equal(late.details.cached, false);
+	assert.equal(late.details.title, "v2");
+});
