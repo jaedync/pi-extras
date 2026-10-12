@@ -34,6 +34,9 @@ function Get-Machine([string]$vm) {
     if (-not $m) { throw "There is no Hyper-V VM named '$vm'" }
     @($m)[0]
 }
+# The Hyper-V module's object for the VM with exactly this name. The module's -Name and
+# -VMName parameters take wildcards: Start-VM -Name 'Win*' starts every VM whose name starts with Win.
+function Get-ExactVm([string]$vm) { Get-VM -Id (Get-Machine $vm).Name }
 function Get-RunningMachine([string]$vm) {
     $m = Get-Machine $vm
     if ($m.EnabledState -ne 2) { throw "VM '$vm' is $(Get-StateName $m.EnabledState), not running" }
@@ -49,7 +52,7 @@ function Get-Resolution($machine) {
     @{ w = [int](@($head.CurrentHorizontalResolution)[0]); h = [int](@($head.CurrentVerticalResolution)[0]) }
 }
 function Get-Ipv4([string]$vm) {
-    (Get-VMNetworkAdapter -VMName $vm).IPAddresses |
+    (Get-VMNetworkAdapter -VM (Get-ExactVm $vm)).IPAddresses |
         Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' -and $_ -notmatch '^169\.254\.' } | Select-Object -First 1
 }
 # Hyper-V's method return codes, named so errors say what went wrong.
@@ -79,8 +82,8 @@ function Get-Vms {
 # Heartbeat: $true once Windows answers the heartbeat integration service,
 # $false while it is still starting or stopping, $null when that service is off.
 # Uptime: seconds since Windows last started; a restart inside the guest resets it.
-function Get-Liveness([string]$vm) {
-    $hv = Get-VM -Name $vm
+function Get-Liveness($machine) {
+    $hv = Get-VM -Id $machine.Name
     $state = "$($hv.Heartbeat)"
     @{ heartbeat = $(if ($state) { $state -like 'Ok*' } else { $null }); uptime = [int]$hv.Uptime.TotalSeconds }
 }
@@ -88,12 +91,12 @@ function Get-Status([string]$vm) {
     $m = Get-Machine $vm
     $running = $m.EnabledState -eq 2
     $size = if ($running) { Get-Resolution $m } else { @{ w = 0; h = 0 } }
-    $live = if ($running) { Get-Liveness $vm } else { @{ heartbeat = $null; uptime = $null } }
+    $live = if ($running) { Get-Liveness $m } else { @{ heartbeat = $null; uptime = $null } }
     # No IP here: Get-VMNetworkAdapter takes one to two seconds, and every reconnect waits on status.
     [ordered]@{ vm = $vm; state = (Get-StateName $m.EnabledState); running = $running; width = $size.w; height = $size.h; installed = (Test-Path (Get-KeyFile $vm)); heartbeat = $live.heartbeat; uptime = $live.uptime }
 }
 function Start-Machine([string]$vm) {
-    Start-VM -Name $vm | Out-Null
+    Start-VM -VM (Get-ExactVm $vm) | Out-Null
     Get-Status $vm
 }
 

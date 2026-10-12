@@ -108,6 +108,29 @@ test("native console keys and drags let go of what they hold when a Hyper-V call
 	assert.match(both.error, /SetAbsolutePosition failure.*SetButtonState failure/, "both failures are reported");
 });
 
+/** Fakes for the VM lookups: Get-CimInstance answers its WQL filter by exact name, as WMI does. */
+const FAKE_VMS = `$ns='synthetic'
+	function Get-CimInstance { param($Namespace,$ClassName,$Filter); $name = ([regex]::Match($Filter, "ElementName='(.*)'$").Groups[1].Value) -replace "''","'"; @($vms | Where-Object { $_.ElementName -eq $name } | ForEach-Object { [pscustomobject]@{ ElementName=$_.ElementName; Name=$_.Id } }) }
+	function Get-VM { param($Id); if ($Id) { $vms | Where-Object { $_.Id -eq $Id } } else { $vms } }`;
+
+test("native win.start starts the VM with exactly the name given, never every VM a wildcard matches", native, () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	const machine = host.slice(host.indexOf("function Get-Machine"), host.indexOf("function Get-RunningMachine"));
+	const start = host.slice(host.indexOf("function Start-Machine"), host.indexOf("# ---- Screen"));
+	const out = JSON.parse(powershell(`$ErrorActionPreference='Stop'; $started=[Collections.Generic.List[string]]::new()
+		$vms=@([pscustomobject]@{ Name='Win10'; ElementName='Win10'; Id='a0000000-0000-0000-0000-000000000001' }, [pscustomobject]@{ Name='Win11'; ElementName='Win11'; Id='a0000000-0000-0000-0000-000000000002' })
+		${FAKE_VMS}
+		function Start-VM { param($VM); $started.Add($VM.Id) }
+		function Get-Status { param($vm); 'status' }
+		${machine}
+		${start}
+		$caught=$null; try { $null = Start-Machine 'Win*' } catch { $caught=$_.Exception.Message }
+		$null = Start-Machine 'Win11'
+		@{ started=@($started.ToArray()); error=$caught } | ConvertTo-Json -Compress`));
+	assert.match(out.error, /no Hyper-V VM named 'Win\*'/);
+	assert.deepEqual(out.started, ["a0000000-0000-0000-0000-000000000002"]);
+});
+
 test("native setup prepares its shell and commits the key only after complete typing", native, () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	const code = host.slice(host.indexOf("# ---- Setup payload"), host.indexOf("# The \"<run> <status>\""));

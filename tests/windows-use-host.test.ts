@@ -199,6 +199,16 @@ test("a drag that fails part-way lets go of the mouse button, and reports every 
 	assert.match(drag, /if \(\$errors\.Count\) \{ throw/);
 });
 
+test("VMs are found by their exact name, never through the Hyper-V cmdlets' wildcard names", () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	// Start-VM -Name 'Win*' starts every VM whose name starts with Win; -VMName matches the same way.
+	assert.doesNotMatch(host, /-(?:VM)?Name \$/, "no cmdlet gets a VM name as a pattern");
+	const start = host.slice(host.indexOf("function Start-Machine"), host.indexOf("# ---- Screen"));
+	assert.match(start, /Start-VM -VM \(Get-ExactVm \$vm\)/);
+	assert.match(host, /function Get-ExactVm\(\[string\]\$vm\) \{ Get-VM -Id \(Get-Machine \$vm\)\.Name \}/);
+	assert.match(host, /function Get-Machine[\s\S]*?ElementName='\$\(\$vm -replace/, "Get-Machine matches the name with WQL =, which has no wildcards");
+});
+
 test("Hyper-V's in-between states have names, since a restart inside Windows passes through them", () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	assert.match(host, /4 = 'shutting down'/);
