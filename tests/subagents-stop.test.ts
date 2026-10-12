@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
-import { type AgentRecord, type ChildHandle, type MainDelivery, NO_USAGE } from "../lib/subagents/types.ts";
+import { type AgentRecord, type ChildHandle, type ChildHooks, type MainDelivery, NO_USAGE, type SpawnRequest } from "../lib/subagents/types.ts";
 
 const flush = async (rounds = 4) => { for (let i = 0; i < rounds; i++) await tick(); };
 
@@ -95,4 +95,71 @@ test("stopping an interrupted child keeps the report of its last run", async () 
 	assert.equal(stopped?.report, "Half-way: found the bug in parser.ts");
 	const report = main.find((delivery) => delivery.kind === "report");
 	assert.equal(report?.kind === "report" ? report.record.report : undefined, "Half-way: found the bug in parser.ts");
+});
+
+/** Children whose abort takes a while, as a real session's does, and whose reports name what they said. */
+function slowAbortTeam(abortMs = 60) {
+	const main: MainDelivery[] = [];
+	const finish = new Map<string, (text: string) => void>();
+	const hooks = new Map<string, ChildHooks>();
+	const team = new Team({ maxConcurrent: 8, maxDepth: 2, replyTimeoutMs: 60_000, deliverToMain: (delivery) => main.push(delivery), warn: () => undefined,
+		launcher: { async launch(record: AgentRecord, childHooks: ChildHooks): Promise<ChildHandle> {
+			hooks.set(record.name, childHooks);
+			const transcript: unknown[] = [];
+			return { prompt: (text) => new Promise<void>((resolve) => {
+				transcript.push({ role: "user", content: text });
+				finish.set(record.name, (said) => { transcript.push({ role: "assistant", content: [{ type: "text", text: said }] }); resolve(); });
+			}),
+			steer: () => undefined, abort: () => sleep(abortMs).then(() => finish.get(record.name)?.("aborted")),
+			lastText: () => undefined, messages: () => transcript, takeQueued: () => [], dispose: async () => undefined };
+		} } });
+	const spawn = (name: string, parent: string, extra: Partial<SpawnRequest> = {}) =>
+		team.spawn({ name, task: name, parent, model: "m", readOnly: false, fork: false, blocking: false, ...extra });
+	const reports = () => main.flatMap((delivery) => delivery.kind === "report" ? [delivery.record.name] : []);
+	return { team, main, finish, hooks, spawn, reports };
+}
+
+test("a parent that is stopping can't start a subagent that would outlive the stop", async () => {
+	const h = slowAbortTeam();
+	assert.ok(h.spawn("lead", "main").ok); await flush();
+	assert.ok(h.spawn("old-helper", "lead").ok); await flush();
+	const stopping = h.team.stop("lead");
+	await sleep(10);
+	const late = h.spawn("new-helper", "lead");
+	assert.equal(late.ok, false);
+	assert.match(!late.ok ? late.error : "", /lead is stopping/);
+	await stopping;
+	assert.equal(h.team.get("lead")!.state, "stopped");
+	assert.equal(h.team.get("old-helper")!.state, "stopped");
+});
+
+test("a second stop during a stop, as a budget stop gives, reports the parent once", async () => {
+	const h = slowAbortTeam();
+	assert.ok(h.spawn("lead", "main", { maxCost: 1 }).ok); await flush();
+	assert.ok(h.spawn("helper", "lead").ok); await flush();
+	const userStop = h.team.stop("lead");
+	await sleep(10);
+	// The lead's reply in flight ends, and its usage crosses the budget while helper's abort winds down.
+	h.hooks.get("lead")!.update({ usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 1.5 } });
+	assert.equal(await h.team.stop("lead"), undefined);
+	await userStop; await sleep(80); await flush();
+	assert.deepEqual(h.reports(), ["lead"]);
+});
+
+test("the usage of the request a stop aborts reaches the record", async () => {
+	let hooks!: ChildHooks;
+	const team = new Team({ maxConcurrent: 4, maxDepth: 1, replyTimeoutMs: 1000, deliverToMain: () => undefined, warn: () => undefined,
+		launcher: { async launch(_record: AgentRecord, childHooks: ChildHooks): Promise<ChildHandle> {
+			hooks = childHooks;
+			let done!: () => void;
+			return { prompt: () => new Promise<void>((resolve) => { done = resolve; }), steer: () => undefined,
+				// As Pi does: the aborted reply ends with the usage its request already ran up (message_end).
+				abort: async () => { await sleep(5); hooks.update({ usage: { input: 180_000, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.92 } }); done(); },
+				lastText: () => undefined, messages: () => [], takeQueued: () => [], dispose: async () => undefined };
+		} } });
+	assert.ok(team.spawn({ name: "big", task: "t", parent: "main", model: "m", readOnly: false, fork: false, blocking: false }).ok); await flush();
+	hooks.update({ usage: { input: 100_000, output: 2000, cacheRead: 0, cacheWrite: 0, cost: 0.55 } });
+	const stopped = await team.stop("big");
+	assert.equal(stopped!.usage.cost, 0.92);
+	assert.equal(stopped!.state, "stopped");
 });

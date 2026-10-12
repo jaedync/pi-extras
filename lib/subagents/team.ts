@@ -178,6 +178,8 @@ export class Team implements HostTeam {
 		if (this.closed) return { ok: false, error: "The session is shutting down." };
 		const parent = request.parent === MAIN ? null : this.records.get(request.parent);
 		if (request.parent !== MAIN && !parent) return { ok: false, error: `Unknown parent ${request.parent}.` };
+		// A tool call still in flight when its agent stopped: a subagent it started now would outlive the stop.
+		if (parent && (this.ending.has(parent.name) || parent.state === "stopped")) return { ok: false, error: `${parent.name} is stopping; it can't start subagents now.` };
 		const depth = (parent?.depth ?? 0) + 1;
 		if (depth > this.options.maxDepth) return { ok: false, error: `Subagents cannot start subagents here (depth limit ${this.options.maxDepth}).` };
 		const name = nameFor(request.name, request.task, (candidate) => this.records.has(candidate));
@@ -274,19 +276,20 @@ export class Team implements HostTeam {
 	 */
 	async stop(name: string, options: { by?: string; reason?: string } = {}): Promise<AgentRecord | undefined> {
 		const record = this.records.get(name);
-		if (!record || (!LIVE_STATES.has(record.state) && record.state !== "interrupted")) return undefined;
+		if (!record || this.ending.has(name) || (!LIVE_STATES.has(record.state) && record.state !== "interrupted")) return undefined;
 		if (options.by !== undefined && options.by === record.parent) this.stoppedByParent.add(name);
-		for (const child of this.list().filter((entry) => entry.parent === name)) await this.stop(child.name, { by: name });
+		// Ending before its subagents stop: it can't start another meanwhile, and a second stop finds it ending.
+		this.ending.add(name);
 		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
 		this.resumePrompts.delete(name);
 		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
 		this.checks.abort(name);
 		const handle = this.sessions.get(name);
 		const launch = this.launches.get(name);
-		this.ending.add(name);
 		// An interrupted child has no run in this process; its last report stays.
 		const report = () => this.sessions.runText(name) ?? (record.state === "interrupted" ? record.report : undefined);
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: report(), ...this.unreadLeft(name) });
+		for (const child of this.list().filter((entry) => entry.parent === name)) await this.stop(child.name, { by: name });
 		await handle?.abort().catch(() => undefined);
 		// A message relaunched it during the abort: the new run is what its parent hears of.
 		if (this.launches.get(name) !== launch) {
@@ -453,7 +456,10 @@ export class Team implements HostTeam {
 			toolCalled: (tool) => this.checks.called(name, tool),
 			update: (patch) => {
 				const record = this.records.get(name);
-				if (!record || !LIVE_STATES.has(record.state) || this.launches.get(name) !== launch) return;
+				if (!record || this.launches.get(name) !== launch) return;
+				// The request a stop aborts still says what it used.
+				if (record.state === "stopped" && this.ending.has(name) && patch.usage) return this.patch(name, { usage: patch.usage });
+				if (!LIVE_STATES.has(record.state)) return;
 				this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.answers.workedSince(name, patch.toolCalls) ? { answeredMain: undefined } : {}) });
 				if (patch.usage) this.budgets.spent(name, patch.usage.cost);
 				this.forgetRead(name);
