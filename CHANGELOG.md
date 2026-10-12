@@ -2,6 +2,34 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.11 - 2026-10-12
+
+### Added
+
+- Subagents: each report, note or question that reaches main ends with one
+  line about the other agents that still work, for example
+  `Still working: impl 37m $17.20, review queued after impl`. Main's
+  `message` and `stop_subagent` results end with a short `Team now:` roster.
+  Main does not need a turn to ask for this status.
+- Subagents: `check` on `subagent` and `message`. After a run, the harness
+  runs the command with the child's own bash rules and adds the exit code
+  and the last lines of output to the report. `fixUntilPass` sends a failed
+  check back to the child, at most that many times, before the parent hears
+  of it. A check that fails, times out or can't run always wakes the parent.
+- Subagents: `after` on `subagent`. The spawn waits in the queue, without a
+  slot, until the named agents end. Then it starts with the path of each
+  report. A report that only a waiting spawn needs does not wake the parent.
+  Loops that would wait forever are refused.
+- Subagents: the tool description and the child instructions tell agents
+  to do review and fix loops directly, by message, and to report to the
+  parent at the end.
+
+### Changed
+
+- Subagents: the handover contract for `/reload` is now version 2. The
+  first `/reload` after you update interrupts children and resumes them.
+  Later reloads keep them running.
+
 ## 0.24.10 - 2026-10-12
 
 ### Changed
