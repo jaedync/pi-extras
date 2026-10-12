@@ -180,6 +180,26 @@ test("a question chain through a peer can't end at a waiting spawn, in either or
 	await h.team.close();
 });
 
+test("a question to an agent that waits for the asker through a held spawn is refused; a note still goes", async () => {
+	const h = teamHarness({ maxDepth: 2 });
+	const [impl, lead, other] = [h.spawn("impl", { name: "impl" }), h.spawn("lead", { name: "lead" }), h.spawn("other", { name: "other" })];
+	await tick();
+	assert.ok(h.team.spawn({ name: "docs", task: "docs", parent: lead, model: "m", readOnly: false, fork: false, blocking: false, after: [impl] }).ok);
+	await tick();
+	const asked = await h.team.send(impl, lead, "Which API do you want?", { expectReply: true });
+	assert.equal(asked.ok, false, "lead can't end before docs, docs starts after impl, and impl would wait for lead's answer");
+	assert.match(asked.ok ? "" : asked.error, /^lead waits for you: docs, which it waits for, starts after you end\. A question could leave each of you waiting for the other\. Send a note instead \(no expectReply\)\.$/);
+	assert.equal(h.team.get(impl)!.owed, undefined, "a refused question is owed nothing");
+	assert.deepEqual(await h.team.send(impl, lead, "fyi: the API is v2"), { ok: true, delivered: "steered" });
+	assert.ok((await h.team.send(other, lead, "Which API?", { expectReply: true })).ok, "lead does not wait for other");
+	assert.ok((await h.team.send(lead, impl, "Which API will you ship?", { expectReply: true })).ok, "impl does not wait for lead");
+	assert.equal((await h.team.send(impl, other, "Ask lead for me?", { expectReply: true })).ok, false, "other waits for lead's answer, lead for docs, docs for impl");
+	h.lastCall(impl).finish("Done.");
+	await tick(); await tick();
+	assert.equal(h.team.get("docs")!.state, "running", "impl ended, so docs started");
+	await h.team.close();
+});
+
 test("a spawn waiting for its after agents does not keep its group's reports waiting", () => {
 	const base = { parent: "main", depth: 1, task: "t", model: "m", readOnly: false, fork: false, blocking: false, createdAt: 0, activity: null, toolCalls: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, runs: 0, group: "g" } as const;
 	const records: AgentRecord[] = [

@@ -46,6 +46,34 @@ export function dependsOn(name: string, target: string, records: readonly AgentR
 	return false;
 }
 
+/**
+ * The held spawn through which `name` can't end before `target` does: the
+ * first spawn on such a path that waits to start for its after agents.
+ * Undefined when no path goes through one (a path of subagents and owed
+ * answers alone is not this case).
+ */
+export function heldBetween(name: string, target: string, records: readonly AgentRecord[]): string | undefined {
+	const byName = new Map(records.map((record) => [record.name, record]));
+	const get: Lookup = (other) => byName.get(other);
+	const children = new Map<string, string[]>();
+	for (const record of records) if (live(record)) children.set(record.parent, [...(children.get(record.parent) ?? []), record.name]);
+	const seen = new Set<string>();
+	const next: Array<{ readonly at: string; readonly held: string | undefined }> = [{ at: name, held: undefined }];
+	while (next.length > 0) {
+		const { at, held } = next.pop()!;
+		if (at === target && held !== undefined) return held;
+		const key = `${held === undefined ? "-" : "+"}${at}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const record = get(at);
+		if (!record) continue;
+		const waits = record.state === "queued" ? waitingFor(record, get) : [];
+		next.push(...[...(children.get(at) ?? []), ...(record.owed ?? [])].map((other) => ({ at: other, held })));
+		next.push(...waits.map((other) => ({ at: other, held: held ?? at })));
+	}
+	return undefined;
+}
+
 export interface AfterRequest {
 	readonly after: readonly string[];
 	/** The spawner: this spawn's parent, which is not done until it reports. */
