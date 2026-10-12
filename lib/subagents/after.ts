@@ -19,12 +19,14 @@ const live = (record: AgentRecord | undefined): boolean => record !== undefined 
 
 /**
  * The agents `record` can't end before: its live subagents, whose reports it
- * waits for; the agents that owe it an answer; and, while it waits to start,
- * its live after agents. A conservative graph: an owed answer may come
- * without its giver ending, but nothing makes it come.
+ * waits for; the live agents that owe it an answer; and, while it waits to
+ * start, its live after agents. A conservative graph: an owed answer may come
+ * without its giver ending, but nothing makes it come. One that owes an
+ * answer but no longer runs is not waited on (team.ts `waitsFor`).
  */
 function blockers(record: AgentRecord, children: ReadonlyMap<string, readonly string[]>, get: Lookup): string[] {
-	return [...(children.get(record.name) ?? []), ...(record.owed ?? []), ...(record.state === "queued" ? waitingFor(record, get) : [])];
+	const owed = (record.owed ?? []).filter((name) => live(get(name)));
+	return [...(children.get(record.name) ?? []), ...owed, ...(record.state === "queued" ? waitingFor(record, get) : [])];
 }
 
 /** Whether `name` can't end before `target` does, directly or through other agents. */

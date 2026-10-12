@@ -68,3 +68,34 @@ test("after a restart, a resumed asker does not wait on a peer that is still pau
 	assert.equal(h.team.get("worker")!.state, "idle");
 	assert.deepEqual(h.main.flatMap((delivery) => delivery.kind === "report" ? [delivery.record.name] : []), ["worker"]);
 });
+
+test("a question back to a peer that waits for the asker's answer is refused", async () => {
+	const h = teamHarness();
+	h.spawn("A", { name: "a" });
+	h.spawn("B", { name: "b" });
+	await flush();
+	assert.equal((await h.team.send("a", "b", "What schema do you use?", { expectReply: true })).ok, true);
+	const back = await h.team.send("b", "a", "Which file are you editing?", { expectReply: true });
+	assert.equal(back.ok, false);
+	assert.match(!back.ok ? back.error : "", /a waits for you.*Send a note instead/s);
+	assert.equal((await h.team.send("b", "a", "I edit schema.ts.")).ok, true, "a note still goes");
+});
+
+test("a question to a grandparent, which waits on the asker through its subagents, is refused", async () => {
+	const h = teamHarness({ maxDepth: 3 });
+	h.spawn("Lead", { name: "lead" }); await flush();
+	h.spawn("Mid", { name: "mid", parent: "lead" }); await flush();
+	h.spawn("Leaf", { name: "leaf", parent: "mid" }); await flush();
+	const asked = await h.team.send("leaf", "lead", "Is the API frozen?", { expectReply: true });
+	assert.equal(asked.ok, false);
+	assert.match(!asked.ok ? asked.error : "", /lead waits for you/);
+});
+
+test("a question to an agent that does not wait for the asker still goes", async () => {
+	const h = teamHarness({ maxDepth: 3 });
+	h.spawn("Lead", { name: "lead" }); await flush();
+	h.spawn("Mid", { name: "mid", parent: "lead" }); await flush();
+	h.spawn("Peer", { name: "peer" }); await flush();
+	assert.equal((await h.team.send("lead", "mid", "Status?", { expectReply: true })).ok, true, "a parent may ask its subagent");
+	assert.equal((await h.team.send("mid", "peer", "Which port?", { expectReply: true })).ok, true);
+});

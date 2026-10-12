@@ -1261,10 +1261,13 @@ tree, to main or its parent, waits for the answer, which comes fast because
 the question wakes them. A question to anyone else, a peer or its own
 subagent, returns at once: the answer arrives as a message that wakes the
 asker, and its report waits until every agent it asked answers or ends. One
-that ends without answering hands the asker how its run ended. So agents never
-wait on each other in a loop. When a peer's message resumes a finished child
-and that run ends normally, its report goes to its parent without waking it:
-main reads it at its next turn, and a child parent at its next run. A run that
+that ends without answering, or can't resume to answer, hands the asker how
+its run ended. A question to an agent that waits for the asker (through its
+subagents, or an answer the asker owes it) is refused: send a note instead.
+So agents never wait on each other in a loop. When a peer's message resumes a
+finished child and that run ends normally, its report goes to its parent
+without waking it: main reads it at its next turn, and a child parent at its
+next run. A parent that waits only on its subagents wakes for it. A run that
 fails or goes over its budget still wakes the parent, and so does one that
 main, the parent or you wrote to while it ran. Main never waits: a child's note or question
 wakes it, and so does the answer to anything main asked. When main's question resumes a finished child that

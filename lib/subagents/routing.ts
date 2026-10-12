@@ -10,7 +10,7 @@
  * A run that a peer's message started and that ends idle reports to its
  * parent without waking it (team.ts `finish`).
  */
-import { askError, heldBetween } from "./after.ts";
+import { askError, dependsOn, heldBetween } from "./after.ts";
 import type { MainAnswers } from "./answers.ts";
 import type { RunChecks } from "./checks.ts";
 import { noteText, questionText, resumeWarning } from "./format.ts";
@@ -158,15 +158,17 @@ export class Routing {
 	}
 
 	/**
-	 * A question to an agent that can't end before the asker does, because a
-	 * spawn it waits for starts after the asker ends. Should it end its run
-	 * without answering, the asker's report would wait for that answer, and
-	 * nothing would end (after.ts).
+	 * A question to an agent that can't end before the asker does: through its
+	 * subagents, answers it is owed, or a spawn it waits for that starts after
+	 * the asker ends. Should it end its run without answering, the asker's
+	 * report would wait for that answer, and nothing would end (after.ts).
 	 */
 	private loopError(from: string, to: string): string | undefined {
-		const held = heldBetween(to, from, this.host.list());
-		if (held === undefined) return undefined;
-		return `${to} waits for you: ${held}, which it waits for, starts after you end. A question could leave each of you waiting for the other. Send a note instead (no expectReply).`;
+		const records = this.host.list();
+		const held = heldBetween(to, from, records);
+		if (held !== undefined) return `${to} waits for you: ${held}, which it waits for, starts after you end. A question could leave each of you waiting for the other. Send a note instead (no expectReply).`;
+		if (!dependsOn(to, from, records)) return undefined;
+		return `${to} waits for you, directly or through other agents (its subagents or an answer it is owed). A question could leave each of you waiting for the other. Send a note instead (no expectReply).`;
 	}
 
 	/** Main never blocks: its question is delivered, and the answer wakes it later. */
