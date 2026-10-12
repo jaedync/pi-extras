@@ -477,8 +477,8 @@ describe("log edges", () => {
 		joined = "";
 		offset = 0;
 		for (let page = 0; page < 20; page++) {
-			// Four bytes hold any one character, so even pages this small lose nothing.
-			const read = readLogPage(small, { offset, bytes: 4, tail: false });
+			// A page holds at least four bytes, enough for any one character, so even a one-byte request loses nothing.
+			const read = readLogPage(small, { offset, bytes: 1, tail: false });
 			joined += read.text;
 			offset = read.nextOffset;
 			if (read.eof) break;

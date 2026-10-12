@@ -26,6 +26,8 @@ export const MAX_COMMAND_BYTES = 65536;
 export const MAX_CWD_BYTES = 4096;
 // A title is a UI label, so it is held to one short line.
 export const MAX_TITLE_BYTES = 80;
+/** The smallest log page: room for any one UTF-8 character, so no page shows one as U+FFFD. */
+export const MIN_PAGE_BYTES = 4;
 
 const TRUNCATION_NOTICE = "\n[... truncated; read the log path for the rest ...]";
 
@@ -525,17 +527,17 @@ function readFittingWindow(logPath: string, start: number, length: number, fromE
 		const buffer = readRange(logPath, windowStart, size);
 		const whole = wholeCharacters(buffer);
 		const text = decodeWindow(buffer.subarray(whole.skip, whole.skip + whole.length));
-		if (jsonEscapedBytes(text) <= TEXT_BUDGET_BYTES || size <= 1) {
+		if (jsonEscapedBytes(text) <= TEXT_BUDGET_BYTES || size <= MIN_PAGE_BYTES) {
 			// A forward page owns the orphaned bytes it skipped; a tail starts after them.
 			return { text, start: windowStart + (fromEnd ? whole.skip : 0), end: windowStart + whole.skip + whole.length };
 		}
-		size = Math.max(1, Math.floor(size / 2));
+		size = Math.max(MIN_PAGE_BYTES, Math.floor(size / 2));
 	}
 }
 
 export function readLogPage(logPath: string, options: { offset: number; bytes: number; tail: boolean }): LogPage {
 	const totalBytes = statSync(logPath).size;
-	const budget = Math.max(1, Math.min(options.bytes, LOG_READ_BYTES));
+	const budget = Math.max(MIN_PAGE_BYTES, Math.min(options.bytes, LOG_READ_BYTES));
 	if (options.tail) {
 		const length = Math.min(budget, totalBytes);
 		if (length === 0) return { text: "", offset: totalBytes, nextOffset: totalBytes, eof: true, totalBytes };
