@@ -307,6 +307,7 @@ let body = "";
 process.stdin.on("data", (chunk) => (body += chunk));
 process.stdin.on("end", () => {
 	const request = JSON.parse(body);
+	if (!request.cookies) return process.stdout.write(JSON.stringify({ cookies: null }));
 	const stat = fs.statSync(request.cookies);
 	fs.writeFileSync(${JSON.stringify(join(dir, "seen.json"))}, JSON.stringify({ path: request.cookies, mode: (stat.mode & 0o777).toString(8), text: fs.readFileSync(request.cookies, "utf8") }));
 	if (${hang}) setInterval(() => {}, 1000);
@@ -338,6 +339,7 @@ test("the helper gets a private copy of the cookies, removed when it ends, also 
 		await assert.rejects(call);
 		assert.equal(existsSync(dirname(seen().path)), false, "a killed helper leaves no copy");
 		assert.equal(readFileSync(jar, "utf8"), "# Netscape HTTP Cookie File\n", "the user's file is never written");
+		assert.deepEqual(await runHelper(tools(false), "compose", { cookies: jar }, { timeoutMs: 10_000, cwd: dir }), { cookies: null }, "a local command gets no copy");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

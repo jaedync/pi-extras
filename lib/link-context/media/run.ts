@@ -7,6 +7,7 @@ import { killGroup, track } from "./children.ts";
 import { nodePath, toolEnv, type Toolchain } from "./provision.ts";
 
 const MAX_STDOUT = 64 * 1024 * 1024;
+const NETWORK_COMMANDS = new Set(["info", "captions", "download"]);
 
 interface CookieCopy { readonly path: string; readonly remove: () => void }
 
@@ -30,7 +31,8 @@ function copyCookies(source: string): CookieCopy {
 }
 
 export async function runHelper<T>(toolchain: Toolchain, command: string, request: Record<string, unknown>, options: { signal?: AbortSignal; timeoutMs: number; cwd: string }): Promise<T> {
-	const cookies = typeof request.cookies === "string" ? copyCookies(request.cookies) : undefined;
+	// Only the commands that reach the link's hosts use cookies; the others never get a copy.
+	const cookies = typeof request.cookies === "string" && NETWORK_COMMANDS.has(command) ? copyCookies(request.cookies) : undefined;
 	const body = JSON.stringify({ node: toolchain.node, serverHome: toolchain.serverHome, ...request, cookies: cookies?.path });
 	return spawnHelper<T>(toolchain, command, body, options).finally(() => cookies?.remove());
 }
