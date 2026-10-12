@@ -435,8 +435,8 @@ state, session path, run count, `cwd` and checkout path. A lease stops two Pi pr
 the same children, and a lease held under another hostname is never taken
 over. A `/reload` keeps children running: the new copy of the extension takes
 them over in the same process and keeps the lease. When it can't, it
-interrupts them, and by default only that interruption resumes children on
-its own, at most once each; a restart or crash only notifies. Orphans, grandchildren,
+interrupts them. By default, only such an interruption resumes children on its
+own, at most one time for each child. A restart or crash only notifies. Orphans, grandchildren,
 children whose workspace moved and children whose model is no longer allowed
 never resume on their own. A resumed child is told to check files first,
 because an interrupted tool may have changed them. Orphan sessions restore
@@ -445,7 +445,9 @@ Restoring only reads transcripts and never rewrites them. The run log,
 `PI_CODING_AGENT_DIR/subagents/runs.jsonl`, keeps the first 200 characters of
 each task, the model, timings, tool-call counts, usage, the session path and
 any error. `PI_CODING_AGENT_DIR/subagents/reload.log` gets one line, with no
-task text, when a `/reload` did not take the children over in time. Delete
+task text, when a `/reload` could not keep the children or did not take them
+over in time. The index also keeps mail to main that a `/reload` could not
+hand over, until the next session start posts it. Delete
 these files whenever you like. Nothing is sent anywhere except the child's own
 model requests.
 

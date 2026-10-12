@@ -1407,13 +1407,18 @@ all mail is in main's transcript, a team from the new code takes over from
 extension gets to children at the latest after `/reload`. A new context file
 or skill gets to children at the latest after `/reload` too.
 
-Some reloads must interrupt children: a new version of pi-extras that can't
-take over from the old one, a takeover that fails, and a reload that does not
-finish in 30 seconds. Then Subagents interrupts the children and records them
-in `index.json`. The next session start resumes them, as `resumePolicy`
-allows. Mail to main that waited during the reload stays in `index.json`, and
-the next session start sends it one time. A reload that does not finish writes
-a line to `~/.pi/agent/subagents/reload.log`.
+Some reloads must interrupt children:
+
+- a new version of pi-extras that can't take over from the old one
+- a takeover that fails, or a reload that can't keep the children
+- a reload that does not finish in 30 seconds
+
+Then Subagents interrupts the children and records them in `index.json`. The
+next session start resumes them, as `resumePolicy` allows. Mail to main that
+waited during the reload stays in `index.json`, and the next session start
+sends it one time. A reload that does not finish, or that can't keep the
+children, writes a line to `~/.pi/agent/subagents/reload.log`. For the other
+cases, Pi shows a notice.
 
 **Restoration.** Children survive `/reload`, restarts and crashes. An
 `index.json` beside their sessions keeps each child's name, settings, state and

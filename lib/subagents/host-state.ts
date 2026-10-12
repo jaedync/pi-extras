@@ -137,98 +137,139 @@ function recordSignals(inputs: HostInputs, team: Team, index: ChildIndex, logFil
 
 /** Opens a session's subagents from its index, as a session start does; throws when the index can't be read. */
 export function openHost(inputs: HostInputs): HostState {
-	const { agentDir, sessionId, owner, config } = inputs;
-	const binding = new PortBinding(inputs.ports);
-	const ports = binding.ports;
-	const notify = (message: string) => ports.notify(message, "warning");
-	const logFile = runLogPath(agentDir);
-	const sessionDir = join(agentDir, "sessions", "subagents", sessionId);
-	const index = new ChildIndex(sessionDir, sessionId, inputs.cwd);
-	const releaseLease = inputs.lease ?? acquireParent(sessionDir);
-	const place: Place = { index, cwd: inputs.cwd, moved: () => index.cwd !== inputs.cwd };
-	// The team is made below; the mail only asks it once reports arrive.
-	let team!: Team;
-	const mail = new MainMail({
+	return new Host(inputs);
+}
+
+/** Main's mail; it asks the team about groups only once reports arrive, so the team may be made after it. */
+function mailFor(config: SubagentsConfig, ports: HostPorts, team: () => Team): MainMail {
+	return new MainMail({
 		batchMs: config.batchMs,
 		groupWaitMs: config.groupWaitMs,
-		groupBusy: (group, except) => team.list().some((r) => r.group === group && r.name !== except && LIVE_STATES.has(r.state)),
+		groupBusy: (group, except) => team().list().some((r) => r.group === group && r.name !== except && LIVE_STATES.has(r.state)),
 		port: { send: (message, options) => ports.send(message, options) },
 		route: () => ports.route(),
 		onChange: () => ports.mailChanged(),
 	});
-	team = teamFor(inputs, ports, () => mail, place, sessionDir);
-	let previousShutdown: string | undefined;
-	let previousOwner: string | undefined;
-	try {
-		restoreRoster(inputs, ports, team, index, sessionDir);
-		previousShutdown = index.shutdown;
-		previousOwner = index.shutdownOwner;
-	} catch (error) {
-		mail.dispose();
-		if (!inputs.lease) releaseLease();
-		throw new Error(`Could not restore ${index.file}: ${(error as Error).message}. The index has been left unchanged.`);
+}
+
+class Host implements HostState {
+	readonly version = HOST_VERSION;
+	readonly generation: number;
+	readonly team: Team;
+	readonly mail: MainMail;
+	readonly activity: HostActivity;
+	readonly ports: HostPorts;
+	private readonly inputs: HostInputs;
+	private readonly binding: PortBinding;
+	private readonly index: ChildIndex;
+	private readonly place: Place;
+	private readonly releaseLease: () => void;
+	/** How the session's last shutdown left the index, read before this host saves it. */
+	private readonly previous: { readonly shutdown: string | undefined; readonly owner: string | undefined };
+	private readonly unsubscribe: () => void;
+	private readonly removeSignals: () => void;
+	private signalReason: string | undefined;
+	private closed = false;
+	private leaseHandedOver = false;
+
+	constructor(inputs: HostInputs) {
+		const { agentDir, sessionId } = inputs;
+		this.inputs = inputs;
+		this.generation = inputs.generation;
+		this.binding = new PortBinding(inputs.ports);
+		this.ports = this.binding.ports;
+		const sessionDir = join(agentDir, "sessions", "subagents", sessionId);
+		const index = new ChildIndex(sessionDir, sessionId, inputs.cwd);
+		this.index = index;
+		this.releaseLease = inputs.lease ?? acquireParent(sessionDir);
+		this.place = { index, cwd: inputs.cwd, moved: () => index.cwd !== inputs.cwd };
+		this.mail = mailFor(inputs.config, this.ports, () => this.team);
+		this.team = teamFor(inputs, this.ports, () => this.mail, this.place, sessionDir);
+		this.previous = this.load(sessionDir);
+		const logFile = runLogPath(agentDir);
+		this.unsubscribe = recordChanges(inputs, this.ports, this.team, index, logFile);
+		this.removeSignals = recordSignals(inputs, this.team, index, logFile, (message) => this.notify(message), (signal) => { this.signalReason = signal; });
+		this.activity = inputs.activity ?? new ToolActivity();
 	}
-	try {
-		appendInterruptedRuns(logFile, team.list(), sessionId, Date.now());
-		if (team.list().length > 0) index.save(team.list());
-	} catch (error) { notify(`subagents: could not record restored children: ${(error as Error).message}`); }
-	const unsubscribe = recordChanges(inputs, ports, team, index, logFile);
-	let signalReason: string | undefined;
-	const removeSignals = recordSignals(inputs, team, index, logFile, notify, (signal) => { signalReason = signal; });
-	const activity = inputs.activity ?? new ToolActivity();
-	let closed = false;
-	let leaseHandedOver = false;
-	return {
-		version: HOST_VERSION,
-		generation: inputs.generation,
-		team, mail, activity, ports,
-		rebind(next) {
-			if (closed || signalReason) throw new Error("This session's subagents are closed.");
-			binding.bind(next);
-			mail.retry();
-			next.teamChanged();
-			next.mailChanged();
-		},
-		park: () => binding.park(),
-		quiet: () => !closed && !signalReason && team.quiet() && mail.idle(),
-		handOver() {
-			index.save(team.list());
-			return releaseLease;
-		},
-		async retire() {
-			closed = true;
-			leaseHandedOver = true;
-			removeSignals();
-			unsubscribe();
-			binding.close();
-			mail.dispose();
-			// Quiet, so closing interrupts no one: it only lets the idle sessions go.
-			await team.close("reload", owner);
-		},
-		async restore(reason) {
-			postKeptMail(index, team, mail, notify);
-			await restoreInterrupted({ team, index, config, owner, ports, place, previousShutdown, previousOwner }, reason);
-		},
-		async close(reason = "quit") {
-			if (closed) return;
-			closed = true;
-			removeSignals();
-			const live = binding.close();
-			index.keepMail(handOverMail(mail.drain(), live));
-			// The team marks its live children interrupted at once, and the run log records them as it does.
-			const closing = team.close(signalReason ? "signal" : reason === "reload" ? "reload" : "quit", owner);
-			unsubscribe();
-			// Saved before anything is awaited, so an exit during the close still finds its children interrupted and its mail kept.
-			let unsaved: string | undefined;
-			try { index.save(team.list(), signalReason ?? reason, owner); }
-			catch (error) { unsaved = `subagents: could not save ${index.file}: ${(error as Error).message}`; }
-			try { await closing; }
-			finally { if (!leaseHandedOver) releaseLease(); }
-			// A parked host has no one to tell; whoever closed it says it (host.ts logs it, a session start shows it).
-			if (unsaved && live) live.notify(unsaved, "warning");
-			else if (unsaved) throw new Error(unsaved);
-		},
-	};
+
+	rebind(next: HostPorts): void {
+		if (this.closed || this.signalReason) throw new Error("This session's subagents are closed.");
+		this.binding.bind(next);
+		this.mail.retry();
+		next.teamChanged();
+		next.mailChanged();
+	}
+
+	park(): void {
+		this.binding.park();
+	}
+
+	quiet(): boolean {
+		return !this.closed && !this.signalReason && this.team.quiet() && this.mail.idle();
+	}
+
+	handOver(): () => void {
+		this.index.save(this.team.list());
+		return this.releaseLease;
+	}
+
+	async retire(): Promise<void> {
+		this.closed = true;
+		this.leaseHandedOver = true;
+		this.removeSignals();
+		this.unsubscribe();
+		this.binding.close();
+		this.mail.dispose();
+		// Quiet, so closing interrupts no one: it only lets the idle sessions go.
+		await this.team.close("reload", this.inputs.owner);
+	}
+
+	async restore(reason: string): Promise<void> {
+		const { team, index, place, ports, inputs: { config, owner } } = this;
+		postKeptMail(index, team, this.mail, (message) => this.notify(message));
+		await restoreInterrupted({ team, index, config, owner, ports, place, previousShutdown: this.previous.shutdown, previousOwner: this.previous.owner }, reason);
+	}
+
+	async close(reason = "quit"): Promise<void> {
+		if (this.closed) return;
+		this.closed = true;
+		this.removeSignals();
+		const live = this.binding.close();
+		this.index.keepMail(handOverMail(this.mail.drain(), live));
+		// The team marks its live children interrupted at once, and the run log records them as it does.
+		const closing = this.team.close(this.signalReason ? "signal" : reason === "reload" ? "reload" : "quit", this.inputs.owner);
+		this.unsubscribe();
+		// Saved before anything is awaited, so an exit during the close still finds its children interrupted and its mail kept.
+		let unsaved: string | undefined;
+		try { this.index.save(this.team.list(), this.signalReason ?? reason, this.inputs.owner); }
+		catch (error) { unsaved = `subagents: could not save ${this.index.file}: ${(error as Error).message}`; }
+		try { await closing; }
+		finally { if (!this.leaseHandedOver) this.releaseLease(); }
+		// A parked host has no one to tell; whoever closed it says it (host.ts logs it, a session start shows it).
+		if (unsaved && live) live.notify(unsaved, "warning");
+		else if (unsaved) throw new Error(unsaved);
+	}
+
+	/** Puts the saved roster back; when it can't, lets go of what this host took and leaves the index as it was. */
+	private load(sessionDir: string): Host["previous"] {
+		const { inputs, team, index } = this;
+		try { restoreRoster(inputs, this.ports, team, index, sessionDir); }
+		catch (error) {
+			this.mail.dispose();
+			if (!inputs.lease) this.releaseLease();
+			throw new Error(`Could not restore ${index.file}: ${(error as Error).message}. The index has been left unchanged.`);
+		}
+		const previous = { shutdown: index.shutdown, owner: index.shutdownOwner };
+		try {
+			appendInterruptedRuns(runLogPath(inputs.agentDir), team.list(), inputs.sessionId, Date.now());
+			if (team.list().length > 0) index.save(team.list());
+		} catch (error) { this.notify(`subagents: could not record restored children: ${(error as Error).message}`); }
+		return previous;
+	}
+
+	private notify(message: string): void {
+		this.ports.notify(message, "warning");
+	}
 }
 
 /**

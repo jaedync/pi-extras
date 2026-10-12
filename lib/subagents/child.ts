@@ -224,36 +224,13 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			// Taken before anything is read, so a file that changes during the launch makes this session stale, never current.
 			const begun = Date.now();
 			const settled = stampOf(generation, launchFiles(agentDir, cwd, sdk.CONFIG_DIR_NAME ?? ".pi"));
-			const modelRuntime = await deps.modelRuntime();
-			await freshModels(modelRuntime, join(agentDir, "models.json"), piModelsCheck(sdk, modelRuntime), (message) => deps.warn?.(message));
-			const resolved = sdk.resolveCliModel({ cliModel: record.model, modelRuntime });
-			if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Unknown model ${record.model}.`);
+			const { modelRuntime, model } = await childModel(deps, record);
 			const wanted = new Set(tools);
 			const guard = createChildRateLimitGuard({ configFile: join(agentDir, "pi-extras.json"), onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
-			// A directory a spawn named is used as Pi would use it with no one to ask; main's own keeps today's settings.
-			const settingsManager = record.cwd ? sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: false }) : sdk.SettingsManager.create(cwd, agentDir);
-			if (record.cwd) {
-				const place = record.worktree ? sourcePlace(record.worktree, record.cwd) : record.cwd;
-				settingsManager.setProjectTrusted(projectTrusted(sdk, agentDir, place, settingsManager.getDefaultProjectTrust()));
-			}
+			const settingsManager = childSettings(sdk, agentDir, cwd, record);
 			// An SDK tool wins over a built-in or extension tool of the same name.
 			const customTools = wanted.has("bash") ? [...listed, childBash(sdk, cwd, settingsManager, record, deps)] : listed;
-			const loader = new sdk.DefaultResourceLoader({
-				cwd, agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
-				// Besides Cache Compaction, load only files that own the child's tools. Every factory is handed the
-				// child's API, and one that keeps it in module state (remote-pi does) then delivers the
-				// parent's messages to the child, even if the extension is filtered out afterwards.
-				noExtensions: true, additionalExtensionPaths: loaded,
-				appendSystemPrompt: [deps.instructions(record)],
-				// Outside its worktree is refused before the lock is taken, so a refused edit holds nothing.
-				extensionFactories: [guard.extension, editGuard((path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name, editTarget(cwd, path)),
-					editTracker(deps.activity, record.name, cwd))],
-				extensionsOverride: (base) => ({
-					...base,
-					extensions: base.extensions.filter((extension) => [CHILD_GUARD_PATH, EDIT_GUARD_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
-						|| [...extension.tools.keys()].some((name) => wanted.has(name))),
-				}),
-			});
+			const loader = childLoader(deps, record, { cwd, settingsManager, guard, wanted, loaded });
 			await loader.reload();
 			const stamp = withFiles(settled, resourceFiles(loader), begun);
 			// A path fixed at spawn opens as a new session written there.
@@ -261,16 +238,64 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				: deps.sessionDir ? sdk.SessionManager.create(cwd, deps.sessionDir) : sdk.SessionManager.inMemory(cwd);
 			const { session } = await sdk.createAgentSession({
 				cwd, agentDir, modelRuntime, settingsManager, resourceLoader: loader, sessionManager,
-				model: resolved.model,
+				model,
 				...(record.thinking ? { thinkingLevel: record.thinking } : {}),
 				tools: [...wanted, ...customTools.map((tool) => tool.name)],
 				customTools,
 			}).catch((error) => { guard.dispose(); throw error; });
 			await bindChild(session, guard, deps.onExtensionError);
-			return { ...handleFor(session, hooks, resolved.model.contextWindow, guard, record), stamp };
+			return { ...handleFor(session, hooks, model.contextWindow, guard, record), stamp };
 		},
 		current: (handle) => !handle.stamp || stampCurrent(handle.stamp, generation),
 	};
+}
+
+/** The child's model from main's runtime, brought up to models.json first (fresh-models.ts). */
+async function childModel(deps: LauncherDeps, record: AgentRecord) {
+	const modelRuntime = await deps.modelRuntime();
+	await freshModels(modelRuntime, join(deps.agentDir, "models.json"), piModelsCheck(deps.sdk, modelRuntime), (message) => deps.warn?.(message));
+	const resolved = deps.sdk.resolveCliModel({ cliModel: record.model, modelRuntime });
+	if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Unknown model ${record.model}.`);
+	return { modelRuntime, model: resolved.model };
+}
+
+/** A directory a spawn named is used as Pi would use it with no one to ask; main's own keeps today's settings. */
+function childSettings(sdk: Sdk, agentDir: string, cwd: string, record: AgentRecord): SettingsManager {
+	const settingsManager = record.cwd ? sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: false }) : sdk.SettingsManager.create(cwd, agentDir);
+	if (record.cwd) {
+		const place = record.worktree ? sourcePlace(record.worktree, record.cwd) : record.cwd;
+		settingsManager.setProjectTrusted(projectTrusted(sdk, agentDir, place, settingsManager.getDefaultProjectTrust()));
+	}
+	return settingsManager;
+}
+
+interface LoaderInputs {
+	readonly cwd: string;
+	readonly settingsManager: SettingsManager;
+	readonly guard: ReturnType<typeof createChildRateLimitGuard>;
+	/** The child's tools, and the extension files that own them. */
+	readonly wanted: ReadonlySet<string>;
+	readonly loaded: readonly string[];
+}
+
+function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInputs) {
+	const { cwd, settingsManager, guard, wanted, loaded } = inputs;
+	return new deps.sdk.DefaultResourceLoader({
+		cwd, agentDir: deps.agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
+		// Besides Cache Compaction, load only files that own the child's tools. Every factory is handed the
+		// child's API, and one that keeps it in module state (remote-pi does) then delivers the
+		// parent's messages to the child, even if the extension is filtered out afterwards.
+		noExtensions: true, additionalExtensionPaths: [...loaded],
+		appendSystemPrompt: [deps.instructions(record)],
+		// Outside its worktree is refused before the lock is taken, so a refused edit holds nothing.
+		extensionFactories: [guard.extension, editGuard((path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name, editTarget(cwd, path)),
+			editTracker(deps.activity, record.name, cwd))],
+		extensionsOverride: (base) => ({
+			...base,
+			extensions: base.extensions.filter((extension) => [CHILD_GUARD_PATH, EDIT_GUARD_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
+				|| [...extension.tools.keys()].some((name) => wanted.has(name))),
+		}),
+	});
 }
 
 async function bindChild(session: AgentSession, guard: ReturnType<typeof createChildRateLimitGuard>, onError: LauncherDeps["onExtensionError"]): Promise<void> {

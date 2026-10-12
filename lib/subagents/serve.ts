@@ -216,107 +216,137 @@ export async function serveSession(options: ServeOptions): Promise<Served> {
 }
 
 async function serve(options: ServeOptions): Promise<Served> {
-	const { sdk, pi, ctx, generation, parked } = options;
-	const agentDir = sdk.getAgentDir();
+	const { sdk, pi, ctx, parked } = options;
 	const scope = sessionScope(sdk, ctx);
 	const live = livePi(pi, ctx);
-	const notify = (message: string) => ctx.ui.notify(message, "warning");
 	let adoptable: HostState | undefined;
 	if (parked?.version === HOST_VERSION) adoptable = parked.claim() as HostState;
 	else if (parked) {
-		notify("subagents: this version can't take over the children the /reload left running. They are interrupted and resume as after an earlier reload.");
+		ctx.ui.notify("subagents: this version can't take over the children the /reload left running. They are interrupted and resume as after an earlier reload.", "warning");
 		await parked.close("reload");
 	}
-	const activity: HostActivity = adoptable?.activity ?? new ToolActivity();
-	let host!: HostState;
-	let looking: ReturnType<typeof setImmediate> | undefined;
-	let serving = true;
-	let renewFailed = false;
-	const team = (): HostTeam => host.team;
-	const tools = mainToolContext(scope, live, team, options.currentGroup);
-	// Through the host, so a warning from a launch still under way when Pi reloads waits for the next module.
-	const launcher = childLauncher({ sdk, ctx, generation, scope, live, team, tools, activity, warn: (message) => host.ports.notify(message, "warning") });
-	const lookForQuiet = () => {
-		if (looking || !serving || renewFailed || host.generation === generation) return;
+	const service = new Service(options, scope, live, adoptable?.activity ?? new ToolActivity());
+	await service.start(adoptable);
+	return service;
+}
+
+interface HandedOver {
+	readonly lease: () => void;
+	readonly activity: HostActivity;
+}
+
+/** One module's service of a session: the host it serves now, its ports and launcher, and how it hands the host on. */
+class Service implements Served {
+	readonly tools: ToolContext;
+	private current!: HostState;
+	private took = false;
+	private looking: ReturnType<typeof setImmediate> | undefined;
+	private serving = true;
+	private renewFailed = false;
+	private readonly options: ServeOptions;
+	private readonly live: LivePi;
+	private readonly ports: HostPorts;
+	private readonly open: (handedOver?: HandedOver) => HostState;
+
+	constructor(options: ServeOptions, scope: Scope, live: LivePi, activity: HostActivity) {
+		const { sdk, pi, ctx, generation } = options;
+		this.options = options;
+		this.live = live;
+		const team = (): HostTeam => this.current.team;
+		this.tools = mainToolContext(scope, live, team, options.currentGroup);
+		this.ports = {
+			send: (message, sendOptions) => pi.sendMessage(message as Parameters<ExtensionAPI["sendMessage"]>[0], sendOptions),
+			route: options.route,
+			notify: (message, level) => ctx.ui.notify(message, level),
+			teamChanged: () => { options.teamChanged(); this.lookForQuiet(); },
+			mailChanged: () => { options.mailChanged(); this.lookForQuiet(); },
+			// Warnings go through the host, so one from a launch still under way when Pi reloads waits for the next module.
+			launcher: childLauncher({ sdk, ctx, generation, scope, live, team, tools: this.tools, activity, warn: (message) => this.current.ports.notify(message, "warning") }),
+			models: () => scope,
+		};
+		const scanner = createSessionScanner(sdk.parseSessionEntries, sdk.migrateSessionEntries);
+		this.open = (handedOver) => openHost({
+			generation, agentDir: sdk.getAgentDir(), cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), owner: recoveryOwner(ctx.sessionManager),
+			config: scope.config, branch: () => live.branch(), scanner, ports: this.ports, activity: handedOver?.activity ?? activity,
+			...(handedOver ? { lease: handedOver.lease } : {}),
+		});
+	}
+
+	get adopted(): boolean {
+		return this.took;
+	}
+
+	host(): HostState {
+		return this.current;
+	}
+
+	/** Takes over the host a reload left, else opens the index as a start does. */
+	async start(adoptable: HostState | undefined): Promise<void> {
+		if (adoptable) {
+			// Set first: binding the ports reports a change, and that looks at the host.
+			this.current = adoptable;
+			try {
+				adoptable.rebind(this.ports);
+				this.took = true;
+				return;
+			} catch (error) {
+				this.options.ctx.ui.notify(`subagents: could not take over the children the /reload left running (${(error as Error).message}). They are interrupted and resume as after an earlier reload.`, "warning");
+				await this.options.parked!.close("reload");
+			}
+		}
+		// A host an earlier reload left that timed out may still be letting its children go, and holds the lease until then.
+		await closingHost(this.options.ctx.sessionManager);
+		this.current = this.open();
+	}
+
+	lookForQuiet(): void {
+		if (this.looking || !this.serving || this.renewFailed || this.current.generation === this.options.generation) return;
 		// After the change that called this has finished: a report is handed to the mail after its record changes.
-		looking = setImmediate(() => { looking = undefined; renew(); });
-	};
-	const ports: HostPorts = {
-		send: (message, sendOptions) => pi.sendMessage(message as Parameters<ExtensionAPI["sendMessage"]>[0], sendOptions),
-		route: options.route,
-		notify: (message, level) => ctx.ui.notify(message, level),
-		teamChanged: () => { options.teamChanged(); lookForQuiet(); },
-		mailChanged: () => { options.mailChanged(); lookForQuiet(); },
-		launcher,
-		models: () => scope,
-	};
-	const scanner = createSessionScanner(sdk.parseSessionEntries, sdk.migrateSessionEntries);
-	const open = (handedOver?: { lease: () => void; activity: HostActivity }) => openHost({
-		generation, agentDir, cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), owner: recoveryOwner(ctx.sessionManager),
-		config: scope.config, branch: () => live.branch(), scanner, ports, activity: handedOver?.activity ?? activity,
-		...(handedOver ? { lease: handedOver.lease } : {}),
-	});
+		this.looking = setImmediate(() => { this.looking = undefined; this.renew(); });
+	}
+
+	async park(session: object): Promise<void> {
+		this.stop();
+		const log = reloadLog(this.options.sdk.getAgentDir());
+		try {
+			this.current.park();
+			this.live.freeze();
+			parkHost(session, this.current, { log });
+		} catch (error) {
+			// Not on the shelf, so no module takes it over and no timeout closes it: close it now, which lets the lease
+			// go. The next start announces and resumes the interrupted children.
+			log(`could not keep the subagents through a /reload (${(error as Error).message}), so they were interrupted`);
+			await this.current.close("reload");
+		}
+	}
+
+	async close(reason?: string): Promise<void> {
+		this.stop();
+		await this.current.close(reason);
+	}
+
 	/** Replaces an adopted host that is quiet with one from this module's code, which reads the index it saved. */
-	const renew = () => {
-		const old = host;
-		if (!serving || renewFailed || old.generation === generation || !old.quiet()) return;
+	private renew(): void {
+		const old = this.current;
+		if (!this.serving || this.renewFailed || old.generation === this.options.generation || !old.quiet()) return;
 		let next: HostState;
-		try { next = open({ lease: old.handOver(), activity: old.activity }); }
+		try { next = this.open({ lease: old.handOver(), activity: old.activity }); }
 		catch (error) {
 			// The old host still works and still holds the lease; it serves the rest of the session.
-			renewFailed = true;
-			notify(`subagents: kept the team from before the /reload: ${(error as Error).message}`);
+			this.renewFailed = true;
+			this.options.ctx.ui.notify(`subagents: kept the team from before the /reload: ${(error as Error).message}`, "warning");
 			return;
 		}
-		host = next;
+		this.current = next;
 		// Through the host, whose ports follow the module that serves it: this `ctx` may be gone by the time it fails.
 		old.retire().catch((error: unknown) => next.ports.notify(`subagents: letting the team from before the /reload go failed: ${(error as Error).message}`, "warning"));
-		options.teamChanged();
-		options.mailChanged();
-	};
-	let adopted = false;
-	if (adoptable) {
-		// Set first: binding the ports reports a change, and that looks at the host.
-		host = adoptable;
-		try {
-			adoptable.rebind(ports);
-			adopted = true;
-		} catch (error) {
-			notify(`subagents: could not take over the children the /reload left running (${(error as Error).message}). They are interrupted and resume as after an earlier reload.`);
-			await parked!.close("reload");
-		}
+		this.options.teamChanged();
+		this.options.mailChanged();
 	}
-	if (!adopted) {
-		// A host an earlier reload left that timed out may still be letting its children go, and holds the lease until then.
-		await closingHost(ctx.sessionManager);
-		host = open();
+
+	private stop(): void {
+		this.serving = false;
+		if (this.looking) clearImmediate(this.looking);
+		this.looking = undefined;
 	}
-	return {
-		host: () => host,
-		adopted,
-		tools,
-		lookForQuiet,
-		async park(session) {
-			serving = false;
-			if (looking) clearImmediate(looking);
-			looking = undefined;
-			const log = reloadLog(agentDir);
-			try {
-				host.park();
-				live.freeze();
-				parkHost(session, host, { log });
-			} catch (error) {
-				// Not on the shelf, so no module takes it over and no timeout closes it: close it now, which lets the lease
-				// go. The next start announces and resumes the interrupted children.
-				log(`could not keep the subagents through a /reload (${(error as Error).message}), so they were interrupted`);
-				await host.close("reload");
-			}
-		},
-		async close(reason) {
-			serving = false;
-			if (looking) clearImmediate(looking);
-			looking = undefined;
-			await host.close(reason);
-		},
-	};
 }
