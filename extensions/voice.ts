@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
-import { startCapture, hasAudioInput, type Capture, type CaptureCallbacks } from "../lib/voice/capture.ts";
+import { startCapture, hasAudioInput, probeAudioInput, type Capture, type CaptureCallbacks } from "../lib/voice/capture.ts";
 import { captureRoute, startMacDesktopCapture } from "../lib/voice/desktop-capture.ts";
 import { listMics, micChoices, micSummary, readMicSetting, resolveMic, writeMicSetting } from "../lib/voice/mics.ts";
 import { alignRows, menuItems, modelChoices, modelSummary, SUBCOMMANDS, tierName, type MenuAction } from "../lib/voice/menu.ts";
@@ -231,6 +231,37 @@ export class Setup {
 	}
 }
 
+export interface AutoSetupDeps {
+	readonly offline: () => boolean;
+	readonly provisioned: () => boolean;
+	/** Cheap and synchronous: true only when the host is known to have a microphone. */
+	readonly hasInput: () => boolean;
+	/** Looks for a microphone in the background and calls back when it finds one; returns a stop. */
+	readonly probe: (onFound: () => void) => () => void;
+	readonly start: () => void;
+}
+
+/**
+ * Starts setup without being asked only on a host with a microphone, so a
+ * headless host downloads nothing; offline sessions use what is installed.
+ * Returns a stop that ends the background probe with the session.
+ */
+export function startAutoSetup(deps: AutoSetupDeps): () => void {
+	if (deps.offline() || deps.provisioned()) return () => {};
+	if (deps.hasInput()) {
+		deps.start();
+		return () => {};
+	}
+	let live = true;
+	const stop = deps.probe(() => {
+		if (live && !deps.offline() && !deps.provisioned()) deps.start();
+	});
+	return () => {
+		live = false;
+		stop();
+	};
+}
+
 /**
  * Starts the shared daemon, detached. A python that exists but cannot run (no
  * exec bit, a noexec mount) fails after spawn returns, as an 'error' event that
@@ -285,6 +316,7 @@ class VoiceRuntime {
 	private timer?: ReturnType<typeof setInterval>;
 	/** Set by dispose: the session's ctx may be stale from then on. */
 	private disposed = false;
+	private stopAudioProbe: () => void = () => {};
 
 	constructor(ctx: ExtensionContext, useBorder: boolean, requestRender: () => void, onShown: (shown: boolean) => void = () => {}) {
 		this.ctx = ctx;
@@ -299,10 +331,13 @@ class VoiceRuntime {
 		this.client = new DaemonClient({ socketPath: join(this.home, "daemon.sock"), spawnDaemon: (failed) => this.spawnDaemon(failed) });
 		this.controller = this.createController(this.createLink());
 		this.unsubscribe = ctx.ui.onTerminalInput((data) => this.controller.handleInput(data));
-		// Headless hosts never download models; offline sessions use whatever is already installed.
-		if (!isOffline() && hasAudioInput(process.platform, process.env) && !provisioningComplete(readTiers(this.home), hardwareFacts())) {
-			this.setup.start();
-		}
+		this.stopAudioProbe = startAutoSetup({
+			offline: isOffline,
+			provisioned: () => provisioningComplete(readTiers(this.home), hardwareFacts()),
+			hasInput: () => hasAudioInput(process.platform, process.env),
+			probe: (onFound) => probeAudioInput(process.platform, process.env, onFound),
+			start: () => this.setup.start(),
+		});
 	}
 
 	private createSetup(): Setup {
@@ -574,6 +609,7 @@ class VoiceRuntime {
 	}
 
 	dispose(): void {
+		this.stopAudioProbe();
 		this.setup.dispose();
 		this.controller.dispose();
 		this.unsubscribe();
