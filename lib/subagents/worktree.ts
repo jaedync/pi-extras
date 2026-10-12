@@ -113,13 +113,27 @@ export function workspaceError(path: string): string | undefined {
 /** The spaces Pi's `resolveToCwd` turns into plain ones before it resolves a tool's path (Pi's utils/paths.ts). */
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
-/** A tool's path as Pi's edit and write tools read it: Unicode spaces made plain, an `@` prefix dropped, `~` and file URLs expanded. */
+/** Git Bash, MSYS, Cygwin and WSL drive paths as Windows reads them (Pi's `normalizeWindowsShellPath`). */
+function windowsShellPath(path: string): string {
+	if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) return path;
+	const match = /^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i.exec(path);
+	if (!match) return path;
+	return `${match[1]!.toUpperCase()}:\\${match[2]?.replaceAll("/", "\\") ?? ""}`;
+}
+
+/**
+ * A tool's path as Pi's edit and write tools read it (Pi's `normalizePath`):
+ * Unicode spaces made plain, an `@` prefix dropped, Windows shell paths
+ * converted on Windows, `~` and file URLs expanded.
+ */
 function toolPath(path: string): string {
 	const spaced = path.replace(UNICODE_SPACES, " ");
 	const bare = spaced.startsWith("@") ? spaced.slice(1) : spaced;
-	if (bare === "~") return homedir();
-	if (bare.startsWith("~/")) return join(homedir(), bare.slice(2));
-	return bare.startsWith("file://") ? fileURLToPath(bare) : bare;
+	const windows = process.platform === "win32";
+	const native = windows ? windowsShellPath(bare) : bare;
+	if (native === "~") return homedir();
+	if (native.startsWith("~/") || (windows && native.startsWith("~\\"))) return join(homedir(), native.slice(2));
+	return native.startsWith("file://") ? fileURLToPath(native) : native;
 }
 
 const ADVICE = "Edit only files inside it; your parent applies your changes to its checkout from your report.";

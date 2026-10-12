@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { editTarget, outsideWorktree } from "../lib/subagents/worktree.ts";
+import { pathToFileURL } from "node:url";
+import { editTarget, outsideWorktree, realTarget } from "../lib/subagents/worktree.ts";
 
 const worktree = { path: "/tmp/repo.worktrees/scout", branch: "subagent/scout", base: "a".repeat(40) };
 const cwd = worktree.path;
@@ -60,4 +61,21 @@ test("a path with Unicode spaces is checked as Pi's edit and write tools resolve
 		assert.match(outsideWorktree(tree, tree.path, path) ?? "", /resolves to .*, outside your worktree/, JSON.stringify(path));
 	}
 	assert.equal(editTarget(tree.path, "x\u00A0y/evil.txt"), join(realpathSync(root), "evil.txt"));
+});
+
+test("a worktree child's edit path resolves as Pi's own edit and write tools resolve it, also with Windows rules", async (t) => {
+	const { agentRoot } = await import("./support/pi-runtime.mjs");
+	const pi = await import(pathToFileURL(join(agentRoot, "dist", "core", "tools", "path-utils.js")).href) as { resolveToCwd(path: string, cwd: string): string };
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "subagent-boundary-")));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const inputs = ["a.txt", "./b/../c.txt", "@a.txt", "@~/x", "~", "~/notes.md", "~\\notes.md", "file:///tmp/x.txt", "x\u00A0y/z.txt", "\u3000lead.txt",
+		"../out.txt", "/abs/q.txt", "/c/Users/x/a.txt", "/mnt/d/a.txt", "/cygdrive/e/a", "/z", "//server/share", "C:\\x\\y.txt"];
+	const compare = () => {
+		for (const input of inputs) assert.equal(editTarget(dir, input), realTarget(pi.resolveToCwd(input, dir)), `${process.platform}: ${JSON.stringify(input)}`);
+	};
+	compare();
+	const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+	Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+	try { compare(); }
+	finally { Object.defineProperty(process, "platform", platform); }
 });
