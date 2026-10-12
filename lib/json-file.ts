@@ -48,20 +48,48 @@ export function readJsonObject(file: string): Json {
 	return parsed;
 }
 
-/** The real file behind `file`, so a write through a symlink replaces the target and keeps the link. */
-export function resolveTarget(file: string): string {
+/** Like the system's own limit; a longer chain is almost certainly a mistake. */
+const MAX_LINKS = 40;
+
+/** `path` with its folder resolved, so `..` in a link means what the system makes it mean. */
+function inRealFolder(path: string): string {
 	try {
-		return realpathSync(file);
+		return join(realpathSync(dirname(path)), basename(path));
 	} catch (error) {
-		if (errorCode(error) !== "ENOENT") throw error;
-	}
-	// A dangling link: create the file it points at.
-	try {
-		return lstatSync(file).isSymbolicLink() ? resolve(dirname(file), readlinkSync(file)) : file;
-	} catch (error) {
-		if (errorCode(error) === "ENOENT") return file;
+		if (errorCode(error) === "ENOENT") return path;
 		throw error;
 	}
+}
+
+/** Where the link at `path` points, or undefined when `path` is not a link. */
+function linkTarget(path: string): string | undefined {
+	try {
+		if (!lstatSync(path).isSymbolicLink()) return undefined;
+	} catch (error) {
+		if (errorCode(error) === "ENOENT") return undefined;
+		throw error;
+	}
+	return resolve(dirname(inRealFolder(path)), readlinkSync(path));
+}
+
+/**
+ * The real file behind `file`, so a write through a symlink replaces the
+ * target and keeps every link. A chain of links that ends at a missing file
+ * resolves to that file, which the write then creates.
+ */
+export function resolveTarget(file: string): string {
+	let path = file;
+	for (let depth = 0; depth <= MAX_LINKS; depth++) {
+		try {
+			return realpathSync(path);
+		} catch (error) {
+			if (errorCode(error) !== "ENOENT") throw error;
+		}
+		const next = linkTarget(path);
+		if (next === undefined) return inRealFolder(path);
+		path = next;
+	}
+	throw new Error(`${file} has more than ${MAX_LINKS} symbolic links in a chain.`);
 }
 
 function existingMode(target: string): number | undefined {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { readSection, UnreadableJsonError, updateSection, writeSection } from "../lib/extras-config.ts";
+import { writeJsonAtomic } from "../lib/json-file.ts";
 
 function scratch(t: test.TestContext): string {
 	const dir = mkdtempSync(join(tmpdir(), "extras-config-"));
@@ -70,6 +71,42 @@ test("a save writes through a symlinked pi-extras.json and keeps the file's mode
 	writeSection("toolDisplay", { motion: "full" }, link);
 	assert.ok(lstatSync(link).isSymbolicLink());
 	assert.deepEqual(JSON.parse(readFileSync(real, "utf8")), { toolDisplay: { motion: "full" } });
+});
+
+test("a dangling relative link in a symlinked folder creates the file the system would open", (t) => {
+	const dir = scratch(t);
+	mkdirSync(join(dir, "dotfiles", "agent"), { recursive: true });
+	mkdirSync(join(dir, "dotfiles", "shared"));
+	symlinkSync(join(dir, "dotfiles", "agent"), join(dir, "agent"));
+	const link = join(dir, "agent", "pi-extras.json");
+	// `..` from the real folder is dotfiles/, not the scratch folder.
+	symlinkSync("../shared/pi-extras.json", link);
+	writeSection("toolDisplay", { motion: "reduced" }, link);
+	assert.deepEqual(readSection("toolDisplay", link), { motion: "reduced" });
+	assert.deepEqual(readdirSync(dir).sort(), ["agent", "dotfiles"], "no stray folder beside the link");
+});
+
+test("a chain of links that ends at a missing file keeps every link", (t) => {
+	const dir = scratch(t);
+	symlinkSync("one.json", join(dir, "pi-extras.json"));
+	symlinkSync("two.json", join(dir, "one.json"));
+	symlinkSync("final.json", join(dir, "two.json"));
+	writeSection("toolDisplay", { motion: "reduced" }, join(dir, "pi-extras.json"));
+	for (const name of ["pi-extras.json", "one.json", "two.json"]) assert.ok(lstatSync(join(dir, name)).isSymbolicLink(), `${name} is still a link`);
+	assert.deepEqual(JSON.parse(readFileSync(join(dir, "final.json"), "utf8")), { toolDisplay: { motion: "reduced" } });
+	// The voice mic file is written by writeJsonAtomic alone.
+	symlinkSync("mic-one.json", join(dir, "settings.json"));
+	symlinkSync("mic-final.json", join(dir, "mic-one.json"));
+	writeJsonAtomic(join(dir, "settings.json"), { mic: "USB" });
+	assert.ok(lstatSync(join(dir, "mic-one.json")).isSymbolicLink(), "mic-one.json is still a link");
+	assert.deepEqual(JSON.parse(readFileSync(join(dir, "mic-final.json"), "utf8")), { mic: "USB" });
+});
+
+test("a loop of links is refused, not followed for all time", (t) => {
+	const dir = scratch(t);
+	symlinkSync("b.json", join(dir, "pi-extras.json"));
+	symlinkSync("pi-extras.json", join(dir, "b.json"));
+	assert.throws(() => writeSection("toolDisplay", { motion: "reduced" }, join(dir, "pi-extras.json")), /ELOOP|too many/i);
 });
 
 test("updateSection changes only its own section, from the file as it is now", (t) => {
