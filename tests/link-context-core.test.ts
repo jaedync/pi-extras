@@ -122,3 +122,8 @@ test("bodies over the cap are refused", async () => {
 	const rate = fakeFetch(() => new Response("slow down", { status: 429 }));
 	await assert.rejects(get("https://e.test/", { fetcher: rate.fetcher }), /rate limited/);
 });
+
+test("site-local IPv6, cluster service names and every documentation range are private", () => {
+	for (const host of ["fec0::1", "[fec0::1]", "feff::1", "api.default.svc", "198.51.100.1", "203.0.113.1"]) assert.equal(isPrivateHost(host), true, host);
+	for (const host of ["198.51.101.1", "203.0.114.1", "service.example.com"]) assert.equal(isPrivateHost(host), false, host);
+});

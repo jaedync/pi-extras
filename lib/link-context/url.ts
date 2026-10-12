@@ -53,10 +53,10 @@ export function parseUrl(raw: string): URL {
 	return url;
 }
 
-const LOCAL_SUFFIXES = [".localhost", ".local", ".internal", ".lan", ".home", ".home.arpa", ".localdomain", ".intranet", ".corp"];
+const LOCAL_SUFFIXES = [".localhost", ".local", ".internal", ".lan", ".home", ".home.arpa", ".localdomain", ".intranet", ".corp", ".svc"];
 
 function privateV4(a: number, b: number, c: number): boolean {
-	return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19));
+	return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19));
 }
 
 /**
@@ -71,7 +71,7 @@ export function isPrivateHost(host: string): boolean {
 	const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(name);
 	if (v4) return privateV4(Number(v4[1]), Number(v4[2]), Number(v4[3]));
 	if (!name.includes(":")) return false;
-	if (name === "::1" || name === "::" || /^f[cd]/.test(name) || /^fe[89ab]/.test(name) || /^ff/.test(name)) return true;
+	if (name === "::1" || name === "::" || /^f[cd]/.test(name) || /^fe[89a-f]/.test(name) || /^ff/.test(name)) return true;
 	// IPv4 inside IPv6: mapped (::ffff:), compatible (::a.b.c.d or ::7f00:1), NAT64 (64:ff9b::) and 6to4 (2002:).
 	if (/^::(?:ffff:)?[0-9a-f.:]+$/.test(name) || name.startsWith("64:ff9b:") || name.startsWith("2002:")) return true;
 	// Teredo (2001:0::/32) carries an IPv4 address too.
