@@ -54,12 +54,22 @@ export class McpLink {
 		});
 		// A closed pipe is reported by the exit below; without a listener it would crash Pi.
 		proc.stdin.on("error", () => {});
+		// ClientProcess's minimal interface only names close; a real child also reports a failed start
+		// (ENOEXEC or EACCES for powershell.exe under WSL) as 'error', which would crash Pi unheard.
+		const events = proc as ClientProcess & { once(event: "error", listener: (error: Error) => void): unknown };
+		events.once("error", (error) => this.fail(new Error(`${this.names.process} failed to start: ${error.message}`)));
 		proc.once("close", (code) => {
 			const detail = this.stderrTail.trim();
-			this.exitError = new Error(`${this.names.process} exited (code ${code ?? "unknown"})${detail ? `: ${detail}` : ""}`);
-			for (const waiter of this.pending.values()) waiter.reject(this.exitError);
-			this.pending.clear();
+			this.fail(new Error(`${this.names.process} exited (code ${code ?? "unknown"})${detail ? `: ${detail}` : ""}`));
 		});
+	}
+
+	/** The first failure is the one calls report: a failed start may be followed by a close. */
+	private fail(error: Error): void {
+		if (this.exitError) return;
+		this.exitError = error;
+		for (const waiter of this.pending.values()) waiter.reject(error);
+		this.pending.clear();
 	}
 
 	get closed(): boolean {
