@@ -1,12 +1,16 @@
 /**
  * pi-extras.json: one file of persistent settings, a section per extension.
- * Writes go through a temporary file and a rename, so two Pi sessions saving
- * at once never leave a half-written file.
+ * Each write reads the file again, changes only its own section, and
+ * replaces the file through a temporary file and a rename, so a reader never
+ * sees half a file. A file that exists but does not parse is never written:
+ * the save throws `UnreadableJsonError` instead of replacing every setting.
  */
-import { randomBytes } from "node:crypto";
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { readJsonObject, resolveTarget, writeJsonAtomic } from "./json-file.ts";
+
+export { UnreadableJsonError } from "./json-file.ts";
 
 export const CONFIG_FILE = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "pi-extras.json");
 
@@ -18,18 +22,20 @@ type Json = Record<string, unknown>;
 
 const isObject = (value: unknown): value is Json => !!value && typeof value === "object" && !Array.isArray(value);
 
-function readConfig(file: string): Json {
+/**
+ * A section of the file; empty when the file or section is missing or
+ * unreadable, so every extension runs on its defaults. Saving into an
+ * unreadable file throws instead (see `updateSection`).
+ */
+export function readSection(name: string, file = CONFIG_FILE): Json {
+	let config: Json;
 	try {
-		const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
-		return isObject(parsed) ? parsed : {};
+		config = readJsonObject(file);
 	} catch {
+		// Deliberate: a save into the same file throws and tells the user.
 		return {};
 	}
-}
-
-/** A section of the file; empty when the file or section is missing or unreadable. */
-export function readSection(name: string, file = CONFIG_FILE): Json {
-	const value = readConfig(file)[name];
+	const value = config[name];
 	return isObject(value) ? value : {};
 }
 
@@ -48,16 +54,22 @@ export function watchMotion(events?: { on(name: string, handler: (value: unknown
 	return () => motion;
 }
 
+/**
+ * Replaces a section with `change(current)`, keeping everything else in the
+ * file as it is at the moment of the write. Returns the section written.
+ * Throws `UnreadableJsonError` when the file exists but does not parse, and
+ * leaves the file as it was.
+ */
+export function updateSection(name: string, change: (current: Json) => Json, file = CONFIG_FILE): Json {
+	const target = resolveTarget(file);
+	mkdirSync(dirname(target), { recursive: true });
+	const config = readJsonObject(target);
+	const section = change(isObject(config[name]) ? config[name] : {});
+	writeJsonAtomic(target, { ...config, [name]: section });
+	return section;
+}
+
 /** Merges `patch` into a section, keeping everything else in the file. */
-export function writeSection(name: string, patch: Json, file = CONFIG_FILE): void {
-	const config = readConfig(file);
-	const next = { ...config, [name]: { ...(isObject(config[name]) ? config[name] : {}), ...patch } };
-	const temp = join(dirname(file), `.pi-extras.json.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
-	try {
-		writeFileSync(temp, `${JSON.stringify(next, null, 2)}\n`, { flag: "wx" });
-		renameSync(temp, file);
-	} catch (error) {
-		rmSync(temp, { force: true });
-		throw error;
-	}
+export function writeSection(name: string, patch: Json, file = CONFIG_FILE): Json {
+	return updateSection(name, (current) => ({ ...current, ...patch }), file);
 }

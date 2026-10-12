@@ -245,6 +245,27 @@ test("/tool-display says when the setting could not be saved", async () => {
 	assert.match(h.notes.at(-1)![0], /this session only/);
 });
 
+test("a pi-extras.json that does not parse is kept, and /tool-display says why the change applies to this session only", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tool-display-"));
+	try {
+		const file = join(dir, "pi-extras.json");
+		const broken = `{ "computerUse": { "apps": "all" }, }`;
+		writeFileSync(file, broken);
+		assert.throws(() => writeSettings({ ...DEFAULT_SETTINGS, chains: false }, file), /pi-extras\.json could not be read/);
+		assert.throws(() => writeToolCount("calls", file), /pi-extras\.json could not be read/);
+		assert.equal(readFileSync(file, "utf8"), broken);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+	const h = harness({ failWrite: true });
+	h.start();
+	await h.run("motion reduced");
+	assert.match(h.notes.at(-1)![0], /this session only\. read-only$/);
+	await h.run("count calls");
+	assert.match(h.notes.at(-1)![0], /this session only\. read-only$/);
+	assert.equal(h.notes.at(-1)![1], "warning");
+});
+
 test("/tool-display count switches the Status Plus tool count and tells it", async () => {
 	const h = harness();
 	h.start();

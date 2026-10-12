@@ -25,6 +25,7 @@ import {
 	type ArchiveModel,
 	type Asset,
 } from "./assets.ts";
+import { writeJsonAtomic } from "../json-file.ts";
 import { chooseThreads, tierName, TIER_ORDER, wantedTiers, type HardwareFacts, type TierId, type TierMap } from "./plan.ts";
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -96,9 +97,7 @@ export function readTiers(home: string): Tiers {
 }
 
 export function writeTiers(home: string, tiers: Tiers): void {
-	const path = join(home, "tiers.json");
-	writeFileSync(`${path}.tmp`, `${JSON.stringify(tiers, null, 2)}\n`, { mode: 0o600 });
-	renameSync(`${path}.tmp`, path);
+	writeJsonAtomic(join(home, "tiers.json"), tiers);
 }
 
 /** True once the daemon has everything it needs to transcribe something. */

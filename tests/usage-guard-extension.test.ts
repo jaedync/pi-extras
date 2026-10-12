@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLimitStore, type LimitStore } from "../lib/limit-store.ts";
@@ -237,6 +237,35 @@ test("config helpers preserve unrelated keys and honour the env override", () =>
 	saveGuardConfig({ enabled: true }, file);
 	assert.equal(loadGuardConfig(file, { PI_EXTRAS_USAGE_GUARD: "0" }).enabled, false);
 	assert.equal(loadGuardConfig(file, {}).enabled, true);
+});
+
+test("a pi-extras.json that does not parse is kept, and /usage warnings applies for this session and says why", async () => {
+	const { pi, store, ctx, configFile } = setup();
+	await pi.handlers.get("session_start")!({}, ctx);
+	const broken = `{ "usageGuard": { "enabled": true }, "toolDisplay": {} ,}`;
+	writeFileSync(configFile, broken);
+	assert.throws(() => saveGuardConfig({ enabled: false }, configFile), /pi-extras\.json could not be read/);
+	await pi.command!.handler("warnings off", ctx);
+	assert.equal(readFileSync(configFile, "utf8"), broken, "every other setting is still there");
+	assert.match(ctx.notices.at(-1) ?? "", /^Usage warnings off for this session only\. pi-extras\.json could not be read/);
+	// The choice holds in memory: a band crossing stays silent.
+	anthropicSnapshot(store, 99);
+	await pi.handlers.get("turn_end")!({ toolResults: [{}] }, ctx);
+	await request(pi, ctx);
+	assert.equal(pi.sent.length, 0);
+});
+
+test("saving the guard config writes through a symlinked pi-extras.json and keeps its mode", () => {
+	const dir = mkdtempSync(join(tmpdir(), "usage-guard-"));
+	const real = join(dir, "real.json");
+	const link = join(dir, "pi-extras.json");
+	writeFileSync(real, JSON.stringify({ other: { keep: true } }), { mode: 0o640 });
+	symlinkSync(real, link);
+	saveGuardConfig({ enabled: true }, link);
+	assert.ok(lstatSync(link).isSymbolicLink());
+	assert.equal(lstatSync(real).mode & 0o777, 0o640);
+	assert.deepEqual(JSON.parse(readFileSync(real, "utf8")).other, { keep: true });
+	assert.equal(loadGuardConfig(link, {}).enabled, true);
 });
 
 test("with the default config, bands stay silent but a session budget still warns once", async () => {

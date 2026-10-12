@@ -7,12 +7,13 @@
  * models are installed only when a video has no captions.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, closeSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PYTHON_VERSION, uvAsset } from "../../voice/assets.ts";
 import { acquireLock, downloadVerified, parseUvVersion, uvIsRecentEnough } from "../../voice/provision.ts";
+import { readJsonObject, writeJsonAtomic } from "../../json-file.ts";
 import { deadline } from "../http.ts";
 import { killGroup, track } from "./children.ts";
 
@@ -24,6 +25,7 @@ export const PACKAGES = ["yt-dlp[default,curl-cffi]", "youtube-transcript-api", 
 const LOCK_WAIT_MS = 10 * 60_000;
 const DAY_MS = 86_400_000;
 const TAG = /^\d+\.\d+\.\d+$/;
+const STATE_FILE = "state.json";
 /** Per install step; a hung step must not hold the lock that other sessions wait on. */
 const STEP_TIMEOUT_MS = { download: 5 * 60_000, venv: 5 * 60_000, pip: 20 * 60_000, git: 3 * 60_000, npm: 10 * 60_000, tsc: 5 * 60_000, tar: 60_000 } as const;
 
@@ -63,23 +65,24 @@ export function toolEnv(env: Env = process.env): Record<string, string> {
 	return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => PASS_ENV.test(entry[0]) && typeof entry[1] === "string"));
 }
 
+// The tag reaches git and pip as an argument, so only a plain version passes.
+const checked = (state: MediaState): MediaState =>
+	typeof state.bgutilTag === "string" && !TAG.test(state.bgutilTag) ? { ...state, bgutilTag: undefined } : state;
+
+/** A missing or broken state file reads as empty, so the next call installs again. */
 export function readState(home: string): MediaState {
 	try {
-		const value = JSON.parse(readFileSync(join(home, "state.json"), "utf8")) as unknown;
-		if (!value || typeof value !== "object") return {};
-		const state = value as MediaState;
-		// The tag reaches git and pip as an argument, so only a plain version passes.
-		return typeof state.bgutilTag === "string" && !TAG.test(state.bgutilTag) ? { ...state, bgutilTag: undefined } : state;
+		return checked(readJsonObject(join(home, STATE_FILE)) as MediaState);
 	} catch {
+		// Deliberate: the next writeState throws and the error names the file.
 		return {};
 	}
 }
 
-function writeState(home: string, patch: Partial<MediaState>): MediaState {
-	const next = { ...readState(home), ...patch };
-	const temp = join(home, `.state.${process.pid}.tmp`);
-	writeFileSync(temp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-	renameSync(temp, join(home, "state.json"));
+/** Throws `UnreadableJsonError`, and keeps the file, when it exists but does not parse. */
+export function writeState(home: string, patch: Partial<MediaState>): MediaState {
+	const next = { ...checked(readJsonObject(join(home, STATE_FILE)) as MediaState), ...patch };
+	writeJsonAtomic(join(home, STATE_FILE), next);
 	return next;
 }
 

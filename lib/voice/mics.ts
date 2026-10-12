@@ -4,8 +4,8 @@
  * but both accept names. A saved mic that is unplugged falls back to the
  * system default rather than failing the dictation.
  */
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readJsonObject, writeJsonAtomic } from "../json-file.ts";
 import { loadPvRecorder } from "./capture.ts";
 
 export interface MicList {
@@ -79,23 +79,21 @@ export function micChoices(saved: string | undefined, list: MicList): MicChoice[
 	return choices;
 }
 
-function readSettings(home: string): Record<string, unknown> {
-	try {
-		const parsed = JSON.parse(readFileSync(join(home, SETTINGS_FILE), "utf8"));
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-	} catch {
-		return {};
-	}
-}
-
+/** A missing or broken settings file records from the system default. */
 export function readMicSetting(home: string): string | undefined {
-	const mic = readSettings(home).mic;
+	let settings: Record<string, unknown>;
+	try {
+		settings = readJsonObject(join(home, SETTINGS_FILE));
+	} catch {
+		// Deliberate: saving a mic into the same file throws and tells the user.
+		return undefined;
+	}
+	const mic = settings.mic;
 	return typeof mic === "string" && mic ? mic : undefined;
 }
 
+/** Throws `UnreadableJsonError`, and keeps the file, when it exists but does not parse. */
 export function writeMicSetting(home: string, mic: string | undefined): void {
-	const { mic: _previous, ...rest } = readSettings(home);
-	const path = join(home, SETTINGS_FILE);
-	writeFileSync(`${path}.tmp`, `${JSON.stringify(mic ? { ...rest, mic } : rest, null, 2)}\n`, { mode: 0o600 });
-	renameSync(`${path}.tmp`, path);
+	const { mic: _previous, ...rest } = readJsonObject(join(home, SETTINGS_FILE));
+	writeJsonAtomic(join(home, SETTINGS_FILE), mic ? { ...rest, mic } : rest);
 }

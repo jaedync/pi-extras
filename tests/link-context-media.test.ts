@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { sampleTimes, sheetColumns } from "../lib/link-context/media/frames.ts";
 import { sized } from "../lib/link-context/media/images.ts";
 import { imageLink, imageLinks } from "../lib/link-context/media/images.ts";
-import { asrPlan, bgutilDue, HELPER, packagesDue, PACKAGES, readState, toolEnv } from "../lib/link-context/media/provision.ts";
+import { asrPlan, bgutilDue, HELPER, packagesDue, PACKAGES, readState, toolEnv, writeState } from "../lib/link-context/media/provision.ts";
 import { clipFor, HOST_BLOCKED, keyName, formatTranscript, header, prunePulls, pullDir, pullVideo, sampleFor, thumbnailUrl, validTimes, videoComments, youtubeId, type VideoDeps, type VideoInfo } from "../lib/link-context/media/video.ts";
 import { writeFileSync } from "node:fs";
 import { context } from "./support/link-fetch.ts";
@@ -247,6 +247,21 @@ test("provisioning state: token-provider retry, tag check, child environment", (
 	}
 	const env = toolEnv({ PATH: "/bin", HOME: "/h", HTTPS_PROXY: "http://p", ANTHROPIC_API_KEY: "k", GITHUB_TOKEN: "t", UV_INDEX_URL: "u", AWS_SECRET_ACCESS_KEY: "s" });
 	assert.deepEqual(env, { PATH: "/bin", HOME: "/h", HTTPS_PROXY: "http://p", UV_INDEX_URL: "u" });
+});
+
+test("provisioning state: a broken state file is kept and the write says why; a missing one starts empty", () => {
+	const home = mkdtempSync(join(tmpdir(), "link-state-"));
+	try {
+		assert.deepEqual(writeState(home, { asr: "mlx-whisper" }), { asr: "mlx-whisper" });
+		assert.deepEqual(readState(home), { asr: "mlx-whisper" });
+		assert.deepEqual(writeState(home, { packagesAt: 7 }), { asr: "mlx-whisper", packagesAt: 7 });
+		writeFileSync(join(home, "state.json"), "{ \"asr\": ");
+		assert.deepEqual(readState(home), {});
+		assert.throws(() => writeState(home, { packagesAt: 8 }), /state\.json could not be read .*Fix or remove/);
+		assert.equal(readFileSync(join(home, "state.json"), "utf8"), "{ \"asr\": ");
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
 });
 
 const python = ["python3", "python"].find((bin) => spawnSync(bin, ["--version"]).status === 0);

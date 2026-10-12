@@ -53,6 +53,17 @@ test("an unplugged saved mic stays in the list so it can be seen and replaced", 
 	assert.equal(labels.at(-1), "✓ USB Mic (not connected)");
 });
 
+test("a broken settings file is kept, and saving a mic says why", () => {
+	const home = mkdtempSync(join(tmpdir(), "pv-mic-"));
+	try {
+		writeFileSync(join(home, "settings.json"), "{ \"mic\": \"USB\", \"other\": true,");
+		assert.throws(() => writeMicSetting(home, "X"), /settings\.json could not be read/);
+		assert.equal(readFileSync(join(home, "settings.json"), "utf8"), "{ \"mic\": \"USB\", \"other\": true,");
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
 test("the mic setting round-trips and tolerates a missing or broken file", () => {
 	const home = mkdtempSync(join(tmpdir(), "pv-mic-"));
 	try {

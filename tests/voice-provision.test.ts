@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -87,6 +88,29 @@ test("provisioning lock is exclusive and recovers from a dead holder", async () 
 		const recovered = acquireLock(dir);
 		assert.ok(recovered, "stale lock from a dead pid is taken over");
 		recovered.release();
+	});
+});
+
+function runNode(script: string, args: string[]): Promise<{ code: number | null; stderr: string }> {
+	return new Promise((resolve) => {
+		const child = spawn(process.execPath, ["--input-type=module", "-e", script, ...args], { stdio: ["ignore", "ignore", "pipe"] });
+		let stderr = "";
+		child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+		child.on("close", (code) => resolve({ code, stderr }));
+	});
+}
+
+test("Pi sessions that save tiers and the mic at the same time never collide on a temporary file", async () => {
+	await withTemp(async (dir) => {
+		const provision = new URL("../lib/voice/provision.ts", import.meta.url).href;
+		const mics = new URL("../lib/voice/mics.ts", import.meta.url).href;
+		const script = `const { writeTiers } = await import(${JSON.stringify(provision)});
+const { writeMicSetting } = await import(${JSON.stringify(mics)});
+const [home, id] = process.argv.slice(1);
+for (let i = 0; i < 150; i++) { writeTiers(home, { python: id + i }); writeMicSetting(home, id + i); }`;
+		const results = await Promise.all(["a", "b", "c", "d"].map((id) => runNode(script, [dir, id])));
+		for (const result of results) assert.equal(result.code, 0, result.stderr);
+		assert.deepEqual(readdirSync(dir).sort(), ["settings.json", "tiers.json"]);
 	});
 });
 

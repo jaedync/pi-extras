@@ -8,11 +8,11 @@
  * for a model the user may switch away from. Fired keys and the session budget persist
  * as custom session entries; a resumed session does not repeat them.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { defineTool, type ContextEvent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { readSection, updateSection } from "../lib/extras-config.ts";
 import { sharedLimitStore, type LimitStore } from "../lib/limit-store.ts";
 import { operationalError } from "../lib/operational-log.ts";
 import { markRow } from "../lib/tool-row.ts";
@@ -47,32 +47,21 @@ interface GuardEntry {
 type DeliverAs = "steer" | "nextTurn";
 type CustomMessage = Extract<ContextEvent["messages"][number], { role: "custom" }>;
 
-function readConfigFile(file: string): Record<string, unknown> {
-	try {
-		const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-	} catch {
-		return {};
-	}
-}
-
 /** `PI_EXTRAS_USAGE_GUARD=1` or `0` turns band warnings on or off for one run without touching the file. */
 export function loadGuardConfig(file = CONFIG_FILE, env: NodeJS.ProcessEnv = process.env): GuardConfig {
-	const config = normalizeGuardConfig(readConfigFile(file)[CONFIG_KEY]);
+	const config = normalizeGuardConfig(readSection(CONFIG_KEY, file));
 	const override = env.PI_EXTRAS_USAGE_GUARD;
 	if (override === "0") return { ...config, enabled: false };
 	if (override === "1") return { ...config, enabled: true };
 	return config;
 }
 
-/** Merge a patch into the guard section, preserving any other keys in the file. */
+/**
+ * Merge a patch into the guard section, preserving any other keys in the file.
+ * Throws `UnreadableJsonError`, and keeps the file, when it does not parse.
+ */
 export function saveGuardConfig(patch: Partial<GuardConfig>, file = CONFIG_FILE): GuardConfig {
-	const existing = readConfigFile(file);
-	const current = existing[CONFIG_KEY];
-	const merged = normalizeGuardConfig({ ...(current && typeof current === "object" ? current : {}), ...patch });
-	mkdirSync(dirname(file), { recursive: true });
-	writeFileSync(file, `${JSON.stringify({ ...existing, [CONFIG_KEY]: merged }, null, 2)}\n`);
-	return merged;
+	return normalizeGuardConfig(updateSection(CONFIG_KEY, (current) => ({ ...normalizeGuardConfig({ ...current, ...patch }) }), file));
 }
 
 /** "7d 60" -> budget; "clear" -> null; anything else -> undefined. */
@@ -250,7 +239,12 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			const words = args.trim().split(/\s+/).filter(Boolean);
 			if (words[0] === "warnings") {
 				if (words[1] !== "on" && words[1] !== "off") return ctx.ui.notify(USAGE_HELP, "warning");
-				config = saveGuardConfig({ enabled: words[1] === "on" }, configFile);
+				config = { ...config, enabled: words[1] === "on" };
+				try {
+					config = saveGuardConfig({ enabled: config.enabled }, configFile);
+				} catch (error) {
+					return ctx.ui.notify(`Usage warnings ${config.enabled ? "on" : "off"} for this session only. ${(error as Error).message}`, "error");
+				}
 				return ctx.ui.notify(`Usage warnings ${config.enabled ? "on" : "off"}`, "info");
 			}
 			if (words[0] === "budget") {

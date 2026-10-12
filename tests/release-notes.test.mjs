@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -90,6 +90,23 @@ function app({ mode = "tui", messages = [] } = {}) {
 		run: (args) => commands.get("pi-extras").handler(args, ctx),
 	};
 }
+
+test("a pi-extras.json that does not parse is left alone at startup, and the user is told", () => {
+	// A hand edit with a trailing comma: every other extension's settings are in it.
+	const broken = `{\n  "usageGuard": { "enabled": true },\n  "toolDisplay": { "motion": "reduced" },\n}\n`;
+	writeFileSync(CONFIG, broken);
+	try {
+		const session = app();
+		session.start();
+		assert.equal(readFileSync(CONFIG, "utf8"), broken, "no version was recorded over the settings");
+		assert.equal(session.appended.length, 0);
+		assert.equal(session.notices.length, 1);
+		assert.equal(session.notices[0][1], "warning");
+		assert.match(session.notices[0][0], /^pi-extras could not read .*pi-extras\.json \(.*\)\. Every pi-extras setting is at its default/);
+	} finally {
+		rmSync(CONFIG, { force: true });
+	}
+});
 
 test("the first new session after an update shows the notes once, and never to a resumed one", async (t) => {
 	t.after(() => rmSync(agentDir, { recursive: true, force: true }));

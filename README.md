@@ -135,6 +135,18 @@ the package. Removing it does not remove your credentials or change other packag
 See [security and privacy](docs/security.md) before enabling provider-limit polling
 or supplying search credentials. Extensions execute with your user permissions.
 
+**How `pi-extras.json` is saved.** Each extension keeps its settings in its own
+section. A save reads the file again and changes only that section. The new
+text goes to a temporary file in the same directory,
+which then replaces the old file. When `pi-extras.json` is a symbolic link, the
+save writes the file that the link points to and keeps the link. The file keeps
+its permissions, and a new file gets mode `0600`.
+
+When the file does not parse (for example, after an edit that leaves an extra
+comma), pi-extras does not write it. Each extension uses its defaults, and each
+save shows an error that names the file. A new session in the terminal also
+shows a warning. Correct or remove the file to save settings again.
+
 ## Tab Status
 
 Tab Status shows Pi's state in the terminal tab.

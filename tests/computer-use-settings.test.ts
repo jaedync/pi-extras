@@ -29,3 +29,14 @@ test("writing the mode keeps every other setting in the file", () => {
 		assert.equal(readAppsMode(file), "none");
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a pi-extras.json that does not parse is kept, and saving the mode says why", () => {
+	const dir = mkdtempSync(join(tmpdir(), "cu-settings-"));
+	try {
+		const file = join(dir, "pi-extras.json");
+		const broken = `{ "usageGuard": { "enabled": true }, }`;
+		writeFileSync(file, broken);
+		assert.throws(() => writeAppsMode("all", file), /pi-extras\.json could not be read/);
+		assert.equal(readFileSync(file, "utf8"), broken);
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});

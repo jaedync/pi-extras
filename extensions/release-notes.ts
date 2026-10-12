@@ -7,6 +7,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, getMarkdownTheme, SettingsManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { UnreadableJsonError } from "../lib/extras-config.ts";
 import { operationalError } from "../lib/operational-log.ts";
 import { NOTES_ENTRY, NotesView, notesToShow, parseChangelog, readSeen, writeSeen, type NotesData, type NotesEntry } from "../lib/release-notes.ts";
 
@@ -23,6 +24,11 @@ function installed(): { version: string; entries: NotesEntry[] } | undefined {
 		operationalError(LOG_FILE, "release-notes", `could not read the changelog: ${(error as Error).message}`);
 		return undefined;
 	}
+}
+
+/** Release notes start every new session, so they are first to see a broken pi-extras.json and say so. */
+function unreadableNotice(error: UnreadableJsonError): string {
+	return `pi-extras could not read ${error.file} (${error.reason}). Every pi-extras setting is at its default, and no setting can be saved. Fix or remove the file.`;
 }
 
 function collapsed(ctx: ExtensionContext): boolean {
@@ -50,10 +56,12 @@ export default function releaseNotes(pi: ExtensionAPI): void {
 		if (seen === current.version) return;
 		const shown = notesToShow(current.entries, current.version, seen);
 		try {
+			// Never writes over a pi-extras.json that does not parse: that would keep this section and lose every other.
 			writeSeen(current.version);
 		} catch (error) {
 			// Without a record the notes would come back every session; better not to show them.
 			operationalError(LOG_FILE, "release-notes", `could not record the version seen: ${(error as Error).message}`);
+			if (error instanceof UnreadableJsonError) ctx.ui.notify(unreadableNotice(error), "warning");
 			return;
 		}
 		if (shown.length === 0) return;

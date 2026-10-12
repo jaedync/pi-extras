@@ -110,6 +110,16 @@ function describeSettings(settings: DisplaySettings): string {
 	return `Tool Display is on${SEP}other tools' rows ${settings.others ? "on" : "off"}${SEP}chain steps ${settings.chains ? "on" : "off"}${SEP}motion ${settings.motion}${SEP}thinking ${settings.thinking}${SEP}folded ${settings.folded ? "on" : "off"}.`;
 }
 
+/** Runs a settings write: empty when it saved, else a note that says why it applies to this session only. */
+function trySave(write: () => void): string {
+	try {
+		write();
+		return "";
+	} catch (error) {
+		return ` Not saved, so it applies to this session only. ${error instanceof Error ? error.message : String(error)}`;
+	}
+}
+
 /** `count calls` or `count steps`, for the Status Plus tool figure. */
 export function countArg(args: string): ToolCount | undefined {
 	const words = args.trim().toLowerCase().split(/\s+/);
@@ -442,11 +452,10 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			const count = countArg(args);
 			if (count !== undefined) {
 				// Status Plus owns this setting; a click on its tool figure does the same.
-				let saved = true;
-				try { deps.writeToolCount(count); } catch { saved = false; }
+				const unsaved = trySave(() => deps.writeToolCount(count));
 				pi.events.emit(TOOL_COUNT_EVENT, count);
 				const what = count === "steps" ? "each step of a chained command and each call a script made" : "one per tool call";
-				ctx.ui.notify(`The Status Plus tool count now counts ${what}.${saved ? "" : " Could not save the setting, so it applies to this session only."}`, saved ? "info" : "warning");
+				ctx.ui.notify(`The Status Plus tool count now counts ${what}.${unsaved}`, unsaved ? "warning" : "info");
 				return;
 			}
 			const next = applyArgs(settings, args);
@@ -462,13 +471,11 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			publishSettings();
 			clock.setReduced(settings.motion === "reduced");
 			foldClock.setReduced(settings.motion === "reduced");
-			let saved = true;
-			try { deps.settings.write(settings); } catch { saved = false; }
+			const note = trySave(() => deps.settings.write(settings));
 			if (toggled) install();
-			const note = saved ? "" : " Could not save the setting, so it applies to this session only.";
 			const reach = folding() && !folds ? ` ${FOLD_MISSING}`
 				: !toggled && next.enabled && owned.size === 0 && !adopting ? " No tool rows are drawn by Tool Display in this session." : "";
-			ctx.ui.notify(`${describeSettings(settings)}${reach}${note}`, saved && !reach ? "info" : "warning");
+			ctx.ui.notify(`${describeSettings(settings)}${reach}${note}`, !note && !reach ? "info" : "warning");
 		},
 	});
 }

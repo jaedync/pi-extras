@@ -4,6 +4,12 @@ Pi extensions run with the same filesystem, process and network permissions as
 Pi. Review the source before installing. This package adds no telemetry uploader,
 remote management service, credential provisioning, or automatic updater.
 
+Saves to `pi-extras.json` keep the file's permissions and write through a
+symbolic link to its target. A new `pi-extras.json` gets mode `0600`. A save
+never writes over a file that does not parse, so a typo cannot erase the
+other settings. Voice's `settings.json` and the Pull Link media `state.json`
+follow the same rules.
+
 ## Status Plus
 
 The footer reads the active session branch and linked local subagent evidence to
@@ -572,7 +578,8 @@ system clipboard, with OSC 52 to the terminal as well). It writes no files.
 ## Release Notes
 
 Release Notes reads `CHANGELOG.md` from the installed package and writes the
-last version it showed to `releaseNotes.seen` in `pi-extras.json`. The notes
+last version it showed to `releaseNotes.seen` in `pi-extras.json`. When that
+file does not parse, it writes nothing and shows a warning instead. The notes
 are a custom entry in the session file; they are not sent to the model.
 
 ## Reporting
