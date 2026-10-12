@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { outsideWorktree } from "../lib/subagents/worktree.ts";
+import { editTarget, outsideWorktree } from "../lib/subagents/worktree.ts";
 
 const worktree = { path: "/tmp/repo.worktrees/scout", branch: "subagent/scout", base: "a".repeat(40) };
 const cwd = worktree.path;
@@ -45,4 +45,19 @@ test("an edit through a symlink out of the worktree is refused; one that stays i
 	for (const path of ["src/a.ts", "alias/a.ts", "new/dir/a.ts", join(tree.path, "README.md")]) {
 		assert.equal(outsideWorktree(tree, tree.path, path), undefined, path);
 	}
+});
+
+test("a path with Unicode spaces is checked as Pi's edit and write tools resolve it", (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "subagent-boundary-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const root = join(dir, "repo");
+	mkdirSync(root, { recursive: true });
+	const tree = { ...worktree, path: join(dir, "repo.worktrees", "scout") };
+	mkdirSync(tree.path, { recursive: true });
+	// A link the child made with bash; Pi turns a no-break space into a plain one and follows it.
+	symlinkSync(root, join(tree.path, "x y"), "dir");
+	for (const path of ["x y/evil.txt", "x\u00A0y/evil.txt", "x\u3000y/evil.txt", "@x\u202Fy/evil.txt"]) {
+		assert.match(outsideWorktree(tree, tree.path, path) ?? "", /resolves to .*, outside your worktree/, JSON.stringify(path));
+	}
+	assert.equal(editTarget(tree.path, "x\u00A0y/evil.txt"), join(realpathSync(root), "evil.txt"));
 });

@@ -102,9 +102,13 @@ export function workspaceError(path: string): string | undefined {
 	return existsSync(path) ? undefined : `The child workspace no longer exists: ${path}. Restore this workspace before resuming.`;
 }
 
-/** A tool's path as Pi's edit and write tools read it: an `@` prefix dropped, `~` and file URLs expanded. */
+/** The spaces Pi's `resolveToCwd` turns into plain ones before it resolves a tool's path (Pi's utils/paths.ts). */
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+
+/** A tool's path as Pi's edit and write tools read it: Unicode spaces made plain, an `@` prefix dropped, `~` and file URLs expanded. */
 function toolPath(path: string): string {
-	const bare = path.startsWith("@") ? path.slice(1) : path;
+	const spaced = path.replace(UNICODE_SPACES, " ");
+	const bare = spaced.startsWith("@") ? spaced.slice(1) : spaced;
 	if (bare === "~") return homedir();
 	if (bare.startsWith("~/")) return join(homedir(), bare.slice(2));
 	return bare.startsWith("file://") ? fileURLToPath(bare) : bare;
