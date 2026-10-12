@@ -5,7 +5,7 @@
  * installed; elsewhere commands run unconfined, as before.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import type { BashSpawnContext } from "@earendil-works/pi-coding-agent";
 import type { Worktree } from "./types.ts";
@@ -81,9 +81,11 @@ export function seatbeltProfile(roots: readonly string[], git: GitWrites): strin
 /**
  * bwrap binds need existing paths. A bind over a file would make git's rename
  * of the lock file onto it fail, so the branch's ref and reflog folders are
- * bound whole: there, a child can also move another subagent's branch.
+ * bound whole: there, a child can also move another subagent's branch. Main
+ * makes them first, since `git pack-refs` or gc can remove them.
  */
 export function bwrapPrefix(roots: readonly string[], git: GitWrites): string[] {
+	for (const folder of folders(git.files)) mkdirSync(folder, { recursive: true });
 	const writable = [...git.trees, ...folders(git.files), ...roots.map((root) => join(root, CACHE_DIR))].filter((path) => existsSync(path));
 	return [BWRAP, "--dev-bind", "/", "/", ...roots.flatMap((root) => ["--ro-bind", root, root]), ...writable.flatMap((path) => ["--bind", path, path])];
 }

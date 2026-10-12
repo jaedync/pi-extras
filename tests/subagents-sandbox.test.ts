@@ -55,7 +55,8 @@ test("bwrap binds everything writable, each checkout read-only, then the worktre
 	const root = mkdtempSync(join(tmpdir(), "subagent-bwrap-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const git = join(root, ".git");
-	for (const dir of ["worktrees/scout", "objects", "refs/heads/subagent", "logs/refs/heads/subagent", "hooks"]) mkdirSync(join(git, dir), { recursive: true });
+	// No branch folders: git pack-refs or gc can remove them, and a bind needs them.
+	for (const dir of ["worktrees/scout", "objects", "hooks"]) mkdirSync(join(git, dir), { recursive: true });
 	mkdirSync(join(root, "node_modules", ".cache"), { recursive: true });
 	mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
 	mkdirSync(join(root, "node_modules", "pkg"));
@@ -73,6 +74,7 @@ test("bwrap binds everything writable, each checkout read-only, then the worktre
 		...bind(join(git, "refs", "heads", "subagent")), ...bind(join(git, "logs", "refs", "heads", "subagent")),
 		...bind(join(root, "node_modules", ".cache")),
 	]);
+	assert.ok(existsSync(join(git, "refs", "heads", "subagent")) && existsSync(join(git, "logs", "refs", "heads", "subagent")), "made before the bind");
 });
 
 test("a worktree's git writes are its own git folder, the object store and its branch, read from the source checkout", (t) => {
