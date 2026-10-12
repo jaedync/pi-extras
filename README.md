@@ -1162,13 +1162,14 @@ Each launch of a child reads Pi's `settings.json`, the project's
 `.pi/settings.json` and `models.json` again. It also reads the context files
 (`AGENTS.md`), `SYSTEM.md`, `APPEND_SYSTEM.md` and skills that Pi gives a
 child. The text of `APPEND_SYSTEM.md` comes before the child's own
-instructions, and a project's file applies only when Pi trusts the project, as
-for main. The child's
-extensions also read their own sections of `pi-extras.json`, such as
-`cacheCompaction` and `rateLimitRecovery`, at each launch. The `subagents`
-section applies at the next session start or `/reload`, because it also sets
-main's tools. For example, a change to `compaction.reserveTokens` or to a
-model's `contextWindow` applies to the next child that starts. When `models.json`
+instructions. A child in main's directory gets the project's `.pi/` files and
+settings only when main trusts the project. A child with a `cwd` of its own
+gets them as described for `cwd` above. The child's extensions also read their
+own sections of `pi-extras.json`, such as `cacheCompaction` and
+`rateLimitRecovery`, at each launch. The `subagents` section applies at the
+next session start or `/reload`, because it also sets main's tools. For
+example, a change to `compaction.reserveTokens` or to a model's
+`contextWindow` applies to the next child that starts. When `models.json`
 changed, the launch first reads it into the model list that main and its
 children share, as `/model` does. Before that, Pi's own loader checks the
 file. If it finds an error, the launch uses the models from before and tells

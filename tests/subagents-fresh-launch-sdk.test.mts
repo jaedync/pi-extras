@@ -227,6 +227,44 @@ test("a child in a project of its own reads that project's APPEND_SYSTEM.md only
 	}
 });
 
+test("a child in main's directory follows main's trust in the project: its .pi/ SYSTEM.md, APPEND_SYSTEM.md and shellCommandPrefix apply only when main trusts it", { timeout: 20_000 }, async () => {
+	writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: {} }));
+	const project = mkdtempSync(join(scratch, "main-project-"));
+	mkdirSync(join(project, ".pi"));
+	writeFileSync(join(project, ".pi", "SYSTEM.md"), "Project system.\n");
+	writeFileSync(join(project, ".pi", "APPEND_SYSTEM.md"), "Project append.\n");
+	writeFileSync(join(project, ".pi", "settings.json"), JSON.stringify({ shellCommandPrefix: "echo from-the-repository;" }));
+	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
+	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
+	runtime.registerNativeProvider(faux.provider);
+	// What each launch handed Pi: the project files its loader read, and the prefix its bash would run.
+	const seen: Array<{ system?: string; append: string[]; prefix?: string }> = [];
+	const watched = { ...sdk, createAgentSession: (options: any) => {
+		seen.push({ system: options.resourceLoader.getSystemPromptSource()?.path, append: options.resourceLoader.getAppendSystemPromptSources().map((source: { path: string }) => source.path),
+			prefix: options.settingsManager.getShellCommandPrefix() });
+		return sdk.createAgentSession(options);
+	} };
+	const launch = async (projectTrusted: boolean) => {
+		const launcher = createLauncher({
+			sdk: watched as never, agentDir, cwd: project, sessionDir: null, generation: 1, projectTrusted,
+			modelRuntime: async () => runtime,
+			toolsFor: () => ({ tools: ["read", "bash"], customTools: [] }),
+			instructions: () => "You are the subagent.",
+		});
+		const handle = await launcher.launch({ name: "local", task: "Look", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false, state: "starting", runs: 0, depth: 1, startedAt: Date.now() } as never, { onEvent: () => undefined } as never);
+		await handle.dispose();
+		return seen.at(-1)!;
+	};
+	const untrusted = await launch(false);
+	assert.notEqual(untrusted.system, join(project, ".pi", "SYSTEM.md"), "no project SYSTEM.md");
+	assert.ok(!untrusted.append.includes(join(project, ".pi", "APPEND_SYSTEM.md")), "no project APPEND_SYSTEM.md");
+	assert.equal(untrusted.prefix, undefined, "no command prefix from the repository in its bash");
+	const trusted = await launch(true);
+	assert.equal(trusted.system, join(project, ".pi", "SYSTEM.md"));
+	assert.deepEqual(trusted.append, [join(project, ".pi", "APPEND_SYSTEM.md")]);
+	assert.equal(trusted.prefix, "echo from-the-repository;");
+});
+
 test("an overlay for a provider an extension registered from config is checked as main would compose it", { timeout: 20_000 }, async () => {
 	const { freshModels, piModelsCheck } = await import("../lib/subagents/fresh-models.ts");
 	const e1 = { id: "e1", name: "e1", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1_000, maxTokens: 100 };

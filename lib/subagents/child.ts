@@ -130,6 +130,12 @@ export interface LauncherDeps {
 	generation?: number;
 	/** Where child sessions are written; null keeps them in memory. */
 	sessionDir: string | null;
+	/**
+	 * Whether main trusts its project (Pi's `ctx.isProjectTrusted()` at the
+	 * session start). A child in main's directory loads that project's `.pi/`
+	 * only then; unset leaves Pi's default.
+	 */
+	projectTrusted?: boolean;
 	modelRuntime(): Promise<ModelRuntime>;
 	modelAllowed?(model: string): boolean;
 	/** Tool names and custom tools for this child. */
@@ -227,7 +233,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const { modelRuntime, model } = await childModel(deps, record);
 			const wanted = new Set(tools);
 			const guard = createChildRateLimitGuard({ configFile: join(agentDir, "pi-extras.json"), onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
-			const settingsManager = childSettings(sdk, agentDir, cwd, record);
+			const settingsManager = childSettings(deps, cwd, record);
 			// An SDK tool wins over a built-in or extension tool of the same name.
 			const customTools = wanted.has("bash") ? [...listed, childBash(sdk, cwd, settingsManager, record, deps)] : listed;
 			const loader = childLoader(deps, record, { cwd, settingsManager, guard, wanted, loaded });
@@ -259,9 +265,13 @@ async function childModel(deps: LauncherDeps, record: AgentRecord) {
 	return { modelRuntime, model: resolved.model };
 }
 
-/** A directory a spawn named is used as Pi would use it with no one to ask; main's own keeps today's settings. */
-function childSettings(sdk: Sdk, agentDir: string, cwd: string, record: AgentRecord): SettingsManager {
-	const settingsManager = record.cwd ? sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: false }) : sdk.SettingsManager.create(cwd, agentDir);
+/** A directory a spawn named is used as Pi would use it with no one to ask; main's own as main uses it. */
+function childSettings(deps: LauncherDeps, cwd: string, record: AgentRecord): SettingsManager {
+	const { sdk, agentDir } = deps;
+	// Main's decision, never Pi's default, which trusts: an untrusted repository's .pi/ (a shellCommandPrefix, a
+	// SYSTEM.md) would reach the child where main refused it.
+	const settingsManager = record.cwd ? sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: false })
+		: sdk.SettingsManager.create(cwd, agentDir, deps.projectTrusted === undefined ? {} : { projectTrusted: deps.projectTrusted });
 	if (record.cwd) {
 		const place = record.worktree ? sourcePlace(record.worktree, record.cwd) : record.cwd;
 		settingsManager.setProjectTrusted(projectTrusted(sdk, agentDir, place, settingsManager.getDefaultProjectTrust()));

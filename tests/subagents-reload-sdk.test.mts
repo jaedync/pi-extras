@@ -89,7 +89,8 @@ interface Parent {
  * A child first waits in bash for its flag, then reports which build of the
  * instructions it was launched with; main only reads what arrives.
  */
-async function parent(packageRoot: string): Promise<Parent> {
+async function parent(packageRoot: string, where: { cwd?: string; trusted?: boolean } = {}): Promise<Parent> {
+	const cwd = where.cwd ?? scratch;
 	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
 	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
 	runtime.registerNativeProvider(faux.provider);
@@ -101,17 +102,19 @@ async function parent(packageRoot: string): Promise<Parent> {
 		if (context.messages.at(-1)?.role !== "toolResult") {
 			return ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: `until [ -f ${join(flags, name)} ]; do sleep 0.05; done; echo released` }));
 		}
-		return ai.fauxAssistantMessage(`${name} done on build ${said.includes(SECOND_BUILD) ? 2 : 1}`);
+		// What a child got from a project's .pi/ shows in its report, for the tests that set one up.
+		const project = ["PROJECT-SYSTEM", "PROJECT-APPEND", "PROJECT-PREFIX"].filter((marker) => said.includes(`${marker}-SEEN`));
+		return ai.fauxAssistantMessage(`${name} done on build ${said.includes(SECOND_BUILD) ? 2 : 1}${project.length ? ` with ${project.join(", ")}` : ""}`);
 	};
 	faux.setResponses(Array.from({ length: 80 }, () => answer));
-	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false } });
-	const loader = new sdk.DefaultResourceLoader({ cwd: scratch, agentDir, settingsManager, noExtensions: true, noSkills: true,
+	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false } }, { projectTrusted: where.trusted ?? true });
+	const loader = new sdk.DefaultResourceLoader({ cwd, agentDir, settingsManager, noExtensions: true, noSkills: true,
 		noPromptTemplates: true, noThemes: true, noContextFiles: true, additionalExtensionPaths: [join(packageRoot, "extensions", "subagents.ts")] });
 	await loader.reload();
 	assert.deepEqual(loader.getExtensions().errors, []);
-	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model: faux.getModel("cheap"),
+	const { session } = await sdk.createAgentSession({ cwd, agentDir, modelRuntime: runtime, model: faux.getModel("cheap"),
 		scopedModels: [{ model: faux.getModel("cheap") }], settingsManager, resourceLoader: loader,
-		sessionManager: sdk.SessionManager.create(scratch, join(scratch, "parents")) });
+		sessionManager: sdk.SessionManager.create(cwd, join(scratch, "parents")) });
 	const notices: string[] = [];
 	await session.bindExtensions({ mode: "print", uiContext: { notify: (text: string) => notices.push(text) } } as never);
 	const dir = join(agentDir, "sessions", "subagents", session.sessionManager.getSessionId());
@@ -366,6 +369,44 @@ test("a /reload while the old team is still letting its sessions go hands the ne
 		gate.done();
 		await p.close();
 	}
+});
+
+/** A repository whose .pi/ would show in a child's report: its system prompt files and a bash command prefix. */
+function projectWithPi(): string {
+	const project = mkdtempSync(join(scratch, "repository-"));
+	mkdirSync(join(project, ".pi"));
+	writeFileSync(join(project, ".pi", "SYSTEM.md"), "PROJECT-SYSTEM-SEEN\n");
+	writeFileSync(join(project, ".pi", "APPEND_SYSTEM.md"), "PROJECT-APPEND-SEEN\n");
+	writeFileSync(join(project, ".pi", "settings.json"), JSON.stringify({ shellCommandPrefix: "echo PROJECT-PREFIX-SEEN;" }));
+	return project;
+}
+
+for (const trusted of [false, true]) {
+	test(`a child in main's directory gets the project's .pi/ only when main trusts it (${trusted ? "trusted" : "not trusted"})`, { timeout: 60_000, skip: process.platform === "win32" }, async () => {
+		const p = await parent(copyPackage().root, { cwd: projectWithPi(), trusted });
+		try {
+			p.release("local");
+			await p.spawn("local", "Look at the repository");
+			await until("local finishes", () => p.record("local")?.state === "idle");
+			assert.equal(p.record("local")?.report, trusted ? "local done on build 1 with PROJECT-SYSTEM, PROJECT-APPEND, PROJECT-PREFIX" : "local done on build 1");
+		} finally { await p.close(); }
+	});
+}
+
+test("a /reload after the user trusts the project gives later children its .pi/: the next module reads main's decision again", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
+	const p = await parent(copyPackage().root, { cwd: projectWithPi(), trusted: false });
+	try {
+		p.release("before");
+		await p.spawn("before", "Look before the user trusts it");
+		await until("before finishes", () => p.record("before")?.state === "idle");
+		assert.equal(p.record("before")?.report, "before done on build 1");
+		p.session.settingsManager.setProjectTrusted(true);
+		await p.session.reload();
+		p.release("after");
+		await p.spawn("after", "Look after the user trusts it");
+		await until("after finishes", () => p.record("after")?.state === "idle");
+		assert.equal(p.record("after")?.report, "after done on build 1 with PROJECT-SYSTEM, PROJECT-APPEND, PROJECT-PREFIX");
+	} finally { await p.close(); }
 });
 
 test("a shutdown other than a reload interrupts children as before", { timeout: 60_000, skip: process.platform === "win32" }, async () => {

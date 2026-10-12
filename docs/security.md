@@ -417,7 +417,10 @@ and `shellCommandPrefix`) load only as Pi would decide at a start with no one
 to ask: nothing there needs trust, you trusted the directory before, or
 `defaultProjectTrust` is `"always"`. Otherwise they are not loaded. A worktree
 made from a `cwd` takes the trust of the directory it was made from. A child
-without a `cwd` loads project settings as before. The path must name an
+without a `cwd` follows the parent's trust decision. It loads the project's
+`.pi/` settings and resources only when the parent trusts the project. Before this change, such a child trusted the project by default, so
+the `shellCommandPrefix` of an untrusted repository reached the child's bash.
+The path must name an
 existing directory without control characters; it is resolved to its real
 path before use and is never passed to a shell. A read-only child's subagents
 can't make a worktree from a `cwd`, because `git worktree add` runs that

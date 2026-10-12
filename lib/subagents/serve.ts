@@ -34,6 +34,8 @@ export interface Scope extends ModelScope {
 	readonly config: SubagentsConfig;
 	readonly thinking: ThinkingSettings;
 	readonly guide: string;
+	/** Main's decision on its project's `.pi/`, which children in main's directory follow; unset on a Pi that has none. */
+	readonly projectTrusted: boolean | undefined;
 }
 
 function thinkingSettings(sdk: Sdk, cwd: string, agentDir: string): ThinkingSettings {
@@ -59,7 +61,9 @@ export function sessionScope(sdk: Sdk, ctx: ExtensionContext): Scope {
 	const configured = config.defaultModel ? resolveModel(config.defaultModel, allowed) : null;
 	if (configured && !configured.ok) ctx.ui.notify(`subagents.defaultModel: ${configured.error}`, "warning");
 	const fallbackModel = configured?.ok ? configured.choice.ref : parentRef && allowed.some((choice) => choice.ref === parentRef) ? parentRef : allowed[0]?.ref ?? null;
-	return { config, allowed, fallbackModel, thinking: thinkingSettings(sdk, ctx.cwd, agentDir), guide: readGuide(agentDir, ctx.cwd).text };
+	const trust = (ctx as Partial<Pick<ExtensionContext, "isProjectTrusted">>).isProjectTrusted;
+	return { config, allowed, fallbackModel, thinking: thinkingSettings(sdk, ctx.cwd, agentDir), guide: readGuide(agentDir, ctx.cwd).text,
+		projectTrusted: typeof trust === "function" ? trust.call(ctx) : undefined };
 }
 
 /** The parent's model runtime when Pi exposes it, so children share auth and providers. */
@@ -123,6 +127,8 @@ function childLauncher(inputs: LauncherInputs): Launcher {
 	const agentDir = sdk.getAgentDir();
 	return createLauncher({
 		sdk, agentDir, cwd: ctx.cwd, generation: inputs.generation,
+		// Read at this start, a takeover's included: the module that serves the session launches with its own `ctx`'s decision.
+		...(scope.projectTrusted !== undefined ? { projectTrusted: scope.projectTrusted } : {}),
 		sessionDir: join(agentDir, "sessions", "subagents", ctx.sessionManager.getSessionId()),
 		modelRuntime: runtimeSource(sdk, ctx),
 		modelAllowed: (model) => scope.allowed.some((choice) => choice.ref === model),
