@@ -391,6 +391,35 @@ def cmd_compose(req):
     return {"files": [req["out"]]}
 
 
+# The commands that make requests to the link's hosts.
+NETWORK_COMMANDS = ("info", "captions", "download")
+PROXY_NAMES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+
+
+def load_guard():
+    """net_guard.py from this folder; -I keeps the folder off sys.path, so it is loaded by path."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("net_guard", os.path.join(os.path.dirname(os.path.abspath(__file__)), "net_guard.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def guard_network(req):
+    """Sends every request of this call through the guard proxy, unless the user set a proxy.
+
+    A proxy the user set (linkContext.proxy, or a proxy variable) decides itself which hosts it reaches.
+    """
+    if req.get("proxy") or any(os.environ.get(name) for name in PROXY_NAMES):
+        return None
+    guard = load_guard()
+    proxy = guard.start(req.get("testAllowTargets") or ())
+    guard.take_over_environment(proxy)
+    req["proxy"] = proxy
+    return guard
+
+
 COMMANDS = {
     "info": cmd_info,
     "captions": cmd_captions,
@@ -404,12 +433,16 @@ COMMANDS = {
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in COMMANDS:
         emit({"error": f"usage: helper.py {'|'.join(COMMANDS)}"}, 2)
+    guard = None
     try:
         req = json.loads(sys.stdin.read() or "{}")
+        guard = guard_network(req) if sys.argv[1] in NETWORK_COMMANDS else None
         reply, code = COMMANDS[sys.argv[1]](req), 0
     except Exception as error:
         message = str(error).strip().splitlines()
         reply, code = {"error": f"{type(error).__name__}: {message[0][:500] if message else ''}"}, 1
+        if guard and guard.REFUSED:
+            reply = {"error": f"Refusing a private or local address: {guard.REFUSED[0]} (the link sent yt-dlp there). {reply['error']}"}
     emit(reply, code)
 
 

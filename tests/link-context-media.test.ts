@@ -511,7 +511,7 @@ except Exception as error:
     out["live"] = str(error)
 out["vod"] = opts["match_filter"]({"live_status": "was_live"})
 print(json.dumps(out))`;
-	const result = spawnSync(python as string, ["-I", "-c", code, dirname(HELPER)], { encoding: "utf8" });
+	const result = spawnSync(python as string, ["-I", "-B", "-c", code, dirname(HELPER)], { encoding: "utf8" });
 	assert.equal(result.status, 0, result.stderr);
 	const out = JSON.parse(result.stdout);
 	assert.equal(out.video, 2 * 1024 ** 3);
