@@ -286,7 +286,18 @@ class VoiceRuntime {
 		mkdirSync(join(this.home, "sessions"), { recursive: true, mode: 0o700 });
 		this.lease = join(this.home, "sessions", String(process.pid));
 		writeFileSync(this.lease, "");
-		this.setup = new Setup({
+		this.setup = this.createSetup();
+		this.client = new DaemonClient({ socketPath: join(this.home, "daemon.sock"), spawnDaemon: (failed) => this.spawnDaemon(failed) });
+		this.controller = this.createController(this.createLink());
+		this.unsubscribe = ctx.ui.onTerminalInput((data) => this.controller.handleInput(data));
+		// Headless hosts never download models; offline sessions use whatever is already installed.
+		if (!isOffline() && hasAudioInput(process.platform, process.env) && !provisioningComplete(readTiers(this.home), hardwareFacts())) {
+			this.setup.start();
+		}
+	}
+
+	private createSetup(): Setup {
+		return new Setup({
 			home: this.home,
 			onProgress: (label) => {
 				this.setupLabel = label;
@@ -296,7 +307,10 @@ class VoiceRuntime {
 			onFinish: (failure, refused) => this.onSetupFinished(failure, refused),
 			onCallbackError: (error) => this.logError("setup callback", error),
 		});
-		this.client = new DaemonClient({ socketPath: join(this.home, "daemon.sock"), spawnDaemon: (failed) => this.spawnDaemon(failed) });
+	}
+
+	/** The controller's way to the daemon; the client's events reach it through here. */
+	private createLink(): DaemonLink {
 		const link: DaemonLink = {
 			onEvent: () => {},
 			onClose: () => {},
@@ -314,7 +328,12 @@ class VoiceRuntime {
 		};
 		// A daemon that exits (unload, crash) must end the dictation now, not after the final timeout.
 		this.client.onClose = () => link.onClose();
-		this.controller = new VoiceController({
+		return link;
+	}
+
+	private createController(link: DaemonLink): VoiceController {
+		const ctx = this.ctx;
+		return new VoiceController({
 			key: (process.env.PI_VOICE_KEY || DEFAULT_KEY).trim().toLowerCase(),
 			now: Date.now,
 			link,
@@ -332,11 +351,6 @@ class VoiceRuntime {
 				},
 			},
 		});
-		this.unsubscribe = ctx.ui.onTerminalInput((data) => this.controller.handleInput(data));
-		// Headless hosts never download models; offline sessions use whatever is already installed.
-		if (!isOffline() && hasAudioInput(process.platform, process.env) && !provisioningComplete(readTiers(this.home), hardwareFacts())) {
-			this.setup.start();
-		}
 	}
 
 	private get desktopRoute(): boolean {

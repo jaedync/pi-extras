@@ -51,7 +51,6 @@ const FOOTER_FAILED = "status-plus: footer failed, see status-plus.log";
 /** An unknown STATUSLINE_TZ is logged with the first session, not with each one. */
 let zoneLogged = false;
 
-
 interface FooterData {
 	getGitBranch(): string | null;
 	getExtensionStatuses(): ReadonlyMap<string, string>;

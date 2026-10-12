@@ -324,10 +324,11 @@ export function contextBar(_paint: Painter, percent: number): string {
 export function limitText(paint: Painter, entry: LimitEntry, now: number, inlineCountdown = false): string {
 	let text = entry.label ? `${entry.label} ` : "";
 	if (entry.usedPct !== undefined) {
+		const reset = dateMs(entry.resetMs);
 		text += `${Math.round(entry.usedPct)}%`;
 		if (entry.remainingText) text += ` (${entry.remainingText})`;
-		else if (inlineCountdown && entry.usedPct >= WARN_PCT && (dateMs(entry.resetMs) ?? 0) > now) {
-			text += ` ${formatDuration(entry.resetMs! - now, false)}`;
+		else if (inlineCountdown && entry.usedPct >= WARN_PCT && reset !== undefined && reset > now) {
+			text += ` ${formatDuration(reset - now, false)}`;
 		}
 		return paint.fg(toneForPct(entry.usedPct), text);
 	}
