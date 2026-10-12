@@ -35,7 +35,7 @@ import { formatMoney } from "../lib/status-plus-logic.ts";
 import { editTarget } from "../lib/subagents/worktree.ts";
 import { checkoutOf } from "../lib/subagents/checkout.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
-import { type Served, serveSession } from "../lib/subagents/serve.ts";
+import { chatSettings, mainTrust, type Served, serveSession } from "../lib/subagents/serve.ts";
 import { mainMessageTool, stopTool, subagentTool } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
@@ -53,16 +53,6 @@ and on /reload. Edit freely.
 
 - (model): (when to use it)
 `;
-
-/** How main's chat is drawn, so an agent's chat in the inspector matches it. */
-function chatSettings(cwd: string): { hideThinking?: boolean; outputPad?: number } {
-	try {
-		const settings = sdk.SettingsManager.create(cwd, sdk.getAgentDir()) as unknown as { getHideThinkingBlock?: () => boolean; getOutputPad?: () => number };
-		return { hideThinking: settings.getHideThinkingBlock?.(), outputPad: settings.getOutputPad?.() };
-	} catch {
-		return {};
-	}
-}
 
 export default function subagents(pi: ExtensionAPI) {
 	if (process.env.PI_SUBAGENTS === "off") return;
@@ -90,6 +80,8 @@ export default function subagents(pi: ExtensionAPI) {
 	});
 	let inspectorUi: InspectorHost | null = null;
 	let inspectorCwd = process.cwd();
+	/** Main's decision on its project's `.pi/`, which decides the inspector's look as it does main's. */
+	let inspectorTrusted: boolean | undefined;
 	let inspected: ShownOverlay | undefined;
 
 	/**
@@ -108,7 +100,7 @@ export default function subagents(pi: ExtensionAPI) {
 			streaming: () => team().streaming(name),
 			tool: (toolName) => team().tool(name, toolName),
 			cwd: team().get(name)?.cwd ?? team().get(name)?.worktree?.path ?? inspectorCwd,
-			...chatSettings(inspectorCwd),
+			...chatSettings(sdk, inspectorCwd, sdk.getAgentDir(), inspectorTrusted),
 			motion,
 			hue: (other) => agentHue(team().get(other)?.model),
 			stop: async () => { await team().stop(name); },
@@ -227,6 +219,7 @@ export default function subagents(pi: ExtensionAPI) {
 		}
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui as unknown as InspectorHost : null;
 		inspectorCwd = ctx.cwd;
+		inspectorTrusted = mainTrust(ctx);
 		if (ctx.hasUI && ctx.mode === "tui") {
 			widget.attach(ctx.ui as never, () => ({ records: current.host().team.list(), pending: current.host().mail.pending() }), inspect, () => viewAll());
 		}

@@ -1143,8 +1143,9 @@ a `cwd` of their own. A resume or a restore keeps it.
 **Models.** A child may run on any of the session's scoped models
 (`enabledModels`, the list `/scoped-models` shows); short names such as `luna`
 or `opus` work when they match one. Its thinking level is the call's, else the
-one Pi's `modelThinkingLevels` sets for that model, else your default. Which
-model suits what is yours to say in a Markdown guide,
+one Pi's `modelThinkingLevels` sets for that model, else your default. These
+settings come from the project's `.pi/settings.json` only when main trusts
+the project. Which model suits what is yours to say in a Markdown guide,
 `~/.pi/agent/subagent-models.md`:
 
 ```md
@@ -1280,7 +1281,8 @@ Click a row, a `subagent` row, or pick one in the agents view to open the
 inspector over the full terminal: the agent's chat, drawn as Pi draws main's.
 Its task is the first message, then its replies, thinking and tool rows, with
 the same look Tool Display, Copy Blocks and the thinking tail give main, and
-the reply it is writing streams in. A click on a row works as it does in main.
+the reply it is writing streams in. It uses main's `hideThinkingBlock` and
+`outputPad`, from the project's settings only when main trusts the project. A click on a row works as it does in main.
 The chat sits on a wash of the agent's provider color, so it never reads as
 main. Its live row is the title bar, and a message box sits between two rules
 in the agent's color, as Pi's editor does; the top rule carries its tool

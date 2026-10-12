@@ -38,9 +38,24 @@ export interface Scope extends ModelScope {
 	readonly projectTrusted: boolean | undefined;
 }
 
-function thinkingSettings(sdk: Sdk, cwd: string, agentDir: string): ThinkingSettings {
+/** Main's decision on its project's `.pi/` (Pi's `ctx.isProjectTrusted()`); undefined on a Pi that has none. */
+export function mainTrust(ctx: ExtensionContext): boolean | undefined {
+	const trust = (ctx as Partial<Pick<ExtensionContext, "isProjectTrusted">>).isProjectTrusted;
+	return typeof trust === "function" ? trust.call(ctx) : undefined;
+}
+
+/**
+ * Main's settings as Pi reads them for main: the project's `.pi/settings.json`
+ * only when main trusts the project. Pi's default would trust it, so an
+ * untrusted repository could set what main refused.
+ */
+function mainSettings(sdk: Sdk, cwd: string, agentDir: string, trusted: boolean | undefined): unknown {
+	return sdk.SettingsManager.create(cwd, agentDir, trusted === undefined ? {} : { projectTrusted: trusted });
+}
+
+export function thinkingSettings(sdk: Sdk, cwd: string, agentDir: string, trusted: boolean | undefined): ThinkingSettings {
 	try {
-		const settings = sdk.SettingsManager.create(cwd, agentDir) as unknown as {
+		const settings = mainSettings(sdk, cwd, agentDir, trusted) as {
 			getAllModelThinkingLevels?: () => ThinkingSettings["modelThinkingLevels"];
 			getDefaultThinkingLevel?: () => string | undefined;
 		};
@@ -48,6 +63,16 @@ function thinkingSettings(sdk: Sdk, cwd: string, agentDir: string): ThinkingSett
 			modelThinkingLevels: settings.getAllModelThinkingLevels?.() ?? {},
 			...(settings.getDefaultThinkingLevel?.() ? { defaultThinkingLevel: settings.getDefaultThinkingLevel!()! } : {}),
 		};
+	} catch {
+		return {};
+	}
+}
+
+/** How main's chat is drawn, so an agent's chat in the inspector matches it. */
+export function chatSettings(sdk: Sdk, cwd: string, agentDir: string, trusted: boolean | undefined): { hideThinking?: boolean; outputPad?: number } {
+	try {
+		const settings = mainSettings(sdk, cwd, agentDir, trusted) as { getHideThinkingBlock?: () => boolean; getOutputPad?: () => number };
+		return { hideThinking: settings.getHideThinkingBlock?.(), outputPad: settings.getOutputPad?.() };
 	} catch {
 		return {};
 	}
@@ -61,9 +86,8 @@ export function sessionScope(sdk: Sdk, ctx: ExtensionContext): Scope {
 	const configured = config.defaultModel ? resolveModel(config.defaultModel, allowed) : null;
 	if (configured && !configured.ok) ctx.ui.notify(`subagents.defaultModel: ${configured.error}`, "warning");
 	const fallbackModel = configured?.ok ? configured.choice.ref : parentRef && allowed.some((choice) => choice.ref === parentRef) ? parentRef : allowed[0]?.ref ?? null;
-	const trust = (ctx as Partial<Pick<ExtensionContext, "isProjectTrusted">>).isProjectTrusted;
-	return { config, allowed, fallbackModel, thinking: thinkingSettings(sdk, ctx.cwd, agentDir), guide: readGuide(agentDir, ctx.cwd).text,
-		projectTrusted: typeof trust === "function" ? trust.call(ctx) : undefined };
+	const projectTrusted = mainTrust(ctx);
+	return { config, allowed, fallbackModel, thinking: thinkingSettings(sdk, ctx.cwd, agentDir, projectTrusted), guide: readGuide(agentDir, ctx.cwd).text, projectTrusted };
 }
 
 /** The parent's model runtime when Pi exposes it, so children share auth and providers. */

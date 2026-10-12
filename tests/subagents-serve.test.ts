@@ -5,7 +5,7 @@
  */
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as tick } from "node:timers/promises";
@@ -95,4 +95,25 @@ test("a start that waits too long for a host still closing says to run /reload a
 	await assert.rejects(pi.serve(undefined, { closeWaitMs: 20 }), /still closing\. Run \/reload again/);
 	finish();
 	await host.close();
+});
+
+test("main's thinking levels and chat look come from its project's settings only when main trusts the project", async () => {
+	const sdk = await import("@earendil-works/pi-coding-agent");
+	const { chatSettings, sessionScope, thinkingSettings } = await import("../lib/subagents/serve.ts");
+	const dir = mkdtempSync(join(tmpdir(), "subagents-trust-"));
+	cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+	const agentDir = join(dir, "agent");
+	const project = join(dir, "repository");
+	mkdirSync(agentDir, { recursive: true });
+	mkdirSync(join(project, ".pi"), { recursive: true });
+	writeFileSync(join(project, ".pi", "settings.json"), JSON.stringify({ defaultThinkingLevel: "high", modelThinkingLevels: { "faux/cheap": "low" }, hideThinkingBlock: true, outputPad: 0 }));
+	assert.deepEqual(thinkingSettings(sdk, project, agentDir, false), { modelThinkingLevels: {} });
+	assert.deepEqual(chatSettings(sdk, project, agentDir, false), { hideThinking: false, outputPad: 1 });
+	assert.deepEqual(thinkingSettings(sdk, project, agentDir, true), { modelThinkingLevels: { "faux/cheap": "low" }, defaultThinkingLevel: "high" });
+	assert.deepEqual(chatSettings(sdk, project, agentDir, true), { hideThinking: true, outputPad: 0 });
+	const ctx = (trusted: boolean) => ({ cwd: project, scopedModels: [], model: undefined, ui: { notify: () => undefined }, isProjectTrusted: () => trusted });
+	const scoped = (trusted: boolean) => sessionScope({ ...sdk, getAgentDir: () => agentDir } as never, ctx(trusted) as never);
+	assert.equal(scoped(false).projectTrusted, false);
+	assert.equal(scoped(false).thinking.defaultThinkingLevel, undefined, "main's decision, not Pi's default, which trusts");
+	assert.equal(scoped(true).thinking.defaultThinkingLevel, "high");
 });
