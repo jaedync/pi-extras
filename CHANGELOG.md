@@ -2,6 +2,38 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.10 - 2026-10-12
+
+### Changed
+
+- Subagents: `/reload` no longer stops children. A child that works
+  continues on the code that it started with. Its next run uses the new code.
+  A child that starts after the reload uses the new code. Mail to main waits
+  during the reload and then arrives one time. When no child works, a team
+  from the new code takes over. Some reloads must still interrupt children:
+  a version that can't take over, a takeover that fails, or a reload that
+  does not finish in 30 seconds. Then the next session start resumes them,
+  as before, and sends the mail that waited. The first `/reload` after you
+  update runs the old code, so it still interrupts children.
+- Subagents: each child launch reads `settings.json`, the project's
+  settings, `models.json`, context files, `SYSTEM.md` and skills again. A
+  change to `compaction.reserveTokens` or to a model's `contextWindow` now
+  applies to the next child that starts. Before the launch reads a changed
+  `models.json`, Pi's own loader checks it. A file with an error does not
+  change main's models.
+- Subagents: a message to a child that finished less than two minutes ago
+  uses its open session only when nothing that the launch read changed.
+  Otherwise the child relaunches from its session file.
+- Subagents: children read `APPEND_SYSTEM.md` before their own instructions,
+  as main does. A project's file applies only when Pi trusts the project.
+
+### Fixed
+
+- Subagents: a child that works in main's directory now follows main's
+  project-trust decision. Before, it trusted the project by default, so an
+  untrusted repository's `.pi/settings.json` (for example
+  `shellCommandPrefix`) and `.pi/SYSTEM.md` reached the child.
+
 ## 0.24.9 - 2026-10-12
 
 ### Fixed
