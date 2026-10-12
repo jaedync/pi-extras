@@ -234,6 +234,12 @@ export interface ChildHandle {
 
 export interface ChildHooks {
 	update(patch: Partial<Pick<AgentRecord, "activity" | "work" | "toolCalls" | "usage" | "contextTokens" | "contextWindow">>): void;
+	/**
+	 * Called where the run's loop would ask the model again, with the turn's
+	 * tool results recorded and no tool running: true ends the run's prompt
+	 * there, and the team moves the run to a new session (swap.ts).
+	 */
+	turnEnded?(): boolean;
 }
 
 export interface Launcher {

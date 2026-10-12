@@ -8,7 +8,8 @@
  * session file with its context, so a long session's memory stays bounded.
  * A session the launcher says a launch now would not make (new code after a
  * /reload, an edited input, stamp.ts) goes at the child's next pause, so its
- * next run starts on what is current; a running child keeps it until then.
+ * next run starts on what is current; a running child moves to a new session
+ * at its next turn boundary instead (swap.ts).
  */
 import type { AgentRecord, ChildHandle, Launcher } from "./types.ts";
 
@@ -80,10 +81,15 @@ export class OpenSessions {
 	 * inside another tool, so neither shows up as work after it.
 	 */
 	onlyMessageCall(name: string): boolean {
+		const calls = this.lastCalls(name);
+		return calls.length === 1 && (calls[0] as { name?: unknown }).name === "message";
+	}
+
+	/** The tool calls of the child's last response; none when it only wrote text. */
+	lastCalls(name: string): readonly unknown[] {
 		const messages = this.handles.get(name)?.messages() ?? [];
 		const last = [...messages].reverse().find((message) => (message as { role?: unknown }).role === "assistant") as { content?: unknown } | undefined;
-		const calls = Array.isArray(last?.content) ? last.content.filter((part) => (part as { type?: unknown }).type === "toolCall") : [];
-		return calls.length === 1 && (calls[0] as { name?: unknown }).name === "message";
+		return Array.isArray(last?.content) ? last.content.filter((part) => (part as { type?: unknown }).type === "toolCall") : [];
 	}
 
 	/** A run ended in `state`: its session goes now, after a quiet spell, or stays for a child still at work. */

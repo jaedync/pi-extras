@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { copyPackage, hold, parent, reloadWarnings, removeScratch, shelf, until, waitingInBash } from "./support/reload-harness.mts";
 
-test("/reload interrupts no child; new children and the next run of a paused one use the new code; each report reaches main once", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
+test("/reload interrupts no child; a running child moves to the new code at its next turn boundary, new children and paused ones use it, and each report reaches main once", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
 	const code = copyPackage();
 	const p = await parent(code.root);
 	try {
@@ -24,10 +24,11 @@ test("/reload interrupts no child; new children and the next run of a paused one
 		p.release("beta");
 		p.release("alpha");
 		await until("alpha and beta finish", () => p.record("alpha")?.state === "idle" && p.record("beta")?.state === "idle");
-		assert.equal(p.record("alpha")?.report, "alpha done on build 1", "a running child keeps the code it started with");
-		assert.equal(p.record("alpha")?.runs, 1);
+		assert.match(p.transcript("alpha"), /alpha-on-build-1/, "its turn under way when Pi reloaded ran the code it started with");
+		assert.equal(p.record("alpha")?.report, "alpha done on build 2", "its next turn ran the new code");
+		assert.equal(p.record("alpha")?.runs, 1, "in the same run");
 		assert.equal(p.record("beta")?.report, "beta done on build 2", "a child started after the reload runs the new code");
-		await until("every report reaches main", () => ["alpha done", "beta done", "delta done on build 1", "delta done on build 2"].every((text) => p.reports(text) > 0));
+		await until("every report reaches main", () => ["alpha done on build 2", "beta done", "delta done on build 1", "delta done on build 2"].every((text) => p.reports(text) > 0));
 		// Quiet now: a team from the new code takes over from the index, which marks what it restored.
 		await until("the new code's team takes over", () => ["alpha", "beta", "delta"].every((name) => p.record(name)?.restored === true));
 		await p.spawn("gamma", "Start after the new team");
@@ -36,10 +37,12 @@ test("/reload interrupts no child; new children and the next run of a paused one
 		assert.equal(p.record("gamma")?.report, "gamma done on build 2");
 		await until("gamma's report reaches main", () => p.reports("gamma done") > 0);
 		await p.session.agent.state.tools.find((t: any) => t.name === "message").execute("alpha-again", { to: "alpha", text: "Once more" }, undefined);
-		await until("alpha's second run, from its file", () => p.record("alpha")?.report === "alpha done on build 2");
-		assert.equal(p.record("alpha")?.runs, 2);
-		await until("its report reaches main", () => p.reports("alpha done on build 2") > 0);
-		for (const text of ["alpha done on build 1", "alpha done on build 2", "beta done", "delta done on build 1", "delta done on build 2", "gamma done"]) assert.equal(p.reports(text), 1, `${text}: reported once`);
+		await until("alpha's second run, from its file", () => p.record("alpha")?.runs === 2 && p.record("alpha")?.state === "idle");
+		assert.equal(p.record("alpha")?.report, "alpha done on build 2");
+		await until("its report reaches main", () => p.reports("alpha done on build 2") === 2);
+		for (const text of ["beta done", "delta done on build 1", "delta done on build 2", "gamma done"]) assert.equal(p.reports(text), 1, `${text}: reported once`);
+		assert.equal(p.reports("alpha done on build 2"), 2, "one report for each of its two runs");
+		assert.equal(p.reports("alpha done on build 1"), 0);
 		assert.equal(p.session.messages.filter((m: any) => m.customType === "subagent-restore").length, 0, "nothing to announce");
 		assert.deepEqual(reloadWarnings(p), []);
 	} finally { await p.close(); }
@@ -60,7 +63,9 @@ test("a second /reload while the adopted team still works hands the same childre
 		p.release("long");
 		p.release("late");
 		await until("both finish", () => p.record("long")?.state === "idle" && p.record("late")?.state === "idle");
-		assert.equal(p.record("long")?.report, "long done on build 1");
+		assert.match(p.transcript("long"), /long-on-build-1/);
+		assert.equal(p.record("long")?.report, "long done on build 2", "it moved to the newest code at its next turn boundary");
+		assert.equal(p.record("long")?.runs, 1);
 		assert.equal(p.record("late")?.report, "late done on build 2");
 		await until("the reports reach main", () => p.reports("long done") > 0 && p.reports("late done") > 0);
 		await until("the newest code's team takes over", () => p.record("long")?.restored === true);
@@ -70,7 +75,7 @@ test("a second /reload while the adopted team still works hands the same childre
 	} finally { await p.close(); }
 });
 
-test("a launch under way when Pi reloads ends on the code it began with, runs, reports once, and its next run uses the new code", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
+test("a launch under way when Pi reloads ends on the code it began with, moves to the new code at its next turn boundary, and reports once", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
 	const code = copyPackage();
 	const p = await parent(code.root);
 	const gate = hold("launch", "slow");
@@ -84,13 +89,14 @@ test("a launch under way when Pi reloads ends on the code it began with, runs, r
 		await waitingInBash(p, "slow");
 		p.release("slow");
 		await until("slow finishes", () => p.record("slow")?.state === "idle");
-		assert.equal(p.record("slow")?.report, "slow done on build 1", "the launch finished with the code it began with");
+		assert.match(p.transcript("slow"), /slow-on-build-1/, "the launch finished with the code it began with");
+		assert.equal(p.record("slow")?.report, "slow done on build 2", "its next turn ran the new code");
+		assert.equal(p.record("slow")?.runs, 1);
 		await until("its report reaches main", () => p.reports("slow done") > 0);
-		await p.session.agent.state.tools.find((t: any) => t.name === "message").execute("again", { to: "slow", text: "Once more" }, undefined);
-		await until("its next run", () => p.record("slow")?.report === "slow done on build 2");
-		await until("that report reaches main", () => p.reports("slow done on build 2") > 0);
-		assert.equal(p.reports("slow done on build 1"), 1);
-		assert.equal(p.reports("slow done on build 2"), 1);
+		await p.send("slow", "Once more");
+		await until("its next run", () => p.record("slow")?.runs === 2 && p.record("slow")?.state === "idle");
+		await until("that report reaches main", () => p.reports("slow done on build 2") === 2);
+		assert.equal(p.reports("slow done on build 1"), 0);
 		assert.deepEqual(reloadWarnings(p), []);
 	} finally {
 		gate.open();

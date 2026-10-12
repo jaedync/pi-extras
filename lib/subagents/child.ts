@@ -336,6 +336,56 @@ export function streamingActivity(update: { type?: string; contentIndex?: number
 	return { activity, work: "call" };
 }
 
+/** A turn as Pi's `finishTurn` sees it: the reply that ended it and the tool results recorded for it. */
+export interface TurnEnd {
+	readonly message: { readonly stopReason?: string };
+	readonly toolResults: readonly unknown[];
+}
+
+/**
+ * Whether the agent loop would ask the model again after `turn`: a normal
+ * reply whose tool results are in, or steering that waits, with no tool
+ * running and no compaction. Only there may a run end for a swap (swap.ts):
+ * anywhere else it would cut the run short, or leave a call without its result.
+ */
+export function turnGoesOn(turn: TurnEnd, session: { readonly queued: boolean; readonly toolsRunning: number; readonly compacting: boolean }): boolean {
+	const stop = turn.message.stopReason;
+	if (stop === "error" || stop === "aborted" || session.toolsRunning > 0 || session.compacting) return false;
+	return turn.toolResults.length > 0 || session.queued;
+}
+
+type FinishTurn = (turn: TurnEnd, signal?: AbortSignal) => unknown;
+
+/**
+ * Ends the run after a turn when the team asks (a swap, swap.ts), through the
+ * agent's own `finishTurn`: Pi calls it once the turn's tool results are in,
+ * and `{ action: "end" }` ends the loop before it reads its queues or asks the
+ * model again, so no aborted reply is left in the session. Steering that came
+ * by then would make Pi go on, so it leaves the queue for `held`; the team has
+ * it as unread steering for the new session.
+ */
+export function endAtTurn(session: AgentSession, hooks: ChildHooks, held: string[]): { ending(): boolean; reset(): void } {
+	let ending = false;
+	const turnEnd = { ending: () => ending, reset: () => { ending = false; } };
+	// A session without Pi's agent (a test's) never ends a run for a swap.
+	const agent = (session as { agent?: unknown }).agent as { finishTurn?: FinishTurn; hasQueuedMessages?(): boolean; state?: { pendingToolCalls?: ReadonlySet<string> } } | undefined;
+	if (!agent) return turnEnd;
+	const previous = agent.finishTurn;
+	agent.finishTurn = async (turn, signal) => {
+		const decision = await previous?.(turn, signal) as { action?: string } | undefined;
+		// Pi can still go on after an end, to compact; the next turn ends too.
+		if (ending) return { action: "end" };
+		if (decision?.action === "end" || !hooks.turnEnded) return decision;
+		const goesOn = turnGoesOn(turn, { queued: agent.hasQueuedMessages?.() === true, toolsRunning: agent.state?.pendingToolCalls?.size ?? 0, compacting: session.isCompacting === true });
+		if (!goesOn || !hooks.turnEnded()) return decision;
+		ending = true;
+		const { steering, followUp } = session.clearQueue();
+		held.push(...steering, ...followUp);
+		return { action: "end" };
+	};
+	return turnEnd;
+}
+
 /** What an agent does now, in words and as its spinner's state. */
 export interface Activity {
 	readonly activity: string;
@@ -447,9 +497,12 @@ function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: numb
 	const streaming = watchStreaming(session);
 	const unwatch = watchChild(session, hooks, contextWindow, record);
 	const dispose = childDisposer(session, () => { streaming.stop(); unwatch(); }, guard);
+	const held: string[] = [];
+	const turnEnd = endAtTurn(session, hooks, held);
 	return {
 		sessionFile: session.sessionFile,
 		async prompt(text) {
+			turnEnd.reset();
 			await session.prompt(text);
 			const failure = guard.failure();
 			if (failure) throw new Error(failure);
@@ -457,7 +510,9 @@ function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: numb
 			if (last?.stopReason === "error") throw new Error(last.errorMessage || "The model returned an error.");
 		},
 		steer(text) {
-			void session.steer(text).catch(() => undefined);
+			// A run that ended at a turn for a swap reads nothing more here.
+			if (turnEnd.ending()) held.push(text);
+			else void session.steer(text).catch(() => undefined);
 		},
 		abort: () => session.abort(),
 		lastText: () => session.getLastAssistantText(),
@@ -465,10 +520,11 @@ function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: numb
 		streaming: streaming.current,
 		tool: (name) => session.getToolDefinition(name),
 		takeQueued() {
+			const kept = held.splice(0);
 			const agent = session.agent as { hasQueuedMessages?: () => boolean };
-			if (agent.hasQueuedMessages?.() !== true) return [];
+			if (agent.hasQueuedMessages?.() !== true) return kept;
 			const { steering, followUp } = session.clearQueue();
-			return [...steering, ...followUp];
+			return [...kept, ...steering, ...followUp];
 		},
 		dispose,
 	};

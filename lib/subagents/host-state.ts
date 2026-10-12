@@ -6,8 +6,9 @@
  * outlive the module that opened it.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { operationalLine } from "../operational-log.ts";
 import { afterOrder, busyInGroup } from "./after.ts";
 import { stillWorking } from "./status.ts";
 import { HOST_VERSION, type HeldMail, type HostActivity, type HostPorts, type HostState } from "./contract.ts";
@@ -62,6 +63,10 @@ function teamFor(inputs: HostInputs, ports: HostPorts, mail: () => MainMail, pla
 		replyTimeoutMs: config.replyTimeoutMs,
 		runBudget: { minutes: config.maxRunMinutes, ...(config.maxRunCost !== null ? { cost: config.maxRunCost } : {}) },
 		fallbackModels: fallbackChain(config.fallbackModels, scope.fallbackModel, scope.allowed, warn),
+		swapAtTurn: config.swapAtTurn,
+		// The scope of the session start serving now, as the launcher checks it.
+		modelAllowed: (model) => ports.models().allowed.some((choice) => choice.ref === model),
+		log: swapLog(inputs.agentDir),
 		messagesFor: (record) => record.sessionFile && existsSync(record.sessionFile) && !record.restoreError ? scanner.messages(record.sessionFile) : [],
 		prepareResume: (record) => {
 			// The scope of the session start serving now, which a /reload may have changed.
@@ -79,6 +84,15 @@ function teamFor(inputs: HostInputs, ports: HostPorts, mail: () => MainMail, pla
 		deliverToMain: (delivery) => mail().deliver(delivery),
 		launcher: ports.launcher,
 	});
+}
+
+/** Each swap (swap.ts), one line in `subagents/swaps.log`; best effort, as operational-log.ts is. */
+function swapLog(agentDir: string): (message: string) => void {
+	const file = join(agentDir, "subagents", "swaps.log");
+	return (message) => {
+		try { mkdirSync(dirname(file), { recursive: true }); } catch { /* the append below fails the same way, and quietly */ }
+		operationalLine(file, `${new Date().toISOString()} ${message}`);
+	};
 }
 
 /** Puts the saved roster back in the team; throws, leaving the index as it was, when it can't be read. */

@@ -59,6 +59,14 @@ export function stampCurrent(stamp: LaunchStamp, generation: number): boolean {
 	return stamp.generation === generation && stamp.files.every(([path, identity]) => fileIdentity(path) === identity);
 }
 
+/** Each file whose identity changed since `stamp` was taken, as `path@identity` of what is there now. */
+export function changedFiles(stamp: LaunchStamp): string[] {
+	return stamp.files.flatMap(([path, identity]) => {
+		const now = fileIdentity(path);
+		return now === identity ? [] : [`${path}@${now}`];
+	});
+}
+
 /**
  * The files a launch reads before its resources: global and project settings,
  * models, and pi-extras.json, which the child's quota guard and Cache

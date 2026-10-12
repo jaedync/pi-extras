@@ -96,7 +96,9 @@ the package. Removing it does not remove your credentials or change other packag
   `"always"` also allows one automatic attempt after a restart or crash;
   `"notify"` never resumes on its own), and `fallbackModels` (models, in
   order, that a run moves to when its model can't serve it; default: the
-  default model; `[]` turns fallback off). The model guide is
+  default model; `[]` turns fallback off), and `swapAtTurn` (default `true`;
+  `false` keeps a working child on its session until its run ends, also when
+  that session is not current). The model guide is
   `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
   project. See below.
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
@@ -1476,15 +1478,39 @@ would make the same session. After a `/reload`, or after a change to a file
 that the launch read, the child relaunches from its session file instead. A
 finished child whose session is not current releases it immediately.
 
+**Moving to a new session.** A working child whose session is not current
+moves to a new session at its next turn boundary. That is the point after a
+turn, when the results of its tool calls are recorded and before its model
+gets the next request. The cause is a `/reload` or a change to a file that
+the launch read. These files are `settings.json`, the project's
+`.pi/settings.json`, `models.json`, `pi-extras.json`, the context files,
+`SYSTEM.md`, `APPEND_SYSTEM.md` and the skills. The new session opens from the session file
+with the current code and settings, and the run continues as the same run.
+It keeps its run number, its time and cost budget, its check and fix rounds,
+its edit lock and the answers it is owed. Messages that it had not read go to
+the new session with a short note. The note tells the child that its session
+moved and that it continues where it stopped. A child does not move while a
+question with `expectReply` or a subagent call with `wait: true` blocks it.
+It moves at the end of the turn after that call returns. A child also does
+not move while its run stops, or when its model is not in scope now. Each
+cause moves a run one time at most. Its row shows `moving to a new session`
+and the cause during the move. Each move adds a line to
+`~/.pi/agent/subagents/swaps.log`. The prompt cache keeps the prefix when
+the system prompt and the tools did not change, for example after a change
+to `settings.json` only. A move after a code change costs one cache miss,
+because new code usually changes the child's instructions or tools.
+`swapAtTurn: false` in the `subagents` section turns moves off.
+
 **Headless runs.** `pi -p` and `--mode json` end when main settles, so main
 waits there for its background children. Their reports, questions and notes
 go into main's context as it would otherwise settle, with one more turn to
 read them; a child's question to main gets main's answer and the child goes
 on. Main settles once no child is working and nothing waits for it.
 
-**Reload.** `/reload` does not stop children. A child that works continues on
-the code that it started with. When its run ends, its next run uses the new
-code. A child that starts after the reload uses the new code. Mail to main
+**Reload.** `/reload` does not stop children. A child that works moves to the
+new code at its next turn boundary, as the same run (see **Moving to a new
+session**). A child that starts after the reload uses the new code. A child
+that reaches a turn boundary during the reload waits for the new code. Mail to main
 waits during the reload and then arrives one time. When no child works and
 all mail is in main's transcript, a team from the new code takes over from
 `index.json`. Until then, team settings from `pi-extras.json`, such as

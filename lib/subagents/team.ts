@@ -4,7 +4,8 @@
  * where routing.ts says. Sessions are made by an injected launcher, so all of
  * this runs in tests without a model.
  * A run whose model can't serve it goes on, as the same run, on a fallback
- * model (fallback.ts).
+ * model (fallback.ts); one whose session went stale moves to a new session at
+ * its next turn boundary (swap.ts).
  * A child is not done until its own children have reported. A run that a
  * peer's message started and that ends idle reports to its parent without
  * waking it: main reads it at its next turn, a child parent at its next run.
@@ -24,6 +25,7 @@ import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
 import { saveReport } from "./reports.ts";
+import { causeWords, staleCauses, SWAP_NOTE, swapActivity, swapDue, TurnSwaps } from "./swap.ts";
 import { Routing, type SendOptions } from "./routing.ts";
 import { OpenSessions } from "./sessions.ts";
 import { WorkTrees } from "./work-trees.ts";
@@ -56,6 +58,12 @@ export interface TeamOptions {
 	runBudget?: RunLimits;
 	/** Model references a run goes on with, in order, when its model can't serve it (fallback.ts); unset or empty turns fallback off. */
 	fallbackModels?: readonly string[];
+	/** Whether a running child whose session went stale moves to a new session at its next turn boundary (swap.ts); default true. */
+	swapAtTurn?: boolean;
+	/** Whether a launch now would take `model`; a run on one it would not keeps its session. Unset: every model. */
+	modelAllowed?(model: string): boolean;
+	/** Writes one line to the operational log: each swap. */
+	log?(message: string): void;
 }
 
 export type SendResult =
@@ -80,8 +88,9 @@ export class Team implements HostTeam {
 	private readonly resumePrompts = new Map<string, string>();
 	/** Stopped by their own parent, which already knows; no report goes up. */
 	private readonly stoppedByParent = new Set<string>();
-	/** Runs moving to a fallback model, with what they had used of their budget: the same run goes on. */
+	/** Runs going on in a new session, on a fallback model or after a swap, with what they had used of their budget: the same run goes on. */
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
+	private readonly swaps = new TurnSwaps();
 	private readonly checks = new RunChecks({
 		get: (name) => this.records.get(name), patch: (name, patch) => this.patch(name, patch), under: (name, ancestor) => this.under(name, ancestor),
 		gone: (name) => this.gone(name), now: () => this.now(), known: () => this.knownNames(), messages: (name) => this.sessions.runMessages(name),
@@ -372,7 +381,8 @@ export class Team implements HostTeam {
 
 	private async start(name: string): Promise<void> {
 		const startedAt = this.continuing.has(name) ? this.records.get(name)?.startedAt : undefined;
-		this.patch(name, { state: "starting", startedAt: startedAt ?? this.now(), activity: "starting" });
+		// The same run going on keeps saying why it moves: a fallback model, or a swap.
+		this.patch(name, { state: "starting", startedAt: startedAt ?? this.now(), activity: startedAt !== undefined ? this.records.get(name)?.activity ?? "starting" : "starting" });
 		const opening = this.open(name);
 		this.opening.add(opening);
 		let handle: ChildHandle | null;
@@ -404,6 +414,7 @@ export class Team implements HostTeam {
 		const previous = this.records.get(name)!;
 		this.resumePrompts.delete(name);
 		this.checks.end(name);
+		this.swaps.end(name);
 		this.sessions.endRun(name);
 		this.routing.ended(name);
 		this.forgetAnswer(name);
@@ -425,6 +436,7 @@ export class Team implements HostTeam {
 	/** Shutdown must wait for launchers too, or they can write into a newly reopened transcript. */
 	private async open(name: string): Promise<ChildHandle | null> {
 		const handle = await this.options.launcher.launch(this.records.get(name)!, {
+			turnEnded: () => this.turnEnded(name),
 			update: (patch) => {
 				const record = this.records.get(name);
 				if (!record || !LIVE_STATES.has(record.state)) return;
@@ -469,15 +481,72 @@ export class Team implements HostTeam {
 		while (next !== null) {
 			await handle.prompt(next);
 			if (this.gone(name)) return false;
+			// Its session ended the prompt at a turn boundary to move; what it had not read goes along. Should Pi have
+			// gone on after the end (to compact) to an answer, the run ends here instead, and its session goes at the end.
+			const causes = this.swaps.take(name);
+			if (causes && this.sessions.lastCalls(name).length > 0) return this.swap(name, causes, SWAP_NOTE, false);
 			next = this.late(name, handle);
+			if (next !== null && this.swapBefore(name, next)) return false;
 			if (next !== null || this.waitsFor(name)) continue;
 			const fix = await this.checks.run(name, handle);
 			if (this.gone(name)) return false;
 			// Mail that came during the check goes first, with a fix round's prompt; the check runs again after it.
 			const late = this.late(name, handle);
 			next = late !== null && fix !== null ? `${late}\n\n${fix}` : late ?? fix;
+			if (next !== null && this.swapBefore(name, next)) return false;
 		}
 		return true;
+	}
+
+	/**
+	 * At a turn boundary of `name`'s run (child.ts): whether it ends there to
+	 * move to a new session (swap.ts). Pi waits on this, so it never throws.
+	 */
+	private turnEnded(name: string): boolean {
+		if (this.swaps.ending(name)) return true;
+		const record = this.records.get(name);
+		const handle = this.sessions.get(name);
+		if (!record || !handle) return false;
+		try {
+			const causes = staleCauses(handle.stamp, !this.sessions.stale(name));
+			if (!swapDue({ enabled: this.options.swapAtTurn !== false, state: record.state, asking: this.questions.of(name).length > 0,
+				blocked: this.list().some((entry) => entry.parent === name && entry.blocking && LIVE_STATES.has(entry.state)),
+				ending: this.closed || this.ending.has(name), launchable: this.options.modelAllowed?.(record.model) ?? true,
+				causes, handled: this.swaps.done(name) })) return false;
+			this.swaps.request(name, causes);
+			this.patch(name, { activity: swapActivity(causes), work: "model" });
+			return true;
+		} catch (error) {
+			(this.options.warn ?? console.warn)(`subagents: could not tell whether ${name} should move to a new session: ${(error as Error).message}`);
+			return false;
+		}
+	}
+
+	/** Before the run's next prompt, a stale session moves too, and the new one gets that prompt. */
+	private swapBefore(name: string, prompt: string): boolean {
+		if (!this.turnEnded(name)) return false;
+		this.swap(name, this.swaps.take(name)!, prompt, true);
+		return true;
+	}
+
+	/**
+	 * Moves the run to a new session from its session file, on current code and
+	 * settings, the way a fallback model goes on: the same run with its budget,
+	 * check rounds, mail and edit lock, and the slot it holds. `prompt` comes
+	 * first; steering the old session had not read follows, unless the prompt
+	 * already carries it.
+	 */
+	private swap(name: string, causes: readonly string[], prompt: string, carriesUnread: boolean): false {
+		this.swaps.swapped(name, causes);
+		this.options.log?.(`${name}: run ${this.records.get(name)!.runs} moved to a new session at a turn boundary (${causeWords(causes)})`);
+		// Read before the state change in start() ends the clock.
+		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
+		this.resumePrompts.set(name, prompt);
+		this.checks.seen(name);
+		this.patch(name, { ...(carriesUnread ? {} : this.unreadLeft(name)), activity: swapActivity(causes) });
+		void this.sessions.release(name);
+		void this.start(name);
+		return false;
 	}
 
 	private gone(name: string): boolean {
@@ -504,6 +573,7 @@ export class Team implements HostTeam {
 			return this.fail(name, plan.error);
 		}
 		const { step } = plan;
+		this.swaps.take(name);
 		// Read before the state change below ends the clock; a launch that failed has none left to read.
 		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
 		this.resumePrompts.set(name, fallbackNote(step));
@@ -573,6 +643,7 @@ export class Team implements HostTeam {
 		this.ending.delete(name);
 		this.continuing.delete(name);
 		this.checks.end(name);
+		this.swaps.end(name);
 		// Answers still owed to it die with its run; a message resumes it to ask again.
 		const record = saveReport({ ...this.records.get(name)!, owed: undefined }, this.options.warn ?? console.warn);
 		this.sessions.endRun(name);

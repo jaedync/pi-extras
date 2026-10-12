@@ -16,7 +16,7 @@ import { agentRoot } from "./pi-runtime.mjs";
 export const scratch = mkdtempSync(join(tmpdir(), "subagents-handover-"));
 // Set before importing the SDK. This test must never read real settings or credentials.
 process.env.HOME = scratch;
-const agentDir = join(scratch, "agent");
+export const agentDir = join(scratch, "agent");
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.PI_OFFLINE = "1";
 mkdirSync(agentDir, { recursive: true });
@@ -82,7 +82,24 @@ export interface Parent {
 	reports(text: string): number;
 	release(name: string): void;
 	spawn(name: string, task: string): Promise<void>;
+	/** Main's `message` call. */
+	send(to: string, text: string): Promise<void>;
 	close(): Promise<void>;
+}
+
+/** What a child sees when it is asked: the model's context, its name, the build of its instructions, and the flag files. */
+export interface Asked {
+	readonly context: any;
+	readonly said: string;
+	readonly name: string;
+	readonly build: 1 | 2;
+	readonly flags: string;
+}
+
+/** Writes the `subagents` section of pi-extras.json; before the parent starts, since each session start reads it. */
+export function extrasConfig(section: Record<string, unknown>): void {
+	mkdirSync(agentDir, { recursive: true });
+	writeFileSync(join(agentDir, "pi-extras.json"), JSON.stringify({ subagents: section }));
 }
 
 /**
@@ -90,7 +107,7 @@ export interface Parent {
  * A child first waits in bash for its flag, then reports which build of the
  * instructions it was launched with; main only reads what arrives.
  */
-export async function parent(packageRoot: string, where: { cwd?: string; trusted?: boolean } = {}): Promise<Parent> {
+export async function parent(packageRoot: string, where: { cwd?: string; trusted?: boolean; answer?: (asked: Asked) => unknown } = {}): Promise<Parent> {
 	const cwd = where.cwd ?? scratch;
 	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
 	const faux = ai.fauxProvider({ provider: "faux", models: [{ id: "cheap", contextWindow: 100_000 }] });
@@ -100,12 +117,15 @@ export async function parent(packageRoot: string, where: { cwd?: string; trusted
 		const said = JSON.stringify(context);
 		const name = said.match(/You are the subagent \\"([a-z0-9-]+)\\"/)?.[1];
 		if (!name) return ai.fauxAssistantMessage("Main read it.");
+		const build = said.includes(SECOND_BUILD) ? 2 : 1;
+		const own = where.answer?.({ context, said, name, build, flags });
+		if (own) return own;
 		if (context.messages.at(-1)?.role !== "toolResult") {
-			return ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: `until [ -f ${join(flags, name)} ]; do sleep 0.05; done; echo released` }));
+			return ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: `echo ${name}-on-build-${build}; until [ -f ${join(flags, name)} ]; do sleep 0.05; done; echo released` }));
 		}
 		// What a child got from a project's .pi/ shows in its report, for the tests that set one up.
 		const project = ["PROJECT-SYSTEM", "PROJECT-APPEND", "PROJECT-PREFIX"].filter((marker) => said.includes(`${marker}-SEEN`));
-		return ai.fauxAssistantMessage(`${name} done on build ${said.includes(SECOND_BUILD) ? 2 : 1}${project.length ? ` with ${project.join(", ")}` : ""}`);
+		return ai.fauxAssistantMessage(`${name} done on build ${build}${project.length ? ` with ${project.join(", ")}` : ""}`);
 	};
 	faux.setResponses(Array.from({ length: 80 }, () => answer));
 	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false } }, { projectTrusted: where.trusted ?? true });
@@ -127,6 +147,7 @@ export async function parent(packageRoot: string, where: { cwd?: string; trusted
 		reports: (text) => session.messages.filter((m: any) => m.role === "custom" && m.customType === "subagent-report" && JSON.stringify(m.details).includes(text)).length,
 		release: (name) => writeFileSync(join(flags, name), ""),
 		async spawn(name, task) { await tool("subagent").execute(`spawn-${name}`, { name, task, model: "faux/cheap" }, undefined); },
+		async send(to, text) { await tool("message").execute(`message-${to}`, { to, text }, undefined); },
 		async close() {
 			await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 			session.dispose();

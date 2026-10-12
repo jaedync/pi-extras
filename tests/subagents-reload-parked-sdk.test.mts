@@ -1,7 +1,11 @@
 /** A real parent session reloads (support/reload-harness.mts): mail and children while Pi reloads: a report that comes while the host is parked, and parked hosts the next module can't take over. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { copyPackage, finishWhileParked, parent, reloadWarnings, removeScratch, shelf, until, waitingInBash } from "./support/reload-harness.mts";
+import { copyPackage, extrasConfig, finishWhileParked, parent, reloadWarnings, removeScratch, shelf, until, waitingInBash } from "./support/reload-harness.mts";
+
+// These tests finish a run while Pi reloads, to see where its report goes. A child at a turn boundary then would
+// move to a new session, and that launch waits for the next module (subagents-swap-sdk.test.mts), so here it does not.
+extrasConfig({ swapAtTurn: false });
 
 test("a report that comes while Pi reloads reaches main once, after the reload", { timeout: 60_000, skip: process.platform === "win32" }, async () => {
 	const p = await parent(copyPackage().root);
