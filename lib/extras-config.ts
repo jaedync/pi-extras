@@ -1,13 +1,15 @@
 /**
  * pi-extras.json: one file of persistent settings, a section per extension.
- * Each write reads the file again, changes only its own section, and
- * replaces the file through a temporary file and a rename, so a reader never
+ * Each write takes a lock, reads the file again, changes only its own
+ * section, and replaces the file through a temporary file and a rename. So
+ * two Pi sessions that save together keep both changes, and a reader never
  * sees half a file. A file that exists but does not parse is never written:
  * the save throws `UnreadableJsonError` instead of replacing every setting.
  */
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { waitForLock } from "./file-lock.ts";
 import { readJsonObject, resolveTarget, writeJsonAtomic } from "./json-file.ts";
 
 export { UnreadableJsonError } from "./json-file.ts";
@@ -21,6 +23,10 @@ export const FOLD_LIVE_EVENT = "pi-extras:fold-live";
 type Json = Record<string, unknown>;
 
 const isObject = (value: unknown): value is Json => !!value && typeof value === "object" && !Array.isArray(value);
+
+/** A config write holds the lock for a few milliseconds; a holder this old has stopped. */
+const LOCK_STALE_MS = 5_000;
+const LOCK_WAIT_MS = 3_000;
 
 /**
  * A section of the file; empty when the file or section is missing or
@@ -63,10 +69,15 @@ export function watchMotion(events?: { on(name: string, handler: (value: unknown
 export function updateSection(name: string, change: (current: Json) => Json, file = CONFIG_FILE): Json {
 	const target = resolveTarget(file);
 	mkdirSync(dirname(target), { recursive: true });
-	const config = readJsonObject(target);
-	const section = change(isObject(config[name]) ? config[name] : {});
-	writeJsonAtomic(target, { ...config, [name]: section });
-	return section;
+	const lock = waitForLock(`${target}.lock`, LOCK_WAIT_MS, { staleMs: LOCK_STALE_MS, settleMs: LOCK_STALE_MS });
+	try {
+		const config = readJsonObject(target);
+		const section = change(isObject(config[name]) ? config[name] : {});
+		writeJsonAtomic(target, { ...config, [name]: section });
+		return section;
+	} finally {
+		lock.release();
+	}
 }
 
 /** Merges `patch` into a section, keeping everything else in the file. */

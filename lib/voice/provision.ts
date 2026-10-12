@@ -25,6 +25,7 @@ import {
 	type ArchiveModel,
 	type Asset,
 } from "./assets.ts";
+import { tryLock } from "../file-lock.ts";
 import { writeJsonAtomic } from "../json-file.ts";
 import { chooseThreads, tierName, TIER_ORDER, wantedTiers, type HardwareFacts, type TierId, type TierMap } from "./plan.ts";
 
@@ -124,32 +125,12 @@ export function pruneMissingTiers(tiers: Tiers, exists: (path: string) => boolea
 	return kept as Tiers;
 }
 
-function pidAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
-	}
-}
-
-/** Cross-process provisioning lock; a lock left by a dead process is taken over. */
+/**
+ * Cross-process provisioning lock; a lock left by a dead process is taken
+ * over. Provisioning can hold it for many minutes, so only a dead pid frees it.
+ */
 export function acquireLock(home: string): { release(): void } | undefined {
-	const path = join(home, "provision.lock");
-	for (let attempt = 0; attempt < 2; attempt++) {
-		try {
-			const fd = openSync(path, "wx", 0o600);
-			writeFileSync(fd, String(process.pid));
-			closeSync(fd);
-			return { release: () => rmSync(path, { force: true }) };
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			const holder = Number.parseInt(readFileSync(path, "utf8"), 10);
-			if (Number.isInteger(holder) && holder > 0 && pidAlive(holder)) return undefined;
-			rmSync(path, { force: true });
-		}
-	}
-	return undefined;
+	return tryLock(join(home, "provision.lock"));
 }
 
 const PROGRESS_STEP = 0.01;

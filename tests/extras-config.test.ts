@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,4 +79,28 @@ test("updateSection changes only its own section, from the file as it is now", (
 	writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), c: { other: true } }));
 	updateSection("b", (current) => ({ ...current, n: (current.n as number) + 1 }), file);
 	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { a: { keep: 1 }, b: { n: 2 }, c: { other: true } });
+});
+
+function run(command: string, args: string[]): Promise<{ code: number | null; stderr: string }> {
+	return new Promise((resolve) => {
+		const child = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
+		let stderr = "";
+		child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+		child.on("close", (code) => resolve({ code, stderr }));
+	});
+}
+
+test("Pi sessions that save at the same time keep each other's changes", async (t) => {
+	const file = join(scratch(t), "pi-extras.json");
+	const module = new URL("../lib/extras-config.ts", import.meta.url).href;
+	const writers = 4;
+	const writes = 40;
+	const script = `const { writeSection } = await import(${JSON.stringify(module)});
+const [file, name, count] = process.argv.slice(1);
+for (let i = 0; i < Number(count); i++) writeSection(name, { ["k" + i]: i }, file);`;
+	const results = await Promise.all(Array.from({ length: writers }, (_, index) =>
+		run(process.execPath, ["--input-type=module", "-e", script, file, `s${index}`, String(writes)])));
+	for (const result of results) assert.equal(result.code, 0, result.stderr);
+	const saved = JSON.parse(readFileSync(file, "utf8"));
+	for (let index = 0; index < writers; index++) assert.equal(Object.keys(saved[`s${index}`] ?? {}).length, writes, `section s${index} kept every write`);
 });

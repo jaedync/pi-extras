@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -88,6 +88,35 @@ test("provisioning lock is exclusive and recovers from a dead holder", async () 
 		const recovered = acquireLock(dir);
 		assert.ok(recovered, "stale lock from a dead pid is taken over");
 		recovered.release();
+	});
+});
+
+test("the provisioning lock waits for a holder still writing its pid, and takes over one that never did", async () => {
+	await withTemp(async (dir) => {
+		const lock = join(dir, "provision.lock");
+		writeFileSync(lock, "");
+		assert.equal(acquireLock(dir), undefined, "a new empty lock is a holder mid-write");
+		const old = new Date(Date.now() - 60_000);
+		utimesSync(lock, old, old);
+		const taken = acquireLock(dir);
+		assert.ok(taken, "an empty lock left for a minute is taken over");
+		assert.match(readFileSync(lock, "utf8"), new RegExp(`^${process.pid} `), "the lock never appears empty: it holds the pid");
+		taken.release();
+		assert.deepEqual(readdirSync(dir), [], "nothing is left behind");
+	});
+});
+
+test("releasing a lock that was taken over leaves the new holder's lock", async () => {
+	await withTemp(async (dir) => {
+		const first = acquireLock(dir);
+		assert.ok(first);
+		writeFileSync(join(dir, "provision.lock"), "999999");
+		const second = acquireLock(dir);
+		assert.ok(second);
+		first.release();
+		assert.ok(existsSync(join(dir, "provision.lock")), "the old holder did not remove the new lock");
+		second.release();
+		assert.ok(!existsSync(join(dir, "provision.lock")));
 	});
 });
 
