@@ -76,6 +76,8 @@ export function isPrivateHost(host: string): boolean {
 	if (/^::(?:ffff:)?[0-9a-f.:]+$/.test(name) || name.startsWith("64:ff9b:") || name.startsWith("2002:")) return true;
 	// Teredo (2001:0::/32) carries an IPv4 address too.
 	if (/^2001:(?:0{1,4})?:/.test(name)) return true;
+	// Documentation: 2001:db8::/32 and 3fff::/20.
+	if (/^2001:0?db8:/.test(name) || /^3fff:(?::|0?[0-9a-f]{1,3}:)/.test(name)) return true;
 	return false;
 }
 

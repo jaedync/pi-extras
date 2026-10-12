@@ -51,7 +51,7 @@ test("only public http(s) links are read", () => {
 	assert.throws(() => parseUrl("http://printer.local/"), /private or local/);
 	assert.throws(() => parseUrl("not a url at all"), /valid URL/);
 	for (const host of ["10.0.0.1", "192.168.1.1", "172.20.0.1", "169.254.169.254", "100.64.0.1", "localhost", "intranet", "fd00::1", "fe80::1", "localhost.", "printer.local.", "nas.lan", "router.home.arpa", "box.localdomain", "198.18.0.1", "224.0.0.1", "255.255.255.255", "::7f00:1", "::127.0.0.1", "::ffff:7f00:1", "64:ff9b::7f00:1", "2002:7f00:1::", "ff02::1", "192.0.0.8", "192.0.2.1", "2001:0:4136:e378::1", "2001::1"]) assert.equal(isPrivateHost(host), true, host);
-	for (const host of ["example.com", "8.8.8.8", "172.32.0.1", "2606:4700::1111", "192.0.43.10", "2001:db8:1::1", "2001:4860:4860::8888"]) assert.equal(isPrivateHost(host), false, host);
+	for (const host of ["example.com", "8.8.8.8", "172.32.0.1", "2606:4700::1111", "192.0.43.10", "2001:4860:4860::8888"]) assert.equal(isPrivateHost(host), false, host);
 	assert.equal(parseUrl("<https://example.com/a>").href, "https://example.com/a");
 });
 
@@ -125,8 +125,8 @@ test("bodies over the cap are refused", async () => {
 });
 
 test("site-local IPv6, cluster service names and every documentation range are private", () => {
-	for (const host of ["fec0::1", "[fec0::1]", "feff::1", "api.default.svc", "198.51.100.1", "203.0.113.1"]) assert.equal(isPrivateHost(host), true, host);
-	for (const host of ["198.51.101.1", "203.0.114.1", "service.example.com"]) assert.equal(isPrivateHost(host), false, host);
+	for (const host of ["fec0::1", "[fec0::1]", "feff::1", "api.default.svc", "198.51.100.1", "203.0.113.1", "2001:db8::1", "2001:db8:1::1", "3fff::1", "3fff:fff:ffff::1"]) assert.equal(isPrivateHost(host), true, host);
+	for (const host of ["198.51.101.1", "203.0.114.1", "service.example.com", "2001:db9::1", "3fff:1000::1"]) assert.equal(isPrivateHost(host), false, host);
 });
 
 test("cuts never split a surrogate pair", () => {
