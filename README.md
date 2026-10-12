@@ -82,7 +82,7 @@ the package. Removing it does not remove your credentials or change other packag
   `18000`, five hours total per user-started run), `maxRecoveries` (default and
   maximum `10`), `anthropicFirstEventSeconds` (default `45`, `10` to `600`, `0`
   disables the Anthropic stall retry), `transientMaxWaitSeconds` (default `180`,
-  `10` to `900`, `0` leaves short rate limits to Pi's own retry). `/rate-limit-recovery on|off` persists the choice; commands
+  `10` to `900`, `0` leaves short rate limits and proxy turn failures to Pi). `/rate-limit-recovery on|off` persists the choice; commands
   take precedence for the current session. `PI_RATE_LIMIT_RECOVERY_ROLE=subagent`
   marks external child sessions as detection-only.
 - `PI_SUBAGENTS=off`: disable Subagents. `subagents` in `pi-extras.json`, all
@@ -575,6 +575,13 @@ short limits. A limit reported inside an already started stream is recognized
 only by its message text, because Pi keeps no status code or structured reset
 for it: OpenRouter's "rate-limited upstream" wording gets this backoff, while a
 generic message such as "Provider returned error" stays with Pi's own retry.
+
+Meridian, a local Claude Code proxy, sometimes stops a turn with "Reached
+maximum number of turns". Pi does not retry this error. The extension sends the
+request again after 2 s, 5 s, then 10 s, in all sessions, subagents included.
+It does this only when no tool of the failed reply ran. After 3 retries, the run
+stops with an error. A value of `0` for `transientMaxWaitSeconds` stops these
+retries.
 
 Recognized quota errors remain errors and are classified as non-transient so
 Pi does not run a competing short retry loop. This recovery policy is independent

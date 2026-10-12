@@ -21,6 +21,9 @@ const { fullscreen } = await import("./support/fullscreen.ts");
 const NOW = Date.parse("2026-09-30T02:00:00Z");
 const errorBody = (seconds = 1) => JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "synthetic quota rejection", retry_after: seconds } });
 const rejected = (seconds = 1) => ai.fauxAssistantMessage("", { stopReason: "error", errorMessage: errorBody(seconds) });
+// Meridian's intermittent failure: a partial thinking block, a tool call that never ran, no output.
+const MERIDIAN = '{"type":"error","error":{"type":"api_error","message":"Claude Code returned an error result: Reached maximum number of turns (1)"}}';
+const proxyFailure = () => ai.fauxAssistantMessage([ai.fauxThinking("Partial plan"), ai.fauxToolCall("record_action", {})], { stopReason: "error", errorMessage: MERIDIAN });
 
 async function setup(options: { autoWait?: boolean; mode?: "tui" | "print"; realWait?: boolean; retry?: boolean; maxRecoveries?: number; sideEffect?: () => void; terminalInput?: (listener: (data: string) => any) => () => void } = {}) {
 	const agentDir = mkdtempSync(join(scratch, "case-"));
@@ -31,6 +34,7 @@ async function setup(options: { autoWait?: boolean; mode?: "tui" | "print"; real
 	runtime.registerNativeProvider(faux.provider);
 	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: options.retry ?? true, maxRetries: 3, baseDelayMs: 1 } } as never);
 	let now = NOW;
+	const waits: number[] = [];
 	let signalStarted!: () => void;
 	const started = new Promise<void>((resolve) => { signalStarted = resolve; });
 	let finish!: () => void;
@@ -45,6 +49,7 @@ async function setup(options: { autoWait?: boolean; mode?: "tui" | "print"; real
 			{ name: "recovery-fixture", factory: (pi) => recovery(pi, { configFile, env: {}, now: () => now,
 			wait: async (ms, signal) => {
 				signalStarted();
+				waits.push(ms);
 				if (!options.realWait) { now += ms + 234; return true; }
 				return new Promise<boolean>((resolve) => {
 					finish = () => { now += ms + 234; resolve(true); };
@@ -61,7 +66,7 @@ async function setup(options: { autoWait?: boolean; mode?: "tui" | "print"; real
 	session.subscribe((event) => events.push(event));
 	await session.bindExtensions({ mode: options.mode ?? "tui", uiContext: { notify() {}, setWidget() {}, onTerminalInput: options.terminalInput ?? (() => () => {}) } as never, onError: (error: unknown) => errors.push(error) } as never);
 	return {
-		session, faux, events, errors, started,
+		session, faux, events, errors, started, waits,
 		finish: () => finish(),
 		async close() { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); },
 	};
@@ -98,6 +103,42 @@ test("ordinary transient failures retain native retry ownership", { timeout: 10_
 		assert.equal(f.faux.state.callCount, 2);
 		assert.equal(f.events.filter((event) => event.type === "auto_retry_start").length, 1);
 		assert.ok(!f.session.messages.some((message: any) => message.customType === "rate-limit-recovery"));
+		assert.deepEqual(f.errors, []);
+	} finally { await f.close(); }
+});
+
+test("a Meridian turn-limit failure is sent again after 2 s, and its unfinished tool call never runs", { timeout: 10_000 }, async () => {
+	let actions = 0;
+	const f = await setup({ sideEffect: () => actions++ });
+	try {
+		let seen: any[] = [];
+		f.faux.setResponses([proxyFailure(), (context: any) => { seen = context.messages; return ai.fauxAssistantMessage("Recovered."); }]);
+		await f.session.prompt("Work.");
+		assert.equal(f.faux.state.callCount, 2);
+		assert.equal(actions, 0);
+		assert.deepEqual(f.waits, [2_000]);
+		assert.equal(f.events.filter((e) => e.type === "auto_retry_start").length, 0, "only one retry owner");
+		assert.equal(f.session.getLastAssistantText(), "Recovered.");
+		assert.deepEqual(seen.filter((message) => message.role !== "system").map((message) => message.role), ["user"], "the failed reply and its tool call leave the retried context");
+		assert.ok(!f.session.messages.some((message: any) => message.role === "assistant" && message.stopReason === "error"));
+		const raw: any[] = f.session.sessionManager.getEntries().filter((entry: any) => entry.type === "message" && entry.message.stopReason === "error");
+		assert.equal(raw.length, 1, "raw history keeps the failure");
+		assert.match(raw[0].message.errorMessage, /^Claude Code proxy failure: .* Sending the request again in 2 s \(retry 1 of 3\)/);
+		assert.deepEqual(f.errors, []);
+	} finally { await f.close(); }
+});
+
+test("a persistent Meridian turn-limit failure ends the run after 3 retries", { timeout: 10_000 }, async () => {
+	const f = await setup();
+	try {
+		f.faux.setResponses([...Array.from({ length: 4 }, proxyFailure), ai.fauxAssistantMessage("Must not run.")]);
+		await f.session.prompt("Work.");
+		assert.equal(f.faux.state.callCount, 4);
+		assert.deepEqual(f.waits, [2_000, 5_000, 10_000]);
+		assert.equal(f.events.filter((e) => e.type === "auto_retry_start").length, 0);
+		const failure = f.session.messages.at(-1) as any;
+		assert.equal(failure.stopReason, "error");
+		assert.match(failure.errorMessage, /persisted after 3 automatic retries over 17 s/);
 		assert.deepEqual(f.errors, []);
 	} finally { await f.close(); }
 });

@@ -8,7 +8,7 @@ import { captureLimit, failureMessage, parseRateLimit, planWait, resumedMessage,
 import { waitForDelay, waitUI, type Wait } from "./wait.ts";
 import { createQuotaTransportGuard } from "./transport.ts";
 import { ANTHROPIC_HOSTS, type FirstEventPolicy } from "./first-event.ts";
-import { TransientBackoff } from "./transient.ts";
+import { PROXY_RETRY_DELAYS_MS, TransientBackoff } from "./transient.ts";
 
 export const RECOVERY_TYPE = "rate-limit-recovery";
 const HELP = "Usage: /rate-limit-recovery on|off|status|cancel";
@@ -71,8 +71,8 @@ export class Recovery {
 			budgetMs: () => this.config.transientMaxWaitSeconds * 1000,
 			wait: this.wait,
 			...(options.random ? { random: options.random } : {}),
-			ui: (ctx, who, resumeAtMs, cancel) => this.role === "main" && ctx.mode === "tui" && ctx.hasUI
-				? waitUI(ctx, { provider: who }, { resumeAtMs }, Date.now, cancel, (remaining) => `Rate limited on ${who} \u00b7 retrying in ${remaining}`, pi) : undefined,
+			ui: (ctx, who, resumeAtMs, cancel, kind) => this.role === "main" && ctx.mode === "tui" && ctx.hasUI
+				? waitUI(ctx, { provider: who }, { resumeAtMs }, Date.now, cancel, (remaining) => `${kind === "proxy" ? "Claude Code proxy failed on" : "Rate limited on"} ${who} \u00b7 retrying in ${remaining}`, pi) : undefined,
 			onFailure: (error) => operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `transient wait failed (${error instanceof Error ? error.name : "unknown error"})`),
 		});
 	}
@@ -229,6 +229,6 @@ export class Recovery {
 			try { this.config = saveConfig({ autoWait: this.config.autoWait }, this.file); }
 			catch { ctx.ui.notify("Could not save quota recovery settings. Check permissions on pi-extras.json. The choice applies to this session only.", "error"); return; }
 		} else if (command !== "status") { ctx.ui.notify(HELP, "warning"); return; }
-		ctx.ui.notify(`Automatic quota waiting ${this.config.autoWait ? "on" : "off"} (interactive main sessions only). Budget ${this.config.maxWaitSeconds}s, at most ${this.config.maxRecoveries} recoveries per run. Anthropic subscription stall retry ${this.config.anthropicFirstEventSeconds ? `after ${this.config.anthropicFirstEventSeconds}s of pings` : "off"}. Temporary rate limits ${this.config.transientMaxWaitSeconds ? `retried for up to ${this.config.transientMaxWaitSeconds}s` : "left to Pi"}.${this.active ? " Currently hibernating." : ""}${this.transient.waiting ? " Currently waiting out a rate limit." : ""}`, "info");
+		ctx.ui.notify(`Automatic quota waiting ${this.config.autoWait ? "on" : "off"} (interactive main sessions only). Budget ${this.config.maxWaitSeconds}s, at most ${this.config.maxRecoveries} recoveries per run. Anthropic subscription stall retry ${this.config.anthropicFirstEventSeconds ? `after ${this.config.anthropicFirstEventSeconds}s of pings` : "off"}. ${this.config.transientMaxWaitSeconds ? `Temporary rate limits retried for up to ${this.config.transientMaxWaitSeconds}s, Claude Code proxy turn failures up to ${PROXY_RETRY_DELAYS_MS.length} times` : "Temporary rate limits and Claude Code proxy turn failures left to Pi"}.${this.active ? " Currently hibernating." : ""}${this.transient.waiting ? " Currently waiting to send a failed request again." : ""}`, "info");
 	}
 }

@@ -62,7 +62,20 @@ function success(res: ServerResponse, model: string): void {
 	res.end();
 }
 
-async function endpoint(options: { recover?: boolean; retryAfter?: string; status?: 429 | 500 } = {}, fixture: NativeFixture = anthropic) {
+const MERIDIAN_ERROR = { type: "api_error", message: "Claude Code returned an error result: Reached maximum number of turns (1)" };
+
+/** Meridian's turn-limit failure as it arrives: a started reply, a partial thinking block, then an error event. */
+function meridianStream(res: ServerResponse, model: string): void {
+	const sse = (type: string, data: object) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+	res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+	sse("message_start", { message: { id: "msg_synthetic", type: "message", role: "assistant", model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 8, output_tokens: 0 } } });
+	sse("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } });
+	sse("content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: "Partial plan" } });
+	sse("error", { error: MERIDIAN_ERROR });
+	res.end();
+}
+
+async function endpoint(options: { recover?: boolean; retryAfter?: string; status?: 429 | 500; meridian?: "stream" | "status" } = {}, fixture: NativeFixture = anthropic) {
 	const requests: { body: any; retryCount: string | string[] | undefined; entries: readonly any[]; metadata: { overlay: string | string[] | undefined; model: string | string[] | undefined } }[] = [];
 	const errors: unknown[] = [];
 	let entries: () => readonly any[] = () => [];
@@ -88,6 +101,8 @@ async function endpoint(options: { recover?: boolean; retryAfter?: string; statu
 					assert.equal(req.headers["chatgpt-account-id"], accountId);
 				} else assert.equal(req.headers["x-api-key"], "synthetic-http-test-key");
 				if (options.recover && requests.length === 2) { success(res, request.model); return; }
+				if (options.meridian === "stream") { meridianStream(res, request.model); return; }
+				if (options.meridian === "status") { res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ type: "error", error: MERIDIAN_ERROR })); return; }
 				res.writeHead(options.status ?? 429, { "content-type": "application/json", ...(options.retryAfter !== undefined ? { "retry-after": options.retryAfter } : {}) });
 				const error = options.status === 500 ? { type: "api_error", message: "synthetic temporary upstream failure" }
 					: { type: "rate_limit_error", message: "synthetic quota rejection", retry_after: RETRY_SECONDS };
@@ -363,6 +378,38 @@ test("ordinary native HTTP 500 retains transport retries with Pi session retry d
 	assert.equal(f.events.filter((event) => event.type === "auto_retry_start").length, 0);
 	assert.deepEqual(f.waits, []);
 	assert.equal(notes(f.session.sessionManager.getEntries()).length, 0);
+	assert.deepEqual(f.errors, []);
+});
+
+// The stream form is how Meridian reports it; with an HTTP status first, Pi would retry it on its own.
+for (const meridian of ["stream", "status"] as const) test(`a Meridian turn-limit failure (${meridian}) is sent again once, by this extension only`, { timeout: 10_000 }, async (t) => {
+	const http = await endpoint({ meridian, recover: true });
+	t.after(() => http.close());
+	const f = await mainSession(http.baseUrl, false);
+	t.after(() => f.close());
+	await bounded(f.session.prompt("Work."), () => f.session.abort());
+	assertRequests(http, 2);
+	assert.deepEqual(f.waits, [2_000]);
+	assert.equal(f.events.filter((event) => event.type === "auto_retry_start").length, 0);
+	assert.equal(f.session.getLastAssistantText(), "Recovered over native HTTP.");
+	const failed: any[] = f.session.sessionManager.getEntries().filter((entry: any) => entry.type === "message" && entry.message.stopReason === "error");
+	assert.equal(failed.length, 1);
+	assert.match(failed[0].message.errorMessage, /^Claude Code proxy failure: .*retry 1 of 3/);
+	assert.ok(!f.session.messages.some((message: any) => message.role === "assistant" && message.stopReason === "error"));
+	assert.deepEqual(f.errors, []);
+});
+
+test("an actual child sends a Meridian turn-limit failure again and completes", { timeout: 10_000 }, async (t) => {
+	const http = await endpoint({ meridian: "stream", recover: true });
+	t.after(() => http.close());
+	const f = await childSession(http.baseUrl, anthropic, retrySettings);
+	t.after(() => f.close());
+	assert.equal(f.team.spawn({ name: "proxied", task: "Work.", parent: "main", model: `${f.model.provider}/${f.model.id}`, readOnly: false, fork: false, blocking: false }).ok, true);
+	// The launcher's real 2 s timer runs here.
+	const done = await bounded(f.team.whenDone("proxied"), () => f.team.close());
+	assertRequests(http, 2);
+	assert.notEqual(done.state, "failed", done.error);
+	assert.match(done.report ?? "", /Recovered over native HTTP\./);
 	assert.deepEqual(f.errors, []);
 });
 

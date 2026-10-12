@@ -4,6 +4,10 @@
  * about 14 seconds. This owns those errors instead: jittered exponential backoff within a bounded
  * budget, honoring a Retry-After the transport just saw. Structured quota errors stay with the
  * hibernation path in controller.ts.
+ *
+ * The same backoff sends a turn again when Meridian, a local Claude Code proxy, fails it with
+ * "Reached maximum number of turns". That failure is intermittent and Pi's own retry does not
+ * recognize it; a short, fixed schedule is enough.
  */
 import type { ExtensionContext, MessageEndEvent, TurnEndEvent, TurnEndEventResult } from "@earendil-works/pi-coding-agent";
 import { captureLimit, parseRateLimit } from "./core.ts";
@@ -20,10 +24,16 @@ const JITTER = 0.2;
 const RATE_LIMITED = /rate.?limit|too many requests|\b429\b/i;
 // Long-lived limits and billing must still stop the run, as Pi's own classifier intends.
 const NOT_TRANSIENT = /quota|billing|insufficient|usage limit|available balance|out of budget/i;
+// Only this result of the proxy, not any api_error: other Claude Code results (a low balance,
+// a refusal) would fail again.
+const PROXY_TURN_LIMIT = /Claude Code returned an error result: Reached maximum number of turns\b/;
+export const PROXY_RETRY_DELAYS_MS: readonly number[] = [2_000, 5_000, 10_000];
 
 export interface Streak { readonly attempts: number; readonly spentMs: number }
 export interface TransientPlan { readonly delayMs: number; readonly attempt: number; readonly hinted: boolean }
 export type TransientRefusal = "budget" | "attempts" | "hint-too-long";
+/** A short provider rate limit, or the proxy's turn-limit failure. */
+export type TransientKind = "rate-limit" | "proxy";
 // pi-ai is not a direct dependency; take its assistant message shape from the event.
 type AssistantMessage = Extract<MessageEndEvent["message"], { role: "assistant" }>;
 type Failure = Pick<AssistantMessage, "stopReason" | "errorMessage">;
@@ -32,6 +42,11 @@ export function isTransientRateLimit(message: Failure): boolean {
 	const text = message.errorMessage;
 	if (message.stopReason !== "error" || typeof text !== "string" || text.length > MAX_ERROR_CHARS) return false;
 	return RATE_LIMITED.test(text) && !NOT_TRANSIENT.test(text) && parseRateLimit(text) === undefined;
+}
+
+export function isProxyTurnLimit(message: Failure): boolean {
+	const text = message.errorMessage;
+	return message.stopReason === "error" && typeof text === "string" && text.length <= MAX_ERROR_CHARS && PROXY_TURN_LIMIT.test(text);
 }
 
 /** Long-lived limits and billing, which no short wait clears. */
@@ -54,6 +69,11 @@ export function planTransient(streak: Streak, budgetMs: number, random: () => nu
 	const scheduled = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** streak.attempts);
 	const jittered = Math.round(scheduled * (1 - JITTER + 2 * JITTER * random()));
 	return { delayMs: Math.min(Math.max(jittered, hintMs), remainingMs), attempt: streak.attempts + 1, hinted: hintMs > jittered };
+}
+
+export function planProxyRetry(streak: Streak): TransientPlan | "attempts" {
+	const delayMs = PROXY_RETRY_DELAYS_MS[streak.attempts];
+	return delayMs === undefined ? "attempts" : { delayMs, attempt: streak.attempts + 1, hinted: false };
 }
 
 function duration(ms: number): string {
@@ -81,23 +101,37 @@ export function exhaustedMessage(who: string, refusal: TransientRefusal, streak:
 	return `${PREFIX} ${who}: ${TEMPORARY}. ${why} Send the request again later, switch models, or raise rateLimitRecovery.transientMaxWaitSeconds.`;
 }
 
+// Pi does not retry the proxy's failure, and these texts must not match its retry pattern
+// either, or both would send the request. So they carry no "error", no status code and no model
+// name: a dated model ID such as 20250520 contains "520", which Pi reads as a server failure.
+const PROXY_FAILED = 'Claude Code proxy failure: the proxy ended the turn early ("Reached maximum number of turns")';
+
+export function proxyWaitingMessage(plan: TransientPlan): string {
+	return `${PROXY_FAILED}. Sending the request again in ${duration(plan.delayMs)} (retry ${plan.attempt} of ${PROXY_RETRY_DELAYS_MS.length}). Esc cancels.`;
+}
+
+export function proxyExhaustedMessage(streak: Streak): string {
+	return `${PROXY_FAILED}. It persisted after ${streak.attempts} automatic retries over ${duration(streak.spentMs)}. Send the request again later or switch models.`;
+}
+
 export interface TransientDeps {
 	/** Total wait per streak of consecutive limits; 0 leaves these errors to Pi. */
 	readonly budgetMs: () => number;
 	readonly random?: () => number;
 	readonly wait?: Wait;
 	/** Countdown for interactive sessions; children and print mode wait silently. */
-	readonly ui?: (ctx: ExtensionContext, who: string, resumeAtMs: number, cancel: () => void) => { tick(): void; close(): void } | undefined;
+	readonly ui?: (ctx: ExtensionContext, who: string, resumeAtMs: number, cancel: () => void, kind: TransientKind) => { tick(): void; close(): void } | undefined;
 	readonly onFailure?: (error: unknown) => void;
 }
 
-interface Pending { readonly plan: TransientPlan; readonly who: string }
+interface Pending { readonly plan: TransientPlan; readonly who: string; readonly kind: TransientKind }
+const NO_STREAKS: Readonly<Record<TransientKind, Streak>> = { "rate-limit": { attempts: 0, spentMs: 0 }, proxy: { attempts: 0, spentMs: 0 } };
 interface Active { readonly cancel: () => void; readonly skip: () => void }
 
-/** One session's streak of transient limits. Resumes through agent_before_settle, like hibernation. */
+/** One session's streaks of transient failures, one per kind. Resumes through agent_before_settle, like hibernation. */
 export class TransientBackoff {
 	private readonly deps: TransientDeps;
-	private streak: Streak = { attempts: 0, spentMs: 0 };
+	private streaks = NO_STREAKS;
 	private pending: Pending | undefined;
 	private active: Active | undefined;
 	private ready = false;
@@ -105,7 +139,7 @@ export class TransientBackoff {
 	constructor(deps: TransientDeps) { this.deps = deps; }
 
 	reset(): void {
-		this.streak = { attempts: 0, spentMs: 0 };
+		this.streaks = NO_STREAKS;
 		this.pending = undefined;
 		this.ready = false;
 	}
@@ -128,16 +162,25 @@ export class TransientBackoff {
 		// Taken for every reply, so a hint from a quota error cannot reach a later limit.
 		const hint = takeRetryHint(ctx.signal);
 		if (message.stopReason !== "error") {
-			if (message.stopReason !== "aborted") this.streak = { attempts: 0, spentMs: 0 };
+			if (message.stopReason !== "aborted") this.streaks = NO_STREAKS;
 			return undefined;
 		}
 		const budgetMs = this.deps.budgetMs();
-		if (budgetMs <= 0 || !isTransientRateLimit(message) || !ctx.signal || ctx.signal.aborted) return undefined;
+		if (budgetMs <= 0 || !ctx.signal || ctx.signal.aborted) return undefined;
+		const kind: TransientKind | undefined = isProxyTurnLimit(message) ? "proxy" : isTransientRateLimit(message) ? "rate-limit" : undefined;
+		if (!kind) return undefined;
 		const limit = captureLimit(message, {}, Date.now());
 		const who = `${limit.provider}/${limit.model}`;
-		const plan = planTransient(this.streak, budgetMs, this.deps.random ?? Math.random, hint);
-		if (typeof plan === "string") return { ...message, errorMessage: exhaustedMessage(who, plan, this.streak, hint) };
-		this.pending = { plan, who };
+		const streak = this.streaks[kind];
+		if (kind === "proxy") {
+			const plan = planProxyRetry(streak);
+			if (typeof plan === "string") return { ...message, errorMessage: proxyExhaustedMessage(streak) };
+			this.pending = { plan, who, kind };
+			return { ...message, errorMessage: proxyWaitingMessage(plan) };
+		}
+		const plan = planTransient(streak, budgetMs, this.deps.random ?? Math.random, hint);
+		if (typeof plan === "string") return { ...message, errorMessage: exhaustedMessage(who, plan, streak, hint) };
+		this.pending = { plan, who, kind };
 		return { ...message, errorMessage: waitingMessage(who, plan, budgetMs) };
 	}
 
@@ -145,6 +188,8 @@ export class TransientBackoff {
 		const pending = this.pending;
 		this.pending = undefined;
 		if (!pending || event.message.role !== "assistant" || event.message.stopReason !== "error") return undefined;
+		// Pi runs no tool call of a failed reply today. If it ever does, sending the turn again could run a tool twice.
+		if (event.toolResults?.length) return undefined;
 		const runSignal = ctx.signal;
 		if (!runSignal || runSignal.aborted) return undefined;
 		const controller = new AbortController();
@@ -157,7 +202,7 @@ export class TransientBackoff {
 		let ui: ReturnType<NonNullable<TransientDeps["ui"]>>;
 		let finished = false;
 		try {
-			ui = this.deps.ui?.(ctx, pending.who, startedAt + pending.plan.delayMs, () => this.cancel());
+			ui = this.deps.ui?.(ctx, pending.who, startedAt + pending.plan.delayMs, () => this.cancel(), pending.kind);
 			const waited = (this.deps.wait ?? waitForDelay)(pending.plan.delayMs, AbortSignal.any([controller.signal, runSignal]), () => ui?.tick());
 			finished = await Promise.race([waited, skipped]);
 		} catch (error) { this.deps.onFailure?.(error); }
@@ -170,7 +215,7 @@ export class TransientBackoff {
 		if (!finished || cancelled || runSignal.aborted) return undefined;
 		// A completed wait counts in full; a skipped one only as long as it ran.
 		const spentMs = wasSkipped ? Math.min(pending.plan.delayMs, Math.max(0, Date.now() - startedAt)) : pending.plan.delayMs;
-		this.streak = { attempts: pending.plan.attempt, spentMs: this.streak.spentMs + spentMs };
+		this.streaks = { ...this.streaks, [pending.kind]: { attempts: pending.plan.attempt, spentMs: this.streaks[pending.kind].spentMs + spentMs } };
 		this.ready = true;
 		// The failed attempt stays in raw history but leaves the retried context, as with Pi's own retry.
 		return { entries: [...event.entries, { type: "context_edit", targetId: event.messageEntryId, replacement: null }] };

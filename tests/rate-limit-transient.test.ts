@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { BASE_DELAY_MS, MAX_ATTEMPTS, MAX_DELAY_MS, TransientBackoff, exhaustedMessage, isTransientRateLimit, planTransient, waitingMessage } from "../lib/rate-limit-recovery/transient.ts";
+import { BASE_DELAY_MS, MAX_ATTEMPTS, MAX_DELAY_MS, PROXY_RETRY_DELAYS_MS, TransientBackoff, exhaustedMessage, isProxyTurnLimit, isQuotaError, isTransientRateLimit, planProxyRetry, planTransient, proxyExhaustedMessage, proxyWaitingMessage, waitingMessage } from "../lib/rate-limit-recovery/transient.ts";
 import { parseRetryAfter, recordRetryHint, takeRetryHint } from "../lib/rate-limit-recovery/retry-hint.ts";
 import { DEFAULT_CONFIG, normalizeConfig } from "../lib/rate-limit-recovery/config.ts";
 import { agentRoot } from "./support/pi-runtime.mjs";
@@ -15,6 +15,8 @@ const LUNA = "openai/gpt-6-luna is temporarily rate-limited upstream. Please ret
 const LEGACY = '429: {"message":"Provider returned error","code":429,"metadata":{"raw":"deepseek/deepseek-v4.1-flash is temporarily rate-limited upstream. Please retry shortly","provider_name":"Novita"}}';
 const failed = (errorMessage: string): any => ({ role: "assistant", stopReason: "error", errorMessage, provider: "openrouter", model: "openai/gpt-6-luna", content: [], usage: {} });
 const half = () => 0.5;
+// Meridian (a local Claude Code proxy) sends this as a stream error event, so no HTTP status precedes it.
+const MERIDIAN = '{"type":"error","error":{"type":"api_error","message":"Claude Code returned an error result: Reached maximum number of turns (1)"}}';
 
 test("OpenRouter upstream limits and bare 429s are transient", () => {
 	for (const text of [LUNA, LEGACY, "429 Too Many Requests", "Rate limit reached for requests", "too many requests, slow down"]) assert.equal(isTransientRateLimit(failed(text)), true, text);
@@ -139,7 +141,7 @@ function backoff(options: { budgetMs?: number; wait?: (ms: number, signal: Abort
 		wait: options.wait ?? (async (ms) => { waits.push(ms); return true; }) });
 	const controller = new AbortController();
 	const ctx = { signal: controller.signal } as never;
-	const turn = (entryId: string) => ({ message: { role: "assistant", stopReason: "error" }, messageEntryId: entryId, entries: [] }) as never;
+	const turn = (entryId: string, toolResults: unknown[] = []) => ({ message: { role: "assistant", stopReason: "error" }, toolResults, messageEntryId: entryId, entries: [] }) as never;
 	return { b, waits, ctx, controller, turn };
 }
 
@@ -233,4 +235,93 @@ test("a Retry-After recorded by the transport sets the next wait", async () => {
 	f.b.messageEnd(failed(LUNA) as never, f.ctx);
 	await f.b.turnEnd(f.turn("h"), f.ctx);
 	assert.deepEqual(f.waits, [17_000]);
+});
+
+test("only the proxy's turn-limit failure is a proxy retry, with or without an HTTP status", () => {
+	for (const text of [MERIDIAN, `500 ${MERIDIAN}`, "Claude Code returned an error result: Reached maximum number of turns (3)"]) assert.equal(isProxyTurnLimit(failed(text)), true, text);
+	for (const text of [
+		'{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+		'{"type":"error","error":{"type":"api_error","message":"Claude Code returned an error result: Credit balance is too low"}}',
+		"Reached maximum number of turns (1)", "529 overloaded_error", LUNA,
+	]) assert.equal(isProxyTurnLimit(failed(text)), false, text);
+	assert.equal(isProxyTurnLimit({ ...failed(MERIDIAN), stopReason: "aborted" }), false);
+	assert.equal(isProxyTurnLimit({ ...failed(MERIDIAN), errorMessage: undefined }), false);
+	assert.equal(isProxyTurnLimit(failed(`${"x".repeat(40_000)}${MERIDIAN}`)), false, "oversized text is not scanned");
+	assert.equal(isTransientRateLimit(failed(MERIDIAN)), false, "not a rate limit");
+});
+
+test("proxy retries wait 2, 5, then 10 seconds, at most 3 times", () => {
+	assert.deepEqual(PROXY_RETRY_DELAYS_MS, [2_000, 5_000, 10_000]);
+	const delays: number[] = [];
+	let state = { attempts: 0, spentMs: 0 };
+	for (let plan = planProxyRetry(state); typeof plan !== "string"; plan = planProxyRetry(state)) {
+		delays.push(plan.delayMs);
+		state = { attempts: plan.attempt, spentMs: state.spentMs + plan.delayMs };
+	}
+	assert.deepEqual(delays, [2_000, 5_000, 10_000]);
+	assert.equal(planProxyRetry(state), "attempts");
+});
+
+test("proxy retry messages stop Pi's own retry, are never overflow, quota or a second proxy failure", () => {
+	const plan = planProxyRetry({ attempts: 0, spentMs: 0 });
+	assert.ok(typeof plan !== "string");
+	const messages = [proxyWaitingMessage(plan), proxyExhaustedMessage({ attempts: 3, spentMs: 17_000 })];
+	for (const text of messages) {
+		const message = { ...failed(text), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+		assert.equal(isRetryableAssistantError(message), false, text);
+		assert.equal(isContextOverflow(message, 100_000), false, text);
+		assert.equal(isProxyTurnLimit(message), false, "a rewritten message is never handled twice");
+		assert.equal(isTransientRateLimit(message), false, text);
+		assert.equal(isQuotaError(text), false, text);
+		assert.match(text, /^Claude Code proxy failure: /);
+	}
+	assert.match(messages[0]!, /in 2 s \(retry 1 of 3\)/);
+	assert.match(messages[1]!, /persisted after 3 automatic retries over 17 s/);
+});
+
+test("the backoff retries a proxy turn-limit failure 3 times, then ends the run without a wait", async () => {
+	const f = backoff();
+	for (const [index, expected] of [2_000, 5_000, 10_000].entries()) {
+		const replaced = f.b.messageEnd(failed(MERIDIAN) as never, f.ctx);
+		assert.match(replaced!.errorMessage!, new RegExp(`in ${expected / 1000} s \\(retry ${index + 1} of 3\\)`));
+		assert.deepEqual(await f.b.turnEnd(f.turn(`p${index}`), f.ctx), { entries: [{ type: "context_edit", targetId: `p${index}`, replacement: null }] });
+		assert.equal(f.b.consumeReady(), true);
+	}
+	const final = f.b.messageEnd(failed(MERIDIAN) as never, f.ctx);
+	assert.match(final!.errorMessage!, /persisted after 3 automatic retries over 17 s/);
+	assert.equal(await f.b.turnEnd(f.turn("p3"), f.ctx), undefined);
+	assert.equal(f.b.consumeReady(), false);
+	assert.deepEqual(f.waits, [2_000, 5_000, 10_000]);
+	// A reply that succeeds ends the streak; the next failure gets all 3 retries again.
+	f.b.messageEnd({ ...failed(""), stopReason: "stop", errorMessage: undefined } as never, f.ctx);
+	f.b.messageEnd(failed(MERIDIAN) as never, f.ctx);
+	await f.b.turnEnd(f.turn("p4"), f.ctx);
+	assert.deepEqual(f.waits, [2_000, 5_000, 10_000, 2_000]);
+});
+
+test("proxy retries and rate-limit waits keep separate counts", async () => {
+	const f = backoff();
+	for (const text of [LUNA, MERIDIAN, LUNA, MERIDIAN]) {
+		f.b.messageEnd(failed(text) as never, f.ctx);
+		await f.b.turnEnd(f.turn("m"), f.ctx);
+		f.b.consumeReady();
+	}
+	assert.deepEqual(f.waits, [5_000, 2_000, 10_000, 5_000]);
+});
+
+test("a failure whose turn ran tools is never sent again", async () => {
+	const f = backoff();
+	for (const text of [MERIDIAN, LUNA]) {
+		assert.ok(f.b.messageEnd(failed(text) as never, f.ctx));
+		assert.equal(await f.b.turnEnd(f.turn("t", [{ role: "toolResult" }]), f.ctx), undefined, text);
+		assert.equal(f.b.consumeReady(), false);
+	}
+	assert.deepEqual(f.waits, []);
+});
+
+test("transientMaxWaitSeconds 0 also leaves proxy failures to Pi", () => {
+	const off = backoff({ budgetMs: 0 });
+	assert.equal(off.b.messageEnd(failed(MERIDIAN) as never, off.ctx), undefined);
+	const f = backoff();
+	assert.equal(f.b.messageEnd(failed(MERIDIAN) as never, {} as never), undefined, "no run signal to cancel a wait");
 });

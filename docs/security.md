@@ -167,6 +167,14 @@ Pi's non-transient class so Pi's own retry does not also run. Waits are
 cancellable in-process timers; the failed attempt is omitted from the retried
 context. No extra requests are made beyond the retried one.
 
+The same backoff sends a turn again, after 2, 5 and 10 s and at most 3 times,
+when Meridian (a local Claude Code proxy) fails it with exactly "Claude Code
+returned an error result: Reached maximum number of turns". Other API errors
+are not matched. A turn whose tool calls ran is never sent again, so no tool
+runs twice; Pi runs no tool call of a failed reply. The replacement error names
+no model, so Pi's retry, which reads status codes such as 520 in any text, does
+not also run.
+
 The `rateLimitRecovery` section of `pi-extras.json` stores policy. Pause metadata
 and the resumed timing message are written to the current session. That message
 enters model context before the resumed request and contains elapsed wall time,
