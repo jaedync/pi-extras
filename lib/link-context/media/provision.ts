@@ -15,6 +15,7 @@ import { PYTHON_VERSION, uvAsset } from "../../voice/assets.ts";
 import { acquireLock, downloadVerified, parseUvVersion, uvIsRecentEnough } from "../../voice/provision.ts";
 import { readJsonObject, UnreadableJsonError, writeJsonAtomic } from "../../json-file.ts";
 import { operationalLine } from "../../operational-log.ts";
+import { isOffline } from "../../offline.ts";
 import { deadline } from "../http.ts";
 import { killGroup, track } from "./children.ts";
 
@@ -23,6 +24,8 @@ export const BGUTIL_REPO = "Brainicism/bgutil-ytdlp-pot-provider";
 export const BGUTIL_FALLBACK_TAG = "2.0.2";
 /** Unpinned on purpose: video sites break old clients within weeks. A changed list reinstalls. */
 export const PACKAGES = ["yt-dlp[default,curl-cffi]", "youtube-transcript-api", "imageio-ffmpeg", "pillow"] as const;
+/** No install scripts: the token script runs without them (jsdom falls back when canvas has no native build). */
+export const NPM_CI_ARGS = ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"] as const;
 const LOCK_WAIT_MS = 10 * 60_000;
 const DAY_MS = 86_400_000;
 const TAG = /^\d+\.\d+\.\d+$/;
@@ -214,7 +217,7 @@ class Installer {
 		mkdirSync(dirname(root), { recursive: true, mode: 0o700 });
 		await this.run("git", ["clone", "--quiet", "--depth", "1", "--branch", tag, `https://github.com/${BGUTIL_REPO}.git`, staging], STEP_TIMEOUT_MS.git);
 		const stagedServer = join(staging, "server");
-		await this.run(npmCommand(), ["ci", "--no-audit", "--no-fund", "--loglevel=error"], STEP_TIMEOUT_MS.npm, { cwd: stagedServer });
+		await this.run(npmCommand(), NPM_CI_ARGS, STEP_TIMEOUT_MS.npm, { cwd: stagedServer });
 		await this.run(process.execPath, [join(stagedServer, "node_modules", "typescript", "bin", "tsc")], STEP_TIMEOUT_MS.tsc, { cwd: stagedServer });
 		rmSync(root, { recursive: true, force: true });
 		renameSync(staging, root);
@@ -265,11 +268,22 @@ export interface EnsureOptions {
 	readonly home?: string;
 }
 
+const builtServer = (home: string, tag: string): string | undefined => (existsSync(join(home, "bgutil", tag, "server", "build", "generate_once.js")) ? join(home, "bgutil", tag, "server") : undefined);
+
+/** PI_OFFLINE: the installed tools as they are; nothing is installed, updated or looked up. */
+function offlineToolchain(home: string): Toolchain {
+	const python = join(home, "env", "bin", "python");
+	const state = readState(home);
+	if (!existsSync(python) || !state.packagesAt) throw new Error("PI_OFFLINE is set, so the media tools cannot be installed. Unset PI_OFFLINE to install them.");
+	return { python, helper: HELPER, node: process.execPath, serverHome: builtServer(home, state.bgutilTag ?? BGUTIL_FALLBACK_TAG), home };
+}
+
 /** Installs or refreshes the toolchain. A failed refresh keeps the last working install. */
 export async function ensureMedia(options: EnsureOptions): Promise<Toolchain> {
 	const home = options.home ?? mediaHome();
 	mkdirSync(home, { recursive: true, mode: 0o700 });
 	return withLock(home, async () => {
+		if (isOffline()) return offlineToolchain(home);
 		const installer = new Installer(home, options.progress, options.signal);
 		const uv = await installer.uv();
 		const python = await installer.python(uv);
@@ -286,7 +300,7 @@ export async function ensureMedia(options: EnsureOptions): Promise<Toolchain> {
 			}
 		}
 		const tag = state.bgutilTag ?? BGUTIL_FALLBACK_TAG;
-		let serverHome: string | undefined = existsSync(join(home, "bgutil", tag, "server", "build", "generate_once.js")) ? join(home, "bgutil", tag, "server") : undefined;
+		let serverHome = builtServer(home, tag);
 		if (!serverHome && bgutilDue(state)) {
 			try {
 				serverHome = await installer.bgutil(tag);
@@ -307,6 +321,7 @@ export async function ensureAsr(toolchain: Toolchain, progress: (text: string) =
 	return withLock(toolchain.home, async () => {
 		const state = readState(toolchain.home);
 		if (state.asr !== plan.backend) {
+			if (isOffline()) throw new Error(`PI_OFFLINE is set, so ${plan.backend} cannot be installed for speech-to-text.`);
 			const installer = new Installer(toolchain.home, progress, signal);
 			progress(`installing ${plan.backend}`);
 			await installer.run(await installer.uv(), ["pip", "install", "--python", toolchain.python, ...plan.packages], STEP_TIMEOUT_MS.pip);

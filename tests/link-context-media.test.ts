@@ -7,7 +7,7 @@ import test from "node:test";
 import { sampleTimes, sheetColumns } from "../lib/link-context/media/frames.ts";
 import { sniffImage } from "../lib/link-context/media/image-bytes.ts";
 import { fetchImages, imageLink, imageLinks, prepareImage, sized } from "../lib/link-context/media/images.ts";
-import { asrPlan, bgutilDue, ensureMedia, HELPER, packagesDue, PACKAGES, readState, toolEnv, installEnv, writeState } from "../lib/link-context/media/provision.ts";
+import { asrPlan, bgutilDue, ensureAsr, ensureMedia, HELPER, NPM_CI_ARGS, packagesDue, PACKAGES, readState, toolEnv, installEnv, writeState } from "../lib/link-context/media/provision.ts";
 import { clipFor, HOST_BLOCKED, keyName, formatTranscript, header, prunePulls, pullDir, pullVideo, sampleFor, thumbnailUrl, validTimes, videoComments, youtubeId, type VideoDeps, type VideoInfo } from "../lib/link-context/media/video.ts";
 import { writeFileSync } from "node:fs";
 import { gifHeader, jpegHeader, png, pngClaiming, webpHeader } from "./support/image-bytes.ts";
@@ -377,4 +377,31 @@ test("images: a mislabelled image is sent as its real type, a fake one is droppe
 	// Without Photon, an image inside every limit still goes as it is, and a larger one does not.
 	assert.equal((await prepareImage(png(4, 4), async () => null))?.mimeType, "image/png");
 	assert.equal(await prepareImage(png(3000, 10), async () => null), undefined);
+});
+
+test("PI_OFFLINE: no install, no update, no release lookup; an installed toolchain still works", { skip: process.platform === "win32" ? "POSIX shell scripts" : false }, async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "link-offline-"));
+	const tools = fakeMediaTools(dir);
+	process.env.PI_OFFLINE = "1";
+	t.after(() => {
+		tools.restore();
+		rmSync(dir, { recursive: true, force: true });
+	});
+	const fetches = t.mock.method(globalThis, "fetch", async () => Response.json({ tag_name: "9.9.9" }));
+	const home = join(dir, "media");
+	await assert.rejects(ensureMedia({ refreshDays: 3, progress: () => {}, home }), /PI_OFFLINE/);
+	mkdirSync(join(home, "env", "bin"), { recursive: true });
+	writeFileSync(join(home, "env", "bin", "python"), "");
+	// Installed long ago, so a refresh is due; offline mode skips it.
+	writeState(home, { packagesAt: 1, packages: PACKAGES.join(" "), bgutilTag: "2.0.2" });
+	const toolchain = await ensureMedia({ refreshDays: 3, progress: () => {}, home });
+	assert.equal(toolchain.python, join(home, "env", "bin", "python"));
+	await assert.rejects(ensureAsr(toolchain, () => {}), /PI_OFFLINE/);
+	assert.deepEqual(tools.calls(), []);
+	assert.equal(fetches.mock.callCount(), 0);
+	assert.equal(readState(home).packagesAt, 1);
+});
+
+test("the token provider installs its packages without their install scripts", () => {
+	assert.ok(NPM_CI_ARGS.includes("--ignore-scripts"));
 });

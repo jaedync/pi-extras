@@ -1114,7 +1114,10 @@ a browser or a desktop, so it also works on a headless Linux host. The tools are
 
 Video sites often change and stop old versions of these tools, so the tool
 updates them every `refreshDays` days. If an update fails, the tool continues
-to use the installed version.
+to use the installed version. With `PI_OFFLINE=1` (or `true` or `yes`), the
+tool does not install, update or look up a release. It uses the installed
+tools, and without them a video link fails with a note. The token provider's
+`npm ci` runs with `--ignore-scripts`.
 
 The transcript comes from the captions of the video. If the video has no
 captions, the tool downloads the audio and transcribes it on this machine. It
