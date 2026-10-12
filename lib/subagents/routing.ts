@@ -76,8 +76,6 @@ export class Routing {
 	private readonly owesMain = new Set<string>();
 	/** Runs a peer's message started; main, its parent or the user writing to it during the run makes it theirs. */
 	private readonly peerRuns = new Set<string>();
-	/** Interrupted children whose next message from main waits in their inbox (`holdAnswer`). */
-	private readonly heldAnswers = new Set<string>();
 	private readonly host: RouteHost;
 
 	constructor(host: RouteHost) {
@@ -112,16 +110,6 @@ export class Routing {
 		const result = keepCheck(to === MAIN ? this.toMain(from, text, options.expectReply === true) : this.toChild(from, to, text, options.expectReply === true, options.automatic));
 		if (!result.ok || !options.expectReply) return result;
 		return host.questions.ask(from, to, options.signal);
-	}
-
-	/** Main's next message to `name`, which is paused, waits in its inbox instead of resuming it (team.ts `holdAnswer`). */
-	holdAnswer(name: string): void {
-		this.heldAnswers.add(name);
-	}
-
-	/** A held answer is for the paused child that asked; once anything resumes it, main's messages work as usual. */
-	unhold(name: string): void {
-		this.heldAnswers.delete(name);
 	}
 
 	/** `name`'s run ended: whether it owed main an answer, and whether a peer's message started it. */
@@ -207,8 +195,9 @@ export class Routing {
 		const { host } = this;
 		const target = host.get(to);
 		if (!target) return { ok: false, error: `No agent named ${to}. ${host.known()}` };
-		if (from === MAIN && this.heldAnswers.delete(to) && target.state === "interrupted") {
-			host.patch(to, { inbox: [...(target.inbox ?? []), body] });
+		// Main's next message to a paused child whose answer is held (team.ts `holdAnswer`) waits in its inbox.
+		if (from === MAIN && target.answerHeld && target.state === "interrupted") {
+			host.patch(to, { answerHeld: undefined, inbox: [...(target.inbox ?? []), body] });
 			return { ok: true, delivered: "inbox", notice: `${to} is paused, and resumePolicy is "notify", so it reads this when it resumes. Message it again, or run /subagents resume ${to}, to resume it now.` };
 		}
 		// Main stands above every agent, so it resumes any of them as a parent does.

@@ -116,6 +116,7 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.interruptedOwner === undefined || typeof r.interruptedOwner === "string")
 		&& (r.interruptionAnnounced === undefined || typeof r.interruptionAnnounced === "boolean")
 		&& (r.autoResumeAttempts === undefined || (Number.isInteger(r.autoResumeAttempts) && r.autoResumeAttempts >= 0))
+		&& (r.answerHeld === undefined || typeof r.answerHeld === "boolean")
 		&& (r.lastActivityAt === undefined || Number.isFinite(r.lastActivityAt))
 		&& (r.restoreError === undefined || typeof r.restoreError === "string")
 		&& (r.launchFailures === undefined || (Number.isInteger(r.launchFailures) && r.launchFailures >= 0))

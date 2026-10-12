@@ -182,7 +182,7 @@ export class Team implements HostTeam {
 	 * of resuming it: main is answering what it asked before an interruption,
 	 * and the policy leaves resuming to the user (host-state.ts).
 	 */
-	holdAnswer(name: string): void { this.routing.holdAnswer(name); }
+	holdAnswer(name: string): void { if (this.records.get(name)?.state === "interrupted") this.patch(name, { answerHeld: true }); }
 
 	/** Validates depth, names the child, and starts or queues it. */
 	spawn(request: SpawnRequest): { ok: true; record: AgentRecord } | { ok: false; error: string } {
@@ -373,10 +373,10 @@ export class Team implements HostTeam {
 		})();
 	}
 
-	private put(record: AgentRecord): void {
-		this.records.set(record.name, record);
+	private put(next: AgentRecord): void {
 		// A held answer is for the paused child that asked; once anything resumes it, main's messages work as usual.
-		if (record.state !== "interrupted") this.routing.unhold(record.name);
+		const record = next.answerHeld && next.state !== "interrupted" ? { ...next, answerHeld: undefined } : next;
+		this.records.set(record.name, record);
 		this.budgets.follow(record.name, record.state);
 		this.locks.follow(record);
 		for (const listener of this.listeners) listener(record);

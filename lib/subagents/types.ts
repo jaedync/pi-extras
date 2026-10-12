@@ -114,6 +114,8 @@ export interface AgentRecord {
 	interruptedOwner?: string;
 	interruptionAnnounced?: boolean;
 	autoResumeAttempts?: number;
+	/** Main's next message to this paused child waits in its inbox instead of resuming it (team.ts `holdAnswer`); saved, so a renewed host keeps holding it. */
+	answerHeld?: boolean;
 	lastActivityAt?: number;
 	restoreError?: string;
 	launchFailures?: number;
