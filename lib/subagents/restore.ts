@@ -53,10 +53,12 @@ interface IndexData {
 function validMail(value: unknown): value is HeldMail {
 	const item = value as HeldMail | null;
 	const message = item?.message;
-	const details = message?.details as { id?: unknown; kind?: unknown } | undefined;
+	const details = message?.details as { id?: unknown; kind?: unknown; reports?: unknown } | undefined;
 	return !!item && typeof item.wakes === "boolean" && !!message && (message.customType === MESSAGE_TYPE || message.customType === REPORT_TYPE)
 		&& typeof message.content === "string" && typeof message.display === "boolean"
-		&& typeof details?.id === "string" && ["note", "question", "reply", "relay", "report", "reminder"].includes(details.kind as string);
+		&& typeof details?.id === "string" && ["note", "question", "reply", "relay", "report", "reminder"].includes(details.kind as string)
+		// The report renderer reads its summaries.
+		&& (details.kind !== "report" || Array.isArray(details.reports));
 }
 
 /** Saved paths are used as tool and git arguments and shown in prompts, never as shell input. */

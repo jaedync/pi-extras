@@ -74,11 +74,13 @@ test("mail a closing host keeps is saved with the index, read back once, and any
 		index.save([], "reload", "owner");
 		const saved = JSON.parse(readFileSync(join(dir, "index.json"), "utf8"));
 		assert.deepEqual(saved.mail, [report]);
-		writeFileSync(join(dir, "index.json"), JSON.stringify({ ...saved, mail: [...saved.mail, { message: { customType: "other", content: "x", display: true, details: { id: "x", kind: "note" } }, wakes: true }] }));
+		const foreign = { message: { customType: "other", content: "x", display: true, details: { id: "x", kind: "note" } }, wakes: true };
+		const hollow = { message: { ...report.message, details: { id: "sa-2", kind: "report" } }, wakes: true };
+		writeFileSync(join(dir, "index.json"), JSON.stringify({ ...saved, mail: [...saved.mail, foreign, hollow] }));
 		const warnings: string[] = [];
 		const next = new ChildIndex(dir, "parent", dir);
 		next.load((message) => warnings.push(message));
-		assert.equal(warnings.length, 1);
+		assert.equal(warnings.length, 1, "one warning for what is left out");
 		assert.deepEqual(next.takeMail(), [report]);
 		assert.deepEqual(next.takeMail(), [], "taken once");
 		next.save([]);
