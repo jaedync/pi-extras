@@ -43,3 +43,14 @@ test("a windows_use host that cannot start, spawned at the top of a macrotask, f
 	host.close();
 	assert.deepEqual(uncaught, []);
 });
+
+test("an error on the client's stdout or stderr fails the calls instead of throwing", async () => {
+	const { EventEmitter } = await import("node:events");
+	const { PassThrough } = await import("node:stream");
+	const proc = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
+	const link = new McpLink(proc);
+	const call = link.request("tools/list", {});
+	assert.doesNotThrow(() => proc.stderr.emit("error", new Error("EPIPE")));
+	assert.doesNotThrow(() => proc.stdout.emit("error", new Error("read EIO")));
+	await assert.rejects(call, /read EIO/);
+});

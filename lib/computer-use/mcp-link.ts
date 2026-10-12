@@ -48,12 +48,17 @@ export class McpLink {
 	constructor(proc: ClientProcess, names: LinkNames = COMPUTER_USE) {
 		this.proc = proc;
 		this.names = names;
-		createInterface({ input: proc.stdout }).on("line", (line) => this.receive(line));
+		// readline passes stdout's errors on as its own; the stdout listener below reports them.
+		createInterface({ input: proc.stdout }).on("line", (line) => this.receive(line)).on("error", () => {});
 		proc.stderr?.on("data", (chunk: Buffer) => {
 			this.stderrTail = `${this.stderrTail}${chunk}`.slice(-STDERR_TAIL_CHARS);
 		});
 		// A closed pipe is reported by the exit below; without a listener it would crash Pi.
 		proc.stdin.on("error", () => {});
+		proc.stdout.on("error", (error) => this.fail(new Error(`${this.names.process} output failed: ${error.message}`)));
+		proc.stderr?.on("error", (error) => {
+			this.stderrTail = `${this.stderrTail}\n${error.message}`.slice(-STDERR_TAIL_CHARS);
+		});
 		// ClientProcess's minimal interface only names close; a real child also reports a failed start
 		// (ENOEXEC or EACCES for powershell.exe under WSL) as 'error', which would crash Pi unheard.
 		const events = proc as ClientProcess & { once(event: "error", listener: (error: Error) => void): unknown };
