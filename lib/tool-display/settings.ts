@@ -38,6 +38,8 @@ export function readSettings(file = CONFIG_FILE): DisplaySettings {
 	};
 }
 
-export function writeSettings(settings: DisplaySettings, file = CONFIG_FILE): void {
-	writeSection(SECTION, { enabled: settings.enabled, others: settings.others, chains: settings.chains, motion: settings.motion, thinking: settings.thinking, folded: settings.folded }, file);
+/** Saves only the fields in `patch`, so a session never writes its defaults over values set in another session or by hand. */
+export function writeSettings(patch: Partial<DisplaySettings>, file = CONFIG_FILE): void {
+	const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof DisplaySettings>;
+	writeSection(SECTION, Object.fromEntries(keys.filter((key) => patch[key] !== undefined).map((key) => [key, patch[key]])), file);
 }

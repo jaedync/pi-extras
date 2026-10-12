@@ -89,7 +89,7 @@ export type HostKit = Pick<Kit, "highlight" | "language" | "diff" | "fileUrl" | 
 
 export interface ToolDisplayDeps {
 	readonly tools: (ctx: ExtensionContext, wrap: (operations: BashOperations) => BashOperations) => SessionTools;
-	readonly settings: { read(): DisplaySettings; write(settings: DisplaySettings): void };
+	readonly settings: { read(): DisplaySettings; write(patch: Partial<DisplaySettings>): void };
 	readonly host: HostKit;
 	readonly nonce?: () => string;
 	/** Saves the Status Plus tool count for `/tool-display count`. */
@@ -126,18 +126,24 @@ export function countArg(args: string): ToolCount | undefined {
 	return words.length === 2 && words[0] === "count" && (words[1] === "calls" || words[1] === "steps") ? words[1] : undefined;
 }
 
-/** Applies a /tool-display argument, or undefined when it isn't one. */
-export function applyArgs(settings: DisplaySettings, args: string): DisplaySettings | undefined {
+/** The one setting a /tool-display argument names, or undefined when it isn't one. */
+export function argPatch(args: string): Partial<DisplaySettings> | undefined {
 	const words = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
 	const [first, second] = words;
-	if (words.length === 1 && (first === "on" || first === "off")) return { ...settings, enabled: first === "on" };
-	if (words.length === 2 && first === "others" && (second === "on" || second === "off")) return { ...settings, others: second === "on" };
-	if (words.length === 2 && first === "chains" && (second === "on" || second === "off")) return { ...settings, chains: second === "on" };
-	if (words.length === 2 && first === "motion" && (second === "full" || second === "reduced")) return { ...settings, motion: second };
-	if (words.length === 2 && first === "folded" && (second === "on" || second === "off")) return { ...settings, folded: second === "on" };
+	if (words.length === 1 && (first === "on" || first === "off")) return { enabled: first === "on" };
+	if (words.length === 2 && first === "others" && (second === "on" || second === "off")) return { others: second === "on" };
+	if (words.length === 2 && first === "chains" && (second === "on" || second === "off")) return { chains: second === "on" };
+	if (words.length === 2 && first === "motion" && (second === "full" || second === "reduced")) return { motion: second };
+	if (words.length === 2 && first === "folded" && (second === "on" || second === "off")) return { folded: second === "on" };
 	const thinking = THINKING_MODES.find((mode) => mode === second);
-	if (words.length === 2 && first === "thinking" && thinking) return { ...settings, thinking };
+	if (words.length === 2 && first === "thinking" && thinking) return { thinking };
 	return undefined;
+}
+
+/** Applies a /tool-display argument, or undefined when it isn't one. */
+export function applyArgs(settings: DisplaySettings, args: string): DisplaySettings | undefined {
+	const patch = argPatch(args);
+	return patch && { ...settings, ...patch };
 }
 
 /** How long a reply thought in all: the sum of its timed thinking runs, or undefined when none was timed. */
@@ -458,11 +464,12 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 				ctx.ui.notify(`The Status Plus tool count now counts ${what}.${unsaved}`, unsaved ? "warning" : "info");
 				return;
 			}
-			const next = applyArgs(settings, args);
-			if (!next) {
+			const patch = argPatch(args);
+			if (!patch) {
 				ctx.ui.notify(`Unknown option "${args.trim()}". Use ${USAGE}.`, "warning");
 				return;
 			}
+			const next = { ...settings, ...patch };
 			const toggled = next.enabled !== settings.enabled;
 			const wasFolding = folding();
 			settings = next;
@@ -471,7 +478,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			publishSettings();
 			clock.setReduced(settings.motion === "reduced");
 			foldClock.setReduced(settings.motion === "reduced");
-			const note = trySave(() => deps.settings.write(settings));
+			const note = trySave(() => deps.settings.write(patch));
 			if (toggled) install();
 			const reach = folding() && !folds ? ` ${FOLD_MISSING}`
 				: !toggled && next.enabled && owned.size === 0 && !adopting ? " No tool rows are drawn by Tool Display in this session." : "";

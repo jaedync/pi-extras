@@ -41,7 +41,7 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 	const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
 	const commands = new Map<string, any>();
 	let settings = options.settings ?? DEFAULT_SETTINGS;
-	const writes: DisplaySettings[] = [];
+	const writes: Partial<DisplaySettings>[] = [];
 	const counts: string[] = [];
 	const sources = options.sources ?? Object.fromEntries(TOOL_NAMES.map((name) => [name, "builtin"]));
 	const deps: ToolDisplayDeps = {
@@ -62,7 +62,7 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 			write: (next) => {
 				if (options.failWrite) throw new Error("read-only");
 				writes.push(next);
-				settings = next;
+				settings = { ...settings, ...next };
 			},
 		},
 		host,
@@ -188,10 +188,12 @@ test("/tool-display reports, switches and saves its settings", async () => {
 	h.start();
 	await h.run("");
 	assert.match(h.notes.at(-1)![0], /^Tool Display is on, other tools' rows on, chain steps on, motion full, thinking tail, folded off\./);
+	// Only the field the command names is saved: the others in memory may be defaults over a file the user has since corrected.
 	await h.run("motion reduced");
-	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: true, motion: "reduced", thinking: "tail", folded: false });
+	assert.deepEqual(h.writes.at(-1), { motion: "reduced" });
 	await h.run("chains off");
-	assert.deepEqual(h.writes.at(-1), { enabled: true, others: true, chains: false, motion: "reduced", thinking: "tail", folded: false });
+	assert.deepEqual(h.writes.at(-1), { chains: false });
+	assert.match(h.notes.at(-1)![0], /chain steps off, motion reduced/);
 	await h.run("sideways");
 	assert.equal(h.notes.at(-1)![1], "warning");
 	assert.equal(h.writes.length, 2);
@@ -329,6 +331,9 @@ test("the settings persist under toolDisplay in pi-extras.json and keep other se
   assert.equal(Object.hasOwn(readSettings(file),"fold"),false,"legacy fold keys are silently ignored");
   assert.equal(readSettings(file).folded,false,"the 0.17 fold key does not opt in to folded mode");
 		writeSettings({ enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed", folded: true }, file);
+		writeSettings({ motion: "full" }, file);
+		assert.deepEqual(readSettings(file), { enabled: true, others: false, chains: false, motion: "full", thinking: "collapsed", folded: true }, "a one-field save keeps the rest of the section");
+		writeSettings({ motion: "reduced" }, file);
 		assert.deepEqual(readSettings(file), { enabled: true, others: false, chains: false, motion: "reduced", thinking: "collapsed", folded: true });
 		const saved = JSON.parse(readFileSync(file, "utf8"));
 		assert.deepEqual(saved.computerUse, { apps: "all" });
