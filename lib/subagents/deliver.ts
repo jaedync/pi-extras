@@ -158,6 +158,7 @@ export class MainMail implements HostMail {
 	private readonly groupBusy: (group: string, except: string) => boolean;
 	private readonly now: () => number;
 	private readonly onChange: () => void;
+	private readonly status: (except: readonly string[]) => string | undefined;
 
 	constructor(options: {
 		port: MainPort;
@@ -170,6 +171,8 @@ export class MainMail implements HostMail {
 		/** Where main is now; without it, mail always goes as if main were idle. */
 		route?: () => Route;
 		retryMs?: number;
+		/** The line each delivery ends with about the live agents besides those it names (status.ts); none without it. */
+		status?: (except: readonly string[]) => string | undefined;
 	}) {
 		this.port = options.port;
 		this.route = options.route ?? (() => "wake");
@@ -179,6 +182,7 @@ export class MainMail implements HostMail {
 		this.groupBusy = options.groupBusy ?? (() => false);
 		this.now = options.now ?? Date.now;
 		this.onChange = options.onChange ?? (() => undefined);
+		this.status = options.status ?? (() => undefined);
 	}
 
 	deliver(delivery: MainDelivery): void {
@@ -266,7 +270,7 @@ export class MainMail implements HostMail {
 		for (const group of [...this.held.keys()]) this.release(group, false);
 		this.flush();
 		const taken = this.outbox.splice(0);
-		return { messages: taken.map((item) => item.message), wakes: taken.some((item) => item.wakes) };
+		return { messages: taken.map((item) => this.withStatus(item.message)), wakes: taken.some((item) => item.wakes) };
 	}
 
 	/**
@@ -426,10 +430,23 @@ export class MainMail implements HostMail {
 		const options = route === "wake" && wakes ? { triggerTurn: true, deliverAs: "steer" as const } : { triggerTurn: false };
 		if (route === "queue" && wakes) this.owing.set(message.details.id, ownerOf(message.details));
 		try {
-			this.port.send(message, options);
+			this.port.send(this.withStatus(message), options);
 		} catch {
 			// A stale context after session replacement; the item stays visible as pending.
 		}
+	}
+
+	/**
+	 * The message as it goes to Pi: a delivery ends with who else still works,
+	 * read now rather than when it was queued. A hidden reminder gets none.
+	 */
+	private withStatus(message: OutgoingMessage): OutgoingMessage {
+		const { details } = message;
+		if (details.kind === "reminder") return message;
+		let line: string | undefined;
+		try { line = this.status(details.kind === "report" ? details.reports.map((report) => report.name) : details.kind === "relay" ? [details.to] : [details.from]); }
+		catch { line = undefined; /* A team that is going away has nothing to add; the mail goes without it. */ }
+		return line ? { ...message, content: `${message.content}\n\n${line}` } : message;
 	}
 
 	private nextId(): string {

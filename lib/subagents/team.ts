@@ -498,7 +498,7 @@ export class Team implements HostTeam {
 		const record = this.records.get(name)!;
 		const used = this.continuing.get(name);
 		const continued = this.continuing.delete(name);
-		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined });
+		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined, ...(continued ? {} : { runCost: record.usage.cost }) });
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
 		if (!continued) this.checks.begin(name);
 		try {

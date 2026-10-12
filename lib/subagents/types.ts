@@ -144,6 +144,8 @@ export interface AgentRecord {
 	check?: CheckSpec;
 	/** What the latest check found; a report shows only its own run's. */
 	checked?: CheckResult;
+	/** What it had spent when its current run began, so main's status lines show the run's own cost (status.ts). */
+	runCost?: number;
 }
 
 /** A check as a spawn or a message set it (checks.ts). */

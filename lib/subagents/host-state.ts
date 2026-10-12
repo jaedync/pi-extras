@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { busyInGroup } from "./after.ts";
+import { stillWorking } from "./status.ts";
 import { HOST_VERSION, type HeldMail, type HostActivity, type HostPorts, type HostState } from "./contract.ts";
 import type { SubagentsConfig } from "./config.ts";
 import { MainMail } from "./deliver.ts";
@@ -151,6 +152,7 @@ function mailFor(config: SubagentsConfig, ports: HostPorts, team: () => Team): M
 		port: { send: (message, options) => ports.send(message, options) },
 		route: () => ports.route(),
 		onChange: () => ports.mailChanged(),
+		status: (except) => stillWorking(team().list(), except, Date.now()),
 	});
 }
 

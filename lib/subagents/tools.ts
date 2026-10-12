@@ -12,6 +12,7 @@ import { childMessageDescription, mainMessageDescription, stopDescription, subag
 import { capReport, reportText, rosterText } from "./format.ts";
 import { isThinking, type ModelChoice, resolveModel, THINKING_LEVELS, type Thinking, thinkingFor, type ThinkingSettings } from "./models.ts";
 import { EVERYONE, MAIN } from "./names.ts";
+import { teamNow } from "./status.ts";
 import type { HostTeam } from "./contract.ts";
 import { type AgentRecord, type CheckUpdate, LIVE_STATES } from "./types.ts";
 
@@ -238,7 +239,7 @@ export function mainMessageTool(tc: ToolContext): ToolDefinition {
 			const result = await tc.team.send(MAIN, params.to, params.text, { expectReply: params.expectReply === true, ...(check ? { check } : {}) });
 			if (!result.ok) throw new Error(result.error);
 			const tail = params.expectReply && result.delivered !== "replied" ? " Its answer will wake you." : "";
-			return text(`${deliveredWords[result.delivered] ?? "Delivered."}${tail}${result.notice ? `\n${result.notice}` : ""}`, { to: params.to, delivered: result.delivered, ...(result.notice ? { notice: result.notice } : {}) });
+			return withRoster(text(`${deliveredWords[result.delivered] ?? "Delivered."}${tail}${result.notice ? `\n${result.notice}` : ""}`, { to: params.to, delivered: result.delivered, ...(result.notice ? { notice: result.notice } : {}) }), tc.team);
 		},
 	} as ToolDefinition;
 }
@@ -252,16 +253,26 @@ export function stopTool(tc: Pick<ToolContext, "team">, self: string): ToolDefin
 		promptSnippet: "Stop a subagent whose work is no longer needed",
 		parameters: stopParams,
 		async execute(_id, raw) {
-			const { name } = raw as { name: string };
-			if (name === EVERYONE) return stopAll(tc.team, self);
-			const record = tc.team.get(name);
-			if (!record) throw new Error(`No agent named ${name}.`);
-			if (!tc.team.under(name, self)) throw new Error(`${name} is not one of your subagents; you can stop only agents you started.`);
-			const stopped = await tc.team.stop(name, { by: self });
-			if (!stopped) return text(`${name} had already ${record.state === "idle" ? "finished" : record.state}; nothing to stop.`, { name, state: record.state });
-			return text(`Stopped ${name}. ${reportText(stopped, Date.now())}\n\nMessage it to resume it with its context.`, { name, state: stopped.state, ...(stopped.sessionFile ? { sessionFile: stopped.sessionFile } : {}) });
+			const result = await stopFor(tc.team, self, (raw as { name: string }).name);
+			return self === MAIN ? withRoster(result, tc.team) : result;
 		},
 	} as ToolDefinition;
+}
+
+async function stopFor(team: HostTeam, self: string, name: string): Promise<Result> {
+	if (name === EVERYONE) return stopAll(team, self);
+	const record = team.get(name);
+	if (!record) throw new Error(`No agent named ${name}.`);
+	if (!team.under(name, self)) throw new Error(`${name} is not one of your subagents; you can stop only agents you started.`);
+	const stopped = await team.stop(name, { by: self });
+	if (!stopped) return text(`${name} had already ${record.state === "idle" ? "finished" : record.state}; nothing to stop.`, { name, state: record.state });
+	return text(`Stopped ${name}. ${reportText(stopped, Date.now())}\n\nMessage it to resume it with its context.`, { name, state: stopped.state, ...(stopped.sessionFile ? { sessionFile: stopped.sessionFile } : {}) });
+}
+
+/** Main's own results end with its team as it is now (status.ts), so it needs no turn to ask. */
+function withRoster(result: Result, team: HostTeam): Result {
+	const [first, ...rest] = result.content;
+	return { ...result, content: [{ type: "text", text: `${first?.text ?? ""}\n\n${teamNow(team.list(), Date.now())}` }, ...rest] };
 }
 
 async function stopAll(team: HostTeam, self: string): Promise<Result> {
