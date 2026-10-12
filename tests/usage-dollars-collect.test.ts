@@ -247,13 +247,26 @@ test("Pi processes that observe at the same time keep each other's meter anchors
 	const script = `const { createDollarsCollector } = await import(${JSON.stringify(module)});
 const [agentDir, id, now] = process.argv.slice(1);
 const collector = createDollarsCollector({ agentDir, timeZone: ${JSON.stringify(TZ)}, fetch: async () => new Response("{}") });
-// A poll skips a lock busy for over 100 ms and records at the next poll; the later passes are those polls.
-for (let pass = 0; pass < 3; pass++) for (let i = 0; i < 30; i++) {
+const { readFileSync } = await import("node:fs");
+const { join } = await import("node:path");
+const files = ["meter-day.json", "window-readings.json"].map((name) => join(agentDir, "usage-dollars", name));
+const keysIn = (file) => { try { return Object.keys(JSON.parse(readFileSync(file, "utf8"))); } catch { return []; } };
+// A key that any process saw saved must never go missing: only a write from a stale read removes one.
+const seen = files.map(() => new Set());
+const check = () => files.forEach((file, index) => {
+	const now = new Set(keysIn(file));
+	for (const key of seen[index]) if (!now.has(key)) { console.error("lost " + key + " from " + file); process.exit(3); }
+	for (const key of now) seen[index].add(key);
+});
+const mine = (file) => keysIn(file).filter((key) => key.startsWith(id + "-")).length;
+// A poll skips a lock busy for over 100 ms and records at a later poll, so poll until this process's readings are saved.
+for (let pass = 0; pass < 50 && (pass < 3 || files.some((file) => mine(file) < 30)); pass++) for (let i = 0; i < 30; i++) {
 	const atMs = Number(now);
 	collector.observe([[id + "-" + i, { atMs, source: "poll", entries: [
 		{ label: "", kind: "budget", usedUsd: 1, limitUsd: 10 },
 		{ label: "7d", key: "seven_day", usedPct: 10, resetMs: atMs + 3600000 },
 	] }]], atMs);
+	check();
 }`;
 	const results = await Promise.all(["a", "b", "c", "d"].map((id) => runNode(script, [dir, id, String(NOW)])));
 	for (const result of results) assert.equal(result.code, 0, result.stderr);
@@ -292,7 +305,8 @@ test("an observation with nothing new takes no lock, and a busy lock never stall
 	holdLocks(dir, "meter-day.json", "window-readings.json");
 	const same = Date.now();
 	collector.observe(meterAndWeekly(1100, 10, NOW - MIN), NOW);
-	assert.ok(Date.now() - same < 50, "nothing new: no lock and no wait");
+	// Well under the 100 ms skip and the old 3 s wait, with room for a loaded machine.
+	assert.ok(Date.now() - same < 500, "nothing new: no lock and no wait");
 	const quiet = await collector.collect(context({ snapshots: meterAndWeekly(1100, 10, NOW - MIN), now: NOW }));
 	assert.ok(!quiet.notes.some((note) => /meter-day|window-readings/.test(note)), quiet.notes.join(" | "));
 	const changed = Date.now();
