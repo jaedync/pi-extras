@@ -12,6 +12,7 @@ import { HOST_VERSION, type HeldMail, type HostActivity, type HostPorts, type Ho
 import type { SubagentsConfig } from "./config.ts";
 import { MainMail } from "./deliver.ts";
 import { fallbackChain } from "./fallback.ts";
+import { keptQuestionText } from "./format.ts";
 import { PortBinding } from "./host.ts";
 import { MAIN } from "./names.ts";
 import { acquireParent } from "./ownership.ts";
@@ -226,8 +227,9 @@ class Host implements HostState {
 
 	async restore(reason: string): Promise<void> {
 		const { team, index, place, ports, inputs: { config, owner } } = this;
-		postKeptMail(index, team, this.mail, (message) => this.notify(message));
 		await restoreInterrupted({ team, index, config, owner, ports, place, previousShutdown: this.previous.shutdown, previousOwner: this.previous.owner }, reason);
+		// After the restore, which says which children it resumed: a kept question depends on what became of its asker.
+		postKeptMail(index, team, this.mail, config.resumePolicy, (message) => this.notify(message));
 	}
 
 	async close(reason = "quit"): Promise<void> {
@@ -286,12 +288,27 @@ function handOverMail(items: readonly HeldMail[], live: HostPorts | undefined): 
 }
 
 /** Posts the mail an earlier host kept for main, once: the index forgets it before it goes. */
-function postKeptMail(index: ChildIndex, team: Team, mail: MainMail, notify: (message: string) => void): void {
-	const kept = index.takeMail();
+function postKeptMail(index: ChildIndex, team: Team, mail: MainMail, policy: SubagentsConfig["resumePolicy"], notify: (message: string) => void): void {
+	const kept = index.takeMail().map((item) => keptForNow(item, team, policy));
 	if (kept.length === 0) return;
 	try { index.save(team.list()); }
 	catch (error) { notify(`subagents: could not save ${index.file}; mail it kept for main may come twice: ${(error as Error).message}`); }
 	mail.resend(kept);
+}
+
+/**
+ * A question kept from before an interruption says what became of its asker,
+ * and wakes main only when the asker runs again. Under "notify" the user
+ * resumes paused children, so an answer to a paused one waits in its inbox.
+ */
+function keptForNow(item: HeldMail, team: Team, policy: SubagentsConfig["resumePolicy"]): HeldMail {
+	const { details } = item.message;
+	const asker = details.kind === "question" ? team.get(details.from) : undefined;
+	if (!asker || details.kind !== "question") return item;
+	const live = LIVE_STATES.has(asker.state);
+	const now = live ? "resumed" : policy === "notify" ? "held" : "paused";
+	if (now === "held") team.holdAnswer(asker.name);
+	return { message: { ...item.message, content: keptQuestionText(asker.name, details.text, now) }, wakes: live && item.wakes };
 }
 
 interface RestoreContext {

@@ -98,6 +98,8 @@ export class Team implements HostTeam {
 	private readonly peerRuns = new Set<string>();
 	/** Stopped by their own parent, which already knows; no report goes up. */
 	private readonly stoppedByParent = new Set<string>();
+	/** Paused children whose next message from main waits in their inbox (`holdAnswer`). */
+	private readonly heldAnswers = new Set<string>();
 	/** Runs moving to a fallback model, with what they had used of their budget: the same run goes on. */
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
 	private readonly budgets: RunBudgets;
@@ -146,6 +148,13 @@ export class Team implements HostTeam {
 	}
 
 	markRecovery(name: string, patch: Partial<AgentRecord>): void { this.patch(name, patch); }
+
+	/**
+	 * Main's next message to `name`, which is paused, waits in its inbox instead
+	 * of resuming it: main is answering what it asked before an interruption,
+	 * and the policy leaves resuming to the user (host-state.ts).
+	 */
+	holdAnswer(name: string): void { this.heldAnswers.add(name); }
 
 	/** Validates depth, names the child, and starts or queues it. */
 	spawn(request: SpawnRequest): { ok: true; record: AgentRecord } | { ok: false; error: string } {
@@ -649,6 +658,10 @@ export class Team implements HostTeam {
 	private deliverToChild(from: string, to: string, body: string, wakes: boolean, said = body, automatic = false): SendResult {
 		const target = this.records.get(to);
 		if (!target) return { ok: false, error: `No agent named ${to}. ${this.knownNames()}` };
+		if (from === MAIN && this.heldAnswers.delete(to) && !LIVE_STATES.has(target.state)) {
+			this.patch(to, { inbox: [...(target.inbox ?? []), body] });
+			return { ok: true, delivered: "inbox", notice: `${to} is paused, and resumePolicy is "notify", so it reads this when it resumes. Message it again, or run /subagents resume ${to}, to resume it now.` };
+		}
 		const resumes = wakes || from === target.parent || from === USER;
 		// An ended run's session is on disk, so its parent or the user can take it up again; a peer can't.
 		const ended = target.state === "failed" || target.state === "stopped";

@@ -46,6 +46,17 @@ export function questionText(from: string, text: string): string {
 	return `Question from ${from}, who is waiting for your reply (${replyHint(from)}):\n${text}`;
 }
 
+/**
+ * A question a child asked main before it was interrupted, as the next start
+ * posts it (host-state.ts): what became of the child decides what an answer does.
+ */
+export function keptQuestionText(from: string, text: string, now: "resumed" | "paused" | "held"): string {
+	const state = now === "resumed" ? `It has resumed; ${replyHint(from)}, and the answer reaches its new run.`
+		: now === "held" ? `It is paused, and resumePolicy is "notify": an answer waits in its inbox until it resumes.`
+		: `It is paused; an answer (${replyHint(from)}) resumes it.`;
+	return `${from} asked this before it was interrupted. ${state}\n${text}`;
+}
+
 export function spend(record: Pick<AgentRecord, "usage">): string {
 	return record.usage.cost > 0 ? `, $${formatMoney(record.usage.cost)}` : "";
 }

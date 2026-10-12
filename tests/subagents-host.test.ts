@@ -311,3 +311,73 @@ test("a start after a parked host timed out waits for its close to let go of the
 	cleanups.push(() => next.close());
 	assert.equal(next.team.list()[0]?.state, "interrupted");
 });
+
+/**
+ * A child asks main while its host is parked, and the takeover falls back:
+ * the child is interrupted with its question unanswered, and the next start
+ * (`reason`) restores it under `policy` and posts the question it kept.
+ */
+async function questionAcrossFallback(policy: "notify" | "reload" | "always", reason: string) {
+	const h = hostHarness({ resumePolicy: policy });
+	cleanups.push(h.cleanup);
+	const host = h.open(h.portsFor("first"));
+	const name = h.spawn(host, "Ask main something");
+	await tick();
+	host.park();
+	const session = {};
+	parkHost(session, host, { log: () => undefined });
+	const asked = host.team.send(name, "main", "Which branch?", { expectReply: true });
+	await sleep(10);
+	await takeParked(session)!.close("reload");
+	assert.equal((await asked).ok, false, "its wait ended with the interruption");
+	const next = h.portsFor("next");
+	const reopened = h.open(next);
+	cleanups.push(() => reopened.close());
+	await reopened.restore(reason);
+	await sleep(20);
+	const posted = next.sent.map(({ message, options }) => ({ type: message.customType, kind: (message.details as { kind?: string }).kind, content: message.content, wakes: options.triggerTurn }));
+	const question = posted.find((item) => item.kind === "question");
+	assert.ok(question, "the kept question is posted");
+	assert.deepEqual(posted.map((item) => item.type), ["subagent-restore", "subagent-message"], "after the restore notice");
+	assert.match(question.content, /Which branch\?/);
+	assert.match(question.content, /asked this before it was interrupted/);
+	return { name, reopened, question };
+}
+
+test("under resumePolicy notify, a kept question from a paused child does not wake main, and main's answer waits in its inbox", async () => {
+	const { name, reopened, question } = await questionAcrossFallback("notify", "reload");
+	assert.equal(question.wakes, false);
+	assert.match(question.content, /paused/);
+	const answer = await reopened.team.send("main", name, "release/2.0");
+	assert.equal(answer.ok && answer.delivered, "inbox");
+	assert.equal(reopened.team.get(name)?.state, "interrupted", "the answer resumes nothing");
+	assert.match(reopened.team.get(name)?.inbox?.join("\n") ?? "", /release\/2\.0/);
+	const again = await reopened.team.send("main", name, "Go on now.");
+	assert.equal(again.ok && again.delivered, "resumed", "a later message from main resumes it, as for any paused child");
+});
+
+test("under resumePolicy reload, a child a /reload paused resumes, and its kept question reaches main with the answer going to its new run", async () => {
+	const { name, reopened, question } = await questionAcrossFallback("reload", "reload");
+	assert.equal(question.wakes, true);
+	assert.match(question.content, /resumed/);
+	await sleep(20);
+	assert.ok(["queued", "starting", "running"].includes(reopened.team.get(name)!.state));
+	const answer = await reopened.team.send("main", name, "release/2.0");
+	assert.equal(answer.ok && answer.delivered, "steered");
+});
+
+test("under resumePolicy reload, after a restart the child stays paused: its kept question does not wake main, and an answer resumes it", async () => {
+	const { name, reopened, question } = await questionAcrossFallback("reload", "startup");
+	assert.equal(question.wakes, false);
+	assert.match(question.content, /paused/);
+	const answer = await reopened.team.send("main", name, "release/2.0");
+	assert.equal(answer.ok && answer.delivered, "resumed");
+});
+
+test("under resumePolicy always, the child resumes after a restart, and its kept question reaches main with the answer going to its new run", async () => {
+	const { name, reopened, question } = await questionAcrossFallback("always", "startup");
+	assert.equal(question.wakes, true);
+	await sleep(20);
+	const answer = await reopened.team.send("main", name, "release/2.0");
+	assert.equal(answer.ok && answer.delivered, "steered");
+});

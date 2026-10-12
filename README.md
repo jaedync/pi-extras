@@ -1416,7 +1416,9 @@ Some reloads must interrupt children:
 Then Subagents interrupts the children and records them in `index.json`. The
 next session start resumes them, as `resumePolicy` allows. Mail to main that
 waited during the reload stays in `index.json`, and the next session start
-sends it one time. A reload that does not finish, or that can't keep the
+sends it one time, after its restore notice. A question from a child that
+stays paused does not wake main. Under `resumePolicy: "notify"`, main's answer
+to it goes to the child's inbox and does not resume the child. A reload that does not finish, or that can't keep the
 children, writes a line to `~/.pi/agent/subagents/reload.log`. For the other
 cases, Pi shows a notice.
 
