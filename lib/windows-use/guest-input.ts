@@ -48,14 +48,34 @@ export async function typeAtFocus(guest: Guest, args: Args, signal?: AbortSignal
 	return textResult(`Typed ${args.text.length} characters into the focused control${enter ? ", then pressed Enter" : ""}.`);
 }
 
-/** Alt+F4 closes the window in front; with the desktop or taskbar there, it opens Shut Down Windows, an Enter away from turning the VM off. */
-const CLOSE_WINDOW = /^\s*alt\s*\+\s*f4\s*$/i;
+/** Names Windows-MCP (pyautogui) and the console keyboard give either Alt key. */
+const ALT_KEYS = new Set(["alt", "altleft", "altright", "lalt", "ralt", "leftalt", "rightalt", "lmenu", "rmenu", "option"]);
+/** Windows-MCP's tool for key combinations, under its current and its former name. */
+const SHORTCUT_TOOL = /^shortcut(?:-tool)?$/i;
+
+/**
+ * Alt+F4 closes the window in front; with the desktop or taskbar there, it opens
+ * Shut Down Windows, an Enter away from turning the VM off. The set of keys
+ * decides, not how it is written: "F4+ALT", "alt+f4+" and "shift+alt+f4" all
+ * press Alt and F4. Windows-MCP joins the parts into a uiautomation SendKeys
+ * string ("{Alt}{F4}"), so braces, groups and repeat counts split keys too:
+ * "Alt}{F4" and "alt+(+f4+)" press Alt+F4 there.
+ */
+function closesWindow(keys: string): boolean {
+	const names = keys.split(/[+{}()\s]+/).map((key) => key.toLowerCase());
+	return names.includes("f4") && names.some((key) => ALT_KEYS.has(key));
+}
+
+/** The keys a win.call presses, when it calls Windows-MCP's Shortcut tool. */
+export function shortcutKeys(tool: string, args: Args): unknown {
+	return SHORTCUT_TOOL.test(tool.trim()) ? args.shortcut : undefined;
+}
 /** Explorer's desktop ("Program Manager") and taskbar (untitled), as opposed to its folder windows. */
 const SHELL_TITLES = new Set(["", "Program Manager"]);
 
 /** Refuses Alt+F4 while the desktop or taskbar is in front, as after a switch that didn't take. */
 export async function checkAltF4(guest: Guest, keys: unknown, signal?: AbortSignal): Promise<void> {
-	if (typeof keys !== "string" || !CLOSE_WINDOW.test(keys)) return;
+	if (typeof keys !== "string" || !closesWindow(keys)) return;
 	const front = readFront(textOf(await guest.tool("PowerShell", { command: FRONT_WINDOW }, signal)));
 	if (front?.process.toLowerCase() !== "explorer" || !SHELL_TITLES.has(front.title)) return;
 	throw new Error(`Alt+F4 wasn't sent to ${guest.vm}: the desktop or taskbar is in front, where it opens Shut Down Windows. Bring the window to close to the front first (a click on it, or win.app with mode "switch"), check with a snapshot, or click its Close button.`);

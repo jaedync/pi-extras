@@ -377,6 +377,38 @@ test("Alt+F4 with the desktop or taskbar in front, where it opens Shut Down Wind
 	assert.equal(log.at(-1), 'Shortcut {"shortcut":"ctrl+c"}', "other keys go without a look");
 });
 
+test("the Alt+F4 check reads the key set, and win.call's Shortcut gets it too", async () => {
+	const log: string[] = [];
+	const guest = (vm: string) => ({
+		vm,
+		async tool(name: string, args: Record<string, unknown>) {
+			if (name === "PowerShell" && String(args.command).includes("GetForegroundWindow")) return { content: [{ type: "text", text: `Response: ${JSON.stringify({ process: "explorer", title: "Program Manager", responding: true })}\n\nStatus Code: 0` }], isError: false };
+			log.push(`${name} ${JSON.stringify(args)}`);
+			return { content: [{ type: "text", text: `${name} done` }], isError: false };
+		},
+		ready: () => true,
+		assertConsole: async () => {},
+		forget() {},
+		recheck() {},
+	}) as unknown as Guest;
+	const { host, calls } = fakeHost();
+	const session = new WinSession(host, guest);
+	// Windows-MCP 0.8 builds a uiautomation SendKeys string from the parts: "Alt}{F4" becomes "{Alt}{F4}".
+	for (const keys of ["alt+f4+alt", "alt+f4+", "F4+ALT", " alt +  f4 ", "altleft+f4", "shift+alt+f4", "Alt}{F4", "alt+(+f4+)", "lalt+f4 2"]) {
+		await assert.rejects(session.call("key", { vm: "A", keys }, {}), /Alt\+F4 wasn't sent/, `win.key ${JSON.stringify(keys)}`);
+		await assert.rejects(session.call("console.key", { vm: "A", keys }, {}), /Alt\+F4 wasn't sent/, `win.console.key ${JSON.stringify(keys)}`);
+	}
+	for (const tool of ["Shortcut", "shortcut", "SHORTCUT"]) {
+		await assert.rejects(session.call("call", { vm: "A", tool, args: { shortcut: "Alt+F4" } }, {}), /Alt\+F4 wasn't sent/, `win.call ${tool}`);
+	}
+	assert.deepEqual(log, []);
+	assert.ok(!calls.some(([method]) => method === "key"));
+	await session.call("key", { vm: "A", keys: "f4" }, {});
+	await session.call("key", { vm: "A", keys: "alt+f5" }, {});
+	await session.call("call", { vm: "A", tool: "Shortcut", args: { shortcut: "alt+tab" } }, {});
+	assert.deepEqual(log, ['Shortcut {"shortcut":"f4"}', 'Shortcut {"shortcut":"alt+f5"}', 'Shortcut {"shortcut":"alt+tab"}']);
+});
+
 test("win.uac answers a prompt through the console and waits for it to close; it never types a password", async () => {
 	const { host, calls } = fakeHost();
 	const answered = await new WinSession(host, secureDesktop([], 2), undefined, async () => {}).call("uac", { vm: "A", answer: "yes" }, {});

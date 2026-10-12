@@ -11,7 +11,7 @@ import type { CallOptions, ToolResult } from "../computer-use/session.ts";
 import type { Region } from "./ocr.ts";
 import { Display } from "./display.ts";
 import { Guest, wait, type HostCalls } from "./guest.ts";
-import { answerUac, captureFailure, checkAltF4, SCREEN_GRAB_FAILED, typeAtFocus } from "./guest-input.ts";
+import { answerUac, captureFailure, checkAltF4, SCREEN_GRAB_FAILED, shortcutKeys, typeAtFocus } from "./guest-input.ts";
 import { textOf, textResult } from "./result.ts";
 import { pickApp, START_APPS } from "./apps.ts";
 import { compactSnapshot } from "./snapshot.ts";
@@ -315,8 +315,11 @@ export class WinSession {
 	private async guestTool(vm: string, method: string, args: Args, signal?: AbortSignal): Promise<ToolResult> {
 		const call = toMcp(method, args);
 		const guest = this.guest(vm);
-		if (method === "call") return anyTool(guest, call.tool, call.args, signal);
 		if (method === "key") await checkAltF4(guest, args.keys, signal);
+		if (method === "call") {
+			await checkAltF4(guest, shortcutKeys(call.tool, call.args), signal);
+			return anyTool(guest, call.tool, call.args, signal);
+		}
 		const result = await guest.tool(call.tool, call.args, signal);
 		if (method === "app" && result.isError && UIA_EVENT_FAILED.test(textOf(result)) && (args.mode ?? "launch") === "launch") {
 			throw new Error(`${String(args.name)} may have opened: Windows-MCP started it, then failed to find its window through UI Automation (${firstLine(textOf(result))}). Take a snapshot before launching it again.`);
