@@ -2,6 +2,22 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.9 - 2026-10-12
+
+### Fixed
+
+- Usage dollars: a window that the provider resets before its reset time
+  no longer reads too large. Before, the 7-day size counted the spend from
+  before the granted reset. The tool now starts the window's spend at the
+  granted reset. It uses Tokenfold's new `window_start` field, or a reset that
+  it finds in its own readings (a fall of 10 points or more, or a fall to 0%,
+  with the same reset time).
+- Usage dollars: the tool now keeps a reading of each window at each limit
+  poll, not only when an agent calls `usage`.
+- Usage dollars: the window sizes that the tool saved before this release
+  are not used. The first cycle after the update shows no size until 5% of
+  the window is used.
+
 ## 0.24.8 - 2026-10-10
 
 ### Fixed
