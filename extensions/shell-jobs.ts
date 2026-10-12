@@ -244,6 +244,23 @@ function trimRetained(runtime: Runtime): void {
 	}
 }
 
+type SpawnedJob = { readonly child: ReturnType<typeof spawn>; started(): void };
+
+/**
+ * Spawn a job's shell in a process group of its own. A started child can still
+ * emit 'error' (a signal it could not deliver, say). With no listener Node throws
+ * it, and that ends Pi, so a listener stays on and logs it. Until `started`, the
+ * caller's wait for the spawn event reports the error instead.
+ */
+function spawnJob(launch: Launch, cwd: string, fd: number, id: string): SpawnedJob {
+	const child = spawn(launch.shell, [...launch.args], { cwd, env: launch.env, detached: true, stdio: ["ignore", fd, fd] });
+	let spawned = false;
+	child.on("error", (error) => {
+		if (spawned) logError(`job ${id} process error`, error);
+	});
+	return { child, started: () => { spawned = true; } };
+}
+
 async function startJob(
 	runtime: Runtime,
 	launch: Launch,
@@ -281,18 +298,14 @@ async function startJob(
 			return errResult(`Could not create the job log: ${(error as Error).message}`);
 		}
 		const shell = launch.shell;
-		let child: ReturnType<typeof spawn>;
+		let spawned: SpawnedJob;
 		try {
-			child = spawn(shell, [...launch.args], {
-				cwd,
-				env: launch.env,
-				detached: true,
-				stdio: ["ignore", fd, fd],
-			});
+			spawned = spawnJob(launch, cwd, fd, id);
 		} catch (error) {
 			discardLog(logPath, fd);
 			return errResult(`Could not spawn ${shell}: ${(error as Error).message}`);
 		}
+		const { child } = spawned;
 		if (typeof child.pid === "number") {
 			pendingPid = child.pid;
 			runtime.pendingPids.add(pendingPid);
@@ -300,15 +313,9 @@ async function startJob(
 		const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
 			child.once("exit", (code, signal) => resolve({ code, signal }));
 		});
-		// A started child can still emit 'error' (a signal it could not deliver, say).
-		// With no listener Node throws it, and that ends Pi; a failed start is the catch below.
-		let spawned = false;
-		child.on("error", (error) => {
-			if (spawned) logError(`job ${id} process error`, error);
-		});
 		try {
 			await once(child, "spawn");
-			spawned = true;
+			spawned.started();
 		} catch (error) {
 			discardLog(logPath, fd);
 			return errResult(`Could not start ${shell}: ${(error as Error).message}`);

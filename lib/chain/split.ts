@@ -100,13 +100,6 @@ function scan(s: string): Chain | undefined {
 		while (j >= 0 && (s[j] === " " || s[j] === "\t")) j--;
 		return j < 0 ? "" : s[j]!;
 	};
-	// A line that ends in `|` or `|&` continues its pipeline on the next line, where the rewrite would end the step.
-	const pipeBefore = (i: number) => {
-		let j = i - 1;
-		while (j >= 0 && (s[j] === " " || s[j] === "\t")) j--;
-		if (s[j] === "&") return s[j - 1] === "|";
-		return s[j] === "|" && s[j - 1] !== "|";
-	};
 
 	let i = 0;
 	while (i < s.length) {
@@ -154,7 +147,7 @@ function scan(s: string): Chain | undefined {
 		if (ch === "$" && next === "(") { stack.push("paren"); i += 2; continue; }
 		if (ch === "$" && next === "{") { stack.push("brace"); i += 2; continue; }
 		if (ch === "#" && wordStart(i)) {
-			if (stack.length === 0 && pipeBefore(i)) fail();
+			if (stack.length === 0 && pipeBefore(s, i)) fail();
 			while (i < s.length && s[i] !== "\n") i++;
 			continue;
 		}
@@ -214,7 +207,7 @@ function scan(s: string): Chain | undefined {
 			continue;
 		}
 		if (ch === "\n") {
-			if (pipeBefore(i)) fail();
+			if (pipeBefore(s, i)) fail();
 			finish(i, ";");
 			pendingLine = true;
 			stepStart = ++i;
@@ -225,7 +218,19 @@ function scan(s: string): Chain | undefined {
 	}
 	if (stack.length > 0) return undefined;
 	finish(s.length, null);
+	return toChain(steps);
+}
 
+/** A line that ends in `|` or `|&` before index i continues its pipeline on the next line, where the rewrite would end the step. */
+function pipeBefore(s: string, i: number): boolean {
+	let j = i - 1;
+	while (j >= 0 && (s[j] === " " || s[j] === "\t")) j--;
+	if (s[j] === "&") return s[j - 1] === "|";
+	return s[j] === "|" && s[j - 1] !== "|";
+}
+
+/** The steps as a chain, when there are enough of them and none changes how the rest of the list runs. */
+function toChain(steps: readonly ChainStep[]): Chain | undefined {
 	if (steps.length < 2 || steps.length > MAX_STEPS) return undefined;
 	for (const step of steps) {
 		const word = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*([^\s;&|()<>]+)/.exec(step.text)?.[1];

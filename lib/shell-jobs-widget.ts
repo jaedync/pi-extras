@@ -221,6 +221,30 @@ interface WidgetMouseEvent {
 }
 
 /**
+ * A render that cannot throw: Pi's TUI does not catch a widget's render, and a
+ * throw there ends Pi. A frame that fails is reported and drawn as one line.
+ */
+function guarded(draw: (width: number) => string[], onError: (error: unknown) => void): (width: number) => string[] {
+	return (width) => {
+		try {
+			return draw(width);
+		} catch (error) {
+			onError(error);
+			return [truncateToWidth(WIDGET_FAILED, Math.max(1, width), "")];
+		}
+	};
+}
+
+/** A left click on a row opens its job. */
+function clickRow(event: WidgetMouseEvent, rows: readonly Job[], onSelect: ((job: Job) => void) | null): { handled: true } | undefined {
+	if (event.type !== "click" || event.button !== "left" || onSelect === null) return undefined;
+	const job = rows[event.y];
+	if (job === undefined) return undefined;
+	onSelect(job);
+	return { handled: true };
+}
+
+/**
  * `motion` is Tool Display's setting, read each frame: reduced holds the spinners still.
  * `onError` hears a render that threw: Pi's TUI does not catch a widget's render, and a throw there ends Pi.
  */
@@ -296,23 +320,10 @@ export function createJobsWidget(motion: () => Motion = () => "full", onError: (
 			return lines;
 		};
 		return {
-			render: (width: number) => {
-				try {
-					return draw(width);
-				} catch (error) {
-					lastRows = [];
-					onError(error);
-					return [truncateToWidth(WIDGET_FAILED, Math.max(1, width), "")];
-				}
-			},
+			// A failed frame maps no row to a job.
+			render: guarded(draw, (error) => { lastRows = []; onError(error); }),
 			invalidate: () => {},
-			handleMouse: (event: WidgetMouseEvent) => {
-				if (event.type !== "click" || event.button !== "left" || onSelect === null) return undefined;
-				const job = lastRows[event.y];
-				if (job === undefined) return undefined;
-				onSelect(job);
-				return { handled: true };
-			},
+			handleMouse: (event: WidgetMouseEvent) => clickRow(event, lastRows, onSelect),
 		};
 	};
 
