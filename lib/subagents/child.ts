@@ -8,6 +8,7 @@ import type { AgentSession, InlineExtension, ModelRuntime, SettingsManager, Tool
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { applyDefaultTimeout, resolveDefaultSeconds } from "../../extensions/bash-default-timeout.ts";
 import { isBlockingPeer } from "../band/glyph.ts";
 import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
@@ -44,6 +45,10 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const EDIT_GUARD_NAME = "subagent-edit-guard";
 const EDIT_GUARD_PATH = `<inline:${EDIT_GUARD_NAME}>`;
+const TIMEOUT_NAME = "subagent-default-timeout";
+const TIMEOUT_PATH = `<inline:${TIMEOUT_NAME}>`;
+/** The shell tools whose calls get main's default timeout. */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(["bash", "powershell"]);
 const READ_TOOLS = ["read", "grep", "find", "ls"];
 const SHUTDOWN_TIMEOUT_MS = 2_000;
 export const CHILD_CACHE_COMPACTION_PATH = fileURLToPath(new URL("../../extensions/cache-compaction.ts", import.meta.url));
@@ -237,6 +242,24 @@ export function editGuard(check: (path: unknown) => string | undefined, track?: 
 	};
 }
 
+/**
+ * Main's Bash Default Timeout for a child's shell calls that omit one. That
+ * extension owns no tool, so it never loads in a child, and a call would run
+ * until the run's time budget ends.
+ */
+export function defaultTimeout(seconds: number): InlineExtension {
+	return {
+		name: TIMEOUT_NAME,
+		factory(pi) {
+			pi.on("tool_call", (event) => {
+				// Pi's tool_call contract: the input is changed in place.
+				if (SHELL_TOOLS.has(event.toolName)) applyDefaultTimeout(event.input, seconds);
+				return undefined;
+			});
+		},
+	};
+}
+
 function editTracker(activity: HostActivity | undefined, agent: string, cwd: string): EditTracker | undefined {
 	if (!activity) return undefined;
 	return {
@@ -336,6 +359,8 @@ interface LoaderInputs {
 
 function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInputs) {
 	const { cwd, settingsManager, guard, wanted, loaded, editCheck } = inputs;
+	// Read at each launch, as main reads it at each session start.
+	const timeout = resolveDefaultSeconds(process.env.PI_BASH_DEFAULT_TIMEOUT);
 	return new deps.sdk.DefaultResourceLoader({
 		cwd, agentDir: deps.agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
 		// Besides Cache Compaction, load only files that own the child's tools. Every factory is handed the
@@ -345,10 +370,11 @@ function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInpu
 		// After APPEND_SYSTEM.md, which Pi finds as it finds SYSTEM.md, project trust and all; a plain
 		// appendSystemPrompt would take its place.
 		appendSystemPromptOverride: (base) => [...base, deps.instructions(record)],
-		extensionFactories: [guard.extension, editGuard(editCheck, editTracker(deps.activity, record.name, cwd))],
+		extensionFactories: [guard.extension, editGuard(editCheck, editTracker(deps.activity, record.name, cwd)),
+			...(timeout === undefined ? [] : [defaultTimeout(timeout)])],
 		extensionsOverride: (base) => ({
 			...base,
-			extensions: base.extensions.filter((extension) => [CHILD_GUARD_PATH, EDIT_GUARD_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
+			extensions: base.extensions.filter((extension) => [CHILD_GUARD_PATH, EDIT_GUARD_PATH, TIMEOUT_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
 				|| [...extension.tools.keys()].some((name) => wanted.has(name))),
 		}),
 	});

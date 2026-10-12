@@ -151,3 +151,46 @@ test("a shared child's bash call that changes files beside the holder gets a not
 	assert.match(team.claimEdit("shell", join(root, "other.txt")) ?? "", /^holder is editing/, "the holder keeps the lock");
 	await team.close();
 });
+
+test("a child's bash call with no timeout gets main's default timeout; one with a timeout keeps it", { timeout: 30_000 }, async (t) => {
+	const before = process.env.PI_BASH_DEFAULT_TIMEOUT;
+	process.env.PI_BASH_DEFAULT_TIMEOUT = "1";
+	t.after(() => { if (before === undefined) delete process.env.PI_BASH_DEFAULT_TIMEOUT; else process.env.PI_BASH_DEFAULT_TIMEOUT = before; });
+	const root = repository();
+	const { team, faux } = await setup(root);
+	const results: string[] = [];
+	faux.setResponses([
+		ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 5; echo finished" })),
+		(context: any) => {
+			results.push(lastToolResult(context));
+			return ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 1.5; echo kept", timeout: 10 }));
+		},
+		(context: any) => {
+			results.push(lastToolResult(context));
+			return ai.fauxAssistantMessage("Done.");
+		},
+	]);
+	const started = Date.now();
+	assert.ok(spawn(team, "sleeper").ok);
+	const done = await team.whenDone("sleeper");
+	assert.equal(done.state, "idle", done.error);
+	assert.match(results[0] ?? "", /timed out after 1 second/i);
+	assert.doesNotMatch(results[0] ?? "", /finished/);
+	assert.match(results[1] ?? "", /kept/);
+	assert.ok(Date.now() - started < 4_500, "the first call stopped at the default, not after its 5 seconds");
+	await team.close();
+});
+
+test("the child's default timeout covers bash and powershell calls that omit one, and leaves other tools alone", async () => {
+	const { defaultTimeout } = await import("../lib/subagents/child.ts");
+	let handler: ((event: { toolName: string; input: Record<string, unknown> }) => unknown) | undefined;
+	(defaultTimeout(30) as unknown as { factory(pi: unknown): void }).factory({ on: (_event: string, h: typeof handler) => { handler = h; } });
+	const calls = [
+		{ toolName: "bash", input: { command: "x" } },
+		{ toolName: "powershell", input: { command: "x" } },
+		{ toolName: "bash", input: { command: "x", timeout: 5 } },
+		{ toolName: "read", input: { path: "x" } },
+	];
+	for (const call of calls) handler!(call);
+	assert.deepEqual(calls.map((call) => call.input.timeout), [30, 30, 5, undefined]);
+});
