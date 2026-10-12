@@ -21,7 +21,6 @@ export const MAX_CHECK_CHARS = 4_000;
 /** A failure shows more output than a pass: the parent needs to see why. */
 const FAILED_TAIL = { lines: 40, chars: 4_000 };
 const PASSED_TAIL = { lines: 10, chars: 1_000 };
-const STATUS_LINE = /\n*Command exited with code \d+$/m;
 
 /** Why `update` is not a check `target` can have, or undefined. */
 export function checkError(update: CheckUpdate, target: { readOnly: boolean }): string | undefined {
@@ -52,11 +51,19 @@ export async function bashCheck(bash: ToolDefinition, command: string, options: 
 		const result = await bash.execute(options.id, { command, timeout: options.timeoutMs / 1_000 }, options.signal, undefined, undefined as never);
 		const exit = (result as { structuredContent?: { exit_code?: unknown } }).structuredContent?.exit_code;
 		const failed = (result as { isError?: boolean }).isError === true;
-		return { exitCode: typeof exit === "number" ? exit : failed ? 1 : 0, output: textOf(result.content).replace(STATUS_LINE, "") };
+		const exitCode = typeof exit === "number" ? exit : failed ? 1 : 0;
+		return { exitCode, output: withoutStatus(textOf(result.content), exitCode) };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return { exitCode: null, output: message, ...(/Command timed out after/.test(message) ? { timedOut: true } : {}) };
 	}
+}
+
+/** Pi ends a failed command's text with its exit status, which the block says itself; output that looks like it stays. */
+function withoutStatus(text: string, exitCode: number): string {
+	const status = `Command exited with code ${exitCode}`;
+	const at = exitCode === 0 ? -1 : text.lastIndexOf(status);
+	return at < 0 ? text : `${text.slice(0, at).replace(/\n+$/, "")}${text.slice(at + status.length)}`;
 }
 
 /** The last `lines` lines of `text`, at most `chars` characters. */
@@ -89,13 +96,21 @@ export const checkActivity = (command: string): string => `check: ${command.repl
 /** The check of `record`'s latest run, if one ran. */
 export const checkOf = (record: Pick<AgentRecord, "checked" | "runs">): CheckResult | undefined => (record.checked?.run === record.runs ? record.checked : undefined);
 
+/** Whether `record`'s latest run had a check that did not pass: news its parent must hear, whoever started the run. */
+export const checkFailed = (record: Pick<AgentRecord, "checked" | "runs">): boolean => (checkOf(record)?.exitCode ?? 0) !== 0;
+
+/** How a check ended, in a few words: `failed (exit 1)`, `timed out`. */
+export function checkVerdict(result: Pick<CheckResult, "exitCode" | "timedOut">): string {
+	if (result.exitCode === 0) return "passed (exit 0)";
+	if (result.timedOut) return "timed out";
+	return result.exitCode === null ? "could not run" : `failed (exit ${result.exitCode})`;
+}
+
 function outcome(result: CheckResult): string {
 	const took = formatElapsed(result.durationMs);
 	const attempt = result.attempts > 1 ? `, attempt ${result.attempt} of ${result.attempts}` : "";
-	if (result.exitCode === 0) return `passed (exit 0) in ${took}${attempt}`;
-	if (result.timedOut) return `timed out after ${took}${attempt}`;
-	if (result.exitCode === null) return `could not run${attempt}`;
-	return `failed (exit ${result.exitCode}) in ${took}${attempt}`;
+	const when = result.timedOut ? ` after ${took}` : result.exitCode === null ? "" : ` in ${took}`;
+	return `${checkVerdict(result)}${when}${attempt}`;
 }
 
 /** A fence longer than any run of backticks in `text`. */
@@ -191,8 +206,11 @@ export class RunChecks {
 		try { result = await runCheck(handle, record, fixes + 1, controller.signal, () => this.host.now()); }
 		finally { this.running.delete(name); }
 		if (this.host.gone(name)) return null;
-		this.host.patch(name, { checked: result, ...WAITING_FOR_MODEL });
-		if (result.exitCode === 0 || fixes >= record.check.fixUntilPass) return null;
+		// A failed check is news main has not heard, even when the run only answered main.
+		this.host.patch(name, { checked: result, ...WAITING_FOR_MODEL, ...(result.exitCode !== 0 ? { answeredMain: undefined } : {}) });
+		// A check that could not run is the harness's problem, which no fix round of the child repairs.
+		const fixable = result.exitCode !== 0 && (result.exitCode !== null || result.timedOut === true);
+		if (!fixable || fixes >= record.check.fixUntilPass) return null;
 		this.rounds.set(name, fixes + 1);
 		return fixPrompt(result);
 	}

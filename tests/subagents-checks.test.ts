@@ -310,3 +310,73 @@ test("only an agent that can run bash itself may set a check, and a message's ch
 	assert.equal(h.team.get("reader")?.check?.command, "npm run build", "main may check a read-only agent's work");
 	await h.team.close();
 });
+
+test("a run whose check did not pass is news: its report is never quiet, and a spawn after it hears so", async () => {
+	const failing = async () => ({ exitCode: 1, output: "FAIL 3 tests" });
+	const h = teamHarness({ check: failing, warn: () => undefined });
+	h.spawn("impl", { name: "impl", check: { command: "npm test", fixUntilPass: 0 } });
+	h.spawn("review", { name: "review", after: ["impl"] });
+	h.spawn("rev", { name: "rev" });
+	await tick();
+	h.lastCall("impl").finish("Done, all tests pass.");
+	await settled();
+	assert.equal(reports(h.main).at(-1)?.record.name, "impl");
+	assert.equal(reports(h.main).at(-1)?.quiet, undefined, "a spawn waits for it, but main still hears of the failed check");
+	assert.match(h.lastCall("review").text, /- impl finished, but the harness's check failed \(exit 1\)\. /);
+	assert.deepEqual(await h.team.send("rev", "impl", "Fix the null check in a.ts.", { expectReply: true }), { ok: true, delivered: "resumed" });
+	await settled();
+	h.lastCall("impl").finish("Fixed.");
+	await settled();
+	assert.equal(reports(h.main).at(-1)?.quiet, undefined, "a peer started this run, but its check failed");
+	assert.deepEqual(await h.team.send("main", "impl", "Which file?", { expectReply: true }), { ok: true, delivered: "resumed" });
+	await settled();
+	h.transcripts.set("impl", [...(h.transcripts.get("impl") ?? []), { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "message", arguments: {} }] }]);
+	await h.team.send("impl", "main", "a.ts");
+	assert.equal(h.team.get("impl")!.answeredMain, true);
+	h.lastCall("impl").finish("a.ts");
+	await settled();
+	assert.equal(reports(h.main).at(-1)?.record.answeredMain, undefined, "an answer can't stand in for a report whose check failed");
+	await h.team.close();
+});
+
+test("mail that comes during a failing check goes with the fix prompt, so no fix round goes unseen", async () => {
+	const script = scripted({ exitCode: 1, output: "broken" }, { exitCode: 0, output: "ok" });
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("impl", { name: "impl", check: { command: "npm test", fixUntilPass: 1 } });
+	await tick();
+	script.hold();
+	h.lastCall(name).finish("Done.");
+	await settled();
+	h.late.set(name, ["Message from main:\nAlso update the README."]);
+	script.go();
+	await settled();
+	const prompt = h.lastCall(name).text;
+	assert.match(prompt, /^Message from main:\nAlso update the README\.\n\nThe harness ran your check when your run ended, and it failed\./);
+	assert.match(prompt, /fix round 1 of 1/);
+	h.lastCall(name).finish("Fixed both.");
+	const done = await h.team.whenDone(name);
+	assert.equal(done.checked?.exitCode, 0);
+	assert.equal(done.checked?.attempt, 2);
+	await h.team.close();
+});
+
+test("a check that could not run gets no fix rounds: the child can't repair the harness", async () => {
+	const h = teamHarness();
+	const name = h.spawn("impl", { name: "impl", check: { command: "npm test", fixUntilPass: 2 } });
+	await tick();
+	h.lastCall(name).finish("Done.");
+	const done = await h.team.whenDone(name);
+	assert.equal(h.calls.get(name)!.length, 1);
+	assert.match(reportText(done, Date.now()), /could not run, attempt 1 of 3\.[\s\S]*can't run checks/);
+	await h.team.close();
+});
+
+test("only the trailing exit status leaves the output; a line of the command's own that looks like it stays", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "subagents-check-status-"));
+	try {
+		const bash = createBashToolDefinition(dir) as unknown as ToolDefinition;
+		const run = await bashCheck(bash, "echo 'Command exited with code 7'; echo real-output; exit 2", { timeoutMs: 10_000, signal: new AbortController().signal, id: "s1" });
+		assert.equal(run.exitCode, 2);
+		assert.equal(run.output, "Command exited with code 7\nreal-output");
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});

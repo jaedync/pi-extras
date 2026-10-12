@@ -24,7 +24,7 @@ import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText, resumeWarning } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
-import { checkError, mergeCheck, RunChecks } from "./checks.ts";
+import { checkError, checkFailed, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
 import { EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
@@ -524,8 +524,9 @@ export class Team implements HostTeam {
 			if (next !== null || this.waitsFor(name)) continue;
 			const fix = await this.checks.run(name, handle);
 			if (this.gone(name)) return false;
-			// Mail that came during the check goes first; the check runs again after it.
-			next = this.late(name, handle) ?? fix;
+			// Mail that came during the check goes first, with a fix round's prompt; the check runs again after it.
+			const late = this.late(name, handle);
+			next = late !== null && fix !== null ? `${late}\n\n${fix}` : late ?? fix;
 		}
 		return true;
 	}
@@ -640,7 +641,8 @@ export class Team implements HostTeam {
 		// A peer's run that ended quietly is news for the parent's next turn, unless it answers the parent or main.
 		// So is one that a spawn of the same parent waits for: the parent hears of it through that spawn's report.
 		const peerRun = this.peerRuns.delete(name);
-		const quiet = (peerRun || awaited(record, this.list())) && record.state === "idle" && !parentAsked && !owedMain;
+		// A check that did not pass is news either way.
+		const quiet = (peerRun || awaited(record, this.list())) && record.state === "idle" && !checkFailed(record) && !parentAsked && !owedMain;
 		// A parent waiting on this child's answer gets the report as that answer.
 		const asked = this.questions.of(record.parent).find((question) => question.to === name);
 		const silent = this.stoppedByParent.delete(name);

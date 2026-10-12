@@ -6,6 +6,7 @@
  * is, not the report itself, so the child reads only what it needs. Only the
  * first start waits: a later run, a resume included, never does.
  */
+import { checkFailed, checkOf, checkVerdict } from "./checks.ts";
 import { latestReportFile } from "./reports.ts";
 import { LIVE_STATES, type AgentRecord } from "./types.ts";
 
@@ -96,7 +97,8 @@ function reportOf(record: AgentRecord): string | undefined {
 
 function ended(record: AgentRecord): string {
 	switch (record.state) {
-		case "idle": return "finished";
+		// Its own report may claim success; the harness's check says otherwise.
+		case "idle": return checkFailed(record) ? `finished, but the harness's check ${checkVerdict(checkOf(record)!)}` : "finished";
 		case "failed": return `failed: ${oneLine(record.error ?? "unknown error")}`;
 		case "stopped": return `was stopped${record.stopReason ? ` ${record.stopReason}` : ""}`;
 		case "interrupted": return "was interrupted; that counts as ended, and it may resume later";
