@@ -509,7 +509,7 @@ export class Team implements HostTeam {
 		const handle = this.sessions.get(name);
 		if (!record || !handle) return false;
 		try {
-			const causes = staleCauses(handle.stamp, !this.sessions.stale(name));
+			const causes = staleCauses(handle.stamp, !this.sessions.stale(name), this.sessions.newCode(name));
 			if (!swapDue({ enabled: this.options.swapAtTurn !== false, state: record.state, asking: this.questions.of(name).length > 0,
 				blocked: this.list().some((entry) => entry.parent === name && entry.blocking && LIVE_STATES.has(entry.state)),
 				ending: this.closed || this.ending.has(name), launchable: this.options.modelAllowed?.(record.model) ?? true,

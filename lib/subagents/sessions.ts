@@ -113,6 +113,12 @@ export class OpenSessions {
 		return handle !== undefined && !(this.options.launcher.current?.(handle) ?? true);
 	}
 
+	/** Whether `name` holds a session on code older than a launch now would run (types.ts `Launcher.codeCurrent`). */
+	newCode(name: string): boolean {
+		const handle = this.handles.get(name);
+		return handle !== undefined && !(this.options.launcher.codeCurrent?.(handle) ?? true);
+	}
+
 	async release(name: string): Promise<void> {
 		const handle = this.handles.get(name);
 		if (!handle) return;

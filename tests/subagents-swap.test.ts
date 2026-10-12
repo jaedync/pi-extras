@@ -66,6 +66,7 @@ function harness(options: Partial<TeamOptions> & { files?: (name: string) => Arr
 				};
 			},
 			current: (handle) => handle.stamp?.generation === generation && (handle.stamp?.files ?? []).every(([path, identity]) => fileIdentity(path) === identity),
+			codeCurrent: (handle) => handle.stamp?.generation === generation,
 		},
 		...teamOptions,
 	});
@@ -211,7 +212,7 @@ test("no swap while it asks, while a subagent blocks it, when its model left the
 	}
 });
 
-test("each cause swaps once a run: a file read again during the new launch does not swap it again; a later change does", async () => {
+test("changed files move a run one time: a file read during the new launch or changed later waits for the next run, and new code still moves it", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "subagents-swap-"));
 	try {
 		const settings = join(dir, "settings.json");
@@ -226,10 +227,26 @@ test("each cause swaps once a run: a file read again during the new launch does 
 		await settled();
 		assert.match(h.logged[0] ?? "", /\(settings\.json changed\)$/);
 		assert.equal(h.boundary(name), false, "stale for the same cause it swapped for");
+		// Pi writes settings.json at each change of main's model, and a child may edit a context file again and again.
 		writeFileSync(settings, JSON.stringify({ theme: "light" }));
-		assert.equal(h.boundary(name), true, "a new change is a new cause");
+		assert.equal(h.boundary(name), false, "a later change waits for the next run");
+		h.reload();
+		assert.equal(h.boundary(name), true, "new code is a new cause");
 		await settled();
+		assert.match(h.logged[1] ?? "", /\(new code, settings\.json changed\)$/);
 		assert.equal(h.sessionsOf(name).length, 3);
+		writeFileSync(settings, JSON.stringify({ theme: "auto" }));
+		assert.equal(h.boundary(name), false);
+		h.finish(name, "Done.");
+		await settled();
+		assert.equal(h.team.get(name)!.state, "idle");
+		assert.ok((await h.team.send("main", name, "One more change.")).ok);
+		await settled();
+		assert.equal(h.sessionsOf(name).length, 4, "the next run starts on a session that is current");
+		writeFileSync(settings, JSON.stringify({ theme: "dark" }));
+		assert.equal(h.boundary(name), true, "the next run moves for a changed file again");
+		await settled();
+		assert.equal(h.sessionsOf(name).length, 5);
 		await h.team.close();
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -281,8 +298,15 @@ test("the rules: a running child that waits on no one swaps for a cause it has n
 		assert.equal(swapDue({ ...facts, ...change }), false, JSON.stringify(change));
 	}
 	assert.equal(swapDue({ ...facts, causes: ["code@1", "/a/settings.json@1:2:3:4"], handled: new Set(["code@1"]) }), true, "one new cause is enough");
-	assert.deepEqual(staleCauses({ generation: 3, files: [] }, false), ["code@3"]);
-	assert.deepEqual(staleCauses({ generation: 3, files: [] }, true), []);
+	const movedForFile = new Set(["/a/settings.json@1:2:3:4"]);
+	assert.equal(swapDue({ ...facts, causes: ["/a/settings.json@5:6:7:8"], handled: movedForFile }), false, "changed files move a run one time");
+	assert.equal(swapDue({ ...facts, causes: ["/a/AGENTS.md@1:2:3:4"], handled: movedForFile }), false);
+	assert.equal(swapDue({ ...facts, causes: ["code@1", "/a/AGENTS.md@1:2:3:4"], handled: movedForFile }), true, "new code moves it again");
+	assert.deepEqual(staleCauses({ generation: 3, files: [] }, false, false), ["code@3"], "stale with no file changed: its code");
+	assert.deepEqual(staleCauses({ generation: 3, files: [] }, true, true), []);
+	const missing = join(tmpdir(), "subagents-swap-missing", "settings.json");
+	assert.deepEqual(staleCauses({ generation: 3, files: [[missing, "1:2:3:4"]] }, false, false), [`${missing}@absent`]);
+	assert.deepEqual(staleCauses({ generation: 3, files: [[missing, "1:2:3:4"]] }, false, true), ["code@3", `${missing}@absent`]);
 	assert.equal(causeWords(["code@3", "/a/.pi/settings.json@x", "/b/models.json@y", "/c/settings.json@z"]), "new code, settings.json, models.json changed");
 });
 

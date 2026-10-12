@@ -11,7 +11,11 @@
  * tool, as a question with expectReply or a subagent with wait: true does
  * until its answer or report comes. Each cause swaps at most once per run, so
  * a file that changed during the new launch, which leaves that session stale
- * too, does not swap again and again.
+ * too, does not swap again and again. Changed files swap a run one time at
+ * most: Pi writes settings.json at each change of main's model or thinking
+ * level, and a child may edit a context file or a skill again and again. New
+ * code after a /reload swaps it again, so the launcher tells it apart
+ * (types.ts `Launcher.codeCurrent`).
  */
 import { changedFiles, type LaunchStamp } from "./stamp.ts";
 import type { AgentState } from "./types.ts";
@@ -23,19 +27,22 @@ export const SWAP_NOTE = "[Your session moved to current code and settings. Your
 export const swapActivity = (causes: readonly string[]): string => `moving to a new session: ${causeWords(causes)}`;
 
 /**
- * Why a session with `stamp` is stale, one cause per changed file
- * (`path@identity`), or its code (`code@generation`) when no file changed.
- * None for a session that is current.
+ * Why a session with `stamp` is stale: its code (`code@generation`) when it
+ * is `newCode`, and one cause per changed file (`path@identity`). A stale
+ * session with no file changed is stale for its code. None when current.
  */
-export function staleCauses(stamp: LaunchStamp | undefined, current: boolean): string[] {
+export function staleCauses(stamp: LaunchStamp | undefined, current: boolean, newCode: boolean): string[] {
 	if (current) return [];
+	const code = `code@${stamp?.generation ?? "unknown"}`;
 	const files = stamp ? changedFiles(stamp) : [];
-	return files.length > 0 ? files : [`code@${stamp?.generation ?? "unknown"}`];
+	return files.length === 0 ? [code] : newCode ? [code, ...files] : files;
 }
+
+const fileCause = (cause: string): boolean => !cause.startsWith("code@");
 
 /** The causes in a few words: `settings.json changed`, `new code`. */
 export function causeWords(causes: readonly string[]): string {
-	const files = causes.filter((cause) => !cause.startsWith("code@")).map((cause) => cause.slice(0, cause.lastIndexOf("@")).split(/[\\/]/).at(-1));
+	const files = causes.filter(fileCause).map((cause) => cause.slice(0, cause.lastIndexOf("@")).split(/[\\/]/).at(-1));
 	const code = files.length < causes.length ? ["new code"] : [];
 	return [...code, ...(files.length > 0 ? [`${[...new Set(files)].join(", ")} changed`] : [])].join(", ");
 }
@@ -62,7 +69,9 @@ export interface SwapFacts {
 /** Whether the child moves to a new session now. */
 export function swapDue(facts: SwapFacts): boolean {
 	if (!facts.enabled || facts.state !== "running" || facts.asking || facts.blocked || facts.ending || !facts.launchable) return false;
-	return facts.causes.some((cause) => !facts.handled.has(cause));
+	// Changed files swap a run one time; later changes wait for its next run.
+	const movedForFiles = [...facts.handled].some(fileCause);
+	return facts.causes.some((cause) => !facts.handled.has(cause) && !(movedForFiles && fileCause(cause)));
 }
 
 /** The swaps of the team's runs: the one each run ends its prompt for, and the causes each run already swapped for. */

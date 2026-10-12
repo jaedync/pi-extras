@@ -1284,7 +1284,8 @@ inspector over the full terminal: the agent's chat, drawn as Pi draws main's.
 Its task is the first message, then its replies, thinking and tool rows, with
 the same look Tool Display, Copy Blocks and the thinking tail give main, and
 the reply it is writing streams in. It uses main's `hideThinkingBlock` and
-`outputPad`, from the project's settings only when main trusts the project. A click on a row works as it does in main.
+`outputPad`, from the project's settings only when main trusts the project.
+A click on a row works as it does in main.
 The chat sits on a wash of the agent's provider color, so it never reads as
 main. Its live row is the title bar, and a message box sits between two rules
 in the agent's color, as Pi's editor does; the top rule carries its tool
@@ -1348,9 +1349,9 @@ The call returns how it ended and its last message, so no report follows; a
 message resumes it later. `/subagents stop <name>`, `stop all` and ctrl+x in
 the inspector stop children for you, and then main gets the stopped report.
 
-**Order.** `after` on `subagent` gives the agents that must end before the
-new child starts, for example `{ task, after: ["impl"] }`. The call records
-the child and returns. `wait: true` can't go with `after`, because the agents
+**Order.** `after` on `subagent` gives the agents that must end before the new
+child starts, for example `{ task, after: ["impl"] }`. The call records the
+child and returns. `wait: true` can't go with `after`, because the agents
 before the child could need an answer from the caller. The child stays queued
 until each of these agents is idle, failed, stopped or interrupted. It does
 not use a `maxConcurrent` slot while it waits, and its row shows `after impl`.
@@ -1363,19 +1364,20 @@ Examples are the agent that starts the child, an agent above it, and a queued
 child that waits for one of these. `index.json` keeps the names, so a restore
 or a `/reload` keeps the wait. A restore resumes a queued child after the
 agents it waits for. So when one of these agents resumes too, the child waits
-for it again. An agent that stays paused counts as ended. Only the first run waits; a resume does not. A
-stop removes a queued child before it starts. When a run ends normally and a
-queued child of the same parent waits for it, its report does not wake the
-parent. The parent reads it with the report of the queued child. A run that
-fails, is stopped or has a failed check still wakes the parent. A child can't
-ask a queued child a question, because the answer can come only after the
-start. Such a question could also make a loop of agents that wait for each
-other. A note is possible, and the queued child reads it when it starts. For
-the same reason, a child can't ask a question to an agent that waits for it
-through a queued child. For example, `lead` waits for its subagent `docs`, and
-`docs` starts after `impl`. Then `impl` can't ask `lead` a question: `lead`
-could end its run before it answers, and each agent would wait for the other.
-A queued child does not keep the reports of its group waiting.
+for it again. An agent that stays paused counts as ended. Only the first run
+waits; a resume does not. A stop removes a queued child before it starts. When
+a run ends normally and a queued child of the same parent waits for it, its
+report does not wake the parent. The parent reads it with the report of the
+queued child. A run that fails, is stopped or has a failed check still wakes
+the parent. A child can't ask a queued child a question, because the answer
+can come only after the start. Such a question could also make a loop of
+agents that wait for each other. A note is possible, and the queued child
+reads it when it starts. For the same reason, a child can't ask a question to
+an agent that waits for it through a queued child. For example, `lead` waits
+for its subagent `docs`, and `docs` starts after `impl`. Then `impl` can't ask
+`lead` a question: `lead` could end its run before it answers, and each agent
+would wait for the other. A queued child does not keep the reports of its
+group waiting.
 
 **Writers.** The first child to edit files in a checkout holds that checkout
 until its run ends. The checkout is the git work tree that contains the edited
@@ -1484,25 +1486,28 @@ finished child whose session is not current releases it immediately.
 **Moving to a new session.** A working child whose session is not current
 moves to a new session at its next turn boundary. That is the point after a
 turn, when the results of its tool calls are recorded and before its model
-gets the next request. The cause is a `/reload` or a change to a file that
-the launch read. These files are `settings.json`, the project's
+gets the next request. The cause is a `/reload` or a change to a file that the
+launch read. These files are `settings.json`, the project's
 `.pi/settings.json`, `models.json`, `pi-extras.json`, the context files,
-`SYSTEM.md`, `APPEND_SYSTEM.md` and the skills. The new session opens from the session file
-with the current code and settings, and the run continues as the same run.
-It keeps its run number, its time and cost budget, its check and fix rounds,
-its edit lock and the answers it is owed. Messages that it had not read go to
-the new session with a short note. The note tells the child that its session
-moved and that it continues where it stopped. A child does not move while a
-question with `expectReply` or a subagent call with `wait: true` blocks it.
-It moves at the end of the turn after that call returns. A child also does
-not move while its run stops, or when its model is not in scope now. Each
-cause moves a run one time at most. Its row shows `moving to a new session`
-and the cause during the move. Each move adds a line to
-`~/.pi/agent/subagents/swaps.log`. The prompt cache keeps the prefix when
-the system prompt and the tools did not change, for example after a change
-to `settings.json` only. A move after a code change costs one cache miss,
-because new code usually changes the child's instructions or tools.
-`swapAtTurn: false` in the `subagents` section turns moves off.
+`SYSTEM.md`, `APPEND_SYSTEM.md` and the skills. The new session opens from the
+session file with the current code and settings, and the run continues as the
+same run. It keeps its run number, its time and cost budget, its check and fix
+rounds, its edit lock and the answers it is owed. Messages that it had not
+read go to the new session with a short note. The note tells the child that
+its session moved and that it continues where it stopped. A child does not
+move while a question with `expectReply` or a subagent call with `wait: true`
+blocks it. It moves at the end of the turn after that call returns. A child
+also does not move while its run stops, or when its model is not in scope now.
+Each cause moves a run one time at most. Changes to files move a run only one
+time, and later changes wait for its next run. This is because Pi writes
+`settings.json` each time you change main's model or thinking level, and a
+child can edit a context file many times. New code after a `/reload` still
+moves the run. Its row shows `moving to a new session` and the cause during
+the move. Each move adds a line to `~/.pi/agent/subagents/swaps.log`. Pi adds
+a changed system prompt after the earlier messages, so the prompt cache keeps
+the prefix. A move after a code change can cost one cache miss when the new
+code changes the child's tools. `swapAtTurn: false` in the `subagents` section
+turns moves off.
 
 **Headless runs.** `pi -p` and `--mode json` end when main settles, so main
 waits there for its background children. Their reports, questions and notes
@@ -1513,13 +1518,13 @@ on. Main settles once no child is working and nothing waits for it.
 **Reload.** `/reload` does not stop children. A child that works moves to the
 new code at its next turn boundary, as the same run (see **Moving to a new
 session**). A child that starts after the reload uses the new code. A child
-that reaches a turn boundary during the reload waits for the new code. Mail to main
-waits during the reload and then arrives one time. When no child works and
-all mail is in main's transcript, a team from the new code takes over from
+that reaches a turn boundary during the reload waits for the new code. Mail to
+main waits during the reload and then arrives one time. When no child works
+and all mail is in main's transcript, a team from the new code takes over from
 `index.json`. Until then, team settings from `pi-extras.json`, such as
-`maxConcurrent`, run budgets and `batchMs`, stay as they were. Children get
-new code of an extension at the latest after `/reload`. They also get a new
-context file or skill at the latest after `/reload`.
+`maxConcurrent`, run budgets, `batchMs` and `swapAtTurn`, stay as they were.
+Children get new code of an extension at the latest after `/reload`. They also
+get a new context file or skill at the latest after `/reload`.
 
 Some reloads must interrupt children:
 

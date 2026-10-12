@@ -258,6 +258,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			return { ...handleFor(session, hooks, model.contextWindow, guard, record), stamp, check };
 		},
 		current: (handle) => !handle.stamp || stampCurrent(handle.stamp, generation),
+		codeCurrent: (handle) => !handle.stamp || handle.stamp.generation === generation,
 	};
 }
 
@@ -349,6 +350,8 @@ export interface TurnEnd {
  * anywhere else it would cut the run short, or leave a call without its result.
  */
 export function turnGoesOn(turn: TurnEnd, session: { readonly queued: boolean; readonly toolsRunning: number; readonly compacting: boolean }): boolean {
+	// Pi also ends the loop after a batch whose results all set `terminate`, which the turn does not show. No
+	// pi-extras tool sets it; after such a batch, a swap would go on with a run that Pi ended.
 	const stop = turn.message.stopReason;
 	if (stop === "error" || stop === "aborted" || session.toolsRunning > 0 || session.compacting) return false;
 	return turn.toolResults.length > 0 || session.queued;

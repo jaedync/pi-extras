@@ -140,6 +140,7 @@ export class PortBinding {
 				launch: (record, hooks) => this.launch(record, hooks),
 				// While parked nothing is current: the next module's launcher makes the next session.
 				current: (handle) => this.bound ? this.bound.launcher.current?.(handle) ?? true : false,
+				codeCurrent: (handle) => this.bound ? this.bound.launcher.codeCurrent?.(handle) ?? true : false,
 			},
 			models: () => this.bound ? (this.scope = this.bound.models()) : this.scope,
 		};

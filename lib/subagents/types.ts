@@ -251,6 +251,8 @@ export interface Launcher {
 	 * settings, models and extensions. Without it every open session is current.
 	 */
 	current?(handle: ChildHandle): boolean;
+	/** Whether a launch now would run the code `handle`'s session runs: false after a /reload. Without it, the code counts as current. */
+	codeCurrent?(handle: ChildHandle): boolean;
 }
 
 /** Something the team hands to the main session. */
