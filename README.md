@@ -1518,8 +1518,12 @@ Worktrees stay until you remove them. Resumed children keep the same workspace.
 After you apply the changes, the cleanup command force-removes the worktree and
 deletes its branch. Check that you kept all needed files first.
 
-**Limits.** At most `maxConcurrent` children run at once; the rest queue. A
-child can't start children of its own by default.
+**Limits.** At most `maxConcurrent` children run at once; the rest queue.
+This also applies to a child that goes on in its open session: a resumed idle
+child, a parent woken from waiting, or a child that got its answer. Such a
+child waits in line ahead of spawns that have not started. A subagent that its
+parent starts with `wait: true` runs in that parent's slot. A child can't
+start children of its own by default.
 Each run of a child has a time budget, `maxRunMinutes` (default 60), and an
 optional cost budget, `maxRunCost` (no limit by default). The `subagent` call
 can set its own with `maxMinutes` and `maxCost`, and the child keeps them

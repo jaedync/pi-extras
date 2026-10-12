@@ -70,10 +70,14 @@ export class RunBudgets {
 		return { costAtStart: clock.costAtStart, usedMs: clock.usedMs + (clock.since === undefined ? 0 : this.now() - clock.since) };
 	}
 
-	/** Follows the child's state: asking or waiting on its subagents pauses the clock, running resumes it, anything else ends the run. */
+	/**
+	 * Follows the child's state: running resumes the clock; asking, waiting on
+	 * its subagents, or waiting in line for a slot pauses it; anything else
+	 * ends the run.
+	 */
 	follow(name: string, state: AgentState): void {
 		if (state === "running") this.resume(name);
-		else if (state === "asking" || state === "waiting") this.pause(name);
+		else if (state === "asking" || state === "waiting" || state === "queued") this.pause(name);
 		else this.end(name);
 	}
 

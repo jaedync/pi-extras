@@ -13,7 +13,7 @@
  * When a child's session is held and when it goes is sessions.ts's to say.
  */
 import { randomUUID } from "node:crypto";
-import { afterBlock, afterError, queuedActivity, stopOrder, waitingFor } from "./after.ts";
+import { afterBlock, afterError, queuedActivity, stopOrder } from "./after.ts";
 import { MAIN, nameFor } from "./names.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
@@ -25,6 +25,7 @@ import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
 import { ResumePrompts } from "./resume-prompts.ts";
+import { Slots } from "./slots.ts";
 import { handUp, handUpFailure, type HandUpHost } from "./hand-up.ts";
 import { saveReport } from "./reports.ts";
 import { causeWords, staleCauses, SWAP_NOTE, swapActivity, swapDue, TurnSwaps } from "./swap.ts";
@@ -33,7 +34,7 @@ import { OpenSessions } from "./sessions.ts";
 import { WorkTrees } from "./work-trees.ts";
 import { placeChild } from "./placement.ts";
 import {
-	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
+	type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
 } from "./types.ts";
 
 export interface TeamOptions {
@@ -81,7 +82,7 @@ export class Team implements HostTeam {
 	private readonly questions: OpenQuestions;
 	private readonly waiters = new Map<string, Array<(record: AgentRecord) => void>>();
 	private readonly listeners = new Set<Listener>();
-	private readonly queue: string[] = [];
+	private readonly slots: Slots;
 	/** Stops between marking the record stopped and handing its report up. */
 	private readonly ending = new Set<string>();
 	private readonly answers = new MainAnswers();
@@ -96,6 +97,8 @@ export class Team implements HostTeam {
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
 	/** Runs that waited on their subagents or an answer and relaunch to go on, with what they had used: a launch that fails is a failed resume. */
 	private readonly woken = new Map<string, BudgetUse | undefined>();
+	/** Askers whose answers came, until they have a slot to go on in. */
+	private readonly answered = new Map<string, Promise<void>>();
 	private readonly swaps = new TurnSwaps();
 	private readonly checks = new RunChecks({
 		get: (name) => this.records.get(name), patch: (name, patch) => this.patch(name, patch), under: (name, ancestor) => this.under(name, ancestor),
@@ -116,6 +119,7 @@ export class Team implements HostTeam {
 		this.now = options.now ?? Date.now;
 		// An asking agent frees its slot for a queued one.
 		this.questions = new OpenQuestions({ replyTimeoutMs: options.replyTimeoutMs, changed: (asker, waitingOn) => { this.showAsking(asker, waitingOn); this.pump(); } });
+		this.slots = new Slots({ maxConcurrent: options.maxConcurrent, closed: () => this.closed, list: () => this.list(), get: this.lookup, start: (name) => void this.start(name) });
 		this.budgets = new RunBudgets({ now: this.now, over: (name, reason) => void this.stop(name, { reason }) });
 		this.sessions = new OpenSessions({ launcher: options.launcher, idle: (name) => this.records.get(name)?.state === "idle", warn: options.warn ?? console.warn,
 			...(options.idleReleaseMs !== undefined ? { idleReleaseMs: options.idleReleaseMs } : {}) });
@@ -135,8 +139,8 @@ export class Team implements HostTeam {
 			resumeWith: (name, note, message) => { this.resumePrompts.set(name, { note, message }); },
 			goOn: (name) => { this.woken.set(name, this.budgets.used(name)); },
 			forgetAnswer: (name) => this.forgetAnswer(name), takeInbox: (name) => this.takeInbox(name),
-			enqueue: (name) => { this.queue.push(name); this.pump(); },
-			run: (name, text) => { void this.run(name, text); },
+			enqueue: (name) => { this.slots.enqueue(name); this.pump(); },
+			run: (name, text) => this.runWhenFree(name, text),
 		});
 	}
 
@@ -221,7 +225,8 @@ export class Team implements HostTeam {
 			...(request.check ? { check: mergeCheck(request.check) } : {}),
 		};
 		this.put(record);
-		this.queue.push(name);
+		// A subagent its parent blocks on runs in the parent's slot (slots.ts), so it goes ahead of the line.
+		this.slots.enqueue(name, request.blocking && parent !== null);
 		this.pump();
 		return { ok: true, record: this.records.get(name)! };
 	}
@@ -255,8 +260,13 @@ export class Team implements HostTeam {
 		if (record?.blocking) this.patch(name, { blocking: false });
 	}
 
-	send(from: string, to: string, text: string, options: SendOptions = {}): Promise<SendResult> {
-		return this.routing.send(from, to, text, options);
+	async send(from: string, to: string, text: string, options: SendOptions = {}): Promise<SendResult> {
+		const result = await this.routing.send(from, to, text, options);
+		// An asker that got its answer goes on only once a slot is free.
+		const slot = this.answered.get(from);
+		this.answered.delete(from);
+		await slot;
+		return result;
 	}
 
 	/** The child's messages so far; empty before it starts. */
@@ -287,7 +297,7 @@ export class Team implements HostTeam {
 		if (options.by !== undefined && options.by === record.parent) this.stoppedByParent.add(name);
 		// Ending before its subagents stop: it can't start another meanwhile, and a second stop finds it ending.
 		this.ending.add(name);
-		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
+		this.slots.remove(name);
 		this.parkResume(name);
 		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
 		this.checks.abort(name);
@@ -339,7 +349,7 @@ export class Team implements HostTeam {
 		for (const record of this.live()) this.patch(record.name, { state: "interrupted", endedAt: this.now(), blocking: false,
 			interruptedBy: reason, interruptionId: randomUUID(), interruptedOwner: owner, interruptionAnnounced: false,
 			autoResumeAttempts: record.autoResumeAttempts ?? 0 });
-		this.queue.splice(0);
+		this.slots.clear();
 		this.questions.rejectAll(new Error("interrupted"));
 		for (const [name, waiters] of this.waiters) for (const resolve of waiters) resolve(this.records.get(name)!);
 		this.waiters.clear();
@@ -378,24 +388,33 @@ export class Team implements HostTeam {
 	}
 
 	private pump(): void {
-		let active = this.list().filter((record) => ACTIVE_STATES.has(record.state)).length;
-		const held: string[] = [];
-		while (!this.closed && active < this.options.maxConcurrent && this.queue.length > 0) {
-			const name = this.queue.shift()!;
-			const record = this.records.get(name);
-			if (record?.state !== "queued") continue;
-			// A spawn waiting for its after agents keeps its place in line but holds no slot.
-			if (waitingFor(record, this.lookup).length > 0) { held.push(name); continue; }
-			active++;
-			void this.start(name);
-		}
-		this.queue.unshift(...held);
+		this.slots.pump();
 		this.showWaits();
+	}
+
+	/**
+	 * `name` goes on in the session it holds with `go` once a slot is free, so
+	 * maxConcurrent holds (slots.ts); resolves when it goes on, or when a stop
+	 * or close takes it out of line.
+	 */
+	private goOnWhenFree(name: string, go: () => void): Promise<void> {
+		if (this.slots.free()) { go(); return Promise.resolve(); }
+		// Waiting on its subagents, its clock paused; the same run goes on (run()).
+		if (this.records.get(name)?.state === "waiting") this.woken.set(name, this.budgets.used(name));
+		this.patch(name, { state: "queued", activity: "waiting for a free slot" });
+		return new Promise((resolve) => this.slots.goOn(name, () => { go(); resolve(); }, resolve));
+	}
+
+	/** A run on the session `name` holds, which a message started; while it waits for a slot, the message waits in its inbox. */
+	private runWhenFree(name: string, text: string): void {
+		if (this.slots.free()) return void this.run(name, text);
+		this.patch(name, { inbox: [text, ...(this.records.get(name)?.inbox ?? [])] });
+		void this.goOnWhenFree(name, () => void this.run(name, this.takeInbox(name).join("\n\n")));
 	}
 
 	/** A queued spawn says which after agents it still waits for, as the widget shows it. */
 	private showWaits(): void {
-		for (const record of this.queue.map(this.lookup)) {
+		for (const record of this.slots.queued().map(this.lookup)) {
 			const activity = record?.state === "queued" ? queuedActivity(record, this.lookup) : record?.activity;
 			if (record && activity !== record.activity) this.patch(record.name, { activity });
 		}
@@ -608,7 +627,7 @@ export class Team implements HostTeam {
 		this.resumePrompts.set(name, { note: fallbackNote(step), message: this.resumePrompts.message(name) });
 		this.patch(name, { ...this.unreadLeft(name), state: "queued", model: step.to, fallbacks: [...(record.fallbacks ?? []), step], activity: `switching to ${step.to}` });
 		void this.sessions.release(name);
-		this.queue.push(name);
+		this.slots.enqueue(name);
 		this.pump();
 	}
 
@@ -696,8 +715,9 @@ export class Team implements HostTeam {
 		if (!current) return;
 		if (waitingOn.length > 0) {
 			this.patch(name, { state: "asking", askingWho: waitingOn.join(", "), activity: `asking ${waitingOn.join(", ")}` });
-		} else if (current.state === "asking") {
-			this.patch(name, { state: "running", askingWho: undefined, ...WAITING_FOR_MODEL });
+		} else if (current.state === "asking" && !this.ending.has(name) && !this.closed) {
+			// Its slot went to another while it asked; the answer reaches it once one is free (send()).
+			this.answered.set(name, this.goOnWhenFree(name, () => this.patch(name, { state: "running", askingWho: undefined, ...WAITING_FOR_MODEL })));
 		}
 	}
 
