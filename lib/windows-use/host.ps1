@@ -214,17 +214,20 @@ function Send-Keys($machine, [string]$keys) {
     $codes = @($keys -split '\+' | ForEach-Object { Get-Vk $_ })
     # Hold in order, release in reverse, so combos like ctrl+shift+esc register.
     # Whatever went down comes up even if a press fails, or Ctrl stays held in the guest.
+    # A failed press may still have pressed its key, so it is let go too.
     $held = New-Object System.Collections.Generic.List[int]
-    $failed = $null
+    $errors = @()
     try {
-        foreach ($c in $codes) { Invoke-Checked $kb 'PressKey' @{ keyCode = [uint32]$c }; $held.Insert(0, $c) }
-    } finally {
+        foreach ($c in $codes) { $held.Insert(0, $c); Invoke-Checked $kb 'PressKey' @{ keyCode = [uint32]$c } }
+    } catch { $errors = @($_.Exception.Message) }
+    finally {
+        # Each release has its own try: under 'Stop', one that throws would end the loop with later keys still down.
         foreach ($c in $held) {
-            $r = Invoke-CimMethod -InputObject $kb -MethodName 'ReleaseKey' -Arguments @{ keyCode = [uint32]$c }
-            if ($r.ReturnValue -ne 0 -and -not $failed) { $failed = Get-Failure 'ReleaseKey' $r.ReturnValue }
+            try { Invoke-Checked $kb 'ReleaseKey' @{ keyCode = [uint32]$c } }
+            catch { $errors = @($errors + $_.Exception.Message) }
         }
+        if ($errors.Count) { throw ('Console key input failed: ' + ($errors -join '; ')) }
     }
-    if ($failed) { throw $failed }
 }
 
 # The synthetic mouse drops a click unless the pointer has just moved, so every
@@ -248,15 +251,23 @@ function Send-Click($machine, [int]$x, [int]$y, [string]$button, [bool]$double) 
 function Send-Drag($machine, [int]$x, [int]$y, [int]$x2, [int]$y2) {
     $mouse = Get-Device $machine 'Msvm_SyntheticMouse'
     Set-Pointer $mouse $x $y
-    Invoke-Checked $mouse 'SetButtonState' @{ buttonIndex = [uint32]1; isDown = $true }
-    Start-Sleep -Milliseconds 150
-    $steps = 12
-    for ($i = 1; $i -le $steps; $i++) {
-        Invoke-Checked $mouse 'SetAbsolutePosition' @{ horizontalPosition = [int]($x + ($x2 - $x) * $i / $steps); verticalPosition = [int]($y + ($y2 - $y) * $i / $steps) }
-        Start-Sleep -Milliseconds 25
+    # A failed move must not leave the left button held, or later clicks in the guest become drags.
+    $errors = @()
+    try {
+        Invoke-Checked $mouse 'SetButtonState' @{ buttonIndex = [uint32]1; isDown = $true }
+        Start-Sleep -Milliseconds 150
+        $steps = 12
+        for ($i = 1; $i -le $steps; $i++) {
+            Invoke-Checked $mouse 'SetAbsolutePosition' @{ horizontalPosition = [int]($x + ($x2 - $x) * $i / $steps); verticalPosition = [int]($y + ($y2 - $y) * $i / $steps) }
+            Start-Sleep -Milliseconds 25
+        }
+        Start-Sleep -Milliseconds 150
+    } catch { $errors = @($_.Exception.Message) }
+    finally {
+        try { Invoke-Checked $mouse 'SetButtonState' @{ buttonIndex = [uint32]1; isDown = $false } }
+        catch { $errors = @($errors + $_.Exception.Message) }
+        if ($errors.Count) { throw ('Console drag failed: ' + ($errors -join '; ')) }
     }
-    Start-Sleep -Milliseconds 150
-    Invoke-Checked $mouse 'SetButtonState' @{ buttonIndex = [uint32]1; isDown = $false }
 }
 # Notches of the wheel: negative scrolls down. Hyper-V takes 120ths of a notch.
 function Send-Scroll($machine, [int]$x, [int]$y, [int]$notches) {

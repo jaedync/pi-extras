@@ -186,7 +186,17 @@ test("every Hyper-V input method host.ps1 calls gets the parameters Hyper-V decl
 test("a key combination that fails part-way lets go of the keys it held, so no modifier stays down in the guest", () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	const keys = host.slice(host.indexOf("function Send-Keys"), host.indexOf("# The synthetic mouse"));
-	assert.match(keys, /try \{[\s\S]*'PressKey'[\s\S]*\} finally \{[\s\S]*'ReleaseKey'/);
+	assert.match(keys, /try \{[\s\S]*'PressKey'[\s\S]*\}(?: catch \{[^\n]*\})?\s*finally \{[\s\S]*'ReleaseKey'/);
+	// $ErrorActionPreference is Stop: one release that throws would end the loop and leave the later keys down.
+	assert.match(keys, /foreach \(\$c in \$held\) \{\s*try \{ Invoke-Checked \$kb 'ReleaseKey'[^\n]*\}\s*catch \{ \$errors = @\(\$errors \+ \$_\.Exception\.Message\) \}/);
+	assert.doesNotMatch(keys, /Invoke-CimMethod/, "every release goes through Invoke-Checked inside its own try");
+});
+
+test("a drag that fails part-way lets go of the mouse button, and reports every failure", () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	const drag = host.slice(host.indexOf("function Send-Drag"), host.indexOf("# Notches of the wheel"));
+	assert.match(drag, /try \{\s*Invoke-Checked \$mouse 'SetButtonState' @\{ buttonIndex = \[uint32\]1; isDown = \$true \}[\s\S]*'SetAbsolutePosition'[\s\S]*\} catch \{ \$errors = @\(\$_\.Exception\.Message\) \}\s*finally \{\s*try \{ Invoke-Checked \$mouse 'SetButtonState' @\{ buttonIndex = \[uint32\]1; isDown = \$false \} \}\s*catch \{ \$errors = @\(\$errors \+ \$_\.Exception\.Message\) \}/);
+	assert.match(drag, /if \(\$errors\.Count\) \{ throw/);
 });
 
 test("Hyper-V's in-between states have names, since a restart inside Windows passes through them", () => {

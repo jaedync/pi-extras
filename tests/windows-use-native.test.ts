@@ -83,6 +83,31 @@ test("native console typing uses one paired TypeKey per character with settled g
 	assert.deepEqual(JSON.parse(powershell(unsupported)), [], "validate all text before sending any input");
 });
 
+test("native console keys and drags let go of what they hold when a Hyper-V call fails", native, () => {
+	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
+	const code = host.slice(host.indexOf("$vkNames ="), host.indexOf("# Notches of the wheel"));
+	const run = (fail: string, action: string) => JSON.parse(powershell(`$ErrorActionPreference='Stop'; $calls=[Collections.Generic.List[object]]::new();
+		function Get-Device { 'synthetic' }
+		function Start-Sleep { }
+		function Get-Failure { param($method,$code); "$method failed with code $code" }
+		function Invoke-Checked { param($Device,$Method,$Arguments); $calls.Add(@{ method=$Method; key=$Arguments.keyCode; down=$Arguments.isDown; x=$Arguments.horizontalPosition }); if (${fail}) { throw "synthetic $Method failure" } }
+		${code}
+		$caught=$null; try { ${action} } catch { $caught=$_.Exception.Message }
+		@{ calls=@($calls.ToArray()); error=$caught } | ConvertTo-Json -Depth 6 -Compress`));
+	type Call = { method: string; key?: number; down?: boolean; x?: number };
+	const keys = run("$Method -eq 'ReleaseKey' -and $Arguments.keyCode -eq 16", "Send-Keys 'synthetic' 'ctrl+shift+a'");
+	assert.deepEqual(keys.calls.filter((c: Call) => c.method === "ReleaseKey").map((c: Call) => c.key), [65, 16, 17], "a failed Shift release does not skip Ctrl");
+	assert.match(keys.error, /synthetic ReleaseKey failure/);
+	const pressed = run("$Method -eq 'PressKey' -and $Arguments.keyCode -eq 16", "Send-Keys 'synthetic' 'ctrl+shift+a'");
+	assert.deepEqual(pressed.calls.filter((c: Call) => c.method === "ReleaseKey").map((c: Call) => c.key), [16, 17], "the key whose press failed is let go too");
+	assert.match(pressed.error, /synthetic PressKey failure/);
+	const drag = run("$Method -eq 'SetAbsolutePosition' -and $Arguments.horizontalPosition -eq 30", "Send-Drag 'synthetic' 0 0 120 0");
+	assert.deepEqual(drag.calls.at(-1), { method: "SetButtonState", key: null, down: false, x: null }, "the button comes up after a failed move");
+	assert.match(drag.error, /synthetic SetAbsolutePosition failure/);
+	const both = run("($Method -eq 'SetAbsolutePosition' -and $Arguments.horizontalPosition -eq 30) -or ($Method -eq 'SetButtonState' -and -not $Arguments.isDown)", "Send-Drag 'synthetic' 0 0 120 0");
+	assert.match(both.error, /SetAbsolutePosition failure.*SetButtonState failure/, "both failures are reported");
+});
+
 test("native setup prepares its shell and commits the key only after complete typing", native, () => {
 	const host = readFileSync(new URL("../lib/windows-use/host.ps1", import.meta.url), "utf8");
 	const code = host.slice(host.indexOf("# ---- Setup payload"), host.indexOf("# The \"<run> <status>\""));
