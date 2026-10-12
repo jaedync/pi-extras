@@ -160,7 +160,9 @@ export function absolutePath(raw: string, cwd: string): string {
 export function shownPath(raw: string): string {
 	const clean = sanitize(raw).replace(/\n/g, " ").replace(/^@/, "");
 	const home = homedir();
-	return clean.startsWith(home) ? `~${clean.slice(home.length)}` : clean;
+	// `/home/al` is not home for `/home/alice`: the match must end at a separator.
+	const atBoundary = clean === home || /^[\\/]/.test(clean.slice(home.length));
+	return home !== "" && clean.startsWith(home) && atBoundary ? `~${clean.slice(home.length)}` : clean;
 }
 
 /** A path segment in the accent color, linked to the file when the terminal supports it. */
