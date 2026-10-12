@@ -20,7 +20,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { closeSync, existsSync, mkdtempSync, openSync, rmSync, statSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
@@ -38,6 +38,7 @@ import {
 	commandPreview,
 	JOB_ID_PATTERN,
 	jobIdFor,
+	resolveJobCwd,
 	resolveShellPath,
 	sanitizeControl,
 	utf8Head,
@@ -500,7 +501,8 @@ export default function shellJobs(pi: ExtensionAPI): void {
 			const validation = validateStartParams(params);
 			if (!validation.ok) return errResult(validation.error);
 			const sessionCwd = typeof ctx?.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd();
-			const cwd = validation.cwd ?? sessionCwd;
+			// A relative path is the session's, not Pi's process directory, as it would be in Pi's bash tool.
+			const cwd = resolveJobCwd(validation.cwd, sessionCwd, homedir());
 			try {
 				if (!statSync(cwd).isDirectory()) return errResult(`Working directory is not a directory: ${cwd}`);
 			} catch {

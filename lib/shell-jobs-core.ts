@@ -4,6 +4,7 @@
  * unit tested without a session.
  */
 import { closeSync, createReadStream, openSync, readSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { minutesAndUp } from "./duration.ts";
 
 export const MAX_LIVE = 8;
@@ -107,6 +108,13 @@ export function jobIdFor(title: string | null, command: string, taken: (id: stri
 export function resolveShellPath(env: NodeJS.ProcessEnv): string {
 	const shell = typeof env.SHELL === "string" ? env.SHELL.trim() : "";
 	return shell.length > 0 ? shell : "/bin/sh";
+}
+
+/** Where a job runs: the session's directory, or a path the model gave, read from there as a shell would. */
+export function resolveJobCwd(raw: string | undefined, sessionCwd: string, home: string): string {
+	if (raw === undefined) return sessionCwd;
+	const expanded = raw === "~" ? home : raw.startsWith("~/") ? join(home, raw.slice(2)) : raw;
+	return resolve(sessionCwd, expanded);
 }
 
 function badCommand(reason: string): { ok: false; error: string } {
