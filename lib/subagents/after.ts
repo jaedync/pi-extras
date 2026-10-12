@@ -66,11 +66,20 @@ export function awaited(record: AgentRecord, records: readonly AgentRecord[]): b
 	return records.some((other) => other.parent === record.parent && other.state === "queued" && other.runs === 0 && other.after?.includes(record.name) === true);
 }
 
-/** The after agents `asker` is, or works for, while `target` still waits for them: `target` can't answer it first. */
-export function waitsOnAsker(target: AgentRecord, asker: string, get: Lookup, under: (name: string, ancestor: string) => boolean): string[] {
-	if (target.state !== "queued") return [];
-	const waits = waitingFor(target, get);
-	return waits.some((name) => name === asker || under(asker, name)) ? waits : [];
+/**
+ * Why `asker` can't ask `target` a question: `target` waits to start until
+ * `asker`, or an agent `asker` works for, ends, so neither would.
+ */
+export function askError(target: AgentRecord | undefined, asker: string, get: Lookup, under: (name: string, ancestor: string) => boolean): string | undefined {
+	const waits = target?.state === "queued" ? waitingFor(target, get) : [];
+	if (!waits.some((name) => name === asker || under(asker, name))) return undefined;
+	return `${target!.name} starts after ${waits.join(", ")} ${waits.length === 1 ? "ends" : "end"}, so it can't answer you first. Send a note instead (no expectReply); it reads it when it starts.`;
+}
+
+/** What a queued spawn shows: the after agents it still waits for, then plain `queued`; any other activity stays. */
+export function queuedActivity(record: AgentRecord, get: Lookup): string | null {
+	const waits = waitingFor(record, get);
+	return waits.length > 0 ? afterActivity(waits) : record.activity?.startsWith("after ") ? "queued" : record.activity;
 }
 
 const oneLine = (text: string, max = 200): string => {

@@ -105,6 +105,17 @@ export class EditLocks {
 		return lockedError(holder, record, key);
 	}
 
+	/** After `name`'s bash call changed `paths` in the work tree `root`: takes its lock as an edit would, or warns and returns a note for the call's result. */
+	bashChanged(name: string, paths: readonly string[], root: string, warn: (message: string) => void): string | undefined {
+		const record = this.family.get(name);
+		if (!record || this.claim(name, root) === undefined) return undefined;
+		const holder = this.holder(name, root);
+		if (holder === undefined) return undefined;
+		const { note, warning } = bashChangeNotes(record, holder, paths, root);
+		warn(warning);
+		return note;
+	}
+
 	/** Called on every record change: a holder that is no longer live lets go. */
 	follow(record: AgentRecord): void {
 		if (LIVE_STATES.has(record.state)) return;

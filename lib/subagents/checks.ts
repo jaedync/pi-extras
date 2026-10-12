@@ -11,7 +11,8 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { formatElapsed } from "../shell-jobs-widget.ts";
-import type { AgentRecord, CheckResult, CheckRun, CheckSpec, CheckUpdate, ChildHandle } from "./types.ts";
+import { MAIN } from "./names.ts";
+import { type AgentRecord, type CheckResult, type CheckRun, type CheckSpec, type CheckUpdate, type ChildHandle, WAITING_FOR_MODEL } from "./types.ts";
 
 export const MAX_FIX_ROUNDS = 5;
 export const CHECK_TIMEOUT_MINUTES = 10;
@@ -125,4 +126,74 @@ export function fixPrompt(result: CheckResult): string {
 		`The harness ran your check when your run ended, and it failed. Fix the cause, then end your run as before. The check runs again, and your last message is your report, so write the whole report again. This is fix round ${result.attempt} of ${result.attempts - 1}.`,
 		checkBlock(result),
 	].join("\n\n");
+}
+
+/** What the check runner needs from the team. */
+export interface CheckHost {
+	get(name: string): AgentRecord | undefined;
+	patch(name: string, patch: Partial<AgentRecord>): void;
+	under(name: string, ancestor: string): boolean;
+	/** Whether the run ended some other way meanwhile: it was stopped, or the team closed. */
+	gone(name: string): boolean;
+	now(): number;
+	/** Every agent's name, for an error about one that is not there. */
+	known(): string;
+}
+
+/** The team's checks: the ones running now, the fix rounds of each run, and the checks messages set. */
+export class RunChecks {
+	private readonly running = new Map<string, AbortController>();
+	private readonly rounds = new Map<string, number>();
+	private readonly host: CheckHost;
+
+	constructor(host: CheckHost) {
+		this.host = host;
+	}
+
+	/** A new run has had no fix rounds; one that goes on on a fallback model keeps its count. */
+	begin(name: string): void {
+		this.rounds.set(name, 0);
+	}
+
+	end(name: string): void {
+		this.rounds.delete(name);
+	}
+
+	/** Aborts `name`'s running check, or every one, which kills its process group. */
+	abort(name?: string): void {
+		for (const [running, controller] of this.running) if (name === undefined || running === name) controller.abort();
+	}
+
+	/**
+	 * A message's check replaces the stored one, and applies when the run under
+	 * way or the next one ends. Only main or an agent above `to` may set it: a
+	 * check runs in `to`'s directory and sandbox, which a peer must not choose.
+	 */
+	set(from: string, to: string, update: CheckUpdate): string | undefined {
+		const target = this.host.get(to);
+		if (!target) return `No agent named ${to}. ${this.host.known()}`;
+		if (from !== MAIN && !this.host.under(to, from)) return `Only main or an agent ${to} works for can set its check.`;
+		const error = checkError(update, target);
+		if (error) return error;
+		this.host.patch(to, { check: mergeCheck(update, target.check) });
+		return undefined;
+	}
+
+	/** Runs `name`'s check, if it has one: the prompt of a fix round when it failed and the run has one left. */
+	async run(name: string, handle: Pick<ChildHandle, "check">): Promise<string | null> {
+		const record = this.host.get(name);
+		if (!record?.check) return null;
+		const controller = new AbortController();
+		const fixes = this.rounds.get(name) ?? 0;
+		this.running.set(name, controller);
+		this.host.patch(name, { activity: checkActivity(record.check.command), work: "tool" });
+		let result: CheckResult;
+		try { result = await runCheck(handle, record, fixes + 1, controller.signal, () => this.host.now()); }
+		finally { this.running.delete(name); }
+		if (this.host.gone(name)) return null;
+		this.host.patch(name, { checked: result, ...WAITING_FOR_MODEL });
+		if (result.exitCode === 0 || fixes >= record.check.fixUntilPass) return null;
+		this.rounds.set(name, fixes + 1);
+		return fixPrompt(result);
+	}
 }

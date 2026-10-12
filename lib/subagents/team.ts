@@ -19,16 +19,17 @@
  * When a child's session is held and when it goes is sessions.ts's to say.
  */
 import { randomUUID } from "node:crypto";
-import { afterActivity, afterBlock, afterError, awaited, waitingFor, waitsOnAsker } from "./after.ts";
+import { afterBlock, afterError, askError, awaited, queuedActivity, waitingFor } from "./after.ts";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";
 import { noteText, questionText, reportText, resumeWarning } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
-import { checkActivity, checkError, fixPrompt, mergeCheck, runCheck } from "./checks.ts";
+import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
-import { bashChangeNotes, EditLocks } from "./edit-lock.ts";
+import { EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
 import { stillUnread, unreadToInbox } from "./mailbox.ts";
+import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
 import { saveReport } from "./reports.ts";
 import { OpenSessions } from "./sessions.ts";
@@ -83,10 +84,7 @@ export class Team implements HostTeam {
 	private readonly owesMain = new Set<string>();
 	/** Stops between marking the record stopped and handing its report up. */
 	private readonly ending = new Set<string>();
-	/** Children main resumed from idle with a question: only that answer can stand in for the run's report. */
-	private readonly resumedToAnswer = new Set<string>();
-	/** Tool calls a child had finished when it gave that answer. */
-	private readonly answeredAt = new Map<string, number>();
+	private readonly answers = new MainAnswers();
 	private closed = false;
 	private closing: Promise<void> | undefined;
 	private readonly resumePrompts = new Map<string, string>();
@@ -98,10 +96,10 @@ export class Team implements HostTeam {
 	private readonly heldAnswers = new Set<string>();
 	/** Runs moving to a fallback model, with what they had used of their budget: the same run goes on. */
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
-	/** Checks running now, which a stop or a close aborts with their process groups. */
-	private readonly checking = new Map<string, AbortController>();
-	/** Fix rounds each run has had; a run that goes on on a fallback model keeps its count. */
-	private readonly fixRounds = new Map<string, number>();
+	private readonly checks = new RunChecks({
+		get: (name) => this.records.get(name), patch: (name, patch) => this.patch(name, patch), under: (name, ancestor) => this.under(name, ancestor),
+		gone: (name) => this.gone(name), now: () => this.now(), known: () => this.knownNames(),
+	});
 	private readonly budgets: RunBudgets;
 	private readonly locks = new EditLocks(this);
 	private readonly workTrees = new WorkTrees();
@@ -216,13 +214,7 @@ export class Team implements HostTeam {
 
 	/** After `name`'s bash call changed `paths` in the work tree `root`: takes its lock as an edit would, or warns and returns a note for the call's result. */
 	bashChanged(name: string, paths: readonly string[], root: string): string | undefined {
-		const record = this.records.get(name);
-		if (!record || this.locks.claim(name, root) === undefined) return undefined;
-		const holder = this.locks.holder(name, root);
-		if (holder === undefined) return undefined;
-		const { note, warning } = bashChangeNotes(record, holder, paths, root);
-		(this.options.warn ?? console.warn)(warning);
-		return note;
+		return this.locks.bashChanged(name, paths, root, this.options.warn ?? console.warn);
 	}
 
 	/** Resolves once the child reaches idle, failed or stopped. */
@@ -242,7 +234,7 @@ export class Team implements HostTeam {
 	async send(from: string, to: string, text: string, options: { expectReply?: boolean; signal?: AbortSignal; automatic?: boolean; check?: CheckUpdate } = {}): Promise<SendResult> {
 		if (this.closed) return { ok: false, error: "The session is shutting down." };
 		if (to === from) return { ok: false, error: "That is you." };
-		const badCheck = options.check ? this.setCheck(from, to, options.check) : undefined;
+		const badCheck = options.check ? this.checks.set(from, to, options.check) : undefined;
 		if (badCheck) return { ok: false, error: badCheck };
 		if (to === EVERYONE) return this.broadcast(from, text, options.expectReply === true);
 		// The user can answer any question, whoever it was put to.
@@ -266,9 +258,8 @@ export class Team implements HostTeam {
 		const body = options.expectReply ? questionText(from, text) : noteText(from, text);
 		const said = `${options.expectReply ? "Question" : "Message"} from ${from}: ${text}`;
 		if (options.expectReply && !waits && asker) {
-			const target = this.records.get(to);
-			const waitsOn = target ? waitsOnAsker(target, from, this.lookup, (name, ancestor) => this.under(name, ancestor)) : [];
-			if (waitsOn.length > 0) return { ok: false, error: `${to} starts after ${waitsOn.join(", ")} ${waitsOn.length === 1 ? "ends" : "end"}, so it can't answer you first. Send a note instead (no expectReply); it reads it when it starts.` };
+			const cycle = askError(this.records.get(to), from, this.lookup, (name, ancestor) => this.under(name, ancestor));
+			if (cycle) return { ok: false, error: cycle };
 			const result = this.deliverToChild(from, to, body, true, said, options.automatic);
 			if (result.ok) this.patch(from, { owed: [...new Set([...(this.records.get(from)?.owed ?? []), to])] });
 			return result;
@@ -278,17 +269,14 @@ export class Team implements HostTeam {
 			const idle = this.records.get(to)?.state === "idle";
 			const result = this.deliverToChild(from, to, body, true, said, options.automatic);
 			if (result.ok) this.owesMain.add(to);
-			if (result.ok && idle && result.delivered === "resumed") this.resumedToAnswer.add(to);
+			if (result.ok && idle && result.delivered === "resumed") this.answers.resumedToAnswer(to);
 			return result;
 		}
 		let result: SendResult;
 		if (to === MAIN) {
 			const answering = this.owesMain.delete(from);
 			const answerer = this.records.get(from);
-			if (answering && answerer && this.resumedToAnswer.delete(from) && this.sessions.onlyMessageCall(from)) {
-				this.answeredAt.set(from, answerer.toolCalls);
-				this.patch(from, { answeredMain: true });
-			}
+			if (answering && answerer && this.answers.answers(from, answerer.toolCalls, () => this.sessions.onlyMessageCall(from))) this.patch(from, { answeredMain: true });
 			this.options.deliverToMain(options.expectReply ? { kind: "question", from, text } : answering ? { kind: "reply", from, text } : { kind: "note", from, text });
 			result = { ok: true, delivered: "main" };
 		} else {
@@ -299,21 +287,6 @@ export class Team implements HostTeam {
 		}
 		if (!result.ok || !options.expectReply) return result;
 		return this.questions.ask(from, to, options.signal);
-	}
-
-	/**
-	 * A message's check replaces the stored one, and applies when the run under
-	 * way or the next one ends. Only main or an agent above `to` may set it: a
-	 * check runs in `to`'s directory and sandbox, which a peer must not choose.
-	 */
-	private setCheck(from: string, to: string, update: CheckUpdate): string | undefined {
-		const target = this.records.get(to);
-		if (!target) return `No agent named ${to}. ${this.knownNames()}`;
-		if (from !== MAIN && !this.under(to, from)) return `Only main or an agent ${to} works for can set its check.`;
-		const error = checkError(update, target);
-		if (error) return error;
-		this.patch(to, { check: mergeCheck(update, target.check) });
-		return undefined;
 	}
 
 	/** The child's messages so far; empty before it starts. */
@@ -346,7 +319,7 @@ export class Team implements HostTeam {
 		this.queue.splice(0, this.queue.length, ...this.queue.filter((queued) => queued !== name));
 		this.resumePrompts.delete(name);
 		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
-		this.checking.get(name)?.abort();
+		this.checks.abort(name);
 		const handle = this.sessions.get(name);
 		this.ending.add(name);
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.sessions.runText(name), ...this.unreadLeft(name) });
@@ -396,7 +369,7 @@ export class Team implements HostTeam {
 		if (this.closing) return this.closing;
 		this.interrupt(reason, owner);
 		this.budgets.clear();
-		for (const check of this.checking.values()) check.abort();
+		this.checks.abort();
 		this.sessions.stopTimers();
 		return this.closing = (async () => {
 			await Promise.all([
@@ -441,12 +414,9 @@ export class Team implements HostTeam {
 
 	/** A queued spawn says which after agents it still waits for, as the widget shows it. */
 	private showWaits(): void {
-		for (const name of this.queue) {
-			const record = this.records.get(name);
-			if (record?.state !== "queued") continue;
-			const waits = waitingFor(record, this.lookup);
-			const activity = waits.length > 0 ? afterActivity(waits) : record.activity?.startsWith("after ") ? "queued" : record.activity;
-			if (activity !== record.activity) this.patch(name, { activity });
+		for (const record of this.queue.map(this.lookup)) {
+			const activity = record?.state === "queued" ? queuedActivity(record, this.lookup) : record?.activity;
+			if (record && activity !== record.activity) this.patch(record.name, { activity });
 		}
 	}
 
@@ -508,7 +478,7 @@ export class Team implements HostTeam {
 			update: (patch) => {
 				const record = this.records.get(name);
 				if (!record || !LIVE_STATES.has(record.state)) return;
-				this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.workedSinceAnswer(name, patch) ? { answeredMain: undefined } : {}) });
+				this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.answers.workedSince(name, patch.toolCalls) ? { answeredMain: undefined } : {}) });
 				if (patch.usage) this.budgets.spent(name, patch.usage.cost);
 				this.forgetRead(name);
 			},
@@ -530,7 +500,7 @@ export class Team implements HostTeam {
 		const continued = this.continuing.delete(name);
 		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined });
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
-		if (!continued) this.fixRounds.set(name, 0);
+		if (!continued) this.checks.begin(name);
 		try {
 			if (!(await this.work(name, handle, text))) return;
 		} catch (error) {
@@ -552,7 +522,7 @@ export class Team implements HostTeam {
 			if (this.gone(name)) return false;
 			next = this.late(name, handle);
 			if (next !== null || this.waitsFor(name)) continue;
-			const fix = await this.check(name, handle);
+			const fix = await this.checks.run(name, handle);
 			if (this.gone(name)) return false;
 			// Mail that came during the check goes first; the check runs again after it.
 			next = this.late(name, handle) ?? fix;
@@ -568,24 +538,6 @@ export class Team implements HostTeam {
 	private late(name: string, handle: ChildHandle): string | null {
 		const late = [...handle.takeQueued(), ...this.takeInbox(name)];
 		return late.length > 0 ? late.join("\n\n") : null;
-	}
-
-	/** Runs the check, if there is one: the prompt of a fix round when it failed and the run has one left. */
-	private async check(name: string, handle: ChildHandle): Promise<string | null> {
-		const record = this.records.get(name)!;
-		if (!record.check) return null;
-		const controller = new AbortController();
-		const fixes = this.fixRounds.get(name) ?? 0;
-		this.checking.set(name, controller);
-		this.patch(name, { activity: checkActivity(record.check.command), work: "tool" });
-		let result;
-		try { result = await runCheck(handle, record, fixes + 1, controller.signal, this.now); }
-		finally { this.checking.delete(name); }
-		if (this.gone(name)) return null;
-		this.patch(name, { checked: result, ...WAITING_FOR_MODEL });
-		if (result.exitCode === 0 || fixes >= record.check.fixUntilPass) return null;
-		this.fixRounds.set(name, fixes + 1);
-		return fixPrompt(result);
 	}
 
 	/**
@@ -658,21 +610,9 @@ export class Team implements HostTeam {
 		return record ? unreadToInbox(record, this.sessions.runMessages(name)) : {};
 	}
 
-	/**
-	 * The call that carried the answer ends right after it; any call after that is
-	 * work main has not heard about, so the report must wake main after all.
-	 */
-	private workedSinceAnswer(name: string, patch: { toolCalls?: number }): boolean {
-		const at = this.answeredAt.get(name);
-		if (at === undefined || patch.toolCalls === undefined || patch.toolCalls <= at + 1) return false;
-		this.answeredAt.delete(name);
-		return true;
-	}
-
 	/** Anything delivered to a child (steering, a note, a subagent's report, a resume) is new work its report must tell main about. */
 	private forgetAnswer(name: string): void {
-		this.resumedToAnswer.delete(name);
-		this.answeredAt.delete(name);
+		this.answers.forget(name);
 		if (this.records.get(name)?.answeredMain) this.patch(name, { answeredMain: undefined });
 	}
 
@@ -680,13 +620,12 @@ export class Team implements HostTeam {
 	private finish(name: string): void {
 		this.ending.delete(name);
 		this.continuing.delete(name);
-		this.fixRounds.delete(name);
+		this.checks.end(name);
 		// Answers still owed to it die with its run; a message resumes it to ask again.
 		const record = saveReport({ ...this.records.get(name)!, owed: undefined }, this.options.warn ?? console.warn);
 		this.sessions.endRun(name);
 		this.put(record);
-		this.answeredAt.delete(name);
-		this.resumedToAnswer.delete(name);
+		this.answers.forget(name);
 		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
 		this.waiters.delete(name);
 		// The report answers anything main was waiting on.
