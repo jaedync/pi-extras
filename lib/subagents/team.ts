@@ -284,7 +284,9 @@ export class Team implements HostTeam {
 		const handle = this.sessions.get(name);
 		const launch = this.launches.get(name);
 		this.ending.add(name);
-		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: this.sessions.runText(name), ...this.unreadLeft(name) });
+		// An interrupted child has no run in this process; its last report stays.
+		const report = () => this.sessions.runText(name) ?? (record.state === "interrupted" ? record.report : undefined);
+		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: report(), ...this.unreadLeft(name) });
 		await handle?.abort().catch(() => undefined);
 		// A message relaunched it during the abort: the new run is what its parent hears of.
 		if (this.launches.get(name) !== launch) {
@@ -292,7 +294,7 @@ export class Team implements HostTeam {
 			this.stoppedByParent.delete(name);
 			return this.records.get(name);
 		}
-		this.patch(name, { report: this.sessions.runText(name) });
+		this.patch(name, { report: report() });
 		this.finish(name);
 		return this.records.get(name);
 	}

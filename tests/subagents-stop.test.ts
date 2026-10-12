@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
-import type { AgentRecord, ChildHandle, MainDelivery } from "../lib/subagents/types.ts";
+import { type AgentRecord, type ChildHandle, type MainDelivery, NO_USAGE } from "../lib/subagents/types.ts";
 
 const flush = async (rounds = 4) => { for (let i = 0; i < rounds; i++) await tick(); };
 
@@ -81,4 +81,18 @@ test("a message during a stop's abort relaunches the child, and the aborted run 
 	assert.equal(team.get(name)!.state, "running");
 	assert.equal(launches, 2);
 	assert.equal(main.filter((delivery) => delivery.kind === "report").length, 0, "neither the stop nor the aborted run reports over the new run");
+});
+
+const restored = (over: Partial<AgentRecord>): AgentRecord => ({ name: "paused", parent: "main", depth: 1, task: "T", model: "m", readOnly: false, fork: false,
+	blocking: false, state: "interrupted", createdAt: 1, activity: null, toolCalls: 0, usage: { ...NO_USAGE }, runs: 1, restored: true, ...over });
+
+test("stopping an interrupted child keeps the report of its last run", async () => {
+	const main: MainDelivery[] = [];
+	const team = new Team({ maxConcurrent: 4, maxDepth: 2, replyTimeoutMs: 60_000, deliverToMain: (delivery) => main.push(delivery),
+		launcher: { launch: async () => { throw new Error("no launch"); } } });
+	team.restore([restored({ report: "Half-way: found the bug in parser.ts" })]);
+	const stopped = await team.stop("paused");
+	assert.equal(stopped?.report, "Half-way: found the bug in parser.ts");
+	const report = main.find((delivery) => delivery.kind === "report");
+	assert.equal(report?.kind === "report" ? report.record.report : undefined, "Half-way: found the bug in parser.ts");
 });
