@@ -156,3 +156,23 @@ test("a cached result older than 30 minutes is read again", async (t) => {
 	assert.equal(late.details.cached, false);
 	assert.equal(late.details.title, "v2");
 });
+
+test("an aborted pull is not cached, so the next call reads the link again", async () => {
+	const tools: ToolUnderTest[] = [];
+	let calls = 0;
+	const controller = new AbortController();
+	const deps: PullDeps = {
+		// A video adapter that turns the abort into a partial result, as a caught transcript error does.
+		video: async (url) => {
+			calls++;
+			if (calls === 1) controller.abort();
+			return { platform: "vimeo", title: `run ${calls}`, url, markdown: calls === 1 ? "## Transcript\n\nNo transcript: aborted" : "## Transcript\n\n[0:00] said" };
+		},
+		images: async () => [],
+	};
+	registerLinkTool({ registerTool: (tool: never) => tools.push(tool) } as never, { config: () => parseConfig({}), deps });
+	await assert.rejects(tools[0].execute("1", { url: "https://vimeo.com/123456" }, controller.signal, undefined));
+	const retry = await tools[0].execute("2", { url: "https://vimeo.com/123456" }, new AbortController().signal, undefined);
+	assert.equal(retry.details.cached, false);
+	assert.equal(retry.details.title, "run 2");
+});

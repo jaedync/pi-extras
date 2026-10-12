@@ -63,6 +63,7 @@ async function attachVideo(pulled: Pulled, ctx: AdapterContext, deps: PullDeps):
 		const sections = video.markdown.split(/\n(?=## )/).filter((part) => /^## (Transcript|Frames)/.test(part)).map((part) => part.trim());
 		return { ...pulled, markdown: [pulled.markdown, "# Attached video", ...sections].join("\n\n"), images: [...(pulled.images ?? []), ...(video.images ?? [])], files: video.files };
 	} catch (error) {
+		ctx.signal?.throwIfAborted();
 		return { ...pulled, markdown: `${pulled.markdown}\n\n_The attached video could not be read: ${(error as Error).message}_` };
 	}
 }

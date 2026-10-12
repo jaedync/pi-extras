@@ -298,3 +298,23 @@ test("helper parses VTT without auto-caption repeats, and json3", { skip: python
 	assert.equal(fromVtt.at(-1).start, 3600.5);
 	assert.deepEqual(fromJson, [{ start: 1.5, end: 2.5, text: "hi there" }]);
 });
+
+test("video: an abort during the transcript stops the pull instead of reporting no transcript", async () => {
+	const home = mkdtempSync(join(tmpdir(), "link-video-"));
+	try {
+		const seen: Recorded = { log: [], downloads: [], sources: [], images: [] };
+		const deps = fakeDeps(home, { info: { id: "1", title: "Talk", extractor_key: "Vimeo", duration: 1800, has_video: true }, ffmpeg: { path: "/ff" } }, seen);
+		const controller = new AbortController();
+		const run = deps.run;
+		const aborting = { ...deps, run: (async (tools: never, command: string, request: never, options: never) => {
+			if (command !== "captions") return run(tools, command, request, options);
+			controller.abort();
+			throw new Error("media helper captions aborted");
+		}) as VideoDeps["run"] };
+		const ctx = { ...context(fetch, { transcript: true, frames: 2 }), signal: controller.signal };
+		await assert.rejects(pullVideo("https://vimeo.com/123456", "vimeo", ctx, aborting));
+		assert.deepEqual(seen.log, ["info"], "no frames are cut after the abort");
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});

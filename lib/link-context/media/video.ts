@@ -297,7 +297,10 @@ class VideoJob {
 const AT_HINT = '_To look at a moment, call pull_link again with this URL and at: ["m:ss", ...] for the frames at those times._';
 
 async function transcriptSection(job: VideoJob, info: VideoInfo, ctx: AdapterContext): Promise<string> {
-	const transcript = await job.transcript(info).catch((error: Error) => ({ segments: [], errors: [error.message] }) as Transcript);
+	const transcript = await job.transcript(info).catch((error: Error) => {
+		ctx.signal?.throwIfAborted();
+		return { segments: [], errors: [error.message] } as Transcript;
+	});
 	const body = formatTranscript(transcript, info.chapters, ctx.options.range);
 	if (!body) return `## Transcript\n\nNo transcript: ${(transcript.errors ?? ["no captions or speech found"]).join("; ")}`;
 	const label = [transcript.source, transcript.language].filter(Boolean).join(", ");
@@ -391,6 +394,7 @@ export async function pullVideo(url: string, site: string, ctx: AdapterContext, 
 					parts.push(`## Frames\n\n${frames.caption}\nFull-size frames: ${dirOf(frames.files)}`);
 				}
 			} catch (error) {
+				ctx.signal?.throwIfAborted();
 				notes.push(`Frames failed: ${(error as Error).message}`);
 			}
 		}

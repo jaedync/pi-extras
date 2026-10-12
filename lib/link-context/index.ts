@@ -154,6 +154,8 @@ export function registerLinkTool(pi: ExtensionAPI, options: LinkToolOptions = {}
 				const ctx = { signal, fetcher: options.fetcher, config: (options.config ?? loadConfig)(), options: resolveOptions(params, isVideo), progress };
 				const wantsVideo = params.transcript === true || (params.frames ?? 0) > 0 || !!params.at?.length;
 				pulled = await pull(url.href, ctx, options.deps, wantsVideo);
+				// Parts that failed because of the abort read as "no transcript" or "frames failed"; never keep or return them.
+				signal?.throwIfAborted();
 				remember(key, pulled);
 			}
 			const { content, next } = compose(pulled, params);
