@@ -98,7 +98,7 @@ export class Team implements HostTeam {
 	private readonly peerRuns = new Set<string>();
 	/** Stopped by their own parent, which already knows; no report goes up. */
 	private readonly stoppedByParent = new Set<string>();
-	/** Paused children whose next message from main waits in their inbox (`holdAnswer`). */
+	/** Interrupted children whose next message from main waits in their inbox (`holdAnswer`). */
 	private readonly heldAnswers = new Set<string>();
 	/** Runs moving to a fallback model, with what they had used of their budget: the same run goes on. */
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
@@ -402,6 +402,8 @@ export class Team implements HostTeam {
 
 	private put(record: AgentRecord): void {
 		this.records.set(record.name, record);
+		// A held answer is for the paused child that asked; once anything resumes it, main's messages work as usual.
+		if (record.state !== "interrupted") this.heldAnswers.delete(record.name);
 		this.budgets.follow(record.name, record.state);
 		this.locks.follow(record);
 		for (const listener of this.listeners) listener(record);
@@ -658,7 +660,7 @@ export class Team implements HostTeam {
 	private deliverToChild(from: string, to: string, body: string, wakes: boolean, said = body, automatic = false): SendResult {
 		const target = this.records.get(to);
 		if (!target) return { ok: false, error: `No agent named ${to}. ${this.knownNames()}` };
-		if (from === MAIN && this.heldAnswers.delete(to) && !LIVE_STATES.has(target.state)) {
+		if (from === MAIN && this.heldAnswers.delete(to) && target.state === "interrupted") {
 			this.patch(to, { inbox: [...(target.inbox ?? []), body] });
 			return { ok: true, delivered: "inbox", notice: `${to} is paused, and resumePolicy is "notify", so it reads this when it resumes. Message it again, or run /subagents resume ${to}, to resume it now.` };
 		}

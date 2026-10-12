@@ -307,7 +307,7 @@ function keptForNow(item: HeldMail, team: Team, policy: SubagentsConfig["resumeP
 	const asker = details.kind === "question" ? team.get(details.from) : undefined;
 	if (!asker || details.kind !== "question") return item;
 	const live = LIVE_STATES.has(asker.state);
-	const now = live ? "resumed" : policy === "notify" ? "held" : "paused";
+	const now = live ? "resumed" : policy === "notify" && asker.state === "interrupted" ? "held" : "paused";
 	if (now === "held") team.holdAnswer(asker.name);
 	return { message: { ...item.message, content: keptQuestionText(asker.name, details.text, now) }, wakes: live && item.wakes };
 }

@@ -342,7 +342,7 @@ async function questionAcrossFallback(policy: "notify" | "reload" | "always", re
 	assert.deepEqual(posted.map((item) => item.type), ["subagent-restore", "subagent-message"], "after the restore notice");
 	assert.match(question.content, /Which branch\?/);
 	assert.match(question.content, /asked this before it was interrupted/);
-	return { name, reopened, question };
+	return { h, name, reopened, question };
 }
 
 test("under resumePolicy notify, a kept question from a paused child does not wake main, and main's answer waits in its inbox", async () => {
@@ -415,4 +415,17 @@ test("warnings while a parked host closes go to its log, and an index it can't s
 	await takeParked(session)!.close("reload");
 	assert.match(logged.join("\n"), /could not write the run log/);
 	assert.match(logged.join("\n"), /could not save/);
+});
+
+test("under resumePolicy notify, an answer is held only while the child is still interrupted: once the user resumed it, main's message starts a run", async () => {
+	const { h, name, reopened } = await questionAcrossFallback("notify", "reload");
+	const resumed = await reopened.team.send("user", name, "Carry on.");
+	assert.equal(resumed.ok && resumed.delivered, "resumed");
+	await sleep(20);
+	h.call(name).finish("Carried on.");
+	await reopened.team.whenDone(name);
+	assert.equal(reopened.team.get(name)?.state, "idle");
+	const later = await reopened.team.send("main", name, "One more thing.");
+	assert.equal(later.ok && later.delivered, "resumed", "not held in its inbox as if it were still paused");
+	assert.equal(later.ok && later.notice, undefined);
 });
