@@ -56,7 +56,7 @@ test("an edited reserveTokens and contextWindow reach a new launch, and a resume
 	});
 	tools = { team, replyTimeoutMs: 5_000 };
 	try {
-		faux.setResponses([ai.fauxAssistantMessage("First."), ai.fauxAssistantMessage("Follow-up on the same session."), ai.fauxAssistantMessage("Relaunched.")]);
+		faux.setResponses([ai.fauxAssistantMessage("First."), ai.fauxAssistantMessage("Follow-up on the same session."), ai.fauxAssistantMessage("Relaunched."), ai.fauxAssistantMessage("New child.")]);
 		assert.ok(team.spawn({ name: "fresh", task: "Look", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false }).ok);
 		await team.whenDone("fresh");
 		assert.deepEqual(launched, [{ reserveTokens: 1_000, contextWindow: 50_000 }], "the first launch reads both files");
@@ -73,6 +73,10 @@ test("an edited reserveTokens and contextWindow reach a new launch, and a resume
 		assert.equal(record.report, "Relaunched.");
 		assert.equal(record.contextWindow, 70_000);
 		assert.equal(runtime.getModel("faux", "cheap")?.contextWindow, 70_000, "main's runtime reads the edit too, as /model would");
+		settings(4_000);
+		assert.ok(team.spawn({ name: "second", task: "Look too", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false }).ok);
+		await team.whenDone("second");
+		assert.deepEqual(launched.at(-1), { reserveTokens: 4_000, contextWindow: 70_000 }, "a new child reads the files as they are now");
 	} finally {
 		await team.close();
 	}

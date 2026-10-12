@@ -151,6 +151,19 @@ function childLauncher(inputs: LauncherInputs): Launcher {
 	});
 }
 
+/**
+ * Where a parked host says what became of it. No module is left to show a
+ * notice, and the next start announces interrupted children itself, so this
+ * is best effort, as operational-log.ts is.
+ */
+function reloadLog(agentDir: string): (message: string) => void {
+	const file = join(agentDir, "subagents", "reload.log");
+	return (message) => {
+		try { mkdirSync(dirname(file), { recursive: true }); } catch { /* the append below fails the same way, and quietly */ }
+		operationalError(file, "subagents", message);
+	};
+}
+
 export interface ServeOptions {
 	readonly sdk: Sdk;
 	readonly pi: ExtensionAPI;
@@ -264,15 +277,7 @@ export async function serveSession(options: ServeOptions): Promise<Served> {
 			looking = undefined;
 			live.freeze();
 			host.park();
-			const logFile = join(agentDir, "subagents", "reload.log");
-			parkHost(session, host, {
-				log(message) {
-					// No module is left to show a notice, and the next start announces the interrupted children itself,
-					// so this log is best effort, as operational-log.ts is: a directory it can't make loses only the line.
-					try { mkdirSync(dirname(logFile), { recursive: true }); } catch { /* the append below fails the same way, quietly */ }
-					operationalError(logFile, "subagents", message);
-				},
-			});
+			parkHost(session, host, { log: reloadLog(agentDir) });
 		},
 		async close(reason) {
 			serving = false;

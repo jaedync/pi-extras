@@ -122,6 +122,19 @@ function recordChanges(inputs: HostInputs, ports: HostPorts, team: Team, index: 
 	});
 }
 
+/** A signal can end the process before any await, so the interruption is recorded at once. */
+function recordSignals(inputs: HostInputs, team: Team, index: ChildIndex, logFile: string, notify: (message: string) => void, signaled: (signal: string) => void): () => void {
+	const { owner, sessionId } = inputs;
+	return installSignalRecorder((signal) => {
+		try {
+			signaled(signal);
+			team.interrupt("signal", owner);
+			index.save(team.list(), signal, owner);
+			appendInterruptedRuns(logFile, team.list(), sessionId, Date.now());
+		} catch (error) { notify(`subagents: could not record ${signal}: ${(error as Error).message}`); }
+	});
+}
+
 /** Opens a session's subagents from its index, as a session start does; throws when the index can't be read. */
 export function openHost(inputs: HostInputs): HostState {
 	const { agentDir, sessionId, owner, config } = inputs;
@@ -161,14 +174,7 @@ export function openHost(inputs: HostInputs): HostState {
 	} catch (error) { notify(`subagents: could not record restored children: ${(error as Error).message}`); }
 	const unsubscribe = recordChanges(inputs, ports, team, index, logFile);
 	let signalReason: string | undefined;
-	const removeSignals = installSignalRecorder((signal) => {
-		try {
-			signalReason = signal;
-			team.interrupt("signal", owner);
-			index.save(team.list(), signal, owner);
-			appendInterruptedRuns(logFile, team.list(), sessionId, Date.now());
-		} catch (error) { notify(`subagents: could not record ${signal}: ${(error as Error).message}`); }
-	});
+	const removeSignals = recordSignals(inputs, team, index, logFile, notify, (signal) => { signalReason = signal; });
 	const activity = inputs.activity ?? new ToolActivity();
 	let closed = false;
 	let leaseHandedOver = false;
