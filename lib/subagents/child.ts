@@ -177,7 +177,8 @@ export interface LauncherDeps {
 function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, deps: LauncherDeps): ToolDefinition {
 	const warn = (message: string) => deps.warn?.(message);
 	const sandbox = record.worktree
-		? sandboxFor(record.worktree.path, (why) => warn(`subagents: bash in worktrees runs without a sandbox, so it can write into your checkout. ${why}`))
+		? sandboxFor(record.worktree, (why) => warn(`subagents: bash in worktrees runs without a sandbox, so it can write into your checkout. ${why}`),
+			(why) => warn(`subagents: ${record.name}'s sandbox keeps all git data read-only, so its commits will fail. ${why}`))
 		: undefined;
 	const { activity, bashChanged } = deps;
 	const changes = activity && bashChanged ? {

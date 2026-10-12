@@ -5,14 +5,18 @@
  * installed; elsewhere commands run unconfined, as before.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, realpathSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
 import type { BashSpawnContext } from "@earendil-works/pi-coding-agent";
+import type { Worktree } from "./types.ts";
 import { sourceCheckout } from "./worktree.ts";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 const BWRAP = "bwrap";
 const PROBE_TIMEOUT_MS = 5_000;
+const GIT_TIMEOUT_MS = 10_000;
+/** The one node_modules entry a worktree child may write: tool caches. The packages, `.bin` shims and package-manager files stay the parent's. */
+const CACHE_DIR = join("node_modules", ".cache");
 const ARG_VARIABLE = "PI_SUBAGENT_SANDBOX_ARG_";
 const COMMAND_VARIABLE = "PI_SUBAGENT_SANDBOX_COMMAND";
 
@@ -29,40 +33,93 @@ export function protectedRoots(path: string): string[] {
 	return root === undefined ? [] : [root, ...protectedRoots(root)];
 }
 
+/**
+ * What commits in a worktree write in its repository's git data, which lives
+ * in the parent's checkout. The hooks, config, info/ and the other branches stay read-only.
+ */
+export interface GitWrites {
+	/** Written as a whole: the worktree's own git folder and the shared object store. */
+	readonly trees: readonly string[];
+	/** Its branch's ref and reflog, each replaced through a lock file beside it, in a folder git may have to make again. */
+	readonly files: readonly string[];
+}
+
+export const NO_GIT_WRITES: GitWrites = { trees: [], files: [] };
+
+const oneLine = (error: unknown): string => String((error as { stderr?: unknown }).stderr || (error as Error).message).replace(/\s+/g, " ").trim().slice(0, 200);
+
+/** The repository's shared git folder, as `root`, the checkout the worktree was made from, names it; or why not. */
+function commonDir(root: string): { dir: string } | { why: string } {
+	try {
+		const out = execFileSync("git", ["-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, stdio: ["ignore", "pipe", "pipe"] });
+		return { dir: realpathSync(out.trim()) };
+	} catch (error) { return { why: `git can't find the git folder of ${root}: ${oneLine(error)}` }; }
+}
+
+/**
+ * The worktree's own git folder in `common`, or why not. The child can
+ * rewrite its `.git` file, so the folder counts only when it is one of
+ * `common/worktrees` and its `gitdir` file points back at this worktree.
+ */
+function ownGitDir(path: string, common: string): { dir: string } | { why: string } {
+	const wrong = { why: `${join(path, ".git")} does not point to a folder of its own in ${join(common, "worktrees")}.` };
+	try {
+		const link = /^gitdir: (.+)$/m.exec(readFileSync(join(path, ".git"), "utf8"))?.[1]?.trim();
+		if (!link) return wrong;
+		const dir = realpathSync(resolve(path, link));
+		const back = realpathSync(resolve(dir, readFileSync(join(dir, "gitdir"), "utf8").trim()));
+		return dirname(dir) === join(common, "worktrees") && back === realpathSync(join(path, ".git")) ? { dir } : wrong;
+	} catch (error) { return { why: `${wrong.why} ${oneLine(error)}` }; }
+}
+
+/**
+ * What git needs to write for `git add`, `git commit` and `git status` in
+ * the worktree, read from `root`, its real source checkout; or why it can't
+ * be told. The branch comes from the record, not the worktree's HEAD, which
+ * the child can move.
+ */
+export function gitWrites(worktree: Pick<Worktree, "path" | "branch">, root: string): GitWrites | string {
+	const common = commonDir(root);
+	if ("why" in common) return common.why;
+	const own = ownGitDir(worktree.path, common.dir);
+	if ("why" in own) return own.why;
+	const ref = join("refs", "heads", worktree.branch);
+	return { trees: [own.dir, join(common.dir, "objects")], files: [join(common.dir, ref), join(common.dir, "logs", ref)] };
+}
+
 const seatbeltString = (text: string): string => `"${text.replace(/[\\"]/g, "\\$&")}"`;
 const regexLiteral = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 
+const folders = (files: readonly string[]): string[] => [...new Set(files.map((file) => dirname(file)))];
+
 /** Seatbelt's last matching rule wins, so every denial comes before the exceptions. Paths must be resolved: seatbelt matches real paths. */
-export function seatbeltProfile(roots: readonly string[]): string {
+export function seatbeltProfile(roots: readonly string[], git: GitWrites): string {
 	const denials = roots.map((root) => `(deny file-write* (subpath ${seatbeltString(root)}))`);
-	const exceptions = roots.flatMap((root) => [
-		// A worktree's git data and objects live in its checkout's .git, so commits in the worktree write there.
-		`(allow file-write* (subpath ${seatbeltString(join(root, ".git"))}))`,
-		// Tool caches such as node_modules/.cache; the packages themselves stay the parent's.
-		`(allow file-write* (regex ${seatbeltString(`^${regexLiteral(join(root, "node_modules"))}/\\.[^/]+(/|$)`)}))`,
-	]);
+	const exceptions = [
+		...git.trees.map((tree) => `(allow file-write* (subpath ${seatbeltString(tree)}))`),
+		...git.files.map((file) => `(allow file-write* (regex ${seatbeltString(`^${regexLiteral(file)}(\\.lock)?$`)}))`),
+		// Only the folder itself, so git can make it again after `git pack-refs` removed it; nothing in it beyond the files above.
+		...folders(git.files).map((folder) => `(allow file-write* (literal ${seatbeltString(folder)}))`),
+		...roots.map((root) => `(allow file-write* (subpath ${seatbeltString(join(root, CACHE_DIR))}))`),
+	];
 	return ["(version 1)", "(allow default)", ...denials, ...exceptions].join("\n");
 }
 
-function dotEntries(dir: string): string[] {
-	try { return readdirSync(dir).filter((name) => name.startsWith(".")).map((name) => join(dir, name)); }
-	catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") return [];
-		throw error;
-	}
-}
-
-/** bwrap binds need existing paths, so only the node_modules dot-entries present now stay writable. */
-export function bwrapPrefix(roots: readonly string[]): string[] {
-	const writable = roots.flatMap((root) => [join(root, ".git"), ...dotEntries(join(root, "node_modules"))]).filter((path) => existsSync(path));
+/**
+ * bwrap binds need existing paths. A bind over a file would make git's rename
+ * of the lock file onto it fail, so the branch's ref and reflog folders are
+ * bound whole: there, a child can also move another subagent's branch.
+ */
+export function bwrapPrefix(roots: readonly string[], git: GitWrites): string[] {
+	const writable = [...git.trees, ...folders(git.files), ...roots.map((root) => join(root, CACHE_DIR))].filter((path) => existsSync(path));
 	return [BWRAP, "--dev-bind", "/", "/", ...roots.flatMap((root) => ["--ro-bind", root, root]), ...writable.flatMap((path) => ["--bind", path, path])];
 }
 
 const onPath = (name: string): boolean => (process.env.PATH ?? "").split(delimiter).some((dir) => dir !== "" && existsSync(join(dir, name)));
 
-function confinement(roots: readonly string[]): string[] | undefined {
-	if (process.platform === "darwin") return existsSync(SANDBOX_EXEC) ? [SANDBOX_EXEC, "-p", seatbeltProfile(roots)] : undefined;
-	if (process.platform === "linux") return onPath(BWRAP) ? bwrapPrefix(roots) : undefined;
+function confinement(roots: readonly string[], git: () => GitWrites): string[] | undefined {
+	if (process.platform === "darwin") return existsSync(SANDBOX_EXEC) ? [SANDBOX_EXEC, "-p", seatbeltProfile(roots, git())] : undefined;
+	if (process.platform === "linux") return onPath(BWRAP) ? bwrapPrefix(roots, git()) : undefined;
 	return undefined;
 }
 
@@ -80,12 +137,19 @@ function probe(prefix: readonly string[]): string | undefined {
 }
 
 /**
- * The sandbox for bash in the worktree at `path`, or undefined where none is
- * available. `onUnavailable` hears once why an installed sandbox tool failed.
+ * The sandbox for bash in `worktree`, or undefined where none is available.
+ * `onUnavailable` hears once why an installed sandbox tool failed;
+ * `onNoGit` why the sandbox keeps all git data read-only, so commits fail.
  */
-export function sandboxFor(path: string, onUnavailable?: (why: string) => void): Sandbox | undefined {
-	const roots = protectedRoots(path).filter((root) => existsSync(root)).map((root) => realpathSync(root));
-	const prefix = roots.length > 0 ? confinement(roots) : undefined;
+export function sandboxFor(worktree: Pick<Worktree, "path" | "branch">, onUnavailable?: (why: string) => void, onNoGit?: (why: string) => void): Sandbox | undefined {
+	const roots = protectedRoots(worktree.path).filter((root) => existsSync(root)).map((root) => realpathSync(root));
+	const git = (): GitWrites => {
+		const found = gitWrites(worktree, roots[0]!);
+		if (typeof found !== "string") return found;
+		onNoGit?.(found);
+		return NO_GIT_WRITES;
+	};
+	const prefix = roots.length > 0 ? confinement(roots, git) : undefined;
 	if (!prefix || broken.has(prefix[0]!)) return undefined;
 	const failure = probe(prefix);
 	if (failure === undefined) return { root: roots[0]!, prefix };

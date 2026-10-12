@@ -1506,15 +1506,18 @@ check follows symlinks, so an edit through the
 worktree's `node_modules` link into the parent's checkout is refused too. A
 worktree child's `bash` commands run in an OS sandbox that blocks writes into
 the parent's checkout (and, for a worktree made from a worktree, into each
-checkout it came from). Two exceptions stay writable: the checkout's `.git`
-directory, where commits in the worktree go, and the dot-entries directly in its
-`node_modules`, such as `.cache`. The packages in `node_modules` are not
-writable, so an install in a worktree can't change the parent's dependencies.
+checkout it came from). Some exceptions stay writable, so `git add`, `git commit`
+and `git status` work in the worktree: in the repository's `.git`, the
+worktree's own folder in `worktrees/`, `objects/`, and the ref and reflog of
+the child's own `subagent/<name>` branch. The hooks, the config, `info/` and
+the other branches stay read-only. In `node_modules`, only `.cache` is
+writable. The packages, `.bin` and the other dot-entries are not, so an
+install in a worktree can't change the parent's dependencies.
 When a command fails on a blocked write, its result names the parent's
 checkout. The transcript shows the child's own command, not the sandbox around
 it. macOS uses `sandbox-exec`. Linux uses `bwrap` when it is on `PATH`; there,
-only the `node_modules` dot-entries that exist when the child starts are
-writable. Without `bwrap`, and on Windows, there is no sandbox: the boundary for
+only the paths that exist when the child starts are writable, and the child
+can also change the other `subagent/` branches. Without `bwrap`, and on Windows, there is no sandbox: the boundary for
 `bash` is only the child's working directory, which is the worktree, and its
 instructions. Worktree isolation
 needs a git repository: the one at the child's `cwd`, else the one the parent

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { guardBash } from "../lib/subagents/bash-guard.ts";
-import { bwrapPrefix, confine, protectedRoots, sandboxFor, seatbeltProfile, type Sandbox } from "../lib/subagents/sandbox.ts";
+import { bwrapPrefix, confine, gitWrites, NO_GIT_WRITES, protectedRoots, sandboxFor, seatbeltProfile, type GitWrites, type Sandbox } from "../lib/subagents/sandbox.ts";
 import { createWorktree } from "../lib/subagents/worktree.ts";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 10_000 });
@@ -16,42 +16,82 @@ test("the protected checkouts are every source the worktree was made from", () =
 	assert.deepEqual(protectedRoots("/x/repo/scout"), []);
 });
 
-test("the seatbelt profile denies writes under each checkout except its git data and node_modules dot-entries", () => {
-	assert.equal(seatbeltProfile(["/x/my.repo"]), [
+const GIT: GitWrites = {
+	trees: ["/x/my.repo/.git/worktrees/scout", "/x/my.repo/.git/objects"],
+	files: ["/x/my.repo/.git/refs/heads/subagent/scout", "/x/my.repo/.git/logs/refs/heads/subagent/scout"],
+};
+
+test("the seatbelt profile denies writes under each checkout except the worktree's git data, its branch and node_modules/.cache", () => {
+	assert.equal(seatbeltProfile(["/x/my.repo"], GIT), [
 		"(version 1)",
 		"(allow default)",
 		"(deny file-write* (subpath \"/x/my.repo\"))",
-		"(allow file-write* (subpath \"/x/my.repo/.git\"))",
-		"(allow file-write* (regex \"^/x/my\\\\.repo/node_modules/\\\\.[^/]+(/|$)\"))",
+		"(allow file-write* (subpath \"/x/my.repo/.git/worktrees/scout\"))",
+		"(allow file-write* (subpath \"/x/my.repo/.git/objects\"))",
+		"(allow file-write* (regex \"^/x/my\\\\.repo/\\\\.git/refs/heads/subagent/scout(\\\\.lock)?$\"))",
+		"(allow file-write* (regex \"^/x/my\\\\.repo/\\\\.git/logs/refs/heads/subagent/scout(\\\\.lock)?$\"))",
+		"(allow file-write* (literal \"/x/my.repo/.git/refs/heads/subagent\"))",
+		"(allow file-write* (literal \"/x/my.repo/.git/logs/refs/heads/subagent\"))",
+		"(allow file-write* (subpath \"/x/my.repo/node_modules/.cache\"))",
 	].join("\n"));
+	assert.equal(seatbeltProfile(["/x/my.repo"], NO_GIT_WRITES).split("\n").filter((line) => line.includes(".git")).length, 0, "no git data writable when it can't be found");
 });
 
 test("the seatbelt profile escapes quotes, backslashes and regex characters", () => {
-	const profile = seatbeltProfile(["/x/a\"b\\c(d)+[e]"]);
+	const root = "/x/a\"b\\c(d)+[e]";
+	const profile = seatbeltProfile([root], { trees: [], files: [`${root}/.git/refs/heads/subagent/s`] });
 	assert.ok(profile.includes(String.raw`(deny file-write* (subpath "/x/a\"b\\c(d)+[e]"))`), profile);
-	assert.ok(profile.includes(String.raw`(regex "^/x/a\"b\\\\c\\(d\\)\\+\\[e\\]/node_modules/\\.[^/]+(/|$)")`), profile);
+	assert.ok(profile.includes(String.raw`(regex "^/x/a\"b\\\\c\\(d\\)\\+\\[e\\]/\\.git/refs/heads/subagent/s(\\.lock)?$")`), profile);
 });
 
 test("all denials come before the exceptions, so a second checkout can't undo the first one's", () => {
-	const lines = seatbeltProfile(["/x/a.worktrees/b", "/x/a"]).split("\n");
+	const lines = seatbeltProfile(["/x/a.worktrees/b", "/x/a"], GIT).split("\n");
 	const lastDeny = lines.findLastIndex((line) => line.startsWith("(deny"));
 	const firstAllow = lines.findIndex((line) => line.startsWith("(allow file-write*"));
 	assert.ok(lastDeny < firstAllow);
 });
 
-test("bwrap binds everything writable, each checkout read-only, then its git data and existing node_modules dot-entries writable", (t) => {
+test("bwrap binds everything writable, each checkout read-only, then the worktree's git data, its branch's folders and node_modules/.cache writable", (t) => {
 	const root = mkdtempSync(join(tmpdir(), "subagent-bwrap-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
-	mkdirSync(join(root, ".git"));
+	const git = join(root, ".git");
+	for (const dir of ["worktrees/scout", "objects", "refs/heads/subagent", "logs/refs/heads/subagent", "hooks"]) mkdirSync(join(git, dir), { recursive: true });
 	mkdirSync(join(root, "node_modules", ".cache"), { recursive: true });
+	mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
 	mkdirSync(join(root, "node_modules", "pkg"));
-	assert.deepEqual(bwrapPrefix([root, "/missing"]), [
+	const writes: GitWrites = {
+		trees: [join(git, "worktrees", "scout"), join(git, "objects")],
+		files: [join(git, "refs", "heads", "subagent", "scout"), join(git, "logs", "refs", "heads", "subagent", "scout")],
+	};
+	const bind = (path: string) => ["--bind", path, path];
+	assert.deepEqual(bwrapPrefix([root, "/missing"], writes), [
 		"bwrap", "--dev-bind", "/", "/",
 		"--ro-bind", root, root,
 		"--ro-bind", "/missing", "/missing",
-		"--bind", join(root, ".git"), join(root, ".git"),
-		"--bind", join(root, "node_modules", ".cache"), join(root, "node_modules", ".cache"),
+		...bind(join(git, "worktrees", "scout")), ...bind(join(git, "objects")),
+		// A bind over a file would break git's rename of the lock file onto it, so the branch's folder is bound.
+		...bind(join(git, "refs", "heads", "subagent")), ...bind(join(git, "logs", "refs", "heads", "subagent")),
+		...bind(join(root, "node_modules", ".cache")),
 	]);
+});
+
+test("a worktree's git writes are its own git folder, the object store and its branch, read from the source checkout", (t) => {
+	const root = repository(t);
+	const worktree = createWorktree(root, "scout");
+	const common = join(realpathSync(root), ".git");
+	assert.deepEqual(gitWrites(worktree, realpathSync(root)), {
+		trees: [join(common, "worktrees", "scout"), join(common, "objects")],
+		files: [join(common, "refs", "heads", "subagent", "scout"), join(common, "logs", "refs", "heads", "subagent", "scout")],
+	});
+	// The worktree's .git file is the child's to write: one that points at the repository's own git folder, or another worktree's, gets nothing.
+	const other = createWorktree(root, "other");
+	const refused = new RegExp(`^${join(worktree.path, ".git").replace(/[.]/g, "\\.")} does not point to a folder of its own in ${join(common, "worktrees").replace(/[.]/g, "\\.")}\\.`);
+	writeFileSync(join(worktree.path, ".git"), `gitdir: ${common}\n`);
+	assert.match(String(gitWrites(worktree, realpathSync(root))), refused);
+	writeFileSync(join(worktree.path, ".git"), `gitdir: ${join(common, "worktrees", "other")}\n`);
+	assert.match(String(gitWrites(worktree, realpathSync(root))), refused);
+	assert.ok(existsSync(other.path));
+	assert.match(String(gitWrites(worktree, join(realpathSync(root), "..", "missing"))), /^git can't find the git folder of /);
 });
 
 test("the confined command line is fixed text; the prefix and the command travel in the environment", () => {
@@ -109,7 +149,7 @@ const macSandbox = process.platform === "darwin" && existsSync("/usr/bin/sandbox
 test("a real sandbox keeps a worktree child's shell out of the parent's checkout", { skip: !macSandbox && "needs /usr/bin/sandbox-exec" }, (t) => {
 	const root = repository(t);
 	const worktree = createWorktree(root, "scout");
-	const box = sandboxFor(worktree.path);
+	const box = sandboxFor(worktree);
 	assert.ok(box, "sandbox-exec applies the profile");
 	assert.equal(box.root, realpathSync(root));
 	const shell = (command: string) => {
@@ -134,6 +174,42 @@ test("a real sandbox keeps a worktree child's shell out of the parent's checkout
 	assert.equal(shell(`echo t > '${elsewhere}'`).status, 0, "writes elsewhere still work");
 });
 
+test("a real sandbox lets a worktree child commit on its branch, but not change the parent's hooks, config, branches or packages", { skip: !macSandbox && "needs /usr/bin/sandbox-exec" }, (t) => {
+	const root = repository(t);
+	mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
+	const parentBranch = git(root, "branch", "--show-current").trim();
+	const parentHead = git(root, "rev-parse", "HEAD").trim();
+	const worktree = createWorktree(root, "scout");
+	// Pack the refs, as git gc does: the child's commit must make its branch's folder again.
+	git(root, "pack-refs", "--all");
+	const box = sandboxFor(worktree);
+	assert.ok(box, "sandbox-exec applies the profile");
+	const shell = (command: string) => {
+		const hooked = confine(box.prefix)({ command, cwd: worktree.path, env: { ...process.env } });
+		return spawnSync("/bin/bash", ["-c", hooked.command], { cwd: hooked.cwd, env: hooked.env, encoding: "utf8" });
+	};
+	const commit = shell("echo one > one.txt && git status --short && git add one.txt && git commit -qm one && echo two > two.txt && git add -A && git commit -qm two && git status --short");
+	assert.equal(commit.status, 0, commit.stderr);
+	assert.equal(git(worktree.path, "log", "-2", "--format=%s").trim(), "two\none");
+	assert.equal(git(root, "rev-parse", "HEAD").trim(), parentHead);
+	const gitDir = join(realpathSync(root), ".git");
+	const refused = [
+		[`printf '#!/bin/sh\\necho hook\\n' > '${join(gitDir, "hooks", "pre-commit")}'`, "a parent's hook"],
+		[`git config --file '${join(gitDir, "config")}' core.hooksPath /tmp`, "the parent's config"],
+		[`echo x > '${join(gitDir, "info", "exclude")}'`, "the parent's info/exclude"],
+		[`git -C '${root}' update-ref refs/heads/${parentBranch} ${worktree.base}`, "the parent's branch"],
+		[`git -C '${root}' branch evil`, "a new branch"],
+		[`echo evil > '${join(root, "node_modules", ".bin", "vitest")}'`, "a node_modules/.bin shim"],
+		[`echo x > '${join(worktree.path, "node_modules", ".package-lock.json")}'`, "another node_modules dot-entry"],
+	] as const;
+	for (const [command, what] of refused) assert.notEqual(shell(command).status, 0, what);
+	assert.equal(existsSync(join(gitDir, "hooks", "pre-commit")), false);
+	assert.doesNotMatch(readFileSync(join(gitDir, "config"), "utf8"), /hooksPath/);
+	assert.equal(git(root, "rev-parse", parentBranch).trim(), parentHead);
+	assert.equal(existsSync(join(root, "node_modules", ".bin", "vitest")), false);
+	assert.equal(existsSync(join(root, "node_modules", ".package-lock.json")), false);
+});
+
 test("no sandbox for a workspace with no source checkout on disk", () => {
-	assert.equal(sandboxFor("/nonexistent/repo.worktrees/scout"), undefined);
+	assert.equal(sandboxFor({ path: "/nonexistent/repo.worktrees/scout", branch: "subagent/scout" }), undefined);
 });
