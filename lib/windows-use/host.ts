@@ -71,9 +71,22 @@ export class HostSession implements HostCalls {
 
 	private async connect(): Promise<McpLink> {
 		if (this.link && !this.link.closed) return this.link;
-		this.starting ??= Promise.resolve(this.options.launch())
-			.then((proc) => (this.link = new McpLink(proc, NAMES)))
-			.finally(() => { this.starting = undefined; });
+		this.starting ??= this.start().finally(() => { this.starting = undefined; });
 		return this.starting;
+	}
+
+	/**
+	 * A spawned child reports a failed start (EACCES, ENOEXEC) on the next tick,
+	 * before a promise callback runs, so a process launched synchronously gets
+	 * its link, and with it the link's error listener, at once.
+	 */
+	private start(): Promise<McpLink> {
+		try {
+			const launched = this.options.launch();
+			const adopt = (proc: ClientProcess) => (this.link = new McpLink(proc, NAMES));
+			return launched instanceof Promise ? launched.then(adopt) : Promise.resolve(adopt(launched));
+		} catch (error) {
+			return Promise.reject(error);
+		}
 	}
 }
