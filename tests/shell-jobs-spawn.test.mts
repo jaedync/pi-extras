@@ -8,9 +8,9 @@ import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanup, createFakePi, fire, shellJobs, sleep, tempDir } from "./support/shell-jobs-harness.mts";
+import { agentDir, cleanup, createFakePi, fire, shellJobs, sleep, tempDir } from "./support/shell-jobs-harness.mts";
 
 afterEach(cleanup);
 
@@ -68,6 +68,13 @@ async function started() {
 	await fire(app.handlers, "session_start", app.ctx);
 	return app;
 }
+
+describe("isolation", () => {
+	test("the harness points Pi's agent directory at a scratch directory of its own", () => {
+		assert.strictEqual(process.env.PI_CODING_AGENT_DIR, agentDir);
+		assert.ok(agentDir.startsWith(realpathSync(tmpdir())) || agentDir.startsWith(tmpdir()), agentDir);
+	});
+});
 
 describe("start", () => {
 	test("untitled jobs named from a bare slash start and free their slot", async () => {

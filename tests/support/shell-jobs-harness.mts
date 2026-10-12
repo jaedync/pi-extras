@@ -18,6 +18,14 @@ import type { Job } from "../../lib/shell-jobs-process.ts";
 
 import { agentRoot } from './pi-runtime.mjs';
 export { agentRoot };
+
+/**
+ * Pi's agent directory for every suite that loads shell-jobs: a job start reads
+ * (and briefly locks) its settings.json, so a direct run must never reach the real one.
+ */
+export const agentDir = mkdtempSync(join(tmpdir(), "shell-jobs-agent-"));
+process.env.PI_CODING_AGENT_DIR = agentDir;
+process.once("exit", () => rmSync(agentDir, { recursive: true, force: true }));
 const { createJiti } = createRequire(join(agentRoot, "package.json"))("jiti");
 const loaderOptions = {
 	alias: {
