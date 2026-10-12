@@ -85,6 +85,24 @@ test("warming starts the host once, ahead of its first call, and an unused warm 
 	await assert.rejects(broken.call("vms"), /no powershell\.exe/, "a failed warm-up surfaces on the call");
 });
 
+test("a host closed while it starts is stopped as it comes up, and the next call starts a new one", async () => {
+	for (const later of [false, true]) {
+		const first = fakeProcess(() => "first");
+		const second = fakeProcess(() => "second");
+		let launches = 0;
+		const pick = () => (++launches === 1 ? first.proc : second.proc);
+		const host = new HostSession({ idleMs: 60_000, launch: () => (later ? new Promise((resolve) => setTimeout(() => resolve(pick()), 10)) : pick()) });
+		const pending = host.call("vms");
+		host.close();
+		await assert.rejects(pending);
+		assert.equal(first.killed(), 1, `the first host is stopped (${later ? "async" : "sync"} launch)`);
+		assert.equal(host.state, "closed");
+		assert.equal(await host.call("vms"), "second");
+		assert.equal(launches, 2);
+		host.close();
+	}
+});
+
 test("the host closes itself after sitting idle", async () => {
 	const fake = fakeProcess(() => "ok");
 	const host = new HostSession({ idleMs: 20, launch: () => fake.proc });

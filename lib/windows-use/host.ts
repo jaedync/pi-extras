@@ -22,6 +22,8 @@ export class HostSession implements HostCalls {
 	private starting?: Promise<McpLink>;
 	private idleTimer?: NodeJS.Timeout;
 	private active = 0;
+	/** Counts close() calls, so a host that comes up after one is stopped instead of kept. */
+	private closes = 0;
 
 	constructor(options: HostSessionOptions) {
 		this.options = options;
@@ -65,14 +67,18 @@ export class HostSession implements HostCalls {
 
 	close(): void {
 		clearTimeout(this.idleTimer);
+		this.closes++;
+		this.starting = undefined;
 		this.link?.close();
 		this.link = undefined;
 	}
 
 	private async connect(): Promise<McpLink> {
 		if (this.link && !this.link.closed) return this.link;
-		this.starting ??= this.start().finally(() => { this.starting = undefined; });
-		return this.starting;
+		if (this.starting) return this.starting;
+		const starting = this.start().finally(() => { if (this.starting === starting) this.starting = undefined; });
+		this.starting = starting;
+		return starting;
 	}
 
 	/**
@@ -82,8 +88,15 @@ export class HostSession implements HostCalls {
 	 */
 	private start(): Promise<McpLink> {
 		try {
+			const closes = this.closes;
 			const launched = this.options.launch();
-			const adopt = (proc: ClientProcess) => (this.link = new McpLink(proc, NAMES));
+			const adopt = (proc: ClientProcess) => {
+				const link = new McpLink(proc, NAMES);
+				// A host that comes up after close() is stopped instead of kept until its idle timer.
+				if (closes === this.closes) return (this.link = link);
+				link.close();
+				throw new Error("windows_use host was closed while it started");
+			};
 			return launched instanceof Promise ? launched.then(adopt) : Promise.resolve(adopt(launched));
 		} catch (error) {
 			return Promise.reject(error);
