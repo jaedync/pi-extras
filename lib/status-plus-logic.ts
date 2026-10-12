@@ -61,8 +61,27 @@ export interface ModelCost extends CostRates {
 	tiers?: CostTier[];
 }
 
+const SYSTEM_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/**
+ * The zone to show times in, and why a requested one was not used. Every
+ * formatter throws on an unknown zone, and the footer formats on each frame.
+ */
+export function resolveTimeZone(requested: string | undefined): { timeZone: string; problem?: string } {
+	if (!requested) return { timeZone: SYSTEM_TIME_ZONE };
+	try {
+		new Intl.DateTimeFormat(undefined, { timeZone: requested });
+		return { timeZone: requested };
+	} catch {
+		return { timeZone: SYSTEM_TIME_ZONE, problem: `STATUSLINE_TZ is not a known time zone; times use ${SYSTEM_TIME_ZONE}` };
+	}
+}
+
+const statusZone = resolveTimeZone(process.env.STATUSLINE_TZ);
 /** Keep clock and reset labels in the user's zone unless explicitly overridden. */
-export const STATUS_TIME_ZONE = process.env.STATUSLINE_TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+export const STATUS_TIME_ZONE = statusZone.timeZone;
+/** Why STATUSLINE_TZ was not used, for status-plus to log. */
+export const STATUS_TIME_ZONE_PROBLEM = statusZone.problem;
 
 /** At least two decimals; small amounts keep two significant digits ($0.0012). */
 /** Decimal places that give `value` two significant figures below a dime, cents otherwise. */

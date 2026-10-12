@@ -12,7 +12,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { operationalError } from "../lib/operational-log.ts";
+import { operationalError, operationalLine } from "../lib/operational-log.ts";
 import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
@@ -20,7 +20,7 @@ import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolC
 import { sharedLimitStore } from "../lib/limit-store.ts";
 import { nextPollMs, readShared, writeShared, type SharedPoll } from "../lib/limit-share.ts";
 import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, PollRefused, REFRESH_INTERVAL_MS, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
-import { estimateUsageCost, freeProviders, toEpochMs, withPolledBalances, type PricedModel } from "../lib/status-plus-logic.ts";
+import { STATUS_TIME_ZONE_PROBLEM, estimateUsageCost, freeProviders, toEpochMs, withPolledBalances, type PricedModel } from "../lib/status-plus-logic.ts";
 import { splitMeshStatuses } from "../lib/status-plus-mesh.ts";
 import { TWEEN_FRAME_MS, flashIntensity, incrementAt, isActive, retarget, valueAt, type Tween } from "../lib/status-plus-tween.ts";
 import { EMPTY_PROVIDER, cacheState, cacheTtl } from "../lib/status-plus-render.ts";
@@ -48,6 +48,9 @@ const GO_BILLING_NOTE = "billing Zen";
 const FOOTER_FAILED = "status-plus: footer failed, see status-plus.log";
 /** Enough of an error to find its cause in the log. */
 const ERROR_TEXT_MAX = 200;
+
+/** An unknown STATUSLINE_TZ is logged with the first session, not with each one. */
+let zoneLogged = false;
 
 function errorText(error: unknown): string {
 	const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
@@ -516,6 +519,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		if (STATUS_TIME_ZONE_PROBLEM && !zoneLogged) operationalLine(LOG_FILE, `[status-plus] ${new Date().toISOString()} ${STATUS_TIME_ZONE_PROBLEM}`);
+		zoneLogged = true;
 		latestCtx = ctx;
 		liveChains.clear();
 		toolCount = readToolCount();
