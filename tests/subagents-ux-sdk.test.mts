@@ -172,15 +172,16 @@ test("a reviewer and an implementer loop two rounds by message; main wakes once 
 	try {
 		t.spawn("impl", "Implement the parser");
 		t.spawn("review", "Review impl's parser. Iterate with impl directly, then report.", { after: ["impl"] });
-		await until(() => t.team.get("review")?.state === "idle", "review approves");
+		await until(() => t.team.get("review")?.state === "idle" && t.team.get("impl")?.state === "idle", "review approves and impl ends");
 		await sleep(50);
 		const reviewSaw = t.team.messages("review").filter((message: any) => message.role === "user").map(said).join("\n");
 		assert.match(reviewSaw, /Fixed finding 1\.[\s\S]*Fixed finding 2\./, "two rounds");
 		assert.equal(t.delivered.filter((d) => d.kind !== "report").length, 0, "no note between them reaches main");
-		// impl's run that answers round 1 may still be going when round 2 arrives, which then steers into it.
+		// impl's run that answers a round may still be going when the next round arrives, which then steers into it,
+		// and its last report may land after review's.
 		const reports = t.delivered.map((d) => d.kind === "report" ? `${d.record.name}${d.quiet ? " (quiet)" : ""}` : d.kind);
-		assert.equal(reports.at(-1), "review");
-		assert.ok(reports.length >= 3 && reports.slice(0, -1).every((report) => report === "impl (quiet)"), reports.join(", "));
+		assert.deepEqual(reports.filter((report) => report.startsWith("review")), ["review"]);
+		assert.ok(reports.length >= 3 && reports.filter((report) => report.startsWith("impl")).every((report) => report === "impl (quiet)"), reports.join(", "));
 		assert.equal(t.wakes.length, 1, "one turn for main");
 		assert.match(t.wakes[0]!, /Approved: the parser is right after two rounds\./);
 	} finally { await t.close(); }
