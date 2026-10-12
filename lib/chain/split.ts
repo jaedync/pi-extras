@@ -43,10 +43,11 @@ const UNSAFE_FIRST_WORDS = new Set([
 	"function", "coproc", "exit", "exec", "return", "trap", "set",
 ]);
 // Values the rewrite would change: the step wrapper runs commands of its own and moves line numbers.
-// Any mention counts, since arithmetic reads them without a `$`; `$_` also as `${_:-x}` or `${#_}`.
-const SHELL_STATE = /\b(?:PIPESTATUS|LINENO|BASH_LINENO|BASH_COMMAND)\b|\$_(?![A-Za-z0-9_])|\$\{[#!]?_(?![A-Za-z0-9_])/;
+// Any mention counts, since arithmetic reads them without a `$`; `$_` also as `${_:-x}`, `${#_}` or a bare `_` in `(( ))`.
+const SHELL_STATE = /\b(?:PIPESTATUS|LINENO|BASH_LINENO|BASH_COMMAND)\b|\$_(?![A-Za-z0-9_])|\$\{[#!]?_(?![A-Za-z0-9_])|\(\([^()]*(?<![\w$])_(?!\w)/;
 // An alias defined on a line applies only from the next line on, and the rewrite puts each step on a line of its own.
-const ALIASES = /(?:^|[\s;&|({`])(?:un)?alias(?=\s|$)|\bexpand_aliases\b/;
+// Any mention of one counts, quoted, escaped or run through `eval`.
+const ALIASES = /\b(?:un)?alias\b|\bexpand_aliases\b|\beval\b/;
 // A backslash that escapes nothing: before the wrapper's newline it would join the step to the wrapper.
 const TRAILING_BACKSLASH = /(?:^|[^\\])(?:\\\\)*\\$/;
 const CD = /^cd\s+(?:"([^"$`\\]*)"|'([^']*)'|([^\s"'$`\\;&|()<>]+))$/;

@@ -116,6 +116,14 @@ test("the shell's own state in any form, and aliases, leave a command alone", ()
 		"alias e=echo; e hi",
 		"unalias e; e hi",
 		"shopt -s expand_aliases\ne hi",
+		"'alias' e=echo; e hi",
+		"\"alias\" e=echo; e hi",
+		"\\alias e=echo; e hi",
+		"eval 'alias e=echo'; e hi",
+		"eval \"$cmd\"; echo b",
+		"echo $((_)); echo b",
+		"x=1; echo $(( _ + 1 ))",
+		"(( _ > 0 )) && echo b",
 	]) {
 		assert.equal(splitChain(command), undefined, command);
 	}
