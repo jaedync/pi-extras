@@ -42,6 +42,7 @@ import {
 import { TopBorderLink, voiceRow } from "../lib/top-border.ts";
 import { EditorSlot } from "../lib/editor-wrapper.ts";
 import { isOffline } from "../lib/offline.ts";
+import { operationalError, operationalLine } from "../lib/operational-log.ts";
 import { backendOptions, backendSummary, CUDA_NOTE, type HardwareFacts, type TierId } from "../lib/voice/plan.ts";
 import {
 	floorReady,
@@ -52,10 +53,15 @@ import {
 	voiceHome,
 	writeTiers,
 	type Progress,
+	type ProvisionOptions,
 	type Tiers,
 } from "../lib/voice/provision.ts";
 
 export const DEFAULT_KEY = "ctrl+space";
+/** Operational notes in the voice home, beside daemon.log and provision.log. */
+const LOG_NAME = "voice.log";
+/** Enough of an error to find its cause in the log. */
+const ERROR_TEXT_MAX = 200;
 const DISABLED = new Set(["0", "off", "false", "none"]);
 const STATUS_KEY = "voice";
 const FRAME_MS = 100;
@@ -107,25 +113,58 @@ export function progressText(progress: Progress): string {
 	return progress.fraction === undefined ? progress.label : `${progress.label} ${Math.round(progress.fraction * 100)}%`;
 }
 
-/** Owns background setup so dictation can start before it finishes. */
-class Setup {
-	private readonly home: string;
-	private readonly onProgress: (label: string | undefined) => void;
-	private readonly onFinish: (failure: string | undefined, refused: readonly string[]) => void;
+export interface SetupOptions {
+	readonly home: string;
+	readonly onProgress: (label: string | undefined) => void;
+	readonly onFinish: (failure: string | undefined, refused: readonly string[]) => void;
+	/** A progress or finish callback threw, e.g. on a session's stale ctx. */
+	readonly onCallbackError: (error: unknown) => void;
+	readonly provision?: (options: ProvisionOptions) => Promise<"done" | "busy">;
+}
+
+/**
+ * Owns background setup so dictation can start before it finishes. Setup
+ * outlives the session that started it (/reload, /new, /resume), so after
+ * dispose it calls nothing back, and a callback that throws is only reported:
+ * a rejection from here would end Pi.
+ */
+export class Setup {
+	private readonly options: SetupOptions;
 	private running?: Promise<void>;
 	private failure?: string;
+	private disposed = false;
 	private requested: readonly TierId[] = [];
 	/** Upgrades the last run did not attempt, e.g. for lack of disk space. */
 	readonly skipped = new Map<TierId, string>();
 
-	constructor(
-		home: string,
-		onProgress: (label: string | undefined) => void,
-		onFinish: (failure: string | undefined, refused: readonly string[]) => void,
-	) {
-		this.home = home;
-		this.onProgress = onProgress;
-		this.onFinish = onFinish;
+	constructor(options: SetupOptions) {
+		this.options = options;
+	}
+
+	private get home(): string {
+		return this.options.home;
+	}
+
+	/** The download itself goes on, so the next session finds it done; this one hears nothing more. */
+	dispose(): void {
+		this.disposed = true;
+	}
+
+	private progress(label: string | undefined): void {
+		this.callBack(() => this.options.onProgress(label));
+	}
+
+	private finish(failure: string | undefined, refused: readonly string[]): void {
+		this.callBack(() => this.options.onFinish(failure, refused));
+	}
+
+	private callBack(callback: () => void): void {
+		if (this.disposed) return;
+		try {
+			callback();
+		} catch (error) {
+			this.options.onCallbackError(error);
+		}
 	}
 
 	get busy(): boolean {
@@ -137,36 +176,39 @@ class Setup {
 	}
 
 	start(extraTiers: readonly TierId[] = []): void {
-		if (this.running) return;
+		if (this.running || this.disposed) return;
 		this.failure = undefined;
 		this.requested = extraTiers;
 		this.skipped.clear();
-		this.running = this.run(extraTiers).finally(() => (this.running = undefined));
+		this.running = this.run(extraTiers)
+			.catch((error: unknown) => this.options.onCallbackError(error))
+			.finally(() => (this.running = undefined));
 	}
 
 	private async run(extraTiers: readonly TierId[]): Promise<void> {
+		const provisionTiers = this.options.provision ?? provision;
 		try {
 			for (;;) {
-				const result = await provision({
+				const result = await provisionTiers({
 					home: this.home,
 					facts: hardwareFacts(),
 					env: process.env,
 					homedir: homedir(),
 					extraTiers,
-					onProgress: (p) => this.onProgress(p && progressText(p)),
+					onProgress: (p) => this.progress(p && progressText(p)),
 					onSkip: (tier, reason) => this.skipped.set(tier, reason),
 				});
-				if (result === "done") break;
+				if (result === "done" || this.disposed) break;
 				// Another Pi session is provisioning; wait for it rather than racing it.
 				await sleep(BUSY_POLL_MS);
 			}
-			this.onProgress(undefined);
+			this.progress(undefined);
 			// Only a tier the user just asked for is worth interrupting them about.
-			this.onFinish(undefined, this.requested.flatMap((tier) => this.skipped.get(tier) ?? []));
+			this.finish(undefined, this.requested.flatMap((tier) => this.skipped.get(tier) ?? []));
 		} catch (error) {
 			this.failure = (error as Error).message;
-			this.onProgress(undefined);
-			this.onFinish(this.failure, []);
+			this.progress(undefined);
+			this.finish(this.failure, []);
 		}
 	}
 
@@ -178,6 +220,33 @@ class Setup {
 			if (!this.running) throw new Error(this.failure ? `voice setup failed: ${this.failure}` : "voice is not set up yet (/voice setup)");
 			await Promise.race([this.running, sleep(BUSY_POLL_MS)]);
 		}
+	}
+}
+
+/**
+ * Starts the shared daemon, detached. A python that exists but cannot run (no
+ * exec bit, a noexec mount) fails after spawn returns, as an 'error' event that
+ * would end Pi without a listener. It goes to daemon.log and to `onError`.
+ */
+export function spawnVoiceDaemon(python: string, home: string, onError: (message: string) => void = () => {}): void {
+	const logPath = join(home, "daemon.log");
+	if (existsSync(logPath) && statSync(logPath).size > MAX_LOG_BYTES) renameSync(logPath, `${logPath}.old`);
+	const log = openSync(logPath, "a", 0o600);
+	try {
+		const child = spawn(python, [DAEMON, "--home", home], {
+			detached: true,
+			stdio: ["ignore", log, log],
+			// Models are provisioned ahead of time; the daemon must never fetch at load.
+			env: { ...process.env, HF_HUB_OFFLINE: "1", PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1" },
+		});
+		child.on("error", (error: NodeJS.ErrnoException) => {
+			const message = `${error.code ?? error.name} running ${python}`;
+			operationalLine(logPath, `[voice] ${new Date().toISOString()} daemon could not start: ${message}`);
+			onError(message);
+		});
+		child.unref();
+	} finally {
+		closeSync(log);
 	}
 }
 
@@ -206,6 +275,10 @@ class VoiceRuntime {
 	private warnedMissingMic?: string;
 	private shown = false;
 	private timer?: ReturnType<typeof setInterval>;
+	/** Set by dispose: the session's ctx may be stale from then on. */
+	private disposed = false;
+	/** Why the last daemon spawn failed, for the connect error. */
+	private spawnError?: string;
 
 	constructor(ctx: ExtensionContext, useBorder: boolean, requestRender: () => void, onShown: (shown: boolean) => void = () => {}) {
 		this.ctx = ctx;
@@ -216,22 +289,28 @@ class VoiceRuntime {
 		mkdirSync(join(this.home, "sessions"), { recursive: true, mode: 0o700 });
 		this.lease = join(this.home, "sessions", String(process.pid));
 		writeFileSync(this.lease, "");
-		this.setup = new Setup(
-			this.home,
-			(label) => {
+		this.setup = new Setup({
+			home: this.home,
+			onProgress: (label) => {
 				this.setupLabel = label;
 				this.controller.setSetupMessage(label);
 				this.refresh();
 			},
-			(failure, refused) => this.onSetupFinished(failure, refused),
-		);
+			onFinish: (failure, refused) => this.onSetupFinished(failure, refused),
+			onCallbackError: (error) => this.logError("setup callback", error),
+		});
 		this.client = new DaemonClient({ socketPath: join(this.home, "daemon.sock"), spawnDaemon: () => this.spawnDaemon() });
 		const link: DaemonLink = {
 			onEvent: () => {},
 			onClose: () => {},
 			connect: async () => {
 				this.pythonPath = await this.setup.ready();
-				await this.client.connect();
+				this.spawnError = undefined;
+				try {
+					await this.client.connect();
+				} catch (error) {
+					throw this.spawnError ? new Error(`voice daemon could not start: ${this.spawnError} (see daemon.log)`) : error;
+				}
 			},
 			send: (message) => this.client.send(message),
 		};
@@ -253,8 +332,12 @@ class VoiceRuntime {
 					this.view = view;
 					this.refresh();
 				},
-				paste: (text) => ctx.ui.pasteToEditor(text),
-				getEditorText: () => ctx.ui.getEditorText(),
+				paste: (text) => this.withUi("paste", () => ctx.ui.pasteToEditor(text)),
+				getEditorText: () => {
+					let text = "";
+					this.withUi("read the editor", () => (text = ctx.ui.getEditorText()));
+					return text;
+				},
 			},
 		});
 		this.unsubscribe = ctx.ui.onTerminalInput((data) => this.controller.handleInput(data));
@@ -274,7 +357,8 @@ class VoiceRuntime {
 		const mic = saved || this.desktopRoute ? resolveMic(saved, listMics(this.desktopRoute)) : {};
 		if (mic.missing && mic.missing !== this.warnedMissingMic) {
 			this.warnedMissingMic = mic.missing;
-			this.ctx.ui.notify(`${mic.missing} is not connected, so voice is using the system default. /voice mic changes it.`, "warning");
+			const missing = mic.missing;
+			this.withUi("notify", () => this.ctx.ui.notify(`${missing} is not connected, so voice is using the system default. /voice mic changes it.`, "warning"));
 		}
 		return this.desktopRoute ? startMacDesktopCapture(callbacks, this.home, mic) : startCapture(callbacks, mic.device);
 	}
@@ -288,19 +372,26 @@ class VoiceRuntime {
 	}
 
 	private spawnDaemon(): void {
-		const logPath = join(this.home, "daemon.log");
-		if (existsSync(logPath) && statSync(logPath).size > MAX_LOG_BYTES) renameSync(logPath, `${logPath}.old`);
-		const log = openSync(logPath, "a", 0o600);
+		spawnVoiceDaemon(this.pythonPath, this.home, (message) => (this.spawnError = message));
+	}
+
+	/**
+	 * The session's ctx goes stale on /reload, /new and /resume, and every
+	 * ctx.ui call on it throws. Timers, setup and the daemon outlive a call, and
+	 * a throw from them ends Pi, so their UI calls stop at dispose and are caught.
+	 */
+	private withUi(what: string, use: () => void): void {
+		if (this.disposed) return;
 		try {
-			spawn(this.pythonPath, [DAEMON, "--home", this.home], {
-				detached: true,
-				stdio: ["ignore", log, log],
-				// Models are provisioned ahead of time; the daemon must never fetch at load.
-				env: { ...process.env, HF_HUB_OFFLINE: "1", PYTHONUNBUFFERED: "1", PYTHONDONTWRITEBYTECODE: "1" },
-			}).unref();
-		} finally {
-			closeSync(log);
+			use();
+		} catch (error) {
+			this.logError(what, error);
 		}
+	}
+
+	private logError(what: string, error: unknown): void {
+		const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+		operationalError(join(this.home, LOG_NAME), "voice", `${what} failed: ${text.slice(0, ERROR_TEXT_MAX)}`);
 	}
 
 	/** Keeps the blink animating; the editor border reads state on each render. */
@@ -322,6 +413,10 @@ class VoiceRuntime {
 	}
 
 	private repaint(): void {
+		this.withUi("repaint", () => this.paint());
+	}
+
+	private paint(): void {
 		if (this.useBorder) {
 			// Setup progress lives in the footer only while the border row is idle.
 			const footer = this.view ? undefined : this.setupLabel && `voice: ${this.setupLabel}`;
@@ -334,15 +429,17 @@ class VoiceRuntime {
 	}
 
 	private onSetupFinished(failure: string | undefined, refused: readonly string[]): void {
-		if (failure) {
-			this.ctx.ui.notify(`Voice setup failed: ${failure}`, "error");
-			return;
-		}
-		if (refused.length > 0) {
-			this.ctx.ui.notify(`Not enough disk space: ${refused.join("; ")}. Model: ${modelSummary(readTiers(this.home))}.`, "warning");
-			return;
-		}
-		this.ctx.ui.notify(`Voice is ready. Model: ${modelSummary(readTiers(this.home))}.`, "info");
+		this.withUi("notify", () => {
+			if (failure) {
+				this.ctx.ui.notify(`Voice setup failed: ${failure}`, "error");
+				return;
+			}
+			if (refused.length > 0) {
+				this.ctx.ui.notify(`Not enough disk space: ${refused.join("; ")}. Model: ${modelSummary(readTiers(this.home))}.`, "warning");
+				return;
+			}
+			this.ctx.ui.notify(`Voice is ready. Model: ${modelSummary(readTiers(this.home))}.`, "info");
+		});
 	}
 
 	/** Plain /voice: every entry shows its current value. */
@@ -460,13 +557,15 @@ class VoiceRuntime {
 	}
 
 	dispose(): void {
+		this.setup.dispose();
 		this.controller.dispose();
 		this.unsubscribe();
 		this.client.close();
 		clearInterval(this.timer);
 		this.timer = undefined;
 		rmSync(this.lease, { force: true });
-		this.ctx.ui.setStatus(STATUS_KEY, undefined);
+		this.withUi("clear the status", () => this.ctx.ui.setStatus(STATUS_KEY, undefined));
+		this.disposed = true;
 	}
 }
 
