@@ -70,8 +70,8 @@ export function slugify(text: string, max = MAX_JOB_ID): string {
 const WRAPPERS = new Set(["sudo", "env", "npx", "bunx", "pnpx", "nohup", "time", "exec", "command", "nice", "caffeinate"]);
 const RUNNERS = new Set(["npm", "pnpm", "yarn", "bun"]);
 
-/** The part of a path or script name that names it: `scripts/serve.mjs` → `serve`. */
-const stem = (word: string) => (word.includes("/") || /\.[a-z0-9]+$/i.test(word) ? word.split("/").filter(Boolean).at(-1)!.replace(/\.[^.]+$/, "") : word);
+/** The part of a path or script name that names it: `scripts/serve.mjs` → `serve`. A bare `/` names nothing. */
+const stem = (word: string) => (word.includes("/") || /\.[a-z0-9]+$/i.test(word) ? (word.split("/").filter(Boolean).at(-1) ?? "").replace(/\.[^.]+$/, "") : word);
 
 /** A name for an untitled job: the program and what it runs, e.g. `npm test` → `npm-test`. */
 export function commandSlug(command: string): string {

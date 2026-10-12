@@ -200,15 +200,16 @@ async function startJob(
 	if (liveCount(runtime) >= MAX_LIVE) {
 		return errResult(`Too many live jobs (max ${MAX_LIVE}). Kill one or wait for one to finish.`);
 	}
+	// A name rather than a number, so the model and the user can both refer to it.
+	// Sibling starts run in parallel, so a name is held from here until the job is registered.
+	// It is chosen before the slot is reserved: a throw here must not hold a slot the finally below never frees.
+	const reserved = reservedIds(runtime);
+	const id = jobIdFor(title, command, (candidate) =>
+		runtime.jobs.has(candidate) || reserved.has(candidate) || (runtime.logDir !== null && existsSync(join(runtime.logDir, `${candidate}.log`))));
 	// Reserve the slot synchronously; pi runs sibling tool calls in parallel, so
 	// the registry alone cannot enforce the limit until spawn resolves.
 	runtime.pending += 1;
 	runtime.counter += 1;
-	// A name rather than a number, so the model and the user can both refer to it.
-	// Sibling starts run in parallel, so a name is held from here until the job is registered.
-	const reserved = reservedIds(runtime);
-	const id = jobIdFor(title, command, (candidate) =>
-		runtime.jobs.has(candidate) || reserved.has(candidate) || (runtime.logDir !== null && existsSync(join(runtime.logDir, `${candidate}.log`))));
 	reserved.add(id);
 	let pendingPid: number | null = null;
 	try {

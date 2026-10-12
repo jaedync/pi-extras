@@ -95,6 +95,14 @@ describe("ids", () => {
 		assert.strictEqual(jobIdFor("A very long title that keeps going and going", "x", none), "a-very-long-title-that");
 		assert.ok(jobIdFor("x".repeat(80), "x", none).length <= MAX_JOB_ID);
 	});
+	test("a path made only of slashes names no part, and never throws", () => {
+		const none = () => false;
+		assert.strictEqual(jobIdFor(null, "ls /", none), "ls");
+		assert.strictEqual(jobIdFor(null, "du -sh ./", none), "du");
+		assert.strictEqual(jobIdFor(null, "cd / && make", none), "cd");
+		assert.strictEqual(jobIdFor(null, "/ x", none), "x");
+		assert.strictEqual(jobIdFor(null, "//", none), "job");
+	});
 	test("a name already taken gets a number, and one that looks like an old id a prefix", () => {
 		const taken = new Set(["npm-test", "npm-test-2"]);
 		assert.strictEqual(jobIdFor(null, "npm test", (id) => taken.has(id)), "npm-test-3");
