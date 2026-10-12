@@ -45,6 +45,21 @@ export function handUp(host: HandUpHost, record: AgentRecord, silent: boolean): 
 	}
 }
 
+/**
+ * A resume that could not launch: its parent, and main when main asked it,
+ * get the failure; anyone else it owed an answer hears that none will come.
+ */
+export function handUpFailure(host: HandUpHost, failure: AgentRecord, owedMain: boolean): void {
+	const text = reportText(failure, host.now());
+	const { unanswered } = payOwed(host, failure);
+	const asked = host.questions.of(failure.parent).find((question) => question.to === failure.name);
+	if (asked) asked.resolve(text);
+	else if (failure.parent === MAIN) host.deliverToMain({ kind: "report", record: failure });
+	else host.routing.deliver(failure.name, failure.parent, text, true);
+	if (owedMain && failure.parent !== MAIN) host.deliverToMain({ kind: "report", record: failure });
+	for (const asker of unanswered) host.routing.deliver(failure.name, asker, `${failure.name} ended without answering you. ${text}`, true, `Report from ${failure.name}`);
+}
+
 /** Settles what `record` owed: whether its parent asked it, and who else did. */
 function payOwed(host: HandUpHost, record: AgentRecord): { parentAsked: boolean; unanswered: string[] } {
 	const unanswered: string[] = [];

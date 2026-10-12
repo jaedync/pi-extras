@@ -15,7 +15,6 @@
 import { randomUUID } from "node:crypto";
 import { afterBlock, afterError, queuedActivity, stopOrder, waitingFor } from "./after.ts";
 import { MAIN, nameFor } from "./names.ts";
-import { reportText } from "./format.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
 import { checkError, mergeCheck, RunChecks } from "./checks.ts";
@@ -26,7 +25,7 @@ import { stillUnread, unreadToInbox } from "./mailbox.ts";
 import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
 import { ResumePrompts } from "./resume-prompts.ts";
-import { handUp, type HandUpHost } from "./hand-up.ts";
+import { handUp, handUpFailure, type HandUpHost } from "./hand-up.ts";
 import { saveReport } from "./reports.ts";
 import { causeWords, staleCauses, SWAP_NOTE, swapActivity, swapDue, TurnSwaps } from "./swap.ts";
 import { Routing, type SendOptions } from "./routing.ts";
@@ -437,7 +436,7 @@ export class Team implements HostTeam {
 		this.checks.end(name);
 		this.swaps.end(name);
 		this.sessions.endRun(name);
-		this.routing.ended(name);
+		const { owedMain } = this.routing.ended(name);
 		this.forgetAnswer(name);
 		this.patch(name, { state: "interrupted", error: message, restoreError: message, launchError: message,
 			launchFailures: (previous.launchFailures ?? 0) + 1, endedAt: this.now(), activity: `resume launch failed: ${message}`,
@@ -447,10 +446,7 @@ export class Team implements HostTeam {
 		this.waiters.delete(name);
 		const failure = { ...record, reportFile: undefined,
 			report: `Resume launch failed: ${message}. The child remains interrupted; fix the problem and resume it again.` };
-		const asked = this.questions.of(record.parent).find((question) => question.to === name);
-		if (asked) asked.resolve(reportText(failure, this.now()));
-		else if (record.parent === MAIN) this.options.deliverToMain({ kind: "report", record: failure });
-		else this.routing.deliver(name, record.parent, reportText(failure, this.now()), true);
+		handUpFailure(this.handUpHost, failure, owedMain);
 		this.pump();
 	}
 
@@ -615,10 +611,14 @@ export class Team implements HostTeam {
 		return { minutes: record.maxMinutes ?? this.options.runBudget?.minutes, cost: record.maxCost ?? this.options.runBudget?.cost };
 	}
 
-	/** What a run that ends now would still wait for: its live subagents, or answers it is owed; undefined when nothing. */
+	/**
+	 * What a run that ends now would still wait for: its live subagents, or
+	 * answers it is owed by agents that still run; undefined when nothing. One
+	 * that ended or is paused can't answer until something resumes it.
+	 */
 	private waitsFor(name: string): string | undefined {
 		if (this.list().some((entry) => entry.parent === name && LIVE_STATES.has(entry.state))) return "waiting on its subagents";
-		const owing = this.records.get(name)?.owed ?? [];
+		const owing = (this.records.get(name)?.owed ?? []).filter((other) => LIVE_STATES.has(this.records.get(other)?.state ?? "idle"));
 		return owing.length > 0 ? `waiting for ${owing.join(", ")} to answer` : undefined;
 	}
 
