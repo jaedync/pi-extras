@@ -22,6 +22,8 @@ export interface ChainStep {
 	readonly end: number;
 	/** A leading `cd <dir>`, shown as a location rather than a step. */
 	readonly cd?: true;
+	/** A line break comes before this step, not only a `;`; the rewrite keeps it on a line of its own. */
+	readonly line?: true;
 }
 
 export interface Chain {
@@ -71,6 +73,7 @@ function scan(s: string): Chain | undefined {
 	const steps: ChainStep[] = [];
 	let stepStart = 0;
 	let pending: ChainOp | null = null;
+	let pendingLine = false;
 
 	const finish = (end: number, next: ChainOp | null) => {
 		const raw = s.slice(stepStart, end);
@@ -85,8 +88,9 @@ function scan(s: string): Chain | undefined {
 		}
 		// The trim above can also take a space a backslash escaped, which leaves the backslash bare.
 		if (TRAILING_BACKSLASH.test(text)) fail();
-		steps.push({ op: steps.length === 0 ? null : pending, text, start: stepStart + lead, end: stepStart + body.length });
+		steps.push({ op: steps.length === 0 ? null : pending, text, start: stepStart + lead, end: stepStart + body.length, ...(pendingLine && steps.length > 0 ? { line: true as const } : {}) });
 		pending = next;
+		pendingLine = false;
 	};
 
 	const wordStart = (i: number) => i === 0 || WORD_BREAK.test(s[i - 1]!);
@@ -211,6 +215,7 @@ function scan(s: string): Chain | undefined {
 		if (ch === "\n") {
 			if (pipeBefore(i)) fail();
 			finish(i, ";");
+			pendingLine = true;
 			stepStart = ++i;
 			continue;
 		}

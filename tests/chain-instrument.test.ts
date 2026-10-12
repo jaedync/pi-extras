@@ -116,6 +116,32 @@ test("errexit set inside the command, from SHELLOPTS or from BASH_ENV changes no
 	}
 });
 
+// bash drops the rest of a line after an arithmetic error, so steps joined by `;` must share a line, and steps on lines of their own must not.
+const ARITHMETIC_COMMANDS = [
+	"m=08; echo $((m+1)); echo next",
+	"m=08; echo $((m+1)) && echo ok; echo next",
+	"echo a\necho $((08))\necho n",
+	"x=; echo $((x+)); echo after",
+	"echo $[1/0]; echo after",
+	"echo a;\necho $((08)); echo b\necho c",
+	"echo a; { echo $((08)); }; echo b",
+];
+// A newer bash than macOS ships, when one was built for the review.
+const BASH5 = "/tmp/review-d/bash5/bin/bash";
+
+for (const shell of ["/bin/bash", BASH5, "/bin/sh", "/bin/zsh"]) {
+	test(`an arithmetic error ends as much of the script as without the rewrite in ${shell}`, { skip: !existsSync(shell) }, () => {
+		for (const prefix of ["", "set -e"]) {
+			for (const command of ARITHMETIC_COMMANDS) {
+				const { original, rewritten } = compareUnder(shell, command, prefix);
+				// Line numbers in the error text move with the rewrite, as they always did.
+				const lineless = (run: typeof original) => ({ ...run, stderr: run.stderr.replace(/(?:line )?\d+: /g, "") });
+				assert.deepEqual(lineless(rewritten), lineless(original), `${prefix} ${command}`);
+			}
+		}
+	});
+}
+
 test("each step reports its start and its exit status", { skip: !existsSync("/bin/bash") }, () => {
 	const { marks } = compare("/bin/bash", "echo a && false || echo c; (exit 4)");
 	assert.deepEqual(marks, [

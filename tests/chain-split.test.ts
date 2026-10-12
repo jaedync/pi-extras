@@ -13,6 +13,10 @@ test("||, ; and newlines separate steps too, and blank lines are dropped", () =>
 	assert.deepEqual(steps("a; b\n\nc\n"), [[null, "a"], [";", "b"], [";", "c"]]);
 });
 
+test("a step after a line break is marked, and one after only a ; is not", () => {
+	assert.deepEqual(splitChain("a; b\nc;\n\nd")?.steps.map((step) => step.line === true), [false, false, true, true]);
+});
+
 test("a leading cd is marked as a location", () => {
 	const chain = splitChain("cd src && npm test && npm run build");
 	assert.equal(chain?.cd, "src");

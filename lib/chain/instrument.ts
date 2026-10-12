@@ -47,7 +47,9 @@ export function instrument(chain: Chain, nonce: string): string {
 		const n = index + 1;
 		const group = `{ __pi_m s ${n}; __pi_r "$__pi_s" && :; ${step.text}\n__pi_s=$?; __pi_m e ${n} "$__pi_s"; __pi_r "$__pi_s" && :; }`;
 		if (index === 0) body = group;
-		else body += step.op === ";" ? `\n${group}` : ` ${step.op} ${group}`;
+		// A `;` keeps the next step on the same line and a line break on the next one:
+		// bash drops the rest of a line after an arithmetic error, and only the rest.
+		else body += step.op !== ";" ? ` ${step.op} ${group}` : step.line ? `\n${group}` : `; ${group}`;
 	});
 	return `${prologue}\n${body}`;
 }
