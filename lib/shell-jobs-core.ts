@@ -105,11 +105,6 @@ export function jobIdFor(title: string | null, command: string, taken: (id: stri
 	}
 }
 
-export function resolveShellPath(env: NodeJS.ProcessEnv): string {
-	const shell = typeof env.SHELL === "string" ? env.SHELL.trim() : "";
-	return shell.length > 0 ? shell : "/bin/sh";
-}
-
 /** Where a job runs: the session's directory, or a path the model gave, read from there as a shell would. */
 export function resolveJobCwd(raw: string | undefined, sessionCwd: string, home: string): string {
 	if (raw === undefined) return sessionCwd;

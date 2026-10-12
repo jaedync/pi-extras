@@ -7,7 +7,7 @@
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { ChildProcess } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { cleanup, createFakePi, fire, shellJobs, sleep, tempDir } from "./support/shell-jobs-harness.mts";
@@ -29,13 +29,37 @@ async function withAgentDir<T>(body: (dir: string) => Promise<T>): Promise<T> {
 
 /** Record each child process made while it is on; every spawn goes through this prototype method. */
 function captureSpawns(): { children: ChildProcess[]; restore(): void } {
-	const original = ChildProcess.prototype.spawn;
+	// `spawn` is an internal method, so the types do not list it.
+	const proto = ChildProcess.prototype as unknown as { spawn(this: ChildProcess, ...args: unknown[]): unknown };
+	const original = proto.spawn;
 	const children: ChildProcess[] = [];
-	ChildProcess.prototype.spawn = function (this: ChildProcess, ...args: Parameters<typeof original>) {
+	proto.spawn = function (this: ChildProcess, ...args: unknown[]) {
 		children.push(this);
 		return original.apply(this, args);
 	};
-	return { children, restore() { ChildProcess.prototype.spawn = original; } };
+	return { children, restore() { proto.spawn = original; } };
+}
+
+/** Run `body` with some process variables set, as a parent Pi or a login shell would leave them. */
+async function withEnv<T>(values: Record<string, string>, body: () => Promise<T>): Promise<T> {
+	const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
+	Object.assign(process.env, values);
+	try {
+		return await body();
+	} finally {
+		for (const [key, value] of Object.entries(previous)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
+}
+
+/** Start one job and return what it printed once it is done. */
+async function output(app: Awaited<ReturnType<typeof started>>, command: string): Promise<string> {
+	const result = await app.tools.get("shell_job_start").execute(`t-${Math.random()}`, { command, title: "Probe" }, undefined, undefined, app.ctx);
+	assert.notStrictEqual(result.isError, true, result.content[0].text);
+	for (let waited = 0; waited < 3000 && app.messages.every((m) => m.message.details?.id !== result.details.id); waited += 50) await sleep(50);
+	return readFileSync(result.details.logPath, "utf8").trim();
 }
 
 async function started() {
@@ -84,5 +108,47 @@ describe("start", () => {
 		await sleep(400);
 		assert.strictEqual(realpathSync(readFileSync(relative.details.logPath, "utf8").trim()), realpathSync(join(app.ctx.cwd, "sub")));
 		assert.strictEqual(realpathSync(readFileSync(home.details.logPath, "utf8").trim()), realpathSync(homedir()));
+	});
+});
+
+describe("shell and environment, as Pi's bash tool has them", () => {
+	const which = 'echo "${BASH_VERSION:+bash}${ZSH_VERSION:+zsh}"';
+
+	test("a job runs in Pi's shell, not the login shell", { skip: !existsSync("/bin/zsh") }, async () => {
+		await withAgentDir(() => withEnv({ SHELL: "/bin/zsh" }, async () => {
+			const app = await started();
+			assert.strictEqual(await output(app, which), "bash");
+			assert.strictEqual(await output(app, "echo *.nomatch-glob"), "*.nomatch-glob");
+		}));
+	});
+
+	test("Pi's shellPath and shellCommandPrefix settings apply to a job", { skip: !existsSync("/bin/zsh") }, async () => {
+		await withAgentDir(async (dir) => {
+			writeFileSync(join(dir, "settings.json"), JSON.stringify({ shellPath: "/bin/zsh", shellCommandPrefix: "export JOB_PREFIX=applied" }));
+			const app = await started();
+			assert.strictEqual(await output(app, `${which}; echo $JOB_PREFIX`), "zsh\napplied");
+		});
+	});
+
+	test("a shellPath that does not exist fails the start with Pi's reason", async () => {
+		await withAgentDir(async (dir) => {
+			writeFileSync(join(dir, "settings.json"), JSON.stringify({ shellPath: join(dir, "no-such-shell") }));
+			const app = await started();
+			const result = await app.tools.get("shell_job_start").execute("t1", { command: "true" }, undefined, undefined, app.ctx);
+			assert.strictEqual(result.isError, true);
+			assert.match(result.content[0].text, /Custom shell path not found/);
+		});
+	});
+
+	test("a job gets Pi's bin directory first in PATH and this session's PI_ variables", async () => {
+		await withAgentDir((dir) => withEnv({ PI_SESSION_ID: "stale-parent", PI_SESSION_FILE: "/stale.jsonl", PI_MODEL: "parent-model", PI_PROVIDER: "parent", PI_REASONING_LEVEL: "high" }, async () => {
+			const app = await started();
+			Object.assign(app.ctx, {
+				sessionManager: { ...app.ctx.sessionManager, getSessionId: () => "this-session", getSessionFile: () => undefined },
+				model: { provider: "anthropic", id: "claude-x" },
+			});
+			const printed = await output(app, 'echo "${PATH%%:*}|${PI_SESSION_ID-unset}|${PI_SESSION_FILE-unset}|${PI_PROVIDER-unset}|${PI_MODEL-unset}|${PI_REASONING_LEVEL-unset}"');
+			assert.strictEqual(printed, `${join(dir, "bin")}|this-session|unset|anthropic|claude-x|unset`);
+		}));
 	});
 });

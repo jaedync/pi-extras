@@ -22,7 +22,7 @@ import { once } from "node:events";
 import { closeSync, existsSync, mkdtempSync, openSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, getShellConfig, SettingsManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import type { Motion } from "../lib/band/band.ts";
@@ -40,7 +40,6 @@ import {
 	JOB_ID_PATTERN,
 	jobIdFor,
 	resolveJobCwd,
-	resolveShellPath,
 	sanitizeControl,
 	utf8Head,
 	validateManageParams,
@@ -62,6 +61,7 @@ import {
 	takeReload,
 } from "../lib/shell-jobs-process.ts";
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, reconcileDeliveries } from "../lib/shell-jobs-delivery.ts";
+import { jobEnv, type Launch, launchArgs, type SessionFacts } from "../lib/shell-jobs-launch.ts";
 import { watchMotion } from "../lib/extras-config.ts";
 import { operationalError } from "../lib/operational-log.ts";
 import { type ClickTarget, clickToInspect, type InspectorHost, openInspector } from "../lib/shell-jobs-inspector.ts";
@@ -95,6 +95,32 @@ function logError(what: string, error: unknown): void {
 }
 
 const jobsWidget = (motion: () => Motion) => createJobsWidget(motion, (error) => logError("widget render failed", error));
+
+/** What Pi's bash tool would set for this session; older cores and test contexts may lack any of it. */
+function sessionFacts(ctx: ExtensionContext): SessionFacts {
+	const session = ctx.sessionManager as { getSessionId?: () => string; getSessionFile?: () => string | undefined } | undefined;
+	const facts: Record<string, string | undefined> = {
+		sessionId: typeof session?.getSessionId === "function" ? session.getSessionId() : undefined,
+		sessionFile: typeof session?.getSessionFile === "function" ? session.getSessionFile() : undefined,
+		provider: ctx.model?.provider,
+		model: ctx.model?.id,
+		thinkingLevel: ctx.thinkingLevel,
+	};
+	return Object.fromEntries(Object.entries(facts).filter(([, value]) => typeof value === "string" && value.length > 0));
+}
+
+/** The shell, arguments and environment Pi's bash tool would use for this command in this session. */
+function launchFor(ctx: ExtensionContext, sessionCwd: string, command: string): Launch {
+	const agentDir = getAgentDir();
+	const trusted = typeof ctx.isProjectTrusted === "function" && ctx.isProjectTrusted();
+	const settings = SettingsManager.create(sessionCwd, agentDir, { projectTrusted: trusted });
+	const config = getShellConfig(settings.getShellPath());
+	return {
+		shell: config.shell,
+		args: launchArgs(config, command, settings.getShellCommandPrefix()),
+		env: jobEnv(process.env, join(agentDir, "bin"), sessionFacts(ctx)),
+	};
+}
 
 /** The render context pi passes to tool renderers; older cores pass nothing. */
 type RowContext = { toolCallId?: unknown; expanded?: boolean; state?: unknown; isPartial?: boolean; executionStarted?: boolean; isError?: boolean } | undefined;
@@ -203,6 +229,7 @@ function trimRetained(runtime: Runtime): void {
 
 async function startJob(
 	runtime: Runtime,
+	launch: Launch,
 	command: string,
 	cwd: string,
 	title: string | null,
@@ -236,12 +263,12 @@ async function startJob(
 		} catch (error) {
 			return errResult(`Could not create the job log: ${(error as Error).message}`);
 		}
-		const shell = resolveShellPath(process.env);
+		const shell = launch.shell;
 		let child: ReturnType<typeof spawn>;
 		try {
-			child = spawn(shell, ["-c", command], {
+			child = spawn(shell, [...launch.args], {
 				cwd,
-				env: process.env,
+				env: launch.env,
 				detached: true,
 				stdio: ["ignore", fd, fd],
 			});
@@ -526,7 +553,13 @@ export default function shellJobs(pi: ExtensionAPI): void {
 				return errResult(`Working directory does not exist: ${cwd}`);
 			}
 			if (runtime.closing) return errResult("This session is shutting down; cannot start new jobs.");
-			return startJob(runtime, validation.command, cwd, validation.title ?? null, typeof toolCallId === "string" ? toolCallId : null);
+			let launch: Launch;
+			try {
+				launch = launchFor(ctx, sessionCwd, validation.command);
+			} catch (error) {
+				return errResult(`Could not prepare the shell: ${(error as Error).message}. Pi's shellPath setting chooses it.`);
+			}
+			return startJob(runtime, launch, validation.command, cwd, validation.title ?? null, typeof toolCallId === "string" ? toolCallId : null);
 		},
 		// The row draws its own band, as Tool Display's rows do.
 		renderShell: "self" as const,

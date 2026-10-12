@@ -35,7 +35,6 @@ import {
 	readLogEnd,
 	readLogTail,
 	readLogWindow,
-	resolveShellPath,
 	sanitizeControl,
 	tailText,
 	validateManageParams,
@@ -109,14 +108,6 @@ describe("ids", () => {
 		assert.strictEqual(jobIdFor(null, "npm test", (id) => taken.has(id)), "npm-test-3");
 		assert.strictEqual(jobIdFor("J1", "x", () => false), "job-j1");
 		for (const id of ["npm-test-3", "job-j1", "run-e2e-tests", "tsc"]) assert.ok(isJobId(id), id);
-	});
-});
-
-describe("shell resolution", () => {
-	test("prefers $SHELL and falls back to /bin/sh", () => {
-		assert.strictEqual(resolveShellPath({ SHELL: "/bin/zsh" }), "/bin/zsh");
-		assert.strictEqual(resolveShellPath({}), "/bin/sh");
-		assert.strictEqual(resolveShellPath({ SHELL: "" }), "/bin/sh");
 	});
 });
 

@@ -10,7 +10,8 @@ rows.
 
 Requires Pi **0.99.2 or newer**, Node **22.18 or newer**, npm and Git.
 pi-extras follows Pi's latest release; after updating pi-extras, update Pi too.
-The shell-job extension currently targets macOS and Linux with a POSIX shell.
+The shell-job extension currently targets macOS and Linux. A job runs in the
+shell of Pi's bash tool, with its `shellPath` and `shellCommandPrefix` settings.
 Windows process-group behavior has not been validated.
 
 ```sh
