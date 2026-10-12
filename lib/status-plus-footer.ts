@@ -351,7 +351,7 @@ export function footerLayout(model: FooterModel, width: number, paint: Painter):
 		.filter(Boolean)
 		.map((text) => truncateVisible(text, width, paint.fg("dim", ELLIPSIS)));
 	// The cells above are sized to fit; this is the last guard, since Pi exits on a line wider than the terminal.
-	const lines = [...grid, ...meshLine, ...rowBlock, ...statuses].map((line) => truncateToWidth(line, width, ""));
+	const lines = [...grid, ...meshLine, ...rowBlock, ...statuses].map((line) => (visibleWidth(line) <= width ? line : truncateToWidth(line, width, "")));
 	return { lines, tools };
 }
 

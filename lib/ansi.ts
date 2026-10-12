@@ -12,6 +12,8 @@ import { stripTerminalSequences, visibleWidth as cellWidth } from "@earendil-wor
  */
 const ESCAPE = /(\x1b\[[^mGKHJ]*[mGKHJ]|\x1b[\]_](?:[^\x07\x1b]|\x1b(?!\\))*(?:\x07|\x1b\\))/;
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+/** Most footer text: one cell per character, so no segmenter is needed. */
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
 
 interface Piece {
 	readonly text: string;
@@ -26,6 +28,7 @@ function pieces(text: string): Piece[] {
 	text.split(ESCAPE).forEach((part, index) => {
 		// split() with a capture group puts each escape at an odd index.
 		if (index % 2 === 1) out.push({ text: part, width: 0, escape: true });
+		else if (PRINTABLE_ASCII.test(part)) for (const char of part) out.push({ text: char, width: 1, escape: false });
 		else for (const { segment } of graphemes.segment(part)) out.push({ text: segment, width: cellWidth(segment), escape: false });
 	});
 	return out;
