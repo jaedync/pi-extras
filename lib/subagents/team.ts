@@ -94,6 +94,8 @@ export class Team implements HostTeam {
 	private readonly stoppedByParent = new Set<string>();
 	/** Runs going on in a new session, on a fallback model or after a swap, with what they had used of their budget: the same run goes on. */
 	private readonly continuing = new Map<string, BudgetUse | undefined>();
+	/** Runs that waited on their subagents or an answer and relaunch to go on, with what they had used: a launch that fails is a failed resume. */
+	private readonly woken = new Map<string, BudgetUse | undefined>();
 	private readonly swaps = new TurnSwaps();
 	private readonly checks = new RunChecks({
 		get: (name) => this.records.get(name), patch: (name, patch) => this.patch(name, patch), under: (name, ancestor) => this.under(name, ancestor),
@@ -131,6 +133,7 @@ export class Team implements HostTeam {
 			deliverToMain: (delivery) => options.deliverToMain(delivery),
 			...(options.prepareResume ? { prepareResume: (record: AgentRecord) => options.prepareResume!(record) } : {}),
 			resumeWith: (name, note, message) => { this.resumePrompts.set(name, { note, message }); },
+			goOn: (name) => { this.woken.set(name, this.budgets.used(name)); },
 			forgetAnswer: (name) => this.forgetAnswer(name), takeInbox: (name) => this.takeInbox(name),
 			enqueue: (name) => { this.queue.push(name); this.pump(); },
 			run: (name, text) => { void this.run(name, text); },
@@ -433,6 +436,7 @@ export class Team implements HostTeam {
 		const message = error instanceof Error ? error.message : String(error);
 		const previous = this.records.get(name)!;
 		this.parkResume(name);
+		this.woken.delete(name);
 		this.checks.end(name);
 		this.swaps.end(name);
 		this.sessions.endRun(name);
@@ -480,8 +484,10 @@ export class Team implements HostTeam {
 		this.sessions.startRun(name, handle);
 		const launch = this.launches.get(name);
 		const record = this.records.get(name)!;
-		const used = this.continuing.get(name);
-		const continued = this.continuing.delete(name);
+		// A run woken from waiting on its subagents or an answer goes on, with the budget it has left (budget.ts).
+		const waking = record.state === "waiting";
+		const used = this.continuing.get(name) ?? this.woken.get(name) ?? (waking ? this.budgets.used(name) : undefined);
+		const continued = [this.continuing.delete(name), this.woken.delete(name), waking].some(Boolean);
 		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined, ...(continued ? {} : { runCost: record.usage.cost }) });
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
 		try {
@@ -669,6 +675,7 @@ export class Team implements HostTeam {
 	private finish(name: string): void {
 		this.ending.delete(name);
 		this.continuing.delete(name);
+		this.woken.delete(name);
 		this.checks.end(name);
 		this.swaps.end(name);
 		// Answers still owed to it die with its run; a message resumes it to ask again.

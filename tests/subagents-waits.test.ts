@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { setImmediate as tick } from "node:timers/promises";
+import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import { type AgentRecord, NO_USAGE } from "../lib/subagents/types.ts";
 import { teamHarness } from "./support/team-harness.ts";
 
@@ -98,4 +98,22 @@ test("a question to an agent that does not wait for the asker still goes", async
 	h.spawn("Peer", { name: "peer" }); await flush();
 	assert.equal((await h.team.send("lead", "mid", "Status?", { expectReply: true })).ok, true, "a parent may ask its subagent");
 	assert.equal((await h.team.send("mid", "peer", "Which port?", { expectReply: true })).ok, true);
+});
+
+test("a parent woken from waiting goes on with the same run and the budget it has left", async () => {
+	const h = teamHarness();
+	h.spawn("Coordinate", { name: "lead", maxMinutes: 0.01 }); await flush();
+	for (let i = 1; i <= 3; i++) {
+		h.spawn("Help", { name: `helper-${i}`, parent: "lead" }); await flush();
+		await sleep(150);
+		h.lastCall("lead").finish("waiting"); await flush();
+		assert.equal(h.team.get("lead")!.state, "waiting");
+		h.lastCall(`helper-${i}`).finish(`helper-${i} done`); await flush();
+	}
+	assert.equal(h.team.get("lead")!.state, "running");
+	await sleep(250);
+	const lead = h.team.get("lead")!;
+	assert.equal(lead.runs, 1, "one run, woken three times");
+	assert.equal(lead.state, "stopped", "about 450 ms, then 250 ms more, of work against a 600 ms budget");
+	assert.match(lead.stopReason ?? "", /budget/);
 });

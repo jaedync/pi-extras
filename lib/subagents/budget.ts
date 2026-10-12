@@ -4,7 +4,8 @@
  * bound. Time counts only while the run works: a child blocked on an answer
  * spends nothing, and the one answering it has its own budget. Cost counts
  * only what this run spent. A new run starts with a fresh budget; a run that
- * goes on on a fallback model is the same run and keeps what it has used.
+ * goes on on a fallback model, or wakes from waiting on its subagents, is the
+ * same run and keeps what it has used.
  */
 import { formatMoney } from "../status-plus-logic.ts";
 import type { AgentState } from "./types.ts";
@@ -69,10 +70,10 @@ export class RunBudgets {
 		return { costAtStart: clock.costAtStart, usedMs: clock.usedMs + (clock.since === undefined ? 0 : this.now() - clock.since) };
 	}
 
-	/** Follows the child's state: asking pauses the clock, running resumes it, anything else ends the run. */
+	/** Follows the child's state: asking or waiting on its subagents pauses the clock, running resumes it, anything else ends the run. */
 	follow(name: string, state: AgentState): void {
 		if (state === "running") this.resume(name);
-		else if (state === "asking") this.pause(name);
+		else if (state === "asking" || state === "waiting") this.pause(name);
 		else this.end(name);
 	}
 

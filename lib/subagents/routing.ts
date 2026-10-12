@@ -46,6 +46,8 @@ export interface RouteHost {
 	prepareResume?(record: AgentRecord): { model: string; note?: string; notice?: string };
 	/** What the next launch of `name` is prompted with instead of its task: a note, then the message that resumes it. */
 	resumeWith(name: string, note: string, message: string): void;
+	/** The next launch of `name`, which waits on its subagents or an answer, goes on with the same run. */
+	goOn(name: string): void;
 	forgetAnswer(name: string): void;
 	takeInbox(name: string): string[];
 	/** Puts `name`, now queued, in line to start. */
@@ -270,6 +272,7 @@ export class Routing {
 		if (why.stale) void host.sessions.release(name);
 		host.resumeWith(name, `${resumeWarning(target)}${prepared.note ? `${prepared.note}\n\n` : ""}`, why.body);
 		if (target.state !== "waiting") this.startedBy(name, why.peer);
+		else host.goOn(name);
 		host.patch(name, { state: "queued", model: prepared.model, resumedBy: { from: why.from, text: why.said }, startedAt: host.now(), error: undefined, stopReason: undefined, restoreError: undefined, launchError: undefined,
 			...(!why.automatic ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
 		host.enqueue(name);
