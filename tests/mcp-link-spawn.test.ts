@@ -54,3 +54,24 @@ test("an error on the client's stdout or stderr fails the calls instead of throw
 	assert.doesNotThrow(() => proc.stdout.emit("error", new Error("read EIO")));
 	await assert.rejects(call, /read EIO/);
 });
+
+// A pipe error does not mean the child exited; a session that closes the link must not leave it running.
+test("close still stops a client whose output failed, but not one that exited", async () => {
+	const { EventEmitter } = await import("node:events");
+	const { PassThrough } = await import("node:stream");
+	const fake = () => {
+		const kills: string[] = [];
+		const proc = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: (signal: string) => kills.push(signal) > 0 });
+		return { proc, kills };
+	};
+	const broken = fake();
+	const link = new McpLink(broken.proc as never);
+	broken.proc.stdout.emit("error", new Error("read EIO"));
+	link.close();
+	assert.deepEqual(broken.kills, ["SIGTERM"]);
+	const exited = fake();
+	const done = new McpLink(exited.proc as never);
+	exited.proc.emit("close", 0);
+	done.close();
+	assert.deepEqual(exited.kills, []);
+});

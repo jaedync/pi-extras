@@ -36,7 +36,10 @@ export function operationalError(logFile: string, tag: string, message: string):
 function firstFrame(stack: unknown): string | undefined {
 	if (typeof stack !== "string") return undefined;
 	const frame = stack.split("\n").find((line) => line.trimStart().startsWith("at "));
-	return frame?.trim().replace("file://", "").split(homedir()).join("~").slice(0, FRAME_MAX);
+	const home = homedir();
+	// A home of "/" or "" would match inside every path; only a real directory, as a prefix, becomes ~.
+	const shown = frame?.trim().replace("file://", "");
+	return (home.length > 1 ? shown?.split(`${home}/`).join("~/") : shown)?.slice(0, FRAME_MAX);
 }
 
 /** An error's name, message and where it came from, cut short: a log line, not a dump. */

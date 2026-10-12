@@ -41,6 +41,8 @@ export class McpLink {
 	private nextId = 1;
 	private stderrTail = "";
 	private exitError?: Error;
+	/** Set by the close event only: a pipe error leaves a child that may still run and need a kill. */
+	private exited = false;
 	onServerRequest: ServerRequestHandler = async (method) => {
 		throw Object.assign(new Error(`unsupported request ${method}`), { code: METHOD_NOT_FOUND });
 	};
@@ -64,6 +66,7 @@ export class McpLink {
 		const events = proc as ClientProcess & { once(event: "error", listener: (error: Error) => void): unknown };
 		events.once("error", (error) => this.fail(new Error(`${this.names.process} failed to start: ${error.message}`)));
 		proc.once("close", (code) => {
+			this.exited = true;
 			const detail = this.stderrTail.trim();
 			this.fail(new Error(`${this.names.process} exited (code ${code ?? "unknown"})${detail ? `: ${detail}` : ""}`));
 		});
@@ -106,7 +109,7 @@ export class McpLink {
 	}
 
 	close(): void {
-		if (!this.exitError) this.proc.kill("SIGTERM");
+		if (!this.exited) this.proc.kill("SIGTERM");
 	}
 
 	private write(message: object): void {

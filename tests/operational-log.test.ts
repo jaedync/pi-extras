@@ -58,3 +58,17 @@ test("error text never throws, whatever was thrown", () => {
 	Object.defineProperty(hostile, "message", { get() { throw new Error("no"); } });
 	assert.equal(typeof errorText(hostile), "string");
 });
+
+test("the home directory becomes ~ only as a path prefix, and never for a home of / or nothing", () => {
+	const home = process.env.HOME;
+	const frame = (path: string) => Object.assign(new Error("x"), { stack: `Error: x\n    at f (${path}:1:1)` });
+	try {
+		process.env.HOME = "/";
+		assert.equal(errorText(frame("/usr/lib/x.ts")), "Error: x (at f (/usr/lib/x.ts:1:1))");
+		process.env.HOME = "/Users/a";
+		assert.equal(errorText(frame("/Users/ab/x.ts")), "Error: x (at f (/Users/ab/x.ts:1:1))");
+		assert.equal(errorText(frame("/Users/a/x.ts")), "Error: x (at f (~/x.ts:1:1))");
+	} finally {
+		if (home === undefined) delete process.env.HOME; else process.env.HOME = home;
+	}
+});
