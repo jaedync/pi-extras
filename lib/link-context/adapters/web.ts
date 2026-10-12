@@ -6,7 +6,7 @@
 import { parse } from "node-html-parser";
 import { agentsFor } from "../config.ts";
 import { BROWSER_UA, get, PLAIN_UA, PREVIEW_UA } from "../http.ts";
-import { decodeEntities, htmlToText, isoDate, jsonLd, metaTags } from "../text.ts";
+import { decodeEntities, fenced, htmlToText, isoDate, jsonLd, metaTags } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
 const DROP = "script, style, noscript, nav, header, footer, aside, form, svg, iframe, [role=navigation], [aria-hidden=true], .sidebar, .advert, .ad, .cookie, .newsletter";
@@ -52,7 +52,7 @@ export function webFromHtml(html: string, url: string): Pulled {
 
 export async function pullWeb(url: string, ctx: AdapterContext): Promise<Pulled> {
 	const page = await get(url, { signal: ctx.signal, fetcher: ctx.fetcher, agents: agentsFor(ctx.config, "web", [BROWSER_UA, PREVIEW_UA, PLAIN_UA]) });
-	if (/json/i.test(page.contentType)) return { platform: "web", title: url, url: page.url, markdown: `\`\`\`json\n${page.body}\n\`\`\``, photos: [] };
+	if (/json/i.test(page.contentType)) return { platform: "web", title: url, url: page.url, markdown: fenced(page.body, "json"), photos: [] };
 	if (/^text\/plain|markdown/i.test(page.contentType)) return { platform: "web", title: url, url: page.url, markdown: page.body, photos: [] };
 	if (!/html|xml/i.test(page.contentType) && page.contentType) throw new Error(`This link is ${page.contentType.split(";")[0]}, not a page. Use fetch_content for PDFs and documents.`);
 	return webFromHtml(page.body, page.url);

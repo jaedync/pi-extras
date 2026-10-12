@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { expandLinks, pullBluesky } from "../lib/link-context/adapters/bluesky.ts";
-import { NotHandled, pullGithub } from "../lib/link-context/adapters/github.ts";
+import { NotHandled, pullGist, pullGithub } from "../lib/link-context/adapters/github.ts";
 import { pullHackerNews } from "../lib/link-context/adapters/hackernews.ts";
 import { nestReplies, pullMastodon } from "../lib/link-context/adapters/mastodon.ts";
 import { pullReddit } from "../lib/link-context/adapters/reddit.ts";
@@ -164,4 +164,17 @@ test("GitHub: a branch name with a slash is found on a 404, and an unknown ref g
 	const page = await pull("https://github.com/o/r/blob/nope/x.md", context(fakeFetch(html("github.com/o/r/blob", "<title>x.md</title><article><p>page text</p></article>")).fetcher));
 	assert.equal(page.platform, "web");
 	assert.match(page.markdown, /page text/);
+});
+
+test("GitHub: a diff with a code fence keeps its own fence, and a cut gist file says so", async () => {
+	const patch = "@@ -1 +1 @@\n-old\n+```js\n+code\n+```";
+	const { fetcher } = fakeFetch(
+		json("/commits/abcdef1", { html_url: "https://github.com/o/r/commit/abcdef1", commit: { message: "m", author: { name: "A", date: "2026-01-01T00:00:00Z" } }, stats: { additions: 1, deletions: 1 }, files: [{ filename: "README.md", status: "modified", patch }] }),
+		json("/gists/abcdef0123", { description: "d", html_url: "https://gist.github.com/abcdef0123", files: { "big.txt": { filename: "big.txt", content: "start of it", truncated: true, raw_url: "https://gist.githubusercontent.com/u/abcdef0123/raw/big.txt" }, "small.txt": { filename: "small.txt", content: "all" } } }),
+	);
+	const commit = await pullGithub("o", "r", ["commit", "abcdef1"], context(fetcher));
+	assert.ok(commit.markdown.endsWith(`\`\`\`\`diff\n${patch}\n\`\`\`\``), commit.markdown);
+	const gist = await pullGist("abcdef0123", context(fetcher));
+	assert.match(gist.markdown, /start of it\n````\n_GitHub cut this file\. The full file: https:\/\/gist\.githubusercontent\.com\/u\/abcdef0123\/raw\/big\.txt_/);
+	assert.doesNotMatch(gist.markdown.split("## small.txt")[1], /GitHub cut/);
 });

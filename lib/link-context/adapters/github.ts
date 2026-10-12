@@ -6,7 +6,7 @@
  */
 import { get, getJson, HttpError, PLAIN_UA } from "../http.ts";
 import { renderThread, type Reply } from "../post.ts";
-import { cutIndex, isoDate, stats } from "../text.ts";
+import { cutIndex, fenced, isoDate, stats } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
 const API = "https://api.github.com";
@@ -70,7 +70,7 @@ async function file(owner: string, repo: string, ref: string, path: string, ctx:
 	const body = await gh.raw(`/repos/${owner}/${repo}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`);
 	const extension = /\.([\w]+)$/.exec(path)?.[1] ?? "";
 	const url = `https://github.com/${owner}/${repo}/blob/${ref}/${path}`;
-	return { platform: "github", title: `${owner}/${repo}: ${path}`, url, markdown: `# ${path}\n${owner}/${repo} at ${ref}\n\n\`\`\`\`${extension}\n${clip(body, MAX_FILE_CHARS)}\n\`\`\`\`` };
+	return { platform: "github", title: `${owner}/${repo}: ${path}`, url, markdown: `# ${path}\n${owner}/${repo} at ${ref}\n\n${fenced(clip(body, MAX_FILE_CHARS), extension, 4)}` };
 }
 
 async function directory(owner: string, repo: string, ref: string, path: string, ctx: AdapterContext): Promise<Pulled> {
@@ -81,7 +81,7 @@ async function directory(owner: string, repo: string, ref: string, path: string,
 
 async function commit(owner: string, repo: string, sha: string, ctx: AdapterContext): Promise<Pulled> {
 	const data = await ghFetch(ctx).json<{ html_url?: string; commit?: { message?: string; author?: { name?: string; date?: string } }; stats?: { additions?: number; deletions?: number }; files?: { filename?: string; status?: string; patch?: string }[] }>(`/repos/${owner}/${repo}/commits/${sha}`);
-	const files = (data.files ?? []).map((f) => `### ${f.status} ${f.filename}\n\n\`\`\`diff\n${clip(f.patch ?? "(binary or too large)", MAX_PATCH_CHARS)}\n\`\`\``);
+	const files = (data.files ?? []).map((f) => `### ${f.status} ${f.filename}\n\n${fenced(clip(f.patch ?? "(binary or too large)", MAX_PATCH_CHARS), "diff")}`);
 	const head = `# Commit ${sha.slice(0, 12)}\n${data.commit?.author?.name} · ${isoDate(data.commit?.author?.date)} · +${data.stats?.additions} −${data.stats?.deletions}\n\n${data.commit?.message ?? ""}`;
 	return { platform: "github", title: `${owner}/${repo}@${sha.slice(0, 12)}`, url: data.html_url ?? "", markdown: [head, ...files].join("\n\n") };
 }
@@ -91,10 +91,18 @@ async function release(owner: string, repo: string, tag: string, ctx: AdapterCon
 	return { platform: "github", title: `${owner}/${repo} ${data.name || data.tag_name}`, url: data.html_url ?? "", markdown: `# ${data.name || data.tag_name}\n${owner}/${repo} · ${data.author?.login} · ${isoDate(data.published_at)}\n\n${data.body ?? ""}` };
 }
 
+interface GistFile { filename?: string; language?: string; content?: string; truncated?: boolean; raw_url?: string }
+
+/** GitHub's gist API sends the first megabyte of a large file and marks it truncated. */
+function gistFile(f: GistFile): string {
+	const cut = f.truncated ? `\n_GitHub cut this file. The full file: ${f.raw_url ?? "see the gist page"}_` : "";
+	return `## ${f.filename}\n\n${fenced(clip(f.content ?? "", MAX_FILE_CHARS), (f.language ?? "").toLowerCase(), 4)}${cut}`;
+}
+
 export async function pullGist(id: string, ctx: AdapterContext): Promise<Pulled> {
 	if (!/^[0-9a-f]{6,64}$/i.test(id)) throw new NotHandled();
-	const data = await ghFetch(ctx).json<{ description?: string; html_url?: string; owner?: User; files?: Record<string, { filename?: string; language?: string; content?: string; truncated?: boolean }> }>(`/gists/${id}`);
-	const files = Object.values(data.files ?? {}).map((f) => `## ${f.filename}\n\n\`\`\`\`${(f.language ?? "").toLowerCase()}\n${clip(f.content ?? "", MAX_FILE_CHARS)}\n\`\`\`\``);
+	const data = await ghFetch(ctx).json<{ description?: string; html_url?: string; owner?: User; files?: Record<string, GistFile> }>(`/gists/${id}`);
+	const files = Object.values(data.files ?? {}).map(gistFile);
 	return { platform: "github", title: `Gist ${data.description || id}`, url: data.html_url ?? "", markdown: `# ${data.description || "Gist"}\nby ${data.owner?.login ?? "anonymous"}\n\n${files.join("\n\n")}` };
 }
 

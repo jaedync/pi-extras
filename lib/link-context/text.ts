@@ -19,6 +19,13 @@ export function cutIndex(text: string, end: number): number {
 	return end > 0 && end < text.length && before >= 0xd800 && before <= 0xdbff ? end - 1 : end;
 }
 
+/** `body` in a code fence longer than any run of backticks inside it, so the body cannot close the fence. */
+export function fenced(body: string, language = "", min = 3): string {
+	const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
+	const fence = "`".repeat(Math.max(min, longest + 1));
+	return `${fence}${language}\n${body}\n${fence}`;
+}
+
 const BLOCK = new Set(["p", "div", "br", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote", "tr", "section", "article", "header", "footer", "table"]);
 
 function walk(node: HTMLElement, out: string[]): void {
