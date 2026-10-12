@@ -55,6 +55,25 @@ test("a launch while Pi reloads waits for the next module's launcher", async () 
 	assert.equal(h.call(name).launcher, "second");
 });
 
+test("a child's question to main crosses the reload: main's answer through the next module reaches it", async () => {
+	const h = setup();
+	const first = h.portsFor("first");
+	const host = h.open(first);
+	cleanups.push(() => host.close());
+	const name = h.spawn(host, "Ask main something");
+	await tick();
+	const asked = host.team.send(name, "main", "Which branch?", { expectReply: true });
+	await sleep(10);
+	assert.equal(host.team.get(name)?.state, "asking");
+	host.park();
+	const second = h.portsFor("second");
+	host.rebind(second.ports);
+	assert.deepEqual(await host.team.send("main", name, "release/2.0"), { ok: true, delivered: "replied" });
+	assert.deepEqual(await asked, { ok: true, delivered: "replied", reply: "release/2.0" });
+	assert.equal(host.team.get(name)?.state, "running");
+	assert.equal(first.sent.filter(({ message }) => message.customType === "subagent-message").length, 1, "the question went out before the reload");
+});
+
 test("notices while Pi reloads are kept for the next module, up to a limit, and the rest are counted", async () => {
 	const h = setup();
 	const first = h.portsFor("first");

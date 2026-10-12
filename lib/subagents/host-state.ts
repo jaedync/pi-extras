@@ -206,15 +206,14 @@ export function openHost(inputs: HostInputs): HostState {
 			removeSignals();
 			binding.close();
 			mail.dispose();
+			// The team marks its live children interrupted at once, and the run log records them as it does.
 			const closing = team.close(signalReason ? "signal" : reason === "reload" ? "reload" : "quit", owner);
+			unsubscribe();
 			// Saved before anything is awaited, so an exit during the close still finds its children interrupted.
 			try { index.save(team.list(), signalReason ?? reason, owner); }
 			catch (error) { notify(`subagents: could not save ${index.file}: ${(error as Error).message}`); }
 			try { await closing; }
-			finally {
-				unsubscribe();
-				if (!leaseHandedOver) releaseLease();
-			}
+			finally { if (!leaseHandedOver) releaseLease(); }
 		},
 	};
 }
