@@ -227,15 +227,23 @@ const cycleStart = (entry: LimitEntry): number => (entry.resetMs as number) - (e
 function tokenfoldStart(provider: string, entry: LimitEntry, inputs: DollarInputs, seen: WindowEvidence | undefined): number | undefined {
 	const start = tokenfoldCycle(provider, entry, inputs)?.windowStartMs;
 	if (start === undefined || !entry.modelFamily) return start;
-	const drop = seen?.drop;
-	const fell = !!drop && drop.fromMs - TOKENFOLD_RESET_TOLERANCE_MS <= start && start <= drop.atMs + TOKENFOLD_RESET_TOLERANCE_MS;
+	const fell = (seen?.drops ?? []).some((drop) =>
+		drop.fromMs - TOKENFOLD_RESET_TOLERANCE_MS <= start && start <= drop.atMs + TOKENFOLD_RESET_TOLERANCE_MS);
 	return fell ? start : undefined;
 }
 
-/** A confirmed reset seen here that Tokenfold's start (or, without one, the cycle start) does not cover. */
+/**
+ * A confirmed reset seen here that Tokenfold's start (or, without one, the
+ * cycle start) does not cover. An approximate reset happened at an unknown
+ * time after lastHighMs, so a start inside the reading gap is the exact time
+ * of the same reset (2026-10-12: Pi was off at the 02:22 grant). Only a start
+ * before the gap leaves the reset uncovered.
+ */
 function laterGrant(seen: WindowEvidence | undefined, startMs: number) {
 	const grant = seen?.grant;
-	return grant && grant.startMs - startMs > TOKENFOLD_RESET_TOLERANCE_MS ? grant : undefined;
+	if (!grant) return undefined;
+	const earliest = grant.approximate ? grant.lastHighMs : grant.startMs;
+	return earliest - startMs > TOKENFOLD_RESET_TOLERANCE_MS ? grant : undefined;
 }
 
 /**

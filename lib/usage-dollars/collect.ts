@@ -114,12 +114,21 @@ function writeJson(file: string, value: unknown): boolean {
 	}
 }
 
-/** What each state file is for, for the note when it cannot be saved. */
-const STATE_FILES: Record<string, string> = {
-	"meter-day.json": "spent today can count from the wrong reading",
-	"window-readings.json": "granted resets can be missed, and window sizes can read high",
-	"window-sizes-v2.json": "the start of the next cycle can have no dollar size",
+/** The note for each step that failed: a state file that could not be saved, or an observer that threw. */
+const PROBLEM_NOTES: Record<string, string> = {
+	"meter-day.json": "Could not save meter-day.json in the usage-dollars folder, so spent today can count from the wrong reading.",
+	"window-readings.json": "Could not save window-readings.json in the usage-dollars folder, so granted resets can be missed, and window sizes can read high.",
+	"window-sizes-v2.json": "Could not save window-sizes-v2.json in the usage-dollars folder, so the start of the next cycle can have no dollar size.",
+	"meter readings": "Could not record the meter readings, so spent today can be missing.",
+	"window readings": "Could not record the window readings, so granted resets can be missed, and window sizes can read high.",
 };
+
+function evidenceMap(readings: Readings): Record<string, WindowEvidence> {
+	return Object.fromEntries(Object.entries(readings).flatMap(([key, record]) => {
+		const seen = evidenceOf(record);
+		return seen ? [[key, seen]] : [];
+	}));
+}
 
 function meterReadings(snapshots: Array<[string, LimitSnapshot]>): MeterReading[] {
 	const readings: MeterReading[] = [];
@@ -148,16 +157,27 @@ export function createDollarsCollector(options: CollectorOptions) {
 	const ledger: SpendLedger = createSpendLedger({
 		root: join(options.agentDir, "sessions"), maxAgeMs: LEDGER_MAX_AGE_MS, minRefreshMs: LEDGER_MIN_REFRESH_MS,
 	});
-	// File names whose last save failed; collect() reports them, and a later successful save clears them.
-	let failedSaves = new Set<string>();
+	// Steps whose last run failed (PROBLEM_NOTES keys); collect() reports them, and a later success clears them.
+	let problems = new Set<string>();
+	function mark(name: string, ok: boolean): void {
+		if (ok !== problems.has(name)) return;
+		const next = new Set(problems);
+		if (ok) next.delete(name);
+		else next.add(name);
+		problems = next;
+	}
 	function save(file: string, value: unknown): void {
-		const name = basename(file);
-		const saved = writeJson(file, value);
-		if (saved === failedSaves.has(name)) {
-			const next = new Set(failedSaves);
-			if (saved) next.delete(name);
-			else next.add(name);
-			failedSaves = next;
+		mark(basename(file), writeJson(file, value));
+	}
+	/** Each observer runs on its own, so one failing step does not stop the other at every poll. */
+	function attempt<T>(name: string, run: () => T, fallback: () => T): T {
+		try {
+			const value = run();
+			mark(name, true);
+			return value;
+		} catch {
+			mark(name, false);
+			return fallback();
 		}
 	}
 	let tokenfold: Cached<{ snapshot?: TokenfoldSnapshot; error?: string }> | undefined;
@@ -188,7 +208,10 @@ export function createDollarsCollector(options: CollectorOptions) {
 	 * next usage call.
 	 */
 	function observe(snapshots: Array<[string, LimitSnapshot]>, now: number): { anchors: Anchors; resetEvidence: Record<string, WindowEvidence> } {
-		return { anchors: observeMeters(snapshots, now), resetEvidence: observeWindows(snapshots, now) };
+		return {
+			anchors: attempt("meter readings", () => observeMeters(snapshots, now), () => readAnchors(anchorFile)),
+			resetEvidence: attempt("window readings", () => observeWindows(snapshots, now), () => evidenceMap(readReadings(readingsFile))),
+		};
 	}
 
 	/**
@@ -216,10 +239,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 			next = mergeReadings(readReadings(readingsFile), next, changed);
 			save(readingsFile, next);
 		}
-		return Object.fromEntries(Object.entries(next).flatMap(([key, record]) => {
-			const seen = evidenceOf(record);
-			return seen ? [[key, seen]] : [];
-		}));
+		return evidenceMap(next);
 	}
 
 	async function tokenfoldFor(config: ReturnType<typeof normalizeDollarsConfig>, now: number, force: boolean, notes: string[]) {
@@ -303,7 +323,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 			openCodeGo: { ...config.openCodeGo, models: openCodeGoModels(context) },
 		};
 		const lastSizes = rememberSizes(context.snapshots, inputs);
-		for (const name of failedSaves) notes.push(`Could not save ${name} in the usage-dollars folder, so ${STATE_FILES[name] ?? "a figure can be wrong"}.`);
+		for (const name of problems) notes.push(PROBLEM_NOTES[name] ?? `Could not complete ${name}; a figure can be wrong.`);
 		return { inputs: Object.keys(lastSizes).length ? { ...inputs, lastSizes } : inputs, notes };
 	}
 

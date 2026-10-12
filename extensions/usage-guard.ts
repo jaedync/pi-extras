@@ -309,7 +309,13 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	const unsubscribe = store.subscribe(() => {
 		// The first meter reading of the day anchors "spent today", and each window reading can show a
 		// granted reset, for every process. Only polls see every reading; usage calls come too late.
-		try { dollars.observe(store.entries(), now()); } catch { /* the report recomputes it */ }
+		// observe() isolates its two steps and keeps their failures for the report's notes; this guard
+		// only keeps an unexpected error out of the poll loop.
+		try {
+			dollars.observe(store.entries(), now());
+		} catch (error) {
+			operationalError(LOG_FILE, "usage-guard", `dollars observe failed: ${(error as Error)?.message ?? "error"}`);
+		}
 		const ctx = latestCtx;
 		if (ctx && idle(ctx)) evaluate(ctx);
 	});

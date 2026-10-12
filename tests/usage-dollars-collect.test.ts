@@ -209,3 +209,24 @@ test("a state file that cannot be saved becomes a note", async () => {
 	const { notes } = await collector.collect(context({ snapshots: weekly(10, NOW), now: NOW }));
 	assert.ok(notes.some((note) => /window-readings\.json/.test(note) && /granted resets/.test(note)), notes.join(" | "));
 });
+
+test("a failing meter observer does not stop the window readings, and the report says so", async () => {
+	const dir = agentDirWithTurns([[NOW - 30 * MIN, 4]]);
+	const collector = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: noFetch });
+	collector.observe(weekly(97, NOW - 10 * MIN), NOW - 10 * MIN);
+	collector.observe(weekly(0, NOW - 5 * MIN), NOW - 5 * MIN);
+	// The first read of the entries (the meter observer's) throws; later reads work.
+	const [[provider, snapshot]] = weekly(1, NOW);
+	let reads = 0;
+	const flaky = { atMs: snapshot.atMs, source: snapshot.source, get entries() {
+		reads += 1;
+		if (reads === 1) throw new Error("synthetic meter failure");
+		return snapshot.entries;
+	} } as LimitSnapshot;
+	const { inputs, notes } = await collector.collect(context({ snapshots: [[provider, flaky]], now: NOW }));
+	assert.equal(inputs.resetEvidence?.["anthropic|seven_day"]?.grant?.startMs, NOW - 5 * MIN);
+	assert.ok(notes.some((note) => /meter readings/.test(note)), notes.join(" | "));
+	// The next good observation clears the note.
+	const again = await collector.collect(context({ snapshots: weekly(2, NOW + MIN), now: NOW + MIN, force: true }));
+	assert.ok(!again.notes.some((note) => /meter readings/.test(note)), again.notes.join(" | "));
+});

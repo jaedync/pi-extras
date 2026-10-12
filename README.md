@@ -473,7 +473,8 @@ a top-level `dollars` summary.
     also fell at that time. Otherwise it uses only the resets in its own
     readings.
   - Sometimes a reset comes after a gap of more than 20 minutes in the
-    readings. Then the tool does not count the spend in the gap
+    readings. If the Tokenfold start is in that gap, the tool uses the
+    Tokenfold start. If not, the tool does not count the spend in the gap
     (`spendStartApprox`), and it does not keep that size for the next cycle.
 - **Model-family windows (such as `7d-fable`):** the dollars count only that
   family's spend and carry `modelFamily`. They set a provider's summary only

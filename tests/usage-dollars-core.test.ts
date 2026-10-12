@@ -313,7 +313,11 @@ const weeklyStart = (windowStartMs: number) =>
 	({ fetchedAtMs: SAT, weekly: { pctUsed: 10, spendUsd: 60, resetsAtMs: RESET7 - 40_000, windowStartMs } });
 
 test("a family window takes Tokenfold's weekly start only when its own readings fell there", () => {
-	const fell = { "anthropic|seven_day_fable": { resetMs: RESET7, drop: { fromMs: SAT - 3 * HOUR - 4 * 60_000, atMs: SAT - 3 * HOUR + 60_000 } } };
+	const fell = { "anthropic|seven_day_fable": { resetMs: RESET7, drops: [
+		{ fromMs: SAT - 3 * HOUR - 4 * 60_000, atMs: SAT - 3 * HOUR + 60_000 },
+		// A later one-point dip must not hide the fall at the grant.
+		{ fromMs: SAT - HOUR, atMs: SAT - HOUR + 5 * 60_000 },
+	] } };
 	const corroborated = local(fable, { tokenfold: weeklyStart(SAT - 3 * HOUR), resetEvidence: fell }, 20);
 	assert.equal(corroborated.sinceMs, SAT - 3 * HOUR);
 	assert.equal(corroborated.family, "fable");
@@ -322,6 +326,49 @@ test("a family window takes Tokenfold's weekly start only when its own readings 
 	// No fall in the family's own readings: the weekly start does not apply.
 	assert.equal(local(fable, { tokenfold: weeklyStart(SAT - 3 * HOUR) }, 20).sinceMs, BASE7);
 	// The family's own confirmed reset still applies, and the later start wins.
-	const own = { "anthropic|seven_day_fable": { resetMs: RESET7, grant: grant(SAT - HOUR), drop: { fromMs: SAT - 3 * HOUR - 4 * 60_000, atMs: SAT - 3 * HOUR + 60_000 } } };
+	const own = { "anthropic|seven_day_fable": { resetMs: RESET7, grant: grant(SAT - HOUR), drops: [{ fromMs: SAT - 3 * HOUR - 4 * 60_000, atMs: SAT - 3 * HOUR + 60_000 }] } };
 	assert.equal(local(fable, { tokenfold: weeklyStart(SAT - 3 * HOUR), resetEvidence: own }, 20).sinceMs, SAT - HOUR);
+});
+
+// 2026-10-12: Pi was off at the 02:22 grant. Its first reading after it came
+// hours later, so its own grant is approximate, and Tokenfold's exact start
+// (inside the gap) must win.
+const GRANT = SAT - 6 * HOUR;
+const LAST_HIGH = SAT - 7 * HOUR;
+const FIRST_LOW = SAT - 30 * 60_000;
+const offAtGrant = (key: string) => ({ [key]: {
+	resetMs: RESET7,
+	grant: { startMs: FIRST_LOW, resetMs: RESET7, beforePct: 97, lastHighMs: LAST_HIGH, approximate: true },
+	drops: [{ fromMs: LAST_HIGH, atMs: FIRST_LOW }],
+} });
+
+test("Tokenfold's exact start inside the reading gap wins over an approximate grant seen here", () => {
+	const dollars = figures("anthropic", seven(10), inputs({
+		tokenfold: { fetchedAtMs: SAT, weekly: { pctUsed: 10, spendUsd: 600, resetsAtMs: RESET7, windowStartMs: GRANT } },
+		spend: () => { throw new Error("local spend is not needed"); },
+		resetEvidence: offAtGrant("anthropic|seven_day"),
+	}));
+	assert.equal(dollars?.source, "tokenfold");
+	assert.equal(dollars?.spentUsd, 600);
+	assert.equal(dollars?.limitUsd, 6000);
+	assert.equal(dollars?.spendStartApprox, undefined);
+	assert.doesNotMatch(dollars?.note ?? "", /Tokenfold counts spend|can read low/);
+});
+
+test("a family window in the same case starts at Tokenfold's exact start, not approximate", () => {
+	const { dollars, sinceMs } = local(fable, { tokenfold: weeklyStart(GRANT), resetEvidence: offAtGrant("anthropic|seven_day_fable") }, 20);
+	assert.equal(sinceMs, GRANT);
+	assert.equal(dollars?.spendStartApprox, undefined);
+	assert.doesNotMatch(dollars?.note ?? "", /can read low/);
+});
+
+test("an approximate grant still wins when Tokenfold's start is before the reading gap", () => {
+	const { dollars, sinceMs } = local(seven(10), {
+		tokenfold: { fetchedAtMs: SAT, weekly: { pctUsed: 10, spendUsd: 600, resetsAtMs: RESET7, windowStartMs: BASE7 } },
+		resetEvidence: offAtGrant("anthropic|seven_day"),
+	});
+	assert.equal(dollars?.source, "local");
+	assert.equal(sinceMs, FIRST_LOW);
+	assert.equal(dollars?.spendStartApprox, true);
+	assert.match(dollars?.note ?? "", /can read low/);
 });
