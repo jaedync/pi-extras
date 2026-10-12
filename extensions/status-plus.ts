@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isOffline } from "../lib/offline.ts";
-import { operationalError, operationalLine } from "../lib/operational-log.ts";
+import { errorText, operationalError, operationalLine } from "../lib/operational-log.ts";
 import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
@@ -47,16 +47,10 @@ const CATCH_UP_MS = 250;
 const MAX_CATCH_UPS = 4;
 const GO_BILLING_NOTE = "billing Zen";
 const FOOTER_FAILED = "status-plus: footer failed, see status-plus.log";
-/** Enough of an error to find its cause in the log. */
-const ERROR_TEXT_MAX = 200;
 
 /** An unknown STATUSLINE_TZ is logged with the first session, not with each one. */
 let zoneLogged = false;
 
-function errorText(error: unknown): string {
-	const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-	return text.slice(0, ERROR_TEXT_MAX);
-}
 
 interface FooterData {
 	getGitBranch(): string | null;
@@ -322,7 +316,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 				costTween = undefined;
 				// Chains announced on the old branch are not on this one; its saved ones are in the transcript.
 				liveChains.clear();
-				refreshStats(ctx);
+				walk(ctx);
 				tui.requestRender();
 			});
 			return {
@@ -357,8 +351,17 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	/** Walk the transcript again and repaint. The timer always walks: subagents add spend in files of their own. */
 	function update(ctx: ExtensionContext): void {
 		sessionFacts = undefined;
-		refreshStats(ctx);
+		walk(ctx);
 		requestFooterRender?.();
+	}
+
+	/** Timers and Pi's branch listener call this, and a throw from them ends Pi; the last totals stay on screen. */
+	function walk(ctx: ExtensionContext): void {
+		try {
+			refreshStats(ctx);
+		} catch (error) {
+			operationalError(LOG_FILE, "status-plus", `transcript walk failed: ${errorText(error)}`);
+		}
 	}
 
 	/**

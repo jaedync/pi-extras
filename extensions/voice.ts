@@ -42,7 +42,7 @@ import {
 import { TopBorderLink, voiceRow } from "../lib/top-border.ts";
 import { EditorSlot } from "../lib/editor-wrapper.ts";
 import { isOffline } from "../lib/offline.ts";
-import { operationalError, operationalLine } from "../lib/operational-log.ts";
+import { errorText, operationalError, operationalLine } from "../lib/operational-log.ts";
 import { backendOptions, backendSummary, CUDA_NOTE, type HardwareFacts, type TierId } from "../lib/voice/plan.ts";
 import {
 	floorReady,
@@ -60,8 +60,7 @@ import {
 export const DEFAULT_KEY = "ctrl+space";
 /** Operational notes in the voice home, beside daemon.log and provision.log. */
 const LOG_NAME = "voice.log";
-/** Enough of an error to find its cause in the log. */
-const ERROR_TEXT_MAX = 200;
+
 const DISABLED = new Set(["0", "off", "false", "none"]);
 const STATUS_KEY = "voice";
 const FRAME_MS = 100;
@@ -389,9 +388,8 @@ class VoiceRuntime {
 		}
 	}
 
-	private logError(what: string, error: unknown): void {
-		const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-		operationalError(join(this.home, LOG_NAME), "voice", `${what} failed: ${text.slice(0, ERROR_TEXT_MAX)}`);
+	logError(what: string, error: unknown): void {
+		operationalError(join(this.home, LOG_NAME), "voice", `${what} failed: ${errorText(error)}`);
 	}
 
 	/** Keeps the blink animating; the editor border reads state on each render. */
@@ -622,6 +620,7 @@ export default function voice(pi: ExtensionAPI): void {
 						overflow,
 					));
 				},
+				onRenderError: (error) => runtime?.logError("voice row render", error),
 			};
 		});
 		link.hello();

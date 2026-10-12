@@ -48,3 +48,26 @@ test("a footer render that fails logs the error and shows one short line instead
 		await handlers.get("session_shutdown")({}, ctx);
 	}
 });
+
+// The 30 s refresh runs on a timer: a throw there is uncaught, and Pi exits.
+test("a transcript walk that fails on the refresh timer is logged, not thrown", async (t) => {
+	t.mock.timers.enable({ apis: ["setInterval"] });
+	const handlers = new Map();
+	let broken = false;
+	const ctx = {
+		mode: "print",
+		sessionManager: {
+			getBranch: () => { if (broken) throw new Error("This extension ctx is stale after session replacement or reload."); return []; },
+			getSessionDir: () => "/nonexistent-status-plus-test", getSessionFile: () => undefined,
+		},
+		ui: { setWidget() {}, setStatus() {} },
+	};
+	statusPlus({ on: (name, handler) => handlers.set(name, handler), events: { on() {}, emit() {} } });
+	await handlers.get("session_start")({}, ctx);
+	try {
+		broken = true;
+		assert.doesNotThrow(() => t.mock.timers.tick(30_000));
+	} finally {
+		await handlers.get("session_shutdown")({}, ctx);
+	}
+});

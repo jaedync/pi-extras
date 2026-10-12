@@ -17,6 +17,8 @@ export interface EditorDecoration {
 	onWorkingStatus?(indicator: StatusIndicator | undefined): void;
 	/** Observes Pi's actual cancel action, after overlays and autocomplete have consumed their own Escape. */
 	onEscape?(): void;
+	/** `render` threw; the base editor's lines were shown instead. */
+	onRenderError?(error: unknown): void;
 }
 
 export class WrappedEditor extends CustomEditor {
@@ -36,7 +38,14 @@ export class WrappedEditor extends CustomEditor {
 	render(width: number): string[] {
 		this.syncBase();
 		const lines = this.base.render(width);
-		return lines.length === 0 ? lines : this.decoration.render(lines, width, this);
+		if (lines.length === 0) return lines;
+		// Pi does not catch an editor's render, and a throw there ends Pi; a row that cannot draw is left out.
+		try {
+			return this.decoration.render(lines, width, this);
+		} catch (error) {
+			this.decoration.onRenderError?.(error);
+			return lines;
+		}
 	}
 
 	setWorkingStatusIndicator(indicator: StatusIndicator | undefined): void {

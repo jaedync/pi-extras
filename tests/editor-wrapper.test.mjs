@@ -103,3 +103,17 @@ test("restore without an install leaves the editor alone", () => {
 	new EditorSlot().restore(ctx);
 	assert.equal(sets, 0);
 });
+
+// Pi does not catch an editor's render: a throw there ends Pi.
+test("a decoration that throws leaves the base editor's lines and reports the error", () => {
+	const base = baseEditor();
+	const ctx = host(() => base);
+	const errors = [];
+	new EditorSlot().install(ctx, () => ({
+		render: () => { throw new RangeError("Invalid time value"); },
+		onRenderError: (error) => errors.push(error.message),
+	}));
+	const editor = ctx.factory(tui, theme, {});
+	assert.deepEqual(editor.render(12), ["─".repeat(12), "input"]);
+	assert.deepEqual(errors, ["Invalid time value"]);
+});

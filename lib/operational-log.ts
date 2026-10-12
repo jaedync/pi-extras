@@ -2,6 +2,14 @@
 import { appendFileSync } from "node:fs";
 
 const lastWrite = new Map<string, number>();
+/** Enough of an error to find its cause in a log. */
+const ERROR_TEXT_MAX = 200;
+
+/** An error's name and message, cut short: a log line, not a dump. */
+export function errorText(error: unknown): string {
+	const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+	return text.slice(0, ERROR_TEXT_MAX);
+}
 const THROTTLE_MS = 60_000;
 
 /**

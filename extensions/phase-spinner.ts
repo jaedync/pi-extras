@@ -15,6 +15,7 @@ import { averageTps, emptyRunMetrics, updateRunMetrics } from "../lib/phase-metr
 import { emptyLiveRate, liveTokensPerSecond, noteArrival, type LiveRate } from "../lib/live-rate.ts";
 import { TopBorderLink } from "../lib/top-border.ts";
 import { EditorSlot, type StatusIndicator, type WrappedEditor } from "../lib/editor-wrapper.ts";
+import { errorText, operationalError } from "../lib/operational-log.ts";
 import { everyFrame } from "../lib/band/clock.ts";
 import { TailRow } from "../lib/tail-row.ts";
 import { DISPLAY_SETTINGS_EVENT, FOLD_LIVE_EVENT, readSection } from "../lib/extras-config.ts";
@@ -77,6 +78,7 @@ const STEP_CLOCK_REFRESH_MS = 80;
 const STILL_LOADER_FRAME = REDUCED_FRAME;
 const DEBUG_HEARTBEAT_MS = 5_000;
 const DEBUG_LOG = join(getAgentDir(), "phase-spinner-debug.jsonl");
+const LOG_FILE = join(getAgentDir(), "pi-extras.log");
 const DEBUG_ENABLED = process.env.PHASE_SPINNER_DEBUG === "1";
 /** Marks an indicator whose dispose this copy of the extension already watches. */
 const DISPOSE_WATCHED = Symbol("phase-spinner.dispose-watched");
@@ -646,6 +648,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 				render: (lines, width, editor) => drawTopRow(lines, width, painter((text) => editor.borderColor(text)), editor),
 				onWorkingStatus: noteStatusIndicator,
 				onEscape: () => { if (active && currentContext && !currentContext.isIdle()) cancelled = true; },
+				onRenderError: (error) => operationalError(LOG_FILE, "phase-spinner", `top row render failed: ${errorText(error)}`),
 			};
 		});
 		topBorder.hello();
