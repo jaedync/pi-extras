@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import test from "node:test";
-import { Guest } from "../lib/windows-use/guest.ts";
+import { Guest, wait } from "../lib/windows-use/guest.ts";
 import { LAUNCHER } from "../lib/windows-use/install.ts";
 import { hostFrame } from "./support/windows-frames.ts";
 
@@ -732,4 +733,13 @@ test("an installer that didn't arrive whole over key-value exchange says so, and
 	await g.setup();
 	assert.deepEqual(world.stubs?.slice(1), [""], "then the typed launcher, with no stub");
 	assert.equal(world.server, true);
+});
+
+test("a wait that ends takes its abort listener off the signal, so polling doesn't pile them up", async () => {
+	const controller = new AbortController();
+	for (let i = 0; i < 15; i++) await wait(1, controller.signal);
+	assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+	const pending = wait(60_000, controller.signal);
+	controller.abort();
+	await assert.rejects(pending, /windows_use call cancelled/);
 });

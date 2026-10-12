@@ -101,8 +101,10 @@ interface Status {
 
 export const wait = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
 	if (signal?.aborted) return reject(new Error("windows_use call cancelled"));
-	const timer = setTimeout(resolve, ms);
-	signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("windows_use call cancelled")); }, { once: true });
+	const cancel = () => { clearTimeout(timer); reject(new Error("windows_use call cancelled")); };
+	// One signal serves every poll of a call; a listener left behind per wait would pile up.
+	const timer = setTimeout(() => { signal?.removeEventListener("abort", cancel); resolve(); }, ms);
+	signal?.addEventListener("abort", cancel, { once: true });
 });
 
 export class Guest {
