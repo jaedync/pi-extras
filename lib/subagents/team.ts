@@ -21,6 +21,9 @@
  * stopped, after a quiet spell when it finished, since a follow-up often
  * comes quickly. A message to a released child relaunches it from its
  * session file with its context, so a long session's memory stays bounded.
+ * A session the launcher says a launch now would not make (new code after a
+ * /reload, edited settings) goes at the child's next pause, so its next run
+ * starts on what is current; a running child keeps it until then.
  */
 import { randomUUID } from "node:crypto";
 import { EVERYONE, MAIN, nameFor, USER } from "./names.ts";

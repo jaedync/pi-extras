@@ -92,7 +92,7 @@ the package. Removing it does not remove your credentials or change other packag
   `maxRunMinutes` (default `60`, at most `1440`) and `maxRunCost` (US dollars,
   default `null` for no limit), the budget of each run of a child,
   `childToolsExclude` (tool names children never get) and `resumePolicy`
-  (`"reload"`, the default, resumes children a `/reload` interrupted;
+  (`"reload"`, the default, resumes children that a `/reload` had to interrupt;
   `"always"` also allows one automatic attempt after a restart or crash;
   `"notify"` never resumes on its own), and `fallbackModels` (models, in
   order, that a run moves to when its model can't serve it; default: the
@@ -1158,6 +1158,13 @@ session starts and on `/reload`, never mid-session, since a changed tool
 description busts the prompt cache. `/subagents guide` edits it, or ask the
 agent to.
 
+Each launch of a child reads Pi's `settings.json`, the project's
+`.pi/settings.json`, `models.json` and `pi-extras.json` again. Thus a change to
+`compaction.reserveTokens` or to a model's `contextWindow` applies to the next
+child that starts. When `models.json` changed, the launch first reads it into
+the model list that main and its children share, as `/model` does. If the
+file does not parse, the launch uses the models from before and tells you.
+
 **Talking.** Every agent has a name made from its task, and `main` is the
 session. `message` sends a note to an agent by name, or to `all`. A running
 agent reads it after its current tool call; a finished one resumes with its
@@ -1372,13 +1379,34 @@ request, fail as before.
 failed or was stopped, after two quiet minutes when it finished, since a
 follow-up often comes soon. A message to a released child relaunches it from
 its session file with its context, and its inspector reads that file, so a
-long session with many children keeps only the working ones in memory.
+long session with many children keeps only the working ones in memory. A
+message within the two minutes uses the open session only when a launch now
+would make the same session. After a `/reload`, or after a change to one of
+the files that a launch reads or to an extension that the child loads, the
+child relaunches from its file instead. A finished child whose session is not
+current any more releases it at once.
 
 **Headless runs.** `pi -p` and `--mode json` end when main settles, so main
 waits there for its background children. Their reports, questions and notes
 go into main's context as it would otherwise settle, with one more turn to
 read them; a child's question to main gets main's answer and the child goes
 on. Main settles once no child is working and nothing waits for it.
+
+**Reload.** `/reload` does not stop children. A child that works continues on
+the code that it started with. When its run ends, its next run uses the new
+code. A child that starts after the reload uses the new code. Mail to main
+waits during the reload and then arrives one time. When no child works and
+all mail is in main's transcript, a team from the new code takes over from
+`index.json`. Until then, team settings from `pi-extras.json`, such as
+`maxConcurrent`, run budgets and `batchMs`, stay as they were. A change to the
+code of an extension gets to children after `/reload`, as it gets to main.
+
+Some reloads must interrupt children: a new version of pi-extras that can't
+take over from the old one, a takeover that fails, and a reload that does not
+finish in 30 seconds. Then Subagents interrupts the children and records them
+in `index.json`. The next session start resumes them, as `resumePolicy`
+allows. A reload that does not finish writes a line to
+`~/.pi/agent/subagents/reload.log`.
 
 **Restoration.** Children survive `/reload`, restarts and crashes. An
 `index.json` beside their sessions keeps each child's name, settings, state and
@@ -1388,7 +1416,7 @@ and messages steered into its run that it had not read. After a restart, its
 next run gets that mail first, and an answer it is owed still resumes it.
 A run that fails or is stopped keeps its unread messages for the next run
 too. Children that a
-`/reload` interrupted resume on their own, once. After a restart or crash they
+`/reload` had to interrupt resume on their own, once. After a restart or crash they
 come back paused, and main gets one notice listing them with their task and
 last activity. `/subagents resume <name>` continues a paused child; message
 finished ones instead. A resumed child is told to check files first, because

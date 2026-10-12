@@ -421,15 +421,21 @@ without a `cwd` loads project settings as before. The path must name an
 existing directory without control characters; it is resolved to its real
 path before use and is never passed to a shell. A read-only child's subagents
 can't make a worktree from a `cwd`, because `git worktree add` runs that
-repository's hooks. Children use the parent's model credentials.
+repository's hooks. Children use the parent's model credentials. When
+`models.json` changed, a child launch reads it into the parent's model list
+before it picks the child's model, as `/model` does; a file that does not
+parse is not read, so a half-saved file can't remove the parent's custom
+models.
 
 Child sessions are written under
 `PI_CODING_AGENT_DIR/sessions/subagents/<parent session id>/`. An `index.json`
 there, readable only by you, stores each child's full task, model settings,
 state, session path, run count, `cwd` and checkout path. A lease stops two Pi processes from driving
 the same children, and a lease held under another hostname is never taken
-over. By default only a `/reload` resumes interrupted children on its own, at
-most once each; a restart or crash only notifies. Orphans, grandchildren,
+over. A `/reload` keeps children running: the new copy of the extension takes
+them over in the same process and keeps the lease. When it can't, it
+interrupts them, and by default only that interruption resumes children on
+its own, at most once each; a restart or crash only notifies. Orphans, grandchildren,
 children whose workspace moved and children whose model is no longer allowed
 never resume on their own. A resumed child is told to check files first,
 because an interrupted tool may have changed them. Orphan sessions restore
@@ -437,8 +443,10 @@ read-only. `subagents.resumePolicy: "notify"` turns automatic resume off.
 Restoring only reads transcripts and never rewrites them. The run log,
 `PI_CODING_AGENT_DIR/subagents/runs.jsonl`, keeps the first 200 characters of
 each task, the model, timings, tool-call counts, usage, the session path and
-any error. Delete either whenever you like. Nothing is sent anywhere except
-the child's own model requests.
+any error. `PI_CODING_AGENT_DIR/subagents/reload.log` gets one line, with no
+task text, when a `/reload` did not take the children over in time. Delete
+these files whenever you like. Nothing is sent anywhere except the child's own
+model requests.
 
 A forked child's system prompt carries a condensed copy of the conversation:
 user and assistant text and one line per tool call, not tool output.
