@@ -299,6 +299,13 @@ export class MainMail implements HostMail {
 
 	/** Hands Pi what waits, oldest first, for as long as main can take it. */
 	retry(): void {
+		const waited = this.outbox.length > 0;
+		this.sendWaiting();
+		// Mail that waited and has now gone can leave the mail idle with nothing else changed, as a reminder that went out does.
+		if (waited && this.outbox.length === 0 && !this.closed) this.onChange();
+	}
+
+	private sendWaiting(): void {
 		if (this.retryTimer) clearTimeout(this.retryTimer);
 		this.retryTimer = null;
 		while (this.outbox.length > 0 && !this.closed) {
@@ -414,7 +421,7 @@ export class MainMail implements HostMail {
 	/** Queues mail behind anything already waiting, so Pi is handed it in the order it came. */
 	private post(message: OutgoingMessage, wakes: boolean): void {
 		this.outbox.push({ message, wakes });
-		this.retry();
+		this.sendWaiting();
 	}
 
 	private where(): Route {

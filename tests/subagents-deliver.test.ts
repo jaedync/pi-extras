@@ -295,3 +295,23 @@ test("main's reply to mail it owed is a change, however it is seen, so a host wa
 	assert.equal(box.owed({ contextMessages: [], pendingMessages: [] }), false);
 	assert.equal(count(), 0, "nothing owed, nothing changed");
 });
+
+test("mail that leaves the outbox on a retry tells the listener, so a quiet takeover sees the mail idle", () => {
+	let route: Route = "queue";
+	let changes = 0;
+	const sent: string[] = [];
+	const mail = new MainMail({ batchMs: 5, route: () => route, onChange: () => { changes++; }, retryMs: 1_000_000,
+		port: { send: (message) => sent.push(message.details.kind) } });
+	mail.deliver({ kind: "note", from: "lead", text: "FYI" });
+	mail.acknowledge(mail.pending()[0]!.id);
+	route = "hold";
+	mail.remind();
+	assert.equal(mail.idle(), false, "the reminder waits in the outbox");
+	const before = changes;
+	route = "wake";
+	mail.retry();
+	assert.deepEqual(sent, ["note", "reminder"]);
+	assert.equal(mail.idle(), true);
+	assert.ok(changes > before);
+	mail.dispose();
+});
