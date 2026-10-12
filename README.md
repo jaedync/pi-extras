@@ -1321,7 +1321,14 @@ cause, and the check runs again. The run keeps its budget, and the parent gets
 only the last result. The fix rounds count across the whole run, also when the
 run waits for its subagents or for an answer. The next run starts again at 0. A check that could not run gets no fix rounds, because
 the child can't repair the harness. A run that fails, is stopped or goes over
-its budget gets no check. The child keeps its check for its later runs. A
+its budget gets no check. A run that called no tool that can change files
+since the last check also gets no check, for example a run that only answered
+a question or sent messages. The tools that can't change files are `read`,
+`grep`, `find`, `ls`, `message` and `stop_subagent`. All other tools count as
+changes. This includes `subagent` and each tool that Subagents does not know.
+Then the report ends with `Check skipped: no changes since the last check.`
+The check runs again when its command changed or the last check could not
+run. After a restart, the next check always runs. The child keeps its check for its later runs. A
 `message` with `check` replaces it. When that message does not give
 `fixUntilPass` or `checkTimeoutMinutes`, the old values stay. Only main, or a
 child that can run `bash` itself, can set a check. A message can set a check

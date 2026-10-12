@@ -146,6 +146,8 @@ export interface AgentRecord {
 	checked?: CheckResult;
 	/** What it had spent when its current run began, so main's status lines show the run's own cost (status.ts). */
 	runCost?: number;
+	/** The run whose check the harness skipped: it called nothing that can change files since the last check (checks.ts). */
+	checkSkipped?: number;
 }
 
 /** A check as a spawn or a message set it (checks.ts). */

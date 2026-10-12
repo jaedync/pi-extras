@@ -124,7 +124,8 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.stopReason === undefined || typeof r.stopReason === "string")
 		&& strings(r.inbox) && strings(r.owed) && strings(r.unread) && strings(r.tools) && validSteps(r.fallbacks) && strings(r.after)
 		&& (r.check === undefined || validCheck(r.check)) && (r.checked === undefined || validChecked(r.checked))
-		&& (r.runCost === undefined || (Number.isFinite(r.runCost) && r.runCost >= 0));
+		&& (r.runCost === undefined || (Number.isFinite(r.runCost) && r.runCost >= 0))
+		&& (r.checkSkipped === undefined || (Number.isInteger(r.checkSkipped) && r.checkSkipped >= 0));
 }
 
 export class ChildIndex {

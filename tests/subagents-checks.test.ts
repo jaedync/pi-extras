@@ -35,6 +35,12 @@ function scripted(...runs: CheckRun[]) {
 
 const settled = async () => { for (let i = 0; i < 6; i++) await tick(); };
 
+/** The child calls these tools in the run under way, as an assistant message in its transcript. */
+const calls = (h: ReturnType<typeof teamHarness>, name: string, ...tools: string[]) => {
+	const parts = tools.map((tool, i) => ({ type: "toolCall", id: `${tool}-${i}`, name: tool, arguments: {} }));
+	h.transcripts.set(name, [...(h.transcripts.get(name) ?? []), { role: "assistant", content: parts }]);
+};
+
 test("a check that passes runs once as part of the run, and the report carries its block", async () => {
 	const script = scripted({ exitCode: 0, output: "# pass 12\n# fail 0" });
 	const h = teamHarness({ check: script.check });
@@ -71,6 +77,7 @@ test("a failed check goes back to the child as the same run, and the parent hear
 	assert.match(fix, /failed \(exit 1\)[\s\S]*expected 2, got 3/);
 	assert.equal(h.team.get(name)!.runs, 1, "a fix round is the same run");
 	assert.equal(reports(h.main).length, 0);
+	calls(h, name, "edit");
 	h.lastCall(name).finish("Fixed for real. Report: ...");
 	const done = await h.team.whenDone(name);
 	assert.equal(script.asked.length, 2);
@@ -89,6 +96,7 @@ test("a check that keeps failing ends the run after its fix rounds with the last
 	await tick();
 	h.lastCall(name).finish("First try.");
 	await settled();
+	calls(h, name, "edit");
 	h.lastCall(name).finish("Second try.");
 	const done = await h.team.whenDone(name);
 	assert.equal(done.state, "idle");
@@ -181,6 +189,7 @@ test("fix rounds count across the whole run: one that waited on its subagents or
 	assert.equal(h.team.get(lead)!.state, "waiting");
 	h.lastCall("helper").finish("Fixed.");
 	await settled();
+	calls(h, lead, "edit");
 	h.lastCall(lead).finish("Second try.");
 	await settled();
 	assert.match(h.lastCall(lead).text, /fix round 2 of 3/, "the wait on its subagent did not start the count again");
@@ -190,9 +199,11 @@ test("fix rounds count across the whole run: one that waited on its subagents or
 	assert.equal(h.team.get(lead)!.state, "waiting");
 	assert.ok((await h.team.send(peer, lead, "Use --strict.")).ok);
 	await settled();
+	calls(h, lead, "edit");
 	h.lastCall(lead).finish("Third try.");
 	await settled();
 	assert.match(h.lastCall(lead).text, /fix round 3 of 3/, "nor did the wait for an answer");
+	calls(h, lead, "edit");
 	h.lastCall(lead).finish("Last try.");
 	const done = await h.team.whenDone(lead);
 	assert.equal(script.asked.length, 4);
@@ -200,9 +211,75 @@ test("fix rounds count across the whole run: one that waited on its subagents or
 	assert.match(reportText(done, Date.now()), /failed \(exit 1\) in \d+s, attempt 4 of 4\./);
 	assert.ok((await h.team.send("main", lead, "Try once more.")).ok);
 	await settled();
+	calls(h, lead, "edit");
 	h.lastCall(lead).finish("New run.");
 	await settled();
 	assert.match(h.lastCall(lead).text, /fix round 1 of 3/, "a new run starts its own count");
+	await h.team.close();
+});
+
+test("a run that called no tool that can change files since the last check skips it, and its report says so", async () => {
+	const script = scripted();
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("impl", { name: "impl", check: { command: "npm test", fixUntilPass: 0 } });
+	await tick();
+	const run = async (text: string, tools: string[], options: { check?: { command: string } } = {}) => {
+		assert.ok((await h.team.send("main", name, text, options)).ok);
+		await settled();
+		if (tools.length > 0) calls(h, name, ...tools);
+		h.lastCall(name).finish(`${text} done.`);
+		return h.team.whenDone(name);
+	};
+	calls(h, name, "read", "edit");
+	h.lastCall(name).finish("Implemented.");
+	await h.team.whenDone(name);
+	assert.equal(script.asked.length, 1, "the first run edited files");
+	const answered = await run("Which file?", ["message"]);
+	assert.equal(script.asked.length, 1, "an answer by message changes no files");
+	assert.equal(answered.checkSkipped, answered.runs);
+	assert.match(reportText(answered, Date.now()), /Which file\? done\.\n\nCheck skipped: no changes since the last check\.$/);
+	assert.doesNotMatch(reportText(answered, Date.now()), /Check run by the harness/, "the last run's check is not this run's");
+	await run("Look again.", ["read", "grep", "find", "ls", "stop_subagent"]);
+	await run("Just say it.", []);
+	assert.equal(script.asked.length, 1, "reading and writing text change nothing");
+	await run("Run it.", ["bash"]);
+	assert.equal(script.asked.length, 2, "bash can change files");
+	const unknown = await run("Search.", ["web_search"]);
+	assert.equal(script.asked.length, 3, "a tool it does not know counts as a change");
+	assert.equal(unknown.checkSkipped, undefined);
+	await run("Delegate.", ["subagent"]);
+	assert.equal(script.asked.length, 4, "a subagent can change files for it");
+	await run("Lint too.", ["message"], { check: { command: "npm run lint" } });
+	assert.equal(script.asked.length, 5, "a new check command has not run yet");
+	assert.equal(script.asked.at(-1)?.command, "npm run lint");
+	await h.team.close();
+});
+
+test("a fix round that changed nothing ends with the failed check, and a run that changed files and then failed is checked next time", async () => {
+	const script = scripted({ exitCode: 1, output: "broken" }, { exitCode: 0, output: "ok" });
+	const h = teamHarness({ check: script.check });
+	const name = h.spawn("impl", { name: "impl", check: { command: "npm test", fixUntilPass: 2 } });
+	await tick();
+	calls(h, name, "edit");
+	h.lastCall(name).finish("Implemented.");
+	await settled();
+	assert.match(h.lastCall(name).text, /fix round 1 of 2/);
+	h.lastCall(name).finish("I can't fix this.");
+	const done = await h.team.whenDone(name);
+	assert.equal(script.asked.length, 1, "nothing changed since the check failed");
+	assert.equal(done.checked?.exitCode, 1);
+	assert.match(reportText(done, Date.now()), /failed \(exit 1\) in \d+s, attempt 1 of 3\.[\s\S]*broken\n```\n\nCheck skipped: no changes since the last check\.$/);
+	assert.ok((await h.team.send("main", name, "Try a different fix.")).ok);
+	await settled();
+	calls(h, name, "write");
+	h.lastCall(name).fail(new Error("model error"));
+	assert.equal((await h.team.whenDone(name)).state, "failed");
+	assert.ok((await h.team.send("main", name, "What did you change?")).ok);
+	await settled();
+	calls(h, name, "message");
+	h.lastCall(name).finish("I wrote a.ts.");
+	await h.team.whenDone(name);
+	assert.equal(script.asked.length, 2, "the failed run's write is not covered by any check yet");
 	await h.team.close();
 });
 
@@ -219,6 +296,7 @@ test("mail that arrives during the check is read first, then the check runs agai
 	await settled();
 	assert.equal(h.lastCall(name).text, "Message from main:\nAlso update the README.");
 	assert.equal(h.team.get(name)!.state, "running");
+	calls(h, name, "edit");
 	h.lastCall(name).finish("Done, README too.");
 	const done = await h.team.whenDone(name);
 	assert.equal(script.asked.length, 2, "the README change is checked too");
@@ -366,12 +444,14 @@ test("a run whose check did not pass is news: its report is never quiet, and a s
 	assert.match(h.lastCall("review").text, /- impl finished, but the harness's check failed \(exit 1\)\. /);
 	assert.deepEqual(await h.team.send("rev", "impl", "Fix the null check in a.ts.", { expectReply: true }), { ok: true, delivered: "resumed" });
 	await settled();
+	calls(h, "impl", "edit");
 	h.lastCall("impl").finish("Fixed.");
 	await settled();
 	assert.equal(reports(h.main).at(-1)?.quiet, undefined, "a peer started this run, but its check failed");
 	assert.deepEqual(await h.team.send("main", "impl", "Which file?", { expectReply: true }), { ok: true, delivered: "resumed" });
 	await settled();
-	h.transcripts.set("impl", [...(h.transcripts.get("impl") ?? []), { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "message", arguments: {} }] }]);
+	calls(h, "impl", "edit");
+	calls(h, "impl", "message");
 	await h.team.send("impl", "main", "a.ts");
 	assert.equal(h.team.get("impl")!.answeredMain, true);
 	h.lastCall("impl").finish("a.ts");
@@ -394,6 +474,7 @@ test("mail that comes during a failing check goes with the fix prompt, so no fix
 	const prompt = h.lastCall(name).text;
 	assert.match(prompt, /^Message from main:\nAlso update the README\.\n\nThe harness ran your check when your run ended, and it failed\./);
 	assert.match(prompt, /fix round 1 of 1/);
+	calls(h, name, "edit");
 	h.lastCall(name).finish("Fixed both.");
 	const done = await h.team.whenDone(name);
 	assert.equal(done.checked?.exitCode, 0);
