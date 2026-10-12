@@ -189,6 +189,29 @@ function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: Age
 	return guardBash(definition, { ...(sandbox ? { sandbox } : {}), ...(changes ? { changes } : {}) }) as ToolDefinition;
 }
 
+/**
+ * An edit or write tool that checks its path again as it runs. The edit guard
+ * checks every call of a reply before any of them runs, so a link that an
+ * earlier call of the same reply makes (a bash `ln -s`) could take the path
+ * out of the worktree in between.
+ */
+export function recheckedEdit(definition: ToolDefinition, check: (path: unknown) => string | undefined): ToolDefinition {
+	return {
+		...definition,
+		async execute(id, params, signal, onUpdate, ctx) {
+			const reason = check((params as { path?: unknown }).path);
+			if (reason) throw new Error(reason);
+			return definition.execute(id, params, signal, onUpdate, ctx);
+		},
+	};
+}
+
+/** Pi's edit and write tools for the child, each checked again as it runs; they replace whichever ones the child would get. */
+function childEdits(sdk: Sdk, cwd: string, wanted: ReadonlySet<string>, check: (path: unknown) => string | undefined): ToolDefinition[] {
+	const made = { edit: () => sdk.createEditToolDefinition(cwd), write: () => sdk.createWriteToolDefinition(cwd) } as const;
+	return (["edit", "write"] as const).filter((name) => wanted.has(name)).map((name) => recheckedEdit(made[name]() as ToolDefinition, check));
+}
+
 /** The child's edit calls that run, by call id, so its own and other agents' bash calls don't count their changes. */
 export interface EditTracker {
 	start(id: string, path: unknown): void;
@@ -246,11 +269,12 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const settingsManager = childSettings(deps, cwd, record);
 			// An SDK tool wins over a built-in or extension tool of the same name.
 			const bash = wanted.has("bash") ? childBash(sdk, cwd, settingsManager, record, deps) : undefined;
-			const customTools = bash ? [...listed, bash] : listed;
+			const editCheck = childEditCheck(deps, record, cwd);
+			const customTools = [...listed, ...(bash ? [bash] : []), ...childEdits(sdk, cwd, wanted, editCheck)];
 			// A check runs as the child's own bash would; a child without bash gets one made the same way when it needs it.
 			let checkBash = bash;
 			const check: ChildHandle["check"] = (command, options) => bashCheck(checkBash ??= childBash(sdk, cwd, settingsManager, record, deps), command, options);
-			const loader = childLoader(deps, record, { cwd, settingsManager, guard, wanted, loaded });
+			const loader = childLoader(deps, record, { cwd, settingsManager, guard, wanted, loaded, editCheck });
 			await loader.reload();
 			const stamp = withFiles(settled, resourceFiles(loader), begun);
 			// A path fixed at spawn opens as a new session written there.
@@ -295,6 +319,11 @@ function childSettings(deps: LauncherDeps, cwd: string, record: AgentRecord): Se
 	return settingsManager;
 }
 
+/** Why the child may not edit `path` now: outside its worktree is refused before the lock is taken, so a refused edit holds nothing. */
+function childEditCheck(deps: LauncherDeps, record: AgentRecord, cwd: string): (path: unknown) => string | undefined {
+	return (path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name, editTarget(cwd, path));
+}
+
 interface LoaderInputs {
 	readonly cwd: string;
 	readonly settingsManager: SettingsManager;
@@ -302,10 +331,11 @@ interface LoaderInputs {
 	/** The child's tools, and the extension files that own them. */
 	readonly wanted: ReadonlySet<string>;
 	readonly loaded: readonly string[];
+	readonly editCheck: (path: unknown) => string | undefined;
 }
 
 function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInputs) {
-	const { cwd, settingsManager, guard, wanted, loaded } = inputs;
+	const { cwd, settingsManager, guard, wanted, loaded, editCheck } = inputs;
 	return new deps.sdk.DefaultResourceLoader({
 		cwd, agentDir: deps.agentDir, settingsManager, noPromptTemplates: true, noThemes: true,
 		// Besides Cache Compaction, load only files that own the child's tools. Every factory is handed the
@@ -315,9 +345,7 @@ function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInpu
 		// After APPEND_SYSTEM.md, which Pi finds as it finds SYSTEM.md, project trust and all; a plain
 		// appendSystemPrompt would take its place.
 		appendSystemPromptOverride: (base) => [...base, deps.instructions(record)],
-		// Outside its worktree is refused before the lock is taken, so a refused edit holds nothing.
-		extensionFactories: [guard.extension, editGuard((path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name, editTarget(cwd, path)),
-			editTracker(deps.activity, record.name, cwd))],
+		extensionFactories: [guard.extension, editGuard(editCheck, editTracker(deps.activity, record.name, cwd))],
 		extensionsOverride: (base) => ({
 			...base,
 			extensions: base.extensions.filter((extension) => [CHILD_GUARD_PATH, EDIT_GUARD_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)

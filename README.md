@@ -1499,7 +1499,9 @@ a git repository, or when `git` fails or takes more than 10 seconds, calls are
 not checked, and you get one warning. Use `isolation: "worktree"` for
 parallel edits. Each worktree has its own lock, shared by the helpers that
 inherit it. A worktree child's `edit` and `write` calls outside its worktree
-are refused before they run. The check follows symlinks, so an edit through the
+are refused before they run, and the check runs again as each call starts. So
+a link that an earlier call of the same reply made can't take a path out. The
+check follows symlinks, so an edit through the
 worktree's `node_modules` link into the parent's checkout is refused too. A
 worktree child's `bash` commands run in an OS sandbox that blocks writes into
 the parent's checkout (and, for a worktree made from a worktree, into each
