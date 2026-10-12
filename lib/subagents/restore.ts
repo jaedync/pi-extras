@@ -116,6 +116,7 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.worktree === undefined || validWorktree(r.worktree))
 		&& (r.cwd === undefined || savedPath(r.cwd)) && (r.checkout === undefined || savedPath(r.checkout))
 		&& (r.worktreeReport === undefined || typeof r.worktreeReport === "string")
+		&& (r.sharesWorktree === undefined || typeof r.sharesWorktree === "boolean")
 		&& (r.thinking === undefined || isThinking(r.thinking))
 		&& (r.interruptedBy === undefined || ["reload", "signal", "quit"].includes(r.interruptedBy))
 		&& (r.interruptionId === undefined || typeof r.interruptionId === "string")

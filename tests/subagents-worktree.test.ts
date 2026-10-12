@@ -94,6 +94,8 @@ test("reports count files and child commits and give quoted apply and cleanup co
 	assert.ok(existsSync(worktree.path));
 	const baseContent = git(worktree.path, "show", `${worktree.base}:tracked.txt`);
 	assert.equal(baseContent, "main uncommitted\n");
+	// As the Apply line says: the report stages nothing, so the parent stages, then applies.
+	git(worktree.path, "add", "-A");
 	execFileSync("git", ["-C", root, "apply"], { input: git(worktree.path, "diff", "--binary", "--cached", worktree.base), timeout: 10_000, stdio: ["pipe", "pipe", "pipe"] });
 	assert.equal(readFileSync(join(root, "tracked.txt"), "utf8"), "child edit\n");
 	assert.equal(readFileSync(join(root, "new file.txt"), "utf8"), "new\n");
@@ -165,3 +167,43 @@ for (const [layout, ignore] of [["node_modules", "node_modules\n"], ["node_modul
 		assert.equal(readFileSync(join(root, "node_modules", "pkg", "index.js"), "utf8"), "dependency\n");
 	});
 }
+
+test("a worktree report counts every change without staging anything in the worktree", (t) => {
+	const root = repository(t);
+	const worktree = createWorktree(root, "lead");
+	writeFileSync(join(worktree.path, "feature.txt"), "the change\n");
+	writeFileSync(join(worktree.path, "scratch.txt"), "not for commit\n");
+	git(worktree.path, "add", "feature.txt");
+	const staged = git(worktree.path, "diff", "--cached", "--name-only");
+	assert.match(worktreeFooter(worktree), /2 files differ from base/);
+	assert.equal(git(worktree.path, "diff", "--cached", "--name-only"), staged, "the lead's own staging stays as it was");
+});
+
+test("a helper in its lead's worktree reports without the lead's worktree footer", async (t) => {
+	const root = repository(t);
+	const prompts = new Map<string, string[]>();
+	const finish = new Map<string, (text: string) => void>();
+	const team = new Team({ maxConcurrent: 4, maxDepth: 2, replyTimeoutMs: 60_000, deliverToMain: () => undefined, warn: () => undefined,
+		launcher: { async launch(record: AgentRecord) {
+			const transcript: unknown[] = [];
+			return { prompt: (text: string) => new Promise<void>((resolve) => {
+				prompts.set(record.name, [...(prompts.get(record.name) ?? []), text]);
+				finish.set(record.name, (said) => { transcript.push({ role: "assistant", content: [{ type: "text", text: said }] }); resolve(); });
+			}), steer: () => undefined, abort: async () => undefined, lastText: () => undefined, messages: () => transcript, takeQueued: () => [], dispose: async () => undefined };
+		} } });
+	const spawn = (name: string, parent: string, extra: object = {}) => {
+		const result = team.spawn({ name, task: name, parent, model: "m", readOnly: false, fork: false, blocking: false, ...extra });
+		assert.ok(result.ok, !result.ok ? result.error : "");
+	};
+	const flush = async () => { for (let i = 0; i < 6; i++) await new Promise((resolve) => setImmediate(resolve)); };
+	spawn("lead", "main", { cwd: root, isolation: "worktree" }); await flush();
+	spawn("helper", "lead"); await flush();
+	assert.equal(team.get("helper")!.worktree?.path, team.get("lead")!.worktree?.path);
+	finish.get("lead")!("waiting for helper"); await flush();
+	finish.get("helper")!("Checked the docs."); await flush();
+	const toLead = prompts.get("lead")!.at(-1)!;
+	assert.match(toLead, /Checked the docs/);
+	assert.doesNotMatch(toLead, /git worktree remove|Worktree:/);
+	assert.match(reportText(team.get("lead")!, Date.now()), /Worktree: /, "the lead's own report keeps it");
+	await team.close();
+});

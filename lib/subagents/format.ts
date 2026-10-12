@@ -68,7 +68,7 @@ function duration(record: AgentRecord, now: number): string {
 
 /** A finished, failed, stopped or interrupted child, as its parent reads it. */
 export function reportText(record: AgentRecord, now: number): string {
-	return reportSummary(record, now) + (record.worktree ? record.worktreeReport ?? worktreeFooter(record.worktree) : "");
+	return reportSummary(record, now) + (record.worktree && !record.sharesWorktree ? record.worktreeReport ?? worktreeFooter(record.worktree) : "");
 }
 
 /** This run's switches to fallback models, said plainly, since a fallback may cost more than the model its parent chose. */

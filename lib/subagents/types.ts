@@ -78,6 +78,8 @@ export interface AgentRecord {
 	checkout?: string;
 	/** Captured when a run ends, so reading its report does not stage a later run's files. */
 	worktreeReport?: string;
+	/** It works in its parent's worktree, which is the parent's to apply and delete: its report has no worktree footer. */
+	sharesWorktree?: boolean;
 	fork: boolean;
 	/** The parent's tool call waits for the report instead of a message. */
 	blocking: boolean;

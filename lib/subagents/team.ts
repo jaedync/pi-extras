@@ -217,6 +217,7 @@ export class Team implements HostTeam {
 			...(request.group ? { group: request.group } : {}),
 			...(request.tools ? { tools: [...request.tools] } : {}),
 			...(worktree ? { worktree: { ...worktree } } : {}),
+			...(worktree && request.isolation !== "worktree" ? { sharesWorktree: true } : {}),
 			...(startsIn ? { cwd: startsIn } : {}),
 			...(checkout ? { checkout } : {}),
 			...(maxMinutes !== undefined ? { maxMinutes } : {}),

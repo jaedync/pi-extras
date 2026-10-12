@@ -61,7 +61,7 @@ export function writeReport(sessionFile: string, run: number, text: string, io: 
 /** Disk trouble must not prevent delivery of the report or leave a stale path in it. */
 export function saveReport(record: AgentRecord, warn: Warn = console.warn): AgentRecord {
 	// Counts belong to this run; later display must not stage files from a resumed run.
-	const completed = record.worktree ? { ...record, worktreeReport: worktreeFooter(record.worktree) } : record;
+	const completed = record.worktree && !record.sharesWorktree ? { ...record, worktreeReport: worktreeFooter(record.worktree) } : record;
 	// The file is the report as the parent reads it: the agent's text, then its run's check.
 	const text = reportWithCheck(record);
 	if (!text || !record.sessionFile) return { ...completed };
