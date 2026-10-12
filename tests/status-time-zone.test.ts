@@ -62,12 +62,12 @@ test("a system zone no formatter accepts falls back to UTC", () => {
 	const agentDir = mkdtempSync(join(tmpdir(), "status-tz-"));
 	try {
 		const script = `
-			const { hhmm, STATUS_TIME_ZONE } = await import(${JSON.stringify(new URL("../lib/status-plus-logic.ts", import.meta.url).href)});
+			const { hhmm, STATUS_TIME_ZONE, STATUS_TIME_ZONE_PROBLEM } = await import(${JSON.stringify(new URL("../lib/status-plus-logic.ts", import.meta.url).href)});
 			const { localTime } = await import(${JSON.stringify(new URL("../lib/usage-time.ts", import.meta.url).href)});
 			const { resetLabel } = await import(${JSON.stringify(new URL("../lib/status-plus-render.ts", import.meta.url).href)});
 			const now = Date.now();
 			hhmm(now); localTime(now); resetLabel(now + 3_600_000, now);
-			console.log(STATUS_TIME_ZONE);
+			console.log(JSON.stringify({ zone: STATUS_TIME_ZONE, problem: STATUS_TIME_ZONE_PROBLEM }));
 		`;
 		// TZ="" gives Etc/Unknown; an unknown TZ name gives no zone at all.
 		for (const tz of ["", "Not/AZone"]) {
@@ -75,7 +75,7 @@ test("a system zone no formatter accepts falls back to UTC", () => {
 			delete env.STATUSLINE_TZ;
 			const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env });
 			assert.equal(result.status, 0, result.stderr);
-			assert.equal(result.stdout.trim(), "UTC", `TZ=${JSON.stringify(tz)}`);
+			assert.deepEqual(JSON.parse(result.stdout), { zone: "UTC", problem: "the system time zone is not a known time zone; times use UTC" }, `TZ=${JSON.stringify(tz)}`);
 		}
 	} finally {
 		rmSync(agentDir, { recursive: true, force: true });

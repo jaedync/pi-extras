@@ -63,7 +63,7 @@ export interface ModelCost extends CostRates {
 
 /** For a system zone no formatter accepts: TZ="" gives Etc/Unknown, and an unknown TZ name gives none. */
 const FALLBACK_TIME_ZONE = "UTC";
-const SYSTEM_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone ?? FALLBACK_TIME_ZONE;
+const SYSTEM_TIME_ZONE: string | undefined = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 function knownTimeZone(timeZone: string): boolean {
 	try {
@@ -78,12 +78,12 @@ function knownTimeZone(timeZone: string): boolean {
  * The zone to show times in, and why the wanted one was not used. Every
  * formatter throws on an unknown zone, and the footer formats on each frame.
  */
-export function resolveTimeZone(requested: string | undefined, system = SYSTEM_TIME_ZONE): { timeZone: string; problem?: string } {
+export function resolveTimeZone(requested: string | undefined, system: string | undefined = SYSTEM_TIME_ZONE): { timeZone: string; problem?: string } {
 	if (requested && knownTimeZone(requested)) return { timeZone: requested };
-	const fallback = knownTimeZone(system) ? system : FALLBACK_TIME_ZONE;
+	const fallback = system && knownTimeZone(system) ? system : FALLBACK_TIME_ZONE;
 	if (requested) return { timeZone: fallback, problem: `STATUSLINE_TZ is not a known time zone; times use ${fallback}` };
 	if (fallback !== system) return { timeZone: fallback, problem: `the system time zone is not a known time zone; times use ${fallback}` };
-	return { timeZone: system };
+	return { timeZone: fallback };
 }
 
 const statusZone = resolveTimeZone(process.env.STATUSLINE_TZ);

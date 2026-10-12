@@ -157,7 +157,10 @@ function floorProvision(setupHome: string, runs: { count: number }) {
 function withOnline<T>(run: () => Promise<T>): Promise<T> {
 	const offline = process.env.PI_OFFLINE;
 	delete process.env.PI_OFFLINE;
-	return run().finally(() => (process.env.PI_OFFLINE = offline));
+	return run().finally(() => {
+		if (offline === undefined) delete process.env.PI_OFFLINE;
+		else process.env.PI_OFFLINE = offline;
+	});
 }
 
 // Hosts that could not tell whether they have a microphone do not set up at session start; a dictation must.
