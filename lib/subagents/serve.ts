@@ -189,8 +189,8 @@ export interface Served {
 	readonly tools: ToolContext;
 	/** Opens a host from this module's code once the adopted one is quiet; looked at after each change. */
 	lookForQuiet(): void;
-	/** Pi reloads: leaves the host for the next module. */
-	park(session: object): void;
+	/** Pi reloads: leaves the host for the next module, or closes it as a reload did before when it can't. */
+	park(session: object): Promise<void>;
 	close(reason?: string): Promise<void>;
 }
 
@@ -269,7 +269,8 @@ async function serve(options: ServeOptions): Promise<Served> {
 			return;
 		}
 		host = next;
-		old.retire().catch((error: unknown) => notify(`subagents: letting the team from before the /reload go failed: ${(error as Error).message}`));
+		// Through the host, whose ports follow the module that serves it: this `ctx` may be gone by the time it fails.
+		old.retire().catch((error: unknown) => next.ports.notify(`subagents: letting the team from before the /reload go failed: ${(error as Error).message}`, "warning"));
 		options.teamChanged();
 		options.mailChanged();
 	};
@@ -295,13 +296,21 @@ async function serve(options: ServeOptions): Promise<Served> {
 		adopted,
 		tools,
 		lookForQuiet,
-		park(session) {
+		async park(session) {
 			serving = false;
 			if (looking) clearImmediate(looking);
 			looking = undefined;
-			live.freeze();
-			host.park();
-			parkHost(session, host, { log: reloadLog(agentDir) });
+			const log = reloadLog(agentDir);
+			try {
+				host.park();
+				live.freeze();
+				parkHost(session, host, { log });
+			} catch (error) {
+				// Not on the shelf, so no module takes it over and no timeout closes it: close it now, which lets the lease
+				// go. The next start announces and resumes the interrupted children.
+				log(`could not keep the subagents through a /reload (${(error as Error).message}), so they were interrupted`);
+				await host.close("reload");
+			}
 		},
 		async close(reason) {
 			serving = false;

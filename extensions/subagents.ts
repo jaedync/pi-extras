@@ -290,7 +290,7 @@ export default function subagents(pi: ExtensionAPI) {
 		const current = served;
 		served = null;
 		// The children keep running; the module Pi loads next takes them over (host.ts). Quick, as Pi waits for it.
-		if (event.reason === "reload") current?.park(ctx.sessionManager);
+		if (event.reason === "reload") await current?.park(ctx.sessionManager);
 		else await current?.close(event.reason);
 		if (backgroundCtx && event.reason !== "reload") announceBackground(pi, backgroundCtx, "subagents", 0);
 		backgroundCtx = undefined;
