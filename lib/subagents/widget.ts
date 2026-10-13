@@ -60,10 +60,11 @@ function treeRows(visible: readonly AgentRecord[], reportPending: ReadonlySet<st
 		}
 	};
 	walk(MAIN, 0);
-	// A visible child whose parent is not shown still gets a row.
+	// A visible child whose parent is not shown still gets a row, at its own depth: main's wait: true child has its row in the transcript.
 	for (const record of visible) if (record.parent !== MAIN && !shown.has(record.parent)) {
-		ordered.push(rowOf(record, 0));
-		walk(record.name, 1);
+		const depth = Math.max(0, record.depth - 1);
+		ordered.push(rowOf(record, depth));
+		walk(record.name, depth + 1);
 	}
 	return ordered;
 }

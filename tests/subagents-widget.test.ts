@@ -288,3 +288,9 @@ test("the widget's control line opens the view, expands to fit and collapses bac
 	assert.equal(component.handleMouse({ type: "click", button: "left", x: lines[3]!.length + 4, y: 3 }), undefined);
 	widget.detach();
 });
+
+test("a subagent of main's wait: true child keeps its own depth, though its parent's row is in the transcript", () => {
+	const rows = agentRows([record("check", { state: "running", blocking: true }), record("helper", { parent: "check", depth: 2, state: "running" }),
+		record("leaf", { parent: "helper", depth: 3, state: "running" })], new Set());
+	assert.deepEqual(rows.map((row) => [row.record.name, row.depth]), [["helper", 1], ["leaf", 2]]);
+});
