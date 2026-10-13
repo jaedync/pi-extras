@@ -1657,7 +1657,10 @@ Pi process at a time can own a session's children; forks start without them.
 
 Each run adds a line to `~/.pi/agent/subagents/runs.jsonl` (model,
 task opening, time, tool calls, cost, how it ended); `/subagents stats` sums it
-by model, which is what to tune the guide on. `/subagents stop <name>` or
+by model, which is what to tune the guide on. Each line holds that run's own
+tool calls and cost (`"format": 2`). Older lines, with no `format`, hold the
+child's totals so far, so stats over them count a child with many runs too
+high. `/subagents stop <name>` or
 `stop all` also stops paused interrupted children.
 
 If another extension already has a `subagent` tool, such as pi-subagents,

@@ -503,7 +503,8 @@ read-only. `subagents.resumePolicy: "notify"` turns automatic resume off.
 Restoring only reads transcripts and never rewrites them. The run log,
 `PI_CODING_AGENT_DIR/subagents/runs.jsonl`, keeps the first 200 characters of
 each task, the model, timings, tool-call counts, usage, the session path and
-any error. `PI_CODING_AGENT_DIR/subagents/reload.log` gets one line, with no
+any error. The file has mode 0600, and a new `subagents` directory has mode
+0700. `PI_CODING_AGENT_DIR/subagents/reload.log` gets one line, with no
 task text, when a `/reload` could not keep the children or did not take them
 over in time. The warnings of that interruption also go there, such as a run
 log or index that can't be written. The index also keeps mail to main that a
