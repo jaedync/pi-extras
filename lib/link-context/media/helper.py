@@ -292,19 +292,45 @@ def other_scheme_urls(info):
     return found
 
 
+def refuse_other_schemes(info):
+    other = other_scheme_urls(info)
+    if other:
+        # Not PostProcessingError: yt-dlp logs that one and downloads anyway.
+        raise RuntimeError(f"pull_link downloads only http and https media, not {other[0].split(':', 1)[0]}://")
+
+
 def http_only(ydl):
     """A before_dl step that stops the download when a chosen format is not on http or https."""
     from yt_dlp.postprocessor.common import PostProcessor
-    from yt_dlp.utils import PostProcessingError
 
     class HttpOnly(PostProcessor):
         def run(self, info):
-            other = other_scheme_urls(info)
-            if other:
-                raise PostProcessingError(f"pull_link downloads only http and https media, not {other[0].split(':', 1)[0]}://")
+            refuse_other_schemes(info)
             return [], info
 
     return HttpOnly(ydl)
+
+
+def restrict_downloaders():
+    """Every file yt-dlp fetches (media and captions) gets a downloader it picks here first.
+
+    Refuses a URL that is not http, https or data, and any external program but
+    ffmpeg (rtmpdump, aria2c, curl, mpv): the guard proxy cannot see their requests.
+    """
+    import yt_dlp  # noqa: F401 (loads the module below; the package's YoutubeDL name is the class)
+    from yt_dlp.downloader.external import ExternalFD, FFmpegFD
+
+    module = sys.modules["yt_dlp.YoutubeDL"]
+    original = module.get_suitable_downloader
+
+    def checked(info, *args, **kwargs):
+        refuse_other_schemes(info)
+        downloader = original(info, *args, **kwargs)
+        if downloader is not None and downloader is not FFmpegFD and (issubclass(downloader, ExternalFD) or downloader.__name__ == "RtmpFD"):
+            raise RuntimeError(f"pull_link does not run {downloader.__name__}, an external downloader")
+        return downloader
+
+    module.get_suitable_downloader = checked
 
 
 def cmd_download(req):
@@ -468,7 +494,10 @@ def main():
     guard = None
     try:
         req = json.loads(sys.stdin.read() or "{}")
-        guard = guard_network(req) if sys.argv[1] in NETWORK_COMMANDS else None
+        if sys.argv[1] in NETWORK_COMMANDS:
+            # Also with the user's own proxy: an external downloader would not use it either.
+            restrict_downloaders()
+            guard = guard_network(req)
         reply, code = COMMANDS[sys.argv[1]](req), 0
     except Exception as error:
         message = str(error).strip().splitlines()

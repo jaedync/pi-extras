@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -34,9 +34,9 @@ async function listen(answer: (path: string, res: import("node:http").ServerResp
 	return { port, hits, close: () => new Promise((resolve) => server.close(() => resolve())) };
 }
 
-function runPython(bin: string, args: string[], input = ""): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runPython(bin: string, args: string[], input = "", env: NodeJS.ProcessEnv = NO_PROXY_ENV): Promise<{ code: number | null; stdout: string; stderr: string }> {
 	return new Promise((resolve) => {
-		const child = spawn(bin, args, { env: NO_PROXY_ENV, cwd: tmpdir() });
+		const child = spawn(bin, args, { env, cwd: tmpdir() });
 		let stdout = "";
 		let stderr = "";
 		child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -289,4 +289,42 @@ test("yt-dlp: an ftp:// video, or HLS segments on ftp://, never reach ffmpeg's F
 	}
 	await new Promise((resolve) => setTimeout(resolve, 600));
 	assert.deepEqual(ftp.hits, [], "the FTP listener got no connection");
+});
+
+/** A fake rtmpdump on PATH that records each run: yt-dlp would start it for rtmp:// media, and a real one connects around the guard. */
+function fakeRtmpdump(): { bin: string; calls: () => string } {
+	const bin = mkdtempSync(join(childHome, "fakebin-"));
+	writeFileSync(join(bin, "rtmpdump"), `#!/bin/sh\necho "rtmpdump $*" >> "${bin}/calls.log"\ncase "$*" in *-h*|*--help*) echo "RTMPDump v2.4"; exit 0;; esac\nexit 1\n`, { mode: 0o755 });
+	return { bin, calls: () => (existsSync(join(bin, "calls.log")) ? readFileSync(join(bin, "calls.log"), "utf8") : "") };
+}
+
+test("yt-dlp: media and captions on rtmp:// or ftp:// stop the call, and no external downloader runs", { skip: SKIP_YTDLP }, async (t) => {
+	const ftp = await rawListener();
+	const rtmpdump = fakeRtmpdump();
+	const page = await listen((path, res) => {
+		const [, scheme, mode] = /^\/(\w+)\/(\w+)$/.exec(path) ?? [];
+		const media = mode === "captions" ? `http://127.0.0.1:${page.port}/v.mp4` : `${scheme}://127.0.0.1:${ftp.port}/v.mp4`;
+		const track = mode === "captions" ? `<track kind="captions" srclang="en" src="${scheme}://127.0.0.1:${ftp.port}/sub.vtt">` : "";
+		res.writeHead(200, { "content-type": "text/html" }).end(`<html><head><title>t</title></head><body><video src="${media}" type='video/mp4; codecs="avc1.42E01E"'>${track}</video></body></html>`);
+	});
+	const dir = mkdtempSync(join(tmpdir(), "link-guard-"));
+	t.after(async () => {
+		await ftp.close();
+		await page.close();
+		rmSync(dir, { recursive: true, force: true });
+	});
+	const env = { ...NO_PROXY_ENV, PATH: `${rtmpdump.bin}:${process.env.PATH ?? ""}` };
+	for (const scheme of ["rtmp", "ftp"]) {
+		for (const sections of [[[0, 1]], undefined]) {
+			const request = { url: `http://127.0.0.1:${page.port}/${scheme}/media`, kind: "video", dir, sections, testAllowTargets: [`127.0.0.1:${page.port}`] };
+			const result = await runPython(mediaPython as string, ["-I", "-B", HELPER, "download"], JSON.stringify(request), env);
+			assert.equal(result.code, 1, `${scheme} sections=${!!sections}: ${result.stdout}`);
+			assert.match(JSON.parse(result.stdout).error, new RegExp(`only http and https media, not ${scheme}://`), `${scheme} sections=${!!sections}`);
+		}
+		const captions = { url: `http://127.0.0.1:${page.port}/${scheme}/captions`, dir, testAllowTargets: [`127.0.0.1:${page.port}`] };
+		await runPython(mediaPython as string, ["-I", "-B", HELPER, "captions"], JSON.stringify(captions), env);
+	}
+	await new Promise((resolve) => setTimeout(resolve, 600));
+	assert.equal(rtmpdump.calls().split("\n").filter((line) => line && !/-h|--help/.test(line)).join("\n"), "", "rtmpdump never ran for a download");
+	assert.deepEqual(ftp.hits, [], "nothing connected to the listener");
 });
