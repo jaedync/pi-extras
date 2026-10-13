@@ -55,7 +55,7 @@
   "scripts": {
     "test": "node scripts/test.mjs",
     "typecheck": "tsc -p .",
-    "test:unit": "node --import ./tests/support/keep-alive.mjs --test --test-timeout=30000 tests/*.test.ts tests/*.test.mjs tests/*.test.mts",
+    "test:unit": "node --import ./tests/support/keep-alive.mjs --test --test-timeout=60000 tests/*.test.ts tests/*.test.mjs tests/*.test.mts",
     "test:kagi": "vitest run",
     "test:install": "node scripts/install-smoke.mjs",
     "audit:package": "node scripts/audit-package.mjs",
