@@ -408,7 +408,8 @@ for what is kept in memory.
 Usage Guard reads the limit snapshots Status Plus polls; it never polls limits on its
 own except when the `usage` tool is called with `refresh: true`. For dollar
 figures, a `usage` call also reads local session files and, when set up,
-Tokenfold and OpenRouter (see [Dollar figures](#dollar-figures)). Only windows that
+Tokenfold and OpenRouter (see [Dollar figures](#dollar-figures)). `PI_OFFLINE`
+stops the Tokenfold and OpenRouter requests. Only windows that
 govern the active model count: provider-wide windows always, model-specific ones
 (such as an Anthropic `seven_day_fable` bucket) only when the active model id
 carries that family. Balances (Enterprise spend, prepaid credits) and per-minute

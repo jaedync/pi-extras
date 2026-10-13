@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { withFileLock } from "../file-lock.ts";
+import { isOffline } from "../offline.ts";
 import type { LimitSnapshot } from "../limit-store.ts";
 import { STATUS_TIME_ZONE, type LimitEntry } from "../status-plus-logic.ts";
 import { localDateKey, localDayStartMs } from "./calendar.ts";
@@ -286,6 +287,10 @@ export function createDollarsCollector(options: CollectorOptions) {
 	}
 
 	async function tokenfoldFor(config: ReturnType<typeof normalizeDollarsConfig>, now: number, force: boolean, notes: string[]) {
+		if (config.tokenfold && isOffline()) {
+			notes.push("Pi is offline (PI_OFFLINE), so Tokenfold was not asked; Claude window dollars count this machine's spend only.");
+			return undefined;
+		}
 		if (!config.tokenfold) {
 			notes.push("Tokenfold is not set up (usageDollars.tokenfold in pi-extras.json), so Claude window dollars count this machine's spend only.");
 			return undefined;
@@ -304,7 +309,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 
 	/** Only for a user of OpenRouter: one whose session already polls its credits. */
 	async function openRouterFor(context: CollectContext): Promise<OpenRouterKeyInfo | undefined> {
-		if (!context.snapshots.some(([provider]) => provider === "openrouter")) return undefined;
+		if (isOffline() || !context.snapshots.some(([provider]) => provider === "openrouter")) return undefined;
 		const key = await context.getApiKey("openrouter").catch(() => undefined);
 		if (!key) return undefined;
 		openRouter = cached(openRouter, "openrouter", context.now, context.force === true, () => fetchOpenRouterKey(key, fetchImpl));

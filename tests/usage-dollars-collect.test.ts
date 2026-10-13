@@ -7,6 +7,9 @@ import { join } from "node:path";
 import type { LimitSnapshot } from "../lib/limit-store.ts";
 import { createDollarsCollector } from "../lib/usage-dollars/collect.ts";
 
+// The test runner sets PI_OFFLINE=1; these tests fake fetch, and the offline test sets it again.
+delete process.env.PI_OFFLINE;
+
 const TZ = "America/Chicago";
 const NOW = Date.UTC(2026, 9, 10, 17);
 const HOUR = 3_600_000;
@@ -96,6 +99,28 @@ test("OpenRouter's key endpoint is read only when there is an OpenRouter key", a
 	const { inputs } = await collector.collect(context({ snapshots: openrouter, getApiKey: async (provider: string) => (provider === "openrouter" ? "or-key" : undefined), force: true }));
 	assert.deepEqual(calls, ["https://openrouter.ai/api/v1/key"]);
 	assert.equal(inputs.openRouterKey?.usageDailyUsd, 2);
+});
+
+test("PI_OFFLINE stops the Tokenfold and OpenRouter fetches, also for a usage call", async (t) => {
+	process.env.PI_OFFLINE = "true";
+	t.after(() => { delete process.env.PI_OFFLINE; });
+	const dir = agentDir({});
+	writeFileSync(join(dir, "pi-extras.json"), JSON.stringify({ usageDollars: { tokenfold: { url: "https://t.example", keyFile: join(dir, "read-key") } } }));
+	const calls: string[] = [];
+	const collector = createDollarsCollector({
+		agentDir: dir, timeZone: TZ,
+		fetch: async (url) => { calls.push(String(url)); return new Response(JSON.stringify(HA)); },
+	});
+	const openrouter: Array<[string, LimitSnapshot]> = [["openrouter", { atMs: NOW, source: "poll", entries: [{ label: "", kind: "credits", balanceUsd: 5 }] }]];
+	const { inputs, notes } = await collector.collect(context({ snapshots: openrouter, getApiKey: async () => "or-key", force: true }));
+	assert.deepEqual(calls, []);
+	assert.equal(inputs.tokenfold, undefined);
+	assert.equal(inputs.openRouterKey, undefined);
+	assert.ok(notes.some((note) => /PI_OFFLINE/.test(note)));
+	// PI_OFFLINE=0 is online, as in Pi.
+	process.env.PI_OFFLINE = "0";
+	await collector.collect(context({ snapshots: openrouter, getApiKey: async () => "or-key", force: true }));
+	assert.deepEqual(calls.sort(), ["https://openrouter.ai/api/v1/key", "https://t.example/api/ha"]);
 });
 
 test("meter readings anchor the day in a shared file, and later readings measure today's spend", async () => {
