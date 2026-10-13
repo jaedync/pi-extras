@@ -313,10 +313,12 @@ list or act on. That limit binds the tool, not an agent that also has a shell,
 which can run `powershell.exe` itself. Screenshots and guest text enter the conversation only when
 the agent's script emits them. The images that `win.snapshot` and `win.screenshot`
 return come from the guest, so windows_use checks each one before the script
-sees it. The type comes from the image bytes, not from the label. An image that
-is not a JPEG, PNG, GIF or WebP, or that claims more than 50 million pixels, is
-replaced by a note. An image over 2000 px on a side or 4.5 MB is made smaller
-with Pi's `resizeImage`, as Pi's read tool does.
+sees it. The type comes from the image bytes, not from the label. When an image
+is not a JPEG, PNG, GIF or WebP, or claims more than 50 million pixels,
+windows_use replaces it with a note. Then Pi's `resizeImage` decodes each image,
+as Pi's read tool does. When an image is over 2000 px on a side or 4.5 MB of
+base64, windows_use makes it smaller. When Pi can't decode an image or make it
+small enough, windows_use replaces it with a note.
 
 Setting up a VM installs uv and Windows-MCP for the signed-in guest user,
 registers a logon task that runs it (also started by a `pi-windows-use` value

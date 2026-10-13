@@ -38,14 +38,31 @@ const realPng = () => toPng(readFrame(hostFrame({ taskbar: true, width: 64, heig
 const result = (data: Buffer, mimeType = "image/png"): ToolResult => ({ content: [{ type: "text", text: "Screenshot" }, { type: "image", data: data.toString("base64"), mimeType }], isError: false });
 const noResize: Resize = async () => { throw new Error("resize should not run"); };
 
-test("an image inside Pi's read-tool limits goes as it is, typed by its bytes and not its label", async () => {
+/** Stands in for Pi's decoder: answers with the bytes it got, as resizeImage does for an image that fits. */
+const decodes = (seen: string[]): Resize => async (bytes, mimeType) => {
+	seen.push(mimeType);
+	return { data: Buffer.from(bytes).toString("base64"), mimeType, originalWidth: 800, originalHeight: 600, width: 800, height: 600, wasResized: false };
+};
+
+test("an image inside Pi's read-tool limits is decoded by Pi and goes as it is, typed by its bytes and not its label", async () => {
 	const png = realPng();
-	const checked = await checkImages(result(png, "image/jpeg"), noResize);
+	const checked = await checkImages(result(png, "image/jpeg"));
 	assert.deepEqual(checked.content, [{ type: "text", text: "Screenshot" }, { type: "image", data: png.toString("base64"), mimeType: "image/png" }]);
+	const seen: string[] = [];
 	for (const [bytes, mimeType] of [[jpegClaiming(800, 600), "image/jpeg"], [gifClaiming(800, 600), "image/gif"], [webpClaiming(800, 600), "image/webp"]] as const) {
-		const kept = await checkImages(result(bytes, "image/png"), noResize);
+		const kept = await checkImages(result(bytes, "image/png"), decodes(seen));
 		assert.equal(kept.content[1]?.type === "image" && kept.content[1].mimeType, mimeType);
 	}
+	assert.deepEqual(seen, ["image/jpeg", "image/gif", "image/webp"], "every image goes through the decoder, small ones too");
+});
+
+test("a valid PNG header in front of a corrupt body is dropped, since Pi's decoder refuses it", async () => {
+	const bad = realPng();
+	// The signature and IHDR stay; the rest is garbage.
+	for (let i = 33; i < bad.length - 12; i++) bad[i] = 0x5a;
+	const checked = await checkImages(result(bad));
+	assert.ok(!checked.content.some((block) => block.type === "image"), "no image goes on");
+	assert.match((checked.content.at(-1) as { text: string }).text, /\[windows_use dropped the screenshot: it could not be decoded/);
 });
 
 test("bytes that are no supported image, an animated PNG, and an absurd pixel count are dropped with a note", async () => {
@@ -68,14 +85,11 @@ test("an image over 2000 px a side or 4.5 MB is scaled with Pi's resizeImage, wi
 		{ type: "image", data: "c2NhbGVk", mimeType: "image/jpeg" },
 		{ type: "text", text: "[Image: original 3000x1500, displayed at 2000x1000. Multiply coordinates by 1.50 to map to original image.]" },
 	]);
-	const heavy = Buffer.concat([pngClaiming(1000, 800), Buffer.alloc(Math.ceil(MAX_BASE64 * 3 / 4))]);
-	await checkImages(result(heavy), resize);
-	assert.equal(asked.length, 2, "a small picture in a large file is scaled too");
 	const failed = await checkImages(result(pngClaiming(3000, 1500)), async () => null);
 	assert.ok(!failed.content.some((block) => block.type === "image"));
-	assert.match((failed.content.at(-1) as { text: string }).text, /could not be scaled down/);
+	assert.match((failed.content.at(-1) as { text: string }).text, /could not be decoded or scaled down/);
 	const broken = await checkImages(result(pngClaiming(3000, 1500)), async () => { throw new Error("no photon"); });
-	assert.match((broken.content.at(-1) as { text: string }).text, /could not be scaled down: no photon/);
+	assert.match((broken.content.at(-1) as { text: string }).text, /could not be decoded or scaled down to 2000 px a side and 4\.5 MB of base64: no photon\]/);
 });
 
 test("win.snapshot and win.screenshot check their images before a script can emit them", async () => {

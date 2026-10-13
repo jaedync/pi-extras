@@ -1,10 +1,10 @@
 /**
  * Checks the images Windows-MCP sends with win.snapshot and win.screenshot
- * before a script can emit them. The type comes from the bytes, not the label,
- * and an image over the limits of Pi's read tool (2000 px a side, 4.5 MB of
- * base64) is scaled down with Pi's own resizeImage. A provider refuses the
- * whole conversation for one bad image, so an image that fails the check is
- * dropped, with a note in its place.
+ * before a script can emit them. The type comes from the bytes, not the label.
+ * Then Pi's own resizeImage decodes every image, as Pi's read tool does, and
+ * scales one over the read tool's limits (2000 px a side, 4.5 MB of base64).
+ * A provider refuses the whole conversation for one bad image, so an image
+ * that fails the check is dropped, with a note in its place.
  */
 import type { ResizedImage } from "@earendil-works/pi-coding-agent";
 import type { ContentBlock, ToolResult } from "../computer-use/session.ts";
@@ -20,7 +20,7 @@ export const MAX_BASE64 = 4.5 * 1024 * 1024;
 /** Decoding takes 4 bytes a pixel, and a small file can claim any size, so larger claims are never decoded. */
 const MAX_DECODE_PIXELS = 50_000_000;
 
-/** Loaded on first use: most screenshots fit, and Pi's package is large to load. */
+/** Loaded on first use: Pi's package is large to load, and many sessions never take a screenshot. */
 const piResize: Resize = async (bytes, mimeType, options) => (await import("@earendil-works/pi-coding-agent")).resizeImage(bytes, mimeType, options);
 
 export async function checkImages(result: ToolResult, resize: Resize = piResize): Promise<ToolResult> {
@@ -36,17 +36,17 @@ async function checkImage(image: Image, resize: Resize): Promise<ContentBlock[]>
 	const header = readHeader(bytes);
 	if (!header) return [dropped("its bytes are not a JPEG, PNG, GIF or WebP image")];
 	if (header.width * header.height > MAX_DECODE_PIXELS) return [dropped(`it claims ${header.width}x${header.height} pixels`)];
-	if (header.width <= MAX_SIDE && header.height <= MAX_SIDE && Math.ceil(bytes.length / 3) * 4 < MAX_BASE64) {
-		// Encoded again from the bytes, so stray characters in the base64 don't reach the provider.
-		return [{ type: "image", data: bytes.toString("base64"), mimeType: header.mimeType }];
-	}
+	// Decoded every time: a valid header can front a corrupt body, and Pi's own
+	// check of tool results keeps an image it can't decode. resizeImage gives back
+	// the bytes, encoded again, when the image already fits.
+	const failed = `it could not be decoded or scaled down to ${MAX_SIDE} px a side and 4.5 MB of base64`;
 	let resized: ResizedImage | null;
 	try {
 		resized = await resize(bytes, header.mimeType, { maxWidth: MAX_SIDE, maxHeight: MAX_SIDE, maxBytes: MAX_BASE64 });
 	} catch (error) {
-		return [dropped(`it is over ${MAX_SIDE} px a side or 4.5 MB and could not be scaled down: ${error instanceof Error ? error.message : String(error)}`)];
+		return [dropped(`${failed}: ${error instanceof Error ? error.message : String(error)}`)];
 	}
-	if (!resized) return [dropped(`it is over ${MAX_SIDE} px a side or 4.5 MB and could not be scaled down`)];
+	if (!resized) return [dropped(failed)];
 	const scaled: ContentBlock = { type: "image", data: resized.data, mimeType: resized.mimeType };
 	if (!resized.wasResized) return [scaled];
 	// Pi's own note for a scaled image, so click coordinates can be mapped back.
