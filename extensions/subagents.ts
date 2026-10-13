@@ -35,7 +35,7 @@ import type { ShownOverlay } from "../lib/band/modal.ts";
 import { formatMoney } from "../lib/status-plus-logic.ts";
 import { editTarget } from "../lib/subagents/worktree.ts";
 import { checkoutOf } from "../lib/subagents/checkout.ts";
-import { latestReportFile } from "../lib/subagents/reports.ts";
+import { savedReport } from "../lib/subagents/reports.ts";
 import { chatSettings, mainTrust, type Served, serveSession } from "../lib/subagents/serve.ts";
 import { mainMessageTool, stopTool, subagentTool, userSendWords } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
@@ -303,36 +303,9 @@ export default function subagents(pi: ExtensionAPI) {
 			}
 			const state = host();
 			if (!state) return ctx.ui.notify("Subagents are not active in this session.", "info");
-			if (verb === "report") {
-				const name = rest.join(" ");
-				if (!name) return ctx.ui.notify("Usage: /subagents report <name>", "info");
-				const record = state.team.get(name);
-				if (!record) return ctx.ui.notify(`No subagent named ${name}.`, "warning");
-				try {
-					const file = record.reportFile ?? (record.sessionFile ? latestReportFile(record.sessionFile) : undefined);
-					return ctx.ui.notify(file ? `Report for ${name}: ${file}` : `No saved report for ${name} yet.`, "info");
-				} catch (error) {
-					return ctx.ui.notify(`Could not find the report for ${name}: ${(error as Error).message}`, "warning");
-				}
-			}
-			if (verb === "resume") {
-				const name = rest.join(" ");
-				const record = state.team.get(name);
-				if (!record) return ctx.ui.notify(`No subagent named ${name}.`, "warning");
-				if (LIVE_STATES.has(record.state)) return ctx.ui.notify(`${name} is already running.`, "info");
-				if (record.state !== "interrupted") return ctx.ui.notify(`${name} is not interrupted. Message it to start new work.`, "info");
-				const result = await state.team.send(USER, name, "Continue your task and report the outcome.");
-				return ctx.ui.notify(result.ok ? `${name}: ${result.delivered}.${result.notice ? ` ${result.notice}` : ""}` : result.error, result.ok ? "info" : "warning");
-			}
-			if (verb === "stop") {
-				const target = rest.join(" ");
-				const names = target === "all" ? stopOrder(state.team.list().filter((record) => LIVE_STATES.has(record.state) || record.state === "interrupted")).map((record) => record.name) : [target];
-				for (const name of names) {
-					if (!state.team.get(name)) { ctx.ui.notify(`No subagent named ${name}.`, "warning"); continue; }
-					await state.team.stop(name);
-				}
-				return;
-			}
+			if (verb === "report") return reportCommand(state, rest.join(" "), ctx);
+			if (verb === "resume") return resumeCommand(state, rest.join(" "), ctx);
+			if (verb === "stop") return stopCommand(state, rest.join(" "), ctx);
 			const records = state.team.list();
 			// Every word above is a subcommand, so anything else names an agent, and a name that isn't one is a typo.
 			if (verb && !state.team.get(verb)) return ctx.ui.notify(`No subagent named ${verb}.`, "warning");
@@ -351,6 +324,44 @@ export default function subagents(pi: ExtensionAPI) {
 		writeFileSync(file, edited.endsWith("\n") ? edited : `${edited}\n`);
 		ctx.ui.notify(`Saved ${file}. Run /reload to apply it.`, "info");
 	}
+}
+
+async function reportCommand(state: HostState, name: string, ctx: ExtensionCommandContext): Promise<void> {
+	if (!name) return ctx.ui.notify("Usage: /subagents report <name>", "info");
+	const record = state.team.get(name);
+	if (!record) return ctx.ui.notify(`No subagent named ${name}.`, "warning");
+	try {
+		const saved = savedReport(record);
+		if (!saved) return ctx.ui.notify(`No saved report for ${name} yet.`, "info");
+		// A run that said nothing saved no report; an older run's is not this one's.
+		const older = saved.run !== undefined && saved.run < record.runs ? ` (from run ${saved.run}; run ${record.runs} saved none)` : "";
+		return ctx.ui.notify(`Report for ${name}${older}: ${saved.file}`, "info");
+	} catch (error) {
+		return ctx.ui.notify(`Could not find the report for ${name}: ${(error as Error).message}`, "warning");
+	}
+}
+
+async function resumeCommand(state: HostState, name: string, ctx: ExtensionCommandContext): Promise<void> {
+	if (!name) return ctx.ui.notify("Usage: /subagents resume <name>", "info");
+	const record = state.team.get(name);
+	if (!record) return ctx.ui.notify(`No subagent named ${name}.`, "warning");
+	if (LIVE_STATES.has(record.state)) return ctx.ui.notify(`${name} is already running.`, "info");
+	if (record.state !== "interrupted") return ctx.ui.notify(`${name} is not interrupted. Message it to start new work.`, "info");
+	const result = await state.team.send(USER, name, "Continue your task and report the outcome.");
+	return ctx.ui.notify(result.ok ? `${name}: ${result.delivered}.${result.notice ? ` ${result.notice}` : ""}` : result.error, result.ok ? "info" : "warning");
+}
+
+async function stopCommand(state: HostState, target: string, ctx: ExtensionCommandContext): Promise<void> {
+	if (!target) return ctx.ui.notify("Usage: /subagents stop <name>, or /subagents stop all", "info");
+	const stoppable = (record: AgentRecord) => LIVE_STATES.has(record.state) || record.state === "interrupted";
+	if (target === "all") {
+		const names = stopOrder(state.team.list().filter(stoppable)).map((record) => record.name);
+		if (names.length === 0) return ctx.ui.notify("No subagents are running.", "info");
+		for (const name of names) await state.team.stop(name);
+		return;
+	}
+	if (!state.team.get(target)) return ctx.ui.notify(`No subagent named ${target}.`, "warning");
+	if (!(await state.team.stop(target))) ctx.ui.notify(`${target} has already ended; there is nothing to stop.`, "info");
 }
 
 function listing(records: readonly AgentRecord[]): string {

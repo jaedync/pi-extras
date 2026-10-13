@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { latestReportFile, reportFilePath, saveReport, writeReport } from "../lib/subagents/reports.ts";
+import { latestReportFile, reportFilePath, savedReport, saveReport, writeReport } from "../lib/subagents/reports.ts";
 import { capReport, REPORT_MAX_CHARS, reportText } from "../lib/subagents/format.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 import { Team } from "../lib/subagents/team.ts";
@@ -304,4 +304,9 @@ test("current-run text matches Pi trimming and empty-final-message semantics", a
 test("report commands complete agent names and close when complete", () => {
 	assert.deepEqual(commandCompletions("report re", ["reviewer"])?.map((item) => item.value), ["report reviewer"]);
 	assert.equal(commandCompletions("report reviewer", ["reviewer", "reviewer-2"]), null);
+});
+
+test("the saved report names its run, so /subagents report can say when it is an older run's", () => {
+	assert.deepEqual(savedReport({ reportFile: "/nowhere/quiet.run-1.report.md" }), { file: "/nowhere/quiet.run-1.report.md", run: 1 });
+	assert.equal(savedReport({ sessionFile: "/nowhere/missing/quiet.jsonl" }), undefined);
 });

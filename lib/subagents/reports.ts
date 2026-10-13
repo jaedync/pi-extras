@@ -73,6 +73,14 @@ export function saveReport(record: AgentRecord, warn: Warn = console.warn): Agen
 	}
 }
 
+/** The newest saved report of `record` and its run; an older run's when the latest saved none. */
+export function savedReport(record: Pick<AgentRecord, "reportFile" | "sessionFile">): { file: string; run?: number } | undefined {
+	const file = record.reportFile ?? (record.sessionFile ? latestReportFile(record.sessionFile) : undefined);
+	if (!file) return undefined;
+	const run = /\.run-([1-9]\d*)\.report\.md$/.exec(file)?.[1];
+	return { file, ...(run ? { run: Number(run) } : {}) };
+}
+
 /** Restored records from older versions may not carry a report path. Run numbers can have gaps. */
 export function latestReportFile(sessionFile: string): string | undefined {
 	let entries: fs.Dirent[];

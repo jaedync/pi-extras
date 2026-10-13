@@ -167,6 +167,12 @@ test("/subagents report shows the latest saved path without adding a report tool
 		assert.equal(notices.at(-1), "No subagent named missing.");
 		await session.prompt("/subagents nobody");
 		assert.equal(notices.at(-1), "No subagent named nobody.", "a name that isn't an agent is a typo, not a request for the list");
+		await session.prompt("/subagents stop");
+		assert.equal(notices.at(-1), "Usage: /subagents stop <name>, or /subagents stop all");
+		await session.prompt("/subagents resume");
+		assert.equal(notices.at(-1), "Usage: /subagents resume <name>");
+		await session.prompt("/subagents stop all");
+		assert.equal(notices.at(-1), "No subagents are running.");
 		const tool = session.agent.state.tools.find((tool) => tool.name === "subagent")!;
 		assert.ok(tool);
 		assert.ok(!session.agent.state.tools.some((tool) => /report/.test(tool.name)));
@@ -176,6 +182,18 @@ test("/subagents report shows the latest saved path without adding a report tool
 		assert.ok(path, result.content[0]!.text);
 		await session.prompt("/subagents report command-report");
 		assert.equal(notices.at(-1), `Report for command-report: ${path}`);
+		await session.prompt("/subagents stop command-report");
+		assert.equal(notices.at(-1), "command-report has already ended; there is nothing to stop.");
+		// A second run that says nothing saves no report: the command says the path is the first run's.
+		faux.setResponses([ai.fauxAssistantMessage("")]);
+		const message = session.agent.state.tools.find((tool) => tool.name === "message")!;
+		await message.execute("again", { to: "command-report", text: "Anything else?" });
+		const older = `Report for command-report (from run 1; run 2 saved none): ${path}`;
+		for (let i = 0; i < 100 && notices.at(-1) !== older; i++) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await session.prompt("/subagents report command-report");
+		}
+		assert.equal(notices.at(-1), older);
 		assert.equal(readFileSync(path, "utf8"), "Full command report.");
 		faux.setResponses([ai.fauxAssistantMessage("")]);
 		const restored = await tool.execute("restored", { name: "restored-report", task: "Report", wait: true }) as { details: { sessionFile: string } };
