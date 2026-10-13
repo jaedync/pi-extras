@@ -8,6 +8,7 @@
  * still see one store.
  */
 import type { LimitEntry } from "./status-plus-logic.ts";
+import { aheadOfClock } from "./clock-skew.ts";
 import { createRejectionTracker } from "./limit-rejection.ts";
 
 export interface LimitSnapshot {
@@ -48,7 +49,8 @@ export function createLimitStore(): LimitStore {
 		entries: () => [...snapshots.entries()],
 		set(provider, snapshot) {
 			const prior = snapshots.get(provider);
-			if (prior && snapshot.atMs < prior.atMs) return;
+			// A prior stamped well ahead came from a clock that was wrong; it must not hold newer snapshots off.
+			if (prior && snapshot.atMs < prior.atMs && !aheadOfClock(prior.atMs, Date.now())) return;
 			snapshots.set(provider, { ...snapshot, entries: rejections.reconcile(provider, snapshot.entries, snapshot.atMs) });
 			for (const listener of listeners) {
 				// A listener fault must not break the poller that published the snapshot.

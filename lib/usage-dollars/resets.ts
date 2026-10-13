@@ -15,6 +15,7 @@
  * the same evidence. One latest drop is not enough, because 1 to 2 point
  * dips are normal and a later dip would hide the fall at the reset.
  */
+import { aheadOfClock } from "../clock-skew.ts";
 
 /** A smaller fall can be the provider's rounding or a reading that came late. */
 export const GRANT_DROP_PTS = 10;
@@ -83,10 +84,15 @@ const finite = (value: unknown): value is number => typeof value === "number" &&
 
 export const sameReset = (a: number, b: number): boolean => Math.abs(a - b) <= SAME_RESET_TOLERANCE_MS;
 
-/** The next record for one window. A reading that is not newer than the last one changes nothing. */
+/**
+ * The next record for one window. A reading that is not newer than the last one
+ * changes nothing. A last reading stamped well ahead of this one came from a clock
+ * that was wrong, and is no base for this one.
+ */
 export function advanceReading(prev: WindowReading | undefined, cur: Reading): WindowReading {
-	if (prev && cur.atMs <= prev.atMs) return prev;
 	const fresh: WindowReading = { pct: cur.pct, resetMs: cur.resetMs, atMs: cur.atMs };
+	if (prev && aheadOfClock(prev.atMs, cur.atMs)) return fresh;
+	if (prev && cur.atMs <= prev.atMs) return prev;
 	// A reading from another cycle starts the record again.
 	if (!prev || !sameReset(prev.resetMs, cur.resetMs)) return fresh;
 	let { grant, drops } = prev;
@@ -120,7 +126,8 @@ export function mergeReadings(onDisk: Record<string, WindowReading>, ours: Recor
 	let merged = onDisk;
 	for (const key of changed) {
 		const mine = ours[key];
-		if (mine && (!merged[key] || mine.atMs > merged[key].atMs)) merged = { ...merged, [key]: mine };
+		const theirs = merged[key];
+		if (mine && (!theirs || mine.atMs > theirs.atMs || aheadOfClock(theirs.atMs, mine.atMs))) merged = { ...merged, [key]: mine };
 	}
 	return merged;
 }

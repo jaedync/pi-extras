@@ -12,6 +12,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { CLOCK_SKEW_MS, aheadOfClock } from "./clock-skew.ts";
 import type { LimitEntry } from "./status-plus-logic.ts";
 
 export interface SharedPoll {
@@ -26,23 +27,28 @@ export interface SharedPoll {
 	retryAtMs?: number;
 }
 
+/** Retry-After is held to an hour (MAX_RETRY_AFTER_MS in provider-limits.ts); a later wait came from a clock that ran ahead. */
+const MAX_RETRY_AHEAD_MS = 60 * 60_000 + CLOCK_SKEW_MS;
+
 const fileFor = (dir: string, provider: string): string => join(dir, `${provider.replace(/[^a-z0-9._-]/gi, "_")}.json`);
 const isTime = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const isEntry = (value: unknown): value is LimitEntry => !!value && typeof value === "object" && typeof (value as LimitEntry).label === "string";
 
-function valid(value: unknown): value is SharedPoll {
+/** A poll or try stamped well ahead of this clock is skew, and would hold every process's polls until then. */
+function valid(value: unknown, now: number): value is SharedPoll {
 	const poll = value as Partial<SharedPoll> | null;
 	if (!poll || typeof poll !== "object" || !isTime(poll.triedAtMs) || !isTime(poll.failures)) return false;
-	if (poll.atMs !== undefined && !isTime(poll.atMs)) return false;
-	if (poll.retryAtMs !== undefined && !isTime(poll.retryAtMs)) return false;
+	if (aheadOfClock(poll.triedAtMs, now)) return false;
+	if (poll.atMs !== undefined && (!isTime(poll.atMs) || aheadOfClock(poll.atMs, now))) return false;
+	if (poll.retryAtMs !== undefined && (!isTime(poll.retryAtMs) || poll.retryAtMs > now + MAX_RETRY_AHEAD_MS)) return false;
 	return poll.entries === undefined || (Array.isArray(poll.entries) && poll.entries.every(isEntry));
 }
 
-/** The shared poll for a provider, or undefined when there is none or the file is not one. */
-export function readShared(dir: string, provider: string): SharedPoll | undefined {
+/** The shared poll for a provider, or undefined when there is none, the file is not one, or a clock that ran ahead wrote it. */
+export function readShared(dir: string, provider: string, now = Date.now()): SharedPoll | undefined {
 	try {
 		const value: unknown = JSON.parse(readFileSync(fileFor(dir, provider), "utf8"));
-		return valid(value) ? value : undefined;
+		return valid(value, now) ? value : undefined;
 	} catch {
 		return undefined;
 	}
