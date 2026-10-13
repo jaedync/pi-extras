@@ -90,7 +90,10 @@ def connect_any(addresses, port):
 
 
 def copy(sockets, pairs):
-    """Copies bytes from each source to its target until a source closes, a socket fails or nothing moves."""
+    """Copies bytes from each source to its target until a source closes, a socket fails or nothing moves.
+
+    A source with no target is only watched: its bytes are dropped, and its close ends the copy.
+    """
     selector = selectors.DefaultSelector()
     try:
         for source in sockets:
@@ -103,7 +106,8 @@ def copy(sockets, pairs):
                 data = key.fileobj.recv(BUFFER)
                 if not data:
                     return
-                pairs[key.fileobj].sendall(data)
+                if pairs.get(key.fileobj) is not None:
+                    pairs[key.fileobj].sendall(data)
     except OSError:
         return
     finally:
@@ -133,6 +137,15 @@ def read_head(sock):
 def header(headers, name):
     prefix = name.lower() + ":"
     return next((h.split(":", 1)[1].strip() for h in headers if h.lower().startswith(prefix)), None)
+
+
+def body_length(headers):
+    """The request body's length, 0 when there is none; None when the headers disagree or the value is not a count."""
+    values = {h.split(":", 1)[1].strip() for h in headers if h.lower().startswith("content-length:")}
+    if not values:
+        return 0
+    value = next(iter(values))
+    return int(value) if len(values) == 1 and value.isdigit() else None
 
 
 HOP_HEADERS = ("connection:", "keep-alive:", "proxy-", "transfer-encoding:", "te:", "upgrade:", "expect:")
@@ -167,6 +180,8 @@ class Handler(socketserver.BaseRequestHandler):
             return
         if not head:
             return
+        # The head timeout is for an idle client only; a slow reader of a long body must not be cut.
+        self.request.settimeout(None)
         line, *headers = head[:-4].split("\r\n")
         parts = line.split(" ")
         if len(parts) != 3:
@@ -191,13 +206,16 @@ class Handler(socketserver.BaseRequestHandler):
         except OSError as error:
             return self.reply("502 Bad Gateway", f"pull_link's proxy could not connect to {host}: {error}")
         with upstream:
-            if url is None:
-                self.tunnel(upstream)
-            else:
-                self.forward(upstream, method, url, version, headers)
+            try:
+                if url is None:
+                    self.tunnel(upstream)
+                else:
+                    self.forward(upstream, method, url, version, headers)
+            except OSError:
+                # A peer that closed or stalled ends this request; the client sees the connection close.
+                return
 
     def tunnel(self, upstream):
-        self.request.settimeout(None)
         upstream.settimeout(None)
         self.request.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
         copy([self.request, upstream], {self.request: upstream, upstream: self.request})
@@ -210,9 +228,8 @@ class Handler(socketserver.BaseRequestHandler):
         """
         if header(headers, "transfer-encoding"):
             return self.reply("411 Length Required", "pull_link's proxy needs a Content-Length for a request body")
-        try:
-            length = int(header(headers, "content-length") or 0)
-        except ValueError:
+        length = body_length(headers)
+        if length is None:
             return self.reply("400 Bad Request", "pull_link's proxy could not read the Content-Length")
         if (header(headers, "expect") or "").lower() == "100-continue":
             self.request.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
@@ -228,7 +245,9 @@ class Handler(socketserver.BaseRequestHandler):
         if not response:
             return
         self.request.sendall(closing(response))
-        copy([upstream], {upstream: self.request})
+        upstream.settimeout(None)
+        # The client is watched too: when it closes, a keep-alive upstream no longer holds this thread.
+        copy([upstream, self.request], {upstream: self.request, self.request: None})
 
 
 class Server(socketserver.ThreadingTCPServer):

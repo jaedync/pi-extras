@@ -328,3 +328,51 @@ test("yt-dlp: media and captions on rtmp:// or ftp:// stop the call, and no exte
 	assert.equal(rtmpdump.calls().split("\n").filter((line) => line && !/-h|--help/.test(line)).join("\n"), "", "rtmpdump never ran for a download");
 	assert.deepEqual(ftp.hits, [], "nothing connected to the listener");
 });
+
+test("guard proxy: a bad Content-Length is a 400, a closed client frees its thread, and a slow reader gets the whole body", { skip: python ? false : "python3 not available" }, async (t) => {
+	const hostile = await keepAlive("kept");
+	const big = Buffer.alloc(8 * 1024 * 1024, 0x61);
+	const bulk = await listen((_path, res) => res.writeHead(200, { "content-length": String(big.length) }).end(big));
+	t.after(async () => {
+		await hostile.close();
+		await bulk.close();
+	});
+	const code = `import sys, json, socket, threading, time; sys.path.insert(0, sys.argv[1]); import net_guard
+net_guard.HEAD_TIMEOUT = 0.5
+h, b = sys.argv[2], sys.argv[3]
+proxy = net_guard.start([f"127.0.0.1:{h}", f"127.0.0.1:{b}"])
+port = int(proxy.rsplit(":", 1)[1])
+def status(extra):
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(f"POST http://127.0.0.1:{h}/p HTTP/1.1\\r\\nHost: x\\r\\n{extra}\\r\\nabcde".encode())
+        return s.recv(100).decode().split("\\r\\n")[0]
+out = {"duplicate": status("Content-Length: 5\\r\\nContent-Length: 50\\r\\n"), "negative": status("Content-Length: -5\\r\\n")}
+time.sleep(0.3)
+before = threading.active_count()
+for _ in range(5):
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(f"GET http://127.0.0.1:{h}/k HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n".encode())
+        s.recv(4096)
+time.sleep(1)
+out["threads"] = threading.active_count() - before
+with socket.create_connection(("127.0.0.1", port), timeout=30) as s:
+    s.sendall(f"GET http://127.0.0.1:{b}/big HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n".encode())
+    time.sleep(1.5)
+    got = b""
+    while True:
+        chunk = s.recv(1 << 20)
+        if not chunk:
+            break
+        got += chunk
+out["body"] = len(got.partition(b"\\r\\n\\r\\n")[2])
+print(json.dumps(out))`;
+	const result = await runPython(python as string, ["-I", "-B", "-c", code, dirname(HELPER), String(hostile.port), String(bulk.port)]);
+	assert.equal(result.code, 0, result.stderr);
+	assert.doesNotMatch(result.stderr, /Traceback/);
+	const out = JSON.parse(result.stdout) as { duplicate: string; negative: string; threads: number; body: number };
+	assert.match(out.duplicate, /^HTTP\/1\.1 400/);
+	assert.match(out.negative, /^HTTP\/1\.1 400/);
+	assert.equal(out.threads, 0, "no guard thread waits on a keep-alive upstream after its client closed");
+	assert.equal(out.body, big.length);
+	assert.equal(hostile.hits.filter((path) => path === "/p").length, 0, "a bad request never goes upstream");
+});
