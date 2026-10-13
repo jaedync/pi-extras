@@ -2,6 +2,122 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.13 - 2026-10-12
+
+### Added
+
+- Pull Link: yt-dlp, ffmpeg and the transcript client send each HTTP
+  request, including redirects, manifests and fragments, through a small
+  local proxy. The proxy refuses private, loopback, link-local, metadata and
+  reserved addresses. When you set a proxy, your proxy decides instead.
+- Shell Jobs: a job's completion says how many background processes were
+  still running at exit and were stopped, when the count is known.
+
+### Changed
+
+- Shell Jobs: jobs run in Pi's shell (`shellPath`, else bash) with
+  `shellCommandPrefix`, Pi's bin folder first in `PATH` and this session's
+  `PI_` variables. Before, jobs ran in your login `$SHELL`.
+- Voice: setup starts on its own only when Pi finds a microphone. On macOS,
+  a background check lists the input devices and keeps the result for one
+  day. Otherwise setup starts at your first dictation or with `/voice setup`.
+- Pull Link: downloads stop at 2 GiB for video and 1 GiB for audio. Live
+  streams, and videos of unknown length without a bounded `range`, are not
+  downloaded. Media on other protocols, such as `ftp://` or `rtmp://`, is
+  refused, and yt-dlp runs no external downloader except ffmpeg.
+- Pull Link: `PI_OFFLINE` stops media installs, updates and release
+  lookups. The token provider installs with `npm ci --ignore-scripts`.
+- Rate Limit Recovery: a setting outside its range moves to the nearest
+  limit, not to the default. `/rate-limit-recovery on|off` saves only
+  `autoWait`.
+- Bash Default Timeout: an explicit timeout passes through unchanged, and a
+  default above 2147483.647 s is ignored. Pi's `powershell` tool also gets
+  the default.
+- Settings: a new `pi-extras.json` gets mode 0600.
+- Windows Use: each VM's host key file is named by its Hyper-V id. An old
+  file named by the VM name moves to the new name when only one VM maps to
+  it.
+
+### Fixed
+
+- Settings: a `pi-extras.json` that does not parse is no longer replaced.
+  Saves stop and name the file to fix, and a new session shows a warning.
+- Settings: sessions that save at the same time no longer lose each other's
+  changes. A save keeps a linked `pi-extras.json` as a link and keeps its
+  mode.
+- Settings: `/tool-display` and `/usage warnings` save only the setting that
+  you change. pi-extras finds `pi-extras.json` where Pi finds its agent
+  folder, also when `PI_CODING_AGENT_DIR` starts with `~`.
+- Settings: a lock from a session that is still writing it is not taken,
+  and a lock dated in the future no longer blocks saves.
+- Usage: the dollar state files no longer lose updates when several
+  sessions poll. A poll never waits more than 100 ms for another session's
+  lock.
+- Status Plus: the footer no longer ends Pi on a reset past the date range,
+  an unknown time zone or a failed frame. Times then use the system zone or
+  UTC.
+- Status Plus: the footer measures CJK, emoji and links in terminal cells,
+  so a line is never wider than the terminal.
+- Status Plus: a small numeric `x-ratelimit-reset` is read as seconds from
+  now. Header percentages stay between 0 and 100, and an epoch reset more
+  than 400 days ahead is ignored.
+- Voice: setup that goes on after `/reload`, `/new` or `/resume` no longer
+  ends Pi. A daemon that cannot start stops the dictation with the cause.
+- Voice: a dictation starts setup if the session did not, except offline.
+  `/voice model` keeps a model that setup made ready while the menu was
+  open.
+- Computer Use and Windows Use: a client that cannot start, or whose output
+  pipe fails, fails its calls instead of ending Pi. Close stops it.
+- Windows Use: the Alt+F4 check reads the whole key set, also forms such
+  as `F4+ALT` and `Alt}{F4`, and it also checks `win.call` with Shortcut.
+- Windows Use: `win.start` starts only the VM with that exact name. Two VMs
+  with the same name are refused until you rename one.
+- Windows Use: a failed console drag or key release lets go of the mouse
+  button and the keys, and reports every error.
+- Windows Use: screenshots are decoded before a script gets them. An image
+  that cannot be decoded becomes a note.
+- Windows Use: waits no longer leak abort listeners, and a host that comes
+  up after the session closed is stopped.
+- Computer Use and Windows Use: the 5 s time slice no longer stops scripts
+  whose calls run at the same time.
+- `PI_OFFLINE=0` or `false` no longer counts as offline. As in Pi, only `1`,
+  `true` or `yes` turns offline mode on.
+- Editor border rows and the Status Plus timer log their errors instead of
+  ending Pi.
+- Shell Jobs: in chain steps, `set -e` no longer breaks `||` and `&&`
+  recovery. An arithmetic error stops the same steps as before the rewrite.
+  Commands with continued pipelines, `alias`, `eval` or a final
+  backslash run as one step.
+- Shell Jobs: logs keep output with no final new line and characters at a
+  page boundary, and show no leftover color codes. Rows drop 8-bit C1
+  controls.
+- Shell Jobs: an untitled job starts normally and does not use up a job
+  slot. A relative `cwd` is the session folder, and `~` is the home folder.
+- Shell Jobs: jobs that `/reload` parks stop after a minute if shell-jobs
+  does not load again. Widget and process errors are logged, not thrown to
+  Pi. Settings that fail to load are read again at the next job start.
+- Pull Link: the image type and size come from the image bytes. An image
+  that Pi cannot decode is dropped, and images over 25 megapixels are never
+  decoded.
+- Pull Link: a broken media `state.json` is moved aside and logged. yt-dlp
+  and the helper get no variable whose name looks like a secret, and the
+  cookie copy is in a private temporary folder.
+- Pull Link: cached results expire after 30 minutes, and an aborted call is
+  never cached. Two pulls of one video at the same time no longer fail.
+- Pull Link: GitHub links on branches with a slash work. Fences hold diffs
+  that contain fences, and a cut gist file says that it is cut.
+- Pull Link: a bad `og:image` or a null JSON-LD block no longer fails a
+  pull. Titles decode HTML entities, and cuts never split an emoji.
+- Pull Link: site-local IPv6 addresses, `.svc` names and the documentation
+  ranges are refused.
+- Tool Display: rows remove terminal sequences from foreign tool argument
+  names, names and labels, and remove bidi and zero-width controls.
+  Progress output that uses carriage returns shows its last state.
+- Tool Display: `~` replaces the home folder only at a path boundary.
+- Copy Blocks: cards keep their background after combined resets. Blocks
+  come from Pi's Markdown lexer, so block numbers match the cards, and
+  copies keep their tabs.
+
 ## 0.24.12 - 2026-10-12
 
 ### Added
