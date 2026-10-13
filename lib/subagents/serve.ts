@@ -299,7 +299,7 @@ class Service implements Served {
 		const scanner = createSessionScanner(sdk.parseSessionEntries, sdk.migrateSessionEntries);
 		this.open = (handedOver) => openHost({
 			generation, agentDir: sdk.getAgentDir(), cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), owner: recoveryOwner(ctx.sessionManager),
-			config: scope.config, branch: () => live.branch(), scanner, ports: this.ports, activity: handedOver?.activity ?? activity,
+			config: scope.config, thinking: scope.thinking, branch: () => live.branch(), scanner, ports: this.ports, activity: handedOver?.activity ?? activity,
 			...(handedOver ? { lease: handedOver.lease } : {}),
 		});
 	}

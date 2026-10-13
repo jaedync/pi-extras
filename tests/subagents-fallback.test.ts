@@ -183,3 +183,16 @@ test("the fallback history survives the index, and a report with one still reads
 		assert.doesNotMatch(reportText({ ...record, runs: 2, report: "Next." }, 0), /Ran on/, "a later run names only its own switches");
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("a fallback model gets its own usual thinking level, unless the call chose another", async () => {
+	const usual: Record<string, "max" | "high"> = { "opencode-go/deepseek-v4-flash": "max", "anthropic/claude-opus-5-5": "high" };
+	const h = teamHarness({ fallbackModels: ["anthropic/claude-opus-5-5"], defaultThinking: (model) => usual[model] });
+	h.spawn("Bulk work", { name: "bulk", model: "opencode-go/deepseek-v4-flash", thinking: "max" });
+	h.spawn("Chosen", { name: "chosen", model: "opencode-go/deepseek-v4-flash", thinking: "low" });
+	await tick(); await tick();
+	for (const name of ["bulk", "chosen"]) h.lastCall(name).fail(new Error("429 usage limit reached for this billing period"));
+	for (let i = 0; i < 6; i++) await tick();
+	assert.equal(h.team.get("bulk")!.model, "anthropic/claude-opus-5-5");
+	assert.equal(h.team.get("bulk")!.thinking, "high");
+	assert.equal(h.team.get("chosen")!.thinking, "low", "the call's own choice stays");
+});

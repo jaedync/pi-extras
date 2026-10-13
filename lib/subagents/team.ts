@@ -32,6 +32,7 @@ import { causeWords, staleCauses, SWAP_NOTE, swapActivity, swapDue, TurnSwaps } 
 import { Routing, type SendOptions } from "./routing.ts";
 import { OpenSessions } from "./sessions.ts";
 import { WorkTrees } from "./work-trees.ts";
+import type { Thinking } from "./models.ts";
 import { placeChild } from "./placement.ts";
 import {
 	type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
@@ -61,6 +62,8 @@ export interface TeamOptions {
 	runBudget?: RunLimits;
 	/** Model references a run goes on with, in order, when its model can't serve it (fallback.ts); unset or empty turns fallback off. */
 	fallbackModels?: readonly string[];
+	/** The thinking level a spawn of `model` gets when the call names none (models.ts `thinkingFor`); a fallback model gets its own. */
+	defaultThinking?(model: string): Thinking | undefined;
 	/** Whether a running child whose session went stale moves to a new session at its next turn boundary (swap.ts); default true. */
 	swapAtTurn?: boolean;
 	/** Whether a launch now would take `model`; a run on one it would not keeps its session. Unset: every model. */
@@ -624,11 +627,14 @@ export class Team implements HostTeam {
 			return this.fail(name, plan.error);
 		}
 		const { step } = plan;
+		// A level that was only the failed model's usual one becomes the fallback's usual one; one the call chose stays.
+		const usual = this.options.defaultThinking;
+		const thinking = usual && record.thinking === usual(record.model) ? usual(step.to) : record.thinking;
 		this.swaps.take(name);
 		// Read before the state change below ends the clock; a launch that failed has none left to read.
 		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
 		this.resumePrompts.set(name, { note: fallbackNote(step), message: this.resumePrompts.message(name) });
-		this.patch(name, { ...this.unreadLeft(name), state: "queued", model: step.to, fallbacks: [...(record.fallbacks ?? []), step], activity: `switching to ${step.to}` });
+		this.patch(name, { ...this.unreadLeft(name), state: "queued", model: step.to, thinking, fallbacks: [...(record.fallbacks ?? []), step], activity: `switching to ${step.to}` });
 		void this.sessions.release(name);
 		this.slots.enqueue(name);
 		this.pump();
