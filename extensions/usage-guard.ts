@@ -16,6 +16,7 @@ import { sharedLimitStore, type LimitStore } from "../lib/limit-store.ts";
 import { operationalError } from "../lib/operational-log.ts";
 import { markRow } from "../lib/tool-row.ts";
 import { parseRateLimit } from "../lib/rate-limit-recovery/core.ts";
+import { routedModel } from "../lib/routed-model.ts";
 import { createDollarsCollector, type DollarsCollector } from "../lib/usage-dollars/collect.ts";
 import {
 	hotProviders,
@@ -71,8 +72,10 @@ export function parseBudgetArgs(words: string[]): SessionBudget | null | undefin
 	return { window: words[0], pct };
 }
 
-function activeModel(ctx: Pick<ExtensionContext, "model">): ActiveModel {
-	return { provider: ctx.model?.provider, id: ctx.model?.id };
+/** The model whose limits apply: under a virtual selection, the one it routed to. */
+function activeModel(ctx: Pick<ExtensionContext, "model" | "sessionManager" | "modelRegistry">): ActiveModel {
+	const model = routedModel(ctx);
+	return { provider: model?.provider, id: model?.id };
 }
 
 function idle(ctx: ExtensionContext): boolean {
@@ -291,9 +294,10 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	pi.on("context", async (event, ctx) => {
 		latestCtx = ctx;
 		const notices = evaluate(ctx, true);
+		const model = activeModel(ctx);
 		return {
 			messages: [...event.messages.filter((message) => message.role !== "custom" ||
-				message.customType !== GUARD_CUSTOM_TYPE || warningApplies(message.details, activeModel(ctx), now(), store.get(ctx.model?.provider ?? ""), budget ?? null)), ...notices],
+				message.customType !== GUARD_CUSTOM_TYPE || warningApplies(message.details, model, now(), store.get(model.provider ?? ""), budget ?? null)), ...notices],
 		};
 	});
 

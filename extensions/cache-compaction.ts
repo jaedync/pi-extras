@@ -4,6 +4,7 @@ import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprin
 
 import { dirname, join } from "node:path";
 import { operationalLine } from "../lib/operational-log.ts";
+import { routedModel } from "../lib/routed-model.ts";
 import { COMPACTION_DECISION_EVENT, COMPACTION_PROGRESS_EVENT, PROGRESS_TAIL_CHARS, compactionKey, type CompactionDecision } from "../lib/cache-compaction/decision.ts";
 import { foldProjection } from "../lib/cache-compaction/system-fold.ts";
 import { estimateRequestContext, contextSafetyTokens, summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
@@ -26,8 +27,9 @@ function sessionOptions(settings: RequestSettings) {
 	return { timeoutMs: retry.timeoutMs ?? (idle === 0 ? 2147483647 : idle), maxRetries: retry.maxRetries, maxRetryDelayMs: retry.maxRetryDelayMs, websocketConnectTimeoutMs: settings.getWebSocketConnectTimeoutMs(), transport: settings.getTransport() };
 }
 
+/** The model a request goes to: under a virtual selection, the one it routed to, whose prefix cache the summary shares. */
 function identity(ctx: ExtensionContext, at: number): RequestIdentity | undefined {
-	const model = ctx.model;
+	const model = routedModel(ctx);
 	return model ? { provider: model.provider, id: model.id, api: model.api, baseUrl: model.baseUrl, contextWindow: model.contextWindow, sessionId: ctx.sessionManager.getSessionId(), at } : undefined;
 }
 /** Only custom notices may be omitted; missing conversation messages could be rewritten retained content. */
@@ -210,7 +212,7 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 		const fallback = (reason: string) => { record("default", reason); report(ctx, `default (${reason})`); return undefined; };
 		let payloadFallback: string | undefined;
 		try {
-			const model = ctx.model;
+			const model = routedModel(ctx);
 			if (!model) return fallback("no-model");
 			const p = event.preparation;
 			const reason = fallbackReason({ enabled: policy.enabled, captured, model, sessionId: ctx.sessionManager.getSessionId(), now: now(), idleMs: idleLimitMs(policy, model), reason: event.reason, aborted: event.signal.aborted });

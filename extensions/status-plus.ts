@@ -19,6 +19,7 @@ import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
 import { mergePolled } from "../lib/limit-merge.ts";
+import { isVirtualModel, routedModel } from "../lib/routed-model.ts";
 import { sharedLimitStore, type LimitSnapshot } from "../lib/limit-store.ts";
 import { nextPollMs, readShared, writeShared, type SharedPoll } from "../lib/limit-share.ts";
 import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, PollRefused, REFRESH_INTERVAL_MS, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
@@ -232,13 +233,17 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	 * gains an entry (which moves its leaf) or the model changes. Pi works both
 	 * out by walking the whole session, too slow for every frame of a long one.
 	 */
-	let sessionFacts: { key: string; model: unknown; usage: ReturnType<ExtensionContext["getContextUsage"]>; name: string | undefined } | undefined;
+	let sessionFacts: {
+		key: string; model: unknown; usage: ReturnType<ExtensionContext["getContextUsage"]>; name: string | undefined;
+		/** Under a virtual selection, the model it routed to (lib/routed-model.ts); the selection otherwise. */
+		routed: ExtensionContext["model"];
+	} | undefined;
 
 	function readSessionFacts(ctx: ExtensionContext): NonNullable<typeof sessionFacts> {
 		const leaf = typeof ctx.sessionManager.getLeafId === "function" ? ctx.sessionManager.getLeafId() : undefined;
 		const key = `${leaf ?? ""}|${ctx.model?.contextWindow ?? ""}`;
 		if (leaf !== undefined && sessionFacts?.key === key && sessionFacts.model === ctx.model) return sessionFacts;
-		sessionFacts = { key, model: ctx.model, usage: ctx.getContextUsage(), name: ctx.sessionManager.getSessionName() };
+		sessionFacts = { key, model: ctx.model, usage: ctx.getContextUsage(), name: ctx.sessionManager.getSessionName(), routed: routedModel(ctx) };
 		return sessionFacts;
 	}
 
@@ -257,8 +262,9 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			lastApiEndMs: stats.lastApiEndMs,
 			cache: cacheState(stats.lastCacheMs, stats.lastContextResetMs, now, cacheTtl(stats.cacheLongRetention, LONG_CACHE)),
 			context: { usedTokens, windowTokens, percent },
-			modelName: ctx.model?.id || "no-model",
-			providerId: ctx.model?.provider,
+			// As Pi's own footer: the selection, then where its requests go.
+			modelName: facts.routed && facts.routed !== ctx.model ? `${ctx.model?.id} → ${facts.routed.id}` : ctx.model?.id || "no-model",
+			providerId: facts.routed?.provider,
 			thinkingLevel: ctx.model?.reasoning ? ctx.thinkingLevel || "off" : undefined,
 			spend: animatedSpend(rows, now),
 			counters: toolCounters(stats),
@@ -464,16 +470,29 @@ export default function statusPlus(pi: ExtensionAPI): void {
 
 	function schedulePolls(ctx: ExtensionContext): void {
 		for (const provider of Object.keys(LIMIT_POLLERS)) {
-			if (!seenProviders.has(provider) && ctx.model?.provider !== provider) continue;
+			if (!seenProviders.has(provider) && routedModel(ctx)?.provider !== provider) continue;
 			void refreshProviderLimits(provider, ctx);
 		}
 	}
 
+	/**
+	 * Under a virtual selection, response headers wait for the reply: only it
+	 * names the provider the request went to, and the router can switch providers.
+	 */
+	let virtualHeaders: Record<string, string> | undefined;
+
 	pi.on("after_provider_response", async (event, ctx) => {
 		latestCtx = ctx;
-		const provider = ctx.model?.provider;
+		if (isVirtualModel(ctx.model)) {
+			virtualHeaders = event.headers;
+			return;
+		}
+		applyHeaders(ctx.model?.provider, event.headers);
+	});
+
+	function applyHeaders(provider: string | undefined, headers: Record<string, string>): void {
 		if (!provider) return;
-		const entries = parseLimitHeaders(provider, event.headers);
+		const entries = parseLimitHeaders(provider, headers);
 		if (entries.length === 0) return;
 		// Headers must not clobber a fresh, richer poll snapshot between polls.
 		const existing = providerLimits.get(provider);
@@ -481,7 +500,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		// Headers carry windows but never money: keep the balance the last poll found.
 		providerLimits.set(provider, { entries: withPolledBalances(entries, existing?.entries, Date.now()), atMs: Date.now(), source: "headers" });
 		requestFooterRender?.();
-	});
+	}
 
 	pi.on("turn_start", async () => {
 		awaitingReply = true;
@@ -489,7 +508,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 
 	pi.on("before_provider_request", async (_event, ctx) => {
 		if (!awaitingReply) return;
-		const sourceProvider = ctx.model?.provider ?? "unknown";
+		const sourceProvider = routedModel(ctx)?.provider ?? "unknown";
 		if (sourceProvider === "opencode-go") {
 			// The usage endpoint is the only authoritative signal that Go has
 			// exhausted a window and a successful request will use Zen balance.
@@ -503,6 +522,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	pi.on("message_end", async (event, ctx) => {
 		if (event.message.role !== "assistant") return;
 		awaitingReply = false;
+		if (virtualHeaders) applyHeaders(event.message.provider, virtualHeaders);
+		virtualHeaders = undefined;
 		if (event.message.provider === "opencode-go" && inflight?.provider === "opencode") {
 			pi.appendEntry(BILLING_SOURCE_ENTRY, {
 				messageTimestampMs: toEpochMs(event.message.timestamp),

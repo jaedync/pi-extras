@@ -5,6 +5,7 @@ import { CONFIG_FILE } from "../extras-config.ts";
 import { operationalError } from "../operational-log.ts";
 import { loadConfig, saveConfig, type RecoveryConfig } from "./config.ts";
 import { captureLimit, failureMessage, parseRateLimit, planWait, resumedMessage, sameScope, type CapturedLimit, type WaitPlan, type WaitRefusal } from "./core.ts";
+import { isVirtualModel, routedModel } from "../routed-model.ts";
 import { waitForDelay, waitUI, type Wait } from "./wait.ts";
 import { createQuotaTransportGuard } from "./transport.ts";
 import { ANTHROPIC_HOSTS, type FirstEventPolicy } from "./first-event.ts";
@@ -90,7 +91,7 @@ export class Recovery {
 			// Switching away from a limited model is a request to go on with the new one now.
 			this.transient.skip();
 		});
-		pi.on("cache_warming_decision", (_event, ctx) => this.limited?.resetAtMs !== undefined && this.limited.resetAtMs > this.now() && sameScope(this.limited.scope, ctx.model) ? { action: "stop" } : undefined);
+		pi.on("cache_warming_decision", (_event, ctx) => this.limited?.resetAtMs !== undefined && this.limited.resetAtMs > this.now() && this.inScope(this.limited.scope, ctx) ? { action: "stop" } : undefined);
 		pi.on("before_agent_start", (_event, ctx) => { this.attempts = 0; this.spentMs = 0; this.pending = undefined; this.ready = false; this.transient.reset(); this.protectTransport(ctx, ctx.model, true); });
 		pi.on("session_start", (_event, ctx) => { this.stopped = false; this.cancel(); this.transient.reset(); this.releaseTransport(); this.config = loadConfig(this.file, this.env); this.generation++; this.limited = undefined; this.protectTransport(ctx); });
 		pi.on("session_shutdown", () => { this.stopped = true; this.cancel(); this.generation++; this.limited = undefined; this.releaseTransport(); });
@@ -103,6 +104,16 @@ export class Recovery {
 	private firstEventPolicy(): FirstEventPolicy | undefined {
 		const timeoutMs = this.firstEvent.timeoutMs ?? this.config.anthropicFirstEventSeconds * 1000;
 		return timeoutMs > 0 ? { timeoutMs, hosts: this.firstEvent.hosts ?? ANTHROPIC_HOSTS } : undefined;
+	}
+
+	/**
+	 * Whether a limit's scope covers the model requests now go to. Under a
+	 * virtual selection that is the routed model of the latest request. With no
+	 * request on the branch yet, the limit came from the one now failing.
+	 */
+	private inScope(scope: string, ctx: ExtensionContext): boolean {
+		const routed = routedModel(ctx, true);
+		return (isVirtualModel(routed) && routed === ctx.model) || sameScope(scope, routed);
 	}
 
 	private releaseTransport(): void {
@@ -147,7 +158,7 @@ export class Recovery {
 		this.limited = limit;
 		const plan = planWait(limit, this.config, this.spentMs, this.attempts, this.now());
 		const reason = this.reasonFor(ctx, plan);
-		const eligible = this.role === "main" && ctx.mode === "tui" && ctx.hasUI && this.config.autoWait && !!ctx.signal && !ctx.signal.aborted && typeof plan !== "string" && sameScope(limit.scope, ctx.model);
+		const eligible = this.role === "main" && ctx.mode === "tui" && ctx.hasUI && this.config.autoWait && !!ctx.signal && !ctx.signal.aborted && typeof plan !== "string" && this.inScope(limit.scope, ctx);
 		this.pending = { limit, eligible };
 		if (this.role === "subagent" || ctx.mode !== "tui") ctx.abort();
 		return { message: { ...event.message, errorMessage: failureMessage(limit, this.now(), reason) } };
@@ -168,7 +179,7 @@ export class Recovery {
 
 	private async hibernate(ctx: ExtensionContext, limit: CapturedLimit, plan: WaitPlan): Promise<SessionBoundaryDraft[] | undefined> {
 		const nativeSignal = ctx.signal;
-		if (!nativeSignal || nativeSignal.aborted || !sameScope(limit.scope, ctx.model)) return undefined;
+		if (!nativeSignal || nativeSignal.aborted || !this.inScope(limit.scope, ctx)) return undefined;
 		const controller = new AbortController();
 		const signal = AbortSignal.any([controller.signal, nativeSignal]);
 		const epoch = this.generation;
@@ -185,7 +196,7 @@ export class Recovery {
 			try { ui?.close(); } catch (error) { finished = false; this.fail(ctx, error); }
 			this.active = undefined;
 		}
-		if (!finished || signal.aborted || this.generation !== epoch || !sameScope(limit.scope, ctx.model)) return undefined;
+		if (!finished || signal.aborted || this.generation !== epoch || !this.inScope(limit.scope, ctx)) return undefined;
 		const resumedAtMs = this.now();
 		// A backwards wall-clock adjustment cannot refund a completed relative timer.
 		const elapsedMs = Math.max(plan.delayMs, resumedAtMs - plan.pausedAtMs, 0);
