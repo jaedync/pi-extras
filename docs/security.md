@@ -507,15 +507,18 @@ permissions.
 
 Main also runs git in a child's worktree: for the report, for the check of
 which files a `bash` call changed, and to make a worktree for the child's own
-subagent. There, main gives git the worktree's own git folder and the
-repository's shared git folder, and never follows the worktree's `.git` file.
+subagent. For these three uses, main gives git the worktree's own git folder
+and the repository's shared git folder, and does not follow the worktree's
+`.git` file. Main's other git calls in a worktree run only `git rev-parse`,
+which follows that file but runs no program.
 It also turns off fsmonitor, hooks, automatic gc and submodules. Git then
 reads its config only from your own config files and the parent's repository.
 The sandbox keeps those read-only, and also the worktree's `config.worktree`.
 The report's apply command runs git only in the parent's checkout, on a
-snapshot that main wrote. A worktree child can't name a `cwd` for its
-subagents, so main never makes a worktree in a repository that the child
-chose. So git in main does not run a program that the child put in the git
+snapshot that main wrote. When that checkout is itself a child's worktree, the
+command gives git that worktree's verified git folders too. A worktree child
+can name a `cwd` for its subagents only inside its own worktree. So main never
+makes a worktree in a repository that the child chose. So git in main does not run a program that the child put in the git
 data or in its worktree. These are the limits:
 - Your own config. A hostile child can write `~/.gitconfig`, and git in main
   then reads it.

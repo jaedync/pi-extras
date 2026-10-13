@@ -1531,8 +1531,8 @@ the parent's directory is not a repository. The child starts in the same
 directory of its worktree as its `cwd` (or, for a subagent's own worktree, its
 parent's) is in the repository. A read-only
 child's subagents can't make a worktree from a `cwd`, because making one runs
-that repository's git hooks. A worktree child's subagents can't name a `cwd`
-at all. It copies that repository's current files, including uncommitted
+that repository's git hooks. A worktree child's subagents can name only a `cwd`
+inside that child's worktree. It copies that repository's current files, including uncommitted
 changes and untracked files that Git does not ignore, into a separate checkout.
 The parent keeps its files and index unchanged. The report gives the worktree,
 branch, change counts, and commands to apply changes and remove it after merging.
