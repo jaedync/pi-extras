@@ -4,7 +4,8 @@ Pi extensions run with the same filesystem, process and network permissions as
 Pi. Review the source before installing. This package adds no telemetry uploader,
 remote management service or credential provisioning. It does not update
 itself. Only the Pull Link media tools update themselves; see
-[Pull Link](#pull-link). They and Voice install their own tools on first use.
+[Pull Link](#pull-link). The Pull Link media tools install on the first video
+link. Voice installs when Pi finds a microphone.
 
 Saves to `pi-extras.json` keep the file's permissions and write through a
 symbolic link to its target. A new `pi-extras.json` gets mode `0600`. A save
@@ -255,8 +256,9 @@ loopback, link-local, multicast and reserved addresses. It checks each
 redirect in the same way and follows at most 5. It does not resolve DNS for
 these requests, so a public name that points to a private address passes. It
 sends `GITHUB_TOKEN` or `GH_TOKEN` only to GitHub's API. It refuses a response
-body larger than 8 MB. It keeps at most 16 results in memory, each for at most
-30 minutes. Page text, posts and comments can contain malicious instructions.
+body larger than 8 MB. It reuses a result for at most 30 minutes and keeps at
+most 16 results in memory. Page text, posts and comments can contain malicious
+instructions.
 
 The first video link downloads the media tools into
 `~/.cache/pi-extras/link-context` (or under `XDG_CACHE_HOME`, or
@@ -341,9 +343,9 @@ ALSA capture stream, or a PulseAudio or PipeWire source that is not a monitor.
 Pi runs `pactl` only when `PULSE_SERVER` is set or a server socket exists. It
 names that server, so `pactl` cannot start a PulseAudio daemon. On macOS, when
 Pi runs under a plain `node` binary, a child process lists the input devices.
-Pi keeps the `pactl` answer and the macOS result for
-one day in `PI_VOICE_HOME`. When Pi finds no microphone, nothing downloads until
-you start a dictation or run `/voice setup`.
+Pi keeps the `pactl` answer and the macOS result for one day in
+`PI_VOICE_HOME`. When Pi finds no microphone, nothing downloads until you start
+a dictation or run `/voice setup`.
 
 Sessions talk to the daemon over a Unix socket in `PI_VOICE_HOME` that only your
 user can open. The daemon exits when it goes unused or no Pi session is open.

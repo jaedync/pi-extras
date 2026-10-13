@@ -57,9 +57,10 @@ pi remove git:github.com/jaedync/pi-extras
 An unpinned Git install follows upstream commits. Pi can detect available package
 updates. This package does not update itself and adds no background service.
 Only the Pull Link media tools update themselves (see
-[Video tools](#video-tools)); `PI_OFFLINE=1` stops that. They and Voice
-install their own tools on first use. To pin a published tag, append it to
-the Git source, for example `pi install git:github.com/jaedync/pi-extras@v0.24.14`.
+[Video tools](#video-tools)); `PI_OFFLINE=1` stops that. The Pull Link media
+tools install on the first video link. Voice installs when Pi finds a
+microphone. To pin a published tag, append it to the Git source, for example
+`pi install git:github.com/jaedync/pi-extras@v0.24.14`.
 Pinned installs require an explicit installation of a newer tag.
 After an update, restart Pi or use `/reload`; stop active jobs before removing
 the package. Removing it does not remove your credentials or change other packages.
@@ -704,10 +705,9 @@ for a source that is not a monitor of an output. WSLg always lists its
 `RDPSource`, so on WSLg setup starts when `pactl` (from `pulseaudio-utils`) is
 installed. On macOS, a background check lists the input devices, and setup
 starts when it finds one. This check needs Pi to run under a plain `node`
-binary. Under other builds, setup waits for your first dictation or
-`/voice setup`. Pi keeps the `pactl` answer and the macOS result for
-one day. When Pi cannot find a microphone, setup waits for your first dictation
-or `/voice setup`.
+binary. Pi keeps the `pactl` answer and the macOS result for one day. When Pi
+cannot find a microphone, or under other builds on macOS, setup waits for your
+first dictation or `/voice setup`.
 
 **Background process.** One daemon per user holds the model and serves every
 Pi session. It starts on the first dictation, exits 15 minutes after the last
@@ -1171,8 +1171,7 @@ to use the installed version. With `PI_OFFLINE=1` (or `true` or `yes`), the
 tool does not install, update or look up a release. It uses the installed
 tools, and without them a video link fails with a note. But a speech model
 that is not in the Hugging Face cache still downloads on the first
-transcription. The token provider's
-`npm ci` runs with `--ignore-scripts`.
+transcription. The token provider's `npm ci` runs with `--ignore-scripts`.
 
 The transcript comes from the captions of the video. If the video has no
 captions, the tool downloads the audio and transcribes it on this machine. It
