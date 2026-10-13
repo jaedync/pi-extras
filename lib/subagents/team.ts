@@ -35,7 +35,7 @@ import { WorkTrees } from "./work-trees.ts";
 import type { Thinking } from "./models.ts";
 import { placeChild } from "./placement.ts";
 import {
-	type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
+	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
 } from "./types.ts";
 
 export interface TeamOptions {
@@ -256,6 +256,17 @@ export class Team implements HostTeam {
 		if (!record) return Promise.reject(new Error(`Unknown agent ${name}.`));
 		if (!LIVE_STATES.has(record.state)) return Promise.resolve(record);
 		return new Promise((resolve) => this.waiters.set(name, [...(this.waiters.get(name) ?? []), resolve]));
+	}
+
+	/**
+	 * A parent whose wait: true subagent no longer blocks it goes on only when
+	 * that leaves a slot free: the subagent may have left their shared slot to
+	 * another agent (slots.ts). Resolves when it may go on.
+	 */
+	afterWait(name: string): Promise<void> {
+		const record = this.records.get(name);
+		if (!record || !ACTIVE_STATES.has(record.state) || this.slots.used() <= this.options.maxConcurrent) return Promise.resolve();
+		return this.goOnWhenFree(name, () => this.patch(name, { state: "running", ...WAITING_FOR_MODEL }));
 	}
 
 	/** Detach a blocking parent: its report now arrives as a message instead. */

@@ -39,6 +39,7 @@ export interface HostTeam {
 	under(name: string, ancestor: string): boolean;
 	whenDone(name: string): Promise<AgentRecord>;
 	detach(name: string): void;
+	afterWait(name: string): Promise<void>;
 	messages(name: string): readonly unknown[];
 	streaming(name: string): unknown;
 	tool(name: string, toolName: string): object | undefined;

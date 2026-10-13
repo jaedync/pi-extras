@@ -164,12 +164,12 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 				...(record.cwd ? { cwd: record.cwd } : {}),
 			};
 			if (params.wait !== true) return text(spawnSummary(record, tc.team), details);
-			return await waitFor(tc, record.name, details, signal, onUpdate as ((update: Result) => void) | undefined);
+			return await waitFor(tc, { name: record.name, parent }, details, signal, onUpdate as ((update: Result) => void) | undefined);
 		},
 	} as ToolDefinition;
 }
 
-async function waitFor(tc: ToolContext, name: string, details: Record<string, unknown>, signal: AbortSignal | undefined,
+async function waitFor(tc: ToolContext, { name, parent }: { name: string; parent: string }, details: Record<string, unknown>, signal: AbortSignal | undefined,
 	onUpdate: ((update: Result) => void) | undefined): Promise<Result> {
 	let last = 0;
 	let onDetached: (() => void) | undefined;
@@ -192,6 +192,8 @@ async function waitFor(tc: ToolContext, name: string, details: Record<string, un
 	});
 	try {
 		const done = await Promise.race([tc.team.whenDone(name), aborted, detached]);
+		// The subagent may have left their shared slot to another agent; the parent goes on when one is free.
+		if (done !== null) await tc.team.afterWait(parent);
 		if (done === "detached") {
 			return text(`Stopped waiting: ${name} asked you something. Answer with message({ to: "${name}", text }); its report will arrive as a message.`, { ...details, detached: true, asked: true });
 		}

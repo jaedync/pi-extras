@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { subagentTool } from "../lib/subagents/tools.ts";
-import { ACTIVE_STATES } from "../lib/subagents/types.ts";
+import { ACTIVE_STATES, LIVE_STATES } from "../lib/subagents/types.ts";
 import { teamHarness } from "./support/team-harness.ts";
 
 const flush = async (rounds = 6) => { for (let i = 0; i < rounds; i++) await tick(); };
@@ -98,4 +98,33 @@ test("a stop of an agent that waits for a slot keeps its message and ends its wa
 	assert.match((h.team.get("a")!.inbox ?? []).join("\n"), /Check the tests too/);
 	h.lastCall("b").finish("b done"); await flush();
 	assert.deepEqual(activeNames(h), []);
+});
+
+/** Slots in use: a parent blocked on its wait: true subagent shares that subagent's. */
+const slotsUsed = (h: ReturnType<typeof teamHarness>) => {
+	const records = h.team.list();
+	const blocked = new Set(records.filter((record) => record.blocking && LIVE_STATES.has(record.state)).map((record) => record.parent));
+	return records.filter((record) => ACTIVE_STATES.has(record.state) && !blocked.has(record.name)).map((record) => record.name);
+};
+
+test("a parent whose wait: true child ended while another agent had their slot waits for a free one", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.spawn("Lead", { name: "lead" }); await flush();
+	h.spawn("Other", { name: "other" }); await flush();
+	const context = { team: h.team, allowed: [{ ref: "m", short: "m" }], fallbackModel: "m", thinking: {}, modelTable: "", guide: "", replyTimeoutMs: 60_000, now: Date.now };
+	let returned = false;
+	const waiting = (subagentTool(context as never, "lead").execute as any)("id", { task: "check", name: "check", wait: true }, undefined, undefined, undefined)
+		.catch((error: Error) => error).finally(() => { returned = true; });
+	await flush();
+	assert.deepEqual(slotsUsed(h), ["check"]);
+	void h.team.send("check", "main", "Which branch?", { expectReply: true }); await flush();
+	assert.deepEqual(slotsUsed(h), ["other"], "the asker freed the slot it shared with lead");
+	await h.team.stop("check"); await flush();
+	assert.equal(returned, false, "lead's wait holds until a slot is free");
+	assert.equal(h.team.get("lead")!.state, "queued");
+	assert.deepEqual(slotsUsed(h), ["other"]);
+	h.lastCall("other").finish("other done"); await flush();
+	await waiting;
+	assert.equal(returned, true);
+	assert.deepEqual(slotsUsed(h), ["lead"]);
 });
