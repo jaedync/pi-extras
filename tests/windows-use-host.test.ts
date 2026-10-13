@@ -206,9 +206,10 @@ test("VMs are found by their exact name, never through the Hyper-V cmdlets' wild
 	const start = host.slice(host.indexOf("function Start-Machine"), host.indexOf("# ---- Screen"));
 	assert.match(start, /Start-VM -VM \(Get-ExactVm \$vm\)/);
 	assert.match(host, /function Get-ExactVm\(\[string\]\$vm\) \{ Get-VM -Id \(Get-Machine \$vm\)\.Name \}/);
-	// WQL escapes with backslashes, not doubled quotes, so the name is matched in PowerShell: -eq has no wildcards and ignores case, as Hyper-V does.
+	// WQL escapes with backslashes, not doubled quotes, so the name is matched in PowerShell.
+	// An ordinal compare has no wildcards and ignores case, as Hyper-V does; -eq's culture compare skips characters such as U+00AD.
 	const machine = host.slice(host.indexOf("function Get-Machine"), host.indexOf("function Get-ExactVm"));
-	assert.match(machine, /Get-CimInstance -Namespace \$ns -ClassName Msvm_ComputerSystem -Filter "Caption='Virtual Machine'" \| Where-Object \{ \$_\.ElementName -eq \$vm \}/);
+	assert.match(machine, /Get-CimInstance -Namespace \$ns -ClassName Msvm_ComputerSystem -Filter "Caption='Virtual Machine'" \| Where-Object \{ \[string\]::Equals\(\$_\.ElementName, \$vm, \[StringComparison\]::OrdinalIgnoreCase\) \}/);
 	assert.doesNotMatch(host, /ElementName='/, "no VM name goes into a WQL string");
 });
 
@@ -217,9 +218,11 @@ test("each VM's key file is named by its VM id, so VMs whose names differ in cas
 	const keyFile = host.slice(host.indexOf("function Get-KeyFile"), host.indexOf("function Get-Machine"));
 	assert.match(keyFile, /function Get-KeyFile\(\[string\]\$vm, \[string\]\$id\) \{\s*if \(-not \$id\) \{ \$id = \(Get-Machine \$vm\)\.Name \}\s*\$file = Join-Path \$dataDir \('vm-' \+ \$id\.ToLowerInvariant\(\) \+ '\.key'\)/);
 	// A name-based file from before moves only when exactly one VM's name maps to it.
-	assert.match(keyFile, /\$sharing = @\(Get-VM \| Where-Object \{ \(Get-SafeName \$_\.Name\) -eq \$safe \}\)\s*if \(\$sharing\.Count -ne 1\) \{[\s\S]*?\[Console\]::Error\.WriteLine[\s\S]*?return\s*\}\s*(?:#[^\n]*\n\s*)?try \{ Move-Item -LiteralPath \$old -Destination \$file \}\s*catch \{ if \(-not \(Test-Path -LiteralPath \$file\)\) \{ \[Console\]::Error\.WriteLine/, "a failed or raced move costs this call no more than a log line");
+	assert.match(keyFile, /\$sharing = @\(Get-VM \| Where-Object \{ \(Get-SafeName \$_\.Name\) -eq \$safe \}\)\s*if \(\$sharing\.Count -ne 1\) \{\s*Write-KeyWarning "shared \$file" [^\n]*\s*return\s*\}\s*(?:#[^\n]*\n\s*)?try \{ Move-Item -LiteralPath \$old -Destination \$file \}\s*catch \{ if \(-not \(Test-Path -LiteralPath \$file\)\) \{ Write-KeyWarning "move \$file" /, "a failed or raced move costs this call no more than a log line");
+	assert.match(keyFile, /function Write-KeyWarning\(\[string\]\$key, \[string\]\$text\) \{\s*if \(\$script:keyWarnings\[\$key\]\) \{ return \}\s*\$script:keyWarnings\[\$key\] = \$true\s*\[Console\]::Error\.WriteLine\(\$text\)/, "each warning is written one time for each file");
 	// -Path takes wildcards, and %LOCALAPPDATA% may hold a "[".
-	assert.doesNotMatch(keyFile, /Test-Path (?!-LiteralPath)/);
+	assert.doesNotMatch(host, /Test-Path (?!-LiteralPath)/);
+	assert.doesNotMatch(host, /Get-Content -Path \$(?:file|keyFile)/);
 	const vms = host.slice(host.indexOf("function Get-Vms"), host.indexOf("# Heartbeat:"));
 	assert.match(vms, /Get-KeyFile \$vm "\$\(\$hv\.Id\)"/, "the list names each VM's file from its own id, not by a name lookup");
 	assert.match(vms, /Get-VmIpv4 \$hv/);

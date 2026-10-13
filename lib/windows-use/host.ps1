@@ -38,28 +38,32 @@ function Get-KeyFile([string]$vm, [string]$id) {
 # other VMs' names map to the same file name, the file may hold any of their keys,
 # so none of them gets it: setup makes a new key instead.
 $script:keyWarnings = @{}
+# Each warning goes to the log one time for each file, not on every call that looks.
+function Write-KeyWarning([string]$key, [string]$text) {
+    if ($script:keyWarnings[$key]) { return }
+    $script:keyWarnings[$key] = $true
+    [Console]::Error.WriteLine($text)
+}
 function Move-NamedKey([string]$vm, [string]$file) {
     $safe = Get-SafeName $vm
     $old = Join-Path $dataDir ($safe + '.key')
     if (-not (Test-Path -LiteralPath $old)) { return }
     $sharing = @(Get-VM | Where-Object { (Get-SafeName $_.Name) -eq $safe })
     if ($sharing.Count -ne 1) {
-        if (-not $script:keyWarnings[$file]) {
-            $script:keyWarnings[$file] = $true
-            [Console]::Error.WriteLine("key file '$old' could belong to any of these VMs: $(@($sharing | ForEach-Object { $_.Name }) -join ', '). '$vm' does not use it; its next setup makes a new key.")
-        }
+        Write-KeyWarning "shared $file" "key file '$old' could belong to any of these VMs: $(@($sharing | ForEach-Object { $_.Name }) -join ', '). '$vm' does not use it; its next setup makes a new key."
         return
     }
     # Another host process may have moved it first; only a key file still missing is worth a line.
     try { Move-Item -LiteralPath $old -Destination $file }
-    catch { if (-not (Test-Path -LiteralPath $file)) { [Console]::Error.WriteLine("key file '$old' could not move to '$file': $($_.Exception.Message)") } }
+    catch { if (-not (Test-Path -LiteralPath $file)) { Write-KeyWarning "move $file" "key file '$old' could not move to '$file': $($_.Exception.Message)" } }
 }
 
 function Get-Machine([string]$vm) {
     if (-not $vm) { throw 'vm is required' }
-    # Matched here, not in WQL, which escapes quotes and backslashes in its own way.
-    # -eq has no wildcards and ignores case, as Hyper-V names do.
-    $m = @(Get-CimInstance -Namespace $ns -ClassName Msvm_ComputerSystem -Filter "Caption='Virtual Machine'" | Where-Object { $_.ElementName -eq $vm })
+    # Matched here, not in WQL, which escapes quotes and backslashes in its own way. An
+    # ordinal compare has no wildcards and ignores case, as Hyper-V names do; -eq's culture
+    # compare would also skip characters such as the soft hyphen.
+    $m = @(Get-CimInstance -Namespace $ns -ClassName Msvm_ComputerSystem -Filter "Caption='Virtual Machine'" | Where-Object { [string]::Equals($_.ElementName, $vm, [StringComparison]::OrdinalIgnoreCase) })
     if (-not $m.Count) { throw "There is no Hyper-V VM named '$vm'" }
     # Hyper-V allows one name twice. Picking one could send its key to the other's IP.
     if ($m.Count -gt 1) { throw "$($m.Count) Hyper-V VMs are named '$vm'. Rename all but one, so windows_use can tell them apart." }
@@ -108,7 +112,7 @@ function Get-Vms {
         $hv = $_
         $vm = $hv.Name
         $running = $hv.State -eq 'Running'
-        [ordered]@{ name = $vm; state = "$($hv.State)".ToLowerInvariant(); running = $running; installed = (Test-Path (Get-KeyFile $vm "$($hv.Id)")); ip = $(if ($running) { Get-VmIpv4 $hv } else { $null }) }
+        [ordered]@{ name = $vm; state = "$($hv.State)".ToLowerInvariant(); running = $running; installed = (Test-Path -LiteralPath (Get-KeyFile $vm "$($hv.Id)")); ip = $(if ($running) { Get-VmIpv4 $hv } else { $null }) }
     })
     , $list
 }
@@ -126,7 +130,7 @@ function Get-Status([string]$vm) {
     $size = if ($running) { Get-Resolution $m } else { @{ w = 0; h = 0 } }
     $live = if ($running) { Get-Liveness $m } else { @{ heartbeat = $null; uptime = $null } }
     # No IP here: Get-VMNetworkAdapter takes one to two seconds, and every reconnect waits on status.
-    [ordered]@{ vm = $vm; state = (Get-StateName $m.EnabledState); running = $running; width = $size.w; height = $size.h; installed = (Test-Path (Get-KeyFile $vm $m.Name)); heartbeat = $live.heartbeat; uptime = $live.uptime }
+    [ordered]@{ vm = $vm; state = (Get-StateName $m.EnabledState); running = $running; width = $size.w; height = $size.h; installed = (Test-Path -LiteralPath (Get-KeyFile $vm $m.Name)); heartbeat = $live.heartbeat; uptime = $live.uptime }
 }
 function Start-Machine([string]$vm) {
     Start-VM -VM (Get-ExactVm $vm) | Out-Null
@@ -343,15 +347,15 @@ function Set-Key([string]$vm, [string]$key) {
     try {
         [IO.File]::WriteAllText($pending, $key)
         # PS5.1 converts $null to an empty string here; the API needs a real null.
-        if (Test-Path $file) { [IO.File]::Replace($pending, $file, [NullString]::Value) }
+        if (Test-Path -LiteralPath $file) { [IO.File]::Replace($pending, $file, [NullString]::Value) }
         else { [IO.File]::Move($pending, $file) }
-    } finally { if (Test-Path $pending) { [IO.File]::Delete($pending) } }
+    } finally { if (Test-Path -LiteralPath $pending) { [IO.File]::Delete($pending) } }
 }
 
 function Get-Key([string]$vm, [bool]$rotate) {
     $file = Get-KeyFile $vm
-    if ($rotate -or -not (Test-Path $file)) { Set-Key $vm (New-Key) }
-    (Get-Content -Path $file -Raw).Trim()
+    if ($rotate -or -not (Test-Path -LiteralPath $file)) { Set-Key $vm (New-Key) }
+    (Get-Content -LiteralPath $file -Raw).Trim()
 }
 
 # Opens an administrator's PowerShell at the console of a signed-in, unlocked
@@ -507,12 +511,12 @@ function Send-Mcp([string]$vm, [int]$port, [string]$message) {
     $ip = Get-Ipv4 $vm
     if (-not $ip) { throw "VM '$vm' has no IPv4 address yet" }
     $keyFile = Get-KeyFile $vm
-    if (-not (Test-Path $keyFile)) { throw "Windows-MCP is not set up on '$vm'" }
+    if (-not (Test-Path -LiteralPath $keyFile)) { throw "Windows-MCP is not set up on '$vm'" }
     $req = New-Object Net.Http.HttpRequestMessage([Net.Http.HttpMethod]::Post, "http://${ip}:$port/mcp")
     $req.Content = New-Object Net.Http.StringContent($message, $utf8, 'application/json')
     $req.Headers.Accept.ParseAdd('application/json')
     $req.Headers.Accept.ParseAdd('text/event-stream')
-    [void]$req.Headers.TryAddWithoutValidation('Authorization', 'Bearer ' + (Get-Content -Path $keyFile -Raw).Trim())
+    [void]$req.Headers.TryAddWithoutValidation('Authorization', 'Bearer ' + (Get-Content -LiteralPath $keyFile -Raw).Trim())
     try { $resp = $http.SendAsync($req, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult() }
     catch {
         $base = $_.Exception.GetBaseException()
@@ -545,7 +549,7 @@ function Send-Mcp([string]$vm, [int]$port, [string]$message) {
 function Get-RelayAuth([string]$vm) {
     $id = [string](Get-Machine $vm).Name
     $keyFile = Get-KeyFile $vm $id
-    $key = if (Test-Path $keyFile) { (Get-Content -Path $keyFile -Raw).Trim() } else { $null }
+    $key = if (Test-Path -LiteralPath $keyFile) { (Get-Content -LiteralPath $keyFile -Raw).Trim() } else { $null }
     [ordered]@{ id = $id; key = $key }
 }
 
