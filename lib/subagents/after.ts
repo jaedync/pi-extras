@@ -7,7 +7,7 @@
  * first start waits: a later run, a resume included, never does.
  */
 import { checkFailed, checkOf, checkVerdict } from "./checks.ts";
-import { latestReportFile } from "./reports.ts";
+import { savedReport } from "./reports.ts";
 import { LIVE_STATES, type AgentRecord } from "./types.ts";
 
 /** The most agents one spawn may wait for. */
@@ -176,10 +176,14 @@ const oneLine = (text: string, max = 200): string => {
 };
 
 /** The report of its latest run that saved one; a restored record has only its session file to find it by. */
+/** Where its report is; one from an older run says so, since the last run saved none. */
 function reportOf(record: AgentRecord): string | undefined {
-	if (record.reportFile) return record.reportFile;
-	try { return record.sessionFile ? latestReportFile(record.sessionFile) : undefined; }
+	let saved: ReturnType<typeof savedReport>;
+	// An unreadable session directory leaves the line at its session file; the spawn starts anyway.
+	try { saved = savedReport(record); }
 	catch { return undefined; }
+	if (!saved) return undefined;
+	return saved.run !== undefined && saved.run < record.runs ? `Its last run (run ${record.runs}) saved no report; run ${saved.run}'s: ${saved.file}` : `Report: ${saved.file}`;
 }
 
 function ended(record: AgentRecord): string {
@@ -196,7 +200,7 @@ function ended(record: AgentRecord): string {
 function endedLine(name: string, record: AgentRecord | undefined): string {
 	if (!record) return `- ${name} is no longer known.`;
 	const report = reportOf(record);
-	const where = report ? `Report: ${report}` : record.sessionFile ? `No report; its session: ${record.sessionFile}` : "No report.";
+	const where = report ? report : record.sessionFile ? `No report; its session: ${record.sessionFile}` : "No report.";
 	return `- ${name} ${ended(record)}. ${where}`;
 }
 

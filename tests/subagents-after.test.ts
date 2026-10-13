@@ -98,6 +98,13 @@ test("a failed, stopped or interrupted agent counts as ended, and the block says
 	assert.match(block, /- c was interrupted; that counts as ended, and it may resume later\. No report\./);
 });
 
+test("the block says when the report it names is an older run's, since the last run saved none", () => {
+	const base = { parent: "main", depth: 1, task: "t", model: "m", readOnly: false, fork: false, blocking: false, createdAt: 0, activity: null, toolCalls: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 } } as const;
+	const records = new Map<string, AgentRecord>([["a", { ...base, name: "a", state: "stopped", runs: 3, reportFile: "/s/a.run-2.report.md" }]]);
+	const block = afterBlock({ ...base, name: "d", state: "queued", runs: 0, after: ["a"] }, (name) => records.get(name));
+	assert.match(block, /- a was stopped\. Its last run \(run 3\) saved no report; run 2's: \/s\/a\.run-2\.report\.md/);
+});
+
 test("an agent waiting for another holds no slot, and a stop while it waits just drops it", async () => {
 	const h = teamHarness({ maxConcurrent: 1 });
 	const first = h.spawn("first job", { name: "first" });
