@@ -483,3 +483,32 @@ test("console.screenshot and console.ocr wake a display that went dark, and say 
 	assert.deepEqual(read.calls, ["ocr", "frame", "key shift", "frame", "ocr"], "read again once awake");
 	assert.deepEqual(reader.drainNotes(), ["A: woke the display, which had gone dark"]);
 });
+
+test("a first-call console Alt+F4 looks at the guest first, and a lock screen still gets its keys", async () => {
+	for (const unlocks of [true, false]) {
+		const looked: string[] = [];
+		const guest = (vm: string) => {
+			let ready = false;
+			return {
+				vm,
+				async tool(name: string, args: Record<string, unknown>) {
+					if (name === "PowerShell" && String(args.command).includes("GetForegroundWindow")) return { content: [{ type: "text", text: `Response: ${JSON.stringify({ process: "explorer", title: "Program Manager", responding: true })}\n\nStatus Code: 0` }], isError: false };
+					return { content: [{ type: "text", text: `${name} done` }], isError: false };
+				},
+				ready: () => ready,
+				async inspect() { looked.push("inspect"); ready = unlocks; return undefined; },
+				assertConsole: async () => {},
+				forget() {},
+				recheck() {},
+			} as unknown as Guest;
+		};
+		const { host, calls } = fakeHost();
+		const session = new WinSession(host, guest);
+		if (unlocks) await assert.rejects(session.call("console.key", { vm: "A", keys: "alt+f4" }, {}), /Alt\+F4 wasn't sent/);
+		else await session.call("console.key", { vm: "A", keys: "alt+f4" }, {});
+		assert.deepEqual(looked, ["inspect"]);
+		assert.equal(calls.filter(([method]) => method === "key").length, unlocks ? 0 : 1, unlocks ? "the desktop is in front: refused" : "locked: the check can't run, and the keys go");
+		await session.call("console.key", { vm: "A", keys: "enter" }, {});
+		assert.deepEqual(looked, ["inspect"], "other keys go without a look");
+	}
+});

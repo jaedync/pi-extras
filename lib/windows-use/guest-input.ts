@@ -63,7 +63,7 @@ const SHORTCUT_TOOL = /^shortcut(?:-tool)?$/i;
  * and digits, and anything else splits them: Python's strip() and .NET's Trim()
  * remove characters (\x1c-\x1f, \x85) that JavaScript's \s leaves.
  */
-function closesWindow(keys: string): boolean {
+export function closesWindow(keys: string): boolean {
 	const names = keys.toLowerCase().split(/[^a-z0-9]+/);
 	return names.includes("f4") && names.some((key) => ALT_KEYS.has(key));
 }

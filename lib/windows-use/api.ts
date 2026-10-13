@@ -11,7 +11,7 @@ import type { CallOptions, ToolResult } from "../computer-use/session.ts";
 import type { Region } from "./ocr.ts";
 import { Display } from "./display.ts";
 import { Guest, wait, type HostCalls } from "./guest.ts";
-import { answerUac, captureFailure, checkAltF4, SCREEN_GRAB_FAILED, shortcutKeys, typeAtFocus } from "./guest-input.ts";
+import { answerUac, captureFailure, checkAltF4, closesWindow, SCREEN_GRAB_FAILED, shortcutKeys, typeAtFocus } from "./guest-input.ts";
 import { textOf, textResult } from "./result.ts";
 import { pickApp, START_APPS } from "./apps.ts";
 import { compactSnapshot } from "./snapshot.ts";
@@ -291,8 +291,12 @@ export class WinSession {
 			case "console.key": {
 				if (typeof args.keys !== "string") throw new Error("win.console.key needs { vm, keys }");
 				// Console keys also serve lock and sign-in screens, where the guest can't be asked what is in front.
-				const guest = this.guests.get(vm.toLowerCase());
-				if (guest?.ready()) await checkAltF4(guest, args.keys, signal);
+				// Only Alt+F4 waits on a look at the guest, also as a session's first call.
+				if (closesWindow(args.keys)) {
+					const guest = this.guest(vm);
+					if (!guest.ready()) await guest.inspect(signal);
+					if (guest.ready()) await checkAltF4(guest, args.keys, signal);
+				}
 				return this.console("key", { vm, keys: args.keys }, signal);
 			}
 			case "console.cad": return this.console("cad", { vm }, signal);
