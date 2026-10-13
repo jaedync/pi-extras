@@ -1725,9 +1725,9 @@ so a stray Enter refuses. "Allow for this session" lasts until the client exits;
 "Always allow" is stored by the Computer Use service and also applies to ChatGPT
 and Codex computer use. Apps the service rates high risk, such as browsers, show
 its prompt injection warning. The service never allows some apps, such as
-terminals. Without a UI, such as `pi -p` or a subagent, an app that is not
-always allowed is denied unless Allow all is on, and the agent is told how to
-allow it.
+terminals. Without a UI, such as `pi -p`, an app that is not always allowed
+is denied unless Allow all is on, and the agent is told how to allow it.
+Subagents never get `computer_use` or `windows_use`.
 
 `/computer-use` opens a panel with the client's status, the apps mode and a
 checklist of the apps the agent may always use. Check and uncheck any number of
