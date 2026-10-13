@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseCodexUsage } from "../lib/provider-limits.ts";
-import { parseAnthropicLimits, parseCodexLimits, parseGenericLimits } from "../lib/status-plus-limits.ts";
+import { parseAnthropicLimits, parseCodexLimits, parseGenericLimits, parseLimitHeaders } from "../lib/status-plus-limits.ts";
 import { hhmm, parseProxyQuota } from "../lib/status-plus-logic.ts";
 import { resetLabel } from "../lib/status-plus-render.ts";
 import { footerLayout, type FooterModel } from "../lib/status-plus-footer.ts";
@@ -118,4 +118,9 @@ test("header percentages stay within 0..100", () => {
 	assert.deepEqual(unified.map((entry) => entry.usedPct).sort((a, b) => (a ?? 0) - (b ?? 0)), [0, 100]);
 	const codex = parseCodexLimits({ "x-codex-primary-used-percent": "-3", "x-codex-secondary-used-percent": "140" }, NOW);
 	assert.deepEqual(codex.map((entry) => entry.usedPct), [0, 100]);
+});
+
+test("a limit header of Infinity is no reading, not NaN percent", () => {
+	const entries = parseLimitHeaders("anthropic", { "anthropic-ratelimit-requests-limit": "Infinity", "anthropic-ratelimit-requests-remaining": "150" }, NOW);
+	assert.ok(entries.every((entry) => Number.isFinite(entry.usedPct)), JSON.stringify(entries));
 });

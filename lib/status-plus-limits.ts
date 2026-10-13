@@ -84,7 +84,7 @@ function parseResetHeader(value: string | undefined, now: number): number | unde
 
 /** Used share of a limit/remaining pair; a remaining count outside 0..limit is not a reading. */
 function pairUsedPct(limit: number, remaining: number): number | undefined {
-	if (!(limit > 0) || remaining < 0 || remaining > limit) return undefined;
+	if (!Number.isFinite(limit) || !(limit > 0) || remaining < 0 || remaining > limit) return undefined;
 	return clampPct(((limit - remaining) / limit) * 100);
 }
 
