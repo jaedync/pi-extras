@@ -611,7 +611,8 @@ export class Team implements HostTeam {
 		this.continuing.set(name, this.continuing.get(name) ?? this.budgets.used(name));
 		// A prompt that carries mail or a fix round is a message, which a launch that can't go keeps.
 		this.resumePrompts.set(name, carriesUnread ? { note: "", message: prompt } : { note: prompt });
-		this.patch(name, { ...(carriesUnread ? {} : this.unreadLeft(name)), activity: swapActivity(causes) });
+		// A prompt that carries the unread mail holds it now: still listed as unread, a launch that can't go would add it again.
+		this.patch(name, { ...(carriesUnread ? { unread: undefined } : this.unreadLeft(name)), activity: swapActivity(causes) });
 		void this.sessions.release(name);
 		void this.start(name);
 		return false;
