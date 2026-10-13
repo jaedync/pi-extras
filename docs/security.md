@@ -65,15 +65,46 @@ This adds no network request or transcript log. Disable it with
 
 ## Usage Guard
 
-Usage Guard makes no network requests of its own. It reads the snapshots Status
-Plus polls; the `usage` tool's `refresh` option asks Status Plus to poll again,
-subject to the same `STATUS_PLUS_POLL_LIMITS` and `PI_OFFLINE` switches. It
-writes only the `usageGuard` section of `pi-extras.json` in the Pi agent
-directory (through `/usage warnings on|off`) and custom entries in the current
-session file (fired warning keys and the session budget). Warnings and `/usage`
-snapshots are injected into the model's context as ordinary messages, so they
-are sent to your provider with the next request like any other conversation
-text. They contain window labels, percentages and reset times, not credentials.
+Usage Guard reads the snapshots Status Plus polls. Two `usage` tool options
+ask Status Plus to poll: `refresh` polls again, and `all` polls each scoped
+model's provider that has no snapshot yet. The same `STATUS_PLUS_POLL_LIMITS`
+and `PI_OFFLINE` switches apply to these polls.
+
+For dollar figures, a `usage` call and `/usage` can send two more requests:
+
+- With `usageDollars.tokenfold` set, it reads the key file and sends the key
+  in an `x-api-key` header to `GET <url>/api/ha`. The URL must use `https`, or
+  `http` to this machine only.
+- When Status Plus has polled OpenRouter credits, it sends Pi's OpenRouter API
+  key to `https://openrouter.ai/api/v1/key`.
+
+Both requests refuse redirects and stop after 3 seconds. `PI_OFFLINE=1`,
+`true` or `yes` stops both. The answers stay in memory for one minute. The
+report's notes never contain a key, the Tokenfold URL or a response body.
+
+Dollar figures also read the Pi session files under
+`PI_CODING_AGENT_DIR/sessions` that changed in the last 8 days, subagent
+sessions included. They use only the recorded cost, provider, model, time and
+response ID of each turn and summary.
+
+Usage Guard writes these files:
+
+- The `usageGuard` section of `pi-extras.json` in the Pi agent directory,
+  through `/usage warnings on|off`.
+- Custom entries in the current session file: fired warning keys and the
+  session budget.
+- `meter-day.json`, `window-readings.json` and `window-sizes-v2.json` in
+  `PI_CODING_AGENT_DIR/usage-dollars/`, with mode `0600`, and a `.lock` file
+  beside each one while it changes it. They hold dollar amounts, percentages
+  and times. Each Status Plus poll can change the first two, not only a
+  `usage` call.
+- Error lines in `usage-guard.log` in the Pi agent directory.
+
+Warnings and `/usage` snapshots are injected into the model's context as
+ordinary messages, so they are sent to your provider with the next request
+like any other conversation text. They contain window labels, percentages and
+reset times, and snapshots also contain dollar figures. They contain no
+credentials.
 Idle polls update proximity but do not persist a fired warning or queue instructions
 for a future model. Delivery checks the active provider/model family at the shared
 request-context boundary, including automated wakeups and queued follow-ups. New
