@@ -1149,8 +1149,14 @@ link-local, metadata and reserved addresses. The tool does not download media
 or captions on other protocols, such as `ftp://` or `rtmp://`, and ffmpeg can
 read only HTTP. yt-dlp does not start other downloaders, such as `rtmpdump`.
 When you set `linkContext.proxy` or a proxy variable (`HTTPS_PROXY`,
-`HTTP_PROXY` or `ALL_PROXY`), the tool uses your proxy instead. Then your proxy decides which hosts the video tools
-can reach.
+`HTTP_PROXY` or `ALL_PROXY`), the guard still checks each request. Then it
+sends the request to your proxy. `linkContext.proxy` comes before the
+variables. Your proxy gets the IP address that the guard checked, not the
+name. A host in `NO_PROXY` gets a direct connection, and the guard checks it
+too. The guard uses the DNS of this host for its check, so it cannot see a
+name that is private only in the network of your proxy. The proxy URL must
+start with `http://`, `https://`, `socks5://`, `socks5h://`, `socks4://` or
+`socks4a://`. If it does not, the tool stops before it sends a request.
 
 A shared YouTube link with `&list=` reads only its one video, not the
 playlist.
@@ -1220,7 +1226,9 @@ Put these in the `linkContext` section of `pi-extras.json`:
   `0` stops the scheduled updates. A new pi-extras version that changes the
   list of video packages still installs them again.
 - `proxy`: a proxy URL for yt-dlp and the YouTube transcript client, for
-  example `socks5://host:1080`.
+  example `socks5://host:1080`. The URL can have a user name and password,
+  for example `http://user:pass@host:8080`. The guard checks each request
+  before it goes to this proxy (see Pull Link).
 - `cookies`: the path to a Netscape `cookies.txt` file for yt-dlp.
 - `asrModel`: a different speech-to-text model, for example
   `mlx-community/whisper-small-mlx` or `medium`.

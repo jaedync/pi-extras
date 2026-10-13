@@ -304,10 +304,40 @@ yt-dlp, its HTTP libraries and ffmpeg send each HTTP request through a guard
 proxy on the loopback address. This includes redirects, manifests and
 fragments. The proxy resolves each name itself and connects only to the
 addresses that it checked. It refuses private, loopback, link-local,
-metadata and reserved addresses. When you set `linkContext.proxy` or a proxy
-variable, such as `HTTPS_PROXY`, your proxy replaces the guard. Then your
-proxy decides which hosts the media tools can reach. These downloader limits
-apply with either proxy:
+metadata and reserved addresses.
+
+When you set `linkContext.proxy` or a proxy variable, such as `HTTPS_PROXY`,
+the guard stays on:
+
+- The guard checks each request in the same way. Then it sends the request
+  to your proxy and not to the site. `linkContext.proxy` comes before the
+  variables. A host in `NO_PROXY` gets a direct connection after the check.
+- The guard takes the place of your proxy in the settings of yt-dlp, the
+  YouTube transcript client and the proxy variables. Then no client can get
+  to your proxy without the check.
+- Your proxy gets the IP address that the guard checked, not the name. A
+  DNS answer that changes after the check cannot send your proxy to a
+  private address. The guard tries IPv4 addresses first, because many proxies
+  have no IPv6 route. If your proxy cannot get to one address, the guard
+  tries the next one.
+- The guard can use `http://`, `https://` (with a verified certificate),
+  `socks5://`, `socks5h://`, `socks4://` and `socks4a://` proxies. It sends
+  the user name and password from the URL to your proxy only. It does not
+  write them in a message or a log. For other proxy URLs, the tool stops
+  before it sends a request. It never connects without the guard.
+- When your proxy fails, the request fails with a message that gives the
+  host and port of the proxy and the reason.
+
+The guard has these limits with your proxy:
+
+- The guard uses the DNS of this host for its check. It cannot see a name
+  that is private only in the network of your proxy.
+- For a plain `http` request, the guard puts the IP address in the request
+  line and keeps the `Host` header. A proxy that makes a new `Host` header
+  from the request line sends the IP address to the site, and some sites
+  then do not answer correctly.
+
+These downloader limits apply with or without your proxy:
 
 - The tool downloads media and captions only from `http`, `https` and `data`
   URLs. It refuses other protocols, such as `ftp://`, `rtmp://` or `rtsp://`.
