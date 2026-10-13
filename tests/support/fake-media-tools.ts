@@ -37,9 +37,11 @@ export function fakeMediaTools(dir: string, options: { cloneWorks?: boolean } = 
 		writeFileSync(join(bin, name), body);
 		chmodSync(join(bin, name), 0o755);
 	}
-	const saved = { PATH: process.env.PATH, PI_OFFLINE: process.env.PI_OFFLINE };
+	const saved = { PATH: process.env.PATH, PI_OFFLINE: process.env.PI_OFFLINE, npm_config_cache: process.env.npm_config_cache };
 	process.env.PATH = [bin, saved.PATH].filter(Boolean).join(delimiter);
 	delete process.env.PI_OFFLINE;
+	// The real npm runs in one test; its cache and logs stay in the test folder, not in ~/.npm.
+	process.env.npm_config_cache = join(dir, "npm-cache");
 	return {
 		calls: () => {
 			try {

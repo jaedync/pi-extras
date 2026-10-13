@@ -454,6 +454,7 @@ test("the token provider installs its packages without their install scripts", {
 	const log = readFileSync(join(home, "provision.log"), "utf8");
 	assert.match(log, /\$ \S*npm ci --ignore-scripts --no-audit --no-fund --loglevel=error\n/);
 	assert.match(readState(home).bgutilError ?? "", /npm ci/);
+	assert.ok(existsSync(join(dir, "npm-cache")), "npm used the test's cache folder");
 });
 
 test("video: two pulls of one link at the same time each get the download, and only one folder is kept", async () => {
