@@ -324,23 +324,30 @@ function withTemporaryIndex<T>(path: string, paths: readonly string[], call: Git
 	} finally { rmSync(temporary, { recursive: true, force: true }); }
 }
 
-export function worktreeFooter(worktree: Worktree): string {
+/** The tree an earlier footer's Apply line applies, so a later footer can apply only what changed since. */
+export function footerTree(footer: string): string | undefined {
+	return /--no-textconv [0-9a-f]{40,64} ([0-9a-f]{40,64})/.exec(footer)?.[1];
+}
+
+/** `since`: a tree already applied, the Apply line then applies only what changed after it; `into`: the checkout it applies to, else the worktree's source. */
+export function worktreeFooter(worktree: Worktree, options: { since?: string; into?: string } = {}): string {
 	const { path, branch, base } = worktree;
+	const from = options.since ?? base;
 	try {
 		const call = gitCall(worktree);
 		const paths = dependencyPaths(path, base, call);
 		// One temporary index: the child's own staging stays as it was, and the tree is the snapshot the counts describe.
 		const { files, tree } = withTemporaryIndex(path, paths, call, (index) => ({
-			files: git(path, ["diff", "--cached", "--name-only", "-z", base, ...paths], index, call).split("\0").filter(Boolean).length,
+			files: git(path, ["diff", "--cached", "--name-only", "-z", from, ...paths], index, call).split("\0").filter(Boolean).length,
 			tree: git(path, ["write-tree"], index, call).trim(),
 		}));
 		const commits = git(path, ["rev-list", "--count", `${base}..HEAD`], undefined, call).trim();
-		const root = sourceCheckout(path);
+		const root = options.into ?? sourceCheckout(path);
 		if (root === undefined) throw new Error("The saved worktree path has no source checkout.");
 		const pathspec = paths.length ? ` ${paths.map(quote).join(" ")}` : "";
 		return `\n\nWorktree: ${path} (${branch}); ${files} ${files === 1 ? "file differs" : "files differ"} from base, ${commits} ${commits === "1" ? "commit" : "commits"}.\n`
 			// Git runs only in the parent's checkout, on the tree written above, so main's bash never reads the child's git data.
-			+ `Apply: ${gitIn(root)} diff --binary --no-ext-diff --no-textconv ${base} ${tree}${pathspec} | ${gitIn(root)} apply\n`
+			+ `Apply: ${gitIn(root)} diff --binary --no-ext-diff --no-textconv ${from} ${tree}${pathspec} | ${gitIn(root)} apply\n`
 			+ `After you applied the changes (deletes this worktree): git worktree remove --force ${quote(path)} && git branch -D ${quote(branch)}`;
 	} catch (error) {
 		return `\n\nWorktree report unavailable: ${String((error as Error).message).replace(/\s+/g, " ").slice(0, 300)} (${path}, ${branch}).`;

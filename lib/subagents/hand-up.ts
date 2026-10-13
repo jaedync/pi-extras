@@ -11,6 +11,7 @@ import { MAIN } from "./names.ts";
 import type { OpenQuestions } from "./questions.ts";
 import type { Routing } from "./routing.ts";
 import { type AgentRecord, LIVE_STATES, type MainDelivery } from "./types.ts";
+import { footerTree, sourceCheckout, worktreeFooter } from "./worktree.ts";
 
 export interface HandUpHost {
 	readonly questions: OpenQuestions;
@@ -81,9 +82,30 @@ function reportUp(host: HandUpHost, record: AgentRecord, quiet: boolean): void {
 	const to = reportTarget(host, record);
 	const orphan = to !== record.parent;
 	if (record.blocking && !orphan) return;
-	if (to === MAIN) return host.deliverToMain({ kind: "report", record, ...(quiet && !orphan ? { quiet } : {}) });
+	const sent = orphan ? orphanFooter(host, record, to) : record;
+	if (to === MAIN) return host.deliverToMain({ kind: "report", record: sent, ...(quiet && !orphan ? { quiet } : {}) });
 	const why = orphan ? `${record.name}'s parent ${record.parent} has ended, so its report comes to you.\n` : "";
-	host.routing.deliver(record.name, to, `${why}${reportText(record, host.now())}`, !quiet || orphan, `Report from ${record.name}`);
+	host.routing.deliver(record.name, to, `${why}${reportText(sent, host.now())}`, !quiet || orphan, `Report from ${record.name}`);
+}
+
+/**
+ * The Apply line of a report whose worktree an ended agent owns or made: that
+ * agent's own Apply line is a tree written when it ended. A helper in its
+ * worktree applies what changed since; a worktree made from it applies to
+ * that agent's own source checkout.
+ */
+function orphanFooter(host: HandUpHost, record: AgentRecord, to: string): AgentRecord {
+	const { worktree } = record;
+	if (!worktree || host.get(to)?.worktree?.path === worktree.path) return record;
+	if (record.sharesWorktree) {
+		let owner = host.get(record.parent);
+		while (owner?.sharesWorktree) owner = host.get(owner.parent);
+		const since = owner?.worktreeReport ? footerTree(owner.worktreeReport) : undefined;
+		return { ...record, sharesWorktree: undefined, worktreeReport: worktreeFooter(worktree, since ? { since } : {}) };
+	}
+	const parent = host.get(record.parent);
+	const into = parent?.worktree && sourceCheckout(worktree.path) === parent.worktree.path ? sourceCheckout(parent.worktree.path) : undefined;
+	return into ? { ...record, worktreeReport: worktreeFooter(worktree, { into }) } : record;
 }
 
 function reportTarget(host: HandUpHost, record: AgentRecord): string {

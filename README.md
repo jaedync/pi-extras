@@ -1553,6 +1553,8 @@ The parent keeps its files and index unchanged. The report gives the worktree,
 branch, change counts, and commands to apply changes and remove it after merging.
 The apply command runs git only in the parent's checkout, on a snapshot of the
 worktree's files that main wrote when the child ended.
+A child can end before its subagents. Then their reports give their own apply
+commands, so their later changes are not lost.
 Untracked `node_modules` are linked, not copied or included in the changes.
 Worktrees stay until you remove them. Resumed children keep the same workspace.
 After you apply the changes, the cleanup command force-removes the worktree and
