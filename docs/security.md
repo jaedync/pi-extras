@@ -2,7 +2,9 @@
 
 Pi extensions run with the same filesystem, process and network permissions as
 Pi. Review the source before installing. This package adds no telemetry uploader,
-remote management service, credential provisioning, or automatic updater.
+remote management service or credential provisioning. It does not update
+itself. Only the Pull Link media tools install and update themselves; see
+[Pull Link](#pull-link).
 
 Saves to `pi-extras.json` keep the file's permissions and write through a
 symbolic link to its target. A new `pi-extras.json` gets mode `0600`. A save
@@ -213,6 +215,69 @@ permissions, rotate credentials, or copy them elsewhere. `KAGI_TOKEN_FILE` is a
 path, never the token value. Search queries are sent to Kagi and search results
 enter your model context when you invoke the tool. Search results can contain
 malicious instructions; they are evidence, not instructions to execute.
+
+## Pull Link
+
+`pull_link` sends requests only when the agent calls it. It reads only public
+`http` and `https` links and refuses links with credentials. It also refuses
+local names, such as `localhost` or `.local` names, and literal private,
+loopback, link-local, multicast and reserved addresses. It checks each
+redirect in the same way and follows at most 5. It does not resolve DNS for
+these requests, so a public name that points to a private address passes. It
+sends `GITHUB_TOKEN` or `GH_TOKEN` only to GitHub's API. It refuses a response
+body larger than 8 MB. Results stay in memory for 30 minutes. Page text, posts
+and comments can contain malicious instructions.
+
+The first video link downloads the media tools into
+`~/.cache/pi-extras/link-context` (or under `XDG_CACHE_HOME`, or
+`PI_LINK_CONTEXT_HOME`) and runs them:
+
+- uv, when the tool finds no recent uv: from `github.com/astral-sh/uv`
+  releases, pinned and SHA-256 checked.
+- Python 3.12 through uv, and the newest `yt-dlp`, `youtube-transcript-api`,
+  `imageio-ffmpeg`, `pillow` and `bgutil-ytdlp-pot-provider` from PyPI. These
+  versions are not pinned.
+- The bgutil token provider: the latest release tag from GitHub's API, a
+  `git clone` of that tag, `npm ci --ignore-scripts` and a TypeScript build.
+  It runs with the Node that runs Pi.
+- For a video without captions, `mlx-whisper` or `faster-whisper` from PyPI
+  and a speech model.
+
+The tool updates the PyPI packages and the token provider every
+`linkContext.refreshDays` days (default 3). It also updates them when a new
+pi-extras version changes the package list. With `PI_OFFLINE=1`, `true` or
+`yes`, it does not install, update or look up a release. It then uses only
+the installed tools.
+
+The install steps and the media tools get only a small set of variables:
+the path, the home folder, the user name and shell, the locale and time zone,
+and the temporary and `XDG_` folders. They also get the Hugging Face cache
+folders and the proxy and certificate settings. Only the installers (`uv`,
+`pip`, `git` and `npm`) also get the `UV_`, `PIP_`, `npm_config_` and
+`NPM_CONFIG_` settings.
+
+yt-dlp, its HTTP libraries and ffmpeg send each HTTP request through a guard
+proxy on the loopback address. This includes redirects, manifests and
+fragments. The proxy resolves each name itself and connects only to the
+addresses that it checked. It refuses private, loopback, link-local,
+metadata and reserved addresses. When you set `linkContext.proxy` or a proxy
+variable, such as `HTTPS_PROXY`, your proxy replaces the guard. Then your
+proxy decides which hosts the media tools can reach. These downloader limits
+apply with either proxy:
+
+- Media and captions download only from `http`, `https` and `data` URLs.
+  Other protocols, such as `ftp://`, `rtmp://` or `rtsp://`, are refused.
+- yt-dlp runs no external downloader except ffmpeg, so not `rtmpdump`,
+  `aria2c`, `curl` or `mpv`. ffmpeg reads only HTTP and HTTPS, and the
+  encrypted and inline parts of HLS.
+- One download stops at 2 GiB of video or 1 GiB of audio. Live streams are
+  not downloaded.
+
+The tool writes `state.json` and `provision.log` in the media folder. It keeps
+downloads and frames in its `pulls` folder. Each video call removes the
+folders that are older than 2 days. yt-dlp gets a copy of the
+`linkContext.cookies` file in a private temporary folder. The tool removes
+that copy when the media helper stops.
 
 ## Voice
 
