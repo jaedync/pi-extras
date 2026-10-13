@@ -175,14 +175,19 @@ test("a worktree comes from the repository at cwd, even when the parent's folder
 	assert.match(parentless.ok ? "" : parentless.error, /^Worktree isolation needs a git repository in the parent's workspace\./, "no cwd: today's rule");
 	const plain = team.spawn(request("plain", { cwd: notes, isolation: "worktree" }));
 	assert.match(plain.ok ? "" : plain.error, literal(`Worktree isolation needs a git repository in ${notes}.`));
-	const inTree = `iso's subagents work in its worktree ${isolated.worktree?.path}. Leave out cwd.`;
+	const inTree = `iso's subagents work in its worktree ${isolated.worktree?.path}. Leave out cwd, or name a directory inside it.`;
 	const stray = team.spawn(request("stray", { parent: "iso", cwd: two }));
 	assert.match(stray.ok ? "" : stray.error, literal(inTree));
-	// Main makes a worktree with git and no sandbox, so a sandboxed child may not choose the repository.
-	for (const cwd of [two, join(one, "sub")]) {
+	// Main makes a worktree with git and no sandbox, so a sandboxed child may not choose the repository; a link out of its worktree counts as out.
+	symlinkSync(two, join(tree, "out"), "dir");
+	for (const cwd of [two, join(one, "sub"), join(tree, "out")]) {
 		const own = team.spawn(request("own", { parent: "iso", cwd, isolation: "worktree" }));
 		assert.match(own.ok ? "" : own.error, literal(inTree), cwd);
 	}
+	// A directory inside its worktree only says where the subagent starts; its worktree is still made from the parent's.
+	assert.equal(spawned(team, request("helper", { parent: "iso", cwd: join(tree, "sub") })).cwd, join(tree, "sub"));
+	const inside = spawned(team, request("inside", { parent: "iso", cwd: join(tree, "sub"), isolation: "worktree" }));
+	assert.deepEqual([inside.worktree?.path, inside.cwd], [join(`${tree}.worktrees`, "inside"), join(`${tree}.worktrees`, "inside", "sub")]);
 	spawned(team, request("reader", { readOnly: true }));
 	const hooks = team.spawn(request("hooks", { parent: "reader", readOnly: true, cwd: two, isolation: "worktree" }));
 	assert.match(hooks.ok ? "" : hooks.error, /^reader is read-only, so its subagents can't make a worktree from a cwd\./, "git would run that repository's hooks");
