@@ -451,9 +451,9 @@ session stops them according to the extension lifecycle.
 The Bash Default Timeout extension does not sandbox commands. It only supplies
 a default timeout for bash and powershell calls that omit one. Explicit
 timeouts remain unchanged, also an invalid one such as `0`, so Pi reports the
-problem. Subagent children always apply this default to their `bash` and
-`powershell` calls. They do so also when a package filter turns off the
-extension for main.
+problem. Subagent children apply the same default to their `bash` and
+`powershell` calls, also when a package filter turns off the extension for
+main.
 
 ## Subagents
 

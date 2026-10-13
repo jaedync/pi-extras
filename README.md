@@ -111,9 +111,9 @@ the package. Removing it does not remove your credentials or change other packag
   project that main trusts. See below.
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
   A value above 2147483.647 (the longest timer Pi can set) falls back to 120.
-  Explicit per-call timeouts are preserved. Subagent children always apply this
-  default to their `bash` and `powershell` calls. They do so also when a
-  package filter turns off the Bash Default Timeout extension for main.
+  Explicit per-call timeouts are preserved. Subagent children apply the same
+  default to their `bash` and `powershell` calls, also when a package filter
+  turns off the Bash Default Timeout extension for main.
 - `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
   transcript doesn't say. Anthropic replies report hour-long cache writes and
   Status Plus follows them, so a proxy that always writes them, such as
