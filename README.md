@@ -452,6 +452,16 @@ rate limits taken from response headers are reported but never warned on.
   A later reset cycle or a successful response from the applicable model clears that flag below 95% used.
   A new structured quota error restores the block. A rejection without newer evidence stays blocked.
   Cleared block warnings remain in history but do not enter later model requests.
+- A proxy such as Meridian can answer the quota poll without its usage-endpoint
+  source. Then it sends only Claude Code's last readings, which can lag or read high.
+  - Such a reading does not replace a usage-endpoint reading that is less than
+    30 minutes old. A window that the answer does not include keeps its last
+    reading until its reset.
+  - A Claude Code reading that is more than 15 minutes old is ignored. A
+    rejection with a future reset still blocks the window.
+  - When no usage-endpoint reading is available, the `usage` tool shows the
+    Claude Code reading with `approximate`. Such a reading fires no band or budget
+    warning, has no dollar figures, and does not go into the granted-reset readings.
 - `/usage` queues the current snapshot for the next turn; `/usage budget 7d 60`
   and `/usage budget clear` manage the session budget; `/usage warnings on|off`
   persists the toggle.

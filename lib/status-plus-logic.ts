@@ -35,6 +35,13 @@ export interface LimitEntry {
 	balanceUsd?: number;
 	resetApprox?: boolean;
 	resetMs?: number;
+	/**
+	 * The reading is Claude Code's last rate-limit event, which a proxy passes on
+	 * when its usage-endpoint source is missing. It can lag or overstate the window.
+	 */
+	approximate?: boolean;
+	/** When the provider measured this reading, if the source says; a kept reading keeps its own time. */
+	sampledMs?: number;
 }
 
 export interface UsageCounts {
@@ -301,6 +308,51 @@ interface ProxyQuotaBucket {
 	status?: unknown;
 	utilization?: unknown;
 	resetsAt?: unknown;
+	observedAt?: unknown;
+}
+
+/** A Claude Code reading older than this says little about the window now. */
+export const SDK_READING_MAX_AGE_MS = 15 * 60_000;
+
+const finiteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+/**
+ * Which buckets came from Claude Code's rate-limit events rather than the
+ * usage endpoint. A response with no `sources` is from a proxy that does not
+ * say, and keeps its old meaning. With `sources` but no OAuth source, every
+ * bucket is Claude Code's. With one, a bucket the OAuth fetch did not stamp is.
+ */
+function sdkOnly(record: { sources?: unknown }): (bucket: ProxyQuotaBucket) => boolean {
+	if (!record.sources || typeof record.sources !== "object") return () => false;
+	const oauth = (record.sources as { oauth?: { fetchedAt?: unknown } | null }).oauth;
+	if (!oauth || typeof oauth !== "object") return () => true;
+	const fetchedAt = oauth.fetchedAt;
+	return (bucket) => finiteNumber(fetchedAt) && finiteNumber(bucket.observedAt) && bucket.observedAt !== fetchedAt;
+}
+
+function bucketEntry(bucket: ProxyQuotaBucket, approximate: boolean, now: number): LimitEntry | undefined {
+	if (typeof bucket.type !== "string" || !finiteNumber(bucket.utilization)) return undefined;
+	const resetMs = finiteNumber(bucket.resetsAt) ? resetTimeMs(bucket.resetsAt, now) : undefined;
+	const rejected = bucket.status === "rejected";
+	const sampledMs = finiteNumber(bucket.observedAt) ? bucket.observedAt : undefined;
+	if (approximate && sampledMs !== undefined && now - sampledMs > SDK_READING_MAX_AGE_MS) {
+		// An old reading's percent is stale, but a rejection still gates requests until its reset.
+		if (!rejected || resetMs === undefined || resetMs <= now) return undefined;
+	}
+	const { family } = quotaKeyParts(bucket.type);
+	return {
+		label: quotaLabel(bucket.type),
+		key: bucket.type,
+		...(family ? { modelFamily: family } : {}),
+		usedPct: bucket.utilization <= 1 ? bucket.utilization * 100 : bucket.utilization,
+		...(quotaWindowSeconds(bucket.type) !== undefined ? { windowSeconds: quotaWindowSeconds(bucket.type) } : {}),
+		resetMs,
+		exhausted: rejected,
+		...(rejected ? { proxyRejected: true } : {}),
+		...(bucket.status === "allowed" ? { allowed: true } : {}),
+		...(approximate ? { approximate: true } : {}),
+		...(sampledMs !== undefined ? { sampledMs } : {}),
+	};
 }
 
 interface ProxyExtraUsage {
@@ -313,29 +365,14 @@ interface ProxyExtraUsage {
 /** Normalize fractional proxy quotas into the percentage-based footer format. */
 export function parseProxyQuota(body: unknown, now = Date.now()): LimitEntry[] {
 	if (!body || typeof body !== "object") return [];
-	const record = body as { buckets?: unknown; extraUsage?: unknown };
+	const record = body as { buckets?: unknown; extraUsage?: unknown; sources?: unknown };
+	const fromSdk = sdkOnly(record);
 	const entries: LimitEntry[] = [];
 
-	if (Array.isArray(record.buckets)) {
-		for (const raw of record.buckets) {
-			if (!raw || typeof raw !== "object") continue;
-			const bucket = raw as ProxyQuotaBucket;
-			if (typeof bucket.type !== "string" || typeof bucket.utilization !== "number") continue;
-			if (!Number.isFinite(bucket.utilization)) continue;
-			const resetMs = typeof bucket.resetsAt === "number" ? resetTimeMs(bucket.resetsAt, now) : undefined;
-			const { family } = quotaKeyParts(bucket.type);
-			entries.push({
-				label: quotaLabel(bucket.type),
-				key: bucket.type,
-				...(family ? { modelFamily: family } : {}),
-				usedPct: bucket.utilization <= 1 ? bucket.utilization * 100 : bucket.utilization,
-				...(quotaWindowSeconds(bucket.type) !== undefined ? { windowSeconds: quotaWindowSeconds(bucket.type) } : {}),
-				resetMs,
-				exhausted: bucket.status === "rejected",
-				...(bucket.status === "rejected" ? { proxyRejected: true } : {}),
-				...(bucket.status === "allowed" ? { allowed: true } : {}),
-			});
-		}
+	for (const raw of Array.isArray(record.buckets) ? record.buckets : []) {
+		if (!raw || typeof raw !== "object") continue;
+		const entry = bucketEntry(raw as ProxyQuotaBucket, fromSdk(raw as ProxyQuotaBucket), now);
+		if (entry) entries.push(entry);
 	}
 
 	const extra = record.extraUsage as ProxyExtraUsage | null | undefined;

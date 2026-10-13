@@ -18,7 +18,8 @@ import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
-import { sharedLimitStore } from "../lib/limit-store.ts";
+import { mergePolled } from "../lib/limit-merge.ts";
+import { sharedLimitStore, type LimitSnapshot } from "../lib/limit-store.ts";
 import { nextPollMs, readShared, writeShared, type SharedPoll } from "../lib/limit-share.ts";
 import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, PollRefused, REFRESH_INTERVAL_MS, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
 import { STATUS_TIME_ZONE_PROBLEM, estimateUsageCost, freeProviders, toEpochMs, withPolledBalances, type PricedModel } from "../lib/status-plus-logic.ts";
@@ -405,6 +406,16 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		requestFooterRender?.();
 	}
 
+	/** The newest poll result, this process's or another's, for a partial poll to merge over. */
+	function latestPoll(provider: string): Pick<LimitSnapshot, "entries" | "atMs"> | undefined {
+		const local = providerLimits.get(provider);
+		const shared = readShared(SHARE_DIR, provider);
+		const fromFile = shared?.atMs !== undefined && shared.entries ? { entries: shared.entries, atMs: shared.atMs } : undefined;
+		const fromStore = local?.source === "poll" ? local : undefined;
+		if (!fromFile || !fromStore) return fromFile ?? fromStore;
+		return fromFile.atMs > fromStore.atMs ? fromFile : fromStore;
+	}
+
 	/**
 	 * Poll a provider's limits at most once a gap across every Pi process of this
 	 * agent directory: Anthropic rate-limits its usage endpoint per account, and
@@ -425,10 +436,11 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		const claimed: SharedPoll = { ...(readShared(SHARE_DIR, provider) ?? shared), triedAtMs, failures };
 		share(provider, claimed);
 		try {
-			const entries = await poller.poll(ctx);
+			const polled = await poller.poll(ctx);
 			// No credentials or no data: back off rather than retry every interval.
-			if (!entries || entries.length === 0) return pollFailed(provider, claimed);
+			if (!polled || polled.length === 0) return pollFailed(provider, claimed);
 			const atMs = Date.now();
+			const entries = mergePolled(latestPoll(provider), polled, atMs);
 			pollFailures.set(provider, 0);
 			polledAtMs.set(provider, atMs);
 			providerLimits.set(provider, { entries, atMs, source: "poll" });

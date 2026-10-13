@@ -324,7 +324,8 @@ function openCodeGoDollars(entry: LimitEntry, inputs: DollarInputs): WindowDolla
 }
 
 function windowDollars(provider: string, entry: LimitEntry, inputs: DollarInputs): WindowDollars | undefined {
-	if (!finite(entry.usedPct)) return undefined;
+	// Claude Code's last reading can read high; a size implied from it would be wrong.
+	if (!finite(entry.usedPct) || entry.approximate) return undefined;
 	if (provider === "opencode-go") return openCodeGoDollars(entry, inputs);
 	const window = tokenfoldWindow(provider, entry, inputs);
 	const matches = !!window && finite(entry.resetMs) && Math.abs(window.resetsAtMs - entry.resetMs) <= TOKENFOLD_RESET_TOLERANCE_MS;

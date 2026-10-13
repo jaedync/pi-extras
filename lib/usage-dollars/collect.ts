@@ -9,7 +9,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { basename, dirname, join } from "node:path";
 import { withFileLock } from "../file-lock.ts";
 import type { LimitSnapshot } from "../limit-store.ts";
-import { STATUS_TIME_ZONE } from "../status-plus-logic.ts";
+import { STATUS_TIME_ZONE, type LimitEntry } from "../status-plus-logic.ts";
 import { localDateKey, localDayStartMs } from "./calendar.ts";
 import { entryDollars, sizeKey, type DollarInputs, type OpenRouterKeyInfo, type TokenfoldSnapshot, type WindowSize } from "./core.ts";
 import { createSpendLedger, type SpendLedger } from "./ledger.ts";
@@ -142,9 +142,25 @@ function meterReadings(snapshots: Array<[string, LimitSnapshot]>): MeterReading[
 	const readings: MeterReading[] = [];
 	for (const [provider, snapshot] of snapshots) {
 		const meter = snapshot.entries.find((entry) => entry.kind === "budget" && Number.isFinite(entry.usedUsd));
-		if (meter) readings.push({ provider, usedUsd: meter.usedUsd as number, atMs: snapshot.atMs });
+		if (meter) readings.push({ provider, usedUsd: meter.usedUsd as number, atMs: readingTime(meter, snapshot) });
 	}
 	return readings;
+}
+
+/** A reading kept from an earlier poll counts at its own time, not at the time of the poll that kept it. */
+function readingTime(entry: LimitEntry, snapshot: LimitSnapshot): number {
+	return entry.sampledMs !== undefined && Number.isFinite(entry.sampledMs) && entry.sampledMs <= snapshot.atMs ? entry.sampledMs : snapshot.atMs;
+}
+
+/**
+ * The window readings a snapshot gives. An approximate reading (Claude Code's
+ * last one, sent when a proxy's usage-endpoint source is down) can read 96%
+ * against a real 38%: recorded, the return to 38% would look like a granted reset.
+ */
+function windowReadings(provider: string, snapshot: LimitSnapshot) {
+	return snapshot.entries
+		.filter((entry) => (entry.kind ?? "window") === "window" && !entry.approximate && Number.isFinite(entry.usedPct) && Number.isFinite(entry.resetMs))
+		.map((entry) => ({ key: sizeKey(provider, entry), pct: entry.usedPct as number, resetMs: entry.resetMs as number, atMs: readingTime(entry, snapshot) }));
 }
 
 /** Reuse a cached answer for the same source within the TTL, unless forced. */
@@ -258,9 +274,7 @@ export function createDollarsCollector(options: CollectorOptions) {
 	function observeWindows(snapshots: Array<[string, LimitSnapshot]>, now: number): Record<string, WindowEvidence> {
 		const readings = snapshots.flatMap(([provider, snapshot]) => {
 			if (!Number.isFinite(snapshot.atMs) || snapshot.atMs > now) return [];
-			return snapshot.entries
-				.filter((entry) => (entry.kind ?? "window") === "window" && Number.isFinite(entry.usedPct) && Number.isFinite(entry.resetMs))
-				.map((entry) => ({ key: sizeKey(provider, entry), pct: entry.usedPct as number, resetMs: entry.resetMs as number, atMs: snapshot.atMs }));
+			return windowReadings(provider, snapshot);
 		});
 		if (readings.length === 0) return evidenceMap(readReadings(readingsFile));
 		// Read under the lock, so another process's newer readings are the base.

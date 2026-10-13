@@ -38,7 +38,7 @@ function share(poll) {
 	writeFileSync(join(SHARE, "anthropic.json"), JSON.stringify(poll));
 }
 
-function app() {
+function app(baseUrl = "https://api.anthropic.com") {
 	const handlers = new Map();
 	let component;
 	const branch = [{ type: "message", id: "r1", timestamp: new Date(NOW - 1000).toISOString(), message: {
@@ -46,7 +46,7 @@ function app() {
 		usage: { input: 1000, output: 100, cacheRead: 0, cacheWrite: 0, cost: { total: 0.5 } },
 	} }];
 	const ctx = {
-		mode: "tui", model: { id: "claude", provider: "anthropic", baseUrl: "https://api.anthropic.com" },
+		mode: "tui", model: { id: "claude", provider: "anthropic", baseUrl },
 		modelRegistry: { getAll: () => [], find: () => undefined, getApiKeyForProvider: async () => "test-token", getProvider: () => undefined },
 		sessionManager: {
 			getBranch: () => branch, getLeafId: () => "r1",
@@ -113,4 +113,27 @@ test("a refused poll is logged, and the next Pi process waits instead of asking 
 	t.after(() => second.emit("session_shutdown"));
 	await settle();
 	assert.equal(requests, 1);
+});
+
+test("a proxy answer without its OAuth source keeps the recent windows another process polled", async (t) => {
+	const fetchedAt = NOW - 60_000;
+	const good = [
+		{ label: "5h", key: "five_hour", usedPct: 46, windowSeconds: 18_000, resetMs: NOW + 3_600_000, sampledMs: fetchedAt },
+		{ label: "7d", key: "seven_day", usedPct: 37, windowSeconds: 604_800, resetMs: NOW + 86_400_000, sampledMs: fetchedAt },
+	];
+	share({ atMs: fetchedAt, entries: good, triedAtMs: NOW - 120_000, failures: 0 });
+	respond = () => new Response(JSON.stringify({
+		buckets: [{ type: "seven_day", status: "allowed_warning", utilization: 0.96, resetsAt: NOW + 86_400_000, observedAt: Date.now() - 120_000 }],
+		extraUsage: null, sources: { oauth: null, sdk: { entryCount: 1 } }, asOf: Date.now(),
+	}));
+	const footer = app("http://127.0.0.1:3456");
+	await footer.emit("session_start");
+	t.after(() => footer.emit("session_shutdown"));
+	await settle();
+	assert.equal(requests, 1);
+	const row = footer.row();
+	assert.match(row, /5h 46%/);
+	assert.match(row, /7d 37%/);
+	const shared = JSON.parse(readFileSync(join(SHARE, "anthropic.json"), "utf8"));
+	assert.deepEqual(shared.entries.map((entry) => [entry.key, entry.usedPct]), [["seven_day", 37], ["five_hour", 46]]);
 });

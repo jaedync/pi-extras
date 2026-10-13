@@ -200,6 +200,8 @@ function classify(
 	const thresholds = thresholdsFor(entry, config, budget);
 	if (thresholds.length === 0) return undefined;
 	if (entry.exhausted) return { threshold: 100, reason: "exhausted", final: true };
+	// Claude Code's last reading can overstate a window: alone it is no reason to warn.
+	if (entry.approximate) return undefined;
 	const threshold = bandFor(entry.usedPct as number, thresholds);
 	if (threshold === undefined) return undefined;
 	const budgeted = budgetMatches(entry, budget);
@@ -251,6 +253,7 @@ export function hotProviders(
 ): Set<string> {
 	const hot = new Set<string>();
 	for (const { provider, entry } of activeWindows(snapshots, model, now)) {
+		if (entry.approximate) continue;
 		const pct = entry.usedPct as number;
 		const next = thresholdsFor(entry, config, budget).filter((threshold) => threshold > pct).sort((a, b) => a - b)[0];
 		if (next !== undefined && next - pct <= config.proximityPct) hot.add(provider);
@@ -336,6 +339,10 @@ export function warningMessage(warning: Warning, config: GuardConfig, now: numbe
 	return `Usage warning: ${cause}${reset}${pace}${codexNote} ${guidance(warning, timing, config)}${scopeNote(warning)}`;
 }
 
+const APPROXIMATE_SOURCE = "from Claude Code's last response";
+const APPROXIMATE_NOTE = "Limits marked approximate come from Claude Code's last response, because the usage endpoint did not answer. " +
+	"They can lag or read high, fire no threshold warnings, and have no dollar figures.";
+
 export interface UsageReportLimit {
 	provider: string;
 	window: string;
@@ -349,6 +356,8 @@ export interface UsageReportLimit {
 	nextThreshold?: number;
 	headroomPct?: number;
 	budgetPct?: number;
+	/** Set when the reading is not the usage endpoint's. */
+	approximate?: string;
 	reset?: ResetTiming;
 	pace?: UsagePace;
 	dollars?: EntryDollars;
@@ -417,6 +426,7 @@ function reportLimitFigures(
 		...(pct !== undefined ? { usedPct: Math.round(pct * 10) / 10 } : {}),
 		...(entry.remainingText ? { remaining: entry.remainingText } : {}),
 		status,
+		...(entry.approximate ? { approximate: APPROXIMATE_SOURCE } : {}),
 	};
 	const reset = resetTiming(entry, config, now, timeZone);
 	const pace = usagePace(entry, now, timeZone);
@@ -463,6 +473,7 @@ export function usageReport(
 	} else if (!limits.some((limit) => limit.kind === "window" && limit.applies)) {
 		notes.push(`${provider} reports no subscription windows for this model; only per-minute rate limits, balances or budgets apply, and no usage warnings will fire.`);
 	}
+	if (limits.some((limit) => limit.approximate)) notes.push(APPROXIMATE_NOTE);
 	if (budget && !limits.some((limit) => limit.budgetPct !== undefined)) {
 		notes.push(`Session budget targets window "${budget.window}", which no applicable limit matches; it will not fire.`);
 	}
