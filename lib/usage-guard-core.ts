@@ -486,6 +486,25 @@ function reportLimitFigures(
 	};
 }
 
+/** What the report cannot show in its figures: missing data, approximate or outdated readings, a budget that matches nothing. */
+function reportNotes(limits: readonly UsageReportLimit[], model: ActiveModel, budget: SessionBudget | undefined, sawActiveProvider: boolean): string[] {
+	const notes: string[] = [];
+	const provider = model.provider ?? "the active provider";
+	if (!sawActiveProvider) {
+		notes.push(model.provider && !Object.hasOwn(LIMIT_POLLERS, model.provider)
+			? `No usage data yet for ${provider}. It has no usage endpoint to poll, so limits come only from response headers after its next request.`
+			: `No usage data yet for ${provider}; call again with refresh: true after a request has been made.`);
+	} else if (!limits.some((limit) => limit.kind === "window" && limit.applies)) {
+		notes.push(`${provider} reports no subscription windows for this model; only per-minute rate limits, balances or budgets apply, and no usage warnings will fire.`);
+	}
+	if (limits.some((limit) => limit.approximate)) notes.push(APPROXIMATE_NOTE);
+	if (limits.some((limit) => limit.status === "reset")) notes.push(RESET_PASSED_NOTE);
+	if (budget && !limits.some((limit) => limit.budgetPct !== undefined)) {
+		notes.push(`Session budget targets window "${budget.window}", which no applicable limit matches; it will not fire.`);
+	}
+	return notes;
+}
+
 export function usageReport(
 	snapshots: Iterable<[string, LimitSnapshot]>,
 	model: ActiveModel,
@@ -510,20 +529,7 @@ export function usageReport(
 			if (limit.applies || includeAll) limits.push(kept ? { ...limit, readingAgeSeconds: Math.max(0, Math.round((now - entry.sampledMs!) / 1000)) } : limit);
 		}
 	}
-	const notes: string[] = [];
-	const provider = model.provider ?? "the active provider";
-	if (!sawActiveProvider) {
-		notes.push(model.provider && !Object.hasOwn(LIMIT_POLLERS, model.provider)
-			? `No usage data yet for ${provider}. It has no usage endpoint to poll, so limits come only from response headers after its next request.`
-			: `No usage data yet for ${provider}; call again with refresh: true after a request has been made.`);
-	} else if (!limits.some((limit) => limit.kind === "window" && limit.applies)) {
-		notes.push(`${provider} reports no subscription windows for this model; only per-minute rate limits, balances or budgets apply, and no usage warnings will fire.`);
-	}
-	if (limits.some((limit) => limit.approximate)) notes.push(APPROXIMATE_NOTE);
-	if (limits.some((limit) => limit.status === "reset")) notes.push(RESET_PASSED_NOTE);
-	if (budget && !limits.some((limit) => limit.budgetPct !== undefined)) {
-		notes.push(`Session budget targets window "${budget.window}", which no applicable limit matches; it will not fire.`);
-	}
+	const notes = reportNotes(limits, model, budget, sawActiveProvider);
 	const report: UsageReport = {
 		asOf: new Date(now).toISOString(),
 		model,
