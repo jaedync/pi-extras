@@ -285,8 +285,9 @@ other APIs, Pi's own compaction runs with the reason `unsupported-api`.
 **Local engines.** Many local engines keep a prompt prefix in memory until
 they need the space. For `openai-completions` models with a local `baseUrl`,
 the default idle limit is 25 minutes. A local `baseUrl` is a loopback, private
-or Tailscale (`100.64.0.0/10`) address, a host name without a dot, or a name
-that ends in `.local`, `.lan`, `.internal`, `.home.arpa` or `.ts.net`. This
+or Tailscale (`100.64.0.0/10`) address, `0.0.0.0`, such an address in IPv6
+(`::ffff:192.168.1.5`), a host name without a dot, or a name that ends in
+`.local`, `.lan`, `.internal`, `.localdomain`, `.home.arpa` or `.ts.net`. This
 stays under a typical gateway idle window. When the cache is cold, the summary
 request is a full prefill of the conversation, which is larger than Pi's own
 summary prompt. Set `idleSeconds` for the provider if your engine evicts

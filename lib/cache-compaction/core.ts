@@ -20,17 +20,32 @@ export function loadConfig(section: RecordValue): Config {
 
 export const LOCAL_ENGINE_IDLE_MINUTES = 25;
 /** Loopback, private (RFC 1918, ULA, link-local), Tailscale CGNAT and LAN-only names: a self-hosted engine, not a cloud API. */
+/** The IPv4 address in an IPv4-mapped IPv6 host; URL writes ::ffff:192.168.1.5 as ::ffff:c0a8:105. */
+function mappedIpv4(host: string): string | undefined {
+	const match = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+	if (!match) return undefined;
+	const [high, low] = [parseInt(match[1], 16), parseInt(match[2], 16)];
+	return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+}
+
+function localIpv4(host: string): boolean {
+	const octets = host.split(".").map(Number);
+	if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+	const [a, b] = octets;
+	// 0.0.0.0, the any address, is where a server bound to every interface answers this host.
+	return host === "0.0.0.0" || a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+}
+
 export function isLocalEngineUrl(baseUrl: string | undefined): boolean {
 	let host: string;
 	try { host = new URL(baseUrl ?? "").hostname.toLowerCase().replace(/^\[|\]$/g, ""); }
 	catch { return false; }
 	if (!host.includes(".") && !host.includes(":")) return host.length > 0;
-	if (/(^|\.)(localhost|local|lan|internal|home\.arpa|ts\.net)$/.test(host)) return true;
-	if (host.includes(":")) return host === "::1" || /^f[cd][0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host);
-	const octets = host.split(".").map(Number);
-	if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-	const [a, b] = octets;
-	return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+	if (/(^|\.)(localhost|localdomain|local|lan|internal|home\.arpa|ts\.net)$/.test(host)) return true;
+	const mapped = mappedIpv4(host);
+	if (mapped) return localIpv4(mapped);
+	if (host.includes(":")) return host === "::1" || host === "::" || /^f[cd][0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host);
+	return localIpv4(host);
 }
 
 export function idleLimitMs(config: Config, model: Pick<ModelIdentity, "provider" | "api" | "baseUrl">): number {

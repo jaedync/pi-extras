@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
 import { test } from "node:test";
-import { conversationKey, capturePayload, payloadHashes, mergePayload, loadConfig, idleLimitMs, fallbackReason, fileLists, formatFiles, fingerprint, reconcile, buildInstruction, boundaryIdentifier, MAX_BOUNDARY_IDENTIFIER_CHARS, requestOutputLimit, requestEffort, safeHeaders } from "../lib/cache-compaction/core.ts";
+import { conversationKey, capturePayload, payloadHashes, mergePayload, loadConfig, idleLimitMs, fallbackReason, fileLists, formatFiles, fingerprint, reconcile, buildInstruction, boundaryIdentifier, MAX_BOUNDARY_IDENTIFIER_CHARS, requestOutputLimit, requestEffort, safeHeaders, isLocalEngineUrl } from "../lib/cache-compaction/core.ts";
 
 for (const [api, key] of [["anthropic-messages", "messages"], ["openai-completions", "messages"], ["openai-responses", "input"], ["openai-codex-responses", "input"], ["google-generative-ai", "contents"], ["google-vertex", "contents"]]) {
 	test(`payload replay changes only ${key} for ${api}`, () => {
@@ -166,4 +166,13 @@ test("headers retain routing but never credential-like names; effort comes from 
  assert.equal(requestEffort({ output_config: { effort: "high" }, messages: [{ role: "system", output_config: { effort: "low" } }] }), "low");
  assert.equal(requestEffort({ reasoning: { effort: "low" } }), undefined);
  assert.equal(requestEffort({ messages: [{ role: "system", content: [], output_config: { effort: "xhigh" } }] }), "xhigh");
+});
+
+test("local engines include the any address, IPv4-mapped IPv6 and localhost.localdomain", () => {
+	for (const url of ["http://0.0.0.0:8080/v1", "http://[::ffff:192.168.1.5]:8000/v1", "http://[::ffff:127.0.0.1]:8000/v1", "http://[::]:8000/v1", "http://localhost.localdomain:11434/v1"]) {
+		assert.equal(isLocalEngineUrl(url), true, url);
+	}
+	for (const url of ["http://[::ffff:8.8.8.8]:8000/v1", "http://0.0.0.1:8000/v1", "http://example.localdomain.com/v1"]) {
+		assert.equal(isLocalEngineUrl(url), false, url);
+	}
 });
