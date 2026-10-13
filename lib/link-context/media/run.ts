@@ -42,7 +42,7 @@ function spawnHelper<T>(toolchain: Toolchain, command: string, body: string, opt
 		// -I keeps the working directory and user site-packages off sys.path; it also ignores PYTHON*
 		// variables, hence -B and -X utf8 as flags. Its own process group, so a kill reaches the ffmpeg
 		// and token script that yt-dlp starts.
-		const child = spawn(toolchain.python, ["-I", "-B", "-X", "utf8", toolchain.helper, command], { cwd: options.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"], env: { ...toolEnv(), PATH: nodePath() } });
+		const child = spawn(toolchain.python, ["-I", "-B", "-X", "utf8", toolchain.helper, command], { cwd: options.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"], env: { ...toolEnv(), PATH: nodePath(toolchain.home) } });
 		const untrack = track(child.pid);
 		const out: Buffer[] = [];
 		let size = 0;

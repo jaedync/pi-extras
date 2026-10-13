@@ -7,7 +7,7 @@
  * models are installed only when a video has no captions.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, openSync, closeSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, closeSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -142,7 +142,7 @@ class Installer {
 		writeFileSync(this.log, `${new Date().toISOString()} $ ${command} ${args.join(" ")}\n`, { flag: "a", mode: 0o600 });
 		const fd = openSync(this.log, "a", 0o600);
 		return new Promise<void>((resolve, reject) => {
-			const env = { ...installEnv(), ...this.uvEnv(), PATH: nodePath(), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", npm_config_update_notifier: "false" };
+			const env = { ...installEnv(), ...this.uvEnv(), PATH: nodePath(this.home), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", npm_config_update_notifier: "false" };
 			const child = spawn(command, [...args], { cwd: options.cwd, detached: true, stdio: ["ignore", fd, fd], env });
 			const untrack = track(child.pid);
 			let why: string | undefined;
@@ -225,9 +225,33 @@ class Installer {
 	}
 }
 
-/** Node that runs Pi first on PATH, so yt-dlp and the token script find a Node 22+. */
-export function nodePath(env: Env = process.env): string {
-	return [dirname(process.execPath), ...(env.PATH ?? "").split(delimiter)].filter(Boolean).join(delimiter);
+/** Node that runs Pi first on PATH, so yt-dlp and the token script find a Node 22+. Only node goes first: node's
+ * own folder (/usr/bin for a system Node) would also put its git, python and the rest ahead of the user's PATH. */
+export function nodePath(home: string, env: Env = process.env): string {
+	return [nodeDir(home), ...(env.PATH ?? "").split(delimiter)].filter(Boolean).join(delimiter);
+}
+
+/** `home`/node-bin, which holds one link, node, to the Node that runs Pi; node's own folder if no link can be made. */
+function nodeDir(home: string): string {
+	if (process.platform === "win32") return dirname(process.execPath);
+	const dir = join(home, "node-bin");
+	const link = join(dir, "node");
+	try {
+		if (readlinkSync(link) === process.execPath) return dir;
+	} catch {
+		// No link yet, or not a link: make it below.
+	}
+	try {
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		// A rename replaces the link in one step, so a second process never sees the folder without node.
+		const temp = `${link}.${process.pid}`;
+		rmSync(temp, { force: true });
+		symlinkSync(process.execPath, temp);
+		renameSync(temp, link);
+		return dir;
+	} catch {
+		return dirname(process.execPath);
+	}
 }
 
 function npmCommand(): string {

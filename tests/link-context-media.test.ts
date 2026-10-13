@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { sampleTimes, sheetColumns } from "../lib/link-context/media/frames.ts";
 import { sniffImage } from "../lib/link-context/media/image-bytes.ts";
 import { fetchImages, imageLink, imageLinks, prepareImage, sized } from "../lib/link-context/media/images.ts";
-import { asrPlan, bgutilDue, ensureAsr, ensureMedia, HELPER, NPM_CI_ARGS, packagesDue, PACKAGES, readState, toolEnv, installEnv, writeState } from "../lib/link-context/media/provision.ts";
+import { asrPlan, bgutilDue, ensureAsr, ensureMedia, HELPER, NPM_CI_ARGS, nodePath, packagesDue, PACKAGES, readState, toolEnv, installEnv, writeState } from "../lib/link-context/media/provision.ts";
 import { clipFor, HOST_BLOCKED, keyName, formatTranscript, header, prunePulls, pullDir, pullVideo, sampleFor, thumbnailUrl, validTimes, videoComments, youtubeId, type VideoDeps, type VideoInfo } from "../lib/link-context/media/video.ts";
 import { writeFileSync } from "node:fs";
 import { gifHeader, jpegHeader, png, pngClaiming, webpHeader } from "./support/image-bytes.ts";
@@ -434,6 +434,21 @@ test("PI_OFFLINE: no install, no update, no release lookup; an installed toolcha
 	assert.deepEqual(tools.calls(), []);
 	assert.equal(fetches.mock.callCount(), 0);
 	assert.equal(readState(home).packagesAt, 1);
+});
+
+test("only node goes ahead of the user's PATH, not the other programs in its folder", { skip: process.platform === "win32" ? "POSIX links" : false }, () => {
+	// A system Node lives in /usr/bin: putting that whole folder first would also put its git, python and the
+	// rest ahead of the user's PATH (and ahead of the tests' fake tools).
+	const home = mkdtempSync(join(tmpdir(), "link-path-"));
+	try {
+		const [first, ...rest] = nodePath(home, { PATH: ["/a", "/b"].join(delimiter) }).split(delimiter);
+		assert.deepEqual(rest, ["/a", "/b"]);
+		assert.deepEqual(readdirSync(first), ["node"]);
+		assert.equal(realpathSync(join(first, "node")), realpathSync(process.execPath));
+		assert.equal(nodePath(home, { PATH: "/a" }).split(delimiter)[0], first, "the link is kept and used again");
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
 });
 
 test("the token provider installs its packages without their install scripts", { skip: process.platform === "win32" ? "POSIX shell scripts" : false }, async (t) => {
