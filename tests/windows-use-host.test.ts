@@ -206,7 +206,10 @@ test("VMs are found by their exact name, never through the Hyper-V cmdlets' wild
 	const start = host.slice(host.indexOf("function Start-Machine"), host.indexOf("# ---- Screen"));
 	assert.match(start, /Start-VM -VM \(Get-ExactVm \$vm\)/);
 	assert.match(host, /function Get-ExactVm\(\[string\]\$vm\) \{ Get-VM -Id \(Get-Machine \$vm\)\.Name \}/);
-	assert.match(host, /function Get-Machine[\s\S]*?ElementName='\$\(\$vm -replace/, "Get-Machine matches the name with WQL =, which has no wildcards");
+	// WQL escapes with backslashes, not doubled quotes, so the name is matched in PowerShell: -eq has no wildcards and ignores case, as Hyper-V does.
+	const machine = host.slice(host.indexOf("function Get-Machine"), host.indexOf("function Get-ExactVm"));
+	assert.match(machine, /Get-CimInstance -Namespace \$ns -ClassName Msvm_ComputerSystem -Filter "Caption='Virtual Machine'" \| Where-Object \{ \$_\.ElementName -eq \$vm \}/);
+	assert.doesNotMatch(host, /ElementName='/, "no VM name goes into a WQL string");
 });
 
 test("each VM's key file is named by its VM id, so VMs whose names differ in case or punctuation never share a key", () => {

@@ -331,7 +331,8 @@ the guest user's `%USERPROFILE%\.windows-mcp\config.toml`. The file name comes
 from the VM's Hyper-V id, not its name, so two VMs never share a key. An older
 key file named for the VM moves to the new name on first use. When the old name
 fits more than one VM, no VM uses that file, and the next setup makes a new key.
-Two VMs with the same name are refused until one is renamed. The key is typed
+Names that differ only in case count as the same name. windows_use refuses
+two VMs with the same name until one of them gets a new name. The key is typed
 into the guest inside the bootstrap, only after Windows OCR on the host reads
 an administrator's PowerShell window on the console (without OCR it is typed
 unchecked). When the VM's key-value exchange works, the bootstrap itself goes

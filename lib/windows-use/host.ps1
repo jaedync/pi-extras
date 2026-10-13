@@ -57,7 +57,9 @@ function Move-NamedKey([string]$vm, [string]$file) {
 
 function Get-Machine([string]$vm) {
     if (-not $vm) { throw 'vm is required' }
-    $m = @(Get-CimInstance -Namespace $ns -ClassName Msvm_ComputerSystem -Filter "Caption='Virtual Machine' AND ElementName='$($vm -replace "'", "''")'")
+    # Matched here, not in WQL, which escapes quotes and backslashes in its own way.
+    # -eq has no wildcards and ignores case, as Hyper-V names do.
+    $m = @(Get-CimInstance -Namespace $ns -ClassName Msvm_ComputerSystem -Filter "Caption='Virtual Machine'" | Where-Object { $_.ElementName -eq $vm })
     if (-not $m.Count) { throw "There is no Hyper-V VM named '$vm'" }
     # Hyper-V allows one name twice. Picking one could send its key to the other's IP.
     if ($m.Count -gt 1) { throw "$($m.Count) Hyper-V VMs are named '$vm'. Rename all but one, so windows_use can tell them apart." }
