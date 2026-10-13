@@ -57,8 +57,10 @@ pi remove git:github.com/jaedync/pi-extras
 An unpinned Git install follows upstream commits. Pi can detect available package
 updates. This package does not update itself and adds no background service.
 Only the Pull Link media tools install and update themselves (see
-[Video tools](#video-tools)); `PI_OFFLINE=1` stops that. To pin a published tag, append `@v0.1.0` to the Git source once that tag
-exists. Pinned installs require an explicit installation of a newer tag.
+[Video tools](#video-tools)); `PI_OFFLINE=1` stops that. To pin a published
+tag, append it to the Git source, for example
+`pi install git:github.com/jaedync/pi-extras@v0.24.14`. Pinned installs
+require an explicit installation of a newer tag.
 After an update, restart Pi or use `/reload`; stop active jobs before removing
 the package. Removing it does not remove your credentials or change other packages.
 
