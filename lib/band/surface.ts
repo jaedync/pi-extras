@@ -17,17 +17,21 @@ const SGR = /\x1b\[([0-9;:]*)m/g;
 
 /**
  * Whether an SGR sequence leaves the default background behind: a full reset
- * (`0`, or no parameters) or `49`, alone or among others. Color values after
- * 38 or 48 are skipped, so `38;2;0;49;0` is a color, not a reset.
+ * (`0`, or no parameters) or `49`, alone or among others, with no background
+ * set after it in the same sequence. Color values after 38 or 48 are skipped,
+ * so `38;2;0;49;0` is a color, not a reset.
  */
 function clearsBackground(params: string): boolean {
 	const list = params === "" ? [0] : params.split(/[;:]/).map(Number);
+	let cleared = false;
 	for (let i = 0; i < list.length; i++) {
-		const code = list[i];
+		const code = list[i]!;
+		if (code === 48) cleared = false;
 		if (code === 38 || code === 48 || code === 58) i += list[i + 1] === 5 ? 2 : list[i + 1] === 2 ? 4 : 0;
-		else if (code === 0 || code === 49) return true;
+		else if (code === 0 || code === 49) cleared = true;
+		else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) cleared = false;
 	}
-	return false;
+	return cleared;
 }
 
 /** `text` with `sgr` set again after every code inside it that clears the background. */

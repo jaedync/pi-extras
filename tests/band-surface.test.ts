@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { Sheet, type SheetSource } from "../lib/band/sheet.ts";
-import { bodyBackground, onBackground, panelBackground } from "../lib/band/surface.ts";
+import { bodyBackground, onBackground, panelBackground, reopenBackground } from "../lib/band/surface.ts";
 import { quiet } from "./support/quiet-theme.ts";
 
 const BG = "\x1b[48;2;1;2;3m";
@@ -19,6 +19,10 @@ test("a background comes back after any code that clears it, not after colors th
 	assert.equal(mixed, `${BG}a\x1b[0;3m${BG}b\x1b[39;49m${BG}c\x1b[m${BG}done   \x1b[49m`);
 	const colors = "\x1b[38;2;0;49;0mx\x1b[48;5;0my\x1b[38;5;49mz";
 	assert.equal(onBackground([colors], 3, BG)[0], `${BG}${colors}\x1b[49m`, "color values are not resets");
+	for (const own of ["\x1b[0;48;5;10m", "\x1b[0;41m", "\x1b[0;101m", "\x1b[49;48;2;1;2;3m"]) {
+		assert.equal(reopenBackground(`a${own}b`, BG), `a${own}b`, `a code that sets its own background after the reset keeps it: ${JSON.stringify(own)}`);
+	}
+	assert.equal(reopenBackground("a\x1b[48;5;10;0mb", BG), `a\x1b[48;5;10;0m${BG}b`, "a reset after a background clears it");
 });
 
 test("a line wider than its row is cut to fit, with or without a background", () => {
