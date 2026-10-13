@@ -224,3 +224,29 @@ test("a refused message leaves the target's check as it was; a delivered one set
 	assert.equal(sent.ok, true);
 	assert.equal(h.team.get("lead")!.check?.command, "make test");
 });
+
+test("a message during a stop's abort that queues a relaunch behind a full team: the stop reports nothing over it", async () => {
+	const main: MainDelivery[] = [];
+	let endAbort: (() => void) | undefined;
+	const team = new Team({
+		maxConcurrent: 1, maxDepth: 2, replyTimeoutMs: 60_000, deliverToMain: (delivery) => main.push(delivery),
+		launcher: { async launch(record: AgentRecord): Promise<ChildHandle> {
+			return { prompt: () => new Promise<void>(() => undefined), steer: () => undefined,
+				abort: () => record.name === "a" ? new Promise<void>((resolve) => { endAbort = resolve; }) : Promise.resolve(),
+				lastText: () => undefined, messages: () => [], takeQueued: () => [], dispose: async () => undefined };
+		} },
+	});
+	assert.ok(team.spawn({ name: "a", task: "A", parent: "main", model: "m", readOnly: false, fork: false, blocking: false }).ok);
+	await flush();
+	assert.ok(team.spawn({ name: "b", task: "B", parent: "main", model: "m", readOnly: false, fork: false, blocking: false }).ok);
+	const stopping = team.stop("a");
+	await flush();
+	assert.equal((await team.send("main", "a", "Change of plan.")).ok, true);
+	assert.equal(team.get("a")!.state, "queued");
+	endAbort!();
+	await stopping;
+	await flush();
+	assert.equal(team.get("b")!.state, "running", "b, first in line, has the slot a left");
+	assert.equal(team.get("a")!.state, "queued");
+	assert.equal(main.filter((delivery) => delivery.kind === "report").length, 0);
+});

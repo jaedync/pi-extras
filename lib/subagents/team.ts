@@ -312,10 +312,11 @@ export class Team implements HostTeam {
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: report(), ...this.unreadLeft(name) });
 		for (const child of stopOrder(this.list().filter((entry) => entry.parent === name))) await this.stop(child.name, { by: name });
 		await handle?.abort().catch(() => undefined);
-		// A message relaunched it during the abort: the new run is what its parent hears of.
-		if (this.launches.get(name) !== launch) {
+		// A message relaunched it during the abort (queued, or launched already): the new run is what its parent hears of.
+		if (this.launches.get(name) !== launch || this.records.get(name)?.state !== "stopped") {
 			this.ending.delete(name);
 			this.stoppedByParent.delete(name);
+			this.pump();
 			return this.records.get(name);
 		}
 		this.patch(name, { report: report() });
