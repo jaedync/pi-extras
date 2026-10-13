@@ -101,6 +101,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	const lastPollMs = new Map<string, number>();
 	/** Consecutive failed polls per provider, for backoff when the shared poll file is out of reach. */
 	const pollFailures = new Map<string, number>();
+	/** A provider's Retry-After, kept here too: the shared poll file can be out of reach. */
+	const retryAtMs = new Map<string, number>();
 	/** When the newest poll result this process applied ended, its own or another process's. */
 	const polledAtMs = new Map<string, number>();
 	let shareFailed = false;
@@ -430,7 +432,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		const failures = shared?.failures ?? pollFailures.get(provider) ?? 0;
 		const gap = force ? FORCED_POLL_FLOOR_MS : pollGapMs(poller.interval(ctx), failures, providerLimits.isHot(provider));
 		const triedAtMs = Date.now();
-		if (triedAtMs < nextPollMs(lastPollMs.get(provider) ?? 0, shared, gap)) return;
+		if (triedAtMs < Math.max(nextPollMs(lastPollMs.get(provider) ?? 0, shared, gap), retryAtMs.get(provider) ?? 0)) return;
 		lastPollMs.set(provider, triedAtMs);
 		// Claim the try first, so the other processes wait for its result instead of asking too.
 		const claimed: SharedPoll = { ...(readShared(SHARE_DIR, provider) ?? shared), triedAtMs, failures };
@@ -448,6 +450,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			requestFooterRender?.();
 		} catch (error) {
 			const refusal = error instanceof PollRefused ? error : undefined;
+			if (refusal?.retryAfterMs) retryAtMs.set(provider, triedAtMs + refusal.retryAfterMs);
 			pollFailed(provider, refusal?.retryAfterMs ? { ...claimed, retryAtMs: triedAtMs + refusal.retryAfterMs } : claimed);
 			// Best-effort: a failed poll must never fail Pi, but it should be findable.
 			operationalError(LOG_FILE, "status-plus", `${provider} limit poll failed: ${refusal?.message ?? (error as Error)?.name ?? "error"}`);

@@ -137,3 +137,20 @@ test("a proxy answer without its OAuth source keeps the recent windows another p
 	const shared = JSON.parse(readFileSync(join(SHARE, "anthropic.json"), "utf8"));
 	assert.deepEqual(shared.entries.map((entry) => [entry.key, entry.usedPct]), [["seven_day", 37], ["five_hour", 46]]);
 });
+
+test("a Retry-After holds this process's polls when the shared poll file cannot be written", async (t) => {
+	// A file where the folder should be: every shared write fails.
+	writeFileSync(SHARE, "not a folder");
+	t.after(() => rmSync(SHARE, { force: true }));
+	respond = () => new Response("{}", { status: 429, headers: { "retry-after": "120" } });
+	const footer = app();
+	await footer.emit("session_start");
+	t.after(() => footer.emit("session_shutdown"));
+	await settle();
+	assert.equal(requests, 1);
+	const realNow = Date.now;
+	Date.now = () => realNow() + 10_000;
+	t.after(() => { Date.now = realNow; });
+	await globalThis[STORE].refresh("anthropic", true);
+	assert.equal(requests, 1);
+});
