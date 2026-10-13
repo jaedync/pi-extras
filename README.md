@@ -703,7 +703,9 @@ connected. Then Pi asks a running PulseAudio or PipeWire server, with `pactl`,
 for a source that is not a monitor of an output. WSLg always lists its
 `RDPSource`, so on WSLg setup starts when `pactl` (from `pulseaudio-utils`) is
 installed. On macOS, a background check lists the input devices, and setup
-starts when it finds one. Pi keeps the `pactl` answer and the macOS result for
+starts when it finds one. This check needs Pi to run under a plain `node`
+binary. Under other builds, setup waits for your first dictation or
+`/voice setup`. Pi keeps the `pactl` answer and the macOS result for
 one day. When Pi cannot find a microphone, setup waits for your first dictation
 or `/voice setup`.
 
