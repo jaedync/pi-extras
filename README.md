@@ -1183,9 +1183,12 @@ host, set `cookies` to a `cookies.txt` file from a signed-in browser, or set
 a private copy of the file in a temporary folder, not the file itself. The tool
 removes the copy when the media helper stops, also when it kills the helper.
 
-The install steps and the media commands get a minimal environment: the path,
-the home folder, the locale, and the proxy and certificate settings. They do
-not get other variables, such as API keys. Only the installers (`uv`, `pip`,
+The install steps and the media commands get a minimal environment. It holds
+the path, the home folder, the user name and shell, the locale and time zone,
+and the temporary and `XDG_` folders. It also holds the Hugging Face cache
+folders and the proxy and certificate settings. They do not get other
+variables, such as API keys.
+Only the installers (`uv`, `pip`,
 `git` and `npm`) also get the `UV_`, `PIP_`, `npm_config_` and `NPM_CONFIG_`
 settings, because a private package index needs them. yt-dlp, the media helper
 and the token provider do not get a variable whose name contains `TOKEN`,
