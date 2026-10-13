@@ -104,8 +104,10 @@ function orphanFooter(host: HandUpHost, record: AgentRecord, to: string): AgentR
 		return { ...record, sharesWorktree: undefined, worktreeReport: worktreeFooter(worktree, since ? { since } : {}) };
 	}
 	const parent = host.get(record.parent);
-	const into = parent?.worktree && sourceCheckout(worktree.path) === parent.worktree.path ? sourceCheckout(parent.worktree.path) : undefined;
-	return into ? { ...record, worktreeReport: worktreeFooter(worktree, { into }) } : record;
+	const source = sourceCheckout(worktree.path);
+	// A receiver that works in the worktree this one was made from (a live lead whose helper made it) applies there, as the line says.
+	if (!parent?.worktree || source !== parent.worktree.path || host.get(to)?.worktree?.path === source) return record;
+	return { ...record, worktreeReport: worktreeFooter(worktree, { into: sourceCheckout(source) }) };
 }
 
 function reportTarget(host: HandUpHost, record: AgentRecord): string {
