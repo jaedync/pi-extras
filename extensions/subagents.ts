@@ -37,7 +37,7 @@ import { editTarget } from "../lib/subagents/worktree.ts";
 import { checkoutOf } from "../lib/subagents/checkout.ts";
 import { latestReportFile } from "../lib/subagents/reports.ts";
 import { chatSettings, mainTrust, type Served, serveSession } from "../lib/subagents/serve.ts";
-import { mainMessageTool, stopTool, subagentTool } from "../lib/subagents/tools.ts";
+import { mainMessageTool, stopTool, subagentTool, userSendWords } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
 import { awaitChildren, isHeadless } from "../lib/subagents/headless.ts";
@@ -108,7 +108,7 @@ export default function subagents(pi: ExtensionAPI) {
 			async send(text) {
 				const result = await team().send(USER, name, text);
 				if (!result.ok) throw new Error(result.error);
-				return result.delivered === "replied" ? "Answered its question." : result.delivered === "resumed" ? "It resumed to handle your message." : "Delivered after its current step.";
+				return userSendWords(result);
 			},
 		});
 		inspected = shown;

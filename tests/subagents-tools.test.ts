@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
-import { stopTool, subagentTool } from "../lib/subagents/tools.ts";
+import { stopTool, subagentTool, userSendWords } from "../lib/subagents/tools.ts";
 import type { AgentRecord, ChildHandle, SpawnRequest } from "../lib/subagents/types.ts";
 
 /** A team whose children finish when the test says, behind the real `subagent` tool. */
@@ -114,4 +114,12 @@ test("stop_subagent with all stops every live agent you started, and says when t
 	assert.match(result.content[0].text, /^Stopped 2 subagents: one, two\./);
 	assert.deepEqual([team.get("one")?.state, team.get("two")?.state], ["stopped", "stopped"]);
 	await team.close();
+});
+
+test("the inspector says what became of the user's message, for a paused or queued child too", () => {
+	assert.equal(userSendWords({ ok: true, delivered: "steered" }), "Delivered after its current step.");
+	assert.equal(userSendWords({ ok: true, delivered: "resumed" }), "It resumed to handle your message.");
+	assert.equal(userSendWords({ ok: true, delivered: "replied" }), "Answered its question.");
+	assert.equal(userSendWords({ ok: true, delivered: "queued" }), "It has not started yet; it reads this when it does.");
+	assert.equal(userSendWords({ ok: true, delivered: "inbox", notice: "It is paused." }), "It waits in its inbox for its next run. It is paused.");
 });

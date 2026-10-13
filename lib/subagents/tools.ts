@@ -14,6 +14,7 @@ import { isThinking, type ModelChoice, resolveModel, THINKING_LEVELS, type Think
 import { EVERYONE, MAIN } from "./names.ts";
 import { teamNow } from "./status.ts";
 import type { HostTeam } from "./contract.ts";
+import type { SendResult } from "./team.ts";
 import { type AgentRecord, type CheckUpdate, LIVE_STATES } from "./types.ts";
 
 export const MAX_TASK_CHARS = 60_000;
@@ -225,6 +226,20 @@ const deliveredWords: Record<string, string> = {
 	inbox: "It had finished; this waits for its next run.",
 	main: "Delivered to main.",
 };
+
+const userWords: Record<string, string> = {
+	replied: "Answered its question.",
+	steered: "Delivered after its current step.",
+	resumed: "It resumed to handle your message.",
+	queued: "It has not started yet; it reads this when it does.",
+	inbox: "It waits in its inbox for its next run.",
+};
+
+/** What the inspector tells the user about a message they sent a child; a paused child's notice says why it did not resume. */
+export function userSendWords(result: Extract<SendResult, { ok: true }>): string {
+	const words = userWords[result.delivered] ?? "Delivered.";
+	return result.notice ? `${words} ${result.notice}` : words;
+}
 
 export function mainMessageTool(tc: ToolContext): ToolDefinition {
 	return {
