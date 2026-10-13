@@ -83,3 +83,12 @@ export function mergePolled(stored: Stored | undefined, fresh: LimitEntry[], now
 	});
 	return [...merged, ...carried];
 }
+
+/**
+ * Windows another process shared without a sample time come from an older
+ * installed copy, which shared proxy readings without their approximate mark.
+ * They show as approximate until a poll by this version replaces them.
+ */
+export function markUnsampled(entries: readonly LimitEntry[]): LimitEntry[] {
+	return entries.map((entry) => isWindow(entry) && entry.sampledMs === undefined && !entry.approximate ? { ...entry, approximate: true } : entry);
+}

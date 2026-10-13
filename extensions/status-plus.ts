@@ -18,7 +18,7 @@ import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
-import { mergePolled } from "../lib/limit-merge.ts";
+import { markUnsampled, mergePolled } from "../lib/limit-merge.ts";
 import { isVirtualModel, routedModel } from "../lib/routed-model.ts";
 import { sharedLimitStore, type LimitSnapshot } from "../lib/limit-store.ts";
 import { nextPollMs, readShared, writeShared, type SharedPoll } from "../lib/limit-share.ts";
@@ -409,7 +409,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		const existing = providerLimits.get(provider);
 		const fresh = now - shared.atMs < POLL_FRESH_MS;
 		providerLimits.set(provider, fresh && (!existing || shared.atMs > existing.atMs)
-			? { entries: shared.entries, atMs: shared.atMs, source: "poll" }
+			? { entries: markUnsampled(shared.entries), atMs: shared.atMs, source: "poll" }
 			: { atMs: shared.atMs, source: "poll", ...existing, entries: withPolledBalances(existing?.entries ?? [], shared.entries, now) });
 		requestFooterRender?.();
 	}

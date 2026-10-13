@@ -166,3 +166,16 @@ test("every polled entry in the shared file carries its sample time", async (t) 
 	assert.ok(shared.entries.length > 0);
 	assert.ok(shared.entries.every((entry) => entry.sampledMs === shared.atMs), JSON.stringify(shared.entries));
 });
+
+test("windows that an older installed copy shared, with no sample time, show as approximate", async (t) => {
+	// An older copy shared a Claude Code reading as it was: no mark, no sample time.
+	share({ atMs: NOW - 60_000, entries: [{ label: "7d", key: "seven_day", usedPct: 96, windowSeconds: 604_800, resetMs: NOW + 86_400_000 }, budget], triedAtMs: NOW - 60_000, failures: 0 });
+	const footer = app();
+	await footer.emit("session_start");
+	t.after(() => footer.emit("session_shutdown"));
+	await settle();
+	assert.equal(requests, 0);
+	const row = footer.row();
+	assert.match(row, /7d ~96%/);
+	assert.match(row, /\$1106\.83\/\$2000\.00 left/, "a budget keeps its dollar figures");
+});
