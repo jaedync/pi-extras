@@ -304,13 +304,14 @@ variable, such as `HTTPS_PROXY`, your proxy replaces the guard. Then your
 proxy decides which hosts the media tools can reach. These downloader limits
 apply with either proxy:
 
-- Media and captions download only from `http`, `https` and `data` URLs.
-  Other protocols, such as `ftp://`, `rtmp://` or `rtsp://`, are refused.
+- The tool downloads media and captions only from `http`, `https` and `data`
+  URLs. It refuses other protocols, such as `ftp://`, `rtmp://` or `rtsp://`.
 - yt-dlp runs no external downloader except ffmpeg, so not `rtmpdump`,
-  `aria2c`, `curl` or `mpv`. ffmpeg reads only HTTP and HTTPS, and the
-  encrypted and inline parts of HLS.
-- One download stops at 2 GiB of video or 1 GiB of audio. Live streams are
-  not downloaded.
+  `aria2c`, `curl` or `mpv`.
+- When ffmpeg downloads media, it reads only HTTP and HTTPS, and the encrypted
+  and inline parts of HLS.
+- One media download stops at 2 GiB of video or 1 GiB of audio. The tool does
+  not download live streams.
 
 The tool writes `state.json` and `provision.log` in the media folder. It keeps
 downloads and frames in its `pulls` folder. Each video call removes the
