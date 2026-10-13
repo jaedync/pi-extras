@@ -291,3 +291,13 @@ test("an aborted run whose prompt ends after a message queued a relaunch behind 
 	assert.equal(main.filter((delivery) => delivery.kind === "report" && delivery.record.name === "a").length, 0, "no report of the aborted run");
 	assert.match(prompts.at(-1)!, /Change of plan/, "the message that queued the relaunch reaches the new run");
 });
+
+test("a failed parent's queued subagent is stopped, never launched only to be stopped", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.spawn("Lead", { name: "lead" }); await flush();
+	h.spawn("Helper", { name: "helper", parent: "lead" }); await flush();
+	assert.equal(h.team.get("helper")!.state, "queued");
+	h.lastCall("lead").fail(new Error("boom: something unclassified")); await flush();
+	assert.equal(h.team.get("helper")!.state, "stopped");
+	assert.deepEqual(h.launched.map((launch) => launch.name), ["lead"]);
+});

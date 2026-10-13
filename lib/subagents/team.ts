@@ -688,9 +688,10 @@ export class Team implements HostTeam {
 		const message = error instanceof Error ? error.message : String(error);
 		// A failure after an answer is news main has not heard.
 		this.patch(name, { state: "failed", endedAt: this.now(), activity: null, error: message, answeredMain: undefined, report: this.sessions.runText(name), ...this.unreadLeft(name) });
-		this.finish(name);
 		// Its subagents stop as a stop's would, but each report goes on up (hand-up.ts), since this one can't read it.
-		for (const child of this.list().filter((entry) => entry.parent === name)) void this.stop(child.name, { reason: `because its parent ${name} failed` });
+		// Their stops start before finish() frees the slot, so a queued one is not launched only to be stopped.
+		for (const child of stopOrder(this.list().filter((entry) => entry.parent === name))) void this.stop(child.name, { reason: `because its parent ${name} failed` });
+		this.finish(name);
 	}
 
 	/** This run's messages, which are where a steered message shows up once the child reads it. */
