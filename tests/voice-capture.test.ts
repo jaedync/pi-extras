@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FrameChunker, captureCommands, hasAudioInput, probeAudioInput, type AudioProbe } from "../lib/voice/capture.ts";
-import { runDeviceProbe } from "../lib/voice/audio-input.ts";
+import { deviceProbeCommand, runDeviceProbe } from "../lib/voice/audio-input.ts";
 import { joinDictation, splitForPaste } from "../lib/voice/insert.ts";
 
 test("Linux prefers PulseAudio tools, then ALSA", () => {
@@ -182,4 +182,14 @@ test("long dictation is split below the paste-collapse threshold at word boundar
 	assert.ok(pieces.slice(0, -1).every((p) => p.endsWith(" ")), "cuts land after a space");
 	assert.deepEqual(splitForPaste("short", 900), ["short"]);
 	assert.deepEqual(splitForPaste("x".repeat(20), 8), ["xxxxxxxx", "xxxxxxxx", "xxxx"]);
+});
+
+test("the device probe runs only under a plain node binary, never through Pi's own binary", () => {
+	const node = { bun: false, sea: false, execPath: "/usr/local/bin/node" };
+	assert.equal(deviceProbeCommand(node)?.command, "/usr/local/bin/node");
+	assert.equal(deviceProbeCommand({ ...node, execPath: "C:\\Program Files\\nodejs\\node.exe" })?.command, "C:\\Program Files\\nodejs\\node.exe");
+	assert.equal(deviceProbeCommand({ ...node, execPath: "/opt/homebrew/bin/nodejs" })?.command, "/opt/homebrew/bin/nodejs");
+	assert.equal(deviceProbeCommand({ ...node, bun: true }), undefined, "a Bun binary would read -e as an extension");
+	assert.equal(deviceProbeCommand({ ...node, sea: true }), undefined, "so would a single executable application");
+	assert.equal(deviceProbeCommand({ ...node, execPath: "/Users/me/.local/bin/pi" }), undefined);
 });

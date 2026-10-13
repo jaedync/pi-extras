@@ -143,10 +143,32 @@ export function probeAudioInput(platform: NodeJS.Platform, env: Env, onFound: ()
 	};
 }
 
-function deviceProbeCommand(): ProbeCommand | undefined {
+export interface Runtime {
+	readonly bun: boolean;
+	readonly sea: boolean;
+	readonly execPath: string;
+}
+
+function isSea(): boolean {
+	try {
+		return createRequire(import.meta.url)("node:sea").isSea?.() === true;
+	} catch {
+		return false; // A Node without node:sea is older than single executable applications.
+	}
+}
+
+const currentRuntime = (): Runtime => ({ bun: !!process.versions.bun, sea: isSea(), execPath: process.execPath });
+
+/**
+ * The child that counts devices. It needs a plain node binary: in Pi's Bun or
+ * single-executable builds, execPath is Pi itself, which reads `-e` as an extension.
+ */
+export function deviceProbeCommand(runtime: Runtime = currentRuntime()): ProbeCommand | undefined {
+	const binary = runtime.execPath.split(/[\\/]/).at(-1) ?? "";
+	if (runtime.bun || runtime.sea || !/^node(js)?(\.exe)?$/i.test(binary)) return undefined;
 	try {
 		const module = createRequire(import.meta.url).resolve("@picovoice/pvrecorder-node");
-		return { command: process.execPath, args: ["-e", COUNT_SCRIPT, module] };
+		return { command: runtime.execPath, args: ["-e", COUNT_SCRIPT, module] };
 	} catch {
 		return undefined; // No PvRecorder for this platform: the probe cannot decide.
 	}
