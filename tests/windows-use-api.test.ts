@@ -398,12 +398,14 @@ test("the Alt+F4 check reads the key set, and win.call's Shortcut gets it too", 
 	const { host, calls } = fakeHost();
 	const session = new WinSession(host, guest);
 	// Windows-MCP 0.8 builds a uiautomation SendKeys string from the parts: "Alt}{F4" becomes "{Alt}{F4}".
-	for (const keys of ["alt+f4+alt", "alt+f4+", "F4+ALT", " alt +  f4 ", "altleft+f4", "shift+alt+f4", "Alt}{F4", "alt+(+f4+)", "lalt+f4 2"]) {
+	for (const keys of ["alt+f4+alt", "alt+f4+", "F4+ALT", " alt +  f4 ", "altleft+f4", "shift+alt+f4", "Alt}{F4", "alt+(+f4+)", "lalt+f4 2",
+		// Python's strip() (Windows-MCP) and .NET's Trim() (host.ps1) also remove these; JavaScript's \s does not.
+		"alt\x1c+f4", "alt\x85+f4", "\x1fAlt\x1d+F4\x1e"]) {
 		await assert.rejects(session.call("key", { vm: "A", keys }, {}), /Alt\+F4 wasn't sent/, `win.key ${JSON.stringify(keys)}`);
 		await assert.rejects(session.call("console.key", { vm: "A", keys }, {}), /Alt\+F4 wasn't sent/, `win.console.key ${JSON.stringify(keys)}`);
 	}
 	for (const tool of ["Shortcut", "shortcut", "SHORTCUT"]) {
-		await assert.rejects(session.call("call", { vm: "A", tool, args: { shortcut: "Alt+F4" } }, {}), /Alt\+F4 wasn't sent/, `win.call ${tool}`);
+		for (const shortcut of ["Alt+F4", "\x1cAlt\x1c+F4"]) await assert.rejects(session.call("call", { vm: "A", tool, args: { shortcut } }, {}), /Alt\+F4 wasn't sent/, `win.call ${tool} ${JSON.stringify(shortcut)}`);
 	}
 	assert.deepEqual(log, []);
 	assert.ok(!calls.some(([method]) => method === "key"));

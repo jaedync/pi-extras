@@ -59,10 +59,12 @@ const SHORTCUT_TOOL = /^shortcut(?:-tool)?$/i;
  * decides, not how it is written: "F4+ALT", "alt+f4+" and "shift+alt+f4" all
  * press Alt and F4. Windows-MCP joins the parts into a uiautomation SendKeys
  * string ("{Alt}{F4}"), so braces, groups and repeat counts split keys too:
- * "Alt}{F4" and "alt+(+f4+)" press Alt+F4 there.
+ * "Alt}{F4" and "alt+(+f4+)" press Alt+F4 there. Key names are ASCII letters
+ * and digits, and anything else splits them: Python's strip() and .NET's Trim()
+ * remove characters (\x1c-\x1f, \x85) that JavaScript's \s leaves.
  */
 function closesWindow(keys: string): boolean {
-	const names = keys.split(/[+{}()\s]+/).map((key) => key.toLowerCase());
+	const names = keys.toLowerCase().split(/[^a-z0-9]+/);
 	return names.includes("f4") && names.some((key) => ALT_KEYS.has(key));
 }
 
