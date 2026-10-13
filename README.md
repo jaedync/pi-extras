@@ -1167,14 +1167,18 @@ Video sites often change and stop old versions of these tools, so the tool
 updates them every `refreshDays` days. If an update fails, the tool continues
 to use the installed version. With `PI_OFFLINE=1` (or `true` or `yes`), the
 tool does not install, update or look up a release. It uses the installed
-tools, and without them a video link fails with a note. The token provider's
+tools, and without them a video link fails with a note. But a speech model
+that is not in the Hugging Face cache still downloads on the first
+transcription. The token provider's
 `npm ci` runs with `--ignore-scripts`.
 
 The transcript comes from the captions of the video. If the video has no
 captions, the tool downloads the audio and transcribes it on this machine. It
 uses `mlx-whisper` (whisper-large-v3-turbo) on Apple silicon and
 `faster-whisper` (small, CPU) on other hosts. The first transcription installs
-the package and downloads the model.
+the package, and the package downloads the model from Hugging Face. The tool
+does not pin or check the model, and this download does not go through the
+guard proxy.
 
 The tool does not download live streams. One download stops at 2 GiB of video
 or 1 GiB of audio. When the length of a video is not known, the tool does not

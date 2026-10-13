@@ -271,14 +271,19 @@ The first video link downloads the media tools into
 - The bgutil token provider: the latest release tag from GitHub's API, a
   `git clone` of that tag, `npm ci --ignore-scripts` and a TypeScript build.
   It runs with the Node that runs Pi.
-- For a video without captions, `mlx-whisper` or `faster-whisper` from PyPI
-  and a speech model.
+- For a video without captions, `mlx-whisper` or `faster-whisper` from PyPI.
+  On the first transcription, that package downloads its speech model from
+  Hugging Face: `mlx-community/whisper-large-v3-turbo` on Apple silicon,
+  `Systran/faster-whisper-small` on other hosts, or `linkContext.asrModel`.
+  The tool does not pin or check the model. This download does not go through
+  the guard proxy.
 
 The tool updates the PyPI packages and the token provider every
 `linkContext.refreshDays` days (default 3). It also updates them when a new
 pi-extras version changes the package list. With `PI_OFFLINE=1`, `true` or
 `yes`, it does not install, update or look up a release. It then uses only
-the installed tools.
+the installed tools. But a speech model that is not in the Hugging Face cache
+still downloads on the first transcription, also with `PI_OFFLINE`.
 
 The install steps and the media tools get only a small set of variables. These
 are the path, the home folder, the user name and shell, the locale and time
