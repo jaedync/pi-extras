@@ -448,7 +448,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			// No credentials or no data: back off rather than retry every interval.
 			if (!polled || polled.length === 0) return pollFailed(provider, claimed);
 			const atMs = Date.now();
-			const entries = mergePolled(latestPoll(provider), polled, atMs);
+			// Each entry carries its sample time, so a later partial poll can tell a recent reading from one an older copy wrote.
+			const entries = mergePolled(latestPoll(provider), polled, atMs).map((entry) => entry.sampledMs !== undefined ? entry : { ...entry, sampledMs: atMs });
 			pollFailures.set(provider, 0);
 			polledAtMs.set(provider, atMs);
 			providerLimits.set(provider, { entries, atMs, source: "poll" });

@@ -1,5 +1,6 @@
 /** Pure helpers for status-plus: money, time, quota shapes, catalog cost. */
 
+import { aheadOfClock } from "./clock-skew.ts";
 import { dateFormat, dateMs, resetTimeMs } from "./date-format.ts";
 
 /**
@@ -42,6 +43,11 @@ export interface LimitEntry {
 	approximate?: boolean;
 	/** When the provider measured this reading, if the source says; a kept reading keeps its own time. */
 	sampledMs?: number;
+	/**
+	 * A usage-endpoint reading kept longer than limit-merge's OAUTH_READING_KEEP_MS
+	 * while the endpoint did not answer. It is also `approximate`.
+	 */
+	stale?: boolean;
 }
 
 export interface UsageCounts {
@@ -334,7 +340,8 @@ function bucketEntry(bucket: ProxyQuotaBucket, approximate: boolean, now: number
 	if (typeof bucket.type !== "string" || !finiteNumber(bucket.utilization)) return undefined;
 	const resetMs = finiteNumber(bucket.resetsAt) ? resetTimeMs(bucket.resetsAt, now) : undefined;
 	const rejected = bucket.status === "rejected";
-	const sampledMs = finiteNumber(bucket.observedAt) ? bucket.observedAt : undefined;
+	// A time ahead of this clock would keep a reading young for too long.
+	const sampledMs = finiteNumber(bucket.observedAt) ? (aheadOfClock(bucket.observedAt, now) ? now : bucket.observedAt) : undefined;
 	if (approximate && sampledMs !== undefined && now - sampledMs > SDK_READING_MAX_AGE_MS) {
 		// An old reading's percent is stale, but a rejection still gates requests until its reset.
 		if (!rejected || resetMs === undefined || resetMs <= now) return undefined;

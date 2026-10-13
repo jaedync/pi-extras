@@ -17,43 +17,69 @@ export const OAUTH_READING_KEEP_MS = 30 * 60_000;
 type Stored = Pick<LimitSnapshot, "entries" | "atMs">;
 
 const identity = (entry: LimitEntry): string => `${entry.kind ?? ""}|${entry.key ?? entry.label}`;
-const sampled = (entry: LimitEntry, stored: Stored): number => entry.sampledMs ?? stored.atMs;
 const resetPassed = (entry: LimitEntry, now: number): boolean => entry.resetMs !== undefined && entry.resetMs <= now;
 const isWindow = (entry: LimitEntry): boolean => (entry.kind ?? "window") === "window" && entry.usedPct !== undefined;
 
 /** A kept reading carries its own sample time, so its age does not restart with each poll that keeps it. */
-function stamped(entry: LimitEntry, stored: Stored): LimitEntry {
-	return entry.sampledMs !== undefined ? entry : { ...entry, sampledMs: stored.atMs };
+function stamped(entry: LimitEntry, stored: Stored): LimitEntry & { sampledMs: number } {
+	return { ...entry, sampledMs: entry.sampledMs ?? stored.atMs };
 }
 
-/** A stored usage-endpoint reading that a Claude Code reading must not replace. */
-function trusted(entry: LimitEntry, stored: Stored, now: number): boolean {
-	return !entry.approximate && !resetPassed(entry, now) && now - sampled(entry, stored) < OAUTH_READING_KEEP_MS;
+/**
+ * A stored usage-endpoint reading that a Claude Code reading must not replace.
+ * One with no sample time came from an older installed copy, which wrote
+ * Claude Code's readings unmarked, so it is not trusted.
+ */
+function trusted(entry: LimitEntry, now: number): entry is LimitEntry & { sampledMs: number } {
+	return !entry.approximate && entry.sampledMs !== undefined && !resetPassed(entry, now) && now - entry.sampledMs < OAUTH_READING_KEEP_MS;
 }
 
-/** A stored entry the poll left out still holds until its reset; one with no reset, for a while. */
-function stillHolds(entry: LimitEntry, stored: Stored, now: number): boolean {
-	if (resetPassed(entry, now)) return false;
-	const age = now - sampled(entry, stored);
-	if (entry.approximate) return (entry.exhausted === true && entry.resetMs !== undefined) || age <= SDK_READING_MAX_AGE_MS;
-	return entry.resetMs !== undefined || age < OAUTH_READING_KEEP_MS;
+/**
+ * A stored entry the poll left out: kept as it is while recent; approximate
+ * when it is Claude Code's, has no sample time, or is a usage-endpoint reading
+ * older than OAUTH_READING_KEEP_MS (shown until its reset, never counted as
+ * current); or dropped.
+ */
+function carry(entry: LimitEntry, stored: Stored, now: number): LimitEntry | undefined {
+	if (resetPassed(entry, now)) return undefined;
+	const kept = stamped(entry, stored);
+	const age = now - kept.sampledMs;
+	if (entry.stale) return entry.resetMs !== undefined ? kept : undefined;
+	if (entry.approximate || entry.sampledMs === undefined) {
+		const holds = (entry.exhausted === true && entry.resetMs !== undefined) || age <= SDK_READING_MAX_AGE_MS;
+		return holds ? { ...kept, approximate: true } : undefined;
+	}
+	if (age < OAUTH_READING_KEEP_MS) return kept;
+	return entry.resetMs !== undefined ? { ...kept, approximate: true, stale: true } : undefined;
 }
 
-/** One fresh entry, or the stored reading it must not replace. A fresh rejection still blocks the window. */
-function mergeOne(entry: LimitEntry, kept: LimitEntry | undefined, stored: Stored | undefined, now: number): LimitEntry {
-	if (!entry.approximate || !kept || !stored || !trusted(kept, stored, now)) return entry;
-	return { ...stamped(kept, stored), ...(entry.proxyRejected ? { exhausted: true, proxyRejected: true } : {}) };
+/**
+ * One fresh entry, or the stored reading it must not replace. The status is
+ * the fresh one's: a fresh rejection blocks the window, a fresh "allowed" clears
+ * the kept block, unless the kept reading is full.
+ */
+function mergeOne(entry: LimitEntry, kept: LimitEntry | undefined, now: number): LimitEntry {
+	if (!entry.approximate || !kept || !trusted(kept, now)) return entry;
+	const { exhausted, proxyRejected: _rejected, allowed: _allowed, ...reading } = kept;
+	const full = exhausted === true && (kept.usedPct ?? 0) >= 100;
+	return {
+		...reading,
+		exhausted: entry.proxyRejected === true || full,
+		...(entry.proxyRejected ? { proxyRejected: true } : {}),
+		...(entry.allowed ? { allowed: true } : {}),
+	};
 }
 
 export function mergePolled(stored: Stored | undefined, fresh: LimitEntry[], now: number): LimitEntry[] {
 	if (!fresh.some((entry) => entry.approximate)) return fresh;
 	const previous = new Map((stored?.entries ?? []).map((entry) => [identity(entry), entry]));
-	const merged = fresh.map((entry) => mergeOne(entry, previous.get(identity(entry)), stored, now));
+	const merged = fresh.map((entry) => mergeOne(entry, previous.get(identity(entry)), now));
 	// A usage-endpoint answer is complete: a window it leaves out is gone.
 	if (!stored || fresh.some((entry) => isWindow(entry) && !entry.approximate)) return merged;
 	const seen = new Set(fresh.map(identity));
-	const carried = stored.entries
-		.filter((entry) => !seen.has(identity(entry)) && stillHolds(entry, stored, now))
-		.map((entry) => stamped(entry, stored));
+	const carried = stored.entries.flatMap((entry) => {
+		const kept = seen.has(identity(entry)) ? undefined : carry(entry, stored, now);
+		return kept ? [kept] : [];
+	});
 	return [...merged, ...carried];
 }

@@ -272,8 +272,10 @@ function fromLocal(provider: string, entry: LimitEntry, inputs: DollarInputs, re
 	const { windowSeconds, resetMs, usedPct } = entry;
 	if (!inputs.spend || !finite(windowSeconds) || !finite(resetMs) || !finite(usedPct)) return undefined;
 	const { sinceMs, grantedAtMs, approx } = localStart(provider, entry, inputs);
+	// The percent is from the reading's time, so the spend that sizes it stops there too.
+	const readAt = finite(entry.sampledMs) ? Math.min(inputs.now, entry.sampledMs) : inputs.now;
 	const query: SpendQuery = {
-		provider, sinceMs, untilMs: inputs.now,
+		provider, sinceMs, untilMs: readAt,
 		...(entry.modelFamily ? { family: entry.modelFamily } : {}),
 	};
 	const spentUsd = money(inputs.spend(query));

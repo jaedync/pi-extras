@@ -8,6 +8,7 @@ import { mergePolled } from "../lib/limit-merge.ts";
 import { parseProxyQuota, type LimitEntry } from "../lib/status-plus-logic.ts";
 import { DEFAULT_GUARD_CONFIG, hotProviders, pendingWarnings, usageReport } from "../lib/usage-guard-core.ts";
 import { createDollarsCollector } from "../lib/usage-dollars/collect.ts";
+import { entryDollars } from "../lib/usage-dollars/core.ts";
 
 // 2026-10-12T23:53:12.868Z: Meridian answered without its OAuth source.
 const BAD_AT = 1_791_849_192_868;
@@ -99,11 +100,18 @@ test("an approximate reading does not replace an OAuth reading younger than 30 m
 	assert.equal(byKey(pastReset.entries, "five_hour"), undefined);
 });
 
-test("a stored snapshot from an older version (no sample times) still counts as an OAuth reading", () => {
-	const legacy = snap(parseProxyQuota(goodResponse(BAD_AT - MIN), BAD_AT).map(({ sampledMs: _drop, ...entry }) => entry), BAD_AT - MIN);
-	const after = poll(legacy, badResponse(), BAD_AT);
-	assert.equal(byKey(after.entries, "seven_day")?.usedPct, 37);
-	assert.equal(byKey(after.entries, "seven_day")?.sampledMs, BAD_AT - MIN);
+test("a stored entry with no sample time (an older installed copy wrote it) is approximate on the proxy merge path", () => {
+	const legacy = snap([{ label: "7d", key: "seven_day", usedPct: 96, windowSeconds: 604_800, resetMs: WEEK_RESET }], BAD_AT - MIN);
+	const fresh = badResponse(BAD_AT);
+	fresh.buckets[0] = { ...fresh.buckets[0], status: "allowed", utilization: 0.4 };
+	const after = poll(legacy, fresh, BAD_AT);
+	assert.equal(byKey(after.entries, "seven_day")?.usedPct, 40);
+	assert.deepEqual(pendingWarnings([["anthropic", after]], OPUS, ON, undefined, new Set(), BAD_AT), []);
+	// Left out of the answer, it is still kept, but only as an approximate reading.
+	const five = snap([{ label: "5h", key: "five_hour", usedPct: 96, windowSeconds: 18_000, resetMs: FIVE_RESET }], BAD_AT - MIN);
+	const kept = byKey(poll(five, badResponse(), BAD_AT).entries, "five_hour");
+	assert.equal(kept?.approximate, true);
+	assert.equal(kept?.sampledMs, BAD_AT - MIN);
 });
 
 test("good, bad, good: no lost 5h window, no warning, and no granted reset", () => {
@@ -186,4 +194,73 @@ test("polls with OAuth readings, and other providers, are not merged", () => {
 	assert.deepEqual(mergePolled(good, fresh, BAD_AT), fresh);
 	const codex: LimitEntry[] = [{ label: "5h", key: "five_hour", usedPct: 3 }];
 	assert.deepEqual(mergePolled(good, codex, BAD_AT), codex);
+});
+
+test("a kept usage-endpoint reading older than 30 minutes stays on show, but only as an approximate reading", () => {
+	const dir = mkdtempSync(join(tmpdir(), "proxy-quota-"));
+	try {
+		const old = snap(parseProxyQuota(goodResponse(BAD_AT - 48 * 60 * MIN, 0.96), BAD_AT - 48 * 60 * MIN).map((entry) => ({ ...entry, resetMs: entry.key === "five_hour" ? BAD_AT + 60 * MIN : WEEK_RESET })), BAD_AT - 48 * 60 * MIN);
+		const body = badResponse();
+		body.buckets[0] = { ...body.buckets[0], type: "seven_day_opus", utilization: 0.1 };
+		const after = poll(old, body, BAD_AT);
+		const week = byKey(after.entries, "seven_day");
+		assert.equal(week?.usedPct, 96);
+		assert.equal(week?.approximate, true);
+		assert.deepEqual(pendingWarnings([["anthropic", after]], OPUS, ON, undefined, new Set(), BAD_AT), []);
+		const report = usageReport([["anthropic", after]], OPUS, ON, undefined, BAD_AT);
+		assert.equal(report.limits.find((limit) => limit.key === "seven_day")?.approximate, "an earlier usage-endpoint reading, more than 30 minutes old");
+		assert.equal(report.limits.find((limit) => limit.key === "seven_day")?.dollars, undefined);
+		const collector = createDollarsCollector({ agentDir: dir, timeZone: "UTC" });
+		collector.observe([["anthropic", after]], BAD_AT);
+		assert.throws(() => readFileSync(join(dir, "usage-dollars", "window-readings.json")), /ENOENT/);
+		// It stays until its reset, poll after poll.
+		const later = poll(after, badResponse(BAD_AT + 2 * 60 * MIN), BAD_AT + 2 * 60 * MIN);
+		assert.equal(byKey(later.entries, "seven_day")?.approximate, true);
+		assert.equal(byKey(later.entries, "five_hour"), undefined);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a kept reading 31 minutes after its fetch turns approximate", () => {
+	const good = poll(undefined, goodResponse(BAD_AT - MIN), BAD_AT - MIN);
+	const recent = poll(good, badResponse(BAD_AT + 20 * MIN), BAD_AT + 20 * MIN);
+	assert.equal(byKey(recent.entries, "five_hour")?.approximate, undefined);
+	const late = poll(recent, badResponse(BAD_AT + 30 * MIN), BAD_AT + 30 * MIN);
+	assert.equal(byKey(late.entries, "five_hour")?.approximate, true);
+	assert.equal(byKey(late.entries, "five_hour")?.usedPct, 46);
+});
+
+test("a kept reading takes its status from the fresh Claude Code reading", () => {
+	let stored = poll(undefined, goodResponse(BAD_AT - MIN), BAD_AT - MIN);
+	const rejected = badResponse(BAD_AT, BAD_AT);
+	rejected.buckets[0] = { ...rejected.buckets[0], status: "rejected", utilization: 1 };
+	stored = poll(stored, rejected, BAD_AT);
+	assert.equal(byKey(stored.entries, "seven_day")?.exhausted, true);
+	const allowed = badResponse(BAD_AT + 3 * MIN, BAD_AT + 3 * MIN);
+	allowed.buckets[0] = { ...allowed.buckets[0], status: "allowed", utilization: 0.4 };
+	stored = poll(stored, allowed, BAD_AT + 3 * MIN);
+	const week = byKey(stored.entries, "seven_day");
+	assert.equal(week?.usedPct, 37);
+	assert.equal(week?.exhausted, false);
+	assert.equal(week?.proxyRejected, undefined);
+	// A kept reading that is full stays blocked.
+	const full = poll(undefined, goodResponse(BAD_AT - MIN, 1), BAD_AT - MIN);
+	const blocked = byKey(full.entries, "seven_day");
+	const fullStored = snap(full.entries.map((entry) => entry === blocked ? { ...entry, exhausted: true } : entry), BAD_AT - MIN);
+	assert.equal(byKey(poll(fullStored, allowed, BAD_AT + 3 * MIN).entries, "seven_day")?.exhausted, true);
+});
+
+test("an observedAt ahead of the clock counts as now", () => {
+	const [entry] = parseProxyQuota(badResponse(BAD_AT, BAD_AT + 120 * MIN), BAD_AT);
+	assert.equal(entry.sampledMs, BAD_AT);
+	const [drift] = parseProxyQuota(badResponse(BAD_AT, BAD_AT + 2 * MIN), BAD_AT);
+	assert.equal(drift.sampledMs, BAD_AT + 2 * MIN);
+});
+
+test("local spend for a window stops at the time of its reading", () => {
+	const queries: number[] = [];
+	const entry: LimitEntry = { label: "5h", key: "five_hour", windowSeconds: 18_000, usedPct: 46, resetMs: BAD_AT + 60 * MIN, sampledMs: BAD_AT - 60 * MIN };
+	entryDollars("anthropic", entry, { now: BAD_AT, timeZone: "UTC", spend: (query) => { queries.push(query.untilMs); return 10; } });
+	assert.deepEqual(queries, [BAD_AT - 60 * MIN]);
 });

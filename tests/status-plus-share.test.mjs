@@ -154,3 +154,15 @@ test("a Retry-After holds this process's polls when the shared poll file cannot 
 	await globalThis[STORE].refresh("anthropic", true);
 	assert.equal(requests, 1);
 });
+
+test("every polled entry in the shared file carries its sample time", async (t) => {
+	respond = () => new Response(JSON.stringify({ five_hour: { utilization: 12, resets_at: new Date(NOW + 3_600_000).toISOString() } }));
+	const footer = app();
+	await footer.emit("session_start");
+	t.after(() => footer.emit("session_shutdown"));
+	await settle();
+	assert.equal(requests, 1);
+	const shared = JSON.parse(readFileSync(join(SHARE, "anthropic.json"), "utf8"));
+	assert.ok(shared.entries.length > 0);
+	assert.ok(shared.entries.every((entry) => entry.sampledMs === shared.atMs), JSON.stringify(shared.entries));
+});
