@@ -2,6 +2,27 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.18 - 2026-10-13
+
+### Fixed
+
+- Pull Link: the network guard now stays on when you set `linkContext.proxy`
+  or a proxy variable. Before, a proxy turned the guard off. The guard checks
+  each request first, then sends it to your proxy with the checked IP
+  address. It uses the proxy rules of yt-dlp, and it keeps the site's `Host`
+  header in a tunnel. http, https, socks5(h) and socks4(a) proxies work, also
+  with a user name and password. For any other proxy URL, the call stops
+  before it sends a request.
+- Bash Default Timeout: the model now gets the default timeout in the system
+  prompt, for main and for subagent children. Before, Pi's own `bash` schema
+  told it that the timeout has no default.
+- Subagents: a child that was stopped before its first launch is no longer
+  told that its last run may have changed files.
+- Status Plus and Usage Guard: a rejected limit that comes with no percent
+  now blocks its window and shows as an approximate 100%. Before, it was
+  dropped. A successful response clears it, and it gives no pace, dollar
+  figures or disagreement log line.
+
 ## 0.24.17 - 2026-10-13
 
 ### Fixed
