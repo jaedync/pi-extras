@@ -499,8 +499,9 @@ export class Team implements HostTeam {
 			update: (patch) => {
 				const record = this.records.get(name);
 				if (!record) return;
-				// The request a stop aborts still says what it used.
-				if (record.state === "stopped" && this.ending.has(name) && patch.usage) return this.patch(name, { usage: patch.usage });
+				// The request a stop aborts still says what it used; the stop gave the child the number after that launch's.
+				const aborted = record.state === "stopped" && this.ending.has(name) && launch === (this.launches.get(name) ?? 0) - 1;
+				if (aborted && patch.usage) return this.patch(name, { usage: patch.usage });
 				if (this.launches.get(name) !== launch || !LIVE_STATES.has(record.state)) return;
 				this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.answers.workedSince(name, patch.toolCalls) ? { answeredMain: undefined } : {}) });
 				if (patch.usage) this.budgets.spent(name, patch.usage.cost);

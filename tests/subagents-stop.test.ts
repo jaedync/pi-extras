@@ -301,3 +301,30 @@ test("a failed parent's queued subagent is stopped, never launched only to be st
 	assert.equal(h.team.get("helper")!.state, "stopped");
 	assert.deepEqual(h.launched.map((launch) => launch.name), ["lead"]);
 });
+
+test("an older session's late usage during a later stop does not lower the usage", async () => {
+	const sessions: Array<{ hooks: ChildHooks; end?: () => void; abortGate?: () => void }> = [];
+	const team = new Team({ maxConcurrent: 4, maxDepth: 2, replyTimeoutMs: 60_000, warn: () => undefined, deliverToMain: () => undefined,
+		launcher: { async launch(_record: AgentRecord, hooks: ChildHooks): Promise<ChildHandle> {
+			const session: { hooks: ChildHooks; end?: () => void; abortGate?: () => void } = { hooks };
+			sessions.push(session);
+			return { prompt: () => new Promise<void>((resolve) => { session.end = resolve; }), steer: () => undefined,
+				abort: () => new Promise<void>((resolve) => { session.abortGate = () => { session.end?.(); resolve(); }; }),
+				lastText: () => undefined, messages: () => [], takeQueued: () => [], dispose: async () => undefined };
+		} } });
+	const usage = (cost: number) => ({ ...NO_USAGE, cost });
+	assert.ok(team.spawn({ name: "a", task: "A", parent: "main", model: "m", readOnly: false, fork: false, blocking: false }).ok);
+	await flush();
+	const old = sessions[0]!;
+	const first = team.stop("a"); await flush();
+	old.abortGate!(); await first; await flush();
+	await team.send("main", "a", "Resume."); await flush();
+	const fresh = sessions[1]!;
+	fresh.hooks.update({ usage: usage(3) });
+	const second = team.stop("a"); await flush();
+	old.hooks.update({ usage: usage(0.5) });
+	assert.equal(team.get("a")!.usage.cost, 3, "a stale session's late usage is ignored");
+	fresh.hooks.update({ usage: usage(3.25) });
+	fresh.abortGate!(); await second;
+	assert.equal(team.get("a")!.usage.cost, 3.25, "only the session the stop aborted reports its late usage");
+});
