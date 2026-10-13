@@ -456,7 +456,7 @@ function Invoke-Setup([string]$vm, [int]$port, [string]$launcher, [bool]$elevate
     # Tags the status the bootstrap publishes, so an earlier run's can't be mistaken for this one's.
     $run = -join (1..8 | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
     # Comment lines go: paced console input makes every extra character costly.
-    $lines = (Get-Content -Path (Join-Path $PSScriptRoot 'guest-bootstrap.ps1')) | Where-Object { $_ -notmatch '^\s*#' }
+    $lines = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'guest-bootstrap.ps1')) | Where-Object { $_ -notmatch '^\s*#' }
     $runLevel = if ($elevated) { 'Highest' } else { 'Limited' }
     $script = ($lines -join "`n").Replace('__PORT__', "$port").Replace('__RUNLEVEL__', $runLevel).Replace('__RUN__', $run)
     $line = $null; $via = 'typed'

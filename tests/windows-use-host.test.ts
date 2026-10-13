@@ -222,7 +222,7 @@ test("each VM's key file is named by its VM id, so VMs whose names differ in cas
 	assert.match(keyFile, /function Write-KeyWarning\(\[string\]\$key, \[string\]\$text\) \{\s*if \(\$script:keyWarnings\[\$key\]\) \{ return \}\s*\$script:keyWarnings\[\$key\] = \$true\s*\[Console\]::Error\.WriteLine\(\$text\)/, "each warning is written one time for each file");
 	// -Path takes wildcards, and %LOCALAPPDATA% may hold a "[".
 	assert.doesNotMatch(host, /Test-Path (?!-LiteralPath)/);
-	assert.doesNotMatch(host, /Get-Content -Path \$(?:file|keyFile)/);
+	assert.doesNotMatch(host, /Get-Content -Path /, "the scripts folder is under %LOCALAPPDATA%, where [ is a wildcard to -Path");
 	const vms = host.slice(host.indexOf("function Get-Vms"), host.indexOf("# Heartbeat:"));
 	assert.match(vms, /Get-KeyFile \$vm "\$\(\$hv\.Id\)"/, "the list names each VM's file from its own id, not by a name lookup");
 	assert.match(vms, /Get-VmIpv4 \$hv/);
