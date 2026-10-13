@@ -2,6 +2,32 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.15 - 2026-10-12
+
+### Fixed
+
+- Docs: the Pull Link media tools install and update themselves, and
+  `PI_OFFLINE` stops this. `docs/security.md` has a new Pull Link section
+  with the requests, downloads, guard proxy, downloader limits and files.
+- Docs: the speech model for video transcription downloads from Hugging
+  Face on the first transcription. It is not pinned, it does not go through
+  the guard proxy, and `PI_OFFLINE` does not stop it.
+- Docs: the macOS microphone check needs Pi to run under a plain `node`
+  binary.
+- Docs: `docs/security.md` describes the Tokenfold and OpenRouter requests
+  of the usage dollar figures, the session files they read, and the files
+  in `usage-dollars/`.
+- Docs: `usage` with `all: true` also polls, and `/usage` steers into a run
+  that is working.
+- Docs: the Cache Compaction providers include OpenAI chat completions.
+- Docs: a subagent can't use `computer_use` or `windows_use`.
+- Docs: the README lists every variable that the media tools get.
+- Docs: the README lists every type of chain that runs unsplit, and gives
+  the three timeouts of the test runner.
+- Docs: the README and `docs/security.md` give the exact list of tools that
+  a subagent child never gets.
+- Docs: the pin example in the README uses a real tag.
+
 ## 0.24.14 - 2026-10-12
 
 ### Changed
