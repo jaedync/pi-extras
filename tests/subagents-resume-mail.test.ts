@@ -84,6 +84,46 @@ test("main resumes a grandchild as its parent would: a note to an idle one, and 
 	assert.equal(h.team.get("lead")!.state, "idle", "its parent stays as it was");
 });
 
+test("a child stopped before its first launch is not told that a run of its own may have changed files", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.spawn("Build it", { name: "builder" });
+	h.spawn("Review it", { name: "reviewer" }); await flush();
+	assert.equal(h.team.get("reviewer")!.state, "queued");
+	await h.team.stop("reviewer");
+	h.lastCall("builder").finish("Built."); await flush();
+	await h.team.send("main", "reviewer", "Go ahead now."); await flush();
+	const prompt = h.lastCall("reviewer").text;
+	assert.match(prompt, /Your first run was stopped before it started, so nothing ran\./);
+	assert.doesNotMatch(prompt, /previous run|tool call may not have completed|files may have changed/);
+	assert.match(prompt, /Review it[\s\S]*Go ahead now\./, "it still gets its task, then the message");
+	await h.team.close();
+});
+
+test("a later run stopped before it launched keeps the careful note: the run before it may not have ended cleanly", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.team.restore([saved({ name: "dev", state: "interrupted", interruptionId: "i", interruptedBy: "quit" })]);
+	h.spawn("Build it", { name: "builder" }); await flush();
+	await h.team.send("main", "dev", "Resume, please.");
+	assert.equal(h.team.get("dev")!.state, "queued");
+	await h.team.stop("dev");
+	h.lastCall("builder").finish("Built."); await flush();
+	await h.team.send("main", "dev", "Now go on."); await flush();
+	assert.match(h.lastCall("dev").text, /Your previous run was stopped\. Its last tool call may not have completed/);
+	await h.team.close();
+});
+
+test("a restored record that ran but has no start time (legacy or orphaned) keeps the careful note when stopped", async () => {
+	const h = teamHarness();
+	h.team.restore([saved({ name: "old", state: "interrupted", interruptionId: "i", interruptedBy: "quit" })]);
+	assert.equal(h.team.get("old")!.startedAt, undefined);
+	await h.team.stop("old");
+	await h.team.send("main", "old", "Pick it up again."); await flush();
+	const prompt = h.lastCall("old").text;
+	assert.match(prompt, /Your previous run was stopped\. Its last tool call may not have completed/);
+	assert.doesNotMatch(prompt, /nothing ran/);
+	await h.team.close();
+});
+
 test("a relaunch reads older inbox mail before the message that started it, after the resume note", async () => {
 	const h = teamHarness();
 	h.team.restore([saved({ name: "dev", state: "stopped", inbox: ["Message from peer:\nOLD: use the v1 API."] })]);

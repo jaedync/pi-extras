@@ -29,6 +29,9 @@ const CHECK_FIRST = "Its last tool call may not have completed and files may hav
 export function resumeWarning(target: AgentRecord): string {
 	if (target.state === "interrupted") return `Your previous run was interrupted. ${CHECK_FIRST}\n\n`;
 	if (target.state === "failed") return `Your previous run failed: ${target.error ?? "unknown error"}. ${CHECK_FIRST}\n\n`;
+	// No run began (a spawn has runs 0 until its launch opens) and no launch set startedAt, so it changed nothing.
+	// A legacy or orphaned record restores with runs 1 and no startedAt, but it ran.
+	if (target.state === "stopped" && target.runs === 0 && target.startedAt === undefined) return "Your first run was stopped before it started, so nothing ran.\n\n";
 	if (target.state === "stopped" && target.stopReason) return `Your previous run was stopped ${target.stopReason}. This run has a fresh budget. ${CHECK_FIRST}\n\n`;
 	if (target.state === "stopped") return `Your previous run was stopped. ${CHECK_FIRST}\n\n`;
 	return "";
