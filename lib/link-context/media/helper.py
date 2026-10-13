@@ -316,6 +316,9 @@ def restrict_downloaders():
 
     Refuses a URL that is not http, https or data, and any external program but
     ffmpeg (rtmpdump, aria2c, curl, mpv): the guard proxy cannot see their requests.
+    The HLS and DASH downloaders keep their own copy of get_suitable_downloader;
+    it picks an external program only when `external_downloader` is set, and
+    ydl_options never sets it. Wrap those copies too if that ever changes.
     """
     import yt_dlp  # noqa: F401 (loads the module below; the package's YoutubeDL name is the class)
     from yt_dlp.downloader.external import ExternalFD, FFmpegFD

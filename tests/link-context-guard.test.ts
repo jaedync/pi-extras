@@ -344,9 +344,10 @@ proxy = net_guard.start([f"127.0.0.1:{h}", f"127.0.0.1:{b}"])
 port = int(proxy.rsplit(":", 1)[1])
 def status(extra):
     with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
-        s.sendall(f"POST http://127.0.0.1:{h}/p HTTP/1.1\\r\\nHost: x\\r\\n{extra}\\r\\nabcde".encode())
+        s.sendall(f"POST http://127.0.0.1:{h}/p HTTP/1.1\\r\\nHost: x\\r\\n{extra}\\r\\nabcde".encode("latin-1"))
         return s.recv(100).decode().split("\\r\\n")[0]
-out = {"duplicate": status("Content-Length: 5\\r\\nContent-Length: 50\\r\\n"), "negative": status("Content-Length: -5\\r\\n")}
+# Byte 0xB2 reads as "²", which str.isdigit() accepts and int() refuses.
+out = {"duplicate": status("Content-Length: 5\\r\\nContent-Length: 50\\r\\n"), "negative": status("Content-Length: -5\\r\\n"), "superscript": status("Content-Length: \\xb2\\r\\n")}
 time.sleep(0.3)
 before = threading.active_count()
 for _ in range(5):
@@ -369,9 +370,10 @@ print(json.dumps(out))`;
 	const result = await runPython(python as string, ["-I", "-B", "-c", code, dirname(HELPER), String(hostile.port), String(bulk.port)]);
 	assert.equal(result.code, 0, result.stderr);
 	assert.doesNotMatch(result.stderr, /Traceback/);
-	const out = JSON.parse(result.stdout) as { duplicate: string; negative: string; threads: number; body: number };
+	const out = JSON.parse(result.stdout) as { duplicate: string; negative: string; superscript: string; threads: number; body: number };
 	assert.match(out.duplicate, /^HTTP\/1\.1 400/);
 	assert.match(out.negative, /^HTTP\/1\.1 400/);
+	assert.match(out.superscript, /^HTTP\/1\.1 400/);
 	assert.equal(out.threads, 0, "no guard thread waits on a keep-alive upstream after its client closed");
 	assert.equal(out.body, big.length);
 	assert.equal(hostile.hits.filter((path) => path === "/p").length, 0, "a bad request never goes upstream");

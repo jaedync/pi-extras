@@ -145,7 +145,8 @@ def body_length(headers):
     if not values:
         return 0
     value = next(iter(values))
-    return int(value) if len(values) == 1 and value.isdigit() else None
+    # isdigit() alone accepts digits such as "²" that int() refuses.
+    return int(value) if len(values) == 1 and value.isascii() and value.isdigit() else None
 
 
 HOP_HEADERS = ("connection:", "keep-alive:", "proxy-", "transfer-encoding:", "te:", "upgrade:", "expect:")

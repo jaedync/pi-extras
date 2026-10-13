@@ -1095,9 +1095,9 @@ through a small proxy in the media helper. This includes redirects, manifests
 and fragments. The proxy resolves the name and refuses private, loopback,
 link-local, metadata and reserved addresses. The tool does not download media
 or captions on other protocols, such as `ftp://` or `rtmp://`, and ffmpeg can
-read only HTTP. yt-dlp may not start other downloaders, such as `rtmpdump`. When you set `linkContext.proxy`
-or a proxy variable (`HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY`), the tool
-uses your proxy instead. Then your proxy decides which hosts the video tools
+read only HTTP. yt-dlp does not start other downloaders, such as `rtmpdump`.
+When you set `linkContext.proxy` or a proxy variable (`HTTPS_PROXY`,
+`HTTP_PROXY` or `ALL_PROXY`), the tool uses your proxy instead. Then your proxy decides which hosts the video tools
 can reach.
 
 A shared YouTube link with `&list=` reads only its one video, not the
