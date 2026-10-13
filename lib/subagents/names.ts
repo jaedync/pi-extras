@@ -11,6 +11,8 @@ export const USER = "user";
 export const EVERYONE = "all";
 export const NAME_MAX = 24;
 const RESERVED = new Set([MAIN, EVERYONE, USER, "you", "me", "parent"]);
+/** `/subagents` subcommands: a child named one could not be opened with `/subagents <name>`. Older saved names stay valid. */
+const COMMAND_WORDS = new Set(["guide", "stats", "report", "resume", "stop"]);
 
 // Words that say nothing about which task this is.
 const FILLER = new Set([
@@ -30,7 +32,7 @@ export function taskSlug(task: string): string {
 /** The requested name if usable, else one from the task; `-2`, `-3` on collisions. */
 export function nameFor(requested: string | undefined, task: string, taken: (name: string) => boolean): string {
 	let base = (requested ? slugify(requested, NAME_MAX) : "") || taskSlug(task) || "agent";
-	if (isReserved(base)) base = `${base}-agent`;
+	if (isReserved(base) || COMMAND_WORDS.has(base)) base = `${base}-agent`;
 	if (!taken(base)) return base;
 	for (let n = 2; ; n++) {
 		const name = `${base}-${n}`;

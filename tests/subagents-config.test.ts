@@ -107,3 +107,10 @@ test("/subagents completions close once the command is complete, so Enter runs i
 	assert.equal(values("stats", []), null);
 	assert.equal(values("zzz", []), null);
 });
+
+test("a child is never named after a /subagents subcommand, so /subagents <name> can open it", async () => {
+	const { nameFor } = await import("../lib/subagents/names.ts");
+	for (const word of ["guide", "stats", "report", "resume", "stop"]) assert.equal(nameFor(word, "anything", () => false), `${word}-agent`);
+	assert.equal(nameFor(undefined, "Stats", () => false), "stats-agent");
+	assert.equal(nameFor("stats-check", "x", () => false), "stats-check");
+});
