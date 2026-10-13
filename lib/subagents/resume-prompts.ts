@@ -13,12 +13,13 @@ export interface ResumePrompt {
 
 /**
  * A launch's first prompt: the task when the session has not started it, or
- * the note; then mail that waited in the inbox, oldest first; then the
- * message that resumed it, which is the newest.
+ * the note; then the message that resumed it, which carries the mail that
+ * waited before it (routing.ts `relaunch`); then mail that came while the
+ * launch waited, oldest first.
  */
 export function launchPrompt(parts: { task?: string; after: string; resumed?: ResumePrompt; inbox: readonly string[] }): string {
 	const head = [parts.task, parts.resumed?.note.trimEnd()].filter(Boolean).join("\n\n");
-	return [`${head}${parts.after}`, ...parts.inbox, parts.resumed?.message].filter(Boolean).join("\n\n");
+	return [`${head}${parts.after}`, parts.resumed?.message, ...parts.inbox].filter(Boolean).join("\n\n");
 }
 
 export class ResumePrompts {

@@ -738,7 +738,8 @@ export class Team implements HostTeam {
 	private parkResume(name: string): void {
 		const message = this.resumePrompts.park(name);
 		const record = this.records.get(name);
-		if (message !== undefined && record) this.patch(name, { inbox: [...(record.inbox ?? []), message] });
+		// It came before anything that waits behind it in the inbox.
+		if (message !== undefined && record) this.patch(name, { inbox: [message, ...(record.inbox ?? [])] });
 	}
 
 	private takeInbox(name: string): string[] {

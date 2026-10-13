@@ -261,7 +261,8 @@ export class Routing {
 		try { if (!why.automatic) prepared = host.prepareResume?.(target) ?? prepared; }
 		catch (error) { return why.stale ? undefined : { ok: false, error: (error as Error).message }; }
 		if (why.stale) void host.sessions.release(name);
-		host.resumeWith(name, `${resumeWarning(target)}${prepared.note ? `${prepared.note}\n\n` : ""}`, why.body);
+		// Mail that waited in its inbox came before this message; mail that comes while the relaunch waits follows it.
+		host.resumeWith(name, `${resumeWarning(target)}${prepared.note ? `${prepared.note}\n\n` : ""}`, [...host.takeInbox(name), why.body].join("\n\n"));
 		if (target.state !== "waiting") this.startedBy(name, why.peer);
 		else host.goOn(name);
 		host.patch(name, { state: "queued", model: prepared.model, resumedBy: { from: why.from, text: why.said }, startedAt: host.now(), error: undefined, stopReason: undefined, restoreError: undefined, launchError: undefined,

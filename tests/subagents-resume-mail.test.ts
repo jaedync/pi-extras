@@ -105,3 +105,71 @@ test("a spawn group holds only its first run's reports: a later run leaves the g
 	assert.equal(h.team.get("quick")!.group, undefined);
 	assert.equal(h.team.get("long")!.group, "run-0-1");
 });
+
+test("mail that comes while a relaunch waits in line follows the message that started the relaunch", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.spawn("A", { name: "a" }); await flush();
+	await h.team.stop("a"); await flush();
+	h.spawn("B", { name: "b" }); await flush();
+	const first = await h.team.send("main", "a", "FIRST: change of plan.");
+	assert.equal(first.ok && first.delivered, "resumed");
+	await h.team.send("main", "a", "SECOND: and also this."); await flush();
+	h.lastCall("b").finish("b done"); await flush();
+	const text = h.lastCall("a").text;
+	assert.ok(text.indexOf("FIRST") >= 0 && text.indexOf("FIRST") < text.indexOf("SECOND"), `oldest first: ${text}`);
+});
+
+test("a parked message keeps its place before mail that came after it", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.team.restore([saved({ state: "stopped" })]);
+	h.spawn("Build it", { name: "builder" }); await flush();
+	await h.team.send("main", "reviewer", "FIRST: review db/017.sql.");
+	await h.team.send("main", "reviewer", "SECOND: and db/018.sql.");
+	await h.team.stop("reviewer");
+	const inbox = (h.team.get("reviewer")!.inbox ?? []).join("\n");
+	assert.ok(inbox.indexOf("FIRST") >= 0 && inbox.indexOf("FIRST") < inbox.indexOf("SECOND"), inbox);
+});
+
+test("swap: mail carried from the old session comes before mail that came during the new launch", async () => {
+	const transcript: unknown[] = [];
+	const prompts: string[][] = [];
+	const resolvers: Array<() => void> = [];
+	const queues: string[][] = [];
+	let gate: (() => void) | undefined;
+	let launches = 0;
+	let stale = false;
+	const team = new Team({
+		maxConcurrent: 4, maxDepth: 2, replyTimeoutMs: 60_000, warn: () => undefined, deliverToMain: () => undefined,
+		launcher: {
+			async launch(): Promise<ChildHandle> {
+				const id = launches++;
+				if (id > 0) await new Promise<void>((resolve) => { gate = resolve; });
+				prompts[id] = []; queues[id] = [];
+				return {
+					sessionFile: "/sessions/impl.jsonl", stamp: { generation: id, files: [] },
+					prompt: (text) => new Promise<void>((resolve) => { transcript.push({ role: "user", content: [{ type: "text", text }] }); prompts[id]!.push(text); resolvers[id] = resolve; }),
+					steer: (text) => { queues[id]!.push(text); },
+					abort: async () => undefined, lastText: () => undefined, messages: () => transcript,
+					takeQueued: () => queues[id]!.splice(0), dispose: async () => undefined,
+				};
+			},
+			current: (handle) => !(stale && handle.stamp?.generation === 0),
+			codeCurrent: (handle) => !(stale && handle.stamp?.generation === 0),
+		},
+	});
+	assert.ok(team.spawn({ name: "impl", task: "Task", parent: "main", model: "m", readOnly: false, fork: false, blocking: false }).ok);
+	await flush();
+	assert.equal((await team.send("main", "impl", "OLD mail.")).ok, true);
+	stale = true;
+	transcript.push({ role: "assistant", content: [{ type: "text", text: "Done, I think." }] });
+	assert.equal((team as unknown as { turnEnded(name: string): boolean }).turnEnded("impl"), true);
+	resolvers[0]!();
+	await flush();
+	assert.equal(team.get("impl")!.state, "starting");
+	assert.equal((await team.send("main", "impl", "NEW mail.")).ok, true);
+	gate!();
+	await flush();
+	const prompt = prompts[1]!.join("\n\n");
+	assert.ok(prompt.indexOf("OLD mail.") >= 0 && prompt.indexOf("OLD mail.") < prompt.indexOf("NEW mail."), `order: ${prompt}`);
+	await team.close();
+});
