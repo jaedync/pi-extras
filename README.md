@@ -475,10 +475,11 @@ rate limits taken from response headers are reported but never warned on.
     example `7d ~96%`. The `usage` tool marks it with `approximate`.
   - An approximate reading fires no band or budget warning, has no dollar
     figures, and does not go into the granted-reset readings.
-  - When a Claude Code reading differs by 20 points or more from the last
-    usage-endpoint reading of its window, `status-plus.log` gets one line with
-    both readings. The line gives the percentages, reset times, ages and the
-    proxy's status and warning threshold.
+  - A Claude Code reading can differ by 20 points or more from the last
+    usage-endpoint reading of its window, more than normal use explains. Then
+    each Pi process that polls writes one line with both readings to
+    `status-plus.log`. The line gives the percentages, reset times, ages and
+    the proxy's status and warning threshold.
 - `/usage` queues the current snapshot for the next turn, or steers it into
   the run while the agent works; `/usage budget 7d 60`
   and `/usage budget clear` manage the session budget; `/usage warnings on|off`

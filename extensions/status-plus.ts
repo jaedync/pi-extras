@@ -18,7 +18,7 @@ import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
-import { disagreementText, disagreements, markUnsampled, mergePolled } from "../lib/limit-merge.ts";
+import { disagreementText, disagreements, markUnsampled, mergePolled, windowName } from "../lib/limit-merge.ts";
 import { isVirtualModel, routedModel } from "../lib/routed-model.ts";
 import { sharedLimitStore, type LimitSnapshot } from "../lib/limit-store.ts";
 import { nextPollMs, readShared, writeShared, type SharedPoll } from "../lib/limit-share.ts";
@@ -421,15 +421,20 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	/**
 	 * Log an approximate reading far from the last usage-endpoint reading, with
 	 * both, so a wrong proxy reading can be traced. Claude Code's reading stays
-	 * the same between its events, so each one is logged one time.
+	 * the same between its events, so this process logs each one one time. A
+	 * failure here must not fail the poll.
 	 */
 	function logDisagreements(provider: string, stored: Pick<LimitSnapshot, "entries" | "atMs"> | undefined, polled: LimitEntry[], now: number): void {
-		for (const found of disagreements(stored, polled, now)) {
-			const reading = `${provider}|${found.fresh.key ?? found.fresh.label}|${found.fresh.usedPct}|${found.fresh.sampledMs}`;
-			if (loggedReadings.has(reading)) continue;
-			if (loggedReadings.size >= LOGGED_READINGS_MAX) loggedReadings.clear();
-			loggedReadings.add(reading);
-			operationalLine(LOG_FILE, `[status-plus] ${new Date(now).toISOString()} ${disagreementText(provider, found, now)}`);
+		try {
+			for (const found of disagreements(stored, polled, now)) {
+				const reading = `${provider}|${windowName(found.fresh)}|${found.fresh.usedPct}|${found.fresh.sampledMs}`;
+				if (loggedReadings.has(reading)) continue;
+				if (loggedReadings.size >= LOGGED_READINGS_MAX) loggedReadings.clear();
+				loggedReadings.add(reading);
+				operationalLine(LOG_FILE, `[status-plus] ${new Date(now).toISOString()} ${disagreementText(provider, found, now)}`);
+			}
+		} catch (error) {
+			operationalError(LOG_FILE, "status-plus", `disagreement log failed: ${errorText(error)}`);
 		}
 	}
 

@@ -9,6 +9,7 @@
  * route, a healthy proxy) replace the snapshot as before.
  */
 import type { LimitSnapshot } from "./limit-store.ts";
+import { dateMs } from "./date-format.ts";
 import { SDK_READING_MAX_AGE_MS, type LimitEntry } from "./status-plus-logic.ts";
 
 /** A usage-endpoint reading younger than this outranks Claude Code's readings. */
@@ -95,17 +96,26 @@ export function markUnsampled(entries: readonly LimitEntry[]): LimitEntry[] {
 
 /** Points between an approximate reading and the last usage-endpoint reading that are worth a log line. */
 export const DISAGREE_MIN_POINTS = 20;
+/** The most a window's use can grow per window length: a 5h window can fill in about an hour. */
+const MAX_GROWTH_PER_WINDOW = 5;
 
 export interface Disagreement {
 	readonly fresh: LimitEntry;
 	readonly kept: LimitEntry & { sampledMs: number };
 }
 
+/** Points a window's use can rise in normal use between two readings. */
+function growthAllowance(kept: LimitEntry & { sampledMs: number }, fresh: LimitEntry, now: number): number {
+	if (!kept.windowSeconds) return 0;
+	const elapsed = Math.max(0, (fresh.sampledMs ?? now) - kept.sampledMs);
+	return (elapsed / (kept.windowSeconds * 1000)) * 100 * MAX_GROWTH_PER_WINDOW;
+}
+
 /**
  * Approximate readings far from the last usage-endpoint reading of the same
- * window, of any age while its reset has not passed. A window's use only grows
- * until its reset, so a large gap names a wrong reading, and the log keeps
- * both for the diagnosis.
+ * window, of any age while its reset has not passed. A window's use does not
+ * fall before its reset, and it rises only so fast, so a larger gap names a
+ * wrong reading. The log keeps both readings for the diagnosis.
  */
 export function disagreements(stored: Stored | undefined, fresh: readonly LimitEntry[], now: number, minPoints = DISAGREE_MIN_POINTS): Disagreement[] {
 	const previous = new Map((stored?.entries ?? []).map((entry) => [identity(entry), entry]));
@@ -113,20 +123,31 @@ export function disagreements(stored: Stored | undefined, fresh: readonly LimitE
 		const kept = previous.get(identity(entry));
 		if (!entry.approximate || !isWindow(entry) || !kept || kept.approximate || !isWindow(kept)) return [];
 		if (kept.sampledMs === undefined || resetPassed(kept, now)) return [];
-		if (Math.abs(entry.usedPct! - kept.usedPct!) < minPoints) return [];
-		return [{ fresh: entry, kept: { ...kept, sampledMs: kept.sampledMs } }];
+		const sampled = { ...kept, sampledMs: kept.sampledMs };
+		// Tenths of a point: 0.57 * 100 is 56.99999999999999.
+		const gap = Math.round((entry.usedPct! - kept.usedPct!) * 10) / 10;
+		if (Math.abs(gap) < minPoints || (gap > 0 && gap < minPoints + growthAllowance(sampled, entry, now))) return [];
+		return [{ fresh: entry, kept: sampled }];
 	});
 }
 
 const pct = (value: number | undefined): string => `${Math.round((value ?? 0) * 10) / 10}%`;
-const resetText = (entry: LimitEntry): string => entry.resetMs === undefined ? "none" : new Date(entry.resetMs).toISOString();
+// A stored entry has only a shape check, so its reset may be no date at all.
+const resetText = (entry: LimitEntry): string => {
+	const ms = typeof entry.resetMs === "number" ? dateMs(entry.resetMs) : undefined;
+	return ms === undefined ? "none" : new Date(ms).toISOString();
+};
+
+/** The window's name for the log: the proxy's text is not trusted, so only a plain key gets through. */
+export const windowName = (entry: LimitEntry): string => /^[a-z0-9_]{1,64}$/.test(entry.key ?? "") ? entry.key! : "unknown window";
 const ageText = (sampledMs: number | undefined, now: number): string => sampledMs === undefined ? "at an unknown time" : `${Math.max(0, Math.round((now - sampledMs) / 1000))} s ago`;
 
 /** One log line: the approximate reading with the proxy's raw status, then the usage-endpoint reading. */
 export function disagreementText(provider: string, found: Disagreement, now: number): string {
 	const { fresh, kept } = found;
 	const status = `status ${fresh.proxyStatus ?? "unknown"}${fresh.surpassedThreshold !== undefined ? `, surpassed ${fresh.surpassedThreshold}` : ""}`;
-	return `approximate ${provider} ${fresh.key ?? fresh.label} reading differs from the usage endpoint: `
+	return `approximate ${provider} ${windowName(fresh)} reading differs from the usage endpoint: `
 		+ `${pct(fresh.usedPct)} (${status}, reset ${resetText(fresh)}, sampled ${ageText(fresh.sampledMs, now)}) `
 		+ `vs ${pct(kept.usedPct)} (reset ${resetText(kept)}, sampled ${ageText(kept.sampledMs, now)})`;
 }
+

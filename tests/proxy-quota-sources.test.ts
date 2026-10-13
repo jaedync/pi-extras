@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LimitSnapshot } from "../lib/limit-store.ts";
-import { disagreements, disagreementText, mergePolled } from "../lib/limit-merge.ts";
+import { disagreements, disagreementText, mergePolled, windowName } from "../lib/limit-merge.ts";
 import { parseProxyQuota, type LimitEntry } from "../lib/status-plus-logic.ts";
 import { DEFAULT_GUARD_CONFIG, hotProviders, pendingWarnings, usageReport } from "../lib/usage-guard-core.ts";
 import { createDollarsCollector } from "../lib/usage-dollars/collect.ts";
@@ -297,4 +297,33 @@ test("no disagreement under 20 points, against an approximate or unsampled readi
 	assert.deepEqual(disagreements(snap(reset, fetchedAt), bad, BAD_AT), [], "the kept window has reset");
 	assert.deepEqual(disagreements(snap(good, fetchedAt), parseProxyQuota(goodResponse(BAD_AT, 0.96), BAD_AT), BAD_AT), [], "a usage-endpoint poll");
 	assert.deepEqual(disagreements(undefined, bad, BAD_AT), [], "nothing stored");
+});
+
+test("a window that rises fast in normal use between the two readings is not a disagreement", () => {
+	const fetchedAt = BAD_AT - 20 * MIN;
+	const stored = snap(parseProxyQuota(goodResponse(fetchedAt), fetchedAt), fetchedAt);
+	const rising = parseProxyQuota({ ...badResponse(), buckets: [{ ...badResponse().buckets[0], type: "five_hour", utilization: 0.71, resetsAt: FIVE_RESET + 256 }] }, BAD_AT);
+	assert.deepEqual(disagreements(stored, rising, BAD_AT), [], "5h rose 25 points in 20 minutes");
+});
+
+test("a gap of exactly 20 points is a disagreement", () => {
+	// The same sample time as the Claude Code reading, so no growth allowance applies.
+	const fetchedAt = BAD_AT - 2 * MIN;
+	const stored = snap(parseProxyQuota(goodResponse(fetchedAt), fetchedAt), fetchedAt);
+	const at57 = parseProxyQuota({ ...badResponse(), buckets: [{ ...badResponse().buckets[0], utilization: 0.57 }] }, BAD_AT);
+	assert.equal(disagreements(stored, at57, BAD_AT).length, 1);
+});
+
+test("the log line names an unusual window as unknown and survives a stored reset time no date can hold", () => {
+	const odd = "seven_day\nfake log line";
+	const fetchedAt = BAD_AT - 10 * MIN;
+	const stored = snap(parseProxyQuota(goodResponse(fetchedAt), fetchedAt).map((entry) => entry.key === "seven_day" ? { ...entry, key: odd, resetMs: 9e15 } : entry), fetchedAt);
+	const fresh = parseProxyQuota({ ...badResponse(), buckets: [{ ...badResponse().buckets[0], type: odd }] }, BAD_AT);
+	const found = disagreements(stored, fresh, BAD_AT);
+	assert.equal(found.length, 1);
+	const text = disagreementText("anthropic", found[0]!, BAD_AT);
+	assert.ok(!text.includes("\n"), text);
+	assert.match(text, /^approximate anthropic unknown window reading differs/);
+	assert.match(text, /vs 37% \(reset none,/);
+	assert.equal(windowName(found[0]!.fresh), "unknown window");
 });

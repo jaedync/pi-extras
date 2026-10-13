@@ -47,9 +47,10 @@ quotas and provider errors should not prevent Pi from running.
 
 If the footer cannot draw a frame, it shows one short line in its place.
 The error name and message go to `status-plus.log` in the Pi agent directory.
-When a proxy's approximate reading differs by 20 points or more from the last
-usage-endpoint reading, that log also gets both readings. The line has limit
-percentages, reset times, ages and the proxy's status, and no credentials.
+A proxy's approximate reading can differ by 20 points or more from the last
+usage-endpoint reading, more than normal use explains. Then that log also gets
+both readings. The line has limit percentages, reset times, ages and the
+proxy's status, and no credentials.
 
 Cost totals are recorded usage or catalog estimates, not authoritative invoices.
 TTFT and throughput describe observed request timing, not server-only decoding.
