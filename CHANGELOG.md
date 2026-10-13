@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.16 - 2026-10-13
+
+### Added
+
+- Status Plus: when a proxy's approximate limit reading differs from the last
+  usage-endpoint reading more than normal use explains, `status-plus.log` gets
+  both readings. The gap must be 20 points or more. The line gives the
+  percentages, reset times, ages and the proxy's status, so a wrong reading
+  can be traced.
+
 ## 0.24.15 - 2026-10-12
 
 ### Fixed
