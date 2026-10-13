@@ -4,8 +4,9 @@
  * `usage` tool returns. No I/O; the extension wires this to Pi.
  */
 import type { LimitSnapshot } from "./limit-store.ts";
-import { formatDuration, quotaKeyParts, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
+import { formatDuration, quotaKeyParts, quotaLabel, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
 import { localTime } from "./usage-time.ts";
+import { LIMIT_POLLERS } from "./status-plus-limits.ts";
 import { paceText, usagePace, type UsagePace } from "./usage-pace.ts";
 import { dollarsSummary, entryDollars, type DollarInputs, type DollarsSummary, type EntryDollars } from "./usage-dollars/core.ts";
 export { localTime } from "./usage-time.ts";
@@ -94,27 +95,58 @@ function keyResetMs(key: string): number | undefined {
 	return /^\d+$/.test(reset) ? Number(reset) : undefined;
 }
 
+/** A notice's window and threshold, from its details or, for older notices, its key (provider|window|threshold|reset). */
+function noticeParts(record: Record<string, unknown>, key: string): { provider: string; window: string; threshold: number } {
+	const [legacyProvider, window = "", threshold] = key.split("|");
+	return {
+		provider: typeof record.provider === "string" ? record.provider : legacyProvider,
+		window,
+		threshold: typeof record.threshold === "number" ? record.threshold : Number(threshold),
+	};
+}
+
+/**
+ * A band or budget notice says its window reached a threshold. It no longer
+ * holds when the budget it names was cleared or changed (`budget` null or
+ * another one; undefined means the caller does not know), or when the live
+ * window is below the threshold (a granted reset) or past its reset.
+ */
+function thresholdLapsed(
+	record: Record<string, unknown>,
+	parts: { window: string; threshold: number },
+	current: LimitEntry | undefined,
+	now: number | undefined,
+	budget: SessionBudget | null | undefined,
+): boolean {
+	if (record.reason === "budget" && budget !== undefined) {
+		const named = { label: quotaLabel(parts.window), key: parts.window };
+		if (!budget || budget.pct !== parts.threshold || !budgetMatches(named, budget)) return true;
+	}
+	if (!current) return false;
+	if (now !== undefined && current.resetMs !== undefined && current.resetMs <= now) return true;
+	return current.usedPct !== undefined && Number.isFinite(parts.threshold) && current.usedPct < parts.threshold;
+}
+
 /**
  * Recheck automatic notices at request time, including notices queued by older
  * extension versions. A notice lapses once its window resets: it stays in raw
  * history but would otherwise keep telling the model to wait out a limit that
- * no longer exists.
+ * no longer exists. `snapshot` is the active provider's.
  */
-export function warningApplies(details: unknown, model: ActiveModel, now?: number, snapshot?: LimitSnapshot): boolean {
+export function warningApplies(details: unknown, model: ActiveModel, now?: number, snapshot?: LimitSnapshot, budget?: SessionBudget | null): boolean {
 	if (!details || typeof details !== "object") return true;
 	const record = details as Record<string, unknown>;
 	if (typeof record.key !== "string" || !["band", "budget", "exhausted"].includes(String(record.reason))) return true;
 	const resetMs = keyResetMs(record.key);
 	if (now !== undefined && resetMs !== undefined && now >= resetMs) return false;
-	const [legacyProvider, window] = record.key.split("|");
-	const provider = typeof record.provider === "string" ? record.provider : legacyProvider;
-	const modelFamily = typeof record.modelFamily === "string" ? record.modelFamily : quotaKeyParts(window ?? "").family;
-	if (record.reason === "exhausted" && provider === model.provider) {
-		const current = snapshot?.entries.find((entry) => (entry.key ?? entry.label) === window);
-		// Keep raw history, but do not carry a disproved block into another model request.
-		if (current?.exhausted === false) return false;
-	}
-	return !!model.provider && provider === model.provider && entryApplies({ label: "", modelFamily }, model);
+	const parts = noticeParts(record, record.key);
+	const modelFamily = typeof record.modelFamily === "string" ? record.modelFamily : quotaKeyParts(parts.window).family;
+	if (!model.provider || parts.provider !== model.provider) return false;
+	const current = snapshot?.entries.find((entry) => (entry.key ?? entry.label) === parts.window);
+	// Keep raw history, but do not carry a disproved block or a void threshold into another model request.
+	if (record.reason === "exhausted" && current?.exhausted === false) return false;
+	if (record.reason !== "exhausted" && thresholdLapsed(record, parts, current, now, budget)) return false;
+	return entryApplies({ label: "", modelFamily }, model);
 }
 
 export function budgetMatches(entry: LimitEntry, budget: SessionBudget | undefined): boolean {
@@ -343,6 +375,9 @@ const APPROXIMATE_SOURCE = "from Claude Code's last response";
 const APPROXIMATE_NOTE = "Limits marked approximate come from Claude Code's last response, because the usage endpoint did not answer. " +
 	"They can lag or read high, fire no threshold warnings, and have no dollar figures.";
 
+const RESET_PASSED_NOTE = "Limits with status \"reset\" already reset since their last reading, so their percent is from the previous cycle. " +
+	"The next poll or response gives the new reading.";
+
 export interface UsageReportLimit {
 	provider: string;
 	window: string;
@@ -351,7 +386,8 @@ export interface UsageReportLimit {
 	applies: boolean;
 	usedPct?: number;
 	remaining?: string;
-	status: "ok" | "exhausted" | "full-but-allowed";
+	/** "reset": the reading is from before a reset that has passed, so its percent is the previous cycle's. */
+	status: "ok" | "exhausted" | "full-but-allowed" | "reset";
 	thresholds?: number[];
 	nextThreshold?: number;
 	headroomPct?: number;
@@ -416,7 +452,8 @@ function reportLimitFigures(
 	const kind = entryKind(entry);
 	const applies = provider === model.provider && entryApplies(entry, model);
 	const pct = entry.usedPct;
-	const status = entry.exhausted ? "exhausted" : entry.allowed === true && pct !== undefined && pct >= 100 ? "full-but-allowed" : "ok";
+	const passed = entry.resetMs !== undefined && entry.resetMs <= now;
+	const status = passed ? "reset" : entry.exhausted ? "exhausted" : entry.allowed === true && pct !== undefined && pct >= 100 ? "full-but-allowed" : "ok";
 	const base: UsageReportLimit = {
 		provider,
 		window: entry.label || entry.key || kind,
@@ -428,7 +465,9 @@ function reportLimitFigures(
 		status,
 		...(entry.approximate ? { approximate: APPROXIMATE_SOURCE } : {}),
 	};
-	const reset = resetTiming(entry, config, now, timeZone);
+	const timing = resetTiming(entry, config, now, timeZone);
+	// Nothing is left to wait for once the reset has passed.
+	const reset = timing && passed ? { ...timing, waitable: false } : timing;
 	const pace = usagePace(entry, now, timeZone);
 	if (kind !== "window" || pct === undefined) return { ...base, ...(reset ? { reset } : {}) };
 	const thresholds = thresholdsFor(entry, config, budget);
@@ -469,11 +508,14 @@ export function usageReport(
 	const notes: string[] = [];
 	const provider = model.provider ?? "the active provider";
 	if (!sawActiveProvider) {
-		notes.push(`No usage data yet for ${provider}; call again with refresh: true after a request has been made.`);
+		notes.push(model.provider && !Object.hasOwn(LIMIT_POLLERS, model.provider)
+			? `No usage data yet for ${provider}. It has no usage endpoint to poll, so limits come only from response headers after its next request.`
+			: `No usage data yet for ${provider}; call again with refresh: true after a request has been made.`);
 	} else if (!limits.some((limit) => limit.kind === "window" && limit.applies)) {
 		notes.push(`${provider} reports no subscription windows for this model; only per-minute rate limits, balances or budgets apply, and no usage warnings will fire.`);
 	}
 	if (limits.some((limit) => limit.approximate)) notes.push(APPROXIMATE_NOTE);
+	if (limits.some((limit) => limit.status === "reset")) notes.push(RESET_PASSED_NOTE);
 	if (budget && !limits.some((limit) => limit.budgetPct !== undefined)) {
 		notes.push(`Session budget targets window "${budget.window}", which no applicable limit matches; it will not fire.`);
 	}
