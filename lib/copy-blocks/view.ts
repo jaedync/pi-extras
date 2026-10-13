@@ -113,7 +113,7 @@ export class CopyBlocksView implements Component {
 		this.sources ??= sourceBlocks(this.source);
 		if (block.kind === "code") {
 			const drawn = this.recorder.codes[block.index]?.code;
-			return drawn === undefined ? undefined : sourceCode(drawn, this.sources);
+			return drawn === undefined ? undefined : sourceCode(drawn, this.sources, block.index);
 		}
 		// Quotes pair up by order only when the source has exactly the quotes Pi drew; one inside a list item, say, doesn't.
 		const quotes = this.sources.filter((each) => each.kind === "quote");

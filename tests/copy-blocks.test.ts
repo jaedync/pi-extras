@@ -94,6 +94,13 @@ test("source blocks and Pi's drawn blocks agree in number, kind and code", () =>
 		"intro\n\n    indented\n\n- item\n\n  ~~~\n  nested\n  ~~~\n\n> a\nlazy",
 		"```\nfirst\n\t```\nsecond\n```",
 		"````\nkeep\n```\n````\n\n```\nopen\n``",
+		"> note\n>\n> ```sh\n> rm -rf x\n> ```\n\n```\nafter\n```",
+		"- ```\n  x\n  ``\n\npara\n\n```\ny\n```",
+		"- one\n- ```\n  x\n  ``",
+		"> ```\n> x\n> ``",
+		"- item\n\n  > quoted\n  >\n  > ```\n  > \tin list\n  > ```",
+		"1. Edit main.go:\n\n   ```go\n   func main() {\n   \tfmt.Println(1)\n   }\n   ```\n2. Run it.",
+		"Makefile:\n\n```make\nall:\n\tgo build\n```\n\nAlso:\n\n\tcode with tab indent\n",
 	];
 	for (const reply of replies) {
 		const recorder = newRecorder();
@@ -103,6 +110,35 @@ test("source blocks and Pi's drawn blocks agree in number, kind and code", () =>
 		assert.deepEqual(source.map((block) => block.kind), drawn, JSON.stringify(reply));
 		assert.deepEqual(source.filter((block) => block.kind === "code").map((block) => block.text.replace(/\t/g, "   ")), recorder.pending!.map((code) => code.code), JSON.stringify(reply));
 	}
+});
+
+test("a copy keeps the source's tabs block by block, wherever Pi and the source disagree about a tab", () => {
+	const cases: Array<[string, string[]]> = [
+		["1. Edit main.go:\n\n   ```go\n   func main() {\n   \tfmt.Println(1)\n   }\n   ```\n2. Run it.", ["func main() {\n\tfmt.Println(1)\n}"]],
+		["Makefile:\n\n```make\nall:\n\tgo build\n```\n\nAlso:\n\n\tcode with tab indent\n", ["all:\n\tgo build"]],
+		["First:\n\n```go\nfunc a() {\n\treturn\n}\n```\n\nThen:\n\n- step\n\n  ```go\n  func b() {\n  \treturn\n  }\n  ```", ["func a() {\n\treturn\n}", "func b() {\n\treturn\n}"]],
+		["> quoted:\n>\n> ```make\n> all:\n> \tgo build\n> ```", ["all:\n\tgo build"]],
+	];
+	for (const [reply, expected] of cases) {
+		const recorder = newRecorder();
+		new Markdown(reply, 0, 0, taggedTheme(getMarkdownTheme(), recorder)).render(60);
+		const blocks = sourceBlocks(reply);
+		assert.deepEqual(blocks.filter((block) => block.kind === "code").map((block) => block.text), expected, `/copy-block ${JSON.stringify(reply)}`);
+		assert.deepEqual(recorder.pending!.map((code, index) => sourceCode(code.code, blocks, index)), expected, `click ${JSON.stringify(reply)}`);
+	}
+	// A tab that Pi's indent cut splits leaves the columns that remain, as spaces.
+	assert.deepEqual(sourceBlocks("- item\n\n  ```\n \tx\n  ```").filter((block) => block.kind === "code").map((block) => block.text), ["  x"]);
+});
+
+test("a code block inside a quote is a card of its own, after its quote", () => {
+	assert.deepEqual(sourceBlocks("> note\n>\n> ```sh\n> rm -rf x\n> ```\n\n```\nafter\n```"), [
+		{ kind: "quote", text: "note\n\n```sh\nrm -rf x\n```" },
+		{ kind: "code", text: "rm -rf x" },
+		{ kind: "code", text: "after" },
+	]);
+	assert.deepEqual(sourceBlocks("- ```\n  x\n  ``\n\npara\n\n```\ny\n```").map((block) => block.text), ["x\n``", "y"], "only the last block can be a fence still arriving");
+	assert.deepEqual(sourceBlocks("- one\n- ```\n  x\n  ``").map((block) => block.text), ["x"], "the last block of the last list item is the last block");
+	assert.deepEqual(sourceBlocks("> ```\n> x\n> ``").map((block) => block.text), ["```\nx\n``", "x"], "and so is the last block of a last quote");
 });
 
 test("a reply's code blocks and quotes draw as cards with copy labels a click copies exactly", async () => {
