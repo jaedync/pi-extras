@@ -102,8 +102,11 @@ function linuxInput(env: Env, probe: AudioProbe): boolean {
 	if (!server) return false;
 	const saved = savedVerdict(env, probe);
 	if (saved !== undefined) return saved;
+	const sources = probe.sources(server);
+	// No answer (pactl missing, slow or failing) decides nothing, so it is not saved.
+	if (!sources) return false;
 	// A sink's monitor records what plays, not a microphone.
-	const input = (probe.sources(server) ?? []).some((name) => !name.endsWith(".monitor"));
+	const input = sources.some((name) => !name.endsWith(".monitor"));
 	writeVerdict(env, probe, input);
 	return input;
 }

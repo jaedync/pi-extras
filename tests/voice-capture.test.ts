@@ -94,6 +94,9 @@ test("Linux asks only the server whose socket it found, and saves pactl's answer
 	const named = linuxProbe({}, ["mic"]);
 	hasAudioInput("linux", { PI_VOICE_HOME: "/voice", PULSE_SERVER: "tcp:host" }, named);
 	assert.deepEqual(named.servers, ["tcp:host"]);
+	const silent = linuxProbe({ "/mnt/wslg/PulseServer": "" }, undefined);
+	assert.equal(hasAudioInput("linux", { PI_VOICE_HOME: "/voice" }, silent), false);
+	assert.equal(silent.files["/voice/audio-input.json"], undefined, "no answer from pactl is not saved as no microphone");
 	const unsaved = linuxProbe({ [PCM]: WITH_MIC });
 	hasAudioInput("linux", { PI_VOICE_HOME: "/voice" }, unsaved);
 	assert.equal(unsaved.files["/voice/audio-input.json"], undefined, "a capture stream needs no saved answer");
