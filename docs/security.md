@@ -554,8 +554,19 @@ main.
 ## Subagents
 
 Children are Pi sessions in the same process, with your permissions. A child
-gets the parent's active tools except mesh, goal, desktop-control, background
-job and subagent tools, and `childToolsExclude`. A read-only child keeps only
+gets the parent's active tools except the names in `childToolsExclude` and
+these:
+
+- subagent tools: `subagent`, `message`, `stop_subagent`, `subagents_enable`,
+  `bg_wait` and `subagent_supervisor`
+- mesh tools: `agent_send`, `agent_request` and `list_peers`
+- goal tools: `get_goal`, `create_goal`, `propose_goal_draft`,
+  `complete_goal` and `update_goal_progress`
+- shell job tools: `shell_job_start` and `shell_job`
+- `computer_use`, `windows_use`, `usage`, `codemode` and `tool_search`
+
+A child then gets its own `message` tool, and its own `subagent` and
+`stop_subagent` when it may start subagents. A read-only child keeps only
 tools that can't change your files or run commands that the model chooses.
 These are Pi's `read`, `grep`, `find` and `ls`, and the search and fetch tools
 `pull_link`, `kagi_search`, `web_search`, `fetch_content`,

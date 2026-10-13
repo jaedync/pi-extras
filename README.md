@@ -1220,8 +1220,10 @@ Put these in the `linkContext` section of `pi-extras.json`:
 
 The `subagent` tool starts a child agent: a separate Pi session on the model
 the agent picks, with a fresh context, the same working directory and the
-same tools minus a few that make no sense in a child (mesh, goals, desktop
-control, background jobs). Children load the extensions that provide their
+same tools minus a few that make no sense in a child. A child never gets mesh,
+goal and shell job tools, `computer_use`, `windows_use`, `usage`, `codemode`,
+`tool_search`, or other subagent extensions' tools (see
+[security and privacy](docs/security.md#subagents) for the list). Children load the extensions that provide their
 tools, Cache Compaction and a quota guard. Other extensions, such as the
 remote-pi mesh, keep serving the parent session. It runs in the background and its report arrives
 as a message, so the agent keeps working or ends its turn and is woken when it
