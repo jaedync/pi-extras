@@ -291,3 +291,19 @@ test("main's change check runs no fsmonitor or hook that a repository's config s
 	assert.ok((await fingerprint(root)).has(join(root, "new.txt")));
 	assert.deepEqual(ran(marker), []);
 });
+
+test("a nested worktree's apply command runs git in the parent worktree only through that worktree's verified git folders", (t) => {
+	const root = realpathSync(repository(t));
+	const parent = createWorktree(root, "scout");
+	const nested = createWorktree(parent.path, "nested", undefined, parent);
+	writeFileSync(join(nested.path, "deep.txt"), "deep\n");
+	// The parent child plants a git folder of its own, with a clean filter, behind its worktree's .git file.
+	const marker = join(root, "..", "ran");
+	plantGitFolder(parent.path, root, marker);
+	const footer = worktreeFooter(nested);
+	const own = join(root, ".git", "worktrees", "scout");
+	assert.ok(footer.includes(`GIT_COMMON_DIR=${join(root, ".git").replace(/^(.*)$/, (path) => /^[a-zA-Z0-9_./-]+$/.test(path) ? path : `'${path}'`)} git -C '${parent.path}' --git-dir '${own}' --work-tree '${parent.path}' -c core.fsmonitor=false`), footer);
+	execFileSync("/bin/bash", ["-c", /\nApply: (.*)\n/.exec(footer)![1]!], { timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] });
+	assert.deepEqual(ran(marker), []);
+	assert.equal(readFileSync(join(parent.path, "deep.txt"), "utf8"), "deep\n");
+});

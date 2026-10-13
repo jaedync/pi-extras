@@ -298,7 +298,19 @@ export function validWorktree(value: unknown): value is Worktree {
 		&& typeof w.base === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(w.base);
 }
 
-const quote = (value: string): string => /^[a-zA-Z0-9_./-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+const quote = (value: string): string => /^[a-zA-Z0-9_./=-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+
+/**
+ * A shell command that runs git in `root`. When `root` is a subagent's
+ * worktree (a nested worktree's parent), git gets its verified git folders,
+ * so the line never follows the `.git` file that child can write.
+ */
+function gitIn(root: string): string {
+	if (firstCheckout(root) === undefined) return `git -C ${quote(root)}`;
+	const { args, env } = gitCall({ path: root });
+	const assignments = Object.entries(env).map(([name, value]) => `${name}=${quote(value)} `).join("");
+	return `${assignments}git -C ${quote(root)} ${args.map(quote).join(" ")}`;
+}
 
 /** Runs `count` against a temporary index of the worktree's files as they are, so the child's own staging stays as it was. */
 function withTemporaryIndex<T>(path: string, paths: readonly string[], call: GitCall, count: (index: string) => T): T {
@@ -327,7 +339,7 @@ export function worktreeFooter(worktree: Worktree): string {
 		const pathspec = paths.length ? ` ${paths.map(quote).join(" ")}` : "";
 		return `\n\nWorktree: ${path} (${branch}); ${files} ${files === 1 ? "file differs" : "files differ"} from base, ${commits} ${commits === "1" ? "commit" : "commits"}.\n`
 			// Git runs only in the parent's checkout, on the tree written above, so main's bash never reads the child's git data.
-			+ `Apply: git -C ${quote(root)} diff --binary --no-ext-diff --no-textconv ${base} ${tree}${pathspec} | git -C ${quote(root)} apply\n`
+			+ `Apply: ${gitIn(root)} diff --binary --no-ext-diff --no-textconv ${base} ${tree}${pathspec} | ${gitIn(root)} apply\n`
 			+ `After you applied the changes (deletes this worktree): git worktree remove --force ${quote(path)} && git branch -D ${quote(branch)}`;
 	} catch (error) {
 		return `\n\nWorktree report unavailable: ${String((error as Error).message).replace(/\s+/g, " ").slice(0, 300)} (${path}, ${branch}).`;
