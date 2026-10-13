@@ -32,7 +32,9 @@ const MAX_RETRY_AHEAD_MS = 60 * 60_000 + CLOCK_SKEW_MS;
 
 const fileFor = (dir: string, provider: string): string => join(dir, `${provider.replace(/[^a-z0-9._-]/gi, "_")}.json`);
 const isTime = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
-const isEntry = (value: unknown): value is LimitEntry => !!value && typeof value === "object" && typeof (value as LimitEntry).label === "string";
+/** A percent that is not a number would show as NaN%. */
+const isEntry = (value: unknown): value is LimitEntry => !!value && typeof value === "object" && typeof (value as LimitEntry).label === "string"
+	&& ((value as LimitEntry).usedPct === undefined || Number.isFinite((value as LimitEntry).usedPct));
 
 /** A poll or try stamped well ahead of this clock is skew, and would hold every process's polls until then. */
 function valid(value: unknown, now: number): value is SharedPoll {

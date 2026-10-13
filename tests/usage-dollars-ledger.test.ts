@@ -158,7 +158,7 @@ test("compaction, branch summary and cache-warm spend count, under the session's
 	];
 	const text = line({ cost: 0.1, responseId: "r1" }) + entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
 	writeFileSync(join(dir, "a.jsonl"), text);
-	// A fork copies the entries; each counts once.
+	// A fork copies the entries; each counts one time.
 	writeFileSync(join(dir, "fork.jsonl"), text);
 	const ledger = ledgerAt(dir);
 	await ledger.refresh(NOW);

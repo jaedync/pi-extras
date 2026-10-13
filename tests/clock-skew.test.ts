@@ -43,3 +43,12 @@ test("a window reading from a clock that ran ahead does not freeze reset detecti
 	const merged = mergeReadings({ k: prev }, { k: cur }, ["k"]);
 	assert.equal(merged.k.atMs, NOW);
 });
+
+test("a shared poll entry with a percent that is not a number is not a reading", (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "clock-skew-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	writeShared(dir, "anthropic", { atMs: NOW, entries: [{ label: "5h", usedPct: "x" as unknown as number }], triedAtMs: NOW, failures: 0 });
+	assert.equal(readShared(dir, "anthropic", NOW), undefined);
+	writeShared(dir, "anthropic", { atMs: NOW, entries: [{ label: "", kind: "budget", remainingText: "$1/$2" }], triedAtMs: NOW, failures: 0 });
+	assert.ok(readShared(dir, "anthropic", NOW));
+});

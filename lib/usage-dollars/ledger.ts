@@ -100,7 +100,7 @@ function replySpend(entry: { timestamp?: unknown; message?: Record<string, unkno
 /**
  * Spend Pi records outside replies: compaction and branch summaries (made with
  * the session's model) and usage entries such as cache refreshes (which name
- * their own). A fork copies an entry with its id, so the id counts it once.
+ * their own). A fork copies an entry with its id, so the id makes it count one time.
  */
 function offTurnSpend(entry: Record<string, unknown>, active: SessionModel): LedgerLine | undefined {
 	if (entry.type === "model_change") {

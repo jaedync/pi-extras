@@ -19,7 +19,6 @@ export function loadConfig(section: RecordValue): Config {
 }
 
 export const LOCAL_ENGINE_IDLE_MINUTES = 25;
-/** Loopback, private (RFC 1918, ULA, link-local), Tailscale CGNAT and LAN-only names: a self-hosted engine, not a cloud API. */
 /** The IPv4 address in an IPv4-mapped IPv6 host; URL writes ::ffff:192.168.1.5 as ::ffff:c0a8:105. */
 function mappedIpv4(host: string): string | undefined {
 	const match = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
@@ -36,6 +35,7 @@ function localIpv4(host: string): boolean {
 	return host === "0.0.0.0" || a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
 }
 
+/** Loopback, private (RFC 1918, ULA, link-local), Tailscale CGNAT and LAN-only names: a self-hosted engine, not a cloud API. */
 export function isLocalEngineUrl(baseUrl: string | undefined): boolean {
 	let host: string;
 	try { host = new URL(baseUrl ?? "").hostname.toLowerCase().replace(/^\[|\]$/g, ""); }
