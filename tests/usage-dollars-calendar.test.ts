@@ -51,3 +51,16 @@ test("next UTC month start rolls the year over", () => {
 	assert.equal(nextUtcMonthStartMs(SAT_NOON), NOV_1_UTC);
 	assert.equal(nextUtcMonthStartMs(Date.UTC(2026, 11, 31, 23)), Date.UTC(2027, 0, 1));
 });
+
+test("the day starts at its first instant where DST begins at midnight", () => {
+	// Havana, Santiago, Asunción and Beirut have moved their clocks from 00:00 to 01:00.
+	for (const zone of ["America/Havana", "America/Santiago", "America/Asuncion", "Asia/Beirut", "America/Sao_Paulo", "Europe/London"]) {
+		for (let t = Date.UTC(2017, 0, 1, 13); t < Date.UTC(2019, 0, 1); t += 6 * 3_600_000) {
+			const start = localDayStartMs(t, zone);
+			const day = localDateKey(t, zone);
+			assert.ok(start <= t, `${zone} ${new Date(t).toISOString()}`);
+			assert.equal(localDateKey(start, zone), day, `${zone} ${new Date(t).toISOString()}`);
+			assert.notEqual(localDateKey(start - 1000, zone), day, `${zone} ${new Date(t).toISOString()}`);
+		}
+	}
+});

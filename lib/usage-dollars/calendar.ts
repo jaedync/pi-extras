@@ -42,12 +42,32 @@ export function localDateKey(epochMs: number, timeZone: string): string {
 	return new Date(localDayNumber(epochMs, timeZone) * DAY_MS).toISOString().slice(0, 10);
 }
 
-/** The instant the local day containing epochMs began. */
+/** A clock change moves local time by at most this much, so a day's first instant is within it of the estimate. */
+const MAX_SHIFT_MS = 3 * 3_600_000;
+
+/** The first instant in (low, high] whose local date is at least `day`; local dates only rise across a clock change. */
+function firstOf(day: number, low: number, high: number, timeZone: string): number {
+	while (high - low > 1) {
+		const mid = Math.floor((low + high) / 2);
+		if (localDayNumber(mid, timeZone) >= day) high = mid;
+		else low = mid;
+	}
+	return high;
+}
+
+/**
+ * The instant the local day containing epochMs began. The offset at local
+ * midnight can differ from the offset now on a DST day; a second pass settles
+ * it. Where DST begins at midnight (Havana, Santiago), there is no 00:00: the
+ * estimate lands in the day before, and the day begins at the change.
+ */
 export function localDayStartMs(epochMs: number, timeZone: string): number {
-	const midnight = localDayNumber(epochMs, timeZone) * DAY_MS;
-	// The offset at local midnight can differ from the offset now on a DST day; a second pass settles it.
-	const first = midnight - offsetMs(midnight, timeZone);
-	return midnight - offsetMs(first, timeZone);
+	const day = localDayNumber(epochMs, timeZone);
+	const midnight = day * DAY_MS;
+	const estimate = midnight - offsetMs(midnight - offsetMs(midnight, timeZone), timeZone);
+	if (localDayNumber(estimate, timeZone) < day) return firstOf(day, estimate, Math.min(epochMs, estimate + MAX_SHIFT_MS), timeZone);
+	if (localDayNumber(estimate - 1, timeZone) === day) return firstOf(day, Math.max(estimate - MAX_SHIFT_MS, epochMs - DAY_MS - MAX_SHIFT_MS), estimate, timeZone);
+	return estimate;
 }
 
 /** Local dates from today through the day that holds the last moment before the reset. */
