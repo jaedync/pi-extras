@@ -2,6 +2,99 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.14 - 2026-10-12
+
+### Changed
+
+- Subagents: `readOnly: true` keeps only tools that are known not to write
+  files or run commands. It drops `powershell` and unknown extension and MCP
+  tools, and it refuses a `tools` list that names another tool.
+- Subagents: a project's `.pi/subagent-models.md` goes into the subagent
+  tool description only when main trusts the project.
+- Subagents: the worktree sandbox lets a child write only its own git data,
+  its own branch and `node_modules/.cache`. The parent's hooks, config,
+  `config.worktree`, other branches and `node_modules/.bin` stay read-only.
+- Subagents: the report's apply command runs git only in the parent's
+  checkout, on a snapshot that main wrote. A nested worktree's command uses
+  its parent worktree's verified git folders.
+- Subagents: the subagents of a worktree child may name a `cwd` only inside
+  that child's worktree.
+- Subagents: a `wait: true` subagent runs in its parent's slot. When it
+  ends, the parent waits for a free slot before it continues.
+- Subagents: `runs.jsonl` is private (mode 0600).
+- Status Plus: header and poll limits use the same window keys, so a
+  warning does not fire twice and a budget matches both. Codex windows are
+  now `five_hour` and `seven_day`, and their reading history starts again.
+- Status Plus: under a virtual model, usage warnings, header limits, rate
+  limit recovery and cache compaction use the routed model. The footer
+  shows "selection → routed".
+
+### Fixed
+
+- Subagents: a worktree child of main that works in a subdirectory uses the
+  trust of the repository's top, not main's decision for the subdirectory.
+- Subagents: a child's `edit` and `write` calls are checked again when they
+  run. Paths with Unicode spaces and Windows paths are checked as Pi
+  resolves them.
+- Subagents: a child's `bash` and `powershell` calls with no timeout get
+  `PI_BASH_DEFAULT_TIMEOUT`.
+- Subagents: main's git commands in a child's worktree use the worktree's
+  verified git folders. Fsmonitor, hooks, automatic gc and submodules are
+  off, and git never follows a `.git` file that the child can write.
+- Subagents: on Linux, main makes a worktree child's branch folders before
+  bwrap binds them.
+- Subagents: a subagent that was stopped and then resumed no longer runs
+  twice, leaves a launch behind or loses the resume message.
+- Subagents: a failed subagent stops its subagents before it ends. Their
+  reports go to the nearest live agent above, or to main.
+- Subagents: a message that resumes a subagent stays in its inbox when the
+  launch fails, is stopped, or the session closes. Mail arrives oldest
+  first.
+- Subagents: agents no longer wait on each other forever. A question that
+  would close a loop is refused, and an asker waits only on agents that can
+  still answer.
+- Subagents: `maxConcurrent` now holds for resumed sessions, woken parents
+  and answered askers. Main can resume a grandchild, as the docs said.
+- Subagents: `/subagents stats` no longer counts a run two times.
+- Subagents: a worktree report no longer stages the worktree's files. A
+  helper in its lead's worktree no longer tells the lead to delete it.
+- Subagents: a `cwd` whose real path has a control character is refused.
+- Subagents: when a child ends before its subagents, their reports give
+  their own apply commands, so their later changes are not lost.
+- Subagents: a fallback model gets its own thinking level. A Claude Code
+  proxy turn-limit failure moves the run to a fallback model.
+- Subagents: smaller fixes to restore, group hold, fork digest, widget
+  depth, inspector feedback, and the `/subagents stop`, `resume` and
+  `report` messages.
+- Status Plus: a proxy quota answer without its usage-endpoint source no
+  longer replaces readings less than 30 minutes old. Windows that the answer
+  leaves out stay until their reset. They turn approximate when they are
+  more than 30 minutes old.
+- Status Plus: approximate readings show `~` before the percent in the
+  footer (for example `7d ~96%`). The `usage` tool marks them
+  `approximate`. They fire no warnings, have no dollar figures, and record
+  no granted reset.
+- Status Plus: a shared limit window that has no sample time comes from an
+  older installed copy. It shows as approximate, and a partial proxy answer
+  does not keep it.
+- Status Plus: a Codex `limit_reached` blocks only the full window.
+- Status Plus: Codex, OpenCode Go and OpenRouter polls obey Retry-After.
+  Status Plus also keeps Retry-After when the shared poll file cannot be
+  written.
+- Usage: a notice lapses when its budget is cleared or changed, when the
+  window falls below the threshold, or when the reset passes. The report
+  marks a window that already reset.
+- Status Plus: a subagent transcript over 50 MB is read in parts, not
+  dropped.
+- Usage: the spend ledger counts compaction, branch summary and cache-warm
+  spend.
+- Status Plus: a time more than 5 minutes ahead is clock skew. It no longer
+  holds polls, snapshots or granted-reset readings.
+- Status Plus: a limit header of `Infinity` gives no percentage.
+- Fixes for the local day start at a DST change, local-engine detection
+  (`0.0.0.0`, `::ffff:`, `.localdomain`), `PI_OFFLINE` for dollar fetches,
+  and `~` in `PI_CODING_AGENT_DIR`.
+
 ## 0.24.13 - 2026-10-12
 
 ### Added
