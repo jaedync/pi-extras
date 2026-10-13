@@ -36,7 +36,7 @@ Status Plus saves the newest poll result for each provider in
 `status-plus-limits/<provider>.json` in the Pi agent directory, with mode
 `0600`: window percentages, reset times, a budget or credit balance, and when
 the last poll was tried. The Pi processes that share the agent directory read
-it, so they poll each provider once between them. It holds no credentials.
+it, so they poll each provider one time between them. It holds no credentials.
 
 It uses your existing provider authentication. Codex fallback reads only the
 configured Pi agent directory's `auth.json` (default `~/.pi/agent/auth.json`),
@@ -474,7 +474,7 @@ While it runs, the bootstrap reports its progress to the host through Hyper-V
 key-value exchange, as the value `PiWindowsUse` under
 `HKLM\SOFTWARE\Microsoft\Virtual Machine\Guest` in the guest. The value holds
 a run id and a status line, and on failure the installer's last output lines,
-never the key. The host reads it to stop a failed install at once.
+never the key. The host reads it to stop a failed install immediately.
 
 Requests to the guest go from the host, without a proxy and without following
 redirects, so the key goes only to the guest's address. This remains an IP/TCP
@@ -505,7 +505,7 @@ with OCR before the restart command is typed; without OCR nothing is typed.
 The restart ends and reruns the logon task, which first stops any server
 still running: the signed-in user can't stop one that has administrator
 rights. A server whose rights don't match `PI_WINDOWS_USE_ELEVATED` is
-reinstalled, once per session, only at the console. A rights mismatch in an
+reinstalled, one time per session, only at the console. A rights mismatch in an
 enhanced session is reported rather than triggering console repair. Shell UI
 restarts and UAC detection are scoped to the server's own Windows session.
 
@@ -703,7 +703,7 @@ result's text instead, stripped of terminal control sequences.
 
 Folded mode (`/tool-display folded on`, off by default) wraps the render of
 Pi's chat container, which it finds in Pi's layout through a widget that draws
-nothing and is removed at once. Each row still renders; the lines of folded
+nothing and is removed immediately. Each row still renders; the lines of folded
 rows are not drawn, and the rows of an open run are drawn inside a rule. The
 figures on a folded line come from Pi's saved messages (token counts and
 timestamps). Nothing is sent or saved, and the model's

@@ -42,7 +42,7 @@ can still conflict.
 | Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; every finished row stays visible, ctrl+o expands them all |
 | Pull Link | `pull_link` tool: give it a link to read posts with their threads, replies and images (X, Bluesky, Threads, Mastodon, Reddit, Hacker News, LinkedIn), GitHub pages, images, any web page, and videos with transcript, thumbnail, comments and frames on request (YouTube, TikTok, Instagram, Vimeo and more) |
 | Copy Blocks | Code blocks and quotes in replies drawn on a background of their own with a `copy` label: one click copies the exact text; `/copy-block` does it from the keyboard |
-| Release Notes | What changed in pi-extras, shown once in the first new session after an update; `/pi-extras changelog` shows it again |
+| Release Notes | What changed in pi-extras, shown one time in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
 
 ## Updates and removal
@@ -73,9 +73,9 @@ the package. Removing it does not remove your credentials or change other packag
 - `STATUS_PLUS_POLL_LIMITS=0`: disable authenticated quota polling while retaining
   recorded usage and response-header limits. `PI_OFFLINE` also suppresses polling.
   As in Pi, only `PI_OFFLINE=1`, `true` or `yes` turns offline mode on.
-  Pi processes that share an agent directory poll each provider once between them
-  and share the result in `PI_CODING_AGENT_DIR/status-plus-limits/`, so a new
-  session shows the last budget at once.
+  Pi processes that share an agent directory poll each provider one time
+  between them and share the result in `PI_CODING_AGENT_DIR/status-plus-limits/`,
+  so a new session shows the last budget immediately.
 - `PI_EXTRAS_USAGE_GUARD=1` or `0`: turn band warnings on or off for one run.
   See below for the persistent setting.
 - `PI_CODING_AGENT_DIR/pi-extras.json` (default `~/.pi/agent/pi-extras.json`):
@@ -436,15 +436,15 @@ rate limits taken from response headers are reported but never warned on.
   These early limits omit the projection and the time estimate.
   The tool rows, popup, and warning text show pace. Pace does not change warning thresholds.
   Estimates use the average rate since the window began, not the last request.
-- Warnings are off by default: only a session budget warns, once, when its
+- Warnings are off by default: only a session budget warns, one time, when its
   window is reached. `/usage warnings on` adds band warnings (90 and 95 by
-  default) and provider blocks. Each fires once per window, threshold and reset
-  cycle, immediately before a model request, as a message appended to context
+  default) and provider blocks. Each fires one time per window, threshold and
+  reset cycle, immediately before a model request, as a message appended to context
   without changing the system prompt or initiating another request. Idle polls
   do not queue warnings for later delivery: the active provider and model family
   are checked again for manual prompts, automated wakeups and queued follow-ups. Obsolete automatic warnings remain in raw history
   but are omitted from requests for models they do not govern, and from every
-  request once their window has reset. Resets reported
+  request after their window has reset. Resets reported
   within ten minutes of each other
   count as one cycle, since proxies recompute them on every fetch. The first
   band is advance notice only. The final message never cuts short work that
@@ -616,7 +616,7 @@ waits 5, 10, 20, 40, then 60 seconds (each ±20% so parallel subagents spread
 out, and never less than the 429's `Retry-After`), for up to
 `transientMaxWaitSeconds` (180 s) per streak, then sends the request again. A
 countdown shows in interactive sessions; Esc cancels, and switching models
-resumes at once with the new model. If the limit outlasts the budget, the run
+resumes immediately with the new model. If the limit outlasts the budget, the run
 ends with guidance. Quota, billing and usage-limit errors are not treated as
 short limits. A limit reported inside an already started stream is recognized
 only by its message text, because Pi keeps no status code or structured reset
@@ -707,7 +707,7 @@ or `/voice setup`.
 
 **Background process.** One daemon per user holds the model and serves every
 Pi session. It starts on the first dictation, exits 15 minutes after the last
-one, and exits sooner once no Pi session is open. The next dictation starts it
+one, and exits sooner when no Pi session is open. The next dictation starts it
 again and loses no audio while it loads.
 
 **Logs.** `PI_VOICE_HOME` keeps three local logs. `provision.log` records
@@ -718,7 +718,7 @@ that voice could not show, for example after `/reload` or `/new`.
 
 **macOS over SSH.** macOS gives SSH sessions a silent microphone, so when Pi
 runs over SSH, recording runs as a short-lived launchd job in your desktop
-session instead. macOS asks once, on the Mac's screen, to allow
+session instead. macOS asks one time, on the Mac's screen, to allow
 `ffmpeg` to use the microphone; this needs Homebrew `ffmpeg`. About the first
 half second of each recording is lost while that job starts.
 
@@ -752,7 +752,7 @@ The editor's top divider says what the agent is doing:
   send the start of a tool call and hold its arguments until the model has
   written them all. While a call has started but none of its arguments came,
   the status stays calm for 2 minutes, as it does while it waits for a first
-  token. Once arguments come, the 10-second rule applies again.
+  token. When arguments come, the 10-second rule applies again.
 - **The clocks:** a stopwatch beside the word shows how long the current step
   has run, in tenths, in the word's color. It restarts for each new request,
   thinking, tool call, tool run and reply; `Still thinking` and the later
@@ -997,7 +997,7 @@ the full list and for what the rewrite does.
   them as written.
 - `/tool-display motion full|reduced`: the reduced setting drops the sweep,
   the running step's breathing and the finish flashes, holds spinners on a
-  still frame, and updates times once a second.
+  still frame, and updates times every second.
 - `/tool-display thinking tail|collapsed|full`: how thinking blocks rest.
 - `/tool-display folded on|off`: one line for each run of work (see above).
 - `/tool-display count calls|steps`: how Status Plus counts tools (see below).
@@ -1040,7 +1040,7 @@ climbs, so `coverage 85%` never fakes a bar, and a finished meter stops
 filling, since the job may still have work after it. When nothing says how
 far along it is, a sweep crosses the band and its latest output line shows
 instead (`▸ 212 passing`). The spinner at its start dims
-to a slow crawl once a log goes quiet. Four jobs fit; the rest give way to
+to a slow crawl when a log goes quiet. Four jobs fit; the rest give way to
 `+2 more`. Click a job's band to open its live log over the full terminal,
 with the same band at the top and buttons (or `c` and `o`) to copy the
 command and the whole log; Esc, `q` or `✕` closes it.
@@ -1102,7 +1102,7 @@ Arguments:
 - `at`: frames at exact times, for example `["4:05", "1:02:30", "95"]` (up
   to 12). This call returns only the frames, with a short heading. Set
   `transcript: true` to get the transcript too. A video of 10 minutes or
-  less is downloaded once at 720p and kept for later calls. For a longer
+  less is downloaded one time at 720p and kept for later calls. For a longer
   video, the tool cuts a 2-second clip at each time, so it does not
   download the full video.
 - `frames`: the number of frames to sample evenly over the video or the
@@ -1294,7 +1294,7 @@ parent or you write to it, and is told first how its last run ended; a peer's
 note can't wake it. A child asks with `expectReply: true`. A question up the
 tree, to main or its parent, waits for the answer, which comes fast because
 the question wakes them. A question to anyone else, a peer or its own
-subagent, returns at once: the answer arrives as a message that wakes the
+subagent, returns immediately: the answer arrives as a message that wakes the
 asker, and its report waits until every agent it asked answers or ends. One
 that ends without answering, or can't resume to answer, hands the asker how
 its run ended. Some agents wait for the asker, through their subagents or an
@@ -1320,9 +1320,9 @@ Messages to main show above the editor until they are in the transcript.
 One that arrives while main works lands at its next turn boundary, and main
 takes one more turn before it stops if it hasn't replied since. Esc doesn't
 drop it: it stays in the transcript for main's next turn. While main
-compacts, mail waits and wakes main once the compaction is done, so no turn
+compacts, mail waits and wakes main after the compaction is done, so no turn
 starts on the context being summarized. A `/compact` that stops main's turn
-leaves the mail that landed in it unanswered, so once the compaction is done
+leaves the mail that landed in it unanswered, so after the compaction is done
 a hidden reminder naming who wrote wakes main to reply.
 What you type to a child directly is recorded for main without waking it.
 Reports from children started in the same run arrive together, as one message.
@@ -1365,7 +1365,7 @@ red above 90, as the footer does for main's context. After a compaction the
 size is `?` until the next reply, and a finished agent keeps its last size,
 which is where a resume starts. What it is doing comes last, so a narrow
 terminal cuts it and keeps the other facts. Names, times, context figures,
-costs and models line up, so what each agent is doing starts in one column; once it has ended, `✓`, `✗` or `■`
+costs and models line up, so what each agent is doing starts in one column; after it has ended, `✓`, `✗` or `■`
 takes the spinner's place. What it is doing moves the way
 main's own spinner does for the same work, so the wait for its model,
 thinking, writing, a tool call being written, a tool that runs, a wait on
@@ -1383,7 +1383,7 @@ first (asking, failed, interrupted), then those still working; finished ones
 give way first. `(expand)` shows as many rows as fit, up to all of them,
 taking at most half of what the editor and footer leave so the transcript
 keeps the rest, and `(collapse)` takes them back; the rows stay expanded until
-then or until the widget empties, once every agent is done and its report has
+then or until the widget empties, when every agent is done and its report has
 reached main. A terminal too short to give the rows more room shows no
 `(expand)`. `(view)`, a click on `+7 more subagents`, or `/subagents` opens
 every agent over the full terminal: the same live rows,
@@ -1613,7 +1613,7 @@ cost it used before the switch still count. When no model is left, the run
 fails and its error says so. Other failures, such as a full context or a bad
 request, fail as before.
 
-**Memory.** A child's session is released when it ends: at once when it
+**Memory.** A child's session is released when it ends: immediately when it
 failed or was stopped, after two quiet minutes when it finished, since a
 follow-up often comes soon. A message to a released child relaunches it from
 its session file with its context, and its inspector reads that file, so a
@@ -1653,7 +1653,7 @@ turns moves off.
 waits there for its background children. Their reports, questions and notes
 go into main's context as it would otherwise settle, with one more turn to
 read them; a child's question to main gets main's answer and the child goes
-on. Main settles once no child is working and nothing waits for it.
+on. Main settles when no child is working and nothing waits for it.
 
 **Reload.** `/reload` does not stop children. A child that works moves to the
 new code at its next turn boundary, as the same run (see **Moving to a new
@@ -1812,7 +1812,7 @@ live. Otherwise all of it is typed, which took about seven minutes, within a
 10-minute input budget. Installation needs internet access in the guest. The
 exception is a reinstall that can't reach the package index: it keeps an
 installed Windows-MCP from the same release line. An install that fails
-stops at once with the guest's error, which the bootstrap reports to the host
+stops immediately with the guest's error, which the bootstrap reports to the host
 through Hyper-V key-value exchange. After that, each call first makes sure the VM
 is usable and repairs what it can, and the result says what it did:
 
@@ -1969,8 +1969,8 @@ unofficial and can break when Kagi changes its pages. Use it in accordance with
 Kagi's terms and your subscription.
 
 Search results are bounded and treated as untrusted source text. A five-minute
-in-memory cache reduces repeated queries. Up to four searches run at once, with
-request starts at least 150 ms apart and at most 30 page requests a minute, so a
+in-memory cache reduces repeated queries. Up to four searches run at the same
+time, with request starts at least 150 ms apart and at most 30 page requests a minute, so a
 batch of searches is fast but a looping agent cannot hammer the account. A search
 that would have to wait past its deadline for that pace fails with a pacing
 error instead. The client uses a **cooperative I/O deadline**;
