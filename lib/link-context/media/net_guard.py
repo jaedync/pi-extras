@@ -194,11 +194,16 @@ class BadProxy(ValueError):
 
 
 class UpstreamFailure(Exception):
-    """The user's proxy failed one request. retry: it could not reach this address, so the next checked one may work."""
+    """The user's proxy failed one request.
 
-    def __init__(self, text, retry=False):
+    retry: it could not reach this address, so the next checked one may work.
+    refused_connect: an HTTP proxy refused CONNECT to this port, so plain http can try the absolute form.
+    """
+
+    def __init__(self, text, retry=False, refused_connect=False):
         super().__init__(text)
         self.retry = retry
+        self.refused_connect = refused_connect
 
 
 def bracketed(address):
@@ -242,7 +247,7 @@ class Upstream:
 
     def __init__(self, url, source):
         try:
-            parts = urlsplit(url.strip())
+            parts = urlsplit(normalized(url))
             port = parts.port
             host = parts.hostname
         except ValueError:
@@ -264,7 +269,7 @@ class Upstream:
 
     @property
     def absolute(self):
-        """An HTTP proxy takes plain http as one absolute-form request; SOCKS takes it through a tunnel."""
+        """An HTTP proxy, which gets CONNECT, and an absolute-form request when it refuses CONNECT for plain http."""
         return self.scheme in ("http", "https")
 
     def authorization(self):
@@ -331,6 +336,9 @@ class Upstream:
             return
         if code == "407":
             raise self.refused_login()
+        if code in ("403", "405"):
+            # A rule for this port (Squid and tinyproxy allow CONNECT to 443 only by default); another address gets the same answer.
+            raise UpstreamFailure(f"the proxy {self.label} answered {printable(status)}", refused_connect=True)
         # A proxy that cannot reach this address answers 502 or 504; the next address may work.
         raise UpstreamFailure(f"the proxy {self.label} answered {printable(status)}", retry=True)
 
@@ -374,19 +382,25 @@ class Upstream:
 
 
 class Routes:
-    """Which of the user's proxies, if any, carries a checked request. linkContext.proxy wins over the variables."""
+    """Which of the user's proxies, if any, carries a checked request, by yt-dlp's rules.
+
+    linkContext.proxy wins over the variables, and NO_PROXY applies only to the
+    variables. A tunnel takes https, else http, else all (yt-dlp copies http to
+    https); plain http takes http, else all. So all is read only when http is missing.
+    """
 
     def __init__(self, explicit=None, environment=None):
         self.explicit = Upstream(explicit, "linkContext.proxy") if explicit else None
         environment = {} if explicit else (environment or {})
-        self.variables = {kind: Upstream(url, f"the {kind.upper()}_PROXY variable")
-                          for kind, url in environment.items() if kind in ("http", "https", "all") and url}
+        kinds = ("http", "https") if environment.get("http") else ("https", "all")
+        self.variables = {kind: Upstream(environment[kind], f"the {kind.upper()}_PROXY variable") for kind in kinds if environment.get(kind)}
         self.no_proxy = environment.get("no", "")
 
     def pick(self, host, port, tunnel):
         if self.explicit:
             return self.explicit
-        upstream = self.variables.get("https" if tunnel else "http") or self.variables.get("all")
+        order = ("https", "http", "all") if tunnel else ("http", "all")
+        upstream = next((self.variables[kind] for kind in order if kind in self.variables), None)
         if upstream and self.bypass(host, port):
             # A NO_PROXY host goes direct, as with any client of these variables; the guard has still checked it.
             return None
@@ -397,6 +411,14 @@ class Routes:
             return False
         no = {"no": self.no_proxy}
         return proxy_bypass_environment(f"{bracketed(host)}:{port}", no) or proxy_bypass_environment(host, no)
+
+
+def normalized(url):
+    """The proxy URL as yt-dlp reads it: http:// when it has no scheme, and socks:// as SOCKS4."""
+    url = url.strip()
+    if "://" not in url:
+        return "http://" + url
+    return "socks4://" + url[len("socks://"):] if url.lower().startswith("socks://") else url
 
 
 def user_routes(explicit):
@@ -465,10 +487,15 @@ class Handler(socketserver.BaseRequestHandler):
         if via is None:
             return connect_any(addresses, port), None
         ordered = ipv4_first(addresses)
-        if url is not None and via.absolute:
-            # One absolute-form request; an error answer from the proxy cannot be told apart from the origin's, so there is no next try.
-            return via.connect(), absolute_target(url, ordered[0], port)
-        return via.open(ordered, port), None
+        try:
+            return via.open(ordered, port), None
+        except UpstreamFailure as error:
+            if url is None or not error.refused_connect:
+                raise
+        # Plain http goes in a tunnel first, so the site gets its own Host header: RFC 9112 tells a proxy to make the
+        # Host of an absolute-form request from the request line, here the checked IP. Only a proxy that refuses the
+        # tunnel gets that form, as one request; its error answer looks like the site's, so there is no next try.
+        return via.connect(), absolute_target(url, ordered[0], port)
 
     def tunnel(self, upstream):
         upstream.settimeout(None)

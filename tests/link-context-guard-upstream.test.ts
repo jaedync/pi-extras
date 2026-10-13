@@ -99,8 +99,12 @@ async function keepAliveOrigin(): Promise<Closable> {
 
 interface FakeHttpProxy extends Closable { readonly lines: string[]; readonly auths: (string | undefined)[]; readonly hosts: (string | undefined)[] }
 
-/** An HTTP proxy that records each request line, Proxy-Authorization and Host, then connects where the line says. */
-async function httpProxy(options: { auth?: string; tls?: { key: string; cert: string } } = {}): Promise<FakeHttpProxy> {
+/**
+ * An HTTP proxy that records each request line, Proxy-Authorization and Host, then connects where the line says.
+ * Like Squid (RFC 9112), it makes the Host of an absolute-form request from the request line. `refuseConnect` answers
+ * every CONNECT with that status, as Squid's default rules do for port 80; `deny` answers a CONNECT to those hosts with 502.
+ */
+async function httpProxy(options: { auth?: string; tls?: { key: string; cert: string }; refuseConnect?: number; deny?: string[] } = {}): Promise<FakeHttpProxy> {
 	const lines: string[] = [];
 	const auths: (string | undefined)[] = [];
 	const hosts: (string | undefined)[] = [];
@@ -113,17 +117,18 @@ async function httpProxy(options: { auth?: string; tls?: { key: string; cert: st
 		lines.push(line);
 		auths.push(field("proxy-authorization"));
 		hosts.push(field("host"));
-		if (options.auth && field("proxy-authorization") !== options.auth) {
-			client.end("HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n");
-			return;
-		}
 		const [method, target, version] = line.split(" ");
 		const url = method === "CONNECT" ? new URL(`http://${target}`) : new URL(target);
-		const upstream = connect(Number(url.port || 80), url.hostname.replace(/^\[|\]$/g, ""));
+		const address = url.hostname.replace(/^\[|\]$/g, "");
+		if (method === "CONNECT" && options.refuseConnect) return void client.end(`HTTP/1.1 ${options.refuseConnect} Refused\r\nContent-Length: 0\r\n\r\n`);
+		if (options.auth && field("proxy-authorization") !== options.auth) return void client.end("HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n");
+		if (method === "CONNECT" && options.deny?.includes(address)) return void client.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+		const upstream = connect(Number(url.port || 80), address);
 		upstream.on("error", () => client.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"));
 		upstream.on("connect", () => {
+			const kept = headers.filter((h) => !/^(?:proxy-|host:)/i.test(h));
 			if (method === "CONNECT") client.write("HTTP/1.1 200 Connection established\r\n\r\n");
-			else upstream.write(`${method} ${url.pathname}${url.search} ${version}\r\n${headers.filter((h) => !/^proxy-/i.test(h)).join("\r\n")}\r\n\r\n`);
+			else upstream.write(`${method} ${url.pathname}${url.search} ${version}\r\nHost: ${url.host}\r\n${kept.join("\r\n")}\r\n\r\n`);
 			splice(client, upstream, read.rest());
 		});
 	};
@@ -297,11 +302,34 @@ test("guard upstream: an http proxy gets each checked request with the checked I
 		],
 	});
 	assert.deepEqual(run.results, ["200 origin /plain?q=1", "200 origin /tunnel"]);
-	assert.deepEqual(proxy.lines, [`GET http://127.0.0.1:${site.port}/plain?q=1 HTTP/1.1`, `CONNECT 127.0.0.1:${site.port} HTTP/1.1`], "the proxy gets the checked address, not the name");
-	assert.equal(proxy.hosts[0], `site.test:${site.port}`, "plain http keeps the original Host");
+	assert.deepEqual(proxy.lines, [`CONNECT 127.0.0.1:${site.port} HTTP/1.1`, `CONNECT 127.0.0.1:${site.port} HTTP/1.1`], "the proxy gets the checked address, not the name");
+	assert.equal(site.hosts[0], `site.test:${site.port}`, "plain http goes in a tunnel, so the site gets the original Host");
 	assert.deepEqual(proxy.auths, [basic(login), basic(login)]);
 	assert.deepEqual(site.hits, ["/plain?q=1", "/tunnel"]);
 	for (const secret of ["p:ss", "p%3Ass", Buffer.from(login).toString("base64")]) assert.equal(run.raw.includes(secret), false, `output shows ${secret}`);
+});
+
+test("guard upstream: when the proxy refuses CONNECT with 403 or 405, plain http goes in absolute form with the checked IP", { skip: SKIP }, async (t) => {
+	const site = await origin();
+	const forbidding = await httpProxy({ refuseConnect: 403 });
+	const unallowed = await httpProxy({ refuseConnect: 405, auth: basic("right:answer") });
+	t.after(async () => {
+		await site.close();
+		await forbidding.close();
+		await unallowed.close();
+	});
+	const base = { allow: [`site.test:${site.port}`], dns: { "site.test": ["127.0.0.1"] } };
+	const plain = await drive({ ...base, proxy: `http://127.0.0.1:${forbidding.port}`, steps: [{ kind: "get", host: "site.test", port: site.port, path: "/abs" }, { kind: "connect", host: "site.test", port: site.port, path: "/tls" }] });
+	assert.equal(plain.results[0], "200 origin /abs");
+	assert.match(plain.results[1], new RegExp(`^502 .*proxy 127\\.0\\.0\\.1:${forbidding.port} answered HTTP/1\\.1 403`), "a tunnel the client asked for gets no fallback");
+	assert.deepEqual(forbidding.lines, [`CONNECT 127.0.0.1:${site.port} HTTP/1.1`, `GET http://127.0.0.1:${site.port}/abs HTTP/1.1`, `CONNECT 127.0.0.1:${site.port} HTTP/1.1`]);
+	assert.equal(forbidding.hosts[1], `site.test:${site.port}`, "the guard still sends the original Host");
+	assert.deepEqual(site.hosts, [`127.0.0.1:${site.port}`], "this proxy makes the Host from the request line: the documented limit");
+	const login = await drive({ ...base, proxy: `http://right:hunter2@127.0.0.1:${unallowed.port}`, steps: [{ kind: "get", host: "site.test", port: site.port, path: "/login" }] });
+	assert.match(login.results[0], new RegExp(`^502 .*proxy 127\\.0\\.0\\.1:${unallowed.port} refused the user name or password`));
+	assert.deepEqual(unallowed.lines, [`CONNECT 127.0.0.1:${site.port} HTTP/1.1`, `GET http://127.0.0.1:${site.port}/login HTTP/1.1`]);
+	assert.equal(login.raw.includes("hunter2"), false);
+	assert.deepEqual(site.hits, ["/abs"]);
 });
 
 test("guard upstream: a private target is refused and never reaches the user's proxy", { skip: SKIP }, async (t) => {
@@ -430,7 +458,7 @@ test("guard upstream: a NO_PROXY host goes direct and is still checked", { skip:
 	});
 	assert.deepEqual(run.results.map((r) => r.split(" ")[0]), ["200", "200", "403", "200"]);
 	assert.deepEqual(run.refused, ["private.test"]);
-	assert.deepEqual(proxy.lines, [`GET http://127.0.0.1:${site.port}/proxied HTTP/1.1`]);
+	assert.deepEqual(proxy.lines, [`CONNECT 127.0.0.1:${site.port} HTTP/1.1`]);
 	assert.deepEqual(site.hits, ["/direct", "/direct-tunnel", "/proxied"]);
 	assert.equal(run.env.no_proxy, null);
 	assert.equal(run.env.NO_PROXY, null);
@@ -455,12 +483,35 @@ test("guard upstream: HTTPS_PROXY takes tunnels and HTTP_PROXY plain http, and l
 	};
 	const fromEnv = await drive(base);
 	assert.deepEqual(fromEnv.results, ["200 origin /a", "200 origin /b"]);
-	assert.deepEqual(plain.lines, [`GET http://127.0.0.1:${site.port}/a HTTP/1.1`]);
+	assert.deepEqual(plain.lines, [`CONNECT 127.0.0.1:${site.port} HTTP/1.1`]);
+	assert.deepEqual(site.hits, ["/a", "/b"]);
 	assert.deepEqual(tls.lines, [`CONNECT 127.0.0.1:${site.port} HTTP/1.1`]);
 	const fromConfig = await drive({ ...base, proxy: `http://127.0.0.1:${chosen.port}` });
 	assert.deepEqual(fromConfig.results, ["200 origin /a", "200 origin /b"]);
 	assert.equal(chosen.lines.length, 2);
 	assert.equal(plain.lines.length + tls.lines.length, 2, "the variables' proxies got nothing more");
+	// yt-dlp uses the http proxy for https when no https proxy is set; the guard must not send those tunnels direct.
+	const httpOnly = await drive({ ...base, env: { HTTP_PROXY: `http://127.0.0.1:${plain.port}` } });
+	assert.deepEqual(httpOnly.results, ["200 origin /a", "200 origin /b"]);
+	assert.equal(plain.lines.length, 3, "the tunnel went through the HTTP_PROXY proxy too");
+});
+
+test("guard upstream: proxy URLs that yt-dlp accepts work: no scheme is http, socks:// is SOCKS4, and an unused ALL_PROXY is not read", { skip: SKIP }, async (t) => {
+	const site = await origin();
+	const proxy = await httpProxy();
+	const socks = await socks4();
+	t.after(async () => {
+		await site.close();
+		await proxy.close();
+		await socks.close();
+	});
+	const base = { allow: [`site.test:${site.port}`], dns: { "site.test": ["127.0.0.1"] }, steps: [{ kind: "connect", host: "site.test", port: site.port, path: "/c" } as const] };
+	const bare = await drive({ ...base, env: { HTTPS_PROXY: `127.0.0.1:${proxy.port}` } });
+	const gnome = await drive({ ...base, env: { all_proxy: `socks://reader@127.0.0.1:${socks.port}` } });
+	const unused = await drive({ ...base, env: { HTTP_PROXY: `http://127.0.0.1:${proxy.port}`, ALL_PROXY: "gopher://127.0.0.1:70" } });
+	for (const run of [bare, gnome, unused]) assert.deepEqual(run.results, ["200 origin /c"], run.setup);
+	assert.equal(proxy.lines.length, 2);
+	assert.deepEqual(socks.targets, [`127.0.0.1:${site.port} reader`]);
 });
 
 test("guard upstream: an unsupported scheme or a bad proxy URL stops the call before any request", { skip: SKIP }, async (t) => {
@@ -469,13 +520,12 @@ test("guard upstream: an unsupported scheme or a bad proxy URL stops the call be
 	const steps: Step[] = [{ kind: "get", host: "127.0.0.1", port: site.port, path: "/never" }];
 	const bad: { proxy?: string; env?: Record<string, string> }[] = [
 		{ proxy: "ftp://user:hunter2@127.0.0.1:21" },
-		{ proxy: "user:hunter2@127.0.0.1:8080" },
-		{ proxy: "127.0.0.1:8080" },
+		{ proxy: "socks6://user:hunter2@127.0.0.1:1080" },
 		{ proxy: "http://[::1" },
 		{ proxy: "http://user:hunter2@:8080" },
 		{ proxy: "http://user:hunter2@127.0.0.1:99999" },
 		{ env: { HTTPS_PROXY: "gopher://user:hunter2@127.0.0.1:70" } },
-		{ env: { ALL_PROXY: "socks://user:hunter2@127.0.0.1:1080" } },
+		{ env: { ALL_PROXY: "file://user:hunter2@127.0.0.1/x" } },
 	];
 	for (const config of bad) {
 		const run = await drive({ ...config, allow: [`127.0.0.1:${site.port}`], steps });
@@ -542,7 +592,7 @@ test("guard upstream: an https proxy gets TLS that is verified, and each answer 
 	};
 	const trusted = await drive({ ...base, env: { SSL_CERT_FILE: cert.certFile } });
 	assert.deepEqual(trusted.results, [`200 ${1024 * 1024}`, "200 origin /plain", "200 kept"]);
-	assert.deepEqual(proxy.lines.slice(0, 2), [`CONNECT 127.0.0.1:${site.port} HTTP/1.1`, `GET http://127.0.0.1:${site.port}/plain HTTP/1.1`]);
+	assert.deepEqual(proxy.lines.slice(0, 2), [`CONNECT 127.0.0.1:${site.port} HTTP/1.1`, `CONNECT 127.0.0.1:${site.port} HTTP/1.1`]);
 	const untrusted = await drive(base);
 	for (const result of untrusted.results) assert.match(result, new RegExp(`^502 .*proxy 127\\.0\\.0\\.1:${proxy.port}`));
 	assert.equal(proxy.lines.length, 3, "an unverified proxy gets no request");
@@ -569,7 +619,7 @@ test("yt-dlp: with linkContext.proxy set, its requests go through that proxy and
 	});
 	assert.equal(result.code, 1, result.out);
 	assert.match(JSON.parse(result.out).error, /^Refusing a private or local address: 127\.0\.0\.1/);
-	assert.ok(proxy.lines.includes(`GET http://127.0.0.1:${port}/watch HTTP/1.1`), proxy.lines.join("\n"));
+	assert.ok(proxy.lines.includes(`CONNECT 127.0.0.1:${port} HTTP/1.1`), proxy.lines.join("\n"));
 	assert.ok(proxy.auths.every((auth) => auth === basic("user:hunter2")));
 	assert.deepEqual(inside.hits, [], "the redirect target was never requested");
 	assert.equal(result.out.includes("hunter2"), false);
