@@ -7,6 +7,7 @@
 import {
 	pollCodexUsage,
 	pollOpenCodeGoUsage,
+	refused,
 	type ProviderUsage,
 	type RegistryLike,
 } from "./provider-limits.ts";
@@ -22,6 +23,8 @@ import {
 	type LimitEntry,
 } from "./status-plus-logic.ts";
 import { dateMs, resetTimeMs } from "./date-format.ts";
+
+export { PollRefused, retryAfterMs } from "./provider-limits.ts";
 
 export interface PollerContext {
 	model?: { provider: string; baseUrl?: string };
@@ -253,31 +256,6 @@ export function openCodeGoEntries(usage: ProviderUsage): LimitEntry[] {
 	}));
 }
 
-/** The longest wait a provider's Retry-After can impose; a wrong header must not stop polling for days. */
-const MAX_RETRY_AFTER_MS = 60 * 60_000;
-
-/** A poll the provider answered with an error status, such as 429 when its usage endpoint is rate-limited. */
-export class PollRefused extends Error {
-	readonly status: number;
-	readonly retryAfterMs: number | undefined;
-	constructor(status: number, retryAfterMs?: number) {
-		super(`HTTP ${status}`);
-		this.name = "PollRefused";
-		this.status = status;
-		this.retryAfterMs = retryAfterMs;
-	}
-}
-
-/** Retry-After in milliseconds, from delta seconds or an HTTP date; undefined when absent, zero or unreadable. */
-export function retryAfterMs(value: string | null | undefined, now = Date.now()): number | undefined {
-	if (!value) return undefined;
-	const seconds = Number(value);
-	const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - now;
-	return Number.isFinite(ms) && ms > 0 ? Math.min(ms, MAX_RETRY_AFTER_MS) : undefined;
-}
-
-const refused = (response: Response): PollRefused => new PollRefused(response.status, retryAfterMs(response.headers.get("retry-after")));
-
 /** Anthropic OAuth windows are keyed five_hour, seven_day, seven_day_<family>. */
 const OAUTH_WINDOW_KEY = /^(five_hour|seven_day)(_[a-z0-9_]+)?$/;
 
@@ -365,7 +343,7 @@ export async function pollOpenRouterCredits(ctx: PollerContext): Promise<LimitEn
 		headers: { authorization: `Bearer ${apiKey}` },
 		signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
 	});
-	if (!response.ok) return undefined;
+	if (!response.ok) throw refused(response);
 	const body = (await response.json()) as { data?: { total_credits?: unknown; total_usage?: unknown } };
 	const total = body.data?.total_credits;
 	const used = body.data?.total_usage;

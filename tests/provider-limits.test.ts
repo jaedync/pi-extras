@@ -14,6 +14,7 @@ import {
 	pollCodexUsage,
 	pollOpenCodeGoUsage,
 } from "../lib/provider-limits.ts";
+import { PollRefused, pollOpenRouterCredits } from "../lib/status-plus-limits.ts";
 
 const codexBody = {
 	plan_type: "Plus",
@@ -121,7 +122,7 @@ test("codex credentials come from the auth file when the registry has no api key
 	}
 });
 
-test("pollCodexUsage sends both credentials and gives up on a non-2xx", async () => {
+test("pollCodexUsage sends both credentials and reports a non-2xx as a refusal", async () => {
 	const seen: Array<{ url: string; headers: Record<string, string> }> = [];
 	const fetchOk = async (url: string, init?: RequestInit) => {
 		seen.push({ url, headers: init?.headers as Record<string, string> });
@@ -140,7 +141,8 @@ test("pollCodexUsage sends both credentials and gives up on a non-2xx", async ()
 		assert.equal(seen[0].headers.authorization, "Bearer tok");
 		assert.equal(seen[0].headers["chatgpt-account-id"], "acct");
 		const fetchDenied = async () => jsonResponse({}, 403);
-		assert.equal(await pollCodexUsage(registry, fetchDenied, authFile), undefined);
+		await assert.rejects(pollCodexUsage(registry, fetchDenied, authFile), (error: unknown) =>
+			error instanceof PollRefused && error.status === 403 && error.retryAfterMs === undefined);
 		const unauthenticated = { async getApiKeyForProvider() { return undefined; } };
 		assert.equal(await pollCodexUsage(unauthenticated, fetchOk, join(dir, "missing.json")), undefined);
 	} finally {
@@ -154,4 +156,25 @@ test("pollOpenCodeGoUsage needs a registry api key", async () => {
 	const usage = await pollOpenCodeGoUsage({ async getApiKeyForProvider() { return "go-key"; } }, fetchOk);
 	assert.equal(usage?.windows.length, 2);
 	assert.equal(usage?.windows[0].exhausted, true);
+});
+
+test("every usage poller passes the provider's Retry-After on", async () => {
+	const tooMany = async () => new Response("{}", { status: 429, headers: { "retry-after": "120" } });
+	const refused = (error: unknown) => error instanceof PollRefused && error.status === 429 && error.retryAfterMs === 120_000;
+	const registry = { async getApiKeyForProvider() { return "test-key"; } };
+	await assert.rejects(pollOpenCodeGoUsage(registry, tooMany), refused);
+	const savedToken = process.env.PI_CODEX_ACCESS_TOKEN;
+	const savedAccount = process.env.PI_CODEX_ACCOUNT_ID;
+	process.env.PI_CODEX_ACCESS_TOKEN = "env-token";
+	process.env.PI_CODEX_ACCOUNT_ID = "env-account";
+	const original = globalThis.fetch;
+	globalThis.fetch = tooMany;
+	try {
+		await assert.rejects(pollCodexUsage(undefined, tooMany), refused);
+		await assert.rejects(pollOpenRouterCredits({ modelRegistry: { ...registry, getProvider: () => undefined } }), refused);
+	} finally {
+		globalThis.fetch = original;
+		if (savedToken === undefined) delete process.env.PI_CODEX_ACCESS_TOKEN; else process.env.PI_CODEX_ACCESS_TOKEN = savedToken;
+		if (savedAccount === undefined) delete process.env.PI_CODEX_ACCOUNT_ID; else process.env.PI_CODEX_ACCOUNT_ID = savedAccount;
+	}
 });
