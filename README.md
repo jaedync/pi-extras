@@ -980,10 +980,13 @@ location instead of a step.
 To time each step, Tool Display adds a marker line around each step before the
 command runs and removes the markers from the output before Pi or the model
 sees it. The model's command and the output it reads are unchanged. Commands
-Tool Display can't split safely (heredocs, `if` and `for` blocks, background
-`&`, `exit`, `set`, `alias`, `eval`, or a pipeline continued on the next line) run
-exactly as written. See
-[security and privacy](docs/security.md#tool-display) for what the rewrite does.
+Tool Display can't split safely run exactly as written. Examples are
+heredocs, `if`, `for`, `while` and `case` blocks, function definitions and
+background `&`. Others are `exit`, `set` and other commands that use the
+shell's state, reads of `$LINENO` or `$_`, and any mention of `alias` or
+`eval`. A pipeline continued on the next line and a list of more than 12
+steps also run as written. See [security and privacy](docs/security.md#tool-display) for
+the full list and for what the rewrite does.
 
 `/tool-display` switches it:
 
@@ -1994,7 +1997,8 @@ ignored by git, and uploaded now and then rather than with each release (see
 [CONTRIBUTING.md](CONTRIBUTING.md#periodic-upkeep)).
 
 Tests use synthetic credentials and isolated homes, not live accounts. The test
-runner bounds each suite to two minutes. The installation smoke test uses Pi's
+runner bounds each suite to two minutes, five minutes when `CI` is set, or ten
+minutes with `PI_TEST_SERIAL=1`. The installation smoke test uses Pi's
 real package manager and an isolated home; it never starts a model request.
 No build step or install lifecycle hook is needed. Pi loads TypeScript directly.
 Runtime dependencies are installed by Pi; no global extension npm install is needed.

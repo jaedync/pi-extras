@@ -726,6 +726,8 @@ The splitter is conservative. These commands run exactly as written:
 - heredocs, `if`, `for`, `while` and `case` blocks, and background `&`
 - function definitions, and `exit`, `set` and other commands that depend on the
   shell's own state
+- any mention of `PIPESTATUS`, `LINENO`, `BASH_LINENO`, `BASH_COMMAND` or `$_`,
+  because the rewrite changes their values
 - any mention of `alias` or `eval`
 - a pipeline continued on the next line, and a step that ends in a bare backslash
 - lists longer than 12 steps
