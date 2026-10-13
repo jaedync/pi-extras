@@ -266,8 +266,9 @@ The first video link downloads the media tools into
 - uv, when the tool finds no recent uv: from `github.com/astral-sh/uv`
   releases, pinned and SHA-256 checked.
 - Python 3.12 through uv, and the newest `yt-dlp`, `youtube-transcript-api`,
-  `imageio-ffmpeg`, `pillow` and `bgutil-ytdlp-pot-provider` from PyPI. These
-  versions are not pinned.
+  `imageio-ffmpeg` and `pillow` from PyPI. The tool does not pin these
+  versions. The `bgutil-ytdlp-pot-provider` plugin from PyPI gets the version
+  of the token provider below.
 - The bgutil token provider: the latest release tag from GitHub's API, a
   `git clone` of that tag, `npm ci --ignore-scripts` and a TypeScript build.
   It runs with the Node that runs Pi.
