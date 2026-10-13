@@ -390,7 +390,8 @@ the room is too small, Pi's own compaction runs with the reason
   long caches.
 
 **Providers.** Anthropic Messages, OpenAI Responses (including Codex and
-Azure), Google Generative AI and Vertex. Other APIs use Pi's compaction.
+Azure), Google Generative AI and Vertex, and OpenAI chat completions. Other
+APIs use Pi's compaction.
 Tested with Pi 1.0.0. If another extension changes requests in
 `context_with_system`, `before_provider_headers` or `before_provider_request`,
 load it before this one.
