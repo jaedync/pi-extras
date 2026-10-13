@@ -102,9 +102,8 @@ Usage Guard writes these files:
 
 Warnings and `/usage` snapshots are injected into the model's context as
 ordinary messages. So they are sent to your provider with the next request,
-like any other conversation text. They contain window labels, percentages and
-reset times, and snapshots also contain dollar figures. They contain no
-credentials.
+like any other conversation text. They contain window labels, percentages,
+reset times and, in snapshots, dollar figures. They contain no credentials.
 Idle polls update proximity but do not persist a fired warning or queue instructions
 for a future model. Delivery checks the active provider/model family at the shared
 request-context boundary, including automated wakeups and queued follow-ups. New
@@ -256,8 +255,8 @@ loopback, link-local, multicast and reserved addresses. It checks each
 redirect in the same way and follows at most 5. It does not resolve DNS for
 these requests, so a public name that points to a private address passes. It
 sends `GITHUB_TOKEN` or `GH_TOKEN` only to GitHub's API. It refuses a response
-body larger than 8 MB. Results stay in memory for 30 minutes. Page text, posts
-and comments can contain malicious instructions.
+body larger than 8 MB. It keeps at most 16 results in memory, each for at most
+30 minutes. Page text, posts and comments can contain malicious instructions.
 
 The first video link downloads the media tools into
 `~/.cache/pi-extras/link-context` (or under `XDG_CACHE_HOME`, or
