@@ -454,7 +454,6 @@ def cmd_compose(req):
 
 # The commands that make requests to the link's hosts.
 NETWORK_COMMANDS = ("info", "captions", "download")
-PROXY_NAMES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 
 
 def load_guard():
@@ -468,14 +467,15 @@ def load_guard():
 
 
 def guard_network(req):
-    """Sends every request of this call through the guard proxy, unless the user set a proxy.
+    """Sends every request of this call through the guard proxy, and then through the user's proxy if one is set.
 
-    A proxy the user set (linkContext.proxy, or a proxy variable) decides itself which hosts it reaches.
+    The guard reads the user's proxy (linkContext.proxy, else the proxy variables)
+    first, then takes its place, so no client reaches that proxy around the check.
+    A proxy setting that the guard cannot use stops the call (BadProxy).
     """
-    if req.get("proxy") or any(os.environ.get(name) for name in PROXY_NAMES):
-        return None
     guard = load_guard()
-    proxy = guard.start(req.get("testAllowTargets") or ())
+    routes = guard.user_routes(req.get("proxy"))
+    proxy = guard.start(req.get("testAllowTargets") or (), routes)
     guard.take_over_environment(proxy)
     req["proxy"] = proxy
     return guard
@@ -498,7 +498,6 @@ def main():
     try:
         req = json.loads(sys.stdin.read() or "{}")
         if sys.argv[1] in NETWORK_COMMANDS:
-            # Also with the user's own proxy: an external downloader would not use it either.
             restrict_downloaders()
             guard = guard_network(req)
         reply, code = COMMANDS[sys.argv[1]](req), 0
