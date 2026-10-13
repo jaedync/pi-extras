@@ -7,7 +7,9 @@ const result = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-script
   encoding: 'utf8', timeout: 30000,
 });
 assert.equal(result.status, 0, result.stderr);
-const files = JSON.parse(result.stdout)[0].files;
+const packed = JSON.parse(result.stdout);
+// npm 11 prints a list of packages; npm 12 prints an object keyed by package name.
+const files = (Array.isArray(packed) ? packed[0] : Object.values(packed)[0]).files;
 const roots = new Set(['extensions', 'lib', 'themes', 'docs', 'licenses']);
 const top = new Set(['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'THIRD_PARTY.md']);
 for (const { path } of files) {
