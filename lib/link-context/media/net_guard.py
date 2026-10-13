@@ -125,13 +125,39 @@ def copy(sockets, pairs):
         selector.close()
 
 
-def split_target(target, default_port):
-    """host:port or [v6]:port from a CONNECT line."""
+def split_target(target):
+    """The host and the port text from a CONNECT line: host:port or [v6]:port."""
     if target.startswith("["):
         host, _, rest = target[1:].partition("]")
-        return host, int(rest.lstrip(":") or default_port)
+        return host, rest.lstrip(":")
     host, _, port = target.partition(":")
-    return host, int(port or default_port)
+    return host, port
+
+
+def port_number(text, default):
+    """None when the port is not a number from 1 to 65535; a socket call would raise OverflowError on it."""
+    if not text:
+        return default
+    if not (text.isascii() and text.isdigit()):
+        return None
+    return int(text) if 0 < int(text) < 65536 else None
+
+
+def request_target(method, target):
+    """The URL (None for CONNECT), host and port of a request line, with port None when it is not usable.
+
+    ValueError for a URL that urlsplit cannot read.
+    """
+    if method == "CONNECT":
+        host, port = split_target(target)
+        return None, host, port_number(port, 443)
+    url = urlsplit(target)
+    host = url.hostname or ""
+    try:
+        port = url.port
+    except ValueError:
+        return url, host, None
+    return url, host, 80 if port is None else port_number(str(port), 80)
 
 
 def read_head(sock):
@@ -263,8 +289,9 @@ class Upstream:
         self.user = None if parts.username is None else unquote(parts.username)
         self.password = unquote(parts.password or "")
         self.label = f"{bracketed(host)}:{self.port}"
-        if self.scheme.startswith("socks5") and max(len((self.user or "").encode()), len(self.password.encode())) > 255:
-            raise BadProxy(f"The SOCKS5 proxy in {source} has a user name or password longer than 255 bytes.")
+        # RFC 1929: a user name of 1 to 255 bytes, a password of up to 255 bytes.
+        if self.scheme.startswith("socks5") and self.user is not None and not (0 < len(self.user.encode()) < 256 and len(self.password.encode()) < 256):
+            raise BadProxy(f"The SOCKS5 proxy in {source} needs a user name of 1 to 255 bytes and a password of up to 255 bytes.")
         self.tls = ssl.create_default_context() if self.scheme == "https" else None
 
     @property
@@ -361,6 +388,8 @@ class Upstream:
             reason = SOCKS5_ERRORS.get(code, f"error {code}")
             raise UpstreamFailure(f"the proxy {self.label} could not connect to {address}: {reason}", retry=code not in SOCKS5_FINAL)
         # The proxy's bound address comes before the tunnel's first byte.
+        if kind not in (1, 3, 4):
+            raise UpstreamFailure(f"the proxy {self.label} sent an unknown SOCKS5 address type {kind}")
         size = {1: 4, 4: 16}.get(kind)
         receive_exact(sock, (size if size is not None else receive_exact(sock, 1)[0]) + 2)
 
@@ -455,10 +484,11 @@ class Handler(socketserver.BaseRequestHandler):
             # urllib sends ftp:// through an HTTP proxy too; only plain http is forwarded here.
             return self.reply("403 Forbidden", f"pull_link's proxy forwards only http, not {target.split(':', 1)[0][:20]}")
         try:
-            url = None if method == "CONNECT" else urlsplit(target)
-            host, port = split_target(target, 443) if url is None else (url.hostname or "", url.port or 80)
+            url, host, port = request_target(method, target)
         except ValueError:
             return self.reply("403 Forbidden", f"pull_link refused a private or local address: {target[:200]}")
+        if port is None:
+            return self.reply("400 Bad Request", "pull_link's proxy needs a port from 1 to 65535")
         try:
             addresses = self.server.guard.resolve(host, port)
         except Unresolved:
@@ -498,7 +528,8 @@ class Handler(socketserver.BaseRequestHandler):
         return via.connect(), absolute_target(url, ordered[0], port)
 
     def tunnel(self, upstream):
-        upstream.settimeout(None)
+        # Not None: with an https proxy, select() can report part of a TLS record, and recv() then waits for the rest.
+        upstream.settimeout(IDLE_TIMEOUT)
         self.request.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
         copy([self.request, upstream], {self.request: upstream, upstream: self.request})
 
@@ -530,7 +561,6 @@ class Handler(socketserver.BaseRequestHandler):
         if via and response.split(" ", 2)[1:2] == ["407"]:
             return self.reply("502 Bad Gateway", f"pull_link's proxy could not reach {url.hostname}: {via.refused_login()}")
         self.request.sendall(closing(response))
-        upstream.settimeout(None)
         # The client is watched too: when it closes, a keep-alive upstream no longer holds this thread.
         copy([upstream, self.request], {upstream: self.request, self.request: None})
 

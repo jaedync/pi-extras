@@ -140,7 +140,7 @@ async function httpProxy(options: { auth?: string; tls?: { key: string; cert: st
 interface FakeSocks extends Closable { readonly greetings: number[][]; readonly logins: string[]; readonly targets: string[] }
 
 /** A SOCKS5 proxy (RFC 1928, RFC 1929) that records each greeting, login and target, and refuses the targets in `deny`. */
-async function socks5(options: { login?: string; deny?: string[] } = {}): Promise<FakeSocks> {
+async function socks5(options: { login?: string; deny?: string[]; bound?: 1 | 3 | 4 | 9 } = {}): Promise<FakeSocks> {
 	const greetings: number[][] = [];
 	const logins: string[] = [];
 	const targets: string[] = [];
@@ -168,7 +168,9 @@ async function socks5(options: { login?: string; deny?: string[] } = {}): Promis
 		const port = (await read.take(2)).readUInt16BE(0);
 		const host = type === 1 ? [...raw].join(".") : type === 4 ? Array.from({ length: 8 }, (_, i) => raw.readUInt16BE(i * 2).toString(16)).join(":") : `name ${raw.toString()}`;
 		targets.push(`${host}:${port}`);
-		const reply = (code: number) => Buffer.from([5, code, 0, 1, 0, 0, 0, 0, 0, 0]);
+		// The bound address in the reply has the type that the test asks for: IPv4, a name or IPv6.
+		const bound = options.bound === 3 ? Buffer.from([3, 13, ...Buffer.from("proxy.example")]) : options.bound === 4 ? Buffer.from([4, ...Buffer.alloc(16)]) : Buffer.from([options.bound ?? 1, 0, 0, 0, 0]);
+		const reply = (code: number) => Buffer.concat([Buffer.from([5, code, 0]), bound, Buffer.from([0x1f, 0x90])]);
 		// 4 is "host unreachable": the guard should try its next checked address.
 		if (options.deny?.includes(host)) return void client.end(reply(4));
 		const upstream = connect(port, host);
@@ -419,6 +421,14 @@ test("guard upstream: SOCKS4a gets the checked IPv4 address and the user id, and
 	});
 	assert.deepEqual(run.results, ["200 origin /four"]);
 	assert.deepEqual(socks.targets, [`127.0.0.1:${site.port} reader`]);
+	const six = await drive({
+		proxy: `socks4://127.0.0.1:${socks.port}`,
+		allow: [`six.test:${site.port}`],
+		dns: { "six.test": ["::1"] },
+		steps: [{ kind: "connect", host: "six.test", port: site.port, path: "/six" }],
+	});
+	assert.match(six.results[0], /^502 .*cannot reach the IPv6 address ::1/);
+	assert.equal(socks.targets.length, 1, "the SOCKS4 proxy got no request for the IPv6 address");
 });
 
 test("guard upstream: IPv4 goes first, and the next checked address is tried when the proxy cannot reach one", { skip: SKIP }, async (t) => {
@@ -436,6 +446,52 @@ test("guard upstream: IPv4 goes first, and the next checked address is tried whe
 	});
 	assert.deepEqual(run.results, ["200 origin /retry"]);
 	assert.deepEqual(socks.targets, [`127.0.0.3:${site.port}`, `127.0.0.1:${site.port}`]);
+});
+
+test("guard upstream: an HTTP proxy's 502 to a CONNECT makes the guard try the next checked address", { skip: SKIP }, async (t) => {
+	const site = await origin();
+	const proxy = await httpProxy({ deny: ["127.0.0.3"] });
+	t.after(async () => {
+		await site.close();
+		await proxy.close();
+	});
+	const run = await drive({
+		proxy: `http://127.0.0.1:${proxy.port}`,
+		allow: [`multi.test:${site.port}`],
+		dns: { "multi.test": ["127.0.0.3", "127.0.0.1"] },
+		steps: [{ kind: "connect", host: "multi.test", port: site.port, path: "/retry" }],
+	});
+	assert.deepEqual(run.results, ["200 origin /retry"]);
+	assert.deepEqual(proxy.lines, [`CONNECT 127.0.0.3:${site.port} HTTP/1.1`, `CONNECT 127.0.0.1:${site.port} HTTP/1.1`]);
+});
+
+test("guard upstream: a SOCKS5 reply with a name or an IPv6 bound address is read whole, and an unknown type is a 502", { skip: SKIP }, async (t) => {
+	const site = await origin();
+	const named = await socks5({ bound: 3 });
+	const six = await socks5({ bound: 4 });
+	const odd = await socks5({ bound: 9 });
+	t.after(async () => {
+		await site.close();
+		await named.close();
+		await six.close();
+		await odd.close();
+	});
+	for (const socks of [named, six]) {
+		const run = await drive({
+			proxy: `socks5://127.0.0.1:${socks.port}`,
+			allow: [`site.test:${site.port}`],
+			dns: { "site.test": ["127.0.0.1"] },
+			steps: [{ kind: "connect", host: "site.test", port: site.port, path: "/bound" }],
+		});
+		assert.deepEqual(run.results, ["200 origin /bound"]);
+	}
+	const run = await drive({
+		proxy: `socks5://127.0.0.1:${odd.port}`,
+		allow: [`site.test:${site.port}`],
+		dns: { "site.test": ["127.0.0.1"] },
+		steps: [{ kind: "connect", host: "site.test", port: site.port, path: "/bound" }],
+	});
+	assert.match(run.results[0], new RegExp(`^502 .*proxy 127\\.0\\.0\\.1:${odd.port} sent an unknown SOCKS5 address type 9`));
 });
 
 test("guard upstream: a NO_PROXY host goes direct and is still checked", { skip: SKIP }, async (t) => {
@@ -514,6 +570,20 @@ test("guard upstream: proxy URLs that yt-dlp accepts work: no scheme is http, so
 	assert.deepEqual(socks.targets, [`127.0.0.1:${site.port} reader`]);
 });
 
+test("guard upstream: a port outside 1 to 65535 is a 400, with no traceback", { skip: SKIP }, async (t) => {
+	const proxy = await httpProxy();
+	t.after(proxy.close);
+	const run = await drive({
+		proxy: `http://127.0.0.1:${proxy.port}`,
+		allow: ["site.test:70000", "site.test:0"],
+		dns: { "site.test": ["127.0.0.1"] },
+		steps: [{ kind: "connect", host: "site.test", port: 70000, path: "/" }, { kind: "connect", host: "site.test", port: 0, path: "/" }],
+	});
+	for (const result of run.results) assert.match(result, /^400 .*port/);
+	assert.doesNotMatch(run.raw, /Traceback/);
+	assert.deepEqual(proxy.lines, []);
+});
+
 test("guard upstream: an unsupported scheme or a bad proxy URL stops the call before any request", { skip: SKIP }, async (t) => {
 	const site = await origin();
 	t.after(site.close);
@@ -521,6 +591,7 @@ test("guard upstream: an unsupported scheme or a bad proxy URL stops the call be
 	const bad: { proxy?: string; env?: Record<string, string> }[] = [
 		{ proxy: "ftp://user:hunter2@127.0.0.1:21" },
 		{ proxy: "socks6://user:hunter2@127.0.0.1:1080" },
+		{ proxy: "socks5://:hunter2@127.0.0.1:1080" },
 		{ proxy: "http://[::1" },
 		{ proxy: "http://user:hunter2@:8080" },
 		{ proxy: "http://user:hunter2@127.0.0.1:99999" },
