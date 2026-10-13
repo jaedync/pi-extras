@@ -371,6 +371,8 @@ export function warningMessage(warning: Warning, config: GuardConfig, now: numbe
 	return `Usage warning: ${cause}${reset}${pace}${codexNote} ${guidance(warning, timing, config)}${scopeNote(warning)}`;
 }
 
+/** A reading this much older than its snapshot was kept from an earlier poll. */
+const KEPT_READING_MS = 60_000;
 const APPROXIMATE_SOURCE = "from Claude Code's last response";
 const APPROXIMATE_NOTE = "Limits marked approximate come from Claude Code's last response, because the usage endpoint did not answer. " +
 	"They can lag or read high, fire no threshold warnings, and have no dollar figures.";
@@ -394,6 +396,8 @@ export interface UsageReportLimit {
 	budgetPct?: number;
 	/** Set when the reading is not the usage endpoint's. */
 	approximate?: string;
+	/** Set when the reading is older than its snapshot: a poll that could not read the window kept it. */
+	readingAgeSeconds?: number;
 	reset?: ResetTiming;
 	pace?: UsagePace;
 	dollars?: EntryDollars;
@@ -502,7 +506,8 @@ export function usageReport(
 		snapshotAgeSeconds[provider] = Math.max(0, Math.round((now - snapshot.atMs) / 1000));
 		for (const entry of snapshot.entries) {
 			const limit = reportLimit(provider, entry, model, config, budget, now, timeZone, dollars?.inputs);
-			if (limit.applies || includeAll) limits.push(limit);
+			const kept = entry.sampledMs !== undefined && snapshot.atMs - entry.sampledMs > KEPT_READING_MS;
+			if (limit.applies || includeAll) limits.push(kept ? { ...limit, readingAgeSeconds: Math.max(0, Math.round((now - entry.sampledMs!) / 1000)) } : limit);
 		}
 	}
 	const notes: string[] = [];

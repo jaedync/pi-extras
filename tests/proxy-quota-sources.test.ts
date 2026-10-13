@@ -92,6 +92,9 @@ test("an approximate reading does not replace an OAuth reading younger than 30 m
 	assert.equal(byKey(later.entries, "seven_day")?.approximate, true);
 	// A window absent from the response keeps its reading until its reset passes.
 	assert.equal(byKey(later.entries, "five_hour")?.usedPct, 46);
+	// The report says how old a kept reading is; the snapshot itself is new.
+	const kept = usageReport([["anthropic", later]], OPUS, ON, undefined, BAD_AT + 31 * MIN).limits.find((limit) => limit.key === "five_hour");
+	assert.equal(kept?.readingAgeSeconds, 32 * 60);
 	const pastReset = poll(later, badResponse(FIVE_RESET + MIN), FIVE_RESET + MIN);
 	assert.equal(byKey(pastReset.entries, "five_hour"), undefined);
 });
