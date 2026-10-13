@@ -118,6 +118,9 @@ test("a copy keeps the source's tabs block by block, wherever Pi and the source 
 		["Makefile:\n\n```make\nall:\n\tgo build\n```\n\nAlso:\n\n\tcode with tab indent\n", ["all:\n\tgo build"]],
 		["First:\n\n```go\nfunc a() {\n\treturn\n}\n```\n\nThen:\n\n- step\n\n  ```go\n  func b() {\n  \treturn\n  }\n  ```", ["func a() {\n\treturn\n}", "func b() {\n\treturn\n}"]],
 		["> quoted:\n>\n> ```make\n> all:\n> \tgo build\n> ```", ["all:\n\tgo build"]],
+		// Indented code ends with a new line that the token's window does not cover.
+		["- a\n\n      \tx\n\n- b", ["\tx\n"]],
+		["> p\n>\n>     \tx\n>\n", ["\tx\n"]],
 	];
 	for (const [reply, expected] of cases) {
 		const recorder = newRecorder();

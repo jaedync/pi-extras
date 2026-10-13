@@ -91,10 +91,12 @@ function quoteBlocks(node: Node, reader: Reader, quoted: boolean, lastHere: bool
 function codeSource(token: Tokens.Code, reader: Reader, quoted: boolean, lastHere: boolean): string {
 	const drawn = lastHere ? trimPartialFence(token) : token.text;
 	if (drawn === "") return drawn;
-	const at = findLines(reader, drawn.split("\n"), quoted);
+	// Indented code can end with new lines that its token's line window does not cover.
+	const body = drawn.replace(/\n+$/, "");
+	const at = findLines(reader, body.split("\n"), quoted);
 	if (!at) return drawn;
 	reader.from = at.end;
-	return at.lines.join("\n");
+	return at.lines.join("\n") + drawn.slice(body.length);
 }
 
 /** A last line that is only part of the closing fence, still streaming in, is not code. */
