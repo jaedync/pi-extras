@@ -101,7 +101,7 @@ Usage Guard writes these files:
 - Error lines in `usage-guard.log` in the Pi agent directory.
 
 Warnings and `/usage` snapshots are injected into the model's context as
-ordinary messages, so they are sent to your provider with the next request
+ordinary messages. So they are sent to your provider with the next request,
 like any other conversation text. They contain window labels, percentages and
 reset times, and snapshots also contain dollar figures. They contain no
 credentials.
@@ -280,9 +280,9 @@ pi-extras version changes the package list. With `PI_OFFLINE=1`, `true` or
 `yes`, it does not install, update or look up a release. It then uses only
 the installed tools.
 
-The install steps and the media tools get only a small set of variables:
-the path, the home folder, the user name and shell, the locale and time zone,
-and the temporary and `XDG_` folders. They also get the Hugging Face cache
+The install steps and the media tools get only a small set of variables. These
+are the path, the home folder, the user name and shell, the locale and time
+zone, and the temporary and `XDG_` folders. They also get the Hugging Face cache
 folders and the proxy and certificate settings. Only the installers (`uv`,
 `pip`, `git` and `npm`) also get the `UV_`, `PIP_`, `npm_config_` and
 `NPM_CONFIG_` settings.
@@ -702,12 +702,12 @@ result's text instead, stripped of terminal control sequences.
 `/tool-display others off` stops this for other extensions' tools.
 
 Folded mode (`/tool-display folded on`, off by default) wraps the render of
-Pi's chat container, which it finds in Pi's layout through a widget that draws
-nothing and is removed immediately. Each row still renders; the lines of folded
-rows are not drawn, and the rows of an open run are drawn inside a rule. The
-figures on a folded line come from Pi's saved messages (token counts and
-timestamps). Nothing is sent or saved, and the model's
-context is unchanged.
+Pi's chat container. It finds that container in Pi's layout through a widget
+that draws nothing and is removed immediately. Each row still renders; the lines
+of folded rows are not drawn, and the rows of an open run are drawn inside a
+rule. The figures on a folded line come from Pi's saved messages (token counts
+and timestamps). Nothing is sent or saved, and the model's context is
+unchanged.
 
 **Chained bash commands are rewritten before they run.** When a command is a
 list of steps joined by `&&`, `||`, `;` or newlines, and the shell is `bash`,

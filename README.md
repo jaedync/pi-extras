@@ -74,8 +74,9 @@ the package. Removing it does not remove your credentials or change other packag
   recorded usage and response-header limits. `PI_OFFLINE` also suppresses polling.
   As in Pi, only `PI_OFFLINE=1`, `true` or `yes` turns offline mode on.
   Pi processes that share an agent directory poll each provider one time
-  between them and share the result in `PI_CODING_AGENT_DIR/status-plus-limits/`,
-  so a new session shows the last budget immediately.
+  between them. They share the result in
+  `PI_CODING_AGENT_DIR/status-plus-limits/`, so a new session shows the last
+  budget immediately.
 - `PI_EXTRAS_USAGE_GUARD=1` or `0`: turn band warnings on or off for one run.
   See below for the persistent setting.
 - `PI_CODING_AGENT_DIR/pi-extras.json` (default `~/.pi/agent/pi-extras.json`):
@@ -410,8 +411,8 @@ for what is kept in memory.
 
 ## Usage Guard
 
-Usage Guard reads the limit snapshots Status Plus polls; it never polls limits on its
-own except when the `usage` tool is called with `refresh: true` or `all: true`.
+Usage Guard reads the limit snapshots Status Plus polls. It never polls limits
+on its own, except for a `usage` call with `refresh: true` or `all: true`.
 `all: true` polls each scoped model's provider that has no snapshot yet. For
 dollar figures, a `usage` call or `/usage` also reads local session files and,
 when set up, Tokenfold and OpenRouter (see [Dollar figures](#dollar-figures)).
@@ -439,12 +440,13 @@ rate limits taken from response headers are reported but never warned on.
 - Warnings are off by default: only a session budget warns, one time, when its
   window is reached. `/usage warnings on` adds band warnings (90 and 95 by
   default) and provider blocks. Each fires one time per window, threshold and
-  reset cycle, immediately before a model request, as a message appended to context
-  without changing the system prompt or initiating another request. Idle polls
-  do not queue warnings for later delivery: the active provider and model family
-  are checked again for manual prompts, automated wakeups and queued follow-ups. Obsolete automatic warnings remain in raw history
-  but are omitted from requests for models they do not govern, and from every
-  request after their window has reset. Resets reported
+  reset cycle, immediately before a model request. It is a message appended to
+  context, without changing the system prompt or initiating another request.
+  Idle polls do not queue warnings for later delivery: the active provider and
+  model family are checked again for manual prompts, automated wakeups and
+  queued follow-ups. Obsolete automatic warnings remain in raw history. They are
+  omitted from requests for models they do not govern, and from every request
+  after their window has reset. Resets reported
   within ten minutes of each other
   count as one cycle, since proxies recompute them on every fetch. The first
   band is advance notice only. The final message never cuts short work that
@@ -996,8 +998,8 @@ the full list and for what the rewrite does.
 - `/tool-display chains on|off`: break chained commands into steps, or run
   them as written.
 - `/tool-display motion full|reduced`: the reduced setting drops the sweep,
-  the running step's breathing and the finish flashes, holds spinners on a
-  still frame, and updates times every second.
+  the running step's breathing and the finish flashes. It holds spinners on a
+  still frame and updates times every second.
 - `/tool-display thinking tail|collapsed|full`: how thinking blocks rest.
 - `/tool-display folded on|off`: one line for each run of work (see above).
 - `/tool-display count calls|steps`: how Status Plus counts tools (see below).
@@ -1219,13 +1221,14 @@ Put these in the `linkContext` section of `pi-extras.json`:
 ## Subagents
 
 The `subagent` tool starts a child agent: a separate Pi session on the model
-the agent picks, with a fresh context, the same working directory and the
-same tools minus a few that make no sense in a child. A child never gets mesh,
+the agent picks. It has a fresh context, the same working directory and the
+same tools, minus a few that make no sense in a child. A child never gets mesh,
 goal and shell job tools, `computer_use`, `windows_use`, `usage`, `codemode`,
-`tool_search`, or other subagent extensions' tools (see
-[security and privacy](docs/security.md#subagents) for the list). Children load the extensions that provide their
-tools, Cache Compaction and a quota guard. Other extensions, such as the
-remote-pi mesh, keep serving the parent session. It runs in the background and its report arrives
+`tool_search`, or other subagent extensions' tools. The full list is in
+[security and privacy](docs/security.md#subagents). Children load the
+extensions that provide their tools, Cache Compaction and a quota guard. Other
+extensions, such as the remote-pi mesh, keep serving the parent session. It
+runs in the background and its report arrives
 as a message, so the agent keeps working or ends its turn and is woken when it
 matters. `wait: true` blocks instead, for a quick check. `readOnly: true` keeps
 only tools that can't change your files or run commands that the model
@@ -1294,8 +1297,8 @@ parent or you write to it, and is told first how its last run ended; a peer's
 note can't wake it. A child asks with `expectReply: true`. A question up the
 tree, to main or its parent, waits for the answer, which comes fast because
 the question wakes them. A question to anyone else, a peer or its own
-subagent, returns immediately: the answer arrives as a message that wakes the
-asker, and its report waits until every agent it asked answers or ends. One
+subagent, returns immediately. The answer arrives as a message that wakes the
+asker. The asker's report waits until every agent it asked answers or ends. One
 that ends without answering, or can't resume to answer, hands the asker how
 its run ended. Some agents wait for the asker, through their subagents or an
 answer the asker owes them. A question to such an agent is refused; send a
@@ -1322,8 +1325,8 @@ takes one more turn before it stops if it hasn't replied since. Esc doesn't
 drop it: it stays in the transcript for main's next turn. While main
 compacts, mail waits and wakes main after the compaction is done, so no turn
 starts on the context being summarized. A `/compact` that stops main's turn
-leaves the mail that landed in it unanswered, so after the compaction is done
-a hidden reminder naming who wrote wakes main to reply.
+leaves the mail that landed in it unanswered. So after the compaction is done,
+a hidden reminder that names who wrote wakes main to reply.
 What you type to a child directly is recorded for main without waking it.
 Reports from children started in the same run arrive together, as one message.
 `message` call rows and incoming notes, questions, replies and relays read
@@ -1365,10 +1368,10 @@ red above 90, as the footer does for main's context. After a compaction the
 size is `?` until the next reply, and a finished agent keeps its last size,
 which is where a resume starts. What it is doing comes last, so a narrow
 terminal cuts it and keeps the other facts. Names, times, context figures,
-costs and models line up, so what each agent is doing starts in one column; after it has ended, `✓`, `✗` or `■`
-takes the spinner's place. What it is doing moves the way
-main's own spinner does for the same work, so the wait for its model,
-thinking, writing, a tool call being written, a tool that runs, a wait on
+costs and models line up, so what each agent is doing starts in one column.
+After it has ended, `✓`, `✗` or `■` takes the spinner's place. What it is doing
+moves the way main's own spinner does for the same work, so the wait for its
+model, thinking, writing, a tool call being written, a tool that runs, a wait on
 another agent through a tool (these three in the tool color), a compaction
 and a retry (in amber) look alike everywhere; a question waits in amber. The
 words say the same: `waiting for the model` until its model sends thinking
@@ -1380,13 +1383,13 @@ Up to four agents show whole. A fifth turns the last row into a control line,
 `+7 more subagents · 1 asking · 6 working  (view)  (expand)`, so the rows stay
 four lines and never say `+1 more`. The rows kept are the ones that need you
 first (asking, failed, interrupted), then those still working; finished ones
-give way first. `(expand)` shows as many rows as fit, up to all of them,
-taking at most half of what the editor and footer leave so the transcript
-keeps the rest, and `(collapse)` takes them back; the rows stay expanded until
-then or until the widget empties, when every agent is done and its report has
-reached main. A terminal too short to give the rows more room shows no
-`(expand)`. `(view)`, a click on `+7 more subagents`, or `/subagents` opens
-every agent over the full terminal: the same live rows,
+give way first. `(expand)` shows as many rows as fit, up to all of them. It
+takes at most half of what the editor and footer leave, so the transcript
+keeps the rest. `(collapse)` takes them back. The rows stay expanded until
+then, or until the widget empties. The widget empties when every agent is done
+and its report has reached main. A terminal too short to give the rows more
+room shows no `(expand)`. `(view)`, a click on `+7 more subagents`, or
+`/subagents` opens every agent over the full terminal: the same live rows,
 children under parents, each with its task under it and a count of what they
 are doing on top. Use ↑↓ and Enter, or click either line, to open one; Esc in
 its inspector comes back to the list.
@@ -1613,11 +1616,12 @@ cost it used before the switch still count. When no model is left, the run
 fails and its error says so. Other failures, such as a full context or a bad
 request, fail as before.
 
-**Memory.** A child's session is released when it ends: immediately when it
-failed or was stopped, after two quiet minutes when it finished, since a
-follow-up often comes soon. A message to a released child relaunches it from
-its session file with its context, and its inspector reads that file, so a
-long session with many children keeps only the working ones in memory. A
+**Memory.** A child's session is released when it ends. It is released
+immediately when it failed or was stopped. When it finished, it is released
+after two quiet minutes, since a follow-up often comes soon. A message to a
+released child relaunches it from its session file with its context, and its
+inspector reads that file, so a long session with many children keeps only the
+working ones in memory. A
 message within the two minutes uses the open session only when a launch now
 would make the same session. After a `/reload`, or after a change to a file
 that the launch read, the child relaunches from its session file instead. A
@@ -1734,7 +1738,7 @@ so a stray Enter refuses. "Allow for this session" lasts until the client exits;
 and Codex computer use. Apps the service rates high risk, such as browsers, show
 its prompt injection warning. The service never allows some apps, such as
 terminals. Without a UI, such as `pi -p`, an app that is not always allowed
-is denied unless Allow all is on, and the agent is told how to allow it.
+is denied unless Allow all is on. The agent is then told how to allow it.
 Subagents never get `computer_use` or `windows_use`.
 
 `/computer-use` opens a panel with the client's status, the apps mode and a
@@ -1970,8 +1974,9 @@ Kagi's terms and your subscription.
 
 Search results are bounded and treated as untrusted source text. A five-minute
 in-memory cache reduces repeated queries. Up to four searches run at the same
-time, with request starts at least 150 ms apart and at most 30 page requests a minute, so a
-batch of searches is fast but a looping agent cannot hammer the account. A search
+time. Request starts are at least 150 ms apart, with at most 30 page requests a
+minute. So a batch of searches is fast, but a looping agent cannot hammer the
+account. A search
 that would have to wait past its deadline for that pace fails with a pacing
 error instead. The client uses a **cooperative I/O deadline**;
 **synchronous parsing cannot be interrupted** by that timer. There is a 2 MB
