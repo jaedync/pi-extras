@@ -306,7 +306,9 @@ export class Team implements HostTeam {
 		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
 		this.checks.abort(name);
 		const handle = this.sessions.get(name);
-		const launch = this.launches.get(name);
+		// A new number: the run and launch from before the stop are stale from now on, even when a message queues a relaunch.
+		const launch = (this.launches.get(name) ?? 0) + 1;
+		this.launches.set(name, launch);
 		// An interrupted child has no run in this process; its last report stays.
 		const report = () => this.sessions.runText(name) ?? (record.state === "interrupted" ? record.report : undefined);
 		this.patch(name, { state: "stopped", endedAt: this.now(), activity: null, stopReason: options.reason, report: report(), ...this.unreadLeft(name) });
@@ -480,14 +482,15 @@ export class Team implements HostTeam {
 	/** Shutdown must wait for launchers too, or they can write into a newly reopened transcript. */
 	private async open(name: string, launch: number): Promise<ChildHandle | null> {
 		const handle = await this.options.launcher.launch(this.records.get(name)!, {
-			turnEnded: () => this.turnEnded(name),
-			toolCalled: (tool) => this.checks.called(name, tool),
+			// An older session's late events belong to a run that has ended.
+			turnEnded: () => this.launches.get(name) === launch && this.turnEnded(name),
+			toolCalled: (tool) => { if (this.launches.get(name) === launch) this.checks.called(name, tool); },
 			update: (patch) => {
 				const record = this.records.get(name);
-				if (!record || this.launches.get(name) !== launch) return;
+				if (!record) return;
 				// The request a stop aborts still says what it used.
 				if (record.state === "stopped" && this.ending.has(name) && patch.usage) return this.patch(name, { usage: patch.usage });
-				if (!LIVE_STATES.has(record.state)) return;
+				if (this.launches.get(name) !== launch || !LIVE_STATES.has(record.state)) return;
 				this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.answers.workedSince(name, patch.toolCalls) ? { answeredMain: undefined } : {}) });
 				if (patch.usage) this.budgets.spent(name, patch.usage.cost);
 				this.forgetRead(name);

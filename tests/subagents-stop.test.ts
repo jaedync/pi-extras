@@ -250,3 +250,44 @@ test("a message during a stop's abort that queues a relaunch behind a full team:
 	assert.equal(team.get("a")!.state, "queued");
 	assert.equal(main.filter((delivery) => delivery.kind === "report").length, 0);
 });
+
+test("an aborted run whose prompt ends after a message queued a relaunch behind a full team does not settle over it", async () => {
+	const main: MainDelivery[] = [];
+	const prompts: string[] = [];
+	const ends = new Map<string, () => void>();
+	let endAbort: (() => void) | undefined;
+	const team = new Team({
+		maxConcurrent: 1, maxDepth: 2, replyTimeoutMs: 60_000, deliverToMain: (delivery) => main.push(delivery), warn: () => undefined,
+		launcher: { async launch(record: AgentRecord): Promise<ChildHandle> {
+			let endPrompt: (() => void) | undefined;
+			const transcript: unknown[] = [];
+			return {
+				prompt: (text) => {
+					prompts.push(`${record.name}: ${text}`);
+					transcript.push({ role: "user", content: text });
+					return new Promise<void>((resolve) => { endPrompt = resolve; ends.set(record.name, resolve); });
+				},
+				steer: () => undefined,
+				// As Pi does: the abort ends the prompt that was running.
+				abort: () => record.name === "a"
+					? new Promise<void>((resolve) => { endAbort = () => { transcript.push({ role: "assistant", content: [{ type: "text", text: "half done" }] }); endPrompt?.(); resolve(); }; })
+					: Promise.resolve(),
+				lastText: () => undefined, messages: () => transcript, takeQueued: () => [], dispose: async () => undefined,
+			};
+		} },
+	});
+	assert.ok(team.spawn({ name: "a", task: "A", parent: "main", model: "m", readOnly: false, fork: false, blocking: false }).ok);
+	await flush();
+	assert.ok(team.spawn({ name: "b", task: "B", parent: "main", model: "m", readOnly: false, fork: false, blocking: false }).ok);
+	const stopping = team.stop("a");
+	await flush();
+	assert.equal((await team.send("main", "a", "Change of plan.")).ok, true);
+	endAbort!();
+	await stopping;
+	await flush();
+	assert.equal(team.get("a")!.state, "queued", "a still waits for its relaunch");
+	await team.send("main", "a", "Second message."); await flush();
+	ends.get("b")!(); await flush();
+	assert.equal(main.filter((delivery) => delivery.kind === "report" && delivery.record.name === "a").length, 0, "no report of the aborted run");
+	assert.match(prompts.at(-1)!, /Change of plan/, "the message that queued the relaunch reaches the new run");
+});
