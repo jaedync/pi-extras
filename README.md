@@ -1198,12 +1198,11 @@ The install steps and the media commands get a minimal environment. It holds
 the path, the home folder, the user name and shell, the locale and time zone,
 and the temporary and `XDG_` folders. It also holds the Hugging Face cache
 folders and the proxy and certificate settings. They do not get other
-variables, such as API keys.
-Only the installers (`uv`, `pip`,
-`git` and `npm`) also get the `UV_`, `PIP_`, `npm_config_` and `NPM_CONFIG_`
-settings, because a private package index needs them. yt-dlp, the media helper
-and the token provider do not get a variable whose name contains `TOKEN`,
-`PASSWORD`, `AUTH`, `SECRET` or `KEY`.
+variables, such as API keys. Only the install steps (`tar`, `uv`, `pip`, `git`,
+`npm` and the TypeScript build) also get the `UV_`, `PIP_`, `npm_config_` and
+`NPM_CONFIG_` settings, because a private package index needs them. yt-dlp,
+the media helper and the token provider do not get a variable whose name
+contains `TOKEN`, `PASSWORD`, `AUTH`, `SECRET` or `KEY`.
 
 ### Settings
 

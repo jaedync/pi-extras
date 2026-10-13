@@ -288,9 +288,11 @@ still downloads on the first transcription, also with `PI_OFFLINE`.
 The install steps and the media tools get only a small set of variables. These
 are the path, the home folder, the user name and shell, the locale and time
 zone, and the temporary and `XDG_` folders. They also get the Hugging Face cache
-folders and the proxy and certificate settings. Only the installers (`uv`,
-`pip`, `git` and `npm`) also get the `UV_`, `PIP_`, `npm_config_` and
-`NPM_CONFIG_` settings.
+folders and the proxy and certificate settings. Only the install steps
+(`tar`, `uv`, `pip`, `git`, `npm` and the TypeScript build) also get the
+`UV_`, `PIP_`, `npm_config_` and `NPM_CONFIG_` settings. yt-dlp, the media
+helper and the token provider get no variable whose name contains `TOKEN`,
+`PASSWORD`, `AUTH`, `SECRET` or `KEY`.
 
 yt-dlp, its HTTP libraries and ffmpeg send each HTTP request through a guard
 proxy on the loopback address. This includes redirects, manifests and
