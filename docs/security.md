@@ -85,7 +85,7 @@ report's notes never contain a key, the Tokenfold URL or a response body.
 Dollar figures also read the Pi session files under
 `PI_CODING_AGENT_DIR/sessions` that changed in the last 8 days, subagent
 sessions included. They use only the recorded cost, provider, model, time and
-response ID of each turn and summary.
+ID of each reply, summary and usage entry, and the model changes.
 
 Usage Guard writes these files:
 
