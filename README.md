@@ -1548,7 +1548,8 @@ over its budget.
 
 **Fallback.** Sometimes a child's model can't serve its run: its quota or
 usage limit is used up, a rate limit lasts longer than the automatic wait,
-the provider is overloaded or unavailable, the credentials are missing or
+the provider is overloaded or unavailable, the Claude Code proxy (Meridian)
+ends the turn early after its retries, the credentials are missing or
 expired, or the model is gone. Then the run does not fail. It continues from
 the child's session on the next model of `fallbackModels`, by default the
 default subagent model. The child is told first that its model failed and
