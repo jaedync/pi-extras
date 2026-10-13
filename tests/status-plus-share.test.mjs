@@ -205,5 +205,6 @@ test("an approximate reading far from the last usage-endpoint reading is logged 
 	assert.equal(requests, 2, "the same reading came a second time");
 	const lines = readFileSync(log, "utf8").slice(before).split("\n").filter((line) => line.includes("reading differs"));
 	assert.equal(lines.length, 1, lines.join("\n"));
-	assert.match(lines[0], /approximate anthropic seven_day reading differs from the usage endpoint: 96% \(status allowed_warning, surpassed 0\.75, reset \S+, sampled 120 s ago\) vs 37% \(reset \S+, sampled 60 s ago\)/);
+	// NOW is taken when this file loads and the log line reads the real clock, so a busy machine adds a few seconds.
+	assert.match(lines[0], /approximate anthropic seven_day reading differs from the usage endpoint: 96% \(status allowed_warning, surpassed 0\.75, reset \S+, sampled 12\d s ago\) vs 37% \(reset \S+, sampled 6\d s ago\)/);
 });
