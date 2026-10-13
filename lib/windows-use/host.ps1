@@ -31,7 +31,7 @@ function Get-SafeName([string]$vm) { $vm -replace '[^\w-]', '_' }
 function Get-KeyFile([string]$vm, [string]$id) {
     if (-not $id) { $id = (Get-Machine $vm).Name }
     $file = Join-Path $dataDir ('vm-' + $id.ToLowerInvariant() + '.key')
-    if (-not (Test-Path $file)) { Move-NamedKey $vm $file }
+    if (-not (Test-Path -LiteralPath $file)) { Move-NamedKey $vm $file }
     $file
 }
 # A key file from before, named by VM name, moves to the id name on first use. When
@@ -41,7 +41,7 @@ $script:keyWarnings = @{}
 function Move-NamedKey([string]$vm, [string]$file) {
     $safe = Get-SafeName $vm
     $old = Join-Path $dataDir ($safe + '.key')
-    if (-not (Test-Path $old)) { return }
+    if (-not (Test-Path -LiteralPath $old)) { return }
     $sharing = @(Get-VM | Where-Object { (Get-SafeName $_.Name) -eq $safe })
     if ($sharing.Count -ne 1) {
         if (-not $script:keyWarnings[$file]) {
@@ -50,7 +50,9 @@ function Move-NamedKey([string]$vm, [string]$file) {
         }
         return
     }
-    Move-Item -Path $old -Destination $file
+    # Another host process may have moved it first; only a key file still missing is worth a line.
+    try { Move-Item -LiteralPath $old -Destination $file }
+    catch { if (-not (Test-Path -LiteralPath $file)) { [Console]::Error.WriteLine("key file '$old' could not move to '$file': $($_.Exception.Message)") } }
 }
 
 function Get-Machine([string]$vm) {

@@ -214,7 +214,9 @@ test("each VM's key file is named by its VM id, so VMs whose names differ in cas
 	const keyFile = host.slice(host.indexOf("function Get-KeyFile"), host.indexOf("function Get-Machine"));
 	assert.match(keyFile, /function Get-KeyFile\(\[string\]\$vm, \[string\]\$id\) \{\s*if \(-not \$id\) \{ \$id = \(Get-Machine \$vm\)\.Name \}\s*\$file = Join-Path \$dataDir \('vm-' \+ \$id\.ToLowerInvariant\(\) \+ '\.key'\)/);
 	// A name-based file from before moves only when exactly one VM's name maps to it.
-	assert.match(keyFile, /\$sharing = @\(Get-VM \| Where-Object \{ \(Get-SafeName \$_\.Name\) -eq \$safe \}\)\s*if \(\$sharing\.Count -ne 1\) \{[\s\S]*?\[Console\]::Error\.WriteLine[\s\S]*?return\s*\}\s*Move-Item -Path \$old -Destination \$file/);
+	assert.match(keyFile, /\$sharing = @\(Get-VM \| Where-Object \{ \(Get-SafeName \$_\.Name\) -eq \$safe \}\)\s*if \(\$sharing\.Count -ne 1\) \{[\s\S]*?\[Console\]::Error\.WriteLine[\s\S]*?return\s*\}\s*(?:#[^\n]*\n\s*)?try \{ Move-Item -LiteralPath \$old -Destination \$file \}\s*catch \{ if \(-not \(Test-Path -LiteralPath \$file\)\) \{ \[Console\]::Error\.WriteLine/, "a failed or raced move costs this call no more than a log line");
+	// -Path takes wildcards, and %LOCALAPPDATA% may hold a "[".
+	assert.doesNotMatch(keyFile, /Test-Path (?!-LiteralPath)/);
 	const vms = host.slice(host.indexOf("function Get-Vms"), host.indexOf("# Heartbeat:"));
 	assert.match(vms, /Get-KeyFile \$vm "\$\(\$hv\.Id\)"/, "the list names each VM's file from its own id, not by a name lookup");
 	assert.match(vms, /Get-VmIpv4 \$hv/);
