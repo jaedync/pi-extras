@@ -1263,8 +1263,9 @@ the question wakes them. A question to anyone else, a peer or its own
 subagent, returns at once: the answer arrives as a message that wakes the
 asker, and its report waits until every agent it asked answers or ends. One
 that ends without answering, or can't resume to answer, hands the asker how
-its run ended. A question to an agent that waits for the asker (through its
-subagents, or an answer the asker owes it) is refused: send a note instead.
+its run ended. Some agents wait for the asker, through their subagents or an
+answer the asker owes them. A question to such an agent is refused; send a
+note instead.
 So agents never wait on each other in a loop. When a peer's message resumes a
 finished child and that run ends normally, its report goes to its parent
 without waking it: main reads it at its next turn, and a child parent at its
@@ -1525,10 +1526,10 @@ Worktrees stay until you remove them. Resumed children keep the same workspace.
 After you apply the changes, the cleanup command force-removes the worktree and
 deletes its branch. Check that you kept all needed files first.
 
-**Limits.** At most `maxConcurrent` children run at once; the rest queue.
-This also applies to a child that goes on in its open session: a resumed idle
-child, a parent woken from waiting, or a child that got its answer. Such a
-child waits in line ahead of spawns that have not started. A subagent that its
+**Limits.** At most `maxConcurrent` children run at the same time; the rest
+queue. The limit also applies to a child that goes on in its open session.
+Examples are a resumed idle child, a woken parent, and a child that got its
+answer. Such a child waits in line ahead of spawns that have not started. A subagent that its
 parent starts with `wait: true` runs in that parent's slot. A child can't
 start children of its own by default.
 Each run of a child has a time budget, `maxRunMinutes` (default 60), and an
@@ -1537,8 +1538,8 @@ can set its own with `maxMinutes` and `maxCost`, and the child keeps them
 when it resumes. Time counts only while the run works, not while it waits
 for an answer, for its subagents, or for a free slot. A run that wakes from
 waiting on its subagents keeps what it used. Cost counts only what this run
-spent. Each agent has its own budget: a parent's budget does not limit its
-subagents, and a child can give a subagent a larger budget than its own.
+spent. Each agent has its own budget, which its parent's budget does not
+limit. A child can give a subagent a larger budget than its own.
 A run over either budget is stopped with its subagents, like `stop_subagent`,
 but its parent gets a report that says why, for example `stopped after 1h00m:
 over its 60-minute budget`, with its last message. A report to main wakes it.

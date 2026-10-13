@@ -49,7 +49,7 @@ export function childMessageDescription(replyTimeoutMs: number): string {
 	return [
 		`Send a message to "${MAIN}", another agent by name, or "all".`,
 		`With expectReply: true to "${MAIN}" or your parent, this call waits up to ${Math.round(replyTimeoutMs / 60_000)} minutes and returns the answer.`,
-		"A question to anyone else returns at once: the answer arrives as a message, and your report waits until it answers or ends. A question to an agent that waits for you is refused; send it a note instead.",
+		"A question to anyone else returns immediately: the answer arrives as a message, and your report waits until it answers or ends. A question to an agent that waits for you is refused; send it a note instead.",
 		"Keep messages short and only send what changes the recipient's work.",
 	].join(" ");
 }

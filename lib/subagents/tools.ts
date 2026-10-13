@@ -224,7 +224,7 @@ const deliveredWords: Record<string, string> = {
 	replied: "Answered; it continues with your reply.",
 	steered: "Delivered; it reads it after its current tool call.",
 	resumed: "It had finished; it resumed with its context to handle this.",
-	queued: "It has not started yet; it reads this when it does.",
+	queued: "It waits in line to run; it reads this when its run starts.",
 	inbox: "It had finished; this waits for its next run.",
 	main: "Delivered to main.",
 };
@@ -233,7 +233,7 @@ const userWords: Record<string, string> = {
 	replied: "Answered its question.",
 	steered: "Delivered after its current step.",
 	resumed: "It resumed to handle your message.",
-	queued: "It has not started yet; it reads this when it does.",
+	queued: "It waits in line to run; it reads this when its run starts.",
 	inbox: "It waits in its inbox for its next run.",
 };
 

@@ -120,6 +120,6 @@ test("the inspector says what became of the user's message, for a paused or queu
 	assert.equal(userSendWords({ ok: true, delivered: "steered" }), "Delivered after its current step.");
 	assert.equal(userSendWords({ ok: true, delivered: "resumed" }), "It resumed to handle your message.");
 	assert.equal(userSendWords({ ok: true, delivered: "replied" }), "Answered its question.");
-	assert.equal(userSendWords({ ok: true, delivered: "queued" }), "It has not started yet; it reads this when it does.");
+	assert.equal(userSendWords({ ok: true, delivered: "queued" }), "It waits in line to run; it reads this when its run starts.");
 	assert.equal(userSendWords({ ok: true, delivered: "inbox", notice: "It is paused." }), "It waits in its inbox for its next run. It is paused.");
 });
