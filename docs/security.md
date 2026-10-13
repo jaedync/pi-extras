@@ -3,8 +3,8 @@
 Pi extensions run with the same filesystem, process and network permissions as
 Pi. Review the source before installing. This package adds no telemetry uploader,
 remote management service or credential provisioning. It does not update
-itself. Only the Pull Link media tools install and update themselves; see
-[Pull Link](#pull-link).
+itself. Only the Pull Link media tools update themselves; see
+[Pull Link](#pull-link). They and Voice install their own tools on first use.
 
 Saves to `pi-extras.json` keep the file's permissions and write through a
 symbolic link to its target. A new `pi-extras.json` gets mode `0600`. A save
