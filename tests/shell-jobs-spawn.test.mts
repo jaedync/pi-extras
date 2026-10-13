@@ -150,6 +150,18 @@ describe("shell and environment, as Pi's bash tool has them", () => {
 		});
 	});
 
+	test("settings that fail to load at session start are read again at the next job start", async () => {
+		await withAgentDir(async (dir) => {
+			const settings = join(dir, "settings.json");
+			writeFileSync(settings, "{ not json");
+			const app = await started();
+			// While the file still fails, a job runs with Pi's defaults, as Pi's bash tool does.
+			assert.strictEqual(await output(app, 'echo "${BASH_VERSION:+bash}:$JOB_PREFIX"'), "bash:");
+			writeFileSync(settings, JSON.stringify({ shellCommandPrefix: "export JOB_PREFIX=recovered" }));
+			assert.strictEqual(await output(app, "echo $JOB_PREFIX"), "recovered");
+		});
+	});
+
 	test("a shellPath that does not exist fails the start with Pi's reason", async () => {
 		await withAgentDir(async (dir) => {
 			writeFileSync(join(dir, "settings.json"), JSON.stringify({ shellPath: join(dir, "no-such-shell") }));

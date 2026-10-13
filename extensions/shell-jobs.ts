@@ -120,6 +120,9 @@ interface ShellSettings {
 function readShellSettings(ctx: ExtensionContext, sessionCwd: string): ShellSettings {
 	const trusted = typeof ctx.isProjectTrusted === "function" && ctx.isProjectTrusted();
 	const settings = SettingsManager.create(sessionCwd, getAgentDir(), { projectTrusted: trusted });
+	// A failed load (a busy lock, a file being written) is recorded, not thrown; throw it, so the next start reads again.
+	const failed = settings.drainErrors()[0];
+	if (failed) throw failed.error;
 	return { shellPath: settings.getShellPath(), prefix: settings.getShellCommandPrefix() };
 }
 
@@ -132,6 +135,9 @@ function launchFor(ctx: ExtensionContext, shell: ShellSettings, command: string)
 		env: jobEnv(process.env, join(getAgentDir(), "bin"), sessionFacts(ctx)),
 	};
 }
+
+/** No shellPath and no prefix: what Pi's bash tool uses when its settings fail to load. */
+const PI_DEFAULT_SHELL: ShellSettings = { shellPath: undefined, prefix: undefined };
 
 const sessionCwdOf = (ctx: ExtensionContext): string => (typeof ctx?.cwd === "string" && ctx.cwd.length > 0 ? ctx.cwd : process.cwd());
 
@@ -482,6 +488,16 @@ export default function shellJobs(pi: ExtensionAPI): void {
 	let started = false;
 	let backgroundCtx: ExtensionContext | undefined;
 	let shellSettings: ShellSettings | undefined;
+	/** Read at session start; read again here only when that read failed, with Pi's defaults while it still fails. */
+	const currentShellSettings = (ctx: ExtensionContext, cwd: string): ShellSettings => {
+		if (shellSettings !== undefined) return shellSettings;
+		try {
+			return (shellSettings = readShellSettings(ctx, cwd));
+		} catch (error) {
+			logError("could not read Pi's shell settings; this job uses Pi's defaults", error);
+			return PI_DEFAULT_SHELL;
+		}
+	};
 	const publishBackground = () => { if (active && backgroundCtx) announceBackground(pi, backgroundCtx, "shell-jobs", [...runtime.jobs.values()].filter((job) => job.state !== "done").length); };
 	pi.events?.on(BACKGROUND_REQUEST_EVENT, publishBackground);
 	// The TUI's UI handle, kept so a click on a transcript row can open the
@@ -580,9 +596,7 @@ export default function shellJobs(pi: ExtensionAPI): void {
 			if (runtime.closing) return errResult("This session is shutting down; cannot start new jobs.");
 			let launch: Launch;
 			try {
-				// Read at session start; read here only when that read failed.
-				shellSettings ??= readShellSettings(ctx, sessionCwd);
-				launch = launchFor(ctx, shellSettings, validation.command);
+				launch = launchFor(ctx, currentShellSettings(ctx, sessionCwd), validation.command);
 			} catch (error) {
 				return errResult(`Could not prepare the shell: ${(error as Error).message}. Pi's shellPath setting chooses it.`);
 			}
