@@ -298,7 +298,8 @@ export function validWorktree(value: unknown): value is Worktree {
 		&& typeof w.base === "string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(w.base);
 }
 
-const quote = (value: string): string => /^[a-zA-Z0-9_./=-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+// zsh expands an unquoted word that starts with "=" (=ls gives /bin/ls), so only an inner "=" stays bare.
+const quote = (value: string): string => /^[a-zA-Z0-9_./-][a-zA-Z0-9_./=-]*$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 
 /**
  * A shell command that runs git in `root`. When `root` is a subagent's
