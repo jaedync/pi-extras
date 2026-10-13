@@ -196,3 +196,10 @@ test("a fallback model gets its own usual thinking level, unless the call chose 
 	assert.equal(h.team.get("bulk")!.thinking, "high");
 	assert.equal(h.team.get("chosen")!.thinking, "low", "the call's own choice stays");
 });
+
+test("a Meridian proxy turn-limit failure that outlasted its retries moves the run to a fallback model", async () => {
+	const { proxyExhaustedMessage } = await import("../lib/rate-limit-recovery/transient.ts");
+	const exhausted = proxyExhaustedMessage({ attempts: 3, spentMs: 17_000 });
+	assert.deepEqual(classifyFailure(exhausted), { kind: "overloaded", reason: "the Claude Code proxy ended the turn early" });
+	assert.equal(classifyFailure("Claude Code returned an error result: Reached maximum number of turns (1)")?.kind, "overloaded");
+});

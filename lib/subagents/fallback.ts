@@ -23,6 +23,8 @@ export interface Failure {
 const OVERFLOW = /context.?length|context.?window|prompt is too long|input is too long|too many tokens|maximum context/i;
 const OVERLOADED = /overloaded|high demand|service.?unavailable|temporarily unavailable|bad gateway|gateway timeout|internal server error|server_error|\b(?:502|503|504|529)\b/i;
 const CREDENTIALS = /api key|unauthori[sz]ed|\b40[13]\b|forbidden|authentication|credential|(?:token|session|login)\b.{0,40}\bexpired|expired.{0,40}\b(?:token|credential)|not logged in|\/login\b/i;
+// Meridian, a local Claude Code proxy, ended the turn early, and Rate Limit Recovery's retries (or none) did not clear it.
+const PROXY_TURN_LIMIT = /Reached maximum number of turns/;
 const NOT_FOUND = /unknown model|model_not_found|no such model|model\b.{0,60}\b(?:not found|does not exist|is not available)/i;
 /** Failures that are the provider's as a whole, so its other models would fail the same way. */
 const PROVIDER_WIDE: ReadonlySet<FailureKind> = new Set(["quota", "credentials"]);
@@ -35,6 +37,7 @@ export function classifyFailure(error: string): Failure | undefined {
 	if (isQuotaError(error)) return { kind: "quota", reason: /usage limit/i.test(error) ? "usage limit reached" : "quota exceeded" };
 	if (parseRateLimit(error) !== undefined || isTransientRateLimit({ stopReason: "error", errorMessage: error })) return { kind: "rate-limit", reason: "rate limit" };
 	if (OVERLOADED.test(error)) return { kind: "overloaded", reason: "provider overloaded or unavailable" };
+	if (PROXY_TURN_LIMIT.test(error)) return { kind: "overloaded", reason: "the Claude Code proxy ended the turn early" };
 	if (CREDENTIALS.test(error)) return { kind: "credentials", reason: "missing or expired credentials" };
 	if (NOT_FOUND.test(error)) return { kind: "not-found", reason: "model not found" };
 	return undefined;
