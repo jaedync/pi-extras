@@ -4,6 +4,7 @@ import { Guest, type HostCalls } from "../lib/windows-use/guest.ts";
 import { WinSession, WIN_API } from "../lib/windows-use/api.ts";
 import { readFrame, toPng } from "../lib/windows-use/frame.ts";
 import { hostFrame } from "./support/windows-frames.ts";
+import { textOf } from "../lib/windows-use/result.ts";
 
 /** The server can move to RDP while the physical console becomes a different lock screen. */
 function lab() {
@@ -17,9 +18,12 @@ function lab() {
 	let consoleDesktop = false;
 	let grabFails = false;
 	let consent = false;
+	let corrupt = false;
 	let metadata = "Screenshot Size: (640,480)\nVisible Displays: 0:DISPLAY (0,0,640,480) primary";
 	const calls: string[] = [];
 	const png = toPng(readFrame(hostFrame({ taskbar: true, width: 640, height: 480 })));
+	// The signature and IHDR stay; the body is garbage.
+	const garbled = Buffer.concat([png.subarray(0, 33), Buffer.alloc(png.length - 45, 0x5a), png.subarray(-12)]);
 	const host: HostCalls = {
 		async call(method, params = {}) {
 			if (method === "mcp") {
@@ -40,7 +44,7 @@ function lab() {
 				if (hangTool) { frozen = true; throw new Error("windows_use host mcp timed out after 30 s"); }
 				if (command.includes("consent")) return text(`Response: ${consent ? 1 : 0}\nStatus Code: 0`);
 				if (name === "Screenshot" || name === "Snapshot") {
-					return grabFails ? text("screen grab failed") : reply({ content: [{ type: "text", text: metadata }, { type: "image", mimeType: "image/png", data: png.toString("base64") }], isError: false });
+					return grabFails ? text("screen grab failed") : reply({ content: [{ type: "text", text: metadata }, { type: "image", mimeType: "image/png", data: (corrupt ? garbled : png).toString("base64") }], isError: false });
 				}
 				return text("ok");
 			}
@@ -65,6 +69,7 @@ function lab() {
 		sleepConsole: () => { dark = true; }, showConsole: () => { consoleDesktop = true; },
 		failCapture: (uac = false) => { grabFails = true; consent = uac; },
 		captureMetadata: (text: string) => { metadata = text; },
+		corruptCapture: () => { corrupt = true; },
 		hangNextTool: () => { hangTool = true; },
 		recoverOnProbe: () => { restoreOnProbe = true; },
 	};
@@ -195,6 +200,14 @@ test("console screenshots and OCR use the enhanced session's image and coordinat
 	assert.deepEqual(value, { width: 640, height: 480, text: "(130,60) Editor", items: [{ text: "Editor", x: 130, y: 60 }] });
 	assert.ok(!l.calls.includes("host frame") && !l.calls.includes("host ocr"));
 	assert.deepEqual(consoleInput(l.calls), []);
+});
+
+test("an enhanced session's console screenshot is checked like win.screenshot, since the guest sends it", async () => {
+	const l = lab();
+	l.corruptCapture();
+	const shot = await l.session.call("console.screenshot", {}, {});
+	assert.ok(!shot.content.some((part) => part.type === "image"), "a corrupt guest image goes no further");
+	assert.match(textOf(shot), /"source":"guest"[\s\S]*\[windows_use dropped the screenshot: it could not be decoded/);
 });
 
 test("enhanced OCR maps downscaled images and negative monitor origins before region filtering", async () => {

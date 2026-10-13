@@ -5,6 +5,7 @@ import { isDark, readFrame, toPng, type Frame } from "./frame.ts";
 import { ocrItems, ocrText, readOcr, seamOf, type Region } from "./ocr.ts";
 import { OCR_TIMEOUT_MS, Screen } from "./screen.ts";
 import { textOf, textResult } from "./result.ts";
+import { checkImages } from "./image-check.ts";
 
 const MAX_PNG_BYTES = 16 * 1024 * 1024;
 const MAX_DIMENSION = 8192;
@@ -63,8 +64,9 @@ export class Display {
 			const result = await capture();
 			const png = screenshotPng(result);
 			const geometry = screenshotGeometry(result, png);
-			if (method === "console.screenshot") return this.image(png, { source: "guest", session: state?.id,
-				x: geometry.x, y: geometry.y, screenWidth: geometry.width, screenHeight: geometry.height, scaleX: geometry.scaleX, scaleY: geometry.scaleY });
+			// The guest sends this image, so it gets win.screenshot's check; OCR below reads the bytes on the host only.
+			if (method === "console.screenshot") return checkImages(this.image(png, { source: "guest", session: state?.id,
+				x: geometry.x, y: geometry.y, screenWidth: geometry.width, screenHeight: geometry.height, scaleX: geometry.scaleX, scaleY: geometry.scaleY }));
 			const ocr = readOcr(await host.call("ocrImage", { vm: guest.vm, png: [...png.data] }, { signal, timeoutMs: OCR_TIMEOUT_MS }));
 			if (ocr.width !== png.width || ocr.height !== png.height) throw new Error("Windows OCR dimensions do not match the captured screenshot");
 			return this.text(ocr, area, geometry);

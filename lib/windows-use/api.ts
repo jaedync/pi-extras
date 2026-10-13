@@ -296,7 +296,7 @@ export class WinSession {
 				return this.console("key", { vm, keys: args.keys }, signal);
 			}
 			case "console.cad": return this.console("cad", { vm }, signal);
-			// The guest's server sends these images; the console's are made here, from Hyper-V's pixels.
+			// The guest's server sends these images. Display checks the guest image that console.screenshot uses in an enhanced session.
 			case "snapshot":
 			case "screenshot": return checkImages(await this.guestTool(vm, method, args, signal));
 			case "type":
