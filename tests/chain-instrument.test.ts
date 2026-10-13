@@ -126,11 +126,11 @@ const ARITHMETIC_COMMANDS = [
 	"echo a;\necho $((08)); echo b\necho c",
 	"echo a; { echo $((08)); }; echo b",
 ];
-// A newer bash than macOS ships, when one was built for the review.
-const BASH5 = "/tmp/review-d/bash5/bin/bash";
+// Another bash to compare with, such as a newer one than macOS ships: PI_TEST_BASH=/path/to/bash.
+const EXTRA_BASH = process.env.PI_TEST_BASH;
 
-for (const shell of ["/bin/bash", BASH5, "/bin/sh", "/bin/zsh"]) {
-	test(`an arithmetic error ends as much of the script as without the rewrite in ${shell}`, { skip: !existsSync(shell) }, () => {
+for (const shell of ["/bin/bash", EXTRA_BASH ?? "", "/bin/sh", "/bin/zsh"]) {
+	test(`an arithmetic error ends as much of the script as without the rewrite in ${shell || "PI_TEST_BASH (unset)"}`, { skip: shell === "" || !existsSync(shell) }, () => {
 		for (const prefix of ["", "set -e"]) {
 			for (const command of ARITHMETIC_COMMANDS) {
 				const { original, rewritten } = compareUnder(shell, command, prefix);
