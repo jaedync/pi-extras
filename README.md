@@ -410,10 +410,11 @@ for what is kept in memory.
 ## Usage Guard
 
 Usage Guard reads the limit snapshots Status Plus polls; it never polls limits on its
-own except when the `usage` tool is called with `refresh: true`. For dollar
-figures, a `usage` call also reads local session files and, when set up,
-Tokenfold and OpenRouter (see [Dollar figures](#dollar-figures)). `PI_OFFLINE`
-stops the Tokenfold and OpenRouter requests. Only windows that
+own except when the `usage` tool is called with `refresh: true` or `all: true`.
+`all: true` polls each scoped model's provider that has no snapshot yet. For
+dollar figures, a `usage` call or `/usage` also reads local session files and,
+when set up, Tokenfold and OpenRouter (see [Dollar figures](#dollar-figures)).
+`PI_OFFLINE` stops the Tokenfold and OpenRouter requests. Only windows that
 govern the active model count: provider-wide windows always, model-specific ones
 (such as an Anthropic `seven_day_fable` bucket) only when the active model id
 carries that family. Balances (Enterprise spend, prepaid credits) and per-minute
@@ -470,7 +471,8 @@ rate limits taken from response headers are reported but never warned on.
     example `7d ~96%`. The `usage` tool marks it with `approximate`.
   - An approximate reading fires no band or budget warning, has no dollar
     figures, and does not go into the granted-reset readings.
-- `/usage` queues the current snapshot for the next turn; `/usage budget 7d 60`
+- `/usage` queues the current snapshot for the next turn, or steers it into
+  the run while the agent works; `/usage budget 7d 60`
   and `/usage budget clear` manage the session budget; `/usage warnings on|off`
   persists the toggle.
 - Polling: providers whose window sits within `proximityPct` of a threshold poll
