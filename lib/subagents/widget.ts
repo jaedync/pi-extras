@@ -237,6 +237,51 @@ export interface AgentsWidget {
 
 
 /** `motion` is Tool Display's setting, read each frame: reduced holds what agents are doing still. */
+const reportPending = (pending: readonly PendingItem[]): Set<string> =>
+	new Set(pending.filter((item) => item.kind === "report").flatMap((item) => item.from.split(", ")));
+
+interface WidgetView { records: AgentRecord[]; pending: PendingItem[]; expanded: boolean; motion: Motion }
+
+/** The widget's lines at `width`, and where its rows and control line sit, for clicks. */
+function renderAgents(theme: Theme, host: TuiHost, width: number, view: WidgetView): { lines: string[]; layout: Layout } {
+	const all = agentRows(view.records, reportPending(view.pending));
+	const mail = pendingLines(view.pending);
+	const budget = expandedBudget(host.terminal?.rows ?? process.stdout.rows ?? 40, mail.length);
+	// A terminal too short to give the rows more room has nothing to expand into.
+	const roomy = shownCount(all.length, true, budget) !== shownCount(all.length, false, budget);
+	const { shown: rows, hidden } = fitRows(all, shownCount(all.length, view.expanded && roomy, budget));
+	const now = Date.now();
+	const columns = rowColumns(rows, now);
+	const lines = rows.map((row) => presenceLine(theme, row, width, now, view.motion, columns));
+	const toggle = roomy ? (view.expanded ? "collapse" : "expand") : null;
+	const control = all.length > COLLAPSED_ROWS ? { ...controlLine(hidden, all.length, toggle, width), y: lines.length } : null;
+	if (control) lines.push(agentLine(theme, control.segs, width));
+	// Mail still on its way to main, cut to the width like any agent line.
+	for (const line of mail) lines.push(agentLine(theme, [{ text: line.text, color: line.color }], width));
+	return { lines, layout: { rows, control } };
+}
+
+/** A left click on a row opens that agent; on the control line it expands, collapses or opens the agents view. */
+function clickAgents(event: MouseEvent, layout: Layout, actions: { select?: (name: string) => void; view?: () => void; toggle: () => void }) {
+	if (event.type !== "click" || event.button !== "left") return undefined;
+	const row = layout.rows[event.y];
+	if (row && actions.select) {
+		actions.select(row.record.name);
+		return { handled: true };
+	}
+	const control = layout.control;
+	if (!control || event.y !== control.y) return undefined;
+	if (control.toggle && inSpan(event.x, control.toggle)) {
+		actions.toggle();
+		return { handled: true, render: true };
+	}
+	if (actions.view && (inSpan(event.x, control.view) || inSpan(event.x, control.more))) {
+		actions.view();
+		return { handled: true };
+	}
+	return undefined;
+}
+
 export function createAgentsWidget(motion: () => Motion = () => "full"): AgentsWidget {
 	let ui: WidgetUi | null = null;
 	let source: (() => { records: AgentRecord[]; pending: PendingItem[] }) | null = null;
@@ -250,51 +295,19 @@ export function createAgentsWidget(motion: () => Motion = () => "full"): AgentsW
 	let layout: Layout = { rows: [], control: null };
 
 	const snapshot = () => source?.() ?? { records: [], pending: [] };
-	const reportPending = (pending: readonly PendingItem[]) =>
-		new Set(pending.filter((item) => item.kind === "report").flatMap((item) => item.from.split(", ")));
 
 	const factory = (host: TuiHost, theme: Theme) => {
 		tui = host;
 		return {
 			render: (width: number) => {
-				const { records, pending } = snapshot();
-				const all = agentRows(records, reportPending(pending));
-				const mail = pendingLines(pending);
-				const budget = expandedBudget(host.terminal?.rows ?? process.stdout.rows ?? 40, mail.length);
-				// A terminal too short to give the rows more room has nothing to expand into.
-				const roomy = shownCount(all.length, true, budget) !== shownCount(all.length, false, budget);
-				const { shown: rows, hidden } = fitRows(all, shownCount(all.length, expanded && roomy, budget));
-				const now = Date.now();
-				const columns = rowColumns(rows, now);
-				const lines = rows.map((row) => presenceLine(theme, row, width, now, motion(), columns));
-				const toggle = roomy ? (expanded ? "collapse" : "expand") : null;
-				const control = all.length > COLLAPSED_ROWS ? { ...controlLine(hidden, all.length, toggle, width), y: lines.length } : null;
-				if (control) lines.push(agentLine(theme, control.segs, width));
-				layout = { rows, control };
-				// Mail still on its way to main, cut to the width like any agent line.
-				for (const line of mail) lines.push(agentLine(theme, [{ text: line.text, color: line.color }], width));
-				return lines;
+				const frame = renderAgents(theme, host, width, { ...snapshot(), expanded, motion: motion() });
+				layout = frame.layout;
+				return frame.lines;
 			},
 			invalidate: () => {},
-			handleMouse: (event: MouseEvent) => {
-				if (event.type !== "click" || event.button !== "left") return undefined;
-				const row = layout.rows[event.y];
-				if (row && onSelect) {
-					onSelect(row.record.name);
-					return { handled: true };
-				}
-				const control = layout.control;
-				if (!control || event.y !== control.y) return undefined;
-				if (control.toggle && inSpan(event.x, control.toggle)) {
-					expanded = !expanded;
-					return { handled: true, render: true };
-				}
-				if (onView && (inSpan(event.x, control.view) || inSpan(event.x, control.more))) {
-					onView();
-					return { handled: true };
-				}
-				return undefined;
-			},
+			handleMouse: (event: MouseEvent) => clickAgents(event, layout, {
+				...(onSelect ? { select: onSelect } : {}), ...(onView ? { view: onView } : {}), toggle: () => { expanded = !expanded; },
+			}),
 		};
 	};
 
