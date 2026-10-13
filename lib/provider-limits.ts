@@ -3,8 +3,8 @@
  * Credentials are sent only to the matching provider's usage endpoint.
  */
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { dateMs } from "./date-format.ts";
 
 export type UsageWindowKey = "primary" | "secondary" | "rolling" | "weekly" | "monthly";
@@ -37,7 +37,8 @@ export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 export const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 export const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const USAGE_REQUEST_TIMEOUT_MS = 3000;
-export const CODEX_AUTH_FILE = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "auth.json");
+/** Pi's agent directory, as Pi resolves it: PI_CODING_AGENT_DIR="~/x" means the home folder's x. */
+export const CODEX_AUTH_FILE = join(getAgentDir(), "auth.json");
 
 const PLAN_LABEL = /^[a-z0-9_-]{1,32}$/;
 const OPENCODE_GO_WINDOWS: ReadonlyArray<readonly [UsageWindowKey, number]> = [

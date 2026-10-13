@@ -11,7 +11,7 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isOffline } from "../lib/offline.ts";
 import { errorText, operationalError, operationalLine } from "../lib/operational-log.ts";
 import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -37,7 +37,7 @@ import {
 } from "../lib/status-plus-transcript.ts";
 
 const LONG_CACHE = process.env.PI_CACHE_RETENTION === "long";
-const AGENT_DIR = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+const AGENT_DIR = getAgentDir();
 const LOG_FILE = join(AGENT_DIR, "status-plus.log");
 /** Limit polls shared by the Pi processes of this agent directory (lib/limit-share.ts). */
 const SHARE_DIR = join(AGENT_DIR, "status-plus-limits");
