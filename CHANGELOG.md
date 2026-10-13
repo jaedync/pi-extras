@@ -2,6 +2,18 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.17 - 2026-10-13
+
+### Fixed
+
+- Pull Link: the media tools (yt-dlp, its helper and the token provider
+  build) now get only the Node that runs Pi ahead of the user's PATH. Before,
+  Pi put the whole folder of that Node first. For a system Node in
+  `/usr/bin`, that also put `/usr/bin/git`, `python` and the other
+  programs there ahead of the user's own. The first entry is now
+  `node-bin/` in the media folder, with one link, `node`. On Windows, and
+  when the link cannot be made, the old behavior stays.
+
 ## 0.24.16 - 2026-10-13
 
 ### Added
