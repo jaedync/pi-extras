@@ -74,7 +74,11 @@ function writeAtomic(path: string, text: string): void {
 		writeFileSync(temporary, text, { mode: 0o600 });
 		renameSync(temporary, path);
 	} catch (error) {
-		rmSync(temporary, { force: true });
+		try {
+			rmSync(temporary, { force: true });
+		} catch {
+			// The first error is the one worth reporting; a leftover .tmp file is harmless.
+		}
 		throw error;
 	}
 }
@@ -199,6 +203,11 @@ export function deviceProbeCommand(runtime: Runtime = currentRuntime()): ProbeCo
 	}
 }
 
+function closeText(code: number | null, signal: NodeJS.Signals | null, out: string): string {
+	if (signal) return `signal ${signal}`;
+	return code === 0 ? `unreadable output ${JSON.stringify(out.slice(0, 16))}` : `exit code ${code}`;
+}
+
 /**
  * Runs the device count in a child, so a slow CoreAudio start never blocks
  * Pi. The child is killed at its timeout, when Pi exits, or by the returned stop.
@@ -215,8 +224,12 @@ export function runDeviceProbe(
 	}
 	const child = spawn(command.command, [...command.args], { stdio: ["ignore", "pipe", "ignore"] });
 	const kill = () => child.kill("SIGKILL");
+	let timedOut = false;
 	// spawn's own `timeout` holds a referenced timer, which would keep Pi from exiting.
-	const timer = setTimeout(kill, timeoutMs);
+	const timer = setTimeout(() => {
+		timedOut = true;
+		kill();
+	}, timeoutMs);
 	timer.unref();
 	let out = "";
 	let finished = false;
@@ -233,7 +246,12 @@ export function runDeviceProbe(
 		onError(`microphone check could not run: ${errorText(error)}`);
 		finish(undefined);
 	});
-	child.on("close", (code) => finish(code === 0 && /^\d+$/.test(out) ? Number(out) : undefined));
+	child.on("close", (code, signal) => {
+		if (finished) return;
+		const devices = code === 0 && /^\d+$/.test(out) ? Number(out) : undefined;
+		if (devices === undefined) onError(timedOut ? `microphone check timed out after ${timeoutMs} ms` : `microphone check failed: ${closeText(code, signal, out)}`);
+		finish(devices);
+	});
 	// Pi must not wait for the probe to exit.
 	child.unref();
 	(child.stdout as { unref?: () => void } | null)?.unref?.();

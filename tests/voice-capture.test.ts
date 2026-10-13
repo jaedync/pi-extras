@@ -187,8 +187,20 @@ test("the device probe child reports its count, and is killed at its timeout", a
 	const garbage = await new Promise<number | undefined>((resolve) => runDeviceProbe(resolve, { command: process.execPath, args: ["-e", "process.stdout.write('lots')"] }));
 	assert.equal(garbage, undefined);
 	const started = Date.now();
-	const hung = await new Promise<number | undefined>((resolve) => runDeviceProbe(resolve, { command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] }, 300));
+	const hungNotes: string[] = [];
+	const hung = await new Promise<number | undefined>((resolve) => runDeviceProbe(resolve, { command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] }, 300, (note) => hungNotes.push(note)));
 	assert.equal(hung, undefined);
+	assert.match(hungNotes.join("\n"), /microphone check timed out after 300 ms/);
+	const failedNotes: string[] = [];
+	await new Promise<number | undefined>((resolve) => runDeviceProbe(resolve, { command: process.execPath, args: ["-e", "process.exit(3)"] }, 5_000, (note) => failedNotes.push(note)));
+	assert.match(failedNotes.join("\n"), /microphone check failed: exit code 3/);
+	const stoppedNotes: string[] = [];
+	await new Promise<void>((resolve) => {
+		const stop = runDeviceProbe(() => resolve(), { command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] }, 5_000, (note) => stoppedNotes.push(note));
+		setTimeout(stop, 100);
+	});
+	await new Promise((resolve) => setTimeout(resolve, 200));
+	assert.deepEqual(stoppedNotes, [], "a probe that the session ends is not a failure");
 	assert.ok(Date.now() - started < 5_000, "the timeout ends a hung probe");
 	const notes: string[] = [];
 	const missing = await new Promise<number | undefined>((resolve) => runDeviceProbe(resolve, { command: "/nonexistent/pi-extras-probe", args: [] }, 1_000, (note) => notes.push(note)));
