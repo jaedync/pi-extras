@@ -126,6 +126,14 @@ test("a copy keeps the source's tabs block by block, wherever Pi and the source 
 		assert.deepEqual(blocks.filter((block) => block.kind === "code").map((block) => block.text), expected, `/copy-block ${JSON.stringify(reply)}`);
 		assert.deepEqual(recorder.pending!.map((code, index) => sourceCode(code.code, blocks, index)), expected, `click ${JSON.stringify(reply)}`);
 	}
+	// Prose that reads like the code, before the block, is not the block's source.
+	for (const [reply, expected] of [
+		["Run this:\n      make all\n\n```make\n\tmake all\n```\n", "\tmake all"],
+		["> Run this:\n>       make all\n>\n> ```make\n> \tmake all\n> ```\n", "\tmake all"],
+		["```make\r\nall:\r\n\tgo build\r\n```\r\n", "all:\n\tgo build"],
+	]) {
+		assert.deepEqual(sourceBlocks(reply!).filter((block) => block.kind === "code").map((block) => block.text), [expected], JSON.stringify(reply));
+	}
 	// A tab that Pi's indent cut splits leaves the columns that remain, as spaces.
 	assert.deepEqual(sourceBlocks("- item\n\n  ```\n \tx\n  ```").filter((block) => block.kind === "code").map((block) => block.text), ["  x"]);
 });

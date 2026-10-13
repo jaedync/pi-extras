@@ -16,11 +16,16 @@ const TAB = "   ";
 
 type Node = Token & { readonly tokens?: readonly Token[]; readonly items?: readonly Token[] };
 
-/** The source lines, the same lines with tabs expanded, and the line where the next block's search starts. */
+/**
+ * The source lines, the same lines with tabs expanded, and the lines a
+ * block's search may use: from the next unread line to the end of the lines
+ * its token covers.
+ */
 interface Reader {
 	readonly source: readonly string[];
 	readonly expanded: readonly string[];
 	from: number;
+	to: number;
 }
 
 /**
@@ -31,19 +36,36 @@ interface Reader {
  * unclosed fence runs to the end, as it does while a reply streams.
  */
 export function sourceBlocks(markdown: string): SourceBlock[] {
-	const source = markdown.split("\n");
-	const reader: Reader = { source, expanded: source.map(expandTabs), from: 0 };
+	const source = markdown.split(/\r?\n/);
+	const reader: Reader = { source, expanded: source.map(expandTabs), from: 0, to: source.length };
 	const tokens = lexer.lexer(expandTabs(markdown));
-	return collect(tokens, reader, false, tokens.at(-1));
+	return collect(tokens, reader, false, tokens.at(-1), 0);
 }
 
-function collect(tokens: readonly Token[], reader: Reader, quoted: boolean, last: Token | undefined): SourceBlock[] {
+/**
+ * The blocks in `tokens`. When `base` is known, the tokens' raw text joins to
+ * the lines from `base` on, one to one (expanding tabs keeps every line
+ * break), so each token's search stays within its own lines; prose that reads
+ * like a later block's code cannot be taken for it.
+ */
+function collect(tokens: readonly Token[], reader: Reader, quoted: boolean, last: Token | undefined, base?: number): SourceBlock[] {
+	let line = base;
 	return tokens.flatMap((token): SourceBlock[] => {
 		const node = token as Node;
+		const start = line;
+		if (line !== undefined) {
+			const breaks = token.raw.split("\n").length - 1;
+			reader.from = Math.max(reader.from, line);
+			reader.to = line + breaks + (token.raw.endsWith("\n") ? 0 : 1);
+			line += breaks;
+		}
 		const lastHere = token === last;
 		if (node.type === "code") return [{ kind: "code", text: codeSource(node as Tokens.Code, reader, quoted, lastHere) }];
 		if (node.type === "blockquote") return quoteBlocks(node, reader, quoted, lastHere);
-		return collect(node.items ?? node.tokens ?? [], reader, quoted, lastHere ? lastOf(node) : undefined);
+		const inner = node.items ?? node.tokens ?? [];
+		// A list's items, and an item's blocks, keep the line count of the list's own lines.
+		const known = node.type === "list" || node.type === "list_item" ? start : undefined;
+		return collect(inner, reader, quoted, lastHere ? lastOf(node) : undefined, known);
 	});
 }
 
@@ -59,9 +81,9 @@ function quoteBlocks(node: Node, reader: Reader, quoted: boolean, lastHere: bool
 	const at = findLines(reader, raw, quoted);
 	const lines = at ? at.lines : raw;
 	const quote: SourceBlock[] = quoted ? [] : [{ kind: "quote", text: lines.map((line) => line.replace(/^\s{0,3}> ?/, "")).join("\n") }];
-	// The quote's own code blocks lie within its lines.
+	// The quote's own code blocks lie within its lines, which keep their count without the `>`.
 	if (at) reader.from = at.start;
-	const inner = collect(node.tokens ?? [], reader, true, lastHere ? lastOf(node) : undefined);
+	const inner = collect(node.tokens ?? [], reader, true, lastHere ? lastOf(node) : undefined, at?.start);
 	if (at) reader.from = Math.max(reader.from, at.end);
 	return [...quote, ...inner];
 }
@@ -95,7 +117,7 @@ function findLines(reader: Reader, drawn: readonly string[], quoted: boolean): {
 		const want = drawn[index]!;
 		return line.endsWith(want) && lead.test(line.slice(0, line.length - want.length));
 	};
-	for (let start = reader.from; start + drawn.length <= reader.source.length; start++) {
+	for (let start = reader.from; start + drawn.length <= Math.min(reader.to, reader.source.length); start++) {
 		if (!drawn.every((_, index) => fits(start + index, index))) continue;
 		const lines = drawn.map((want, index) => cutColumns(reader.source[start + index]!, reader.expanded[start + index]!.length - want.length));
 		return { lines, start, end: start + drawn.length };
