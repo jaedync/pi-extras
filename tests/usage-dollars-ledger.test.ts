@@ -143,3 +143,26 @@ test("a chunk of many short lines is read without a stack overflow", async () =>
 	await ledger.refresh(NOW);
 	assert.equal(ledger.sum({ provider: "anthropic", ...all }), 2);
 });
+
+test("compaction, branch summary and cache-warm spend count, under the session's model", async () => {
+	const dir = root();
+	const usage = (total: number) => ({ input: 1000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 1010, cost: { total } });
+	const at = (ms: number) => new Date(ms).toISOString();
+	const entries = [
+		{ type: "model_change", id: "m1", timestamp: at(NOW - 2 * HOUR), provider: "anthropic", modelId: "claude-opus-5-5" },
+		{ type: "compaction", id: "c1", timestamp: at(NOW - HOUR), summary: "...", firstKeptEntryId: "x", tokensBefore: 1, usage: usage(0.9) },
+		{ type: "branch_summary", id: "b1", timestamp: at(NOW - HOUR), fromId: "x", summary: "...", usage: usage(0.2) },
+		{ type: "usage", id: "w1", timestamp: at(NOW - HOUR), kind: "cache_warm", provider: "openai-codex", model: "gpt-6", usage: usage(0.45) },
+		// A summary with no recorded usage costs nothing.
+		{ type: "compaction", id: "c2", timestamp: at(NOW - HOUR), summary: "...", firstKeptEntryId: "x", tokensBefore: 1 },
+	];
+	const text = line({ cost: 0.1, responseId: "r1" }) + entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
+	writeFileSync(join(dir, "a.jsonl"), text);
+	// A fork copies the entries; each counts once.
+	writeFileSync(join(dir, "fork.jsonl"), text);
+	const ledger = ledgerAt(dir);
+	await ledger.refresh(NOW);
+	assert.equal(Math.round(ledger.sum({ provider: "anthropic", ...all }) * 100) / 100, 1.2);
+	assert.equal(ledger.sum({ provider: "openai-codex", ...all }), 0.45);
+	assert.deepEqual(ledger.models("openai-codex", 0), ["gpt-6"]);
+});
