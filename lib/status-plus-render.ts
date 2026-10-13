@@ -325,7 +325,8 @@ export function limitText(paint: Painter, entry: LimitEntry, now: number, inline
 	let text = entry.label ? `${entry.label} ` : "";
 	if (entry.usedPct !== undefined) {
 		const reset = dateMs(entry.resetMs);
-		text += `${Math.round(entry.usedPct)}%`;
+		// "~": Claude Code's last reading, or an old one kept while the usage endpoint did not answer.
+		text += `${entry.approximate ? "~" : ""}${Math.round(entry.usedPct)}%`;
 		if (entry.remainingText) text += ` (${entry.remainingText})`;
 		else if (inlineCountdown && entry.usedPct >= WARN_PCT && reset !== undefined && reset > now) {
 			text += ` ${formatDuration(reset - now, false)}`;

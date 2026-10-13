@@ -461,9 +461,12 @@ rate limits taken from response headers are reported but never warned on.
     reading until its reset.
   - A Claude Code reading that is more than 15 minutes old is ignored. A
     rejection with a future reset still blocks the window.
-  - When no usage-endpoint reading is available, the `usage` tool shows the
-    Claude Code reading with `approximate`. Such a reading fires no band or budget
-    warning, has no dollar figures, and does not go into the granted-reset readings.
+  - A Claude Code reading is approximate. A kept usage-endpoint reading that is
+    more than 30 minutes old is also approximate.
+  - The footer shows `~` before the percent of an approximate reading, for
+    example `7d ~96%`. The `usage` tool marks it with `approximate`.
+  - An approximate reading fires no band or budget warning, has no dollar
+    figures, and does not go into the granted-reset readings.
 - `/usage` queues the current snapshot for the next turn; `/usage budget 7d 60`
   and `/usage budget clear` manage the session budget; `/usage warnings on|off`
   persists the toggle.

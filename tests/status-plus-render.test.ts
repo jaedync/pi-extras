@@ -145,3 +145,8 @@ test("provider colours keep distinct hues at a muted, uniform weight", () => {
 	assert.ok(PROVIDERS["opencode-go"].color[1] > PROVIDERS["opencode-go"].color[0] && PROVIDERS["opencode-go"].color[2] > PROVIDERS["opencode-go"].color[0]);
 	assert.equal(stripAnsi(providerTag(paint, "openai-codex")), "Cdx");
 });
+
+test("an approximate reading shows ~ before its percent", () => {
+	assert.match(limitText(paint, { label: "7d", usedPct: 96, approximate: true }, 0), />7d ~96%</);
+	assert.match(limitText(paint, { label: "7d", usedPct: 96 }, 0), />7d 96%</);
+});
