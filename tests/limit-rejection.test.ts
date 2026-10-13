@@ -74,3 +74,14 @@ test("success evidence respects model family, source, provider, and time", () =>
 	store.recordSuccess("opencode-go", "model", at("04:11:43"));
 	assert.equal(store.get("opencode-go")?.entries[0].exhausted, true, "Go may accept requests against paid balance");
 });
+
+test("a successful response clears a rejection that gave no percent: its 100% is inferred, not a near-full reading", () => {
+	const store = createLimitStore();
+	store.set("anthropic", { entries: quota(null as unknown as number), atMs: at("04:11:00"), source: "poll" });
+	assert.equal(store.get("anthropic")?.entries[0].exhausted, true);
+	store.recordSuccess("anthropic", MODEL.id, at("04:11:43"));
+	assert.equal(store.get("anthropic")?.entries[0].exhausted, false);
+	const report = usageReport(store.entries(), MODEL, ON, undefined, at("04:12:00"));
+	assert.equal(report.limits[0].approximate, "a rejection with no percent, so 100% is inferred");
+	assert.equal(report.limits[0].pace, undefined, "no pace from an inferred percent");
+});

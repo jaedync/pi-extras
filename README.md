@@ -471,7 +471,8 @@ rate limits taken from response headers are reported but never warned on.
     30 minutes old. A window that the answer does not include keeps its last
     reading until its reset.
   - A Claude Code reading that is more than 15 minutes old is ignored. A
-    rejection with a future reset still blocks the window.
+    rejection with a future reset still blocks the window. A rejection with
+    no percent blocks the window and shows as an approximate 100%.
   - A Claude Code reading is approximate. A kept usage-endpoint reading that is
     more than 30 minutes old is also approximate.
   - The footer shows `~` before the percent of an approximate reading, for

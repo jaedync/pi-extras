@@ -375,8 +375,10 @@ export function warningMessage(warning: Warning, config: GuardConfig, now: numbe
 const KEPT_READING_MS = 60_000;
 const APPROXIMATE_SOURCE = "from Claude Code's last response";
 const STALE_SOURCE = "an earlier usage-endpoint reading, more than 30 minutes old";
+const NO_PERCENT_SOURCE = "a rejection with no percent, so 100% is inferred";
 const APPROXIMATE_NOTE = "Limits marked approximate come from Claude Code's last response, or are usage-endpoint readings more than 30 minutes old, " +
-	"because the usage endpoint did not answer. They can lag or read high, fire no threshold warnings, and have no dollar figures.";
+	"because the usage endpoint did not answer, or are rejections that gave no percent, shown as 100%. " +
+	"They can lag or read high, fire no threshold warnings, and have no dollar figures.";
 
 const RESET_PASSED_NOTE = "Limits with status \"reset\" already reset since their last reading, so their percent is from the previous cycle. " +
 	"The next poll or response gives the new reading.";
@@ -468,7 +470,7 @@ function reportLimitFigures(
 		...(pct !== undefined ? { usedPct: Math.round(pct * 10) / 10 } : {}),
 		...(entry.remainingText ? { remaining: entry.remainingText } : {}),
 		status,
-		...(entry.approximate ? { approximate: entry.stale ? STALE_SOURCE : APPROXIMATE_SOURCE } : {}),
+		...(entry.approximate ? { approximate: entry.noPercent ? NO_PERCENT_SOURCE : entry.stale ? STALE_SOURCE : APPROXIMATE_SOURCE } : {}),
 	};
 	const timing = resetTiming(entry, config, now, timeZone);
 	// Nothing is left to wait for after the reset.

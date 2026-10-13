@@ -40,7 +40,8 @@ export function createRejectionTracker() {
 				// A proxy can refresh utilization and reset time but retain its last rejection.
 				// New-cycle or successful-response evidence ends that rejection, not a low percentage alone.
 				// Keep near-full buckets blocked because the new window can also genuinely be exhausted.
-				const headroom = entry.usedPct !== undefined && Number.isFinite(entry.usedPct) && entry.usedPct < NEAR_FULL_PCT;
+				// An inferred 100% (a rejection that gave no percent) says nothing about how full the window is.
+				const headroom = entry.noPercent === true || (entry.usedPct !== undefined && Number.isFinite(entry.usedPct) && entry.usedPct < NEAR_FULL_PCT);
 				return { ...entry, exhausted: !(cleared && headroom) };
 			});
 		},

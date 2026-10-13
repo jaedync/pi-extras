@@ -188,6 +188,58 @@ test("a Claude Code rejection blocks the window even while a recent OAuth readin
 	assert.equal(week?.proxyRejected, true);
 });
 
+test("a Claude Code rejection with no utilization still blocks the window, as one at 100% would", () => {
+	for (const utilization of [null, undefined]) {
+		const rejected = badResponse();
+		rejected.buckets[0] = { ...rejected.buckets[0], status: "rejected", utilization: utilization as unknown as number };
+		const [blocked] = parseProxyQuota(rejected, BAD_AT);
+		assert.equal(blocked?.key, "seven_day", String(utilization));
+		assert.equal(blocked.exhausted, true);
+		assert.equal(blocked.proxyRejected, true);
+		assert.equal(blocked.usedPct, 100);
+		assert.equal(blocked.approximate, true);
+		const good = poll(undefined, goodResponse(BAD_AT - MIN), BAD_AT - MIN);
+		const week = byKey(poll(good, rejected, BAD_AT).entries, "seven_day");
+		assert.equal(week?.usedPct, 37, "a kept usage-endpoint percent still wins");
+		assert.equal(week?.exhausted, true);
+	}
+	const allowed = badResponse();
+	allowed.buckets[0] = { ...allowed.buckets[0], status: "allowed", utilization: null as unknown as number };
+	assert.deepEqual(parseProxyQuota(allowed, BAD_AT), [], "a bucket that does not block and has no percent says nothing");
+});
+
+test("a rejection with no percent is approximate also in a legacy or OAuth-stamped body: its 100% never sizes dollars or logs a disagreement", () => {
+	const legacy = { ...badResponse(), sources: undefined };
+	legacy.buckets[0] = { ...legacy.buckets[0], status: "rejected", utilization: null as unknown as number };
+	const stamped = goodResponse(BAD_AT);
+	stamped.buckets[1] = { ...stamped.buckets[1], status: "rejected", utilization: null as unknown as number };
+	for (const body of [legacy, stamped]) {
+		const week = byKey(parseProxyQuota(body, BAD_AT), "seven_day");
+		assert.equal(week?.exhausted, true);
+		assert.equal(week?.usedPct, 100);
+		assert.equal(week?.approximate, true, "the percent is inferred, not read");
+		assert.equal(week?.noPercent, true);
+		const warnings = pendingWarnings([["anthropic", snap(parseProxyQuota(body, BAD_AT), BAD_AT)]], OPUS, ON, undefined, new Set(), BAD_AT);
+		assert.deepEqual(warnings.map((warning) => warning.reason), ["exhausted"], "the block still warns");
+	}
+	const dir = mkdtempSync(join(tmpdir(), "proxy-quota-"));
+	try {
+		const collector = createDollarsCollector({ agentDir: dir, timeZone: "UTC" });
+		collector.observe([["anthropic", snap(parseProxyQuota(legacy, BAD_AT), BAD_AT)]], BAD_AT);
+		assert.throws(() => readFileSync(join(dir, "usage-dollars", "window-readings.json")), /ENOENT/, "no window reading from an inferred percent");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+	const fetchedAt = BAD_AT - 40 * MIN;
+	const kept = snap(parseProxyQuota(goodResponse(fetchedAt), fetchedAt), fetchedAt);
+	const sdk = badResponse();
+	sdk.buckets[0] = { ...sdk.buckets[0], status: "rejected", utilization: null as unknown as number };
+	assert.deepEqual(disagreements(kept, parseProxyQuota(sdk, BAD_AT), BAD_AT), [], "an inferred 100% is no reading to compare");
+	const read = badResponse();
+	read.buckets[0] = { ...read.buckets[0], status: "rejected", utilization: 1 };
+	assert.equal(disagreements(kept, parseProxyQuota(read, BAD_AT), BAD_AT).length, 1, "a rejection that gave 100% still is");
+});
+
 test("polls with OAuth readings, and other providers, are not merged", () => {
 	const good = poll(undefined, goodResponse(BAD_AT - MIN), BAD_AT - MIN);
 	const fresh = parseProxyQuota(goodResponse(BAD_AT, 0.4), BAD_AT).filter((entry) => entry.key !== "five_hour");

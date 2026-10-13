@@ -48,6 +48,8 @@ export interface LimitEntry {
 	 * while the endpoint did not answer. It is also `approximate`.
 	 */
 	stale?: boolean;
+	/** A rejection that came with no percent: its `usedPct` of 100 is inferred, so it is also `approximate`. */
+	noPercent?: boolean;
 	/** An approximate reading's raw status and warning threshold, as the proxy passed them on, for the disagreement log. */
 	proxyStatus?: string;
 	surpassedThreshold?: number;
@@ -341,9 +343,12 @@ function sdkOnly(record: { sources?: unknown }): (bucket: ProxyQuotaBucket) => b
 }
 
 function bucketEntry(bucket: ProxyQuotaBucket, approximate: boolean, now: number): LimitEntry | undefined {
-	if (typeof bucket.type !== "string" || !finiteNumber(bucket.utilization)) return undefined;
-	const resetMs = finiteNumber(bucket.resetsAt) ? resetTimeMs(bucket.resetsAt, now) : undefined;
 	const rejected = bucket.status === "rejected";
+	// A rejection blocks requests with or without a percent (Claude Code's event can leave it out), so it reads as full.
+	const noPercent = rejected && !finiteNumber(bucket.utilization);
+	const utilization = finiteNumber(bucket.utilization) ? bucket.utilization : noPercent ? 1 : undefined;
+	if (typeof bucket.type !== "string" || utilization === undefined) return undefined;
+	const resetMs = finiteNumber(bucket.resetsAt) ? resetTimeMs(bucket.resetsAt, now) : undefined;
 	// A time ahead of this clock would keep a reading young for too long.
 	const sampledMs = finiteNumber(bucket.observedAt) ? (aheadOfClock(bucket.observedAt, now) ? now : bucket.observedAt) : undefined;
 	if (approximate && sampledMs !== undefined && now - sampledMs > SDK_READING_MAX_AGE_MS) {
@@ -357,13 +362,15 @@ function bucketEntry(bucket: ProxyQuotaBucket, approximate: boolean, now: number
 		label: quotaLabel(bucket.type),
 		key: bucket.type,
 		...(family ? { modelFamily: family } : {}),
-		usedPct: bucket.utilization <= 1 ? bucket.utilization * 100 : bucket.utilization,
+		usedPct: utilization <= 1 ? utilization * 100 : utilization,
 		...(quotaWindowSeconds(bucket.type) !== undefined ? { windowSeconds: quotaWindowSeconds(bucket.type) } : {}),
 		resetMs,
 		exhausted: rejected,
 		...(rejected ? { proxyRejected: true } : {}),
 		...(bucket.status === "allowed" ? { allowed: true } : {}),
-		...(approximate ? { approximate: true } : {}),
+		// An inferred 100% still blocks, but must not size dollars, fire bands or look like a granted reset when it goes.
+		...(approximate || noPercent ? { approximate: true } : {}),
+		...(noPercent ? { noPercent: true } : {}),
 		...(sampledMs !== undefined ? { sampledMs } : {}),
 		...(proxyStatus ? { proxyStatus } : {}),
 		...(approximate && finiteNumber(bucket.surpassedThreshold) ? { surpassedThreshold: bucket.surpassedThreshold } : {}),

@@ -25,7 +25,8 @@ const roundPct = (value: number) => Math.round(value * 10) / 10;
 
 export function usagePace(entry: LimitEntry, now: number, timeZone?: string): UsagePace | undefined {
 	const { windowSeconds: duration, resetMs, usedPct } = entry;
-	if ((entry.kind && entry.kind !== "window") || entry.resetApprox) return undefined;
+	// An inferred 100% is no measure of the rate of use.
+	if ((entry.kind && entry.kind !== "window") || entry.resetApprox || entry.noPercent) return undefined;
 	if (duration === undefined || !Number.isFinite(duration) || duration <= 0 || !Number.isFinite(now)) return undefined;
 	if (resetMs === undefined || !Number.isFinite(new Date(resetMs).getTime()) || resetMs <= now) return undefined;
 	if (usedPct === undefined || !Number.isFinite(usedPct) || usedPct < 0) return undefined;

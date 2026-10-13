@@ -121,7 +121,8 @@ export function disagreements(stored: Stored | undefined, fresh: readonly LimitE
 	const previous = new Map((stored?.entries ?? []).map((entry) => [identity(entry), entry]));
 	return fresh.flatMap((entry) => {
 		const kept = previous.get(identity(entry));
-		if (!entry.approximate || !isWindow(entry) || !kept || kept.approximate || !isWindow(kept)) return [];
+		// An inferred 100% (a rejection with no percent) is no reading to compare.
+		if (!entry.approximate || entry.noPercent || !isWindow(entry) || !kept || kept.approximate || !isWindow(kept)) return [];
 		if (kept.sampledMs === undefined || resetPassed(kept, now)) return [];
 		const sampled = { ...kept, sampledMs: kept.sampledMs };
 		// Tenths of a point: 0.57 * 100 is 56.99999999999999.
