@@ -59,10 +59,15 @@ function lastFrame(line: string): string {
 	return line.split("\r").findLast((frame) => frame !== "") ?? "";
 }
 
+/** Text with its controls removed; a lone `\r` shows as a line break, so no part of a command or code is hidden. */
 export function sanitize(text: string): string {
+	return text.replace(/\r\n?/g, "\n").replace(/\t/g, "  ").replace(CONTROL, "").replace(INVISIBLE, "");
+}
+
+/** A command's output as sanitize shows it, but each line redrawn with `\r` keeps only its last frame. */
+export function outputText(text: string): string {
 	const unix = text.replace(/\r\n/g, "\n");
-	const lines = unix.includes("\r") ? unix.split("\n").map(lastFrame).join("\n") : unix;
-	return lines.replace(/\t/g, "  ").replace(CONTROL, "").replace(INVISIBLE, "");
+	return sanitize(unix.includes("\r") ? unix.split("\n").map(lastFrame).join("\n") : unix);
 }
 
 /** A command as display lines, without trailing blank lines. */

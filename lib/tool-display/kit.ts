@@ -10,7 +10,7 @@ import type { Motion, Seg } from "../band/band.ts";
 import type { AnimationClock } from "../band/clock.ts";
 import type { PopupSource, PopupTheme } from "../band/popup.ts";
 import type { ChainRun } from "../chain/run.ts";
-import { sanitize } from "./format.ts";
+import { outputText, sanitize } from "./format.ts";
 import type { CallSnapshot } from "./nested.ts";
 
 export interface Kit {
@@ -123,14 +123,17 @@ export function tail(lines: readonly string[], max: number, width: number): { li
 	return { lines: shown, skipped: index + 1 };
 }
 
-/** Text blocks of a tool result, stripped of terminal sequences and control bytes. */
-export function resultText(result: { content?: unknown } | undefined): string {
+/**
+ * Text blocks of a tool result, stripped of terminal sequences and control
+ * bytes. As `output`, a line redrawn with `\r` keeps only its last frame.
+ */
+export function resultText(result: { content?: unknown } | undefined, output = false): string {
 	const blocks = result && Array.isArray(result.content) ? result.content : [];
 	const text = blocks
 		.filter((block): block is { type: "text"; text: string } => !!block && typeof block === "object" && (block as { type?: unknown }).type === "text" && typeof (block as { text?: unknown }).text === "string")
 		.map((block) => block.text)
 		.join("\n");
-	return sanitize(stripTerminalSequences(text));
+	return (output ? outputText : sanitize)(stripTerminalSequences(text));
 }
 
 export const hasImage = (result: { content?: unknown }) =>

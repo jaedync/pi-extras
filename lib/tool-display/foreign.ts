@@ -173,7 +173,7 @@ function drawnResult(tool: ForeignTool, view: View, own: Borrowed, width: number
 			// Fall back to the result's text.
 		}
 	}
-	return wrapAll(textLines(resultText(view.result)).map((line) => view.paint.fg("toolOutput", line)), width);
+	return wrapAll(textLines(resultText(view.result, true)).map((line) => view.paint.fg("toolOutput", line)), width);
 }
 
 /** Every argument, one per line: strings as written, anything else as JSON. */

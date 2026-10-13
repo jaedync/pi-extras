@@ -12,7 +12,7 @@ import { stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui
 import { resolve } from "node:path";
 import type { Outcome, Seg } from "../band/band.ts";
 import type { ChainRun } from "../chain/run.ts";
-import { commandLines, parseShellOutput, sanitize, type ShellOutput } from "./format.ts";
+import { commandLines, outputText, parseShellOutput, type ShellOutput } from "./format.ts";
 import { codeLines, more, numberArg, plural, resultText, shownPath, tailed, textLines, titleSeg, wrapAll, type Kit, type Paint } from "./kit.ts";
 import { BODY_INDENT } from "./row.ts";
 import { chainTitle, digitsOf, flashing, flat, shownSteps, stateOf, stepLine } from "./steps.ts";
@@ -37,7 +37,7 @@ function runOf(view: View): ChainRun | undefined {
 
 function parsed(view: View): ShellOutput | undefined {
 	if (!view.result) return undefined;
-	return parseShellOutput(resultText(view.result), !view.context.isPartial && view.context.isError);
+	return parseShellOutput(resultText(view.result, true), !view.context.isPartial && view.context.isError);
 }
 
 function outcome(output: ShellOutput | undefined): Outcome | undefined {
@@ -50,7 +50,7 @@ function outcome(output: ShellOutput | undefined): Outcome | undefined {
 	}
 }
 
-const stepOutput = (run: ChainRun, index: number) => textLines(sanitize(stripTerminalSequences(run.steps[index]?.output ?? "")));
+const stepOutput = (run: ChainRun, index: number) => textLines(outputText(stripTerminalSequences(run.steps[index]?.output ?? "")));
 
 /** Steps shown, and where the one being run or that failed sits among them. */
 function position(run: ChainRun): { shown: number[]; at: number } {

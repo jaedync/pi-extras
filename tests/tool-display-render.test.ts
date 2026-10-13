@@ -348,3 +348,12 @@ test("a single hidden line is shown in the row its hint would take, never as a h
 	bash.update({ isPartial: false, result: text("one\ntwo\nthree\nfour\nfive\nsix") });
 	assert.deepEqual(bash.lines().slice(1), ["    … 2 earlier lines (click for all)", "    three", "    four", "    five", "    six"]);
 });
+
+test("a bash row shows each progress line's last frame, and every part of its command", () => {
+	const h = harness();
+	const bash = row(bashRenderers(h.kit), { command: "a #\rb" });
+	bash.update({ executionStarted: true, isPartial: false, expanded: true, result: text("10%\r50%\r100%\ndone") });
+	const lines = bash.lines().map((line) => stripTerminalSequences(line).trimEnd());
+	assert.ok(lines[0]!.includes("$ a #  +1 line") && lines.includes("    b"), JSON.stringify(lines));
+	assert.ok(lines.includes("    100%") && !lines.some((line) => /\b(10|50)%/.test(line)), JSON.stringify(lines));
+});
