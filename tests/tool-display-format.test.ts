@@ -39,6 +39,8 @@ test("sanitize drops bidi and zero-width controls but keeps the joiner that emoj
 	assert.equal(sanitize("admin\u202e\u2066txt.exe\u2069\u202c"), "admintxt.exe", "no Trojan Source reordering");
 	assert.equal(sanitize("a\u202ab\u202bc\u202dd\u2067e\u2068f\u200eg\u200fh"), "abcdefgh");
 	assert.equal(sanitize("zero\u200bwidth\u2060joiner\ufeff"), "zerowidthjoiner");
+	assert.equal(sanitize("a\u061cb\u2061c\u2064d\u180ee\u115ff\u1160g\u3164h"), "abcdefgh", "the Arabic letter mark, invisible operators and fillers go");
+	assert.equal(sanitize("tag\u{e0001}\u{e0041}\u{e007f}s"), "tags", "tag characters smuggle hidden ASCII");
 	const family = "\u{1f468}\u200d\u{1f469}\u200d\u{1f467}";
 	assert.equal(sanitize(family), family, "the zero-width joiner stays");
 });

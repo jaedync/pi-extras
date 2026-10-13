@@ -26,10 +26,11 @@ const TRAILING_NOTICE = /\n\n\[([^\n]*)\]$/;
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 /**
  * Bidi embeddings, overrides, isolates and marks, which can reorder what a
- * title shows (Trojan Source), and zero-width spaces, which hide text. The
- * zero-width joiner (U+200D) stays: emoji sequences need it.
+ * title shows (Trojan Source), and characters that draw nothing and so hide
+ * text: zero-width spaces, invisible operators, fillers and tag characters.
+ * The zero-width joiner (U+200D) stays: emoji sequences need it.
  */
-const INVISIBLE = /[\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g;
+const INVISIBLE = /[\u061c\u115f\u1160\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\u3164\ufeff\u{e0000}-\u{e007f}]/gu;
 
 function shellOutcome(match: RegExpExecArray): ShellOutcome {
 	if (match[1] !== undefined) return { kind: "exit", code: Number(match[1]) };
