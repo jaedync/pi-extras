@@ -13,7 +13,7 @@ export function subagentDescription(options: { models: string; defaultModel: str
 		"",
 		'cwd (absolute or ~/) starts it in another directory or repository. The first child to edit files in a checkout (the file\'s git repository; outside git, its cwd\'s, or yours without one) holds it until its run ends: other children\'s edits there are refused, except its own subagents\'. isolation: "worktree" gives it its own git worktree of the repository at cwd, with uncommitted changes, for parallel edits; its report says how to apply them. Example: { task, cwd: "~/dev/app", isolation: "worktree" }. Set readOnly: true for research and review. Pass tools to give it only the named tools; its message tool always stays.',
 		"",
-		"Each run has a time budget (maxMinutes) and maybe a cost budget (maxCost, US dollars), with defaults from config. A run over either is stopped with its subagents and its report says so; a message resumes it with a fresh budget. Raise them for long work.",
+		"Each run has a time budget (maxMinutes) and maybe a cost budget (maxCost, US dollars), with defaults from config. A run over either is stopped with its subagents and its report says so; a message resumes it with a fresh budget. Each subagent has its own budget, which its parent's does not limit. Raise them for long work.",
 		"",
 		"The task is the subagent's whole brief: it has not seen this conversation (unless context is \"fork\"). State the goal, the relevant files and facts, constraints such as read-only, and what the report must contain.",
 		"",

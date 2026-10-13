@@ -1414,7 +1414,9 @@ each agent above it, also when a message resumed that subagent. The harness
 counts each call when it starts, so a compaction does not hide a change. The
 check runs again when its command changed or the last check could not run.
 After a restart, the next check always runs. The child keeps its check for its
-later runs. A `message` with `check` replaces it. When that message does not
+later runs. A `message` with `check` replaces it. A refused message leaves
+the check as it was. No message removes a check; to make it pass always, set
+`check: "true"`. When that message does not
 give `fixUntilPass` or `checkTimeoutMinutes`, the old values stay. Only main,
 or a child that can run `bash` itself, can set a check. A message can set a
 check only on one of the sender's own subagents. A read-only child can have a
@@ -1425,6 +1427,10 @@ main can stop any, and a child that may start subagents can stop its own.
 The call returns how it ended and its last message, so no report follows; a
 message resumes it later. `/subagents stop <name>`, `stop all` and ctrl+x in
 the inspector stop children for you, and then main gets the stopped report.
+A stop ends spawns that have not started first, so a spawn that waits for a
+stopped agent never starts. A stopping agent can't start new subagents. An
+agent that fails stops its subagents too. Each of their reports goes to the
+nearest agent above that still runs, or to main, so no report is lost.
 
 **Order.** `after` on `subagent` gives the agents that must end before the new
 child starts, for example `{ task, after: ["impl"] }`. The call records the
@@ -1529,7 +1535,10 @@ Each run of a child has a time budget, `maxRunMinutes` (default 60), and an
 optional cost budget, `maxRunCost` (no limit by default). The `subagent` call
 can set its own with `maxMinutes` and `maxCost`, and the child keeps them
 when it resumes. Time counts only while the run works, not while it waits
-for an answer from main or its parent. Cost counts only what this run spent.
+for an answer, for its subagents, or for a free slot. A run that wakes from
+waiting on its subagents keeps what it used. Cost counts only what this run
+spent. Each agent has its own budget: a parent's budget does not limit its
+subagents, and a child can give a subagent a larger budget than its own.
 A run over either budget is stopped with its subagents, like `stop_subagent`,
 but its parent gets a report that says why, for example `stopped after 1h00m:
 over its 60-minute budget`, with its last message. A report to main wakes it.
