@@ -1,6 +1,6 @@
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -178,4 +178,32 @@ test("windows that an older installed copy shared, with no sample time, show as 
 	const row = footer.row();
 	assert.match(row, /7d ~96%/);
 	assert.match(row, /\$1106\.83\/\$2000\.00 left/, "a budget keeps its dollar figures");
+});
+
+test("an approximate reading far from the last usage-endpoint reading is logged with both, one time", async (t) => {
+	const fetchedAt = NOW - 60_000;
+	share({ atMs: fetchedAt, entries: [
+		{ label: "5h", key: "five_hour", usedPct: 46, windowSeconds: 18_000, resetMs: NOW + 3_600_000, sampledMs: fetchedAt },
+		{ label: "7d", key: "seven_day", usedPct: 37, windowSeconds: 604_800, resetMs: NOW + 86_400_000, sampledMs: fetchedAt },
+	], triedAtMs: NOW - 120_000, failures: 0 });
+	const observedAt = NOW - 120_000;
+	respond = () => new Response(JSON.stringify({
+		buckets: [{ type: "seven_day", status: "allowed_warning", utilization: 0.96, surpassedThreshold: 0.75, resetsAt: NOW + 86_400_000, observedAt }],
+		extraUsage: null, sources: { oauth: null, sdk: { entryCount: 1 } }, asOf: Date.now(),
+	}));
+	const log = join(agentDir, "status-plus.log");
+	const before = existsSync(log) ? readFileSync(log, "utf8").length : 0;
+	const footer = app("http://127.0.0.1:3456");
+	await footer.emit("session_start");
+	t.after(() => footer.emit("session_shutdown"));
+	await settle();
+	assert.equal(requests, 1);
+	const realNow = Date.now;
+	Date.now = () => realNow() + 61_000;
+	t.after(() => { Date.now = realNow; });
+	await globalThis[STORE].refresh("anthropic", true);
+	assert.equal(requests, 2, "the same reading came a second time");
+	const lines = readFileSync(log, "utf8").slice(before).split("\n").filter((line) => line.includes("reading differs"));
+	assert.equal(lines.length, 1, lines.join("\n"));
+	assert.match(lines[0], /approximate anthropic seven_day reading differs from the usage endpoint: 96% \(status allowed_warning, surpassed 0\.75, reset \S+, sampled 120 s ago\) vs 37% \(reset \S+, sampled 60 s ago\)/);
 });

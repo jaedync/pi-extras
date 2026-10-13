@@ -92,3 +92,41 @@ export function mergePolled(stored: Stored | undefined, fresh: LimitEntry[], now
 export function markUnsampled(entries: readonly LimitEntry[]): LimitEntry[] {
 	return entries.map((entry) => isWindow(entry) && entry.sampledMs === undefined && !entry.approximate ? { ...entry, approximate: true } : entry);
 }
+
+/** Points between an approximate reading and the last usage-endpoint reading that are worth a log line. */
+export const DISAGREE_MIN_POINTS = 20;
+
+export interface Disagreement {
+	readonly fresh: LimitEntry;
+	readonly kept: LimitEntry & { sampledMs: number };
+}
+
+/**
+ * Approximate readings far from the last usage-endpoint reading of the same
+ * window, of any age while its reset has not passed. A window's use only grows
+ * until its reset, so a large gap names a wrong reading, and the log keeps
+ * both for the diagnosis.
+ */
+export function disagreements(stored: Stored | undefined, fresh: readonly LimitEntry[], now: number, minPoints = DISAGREE_MIN_POINTS): Disagreement[] {
+	const previous = new Map((stored?.entries ?? []).map((entry) => [identity(entry), entry]));
+	return fresh.flatMap((entry) => {
+		const kept = previous.get(identity(entry));
+		if (!entry.approximate || !isWindow(entry) || !kept || kept.approximate || !isWindow(kept)) return [];
+		if (kept.sampledMs === undefined || resetPassed(kept, now)) return [];
+		if (Math.abs(entry.usedPct! - kept.usedPct!) < minPoints) return [];
+		return [{ fresh: entry, kept: { ...kept, sampledMs: kept.sampledMs } }];
+	});
+}
+
+const pct = (value: number | undefined): string => `${Math.round((value ?? 0) * 10) / 10}%`;
+const resetText = (entry: LimitEntry): string => entry.resetMs === undefined ? "none" : new Date(entry.resetMs).toISOString();
+const ageText = (sampledMs: number | undefined, now: number): string => sampledMs === undefined ? "at an unknown time" : `${Math.max(0, Math.round((now - sampledMs) / 1000))} s ago`;
+
+/** One log line: the approximate reading with the proxy's raw status, then the usage-endpoint reading. */
+export function disagreementText(provider: string, found: Disagreement, now: number): string {
+	const { fresh, kept } = found;
+	const status = `status ${fresh.proxyStatus ?? "unknown"}${fresh.surpassedThreshold !== undefined ? `, surpassed ${fresh.surpassedThreshold}` : ""}`;
+	return `approximate ${provider} ${fresh.key ?? fresh.label} reading differs from the usage endpoint: `
+		+ `${pct(fresh.usedPct)} (${status}, reset ${resetText(fresh)}, sampled ${ageText(fresh.sampledMs, now)}) `
+		+ `vs ${pct(kept.usedPct)} (reset ${resetText(kept)}, sampled ${ageText(kept.sampledMs, now)})`;
+}

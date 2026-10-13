@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LimitSnapshot } from "../lib/limit-store.ts";
-import { mergePolled } from "../lib/limit-merge.ts";
+import { disagreements, disagreementText, mergePolled } from "../lib/limit-merge.ts";
 import { parseProxyQuota, type LimitEntry } from "../lib/status-plus-logic.ts";
 import { DEFAULT_GUARD_CONFIG, hotProviders, pendingWarnings, usageReport } from "../lib/usage-guard-core.ts";
 import { createDollarsCollector } from "../lib/usage-dollars/collect.ts";
@@ -263,4 +263,38 @@ test("local spend for a window stops at the time of its reading", () => {
 	const entry: LimitEntry = { label: "5h", key: "five_hour", windowSeconds: 18_000, usedPct: 46, resetMs: BAD_AT + 60 * MIN, sampledMs: BAD_AT - 60 * MIN };
 	entryDollars("anthropic", entry, { now: BAD_AT, timeZone: "UTC", spend: (query) => { queries.push(query.untilMs); return 10; } });
 	assert.deepEqual(queries, [BAD_AT - 60 * MIN]);
+});
+
+test("an approximate reading keeps the proxy's raw status and warning threshold; a usage-endpoint reading does not", () => {
+	const approximate = byKey(parseProxyQuota(badResponse(), BAD_AT), "seven_day")!;
+	assert.equal(approximate.proxyStatus, "allowed_warning");
+	assert.equal(approximate.surpassedThreshold, 0.75);
+	const endpoint = byKey(parseProxyQuota(goodResponse(BAD_AT), BAD_AT), "seven_day")!;
+	assert.equal(endpoint.proxyStatus, undefined);
+	assert.equal(endpoint.surpassedThreshold, undefined);
+});
+
+test("an approximate reading 20 points or more from the last usage-endpoint reading is a disagreement, logged with both readings", () => {
+	const fetchedAt = BAD_AT - 40 * MIN;
+	const stored = snap(parseProxyQuota(goodResponse(fetchedAt), fetchedAt), fetchedAt);
+	const found = disagreements(stored, parseProxyQuota(badResponse(), BAD_AT), BAD_AT);
+	assert.equal(found.length, 1);
+	assert.equal(disagreementText("anthropic", found[0]!, BAD_AT),
+		"approximate anthropic seven_day reading differs from the usage endpoint: 96% (status allowed_warning, surpassed 0.75, "
+		+ "reset 2026-10-15T08:00:00.000Z, sampled 120 s ago) vs 37% (reset 2026-10-15T07:59:59.744Z, sampled 2400 s ago)");
+});
+
+test("no disagreement under 20 points, against an approximate or unsampled reading, after the kept reset, or for a usage-endpoint poll", () => {
+	const fetchedAt = BAD_AT - 10 * MIN;
+	const good = parseProxyQuota(goodResponse(fetchedAt), fetchedAt);
+	const bad = parseProxyQuota(badResponse(), BAD_AT);
+	const close = parseProxyQuota({ ...badResponse(), buckets: [{ ...badResponse().buckets[0], utilization: 0.5 }] }, BAD_AT);
+	assert.deepEqual(disagreements(snap(good, fetchedAt), close, BAD_AT), [], "13 points apart");
+	assert.deepEqual(disagreements(snap(bad, fetchedAt), bad, BAD_AT), [], "the stored reading is approximate too");
+	const unsampled = good.map(({ sampledMs: _sampled, ...entry }) => entry);
+	assert.deepEqual(disagreements(snap(unsampled, fetchedAt), bad, BAD_AT), [], "an older copy wrote the stored reading");
+	const reset = good.map((entry) => ({ ...entry, resetMs: BAD_AT - 1 }));
+	assert.deepEqual(disagreements(snap(reset, fetchedAt), bad, BAD_AT), [], "the kept window has reset");
+	assert.deepEqual(disagreements(snap(good, fetchedAt), parseProxyQuota(goodResponse(BAD_AT, 0.96), BAD_AT), BAD_AT), [], "a usage-endpoint poll");
+	assert.deepEqual(disagreements(undefined, bad, BAD_AT), [], "nothing stored");
 });

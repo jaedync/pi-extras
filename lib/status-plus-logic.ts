@@ -48,6 +48,9 @@ export interface LimitEntry {
 	 * while the endpoint did not answer. It is also `approximate`.
 	 */
 	stale?: boolean;
+	/** An approximate reading's raw status and warning threshold, as the proxy passed them on, for the disagreement log. */
+	proxyStatus?: string;
+	surpassedThreshold?: number;
 }
 
 export interface UsageCounts {
@@ -315,6 +318,7 @@ interface ProxyQuotaBucket {
 	utilization?: unknown;
 	resetsAt?: unknown;
 	observedAt?: unknown;
+	surpassedThreshold?: unknown;
 }
 
 /** A Claude Code reading older than this says little about the window now. */
@@ -347,6 +351,8 @@ function bucketEntry(bucket: ProxyQuotaBucket, approximate: boolean, now: number
 		if (!rejected || resetMs === undefined || resetMs <= now) return undefined;
 	}
 	const { family } = quotaKeyParts(bucket.type);
+	// Only a known word reaches the log; the proxy's text is not trusted.
+	const proxyStatus = approximate && typeof bucket.status === "string" && /^[a-z_]{1,32}$/.test(bucket.status) ? bucket.status : undefined;
 	return {
 		label: quotaLabel(bucket.type),
 		key: bucket.type,
@@ -359,6 +365,8 @@ function bucketEntry(bucket: ProxyQuotaBucket, approximate: boolean, now: number
 		...(bucket.status === "allowed" ? { allowed: true } : {}),
 		...(approximate ? { approximate: true } : {}),
 		...(sampledMs !== undefined ? { sampledMs } : {}),
+		...(proxyStatus ? { proxyStatus } : {}),
+		...(approximate && finiteNumber(bucket.surpassedThreshold) ? { surpassedThreshold: bucket.surpassedThreshold } : {}),
 	};
 }
 

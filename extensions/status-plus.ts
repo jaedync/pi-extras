@@ -18,12 +18,12 @@ import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
-import { markUnsampled, mergePolled } from "../lib/limit-merge.ts";
+import { disagreementText, disagreements, markUnsampled, mergePolled } from "../lib/limit-merge.ts";
 import { isVirtualModel, routedModel } from "../lib/routed-model.ts";
 import { sharedLimitStore, type LimitSnapshot } from "../lib/limit-store.ts";
 import { nextPollMs, readShared, writeShared, type SharedPoll } from "../lib/limit-share.ts";
 import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, PollRefused, REFRESH_INTERVAL_MS, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
-import { STATUS_TIME_ZONE_PROBLEM, estimateUsageCost, freeProviders, toEpochMs, withPolledBalances, type PricedModel } from "../lib/status-plus-logic.ts";
+import { STATUS_TIME_ZONE_PROBLEM, estimateUsageCost, freeProviders, toEpochMs, withPolledBalances, type LimitEntry, type PricedModel } from "../lib/status-plus-logic.ts";
 import { splitMeshStatuses } from "../lib/status-plus-mesh.ts";
 import { TWEEN_FRAME_MS, flashIntensity, incrementAt, isActive, retarget, valueAt, type Tween } from "../lib/status-plus-tween.ts";
 import { EMPTY_PROVIDER, cacheState, cacheTtl } from "../lib/status-plus-render.ts";
@@ -49,6 +49,8 @@ const CATCH_UP_MS = 250;
 const MAX_CATCH_UPS = 4;
 const GO_BILLING_NOTE = "billing Zen";
 const FOOTER_FAILED = "status-plus: footer failed, see status-plus.log";
+/** Distinct readings remembered for the disagreement log; past this the memory starts again. */
+const LOGGED_READINGS_MAX = 200;
 
 /** An unknown STATUSLINE_TZ is logged with the first session, not with each one. */
 let zoneLogged = false;
@@ -106,6 +108,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	const retryAtMs = new Map<string, number>();
 	/** When the newest poll result this process applied ended, its own or another process's. */
 	const polledAtMs = new Map<string, number>();
+	/** Approximate readings already in the disagreement log. */
+	const loggedReadings = new Set<string>();
 	let shareFailed = false;
 	/** Context of the latest event, so forced refreshes from other extensions can poll. */
 	let latestCtx: ExtensionContext | undefined;
@@ -414,6 +418,21 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		requestFooterRender?.();
 	}
 
+	/**
+	 * Log an approximate reading far from the last usage-endpoint reading, with
+	 * both, so a wrong proxy reading can be traced. Claude Code's reading stays
+	 * the same between its events, so each one is logged one time.
+	 */
+	function logDisagreements(provider: string, stored: Pick<LimitSnapshot, "entries" | "atMs"> | undefined, polled: LimitEntry[], now: number): void {
+		for (const found of disagreements(stored, polled, now)) {
+			const reading = `${provider}|${found.fresh.key ?? found.fresh.label}|${found.fresh.usedPct}|${found.fresh.sampledMs}`;
+			if (loggedReadings.has(reading)) continue;
+			if (loggedReadings.size >= LOGGED_READINGS_MAX) loggedReadings.clear();
+			loggedReadings.add(reading);
+			operationalLine(LOG_FILE, `[status-plus] ${new Date(now).toISOString()} ${disagreementText(provider, found, now)}`);
+		}
+	}
+
 	/** The newest poll result, this process's or another's, for a partial poll to merge over. */
 	function latestPoll(provider: string): Pick<LimitSnapshot, "entries" | "atMs"> | undefined {
 		const local = providerLimits.get(provider);
@@ -449,7 +468,9 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			if (!polled || polled.length === 0) return pollFailed(provider, claimed);
 			const atMs = Date.now();
 			// Each entry carries its sample time, so a later partial poll can tell a recent reading from one an older copy wrote.
-			const entries = mergePolled(latestPoll(provider), polled, atMs).map((entry) => entry.sampledMs !== undefined ? entry : { ...entry, sampledMs: atMs });
+			const stored = latestPoll(provider);
+			logDisagreements(provider, stored, polled, atMs);
+			const entries = mergePolled(stored, polled, atMs).map((entry) => entry.sampledMs !== undefined ? entry : { ...entry, sampledMs: atMs });
 			pollFailures.set(provider, 0);
 			polledAtMs.set(provider, atMs);
 			providerLimits.set(provider, { entries, atMs, source: "poll" });
