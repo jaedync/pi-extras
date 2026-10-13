@@ -85,7 +85,7 @@ test("a rewrite in place that keeps the bytes before the old end is still read f
 	assert.deepEqual(values(), [9, 2, 3]);
 });
 
-test("what a new process cannot read is not read here either: deleted files and files over the size limit", () => {
+test("what a new process cannot read is not read here either: deleted files", () => {
 	const dir = fixture();
 	const session = join(dir, "session.jsonl");
 	writeFileSync(session, '{"n":1}\n');
@@ -102,11 +102,28 @@ test("what a new process cannot read is not read here either: deleted files and 
 	unlinkSync(meta);
 	assert.equal(evidenceJson(meta), undefined);
 
-	const grown = join(dir, "grown.jsonl");
-	writeFileSync(grown, '{"n":1}\n');
-	assert.deepEqual(evidenceLines(grown), [{ n: 1 }]);
-	truncateSync(grown, 51 * 1024 * 1024);
-	assert.equal(evidenceLines(grown), undefined);
+});
+
+test("a transcript over 50 MB is read 50 MB a pass, and a line longer than a pass is skipped", () => {
+	const file = join(fixture(), "child.jsonl");
+	const big = (n: number) => `${JSON.stringify({ n, text: "x".repeat(26 * 1024 * 1024) })}\n`;
+	writeFileSync(file, `{"n":1}\n`);
+	appendFileSync(file, big(2));
+	appendFileSync(file, big(3));
+	appendFileSync(file, '{"n":4}\n');
+	const keep = (record: unknown) => ({ n: (record as { n: number }).n });
+	const first: EvidenceBudget = { bytes: 64 * 1024 * 1024 };
+	assert.deepEqual(evidenceLines(file, first, keep), [{ n: 1 }, { n: 2 }]);
+	assert.equal(first.deferred, true);
+	assert.deepEqual(evidenceLines(file, { bytes: 64 * 1024 * 1024 }, keep), [{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }]);
+
+	const huge = join(fixture(), "huge.jsonl");
+	writeFileSync(huge, '{"n":1}\n');
+	assert.deepEqual(evidenceLines(huge), [{ n: 1 }]);
+	truncateSync(huge, 8 + 51 * 1024 * 1024);
+	appendFileSync(huge, '\n{"n":2}\n');
+	assert.deepEqual(evidenceLines(huge), [{ n: 1 }]);
+	assert.deepEqual(evidenceLines(huge), [{ n: 1 }, { n: 2 }]);
 });
 
 test("evidence a walk still reads stays cached while newer entries push older ones out", () => {
@@ -136,4 +153,16 @@ test("I/O budget bounds new reads but allows cached evidence and later retries",
 	assert.equal(evidenceJson(file, { bytes: 1 }), undefined);
 	assert.deepEqual(evidenceJson(file, { bytes: 100 }), { usage: { cost: 1 } });
 	assert.deepEqual(evidenceJson(file, { bytes: 0 }), { usage: { cost: 1 } });
+});
+
+test("a line that a pass cuts after a skipped line is read whole at the next pass", () => {
+	const file = join(fixture(), "cut.jsonl");
+	const pass = 50 * 1024 * 1024;
+	// Line 1 is longer than a pass and ends 200 bytes before the second pass does; line 2 crosses that end.
+	const first = `{"n":1,"text":"${"x".repeat(2 * pass - 200 - 18)}"}\n`;
+	const second = `{"n":2,"text":"${"y".repeat(400)}"}\n`;
+	writeFileSync(file, first + second);
+	let seen: unknown[] | undefined;
+	for (let i = 0; i < 4; i++) seen = evidenceLines(file, undefined, (record) => (record as { n: number }).n);
+	assert.deepEqual(seen, [2]);
 });

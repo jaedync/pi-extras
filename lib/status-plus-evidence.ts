@@ -5,11 +5,15 @@
  * read on from where the last read stopped, a caller's projection keeps only what it
  * reads (so a session's children fit), and a changed file the walk cannot afford keeps
  * what was read before; the budget records that the walk waited, so the caller can
- * come back for the rest. What a new process could not read (a deleted file, one over
- * the size limit) is not served from here either. */
+ * come back for the rest. A transcript is read at most MAX_PASS_BYTES a pass, so a child
+ * that grew past it still counts, over several walks. What a new process could not read
+ * (a deleted file, a JSON file over the size limit) is not served from here either. */
 import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync, type Stats } from "node:fs";
 
+/** A JSON file is read whole, so one larger than this is not read. */
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
+/** New transcript bytes one pass reads; a longer append is read on at the next walk. */
+const MAX_PASS_BYTES = 50 * 1024 * 1024;
 /** Counted as kept: a projected transcript is a small part of its file. */
 const MAX_CACHE_BYTES = 64 * 1024 * 1024;
 const MAX_CACHE_ENTRIES = 4096;
@@ -19,8 +23,11 @@ const RECORD_BYTES = 96;
 const SEAM_BYTES = 64;
 const NEWLINE = 0x0a;
 
-/** Where a transcript's complete lines end, and what they held. */
-interface Lines { ino: number; offset: number; start: Buffer; seam: Buffer; head: unknown[]; headBytes: number; }
+/**
+ * Where a transcript's complete lines end, and what they held. `skipping`: the
+ * offset is inside a line longer than a pass, which is skipped up to its newline.
+ */
+interface Lines { ino: number; offset: number; start: Buffer; seam: Buffer; head: unknown[]; headBytes: number; skipping?: boolean; }
 interface Entry { signature: string; value: unknown; bytes: number; lines?: Lines; }
 
 const cache = new Map<string, Entry>();
@@ -156,6 +163,29 @@ export function evidenceJson(path: string, budget?: EvidenceBudget): unknown {
 	}
 }
 
+/** What one pass read: complete records, a parsed last fragment, and where its complete lines end. */
+interface Pass { complete: { records: unknown[]; bytes: number }; fragment: { records: unknown[]; bytes: number }; end: number; skipping: boolean }
+
+/**
+ * Parse one pass. A pass that stops before the file's end parses no fragment:
+ * its last line goes on in the next pass. A line still open at the end of a full
+ * pass is longer than a pass, so it is skipped (a huge tool result holds no spend).
+ */
+function readPass(chunk: Buffer, partial: boolean, skipping: boolean, keep: (record: unknown) => unknown): Pass {
+	const none = { records: [], bytes: 0 };
+	const skipTo = skipping ? chunk.indexOf(NEWLINE) + 1 : 0;
+	const last = chunk.lastIndexOf(NEWLINE) + 1;
+	// Still inside the skipped line, or a full pass that holds no line end: skip it all.
+	if ((skipping && skipTo === 0) || (partial && last === 0)) return { complete: none, fragment: none, end: chunk.length, skipping: true };
+	const end = Math.max(last, skipTo);
+	return {
+		complete: parse(chunk.subarray(skipTo, end), keep),
+		fragment: partial ? none : parse(chunk.subarray(end), keep),
+		end,
+		skipping: false,
+	};
+}
+
 /** JSONL records, each passed through `keep` (undefined drops it). One caller per path: the cache holds what it kept. */
 export function evidenceLines(path: string, budget?: EvidenceBudget, keep: (record: unknown) => unknown = (record) => record): unknown[] | undefined {
 	const key = `lines:${path}`;
@@ -163,7 +193,7 @@ export function evidenceLines(path: string, budget?: EvidenceBudget, keep: (reco
 	const stale = previous?.value as unknown[] | undefined;
 	try {
 		const stat = statSync(path);
-		if (!stat.isFile() || stat.size > MAX_FILE_BYTES) {
+		if (!stat.isFile()) {
 			forget(key);
 			return;
 		}
@@ -171,19 +201,23 @@ export function evidenceLines(path: string, budget?: EvidenceBudget, keep: (reco
 		if (previous?.signature === signature) return touch(key, previous) as unknown[];
 		const lines = previous?.lines && resumes(path, stat, previous.lines) ? previous.lines : undefined;
 		const from = lines?.offset ?? 0;
-		if (!afford(budget, stat.size - from)) return stale;
-		const chunk = readRange(path, from, stat.size);
-		const end = chunk.lastIndexOf(NEWLINE) + 1;
-		const complete = parse(chunk.subarray(0, end), keep);
-		// A last line with no newline yet counts once it parses, and is read again with what follows it.
-		const fragment = parse(chunk.subarray(end), keep);
-		const head = lines ? [...lines.head, ...complete.records] : complete.records;
-		const headBytes = (lines?.headBytes ?? 0) + complete.bytes;
-		const value = fragment.records.length ? [...head, ...fragment.records] : head;
-		const offset = from + end;
+		const to = Math.min(stat.size, from + MAX_PASS_BYTES);
+		if (!afford(budget, to - from)) return stale;
+		const chunk = readRange(path, from, to);
+		const partial = from + chunk.length < stat.size;
+		// The rest waits for the next walk; a partial pass must not look up to date to it.
+		if (partial && budget) budget.deferred = true;
+		const pass = readPass(chunk, partial, lines?.skipping === true, keep);
+		const head = lines ? [...lines.head, ...pass.complete.records] : pass.complete.records;
+		const headBytes = (lines?.headBytes ?? 0) + pass.complete.bytes;
+		const value = pass.fragment.records.length ? [...head, ...pass.fragment.records] : head;
+		const offset = from + pass.end;
 		remember(key, {
-			signature, value, bytes: headBytes + fragment.bytes,
-			lines: { ino: stat.ino, offset, start: startOf(path, chunk, from, offset, lines?.start), seam: seamBefore(chunk, end, lines?.seam), head, headBytes },
+			signature: partial ? `partial:${signature}` : signature, value, bytes: headBytes + pass.fragment.bytes,
+			lines: {
+				ino: stat.ino, offset, start: startOf(path, chunk, from, offset, lines?.start), seam: seamBefore(chunk, pass.end, lines?.seam), head, headBytes,
+				...(pass.skipping ? { skipping: true } : {}),
+			},
 		});
 		return value;
 	} catch (error) {
