@@ -311,7 +311,10 @@ the guard stays on:
 
 - The guard checks each request in the same way. Then it sends the request
   to your proxy and not to the site. `linkContext.proxy` comes before the
-  variables. A host in `NO_PROXY` gets a direct connection after the check.
+  variables. With `linkContext.proxy`, the tool ignores `NO_PROXY`.
+- The variables follow the rules of yt-dlp. HTTPS goes to `HTTPS_PROXY`,
+  then `HTTP_PROXY`, then `ALL_PROXY`. Plain HTTP goes to `HTTP_PROXY`, then
+  `ALL_PROXY`. A host in `NO_PROXY` gets a direct connection after the check.
 - The guard takes the place of your proxy in the settings of yt-dlp, the
   YouTube transcript client and the proxy variables. Then no client can get
   to your proxy without the check.
@@ -320,22 +323,31 @@ the guard stays on:
   private address. The guard tries IPv4 addresses first, because many proxies
   have no IPv6 route. If your proxy cannot get to one address, the guard
   tries the next one.
+- An HTTP proxy gets each request in a `CONNECT` tunnel to the IP address,
+  also a plain `http` request. Then the site gets its own `Host` header.
 - The guard can use `http://`, `https://` (with a verified certificate),
-  `socks5://`, `socks5h://`, `socks4://` and `socks4a://` proxies. It sends
-  the user name and password from the URL to your proxy only. It does not
-  write them in a message or a log. For other proxy URLs, the tool stops
-  before it sends a request. It never connects without the guard.
+  `socks5://`, `socks5h://`, `socks4://` and `socks4a://` proxies. A proxy
+  URL without a scheme is `http://`, and `socks://` is `socks4://`, as in
+  yt-dlp. The guard sends the user name and password from the URL to your
+  proxy only. It does not write them in a message or a log. For other proxy
+  URLs, the tool stops before it sends a request. It never connects without
+  the guard.
 - When your proxy fails, the request fails with a message that gives the
   host and port of the proxy and the reason.
 
 The guard has these limits with your proxy:
 
-- The guard uses the DNS of this host for its check. It cannot see a name
-  that is private only in the network of your proxy.
-- For a plain `http` request, the guard puts the IP address in the request
-  line and keeps the `Host` header. A proxy that makes a new `Host` header
-  from the request line sends the IP address to the site, and some sites
-  then do not answer correctly.
+- The guard finds each name with the DNS of this host, also for
+  `socks5h://`. DNS lookups do not go through your proxy, and `.onion` names
+  do not work. A proxy with rules for names sees only IP addresses.
+- The guard cannot see a name that is private only in the network of your
+  proxy.
+- An HTTP proxy can get only a Basic login.
+- Some proxies, such as Squid and tinyproxy with their default rules, refuse
+  a `CONNECT` tunnel to port 80. Then the guard sends a plain `http` request
+  with the IP address in the request line and keeps the `Host` header. Such a
+  proxy makes a new `Host` header from the IP address, so some sites do not
+  answer correctly.
 
 These downloader limits apply with or without your proxy:
 

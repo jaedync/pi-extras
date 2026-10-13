@@ -1151,12 +1151,20 @@ read only HTTP. yt-dlp does not start other downloaders, such as `rtmpdump`.
 When you set `linkContext.proxy` or a proxy variable (`HTTPS_PROXY`,
 `HTTP_PROXY` or `ALL_PROXY`), the guard still checks each request. Then it
 sends the request to your proxy. `linkContext.proxy` comes before the
-variables. Your proxy gets the IP address that the guard checked, not the
-name. A host in `NO_PROXY` gets a direct connection, and the guard checks it
-too. The guard uses the DNS of this host for its check, so it cannot see a
-name that is private only in the network of your proxy. The proxy URL must
-start with `http://`, `https://`, `socks5://`, `socks5h://`, `socks4://` or
-`socks4a://`. If it does not, the tool stops before it sends a request.
+variables, and with it the tool ignores `NO_PROXY`. The variables follow the
+rules of yt-dlp: HTTPS goes to `HTTPS_PROXY`, then `HTTP_PROXY`, then
+`ALL_PROXY`, and plain HTTP goes to `HTTP_PROXY`, then `ALL_PROXY`. A host in
+`NO_PROXY` gets a direct connection, and the guard checks it too. Your proxy
+gets the IP address that the guard checked, not the name.
+
+The guard finds each name with the DNS of this host, also for `socks5h://`.
+DNS lookups do not go through your proxy, and `.onion` names do not work. A
+proxy with rules for names sees only IP addresses. The guard cannot see
+a name that is private only in the network of your proxy. An HTTP proxy can
+get only a Basic login. A proxy URL without a scheme is `http://`, and
+`socks://` is `socks4://`. Other proxy URLs must start with `http://`,
+`https://`, `socks5://`, `socks5h://`, `socks4://` or `socks4a://`. If they do
+not, the tool stops before it sends a request.
 
 A shared YouTube link with `&list=` reads only its one video, not the
 playlist.
@@ -1227,8 +1235,9 @@ Put these in the `linkContext` section of `pi-extras.json`:
   list of video packages still installs them again.
 - `proxy`: a proxy URL for yt-dlp and the YouTube transcript client, for
   example `socks5://host:1080`. The URL can have a user name and password,
-  for example `http://user:pass@host:8080`. The guard checks each request
-  before it goes to this proxy (see Pull Link).
+  for example `http://user:pass@host:8080` (Basic login only). The guard
+  checks each request before it goes to this proxy, and the tool ignores
+  `NO_PROXY` (see Pull Link).
 - `cookies`: the path to a Netscape `cookies.txt` file for yt-dlp.
 - `asrModel`: a different speech-to-text model, for example
   `mlx-community/whisper-small-mlx` or `medium`.
