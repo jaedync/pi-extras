@@ -159,10 +159,12 @@ test("a child's bash call with no timeout gets main's default timeout; one with 
 	const root = repository();
 	const { team, faux } = await setup(root);
 	const results: string[] = [];
+	const prompts: string[] = [];
 	faux.setResponses([
 		ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 5; echo finished" })),
 		(context: any) => {
 			results.push(lastToolResult(context));
+			prompts.push(JSON.stringify(context));
 			return ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 1.5; echo kept", timeout: 10 }));
 		},
 		(context: any) => {
@@ -176,13 +178,18 @@ test("a child's bash call with no timeout gets main's default timeout; one with 
 	assert.match(results[0] ?? "", /timed out after 1 second/i);
 	assert.doesNotMatch(results[0] ?? "", /finished/);
 	assert.match(results[1] ?? "", /kept/);
+	assert.match(prompts[0] ?? "", /A bash call with no `timeout` stops after 1 second\./, "Pi puts the rule in the child's system prompt");
 	await team.close();
 });
 
-test("the child's default timeout covers bash and powershell calls that omit one, and leaves other tools alone", async () => {
+test("the child's default timeout covers bash and powershell calls that omit one, leaves other tools alone, and is told to the child", async () => {
 	const { defaultTimeout } = await import("../lib/subagents/child.ts");
-	let handler: ((event: { toolName: string; input: Record<string, unknown> }) => unknown) | undefined;
-	(defaultTimeout(30) as unknown as { factory(pi: unknown): void }).factory({ on: (_event: string, h: typeof handler) => { handler = h; } });
+	const handlers = new Map<string, (event: never) => unknown>();
+	(defaultTimeout(30) as unknown as { factory(pi: unknown): void }).factory({ on: (event: string, h: (event: never) => unknown) => { handlers.set(event, h); } });
+	const handler = handlers.get("tool_call") as ((event: { toolName: string; input: Record<string, unknown> }) => unknown) | undefined;
+	const options = { selectedTools: ["read", "bash"], toolGuidelines: {} as Record<string, string[]> };
+	(handlers.get("before_agent_start") as ((event: { systemPromptOptions: typeof options }) => unknown) | undefined)?.({ systemPromptOptions: options });
+	assert.match(options.toolGuidelines.bash?.[0] ?? "", /no `timeout` stops after 30 seconds/, "the child's model knows the limit");
 	const calls = [
 		{ toolName: "bash", input: { command: "x" } },
 		{ toolName: "powershell", input: { command: "x" } },

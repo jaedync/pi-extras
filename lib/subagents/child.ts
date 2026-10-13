@@ -8,7 +8,7 @@ import type { AgentSession, InlineExtension, ModelRuntime, SettingsManager, Tool
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyDefaultTimeout, resolveDefaultSeconds } from "../../extensions/bash-default-timeout.ts";
+import { addTimeoutGuidelines, applyDefaultTimeout, resolveDefaultSeconds } from "../../extensions/bash-default-timeout.ts";
 import { isBlockingPeer } from "../band/glyph.ts";
 import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
@@ -256,6 +256,9 @@ export function defaultTimeout(seconds: number): InlineExtension {
 				// Pi's tool_call contract: the input is changed in place.
 				if (SHELL_TOOLS.has(event.toolName)) applyDefaultTimeout(event.input, seconds);
 				return undefined;
+			});
+			pi.on("before_agent_start", (event) => {
+				addTimeoutGuidelines(event.systemPromptOptions, seconds);
 			});
 		},
 	};

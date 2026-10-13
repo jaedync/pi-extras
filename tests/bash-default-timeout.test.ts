@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import bashDefaultTimeout, { DEFAULT_TIMEOUT_SECONDS, applyDefaultTimeout, resolveDefaultSeconds } from "../extensions/bash-default-timeout.ts";
+import bashDefaultTimeout, { DEFAULT_TIMEOUT_SECONDS, applyDefaultTimeout, resolveDefaultSeconds, timeoutGuideline } from "../extensions/bash-default-timeout.ts";
 
 type Handler = (event: { toolName: string; input: unknown }, ctx: unknown) => Promise<unknown>;
 
@@ -87,4 +87,45 @@ test("PI_BASH_DEFAULT_TIMEOUT=off registers nothing", () => {
 	const bash = { toolName: "bash", input: {} as Record<string, unknown> };
 	void custom(bash, {});
 	assert.equal(bash.input.timeout, 30);
+});
+
+type StartHandler = (event: { systemPromptOptions: { selectedTools: string[]; toolGuidelines: Record<string, string[]> } }) => unknown;
+
+function installStart(env: string | undefined): StartHandler | undefined {
+	const previous = process.env.PI_BASH_DEFAULT_TIMEOUT;
+	if (env === undefined) delete process.env.PI_BASH_DEFAULT_TIMEOUT;
+	else process.env.PI_BASH_DEFAULT_TIMEOUT = env;
+	let handler: StartHandler | undefined;
+	try {
+		bashDefaultTimeout({ on: (name: string, fn: StartHandler) => { if (name === "before_agent_start") handler = fn; } } as never);
+	} finally {
+		if (previous === undefined) delete process.env.PI_BASH_DEFAULT_TIMEOUT;
+		else process.env.PI_BASH_DEFAULT_TIMEOUT = previous;
+	}
+	return handler;
+}
+
+test("the model is told the default, for each active shell tool only, once", () => {
+	const handler = installStart("300");
+	assert.ok(handler, "before_agent_start handler registered");
+	const options = { selectedTools: ["read", "bash"], toolGuidelines: { bash: ["Pi's own bash rule"] } as Record<string, string[]> };
+	handler({ systemPromptOptions: options });
+	handler({ systemPromptOptions: options });
+	assert.equal(options.toolGuidelines.bash.length, 2, "Pi's rule stays and ours is added once");
+	assert.equal(options.toolGuidelines.bash[0], "Pi's own bash rule");
+	assert.match(options.toolGuidelines.bash[1], /bash call with no `timeout` stops after 300 seconds/);
+	assert.equal(options.toolGuidelines.powershell, undefined, "an inactive tool gets no rule");
+
+	const both = { selectedTools: ["bash", "powershell"], toolGuidelines: {} as Record<string, string[]> };
+	handler({ systemPromptOptions: both });
+	assert.match(both.toolGuidelines.powershell[0], /powershell call with no `timeout` stops after 300 seconds/);
+});
+
+test("one second reads as one second", () => {
+	assert.match(timeoutGuideline("bash", 1), /stops after 1 second\./);
+	assert.match(timeoutGuideline("bash", 0.5), /stops after 0\.5 seconds\./);
+});
+
+test("with the default off, the model is told nothing", () => {
+	assert.equal(installStart("off"), undefined);
 });
