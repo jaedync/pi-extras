@@ -90,6 +90,37 @@ function clampPct(pct: number): number {
 	return Math.min(100, Math.max(0, pct));
 }
 
+/** Header window names as the quota keys polls use, so warnings, budgets and dollar sizes match on both. */
+const HEADER_BASE_KEYS: Record<string, string> = { "5h": "five_hour", "7d": "seven_day", "1d": "one_day", "30d": "thirty_day" };
+
+/** "5h" -> "five_hour", "7d_fable" -> "seven_day_fable"; a name of another shape has no quota key. */
+function headerQuotaKey(name: string): string | undefined {
+	const match = /^(\d+[hd])(?:[-_]([a-z0-9][a-z0-9_-]*))?$/.exec(name.toLowerCase());
+	const base = match ? HEADER_BASE_KEYS[match[1]] : undefined;
+	if (!match || !base) return undefined;
+	return match[2] ? `${base}_${match[2].replaceAll("-", "_")}` : base;
+}
+
+/** The label, key, model family and length a unified header window shares with the poll's entry. */
+function headerWindow(name: string): Pick<LimitEntry, "label" | "key" | "modelFamily" | "windowSeconds"> {
+	const key = headerQuotaKey(name);
+	const windowSeconds = quotaWindowSeconds(key ?? name);
+	const family = key ? quotaKeyParts(key).family : undefined;
+	return {
+		label: key ? quotaLabel(key) : name,
+		...(key ? { key } : {}),
+		...(family ? { modelFamily: family } : {}),
+		...(windowSeconds !== undefined ? { windowSeconds } : {}),
+	};
+}
+
+/** Codex slots are named by position: the key follows the window length, as on the poll path, and the slot name stands in without one. */
+const CODEX_WINDOW_KEYS: Record<number, string> = { [5 * 3600]: "five_hour", [7 * 86400]: "seven_day" };
+
+export function codexWindowKey(slot: string, windowSeconds: number | undefined): string {
+	return (windowSeconds !== undefined ? CODEX_WINDOW_KEYS[windowSeconds] : undefined) ?? slot;
+}
+
 /** Highest-pressure entries first, capped to keep the line compact. */
 export function topEntries(entries: LimitEntry[], max = 3): LimitEntry[] {
 	return [...entries].sort((a, b) => (b.usedPct ?? -1) - (a.usedPct ?? -1)).slice(0, max);
@@ -103,12 +134,14 @@ export function parseCodexLimits(headers: Record<string, string>, now = Date.now
 		if (reported === undefined) continue;
 		const usedPct = clampPct(reported);
 		const windowMinutes = parseNumberHeader(headers[`x-codex-${kind}-window-minutes`]);
+		const windowSeconds = windowMinutes !== undefined && windowMinutes > 0 ? windowMinutes * 60 : undefined;
 		const resetSeconds =
 			parseNumberHeader(headers[`x-codex-${kind}-resets-in-seconds`]) ??
 			parseNumberHeader(headers[`x-codex-${kind}-reset-after-seconds`]);
 		entries.push({
 			label: windowMinutes ? windowLabel(windowMinutes) : fallbackLabel,
-			...(windowMinutes !== undefined && windowMinutes > 0 ? { windowSeconds: windowMinutes * 60 } : {}),
+			key: codexWindowKey(kind, windowSeconds),
+			...(windowSeconds !== undefined ? { windowSeconds } : {}),
 			usedPct,
 			resetMs: resetSeconds !== undefined ? dateMs(now + resetSeconds * 1000) : undefined,
 		});
@@ -130,8 +163,7 @@ export function parseAnthropicLimits(headers: Record<string, string>, now = Date
 		const raw = Number(value);
 		if (!Number.isFinite(raw)) continue;
 		unified.push({
-			label: match[1],
-			...(quotaWindowSeconds(match[1]) !== undefined ? { windowSeconds: quotaWindowSeconds(match[1]) } : {}),
+			...headerWindow(match[1]),
 			usedPct: clampPct(raw <= 1 ? raw * 100 : raw),
 			resetMs: parseResetHeader(headers[`anthropic-ratelimit-unified-${match[1]}-reset`], now) ?? unifiedReset,
 		});
@@ -181,18 +213,30 @@ export function parseLimitHeaders(provider: string, headers: Record<string, stri
 }
 
 /**
+ * Which window the account-level limit_reached blocks: a full one, or the
+ * fullest when none reads 100%. The other windows still have room, and a
+ * warning that called them blocked would contradict their percent.
+ */
+function codexBlocked(usage: ProviderUsage, pct: number): boolean | undefined {
+	if (usage.limitReached === undefined) return undefined;
+	if (!usage.limitReached) return false;
+	const fullest = Math.max(...usage.windows.map((window) => window.pct));
+	return pct >= 100 || (fullest < 100 && pct === fullest);
+}
+
+/**
  * Codex reports its window length, so the label follows it ("5h", "7d").
  * The percentage saturates at 100 while requests still succeed, so the
- * account-level allowed/limit_reached flags are carried on every window.
+ * account-level allowed flag is carried on every window.
  */
 export function codexEntries(usage: ProviderUsage): LimitEntry[] {
 	return usage.windows.map((window) => ({
 		label: window.windowSeconds ? windowLabel(window.windowSeconds / 60) : KEY_LABELS[window.key] ?? window.key,
-		key: window.key,
+		key: codexWindowKey(window.key, window.windowSeconds),
 		...(window.windowSeconds !== undefined ? { windowSeconds: window.windowSeconds } : {}),
 		usedPct: window.pct,
 		resetMs: window.resetsAtMs,
-		...(usage.limitReached !== undefined ? { exhausted: usage.limitReached } : {}),
+		...(codexBlocked(usage, window.pct) !== undefined ? { exhausted: codexBlocked(usage, window.pct) } : {}),
 		...(usage.allowed !== undefined ? { allowed: usage.allowed } : {}),
 	}));
 }

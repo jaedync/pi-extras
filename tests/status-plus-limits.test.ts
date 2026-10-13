@@ -25,8 +25,8 @@ test("codex headers map to window labels and absolute resets", () => {
 		"x-codex-secondary-reset-after-seconds": "86400",
 	}, NOW);
 	assert.deepEqual(entries, [
-		{ label: "5h", windowSeconds: 18000, usedPct: 35, resetMs: NOW + 600_000 },
-		{ label: "7d", usedPct: 80, resetMs: NOW + 86_400_000 },
+		{ label: "5h", key: "five_hour", windowSeconds: 18000, usedPct: 35, resetMs: NOW + 600_000 },
+		{ label: "7d", key: "secondary", usedPct: 80, resetMs: NOW + 86_400_000 },
 	]);
 });
 
@@ -38,8 +38,8 @@ test("anthropic unified headers win over api-key triplets and drop overage", () 
 		"anthropic-ratelimit-unified-reset": "1800003600",
 	}, NOW);
 	assert.deepEqual(unified, [
-		{ label: "7d", windowSeconds: 604800, usedPct: 60, resetMs: 1_800_003_600_000 },
-		{ label: "5h", windowSeconds: 18000, usedPct: 25, resetMs: 1_800_003_600_000 },
+		{ label: "7d", key: "seven_day", windowSeconds: 604800, usedPct: 60, resetMs: 1_800_003_600_000 },
+		{ label: "5h", key: "five_hour", windowSeconds: 18000, usedPct: 25, resetMs: 1_800_003_600_000 },
 	]);
 	const triplets = parseAnthropicLimits({
 		"anthropic-ratelimit-tokens-limit": "1000",
@@ -70,11 +70,11 @@ test("shared poller windows become footer entries with short labels", () => {
 			{ key: "primary", pct: 42, windowSeconds: 18000, resetsAtMs: 1 },
 			{ key: "secondary", pct: 7, resetsAtMs: 2 },
 		],
-	}), [{ label: "5h", key: "primary", windowSeconds: 18000, usedPct: 42, resetMs: 1 }, { label: "7d", key: "secondary", usedPct: 7, resetMs: 2 }]);
+	}), [{ label: "5h", key: "five_hour", windowSeconds: 18000, usedPct: 42, resetMs: 1 }, { label: "7d", key: "secondary", usedPct: 7, resetMs: 2 }]);
 	assert.deepEqual(codexEntries({
 		provider: "codex", allowed: true, limitReached: false,
 		windows: [{ key: "primary", pct: 100, windowSeconds: 604800, resetsAtMs: 9 }],
-	}), [{ label: "7d", key: "primary", windowSeconds: 604800, usedPct: 100, resetMs: 9, exhausted: false, allowed: true }]);
+	}), [{ label: "7d", key: "seven_day", windowSeconds: 604800, usedPct: 100, resetMs: 9, exhausted: false, allowed: true }]);
 	assert.deepEqual(openCodeGoEntries({
 		provider: "opencode-go",
 		windows: [
