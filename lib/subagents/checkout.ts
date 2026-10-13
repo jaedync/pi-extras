@@ -28,6 +28,8 @@ export function resolveCwd(input: string, home = homedir()): string {
 		throw new Error(`cwd ${input} can't be read: ${(error as Error).message}`);
 	}
 	if (!statSync(real).isDirectory()) throw new Error(`cwd ${input} is not a directory.`);
+	// A symlink can lead to a name the input does not show.
+	if (CONTROL.test(real)) throw new Error("cwd must not contain control characters.");
 	return real;
 }
 

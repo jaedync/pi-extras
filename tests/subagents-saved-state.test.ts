@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parkHost, takeParked } from "../lib/subagents/host.ts";
@@ -110,4 +110,18 @@ test("a restore keeps an unread message although an earlier run read the same te
 		savedRecord({ name: "read-it", state: "interrupted", startedAt: 1_000, unread: [note] })]);
 	assert.deepEqual(team.get("dev")!.inbox, [note]);
 	assert.equal(team.get("read-it")!.inbox, undefined, "a run that read it does not get it again");
+});
+
+test("a cwd that leads through a symlink to a directory with a control character is refused", () => {
+	const base = realpathSync(mkdtempSync(join(tmpdir(), "pi-extras-index-")));
+	try {
+		const real = join(base, "client\tnotes");
+		mkdirSync(real);
+		symlinkSync(real, join(base, "link"));
+		const team = new Team({ cwd: base, maxConcurrent: 0, maxDepth: 1, replyTimeoutMs: 1000, deliverToMain: () => undefined,
+			launcher: { launch: async () => { throw new Error("unused"); } } });
+		const spawned = team.spawn({ task: "Look", parent: "main", model: "m", readOnly: false, fork: false, blocking: false, cwd: join(base, "link") });
+		assert.equal(spawned.ok, false);
+		assert.match(!spawned.ok ? spawned.error : "", /control characters/);
+	} finally { rmSync(base, { recursive: true, force: true }); }
 });
