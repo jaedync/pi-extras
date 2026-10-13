@@ -28,9 +28,12 @@ const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
  * Bidi embeddings, overrides, isolates and marks, which can reorder what a
  * title shows (Trojan Source), and characters that draw nothing and so hide
  * text: zero-width spaces, invisible operators, fillers and tag characters.
- * The zero-width joiner (U+200D) stays: emoji sequences need it.
+ * The zero-width joiner (U+200D) stays: emoji sequences need it. An RGI tag
+ * sequence (a subdivision flag) keeps its tags, captured as group 1; any other
+ * tag characters can carry hidden ASCII. Built at run time: the `v` flag and
+ * RGI properties are newer than the TypeScript target.
  */
-const INVISIBLE = /[\u061c\u115f\u1160\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\u3164\ufeff\u{e0000}-\u{e007f}]/gu;
+const INVISIBLE = new RegExp("(\\p{RGI_Emoji_Tag_Sequence})|[\\u061c\\u115f\\u1160\\u180e\\u200b\\u200e\\u200f\\u202a-\\u202e\\u2060-\\u2064\\u2066-\\u2069\\u3164\\ufeff\\u{e0000}-\\u{e007f}]", "gv");
 
 function shellOutcome(match: RegExpExecArray): ShellOutcome {
 	if (match[1] !== undefined) return { kind: "exit", code: Number(match[1]) };
@@ -62,7 +65,7 @@ function lastFrame(line: string): string {
 
 /** Text with its controls removed; a lone `\r` shows as a line break, so no part of a command or code is hidden. */
 export function sanitize(text: string): string {
-	return text.replace(/\r\n?/g, "\n").replace(/\t/g, "  ").replace(CONTROL, "").replace(INVISIBLE, "");
+	return text.replace(/\r\n?/g, "\n").replace(/\t/g, "  ").replace(CONTROL, "").replace(INVISIBLE, (_, flag: string | undefined) => flag ?? "");
 }
 
 /** A command's output as sanitize shows it, but each line redrawn with `\r` keeps only its last frame. */

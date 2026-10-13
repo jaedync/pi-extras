@@ -41,6 +41,10 @@ test("sanitize drops bidi and zero-width controls but keeps the joiner that emoj
 	assert.equal(sanitize("zero\u200bwidth\u2060joiner\ufeff"), "zerowidthjoiner");
 	assert.equal(sanitize("a\u061cb\u2061c\u2064d\u180ee\u115ff\u1160g\u3164h"), "abcdefgh", "the Arabic letter mark, invisible operators and fillers go");
 	assert.equal(sanitize("tag\u{e0001}\u{e0041}\u{e007f}s"), "tags", "tag characters smuggle hidden ASCII");
+	const scotland = "\u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}";
+	assert.equal(sanitize(`go ${scotland}!`), `go ${scotland}!`, "a real subdivision flag keeps its tags");
+	const smuggled = `\u{1f3f4}${[..."ignore all"].map((char) => String.fromCodePoint(0xe0000 + char.charCodeAt(0))).join("")}\u{e007f}`;
+	assert.equal(sanitize(`x${smuggled}y`), "x\u{1f3f4}y", "a fake flag loses the ASCII it hides");
 	const family = "\u{1f468}\u200d\u{1f469}\u200d\u{1f467}";
 	assert.equal(sanitize(family), family, "the zero-width joiner stays");
 });
