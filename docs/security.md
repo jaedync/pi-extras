@@ -233,8 +233,10 @@ Setup downloads, into `PI_VOICE_HOME` (default `~/.cache/pi-extras/voice`):
 `PI_OFFLINE=1`, `true` or `yes` skips setup; voice then uses only what is
 already installed.
 Setup starts on its own only when Pi finds a microphone. On Linux, that is an
-ALSA capture device, or a PulseAudio or PipeWire source that is not a monitor.
-On macOS, a child process lists the input devices, and Pi keeps the result for
+ALSA capture stream, or a PulseAudio or PipeWire source that is not a monitor.
+Pi runs `pactl` only when `PULSE_SERVER` is set or a server socket exists. It
+names that server, so `pactl` cannot start a PulseAudio daemon. On macOS, a child process
+lists the input devices. Pi keeps the `pactl` answer and the macOS result for
 one day in `PI_VOICE_HOME`. When Pi finds no microphone, nothing downloads until
 you start a dictation or run `/voice setup`.
 

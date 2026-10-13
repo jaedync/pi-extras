@@ -672,9 +672,13 @@ A model is skipped when the disk has less than twice its size free. Setup
 never blocks Pi; a dictation started before it finishes waits for it. If setup
 did not start with the session, the first dictation starts it, except offline.
 
-On Linux, a microphone is an ALSA capture device, or a PulseAudio or PipeWire
-source that is not a monitor of an output. On macOS, a background check lists
-the input devices, and setup starts when it finds one. Pi keeps that result for
+On Linux, Pi first looks for an ALSA capture stream in `/proc/asound/pcm`. A
+sound card with a microphone input has one, also when no microphone is
+connected. Then Pi asks a running PulseAudio or PipeWire server, with `pactl`,
+for a source that is not a monitor of an output. WSLg always lists its
+`RDPSource`, so on WSLg setup starts when `pactl` (from `pulseaudio-utils`) is
+installed. On macOS, a background check lists the input devices, and setup
+starts when it finds one. Pi keeps the `pactl` answer and the macOS result for
 one day. When Pi cannot find a microphone, setup waits for your first dictation
 or `/voice setup`.
 
