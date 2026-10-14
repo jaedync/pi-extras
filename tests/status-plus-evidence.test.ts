@@ -1,11 +1,20 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evidenceFiles, evidenceJson, evidenceLines, type EvidenceBudget } from "../lib/status-plus-evidence.ts";
 
-const fixture = () => mkdtempSync(join(tmpdir(), "status-plus-evidence-"));
+// Two tests write files over 50 MB; left in a tmpfs /tmp, each run's fixtures filled the user's quota.
+const fixtures: string[] = [];
+const fixture = () => {
+	const dir = mkdtempSync(join(tmpdir(), "status-plus-evidence-"));
+	fixtures.push(dir);
+	return dir;
+};
+after(() => {
+	for (const dir of fixtures) rmSync(dir, { recursive: true, force: true });
+});
 
 test("evidence cache reuses unchanged parses and invalidates appends and rewrites", () => {
 	const file = join(fixture(), "session.jsonl");
