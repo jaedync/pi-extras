@@ -14,9 +14,14 @@ import type { AdapterContext, Pulled } from "../types.ts";
 
 const DROP = "script, style, noscript, nav, header, footer, aside, form, svg, iframe, [role=navigation], [aria-hidden=true], .sidebar, .advert, .ad, .cookie, .newsletter";
 
+/** Below this share of the page's text, the longest `<article>` is a teaser card, not the content. */
+const ARTICLE_SHARE = 0.1;
+
 export function mainText(html: string): string {
 	const root = parse(html, { comment: false });
-	const scope = root.querySelector("article") ?? root.querySelector("main") ?? root.querySelector("[role=main]") ?? root.querySelector("body") ?? root;
+	const outer = root.querySelector("main") ?? root.querySelector("[role=main]") ?? root.querySelector("body") ?? root;
+	const article = root.querySelectorAll("article").reduce<ReturnType<typeof root.querySelector>>((best, node) => (!best || node.text.length > best.text.length ? node : best), null);
+	const scope = article && article.text.length >= outer.text.length * ARTICLE_SHARE ? article : outer;
 	for (const node of scope.querySelectorAll(DROP)) node.remove();
 	return htmlToText(scope.innerHTML);
 }

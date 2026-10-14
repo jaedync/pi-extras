@@ -284,3 +284,13 @@ test("guard: a refused tunnel and request get 403, an allowed one is relayed", a
 		origin.close();
 	}
 });
+
+test("web: teaser articles in a long main do not hide the main text", async () => {
+	const { mainText } = await import("../lib/link-context/adapters/web.ts");
+	const specs = "Cores: 16. ".repeat(200);
+	const page = `<main><article><p>Other review teaser.</p></article><article><p>Second teaser.</p></article><table><tr><td>${specs}</td></tr></table></main>`;
+	assert.match(mainText(page), /Cores: 16\./);
+	// One article that holds the text still wins over the comments around it.
+	const blog = `<main><article><p>${"Article text. ".repeat(50)}</p></article><section><p>${"A comment. ".repeat(200)}</p></section></main>`;
+	assert.doesNotMatch(mainText(blog), /A comment/);
+});

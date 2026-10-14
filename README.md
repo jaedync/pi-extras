@@ -1197,7 +1197,7 @@ local browser" and gives the reason. A page that is not found (HTTP 404 or
   170 MB, no root). The tool does not download a browser by itself, because
   a blocked page in an auto-pull must not start a large download.
 - Each read uses a new temporary profile, which the tool removes after the
-  read. The browser does not load images. It stops loading after 15 seconds,
+  read. The browser does not load images. It stops loading after 10 seconds,
   and the tool stops the browser and all its processes after 30 seconds or
   when you cancel. The page can be 8 MB at most. Two browsers run at the
   same time at most.

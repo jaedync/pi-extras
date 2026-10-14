@@ -20,7 +20,7 @@ export const BROWSER_TIMEOUT_MS = 30_000;
  * a long time. At this limit it stops loading and prints what it has; the
  * text is there long before.
  */
-const LOAD_LIMIT_MS = 15_000;
+const LOAD_LIMIT_MS = 10_000;
 /** Each browser takes a few hundred MB; auto-pull can ask for several links at once. */
 const MAX_BROWSERS = 2;
 const VERSION_TIMEOUT_MS = 5_000;
