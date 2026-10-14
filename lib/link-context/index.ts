@@ -9,13 +9,11 @@ import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-co
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createReader, DEFAULT_COMMENTS, MAX_AT, type LinkReader, type Params, type ReaderOptions } from "./reader.ts";
-import { cutIndex } from "./text.ts";
+import { clean, page, safe, TOOL_NAME, untrusted } from "./format.ts";
 import type { Pulled } from "./types.ts";
 
+export { clean, page, PAGE_CHARS, TOOL_NAME, type Page } from "./format.ts";
 export { cacheKey, parseTimes, resolveOptions, type Params } from "./reader.ts";
-
-export const TOOL_NAME = "pull_link";
-export const PAGE_CHARS = 40_000;
 
 const DESCRIPTION = [
 	"Read a link and return its content as markdown, for context. Supports:",
@@ -43,24 +41,6 @@ const parameters = Type.Object({
 	offset: Type.Optional(Type.Integer({ minimum: 0, description: "Character offset for the next page of a long result" })),
 }, { additionalProperties: false });
 
-export interface Page {
-	readonly text: string;
-	readonly next?: number;
-}
-
-/** A page of `text` from `offset`, cut at a paragraph or line break near the limit. */
-export function page(text: string, offset: number, limit = PAGE_CHARS): Page {
-	if (offset >= text.length && offset > 0) return { text: `(offset ${offset} is past the end; the result has ${text.length} characters)` };
-	const end = offset + limit;
-	if (end >= text.length) return { text: text.slice(offset) };
-	const window = text.slice(offset, end);
-	const paragraph = window.lastIndexOf("\n\n");
-	const line = window.lastIndexOf("\n");
-	const cut = paragraph > limit * 0.6 ? paragraph : line > limit * 0.6 ? line : -1;
-	const stop = cut > 0 ? offset + cut : cutIndex(text, end);
-	return { text: text.slice(offset, stop), next: stop };
-}
-
 export interface LinkToolOptions extends ReaderOptions {
 	/** Shared with auto-pull, so both use one cache; made from the other options when absent. */
 	readonly reader?: LinkReader;
@@ -72,11 +52,8 @@ function compose(pulled: Pulled, params: Params): { content: ({ type: "text"; te
 	const footer: string[] = [];
 	if (offset > 0) footer.push(`(characters ${offset}-${offset + shown.text.length} of ${pulled.markdown.length})`);
 	if (shown.next !== undefined) footer.push(`[Truncated: ${pulled.markdown.length - shown.next} more characters. Call ${TOOL_NAME} again with the same arguments and offset=${shown.next} for the next page.]`);
-	// The page cannot close its own wrapper, and the source attribute cannot break out of its quotes.
-	const text = [shown.text, ...footer].join("\n\n").replace(/<\/?untrusted-content/gi, (tag) => tag.replace("<", "&lt;"));
-	const source = pulled.url.replace(/[\s"<>\x00-\x1f\x7f]/g, encodeURIComponent);
 	const images = offset === 0 ? [...(pulled.images ?? [])] : [];
-	return { content: [{ type: "text", text: `<untrusted-content source="${source}">\n${text}\n</untrusted-content>` }, ...images], next: shown.next };
+	return { content: [{ type: "text", text: untrusted(pulled.url, [shown.text, ...footer].join("\n\n")) }, ...images], next: shown.next };
 }
 
 export function registerLinkTool(pi: ExtensionAPI, options: LinkToolOptions = {}): void {
@@ -102,20 +79,6 @@ export function registerLinkTool(pi: ExtensionAPI, options: LinkToolOptions = {}
 }
 
 const offset0 = (params: Params) => !params.offset;
-
-function safe(theme: Theme, key: Parameters<Theme["fg"]>[0], text: string): string {
-	try {
-		return theme.fg(key, text);
-	} catch {
-		return text;
-	}
-}
-
-/** Text from links and pages goes on one row with no terminal escapes: titles come from untrusted sites. */
-export function clean(value: unknown, max = 160): string {
-	const text = String(value ?? "").replace(/[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim();
-	return text.length > max ? `${text.slice(0, cutIndex(text, max - 1))}…` : text;
-}
 
 export function callLine(args: Partial<Params>, theme: Theme): string {
 	const parts = [safe(theme, "toolTitle", TOOL_NAME), safe(theme, "accent", clean(args.url ?? "…"))];
