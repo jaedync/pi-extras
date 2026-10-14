@@ -21,6 +21,7 @@
     "!lib/**/__pycache__/",
     "!lib/**/*.pyc",
     "themes/",
+    "prompts/",
     "docs/",
     "licenses/",
     "README.md",
@@ -50,6 +51,9 @@
     ],
     "themes": [
       "themes/quiet.json"
+    ],
+    "prompts": [
+      "prompts/*.md"
     ]
   },
   "scripts": {

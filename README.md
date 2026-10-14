@@ -19,7 +19,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all seventeen extensions (quota hibernation, computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it.
+adds all seventeen extensions (quota hibernation, computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it. It also adds the prompt templates `/deeper`, `/higher` and `/wider`.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -44,6 +44,7 @@ can still conflict.
 | Copy Blocks | Code blocks and quotes in replies drawn on a background of their own with a `copy` label: one click copies the exact text; `/copy-block` does it from the keyboard |
 | Release Notes | What changed in pi-extras, shown one time in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
+| Prompts | `/deeper`, `/higher` and `/wider [task]`: before work starts, the model plans a deeper version of the task (expert methods, raw material, an outside check), the outcome behind the task, or the other fields that can improve it. Then it shows a new prompt and waits for your approval. From Felix Rieseberg's [How to be more ambitious](https://felixrieseberg.com/how-to-be-more-ambitious-a-tutorial-for-humans-with-models/) |
 
 The Status Plus context figure (`33k / 100k` and its bar) shows the context
 size against the point where Pi compacts the session. That point is the

@@ -10,7 +10,7 @@ assert.equal(result.status, 0, result.stderr);
 const packed = JSON.parse(result.stdout);
 // npm 11 prints a list of packages; npm 12 prints an object keyed by package name.
 const files = (Array.isArray(packed) ? packed[0] : Object.values(packed)[0]).files;
-const roots = new Set(['extensions', 'lib', 'themes', 'docs', 'licenses']);
+const roots = new Set(['extensions', 'lib', 'themes', 'prompts', 'docs', 'licenses']);
 const top = new Set(['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'THIRD_PARTY.md']);
 for (const { path } of files) {
   assert.ok(!path.split('/').includes('..'), path);

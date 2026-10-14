@@ -56,7 +56,7 @@ try {
   const { DefaultResourceLoader, SettingsManager, SessionManager, createAgentSession } = await import(pathToFileURL(join(agentRoot, 'dist/bundle/index.js')).href);
   const loader = new DefaultResourceLoader({ cwd: scratch, agentDir,
     settingsManager: SettingsManager.create(scratch, agentDir),
-    noSkills: true, noPromptTemplates: true, noContextFiles: true,
+    noSkills: true, noContextFiles: true,
   });
   await loader.reload();
   const extensions = loader.getExtensions();
@@ -64,6 +64,8 @@ try {
   assert.equal(extensions.extensions.length, 17);
   assert.ok(loader.getThemes().themes.some(theme => theme.name === 'quiet'));
   assert.deepEqual(loader.getThemes().diagnostics, []);
+  assert.ok(loader.getPrompts().prompts.some(prompt => prompt.name === 'deeper'), 'the package ships the /deeper prompt');
+  assert.deepEqual(loader.getPrompts().diagnostics, []);
   const tools = extensions.extensions.flatMap(ext => [...ext.tools.keys()]);
   assert.ok(tools.includes('kagi_search'));
   assert.ok(tools.includes('usage'));
