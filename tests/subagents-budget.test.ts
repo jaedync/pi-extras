@@ -64,15 +64,22 @@ function harness(options: Partial<TeamOptions> = {}) {
 	return { team, hooks, prompts, aborted, main, spawn, say, finish };
 }
 
-test("a run over its time budget is stopped, and main gets a report that says why", async (t) => {
+const WRAPPING = /^wrapping up: over its 0\.001-minute budget$/;
+/** The run's reply that ends its wrap-up (wrap-up.ts): it becomes the report. */
+const report = (h: ReturnType<typeof harness>, name: string, text: string) => { h.say(name, text); h.finish(name); };
+
+test("a run over its time budget that does not wrap up by the backstop is stopped, and main gets a report that says why", async (t) => {
 	const pass = fakeClock(t);
-	const h = harness();
+	const h = harness({ budgetTimes: { backstopMs: 1_000 } });
 	const name = h.spawn("slow", { maxMinutes: SHORT });
 	await tick(); await tick();
 	h.say(name, "Halfway through the survey.");
 	await pass(SHORT_MS - 1);
-	assert.equal(h.team.get(name)!.state, "running", "not yet over");
+	assert.equal(h.team.get(name)!.activity === null || !WRAPPING.test(h.team.get(name)!.activity!), true, "not yet over");
 	await pass(1);
+	assert.match(h.team.get(name)!.activity ?? "", WRAPPING, "it wraps up first");
+	assert.equal(h.team.get(name)!.state, "running");
+	await pass(1_000);
 	const record = h.team.get(name)!;
 	assert.equal(record.state, "stopped");
 	assert.equal(record.stopReason, `over its ${SHORT}-minute budget`);
@@ -97,30 +104,34 @@ test("time spent asking does not count against the budget", async (t) => {
 	assert.ok((await asked).ok);
 	assert.equal(h.team.get(name)?.state, "running");
 	await pass(SHORT_MS / 2 - 1);
-	assert.equal(h.team.get(name)?.state, "running", "the time before the question still counts");
+	assert.doesNotMatch(h.team.get(name)?.activity ?? "", WRAPPING, "the time before the question still counts");
 	await pass(1);
-	assert.equal(h.team.get(name)?.state, "stopped", "the clock runs again once it works");
+	assert.match(h.team.get(name)?.activity ?? "", WRAPPING, "the clock runs again once it works");
+	await h.team.close();
 });
 
-test("a run over its cost budget is stopped; cost counts this run only", async () => {
+test("a run over its cost budget wraps up; cost counts this run only", async () => {
 	const h = harness();
 	const name = h.spawn("spender", { maxCost: 0.5 });
 	await tick(); await tick();
 	h.hooks.get(name)!.update({ usage: usage(0.4) });
-	assert.equal(h.team.get(name)?.state, "running");
+	assert.equal(h.team.get(name)?.activity === "wrapping up: over its $0.50 cost budget", false);
 	h.hooks.get(name)!.update({ usage: usage(0.6) });
-	assert.equal(h.team.get(name)?.state, "stopped");
-	assert.equal(h.team.get(name)?.stopReason, "over its $0.50 cost budget");
+	assert.equal(h.team.get(name)?.activity, "wrapping up: over its $0.50 cost budget");
+	report(h, name, "Spent it.");
+	await tick(); await tick();
+	assert.equal(h.team.get(name)?.state, "idle");
+	assert.equal(h.team.get(name)?.budgetEnd, "over its $0.50 cost budget");
 	assert.ok((await h.team.send("main", name, "Continue, but cheaply.")).ok);
 	await tick(); await tick();
 	assert.equal(h.team.get(name)?.state, "running");
 	assert.equal(h.team.get(name)?.maxCost, 0.5, "a resumed run keeps the same limits");
-	assert.equal(h.team.get(name)?.stopReason, undefined, "the new run has not been stopped");
-	assert.match(h.prompts.get(name)!.at(-1)!, /Your previous run was stopped over its \$0\.50 cost budget\. This run has a fresh budget\./);
+	assert.equal(h.team.get(name)?.budgetEnd, undefined, "the new run has not reached its budget");
+	assert.match(h.prompts.get(name)!.at(-1)!, /Your previous run reached its \$0\.50 cost budget and ended with a wrap-up report\. This run has a fresh budget\./);
 	h.hooks.get(name)!.update({ usage: usage(0.9) });
-	assert.equal(h.team.get(name)?.state, "running", "0.30 spent in this run");
+	assert.equal(h.team.get(name)?.activity === "wrapping up: over its $0.50 cost budget", false, "0.30 spent in this run");
 	h.hooks.get(name)!.update({ usage: usage(1.1) });
-	assert.equal(h.team.get(name)?.state, "stopped");
+	assert.equal(h.team.get(name)?.activity, "wrapping up: over its $0.50 cost budget");
 	await h.team.close();
 });
 
@@ -130,18 +141,22 @@ test("a resumed run gets a fresh time budget", async (t) => {
 	const name = h.spawn("again", { maxMinutes: SHORT });
 	await tick(); await tick();
 	await pass(SHORT_MS);
-	assert.equal(h.team.get(name)?.state, "stopped");
+	report(h, name, "First report.");
+	await tick(); await tick();
+	assert.equal(h.team.get(name)?.state, "idle");
 	assert.ok((await h.team.send("main", name, "Continue.")).ok);
 	await tick(); await tick();
 	assert.equal(h.team.get(name)?.state, "running");
 	await pass(SHORT_MS - 1);
-	assert.equal(h.team.get(name)?.state, "running", "the new run's clock starts at zero");
+	assert.doesNotMatch(h.team.get(name)?.activity ?? "", WRAPPING, "the new run's clock starts at zero");
 	await pass(1);
-	assert.equal(h.team.get(name)?.state, "stopped");
+	assert.match(h.team.get(name)?.activity ?? "", WRAPPING);
+	report(h, name, "Second report.");
+	await tick(); await tick();
 	assert.equal(h.main.filter((delivery) => delivery.kind === "report").length, 2);
 });
 
-test("over budget stops its subagents silently and wakes its own parent with the report", async (t) => {
+test("over budget stops its subagents silently, and its wrap-up report goes to its own parent", async (t) => {
 	const pass = fakeClock(t);
 	const h = harness();
 	const lead = h.spawn("lead");
@@ -150,17 +165,22 @@ test("over budget stops its subagents silently and wakes its own parent with the
 	await tick(); await tick();
 	const nested = h.spawn("nested", { parent: helper });
 	await tick(); await tick();
-	h.say(helper, "Found two of three.");
 	await pass(SHORT_MS);
-	assert.equal(h.team.get(helper)?.state, "stopped");
+	assert.match(h.team.get(helper)?.activity ?? "", WRAPPING);
 	assert.equal(h.team.get(nested)?.state, "stopped");
 	assert.equal(h.team.get(nested)?.stopReason, undefined, "stopped by its parent, not by its own budget");
+	report(h, helper, "Found two of three.");
+	await tick(); await tick();
+	assert.match(h.prompts.get(helper)!.at(-1)!, /Your subagents were stopped: nested \(running\)\.$/, "asked again: its reply could not know of the stop");
+	report(h, helper, "Found two of three; nested was stopped.");
+	await tick(); await tick();
+	assert.equal(h.team.get(helper)?.state, "idle");
 	assert.equal(h.team.get(lead)?.state, "running", "its parent was working and stays on it");
 	assert.deepEqual(h.main, [], "the report goes to its parent, not main");
 	await h.team.close();
 });
 
-test("a parent waiting on its subagents is woken by one's over-budget report", async (t) => {
+test("a parent waiting on its subagents is woken by one's report written at its budget", async (t) => {
 	const pass = fakeClock(t);
 	const h = harness();
 	const lead = h.spawn("lead");
@@ -171,9 +191,11 @@ test("a parent waiting on its subagents is woken by one's over-budget report", a
 	await tick();
 	assert.equal(h.team.get(lead)?.state, "waiting");
 	await pass(SHORT_MS);
-	assert.equal(h.team.get(helper)?.state, "stopped");
+	report(h, helper, "Two of three.");
+	await tick(); await tick();
+	assert.equal(h.team.get(helper)?.state, "idle");
 	assert.equal(h.team.get(lead)?.state, "running", "the report resumes it");
-	assert.match(h.prompts.get(lead)!.at(-1)!, /helper \(test\/model\) was stopped after \d+s: over its 0\.001-minute budget\./);
+	assert.match(h.prompts.get(lead)!.at(-1)!, /helper \(test\/model\) reached its 0\.001-minute budget after \S+ and wrote this report when told to stop\./);
 	await h.team.close();
 });
 
@@ -238,12 +260,13 @@ test("budgets and stop reasons persist in the index, and old records without the
 	const warn = (message: string) => assert.fail(message);
 	const base: AgentRecord = { name: "slow", parent: "main", depth: 1, task: "t", model: "test/model", readOnly: false, fork: false, blocking: false,
 		state: "stopped", createdAt: 0, activity: null, toolCalls: 0, usage: usage(0), runs: 1 };
-	index.save([{ ...base, maxMinutes: 30, maxCost: 1.5, stopReason: "over its 30-minute budget" }]);
-	const [loaded] = new ChildIndex(dir, "parent", "/parent").load(warn);
+	index.save([{ ...base, maxMinutes: 30, maxCost: 1.5, stopReason: "over its 30-minute budget" }, { ...base, name: "wrapped", state: "idle", budgetEnd: "over its $1.50 cost budget" }]);
+	const [loaded, wrapped] = new ChildIndex(dir, "parent", "/parent").load(warn);
 	assert.deepEqual([loaded?.maxMinutes, loaded?.maxCost, loaded?.stopReason], [30, 1.5, "over its 30-minute budget"]);
+	assert.equal(wrapped?.budgetEnd, "over its $1.50 cost budget");
 	index.save([base]);
 	assert.equal(index.load(warn)[0]?.maxMinutes, undefined);
-	for (const bad of [{ maxMinutes: 0 }, { maxMinutes: "60" }, { maxCost: -1 }, { stopReason: 3 }]) {
+	for (const bad of [{ maxMinutes: 0 }, { maxMinutes: "60" }, { maxCost: -1 }, { stopReason: 3 }, { budgetEnd: true }]) {
 		index.save([{ ...base, ...bad } as never]);
 		assert.throws(() => index.load(warn), /Invalid child index/, JSON.stringify(bad));
 	}

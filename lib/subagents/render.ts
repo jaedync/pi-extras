@@ -245,6 +245,7 @@ export function createMessageRenderer(markdown?: MarkdownSource, lookup: Lookup 
 function reportWord(report: ReportSummary): Seg {
 	if (report.state === "failed") return { text: `${FAILURE_GLYPH} failed`, color: "error" };
 	if (report.state === "stopped") return report.stopReason ? { text: `stopped ${report.stopReason}`, color: "warning" } : { text: "stopped", color: "muted" };
+	if (report.state === "idle" && report.budgetEnd) return { text: "reported at budget", color: "warning" };
 	return { text: report.state === "idle" ? "reported" : report.state, color: "muted" };
 }
 

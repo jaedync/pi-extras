@@ -45,6 +45,8 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const EDIT_GUARD_NAME = "subagent-edit-guard";
 const EDIT_GUARD_PATH = `<inline:${EDIT_GUARD_NAME}>`;
+const BUDGET_GUARD_NAME = "subagent-budget-guard";
+const BUDGET_GUARD_PATH = `<inline:${BUDGET_GUARD_NAME}>`;
 const TIMEOUT_NAME = "subagent-default-timeout";
 const TIMEOUT_PATH = `<inline:${TIMEOUT_NAME}>`;
 /** The shell tools whose calls get main's default timeout. */
@@ -243,6 +245,19 @@ export function editGuard(check: (path: unknown) => string | undefined, track?: 
 	};
 }
 
+/** Blocks every tool call while the run wraps up at its budget (wrap-up.ts); `blocked` says why, and that is the call's result. */
+export function budgetGuard(blocked: () => string | undefined): InlineExtension {
+	return {
+		name: BUDGET_GUARD_NAME,
+		factory(pi) {
+			pi.on("tool_call", () => {
+				const reason = blocked();
+				return reason ? { block: true, reason } : undefined;
+			});
+		},
+	};
+}
+
 /**
  * Main's Bash Default Timeout for a child's shell calls that omit one. That
  * extension owns no tool, so it never loads in a child, and a call would run
@@ -301,7 +316,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			// A check runs as the child's own bash would; a child without bash gets one made the same way when it needs it.
 			let checkBash = bash;
 			const check: ChildHandle["check"] = (command, options) => bashCheck(checkBash ??= childBash(sdk, cwd, settingsManager, record, deps), command, options);
-			const loader = childLoader(deps, record, { cwd, settingsManager, guard, wanted, loaded, editCheck });
+			const loader = childLoader(deps, record, { cwd, settingsManager, guard, wanted, loaded, editCheck, blocked: () => hooks.wrapUp?.() });
 			await loader.reload();
 			const stamp = withFiles(settled, resourceFiles(loader), begun);
 			// A path fixed at spawn opens as a new session written there.
@@ -359,10 +374,12 @@ interface LoaderInputs {
 	readonly wanted: ReadonlySet<string>;
 	readonly loaded: readonly string[];
 	readonly editCheck: (path: unknown) => string | undefined;
+	/** Why every tool call is blocked now (types.ts `ChildHooks.wrapUp`). */
+	readonly blocked: () => string | undefined;
 }
 
 function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInputs) {
-	const { cwd, settingsManager, guard, wanted, loaded, editCheck } = inputs;
+	const { cwd, settingsManager, guard, wanted, loaded, editCheck, blocked } = inputs;
 	// Read at each launch, as main reads it at each session start.
 	const timeout = resolveDefaultSeconds(process.env.PI_BASH_DEFAULT_TIMEOUT);
 	return new deps.sdk.DefaultResourceLoader({
@@ -374,11 +391,12 @@ function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInpu
 		// After APPEND_SYSTEM.md, which Pi finds as it finds SYSTEM.md, project trust and all; a plain
 		// appendSystemPrompt would take its place.
 		appendSystemPromptOverride: (base) => [...base, deps.instructions(record)],
-		extensionFactories: [guard.extension, editGuard(editCheck, editTracker(deps.activity, record.name, cwd)),
+		// The budget guard comes first: a call it blocks takes no edit lock.
+		extensionFactories: [budgetGuard(blocked), guard.extension, editGuard(editCheck, editTracker(deps.activity, record.name, cwd)),
 			...(timeout === undefined ? [] : [defaultTimeout(timeout)])],
 		extensionsOverride: (base) => ({
 			...base,
-			extensions: base.extensions.filter((extension) => [CHILD_GUARD_PATH, EDIT_GUARD_PATH, TIMEOUT_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
+			extensions: base.extensions.filter((extension) => [BUDGET_GUARD_PATH, CHILD_GUARD_PATH, EDIT_GUARD_PATH, TIMEOUT_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
 				|| [...extension.tools.keys()].some((name) => wanted.has(name))),
 		}),
 	});
@@ -582,11 +600,12 @@ function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: numb
 			if (last?.stopReason === "error") throw new Error(last.errorMessage || "The model returned an error.");
 		},
 		steer(text) {
-			// A run that ended at a turn for a swap reads nothing more here.
-			if (turnEnd.ending()) held.push(text);
+			// A run that ended at a turn for a swap reads nothing more here, nor does one that wraps up at its budget: its next run does.
+			if (turnEnd.ending() || hooks.wrapUp?.() !== undefined) held.push(text);
 			else void session.steer(text).catch(() => undefined);
 		},
 		abort: () => session.abort(),
+		toolsRunning: () => ((session.agent as { state?: { pendingToolCalls?: ReadonlySet<string> } }).state?.pendingToolCalls?.size ?? 0) > 0,
 		lastText: () => session.getLastAssistantText(),
 		messages: () => session.messages,
 		streaming: streaming.current,

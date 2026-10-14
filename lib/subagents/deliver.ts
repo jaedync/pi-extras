@@ -84,6 +84,8 @@ export interface ReportSummary {
 	error?: string;
 	/** Why it was stopped when no one asked: a run over its budget. */
 	stopReason?: string;
+	/** The budget its run reached before it wrote this report when told to stop (wrap-up.ts). */
+	budgetEnd?: string;
 	sessionFile?: string;
 }
 
@@ -113,6 +115,7 @@ export function summarize(record: AgentRecord): ReportSummary {
 		...(report !== undefined ? { report } : {}),
 		...(record.error !== undefined ? { error: record.error } : {}),
 		...(record.stopReason !== undefined ? { stopReason: record.stopReason } : {}),
+		...(record.budgetEnd !== undefined ? { budgetEnd: record.budgetEnd } : {}),
 		...(record.sessionFile !== undefined ? { sessionFile: record.sessionFile } : {}),
 	};
 }

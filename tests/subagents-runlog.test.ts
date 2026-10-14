@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, statSync, writeFileSync, readFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as tick } from "node:timers/promises";
-import { appendRunLog, runLogEntry, statsByModel } from "../lib/subagents/runlog.ts";
+import { appendRunLog, runLogEntry, statsByModel, statsText } from "../lib/subagents/runlog.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { type AgentRecord, type ChildHandle, type ChildHooks, LIVE_STATES } from "../lib/subagents/types.ts";
 
@@ -69,4 +69,15 @@ test("the run log is private: the file is 0600 and its directory 0700", () => {
 		assert.equal(statSync(older).mode & 0o777, 0o600, "a log made before is made private too");
 		assert.equal(readFileSync(older, "utf8"), '{"model":"p/m"}\n');
 	} finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a run that reported at its budget is logged with that budget, and stats count it apart from ok runs", () => {
+	const base: AgentRecord = { name: "w", parent: "main", depth: 1, task: "t", model: "p/m", readOnly: false, fork: false, blocking: false,
+		state: "idle", createdAt: 1, activity: null, toolCalls: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, runs: 1 };
+	const entry = runLogEntry({ ...base, budgetEnd: "over its 60-minute budget" }, 10, "s");
+	assert.equal(entry.budgetEnd, "over its 60-minute budget");
+	assert.equal(runLogEntry(base, 10, "s").budgetEnd, undefined);
+	const [stats] = statsByModel([JSON.stringify(entry), JSON.stringify(runLogEntry(base, 10, "s"))]);
+	assert.deepEqual([stats!.runs, stats!.ok, stats!.atBudget], [2, 1, 1]);
+	assert.match(statsText(statsByModel([JSON.stringify(entry)]), () => "1s", (value) => value.toFixed(2)), /1 run \(1 at budget\)/);
 });

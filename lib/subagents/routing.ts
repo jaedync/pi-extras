@@ -242,7 +242,8 @@ export class Routing {
 				host.patch(to, { resumedBy: { from: why.from, text: why.said }, startedAt: host.now(),
 					...(!why.automatic && (why.from === MAIN || why.from === USER) ? { interruptionId: undefined, interruptedBy: undefined, interruptionAnnounced: undefined, autoResumeAttempts: 0 } : {}) });
 			}
-			host.run(to, [...host.takeInbox(to), why.body].join("\n\n"));
+			// A run that ended at its budget may have stopped in the middle of a tool call: the next one is told.
+			host.run(to, `${target.state === "idle" ? resumeWarning(target) : ""}${[...host.takeInbox(to), why.body].join("\n\n")}`);
 			return { ok: true, delivered: "resumed" };
 		}
 		host.patch(to, { inbox: [...(host.get(to)?.inbox ?? []), why.body] });

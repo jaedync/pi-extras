@@ -264,7 +264,8 @@ export class RunChecks {
 		let result: CheckResult;
 		try { result = await runCheck(handle, record, fixes + 1, controller.signal, () => this.host.now()); }
 		finally { this.running.delete(name); }
-		if (this.host.gone(name)) return null;
+		// Aborted by a stop, a close or a run at its budget (wrap-up.ts): what it found is no result.
+		if (this.host.gone(name) || controller.signal.aborted) return null;
 		// A failed check is news main has not heard, even when the run only answered main.
 		this.host.patch(name, { checked: result, checkSkipped: undefined, ...WAITING_FOR_MODEL, ...(result.exitCode !== 0 ? { answeredMain: undefined } : {}) });
 		this.checkedAt.set(name, changes);

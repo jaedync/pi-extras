@@ -103,11 +103,13 @@ export interface AgentRecord {
 	/** The full report of the latest completed run, never reused by a later run. */
 	reportFile?: string;
 	error?: string;
-	/** Minutes one run may work, and dollars it may spend, before it is stopped; fixed at spawn so resumes keep them. */
+	/** Minutes one run may work, and dollars it may spend, before it must report (wrap-up.ts); fixed at spawn so resumes keep them. */
 	maxMinutes?: number;
 	maxCost?: number;
 	/** Why its last run was stopped, when it was not by request: `over its 60-minute budget`. */
 	stopReason?: string;
+	/** Its last run reached this budget and ended with the report it was asked for then: `over its 60-minute budget`. */
+	budgetEnd?: string;
 	sessionFile?: string;
 	/** Reconstructed from disk, without a live SDK handle yet. */
 	restored?: boolean;
@@ -234,6 +236,8 @@ export interface ChildHandle {
 	sessionFile?: string;
 	/** What its launch read (stamp.ts); a launcher compares it with what a launch now would read. */
 	stamp?: LaunchStamp;
+	/** Whether a tool call of its session runs now; unset, a session can't say. */
+	toolsRunning?(): boolean;
 	/** Runs a check command as the child's bash would, in its directory and with its shell settings and sandbox. */
 	check?(command: string, options: { timeoutMs: number; signal: AbortSignal; id: string }): Promise<CheckRun>;
 }
@@ -248,6 +252,11 @@ export interface ChildHooks {
 	turnEnded?(): boolean;
 	/** A tool call starts, with the tool's name: the team counts the calls that can change files (checks.ts). */
 	toolCalled?(tool: string): void;
+	/**
+	 * While the run wraps up at its budget (wrap-up.ts): why each tool call is
+	 * blocked. Mail steered then waits for the next run. Undefined otherwise.
+	 */
+	wrapUp?(): string | undefined;
 }
 
 export interface Launcher {

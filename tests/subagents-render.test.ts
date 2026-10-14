@@ -328,3 +328,14 @@ test("a subagent or message call written now has a pen, its size and time, and t
 	const replayed = subagentCallRow(args, theme, { ...context, state: {} }, () => undefined, () => false).render(60).map((line) => strip(line).trimEnd());
 	assert.match(replayed[0]!, /^ {2}◇ range-review  opus$/, "a call rebuilt from history has no draft");
 });
+
+test("a report written at the budget says so in the warning color", () => {
+	const row = (summary: object) => createReportRenderer()({ details: { id: "8", kind: "report", reports: [
+		{ name: "scout", model: "openai-codex/gpt-6-luna", startedAt: 0, endedAt: 5_000, cost: 0, toolCalls: 1, report: "half", ...summary },
+	] } } as any, { expanded: false } as any, theme)!.render(100)[0]!;
+	const atBudget = row({ state: "idle", budgetEnd: "over its 60-minute budget" });
+	assert.match(strip(atBudget), /  ◆ scout reported at budget  5\.0s/);
+	const stopped = row({ state: "stopped", stopReason: "over its 60-minute budget" });
+	assert.equal(colorOf(atBudget, "reported at budget"), colorOf(stopped, "stopped over"), "the warning color, as a budget stop has");
+	assert.notEqual(colorOf(atBudget, "reported at budget"), colorOf(row({ state: "idle" }), "reported"));
+});

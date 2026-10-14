@@ -32,7 +32,8 @@ export function handUp(host: HandUpHost, record: AgentRecord, silent: boolean): 
 	// So is one that a spawn of the same parent waits for: the parent hears of it through that spawn's report.
 	// A check that did not pass is news either way, and so is any report to a parent whose run waits on its subagents.
 	const parentWaits = host.get(record.parent)?.state === "waiting";
-	const quiet = (peerRun || awaited(record, host.list())) && record.state === "idle" && !checkFailed(record) && !parentAsked && !owedMain && !parentWaits;
+	// So is a report written at the budget: the work may be incomplete.
+	const quiet = (peerRun || awaited(record, host.list())) && record.state === "idle" && !record.budgetEnd && !checkFailed(record) && !parentAsked && !owedMain && !parentWaits;
 	// A parent waiting on this child's answer gets the report as that answer.
 	const asked = host.questions.of(record.parent).find((question) => question.to === name);
 	if (asked) asked.resolve(reportText(record, host.now()));

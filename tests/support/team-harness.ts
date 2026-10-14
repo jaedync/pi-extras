@@ -6,7 +6,14 @@ import assert from "node:assert/strict";
 import { Team, type TeamOptions } from "../../lib/subagents/team.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, CheckRun, MainDelivery, SpawnRequest } from "../../lib/subagents/types.ts";
 
-export interface Call { text: string; model: string; finish(result: string): void; fail(error: Error): void }
+export interface Call {
+	text: string;
+	model: string;
+	finish(result: string): void;
+	/** Ends the prompt with `message` as its last reply, such as one with tool calls or one an abort cut short. */
+	end(message: unknown): void;
+	fail(error: Error): void;
+}
 
 const user = (text: string) => ({ role: "user", content: [{ type: "text", text }] });
 
@@ -25,6 +32,8 @@ export function teamHarness(options: HarnessOptions = {}) {
 	const steered = new Map<string, string[]>();
 	const hooks = new Map<string, ChildHooks>();
 	const launched: Array<{ name: string; model: string }> = [];
+	/** Each abort of a child's session, by name. */
+	const aborts: string[] = [];
 	/** Steering that reaches a child as its run ends, which takeQueued hands back. */
 	const late = new Map<string, string[]>();
 	const main: MainDelivery[] = [];
@@ -46,10 +55,11 @@ export function teamHarness(options: HarnessOptions = {}) {
 						calls.set(record.name, [...(calls.get(record.name) ?? []), {
 							text, model: record.model, fail: reject,
 							finish: (result) => { say(record.name, { role: "assistant", content: [{ type: "text", text: result }] }); resolve(); },
+							end: (message) => { say(record.name, message); resolve(); },
 						}]);
 					}),
 					steer: (text) => steered.set(record.name, [...(steered.get(record.name) ?? []), text]),
-					abort: async () => undefined,
+					abort: async () => { aborts.push(record.name); },
 					lastText: () => undefined,
 					messages: () => transcripts.get(record.name) ?? [],
 					takeQueued: () => { const queued = late.get(record.name) ?? []; late.delete(record.name); return queued; },
@@ -73,5 +83,5 @@ export function teamHarness(options: HarnessOptions = {}) {
 		steered.set(name, queue.slice(count));
 		hooks.get(name)?.update({ activity: "thinking" });
 	};
-	return { team, calls, steered, hooks, launched, late, main, transcripts, spawn, lastCall, read };
+	return { team, calls, steered, hooks, launched, aborts, late, main, transcripts, spawn, lastCall, read };
 }

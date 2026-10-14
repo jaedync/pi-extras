@@ -53,6 +53,7 @@ export function runLogEntry(record: AgentRecord, now: number, parentSession: str
 		usage: launchFailed ? NO_USAGE : use.usage,
 		reportChars: launchFailed ? 0 : record.report?.length ?? 0,
 		error: record.error ?? null,
+		...(record.budgetEnd ? { budgetEnd: record.budgetEnd } : {}),
 		sessionFile: record.sessionFile ?? null,
 	};
 }
@@ -93,6 +94,8 @@ export interface ModelStats {
 	model: string;
 	runs: number;
 	ok: number;
+	/** Runs that ended idle with a report written at their budget (wrap-up.ts); not counted as ok. */
+	atBudget: number;
 	failed: number;
 	stopped: number;
 	interrupted: number;
@@ -113,12 +116,13 @@ export function statsByModel(lines: readonly string[]): ModelStats[] {
 		let entry: Record<string, unknown>;
 		try { entry = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
 		if (typeof entry.model !== "string") continue;
-		const stats = byModel.get(entry.model) ?? { model: entry.model, runs: 0, ok: 0, failed: 0, stopped: 0, interrupted: 0, cost: 0, durationMs: 0, toolCalls: 0 };
+		const stats = byModel.get(entry.model) ?? { model: entry.model, runs: 0, ok: 0, atBudget: 0, failed: 0, stopped: 0, interrupted: 0, cost: 0, durationMs: 0, toolCalls: 0 };
 		const usage = (entry.usage ?? {}) as { cost?: unknown };
 		byModel.set(entry.model, {
 			...stats,
 			runs: stats.runs + 1,
-			ok: stats.ok + (entry.state === "idle" ? 1 : 0),
+			ok: stats.ok + (entry.state === "idle" && !entry.budgetEnd ? 1 : 0),
+			atBudget: stats.atBudget + (entry.state === "idle" && entry.budgetEnd ? 1 : 0),
 			failed: stats.failed + (entry.state === "failed" ? 1 : 0),
 			stopped: stats.stopped + (entry.state === "stopped" ? 1 : 0),
 			interrupted: stats.interrupted + (entry.state === "interrupted" ? 1 : 0),
@@ -134,7 +138,7 @@ export function statsText(stats: readonly ModelStats[], format: (ms: number) => 
 	if (stats.length === 0) return "No subagent runs logged yet.";
 	const width = Math.max(...stats.map((s) => s.model.length));
 	return stats.map((s) => {
-		const ended = [s.failed && `${s.failed} failed`, s.stopped && `${s.stopped} stopped`, s.interrupted && `${s.interrupted} interrupted`].filter(Boolean).join(", ");
+		const ended = [s.atBudget && `${s.atBudget} at budget`, s.failed && `${s.failed} failed`, s.stopped && `${s.stopped} stopped`, s.interrupted && `${s.interrupted} interrupted`].filter(Boolean).join(", ");
 		const count = `${String(s.runs).padStart(4)} ${s.runs === 1 ? "run" : "runs"}${ended ? ` (${ended})` : s.runs === 1 ? " " : ""}`;
 		return `${s.model.padEnd(width)}  ${count}  avg ${format(s.durationMs / s.runs)}, ${(s.toolCalls / s.runs).toFixed(1)} tools, $${money(s.cost / s.runs)}  total $${money(s.cost)}`;
 	}).join("\n");

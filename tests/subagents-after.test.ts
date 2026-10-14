@@ -91,11 +91,13 @@ test("a failed, stopped or interrupted agent counts as ended, and the block says
 		["a", { ...base, name: "a", state: "failed", error: "rate limited", reportFile: "/s/a.run-1.report.md" }],
 		["b", { ...base, name: "b", state: "stopped", stopReason: "over its 60-minute budget", sessionFile: "/s/b.jsonl" }],
 		["c", { ...base, name: "c", state: "interrupted" }],
+		["e", { ...base, name: "e", state: "idle", budgetEnd: "over its $2.00 cost budget", sessionFile: "/s/e.jsonl" }],
 	]);
-	const block = afterBlock({ ...base, name: "d", state: "queued", runs: 0, after: ["a", "b", "c"] }, (name) => records.get(name));
+	const block = afterBlock({ ...base, name: "d", state: "queued", runs: 0, after: ["a", "b", "c", "e"] }, (name) => records.get(name));
 	assert.match(block, /- a failed: rate limited\. Report: \/s\/a\.run-1\.report\.md/);
 	assert.match(block, /- b was stopped over its 60-minute budget\. No report; its session: \/s\/b\.jsonl/);
 	assert.match(block, /- c was interrupted; that counts as ended, and it may resume later\. No report\./);
+	assert.match(block, /- e reached its \$2\.00 cost budget and wrote a wrap-up report; its work may be incomplete\. No report; its session: \/s\/e\.jsonl/);
 });
 
 test("the block says when the report it names is an older run's, since the last run saved none", () => {

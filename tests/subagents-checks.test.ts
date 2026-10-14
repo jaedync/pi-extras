@@ -141,7 +141,7 @@ test("a stop during the check aborts it, and a failed run skips it", async () =>
 	await h.team.close();
 });
 
-test("a run over its budget during the check is stopped and its check aborted", async () => {
+test("a run over its budget during the check has its check aborted and ends with the reply before it as its report", async () => {
 	const script = scripted();
 	const h = teamHarness({ check: script.check });
 	const name = h.spawn("slow check", { name: "impl", maxMinutes: 0.001, check: { command: "sleep 100", fixUntilPass: 0 } });
@@ -149,8 +149,10 @@ test("a run over its budget during the check is stopped and its check aborted", 
 	script.hold();
 	h.lastCall(name).finish("Done.");
 	const done = await h.team.whenDone(name);
-	assert.equal(done.state, "stopped");
-	assert.match(done.stopReason ?? "", /budget/);
+	assert.equal(done.state, "idle");
+	assert.match(done.budgetEnd ?? "", /budget/);
+	assert.equal(done.report, "Done.");
+	assert.equal(done.checked, undefined);
 	assert.equal(script.asked[0]?.signal.aborted, true);
 	await h.team.close();
 });

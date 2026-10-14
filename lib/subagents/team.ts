@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { afterBlock, afterError, queuedActivity, stopOrder } from "./after.ts";
 import { MAIN, nameFor } from "./names.ts";
-import { budgetError, type BudgetUse, type NoteTimes, RunBudgets, type RunLimits } from "./budget.ts";
+import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
 import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
@@ -32,6 +32,7 @@ import { causeWords, staleCauses, SWAP_NOTE, swapActivity, swapDue, TurnSwaps } 
 import { Routing, type SendOptions } from "./routing.ts";
 import { OpenSessions } from "./sessions.ts";
 import { WorkTrees } from "./work-trees.ts";
+import { RunWrapUps, type WrapUpTimes } from "./wrap-up.ts";
 import type { Thinking } from "./models.ts";
 import { placeChild } from "./placement.ts";
 import {
@@ -60,8 +61,8 @@ export interface TeamOptions {
 	idleReleaseMs?: number;
 	/** Each run's limits when the spawn names none; without them a run has no limit. */
 	runBudget?: RunLimits;
-	/** When a run gets its note near the end of a budget (budget.ts); tests make these small. */
-	budgetTimes?: Partial<NoteTimes>;
+	/** When a run gets its note near the end of a budget, and how long it may take to wrap up at the limit (wrap-up.ts); tests make these small. */
+	budgetTimes?: Partial<WrapUpTimes>;
 	/** Model references a run goes on with, in order, when its model can't serve it (fallback.ts); unset or empty turns fallback off. */
 	fallbackModels?: readonly string[];
 	/** The thinking level a spawn of `model` gets when the call names none (models.ts `thinkingFor`); a fallback model gets its own. */
@@ -110,6 +111,7 @@ export class Team implements HostTeam {
 		gone: (name) => this.gone(name), now: () => this.now(), known: () => this.knownNames(),
 	});
 	private readonly budgets: RunBudgets;
+	private readonly wrapUps: RunWrapUps;
 	private readonly locks = new EditLocks(this);
 	private readonly workTrees = new WorkTrees();
 	private readonly routing: Routing;
@@ -125,8 +127,10 @@ export class Team implements HostTeam {
 		// An asking agent frees its slot for a queued one.
 		this.questions = new OpenQuestions({ replyTimeoutMs: options.replyTimeoutMs, changed: (asker, waitingOn) => { this.showAsking(asker, waitingOn); this.pump(); } });
 		this.slots = new Slots({ maxConcurrent: options.maxConcurrent, closed: () => this.closed, list: () => this.list(), get: this.lookup, start: (name) => void this.start(name) });
+		this.wrapUps = new RunWrapUps({ get: this.lookup, list: () => this.list(), patch: (name, patch) => this.patch(name, patch), handle: (name) => this.sessions.get(name), runMessages: (name) => this.sessions.runMessages(name),
+			stop: (name, how) => this.stop(name, how), warn: (message) => (this.options.warn ?? console.warn)(message), abortCheck: (name) => this.checks.abort(name), ended: (name, reason) => this.endAtBudget(name, reason) }, options.budgetTimes);
 		// A note steered during the check would come back as a prompt of its own once the check ends; the run goes without it.
-		this.budgets = new RunBudgets({ now: this.now, over: (name, reason) => void this.stop(name, { reason }), notes: options.budgetTimes ?? {},
+		this.budgets = new RunBudgets({ now: this.now, over: (name, reason) => this.wrapUps.begin(name, reason), notes: options.budgetTimes ?? {},
 			near: (name, text) => { if (!this.checks.busy(name)) this.sessions.get(name)?.steer(text); } });
 		this.sessions = new OpenSessions({ launcher: options.launcher, idle: (name) => this.records.get(name)?.state === "idle", warn: options.warn ?? console.warn,
 			...(options.idleReleaseMs !== undefined ? { idleReleaseMs: options.idleReleaseMs } : {}) });
@@ -198,6 +202,7 @@ export class Team implements HostTeam {
 		if (request.parent !== MAIN && !parent) return { ok: false, error: `Unknown parent ${request.parent}.` };
 		// A tool call still in flight when its agent stopped: a subagent it started now would outlive the stop.
 		if (parent && (this.ending.has(parent.name) || parent.state === "stopped")) return { ok: false, error: `${parent.name} is stopping; it can't start subagents now.` };
+		if (parent && this.wrapUps.active(parent.name)) return { ok: false, error: `${parent.name} is wrapping up at its budget; it can't start subagents now.` };
 		const depth = (parent?.depth ?? 0) + 1;
 		if (depth > this.options.maxDepth) return { ok: false, error: `Subagents cannot start subagents here (depth limit ${this.options.maxDepth}).` };
 		const name = nameFor(request.name, request.task, (candidate) => this.records.has(candidate));
@@ -316,6 +321,7 @@ export class Team implements HostTeam {
 		if (options.by !== undefined && options.by === record.parent) this.stoppedByParent.add(name);
 		// Ending before its subagents stop: it can't start another meanwhile, and a second stop finds it ending.
 		this.ending.add(name);
+		this.wrapUps.end(name);
 		this.slots.remove(name);
 		this.parkResume(name);
 		for (const question of this.questions.of(name)) question.reject(new Error("stopped"));
@@ -367,6 +373,7 @@ export class Team implements HostTeam {
 	/** Freeze records before aborting, so SDK cancellation cannot turn shutdown into a failure. */
 	interrupt(reason: AgentRecord["interruptedBy"] = "quit", owner?: string): void {
 		this.closed = true;
+		this.wrapUps.clear();
 		for (const name of this.resumePrompts.names()) this.parkResume(name);
 		for (const record of this.live()) this.patch(record.name, { state: "interrupted", endedAt: this.now(), blocking: false,
 			interruptedBy: reason, interruptionId: randomUUID(), interruptedOwner: owner, interruptionAnnounced: false,
@@ -500,6 +507,7 @@ export class Team implements HostTeam {
 			// An older session's late events belong to a run that has ended.
 			turnEnded: () => this.launches.get(name) === launch && this.turnEnded(name),
 			toolCalled: (tool) => { if (this.launches.get(name) === launch) this.checks.called(name, tool); },
+			wrapUp: () => (this.launches.get(name) === launch ? this.wrapUps.blocked(name) : undefined),
 			update: (patch) => {
 				const record = this.records.get(name);
 				if (!record) return;
@@ -507,7 +515,7 @@ export class Team implements HostTeam {
 				const aborted = record.state === "stopped" && this.ending.has(name) && launch === (this.launches.get(name) ?? 0) - 1;
 				if (aborted && patch.usage) return this.patch(name, { usage: patch.usage });
 				if (this.launches.get(name) !== launch || !LIVE_STATES.has(record.state)) return;
-				this.patch(name, { ...patch, lastActivityAt: this.now(), ...(this.answers.workedSince(name, patch.toolCalls) ? { answeredMain: undefined } : {}) });
+				this.patch(name, { ...patch, ...this.wrapUps.shown(name, patch), lastActivityAt: this.now(), ...(this.answers.workedSince(name, patch.toolCalls) ? { answeredMain: undefined } : {}) });
 				if (patch.usage) this.budgets.spent(name, patch.usage.cost);
 				this.forgetRead(name);
 			},
@@ -533,12 +541,13 @@ export class Team implements HostTeam {
 		// A spawn group gathers its first runs' reports (deliver.ts); a later run reports on its own.
 		const leavesGroup = !continued && record.runs > 0 && record.group !== undefined;
 		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined,
-			...(continued ? {} : { runCost: record.usage.cost, runStart: { usage: { ...record.usage }, toolCalls: record.toolCalls } }), ...(leavesGroup ? { group: undefined } : {}) });
+			...(continued ? {} : { runCost: record.usage.cost, runStart: { usage: { ...record.usage }, toolCalls: record.toolCalls }, budgetEnd: undefined }), ...(leavesGroup ? { group: undefined } : {}) });
 		this.budgets.start(name, this.limits(record), record.usage.cost, used);
 		try {
 			if (!(await this.work(name, handle, text, launch))) return;
 		} catch (error) {
-			if (!this.gone(name, launch)) this.failOrFallBack(name, error);
+			// A run at its budget gets no fallback model: it stops as before (wrap-up.ts).
+			if (!this.gone(name, launch)) void (this.wrapUps.active(name) ? this.stop(name, { reason: this.wrapUps.reason(name) }) : this.failOrFallBack(name, error));
 			return;
 		}
 		this.settle(name, this.sessions.runText(name));
@@ -554,6 +563,7 @@ export class Team implements HostTeam {
 		while (next !== null) {
 			await handle.prompt(next);
 			if (this.gone(name, launch)) return false;
+			if (this.wrapUps.active(name)) return this.wrapUps.finish(name, handle, () => this.gone(name, launch));
 			// Its session ended the prompt at a turn boundary to move; what it had not read goes along. Should Pi have
 			// gone on after the end (to compact) to an answer, the run ends here instead, and its session goes at the end.
 			const causes = this.swaps.take(name);
@@ -563,6 +573,7 @@ export class Team implements HostTeam {
 			if (next !== null || this.waitsFor(name)) continue;
 			const fix = await this.checks.run(name, handle);
 			if (this.gone(name, launch)) return false;
+			if (this.wrapUps.active(name)) return this.wrapUps.finish(name, handle, () => this.gone(name, launch));
 			// Mail that came during the check goes first, with a fix round's prompt; the check runs again after it.
 			const late = this.late(name, handle);
 			next = late !== null && fix !== null ? `${late}\n\n${fix}` : late ?? fix;
@@ -576,6 +587,8 @@ export class Team implements HostTeam {
 	 * move to a new session (swap.ts). Pi waits on this, so it never throws.
 	 */
 	private turnEnded(name: string): boolean {
+		// A run that wraps up at its budget does not move: it ends where its report is due (wrap-up.ts).
+		if (this.wrapUps.active(name)) return this.wrapUps.turnEnded(name) === true;
 		if (this.swaps.ending(name)) return true;
 		const record = this.records.get(name);
 		const handle = this.sessions.get(name);
@@ -700,7 +713,6 @@ export class Team implements HostTeam {
 		this.finish(name);
 	}
 
-	/** This run's messages, which are where a steered message shows up once the child reads it. */
 	/** Drops from `unread` what the child has now read. */
 	private forgetRead(name: string): void {
 		const unread = this.records.get(name)?.unread;
@@ -721,9 +733,17 @@ export class Team implements HostTeam {
 		if (this.records.get(name)?.answeredMain) this.patch(name, { answeredMain: undefined });
 	}
 
+	/** A run that wrote its report at its budget ends idle and resumable, owed no answer; mail it held is unread, so it waits in the inbox (wrap-up.ts). */
+	private endAtBudget(name: string, reason: string): void {
+		this.sessions.get(name)?.takeQueued();
+		this.patch(name, { state: "idle", endedAt: this.now(), activity: null, report: this.sessions.runText(name), budgetEnd: reason, answeredMain: undefined, ...this.unreadLeft(name) });
+		this.finish(name);
+	}
+
 	/** Hands the report up and frees the slot. */
 	private finish(name: string): void {
 		this.ending.delete(name);
+		this.wrapUps.end(name);
 		this.continuing.delete(name);
 		this.woken.delete(name);
 		this.checks.end(name);

@@ -162,9 +162,11 @@ test("a fallback continues the run's budget: what it spent before still counts",
 	assert.equal(h.team.get(name)?.startedAt, startedAt, "the run's time counts from its start");
 	h.hooks.get(name)!.update({ usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 1.1 } });
 	await settle();
+	assert.equal(h.team.get(name)?.activity, "wrapping up: over its $1.00 cost budget");
+	h.lastCall(name).finish("Partial.");
 	const done = await h.team.whenDone(name);
-	assert.equal(done.state, "stopped");
-	assert.match(done.stopReason ?? "", /cost budget/);
+	assert.equal(done.state, "idle");
+	assert.match(done.budgetEnd ?? "", /cost budget/);
 	await h.team.close();
 });
 

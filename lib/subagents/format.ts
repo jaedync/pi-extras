@@ -6,7 +6,7 @@
 import { formatElapsed } from "../shell-jobs-widget.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import type { RunLimits } from "./budget.ts";
-import { checkLines } from "./checks.ts";
+import { checkLines, checkOf } from "./checks.ts";
 import { MAIN } from "./names.ts";
 import type { AgentRecord, Worktree } from "./types.ts";
 import { worktreeFooter } from "./worktree.ts";
@@ -26,9 +26,14 @@ const replyHint = (from: string) => `answer with message({ to: "${from}", text }
 
 const CHECK_FIRST = "Its last tool call may not have completed and files may have changed. Verify the current state before continuing.";
 
+/** The budget a reason names (budget.ts `timeReason`): `its 60-minute budget`. */
+export const budgetWords = (reason: string): string => reason.replace(/^over /, "");
+
 /** What a resumed agent is told first about how its last run ended, when that run did not finish. */
 export function resumeWarning(target: AgentRecord): string {
 	if (target.state === "interrupted") return `Your previous run was interrupted. ${CHECK_FIRST}\n\n`;
+	// Its tools stopped at the limit, maybe in the middle of a call.
+	if (target.state === "idle" && target.budgetEnd) return `Your previous run reached ${budgetWords(target.budgetEnd)} and ended with a wrap-up report. This run has a fresh budget. ${CHECK_FIRST}\n\n`;
 	if (target.state === "failed") return `Your previous run failed: ${target.error ?? "unknown error"}. ${CHECK_FIRST}\n\n`;
 	// No run began (a spawn has runs 0 until its launch opens) and no launch set startedAt, so it changed nothing.
 	// A legacy or orphaned record restores with runs 1 and no startedAt, but it ran.
@@ -103,7 +108,15 @@ function reportCore(record: AgentRecord, now: number): string {
 	}
 	const report = record.report?.trim() ? capReport(record.report, record.sessionFile, record.reportFile) : noReport(record.state);
 	const why = record.resumedBy && record.runs > 1 ? `\nThis run (${record.runs}) handled: ${oneLine(record.resumedBy.text, 300)}` : "";
+	if (record.state === "idle" && record.budgetEnd) return `${head} ${budgetOutcome(record, now)}${session}${why}\n\n${report}`;
 	return `${head} finished after ${duration(record, now)}. Message it to follow up; it keeps its context.${session}${why}\n\n${report}`;
+}
+
+/** How a run that wrote its report at its budget (wrap-up.ts) ended, for the model that reads it. */
+function budgetOutcome(record: AgentRecord, now: number): string {
+	// A check of an earlier fix round of this run may show below; none ran on the work as it ended.
+	const check = record.check ? `, and its check did not run${checkOf(record) ? " again" : ""}` : "";
+	return `reached ${budgetWords(record.budgetEnd!)} after ${duration(record, now)} and wrote this report when told to stop. Its work may be incomplete${check}. Message it to continue with a fresh budget; it keeps its context.`;
 }
 
 /** What a report says when the agent never wrote a final message. */
@@ -112,7 +125,7 @@ export const noReport = (state: string): string => (state === "stopped" ? "Stopp
 /** The report itself, without the header `reportText` puts on it for the model. */
 export function reportBody(text: string): string {
 	const cut = text.indexOf("\n\n");
-	return cut >= 0 && / finished after /.test(text.slice(0, text.indexOf("\n"))) ? text.slice(cut + 2) : text;
+	return cut >= 0 && / (?:finished|reached .+? budget) after /.test(text.slice(0, text.indexOf("\n"))) ? text.slice(cut + 2) : text;
 }
 
 type ReportState = "idle" | "failed" | "stopped" | "interrupted";
@@ -134,6 +147,7 @@ const MESSAGES = [
 const REPORT_HEAD = new RegExp(`^(${NAME}) \\(([^\\s(),]+)(?:, \\$[^\\s)]+)?\\) (.*)$`);
 const OUTCOMES: ReadonlyArray<readonly [ReportState, RegExp]> = [
 	["idle", /^finished after (?<took>\S+?)\. Message it to follow up/],
+	["idle", /^(?<error>reached .+? budget) after (?<took>\S+?) and wrote this report when told to stop\./],
 	["failed", /^failed after (?<took>\S+?): (?<error>.*)$/],
 	["stopped", /^was stopped after (?<took>\S+?)(?:: (?<error>.*))?\.$/],
 	["interrupted", /^was interrupted after (?<took>\S+?)\.$/],
@@ -277,6 +291,26 @@ export function timeNote(minutes: number): string {
 /** The note a run gets near the end of its cost budget: `left` dollars of `limit`. */
 export function costNote(left: number, limit: number): string {
 	return `About $${formatMoney(Math.max(0, left))} is left of this run's $${formatMoney(limit)} cost budget. ${PLAN_TO_REPORT}`;
+}
+
+/** Each tool call's result while a run wraps up at its budget (wrap-up.ts). */
+export const BUDGET_BLOCKED = "Blocked: this run's budget is used up. Do not call tools. Write your final report now.";
+
+/** A subagent stopped when its parent reached its budget, as it was then. */
+export interface StoppedSubagent {
+	readonly name: string;
+	readonly state: string;
+	readonly sessionFile?: string;
+}
+
+/** What a run at its budget is asked once its loop ended: its report, at once and from what it has. */
+export function wrapUpPrompt(options: { reason: string; parent: string; subagents: readonly StoppedSubagent[] }): string {
+	const budget = budgetWords(options.reason).replace(/^its /, "");
+	const stopped = options.subagents.map((entry) => `${entry.name} (${entry.state}${entry.sessionFile ? `; session ${entry.sessionFile}` : ""})`);
+	return [
+		`Your ${budget} for this run is used up. Do not call tools; they are blocked. Write your final report to ${options.parent} now, from what you have: what is done (with evidence), what is not done or not verified, what you leave behind (uncommitted edits, worktrees, running processes), and the next steps to finish.`,
+		...(stopped.length > 0 ? [`Your subagents were stopped: ${stopped.join(", ")}.`] : []),
+	].join(" ");
 }
 
 /** What the child is told of its run's budgets up front; none without one. */

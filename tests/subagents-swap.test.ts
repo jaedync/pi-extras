@@ -265,10 +265,9 @@ test("a run that swaps keeps its budget clock", async (t: TestContext) => {
 	await settled();
 	assert.equal(h.team.get(name)!.state, "running");
 	await pass(19);
-	assert.equal(h.team.get(name)!.state, "running");
+	assert.doesNotMatch(h.team.get(name)!.activity ?? "", /wrapping up/);
 	await pass(1);
-	assert.equal(h.team.get(name)!.state, "stopped", "40 ms before the swap and 20 after: its 60 ms are used");
-	assert.match(h.team.get(name)!.stopReason ?? "", /0\.001-minute budget/);
+	assert.equal(h.team.get(name)!.activity, "wrapping up: over its 0.001-minute budget", "40 ms before the swap and 20 after: its 60 ms are used");
 	await h.team.close();
 });
 
@@ -368,4 +367,25 @@ test("the session ends its loop through Pi's finishTurn only when the team says 
 	turnEnd.reset();
 	assert.equal(turnEnd.ending(), false, "a new prompt starts clean");
 	assert.equal(await finish("toolUse"), undefined);
+});
+
+test("a run that wraps up at its budget does not move to a new session, even when its session went stale", async (t: TestContext) => {
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+	const h = harness();
+	const name = h.spawn("impl", { maxMinutes: 0.001 });
+	await settled();
+	t.mock.timers.tick(60);
+	await settled();
+	h.reload();
+	assert.equal(h.boundary(name), true, "the loop ends for the wrap-up");
+	await settled();
+	assert.equal(h.sessionsOf(name).length, 1);
+	assert.match(h.current(name).prompts.at(-1) ?? "", /budget for this run is used up/);
+	h.finish(name, "Report.");
+	await settled();
+	assert.equal(h.team.get(name)!.state, "idle");
+	assert.equal(h.team.get(name)!.budgetEnd, "over its 0.001-minute budget");
+	assert.equal(h.sessionsOf(name).length, 1);
+	assert.deepEqual(h.logged, []);
+	await h.team.close();
 });

@@ -46,3 +46,20 @@ test("a child's report reads back as who, on which model, how it ended and what 
 	assert.deepEqual(readEnvelopes(reportText(record({ state: "interrupted", launchError: "model gone" }), 0)),
 		[{ kind: "report", from: "lead-a", model: "openai-codex/gpt-6-luna", state: "interrupted", text: "model gone" }]);
 });
+
+test("a report written at the budget says so for the model, reads back as an idle report, and keeps its body for the inspector", async () => {
+	const { reportBody } = await import("../lib/subagents/format.ts");
+	const atBudget = record({ budgetEnd: "over its 60-minute budget", report: "Half done.\n\nNext: the tests." });
+	const text = reportText(atBudget, 0);
+	assert.match(text, /^lead-a \(openai-codex\/gpt-6-luna, \$0\.0012\) reached its 60-minute budget after 16s and wrote this report when told to stop\. Its work may be incomplete\. Message it to continue with a fresh budget; it keeps its context\.\nSession: \/tmp\/lead-a\.jsonl\n\nHalf done\./);
+	assert.deepEqual(readEnvelopes(text), [{ kind: "report", from: "lead-a", model: "openai-codex/gpt-6-luna", state: "idle", took: "16s",
+		text: "reached its 60-minute budget\n\nHalf done.\n\nNext: the tests." }]);
+	assert.equal(reportBody(text), "Half done.\n\nNext: the tests.");
+	const cost = reportText(record({ budgetEnd: "over its $0.50 cost budget", report: "x", check: { command: "npm test", fixUntilPass: 0 } }), 0);
+	assert.match(cost, / reached its \$0\.50 cost budget after 16s and wrote this report when told to stop\. Its work may be incomplete, and its check did not run\. Message it/);
+	const checked = record({ budgetEnd: "over its 60-minute budget", report: "x", check: { command: "npm test", fixUntilPass: 1 },
+		checked: { run: 1, command: "npm test", exitCode: 1, durationMs: 1_000, tail: "fail", attempt: 1, attempts: 2 } });
+	assert.match(reportText(checked, 0), /its check did not run again\./);
+	const [read] = readEnvelopes(cost);
+	assert.equal(read?.kind === "report" && read.state, "idle");
+});

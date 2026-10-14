@@ -117,10 +117,10 @@ test("a parent woken from waiting goes on with the same run and the budget it ha
 	}
 	assert.equal(h.team.get("lead")!.state, "running");
 	await pass(14);
-	assert.equal(h.team.get("lead")!.state, "running");
+	assert.doesNotMatch(h.team.get("lead")!.activity ?? "", /wrapping up/);
 	await pass(1);
 	const lead = h.team.get("lead")!;
 	assert.equal(lead.runs, 1, "one run, woken three times");
-	assert.equal(lead.state, "stopped", "45 ms before the wakes and 15 after: its 60 ms are used");
-	assert.match(lead.stopReason ?? "", /budget/);
+	assert.equal(lead.activity, "wrapping up: over its 0.001-minute budget", "45 ms before the wakes and 15 after: its 60 ms are used");
+	await h.team.close();
 });
