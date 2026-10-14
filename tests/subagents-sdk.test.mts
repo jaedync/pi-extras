@@ -42,7 +42,7 @@ async function setup(models: Array<{ id: string; contextWindow: number }> = [{ i
 		}),
 	});
 	tools = { team, replyTimeoutMs: 5_000 };
-	return { team, faux, main };
+	return { team, faux, main, runtime };
 }
 
 test("a child runs only the extensions that own its tools; another extension's factory never runs with the child's API", { timeout: 20_000 }, async () => {
@@ -137,6 +137,22 @@ test("a child's compaction point follows its own model's reserve, and is the win
 	assert.deepEqual(await pointOf("override", { reserveTokens: 10_000, modelOverrides: { "faux/cheap": { reserveTokens: 40_000 } } }), [100_000, 60_000]);
 	assert.deepEqual(await pointOf("off", { enabled: false, reserveTokens: 40_000 }), [100_000, 100_000]);
 	assert.deepEqual(await pointOf("whole", { reserveTokens: 100_000 }), [100_000, 100_000], "a reserve that leaves nothing");
+});
+
+test("a child on a virtual model takes the window of the model that answered and the reserve of its selection, as Pi does", { timeout: 20_000 }, async () => {
+	const dir = join(scratch, "agent-point-virtual");
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, "settings.json"), JSON.stringify({ compaction: { modelOverrides: { "router/auto": { reserveTokens: 40_000 }, "faux/cheap": { reserveTokens: 10_000 } } } }));
+	const { team, faux, runtime } = await setup([{ id: "cheap", contextWindow: 100_000 }], dir);
+	// The virtual entry names no window of its own: Pi reads 0 until a physical model answers.
+	runtime.registerVirtualModel({ provider: "router", id: "auto", name: "auto", route: () => ({ model: runtime.getPhysicalModel("faux", "cheap")!, thinkingLevel: "off" }) });
+	faux.setResponses([ai.fauxAssistantMessage("Routed.")]);
+	const spawned = team.spawn({ task: "Route it", parent: "main", model: "router/auto", readOnly: false, fork: false, blocking: false });
+	assert.ok(spawned.ok);
+	const done = await team.whenDone(spawned.record.name);
+	await team.close();
+	assert.equal(done.state, "idle", done.error);
+	assert.deepEqual([done.contextWindow, done.compactAt], [100_000, 60_000]);
 });
 
 test("a long SDK report is saved in full and its completion message names that run's file", { timeout: 20_000 }, async () => {

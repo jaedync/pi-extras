@@ -60,7 +60,7 @@ test("an edited reserveTokens and contextWindow reach a new launch, and a resume
 		assert.ok(team.spawn({ name: "fresh", task: "Look", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false }).ok);
 		await team.whenDone("fresh");
 		assert.deepEqual(launched, [{ reserveTokens: 1_000, contextWindow: 50_000 }], "the first launch reads both files");
-		assert.equal(team.get("fresh")?.contextWindow, 50_000);
+		assert.deepEqual([team.get("fresh")?.contextWindow, team.get("fresh")?.compactAt], [50_000, 49_000]);
 		await team.send("main", "fresh", "Again.");
 		await wait(() => team.get("fresh")?.runs === 2 && team.get("fresh")?.state === "idle");
 		assert.equal(launched.length, 1, "nothing changed, so the open session is reused");
@@ -71,7 +71,7 @@ test("an edited reserveTokens and contextWindow reach a new launch, and a resume
 		assert.deepEqual(launched.at(-1), { reserveTokens: 9_000, contextWindow: 70_000 }, "the resume relaunched on the edited files");
 		const record = team.get("fresh")!;
 		assert.equal(record.report, "Relaunched.");
-		assert.equal(record.contextWindow, 70_000);
+		assert.deepEqual([record.contextWindow, record.compactAt], [70_000, 61_000], "the relaunch replaces the older point");
 		assert.equal(runtime.getModel("faux", "cheap")?.contextWindow, 70_000, "main's runtime reads the edit too, as /model would");
 		settings(4_000);
 		assert.ok(team.spawn({ name: "second", task: "Look too", parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false }).ok);

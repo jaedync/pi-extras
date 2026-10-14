@@ -10,8 +10,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { addTimeoutGuidelines, applyDefaultTimeout, resolveDefaultSeconds } from "../../extensions/bash-default-timeout.ts";
 import { isBlockingPeer } from "../band/glyph.ts";
-import { compactionPoint } from "../compaction-point.ts";
+import { compactionPoint, type CompactionLimits } from "../compaction-point.ts";
 import { operationalError } from "../operational-log.ts";
+import { isVirtualModel } from "../routed-model.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
 import { guardBash } from "./bash-guard.ts";
@@ -106,6 +107,8 @@ export function describeTool(name: string, args: unknown): string {
 
 interface AssistantLike {
 	role?: string;
+	provider?: string;
+	model?: string;
 	content?: unknown;
 	stopReason?: string;
 	errorMessage?: string;
@@ -331,7 +334,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				customTools,
 			}).catch((error) => { guard.dispose(); throw error; });
 			await bindChild(session, guard, deps.onExtensionError);
-			const context = { window: model.contextWindow, compactAt: childCompactAt(deps, settingsManager, model, record) };
+			const context = childContext(deps, settingsManager, modelRuntime, model, record);
 			return { ...handleFor(session, hooks, context, guard, record), stamp, check };
 		},
 		current: (handle) => !handle.stamp || stampCurrent(handle.stamp, generation),
@@ -348,15 +351,21 @@ async function childModel(deps: LauncherDeps, record: AgentRecord) {
 	return { modelRuntime, model: resolved.model };
 }
 
-/** Where the child's session compacts, from its own settings as Pi reads them; the window when they can't be read. */
-function childCompactAt(deps: LauncherDeps, settingsManager: SettingsManager, model: { provider: string; id: string; contextWindow?: number }, record: AgentRecord): number | undefined {
+/**
+ * The child's window for each reply and its compaction settings, read at launch from its own settings as Pi
+ * reads them: a settings change applies to the next launch. As in Pi, the reserve is the selection's, and the
+ * window is that of the model that answered, which under a virtual selection is the physical model it routed to.
+ */
+function childContext(deps: LauncherDeps, settingsManager: SettingsManager, modelRuntime: ModelRuntime, model: { provider: string; id: string; api: string; contextWindow?: number }, record: AgentRecord): ChildContext {
+	let limits: CompactionLimits | undefined;
 	try {
-		return compactionPoint(model.contextWindow, settingsManager.getCompactionSettings(model));
+		limits = settingsManager.getCompactionSettings(model);
 	} catch (error) {
 		// Pi itself rejects a malformed compaction setting when it next checks; the row only loses its point.
 		deps.warn?.(`subagents: ${record.name}'s context share uses the whole window. ${(error as Error).message}`);
-		return compactionPoint(model.contextWindow, undefined);
 	}
+	const routed = (message: AssistantLike) => (isVirtualModel(model) && message.provider && message.model ? modelRuntime.getPhysicalModel(message.provider, message.model)?.contextWindow : undefined);
+	return { window: (message) => routed(message) || model.contextWindow, limits };
 }
 
 /** A directory a spawn named is used as Pi would use it with no one to ask; main's own as main uses it. */
@@ -539,8 +548,7 @@ export function activityWatch(): (event: ChildEvent) => Activity | undefined {
 	};
 }
 
-/** The child's window and where it compacts, fixed at launch: a settings change applies to the next launch. */
-interface ChildContext { readonly window: number | undefined; readonly compactAt: number | undefined }
+interface ChildContext { window(message: AssistantLike): number | undefined; readonly limits: CompactionLimits | undefined }
 
 function watchChild(session: AgentSession, hooks: ChildHooks, context: ChildContext, record: AgentRecord): () => void {
 	let usage: Usage = { ...record.usage };
@@ -562,10 +570,9 @@ function watchChild(session: AgentSession, hooks: ChildHooks, context: ChildCont
 			usage = addUsage(usage, e.message.usage);
 			const u = e.message.usage;
 			const contextTokens = u ? (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0) + (u.output ?? 0) : undefined;
-			hooks.update({
-				usage, ...(contextTokens ? { contextTokens } : {}), ...(context.window ? { contextWindow: context.window } : {}),
-				...(context.compactAt ? { compactAt: context.compactAt } : {}),
-			});
+			const contextWindow = context.window(e.message);
+			const compactAt = compactionPoint(contextWindow, context.limits);
+			hooks.update({ usage, ...(contextTokens ? { contextTokens } : {}), ...(contextWindow ? { contextWindow } : {}), ...(compactAt ? { compactAt } : {}) });
 		}
 	});
 }
