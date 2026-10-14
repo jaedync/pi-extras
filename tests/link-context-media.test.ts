@@ -140,6 +140,29 @@ test("video: captions first, then speech-to-text, then frames; results are reuse
 	}
 });
 
+test("video: speech off reads captions only, never downloads audio or runs speech-to-text", async () => {
+	const home = mkdtempSync(join(tmpdir(), "link-captions-"));
+	try {
+		const seen: Recorded = { log: [], downloads: [], sources: [], images: [] };
+		const replies = { info: { id: "abcdefghijk", title: "Vid", extractor_key: "Youtube", duration: 60, has_video: true, description: "About it.", chapters: [{ start_time: 0, title: "Intro" }] }, captions: { segments: [], errors: ["no captions"] }, asr: { source: "speech-to-text", segments: [{ start: 1, end: 2, text: "Spoken." }] } };
+		const deps = { ...fakeDeps(home, replies, seen), ensureAsr: async () => { throw new Error("speech-to-text must not be set up"); } };
+		const pulled = await pullVideo("https://www.youtube.com/watch?v=abcdefghijk", "youtube", context(fetch, { transcript: true, speech: false }), deps);
+		assert.deepEqual(seen.log, ["info", "captions"]);
+		assert.equal(pulled.speechSkipped, true);
+		assert.match(pulled.markdown, /## Description\n\nAbout it\.[\s\S]*## Chapters\n\n- 0:00 Intro[\s\S]*## Transcript\n\nNo transcript: no captions; No captions\. Call pull_link for this video to transcribe its speech\./);
+		// The skipped transcript is not kept, so a later call with speech still transcribes.
+		seen.log.length = 0;
+		const full = await pullVideo("https://www.youtube.com/watch?v=abcdefghijk", "youtube", context(fetch, { transcript: true }), fakeDeps(home, replies, seen));
+		assert.deepEqual(seen.log, ["captions", "download", "asr"]);
+		assert.equal(full.speechSkipped, undefined);
+		const captioned = await pullVideo("https://vimeo.com/1", "vimeo", context(fetch, { transcript: true, speech: false }), fakeDeps(home, { ...replies, captions: { source: "captions", segments: [{ start: 0, end: 1, text: "Hi." }] } }));
+		assert.match(captioned.markdown, /\[0:00\] Hi\./);
+		assert.equal(captioned.speechSkipped, undefined, "a video with captions gives what a default call gives");
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
 test("video: no frames without a video stream, and a missing token provider is noted", async () => {
 	const home = mkdtempSync(join(tmpdir(), "link-audio-"));
 	try {

@@ -57,7 +57,9 @@ export interface VideoInfo {
 }
 
 export interface Segment { start: number; end: number; text: string }
-export interface Transcript { source?: string; language?: string; segments: Segment[]; errors?: string[] }
+export interface Transcript { source?: string; language?: string; segments: Segment[]; errors?: string[]; speechSkipped?: boolean }
+
+export const NO_SPEECH = "No captions. Call pull_link for this video to transcribe its speech.";
 
 export interface VideoDeps {
 	readonly ensure: typeof ensureMedia;
@@ -299,6 +301,8 @@ class VideoJob {
 		const captionsDir = uniqueDir(join(this.dir, "captions"));
 		let transcript = await this.run<Transcript>("captions", { url: this.url, videoId: youtube ? info.id : undefined, dir: captionsDir }, 180_000).finally(() => rmSync(captionsDir, { recursive: true, force: true }));
 		if (!transcript.segments.length) {
+			// Not kept: a later call with speech on must still transcribe.
+			if (this.ctx.options.speech === false) return { ...transcript, errors: [...(transcript.errors ?? []), NO_SPEECH], speechSkipped: true };
 			const range = this.ctx.options.range;
 			const span = knownSpan(range, info.duration);
 			refuseLive(info);
@@ -350,16 +354,17 @@ class VideoJob {
 
 const AT_HINT = '_To look at a moment, call pull_link again with this URL and at: ["m:ss", ...] for the frames at those times._';
 
-async function transcriptSection(job: VideoJob, info: VideoInfo, ctx: AdapterContext): Promise<string> {
+async function transcriptSection(job: VideoJob, info: VideoInfo, ctx: AdapterContext): Promise<{ text: string; speechSkipped?: boolean }> {
 	const transcript = await job.transcript(info).catch((error: Error) => {
 		ctx.signal?.throwIfAborted();
 		return { segments: [], errors: [error.message] } as Transcript;
 	});
 	const body = formatTranscript(transcript, info.chapters, ctx.options.range);
-	if (!body) return `## Transcript\n\nNo transcript: ${(transcript.errors ?? ["no captions or speech found"]).join("; ")}`;
+	const skipped = transcript.speechSkipped ? { speechSkipped: true } : {};
+	if (!body) return { text: `## Transcript\n\nNo transcript: ${(transcript.errors ?? ["no captions or speech found"]).join("; ")}`, ...skipped };
 	const label = [transcript.source, transcript.language].filter(Boolean).join(", ");
 	const span = ctx.options.range ? ` (${clock(ctx.options.range.start)}-${ctx.options.range.end !== undefined ? clock(ctx.options.range.end) : "end"})` : "";
-	return `## Transcript${span}${label ? `\n_${label}_` : ""}\n\n${body}${info.has_video === false ? "" : `\n\n${AT_HINT}`}`;
+	return { text: `## Transcript${span}${label ? `\n_${label}_` : ""}\n\n${body}${info.has_video === false ? "" : `\n\n${AT_HINT}`}`, ...skipped };
 }
 
 /** The sample times for `frames`: evenly over the range, or the whole video. */
@@ -430,7 +435,8 @@ export async function pullVideo(url: string, site: string, ctx: AdapterContext, 
 			parts[0] += "\n\n_The first image is the thumbnail._";
 		}
 	}
-	if (ctx.options.transcript) parts.push(await transcriptSection(job, info, ctx));
+	const transcript = ctx.options.transcript ? await transcriptSection(job, info, ctx) : undefined;
+	if (transcript) parts.push(transcript.text);
 	if (at.length && ctx.options.frames > 0) notes.push(`frames: ${ctx.options.frames} was ignored, because at names the times.`);
 	if ((at.length || ctx.options.frames > 0) && info.blocked) notes.push("Frames need a download, which YouTube refused.");
 	else if (at.length || ctx.options.frames > 0) {
@@ -459,7 +465,7 @@ export async function pullVideo(url: string, site: string, ctx: AdapterContext, 
 	}
 	if (!tools.serverHome && site === "youtube") notes.push("The YouTube PO-token provider is not installed, so YouTube may refuse downloads. See provision.log in the media folder.");
 	if (notes.length) parts.push(notes.map((note) => `_${note}_`).join("\n"));
-	return { platform: site === "file" ? "video" : site, title: info.title ?? url, url: info.webpage_url ?? url, markdown: parts.join("\n\n"), images, files };
+	return { platform: site === "file" ? "video" : site, title: info.title ?? url, url: info.webpage_url ?? url, markdown: parts.join("\n\n"), images, files, ...(transcript?.speechSkipped ? { speechSkipped: true } : {}) };
 }
 
 function dirOf(files: readonly string[]): string {

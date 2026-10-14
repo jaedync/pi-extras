@@ -19,6 +19,8 @@ export interface PullOptions {
 	readonly at?: readonly number[];
 	/** Attach a post's photos as images. */
 	readonly images: boolean;
+	/** Video: transcribe speech when there are no captions (default true). Auto-pull reads captions only. */
+	readonly speech?: boolean;
 }
 
 export interface LinkConfig {
@@ -55,4 +57,6 @@ export interface Pulled {
 	readonly photos?: readonly string[];
 	/** A playable video in a post, for transcript and frames. */
 	readonly videoUrl?: string;
+	/** The video had no captions and speech was off, so a default call would give more. */
+	readonly speechSkipped?: boolean;
 }
