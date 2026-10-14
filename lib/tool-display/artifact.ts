@@ -67,8 +67,8 @@ function callFacts(view: View): Seg[] {
 /** The line under the address: the expiry, the check, and an image sent to the model. */
 function factLine(view: View, pages: readonly PageRef[], extra: readonly string[] = []): string {
 	const expiry = pages[0] ? view.paint.fg("muted", expiryText(pages[0].expires_at, view.now)) : "";
-	// Pages whose checks all went well need one word for all of them.
-	const named = pages.length > 1 && pages.some((page) => page.check.state !== "ok");
+	// Pages whose checks all ended alike, with no problems, need one word for all of them.
+	const named = pages.length > 1 && !pages.every((page) => page.check.state === pages[0]!.check.state && page.check.problems.length === 0);
 	const checks = named ? pages.map((page) => checkFact(view.paint, page.check, `${page.role ?? `page ${page.page ?? ""}`.trim()} check`))
 		: [checkFact(view.paint, pages[0]?.check ?? { state: "not_run", problems: [] })];
 	return facts(view.paint, [expiry, ...checks, ...extra, sentNote(view.paint, imageCount(view))]);
@@ -120,7 +120,7 @@ export const publishSpec: ToolSpec = {
 		const own = details ? [...publishLines(view, details, true), ...problemLines(view.paint, pagesOf(details.pages), true)] : [];
 		return popupOutput(view, width, own);
 	},
-	copies: (view) => copiesOf(view, pagesOf(detailsOf<PublishDetails>(view, "publish")?.pages)[0]),
+	copies: (view) => copiesOf(view, pagesOf(detailsOf<PublishDetails>(view, "publish")?.pages)[0], publishSpec),
 };
 
 function askPages(details: AskDetails | undefined): PageRef[] {
@@ -156,7 +156,7 @@ export const askSpec: ToolSpec = {
 		const details = detailsOf<AskDetails>(view, "ask");
 		return popupOutput(view, width, details ? [...askLines(view, details), ...problemLines(view.paint, askPages(details), true)] : []);
 	},
-	copies: (view) => copiesOf(view, askPages(detailsOf<AskDetails>(view, "ask"))[0]),
+	copies: (view) => copiesOf(view, askPages(detailsOf<AskDetails>(view, "ask"))[0], askSpec),
 };
 
 function checkProblems(details: CheckDetails | undefined): string[] {
@@ -195,8 +195,7 @@ export const checkSpec: ToolSpec = {
 };
 
 /** The page's address, which is what the user most often wants to paste, and the whole output. */
-function copiesOf(view: View, page: PageRef | undefined) {
-	const spec = view.context.args && typeof view.context.args === "object" && "questions" in view.context.args ? askSpec : publishSpec;
+function copiesOf(view: View, page: PageRef | undefined, spec: ToolSpec) {
 	return [
 		...(page && !failed(view) ? [{ label: "copy URL", key: "u", text: () => shownUrl(page) }] : []),
 		{ label: "copy output", key: "o", text: () => plainText(spec.output(view, UNWRAPPED, 0)) || resultText(view.result) || undefined },

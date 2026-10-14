@@ -96,6 +96,8 @@ test("an ask row counts its questions and shows the form and its page, with no i
 	]);
 	const bad = { ...details, page: page("p1", { role: "page", check: { state: "problems", problems: ["low contrast"] } }) };
 	assert.equal(draw("artifact_ask", args, text("…", bad), { width: 100 }).lines[3], "    expires in 30d, form check: no problems, page check: 1 problem, watching for answers");
+	const unchecked = { ...details, form: page("f1", { role: "form", check: { state: "not_run", problems: [] } }), page: page("p1", { role: "page", check: { state: "not_run", problems: [] } }), watching: false };
+	assert.equal(draw("artifact_ask", args, text("…", unchecked)).lines[3], "    expires in 30d, check: not run, watch off", "checks that ended alike take one word");
 });
 
 test("rows of an older artifact extension, whose details are {}, show the text and never throw", () => {

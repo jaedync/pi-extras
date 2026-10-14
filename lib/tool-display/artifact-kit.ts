@@ -10,12 +10,13 @@
  */
 import { SEP } from "../cc-phase.ts";
 import { link } from "../kagi/render.ts";
+import { FOREIGN_PREVIEW_LINES } from "./foreign.ts";
 import { sanitize } from "./format.ts";
 import { errorLines, hasImage, head, more, plural, resultText, textLines, wrapAll, type Paint } from "./kit.ts";
 import type { View } from "./tool.ts";
 
-/** Lines of a result's text under the band when its details say nothing. */
-export const TEXT_PREVIEW_LINES = 4;
+/** Lines of a result's text under the band when its details say nothing, as for any other tool. */
+export const TEXT_PREVIEW_LINES = FOREIGN_PREVIEW_LINES;
 
 export interface CheckRef {
 	readonly state: "ok" | "problems" | "not_run" | "error";
