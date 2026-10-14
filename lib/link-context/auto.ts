@@ -18,6 +18,8 @@ export const WAIT_MS = 15_000;
 /** A read left running past the wait stops here, so a hung site holds nothing for long. */
 export const BACKGROUND_MS = 5 * 60_000;
 const USAGE = "Usage: /autopull on|off|status";
+const STATUS_KEY = "pull-link-auto";
+const STATUS_TEXT = "Pull Link: reading the links in your message…";
 
 export interface AutoPullOptions {
 	readonly reader: LinkReader;
@@ -68,12 +70,19 @@ export function registerAutoPull(pi: ExtensionAPI, options: AutoPullOptions): vo
 		void message.then((built) => pi.sendMessage(built, { triggerTurn: false }), (error: unknown) => ctx.ui.notify(`Auto-pull failed: ${reason(error)}`, "warning"));
 	});
 
-	pi.on("before_agent_start", async (event) => {
+	pi.on("before_agent_start", async (event, ctx) => {
 		// A run that a custom message starts leaves the user's links for the user's own run.
 		if ((event as { messageType?: string }).messageType === "custom") return undefined;
 		const pending = next;
 		next = undefined;
-		return pending ? { message: await pending } : undefined;
+		if (!pending) return undefined;
+		// Pi shows the user's message only when the run starts, so a status says what the wait is for.
+		ctx.ui.setStatus?.(STATUS_KEY, STATUS_TEXT);
+		try {
+			return { message: await pending };
+		} finally {
+			ctx.ui.setStatus?.(STATUS_KEY, undefined);
+		}
 	});
 
 	pi.on("session_shutdown", () => {

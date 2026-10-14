@@ -130,7 +130,8 @@ function harness(options: { config?: Record<string, unknown>; waitMs?: number; f
 	const fetcher = options.fetcher ?? (async (input: string | URL | Request) => { fetched.push(String(input)); return page(String(input)); }) as typeof fetch;
 	const reader = createReader({ fetcher, config: () => parseConfig({}), deps: { video: async () => { throw new Error("no video"); }, images: async () => [] } });
 	registerAutoPull(pi as never, { reader, config: () => parseConfig(options.config ?? {}), waitMs: options.waitMs });
-	const ctx = (sessionManager: object = {}) => ({ sessionManager, ui: { notify: (text: string) => notes.push(text) } });
+	const statuses: (string | undefined)[] = [];
+	const ctx = (sessionManager: object = {}) => ({ sessionManager, ui: { notify: (text: string) => notes.push(text), setStatus: (_key: string, text: string | undefined) => statuses.push(text) } });
 	const main = ctx();
 	const emit = async (name: string, event: Record<string, unknown>, on: unknown = main) => {
 		let result: unknown;
@@ -138,7 +139,7 @@ function harness(options: { config?: Record<string, unknown>; waitMs?: number; f
 		return result;
 	};
 	const command = (args: string, on: unknown = main) => commands.get("autopull")!.handler(args, on);
-	return { emit, command, ctx, renderers, sent, notes, fetched, reader };
+	return { emit, command, ctx, renderers, sent, notes, statuses, fetched, reader };
 }
 
 const input = (text: string, source = "interactive", streamingBehavior?: string) => ({ text, source, ...(streamingBehavior ? { streamingBehavior } : {}) });
@@ -153,6 +154,7 @@ test("a typed message with links: the reads start at input, and the run gets the
 	const text = messageText(result);
 	assert.match(text, /Text of https:\/\/e\.test\/a[\s\S]*Text of https:\/\/e\.test\/b/);
 	assert.equal((result as { message: { customType: string; display: boolean } }).message.customType, AUTO_TYPE);
+	assert.deepEqual(h.statuses, ["Pull Link: reading the links in your message…", undefined], "the wait has a status, since Pi shows the message only when the run starts");
 	assert.equal(await h.emit("before_agent_start", start("again")), undefined, "one message per user message");
 	await h.emit("input", input("https://e.test/a once more", "rpc"));
 	const again = await h.emit("before_agent_start", start("https://e.test/a once more"));
