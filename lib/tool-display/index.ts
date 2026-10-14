@@ -42,6 +42,7 @@ import { forgetLate, lateRows, offeredRows, redrawLateMessages } from "../late-r
 import { markRow, rowKind, shareDrawnTools, type RowKind } from "../tool-row.ts";
 import { canAdopt, installAdoption, prepareAdoption, rebuildRow, type RowRenderers } from "./adopt.ts";
 import { ARTIFACT_SPECS, isArtifactTool } from "./artifact.ts";
+import { ARTIFACT_FEEDBACK_TYPE, createArtifactFeedbackRenderer } from "./artifact-message.ts";
 import { computerUseSpec, windowsUseSpec } from "./computer.ts";
 import { codemodeRenderers } from "./codemode.ts";
 import { registerCompaction } from "./compaction.ts";
@@ -173,7 +174,10 @@ const OWN_SPECS: Partial<Record<RowKind, (name: string) => ToolSpec>> = {
 
 export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): void {
 	// Pi searches every extension for a renderer; the sender need not own it. Register before transcript replay.
-	if (typeof pi.registerMessageRenderer === "function") pi.registerMessageRenderer(MESH_MESSAGE_TYPE, createMeshMessageRenderer(() => getMarkdownTheme()));
+	if (typeof pi.registerMessageRenderer === "function") {
+		pi.registerMessageRenderer(MESH_MESSAGE_TYPE, createMeshMessageRenderer(() => getMarkdownTheme()));
+		pi.registerMessageRenderer(ARTIFACT_FEEDBACK_TYPE, createArtifactFeedbackRenderer());
+	}
 	let settings: DisplaySettings = DEFAULT_SETTINGS;
 	let ui: PopupHost | undefined;
 	let fullscreen = false;

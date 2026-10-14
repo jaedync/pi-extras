@@ -428,6 +428,13 @@ test("artifact tools get their layouts and never show images; others off leaves 
 	}
 });
 
+test("Tool Display registers the artifact feedback message renderer before session_start", () => {
+	const renderers = new Map<string, unknown>();
+	registerToolDisplay({ on() {}, events: { on() {} }, registerMessageRenderer: (type: string, render: unknown) => renderers.set(type, render), registerCommand() {} } as never,
+		{ host: {}, settings: {} } as never);
+	assert.equal(typeof renderers.get("artifact-feedback"), "function");
+});
+
 test("print, JSON and RPC runs leave every tool's rows alone", () => {
 	const h = harness();
 	h.start("print");
