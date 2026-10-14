@@ -2,6 +2,29 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.20 - 2026-10-14
+
+### Changed
+
+- The context percent is now the share of the point where Pi compacts the
+  session, not of the model's whole window. That point is the window less
+  `compaction.reserveTokens`, or less the reserve in
+  `compaction.modelOverrides` for the selected model. Thus 100% means Pi
+  compacts now. Before, a model with a 200k window and a 100k reserve
+  compacted at 50%, and its figure never turned amber or red.
+  - Status Plus footer: the figure shows `used / point` (for example
+    `33k / 100k`). The bar and the colors (amber above 70%, red above 90%)
+    follow the same point. The footer reads the settings files again only
+    when one of them, the directory or the project trust changes.
+  - Subagent rows, `/subagents` and the inspector: each child sends its
+    compaction point with each reply. A child on a virtual model takes the
+    window of the model that answered. Records saved before this version
+    show the share of the window until their next reply.
+  - With compaction off, or with a reserve as large as the window, the
+    figures use the whole window, as before.
+  - `HOST_VERSION` is now 6. At the first `/reload` to this version, a
+    session's running children are interrupted and then resumed.
+
 ## 0.24.19 - 2026-10-14
 
 ### Changed
