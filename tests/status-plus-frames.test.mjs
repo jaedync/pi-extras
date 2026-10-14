@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,6 +43,51 @@ test("the footer walks the session for context usage only when the session or mo
 		ctx.model = { ...ctx.model, contextWindow: 2000 };
 		text();
 		assert.equal(calls.usage, before.usage + 3, "a model change reads again");
+	} finally {
+		await handlers.get("session_shutdown")({}, ctx);
+	}
+});
+
+test("the context figure is a share of the point where Pi compacts, read again with the session", async (t) => {
+	const cwd = mkdtempSync(join(tmpdir(), "status-plus-point-"));
+	mkdirSync(agentDir, { recursive: true });
+	const settings = (compaction) => writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ compaction }));
+	t.after(() => { rmSync(cwd, { recursive: true, force: true }); rmSync(agentDir, { recursive: true, force: true }); });
+	// Pi takes the reserve from the selected model and the window from where it routes (getContextUsage).
+	settings({ reserveTokens: 100, modelOverrides: { "virtual/auto": { reserveTokens: 500 } } });
+	const handlers = new Map();
+	let component;
+	let leaf = "a";
+	let usage = { tokens: 400, contextWindow: 1000, percent: 40 };
+	const ctx = {
+		mode: "tui", cwd, isProjectTrusted: () => true, model: { id: "auto", provider: "virtual", contextWindow: 4000 },
+		sessionManager: {
+			getBranch: () => [], getSessionDir: () => "/nonexistent-status-plus-test", getSessionFile: () => undefined, getCwd: () => "~",
+			getLeafId: () => leaf, getSessionName: () => undefined,
+		},
+		getContextUsage: () => usage,
+		ui: { setWidget() {}, setStatus() {}, setFooter(factory) {
+			component = factory({ requestRender() {} }, { fg: (tone, text) => `<${tone}>${text}</>` }, {
+				getGitBranch: () => null, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {},
+			});
+		} },
+	};
+	statusPlus({ on: (name, handler) => handlers.set(name, handler), events: { on() {}, emit() {} } });
+	await handlers.get("session_start")({}, ctx);
+	const figure = () => stripAnsi(component.render(200).join("\n")).match(/<(\w+)>(\S+ \/ \S+)<\/>/)?.slice(1);
+	try {
+		assert.deepEqual(figure(), ["warning", "400 / 500"], "80 percent of the point, not 40 of the window");
+		settings({ enabled: false });
+		assert.deepEqual(figure(), ["warning", "400 / 500"], "a frame reads no settings");
+		leaf = "b";
+		usage = { tokens: 550, contextWindow: 1000, percent: 55 };
+		assert.deepEqual(figure(), ["dim", "550 / 1.0k"], "compaction off: the window, read again with the new entry");
+		settings({ reserveTokens: 500 });
+		leaf = "c";
+		assert.deepEqual(figure(), ["error", "550 / 500"], "past the point until Pi compacts");
+		leaf = "d";
+		usage = { tokens: null, contextWindow: 1000, percent: null };
+		assert.deepEqual(figure(), ["dim", "? / 500"], "unknown after a compaction until the next reply");
 	} finally {
 		await handlers.get("session_shutdown")({}, ctx);
 	}

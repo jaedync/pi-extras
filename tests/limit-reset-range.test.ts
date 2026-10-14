@@ -58,7 +58,7 @@ test("a footer row whose snapshot holds an out-of-range reset still renders", ()
 	const model: FooterModel = {
 		nowMs: NOW, lastApiEndMs: NOW,
 		cache: { kind: "warm", tone: "dim", label: "1m warm" },
-		context: { usedTokens: 100, windowTokens: 1000, percent: 10 },
+		context: { usedTokens: 100, limitTokens: 1000, percent: 10 },
 		modelName: "test", counters: { prompts: 1, turns: 1, toolCalls: 1 }, cwd: "~",
 		tokens: { input: 1, cacheWrite: 0, cacheRead: 0, output: 1 },
 		rows: [{ id: "anthropic", cost: 1, airtimeMs: 1000, tokens: { input: 1, output: 1 }, entries: [

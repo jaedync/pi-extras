@@ -11,7 +11,8 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { compactionPoint, contextShare, type CompactionLimits } from "../lib/compaction-point.ts";
 import { isOffline } from "../lib/offline.ts";
 import { errorText, operationalError, operationalLine } from "../lib/operational-log.ts";
 import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -241,14 +242,46 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		key: string; model: unknown; usage: ReturnType<ExtensionContext["getContextUsage"]>; name: string | undefined;
 		/** Under a virtual selection, the model it routed to (lib/routed-model.ts); the selection otherwise. */
 		routed: ExtensionContext["model"];
+		compaction: CompactionLimits | undefined;
 	} | undefined;
 
 	function readSessionFacts(ctx: ExtensionContext): NonNullable<typeof sessionFacts> {
 		const leaf = typeof ctx.sessionManager.getLeafId === "function" ? ctx.sessionManager.getLeafId() : undefined;
 		const key = `${leaf ?? ""}|${ctx.model?.contextWindow ?? ""}`;
 		if (leaf !== undefined && sessionFacts?.key === key && sessionFacts.model === ctx.model) return sessionFacts;
-		sessionFacts = { key, model: ctx.model, usage: ctx.getContextUsage(), name: ctx.sessionManager.getSessionName(), routed: routedModel(ctx) };
+		sessionFacts = {
+			key, model: ctx.model, usage: ctx.getContextUsage(), name: ctx.sessionManager.getSessionName(), routed: routedModel(ctx),
+			compaction: compactionLimits(ctx, leaf),
+		};
 		return sessionFacts;
+	}
+
+	/** The last reading of Pi's compaction settings, and what it was read for. */
+	let compaction: { key: string; limits: CompactionLimits | undefined } | undefined;
+	let compactionProblem: string | undefined;
+
+	/**
+	 * Pi's compaction settings for the selected model, whose reserve Pi uses
+	 * (lib/compaction-point.ts). The extension context has no settings, so this
+	 * reads the files as Pi does, once for each new entry: a session with no
+	 * entry yet would otherwise read them on every frame.
+	 */
+	function compactionLimits(ctx: ExtensionContext, leaf: string | null | undefined): CompactionLimits | undefined {
+		const trusted = typeof ctx.isProjectTrusted === "function" && ctx.isProjectTrusted();
+		const key = `${leaf ?? ""}|${ctx.cwd}|${trusted}|${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
+		if (compaction?.key === key) return compaction.limits;
+		let limits: CompactionLimits | undefined;
+		try {
+			limits = SettingsManager.create(ctx.cwd, AGENT_DIR, { projectTrusted: trusted }).getCompactionSettings(ctx.model);
+			compactionProblem = undefined;
+		} catch (error) {
+			// The figure falls back to the window; one line for each new problem, not one for each entry.
+			const problem = errorText(error);
+			if (problem !== compactionProblem) operationalError(LOG_FILE, "status-plus", `context share uses the whole window: ${problem}`);
+			compactionProblem = problem;
+		}
+		compaction = { key, limits };
+		return limits;
 	}
 
 	function footerModel(ctx: ExtensionContext, footerData: FooterData): FooterModel {
@@ -258,14 +291,17 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		const facts = readSessionFacts(ctx);
 		const usage = facts.usage;
 		const windowTokens = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-		const percent = usage?.percent ?? undefined;
+		// The share of where Pi compacts, so 100 percent means it compacts now; the window when it never does.
+		const limitTokens = compactionPoint(windowTokens, facts.compaction) ?? windowTokens;
+		const windowPercent = usage?.percent ?? undefined;
 		// Pi reports null tokens after a compaction until a reply sizes the new context; that is unknown, not empty.
-		const usedTokens = usage?.tokens ?? (percent !== undefined ? (percent / 100) * windowTokens : undefined);
+		const usedTokens = usage?.tokens ?? (windowPercent !== undefined ? (windowPercent / 100) * windowTokens : undefined);
+		const percent = usedTokens === undefined ? undefined : contextShare(usedTokens, limitTokens);
 		return {
 			nowMs: now,
 			lastApiEndMs: stats.lastApiEndMs,
 			cache: cacheState(stats.lastCacheMs, stats.lastContextResetMs, now, cacheTtl(stats.cacheLongRetention, LONG_CACHE)),
-			context: { usedTokens, windowTokens, percent },
+			context: { usedTokens, limitTokens, percent },
 			// As Pi's own footer: the selection, then where its requests go.
 			modelName: facts.routed && facts.routed !== ctx.model ? `${ctx.model?.id} → ${facts.routed.id}` : ctx.model?.id || "no-model",
 			providerId: facts.routed?.provider,

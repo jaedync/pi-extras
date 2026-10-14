@@ -13,7 +13,7 @@ function model(overrides: Partial<FooterModel> = {}): FooterModel {
 		nowMs: NOON,
 		lastApiEndMs: NOON,
 		cache: { kind: "warm", tone: "dim", label: "2m warm" },
-		context: { usedTokens: 112_000, windowTokens: 272_000, percent: 41.2 },
+		context: { usedTokens: 112_000, limitTokens: 272_000, percent: 41.2 },
 		modelName: "gpt-5.6-sol",
 		thinkingLevel: "high",
 		counters: { prompts: 12, turns: 31, toolCalls: 48 },
@@ -158,7 +158,7 @@ test("cache writes stay split when the long model cell already made room", () =>
 	const m = model({
 		modelName: "opencode-go/deepseek-v4-flash-vision-exp",
 		thinkingLevel: "max",
-		context: { usedTokens: 17_000, windowTokens: 1_000_000, percent: 1.7 },
+		context: { usedTokens: 17_000, limitTokens: 1_000_000, percent: 1.7 },
 		counters: { prompts: 2, turns: 8, toolCalls: 7 },
 		cwd: "~",
 		gitBranch: null,
@@ -317,14 +317,14 @@ test("other extensions' statuses still get a line", () => {
 
 test("context Pi cannot size yet reads as unknown, not empty", () => {
 	// After a compaction Pi has no usage for the new context until the next reply.
-	const plain = renderFooter(model({ context: { usedTokens: undefined, windowTokens: 272_000, percent: undefined } }), 150, paint).map(stripAnsi);
+	const plain = renderFooter(model({ context: { usedTokens: undefined, limitTokens: 272_000, percent: undefined } }), 150, paint).map(stripAnsi);
 	assert.match(plain[0], /^12:00 ░{20} \? \/ 272k\s+│/);
 });
 
 test("everything is dim except the model, total cost, and what needs attention", () => {
 	const toned = { fg: (tone: string, text: string) => `<${tone}>${text}</${tone}>` };
 	const hot = model({
-		context: { usedTokens: 250_000, windowTokens: 272_000, percent: 92 },
+		context: { usedTokens: 250_000, limitTokens: 272_000, percent: 92 },
 		rows: [{ id: "openai-codex", cost: 0.62, airtimeMs: 250_000, tokens: { input: 80_000, output: 5_200 }, entries: [
 			{ label: "5h", usedPct: 3 }, { label: "7d", usedPct: 78 },
 		] }],

@@ -64,8 +64,11 @@ export interface FooterModel {
 	 */
 	lastApiEndMs?: number;
 	cache: CacheState;
-	/** usedTokens is undefined while Pi cannot size the context, as after a compaction until the next reply. */
-	context: { usedTokens: number | undefined; windowTokens: number; percent: number | undefined };
+	/**
+	 * usedTokens is undefined while Pi cannot size the context, as after a compaction until the next reply.
+	 * limitTokens is where Pi compacts (lib/compaction-point.ts), the window when it never does; percent is of it.
+	 */
+	context: { usedTokens: number | undefined; limitTokens: number; percent: number | undefined };
 	modelName: string;
 	/** Provider of the active model; colours the model id in that provider's identity colour. */
 	providerId?: string;
@@ -117,10 +120,10 @@ function fieldSeparator(compact: boolean): string {
 	return compact ? " " : " · ";
 }
 
-/** Everything is dim unless it needs attention; the context figure turns at 70 and 90 percent (contextHeat). */
+/** Everything is dim unless it needs attention; the context figure turns at 70 and 90 percent of the compaction point (contextHeat). */
 function contextText(paint: Painter, model: FooterModel): string {
 	const used = model.context.usedTokens === undefined ? "?" : formatTokens(model.context.usedTokens);
-	const text = `${used} / ${formatTokens(model.context.windowTokens)}`;
+	const text = `${used} / ${formatTokens(model.context.limitTokens)}`;
 	const pct = model.context.percent ?? 0;
 	return paint.fg(contextHeat(pct), text);
 }
