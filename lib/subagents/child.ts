@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { addTimeoutGuidelines, applyDefaultTimeout, resolveDefaultSeconds } from "../../extensions/bash-default-timeout.ts";
 import { isBlockingPeer } from "../band/glyph.ts";
+import { markChildSession } from "../child-session.ts";
 import { compactionPoint, type CompactionLimits } from "../compaction-point.ts";
 import { operationalError } from "../operational-log.ts";
 import { isVirtualModel } from "../routed-model.ts";
@@ -326,6 +327,8 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			// A path fixed at spawn opens as a new session written there.
 			const sessionManager = record.sessionFile ? sdk.SessionManager.open(record.sessionFile, dirname(record.sessionFile), cwd)
 				: deps.sessionDir ? sdk.SessionManager.create(cwd, deps.sessionDir) : sdk.SessionManager.inMemory(cwd);
+			// The task arrives as a typed prompt; this tells extensions such as Pull Link's auto-pull that no user typed it.
+			markChildSession(sessionManager);
 			const { session } = await sdk.createAgentSession({
 				cwd, agentDir, modelRuntime, settingsManager, resourceLoader: loader, sessionManager,
 				model,
