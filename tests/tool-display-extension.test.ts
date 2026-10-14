@@ -405,6 +405,29 @@ test("codemode adopts only presentation, observes nested events, restores saved 
 	} finally { h.fire("session_shutdown"); }
 });
 
+test("artifact tools get their layouts and never show images; others off leaves them to Pi", async () => {
+	const h = harness();
+	h.start();
+	const publish = { name: "artifact_publish" };
+	const old = { name: "artifact_new" };
+	try {
+		const row = piRow(publish, { title: "Plan" }) as PiRow & { showImages: boolean };
+		const pages = [{ id: "p1", title: "Plan", url: "https://a/p1/", inbox_url: null, private: false, expires_at: null, check: { state: "ok", problems: [] } }];
+		row.updateResult({ content: [{ type: "text", text: "Published" }, { type: "image", data: "AA==", mimeType: "image/jpeg" }],
+			details: { tool: "publish", update: false, template: null, watching: true, pages }, isError: false }, false);
+		assert.match(drawn(row), /publish Plan[\s\S]*https:\/\/a\/p1\/[\s\S]*no expiry, check: no problems, check image sent to the\s+model/);
+		assert.equal(row.showImages, false);
+		const legacy = piRow(old, { template: "gallery" }) as PiRow & { showImages: boolean };
+		legacy.updateResult({ content: [{ type: "text", text: "Published" }], isError: false }, false);
+		assert.match(drawn(legacy), /artifact_new gallery/, "an old name gets the generic band");
+		assert.equal(legacy.showImages, false);
+		await h.run("others off");
+		assert.equal(piRow(publish).getRenderShell(), "default");
+	} finally {
+		h.fire("session_shutdown");
+	}
+});
+
 test("print, JSON and RPC runs leave every tool's rows alone", () => {
 	const h = harness();
 	h.start("print");

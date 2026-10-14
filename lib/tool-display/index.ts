@@ -41,6 +41,7 @@ import { TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../tool-count.
 import { forgetLate, lateRows, offeredRows, redrawLateMessages } from "../late-rows.ts";
 import { markRow, rowKind, shareDrawnTools, type RowKind } from "../tool-row.ts";
 import { canAdopt, installAdoption, prepareAdoption, rebuildRow, type RowRenderers } from "./adopt.ts";
+import { ARTIFACT_SPECS, isArtifactTool } from "./artifact.ts";
 import { computerUseSpec, windowsUseSpec } from "./computer.ts";
 import { codemodeRenderers } from "./codemode.ts";
 import { registerCompaction } from "./compaction.ts";
@@ -313,7 +314,10 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		if (!own && !settings.others) return undefined;
 		let renderers = adopted.get(definition);
 		if (!renderers) {
-			renderers = (own ? toolRenderers(kit, own(tool.name)) : tool.name === "codemode" ? codemodeRenderers(kit, tool) : foreignRenderers(kit, tool)) as unknown as RowRenderers;
+			const artifact = Object.hasOwn(ARTIFACT_SPECS, tool.name) ? ARTIFACT_SPECS[tool.name] : undefined;
+			renderers = (own ? toolRenderers(kit, own(tool.name)) : artifact ? toolRenderers(kit, artifact)
+				: tool.name === "codemode" ? codemodeRenderers(kit, tool) : foreignRenderers(kit, tool)) as unknown as RowRenderers;
+			if (isArtifactTool(tool.name)) renderers = { ...renderers, hidesImages: true };
 			adopted.set(definition, renderers);
 		}
 		return renderers;
