@@ -2,6 +2,18 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.22 - 2026-10-14
+
+### Fixed
+
+- Subagents find their transcripts after a session moves to another folder
+  or machine. The child index keeps each transcript's whole path, so a
+  session started on a Mac (`/Users/<name>/...`) failed to load on Linux
+  with "Invalid child session path.", and the `subagent`, `message` and
+  `stop_subagent` tools did not register. The index now finds each
+  transcript in its own folder by the file name and warns one time. A path
+  without a session file name is still refused.
+
 ## 0.24.21 - 2026-10-14
 
 ### Added
