@@ -118,6 +118,18 @@ test("context is its size after the last reply and its share of the window, warm
 	assert.deepEqual(contextFigures(record("g", { state: "idle", contextTokens: 31_000, contextWindow: 200_000 }))?.percent, "16%", "a finished agent keeps its last size");
 });
 
+test("the share is of the point where its session compacts, so 100 percent is a compaction", () => {
+	// A 200k model with a 100k reserve compacts at 100k: just before, it is nearly full, not half full.
+	assert.deepEqual(contextFigures(record("a", { contextTokens: 98_000, contextWindow: 200_000, compactAt: 100_000 })), { tokens: "98k", percent: "98%", heat: "error" });
+	assert.deepEqual(contextFigures(record("b", { contextTokens: 75_000, contextWindow: 200_000, compactAt: 100_000 })), { tokens: "75k", percent: "75%", heat: "warning" });
+	assert.deepEqual(contextFigures(record("c", { contextTokens: 105_000, contextWindow: 200_000, compactAt: 100_000 })), { tokens: "105k", percent: "105%", heat: "error" }, "past the point until Pi compacts");
+	assert.deepEqual(contextFigures(record("d", { contextWindow: 200_000, compactAt: 100_000 })), { tokens: "?", percent: "", heat: "dim" });
+	assert.deepEqual(contextFigures(record("e", { contextTokens: 50_000, compactAt: 100_000 }))?.percent, "50%", "the point alone is enough");
+	assert.equal(listLabel(record("big", { state: "idle", endedAt: 12_000, contextTokens: 48_200, contextWindow: 200_000, compactAt: 100_000 }), 3, 20_000), "big  finished  gpt-6-luna  11.0s  48k 48%  t");
+	const row = text(rowSegs({ record: record("lead", { contextTokens: 48_200, contextWindow: 200_000, compactAt: 100_000 }), depth: 0 }, 2_000));
+	assert.match(row, / 48k 48% /);
+});
+
 test("context sits between time and spend, its tokens and percent each lined up on the right", () => {
 	const cost = (dollars: number) => ({ ...NO_USAGE, cost: dollars });
 	const rows = [

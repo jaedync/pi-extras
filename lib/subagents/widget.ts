@@ -19,6 +19,7 @@ import { agentHue, agentLine, avatarOf, doingGlyph, doingOf, endGlyph, spaced } 
 import { everyFrame } from "../band/clock.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import { contextHeat, formatTokens } from "../status-plus-render.ts";
+import { contextShare } from "../compaction-point.ts";
 import type { PendingItem } from "./deliver.ts";
 import { MAIN } from "./names.ts";
 import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount, type ControlLine, type Span } from "./overflow.ts";
@@ -132,16 +133,18 @@ export interface ContextFigures {
 }
 
 /**
- * Its context size after the last reply and that size's share of the model's
- * window, colored as main's footer colors its own: `?` after a compaction
- * until the next reply sizes it, nothing before its first reply. A finished
- * agent keeps its last size, which is what a resume starts from.
+ * Its context size after the last reply and that size's share of the point
+ * where its session compacts (the window for a record saved before points),
+ * colored as main's footer colors its own: `?` after a compaction until the
+ * next reply sizes it, nothing before its first reply. A finished agent keeps
+ * its last size, which is what a resume starts from.
  */
-export function contextFigures(record: Pick<AgentRecord, "contextTokens" | "contextWindow">): ContextFigures | undefined {
-	const { contextTokens: tokens, contextWindow: window } = record;
-	if (!tokens) return window ? { tokens: "?", percent: "", heat: "dim" } : undefined;
-	if (!window) return { tokens: formatTokens(tokens), percent: "", heat: "dim" };
-	const share = (100 * tokens) / window;
+export function contextFigures(record: Pick<AgentRecord, "contextTokens" | "contextWindow" | "compactAt">): ContextFigures | undefined {
+	const { contextTokens: tokens } = record;
+	const point = record.compactAt ?? record.contextWindow;
+	if (!tokens) return point ? { tokens: "?", percent: "", heat: "dim" } : undefined;
+	const share = contextShare(tokens, point);
+	if (share === undefined) return { tokens: formatTokens(tokens), percent: "", heat: "dim" };
 	return { tokens: formatTokens(tokens), percent: `${Math.round(share)}%`, heat: contextHeat(share) };
 }
 

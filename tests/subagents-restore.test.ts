@@ -31,15 +31,19 @@ test("the index keeps each child's context size and drops one it can't use", () 
 	const dir = mkdtempSync(join(tmpdir(), "child-index-"));
 	try {
 		const file = join(dir, "index.json");
-		new ChildIndex(dir, "parent-1", dir).save([record({ contextTokens: 48_200, contextWindow: 200_000 })]);
+		new ChildIndex(dir, "parent-1", dir).save([record({ contextTokens: 48_200, contextWindow: 200_000, compactAt: 100_000 })]);
 		const [kept] = new ChildIndex(dir, "parent-1", dir).load(warn);
-		assert.deepEqual([kept?.contextTokens, kept?.contextWindow], [48_200, 200_000]);
+		assert.deepEqual([kept?.contextTokens, kept?.contextWindow, kept?.compactAt], [48_200, 200_000, 100_000]);
 		const data = JSON.parse(readFileSync(file, "utf8"));
-		data.records[0] = { ...data.records[0], contextTokens: "lots", contextWindow: -5 };
+		data.records[0] = { ...data.records[0], contextTokens: "lots", contextWindow: -5, compactAt: Number.POSITIVE_INFINITY.toString() };
 		writeFileSync(file, JSON.stringify(data));
 		const [dropped] = new ChildIndex(dir, "parent-1", dir).load(warn);
 		assert.equal(dropped?.name, "helper", "the child itself is still restored");
-		assert.deepEqual(["contextTokens" in dropped!, "contextWindow" in dropped!], [false, false]);
+		assert.deepEqual(["contextTokens" in dropped!, "contextWindow" in dropped!, "compactAt" in dropped!], [false, false, false]);
+		data.records[0] = { ...data.records[0], contextTokens: 48_200, contextWindow: 200_000, compactAt: 0 };
+		writeFileSync(file, JSON.stringify(data));
+		const [old] = new ChildIndex(dir, "parent-1", dir).load(warn);
+		assert.deepEqual([old?.contextWindow, "compactAt" in old!], [200_000, false], "a bad point is dropped and the window stands in, as for a record saved before points");
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

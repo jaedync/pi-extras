@@ -24,7 +24,7 @@ const { MainMail } = await import("../lib/subagents/deliver.ts");
 
 type Delivery = import("../lib/subagents/types.ts").MainDelivery;
 
-async function setup(models: Array<{ id: string; contextWindow: number }> = [{ id: "cheap", contextWindow: 100_000 }]) {
+async function setup(models: Array<{ id: string; contextWindow: number }> = [{ id: "cheap", contextWindow: 100_000 }], dir = agentDir) {
 	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
 	const faux = ai.fauxProvider({ provider: "faux", models });
 	runtime.registerNativeProvider(faux.provider);
@@ -32,10 +32,10 @@ async function setup(models: Array<{ id: string; contextWindow: number }> = [{ i
 	let tools: any;
 	const team = new Team({
 		maxConcurrent: 2, maxDepth: 1, replyTimeoutMs: 5_000,
-		sessionFileFor: (name) => join(agentDir, "sessions", "subagents", "parent-1", `${name}.jsonl`),
+		sessionFileFor: (name) => join(dir, "sessions", "subagents", "parent-1", `${name}.jsonl`),
 		deliverToMain: (delivery) => main.push(delivery),
 		launcher: createLauncher({
-			sdk: sdk as never, agentDir, cwd: scratch, sessionDir: join(agentDir, "sessions", "subagents", "parent-1"),
+			sdk: sdk as never, agentDir: dir, cwd: scratch, sessionDir: join(dir, "sessions", "subagents", "parent-1"),
 			modelRuntime: async () => runtime,
 			toolsFor: (record) => ({ tools: ["read"], customTools: [childMessageTool(tools, record.name)] }),
 			instructions: (record) => childInstructions({ name: record.name, parent: record.parent, readOnly: false, canSpawn: false, roster: "" }),
@@ -116,7 +116,27 @@ test("a child session runs on its model, messages main, and reports", { timeout:
 	assert.ok(done.sessionFile?.endsWith("/parent-1/count-files.jsonl"), done.sessionFile);
 	assert.ok(existsSync(done.sessionFile!), "the child session is persisted where the spawn said");
 	assert.equal(done.contextWindow, 100_000);
+	assert.equal(done.compactAt, 100_000 - 16_384, "Pi's default reserve");
 	await team.close();
+});
+
+test("a child's compaction point follows its own model's reserve, and is the window with compaction off", { timeout: 20_000 }, async () => {
+	const pointOf = async (label: string, compaction: object) => {
+		const dir = join(scratch, `agent-point-${label}`);
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "settings.json"), JSON.stringify({ compaction }));
+		const { team, faux } = await setup([{ id: "cheap", contextWindow: 100_000 }], dir);
+		faux.setResponses([ai.fauxAssistantMessage("Done.")]);
+		const spawned = team.spawn({ task: `Point ${label}`, parent: "main", model: "faux/cheap", readOnly: false, fork: false, blocking: false });
+		assert.ok(spawned.ok);
+		const done = await team.whenDone(spawned.record.name);
+		await team.close();
+		assert.equal(done.state, "idle", done.error);
+		return [done.contextWindow, done.compactAt];
+	};
+	assert.deepEqual(await pointOf("override", { reserveTokens: 10_000, modelOverrides: { "faux/cheap": { reserveTokens: 40_000 } } }), [100_000, 60_000]);
+	assert.deepEqual(await pointOf("off", { enabled: false, reserveTokens: 40_000 }), [100_000, 100_000]);
+	assert.deepEqual(await pointOf("whole", { reserveTokens: 100_000 }), [100_000, 100_000], "a reserve that leaves nothing");
 });
 
 test("a long SDK report is saved in full and its completion message names that run's file", { timeout: 20_000 }, async () => {

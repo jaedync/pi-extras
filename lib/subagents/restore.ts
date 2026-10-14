@@ -67,8 +67,11 @@ const usableSize = (value: unknown): value is number => typeof value === "number
 
 /** A saved context size is only drawn, so one that is not a positive number is dropped, not the child. */
 function usableContext(record: AgentRecord): AgentRecord {
-	const { contextTokens, contextWindow, ...rest } = record;
-	return { ...rest, ...(usableSize(contextTokens) ? { contextTokens } : {}), ...(usableSize(contextWindow) ? { contextWindow } : {}) };
+	const { contextTokens, contextWindow, compactAt, ...rest } = record;
+	return {
+		...rest, ...(usableSize(contextTokens) ? { contextTokens } : {}), ...(usableSize(contextWindow) ? { contextWindow } : {}),
+		...(usableSize(compactAt) ? { compactAt } : {}),
+	};
 }
 
 const validRunStart = (value: unknown): boolean => {
@@ -195,7 +198,7 @@ export class ChildIndex {
 	}
 
 	private stateSignature(records: readonly AgentRecord[]): string {
-		return JSON.stringify(records.map(({ activity: _activity, work: _work, lastActivityAt: _at, toolCalls: _calls, usage: _usage, contextTokens: _tokens, contextWindow: _window, ...state }) => state));
+		return JSON.stringify(records.map(({ activity: _activity, work: _work, lastActivityAt: _at, toolCalls: _calls, usage: _usage, contextTokens: _tokens, contextWindow: _window, compactAt: _point, ...state }) => state));
 	}
 
 	save(records: readonly AgentRecord[], shutdown?: string, shutdownOwner?: string): void {

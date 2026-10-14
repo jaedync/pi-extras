@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { addTimeoutGuidelines, applyDefaultTimeout, resolveDefaultSeconds } from "../../extensions/bash-default-timeout.ts";
 import { isBlockingPeer } from "../band/glyph.ts";
+import { compactionPoint } from "../compaction-point.ts";
 import { operationalError } from "../operational-log.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
@@ -330,7 +331,8 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				customTools,
 			}).catch((error) => { guard.dispose(); throw error; });
 			await bindChild(session, guard, deps.onExtensionError);
-			return { ...handleFor(session, hooks, model.contextWindow, guard, record), stamp, check };
+			const context = { window: model.contextWindow, compactAt: childCompactAt(deps, settingsManager, model, record) };
+			return { ...handleFor(session, hooks, context, guard, record), stamp, check };
 		},
 		current: (handle) => !handle.stamp || stampCurrent(handle.stamp, generation),
 		codeCurrent: (handle) => !handle.stamp || handle.stamp.generation === generation,
@@ -344,6 +346,17 @@ async function childModel(deps: LauncherDeps, record: AgentRecord) {
 	const resolved = deps.sdk.resolveCliModel({ cliModel: record.model, modelRuntime });
 	if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Unknown model ${record.model}.`);
 	return { modelRuntime, model: resolved.model };
+}
+
+/** Where the child's session compacts, from its own settings as Pi reads them; the window when they can't be read. */
+function childCompactAt(deps: LauncherDeps, settingsManager: SettingsManager, model: { provider: string; id: string; contextWindow?: number }, record: AgentRecord): number | undefined {
+	try {
+		return compactionPoint(model.contextWindow, settingsManager.getCompactionSettings(model));
+	} catch (error) {
+		// Pi itself rejects a malformed compaction setting when it next checks; the row only loses its point.
+		deps.warn?.(`subagents: ${record.name}'s context share uses the whole window. ${(error as Error).message}`);
+		return compactionPoint(model.contextWindow, undefined);
+	}
 }
 
 /** A directory a spawn named is used as Pi would use it with no one to ask; main's own as main uses it. */
@@ -526,7 +539,10 @@ export function activityWatch(): (event: ChildEvent) => Activity | undefined {
 	};
 }
 
-function watchChild(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined, record: AgentRecord): () => void {
+/** The child's window and where it compacts, fixed at launch: a settings change applies to the next launch. */
+interface ChildContext { readonly window: number | undefined; readonly compactAt: number | undefined }
+
+function watchChild(session: AgentSession, hooks: ChildHooks, context: ChildContext, record: AgentRecord): () => void {
 	let usage: Usage = { ...record.usage };
 	let toolCalls = record.toolCalls;
 	const watch = activityWatch();
@@ -546,7 +562,10 @@ function watchChild(session: AgentSession, hooks: ChildHooks, contextWindow: num
 			usage = addUsage(usage, e.message.usage);
 			const u = e.message.usage;
 			const contextTokens = u ? (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0) + (u.output ?? 0) : undefined;
-			hooks.update({ usage, ...(contextTokens ? { contextTokens } : {}), ...(contextWindow ? { contextWindow } : {}) });
+			hooks.update({
+				usage, ...(contextTokens ? { contextTokens } : {}), ...(context.window ? { contextWindow: context.window } : {}),
+				...(context.compactAt ? { compactAt: context.compactAt } : {}),
+			});
 		}
 	});
 }
@@ -583,9 +602,9 @@ function watchStreaming(session: AgentSession): { current: () => unknown; stop: 
 	return { current: () => current, stop };
 }
 
-function handleFor(session: AgentSession, hooks: ChildHooks, contextWindow: number | undefined, guard: ReturnType<typeof createChildRateLimitGuard>, record: AgentRecord): ChildHandle {
+function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildContext, guard: ReturnType<typeof createChildRateLimitGuard>, record: AgentRecord): ChildHandle {
 	const streaming = watchStreaming(session);
-	const unwatch = watchChild(session, hooks, contextWindow, record);
+	const unwatch = watchChild(session, hooks, context, record);
 	const dispose = childDisposer(session, () => { streaming.stop(); unwatch(); }, guard);
 	const held: string[] = [];
 	const turnEnd = endAtTurn(session, hooks, held);
