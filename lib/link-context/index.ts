@@ -8,18 +8,14 @@
 import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { loadConfig } from "./config.ts";
-import { pull, type PullDeps } from "./pull.ts";
-import { cutIndex, parseClock, parseRange } from "./text.ts";
-import type { LinkConfig, Pulled, PullOptions } from "./types.ts";
-import { classify, parseUrl } from "./url.ts";
+import { createReader, DEFAULT_COMMENTS, MAX_AT, type LinkReader, type Params, type ReaderOptions } from "./reader.ts";
+import { cutIndex } from "./text.ts";
+import type { Pulled } from "./types.ts";
+
+export { cacheKey, parseTimes, resolveOptions, type Params } from "./reader.ts";
 
 export const TOOL_NAME = "pull_link";
 export const PAGE_CHARS = 40_000;
-const CACHE_MS = 30 * 60_000;
-const CACHE_ENTRIES = 16;
-const DEFAULT_COMMENTS = 20;
-const MAX_AT = 12;
 
 const DESCRIPTION = [
 	"Read a link and return its content as markdown, for context. Supports:",
@@ -47,38 +43,6 @@ const parameters = Type.Object({
 	offset: Type.Optional(Type.Integer({ minimum: 0, description: "Character offset for the next page of a long result" })),
 }, { additionalProperties: false });
 
-export interface Params {
-	url: string;
-	transcript?: boolean;
-	frames?: number;
-	range?: string;
-	at?: string[];
-	comments?: number;
-	images?: boolean;
-	offset?: number;
-}
-
-export function parseTimes(at: readonly string[] | undefined): number[] | undefined {
-	if (!at?.length) return undefined;
-	return at.slice(0, MAX_AT).map((text) => {
-		const seconds = parseClock(text);
-		if (seconds === undefined || seconds < 0) throw new Error(`at: "${text}" is not a time; use forms like 4:05, 1:02:30 or 95.`);
-		return seconds;
-	});
-}
-
-export function resolveOptions(params: Params, isVideo: boolean): PullOptions {
-	const at = parseTimes(params.at);
-	return {
-		comments: params.comments ?? (isVideo || at ? 0 : DEFAULT_COMMENTS),
-		transcript: params.transcript ?? (isVideo && !at),
-		frames: params.frames ?? 0,
-		range: parseRange(params.range),
-		...(at ? { at } : {}),
-		images: params.images ?? true,
-	};
-}
-
 export interface Page {
 	readonly text: string;
 	readonly next?: number;
@@ -97,17 +61,9 @@ export function page(text: string, offset: number, limit = PAGE_CHARS): Page {
 	return { text: text.slice(offset, stop), next: stop };
 }
 
-interface Entry { readonly at: number; readonly pulled: Pulled }
-
-export function cacheKey(params: Params): string {
-	const { offset: _offset, ...rest } = params;
-	return JSON.stringify(Object.entries(rest).sort(([a], [b]) => a.localeCompare(b)));
-}
-
-export interface LinkToolOptions {
-	readonly deps?: PullDeps;
-	readonly config?: () => LinkConfig;
-	readonly fetcher?: typeof fetch;
+export interface LinkToolOptions extends ReaderOptions {
+	/** Shared with auto-pull, so both use one cache; made from the other options when absent. */
+	readonly reader?: LinkReader;
 }
 
 function compose(pulled: Pulled, params: Params): { content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]; next?: number } {
@@ -124,19 +80,7 @@ function compose(pulled: Pulled, params: Params): { content: ({ type: "text"; te
 }
 
 export function registerLinkTool(pi: ExtensionAPI, options: LinkToolOptions = {}): void {
-	const cache = new Map<string, Entry>();
-	const recall = (key: string): Pulled | undefined => {
-		const entry = cache.get(key);
-		if (entry && Date.now() - entry.at <= CACHE_MS) return entry.pulled;
-		cache.delete(key);
-		return undefined;
-	};
-	const remember = (key: string, pulled: Pulled) => {
-		const now = Date.now();
-		for (const [k, entry] of cache) if (now - entry.at > CACHE_MS) cache.delete(k);
-		while (cache.size >= CACHE_ENTRIES) cache.delete(cache.keys().next().value as string);
-		cache.set(key, { at: now, pulled });
-	};
+	const reader = options.reader ?? createReader(options);
 	pi.registerTool(defineTool({
 		name: TOOL_NAME,
 		label: "Pull link",
@@ -144,20 +88,8 @@ export function registerLinkTool(pi: ExtensionAPI, options: LinkToolOptions = {}
 		parameters,
 		async execute(_id, params: Params, signal, onUpdate) {
 			const started = performance.now();
-			const key = cacheKey(params);
-			let pulled = recall(key);
-			const cached = !!pulled;
-			if (!pulled) {
-				const url = parseUrl(params.url);
-				const isVideo = classify(url).kind === "video";
-				const progress = (text: string) => onUpdate?.({ content: [{ type: "text", text: `${text}…` }], details: { progress: text } });
-				const ctx = { signal, fetcher: options.fetcher, config: (options.config ?? loadConfig)(), options: resolveOptions(params, isVideo), progress };
-				const wantsVideo = params.transcript === true || (params.frames ?? 0) > 0 || !!params.at?.length;
-				pulled = await pull(url.href, ctx, options.deps, wantsVideo);
-				// Parts that failed because of the abort read as "no transcript" or "frames failed"; never keep or return them.
-				signal?.throwIfAborted();
-				remember(key, pulled);
-			}
+			const progress = (text: string) => onUpdate?.({ content: [{ type: "text", text: `${text}…` }], details: { progress: text } });
+			const { pulled, cached } = await reader.read(params, signal, progress);
 			const { content, next } = compose(pulled, params);
 			return {
 				content,
