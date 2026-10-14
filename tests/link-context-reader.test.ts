@@ -7,7 +7,7 @@ import { cacheKey, createReader } from "../lib/link-context/reader.ts";
 import type { Pulled } from "../lib/link-context/types.ts";
 import { fakeFetch, html } from "./support/link-fetch.ts";
 
-type Tool = { execute: (...args: unknown[]) => Promise<{ content: { type: string; text?: string }[]; details: Record<string, unknown> }> };
+type Tool = { description: string; execute: (...args: unknown[]) => Promise<{ content: { type: string; text?: string }[]; details: Record<string, unknown> }> };
 
 const noImages: PullDeps["images"] = async () => [];
 
@@ -115,7 +115,9 @@ test("the tool goes through the shared reader", async () => {
 	const { fetcher, calls } = fakeFetch(html("e.test/page", "<title>Page</title><article><p>words</p></article>"));
 	const reader = createReader({ fetcher, config: () => parseConfig({}), deps: { video: async () => { throw new Error("no"); }, images: noImages } });
 	await reader.readPlain("https://e.test/page", new AbortController().signal);
-	const result = await toolWith(reader).execute("id", { url: "https://e.test/page" }, undefined, undefined);
+	const tool = toolWith(reader);
+	assert.match(tool.description, /Links in the user's messages are usually read already: a message next to the user's message that starts with "Pull Link read"/);
+	const result = await tool.execute("id", { url: "https://e.test/page" }, undefined, undefined);
 	assert.equal(result.details.cached, true);
 	assert.equal(calls.length, 1);
 	assert.equal(cacheKey({ url: "u" }), cacheKey({ url: "u", offset: 12_000 }));
