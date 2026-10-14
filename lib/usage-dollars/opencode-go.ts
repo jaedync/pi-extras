@@ -4,7 +4,8 @@
  * window 50%. The usage endpoint reports one percentage per window and no
  * plan, so the plan and any changed caps come from settings.
  *
- * Source: https://opencode.ai/docs/go/ "Usage limits", read 2026-10-10.
+ * Source: https://opencode.ai/docs/go/ "Usage limits", read 2026-10-10
+ * (DeepSeek V4.1 Flash re-read 2026-10-14).
  * Free preview models are unlimited and are left out.
  */
 
@@ -32,7 +33,7 @@ const MONTHLY_CAPS: Record<string, readonly [number, number]> = {
 	"qwen3.8-max": [15, 60],
 	"qwen3.8-flash": [30, 90],
 	"qwen3.7-plus": [60, 180],
-	"deepseek-v4.1-flash": [60, 120],
+	"deepseek-v4.1-flash": [80, 160],
 	"deepseek-v4-pro": [15, 60],
 	"deepseek-v4-flash": [30, 120],
 	"deepseek-v4-flash-vision-exp": [15, 60],

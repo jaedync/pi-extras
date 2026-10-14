@@ -104,7 +104,7 @@ test("OpenCode Go windows give exact dollars per model from the plan caps", () =
 		basis: "plan cap",
 		source: "plan table",
 		perModel: {
-			"deepseek-v4.1-flash": { limitUsd: 12, remainingUsd: 7.2 },
+			"deepseek-v4.1-flash": { limitUsd: 16, remainingUsd: 9.6 },
 			"glm-5.3": { limitUsd: 3, remainingUsd: 1.8 },
 		},
 		note: "No published cap for: not-a-go-model.",
@@ -114,10 +114,11 @@ test("OpenCode Go windows give exact dollars per model from the plan caps", () =
 test("OpenCode Go settings choose Go Plus and override one cap", () => {
 	const monthly: LimitEntry = { label: "mo", key: "monthly", usedPct: 50, windowSeconds: 30 * 86400, resetMs: SAT + 99 * HOUR };
 	const dollars = figures("opencode-go", monthly, inputs({
-		openCodeGo: { plan: "go-plus", caps: { "glm-5.3": 100 }, models: ["glm-5.3", "kimi-k3"] },
+		openCodeGo: { plan: "go-plus", caps: { "glm-5.3": 100 }, models: ["glm-5.3", "kimi-k3", "deepseek-v4.1-flash"] },
 	}));
 	assert.deepEqual(dollars?.perModel, {
 		"glm-5.3": { limitUsd: 100, remainingUsd: 50 },
+		"deepseek-v4.1-flash": { limitUsd: 160, remainingUsd: 80 },
 		"kimi-k3": { limitUsd: 60, remainingUsd: 30 },
 	});
 });
