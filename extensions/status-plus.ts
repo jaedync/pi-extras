@@ -11,8 +11,9 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { compactionPoint, contextShare, type CompactionLimits } from "../lib/compaction-point.ts";
+import { fileIdentity } from "../lib/file-identity.ts";
 import { isOffline } from "../lib/offline.ts";
 import { errorText, operationalError, operationalLine } from "../lib/operational-log.ts";
 import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -41,6 +42,8 @@ import {
 const LONG_CACHE = process.env.PI_CACHE_RETENTION === "long";
 const AGENT_DIR = getAgentDir();
 const LOG_FILE = join(AGENT_DIR, "status-plus.log");
+/** Pi's global settings, the file SettingsManager.create reads besides the project's. */
+const GLOBAL_SETTINGS = join(AGENT_DIR, "settings.json");
 /** Limit polls shared by the Pi processes of this agent directory (lib/limit-share.ts). */
 const SHARE_DIR = join(AGENT_DIR, "status-plus-limits");
 const ZEN_NOTE = "balance not exposed by OpenCode";
@@ -251,45 +254,64 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		if (leaf !== undefined && sessionFacts?.key === key && sessionFacts.model === ctx.model) return sessionFacts;
 		sessionFacts = {
 			key, model: ctx.model, usage: ctx.getContextUsage(), name: ctx.sessionManager.getSessionName(), routed: routedModel(ctx),
-			compaction: compactionLimits(ctx, leaf),
+			compaction: compactionLimits(ctx),
 		};
 		return sessionFacts;
 	}
 
-	/** The last reading of Pi's compaction settings, and what it was read for. */
-	let compaction: { key: string; limits: CompactionLimits | undefined } | undefined;
+	/** The last settings read, and the files, directory and trust they were read for. */
+	let settingsRead: { key: string; settings: SettingsManager | undefined } | undefined;
 	let compactionProblem: string | undefined;
 
 	/**
 	 * Pi's compaction settings for the selected model, whose reserve Pi uses
 	 * (lib/compaction-point.ts). The extension context has no settings, so this
-	 * reads the files as Pi does, once for each new entry: a session with no
-	 * entry yet would otherwise read them on every frame.
+	 * reads the files as Pi does. Pi takes a lock on settings.json even to read
+	 * it, and other Pi processes share that file, so a read happens only when a
+	 * file's identity (a stat), the directory or the trust changes; the model's
+	 * override comes from the settings already read.
 	 */
-	function compactionLimits(ctx: ExtensionContext, leaf: string | null | undefined): CompactionLimits | undefined {
+	function compactionLimits(ctx: ExtensionContext): CompactionLimits | undefined {
 		const trusted = typeof ctx.isProjectTrusted === "function" && ctx.isProjectTrusted();
-		const key = `${leaf ?? ""}|${ctx.cwd}|${trusted}|${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
-		if (compaction?.key === key) return compaction.limits;
-		let limits = compaction?.limits;
+		// Pi does not read an untrusted project's file, so its changes don't count.
+		const project = trusted && typeof ctx.cwd === "string" ? fileIdentity(join(ctx.cwd, CONFIG_DIR_NAME, "settings.json")) : "";
+		const key = `${ctx.cwd}|${trusted}|${fileIdentity(GLOBAL_SETTINGS)}|${project}`;
+		if (settingsRead?.key !== key) settingsRead = { key, settings: readSettings(ctx, trusted) ?? settingsRead?.settings };
 		try {
-			limits = readCompactionLimits(ctx, trusted);
-			compactionProblem = undefined;
+			return settingsRead.settings?.getCompactionSettings(ctx.model);
 		} catch (error) {
-			// Pi keeps the values it loaded, so the figure keeps its last reading (the window before one); one line for each new problem.
-			const problem = errorText(error);
-			if (problem !== compactionProblem) operationalError(LOG_FILE, "status-plus", `context share keeps its last reading: ${problem}`);
-			compactionProblem = problem;
+			// An override Pi rejects for this model: Pi fails its own check too, so the figure takes the window.
+			problem("uses the whole window", error);
+			return undefined;
 		}
-		compaction = { key, limits };
-		return limits;
 	}
 
-	/** A settings file that does not load reads as empty, which would show Pi's defaults: that is a problem, not a reading. */
-	function readCompactionLimits(ctx: ExtensionContext, trusted: boolean): CompactionLimits {
-		const settings = SettingsManager.create(ctx.cwd, AGENT_DIR, { projectTrusted: trusted });
-		const [failed] = typeof settings.drainErrors === "function" ? settings.drainErrors() : [];
-		if (failed) throw new Error(`${failed.path ?? `${failed.scope} settings`}: ${failed.error.message}`);
-		return settings.getCompactionSettings(ctx.model);
+	/**
+	 * The settings as Pi reads them now, or none when a file does not load:
+	 * Pi keeps the values it loaded, so the figure keeps its last reading (the
+	 * window before one). A file that does not load reads as empty, and an empty
+	 * file would show Pi's defaults.
+	 */
+	function readSettings(ctx: ExtensionContext, trusted: boolean): SettingsManager | undefined {
+		try {
+			const settings = SettingsManager.create(ctx.cwd, AGENT_DIR, { projectTrusted: trusted });
+			const [failed] = typeof settings.drainErrors === "function" ? settings.drainErrors() : [];
+			if (failed) throw new Error(`${failed.path ?? `${failed.scope} settings`}: ${failed.error.message}`);
+			// A value Pi rejects for the selected model counts as a file that does not load.
+			settings.getCompactionSettings(ctx.model);
+			compactionProblem = undefined;
+			return settings;
+		} catch (error) {
+			problem("keeps its last reading", error);
+			return undefined;
+		}
+	}
+
+	/** One log line for each new problem, not one for each entry. */
+	function problem(outcome: string, error: unknown): void {
+		const text = `context share ${outcome}: ${errorText(error)}`;
+		if (text !== compactionProblem) operationalError(LOG_FILE, "status-plus", text);
+		compactionProblem = text;
 	}
 
 	function footerModel(ctx: ExtensionContext, footerData: FooterData): FooterModel {

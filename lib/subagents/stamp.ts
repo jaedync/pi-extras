@@ -11,23 +11,15 @@
  */
 import { statSync } from "node:fs";
 import { join } from "node:path";
+import { fileIdentity } from "../file-identity.ts";
 
 export interface LaunchStamp {
 	readonly generation: number;
 	readonly files: ReadonlyArray<readonly [path: string, identity: string]>;
 }
 
-/** Changes when the file is written, replaced or removed. */
-export function fileIdentity(path: string): string {
-	try {
-		const stat = statSync(path);
-		return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-	} catch (error) {
-		const code = (error as NodeJS.ErrnoException).code;
-		// A file that can't be read now may be readable at the next look; that is a change too.
-		return code === "ENOENT" || code === "ENOTDIR" ? "absent" : `unreadable:${code ?? "unknown"}`;
-	}
-}
+// Moved to lib/ so code outside subagents can use it; its callers here keep this import.
+export { fileIdentity };
 
 export function stampOf(generation: number, paths: readonly string[]): LaunchStamp {
 	return { generation, files: [...new Set(paths)].map((path) => [path, fileIdentity(path)] as const) };

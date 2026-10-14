@@ -52,9 +52,10 @@ window less `compaction.reserveTokens`, or less the reserve in
 now, and the figure can go past 100% until it does. With compaction off, or
 with a reserve as large as the window, the figure uses the whole window. It
 turns amber above 70% and red above 90%. After a compaction the size is `?`
-until the next reply. The figure reads the settings files again at each new
-entry in the session, but Pi uses a changed file only after `/reload`. Thus,
-after you edit a settings file, use `/reload` so that Pi and the figure agree.
+until the next reply. The figure reads the settings files again when one of
+them changes, and shows the change at the next entry in the session. Pi uses
+a changed file only after `/reload`. Thus, after you edit a settings file, use
+`/reload` so that Pi and the figure agree.
 
 ## Updates and removal
 

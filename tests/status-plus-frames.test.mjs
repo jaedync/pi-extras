@@ -108,3 +108,62 @@ test("the context figure is a share of the point where Pi compacts, read again w
 		await handlers.get("session_shutdown")({}, ctx);
 	}
 });
+
+test("the footer reads the settings files again only when one of them, the directory or the trust changes", async (t) => {
+	const { SettingsManager } = await import("@earendil-works/pi-coding-agent");
+	const cwd = mkdtempSync(join(tmpdir(), "status-plus-reads-"));
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+	mkdirSync(agentDir, { recursive: true });
+	// Each create takes Pi's lock on settings.json, so the count is what the footer costs other Pi processes.
+	const create = SettingsManager.create;
+	let creates = 0;
+	SettingsManager.create = (...args) => { creates++; return create.apply(SettingsManager, args); };
+	t.after(() => { SettingsManager.create = create; rmSync(cwd, { recursive: true, force: true }); rmSync(agentDir, { recursive: true, force: true }); });
+	const global = (compaction) => writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ compaction }));
+	const project = (compaction) => writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ compaction }));
+	global({ reserveTokens: 500, modelOverrides: { "p/other": { reserveTokens: 800 } } });
+	const handlers = new Map();
+	let component;
+	let leaf = "a";
+	let trusted = true;
+	const ctx = {
+		mode: "tui", cwd, isProjectTrusted: () => trusted, model: { id: "one", provider: "p", contextWindow: 1000 },
+		sessionManager: {
+			getBranch: () => [], getSessionDir: () => "/nonexistent-status-plus-test", getSessionFile: () => undefined, getCwd: () => "~",
+			getLeafId: () => leaf, getSessionName: () => undefined,
+		},
+		getContextUsage: () => ({ tokens: 100, contextWindow: 1000, percent: 10 }),
+		ui: { setWidget() {}, setStatus() {}, setFooter(factory) {
+			component = factory({ requestRender() {} }, { fg: (_tone, text) => text }, {
+				getGitBranch: () => null, getExtensionStatuses: () => new Map(), onBranchChange: () => () => {},
+			});
+		} },
+	};
+	statusPlus({ on: (name, handler) => handlers.set(name, handler), events: { on() {}, emit() {} } });
+	await handlers.get("session_start")({}, ctx);
+	const figure = () => stripAnsi(component.render(200).join("\n")).match(/\S+ \/ (\S+)/)?.[1];
+	try {
+		assert.equal(figure(), "500");
+		const first = creates;
+		for (const next of ["b", "c", "d"]) { leaf = next; assert.equal(figure(), "500"); }
+		assert.equal(creates, first, "new entries with the files unchanged read nothing");
+		ctx.model = { id: "other", provider: "p", contextWindow: 1000 };
+		assert.equal(figure(), "200", "a model change takes its override from the settings already read");
+		assert.equal(creates, first, "and reads no file");
+		global({ reserveTokens: 400, modelOverrides: { "p/other": { reserveTokens: 900 } } });
+		assert.equal(figure(), "200", "a frame reads no settings");
+		leaf = "e";
+		assert.equal(figure(), "100", "a changed global file shows at the next entry");
+		assert.equal(creates, first + 1);
+		project({ modelOverrides: { "p/other": { reserveTokens: 700 } } });
+		leaf = "f";
+		assert.equal(figure(), "300", "a changed project file shows at the next entry");
+		assert.equal(creates, first + 2);
+		trusted = false;
+		leaf = "g";
+		assert.equal(figure(), "100", "an untrusted project's file is not read");
+		assert.equal(creates, first + 3);
+	} finally {
+		await handlers.get("session_shutdown")({}, ctx);
+	}
+});
