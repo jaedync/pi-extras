@@ -2,6 +2,28 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.24 - 2026-10-14
+
+### Added
+
+- Pull Link auto-pull: links in a message that you type or send through RPC
+  are read before the model starts. Pi adds them after your message as
+  untrusted content, so the model needs no `pull_link` call. This saves one
+  model turn for each message with links.
+  - Limits for each message: 5 links, the first 12,000 characters of each
+    link, and 4 images in total. Other links are named (5 at most) or only
+    counted. The model can read more with `pull_link`.
+  - Videos give the title, description, chapters and captions only. Pi does
+    not run speech-to-text for them.
+  - The model waits 15 seconds at most. A link that is not ready is named,
+    and a later `pull_link` call uses the read that is still running.
+  - Links in a message sent during a run reach the same request as that
+    message. Messages from extensions and subagent tasks are not read.
+    Links to local and private addresses are skipped.
+  - The TUI shows one row, for example `Pulled 2 links: x.com/… · github.com/…`.
+  - Turn it off with `linkContext.autoPull: false` in `pi-extras.json`, or
+    with `/autopull off` for the current session.
+
 ## 0.24.23 - 2026-10-14
 
 ### Fixed
