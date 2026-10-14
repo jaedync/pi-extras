@@ -27,14 +27,14 @@ jobs:
       - run: npm test
       - run: npm run test:install
       - run: npm run audit:package
-  # The job above tests the Pi in package-lock. This one tests the oldest Pi that the README and the peer ranges
-  # promise, and the newest Pi that npm serves now. Keep the minimum equal to peerDependencies (a test checks it).
+  # pi-extras supports only the latest Pi. The job above tests the Pi in package-lock, which is also the minimum in
+  # the README and the peer ranges (a test checks it). This one tests the newest Pi that npm serves now.
   pi-versions:
     name: Pi ${{ matrix.pi }}
     strategy:
       fail-fast: false
       matrix:
-        pi: [0.99.2, latest]
+        pi: [latest]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
