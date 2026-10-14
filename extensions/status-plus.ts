@@ -270,18 +270,26 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		const trusted = typeof ctx.isProjectTrusted === "function" && ctx.isProjectTrusted();
 		const key = `${leaf ?? ""}|${ctx.cwd}|${trusted}|${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
 		if (compaction?.key === key) return compaction.limits;
-		let limits: CompactionLimits | undefined;
+		let limits = compaction?.limits;
 		try {
-			limits = SettingsManager.create(ctx.cwd, AGENT_DIR, { projectTrusted: trusted }).getCompactionSettings(ctx.model);
+			limits = readCompactionLimits(ctx, trusted);
 			compactionProblem = undefined;
 		} catch (error) {
-			// The figure falls back to the window; one line for each new problem, not one for each entry.
+			// Pi keeps the values it loaded, so the figure keeps its last reading (the window before one); one line for each new problem.
 			const problem = errorText(error);
-			if (problem !== compactionProblem) operationalError(LOG_FILE, "status-plus", `context share uses the whole window: ${problem}`);
+			if (problem !== compactionProblem) operationalError(LOG_FILE, "status-plus", `context share keeps its last reading: ${problem}`);
 			compactionProblem = problem;
 		}
 		compaction = { key, limits };
 		return limits;
+	}
+
+	/** A settings file that does not load reads as empty, which would show Pi's defaults: that is a problem, not a reading. */
+	function readCompactionLimits(ctx: ExtensionContext, trusted: boolean): CompactionLimits {
+		const settings = SettingsManager.create(ctx.cwd, AGENT_DIR, { projectTrusted: trusted });
+		const [failed] = typeof settings.drainErrors === "function" ? settings.drainErrors() : [];
+		if (failed) throw new Error(`${failed.path ?? `${failed.scope} settings`}: ${failed.error.message}`);
+		return settings.getCompactionSettings(ctx.model);
 	}
 
 	function footerModel(ctx: ExtensionContext, footerData: FooterData): FooterModel {

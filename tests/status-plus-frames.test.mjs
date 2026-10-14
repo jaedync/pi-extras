@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,7 +17,7 @@ test("the footer walks the session for context usage only when the session or mo
 	let leaf = "a";
 	const calls = { usage: 0, name: 0 };
 	const ctx = {
-		mode: "tui", model: { id: "test", provider: "test-provider", contextWindow: 1000 },
+		mode: "tui", cwd: agentDir, isProjectTrusted: () => false, model: { id: "test", provider: "test-provider", contextWindow: 1000 },
 		sessionManager: {
 			getBranch: () => [], getSessionDir: () => "/nonexistent-status-plus-test", getSessionFile: () => undefined, getCwd: () => "~",
 			getLeafId: () => leaf,
@@ -59,8 +59,9 @@ test("the context figure is a share of the point where Pi compacts, read again w
 	let component;
 	let leaf = "a";
 	let usage = { tokens: 400, contextWindow: 1000, percent: 40 };
+	let trusted = true;
 	const ctx = {
-		mode: "tui", cwd, isProjectTrusted: () => true, model: { id: "auto", provider: "virtual", contextWindow: 4000 },
+		mode: "tui", cwd, isProjectTrusted: () => trusted, model: { id: "auto", provider: "virtual", contextWindow: 4000 },
 		sessionManager: {
 			getBranch: () => [], getSessionDir: () => "/nonexistent-status-plus-test", getSessionFile: () => undefined, getCwd: () => "~",
 			getLeafId: () => leaf, getSessionName: () => undefined,
@@ -88,6 +89,21 @@ test("the context figure is a share of the point where Pi compacts, read again w
 		leaf = "d";
 		usage = { tokens: null, contextWindow: 1000, percent: null };
 		assert.deepEqual(figure(), ["dim", "? / 500"], "unknown after a compaction until the next reply");
+		usage = { tokens: 300, contextWindow: 1000, percent: 30 };
+		// A settings file Pi cannot load leaves its values as they were; the figure keeps its last reading and says why.
+		writeFileSync(join(agentDir, "settings.json"), "{ half-written");
+		leaf = "e";
+		assert.deepEqual(figure(), ["dim", "300 / 500"], "a file that does not load keeps the last reading, not Pi's defaults");
+		assert.match(readFileSync(join(agentDir, "status-plus.log"), "utf8"), /context share keeps its last reading/);
+		// A trusted project's own settings apply, and the same file is ignored when the project is not trusted.
+		settings({ reserveTokens: 500 });
+		mkdirSync(join(cwd, ".pi"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ compaction: { modelOverrides: { "virtual/auto": { reserveTokens: 700 } } } }));
+		leaf = "f";
+		assert.deepEqual(figure(), ["error", "300 / 300"], "the trusted project's override");
+		trusted = false;
+		leaf = "g";
+		assert.deepEqual(figure(), ["dim", "300 / 500"], "an untrusted project's settings are not read");
 	} finally {
 		await handlers.get("session_shutdown")({}, ctx);
 	}
