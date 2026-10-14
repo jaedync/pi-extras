@@ -1621,12 +1621,34 @@ for an answer, for its subagents, or for a free slot. A run that wakes from
 waiting on its subagents keeps what it used. Cost counts only what this run
 spent. Each agent has its own budget, which its parent's budget does not
 limit. A child can give a subagent a larger budget than its own.
-A run over either budget is stopped with its subagents, like `stop_subagent`,
-but its parent gets a report that says why, for example `stopped after 1h00m:
-over its 60-minute budget`, with its last message. A report to main wakes it.
-So a hung child can't keep a `pi -p` run open forever. A message to the child
-resumes it with a fresh budget, and it is told that its last run was stopped
-over its budget.
+The child's instructions name its budgets. At 80% of a budget, the child gets
+one note that tells it how much is left, so it can plan its report. A time
+budget under 5 minutes gets no note. A run that goes on (on a fallback model,
+in a new session, or after a wait) does not get the note again.
+At the limit, the run must wrap up. Each new tool call is blocked, and the
+widget shows `wrapping up: over its 60-minute budget`. The child's own
+subagents stop without a report. A tool call that already runs gets 60 seconds
+to finish; after that, the run is aborted. At the next turn boundary, the child
+is asked in the same session for its final report: what is done, what is not
+done or not verified, what it leaves behind, and the next steps. The prompt
+names the subagents that were stopped. If its reply at the limit called no
+tool and no subagent was stopped, that reply is the report. The run then ends
+as a normal run does, and the child keeps its context. Its parent gets a report
+whose header says, for example, `reached its 60-minute budget after 1h00m and
+wrote this report when told to stop`. A report to main wakes it. The check
+does not run, and the run gets no fallback model and no move to a new session.
+Mail that comes during the wrap-up waits for the next run. The run can go over
+`maxCost` by a few replies at most: the reply that streams at the limit, the
+wrap-up reply, and each blocked reply. A run whose last reply crosses
+`maxCost` as it ends also counts as one that reached its budget, so its check
+does not run.
+If 2 replies after the wrap-up prompt still call tools (both are blocked), if
+the model fails, or if the run has not ended 4 minutes after the limit, the
+run is stopped with its subagents, like `stop_subagent`. Its parent then gets
+a report that says why, for example `stopped after 1h04m: over its 60-minute budget`,
+with its last message. So a hung child can't keep a `pi -p` run open forever.
+A message to the child resumes it with a fresh budget, and it is told how its
+last run ended.
 
 **Fallback.** Sometimes a child's model can't serve its run: its quota or
 usage limit is used up, a rate limit lasts longer than the automatic wait,
@@ -1741,7 +1763,9 @@ Pi process at a time can own a session's children; forks start without them.
 
 Each run adds a line to `~/.pi/agent/subagents/runs.jsonl` (model,
 task opening, time, tool calls, cost, how it ended); `/subagents stats` sums it
-by model, which is what to tune the guide on. Each line holds that run's own
+by model, which is what to tune the guide on. A run that wrote its report at
+its budget has a `budgetEnd` field, and stats count it as `at budget`, not as
+an ordinary finish. Each line holds that run's own
 tool calls and cost (`"format": 2`). Older lines, with no `format`, hold the
 child's totals so far, so stats over them count a child with many runs too
 high. `/subagents stop <name>` or
