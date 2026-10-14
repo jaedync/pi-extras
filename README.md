@@ -45,6 +45,16 @@ can still conflict.
 | Release Notes | What changed in pi-extras, shown one time in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
 
+The Status Plus context figure (`33k / 100k` and its bar) shows the context
+size against the point where Pi compacts the session. That point is the
+window less `compaction.reserveTokens`, or less the reserve in
+`compaction.modelOverrides` for the selected model. Thus 100% means Pi compacts
+now, and the figure can go past 100% until it does. With compaction off, or
+with a reserve as large as the window, the figure uses the whole window. It
+turns amber above 70% and red above 90%. After a compaction the size is `?`
+until the next reply. A settings change shows after the next entry in the
+session.
+
 ## Updates and removal
 
 ```sh
@@ -1392,8 +1402,13 @@ line and a click unfolds its text.
 Each agent has a row above the editor:
 `◆ reviewer  1m02s  48k 24%  $0.21  opus high  ∴ thinking`, its name, how
 long this run has taken, its context (the size after its last reply and that
-size's share of the model's window), what it has cost, its model and thinking
-level, then what it is doing right now. The percent turns amber above 70 and
+size's share of the point where its session compacts), what it has cost, its
+model and thinking level, then what it is doing right now. The compaction point
+is the model's window less `compaction.reserveTokens` (or the reserve in
+`compaction.modelOverrides` for the child's model), so 100% means Pi compacts
+now. The percent can go past 100 until it does. With compaction off, or with a
+reserve as large as the window, the percent is of the whole window. The point
+is read at each launch. The percent turns amber above 70 and
 red above 90, as the footer does for main's context. After a compaction the
 size is `?` until the next reply, and a finished agent keeps its last size,
 which is where a resume starts. What it is doing comes last, so a narrow
