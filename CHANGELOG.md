@@ -2,6 +2,32 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.19 - 2026-10-14
+
+### Changed
+
+- Subagents: a run that reaches its time budget (`maxMinutes`) or cost
+  budget (`maxCost`) now writes a report. Before, it was cut off at once,
+  and its parent got only its last message.
+  - The child's instructions name its budgets. At 80% of a budget, it gets
+    one note that tells it how much is left. A time budget under 5 minutes
+    gets no note.
+  - At the limit, new tool calls are blocked and the child's own subagents
+    stop. A tool call that already runs gets 60 seconds. Then the same
+    session is asked for a report: what is done, what is not done, what it
+    leaves behind, and the next steps. The prompt names the subagents that
+    were stopped.
+  - The run ends idle, and the child keeps its context. The report header
+    says that it was written at the budget and that the work may be
+    incomplete. The TUI row shows "reported at budget". No check runs.
+  - A run can go over `maxCost` by a few replies at most.
+  - If 2 replies after the wrap-up prompt still call tools, if the model
+    fails, or if 4 minutes go by after the limit, the run is stopped as
+    before.
+  - The run log and `/subagents stats` count these runs as "at budget".
+  - `HOST_VERSION` is now 5. At the first `/reload` to this version, a
+    session's running children are interrupted and then resumed.
+
 ## 0.24.18 - 2026-10-13
 
 ### Fixed
