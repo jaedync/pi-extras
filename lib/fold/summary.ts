@@ -51,6 +51,8 @@ const naming = (base: Kind): Kind => ({ ...base, names: true });
 
 const FILE_READ = kind("read", "file");
 const SEARCH = kind("searched for", "pattern");
+const PUBLISH = kind("published", "page");
+const INBOX = kind("read the inbox", "time");
 const KINDS: Readonly<Record<string, Kind>> = {
 	read: FILE_READ,
 	edit: naming(kind("edited", "file")),
@@ -67,6 +69,15 @@ const KINDS: Readonly<Record<string, Kind>> = {
 	web_search: kind("searched the web", "time"),
 	fetch_content: kind("fetched", "page"),
 	codemode: kind("ran", "script"),
+	// The artifact extension (its rows: tool-display/artifact.ts). Old names count with the new ones.
+	artifact_publish: PUBLISH,
+	artifact_new: PUBLISH,
+	artifact_ask: kind("asked", "form"),
+	artifact_check: kind("checked", "page"),
+	artifact_find: kind("searched artifacts", "time"),
+	artifact_feedback: INBOX,
+	artifact_answers: INBOX,
+	artifact_comments: INBOX,
 };
 
 /** The table key for a tool, also when an MCP bridge prefixes its name (`mcp__oc__web_search`). */

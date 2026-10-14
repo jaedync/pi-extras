@@ -974,7 +974,9 @@ that made the calls, set in two columns with no blank line between them:
 The words count the calls by kind. Each step of a chained command counts as a
 command, and the calls in a codemode script count in its place. When all the
 edits (or all the writes) in a run are to one file, the line names that file
-(`edited footer.ts`). Tools without
+(`edited footer.ts`). The artifact tools have kinds too: `published 2 pages`,
+`asked 1 form`, `checked 1 page`, `searched artifacts 1 time` and `read the
+inbox 1 time`; their old names count with the new ones. Tools without
 a kind of their own, such as MCP tools, are counted together: `used 44 tools`,
 or `used 2 other tools` after the known kinds. Only one such tool with a short
 name is named (`called usage 2 times`). One failed call is named in red

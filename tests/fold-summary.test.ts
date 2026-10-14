@@ -46,6 +46,12 @@ test("pi-extras and Pi tools share their kinds", () => {
 	assert.equal(text, "Started 1 background job, started 1 subagent, fetched 2 pages, ran 1 script, wrote 1 file, listed 1 folder, searched for 1 pattern");
 });
 
+test("the artifact tools have kinds of their own, the old names too", () => {
+	const text = foldPhrase(facts({ tools: [tool("artifact_ask"), tool("artifact_publish"), tool("artifact_new"), tool("artifact_check"),
+		tool("artifact_find"), tool("artifact_feedback"), tool("artifact_answers"), tool("mcp__oc__artifact_comments")] }));
+	assert.equal(text, "Asked 1 form, published 2 pages, checked 1 page, searched artifacts 1 time, read the inbox 3 times");
+});
+
 test("stats give tokens sent and received, and time; an unknown time is left out", () => {
 	assert.deepEqual(foldStats(facts({ tools: [tool("read"), tool("bash", true)], sent: 288_214, tokens: 1_620, elapsedMs: 8_400 })), ["↑288k ↓1.6k", "8.4s"], "the words count the calls already");
 	assert.deepEqual(foldStats(facts({ tools: [tool("read")], tokens: 12 })), ["↓12"]);
