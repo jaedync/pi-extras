@@ -5,6 +5,7 @@
  */
 import { formatElapsed } from "../shell-jobs-widget.ts";
 import { formatMoney } from "../status-plus-logic.ts";
+import type { RunLimits } from "./budget.ts";
 import { checkLines } from "./checks.ts";
 import { MAIN } from "./names.ts";
 import type { AgentRecord, Worktree } from "./types.ts";
@@ -265,6 +266,29 @@ export function conversationDigest(entries: readonly unknown[], describe: (tool:
 	return `${dropped > 0 ? `(${dropped} earlier entries omitted)\n\n` : ""}${kept.join("\n\n")}`;
 }
 
+const PLAN_TO_REPORT = "Plan so that you can write your report before then. At the limit, tool calls stop and you must report.";
+
+/** The note a run gets near the end of its time budget (budget.ts): about `minutes` are left. */
+export function timeNote(minutes: number): string {
+	const left = Math.max(1, Math.round(minutes));
+	return `About ${left} ${left === 1 ? "minute is" : "minutes are"} left in this run's time budget. ${PLAN_TO_REPORT}`;
+}
+
+/** The note a run gets near the end of its cost budget: `left` dollars of `limit`. */
+export function costNote(left: number, limit: number): string {
+	return `About $${formatMoney(Math.max(0, left))} is left of this run's $${formatMoney(limit)} cost budget. ${PLAN_TO_REPORT}`;
+}
+
+/** What the child is told of its run's budgets up front; none without one. */
+function budgetSection(budget: RunLimits | undefined): string[] {
+	const limits = [
+		...(budget?.minutes !== undefined ? [`work ${budget.minutes} minutes (time counts only while you work)`] : []),
+		...(budget?.cost !== undefined ? [`spend $${formatMoney(budget.cost)}`] : []),
+	];
+	if (limits.length === 0) return [];
+	return ["", "## Budget", `This run may ${limits.join(" and ")}. Near the end you get a note. At the limit, tool calls are blocked and you must write your final report at once.`];
+}
+
 /** Appended to a child's system prompt. */
 export function childInstructions(options: {
 	name: string;
@@ -275,6 +299,8 @@ export function childInstructions(options: {
 	roster: string;
 	/** Main's conversation, for a forked child. */
 	conversation?: string;
+	/** Each run's limits, fixed at spawn (budget.ts). */
+	budget?: RunLimits;
 }): string {
 	const { name, parent } = options;
 	return [
@@ -298,6 +324,7 @@ export function childInstructions(options: {
 		] : []),
 		...(options.readOnly ? ["", "## Read-only", "Do not modify files, run commands that change state, or make other side effects."] : []),
 		...(options.canSpawn ? ["", "## Your own subagents", "You may start subagents with the subagent tool. You are not done until they report back; their reports arrive as messages."] : []),
+		...budgetSection(options.budget),
 		"",
 		"## Team right now",
 		options.roster,

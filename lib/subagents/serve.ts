@@ -175,6 +175,7 @@ function childLauncher(inputs: LauncherInputs): Launcher {
 		instructions: (record) => childInstructions({
 			name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < scope.config.maxDepth,
 			...(record.worktree ? { worktree: record.worktree } : {}),
+			budget: { ...(record.maxMinutes !== undefined ? { minutes: record.maxMinutes } : {}), ...(record.maxCost !== undefined ? { cost: record.maxCost } : {}) },
 			roster: rosterText(record.name, team().list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model }))),
 			...(record.fork ? { conversation: conversationDigest(entriesUntil(live.branch(), record.createdAt), describeTool) } : {}),
 		}),

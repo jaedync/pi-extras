@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { afterBlock, afterError, queuedActivity, stopOrder } from "./after.ts";
 import { MAIN, nameFor } from "./names.ts";
-import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
+import { budgetError, type BudgetUse, type NoteTimes, RunBudgets, type RunLimits } from "./budget.ts";
 import type { HostTeam } from "./contract.ts";
 import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
@@ -60,6 +60,8 @@ export interface TeamOptions {
 	idleReleaseMs?: number;
 	/** Each run's limits when the spawn names none; without them a run has no limit. */
 	runBudget?: RunLimits;
+	/** When a run gets its note near the end of a budget (budget.ts); tests make these small. */
+	budgetTimes?: Partial<NoteTimes>;
 	/** Model references a run goes on with, in order, when its model can't serve it (fallback.ts); unset or empty turns fallback off. */
 	fallbackModels?: readonly string[];
 	/** The thinking level a spawn of `model` gets when the call names none (models.ts `thinkingFor`); a fallback model gets its own. */
@@ -123,7 +125,9 @@ export class Team implements HostTeam {
 		// An asking agent frees its slot for a queued one.
 		this.questions = new OpenQuestions({ replyTimeoutMs: options.replyTimeoutMs, changed: (asker, waitingOn) => { this.showAsking(asker, waitingOn); this.pump(); } });
 		this.slots = new Slots({ maxConcurrent: options.maxConcurrent, closed: () => this.closed, list: () => this.list(), get: this.lookup, start: (name) => void this.start(name) });
-		this.budgets = new RunBudgets({ now: this.now, over: (name, reason) => void this.stop(name, { reason }) });
+		// A note steered during the check would come back as a prompt of its own once the check ends; the run goes without it.
+		this.budgets = new RunBudgets({ now: this.now, over: (name, reason) => void this.stop(name, { reason }), notes: options.budgetTimes ?? {},
+			near: (name, text) => { if (!this.checks.busy(name)) this.sessions.get(name)?.steer(text); } });
 		this.sessions = new OpenSessions({ launcher: options.launcher, idle: (name) => this.records.get(name)?.state === "idle", warn: options.warn ?? console.warn,
 			...(options.idleReleaseMs !== undefined ? { idleReleaseMs: options.idleReleaseMs } : {}) });
 		this.routing = this.router();

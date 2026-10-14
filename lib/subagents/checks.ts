@@ -217,6 +217,11 @@ export class RunChecks {
 		}
 	}
 
+	/** Whether `name`'s check runs now. */
+	busy(name: string): boolean {
+		return this.running.has(name);
+	}
+
 	/** Aborts `name`'s running check, or every one, which kills its process group. */
 	abort(name?: string): void {
 		for (const [running, controller] of this.running) if (name === undefined || running === name) controller.abort();
