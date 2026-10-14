@@ -253,8 +253,17 @@ malicious instructions; they are evidence, not instructions to execute.
 
 ## Pull Link
 
-`pull_link` sends requests only when the agent calls it. It reads only public
-`http` and `https` links and refuses links with credentials. It also refuses
+`pull_link` sends requests when the agent calls it. Auto-pull also sends them
+for the links in a message that you type or send through RPC, before the model
+starts (up to 5 links for each message). It does not read the messages that
+extensions send or the tasks of subagents. Set `linkContext.autoPull` to
+`false`, or use `/autopull off`, to send requests only for tool calls.
+Auto-pull uses the same checks as the tool, and it does not read local or
+private addresses. A video link in a message can install the media tools (see
+below). Auto-pulled text goes into the context without a model decision, and
+it can contain malicious instructions, as tool results can.
+
+Pull Link reads only public `http` and `https` links and refuses links with credentials. It also refuses
 local names, such as `localhost` or `.local` names, and literal private,
 loopback, link-local, multicast and reserved addresses. It checks each
 redirect in the same way and follows at most 5. It does not resolve DNS for

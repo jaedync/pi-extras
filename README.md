@@ -40,7 +40,7 @@ can still conflict.
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
 | Windows Use | Opt-in, WSL on a Hyper-V host: a `windows_use` tool that operates Windows VMs through Windows-MCP, which it installs in each guest, and through their consoles |
 | Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; every finished row stays visible, ctrl+o expands them all |
-| Pull Link | `pull_link` tool: give it a link to read posts with their threads, replies and images (X, Bluesky, Threads, Mastodon, Reddit, Hacker News, LinkedIn), GitHub pages, images, any web page, and videos with transcript, thumbnail, comments and frames on request (YouTube, TikTok, Instagram, Vimeo and more) |
+| Pull Link | `pull_link` tool: give it a link to read posts with their threads, replies and images (X, Bluesky, Threads, Mastodon, Reddit, Hacker News, LinkedIn), GitHub pages, images, any web page, and videos with transcript, thumbnail, comments and frames on request (YouTube, TikTok, Instagram, Vimeo and more); the links in your messages are read before the model starts (`/autopull`) |
 | Copy Blocks | Code blocks and quotes in replies drawn on a background of their own with a `copy` label: one click copies the exact text; `/copy-block` does it from the keyboard |
 | Release Notes | What changed in pi-extras, shown one time in the first new session after an update; `/pi-extras changelog` shows it again |
 | Quiet | Low-contrast theme with restrained accent colors |
@@ -1119,7 +1119,9 @@ Pi draws them and `/copy-block` still works.
 ## Pull Link
 
 `pull_link` reads a link and gives the agent its content as markdown. Paste a
-link into the prompt, and the agent can read it with one tool call.
+link into the prompt, and Pull Link reads it before the model starts (see
+[Auto-pull](#auto-pull)). The agent calls the tool for other links and for
+more of a result.
 
 | Link | What you get |
 | --- | --- |
@@ -1206,6 +1208,53 @@ not, the tool stops before it sends a request.
 A shared YouTube link with `&list=` reads only its one video, not the
 playlist.
 
+### Auto-pull
+
+When you send a message with links, Pull Link reads the links before the model
+starts. It adds the results to the session as one message after your message.
+The model then has the content in its first request, so it does not need a
+`pull_link` call for these links. This saves one model turn for each message
+with links. The cost is the size of the results in the context, also when the
+model does not need them, and a wait before the model starts.
+
+- Only messages that you type or send through RPC are read. Messages that an
+  extension sends and the tasks of subagents are not.
+- Auto-pull finds the `http` and `https` links in the message, also links in
+  code spans and code blocks. It removes the punctuation after a link, such
+  as `.`, `,`, quotes and a `)` that has no `(` in the link. It reads each
+  link one time. It does not read local and private addresses or links with
+  credentials.
+- It reads up to 5 links for each message. The message names the other links,
+  and the model can read them with `pull_link`.
+- Each result is the first 12,000 characters of what `pull_link` gives for
+  the link. A note tells the model the `offset` for the rest.
+- One message has up to 4 images in total (photos and thumbnails), in link
+  order.
+- A video gives its title, description, chapters and the transcript from its
+  captions. Auto-pull does not transcribe speech and sends no frames. For a
+  video without captions, the model can call `pull_link`, which transcribes
+  the speech.
+- All links are read at the same time. The model starts when all links are
+  read, or after 15 seconds. The message names a link that is still being
+  read. Its read continues for up to 5 minutes, and a `pull_link` call for
+  that link waits for this read and uses its result.
+- The results go into the `pull_link` cache. A link that was read in the last
+  30 minutes is not read again.
+- A link that cannot be read is named with the reason. It does not stop the
+  other links or your message.
+- A message that you send while the agent works (a steer or a follow-up) gets
+  its links in the same way. Pi adds the results at the end of the current
+  turn, so they come before your message in the next request.
+
+The transcript shows one row, for example
+`Pulled 2 links: x.com/user/status/… · github.com/owner/repo`. Expand it to
+see each link. Auto-pull uses the same network rules and the same guard as
+`pull_link`.
+
+To turn auto-pull off, set `linkContext.autoPull` to `false`. To change it for
+the current session only, use `/autopull on` or `/autopull off`. `/autopull`
+or `/autopull status` shows the current state.
+
 ### Video tools
 
 The first video link installs the media tools into
@@ -1267,6 +1316,8 @@ contains `TOKEN`, `PASSWORD`, `AUTH`, `SECRET` or `KEY`.
 
 Put these in the `linkContext` section of `pi-extras.json`:
 
+- `autoPull` (default `true`): read the links in your messages before the
+  model starts (see [Auto-pull](#auto-pull)).
 - `refreshDays` (default `3`): the days between updates of the video tools.
   `0` stops the scheduled updates. A new pi-extras version that changes the
   list of video packages still installs them again.
