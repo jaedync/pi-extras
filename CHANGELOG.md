@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.23 - 2026-10-14
+
+### Fixed
+
+- Folded mode counts the artifact tools' calls in words of their own:
+  `published 2 pages`, `asked 1 form`, `checked 1 page`, `searched artifacts
+  1 time` and `read the inbox 1 time`. Before, a run with artifact calls
+  folded to `called artifact_find`, or to `used 8 tools`. The old tool names
+  count with the new ones.
+
 ## 0.24.22 - 2026-10-14
 
 ### Fixed
