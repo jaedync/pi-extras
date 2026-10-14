@@ -17,6 +17,8 @@ export function subagentDescription(options: { models: string; defaultModel: str
 		"",
 		"The task is the subagent's whole brief: it has not seen this conversation (unless context is \"fork\"). State the goal, the relevant files and facts, constraints such as read-only, and what the report must contain.",
 		"",
+		"A task that changes code needs check: the shell command that proves the work (tests, typecheck or build). With fixUntilPass a failure goes back to the child to fix. Read-only and research tasks need no check.",
+		"",
 		options.forChild
 			? "Its report arrives as a message to you. You are not done until your subagents have reported."
 			: "Talk to a running or finished subagent with message. Its notes and questions appear in this conversation. For a review or fix loop, tell the agents to message each other by name and report to you only at the end, so you are not woken for each round.",

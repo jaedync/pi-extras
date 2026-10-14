@@ -246,7 +246,9 @@ export class Team implements HostTeam {
 
 	/** Before a child's `edit` or `write` of the absolute `target`: takes the lock of its work tree, or says who holds it (edit-lock.ts). */
 	claimEdit(name: string, target?: string): string | undefined {
-		return this.locks.claim(name, target === undefined ? undefined : this.workTrees.topOf(target));
+		const refused = this.locks.claim(name, target === undefined ? undefined : this.workTrees.topOf(target));
+		if (refused === undefined) this.changed(name);
+		return refused;
 	}
 
 	/** Whether `name` may edit in the work tree `root` now without taking its lock; its bash calls there are not checked then. */
@@ -256,7 +258,24 @@ export class Team implements HostTeam {
 
 	/** After `name`'s bash call changed `paths` in the work tree `root`: takes its lock as an edit would, or warns and returns a note for the call's result. */
 	bashChanged(name: string, paths: readonly string[], root: string): string | undefined {
+		this.changed(name);
 		return this.locks.bashChanged(name, paths, root, this.options.warn ?? console.warn);
+	}
+
+	/**
+	 * `name`'s run changed files, so without a check its report says so
+	 * (checks.ts `unchecked`). A change is an `edit` or `write` call the lock
+	 * let through, even one that then failed, and a bash call that bash-guard.ts
+	 * saw change files in a git work tree. Bash is not counted by its name: a
+	 * run that only ran tests would be flagged. So a bash change goes unseen
+	 * outside git, while another agent's bash call runs in the same work tree,
+	 * and while an agent above it holds that work tree's lock. Its own lock
+	 * comes from a change this run, already counted. A subagent's change is not
+	 * its parent's: the subagent's own report carries the flag.
+	 */
+	private changed(name: string): void {
+		const record = this.records.get(name);
+		if (record && record.changedRun !== record.runs) this.patch(name, { changedRun: record.runs });
 	}
 
 	/** Resolves once the child reaches idle, failed or stopped. */

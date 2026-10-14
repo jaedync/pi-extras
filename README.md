@@ -1590,6 +1590,11 @@ or a child that can run `bash` itself, can set a check. A message can set a
 check only on one of the sender's own subagents. A read-only child can have a
 check, but not `fixUntilPass`.
 
+When a run ends normally, changes files and has no check, its report ends
+with `Not checked: this run changed files and had no check command. Verify the
+work before you rely on it.` A change is an `edit` or `write` call, or a
+`bash` command that the edit lock saw change files in a git work tree.
+
 **Stopping.** `stop_subagent` stops a subagent and everything it started:
 main can stop any, and a child that may start subagents can stop its own.
 The call returns how it ended and its last message, so no report follows; a

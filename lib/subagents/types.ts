@@ -158,6 +158,8 @@ export interface AgentRecord {
 	runStart?: { usage: Usage; toolCalls: number };
 	/** The run whose check the harness skipped: it called nothing that can change files since the last check (checks.ts). */
 	checkSkipped?: number;
+	/** The latest run that changed files (`Team.changed`); without a check, its report says nobody checked them (checks.ts). */
+	changedRun?: number;
 }
 
 /** A check as a spawn or a message set it (checks.ts). */

@@ -137,7 +137,8 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.check === undefined || validCheck(r.check)) && (r.checked === undefined || validChecked(r.checked))
 		&& (r.runCost === undefined || (Number.isFinite(r.runCost) && r.runCost >= 0))
 		&& (r.runStart === undefined || validRunStart(r.runStart))
-		&& (r.checkSkipped === undefined || (Number.isInteger(r.checkSkipped) && r.checkSkipped >= 0));
+		&& (r.checkSkipped === undefined || (Number.isInteger(r.checkSkipped) && r.checkSkipped >= 0))
+		&& (r.changedRun === undefined || (Number.isInteger(r.changedRun) && r.changedRun >= 0));
 }
 
 /**

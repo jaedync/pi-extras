@@ -12,7 +12,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { formatElapsed } from "../shell-jobs-widget.ts";
 import { MAIN } from "./names.ts";
-import { type AgentRecord, type CheckResult, type CheckRun, type CheckSpec, type CheckUpdate, type ChildHandle, WAITING_FOR_MODEL } from "./types.ts";
+import { type AgentRecord, type AgentState, type CheckResult, type CheckRun, type CheckSpec, type CheckUpdate, type ChildHandle, WAITING_FOR_MODEL } from "./types.ts";
 
 export const MAX_FIX_ROUNDS = 5;
 export const CHECK_TIMEOUT_MINUTES = 10;
@@ -22,6 +22,8 @@ export const MAX_CHECK_CHARS = 4_000;
 const FAILED_TAIL = { lines: 40, chars: 4_000 };
 /** What a report says when the harness skipped the check at the end of its run. */
 export const SKIPPED_LINE = "Check skipped: no changes since the last check.";
+/** What a report says when its run changed files and no check proved the work. */
+export const NOT_CHECKED_LINE = "Not checked: this run changed files and had no check command. Verify the work before you rely on it.";
 /**
  * Tools that can't change files: Pi's tools that only read, and this
  * extension's messages and stops. Any other tool can, `subagent` too, and
@@ -140,15 +142,28 @@ export function checkBlock(result: CheckResult): string {
 	return [`Check run by the harness, not by the agent: ${outcome(result)}.`, command, output].join("\n");
 }
 
-/** How a report ends: its run's check, then whether the harness skipped the check at the run's end. */
-export function checkLines(record: Pick<AgentRecord, "checked" | "runs" | "checkSkipped">): string | undefined {
+/** What a report's check lines are made from. */
+type CheckFacts = Pick<AgentRecord, "checked" | "runs" | "checkSkipped" | "check" | "changedRun" | "budgetEnd"> & { state?: AgentState };
+
+/**
+ * Whether `record`'s run ended normally, changed files and had no check.
+ * A run stopped, failed or at its budget already says that its work may be
+ * incomplete. What counts as a change is in `Team.changed`.
+ */
+export function unchecked(record: CheckFacts): boolean {
+	return record.check === undefined && record.changedRun === record.runs && record.state === "idle" && record.budgetEnd === undefined;
+}
+
+/** How a report ends: its run's check, then whether the harness skipped the check at the run's end, or that the run had none. */
+export function checkLines(record: CheckFacts): string | undefined {
 	const checked = checkOf(record);
-	const lines = [checked ? checkBlock(checked) : undefined, record.checkSkipped === record.runs ? SKIPPED_LINE : undefined].filter(Boolean);
+	const lines = [checked ? checkBlock(checked) : undefined, record.checkSkipped === record.runs ? SKIPPED_LINE : undefined,
+		unchecked(record) ? NOT_CHECKED_LINE : undefined].filter(Boolean);
 	return lines.length > 0 ? lines.join("\n\n") : undefined;
 }
 
 /** The report as saved and shown: the agent's text, then its run's check. */
-export function reportWithCheck(record: Pick<AgentRecord, "report" | "checked" | "runs" | "checkSkipped">): string | undefined {
+export function reportWithCheck(record: CheckFacts & Pick<AgentRecord, "report">): string | undefined {
 	const check = checkLines(record);
 	if (!check) return record.report;
 	return [record.report?.trim() ? record.report : undefined, check].filter(Boolean).join("\n\n");
