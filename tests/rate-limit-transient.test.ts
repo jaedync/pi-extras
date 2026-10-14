@@ -5,9 +5,9 @@ import { pathToFileURL } from "node:url";
 import { BASE_DELAY_MS, MAX_ATTEMPTS, MAX_DELAY_MS, PROXY_RETRY_DELAYS_MS, TransientBackoff, exhaustedMessage, isProxyTurnLimit, isQuotaError, isTransientRateLimit, planProxyRetry, planTransient, proxyExhaustedMessage, proxyWaitingMessage, waitingMessage } from "../lib/rate-limit-recovery/transient.ts";
 import { parseRetryAfter, recordRetryHint, takeRetryHint } from "../lib/rate-limit-recovery/retry-hint.ts";
 import { DEFAULT_CONFIG, normalizeConfig } from "../lib/rate-limit-recovery/config.ts";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { piAiRoot } from "./support/pi-runtime.mjs";
 
-const aiDist = join(agentRoot, "node_modules/@earendil-works/pi-ai/dist");
+const aiDist = join(piAiRoot, "dist");
 const { isRetryableAssistantError } = await import(pathToFileURL(join(aiDist, "utils/retry.js")).href);
 const { isContextOverflow } = await import(pathToFileURL(join(aiDist, "utils/overflow.js")).href);
 

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "usage-sdk-"));
 const previous = { HOME: process.env.HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, PI_OFFLINE: process.env.PI_OFFLINE };
@@ -15,7 +15,7 @@ mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => { throw new Error("Usage fixture must never reach a real provider"); };
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href);
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 const { default: usageGuard, GUARD_CUSTOM_TYPE } = await import("../extensions/usage-guard.ts");
 const { createLimitStore } = await import("../lib/limit-store.ts");
 const { parseProxyQuota } = await import("../lib/status-plus-logic.ts");

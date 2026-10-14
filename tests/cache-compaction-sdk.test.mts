@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, statSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 import cacheCompaction from "../extensions/cache-compaction.ts";
 import { COMPACTION_PROGRESS_EVENT } from "../lib/cache-compaction/decision.ts";
 import usageGuard, { GUARD_CUSTOM_TYPE } from "../extensions/usage-guard.ts";
@@ -16,7 +16,7 @@ const scratch = mkdtempSync(join(tmpdir(), "prefix-sdk-"));
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => { throw new Error("Prefix fixture must never reach a real provider"); };
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href);
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 const usage = { input: 10, output: 2, cacheRead: 90, cacheWrite: 0, totalTokens: 102, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 } };
 const textOf = (message: any) => typeof message.content === "string" ? message.content : (message.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n");
 

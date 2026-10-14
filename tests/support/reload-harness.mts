@@ -11,7 +11,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { agentRoot } from "./pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./pi-runtime.mjs";
 
 export const scratch = mkdtempSync(join(tmpdir(), "subagents-handover-"));
 // Set before importing the SDK. This test must never read real settings or credentials.
@@ -21,7 +21,7 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.PI_OFFLINE = "1";
 mkdirSync(agentDir, { recursive: true });
 export const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href) as typeof import("@earendil-works/pi-coding-agent");
-export const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href) as any;
+export const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href) as any;
 
 export const SECOND_BUILD = "[second build]";
 const repo = fileURLToPath(new URL("../..", import.meta.url));

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 import tabStatus from "../extensions/tab-status.ts";
 import { ChildIndex } from "../lib/subagents/restore.ts";
 import { BACKGROUND_EVENT, RATE_WAIT_EVENT } from "../lib/tab-status/events.ts";
@@ -16,7 +16,7 @@ import cacheCompactionExtension from "../extensions/cache-compaction.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "tab-status-sdk-"));
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href);
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 const tui = await import("@earendil-works/pi-tui");
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 

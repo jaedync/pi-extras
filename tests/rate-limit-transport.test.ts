@@ -8,7 +8,7 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 type Provider = NonNullable<ReturnType<ModelRegistry["getProvider"]>>;
 import { createQuotaTransportGuard } from "../lib/rate-limit-recovery/transport.ts";
 import { parseRateLimit } from "../lib/rate-limit-recovery/core.ts";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const body = JSON.stringify({ type: "error", error: { type: "rate_limit_error", retry_after: 9905, message: "synthetic rejection" } });
 const model = { provider: "fixture", api: "anthropic-messages", id: "claude-fixture" };
@@ -52,7 +52,7 @@ async function modelsFileRuntime(sdk: any, ai: any, modelsPath: string, credenti
 
 async function builtinPair() {
 	const sdk = await import(pathToFileURL(join(agentRoot, "dist/index.js")).href);
-	const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+	const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 	const credentials = new ai.InMemoryCredentialStore();
 	await credentials.modify("opencode-go", async () => ({ type: "api_key", key: "synthetic-not-a-credential" }));
 	const runtime = await sdk.ModelRuntime.create({ credentials, modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
@@ -274,7 +274,7 @@ test("a stalled 429 body inspection returns within its 500ms deadline, without a
 
 test("real public ModelRegistry facades share a runtime lease and restore configuration", async () => {
 	const sdk = await import(pathToFileURL(join(agentRoot, "dist/index.js")).href);
-	const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+	const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 	const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null, allowOffline: true, refreshOnCreate: false });
 	const first = new sdk.ModelRegistry(runtime); const second = new sdk.ModelRegistry(runtime);
 	first.registerProvider("anthropic", { apiKey: "synthetic-not-a-credential", baseUrl: "https://fixture.invalid" });
@@ -292,7 +292,7 @@ test("real public ModelRegistry facades share a runtime lease and restore config
 
 test("real legacy SDK stream keeps its overlay installed during fetch and protects quota after a partial registration", { timeout: 3000 }, async () => {
 	const sdk = await import(pathToFileURL(join(agentRoot, "dist/index.js")).href);
-	const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+	const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 	const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null, allowOffline: true, refreshOnCreate: false });
 	const registry = new sdk.ModelRegistry(runtime);
 	registry.registerProvider("anthropic", { apiKey: "synthetic-not-a-credential", baseUrl: "https://retained.invalid", headers: { initial: "old" } });
@@ -316,7 +316,7 @@ test("real legacy SDK stream keeps its overlay installed during fetch and protec
 
 test("partial foreign legacy registration preserves endpoint/auth/headers while owned and after disposal", async () => {
 	const sdk = await import(pathToFileURL(join(agentRoot, "dist/index.js")).href);
-	const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+	const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 	const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null, allowOffline: true, refreshOnCreate: false });
 	const registry = new sdk.ModelRegistry(runtime);
 	registry.registerProvider("anthropic", { apiKey: "synthetic-not-a-credential", baseUrl: "https://retained.invalid", headers: { old: "old" } });
@@ -335,7 +335,7 @@ test("partial foreign legacy registration preserves endpoint/auth/headers while 
 
 for (const kind of ["native", "builtin"] as const) test(`${kind} provider preserves live models-file edits/removals under a quota lease`, async () => {
 	const sdk = await import(pathToFileURL(join(agentRoot, "dist/index.js")).href);
-	const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+	const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 	const dir = await mkdtemp(join(tmpdir(), "quota-models-")); const modelsPath = join(dir, "models.json");
 	const guard = createQuotaTransportGuard();
 	try {
@@ -363,7 +363,7 @@ for (const kind of ["native", "builtin"] as const) test(`${kind} provider preser
 
 for (const kind of ["native", "builtin"] as const) test(`${kind} quota disposal refresh cannot recreate a removed models directory`, { timeout: 10_000 }, async (t) => {
 	const sdk = await import(pathToFileURL(join(agentRoot, "dist/index.js")).href);
-	const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+	const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 	const { ModelConfig } = await import(pathToFileURL(join(agentRoot, "dist/core/model-config.js")).href);
 	const dir = await mkdtemp(join(tmpdir(), "quota-models-disposal-")); const modelsPath = join(dir, "models.json");
 	const guard = createQuotaTransportGuard(); const entered = deferred(); const resume = deferred();
@@ -400,8 +400,8 @@ for (const kind of ["native", "builtin"] as const) test(`${kind} quota disposal 
 
 test("gated SDK parent API A retains foreign S and one HTTP attempt while child API B is explicitly unsupported", { timeout: 10_000 }, async () => {
 	const sdk = await import(pathToFileURL(join(agentRoot, "dist/index.js")).href);
-	const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
-	const completions = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js")).href);
+	const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
+	const completions = await import(pathToFileURL(join(piAiRoot, "dist/api/openai-completions.js")).href);
 	const dir = await mkdtemp(join(tmpdir(), "quota-gated-")); const originalFetch = globalThis.fetch;
 	const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
 	const registry = new sdk.ModelRegistry(runtime);
@@ -444,7 +444,7 @@ test("gated SDK parent API A retains foreign S and one HTTP attempt while child 
 
 test("defaulted custom legacy models without a root API are explicitly unsupported and unchanged", async () => {
 	const sdk = await import(pathToFileURL(join(agentRoot, "dist/index.js")).href);
-	const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+	const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 	const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
 	const registry = new sdk.ModelRegistry(runtime); const baseline = registry.getAll().find((m: any) => m.provider === "anthropic");
 	const { api: _api, ...definition } = baseline;
@@ -481,7 +481,7 @@ test("failed stripped-config validation leaves registration recoverable and disp
 
 for (const kind of ["legacy", "native"] as const) test(`${kind} invalid models-file fails closed before HTTP and preserves recoverable registration`, async () => {
 	const sdk = await import(pathToFileURL(join(agentRoot, "dist/index.js")).href);
-	const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+	const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 	const dir = await mkdtemp(join(tmpdir(), "quota-invalid-models-")); const modelsPath = join(dir, "models.json"); const warnings: string[] = [];
 	const guard = createQuotaTransportGuard({ onWarning: (code) => warnings.push(code) });
 	try {
@@ -497,6 +497,10 @@ for (const kind of ["legacy", "native"] as const) test(`${kind} invalid models-f
 		guard.ensure({ modelRegistry: registry, model: selected } as never); const overlay = registry.getRegisteredProviderConfig("anthropic")?.streamSimple;
 		await writeFile(modelsPath, JSON.stringify({ providers: { anthropic: { baseUrl: "https://fixture.invalid", models: [{ id: "unknown-fixture-model", name: "Invalid model window", contextWindow: -1 }] } } }));
 		await registry.refresh({ allowNetwork: false }); assert.ok(registry.getError());
+		// Pi before 1.2 names the bad provider and still merges its registration, so restoring the original would break
+		// the provider: the guard must keep its overlay. Pi 1.2 rejects the whole file and loads no custom provider, so the
+		// restore is safe and the overlay goes.
+		const keepsOverlay = registry.getError().includes('Provider "anthropic":');
 		const oldFetch = globalThis.fetch; let requests = 0;
 		globalThis.fetch = async () => { requests++; throw new Error("Invalid config must not make HTTP requests"); };
 		try {
@@ -508,10 +512,10 @@ for (const kind of ["legacy", "native"] as const) test(`${kind} invalid models-f
 		assert.doesNotThrow(() => guard.dispose());
 		if (kind === "native") assert.equal(registry.getRegisteredNativeProvider("anthropic"), original);
 		else {
-			assert.equal(registry.getRegisteredProviderConfig("anthropic").streamSimple, overlay);
+			assert.equal(registry.getRegisteredProviderConfig("anthropic").streamSimple, keepsOverlay ? overlay : undefined);
 			assert.equal(registry.getRegisteredProviderConfig("anthropic").baseUrl, "https://retained.invalid");
 		}
-		assert.deepEqual(warnings, kind === "native" ? ["invalid-provider-config"] : ["invalid-provider-config", "legacy-restore-validation-failed"]);
+		assert.deepEqual(warnings, kind === "native" || !keepsOverlay ? ["invalid-provider-config"] : ["invalid-provider-config", "legacy-restore-validation-failed"]);
 		await writeFile(modelsPath, JSON.stringify({ providers: {} })); await registry.refresh({ allowNetwork: false }); guard.dispose();
 		assert.deepEqual(kind === "native" ? registry.getRegisteredNativeProvider("anthropic") : registry.getRegisteredProviderConfig("anthropic"), original);
 	} finally { guard.dispose(); await rm(dir, { recursive: true, force: true }); }
@@ -610,7 +614,7 @@ test("disposing a guard resets unsupported warning deduplication for its next se
 });
 
 test("native Codex raw retry loop fails after one recognized quota response with JSON preserved", { timeout: 3000 }, async () => {
-	const native = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/api/openai-codex-responses.js")).href);
+	const native = await import(pathToFileURL(join(piAiRoot, "dist/api/openai-codex-responses.js")).href);
 	const codex = { ...model, api: "openai-codex-responses", baseUrl: "https://fixture.invalid", name: "Synthetic", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 10000, maxTokens: 100 };
 	const f = fixture(); f.registry.registerProvider({ ...f.base, stream: native.stream, streamSimple: native.streamSimple } as Provider);
 	const guard = createQuotaTransportGuard(); guard.ensure({ modelRegistry: f.registry, model: codex } as never);

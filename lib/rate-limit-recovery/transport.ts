@@ -240,6 +240,11 @@ function refreshLease(lease: Lease, api: string, owner: object, retarget: boolea
 	if (release(lease, owner, warn)) return "retry";
 	lease.owners.add(owner); return "skip";
 }
+// Pi before 1.2 reports a bad models.json entry as `Provider "id": ...`. Pi 1.2 rejects a bad file as a whole, with no
+// provider named, and loads no custom provider. Treat both as unsafe for the provider that is about to be prepared.
+const FILE_LEVEL_ERROR = /^(Failed to (load|parse) models\.json|Invalid models\.json schema)/m;
+const blocksProvider = (error: string | undefined, id: string) => !!error && (error.includes(`Provider "${id}":`) || FILE_LEVEL_ERROR.test(error));
+
 export function createQuotaTransportGuard(options: QuotaTransportOptions = {}): QuotaTransportGuard {
 	const owner = {}; const owned = new Map<string, Lease>(); const shared = sharedLeases();
 	const warn = reporter(options); const warned = new Set<string>();
@@ -256,7 +261,7 @@ export function createQuotaTransportGuard(options: QuotaTransportOptions = {}): 
 		ensure(ctx) {
 			const model = ctx.model; if (!model || !supported(model.api)) return;
 			const id = model.provider; const registry = ctx.modelRegistry;
-			if (registry.getError?.()?.includes(`Provider "${id}":`)) {
+			if (blocksProvider(registry.getError?.(), id)) {
 				once("invalid-provider-config", id);
 				throw new Error("Rate-limit recovery cannot safely prepare this provider. Fix models.json or its custom provider configuration, then reload.");
 			}

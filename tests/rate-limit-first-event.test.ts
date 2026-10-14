@@ -5,9 +5,9 @@ import { pathToFileURL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { ANTHROPIC_HOSTS, guardFirstEvent, stallMessage, subscriptionMessagesRequest, watchFirstEvent, type FirstEventPolicy } from "../lib/rate-limit-recovery/first-event.ts";
 import { createQuotaTransportGuard } from "../lib/rate-limit-recovery/transport.ts";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { piAiRoot } from "./support/pi-runtime.mjs";
 
-const { isRetryableAssistantError } = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/utils/retry.js")).href);
+const { isRetryableAssistantError } = await import(pathToFileURL(join(piAiRoot, "dist/utils/retry.js")).href);
 
 const TIMEOUT_MS = 60;
 const PING = "event: ping\ndata: {\"type\": \"ping\"}\n\n";

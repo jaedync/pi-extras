@@ -6,7 +6,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "transient-http-"));
 const previous = { HOME: process.env.HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, PI_OFFLINE: process.env.PI_OFFLINE };
@@ -23,7 +23,7 @@ globalThis.fetch = async (input, init) => {
 	return originalFetch(input, init);
 };
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href) as typeof import("@earendil-works/pi-coding-agent");
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href) as any;
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href) as any;
 const { default: recovery } = await import("../extensions/rate-limit-recovery.ts");
 const { createChildRateLimitGuard } = await import("../lib/rate-limit-recovery/child.ts");
 

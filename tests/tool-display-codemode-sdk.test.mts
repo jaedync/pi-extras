@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatTime } from "../lib/band/band.ts";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "codemode-sdk-"));
 process.env.HOME = scratch;
@@ -17,7 +17,7 @@ process.env.PI_TOOL_DISPLAY = "on";
 mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href) as any;
 const require = createRequire(join(agentRoot, "package.json"));
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href) as any;
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href) as any;
 const tui = await import(pathToFileURL(require.resolve("@earendil-works/pi-tui")).href) as any;
 const { Type } = await import(pathToFileURL(require.resolve("typebox")).href) as any;
 sdk.initTheme("dark");

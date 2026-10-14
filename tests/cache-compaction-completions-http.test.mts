@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 import cacheCompaction from "../extensions/cache-compaction.ts";
 import { estimateRequestContext, contextSafetyTokens } from "../lib/cache-compaction/estimate.ts";
 
@@ -19,7 +19,7 @@ globalThis.fetch = async (input, init) => {
 	return originalFetch(input, init);
 };
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href);
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 // The compat a strict local engine uses in Pi's models.json.
 const ENGINE_COMPAT = { supportsStore: false, supportsDeveloperRole: false, supportsUsageInStreaming: true, maxTokensField: "max_tokens", thinkingFormat: "openai" };
 const isSummary = (body: any) => JSON.stringify(body.messages.at(-1)).includes("COMPACTION CHECKPOINT REQUEST");
@@ -109,19 +109,20 @@ test("real HTTP openai-completions summary tool call falls back without running 
 
 // Example: a 258,048-token window with compaction.reserveTokens 24,576 triggers at 233,472 tokens.
 for (const room of ["enough", "too-small"]) test(`real HTTP openai-completions automatic compaction at a 258,048 window and 24,576 reserve (${room})`, { timeout: 15000 }, async (t) => {
-	let summaryEstimate = 0; let summaryMargin = 0;
+	let summaryEstimate = 0; let summaryOwn = 0; let summaryMargin = 0;
 	const { requests, baseUrl } = await serve(t, (body, index) => isSummary(body) ? { text: "## Goal\nSynthetic checkpoint.", prompt: 8, cached: 0 } : { text: "Done.", prompt: index === 0 ? 200000 : room === "enough" ? 234000 : 246500 });
 	const notices: string[] = [];
 	const { session, runtime } = await startSession(t, baseUrl, 258048, { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 24576 } }, notices);
-	const estimator = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/utils/estimate.js")).href);
+	const estimator = await import(pathToFileURL(join(piAiRoot, "dist/utils/estimate.js")).href);
 	const stream = runtime.stream.bind(runtime);
-	runtime.stream = (m: any, context: any, opts: any) => { if (JSON.stringify(context).includes("COMPACTION CHECKPOINT REQUEST")) { summaryEstimate = estimator.estimateContextTokens(ai.normalizeContext(context)).tokens; summaryMargin = contextSafetyTokens(estimateRequestContext(context.messages).tailTokens); } return stream(m, context, opts); };
+	runtime.stream = (m: any, context: any, opts: any) => { if (JSON.stringify(context).includes("COMPACTION CHECKPOINT REQUEST")) { summaryEstimate = estimator.estimateContextTokens(ai.normalizeContext(context)).tokens; summaryOwn = estimateRequestContext(context.messages).tokens; summaryMargin = contextSafetyTokens(estimateRequestContext(context.messages).tailTokens); } return stream(m, context, opts); };
 	await session.prompt("Earlier discarded task."); await session.prompt("Retained synthetic log: " + "abcd ".repeat(2400));
 	const entry = session.sessionManager.getEntries().filter((e: any) => e.type === "compaction").at(-1); assert.ok(entry); assert.ok(entry.tokensBefore > 258048 - 24576);
 	if (room === "enough") {
 		assert.equal(entry.details.cachePrefix, true); assert.ok(notices.includes("Compaction: prefix-sharing"));
 		const cap = requests.at(-1).max_tokens;
-		assert.equal(cap, Math.min(32768, 258048 - summaryEstimate - summaryMargin)); assert.ok(summaryEstimate + cap <= 258048);
+		// Pi 1.2 estimates at 3.5 chars per token, Pi's compaction estimate still at 4. The cap follows the second; the margin keeps it inside the window by the first.
+		assert.equal(cap, Math.min(32768, 258048 - summaryOwn - summaryMargin)); assert.ok(summaryEstimate + cap <= 258048);
 		assert.ok(cap >= 8000, "the first summary floor fits at this trigger");
 		assert.ok(cap < requests[1].max_tokens, "the captured cap would overrun the window");
 	} else {

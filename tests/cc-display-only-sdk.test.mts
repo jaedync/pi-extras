@@ -5,13 +5,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 const scratch=mkdtempSync(join(tmpdir(),"cc-context-"));
 process.env.HOME=scratch;
 process.env.PI_CODING_AGENT_DIR=join(scratch,"agent");
 process.env.PI_OFFLINE="1";
 const sdk=await import(pathToFileURL(join(agentRoot,"dist/bundle/index.js")).href);
-const ai=await import(pathToFileURL(join(agentRoot,"node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+const ai=await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 test("end-of-turn custom entry renders but never reaches the next request or restored context",async t=>{
  const calls:any[][]=[];
  const runtime=await sdk.ModelRuntime.create({credentials:new ai.InMemoryCredentialStore(),modelsPath:null,allowModelNetwork:false,refreshOnCreate:false});

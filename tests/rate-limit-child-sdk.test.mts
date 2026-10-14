@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "rate-limit-child-sdk-"));
 process.env.HOME = scratch;
@@ -16,7 +16,7 @@ mkdirSync(agentDir, { recursive: true });
 writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } }));
 writeFileSync(join(agentDir, "pi-extras.json"), JSON.stringify({ rateLimitRecovery: { autoWait: true } }));
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href) as typeof import("@earendil-works/pi-coding-agent");
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href) as any;
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href) as any;
 const { createLauncher } = await import("../lib/subagents/child.ts");
 const { Team } = await import("../lib/subagents/team.ts");
 const { childInstructions } = await import("../lib/subagents/format.ts");

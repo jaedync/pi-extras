@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { piAiRoot } from "./support/pi-runtime.mjs";
 import { fingerprint } from "../lib/cache-compaction/core.ts";
 import { foldProjection, foldSystem } from "../lib/cache-compaction/system-fold.ts";
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 const tool = (name: string, description = name) => ({ name, description, parameters: { type: "object", properties: {} } });
 const user = { role: "user", content: "Fixture user.", timestamp: 8 };
 

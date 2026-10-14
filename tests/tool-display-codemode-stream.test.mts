@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { codemodeRenderers } from "../lib/tool-display/codemode.ts";
 import { harness } from "./support/tool-rows.ts";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "codemode-stream-"));
 process.env.HOME = scratch;
@@ -19,7 +19,7 @@ test.after(() => rmSync(scratch, { recursive: true, force: true }));
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href) as any;
 const require = createRequire(join(agentRoot, "package.json"));
 const tui = await import(pathToFileURL(require.resolve("@earendil-works/pi-tui")).href) as any;
-const { parseStreamingJson } = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/utils/json-parse.js")).href) as any;
+const { parseStreamingJson } = await import(pathToFileURL(join(piAiRoot, "dist/utils/json-parse.js")).href) as any;
 sdk.initTheme("dark");
 const plain = (component: any, width = 100): string[] => component.render(width).map((line: string) => tui.stripTerminalSequences(line).trimEnd()).filter(Boolean);
 

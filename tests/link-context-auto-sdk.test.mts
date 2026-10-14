@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "link-auto-sdk-"));
 process.env.HOME = scratch;
@@ -25,7 +25,7 @@ globalThis.fetch = (async (input: string | URL | Request) => {
 }) as typeof fetch;
 
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href) as any;
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href) as any;
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href) as any;
 const { default: linkContext } = await import("../extensions/link-context.ts");
 const { createLauncher } = await import("../lib/subagents/child.ts");
 const { Team } = await import("../lib/subagents/team.ts");

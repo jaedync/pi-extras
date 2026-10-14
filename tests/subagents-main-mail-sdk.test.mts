@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "main-mail-sdk-"));
 // Set before importing the SDK. This test must never read real settings or credentials.
@@ -20,7 +20,7 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.PI_OFFLINE = "1";
 mkdirSync(agentDir, { recursive: true });
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href) as any;
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href) as any;
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href) as any;
 const { MainMail } = await import("../lib/subagents/deliver.ts");
 const { watchMain } = await import("../lib/subagents/main-watch.ts");
 

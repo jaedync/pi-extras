@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "cache-child-sdk-"));
 process.env.HOME = scratch;
@@ -15,7 +15,7 @@ mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => { throw new Error("Child fixture must not contact a provider"); };
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href);
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 const { createLauncher } = await import("../lib/subagents/child.ts");
 const textOf = (m: any) => typeof m.content === "string" ? m.content : (m.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n");
 

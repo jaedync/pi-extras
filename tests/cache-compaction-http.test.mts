@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { agentRoot } from "./support/pi-runtime.mjs";
+import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 import cacheCompaction from "../extensions/cache-compaction.ts";
 import { estimateRequestContext, contextSafetyTokens } from "../lib/cache-compaction/estimate.ts";
 
@@ -19,7 +19,7 @@ globalThis.fetch = async (input, init) => {
 	return originalFetch(input, init);
 };
 const sdk = await import(pathToFileURL(join(agentRoot, "dist/bundle/index.js")).href);
-const ai = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/index.js")).href);
+const ai = await import(pathToFileURL(join(piAiRoot, "dist/index.js")).href);
 const sse = (res: ServerResponse, type: string, data: object) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
 function success(res: ServerResponse, api: string, model: string, inputTokens = 8): void {
 	res.writeHead(200, { "content-type": "text/event-stream" });
@@ -109,7 +109,7 @@ for (const mode of ["anthropic-adaptive", "anthropic-managed", "anthropic-manage
 	assert.deepEqual(errors, []);
 });
 for (const api of ["anthropic-messages", "openai-responses"]) for (const room of ["enough", "too-small"]) test(`real HTTP ${api} automatic 200k threshold output clamp (${room})`, { timeout: 15000 }, async (t) => {
- const requests: any[] = []; const notices: string[] = []; let summaryEstimate = 0; let summaryMargin = 0;
+ const requests: any[] = []; const notices: string[] = []; let summaryEstimate = 0; let summaryOwn = 0; let summaryMargin = 0;
  const server = createServer((req, res) => {
   const chunks: Buffer[] = []; req.on("data", (chunk: Buffer) => chunks.push(chunk)); req.on("end", () => {
    const body = JSON.parse(Buffer.concat(chunks).toString()); requests.push(body);
@@ -129,14 +129,15 @@ for (const api of ["anthropic-messages", "openai-responses"]) for (const room of
  await loader.reload();
  const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model, thinkingLevel: "off", settingsManager, resourceLoader: loader, sessionManager: sdk.SessionManager.inMemory(scratch), noTools: "all" });
  t.after(() => session.dispose()); await session.bindExtensions({ mode: "tui", uiContext: { notify: (text: string) => notices.push(text) } });
- const estimator = await import(pathToFileURL(join(agentRoot, "node_modules/@earendil-works/pi-ai/dist/utils/estimate.js")).href);
- const stream = runtime.stream.bind(runtime); runtime.stream = (m: any, context: any, opts: any) => { if (JSON.stringify(context).includes("COMPACTION CHECKPOINT REQUEST")) { summaryEstimate = estimator.estimateContextTokens(ai.normalizeContext(context)).tokens; summaryMargin = contextSafetyTokens(estimateRequestContext(context.messages).tailTokens); } return stream(m, context, opts); };
+ const estimator = await import(pathToFileURL(join(piAiRoot, "dist/utils/estimate.js")).href);
+ const stream = runtime.stream.bind(runtime); runtime.stream = (m: any, context: any, opts: any) => { if (JSON.stringify(context).includes("COMPACTION CHECKPOINT REQUEST")) { summaryEstimate = estimator.estimateContextTokens(ai.normalizeContext(context)).tokens; summaryOwn = estimateRequestContext(context.messages).tokens; summaryMargin = contextSafetyTokens(estimateRequestContext(context.messages).tailTokens); } return stream(m, context, opts); };
  await session.prompt("Earlier discarded task."); await session.prompt("Retained salted log: " + "abcd ".repeat(2400));
  const entry = session.sessionManager.getEntries().filter((e: any) => e.type === "compaction").at(-1); assert.ok(entry); assert.ok(entry.tokensBefore > 200000 - 16384);
  if (room === "enough") {
   assert.equal(entry.details.cachePrefix, true); assert.ok(notices.includes("Compaction: prefix-sharing"));
   const cap = requests.at(-1)[api === "anthropic-messages" ? "max_tokens" : "max_output_tokens"];
-  assert.equal(cap, Math.min(32000, 200000 - summaryEstimate - summaryMargin)); assert.ok(summaryEstimate + cap <= 200000);
+  // Pi 1.2 estimates at 3.5 chars per token, Pi's compaction estimate still at 4. The cap follows the second; the margin keeps it inside the window by the first.
+  assert.equal(cap, Math.min(32000, 200000 - summaryOwn - summaryMargin)); assert.ok(summaryEstimate + cap <= 200000);
   assert.ok(cap < requests[1][api === "anthropic-messages" ? "max_tokens" : "max_output_tokens"], "stale captured cap would overrun the window");
  } else { assert.notEqual(entry.details?.cachePrefix, true); assert.ok(notices.includes("Compaction: default (context-window)")); assert.equal(summaryEstimate, 0, "no prefix request sent below summary floor"); }
 });
