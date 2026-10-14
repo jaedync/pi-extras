@@ -2,6 +2,29 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.24.21 - 2026-10-14
+
+### Added
+
+- Tool Display draws rows of its own for the artifact tools
+  (`artifact_publish`, `artifact_ask`, `artifact_check`, `artifact_feedback`
+  and `artifact_find`). The band says what the call does. The body gives the
+  page's address (the inbox link for a private page), its expiry and its
+  check in one line; problems fold into a hint, and ctrl+o shows each one.
+  The old tool names keep the generic band, and an older artifact extension
+  (a result with no details) gets a short text preview.
+- Artifact feedback messages (`artifact-feedback`) are bands: `⇠ answer` and
+  the page title, with the owner's fields in a gutter. Four lines show while
+  collapsed, and a click or ctrl+o shows all of them. A deleted or expired
+  page gets a `gone` band.
+
+### Fixed
+
+- A row that draws its result's images itself keeps Pi from drawing them
+  under it. The artifact rows use this: before, each check image took a large
+  block of the chat, or left blank space where the terminal cannot show
+  images.
+
 ## 0.24.20 - 2026-10-14
 
 ### Changed
