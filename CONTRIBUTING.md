@@ -6,6 +6,12 @@ Pi: when Pi releases, raise the `@earendil-works/pi-coding-agent` and
 the checks below and fix what breaks. Install development dependencies with
 `npm ci --ignore-scripts` and run `npm run typecheck`, `npm test`,
 `npm run test:install` and `npm run audit:package`. Tests must use synthetic inputs and isolated homes.
+Run `npm run test:pi -- 0.99.2` (or any release number, or `latest`) to
+typecheck and test against one Pi release. The script puts the locked Pi back
+when it ends. CI does the same for the peer minimum and for `latest` on every
+push and every day, so a new Pi release fails CI the same day. When the peer
+minimum changes, change it in `package.json`, in the README and in the
+`pi:` list of `.github/workflows/ci.yml`. A test checks that the three agree.
 Never add account credentials, real authenticated HTML, raw session recordings
 or personal machine configuration to fixtures.
 

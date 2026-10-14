@@ -1,5 +1,11 @@
 name: Test package
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  # A new Pi release must fail CI the day it ships, before the owner updates Pi.
+  schedule:
+    - cron: '17 11 * * *'
 permissions:
   contents: read
 jobs:
@@ -21,6 +27,25 @@ jobs:
       - run: npm test
       - run: npm run test:install
       - run: npm run audit:package
+  # The job above tests the Pi in package-lock. This one tests the oldest Pi that the README and the peer ranges
+  # promise, and the newest Pi that npm serves now. Keep the minimum equal to peerDependencies (a test checks it).
+  pi-versions:
+    name: Pi ${{ matrix.pi }}
+    strategy:
+      fail-fast: false
+      matrix:
+        pi: [0.99.2, latest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Typecheck and test with Pi ${{ matrix.pi }}
+        run: npm run test:pi -- ${{ matrix.pi }} --no-restore
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 5
