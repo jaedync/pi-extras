@@ -889,6 +889,15 @@ in model context but are hidden from the human view; unfamiliar envelopes fall
 back to a purple band over their raw text. Tool Display registers this renderer,
 so it works even when Subagents is disabled.
 
+**Artifact feedback.** An answer or a comment that the owner sends from the
+artifact inbox arrives as a band, as a finished shell job does: `⇠`, what came
+in (`answer`, `comment`) and the page's title, with the count of fields in the
+right rail. An answer's fields sit in a gutter under it, key and value side by
+side, four while collapsed; a comment shows where it is on the page and what it
+says. Click or ctrl+o shows all of it. A page that was deleted or expired gets
+a `gone` band. A message with no changes in its details shows its text under
+the band.
+
 **Other tools.** Every other tool's rows get the same band, with the time and
 any failure in the right rail. pi-extras's own tools have layouts of their own:
 
@@ -899,6 +908,20 @@ any failure in the right rail. pi-extras's own tools have layouts of their own:
   call says `failed` or `not allowed` in words.
 - **usage**: each window's use in the band itself, amber from 80% and red when
   a limit is spent.
+- **artifact_publish, artifact_ask, artifact_check, artifact_feedback,
+  artifact_find** (the artifact tools): the band says what the call does in a
+  word, `publish`, `ask`, `check`, `feedback`, `find artifacts` or
+  `read artifact`, and what it is about (`ask Garden plan, 4 questions,
+  private`). Under it sit the page's address (the inbox link for a private
+  page), when it expires and how its browser check went, one line each. An
+  `ask` row shows the form and its page. Problems fold into
+  `… 2 problems`; ctrl+o lists each one and where the check image is kept.
+  The rows never draw an image: a check image the model got is the line
+  `check image sent to the model`. Feedback rows count the answers and
+  comments, and a search lists one line for each hit. With an older artifact
+  extension, whose results have no details, a row shows the first lines of
+  the result's text. The old tool names (`artifact_new`, `artifact_answers`,
+  `artifact_comments`) get the usual band.
 - **codemode**: a JavaScript band with numbered `ƒ` tool-call cells, distinct
   from shell steps. While arguments stream, a bounded preview shows the newest
   four JavaScript source lines, or “Writing JavaScript…” until source arrives.
