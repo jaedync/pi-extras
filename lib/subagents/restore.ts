@@ -1,7 +1,7 @@
 /** Durable roster separate from Pi's transcript, which may not contain a spawn result yet. */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, openSync, fsyncSync, closeSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { isReserved, nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
 import { latestReportFile, reportFilePath } from "./reports.ts";
@@ -152,6 +152,24 @@ function trustedCheckout<T>(record: T): T {
 	return rest as T;
 }
 
+/**
+ * A child's transcript is always in its parent's index folder, but the index keeps the whole path, so a session
+ * moved to another folder or machine (the Mac's /Users/<name> is /home/<name> on Linux) keeps paths to where it
+ * was. The file name finds the transcript again. A path without a session file name is still refused, so an
+ * index can't point a child outside its folder.
+ */
+function placeSessions(dir: string, records: readonly AgentRecord[], warn: (message: string) => void): AgentRecord[] {
+	const placed = records.map((r) => {
+		if (!r.sessionFile || dirname(resolve(r.sessionFile)) === resolve(dir)) return r;
+		const name = basename(r.sessionFile);
+		if (!name.endsWith(".jsonl") || name === ".jsonl") throw new Error("Invalid child session path.");
+		return { ...r, sessionFile: join(dir, name) };
+	});
+	const moved = placed.filter((r, i) => r !== records[i]).length;
+	if (moved > 0) warn(`subagents: ${moved} saved child session path${moved === 1 ? "" : "s"} pointed to another folder, as after a move. ${moved === 1 ? "It now points" : "They now point"} into ${dir}.`);
+	return placed;
+}
+
 export class ChildIndex {
 	readonly file: string;
 	private data: IndexData;
@@ -181,12 +199,12 @@ export class ChildIndex {
 			|| new Set(data.records.map((r) => r.name)).size !== data.records.length) throw new Error("Invalid child index.");
 		const byName = new Map(data.records.map((r) => [r.name, r]));
 		if (data.records.some((r) => r.parent === "main" ? r.depth !== 1 : byName.get(r.parent)?.depth !== r.depth - 1)) throw new Error("Invalid child parent or depth.");
-		if (data.records.some((r) => r.sessionFile && dirname(resolve(r.sessionFile)) !== resolve(this.dir))) throw new Error("Invalid child session path.");
+		const records = placeSessions(this.dir, data.records, warn);
 		const saved: unknown = data.mail;
 		const mail = Array.isArray(saved) ? saved.filter(validMail) : [];
 		if (saved !== undefined && (!Array.isArray(saved) || mail.length !== saved.length)) warn(`subagents: ${this.file} holds mail for main that can't be read; it is left out.`);
-		this.data = { ...data, mail: mail.length > 0 ? mail : undefined };
-		return data.records.map((r) => ({ ...usableContext(r), usage: { ...r.usage } }));
+		this.data = { ...data, records, mail: mail.length > 0 ? mail : undefined };
+		return records.map((r) => ({ ...usableContext(r), usage: { ...r.usage } }));
 	}
 
 	update(records: readonly AgentRecord[], onError: (error: unknown) => void): void {
