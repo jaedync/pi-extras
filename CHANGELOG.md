@@ -2,6 +2,64 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.25.0 - 2026-10-14
+
+### Added
+
+- Prompt templates `/deeper`, `/higher` and `/wider [task]`. Before work
+  starts, the model plans a deeper version of the task (expert methods, raw
+  material and an outside check), the outcome behind the task, or the other
+  fields that can make it better. Then it shows a new prompt and waits for
+  your approval. They come from Felix Rieseberg's "How to be more
+  ambitious".
+- Pull Link reads pages that refuse plain HTTP clients with a local headless
+  browser. This occurs after HTTP 403, 429 or 503, a bot check (for example
+  Cloudflare "Just a moment..."), a timeout or a dropped connection. On 15
+  links that failed in real sessions, the tool now reads all 15.
+  - The tool uses an installed Google Chrome or Chromium, or the Chromium of
+    Playwright. It does not download a browser. When it finds none, the error
+    gives the command `npx playwright install chromium`.
+  - The result starts with "Read with a local browser" and gives the reason.
+  - Each read uses a new temporary profile, and the tool removes it after the
+    read. The browser does not load images. The tool stops the browser and
+    all its processes after 30 seconds or when you cancel.
+  - The browser sends each request through a proxy in the tool. The proxy
+    resolves the name and refuses private and local addresses, also after a
+    redirect.
+  - Turn it off with `linkContext.browser: false`, or give the path of a
+    browser.
+- Subagents: the `subagent` tool description tells the model that a task
+  that changes code needs `check`, and that read-only and research tasks
+  need none. Before this change, 4 of 223 subagent calls on one machine set
+  a check.
+- Subagents: when a run ends normally, changes files and has no check, its
+  report ends with `Not checked: this run changed files and had no check
+  command. Verify the work before you rely on it.` A change is an `edit` or
+  `write` call, or a `bash` command that the edit lock saw change files in a
+  git work tree. After the update, `/reload` interrupts running subagents one
+  time and then resumes them, because the subagents host version changed.
+
+### Changed
+
+- Pull Link: a 429 with a `Retry-After` of 10 seconds or less gets one retry.
+- Pull Link: a 404 or 410 error says "page not found".
+- pi-extras requires Pi 1.2.0 or newer, and it supports only the latest Pi.
+  Update Pi before you update pi-extras.
+- CI tests the latest Pi on each push and every day. A new Pi release now
+  fails CI on the day it ships. `npm run test:pi -- <version>` runs the same
+  test on your machine. Development uses Pi 1.2.0.
+
+### Fixed
+
+- Rate-limit recovery refuses to prepare a provider when Pi 1.2 rejects the
+  whole `models.json` file. Before, it let the request go on.
+- Pull Link: a dropped connection with one user agent no longer stops the
+  other user agents. eBay item pages failed for this reason.
+- Pull Link: when each `<article>` on a page is a teaser card, the reader
+  reads `<main>`. Notebookcheck spec pages gave a few hundred characters.
+- The test suite passes on Pi 1.2.0. Before, 47 tests failed on each Pi
+  except 1.0.0, because the tests expected the package layout of Pi 1.0.0.
+
 ## 0.24.24 - 2026-10-14
 
 ### Added
