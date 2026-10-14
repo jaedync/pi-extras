@@ -273,6 +273,24 @@ body larger than 8 MB. It reuses a result for at most 30 minutes and keeps at
 most 16 results in memory. Page text, posts and comments can contain malicious
 instructions.
 
+When a page refuses the plain request (HTTP 403, 429 or 503, a bot check, a
+timeout or a dropped connection), Pull Link reads it again with a local
+headless Chrome or Chromium that is already installed. It does not install a
+browser. Set `linkContext.browser` to `false` to turn this off.
+
+- The browser runs the page's scripts, as a normal visit does. The site and
+  its ad and analytics services see a visit from your address.
+- Each read uses a new temporary profile with no cookies or logins. The tool
+  removes the profile after the read.
+- The browser sends each request, also each redirect and each script, through
+  a proxy on `127.0.0.1` in the tool. The proxy resolves the name and refuses
+  private, loopback, link-local and reserved addresses. It connects to the
+  address that it checked. WebRTC can use only the proxy.
+- The tool stops the browser and all its processes after 30 seconds or when
+  the call is cancelled. It keeps at most 8 MB of the page.
+- Running as root, the browser starts with `--no-sandbox`, because Chrome
+  does not start as root with its sandbox.
+
 The first video link downloads the media tools into
 `~/.cache/pi-extras/link-context` (or under `XDG_CACHE_HOME`, or
 `PI_LINK_CONTEXT_HOME`) and runs them:

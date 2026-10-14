@@ -1182,6 +1182,31 @@ own requests in the same way, and it sends a GitHub token only to GitHub's
 API. It does not resolve DNS for its own requests, so a public name that
 points to a private address passes.
 
+Some sites refuse plain HTTP clients. When a page answers HTTP 403, 429 or
+503, shows a bot check (for example Cloudflare "Just a moment..."), does not
+answer in time or drops the connection, the tool reads the page again with a
+local headless Chrome or Chromium. The result then starts with "Read with a
+local browser" and gives the reason. A page that is not found (HTTP 404 or
+410) stays a failure, and the error says "page not found". A 429 with a
+`Retry-After` of 10 seconds or less gets one retry before the browser.
+
+- The tool uses a browser that is already installed: Google Chrome or
+  Chromium from the system, then the Chromium of Playwright, then the
+  Playwright headless shell. When it finds no browser, the error gives the
+  command that installs one: `npx playwright install chromium` (about
+  170 MB, no root). The tool does not download a browser by itself, because
+  a blocked page in an auto-pull must not start a large download.
+- Each read uses a new temporary profile, which the tool removes after the
+  read. The browser does not load images. It stops loading after 15 seconds,
+  and the tool stops the browser and all its processes after 30 seconds or
+  when you cancel. The page can be 8 MB at most. Two browsers run at the
+  same time at most.
+- The browser sends each request through a small proxy in the tool. The
+  proxy resolves the name and refuses private, loopback, link-local and
+  reserved addresses, also after a redirect.
+- To turn the browser off or to use a different browser, set
+  `linkContext.browser` (see [Settings](#settings)).
+
 The video tools (yt-dlp, its HTTP libraries and ffmpeg) send each HTTP request
 through a small proxy in the media helper. This includes redirects, manifests
 and fragments. The proxy resolves the name and refuses private, loopback,
@@ -1334,6 +1359,9 @@ Put these in the `linkContext` section of `pi-extras.json`:
   checks each request before it goes to this proxy, and the tool ignores
   `NO_PROXY` (see Pull Link).
 - `cookies`: the path to a Netscape `cookies.txt` file for yt-dlp.
+- `browser` (default `true`): read pages that refuse plain HTTP with a local
+  headless browser (see Pull Link). `false` turns it off. A path, for example
+  `/usr/bin/chromium`, uses that browser.
 - `asrModel`: a different speech-to-text model, for example
   `mlx-community/whisper-small-mlx` or `medium`.
 - `userAgents`: a different list of user agents for an adapter, for example

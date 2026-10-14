@@ -1,3 +1,4 @@
+import type { Renderer } from "./browser.ts";
 import type { Fetcher } from "./http.ts";
 import type { Range } from "./text.ts";
 
@@ -36,6 +37,8 @@ export interface LinkConfig {
 	readonly refreshDays: number;
 	/** Read the links in each typed message before the model starts. */
 	readonly autoPull: boolean;
+	/** Read pages that refuse plain HTTP with a local browser: on, off, or the path of a browser. */
+	readonly browser: boolean | string;
 }
 
 export interface AdapterContext {
@@ -44,6 +47,8 @@ export interface AdapterContext {
 	readonly config: LinkConfig;
 	readonly options: PullOptions;
 	readonly progress: (text: string) => void;
+	/** Replaces the local browser, for tests. */
+	readonly render?: Renderer;
 }
 
 export interface Pulled {

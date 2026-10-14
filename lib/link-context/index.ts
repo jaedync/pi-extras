@@ -23,6 +23,7 @@ const DESCRIPTION = [
 	"GitHub repos (README), issues, PRs, files, commits, releases and gists;",
 	"YouTube, TikTok, Instagram, Vimeo and other video links (metadata, description, chapters, thumbnail, timestamped transcript, top comments);",
 	"direct image links (returned as the image); and readable text from any other web page.",
+	"A page that refuses plain HTTP (403, 429, 503, a bot check) is read again with a local headless browser; the result says so.",
 	"Photos in posts and image links in posts and comments (imgur, i.redd.it, .jpg/.png) come back as images.",
 	"Video transcripts come from captions, or local speech-to-text when there are none. The first video call installs the media tools (20-60 seconds).",
 	"Frames are opt-in, so a video costs text only: read the transcript first, then call again with at: ['4:05', '12:31'] to see those exact moments",

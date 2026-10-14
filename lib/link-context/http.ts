@@ -5,11 +5,14 @@
  * to a login page, so each adapter names the chain it needs and the first
  * answer that passes `accept` wins.
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import { parseUrl } from "./url.ts";
 
 export const MAX_BODY_BYTES = 8_000_000;
 export const TIMEOUT_MS = 20_000;
 const MAX_REDIRECTS = 5;
+/** A 429 gets one retry only when the server asks for a wait this short; a longer wait is a block, not a pause. */
+const MAX_RETRY_AFTER_MS = 10_000;
 
 /** Identifies the tool honestly; services such as FxTwitter ask for a named client. */
 export const PLAIN_UA = "Mozilla/5.0 (compatible; pi-extras-link/1.0; +https://github.com/jaedync/pi-extras)";
@@ -24,6 +27,8 @@ export interface HttpResult {
 	readonly url: string;
 	readonly contentType: string;
 	readonly body: string;
+	/** The server's Retry-After, in milliseconds, when it gave one. */
+	readonly retryAfter?: number;
 }
 
 export interface GetOptions {
@@ -102,7 +107,16 @@ export async function request(url: string, init: { agent: string; headers?: Read
 async function once(url: string, agent: string, options: GetOptions, signal: AbortSignal): Promise<HttpResult> {
 	const { response, url: final } = await request(url, { agent, headers: options.headers, signal, fetcher: options.fetcher });
 	const body = (await readBytes(response, options.maxBytes ?? MAX_BODY_BYTES)).toString("utf8");
-	return { status: response.status, url: final, contentType: response.headers.get("content-type") ?? "", body };
+	const retryAfter = retryDelay(response.headers.get("retry-after"));
+	return { status: response.status, url: final, contentType: response.headers.get("content-type") ?? "", body, ...(retryAfter === undefined ? {} : { retryAfter }) };
+}
+
+/** Retry-After as milliseconds from now: delay seconds or an HTTP date. */
+export function retryDelay(header: string | null, now = Date.now()): number | undefined {
+	if (!header?.trim()) return undefined;
+	if (/^\d+$/.test(header.trim())) return Number(header.trim()) * 1000;
+	const at = Date.parse(header);
+	return Number.isNaN(at) ? undefined : Math.max(0, at - now);
 }
 
 const okay = (result: HttpResult) => result.status >= 200 && result.status < 300;
@@ -112,18 +126,39 @@ export function deadline(signal: AbortSignal | undefined, ms = TIMEOUT_MS): Abor
 	return signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
 }
 
-/** GET with each user agent in turn; the last failure is thrown when none is accepted. */
+const STATUS_NOTES: Readonly<Record<number, string>> = { 404: " (page not found)", 410: " (page not found)", 429: " (rate limited; try again later)" };
+
+/**
+ * GET with each user agent in turn; the last failure is thrown when none is
+ * accepted. A connection that one agent drops can still answer the next, so
+ * only the caller's abort or the time limit ends the chain early.
+ */
 export async function get(url: string, options: GetOptions = {}): Promise<HttpResult> {
 	const agents = options.agents?.length ? options.agents : [PLAIN_UA];
 	const accept = options.accept ?? okay;
 	const signal = deadline(options.signal);
 	let last: HttpResult | undefined;
+	let failure: unknown;
+	let retried = false;
 	for (const agent of agents) {
-		last = await once(url, agent, options, signal);
+		try {
+			last = await once(url, agent, options, signal);
+		} catch (error) {
+			if (signal.aborted || error instanceof HttpError) throw error;
+			failure = error;
+			continue;
+		}
 		if (accept(last)) return last;
+		if (!retried && last.status === 429 && last.retryAfter !== undefined && last.retryAfter <= MAX_RETRY_AFTER_MS) {
+			retried = true;
+			await sleep(last.retryAfter, undefined, { signal });
+			last = await once(url, agent, options, signal);
+			if (accept(last)) return last;
+		}
 	}
-	const status = last?.status ?? 0;
-	throw new HttpError(`${new URL(url).hostname} answered HTTP ${status}${status === 429 ? " (rate limited; try again later)" : ""}`, status);
+	if (!last) throw failure;
+	const status = last.status;
+	throw new HttpError(`${new URL(url).hostname} answered HTTP ${status}${STATUS_NOTES[status] ?? ""}`, status);
 }
 
 export async function getJson<T = unknown>(url: string, options: GetOptions = {}): Promise<T> {

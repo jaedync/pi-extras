@@ -27,6 +27,7 @@ export function parseConfig(section: Record<string, unknown>): LinkConfig {
 		asrModel: text(section.asrModel),
 		refreshDays: typeof refresh === "number" && refresh >= 0 && refresh <= 365 ? refresh : DEFAULT_REFRESH_DAYS,
 		autoPull: typeof section.autoPull === "boolean" ? section.autoPull : true,
+		browser: section.browser === false ? false : text(section.browser) ?? true,
 	};
 }
 
