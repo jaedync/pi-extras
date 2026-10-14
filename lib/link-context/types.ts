@@ -34,6 +34,8 @@ export interface LinkConfig {
 	readonly asrModel?: string;
 	/** Days between yt-dlp and PO-token provider upgrades. */
 	readonly refreshDays: number;
+	/** Read the links in each typed message before the model starts. */
+	readonly autoPull: boolean;
 }
 
 export interface AdapterContext {

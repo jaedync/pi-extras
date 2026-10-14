@@ -26,6 +26,7 @@ export function parseConfig(section: Record<string, unknown>): LinkConfig {
 		cookies: text(section.cookies),
 		asrModel: text(section.asrModel),
 		refreshDays: typeof refresh === "number" && refresh >= 0 && refresh <= 365 ? refresh : DEFAULT_REFRESH_DAYS,
+		autoPull: typeof section.autoPull === "boolean" ? section.autoPull : true,
 	};
 }
 
