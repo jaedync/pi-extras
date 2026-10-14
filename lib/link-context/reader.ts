@@ -16,6 +16,8 @@ export const DEFAULT_COMMENTS = 20;
 export const MAX_AT = 12;
 /** A video read with captions only differs from a default call's result when it has no captions, so it is kept under its own key. */
 const CAPTIONS_ONLY = "#captions-only";
+/** Shared reads a call waits for before it reads the link itself. */
+const SHARED_ROUNDS = 2;
 
 export interface Params {
 	url: string;
@@ -133,10 +135,12 @@ export function createReader(options: ReaderOptions = {}): LinkReader {
 	return {
 		async read(params, signal, progress) {
 			const key = cacheKey(params);
-			const kept = recall(key);
-			if (kept) return { pulled: kept, cached: true };
-			const pending = entries.get(key)?.pending;
-			if (pending) {
+			// After a failed or captions-only shared read, another waiter may have started the full read already.
+			for (let round = 0; round < SHARED_ROUNDS; round++) {
+				const kept = recall(key);
+				if (kept) return { pulled: kept, cached: true };
+				const pending = entries.get(key)?.pending;
+				if (!pending) break;
 				progress("waiting for the read of this link that is already running");
 				// A failed or captions-only shared read does not answer this call; it reads the link itself.
 				const shared = await waitFor(pending, signal).catch(() => {

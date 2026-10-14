@@ -8,7 +8,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { isChildSession } from "../child-session.ts";
-import { AUTO_TYPE, autoMessage, autoRow, findLinks, MAX_LINKS, type AutoMessage, type LinkResult } from "./auto-message.ts";
+import { AUTO_TYPE, autoMessage, autoRow, findLinks, MAX_LINKS, MAX_NAMED_SKIPPED, type AutoMessage, type LinkResult } from "./auto-message.ts";
 import { loadConfig } from "./config.ts";
 import type { LinkReader } from "./reader.ts";
 import type { LinkConfig } from "./types.ts";
@@ -50,24 +50,44 @@ export function registerAutoPull(pi: ExtensionAPI, options: AutoPullOptions): vo
 		const late = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), waitMs); });
 		const settled = await Promise.all(reads.map((read) => Promise.race([read, late]))).finally(() => clearTimeout(timer));
 		const results = settled.map((result, index): LinkResult => result ?? { url: urls[index], state: "reading" });
-		return autoMessage([...results, ...urls.slice(MAX_LINKS).map((url): LinkResult => ({ url, state: "skipped" }))]);
+		// A pasted list can hold hundreds of links: a few are named, the rest only counted.
+		const named = urls.slice(MAX_LINKS, MAX_LINKS + MAX_NAMED_SKIPPED).map((url): LinkResult => ({ url, state: "skipped" }));
+		return autoMessage([...results, ...named], Math.max(0, urls.length - MAX_LINKS - MAX_NAMED_SKIPPED));
+	};
+
+	/**
+	 * A queued message gets no before_agent_start. Queued as a steer or follow-up too, the result would
+	 * cost a turn of its own (Pi delivers queued messages one at a time by default). With triggerTurn
+	 * false Pi adds it at the end of the current turn, which is before the user's message when the reads
+	 * are done by then, and never starts a turn for it.
+	 */
+	const deliverLater = (message: Promise<AutoMessage>) => {
+		const own = session.signal;
+		message.then((built) => {
+			// After shutdown the reads failed only because the session ended, and its API throws.
+			if (own.aborted) return;
+			try {
+				pi.sendMessage(built, { triggerTurn: false });
+			} catch {
+				// The session went away between the check and the send; there is nothing to deliver to.
+			}
+		}).catch(() => undefined);
 	};
 
 	pi.on("input", (event, ctx) => {
-		next = undefined;
+		// A queued message never starts a run, so it must not take or drop the links of the prompt about to start one.
+		if (!event.streamingBehavior) next = undefined;
 		if (event.source === "extension" || isChildSession(ctx.sessionManager) || !enabled()) return;
 		const urls = findLinks(event.text);
 		if (!urls.length) return;
 		const message = collect(urls);
-		if (!event.streamingBehavior) {
-			next = message;
+		if (event.streamingBehavior) {
+			deliverLater(message);
 			return;
 		}
-		// A queued message gets no before_agent_start. Queued as a steer or follow-up too, the result would
-		// cost a turn of its own (Pi delivers queued messages one at a time by default). With triggerTurn
-		// false Pi adds it at the end of the current turn, which is before the user's message when the reads
-		// are done by then, and never starts a turn for it.
-		void message.then((built) => pi.sendMessage(built, { triggerTurn: false }), (error: unknown) => ctx.ui.notify(`Auto-pull failed: ${reason(error)}`, "warning"));
+		// A prompt that fails before its run (no model, no login) never awaits this.
+		message.catch(() => undefined);
+		next = message;
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {

@@ -1224,8 +1224,9 @@ model does not need them, and a wait before the model starts.
   as `.`, `,`, quotes and a `)` that has no `(` in the link. It reads each
   link one time. It does not read local and private addresses or links with
   credentials.
-- It reads up to 5 links for each message. The message names the other links,
-  and the model can read them with `pull_link`.
+- It reads up to 5 links for each message. The message names the next 5
+  links and gives the number of the others. The model can read them with
+  `pull_link`.
 - Each result is the first 12,000 characters of what `pull_link` gives for
   the link. A note tells the model the `offset` for the rest.
 - One message has up to 4 images in total (photos and thumbnails), in link
@@ -1240,6 +1241,11 @@ model does not need them, and a wait before the model starts.
   that link waits for this read and uses its result.
 - The results go into the `pull_link` cache. A link that was read in the last
   30 minutes is not read again.
+- Each public link in a message gets a request, so a link that works only
+  one time (a password reset, an unsubscribe or a sign-in link) is used up.
+  Use `/autopull off` before you send such a link.
+- The first video link installs the media tools (see
+  [Video tools](#video-tools)), also when auto-pull reads it.
 - A link that cannot be read is named with the reason. It does not stop the
   other links or your message.
 - A message that you send while the agent works (a steer or a follow-up) gets

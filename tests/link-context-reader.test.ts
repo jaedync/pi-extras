@@ -122,3 +122,24 @@ test("the tool goes through the shared reader", async () => {
 	assert.equal(calls.length, 1);
 	assert.equal(cacheKey({ url: "u" }), cacheKey({ url: "u", offset: 12_000 }));
 });
+
+test("two pull_link calls waiting on a captions-only read start one full read between them", async () => {
+	const done = gate<void>();
+	let full = 0;
+	const video: PullDeps["video"] = async (url, site, ctx) => {
+		if (ctx.options.speech === false) { await done.promise; return { platform: site, title: "V", url, markdown: "none", speechSkipped: true }; }
+		full++;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		return { platform: site, title: "V", url, markdown: "spoken" };
+	};
+	const reader = createReader({ config: () => parseConfig({}), deps: { video, images: noImages } });
+	const url = "https://vimeo.com/43";
+	const auto = reader.readPlain(url, new AbortController().signal);
+	const first = reader.read({ url }, undefined, () => {});
+	const second = reader.read({ url }, undefined, () => {});
+	done.open();
+	await auto;
+	const [a, b] = await Promise.all([first, second]);
+	assert.equal(full, 1, "speech-to-text runs once");
+	assert.equal(a.pulled, b.pulled);
+});

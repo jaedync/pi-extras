@@ -113,7 +113,7 @@ test("the row names the links, marks failures and late links, and carries no ter
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
-function harness(options: { config?: Record<string, unknown>; waitMs?: number; fetcher?: typeof fetch } = {}) {
+function harness(options: { config?: Record<string, unknown>; waitMs?: number; fetcher?: typeof fetch; sendMessage?: (message: never, options: unknown) => void } = {}) {
 	const handlers = new Map<string, Handler[]>();
 	const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
 	const renderers = new Map<string, (message: unknown, options: unknown, theme: unknown) => { render: (width: number) => string[] } | undefined>();
@@ -123,7 +123,7 @@ function harness(options: { config?: Record<string, unknown>; waitMs?: number; f
 		on: (name: string, handler: Handler) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
 		registerCommand: (name: string, command: never) => commands.set(name, command),
 		registerMessageRenderer: (type: string, renderer: never) => renderers.set(type, renderer),
-		sendMessage: (message: never, sendOptions: unknown) => sent.push({ message, options: sendOptions }),
+		sendMessage: (message: never, sendOptions: unknown) => (options.sendMessage ? options.sendMessage(message, sendOptions) : sent.push({ message, options: sendOptions })),
 	};
 	const page = (url: string) => new Response(`<title>${url}</title><article><p>Text of ${url}</p></article>`, { headers: { "content-type": "text/html" } });
 	const fetched: string[] = [];
@@ -251,4 +251,52 @@ test("the renderer draws the row", () => {
 	const message = autoMessage([{ url: "https://e.test/a", state: "read", pulled: pulled("https://e.test/a") }]);
 	const component = h.renderers.get(AUTO_TYPE)?.(message, { expanded: false }, plain);
 	assert.deepEqual(component?.render(80).map((line) => line.trimEnd()).filter(Boolean), ["Pulled 1 link: e.test/a"]);
+});
+
+test("a steer's result is dropped after session shutdown, and a throwing sendMessage leaves no unhandled rejection", async () => {
+	const rejections: unknown[] = [];
+	const spy = (reason: unknown) => rejections.push(reason);
+	process.on("unhandledRejection", spy);
+	try {
+		const hang = (async (_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)))) as typeof fetch;
+		let calls = 0;
+		const h = harness({ waitMs: 1_000, fetcher: hang, sendMessage: () => { calls++; throw new Error("This extension ctx is stale"); } });
+		await h.emit("input", input("see https://e.test/late", "interactive", "steer"));
+		await h.emit("session_shutdown", { reason: "reload" });
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.equal(calls, 0, "nothing is sent into a session that ended");
+		const fast = harness({ sendMessage: () => { calls++; throw new Error("This extension ctx is stale"); } });
+		await fast.emit("input", input("see https://e.test/now", "interactive", "followUp"));
+		for (let i = 0; i < 50 && calls === 0; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(calls, 1);
+		assert.deepEqual(rejections, []);
+	} finally {
+		process.off("unhandledRejection", spy);
+	}
+});
+
+test("a message with 100 links reads 5, names 5 more and counts the rest; very long links are left out", async () => {
+	const h = harness();
+	const urls = Array.from({ length: 100 }, (_, i) => `https://e.test/p${i}`);
+	await h.emit("input", input(`${urls.join(" ")} https://e.test/${"x".repeat(5000)}`));
+	const result = await h.emit("before_agent_start", start("x")) as { message: { content: { type: string; text?: string }[]; details: AutoDetails } };
+	const text = messageText(result);
+	assert.equal(h.fetched.length, 5);
+	assert.equal(text.match(/: not read, because only the first 5 links are read/g)?.length, 5);
+	assert.match(text, /- And 90 more links, not read\. Call pull_link for the ones that matter\./);
+	assert.doesNotMatch(text, /xxxxx/);
+	assert.match(text, /^Pull Link read 5 of 100 links/);
+	assert.equal(result.message.details.links.length, 10);
+	assert.equal(result.message.details.more, 90);
+	assert.match(autoRow(result.message.details, plain, false), / · \+90 more$/);
+	assert.ok(text.length < 5_000);
+});
+
+test("a steer typed while the run is about to start keeps the first message's links", async () => {
+	const h = harness();
+	await h.emit("input", input("read https://e.test/first"));
+	await h.emit("input", input("no links here", "interactive", "steer"));
+	await h.emit("input", input("from an extension", "extension", "followUp"));
+	assert.match(messageText(await h.emit("before_agent_start", start("read https://e.test/first"))), /Text of https:\/\/e\.test\/first/);
 });
