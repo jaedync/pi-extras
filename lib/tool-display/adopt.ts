@@ -21,6 +21,8 @@ import { noteLate } from "../late-rows.ts";
 export interface RowRenderers {
 	readonly renderCall: (...args: never[]) => unknown;
 	readonly renderResult: (...args: never[]) => unknown;
+	/** Pi draws a result's images under the row itself; these rows say what the images were instead. */
+	readonly hidesImages?: boolean;
 }
 
 export interface AdoptHost {
@@ -32,6 +34,7 @@ type Lookup = (this: Internals) => unknown;
 
 interface Internals {
 	readonly toolDefinition?: object;
+	showImages?: boolean;
 }
 
 interface Slot {
@@ -60,7 +63,7 @@ interface RowInternals {
 
 // Kept on the prototype, so a reloaded copy of this module takes over the one patch instead of stacking another.
 // Versioned, so an update that changes the patch lays its own over an older one (left passing straight through).
-const SLOT = Symbol.for("pi-extras.tool-adopt.v2");
+const SLOT = Symbol.for("pi-extras.tool-adopt.v3");
 const LOOKUPS = ["getRenderShell", "getCallRenderer", "getResultRenderer"] as const;
 
 function choose(slot: Slot, row: Internals): RowRenderers | undefined {
@@ -106,7 +109,10 @@ function slotOf(target: object): Slot | undefined {
 	};
 	proto[SLOT] = created;
 	proto.getRenderShell = function () {
-		return choose(created, this) ? "self" : created.getRenderShell.call(this);
+		const chosen = choose(created, this);
+		// Pi asks for the shell before it adds a result's images, and adds them only while showImages holds.
+		if (chosen?.hidesImages) this.showImages = false;
+		return chosen ? "self" : created.getRenderShell.call(this);
 	};
 	proto.getCallRenderer = function () {
 		return choose(created, this)?.renderCall ?? created.getCallRenderer.call(this);

@@ -134,3 +134,26 @@ test("a rebuild takes the host's choice and the container it needs, and leaves a
 		undo();
 	}
 });
+
+test("a row whose renderers hide images keeps Pi from drawing the result's images under it", () => {
+	const h = harness();
+	const tool = { name: "artifact_publish" };
+	const plain = { name: "x_tool" };
+	const undo = installAdoption({
+		renderersFor: (definition) => (definition === tool ? { ...(foreignRenderers(h.kit, tool as never) as never as RowRenderers), hidesImages: true }
+			: definition === plain ? (foreignRenderers(h.kit, plain as never) as never) : undefined),
+	});
+	try {
+		const ui = { requestRender() {} };
+		const image = { content: [{ type: "text", text: "Published" }, { type: "image", data: "AA==", mimeType: "image/jpeg" }], isError: false };
+		const hidden = new ToolExecutionComponent("artifact_publish", "call-1", {}, {}, tool as never, ui as never, "/work");
+		hidden.updateResult(image as never, false);
+		assert.equal((hidden as unknown as { showImages: boolean }).showImages, false);
+		assert.deepEqual((hidden as unknown as { imageComponents: unknown[] }).imageComponents, []);
+		const shown = new ToolExecutionComponent("x_tool", "call-2", {}, {}, plain as never, ui as never, "/work");
+		shown.updateResult(image as never, false);
+		assert.equal((shown as unknown as { showImages: boolean }).showImages, true, "other rows keep Pi's setting");
+	} finally {
+		undo();
+	}
+});
