@@ -146,6 +146,8 @@ the package. Removing it does not remove your credentials or change other packag
 - `PI_COPY_BLOCKS=off`: leave code blocks and quotes in replies as Pi draws them.
 - `statusPlus.toolCount` in `pi-extras.json`: `steps` (the default) or `calls`,
   switched by clicking the footer's tool count or with `/tool-display count`.
+- `statusPlus.copyLinks` in `pi-extras.json`: `false` stops the link copy in a
+  remote session (default `true`). See [Status Plus](#status-plus).
 - `releaseNotes.seen` in `pi-extras.json`: the last pi-extras version whose
   notes were shown.
 - `KAGI_TOKEN_FILE`: path to your own subscription session credential. See below.
@@ -209,6 +211,25 @@ pi.events.on("status-plus:click", (data) => {
 	if ((data as { key?: unknown } | undefined)?.key === "my-extension") showDetails();
 });
 ```
+
+**Links in a remote session.** In fullscreen mode, Pi catches the mouse. When
+you click a link, Pi opens it with `xdg-open` (Linux) or `open` (macOS) on the
+machine that runs Pi. Over SSH, that is the remote machine. On a remote machine
+without a desktop, the click does nothing and shows no error. Thus, in a remote
+session, Status Plus copies the link and shows `Copied link: <url>`.
+
+- A session is remote when `SSH_CONNECTION`, `SSH_CLIENT` or `MOSH_CONNECTION`
+  is set, or when `PI_CLIPBOARD_OSC52=1`. This is the same test that Pi uses
+  for its clipboard.
+- The copy uses Pi's clipboard function. In a remote session it sends the text
+  through the terminal (OSC 52) to the clipboard of the computer in front of
+  you. Your terminal must accept OSC 52. On the maintainer's Mac the link gets
+  to the clipboard. On the maintainer's Windows PC it does not get there
+  today. When the link is not in your clipboard, select it in the notice.
+- When the copy fails, a warning shows the link, so that you can select it.
+- A local session opens links as Pi does.
+- To turn this off, set `statusPlus.copyLinks` to `false` in `pi-extras.json`,
+  then use `/reload`.
 
 ## Tab Status
 

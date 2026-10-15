@@ -11,7 +11,7 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, copyToClipboard, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { compactionPoint, contextShare, type CompactionLimits } from "../lib/compaction-point.ts";
 import { fileIdentity } from "../lib/file-identity.ts";
 import { isOffline } from "../lib/offline.ts";
@@ -19,6 +19,7 @@ import { errorText, operationalError, operationalLine } from "../lib/operational
 import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
 import { footerLayout, STATUS_CLICK_EVENT, statusKeyAt, type FooterModel, type FooterRow, type Span, type StatusRow } from "../lib/status-plus-footer.ts";
+import { isRemoteSession, keepLinkCopy, linkCopier, readCopyLinks, type LinkCopier } from "../lib/status-plus-links.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
 import { disagreementText, disagreements, markUnsampled, mergePolled, windowName } from "../lib/limit-merge.ts";
 import { isVirtualModel, routedModel } from "../lib/routed-model.ts";
@@ -138,6 +139,10 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	let toolCount: ToolCount = "steps";
 	let toolsSpan: Span | undefined;
 	let statusRows: StatusRow[] = [];
+	/** Over SSH, the handler that copies a clicked link (lib/status-plus-links.ts); undefined in a local session. */
+	let linkCopy: LinkCopier | undefined;
+	/** Set after the renderer refused the handler, so the log gets one line, not one per frame. */
+	let linkCopyFailed = false;
 
 	function leafOf(ctx: ExtensionContext): string | undefined {
 		return typeof ctx.sessionManager.getLeafId === "function" ? ctx.sessionManager.getLeafId() ?? undefined : undefined;
@@ -408,16 +413,36 @@ export default function statusPlus(pi: ExtensionAPI): void {
 				tui.requestRender();
 			});
 			return {
-				render: (width: number) => renderFooter(ctx, footerData as FooterData, width, theme),
+				render: (width: number) => {
+					keepLinks(tui, linkCopy);
+					return renderFooter(ctx, footerData as FooterData, width, theme);
+				},
 				handleMouse: (event: TuiMouseEvent) => toggleToolCount(event) ?? clickStatus(event),
 				invalidate() {},
 				dispose() {
 					unsubscribe();
 					requestFooterRender = undefined;
+					// Without the footer nothing keeps the copier current, so Pi's handler goes back.
+					keepLinks(tui, undefined);
 				},
 			};
 		});
 		return true;
+	}
+
+	/**
+	 * Give the renderer in use the link copier, or give back Pi's handler. Each
+	 * frame checks, because a switch of the TUI mode builds a new renderer and
+	 * the footer factory does not run again. A throw here would end Pi.
+	 */
+	function keepLinks(tui: object, copier: LinkCopier | undefined): void {
+		if (linkCopyFailed) return;
+		try {
+			keepLinkCopy(tui, copier);
+		} catch (error) {
+			linkCopyFailed = true;
+			operationalError(LOG_FILE, "status-plus", `link copy unavailable: ${errorText(error)}`);
+		}
 	}
 
 	/**
@@ -668,6 +693,11 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		latestCtx = ctx;
 		liveChains.clear();
 		toolCount = readToolCount();
+		linkCopy = isRemoteSession(process.env) && readCopyLinks() ? linkCopier({
+			copy: copyToClipboard,
+			notify: (message, type) => ctx.ui.notify(message, type),
+			report: (error) => operationalError(LOG_FILE, "status-plus", `link notice failed: ${errorText(error)}`),
+		}) : undefined;
 		providerLimits.setRefresher(async (provider, force) => {
 			if (latestCtx) await refreshProviderLimits(provider, latestCtx, force);
 		});

@@ -81,3 +81,51 @@ test("a left click on a status line announces its key; other clicks and other ro
 		await footer.stop();
 	}
 });
+
+test("over SSH a click on a link copies it; a local session keeps Pi's handler", async () => {
+	const local = app();
+	const open = local.screen.openUrl;
+	remote(false);
+	await local.start();
+	try {
+		local.lines();
+		assert.equal(local.screen.openUrl, open);
+	} finally {
+		await local.stop();
+	}
+	const ssh = app();
+	const piOpen = ssh.screen.openUrl;
+	remote(true);
+	await ssh.start();
+	try {
+		ssh.lines();
+		assert.notEqual(ssh.screen.openUrl, piOpen);
+		assert.equal(typeof ssh.screen.openUrl, "function");
+		const copier = ssh.screen.openUrl;
+		ssh.lines();
+		assert.equal(ssh.screen.openUrl, copier, "a later frame keeps the same handler");
+		// A footer that goes away gives Pi's handler back: nothing would keep the copier current.
+		ssh.dispose();
+		ssh.screen.openUrl("https://example.test/");
+		assert.deepEqual(ssh.screen.opened, ["https://example.test/"]);
+	} finally {
+		await ssh.stop();
+		remote(false);
+	}
+});
+
+test("statusPlus.copyLinks: false keeps Pi's handler over SSH", async () => {
+	writeFileSync(join(agentDir, "pi-extras.json"), JSON.stringify({ statusPlus: { copyLinks: false } }));
+	const footer = app();
+	const open = footer.screen.openUrl;
+	remote(true);
+	await footer.start();
+	try {
+		footer.lines();
+		assert.equal(footer.screen.openUrl, open);
+	} finally {
+		await footer.stop();
+		remote(false);
+		rmSync(join(agentDir, "pi-extras.json"), { force: true });
+	}
+});
