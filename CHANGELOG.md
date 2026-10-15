@@ -2,6 +2,26 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.25.1 - 2026-10-15
+
+### Added
+
+- Status Plus: in fullscreen mode, a left click on the footer line of an
+  extension status sends `status-plus:click` with `{ key }` on Pi's event bus.
+  `key` is the key of that status. Other extensions can use it to do something
+  when you click their line. The artifact extension is the first user. See
+  "Status Plus" in the README for the contract.
+- Status Plus: in a remote session (SSH or mosh), a click on a link in
+  fullscreen mode copies the link and shows `Copied link: <url>`. Before, Pi
+  tried to open the link on the remote machine. On a machine without a
+  desktop, nothing occurred and no error showed.
+  - The copy goes through the terminal (OSC 52). On the maintainer's Mac the
+    link gets to the clipboard. On the maintainer's Windows PC it does not get
+    there today. Then select the link in the notice.
+  - When the copy fails, a warning shows the link.
+  - A local session opens links as before.
+  - Set `statusPlus.copyLinks` to `false` in `pi-extras.json` to turn it off.
+
 ## 0.25.0 - 2026-10-14
 
 ### Added
