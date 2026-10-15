@@ -18,7 +18,7 @@ import { isOffline } from "../lib/offline.ts";
 import { errorText, operationalError, operationalLine } from "../lib/operational-log.ts";
 import { truncateToWidth, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { CHAIN_EVENT } from "../lib/chain/run.ts";
-import { footerLayout, type FooterModel, type FooterRow, type Span } from "../lib/status-plus-footer.ts";
+import { footerLayout, STATUS_CLICK_EVENT, statusKeyAt, type FooterModel, type FooterRow, type Span, type StatusRow } from "../lib/status-plus-footer.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../lib/tool-count.ts";
 import { disagreementText, disagreements, markUnsampled, mergePolled, windowName } from "../lib/limit-merge.ts";
 import { isVirtualModel, routedModel } from "../lib/routed-model.ts";
@@ -137,6 +137,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	const liveChains = new Map<string, number>();
 	let toolCount: ToolCount = "steps";
 	let toolsSpan: Span | undefined;
+	let statusRows: StatusRow[] = [];
 
 	function leafOf(ctx: ExtensionContext): string | undefined {
 		return typeof ctx.sessionManager.getLeafId === "function" ? ctx.sessionManager.getLeafId() ?? undefined : undefined;
@@ -368,6 +369,15 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		return { handled: true };
 	}
 
+	/** A click on another extension's status line tells that extension (STATUS_CLICK_EVENT); it decides what the click does. */
+	function clickStatus(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type !== "click" || event.button !== "left") return undefined;
+		const key = statusKeyAt(statusRows, event.y);
+		if (key === undefined) return undefined;
+		pi.events?.emit(STATUS_CLICK_EVENT, { key });
+		return { handled: true };
+	}
+
 	function setToolCount(next: ToolCount, save: boolean): void {
 		toolCount = next;
 		if (save) {
@@ -399,7 +409,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			});
 			return {
 				render: (width: number) => renderFooter(ctx, footerData as FooterData, width, theme),
-				handleMouse: toggleToolCount,
+				handleMouse: (event: TuiMouseEvent) => toggleToolCount(event) ?? clickStatus(event),
 				invalidate() {},
 				dispose() {
 					unsubscribe();
@@ -418,9 +428,11 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		try {
 			const layout = footerLayout(footerModel(ctx, footerData), width, theme);
 			toolsSpan = layout.tools;
+			statusRows = layout.statusRows;
 			return layout.lines;
 		} catch (error) {
 			toolsSpan = undefined;
+			statusRows = [];
 			operationalError(LOG_FILE, "status-plus", `footer render failed: ${errorText(error)}`);
 			return [truncateToWidth(FOOTER_FAILED, width, "")];
 		}

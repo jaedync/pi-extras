@@ -46,18 +46,6 @@ can still conflict.
 | Quiet | Low-contrast theme with restrained accent colors |
 | Prompts | `/deeper`, `/higher` and `/wider [task]`: before work starts, the model plans a deeper version of the task (expert methods, raw material, an outside check), the outcome behind the task, or the other fields that can improve it. Then it shows a new prompt and waits for your approval. From Felix Rieseberg's [How to be more ambitious](https://felixrieseberg.com/how-to-be-more-ambitious-a-tutorial-for-humans-with-models/) |
 
-The Status Plus context figure (`33k / 100k` and its bar) shows the context
-size against the point where Pi compacts the session. That point is the
-window less `compaction.reserveTokens`, or less the reserve in
-`compaction.modelOverrides` for the selected model. Thus 100% means Pi compacts
-now, and the figure can go past 100% until it does. With compaction off, or
-with a reserve as large as the window, the figure uses the whole window. It
-turns amber above 70% and red above 90%. After a compaction the size is `?`
-until the next reply. The figure reads the settings files again when one of
-them changes, and shows the change at the next entry in the session. Pi uses
-a changed file only after `/reload`. Thus, after you edit a settings file, use
-`/reload` so that Pi and the figure agree.
-
 ## Updates and removal
 
 ```sh
@@ -181,6 +169,46 @@ When the file does not parse (for example, after an edit that leaves an extra
 comma), pi-extras does not write it. Each extension uses its defaults, and each
 save shows an error that names the file. A new session in the terminal also
 shows a warning. Correct or remove the file to save settings again.
+
+## Status Plus
+
+The Status Plus context figure (`33k / 100k` and its bar) shows the context
+size against the point where Pi compacts the session. That point is the
+window less `compaction.reserveTokens`, or less the reserve in
+`compaction.modelOverrides` for the selected model. Thus 100% means Pi compacts
+now, and the figure can go past 100% until it does. With compaction off, or
+with a reserve as large as the window, the figure uses the whole window. It
+turns amber above 70% and red above 90%. After a compaction the size is `?`
+until the next reply. The figure reads the settings files again when one of
+them changes, and shows the change at the next entry in the session. Pi uses
+a changed file only after `/reload`. Thus, after you edit a settings file, use
+`/reload` so that Pi and the figure agree.
+
+**A click on a status line.** Status Plus shows the status of each other
+extension (`ctx.ui.setStatus(key, text)`) on a line of its own below the grid.
+In fullscreen mode, a left click on one of these lines sends an event on Pi's
+event bus. Other extensions can use this event as a contract:
+
+- Name: `status-plus:click`.
+- Payload: `{ key }`. `key` is the key that the extension gave to
+  `ctx.ui.setStatus`.
+- When: the left button goes down and up at the same point on the footer line
+  of that status. Today Status Plus cuts a long status to one line. If a later
+  version wraps a status, each of its lines sends the same key.
+- Only in fullscreen mode. In regular mode the terminal keeps the mouse, so
+  the event does not occur.
+- Not for the remote-pi statuses, because the grid shows them in one cell. A
+  click on the tool count changes the count and sends no event. A click on a
+  link in a status line goes to the link.
+
+Status Plus does nothing else with the click. The extension that set the
+status decides what occurs:
+
+```ts
+pi.events.on("status-plus:click", (data) => {
+	if ((data as { key?: unknown } | undefined)?.key === "my-extension") showDetails();
+});
+```
 
 ## Tab Status
 

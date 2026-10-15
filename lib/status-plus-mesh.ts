@@ -20,6 +20,12 @@ export interface MeshState {
 	device?: string;
 }
 
+/** Another extension's status and the key it was set with, so a click on its line can name it. */
+export interface ExtensionStatus {
+	key: string;
+	text: string;
+}
+
 export const MESH_KEY_PREFIX = "remote-pi:";
 const SESSION_RE = /^(.+?)\s*\((\d+)\)$/u;
 
@@ -46,14 +52,14 @@ function parseSlot(mesh: MeshState, key: string, text: string): MeshState {
  * `mesh` is undefined when remote-pi has nothing to show, so the footer
  * costs nothing on machines without it.
  */
-export function splitMeshStatuses(entries: Iterable<[string, unknown]>): { mesh?: MeshState; others: string[] } {
+export function splitMeshStatuses(entries: Iterable<[string, unknown]>): { mesh?: MeshState; others: ExtensionStatus[] } {
 	let mesh: MeshState | undefined;
-	const others: string[] = [];
+	const others: ExtensionStatus[] = [];
 	const sorted = [...entries].sort(([a], [b]) => a.localeCompare(b));
 	for (const [key, value] of sorted) {
 		const text = typeof value === "string" ? value : "";
 		if (!key.startsWith(MESH_KEY_PREFIX)) {
-			others.push(text);
+			others.push({ key, text });
 			continue;
 		}
 		if (!text.trim()) continue;

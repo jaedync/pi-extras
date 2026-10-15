@@ -20,7 +20,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { overlayVisible, padEndVisible, padStartVisible, truncateStart, truncateVisible, visibleWidth } from "./ansi.ts";
 import { formatDuration, formatMoney, hhmm, shownLimits, type LimitEntry } from "./status-plus-logic.ts";
 import { spendText } from "./status-plus-spend.ts";
-import { meshText, type MeshState } from "./status-plus-mesh.ts";
+import { meshText, type ExtensionStatus, type MeshState } from "./status-plus-mesh.ts";
 import {
 	cacheState as _cacheState,
 	compareProviderIds,
@@ -90,9 +90,16 @@ export interface FooterModel {
 	rows: FooterRow[];
 	/** remote-pi's session, relay and device state, folded into one grid cell. */
 	mesh?: MeshState;
-	/** Every other extension's status; each still gets its own plain line. */
-	extensionStatuses: string[];
+	/** Every other extension's status, with its key; each still gets its own plain line. */
+	extensionStatuses: ExtensionStatus[];
 }
+
+/**
+ * Announced on Pi's event bus with `{ key }` when a left click lands on the
+ * footer line of the extension status set with that key (fullscreen only:
+ * in regular mode the terminal keeps the mouse).
+ */
+export const STATUS_CLICK_EVENT = "status-plus:click";
 
 const MODEL_CELL_MAX = 26;
 /** Below this the fourth column (place / cache) is dropped rather than mangled. */
@@ -163,6 +170,22 @@ export interface Span {
 	y: number;
 	x0: number;
 	x1: number;
+}
+
+/** A footer row that shows (part of) the extension status set with `key`. */
+export interface StatusRow {
+	y: number;
+	key: string;
+}
+
+/** The rows of status blocks drawn one after another from row `first`; every row of a block maps to its key. */
+export function statusRowsOf(first: number, blocks: readonly { key: string; lines: readonly string[] }[]): StatusRow[] {
+	let y = first;
+	return blocks.flatMap(({ key, lines }) => lines.map(() => ({ y: y++, key })));
+}
+
+export function statusKeyAt(rows: readonly StatusRow[], y: number): string | undefined {
+	return rows.find((row) => row.y === y)?.key;
 }
 
 function placeText(model: FooterModel, compact: boolean): string {
@@ -331,8 +354,8 @@ function shown(row: FooterRow): boolean {
 	return Boolean(row.free) && (row.tokens.input > 0 || row.tokens.output > 0);
 }
 
-/** The footer's lines and where its tool figure landed, so a click on it can be recognized. */
-export function footerLayout(model: FooterModel, width: number, paint: Painter): { lines: string[]; tools: Span } {
+/** The footer's lines, where its tool figure landed and which rows show which status, so a click on them can be recognized. */
+export function footerLayout(model: FooterModel, width: number, paint: Painter): { lines: string[]; tools: Span; statusRows: StatusRow[] } {
 	const rows = model.rows
 		.filter(shown)
 		.sort((left, right) => Number(Boolean(left.free)) - Number(Boolean(right.free)) || compareProviderIds(left.id, right.id));
@@ -349,13 +372,15 @@ export function footerLayout(model: FooterModel, width: number, paint: Painter):
 		)
 		: [];
 	const meshLine = meshOverflow ? [truncateVisible(meshText(paint, model.mesh, compact), width, paint.fg("dim", ELLIPSIS))] : [];
+	// One line each, cut to the width: a status never wraps today, but its rows are counted as if it might.
 	const statuses = model.extensionStatuses
-		.map((text) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim())
-		.filter(Boolean)
-		.map((text) => truncateVisible(text, width, paint.fg("dim", ELLIPSIS)));
+		.map(({ key, text }) => ({ key, text: text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim() }))
+		.filter(({ text }) => text)
+		.map(({ key, text }) => ({ key, lines: [truncateVisible(text, width, paint.fg("dim", ELLIPSIS))] }));
+	const above = [...grid, ...meshLine, ...rowBlock];
 	// The cells above are sized to fit; this is the last guard, since Pi exits on a line wider than the terminal.
-	const lines = [...grid, ...meshLine, ...rowBlock, ...statuses].map((line) => (visibleWidth(line) <= width ? line : truncateToWidth(line, width, "")));
-	return { lines, tools };
+	const lines = [...above, ...statuses.flatMap((status) => status.lines)].map((line) => (visibleWidth(line) <= width ? line : truncateToWidth(line, width, "")));
+	return { lines, tools, statusRows: statusRowsOf(above.length, statuses) };
 }
 
 export { _cacheState as cacheState };

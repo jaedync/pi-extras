@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { stripAnsi, visibleWidth } from "../lib/ansi.ts";
 import { formatIncrement } from "../lib/status-plus-spend.ts";
 import { OTHER_PROVIDER } from "../lib/status-plus-render.ts";
-import { footerLayout, renderFooter, type FooterModel, type FooterRow } from "../lib/status-plus-footer.ts";
+import { footerLayout, renderFooter, statusKeyAt, statusRowsOf, type FooterModel, type FooterRow } from "../lib/status-plus-footer.ts";
 
 const paint = { fg: (_tone: string, text: string) => `\x1b[2m${text}\x1b[22m` };
 const NOON = Date.parse("2026-07-01T17:00:00Z"); // 12:00 Central
@@ -201,7 +201,7 @@ test("layout changes never mutate the accounting model", () => {
 });
 
 test("compact layout preserves literal middle dots supplied by other content", () => {
-	const lines = renderFooter(model({ cwd: "~/a·b", gitBranch: null, sessionName: "note·name", extensionStatuses: ["external · status"], rows: [] }), 110, paint).map(stripAnsi);
+	const lines = renderFooter(model({ cwd: "~/a·b", gitBranch: null, sessionName: "note·name", extensionStatuses: [{ key: "external", text: "external · status" }], rows: [] }), 110, paint).map(stripAnsi);
 	assert.ok(lines[0].includes("a·b"));
 	assert.ok(lines[0].includes("note·name"));
 	assert.equal(lines.at(-1), "external · status");
@@ -310,9 +310,41 @@ test("delta uses existing token-column padding before borrowing tail space", () 
 });
 
 test("other extensions' statuses still get a line", () => {
-	const lines = renderFooter(model({ rows: [], extensionStatuses: ["subagents: 2 running"] }), 150, paint).map(stripAnsi);
+	const lines = renderFooter(model({ rows: [], extensionStatuses: [{ key: "subagents", text: "subagents: 2 running" }] }), 150, paint).map(stripAnsi);
 	assert.equal(lines.length, 3);
 	assert.equal(lines[2], "subagents: 2 running");
+});
+
+test("the layout names the status on each status row, so a click can say which one it hit", () => {
+	const extensionStatuses = [
+		{ key: "artifact", text: "⇡ 3 published │ ⇠ 1 form waits · Title" },
+		// An empty status draws no line, so it gets no row and the next one moves up.
+		{ key: "blank", text: " \n " },
+		{ key: "subagents", text: "subagents: 2 running" },
+	];
+	const bare = footerLayout(model({ rows: [], extensionStatuses }), 150, paint);
+	assert.deepEqual(bare.statusRows, [{ y: 2, key: "artifact" }, { y: 3, key: "subagents" }]);
+	assert.equal(statusKeyAt(bare.statusRows, 2), "artifact");
+	assert.equal(statusKeyAt(bare.statusRows, 3), "subagents");
+	for (const y of [-1, 0, 1, 4]) assert.equal(statusKeyAt(bare.statusRows, y), undefined, `row ${y}`);
+	// Provider rows, a third grid line and a mesh line push the statuses down; each row still names the status it shows.
+	for (const width of [60, 100, 150]) {
+		const layout = footerLayout(model({ extensionStatuses, mesh: { session: "backend", relay: "paired" } }), width, paint);
+		assert.deepEqual(layout.statusRows.map((row) => row.key), ["artifact", "subagents"]);
+		assert.equal(layout.statusRows[0].y, layout.lines.length - 2);
+		for (const row of layout.statusRows) {
+			const text = extensionStatuses.find((status) => status.key === row.key)!.text;
+			assert.ok(text.startsWith(stripAnsi(layout.lines[row.y]).replace(/…$/, "")), `${width}: ${row.key} on ${row.y}`);
+		}
+	}
+	assert.deepEqual(footerLayout(model(), 150, paint).statusRows, []);
+});
+
+test("a status drawn on two rows maps both rows to its key", () => {
+	const rows = statusRowsOf(4, [{ key: "artifact", lines: ["⇡ 3 published", "⇠ 1 form waits"] }, { key: "voice", lines: ["recording"] }]);
+	assert.deepEqual(rows, [{ y: 4, key: "artifact" }, { y: 5, key: "artifact" }, { y: 6, key: "voice" }]);
+	assert.equal(statusKeyAt(rows, 5), "artifact");
+	assert.equal(statusKeyAt(rows, 7), undefined);
 });
 
 test("context Pi cannot size yet reads as unknown, not empty", () => {
@@ -424,8 +456,8 @@ test("wide characters and links in the place, model, statuses and tags never mak
 		sessionName: "テスト🎙️",
 		modelName: "模型-日本語-测试",
 		extensionStatuses: [
-			"🎙️ 録音中 — 音声入力がアクティブです。".repeat(3),
-			`\x1b]8;;https://example.com\x07${"リンク".repeat(20)}\x1b]8;;\x07`,
+			{ key: "voice", text: "🎙️ 録音中 — 音声入力がアクティブです。".repeat(3) },
+			{ key: "link", text: `\x1b]8;;https://example.com\x07${"リンク".repeat(20)}\x1b]8;;\x07` },
 		],
 		rows: [{ id: "日本語プロバイダー", cost: 1, airtimeMs: 1000, tokens: { input: 1, output: 1 }, entries: [{ label: "５時間", usedPct: 50, resetMs: NOON + 3_600_000 }] }],
 	});

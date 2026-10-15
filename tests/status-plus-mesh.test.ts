@@ -13,7 +13,7 @@ test("remote-pi slots fold into one mesh state, other statuses pass through", ()
 		["remote-pi:peer-active", "📱 ab12"],
 	]);
 	assert.deepEqual(mesh, { session: "backend", peerCount: 2, relay: "paired", device: "ab12" });
-	assert.deepEqual(others, ["subagents: 2 running"]);
+	assert.deepEqual(others, [{ key: "subagents", text: "subagents: 2 running" }]);
 });
 
 test("relay waiting for pairing reads as unpaired, and cleared slots vanish", () => {
