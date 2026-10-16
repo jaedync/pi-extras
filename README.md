@@ -1741,8 +1741,11 @@ prevention. Files that an
 do not count. When another agent's `bash` command runs in the same place at the
 same time, the changes can't be told apart, so that call is not checked. The
 same place means the same git work tree, from any directory in it. Outside
-a git repository, or when `git` fails or takes more than 10 seconds, calls are
-not checked, and you get one warning. Use `isolation: "worktree"` for
+a git repository, calls are not checked, and you get no warning. After a
+`git init` there, the next call is checked. When `git` fails for a different
+reason or takes more than 10 seconds, calls are not checked, and you get one
+warning. Use
+`isolation: "worktree"` for
 parallel edits. Each worktree has its own lock, shared by the helpers that
 inherit it. A worktree child's `edit` and `write` calls outside its worktree
 are refused before they run, and the check runs again as each call starts. So
