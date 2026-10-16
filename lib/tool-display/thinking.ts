@@ -236,6 +236,8 @@ export interface ViewOptions {
 	/** Pi's label for a hidden block, shown in the collapsed style. */
 	readonly label: () => string;
 	readonly pad: number;
+	/** The tail's left margin, when it is not `pad`: the full view's margin, so a flip does not move the text. */
+	readonly tailPad?: number;
 	readonly host: ThinkingHost;
 	readonly toggle: () => void;
 	/** Where the drawing is kept; shared by the views Pi's rebuilds make of an unchanged block. */
@@ -288,8 +290,9 @@ export class ThinkingView implements Component {
 		}
 		// Pi's Markdown keeps `pad` columns on each side; the tail keeps the same margins.
 		const style = (text: string) => { const colored = paint("thinkingText", text); try { return theme?.italic?.(colored) ?? colored; } catch { return colored; } };
-		const tail = tailLines(this.options.text, width - 2 * pad);
-		return tail.lines.map((line, index) => indent + (tail.cut && index === 0 ? paint("thinkingText", TAIL_MARK) : "") + style(line));
+		const left = this.options.tailPad ?? pad;
+		const tail = tailLines(this.options.text, Math.max(1, width - left - pad));
+		return tail.lines.map((line, index) => " ".repeat(left) + (tail.cut && index === 0 ? paint("thinkingText", TAIL_MARK) : "") + style(line));
 	}
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -374,6 +377,8 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 			full: host.gutter?.() ? assistantText(region.child, false, host) : region.child,
 			text: runs[run]!,
 			pad: host.gutter?.() ? host.summary ? 0 : ROW_MARGIN : self.outputPad,
+			// The label hangs in the gutter; the text, in full or as the tail, starts after it.
+			...(host.gutter?.() ? { tailPad: ROW_MARGIN } : {}),
 			host,
 			view: () => (live ? liveStyle(self, host, run) : finishedStyle(self, host, mode, run)),
 			label: () => host.summary?.(message, timed[run] ?? run) ?? self.hiddenThinkingLabel,

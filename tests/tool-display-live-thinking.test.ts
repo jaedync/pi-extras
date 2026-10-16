@@ -139,3 +139,24 @@ test("a label reads the time of its own run, counted as the timer counts runs, e
 		undo();
 	}
 });
+
+test("live thinking starts in the same column as a tail and in full, so a click does not move it", () => {
+	const undo = installThinkingTail(host());
+	try {
+		const reply = new AssistantMessageComponent(undefined, true);
+		markAside(reply);
+		reply.updateContent(live(), true);
+		const column = () => {
+			const lines = reply.render(60).map((line) => stripTerminalSequences(line).replace(/\u00a0/g, " "));
+			const last = lines.filter((line) => line.includes("step 8 of the plan")).at(-1)!;
+			return last.search(/\S/);
+		};
+		const tail = column();
+		click(reply);
+		assert.equal(column(), tail, "in full");
+		reply.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: LIVE }, { type: "text", text: "Done." }] } as never, false);
+		assert.equal(column(), tail, "finished, still in full as the click left it");
+	} finally {
+		undo();
+	}
+});
