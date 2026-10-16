@@ -119,6 +119,11 @@ export class FoldRow implements Component {
 		return `${this.indent()}${paintWith(this.host.theme())("borderMuted", RULE)} `;
 	}
 
+	/** A dim line in the rule, for an open group whose rows draw nothing. */
+	noteLine(width: number, note: string): string {
+		return truncateToWidth(`${this.rule()}${paintWith(this.host.theme())("dim", note)}`, width, "");
+	}
+
 	endLine(width: number): string {
 		const paint = paintWith(this.host.theme());
 		return truncateToWidth(`${this.indent()}${paint("borderMuted", RULE_END)}${paint("dim", CLOSE)}`, width, "");
@@ -223,6 +228,23 @@ class FoldEnd implements Component {
 		this.row.toggle();
 		return { handled: true };
 	}
+}
+
+/** A line of the rule that says why it holds nothing else. */
+export class FoldNote implements Component {
+	private readonly row: FoldRow;
+	private readonly note: string;
+
+	constructor(row: FoldRow, note: string) {
+		this.row = row;
+		this.note = note;
+	}
+
+	render(width: number): string[] {
+		return [this.row.noteLine(width, this.note)];
+	}
+
+	invalidate(): void {}
 }
 
 /** The phase spinner's spinner for each, 3 cells wide (SPINNER_SLOT_WIDTH): its sonar for every wait before the first token. */

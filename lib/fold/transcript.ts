@@ -15,7 +15,7 @@
 import { Spacer, Text, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { isBlockingPeer } from "../band/glyph.ts";
 import { planFold, type FoldGroup, type FoldPlan, type PlanEntry, type PlanItem } from "./plan.ts";
-import { FoldRow, isImage, type FoldRowHost } from "./row.ts";
+import { FoldNote, FoldRow, isImage, type FoldRowHost } from "./row.ts";
 import { thoughtOnly, type FoldFacts, type FoldPhase, type ToolFact } from "./summary.ts";
 import { CHARS_PER_TOKEN } from "../cc-phase.ts";
 import { commandsIn, isShell } from "../tool-count.ts";
@@ -235,6 +235,9 @@ function withoutLead(lines: readonly string[]): { lines: string[]; dropped: numb
 	return { lines: [head + lines[1]!, ...lines.slice(2)], dropped: 1 };
 }
 
+const NO_THINKING = "no thinking text";
+const NOTHING = "nothing to show";
+
 /** What the view draws for one group this frame. */
 interface Drawn {
 	readonly row: FoldRow;
@@ -360,7 +363,7 @@ export class FoldView {
 			live ||= facts.live;
 			put(row, row.render(width));
 			if (thoughtOnly(facts)) for (const index of group.said) tucked.add(index);
-			if (shown) this.drawRun(row, [...group.members, ...group.dropped].sort((a, b) => a - b), children, rows, width, put);
+			if (shown) this.drawRun(row, facts, [...group.members, ...group.dropped].sort((a, b) => a - b), children, rows, width, put);
 		}
 		chat.mouseLayout = { width, children: layout };
 		this.host.animate(live);
@@ -397,7 +400,7 @@ export class FoldView {
 	}
 
 	/** An open group's rows in a rule under its line, the first without its blank line, then the rule's end. */
-	private drawRun(row: FoldRow, members: readonly number[], children: readonly Component[], rows: readonly string[][], width: number, put: (component: Component, lines: readonly string[]) => void): void {
+	private drawRun(row: FoldRow, facts: FoldFacts, members: readonly number[], children: readonly Component[], rows: readonly string[][], width: number, put: (component: Component, lines: readonly string[]) => void): void {
 		if (members.length === 0) return;
 		const rule = row.rule();
 		const dx = row.ruleWidth();
@@ -411,6 +414,11 @@ export class FoldView {
 			const tight = first && own.length > 0 ? withoutLead(own) : { lines: own, dropped: 0 };
 			if (own.length > 0) first = false;
 			put(new Placed(children[index]!, dx, tight.dropped), tight.lines.map(ruled));
+		}
+		// A provider can keep its thinking to itself and still spend tokens on it: the rule says so rather than hold nothing.
+		if (first) {
+			const note = new FoldNote(row, facts.tools.length === 0 ? NO_THINKING : NOTHING);
+			put(note, note.render(width));
 		}
 		put(row.end, row.end.render(width));
 	}

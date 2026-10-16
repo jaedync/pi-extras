@@ -545,3 +545,15 @@ test("a reply in an open group shows its live thinking itself, and the view says
 	enabled = false;
 	assert.equal(view.opensThinking(streaming), false, "fold mode off: the phase spinner's rule applies");
 });
+
+test("an open group with nothing to draw says so, so its rule is never empty", () => {
+	const { value } = host();
+	const hidden = new Reply(quiet({ content: [{ type: "thinking", thinking: "" }], usage: { output: 300 } }));
+	const chat = chatOf([new Row(["", " prompt"]), hidden]);
+	const view = viewOf(value);
+	assert.deepEqual(text(view.render(chat, 80)), ["", " prompt", "", "∴ Thought"], "a provider that keeps its thinking to itself still spent tokens on it");
+	(chat.mouseLayout!.children[1]!.component as FoldRow).toggle();
+	const open = text(view.render(chat, 80));
+	assert.deepEqual(open, ["", " prompt", "", "∴ Thought", "│ no thinking text", "╰─ close"]);
+	assert.equal(chat.mouseLayout!.children.reduce((sum, child) => sum + child.height, 0), open.length);
+});
