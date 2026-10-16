@@ -5,9 +5,11 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { stripTerminalSequences, truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import {
 	formatElapsed,
+	latestToolCall,
 	parseStatusMessage,
 	phaseAfterFirstTokenWait,
 	renderLastRunBorder,
+	sessionIdOf,
 	type PhaseBorderPaint,
 } from "../lib/phase-status.ts";
 
@@ -28,10 +30,6 @@ import { glowing, noteText, type Trail } from "../lib/band/glow.ts";
 import { cancelLive, liveCompactionLines, liveShown, noteProgress, startLive, type LiveCompaction } from "../lib/compaction-live.ts";
 import { COMPACTION_PROGRESS_EVENT, readProgress } from "../lib/cache-compaction/decision.ts";
 import type { ThemeLike } from "../lib/tool-display/kit.ts";
-
-function sessionIdOf(ctx: ExtensionContext): string | undefined {
-	try { return ctx.sessionManager?.getSessionId?.(); } catch { return undefined; }
-}
 
 type ActivePhase = "prep" | "api" | "first_token" | "think" | "text" | "tool" | "run";
 type VisualPhase = ActivePhase | "slow_api" | "stalled";
@@ -96,12 +94,6 @@ interface StatusView {
 	label: string;
 	detail?: string;
 	style: StatusStyle;
-}
-
-/** The call the model is writing now, with as much of its arguments as has streamed in. */
-function latestToolCall(message: object): { name?: string; arguments?: unknown } | undefined {
-	const content = "content" in message && Array.isArray(message.content) ? (message.content as { type?: string; name?: string; arguments?: unknown }[]) : [];
-	return [...content].reverse().find((part) => part.type === "toolCall" && part.name);
 }
 
 /** Pi's status text without Pi's own spinner frame. */

@@ -127,3 +127,14 @@ export function renderLastRunBorder(
 	const variants = lastRunVariants(totalElapsedMs, hiddenLineCount, paint, metrics);
 	return timerBorder(variants, paint.total(`L${formatCompactElapsed(totalElapsedMs)}`), width, paint);
 }
+
+/** The call the model is writing now, with as much of its arguments as has streamed in. */
+export function latestToolCall(message: object): { name?: string; arguments?: unknown } | undefined {
+	const content = "content" in message && Array.isArray(message.content) ? (message.content as { type?: string; name?: string; arguments?: unknown }[]) : [];
+	return [...content].reverse().find((part) => part.type === "toolCall" && part.name);
+}
+
+/** The session's id, if Pi can say it. */
+export function sessionIdOf(ctx: { sessionManager?: { getSessionId?(): string | undefined } }): string | undefined {
+	try { return ctx.sessionManager?.getSessionId?.(); } catch { return undefined; }
+}
