@@ -525,18 +525,20 @@ export class FoldView {
 		}
 		const end = live ? this.host.now() : ended;
 		const elapsedMs = started !== undefined && end !== undefined && end > started ? end - started : undefined;
-		if (!live) return { tools, live, tokens, sent, ...(elapsedMs !== undefined ? { elapsedMs } : {}) };
-		const thoughtMs = this.thinkingSoFar(own);
-		return { tools, live, tokens, sent, ...(elapsedMs !== undefined ? { elapsedMs } : {}), phase: phaseOf(runs, writes, streaming), ...(thoughtMs !== undefined ? { thoughtMs } : {}) };
+		const timed = { tools, live, tokens, sent, ...(elapsedMs !== undefined ? { elapsedMs } : {}) };
+		// A line of thinking alone says how long it thought, as the replies' own labels do.
+		const thoughtMs = live ? this.thinkingSoFar(own, true) : tools.length === 0 ? this.thinkingSoFar([...replies], false) : undefined;
+		const thinking = thoughtMs !== undefined ? { thoughtMs } : {};
+		return live ? { ...timed, phase: phaseOf(runs, writes, streaming), ...thinking } : { ...timed, ...thinking };
 	}
 
-	/** How long the replies have thought, counting only thinking with text: a provider can open a block and send none. */
-	private thinkingSoFar(replies: readonly Reply[]): number | undefined {
+	/** How long the replies thought, counting only thinking with text: a provider can open a block and send none. */
+	private thinkingSoFar(replies: readonly Reply[], live: boolean): number | undefined {
 		let total: number | undefined;
 		for (const reply of replies) {
 			const message = reply.lastMessage;
 			if (!message || !thought(message)) continue;
-			const ms = this.thoughtOf(message, true);
+			const ms = this.thoughtOf(message, live);
 			if (ms !== undefined) total = (total ?? 0) + ms;
 		}
 		return total;

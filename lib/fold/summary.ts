@@ -33,7 +33,7 @@ export interface FoldFacts {
 	readonly elapsedMs?: number;
 	/** While live, what the model does now; the line's spinner shows it. */
 	readonly phase?: FoldPhase;
-	/** While live, how long its replies have thought so far. */
+	/** How long its replies thought (so far, while live), as each reply's Thought label measures it. */
 	readonly thoughtMs?: number;
 }
 
@@ -169,8 +169,8 @@ export function foldPhrase(facts: FoldFacts, brief = false): FoldPhrase {
 export const thoughtOnly = (facts: FoldFacts): boolean => !facts.live && facts.tools.length === 0;
 /** Live with no calls yet, the words say how long it has thought so far, and the figures leave the time out. */
 const thinksLive = (facts: FoldFacts) => facts.live && facts.tools.length === 0 && facts.thoughtMs !== undefined;
-/** It says how long, as Claude Code's does. */
-const timeSaid = (facts: FoldFacts) => (thinksLive(facts) ? facts.thoughtMs : thoughtOnly(facts) && (facts.elapsedMs ?? 0) > 0 ? facts.elapsedMs : undefined);
+/** It says how long, as Claude Code's does: the time thought, the same as the replies' own labels say. */
+const timeSaid = (facts: FoldFacts) => (thinksLive(facts) || thoughtOnly(facts) ? facts.thoughtMs : undefined);
 const thoughtFor = (facts: FoldFacts) => {
 	const ms = timeSaid(facts);
 	return ms !== undefined ? `thought for ${elapsed(ms)}` : "thought";

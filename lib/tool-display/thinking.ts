@@ -18,6 +18,7 @@ import { noteLate } from "../late-rows.ts";
 import { BULLET_GLYPH, THOUGHT_GLYPH } from "../band/glyph.ts";
 import { ROW_MARGIN } from "../band/band.ts";
 import { glowing, glowLines, type GlowTheme, type Trail } from "../band/glow.ts";
+import { elapsed } from "../fold/summary.ts";
 import { sanitize } from "./format.ts";
 
 export type ThinkingMode = "tail" | "collapsed" | "full";
@@ -47,11 +48,9 @@ export interface ThinkingHost {
 	expands?(reply: object): boolean;
 }
 
-/** The glyph, then `Thought for 12s`; tenths below a second, so a fast model never thought for 0s. */
+/** The glyph, then `Thought for 12.3s`: the time as a fold line says it, so the same thinking reads the same everywhere. */
 export function thoughtLabel(ms: number | undefined): string {
-	if (ms === undefined) return `${THOUGHT_GLYPH} Thought`;
-	const time = ms < 1_000 ? `${(Math.max(1, Math.floor(ms / 100)) / 10).toFixed(1)}s` : `${Math.floor(ms / 1_000)}s`;
-	return `${THOUGHT_GLYPH} Thought for ${time}`;
+	return ms === undefined ? `${THOUGHT_GLYPH} Thought` : `${THOUGHT_GLYPH} Thought for ${elapsed(ms)}`;
 }
 
 type Content = { type: string; thinking?: unknown; text?: unknown };

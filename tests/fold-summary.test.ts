@@ -32,7 +32,8 @@ test("failures are named after the calls", () => {
 
 test("finished work with no calls was thinking", () => {
 	assert.equal(foldPhrase(facts()), "Thought");
-	assert.equal(foldPhrase(facts({ elapsedMs: 2_500 })), "Thought for 2.5s", "the time moves into the words");
+	assert.equal(foldPhrase(facts({ thoughtMs: 2_500 })), "Thought for 2.5s", "the time moves into the words");
+	assert.equal(foldPhrase(facts({ elapsedMs: 9_000 })), "Thought", "the time it thought, not the time between its first and last reply, as each reply's label says it");
 });
 
 test("other tools are named, and names are cleaned", () => {
@@ -58,12 +59,12 @@ test("stats give tokens sent and received, and time; an unknown time is left out
 	assert.deepEqual(foldStats(facts({ tools: [tool("read")], sent: 1 })), ["↑1"]);
 	assert.deepEqual(foldStats(facts({ tools: [tool("read")] })), [], "cost shows only on the end line");
 	assert.deepEqual(foldStats(facts({ live: true, elapsedMs: 441 })), ["0.4s"]);
-	assert.deepEqual(foldStats(facts({ tokens: 30, sent: 288_000, elapsedMs: 2_500 })), [], "a settled Thought line says its time in its words, and shows no figures");
+	assert.deepEqual(foldStats(facts({ tokens: 30, sent: 288_000, thoughtMs: 2_500, elapsedMs: 2_500 })), [], "a settled Thought line says its time in its words, and shows no figures");
 	assert.deepEqual(foldStats(facts({ live: true, tokens: 30, sent: 288_000, elapsedMs: 2_500, thoughtMs: 2_000 })), ["↑288k ↓30"], "live thinking counts its tokens; its time is in the words");
 });
 
 test("a time below a second keeps its tenths and never reads 0.0s", () => {
-	assert.equal(foldPhrase(facts({ elapsedMs: 40 })), "Thought for 0.1s");
+	assert.equal(foldPhrase(facts({ thoughtMs: 40 })), "Thought for 0.1s");
 	assert.deepEqual(foldStats(facts({ live: true, elapsedMs: 40 })), ["0.1s"]);
 });
 
@@ -103,5 +104,5 @@ test("the brief form is the total count of calls", () => {
 	const tools = [{ ...tool("bash"), count: 3 }, tool("read"), tool("edit"), tool("bash", true)];
 	assert.deepEqual(phrase(facts({ live: true, tools }), true), { said: "Used 6 tools", failed: "1 failed" });
 	assert.equal(foldPhrase(facts({ tools: [tool("read")] }), true), "Used 1 tool");
-	assert.equal(foldPhrase(facts({ elapsedMs: 900 }), true), "Thought for 0.9s", "no calls: nothing to count");
+	assert.equal(foldPhrase(facts({ thoughtMs: 900 }), true), "Thought for 0.9s", "no calls: nothing to count");
 });

@@ -4,6 +4,7 @@ import { AssistantMessageComponent, initTheme } from "@earendil-works/pi-coding-
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { installThinkingTail, renderThinkingTail, tailLines, thoughtLabel, type ThinkingHost } from "../lib/tool-display/thinking.ts";
 import { GLOW_MS, noteText } from "../lib/band/glow.ts";
+import { elapsed } from "../lib/fold/summary.ts";
 initTheme("dark");
 const text="First thought.\n\nSecond thought.\n\nLast thought.";
 const msg=(answer=false)=>({role:"assistant",content:[{type:"thinking",thinking:text},...(answer?[{type:"text",text:"Answer."}]:[])],stopReason:"stop"}) as never;
@@ -74,11 +75,12 @@ test("new thinking shows brighter for a moment, then fades to the tail's dim",()
  assert.deepEqual(faded,renderThinkingTail(now,60,theme),"faded: the same as without a glow");
 });
 
-test("the label keeps tenths below a second, so a fast model never thought for 0s",()=>{
+test("the label keeps tenths below a minute, as a fold line does, so a fast model never thought for 0s",()=>{
  assert.equal(thoughtLabel(undefined),"∴ Thought");
  assert.equal(thoughtLabel(430),"∴ Thought for 0.4s");
  assert.equal(thoughtLabel(30),"∴ Thought for 0.1s");
- assert.equal(thoughtLabel(12_300),"∴ Thought for 12s");
+ assert.equal(thoughtLabel(12_300),"∴ Thought for 12.3s");
+ for(const ms of [430,12_300,59_990,61_500,3_725_000]) assert.equal(thoughtLabel(ms),`∴ Thought for ${elapsed(ms)}`,"the label says a time as a fold line does");
 });
 test("a reply that folded mode expands shows its thinking in full, and neither a click nor ctrl+t folds it to a second label",()=>{
  const undo=installThinkingTail({...host,expands:()=>true});

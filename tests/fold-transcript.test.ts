@@ -325,6 +325,14 @@ test("a reply that thought and then spoke keeps a Thought line above its words",
 	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt", "", "∴ Thought for 2.5s", "● said"], "right above its words, with no figures");
 });
 
+test("a line of thinking alone says how long its replies thought, not how long they took", () => {
+	const { value } = host({ thoughtMs: () => 500 });
+	const first = new Reply(quiet({ content: [{ type: "thinking", thinking: "one" }], timestamp: 1_000 }));
+	const second = new Reply(thinkingThenWords({ timestamp: 9_000 }));
+	const lines = text(viewOf(value).render(chatOf([new Row(["", " prompt"]), first, second]), 80));
+	assert.equal(lines[3], "∴ Thought for 1.0s", "each reply thought 0.5s, 8s apart");
+});
+
 test("its thinking counts once: in the Thought line, not again in the line of the calls it made", () => {
 	const { value } = host({ thoughtMs: () => 500 });
 	const narrating = new Reply(thinkingThenWords({ content: [{ type: "thinking", thinking: "plan" }, { type: "text", text: "looking" }, { type: "toolCall" }] }));
