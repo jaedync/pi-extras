@@ -132,6 +132,11 @@ const SHAPES: readonly Shape[] = [
 			add.reply([think("Mull over the file."), words("It says one.")]);
 		},
 	},
+	{
+		// An empty block first, then words and thinking: the timer counts the empty run, as the label must.
+		name: "gap", callThinking: false,
+		build: (add) => add.reply([think(""), words("Let me look."), think("Mull after.")]),
+	},
 	{ name: "error", callThinking: false, build: (add) => add.reply([think("Mull, then fail.")], { stopReason: "error", errorMessage: "Overloaded" }) },
 	// A provider that keeps its thinking to itself sends an empty block, and still counts its tokens.
 	{ name: "redacted", callThinking: false, quiet: true, build: (add) => add.reply([think("")]) },

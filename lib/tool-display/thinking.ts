@@ -102,6 +102,21 @@ export function thinkingRuns(content: readonly Content[]): string[] {
 	return runs;
 }
 
+/**
+ * Where each run of thinkingRuns sits among all the runs, empty ones too:
+ * the thinking timer counts every run, so a label reads its time by this index.
+ */
+export function thinkingRunIndices(content: readonly Content[]): number[] {
+	const indices: number[] = [];
+	let run = -1;
+	content.forEach((part, index) => {
+		if (part.type !== "thinking") return;
+		if (content[index - 1]?.type !== "thinking") run++;
+		if (typeof part.thinking === "string" && part.thinking.trim() && indices.at(-1) !== run) indices.push(run);
+	});
+	return indices;
+}
+
 /** The reply streams thinking now: a thinking block with text ends it. An empty block a provider opens does not count. */
 export function thinksNow(content: readonly Content[]): boolean {
 	for (let index = content.length - 1; index >= 0 && content[index]!.type === "thinking"; index--) {
@@ -332,6 +347,7 @@ function inGutter(children: Component[], host: ThinkingHost): void {
 /** Swaps each of Pi's thinking regions for a view of the same rendering; false when the message doesn't look as expected. */
 function restyle(self: Internals, message: Message, host: ThinkingHost, mode: ThinkingMode): boolean {
 	const runs = thinkingRuns(message.content);
+	const timed = thinkingRunIndices(message.content);
 	const children = self.contentContainer.children;
 	const regions = children.filter((child): child is Component & { child: Component } => isRegion(child));
 	if (regions.length !== runs.length) return false;
@@ -360,7 +376,7 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 			pad: host.gutter?.() ? host.summary ? 0 : ROW_MARGIN : self.outputPad,
 			host,
 			view: () => (live ? liveStyle(self, host, run) : finishedStyle(self, host, mode, run)),
-			label: () => host.summary?.(message, run) ?? self.hiddenThinkingLabel,
+			label: () => host.summary?.(message, timed[run] ?? run) ?? self.hiddenThinkingLabel,
 			toggle: () => { if (live || !host.expands?.(owner)) toggleBlock(owner, run); },
 			memo: memoFor(owner, run, runs[run]!, self.isStreaming, self.outputPad),
 		});

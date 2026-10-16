@@ -129,3 +129,13 @@ test("an empty thinking block at the end does not make the reply's finished thin
 		undo();
 	}
 });
+
+test("a label reads the time of its own run, counted as the timer counts runs, empty ones too", () => {
+	const undo = installThinkingTail(host({ summary: (_message, run) => `∴ run ${run}` }));
+	try {
+		const reply = new AssistantMessageComponent({ role: "assistant", content: [{ type: "thinking", thinking: "" }, { type: "text", text: "Let me look." }, { type: "thinking", thinking: "Mull after." }], stopReason: "stop" } as never, true);
+		assert.ok(plain(reply.render(60)).includes("∴ run 1"), plain(reply.render(60)).join(" / "));
+	} finally {
+		undo();
+	}
+});

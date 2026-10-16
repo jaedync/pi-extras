@@ -521,10 +521,13 @@ test("rows a reload builds before session start are rebuilt once it runs, tools 
 });
 
 test("a reply's thinking time is the sum of its timed runs", () => {
-	const message = { timestamp: 1, content: [{ type: "thinking" }, { type: "thinking" }, { type: "text" }, { type: "thinking" }] };
+	const message = { timestamp: 1, content: [{ type: "thinking", thinking: "a" }, { type: "thinking", thinking: "b" }, { type: "text" }, { type: "thinking", thinking: "c" }] };
 	assert.equal(thoughtFor(message, (_m, run) => [1_000, 500][run]), 1_500);
 	assert.equal(thoughtFor(message, () => undefined), undefined);
 	assert.equal(thoughtFor({ content: [{ type: "text" }] }, () => 9), undefined);
+	// A provider can open a block and send no text; that run has no label, so its time is not in the sum.
+	const gap = { timestamp: 1, content: [{ type: "thinking", thinking: "" }, { type: "text" }, { type: "thinking", thinking: "x" }] };
+	assert.equal(thoughtFor(gap, (_m, run) => [700, 300][run]), 300);
 });
 
 test("a new session does not keep the old one's open live group in the published settings", () => {

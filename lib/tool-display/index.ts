@@ -60,7 +60,7 @@ import { toolRenderers, type ToolSpec } from "./tool.ts";
 import { usageSpec } from "./usage.ts";
 import { webSearchSpec } from "./web.ts";
 import { watchFold } from "../fold/index.ts";
-import { installThinkingTail, prepareThinkingTail, THINKING_MODES, thoughtLabel, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
+import { installThinkingTail, prepareThinkingTail, THINKING_MODES, thinkingRunIndices, thoughtLabel, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
 
 export const TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -150,14 +150,10 @@ export function applyArgs(settings: DisplaySettings, args: string): DisplaySetti
 	return patch && { ...settings, ...patch };
 }
 
-/** How long a reply thought in all: the sum of its timed thinking runs, or undefined when none was timed. */
-export function thoughtFor(message: { timestamp?: number; content: readonly { type: string }[] }, duration: (message: never, run: number) => number | undefined): number | undefined {
-	let runs = 0;
-	message.content.forEach((part, index) => {
-		if (part.type === "thinking" && message.content[index - 1]?.type !== "thinking") runs++;
-	});
+/** How long a reply thought in all: the sum of its timed runs with text (the ones with a label), or undefined when none was timed. */
+export function thoughtFor(message: { timestamp?: number; content: readonly { type: string; thinking?: unknown }[] }, duration: (message: never, run: number) => number | undefined): number | undefined {
 	let total: number | undefined;
-	for (let run = 0; run < runs; run++) {
+	for (const run of thinkingRunIndices(message.content)) {
 		const ms = duration(message as never, run);
 		if (ms !== undefined) total = (total ?? 0) + ms;
 	}
