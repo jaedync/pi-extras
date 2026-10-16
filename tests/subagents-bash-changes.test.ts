@@ -130,7 +130,7 @@ test("a bash call that only reads, or writes only ignored files, takes nothing",
 	await team.close();
 });
 
-test("a workspace that is not a git repository skips detection and warns once", async (t) => {
+test("a workspace that is not a git repository skips detection without a warning", async (t) => {
 	const dir = realpathSync(mkdtempSync(join(tmpdir(), "subagent-no-git-")));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const { team, warnings, bash } = harness(dir);
@@ -138,8 +138,33 @@ test("a workspace that is not a git repository skips detection and warns once", 
 	assert.equal(await writer("echo a > a.txt && echo ok"), "ok\n");
 	assert.equal(await writer("echo b > b.txt && echo ok"), "ok\n");
 	assert.equal(team.claimEdit("other", join(dir, "other.txt")), undefined);
+	assert.deepEqual(warnings, []);
+	await team.close();
+});
+
+test("a workspace that a git init makes a repository is checked from the next call", async (t) => {
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "subagent-no-git-")));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const { team, warnings, bash } = harness(dir);
+	const writer = bash("writer", dir);
+	assert.equal(await writer("git init -q && echo ok"), "ok\n");
+	assert.match(await writer("echo a > a.txt && echo ok"), /^ok\n/);
+	assert.match(team.claimEdit("other", join(dir, "other.txt")) ?? "", /writer/, "the command took the lock");
+	assert.deepEqual(warnings, []);
+	await team.close();
+});
+
+test("a workspace where git fails for another reason skips detection and warns once", async (t) => {
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "subagent-bad-git-")));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	writeFileSync(join(dir, ".git"), "gitdir: ./missing\n");
+	const { team, warnings, bash } = harness(dir);
+	const writer = bash("writer", dir);
+	assert.equal(await writer("echo a > a.txt && echo ok"), "ok\n");
+	assert.equal(await writer("echo b > b.txt && echo ok"), "ok\n");
+	assert.equal(team.claimEdit("other", join(dir, "other.txt")), undefined);
 	assert.equal(warnings.length, 1);
-	assert.match(warnings[0]!, new RegExp(`^subagents: can't tell which files bash commands change in ${dir.replace(/[.]/g, "\\.")}, so they don't take the edit lock there\\. .*not a git repository`, "i"));
+	assert.match(warnings[0]!, new RegExp(`^subagents: can't tell which files bash commands change in ${dir.replace(/[.]/g, "\\.")}, so they don't take the edit lock there\\. git rev-parse failed`, "i"));
 	await team.close();
 });
 

@@ -32,9 +32,18 @@ async function git(cwd: string, args: readonly string[], call?: GitCall): Promis
 	}
 }
 
-/** The top level of the git work tree that holds `cwd`. */
-export async function gitRoot(cwd: string): Promise<string> {
-	return (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
+// Git's words when its search up from the directory finds no repository. A broken repository words it differently, so it still fails.
+const NO_REPOSITORY = /not a git repository \(or any /;
+// The C locale keeps those words in English whatever the user's language is.
+const ENGLISH: GitCall = { args: [], env: { LC_ALL: "C" } };
+
+/** The top level of the git work tree that holds `cwd`, or undefined when no repository holds it. */
+export async function gitRoot(cwd: string): Promise<string | undefined> {
+	try { return (await git(cwd, ["rev-parse", "--show-toplevel"], ENGLISH)).trim(); }
+	catch (error) {
+		if (NO_REPOSITORY.test((error as Error).message)) return undefined;
+		throw error;
+	}
 }
 
 /** Status code by path from `git status --porcelain=v1 -z`, where a rename or copy's source follows as its own field. */

@@ -47,7 +47,7 @@ export function withLine<T extends { content: Content }>(result: T, line: string
 	return { ...result, content };
 }
 
-/** Workspaces whose detection failed once; a non-git workspace would otherwise warn on every call. */
+/** Workspaces whose detection failed once; a workspace where git fails would otherwise warn on every call. */
 const warned = new Set<string>();
 
 function skip(watch: ChangeWatch, error: unknown): undefined {
@@ -59,11 +59,12 @@ function skip(watch: ChangeWatch, error: unknown): undefined {
 
 interface Before { root: string; print: Fingerprint; stop(): Watched }
 
-async function before(watch: ChangeWatch, id: string, rootOf: () => Promise<string>): Promise<Before | undefined> {
-	let root: string;
+async function before(watch: ChangeWatch, id: string, rootOf: () => Promise<string | undefined>): Promise<Before | undefined> {
+	let root: string | undefined;
 	try { root = await rootOf(); }
 	catch (error) { return skip(watch, error); }
-	if (watch.mayEdit(root)) return undefined;
+	// Outside git there is nothing to compare. That is a usual place for a child to work, not a fault, so it gets no warning.
+	if (root === undefined || watch.mayEdit(root)) return undefined;
 	// Watch first: an edit that lands while the fingerprint is taken must not count either.
 	// By work tree, not directory: agents that start in different directories of one tree change the same files.
 	const stop = watch.activity.watch(`${watch.agent}:${id}`, root);
@@ -74,8 +75,8 @@ async function before(watch: ChangeWatch, id: string, rootOf: () => Promise<stri
 	}
 }
 
-/** The work tree of `cwd`, looked up once it is found; a failure is tried again on the next call. */
-function rootLookup(cwd: string, fixed?: string): () => Promise<string> {
+/** The work tree of `cwd`, looked up once it is found; no repository or a failure is tried again on the next call, so a `git init` counts. */
+function rootLookup(cwd: string, fixed?: string): () => Promise<string | undefined> {
 	let found = fixed;
 	return async () => found ??= await gitRoot(cwd);
 }
