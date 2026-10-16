@@ -22,6 +22,7 @@ import { DISPLAY_SETTINGS_EVENT, FOLD_LIVE_EVENT, readSection } from "../lib/ext
 import { renderStatusDivider } from "../lib/status-divider.ts";
 import { CHARS_PER_TOKEN, END_ENTRY, parseEndLine, parseVerbs, pickVerb, renderEndLine, renderPiWave, renderRunStatus, smoothTokens, streamRate, type RunLine } from "../lib/cc-phase.ts";
 import { MODE_SPINNERS, PI_WAVE, PI_WAVE_MS, REDUCED_FRAME, isBlockingPeer, slotGlyph, spinnerCadence, type GlyphAnimation } from "../lib/band/glyph.ts";
+import { liveTailShown, type LiveSettings } from "../lib/tool-display/live-thinking.ts";
 import { renderThinkingTail, thinkingRuns } from "../lib/tool-display/thinking.ts";
 import { glowing, noteText, type Trail } from "../lib/band/glow.ts";
 import { cancelLive, liveCompactionLines, liveShown, noteProgress, startLive, type LiveCompaction } from "../lib/compaction-live.ts";
@@ -115,8 +116,6 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		const data = parseEndLine(entry.data);
 		return data ? { render: (width) => [renderEndLine(data, width, theme)], invalidate() {} } : undefined;
 	});
-	/** Tool Display's folded mode: no live thinking. */
-	let folds = false;
 	/** A folded line moves for what happens now, so the run line's spinner and word hold back. */
 	let foldLive = false;
 	let verb: RunLine["verb"];
@@ -136,8 +135,8 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	let endReason: string | undefined;
 	let cancelled = false;
 	let liveThinking = "";
-	let thinkingMode: unknown = "tail";
-	let hidesLiveThinking = false;
+	/** What Tool Display last published about thinking: where the live thinking shows. */
+	let liveSettings: LiveSettings = { thinking: "tail" };
 	let tailCache: { text: string; width: number; theme: ExtensionContext["ui"]["theme"]; lines: string[] } | undefined;
 	/** When the live thinking grew, so its new characters show brighter for a moment. */
 	let thinkingTrail: Trail | undefined;
@@ -569,7 +568,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	 * The editor divider owns every status and sign-off animation.
 	 */
 	function drawThinkingTail(width: number): string[] {
-		if (!linePaint || !active || runEnded || !currentContext || !hidesLiveThinking || folds || phase !== "think" || thinkingMode === "collapsed") return [];
+		if (!linePaint || !active || runEnded || !currentContext || phase !== "think" || !liveTailShown(liveSettings)) return [];
 		if (statusView(performance.now())) return [];
 		const lines = thinkingTail(width, currentContext.ui.theme);
 		return lines.length ? ["", ...lines] : [];
@@ -626,7 +625,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 		verbs = parseVerbs(readSection("phaseSpinner").verbs);
 		const display = readSection("toolDisplay");
 		reduced = display.motion === "reduced";
-		thinkingMode = display.thinking ?? "tail";
+		liveSettings = { ...liveSettings, thinking: display.thinking ?? "tail" };
 		tailRow.detach();
 		const painter = (border: (text: string) => string): Paint => (tone) => {
 			const thm = currentContext?.ui.theme ?? ctx.ui.theme;
@@ -655,12 +654,10 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	});
 
 	pi.events?.on(DISPLAY_SETTINGS_EVENT, (value) => {
-		const settings = value as { motion?: unknown; thinking?: unknown; hidesLiveThinking?: unknown; folds?: unknown };
+		const settings = value as (LiveSettings & { motion?: unknown }) | undefined;
 		if (settings?.motion !== undefined) reduced = settings.motion === "reduced";
 		if (reduced) cancelWave();
-		if (settings?.thinking !== undefined) thinkingMode = settings.thinking;
-		if (typeof settings?.hidesLiveThinking === "boolean") hidesLiveThinking = settings.hidesLiveThinking;
-		if (typeof settings?.folds === "boolean") folds = settings.folds;
+		liveSettings = { ...liveSettings, ...settings };
 		stopFrames?.();
 		stopFrames = undefined;
 		if (active || statusIndicator || wave) ensureTimer();
@@ -790,7 +787,7 @@ export default function phaseSpinner(pi: ExtensionAPI): void {
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (active) debugState("session_shutdown", ctx);
-		hidesLiveThinking = false;
+		liveSettings = { ...liveSettings, hidesLiveThinking: false };
 		compaction = undefined;
 		resetStatus();
 		stop();
