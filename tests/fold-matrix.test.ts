@@ -264,7 +264,8 @@ function subsetSums(values: readonly number[]): number[] {
 	return values.reduce<number[]>((sums, value) => [...sums, ...sums.map((sum) => sum + value)], [0]).filter((sum) => sum > 0);
 }
 
-function draw(c: Case): Drawing {
+/** Sets the state for a case and makes a fresh fold view over it. */
+function freshView(c: Pick<Case, "fold" | "mode" | "hiddenAtStart" | "streaming">): FoldView {
 	state.fold = c.fold;
 	state.mode = c.mode;
 	state.hiddenAtStart = c.hiddenAtStart;
@@ -282,35 +283,45 @@ function draw(c: Case): Drawing {
 		liveOpen: (open) => { state.liveOpen = open; },
 	});
 	state.view = view;
+	return view;
+}
+
+/** Pushes ctrl+t as many times as the case says, as Pi's updateThinkingBlockVisibility does. */
+function pressCtrlT(c: Case, chat: Container, replies: readonly AssistantMessageComponent[]): void {
+	let hide = c.hiddenAtStart;
+	for (let pressed = 0; pressed < c.presses; pressed++) {
+		hide = !hide;
+		for (const reply of replies) reply.setHideThinkingBlock(hide);
+		chat.render(WIDTH);
+	}
+}
+
+/** Opens the groups the way the case says. */
+function openGroups(c: Case, chat: Container): void {
+	if (c.opening === "click" || c.opening === "open-close") clickLines(chat);
+	if (c.opening === "open-close") {
+		// Closed by the rule's end where there is one; a group whose words follow its line has none.
+		clickLines(chat, "ends");
+		clickLines(chat, "open");
+	}
+	if (c.opening !== "ctrl+o") return;
+	// As Pi's setToolsExpanded does: only children with setExpanded hear it.
+	state.expanded = true;
+	for (const child of chat.children) {
+		const expandable = child as Component & { setExpanded?: (expanded: boolean) => void };
+		if (typeof expandable.setExpanded === "function") expandable.setExpanded(true);
+	}
+}
+
+function draw(c: Case): Drawing {
+	const view = freshView(c);
 	const { chat, replies } = build(c);
 	const undo = installFold(chat as unknown as Box, view, () => state.fold);
 	try {
 		chat.render(WIDTH);
-		const press = () => {
-			let hide = c.hiddenAtStart;
-			for (let pressed = 0; pressed < c.presses; pressed++) {
-				hide = !hide;
-				// As Pi's updateThinkingBlockVisibility does.
-				for (const reply of replies) reply.setHideThinkingBlock(hide);
-				chat.render(WIDTH);
-			}
-		};
-		if (!c.late) press();
-		if (c.opening === "click" || c.opening === "open-close") clickLines(chat);
-		if (c.opening === "open-close") {
-			// Closed by the rule's end where there is one; a group whose words follow its line has none.
-			clickLines(chat, "ends");
-			clickLines(chat, "open");
-		}
-		if (c.opening === "ctrl+o") {
-			// As Pi's setToolsExpanded does: only children with setExpanded hear it.
-			state.expanded = true;
-			for (const child of chat.children) {
-				const expandable = child as Component & { setExpanded?: (expanded: boolean) => void };
-				if (typeof expandable.setExpanded === "function") expandable.setExpanded(true);
-			}
-		}
-		if (c.late) press();
+		if (!c.late) pressCtrlT(c, chat, replies);
+		openGroups(c, chat);
+		if (c.late) pressCtrlT(c, chat, replies);
 		const clicked = c.clickThinking ? clickThinking(chat) : false;
 		const lines = chat.render(WIDTH);
 		// Pi's container writes the layout too, so it is there with fold mode off.
@@ -441,21 +452,7 @@ const base: Omit<Case, "shape" | "streaming"> = { fold: true, mode: "tail", hidd
 
 /** Builds the case, opens every group, and returns what a click on line `y` leaves. */
 function clickedAt(c: Case, y: number): { before: string[]; after: string[] } {
-	state.fold = true;
-	state.mode = c.mode;
-	state.hiddenAtStart = c.hiddenAtStart;
-	state.hidden = undefined;
-	state.expanded = false;
-	state.busy = c.streaming;
-	state.durations = new Map();
-	state.liveMessage = undefined;
-	const view = new FoldView({
-		enabled: () => true, theme: () => undefined, busy: () => state.busy, now: () => 60_000, reduced: () => true,
-		toolEndedAt: () => undefined, nestedOf: () => undefined, animate() {}, redraw() {},
-		thoughtMs: (message, live) => thoughtFor(message, (reply, run) => duration(reply, run, live)),
-		toolsExpanded: () => state.expanded,
-	});
-	state.view = view;
+	const view = freshView(c);
 	const { chat } = build(c);
 	const undo = installFold(chat as unknown as Box, view, () => true);
 	try {
@@ -484,17 +481,7 @@ test("a click on any line inside an open group leaves the group open; only its l
 
 test("an open live group stays open as its reply stops thinking: its thinking then shows in full, under its one label", () => {
 	for (const mode of MODES) for (const presses of [0, 1]) {
-		state.fold = true;
-		state.mode = mode;
-		state.hiddenAtStart = true;
-		state.busy = true;
-		state.durations = new Map();
-		const view = new FoldView({
-			enabled: () => true, theme: () => undefined, busy: () => state.busy, now: () => 60_000, reduced: () => true,
-			toolEndedAt: () => undefined, nestedOf: () => undefined, animate() {}, redraw() {},
-			thoughtMs: (message, live) => thoughtFor(message, (reply, run) => duration(reply, run, live)),
-		});
-		state.view = view;
+		const view = freshView({ fold: true, mode, hiddenAtStart: true, streaming: true });
 		const chat = new Container();
 		chat.addChild(new UserMessageComponent("Do the thing.", getMarkdownTheme(), 1));
 		const reply = new AssistantMessageComponent(undefined, true);

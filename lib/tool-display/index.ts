@@ -358,6 +358,20 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		redrawLateMessages();
 	};
 
+	/** Takes back the nested calls and chain steps that the session saved. */
+	function restoreEntries(ctx: ExtensionContext): void {
+		for (const entry of ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? []) {
+			if (entry.type === "message") {
+				const message = entry.message as { role?: unknown; toolCallId?: unknown; nestedCalls?: unknown };
+				if (message.role === "toolResult" && typeof message.toolCallId === "string") nested.restore(message.toolCallId, message.nestedCalls);
+			}
+			if (entry.type === "custom" && entry.customType === CHAIN_ENTRY) {
+				const data = entry.data as { toolCallId?: unknown } | undefined;
+				if (typeof data?.toolCallId === "string") saved.set(data.toolCallId, data);
+			}
+		}
+	}
+
 	pi.on("session_start", (_event, ctx) => {
 		// Rows from the previous session are gone, so nothing of theirs needs to animate.
 		clock.stop();
@@ -373,16 +387,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		thinkingActive = false;
 		if (ctx.mode !== "tui") { publishSettings(); return; }
 		ui = ctx.ui as unknown as PopupHost;
-		for (const entry of ctx.sessionManager?.getBranch?.() ?? ctx.sessionManager?.getEntries?.() ?? []) {
-			if (entry.type === "message") {
-				const message = entry.message as { role?: unknown; toolCallId?: unknown; nestedCalls?: unknown };
-				if (message.role === "toolResult" && typeof message.toolCallId === "string") nested.restore(message.toolCallId, message.nestedCalls);
-			}
-			if (entry.type === "custom" && entry.customType === CHAIN_ENTRY) {
-				const data = entry.data as { toolCallId?: unknown } | undefined;
-				if (typeof data?.toolCallId === "string") saved.set(data.toolCallId, data);
-			}
-		}
+		restoreEntries(ctx);
 		session = deps.tools(ctx, (operations) => chainOperations(operations, active, () => deps.host.now()));
 		fullscreen = session.fullscreen;
 		hiddenAtStart = session.hideThinking ?? false;

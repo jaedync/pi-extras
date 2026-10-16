@@ -235,6 +235,16 @@ function withoutLead(lines: readonly string[]): { lines: string[]; dropped: numb
 	return { lines: [head + lines[1]!, ...lines.slice(2)], dropped: 1 };
 }
 
+/** A group's rows keep the width they have when it opens, so opening it draws nothing again. */
+function ruleWidths(plan: FoldPlan, groups: readonly { row: FoldRow }[], width: number): Map<number, number> {
+	const widths = new Map<number, number>();
+	groups.forEach((group, at) => {
+		const { members, dropped } = plan.groups[at]!;
+		for (const index of [...members, ...dropped]) widths.set(index, Math.max(1, width - group.row.ruleWidth()));
+	});
+	return widths;
+}
+
 const NO_THINKING = "no thinking text";
 const NOTHING = "nothing to show";
 
@@ -330,12 +340,7 @@ export class FoldView {
 		const open = plan.groups.flatMap((group, at) => (groups[at]!.open ? [...group.members, ...group.said] : []));
 		for (const index of this.rebuild(children, open)) drawn[index] = undefined;
 		this.tellLive(children);
-		// A group's rows keep the width they have when it opens, so opening it draws nothing again.
-		const widths = new Map<number, number>();
-		groups.forEach((group, at) => {
-			const { members, dropped } = plan.groups[at]!;
-			for (const index of [...members, ...dropped]) widths.set(index, Math.max(1, width - group.row.ruleWidth()));
-		});
+		const widths = ruleWidths(plan, groups, width);
 		const rows = children.map((child, index) => drawn[index] ?? child.render(widths.get(index) ?? width));
 		const lines: string[] = [];
 		const layout: Array<{ component: Component; height: number }> = [];
@@ -536,6 +541,18 @@ export class FoldView {
 			const child = children[index];
 			if (isReply(child)) replies.add(child);
 		}
+		const { tokens, sent, started, ended: last } = this.spanOf(callers, replies, ended);
+		const end = live ? this.host.now() : last;
+		const elapsedMs = started !== undefined && end !== undefined && end > started ? end - started : undefined;
+		const timed = { tools, live, tokens, sent, ...(elapsedMs !== undefined ? { elapsedMs } : {}) };
+		// A line of thinking alone says how long it thought, as the replies' own labels do.
+		const thoughtMs = live ? this.thinkingSoFar(own, true) : tools.length === 0 ? this.thinkingSoFar([...replies], false) : undefined;
+		const thinking = thoughtMs !== undefined ? { thoughtMs } : {};
+		return live ? { ...timed, phase: phaseOf(runs, writes, streaming), ...thinking } : { ...timed, ...thinking };
+	}
+
+	/** The replies' tokens, and when the group's work started and ended (`ended` so far: its last call's end). */
+	private spanOf(callers: ReadonlySet<Reply>, replies: ReadonlySet<Reply>, ended: number | undefined): { tokens: number; sent: number; started?: number; ended?: number } {
 		let tokens = 0;
 		let sent = 0;
 		let started: number | undefined;
@@ -557,13 +574,7 @@ export class FoldView {
 			const at = message.timestamp + (thoughtFor ?? 0);
 			if (!reply.isStreaming || thoughtFor !== undefined) ended = Math.max(ended ?? at, at);
 		}
-		const end = live ? this.host.now() : ended;
-		const elapsedMs = started !== undefined && end !== undefined && end > started ? end - started : undefined;
-		const timed = { tools, live, tokens, sent, ...(elapsedMs !== undefined ? { elapsedMs } : {}) };
-		// A line of thinking alone says how long it thought, as the replies' own labels do.
-		const thoughtMs = live ? this.thinkingSoFar(own, true) : tools.length === 0 ? this.thinkingSoFar([...replies], false) : undefined;
-		const thinking = thoughtMs !== undefined ? { thoughtMs } : {};
-		return live ? { ...timed, phase: phaseOf(runs, writes, streaming), ...thinking } : { ...timed, ...thinking };
+		return { tokens, sent, started, ended };
 	}
 
 	/** How long the replies thought, counting only thinking with text: a provider can open a block and send none. */
