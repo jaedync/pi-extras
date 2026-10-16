@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { AssistantMessageComponent, initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
+import { Container, stripTerminalSequences, Text } from "@earendil-works/pi-tui";
 import { DISPLAY_SETTINGS_EVENT, UnreadableJsonError } from "../lib/extras-config.ts";
 import { CHAIN_ENTRY, CHAIN_EVENT } from "../lib/chain/run.ts";
 import { readToolCount, splitCount, TOOL_COUNT_EVENT, writeToolCount } from "../lib/tool-count.ts";
@@ -38,7 +38,8 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 	const notes: Array<[string, string | undefined]> = [];
 	const appended: Array<[string, unknown]> = [];
 	const emitted: Array<[string, unknown]> = [];
-	const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+	// Every handler for an event, as Pi keeps them: folded mode listens to session_start too.
+	const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => void>>();
 	const commands = new Map<string, any>();
 	let settings = options.settings ?? DEFAULT_SETTINGS;
 	const writes: Partial<DisplaySettings>[] = [];
@@ -73,7 +74,7 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 		},
 	};
 	registerToolDisplay({
-		on: (event: string, handler: any) => handlers.set(event, handler),
+		on: (event: string, handler: any) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
 		registerCommand: (name: string, command: unknown) => commands.set(name, command),
 		registerTool: (tool: unknown) => registered.push(tool),
 		getAllTools: () => Object.entries(sources).map(([name, source]) => ({ name, sourceInfo: { source } })),
@@ -87,8 +88,8 @@ function harness(options: { sources?: Record<string, string>; settings?: Display
 	});
 	return {
 		registered, notes, writes, counts, commands, appended, emitted,
-		start: (mode = "tui") => handlers.get("session_start")!({ type: "session_start" }, ctx(mode)),
-		fire: (event: string, data: object = {}) => handlers.get(event)!({ type: event, ...data }, ctx("tui")),
+		start: (mode = "tui") => { for (const handler of handlers.get("session_start")!) handler({ type: "session_start" }, ctx(mode)); },
+		fire: (event: string, data: object = {}) => { for (const handler of handlers.get(event)!) handler({ type: event, ...data }, ctx("tui")); },
 		run: (args: string) => commands.get("tool-display").handler(args, ctx("tui")),
 		latest: (name: string) => registered.filter((tool) => tool.name === name).at(-1),
 	};
@@ -524,4 +525,29 @@ test("a reply's thinking time is the sum of its timed runs", () => {
 	assert.equal(thoughtFor(message, (_m, run) => [1_000, 500][run]), 1_500);
 	assert.equal(thoughtFor(message, () => undefined), undefined);
 	assert.equal(thoughtFor({ content: [{ type: "text" }] }, () => 9), undefined);
+});
+
+test("a new session does not keep the old one's open live group in the published settings", () => {
+	const chat = new Container();
+	const document = new Container();
+	document.children = [new Container(), new Container(), chat];
+	const tui = { children: [document, ...Array.from({ length: 6 }, () => new Container())], requestRender() {} };
+	let expanded = true;
+	const ui = { getToolsExpanded: () => expanded, setWidget: (_key: string, factory: unknown) => { if (typeof factory === "function") factory(tui, undefined); } };
+	const h = harness({ settings: { ...DEFAULT_SETTINGS, folded: true }, ui });
+	h.start();
+	try {
+		const reply = new AssistantMessageComponent(undefined, true);
+		reply.updateContent({ role: "assistant", content: [{ type: "thinking", thinking: "Mull it over." }] } as never, true);
+		chat.addChild(reply);
+		chat.render(80);
+		const live = () => (h.emitted.filter(([channel]) => channel === DISPLAY_SETTINGS_EVENT).at(-1)![1] as { liveOpen: boolean }).liveOpen;
+		assert.equal(live(), true, "ctrl+o opened the group of the reply that streams");
+		expanded = false;
+		chat.clear();
+		h.start();
+		assert.equal(live(), false);
+	} finally {
+		h.fire("session_shutdown");
+	}
 });

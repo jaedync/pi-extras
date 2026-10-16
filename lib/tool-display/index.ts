@@ -392,6 +392,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		fullscreen = session.fullscreen;
 		hiddenAtStart = session.hideThinking ?? false;
 		thinkingToggled = false;
+		// The new session's fold view says its own on its first frame; until then no group is open.
+		liveOpen = false;
 		const host = ctx.ui as { theme?: ThinkingTheme };
 		undoThinking?.();
 		undoThinking = installThinkingTail({
