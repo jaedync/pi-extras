@@ -1012,8 +1012,13 @@ Click the row to read the whole block, and again to go back; ctrl+t does the
 same for every block. `/tool-display thinking collapsed` shows just the label,
 as Pi does, and `/tool-display thinking full` shows everything. In the
 `collapsed` style, live thinking does not show until you push ctrl+t. Then its
-newest three lines show above the editor. In the subagent inspector, a child's
-live thinking shows as its tail in the chat.
+newest three lines show above the editor.
+
+In the subagent inspector, a child's live thinking shows in the chat: its
+newest three lines, or all of it in the `full` style. The inspector reads
+Pi's hide-thinking setting when it opens. If you pushed ctrl+t before that,
+the inspector flips the style (all of it in place of the three lines, and
+the three lines in place of all of it).
 
 **Folded mode.** Folded mode is off by default. `/tool-display folded on`
 turns it on. Then the transcript shows no tool rows and no thinking. Each run
@@ -1064,7 +1069,8 @@ took, not the time of the run. Click a line to open its run. Its rows and
 thinking blocks show inside a rule under the line, the line gets brighter, and
 the rule ends with `╰─ close`. Click the line or `close` to close the run. A
 click on a row inside the rule does not close the run. ctrl+o opens every
-run, the `∴ Thought` lines too.
+run, the `∴ Thought` lines too, and ctrl+o again closes every run. A click
+after ctrl+o opens or closes one run.
 
 Thinking in folded mode:
 
@@ -1078,9 +1084,11 @@ Thinking in folded mode:
   the rule (all of them in the `full` style). A click or ctrl+t flips them.
   They then do not show above the editor, so live thinking shows in one place
   only.
-- When the thinking ends in an open run, its full text stays, as above.
+- When the thinking ends in an open run of thinking alone, its full text
+  stays, as above. In an open run with calls, the thinking becomes its label.
 - A provider can keep its thinking text to itself. An open run of such
   thinking shows `no thinking text` in its rule.
+
 The end line of a prompt is the same as in the unfolded view. The subagent
 inspector is not folded.
 
