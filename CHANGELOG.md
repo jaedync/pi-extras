@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.25.3 - 2026-10-16
+
+### Fixed
+
+- Usage: the OpenCode Go monthly cap of DeepSeek V4.1 Flash is now $80 on Go
+  and $160 on Go Plus (before: $60 and $120). So its dollar figures in the
+  `usage` tool and the footer are correct again.
+- Usage: Step 5 Preview and Gemini 4 Argon Contributor now have OpenCode Go
+  caps: $60 on Go and $240 on Go Plus. These are OpenCode's limited-time
+  caps. When the offer ends, set the usual caps with
+  `opencodeGo.monthlyCaps` ($15 and $60 for Step 5 Preview, $30 and $120 for
+  Gemini 4 Argon Contributor) until a release changes them.
+
 ## 0.25.2 - 2026-10-16
 
 ### Fixed
