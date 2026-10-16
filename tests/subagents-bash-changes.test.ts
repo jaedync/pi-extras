@@ -148,7 +148,7 @@ test("a workspace that a git init makes a repository is checked from the next ca
 	const { team, warnings, bash } = harness(dir);
 	const writer = bash("writer", dir);
 	assert.equal(await writer("git init -q && echo ok"), "ok\n");
-	assert.match(await writer("echo a > a.txt && echo ok"), /^ok\n/);
+	assert.equal(await writer("echo a > a.txt && echo ok"), "ok\n");
 	assert.match(team.claimEdit("other", join(dir, "other.txt")) ?? "", /writer/, "the command took the lock");
 	assert.deepEqual(warnings, []);
 	await team.close();

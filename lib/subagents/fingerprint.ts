@@ -33,7 +33,8 @@ async function git(cwd: string, args: readonly string[], call?: GitCall): Promis
 }
 
 // Git's words when its search up from the directory finds no repository. A broken repository words it differently, so it still fails.
-const NO_REPOSITORY = /not a git repository \(or any /;
+// Anchored, because other failures quote a path, which can hold any words.
+const NO_REPOSITORY = /^git rev-parse failed: fatal: not a git repository \(or any (?:of the parent directories|parent up to mount point )/;
 // The C locale keeps those words in English whatever the user's language is.
 const ENGLISH: GitCall = { args: [], env: { LC_ALL: "C" } };
 
