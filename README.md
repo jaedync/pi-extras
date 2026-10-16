@@ -1005,11 +1005,15 @@ their own tools again; Pi's built-in tools keep the band either way.
 **Thinking.** While the model thinks, its newest three lines show above queued
 messages and the editor divider. Paragraphs and list items are joined with `·`
 rather than taking lines of their own, so the three lines hold as much as fits. When thinking
-ends, the transcript keeps one `∴ Thought for 12s` row. Thinking shorter than
-one second shows tenths, such as `∴ Thought for 0.4s`. Click the row to read the
-whole block, and again to go back; ctrl+t does the same for every block.
-`/tool-display thinking collapsed` shows just the label, as Pi does, and
-`/tool-display thinking full` shows everything.
+ends, the transcript keeps one `∴ Thought for 12.0s` row. The time shows
+tenths below one minute (`0.4s`, `54.9s`), then minutes and seconds (`1m05s`).
+Every place that tells a thinking time uses this form and the same measure.
+Click the row to read the whole block, and again to go back; ctrl+t does the
+same for every block. `/tool-display thinking collapsed` shows just the label,
+as Pi does, and `/tool-display thinking full` shows everything. In the
+`collapsed` style, live thinking does not show until you push ctrl+t. Then its
+newest three lines show above the editor. In the subagent inspector, a child's
+live thinking shows as its tail in the chat.
 
 **Folded mode.** Folded mode is off by default. `/tool-display folded on`
 turns it on. Then the transcript shows no tool rows and no thinking. Each run
@@ -1055,12 +1059,28 @@ says how long the model has thought, for example `Thought for 2.5s`. A reply tha
 and then writes keeps its thinking in a line above its words: the line of the
 calls before it, or a line of its own directly above the words, such as
 `∴ Thought for 2.5s`. That line looks like a finished thinking block in the
-unfolded view and has no figures. The
-live thinking tail
-above the editor is not shown. Click a line to open its run. Its rows and
+unfolded view and has no figures. Its time is the time that the thinking
+took, not the time of the run. Click a line to open its run. Its rows and
 thinking blocks show inside a rule under the line, the line gets brighter, and
 the rule ends with `╰─ close`. Click the line or `close` to close the run. A
-`∴ Thought` line opens to the full thinking text. ctrl+o opens every run.
+click on a row inside the rule does not close the run. ctrl+o opens every
+run, the `∴ Thought` lines too.
+
+Thinking in folded mode:
+
+- A `∴ Thought` line opens to the full thinking text, one time, with no
+  second label. A click on the text or ctrl+t does not collapse it.
+- In an open run with calls, the thinking of each reply shows as a label. A
+  click on the label or ctrl+t flips it to the full text and back.
+- While the model thinks and the run is closed, only the line shows. Push
+  ctrl+t to show the newest three lines above the editor.
+- While the model thinks and the run is open, the newest lines show inside
+  the rule (all of them in the `full` style). A click or ctrl+t flips them.
+  They then do not show above the editor, so live thinking shows in one place
+  only.
+- When the thinking ends in an open run, its full text stays, as above.
+- A provider can keep its thinking text to itself. An open run of such
+  thinking shows `no thinking text` in its rule.
 The end line of a prompt is the same as in the unfolded view. The subagent
 inspector is not folded.
 
