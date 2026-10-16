@@ -552,3 +552,34 @@ test("ctrl+o opens every group and closes every group, whatever a click did befo
 		assert.deepEqual(drawn((chat) => { ctrlO(chat, true); clickLines(chat); ctrlO(chat, false); ctrlO(chat, true); }), opened, `${name}: ctrl+o, a click to close, ctrl+o twice`);
 	}
 });
+
+test("folded mode and the thinking style can change while a reply thinks: the live thinking still shows in one place", () => {
+	const c: Case = { ...base, shape: SHAPES[0]!, streaming: true };
+	const { chat } = build(c);
+	const undo = installFold(chat as unknown as Box, freshView(c), () => state.fold);
+	const place = () => {
+		const inline = chat.render(WIDTH).map(plain).filter((line) => line.includes("LIVE")).length;
+		const tail = liveTailShown(published());
+		return inline > 0 && tail ? "both" : inline > 3 ? "inline full" : inline > 0 ? "inline" : tail ? "tail" : "none";
+	};
+	try {
+		chat.render(WIDTH);
+		ctrlO(chat, true);
+		assert.equal(place(), "inline", "an open group");
+		state.mode = "full";
+		assert.equal(place(), "inline full", "the full style, on the next frame");
+		state.mode = "collapsed";
+		assert.equal(place(), "inline", "the collapsed style: the tail in the open group");
+		state.mode = "tail";
+		// As /tool-display folded off does: Tool Display builds the transcript again.
+		state.fold = false;
+		chat.invalidate();
+		assert.equal(place(), "tail", "unfolded: the spinner's tail");
+		state.fold = true;
+		assert.equal(place(), "inline", "folded again: the open group, on its first frame");
+		ctrlO(chat, false);
+		assert.equal(place(), "none", "a closed group: only its line");
+	} finally {
+		undo();
+	}
+});

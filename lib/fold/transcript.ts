@@ -248,6 +248,8 @@ function ruleWidths(plan: FoldPlan, groups: readonly { row: FoldRow }[], width: 
 const NO_THINKING = "no thinking text";
 const NOTHING = "nothing to show";
 
+type Built = "folded" | "open" | "plain";
+
 /** What the view draws for one group this frame. */
 interface Drawn {
 	readonly row: FoldRow;
@@ -300,8 +302,8 @@ export class FoldView {
 	private readonly opened = new WeakSet<object>();
 	/** Replies whose open group is a line of thinking alone, so their thinking shows in full. */
 	private readonly revealed = new WeakSet<object>();
-	/** What each reply was last built with: true when without its thinking. */
-	private readonly built = new WeakMap<object, boolean>();
+	/** What each reply was last built for: its thinking left out, shown in an open group, or folded mode off. */
+	private readonly built = new WeakMap<object, Built>();
 	/** What Pi's expand key said last, and how many times it changed. */
 	private expandKey: { expanded?: boolean; era: number } = { era: 0 };
 	/** What liveOpen last said. */
@@ -316,7 +318,7 @@ export class FoldView {
 	/** Asked as a reply is built: leave out its thinking? Yes in this transcript, unless its group is open. */
 	foldsThinking(reply: object): boolean {
 		const folds = this.host.enabled() && this.ours.has(reply) && !this.opened.has(reply);
-		this.built.set(reply, folds);
+		this.built.set(reply, folds ? "folded" : this.host.enabled() && this.ours.has(reply) ? "open" : "plain");
 		return folds;
 	}
 
@@ -460,10 +462,11 @@ export class FoldView {
 			if (!isReply(child)) return;
 			if (opening.has(child)) this.opened.add(child);
 			else this.opened.delete(child);
-			const folds = !opening.has(child);
-			if (this.built.get(child) === folds) return;
+			// A reply built with folded mode off shows its thinking too, but not its live thinking, which an open group shows.
+			const wanted: Built = opening.has(child) ? "open" : "folded";
+			if (this.built.get(child) === wanted) return;
 			// Noted first: a reply the thinking patch passes over (an unexpected shape) is then not built again every frame.
-			this.built.set(child, folds);
+			this.built.set(child, wanted);
 			child.invalidate();
 			rebuilt.push(index);
 		});
