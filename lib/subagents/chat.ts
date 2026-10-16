@@ -161,9 +161,11 @@ export class ChatLog {
 	}
 
 	private assistant(message: Message): AssistantMessageComponent {
-		const reply = new AssistantMessageComponent(message as never, this.options.hideThinking ?? false, getMarkdownTheme(), undefined, this.pad);
-		// No phase spinner draws a child's live thinking, so the reply shows it itself.
+		// Marked before its first build: the constructor's build would tell Tool Display this saved
+		// setting as Pi's ctrl+t, and a child's live thinking has no spinner tail, so the reply shows it.
+		const reply = new AssistantMessageComponent(undefined, this.options.hideThinking ?? false, getMarkdownTheme(), undefined, this.pad);
 		markAside(reply);
+		reply.updateContent(message as never);
 		return reply;
 	}
 

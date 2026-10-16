@@ -116,6 +116,18 @@ test("a child's live thinking shows as its tail in the inspector, where no phase
 	view.dispose();
 });
 
+test("the inspector's replies keep their saved hide-thinking setting to themselves, finished ones too", (t) => {
+	const heard: boolean[] = [];
+	const undo = installThinkingTail({ mode: () => "tail", hiddenAtStart: () => false, theme: () => undefined, gutter: () => true, summary: () => "∴ Thought for 1.0s", hidden: (hide) => { heard.push(hide); } });
+	t.after(undo);
+	const done = { role: "assistant", content: [{ type: "thinking", thinking: "Mull." }, { type: "text", text: "Done." }], stopReason: "stop" };
+	const live = { role: "assistant", content: [{ type: "thinking", thinking: "Mull more." }] };
+	const { view, screen } = open("running", [{ role: "user", content: "Go" }, done], { hideThinking: true, streaming: () => live });
+	assert.ok(screen().includes("Done."));
+	assert.deepEqual(heard, [], "the setting saved when the inspector opened is not Pi's ctrl+t");
+	view.dispose();
+});
+
 test("a call left without a result says so once the agent can't finish it", () => {
 	const messages = [{ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "sleep 99" } }], stopReason: "toolUse" }];
 	const running = open("running", messages);
