@@ -12,15 +12,18 @@ export function watchThinking(pi: ExtensionAPI, now = Date.now): (message: Messa
   if(ctx.mode==="tui")for(const [timestamp,durations] of ready)pi.appendEntry(THINKING_TIMING_ENTRY,{timestamp,durations});
  };
  let active: {timestamp:number;run:number;startedAt:number} | undefined;
+ // The run that ended last: one run can come as several blocks, and it is timed from its first block's start.
+ let ended: typeof active;
  const finish = () => {
   if(!active) return;
+  ended=active;
   const durations=[...(timings.get(active.timestamp) ?? [])];
   durations[active.run]=Math.max(0,now()-active.startedAt);
   timings=new Map(timings).set(active.timestamp,durations);
   active=undefined;
  };
  pi.on("session_start",(_event,ctx)=>{
-  active=undefined;timings=new Map();pending=new Map();
+  active=undefined;ended=undefined;timings=new Map();pending=new Map();
   for(const entry of ctx.sessionManager?.getBranch?.() ?? []) {
    if(entry.type!=="custom" || entry.customType!==THINKING_TIMING_ENTRY) continue;
    const data=entry.data as Timing | undefined;
@@ -39,7 +42,9 @@ export function watchThinking(pi: ExtensionAPI, now = Date.now): (message: Messa
      if(part.type==="thinking" && !thinking) run++;
      thinking=part.type==="thinking";
     }
-    active={timestamp:message.timestamp,run:Math.max(0,run),startedAt:now()};
+    run=Math.max(0,run);
+    const goesOn=ended?.timestamp===message.timestamp && ended.run===run;
+    active={timestamp:message.timestamp,run,startedAt:goesOn ? ended!.startedAt : now()};
    }
   } else if(stream.type==="thinking_end" || stream.type.startsWith("text_") || stream.type.startsWith("toolcall_")) finish();
  });
