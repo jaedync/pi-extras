@@ -11,6 +11,7 @@ import { noteText } from "../lib/subagents/format.ts";
 import { agentGround, agentHue } from "../lib/band/agent-look.ts";
 import { shareDrawnTools } from "../lib/tool-row.ts";
 import { NO_USAGE, type AgentRecord, type AgentState } from "../lib/subagents/types.ts";
+import { installThinkingTail } from "../lib/tool-display/thinking.ts";
 
 // Pi's chat components draw with Pi's own theme.
 initTheme("dark");
@@ -102,6 +103,16 @@ test("the reply being written shows as it streams, and once it ends it is drawn 
 	messages.push(done);
 	streaming = done;
 	assert.equal(screen().split("Half a thought, now whole.").length, 2, "drawn once, not twice");
+	view.dispose();
+});
+
+test("a child's live thinking shows as its tail in the inspector, where no phase spinner draws it", (t) => {
+	const undo = installThinkingTail({ mode: () => "tail", hiddenAtStart: () => false, theme: () => undefined, gutter: () => true, summary: () => "∴ Thought for 1.0s" });
+	t.after(undo);
+	const steps = Array.from({ length: 30 }, (_, index) => `step ${index + 1} of the survey`).join("\n\n");
+	const { view, screen } = open("running", [{ role: "user", content: "Go" }], { streaming: () => ({ role: "assistant", content: [{ type: "thinking", thinking: steps }] }) });
+	assert.ok(screen().includes("step 30 of the survey"), "its newest lines");
+	assert.ok(!screen().includes("step 1 of the survey"), "as a tail, not in full");
 	view.dispose();
 });
 

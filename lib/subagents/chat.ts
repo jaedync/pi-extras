@@ -15,6 +15,7 @@ import {
 	AssistantMessageComponent, CompactionSummaryMessageComponent, getMarkdownTheme, ToolExecutionComponent, UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { markAside } from "../tool-display/thinking.ts";
 import { readEnvelopes, type Envelope } from "./format.ts";
 import { envelopeLines, type Painter, type Voices } from "./transcript.ts";
 
@@ -160,7 +161,10 @@ export class ChatLog {
 	}
 
 	private assistant(message: Message): AssistantMessageComponent {
-		return new AssistantMessageComponent(message as never, this.options.hideThinking ?? false, getMarkdownTheme(), undefined, this.pad);
+		const reply = new AssistantMessageComponent(message as never, this.options.hideThinking ?? false, getMarkdownTheme(), undefined, this.pad);
+		// No phase spinner draws a child's live thinking, so the reply shows it itself.
+		markAside(reply);
+		return reply;
 	}
 
 	/** The reply being written, until it joins the messages. */
