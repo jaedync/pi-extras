@@ -186,8 +186,21 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	let undoThinking: (() => void) | undefined;
 	let undoAdoption: (() => void) | undefined;
 	let thinkingActive = false;
+	/** Pi's hide-thinking setting when the session started; ctrl+t moves it away and back. */
+	let hiddenAtStart = false;
+	let thinkingToggled = false;
+	/** The reply that streams now is in an open fold group, which shows its live thinking. */
+	let liveOpen = false;
 	const folding = () => settings.enabled && settings.folded;
-	const publishSettings = () => pi.events.emit(DISPLAY_SETTINGS_EVENT, { ...settings, hidesLiveThinking: thinkingActive && settings.enabled, folds: thinkingActive && fold.active() });
+	// The phase spinner draws the live thinking's tail by these (see live-thinking.ts).
+	const publishSettings = () => pi.events.emit(DISPLAY_SETTINGS_EVENT, {
+		...settings, hidesLiveThinking: thinkingActive && settings.enabled, folds: thinkingActive && fold.active(), thinkingToggled, liveOpen,
+	});
+	const noteHidden = (hide: boolean) => {
+		if ((hide !== hiddenAtStart) === thinkingToggled) return;
+		thinkingToggled = !thinkingToggled;
+		publishSettings();
+	};
 	let adopting = false;
 	const owned = new Set<string>();
 	const adopted = new WeakMap<object, RowRenderers>();
@@ -219,6 +232,11 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		nestedOf: (id) => nested.get(id)?.calls,
 		written: run.written,
 		live: (live) => pi.events.emit(FOLD_LIVE_EVENT, { live }),
+		liveOpen: (open) => {
+			if (open === liveOpen) return;
+			liveOpen = open;
+			publishSettings();
+		},
 	});
 
 	const kit: Kit = {
@@ -367,7 +385,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		}
 		session = deps.tools(ctx, (operations) => chainOperations(operations, active, () => deps.host.now()));
 		fullscreen = session.fullscreen;
-		const hiddenAtStart = session.hideThinking ?? false;
+		hiddenAtStart = session.hideThinking ?? false;
+		thinkingToggled = false;
 		const host = ctx.ui as { theme?: ThinkingTheme };
 		undoThinking?.();
 		undoThinking = installThinkingTail({
@@ -377,6 +396,8 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 			gutter: () => true,
 			folds: (reply) => fold.foldsThinking(reply),
 			expands: (reply) => fold.expandsThinking(reply),
+			opens: (reply) => fold.opensThinking(reply),
+			hidden: noteHidden,
 			summary: (message, index) => thoughtLabel(thinkingDuration(message, index)),
 		});
 		undoAdoption?.();

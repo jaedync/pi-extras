@@ -56,6 +56,8 @@ export interface FoldHost extends FoldRowHost {
 	animate(live: boolean): void;
 	/** Pi's expand key (ctrl+o) state; Pi tells only tool rows of it, so without this a group follows its rows. */
 	toolsExpanded?(): boolean;
+	/** The reply that streams now went into an open group or out of one: its live thinking shows there, not in the phase spinner's tail. */
+	liveOpen?(open: boolean): void;
 }
 
 export interface Box {
@@ -287,6 +289,8 @@ export class FoldView {
 	private readonly revealed = new WeakSet<object>();
 	/** What each reply was last built with: true when without its thinking. */
 	private readonly built = new WeakMap<object, boolean>();
+	/** What liveOpen last said. */
+	private liveShown: boolean | undefined;
 	/** A settled group's facts, kept until one of its rows changes. */
 	private readonly settled = new WeakMap<FoldRow, { key: string; facts: FoldFacts }>();
 
@@ -299,6 +303,11 @@ export class FoldView {
 		const folds = this.host.enabled() && this.ours.has(reply) && !this.opened.has(reply);
 		this.built.set(reply, folds);
 		return folds;
+	}
+
+	/** Asked as a reply is built: is its group open, so it shows its live thinking itself? */
+	opensThinking(reply: object): boolean {
+		return this.host.enabled() && this.ours.has(reply) && this.opened.has(reply);
 	}
 
 	/** Asked as a reply's thinking draws: show it in full? Yes when its open group is a line of thinking alone. */
@@ -317,6 +326,7 @@ export class FoldView {
 		groups.forEach((group, at) => this.reveal(children, plan.groups[at]!, group.open && thoughtOnly(group.facts)));
 		const open = plan.groups.flatMap((group, at) => (groups[at]!.open ? [...group.members, ...group.said] : []));
 		for (const index of this.rebuild(children, open)) drawn[index] = undefined;
+		this.tellLive(children);
 		// A group's rows keep the width they have when it opens, so opening it draws nothing again.
 		const widths = new Map<number, number>();
 		groups.forEach((group, at) => {
@@ -403,6 +413,14 @@ export class FoldView {
 			put(new Placed(children[index]!, dx, tight.dropped), tight.lines.map(ruled));
 		}
 		put(row.end, row.end.render(width));
+	}
+
+	/** Says, when it changes, whether the reply that streams now is in an open group. */
+	private tellLive(children: readonly Component[]): void {
+		const open = children.some((child) => isReply(child) && child.isStreaming && this.opened.has(child));
+		if (open === this.liveShown) return;
+		this.liveShown = open;
+		try { this.host.liveOpen?.(open); } catch { /* The phase spinner keeps its last word; the transcript still draws. */ }
 	}
 
 	private rowFor(first: Component): FoldRow {

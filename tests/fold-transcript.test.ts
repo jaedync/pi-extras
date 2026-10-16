@@ -526,3 +526,22 @@ test("a row's own expand, a click on its result, leaves its open group open", ()
 	read.expanded = true;
 	assert.ok(text(view.render(chat, 80)).includes("╰─ close"), "Pi's rows expand one at a time on a click; only Pi's key opens every group");
 });
+
+test("a reply in an open group shows its live thinking itself, and the view says so as it changes", () => {
+	const heard: boolean[] = [];
+	let enabled = true;
+	const { value } = host({ busy: () => true, enabled: () => enabled, liveOpen: (open) => { heard.push(open); } });
+	const streaming = new Reply(quiet({ content: [{ type: "thinking", thinking: "hm" }], usage: { output: 1 }, timestamp: 9_000 }), true);
+	const chat = chatOf([new Row(["", " prompt"]), streaming]);
+	const view = viewOf(value);
+	view.render(chat, 80);
+	assert.equal(view.opensThinking(streaming), false);
+	assert.deepEqual(heard, [false]);
+	(chat.mouseLayout!.children[1]!.component as FoldRow).toggle();
+	view.render(chat, 80);
+	view.render(chat, 80);
+	assert.equal(view.opensThinking(streaming), true);
+	assert.deepEqual(heard, [false, true], "told once, on the change");
+	enabled = false;
+	assert.equal(view.opensThinking(streaming), false, "fold mode off: the phase spinner's rule applies");
+});

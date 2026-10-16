@@ -681,6 +681,20 @@ test("the spinner tail requires a loaded, enabled thinking host and reuses an un
  assert.equal(h.queue().length,0,"Tool Display off: no duplicate tail");
 });
 
+test("the spinner tail follows the published fold, ctrl+t and open-group state, never doubling the transcript's",t=>{
+ const events=eventBus();
+ const { h } = laidOut(t,events);
+ h.emit("agent_start");
+ h.update("thinking_delta","thought ".repeat(200)+"newest",100);
+ const tail=(settings)=>{events.emit(DISPLAY_SETTINGS_EVENT,{hidesLiveThinking:true,...settings});return h.queue().length>0;};
+ assert.equal(tail({folds:true}),false,"a closed fold group shows only its line");
+ assert.equal(tail({folds:true,thinkingToggled:true}),true,"ctrl+t asks for the thinking: the tail, as unfolded");
+ assert.equal(tail({folds:true,thinkingToggled:true,liveOpen:true}),false,"the open group draws it");
+ assert.equal(tail({folds:false,liveOpen:false,thinkingToggled:false,thinking:"collapsed"}),false,"collapsed: no live view");
+ assert.equal(tail({thinkingToggled:true}),true,"until ctrl+t");
+ assert.equal(tail({thinking:"full",thinkingToggled:false}),true);
+});
+
 test("an idle agent has no transcript status, and the divider shows the last run", t => {
 	const { h, layout } = laidOut(t);
 	h.emit("agent_start");

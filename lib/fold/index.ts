@@ -21,6 +21,8 @@ export interface FoldDeps {
 	written?(toolCallId: string): boolean;
 	/** A drawn folded line became live, or the last live one settled. */
 	live?(live: boolean): void;
+	/** The reply that streams now went into an open group or out of one. */
+	liveOpen?(open: boolean): void;
 }
 
 interface Tui {
@@ -54,6 +56,7 @@ type Entry = { type?: string; message?: { role?: string; toolCallId?: unknown; t
 export interface Fold {
 	foldsThinking(reply: object): boolean;
 	expandsThinking(reply: object): boolean;
+	opensThinking(reply: object): boolean;
 	/** The transcript is drawn folded: the switch is on and Pi's transcript was found. */
 	active(): boolean;
 	/** The switch changed, or the session started: put the view in place if it is on, draw again, and say whether it is active. */
@@ -129,6 +132,7 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 			thoughtMs: deps.thoughtMs,
 			nestedOf: deps.nestedOf,
 			...(deps.written ? { written: deps.written } : {}),
+			...(deps.liveOpen ? { liveOpen: deps.liveOpen } : {}),
 			animate,
 			redraw: () => found.requestRender(),
 			...(typeof ui.getToolsExpanded === "function" ? { toolsExpanded: () => ui.getToolsExpanded() } : {}),
@@ -155,6 +159,7 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 	return {
 		foldsThinking: (reply) => view?.foldsThinking(reply) ?? false,
 		expandsThinking: (reply) => view?.expandsThinking(reply) ?? false,
+		opensThinking: (reply) => view?.opensThinking(reply) ?? false,
 		active,
 		refresh: () => {
 			install();

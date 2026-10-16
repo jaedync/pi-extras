@@ -20,6 +20,7 @@ import { ROW_MARGIN } from "../band/band.ts";
 import { glowing, glowLines, type GlowTheme, type Trail } from "../band/glow.ts";
 import { elapsed } from "../fold/summary.ts";
 import { sanitize } from "./format.ts";
+import { livePlace } from "./live-thinking.ts";
 
 export type ThinkingMode = "tail" | "collapsed" | "full";
 export const THINKING_MODES: readonly ThinkingMode[] = ["tail", "collapsed", "full"];
@@ -46,7 +47,25 @@ export interface ThinkingHost {
 	folds?(reply: object): boolean;
 	/** Fold mode: this reply's thinking was opened from its Thought line, so it shows in full; that line is its label, so it never folds to another. */
 	expands?(reply: object): boolean;
+	/** Fold mode: this reply's group is open, so its live thinking shows here rather than in the phase spinner's tail. */
+	opens?(reply: object): boolean;
+	/** Pi's hide-thinking setting, as each reply in Pi's transcript is built or toggled (ctrl+t). */
+	hidden?(hide: boolean): void;
 }
+
+// Global, so a reloaded copy of this module and the subagent inspector's copy read the same mark.
+const ASIDE = Symbol.for("pi-extras.thinking.aside.v1");
+
+/**
+ * Marks a reply drawn outside Pi's transcript (the subagent inspector). No
+ * phase spinner draws its live thinking, so the reply shows it itself, and
+ * Pi's thinking toggle does not reach it.
+ */
+export function markAside(reply: object): void {
+	(reply as Record<symbol, unknown>)[ASIDE] = true;
+}
+
+const isAside = (reply: object): boolean => (reply as Record<symbol, unknown>)[ASIDE] === true;
 
 /** The glyph, then `Thought for 12.3s`: the time as a fold line says it, so the same thinking reads the same everywhere. */
 export function thoughtLabel(ms: number | undefined): string {
@@ -81,6 +100,15 @@ export function thinkingRuns(content: readonly Content[]): string[] {
 		if (texts.length > 0) runs.push(texts.join("\n\n"));
 	}
 	return runs;
+}
+
+/** The reply streams thinking now: a thinking block with text ends it. An empty block a provider opens does not count. */
+export function thinksNow(content: readonly Content[]): boolean {
+	for (let index = content.length - 1; index >= 0 && content[index]!.type === "thinking"; index--) {
+		const thinking = content[index]!.thinking;
+		if (typeof thinking === "string" && thinking.trim()) return true;
+	}
+	return false;
 }
 
 /** The style a block is drawn in: the resting one, or its opposite when toggled once (by click or Pi's key). */
@@ -286,6 +314,21 @@ function toggleBlock(owner: object, run: number): void {
 	clicked.set(owner, was.has(run) ? new Set([...was].filter((index) => index !== run)) : new Set([...was, run]));
 }
 
+/** Puts the reply's words and notices in the bullet gutter, the first words with the bullet. */
+function inGutter(children: Component[], host: ThinkingHost): void {
+	let first = true;
+	for (let index = 0; index < children.length; index++) {
+		const child = children[index]!;
+		if (child.constructor.name === "Text") {
+			children[index] = assistantText(child, false, host);
+		// Copy Blocks may have swapped a reply's Markdown for its card view before this runs.
+		} else if (child.constructor.name === "Markdown" || child.constructor.name === "CopyBlocksView") {
+			children[index] = assistantText(child, first, host);
+			first = false;
+		}
+	}
+}
+
 /** Swaps each of Pi's thinking regions for a view of the same rendering; false when the message doesn't look as expected. */
 function restyle(self: Internals, message: Message, host: ThinkingHost, mode: ThinkingMode): boolean {
 	const runs = thinkingRuns(message.content);
@@ -293,56 +336,61 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 	const regions = children.filter((child): child is Component & { child: Component } => isRegion(child));
 	if (regions.length !== runs.length) return false;
 	const owner = self as object;
-	if (host.gutter?.()) {
-		let first = true;
-		for (let index = 0; index < children.length; index++) {
-			const child = children[index]!;
-			if (child.constructor.name === "Text") {
-				children[index] = assistantText(child, false, host);
-			// Copy Blocks may have swapped a reply's Markdown for its card view before this runs.
-			} else if (child.constructor.name === "Markdown" || child.constructor.name === "CopyBlocksView") {
-				children[index] = assistantText(child, first, host);
-				first = false;
-			}
-		}
-	}
+	if (host.gutter?.()) inGutter(children, host);
 	if (host.folds?.(owner)) {
 		foldThinking(self, regions);
 		return true;
 	}
 	const hiddenSpacers = new Set<Component>();
+	// Only the final thinking run can still be live. Later text or a call closes it.
+	const streams = !!host.summary && self.isStreaming && thinksNow(message.content);
 	regions.forEach((region, run) => {
-		const summary = host.summary;
-		// Only the final thinking run can still be live. Later text or a call closes it.
-		const last = message.content.at(-1);
-		const live = !!summary && self.isStreaming && run === runs.length - 1 && last?.type === "thinking";
-		if (live) {
-			const at = children.indexOf(region);
+		const live = streams && run === runs.length - 1;
+		const at = children.indexOf(region);
+		if (live && !showsLive(self, host)) {
 			const spacer = children[at - 1];
 			// Pi's spacer belongs to the hidden block, not to a reserved thinking-tail row.
 			if (spacer?.constructor.name === "Spacer") hiddenSpacers.add(spacer);
 			children[at] = { render: () => [], invalidate() {} };
 			return;
 		}
-		const view = new ThinkingView({
+		children[at] = new ThinkingView({
 			full: host.gutter?.() ? assistantText(region.child, false, host) : region.child,
 			text: runs[run]!,
-			pad: host.gutter?.() ? summary ? 0 : ROW_MARGIN : self.outputPad,
+			pad: host.gutter?.() ? host.summary ? 0 : ROW_MARGIN : self.outputPad,
 			host,
-			view: () => {
-				if (host.expands?.(owner)) return "full";
-				const resting = summary && host.mode() !== "full" ? "collapsed" : host.mode() ?? mode;
-				const chosen = viewFor(resting, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false);
-				return summary && chosen === "tail" ? "collapsed" : chosen;
-			},
-			label: () => summary?.(message, run) ?? self.hiddenThinkingLabel,
-			toggle: () => { if (!host.expands?.(owner)) toggleBlock(owner, run); },
+			view: () => (live ? liveStyle(self, host, run) : finishedStyle(self, host, mode, run)),
+			label: () => host.summary?.(message, run) ?? self.hiddenThinkingLabel,
+			toggle: () => { if (live || !host.expands?.(owner)) toggleBlock(owner, run); },
 			memo: memoFor(owner, run, runs[run]!, self.isStreaming, self.outputPad),
 		});
-		children[children.indexOf(region)] = view;
 	});
 	if (hiddenSpacers.size) self.contentContainer.children = children.filter((child) => !hiddenSpacers.has(child));
 	return true;
+}
+
+/** Pi's toggle (ctrl+t) was pressed since the session started; the inspector's replies take the setting as it was then. */
+const toggledAll = (self: Internals, host: ThinkingHost) => self.hideThinkingBlock !== host.hiddenAtStart();
+
+/** The live thinking shows in this reply: in an open fold group, or where no spinner draws it (see live-thinking.ts). */
+function showsLive(self: Internals, host: ThinkingHost): boolean {
+	// A closed group's reply was built without its thinking, so here fold mode draws it only when open.
+	const opens = host.opens?.(self) === true;
+	return livePlace({ folded: opens, open: opens, mode: host.mode(), toggled: toggledAll(self, host), aside: isAside(self) }) === "inline";
+}
+
+/** Live thinking rests as its tail, or in full in the full style; it has no label yet. */
+function liveStyle(self: Internals, host: ThinkingHost, run: number): ThinkingMode {
+	return viewFor(host.mode() === "full" ? "full" : "tail", toggledAll(self, host), clicked.get(self)?.has(run) ?? false);
+}
+
+/** Finished thinking rests as its label (the collapsed style) unless the style is full; under an open Thought line it stays in full. */
+function finishedStyle(self: Internals, host: ThinkingHost, mode: ThinkingMode, run: number): ThinkingMode {
+	if (host.expands?.(self)) return "full";
+	const summary = !!host.summary;
+	const resting = summary && host.mode() !== "full" ? "collapsed" : host.mode() ?? mode;
+	const chosen = viewFor(resting, toggledAll(self, host), clicked.get(self)?.has(run) ?? false);
+	return summary && chosen === "tail" ? "collapsed" : chosen;
 }
 
 const isSpacer = (child: Component | undefined) => child?.constructor.name === "Spacer";
@@ -424,9 +472,10 @@ const SLOT = Symbol.for("pi-extras.thinking-tail.v2");
 function implFor(host: ThinkingHost): Impl {
 	return {
 		update(self, message, isStreaming, original) {
+			const hide = self.hideThinkingBlock;
+			if (!isAside(self)) host.hidden?.(hide);
 			const mode = host.mode();
 			if (!mode) return original.call(self, message, isStreaming);
-			const hide = self.hideThinkingBlock;
 			const overrides = self.thinkingVisibilityOverrides;
 			const pad = self.outputPad;
 			if (host.gutter?.()) self.outputPad = 0;
@@ -447,6 +496,7 @@ function implFor(host: ThinkingHost): Impl {
 		setHide(self, hide, original) {
 			// Pi's toggle for every block resets the ones a click switched, as it resets its own.
 			clicked.delete(self);
+			if (!isAside(self)) host.hidden?.(hide);
 			original.call(self, hide);
 		},
 	};

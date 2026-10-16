@@ -165,7 +165,7 @@ test("a resumed session shows the saved steps of a chained command", () => {
 test("Tool Display publishes live-thinking ownership on start, settings changes, and shutdown", async () => {
  const h = harness();
  h.start();
- assert.deepEqual(h.emitted.at(-1), [DISPLAY_SETTINGS_EVENT, { ...DEFAULT_SETTINGS, hidesLiveThinking: true, folds: false }]);
+ assert.deepEqual(h.emitted.at(-1), [DISPLAY_SETTINGS_EVENT, { ...DEFAULT_SETTINGS, hidesLiveThinking: true, folds: false, thinkingToggled: false, liveOpen: false }]);
  await h.run("off");
  assert.equal((h.emitted.at(-1)![1] as any).hidesLiveThinking, false);
  await h.run("on");
@@ -181,6 +181,20 @@ test("Tool Display publishes live-thinking ownership on start, settings changes,
  const print = harness();
  print.start("print");
  assert.equal((print.emitted.at(-1)![1] as any).hidesLiveThinking, false);
+});
+
+test("Tool Display tells the phase spinner when Pi's thinking toggle (ctrl+t) moves away from the session's start and back", () => {
+	const h = harness();
+	h.start();
+	const reply = new AssistantMessageComponent({ role: "assistant", content: [{ type: "thinking", thinking: "Plan." }], stopReason: "stop" } as never, false);
+	const toggled = () => h.emitted.filter(([channel]) => channel === DISPLAY_SETTINGS_EVENT).map(([, data]) => (data as any).thinkingToggled);
+	const before = toggled().length;
+	reply.setHideThinkingBlock(true);
+	assert.deepEqual(toggled().slice(before), [true], "the session started with thinking shown");
+	reply.setHideThinkingBlock(true);
+	reply.setHideThinkingBlock(false);
+	assert.deepEqual(toggled().slice(before), [true, false], "told once per change");
+	h.fire("session_shutdown");
 });
 
 test("/tool-display reports, switches and saves its settings", async () => {
