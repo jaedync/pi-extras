@@ -2,6 +2,43 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.25.4 - 2026-10-16
+
+### Fixed
+
+- Tool Display fold mode: you can now see the thinking that streams now.
+  - Open its line (a click or ctrl+o) to see the thinking under the line, as
+    its newest 3 lines, or in full with the "full" thinking style. A click on
+    it or ctrl+t switches between the two views. Before, an open live line
+    showed only `╰─ close`.
+  - With the line closed, ctrl+t shows the newest lines under the
+    transcript, as unfolded mode does. Before, ctrl+t did nothing in fold
+    mode. The same thinking never shows in two places.
+- Tool Display fold mode: an open "Thought for" line shows its thinking in
+  full, one time. Before, a click on the thinking or ctrl+t could add a
+  second "Thought for" label under the line, with a different time.
+- Tool Display fold mode: ctrl+o now opens and closes every line, a line of
+  thinking alone too. A click on a tool result no longer closes its open
+  line, and ctrl+o now resets the lines that a click opened or closed.
+- Tool Display fold mode: an open line whose thinking has no text (for example
+  redacted thinking) now says `no thinking text`, not only `╰─ close`. After
+  fold mode goes off and on again, an open live line shows its thinking at
+  once, not at the next token.
+- Tool Display: the same thinking shows the same time everywhere, in one form
+  (`12.3s`, then for example `1m05s`). Each "Thought for" label reads the time
+  of its own thinking block, also when an empty block comes before it.
+- Tool Display: when a model sends one run of thinking as several blocks (as
+  Anthropic's summarized thinking does), the time covers the full run. Before,
+  the live time went back to 0 at each block, and the run kept only the time
+  of its last block.
+- Tool Display: an empty thinking block at the end of a reply no longer makes
+  its older, finished thinking look live.
+- Tool Display: in the "collapsed" thinking style, ctrl+t now shows the live
+  thinking under the transcript. Before, live thinking had no view in that
+  style.
+- Subagents: the `/subagents` inspector now shows a child's live thinking.
+  Before, it was blank.
+
 ## 0.25.3 - 2026-10-16
 
 ### Fixed
