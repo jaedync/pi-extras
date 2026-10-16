@@ -9,6 +9,7 @@ import {
 	type DollarInputs,
 	type SpendQuery,
 } from "../lib/usage-dollars/core.ts";
+import { openCodeGoMonthlyCap } from "../lib/usage-dollars/opencode-go.ts";
 
 /** The tests read fields of each union member directly. */
 const figures = (...args: Parameters<typeof entryDollars>) => entryDollars(...args) as Record<string, any> | undefined;
@@ -109,6 +110,13 @@ test("OpenCode Go windows give exact dollars per model from the plan caps", () =
 		},
 		note: "No published cap for: not-a-go-model.",
 	});
+});
+
+test("OpenCode Go caps include the models added on 2026-10-16, at their limited-time caps", () => {
+	assert.equal(openCodeGoMonthlyCap("step-5-preview", "go"), 60);
+	assert.equal(openCodeGoMonthlyCap("step-5-preview", "go-plus"), 240);
+	assert.equal(openCodeGoMonthlyCap("gemini-4-argon-contributor", "go"), 60);
+	assert.equal(openCodeGoMonthlyCap("gemini-4-argon-contributor", "go-plus"), 240);
 });
 
 test("OpenCode Go settings choose Go Plus and override one cap", () => {

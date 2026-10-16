@@ -4,9 +4,9 @@
  * window 50%. The usage endpoint reports one percentage per window and no
  * plan, so the plan and any changed caps come from settings.
  *
- * Source: https://opencode.ai/docs/go/ "Usage limits", read 2026-10-10
- * (DeepSeek V4.1 Flash re-read 2026-10-14).
- * Free preview models are unlimited and are left out.
+ * Source: https://opencode.ai/docs/go/ "Usage limits", read 2026-10-10;
+ * all rows checked again 2026-10-16. Free preview models are unlimited and
+ * are left out. Models that the page no longer lists keep their last caps.
  */
 
 export type OpenCodeGoPlan = "go" | "go-plus";
@@ -45,6 +45,9 @@ const MONTHLY_CAPS: Record<string, readonly [number, number]> = {
 	"gpt-6-luna": [15, 60],
 	"gpt-5.6-luna": [15, 60],
 	"claude-haiku-5-5": [15, 60],
+	// Limited-time caps (4x and 2x); the usual ones are [15, 60] and [30, 120]. Settings can set them back when the offer ends.
+	"step-5-preview": [60, 240],
+	"gemini-4-argon-contributor": [60, 240],
 };
 
 /** Share of the monthly cap each usage-endpoint window allows. */
