@@ -519,3 +519,36 @@ test("an open live group stays open as its reply stops thinking: its thinking th
 		}
 	}
 });
+
+/** As Pi's setToolsExpanded does: only children with setExpanded hear it. Then Pi draws. */
+function ctrlO(chat: Container, expanded: boolean): void {
+	state.expanded = expanded;
+	for (const child of chat.children) {
+		const expandable = child as Component & { setExpanded?: (expanded: boolean) => void };
+		if (typeof expandable.setExpanded === "function") expandable.setExpanded(expanded);
+	}
+	chat.render(WIDTH);
+}
+
+test("ctrl+o opens every group and closes every group, whatever a click did before", () => {
+	for (const shape of SHAPES) for (const streaming of [false, true]) {
+		const c: Case = { ...base, shape, streaming };
+		const drawn = (steps: (chat: Container) => void) => {
+			const { chat } = build(c);
+			const undo = installFold(chat as unknown as Box, freshView(c), () => true);
+			try {
+				chat.render(WIDTH);
+				steps(chat);
+				return chat.render(WIDTH).map(plain);
+			} finally {
+				undo();
+			}
+		};
+		const name = `${shape.name} ${streaming ? "live" : "done"}`;
+		const closed = drawn(() => {});
+		const opened = drawn((chat) => ctrlO(chat, true));
+		assert.deepEqual(drawn((chat) => { ctrlO(chat, true); ctrlO(chat, false); }), closed, `${name}: ctrl+o twice`);
+		assert.deepEqual(drawn((chat) => { clickLines(chat); ctrlO(chat, true); }), opened, `${name}: a click, then ctrl+o`);
+		assert.deepEqual(drawn((chat) => { ctrlO(chat, true); clickLines(chat); ctrlO(chat, false); ctrlO(chat, true); }), opened, `${name}: ctrl+o, a click to close, ctrl+o twice`);
+	}
+});

@@ -81,7 +81,10 @@ export const paintWith = (theme: FoldTheme | undefined) => (key: string, text: s
 
 /** One group's line: a blank line above, as Pi's rows have, then the summary; a hung line has no blank line. */
 export class FoldRow implements Component {
+	/** A click's flip from what Pi's expand key says. */
 	open = false;
+	/** The count of Pi's expand-key changes when a click last flipped this group. */
+	private era = 0;
 	private facts: FoldFacts = { tools: [], live: false, tokens: 0 };
 	private look: FoldLook = { hung: false, open: false };
 	private drawing?: { key: string; facts: FoldFacts; theme: FoldTheme | undefined; lines: string[] };
@@ -97,6 +100,13 @@ export class FoldRow implements Component {
 	update(facts: FoldFacts, look: FoldLook = this.look): void {
 		this.facts = facts;
 		this.look = look;
+	}
+
+	/** Pi's expand key was pushed since the click: it opens or closes every group, so the click's flip goes. */
+	follow(era: number): void {
+		if (era === this.era) return;
+		this.era = era;
+		this.open = false;
 	}
 
 	/** Opens or closes the group. */

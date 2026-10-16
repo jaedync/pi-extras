@@ -302,6 +302,8 @@ export class FoldView {
 	private readonly revealed = new WeakSet<object>();
 	/** What each reply was last built with: true when without its thinking. */
 	private readonly built = new WeakMap<object, boolean>();
+	/** What Pi's expand key said last, and how many times it changed. */
+	private expandKey: { expanded?: boolean; era: number } = { era: 0 };
 	/** What liveOpen last said. */
 	private liveShown: boolean | undefined;
 	/** A settled group's facts, kept until one of its rows changes. */
@@ -380,8 +382,12 @@ export class FoldView {
 		const before = new Map<number, PlanEntry | undefined>();
 		plan.entries.forEach((entry, at) => { if (entry.kind === "group") before.set(entry.group, plan.entries[at - 1]); });
 		const pi = this.toolsExpanded();
+		if (pi !== undefined && pi !== this.expandKey.expanded) {
+			this.expandKey = { expanded: pi, era: this.expandKey.expanded === undefined ? 0 : this.expandKey.era + 1 };
+		}
 		return plan.groups.map((group, at) => {
 			const row = this.rowFor(children[firstOf(group)]!);
+			row.follow(this.expandKey.era);
 			// A click on a row's result expands that row alone; only Pi's key opens every group.
 			const expanded = pi ?? group.members.some((index) => (children[index] as Partial<ToolRow>).expanded === true);
 			// Calls right after the reply that made them hang under it, when it shows.
