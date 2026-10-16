@@ -302,6 +302,8 @@ export class FoldView {
 	private readonly opened = new WeakSet<object>();
 	/** Replies whose open group is a line of thinking alone, so their thinking shows in full. */
 	private readonly revealed = new WeakSet<object>();
+	/** What each group's replies were last revealed for. */
+	private readonly revealedAs = new WeakMap<FoldRow, string>();
 	/** What each reply was last built for: its thinking left out, shown in an open group, or folded mode off. */
 	private readonly built = new WeakMap<object, Built>();
 	/** What Pi's expand key said last, and how many times it changed. */
@@ -340,7 +342,7 @@ export class FoldView {
 		const drawn: Array<string[] | undefined> = children.map((child, index) => (FOLDING.has(kinds[index]!) ? undefined : child.render(width)));
 		const plan = planFold(kinds.map((kind, index) => ({ kind, height: drawn[index]?.length ?? 0 })));
 		const groups = this.groups(children, plan, drawn);
-		groups.forEach((group, at) => this.reveal(children, plan.groups[at]!, group.open && thoughtOnly(group.facts)));
+		groups.forEach((group, at) => this.reveal(children, plan.groups[at]!, group.row, group.open && thoughtOnly(group.facts)));
 		const open = plan.groups.flatMap((group, at) => (groups[at]!.open ? [...group.members, ...group.said] : []));
 		for (const index of this.rebuild(children, open)) drawn[index] = undefined;
 		this.tellLive(children);
@@ -403,7 +405,11 @@ export class FoldView {
 		});
 	}
 
-	private reveal(children: readonly Component[], group: FoldGroup, shows: boolean): void {
+	private reveal(children: readonly Component[], group: FoldGroup, row: FoldRow, shows: boolean): void {
+		// A long transcript has many settled groups: only a group that changed is gone through again.
+		const key = `${shows}|${group.members.join(",")}|${group.said.join(",")}`;
+		if (this.revealedAs.get(row) === key) return;
+		this.revealedAs.set(row, key);
 		for (const index of [...group.members, ...group.said]) {
 			const child = children[index];
 			if (!isReply(child)) continue;
@@ -438,7 +444,14 @@ export class FoldView {
 
 	/** Says, when it changes, whether the reply that streams now is in an open group. */
 	private tellLive(children: readonly Component[]): void {
-		const open = children.some((child) => isReply(child) && child.isStreaming && this.opened.has(child));
+		// Only Pi's newest reply streams, so the search stops there.
+		let open = false;
+		for (let index = children.length - 1; index >= 0; index--) {
+			const child = children[index]!;
+			if (!isReply(child)) continue;
+			open = child.isStreaming && this.opened.has(child);
+			break;
+		}
 		if (open === this.liveShown) return;
 		this.liveShown = open;
 		try { this.host.liveOpen?.(open); } catch { /* The phase spinner keeps its last word; the transcript still draws. */ }
