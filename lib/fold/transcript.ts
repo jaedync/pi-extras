@@ -54,6 +54,8 @@ export interface FoldHost extends FoldRowHost {
 	written?(toolCallId: string): boolean;
 	/** Frames are wanted while a line is live, and not after. */
 	animate(live: boolean): void;
+	/** Pi's expand key (ctrl+o) state; Pi tells only tool rows of it, so without this a group follows its rows. */
+	toolsExpanded?(): boolean;
 }
 
 export interface Box {
@@ -359,9 +361,11 @@ export class FoldView {
 	private groups(children: readonly Component[], plan: FoldPlan, drawn: ReadonlyArray<string[] | undefined>): Drawn[] {
 		const before = new Map<number, PlanEntry | undefined>();
 		plan.entries.forEach((entry, at) => { if (entry.kind === "group") before.set(entry.group, plan.entries[at - 1]); });
+		const pi = this.toolsExpanded();
 		return plan.groups.map((group, at) => {
 			const row = this.rowFor(children[firstOf(group)]!);
-			const expanded = group.members.some((index) => (children[index] as Partial<ToolRow>).expanded === true);
+			// A click on a row's result expands that row alone; only Pi's key opens every group.
+			const expanded = pi ?? group.members.some((index) => (children[index] as Partial<ToolRow>).expanded === true);
 			// Calls right after the reply that made them hang under it, when it shows.
 			const prior = before.get(at);
 			const head = children[group.members[0] ?? -1];
@@ -455,6 +459,10 @@ export class FoldView {
 		if (live) this.settled.delete(row);
 		else this.settled.set(row, { key, facts });
 		return facts;
+	}
+
+	private toolsExpanded(): boolean | undefined {
+		try { return this.host.toolsExpanded?.(); } catch { return undefined; }
 	}
 
 	private nestedOf(toolCallId: string): readonly NestedFact[] | undefined {

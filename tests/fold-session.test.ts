@@ -48,6 +48,7 @@ function stage(options: { mode?: string; layout?: boolean } = {}) {
 	const widgets: Array<[string, unknown]> = [];
 	const notes: string[] = [];
 	let broken = false;
+	let expanded = false;
 	const reply = { role: "assistant", content: [{ type: "toolCall" }], usage: { output: 10, input: 1_000_000, cost: { total: 0 } }, provider: "p", model: "m", timestamp: 1_000 };
 	const context = {
 		mode: options.mode ?? "tui",
@@ -57,6 +58,7 @@ function stage(options: { mode?: string; layout?: boolean } = {}) {
 				return undefined;
 			},
 			notify: (message: string) => { notes.push(message); },
+			getToolsExpanded: () => expanded,
 			setWidget: (key: string, factory: unknown) => {
 				widgets.push([key, factory]);
 				if (typeof factory === "function") factory(tui, undefined);
@@ -89,7 +91,7 @@ function stage(options: { mode?: string; layout?: boolean } = {}) {
 		fold, fire, chat, widgets, rows, ticks, notes, lives,
 		breakTheme: () => { broken = true; },
 		renders: () => renders, stopped: () => stopped,
-		set: (next: { enabled?: boolean; busy?: boolean }) => { enabled = next.enabled ?? enabled; busy = next.busy ?? busy; },
+		set: (next: { enabled?: boolean; busy?: boolean; expanded?: boolean }) => { enabled = next.enabled ?? enabled; busy = next.busy ?? busy; expanded = next.expanded ?? expanded; },
 	};
 }
 
@@ -179,4 +181,13 @@ test("the status line hears when a folded line becomes live and when it settles,
 	s.chat.render(100);
 	s.fire("session_shutdown");
 	assert.deepEqual(s.lives, [true, false, true, false], "a session that ends takes the line down");
+});
+
+test("a session's groups follow Pi's expand key (ctrl+o) as Pi reports it", () => {
+	const s = stage();
+	s.fire("session_start");
+	s.fold.refresh();
+	assert.ok(!plain(s.chat.render(100)).includes("╰─ close"));
+	s.set({ expanded: true });
+	assert.ok(plain(s.chat.render(100)).includes("╰─ close"));
 });

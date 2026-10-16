@@ -497,3 +497,32 @@ test("calls after a reply that draws nothing keep their own blank line, as nothi
 	const chat = chatOf([new Row(["", " prompt"]), new Reply(said({ timestamp: 1_000 }), false, []), new ToolRow("read", "a")]);
 	assert.deepEqual(text(viewOf(value).render(chat, 80)), ["", " prompt", "", "● Read 1 file, ↓50 2.0s"]);
 });
+
+test("Pi's expand key (ctrl+o) opens a line of thinking alone as it opens a line of calls; a click flips one back", () => {
+	let expanded = false;
+	const { value } = host({ thoughtMs: () => 2_500, toolsExpanded: () => expanded });
+	const reply = new Reply(thinkingThenWords(), false, ["", "  plan", "", "● said"]);
+	const chat = chatOf([new Row(["", " prompt"]), reply]);
+	const view = viewOf(value);
+	view.render(chat, 80);
+	expanded = true;
+	view.render(chat, 80);
+	assert.equal(view.expandsThinking(reply), true, "a reply has no setExpanded, so the view asks Pi");
+	const row = chat.mouseLayout!.children[1]!.component as FoldRow;
+	row.handleMouse({ type: "click", button: "left", y: 1 } as never);
+	view.render(chat, 80);
+	assert.equal(view.expandsThinking(reply), false);
+	assert.equal(view.foldsThinking(reply), true);
+});
+
+test("a row's own expand, a click on its result, leaves its open group open", () => {
+	const { value } = host({ toolsExpanded: () => false });
+	const read = new ToolRow("read", "a");
+	const chat = chatOf([read]);
+	const view = viewOf(value);
+	view.render(chat, 80);
+	(chat.mouseLayout!.children[0]!.component as FoldRow).toggle();
+	assert.ok(text(view.render(chat, 80)).includes("╰─ close"));
+	read.expanded = true;
+	assert.ok(text(view.render(chat, 80)).includes("╰─ close"), "Pi's rows expand one at a time on a click; only Pi's key opens every group");
+});

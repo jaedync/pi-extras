@@ -118,6 +118,7 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 		if (!found || !transcript) return;
 		tui = found;
 		const host = ctx.ui as { theme?: FoldTheme };
+		const ui = ctx.ui;
 		view = new FoldView({
 			enabled: deps.enabled,
 			theme: () => host.theme,
@@ -130,6 +131,7 @@ export function watchFold(pi: Pick<ExtensionAPI, "on">, deps: FoldDeps): Fold {
 			...(deps.written ? { written: deps.written } : {}),
 			animate,
 			redraw: () => found.requestRender(),
+			...(typeof ui.getToolsExpanded === "function" ? { toolsExpanded: () => ui.getToolsExpanded() } : {}),
 		});
 		chat = transcript as { invalidate?: () => void };
 		undo = installFold(transcript, view, deps.enabled, failed);
