@@ -2,6 +2,18 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.25.2 - 2026-10-16
+
+### Fixed
+
+- Subagents: a child that works in a directory outside git no longer gives
+  the warning "can't tell which files bash commands change in …". Before, each
+  new directory gave it once, for example each new review folder. Outside git,
+  a child's `bash` calls are still not checked for the edit lock, as before.
+  After a `git init` there, the next call is checked. Other git failures (a
+  broken `.git` file, no `git`, or a call over 10 seconds) still give one
+  warning.
+
 ## 0.25.1 - 2026-10-15
 
 ### Added
