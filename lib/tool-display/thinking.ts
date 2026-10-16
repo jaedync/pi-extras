@@ -43,7 +43,7 @@ export interface ThinkingHost {
 	gutter?(): boolean;
 	/** Fold mode: this reply shows no thinking at all, and no spacing for it. */
 	folds?(reply: object): boolean;
-	/** Fold mode: this reply's thinking was opened from its Thought line, so it rests in full. */
+	/** Fold mode: this reply's thinking was opened from its Thought line, so it shows in full; that line is its label, so it never folds to another. */
 	expands?(reply: object): boolean;
 }
 
@@ -331,12 +331,13 @@ function restyle(self: Internals, message: Message, host: ThinkingHost, mode: Th
 			pad: host.gutter?.() ? summary ? 0 : ROW_MARGIN : self.outputPad,
 			host,
 			view: () => {
-				const resting = host.expands?.(owner) ? "full" : summary && host.mode() !== "full" ? "collapsed" : host.mode() ?? mode;
+				if (host.expands?.(owner)) return "full";
+				const resting = summary && host.mode() !== "full" ? "collapsed" : host.mode() ?? mode;
 				const chosen = viewFor(resting, self.hideThinkingBlock !== host.hiddenAtStart(), clicked.get(owner)?.has(run) ?? false);
 				return summary && chosen === "tail" ? "collapsed" : chosen;
 			},
 			label: () => summary?.(message, run) ?? self.hiddenThinkingLabel,
-			toggle: () => toggleBlock(owner, run),
+			toggle: () => { if (!host.expands?.(owner)) toggleBlock(owner, run); },
 			memo: memoFor(owner, run, runs[run]!, self.isStreaming, self.outputPad),
 		});
 		children[children.indexOf(region)] = view;

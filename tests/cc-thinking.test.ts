@@ -80,12 +80,15 @@ test("the label keeps tenths below a second, so a fast model never thought for 0
  assert.equal(thoughtLabel(30),"∴ Thought for 0.1s");
  assert.equal(thoughtLabel(12_300),"∴ Thought for 12s");
 });
-test("a reply that folded mode expands shows its thinking in full, and a click folds it to the label",()=>{
+test("a reply that folded mode expands shows its thinking in full, and neither a click nor ctrl+t folds it to a second label",()=>{
  const undo=installThinkingTail({...host,expands:()=>true});
  try{
   const component=new AssistantMessageComponent(msg(true),true);
-  assert.ok(plain(component).includes("Last thought."));
+  const full=plain(component);
+  assert.ok(full.includes("Last thought."));
   component.handleMouse({type:"click",button:"left",x:2,y:1,screenX:2,screenY:1,width:60,height:20} as never);
-  assert.deepEqual(plain(component),finishedRows);
+  assert.deepEqual(plain(component),full,"the fold line above is its label; a click on the text leaves it");
+  component.setHideThinkingBlock(false);
+  assert.deepEqual(plain(component),full,"and so does Pi's thinking toggle");
  }finally{undo();}
 });
