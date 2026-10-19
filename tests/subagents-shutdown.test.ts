@@ -49,6 +49,32 @@ test("a real SIGHUP records before the host's default termination", async () => 
 	} finally { child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a signal that ends a suspended Pi drops its SIGCONT listener, so the TUI does not restart in the background", async () => {
+	if (process.platform === "win32") return;
+	const dir = mkdtempSync(join(tmpdir(), "child-sigcont-"));
+	const file = join(dir, "events.txt");
+	const module = new URL("../lib/subagents/signals.ts", import.meta.url).href;
+	// As Pi after Ctrl-Z: a SIGCONT listener restarts the TUI, which sets raw mode, and the terminal stops a background
+	// process for that (SIGTTOU). Its SIGTERM shutdown needs more than one tick before it lets the lease go.
+	const child = spawn(process.execPath, ["--input-type=module", "-e", `
+		import { appendFileSync } from "node:fs";
+		import { installSignalRecorder } from ${JSON.stringify(module)};
+		const log = (event) => appendFileSync(${JSON.stringify(file)}, event + "\\n");
+		process.once("SIGCONT", () => log("tui restarted"));
+		process.prependListener("SIGTERM", () => setTimeout(() => { log("lease released"); process.exit(0); }, 100));
+		installSignalRecorder((signal) => log(signal));
+		console.log("ready"); setInterval(() => {}, 1000);
+	`], { env: { PATH: process.env.PATH, HOME: dir, PI_OFFLINE: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+	try {
+		await once(child.stdout!, "data");
+		const exited = once(child, "exit");
+		child.kill("SIGTERM");
+		child.kill("SIGCONT");
+		assert.deepEqual(await exited, [0, null]);
+		assert.deepEqual(readFileSync(file, "utf8").trim().split("\n"), ["SIGTERM", "lease released"]);
+	} finally { child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("signal recording is synchronous, leaves existing host listeners alone and uninstalls cleanly", () => {
 	const events: string[] = [];
 	const host = () => events.push("host");

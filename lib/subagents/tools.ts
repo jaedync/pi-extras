@@ -20,6 +20,9 @@ import { type AgentRecord, type CheckUpdate, LIVE_STATES } from "./types.ts";
 export const MAX_TASK_CHARS = 60_000;
 export const MAX_MESSAGE_CHARS = 20_000;
 const PROGRESS_MS = 1_000;
+const SPAWN_SNIPPET = "Delegate bounded work to a background subagent on a chosen model";
+const MESSAGE_SNIPPET = "Message a running or finished subagent";
+const STOP_SNIPPET = "Stop a subagent whose work is no longer needed";
 
 export interface ToolContext {
 	/** Read at each call: after a /reload, the team may change once it is quiet (host.ts). */
@@ -127,7 +130,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 		name: "subagent",
 		label: "Subagent",
 		description: subagentDescription({ models: tc.modelTable, defaultModel: tc.fallbackModel, guide: tc.guide, forChild: parent !== MAIN }),
-		promptSnippet: "Delegate bounded work to a background subagent on a chosen model",
+		promptSnippet: SPAWN_SNIPPET,
 		parameters: subagentParams,
 		async execute(_id, raw, signal, onUpdate) {
 			const params = raw as SubagentInput;
@@ -248,7 +251,7 @@ export function mainMessageTool(tc: ToolContext): ToolDefinition {
 		name: "message",
 		label: "Message",
 		description: mainMessageDescription(),
-		promptSnippet: "Message a running or finished subagent",
+		promptSnippet: MESSAGE_SNIPPET,
 		parameters: messageParams,
 		async execute(_id, raw) {
 			const params = raw as MessageInput;
@@ -267,13 +270,31 @@ export function stopTool(tc: Pick<ToolContext, "team">, self: string): ToolDefin
 		name: "stop_subagent",
 		label: "Stop subagent",
 		description: stopDescription(self !== MAIN),
-		promptSnippet: "Stop a subagent whose work is no longer needed",
+		promptSnippet: STOP_SNIPPET,
 		parameters: stopParams,
 		async execute(_id, raw) {
 			const result = await stopFor(tc.team, self, (raw as { name: string }).name);
 			return self === MAIN ? withRoster(result, tc.team) : result;
 		},
 	} as ToolDefinition;
+}
+
+/**
+ * Main's tools while this Pi can't serve the session (most often another
+ * parent holds its lease): each call says why, so the agent tells the user instead of
+ * finding some other way to run Pi. `why` is read at each call.
+ */
+export function blockedTools(why: () => string): ToolDefinition[] {
+	const blocked = (name: string, label: string, parameters: object, promptSnippet: string, does: string) => ({
+		name, label, parameters, promptSnippet,
+		description: `${does} Not available now: this Pi could not open this session's subagents, most often because another Pi process owns them. A call says why and how to fix it.`,
+		async execute() { throw new Error(`${why()} Do not start Pi from bash or in another way to get around this. Tell the user.`); },
+	}) as ToolDefinition;
+	return [
+		blocked("subagent", "Subagent", subagentParams, SPAWN_SNIPPET, "Starts a background subagent."),
+		blocked("message", "Message", messageParams, MESSAGE_SNIPPET, "Messages a subagent."),
+		blocked("stop_subagent", "Stop subagent", stopParams, STOP_SNIPPET, "Stops a subagent."),
+	];
 }
 
 async function stopFor(team: HostTeam, self: string, name: string): Promise<Result> {

@@ -590,7 +590,10 @@ there, readable only by you, stores each child's full task, model settings,
 state, session path, run count, `cwd`, checkout path, the names in `after`,
 the `check` command and the last check result. A lease stops two Pi processes from driving
 the same children, and a lease held under another hostname is never taken
-over. A `/reload` keeps children running: the new copy of the extension takes
+over. `/subagents takeover` ends the owner of a lease only after you confirm,
+only for a process of the same user on the same host, and never this Pi
+process. It sends SIGTERM and SIGCONT, never SIGKILL, and it opens the
+children only after the owner lets the lease go or exits. A `/reload` keeps children running: the new copy of the extension takes
 them over in the same process and keeps the lease. When it can't, it
 interrupts them. By default, only such an interruption resumes children on its
 own, at most one time for each child. A restart or crash only notifies. Orphans, grandchildren,

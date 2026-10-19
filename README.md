@@ -1994,6 +1994,24 @@ uses the current default model and says so). An automatic resume that is
 itself interrupted stays paused, and a failed resume can be retried. Only one
 Pi process at a time can own a session's children; forks start without them.
 
+**A second Pi on the same session.** When another Pi process owns the
+children, this Pi still gives main the `subagent`, `message` and
+`stop_subagent` tools. Each call fails and says which process owns the
+children and what that process does. A line above the editor says the same
+until the children open here. A parent that is suspended with Ctrl-Z still
+owns its children. To free them, do one of these:
+
+- Run `fg` in the terminal of that Pi, then quit it there.
+- Run `/subagents takeover` here. Takeover asks first. Then it sends that Pi
+  SIGTERM, and SIGCONT so that a suspended Pi can act on it. It waits up to
+  10 s for that Pi to let the children go, then opens them here and shows
+  them. Interrupted children then follow the resume policy.
+
+Takeover works only for a process of the same user on the same host, and it
+never sends a stronger signal than SIGTERM. A suspended Pi can stop again
+when it restores its terminal after it lets the children go. Takeover then
+says so: run `fg` in its terminal, and it quits.
+
 Each run adds a line to `~/.pi/agent/subagents/runs.jsonl` (model,
 task opening, time, tool calls, cost, how it ended); `/subagents stats` sums it
 by model, which is what to tune the guide on. A run that wrote its report at

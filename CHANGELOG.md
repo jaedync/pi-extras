@@ -2,7 +2,27 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## 0.26.0 - 2026-10-19
+## 0.26.1 - 2026-10-19
+
+### Fixed
+
+- Subagents: a Pi that you resume while another Pi on the same session is
+  suspended (Ctrl-Z) no longer loses its subagent tools without a reason.
+  The suspended Pi still owns the children, so this Pi can't open them.
+  - Main now gets the `subagent`, `message` and `stop_subagent` tools anyway.
+    Each call fails and says which process owns the children, whether it is
+    suspended or running, and how to free them. A warning line above the
+    editor says the same until the children open.
+  - New `/subagents takeover` command: after you confirm, it ends the other
+    Pi with SIGTERM and SIGCONT, waits up to 10 s for it to let the children
+    go, and opens them here. It works only on the same host for the same
+    user, and it never sends SIGKILL.
+  - A Pi that a signal ends now drops the SIGCONT listener that Ctrl-Z left.
+    Before, that listener restarted the TUI from the background, and the
+    terminal stopped Pi again before it let the children go.
+  - An owner that has exited but is not yet reaped (a zombie) no longer
+    holds the children.
+
 
 ### Removed
 

@@ -11,7 +11,7 @@
  */
 import * as sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import { type Component, Text } from "@earendil-works/pi-tui";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stopOrder } from "../lib/subagents/after.ts";
@@ -36,8 +36,9 @@ import { formatMoney } from "../lib/status-plus-logic.ts";
 import { editTarget } from "../lib/subagents/worktree.ts";
 import { checkoutOf } from "../lib/subagents/checkout.ts";
 import { savedReport } from "../lib/subagents/reports.ts";
-import { chatSettings, mainTrust, type Served, serveSession } from "../lib/subagents/serve.ts";
-import { mainMessageTool, stopTool, subagentTool, userSendWords } from "../lib/subagents/tools.ts";
+import { LeaseHeld, type OwnerState, takeOverParent } from "../lib/subagents/ownership.ts";
+import { chatSettings, mainTrust, type ServeOptions, type Served, serveSession } from "../lib/subagents/serve.ts";
+import { blockedTools, mainMessageTool, stopTool, subagentTool, userSendWords } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
 import { awaitChildren, isHeadless } from "../lib/subagents/headless.ts";
@@ -46,6 +47,14 @@ import { watchMotion } from "../lib/extras-config.ts";
 const markdown = () => sdk.getMarkdownTheme();
 
 const RECONCILE_MS = 1_000;
+const BLOCKED_WIDGET = "subagents-blocked";
+
+/** A session start that could not open its subagents, kept so /subagents takeover can open them later. */
+interface Blocked {
+	readonly ctx: ExtensionContext;
+	readonly reason: string;
+	readonly error: Error;
+}
 
 const GUIDE_TEMPLATE = `# Subagent model guide
 
@@ -62,6 +71,7 @@ export default function subagents(pi: ExtensionAPI) {
 	/** The session this module serves, and through it the host: the team, mail and index. */
 	let served: Served | null = null;
 	const host = (): HostState | null => served?.host() ?? null;
+	let blocked: Blocked | null = null;
 	let backgroundCtx: ExtensionContext | undefined;
 	// Resumed children keep `restored` provenance; only their current live state means work.
 	const publishBackground = () => {
@@ -188,6 +198,7 @@ export default function subagents(pi: ExtensionAPI) {
 	pi.on("session_start", async (event, ctx) => {
 		await served?.close();
 		served = null;
+		unblock(ctx);
 		backgroundCtx = undefined;
 		headless = isHeadless(ctx.mode);
 		// A host a /reload left running, for this module to take over (host.ts).
@@ -198,6 +209,43 @@ export default function subagents(pi: ExtensionAPI) {
 			await parked?.close("reload");
 			return;
 		}
+		await serveFor(ctx, event.reason, parked);
+	});
+
+	const register = (ctx: ExtensionContext, tools: readonly ToolDefinition[]) => {
+		for (const tool of tools) {
+			if (foreign(tool.name)) {
+				ctx.ui.notify(`subagents: tool name "${tool.name}" is already registered by another extension; skipping it.`, "warning");
+				continue;
+			}
+			pi.registerTool(offerRows(withRows(tool)));
+		}
+	};
+
+	/**
+	 * Main keeps its tools while the session can't be served, and each call says
+	 * why: without them the agent can't learn that the tools exist, and it may
+	 * try to run Pi some other way. A start-up notice alone scrolls away, so a
+	 * line above the editor stays until the subagents open.
+	 */
+	const block = (ctx: ExtensionContext, reason: string, error: Error) => {
+		const state: Blocked = { ctx, reason, error };
+		blocked = state;
+		ctx.ui.notify(`subagents: ${error.message}`, "warning");
+		register(ctx, blockedTools(() => state.error.message));
+		if (ctx.hasUI && ctx.mode === "tui") {
+			const line = blockedLine(error);
+			try { ctx.ui.setWidget(BLOCKED_WIDGET, (_tui, theme) => new Text(theme.fg("warning", line), 1, 0)); } catch { /* stale context after a session switch */ }
+		}
+	};
+	const unblock = (ctx: ExtensionContext) => {
+		blocked = null;
+		if (!ctx.hasUI || ctx.mode !== "tui") return;
+		try { ctx.ui.setWidget(BLOCKED_WIDGET, undefined); } catch { /* stale context after a session switch */ }
+	};
+
+	/** Opens the session's subagents and gives main its tools; false if they could not open, and main's tools then say why. */
+	async function serveFor(ctx: ExtensionContext, reason: string, parked?: ServeOptions["parked"]): Promise<boolean> {
 		try {
 			served = await serveSession({
 				sdk, pi, ctx, generation, parked,
@@ -207,17 +255,15 @@ export default function subagents(pi: ExtensionAPI) {
 				// Numbered by generation too: a child from before a /reload may still report with its group.
 				currentGroup: () => `run-${generation}-${mainRun}`,
 			});
-		} catch (error) { ctx.ui.notify(`subagents: ${(error as Error).message}`, "warning"); return; }
+		} catch (error) {
+			block(ctx, reason, error as Error);
+			return false;
+		}
+		unblock(ctx);
 		backgroundCtx = ctx;
 		publishBackground();
 		const current = served;
-		for (const tool of [subagentTool(current.tools, MAIN), mainMessageTool(current.tools), stopTool(current.tools, MAIN)]) {
-			if (foreign(tool.name)) {
-				ctx.ui.notify(`subagents: tool name "${tool.name}" is already registered by another extension; skipping it.`, "warning");
-				continue;
-			}
-			pi.registerTool(offerRows(withRows(tool)));
-		}
+		register(ctx, [subagentTool(current.tools, MAIN), mainMessageTool(current.tools), stopTool(current.tools, MAIN)]);
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui as unknown as InspectorHost : null;
 		inspectorCwd = ctx.cwd;
 		inspectorTrusted = mainTrust(ctx);
@@ -228,8 +274,27 @@ export default function subagents(pi: ExtensionAPI) {
 			// Mail sent before the reload may still wait for Pi to show it.
 			watchPending(ctx);
 			current.lookForQuiet();
-		} else await current.host().restore(event.reason);
-	});
+		} else await current.host().restore(reason);
+		return true;
+	}
+
+	/** Ends the parent that holds this session's lease, after the user agrees, then opens the subagents here. */
+	async function takeover(ctx: ExtensionCommandContext): Promise<void> {
+		if (served) return ctx.ui.notify("This Pi already serves this session's subagents.", "info");
+		const state = blocked;
+		if (!state) return ctx.ui.notify("Subagents are not active in this session.", "info");
+		// Not a held lease: nothing to end, so this only tries to open the subagents again.
+		const result = state.error instanceof LeaseHeld
+			? await takeOverParent(state.error.dir, { confirm: ({ pid, state: doing }) => ctx.ui.confirm("Take over subagents?", takeoverQuestion(pid, doing)) })
+			: { ok: true as const };
+		if (!result.ok) return ctx.ui.notify(result.error, "warning");
+		// The session changed while it waited.
+		if (blocked !== state) return;
+		if (!(await serveFor(state.ctx, state.reason))) return;
+		const from = result.pid ? ` from process ${result.pid}` : "";
+		ctx.ui.notify(`Took over this session's subagents${from}.${result.notice ? ` ${result.notice}` : ""}`, result.notice ? "warning" : "info");
+		if (inspectorUi && host()?.team.list().length) viewAll();
+	}
 
 	// A note appended without waking main raises no event, so look for it.
 	let reconcileTimer: ReturnType<typeof setInterval> | null = null;
@@ -288,10 +353,11 @@ export default function subagents(pi: ExtensionAPI) {
 		else await current?.close(event.reason);
 		if (backgroundCtx && event.reason !== "reload") announceBackground(pi, backgroundCtx, "subagents", 0);
 		backgroundCtx = undefined;
+		unblock(ctx);
 	});
 
 	pi.registerCommand("subagents", {
-		description: "See every subagent (/subagents) or inspect one (/subagents <name>), find full reports (report <name>), resume them (resume <name>), stop them (stop <name> | stop all), edit the model guide (guide), or see runs by model (stats)",
+		description: "See every subagent (/subagents) or inspect one (/subagents <name>), find full reports (report <name>), resume them (resume <name>), stop them (stop <name> | stop all), take them over from a Pi that holds them (takeover), edit the model guide (guide), or see runs by model (stats)",
 		getArgumentCompletions: (prefix: string) => commandCompletions(prefix, host()?.team.list().map((record) => record.name) ?? []),
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const [verb, ...rest] = args.trim().split(/\s+/);
@@ -301,8 +367,9 @@ export default function subagents(pi: ExtensionAPI) {
 				const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
 				return ctx.ui.notify(`Subagent runs by model (${file}):\n${statsText(statsByModel(lines), formatTime, formatMoney)}`, "info");
 			}
+			if (verb === "takeover") return takeover(ctx);
 			const state = host();
-			if (!state) return ctx.ui.notify("Subagents are not active in this session.", "info");
+			if (!state) return ctx.ui.notify(blocked?.error.message ?? "Subagents are not active in this session.", blocked ? "warning" : "info");
 			if (verb === "report") return reportCommand(state, rest.join(" "), ctx);
 			if (verb === "resume") return resumeCommand(state, rest.join(" "), ctx);
 			if (verb === "stop") return stopCommand(state, rest.join(" "), ctx);
@@ -362,6 +429,18 @@ async function stopCommand(state: HostState, target: string, ctx: ExtensionComma
 	}
 	if (!state.team.get(target)) return ctx.ui.notify(`No subagent named ${target}.`, "warning");
 	if (!(await state.team.stop(target))) ctx.ui.notify(`${target} has already ended; there is nothing to stop.`, "info");
+}
+
+function blockedLine(error: Error): string {
+	if (!(error instanceof LeaseHeld)) return `Subagents are off in this session: ${error.message}`;
+	if (error.state === "elsewhere") return `Subagents are off here: process ${error.pid} on another host owns them. Close it there.`;
+	if (error.state === "suspended") return `Subagents are off here: process ${error.pid}, which is suspended (Ctrl-Z), owns them. Run fg in its terminal, or /subagents takeover here.`;
+	return `Subagents are off here: process ${error.pid}, which is still running, owns them. Close it, or run /subagents takeover here.`;
+}
+
+function takeoverQuestion(pid: number, state: OwnerState): string {
+	const doing = state === "suspended" ? "is suspended (Ctrl-Z)" : "is still running";
+	return `Process ${pid} owns this session's subagents and ${doing}. Takeover ends that Pi with SIGTERM. Its running subagents stop, and this Pi opens them and follows the resume policy.`;
 }
 
 function listing(records: readonly AgentRecord[]): string {

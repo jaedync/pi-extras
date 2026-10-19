@@ -1,8 +1,9 @@
 /** Real parent and child SDK sessions, isolated from account settings and providers. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
@@ -20,7 +21,7 @@ async function fixture() {
 	const runtime = await sdk.ModelRuntime.create({ allowModelNetwork: false } as never);
 	const faux = ai.fauxProvider({ provider: "restore-faux", models: [{ id: "cheap", contextWindow: 100_000 }, { id: "other", contextWindow: 100_000 }] });
 	runtime.registerNativeProvider(faux.provider);
-	const open = async (file?: string, notices: string[] = [], options: { cwd?: string; model?: string; unscoped?: boolean } = {}) => {
+	const open = async (file?: string, notices: string[] = [], options: { cwd?: string; model?: string; unscoped?: boolean; ui?: Record<string, unknown> } = {}) => {
 		const cwd = options.cwd ?? scratch;
 		const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false } });
 		const loader = new sdk.DefaultResourceLoader({ cwd, agentDir, settingsManager, noExtensions: true,
@@ -32,7 +33,7 @@ async function fixture() {
 		const { session } = await sdk.createAgentSession({ cwd, agentDir, modelRuntime: runtime, model: faux.getModel(options.model ?? "cheap"),
 			scopedModels: options.unscoped ? [] : [{ model: faux.getModel(options.model ?? "cheap") }],
 			settingsManager, resourceLoader: loader, sessionManager: manager });
-		await session.bindExtensions({ mode: "print", uiContext: { notify: (text: string) => notices.push(text) } } as never);
+		await session.bindExtensions({ mode: "print", uiContext: { notify: (text: string) => notices.push(text), ...options.ui } } as never);
 		return session;
 	};
 	return { faux, open };
@@ -84,11 +85,50 @@ test("a second real SDK parent cannot steal another live parent's child registry
 		const warnings: string[] = [];
 		const second = await open(first.sessionFile!, warnings);
 		try {
-			assert.equal(tool(second, "subagent"), undefined);
+			// The tools are there, so the agent learns why it can't use them instead of starting Pi some other way.
+			const calls: Record<string, object> = { subagent: { name: "spare", task: "Work", model: "restore-faux/cheap" }, message: { to: "reserved", text: "Hi" }, stop_subagent: { name: "reserved" } };
+			for (const [name, args] of Object.entries(calls)) {
+				await assert.rejects(tool(second, name).execute("blocked", args), /already owned by process \d+, which is still running.*\/subagents takeover.*Do not start Pi from bash/s, name);
+			}
 			assert.match(warnings.join("\n"), /already owned by process/);
 			assert.ok(tool(first, "message"), "first parent retains control");
 		} finally { await close(second); }
 	} finally { await close(first); }
+});
+
+test("a suspended owner: the tools say why, a declined takeover changes nothing, and a takeover ends it and serves the session", { timeout: 20_000, skip: process.platform === "win32" }, async () => {
+	const { faux, open } = await fixture();
+	const first = await open();
+	const file = first.sessionFile!;
+	const lock = join(agentDir, "sessions", "subagents", first.sessionManager.getSessionId(), ".owner");
+	await close(first);
+	const owner = spawn("sleep", ["60"], { stdio: "ignore" });
+	const gone = new Promise<string | null>((resolve) => owner.once("exit", (_code, signal) => resolve(signal)));
+	try {
+		mkdirSync(lock, { recursive: true });
+		writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: owner.pid, token: "suspended", host: hostname() }));
+		process.kill(owner.pid!, "SIGSTOP");
+		await wait(() => execFileSync("ps", ["-o", "stat=", "-p", String(owner.pid)], { encoding: "utf8" }).trim().startsWith("T"));
+		const warnings: string[] = [];
+		const asked: string[] = [];
+		let answer = false;
+		const second = await open(file, warnings, { ui: { confirm: async (title: string, message: string) => { asked.push(`${title}: ${message}`); return answer; } } });
+		try {
+			await assert.rejects(tool(second, "subagent").execute("blocked", { name: "helper", task: "Work", model: "restore-faux/cheap" }), /suspended \(Ctrl-Z\)/);
+			assert.match(warnings.join("\n"), new RegExp(`process ${owner.pid}, which is suspended`));
+			const subagents = second.extensionRunner.getCommand("subagents")!;
+			await subagents.handler("takeover", second.extensionRunner.createCommandContext());
+			assert.match(asked.join("\n"), new RegExp(`${owner.pid}.*suspended.*ends that Pi`, "s"));
+			assert.equal(owner.exitCode ?? owner.signalCode, null, "a declined takeover leaves the owner alone");
+			answer = true;
+			await subagents.handler("takeover", second.extensionRunner.createCommandContext());
+			assert.equal(await gone, "SIGTERM");
+			assert.match(warnings.join("\n"), new RegExp(`Took over this session's subagents from process ${owner.pid}`));
+			faux.setResponses([ai.fauxAssistantMessage("Done")]);
+			const result = await tool(second, "subagent").execute("spawn", { name: "helper", task: "Work", model: "restore-faux/cheap" });
+			assert.equal(result.details?.name, "helper");
+		} finally { await close(second); }
+	} finally { owner.kill("SIGKILL"); }
 });
 
 test("always makes at most one automatic attempt, even if that attempt is interrupted", { timeout: 25_000 }, async () => {
