@@ -133,9 +133,9 @@ test("the result cannot close its own wrapper, and rows carry no terminal escape
 });
 
 test("rows show the link, options and a one-line result", () => {
-	assert.equal(callLine({ url: "https://youtu.be/x", frames: 12, range: "1:00-2:00" }, plain), "pull_link https://youtu.be/x 12 frames 1:00-2:00");
-	assert.equal(callLine({ url: "https://youtu.be/x", at: ["4:05", "9:00"] }, plain), "pull_link https://youtu.be/x at 4:05, 9:00");
-	assert.equal(resultLine({ platform: "youtube", title: "Vid", chars: 12_345, images: 1, next: 40000, durationMs: 2500 }, plain), "Vid  youtube · 12,345 chars · 1 image · more pages · took 2.5s");
+	assert.equal(callLine({ url: "https://youtu.be/x", frames: 12, range: "1:00-2:00" }, plain), "pull_link youtu.be/x, 12 frames, 1:00-2:00");
+	assert.equal(callLine({ url: "https://youtu.be/x", at: ["4:05", "9:00"] }, plain), "pull_link youtu.be/x, at 4:05 9:00");
+	assert.equal(resultLine({ platform: "youtube", title: "Vid", chars: 12_345, images: 1, next: 40000, durationMs: 2500 }, plain), "Vid  YouTube, 1 image, more pages, took 2.5s");
 	assert.equal(resultLine({ progress: "reading captions" }, plain), "reading captions…");
 	assert.equal(resultLine(undefined, plain), "");
 });

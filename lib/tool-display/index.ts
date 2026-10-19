@@ -59,6 +59,7 @@ import { bashRenderers } from "./shell.ts";
 import { toolRenderers, type ToolSpec } from "./tool.ts";
 import { usageSpec } from "./usage.ts";
 import { webSearchSpec } from "./web.ts";
+import { linkSpec } from "./link.ts";
 import { watchFold } from "../fold/index.ts";
 import { installThinkingTail, prepareThinkingTail, THINKING_MODES, thinkingRunIndices, thoughtLabel, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
 
@@ -166,6 +167,7 @@ const OWN_SPECS: Partial<Record<RowKind, (name: string) => ToolSpec>> = {
 	"computer-use": () => computerUseSpec,
 	"windows-use": () => windowsUseSpec,
 	usage: () => usageSpec,
+	link: () => linkSpec,
 };
 
 export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): void {

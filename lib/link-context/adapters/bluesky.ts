@@ -5,6 +5,7 @@
 import { agentsFor } from "../config.ts";
 import { getJson, PLAIN_UA } from "../http.ts";
 import { renderThread, type Post, type Reply } from "../post.ts";
+import { threadSummary } from "../summary.ts";
 import { isoDate, stats } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
@@ -127,6 +128,7 @@ export async function pullBluesky(actor: string, rkey: string, ctx: AdapterConte
 		title: `${post.author} on Bluesky`,
 		url: post.url ?? `https://bsky.app/profile/${actor}/post/${rkey}`,
 		markdown: renderThread(parents, post, replies, undefined, thread.post.replyCount),
+		summary: threadSummary(post, replies, thread.post.replyCount),
 		photos: post.images,
 		videoUrl: post.videoUrl,
 	};

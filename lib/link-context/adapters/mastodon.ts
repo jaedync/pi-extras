@@ -6,6 +6,7 @@
 import { agentsFor } from "../config.ts";
 import { getJson, PLAIN_UA } from "../http.ts";
 import { renderThread, type Post, type Reply } from "../post.ts";
+import { threadSummary } from "../summary.ts";
 import { htmlToText, isoDate, stats } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
@@ -72,6 +73,7 @@ export async function pullMastodon(origin: string, id: string, ctx: AdapterConte
 		title: `${post.author} on ${new URL(origin).hostname}`,
 		url: post.url ?? `${origin}/statuses/${id}`,
 		markdown: renderThread(parents, post, replies, undefined, context.descendants?.length),
+		summary: threadSummary(post, replies, context.descendants?.length),
 		photos: post.images,
 		videoUrl: (status.reblog ?? status).media_attachments?.find((item) => item.type === "video" || item.type === "gifv")?.url,
 	};

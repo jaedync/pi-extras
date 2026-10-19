@@ -2,6 +2,7 @@
 import { agentsFor } from "../config.ts";
 import { getJson, PLAIN_UA } from "../http.ts";
 import { renderThread, type Reply } from "../post.ts";
+import { threadSummary } from "../summary.ts";
 import { htmlToText, isoDate, stats } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
@@ -38,5 +39,5 @@ export async function pullHackerNews(id: string, ctx: AdapterContext): Promise<P
 	const body = htmlToText(item.text ?? "");
 	const post = { author: item.author ?? "[deleted]", date: isoDate(item.created_at), url: link, text: [head, body].filter(Boolean).join("\n\n"), stats: stats([["points", item.points]]) };
 	const replies = ctx.options.comments > 0 ? hnReplies(item.children, ctx.options.comments) : [];
-	return { platform: "hackernews", title: item.title ?? `HN comment by ${item.author}`, url: link, markdown: renderThread([], post, replies, undefined, countAll(item.children)) };
+	return { platform: "hackernews", title: item.title ?? `HN comment by ${item.author}`, url: link, markdown: renderThread([], post, replies, undefined, countAll(item.children)), summary: threadSummary(post, replies, countAll(item.children)) };
 }

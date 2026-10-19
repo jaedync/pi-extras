@@ -1201,6 +1201,14 @@ link into the prompt, and Pull Link reads it before the model starts (see
 [Auto-pull](#auto-pull)). The agent calls the tool for other links and for
 more of a result.
 
+In the transcript, a `pull_link` call is a Tool Display row. The band shows
+the link in short, the options of the call and, after the read, the platform.
+While the tool works, the right side of the band shows its step, for example
+`reading captions`. Under the band are the title and a summary of 3 lines or
+fewer, for example the stars of a repository or the first reply of a thread.
+The summary is for you only. The model does not get it. Click the row to see
+the full result.
+
 | Link | What you get |
 | --- | --- |
 | X/Twitter | The post, its quoted post, media and polls, and the posts above it in the thread, through the public FxTwitter API. Replies need an X login, so they are not included. |
@@ -1355,10 +1363,24 @@ model does not need them, and a wait before the model starts.
   its links in the same way. Pi adds the results at the end of the current
   turn, so they come before your message in the next request.
 
-The transcript shows one row, for example
-`Pulled 2 links: x.com/user/status/… · github.com/owner/repo`. Expand it to
-see each link. Auto-pull uses the same network rules and the same guard as
-`pull_link`.
+While Pull Link reads the links, a band above the editor names each link. A
+link that is read shows in the text color, a link that is still being read is
+dim, and a link that failed is red. The band also shows the time against the
+15-second limit. In the transcript, the result is a band with one line for
+each link:
+
+```
+● pull_link 2 of 3 links from your message                1 failed   827ms
+  │ GitHub            earendil-works/pi
+  │ en.wikipedia.org  Terminal emulator - Wikipedia  1 image, first 12k of 24k chars
+  │ httpbin.org       failed: HTTP 500
+```
+
+The band is green when Pull Link read one link or more. It is red when all
+the reads failed. As on a tool row, the failures and the time are on the
+right. Three links show. Click the band or press ctrl+o to see all the links,
+each with its address and its summary. Auto-pull uses the same network rules
+and the same guard as `pull_link`.
 
 To turn auto-pull off, set `linkContext.autoPull` to `false`. To change it for
 the current session only, use `/autopull on` or `/autopull off`. `/autopull`

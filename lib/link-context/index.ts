@@ -12,6 +12,9 @@ import { Type } from "typebox";
 import { createReader, DEFAULT_COMMENTS, MAX_AT, type LinkReader, type Params, type ReaderOptions } from "./reader.ts";
 import { registerAutoPull } from "./auto.ts";
 import { clean, page, safe, TOOL_NAME, untrusted } from "./format.ts";
+import { platformName, shortUrl, summaryOf } from "./names.ts";
+import { markRow } from "../tool-row.ts";
+import { SEP } from "../cc-phase.ts";
 import type { Pulled } from "./types.ts";
 
 export { clean, page, PAGE_CHARS, TOOL_NAME, type Page } from "./format.ts";
@@ -63,7 +66,8 @@ function compose(pulled: Pulled, params: Params): { content: ({ type: "text"; te
 
 export function registerLinkTool(pi: ExtensionAPI, options: LinkToolOptions = {}): void {
 	const reader = options.reader ?? createReader(options);
-	pi.registerTool(defineTool({
+	// Tool Display draws the row with its own layout (lib/tool-display/link.ts); these renderers are for when it is off.
+	pi.registerTool(markRow(defineTool({
 		name: TOOL_NAME,
 		label: "Pull link",
 		description: DESCRIPTION,
@@ -75,24 +79,25 @@ export function registerLinkTool(pi: ExtensionAPI, options: LinkToolOptions = {}
 			const { content, next } = compose(pulled, params);
 			return {
 				content,
-				details: { platform: pulled.platform, title: pulled.title, url: pulled.url, chars: pulled.markdown.length, images: offset0(params) ? (pulled.images?.length ?? 0) : 0, next, cached, files: pulled.files, durationMs: Math.round(performance.now() - started) },
+				details: { platform: pulled.platform, title: pulled.title, url: pulled.url, chars: pulled.markdown.length, images: offset0(params) ? (pulled.images?.length ?? 0) : 0, next, cached, files: pulled.files, durationMs: Math.round(performance.now() - started), preview: summaryOf(pulled) },
 			};
 		},
 		renderCall: (args: Params, theme: Theme) => renderCall(args, theme),
 		renderResult: (result: { details?: unknown }, _options: unknown, theme: Theme) => renderResult(result.details, theme),
-	}));
+	}), "link"));
 }
 
 const offset0 = (params: Params) => !params.offset;
 
 export function callLine(args: Partial<Params>, theme: Theme): string {
-	const parts = [safe(theme, "toolTitle", TOOL_NAME), safe(theme, "accent", clean(args.url ?? "…"))];
-	if (args.frames) parts.push(safe(theme, "muted", `${args.frames} frames`));
-	if (Array.isArray(args.at) && args.at.length) parts.push(safe(theme, "muted", `at ${clean(args.at.join(", "), 80)}`));
-	if (args.range) parts.push(safe(theme, "muted", clean(args.range, 40)));
-	if (args.comments !== undefined) parts.push(safe(theme, "muted", `${args.comments} comments`));
-	if (args.offset) parts.push(safe(theme, "muted", `offset ${args.offset}`));
-	return parts.join(" ");
+	const options: string[] = [];
+	if (args.comments !== undefined) options.push(`${args.comments} comments`);
+	if (args.frames) options.push(`${args.frames} frames`);
+	if (Array.isArray(args.at) && args.at.length) options.push(`at ${clean(args.at.join(" "), 80)}`);
+	if (args.range) options.push(clean(args.range, 40));
+	if (args.offset) options.push(`from ${args.offset.toLocaleString("en-US")}`);
+	const head = `${safe(theme, "toolTitle", TOOL_NAME)} ${safe(theme, "accent", args.url ? clean(shortUrl(args.url)) : "…")}`;
+	return options.length ? `${head}${safe(theme, "muted", `${SEP}${options.join(SEP)}`)}` : head;
 }
 
 function renderCall(args: Params, theme: Theme): Component {
@@ -100,11 +105,11 @@ function renderCall(args: Params, theme: Theme): Component {
 }
 
 export function resultLine(details: unknown, theme: Theme): string {
-	const d = (details && typeof details === "object" ? details : {}) as { progress?: string; platform?: string; title?: string; chars?: number; images?: number; next?: number; cached?: boolean; durationMs?: number };
+	const d = (details && typeof details === "object" ? details : {}) as { progress?: string; platform?: string; title?: string; url?: string; chars?: number; images?: number; next?: number; cached?: boolean; durationMs?: number };
 	if (d.progress) return safe(theme, "muted", `${clean(d.progress)}…`);
 	if (!d.title) return "";
-	const facts = [d.platform, d.chars !== undefined ? `${d.chars.toLocaleString("en-US")} chars` : undefined, d.images ? `${d.images} image${d.images === 1 ? "" : "s"}` : undefined, d.next !== undefined ? "more pages" : undefined, d.cached ? "cached" : undefined, d.durationMs !== undefined ? `took ${(d.durationMs / 1000).toFixed(1)}s` : undefined].filter(Boolean);
-	return `${safe(theme, "toolOutput", clean(d.title))}  ${safe(theme, "muted", clean(facts.join(" · ")))}`;
+	const facts = [platformName(d.platform, d.url ?? ""), d.images ? `${d.images} image${d.images === 1 ? "" : "s"}` : undefined, d.next !== undefined ? "more pages" : undefined, d.cached ? "cached" : undefined, d.durationMs !== undefined ? `took ${(d.durationMs / 1000).toFixed(1)}s` : undefined].filter(Boolean);
+	return `${safe(theme, "toolOutput", clean(d.title))}  ${safe(theme, "muted", clean(facts.join(SEP)))}`;
 }
 
 function renderResult(details: unknown, theme: Theme): Component {

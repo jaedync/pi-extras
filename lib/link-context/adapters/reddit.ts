@@ -6,6 +6,7 @@
 import { agentsFor } from "../config.ts";
 import { get, getJson, PLAIN_UA, PREVIEW_UA } from "../http.ts";
 import { renderThread, type Post, type Reply } from "../post.ts";
+import { threadSummary } from "../summary.ts";
 import { decodeEntities, isoDate, stats } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
@@ -103,6 +104,7 @@ export async function pullReddit(target: { path?: string; share?: string }, ctx:
 		title: link.title ?? "Reddit post",
 		url: post.url ?? `https://www.reddit.com${path}`,
 		markdown: renderThread([], post, replies, undefined, link.num_comments),
+		summary: threadSummary(post, replies, link.num_comments),
 		photos: post.images,
 		videoUrl: post.videoUrl,
 	};

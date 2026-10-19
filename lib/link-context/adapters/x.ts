@@ -6,6 +6,7 @@
 import { agentsFor } from "../config.ts";
 import { getJson, PLAIN_UA } from "../http.ts";
 import { renderThread, type Post } from "../post.ts";
+import { threadSummary } from "../summary.ts";
 import { isoDate, stats } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
@@ -99,6 +100,7 @@ export async function pullX(id: string, ctx: AdapterContext): Promise<Pulled> {
 		title: `${post.author} on X`,
 		url: tweet.url ?? `https://x.com/i/status/${id}`,
 		markdown: renderThread(parents, post, [], "Replies are not available without an X login; only the parent chain is shown."),
+		summary: threadSummary(post, []),
 		photos: [...photoUrls(tweet), ...(tweet.quote ? photoUrls(tweet.quote) : [])],
 		// The direct MP4: yt-dlp's X extractor needs a login more often than the file does.
 		videoUrl: video ? videoFile(video) : undefined,

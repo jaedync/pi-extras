@@ -6,6 +6,7 @@
 import { agentsFor } from "../config.ts";
 import { get, PLAIN_UA, PREVIEW_UA } from "../http.ts";
 import { renderThread, type Post, type Reply } from "../post.ts";
+import { threadSummary } from "../summary.ts";
 import { decodeEntities, isoDate, jsonLd, metaTags, stats } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
@@ -24,6 +25,7 @@ export function threadsFromHtml(html: string, url: string): Pulled {
 		title: title || "Threads post",
 		url: post.url ?? url,
 		markdown: renderThread([], post, [], "Threads shows replies only to signed-in users; the post text comes from the page's preview tags."),
+		summary: threadSummary(post, []),
 		photos: image && !isAvatar ? [image] : [],
 	};
 }
@@ -79,7 +81,7 @@ export function linkedinFromHtml(html: string, url: string, limit: number): Pull
 		depth: 0,
 	}));
 	const title = posting?.headline ? `${post.author}: ${posting.headline}` : `${post.author} on LinkedIn`;
-	return { platform: "linkedin", title: title.slice(0, 200), url: post.url ?? url, markdown: renderThread([], post, replies, undefined, posting?.commentCount), photos: images };
+	return { platform: "linkedin", title: title.slice(0, 200), url: post.url ?? url, markdown: renderThread([], post, replies, undefined, posting?.commentCount), summary: threadSummary(post, replies, posting?.commentCount), photos: images };
 }
 
 export async function pullThreads(url: string, ctx: AdapterContext): Promise<Pulled> {

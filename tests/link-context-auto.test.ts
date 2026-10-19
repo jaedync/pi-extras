@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { isChildSession, markChildSession } from "../lib/child-session.ts";
 import { registerAutoPull, WAIT_MS } from "../lib/link-context/auto.ts";
-import { AUTO_TYPE, autoMessage, autoRow, findLinks, LINK_CHARS, MAX_IMAGES, MAX_LINKS, type AutoDetails, type LinkResult } from "../lib/link-context/auto-message.ts";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { autoLines } from "../lib/link-context/auto-view.ts";
+import { AUTO_TYPE, autoMessage, findLinks, LINK_CHARS, MAX_IMAGES, MAX_LINKS, type AutoDetails, type LinkResult } from "../lib/link-context/auto-message.ts";
 import { parseConfig } from "../lib/link-context/config.ts";
 import { createReader } from "../lib/link-context/reader.ts";
 import type { ImageBlock, Pulled } from "../lib/link-context/types.ts";
+import { quiet } from "./support/quiet-theme.ts";
 
-const plain = { fg: (_key: string, text: string) => text, bold: (text: string) => text } as never;
+const theme = quiet();
+const strip = (lines: readonly string[]) => lines.map((line) => stripTerminalSequences(line).trimEnd());
 const image = (data: string): ImageBlock => ({ type: "image", data, mimeType: "image/png" });
 const pulled = (url: string, extra: Partial<Pulled> = {}): Pulled => ({ platform: "web", title: `Title of ${url}`, url, markdown: `# ${url}\n\nbody`, ...extra });
 
@@ -92,21 +96,25 @@ test("a message: failures, late links and links past the limit are named with wh
 	assert.match((message.content[0] as { text: string }).text, /^Pull Link read 1 of 4 links/);
 });
 
-test("the row names the links, marks failures and late links, and carries no terminal escapes", () => {
+test("the message's lines name the links, mark failures and late links, and carry no terminal escapes", () => {
 	const message = autoMessage([
 		{ url: "https://x.com/BenKoska/status/1234567890123456789", state: "read", pulled: pulled("https://x.com/BenKoska/status/1234567890123456789") },
 		{ url: "https://www.github.com/jaedync/pi-extras", state: "cached", pulled: pulled("https://github.com/jaedync/pi-extras") },
 		{ url: "https://e.test/bad\x1b]8;;evil\x07", state: "failed", error: "nope" },
 		{ url: "https://e.test/slow", state: "reading" },
 	]);
-	const row = autoRow(message.details, plain, false);
-	assert.equal(row, "Pulled 2 of 4 links: x.com/BenKoska/status/1234567… · github.com/jaedync/pi-extras · e.test/bad ]8;;evil (failed) · e.test/slow (still reading)");
-	assert.doesNotMatch(row, /\x1b|\x07/);
-	const expanded = autoRow(message.details, plain, true);
-	assert.match(expanded, /\n  Title of https:\/\/x\.com\/BenKoska\/status\/1234567890123456789  web · \d+ chars/);
-	assert.match(expanded, /\n  e\.test\/bad ]8;;evil: nope/);
-	assert.equal(autoRow({ links: [{ url: "https://e.test/a", state: "read" }] }, plain, false), "Pulled 1 link: e.test/a");
-	assert.equal(autoRow(undefined, plain, false), "");
+	const collapsed = strip(autoLines(theme, 120, message.details, false));
+	assert.match(collapsed[0]!, /^. pull_link 2 of 4 links from your message +1 failed, 1 still reading$/);
+	assert.deepEqual(collapsed.slice(1), [
+		"  │ x.com       Title of https://x.com/BenKoska/status/1234567890123456789",
+		"  │ github.com  Title of https://github.com/jaedync/pi-extras  cached",
+		"  │ e.test      failed: nope",
+		"  │ e.test      still reading; pull_link uses its result when it is ready",
+	]);
+	const expanded = autoLines(theme, 120, message.details, true).join("\n");
+	assert.doesNotMatch(expanded, /\x07|\x1b\]8;;evil/, "a URL from the message opens no link of its own");
+	assert.equal(strip(autoLines(theme, 60, { links: [{ url: "https://e.test/a", state: "read" }] }, false))[1], "  │ e.test  https://e.test/a");
+	assert.deepEqual(autoLines(theme, 60, undefined, false), []);
 });
 
 // --- Wiring: which messages, the wait, delivery, the toggle.
@@ -142,6 +150,32 @@ function harness(options: { config?: Record<string, unknown>; waitMs?: number; f
 	return { emit, command, ctx, renderers, sent, notes, statuses, fetched, reader };
 }
 
+test("in the TUI the wait is a running band above the editor, with each link in the color of its state", async () => {
+	let finish: (() => void) | undefined;
+	const slow = new Promise<void>((resolve) => { finish = resolve; });
+	const h = harness({ fetcher: (async (input: string | URL | Request) => {
+		if (String(input).includes("/slow")) await slow;
+		return new Response(`<title>t</title><article><p>Text</p></article>`, { headers: { "content-type": "text/html" } });
+	}) as typeof fetch });
+	const widgets: { key: string; content: unknown }[] = [];
+	const statuses: unknown[] = [];
+	const tui = { requestRender: () => {} };
+	const on = { ...h.ctx(), hasUI: true, mode: "tui", ui: { setStatus: (_key: string, text: unknown) => statuses.push(text), setWidget: (key: string, content: unknown) => widgets.push({ key, content }) } };
+	await h.emit("input", input("https://e.test/fast https://e.test/slow"), on);
+	const run = h.emit("before_agent_start", start("x"), on);
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	assert.equal(widgets.length, 1);
+	assert.equal(typeof widgets[0]!.content, "function");
+	const component = (widgets[0]!.content as (tui: unknown, theme: unknown) => { render(width: number): string[]; dispose?(): void })(tui, theme);
+	const line = strip(component.render(100))[0]!;
+	assert.match(line, /^. pull_link e\.test, e\.test +\d+(ms|\.\ds) \/ 15s$/);
+	finish!();
+	await run;
+	assert.deepEqual(widgets.map((widget) => widget.content === undefined), [false, true], "the widget goes away when the run starts");
+	assert.deepEqual(statuses, [], "the TUI shows the band, not a footer status");
+	component.dispose?.();
+});
+
 const input = (text: string, source = "interactive", streamingBehavior?: string) => ({ text, source, ...(streamingBehavior ? { streamingBehavior } : {}) });
 const start = (prompt: string, messageType = "user") => ({ prompt, messageType, systemPrompt: "", systemPromptOptions: {} });
 const messageText = (result: unknown) => ((result as { message?: { content: { type: string; text?: string }[] } })?.message?.content ?? []).map((block) => block.text ?? "").join("\n");
@@ -155,6 +189,7 @@ test("a typed message with links: the reads start at input, and the run gets the
 	assert.match(text, /Text of https:\/\/e\.test\/a[\s\S]*Text of https:\/\/e\.test\/b/);
 	assert.equal((result as { message: { customType: string; display: boolean } }).message.customType, AUTO_TYPE);
 	assert.deepEqual(h.statuses, ["Pull Link: reading the links in your message…", undefined], "the wait has a status, since Pi shows the message only when the run starts");
+	assert.equal(typeof (result as { message: { details: AutoDetails } }).message.details.durationMs, "number", "the message keeps how long the reads took");
 	assert.equal(await h.emit("before_agent_start", start("again")), undefined, "one message per user message");
 	await h.emit("input", input("https://e.test/a once more", "rpc"));
 	const again = await h.emit("before_agent_start", start("https://e.test/a once more"));
@@ -249,8 +284,10 @@ test("session shutdown stops reads still running", async () => {
 test("the renderer draws the row", () => {
 	const h = harness();
 	const message = autoMessage([{ url: "https://e.test/a", state: "read", pulled: pulled("https://e.test/a") }]);
-	const component = h.renderers.get(AUTO_TYPE)?.(message, { expanded: false }, plain);
-	assert.deepEqual(component?.render(80).map((line) => line.trimEnd()).filter(Boolean), ["Pulled 1 link: e.test/a"]);
+	const component = h.renderers.get(AUTO_TYPE)?.(message, { expanded: false }, theme);
+	const lines = strip(component?.render(80) ?? []);
+	assert.match(lines[0]!, /^. pull_link 1 link from your message$/);
+	assert.deepEqual(lines.slice(1), ["  │ e.test  Title of https://e.test/a"]);
 });
 
 test("a steer's result is dropped after session shutdown, and a throwing sendMessage leaves no unhandled rejection", async () => {
@@ -289,7 +326,7 @@ test("a message with 100 links reads 5, names 5 more and counts the rest; very l
 	assert.match(text, /^Pull Link read 5 of 100 links/);
 	assert.equal(result.message.details.links.length, 10);
 	assert.equal(result.message.details.more, 90);
-	assert.match(autoRow(result.message.details, plain, false), / · \+90 more$/);
+	assert.match(strip(autoLines(theme, 100, result.message.details, false))[0]!, /pull_link 5 of 100 links from your message +95 not read +\d+ms$/);
 	assert.ok(text.length < 5_000);
 });
 

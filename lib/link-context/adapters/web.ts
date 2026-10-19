@@ -10,6 +10,7 @@ import { isChallenge, renderPage } from "../browser.ts";
 import { agentsFor } from "../config.ts";
 import { BROWSER_UA, get, HttpError, type HttpResult, PLAIN_UA, PREVIEW_UA } from "../http.ts";
 import { decodeEntities, fenced, htmlToText, isoDate, jsonLd, metaTags } from "../text.ts";
+import { plainLine, proseLines } from "../summary.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
 const DROP = "script, style, noscript, nav, header, footer, aside, form, svg, iframe, [role=navigation], [aria-hidden=true], .sidebar, .advert, .ad, .cookie, .newsletter";
@@ -44,6 +45,9 @@ function previewImage(image: string | undefined, url: string): string[] {
 	}
 }
 
+/** The line every Wikipedia article starts with; it says nothing about the article. */
+const WIKIPEDIA_TAGLINE = /^From Wikipedia, the free encyclopedia$/m;
+
 /** `note` goes under the heading, for example to say how the page was read. */
 export function webFromHtml(html: string, url: string, note?: string): Pulled {
 	const meta = metaTags(html);
@@ -56,7 +60,9 @@ export function webFromHtml(html: string, url: string, note?: string): Pulled {
 	const body = mainText(html);
 	const longer = article?.articleBody && article.articleBody.length > body.length ? article.articleBody : body;
 	const head = [`# ${title}`, [meta.get("og:site_name"), author, date].filter(Boolean).join(" · "), url, description && !longer.startsWith(description.slice(0, 60)) ? `> ${description}` : "", note ? `\n${note}` : ""].filter(Boolean).join("\n");
-	return { platform: "web", title, url, markdown: `${head}\n\n${longer || "(no readable text found; the page may need JavaScript)"}`, photos: previewImage(meta.get("og:image"), url) };
+	const byline = plainLine([meta.get("og:site_name"), author, date].filter(Boolean).join(" · "));
+	const summary = [byline, ...(description ? [plainLine(description)] : proseLines(longer.replace(WIKIPEDIA_TAGLINE, ""), title, 2))].filter(Boolean);
+	return { platform: "web", title, url, markdown: `${head}\n\n${longer || "(no readable text found; the page may need JavaScript)"}`, summary, photos: previewImage(meta.get("og:image"), url) };
 }
 
 const BLOCKED = new Set([403, 429, 503]);

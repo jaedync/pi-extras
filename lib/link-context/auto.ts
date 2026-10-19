@@ -6,9 +6,10 @@
  * subagent's task.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { isChildSession } from "../child-session.ts";
-import { AUTO_TYPE, autoMessage, autoRow, findLinks, MAX_LINKS, MAX_NAMED_SKIPPED, type AutoMessage, type LinkResult } from "./auto-message.ts";
+import { watchMotion } from "../extras-config.ts";
+import { AUTO_TYPE, autoMessage, findLinks, MAX_LINKS, MAX_NAMED_SKIPPED, type AutoMessage, type LinkResult } from "./auto-message.ts";
+import { createAutoRenderer, waitWidget, type WaitLink, type WaitState } from "./auto-view.ts";
 import { loadConfig } from "./config.ts";
 import type { LinkReader } from "./reader.ts";
 import type { LinkConfig } from "./types.ts";
@@ -30,6 +31,12 @@ export interface AutoPullOptions {
 
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/** The reads of one message: the message they make, and their state as they go, for the wait widget. */
+interface Pending {
+	readonly message: Promise<AutoMessage>;
+	readonly wait: WaitState;
+}
+
 export function registerAutoPull(pi: ExtensionAPI, options: AutoPullOptions): void {
 	const waitMs = options.waitMs ?? WAIT_MS;
 	const backgroundMs = options.backgroundMs ?? BACKGROUND_MS;
@@ -37,22 +44,42 @@ export function registerAutoPull(pi: ExtensionAPI, options: AutoPullOptions): vo
 	let override: boolean | undefined;
 	let session = new AbortController();
 	// The message for the prompt that is about to start a run.
-	let next: Promise<AutoMessage> | undefined;
+	let next: Pending | undefined;
 	const enabled = () => override ?? (options.config ?? loadConfig)().autoPull;
+	const motion = watchMotion(pi.events);
 
-	const collect = async (urls: readonly string[]): Promise<AutoMessage> => {
+	const collect = (urls: readonly string[]): Pending => {
+		const startedAt = Date.now();
 		const signal = AbortSignal.any([session.signal, AbortSignal.timeout(backgroundMs)]);
-		const reads = urls.slice(0, MAX_LINKS).map((url) => options.reader.readPlain(url, signal).then(
-			(read): LinkResult => ({ url, state: read.cached ? "cached" : "read", pulled: read.pulled }),
-			(error: unknown): LinkResult => ({ url, state: "failed", error: reason(error) }),
+		let states: readonly WaitLink[] = urls.slice(0, MAX_LINKS).map((url) => ({ url, state: "reading" }));
+		const settle = (index: number, result: LinkResult) => {
+			states = states.map((item, at) => (at === index ? { url: item.url, state: result.state, platform: "pulled" in result ? result.pulled.platform : undefined } : item));
+			return result;
+		};
+		const reads = urls.slice(0, MAX_LINKS).map((url, index) => options.reader.readPlain(url, signal).then(
+			(read): LinkResult => settle(index, { url, state: read.cached ? "cached" : "read", pulled: read.pulled }),
+			(error: unknown): LinkResult => settle(index, { url, state: "failed", error: reason(error) }),
 		));
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const late = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), waitMs); });
-		const settled = await Promise.all(reads.map((read) => Promise.race([read, late]))).finally(() => clearTimeout(timer));
-		const results = settled.map((result, index): LinkResult => result ?? { url: urls[index], state: "reading" });
-		// A pasted list can hold hundreds of links: a few are named, the rest only counted.
-		const named = urls.slice(MAX_LINKS, MAX_LINKS + MAX_NAMED_SKIPPED).map((url): LinkResult => ({ url, state: "skipped" }));
-		return autoMessage([...results, ...named], Math.max(0, urls.length - MAX_LINKS - MAX_NAMED_SKIPPED));
+		const build = async (): Promise<AutoMessage> => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const late = new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), waitMs); });
+			const settled = await Promise.all(reads.map((read) => Promise.race([read, late]))).finally(() => clearTimeout(timer));
+			const results = settled.map((result, index): LinkResult => result ?? { url: urls[index], state: "reading" });
+			// A pasted list can hold hundreds of links: a few are named, the rest only counted.
+			const named = urls.slice(MAX_LINKS, MAX_LINKS + MAX_NAMED_SKIPPED).map((url): LinkResult => ({ url, state: "skipped" }));
+			return autoMessage([...results, ...named], Math.max(0, urls.length - MAX_LINKS - MAX_NAMED_SKIPPED), Date.now() - startedAt);
+		};
+		return { message: build(), wait: { links: () => states, startedAt, limitMs: waitMs } };
+	};
+
+	/** Pi shows the user's message only when the run starts, so the wait says what it is for: a band in the TUI, a status elsewhere. */
+	const showWait = (ctx: ExtensionContext, wait: WaitState): (() => void) => {
+		if (ctx.hasUI && ctx.mode === "tui" && typeof ctx.ui.setWidget === "function") {
+			ctx.ui.setWidget(STATUS_KEY, waitWidget(wait, motion));
+			return () => ctx.ui.setWidget(STATUS_KEY, undefined);
+		}
+		ctx.ui.setStatus?.(STATUS_KEY, STATUS_TEXT);
+		return () => ctx.ui.setStatus?.(STATUS_KEY, undefined);
 	};
 
 	/**
@@ -80,14 +107,14 @@ export function registerAutoPull(pi: ExtensionAPI, options: AutoPullOptions): vo
 		if (event.source === "extension" || isChildSession(ctx.sessionManager) || !enabled()) return;
 		const urls = findLinks(event.text);
 		if (!urls.length) return;
-		const message = collect(urls);
+		const pending = collect(urls);
 		if (event.streamingBehavior) {
-			deliverLater(message);
+			deliverLater(pending.message);
 			return;
 		}
 		// A prompt that fails before its run (no model, no login) never awaits this.
-		message.catch(() => undefined);
-		next = message;
+		pending.message.catch(() => undefined);
+		next = pending;
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
@@ -96,12 +123,11 @@ export function registerAutoPull(pi: ExtensionAPI, options: AutoPullOptions): vo
 		const pending = next;
 		next = undefined;
 		if (!pending) return undefined;
-		// Pi shows the user's message only when the run starts, so a status says what the wait is for.
-		ctx.ui.setStatus?.(STATUS_KEY, STATUS_TEXT);
+		const hide = showWait(ctx, pending.wait);
 		try {
-			return { message: await pending };
+			return { message: await pending.message };
 		} finally {
-			ctx.ui.setStatus?.(STATUS_KEY, undefined);
+			hide();
 		}
 	});
 
@@ -113,10 +139,7 @@ export function registerAutoPull(pi: ExtensionAPI, options: AutoPullOptions): vo
 	});
 
 	if (typeof pi.registerMessageRenderer === "function") {
-		pi.registerMessageRenderer(AUTO_TYPE, (message, renderOptions, theme) => {
-			const row = autoRow(message.details, theme, renderOptions.expanded);
-			return row ? new Text(row, 0, 0) : undefined;
-		});
+		pi.registerMessageRenderer(AUTO_TYPE, createAutoRenderer());
 	}
 
 	pi.registerCommand("autopull", {

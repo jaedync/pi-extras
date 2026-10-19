@@ -9,6 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { renderReplies, type Reply } from "../post.ts";
+import { plainLine, proseLines } from "../summary.ts";
 import { clock, cutIndex, isoDate, stats, type Range } from "../text.ts";
 import type { AdapterContext, ImageBlock, Pulled } from "../types.ts";
 import { extractFrames, sampleTimes, type FrameResult, type FrameSource } from "./frames.ts";
@@ -80,6 +81,13 @@ export function header(info: VideoInfo, url: string): string {
 	if (description) lines.push("", "## Description", "", description.length > MAX_DESCRIPTION ? `${description.slice(0, cutIndex(description, MAX_DESCRIPTION))}…` : description);
 	if (info.chapters?.length) lines.push("", "## Chapters", "", ...info.chapters.map((c) => `- ${clock(c.start_time ?? 0)} ${c.title ?? ""}`));
 	return lines.join("\n");
+}
+
+/** Who posted it, when and how long; its counts; the first line of its description. */
+export function videoSummary(info: VideoInfo): string[] {
+	const facts = [info.channel ?? info.uploader, isoDate(info.upload_date ?? info.timestamp), info.duration ? clock(info.duration) : undefined].filter(Boolean).join(" · ");
+	const counts = stats([["views", info.view_count], ["likes", info.like_count], ["comments", info.comment_count]]);
+	return [plainLine(facts), plainLine(counts), ...proseLines(info.description ?? "", "", 1)].filter(Boolean);
 }
 
 /** The short heading for a call that asks only for frames at given times. */
@@ -465,7 +473,7 @@ export async function pullVideo(url: string, site: string, ctx: AdapterContext, 
 	}
 	if (!tools.serverHome && site === "youtube") notes.push("The YouTube PO-token provider is not installed, so YouTube may refuse downloads. See provision.log in the media folder.");
 	if (notes.length) parts.push(notes.map((note) => `_${note}_`).join("\n"));
-	return { platform: site === "file" ? "video" : site, title: info.title ?? url, url: info.webpage_url ?? url, markdown: parts.join("\n\n"), images, files, ...(transcript?.speechSkipped ? { speechSkipped: true } : {}) };
+	return { platform: site === "file" ? "video" : site, title: info.title ?? url, url: info.webpage_url ?? url, markdown: parts.join("\n\n"), summary: videoSummary(info), images, files, ...(transcript?.speechSkipped ? { speechSkipped: true } : {}) };
 }
 
 function dirOf(files: readonly string[]): string {

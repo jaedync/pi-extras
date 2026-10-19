@@ -2,6 +2,36 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.25.5 - 2026-10-19
+
+### Changed
+
+- Pull Link: the `pull_link` row now uses the Tool Display layout, as the
+  other tool rows do.
+  - The band shows the link in short (it opens the full link), the options
+    of the call and, after the read, the platform by its name (`Hacker News`,
+    `GitHub`, or the host of a web page). It also names the images, the page
+    of a long result and the cache. While the tool works, the right side
+    shows its step, for example `reading captions`.
+  - Under the band are the title and a summary of 3 lines or fewer, for
+    example the stars and language of a repository, or the points and first
+    reply of a thread. The model does not get the summary. A row from an
+    older session shows the first lines of its result.
+  - A failure shows its reason in the error color, without the host that the
+    band already names. Before, the row showed the time two times and raw
+    platform IDs (`hackernews`).
+- Pull Link auto-pull: the message in the transcript is now a band, with
+  its status as a tool row has it. The band is green when one link or more
+  was read and red when all failed. The failures, the links still being read
+  and the time are on the right. Under the band is one line for each link:
+  the platform, the title and what came with it. Three links show; a click
+  or ctrl+o shows all, each with its address and summary. Before, the row
+  was plain text with each link cut to 30 characters.
+- Pull Link auto-pull: in the TUI, the wait is a running band above the
+  editor. It names each link in the color of its state and shows the time
+  against the 15-second limit. Before, only a status line in the footer
+  showed the wait. Other modes keep the status line.
+
 ## 0.25.4 - 2026-10-16
 
 ### Fixed

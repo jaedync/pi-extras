@@ -6,6 +6,7 @@
  */
 import { get, getJson, HttpError, PLAIN_UA } from "../http.ts";
 import { renderThread, type Reply } from "../post.ts";
+import { plainLine, proseLines, threadSummary } from "../summary.ts";
 import { cutIndex, fenced, isoDate, stats } from "../text.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
 
@@ -39,6 +40,12 @@ function ghFetch(ctx: AdapterContext) {
 	};
 }
 
+const count = (n: number, word: string) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
+const lineCount = (body: string) => count(body.split("\n").length - (body.endsWith("\n") ? 1 : 0), "line");
+const entryCount = (entries: readonly { type?: string }[]) => {
+	const folders = entries.filter((entry) => entry.type === "dir").length;
+	return `${count(folders, "folder")}, ${count(entries.length - folders, "file")}`;
+};
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, cutIndex(text, max))}\n… (${text.length - max} more characters)` : text);
 
 async function issue(owner: string, repo: string, number: string, ctx: AdapterContext): Promise<Pulled> {
@@ -53,7 +60,7 @@ async function issue(owner: string, repo: string, number: string, ctx: AdapterCo
 	const comments = ctx.options.comments > 0 && item.comments ? await gh.json<Comment[]>(`${base}/issues/${number}/comments?per_page=${Math.min(100, ctx.options.comments)}`) : [];
 	const replies: Reply[] = comments.map((comment) => ({ post: { author: comment.user?.login ?? "ghost", date: isoDate(comment.created_at), text: comment.body ?? "", stats: stats([["reactions", comment.reactions?.total_count || undefined]]) }, depth: 0 }));
 	const post = { author: item.user?.login ?? "ghost", date: isoDate(item.created_at), url: item.html_url, text: `# ${item.title}\n${facts.join(" · ")}\n\n${item.body ?? ""}`, stats: stats([["comments", item.comments]]) };
-	return { platform: "github", title: `${owner}/${repo}#${number}: ${item.title}`, url: item.html_url ?? "", markdown: renderThread([], post, replies, undefined, item.comments) };
+	return { platform: "github", title: `${owner}/${repo}#${number}: ${item.title}`, url: item.html_url ?? "", markdown: renderThread([], post, replies, undefined, item.comments), summary: threadSummary(post, replies, 0) };
 }
 
 async function repository(owner: string, repo: string, ctx: AdapterContext): Promise<Pulled> {
@@ -62,7 +69,7 @@ async function repository(owner: string, repo: string, ctx: AdapterContext): Pro
 	const readme = await gh.raw(`/repos/${owner}/${repo}/readme`).catch(() => "");
 	const facts = [stats([["stars", info.stargazers_count], ["forks", info.forks_count]]), info.language, info.license?.spdx_id, info.pushed_at ? `last push ${isoDate(info.pushed_at)}` : undefined].filter(Boolean).join(" · ");
 	const topics = info.topics?.length ? `\nTopics: ${info.topics.join(", ")}` : "";
-	return { platform: "github", title: info.full_name ?? `${owner}/${repo}`, url: info.html_url ?? `https://github.com/${owner}/${repo}`, markdown: `# ${info.full_name}\n${info.description ?? ""}\n${facts}${topics}\n\n## README\n\n${clip(readme, MAX_FILE_CHARS) || "(no README)"}` };
+	return { platform: "github", title: info.full_name ?? `${owner}/${repo}`, url: info.html_url ?? `https://github.com/${owner}/${repo}`, markdown: `# ${info.full_name}\n${info.description ?? ""}\n${facts}${topics}\n\n## README\n\n${clip(readme, MAX_FILE_CHARS) || "(no README)"}`, summary: [info.description ?? "", facts].map(plainLine).filter(Boolean) };
 }
 
 async function file(owner: string, repo: string, ref: string, path: string, ctx: AdapterContext): Promise<Pulled> {
@@ -70,25 +77,26 @@ async function file(owner: string, repo: string, ref: string, path: string, ctx:
 	const body = await gh.raw(`/repos/${owner}/${repo}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`);
 	const extension = /\.([\w]+)$/.exec(path)?.[1] ?? "";
 	const url = `https://github.com/${owner}/${repo}/blob/${ref}/${path}`;
-	return { platform: "github", title: `${owner}/${repo}: ${path}`, url, markdown: `# ${path}\n${owner}/${repo} at ${ref}\n\n${fenced(clip(body, MAX_FILE_CHARS), extension, 4)}` };
+	return { platform: "github", title: `${owner}/${repo}: ${path}`, url, markdown: `# ${path}\n${owner}/${repo} at ${ref}\n\n${fenced(clip(body, MAX_FILE_CHARS), extension, 4)}`, summary: [`${owner}/${repo} at ${ref}`, lineCount(body)] };
 }
 
 async function directory(owner: string, repo: string, ref: string, path: string, ctx: AdapterContext): Promise<Pulled> {
 	const entries = await ghFetch(ctx).json<{ name?: string; type?: string; size?: number }[]>(`/repos/${owner}/${repo}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`);
 	const lines = entries.map((entry) => `- ${entry.name}${entry.type === "dir" ? "/" : ` (${entry.size} bytes)`}`);
-	return { platform: "github", title: `${owner}/${repo}/${path}`, url: `https://github.com/${owner}/${repo}/tree/${ref}/${path}`, markdown: `# ${owner}/${repo}/${path} at ${ref}\n\n${lines.join("\n")}` };
+	return { platform: "github", title: `${owner}/${repo}/${path}`, url: `https://github.com/${owner}/${repo}/tree/${ref}/${path}`, markdown: `# ${owner}/${repo}/${path} at ${ref}\n\n${lines.join("\n")}`, summary: [`${owner}/${repo} at ${ref}`, entryCount(entries)] };
 }
 
 async function commit(owner: string, repo: string, sha: string, ctx: AdapterContext): Promise<Pulled> {
 	const data = await ghFetch(ctx).json<{ html_url?: string; commit?: { message?: string; author?: { name?: string; date?: string } }; stats?: { additions?: number; deletions?: number }; files?: { filename?: string; status?: string; patch?: string }[] }>(`/repos/${owner}/${repo}/commits/${sha}`);
 	const files = (data.files ?? []).map((f) => `### ${f.status} ${f.filename}\n\n${fenced(clip(f.patch ?? "(binary or too large)", MAX_PATCH_CHARS), "diff")}`);
 	const head = `# Commit ${sha.slice(0, 12)}\n${data.commit?.author?.name} · ${isoDate(data.commit?.author?.date)} · +${data.stats?.additions} −${data.stats?.deletions}\n\n${data.commit?.message ?? ""}`;
-	return { platform: "github", title: `${owner}/${repo}@${sha.slice(0, 12)}`, url: data.html_url ?? "", markdown: [head, ...files].join("\n\n") };
+	const summary = [`${data.commit?.author?.name} · ${isoDate(data.commit?.author?.date)} · +${data.stats?.additions} −${data.stats?.deletions}`, data.commit?.message?.split("\n")[0] ?? "", count(files.length, "file")];
+	return { platform: "github", title: `${owner}/${repo}@${sha.slice(0, 12)}`, url: data.html_url ?? "", markdown: [head, ...files].join("\n\n"), summary: summary.map(plainLine).filter(Boolean) };
 }
 
 async function release(owner: string, repo: string, tag: string, ctx: AdapterContext): Promise<Pulled> {
 	const data = await ghFetch(ctx).json<{ name?: string; tag_name?: string; body?: string; published_at?: string; html_url?: string; author?: User }>(`/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tag)}`);
-	return { platform: "github", title: `${owner}/${repo} ${data.name || data.tag_name}`, url: data.html_url ?? "", markdown: `# ${data.name || data.tag_name}\n${owner}/${repo} · ${data.author?.login} · ${isoDate(data.published_at)}\n\n${data.body ?? ""}` };
+	return { platform: "github", title: `${owner}/${repo} ${data.name || data.tag_name}`, url: data.html_url ?? "", markdown: `# ${data.name || data.tag_name}\n${owner}/${repo} · ${data.author?.login} · ${isoDate(data.published_at)}\n\n${data.body ?? ""}`, summary: [plainLine(`${owner}/${repo} · ${data.author?.login} · ${isoDate(data.published_at)}`), ...proseLines(data.body ?? "", "", 2)] };
 }
 
 interface GistFile { filename?: string; language?: string; content?: string; truncated?: boolean; raw_url?: string }
@@ -103,7 +111,7 @@ export async function pullGist(id: string, ctx: AdapterContext): Promise<Pulled>
 	if (!/^[0-9a-f]{6,64}$/i.test(id)) throw new NotHandled();
 	const data = await ghFetch(ctx).json<{ description?: string; html_url?: string; owner?: User; files?: Record<string, GistFile> }>(`/gists/${id}`);
 	const files = Object.values(data.files ?? {}).map(gistFile);
-	return { platform: "github", title: `Gist ${data.description || id}`, url: data.html_url ?? "", markdown: `# ${data.description || "Gist"}\nby ${data.owner?.login ?? "anonymous"}\n\n${files.join("\n\n")}` };
+	return { platform: "github", title: `Gist ${data.description || id}`, url: data.html_url ?? "", markdown: `# ${data.description || "Gist"}\nby ${data.owner?.login ?? "anonymous"}\n\n${files.join("\n\n")}`, summary: [`by ${data.owner?.login ?? "anonymous"}`, plainLine(Object.values(data.files ?? {}).map((f) => f.filename).join(", "))].filter(Boolean) };
 }
 
 /**

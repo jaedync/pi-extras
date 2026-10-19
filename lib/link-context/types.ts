@@ -57,6 +57,8 @@ export interface Pulled {
 	readonly url: string;
 	/** The whole result as markdown; the tool pages it when long. */
 	readonly markdown: string;
+	/** A few plain lines that say what the link is, for the transcript rows (summary.ts); the model never sees them. */
+	readonly summary?: readonly string[];
 	readonly images?: readonly ImageBlock[];
 	/** Files saved beside the result, such as full-size frames. */
 	readonly files?: readonly string[];
