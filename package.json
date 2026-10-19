@@ -1,6 +1,6 @@
 {
   "name": "pi-extras",
-  "version": "0.25.5",
+  "version": "0.26.0",
   "private": true,
   "description": "Optional status, usage limits, activity, search, shell tools, subagents, clearer tool rows and a quiet theme for Pi",
   "type": "module",
@@ -42,7 +42,6 @@
       "extensions/kagi-search.ts",
       "extensions/voice.ts",
       "extensions/computer-use.ts",
-      "extensions/windows-use.ts",
       "extensions/tool-display.ts",
       "extensions/copy-blocks.ts",
       "extensions/release-notes.ts",

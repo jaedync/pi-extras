@@ -10,6 +10,7 @@
  */
 export const TOOL_ROW = Symbol.for("pi-extras.tool-row.v1");
 
+// "windows-use" is for the windows_use tool of the separate pi-windows-use package.
 export const ROW_KINDS = ["band", "kagi", "computer-use", "windows-use", "usage", "link"] as const;
 export type RowKind = (typeof ROW_KINDS)[number];
 

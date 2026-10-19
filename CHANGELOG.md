@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.26.0 - 2026-10-19
+
+### Removed
+
+- Windows Use: the extension and its `windows_use` tool are no longer in
+  pi-extras. They moved to a package of their own, with the git history of
+  their files. pi-extras now installs sixteen extensions. `PI_WINDOWS_USE` and
+  the `/windows-use` command do nothing without that package.
+  - Tool Display keeps the `windows_use` row layout, and subagents still never
+    get `windows_use`, so the separate package works as before.
+  - The data that Windows Use keeps on Windows (`%LOCALAPPDATA%\pi-extras\windows-use`)
+    and the setup in each VM stay. The separate package uses them.
+
 ## 0.25.5 - 2026-10-19
 
 ### Changed

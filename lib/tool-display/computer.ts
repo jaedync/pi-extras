@@ -137,4 +137,5 @@ export const scriptSpec = (names: ScriptRowNames): ToolSpec => ({
 });
 
 export const computerUseSpec = scriptSpec({ title: "computer_use", call: "Computer Use call", started: "client" });
+// windows_use is its own package now (pi-windows-use); it marks its tool "windows-use" to keep this row.
 export const windowsUseSpec = scriptSpec({ title: "windows_use", call: "Windows call", started: "host" });

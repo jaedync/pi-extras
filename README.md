@@ -19,7 +19,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all seventeen extensions (quota hibernation, computer use and Windows use stay off until you opt in); it makes `quiet` available but does not select it. It also adds the prompt templates `/deeper`, `/higher` and `/wider`.
+adds all sixteen extensions (quota hibernation and computer use stay off until you opt in); it makes `quiet` available but does not select it. It also adds the prompt templates `/deeper`, `/higher` and `/wider`.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -38,7 +38,6 @@ can still conflict.
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
-| Windows Use | Opt-in, WSL on a Hyper-V host: a `windows_use` tool that operates Windows VMs through Windows-MCP, which it installs in each guest, and through their consoles |
 | Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; every finished row stays visible, ctrl+o expands them all |
 | Pull Link | `pull_link` tool: give it a link to read posts with their threads, replies and images (X, Bluesky, Threads, Mastodon, Reddit, Hacker News, LinkedIn), GitHub pages, images, any web page, and videos with transcript, thumbnail, comments and frames on request (YouTube, TikTok, Instagram, Vimeo and more); the links in your messages are read before the model starts (`/autopull`) |
 | Copy Blocks | Code blocks and quotes in replies drawn on a background of their own with a `copy` label: one click copies the exact text; `/copy-block` does it from the keyboard |
@@ -133,8 +132,6 @@ the package. Removing it does not remove your credentials or change other packag
   models and settings (default `~/.cache/pi-extras/voice`, or under
   `XDG_CACHE_HOME`).
 - `PI_COMPUTER_USE=on`: enable computer use on macOS. Off by default. See below.
-- `PI_WINDOWS_USE=on`: enable Windows use in WSL on a Hyper-V host. Off by default. See below.
-  `PI_WINDOWS_USE_VMS`: the only VMs it may use, comma-separated (default: all).
 - `PI_TOOL_DISPLAY=off`: leave Pi's own tool rows in place. `/tool-display`
   writes its switches under `toolDisplay` in `pi-extras.json`: `enabled`,
   `others` (default `true`), `chains` (default `true`), `motion` (`full` or
@@ -953,9 +950,10 @@ any failure in the right rail. pi-extras's own tools have layouts of their own:
 
 - **web_search, kagi_search**: the query and how many results came back, with
   the first three under it.
-- **computer_use**, **windows_use**: the apps (or VMs) the script used and how
-  many calls and screenshots it took, with the last calls under it. A failed
-  call says `failed` or `not allowed` in words.
+- **computer_use**: the apps the script used and how many calls and
+  screenshots it took, with the last calls under it. A failed call says
+  `failed` or `not allowed` in words. The `windows_use` tool, now in a package
+  of its own, gets the same row with its VMs.
 - **usage**: each window's use in the band itself, amber from 80% and red when
   a limit is spent.
 - **artifact_publish, artifact_ask, artifact_check, artifact_feedback,
@@ -2028,7 +2026,7 @@ and Codex computer use. Apps the service rates high risk, such as browsers, show
 its prompt injection warning. The service never allows some apps, such as
 terminals. Without a UI, such as `pi -p`, an app that is not always allowed
 is denied unless Allow all is on. The agent is then told how to allow it.
-Subagents never get `computer_use` or `windows_use`.
+Subagents never get `computer_use`.
 
 `/computer-use` opens a panel with the client's status, the apps mode and a
 checklist of the apps the agent may always use. Check and uncheck any number of
@@ -2060,187 +2058,6 @@ extension before opting in.
 
 This relies on undocumented parts of the ChatGPT app and can break when it
 updates. OpenAI does not produce or endorse this integration.
-
-## Windows use
-
-Opt-in, for Pi running in WSL on a Windows Hyper-V host: set
-`PI_WINDOWS_USE=on` before starting Pi. It adds a `windows_use` tool that runs a
-short script against the host's Windows VMs, the way `computer_use` runs one
-against Mac apps. Guest methods (`win.snapshot`, `win.click`, `win.type`,
-`win.key`, `win.app`, `win.powershell` and the rest) go to
-[Windows-MCP](https://github.com/CursorTouch/Windows-MCP) inside the VM, which
-reads the UI Automation tree and acts in the signed-in desktop. `win.console.*`
-methods drive the VM's screen, keyboard and mouse from the host through
-Hyper-V in a confirmed console session, including its lock and UAC screens.
-In an enhanced VM Connect/RDP session, guest methods operate in that same
-session, console input is refused, and console screenshot/OCR methods read
-Windows-MCP's image instead. Every method names its
-VM: `win.snapshot({ vm: "Win11" })`; `win.vms()` lists them. To keep a session
-away from some VMs, set `PI_WINDOWS_USE_VMS` to the ones it may use, such as
-`PI_WINDOWS_USE_VMS="Win11,Test Lab"` (names match case-insensitively). Other
-VMs are then left out of `win.vms()`, and a call naming one fails before
-anything reaches the host.
-
-On a visible basic-session desktop, the first call installs Windows-MCP
-through the console. An enhanced session needs Windows-MCP already installed
-and reachable; a sign-in screen alone is not evidence that console sign-in is
-safe. Setup opens an elevated PowerShell from the Run box,
-accepts the UAC prompt, reads the console with OCR until that PowerShell is
-ready (so the bootstrap, which carries the key, is never typed into another
-window), and types a short bootstrap that installs
-[uv](https://docs.astral.sh/uv/) and Windows-MCP (0.8.6 or a later 0.8
-release, whose output windows_use is built to read) for the signed-in user,
-starts it at every logon, opens its port to the local subnet only, and
-requires a random key held on the host, new for every install. Setup disables
-PSReadLine only in its temporary shell to avoid expensive long-line redraws.
-The host key changes atomically after the entire command is queued, so a
-partial-typing failure leaves the existing server's authentication usable.
-Console input uses a paired Hyper-V `TypeKey` stroke per character with settled,
-grouped modifiers to preserve case and punctuation without a separate CIM call
-for every make and break.
-When the VM's Hyper-V key-value exchange works (it's on by default), the
-bootstrap itself goes over it and only a short stub is typed. The stub carries
-the key and the bootstrap's hash, and a whole setup took about three minutes
-live. Otherwise all of it is typed, which took about seven minutes, within a
-10-minute input budget. Installation needs internet access in the guest. The
-exception is a reinstall that can't reach the package index: it keeps an
-installed Windows-MCP from the same release line. An install that fails
-stops immediately with the guest's error, which the bootstrap reports to the host
-through Hyper-V key-value exchange. After that, each call first makes sure the VM
-is usable and repairs what it can, and the result says what it did:
-
-- The server reports its live Windows session and connection state before
-  guest tools run. A locked, disconnected or transitioning remote session
-  needs the user to reconnect or unlock the same VM Connect window.
-- A locked console session is signed back in only after a fresh session check.
-  After a reboot, the tool waits for the logon task. If the server remains
-  unavailable at sign-in, it asks for help instead of taking the console.
-- A stopped server may be reinstalled when a console desktop is visible.
-  A remembered enhanced session blocks this fallback even if it goes offline.
-- An unresponsive server may be restarted from a confirmed console's Run box,
-  read with OCR first. In an enhanced session, it reports the failure without
-  sending console input.
-- A snapshot stalled by Start or its search, which sometimes stop answering UI
-  Automation, gets them restarted (Windows starts them again when opened) and
-  is taken again. A snapshot stalled by another app's window fails after 30
-  seconds and names that window.
-- A VM that is starting, restarting or installing updates is waited for, up
-  to 15 minutes, before anything is clicked. It shows as a nearly black screen
-  or a missing Hyper-V heartbeat.
-- A VM that is off or saved is left alone; `win.start({ vm })` starts it.
-
-Windows-MCP runs with the signed-in user's rights, not an administrator's, so
-it can't read or send input to the windows of apps that run as administrator:
-their UI tree is empty, and its clicks and keys to them are dropped without an
-error. Snapshots mark such windows. Console input can reach them only in a
-confirmed basic session; an enhanced session cannot use that fallback.
-
-To give Windows-MCP administrator rights, set `PI_WINDOWS_USE_ELEVATED=on`.
-Setup then has the logon task run it with the guest user's full
-administrator rights (the task's highest run level, which needs that user to
-be an administrator), and a server set up the other way is reinstalled on
-the next call at the console; turning the setting off reinstalls it without
-them. In an enhanced session a mismatch is reported, not repaired through the
-console. Match the setting to the existing server or arrange a repair without
-moving the desktop.
-`win.powershell` and the apps `win.app` launches then run as administrator,
-without UAC prompts, and Windows-MCP's clicks and keys reach apps running as
-administrator. Their UI trees fared poorly in testing even so: a snapshot
-crashed Event Viewer whenever it showed an event log, Services stalled
-snapshots past their limit, and a vendor's MMC console kept its tree hidden. The
-tool description steers agents to PowerShell (`Get-WinEvent`,
-`Get-Service`) and OCR for such consoles. See
-[security and privacy](docs/security.md#windows-use) for what the setting
-allows.
-
-`win.console.ocr({ vm })` reads the screen's text with Windows OCR on the
-host, as lines of `(x,y) text` whose centers can be clicked. It covers what
-the UI tree can't describe, such as custom-drawn windows, MMC consoles, UAC
-and sign-in screens at the console, and needs no model that takes images.
-In enhanced sessions it reads the guest screenshot and converts OCR points
-back to desktop pixels, accounting for image downscaling and monitor offsets.
-Region filters use those same desktop pixels. `win.console.screenshot` reports
-the image dimensions plus the enhanced image's `source`, session, `x`/`y`
-origin, `screenWidth`/`screenHeight` and `scaleX`/`scaleY`; screen coordinates
-are origin plus image coordinates times scale. Failed remote captures never
-fall back to the unrelated console. Only a freshly confirmed console display
-may be woken with Shift; an unknown console screenshot stays read-only.
-
-An app that asks for administrator rights raises a UAC prompt on the secure
-desktop, where Windows-MCP can't see: a snapshot then fails and says a prompt
-is up. At a freshly confirmed console, `win.uac({ vm, answer: "yes" })` (or
-`"no"`) answers it. In an enhanced session the user must answer in VM Connect;
-console keys cannot reach that session's secure desktop. A prompt that asks
-for a password stays up; it is never typed. A synchronous PowerShell
-`Start-Process -Verb RunAs` can wait for consent and time out. Commands are not
-rewritten or automatically repeated to work around that.
-
-A call that never reached the server is sent again after the repair. One whose
-connection dropped mid-way is not, since it may have run (a `Restart-Computer`,
-say); its error says so, and the next call reconnects.
-
-At a confirmed console, signing in clicks the last-used account's Sign in
-button, which suits passwordless lab accounts. The taskbar check still avoids
-clicking an unlocked desktop, and at most two sign-in clicks are attempted.
-Session checks use Windows WTS APIs, not an inherited `SESSIONNAME` or localized
-command output. `win.login`, `win.setup`, UAC and console input all share the
-session guard; none is an override. If the server is unavailable and no console
-desktop is visible, even probe/wake keys are withheld. This deliberately gives
-up unattended sign-in in an ambiguous case rather than disconnecting a user's
-remote desktop or VPN.
-
-It needs `powershell.exe` through WSL interop and a Windows user in the
-Hyper-V Administrators group. Guests need a US keyboard layout for console
-typing. The host side runs as one Windows PowerShell process, started on the
-first call and closed after ten idle minutes; its first call takes a few
-seconds. `/windows-use` lists the host's VMs and which are set up.
-
-To watch the agent work, keep the intended VM Connect window open and visible,
-in either basic or enhanced mode. Windows can move the existing desktop and
-Windows-MCP process into an enhanced session; it is not necessarily a separate
-user login. Avoid simultaneous mouse/keyboard input. Do not switch sessions
-just to repair a failure: moving the desktop can disconnect a VPN.
-
-### Guests behind a VPN
-
-Calls reach Windows-MCP over a Hyper-V socket, not the guest's network. A
-small relay in the guest (Python standard library only, run by the signed-in
-user from `%USERPROFILE%\.windows-mcp\guest-relay.py`) takes them from the
-host and forwards them to the server on the guest's loopback. So a VPN in the
-guest that captures all its traffic, or firewall rules that cut the guest off
-from the host, leave `windows_use` working. When the installer comes over
-key-value exchange, setup installs the relay with the server. Otherwise the
-first call that reaches the server over the guest's IP installs it. From then
-on, the relay also restarts a stopped or stalled server and reports the
-desktop session, without the console. A relay that stops is started again
-within a minute or two by its scheduled task. A relay update that fails to
-start is rolled back to the previous version. Without a relay, calls use the guest's IP
-and port as before. The relay changes no guest credentials or password policy.
-
-Live, the test guest ran a full-tunnel VPN that cut the host's route to it.
-Normal work, a new Pi session, a stalled server and a stopped one, a VPN
-reconnect, a reboot with the VPN up at boot, a locked console, and a relay
-upgrade (plus a failed one, rolled back) all worked, with nothing sent to the
-guest's IP. So did a first setup with the VPN already up and no relay in the
-guest: it took four and a half minutes through the console and key-value
-exchange alone, and kept the installed Windows-MCP because the VPN blocked
-the internet. Warm calls took 130–180 ms, and a new session's first call took
-about 3 seconds.
-
-Earlier live validation confirmed same-session
-input, UIA, screenshots, OCR-coordinate clicks, disconnected-session refusals,
-and no console takeover during a server outage. Live screenshot and OCR-click
-checks passed at 1366x768 and at 2560x1440 with screenshots downscaled to
-1920x1080. OCR boxes are rotated back from Windows' detected text angle before
-conversion to native coordinates. A timed restart of the existing logon task
-restored the server in the same enhanced session; this was a test helper, not
-automatic remote repair. Live basic-session lock/sign-in and unresponsive-
-server Run-box recovery also passed. After replacing separate scancode events
-with paired `TypeKey` strokes, full basic-session bootstrap passed in about
-7 minutes 24 seconds, retaining the same unlocked session and limited server.
-A forced partial-typing timeout preserved the original authenticated server.
-Post-bootstrap stalled-server recovery passed in 90 seconds without reinstalling.
-Without a relay, network timeouts can delay outage detection and recovery.
 
 ## Kagi setup
 
