@@ -102,8 +102,9 @@ test("takeover of a free or dead lease has nothing to end", posixOnly, async (t)
 
 test("an owner that has exited but is not yet reaped (a zombie) holds no lease", posixOnly, async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "lease-zombie-"));
-	// `sleep` never waits for the child the shell started before it took the shell's place.
-	const reaper = spawn("sh", ["-c", "true & echo $!; exec sleep 30"], { stdio: ["ignore", "pipe", "ignore"] });
+	// `sleep` never waits for the child the shell started before it took the shell's place. That child must
+	// exit after the exec: a shell such as dash reaps a child that ends sooner.
+	const reaper = spawn("sh", ["-c", "sleep 1 & echo $!; exec sleep 30"], { stdio: ["ignore", "pipe", "ignore"] });
 	t.after(() => { reaper.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); });
 	const pid = Number(await new Promise<string>((resolve) => reaper.stdout!.once("data", (data) => resolve(String(data).trim()))));
 	await until(() => stat(pid).startsWith("Z"), "the child to become a zombie");
