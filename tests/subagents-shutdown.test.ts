@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { setTimeout as sleep } from "node:timers/promises";
 import { join } from "node:path";
 import { appendInterruptedRuns, loggedRunKeys, statsByModel } from "../lib/subagents/runlog.ts";
 import { installSignalRecorder } from "../lib/subagents/signals.ts";
@@ -61,7 +62,7 @@ test("a signal that ends a suspended Pi drops its SIGCONT listener, so the TUI d
 		import { installSignalRecorder } from ${JSON.stringify(module)};
 		const log = (event) => appendFileSync(${JSON.stringify(file)}, event + "\\n");
 		process.once("SIGCONT", () => log("tui restarted"));
-		process.prependListener("SIGTERM", () => setTimeout(() => { log("lease released"); process.exit(0); }, 100));
+		process.prependListener("SIGTERM", () => setTimeout(() => { log("lease released"); process.exit(0); }, 1000));
 		installSignalRecorder((signal) => log(signal));
 		console.log("ready"); setInterval(() => {}, 1000);
 	`], { env: { PATH: process.env.PATH, HOME: dir, PI_OFFLINE: "1" }, stdio: ["ignore", "pipe", "pipe"] });
@@ -69,6 +70,12 @@ test("a signal that ends a suspended Pi drops its SIGCONT listener, so the TUI d
 		await once(child.stdout!, "data");
 		const exited = once(child, "exit");
 		child.kill("SIGTERM");
+		// Sent together, the two can be handled in either order: Node may take each on its own thread. The test sends
+		// SIGCONT once SIGTERM is handled, which is the case the recorder controls.
+		for (let waited = 0; !(existsSync(file) && readFileSync(file, "utf8").includes("SIGTERM")); waited += 10) {
+			assert.ok(waited < 10_000, "the child never handled SIGTERM");
+			await sleep(10);
+		}
 		child.kill("SIGCONT");
 		assert.deepEqual(await exited, [0, null]);
 		assert.deepEqual(readFileSync(file, "utf8").trim().split("\n"), ["SIGTERM", "lease released"]);
