@@ -2,6 +2,26 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.26.2 - 2026-10-19
+
+### Changed
+
+- Subagents: a child now knows how much of its time budget it used. Before,
+  it had no clock. It guessed its time used far too high (4 to 25 times the
+  true time) and stopped with work not done.
+  - The first message of each run starts with a `[Budget clock]` line: the
+    start time (UTC), the budget in work minutes, the end time if the run
+    does not wait, and `date -u` to read the time.
+  - At each 10% of the time budget up to 80%, the child gets a note with the
+    work minutes used and left. The 80% note also tells it to plan its
+    report. Before, it got only the 80% note.
+  - After a wait of 1 minute or more, a note gives the new end time. A run
+    that goes on after a wait, on a fallback model, or in a new session
+    starts with a line of the minutes used and left.
+  - The times are not in the system prompt, so prompt caching still works.
+  - In a live check, the time estimates of a DeepSeek V4.1 Flash child were
+    within 10% of the true time, and it worked until 99% of its budget.
+
 ## 0.26.1 - 2026-10-19
 
 ### Fixed
