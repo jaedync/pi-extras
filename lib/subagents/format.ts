@@ -281,11 +281,42 @@ export function conversationDigest(entries: readonly unknown[], describe: (tool:
 }
 
 const PLAN_TO_REPORT = "Plan so that you can write your report before then. At the limit, tool calls stop and you must report.";
+const MINUTE_MS = 60_000;
 
-/** The note a run gets near the end of its time budget (budget.ts): about `minutes` are left. */
-export function timeNote(minutes: number): string {
-	const left = Math.max(1, Math.round(minutes));
-	return `About ${left} ${left === 1 ? "minute is" : "minutes are"} left in this run's time budget. ${PLAN_TO_REPORT}`;
+/** Minutes as a clock note gives them: tenths under 10, whole minutes from 10. */
+function clockMinutes(minutes: number): string {
+	const value = Math.max(0, minutes);
+	return String(value < 10 ? Math.round(value * 10) / 10 : Math.round(value));
+}
+
+/** A wall-clock time in UTC to the minute (as `date -u` shows it, without seconds), with its date when that is not `from`'s. */
+function utcAt(ms: number, from: number): string {
+	const iso = new Date(ms).toISOString();
+	return `${iso.slice(11, 16)} UTC${iso.slice(0, 10) === new Date(from).toISOString().slice(0, 10) ? "" : ` on ${iso.slice(0, 10)}`}`;
+}
+
+/**
+ * The first lines of a new run with a time budget (team.ts): a child can't see
+ * a clock and guesses its time used far too high, so it gets the wall-clock
+ * start and end, and how to read the time. Not in the system prompt: a time
+ * there would change it each run and break prompt caching.
+ */
+export function runClockHead(options: { now: number; minutes: number; notes?: boolean }): string {
+	const { now, minutes } = options;
+	const start = new Date(now).toISOString();
+	const notes = options.notes ? " Notes during the run give the work minutes used and left." : "";
+	return `[Budget clock] This run started at ${start.slice(11, 16)} UTC on ${start.slice(0, 10)} with a time budget of ${minutes} work minutes. If you do not wait, the budget ends at ${utcAt(now + minutes * MINUTE_MS, now)}. If you have a shell, run \`date -u\` to see the time now. Do not estimate the time from the work you did.${notes}`;
+}
+
+/**
+ * Where a run stands in its time budget (budget.ts): at a share of it, after
+ * a wait (which moves the end on the wall clock), or as a run goes on. The
+ * last note of a run asks it to plan its report.
+ */
+export function clockNote(options: { now: number; usedMs: number; minutes: number; plan?: boolean }): string {
+	const { now, usedMs, minutes } = options;
+	const left = Math.max(0, minutes - usedMs / MINUTE_MS);
+	return `[Budget clock] ${clockMinutes(usedMs / MINUTE_MS)} of ${minutes} work minutes used, ${clockMinutes(left)} left. If you do not wait, the budget ends at ${utcAt(now + left * MINUTE_MS, now)}.${options.plan ? ` ${PLAN_TO_REPORT}` : ""}`;
 }
 
 /** The note a run gets near the end of its cost budget: `left` dollars of `limit`. */
@@ -316,11 +347,17 @@ export function wrapUpPrompt(options: { reason: string; parent: string; subagent
 /** What the child is told of its run's budgets up front; none without one. */
 function budgetSection(budget: RunLimits | undefined): string[] {
 	const limits = [
-		...(budget?.minutes !== undefined ? [`work ${budget.minutes} minutes (time counts only while you work)`] : []),
+		...(budget?.minutes !== undefined ? [`work ${budget.minutes} minutes`] : []),
 		...(budget?.cost !== undefined ? [`spend $${formatMoney(budget.cost)}`] : []),
 	];
 	if (limits.length === 0) return [];
-	return ["", "## Budget", `This run may ${limits.join(" and ")}. Near the end you get a note. At the limit, tool calls are blocked and you must write your final report at once.`];
+	// The same text each run: the times themselves come in the run's first prompt (runClockHead).
+	const time = budget?.minutes !== undefined ? [
+		"Time counts only while you work, not while you wait for an answer, for your subagents or for a free slot.",
+		"The first message of each run gives its start time and the time its budget ends if you do not wait.",
+	] : [];
+	const cost = budget?.cost !== undefined ? ["Near the end of the cost budget you get a note."] : [];
+	return ["", "## Budget", [`This run may ${limits.join(" and ")}.`, ...time, ...cost, "At the limit, tool calls are blocked and you must write your final report at once."].join(" ")];
 }
 
 /** Appended to a child's system prompt. */

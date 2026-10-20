@@ -21,6 +21,7 @@ import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
 import { EditLocks } from "./edit-lock.ts";
 import { fallbackNote, planFallback } from "./fallback.ts";
+import { clockNote, runClockHead } from "./format.ts";
 import { messagesSince, stillUnread, unreadToInbox } from "./mailbox.ts";
 import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
@@ -61,7 +62,7 @@ export interface TeamOptions {
 	idleReleaseMs?: number;
 	/** Each run's limits when the spawn names none; without them a run has no limit. */
 	runBudget?: RunLimits;
-	/** When a run gets its note near the end of a budget, and how long it may take to wrap up at the limit (wrap-up.ts); tests make these small. */
+	/** When a run gets its budget notes (budget.ts), and how long it may take to wrap up at the limit (wrap-up.ts); tests make these small. */
 	budgetTimes?: Partial<WrapUpTimes>;
 	/** Model references a run goes on with, in order, when its model can't serve it (fallback.ts); unset or empty turns fallback off. */
 	fallbackModels?: readonly string[];
@@ -559,11 +560,13 @@ export class Team implements HostTeam {
 		const continued = [this.continuing.delete(name), this.woken.delete(name), waking].some(Boolean);
 		// A spawn group gathers its first runs' reports (deliver.ts); a later run reports on its own.
 		const leavesGroup = !continued && record.runs > 0 && record.group !== undefined;
+		// Started before the state changes, so a run woken from a wait gets its clock in this prompt, not as a note steered
+		// into a session that is not working.
+		this.budgets.start(name, this.limits(record), record.usage.cost, used);
 		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined,
 			...(continued ? {} : { runCost: record.usage.cost, runStart: { usage: { ...record.usage }, toolCalls: record.toolCalls }, budgetEnd: undefined }), ...(leavesGroup ? { group: undefined } : {}) });
-		this.budgets.start(name, this.limits(record), record.usage.cost, used);
 		try {
-			if (!(await this.work(name, handle, text, launch))) return;
+			if (!(await this.work(name, handle, this.withClock(name, text, continued), launch))) return;
 		} catch (error) {
 			// A run at its budget gets no fallback model: it stops as before (wrap-up.ts).
 			if (!this.gone(name, launch)) void (this.wrapUps.active(name) ? this.stop(name, { reason: this.wrapUps.reason(name) }) : this.failOrFallBack(name, error));
@@ -691,6 +694,19 @@ export class Team implements HostTeam {
 		void this.sessions.release(name);
 		this.slots.enqueue(name);
 		this.pump();
+	}
+
+	/**
+	 * A run with a time budget starts with its clock (format.ts): a new run with
+	 * its start and end, and a run that goes on (after a wait, a fallback or a
+	 * move to a new session) with the work minutes it used and has left.
+	 */
+	private withClock(name: string, text: string, continued: boolean): string {
+		const clock = this.budgets.clock(name);
+		if (!clock) return text;
+		const now = this.now();
+		const head = continued ? clockNote({ now, usedMs: clock.usedMs, minutes: clock.minutes }) : runClockHead({ now, minutes: clock.minutes, notes: clock.shares.length > 0 });
+		return `${head}\n\n${text}`;
 	}
 
 	/** Limits fixed at spawn; records saved before budgets existed get today's defaults. */

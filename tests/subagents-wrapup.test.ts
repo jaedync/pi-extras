@@ -217,7 +217,7 @@ test("mail that comes during the wrap-up waits unread for the child's next run, 
 	assert.ok((await h.team.send("main", name, "Continue.")).ok);
 	await settle();
 	const resumed = h.lastCall(name).text;
-	assert.match(resumed, /^Your previous run reached its 0\.001-minute budget and ended with a wrap-up report\. This run has a fresh budget\. Its last tool call may not have completed/);
+	assert.match(resumed, /^\[Budget clock\] This run started [^\n]*\n\nYour previous run reached its 0\.001-minute budget and ended with a wrap-up report\. This run has a fresh budget\. Its last tool call may not have completed/);
 	assert.match(resumed, /Message from main:\nAlso look at the docs\.\n\nMessage from main:\nContinue\./);
 	assert.equal(h.team.get(name)!.budgetEnd, undefined, "the new run has not reached its budget");
 	assert.equal(h.team.get(name)!.inbox, undefined);

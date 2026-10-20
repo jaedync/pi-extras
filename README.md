@@ -1854,10 +1854,20 @@ for an answer, for its subagents, or for a free slot. A run that wakes from
 waiting on its subagents keeps what it used. Cost counts only what this run
 spent. Each agent has its own budget, which its parent's budget does not
 limit. A child can give a subagent a larger budget than its own.
-The child's instructions name its budgets. At 80% of a budget, the child gets
-one note that tells it how much is left, so it can plan its report. A time
-budget under 5 minutes gets no note. A run that goes on (on a fallback model,
-in a new session, or after a wait) does not get the note again.
+The child's instructions name its budgets. A child can't see a clock, and
+without one it guesses its time used far too high and stops early. So each
+run with a time budget starts with a `[Budget clock]` line: the start time
+(UTC), the budget in work minutes, the end time if the run does not wait, and
+`date -u` to read the time. At each 10% of the time budget up to 80%, the
+child gets a note with the work minutes used and left and the end time.
+Between notes, a child guesses from its own pace and drifts high, so the
+notes are close together. The 80% note also tells it to plan its report. After a wait of 1 minute or more, a note
+gives the new end time. At 80% of a cost budget, the child gets one note that
+tells it how much is left. A time budget under 5 minutes gets the first line
+but no notes. A run that goes on (on a fallback model, in a new session, or
+after a wait) starts with a line of the minutes used and left, and it does not
+get a note again. The times are in the prompts, not in the system prompt, so
+the system prompt stays the same and prompt caching still works.
 At the limit, the run must wrap up. Each new tool call is blocked, and the
 widget shows `wrapping up: over its 60-minute budget`. The child's own
 subagents stop without a report. A tool call that already runs gets 60 seconds

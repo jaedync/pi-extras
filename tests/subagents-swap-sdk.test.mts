@@ -10,6 +10,9 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentDir, ai, type Asked, copyPackage, extrasConfig, type Parent, parent, removeScratch, until } from "./support/reload-harness.mts";
 
+/** A prompt without the budget clock line a run that goes on starts with. */
+const withoutClock = (text: string): string => text.replace(/^\[Budget clock\] [^\n]*\n\n/, "");
+
 // A child may start subagents of its own here, for the wait: true test.
 extrasConfig({ maxDepth: 2 });
 
@@ -55,7 +58,9 @@ test("a settings change moves a child to a new session at its next turn boundary
 		assert.match(swapLog(), /multi: run 1 moved to a new session at a turn boundary \(settings\.json changed\)/);
 		const texts = userTexts(p, "multi");
 		assert.equal(texts.length, 2, "its task, then one prompt for the move");
-		assert.ok(texts[1]!.startsWith(`[${NOTE}`) && texts[1]!.includes("Also check the docs."), texts[1]);
+		// The run goes on with its budget clock first (budget.ts), then the note of the move.
+		assert.ok(withoutClock(texts[1]!).startsWith(`[${NOTE}`) && texts[1]!.includes("Also check the docs."), texts[1]);
+		assert.match(texts[1]!, /^\[Budget clock\] \d+(?:\.\d)? of 60 work minutes used, /);
 		assert.equal(entries(p, "multi").filter((message) => message.role === "assistant" && message.stopReason === "aborted").length, 0, "no aborted reply is left behind");
 		release(p, "multi-2");
 		await until("multi finishes", () => p.record("multi")?.state === "idle");
@@ -109,7 +114,7 @@ test("a child blocked in a subagent call with wait: true does not move until the
 		assert.equal(p.record("lead").report, "lead done; moved", "it moved once the call returned");
 		assert.equal(p.record("lead").runs, 1);
 		assert.match(swapLog(), /lead: run 1 moved to a new session at a turn boundary \(settings\.json changed\)/);
-		assert.ok(userTexts(p, "lead")[1]?.startsWith(`[${NOTE}`));
+		assert.ok(withoutClock(userTexts(p, "lead")[1] ?? "").startsWith(`[${NOTE}`));
 		await until("lead's report reaches main", () => p.reports("lead done") > 0);
 		assert.equal(p.reports("lead done"), 1);
 	} finally { await p.close(); }
