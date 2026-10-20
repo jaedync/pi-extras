@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
 import { join } from "node:path";
@@ -80,6 +80,88 @@ test("a signal that ends a suspended Pi drops its SIGCONT listener, so the TUI d
 		assert.deepEqual(await exited, [0, null]);
 		assert.deepEqual(readFileSync(file, "utf8").trim().split("\n"), ["SIGTERM", "lease released"]);
 	} finally { child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a SIGTERM just after SIGCONT still keeps a suspended Pi from restarting its TUI", async () => {
+	if (process.platform === "win32") return;
+	const dir = mkdtempSync(join(tmpdir(), "child-sigcont-first-"));
+	const file = join(dir, "events.txt");
+	const module = new URL("../lib/subagents/signals.ts", import.meta.url).href;
+	// The takeover race: Pi handles SIGCONT first, and SIGTERM comes a moment later. The first listener, there
+	// before the extension, sends that SIGTERM. Pi's Ctrl-Z listener comes after the extension, as in Pi.
+	const child = spawn(process.execPath, ["--input-type=module", "-e", `
+		import { appendFileSync } from "node:fs";
+		import { installSignalRecorder } from ${JSON.stringify(module)};
+		const log = (event) => appendFileSync(${JSON.stringify(file)}, event + "\\n");
+		process.on("SIGCONT", () => { log("SIGCONT"); process.kill(process.pid, "SIGTERM"); });
+		process.prependListener("SIGTERM", () => setTimeout(() => { log("lease released"); process.exit(0); }, 1000));
+		installSignalRecorder((signal) => log(signal), { sigcontDelayMs: 200 });
+		process.once("SIGCONT", () => log("tui restarted"));
+		console.log("ready"); setInterval(() => {}, 1000);
+	`], { env: { PATH: process.env.PATH, HOME: dir, PI_OFFLINE: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+	try {
+		await once(child.stdout!, "data");
+		const exited = once(child, "exit");
+		child.kill("SIGCONT");
+		assert.deepEqual(await exited, [0, null]);
+		assert.deepEqual(readFileSync(file, "utf8").trim().split("\n"), ["SIGCONT", "SIGTERM", "lease released"]);
+	} finally { child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("fg after Ctrl-Z restarts the TUI, though the SIGCONT comes before the wrap", async () => {
+	if (process.platform === "win32") return;
+	const dir = mkdtempSync(join(tmpdir(), "child-sigcont-fg-"));
+	const file = join(dir, "events.txt");
+	const module = new URL("../lib/subagents/signals.ts", import.meta.url).href;
+	// As Pi's Ctrl-Z: add the listener and stop in one synchronous step, so the SIGCONT is caught before any microtask.
+	const child = spawn(process.execPath, ["--input-type=module", "-e", `
+		import { appendFileSync } from "node:fs";
+		import { installSignalRecorder } from ${JSON.stringify(module)};
+		const log = (event) => appendFileSync(${JSON.stringify(file)}, event + "\\n");
+		installSignalRecorder((signal) => log(signal), { sigcontDelayMs: 50 });
+		setInterval(() => {}, 1000);
+		setTimeout(() => {
+			process.once("SIGCONT", () => { log("tui restarted"); process.exit(0); });
+			process.kill(process.pid, "SIGSTOP");
+		}, 0);
+	`], { env: { PATH: process.env.PATH, HOME: dir, PI_OFFLINE: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+	const state = () => { try { return execFileSync("ps", ["-o", "stat=", "-p", String(child.pid)], { encoding: "utf8" }).trim(); } catch { return ""; } };
+	try {
+		const exited = once(child, "exit");
+		for (let waited = 0; !/^T/.test(state()); waited += 20) {
+			assert.ok(waited < 10_000, "the child never stopped");
+			await sleep(20);
+		}
+		child.kill("SIGCONT");
+		assert.deepEqual(await Promise.race([exited, sleep(5_000).then(() => "no restart within 5 s")]), [0, null]);
+		assert.deepEqual(readFileSync(file, "utf8").trim().split("\n"), ["tui restarted"]);
+	} finally { child.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a SIGCONT alone restarts the TUI after the delay, once, and only listeners added while installed wait", async (t) => {
+	if (process.platform === "win32") return;
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const events: string[] = [];
+	process.on("SIGCONT", () => events.push("earlier"));
+	const remove = installSignalRecorder(() => undefined, { sigcontDelayMs: 100 });
+	try {
+		process.once("SIGCONT", () => events.push("tui restarted"));
+		// The wrap happens in a microtask, before Pi can see the SIGCONT that ends its Ctrl-Z stop.
+		await Promise.resolve();
+		process.emit("SIGCONT");
+		t.mock.timers.tick(99);
+		assert.deepEqual(events, ["earlier"]);
+		t.mock.timers.tick(1);
+		assert.deepEqual(events, ["earlier", "tui restarted"]);
+		process.emit("SIGCONT");
+		t.mock.timers.tick(100);
+		assert.deepEqual(events, ["earlier", "tui restarted", "earlier"]);
+		remove();
+		process.once("SIGCONT", () => events.push("after remove"));
+		await Promise.resolve();
+		process.emit("SIGCONT");
+		assert.deepEqual(events.slice(3), ["earlier", "after remove"]);
+	} finally { remove(); process.removeAllListeners("SIGCONT"); }
 });
 
 test("signal recording is synchronous, leaves existing host listeners alone and uninstalls cleanly", () => {
