@@ -21,6 +21,7 @@ import { bashCheck } from "./checks.ts";
 import type { HostActivity } from "./contract.ts";
 import { confine, sandboxFor } from "./sandbox.ts";
 import { freshModels, piModelsCheck } from "./fresh-models.ts";
+import { withChildRetry } from "./retry.ts";
 import { launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "./stamp.ts";
 import { WAITING_FOR_MODEL, type AgentRecord, type AgentWork, type ChildHandle, type ChildHooks, type Launcher, type Usage } from "./types.ts";
 import { editTarget, outsideWorktree, realTarget, sourcePlace, workspaceError } from "./worktree.ts";
@@ -379,11 +380,11 @@ function childSettings(deps: LauncherDeps, cwd: string, record: AgentRecord): Se
 	// SYSTEM.md) would reach the child where main refused it. It covers main's own directory only: a worktree child
 	// of main in /repo/sub starts at the worktree's top, a copy of /repo, whose .pi/ main never weighed.
 	if (!record.cwd && realTarget(place) === realTarget(deps.cwd)) {
-		return sdk.SettingsManager.create(cwd, agentDir, deps.projectTrusted === undefined ? {} : { projectTrusted: deps.projectTrusted });
+		return withChildRetry(sdk.SettingsManager.create(cwd, agentDir, deps.projectTrusted === undefined ? {} : { projectTrusted: deps.projectTrusted }));
 	}
 	const settingsManager = sdk.SettingsManager.create(cwd, agentDir, { projectTrusted: false });
 	settingsManager.setProjectTrusted(projectTrusted(sdk, agentDir, place, settingsManager.getDefaultProjectTrust()));
-	return settingsManager;
+	return withChildRetry(settingsManager);
 }
 
 /** Why the child may not edit `path` now: outside its worktree is refused before the lock is taken, so a refused edit holds nothing. */

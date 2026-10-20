@@ -2,8 +2,10 @@
  * Model fallback. A run that fails because its model can't serve it (a used-up
  * quota, a rate limit the recovery did not wait out, an overloaded provider,
  * missing credentials, a model that is gone) goes on, in the same run, on the
- * next model of `subagents.fallbackModels`. Any other failure, such as a full
- * context or a bad request, is the run's own and fails as before.
+ * next model of `subagents.fallbackModels`. With none named, the run fails, so
+ * a child never runs on a model its parent did not choose without being told
+ * to. Any other failure, such as a full context or a bad request, is the run's
+ * own and fails as before.
  *
  * Quota and rate-limit errors are told apart the way rate-limit-recovery
  * does, so a child guard's report and a raw provider error read the same.
@@ -46,13 +48,11 @@ export function classifyFailure(error: string): Failure | undefined {
 const providerOf = (ref: string): string => ref.split("/")[0] ?? ref;
 
 /**
- * `fallbackModels` as model references, in order: unset means the default
- * subagent model, `[]` turns fallback off. Names outside the allowed scope
- * are skipped with a warning.
+ * `fallbackModels` as model references, in order: unset or `[]` means no
+ * fallback. Names outside the allowed scope are skipped with a warning.
  */
-export function fallbackChain(configured: readonly string[] | undefined, defaultModel: string | null, allowed: readonly ModelChoice[], warn: (message: string) => void): string[] {
-	const wanted = configured ?? (defaultModel ? [defaultModel] : []);
-	const refs = wanted.flatMap((query) => {
+export function fallbackChain(configured: readonly string[] | undefined, allowed: readonly ModelChoice[], warn: (message: string) => void): string[] {
+	const refs = (configured ?? []).flatMap((query) => {
 		const resolved = resolveModel(query, allowed);
 		if (resolved.ok) return [resolved.choice.ref];
 		warn(`subagents.fallbackModels: ${resolved.error} It is skipped.`);

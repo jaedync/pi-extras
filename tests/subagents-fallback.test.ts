@@ -38,12 +38,12 @@ test("a failure is a reason to fall back only when the model can't serve the run
 	}
 });
 
-test("the fallback chain defaults to the default subagent model, and [] turns it off", () => {
+test("a child falls back only to models that subagents.fallbackModels names", () => {
 	const allowed = [OPUS, SOL, LUNA].map((ref) => ({ ref, model: { provider: ref.split("/")[0]!, id: ref.split("/")[1]! } }));
 	const warnings: string[] = [];
-	assert.deepEqual(fallbackChain(undefined, OPUS, allowed, (message) => warnings.push(message)), [OPUS]);
-	assert.deepEqual(fallbackChain([], OPUS, allowed, (message) => warnings.push(message)), []);
-	assert.deepEqual(fallbackChain(["opus", "gpt-9", "luna", "opus"], OPUS, allowed, (message) => warnings.push(message)), [OPUS, LUNA]);
+	assert.deepEqual(fallbackChain(undefined, allowed, (message) => warnings.push(message)), []);
+	assert.deepEqual(fallbackChain([], allowed, (message) => warnings.push(message)), []);
+	assert.deepEqual(fallbackChain(["opus", "gpt-9", "luna", "opus"], allowed, (message) => warnings.push(message)), [OPUS, LUNA]);
 	assert.deepEqual(warnings, ['subagents.fallbackModels: "gpt-9" is not one of the allowed models: anthropic/claude-opus-5-5, openai-codex/gpt-6.1-sol, openai-codex/gpt-6-luna. It is skipped.']);
 	assert.deepEqual(parseConfig({ fallbackModels: ["opus", 3, " "] }).fallbackModels, ["opus"]);
 	assert.equal(parseConfig({}).fallbackModels, undefined);

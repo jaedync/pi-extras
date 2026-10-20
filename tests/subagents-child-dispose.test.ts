@@ -19,7 +19,7 @@ test("successful extension shutdown clears its child disposal deadline and dispo
 	let closes = 0;
 	const session = { sessionFile: undefined, bindExtensions: async () => {}, subscribe: () => () => {}, dispose: () => { closes++; },
 		extensionRunner: { hasHandlers: () => true, emit: async () => {} } };
-	const sdk = { SettingsManager: { create: () => ({}) }, SessionManager: { inMemory: () => ({}) },
+	const sdk = { SettingsManager: { create: () => ({ getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 2_000, maxAgentDelayMs: 60_000 }), applyOverrides() {} }) }, SessionManager: { inMemory: () => ({}) },
 		DefaultResourceLoader: class { async reload() {} },
 		resolveCliModel: () => ({ model: { provider: "faux", api: "faux", id: "fixture" } }), createAgentSession: async () => ({ session }) };
 	const launcher = createLauncher({ sdk: sdk as never, agentDir: scratch, cwd: scratch, sessionDir: null,

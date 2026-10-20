@@ -65,7 +65,7 @@ function teamFor(inputs: HostInputs, ports: HostPorts, mail: () => MainMail, pla
 		maxDepth: config.maxDepth,
 		replyTimeoutMs: config.replyTimeoutMs,
 		runBudget: { minutes: config.maxRunMinutes, ...(config.maxRunCost !== null ? { cost: config.maxRunCost } : {}) },
-		fallbackModels: fallbackChain(config.fallbackModels, scope.fallbackModel, scope.allowed, warn),
+		fallbackModels: fallbackChain(config.fallbackModels, scope.allowed, warn),
 		defaultThinking: (model) => {
 			const choice = ports.models().allowed.find((allowed) => allowed.ref === model);
 			return choice ? thinkingFor(choice, undefined, inputs.thinking ?? {}) : undefined;

@@ -256,7 +256,8 @@ function sdkHarness(trust: { resources?: boolean; decision?: boolean | null; fal
 			directories.push(cwd);
 			const told: { created?: boolean; set?: boolean } = { ...(options?.projectTrusted !== undefined ? { created: options.projectTrusted } : {}) };
 			settings.push(told);
-			return { getDefaultProjectTrust: () => trust.fallback ?? "ask", setProjectTrusted: (value: boolean) => { told.set = value; } };
+			return { getDefaultProjectTrust: () => trust.fallback ?? "ask", setProjectTrusted: (value: boolean) => { told.set = value; },
+				getRetrySettings: () => ({ enabled: true, maxRetries: 3, baseDelayMs: 2_000, maxAgentDelayMs: 60_000 }), applyOverrides() {} };
 		} },
 		hasTrustRequiringProjectResources: (dir: string) => { asked.push(dir); return trust.resources ?? true; },
 		ProjectTrustStore: class { get(dir: string) { asked.push(`store ${dir}`); return trust.decision ?? null; } },

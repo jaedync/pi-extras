@@ -108,8 +108,8 @@ the package. Removing it does not remove your credentials or change other packag
   (`"reload"`, the default, resumes children that a `/reload` interrupts;
   `"always"` also allows one automatic attempt after a restart or crash;
   `"notify"` never resumes on its own), and `fallbackModels` (models, in
-  order, that a run moves to when its model can't serve it; default: the
-  default model; `[]` turns fallback off), and `swapAtTurn` (default `true`;
+  order, that a run moves to when its model can't serve it; default: none,
+  so the run fails), and `swapAtTurn` (default `true`;
   `false` keeps a working child on its session until its run ends, also when
   that session is not current). The model guide is
   `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
@@ -1893,23 +1893,29 @@ with its last message. So a hung child can't keep a `pi -p` run open forever.
 A message to the child resumes it with a fresh budget, and it is told how its
 last run ended.
 
-**Fallback.** Sometimes a child's model can't serve its run: its quota or
-usage limit is used up, a rate limit lasts longer than the automatic wait,
-the provider is overloaded or unavailable, the Claude Code proxy (Meridian)
+**Retry and fallback.** A child stays on the model its parent chose. When
+the provider is overloaded or unavailable, Pi retries that model 8 times, 5 s
+apart at first and doubling up to 2 min: about 8.6 minutes in all. Longer
+`retry` settings of your own stay, and `retry.enabled: false` stays off. The
+time the retries take counts against the run's time budget.
+
+Sometimes a child's model still can't serve its run: its quota or usage
+limit is used up, a rate limit lasts longer than the automatic wait, the
+provider stays overloaded or unavailable, the Claude Code proxy (Meridian)
 ends the turn early after its retries, the credentials are missing or
-expired, or the model is gone. Then the run does not fail. It continues from
-the child's session on the next model of `fallbackModels`, by default the
-default subagent model. The child is told first that its model failed and
-why, and to check the files before it continues. The fallback skips the model
-that failed and models outside the scoped models. After a quota, usage-limit
-or credentials failure, it also skips the other models of that provider. Each
-model gets at most one try per run. The row shows the new model, and the
-report says what happened, for example `Ran on anthropic/claude-opus-5-5 after
-openai-codex/gpt-6.1-sol failed: usage limit reached.` A fallback model can
-cost more than the model main chose. The run keeps its budget: the time and
-cost it used before the switch still count. When no model is left, the run
-fails and its error says so. Other failures, such as a full context or a bad
-request, fail as before.
+expired, or the model is gone. Then the run fails, and its parent gets the
+error. To let such a run go on, name models in `fallbackModels`. The run
+then continues from the child's session on the next of them. The child is
+told first that its model failed and why, and to check the files before it
+continues. The fallback skips the model that failed and models outside the
+scoped models. After a quota, usage-limit or credentials failure, it also
+skips the other models of that provider. Each model gets at most one try per
+run. The row shows the new model, and the report says what happened, for
+example `Ran on anthropic/claude-opus-5-5 after openai-codex/gpt-6.1-sol
+failed: usage limit reached.` A fallback model can cost more than the model
+main chose. The run keeps its budget: the time and cost it used before the
+switch still count. When no model is left, the run fails and its error says
+so. Other failures, such as a full context or a bad request, fail as before.
 
 **Memory.** A child's session is released when it ends. It is released
 immediately when it failed or was stopped. When it finished, it is released
