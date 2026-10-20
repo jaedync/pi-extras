@@ -2,6 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.26.3 - 2026-10-19
+
+### Fixed
+
+- Subagents: `/subagents takeover` now ends a Pi that you stopped with
+  Ctrl-Z, also when that Pi handles SIGCONT before SIGTERM. Before, Pi then
+  restarted its screen from the background, the terminal stopped it again,
+  and it kept the lease. Now a suspended Pi waits 100 ms before it restarts
+  its screen, and skips the restart when SIGTERM or SIGHUP comes in that
+  time. After `fg`, the screen still comes back as before.
+
 ## 0.26.2 - 2026-10-19
 
 ### Changed
