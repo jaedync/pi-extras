@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.26.4 - 2026-10-20
+
+### Fixed
+
+- Subagents: a child now stays on the model that its parent chose. Before,
+  4 provider errors in about 15 seconds moved the run to another model for
+  good, by default the parent's own model, and the parent was not told.
+  Now a child retries its model 8 times, from 5 s and doubling up to 2 min
+  (about 8.6 minutes in all). Longer `retry` settings of your own stay.
+  When `subagents.fallbackModels` is not set, there is no fallback: after
+  the retries, the run fails and its parent gets the error. Named fallback
+  models work as before.
+
 ## 0.26.3 - 2026-10-19
 
 ### Fixed
