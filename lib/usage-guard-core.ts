@@ -43,6 +43,16 @@ export interface SessionBudget {
 export interface ActiveModel {
 	provider?: string;
 	id?: string;
+	/** Zero token cost in the model catalog, as for a local model. */
+	unmetered?: boolean;
+}
+
+const PRICE_KEYS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
+/** True when the catalog prices every token kind it lists at zero: a local or free model. */
+export function isUnmetered(cost: Partial<Record<(typeof PRICE_KEYS)[number], number>> | undefined): boolean {
+	const prices = PRICE_KEYS.map((key) => cost?.[key]).filter((price) => price !== undefined);
+	return prices.length > 0 && prices.every((price) => price === 0);
 }
 
 export type WarningReason = "band" | "budget" | "exhausted";
@@ -419,6 +429,8 @@ export interface UsageReport {
 	budget: SessionBudget | null;
 	snapshotAgeSeconds: Record<string, number>;
 	limits: UsageReportLimit[];
+	/** Scoped models with zero token cost: subagent choices that use no limit. */
+	unmeteredModels?: string[];
 	notes: string[];
 	dollars?: DollarsSummary;
 }
@@ -490,15 +502,31 @@ function reportLimitFigures(
 }
 
 /** What the report cannot show in its figures: missing data, approximate or outdated readings, a budget that matches nothing. */
-function reportNotes(limits: readonly UsageReportLimit[], model: ActiveModel, budget: SessionBudget | undefined, sawActiveProvider: boolean): string[] {
+function reportNotes(
+	limits: readonly UsageReportLimit[],
+	model: ActiveModel,
+	budget: SessionBudget | undefined,
+	sawActiveProvider: boolean,
+	unmeteredModels: readonly string[],
+): string[] {
 	const notes: string[] = [];
 	const provider = model.provider ?? "the active provider";
-	if (!sawActiveProvider) {
+	const ownWindows = limits.some((limit) => limit.kind === "window" && limit.applies);
+	// Without this, a local model reads other providers' full windows as its own and rations work it gets for free.
+	if (model.unmetered && !ownWindows) {
+		notes.push(`${provider}/${model.id ?? "model"} has zero token cost and reports no usage limits. Usage does not limit this session's own work: keep working without regard to usage.`);
+	} else if (!sawActiveProvider) {
 		notes.push(model.provider && !Object.hasOwn(LIMIT_POLLERS, model.provider)
 			? `No usage data yet for ${provider}. It has no usage endpoint to poll, so limits come only from response headers after its next request.`
 			: `No usage data yet for ${provider}; call again with refresh: true after a request has been made.`);
-	} else if (!limits.some((limit) => limit.kind === "window" && limit.applies)) {
+	} else if (!ownWindows) {
 		notes.push(`${provider} reports no subscription windows for this model; only per-minute rate limits, balances or budgets apply, and no usage warnings will fire.`);
+	}
+	if (limits.some((limit) => !limit.applies)) {
+		notes.push("Limits with applies: false do not govern the active model. They matter only for subagents that you start on that provider.");
+	}
+	if (unmeteredModels.length) {
+		notes.push("unmeteredModels have zero token cost and no usage limits: a subagent on one of them uses no limit or budget.");
 	}
 	if (limits.some((limit) => limit.approximate)) notes.push(APPROXIMATE_NOTE);
 	if (limits.some((limit) => limit.status === "reset")) notes.push(RESET_PASSED_NOTE);
@@ -517,6 +545,8 @@ export function usageReport(
 	includeAll = false,
 	timeZone?: string,
 	dollars?: CollectedDollars,
+	/** Scoped models with zero token cost, as `provider/id`; listed only with includeAll. */
+	unmeteredModels: readonly string[] = [],
 ): UsageReport {
 	const limits: UsageReportLimit[] = [];
 	const snapshotAgeSeconds: Record<string, number> = {};
@@ -532,15 +562,18 @@ export function usageReport(
 			if (limit.applies || includeAll) limits.push(kept ? { ...limit, readingAgeSeconds: Math.max(0, Math.round((now - entry.sampledMs!) / 1000)) } : limit);
 		}
 	}
-	const notes = reportNotes(limits, model, budget, sawActiveProvider);
+	const listed = includeAll ? [...unmeteredModels] : [];
+	const notes = reportNotes(limits, model, budget, sawActiveProvider, listed);
+	// Notes go before the figures: a model reads the JSON in order and must know which limits are its own first.
 	const report: UsageReport = {
 		asOf: new Date(now).toISOString(),
 		model,
+		notes,
+		...(listed.length ? { unmeteredModels: listed } : {}),
 		warnings: config.enabled ? "on" : "off",
 		budget: budget ?? null,
 		snapshotAgeSeconds,
 		limits,
-		notes,
 	};
 	const summary = dollars ? safely(() => dollarsSummary(limits, dollars.inputs)) : undefined;
 	if (!dollars || !summary) return report;

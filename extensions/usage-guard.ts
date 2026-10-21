@@ -20,6 +20,7 @@ import { routedModel } from "../lib/routed-model.ts";
 import { createDollarsCollector, type DollarsCollector } from "../lib/usage-dollars/collect.ts";
 import {
 	hotProviders,
+	isUnmetered,
 	normalizeGuardConfig,
 	pendingWarnings,
 	usageReport,
@@ -75,7 +76,14 @@ export function parseBudgetArgs(words: string[]): SessionBudget | null | undefin
 /** The model whose limits apply: under a virtual selection, the one it routed to. */
 function activeModel(ctx: Pick<ExtensionContext, "model" | "sessionManager" | "modelRegistry">): ActiveModel {
 	const model = routedModel(ctx);
-	return { provider: model?.provider, id: model?.id };
+	return { provider: model?.provider, id: model?.id, ...(isUnmetered(model?.cost) ? { unmetered: true } : {}) };
+}
+
+/** Scoped models a subagent can use without touching any limit. */
+function unmeteredScoped(ctx: Pick<ExtensionContext, "scopedModels">): string[] {
+	return (ctx.scopedModels ?? [])
+		.filter((scoped) => isUnmetered(scoped.model.cost))
+		.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
 }
 
 function idle(ctx: ExtensionContext): boolean {
@@ -223,7 +231,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 				await Promise.all([...scoped].filter((provider) => !known.has(provider)).map((provider) => store.refresh(provider, false)));
 			}
 			const collected = await collectDollars(ctx, params.refresh === true);
-			const report = usageReport(store.entries(), model, config, budget, now(), params.all === true, undefined, collected);
+			const report = usageReport(store.entries(), model, config, budget, now(), params.all === true, undefined, collected, unmeteredScoped(ctx));
 			return { content: [{ type: "text", text: JSON.stringify(report, null, 1) }], details: report };
 		},
 	}), "usage"));
