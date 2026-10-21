@@ -490,6 +490,12 @@ rate limits taken from response headers are reported but never warned on.
   reset is exact and within `maxWaitSeconds`. `setBudget` records a
   session budget ("work until 60% of the weekly limit"); `all` includes other
   providers and non-governing windows.
+- Zero-cost models: when every catalog price of the active model is 0 (a
+  local model), the report marks it `unmetered` and its first note says that
+  usage does not limit the session's own work. A note also says that limits
+  with `applies: false` matter only for subagents on that provider. With
+  `all: true`, `unmeteredModels` lists the scoped zero-cost models, which a
+  subagent can use without any limit. The notes come before the figures.
 - Known window durations and exact reset times add a `pace` object to each limit.
   It gives the elapsed fraction, expected usage at even pace, and projected usage at reset.
   A projection from 90% through 110% is `on pace`.

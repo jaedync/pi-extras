@@ -2,6 +2,18 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.26.5 - 2026-10-21
+
+### Fixed
+
+- Usage Guard: the `usage` tool now tells a zero-cost model (every catalog
+  price 0, as for a local model) that usage does not limit its own work.
+  Before, a local model read other providers' full windows as its own and
+  rationed work. The report marks the model `unmetered`, notes that limits
+  with `applies: false` matter only for subagents on that provider, and with
+  `all: true` lists the scoped zero-cost models in `unmeteredModels`. The
+  notes now come before the figures.
+
 ## 0.26.4 - 2026-10-20
 
 ### Fixed
