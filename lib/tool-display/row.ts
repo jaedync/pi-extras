@@ -95,7 +95,10 @@ export function rail(phase: BandPhase, took: number | undefined, options: { lead
 		case "queued": return [{ text: "queued", color: "dim" }];
 		case "calm": return [...lead];
 		// What the progress says (`18s left`) in place of the time: the fill already shows how far along it is.
-		case "progress": return options.parts?.length ? [...gap(lead), ...options.parts] : [...lead];
+		case "progress": {
+			const parts = (options.parts ?? []).flatMap((seg, index) => (index === 0 ? [seg] : [{ text: "   ", color: "dim" }, seg]));
+			return parts.length > 0 ? [...gap(lead), ...parts] : [...lead];
+		}
 		case "running": {
 			const time: Seg[] = [{ text: formatTime(phase.elapsedMs), color: "text" }];
 			// The timeout in the same units as the time beside it, so `20m02s / 30m00s` compare at a glance.

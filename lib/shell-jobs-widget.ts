@@ -38,6 +38,8 @@ import { commandPreview, readLogEnd } from "./shell-jobs-core.ts";
 import { minutesAndUp } from "./duration.ts";
 import { type Job, jobStatusText } from "./shell-jobs-process.ts";
 import { nextProgress, progressNow, sleepProgress, type Progress, type ProgressState } from "./shell-jobs-progress.ts";
+import { liveSleepProgress, type LiveSleeps } from "./sleep-progress.ts";
+import { sharedSleepWatch } from "./sleep-watch.ts";
 
 export const WIDGET_ID = "shell-jobs";
 export const WIDGET_MAX_ROWS = 4;
@@ -248,7 +250,10 @@ function clickRow(event: WidgetMouseEvent, rows: readonly Job[], onSelect: ((job
  * `motion` is Tool Display's setting, read each frame: reduced holds the spinners still.
  * `onError` hears a render that threw: Pi's TUI does not catch a widget's render, and a throw there ends Pi.
  */
-export function createJobsWidget(motion: () => Motion = () => "full", onError: (error: unknown) => void = () => {}): JobsWidget {
+/** A job leads its own process group, so the sleeps in that group are its own. */
+const groupSleeps = (pgid: number): LiveSleeps | undefined => sharedSleepWatch().sleeps({ pgid });
+
+export function createJobsWidget(motion: () => Motion = () => "full", onError: (error: unknown) => void = () => {}, sleepsOf: (pgid: number) => LiveSleeps | undefined = groupSleeps): JobsWidget {
 	let ui: WidgetUi | null = null;
 	let listJobs: (() => Iterable<Job>) | null = null;
 	let tui: TuiHost | null = null;
@@ -297,9 +302,14 @@ export function createJobsWidget(motion: () => Motion = () => "full", onError: (
 		return job.state === "running" && seen !== null && now - seen.changedAt >= QUIET_AFTER_MS;
 	};
 	let sampledAt = 0;
-	// What the output shows first; a leading sleep only while the output says nothing.
-	const progressOf = (job: Job, now: number): Progress | undefined =>
-		job.state === "running" ? progressNow(activity.get(job.id)?.progress ?? {}, now) ?? sleepProgress(job.command, now - job.startedAt) : undefined;
+	// What the output shows first; while it says nothing, the sleeps the job runs, then a leading sleep in its text.
+	const progressOf = (job: Job, now: number): Progress | undefined => {
+		if (job.state !== "running") return undefined;
+		const meter = progressNow(activity.get(job.id)?.progress ?? {}, now);
+		if (meter) return meter;
+		const sleeps = sleepsOf(job.pid);
+		return (sleeps ? liveSleepProgress(job.command, sleeps, now)?.progress : undefined) ?? sleepProgress(job.command, now - job.startedAt);
+	};
 
 	// Captured by the TUI: the factory runs inside pi's render loop, so `tui`
 	// and `theme` are only available from here.

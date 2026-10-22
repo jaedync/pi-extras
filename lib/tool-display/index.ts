@@ -35,6 +35,8 @@ import { AnimationClock } from "../band/clock.ts";
 import type { ShownOverlay } from "../band/modal.ts";
 import { openPopup, type PopupHost } from "../band/popup.ts";
 import { chainOperations, withChains, type ActiveRuns } from "../chain/exec.ts";
+import { sharedSleepWatch, type SleepWatch } from "../sleep-watch.ts";
+import { liveSleepRuns, runOperations } from "./live-sleeps.ts";
 import { CHAIN_ENTRY, CHAIN_EVENT, ChainRun, type SavedChain } from "../chain/run.ts";
 import { splitChain } from "../chain/split.ts";
 import { TOOL_COUNT_EVENT, writeToolCount, type ToolCount } from "../tool-count.ts";
@@ -95,6 +97,8 @@ export interface ToolDisplayDeps {
 	readonly settings: { read(): DisplaySettings; write(patch: Partial<DisplaySettings>): void };
 	readonly host: HostKit;
 	readonly nonce?: () => string;
+	/** Watches bash calls' sleeps; tests pass their own. */
+	readonly sleepWatch?: SleepWatch;
 	/** Saves the Status Plus tool count for `/tool-display count`. */
 	readonly writeToolCount: (count: ToolCount) => void;
 }
@@ -212,6 +216,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 	/** What install() last registered under each built-in tool's name. */
 	const registered = new Map<string, object>();
 	const nonce = deps.nonce ?? (() => randomBytes(8).toString("hex"));
+	const sleepRuns = liveSleepRuns(deps.sleepWatch ?? sharedSleepWatch(), nonce);
 	// In place before a reload rebuilds the transcript, so the rows it builds are noted (see late-rows.ts).
 	prepareAdoption();
 	prepareThinkingTail();
@@ -245,6 +250,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		written: run.written,
 		busy: run.busy,
 		chains: () => settings.chains,
+		liveSleeps: (toolCallId) => sleepRuns.sleeps(toolCallId),
 		clock,
 		nestedCalls: (id) => nested.get(id),
 		watchNested: (id, invalidate) => nested.watch(id, invalidate),
@@ -317,7 +323,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 				}
 				continue;
 			}
-			if (name === "bash") definition = withChains(definition, session.shellPath, active, hooks) as AnyTool;
+			if (name === "bash") definition = sleepRuns.wrap(withChains(definition, session.shellPath, active, hooks)) as AnyTool;
 			const drawn = withDisplay(definition, renderers[name]);
 			pi.registerTool(drawn);
 			registered.set(name, drawn);
@@ -386,7 +392,7 @@ export function registerToolDisplay(pi: ExtensionAPI, deps: ToolDisplayDeps): vo
 		if (ctx.mode !== "tui") { publishSettings(); return; }
 		ui = ctx.ui as unknown as PopupHost;
 		restoreEntries(ctx);
-		session = deps.tools(ctx, (operations) => chainOperations(operations, active, () => deps.host.now()));
+		session = deps.tools(ctx, (operations) => runOperations(chainOperations(operations, active, () => deps.host.now())));
 		fullscreen = session.fullscreen;
 		hiddenAtStart = session.hideThinking ?? false;
 		thinkingToggled = false;

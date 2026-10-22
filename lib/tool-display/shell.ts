@@ -7,9 +7,11 @@
  * per step, and the output shows under the step that matters: the one
  * running, else the one that failed, else the last one.
  *
- * While a sleep of a known length runs (the command's leading sleep, or the
- * running step of a chain), the band fills by the time slept and the rail
- * says the time left, so a deliberate wait reads as progress.
+ * While a sleep of a known length runs (the command's leading sleep, the
+ * running step of a chain, or any sleep the watch sees it start), the band
+ * fills by the time slept and the rail says the time left, so a deliberate
+ * wait reads as progress. A `for` loop of known length fills over all its
+ * passes (lib/sleep-progress.ts).
  */
 import { SEP } from "../cc-phase.ts";
 import { stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -20,6 +22,7 @@ import { commandLines, outputText, parseShellOutput, type ShellOutput } from "./
 import { codeLines, more, numberArg, plural, resultText, shownPath, tailed, textLines, titleSeg, wrapAll, type Kit, type Paint } from "./kit.ts";
 import { BODY_INDENT } from "./row.ts";
 import { leadingSleepMs, sleepStepMs, timedProgress, type Progress } from "../shell-jobs-progress.ts";
+import { liveSleepProgress } from "../sleep-progress.ts";
 import { chainTitle, digitsOf, flashing, flat, shownSteps, stateOf, stepLine } from "./steps.ts";
 import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
 
@@ -57,12 +60,19 @@ function sleepOf(view: View, run: ChainRun | undefined): { startedAt: number; ms
 	return ms !== undefined && view.row.startedAt !== undefined ? { startedAt: view.row.startedAt, ms } : undefined;
 }
 
+/**
+ * What the sleeps the call really ran say (a loop's passes, `sleep $s`), else
+ * what its text says. A wait the timeout ends early would fill calmly up to
+ * the kill, so it keeps the timeout's own fill, which warns of it.
+ */
 function sleepProgressOf(view: View): Progress | undefined {
-	const sleep = sleepOf(view, runOf(view));
-	if (!sleep) return undefined;
 	const timeout = timeoutMsOf(view);
-	// A sleep the timeout ends early would fill calmly up to the kill; the timeout's own fill warns of it instead.
-	if (timeout !== undefined && view.row.startedAt !== undefined && sleep.startedAt + sleep.ms > view.row.startedAt + timeout) return undefined;
+	const deadline = timeout !== undefined && view.row.startedAt !== undefined ? view.row.startedAt + timeout : Number.POSITIVE_INFINITY;
+	const sleeps = view.kit.liveSleeps?.(view.context.toolCallId);
+	const live = sleeps ? liveSleepProgress(commandOf(view).text ?? "", sleeps, view.now) : undefined;
+	if (live) return live.endsAt === undefined || live.endsAt <= deadline ? live.progress : undefined;
+	const sleep = sleepOf(view, runOf(view));
+	if (!sleep || sleep.startedAt + sleep.ms > deadline) return undefined;
 	return timedProgress(sleep.ms, view.now - sleep.startedAt);
 }
 

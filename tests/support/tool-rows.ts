@@ -3,6 +3,7 @@ import { stripTerminalSequences, type Component } from "@earendil-works/pi-tui";
 import { AnimationClock, type Timers } from "../../lib/band/clock.ts";
 import type { PopupSource } from "../../lib/band/popup.ts";
 import type { ChainRun } from "../../lib/chain/run.ts";
+import type { LiveSleeps } from "../../lib/sleep-progress.ts";
 import type { Kit, RenderContext } from "../../lib/tool-display/kit.ts";
 import { quiet } from "./quiet-theme.ts";
 import { BULLET_GLYPH } from "../../lib/band/glyph.ts";
@@ -19,6 +20,7 @@ export function manualClock() {
 export function harness() {
 	let now = 1_000;
 	const runs = new Map<string, ChainRun>();
+	const sleeps = new Map<string, LiveSleeps>();
 	const popups: PopupSource[] = [];
 	const { clock, tick, running } = manualClock();
 	const kit: Kit = {
@@ -32,9 +34,10 @@ export function harness() {
 		chains: () => true,
 		clock,
 		chainRun: (id) => runs.get(id),
+		liveSleeps: (id) => sleeps.get(id),
 		openPopup: (source) => { popups.push(source); return true; },
 	};
-	return { kit, runs, popups, tick, running, advance: (ms: number) => { now += ms; }, now: () => now };
+	return { kit, runs, sleeps, popups, tick, running, advance: (ms: number) => { now += ms; }, now: () => now };
 }
 
 export type Renderers = {

@@ -159,6 +159,32 @@ test("a sleep step in a chain fills the band while it runs", () => {
 	assert.ok(late.lines()[0]!.endsWith("2 of 2   5.0s / 2m00s"), "a sleep the timeout ends early keeps the timeout's fill");
 });
 
+test("the sleeps a call really runs fill its band: a loop over its passes, a poll for each check", () => {
+	const h = harness();
+	const live = (starts: number[], ms: number) => {
+		const recent = starts.map((startedAt, index) => ({ index, startedAt, ms }));
+		return { count: recent.length, first: recent, recent, running: recent.at(-1)! };
+	};
+	const loop = row(bashRenderers(h.kit), { command: "for i in 1 2 3 4; do sleep 10; done", timeout: 120 });
+	loop.update({ executionStarted: true });
+	h.sleeps.set("call-1", live([h.now(), h.now() + 10_000], 10_000));
+	h.advance(15_000);
+	loop.update({ executionStarted: true });
+	assert.match(loop.lines()[0]!, /done +2 of 4   25s left$/);
+	const poll = row(bashRenderers(h.kit), { command: "while kill -0 1; do sleep 30; done", timeout: 600 }, "call-2");
+	poll.update({ executionStarted: true });
+	h.sleeps.set("call-2", live([h.now(), h.now() + 31_000], 30_000));
+	h.advance(41_000);
+	poll.update({ executionStarted: true });
+	assert.match(poll.lines()[0]!, /done +check 2   20s left$/);
+	const wait = row(bashRenderers(h.kit), { command: "s=60; sleep $s", timeout: 30 }, "call-3");
+	wait.update({ executionStarted: true });
+	h.sleeps.set("call-3", live([h.now()], 60_000));
+	h.advance(5_000);
+	wait.update({ executionStarted: true });
+	assert.ok(wait.lines()[0]!.endsWith("5.0s / 30s"), `a sleep past the timeout keeps the timeout's fill: ${wait.lines()[0]}`);
+});
+
 test("a || fallback that ran reads as handled, and the chain as a success", () => {
 	const h = harness();
 	const command = "grep -q NOPE a.ts || echo none";

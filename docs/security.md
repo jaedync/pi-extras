@@ -698,6 +698,17 @@ The splitter is conservative. These commands run exactly as written:
 `/tool-display chains off` turns the rewrite off, and
 `/tool-display off` or `PI_TOOL_DISPLAY=off` turns off Tool Display entirely.
 
+To show how far a wait has got, Tool Display gives each bash call's shell the
+environment variable `PI_EXTRAS_RUN`, a random id made for that call. The
+command and its output are unchanged; a program that prints its environment
+shows the id. While the call runs, Tool Display reads `/proc` twice a second
+for `sleep` processes: their command line, start time and process group, and
+for each sleep its environment, to find the id. Only processes of your own user
+can be read, and nothing read leaves the process. Background jobs are found by
+their process group in the same scan; on macOS, `ps` lists the sleeps, and
+foreground calls are not watched because macOS does not show another
+process's environment.
+
 Because stdout and stderr arrive through separate pipes, a line of stderr can
 be shown under a neighboring step rather than the one that printed it. The output the model
 reads is the same either way.

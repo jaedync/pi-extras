@@ -229,6 +229,24 @@ describe("job widget", () => {
 		await fire(app.handlers, "session_shutdown", app.ctx);
 	});
 
+	test("widget progress follows the sleeps a job's process group runs: a loop over all its passes", (t) => {
+		const now = 1_800_000_000_000;
+		t.mock.timers.enable({ apis: ["Date"], now });
+		const log = join(tempDir(), "loop.log");
+		writeFileSync(log, "");
+		const loop = makeJob({ id: "loop", pid: 4242, command: "for i in 1 2 3 4; do sleep 10; done", logPath: log, startedAt: now - 15_000 });
+		const recent = [0, 1].map((index) => ({ index, startedAt: now - 15_000 + index * 10_000, ms: 10_000 }));
+		const asked: number[] = [];
+		const jobsWidget = createJobsWidget(undefined, undefined, (pgid: number) => { asked.push(pgid); return { count: 2, first: recent, recent, running: recent[1]! }; });
+		try {
+			jobsWidget.attach({ setWidget: () => {} }, true, () => [loop]);
+			assert.deepStrictEqual(jobsWidget.progressOf(loop, now), { share: 15 / 40, parts: ["2 of 4", "25s left"] });
+			assert.deepStrictEqual(asked, [4242]);
+		} finally {
+			jobsWidget.detach();
+		}
+	});
+
 	test("widget progress uses the sampled meter before sleep, with bare percentages only after a rise", (t) => {
 		const now = 1_800_000_000_000;
 		t.mock.timers.enable({ apis: ["Date"], now });

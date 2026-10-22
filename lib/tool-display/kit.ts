@@ -10,6 +10,7 @@ import type { Motion, Seg } from "../band/band.ts";
 import type { AnimationClock } from "../band/clock.ts";
 import type { PopupSource, PopupTheme } from "../band/popup.ts";
 import type { ChainRun } from "../chain/run.ts";
+import type { LiveSleeps } from "../sleep-progress.ts";
 import { outputText, sanitize } from "./format.ts";
 import type { CallSnapshot } from "./nested.ts";
 
@@ -34,6 +35,8 @@ export interface Kit {
 	/** Whether bash commands are broken into steps. */
 	readonly chains: () => boolean;
 	readonly clock: AnimationClock;
+	/** The sleeps a running bash call has started so far, where the system shows them. */
+	readonly liveSleeps?: (toolCallId: string) => LiveSleeps | undefined;
 	/** The live or saved step record of a bash call. */
 	readonly chainRun: (toolCallId: string, command: string) => ChainRun | undefined;
 	/** Observed or durable nested calls, absent on older Pi versions. */
