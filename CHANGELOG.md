@@ -2,6 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.27.0 - 2026-10-22
+
+### Added
+
+- Idle GC, a new extension. When the agent has been idle for 30 seconds, it
+  runs one full garbage collection that also gives the freed memory back to
+  the system. An idle Pi is never quiet enough for V8 to do this by itself,
+  so a session kept tens to hundreds of megabytes of garbage between runs. It
+  runs at most once in 5 minutes, only after the process grew by 16 MB, and
+  never while a subagent works. `PI_IDLE_GC=off` turns it off.
+
 ## 0.26.7 - 2026-10-22
 
 ### Changed
