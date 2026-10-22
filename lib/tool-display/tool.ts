@@ -15,6 +15,7 @@ import { bodyBackground, onBackground } from "../band/surface.ts";
 import { painter, type Kit, type Paint, type RenderContext, type ThemeLike } from "./kit.ts";
 import { animate, band, BODY_INDENT, indent, phaseOf, rail, rowState, slotFor, tookMs, track, type RowState } from "./row.ts";
 import type { BandPhase } from "../band/band.ts";
+import type { Progress } from "../shell-jobs-progress.ts";
 
 export type ResultInput = { content?: unknown; details?: unknown };
 
@@ -35,6 +36,8 @@ export interface ToolSpec {
 	label(view: View): string;
 	title(view: View): Seg[];
 	timeoutMs?(view: View): number | undefined;
+	/** How far a running call has got, when that is known (a sleep): the band fills linearly and the rail says what is left. */
+	progress?(view: View): Progress | undefined;
 	/** Rail text before the time, e.g. `2 of 3`. */
 	lead?(view: View, phase: BandPhase): Seg[];
 	/** How a failure reads in the rail, e.g. `exit 1`; the default is `failed`. */
@@ -63,12 +66,16 @@ function viewOf(kit: Kit, row: RowState): View | undefined {
 	return { kit, context: row.context, row, theme: row.theme, paint: painter(row.theme), result: row.result as ResultInput | undefined, now: kit.now() };
 }
 
-export function bandOf(spec: ToolSpec, view: View): { segs: Seg[]; rail: Seg[]; phase: BandPhase; toolName: string } {
-	const phase = phaseOf(view.row, view.context, view.now, spec.timeoutMs?.(view), view.kit.written?.(view.context.toolCallId) === true);
+export function bandOf(spec: ToolSpec, view: View): { segs: Seg[]; rail: Seg[]; phase: BandPhase; marginPhase?: BandPhase; toolName: string } {
+	const base = phaseOf(view.row, view.context, view.now, spec.timeoutMs?.(view), view.kit.written?.(view.context.toolCallId) === true);
+	const progress = base.kind === "running" ? spec.progress?.(view) : undefined;
+	const phase: BandPhase = progress?.share !== undefined ? { kind: "progress", share: progress.share } : base;
 	const failure = spec.failure?.(view);
 	const segs = spec.title(view);
-	const railSegs = rail(phase, tookMs(view.row, view.now), { lead: spec.lead?.(view, phase) ?? [], ...(failure ? { failure } : {}) });
-	return { segs, rail: railSegs, phase, toolName: spec.name ?? "" };
+	const parts = phase.kind === "progress" ? progress!.parts.map((text): Seg => ({ text, color: "text" })) : [];
+	const railSegs = rail(phase, tookMs(view.row, view.now), { lead: spec.lead?.(view, phase) ?? [], parts, ...(failure ? { failure } : {}) });
+	// The margin keeps the running spinner while the band shows progress.
+	return { segs, rail: railSegs, phase, ...(phase !== base ? { marginPhase: base } : {}), toolName: spec.name ?? "" };
 }
 
 /** A bash call copies its command, a file tool its path, and every tool its output. */

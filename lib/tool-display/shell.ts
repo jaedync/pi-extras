@@ -6,6 +6,10 @@
  * A chained command (`a && b && c`) that ran step by step also gets one line
  * per step, and the output shows under the step that matters: the one
  * running, else the one that failed, else the last one.
+ *
+ * While a sleep of a known length runs (the command's leading sleep, or the
+ * running step of a chain), the band fills by the time slept and the rail
+ * says the time left, so a deliberate wait reads as progress.
  */
 import { SEP } from "../cc-phase.ts";
 import { stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -15,6 +19,7 @@ import type { ChainRun } from "../chain/run.ts";
 import { commandLines, outputText, parseShellOutput, type ShellOutput } from "./format.ts";
 import { codeLines, more, numberArg, plural, resultText, shownPath, tailed, textLines, titleSeg, wrapAll, type Kit, type Paint } from "./kit.ts";
 import { BODY_INDENT } from "./row.ts";
+import { leadingSleepMs, sleepStepMs, timedProgress, type Progress } from "../shell-jobs-progress.ts";
 import { chainTitle, digitsOf, flashing, flat, shownSteps, stateOf, stepLine } from "./steps.ts";
 import { toolRenderers, type ToolSpec, type View } from "./tool.ts";
 
@@ -33,6 +38,32 @@ function commandOf(view: View): { text?: string; invalid: boolean } {
 function runOf(view: View): ChainRun | undefined {
 	const { text } = commandOf(view);
 	return text === undefined || !view.kit.chains() ? undefined : view.kit.chainRun(view.context.toolCallId, text);
+}
+
+function timeoutMsOf(view: View): number | undefined {
+	const seconds = numberArg(view.context.args, "timeout");
+	return seconds !== undefined && seconds > 0 ? seconds * 1_000 : undefined;
+}
+
+/** The sleep running now and when it started: a chain's running step, else the sleep a command starts with. */
+function sleepOf(view: View, run: ChainRun | undefined): { startedAt: number; ms: number } | undefined {
+	if (run) {
+		const index = run.current;
+		const startedAt = run.steps[index]?.startedAt;
+		const ms = run.chain.steps[index] ? sleepStepMs(run.chain.steps[index]!.text) : undefined;
+		return run.stateOf(index) === "running" && startedAt !== undefined && ms !== undefined ? { startedAt, ms } : undefined;
+	}
+	const ms = leadingSleepMs(commandOf(view).text ?? "");
+	return ms !== undefined && view.row.startedAt !== undefined ? { startedAt: view.row.startedAt, ms } : undefined;
+}
+
+function sleepProgressOf(view: View): Progress | undefined {
+	const sleep = sleepOf(view, runOf(view));
+	if (!sleep) return undefined;
+	const timeout = timeoutMsOf(view);
+	// A sleep the timeout ends early would fill calmly up to the kill; the timeout's own fill warns of it instead.
+	if (timeout !== undefined && view.row.startedAt !== undefined && sleep.startedAt + sleep.ms > view.row.startedAt + timeout) return undefined;
+	return timedProgress(sleep.ms, view.now - sleep.startedAt);
 }
 
 function parsed(view: View): ShellOutput | undefined {
@@ -106,15 +137,13 @@ export const bashSpec: ToolSpec = {
 		const rest = lines.length > 1 ? [{ text: `  +${plural(lines.length - 1, "line")}`, color: "muted" }] : [];
 		return [prompt, { text: lines[0]!, color: "text" }, ...rest];
 	},
-	timeoutMs(view) {
-		const seconds = numberArg(view.context.args, "timeout");
-		return seconds !== undefined && seconds > 0 ? seconds * 1_000 : undefined;
-	},
+	timeoutMs: timeoutMsOf,
+	progress: sleepProgressOf,
 	lead(view, phase) {
 		const run = runOf(view);
 		if (!run) return [];
 		const { shown, at } = position(run);
-		if (phase.kind === "running") return [{ text: `${at} of ${shown.length}`, color: "muted" }];
+		if (phase.kind === "running" || phase.kind === "progress") return [{ text: `${at} of ${shown.length}`, color: "muted" }];
 		if (phase.kind !== "done") return [];
 		const ran = shown.filter((index) => run.steps[index]?.startedAt !== undefined).length;
 		return [{ text: ran === shown.length ? plural(shown.length, "command") : `${ran} of ${shown.length} ran`, color: "muted" }];

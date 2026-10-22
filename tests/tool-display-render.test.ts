@@ -108,6 +108,57 @@ test("a chained command gets a line per step, with output under the step that ma
 	assert.ok(done.some((line) => /^ {4}2 +npm test +exit 1 +600ms$/.test(line)), done.join("\n"));
 });
 
+test("a sleep fills the band by the time slept and says the time left, unless the timeout cuts it short", () => {
+	const h = harness();
+	const nap = row(bashRenderers(h.kit), { command: "sleep 30", timeout: 120 });
+	nap.update({ executionStarted: true });
+	h.advance(12_000);
+	nap.update({ executionStarted: true });
+	assert.match(nap.lines()[0]!, /\$ sleep 30 +18s left$/);
+	assert.ok(nap.lines()[0]!.startsWith(toolIndicator(12_000, 0.1, "timeout").glyph), "the margin still turns as a running call");
+	h.advance(18_000);
+	nap.update({ executionStarted: true });
+	assert.ok(nap.lines()[0]!.endsWith("30.0s / 2m00s"), "past the sleep, the time runs against the timeout again");
+	const cut = row(bashRenderers(h.kit), { command: "sleep 300", timeout: 60 }, "call-2");
+	cut.update({ executionStarted: true });
+	h.advance(10_000);
+	cut.update({ executionStarted: true });
+	assert.ok(cut.lines()[0]!.endsWith("10.0s / 1m00s"), cut.lines()[0]);
+});
+
+test("a sleep step in a chain fills the band while it runs", () => {
+	const h = harness();
+	const command = "cd app && npm ci && sleep 30 && npm test";
+	const run = new ChainRun(splitChain(command)!, h.now());
+	h.runs.set("call-1", run);
+	const bash = row(bashRenderers(h.kit), { command, timeout: 120 });
+	bash.update({ executionStarted: true });
+	for (const step of [0, 1]) {
+		run.mark({ kind: "start", step }, h.now());
+		h.advance(2_000);
+		run.mark({ kind: "end", step, code: 0 }, h.now());
+	}
+	run.mark({ kind: "start", step: 2 }, h.now());
+	h.advance(12_000);
+	bash.update({ executionStarted: true });
+	assert.ok(bash.lines()[0]!.endsWith("2 of 3   18s left"), bash.lines()[0]);
+	run.mark({ kind: "end", step: 2, code: 0 }, h.now());
+	run.mark({ kind: "start", step: 3 }, h.now());
+	h.advance(1_000);
+	bash.update({ executionStarted: true });
+	assert.ok(bash.lines()[0]!.endsWith("3 of 3   17.0s / 2m00s"), bash.lines()[0]);
+	const late = row(bashRenderers(h.kit), { command: "make && sleep 200", timeout: 120 }, "call-2");
+	const lateRun = new ChainRun(splitChain("make && sleep 200")!, h.now());
+	h.runs.set("call-2", lateRun);
+	late.update({ executionStarted: true });
+	lateRun.mark({ kind: "start", step: 0 }, h.now());
+	lateRun.mark({ kind: "end", step: 0, code: 0 }, h.now());
+	lateRun.mark({ kind: "start", step: 1 }, h.now());
+	h.advance(5_000);
+	late.update({ executionStarted: true });
+	assert.ok(late.lines()[0]!.endsWith("2 of 2   5.0s / 2m00s"), "a sleep the timeout ends early keeps the timeout's fill");
+});
+
 test("a || fallback that ran reads as handled, and the chain as a success", () => {
 	const h = harness();
 	const command = "grep -q NOPE a.ts || echo none";

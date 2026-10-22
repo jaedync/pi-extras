@@ -31,18 +31,35 @@ export interface Reading extends Progress {
 
 const UNIT_SECONDS: Record<string, number> = { s: 1, m: 60, h: 3_600, d: 86_400 };
 const SLEEP_STEP = /^sleep((?:\s+\d+(?:\.\d+)?[smhd]?)+)$/;
+/** A `cd` to a plain or quoted path: instant, so the sleep after it still starts the clock. */
+const PLAIN_CD = /^cd\s+(?:"[^"$`\\]*"|'[^']*'|[^\s"'$`\\;&|()<>]+)$/;
+
+function sleepSeconds(step: string): number | undefined {
+	const match = SLEEP_STEP.exec(step.trim());
+	if (!match) return undefined;
+	return match[1]!.trim().split(/\s+/).reduce((sum, arg) => sum + Number.parseFloat(arg) * (UNIT_SECONDS[arg.at(-1)!] ?? 1), 0);
+}
+
+/** The length in ms of one step that is a plain `sleep` (`sleep 1m 30s`), as a chain's running step. */
+export function sleepStepMs(step: string): number | undefined {
+	const seconds = sleepSeconds(step);
+	return seconds ? Math.round(seconds * 1_000) : undefined;
+}
 
 /**
- * The length of the sleeps a command starts with, in ms. Only plain steps
- * joined by `;`, `&&` or a newline count: a sleep in a pipe, a loop or the
- * background says nothing about how long the whole will take.
+ * The length of the sleeps a command starts with, in ms, after at most one
+ * plain `cd`. Only plain steps joined by `;`, `&&` or a newline count: a
+ * sleep in a pipe, a loop or the background says nothing about how long the
+ * whole will take.
  */
 export function leadingSleepMs(command: string): number | undefined {
+	const steps = command.split(/;|&&|\n/);
+	if (PLAIN_CD.test(steps[0]!.trim())) steps.shift();
 	let seconds = 0;
-	for (const step of command.split(/;|&&|\n/)) {
-		const match = SLEEP_STEP.exec(step.trim());
-		if (!match) break;
-		for (const arg of match[1]!.trim().split(/\s+/)) seconds += Number.parseFloat(arg) * (UNIT_SECONDS[arg.at(-1)!] ?? 1);
+	for (const step of steps) {
+		const length = sleepSeconds(step);
+		if (length === undefined) break;
+		seconds += length;
 	}
 	return seconds > 0 ? Math.round(seconds * 1_000) : undefined;
 }
@@ -64,8 +81,13 @@ export function parseEta(text: string | undefined): number | undefined {
 /** How far a leading sleep has got; unknown once it is over, when whatever follows runs. */
 export function sleepProgress(command: string, elapsedMs: number): Progress | undefined {
 	const total = leadingSleepMs(command);
-	if (total === undefined || elapsedMs >= total) return undefined;
-	return { share: Math.max(0, elapsedMs) / total, parts: [`${formatWhole(total - elapsedMs)} left`] };
+	return total === undefined ? undefined : timedProgress(total, elapsedMs);
+}
+
+/** How far a wait of a known length has got; unknown once it is over. */
+export function timedProgress(totalMs: number, elapsedMs: number): Progress | undefined {
+	if (totalMs <= 0 || elapsedMs >= totalMs) return undefined;
+	return { share: Math.max(0, elapsedMs) / totalMs, parts: [`${formatWhole(totalMs - elapsedMs)} left`] };
 }
 
 type Reader = (line: string) => Reading | undefined;

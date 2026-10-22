@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { METER_HOLD_MS, leadingSleepMs, nextProgress, progressNow, readProgress, sleepProgress, type Reading } from "../lib/shell-jobs-progress.ts";
+import { METER_HOLD_MS, leadingSleepMs, nextProgress, progressNow, readProgress, sleepProgress, sleepStepMs, type Reading } from "../lib/shell-jobs-progress.ts";
 
 const near = (actual: number | undefined, expected: number) => assert.ok(actual !== undefined && Math.abs(actual - expected) < 0.001, `${actual} ≉ ${expected}`);
 const read = (line: string): Reading => {
@@ -17,6 +17,20 @@ test("a command that starts by sleeping is as long as its sleeps", () => {
 	assert.equal(leadingSleepMs("sleep 0.5"), 500);
 	assert.equal(leadingSleepMs("sleep 2h"), 7_200_000);
 	assert.equal(leadingSleepMs("sleep 3; sleep 4\necho done"), 7_000);
+});
+
+test("a leading cd takes no time, so the sleep after it still counts", () => {
+	assert.equal(leadingSleepMs("cd ~/dev/app && sleep 30 && make"), 30_000);
+	assert.equal(leadingSleepMs("cd 'my dir'; sleep 5"), 5_000);
+	for (const command of ["cd app", "cd $(slow) && sleep 5", "cd a && cd b && sleep 5", "make && cd app && sleep 5"]) {
+		assert.equal(leadingSleepMs(command), undefined, command);
+	}
+});
+
+test("one step's sleep: its length, or none when the step is not a plain sleep", () => {
+	assert.equal(sleepStepMs(" sleep 1m 30s "), 90_000);
+	assert.equal(sleepStepMs("sleep 0"), undefined);
+	for (const step of ["sleep $S", "sleep 5 | cat", "echo sleep 5", "sleep infinity"]) assert.equal(sleepStepMs(step), undefined, step);
 });
 
 test("a sleep that isn't first, or can't be known, gives no length", () => {

@@ -87,13 +87,15 @@ const OUTCOME_WORD: Record<Exclude<Outcome, "ok">, Seg> = {
  * The right side of the band: the live time while running (with the timeout
  * when there is one), afterwards how the call ended and how long it took.
  */
-export function rail(phase: BandPhase, took: number | undefined, options: { lead?: readonly Seg[]; failure?: readonly Seg[] } = {}): Seg[] {
+export function rail(phase: BandPhase, took: number | undefined, options: { lead?: readonly Seg[]; failure?: readonly Seg[]; parts?: readonly Seg[] } = {}): Seg[] {
 	const lead = options.lead ?? [];
 	const gap = (segs: readonly Seg[]) => (segs.length > 0 ? [...segs, { text: "   ", color: "dim" }] : []);
 	switch (phase.kind) {
 		case "writing": return phase.elapsedMs === undefined ? [] : writingRail(phase.chars ?? 0, phase.elapsedMs);
 		case "queued": return [{ text: "queued", color: "dim" }];
-		case "calm": case "progress": return [...lead];
+		case "calm": return [...lead];
+		// What the progress says (`18s left`) in place of the time: the fill already shows how far along it is.
+		case "progress": return options.parts?.length ? [...gap(lead), ...options.parts] : [...lead];
 		case "running": {
 			const time: Seg[] = [{ text: formatTime(phase.elapsedMs), color: "text" }];
 			// The timeout in the same units as the time beside it, so `20m02s / 30m00s` compare at a glance.
@@ -132,7 +134,7 @@ function stopFrames(row: RowState): void {
  */
 function outlived(row: RowState, kit: Kit): boolean {
 	if (row.drawnAs === "writing") return kit.streaming?.() === false;
-	if (row.drawnAs === "running") return kit.busy?.() === false;
+	if (row.drawnAs === "running" || row.drawnAs === "progress") return kit.busy?.() === false;
 	return false;
 }
 
@@ -141,11 +143,13 @@ export interface BandInput {
 	readonly segs: readonly Seg[];
 	readonly rail: readonly Seg[];
 	readonly phase: BandPhase;
+	/** The phase the margin shows, when it differs from the band's. */
+	readonly marginPhase?: BandPhase;
 }
 
 /** A row's band; `margin` for the transcript, where the call's spinner goes before the title. */
 export function band(theme: ThemeLike, kit: Kit, input: BandInput, width: number, margin: boolean | "blank" = false): string {
-	return renderBand(theme, paletteFrom(theme), { width, phase: input.phase, segs: input.segs, rail: input.rail, clockMs: kit.now(), motion: kit.motion(), margin, toolName: input.toolName });
+	return renderBand(theme, paletteFrom(theme), { width, phase: input.phase, segs: input.segs, rail: input.rail, clockMs: kit.now(), motion: kit.motion(), margin, toolName: input.toolName, ...(input.marginPhase ? { marginPhase: input.marginPhase } : {}) });
 }
 
 /**
