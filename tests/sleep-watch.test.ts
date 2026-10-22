@@ -82,6 +82,16 @@ test("a job is watched by its process group while something asks, then let go", 
 	assert.equal(h.ticking(), false, "no one asked for a while: the watch stops");
 });
 
+test("where the system hides environments, a run is never watched", () => {
+	let started = 0;
+	const watch = new SleepWatch({ list: () => [], seesRuns: false, timers: { setInterval: () => { started++; return 1; }, clearInterval: () => {} } });
+	watch.watch({ run: "r" })();
+	assert.equal(watch.sleeps({ run: "r" }), undefined);
+	assert.equal(started, 0, "no scan for what can't be seen");
+	watch.sleeps({ pgid: 7 });
+	assert.equal(started, 1, "a job's group still is");
+});
+
 test("a real sleep is found by its run variable", { skip: process.platform !== "linux" }, async () => {
 	const child = spawn("sleep", ["7"], { env: { ...process.env, [RUN_VARIABLE]: "live-test" }, stdio: "ignore" });
 	try {

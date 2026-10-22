@@ -96,8 +96,16 @@ function sleepOnlyMs(body: string): number | undefined {
 	return total > 0 ? total : undefined;
 }
 
+/** The last command read: a running row asks again on every frame. */
+let lastRead: { readonly command: string; readonly shape: LoopShape | undefined } | undefined;
+
 /** The one loop a command runs, read from its text; none when there are several, or nested ones. */
 export function loopShape(command: string): LoopShape | undefined {
+	if (lastRead?.command !== command) lastRead = { command, shape: readLoop(command) };
+	return lastRead.shape;
+}
+
+function readLoop(command: string): LoopShape | undefined {
 	const loop = LOOP.exec(command);
 	if (!loop || words(command, DO_WORD) !== 1 || words(command, DONE_WORD) !== 1) return undefined;
 	const start = loop.index + loop[0].length - loop[1]!.length - 1;

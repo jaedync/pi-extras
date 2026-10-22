@@ -143,18 +143,23 @@ export class SleepWatch {
 	private readonly list: () => SleepProcess[] | Promise<SleepProcess[]>;
 	private readonly now: () => number;
 	private readonly timers: Timers;
+	/** Whether the system shows a process's environment, so a foreground call's run can be found. */
+	private readonly seesRuns: boolean;
 	private readonly watched = new Map<string, Watched>();
 	private handle: unknown;
 	private scanning = false;
 
-	constructor(options: { list: () => SleepProcess[] | Promise<SleepProcess[]>; now?: () => number; timers?: Timers }) {
+	constructor(options: { list: () => SleepProcess[] | Promise<SleepProcess[]>; now?: () => number; timers?: Timers; seesRuns?: boolean }) {
 		this.list = options.list;
+		this.seesRuns = options.seesRuns ?? true;
 		this.now = options.now ?? Date.now;
 		this.timers = options.timers ?? { setInterval: (fn, ms) => setInterval(fn, ms).unref(), clearInterval: (handle) => clearInterval(handle as NodeJS.Timeout) };
 	}
 
 	/** Watches an owner until the returned function is called. */
 	watch(owner: SleepOwner): () => void {
+		// A run nobody can see is not worth a scan.
+		if ("run" in owner && !this.seesRuns) return () => {};
 		const key = keyOf(owner);
 		const entry = this.entry(key);
 		entry.refs++;
@@ -171,6 +176,7 @@ export class SleepWatch {
 
 	/** What an owner's sleeps are so far; asking keeps the owner watched for a while. */
 	sleeps(owner: SleepOwner): LiveSleeps | undefined {
+		if ("run" in owner && !this.seesRuns) return undefined;
 		const key = keyOf(owner);
 		const known = this.watched.get(key);
 		const entry = known ?? this.entry(key);
@@ -233,6 +239,7 @@ const SHARED = Symbol.for("pi-extras.sleep-watch.v1");
 /** One watch for every extension in this process, so a job and a call are scanned once together. */
 export function sharedSleepWatch(): SleepWatch {
 	const host = globalThis as { [SHARED]?: SleepWatch };
-	host[SHARED] ??= new SleepWatch({ list: process.platform === "linux" ? () => linuxSleeps() : process.platform === "darwin" ? () => macSleeps() : () => [] });
+	const linux = process.platform === "linux";
+	host[SHARED] ??= new SleepWatch({ list: linux ? () => linuxSleeps() : process.platform === "darwin" ? () => macSleeps() : () => [], seesRuns: linux });
 	return host[SHARED];
 }
