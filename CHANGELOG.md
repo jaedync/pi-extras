@@ -2,6 +2,18 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.26.6 - 2026-10-22
+
+### Changed
+
+- Tool Display: a foreground bash call now shows a plain `sleep` as
+  progress. While the sleep runs, as the whole command or as the running step
+  of a chain, the band fills linearly and the rail shows the time left
+  (`2 of 3   18s left`). Before, the band filled only against the timeout. A
+  sleep that the timeout would end early keeps the timeout's fill.
+- Shell Jobs: a job that starts with `cd <dir>` and then sleeps now fills
+  its band over the sleep.
+
 ## 0.26.5 - 2026-10-21
 
 ### Fixed

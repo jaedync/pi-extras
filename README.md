@@ -1109,6 +1109,10 @@ and which never ran. The running step's line breathes gently, and each step
 that finishes flashes green (or red, or amber) and fades back, so a run of
 quick steps reads as a wave down the list. A leading `cd` becomes the
 location instead of a step.
+While a plain `sleep 30` runs, as the command or as the running step, the
+band fills over those 30 seconds and the rail shows the time left
+(`2 of 3   18s left`). A sleep that the timeout would end early keeps the
+timeout's fill, so a near kill still shows.
 To time each step, Tool Display adds a marker line around each step before the
 command runs and removes the markers from the output before Pi or the model
 sees it. The model's command and the output it reads are unchanged. Commands
@@ -1161,7 +1165,7 @@ click it, or ctrl+o, for the log and the rest.
 
 Each running job has a live band above the editor. When the job's progress
 can be known, the band fills with it: a command that starts with
-`sleep 30` fills over those 30 seconds, and a meter in its newest output line
+`sleep 30` (after at most one `cd`) fills over those 30 seconds, and a meter in its newest output line
 fills it with what the meter says, as in
 `Download ISO  $ curl -LO …  26.1s  45% · 32s left · 312M/690M · 12.1M/s`.
 The meters read are the ones tools draw into a log: curl, wget, rsync
