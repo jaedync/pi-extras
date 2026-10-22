@@ -1111,8 +1111,21 @@ quick steps reads as a wave down the list. A leading `cd` becomes the
 location instead of a step.
 While a plain `sleep 30` runs, as the command or as the running step, the
 band fills over those 30 seconds and the rail shows the time left
-(`2 of 3   18s left`). A sleep that the timeout would end early keeps the
-timeout's fill, so a near kill still shows.
+(`2 of 3   18s left`). On Linux, Tool Display also watches the `sleep`
+processes the call starts, so it knows the real length of `sleep $s` and how
+many passes a loop has made:
+
+- A `for` loop over a list it can count (`1 2 3`, `{1..30}`, `$(seq 1 30)`)
+  fills over all its passes: `3 of 10   ~4m left`. When each pass only
+  sleeps, the time is exact; otherwise each pass is taken to be as long as the
+  last one, and the time left starts with `~`. A loop that can `break` early
+  fills toward its last pass.
+- A `while` or `until` loop has no end to fill toward, so each sleep fills on
+  its own and the rail counts the checks: `check 4   12s left`.
+
+A wait that the timeout would end early keeps the timeout's fill, so a near
+kill still shows. See [security and privacy](docs/security.md#tool-display)
+for how the sleeps are found.
 To time each step, Tool Display adds a marker line around each step before the
 command runs and removes the markers from the output before Pi or the model
 sees it. The model's command and the output it reads are unchanged. Commands
@@ -1165,7 +1178,8 @@ click it, or ctrl+o, for the log and the rest.
 
 Each running job has a live band above the editor. When the job's progress
 can be known, the band fills with it: a command that starts with
-`sleep 30` (after at most one `cd`) fills over those 30 seconds, and a meter in its newest output line
+`sleep 30` (after at most one `cd`) fills over those 30 seconds, a loop's
+sleeps fill as on a bash row (`2 of 4 · 25s left`, `check 3 · 18s left`), and a meter in its newest output line
 fills it with what the meter says, as in
 `Download ISO  $ curl -LO …  26.1s  45% · 32s left · 312M/690M · 12.1M/s`.
 The meters read are the ones tools draw into a log: curl, wget, rsync

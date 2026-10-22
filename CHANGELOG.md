@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.26.7 - 2026-10-22
+
+### Changed
+
+- Tool Display and Shell Jobs: a wait now shows its progress from the `sleep`
+  processes the command really runs. `sleep $s` fills over its real length.
+  A `for` loop over a list that can be counted fills over all its passes
+  (`3 of 10   ~4m left`). A `while` or `until` loop fills for each sleep and
+  counts its checks (`check 4   12s left`). Foreground bash calls are watched
+  on Linux only: each call's shell gets a `PI_EXTRAS_RUN` id in its
+  environment, and `/proc` is read twice a second while the call runs.
+  Background jobs are watched by their process group on Linux and macOS.
+
 ## 0.26.6 - 2026-10-22
 
 ### Changed
