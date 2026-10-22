@@ -1,6 +1,6 @@
 {
   "name": "pi-extras",
-  "version": "0.26.7",
+  "version": "0.27.0",
   "private": true,
   "description": "Optional status, usage limits, activity, search, shell tools, subagents, clearer tool rows and a quiet theme for Pi",
   "type": "module",
@@ -46,7 +46,8 @@
       "extensions/copy-blocks.ts",
       "extensions/release-notes.ts",
       "extensions/cache-compaction.ts",
-      "extensions/link-context.ts"
+      "extensions/link-context.ts",
+      "extensions/idle-gc.ts"
     ],
     "themes": [
       "themes/quiet.json"

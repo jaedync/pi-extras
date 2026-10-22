@@ -19,7 +19,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all sixteen extensions (quota hibernation and computer use stay off until you opt in); it makes `quiet` available but does not select it. It also adds the prompt templates `/deeper`, `/higher` and `/wider`.
+adds all seventeen extensions (quota hibernation and computer use stay off until you opt in); it makes `quiet` available but does not select it. It also adds the prompt templates `/deeper`, `/higher` and `/wider`.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -35,6 +35,7 @@ can still conflict.
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
 | Subagents | `subagent`, `message` and `stop_subagent` tools, `/subagents`: background child agents on your scoped models that report back, talk to main and to each other, each with a live row above the editor |
 | Bash Default Timeout | Adds a 120-second timeout only when a bash or powershell call omitted one |
+| Idle GC | Once the agent has been idle for 30 seconds, one full garbage collection gives the memory of the last run back to the system |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
@@ -122,6 +123,12 @@ the package. Removing it does not remove your credentials or change other packag
   get a rule in the system prompt that gives the default, because Pi's own
   `bash` schema says that the timeout has no default. The rule is only in
   Pi's default system prompt. A `SYSTEM.md` replaces the part that holds it.
+- `PI_IDLE_GC=off`: disable Idle GC. When the agent has been idle for 30
+  seconds, Idle GC runs one full garbage collection that also gives the freed
+  memory back to the system. It runs at most once in 5 minutes, and only when
+  the process grew by 16 MB or more since the last one. It waits while a
+  subagent works. The pause is tens to a few hundred milliseconds. A failure
+  stops it for the session and goes to `idle-gc.log` in the agent directory.
 - `PI_CACHE_RETENTION=long`: use the hour-long cache-warmth window when the
   transcript doesn't say. Anthropic replies report hour-long cache writes and
   Status Plus follows them, so a proxy that always writes them, such as

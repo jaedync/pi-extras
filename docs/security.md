@@ -746,6 +746,16 @@ last version it showed to `releaseNotes.seen` in `pi-extras.json`. When that
 file does not parse, it writes nothing and shows a warning instead. The notes
 are a custom entry in the session file; they are not sent to the model.
 
+## Idle GC
+
+Idle GC sends nothing anywhere and reads no session data. To get V8's
+collector function, it turns on V8's `--expose-gc` flag for one moment, creates
+one empty `vm` context to read `gc` from, and turns the flag off again, so
+`gc` is not added to Pi's global object. When Node already runs with
+`--expose-gc`, it uses that `gc` instead. It reads the process's resident size
+with `process.memoryUsage.rss()`. Its only file is `idle-gc.log` in the agent
+directory, written only when a collection fails. `PI_IDLE_GC=off` turns it off.
+
 ## Reporting
 
 Do not open a public issue containing tokens, session links, auth files, raw

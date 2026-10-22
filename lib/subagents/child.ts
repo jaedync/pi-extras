@@ -12,6 +12,7 @@ import { addTimeoutGuidelines, applyDefaultTimeout, resolveDefaultSeconds } from
 import { isBlockingPeer } from "../band/glyph.ts";
 import { markChildSession } from "../child-session.ts";
 import { compactionPoint, type CompactionLimits } from "../compaction-point.ts";
+import { holdBusy } from "../idle-gc.ts";
 import { operationalError } from "../operational-log.ts";
 import { isVirtualModel } from "../routed-model.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
@@ -623,7 +624,13 @@ function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildConte
 		sessionFile: session.sessionFile,
 		async prompt(text) {
 			turnEnd.reset();
-			await session.prompt(text);
+			// Main can be idle while a child streams; Idle GC must not pause the process under it.
+			const release = holdBusy();
+			try {
+				await session.prompt(text);
+			} finally {
+				release();
+			}
 			const failure = guard.failure();
 			if (failure) throw new Error(failure);
 			const last = [...session.messages].reverse().find((message) => (message as AssistantLike).role === "assistant") as AssistantLike | undefined;
