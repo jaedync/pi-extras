@@ -6,6 +6,7 @@
  * few tokens and never change a tool description.
  */
 import { formatMoney } from "../status-plus-logic.ts";
+import { formatTokens } from "../status-plus-render.ts";
 import { waitingFor } from "./after.ts";
 import { LIVE_STATES, type AgentRecord } from "./types.ts";
 
@@ -42,12 +43,17 @@ function doing(record: AgentRecord, get: Lookup): string {
 	}
 }
 
-/** One agent: `impl 37m $17.20`, `review queued after impl`. Time and cost are those of its current run. */
+/**
+ * One agent: `impl 37m $17.20 ctx 84k`, `review queued after impl`. Time and
+ * cost are those of its current run; the context size tells main what a
+ * follow-up to it would re-read.
+ */
 export function agentStatus(record: AgentRecord, get: Lookup, now: number): string {
 	const working = LIVE_STATES.has(record.state) && record.state !== "queued";
 	const time = working && record.startedAt !== undefined ? shortTime(now - record.startedAt) : "";
 	const cost = working ? record.usage.cost - (record.runCost ?? 0) : 0;
-	return [record.name, doing(record, get), time, cost > 0 ? `$${formatMoney(cost)}` : ""].filter(Boolean).join(" ");
+	const context = working && record.contextTokens ? `ctx ${formatTokens(record.contextTokens)}` : "";
+	return [record.name, doing(record, get), time, cost > 0 ? `$${formatMoney(cost)}` : "", context].filter(Boolean).join(" ");
 }
 
 function bounded(parts: readonly string[]): string {

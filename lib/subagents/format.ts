@@ -5,6 +5,7 @@
  */
 import { formatElapsed } from "../shell-jobs-widget.ts";
 import { formatMoney } from "../status-plus-logic.ts";
+import { formatTokens } from "../status-plus-render.ts";
 import type { RunLimits } from "./budget.ts";
 import { checkLines, checkOf } from "./checks.ts";
 import { MAIN } from "./names.ts";
@@ -94,9 +95,23 @@ function reportSummary(record: AgentRecord, now: number): string {
 	return `${reportCore(record, now)}${check ? `\n\n${check}` : ""}`;
 }
 
+/**
+ * From this context size a follow-up probably costs more than a fresh
+ * subagent: each turn of a resume sends the whole context again (a cache read
+ * at best, a full write once the cache has expired), while a fresh agent
+ * starts at its system prompt and the task, about 10k to 25k tokens.
+ */
+export const FRESH_HINT_TOKENS = 100_000;
+
+/** The hint a report gives when its agent's context is large (FRESH_HINT_TOKENS). */
+function contextLine(record: AgentRecord): string {
+	const tokens = record.contextTokens;
+	return tokens !== undefined && tokens >= FRESH_HINT_TOKENS ? `\nContext: ${formatTokens(tokens)} tokens. A follow-up re-reads all of it each turn; for unrelated work, a fresh subagent probably costs less.` : "";
+}
+
 function reportCore(record: AgentRecord, now: number): string {
 	const head = `${record.name} (${record.model}${spend(record)})`;
-	const session = `${record.sessionFile ? `\nSession: ${record.sessionFile}` : ""}${record.report && record.reportFile ? `\nReport: ${record.reportFile}` : ""}${fallbackLines(record)}`;
+	const session = `${record.sessionFile ? `\nSession: ${record.sessionFile}` : ""}${record.report && record.reportFile ? `\nReport: ${record.reportFile}` : ""}${contextLine(record)}${fallbackLines(record)}`;
 	if (record.state === "interrupted") {
 		const outcome = record.launchError ? `could not resume: ${oneLine(record.launchError, 300)}` : `was interrupted after ${duration(record, now)}.`;
 		const partial = record.report ? `\n\n${record.launchError ? "" : "Last available message:\n"}${capReport(record.report, record.sessionFile, record.reportFile)}` : "";
@@ -159,7 +174,7 @@ const OUTCOMES: ReadonlyArray<readonly [ReportState, RegExp]> = [
 	["interrupted", /^could not resume: (?<error>.*)$/],
 ];
 /** Lines a report's header carries for the model: where its files are, what the run handled, what to do next. */
-const REPORT_META = /^(?:Session|Report): |^This run \(\d+\) handled: |^Resume explicitly after checking the current files\.$/;
+const REPORT_META = /^(?:Session|Report): |^Context: \d|^This run \(\d+\) handled: |^Resume explicitly after checking the current files\.$/;
 const LAST_MESSAGE = /^Last (?:available message|message before it \w+):$/;
 
 const said = (text: string): string => text.replace(/^\n+/, "").trimEnd();

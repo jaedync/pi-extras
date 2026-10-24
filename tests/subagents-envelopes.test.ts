@@ -49,6 +49,14 @@ test("a child's report reads back as who, on which model, how it ended and what 
 		[{ kind: "report", from: "lead-a", model: "openai-codex/gpt-6-luna", state: "interrupted", text: "model gone" }]);
 });
 
+test("a report of an agent with a large context says that a fresh subagent probably costs less than a follow-up", () => {
+	const big = reportText(record({ report: "Done.", contextTokens: 140_000 }), 0);
+	assert.match(big, /\nContext: 140k tokens\. A follow-up re-reads all of it each turn; for unrelated work, a fresh subagent probably costs less\.\n/);
+	assert.deepEqual(readEnvelopes(big), [{ kind: "report", from: "lead-a", model: "openai-codex/gpt-6-luna", state: "idle", took: "16s", text: "Done." }], "a meta line, not the report");
+	assert.doesNotMatch(reportText(record({ report: "Done.", contextTokens: 99_999 }), 0), /Context:/, "under 100k a follow-up is the cheaper way");
+	assert.match(reportText(record({ state: "failed", error: "x", contextTokens: 120_000 }), 0), /\nContext: 120k tokens\./);
+});
+
 test("a report written at the budget says so for the model, reads back as an idle report, and keeps its body for the inspector", async () => {
 	const { reportBody } = await import("../lib/subagents/format.ts");
 	const atBudget = record({ budgetEnd: "over its 60-minute budget", report: "Half done.\n\nNext: the tests." });

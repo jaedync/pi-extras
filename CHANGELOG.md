@@ -17,6 +17,11 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 ### Added
 
+- Subagents: the `Still working` and `Team now` lines give each working
+  agent's context size (`ctx 84k`). A report of an agent with a context of
+  100k tokens or more says that a fresh subagent probably costs less than a
+  follow-up for unrelated work.
+
 - Subagents: `afterReports: false` on a spawn with `after`. The new child is
   told only how each agent before it ended, with no report or session path, so
   it gives an independent opinion.

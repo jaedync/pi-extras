@@ -32,6 +32,14 @@ test("one agent reads as its name, what it waits on, and its current run's time 
 	assert.deepEqual([shortTime(59_000), shortTime(60_000), shortTime(3_900_000)], ["59s", "1m", "1h05m"]);
 });
 
+test("a working agent shows its context size; one that ended or has no reading yet does not", () => {
+	const get = () => undefined;
+	assert.equal(agentStatus(record("impl", { contextTokens: 84_200 }), get, NOW), "impl 37m $17.20 ctx 84k");
+	assert.equal(agentStatus(record("lead", { state: "waiting", contextTokens: 9_400 }), get, NOW), "lead waiting on its subagents 37m $17.20 ctx 9.4k");
+	assert.equal(agentStatus(record("fresh"), get, NOW), "fresh 37m $17.20");
+	assert.equal(teamNow([record("impl", { contextTokens: 140_000 }), record("done", { state: "idle", contextTokens: 200_000 })], NOW), "Team now: impl 37m $17.20 ctx 140k; 1 ended.");
+});
+
 test("the still-working line names the other live agents, capped, and is absent when none is live", () => {
 	const records = [record("impl"), record("review", { startedAt: NOW - 4 * 60_000, usage: { ...NO_USAGE, cost: 1.85 } }), record("done", { state: "idle" })];
 	assert.equal(stillWorking(records, ["done"], NOW), "Still working: impl 37m $17.20, review 4m $1.85");

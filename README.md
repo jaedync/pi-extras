@@ -1643,10 +1643,10 @@ Incoming mail has a Markdown preview, expandable by click or ctrl+o.
 
 **What main sees.** Each message to main ends with one line about the other
 agents that still work, for example
-`Still working: impl 37m $17.20, review queued after impl`. This applies to
-reports, notes, questions, answers and relays. For each
-agent, the line gives the time and cost of its current run, and the agent it
-waits for. It shows 8 agents at most, then `+3 more`. Subagents makes the line
+`Still working: impl 37m $17.20 ctx 84k, review queued after impl`. This
+applies to reports, notes, questions, answers and relays. For each agent, the
+line gives the time and cost of its current run, its context size (`ctx`,
+after its first reply), and the agent it waits for. It shows 8 agents at most, then `+3 more`. Subagents makes the line
 when Pi gets the message, not when the message goes into the queue. When no
 other agent works, the message has no line. The results of main's `message`
 and `stop_subagent` calls end with `Team now:`. It gives the agents that work
@@ -1733,6 +1733,16 @@ characters; main reads the rest with its normal read tool. `/subagents report
 <name>` shows the latest report's path. Each run keeps its own file, and run
 numbers can skip when a run ends waiting for a reply. If saving fails, the
 message still arrives and points to the session file as before.
+
+**Follow-up or fresh agent.** A report of an agent whose context is 100k
+tokens or more has a `Context:` line, for example `Context: 140k tokens. A
+follow-up re-reads all of it each turn; for unrelated work, a fresh subagent
+probably costs less.` The rule is simple: each turn of a resumed agent sends
+its whole context again (a cache read at best, a full cache write after the
+cache expires), and a fresh agent starts with only its system prompt and its
+task (about 10k to 25k tokens). From 100k tokens, a follow-up turn costs about
+4 to 10 times the input of a fresh agent's turn. A follow-up is still better
+when the work needs what the agent learned.
 
 **Checks.** `check` on `subagent` or `message` is a shell command, for example
 `{ task, check: "npm test", fixUntilPass: 2 }`. When a run of the child ends
