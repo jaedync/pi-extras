@@ -2,6 +2,24 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.28.1 - 2026-10-24
+
+### Changed
+
+- pi-extras requires Pi 1.4.0 or newer. Development uses Pi 1.4.0. Update Pi
+  before you update pi-extras.
+
+### Fixed
+
+- Rate-limit recovery: the short backoff does not retry a ChatGPT
+  subscription usage limit when the error gives only its code, for example
+  `subscription_sharing_usage_limit_exceeded`. Pi does not retry these
+  limits, and a short wait does not clear them.
+- The test suite passes on Pi 1.4.0. Before, 7 rate-limit tests for
+  `openai-codex` failed, because they used `gpt-5.5`. Pi 1.4.0 removed this
+  model from its `openai-codex` catalog. The tests now use a model that the
+  catalog has.
+
 ## 0.28.0 - 2026-10-24
 
 ### Added
