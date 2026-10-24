@@ -131,7 +131,7 @@ function windowsShellPath(path: string): string {
  * Unicode spaces made plain, an `@` prefix dropped, Windows shell paths
  * converted on Windows, `~` and file URLs expanded.
  */
-function toolPath(path: string): string {
+export function toolPath(path: string): string {
 	const spaced = path.replace(UNICODE_SPACES, " ");
 	const bare = spaced.startsWith("@") ? spaced.slice(1) : spaced;
 	const windows = process.platform === "win32";

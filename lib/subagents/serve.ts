@@ -18,6 +18,7 @@ import { HOST_VERSION, type HostActivity, type HostPorts, type HostState, type H
 import type { Route } from "./deliver.ts";
 import type { Launcher } from "./types.ts";
 import { childInstructions, conversationDigest, entriesUntil, rosterText } from "./format.ts";
+import { hiddenFrom } from "./hidden.ts";
 import { closingHost, parkHost } from "./host.ts";
 import { openHost } from "./host-state.ts";
 import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "./models.ts";
@@ -161,6 +162,7 @@ function childLauncher(inputs: LauncherInputs): Launcher {
 		activity: inputs.activity,
 		mayEdit: (name, root) => team().mayEdit(name, root),
 		bashChanged: (name, paths, root) => team().bashChanged(name, paths, root),
+		...(scope.config.hideSessions ? { hidden: hiddenFrom(join(agentDir, "sessions", "subagents"), ctx.sessionManager.getSessionFile?.(), team) } : {}),
 		toolsFor: (record) => {
 			const names = allowedTools(childToolNames(live.activeTools(), record.readOnly, scope.config.childToolsExclude), record.tools);
 			return {

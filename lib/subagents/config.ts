@@ -33,6 +33,8 @@ export interface SubagentsConfig {
 	fallbackModels?: string[];
 	/** A running child whose session went stale moves to a new session at its next turn boundary (swap.ts). */
 	swapAtTurn: boolean;
+	/** Children can't read other agents' sessions and reports or main's session (hidden.ts); their bash runs in a sandbox that hides them. */
+	hideSessions: boolean;
 }
 
 export const DEFAULTS: SubagentsConfig = {
@@ -46,6 +48,7 @@ export const DEFAULTS: SubagentsConfig = {
 	maxRunMinutes: 60,
 	maxRunCost: null,
 	swapAtTurn: true,
+	hideSessions: true,
 };
 
 export const GUIDE_FILE = "subagent-models.md";
@@ -72,6 +75,7 @@ export function parseConfig(section: Record<string, unknown>): SubagentsConfig {
 		maxRunMinutes: positive(section.maxRunMinutes) ? Math.min(section.maxRunMinutes, MAX_RUN_MINUTES) : DEFAULTS.maxRunMinutes,
 		maxRunCost: positive(section.maxRunCost) ? section.maxRunCost : DEFAULTS.maxRunCost,
 		swapAtTurn: typeof section.swapAtTurn === "boolean" ? section.swapAtTurn : DEFAULTS.swapAtTurn,
+		hideSessions: typeof section.hideSessions === "boolean" ? section.hideSessions : DEFAULTS.hideSessions,
 	};
 	const fallbacks = Array.isArray(section.fallbackModels)
 		? { fallbackModels: section.fallbackModels.filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0).map((ref) => ref.trim()) }

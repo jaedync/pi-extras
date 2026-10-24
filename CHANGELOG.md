@@ -17,6 +17,13 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 ### Added
 
+- Subagents: children can't read other agents' sessions and reports, or
+  main's session. `read`, `grep`, `find` and `ls` refuse those paths, and a
+  child's bash runs under bwrap (Linux) or sandbox-exec (macOS) with them
+  hidden. A child keeps access to its own files, its subagents' and the
+  reports it was given. `hideSessions: false` turns this off; in the sandbox,
+  `sudo` fails.
+
 - Subagents: the `Still working` and `Team now` lines give each working
   agent's context size (`ctx 84k`). A report of an agent with a context of
   100k tokens or more says that a fresh subagent probably costs less than a

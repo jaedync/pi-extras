@@ -131,3 +131,9 @@ test("a child is never named after a /subagents subcommand, so /subagents <name>
 	assert.equal(nameFor(undefined, "Stats", () => false), "stats-agent");
 	assert.equal(nameFor("stats-check", "x", () => false), "stats-check");
 });
+
+test("hideSessions is on by default and only a boolean turns it off", () => {
+	assert.equal(parseConfig({}).hideSessions, true);
+	assert.equal(parseConfig({ hideSessions: false }).hideSessions, false);
+	assert.equal(parseConfig({ hideSessions: "no" }).hideSessions, true);
+});

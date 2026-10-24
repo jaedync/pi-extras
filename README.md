@@ -113,7 +113,9 @@ the package. Removing it does not remove your credentials or change other packag
   order, that a run moves to when its model can't serve it; default: none,
   so the run fails), and `swapAtTurn` (default `true`;
   `false` keeps a working child on its session until its run ends, also when
-  that session is not current). The model guide is
+  that session is not current), and `hideSessions` (default `true`; `false`
+lets children read other agents' sessions and main's session, and runs a
+child's bash without the sandbox that hides them). The model guide is
   `PI_CODING_AGENT_DIR/subagent-models.md`, plus `.pi/subagent-models.md` in a
   project that main trusts. See below.
 - `PI_BASH_DEFAULT_TIMEOUT`: seconds; `0` or `off` disables the injected timeout.
@@ -1919,6 +1921,22 @@ Untracked `node_modules` are linked, not copied or included in the changes.
 Worktrees stay until you remove them. Resumed children keep the same workspace.
 After you apply the changes, the cleanup command force-removes the worktree and
 deletes its branch. Check that you kept all needed files first.
+
+**Hidden sessions.** A child can't read the sessions and reports of other
+agents, or main's session. Its `read`, `grep`, `find` and `ls` calls refuse
+`~/.pi/agent/sessions/subagents` and main's session file, and the error says
+that the path is hidden from subagents. `grep` and `find` also refuse a folder
+that holds one of these paths, so search a narrower folder. `ls` of a folder
+above only lists names. A child can still read its own session and reports,
+the files of the agents under it, and the reports of the agents it started
+after (not with `afterReports: false`). A call is checked again on its result,
+so a symlink made in the same reply can't get past the check. A child's
+`bash` runs in a sandbox that puts an empty tmpfs over the folder and
+`/dev/null` over main's session (bwrap on Linux, sandbox-exec on macOS). A
+worktree child's sandbox does this too. Where no sandbox tool runs, Pi warns
+once and bash can read the folder. In the sandbox, `sudo` fails, because bwrap
+turns on "no new privileges". Set `hideSessions: false` in the `subagents`
+section of `pi-extras.json` to turn all of this off.
 
 **Limits.** At most `maxConcurrent` children run at the same time; the rest
 queue. The limit also applies to a child that goes on in its open session.

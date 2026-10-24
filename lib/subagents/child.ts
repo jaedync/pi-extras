@@ -20,7 +20,8 @@ import { callPhrase } from "../tool-phrase.ts";
 import { guardBash } from "./bash-guard.ts";
 import { bashCheck } from "./checks.ts";
 import type { HostActivity } from "./contract.ts";
-import { confine, sandboxFor } from "./sandbox.ts";
+import { HIDDEN_READ_TOOLS, hiddenReason, type HiddenPaths } from "./hidden.ts";
+import { confine, hidingFor, sandboxFor } from "./sandbox.ts";
 import { freshModels, piModelsCheck } from "./fresh-models.ts";
 import { withChildRetry } from "./retry.ts";
 import { launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "./stamp.ts";
@@ -50,6 +51,8 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const EDIT_GUARD_NAME = "subagent-edit-guard";
 const EDIT_GUARD_PATH = `<inline:${EDIT_GUARD_NAME}>`;
+const READ_GUARD_NAME = "subagent-read-guard";
+const READ_GUARD_PATH = `<inline:${READ_GUARD_NAME}>`;
 const BUDGET_GUARD_NAME = "subagent-budget-guard";
 const BUDGET_GUARD_PATH = `<inline:${BUDGET_GUARD_NAME}>`;
 const TIMEOUT_NAME = "subagent-default-timeout";
@@ -176,6 +179,8 @@ export interface LauncherDeps {
 	mayEdit?(name: string, root: string): boolean;
 	/** After a bash call changed files in the work tree `root`: takes its lock, or returns a note for the call's result. */
 	bashChanged?(name: string, paths: readonly string[], root: string): string | undefined;
+	/** What this child may not read (hidden.ts); undefined hides nothing. */
+	hidden?(record: AgentRecord): HiddenPaths | undefined;
 }
 
 /**
@@ -183,12 +188,16 @@ export interface LauncherDeps {
  * unless a spawn named one), replacing whichever bash the child would get. A spawn hook confines a worktree child's commands, so
  * its transcript keeps the command it wrote.
  */
-function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, deps: LauncherDeps): ToolDefinition {
+function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, deps: LauncherDeps, hidden: HiddenPaths | undefined): ToolDefinition {
 	const warn = (message: string) => deps.warn?.(message);
+	const hiding = hidden ? { dirs: hidden.dirs, files: hidden.files } : undefined;
 	const sandbox = record.worktree
 		? sandboxFor(record.worktree, (why) => warn(`subagents: bash in worktrees runs without a sandbox, so it can write into your checkout. ${why}`),
-			(why) => warn(`subagents: ${record.name}'s sandbox keeps all git data read-only, so its commits will fail. ${why}`))
+			(why) => warn(`subagents: ${record.name}'s sandbox keeps all git data read-only, so its commits will fail. ${why}`), hiding)
 		: undefined;
+	// A worktree child's sandbox hides them too; without one, a sandbox only hides.
+	const hide = !record.worktree && hiding ? hidingFor(hiding, (why) => warn(`subagents: a subagent's bash can read other agents' sessions, because no sandbox runs here. ${why}`)) : undefined;
+	const prefix = sandbox?.prefix ?? hide;
 	const { activity, bashChanged } = deps;
 	const changes = activity && bashChanged ? {
 		cwd, agent: record.name, activity, warn, ...(record.worktree ? { worktree: record.worktree } : {}),
@@ -199,7 +208,7 @@ function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: Age
 	const definition = sdk.createBashToolDefinition(cwd, {
 		commandPrefix: settings.getShellCommandPrefix(),
 		...(shellPath ? { shellPath } : {}),
-		...(sandbox ? { spawnHook: confine(sandbox.prefix) } : {}),
+		...(prefix ? { spawnHook: confine(prefix) } : {}),
 	});
 	return guardBash(definition, { ...(sandbox ? { sandbox } : {}), ...(changes ? { changes } : {}) }) as ToolDefinition;
 }
@@ -248,6 +257,29 @@ export function editGuard(check: (path: unknown) => string | undefined, track?: 
 			});
 			// Also sent for a call another handler blocked, unlike tool_result.
 			pi.on("tool_execution_end", (event) => track?.end(event.toolCallId));
+		},
+	};
+}
+
+/**
+ * Keeps a child's read, grep, find and ls calls out of the paths hidden from
+ * it (hidden.ts). A call is checked before it runs and again on its result:
+ * a link that an earlier call of the same reply makes could take the path
+ * into a hidden folder in between, and then the result is replaced.
+ */
+export function readGuard(hidden: HiddenPaths, cwd: string): InlineExtension {
+	return {
+		name: READ_GUARD_NAME,
+		factory(pi) {
+			pi.on("tool_call", (event) => {
+				const reason = hiddenReason(hidden, event.toolName, event.input, cwd);
+				return reason ? { block: true, reason } : undefined;
+			});
+			pi.on("tool_result", (event) => {
+				if (!HIDDEN_READ_TOOLS.has(event.toolName)) return undefined;
+				const reason = hiddenReason(hidden, event.toolName, event.input, cwd);
+				return reason ? { content: [{ type: "text", text: reason }], details: undefined, isError: true } : undefined;
+			});
 		},
 	};
 }
@@ -317,13 +349,14 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const guard = createChildRateLimitGuard({ configFile: join(agentDir, "pi-extras.json"), onWarning: (code) => operationalError(join(agentDir, "rate-limit-recovery.log"), CHILD_GUARD_NAME, `transport protection: ${code}`) });
 			const settingsManager = childSettings(deps, cwd, record);
 			// An SDK tool wins over a built-in or extension tool of the same name.
-			const bash = wanted.has("bash") ? childBash(sdk, cwd, settingsManager, record, deps) : undefined;
+			const hidden = deps.hidden?.(record);
+			const bash = wanted.has("bash") ? childBash(sdk, cwd, settingsManager, record, deps, hidden) : undefined;
 			const editCheck = childEditCheck(deps, record, cwd);
 			const customTools = [...listed, ...(bash ? [bash] : []), ...childEdits(sdk, cwd, wanted, editCheck)];
 			// A check runs as the child's own bash would; a child without bash gets one made the same way when it needs it.
 			let checkBash = bash;
-			const check: ChildHandle["check"] = (command, options) => bashCheck(checkBash ??= childBash(sdk, cwd, settingsManager, record, deps), command, options);
-			const loader = childLoader(deps, record, { cwd, settingsManager, guard, wanted, loaded, editCheck, blocked: () => hooks.wrapUp?.() });
+			const check: ChildHandle["check"] = (command, options) => bashCheck(checkBash ??= childBash(sdk, cwd, settingsManager, record, deps, hidden), command, options);
+			const loader = childLoader(deps, record, { cwd, settingsManager, guard, wanted, loaded, editCheck, hidden, blocked: () => hooks.wrapUp?.() });
 			await loader.reload();
 			const stamp = withFiles(settled, resourceFiles(loader), begun);
 			// A path fixed at spawn opens as a new session written there.
@@ -401,12 +434,13 @@ interface LoaderInputs {
 	readonly wanted: ReadonlySet<string>;
 	readonly loaded: readonly string[];
 	readonly editCheck: (path: unknown) => string | undefined;
+	readonly hidden: HiddenPaths | undefined;
 	/** Why every tool call is blocked now (types.ts `ChildHooks.wrapUp`). */
 	readonly blocked: () => string | undefined;
 }
 
 function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInputs) {
-	const { cwd, settingsManager, guard, wanted, loaded, editCheck, blocked } = inputs;
+	const { cwd, settingsManager, guard, wanted, loaded, editCheck, hidden, blocked } = inputs;
 	// Read at each launch, as main reads it at each session start.
 	const timeout = resolveDefaultSeconds(process.env.PI_BASH_DEFAULT_TIMEOUT);
 	return new deps.sdk.DefaultResourceLoader({
@@ -420,10 +454,10 @@ function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInpu
 		appendSystemPromptOverride: (base) => [...base, deps.instructions(record)],
 		// The budget guard comes first: a call it blocks takes no edit lock.
 		extensionFactories: [budgetGuard(blocked), guard.extension, editGuard(editCheck, editTracker(deps.activity, record.name, cwd)),
-			...(timeout === undefined ? [] : [defaultTimeout(timeout)])],
+			...(hidden ? [readGuard(hidden, cwd)] : []), ...(timeout === undefined ? [] : [defaultTimeout(timeout)])],
 		extensionsOverride: (base) => ({
 			...base,
-			extensions: base.extensions.filter((extension) => [BUDGET_GUARD_PATH, CHILD_GUARD_PATH, EDIT_GUARD_PATH, TIMEOUT_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
+			extensions: base.extensions.filter((extension) => [BUDGET_GUARD_PATH, CHILD_GUARD_PATH, EDIT_GUARD_PATH, READ_GUARD_PATH, TIMEOUT_PATH, CHILD_CACHE_COMPACTION_PATH].includes(extension.path)
 				|| [...extension.tools.keys()].some((name) => wanted.has(name))),
 		}),
 	});

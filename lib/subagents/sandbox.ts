@@ -2,7 +2,10 @@
  * An OS sandbox for a worktree child's bash commands, so a shell command
  * can't write into the parent's checkout any more than an `edit` can. macOS
  * runs each command under sandbox-exec, Linux under bwrap when it is
- * installed; elsewhere commands run unconfined, as before.
+ * installed; elsewhere commands run unconfined, as before. Every child's bash
+ * also gets the paths hidden from subagents (hidden.ts) covered: an empty
+ * tmpfs over each folder and /dev/null over each file on Linux, denied reads
+ * on macOS.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
@@ -50,6 +53,25 @@ export interface GitWrites {
 
 export const NO_GIT_WRITES: GitWrites = { trees: [], files: [], readOnly: [] };
 
+/** What a child's bash may not read (hidden.ts), as real paths. */
+export interface Hiding {
+	readonly dirs: readonly string[];
+	readonly files: readonly string[];
+}
+
+export const NO_HIDING: Hiding = { dirs: [], files: [] };
+
+/** Seatbelt rules that deny reads of the hidden paths; last, since the last matching rule wins. */
+export function seatbeltHiding(hiding: Hiding): string[] {
+	return [...hiding.dirs.map((dir) => `(deny file-read* (subpath ${seatbeltString(dir)}))`), ...hiding.files.map((file) => `(deny file-read* (literal ${seatbeltString(file)}))`)];
+}
+
+/** bwrap arguments that cover the hidden paths that exist: a bind needs a path to bind over. */
+export function bwrapHiding(hiding: Hiding): string[] {
+	return [...hiding.dirs.filter((dir) => existsSync(dir)).flatMap((dir) => ["--tmpfs", dir]),
+		...hiding.files.filter((file) => existsSync(file)).flatMap((file) => ["--ro-bind", "/dev/null", file])];
+}
+
 /**
  * What git needs to write for `git add`, `git commit` and `git status` in
  * the worktree, read from `root`, its real source checkout; or why it can't
@@ -71,7 +93,7 @@ const regexLiteral = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|]/
 const folders = (files: readonly string[]): string[] => [...new Set(files.map((file) => dirname(file)))];
 
 /** Seatbelt's last matching rule wins, so every denial comes before the exceptions. Paths must be resolved: seatbelt matches real paths. */
-export function seatbeltProfile(roots: readonly string[], git: GitWrites): string {
+export function seatbeltProfile(roots: readonly string[], git: GitWrites, hiding: Hiding = NO_HIDING): string {
 	const denials = roots.map((root) => `(deny file-write* (subpath ${seatbeltString(root)}))`);
 	const exceptions = [
 		...git.trees.map((tree) => `(allow file-write* (subpath ${seatbeltString(tree)}))`),
@@ -81,6 +103,7 @@ export function seatbeltProfile(roots: readonly string[], git: GitWrites): strin
 		...roots.map((root) => `(allow file-write* (subpath ${seatbeltString(join(root, CACHE_DIR))}))`),
 		// After the allows, which it narrows.
 		...git.readOnly.map((file) => `(deny file-write* (literal ${seatbeltString(file)}))`),
+		...seatbeltHiding(hiding),
 	];
 	return ["(version 1)", "(allow default)", ...denials, ...exceptions].join("\n");
 }
@@ -91,20 +114,27 @@ export function seatbeltProfile(roots: readonly string[], git: GitWrites): strin
  * bound whole: there, a child can also move another subagent's branch. Main
  * makes them first, since `git pack-refs` or gc can remove them.
  */
-export function bwrapPrefix(roots: readonly string[], git: GitWrites): string[] {
+export function bwrapPrefix(roots: readonly string[], git: GitWrites, hiding: Hiding = NO_HIDING): string[] {
 	for (const folder of folders(git.files)) mkdirSync(folder, { recursive: true });
 	// A read-only bind needs a file to bind; an empty config changes nothing for git.
 	for (const file of git.readOnly) if (!existsSync(file)) writeFileSync(file, "", { flag: "wx" });
 	const writable = [...git.trees, ...folders(git.files), ...roots.map((root) => join(root, CACHE_DIR))].filter((path) => existsSync(path));
 	return [BWRAP, "--dev-bind", "/", "/", ...roots.flatMap((root) => ["--ro-bind", root, root]), ...writable.flatMap((path) => ["--bind", path, path]),
-		...git.readOnly.flatMap((file) => ["--ro-bind", file, file])];
+		...git.readOnly.flatMap((file) => ["--ro-bind", file, file]), ...bwrapHiding(hiding)];
 }
 
 const onPath = (name: string): boolean => (process.env.PATH ?? "").split(delimiter).some((dir) => dir !== "" && existsSync(join(dir, name)));
 
-function confinement(roots: readonly string[], git: () => GitWrites): string[] | undefined {
-	if (process.platform === "darwin") return existsSync(SANDBOX_EXEC) ? [SANDBOX_EXEC, "-p", seatbeltProfile(roots, git())] : undefined;
-	if (process.platform === "linux") return onPath(BWRAP) ? bwrapPrefix(roots, git()) : undefined;
+function confinement(roots: readonly string[], git: () => GitWrites, hiding: Hiding): string[] | undefined {
+	if (process.platform === "darwin") return existsSync(SANDBOX_EXEC) ? [SANDBOX_EXEC, "-p", seatbeltProfile(roots, git(), hiding)] : undefined;
+	if (process.platform === "linux") return onPath(BWRAP) ? bwrapPrefix(roots, git(), hiding) : undefined;
+	return undefined;
+}
+
+/** The prefix that only hides paths, for a child with no worktree; undefined where no sandbox tool is available. */
+export function hidingPrefix(hiding: Hiding, platform: NodeJS.Platform = process.platform): string[] | undefined {
+	if (platform === "darwin") return existsSync(SANDBOX_EXEC) ? [SANDBOX_EXEC, "-p", ["(version 1)", "(allow default)", ...seatbeltHiding(hiding)].join("\n")] : undefined;
+	if (platform === "linux") return onPath(BWRAP) ? [BWRAP, "--dev-bind", "/", "/", ...bwrapHiding(hiding)] : undefined;
 	return undefined;
 }
 
@@ -126,7 +156,7 @@ function probe(prefix: readonly string[]): string | undefined {
  * `onUnavailable` hears once why an installed sandbox tool failed;
  * `onNoGit` why the sandbox keeps all git data read-only, so commits fail.
  */
-export function sandboxFor(worktree: Pick<Worktree, "path" | "branch">, onUnavailable?: (why: string) => void, onNoGit?: (why: string) => void): Sandbox | undefined {
+export function sandboxFor(worktree: Pick<Worktree, "path" | "branch">, onUnavailable?: (why: string) => void, onNoGit?: (why: string) => void, hiding: Hiding = NO_HIDING): Sandbox | undefined {
 	const roots = protectedRoots(worktree.path).filter((root) => existsSync(root)).map((root) => realpathSync(root));
 	const git = (): GitWrites => {
 		// The first checkout, not a parent worktree, whose .git the parent child can write.
@@ -135,13 +165,29 @@ export function sandboxFor(worktree: Pick<Worktree, "path" | "branch">, onUnavai
 		onNoGit?.(found);
 		return NO_GIT_WRITES;
 	};
-	const prefix = roots.length > 0 ? confinement(roots, git) : undefined;
-	if (!prefix || broken.has(prefix[0]!)) return undefined;
+	const prefix = roots.length > 0 ? confinement(roots, git, hiding) : undefined;
+	if (!prefix || !works(prefix, onUnavailable)) return undefined;
+	return { root: roots[0]!, prefix };
+}
+
+/** Whether the sandbox tool of `prefix` runs here; the first failure is told once and the tool is not tried again. */
+function works(prefix: readonly string[], onUnavailable?: (why: string) => void): boolean {
+	if (broken.has(prefix[0]!)) return false;
 	const failure = probe(prefix);
-	if (failure === undefined) return { root: roots[0]!, prefix };
+	if (failure === undefined) return true;
 	broken.add(prefix[0]!);
 	onUnavailable?.(failure);
-	return undefined;
+	return false;
+}
+
+/**
+ * The prefix that hides paths from the bash of a child with no worktree, or
+ * undefined where no sandbox tool runs; `onUnavailable` hears once why one failed.
+ */
+export function hidingFor(hiding: Hiding, onUnavailable?: (why: string) => void): readonly string[] | undefined {
+	if (hiding.dirs.length === 0 && hiding.files.length === 0) return undefined;
+	const prefix = hidingPrefix(hiding);
+	return prefix && works(prefix, onUnavailable) ? prefix : undefined;
 }
 
 /**
