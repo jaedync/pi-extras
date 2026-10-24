@@ -402,12 +402,13 @@ export function wrapUpPrompt(options: { reason: string; parent: string; subagent
 }
 
 /** What the child is told of its run's budgets up front; none without one. */
-function budgetSection(budget: RunLimits | undefined): string[] {
+function budgetSection(budget: RunLimits | undefined, windowPct?: number): string[] {
+	const window = windowPct !== undefined ? [`It also wraps up when the usage window of your model reaches ${windowPct}%.`] : [];
 	const limits = [
 		...(budget?.minutes !== undefined ? [`work ${budget.minutes} minutes`] : []),
 		...(budget?.cost !== undefined ? [`spend $${formatMoney(budget.cost)}`] : []),
 	];
-	if (limits.length === 0) return [];
+	if (limits.length === 0) return window.length > 0 ? ["", "## Budget", `${window[0]} At the limit, tool calls are blocked and you must write your final report at once.`] : [];
 	// The same text each run: the times themselves come in the run's first prompt (runClockHead).
 	const time = budget?.minutes !== undefined ? [
 		"Time counts only while you work, not while you wait for an answer, for your subagents or for a free slot.",
@@ -415,7 +416,7 @@ function budgetSection(budget: RunLimits | undefined): string[] {
 		`The ${CLOCK_TOOL} tool gives the time now and the work minutes left.`,
 	] : [];
 	const cost = budget?.cost !== undefined ? ["Near the end of the cost budget you get a note."] : [];
-	return ["", "## Budget", [`This run may ${limits.join(" and ")}.`, ...time, ...cost, "At the limit, tool calls are blocked and you must write your final report at once."].join(" ")];
+	return ["", "## Budget", [`This run may ${limits.join(" and ")}.`, ...time, ...cost, ...window, "At the limit, tool calls are blocked and you must write your final report at once."].join(" ")];
 }
 
 /** Appended to a child's system prompt. */
@@ -430,6 +431,8 @@ export function childInstructions(options: {
 	conversation?: string;
 	/** Each run's limits, fixed at spawn (budget.ts). */
 	budget?: RunLimits;
+	/** The usage-window limit, fixed at spawn (windows.ts). */
+	windowPct?: number;
 }): string {
 	const { name, parent } = options;
 	return [
@@ -453,7 +456,7 @@ export function childInstructions(options: {
 		] : []),
 		...(options.readOnly ? ["", "## Read-only", "Do not modify files, run commands that change state, or make other side effects."] : []),
 		...(options.canSpawn ? ["", "## Your own subagents", "You may start subagents with the subagent tool. You are not done until they report back; their reports arrive as messages."] : []),
-		...budgetSection(options.budget),
+		...budgetSection(options.budget, options.windowPct),
 		"",
 		"## Team right now",
 		options.roster,

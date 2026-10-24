@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { afterBlock, afterError, queuedActivity, stopOrder } from "./after.ts";
 import { MAIN, nameFor } from "./names.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
+import { windowReason, type WindowReading } from "./windows.ts";
 import type { HostTeam } from "./contract.ts";
 import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
@@ -42,6 +43,8 @@ import {
 
 export interface TeamOptions {
 	launcher: Launcher;
+	/** The fullest usage window that governs `model` now (windows.ts); undefined without a reading. */
+	windowUse?(model: string): WindowReading | undefined;
 	/** Main's working directory; children start there unless a spawn names a cwd, and helpers inherit their parent's. */
 	cwd?: string;
 	deliverToMain(delivery: MainDelivery): void;
@@ -209,7 +212,8 @@ export class Team implements HostTeam {
 		if (depth > this.options.maxDepth) return { ok: false, error: `Subagents cannot start subagents here (depth limit ${this.options.maxDepth}).` };
 		const name = nameFor(request.name, request.task, (candidate) => this.records.has(candidate) && !this.reusableName(candidate));
 		if (request.isolation !== undefined && request.isolation !== "shared" && request.isolation !== "worktree") return { ok: false, error: "Unknown isolation. Use shared or worktree." };
-		const badBudget = budgetError("maxMinutes", request.maxMinutes) ?? budgetError("maxCost", request.maxCost);
+		const badBudget = budgetError("maxMinutes", request.maxMinutes) ?? budgetError("maxCost", request.maxCost)
+			?? (request.maxWindowPct !== undefined && !(Number.isFinite(request.maxWindowPct) && request.maxWindowPct >= 1 && request.maxWindowPct <= 100) ? "maxWindowPct must be a number from 1 to 100." : undefined);
 		if (badBudget) return { ok: false, error: badBudget };
 		const badAfter = request.after?.length ? afterError({ ...request, after: request.after }, this.list(), () => this.knownNames()) : undefined;
 		if (badAfter) return { ok: false, error: badAfter };
@@ -240,6 +244,7 @@ export class Team implements HostTeam {
 			...(after ? { after } : {}),
 			...(after && request.afterReports === false ? { afterReports: false } : {}),
 			...(request.panel ? { panel: request.panel } : {}),
+			...(request.maxWindowPct !== undefined ? { maxWindowPct: request.maxWindowPct } : {}),
 			...(request.check ? { check: mergeCheck(request.check) } : {}),
 		};
 		this.put(record);
@@ -247,6 +252,23 @@ export class Team implements HostTeam {
 		this.slots.enqueue(name, request.blocking && parent !== null);
 		this.pump();
 		return { ok: true, record: this.records.get(name)! };
+	}
+
+	/** The limit store has a new reading: each running child with a window limit checks it. */
+	windowsChanged(): void {
+		for (const record of this.list()) if (record.maxWindowPct !== undefined) this.checkWindow(record.name);
+	}
+
+	/**
+	 * A running child whose window reached its limit wraps up as at its
+	 * budget. Only while it runs: the window can't grow from its own work while
+	 * it waits, and a stop there would end a wait its subagents still serve.
+	 */
+	private checkWindow(name: string): void {
+		const record = this.records.get(name);
+		if (record?.maxWindowPct === undefined || record.state !== "running") return;
+		const reading = this.options.windowUse?.(record.model);
+		if (reading && reading.pct >= record.maxWindowPct) this.wrapUps.begin(name, windowReason(record.maxWindowPct, reading));
 	}
 
 	budgetClock(name: string): { usedMs: number; minutes: number } | undefined {
@@ -557,7 +579,10 @@ export class Team implements HostTeam {
 				if (aborted && patch.usage) return this.patch(name, { usage: patch.usage });
 				if (this.launches.get(name) !== launch || !LIVE_STATES.has(record.state)) return;
 				this.patch(name, { ...patch, ...this.wrapUps.shown(name, patch), lastActivityAt: this.now(), ...(this.answers.workedSince(name, patch.toolCalls) ? { answeredMain: undefined } : {}) });
-				if (patch.usage) this.budgets.spent(name, patch.usage.cost);
+				if (patch.usage) {
+					this.budgets.spent(name, patch.usage.cost);
+					this.checkWindow(name);
+				}
 				this.forgetRead(name);
 			},
 		});

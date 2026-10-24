@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { sharedLimitStore } from "../limit-store.ts";
 import { operationalLine } from "../operational-log.ts";
 import { afterOrder, busyInGroup } from "./after.ts";
 import { stillWorking } from "./status.ts";
@@ -28,6 +29,7 @@ import { installSignalRecorder } from "./signals.ts";
 import { Team } from "./team.ts";
 import { ToolActivity } from "./tool-activity.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
+import { windowReading } from "./windows.ts";
 
 export interface HostInputs {
 	readonly generation: number;
@@ -90,6 +92,11 @@ function teamFor(inputs: HostInputs, ports: HostPorts, mail: () => MainMail, pla
 		sessionFileFor: (name) => join(sessionDir, `${new Date().toISOString().replace(/[:.]/g, "-")}_${name}_${randomUUID().slice(0, 8)}.jsonl`),
 		deliverToMain: (delivery) => mail().deliver(delivery),
 		launcher: ports.launcher,
+		// Status Plus fills the store, which is process-wide, so a reload keeps the readings.
+		windowUse: (model) => {
+			const found = windowReading((provider) => sharedLimitStore().get(provider), model);
+			return "reading" in found ? found.reading : undefined;
+		},
 	});
 }
 
@@ -212,7 +219,9 @@ class Host implements HostState {
 		this.team = teamFor(inputs, this.ports, () => this.mail, this.place, sessionDir);
 		this.previous = this.load(sessionDir);
 		const logFile = runLogPath(agentDir);
-		this.unsubscribe = recordChanges(inputs, this.ports, this.team, index, logFile);
+		const unrecord = recordChanges(inputs, this.ports, this.team, index, logFile);
+		const unwatch = sharedLimitStore().subscribe(() => this.team.windowsChanged());
+		this.unsubscribe = () => { unrecord(); unwatch(); };
 		this.removeSignals = recordSignals(inputs, this.team, index, logFile, (message) => this.notify(message), (signal) => { this.signalReason = signal; });
 		this.activity = inputs.activity ?? new ToolActivity();
 	}

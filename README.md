@@ -2011,6 +2011,20 @@ with its last message. So a hung child can't keep a `pi -p` run open forever.
 A message to the child resumes it with a fresh budget, and it is told how its
 last run ended.
 
+**Window limit.** `maxWindowPct` on `subagent` wraps a run up when the usage
+window that governs its model reaches that percent, as a time or cost budget
+does: tool calls are blocked and the child writes its report. The reading is
+the fullest window of the model's provider that applies to the model (for
+example `anthropic 7d`, or a model-family window such as `7d-fable` for
+Fable). It comes from Status Plus, so it works for providers that it polls:
+anthropic, opencode-go and openai-codex. A run is checked at each usage update
+and each new reading, but only while it works. The spawn is refused when the
+window is already at the limit. For a provider with no reading, for example
+`openai` signed in with ChatGPT, the spawn result says that the limit can't
+act, and the time and cost budgets still apply. The child's instructions name
+the limit, and the report says, for example, `reached its 80% limit on the
+anthropic 7d window`.
+
 **Retry and fallback.** A child stays on the model its parent chose. When
 the provider is overloaded or unavailable, Pi retries that model 8 times, 5 s
 apart at first and doubling up to 2 min: about 8.6 minutes in all. Longer

@@ -135,6 +135,7 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& (r.stopReason === undefined || typeof r.stopReason === "string") && (r.budgetEnd === undefined || typeof r.budgetEnd === "string")
 		&& strings(r.inbox) && strings(r.owed) && strings(r.unread) && strings(r.tools) && validSteps(r.fallbacks) && strings(r.after)
 		&& (r.afterReports === undefined || typeof r.afterReports === "boolean")
+		&& (r.maxWindowPct === undefined || (typeof r.maxWindowPct === "number" && r.maxWindowPct >= 1 && r.maxWindowPct <= 100))
 		&& (r.panel === undefined || typeof r.panel === "string") && (r.panelDone === undefined || typeof r.panelDone === "boolean")
 		&& (r.check === undefined || validCheck(r.check)) && (r.checked === undefined || validChecked(r.checked))
 		&& (r.runCost === undefined || (Number.isFinite(r.runCost) && r.runCost >= 0))

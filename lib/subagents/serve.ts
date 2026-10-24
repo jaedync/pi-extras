@@ -18,7 +18,9 @@ import { HOST_VERSION, type HostActivity, type HostPorts, type HostState, type H
 import type { Route } from "./deliver.ts";
 import type { Launcher } from "./types.ts";
 import { childInstructions, conversationDigest, entriesUntil, rosterText } from "./format.ts";
+import { sharedLimitStore } from "../limit-store.ts";
 import { hiddenFrom } from "./hidden.ts";
+import { windowReading } from "./windows.ts";
 import { closingHost, parkHost } from "./host.ts";
 import { openHost } from "./host-state.ts";
 import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings } from "./models.ts";
@@ -131,6 +133,7 @@ function mainToolContext(scope: Scope, live: LivePi, team: () => HostTeam, curre
 		allowed: scope.allowed, fallbackModel: scope.fallbackModel, thinking: scope.thinking, modelTable: modelTable(scope.allowed, scope.thinking),
 		guide: scope.guide, replyTimeoutMs: scope.config.replyTimeoutMs, now: Date.now, currentGroup,
 		childTools: (readOnly) => childToolNames(live.activeTools(), readOnly, scope.config.childToolsExclude),
+		windows: (model) => windowReading((provider) => sharedLimitStore().get(provider), model),
 	};
 }
 
@@ -179,6 +182,7 @@ function childLauncher(inputs: LauncherInputs): Launcher {
 			name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < scope.config.maxDepth,
 			...(record.worktree ? { worktree: record.worktree } : {}),
 			budget: { ...(record.maxMinutes !== undefined ? { minutes: record.maxMinutes } : {}), ...(record.maxCost !== undefined ? { cost: record.maxCost } : {}) },
+			...(record.maxWindowPct !== undefined ? { windowPct: record.maxWindowPct } : {}),
 			roster: rosterText(record.name, team().list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model }))),
 			...(record.fork ? { conversation: conversationDigest(entriesUntil(live.branch(), record.createdAt), describeTool) } : {}),
 		}),

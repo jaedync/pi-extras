@@ -5,6 +5,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MAX_AFTER, stopOrder, waitingFor } from "./after.ts";
+import { windowUnavailable, type WindowLookup } from "./windows.ts";
 import { memberName, PANEL_MAX, PANEL_MIN, PANEL_MODES, panelName, type PanelMode } from "./panel.ts";
 import { CHECK_TIMEOUT_MINUTES, MAX_CHECK_CHARS, MAX_CHECK_TIMEOUT_MINUTES, MAX_FIX_ROUNDS, mergeCheck } from "./checks.ts";
 import { allowedTools, checkAllowlist } from "./allowlist.ts";
@@ -40,6 +41,8 @@ export interface ToolContext {
 	currentGroup?(): string | undefined;
 	/** The tools a child could have before any allowlist: the parent's active tools minus the exclusions. */
 	childTools?(readOnly: boolean): string[];
+	/** The usage window that governs `model` now, or why there is no reading (windows.ts). */
+	windows?(model: string): WindowLookup;
 }
 
 type Result = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> | undefined };
@@ -69,6 +72,7 @@ const subagentParams = Type.Object({
 	wait: Type.Optional(Type.Boolean({ description: "Block until it finishes and return its report. Only for short checks." })),
 	maxMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: MAX_RUN_MINUTES, description: "Minutes one run may work; at the limit its tools are blocked and it must report. Default from config." })),
 	maxCost: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "US dollars one run may spend; at the limit its tools are blocked and it must report. Default from config." })),
+	maxWindowPct: Type.Optional(Type.Number({ minimum: 1, maximum: 100, description: "Wrap the run up (it must report) when the usage window that governs its model reaches this percent." })),
 	after: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 40 }), { minItems: 1, maxItems: MAX_AFTER, description: "Agents that must end first. It waits queued, then starts with the paths of their reports." })),
 	afterReports: Type.Optional(Type.Boolean({ description: "With after: false gives it only the order and how each agent ended, with no report paths, for an independent opinion. Default true." })),
 	...checkFields("Shell command the harness runs in its directory when a run ends normally, before the report goes up. The report shows the command, exit code and last output lines. Later runs keep it."),
@@ -87,7 +91,7 @@ const stopParams = Type.Object({
 
 interface SubagentInput extends CheckInput {
 	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; isolation?: "shared" | "worktree"; cwd?: string; context?: string; wait?: boolean;
-	maxMinutes?: number; maxCost?: number; tools?: string[]; after?: string[]; afterReports?: boolean; models?: string[]; mode?: PanelMode;
+	maxMinutes?: number; maxCost?: number; maxWindowPct?: number; tools?: string[]; after?: string[]; afterReports?: boolean; models?: string[]; mode?: PanelMode;
 }
 interface CheckInput { check?: string; fixUntilPass?: number; checkTimeoutMinutes?: number }
 interface MessageInput extends CheckInput { to: string; text: string; expectReply?: boolean }
@@ -150,14 +154,31 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 			if (!wanted) throw new Error("No model to run on: name one, or set subagents.defaultModel.");
 			const resolved = resolveModel(wanted, tc.allowed);
 			if (!resolved.ok) throw new Error(resolved.error);
+			const windowNote = windowCheck(tc, [resolved.choice.ref], params.maxWindowPct);
 			const spawned = tc.team.spawn(spawnRequest(tc, parent, params, resolved.choice, {}));
 			if (!spawned.ok) throw new Error(spawned.error);
 			const record = spawned.record;
 			const details = { ...childDetails(record), wait: params.wait === true };
-			if (params.wait !== true) return text(spawnSummary(record, tc.team) + renameNote(record, params), details);
+			if (params.wait !== true) return text(spawnSummary(record, tc.team) + renameNote(record, params) + windowNote, details);
 			return await waitFor(tc, { name: record.name, parent }, details, signal, onUpdate as ((update: Result) => void) | undefined);
 		},
 	} as ToolDefinition;
+}
+
+/**
+ * `maxWindowPct` before a spawn: a window already at the limit refuses it, so
+ * no run starts only to wrap up; a model whose provider gives no reading gets
+ * a note that the limit can't act there. Empty when all is well.
+ */
+function windowCheck(tc: ToolContext, models: readonly string[], limit: number | undefined): string {
+	if (limit === undefined || !tc.windows) return "";
+	const notes: string[] = [];
+	for (const model of models) {
+		const found = tc.windows(model);
+		if ("why" in found) notes.push(windowUnavailable(model, found.why));
+		else if (found.reading.pct >= limit) throw new Error(`The ${found.reading.label} window is at ${found.reading.pct}%, at or over maxWindowPct ${limit}. Raise the limit, choose another model, or wait for the window to reset.`);
+	}
+	return notes.length > 0 ? `\n${notes.join("\n")}` : "";
 }
 
 /** Status Plus finds a child's session through `sessionFile` and counts its usage. */
@@ -188,6 +209,7 @@ function spawnRequest(tc: ToolContext, parent: string, params: SubagentInput, ch
 		...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
 		...(params.maxMinutes !== undefined ? { maxMinutes: params.maxMinutes } : {}),
 		...(params.maxCost !== undefined ? { maxCost: params.maxCost } : {}),
+		...(params.maxWindowPct !== undefined ? { maxWindowPct: params.maxWindowPct } : {}),
 		...(tools ? { tools } : {}),
 		...(after ? { after } : {}),
 		...(afterReports !== undefined ? { afterReports } : {}),
@@ -217,6 +239,7 @@ async function spawnPanel(tc: ToolContext, parent: string, params: SubagentInput
 	});
 	const twice = choices.find((choice, index) => choices.findIndex((other) => other.ref === choice.ref) !== index);
 	if (twice) throw new Error(`The panel names ${twice.ref} twice; each member needs its own model.`);
+	const windowNote = windowCheck(tc, choices.map((choice) => choice.ref), params.maxWindowPct);
 	const panel = panelName(baseName(params.name, params.task), tc.team.list());
 	const requests = choices.map((choice) => ({ choice, name: memberName(panel, choice.model.id) }));
 	const started: AgentRecord[] = [];
@@ -234,7 +257,7 @@ async function spawnPanel(tc: ToolContext, parent: string, params: SubagentInput
 	const how = mode === "parallel" ? "in parallel" : "one after another; each starts when the one before ends and gets no earlier report";
 	const lines = started.map((record) => `- ${record.name} on ${record.model}`);
 	return text([`Started the panel ${panel}: ${started.length} subagents on the same task, ${how}.`, ...lines,
-		"Their reports arrive together as one message when the last one ends, with a line per member: how it ended, its time, its cost and its report path. Talk to a member with message({ to, text })."].join("\n"),
+		"Their reports arrive together as one message when the last one ends, with a line per member: how it ended, its time, its cost and its report path. Talk to a member with message({ to, text })."].join("\n") + windowNote,
 		{ panel, mode, wait: false, children: started.map(childDetails) });
 }
 

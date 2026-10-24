@@ -17,6 +17,12 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 ### Added
 
+- Subagents: `maxWindowPct` wraps a child's run up when the usage window
+  that governs its model reaches that percent (anthropic, opencode-go and
+  openai-codex readings from Status Plus). A spawn whose window is already at
+  the limit is refused; for a provider with no reading, the spawn result says
+  so.
+
 - Subagents: panels. `models: [...]` on `subagent` runs the same task on each
   model as its own subagent (`<name>-<model>`, own budgets), in parallel or
   with `mode: "sequential"` one after another without earlier reports. The

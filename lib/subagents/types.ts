@@ -153,6 +153,8 @@ export interface AgentRecord {
 	after?: string[];
 	/** False when its first prompt gives only how its after agents ended, with no report or session path (an independent opinion); never saved as true. */
 	afterReports?: boolean;
+	/** The run wraps up when the usage window that governs its model reaches this percent (windows.ts). */
+	maxWindowPct?: number;
 	/** The panel it belongs to (panel.ts): its report waits for the other members, and the parent gets one message. */
 	panel?: string;
 	/** Its panel's message went out; later runs report on their own. */
@@ -230,6 +232,7 @@ export interface SpawnRequest {
 	afterReports?: boolean;
 	/** The panel it joins (panel.ts). */
 	panel?: string;
+	maxWindowPct?: number;
 	check?: CheckSpec;
 }
 

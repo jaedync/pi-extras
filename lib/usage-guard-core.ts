@@ -511,7 +511,7 @@ export const OPENAI_METER_REASON = "Sign in with ChatGPT reports no usage. Its C
 /** Why a provider that can be polled may still have no reading, when that is not just a pending poll. */
 const PROVIDER_REASONS: Readonly<Record<string, string>> = { openai: OPENAI_METER_REASON };
 
-const missingReason = (provider: string): string =>
+export const missingReason = (provider: string): string =>
 	PROVIDER_REASONS[provider] ?? (Object.hasOwn(LIMIT_POLLERS, provider) ? NO_READING_REASON : NO_ENDPOINT_REASON);
 
 /**
