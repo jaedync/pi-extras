@@ -52,6 +52,8 @@ export interface FooterRow {
 	note?: string;
 	/** Every model of the provider costs nothing: its row shows at $0.00 once it has done work. */
 	free?: boolean;
+	/** The selected model's provider: its limits show before its first request. */
+	selected?: boolean;
 }
 
 export interface FooterModel {
@@ -348,9 +350,13 @@ export function renderFooter(model: FooterModel, width: number, paint: Painter):
 	return footerLayout(model, width, paint).lines;
 }
 
-/** A paid provider shows once it costs something; a free one once it has sent or made tokens (a failed request made none). */
+/**
+ * A paid provider shows once it costs something; a free one once it has sent or made tokens (a failed request made none).
+ * The selected paid provider shows as soon as it has limits, so a switch to it shows its headroom before the first request.
+ */
 function shown(row: FooterRow): boolean {
 	if (row.cost > 0) return true;
+	if (row.selected && !row.free && row.entries.length > 0) return true;
 	return Boolean(row.free) && (row.tokens.input > 0 || row.tokens.output > 0);
 }
 

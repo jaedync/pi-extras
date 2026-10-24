@@ -23,6 +23,7 @@ import {
 	isUnmetered,
 	normalizeGuardConfig,
 	pendingWarnings,
+	unavailableLimits,
 	usageReport,
 	warningApplies,
 	warningMessage,
@@ -79,11 +80,28 @@ function activeModel(ctx: Pick<ExtensionContext, "model" | "sessionManager" | "m
 	return { provider: model?.provider, id: model?.id, ...(isUnmetered(model?.cost) ? { unmetered: true } : {}) };
 }
 
-/** Scoped models a subagent can use without touching any limit. */
-function unmeteredScoped(ctx: Pick<ExtensionContext, "scopedModels">): string[] {
-	return (ctx.scopedModels ?? [])
-		.filter((scoped) => isUnmetered(scoped.model.cost))
-		.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
+interface InScopeModel { provider: string; id: string; cost?: Parameters<typeof isUnmetered>[0] }
+
+/**
+ * The models this session or its subagents may use: the scoped models, or,
+ * when none are scoped, every model with credentials. A registry that fails
+ * to list leaves the scoped list, which may be empty.
+ */
+function modelsInScope(ctx: Pick<ExtensionContext, "scopedModels" | "modelRegistry">): InScopeModel[] {
+	const scoped = (ctx.scopedModels ?? []).map((entry) => entry.model);
+	if (scoped.length) return scoped;
+	try {
+		const registry = ctx.modelRegistry as { getAvailable?: () => InScopeModel[] } | undefined;
+		return typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
+	} catch (error) {
+		operationalError(LOG_FILE, "usage-guard", `model list failed: ${(error as Error)?.message ?? "error"}`);
+		return [];
+	}
+}
+
+/** Models in scope a subagent can use without touching any limit. */
+function unmeteredScoped(models: readonly InScopeModel[]): string[] {
+	return models.filter((model) => isUnmetered(model.cost)).map((model) => `${model.provider}/${model.id}`);
 }
 
 function idle(ctx: ExtensionContext): boolean {
@@ -153,6 +171,13 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		}
 	}
 
+	/** A first, unforced read for each provider the store has no snapshot of. */
+	async function readUnknown(providers: ReadonlyArray<string | undefined>): Promise<void> {
+		const known = new Set(store.entries().map(([provider]) => provider));
+		const unknown = new Set(providers.filter((provider): provider is string => Boolean(provider) && !known.has(provider!)));
+		await Promise.all([...unknown].map((provider) => store.refresh(provider, false)));
+	}
+
 	function evaluate(ctx: ExtensionContext, deliverWarnings = false): CustomMessage[] {
 		try {
 			const snapshots = store.entries();
@@ -217,21 +242,20 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			if (params.clearBudget) setBudget(undefined);
 			if (params.setBudget) setBudget({ window: params.setBudget.window.trim(), pct: params.setBudget.pct });
 			const model = activeModel(ctx);
+			const inScope = params.all ? modelsInScope(ctx) : [];
 			if (params.refresh) {
 				const providers = params.all ? store.entries().map(([provider]) => provider) : [];
 				if (model.provider && !providers.includes(model.provider)) providers.push(model.provider);
 				await Promise.all(providers.map((provider) => store.refresh(provider, true)));
 			}
-			if (params.all) {
-				// Status Plus polls only providers this session has used; a subagent may run on
-				// any scoped model, so its limits must be known before it starts. Not forced:
-				// the shared poll gap still holds, and a provider with no poller is skipped.
-				const known = new Set(store.entries().map(([provider]) => provider));
-				const scoped = new Set((ctx.scopedModels ?? []).map((entry) => entry.model.provider));
-				await Promise.all([...scoped].filter((provider) => !known.has(provider)).map((provider) => store.refresh(provider, false)));
-			}
+			// Status Plus polls only providers this session has used or selected; the active one may not
+			// be read yet, and a subagent may run on any model in scope, so its limits must be known before
+			// it starts. Not forced: the shared poll gap still holds, and a provider with no poller is skipped.
+			await readUnknown([model.provider, ...inScope.filter((entry) => !isUnmetered(entry.cost)).map((entry) => entry.provider)]);
 			const collected = await collectDollars(ctx, params.refresh === true);
-			const report = usageReport(store.entries(), model, config, budget, now(), params.all === true, undefined, collected, unmeteredScoped(ctx));
+			const snapshots = store.entries();
+			const report = usageReport(snapshots, model, config, budget, now(), params.all === true, undefined, collected,
+				unmeteredScoped(inScope), unavailableLimits(inScope.map((entry) => ({ provider: entry.provider, ...(isUnmetered(entry.cost) ? { unmetered: true } : {}) })), snapshots));
 			return { content: [{ type: "text", text: JSON.stringify(report, null, 1) }], details: report };
 		},
 	}), "usage"));
@@ -264,6 +288,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 				return ctx.ui.notify(parsed ? `Session budget: ${parsed.window} at ${parsed.pct}%` : "Session budget cleared", "info");
 			}
 			if (words.length) return ctx.ui.notify(USAGE_HELP, "warning");
+			await readUnknown([activeModel(ctx).provider]);
 			const collected = await collectDollars(ctx, false);
 			const report = usageReport(store.entries(), activeModel(ctx), config, budget, now(), false, undefined, collected);
 			deliver(`Current usage limits:\n${JSON.stringify(report, null, 1)}`, idle(ctx) ? "nextTurn" : "steer", report);

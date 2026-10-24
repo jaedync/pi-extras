@@ -2,6 +2,22 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Status Plus: when you select a model, the footer shows that provider's
+  limits at once, before the model uses tokens. The provider gets a row at
+  $0.00, and Status Plus reads its limits on the switch instead of at the next
+  30-second tick.
+- Usage Guard: a `usage` call or `/usage` reads the active provider's limits
+  first when there is no snapshot, so the first report is not empty. With
+  `all: true`, the tool reads every provider in scope, also when no models are
+  scoped (then every model with credentials). A new `limitsUnavailable` field
+  names each paid provider that still has no reading, and why. OpenAI through
+  Sign in with ChatGPT is one: it gives apps no usage endpoint and no
+  rate-limit headers.
+
 ## 0.27.0 - 2026-10-22
 
 ### Added

@@ -190,6 +190,14 @@ them changes, and shows the change at the next entry in the session. Pi uses
 a changed file only after `/reload`. Thus, after you edit a settings file, use
 `/reload` so that Pi and the figure agree.
 
+**Rows for providers.** The footer has a row for each provider that did work
+in the session: a paid provider when it costs something, a free one when it
+has sent or made tokens. The selected model's provider also gets a row as
+soon as it has limits, before its first request. When you select a model,
+Status Plus reads that provider's limits at once. A poll that another Pi
+process made recently counts, so the switch usually does not ask the provider
+again.
+
 **A click on a status line.** Status Plus shows the status of each other
 extension (`ctx.ui.setStatus(key, text)`) on a line of its own below the grid.
 In fullscreen mode, a left click on one of these lines sends an event on Pi's
@@ -481,9 +489,15 @@ for what is kept in memory.
 
 ## Usage Guard
 
-Usage Guard reads the limit snapshots Status Plus polls. It never polls limits
-on its own, except for a `usage` call with `refresh: true` or `all: true`.
-`all: true` polls each scoped model's provider that has no snapshot yet. For
+Usage Guard reads the limit snapshots Status Plus polls. It polls limits on
+its own only for a provider that has no snapshot yet, and for `refresh: true`.
+A `usage` call or `/usage` reads the active model's provider first when it has
+no snapshot. `all: true` also reads each provider of a scoped model (with no
+scoped models, of each model that has credentials). These first reads keep the
+shared poll gap. With `all: true`, `limitsUnavailable` names each paid
+provider in scope that still has no reading, and the reason. A provider with
+no usage endpoint stays there: for example, OpenAI through Sign in with
+ChatGPT reports no plan usage to apps. For
 dollar figures, a `usage` call or `/usage` also reads local session files and,
 when set up, Tokenfold and OpenRouter (see [Dollar figures](#dollar-figures)).
 `PI_OFFLINE` stops the Tokenfold and OpenRouter requests. Only windows that
@@ -617,7 +631,7 @@ a top-level `dollars` summary.
   the weekly window 50%. The tool gives the remaining dollars per model
   (`perModel`) for the scoped models, the active model, and the models used
   in the last 7 days. With `all: true`, the tool polls a scoped model's
-  provider that this session has not used yet. The usage endpoint does not report the plan, so set it.
+  provider that has no snapshot yet. The usage endpoint does not report the plan, so set it.
 - **Monthly meters (Claude Enterprise, extra usage):** the provider's own
   spend and limit, the calendar days and business days (Monday to Friday,
   local time zone) until the reset, and `perBusinessDayUsd`. That share

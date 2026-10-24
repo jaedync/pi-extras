@@ -210,8 +210,11 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		return snapshot.entries.some((entry) => entry.exhausted && (entry.resetMs === undefined || entry.resetMs > Date.now()));
 	}
 
-	function footerRows(stats: SessionStats): FooterRow[] {
-		return [...stats.providers.entries()].map(([id, { cost, airtimeMs, inputTokens, outputTokens }]) => ({
+	function footerRows(stats: SessionStats, selected: string | undefined): FooterRow[] {
+		const providers = [...stats.providers.entries()];
+		// The transcript knows only providers that did work; the selected one shows its limits before its first request.
+		if (selected && !stats.providers.has(selected)) providers.push([selected, { ...EMPTY_PROVIDER }]);
+		return providers.map(([id, { cost, airtimeMs, inputTokens, outputTokens }]) => ({
 			id,
 			cost,
 			airtimeMs,
@@ -220,6 +223,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			...(id === "opencode-go" && openCodeGoUsesZenBalance() ? { billingNote: GO_BILLING_NOTE } : {}),
 			...(id === "opencode" ? { note: ZEN_NOTE } : {}),
 			...(free.has(id) ? { free: true } : {}),
+			...(id === selected ? { selected: true } : {}),
 		}));
 	}
 
@@ -323,8 +327,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	function footerModel(ctx: ExtensionContext, footerData: FooterData): FooterModel {
 		const stats = sessionStats(ctx);
 		const now = Date.now();
-		const rows = footerRows(stats);
 		const facts = readSessionFacts(ctx);
+		const rows = footerRows(stats, facts.routed?.provider);
 		const usage = facts.usage;
 		const windowTokens = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 		// The share of where Pi compacts, so 100 percent means it compacts now; the window when it never does.
@@ -663,6 +667,16 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		if (inflight && !inflight.endedMs) inflight.endedMs = Date.now();
 		scheduleRefresh(ctx);
 		schedulePolls(ctx);
+	});
+
+	// The new selection's limits, now rather than on the next timer tick: a fresh shared poll is read
+	// at once, and an own poll keeps the usual gap.
+	pi.on("model_select", async (_event, ctx) => {
+		latestCtx = ctx;
+		const provider = routedModel(ctx)?.provider;
+		requestFooterRender?.();
+		// Not awaited: a slow usage endpoint must not hold up the switch. The poll repaints when it lands.
+		if (provider) void refreshProviderLimits(provider, ctx);
 	});
 
 	// A compaction is billed but ends no turn; show its charge now rather than on the next timer tick.

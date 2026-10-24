@@ -431,6 +431,8 @@ export interface UsageReport {
 	limits: UsageReportLimit[];
 	/** Scoped models with zero token cost: subagent choices that use no limit. */
 	unmeteredModels?: string[];
+	/** Paid providers in scope with no limit reading, and why; listed only with includeAll. */
+	limitsUnavailable?: Record<string, string>;
 	notes: string[];
 	dollars?: DollarsSummary;
 }
@@ -501,6 +503,27 @@ function reportLimitFigures(
 	};
 }
 
+export const NO_ENDPOINT_REASON = "It has no usage endpoint to poll. Limits show only if its responses carry rate-limit headers.";
+export const NO_READING_REASON = "No reading yet: the poll is pending, failed, or waits for its gap. Call again later with refresh: true.";
+
+/**
+ * Paid providers in scope that have no limit snapshot, with the reason. A
+ * provider whose scoped models are all unmetered is left out: it has no limit.
+ */
+export function unavailableLimits(
+	models: ReadonlyArray<{ provider: string; unmetered?: boolean }>,
+	snapshots: Iterable<[string, LimitSnapshot]>,
+): Record<string, string> {
+	const known = new Set([...snapshots].map(([provider]) => provider));
+	const metered = new Set(models.filter((model) => !model.unmetered).map((model) => model.provider));
+	const result: Record<string, string> = {};
+	for (const provider of [...metered].sort()) {
+		if (known.has(provider)) continue;
+		result[provider] = Object.hasOwn(LIMIT_POLLERS, provider) ? NO_READING_REASON : NO_ENDPOINT_REASON;
+	}
+	return result;
+}
+
 /** What the report cannot show in its figures: missing data, approximate or outdated readings, a budget that matches nothing. */
 function reportNotes(
 	limits: readonly UsageReportLimit[],
@@ -508,6 +531,7 @@ function reportNotes(
 	budget: SessionBudget | undefined,
 	sawActiveProvider: boolean,
 	unmeteredModels: readonly string[],
+	unavailable: Readonly<Record<string, string>>,
 ): string[] {
 	const notes: string[] = [];
 	const provider = model.provider ?? "the active provider";
@@ -528,6 +552,9 @@ function reportNotes(
 	if (unmeteredModels.length) {
 		notes.push("unmeteredModels have zero token cost and no usage limits: a subagent on one of them uses no limit or budget.");
 	}
+	if (Object.keys(unavailable).length) {
+		notes.push("limitsUnavailable lists paid providers in scope with no limit reading. Their headroom is unknown, not zero.");
+	}
 	if (limits.some((limit) => limit.approximate)) notes.push(APPROXIMATE_NOTE);
 	if (limits.some((limit) => limit.status === "reset")) notes.push(RESET_PASSED_NOTE);
 	if (budget && !limits.some((limit) => limit.budgetPct !== undefined)) {
@@ -547,6 +574,8 @@ export function usageReport(
 	dollars?: CollectedDollars,
 	/** Scoped models with zero token cost, as `provider/id`; listed only with includeAll. */
 	unmeteredModels: readonly string[] = [],
+	/** From unavailableLimits(); listed only with includeAll. */
+	unavailable: Readonly<Record<string, string>> = {},
 ): UsageReport {
 	const limits: UsageReportLimit[] = [];
 	const snapshotAgeSeconds: Record<string, number> = {};
@@ -563,13 +592,15 @@ export function usageReport(
 		}
 	}
 	const listed = includeAll ? [...unmeteredModels] : [];
-	const notes = reportNotes(limits, model, budget, sawActiveProvider, listed);
+	const missing = includeAll ? { ...unavailable } : {};
+	const notes = reportNotes(limits, model, budget, sawActiveProvider, listed, missing);
 	// Notes go before the figures: a model reads the JSON in order and must know which limits are its own first.
 	const report: UsageReport = {
 		asOf: new Date(now).toISOString(),
 		model,
 		notes,
 		...(listed.length ? { unmeteredModels: listed } : {}),
+		...(Object.keys(missing).length ? { limitsUnavailable: missing } : {}),
 		warnings: config.enabled ? "on" : "off",
 		budget: budget ?? null,
 		snapshotAgeSeconds,

@@ -180,13 +180,17 @@ test("a session budget fires once at its own threshold and marks the provider ho
 
 test("the tool reports governing windows, refreshes on request and honours all", async () => {
 	const { pi, store, ctx } = setup({ provider: "anthropic", id: "claude-fable-5-1" });
-	const refreshed: string[] = [];
-	store.setRefresher(async (provider) => { refreshed.push(provider); anthropicSnapshot(store, 31, 62); });
+	const refreshed: Array<[string, boolean]> = [];
+	let pollWorks = false;
+	store.setRefresher(async (provider, force) => { refreshed.push([provider, force]); if (pollWorks) anthropicSnapshot(store, 31, 62); });
 	await pi.handlers.get("session_start")!({}, ctx);
 	const empty = JSON.parse((await pi.tool!.execute("t0", {}, undefined, undefined, ctx)).content[0].text);
+	// The active provider is read once, unforced, before the first report; this poll found nothing.
+	assert.deepEqual(refreshed, [["anthropic", false]]);
 	assert.match(empty.notes[0], /No usage data yet/);
+	pollWorks = true;
 	const result = await pi.tool!.execute("t1", { refresh: true }, undefined, undefined, ctx);
-	assert.deepEqual(refreshed, ["anthropic"]);
+	assert.deepEqual(refreshed, [["anthropic", false], ["anthropic", true]]);
 	const report = JSON.parse(result.content[0].text);
 	assert.deepEqual(report.limits.map((limit: { window: string }) => limit.window), ["5h", "7d", "7d-fable"]);
 	assert.equal(report.limits[2].usedPct, 62);
@@ -402,4 +406,40 @@ test("all: true polls the scoped models' providers that have no snapshot, so a G
 	const go = report.limits.find((limit: { provider: string }) => limit.provider === "opencode-go");
 	assert.deepEqual(go.dollars.perModel, { "glm-5.3": { limitUsd: 3, remainingUsd: 1.5 } });
 	assert.deepEqual(report.dollars.providers["opencode-go"].remainingUsdByModel, { "glm-5.3": 1.5 });
+});
+
+test("all: true with no scoped models reads every model with credentials and names the paid providers with no reading", async () => {
+	const { pi, store, ctx } = setup();
+	const available = [
+		{ provider: "anthropic", id: "claude-sonnet-5", cost: { input: 3, output: 15 } },
+		{ provider: "opencode-go", id: "glm-5.3", cost: { input: 1, output: 2 } },
+		{ provider: "openai", id: "gpt-6-luna", cost: { input: 1, output: 4 } },
+		{ provider: "fw01", id: "local", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+	];
+	const unscoped = { ...ctx, scopedModels: [], modelRegistry: { getAvailable: () => available, getApiKeyForProvider: async () => undefined } };
+	anthropicSnapshot(store, 40);
+	const refreshed: string[] = [];
+	// The Go poll finds nothing; openai has no poller, so the store never gets a snapshot for it.
+	store.setRefresher(async (provider) => { refreshed.push(provider); });
+	await pi.handlers.get("session_start")!({}, unscoped);
+	const report = JSON.parse((await pi.tool!.execute("t1", { all: true }, undefined, undefined, unscoped)).content[0].text);
+	assert.deepEqual(refreshed.sort(), ["openai", "opencode-go"]);
+	assert.deepEqual(Object.keys(report.limitsUnavailable), ["openai", "opencode-go"]);
+	assert.match(report.limitsUnavailable.openai, /no usage endpoint/);
+	assert.match(report.limitsUnavailable["opencode-go"], /No reading yet/);
+	assert.deepEqual(report.unmeteredModels, ["fw01/local"]);
+	assert.ok(report.notes.some((note: string) => /limitsUnavailable/.test(note)));
+	// Without all, the report stays on the active model.
+	const own = JSON.parse((await pi.tool!.execute("t2", {}, undefined, undefined, unscoped)).content[0].text);
+	assert.equal(own.limitsUnavailable, undefined);
+});
+
+test("/usage reads the active provider first when the store has no snapshot of it", async () => {
+	const { pi, store, ctx } = setup();
+	const refreshed: Array<[string, boolean]> = [];
+	store.setRefresher(async (provider, force) => { refreshed.push([provider, force]); anthropicSnapshot(store, 31); });
+	await pi.handlers.get("session_start")!({}, ctx);
+	await pi.command!.handler("", ctx);
+	assert.deepEqual(refreshed, [["anthropic", false]]);
+	assert.match(pi.sent[0].content, /"window": "7d"/);
 });
