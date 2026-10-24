@@ -67,6 +67,7 @@ const subagentParams = Type.Object({
 	maxMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: MAX_RUN_MINUTES, description: "Minutes one run may work; at the limit its tools are blocked and it must report. Default from config." })),
 	maxCost: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "US dollars one run may spend; at the limit its tools are blocked and it must report. Default from config." })),
 	after: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 40 }), { minItems: 1, maxItems: MAX_AFTER, description: "Agents that must end first. It waits queued, then starts with the paths of their reports." })),
+	afterReports: Type.Optional(Type.Boolean({ description: "With after: false gives it only the order and how each agent ended, with no report paths, for an independent opinion. Default true." })),
 	...checkFields("Shell command the harness runs in its directory when a run ends normally, before the report goes up. The report shows the command, exit code and last output lines. Later runs keep it."),
 }, { additionalProperties: false });
 
@@ -83,7 +84,7 @@ const stopParams = Type.Object({
 
 interface SubagentInput extends CheckInput {
 	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; isolation?: "shared" | "worktree"; cwd?: string; context?: string; wait?: boolean;
-	maxMinutes?: number; maxCost?: number; tools?: string[]; after?: string[];
+	maxMinutes?: number; maxCost?: number; tools?: string[]; after?: string[]; afterReports?: boolean;
 }
 interface CheckInput { check?: string; fixUntilPass?: number; checkTimeoutMinutes?: number }
 interface MessageInput extends CheckInput { to: string; text: string; expectReply?: boolean }
@@ -159,6 +160,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 				...(params.maxCost !== undefined ? { maxCost: params.maxCost } : {}),
 				...(tools ? { tools } : {}),
 				...(params.after ? { after: params.after } : {}),
+				...(params.afterReports !== undefined ? { afterReports: params.afterReports } : {}),
 				...(check ? { check: mergeCheck(check) } : {}),
 				task: params.task.trim(), parent, model: resolved.choice.ref, readOnly: params.readOnly === true, fork,
 				blocking: params.wait === true, ...(params.name ? { name: params.name } : {}), ...(thinking ? { thinking } : {}),

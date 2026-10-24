@@ -212,6 +212,7 @@ export class Team implements HostTeam {
 		if (badBudget) return { ok: false, error: badBudget };
 		const badAfter = request.after?.length ? afterError({ ...request, after: request.after }, this.list(), () => this.knownNames()) : undefined;
 		if (badAfter) return { ok: false, error: badAfter };
+		if (request.afterReports !== undefined && !request.after?.length) return { ok: false, error: "afterReports goes with after: it says whether the agents named in after pass on their reports." };
 		const after = request.after?.length ? [...new Set(request.after)] : undefined;
 		const badCheck = request.check ? checkError(request.check, { readOnly: request.readOnly || parent?.readOnly === true }) : undefined;
 		if (badCheck) return { ok: false, error: badCheck };
@@ -236,6 +237,7 @@ export class Team implements HostTeam {
 			...(maxMinutes !== undefined ? { maxMinutes } : {}),
 			...(maxCost !== undefined ? { maxCost } : {}),
 			...(after ? { after } : {}),
+			...(after && request.afterReports === false ? { afterReports: false } : {}),
 			...(request.check ? { check: mergeCheck(request.check) } : {}),
 		};
 		this.put(record);

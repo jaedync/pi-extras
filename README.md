@@ -1804,7 +1804,11 @@ until each of these agents is idle, failed, stopped or interrupted. It does
 not use a `maxConcurrent` slot while it waits, and its row shows `after impl`.
 Its time budget starts when it starts. Its first prompt then tells how each
 agent ended and gives the path of each report, but not the report text. It
-also tells when an agent finished but its check did not pass. Each name must
+also tells when an agent finished but its check did not pass. With
+`afterReports: false`, the first prompt gives only the order and how each
+agent ended, with no report path and no session path. Use it for an
+independent second opinion that must not read the first agent's work. It
+needs `after`, and `index.json` keeps it. Each name must
 be an agent of the team. A name is refused when that agent can't end before
 the agent that starts the child, because each would wait for the other.
 Examples are the agent that starts the child, an agent above it, and a queued

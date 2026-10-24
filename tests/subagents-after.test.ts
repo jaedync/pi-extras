@@ -45,6 +45,29 @@ test("a spawn after another agent stays queued until it ends, then starts with i
 	} finally { await h.done(); }
 });
 
+test("afterReports: false starts the spawn with the order and how each agent ended, but no report or session path", async () => {
+	const h = onDisk();
+	try {
+		const impl = h.spawn("implement it", { name: "impl" });
+		const blind = h.spawn("solve it on your own", { name: "blind", after: ["impl"], afterReports: false });
+		assert.equal(h.team.get(blind)!.afterReports, false, "on the record, so a restore keeps it");
+		await tick();
+		h.lastCall(impl).finish("Implemented.");
+		await tick(); await tick();
+		const prompt = h.lastCall(blind).text;
+		assert.ok(prompt.includes("- impl finished."), prompt);
+		assert.doesNotMatch(prompt, /Report:|report\.md|session|\.jsonl|Read their reports/, "no path to read the other agent's work by");
+		assert.ok(!prompt.includes("Implemented."));
+	} finally { await h.done(); }
+});
+
+test("afterReports needs after", () => {
+	const h = teamHarness();
+	const result = h.team.spawn({ task: "x", parent: "main", model: "m", readOnly: false, fork: false, blocking: false, afterReports: false });
+	assert.equal(result.ok, false);
+	assert.match(result.ok ? "" : result.error, /afterReports goes with after/);
+});
+
 test("after is checked: unknown names, the spawner, and agents the spawner waits on are refused", async () => {
 	const h = teamHarness({ maxDepth: 3 });
 	const lead = h.spawn("lead the work", { name: "lead" });
@@ -225,13 +248,14 @@ test("after is kept in the index and a restored spawn that never ran waits again
 	try {
 		const h = teamHarness({ sessionDir: dir });
 		h.spawn("first", { name: "first" });
-		h.spawn("later", { name: "later", after: ["first"] });
+		h.spawn("later", { name: "later", after: ["first"], afterReports: false });
 		await tick();
 		const index = new ChildIndex(dir, "parent", dir);
 		index.save(h.team.list());
 		await h.team.close();
 		const loaded = new ChildIndex(dir, "parent", dir).load(() => undefined);
 		assert.deepEqual(loaded.find((record) => record.name === "later")?.after, ["first"]);
+		assert.equal(loaded.find((record) => record.name === "later")?.afterReports, false, "afterReports is kept too");
 		const again = teamHarness();
 		again.team.restore([{ ...loaded.find((r) => r.name === "first")!, state: "interrupted" }, { ...loaded.find((r) => r.name === "later")!, state: "interrupted" }]);
 		assert.deepEqual(await again.team.send("main", "first", "Continue"), { ok: true, delivered: "resumed" });

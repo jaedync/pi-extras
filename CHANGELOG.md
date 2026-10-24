@@ -17,6 +17,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 ### Added
 
+- Subagents: `afterReports: false` on a spawn with `after`. The new child is
+  told only how each agent before it ended, with no report or session path, so
+  it gives an independent opinion.
+
 - Subagents: a `clock` tool for every child, also a read-only one. It gives
   the time now and, with a time budget, the work minutes used and left and the
   end time.

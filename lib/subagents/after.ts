@@ -199,17 +199,23 @@ function ended(record: AgentRecord): string {
 	}
 }
 
-function endedLine(name: string, record: AgentRecord | undefined): string {
+function endedLine(name: string, record: AgentRecord | undefined, reports: boolean): string {
 	if (!record) return `- ${name} is no longer known.`;
+	if (!reports) return `- ${name} ${ended(record)}.`;
 	const report = reportOf(record);
 	const where = report ? report : record.sessionFile ? `No report; its session: ${record.sessionFile}` : "No report.";
 	return `- ${name} ${ended(record)}. ${where}`;
 }
 
-/** The block a held spawn's first prompt ends with: how each after agent ended and where its report is. */
+/**
+ * The block a held spawn's first prompt ends with: how each after agent ended
+ * and where its report is. With `afterReports: false` only how each ended, so
+ * an independent opinion has no path to the others' work.
+ */
 export function afterBlock(record: AgentRecord, get: Lookup): string {
-	const lines = (record.after ?? []).map((name) => endedLine(name, get(name)));
-	return ["## Agents you started after", "You started when these had ended. Read their reports as you need them.", ...lines].join("\n");
+	const reports = record.afterReports !== false;
+	const lines = (record.after ?? []).map((name) => endedLine(name, get(name), reports));
+	return ["## Agents you started after", reports ? "You started when these had ended. Read their reports as you need them." : "You started when these had ended. Do your task on your own; their reports are not given to you.", ...lines].join("\n");
 }
 
 /**

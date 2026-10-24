@@ -151,6 +151,8 @@ export interface AgentRecord {
 	fallbacks?: FallbackStep[];
 	/** Agents that must end before its first run starts (after.ts); on the record, so a restore or /reload keeps the wait. */
 	after?: string[];
+	/** False when its first prompt gives only how its after agents ended, with no report or session path (an independent opinion); never saved as true. */
+	afterReports?: boolean;
 	/** The command the harness runs when a run ends normally, before its report goes up (checks.ts); kept for later runs. */
 	check?: CheckSpec;
 	/** What the latest check found; a report shows only its own run's. */
@@ -220,6 +222,8 @@ export interface SpawnRequest {
 	maxCost?: number;
 	/** Agents that must end before it starts (after.ts). */
 	after?: string[];
+	/** False: its first prompt names how the after agents ended, but not where their reports are. */
+	afterReports?: boolean;
 	check?: CheckSpec;
 }
 

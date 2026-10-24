@@ -134,6 +134,7 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& [r.maxMinutes, r.maxCost].every((limit) => limit === undefined || (typeof limit === "number" && Number.isFinite(limit) && limit > 0))
 		&& (r.stopReason === undefined || typeof r.stopReason === "string") && (r.budgetEnd === undefined || typeof r.budgetEnd === "string")
 		&& strings(r.inbox) && strings(r.owed) && strings(r.unread) && strings(r.tools) && validSteps(r.fallbacks) && strings(r.after)
+		&& (r.afterReports === undefined || typeof r.afterReports === "boolean")
 		&& (r.check === undefined || validCheck(r.check)) && (r.checked === undefined || validChecked(r.checked))
 		&& (r.runCost === undefined || (Number.isFinite(r.runCost) && r.runCost >= 0))
 		&& (r.runStart === undefined || validRunStart(r.runStart))
