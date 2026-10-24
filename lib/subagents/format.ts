@@ -419,11 +419,16 @@ function budgetSection(budget: RunLimits | undefined, windowPct?: number): strin
 	return ["", "## Budget", [`This run may ${limits.join(" and ")}.`, ...time, ...cost, ...window, "At the limit, tool calls are blocked and you must write your final report at once."].join(" ")];
 }
 
+const READ_ONLY_SHELL = "Your bash runs in a sandbox: files are read-only, /tmp is private and empty at each command, there is no network, and you see no other processes. "
+	+ "Commands that only read work: git log, git show and git diff work, and so do rg and builds or tests that write only to /tmp. A write elsewhere fails with \"Read-only file system\"; git may warn that it can't write a lock file.";
+
 /** Appended to a child's system prompt. */
 export function childInstructions(options: {
 	name: string;
 	parent: string;
 	readOnly: boolean;
+	/** Bash in a sandbox that writes nothing (sandbox.ts). */
+	readOnlyShell?: boolean;
 	canSpawn: boolean;
 	worktree?: Worktree;
 	roster: string;
@@ -455,6 +460,7 @@ export function childInstructions(options: {
 			`Edit only inside ${options.worktree.path}. Committing there is optional. Do not edit the parent's checkout.`,
 		] : []),
 		...(options.readOnly ? ["", "## Read-only", "Do not modify files, run commands that change state, or make other side effects."] : []),
+		...(options.readOnlyShell ? [READ_ONLY_SHELL] : []),
 		...(options.canSpawn ? ["", "## Your own subagents", "You may start subagents with the subagent tool. You are not done until they report back; their reports arrive as messages."] : []),
 		...budgetSection(options.budget, options.windowPct),
 		"",

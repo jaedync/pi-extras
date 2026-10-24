@@ -17,6 +17,12 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 ### Added
 
+- Subagents: `readOnlyShell: true` gives a read-only child `bash` in a
+  sandbox: read-only files, a private `/tmp`, no network, no view of other
+  processes, and (on Linux) a seccomp filter that blocks Unix sockets. For
+  `git log`, `git diff`, `rg` and tests that write only to `/tmp`. Where no
+  sandbox runs, the spawn is refused.
+
 - Subagents: `maxWindowPct` wraps a child's run up when the usage window
   that governs its model reaches that percent (anthropic, opencode-go and
   openai-codex readings from Status Plus). A spawn whose window is already at

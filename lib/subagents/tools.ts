@@ -40,7 +40,9 @@ export interface ToolContext {
 	/** Main's current run; children it starts in one run report together. */
 	currentGroup?(): string | undefined;
 	/** The tools a child could have before any allowlist: the parent's active tools minus the exclusions. */
-	childTools?(readOnly: boolean): string[];
+	childTools?(readOnly: boolean, shell?: boolean): string[];
+	/** Why a read-only shell's sandbox can't run here, or undefined when it can (sandbox.ts). */
+	shellProblem?(): string | undefined;
 	/** The usage window that governs `model` now, or why there is no reading (windows.ts). */
 	windows?(model: string): WindowLookup;
 }
@@ -65,6 +67,7 @@ const subagentParams = Type.Object({
 	mode: Type.Optional(Type.Union(PANEL_MODES.map((mode) => Type.Literal(mode)), { description: "With models: parallel (default) starts all at once; sequential starts each when the one before ends, without its report." })),
 	thinking: Type.Optional(thinkingSchema),
 	readOnly: Type.Optional(Type.Boolean({ description: "Only tools that can't change your files or run commands that the model chooses: read, grep, find, ls and known search and fetch tools. Other tools are dropped." })),
+	readOnlyShell: Type.Optional(Type.Boolean({ description: "readOnly plus bash in a sandbox: every file is read-only but a private /tmp, and there is no network. For git log, show and diff, rg, and builds or tests that write only to /tmp." })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Give it only these of the tools it would get; message and clock always stay. Omit for all of them." })),
 	cwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Directory it starts in, absolute or ~/: its tools, AGENTS.md and session work there. Default: your working directory." })),
 	isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")], { description: "Default shared. Use worktree for a separate git worktree of the repository at cwd (default: your working directory), with its current files." })),
@@ -90,7 +93,7 @@ const stopParams = Type.Object({
 }, { additionalProperties: false });
 
 interface SubagentInput extends CheckInput {
-	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; isolation?: "shared" | "worktree"; cwd?: string; context?: string; wait?: boolean;
+	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; readOnlyShell?: boolean; isolation?: "shared" | "worktree"; cwd?: string; context?: string; wait?: boolean;
 	maxMinutes?: number; maxCost?: number; maxWindowPct?: number; tools?: string[]; after?: string[]; afterReports?: boolean; models?: string[]; mode?: PanelMode;
 }
 interface CheckInput { check?: string; fixUntilPass?: number; checkTimeoutMinutes?: number }
@@ -114,11 +117,11 @@ function checkInput(tc: ToolContext, self: string, params: CheckInput): CheckUpd
 }
 
 /** The allowlist for a new child of `parent`: the one asked for, else its parent's, since a restricted parent can't pass on more than it has. */
-function spawnTools(tc: ToolContext, parent: string, requested: readonly string[] | undefined, readOnly: boolean): string[] | undefined {
+function spawnTools(tc: ToolContext, parent: string, requested: readonly string[] | undefined, readOnly: boolean, shell: boolean): string[] | undefined {
 	const limit = tc.team.get(parent)?.tools;
-	const available = allowedTools(tc.childTools?.(readOnly) ?? [], limit);
+	const available = allowedTools(tc.childTools?.(readOnly, shell) ?? [], limit);
 	if (requested === undefined) return limit ? available : undefined;
-	const checked = checkAllowlist(requested, available, readOnly);
+	const checked = checkAllowlist(requested, available, readOnly, shell);
 	if (!checked.ok) throw new Error(checked.error);
 	return checked.tools;
 }
@@ -197,7 +200,10 @@ function spawnRequest(tc: ToolContext, parent: string, params: SubagentInput, ch
 	const thinking = thinkingFor(choice, params.thinking as Thinking | undefined, tc.thinking);
 	const fork = params.context === "fork";
 	if (fork && parent !== MAIN) throw new Error("Only the main session can fork its context.");
-	const tools = spawnTools(tc, parent, params.tools, params.readOnly === true);
+	const shell = params.readOnlyShell === true;
+	const problem = shell ? tc.shellProblem?.() : undefined;
+	if (problem) throw new Error(`readOnlyShell needs a sandbox (bwrap on Linux, sandbox-exec on macOS), and none runs here. ${problem} Use readOnly without a shell.`);
+	const tools = spawnTools(tc, parent, params.tools, params.readOnly === true || shell, shell);
 	const check = checkInput(tc, parent, params);
 	const group = parent === MAIN && !member.panel ? tc.currentGroup?.() : undefined;
 	const name = member.name ?? params.name;
@@ -215,7 +221,7 @@ function spawnRequest(tc: ToolContext, parent: string, params: SubagentInput, ch
 		...(afterReports !== undefined ? { afterReports } : {}),
 		...(member.panel ? { panel: member.panel } : {}),
 		...(check ? { check: mergeCheck(check) } : {}),
-		task: params.task.trim(), parent, model: choice.ref, readOnly: params.readOnly === true, fork,
+		task: params.task.trim(), parent, model: choice.ref, readOnly: params.readOnly === true || shell, ...(shell ? { readOnlyShell: true } : {}), fork,
 		blocking: params.wait === true, ...(name ? { name } : {}), ...(thinking ? { thinking } : {}),
 	};
 }

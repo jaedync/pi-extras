@@ -20,6 +20,7 @@ import type { Launcher } from "./types.ts";
 import { childInstructions, conversationDigest, entriesUntil, rosterText } from "./format.ts";
 import { sharedLimitStore } from "../limit-store.ts";
 import { hiddenFrom } from "./hidden.ts";
+import { readOnlyShellProblem } from "./sandbox.ts";
 import { windowReading } from "./windows.ts";
 import { closingHost, parkHost } from "./host.ts";
 import { openHost } from "./host-state.ts";
@@ -132,7 +133,8 @@ function mainToolContext(scope: Scope, live: LivePi, team: () => HostTeam, curre
 		get team() { return team(); },
 		allowed: scope.allowed, fallbackModel: scope.fallbackModel, thinking: scope.thinking, modelTable: modelTable(scope.allowed, scope.thinking),
 		guide: scope.guide, replyTimeoutMs: scope.config.replyTimeoutMs, now: Date.now, currentGroup,
-		childTools: (readOnly) => childToolNames(live.activeTools(), readOnly, scope.config.childToolsExclude),
+		childTools: (readOnly, shell) => childToolNames(live.activeTools(), readOnly, scope.config.childToolsExclude, shell),
+		shellProblem: readOnlyShellProblem,
 		windows: (model) => windowReading((provider) => sharedLimitStore().get(provider), model),
 	};
 }
@@ -167,7 +169,7 @@ function childLauncher(inputs: LauncherInputs): Launcher {
 		bashChanged: (name, paths, root) => team().bashChanged(name, paths, root),
 		...(scope.config.hideSessions ? { hidden: hiddenFrom(join(agentDir, "sessions", "subagents"), ctx.sessionManager.getSessionFile?.(), team) } : {}),
 		toolsFor: (record) => {
-			const names = allowedTools(childToolNames(live.activeTools(), record.readOnly, scope.config.childToolsExclude), record.tools);
+			const names = allowedTools(childToolNames(live.activeTools(), record.readOnly, scope.config.childToolsExclude, record.readOnlyShell === true), record.tools);
 			return {
 				tools: names,
 				extensionPaths: childExtensionPaths(live.allTools(), names),
@@ -179,7 +181,7 @@ function childLauncher(inputs: LauncherInputs): Launcher {
 			};
 		},
 		instructions: (record) => childInstructions({
-			name: record.name, parent: record.parent, readOnly: record.readOnly, canSpawn: record.depth < scope.config.maxDepth,
+			name: record.name, parent: record.parent, readOnly: record.readOnly, ...(record.readOnlyShell ? { readOnlyShell: true } : {}), canSpawn: record.depth < scope.config.maxDepth,
 			...(record.worktree ? { worktree: record.worktree } : {}),
 			budget: { ...(record.maxMinutes !== undefined ? { minutes: record.maxMinutes } : {}), ...(record.maxCost !== undefined ? { cost: record.maxCost } : {}) },
 			...(record.maxWindowPct !== undefined ? { windowPct: record.maxWindowPct } : {}),

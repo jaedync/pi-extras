@@ -1938,6 +1938,30 @@ Worktrees stay until you remove them. Resumed children keep the same workspace.
 After you apply the changes, the cleanup command force-removes the worktree and
 deletes its branch. Check that you kept all needed files first.
 
+**Read-only shell.** `readOnlyShell: true` is `readOnly: true` plus `bash`,
+for work that must run commands but change nothing: `git log`, `git show`
+and `git diff`, `rg`, and builds or tests that write only to `/tmp`. On
+Linux each command runs under bwrap with:
+
+- every file read-only (a write fails with "Read-only file system"),
+- an empty, private `/tmp` for each command, and a new `/dev` and `/proc`,
+- no network, and no view of other processes,
+- a seccomp filter that refuses to make Unix sockets or an io_uring.
+
+The filter is necessary because a read-only mount does not stop a connection
+to a Unix socket, and sockets such as the herdr socket, the Pi broker, the
+user D-Bus or a container engine can make other programs write. `socketpair`
+and pipes still work. A working folder under `/tmp` stays visible,
+read-only. `GIT_OPTIONAL_LOCKS=0` stops `git status` and `git diff` from
+trying to refresh the index; other git commands may warn that they can't
+write a lock file. On macOS the command runs under sandbox-exec with all
+writes but to `/dev/null` and the terminal denied and no network; this was
+not tried on a Mac. The spawn is refused where no sandbox runs, and if the
+sandbox stops working later, the child's `bash` refuses every command
+instead of running unconfined. A read-only child without a shell can't start
+one with `readOnlyShell`. Such a child can't set a `check`, as a read-only
+child can't.
+
 **Hidden sessions.** A child can't read the sessions and reports of other
 agents, or main's session. Its `read`, `grep`, `find` and `ls` calls refuse
 `~/.pi/agent/sessions/subagents` and main's session file, and the error says

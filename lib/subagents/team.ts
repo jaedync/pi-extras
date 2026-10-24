@@ -219,7 +219,8 @@ export class Team implements HostTeam {
 		if (badAfter) return { ok: false, error: badAfter };
 		if (request.afterReports !== undefined && !request.after?.length) return { ok: false, error: "afterReports goes with after: it says whether the agents named in after pass on their reports." };
 		const after = request.after?.length ? [...new Set(request.after)] : undefined;
-		const badCheck = request.check ? checkError(request.check, { readOnly: request.readOnly || parent?.readOnly === true }) : undefined;
+		if (request.readOnlyShell && parent?.readOnly && !parent.readOnlyShell) return { ok: false, error: "A read-only subagent without a shell can't start one with readOnlyShell." };
+		const badCheck = request.check ? checkError(request.check, { readOnly: request.readOnly || request.readOnlyShell === true || parent?.readOnly === true }) : undefined;
 		if (badCheck) return { ok: false, error: badCheck };
 		const maxMinutes = request.maxMinutes ?? this.options.runBudget?.minutes;
 		const maxCost = request.maxCost ?? this.options.runBudget?.cost;
@@ -229,7 +230,8 @@ export class Team implements HostTeam {
 		const sessionFile = this.options.sessionFileFor?.(name);
 		// A read-only agent can't get write tools through a subagent of its own: its subagents are read-only too.
 		const record: AgentRecord = {
-			name, parent: request.parent, depth, task: request.task, model: request.model, readOnly: request.readOnly || parent?.readOnly === true,
+			name, parent: request.parent, depth, task: request.task, model: request.model, readOnly: request.readOnly || request.readOnlyShell === true || parent?.readOnly === true,
+			...(request.readOnlyShell ? { readOnlyShell: true } : {}),
 			fork: request.fork, blocking: request.blocking, state: "queued", createdAt: this.now(), activity: "queued",
 			toolCalls: 0, usage: NO_USAGE, runs: 0, autoResumeAttempts: 0, ...(request.thinking ? { thinking: request.thinking } : {}),
 			...(sessionFile ? { sessionFile } : {}),

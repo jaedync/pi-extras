@@ -21,7 +21,7 @@ import { guardBash } from "./bash-guard.ts";
 import { bashCheck } from "./checks.ts";
 import type { HostActivity } from "./contract.ts";
 import { HIDDEN_READ_TOOLS, hiddenReason, type HiddenPaths } from "./hidden.ts";
-import { confine, hidingFor, sandboxFor } from "./sandbox.ts";
+import { confine, type Hiding, hidingFor, NO_HIDING, readOnlyShellFor, sandboxFor } from "./sandbox.ts";
 import { freshModels, piModelsCheck } from "./fresh-models.ts";
 import { withChildRetry } from "./retry.ts";
 import { launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "./stamp.ts";
@@ -74,10 +74,14 @@ export function childExtensionPaths(all: readonly { name: string; sourceInfo?: {
 	return [...new Set(paths)];
 }
 
+/** What a read-only child may have; with `shell`, bash too, which its sandbox keeps from writing (sandbox.ts). */
+export const readOnlyTools = (shell: boolean): ReadonlySet<string> => (shell ? new Set([...READ_ONLY_TOOLS, "bash"]) : READ_ONLY_TOOLS);
+
 /** The tool names a child gets, before its own `message` (and maybe `subagent`). */
-export function childToolNames(parentActive: readonly string[], readOnly: boolean, extraExclude: readonly string[] = []): string[] {
+export function childToolNames(parentActive: readonly string[], readOnly: boolean, extraExclude: readonly string[] = [], shell = false): string[] {
 	const exclude = new Set([...CHILD_TOOL_EXCLUDE, ...extraExclude]);
-	const kept = parentActive.filter((name) => !exclude.has(name) && (!readOnly || READ_ONLY_TOOLS.has(name)));
+	const allowed = readOnlyTools(shell);
+	const kept = parentActive.filter((name) => !exclude.has(name) && (!readOnly || allowed.has(name)));
 	const withRead = readOnly ? [...READ_TOOLS, ...kept] : kept;
 	return [...new Set(withRead)];
 }
@@ -191,6 +195,7 @@ export interface LauncherDeps {
 function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, deps: LauncherDeps, hidden: HiddenPaths | undefined): ToolDefinition {
 	const warn = (message: string) => deps.warn?.(message);
 	const hiding = hidden ? { dirs: hidden.dirs, files: hidden.files } : undefined;
+	if (record.readOnlyShell) return readOnlyBash(sdk, cwd, settings, record, warn, hiding);
 	const sandbox = record.worktree
 		? sandboxFor(record.worktree, (why) => warn(`subagents: bash in worktrees runs without a sandbox, so it can write into your checkout. ${why}`),
 			(why) => warn(`subagents: ${record.name}'s sandbox keeps all git data read-only, so its commits will fail. ${why}`), hiding)
@@ -211,6 +216,32 @@ function childBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: Age
 		...(prefix ? { spawnHook: confine(prefix) } : {}),
 	});
 	return guardBash(definition, { ...(sandbox ? { sandbox } : {}), ...(changes ? { changes } : {}) }) as ToolDefinition;
+}
+
+/**
+ * A read-only shell child's bash: every command in the read-only sandbox,
+ * else none at all, since without it the child could write anything.
+ */
+function readOnlyBash(sdk: Sdk, cwd: string, settings: SettingsManager, record: AgentRecord, warn: (message: string) => void, hiding: Hiding | undefined): ToolDefinition {
+	let why = "The sandbox tool failed.";
+	const prefix = readOnlyShellFor(hiding ?? NO_HIDING, (reason) => { why = reason; }, cwd);
+	const shellPath = settings.getShellPath();
+	const definition = sdk.createBashToolDefinition(cwd, {
+		commandPrefix: settings.getShellCommandPrefix(),
+		...(shellPath ? { shellPath } : {}),
+		...(prefix ? { spawnHook: confine(prefix) } : {}),
+	}) as ToolDefinition;
+	if (prefix) return definition;
+	warn(`subagents: ${record.name}'s bash is off, because its read-only sandbox does not run here. ${why}`);
+	return noShell(definition, why);
+}
+
+/** A bash tool that refuses every command, with why. */
+export function noShell(definition: ToolDefinition, why: string): ToolDefinition {
+	return {
+		...definition,
+		async execute() { throw new Error(`bash is off: readOnlyShell needs a sandbox (bwrap on Linux, sandbox-exec on macOS), and none runs here. ${why}`); },
+	};
 }
 
 /**

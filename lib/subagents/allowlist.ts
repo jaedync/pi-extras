@@ -4,7 +4,7 @@
  * `stop_subagent` when it may start subagents) are always kept, so naming
  * them is allowed and changes nothing.
  */
-import { READ_ONLY_TOOLS } from "./child.ts";
+import { readOnlyTools } from "./child.ts";
 
 const TEAM_TOOLS: ReadonlySet<string> = new Set(["message", "subagent", "stop_subagent"]);
 
@@ -14,11 +14,12 @@ export function allowedTools(available: readonly string[], allowlist: readonly s
 }
 
 /** The allowlist a spawn asked for, without team tools and repeats, or why it can't have it. */
-export function checkAllowlist(requested: readonly string[], available: readonly string[], readOnly: boolean): { ok: true; tools: string[] } | { ok: false; error: string } {
+export function checkAllowlist(requested: readonly string[], available: readonly string[], readOnly: boolean, shell = false): { ok: true; tools: string[] } | { ok: false; error: string } {
 	const can = `It can have: ${available.join(", ") || "(none)"}.`;
 	if (requested.length === 0) return { ok: false, error: `tools is empty. List the tools the subagent needs, or leave tools out to give it all of them. ${can}` };
 	const wanted = [...new Set(requested.map((name) => name.trim()))].filter((name) => !TEAM_TOOLS.has(name));
-	const writes = readOnly ? wanted.filter((name) => !READ_ONLY_TOOLS.has(name)) : [];
+	const allowed = readOnlyTools(shell);
+	const writes = readOnly ? wanted.filter((name) => !allowed.has(name)) : [];
 	if (writes.length > 0) {
 		return { ok: false, error: `readOnly: true gives only tools that can't change your files or run commands that the model chooses, so tools cannot list ${writes.join(", ")}. Remove ${writes.length === 1 ? "it" : "them"} from tools, or leave out readOnly. ${can}` };
 	}

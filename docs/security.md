@@ -581,6 +581,29 @@ It is not a boundary against a hostile child. The child can still write
 outside the repository, for example `~/.gitconfig`, and it runs with your
 permissions.
 
+A child started with `readOnlyShell: true` is read-only and also gets `bash`.
+On Linux, each of its commands runs under bwrap with a read-only root, an
+empty private `/tmp`, a new `/dev` and `/proc`, its own network namespace with
+only loopback, and its own process namespace. A seccomp filter refuses
+`socket(AF_UNIX)` and `io_uring_setup`, because a read-only mount does not
+stop a connection to a Unix socket: the herdr socket, the Pi broker, the user
+D-Bus or a container engine could make other programs write for the child.
+The filter refuses all calls of other architectures (x32 and 32-bit), and it
+is known only for x86_64 and arm64; on other architectures the spawn is
+refused. Limits: the child can read every file that you can read (as with
+`read`), and a command can still use CPU, memory and time. On macOS the command runs under sandbox-exec with
+writes denied except to the null and terminal devices and with the network
+denied. That profile was not tried on a Mac, so it is not known if its
+network rule also blocks every Unix socket. Where no sandbox runs, the spawn is
+refused, and a child whose sandbox stops working gets a `bash` that refuses
+every command.
+
+Children can't read the sessions and reports of other agents, or main's
+session. `read`, `grep`, `find` and `ls` refuse those paths before and after
+the call, and the bash of every child runs with them hidden (bwrap or
+sandbox-exec), unless `hideSessions` is false. Where no sandbox runs, the
+bash of a child can still read them, and the parent sees a warning.
+
 Main also runs git in a child's worktree: for the report, for the check of
 which files a `bash` call changed, and to make a worktree for the child's own
 subagent. For these three uses, main gives git the worktree's own git folder

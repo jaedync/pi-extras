@@ -5,13 +5,15 @@
  * installed; elsewhere commands run unconfined, as before. Every child's bash
  * also gets the paths hidden from subagents (hidden.ts) covered: an empty
  * tmpfs over each folder and /dev/null over each file on Linux, denied reads
- * on macOS.
+ * on macOS. A `readOnlyShell` child's bash runs with every file read-only,
+ * a private /tmp, no network and no view of other processes.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import type { BashSpawnContext } from "@earendil-works/pi-coding-agent";
 import type { Worktree } from "./types.ts";
+import { unixSocketFilterFile } from "./seccomp.ts";
 import { commonGitDir, sourceCheckout, worktreeGitDir } from "./worktree.ts";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
@@ -138,6 +140,48 @@ export function hidingPrefix(hiding: Hiding, platform: NodeJS.Platform = process
 	return undefined;
 }
 
+/** The bwrap arguments of a read-only shell, before the hidden paths; each command gets a fresh /tmp. */
+const READ_ONLY_BWRAP = ["--ro-bind", "/", "/", "--dev", "/dev", "--unshare-pid", "--proc", "/proc", "--tmpfs", "/tmp",
+	// git status and diff refresh the index when they can take its lock; this tells them not to try.
+	"--unshare-net", "--die-with-parent", "--setenv", "GIT_OPTIONAL_LOCKS", "0"];
+
+/** The same on macOS: no writes but to the terminal devices, and no network. Not tried on a Mac yet. */
+function seatbeltReadOnly(hiding: Hiding): string {
+	return ["(version 1)", "(allow default)", '(deny file-write* (subpath "/"))',
+		'(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (regex #"^/dev/fd/"))',
+		"(deny network*)", ...seatbeltHiding(hiding)].join("\n");
+}
+
+/**
+ * The fresh /tmp would hide a working folder under /tmp, so the top folder
+ * of `cwd` there is bound back, read-only, with the git data above `cwd`.
+ */
+function keptUnderTmp(cwd: string | undefined): string[] {
+	const top = cwd?.match(/^\/tmp\/[^/]+/)?.[0];
+	return top && existsSync(top) ? ["--ro-bind", top, top] : [];
+}
+
+const shellQuote = (text: string): string => `'${text.replace(/'/g, "'\\''")}'`;
+
+/**
+ * The prefix of a read-only shell in `cwd`, or undefined where no sandbox
+ * tool is installed or no seccomp filter is known (seccomp.ts). bwrap reads
+ * the filter from a descriptor, which a shell opens first.
+ */
+export function readOnlyShellPrefix(hiding: Hiding, platform: NodeJS.Platform = process.platform, exists: (path: string) => boolean = existsSync, cwd?: string): string[] | undefined {
+	if (platform === "darwin") return exists(SANDBOX_EXEC) ? [SANDBOX_EXEC, "-p", seatbeltReadOnly(hiding)] : undefined;
+	if (platform !== "linux" || !onPath(BWRAP)) return undefined;
+	const filter = unixSocketFilterFile();
+	if (!filter) return undefined;
+	return ["/bin/sh", "-c", `exec "$0" "$@" 3<${shellQuote(filter)}`, BWRAP, "--seccomp", "3", ...READ_ONLY_BWRAP, ...keptUnderTmp(cwd), ...bwrapHiding(hiding)];
+}
+
+function readOnlyShellMissing(): string {
+	if (process.platform === "darwin") return `${SANDBOX_EXEC} is missing.`;
+	if (process.platform !== "linux") return `No sandbox tool is known for ${process.platform}.`;
+	return onPath(BWRAP) ? `No seccomp filter is known for ${process.arch}.` : "bwrap is not installed.";
+}
+
 /** Tools that failed once (Pi itself sandboxed, user namespaces off) aren't tried or reported again in this process. */
 const broken = new Set<string>();
 
@@ -170,12 +214,16 @@ export function sandboxFor(worktree: Pick<Worktree, "path" | "branch">, onUnavai
 	return { root: roots[0]!, prefix };
 }
 
-/** Whether the sandbox tool of `prefix` runs here; the first failure is told once and the tool is not tried again. */
-function works(prefix: readonly string[], onUnavailable?: (why: string) => void): boolean {
-	if (broken.has(prefix[0]!)) return false;
+/**
+ * Whether the sandbox tool of `prefix` runs here; the first failure is told
+ * once and the tool is not tried again. `key` keeps apart the uses that need
+ * more of the tool: bwrap can hide paths where it can't take the network away.
+ */
+function works(prefix: readonly string[], onUnavailable?: (why: string) => void, key = prefix[0]!): boolean {
+	if (broken.has(key)) return false;
 	const failure = probe(prefix);
 	if (failure === undefined) return true;
-	broken.add(prefix[0]!);
+	broken.add(key);
 	onUnavailable?.(failure);
 	return false;
 }
@@ -189,6 +237,28 @@ export function hidingFor(hiding: Hiding, onUnavailable?: (why: string) => void)
 	const prefix = hidingPrefix(hiding);
 	return prefix && works(prefix, onUnavailable) ? prefix : undefined;
 }
+
+/**
+ * The prefix of a read-only shell, or undefined where no sandbox runs; then
+ * `onUnavailable` hears why, once if a tool failed.
+ */
+export function readOnlyShellFor(hiding: Hiding, onUnavailable?: (why: string) => void, cwd?: string): readonly string[] | undefined {
+	const prefix = readOnlyShellPrefix(hiding, process.platform, existsSync, cwd && existsSync(cwd) ? realpathSync(cwd) : cwd);
+	if (!prefix) {
+		onUnavailable?.(readOnlyShellMissing());
+		return undefined;
+	}
+	if (broken.has(READ_ONLY_KEY)) { onUnavailable?.(`${prefix[0]} failed before.`); return undefined; }
+	return works(prefix, onUnavailable, READ_ONLY_KEY) ? prefix : undefined;
+}
+
+/** Why a read-only shell can't run here, or undefined when it can; for the spawn, before a child starts. */
+export function readOnlyShellProblem(): string | undefined {
+	let why: string | undefined;
+	return readOnlyShellFor(NO_HIDING, (reason) => { why = reason; }) ? undefined : why ?? "The sandbox tool failed.";
+}
+
+const READ_ONLY_KEY = "read-only shell";
 
 /**
  * A spawn hook that runs the command under `prefix`. The prefix and the
