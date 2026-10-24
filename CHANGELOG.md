@@ -17,6 +17,12 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 ### Added
 
+- Subagents: panels. `models: [...]` on `subagent` runs the same task on each
+  model as its own subagent (`<name>-<model>`, own budgets), in parallel or
+  with `mode: "sequential"` one after another without earlier reports. The
+  parent gets one message when the last member ends, with each member's
+  outcome, time, cost and report path.
+
 - Subagents: children can't read other agents' sessions and reports, or
   main's session. `read`, `grep`, `find` and `ls` refuse those paths, and a
   child's bash runs under bwrap (Linux) or sandbox-exec (macOS) with them

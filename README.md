@@ -1842,6 +1842,22 @@ for its subagent `docs`, and `docs` starts after `impl`. Then `impl` can't ask
 would wait for the other. A queued child does not keep the reports of its
 group waiting.
 
+**Panels.** `models: [...]` on `subagent` starts a panel: the same task on
+each model, for independent opinions, for example
+`{ task, name: "review", models: ["opus", "luna", "glm"] }`. Each model gets
+its own subagent named `<name>-<model>` (`review-opus-5-5`), with its own
+budgets. A panel needs 2 to 8 different models, and it can't go with `model`
+or `wait`. `mode: "parallel"` (the default) starts all members at once.
+`mode: "sequential"` starts each member when the one before ends, with
+`after` and `afterReports: false`, so no member gets an earlier report. Each
+model is checked before the first member starts, and when the team refuses a
+member, the members started before it stop. The members' reports are held
+until the last member ends, also when a member fails or is stopped. Then the
+parent gets one message: a line for each member with how it ended, its time,
+its cost and its report path, then each report. After that message, a
+member's later runs report on their own. The panel's name gets `-2` when an
+earlier panel used it.
+
 **Writers.** The first child to edit files in a checkout holds that checkout
 until its run ends. The checkout is the git work tree that contains the edited
 file: a repository or one of its worktrees. For a file outside any git work

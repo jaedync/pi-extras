@@ -153,6 +153,10 @@ export interface AgentRecord {
 	after?: string[];
 	/** False when its first prompt gives only how its after agents ended, with no report or session path (an independent opinion); never saved as true. */
 	afterReports?: boolean;
+	/** The panel it belongs to (panel.ts): its report waits for the other members, and the parent gets one message. */
+	panel?: string;
+	/** Its panel's message went out; later runs report on their own. */
+	panelDone?: boolean;
 	/** The command the harness runs when a run ends normally, before its report goes up (checks.ts); kept for later runs. */
 	check?: CheckSpec;
 	/** What the latest check found; a report shows only its own run's. */
@@ -224,6 +228,8 @@ export interface SpawnRequest {
 	after?: string[];
 	/** False: its first prompt names how the after agents ended, but not where their reports are. */
 	afterReports?: boolean;
+	/** The panel it joins (panel.ts). */
+	panel?: string;
 	check?: CheckSpec;
 }
 
@@ -290,4 +296,6 @@ export type MainDelivery =
 	/** The user wrote to a child directly; main is told but not woken. */
 	| { kind: "relay"; from: string; to: string; text: string; answered: boolean }
 	/** `quiet`: a run a peer started ended idle; main reads it at its next turn instead of being woken. */
-	| { kind: "report"; record: AgentRecord; quiet?: boolean };
+	| { kind: "report"; record: AgentRecord; quiet?: boolean }
+	/** A panel's members once the last one ended (panel.ts), as one message that wakes main. */
+	| { kind: "panel"; panel: string; records: AgentRecord[] };

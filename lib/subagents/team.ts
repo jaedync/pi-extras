@@ -136,7 +136,8 @@ export class Team implements HostTeam {
 		this.sessions = new OpenSessions({ launcher: options.launcher, idle: (name) => this.records.get(name)?.state === "idle", warn: options.warn ?? console.warn,
 			...(options.idleReleaseMs !== undefined ? { idleReleaseMs: options.idleReleaseMs } : {}) });
 		this.routing = this.router();
-		this.handUpHost = { questions: this.questions, routing: this.routing, list: () => this.list(), get: this.lookup, deliverToMain: (delivery) => options.deliverToMain(delivery), now: () => this.now() };
+		this.handUpHost = { questions: this.questions, routing: this.routing, list: () => this.list(), get: this.lookup, deliverToMain: (delivery) => options.deliverToMain(delivery), now: () => this.now(),
+			panelDone: (names) => { for (const name of names) this.patch(name, { panelDone: true }); } };
 	}
 
 	/** Routing's view of the team (routing.ts). */
@@ -238,6 +239,7 @@ export class Team implements HostTeam {
 			...(maxCost !== undefined ? { maxCost } : {}),
 			...(after ? { after } : {}),
 			...(after && request.afterReports === false ? { afterReports: false } : {}),
+			...(request.panel ? { panel: request.panel } : {}),
 			...(request.check ? { check: mergeCheck(request.check) } : {}),
 		};
 		this.put(record);

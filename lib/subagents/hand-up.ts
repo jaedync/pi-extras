@@ -6,8 +6,9 @@
  */
 import { awaited } from "./after.ts";
 import { checkFailed } from "./checks.ts";
-import { reportText } from "./format.ts";
+import { panelText, reportText } from "./format.ts";
 import { MAIN } from "./names.ts";
+import { heldForPanel, panelBusy, panelOf } from "./panel.ts";
 import type { OpenQuestions } from "./questions.ts";
 import type { Routing } from "./routing.ts";
 import { type AgentRecord, LIVE_STATES, type MainDelivery } from "./types.ts";
@@ -20,6 +21,8 @@ export interface HandUpHost {
 	get(name: string): AgentRecord | undefined;
 	deliverToMain(delivery: MainDelivery): void;
 	now(): number;
+	/** Marks the panel's message as sent, so the members' later runs report on their own. */
+	panelDone(names: readonly string[]): void;
 }
 
 /** Hands `record`'s report on; `silent` when its parent stopped it and has the record from that call. */
@@ -37,6 +40,8 @@ export function handUp(host: HandUpHost, record: AgentRecord, silent: boolean): 
 	// A parent waiting on this child's answer gets the report as that answer.
 	const asked = host.questions.of(record.parent).find((question) => question.to === name);
 	if (asked) asked.resolve(reportText(record, host.now()));
+	// A panel member's report waits for the others, also one its parent stopped: the last to end sends them all.
+	else if (heldForPanel(record)) panelUp(host, record);
 	else if (!silent) reportUp(host, record, quiet);
 	// Its parent has the report; anyone else it owed an answer gets how its run ended instead.
 	for (const asker of unanswered) host.routing.deliver(name, asker, `${name} ended without answering you. ${reportText(record, host.now())}`, true, `Report from ${name}`);
@@ -87,6 +92,16 @@ function reportUp(host: HandUpHost, record: AgentRecord, quiet: boolean): void {
 	if (to === MAIN) return host.deliverToMain({ kind: "report", record: sent, ...(quiet && !orphan ? { quiet } : {}) });
 	const why = orphan ? `${record.name}'s parent ${record.parent} has ended, so its report comes to you.\n` : "";
 	host.routing.deliver(record.name, to, `${why}${reportText(sent, host.now())}`, !quiet || orphan, `Report from ${record.name}`);
+}
+
+/** The panel's message, once no other member works; it goes where `record`'s report would. */
+function panelUp(host: HandUpHost, record: AgentRecord): void {
+	const members = panelOf(record, host.list());
+	if (panelBusy(members, record.name)) return;
+	host.panelDone(members.map((member) => member.name));
+	const to = reportTarget(host, record);
+	if (to === MAIN) return host.deliverToMain({ kind: "panel", panel: record.panel!, records: members });
+	host.routing.deliver(record.name, to, panelText(record.panel!, members, host.now()), true, `Report from the panel ${record.panel}`);
 }
 
 /**

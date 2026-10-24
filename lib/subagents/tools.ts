@@ -5,6 +5,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MAX_AFTER, stopOrder, waitingFor } from "./after.ts";
+import { memberName, PANEL_MAX, PANEL_MIN, PANEL_MODES, panelName, type PanelMode } from "./panel.ts";
 import { CHECK_TIMEOUT_MINUTES, MAX_CHECK_CHARS, MAX_CHECK_TIMEOUT_MINUTES, MAX_FIX_ROUNDS, mergeCheck } from "./checks.ts";
 import { allowedTools, checkAllowlist } from "./allowlist.ts";
 import { MAX_RUN_MINUTES } from "./budget.ts";
@@ -15,7 +16,7 @@ import { baseName, EVERYONE, MAIN } from "./names.ts";
 import { teamNow } from "./status.ts";
 import type { HostTeam } from "./contract.ts";
 import type { SendResult } from "./team.ts";
-import { type AgentRecord, type CheckUpdate, LIVE_STATES, neverStarted } from "./types.ts";
+import { type AgentRecord, type CheckUpdate, LIVE_STATES, neverStarted, type SpawnRequest } from "./types.ts";
 
 export const MAX_TASK_CHARS = 60_000;
 export const MAX_MESSAGE_CHARS = 20_000;
@@ -57,6 +58,8 @@ const subagentParams = Type.Object({
 	task: Type.String({ minLength: 1, maxLength: MAX_TASK_CHARS, description: "The complete brief: goal, relevant files and facts, constraints, and what the report must contain." }),
 	name: Type.Optional(Type.String({ maxLength: 40, description: "Short name that says what it does, like auth-review or count-md. You, the user and other agents address it by this name." })),
 	model: Type.Optional(Type.String({ description: "Model reference or unique short name from the list above." })),
+	models: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: PANEL_MIN, maxItems: PANEL_MAX, description: "A panel instead of model: the same task on each of these models, each its own subagent named <name>-<model> with its own budgets. Their reports arrive together as one message." })),
+	mode: Type.Optional(Type.Union(PANEL_MODES.map((mode) => Type.Literal(mode)), { description: "With models: parallel (default) starts all at once; sequential starts each when the one before ends, without its report." })),
 	thinking: Type.Optional(thinkingSchema),
 	readOnly: Type.Optional(Type.Boolean({ description: "Only tools that can't change your files or run commands that the model chooses: read, grep, find, ls and known search and fetch tools. Other tools are dropped." })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Give it only these of the tools it would get; message and clock always stay. Omit for all of them." })),
@@ -84,7 +87,7 @@ const stopParams = Type.Object({
 
 interface SubagentInput extends CheckInput {
 	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; isolation?: "shared" | "worktree"; cwd?: string; context?: string; wait?: boolean;
-	maxMinutes?: number; maxCost?: number; tools?: string[]; after?: string[]; afterReports?: boolean;
+	maxMinutes?: number; maxCost?: number; tools?: string[]; after?: string[]; afterReports?: boolean; models?: string[]; mode?: PanelMode;
 }
 interface CheckInput { check?: string; fixUntilPass?: number; checkTimeoutMinutes?: number }
 interface MessageInput extends CheckInput { to: string; text: string; expectReply?: boolean }
@@ -141,43 +144,98 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 		parameters: subagentParams,
 		async execute(_id, raw, signal, onUpdate) {
 			const params = raw as SubagentInput;
+			if (params.models !== undefined) return spawnPanel(tc, parent, params);
+			if (params.mode !== undefined) throw new Error("mode goes with models: it says how a panel's members start.");
 			const wanted = params.model ?? tc.fallbackModel;
 			if (!wanted) throw new Error("No model to run on: name one, or set subagents.defaultModel.");
 			const resolved = resolveModel(wanted, tc.allowed);
 			if (!resolved.ok) throw new Error(resolved.error);
-			if (params.thinking !== undefined && !isThinking(params.thinking)) throw new Error(`Unknown thinking level ${params.thinking}.`);
-			const thinking = thinkingFor(resolved.choice, params.thinking as Thinking | undefined, tc.thinking);
-			const fork = params.context === "fork";
-			if (fork && parent !== MAIN) throw new Error("Only the main session can fork its context.");
-			const tools = spawnTools(tc, parent, params.tools, params.readOnly === true);
-			const check = checkInput(tc, parent, params);
-			const group = parent === MAIN ? tc.currentGroup?.() : undefined;
-			const spawned = tc.team.spawn({
-				...(group ? { group } : {}),
-				...(params.isolation ? { isolation: params.isolation } : {}),
-				...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
-				...(params.maxMinutes !== undefined ? { maxMinutes: params.maxMinutes } : {}),
-				...(params.maxCost !== undefined ? { maxCost: params.maxCost } : {}),
-				...(tools ? { tools } : {}),
-				...(params.after ? { after: params.after } : {}),
-				...(params.afterReports !== undefined ? { afterReports: params.afterReports } : {}),
-				...(check ? { check: mergeCheck(check) } : {}),
-				task: params.task.trim(), parent, model: resolved.choice.ref, readOnly: params.readOnly === true, fork,
-				blocking: params.wait === true, ...(params.name ? { name: params.name } : {}), ...(thinking ? { thinking } : {}),
-			});
+			const spawned = tc.team.spawn(spawnRequest(tc, parent, params, resolved.choice, {}));
 			if (!spawned.ok) throw new Error(spawned.error);
 			const record = spawned.record;
-			// Status Plus finds the child's session through this path and counts its usage.
-			const details = {
-				name: record.name, model: record.model, thinking: record.thinking ?? null, wait: params.wait === true,
-				...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
-				...(record.worktree ? { worktree: { ...record.worktree } } : {}),
-				...(record.cwd ? { cwd: record.cwd } : {}),
-			};
+			const details = { ...childDetails(record), wait: params.wait === true };
 			if (params.wait !== true) return text(spawnSummary(record, tc.team) + renameNote(record, params), details);
 			return await waitFor(tc, { name: record.name, parent }, details, signal, onUpdate as ((update: Result) => void) | undefined);
 		},
 	} as ToolDefinition;
+}
+
+/** Status Plus finds a child's session through `sessionFile` and counts its usage. */
+function childDetails(record: AgentRecord): Record<string, unknown> {
+	return {
+		name: record.name, model: record.model, thinking: record.thinking ?? null,
+		...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+		...(record.worktree ? { worktree: { ...record.worktree } } : {}),
+		...(record.cwd ? { cwd: record.cwd } : {}),
+	};
+}
+
+/** What one spawn asks the team for; a panel member sets its own name, order and panel. */
+function spawnRequest(tc: ToolContext, parent: string, params: SubagentInput, choice: ModelChoice, member: Partial<Pick<SpawnRequest, "name" | "after" | "afterReports" | "panel">>): SpawnRequest {
+	if (params.thinking !== undefined && !isThinking(params.thinking)) throw new Error(`Unknown thinking level ${params.thinking}.`);
+	const thinking = thinkingFor(choice, params.thinking as Thinking | undefined, tc.thinking);
+	const fork = params.context === "fork";
+	if (fork && parent !== MAIN) throw new Error("Only the main session can fork its context.");
+	const tools = spawnTools(tc, parent, params.tools, params.readOnly === true);
+	const check = checkInput(tc, parent, params);
+	const group = parent === MAIN && !member.panel ? tc.currentGroup?.() : undefined;
+	const name = member.name ?? params.name;
+	const after = "after" in member ? member.after : params.after;
+	const afterReports = "afterReports" in member ? member.afterReports : params.afterReports;
+	return {
+		...(group ? { group } : {}),
+		...(params.isolation ? { isolation: params.isolation } : {}),
+		...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
+		...(params.maxMinutes !== undefined ? { maxMinutes: params.maxMinutes } : {}),
+		...(params.maxCost !== undefined ? { maxCost: params.maxCost } : {}),
+		...(tools ? { tools } : {}),
+		...(after ? { after } : {}),
+		...(afterReports !== undefined ? { afterReports } : {}),
+		...(member.panel ? { panel: member.panel } : {}),
+		...(check ? { check: mergeCheck(check) } : {}),
+		task: params.task.trim(), parent, model: choice.ref, readOnly: params.readOnly === true, fork,
+		blocking: params.wait === true, ...(name ? { name } : {}), ...(thinking ? { thinking } : {}),
+	};
+}
+
+/**
+ * A panel (panel.ts): every model is checked before the first member starts,
+ * and a member that the team refuses stops the ones started before it, so a
+ * panel starts whole or not at all.
+ */
+async function spawnPanel(tc: ToolContext, parent: string, params: SubagentInput): Promise<Result> {
+	const models = params.models ?? [];
+	if (params.model !== undefined) throw new Error("Give model or models, not both.");
+	if (params.wait === true) throw new Error("A panel can't use wait: its members' reports arrive together as one message.");
+	if (models.length < PANEL_MIN || models.length > PANEL_MAX) throw new Error(`A panel needs at least ${PANEL_MIN} models and at most ${PANEL_MAX}.`);
+	const mode: PanelMode = params.mode ?? "parallel";
+	if (!PANEL_MODES.includes(mode)) throw new Error("Unknown mode. Use parallel or sequential.");
+	const choices = models.map((query) => {
+		const resolved = resolveModel(query, tc.allowed);
+		if (!resolved.ok) throw new Error(resolved.error);
+		return resolved.choice;
+	});
+	const twice = choices.find((choice, index) => choices.findIndex((other) => other.ref === choice.ref) !== index);
+	if (twice) throw new Error(`The panel names ${twice.ref} twice; each member needs its own model.`);
+	const panel = panelName(baseName(params.name, params.task), tc.team.list());
+	const requests = choices.map((choice) => ({ choice, name: memberName(panel, choice.model.id) }));
+	const started: AgentRecord[] = [];
+	for (const [index, { choice, name }] of requests.entries()) {
+		// Each sequential member waits for the one before it, without that one's report; the first keeps the call's own order.
+		const order: Partial<Pick<SpawnRequest, "after" | "afterReports">> = mode === "sequential" && index > 0 ? { after: [started[index - 1]!.name], afterReports: false } : {};
+		const request = spawnRequest(tc, parent, params, choice, { name, panel, ...order });
+		const spawned = tc.team.spawn(request);
+		if (!spawned.ok) {
+			for (const record of started.reverse()) await tc.team.stop(record.name, { by: parent });
+			throw new Error(`The panel did not start: ${spawned.error}`);
+		}
+		started.push(spawned.record);
+	}
+	const how = mode === "parallel" ? "in parallel" : "one after another; each starts when the one before ends and gets no earlier report";
+	const lines = started.map((record) => `- ${record.name} on ${record.model}`);
+	return text([`Started the panel ${panel}: ${started.length} subagents on the same task, ${how}.`, ...lines,
+		"Their reports arrive together as one message when the last one ends, with a line per member: how it ended, its time, its cost and its report path. Talk to a member with message({ to, text })."].join("\n"),
+		{ panel, mode, wait: false, children: started.map(childDetails) });
 }
 
 async function waitFor(tc: ToolContext, { name, parent }: { name: string; parent: string }, details: Record<string, unknown>, signal: AbortSignal | undefined,

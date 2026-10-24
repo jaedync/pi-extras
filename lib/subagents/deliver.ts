@@ -32,7 +32,7 @@
  */
 import type { HeldMail, HostMail } from "./contract.ts";
 import { reportWithCheck } from "./checks.ts";
-import { noteText, questionText, reminderText, reportText } from "./format.ts";
+import { noteText, panelText, questionText, reminderText, reportText } from "./format.ts";
 import type { AgentRecord, MainDelivery } from "./types.ts";
 
 export const MESSAGE_TYPE = "subagent-message";
@@ -209,6 +209,7 @@ export class MainMail implements HostMail {
 			this.timer ??= setTimeout(() => this.flush(), this.batchMs);
 			return;
 		}
+		if (delivery.kind === "panel") return this.postReports(delivery.records, true, panelText(delivery.panel, delivery.records, this.now()));
 		const id = this.nextId();
 		if (delivery.kind === "relay") {
 			const said = delivery.answered ? `The user answered ${delivery.to}'s question directly:` : `The user messaged ${delivery.to} directly:`;
@@ -245,11 +246,11 @@ export class MainMail implements HostMail {
 	}
 
 	/** Reports sent together, as one message. */
-	private postReports(records: readonly AgentRecord[], wakes: boolean): void {
+	private postReports(records: readonly AgentRecord[], wakes: boolean, content = reportsText(records, this.now())): void {
 		const id = this.nextId();
 		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
 		// Every report shows its header; one that only repeats an answer keeps its text folded.
-		this.post({ customType: REPORT_TYPE, content: reportsText(records, this.now()), display: true, details: { id, kind: "report", reports: records.map(summarize) } }, wakes);
+		this.post({ customType: REPORT_TYPE, content, display: true, details: { id, kind: "report", reports: records.map(summarize) } }, wakes);
 	}
 
 	/**

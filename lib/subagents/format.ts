@@ -138,6 +138,22 @@ function budgetOutcome(record: AgentRecord, now: number): string {
 	return `reached ${budgetWords(record.budgetEnd!)} after ${duration(record, now)} and wrote this report when told to stop. Its work may be incomplete${check}. Message it to continue with a fresh budget; it keeps its context.`;
 }
 
+/**
+ * A panel's message (panel.ts): a line per member with how it ended, its
+ * time, its cost and where its report is, then each report as usual.
+ */
+export function panelText(panel: string, records: readonly AgentRecord[], now: number): string {
+	const lines = records.map((record) => `- ${record.name} (${record.model}): ${panelOutcome(record, now)}`);
+	return [[`Panel ${panel} ended: ${records.length} agents on the same task.`, ...lines].join("\n"), ...records.map((record) => reportText(record, now))].join("\n\n---\n\n");
+}
+
+function panelOutcome(record: AgentRecord, now: number): string {
+	if (record.state === "stopped" && neverStarted(record)) return CANCELLED_QUEUED;
+	const ended = record.state === "idle" ? (record.budgetEnd ? "reached its budget" : "finished") : record.state === "failed" ? "failed" : record.state === "stopped" ? "was stopped" : `was ${record.state}`;
+	const where = record.report && record.reportFile ? `Report: ${record.reportFile}` : record.sessionFile ? `Session: ${record.sessionFile}` : "No report.";
+	return `${ended} after ${duration(record, now)}, $${formatMoney(record.usage.cost)}. ${where}`;
+}
+
 /** What a report says when the agent never wrote a final message. */
 export const noReport = (state: string): string => (state === "stopped" ? "Stopped before it wrote a report." : "(no final message)");
 

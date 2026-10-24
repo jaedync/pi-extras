@@ -136,14 +136,16 @@ function joinStatus(record: AgentRecord, now: number): Seg[] {
 
 export function subagentCallRow(args: unknown, theme: Theme, context: RowContext, lookup: Lookup, streaming = ALWAYS, motion: () => Motion = () => "full"): Component {
 	noteLive(context, streaming);
-	const input = (args ?? {}) as { task?: unknown; name?: unknown; model?: unknown; thinking?: unknown; wait?: unknown };
+	const input = (args ?? {}) as { task?: unknown; name?: unknown; model?: unknown; models?: unknown; thinking?: unknown; wait?: unknown };
 	const draft = draftOf(context, args, streaming, motion);
+	// A panel's row names its models; each member joins with a row of its own in the widget.
+	const panel = Array.isArray(input.models) ? `panel: ${input.models.map((model) => oneLine(model)).join(", ")}` : undefined;
 	return new Lines((width) => {
 		const now = Date.now();
 		const name = agentOf(context);
 		const record = name ? lookup(name) : undefined;
 		const title = record?.name ?? (oneLine(input.name) || "subagent");
-		const model: Seg[] = [{ text: record ? modelText(record) : oneLine(input.model), color: "dim" }];
+		const model: Seg[] = [{ text: record ? modelText(record) : panel ?? oneLine(input.model), color: "dim" }];
 		// Before it joins, a short model name says no provider; the agent takes its color when it does.
 		const hue = agentHue(record?.model ?? oneLine(input.model));
 		const waited = record?.blocking === true || input.wait === true;
