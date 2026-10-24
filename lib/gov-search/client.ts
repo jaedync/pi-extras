@@ -104,7 +104,7 @@ export class GovSearchClient {
 	private checkStatus(reply: Reply, key: string | undefined): string {
 		if (reply.status === 200) return reply.body;
 		if (reply.status === 400) throw errors.badRequest(redact(badRequestReason(reply.body), key));
-		if (key && (reply.status === 401 || reply.status === 403)) throw errors.auth();
+		if (key && (reply.status === 401 || reply.status === 403)) throw errors.auth(reply.status);
 		if (reply.status === 403) throw errors.blocked();
 		if (reply.status === 429) throw errors.rate(key !== undefined);
 		if (reply.status >= 500) throw errors.upstream(reply.status);

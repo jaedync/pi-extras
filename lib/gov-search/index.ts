@@ -10,7 +10,7 @@ export const TOOL_NAME = "gov_search";
 
 export const DESCRIPTION = [
 	"Search the Firecrawl Government & Legal Index: over 30 million US federal, state and local government pages (statutes, regulations, city and county codes, court opinions, agency guidance).",
-	"Returns ranked titles, URLs and short excerpts, not an answer. Free; no key needed.",
+	"Returns ranked titles, URLs and short excerpts, not an answer. Free. A key is optional, except through a VPN or proxy.",
 	"Put the jurisdiction, agency or citation and a date in the query when you know them.",
 	"Filters (optional, all must match) keep only pages that the index labeled, so a filtered search can miss relevant pages. Zero results does not prove that no law exists.",
 	"Results can be old versions, bills that never passed or third-party copies. Before you state current law, check the issuer, jurisdiction, date and in-force status, and read the source page.",

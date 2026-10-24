@@ -73,7 +73,7 @@ export const errors = {
 		new GovSearchError("proxyRefused", `The gov_search proxy refused the tunnel to api.firecrawl.dev${status ? ` (HTTP ${status})` : ""}. Check that it is an HTTP CONNECT proxy. The request was not sent directly.`),
 	badRequest: (reason: string) =>
 		new GovSearchError("badRequest", `${API} rejected the request (HTTP 400)${reason ? `: ${reason}` : ""}. Check the filter values.`),
-	auth: () => new GovSearchError("auth", `${API} rejected the API key (HTTP 401). Correct FIRECRAWL_API_KEY or the key file, or remove both to search without a key.`),
+	auth: (status: number) => new GovSearchError("auth", `${API} rejected the API key (HTTP ${status}). Correct FIRECRAWL_API_KEY or the key file, or remove both to search without a key.`),
 	// The API's own text for this case carries a signup link with a referral id, so it is not shown.
 	blocked: () => new GovSearchError("blocked", `${API} refuses requests without a key from IP addresses that look like a VPN or proxy (HTTP 403). Set a free Firecrawl API key (FIRECRAWL_API_KEY or ~/.secrets/firecrawl_api_key), or remove the gov_search proxy setting.`),
 	rate: (keyed: boolean) =>
