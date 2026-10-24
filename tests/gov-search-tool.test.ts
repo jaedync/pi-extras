@@ -60,3 +60,28 @@ test("Tool Display draws the gov row with its filters in the band", () => {
 	search.update({ executionStarted: true, isPartial: false, result: text("two", { resultCount: 2, requestedCount: 5, durationMs: 1_200, status: "complete", results, duplicateCount: 1 }) });
 	assert.deepEqual(search.lines(), [band("gov_search small claims us-tx, 2 results", "1.2s"), "    1. Result 1  site1.test", "    2. Result 2  site2.test"]);
 });
+
+test("govSearch.enabled false in pi-extras.json leaves the tool out; anything else keeps it", async () => {
+	const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+	const { tmpdir } = await import("node:os");
+	const { join } = await import("node:path");
+	const { govSearchEnabled } = await import("../lib/gov-search/index.ts");
+	const dir = mkdtempSync(join(tmpdir(), "gov-enabled-"));
+	try {
+		const file = join(dir, "pi-extras.json");
+		assert.equal(govSearchEnabled(file), true, "no file");
+		writeFileSync(file, JSON.stringify({ govSearch: { enabled: false } }));
+		assert.equal(govSearchEnabled(file), false);
+		for (const value of [true, "false", 0, null]) {
+			writeFileSync(file, JSON.stringify({ govSearch: { enabled: value } }));
+			assert.equal(govSearchEnabled(file), true, `enabled: ${JSON.stringify(value)}`);
+		}
+		const tools: unknown[] = [];
+		writeFileSync(file, JSON.stringify({ govSearch: { enabled: false } }));
+		const { registerIfEnabled } = await import("../lib/gov-search/index.ts");
+		registerIfEnabled({ registerTool: (tool: unknown) => tools.push(tool) } as never, file);
+		assert.equal(tools.length, 0, "a disabled extension registers nothing");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

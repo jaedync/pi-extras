@@ -161,7 +161,8 @@ the package. Removing it does not remove your credentials or change other packag
 - `FIRECRAWL_API_KEY`, or the file `~/.secrets/firecrawl_api_key` (another
   path with `FIRECRAWL_API_KEY_FILE`): optional Firecrawl API key for
   `gov_search` (higher rate limits). `PI_GOV_SEARCH_PROXY`, or `govSearch.proxy` in
-  `pi-extras.json`: optional HTTP CONNECT proxy for `gov_search`. See
+  `pi-extras.json`: optional HTTP CONNECT proxy for `gov_search`.
+  `govSearch.enabled: false` in `pi-extras.json` leaves `gov_search` out. See
   [Gov Search](#gov-search).
 
 See [security and privacy](docs/security.md) before enabling provider-limit polling
@@ -2189,6 +2190,15 @@ statutes, regulations, city and county codes, court opinions and agency
 guidance. The tool sends one request to
 `https://api.firecrawl.dev/v2/search/gov` for each call. It returns ranked
 titles, URLs and short descriptions, not an answer.
+
+The tool is on by default. The model can then send queries to Firecrawl, a
+third party, from your IP address. To turn the tool off, use one of these
+ways, then restart Pi or use `/reload`:
+
+- Put `"govSearch": { "enabled": false }` in `pi-extras.json`. The extension
+  then registers no tool. Only `false` turns it off.
+- Run `pi config` and clear `extensions/gov-search.ts`. Pi then does not load
+  the extension.
 
 Parameters:
 

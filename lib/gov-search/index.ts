@@ -1,8 +1,10 @@
 import { defineTool, keyHint, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { CONFIG_FILE, readSection } from "../extras-config.ts";
 import { painter, renderResult } from "../kagi/render.ts";
 import { markRow } from "../tool-row.ts";
 import { GovSearchClient } from "./client.ts";
+import { SECTION } from "./config.ts";
 import { COURT_TYPES, DEFAULT_K, MAX_K, MAX_QUERY_CHARS } from "./input.ts";
 import { renderCall } from "./render.ts";
 
@@ -38,8 +40,21 @@ function expandHint(theme: Theme): string {
 	}
 }
 
+/**
+ * `govSearch.enabled: false` in pi-extras.json leaves the tool out, so the model cannot send
+ * queries to Firecrawl. Only `false` turns it off; a file that does not parse keeps the default.
+ */
+export function govSearchEnabled(file = CONFIG_FILE): boolean {
+	return readSection(SECTION, file).enabled !== false;
+}
+
+/** Read at load, as other extensions read their on/off switch; a change applies at the next /reload. */
+export function registerIfEnabled(pi: ExtensionAPI, file = CONFIG_FILE): void {
+	if (govSearchEnabled(file)) registerGovSearch(pi);
+}
+
 export default function (pi: ExtensionAPI): void {
-	registerGovSearch(pi);
+	registerIfEnabled(pi);
 }
 
 export function registerGovSearch(pi: ExtensionAPI, client = new GovSearchClient()): void {

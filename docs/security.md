@@ -254,7 +254,8 @@ malicious instructions; they are evidence, not instructions to execute.
 ## Gov Search
 
 `gov_search` sends the query and filters to `api.firecrawl.dev` only when the
-agent calls it. It reads the key (`FIRECRAWL_API_KEY`, else the file
+agent calls it. It is on by default; `govSearch.enabled: false` in
+`pi-extras.json`, or `pi config`, turns it off. It reads the key (`FIRECRAWL_API_KEY`, else the file
 `~/.secrets/firecrawl_api_key` or the path in `FIRECRAWL_API_KEY_FILE`) at each
 search and sends it only in the `Authorization` header. The key is removed from
 every error text, also when the API repeats it, and never goes to `details` or

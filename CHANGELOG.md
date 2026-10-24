@@ -16,6 +16,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   duplicate results, keeps the output under 16 KB, and marks it as untrusted.
   The tool description tells the model to check each source before it states
   current law, and to keep personal facts out of the query.
+- Gov Search is on by default and sends each query to Firecrawl from your IP
+  address. To turn it off, put `"govSearch": { "enabled": false }` in
+  `pi-extras.json`, or clear `extensions/gov-search.ts` in `pi config`. Then
+  restart Pi or use `/reload`.
 - Gov Search: an optional HTTP CONNECT proxy, for example wireproxy on a VPN.
   Set `PI_GOV_SEARCH_PROXY` or `govSearch.proxy` in `pi-extras.json`. The
   proxy must be on a loopback, private or Tailscale address. When a proxy is
