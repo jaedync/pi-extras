@@ -25,7 +25,7 @@ test("the extension registers gov_search with the gov row and a closed schema", 
 	assert.equal(tool.parameters.additionalProperties, false);
 	assert.deepEqual(Object.keys(tool.parameters.properties), ["query", "k", "jurisdiction", "court", "courtType", "cites", "domain"]);
 	assert.deepEqual(tool.parameters.required, ["query"]);
-	for (const phrase of ["Zero results does not prove that no law exists", "check the issuer, jurisdiction, date and in-force status", "read the source page", "untrusted", "except through a VPN or proxy"]) {
+	for (const phrase of ["Zero results does not prove that no law exists", "check the issuer, jurisdiction, date and in-force status", "read the source page", "untrusted", "except through a VPN or proxy", "keep personal facts"]) {
 		assert.ok(DESCRIPTION.includes(phrase), phrase);
 	}
 });

@@ -2194,6 +2194,8 @@ Parameters:
 
 - `query` (required): a question or search phrase. Put the jurisdiction, the
   agency or citation, and a date in it when you know them.
+  Firecrawl gets the query text, so the tool tells the model to keep personal
+  facts (names, addresses, case numbers) out of it.
 - `k`: the number of results, from 1 to 100. The default is 10.
 - `jurisdiction`: `us` for federal, or `us-` and a two-letter state or
   territory code, for example `us-ca` or `us-dc`.
