@@ -7,6 +7,7 @@ import {
 	codexAccessToken,
 	codexAccountId,
 	codexCredentials,
+	chatgptLogin,
 	parseCodexUsage,
 	parseOpenCodeGoUsage,
 	planLabel,
@@ -177,4 +178,43 @@ test("every usage poller passes the provider's Retry-After on", async () => {
 		if (savedToken === undefined) delete process.env.PI_CODEX_ACCESS_TOKEN; else process.env.PI_CODEX_ACCESS_TOKEN = savedToken;
 		if (savedAccount === undefined) delete process.env.PI_CODEX_ACCOUNT_ID; else process.env.PI_CODEX_ACCOUNT_ID = savedAccount;
 	}
+});
+
+/** A JWT with the claims given; only the payload is read, so the signature is a dummy. */
+function jwt(claims: Record<string, unknown>): string {
+	const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+	return `${part({ alg: "none" })}.${part(claims)}.sig`;
+}
+
+test("the codex account id falls back to the access token's claim when the auth file has none", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "status-plus-"));
+	const authFile = join(dir, "auth.json");
+	const access = jwt({ "https://api.openai.com/auth": { chatgpt_account_id: "claim-account" } });
+	writeFileSync(authFile, JSON.stringify({ "openai-codex": { type: "oauth", access } }));
+	const savedToken = process.env.PI_CODEX_ACCESS_TOKEN;
+	const savedAccount = process.env.PI_CODEX_ACCOUNT_ID;
+	delete process.env.PI_CODEX_ACCESS_TOKEN;
+	delete process.env.PI_CODEX_ACCOUNT_ID;
+	try {
+		assert.equal(codexAccountId(authFile), "claim-account");
+		// A token from the registry (refreshed) names the account too.
+		const refreshed = jwt({ "https://api.openai.com/auth": { chatgpt_account_id: "fresh-account" } });
+		writeFileSync(authFile, JSON.stringify({ "openai-codex": { type: "oauth" } }));
+		assert.deepEqual(await codexCredentials({ async getApiKeyForProvider() { return refreshed; } }, authFile), { token: refreshed, accountId: "fresh-account" });
+		writeFileSync(authFile, JSON.stringify({ "openai-codex": { access: "not-a-jwt" } }));
+		assert.equal(codexAccountId(authFile), undefined);
+	} finally {
+		if (savedToken === undefined) delete process.env.PI_CODEX_ACCESS_TOKEN; else process.env.PI_CODEX_ACCESS_TOKEN = savedToken;
+		if (savedAccount === undefined) delete process.env.PI_CODEX_ACCOUNT_ID; else process.env.PI_CODEX_ACCOUNT_ID = savedAccount;
+	}
+});
+
+test("chatgptLogin is true only for an OAuth openai credential, not an API key", () => {
+	const dir = mkdtempSync(join(tmpdir(), "status-plus-"));
+	const authFile = join(dir, "auth.json");
+	writeFileSync(authFile, JSON.stringify({ openai: { type: "oauth", access: "x" } }));
+	assert.equal(chatgptLogin(authFile), true);
+	writeFileSync(authFile, JSON.stringify({ openai: { type: "api_key", key: "sk" } }));
+	assert.equal(chatgptLogin(authFile), false);
+	assert.equal(chatgptLogin(join(dir, "missing.json")), false);
 });

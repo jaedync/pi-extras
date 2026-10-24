@@ -5,9 +5,12 @@
  * not clobbered between polls. Adding a provider means adding a table entry.
  */
 import {
+	CODEX_AUTH_FILE,
+	chatgptLogin,
 	pollCodexUsage,
 	pollOpenCodeGoUsage,
 	refused,
+	type FetchLike,
 	type ProviderUsage,
 	type RegistryLike,
 } from "./provider-limits.ts";
@@ -356,6 +359,22 @@ async function pollCodexEntries(ctx: PollerContext): Promise<LimitEntry[] | unde
 	return usage ? codexEntries(usage) : undefined;
 }
 
+/**
+ * Sign in with ChatGPT gives apps no usage endpoint and no rate-limit headers
+ * (openai/codex#54219), but its requests count toward the same ChatGPT plan.
+ * An openai-codex login, kept only as a meter, reads that plan's windows.
+ * An openai API key bills per token, so the windows do not apply to it.
+ */
+export async function pollOpenAIPlanEntries(
+	ctx: PollerContext,
+	authFile = CODEX_AUTH_FILE,
+	fetchImpl: FetchLike = fetch,
+): Promise<LimitEntry[] | undefined> {
+	if (!chatgptLogin(authFile)) return undefined;
+	const usage = await pollCodexUsage(ctx.modelRegistry, fetchImpl, authFile);
+	return usage ? codexEntries(usage) : undefined;
+}
+
 async function pollOpenCodeGoEntries(ctx: PollerContext): Promise<LimitEntry[] | undefined> {
 	const usage = await pollOpenCodeGoUsage(ctx.modelRegistry);
 	return usage ? openCodeGoEntries(usage) : undefined;
@@ -365,6 +384,7 @@ async function pollOpenCodeGoEntries(ctx: PollerContext): Promise<LimitEntry[] |
 export const LIMIT_POLLERS: Record<string, { interval: (ctx: PollerContext) => PollInterval; poll: LimitPoller }> = {
 	anthropic: { interval: anthropicPollInterval, poll: pollAnthropicUsage },
 	"openai-codex": { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: pollCodexEntries },
+	openai: { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: (ctx) => pollOpenAIPlanEntries(ctx) },
 	"opencode-go": { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: pollOpenCodeGoEntries },
 	openrouter: { interval: () => ({ normalMs: 10 * 60_000, hotMs: 5 * 60_000 }), poll: pollOpenRouterCredits },
 };

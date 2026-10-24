@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	FORCED_POLL_FLOOR_MS,
 	LIMIT_POLLERS,
@@ -11,6 +14,7 @@ import {
 	parseCodexLimits,
 	parseLimitHeaders,
 	pollGapMs,
+	pollOpenAIPlanEntries,
 	topEntries,
 } from "../lib/status-plus-limits.ts";
 
@@ -112,4 +116,28 @@ test("anthropic polls the local proxy route often and Anthropic itself rarely", 
 	);
 	assert.equal(LIMIT_POLLERS.anthropic.interval, anthropicPollInterval);
 	assert.equal(LIMIT_POLLERS["openai-codex"].interval({ modelRegistry: registry() }).normalMs, 60_000);
+	assert.equal(LIMIT_POLLERS.openai.interval({ modelRegistry: registry() }).normalMs, 60_000);
+});
+
+test("openai through Sign in with ChatGPT shows the plan windows that the openai-codex login reads", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "status-plus-openai-"));
+	const authFile = join(dir, "auth.json");
+	const body = { plan_type: "plus", rate_limit: { primary_window: { used_percent: 30, limit_window_seconds: 18_000, reset_at: 2_000_000_000 } } };
+	const seen: string[] = [];
+	const fetchOk = async (url: string) => { seen.push(url); return new Response(JSON.stringify(body), { status: 200 }); };
+	const ctx = { modelRegistry: { async getApiKeyForProvider(provider: string) { return provider === "openai-codex" ? "codex-token" : undefined; }, getProvider: () => undefined } };
+	const savedAccount = process.env.PI_CODEX_ACCOUNT_ID;
+	delete process.env.PI_CODEX_ACCOUNT_ID;
+	try {
+		writeFileSync(authFile, JSON.stringify({ openai: { type: "oauth" }, "openai-codex": { type: "oauth", accountId: "acct" } }));
+		const entries = await pollOpenAIPlanEntries(ctx, authFile, fetchOk);
+		assert.equal(entries?.[0]?.usedPct, 30);
+		assert.deepEqual(seen, ["https://chatgpt.com/backend-api/wham/usage"]);
+		// An API key bills per token and has no plan windows: the codex meter must not stand in for it.
+		writeFileSync(authFile, JSON.stringify({ openai: { type: "api_key" }, "openai-codex": { type: "oauth", accountId: "acct" } }));
+		assert.equal(await pollOpenAIPlanEntries(ctx, authFile, fetchOk), undefined);
+		assert.equal(seen.length, 1);
+	} finally {
+		if (savedAccount === undefined) delete process.env.PI_CODEX_ACCOUNT_ID; else process.env.PI_CODEX_ACCOUNT_ID = savedAccount;
+	}
 });

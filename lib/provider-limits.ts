@@ -78,12 +78,38 @@ export function planLabel(value: unknown): string | undefined {
 	return PLAN_LABEL.test(plan) ? plan : undefined;
 }
 
-function readCodexAuth(authFile: string): { access?: unknown; accountId?: unknown } {
+type AuthRecord = { type?: unknown; access?: unknown; accountId?: unknown };
+
+function readAuth(authFile: string, provider: string): AuthRecord {
 	try {
-		const auth = JSON.parse(readFileSync(authFile, "utf8")) as Record<string, { access?: unknown; accountId?: unknown }>;
-		return auth["openai-codex"] ?? {};
+		const auth = JSON.parse(readFileSync(authFile, "utf8")) as Record<string, AuthRecord>;
+		return auth[provider] ?? {};
 	} catch {
 		return {};
+	}
+}
+
+const readCodexAuth = (authFile: string): AuthRecord => readAuth(authFile, "openai-codex");
+
+/**
+ * Whether the openai provider is a Sign in with ChatGPT login (OAuth), which
+ * uses the ChatGPT plan, rather than an API key billed per token.
+ */
+export function chatgptLogin(authFile = CODEX_AUTH_FILE): boolean {
+	return readAuth(authFile, "openai").type === "oauth";
+}
+
+const ACCOUNT_CLAIM = "https://api.openai.com/auth";
+
+/** The ChatGPT account a Codex access token names, as Pi itself reads it; undefined for anything else. */
+function tokenAccountId(token: string | undefined): string | undefined {
+	const payload = token?.split(".")[1];
+	if (!payload) return undefined;
+	try {
+		const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, { chatgpt_account_id?: unknown } | undefined>;
+		return nonEmpty(claims[ACCOUNT_CLAIM]?.chatgpt_account_id);
+	} catch {
+		return undefined;
 	}
 }
 
@@ -91,8 +117,10 @@ function nonEmpty(value: unknown): string | undefined {
 	return typeof value === "string" && value ? value : undefined;
 }
 
+/** The env override, the stored id, else the claim in the stored token (a login that saved no id). */
 export function codexAccountId(authFile = CODEX_AUTH_FILE): string | undefined {
-	return nonEmpty(process.env.PI_CODEX_ACCOUNT_ID) ?? nonEmpty(readCodexAuth(authFile).accountId);
+	const auth = readCodexAuth(authFile);
+	return nonEmpty(process.env.PI_CODEX_ACCOUNT_ID) ?? nonEmpty(auth.accountId) ?? tokenAccountId(nonEmpty(auth.access));
 }
 
 /**
@@ -109,7 +137,7 @@ export async function codexCredentials(
 	authFile = CODEX_AUTH_FILE,
 ): Promise<{ token: string; accountId: string } | undefined> {
 	const token = (await registry?.getApiKeyForProvider("openai-codex")) || codexAccessToken(authFile);
-	const accountId = codexAccountId(authFile);
+	const accountId = codexAccountId(authFile) ?? tokenAccountId(token);
 	return token && accountId ? { token, accountId } : undefined;
 }
 

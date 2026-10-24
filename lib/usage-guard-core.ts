@@ -505,6 +505,14 @@ function reportLimitFigures(
 
 export const NO_ENDPOINT_REASON = "It has no usage endpoint to poll. Limits show only if its responses carry rate-limit headers.";
 export const NO_READING_REASON = "No reading yet: the poll is pending, failed, or waits for its gap. Call again later with refresh: true.";
+/** Sign in with ChatGPT reports no usage itself; an openai-codex login reads the same plan (status-plus-limits.ts). */
+export const OPENAI_METER_REASON = "Sign in with ChatGPT reports no usage. Its ChatGPT plan windows show only when an openai-codex login is also present (/login openai-codex), and only for an OAuth openai login, not an API key.";
+
+/** Why a provider that can be polled may still have no reading, when that is not just a pending poll. */
+const PROVIDER_REASONS: Readonly<Record<string, string>> = { openai: OPENAI_METER_REASON };
+
+const missingReason = (provider: string): string =>
+	PROVIDER_REASONS[provider] ?? (Object.hasOwn(LIMIT_POLLERS, provider) ? NO_READING_REASON : NO_ENDPOINT_REASON);
 
 /**
  * Paid providers in scope that have no limit snapshot, with the reason. A
@@ -519,7 +527,7 @@ export function unavailableLimits(
 	const result: Record<string, string> = {};
 	for (const provider of [...metered].sort()) {
 		if (known.has(provider)) continue;
-		result[provider] = Object.hasOwn(LIMIT_POLLERS, provider) ? NO_READING_REASON : NO_ENDPOINT_REASON;
+		result[provider] = missingReason(provider);
 	}
 	return result;
 }
@@ -540,7 +548,9 @@ function reportNotes(
 	if (model.unmetered && !ownWindows) {
 		notes.push(`${provider}/${model.id ?? "model"} has zero token cost and reports no usage limits. Usage does not limit this session's own work: keep working without regard to usage.`);
 	} else if (!sawActiveProvider) {
-		notes.push(model.provider && !Object.hasOwn(LIMIT_POLLERS, model.provider)
+		notes.push(model.provider && Object.hasOwn(PROVIDER_REASONS, model.provider)
+			? `No usage data yet for ${provider}. ${PROVIDER_REASONS[model.provider]}`
+			: model.provider && !Object.hasOwn(LIMIT_POLLERS, model.provider)
 			? `No usage data yet for ${provider}. It has no usage endpoint to poll, so limits come only from response headers after its next request.`
 			: `No usage data yet for ${provider}; call again with refresh: true after a request has been made.`);
 	} else if (!ownWindows) {

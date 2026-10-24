@@ -495,9 +495,7 @@ A `usage` call or `/usage` reads the active model's provider first when it has
 no snapshot. `all: true` also reads each provider of a scoped model (with no
 scoped models, of each model that has credentials). These first reads keep the
 shared poll gap. With `all: true`, `limitsUnavailable` names each paid
-provider in scope that still has no reading, and the reason. A provider with
-no usage endpoint stays there: for example, OpenAI through Sign in with
-ChatGPT reports no plan usage to apps. For
+provider in scope that still has no reading, and the reason. For
 dollar figures, a `usage` call or `/usage` also reads local session files and,
 when set up, Tokenfold and OpenRouter (see [Dollar figures](#dollar-figures)).
 `PI_OFFLINE` stops the Tokenfold and OpenRouter requests. Only windows that
@@ -506,6 +504,13 @@ govern the active model count: provider-wide windows always, model-specific ones
 carries that family. Balances (Enterprise spend, prepaid credits) and per-minute
 rate limits taken from response headers are reported but never warned on.
 
+- OpenAI through Sign in with ChatGPT (`/login openai`) gives apps no usage
+  endpoint and no rate-limit headers (openai/codex#54219). Its requests count
+  toward the same ChatGPT plan as Codex, so a second login, `/login
+  openai-codex`, works as a meter: Status Plus reads the plan's 5h and 7d
+  windows with it and shows them for the `openai` provider too. You do not have
+  to use the `openai-codex` models. An `openai` API key is billed per token,
+  so it gets no windows.
 - `usage` tool: percent used, thresholds, reset time, seconds until reset and
   `resumeAfterSeconds` (reset plus margin) per window, and `waitable` when the
   reset is exact and within `maxWaitSeconds`. `setBudget` records a

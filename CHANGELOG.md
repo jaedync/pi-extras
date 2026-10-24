@@ -14,9 +14,13 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   first when there is no snapshot, so the first report is not empty. With
   `all: true`, the tool reads every provider in scope, also when no models are
   scoped (then every model with credentials). A new `limitsUnavailable` field
-  names each paid provider that still has no reading, and why. OpenAI through
-  Sign in with ChatGPT is one: it gives apps no usage endpoint and no
-  rate-limit headers.
+  names each paid provider that still has no reading, and why.
+- Status Plus and Usage Guard: OpenAI through Sign in with ChatGPT shows the
+  ChatGPT plan windows (5h, 7d). That login gives apps no usage endpoint and
+  no rate-limit headers, so the windows come from an `openai-codex` login,
+  which reads the same plan. Run `/login openai-codex` one time to use it as a
+  meter. An `openai` API key gets no windows. The Codex poll also takes the
+  account id from the access token when the login saved none.
 
 ## 0.27.0 - 2026-10-22
 

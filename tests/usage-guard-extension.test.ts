@@ -419,13 +419,14 @@ test("all: true with no scoped models reads every model with credentials and nam
 	const unscoped = { ...ctx, scopedModels: [], modelRegistry: { getAvailable: () => available, getApiKeyForProvider: async () => undefined } };
 	anthropicSnapshot(store, 40);
 	const refreshed: string[] = [];
-	// The Go poll finds nothing; openai has no poller, so the store never gets a snapshot for it.
+	// The Go poll finds nothing; openai has no openai-codex meter here, so it gets no snapshot either.
 	store.setRefresher(async (provider) => { refreshed.push(provider); });
 	await pi.handlers.get("session_start")!({}, unscoped);
 	const report = JSON.parse((await pi.tool!.execute("t1", { all: true }, undefined, undefined, unscoped)).content[0].text);
 	assert.deepEqual(refreshed.sort(), ["openai", "opencode-go"]);
+	assert.match(report.limitsUnavailable["opencode-go"], /No reading yet/);
 	assert.deepEqual(Object.keys(report.limitsUnavailable), ["openai", "opencode-go"]);
-	assert.match(report.limitsUnavailable.openai, /no usage endpoint/);
+	assert.match(report.limitsUnavailable.openai, /\/login openai-codex/);
 	assert.match(report.limitsUnavailable["opencode-go"], /No reading yet/);
 	assert.deepEqual(report.unmeteredModels, ["fw01/local"]);
 	assert.ok(report.notes.some((note: string) => /limitsUnavailable/.test(note)));
@@ -442,4 +443,13 @@ test("/usage reads the active provider first when the store has no snapshot of i
 	await pi.command!.handler("", ctx);
 	assert.deepEqual(refreshed, [["anthropic", false]]);
 	assert.match(pi.sent[0].content, /"window": "7d"/);
+});
+
+test("a provider with no usage endpoint is named with that reason", async () => {
+	const { pi, store, ctx } = setup();
+	const unscoped = { ...ctx, scopedModels: [{ model: { provider: "deepinfra", id: "m", cost: { input: 1, output: 1 } } }] };
+	anthropicSnapshot(store, 40);
+	store.setRefresher(async () => {});
+	const report = JSON.parse((await pi.tool!.execute("t1", { all: true }, undefined, undefined, unscoped)).content[0].text);
+	assert.match(report.limitsUnavailable.deepinfra, /no usage endpoint/);
 });

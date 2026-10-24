@@ -65,4 +65,7 @@ test("the no-data note offers refresh only for a provider that can be polled", (
 	assert.match(none.notes.join(" "), /response headers/);
 	const anthropic = usageReport([], OPUS, DEFAULT_GUARD_CONFIG, undefined, NOW);
 	assert.match(anthropic.notes.join(" "), /refresh: true/);
+	// Sign in with ChatGPT has a poller, but only through a second login: the note says which.
+	const openai = usageReport([], { provider: "openai", id: "gpt-6.1-sol" }, DEFAULT_GUARD_CONFIG, undefined, NOW);
+	assert.match(openai.notes.join(" "), /\/login openai-codex/);
 });
