@@ -4,7 +4,7 @@
  * (ftc.gov and search.ftc.gov) with the same title and description. Only
  * the first, higher-ranked copy stays.
  */
-import { cleanDetail, errors } from "./errors.ts";
+import { cleanDetail, errors, redact } from "./errors.ts";
 
 export const MAX_TITLE_CHARS = 200;
 const MAX_URL_CHARS = 2048;
@@ -40,17 +40,21 @@ function webUrl(value: unknown): string | undefined {
 	}
 }
 
-function record(item: unknown): Omit<GovResult, "rank"> | undefined {
+function record(item: unknown, key: string | undefined): Omit<GovResult, "rank"> | undefined {
 	if (!isObject(item)) return undefined;
-	const url = webUrl(item.url);
+	// Redact before any cut: a cut through the key would leave a part that no later pass can find.
+	const text = (value: unknown) => (typeof value === "string" ? redact(value, key) : undefined);
+	const url = webUrl(text(item.url));
 	if (!url) return undefined;
-	const title = typeof item.title === "string" ? cleanDetail(item.title, MAX_TITLE_CHARS) : "";
-	const snippet = typeof item.description === "string" ? cleanDetail(item.description, MAX_DESCRIPTION_CHARS) : "";
+	const rawTitle = text(item.title);
+	const rawDescription = text(item.description);
+	const title = rawTitle !== undefined ? cleanDetail(rawTitle, MAX_TITLE_CHARS) : "";
+	const snippet = rawDescription !== undefined ? cleanDetail(rawDescription, MAX_DESCRIPTION_CHARS) : "";
 	return { title: title || new URL(url).hostname, url, snippet, excerptClipped: false };
 }
 
-/** The `data.web` list of a 200 answer. */
-export function parseResponse(body: string): ParsedResponse {
+/** The `data.web` list of a 200 answer, with `key` removed from every field. */
+export function parseResponse(body: string, key?: string): ParsedResponse {
 	let json: unknown;
 	try {
 		json = JSON.parse(body);
@@ -62,7 +66,7 @@ export function parseResponse(body: string): ParsedResponse {
 	if (!Array.isArray(web)) throw errors.response("data.web is not a list");
 	const results: GovResult[] = [];
 	for (const item of web) {
-		const parsed = record(item);
+		const parsed = record(item, key);
 		if (parsed) results.push({ ...parsed, rank: results.length + 1 });
 	}
 	return { results, retrievedCount: web.length, rejectedCount: web.length - results.length };
@@ -102,7 +106,7 @@ export function dedupe(results: readonly GovResult[]): { results: GovResult[]; d
 }
 
 /** The reason in a 400 answer: `error` plus the first few `details`, cleaned and bounded. */
-export function badRequestReason(body: string): string {
+export function badRequestReason(body: string, key?: string): string {
 	let json: unknown;
 	try {
 		json = JSON.parse(body);
@@ -120,5 +124,6 @@ export function badRequestReason(body: string): string {
 			parts.push(path ? `${path}: ${detail.message}` : detail.message);
 		}
 	}
-	return cleanDetail(parts.join("; "));
+	// Redact before the cut, as in `record`.
+	return cleanDetail(redact(parts.join("; "), key));
 }

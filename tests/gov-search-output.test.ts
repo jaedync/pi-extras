@@ -92,6 +92,8 @@ test("a 400 reason joins error and details, bounded", () => {
 	assert.equal(badRequestReason(JSON.stringify({ success: false, error: "Invalid query parameters", details: [{ path: ["courtType"], message: "Invalid enum value" }, "x"] })), "Invalid query parameters; courtType: Invalid enum value; x");
 	assert.equal(badRequestReason("not json"), "");
 	assert.ok(badRequestReason(JSON.stringify({ error: "e".repeat(5000) })).length <= 300);
+	const key = ["fc", "synthetic", "cut", "0003"].join("-");
+	assert.ok(!badRequestReason(JSON.stringify({ error: `${"e".repeat(295)}${key}` }), key).includes(key.slice(0, 4)), "redacted before the cut");
 });
 
 test("redact removes raw and percent-encoded keys; cleanDetail drops control text", () => {

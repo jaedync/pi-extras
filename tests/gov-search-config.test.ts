@@ -9,12 +9,17 @@ import { GovSearchError } from "../lib/gov-search/errors.ts";
 const isConfigError = (pattern: RegExp) => (error: unknown) => error instanceof GovSearchError && error.code === "proxyConfig" && pattern.test(error.message);
 
 test("only loopback, private and Tailscale addresses can be the proxy", () => {
-	for (const host of ["localhost", "127.0.0.1", "127.8.9.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.5", "100.64.0.1", "100.127.255.254", "::1", "fd7a:115c:a1e0::1", "fc00::5", "::ffff:127.0.0.1"]) {
+	for (const host of ["localhost", "127.0.0.1", "127.8.9.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.5", "100.64.0.1", "100.127.255.254", "::1", "fd7a:115c:a1e0::1", "fc00::5", "::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:a00:1"]) {
 		assert.equal(isPrivateHost(host), true, host);
 	}
-	for (const host of ["8.8.8.8", "172.32.0.1", "100.128.0.1", "192.169.0.1", "2001:db8::1", "::ffff:8.8.8.8", "proxy.example.com", "localhost.example", "fe80::1"]) {
+	for (const host of ["8.8.8.8", "172.32.0.1", "100.128.0.1", "192.169.0.1", "2001:db8::1", "::ffff:8.8.8.8", "::ffff:808:808", "proxy.example.com", "localhost.example", "fe80::1"]) {
 		assert.equal(isPrivateHost(host), false, host);
 	}
+});
+
+test("the URL parser writes an IPv4-mapped host in hex, and it is checked as the IPv4 address", () => {
+	assert.equal(parseProxyUrl("http://[::ffff:127.0.0.1]:8080", "env").host, "::ffff:7f00:1");
+	assert.throws(() => parseProxyUrl("http://[::ffff:8.8.8.8]:8080", "env"), isConfigError(/must be localhost/));
 });
 
 test("a proxy URL parses to host and port", () => {

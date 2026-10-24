@@ -57,7 +57,8 @@ export class GovSearchClient {
 		const key = await readKey(env, options.signal, this.options.defaultKeyFile);
 		try {
 			const proxy = this.options.proxy(env);
-			const identity = key ? createHash("sha256").update(key).digest("hex") : "keyless";
+			// A cooldown belongs to one key on one path: a proxy leaves from another address.
+			const identity = `${key ? createHash("sha256").update(key).digest("hex") : "keyless"} ${proxy ? `${proxy.host}:${proxy.port}` : "direct"}`;
 			const cooldown = this.cooldowns.get(identity);
 			if (cooldown && cooldown.until > Date.now()) throw cooldown.error;
 			if (this.inFlight >= this.options.maxInFlight) throw errors.busy(this.options.maxInFlight);
@@ -65,14 +66,11 @@ export class GovSearchClient {
 			try {
 				const reply = await this.send(requestBody(valid), key, proxy, options.signal);
 				if (reply.status === 429) this.cooldowns.set(identity, { until: Date.now() + retryAfterMs(reply), error: errors.rate(key !== undefined) });
-				const parsed = parseResponse(this.checkStatus(reply, key));
+				const parsed = parseResponse(this.checkStatus(reply, key), key);
 				const unique = dedupe(parsed.results);
 				const filtered = ["jurisdiction", "court", "courtType", "cites", "domain"].some((name) => valid[name as keyof typeof valid] !== undefined);
-				const output = formatOutput(unique.results, { requestedCount: valid.k, retrievedCount: parsed.retrievedCount, duplicateCount: unique.duplicateCount, rejectedCount: parsed.rejectedCount, filtered });
-				// The key only goes in a header, but a page that quotes it must not carry it into the transcript.
-				const clean = (text: string) => redact(text, key);
-				const results = output.results.map((result) => ({ ...result, title: clean(result.title), url: clean(result.url), snippet: clean(result.snippet) }));
-				return { ...output, text: clean(output.text), results, proxied: proxy !== undefined, keyed: key !== undefined };
+				const output = formatOutput(unique.results.slice(0, valid.k), { requestedCount: valid.k, retrievedCount: parsed.retrievedCount, duplicateCount: unique.duplicateCount, rejectedCount: parsed.rejectedCount, filtered });
+				return { ...output, proxied: proxy !== undefined, keyed: key !== undefined };
 			} finally {
 				this.inFlight--;
 			}
@@ -86,6 +84,8 @@ export class GovSearchClient {
 		const controller = new AbortController();
 		let timedOut = false;
 		const timer = setTimeout(() => { timedOut = true; controller.abort(); }, this.options.timeoutMs);
+		// The sockets keep the process alive while a request runs; the timer alone must not.
+		timer.unref();
 		const signal = outer ? AbortSignal.any([controller.signal, outer]) : controller.signal;
 		const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "pi-extras-gov-search" };
 		if (key) headers.Authorization = `Bearer ${key}`;
@@ -103,7 +103,7 @@ export class GovSearchClient {
 
 	private checkStatus(reply: Reply, key: string | undefined): string {
 		if (reply.status === 200) return reply.body;
-		if (reply.status === 400) throw errors.badRequest(redact(badRequestReason(reply.body), key));
+		if (reply.status === 400) throw errors.badRequest(badRequestReason(reply.body, key));
 		if (key && (reply.status === 401 || reply.status === 403)) throw errors.auth(reply.status);
 		if (reply.status === 403) throw errors.blocked();
 		if (reply.status === 429) throw errors.rate(key !== undefined);

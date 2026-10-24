@@ -286,3 +286,126 @@ test("more calls than the limit at the same time are refused", async () => {
 		await api.close();
 	}
 });
+
+/** A TCP server that takes connections and never answers, like a tunnel that stalls before the TLS ServerHello. */
+async function silentServer() {
+	const sockets = new Set<Socket>();
+	const server = createNetServer((socket) => {
+		sockets.add(socket);
+		socket.on("error", () => {});
+	});
+	const port = await listen(server);
+	return { port, close: () => { for (const socket of sockets) socket.destroy(); return close(server); } };
+}
+
+test("a TLS handshake that never ends times out and frees its slot", { timeout: 5_000 }, async () => {
+	const silent = await silentServer();
+	try {
+		const { tlsSecure } = await import("../lib/gov-search/transport.ts");
+		const search = client(silent.port, { secure: tlsSecure(), timeoutMs: 200, maxInFlight: 1 });
+		await assert.rejects(search.search({ query: "q" }), failsWith("timeout"));
+		// A leaked slot would make this one fail as busy instead of timing out.
+		await assert.rejects(search.search({ query: "q" }), failsWith("timeout"));
+	} finally {
+		await silent.close();
+	}
+});
+
+test("an abort during the TLS handshake cancels at once", { timeout: 5_000 }, async () => {
+	const silent = await silentServer();
+	try {
+		const { tlsSecure } = await import("../lib/gov-search/transport.ts");
+		const controller = new AbortController();
+		const pending = client(silent.port, { secure: tlsSecure(), timeoutMs: 10_000 }).search({ query: "q" }, { signal: controller.signal });
+		setTimeout(() => controller.abort(), 100);
+		const started = Date.now();
+		await assert.rejects(pending, failsWith("cancelled"));
+		assert.ok(Date.now() - started < 2_000);
+	} finally {
+		await silent.close();
+	}
+});
+
+test("a proxy that accepts the tunnel and then closes it is a network error, not a direct request", { timeout: 5_000 }, async () => {
+	const api = await fakeApi(ok(web));
+	const proxy = createServer();
+	const tunnels = new Set<Socket>();
+	proxy.on("connect", (_request: IncomingMessage, socket: Socket) => {
+		tunnels.add(socket);
+		socket.end("HTTP/1.1 200 Connection Established\r\n\r\n");
+	});
+	const proxyPort = await listen(proxy);
+	try {
+		const { tlsSecure } = await import("../lib/gov-search/transport.ts");
+		const address = () => ({ host: "127.0.0.1", port: proxyPort, source: "test" });
+		for (const secure of [tlsSecure(), plain]) {
+			await assert.rejects(client(api.port, { secure, timeoutMs: 2_000, proxy: address }).search({ query: "q" }), failsWith("network", /through the proxy/));
+		}
+		assert.equal(api.requests.length, 0);
+	} finally {
+		for (const socket of tunnels) socket.destroy();
+		await close(proxy);
+		await api.close();
+	}
+});
+
+test("an abort while the body arrives cancels, and a body cut short is a network error", { timeout: 5_000 }, async () => {
+	const api = await fakeApi((seen, response) => {
+		response.writeHead(200, { "Content-Type": "application/json", "Content-Length": "1000" });
+		response.write('{"success":true,');
+		if (seen.body.includes("cut")) setTimeout(() => response.destroy(), 50);
+	});
+	try {
+		const controller = new AbortController();
+		const pending = client(api.port, { timeoutMs: 10_000 }).search({ query: "stall" }, { signal: controller.signal });
+		setTimeout(() => controller.abort(), 100);
+		await assert.rejects(pending, failsWith("cancelled"));
+		await assert.rejects(client(api.port, { timeoutMs: 2_000 }).search({ query: "cut" }), failsWith("network"));
+	} finally {
+		await api.close();
+	}
+});
+
+test("a key that a page quotes is removed before any cut, so no part of it is left", async () => {
+	const api = await fakeApi(ok([{ url: "https://e.example.gov/a", title: `${"t".repeat(195)}${KEY}`, description: `${"d".repeat(290)}${KEY} more` }]));
+	try {
+		const result = await client(api.port, {}, { FIRECRAWL_API_KEY: KEY }).search({ query: "q" });
+		assert.ok(!JSON.stringify(result).includes(KEY.slice(0, 8)), "no key prefix in text or details");
+	} finally {
+		await api.close();
+	}
+});
+
+test("never more than k results, also when the API sends more", async () => {
+	const many = Array.from({ length: 6 }, (_, i) => ({ url: `https://code.example.gov/${i}`, title: `S${i}`, description: `Text ${i}.` }));
+	const api = await fakeApi(ok(many));
+	try {
+		const result = await client(api.port).search({ query: "q", k: 2 });
+		assert.equal(result.resultCount, 2);
+		assert.deepEqual(result.results.map((r) => r.url), ["https://code.example.gov/0", "https://code.example.gov/1"]);
+	} finally {
+		await api.close();
+	}
+});
+
+test("a 429 on one path does not block the other path, which leaves from another address", async () => {
+	let answered = 0;
+	const api = await fakeApi((seen, response) => {
+		if (answered++ === 0) response.writeHead(429, { "Retry-After": "120" }).end("{}");
+		else ok(web)(seen, response);
+	});
+	const proxy = await fakeProxy(api.port);
+	try {
+		let via: ProxyAddress | undefined;
+		const search = client(api.port, { proxy: () => via });
+		await assert.rejects(search.search({ query: "q" }), failsWith("rate"));
+		via = { host: "127.0.0.1", port: proxy.port, source: "test" };
+		assert.equal((await search.search({ query: "q" })).proxied, true);
+		via = undefined;
+		await assert.rejects(search.search({ query: "q" }), failsWith("rate"));
+		assert.equal(api.requests.length, 2, "the direct path stays in its cooldown");
+	} finally {
+		await proxy.close();
+		await api.close();
+	}
+});

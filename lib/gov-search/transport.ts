@@ -38,12 +38,19 @@ export function tlsSecure(options: ConnectionOptions = {}): Secure {
 	return (socket, target) => new Promise((resolve, reject) => {
 		// SNI takes host names only; the API target is always one, and test targets can be IP addresses.
 		const secured = tlsConnect({ ...options, socket, host: target.host, ...(isIP(target.host) ? {} : { servername: target.host }), ALPNProtocols: ["http/1.1"] });
+		let settled = false;
 		const fail = (error: Error) => {
+			if (settled) return;
+			settled = true;
 			secured.destroy();
 			reject(error);
 		};
 		secured.once("error", fail);
+		// A TLS client socket whose transport is destroyed (an abort, a stalled tunnel) closes with no error.
+		secured.once("close", () => fail(Object.assign(new Error("TLS socket closed before the handshake ended"), { code: "ECONNRESET" })));
 		secured.once("secureConnect", () => {
+			if (settled) return;
+			settled = true;
 			secured.off("error", fail);
 			resolve(secured);
 		});
@@ -61,6 +68,8 @@ export function tunnel(proxy: ProxyAddress, target: Target, signal: AbortSignal)
 				reject(errors.proxyRefused(response.statusCode));
 				return;
 			}
+			// Until post() tracks it, an error on this socket would have no listener and crash Pi.
+			socket.on("error", () => {});
 			// Bytes the proxy sent after its answer belong to the tunnel.
 			if (head.length) socket.unshift(head);
 			resolve(socket);
@@ -94,6 +103,8 @@ function readReply(response: IncomingMessage, maxBytes: number, proxied: boolean
 		response.once("end", () => resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
 		response.on("error", (error) => reject(errors.network(errorCode(error), proxied)));
 		response.once("aborted", () => reject(errors.network("ECONNRESET", proxied)));
+		// The fallback when a closed socket sends neither of the two events above.
+		response.once("close", () => { if (!response.complete) reject(errors.network("ECONNRESET", proxied)); });
 	});
 }
 
@@ -124,22 +135,30 @@ export async function post(path: string, headers: Record<string, string>, body: 
 		return socket;
 	};
 	const destroyAll = () => { for (const socket of sockets) socket.destroy(); };
-	options.signal.addEventListener("abort", destroyAll, { once: true });
+	// Each step also races the abort, so a step that never settles by itself cannot hang the call.
+	let onAbort = () => {};
+	const aborted = new Promise<never>((_, reject) => { onAbort = () => { destroyAll(); reject(errors.cancelled()); }; });
+	aborted.catch(() => {});
+	const race = <T>(step: Promise<T>) => Promise.race([step, aborted]);
+	options.signal.addEventListener("abort", onAbort, { once: true });
 	try {
 		if (options.signal.aborted) throw errors.cancelled();
 		const proxied = options.proxy !== undefined;
-		const raw = track(options.proxy ? await tunnel(options.proxy, options.target, options.signal) : netConnect(options.target.port, options.target.host));
-		// A tunnel that the abort listener missed (it opened during the await) must not live on.
+		const opening = options.proxy ? tunnel(options.proxy, options.target, options.signal) : undefined;
+		// A tunnel that opens after the abort won the race is closed, not left open.
+		opening?.then((socket) => { if (options.signal.aborted) socket.destroy(); }, () => {});
+		const raw = track(opening ? await race(opening) : netConnect(options.target.port, options.target.host));
+		// A tunnel that opened as the abort came must not live on.
 		if (options.signal.aborted) throw errors.cancelled();
 		let secured: Socket;
 		try {
-			secured = track(await options.secure(raw, options.target));
+			secured = track(await race(options.secure(raw, options.target)));
 		} catch (error) {
 			throw error instanceof GovSearchError ? error : errors.network(errorCode(error), proxied);
 		}
-		return await exchange(secured, path, headers, body, options);
+		return await race(exchange(secured, path, headers, body, options));
 	} finally {
-		options.signal.removeEventListener("abort", destroyAll);
+		options.signal.removeEventListener("abort", onAbort);
 		destroyAll();
 	}
 }

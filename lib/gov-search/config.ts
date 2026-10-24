@@ -44,9 +44,7 @@ export function isPrivateHost(host: string): boolean {
 	if (host === "localhost") return true;
 	const family = isIP(host);
 	if (family === 4) return PRIVATE.check(host, "ipv4");
-	// An IPv4-mapped IPv6 address is checked as the IPv4 address it carries.
-	const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(host);
-	if (family === 6 && mapped) return PRIVATE.check(mapped[1]!, "ipv4");
+	// BlockList checks an IPv4-mapped IPv6 address (::ffff:7f00:1) against the IPv4 ranges.
 	return family === 6 && PRIVATE.check(host, "ipv6");
 }
 
