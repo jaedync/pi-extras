@@ -11,11 +11,11 @@ import { MAX_RUN_MINUTES } from "./budget.ts";
 import { childMessageDescription, mainMessageDescription, stopDescription, subagentDescription } from "./describe.ts";
 import { capReport, reportText, rosterText } from "./format.ts";
 import { isThinking, type ModelChoice, resolveModel, THINKING_LEVELS, type Thinking, thinkingFor, type ThinkingSettings } from "./models.ts";
-import { EVERYONE, MAIN } from "./names.ts";
+import { baseName, EVERYONE, MAIN } from "./names.ts";
 import { teamNow } from "./status.ts";
 import type { HostTeam } from "./contract.ts";
 import type { SendResult } from "./team.ts";
-import { type AgentRecord, type CheckUpdate, LIVE_STATES } from "./types.ts";
+import { type AgentRecord, type CheckUpdate, LIVE_STATES, neverStarted } from "./types.ts";
 
 export const MAX_TASK_CHARS = 60_000;
 export const MAX_MESSAGE_CHARS = 20_000;
@@ -125,6 +125,12 @@ function spawnSummary(record: AgentRecord, team: HostTeam): string {
 	return `Started ${record.name} on ${record.model}${thinking}${place}. ${where} Its report will arrive as a message.${checked} Talk to it with message({ to: "${record.name}", text }).`;
 }
 
+/** Said when the name the spawn asked for (or got from its task) belongs to another agent. */
+function renameNote(record: AgentRecord, params: Pick<SubagentInput, "name" | "task">): string {
+	const wanted = baseName(params.name, params.task);
+	return wanted === record.name ? "" : ` The name ${wanted} was taken; this agent is ${record.name}.`;
+}
+
 export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 	return {
 		name: "subagent",
@@ -166,7 +172,7 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 				...(record.worktree ? { worktree: { ...record.worktree } } : {}),
 				...(record.cwd ? { cwd: record.cwd } : {}),
 			};
-			if (params.wait !== true) return text(spawnSummary(record, tc.team), details);
+			if (params.wait !== true) return text(spawnSummary(record, tc.team) + renameNote(record, params), details);
 			return await waitFor(tc, { name: record.name, parent }, details, signal, onUpdate as ((update: Result) => void) | undefined);
 		},
 	} as ToolDefinition;
@@ -304,7 +310,8 @@ async function stopFor(team: HostTeam, self: string, name: string): Promise<Resu
 	if (!team.under(name, self)) throw new Error(`${name} is not one of your subagents; you can stop only agents you started.`);
 	const stopped = await team.stop(name, { by: self });
 	if (!stopped) return text(`${name} had already ${record.state === "idle" ? "finished" : record.state}; nothing to stop.`, { name, state: record.state });
-	return text(`Stopped ${name}. ${reportText(stopped, Date.now())}\n\nMessage it to resume it with its context.`, { name, state: stopped.state, ...(stopped.sessionFile ? { sessionFile: stopped.sessionFile } : {}) });
+	const next = neverStarted(stopped) ? "" : "\n\nMessage it to resume it with its context.";
+	return text(`Stopped ${name}. ${reportText(stopped, Date.now())}${next}`, { name, state: stopped.state, ...(stopped.sessionFile ? { sessionFile: stopped.sessionFile } : {}) });
 }
 
 /** Main's own results end with its team as it is now (status.ts), so it needs no turn to ask. */

@@ -1785,7 +1785,16 @@ the inspector stop children for you, and then main gets the stopped report.
 A stop ends spawns that have not started first, so a spawn that waits for a
 stopped agent never starts. A stopping agent can't start new subagents. An
 agent that fails stops its subagents too. Each of their reports goes to the
-nearest agent above that still runs, or to main, so no report is lost.
+nearest agent above that still runs, or to main, so no report is lost. A
+stop of a queued child that never started says `was cancelled while queued;
+it never started ($0)` instead of a run time, and its rows show `cancelled
+while queued`.
+
+**Names.** A name that another agent has gets `-2`, `-3` and so on, and the
+spawn result says so: `The name oracle was taken; this agent is oracle-2.`
+A new spawn may take the name of an agent that was cancelled before it ever
+started, because that agent has no session, report or spend to keep. A
+queued spawn that waits for that name with `after` keeps it reserved.
 
 **Order.** `after` on `subagent` gives the agents that must end before the new
 child starts, for example `{ task, after: ["impl"] }`. The call records the

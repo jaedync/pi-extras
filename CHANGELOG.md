@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Changed
+
+- Subagents: a stop of a queued child that never started says "was cancelled
+  while queued; it never started ($0)", not a run time.
+- Subagents: a new spawn may take the name of an agent that was cancelled
+  before it started. When a name is taken, the spawn result says which name
+  was taken and which name the agent got.
+
 ## 0.28.1 - 2026-10-24
 
 ### Changed

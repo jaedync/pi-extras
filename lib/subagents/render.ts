@@ -28,7 +28,7 @@ import { formatTokens } from "../status-plus-render.ts";
 import type { MailDetails, ReportSummary } from "./deliver.ts";
 import { noReport, reportBody } from "./format.ts";
 import { MAIN } from "./names.ts";
-import { type AgentRecord, LIVE_STATES } from "./types.ts";
+import { type AgentRecord, LIVE_STATES, neverStarted } from "./types.ts";
 import { modelText, presenceLine, shortModel } from "./widget.ts";
 
 export type { MarkdownSource } from "../band/message.ts";
@@ -130,7 +130,7 @@ function joinStatus(record: AgentRecord, now: number): Seg[] {
 		// Not "reported": its report can still be on its way to main, and this row can't tell.
 		case "idle": return [{ text: "finished", color: "muted" }, ...took];
 		case "failed": return [{ text: `${FAILURE_GLYPH} failed`, color: "error" }, ...took];
-		case "stopped": return [{ text: "stopped", color: "muted" }, ...took];
+		case "stopped": return neverStarted(record) ? [{ text: "cancelled while queued", color: "muted" }] : [{ text: "stopped", color: "muted" }, ...took];
 	}
 }
 

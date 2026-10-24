@@ -23,7 +23,7 @@ import { contextShare } from "../compaction-point.ts";
 import type { PendingItem } from "./deliver.ts";
 import { MAIN } from "./names.ts";
 import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount, type ControlLine, type Span } from "./overflow.ts";
-import { type AgentRecord, type AgentState, LIVE_STATES, WAITING_FOR_MODEL } from "./types.ts";
+import { type AgentRecord, type AgentState, LIVE_STATES, neverStarted, WAITING_FOR_MODEL } from "./types.ts";
 
 export const WIDGET_ID = "subagents";
 export const MAX_PENDING_ROWS = 3;
@@ -76,7 +76,7 @@ function statusWords(record: AgentRecord, reportQueued: boolean): Seg {
 		// Only the widget knows whether the report has reached main; elsewhere, finished is what is sure.
 		case "idle": return { text: reportQueued ? "report queued" : "finished", color: "muted" };
 		case "failed": return { text: record.error ? `failed: ${record.error}` : "failed", color: "error" };
-		case "stopped": return { text: "stopped", color: "muted" };
+		case "stopped": return { text: neverStarted(record) ? "cancelled while queued" : "stopped", color: "muted" };
 		case "interrupted": return { text: `interrupted${record.activity ? `: ${record.activity}` : ""}`, color: "warning" };
 		// A running agent whose session has reported nothing yet waits for its model, as its spinner says.
 		default: return { text: record.activity ?? (record.state === "running" ? WAITING_FOR_MODEL.activity : ""), color: "muted" };

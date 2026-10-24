@@ -41,6 +41,8 @@ test("a child's report reads back as who, on which model, how it ended and what 
 		[{ kind: "report", from: "lead-a", model: "openai-codex/gpt-6-luna", state: "failed", took: "16s", text: "rate limited\n\nhalf done" }]);
 	assert.deepEqual(readEnvelopes(reportText(record({ state: "stopped", usage: NO_USAGE }), 0)),
 		[{ kind: "report", from: "lead-a", model: "openai-codex/gpt-6-luna", state: "stopped", took: "16s", text: "" }]);
+	assert.deepEqual(readEnvelopes(reportText(record({ state: "stopped", usage: NO_USAGE, startedAt: undefined, runs: 0 }), 0)),
+		[{ kind: "report", from: "lead-a", model: "openai-codex/gpt-6-luna", state: "stopped", text: "" }]);
 	assert.deepEqual(readEnvelopes(reportText(record({ state: "interrupted", report: "partway" }), 0)),
 		[{ kind: "report", from: "lead-a", model: "openai-codex/gpt-6-luna", state: "interrupted", took: "16s", text: "partway" }]);
 	assert.deepEqual(readEnvelopes(reportText(record({ state: "interrupted", launchError: "model gone" }), 0)),

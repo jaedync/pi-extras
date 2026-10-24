@@ -37,7 +37,7 @@ import { RunWrapUps, type WrapUpTimes } from "./wrap-up.ts";
 import type { Thinking } from "./models.ts";
 import { placeChild } from "./placement.ts";
 import {
-	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
+	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, neverStarted, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
 } from "./types.ts";
 
 export interface TeamOptions {
@@ -206,7 +206,7 @@ export class Team implements HostTeam {
 		if (parent && this.wrapUps.active(parent.name)) return { ok: false, error: `${parent.name} is wrapping up at its budget; it can't start subagents now.` };
 		const depth = (parent?.depth ?? 0) + 1;
 		if (depth > this.options.maxDepth) return { ok: false, error: `Subagents cannot start subagents here (depth limit ${this.options.maxDepth}).` };
-		const name = nameFor(request.name, request.task, (candidate) => this.records.has(candidate));
+		const name = nameFor(request.name, request.task, (candidate) => this.records.has(candidate) && !this.reusableName(candidate));
 		if (request.isolation !== undefined && request.isolation !== "shared" && request.isolation !== "worktree") return { ok: false, error: "Unknown isolation. Use shared or worktree." };
 		const badBudget = budgetError("maxMinutes", request.maxMinutes) ?? budgetError("maxCost", request.maxCost);
 		if (badBudget) return { ok: false, error: badBudget };
@@ -243,6 +243,18 @@ export class Team implements HostTeam {
 		this.slots.enqueue(name, request.blocking && parent !== null);
 		this.pump();
 		return { ok: true, record: this.records.get(name)! };
+	}
+
+	/**
+	 * A name a new spawn may take over: its agent was cancelled before it ever
+	 * ran, so it has no session, report or spend to keep under that name. Not
+	 * while a live spawn waits for it with `after`: that one would then wait for
+	 * the newcomer instead.
+	 */
+	private reusableName(name: string): boolean {
+		const record = this.records.get(name);
+		if (!record || record.state !== "stopped" || !neverStarted(record) || this.ending.has(name)) return false;
+		return !this.list().some((other) => LIVE_STATES.has(other.state) && other.after?.includes(name));
 	}
 
 	/** Before a child's `edit` or `write` of the absolute `target`: takes the lock of its work tree, or says who holds it (edit-lock.ts). */

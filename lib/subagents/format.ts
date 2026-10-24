@@ -8,7 +8,7 @@ import { formatMoney } from "../status-plus-logic.ts";
 import type { RunLimits } from "./budget.ts";
 import { checkLines, checkOf } from "./checks.ts";
 import { MAIN } from "./names.ts";
-import type { AgentRecord, Worktree } from "./types.ts";
+import { type AgentRecord, neverStarted, type Worktree } from "./types.ts";
 import { worktreeFooter } from "./worktree.ts";
 
 export const REPORT_MAX_CHARS = 12_000;
@@ -71,6 +71,8 @@ export function spend(record: Pick<AgentRecord, "usage">): string {
 	return record.usage.cost > 0 ? `, $${formatMoney(record.usage.cost)}` : "";
 }
 
+const CANCELLED_QUEUED = "was cancelled while queued; it never started ($0).";
+
 function duration(record: AgentRecord, now: number): string {
 	return formatElapsed((record.endedAt ?? now) - (record.startedAt ?? record.createdAt));
 }
@@ -100,6 +102,8 @@ function reportCore(record: AgentRecord, now: number): string {
 		const partial = record.report ? `\n\n${record.launchError ? "" : "Last available message:\n"}${capReport(record.report, record.sessionFile, record.reportFile)}` : "";
 		return `${head} ${outcome}${session}\nResume explicitly after checking the current files.${partial}`;
 	}
+	// Stopped before its first run: it used no time or money, and it has no session to read.
+	if (record.state === "stopped" && neverStarted(record)) return `${head} ${CANCELLED_QUEUED}${fallbackLines(record)}`;
 	if (record.state === "failed" || record.state === "stopped") {
 		const outcome = record.state === "failed" ? `failed after ${duration(record, now)}: ${record.error ?? "unknown error"}`
 			: `was stopped after ${duration(record, now)}${record.stopReason ? `: ${record.stopReason}` : ""}.`;
@@ -150,6 +154,7 @@ const OUTCOMES: ReadonlyArray<readonly [ReportState, RegExp]> = [
 	["idle", /^(?<error>reached .+? budget) after (?<took>\S+?) and wrote this report when told to stop\./],
 	["failed", /^failed after (?<took>\S+?): (?<error>.*)$/],
 	["stopped", /^was stopped after (?<took>\S+?)(?:: (?<error>.*))?\.$/],
+	["stopped", /^was cancelled while queued; it never started \(\$0\)\.$/],
 	["interrupted", /^was interrupted after (?<took>\S+?)\.$/],
 	["interrupted", /^could not resume: (?<error>.*)$/],
 ];

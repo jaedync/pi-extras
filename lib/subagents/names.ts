@@ -29,10 +29,15 @@ export function taskSlug(task: string): string {
 	return slugify(words.slice(0, 3).join(" "), NAME_MAX);
 }
 
+/** The name a spawn asks for before collisions: the requested one if usable, else one from the task. */
+export function baseName(requested: string | undefined, task: string): string {
+	const base = (requested ? slugify(requested, NAME_MAX) : "") || taskSlug(task) || "agent";
+	return isReserved(base) || COMMAND_WORDS.has(base) ? `${base}-agent` : base;
+}
+
 /** The requested name if usable, else one from the task; `-2`, `-3` on collisions. */
 export function nameFor(requested: string | undefined, task: string, taken: (name: string) => boolean): string {
-	let base = (requested ? slugify(requested, NAME_MAX) : "") || taskSlug(task) || "agent";
-	if (isReserved(base) || COMMAND_WORDS.has(base)) base = `${base}-agent`;
+	const base = baseName(requested, task);
 	if (!taken(base)) return base;
 	for (let n = 2; ; n++) {
 		const name = `${base}-${n}`;

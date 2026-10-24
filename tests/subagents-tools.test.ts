@@ -6,10 +6,10 @@ import { stopTool, subagentTool, userSendWords } from "../lib/subagents/tools.ts
 import type { AgentRecord, ChildHandle, SpawnRequest } from "../lib/subagents/types.ts";
 
 /** A team whose children finish when the test says, behind the real `subagent` tool. */
-function setup() {
+function setup(maxConcurrent = 4) {
 	const finishers = new Map<string, (text: string) => void>();
 	const team = new Team({
-		maxConcurrent: 4, maxDepth: 1, replyTimeoutMs: 60_000, deliverToMain: () => undefined,
+		maxConcurrent, maxDepth: 1, replyTimeoutMs: 60_000, deliverToMain: () => undefined,
 		launcher: {
 			async launch(record: AgentRecord): Promise<ChildHandle> {
 				let last: string | undefined;
@@ -122,4 +122,37 @@ test("the inspector says what became of the user's message, for a paused or queu
 	assert.equal(userSendWords({ ok: true, delivered: "replied" }), "Answered its question.");
 	assert.equal(userSendWords({ ok: true, delivered: "queued" }), "It waits in line to run; it reads this when its run starts.");
 	assert.equal(userSendWords({ ok: true, delivered: "inbox", notice: "It is paused." }), "It waits in its inbox for its next run. It is paused.");
+});
+
+test("a stop of an agent that never started says it was cancelled while queued, not how long it ran", async () => {
+	const { team, tool, finishers } = setup(1);
+	const stop = stopTool({ team } as never, "main");
+	await (tool.execute as any)("id", { task: "first job", name: "first" }, undefined, undefined);
+	await (tool.execute as any)("id", { task: "second job", name: "second" }, undefined, undefined);
+	await tick();
+	assert.equal(team.get("second")?.state, "queued");
+	const stopped = await (stop.execute as any)("id", { name: "second" }, undefined, undefined);
+	assert.match(stopped.content[0].text, /^Stopped second\. second \(openai-codex\/gpt-6-luna\) was cancelled while queued; it never started \(\$0\)\./);
+	assert.doesNotMatch(stopped.content[0].text, /stopped after|Session:/);
+	finishers.get("first")?.("done");
+	await team.close();
+});
+
+test("a new start takes the name of an agent that never started, and a rename says which name was taken", async () => {
+	const { team, tool, finishers } = setup(1);
+	const stop = stopTool({ team } as never, "main");
+	await (tool.execute as any)("id", { task: "first job", name: "first" }, undefined, undefined);
+	await (tool.execute as any)("id", { task: "oracle job", name: "oracle" }, undefined, undefined);
+	await tick();
+	await (stop.execute as any)("id", { name: "oracle" }, undefined, undefined);
+	const again = await (tool.execute as any)("id", { task: "oracle job, take two", name: "oracle" }, undefined, undefined);
+	assert.match(again.content[0].text, /^Started oracle on /);
+	assert.doesNotMatch(again.content[0].text, /was taken/);
+	assert.equal(team.get("oracle")?.task, "oracle job, take two");
+	assert.equal(team.get("oracle")?.state, "queued");
+	// A name held by an agent that ran stays its own: the new one gets -2, and the result says so.
+	const renamed = await (tool.execute as any)("id", { task: "another first job", name: "first" }, undefined, undefined);
+	assert.match(renamed.content[0].text, /The name first was taken; this agent is first-2\./);
+	finishers.get("first")?.("done");
+	await team.close();
 });
