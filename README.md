@@ -2226,8 +2226,9 @@ description on a host of the same site (for example `ftc.gov` and
 The search is free and uses no Firecrawl credits. No key is needed. Without a
 key, Firecrawl limits the requests from each IP address for each day. Over the
 limit, the tool says that the daily limit is reached (HTTP 429). For higher
-limits, get a free key from [firecrawl.dev](https://www.firecrawl.dev) and give
-it to the tool in one of these ways:
+limits, get a free key from [firecrawl.dev](https://www.firecrawl.dev). Firecrawl
+refuses requests without a key from VPN and proxy IP addresses (HTTP 403), so a
+proxy (see below) needs a key too. Give the key to the tool in one of these ways:
 
 - Put it in the environment variable `FIRECRAWL_API_KEY`.
 - Put it in the file `~/.secrets/firecrawl_api_key` (one line). Set
