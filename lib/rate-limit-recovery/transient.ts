@@ -22,8 +22,9 @@ const MAX_ERROR_CHARS = 32_768;
 // ±20% spreads parallel subagents that were limited at the same moment.
 const JITTER = 0.2;
 const RATE_LIMITED = /rate.?limit|too many requests|\b429\b/i;
-// Long-lived limits and billing must still stop the run, as Pi's own classifier intends.
-const NOT_TRANSIENT = /quota|billing|insufficient|usage limit|available balance|out of budget/i;
+// Long-lived limits and billing must still stop the run, as Pi's own classifier intends. `usage.?limit` also
+// matches error codes such as ChatGPT's subscription_sharing_usage_limit_exceeded, which can arrive without prose.
+const NOT_TRANSIENT = /quota|billing|insufficient|usage.?limit|available balance|out of budget/i;
 // Only this result of the proxy, not any api_error: other Claude Code results (a low balance,
 // a refusal) would fail again.
 const PROXY_TURN_LIMIT = /Claude Code returned an error result: Reached maximum number of turns\b/;

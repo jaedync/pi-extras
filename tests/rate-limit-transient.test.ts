@@ -34,6 +34,17 @@ test("quotas, billing, structured quota errors and other failures are not transi
 	assert.equal(isTransientRateLimit(failed(`${LUNA}${"x".repeat(40_000)}`)), false, "oversized text is not scanned");
 });
 
+test("ChatGPT subscription usage limits stay with Pi, which does not retry them", () => {
+	// Pi 1.4.0 added the workspace code; the error text can carry only the code, without the words "usage limit".
+	for (const code of ["subscription_sharing_usage_limit_exceeded", "subscription_sharing_workplace_individual_usage_limit_exceeded"]) {
+		const text = `429 ${JSON.stringify({ error: { code, message: "Rate limit reached" } })}`;
+		const message = { ...failed(text), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+		assert.equal(isRetryableAssistantError(message), false, `Pi: ${code}`);
+		assert.equal(isTransientRateLimit(message), false, code);
+		assert.equal(isQuotaError(text), true, code);
+	}
+});
+
 test("backoff doubles from 5 s, caps at 60 s, jitters, and stops at the budget", () => {
 	const delays: number[] = [];
 	let state = { attempts: 0, spentMs: 0 };
