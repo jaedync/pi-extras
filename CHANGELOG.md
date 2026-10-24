@@ -2,6 +2,28 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.28.0 - 2026-10-24
+
+### Added
+
+- Gov Search, a new extension. It adds the `gov_search` tool, which searches
+  the free Firecrawl Government & Legal Index: more than 30 million US
+  government pages, such as statutes, regulations, city codes, court opinions
+  and agency guidance. No key is needed. A free key gives higher limits:
+  set `FIRECRAWL_API_KEY`, or put the key in `~/.secrets/firecrawl_api_key`
+  (another path with `FIRECRAWL_API_KEY_FILE`). The variable wins. The tool takes `query`, `k` (1 to 100, default 10) and the filters
+  `jurisdiction`, `court`, `courtType`, `cites` and `domain`. It removes
+  duplicate results, keeps the output under 16 KB, and marks it as untrusted.
+  The tool description tells the model to check each source before it states
+  current law.
+- Gov Search: an optional HTTP CONNECT proxy, for example wireproxy on a VPN.
+  Set `PI_GOV_SEARCH_PROXY` or `govSearch.proxy` in `pi-extras.json`. The
+  proxy must be on a loopback, private or Tailscale address. When a proxy is
+  set, the tool never sends a request directly. Firecrawl refuses requests
+  without a key from VPN and proxy IP addresses (HTTP 403), so set a key
+  with a VPN.
+- Tool Display draws `gov_search` rows with the filters in the band.
+
 ## 0.27.1 - 2026-10-24
 
 ### Fixed
