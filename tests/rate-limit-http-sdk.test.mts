@@ -138,10 +138,11 @@ async function nativeRuntime(baseUrl: string, fixture: NativeFixture = anthropic
 		refreshToken: async () => { throw new Error("Fixture must never refresh synthetic OAuth"); },
 		getApiKey: (credential) => credential.access,
 	} } : { baseUrl, apiKey: "synthetic-http-test-key", ...(options.headers ? { headers: options.headers } : {}) });
-	// Codex 0.99 prefixes catalog IDs with chat:, while 0.87 does not.
-	const model = fixture === codex ? runtime.getModels(fixture.provider).find((candidate) => candidate.id.endsWith("gpt-5.5"))
+	// Pi drops retired Codex models from its catalog (1.4.0 removed gpt-5.5), so take any model on the native
+	// Codex API rather than a fixed ID that a later release can remove.
+	const model = fixture === codex ? runtime.getModels(fixture.provider).find((candidate) => candidate.api === codex.api)
 		: runtime.getModel(fixture.provider, "claude-sonnet-4-5");
-	assert.ok(model);
+	assert.ok(model, `Pi's catalog has a ${fixture.provider} model on ${fixture.api}`);
 	assert.equal(model.api, fixture.api);
 	assert.equal(model.baseUrl, baseUrl);
 	if (fixture === codex) {
