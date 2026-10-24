@@ -60,7 +60,7 @@ import { DEFAULT_SETTINGS, readSettings, writeSettings, type DisplaySettings } f
 import { bashRenderers } from "./shell.ts";
 import { toolRenderers, type ToolSpec } from "./tool.ts";
 import { usageSpec } from "./usage.ts";
-import { webSearchSpec } from "./web.ts";
+import { govSearchSpec, webSearchSpec } from "./web.ts";
 import { linkSpec } from "./link.ts";
 import { watchFold } from "../fold/index.ts";
 import { installThinkingTail, prepareThinkingTail, THINKING_MODES, thinkingRunIndices, thoughtLabel, type ThinkingMode, type ThinkingTheme } from "./thinking.ts";
@@ -168,6 +168,7 @@ export function thoughtFor(message: { timestamp?: number; content: readonly { ty
 /** Layouts for pi-extras's own tools, by the mark on their definitions. */
 const OWN_SPECS: Partial<Record<RowKind, (name: string) => ToolSpec>> = {
 	kagi: webSearchSpec,
+	gov: govSearchSpec,
 	"computer-use": () => computerUseSpec,
 	"windows-use": () => windowsUseSpec,
 	usage: () => usageSpec,

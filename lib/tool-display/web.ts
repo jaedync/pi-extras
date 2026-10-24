@@ -1,12 +1,14 @@
 /**
- * The Kagi search row (web_search or kagi_search). The band says what was
- * searched and how many results came back; under it sit the first results,
- * and the popup lists every result with its address and excerpt.
+ * The Kagi search row (web_search or kagi_search), and the gov_search row,
+ * whose results have the same shape. The band says what was searched and how
+ * many results came back; under it sit the first results, and the popup lists
+ * every result with its address and excerpt.
  */
 import { SEP } from "../cc-phase.ts";
 import type { Seg } from "../band/band.ts";
 import type { SearchResult } from "../kagi/parser.ts";
 import { formatDuration, link, type RenderDetails } from "../kagi/render.ts";
+import { filterText } from "../gov-search/render.ts";
 import { sanitize } from "./format.ts";
 import { errorLines, more, mutedSeg, numberArg, plural, resultText, stringArg, textLines, titleSeg, wrapAll } from "./kit.ts";
 import type { ToolSpec, View } from "./tool.ts";
@@ -121,6 +123,35 @@ export function webSearchSpec(name: string): ToolSpec {
 				...(result.snippet ? [`${pad}${view.paint.fg("muted", flat(result.snippet))}`] : []),
 			], width));
 			return [...blocks.flatMap((block) => [...block, ""]), view.paint.fg("muted", statusText(detailsOf(view)!, results))];
+		},
+	};
+}
+
+/** gov_search: the Kagi row with its filters in the band and its own name in the popup. */
+export function govSearchSpec(name: string): ToolSpec {
+	const base = webSearchSpec(name);
+	return {
+		...base,
+		title(view) {
+			const query = stringArg(view.context.args, "query");
+			return [
+				titleSeg(name),
+				{ text: ` ${query ? flat(query) : "…"}`, color: query ? "accent" : "toolOutput" },
+				...filterText(view.context.args).map((filter) => ({ text: ` ${flat(filter)}`, color: "toolOutput" })),
+				...summary(view),
+			];
+		},
+		details(view) {
+			const k = numberArg(view.context.args, "k");
+			const details = detailsOf(view) as (RenderDetails & { duplicateCount?: number; proxied?: boolean }) | undefined;
+			const took = details?.durationMs;
+			return [
+				"Firecrawl Government Index",
+				...(k !== undefined ? [`k ${k}`] : []),
+				...(details?.duplicateCount ? [plural(details.duplicateCount, "duplicate") + " removed"] : []),
+				...(details?.proxied ? ["through proxy"] : []),
+				...(typeof took === "number" ? [`took ${formatDuration(took)}`] : []),
+			].join(SEP);
 		},
 	};
 }

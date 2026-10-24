@@ -3,8 +3,8 @@
 Optional extensions and a theme for [Pi](https://pi.dev): a richer footer,
 usage-limit awareness for the agent, activity and timing indicators, background
 shell jobs, background subagents on the model of your choice, bounded shell
-execution, Kagi subscription search, local voice dictation, and clearer tool
-rows.
+execution, Kagi subscription search, free US government and legal search,
+local voice dictation, and clearer tool rows.
 
 ## Install
 
@@ -19,7 +19,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all seventeen extensions (quota hibernation and computer use stay off until you opt in); it makes `quiet` available but does not select it. It also adds the prompt templates `/deeper`, `/higher` and `/wider`.
+adds all eighteen extensions (quota hibernation and computer use stay off until you opt in); it makes `quiet` available but does not select it. It also adds the prompt templates `/deeper`, `/higher` and `/wider`.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -37,6 +37,7 @@ can still conflict.
 | Bash Default Timeout | Adds a 120-second timeout only when a bash or powershell call omitted one |
 | Idle GC | Once the agent has been idle for 30 seconds, one full garbage collection gives the memory of the last run back to the system |
 | Kagi Search | Adds `kagi_search` without replacing existing search/fetch tools |
+| Gov Search | `gov_search` tool: free search of the Firecrawl Government & Legal Index (US statutes, regulations, city codes, court opinions, agency guidance), with filters for jurisdiction, court and citation; no key needed |
 | Voice | Hold or tap ctrl+space to dictate into the editor, transcribed on this machine |
 | Computer Use | Opt-in, macOS: a `computer_use` tool that operates Mac apps through OpenAI's Computer Use, installed by the ChatGPT app |
 | Tool Display | Every tool row as a colored header band with live progress and a popup with the whole call, other extensions' tools included; chained bash commands broken into steps; every finished row stays visible, ctrl+o expands them all |
@@ -157,6 +158,11 @@ the package. Removing it does not remove your credentials or change other packag
 - `KAGI_TOKEN_FILE`: path to your own subscription session credential. See below.
 - `KAGI_TOOL_NAME=web_search`: explicit search-tool replacement. Leave unset to
   keep `kagi_search` and avoid conflicting with another search extension.
+- `FIRECRAWL_API_KEY`, or the file `~/.secrets/firecrawl_api_key` (another
+  path with `FIRECRAWL_API_KEY_FILE`): optional Firecrawl API key for
+  `gov_search` (higher rate limits). `PI_GOV_SEARCH_PROXY`, or `govSearch.proxy` in
+  `pi-extras.json`: optional HTTP CONNECT proxy for `gov_search`. See
+  [Gov Search](#gov-search).
 
 See [security and privacy](docs/security.md) before enabling provider-limit polling
 or supplying search credentials. Extensions execute with your user permissions.
@@ -2173,6 +2179,110 @@ error instead. The client uses a **cooperative I/O deadline**;
 response cap, but pathological HTML can still occupy the event loop.
 Without a configured token, the rest of the package loads normally; invoking
 `kagi_search` reports a credential error.
+
+## Gov Search
+
+`gov_search` searches the free
+[Firecrawl Government Index](https://docs.firecrawl.dev/features/gov): more
+than 30 million US federal, state and local government pages. The index has
+statutes, regulations, city and county codes, court opinions and agency
+guidance. The tool sends one request to
+`https://api.firecrawl.dev/v2/search/gov` for each call. It returns ranked
+titles, URLs and short descriptions, not an answer.
+
+Parameters:
+
+- `query` (required): a question or search phrase. Put the jurisdiction, the
+  agency or citation, and a date in it when you know them.
+- `k`: the number of results, from 1 to 100. The default is 10.
+- `jurisdiction`: `us` for federal, or `us-` and a two-letter state or
+  territory code, for example `us-ca` or `us-dc`.
+- `court`: a CourtListener court id, for example `scotus`, `ca9` or `nysd`.
+- `courtType`: `federal-supreme`, `federal-appellate`, `federal-district`,
+  `federal-bankruptcy`, `federal-special`, `military`, `state-supreme`,
+  `state-appellate`, `state-trial`, `state-special` or
+  `state-attorney-general`.
+- `cites`: one cited law or case, for example `42 U.S.C. § 1983`,
+  `5 U.S. 137` or `us:usc:42:1983`.
+- `domain`: one site, for example `irs.gov`.
+
+All filters must match. A filter keeps only the pages that the index labeled.
+Thus a filtered search can miss pages, and zero results does not prove that no
+law exists. The index can also return old versions, bills that did not pass and
+third-party copies. The tool description tells the model to check the issuer,
+jurisdiction, date and in-force status, and to read the source page before it
+states current law.
+
+The output is a numbered list. Each description is cut to 300 characters, and
+the whole text stays under 16 KB. When the results do not fit, the
+descriptions get shorter first, and then the last results are removed. The
+count line gives the number of results, the duplicates removed and the results
+removed for size. A duplicate is the same URL again, or the same title and
+description on a host of the same site (for example `ftc.gov` and
+`search.ftc.gov`). The text is marked as untrusted, as with `kagi_search`.
+
+### Key and limits
+
+The search is free and uses no Firecrawl credits. No key is needed. Without a
+key, Firecrawl limits the requests from each IP address for each day. Over the
+limit, the tool says that the daily limit is reached (HTTP 429). For higher
+limits, get a free key from [firecrawl.dev](https://www.firecrawl.dev) and give
+it to the tool in one of these ways:
+
+- Put it in the environment variable `FIRECRAWL_API_KEY`.
+- Put it in the file `~/.secrets/firecrawl_api_key` (one line). Set
+  `FIRECRAWL_API_KEY_FILE` to use a different path. Restrict the file to your
+  user (`chmod 600`). A tool such as Dotfleet can deploy the file for each
+  machine.
+
+The environment variable wins when both are set. No variable and no default
+file means a search without a key. A key file that exists but cannot be read
+or does not hold a valid key stops the search with an error. A missing file at
+the path in `FIRECRAWL_API_KEY_FILE` also stops it. The tool reads the key only
+when a search runs, so a new key needs no `/reload`. It sends the key only in
+the `Authorization` header to `api.firecrawl.dev`, and never shows it in output
+or errors.
+
+Firecrawl refuses requests without a key from IP addresses that look like a VPN
+or proxy (HTTP 403). The tool then says so. Thus, when the proxy below sends
+the requests through a VPN, also set a key. After a 429,
+the tool sends no request for the time in `Retry-After` (60 seconds when there
+is none; one hour at most).
+
+Each request has a limit of 20 seconds. An abort stops it at once. Up to 4
+searches run at the same time.
+
+### Proxy
+
+To send the requests through a VPN, set an HTTP CONNECT proxy, for example
+[wireproxy](https://github.com/whyvl/wireproxy) in HTTP mode:
+
+- `PI_GOV_SEARCH_PROXY=http://127.0.0.1:8080` in the environment of Pi, or
+- `"govSearch": { "proxy": "http://127.0.0.1:8080" }` in `pi-extras.json`.
+
+The environment variable wins over the file. An empty variable does not hide
+the file. Both work when a tool such as Dotfleet sets them for each machine.
+The tool reads the setting at each search, so a change needs no `/reload`.
+The tool does not use `HTTP_PROXY`, `HTTPS_PROXY` or `NO_PROXY`.
+
+The tool sends `CONNECT api.firecrawl.dev:443` to the proxy. The proxy looks up
+the address, so this machine makes no DNS request for the API. TLS runs from
+Pi to the API inside the tunnel, so the proxy sees only the host name.
+
+The proxy URL must:
+
+- use `http://` and have no user name, password, path or query;
+- name `localhost` or an IP address in one of these ranges: loopback
+  (`127.0.0.0/8`, `::1`), private (`10.0.0.0/8`, `172.16.0.0/12`,
+  `192.168.0.0/16`, `fc00::/7`), or Tailscale (`100.64.0.0/10`,
+  `fd7a:115c:a1e0::/48`).
+
+The tool fails closed. When a proxy is set, it never sends a request directly.
+These conditions stop the search with an error, and no request goes out:
+
+- the proxy URL is not correct or is not in an allowed range;
+- `pi-extras.json` does not parse, so the tool cannot know if a proxy is set;
+- the proxy does not answer, or refuses the tunnel.
 
 ## Development
 

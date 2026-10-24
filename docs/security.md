@@ -251,6 +251,25 @@ path, never the token value. Search queries are sent to Kagi and search results
 enter your model context when you invoke the tool. Search results can contain
 malicious instructions; they are evidence, not instructions to execute.
 
+## Gov Search
+
+`gov_search` sends the query and filters to `api.firecrawl.dev` only when the
+agent calls it. It reads the key (`FIRECRAWL_API_KEY`, else the file
+`~/.secrets/firecrawl_api_key` or the path in `FIRECRAWL_API_KEY_FILE`) at each
+search and sends it only in the `Authorization` header. The key is removed from
+every error text, also when the API repeats it, and never goes to `details` or
+a log. A key with spaces or control characters is refused before a request.
+The key file should be readable only by its owner. The tool does not check or
+change its permissions, as with the Kagi token file.
+
+With a proxy set (`PI_GOV_SEARCH_PROXY` or `govSearch.proxy`), the search fails
+closed: a proxy URL that is not correct, a settings file that does not parse,
+or a proxy that is down or refuses stops the search, and no direct request
+goes out. Only loopback, private and Tailscale addresses are allowed as the
+proxy, and the URL must not hold credentials. TLS runs end to end inside the
+tunnel. The proxy sees the host name, not the query or the key. Results enter
+the model context as untrusted text; they can contain malicious instructions.
+
 ## Pull Link
 
 `pull_link` sends requests when the agent calls it. Auto-pull also sends them

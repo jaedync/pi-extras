@@ -40,6 +40,7 @@
       "extensions/subagents.ts",
       "extensions/bash-default-timeout.ts",
       "extensions/kagi-search.ts",
+      "extensions/gov-search.ts",
       "extensions/voice.ts",
       "extensions/computer-use.ts",
       "extensions/tool-display.ts",
