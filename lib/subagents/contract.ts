@@ -24,7 +24,7 @@ import type { SendResult } from "./team.ts";
 import type { Watched } from "./tool-activity.ts";
 import type { AgentRecord, CheckUpdate, Launcher, SpawnRequest } from "./types.ts";
 
-export const HOST_VERSION = 7;
+export const HOST_VERSION = 8;
 
 /** The team, as main's tools, the widget, the inspector and a child's tools use it. */
 export interface HostTeam {
@@ -46,6 +46,8 @@ export interface HostTeam {
 	claimEdit(name: string, target?: string): string | undefined;
 	mayEdit(name: string, root?: string): boolean;
 	bashChanged(name: string, paths: readonly string[], root: string): string | undefined;
+	/** The run's time budget and the work time it used, for the clock tool; undefined without a time budget. */
+	budgetClock?(name: string): { usedMs: number; minutes: number } | undefined;
 }
 
 /** Main's mail, as main's own events and the widget use it. */

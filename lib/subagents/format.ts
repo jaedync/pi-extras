@@ -309,9 +309,31 @@ function utcAt(ms: number, from: number): string {
 export function runClockHead(options: { now: number; minutes: number; notes?: boolean }): string {
 	const { now, minutes } = options;
 	const start = new Date(now).toISOString();
-	const notes = options.notes ? " Notes during the run give the work minutes used and left." : "";
-	return `[Budget clock] This run started at ${start.slice(11, 16)} UTC on ${start.slice(0, 10)} with a time budget of ${minutes} work minutes. If you do not wait, the budget ends at ${utcAt(now + minutes * MINUTE_MS, now)}. If you have a shell, run \`date -u\` to see the time now. Do not estimate the time from the work you did.${notes}`;
+	const notes = options.notes ? " Notes during the run give the time now and the work minutes used and left." : "";
+	return `[Budget clock] This run started at ${start.slice(11, 16)} UTC on ${start.slice(0, 10)} with a time budget of ${minutes} work minutes. If you do not wait, the budget ends at ${utcAt(now + minutes * MINUTE_MS, now)}. Call the ${CLOCK_TOOL} tool to see the time now and the work minutes left. Do not estimate the time from the work you did.${notes}`;
 }
+
+/** The child tool that reads the time (tools.ts): every child has it, a read-only one included, so none needs a shell for `date -u`. */
+export const CLOCK_TOOL = "clock";
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** What the clock tool says: the time now to the second, and where the run stands in its time budget. */
+export function clockText(options: { now: number; clock?: { usedMs: number; minutes: number } }): string {
+	const { now, clock } = options;
+	const iso = new Date(now).toISOString();
+	const head = `Now ${iso.slice(11, 19)} UTC on ${iso.slice(0, 10)} (${WEEKDAYS[new Date(now).getUTCDay()]}).`;
+	return clock ? `${head} ${budgetStand(now, clock.usedMs, clock.minutes)}` : `${head} This run has no time budget.`;
+}
+
+/** Work minutes used and left, and the end on the wall clock if the run does not wait. */
+function budgetStand(now: number, usedMs: number, minutes: number): string {
+	const left = Math.max(0, minutes - usedMs / MINUTE_MS);
+	return `${clockMinutes(usedMs / MINUTE_MS)} of ${minutes} work minutes used, ${clockMinutes(left)} left. If you do not wait, the budget ends at ${utcAt(now + left * MINUTE_MS, now)}.`;
+}
+
+/** "Now 18:40 UTC.", to the minute as the budget times are. */
+const nowAt = (now: number): string => `Now ${new Date(now).toISOString().slice(11, 16)} UTC.`;
 
 /**
  * Where a run stands in its time budget (budget.ts): at a share of it, after
@@ -320,13 +342,12 @@ export function runClockHead(options: { now: number; minutes: number; notes?: bo
  */
 export function clockNote(options: { now: number; usedMs: number; minutes: number; plan?: boolean }): string {
 	const { now, usedMs, minutes } = options;
-	const left = Math.max(0, minutes - usedMs / MINUTE_MS);
-	return `[Budget clock] ${clockMinutes(usedMs / MINUTE_MS)} of ${minutes} work minutes used, ${clockMinutes(left)} left. If you do not wait, the budget ends at ${utcAt(now + left * MINUTE_MS, now)}.${options.plan ? ` ${PLAN_TO_REPORT}` : ""}`;
+	return `[Budget clock] ${nowAt(now)} ${budgetStand(now, usedMs, minutes)}${options.plan ? ` ${PLAN_TO_REPORT}` : ""}`;
 }
 
 /** The note a run gets near the end of its cost budget: `left` dollars of `limit`. */
-export function costNote(left: number, limit: number): string {
-	return `About $${formatMoney(Math.max(0, left))} is left of this run's $${formatMoney(limit)} cost budget. ${PLAN_TO_REPORT}`;
+export function costNote(left: number, limit: number, now: number): string {
+	return `${nowAt(now)} About $${formatMoney(Math.max(0, left))} is left of this run's $${formatMoney(limit)} cost budget. ${PLAN_TO_REPORT}`;
 }
 
 /** Each tool call's result while a run wraps up at its budget (wrap-up.ts). */
@@ -360,6 +381,7 @@ function budgetSection(budget: RunLimits | undefined): string[] {
 	const time = budget?.minutes !== undefined ? [
 		"Time counts only while you work, not while you wait for an answer, for your subagents or for a free slot.",
 		"The first message of each run gives its start time and the time its budget ends if you do not wait.",
+		`The ${CLOCK_TOOL} tool gives the time now and the work minutes left.`,
 	] : [];
 	const cost = budget?.cost !== undefined ? ["Near the end of the cost budget you get a note."] : [];
 	return ["", "## Budget", [`This run may ${limits.join(" and ")}.`, ...time, ...cost, "At the limit, tool calls are blocked and you must write your final report at once."].join(" ")];

@@ -24,7 +24,7 @@ import { allowedModels, modelTable, refOf, resolveModel, type ThinkingSettings }
 import { recoveryOwner } from "./recovery.ts";
 import { createSessionScanner } from "./session-scan.ts";
 import { ToolActivity } from "./tool-activity.ts";
-import { childMessageTool, stopTool, subagentTool, type ToolContext } from "./tools.ts";
+import { childClockTool, childMessageTool, stopTool, subagentTool, type ToolContext } from "./tools.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
 type ToolInfos = ReturnType<ExtensionAPI["getAllTools"]>;
@@ -168,6 +168,7 @@ function childLauncher(inputs: LauncherInputs): Launcher {
 				extensionPaths: childExtensionPaths(live.allTools(), names),
 				customTools: [
 					childMessageTool(tools, record.name),
+					childClockTool(tools, record.name),
 					...(record.depth < scope.config.maxDepth ? [subagentTool(tools, record.name), stopTool(tools, record.name)] : []),
 				],
 			};

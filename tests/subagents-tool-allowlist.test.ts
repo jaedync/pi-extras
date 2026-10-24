@@ -57,7 +57,7 @@ test("readOnly keeps only tools known not to write files or run commands; unknow
 
 test("the subagent tool puts the allowlist on the record, and refuses one it can't meet at spawn", async () => {
 	const { h, call, description } = setup();
-	assert.match(description, /Pass tools to give it only the named tools; its message tool always stays\./);
+	assert.match(description, /Pass tools to give it only the named tools; its message and clock tools always stay\./);
 	await call("main", { task: "look around", name: "looker", tools: ["read", "grep"] });
 	assert.deepEqual(h.team.get("looker")?.tools, ["read", "grep"]);
 	await call("main", { task: "do anything", name: "anything" });

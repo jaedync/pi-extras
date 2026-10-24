@@ -9,7 +9,7 @@ import { CHECK_TIMEOUT_MINUTES, MAX_CHECK_CHARS, MAX_CHECK_TIMEOUT_MINUTES, MAX_
 import { allowedTools, checkAllowlist } from "./allowlist.ts";
 import { MAX_RUN_MINUTES } from "./budget.ts";
 import { childMessageDescription, mainMessageDescription, stopDescription, subagentDescription } from "./describe.ts";
-import { capReport, reportText, rosterText } from "./format.ts";
+import { capReport, CLOCK_TOOL, clockText, reportText, rosterText } from "./format.ts";
 import { isThinking, type ModelChoice, resolveModel, THINKING_LEVELS, type Thinking, thinkingFor, type ThinkingSettings } from "./models.ts";
 import { baseName, EVERYONE, MAIN } from "./names.ts";
 import { teamNow } from "./status.ts";
@@ -59,7 +59,7 @@ const subagentParams = Type.Object({
 	model: Type.Optional(Type.String({ description: "Model reference or unique short name from the list above." })),
 	thinking: Type.Optional(thinkingSchema),
 	readOnly: Type.Optional(Type.Boolean({ description: "Only tools that can't change your files or run commands that the model chooses: read, grep, find, ls and known search and fetch tools. Other tools are dropped." })),
-	tools: Type.Optional(Type.Array(Type.String(), { description: "Give it only these of the tools it would get; message always stays. Omit for all of them." })),
+	tools: Type.Optional(Type.Array(Type.String(), { description: "Give it only these of the tools it would get; message and clock always stay. Omit for all of them." })),
 	cwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Directory it starts in, absolute or ~/: its tools, AGENTS.md and session work there. Default: your working directory." })),
 	isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")], { description: "Default shared. Use worktree for a separate git worktree of the repository at cwd (default: your working directory), with its current files." })),
 	context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")], { description: "fork gives it this conversation so far; default fresh." })),
@@ -326,6 +326,28 @@ async function stopAll(team: HostTeam, self: string): Promise<Result> {
 	const stopped: string[] = [];
 	for (const record of stopOrder(mine)) if (await team.stop(record.name, { by: self })) stopped.push(record.name);
 	return text(`Stopped ${stopped.length} ${stopped.length === 1 ? "subagent" : "subagents"}: ${stopped.join(", ")}. Their last messages are in their sessions; no reports follow.`, { stopped });
+}
+
+const clockParams = Type.Object({}, { additionalProperties: false });
+
+/**
+ * Every child's way to read the time: a read-only child has no shell for
+ * `date -u`, and only the team knows the work minutes, which stop while the
+ * run waits.
+ */
+export function childClockTool(tc: Pick<ToolContext, "team" | "now">, self: string): ToolDefinition {
+	return {
+		name: CLOCK_TOOL,
+		label: "Clock",
+		description: "The time now in UTC, and, when your run has a time budget, the work minutes used and left and when the budget ends if you do not wait. Use it before any decision about time; do not estimate the time from the work you did.",
+		promptSnippet: "Read the time now and your run's time budget",
+		parameters: clockParams,
+		async execute() {
+			const clock = tc.team.budgetClock?.(self);
+			const now = tc.now();
+			return text(clockText({ now, ...(clock ? { clock } : {}) }), { now: new Date(now).toISOString(), ...(clock ? { usedMs: clock.usedMs, minutes: clock.minutes } : {}) });
+		},
+	} as ToolDefinition;
 }
 
 export function childMessageTool(tc: ToolContext, self: string): ToolDefinition {

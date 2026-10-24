@@ -11,6 +11,15 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 - Subagents: a new spawn may take the name of an agent that was cancelled
   before it started. When a name is taken, the spawn result says which name
   was taken and which name the agent got.
+- Subagents: each budget note starts with the time now, for example
+  `Now 18:40 UTC.`. The first line of a run no longer tells the child to run
+  `date -u`, because a read-only child has no shell.
+
+### Added
+
+- Subagents: a `clock` tool for every child, also a read-only one. It gives
+  the time now and, with a time budget, the work minutes used and left and the
+  end time.
 
 ## 0.28.1 - 2026-10-24
 

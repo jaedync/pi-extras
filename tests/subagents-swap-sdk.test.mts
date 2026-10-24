@@ -60,7 +60,7 @@ test("a settings change moves a child to a new session at its next turn boundary
 		assert.equal(texts.length, 2, "its task, then one prompt for the move");
 		// The run goes on with its budget clock first (budget.ts), then the note of the move.
 		assert.ok(withoutClock(texts[1]!).startsWith(`[${NOTE}`) && texts[1]!.includes("Also check the docs."), texts[1]);
-		assert.match(texts[1]!, /^\[Budget clock\] \d+(?:\.\d)? of 60 work minutes used, /);
+		assert.match(texts[1]!, /^\[Budget clock\] Now \d{2}:\d{2} UTC\. \d+(?:\.\d)? of 60 work minutes used, /);
 		assert.equal(entries(p, "multi").filter((message) => message.role === "assistant" && message.stopReason === "aborted").length, 0, "no aborted reply is left behind");
 		release(p, "multi-2");
 		await until("multi finishes", () => p.record("multi")?.state === "idle");

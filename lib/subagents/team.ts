@@ -245,6 +245,11 @@ export class Team implements HostTeam {
 		return { ok: true, record: this.records.get(name)! };
 	}
 
+	budgetClock(name: string): { usedMs: number; minutes: number } | undefined {
+		const clock = this.budgets.clock(name);
+		return clock ? { usedMs: clock.usedMs, minutes: clock.minutes } : undefined;
+	}
+
 	/**
 	 * A name a new spawn may take over: its agent was cancelled before it ever
 	 * ran, so it has no session, report or spend to keep under that name. Not

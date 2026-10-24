@@ -1924,8 +1924,12 @@ The child's instructions name its budgets. A child can't see a clock, and
 without one it guesses its time used far too high and stops early. So each
 run with a time budget starts with a `[Budget clock]` line: the start time
 (UTC), the budget in work minutes, the end time if the run does not wait, and
-`date -u` to read the time. At each 10% of the time budget up to 80%, the
-child gets a note with the work minutes used and left and the end time.
+the `clock` tool to read the time. Every child has `clock`, also a read-only
+child with no shell and a child with a `tools` list. It gives the time now
+(UTC, to the second) and, with a time budget, the work minutes used and left
+and the end time. At each 10% of the time budget up to 80%, the child gets a
+note with the time now (`Now 18:40 UTC.`), the work minutes used and left and
+the end time. The cost note starts with the time now too.
 Between notes, a child guesses from its own pace and drifts high, so the
 notes are close together. The 80% note also tells it to plan its report. After a wait of 1 minute or more, a note
 gives the new end time. At 80% of a cost budget, the child gets one note that

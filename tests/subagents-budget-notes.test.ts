@@ -30,7 +30,7 @@ test("a 5-minute run gets its notes, the last one with about 1 minute left", asy
 	runs.start("five", { minutes: 5 }, 0);
 	for (const minutes of [1.25, 1.25, 1.5]) await pass(minutes * MINUTE);
 	assert.equal(notes.length, 3);
-	assert.match(notes[2]?.text ?? "", /^\[Budget clock\] 4 of 5 work minutes used, 1 left\..* Plan so that you can write your report before then\./);
+	assert.match(notes[2]?.text ?? "", /^\[Budget clock\] Now \d{2}:\d{2} UTC\. 4 of 5 work minutes used, 1 left\..* Plan so that you can write your report before then\./);
 	runs.clear();
 });
 
@@ -59,7 +59,8 @@ test("a run gets one note at 80% of its cost budget, with what is left", () => {
 	runs.spent("spender", 2.5);
 	assert.equal(notes.length, 0);
 	runs.spent("spender", 2.62);
-	assert.deepEqual(notes, [{ name: "spender", text: "About $0.38 is left of this run's $2.00 cost budget. Plan so that you can write your report before then. At the limit, tool calls stop and you must report." }]);
+	assert.deepEqual(notes.map((note) => note.name), ["spender"]);
+	assert.match(notes[0]!.text, /^Now \d{2}:\d{2} UTC\. About \$0\.38 is left of this run's \$2\.00 cost budget\. Plan so that you can write your report before then\. At the limit, tool calls stop and you must report\.$/);
 	runs.spent("spender", 2.8);
 	assert.equal(notes.length, 1);
 	runs.clear();
@@ -72,9 +73,9 @@ test("the team steers the note into the running child", async (t) => {
 	await tick(); await tick();
 	for (const minutes of [2.5, 2.5, 3]) await pass(minutes * MINUTE);
 	assert.deepEqual(h.steered.get(name), [
-		"[Budget clock] 2.5 of 10 work minutes used, 7.5 left. If you do not wait, the budget ends at 00:26 UTC.",
-		"[Budget clock] 5 of 10 work minutes used, 5 left. If you do not wait, the budget ends at 00:26 UTC.",
-		"[Budget clock] 8 of 10 work minutes used, 2 left. If you do not wait, the budget ends at 00:26 UTC. Plan so that you can write your report before then. At the limit, tool calls stop and you must report.",
+		"[Budget clock] Now 00:19 UTC. 2.5 of 10 work minutes used, 7.5 left. If you do not wait, the budget ends at 00:26 UTC.",
+		"[Budget clock] Now 00:21 UTC. 5 of 10 work minutes used, 5 left. If you do not wait, the budget ends at 00:26 UTC.",
+		"[Budget clock] Now 00:24 UTC. 8 of 10 work minutes used, 2 left. If you do not wait, the budget ends at 00:26 UTC. Plan so that you can write your report before then. At the limit, tool calls stop and you must report.",
 	]);
 	await h.team.close();
 });

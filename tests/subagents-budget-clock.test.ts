@@ -8,8 +8,9 @@ import { type TestContext, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { RunBudgets } from "../lib/subagents/budget.ts";
-import { childInstructions, clockNote, runClockHead } from "../lib/subagents/format.ts";
+import { childInstructions, clockNote, clockText, costNote, runClockHead } from "../lib/subagents/format.ts";
 import { Team } from "../lib/subagents/team.ts";
+import { childClockTool } from "../lib/subagents/tools.ts";
 import type { ChildHandle } from "../lib/subagents/types.ts";
 import { teamHarness } from "./support/team-harness.ts";
 
@@ -34,25 +35,36 @@ function budgets() {
 	return { runs, notes };
 }
 
-test("the head gives the start, the budget, the end if the run does not wait, date -u, and that notes come", () => {
+test("the head gives the start, the budget, the end if the run does not wait, the clock tool, and that notes come", () => {
 	assert.equal(runClockHead({ now: T0, minutes: 60, notes: true }),
-		"[Budget clock] This run started at 23:37 UTC on 2026-10-19 with a time budget of 60 work minutes. If you do not wait, the budget ends at 00:37 UTC on 2026-10-20. If you have a shell, run `date -u` to see the time now. Do not estimate the time from the work you did. Notes during the run give the work minutes used and left.");
+		"[Budget clock] This run started at 23:37 UTC on 2026-10-19 with a time budget of 60 work minutes. If you do not wait, the budget ends at 00:37 UTC on 2026-10-20. Call the clock tool to see the time now and the work minutes left. Do not estimate the time from the work you did. Notes during the run give the time now and the work minutes used and left.");
 	assert.equal(runClockHead({ now: T0 - 30 * MINUTE, minutes: 4 }),
-		"[Budget clock] This run started at 23:07 UTC on 2026-10-19 with a time budget of 4 work minutes. If you do not wait, the budget ends at 23:11 UTC. If you have a shell, run `date -u` to see the time now. Do not estimate the time from the work you did.");
+		"[Budget clock] This run started at 23:07 UTC on 2026-10-19 with a time budget of 4 work minutes. If you do not wait, the budget ends at 23:11 UTC. Call the clock tool to see the time now and the work minutes left. Do not estimate the time from the work you did.");
+	assert.doesNotMatch(runClockHead({ now: T0, minutes: 60, notes: true }), /date -u/, "a read-only child has no shell");
 });
 
-test("a clock note gives work minutes used and left, tenths under 10, and the end on the wall clock", () => {
-	assert.equal(clockNote({ now: T0, usedMs: 2.5 * MINUTE, minutes: 10 }), "[Budget clock] 2.5 of 10 work minutes used, 7.5 left. If you do not wait, the budget ends at 23:44 UTC.");
-	assert.equal(clockNote({ now: T0, usedMs: 47.3 * MINUTE, minutes: 120 }), "[Budget clock] 47 of 120 work minutes used, 73 left. If you do not wait, the budget ends at 00:49 UTC on 2026-10-20.");
-	assert.equal(clockNote({ now: T0, usedMs: 8 * MINUTE, minutes: 10, plan: true }), `[Budget clock] 8 of 10 work minutes used, 2 left. If you do not wait, the budget ends at 23:39 UTC. ${PLAN}`);
+test("a clock note gives the time now, work minutes used and left, tenths under 10, and the end on the wall clock", () => {
+	assert.equal(clockNote({ now: T0, usedMs: 2.5 * MINUTE, minutes: 10 }), "[Budget clock] Now 23:37 UTC. 2.5 of 10 work minutes used, 7.5 left. If you do not wait, the budget ends at 23:44 UTC.");
+	assert.equal(clockNote({ now: T0, usedMs: 47.3 * MINUTE, minutes: 120 }), "[Budget clock] Now 23:37 UTC. 47 of 120 work minutes used, 73 left. If you do not wait, the budget ends at 00:49 UTC on 2026-10-20.");
+	assert.equal(clockNote({ now: T0, usedMs: 8 * MINUTE, minutes: 10, plan: true }), `[Budget clock] Now 23:37 UTC. 8 of 10 work minutes used, 2 left. If you do not wait, the budget ends at 23:39 UTC. ${PLAN}`);
 	assert.match(clockNote({ now: T0, usedMs: 11 * MINUTE, minutes: 10 }), /11 of 10 work minutes used, 0 left\. If you do not wait, the budget ends at 23:37 UTC\./);
+});
+
+test("the cost note gives the time now too", () => {
+	assert.equal(costNote(0.5, 2, T0), `Now 23:37 UTC. About $0.50 is left of this run's $2.00 cost budget. ${PLAN}`);
+});
+
+test("the clock tool gives the time now, and the work minutes used and left when the run has a time budget", () => {
+	assert.equal(clockText({ now: T0 }), "Now 23:37:03 UTC on 2026-10-19 (Monday). This run has no time budget.");
+	assert.equal(clockText({ now: T0, clock: { usedMs: 2.5 * MINUTE, minutes: 10 } }),
+		"Now 23:37:03 UTC on 2026-10-19 (Monday). 2.5 of 10 work minutes used, 7.5 left. If you do not wait, the budget ends at 23:44 UTC.");
 });
 
 test("the instructions say how the budget counts and where the clock is, and never change between runs", () => {
 	const base = { name: "scout", parent: "main", readOnly: false, canSpawn: false, roster: "" };
 	assert.match(childInstructions({ ...base, budget: { minutes: 60, cost: 2 } }),
-		/## Budget\nThis run may work 60 minutes and spend \$2\.00\. Time counts only while you work, not while you wait for an answer, for your subagents or for a free slot\. The first message of each run gives its start time and the time its budget ends if you do not wait\. Near the end of the cost budget you get a note\. At the limit, tool calls are blocked and you must write your final report at once\./);
-	assert.match(childInstructions({ ...base, budget: { minutes: 15 } }), /This run may work 15 minutes\. Time counts only while you work, .* if you do not wait\. At the limit/);
+		/## Budget\nThis run may work 60 minutes and spend \$2\.00\. Time counts only while you work, not while you wait for an answer, for your subagents or for a free slot\. The first message of each run gives its start time and the time its budget ends if you do not wait\. The clock tool gives the time now and the work minutes left\. Near the end of the cost budget you get a note\. At the limit, tool calls are blocked and you must write your final report at once\./);
+	assert.match(childInstructions({ ...base, budget: { minutes: 15 } }), /This run may work 15 minutes\. Time counts only while you work, .* if you do not wait\. The clock tool gives the time now and the work minutes left\. At the limit/);
 	assert.match(childInstructions({ ...base, budget: { cost: 0.5 } }), /This run may spend \$0\.50\. Near the end of the cost budget you get a note\. At the limit/);
 	assert.doesNotMatch(childInstructions({ ...base, budget: { minutes: 60 } }), /\d{2}:\d{2}|UTC|Near the end/, "no wall-clock time in the system prompt");
 	assert.doesNotMatch(childInstructions(base), /## Budget/);
@@ -75,11 +87,11 @@ test("a fresh run gets a note at each progress share and at 80% of its time budg
 	await pass(15 * MINUTE - 1);
 	assert.deepEqual(notes, []);
 	await pass(1);
-	assert.deepEqual(notes, ["[Budget clock] 15 of 60 work minutes used, 45 left. If you do not wait, the budget ends at 00:37 UTC on 2026-10-20."]);
+	assert.deepEqual(notes, ["[Budget clock] Now 23:52 UTC. 15 of 60 work minutes used, 45 left. If you do not wait, the budget ends at 00:37 UTC on 2026-10-20."]);
 	await pass(15 * MINUTE);
-	assert.equal(notes[1], "[Budget clock] 30 of 60 work minutes used, 30 left. If you do not wait, the budget ends at 00:37 UTC.");
+	assert.equal(notes[1], "[Budget clock] Now 00:07 UTC. 30 of 60 work minutes used, 30 left. If you do not wait, the budget ends at 00:37 UTC.");
 	await pass(18 * MINUTE);
-	assert.equal(notes[2], `[Budget clock] 48 of 60 work minutes used, 12 left. If you do not wait, the budget ends at 00:37 UTC. ${PLAN}`, "after midnight the end is on the same day");
+	assert.equal(notes[2], `[Budget clock] Now 00:25 UTC. 48 of 60 work minutes used, 12 left. If you do not wait, the budget ends at 00:37 UTC. ${PLAN}`, "after midnight the end is on the same day");
 	await pass(11 * MINUTE);
 	assert.equal(notes.length, 3);
 	runs.clear();
@@ -94,16 +106,16 @@ test("a paused run: notes count work time only, and a wait of a minute or more e
 	await pass(5 * MINUTE);
 	assert.deepEqual(notes, [], "no note while it waits");
 	runs.follow("scout", "running");
-	assert.deepEqual(notes, ["[Budget clock] 1 of 10 work minutes used, 9 left. If you do not wait, the budget ends at 23:52 UTC."], "the wait moved the end by 5 minutes");
+	assert.deepEqual(notes, ["[Budget clock] Now 23:43 UTC. 1 of 10 work minutes used, 9 left. If you do not wait, the budget ends at 23:52 UTC."], "the wait moved the end by 5 minutes");
 	await pass(1.5 * MINUTE);
-	assert.equal(notes[1], "[Budget clock] 2.5 of 10 work minutes used, 7.5 left. If you do not wait, the budget ends at 23:52 UTC.");
+	assert.equal(notes[1], "[Budget clock] Now 23:44 UTC. 2.5 of 10 work minutes used, 7.5 left. If you do not wait, the budget ends at 23:52 UTC.");
 	runs.follow("scout", "waiting");
 	await pass(59_999);
 	runs.follow("scout", "queued");
 	runs.follow("scout", "running");
 	assert.equal(notes.length, 2, "a wait under a minute gets no note");
 	await pass(2.5 * MINUTE);
-	assert.match(notes[2] ?? "", /^\[Budget clock\] 5 of 10 work minutes used, 5 left\. If you do not wait, the budget ends at 23:53 UTC\.$/);
+	assert.match(notes[2] ?? "", /^\[Budget clock\] Now \d{2}:\d{2} UTC\. 5 of 10 work minutes used, 5 left\. If you do not wait, the budget ends at 23:53 UTC\.$/);
 	runs.clear();
 });
 
@@ -132,7 +144,7 @@ test("a run with no time budget has no clock and no time notes; its cost note is
 	await pass(60 * MINUTE);
 	assert.deepEqual(notes, []);
 	runs.spent("spender", 1.7);
-	assert.deepEqual(notes, ["About $0.30 is left of this run's $2.00 cost budget. Plan so that you can write your report before then. At the limit, tool calls stop and you must report."]);
+	assert.deepEqual(notes, ["Now 00:47 UTC. About $0.30 is left of this run's $2.00 cost budget. Plan so that you can write your report before then. At the limit, tool calls stop and you must report."]);
 	runs.start("none", {}, 0);
 	assert.equal(runs.clock("none"), undefined);
 	runs.clear();
@@ -149,15 +161,15 @@ test("a run that goes on keeps its used time and the notes it got; a note it pas
 	assert.equal(runs.clock("scout")?.usedMs, 3 * MINUTE);
 	await pass(2 * MINUTE);
 	assert.equal(notes.length, 2, "the 25% note is not repeated; the 50% note comes at 5 work minutes");
-	assert.match(notes[1]!, /^\[Budget clock\] 5 of 10 work minutes used, 5 left\./);
+	assert.match(notes[1]!, /^\[Budget clock\] Now \d{2}:\d{2} UTC\. 5 of 10 work minutes used, 5 left\./);
 	runs.start("late", { minutes: 10 }, 0, { costAtStart: 0, usedMs: 6 * MINUTE, noted: [] });
 	await pass(MINUTE);
 	assert.equal(notes.length, 2, "the 25% and 50% notes passed: no late progress note");
 	await pass(MINUTE);
-	assert.match(notes[2]!, /^\[Budget clock\] 8 of 10 work minutes used, 2 left\..*Plan so that/);
+	assert.match(notes[2]!, /^\[Budget clock\] Now \d{2}:\d{2} UTC\. 8 of 10 work minutes used, 2 left\..*Plan so that/);
 	runs.start("past", { minutes: 10 }, 0, { costAtStart: 0, usedMs: 9 * MINUTE, noted: [] });
 	await pass(0);
-	assert.match(notes[3]!, /^\[Budget clock\] 9 of 10 work minutes used, 1 left\..*Plan so that/, "the last note comes at once");
+	assert.match(notes[3]!, /^\[Budget clock\] Now \d{2}:\d{2} UTC\. 9 of 10 work minutes used, 1 left\..*Plan so that/, "the last note comes at once");
 	runs.clear();
 });
 
@@ -169,6 +181,22 @@ test("a fresh run's first prompt starts with its clock head; a run with no time 
 	await tick(); await tick();
 	assert.equal(h.lastCall(timed).text, `${runClockHead({ now: T0, minutes: 10, notes: true })}\n\nRead the files.`);
 	assert.equal(h.lastCall(plain).text, "Read the files.");
+	await h.team.close();
+});
+
+test("the clock tool reads the team's clock: work minutes stop while the run waits", async (t) => {
+	const pass = clock(t);
+	const h = teamHarness({ budgetTimes: SHARES, now });
+	const timed = h.spawn("Read the files.", { name: "timed", maxMinutes: 10 });
+	const plain = h.spawn("Read the files.", { name: "plain" });
+	await tick(); await tick();
+	await pass(2.5 * MINUTE);
+	const read = async (self: string) => {
+		const result = await (childClockTool({ team: h.team, now }, self).execute as any)("id", {}, undefined, undefined);
+		return (result.content[0] as { text: string }).text;
+	};
+	assert.equal(await read(timed), "Now 23:39:33 UTC on 2026-10-19 (Monday). 2.5 of 10 work minutes used, 7.5 left. If you do not wait, the budget ends at 23:47 UTC.");
+	assert.equal(await read(plain), "Now 23:39:33 UTC on 2026-10-19 (Monday). This run has no time budget.");
 	await h.team.close();
 });
 
@@ -198,7 +226,7 @@ test("a resumed run gets a fresh head with its new start, then its resume warnin
 	assert.ok(text.startsWith(`${runClockHead({ now: T0 + 30 * MINUTE, minutes: 10, notes: true })}\n\n`), text);
 	assert.match(text, /This run started at 00:07 UTC on 2026-10-20 .*\n\nYour previous run reached its 10-minute budget and ended with a wrap-up report\. This run has a fresh budget\./s);
 	await pass(2.5 * MINUTE);
-	assert.match(h.steered.get(name)?.at(-1) ?? "", /^\[Budget clock\] 2\.5 of 10 work minutes used, 7\.5 left\./, "the new run's notes start again");
+	assert.match(h.steered.get(name)?.at(-1) ?? "", /^\[Budget clock\] Now \d{2}:\d{2} UTC\. 2\.5 of 10 work minutes used, 7\.5 left\./, "the new run's notes start again");
 	await h.team.close();
 });
 
@@ -210,7 +238,7 @@ test("a run woken from waiting on its subagents goes on with a clock line, not a
 	// A mocked tick runs a timer with the time at the end of the tick: stop at the note.
 	await pass(2.5 * MINUTE);
 	await pass(0.5 * MINUTE);
-	assert.deepEqual(h.steered.get(lead), ["[Budget clock] 2.5 of 10 work minutes used, 7.5 left. If you do not wait, the budget ends at 23:47 UTC."]);
+	assert.deepEqual(h.steered.get(lead), ["[Budget clock] Now 23:39 UTC. 2.5 of 10 work minutes used, 7.5 left. If you do not wait, the budget ends at 23:47 UTC."]);
 	const helper = h.spawn("Help.", { name: "helper", parent: lead });
 	await tick(); await tick();
 	h.lastCall(lead).finish("Waiting for helper.");
@@ -221,11 +249,11 @@ test("a run woken from waiting on its subagents goes on with a clock line, not a
 	await tick(); await tick(); await tick();
 	assert.equal(h.team.get(lead)?.state, "running");
 	const text = h.lastCall(lead).text;
-	assert.ok(text.startsWith("[Budget clock] 3 of 10 work minutes used, 7 left. If you do not wait, the budget ends at 00:07 UTC.\n\n"), text);
+	assert.ok(text.startsWith("[Budget clock] Now 00:00 UTC. 3 of 10 work minutes used, 7 left. If you do not wait, the budget ends at 00:07 UTC.\n\n"), text);
 	assert.doesNotMatch(text, /This run started/);
 	await pass(2 * MINUTE);
 	assert.equal(h.steered.get(lead)?.length, 2, "no second 25% note");
-	assert.match(h.steered.get(lead)!.at(-1)!, /^\[Budget clock\] 5 of 10 work minutes used, 5 left\./);
+	assert.match(h.steered.get(lead)!.at(-1)!, /^\[Budget clock\] Now \d{2}:\d{2} UTC\. 5 of 10 work minutes used, 5 left\./);
 	await h.team.close();
 });
 
@@ -240,9 +268,9 @@ test("a run that goes on on a fallback model keeps its clock and gets a clock li
 	for (let i = 0; i < 12; i++) await tick();
 	assert.equal(h.team.get(name)?.model, "anthropic/claude-opus-5-5");
 	const text = h.lastCall(name).text;
-	assert.ok(text.startsWith("[Budget clock] 4 of 10 work minutes used, 6 left. If you do not wait, the budget ends at 23:47 UTC.\n\nYour model "), text);
+	assert.ok(text.startsWith("[Budget clock] Now 23:41 UTC. 4 of 10 work minutes used, 6 left. If you do not wait, the budget ends at 23:47 UTC.\n\nYour model "), text);
 	await pass(MINUTE);
-	assert.deepEqual(h.steered.get(name)?.map((note) => note.slice(0, 40)), ["[Budget clock] 2.5 of 10 work minutes us", "[Budget clock] 5 of 10 work minutes used"]);
+	assert.deepEqual(h.steered.get(name)?.map((note) => note.replace(/Now \d{2}:\d{2} UTC\. /, "").slice(0, 40)), ["[Budget clock] 2.5 of 10 work minutes us", "[Budget clock] 5 of 10 work minutes used"]);
 	await h.team.close();
 });
 
@@ -279,7 +307,7 @@ test("a run that moves to a new session at a turn keeps its clock and gets a clo
 	resolvers[0]!();
 	for (let i = 0; i < 12; i++) await tick();
 	assert.equal(prompts[1]?.length, 1);
-	assert.ok(prompts[1]![0]!.startsWith("[Budget clock] 6 of 10 work minutes used, 4 left. If you do not wait, the budget ends at 23:47 UTC.\n\n[Your session moved"), prompts[1]![0]);
+	assert.ok(prompts[1]![0]!.startsWith("[Budget clock] Now 23:43 UTC. 6 of 10 work minutes used, 4 left. If you do not wait, the budget ends at 23:47 UTC.\n\n[Your session moved"), prompts[1]![0]);
 	await team.close();
 });
 
@@ -295,7 +323,7 @@ test("after a wait on main's answer of a minute or more, the run is steered a no
 	await pass(3 * MINUTE);
 	await h.team.send("main", name, "main");
 	assert.ok((await asked).ok);
-	assert.deepEqual(h.steered.get(name), ["[Budget clock] 1 of 10 work minutes used, 9 left. If you do not wait, the budget ends at 23:50 UTC."]);
+	assert.deepEqual(h.steered.get(name), ["[Budget clock] Now 23:41 UTC. 1 of 10 work minutes used, 9 left. If you do not wait, the budget ends at 23:50 UTC."]);
 	const quick = h.team.send(name, "main", "And the remote?", { expectReply: true });
 	await tick();
 	await pass(30_000);

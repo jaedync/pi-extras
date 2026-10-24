@@ -145,7 +145,7 @@ export class RunBudgets {
 		if (!clock || limit === undefined) return;
 		const run = cost - clock.costAtStart;
 		if (run >= limit) this.expire(name, costReason(limit));
-		else if (run >= limit * this.notes.noteShare) this.note(name, "cost", costNote(limit - run, limit));
+		else if (run >= limit * this.notes.noteShare) this.note(name, "cost", costNote(limit - run, limit, this.now()));
 	}
 
 	end(name: string): void {
