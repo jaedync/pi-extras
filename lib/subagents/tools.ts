@@ -67,7 +67,7 @@ const subagentParams = Type.Object({
 	mode: Type.Optional(Type.Union(PANEL_MODES.map((mode) => Type.Literal(mode)), { description: "With models: parallel (default) starts all at once; sequential starts each when the one before ends, without its report." })),
 	thinking: Type.Optional(thinkingSchema),
 	readOnly: Type.Optional(Type.Boolean({ description: "Only tools that can't change your files or run commands that the model chooses: read, grep, find, ls and known search and fetch tools. Other tools are dropped." })),
-	readOnlyShell: Type.Optional(Type.Boolean({ description: "readOnly plus bash in a sandbox: every file is read-only but a private /tmp, and there is no network. For git log, show and diff, rg, and builds or tests that write only to /tmp." })),
+	readOnlyShell: Type.Optional(Type.Boolean({ description: "Linux only. readOnly plus bash in a sandbox: every file is read-only but a private /tmp, and there is no network. For git log, show and diff, rg, and builds or tests that write only to /tmp." })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Give it only these of the tools it would get; message and clock always stay. Omit for all of them." })),
 	cwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Directory it starts in, absolute or ~/: its tools, AGENTS.md and session work there. Default: your working directory." })),
 	isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")], { description: "Default shared. Use worktree for a separate git worktree of the repository at cwd (default: your working directory), with its current files." })),
@@ -252,9 +252,12 @@ async function spawnPanel(tc: ToolContext, parent: string, params: SubagentInput
 	for (const [index, { choice, name }] of requests.entries()) {
 		// Each sequential member waits for the one before it, without that one's report; the first keeps the call's own order.
 		const order: Partial<Pick<SpawnRequest, "after" | "afterReports">> = mode === "sequential" && index > 0 ? { after: [started[index - 1]!.name], afterReports: false } : {};
-		const request = spawnRequest(tc, parent, params, choice, { name, panel, ...order });
-		const spawned = tc.team.spawn(request);
+		let spawned: ReturnType<HostTeam["spawn"]>;
+		try { spawned = tc.team.spawn(spawnRequest(tc, parent, params, choice, { name, panel, ...order })); }
+		catch (error) { spawned = { ok: false, error: (error as Error).message }; }
 		if (!spawned.ok) {
+			// Marked first, so the stops below send no panel message after this refusal.
+			tc.team.abandonPanel(started.map((record) => record.name));
 			for (const record of started.reverse()) await tc.team.stop(record.name, { by: parent });
 			throw new Error(`The panel did not start: ${spawned.error}`);
 		}
@@ -414,7 +417,7 @@ async function stopAll(team: HostTeam, self: string): Promise<Result> {
 	if (mine.length === 0) return text("No subagents of yours are running.", { stopped: [] });
 	const stopped: string[] = [];
 	for (const record of stopOrder(mine)) if (await team.stop(record.name, { by: self })) stopped.push(record.name);
-	return text(`Stopped ${stopped.length} ${stopped.length === 1 ? "subagent" : "subagents"}: ${stopped.join(", ")}. Their last messages are in their sessions; no reports follow.`, { stopped });
+	return text(`Stopped ${stopped.length} ${stopped.length === 1 ? "subagent" : "subagents"}: ${stopped.join(", ")}. Their last messages are in their sessions; no reports follow${stopped.some((name) => team.get(name)?.panel !== undefined) ? ", but a panel whose members all ended sends its message" : ""}.`, { stopped });
 }
 
 const clockParams = Type.Object({}, { additionalProperties: false });

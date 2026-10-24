@@ -5,15 +5,15 @@
  * installed; elsewhere commands run unconfined, as before. Every child's bash
  * also gets the paths hidden from subagents (hidden.ts) covered: an empty
  * tmpfs over each folder and /dev/null over each file on Linux, denied reads
- * on macOS. A `readOnlyShell` child's bash runs with every file read-only,
- * a private /tmp, no network and no view of other processes.
+ * on macOS. A `readOnlyShell` child's bash runs (on Linux only) with every
+ * file read-only, a private /tmp, no network and no view of other processes.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import type { BashSpawnContext } from "@earendil-works/pi-coding-agent";
 import type { Worktree } from "./types.ts";
-import { unixSocketFilterFile } from "./seccomp.ts";
+import { unixSocketFilter } from "./seccomp.ts";
 import { commonGitDir, sourceCheckout, worktreeGitDir } from "./worktree.ts";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
@@ -141,16 +141,9 @@ export function hidingPrefix(hiding: Hiding, platform: NodeJS.Platform = process
 }
 
 /** The bwrap arguments of a read-only shell, before the hidden paths; each command gets a fresh /tmp. */
-const READ_ONLY_BWRAP = ["--ro-bind", "/", "/", "--dev", "/dev", "--unshare-pid", "--proc", "/proc", "--tmpfs", "/tmp",
+const READ_ONLY_BWRAP = ["--ro-bind", "/", "/", "--dev", "/dev", "--unshare-pid", "--unshare-ipc", "--proc", "/proc", "--tmpfs", "/tmp",
 	// git status and diff refresh the index when they can take its lock; this tells them not to try.
 	"--unshare-net", "--die-with-parent", "--setenv", "GIT_OPTIONAL_LOCKS", "0"];
-
-/** The same on macOS: no writes but to the terminal devices, and no network. Not tried on a Mac yet. */
-function seatbeltReadOnly(hiding: Hiding): string {
-	return ["(version 1)", "(allow default)", '(deny file-write* (subpath "/"))',
-		'(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (regex #"^/dev/fd/"))',
-		"(deny network*)", ...seatbeltHiding(hiding)].join("\n");
-}
 
 /**
  * The fresh /tmp would hide a working folder under /tmp, so the top folder
@@ -161,23 +154,25 @@ function keptUnderTmp(cwd: string | undefined): string[] {
 	return top && existsSync(top) ? ["--ro-bind", top, top] : [];
 }
 
-const shellQuote = (text: string): string => `'${text.replace(/'/g, "'\\''")}'`;
+/** Each byte as a printf octal escape, so the filter travels in the command line itself: no file that another child could change. */
+const printfBytes = (bytes: Buffer): string => [...bytes].map((byte) => `\\${byte.toString(8).padStart(3, "0")}`).join("");
 
 /**
  * The prefix of a read-only shell in `cwd`, or undefined where no sandbox
- * tool is installed or no seccomp filter is known (seccomp.ts). bwrap reads
- * the filter from a descriptor, which a shell opens first.
+ * runs: Linux with bwrap and a seccomp filter for this architecture
+ * (seccomp.ts). A shell pipes the filter into bwrap on descriptor 3 and
+ * keeps its own stdin for the command. macOS has none yet: sandbox-exec with
+ * `(allow default)` leaves Mach and XPC services, which can write for it.
  */
-export function readOnlyShellPrefix(hiding: Hiding, platform: NodeJS.Platform = process.platform, exists: (path: string) => boolean = existsSync, cwd?: string): string[] | undefined {
-	if (platform === "darwin") return exists(SANDBOX_EXEC) ? [SANDBOX_EXEC, "-p", seatbeltReadOnly(hiding)] : undefined;
+export function readOnlyShellPrefix(hiding: Hiding, platform: NodeJS.Platform = process.platform, cwd?: string, arch: string = process.arch): string[] | undefined {
 	if (platform !== "linux" || !onPath(BWRAP)) return undefined;
-	const filter = unixSocketFilterFile();
+	const filter = unixSocketFilter(arch);
 	if (!filter) return undefined;
-	return ["/bin/sh", "-c", `exec "$0" "$@" 3<${shellQuote(filter)}`, BWRAP, "--seccomp", "3", ...READ_ONLY_BWRAP, ...keptUnderTmp(cwd), ...bwrapHiding(hiding)];
+	return ["/bin/sh", "-c", `exec 4<&0; printf '${printfBytes(filter)}' | { exec "$0" "$@" 3<&0 0<&4 4<&-; }`, BWRAP, "--seccomp", "3", ...READ_ONLY_BWRAP, ...keptUnderTmp(cwd), ...bwrapHiding(hiding)];
 }
 
 function readOnlyShellMissing(): string {
-	if (process.platform === "darwin") return `${SANDBOX_EXEC} is missing.`;
+	if (process.platform === "darwin") return "macOS has no sandbox for it yet: sandbox-exec can't keep a shell from asking system services to write.";
 	if (process.platform !== "linux") return `No sandbox tool is known for ${process.platform}.`;
 	return onPath(BWRAP) ? `No seccomp filter is known for ${process.arch}.` : "bwrap is not installed.";
 }
@@ -243,7 +238,7 @@ export function hidingFor(hiding: Hiding, onUnavailable?: (why: string) => void)
  * `onUnavailable` hears why, once if a tool failed.
  */
 export function readOnlyShellFor(hiding: Hiding, onUnavailable?: (why: string) => void, cwd?: string): readonly string[] | undefined {
-	const prefix = readOnlyShellPrefix(hiding, process.platform, existsSync, cwd && existsSync(cwd) ? realpathSync(cwd) : cwd);
+	const prefix = readOnlyShellPrefix(hiding, process.platform, cwd && existsSync(cwd) ? realpathSync(cwd) : cwd);
 	if (!prefix) {
 		onUnavailable?.(readOnlyShellMissing());
 		return undefined;

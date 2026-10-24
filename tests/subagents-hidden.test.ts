@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { readGuard } from "../lib/subagents/child.ts";
+import { childEditCheck, readGuard } from "../lib/subagents/child.ts";
 import { hiddenFrom, hiddenReason, type HiddenPaths } from "../lib/subagents/hidden.ts";
 import { bwrapHiding, hidingFor, seatbeltHiding, seatbeltProfile, NO_GIT_WRITES } from "../lib/subagents/sandbox.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
@@ -117,6 +117,39 @@ test("a child may read its own files, its subagents' and the reports of the agen
 		assert.equal(may("blind", report("impl")), false, "afterReports: false");
 		assert.equal(may("blind", report("blind")), true);
 		assert.deepEqual(hidden(byName.get("peer")!).files, [p.main]);
+	} finally { p.done(); }
+});
+
+test("an after report reaches a subagent only when its spawner may read it too", () => {
+	const p = place();
+	try {
+		const file = (name: string) => join(p.dir, "s1", `t_${name}_1.jsonl`);
+		for (const name of ["member", "other", "helper", "sibling", "fan"]) writeFileSync(file(name), "x");
+		const records = [
+			agent("member", { sessionFile: file("member") }),
+			agent("other", { sessionFile: file("other") }),
+			agent("sibling", { sessionFile: file("sibling"), parent: "member", depth: 2 }),
+			// A panel member's helper names the other member: the member can't read that report, so neither can it.
+			agent("helper", { sessionFile: file("helper"), parent: "member", depth: 2, after: ["other"] }),
+			agent("fan", { sessionFile: file("fan"), parent: "member", depth: 2, after: ["sibling"] }),
+		];
+		const byName = new Map(records.map((record) => [record.name, record]));
+		const team = { get: (name: string) => byName.get(name), list: () => records, under: (name: string, ancestor: string) => byName.get(name)?.parent === ancestor };
+		const hidden = hiddenFrom(p.dir, p.main, () => team);
+		assert.equal(hidden(byName.get("helper")!).readable(file("other")), false);
+		assert.equal(hidden(byName.get("fan")!).readable(file("sibling")), true, "its spawner's own subagent");
+	} finally { p.done(); }
+});
+
+test("edit and write refuse a hidden path, as read does", () => {
+	const p = place();
+	try {
+		const check = childEditCheck({}, agent("scout"), p.project, p.hidden);
+		assert.match(check(p.main) ?? "", /is hidden from subagents/);
+		assert.match(check(p.other) ?? "", /is hidden from subagents/);
+		assert.match(check(join(p.dir, "s1", "new.md")) ?? "", /is hidden from subagents/, "a new file there too");
+		assert.equal(check(p.mine), undefined, "its own files");
+		assert.equal(check(join(p.project, "a.ts")), undefined);
 	} finally { p.done(); }
 });
 

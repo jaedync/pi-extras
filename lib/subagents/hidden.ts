@@ -38,13 +38,23 @@ export function hiddenReason(hidden: HiddenPaths, tool: string, input: unknown, 
 	if (raw !== undefined && typeof raw !== "string") return undefined;
 	const shown = raw ?? ".";
 	const target = realTarget(resolve(cwd, toolPath(shown)));
-	if (hidden.files.includes(target) || hidden.dirs.some((dir) => within(target, dir) && !hidden.readable(target))) {
-		return `${shown} is hidden from subagents: it holds other agents' sessions and reports, or main's session. Read your own files, your subagents' and the reports you were given; ask your parent for anything else.`;
-	}
-	if (!SEARCH_TOOLS.has(tool)) return undefined;
+	const refused = hiddenPath(hidden, target, shown);
+	if (refused || !SEARCH_TOOLS.has(tool)) return refused;
 	if (hidden.dirs.some((dir) => within(dir, target) && dir !== target)) return `${shown} holds a folder hidden from subagents (other agents' sessions and reports). Search a narrower folder.`;
 	if (hidden.files.some((file) => within(file, target))) return `${shown} holds a file hidden from subagents (main's session). Search a narrower folder.`;
 	return undefined;
+}
+
+/** Why the real path `target` (shown as `shown`) is hidden from the child, or undefined when it may use it. */
+function hiddenPath(hidden: HiddenPaths, target: string, shown: string): string | undefined {
+	if (!hidden.files.includes(target) && !hidden.dirs.some((dir) => within(target, dir) && !hidden.readable(target))) return undefined;
+	return `${shown} is hidden from subagents: it holds other agents' sessions and reports, or main's session. Use your own files, your subagents' and the reports you were given; ask your parent for anything else.`;
+}
+
+/** Why an `edit` or `write` of `path` from `cwd` is refused: a child may change no file it may not read. */
+export function hiddenEdit(hidden: HiddenPaths, path: unknown, cwd: string): string | undefined {
+	if (typeof path !== "string") return undefined;
+	return hiddenPath(hidden, realTarget(resolve(cwd, toolPath(path))), path);
 }
 
 /** The files of the agent whose session is `sessionFile`: the session itself and each `<base>.<anything>` beside it, such as its run reports. */
@@ -57,8 +67,9 @@ export function ownsFile(sessionFile: string, path: string): boolean {
  * What a child may not read: every session's subagent folder (`folder`) and
  * main's session file. It may read its own files, those of agents under it,
  * and the reports of the agents it started after, unless it was told not to
- * get them (afterReports: false). Read from the team at each call, so a
- * subagent it starts later counts.
+ * get them (afterReports: false) or its parent may not read them either: a
+ * subagent's `after` can't reach past what its spawner sees. Read from the
+ * team at each call, so a subagent it starts later counts.
  */
 export function hiddenFrom(folder: string, mainSession: string | undefined, team: () => Pick<HostTeam, "get" | "list" | "under">): (record: AgentRecord) => HiddenPaths {
 	const dirs = [realTarget(folder)];
@@ -67,10 +78,13 @@ export function hiddenFrom(folder: string, mainSession: string | undefined, team
 		dirs, files,
 		readable(path) {
 			const now = team();
-			const self = now.get(record.name) ?? record;
-			const given = self.afterReports === false ? [] : self.after ?? [];
-			return now.list().some((other) => other.sessionFile !== undefined && ownsFile(other.sessionFile, path)
-				&& (other.name === self.name || now.under(other.name, self.name) || given.includes(other.name)));
+			const mayRead = (self: AgentRecord): boolean => {
+				const given = self.afterReports === false ? [] : self.after ?? [];
+				const parent = now.get(self.parent);
+				return now.list().some((other) => other.sessionFile !== undefined && ownsFile(other.sessionFile, path)
+					&& (other.name === self.name || now.under(other.name, self.name) || (given.includes(other.name) && (!parent || mayRead(parent)))));
+			};
+			return mayRead(now.get(record.name) ?? record);
 		},
 	});
 }

@@ -20,7 +20,7 @@ import { callPhrase } from "../tool-phrase.ts";
 import { guardBash } from "./bash-guard.ts";
 import { bashCheck } from "./checks.ts";
 import type { HostActivity } from "./contract.ts";
-import { HIDDEN_READ_TOOLS, hiddenReason, type HiddenPaths } from "./hidden.ts";
+import { HIDDEN_READ_TOOLS, hiddenEdit, hiddenReason, type HiddenPaths } from "./hidden.ts";
 import { confine, type Hiding, hidingFor, NO_HIDING, readOnlyShellFor, sandboxFor } from "./sandbox.ts";
 import { freshModels, piModelsCheck } from "./fresh-models.ts";
 import { withChildRetry } from "./retry.ts";
@@ -382,7 +382,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			// An SDK tool wins over a built-in or extension tool of the same name.
 			const hidden = deps.hidden?.(record);
 			const bash = wanted.has("bash") ? childBash(sdk, cwd, settingsManager, record, deps, hidden) : undefined;
-			const editCheck = childEditCheck(deps, record, cwd);
+			const editCheck = childEditCheck(deps, record, cwd, hidden);
 			const customTools = [...listed, ...(bash ? [bash] : []), ...childEdits(sdk, cwd, wanted, editCheck)];
 			// A check runs as the child's own bash would; a child without bash gets one made the same way when it needs it.
 			let checkBash = bash;
@@ -453,8 +453,9 @@ function childSettings(deps: LauncherDeps, cwd: string, record: AgentRecord): Se
 }
 
 /** Why the child may not edit `path` now: outside its worktree is refused before the lock is taken, so a refused edit holds nothing. */
-function childEditCheck(deps: LauncherDeps, record: AgentRecord, cwd: string): (path: unknown) => string | undefined {
-	return (path) => (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined) ?? deps.claimEdit?.(record.name, editTarget(cwd, path));
+export function childEditCheck(deps: Pick<LauncherDeps, "claimEdit">, record: AgentRecord, cwd: string, hidden?: HiddenPaths): (path: unknown) => string | undefined {
+	return (path) => (hidden ? hiddenEdit(hidden, path, cwd) : undefined) ?? (record.worktree ? outsideWorktree(record.worktree, cwd, path) : undefined)
+		?? deps.claimEdit?.(record.name, editTarget(cwd, path));
 }
 
 interface LoaderInputs {

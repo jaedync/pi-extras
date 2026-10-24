@@ -7,10 +7,6 @@
  * nor an io_uring, which could make one past the filter. Built by hand, as
  * classic BPF, so no library is needed.
  */
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 const AF_UNIX = 1;
 const EACCES = 13;
 const RET_ALLOW = 0x7fff0000;
@@ -56,21 +52,4 @@ export function unixSocketFilter(arch: string = process.arch): Buffer | undefine
 		op(RET_K, 0, 0, RET_ALLOW),
 		op(RET_K, 0, 0, RET_ERRNO | EACCES),
 	]);
-}
-
-let written: string | undefined;
-
-/**
- * The filter as a file that bwrap reads, in a private folder of this
- * process (another user can't plant one there), made again when a /tmp
- * cleaner removed it; undefined for an unknown architecture.
- */
-export function unixSocketFilterFile(arch: string = process.arch): string | undefined {
-	const program = unixSocketFilter(arch);
-	if (!program) return undefined;
-	if (written && existsSync(written) && readFileSync(written).equals(program)) return written;
-	const file = join(mkdtempSync(join(tmpdir(), "pi-subagents-seccomp-")), "no-unix.bpf");
-	writeFileSync(file, program, { mode: 0o600 });
-	written = file;
-	return file;
 }

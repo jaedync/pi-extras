@@ -19,9 +19,9 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 - Subagents: `readOnlyShell: true` gives a read-only child `bash` in a
   sandbox: read-only files, a private `/tmp`, no network, no view of other
-  processes, and (on Linux) a seccomp filter that blocks Unix sockets. For
-  `git log`, `git diff`, `rg` and tests that write only to `/tmp`. Where no
-  sandbox runs, the spawn is refused.
+  processes or IPC, and a seccomp filter that blocks Unix sockets. For
+  `git log`, `git diff`, `rg` and tests that write only to `/tmp`. Linux
+  only; where no sandbox runs (also on macOS), the spawn is refused.
 
 - Subagents: `maxWindowPct` wraps a child's run up when the usage window
   that governs its model reaches that percent (anthropic, opencode-go and
@@ -36,7 +36,7 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   outcome, time, cost and report path.
 
 - Subagents: children can't read other agents' sessions and reports, or
-  main's session. `read`, `grep`, `find` and `ls` refuse those paths, and a
+  main's session. `read`, `grep`, `find`, `ls`, `edit` and `write` refuse those paths, and a
   child's bash runs under bwrap (Linux) or sandbox-exec (macOS) with them
   hidden. A child keeps access to its own files, its subagents' and the
   reports it was given. `hideSessions: false` turns this off; in the sandbox,

@@ -16,7 +16,7 @@ export interface WindowReading {
 /** The reading for `model`, or why there is none (a provider with no usage source, or no reading yet). */
 export type WindowLookup = { reading: WindowReading } | { why: string };
 
-export function windowReading(get: (provider: string) => LimitSnapshot | undefined, model: string): WindowLookup {
+export function windowReading(get: (provider: string) => LimitSnapshot | undefined, model: string, now: number = Date.now()): WindowLookup {
 	const slash = model.indexOf("/");
 	const provider = slash > 0 ? model.slice(0, slash) : model;
 	const id = slash > 0 ? model.slice(slash + 1) : model;
@@ -25,7 +25,9 @@ export function windowReading(get: (provider: string) => LimitSnapshot | undefin
 		const why = missingReason(provider);
 		return { why: why === NO_READING_REASON ? `${provider} has no usage reading yet; the limit acts once Status Plus polls one.` : why };
 	}
-	const windows = snapshot.entries.filter((entry) => entryKind(entry) === "window" && entryApplies(entry, { provider, id }) && (entry.usedPct !== undefined || entry.exhausted === true));
+	const windows = snapshot.entries.filter((entry) => entryKind(entry) === "window" && entryApplies(entry, { provider, id }) && (entry.usedPct !== undefined || entry.exhausted === true)
+		// A reset already in the past means the reading is stale, not that the window is full (usage-guard-core.ts `activeWindows`).
+		&& !(entry.resetMs !== undefined && entry.resetMs <= now));
 	if (windows.length === 0) return { why: `${provider} reports no usage windows for ${id}.` };
 	// A blocked window counts as full, whatever its percentage says.
 	const pct = (entry: (typeof windows)[number]): number => (entry.exhausted ? 100 : entry.usedPct ?? 0);

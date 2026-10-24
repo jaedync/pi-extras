@@ -72,4 +72,7 @@ test("a report written at the budget says so for the model, reads back as an idl
 	assert.match(reportText(checked, 0), /its check did not run again\./);
 	const [read] = readEnvelopes(cost);
 	assert.equal(read?.kind === "report" && read.state, "idle");
+	const [window] = readEnvelopes(reportText(record({ budgetEnd: "over its 80% limit on the anthropic 7d window", report: "x" }), 0));
+	assert.equal(window?.kind === "report" && window.state, "idle", "a window-limit report reads back too");
+	assert.match(window?.text ?? "", /^reached its 80% limit on the anthropic 7d window\n/);
 });

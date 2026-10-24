@@ -26,6 +26,54 @@ function setup() {
 const panels = (main: readonly MainDelivery[]) => main.filter((delivery): delivery is Extract<MainDelivery, { kind: "panel" }> => delivery.kind === "panel");
 const reports = (main: readonly MainDelivery[]) => main.filter((delivery) => delivery.kind === "report");
 
+test("a member that its parent asks something still sends the panel message with the others", async () => {
+	const h = setup();
+	const lead = h.spawn("lead the review", { name: "lead" });
+	await h.settle();
+	const tool = subagentTool({ team: h.team, allowed: ALLOWED as never, fallbackModel: ALLOWED[0]!.ref, thinking: {}, modelTable: "", guide: "", replyTimeoutMs: 60_000, now: Date.now }, lead);
+	await (tool.execute as any)("id", { task: "Judge.", name: "jury", models: ["opus", "luna"] }, undefined, undefined);
+	await h.settle();
+	h.lastCall("jury-opus-5-5").finish("Opus: guilty.");
+	await h.settle();
+	const answer = h.team.send(lead, "jury-gpt-6-luna", "Your verdict?", { expectReply: true });
+	await h.settle();
+	h.lastCall("jury-gpt-6-luna").finish("Luna: not guilty.");
+	await h.settle();
+	assert.ok((await answer).ok);
+	const got = h.steered.get(lead) ?? [];
+	assert.equal(got.length, 1, "the held report of the other member arrives");
+	assert.match(got[0]!, /Panel jury ended: 2 agents on the same task\.[\s\S]*Opus: guilty\./);
+	await h.team.close();
+});
+
+test("a panel that fails to start sends no panel message and leaves no member running", async () => {
+	const h = teamHarness({ sessionDir: "/sessions" });
+	let probes = 0;
+	const tool = subagentTool({ team: h.team, allowed: ALLOWED as never, fallbackModel: ALLOWED[0]!.ref, thinking: {}, modelTable: "", guide: "", replyTimeoutMs: 60_000, now: Date.now,
+		childTools: () => ["read", "bash"], shellProblem: () => (probes++ === 0 ? undefined : "bwrap failed.") }, "main");
+	await assert.rejects((tool.execute as any)("id", { task: "x", name: "pair", models: ["opus", "luna"], readOnlyShell: true }, undefined, undefined), /The panel did not start: readOnlyShell needs a sandbox/);
+	for (let i = 0; i < 4; i++) await tick();
+	assert.equal(h.team.get("pair-opus-5-5")!.state, "stopped");
+	assert.equal(panels(h.main).length, 0);
+	await h.team.close();
+});
+
+test("a restore sends the panel message of a panel with no live member left", async () => {
+	const first = setup();
+	await first.run({ task: "Judge.", name: "jury", models: ["opus", "luna"] });
+	await first.settle();
+	first.lastCall("jury-opus-5-5").finish("Opus: guilty.");
+	await first.settle();
+	const saved = first.team.list().map((record) => (record.name === "jury-gpt-6-luna" ? { ...record, state: "interrupted" as const } : record));
+	await first.team.close();
+	const second = teamHarness({ sessionDir: "/sessions" });
+	second.team.restore(saved);
+	const [panel] = panels(second.main);
+	assert.ok(panel);
+	assert.deepEqual(panel.records.map((record) => [record.name, record.state]), [["jury-opus-5-5", "idle"], ["jury-gpt-6-luna", "interrupted"]]);
+	await second.team.close();
+});
+
 test("member names are the panel name and a short model name, at most 24 characters", () => {
 	assert.equal(shortModel("claude-opus-5-5"), "opus-5-5");
 	assert.equal(shortModel("glm-5.3"), "glm-5-3");

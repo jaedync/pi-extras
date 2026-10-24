@@ -25,6 +25,7 @@ test("a read-only shell child gets bash beside the read tools, and no tool that 
 	assert.deepEqual(checkAllowlist(["read", "bash"], available, true, true), { ok: true, tools: ["read", "bash"] });
 	const refused = checkAllowlist(["bash", "edit"], available, true, true);
 	assert.ok(!refused.ok && /cannot list edit/.test(refused.error));
+	assert.deepEqual(checkAllowlist(["read", "clock", "message"], available, true, true), { ok: true, tools: ["read"] }, "clock always stays, as message does");
 	const plain = checkAllowlist(["bash"], childToolNames(parent, true), true);
 	assert.ok(!plain.ok && /cannot list bash/.test(plain.error));
 });
@@ -45,25 +46,20 @@ test("the Linux prefix: read-only root, fresh /dev, /proc and /tmp, no network, 
 	const prefix = readOnlyShellPrefix(NO_HIDING, "linux");
 	assert.ok(prefix);
 	assert.deepEqual(prefix.slice(0, 2), ["/bin/sh", "-c"]);
-	assert.match(prefix[2]!, /^exec "\$0" "\$@" 3<'.+no-unix\.bpf'$/);
-	assert.deepEqual(prefix.slice(3), ["bwrap", "--seccomp", "3", "--ro-bind", "/", "/", "--dev", "/dev", "--unshare-pid", "--proc", "/proc", "--tmpfs", "/tmp",
+	assert.match(prefix[2]!, /^exec 4<&0; printf '(\\[0-7]{3}){80}' \| \{ exec "\$0" "\$@" 3<&0 0<&4 4<&-; \}$/, "the filter is in the command line, not in a file");
+	assert.deepEqual(prefix.slice(3), ["bwrap", "--seccomp", "3", "--ro-bind", "/", "/", "--dev", "/dev", "--unshare-pid", "--unshare-ipc", "--proc", "/proc", "--tmpfs", "/tmp",
 		"--unshare-net", "--die-with-parent", "--setenv", "GIT_OPTIONAL_LOCKS", "0"]);
 	assert.equal(readOnlyShellPrefix(NO_HIDING, "win32"), undefined);
+	assert.equal(readOnlyShellPrefix(NO_HIDING, "linux", undefined, "riscv64"), undefined, "no filter, no shell");
 	const root = mkdtempSync("/tmp/subagents-roshell-");
 	try {
 		mkdirSync(join(root, "repo", "sub"), { recursive: true });
-		assert.deepEqual(readOnlyShellPrefix(NO_HIDING, "linux", undefined, join(root, "repo", "sub"))!.slice(-3), ["--ro-bind", root, root], "a folder under /tmp stays seen");
+		assert.deepEqual(readOnlyShellPrefix(NO_HIDING, "linux", join(root, "repo", "sub"))!.slice(-3), ["--ro-bind", root, root], "a folder under /tmp stays seen");
 	} finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("the macOS profile denies writes but to the null devices, and denies the network", () => {
-	const prefix = readOnlyShellPrefix({ dirs: ["/secret"], files: [] }, "darwin", () => true);
-	assert.ok(prefix);
-	const profile = prefix[2]!;
-	assert.match(profile, /\(deny file-write\* \(subpath "\/"\)\)/);
-	assert.match(profile, /\(allow file-write\* \(literal "\/dev\/null"\)/);
-	assert.match(profile, /\(deny network\*\)/);
-	assert.match(profile, /\(deny file-read\* \(subpath "\/secret"\)\)/);
+test("macOS has no read-only shell: sandbox-exec leaves system services that write", () => {
+	assert.equal(readOnlyShellPrefix(NO_HIDING, "darwin"), undefined);
 });
 
 test("the seccomp filter: 10 instructions for x64 and arm64, none for an unknown architecture", () => {
@@ -130,5 +126,8 @@ test("a real read-only shell: reads and git work; writes, the network and the hi
 		assert.match(unix.stderr, /PermissionError: \[Errno 13\]/, "no Unix socket can be made");
 		assert.equal(run(`python3 -c "import socket; a, b = socket.socketpair(); a.send(b'p'); print(b.recv(1).decode())"`).stdout, "p\n", "socketpair still works");
 		assert.equal(run("echo a | cat | tr a b").stdout, "b\n", "pipes work");
+		const stdin = spawnSync(prefix[0]!, [...prefix.slice(1), "sh", "-c", "cat"], { encoding: "utf8", cwd: repo, input: "from stdin" });
+		assert.equal(stdin.stdout, "from stdin", "the command keeps its own stdin");
+		assert.equal(run("ls /dev/mqueue 2>/dev/null; ipcs -m 2>/dev/null | grep -c '^0x' || true").stdout.trim().split("\n").at(-1), "0", "no host shared memory");
 	} finally { rmSync(root, { recursive: true, force: true }); }
 });

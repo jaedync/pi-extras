@@ -182,7 +182,7 @@ const MESSAGES = [
 const REPORT_HEAD = new RegExp(`^(${NAME}) \\(([^\\s(),]+)(?:, \\$[^\\s)]+)?\\) (.*)$`);
 const OUTCOMES: ReadonlyArray<readonly [ReportState, RegExp]> = [
 	["idle", /^finished after (?<took>\S+?)\. Message it to follow up/],
-	["idle", /^(?<error>reached .+? budget) after (?<took>\S+?) and wrote this report when told to stop\./],
+	["idle", /^(?<error>reached .+?) after (?<took>\S+?) and wrote this report when told to stop\./],
 	["failed", /^failed after (?<took>\S+?): (?<error>.*)$/],
 	["stopped", /^was stopped after (?<took>\S+?)(?:: (?<error>.*))?\.$/],
 	["stopped", /^was cancelled while queued; it never started \(\$0\)\.$/],

@@ -1940,23 +1940,26 @@ deletes its branch. Check that you kept all needed files first.
 
 **Read-only shell.** `readOnlyShell: true` is `readOnly: true` plus `bash`,
 for work that must run commands but change nothing: `git log`, `git show`
-and `git diff`, `rg`, and builds or tests that write only to `/tmp`. On
-Linux each command runs under bwrap with:
+and `git diff`, `rg`, and builds or tests that write only to `/tmp`. It works on Linux only. Each
+command runs under bwrap with:
 
 - every file read-only (a write fails with "Read-only file system"),
 - an empty, private `/tmp` for each command, and a new `/dev` and `/proc`,
-- no network, and no view of other processes,
+- no network, no view of other processes, and no shared System V or POSIX IPC
+  of the host,
 - a seccomp filter that refuses to make Unix sockets or an io_uring.
 
 The filter is necessary because a read-only mount does not stop a connection
 to a Unix socket, and sockets such as the herdr socket, the Pi broker, the
 user D-Bus or a container engine can make other programs write. `socketpair`
-and pipes still work. A working folder under `/tmp` stays visible,
+and pipes still work. The filter is known for x86_64 and arm64 only. A FIFO
+or a device that the command can see can still be opened for write. A working folder under `/tmp` stays visible,
 read-only. `GIT_OPTIONAL_LOCKS=0` stops `git status` and `git diff` from
 trying to refresh the index; other git commands may warn that they can't
-write a lock file. On macOS the command runs under sandbox-exec with all
-writes but to `/dev/null` and the terminal denied and no network; this was
-not tried on a Mac. The spawn is refused where no sandbox runs, and if the
+write a lock file. macOS has no read-only shell yet: sandbox-exec with a
+default-allow profile leaves Mach and XPC services, such as `launchctl` or
+`osascript`, that can write for the command. The spawn is refused where no
+sandbox runs, and if the
 sandbox stops working later, the child's `bash` refuses every command
 instead of running unconfined. A read-only child without a shell can't start
 one with `readOnlyShell`. Such a child can't set a `check`, as a read-only
@@ -1969,14 +1972,21 @@ that the path is hidden from subagents. `grep` and `find` also refuse a folder
 that holds one of these paths, so search a narrower folder. `ls` of a folder
 above only lists names. A child can still read its own session and reports,
 the files of the agents under it, and the reports of the agents it started
-after (not with `afterReports: false`). A call is checked again on its result,
-so a symlink made in the same reply can't get past the check. A child's
+after (not with `afterReports: false`, and not when its own parent can't read
+those reports either). A call is checked again on its result,
+so a symlink made in the same reply can't get past the check. `edit` and
+`write` refuse the same paths. A child's
 `bash` runs in a sandbox that puts an empty tmpfs over the folder and
 `/dev/null` over main's session (bwrap on Linux, sandbox-exec on macOS). A
 worktree child's sandbox does this too. Where no sandbox tool runs, Pi warns
 once and bash can read the folder. In the sandbox, `sudo` fails, because bwrap
-turns on "no new privileges". Set `hideSessions: false` in the `subagents`
-section of `pi-extras.json` to turn all of this off.
+turns on "no new privileges". The hiding keeps an honest child from reading
+the work of the agents beside it by accident. It is not a boundary against a
+child that tries to read them: a writer child's bash keeps the host's
+processes, network and sockets, so it can, for example, read through
+`/proc/<pid>/root` or start a command through the user D-Bus. A
+`readOnlyShell` child has none of these. Set `hideSessions: false` in the
+`subagents` section of `pi-extras.json` to turn all of this off.
 
 **Limits.** At most `maxConcurrent` children run at the same time; the rest
 queue. The limit also applies to a child that goes on in its open session.

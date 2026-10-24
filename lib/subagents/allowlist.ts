@@ -1,12 +1,12 @@
 /**
  * A subagent's tool allowlist: the `tools` its spawn names, out of the tools
- * it could have. Its team tools (`message`, and `subagent` and
+ * it could have. Its team tools (`message`, `clock`, and `subagent` and
  * `stop_subagent` when it may start subagents) are always kept, so naming
  * them is allowed and changes nothing.
  */
 import { readOnlyTools } from "./child.ts";
 
-const TEAM_TOOLS: ReadonlySet<string> = new Set(["message", "subagent", "stop_subagent"]);
+const TEAM_TOOLS: ReadonlySet<string> = new Set(["message", "clock", "subagent", "stop_subagent"]);
 
 /** Its tools: what it could have, cut to its allowlist when it has one. */
 export function allowedTools(available: readonly string[], allowlist: readonly string[] | undefined): string[] {

@@ -28,7 +28,8 @@ import { MainAnswers } from "./answers.ts";
 import { OpenQuestions } from "./questions.ts";
 import { launchPrompt, ResumePrompts } from "./resume-prompts.ts";
 import { Slots } from "./slots.ts";
-import { handUp, handUpFailure, type HandUpHost } from "./hand-up.ts";
+import { handUp, handUpFailure, type HandUpHost, panelUp } from "./hand-up.ts";
+import { heldForPanel, panelBusy, panelOf } from "./panel.ts";
 import { saveReport } from "./reports.ts";
 import { causeWords, staleCauses, SWAP_NOTE, swapActivity, swapDue, TurnSwaps } from "./swap.ts";
 import { Routing, type SendOptions } from "./routing.ts";
@@ -189,6 +190,15 @@ export class Team implements HostTeam {
 			const checkout = record.worktree?.path ?? (record.cwd ? record.checkout ?? checkoutOf(record.cwd) : this.sessionCheckout());
 			this.put({ ...record, blocking: false, usage: { ...record.usage }, ...unread, ...(checkout ? { checkout } : {}) });
 		}
+		// A panel whose last live member ended before the restart (or was interrupted by it) sends its reports now, not never.
+		for (const record of this.list()) {
+			if (heldForPanel(record) && this.records.get(record.name)?.panelDone !== true && !panelBusy(panelOf(record, this.list()), record.name) && !LIVE_STATES.has(record.state)) panelUp(this.handUpHost, record);
+		}
+	}
+
+	/** A panel that did not start: its members' ends report one by one, to no one waiting for a panel message. */
+	abandonPanel(names: readonly string[]): void {
+		for (const name of names) if (this.records.get(name)?.panel !== undefined) this.patch(name, { panelDone: true });
 	}
 
 	markRecovery(name: string, patch: Partial<AgentRecord>): void { this.patch(name, patch); }
@@ -286,8 +296,9 @@ export class Team implements HostTeam {
 	 */
 	private reusableName(name: string): boolean {
 		const record = this.records.get(name);
-		if (!record || record.state !== "stopped" || !neverStarted(record) || this.ending.has(name)) return false;
-		return !this.list().some((other) => LIVE_STATES.has(other.state) && other.after?.includes(name));
+		// A panel member's name stays its own, as do names in any `after`: a new agent would take their place in the panel message, or in what that agent may read.
+		if (!record || record.state !== "stopped" || !neverStarted(record) || this.ending.has(name) || record.panel !== undefined) return false;
+		return !this.list().some((other) => other.after?.includes(name));
 	}
 
 	/** Before a child's `edit` or `write` of the absolute `target`: takes the lock of its work tree, or says who holds it (edit-lock.ts). */

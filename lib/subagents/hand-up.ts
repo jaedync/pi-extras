@@ -41,8 +41,9 @@ export function handUp(host: HandUpHost, record: AgentRecord, silent: boolean): 
 	const asked = host.questions.of(record.parent).find((question) => question.to === name);
 	if (asked) asked.resolve(reportText(record, host.now()));
 	// A panel member's report waits for the others, also one its parent stopped: the last to end sends them all.
-	else if (heldForPanel(record)) panelUp(host, record);
-	else if (!silent) reportUp(host, record, quiet);
+	// Also one whose report answered a question, or the others' reports would wait for it forever.
+	if (heldForPanel(record)) panelUp(host, record);
+	else if (!asked && !silent) reportUp(host, record, quiet);
 	// Its parent has the report; anyone else it owed an answer gets how its run ended instead.
 	for (const asker of unanswered) host.routing.deliver(name, asker, `${name} ended without answering you. ${reportText(record, host.now())}`, true, `Report from ${name}`);
 	// Anyone else waiting on it would wait out the whole timeout for an answer that can't come.
@@ -95,7 +96,7 @@ function reportUp(host: HandUpHost, record: AgentRecord, quiet: boolean): void {
 }
 
 /** The panel's message, once no other member works; it goes where `record`'s report would. */
-function panelUp(host: HandUpHost, record: AgentRecord): void {
+export function panelUp(host: HandUpHost, record: AgentRecord): void {
 	const members = panelOf(record, host.list());
 	if (panelBusy(members, record.name)) return;
 	host.panelDone(members.map((member) => member.name));

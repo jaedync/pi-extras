@@ -156,3 +156,18 @@ test("a new start takes the name of an agent that never started, and a rename sa
 	finishers.get("first")?.("done");
 	await team.close();
 });
+
+test("a name that an after list names stays taken, even when that agent never started", async () => {
+	const { team, tool, finishers } = setup(1);
+	const stop = stopTool({ team } as never, "main");
+	await (tool.execute as any)("id", { task: "first job", name: "first" }, undefined, undefined);
+	await (tool.execute as any)("id", { task: "build", name: "build" }, undefined, undefined);
+	await (tool.execute as any)("id", { task: "check the build", name: "checker", after: ["build"] }, undefined, undefined);
+	await tick();
+	await (stop.execute as any)("id", { name: "build" }, undefined, undefined);
+	await (stop.execute as any)("id", { name: "checker" }, undefined, undefined);
+	const again = await (tool.execute as any)("id", { task: "build again", name: "build" }, undefined, undefined);
+	assert.match(again.content[0].text, /The name build was taken; this agent is build-2\./);
+	finishers.get("first")?.("done");
+	await team.close();
+});

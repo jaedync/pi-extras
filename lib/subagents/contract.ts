@@ -35,6 +35,8 @@ export interface HostTeam {
 	spawn(request: SpawnRequest): { ok: true; record: AgentRecord } | { ok: false; error: string };
 	send(from: string, to: string, text: string, options?: { expectReply?: boolean; signal?: AbortSignal; automatic?: boolean; check?: CheckUpdate }): Promise<SendResult>;
 	stop(name: string, options?: { by?: string; reason?: string }): Promise<AgentRecord | undefined>;
+	/** Members of a panel that did not start: they report on their own, not in a panel message. */
+	abandonPanel(names: readonly string[]): void;
 	stopping(): boolean;
 	under(name: string, ancestor: string): boolean;
 	whenDone(name: string): Promise<AgentRecord>;
