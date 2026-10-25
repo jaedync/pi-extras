@@ -6,11 +6,9 @@
  * sees half a file. A file that exists but does not parse is never written:
  * the save throws `UnreadableJsonError` instead of replacing every setting.
  */
-import { mkdirSync } from "node:fs";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { dirname, join } from "node:path";
-import { withFileLock } from "./file-lock.ts";
-import { readJsonObject, resolveTarget, writeJsonAtomic } from "./json-file.ts";
+import { join } from "node:path";
+import { readSectionFrom, updateSectionIn } from "./json-section.ts";
 
 export { UnreadableJsonError } from "./json-file.ts";
 
@@ -22,23 +20,13 @@ export const FOLD_LIVE_EVENT = "pi-extras:fold-live";
 
 type Json = Record<string, unknown>;
 
-const isObject = (value: unknown): value is Json => !!value && typeof value === "object" && !Array.isArray(value);
-
 /**
  * A section of the file; empty when the file or section is missing or
  * unreadable, so every extension runs on its defaults. Saving into an
  * unreadable file throws instead (see `updateSection`).
  */
 export function readSection(name: string, file = CONFIG_FILE): Json {
-	let config: Json;
-	try {
-		config = readJsonObject(file);
-	} catch {
-		// Deliberate: a save into the same file throws and tells the user.
-		return {};
-	}
-	const value = config[name];
-	return isObject(value) ? value : {};
+	return readSectionFrom(file, name);
 }
 
 export type MotionSetting = "full" | "reduced";
@@ -63,14 +51,7 @@ export function watchMotion(events?: { on(name: string, handler: (value: unknown
  * leaves the file as it was.
  */
 export function updateSection(name: string, change: (current: Json) => Json, file = CONFIG_FILE): Json {
-	const target = resolveTarget(file);
-	mkdirSync(dirname(target), { recursive: true });
-	return withFileLock(target, () => {
-		const config = readJsonObject(target);
-		const section = change(isObject(config[name]) ? config[name] : {});
-		writeJsonAtomic(target, { ...config, [name]: section });
-		return section;
-	});
+	return updateSectionIn(file, name, change);
 }
 
 /** Merges `patch` into a section, keeping everything else in the file. */
