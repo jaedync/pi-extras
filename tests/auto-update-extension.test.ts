@@ -3,6 +3,7 @@
  * nothing for a user who never enabled it, and `/pi-extras update`.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import test from "node:test";
 import autoUpdate from "../extensions/auto-update.ts";
 import { markChildSession } from "../lib/child-session.ts";
 import { writeConfig } from "../lib/auto-update/config.ts";
+import { launcherEnv } from "../lib/auto-update/launcher-env.ts";
 import { storePaths } from "../lib/auto-update/paths.ts";
 import { APPLY_COMMAND, UPDATE_ENTRY } from "../lib/auto-update/session.ts";
 import { emptyState, writeState } from "../lib/auto-update/state.ts";
@@ -139,4 +141,23 @@ test("in the TUI a zero-row widget gives the session the terminal UI, to see ope
 	rpc.emit("session_start", { reason: "startup" });
 	assert.equal(rpc.widgets.size, 0, "no terminal UI in RPC mode");
 	rpc.emit("session_shutdown", { reason: "quit" });
+});
+
+test("the launcher's variables leave process.env at load, so no child of Pi inherits the restart token; a reload still has them", (t) => {
+	machine(t);
+	const slot = Symbol.for("pi-extras.auto-update.launcher-env.v1");
+	delete (globalThis as Record<symbol, unknown>)[slot];
+	t.after(() => delete (globalThis as Record<symbol, unknown>)[slot]);
+	const vars = { PI_EXTRAS_RESTART_TOKEN: "tok9", PI_EXTRAS_LAUNCHER_PID: String(process.ppid), PI_EXTRAS_RESTART_COUNT: "2", PI_EXTRAS_RESTART_TARGET: "T1" };
+	Object.assign(process.env, vars);
+	t.after(() => {
+		for (const key of Object.keys(vars)) delete process.env[key];
+	});
+	autoUpdate(fakePi().pi as never);
+	for (const key of Object.keys(vars)) assert.equal(process.env[key], undefined, key);
+	const seen = execFileSync("sh", ["-c", 'printf "%s %s %s %s" "${PI_EXTRAS_RESTART_TOKEN-unset}" "${PI_EXTRAS_LAUNCHER_PID-unset}" "${PI_EXTRAS_RESTART_COUNT-unset}" "${PI_EXTRAS_RESTART_TARGET-unset}"'], { encoding: "utf8" });
+	assert.equal(seen, "unset unset unset unset", "a bash tool, an MCP server or a shell job started by Pi");
+	// A reload loads the module again with the variables gone: the values come from the process slot.
+	autoUpdate(fakePi().pi as never);
+	assert.deepEqual(launcherEnv(process.env), { token: "tok9", launchedByLauncher: true, restarted: { count: 2, target: "T1" } });
 });

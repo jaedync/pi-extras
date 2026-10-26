@@ -19,6 +19,7 @@ import { errorText, operationalError } from "../lib/operational-log.ts";
 import { registerSubcommand } from "../lib/pi-extras-command.ts";
 import { BACKGROUND_EVENT, BACKGROUND_REQUEST_EVENT, backgroundWork } from "../lib/tab-status/events.ts";
 import { type BashStart, type FocusView, selectorOpen, userBashRunning } from "../lib/auto-update/adopt.ts";
+import { launcherEnv } from "../lib/auto-update/launcher-env.ts";
 import { fileLog } from "../lib/auto-update/log.ts";
 import { EXTRAS_DIR, storePaths, storeRootFrom } from "../lib/auto-update/paths.ts";
 import { APPLY_COMMAND, STATUS_KEY, UPDATE_ENTRY, UpdateSession, type UpdateEntryData } from "../lib/auto-update/session.ts";
@@ -47,12 +48,6 @@ function loadedPaths(pi: ExtensionAPI): string[] {
 	return [...new Set([EXTRAS_DIR, ...sources])].map(realOr);
 }
 
-function restartedFrom(env: NodeJS.ProcessEnv): { count: number; target: string } | undefined {
-	const count = Number.parseInt(env.PI_EXTRAS_RESTART_COUNT ?? "", 10);
-	const target = env.PI_EXTRAS_RESTART_TARGET;
-	return Number.isSafeInteger(count) && count > 0 && target ? { count, target } : undefined;
-}
-
 const FOCUS_WIDGET = "pi-extras-auto-update-focus";
 /** Versioned: a later pi-extras that keeps other data here picks a new symbol. */
 const HISTORY = Symbol.for("pi-extras.auto-update.loaded-releases.v1");
@@ -66,6 +61,7 @@ function processHistory(): Set<string> {
 export default function autoUpdate(pi: ExtensionAPI): void {
 	// The smoke test loads this package in a throwaway Pi: no lease, no timers, no cycle from there.
 	if (process.env.PI_EXTRAS_UPDATE_SMOKE === "1") return;
+	const launcher = launcherEnv(process.env);
 	// Real paths, as the CLI writes them into settings.json; resolved again at each session start, since the store may appear later.
 	const storeRoot = () => storePaths(realOr(storeRootFrom(process.env, process.env.HOME || homedir())));
 	let paths = storeRoot();
@@ -143,7 +139,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 				extrasDir: EXTRAS_DIR,
 				sessionFile: () => context.sessionManager.getSessionFile(),
 				argv: process.argv.slice(2),
-				restarted: restartedFrom(process.env),
+				restarted: launcher.restarted,
 				loadedPaths: () => loadedPaths(pi),
 				history: processHistory(),
 				branch: () => context.sessionManager.getBranch() as never,
@@ -162,9 +158,9 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 				}),
 				dispatchApply: () => pi.sendUserMessage(`/${APPLY_COMMAND}`, { expandPromptTemplates: true }),
 				spawnCycle: spawn,
-				restartToken: process.env.PI_EXTRAS_RESTART_TOKEN || undefined,
+				restartToken: launcher.token,
 				updateNote,
-				launchedByLauncher: process.env.PI_EXTRAS_LAUNCHER_PID === String(process.ppid),
+				launchedByLauncher: launcher.launchedByLauncher,
 				now: Date.now,
 				random: Math.random,
 				setTimer: (fn, ms) => {
