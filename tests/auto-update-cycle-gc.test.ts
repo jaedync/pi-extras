@@ -96,7 +96,12 @@ test("a cycle removes the old smoke folder that a stopped cycle left in the temp
 	t.after(() => rmSync(left, { recursive: true, force: true }));
 	const past = new Date(Date.now() - CYCLE_LIMIT_MS - 60_000);
 	utimesSync(left, past, past);
-	const result = await runCycle(w.cycleDeps(), { force: true });
+	// A running test's folder: young by the wall clock, also when the cycle's own clock runs a day ahead.
+	const live = join(tmpdir(), `${SMOKE_DIR_PREFIX}au-gc-live-${process.pid}`);
+	mkdirSync(join(live, "home"), { recursive: true });
+	t.after(() => rmSync(live, { recursive: true, force: true }));
+	const result = await runCycle(w.cycleDeps({ now: () => Date.now() + 24 * 3_600_000 }), { force: true });
 	assert.equal(result.outcome, "no-change", result.message);
 	assert.equal(existsSync(left), false);
+	assert.equal(existsSync(live), true);
 });
