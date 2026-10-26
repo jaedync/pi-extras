@@ -322,7 +322,8 @@ async function findCulprits(deps: CycleDeps, current: UpdateSet, candidate: Upda
 
 async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<CycleResult> {
 	const deadline = deps.now() + (deps.limitMs ?? CYCLE_LIMIT_MS);
-	for (const dir of sweepSmokeDirs(tmpdir(), deps.now(), CYCLE_LIMIT_MS)) deps.log(`removed an old smoke folder: ${dir}`);
+	// Folder times are wall-clock times: the cycle's clock (deps.now) may differ, and a wrong one would remove live tests' folders.
+	for (const dir of sweepSmokeDirs(tmpdir(), Date.now(), CYCLE_LIMIT_MS)) deps.log(`removed an old smoke folder: ${dir}`);
 	repair(deps, initial);
 	const problem = recordLauncher(deps, initial);
 	const packages = readSettingsPackages(settingsFile(deps.agentDir));
