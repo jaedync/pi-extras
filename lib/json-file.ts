@@ -108,13 +108,18 @@ function existingMode(target: string): number | undefined {
  * file keeps its mode; a new one gets 0600.
  */
 export function writeJsonAtomic(file: string, value: unknown): void {
+	writeTextAtomic(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/** Like `writeJsonAtomic`, for text the caller has formatted. */
+export function writeTextAtomic(file: string, text: string): void {
 	const target = resolveTarget(file);
 	const mode = existingMode(target) ?? NEW_FILE_MODE;
 	const temp = join(dirname(target), `.${basename(target)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
 	try {
 		const fd = openSync(temp, "wx", mode);
 		try {
-			writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+			writeFileSync(fd, text);
 			fsyncSync(fd);
 		} finally {
 			closeSync(fd);

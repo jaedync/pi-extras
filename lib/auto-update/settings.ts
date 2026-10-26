@@ -7,7 +7,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { readJsonObject, writeJsonAtomic } from "../json-file.ts";
+import { readFileSync } from "node:fs";
+import { readJsonObject, writeTextAtomic } from "../json-file.ts";
 import { withSettingsLock } from "./settings-lock.ts";
 
 export const settingsFile = (agentDir: string): string => join(agentDir, "settings.json");
@@ -19,6 +20,15 @@ function packagesOf(settings: Record<string, unknown>): unknown[] {
 /** The packages list; empty when the file is missing. Throws `UnreadableJsonError` for a broken file. */
 export function readSettingsPackages(file: string): unknown[] {
 	return packagesOf(readJsonObject(file));
+}
+
+function endsWithNewline(file: string): boolean {
+	try {
+		return readFileSync(file, "utf8").endsWith("\n");
+	} catch {
+		// A new file: Pi writes none.
+		return false;
+	}
 }
 
 export interface PackagesChange {
@@ -35,7 +45,8 @@ export function rewriteSettingsPackages(file: string, change: (packages: readonl
 		const before = packagesOf(settings);
 		const after = change(before);
 		const changed = !isDeepStrictEqual(before, after);
-		if (changed) writeJsonAtomic(file, { ...settings, packages: after });
+		// Pi's own format (two-space JSON); a final newline stays only if the file had one.
+		if (changed) writeTextAtomic(file, `${JSON.stringify({ ...settings, packages: after }, null, 2)}${endsWithNewline(file) ? "\n" : ""}`);
 		return { before, after, changed };
 	});
 }

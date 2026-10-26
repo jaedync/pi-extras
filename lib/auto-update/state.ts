@@ -11,6 +11,8 @@ export interface PiRelease {
 	readonly version: string;
 	/** The real folder `pi/<version>` (an npm prefix). */
 	readonly dir: string;
+	/** The npm package name, when it is not `@earendil-works/pi-coding-agent`. */
+	readonly name?: string;
 }
 
 export interface PackageRelease {
