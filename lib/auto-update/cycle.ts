@@ -102,17 +102,12 @@ function foreignAgentDir(deps: Pick<CycleDeps, "agentDir">, state: UpdateState):
 	return mine === owner ? undefined : `This update check runs for the agent folder ${deps.agentDir}, but auto-update was turned on for ${owner}. Nothing changed.`;
 }
 
-/** Records the refusal for the status, under the lock; when another cycle holds it, the message alone is enough. */
+/**
+ * Only the log records the refusal: lastError in state.json is what the
+ * sessions of the right agent dir show, and this check is not theirs.
+ */
 function refuse(deps: CycleDeps, message: string): CycleResult {
 	deps.log(message);
-	const lock = tryLock(deps.paths.lock, { staleMs: LOCK_STALE_MS });
-	if (lock) {
-		try {
-			safeUpdate(deps, (state) => ({ ...state, lastError: { at: deps.now(), message } }));
-		} finally {
-			lock.release();
-		}
-	}
 	return { outcome: "error", message };
 }
 

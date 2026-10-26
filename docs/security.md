@@ -904,8 +904,8 @@ The installed folders are read-only. To remove the store by hand, first run
   request only after Pi stops with exit code 0, and only on a request that
   is newer than the start of that Pi.
 - The store serves the agent directory that `enable` used. A check with a
-  different `PI_CODING_AGENT_DIR` writes no `settings.json` and no marker.
-  It records an error in `state.json`.
+  different `PI_CODING_AGENT_DIR` changes no `settings.json`, no marker
+  and no `state.json`. It writes the reason only to `update.log`.
 - macOS is not fully tested.
 
 ## Idle GC

@@ -96,7 +96,7 @@ test("a new unpinned entry that the user adds is adopted at the next cycle", asy
 	assert.equal(readState(w.paths.state).managed["npm-fixture-extra-b75661ca"]?.original, "npm:fixture-extra");
 });
 
-test("a cycle for another agent dir refuses: it records why and changes no settings.json, link or marker", async (t) => {
+test("a cycle for another agent dir refuses: it logs why and changes no state, settings.json, link or marker", async (t) => {
 	const w = await enabled(t);
 	assert.equal(readState(w.paths.state).enabled?.agentDir, realpathSync(w.agentDir), "enable records its agent dir");
 	const other = join(w.root, "other-agent");
@@ -105,10 +105,14 @@ test("a cycle for another agent dir refuses: it records why and changes no setti
 	writeFileSync(otherSettings, ORIGINAL_SETTINGS(w.gitUrl));
 	tagRelease(w.gitRepo, "good", "2.0.0");
 	const before = { state: readState(w.paths.state).current, settings: w.read(w.settings), other: w.read(otherSettings), link: readlinkSync(w.paths.piCurrent) };
-	const result = await runCycle(w.cycleDeps({ agentDir: other, config: { ...DEFAULT_CONFIG, enabled: true, pi: "skip" } }), { force: true });
+	const stateBefore = w.read(w.paths.state);
+	const logged: string[] = [];
+	const result = await runCycle(w.cycleDeps({ agentDir: other, config: { ...DEFAULT_CONFIG, enabled: true, pi: "skip" }, log: (line: string) => logged.push(line) }), { force: true });
 	assert.equal(result.outcome, "error");
 	assert.match(result.message, /turned on for .*agent.*Nothing changed/);
-	assert.match(readState(w.paths.state).lastError?.message ?? "", /turned on for/);
+	assert.ok(logged.some((line) => /turned on for/.test(line)), "the reason goes to the log");
+	// The sessions of the right agent dir show lastError: a check from elsewhere must not put its error there.
+	assert.equal(w.read(w.paths.state), stateBefore, "state.json is unchanged");
 	assert.deepEqual(readState(w.paths.state).current, before.state);
 	assert.equal(w.read(otherSettings), before.other);
 	assert.equal(w.read(w.settings), before.settings);
