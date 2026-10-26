@@ -40,7 +40,8 @@ export function readJsonObject(file: string): Json {
 	}
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(text);
+		// Pi strips a UTF-8 BOM before it parses its JSON files (settings-manager stripBom); so does this.
+		parsed = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 	} catch (error) {
 		throw new UnreadableJsonError(file, (error as Error).message);
 	}

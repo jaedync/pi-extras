@@ -83,3 +83,11 @@ test("a missing settings.json reads as no packages and is created on write", (t)
 	rewriteSettingsPackages(file, () => ["npm:x"]);
 	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { packages: ["npm:x"] });
 });
+
+test("a settings.json with a UTF-8 BOM reads as Pi reads it, and the rewrite keeps every other field", (t) => {
+	const file = join(scratch(t), "settings.json");
+	writeFileSync(file, `\uFEFF${JSON.stringify({ theme: "dark", packages: ["npm:x"] }, null, 2)}\n`);
+	assert.deepEqual(readSettingsPackages(file), ["npm:x"]);
+	rewriteSettingsPackages(file, () => ["/s/x"]);
+	assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { theme: "dark", packages: ["/s/x"] }, "Pi writes no BOM either");
+});
