@@ -71,6 +71,20 @@ test("Bluesky: quote posts by likes with their replies, and the default depth wh
 	assert.ok(pulled.preview);
 });
 
+test("Bluesky: auto-pull's time limit also stops a slow whole tree, and the default depth still gives the post", async () => {
+	const thread = { post: { uri: "at://did:plc:a/app.bsky.feed.post/p", author: { handle: "a.test" }, record: { text: "the post" }, quoteCount: 0 } };
+	const hang = (init: RequestInit) => new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true }));
+	const { fetcher } = fakeFetch(
+		(url, init) => (url.includes("depth=1000") ? hang(init) : undefined),
+		(url) => (url.includes("depth=6") ? Response.json({ thread }) : undefined),
+	);
+	const started = Date.now();
+	const pulled = await pullBluesky("a.test", "p", context(fetcher, { comments: 2000, quotes: 1000, readMs: 40 }));
+	assert.ok(Date.now() - started < 2_000, "the first request does not wait for its own 20 s limit");
+	assert.equal(pulled.timeLimited, true);
+	assert.match(pulled.markdown, /_The whole reply tree could not be read \(it took more than 0\.04 s\); replies up to 6 levels deep are shown\._/);
+});
+
 test("Reddit: old.reddit JSON, link-preview agent first, comments nested", async () => {
 	const listing = [
 		{ data: { children: [{ kind: "t3", data: { title: "A title", selftext: "body text", author: "op", subreddit_name_prefixed: "r/test", score: 10, num_comments: 3, upvote_ratio: 0.9, permalink: "/r/test/comments/abc/a_title/", is_self: true } }] } },

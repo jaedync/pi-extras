@@ -33,15 +33,20 @@ export function fullTextName(pulled: Pulled): string {
 
 function prune(dir: string, keep: string, now: number): void {
 	const names = readdirSync(dir);
-	for (const name of names.filter((item) => item.startsWith(".") && item.endsWith(".tmp"))) {
+	// Another process can rename or remove a file between the listing and its stat; such a file is skipped.
+	const files = names.flatMap((name) => {
 		const path = join(dir, name);
-		if (now - statSync(path).mtimeMs > TEMP_MS) rmSync(path, { force: true });
+		try {
+			return [{ name, path, at: statSync(path).mtimeMs }];
+		} catch {
+			return [];
+		}
+	});
+	for (const file of files.filter((item) => item.name.startsWith(".") && item.name.endsWith(".tmp"))) {
+		if (now - file.at > TEMP_MS) rmSync(file.path, { force: true });
 	}
-	const files = names.filter((name) => name.endsWith(".md") && name !== keep).map((name) => {
-		const path = join(dir, name);
-		return { path, at: statSync(path).mtimeMs };
-	}).sort((a, b) => b.at - a.at);
-	files.forEach((file, index) => {
+	const kept = files.filter((file) => file.name.endsWith(".md") && file.name !== keep).sort((a, b) => b.at - a.at);
+	kept.forEach((file, index) => {
 		if (now - file.at > KEEP_MS || index >= KEEP_FILES - 1) rmSync(file.path, { force: true });
 	});
 }

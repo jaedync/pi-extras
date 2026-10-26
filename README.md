@@ -1636,8 +1636,9 @@ model does not need them, and a wait before the model starts.
   characters. A longer X or Bluesky conversation comes as a preview. Other
   long results come as their first 12,000 characters. Both give the path of
   the file that holds the whole result, and the `offset` to page through it.
-- Auto-pull reads an X or Bluesky conversation for at most 10 seconds after
-  the first request. When this limit stops the read, the message says so,
+- Auto-pull reads an X or Bluesky conversation for at most 10 seconds. Only
+  the first request for an X post can take longer. When this limit stops the
+  read, the message says so,
   and a `pull_link` call for the link reads the whole conversation.
 - One message has up to 4 images in total (photos and thumbnails), in link
   order.

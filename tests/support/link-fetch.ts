@@ -2,7 +2,7 @@
 import { parseConfig } from "../../lib/link-context/config.ts";
 import type { AdapterContext, PullOptions } from "../../lib/link-context/types.ts";
 
-export type Route = (url: string, init: RequestInit) => Response | undefined;
+export type Route = (url: string, init: RequestInit) => Response | Promise<Response> | undefined;
 
 export function fakeFetch(...routes: Route[]): { fetcher: typeof fetch; calls: { url: string; agent: string }[] } {
 	const calls: { url: string; agent: string }[] = [];

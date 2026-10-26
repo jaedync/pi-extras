@@ -23,6 +23,8 @@ const QUOTE_THREADS = 50;
 const QUOTE_PARALLEL = 4;
 /** Time for the quote posts and their replies, as for X's optional requests. */
 const QUOTE_MS = 90_000;
+/** Time for the default-depth read after auto-pull's limit stopped the whole tree, so the post still comes back. */
+const FALLBACK_MS = 5_000;
 
 interface Author { handle?: string; displayName?: string }
 interface Embed {
@@ -190,20 +192,35 @@ async function quoteThreads(quotes: readonly BskyPost[], focalUrl: string | unde
 	return { items, unread };
 }
 
+/**
+ * The post with its parents and the whole reply tree. `limited` is
+ * auto-pull's time limit, when it set one; a tree that does not come back in
+ * time, or fails, is read again at the default depth, which gives its top.
+ */
+async function readFocal(uri: string, ctx: AdapterContext, limited: AbortSignal | undefined): Promise<{ thread?: ThreadNode; note?: string; cut: boolean }> {
+	const comments = ctx.options.comments;
+	try {
+		return { thread: await readThread(uri, comments > 0 ? FULL_DEPTH : 0, MAX_PARENTS, ctx, limited ?? ctx.signal), cut: false };
+	} catch (error) {
+		ctx.signal?.throwIfAborted();
+		if (comments <= 0) throw error;
+		const cut = !!limited?.aborted;
+		const thread = await readThread(uri, FALLBACK_DEPTH, MAX_PARENTS, ctx, cut ? deadline(ctx.signal, FALLBACK_MS) : ctx.signal);
+		const why = cut ? `it took more than ${ctx.options.readMs! / 1000} s` : (error as Error).message;
+		return { thread, cut, note: `The whole reply tree could not be read (${why}); replies up to ${FALLBACK_DEPTH} levels deep are shown.` };
+	}
+}
+
 export async function pullBluesky(actor: string, rkey: string, ctx: AdapterContext): Promise<Pulled> {
 	const uri = `at://${actor}/app.bsky.feed.post/${rkey}`;
 	const comments = ctx.options.comments;
 	const notes: string[] = [];
-	let thread: ThreadNode | undefined;
-	try {
-		thread = await readThread(uri, comments > 0 ? FULL_DEPTH : 0, MAX_PARENTS, ctx);
-	} catch (error) {
-		ctx.signal?.throwIfAborted();
-		if (comments <= 0) throw error;
-		// A whole tree can pass the size or time cap; the default depth still gives the top of it.
-		thread = await readThread(uri, FALLBACK_DEPTH, MAX_PARENTS, ctx);
-		notes.push(`The whole reply tree could not be read (${(error as Error).message}); replies up to ${FALLBACK_DEPTH} levels deep are shown.`);
-	}
+	// Auto-pull's limit covers the whole read from its start, as X's does.
+	const auto = ctx.options.readMs;
+	const limited = auto !== undefined ? deadline(ctx.signal, auto) : undefined;
+	const focal = await readFocal(uri, ctx, limited);
+	const thread = focal.thread;
+	if (focal.note) notes.push(focal.note);
 	if (!thread?.post) throw new Error("Bluesky found no post at that link. It may be deleted or the account may be private to logged-in users.");
 	const parents: Post[] = [];
 	for (let node = thread.parent; node?.post && parents.length < MAX_PARENTS; node = node.parent) parents.unshift(bskyPost(node.post));
@@ -213,18 +230,18 @@ export async function pullBluesky(actor: string, rkey: string, ctx: AdapterConte
 	if ((thread.post.replyCount ?? 0) > direct && comments > replies.length) notes.push(`Bluesky reports ${thread.post.replyCount} replies to this post; ${direct} came back. Replies that are deleted, blocked or hidden are not shown.`);
 	const wanted = ctx.options.quotes ?? 0;
 	let quotes: Reply[] = [];
-	let timeLimited = false;
+	let timeLimited = focal.cut;
 	if (wanted > 0 && (thread.post.quoteCount ?? 0) > 0 && thread.post.uri) {
-		const ms = Math.min(QUOTE_MS, ctx.options.readMs ?? QUOTE_MS);
-		const limited = deadline(ctx.signal, ms);
-		const found = await readQuotes(thread.post.uri, wanted, ctx, limited);
-		if (found.failed && !limited.aborted) notes.push("Some quote posts could not be read.");
-		const withReplies = await quoteThreads(found.posts, post.url, comments, ctx, limited);
+		const ms = auto ?? QUOTE_MS;
+		const quoteLimit = limited ?? deadline(ctx.signal, QUOTE_MS);
+		const found = await readQuotes(thread.post.uri, wanted, ctx, quoteLimit);
+		if (found.failed && !quoteLimit.aborted) notes.push("Some quote posts could not be read.");
+		const withReplies = await quoteThreads(found.posts, post.url, comments, ctx, quoteLimit);
 		quotes = withReplies.items;
 		if (withReplies.unread) notes.push(`The replies to ${withReplies.unread} quote ${withReplies.unread === 1 ? "post were" : "posts were"} not read.`);
-		if (limited.aborted) {
+		if (quoteLimit.aborted) {
 			notes.push(`Reading stopped at the time limit of ${ms / 1000} s; the counts above say what is missing.`);
-			timeLimited = ctx.options.readMs !== undefined;
+			timeLimited ||= auto !== undefined;
 		}
 	}
 	const conversation: Conversation = { parents, post, replies, repliesTotal: thread.post.replyCount, quotes, quotesTotal: thread.post.quoteCount, notes };
