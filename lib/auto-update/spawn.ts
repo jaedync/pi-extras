@@ -3,7 +3,8 @@
  * priority, so a session that reloads or exits never stops a running cycle.
  */
 import { spawn } from "node:child_process";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
 function onPath(name: string, path = process.env.PATH ?? ""): string | undefined {
@@ -25,11 +26,12 @@ export function lowPriority(): string[] {
 	return [...(ionice ? [ionice, "-c3"] : []), ...(nice ? [nice, "-n", "10"] : [])];
 }
 
-export function spawnCycle(extrasDir: string, force: boolean, onError: (error: Error) => void): void {
+/** Started in the store root: the session's project folder (and its .npmrc) must not affect the cycle. */
+export function spawnCycle(extrasDir: string, storeRoot: string, force: boolean, onError: (error: Error) => void): void {
 	const [command, ...args] = [...lowPriority(), process.execPath, join(extrasDir, "lib", "auto-update", "cli.ts"), "check", ...(force ? ["--force"] : [])];
 	// The restart token belongs to this session's launcher, not to the cycle.
 	const { PI_EXTRAS_RESTART_TOKEN: _token, PI_EXTRAS_LAUNCHER_PID: _launcher, PI_EXTRAS_RESTART_COUNT: _count, PI_EXTRAS_RESTART_TARGET: _target, ...env } = process.env;
-	const child = spawn(command!, args, { detached: true, stdio: "ignore", env });
+	const child = spawn(command!, args, { cwd: existsSync(storeRoot) ? storeRoot : tmpdir(), detached: true, stdio: "ignore", env });
 	child.on("error", onError);
 	child.unref();
 }

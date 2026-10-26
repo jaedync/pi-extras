@@ -12,7 +12,7 @@ import { readConfig } from "./config.ts";
 import { armHardLimit, CYCLE_LIMIT_MS, runCycle, type CycleOutcome } from "./cycle.ts";
 import { fileLog } from "./log.ts";
 import { agentDirFrom, EXTRAS_DIR, storePaths, storeRootFrom } from "./paths.ts";
-import { killRunning, runCommand } from "./run.ts";
+import { inFolder, killRunning, runCommand } from "./run.ts";
 import { smokeTest } from "./smoke.ts";
 import { readState } from "./state.ts";
 import { statusLines } from "./status.ts";
@@ -49,7 +49,7 @@ async function main(argv: readonly string[]): Promise<number> {
 	switch (command) {
 		case "check": {
 			const disarm = armHardLimit({ ms: CYCLE_LIMIT_MS, paths: ctx.paths, now: ctx.now, log: ctx.log, kill: killRunning, exit: (code) => process.exit(code) });
-			const result = await runCycle({ ...ctx, config: readConfig(ctx.agentDir), runner: runCommand, smoke: smokeTest }, { force: rest.includes("--force") }).finally(disarm);
+			const result = await runCycle({ ...ctx, config: readConfig(ctx.agentDir), runner: inFolder(runCommand, ctx.paths.root), smoke: smokeTest }, { force: rest.includes("--force") }).finally(disarm);
 			ctx.out(result.message);
 			return FAILED.has(result.outcome) ? 1 : 0;
 		}
@@ -63,7 +63,7 @@ async function main(argv: readonly string[]): Promise<number> {
 			gc(ctx);
 			return 0;
 		case "enable":
-			await enable({ ...ctx, runner: runCommand, smoke: smokeTest, extrasDir: EXTRAS_DIR, node: process.execPath, platform: process.platform });
+			await enable({ ...ctx, runner: inFolder(runCommand, ctx.paths.root), smoke: smokeTest, extrasDir: EXTRAS_DIR, node: process.execPath, platform: process.platform });
 			return 0;
 		case "disable":
 			await disable(ctx);

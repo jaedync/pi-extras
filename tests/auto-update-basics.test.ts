@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { describeEntry } from "../lib/auto-update/enable.ts";
 import { DEFAULT_CONFIG, parseConfig, readConfig, writeConfig } from "../lib/auto-update/config.ts";
 import { agentDirFrom, isInside, storePaths, storeRootFrom } from "../lib/auto-update/paths.ts";
-import { firstLine, killRunning, runCommand, sanitize } from "../lib/auto-update/run.ts";
+import { firstLine, inFolder, killRunning, runCommand, sanitize, type Runner } from "../lib/auto-update/run.ts";
+import { spawnCycle } from "../lib/auto-update/spawn.ts";
 import { armHardLimit } from "../lib/auto-update/cycle.ts";
 import { emptyState, readState, writeState, type UpdateState } from "../lib/auto-update/state.ts";
 
@@ -98,6 +99,35 @@ test("runCommand passes arguments without a shell, closes stdin and stops at the
 	const missing = await runCommand("/nonexistent/cmd", [], { timeoutMs: 1000 });
 	assert.equal(missing.code, null);
 	assert.match(missing.error ?? "", /ENOENT/);
+});
+
+test("the cycle's commands run in the store root unless a step names its own folder, so a project's .npmrc has no effect", async () => {
+	const seen: (string | undefined)[] = [];
+	const inner: Runner = async (_command, _args, options) => {
+		seen.push(options.cwd);
+		return { code: 0, stdout: "", stderr: "", timedOut: false };
+	};
+	const runner = inFolder(inner, "/store");
+	await runner("npm", ["view", "x"], { timeoutMs: 1 });
+	await runner("npm", ["install"], { timeoutMs: 1, cwd: "/store/packages/k/staging" });
+	assert.deepEqual(seen, ["/store", "/store/packages/k/staging"]);
+	const real = await inFolder(runCommand, tmpdir())("pwd", [], { timeoutMs: 5_000 });
+	assert.equal(real.stdout.trim(), realpathSync(tmpdir()));
+});
+
+test("spawnCycle starts the cycle in the store root, not in the session's project folder", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "au-spawn-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const extras = join(root, "extras");
+	mkdirSync(join(extras, "lib", "auto-update"), { recursive: true });
+	const out = join(root, "cwd.txt");
+	writeFileSync(join(extras, "lib", "auto-update", "cli.ts"), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(out)}, process.cwd());\n`);
+	const store = join(root, "store");
+	mkdirSync(store);
+	spawnCycle(extras, store, false, (error) => assert.fail(error));
+	const deadline = Date.now() + 10_000;
+	while (!existsSync(out) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+	assert.equal(readFileSync(out, "utf8"), realpathSync(store));
 });
 
 test("state reads empty when missing, round-trips, and rejects a malformed set", (t) => {

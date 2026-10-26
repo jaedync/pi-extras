@@ -101,6 +101,15 @@ export const runCommand: Runner = (command, args, options) =>
 		});
 	});
 
+/**
+ * `runner` with `folder` as the working folder of each command that names
+ * none. The cycle runs npm and git in the store root, so that the .npmrc or
+ * the Git config of the project where a session started has no effect.
+ */
+export function inFolder(runner: Runner, folder: string): Runner {
+	return (command, args, options) => runner(command, args, { ...options, cwd: options.cwd ?? folder });
+}
+
 const SECRET_PATTERNS: readonly [RegExp, string][] = [
 	// user:password@ or token@ in a URL.
 	[/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1***@"],

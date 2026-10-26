@@ -86,7 +86,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 		return running;
 	};
 	const report = (what: string) => (error: unknown) => operationalError(errorLog, "auto-update", `${what}: ${errorText(error)}`);
-	const spawn = (force: boolean) => spawnCycle(EXTRAS_DIR, force, report("could not start the update cycle"));
+	const spawn = (force: boolean) => spawnCycle(EXTRAS_DIR, paths.root, force, report("could not start the update cycle"));
 
 	// release-notes owns `/pi-extras`; this adds `/pi-extras update` to it. The table is shared by the
 	// whole process, so only a main session adds it: a subagent's runtime must not take it over.
