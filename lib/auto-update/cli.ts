@@ -16,14 +16,27 @@ import { runCommand } from "./run.ts";
 import { smokeTest } from "./smoke.ts";
 import { readState } from "./state.ts";
 import { statusLines } from "./status.ts";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 
 const USAGE = "Usage: node lib/auto-update/cli.ts <check [--force] | status | rollback | gc | enable | disable>";
 const FAILED: ReadonlySet<CycleOutcome> = new Set(["error", "smoke-failed"]);
 
-function context() {
+/** The store's real path: settings.json, leases and the launcher all name it, so a symlink on the way cannot make two names for one folder. */
+function realRoot(root: string): string {
+	try {
+		return realpathSync(root);
+	} catch {
+		// `status` before the store exists: nothing names it yet.
+		return root;
+	}
+}
+
+function context(command: string | undefined) {
 	const home = process.env.HOME || homedir();
-	const paths = storePaths(storeRootFrom(process.env, home));
+	const root = storeRootFrom(process.env, home);
+	// Only status reads without writing; every other command may create the store.
+	if (command !== "status") mkdirSync(root, { recursive: true, mode: 0o700 });
+	const paths = storePaths(realRoot(root));
 	const agentDir = agentDirFrom(process.env, home);
 	const now = () => Date.now();
 	const out = (line: string) => process.stdout.write(`${line}\n`);
@@ -32,9 +45,7 @@ function context() {
 
 async function main(argv: readonly string[]): Promise<number> {
 	const [command, ...rest] = argv;
-	const ctx = context();
-	// Only status reads without writing; every other command may create the store.
-	if (command !== "status") mkdirSync(ctx.paths.root, { recursive: true, mode: 0o700 });
+	const ctx = context(command);
 	switch (command) {
 		case "check": {
 			const result = await runCycle({ ...ctx, config: readConfig(ctx.agentDir), runner: runCommand, smoke: smokeTest }, { force: rest.includes("--force") });

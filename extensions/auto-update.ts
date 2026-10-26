@@ -49,9 +49,11 @@ function loadedPaths(pi: ExtensionAPI): string[] {
 export default function autoUpdate(pi: ExtensionAPI): void {
 	// The smoke test loads this package in a throwaway Pi: no lease, no timers, no cycle from there.
 	if (process.env.PI_EXTRAS_UPDATE_SMOKE === "1") return;
-	const paths = storePaths(storeRootFrom(process.env, process.env.HOME || homedir()));
+	// Real paths, as the CLI writes them into settings.json; resolved again at each session start, since the store may appear later.
+	const storeRoot = () => storePaths(realOr(storeRootFrom(process.env, process.env.HOME || homedir())));
+	let paths = storeRoot();
 	const agentDir = getAgentDir();
-	const log = fileLog(paths.log, Date.now);
+	const log = (line: string) => fileLog(paths.log, Date.now)(line);
 	// Errors go to the agent dir's log, not the store: a user who never enabled auto-update gets no store.
 	const errorLog = join(agentDir, "pi-extras.log");
 	let session: UpdateSession | undefined;
@@ -84,6 +86,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 	pi.on("session_start", (event, context) => {
 		session?.stop("reload");
 		session = undefined;
+		paths = storeRoot();
 		ctx = context;
 		compacting = false;
 		prompts = 0;

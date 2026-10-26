@@ -4,7 +4,7 @@
  * the smoke test.
  */
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_CONFIG, writeConfig } from "../lib/auto-update/config.ts";
@@ -274,4 +274,19 @@ test("GC keeps a store folder that settings.json names, also when no set has it"
 	const late = () => Date.now() + 2 * 3_600_000;
 	await runCycle(w.cycleDeps({ now: late }), { force: true });
 	assert.ok(existsSync(named), "new sessions load it");
+});
+
+test("a symlinked store path: enable writes the real path into settings.json and the launcher", async (t) => {
+	const w = world(t);
+	tagRelease(w.gitRepo, "good", "1.0.0");
+	const link = join(w.root, "store-link");
+	symlinkSync(w.paths.root, link);
+	w.env.PI_EXTRAS_UPDATE_STORE = link;
+	const result = await w.cli("enable");
+	assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+	const real = realpathSync(w.paths.root);
+	const stored = entrySources(w).filter((source) => source.includes("packages"));
+	assert.equal(stored.length, 2);
+	for (const source of stored) assert.ok(source.startsWith(`${real}/`), source);
+	assert.match(w.read(w.launcher), new RegExp(`^STORE='${real.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'$`, "m"));
 });
