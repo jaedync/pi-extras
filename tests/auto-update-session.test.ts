@@ -13,6 +13,7 @@ import { writeConfig } from "../lib/auto-update/config.ts";
 import { storePaths, type StorePaths } from "../lib/auto-update/paths.ts";
 import { APPLY_COMMAND, UPDATE_ENTRY, UpdateSession, type SessionHost, type UpdateEntryData } from "../lib/auto-update/session.ts";
 import { loadedEntries } from "../lib/auto-update/own-set.ts";
+import { replayArgs } from "../lib/auto-update/replay.ts";
 import { emptyState, readState, writeState, type UpdateSet, type UpdateState } from "../lib/auto-update/state.ts";
 import { collectGarbage } from "../lib/auto-update/gc.ts";
 import { readLiveLeases } from "../lib/auto-update/leases.ts";
@@ -107,6 +108,8 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 	(h as { host: SessionHost }).host = {
 		mode: options.mode ?? "tui", paths, agentDir, piVersion: mine.pi.version, piDir: mine.pi.dir, extrasDir: "/dev/pi-extras",
 		sessionFile: () => "/sessions/a.jsonl",
+		argv: ["--model", "sonnet:high", "-e", "./my ext.ts"],
+		restarted: undefined,
 		loadedPaths: () => h.loaded,
 		history: h.history,
 		branch: () => h.branch,
@@ -188,7 +191,8 @@ test("a Pi update restarts through the launcher: the request file names the sess
 	session.poll();
 	await session.apply(actions(h));
 	assert.deepEqual(h.calls, ["dispatch", "shutdown"]);
-	assert.equal(readFileSync(join(h.paths.restart, "tok123"), "utf8"), "/sessions/a.jsonl\nUpdated: Pi 1.4.1\n");
+	const target = JSON.stringify(["1.4.1", next(h.paths.root).packages["npm-pi-extras"]!.entry]);
+	assert.equal(readFileSync(join(h.paths.restart, "tok123"), "utf8"), `/sessions/a.jsonl\nUpdated: Pi 1.4.1\n${target}\n--model\nsonnet:high\n-e\n./my ext.ts\n`);
 	assert.equal(h.entries[0]!.text, "Updating Pi 1.4.0 -> 1.4.1: restarting");
 	assert.equal(h.entries[0]!.after, "Updated: Pi 1.4.1");
 	assert.equal(new Set(JSON.parse(readFileSync(join(h.paths.leases, readdirSync(h.paths.leases)[0]!), "utf8")).releases).size, 1, "no path twice in the lease");
@@ -392,4 +396,52 @@ test("a built-in selector or overlay counts as open: focus away from the editor,
 	assert.equal(selectorOpen({ hasOverlay: () => true, getFocusedComponent: () => editor }), true);
 	assert.equal(selectorOpen({ hasOverlay: () => false, getFocusedComponent: () => null }), false, "no focus at all: unknown, the quiet time decides");
 	assert.equal(selectorOpen({ hasOverlay: () => { throw new Error("gone"); }, getFocusedComponent: () => editor }), false, "a TUI that went away");
+});
+
+test("replay: safe launch options are kept; session options and messages are dropped", () => {
+	assert.deepEqual(replayArgs(["--model", "a b", "--thinking", "high", "-t", "read,*", "-e", "it's.ts", "--append-system-prompt", "x", "--no-mcp", "-nc", "--offline", "--mode", "text"]), { ok: true, args: ["--model", "a b", "--thinking", "high", "-t", "read,*", "-e", "it's.ts", "--append-system-prompt", "x", "--no-mcp", "-nc", "--offline", "--mode", "text"] });
+	assert.deepEqual(replayArgs(["-c", "--session", "/s/x.jsonl", "-r", "--fork", "abc", "--session-id", "id1", "-n", "name", "--no-session", "hello world", "@file.md", "--provider", "p", "--", "--model", "m"]), { ok: true, args: ["--provider", "p"] }, "after -- every argument is a message");
+	assert.deepEqual(replayArgs([]), { ok: true, args: [] });
+});
+
+test("replay: an option off the allowlist, a secret, a missing value or a newline means no restart", () => {
+	for (const argv of [["--my-extension-flag", "v"], ["--model=x"], ["--api-key", "sk-1"], ["--model"], ["--mode", "rpc"], ["-p", "hi"], ["--export", "a.jsonl"], ["-e", "a\nb"], ["--append-system-prompt", "line\rbreak"]]) {
+		const result = replayArgs(argv);
+		assert.equal(result.ok, false, JSON.stringify(argv));
+	}
+	assert.match((replayArgs(["--api-key", "sk-1"]) as { reason: string }).reason, /--api-key/);
+	assert.doesNotMatch((replayArgs(["--api-key", "sk-1"]) as { reason: string }).reason, /sk-1/, "the reason never shows a value");
+});
+
+test("a launch option that cannot be replayed: the Pi update is a notice, not a restart", async (t) => {
+	const old = (root: string) => set(root, "1.4.0", "0.29.0");
+	const next = (root: string) => set(root, "1.4.1", "0.29.0");
+	const h = harness(t, old, next, { previous: old });
+	const session = new UpdateSession({ ...h.host, argv: ["--my-flag", "x"] });
+	session.start("resume");
+	h.clock += QUIET_MS;
+	session.poll();
+	await session.apply(actions(h));
+	assert.deepEqual(h.calls, []);
+	assert.equal(h.statuses.at(-1), "Pi 1.4.1 ready: restart to use it");
+	assert.equal(existsSync(h.paths.restart), false);
+});
+
+test("the launcher's restart count for this target stops a restart loop that the branch cannot see", async (t) => {
+	const old = (root: string) => set(root, "1.4.0", "0.29.0");
+	const next = (root: string) => set(root, "1.4.1", "0.29.0");
+	const h = harness(t, old, next, { previous: old });
+	const target = JSON.stringify(["1.4.1", next(h.paths.root).packages["npm-pi-extras"]!.entry]);
+	// A new session has no file and no entries, so only the launcher knows it restarted twice for this target.
+	const again = new UpdateSession({ ...h.host, restarted: { count: MAX_ATTEMPTS, target } });
+	again.start("startup");
+	h.clock += QUIET_MS;
+	again.poll();
+	assert.deepEqual(h.calls, []);
+	assert.match(h.statuses.at(-1)!, /did not move to it/);
+	const other = new UpdateSession({ ...h.host, restarted: { count: MAX_ATTEMPTS, target: "another set" } });
+	other.start("startup");
+	h.clock += QUIET_MS;
+	other.poll();
+	assert.deepEqual(h.calls, ["dispatch"], "a count for another target does not count");
 });

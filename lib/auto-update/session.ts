@@ -11,6 +11,7 @@ import { readConfig, type AutoUpdateConfig } from "./config.ts";
 import { LOCK_STALE_MS } from "./cycle.ts";
 import { processStart, removeLease, writeLease } from "./leases.ts";
 import { loadedEntries } from "./own-set.ts";
+import { replayArgs } from "./replay.ts";
 import { isInside, type StorePaths } from "./paths.ts";
 import { readSettingsPackages, settingsFile } from "./settings.ts";
 import { classify, entrySource } from "./sources.ts";
@@ -43,6 +44,10 @@ export interface SessionHost {
 	readonly piDir: string;
 	readonly extrasDir: string;
 	readonly sessionFile: () => string | undefined;
+	/** Pi's own arguments (process.argv after the script): a restart repeats the safe ones. */
+	readonly argv: readonly string[];
+	/** From the launcher: how often in a row it restarted Pi for `target` (PI_EXTRAS_RESTART_COUNT and _TARGET). */
+	readonly restarted: { readonly count: number; readonly target: string } | undefined;
 	/** Real paths of the code this process loaded: pi-extras itself and the sources of tools and commands. */
 	readonly loadedPaths: () => readonly string[];
 	/**
@@ -196,6 +201,12 @@ export class UpdateSession {
 
 	/** Reloads or restarts this session made for `target`, counted back from the end of the branch. */
 	private attempts(target: string): number {
+		// A new session has no file and no entries yet; then only the launcher's count shows a loop.
+		const launcher = this.host.restarted?.target === target ? this.host.restarted.count : 0;
+		return Math.max(launcher, this.branchAttempts(target));
+	}
+
+	private branchAttempts(target: string): number {
 		let count = 0;
 		for (const entry of [...this.host.branch()].reverse()) {
 			if (entry.type !== "custom" || entry.customType !== UPDATE_ENTRY) continue;
@@ -221,7 +232,7 @@ export class UpdateSession {
 		const target = fingerprint(state.current);
 		return decide({
 			own: this.own, state, storeRoot: this.host.paths.root, adopt: this.config().adopt, mode: this.host.mode,
-			canRestart: this.host.restartToken !== undefined && this.host.launchedByLauncher && this.host.sessionFile() !== undefined,
+			canRestart: this.host.restartToken !== undefined && this.host.launchedByLauncher && this.host.sessionFile() !== undefined && replayArgs(this.host.argv).ok,
 			ready: this.ready(state), attempts: this.attempts(target),
 		});
 	}
@@ -256,11 +267,14 @@ export class UpdateSession {
 		this.announce({ phase: "start", target: decision.target, text: decision.text, after });
 		if (decision.kind === "reload") return actions.reload();
 		const file = this.host.sessionFile();
-		if (!file || !this.host.restartToken) return;
+		const replay = replayArgs(this.host.argv);
+		if (!file || !this.host.restartToken || !replay.ok) return;
 		mkdirSync(this.host.paths.restart, { recursive: true, mode: 0o700 });
 		const request = join(this.host.paths.restart, this.host.restartToken);
 		// Line 1: the session to resume. Line 2: what the restarted Pi says when the session has no file yet.
-		writeFileSync(request, `${file}\n${after.replace(/[\r\n]+/g, " ")}\n`, { mode: 0o600 });
+		// Line 3: the target, for the launcher's count. Then one launch option per line (none holds a line break).
+		const lines = [file, after, decision.target].map((line) => line.replace(/[\r\n]+/g, " "));
+		writeFileSync(request, [...lines, ...replay.args].map((line) => `${line}\n`).join(""), { mode: 0o600 });
 		try {
 			actions.shutdown();
 		} catch (error) {

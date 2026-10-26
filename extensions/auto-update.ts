@@ -47,6 +47,12 @@ function loadedPaths(pi: ExtensionAPI): string[] {
 	return [...new Set([EXTRAS_DIR, ...sources])].map(realOr);
 }
 
+function restartedFrom(env: NodeJS.ProcessEnv): { count: number; target: string } | undefined {
+	const count = Number.parseInt(env.PI_EXTRAS_RESTART_COUNT ?? "", 10);
+	const target = env.PI_EXTRAS_RESTART_TARGET;
+	return Number.isSafeInteger(count) && count > 0 && target ? { count, target } : undefined;
+}
+
 /** Versioned: a later pi-extras that keeps other data here picks a new symbol. */
 const FOCUS_WIDGET = "pi-extras-auto-update-focus";
 const HISTORY = Symbol.for("pi-extras.auto-update.loaded-releases.v1");
@@ -136,6 +142,8 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 				piDir: realOr(getPackageDir()),
 				extrasDir: EXTRAS_DIR,
 				sessionFile: () => context.sessionManager.getSessionFile(),
+				argv: process.argv.slice(2),
+				restarted: restartedFrom(process.env),
 				loadedPaths: () => loadedPaths(pi),
 				history: processHistory(),
 				branch: () => context.sessionManager.getBranch() as never,

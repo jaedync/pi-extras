@@ -28,7 +28,7 @@ export function lowPriority(): string[] {
 export function spawnCycle(extrasDir: string, force: boolean, onError: (error: Error) => void): void {
 	const [command, ...args] = [...lowPriority(), process.execPath, join(extrasDir, "lib", "auto-update", "cli.ts"), "check", ...(force ? ["--force"] : [])];
 	// The restart token belongs to this session's launcher, not to the cycle.
-	const { PI_EXTRAS_RESTART_TOKEN: _token, PI_EXTRAS_LAUNCHER_PID: _launcher, ...env } = process.env;
+	const { PI_EXTRAS_RESTART_TOKEN: _token, PI_EXTRAS_LAUNCHER_PID: _launcher, PI_EXTRAS_RESTART_COUNT: _count, PI_EXTRAS_RESTART_TARGET: _target, ...env } = process.env;
 	const child = spawn(command!, args, { detached: true, stdio: "ignore", env });
 	child.on("error", onError);
 	child.unref();
