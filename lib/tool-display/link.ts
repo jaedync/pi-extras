@@ -11,7 +11,7 @@ import { SEP } from "../cc-phase.ts";
 import type { Seg } from "../band/band.ts";
 import { formatDuration, link } from "../kagi/render.ts";
 import { platformName, reason, shortUrl } from "../link-context/names.ts";
-import { PAGE_CHARS } from "../link-context/format.ts";
+import { PAGE_CHARS, previewFact } from "../link-context/format.ts";
 import { proseLines, SUMMARY_LINES } from "../link-context/summary.ts";
 import { sanitize } from "./format.ts";
 import { errorLines, mutedSeg, numberArg, plural, resultText, stringArg, textLines, titleSeg, wrapAll } from "./kit.ts";
@@ -25,6 +25,7 @@ interface LinkDetails {
 	readonly chars?: number;
 	readonly images?: number;
 	readonly next?: number;
+	readonly saved?: string;
 	readonly cached?: boolean;
 	readonly durationMs?: number;
 	readonly preview?: readonly string[];
@@ -47,11 +48,13 @@ const resultBody = (view: View) => resultText(view.result).replace(/^<untrusted-
 function optionSegs(args: unknown): Seg[] {
 	const parts: string[] = [];
 	const comments = numberArg(args, "comments");
+	const quotes = numberArg(args, "quotes");
 	const frames = numberArg(args, "frames");
 	const offset = numberArg(args, "offset");
 	const range = stringArg(args, "range");
 	const at = (args as { at?: unknown } | undefined)?.at;
 	if (comments !== undefined) parts.push(plural(comments, "comment"));
+	if (quotes !== undefined) parts.push(plural(quotes, "quote"));
 	if (frames) parts.push(plural(frames, "frame"));
 	if (Array.isArray(at) && at.length) parts.push(`at ${flat(at.map(String).join(" "))}`);
 	if (range) parts.push(flat(range));
@@ -67,8 +70,10 @@ function factSegs(view: View): Seg[] {
 	const facts = [platformName(d.platform, d.url ?? urlOf(view) ?? "")];
 	if (d.images) facts.push(plural(d.images, "image"));
 	if (d.next !== undefined && d.chars) {
-		const offset = numberArg(view.context.args, "offset") ?? 0;
-		facts.push(`page ${Math.floor(offset / PAGE_CHARS) + 1} of ${Math.ceil(d.chars / PAGE_CHARS)}`);
+		const offset = numberArg(view.context.args, "offset");
+		// Without an offset, a saved result came as its preview; next is 0 so that the model pages from the start.
+		const preview = offset === undefined && typeof d.saved === "string" && !!d.saved;
+		facts.push(preview ? previewFact(d.chars) : `page ${Math.floor((offset ?? 0) / PAGE_CHARS) + 1} of ${Math.ceil(d.chars / PAGE_CHARS)}`);
 	}
 	if (d.cached) facts.push("cached");
 	return facts.map((fact) => mutedSeg(`${SEP}${flat(fact)}`));

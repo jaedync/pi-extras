@@ -62,6 +62,12 @@ test("expanded, each link adds its address and its summary", () => {
 	assert.equal(lines.at(-1), "  │                   https://httpbin.org/status/500");
 });
 
+test("a long result with a saved file names a preview of the whole text, not its first 12k", () => {
+	const facts = { url: WIKI, state: "read" as const, title: "Thread", chars: 349_246, truncated: true, saved: "/tmp/x.md" };
+	const lines = strip(autoLines(theme, 100, { links: [facts], more: 0, durationMs: 0 }, false));
+	assert.equal(lines[1], "  │ en.wikipedia.org  Thread  preview of 349k chars, whole text saved");
+});
+
 test("no link read: a red band when they failed, a warning when they are still being read", () => {
 	const failed = autoLines(theme, 80, autoMessage([{ url: BAD, state: "failed", error: "boom" }], 0, 1_200).details, false);
 	assert.equal(strip(failed)[0], band("pull_link 0 of 1 link from your message", "1 failed  1.2s", 80));

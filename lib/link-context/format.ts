@@ -52,3 +52,8 @@ export function clean(value: unknown, max = 160): string {
 export function savedNote(chars: number, path: string, call: string): string {
 	return `[Preview: the full result has ${chars.toLocaleString("en-US")} characters and is saved at ${path}. Read or search that file for the rest, or ${call} and offset=0 to page through it.]`;
 }
+
+export const kChars = (chars: number) => (chars >= 1_000 ? `${Math.round(chars / 1_000)}k` : String(chars));
+
+/** The row fact for a result that came as a preview of a saved whole text. */
+export const previewFact = (chars: number) => `preview of ${kChars(chars)} chars, whole text saved`;

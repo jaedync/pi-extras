@@ -25,7 +25,7 @@ import { link } from "../kagi/render.ts";
 import { rail } from "../tool-display/row.ts";
 import type { AutoDetails, LinkFacts, LinkState } from "./auto-message.ts";
 import { LINK_CHARS, MAX_LINKS } from "./auto-message.ts";
-import { clean, TOOL_NAME } from "./format.ts";
+import { clean, kChars, previewFact, TOOL_NAME } from "./format.ts";
 import { hostOf, platformName, reason } from "./names.ts";
 
 /** Links listed under the band while collapsed. */
@@ -48,7 +48,6 @@ export interface WaitState {
 
 const isRead = (state: LinkState) => state === "read" || state === "cached";
 const plural = (count: number, word: string) => `${count.toLocaleString("en-US")} ${word}${count === 1 ? "" : "s"}`;
-const kChars = (chars: number) => (chars >= 1_000 ? `${Math.round(chars / 1_000)}k` : String(chars));
 
 function paint(theme: BandTheme, key: string, text: string): string {
 	try { return theme.fg(key, text); } catch { return text; }
@@ -96,6 +95,12 @@ function head(theme: BandTheme, width: number, links: readonly LinkFacts[], more
 
 const keyOf = (item: LinkFacts) => clean(isRead(item.state) ? platformName(item.platform, item.url) : hostOf(item.url), KEY_CHARS);
 
+/** A saved result came as a preview of the whole text; any other long one as its first page. Details come from the session file, so the path's type is checked. */
+function sizeFact(item: LinkFacts): string {
+	if (!item.truncated || !item.chars) return "";
+	return typeof item.saved === "string" && item.saved ? previewFact(item.chars) : `first ${kChars(LINK_CHARS)} of ${kChars(item.chars)} chars`;
+}
+
 function linkLine(theme: BandTheme, item: LinkFacts, keyWidth: number): string {
 	const key = paint(theme, "muted", truncateToWidth(keyOf(item), keyWidth, "…").padEnd(keyWidth));
 	switch (item.state) {
@@ -105,7 +110,7 @@ function linkLine(theme: BandTheme, item: LinkFacts, keyWidth: number): string {
 		default: {
 			const facts = [
 				item.images ? plural(item.images, "image") : "",
-				item.truncated && item.chars ? `first ${kChars(LINK_CHARS)} of ${kChars(item.chars)} chars` : "",
+				sizeFact(item),
 				item.state === "cached" ? "cached" : "",
 			].filter(Boolean).join(SEP);
 			return `${key}  ${paint(theme, "toolOutput", clean(item.title || item.url))}${facts ? `  ${paint(theme, "dim", facts)}` : ""}`;
