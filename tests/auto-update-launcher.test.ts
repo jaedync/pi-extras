@@ -42,9 +42,9 @@ case "$FAKE_MODE" in
 	restart-then-fail)
 		# A Pi that wrote its request and then crashed: the launcher must not act on it.
 		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T1" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 3 ;;
-	restart-old-file)
-		# A request with a time from before this Pi started: left over or planted, not from this Pi.
-		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T1" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; touch -t 200001010000 "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 0 ;;
+	restart-other-token)
+		# A request under another token (an earlier start's, left over or planted): not for this Pi.
+		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T1" > "$FAKE_STORE/restart/0123456789abcdef"; exit 0 ;;
 	restart-two-targets)
 		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T$runs" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; [ "$runs" -lt 3 ] || rm -f "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 0 ;;
 	lease-wait)
@@ -123,7 +123,8 @@ test("a restart request starts Pi again on the session with the replayed options
 	assert.ok(first!.startsWith("[--model]\n[x]\n[--continue]\n[hello]\n"));
 	// Exactly the replayed list, then the session: spaces, quotes, globs, "$HOME" and an empty argument unchanged.
 	assert.ok(second!.startsWith("[--model]\n[x y]\n[it's]\n[*]\n[$HOME]\n[]\n[--offline]\n[--session]\n[/sessions/a b.jsonl]\ntoken="), second);
-	assert.equal(first!.match(/token=(\w+)/)?.[1], second!.match(/token=(\w+)/)?.[1], "the token stays for the restarted Pi");
+	assert.notEqual(first!.match(/token=(\w+)/)?.[1], second!.match(/token=(\w+)/)?.[1], "each start gets a new token: an old request cannot match it");
+	assert.match(second!, /token=[0-9a-f]{16}\n/);
 	assert.match(first!, /note=unset\n/);
 	assert.match(second!, /note=Updated: Pi 1\.4\.1\n/, "line 2 of the request goes to the restarted Pi");
 	assert.match(first!, /restarts=unset target=unset\n/);
@@ -205,8 +206,8 @@ test("Ctrl+C reaches Pi and does not end the launcher; Pi does not inherit an ig
 	if (ignored) assert.equal(BigInt(`0x${ignored}`) & 2n, 0n, "SIGINT is not ignored in Pi");
 });
 
-test("a restart request counts only after Pi exits 0 and only when Pi wrote it after its start", async (t) => {
-	for (const [mode, code] of [["restart-then-fail", 3], ["restart-old-file", 0]] as const) {
+test("a restart request counts only after Pi exits 0 and only under the token of this start", async (t) => {
+	for (const [mode, code] of [["restart-then-fail", 3], ["restart-other-token", 0]] as const) {
 		const r = rig(t);
 		const result = await launch(r, [], mode).done;
 		assert.equal(result.code, code, mode);
@@ -214,7 +215,8 @@ test("a restart request counts only after Pi exits 0 and only when Pi wrote it a
 		assert.doesNotMatch(result.stderr, /starting Pi again/);
 		const token = runs(r)[0]!.match(/token=(\w+)/)![1]!;
 		assert.equal(existsSync(join(r.store, "restart", token)), false, `${mode}: the launcher removes the request it ignored`);
-		assert.deepEqual(readdirSync(join(r.store, "restart")), [], `${mode}: no file of the launcher stays`);
+		const left = mode === "restart-other-token" ? ["0123456789abcdef"] : [];
+		assert.deepEqual(readdirSync(join(r.store, "restart")), left, `${mode}: no file of the launcher stays (GC removes old requests)`);
 	}
 });
 

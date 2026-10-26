@@ -898,11 +898,14 @@ The installed folders are read-only. To remove the store by hand, first run
   versions can have known faults. Run `pi update --all` to get the newest.
 - A restart does not repeat `--api-key`, because the restart request is a
   file. Such a session shows a notice instead.
-- The restart token goes from the launcher to Pi in the environment. Pi
-  removes it from its environment at startup, so the tools, MCP servers
-  and shell jobs that Pi starts do not get it. The launcher acts on a
-  request only after Pi stops with exit code 0, and only on a request that
-  is newer than the start of that Pi.
+- The restart token goes from the launcher to Pi in the environment. The
+  launcher makes a new random token for each start of Pi. Pi removes it
+  from its environment at startup, so the tools, MCP servers and shell
+  jobs that Pi starts do not get it. This is not a security boundary:
+  other processes of the same user can read the start environment of Pi
+  in `/proc/<pid>/environ`. The launcher acts on a request only after Pi
+  stops with exit code 0, and only on the request file of the token of
+  that start.
 - The store serves the agent directory that `enable` used. A check with a
   different `PI_CODING_AGENT_DIR` changes no `settings.json`, no marker
   and no `state.json`. It writes the reason only to `update.log`.

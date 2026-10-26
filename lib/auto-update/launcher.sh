@@ -22,9 +22,6 @@ trap ':' INT
 # own count; the outer launcher's values are not for its Pi.
 unset PI_EXTRAS_RESTART_COUNT PI_EXTRAS_RESTART_TARGET
 
-PI_EXTRAS_RESTART_TOKEN=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
-[ -n "$PI_EXTRAS_RESTART_TOKEN" ] || PI_EXTRAS_RESTART_TOKEN="$$-$(date +%s)"
-export PI_EXTRAS_RESTART_TOKEN
 # Pi asks for a restart only when this launcher is its parent; a Pi that a shell job starts inherits the token, not the parent.
 PI_EXTRAS_LAUNCHER_PID=$$
 export PI_EXTRAS_LAUNCHER_PID
@@ -116,28 +113,27 @@ LEASE_START=$(start_time)
 trap 'rm -f "$LEASE" "$LEASE_TMP"' EXIT
 
 REQUEST_DIR="$STORE/restart"
-REQUEST="$REQUEST_DIR/$PI_EXTRAS_RESTART_TOKEN"
-STAMP="$REQUEST_DIR/.$PI_EXTRAS_RESTART_TOKEN.start"
+REQUEST=
 
-# Before each Pi start: no request from earlier, and a stamp with the start
-# time. A request counts only when it is newer than the stamp, so a file
-# left over or put there before this Pi started does not restart it. A
-# shell whose -nt compares whole seconds is enough: a session asks for a
-# restart only after 30 s of quiet.
-mark_start() {
-	rm -f "$REQUEST"
-	# Only in a store that exists: a launcher whose store is gone must not make an empty one.
-	(umask 077 && { [ -d "$REQUEST_DIR" ] || mkdir "$REQUEST_DIR"; } && : > "$STAMP") 2>/dev/null || rm -f "$STAMP"
+# Before each Pi start: a new random token. The Pi of this start writes its
+# restart request to restart/<token>, so a file left over from an earlier
+# start, or one put there by something else, never matches. No file times
+# are compared.
+new_token() {
+	PI_EXTRAS_RESTART_TOKEN=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+	[ -n "$PI_EXTRAS_RESTART_TOKEN" ] || PI_EXTRAS_RESTART_TOKEN="$$-$(date +%s)-$restarts"
+	export PI_EXTRAS_RESTART_TOKEN
+	REQUEST="$REQUEST_DIR/$PI_EXTRAS_RESTART_TOKEN"
 }
 
 # A restart only after a clean exit: a Pi that crashed after it wrote its
 # request is not started again, and its exit code passes through.
 restart_wanted() {
-	[ "$code" -eq 0 ] && [ -f "$REQUEST" ] && [ -f "$STAMP" ] && [ "$REQUEST" -nt "$STAMP" ]
+	[ "$code" -eq 0 ] && [ -f "$REQUEST" ]
 }
 
 finish() {
-	rm -f "$REQUEST" "$STAMP"
+	[ -z "$REQUEST" ] || rm -f "$REQUEST"
 	exit "$1"
 }
 
@@ -146,7 +142,7 @@ window_start=$(date +%s)
 last_target=
 same_target=0
 
-mark_start
+new_token
 pick_pi
 "$PI" "$@"
 code=$?
@@ -189,7 +185,7 @@ while restart_wanted; do
 	PI_EXTRAS_RESTART_TARGET=$target
 	export PI_EXTRAS_RESTART_COUNT PI_EXTRAS_RESTART_TARGET
 	printf '%s\n' "pi-extras launcher: starting Pi again for the update." >&2
-	mark_start
+	new_token
 	pick_pi
 	PI_EXTRAS_UPDATE_DONE=$note "$PI" "$@" --session "$session"
 	code=$?

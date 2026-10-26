@@ -161,7 +161,7 @@ newest versions, run `pi update --all`.
 - starts Pi again after a session asks for a restart (at most 3 times in 60
   seconds). After 2 restarts that did not bring the new set, the session
   stops and shows a notice. A restart occurs only when Pi stopped with exit
-  code 0 and wrote its request after it started;
+  code 0 and wrote its request with the token of that start;
 - changes `pi update` to an update check that runs in the background with a
   low priority. The command stops at once. Use `/pi-extras update` to see
   the result;
