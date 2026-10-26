@@ -44,16 +44,31 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 	let session: UpdateSession | undefined;
 	let ctx: ExtensionContext | undefined;
 	let compacting = false;
+	let removeSubcommand: (() => void) | undefined;
 	let prompts = 0;
 	const background = new Map<string, number>();
 
 	const report = (what: string) => (error: unknown) => operationalError(errorLog, "auto-update", `${what}: ${errorText(error)}`);
 	const spawn = (force: boolean) => spawnCycle(EXTRAS_DIR, force, report("could not start the update cycle"));
 
+	// release-notes owns `/pi-extras`; this adds `/pi-extras update` to it. The table is shared by the
+	// whole process, so only a main session adds it: a subagent's runtime must not take it over.
+	const addSubcommand = () => registerSubcommand("update", {
+		description: "Auto-update: status, now, rollback, pause, resume",
+		handler: async (args, context) => {
+			const result = updateCommand(args, {
+				paths, agentDir, extrasDir: EXTRAS_DIR, now: Date.now, log,
+				pending: () => {
+					const decision = session?.decision();
+					return decision && decision.kind !== "none" ? (decision.kind === "wait" ? "waits for the update to finish" : decision.text) : undefined;
+				},
+				spawnCycle: () => spawn(true),
+			});
+			context.ui.notify(result.lines.join("\n"), result.level);
+		},
+	});
+
 	pi.on("session_start", (event, context) => {
-		// The launcher's note is for the first session of this process only: a later reload must not repeat it.
-		const updateNote = process.env.PI_EXTRAS_UPDATE_DONE || undefined;
-		delete process.env.PI_EXTRAS_UPDATE_DONE;
 		session?.stop("reload");
 		session = undefined;
 		ctx = context;
@@ -62,6 +77,11 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 		background.clear();
 		// Subagents share the process: the main session alone leases, checks and moves.
 		if (isChildSession(context.sessionManager)) return;
+		removeSubcommand?.();
+		removeSubcommand = addSubcommand();
+		// The launcher's note is for the first main session of this process only: a later reload must not repeat it.
+		const updateNote = process.env.PI_EXTRAS_UPDATE_DONE || undefined;
+		delete process.env.PI_EXTRAS_UPDATE_DONE;
 		try {
 			session = new UpdateSession({
 				mode: context.mode,
@@ -158,7 +178,8 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 		session?.stop(event.reason);
 		session = undefined;
 		ctx = undefined;
-		removeSubcommand();
+		removeSubcommand?.();
+		removeSubcommand = undefined;
 	});
 
 	pi.registerCommand(APPLY_COMMAND, {
@@ -171,21 +192,5 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 	pi.registerEntryRenderer<UpdateEntryData>(UPDATE_ENTRY, (entry, _options, theme) => {
 		const text = typeof entry.data?.text === "string" ? entry.data.text : undefined;
 		return text ? new Text(theme.fg("dim", text), 1, 0) : undefined;
-	});
-
-	// release-notes owns `/pi-extras`; this adds `/pi-extras update` to it. A reload registers it again.
-	const removeSubcommand = registerSubcommand("update", {
-		description: "Auto-update: status, now, rollback, pause, resume",
-		handler: async (args, context) => {
-			const result = updateCommand(args, {
-				paths, agentDir, extrasDir: EXTRAS_DIR, now: Date.now, log,
-				pending: () => {
-					const decision = session?.decision();
-					return decision && decision.kind !== "none" ? (decision.kind === "wait" ? "waits for the update to finish" : decision.text) : undefined;
-				},
-				spawnCycle: () => spawn(true),
-			});
-			context.ui.notify(result.lines.join("\n"), result.level);
-		},
 	});
 }
