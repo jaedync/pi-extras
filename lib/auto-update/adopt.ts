@@ -148,23 +148,32 @@ export function userBashRunning(starts: readonly BashStart[], branch: readonly B
 	});
 }
 
-/** The part of Pi's TUI that tells where the keyboard focus is. pi-tui's `TUI` interface has `hasOverlay`; its `TuiBase` class adds `getFocusedComponent`. */
+/**
+ * The part of Pi's TUI that tells where the keyboard focus is. pi-tui's `TUI`
+ * interface has `hasOverlay`; its `TuiBase` class adds `getFocusedComponent`
+ * and (protected in the types, a plain method at run time) `isOverlayFocused`.
+ */
 export interface FocusView {
 	hasOverlay(): boolean;
 	getFocusedComponent?(): unknown;
+	isOverlayFocused?(): boolean;
 }
 
 /**
  * True while a built-in selector (`/model`, `/settings`, `/resume`, `/tree`)
- * or an overlay is open. Pi fires no event for these, but each one takes the
- * focus from the editor, and only pi-tui's Editor (and editors built on it)
- * has `getText`. No focus at all says nothing; then the quiet time decides.
+ * or an overlay that captures the keyboard is open. Pi fires no event for
+ * these, but each one takes the focus from the editor, and only pi-tui's
+ * Editor (and editors built on it) has `getText`. A `nonCapturing` overlay
+ * (a status panel) leaves the focus in the editor, so it does not count. No
+ * focus at all says nothing; then the quiet time decides.
  */
 export function selectorOpen(tui: FocusView | undefined): boolean {
 	if (!tui) return false;
 	try {
-		if (tui.hasOverlay()) return true;
-		const focused = tui.getFocusedComponent?.() as { getText?: unknown } | null | undefined;
+		if (typeof tui.isOverlayFocused === "function" && tui.isOverlayFocused()) return true;
+		// A TUI that tells nothing about focus: any visible overlay counts, the safe side.
+		if (typeof tui.getFocusedComponent !== "function") return tui.hasOverlay();
+		const focused = tui.getFocusedComponent() as { getText?: unknown } | null | undefined;
 		return focused !== null && focused !== undefined && typeof focused.getText !== "function";
 	} catch {
 		// A TUI that stopped: it shows nothing a reload could take away.

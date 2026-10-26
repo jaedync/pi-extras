@@ -387,15 +387,19 @@ test("a user ! command is busy from user_bash until its bash execution entry is 
 	assert.equal(userBashRunning(starts, [], 1_000 + USER_BASH_MAX_MS), false, "past the maximum time: a lost end signal must not block updates forever");
 });
 
-test("a built-in selector or overlay counts as open: focus away from the editor, or any overlay", () => {
+test("a built-in selector or a capturing overlay counts as open: focus away from the editor", () => {
 	const editor = { getText: () => "", render: () => [] };
 	const list = { render: () => [] };
 	assert.equal(selectorOpen(undefined), false, "no terminal UI (RPC): nothing to tell");
-	assert.equal(selectorOpen({ hasOverlay: () => false, getFocusedComponent: () => editor }), false);
-	assert.equal(selectorOpen({ hasOverlay: () => false, getFocusedComponent: () => list }), true, "/model, /settings, /resume, /tree replace the editor and take focus");
-	assert.equal(selectorOpen({ hasOverlay: () => true, getFocusedComponent: () => editor }), true);
-	assert.equal(selectorOpen({ hasOverlay: () => false, getFocusedComponent: () => null }), false, "no focus at all: unknown, the quiet time decides");
-	assert.equal(selectorOpen({ hasOverlay: () => { throw new Error("gone"); }, getFocusedComponent: () => editor }), false, "a TUI that went away");
+	assert.equal(selectorOpen({ hasOverlay: () => false, isOverlayFocused: () => false, getFocusedComponent: () => editor }), false);
+	assert.equal(selectorOpen({ hasOverlay: () => false, isOverlayFocused: () => false, getFocusedComponent: () => list }), true, "/model, /settings, /resume, /tree replace the editor and take focus");
+	assert.equal(selectorOpen({ hasOverlay: () => true, isOverlayFocused: () => true, getFocusedComponent: () => list }), true, "a capturing overlay has the focus");
+	assert.equal(selectorOpen({ hasOverlay: () => true, isOverlayFocused: () => true, getFocusedComponent: () => editor }), true, "an overlay that holds an editor still is an overlay with the focus");
+	assert.equal(selectorOpen({ hasOverlay: () => true, isOverlayFocused: () => false, getFocusedComponent: () => editor }), false, "a nonCapturing overlay (a status panel) leaves the focus in the editor: it does not block");
+	assert.equal(selectorOpen({ hasOverlay: () => true, getFocusedComponent: () => editor }), false, "no isOverlayFocused: the focus alone decides");
+	assert.equal(selectorOpen({ hasOverlay: () => true }), true, "no focus data at all: any overlay counts");
+	assert.equal(selectorOpen({ hasOverlay: () => false, isOverlayFocused: () => false, getFocusedComponent: () => null }), false, "no focus at all: unknown, the quiet time decides");
+	assert.equal(selectorOpen({ hasOverlay: () => false, isOverlayFocused: () => { throw new Error("gone"); }, getFocusedComponent: () => editor }), false, "a TUI that went away");
 });
 
 test("replay: safe launch options are kept; session options and messages are dropped", () => {
