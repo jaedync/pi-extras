@@ -51,6 +51,9 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 	const spawn = (force: boolean) => spawnCycle(EXTRAS_DIR, force, report("could not start the update cycle"));
 
 	pi.on("session_start", (event, context) => {
+		// The launcher's note is for the first session of this process only: a later reload must not repeat it.
+		const updateNote = process.env.PI_EXTRAS_UPDATE_DONE || undefined;
+		delete process.env.PI_EXTRAS_UPDATE_DONE;
 		session?.stop("reload");
 		session = undefined;
 		ctx = context;
@@ -84,6 +87,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 				dispatchApply: () => pi.sendUserMessage(`/${APPLY_COMMAND}`, { expandPromptTemplates: true }),
 				spawnCycle: spawn,
 				restartToken: process.env.PI_EXTRAS_RESTART_TOKEN || undefined,
+				updateNote,
 				launchedByLauncher: process.env.PI_EXTRAS_LAUNCHER_PID === String(process.ppid),
 				now: Date.now,
 				random: Math.random,

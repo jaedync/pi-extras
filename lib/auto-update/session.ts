@@ -47,6 +47,12 @@ export interface SessionHost {
 	readonly dispatchApply: () => void;
 	readonly spawnCycle: (force: boolean) => void;
 	readonly restartToken: string | undefined;
+	/**
+	 * The "Updated" line the launcher passes to a Pi that it started again
+	 * (`PI_EXTRAS_UPDATE_DONE`). Pi writes a session file only after the first
+	 * reply, so a restarted new session has no "start" entry to read it from.
+	 */
+	readonly updateNote: string | undefined;
 	/** True when the launcher is this process's parent. */
 	readonly launchedByLauncher: boolean;
 	readonly now: () => number;
@@ -123,7 +129,7 @@ export class UpdateSession {
 		const start = processStart(process.pid);
 		if (start === undefined) return;
 		const extras = realOr(this.host.extrasDir);
-		const releases = [...this.own.entries, ...(isInside(extras, this.host.paths.root) ? [extras] : [])];
+		const releases = [...new Set([...this.own.entries, ...(isInside(extras, this.host.paths.root) ? [extras] : [])])];
 		writeLease(this.host.paths, { pid: process.pid, start, piVersion: this.host.piVersion, piDir: this.host.piDir, releases, extrasDir: extras, mode: this.host.mode, sessionFile: this.host.sessionFile(), updatedAt: this.host.now() });
 	}
 
@@ -239,7 +245,8 @@ export class UpdateSession {
 		if (!file || !this.host.restartToken) return;
 		mkdirSync(this.host.paths.restart, { recursive: true, mode: 0o700 });
 		const request = join(this.host.paths.restart, this.host.restartToken);
-		writeFileSync(request, `${file}\n`, { mode: 0o600 });
+		// Line 1: the session to resume. Line 2: what the restarted Pi says when the session has no file yet.
+		writeFileSync(request, `${file}\n${after.replace(/[\r\n]+/g, " ")}\n`, { mode: 0o600 });
 		try {
 			actions.shutdown();
 		} catch (error) {
@@ -256,12 +263,12 @@ export class UpdateSession {
 
 	/** After a reload or restart: say that the update happened, once. */
 	private reportAdoption(): void {
+		const state = safeState(this.host.paths);
+		if (!state?.current || piDiffers(this.own, state.current) || packagesDiffer(this.own, state.current)) return;
+		const target = fingerprint(state.current);
 		const last = [...this.host.branch()].reverse().find((entry) => entry.type === "custom" && entry.customType === UPDATE_ENTRY);
 		const data = last?.data as UpdateEntryData | undefined;
-		if (data?.phase !== "start") return;
-		const state = safeState(this.host.paths);
-		if (!state?.current || fingerprint(state.current) !== data.target) return;
-		if (piDiffers(this.own, state.current) || packagesDiffer(this.own, state.current)) return;
-		this.announce({ phase: "done", target: data.target, text: data.after ?? "Updated." });
+		if (data?.phase === "start" && data.target === target) this.announce({ phase: "done", target, text: data.after ?? "Updated." });
+		else if (data === undefined && this.host.updateNote) this.announce({ phase: "done", target, text: this.host.updateNote });
 	}
 }

@@ -66,5 +66,5 @@ export function gc(deps: CommandDeps): void {
 	} finally {
 		lock.release();
 	}
-	deps.out(removed.length > 0 ? `Removed ${removed.length} folders: ${removed.join(", ")}` : "Nothing to remove.");
+	deps.out(removed.length > 0 ? `Removed ${removed.length} ${removed.length === 1 ? "folder" : "folders"}: ${removed.join(", ")}` : "Nothing to remove.");
 }

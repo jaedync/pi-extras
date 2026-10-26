@@ -41,6 +41,8 @@ export const launcherPath = (home: string): string => join(home, ".local", "bin"
 /** Short: a cycle that holds the lock longer is told to the user, who runs the command again. */
 const LOCK_WAIT_MS = 2_000;
 
+const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
+
 export class CommandError extends Error {}
 
 interface OldPi {
@@ -127,7 +129,7 @@ export async function enable(deps: EnableDeps): Promise<void> {
 		const settings = settingsFile(deps.agentDir);
 		const packages = readSettingsPackages(settings);
 		const set = await firstSet(deps, old, packages);
-		deps.out(`Testing Pi ${set.pi.version} with ${Object.keys(set.packages).length} packages.`);
+		deps.out(`Testing Pi ${set.pi.version} with ${plural(Object.keys(set.packages).length, "package")}.`);
 		const smoke = await deps.smoke({ piDir: set.pi.dir, packages: smokeEntries(packages, set, deps.paths.root) });
 		if (!smoke.ok) throw new CommandError(`The test of the new versions failed: ${smoke.reason}. Nothing was switched. The store at ${deps.paths.root} has the new folders; "gc" removes them.`);
 		writeState(deps.paths.state, { ...state, lastCheck: deps.now(), enabled: { at: deps.now(), launcher, previousLink: old.link, fallbackPi: old.real } });
@@ -135,7 +137,7 @@ export async function enable(deps: EnableDeps): Promise<void> {
 		const after = readSettingsPackages(settings);
 		installLauncher(launcher, renderLauncher({ store: deps.paths.root, fallbackPi: old.real, fallbackExtras: deps.extrasDir, node: deps.node }));
 		writeConfig(deps.agentDir, { enabled: true });
-		deps.log(`enabled: Pi ${set.pi.version}, ${Object.keys(set.packages).length} packages`);
+		deps.log(`enabled: Pi ${set.pi.version}, ${plural(Object.keys(set.packages).length, "package")}`);
 		deps.out(`Changed ${launcher}: it was a link to ${old.link}. It is now the pi-extras launcher.`);
 		packages.forEach((entry, index) => {
 			if (JSON.stringify(entry) !== JSON.stringify(after[index])) deps.out(`Changed ${settings}: ${JSON.stringify(entry)} -> ${JSON.stringify(after[index])}`);

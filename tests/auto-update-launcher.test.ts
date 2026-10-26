@@ -20,12 +20,13 @@ log="$FAKE_LOG"
 printf '%s\\n' "--- run" >> "$log"
 for arg in "$@"; do printf '[%s]\\n' "$arg" >> "$log"; done
 printf 'token=%s\\n' "$PI_EXTRAS_RESTART_TOKEN" >> "$log"
+printf 'note=%s\\n' "\${PI_EXTRAS_UPDATE_DONE-unset}" >> "$log"
 [ -r /proc/$$/status ] && grep SigIgn /proc/$$/status >> "$log"
 runs=$(grep -c -- '--- run' "$log")
 case "$FAKE_MODE" in
 	exit7) exit 7 ;;
 	restart-once)
-		if [ "$runs" = 1 ]; then mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/a b.jsonl" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; fi
+		if [ "$runs" = 1 ]; then mkdir -p "$FAKE_STORE/restart"; printf '%s\\n%s\\n' "/sessions/a b.jsonl" "Updated: Pi 1.4.1" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; fi
 		exit 0 ;;
 	restart-always)
 		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 3 ;;
@@ -94,6 +95,8 @@ test("a restart request starts Pi again on the session, once", async (t) => {
 	assert.ok(first!.startsWith("[--model]\n[x]\n"));
 	assert.ok(second!.startsWith("[--session]\n[/sessions/a b.jsonl]\ntoken="), second);
 	assert.equal(first!.match(/token=(\w+)/)?.[1], second!.match(/token=(\w+)/)?.[1], "the token stays for the restarted Pi");
+	assert.match(first!, /note=unset\n/);
+	assert.match(second!, /note=Updated: Pi 1\.4\.1\n/, "line 2 of the request goes to the restarted Pi");
 	assert.equal(runs(r).length, 2);
 	assert.equal(existsSync(join(r.store, "restart", first!.match(/token=(\w+)/)![1]!)), false, "the request is consumed");
 	assert.match(result.stderr, /starting Pi again for the update/);

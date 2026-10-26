@@ -52,7 +52,9 @@ window_start=$(date +%s)
 "$(pi_bin)" "$@"
 code=$?
 while [ -f "$REQUEST" ]; do
-	session=$(head -n 1 "$REQUEST")
+	session=$(sed -n 1p "$REQUEST")
+	# What the new Pi says once it runs: a new session has no file yet to read it from.
+	note=$(sed -n 2p "$REQUEST")
 	rm -f "$REQUEST"
 	[ -n "$session" ] || exit "$code"
 	now=$(date +%s)
@@ -66,7 +68,7 @@ while [ -f "$REQUEST" ]; do
 		exit "$code"
 	fi
 	printf '%s\n' "pi-extras launcher: starting Pi again for the update." >&2
-	"$(pi_bin)" --session "$session"
+	PI_EXTRAS_UPDATE_DONE=$note "$(pi_bin)" --session "$session"
 	code=$?
 done
 exit "$code"

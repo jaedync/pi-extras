@@ -112,6 +112,7 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 		dispatchApply: () => h.calls.push("dispatch"),
 		spawnCycle: (force) => h.calls.push(`spawn ${force}`),
 		restartToken: "tok123",
+		updateNote: undefined,
 		launchedByLauncher: true,
 		now: () => h.clock,
 		random: () => 0.5,
@@ -179,9 +180,22 @@ test("a Pi update restarts through the launcher: the request file names the sess
 	session.poll();
 	await session.apply(actions(h));
 	assert.deepEqual(h.calls, ["dispatch", "shutdown"]);
-	assert.equal(readFileSync(join(h.paths.restart, "tok123"), "utf8"), "/sessions/a.jsonl\n");
+	assert.equal(readFileSync(join(h.paths.restart, "tok123"), "utf8"), "/sessions/a.jsonl\nUpdated: Pi 1.4.1\n");
 	assert.equal(h.entries[0]!.text, "Updating Pi 1.4.0 -> 1.4.1: restarting");
 	assert.equal(h.entries[0]!.after, "Updated: Pi 1.4.1");
+	assert.equal(new Set(JSON.parse(readFileSync(join(h.paths.leases, readdirSync(h.paths.leases)[0]!), "utf8")).releases).size, 1, "no path twice in the lease");
+});
+
+test("after a restart of a session that had no file yet, the launcher's note gives the \"Updated\" line once", (t) => {
+	const old = (root: string) => set(root, "1.4.0", "0.29.0");
+	const next = (root: string) => set(root, "1.4.1", "0.29.0");
+	const h = harness(t, next, next, { previous: old });
+	// Pi keeps a new session in memory until the first reply, so the restarted Pi has an empty branch.
+	new UpdateSession({ ...h.host, updateNote: "Updated: Pi 1.4.1" }).start("startup");
+	assert.deepEqual(h.entries.map((entry) => [entry.phase, entry.text]), [["done", "Updated: Pi 1.4.1"]]);
+	const stale = harness(t, old, next, { previous: old });
+	new UpdateSession({ ...stale.host, updateNote: "Updated: Pi 1.4.1" }).start("startup");
+	assert.deepEqual(stale.entries, [], "the launcher fell back to the old Pi: no false line");
 });
 
 test("without the launcher, or in RPC mode, a Pi update shows a status line and never restarts", async (t) => {
