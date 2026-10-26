@@ -61,7 +61,7 @@ try {
   await loader.reload();
   const extensions = loader.getExtensions();
   assert.deepEqual(extensions.errors, []);
-  assert.equal(extensions.extensions.length, 18);
+  assert.equal(extensions.extensions.length, 19);
   assert.ok(loader.getThemes().themes.some(theme => theme.name === 'quiet'));
   assert.deepEqual(loader.getThemes().diagnostics, []);
   assert.ok(loader.getPrompts().prompts.some(prompt => prompt.name === 'deeper'), 'the package ships the /deeper prompt');
@@ -94,7 +94,7 @@ try {
     await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
     session.dispose();
   }
-  console.log('Native Git install, eighteen-extension loader and session lifecycle passed without credentials.');
+  console.log('Native Git install, nineteen-extension loader and session lifecycle passed without credentials.');
 
   writeFileSync(join(fixture, 'lib/smoke-marker.txt'), 'updated\n');
   run('git', ['add', 'lib/smoke-marker.txt'], fixture);

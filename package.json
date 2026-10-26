@@ -48,7 +48,8 @@
       "extensions/release-notes.ts",
       "extensions/cache-compaction.ts",
       "extensions/link-context.ts",
-      "extensions/idle-gc.ts"
+      "extensions/idle-gc.ts",
+      "extensions/auto-update.ts"
     ],
     "themes": [
       "themes/quiet.json"

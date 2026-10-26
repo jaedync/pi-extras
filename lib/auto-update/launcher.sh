@@ -21,6 +21,9 @@ trap ':' INT
 PI_EXTRAS_RESTART_TOKEN=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
 [ -n "$PI_EXTRAS_RESTART_TOKEN" ] || PI_EXTRAS_RESTART_TOKEN="$$-$(date +%s)"
 export PI_EXTRAS_RESTART_TOKEN
+# Pi asks for a restart only when this launcher is its parent; a Pi that a shell job starts inherits the token, not the parent.
+PI_EXTRAS_LAUNCHER_PID=$$
+export PI_EXTRAS_LAUNCHER_PID
 
 pi_bin() {
 	if [ -x "$STORE/pi-current/bin/pi" ]; then

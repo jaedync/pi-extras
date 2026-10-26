@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { getAgentDir, getMarkdownTheme, SettingsManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { UnreadableJsonError } from "../lib/extras-config.ts";
 import { operationalError } from "../lib/operational-log.ts";
+import { subcommand, subcommandNames } from "../lib/pi-extras-command.ts";
 import { NOTES_ENTRY, NotesView, notesToShow, parseChangelog, readSeen, writeSeen, type NotesData, type NotesEntry } from "../lib/release-notes.ts";
 
 const PACKAGE = new URL("../package.json", import.meta.url);
@@ -69,12 +70,19 @@ export default function releaseNotes(pi: ExtensionAPI): void {
 		pi.appendEntry(NOTES_ENTRY, data);
 	});
 
+	const choices = () => [{ name: "changelog", description: "What changed in this version" }, ...subcommandNames()];
 	pi.registerCommand("pi-extras", {
-		description: "Show what changed in this version of pi-extras",
-		getArgumentCompletions: (prefix) => ("changelog".startsWith(prefix.trim().toLowerCase()) ? [{ value: "changelog", label: "changelog", description: "What changed in this version" }] : null),
+		description: "pi-extras commands: changelog, update",
+		getArgumentCompletions: (prefix) => {
+			const matches = choices().filter((choice) => choice.name.startsWith(prefix.trim().toLowerCase()));
+			return matches.length > 0 ? matches.map((choice) => ({ value: choice.name, label: choice.name, description: choice.description })) : null;
+		},
 		handler: async (args, ctx) => {
-			if (args.trim().toLowerCase() !== "changelog") {
-				ctx.ui.notify("Use /pi-extras changelog.", "warning");
+			const [name = "", ...rest] = args.trim().split(/\s+/);
+			const other = subcommand(name.toLowerCase());
+			if (other) return other.handler(rest.join(" "), ctx);
+			if (name.toLowerCase() !== "changelog") {
+				ctx.ui.notify(`Use ${choices().map((choice) => `/pi-extras ${choice.name}`).join(" or ")}.`, "warning");
 				return;
 			}
 			const current = installed();
