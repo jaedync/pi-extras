@@ -19,7 +19,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all nineteen extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the prompt templates `/deeper`, `/higher` and `/wider`.
+adds all nineteen extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the skill `be-ambitious` and the prompt templates `/higher` and `/wider`.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -46,7 +46,8 @@ can still conflict.
 | Release Notes | What changed in pi-extras, shown one time in the first new session after an update; `/pi-extras changelog` shows it again |
 | Auto-update | Opt-in: Pi and your unpinned packages update by themselves. Each new set is tested before use, and running sessions move to it when they are idle; `/pi-extras update` |
 | Quiet | Low-contrast theme with restrained accent colors |
-| Prompts | `/deeper`, `/higher` and `/wider [task]`: before work starts, the model plans a deeper version of the task (expert methods, raw material, an outside check), the outcome behind the task, or the other fields that can improve it. Then it shows a new prompt and waits for your approval. From Felix Rieseberg's [How to be more ambitious](https://felixrieseberg.com/how-to-be-more-ambitious-a-tutorial-for-humans-with-models/) |
+| Be Ambitious | Skill: the model plans the deeper version of a task that a field-leading expert would do (raw material, expert instruments, a hard target, a check from outside the model), shows it and waits for your approval, then does the work at that depth. It also looks at the goal behind the task and at methods from other fields. The model loads it for open tasks by itself; `/skill:be-ambitious [task]` starts it. From Felix Rieseberg's [How to be more ambitious](https://felixrieseberg.com/how-to-be-more-ambitious-a-tutorial-for-humans-with-models/) |
+| Prompts | `/higher` and `/wider [task]`: before work starts, the model plans the outcome behind the task, or the other fields that can improve it. Then it shows a new prompt and waits for your approval |
 
 ## Updates and removal
 

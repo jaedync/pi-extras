@@ -324,7 +324,7 @@ test("own set: the folders Pi really loaded win over settings.json; a package th
 	const known = [v1, v2, quiet];
 	// settings.json already names v2 (the cycle rewrote it after Pi loaded v1), and the theme package.
 	const snapshot = [v2.entry, quiet.entry, "/elsewhere/local"];
-	const loaded = [join(v1.entry, "extensions", "status.ts"), join(v1.entry, "prompts", "deeper.md"), "/usr/lib/other/tool.ts", "builtin:read"];
+	const loaded = [join(v1.entry, "extensions", "status.ts"), join(v1.entry, "prompts", "higher.md"), "/usr/lib/other/tool.ts", "builtin:read"];
 	assert.deepEqual(loadedEntries({ storeRoot: root, snapshot, loadedPaths: loaded, known }), [v1.entry, quiet.entry]);
 	assert.deepEqual(loadedEntries({ storeRoot: root, snapshot, loadedPaths: [], known }), [v2.entry, quiet.entry], "nothing registered: the snapshot");
 	// A loaded release that no set knows: its folder stands for it, so it differs from every set.

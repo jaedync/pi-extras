@@ -56,7 +56,7 @@ try {
   const { DefaultResourceLoader, SettingsManager, SessionManager, createAgentSession } = await import(pathToFileURL(join(agentRoot, 'dist/bundle/index.js')).href);
   const loader = new DefaultResourceLoader({ cwd: scratch, agentDir,
     settingsManager: SettingsManager.create(scratch, agentDir),
-    noSkills: true, noContextFiles: true,
+    noContextFiles: true,
   });
   await loader.reload();
   const extensions = loader.getExtensions();
@@ -64,8 +64,13 @@ try {
   assert.equal(extensions.extensions.length, 19);
   assert.ok(loader.getThemes().themes.some(theme => theme.name === 'quiet'));
   assert.deepEqual(loader.getThemes().diagnostics, []);
-  assert.ok(loader.getPrompts().prompts.some(prompt => prompt.name === 'deeper'), 'the package ships the /deeper prompt');
+  const prompts = loader.getPrompts().prompts.map(prompt => prompt.name);
+  assert.ok(prompts.includes('higher') && prompts.includes('wider'), 'the package ships the /higher and /wider prompts');
+  assert.ok(!prompts.includes('deeper'), 'the be-ambitious skill replaced /deeper');
   assert.deepEqual(loader.getPrompts().diagnostics, []);
+  // HOME is a scratch folder, so the package is the only skill source.
+  assert.deepEqual(loader.getSkills().skills.map(skill => skill.name), ['be-ambitious']);
+  assert.deepEqual(loader.getSkills().diagnostics, []);
   const tools = extensions.extensions.flatMap(ext => [...ext.tools.keys()]);
   assert.ok(tools.includes('kagi_search'));
   assert.ok(tools.includes('gov_search'));

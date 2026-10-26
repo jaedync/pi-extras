@@ -22,6 +22,7 @@
     "!lib/**/*.pyc",
     "themes/",
     "prompts/",
+    "skills/",
     "docs/",
     "licenses/",
     "README.md",
@@ -53,6 +54,9 @@
     ],
     "themes": [
       "themes/quiet.json"
+    ],
+    "skills": [
+      "skills"
     ],
     "prompts": [
       "prompts/*.md"

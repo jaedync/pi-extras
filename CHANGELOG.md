@@ -2,6 +2,23 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Skill `be-ambitious`: the model plans the deeper version of a task that a
+  field-leading expert would do, then does it. It starts from the raw
+  material, runs the expert's instruments, aims at a hard target, tests the
+  beliefs behind the task and gets a check from outside the model. It
+  covers depth, altitude and range. The model loads it by itself for open
+  tasks that can get a shallow answer. Run `/skill:be-ambitious [task]` to
+  start it yourself.
+
+### Removed
+
+- Prompt template `/deeper`. Use `/skill:be-ambitious` instead. `/higher`
+  and `/wider` stay.
+
 ## 0.30.0 - 2026-10-25
 
 ### Added
