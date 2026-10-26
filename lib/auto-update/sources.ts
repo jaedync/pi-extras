@@ -7,6 +7,7 @@
  * Git source parsing follows Pi's own (pi-coding-agent utils/git.js
  * splitRef), so an entry counts as pinned here exactly when Pi pins it.
  */
+import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ManagedEntry, UpdateSet } from "./state.ts";
 
@@ -22,9 +23,19 @@ export type Classified =
 
 const NPM_SPEC = /^(@?[^@]+(?:\/[^@]+)?)(?:@(.+))?$/;
 
-/** A store key: lowercase letters, digits, dots and dashes only. */
+/** A store key part: lowercase letters, digits, dots and dashes only. */
 function slug(text: string): string {
 	return text.toLowerCase().replace(/[^a-z0-9.]+/g, "-").replace(/^[-.]+|-+$/g, "").replace(/-{2,}/g, "-");
+}
+
+/**
+ * `<kind>-<slug>-<hash>`: the slug is for people, the hash of the exact
+ * identity keeps two sources apart when their slugs match (`@scope/foo` and
+ * `scope-foo`, or `a/b-c` and `a-b/c`).
+ */
+function storeKeyFor(kind: "npm" | "git", identity: string): string {
+	const hash = createHash("sha256").update(`${kind}:${identity}`).digest("hex").slice(0, 8);
+	return `${kind}-${slug(identity)}-${hash}`;
 }
 
 /** The repository and the ref after `@`, as Pi splits them. */
@@ -77,7 +88,7 @@ function classifyGit(source: string): Classified {
 	if (!where?.host || !path || path.split("/").length < 2) return { kind: "local" };
 	const isUrl = /^(https?|ssh|git):\/\//i.test(split.repo) || split.repo.startsWith("git@");
 	const cloneUrl = isUrl ? split.repo : `https://${split.repo}`;
-	return { kind: "managed", origin: { kind: "git", source, url: cloneUrl, key: `git-${slug(`${where.host}/${path}`)}`, label: path.split("/").at(-1) ?? path } };
+	return { kind: "managed", origin: { kind: "git", source, url: cloneUrl, key: storeKeyFor("git", `${where.host}/${path}`), label: path.split("/").at(-1) ?? path } };
 }
 
 /** The key of a store path `<root>/packages/<key>/...`, or undefined. */
@@ -95,7 +106,7 @@ export function classify(source: string, storeRoot: string): Classified {
 		const match = trimmed.slice(4).trim().match(NPM_SPEC);
 		if (!match?.[1]) return { kind: "local" };
 		if (match[2]) return { kind: "pinned" };
-		return { kind: "managed", origin: { kind: "npm", source: trimmed, name: match[1], key: `npm-${slug(match[1])}`, label: match[1] } };
+		return { kind: "managed", origin: { kind: "npm", source: trimmed, name: match[1], key: storeKeyFor("npm", match[1]), label: match[1] } };
 	}
 	if (trimmed.startsWith("git:") || /^(https?|ssh|git):\/\//i.test(trimmed)) return classifyGit(trimmed);
 	const key = storeKey(trimmed, storeRoot);

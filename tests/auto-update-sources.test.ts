@@ -10,17 +10,17 @@ const STORE = "/s";
 test("unpinned npm and git sources are managed; pinned and local ones are left alone", () => {
 	const npm = classify("npm:pi-web-access", STORE);
 	assert.equal(npm.kind, "managed");
-	assert.deepEqual(npm.kind === "managed" && npm.origin, { kind: "npm", source: "npm:pi-web-access", name: "pi-web-access", key: "npm-pi-web-access", label: "pi-web-access" });
+	assert.deepEqual(npm.kind === "managed" && npm.origin, { kind: "npm", source: "npm:pi-web-access", name: "pi-web-access", key: "npm-pi-web-access-0c1c95e7", label: "pi-web-access" });
 	const scoped = classify("npm:@scope/pkg", STORE);
-	assert.equal(scoped.kind === "managed" && scoped.origin.key, "npm-scope-pkg");
+	assert.equal(scoped.kind === "managed" && scoped.origin.key, "npm-scope-pkg-e9a8e5aa");
 	assert.equal(classify("npm:x@1.2.3", STORE).kind, "pinned");
 	assert.equal(classify("npm:@scope/pkg@^1", STORE).kind, "pinned");
 	const git = classify("git:github.com/jaedync/pi-extras", STORE);
 	assert.equal(git.kind, "managed");
-	assert.deepEqual(git.kind === "managed" && git.origin, { kind: "git", source: "git:github.com/jaedync/pi-extras", url: "https://github.com/jaedync/pi-extras", key: "git-github.com-jaedync-pi-extras", label: "pi-extras" });
+	assert.deepEqual(git.kind === "managed" && git.origin, { kind: "git", source: "git:github.com/jaedync/pi-extras", url: "https://github.com/jaedync/pi-extras", key: "git-github.com-jaedync-pi-extras-daed6da4", label: "pi-extras" });
 	const https = classify("https://github.com/a/b.git", STORE);
 	assert.equal(https.kind === "managed" && https.origin.kind === "git" && https.origin.url, "https://github.com/a/b.git");
-	assert.equal(https.kind === "managed" && https.origin.key, "git-github.com-a-b");
+	assert.equal(https.kind === "managed" && https.origin.key, "git-github.com-a-b-c8aa266f");
 	const ssh = classify("git:git@github.com:a/b", STORE);
 	assert.equal(ssh.kind === "managed" && ssh.origin.kind === "git" && ssh.origin.url, "git@github.com:a/b");
 	assert.equal(classify("git:github.com/a/b@v1.0.0", STORE).kind, "pinned");
@@ -34,6 +34,18 @@ test("unpinned npm and git sources are managed; pinned and local ones are left a
 	assert.equal(classify("https://user:secret@example.com/a/b", STORE).kind === "managed", true);
 });
 
+test("sources whose names give the same slug get different keys", () => {
+	const key = (source: string) => {
+		const classified = classify(source, STORE);
+		return classified.kind === "managed" ? classified.origin.key : undefined;
+	};
+	assert.notEqual(key("npm:@scope/foo"), key("npm:scope-foo"));
+	assert.notEqual(key("git:github.com/a/b-c"), key("git:github.com/a-b/c"));
+	assert.equal(key("git:github.com/a/b"), key("https://github.com/a/b.git"), "one repository, one key");
+	assert.equal(key("https://user:secret@github.com/a/b"), key("git:github.com/a/b"), "credentials never reach the key");
+	assert.match(key("npm:@scope/foo")!, /^npm-scope-foo-[0-9a-f]{8}$/);
+});
+
 test("entries keep their filters when the source changes", () => {
 	assert.equal(entrySource("npm:x"), "npm:x");
 	assert.equal(entrySource({ source: "npm:x", extensions: ["a"] }), "npm:x");
@@ -45,23 +57,23 @@ test("entries keep their filters when the source changes", () => {
 const set: UpdateSet = {
 	pi: { version: "1.4.0", dir: "/s/pi/1.4.0" },
 	packages: {
-		"npm-x": { origin: "npm:x", id: "2.0.0", dir: "/s/packages/npm-x/2.0.0", entry: "/s/packages/npm-x/2.0.0/node_modules/x" },
-		"git-github.com-a-b": { origin: "git:github.com/a/b", id: "1.0.0-abc1234", dir: "/s/packages/git-github.com-a-b/1.0.0-abc1234", entry: "/s/packages/git-github.com-a-b/1.0.0-abc1234" },
+		"npm-x-5e8159d8": { origin: "npm:x", id: "2.0.0", dir: "/s/packages/npm-x-5e8159d8/2.0.0", entry: "/s/packages/npm-x-5e8159d8/2.0.0/node_modules/x" },
+		"git-github.com-a-b-c8aa266f": { origin: "git:github.com/a/b", id: "1.0.0-abc1234", dir: "/s/packages/git-github.com-a-b-c8aa266f/1.0.0-abc1234", entry: "/s/packages/git-github.com-a-b-c8aa266f/1.0.0-abc1234" },
 	},
 };
 
 test("applySet rewrites managed and stored entries only, and restoreOriginals undoes it", () => {
-	const before = ["npm:x", { source: "/s/packages/git-github.com-a-b/0.9.0-0000000", extensions: ["e"] }, "npm:y@1.0.0", "/local/pkg", "npm:not-in-set"];
+	const before = ["npm:x", { source: "/s/packages/git-github.com-a-b-c8aa266f/0.9.0-0000000", extensions: ["e"] }, "npm:y@1.0.0", "/local/pkg", "npm:not-in-set"];
 	const after = applySet(before, set, STORE);
 	assert.deepEqual(after, [
-		"/s/packages/npm-x/2.0.0/node_modules/x",
-		{ source: "/s/packages/git-github.com-a-b/1.0.0-abc1234", extensions: ["e"] },
+		"/s/packages/npm-x-5e8159d8/2.0.0/node_modules/x",
+		{ source: "/s/packages/git-github.com-a-b-c8aa266f/1.0.0-abc1234", extensions: ["e"] },
 		"npm:y@1.0.0",
 		"/local/pkg",
 		"npm:not-in-set",
 	]);
 	assert.notEqual(after, before);
-	const managed = { "npm-x": { origin: "npm:x", original: "npm:x" }, "git-github.com-a-b": { origin: "git:github.com/a/b", original: { source: "git:github.com/a/b", extensions: ["e"] } } };
+	const managed = { "npm-x-5e8159d8": { origin: "npm:x", original: "npm:x" }, "git-github.com-a-b-c8aa266f": { origin: "git:github.com/a/b", original: { source: "git:github.com/a/b", extensions: ["e"] } } };
 	assert.deepEqual(restoreOriginals(after, managed, STORE), ["npm:x", { source: "git:github.com/a/b", extensions: ["e"] }, "npm:y@1.0.0", "/local/pkg", "npm:not-in-set"]);
 });
 

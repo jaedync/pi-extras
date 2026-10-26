@@ -87,11 +87,11 @@ test("an npm release lands in its own prefix and names the package folder as its
 	const paths = storePaths(join(scratch(t), "store"));
 	const source = origin("npm:@scope/web") as Extract<Origin, { kind: "npm" }>;
 	const release = await installNpmRelease(paths, source, "2.0.0", deps(fakeNpm(() => "2.0.0")));
-	assert.equal(release.dir, join(paths.packagesRoot, "npm-scope-web", "2.0.0"));
+	assert.equal(release.dir, join(paths.packagesRoot, "npm-scope-web-33483486", "2.0.0"));
 	assert.equal(release.entry, join(release.dir, "node_modules", "@scope/web"));
 	assert.equal(release.label, "@scope/web 2.0.0");
 	await assert.rejects(installNpmRelease(paths, source, "3.0.0", deps(fakeNpm(() => "2.9.9"))), /installed 2\.9\.9 of @scope\/web, not 3\.0\.0/);
-	assert.deepEqual(readdirSync(join(paths.packagesRoot, "npm-scope-web")), ["2.0.0"]);
+	assert.deepEqual(readdirSync(join(paths.packagesRoot, "npm-scope-web-33483486")), ["2.0.0"]);
 });
 
 test("Pi installs into its own prefix with scripts off", async (t) => {

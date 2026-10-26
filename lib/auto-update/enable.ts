@@ -15,10 +15,10 @@ import { installLauncher, isLauncher, linkAt, renderLauncher, restoreLink, syncP
 import type { Log } from "./log.ts";
 import type { StorePaths } from "./paths.ts";
 import { PI_NAME, trackedSources, wantedPackage, type LookupDeps } from "./plan.ts";
-import type { Runner } from "./run.ts";
 import { readSettingsPackages, rewriteSettingsPackages, settingsFile } from "./settings.ts";
 import type { SmokeInput, SmokeResult } from "./smoke.ts";
-import { restoreOriginals } from "./sources.ts";
+import { sanitize, type Runner } from "./run.ts";
+import { entrySource, restoreOriginals } from "./sources.ts";
 import { emptyState, readState, updateState, writeState, type EnableRecord, type ManagedEntry, type PackageRelease, type UpdateSet, type UpdateState } from "./state.ts";
 import { readUndo, removeUndo, undoFile } from "./undo.ts";
 import { newestNpm } from "./versions.ts";
@@ -45,6 +45,12 @@ const LOCK_WAIT_MS = 2_000;
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 export class CommandError extends Error {}
+
+/** A settings entry for the terminal: its source only, credentials removed (a git URL can hold a token). */
+export function describeEntry(entry: unknown): string {
+	const source = entrySource(entry);
+	return source === undefined ? "(an entry without a source)" : sanitize(source);
+}
 
 interface OldPi {
 	readonly link: string;
@@ -142,7 +148,7 @@ export async function enable(deps: EnableDeps): Promise<void> {
 		deps.log(`enabled: Pi ${set.pi.version}, ${plural(Object.keys(set.packages).length, "package")}`);
 		deps.out(`Changed ${launcher}: it was a link to ${old.link}. It is now the pi-extras launcher.`);
 		packages.forEach((entry, index) => {
-			if (JSON.stringify(entry) !== JSON.stringify(after[index])) deps.out(`Changed ${settings}: ${JSON.stringify(entry)} -> ${JSON.stringify(after[index])}`);
+			if (JSON.stringify(entry) !== JSON.stringify(after[index])) deps.out(`Changed ${settings}: ${describeEntry(entry)} -> ${describeEntry(after[index])}`);
 		});
 		deps.out(`Changed ${join(deps.agentDir, "pi-extras.json")}: autoUpdate.enabled is true.`);
 		deps.out(`Pi ${set.pi.version} runs from ${join(deps.paths.root, "pi-current")}. Start a new Pi session to use it.`);
@@ -185,7 +191,7 @@ export async function disable(deps: Pick<EnableDeps, "home" | "agentDir" | "path
 		const settings = settingsFile(deps.agentDir);
 		const change = rewriteSettingsPackages(settings, (packages) => restoreOriginals(packages, source.managed, source.storeRoot));
 		change.before.forEach((entry, index) => {
-			if (JSON.stringify(entry) !== JSON.stringify(change.after[index])) deps.out(`Changed ${settings}: ${JSON.stringify(entry)} -> ${JSON.stringify(change.after[index])}`);
+			if (JSON.stringify(entry) !== JSON.stringify(change.after[index])) deps.out(`Changed ${settings}: ${describeEntry(entry)} -> ${describeEntry(change.after[index])}`);
 		});
 		writeConfig(deps.agentDir, { enabled: false });
 		syncPiMarker(deps.paths, { enabled: false, pi: "skip" });

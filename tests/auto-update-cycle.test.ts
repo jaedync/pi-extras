@@ -16,8 +16,8 @@ import { flipPiCurrent } from "../lib/auto-update/switch.ts";
 import { fixturePackage, PI_NAME, removeTree, tagRelease } from "./support/auto-update-fixtures.ts";
 import { ORIGINAL_SETTINGS, world, type World } from "./support/auto-update-world.ts";
 
-const GIT_KEY = "git-git.example.invalid-jaedync-fixture-git";
-const NPM_KEY = "npm-fixture-npm";
+const GIT_KEY = "git-git.example.invalid-jaedync-fixture-git-ba28a080";
+const NPM_KEY = "npm-fixture-npm-23995fd2";
 
 async function enabled(t: test.TestContext): Promise<World> {
 	const w = world(t);
@@ -37,7 +37,8 @@ test("enable builds, tests and switches the first set; disable restores the exac
 	const result = await w.cli("enable");
 	assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
 	assert.match(result.stdout, /Changed .*\.local\/bin\/pi: it was a link to \.\.\/lib\/node_modules\/@earendil-works\/pi-coding-agent\/dist\/bundle\/cli\.js\. It is now the pi-extras launcher\./);
-	assert.match(result.stdout, /Changed .*settings\.json: "https:\/\/git\.example\.invalid\/jaedync\/fixture-git" -> ".*\/packages\/git-git\.example\.invalid-jaedync-fixture-git\/1\.0\.0-[0-9a-f]{7}"/);
+	assert.match(result.stdout, /Changed .*settings\.json: https:\/\/git\.example\.invalid\/jaedync\/fixture-git -> .*\/packages\/git-git\.example\.invalid-jaedync-fixture-git-[0-9a-f]{8}\/1\.0\.0-[0-9a-f]{7}\n/);
+	assert.match(result.stdout, /Changed .*settings\.json: npm:fixture-npm -> .*\/fixture-npm\n/, "the source only, not the whole entry");
 	const state = readState(w.paths.state);
 	assert.equal(state.current?.pi.version, "1.4.0");
 	assert.deepEqual(Object.keys(state.current?.packages ?? {}).sort(), [GIT_KEY, NPM_KEY]);
@@ -200,8 +201,8 @@ test("a new unpinned entry that the user adds is adopted at the next cycle", asy
 	writeFileSync(w.settings, JSON.stringify({ ...settings, packages: [...settings.packages, "npm:fixture-extra"] }, null, 2));
 	const result = await runCycle(w.cycleDeps(), { force: true });
 	assert.equal(result.outcome, "switched", result.message);
-	assert.equal(entrySources(w).at(-1), join(w.paths.root, "packages", "npm-fixture-extra", "0.1.0", "node_modules", "fixture-extra"));
-	assert.equal(readState(w.paths.state).managed["npm-fixture-extra"]?.original, "npm:fixture-extra");
+	assert.equal(entrySources(w).at(-1), join(w.paths.root, "packages", "npm-fixture-extra-b75661ca", "0.1.0", "node_modules", "fixture-extra"));
+	assert.equal(readState(w.paths.state).managed["npm-fixture-extra-b75661ca"]?.original, "npm:fixture-extra");
 });
 
 test("a stale staging folder from a crashed install is removed; a lock of a dead process is taken over", async (t) => {
@@ -261,7 +262,7 @@ test("rollback after a new source was added marks only the sources both sets hav
 	assert.equal(result.code, 0, result.stderr);
 	const state = readState(w.paths.state);
 	assert.ok(state.bad.pi?.["1.4.3"], "Pi changed in both sets: bad");
-	assert.equal(state.bad["npm-fixture-extra"], undefined, "the previous set had no fixture-extra: not a rollback of it");
+	assert.equal(state.bad["npm-fixture-extra-b75661ca"], undefined, "the previous set had no fixture-extra: not a rollback of it");
 });
 
 test("GC keeps a store folder that settings.json names, also when no set has it", async (t) => {

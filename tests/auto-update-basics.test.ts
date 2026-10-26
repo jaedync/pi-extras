@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { describeEntry } from "../lib/auto-update/enable.ts";
 import { DEFAULT_CONFIG, parseConfig, readConfig, writeConfig } from "../lib/auto-update/config.ts";
 import { agentDirFrom, isInside, storePaths, storeRootFrom } from "../lib/auto-update/paths.ts";
 import { firstLine, runCommand, sanitize } from "../lib/auto-update/run.ts";
@@ -112,4 +113,10 @@ test("state reads empty when missing, round-trips, and rejects a malformed set",
 	assert.deepEqual(readState(file), state);
 	writeFileSync(file, JSON.stringify({ version: 1, current: { pi: { version: 3 } } }));
 	assert.throws(() => readState(file), /state\.json/);
+});
+
+test("a settings entry is shown by its source, without credentials", () => {
+	assert.equal(describeEntry({ source: "https://user:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/a/b", extensions: ["x"] }), "https://***@github.com/a/b");
+	assert.equal(describeEntry("npm:x"), "npm:x");
+	assert.equal(describeEntry(42), "(an entry without a source)");
 });
