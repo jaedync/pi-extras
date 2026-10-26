@@ -2,45 +2,38 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## Unreleased
+## 0.30.0 - 2026-10-25
 
 ### Added
 
 - Auto-update (opt-in, Linux and macOS): Pi and your unpinned packages
   update by themselves. To turn it on, run
-  `node <pi-extras>/lib/auto-update/cli.ts enable`. One check runs every 5
-  minutes on the machine. Each new version goes into its own folder, and
-  each new set must pass a startup test in an offline Pi before a session
-  uses it. A version that fails is marked bad and is not tried again.
-- Auto-update: running sessions move to a new set when they are idle for
-  30 seconds. They reload for package changes. A terminal session restarts
-  for a new Pi. The status line shows `updating: ...` while a check runs.
-- Auto-update: `pi update` through the launcher starts a check in the
-  background and stops at once. Pi's own "New version" message is off while
-  auto-update manages Pi. If something writes over the launcher, sessions
-  show a warning.
-- Auto-update: `/pi-extras update` shows the state. `now`, `retry`, `rollback`,
-  `pause` and `resume` control it. `disable` puts back `~/.local/bin/pi`
-  and the original `settings.json` entries. It also works when the store
-  is gone. These versions can be older than the store's: run
-  `pi update --all` to get the newest.
-- Auto-update: a session does not move while a `!` command runs or a
-  selector such as `/model` is open. A restart repeats the launch options
-  that are safe to repeat.
-- Auto-update: after 30 minutes of waiting for idle, the status line says
-  how to use the new set now. A version whose test did not finish 2 times
-  in a row waits 24 hours before the next try. A check for a different
-  agent directory changes nothing.
+  `node <pi-extras>/lib/auto-update/cli.ts enable`. To turn it off, run
+  the same command with `disable`.
+- Auto-update: one check runs every 5 minutes on the machine, not one for
+  each session. Each new version goes into its own folder. Each new set
+  must pass a startup test in an offline Pi before a session uses it.
+- Auto-update: a running session moves to a new set when it is idle for 30
+  seconds. It reloads for a package change. For a new Pi, a terminal
+  session restarts into the same conversation. A running agent turn, a `!`
+  command, a draft in the editor or an open selector holds the move. The
+  transcript shows a line before and after the move.
 - Auto-update: when a set fails its test, the check finds the version that
-  caused it, also when two new versions need each other. The other new
-  versions switch in the same check. A test that times out marks nothing
-  bad. npm packages follow npm's own `min-release-age` too.
-- Auto-update: `/pi-extras update retry` (and the shell command `retry`)
-  removes all bad and suspect marks and starts a check. The status shows
-  each bad version with its date and reason. A single new version that
-  fails gets one more test before it is marked bad. A test Pi that a
-  signal from outside stops (for example the out-of-memory killer) gives
-  no result, so it marks nothing bad.
+  caused it, also when two new versions need each other. That version is
+  marked bad. The other new versions switch in the same check. A test that
+  gives no result (a timeout, or a signal from outside such as the
+  out-of-memory killer) marks nothing bad.
+- Auto-update: `/pi-extras update` shows the state and each bad version.
+  `now`, `retry`, `rollback`, `pause` and `resume` control it. `retry`
+  removes the bad marks and starts a check.
+- Auto-update: `enable` puts a small launcher at `~/.local/bin/pi`.
+  Through the launcher, `pi update` starts a check in the background and
+  stops at once. Pi's own "New version" message is off while auto-update
+  manages Pi.
+- Auto-update: `disable` puts back `~/.local/bin/pi` and the original
+  `settings.json` entries. These versions can be older than the newest in
+  the store. Run `pi update --all` to get the newest.
+- Auto-update: npm packages follow npm's own `min-release-age` setting.
 
 ## 0.29.0 - 2026-10-24
 

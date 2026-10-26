@@ -1,0 +1,4 @@
+# Store keys in auto-update test fixtures (a name plus a short hash), not secrets.
+55c3e74790de1075dadd3d25db40e58b4f741bec:tests/support/auto-update-world.ts:generic-api-key:108
+e02a437584dc7bb2bb8d1e5990cce8df439ec217:tests/auto-update-cycle.test.ts:generic-api-key:20
+e02a437584dc7bb2bb8d1e5990cce8df439ec217:tests/auto-update-sources.test.ts:generic-api-key:15
