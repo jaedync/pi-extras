@@ -11,6 +11,7 @@ import { decide, idleFor, MAX_ATTEMPTS, QUIET_MS, type AdoptInput, type IdleSign
 import { writeConfig } from "../lib/auto-update/config.ts";
 import { storePaths, type StorePaths } from "../lib/auto-update/paths.ts";
 import { APPLY_COMMAND, UPDATE_ENTRY, UpdateSession, type SessionHost, type UpdateEntryData } from "../lib/auto-update/session.ts";
+import { loadedEntries } from "../lib/auto-update/own-set.ts";
 import { emptyState, writeState, type UpdateSet, type UpdateState } from "../lib/auto-update/state.ts";
 import { flipPiCurrent } from "../lib/auto-update/switch.ts";
 import { removeTree } from "./support/auto-update-fixtures.ts";
@@ -74,6 +75,7 @@ interface Harness {
 	clock: number;
 	signals: Omit<IdleSignals, "now" | "lastActivityAt">;
 	readonly branch: { type: string; customType?: string; data?: unknown }[];
+	loaded: string[];
 }
 
 /** A store whose state.json, pi-current and settings.json all name `current`; the session runs `own`. */
@@ -94,13 +96,14 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 	// settings.json first names the session's own set; `switchSettings` moves it to the target.
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: Object.values(mine.packages).map((r) => r.entry) }));
 	const h: Harness = {
-		paths, agentDir, entries: [], statuses: [], notices: [], calls: [], clock: 1_000_000, branch: [],
+		paths, agentDir, entries: [], statuses: [], notices: [], calls: [], clock: 1_000_000, branch: [], loaded: [],
 		signals: { agentIdle: true, pendingMessages: false, compacting: false, promptOpen: false, subagentRun: false, background: false, editorEmpty: true },
 		host: undefined as unknown as SessionHost,
 	};
 	(h as { host: SessionHost }).host = {
 		mode: options.mode ?? "tui", paths, agentDir, piVersion: mine.pi.version, piDir: mine.pi.dir, extrasDir: "/dev/pi-extras",
 		sessionFile: () => "/sessions/a.jsonl",
+		loadedPaths: () => h.loaded,
 		branch: () => h.branch,
 		appendEntry: (data) => {
 			h.entries.push(data);
@@ -282,4 +285,36 @@ test("a replaced launcher shows a short warning in the status line and one notic
 	assert.equal(h.statuses.at(-1), "auto-update: ~/.local/bin/pi was replaced; run enable again, or disable");
 	assert.equal(h.notices.length, 1);
 	assert.match(h.notices[0]!, /long text/);
+});
+
+test("own set: the folders Pi really loaded win over settings.json; a package that registers nothing falls back to it", () => {
+	const root = "/store";
+	const v1 = release(root, "pi-extras", "0.29.0");
+	const v2 = release(root, "pi-extras", "0.30.0");
+	const quiet = release(root, "themes-only", "1.0.0");
+	const known = [v1, v2, quiet];
+	// settings.json already names v2 (the cycle rewrote it after Pi loaded v1), and the theme package.
+	const snapshot = [v2.entry, quiet.entry, "/elsewhere/local"];
+	const loaded = [join(v1.entry, "extensions", "status.ts"), join(v1.entry, "prompts", "deeper.md"), "/usr/lib/other/tool.ts", "builtin:read"];
+	assert.deepEqual(loadedEntries({ storeRoot: root, snapshot, loadedPaths: loaded, known }), [v1.entry, quiet.entry]);
+	assert.deepEqual(loadedEntries({ storeRoot: root, snapshot, loadedPaths: [], known }), [v2.entry, quiet.entry], "nothing registered: the snapshot");
+	// A loaded release that no set knows: its folder stands for it, so it differs from every set.
+	const odd = join(root, "packages", "npm-pi-extras", "0.28.0", "node_modules", "pi-extras", "x.ts");
+	assert.deepEqual(loadedEntries({ storeRoot: root, snapshot: [v2.entry], loadedPaths: [odd], known }), [join(root, "packages", "npm-pi-extras", "0.28.0")]);
+});
+
+test("settings rewritten between load and session_start: the session still sees that it runs the old set, and reloads", async (t) => {
+	const old = (root: string) => set(root, "1.4.0", "0.29.0");
+	const next = (root: string) => set(root, "1.4.0", "0.30.0");
+	const h = harness(t, old, next, { previous: old });
+	switchSettings(h, next(h.paths.root));
+	h.loaded = [join(old(h.paths.root).packages["npm-pi-extras"]!.entry, "extensions", "auto-update.ts")];
+	const session = new UpdateSession(h.host);
+	session.start("startup");
+	h.clock += QUIET_MS;
+	session.poll();
+	await session.apply(actions(h));
+	assert.deepEqual(h.calls, ["dispatch", "reload"]);
+	const lease = JSON.parse(readFileSync(join(h.paths.leases, readdirSync(h.paths.leases)[0]!), "utf8"));
+	assert.ok(lease.releases.includes(old(h.paths.root).packages["npm-pi-extras"]!.entry), "the lease names what is really in use");
 });

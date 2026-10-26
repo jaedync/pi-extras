@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { decide, fingerprint, idleFor, packagesDiffer, piDiffers, type Decision, type IdleSignals, type OwnSet } from "./adopt.ts";
 import { readConfig, type AutoUpdateConfig } from "./config.ts";
 import { processStart, removeLease, writeLease } from "./leases.ts";
+import { loadedEntries } from "./own-set.ts";
 import { isInside, type StorePaths } from "./paths.ts";
 import { readSettingsPackages, settingsFile } from "./settings.ts";
 import { classify, entrySource } from "./sources.ts";
@@ -40,6 +41,8 @@ export interface SessionHost {
 	readonly piDir: string;
 	readonly extrasDir: string;
 	readonly sessionFile: () => string | undefined;
+	/** Real paths of the code this process loaded: pi-extras itself and the sources of tools and commands. */
+	readonly loadedPaths: () => readonly string[];
 	readonly branch: () => readonly { type: string; customType?: string; data?: unknown }[];
 	readonly appendEntry: (data: UpdateEntryData) => void;
 	readonly notify: (text: string, level: "info" | "warning") => void;
@@ -70,7 +73,7 @@ function realOr(path: string): string {
 	}
 }
 
-/** Store entries in settings.json now: what a session that starts or reloads now loads. */
+/** Store entries in settings.json now: the fallback for a package that registers no tool or command. */
 function storeEntries(host: SessionHost): string[] {
 	let packages: unknown[];
 	try {
@@ -114,7 +117,10 @@ export class UpdateSession {
 	constructor(host: SessionHost) {
 		this.host = host;
 		this.lastActivityAt = host.now();
-		this.own = { piVersion: host.piVersion, piDir: host.piDir, entries: storeEntries(host) };
+		const state = safeState(host.paths);
+		const known = [state?.current, state?.previous].flatMap((set) => (set ? Object.values(set.packages) : []));
+		const entries = loadedEntries({ storeRoot: host.paths.root, snapshot: storeEntries(host), loadedPaths: host.loadedPaths(), known });
+		this.own = { piVersion: host.piVersion, piDir: host.piDir, entries };
 	}
 
 	private config(): AutoUpdateConfig {

@@ -33,6 +33,19 @@ function realOr(path: string): string {
 	}
 }
 
+/** Where this process loaded code from: pi-extras itself, and the source of each tool and command. */
+function loadedPaths(pi: ExtensionAPI): string[] {
+	let items: { sourceInfo?: { path?: unknown } }[];
+	try {
+		items = [...pi.getAllTools(), ...pi.getCommands()];
+	} catch {
+		// A Pi without these lists: pi-extras' own folder, then the settings snapshot for the rest.
+		items = [];
+	}
+	const sources = items.map((item) => item.sourceInfo?.path).filter((path): path is string => typeof path === "string" && path.startsWith("/"));
+	return [...new Set([EXTRAS_DIR, ...sources])].map(realOr);
+}
+
 export default function autoUpdate(pi: ExtensionAPI): void {
 	// The smoke test loads this package in a throwaway Pi: no lease, no timers, no cycle from there.
 	if (process.env.PI_EXTRAS_UPDATE_SMOKE === "1") return;
@@ -91,6 +104,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 				piDir: realOr(getPackageDir()),
 				extrasDir: EXTRAS_DIR,
 				sessionFile: () => context.sessionManager.getSessionFile(),
+				loadedPaths: () => loadedPaths(pi),
 				branch: () => context.sessionManager.getBranch() as never,
 				appendEntry: (data) => pi.appendEntry<UpdateEntryData>(UPDATE_ENTRY, data),
 				notify: (text, level) => context.ui.notify(text, level),

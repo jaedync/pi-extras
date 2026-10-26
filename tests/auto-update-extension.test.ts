@@ -52,6 +52,8 @@ function fakePi(options: { mode?: string; child?: boolean } = {}) {
 		registerEntryRenderer: (type: string, renderer: unknown) => renderers.set(type, renderer),
 		appendEntry: () => {},
 		sendUserMessage: () => {},
+		getAllTools: () => [],
+		getCommands: () => [],
 		events: { on: () => {}, emit: () => {} },
 	};
 	return {
