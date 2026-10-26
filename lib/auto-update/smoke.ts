@@ -24,6 +24,13 @@ export const SMOKE_TIMEOUT_MS = 90_000;
 const PROVIDER = "pi-extras-smoke";
 const MODEL = "smoke";
 const KILL_GRACE_MS = 2_000;
+/**
+ * The time one smoke test can take, start to end: its limit, the stop
+ * (SIGTERM, then SIGKILL after KILL_GRACE_MS, then the wait for the exit),
+ * and a margin for the temp folder and the fake endpoint. A cycle starts a
+ * test only when this much time is left before its hard limit.
+ */
+export const SMOKE_RESERVE_MS = SMOKE_TIMEOUT_MS + 2 * KILL_GRACE_MS + 10_000;
 const GROUP = process.platform !== "win32";
 
 export interface SmokeInput {
@@ -36,7 +43,12 @@ export interface SmokeInput {
 	readonly node?: string;
 }
 
-export type SmokeResult = { readonly ok: true; readonly ms: number } | { readonly ok: false; readonly reason: string };
+/**
+ * `inconclusive`: the test gave no verdict on the set (no reply in time,
+ * for example on a busy machine, or Pi could not be started). The cycle
+ * then marks nothing bad and tries again later.
+ */
+export type SmokeResult = { readonly ok: true; readonly ms: number } | { readonly ok: false; readonly reason: string; readonly inconclusive?: true };
 
 const sse = (type: string, data: object): string => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
 
@@ -92,6 +104,12 @@ interface Drive {
 	readonly timeoutMs: number;
 }
 
+/**
+ * The test Pi keeps the cycle's low priority (nice 10, and ionice idle on
+ * Linux): a session's work comes first. On a busy machine it can then time
+ * out, but a timeout is no verdict, so that costs a later try, not a bad
+ * mark. (An unprivileged process cannot lower its nice value again.)
+ */
 function drivePi(drive: Drive): Promise<SmokeResult> {
 	const started = Date.now();
 	const child = spawn(drive.node, [drive.bin, "--mode", "rpc", "--no-session", "--model", `${PROVIDER}/${MODEL}`], {
@@ -130,7 +148,7 @@ function drivePi(drive: Drive): Promise<SmokeResult> {
 			setTimeout(() => stop("SIGKILL"), KILL_GRACE_MS).unref();
 			setTimeout(() => resolve(result), 2 * KILL_GRACE_MS).unref();
 		};
-		const timer = setTimeout(() => finish({ ok: false, reason: `no reply within ${Math.round(drive.timeoutMs / 1000)} s` }), drive.timeoutMs);
+		const timer = setTimeout(() => finish({ ok: false, reason: `no reply within ${Math.round(drive.timeoutMs / 1000)} s`, inconclusive: true }), drive.timeoutMs);
 		const send = (command: object) => child.stdin.write(`${JSON.stringify(command)}\n`);
 		const onRecord = (record: Record<string, unknown>) => {
 			if (record.type === "extension_error") return finish({ ok: false, reason: extensionError(record) });
@@ -158,7 +176,7 @@ function drivePi(drive: Drive): Promise<SmokeResult> {
 			if (/Failed to load extension/i.test(stderr)) finish({ ok: false, reason: firstLine(stderr.split("\n").find((line) => /Failed to load extension/i.test(line)) ?? stderr) });
 		});
 		child.on("error", (error) => {
-			finish({ ok: false, reason: `Pi did not start: ${sanitize(error.message)}` });
+			finish({ ok: false, reason: `Pi did not start: ${sanitize(error.message)}`, inconclusive: true });
 			resolve(outcome!);
 		});
 		child.on("close", (code, signal) => {

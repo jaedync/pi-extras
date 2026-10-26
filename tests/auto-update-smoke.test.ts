@@ -45,6 +45,19 @@ test("a candidate without bin/pi fails at once", async (t) => {
 	assert.deepEqual(result, { ok: false, reason: "the candidate Pi has no bin/pi" });
 });
 
+test("a Pi that cannot start gives no verdict; a Pi that fails gives one", async (t) => {
+	const dir = scratch(t);
+	mkdirSync(join(dir, "pi", "bin"), { recursive: true });
+	writeFileSync(join(dir, "pi", "bin", "pi"), "process.exit(3);\n");
+	writeFileSync(join(dir, "pi", "package.json"), JSON.stringify({ type: "commonjs" }));
+	const missingNode = await smokeTest({ piDir: join(dir, "pi"), packages: [], node: join(dir, "no-such-node"), timeoutMs: 5_000 });
+	assert.match(missingNode.ok ? "" : missingNode.reason, /Pi did not start/);
+	assert.equal(!missingNode.ok && missingNode.inconclusive, true);
+	const exits = await smokeTest({ piDir: join(dir, "pi"), packages: [], timeoutMs: 5_000 });
+	assert.match(exits.ok ? "" : exits.reason, /Pi exited \(3\)/);
+	assert.equal(!exits.ok && exits.inconclusive, undefined, "an exit is a verdict");
+});
+
 test("pi-extras itself passes the smoke test", async () => {
 	const result = await smokeTest({ piDir: piPrefix(join(mkdtempSync(join(tmpdir(), "au-smoke-x-")), "pi")), packages: [new URL("../", import.meta.url).pathname.replace(/\/$/, "")], timeoutMs: 55_000 });
 	assert.deepEqual(result.ok ? "ok" : result.reason, "ok");
@@ -77,6 +90,7 @@ setInterval(() => {}, 1000);
 	const result = await smokeTest({ piDir: join(dir, "pi"), packages: [], timeoutMs: 1_500 });
 	assert.equal(result.ok, false);
 	assert.match(result.ok ? "" : result.reason, /no reply within/);
+	assert.equal(!result.ok && result.inconclusive, true, "a timeout (for example under load) is no verdict on the set");
 	grandchild = Number(readFileSync(pidFile, "utf8"));
 	for (let i = 0; i < 40 && alive(grandchild); i++) await new Promise((resolve) => setTimeout(resolve, 50));
 	assert.equal(alive(grandchild), false, "the child of the smoke Pi is gone too");
