@@ -14,7 +14,7 @@ import { installGitRelease, installNpmRelease } from "../lib/auto-update/install
 import { storePaths } from "../lib/auto-update/paths.ts";
 import { runCommand, type Runner } from "../lib/auto-update/run.ts";
 import { classify, type Origin } from "../lib/auto-update/sources.ts";
-import { compareSemver, newestGit, newestNpm, parseSemver } from "../lib/auto-update/versions.ts";
+import { compareSemver, newestGit, newestNpm, npmMinAgeHours, parseSemver } from "../lib/auto-update/versions.ts";
 import { removeTree } from "./support/auto-update-fixtures.ts";
 
 const offline = ["1", "true", "yes"].includes((process.env.PI_OFFLINE ?? "").toLowerCase());
@@ -28,6 +28,14 @@ test("newestNpm finds Pi on the real registry, with and without a minimum age", 
 	// Five days back there may be no release at all; a found one is never newer than latest.
 	if (aged !== undefined) assert.ok(compareSemver(parseSemver(aged)!, parseSemver(latest)!) <= 0, `${aged} <= ${latest}`);
 	console.log(`real npm: latest ${latest}, 120 h old ${aged ?? "none"}`);
+});
+
+test("npmMinAgeHours reads the real npm's min-release-age, unset and set", { skip }, async () => {
+	const withAge = (days: string | undefined): Runner => (command, args, options) => runCommand(command, args, { ...options, env: { ...options.env, npm_config_min_release_age: days } });
+	const unset = await npmMinAgeHours(withAge(undefined));
+	assert.ok(unset >= 0, String(unset));
+	assert.equal(await npmMinAgeHours(withAge("2")), 48);
+	console.log(`real npm: min-release-age here ${unset} h`);
 });
 
 test("newestGit finds the newest v tag of pi-extras on GitHub", { skip }, async () => {

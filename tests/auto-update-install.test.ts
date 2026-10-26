@@ -94,7 +94,7 @@ test("an npm release lands in its own prefix and names the package folder as its
 	assert.deepEqual(readdirSync(join(paths.packagesRoot, "npm-scope-web-33483486")), ["2.0.0"]);
 });
 
-test("every npm install turns off npm's own min-release-age: only minReleaseAgeHours decides", async (t) => {
+test("only the Pi install turns off npm's min-release-age (as pi update does); package installs keep the user's rule", async (t) => {
 	const root = scratch(t);
 	const paths = storePaths(join(root, "store"));
 	const seen: string[][] = [];
@@ -113,7 +113,7 @@ test("every npm install turns off npm's own min-release-age: only minReleaseAgeH
 	const okNpm: Runner = async (command, args, options) => (command === "npm" ? { code: 0, stdout: "", stderr: "", timedOut: false } : runCommand(command, args, options));
 	await installGitRelease(paths, source, found, deps(record(okNpm)));
 	assert.equal(seen.length, 3, JSON.stringify(seen));
-	for (const args of seen) assert.ok(args.includes("--min-release-age=0"), args.join(" "));
+	assert.deepEqual(seen.map((args) => args.includes("--min-release-age=0")), [false, true, false], JSON.stringify(seen));
 });
 
 test("Pi installs into its own prefix with scripts off", async (t) => {

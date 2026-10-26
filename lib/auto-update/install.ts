@@ -89,9 +89,10 @@ async function staged(final: string, deps: InstallDeps, build: (staging: string)
 }
 
 /**
- * npm's own `min-release-age` (for example from a user .npmrc) is off for
- * every install: the cycle already picked the version with
- * minReleaseAgeHours, and a second age rule would fail that install.
+ * The Pi install turns npm's own `min-release-age` off, the same as
+ * `pi update` does. Package installs keep it: the lookup picks a version
+ * that passes it (plan.ts), and the package's dependencies keep the
+ * user's rule.
  */
 const NO_NPM_AGE = "--min-release-age=0";
 
@@ -112,7 +113,7 @@ export async function installNpmRelease(paths: StorePaths, origin: NpmOrigin, ve
 	await staged(dir, deps, async (staging) => {
 		// npm installs into the prefix only when it holds a package.json.
 		writeFileSync(join(staging, "package.json"), `${JSON.stringify({ name: "pi-extras-release", private: true })}\n`);
-		await run(deps, "npm install", "npm", ["install", `${origin.name}@${version}`, "--prefix", staging, "--legacy-peer-deps", NO_NPM_AGE]);
+		await run(deps, "npm install", "npm", ["install", `${origin.name}@${version}`, "--prefix", staging, "--legacy-peer-deps"]);
 		const manifest = readJson(join(staging, "node_modules", origin.name, "package.json"));
 		if (manifest?.version !== version) throw new Error(`npm installed ${String(manifest?.version)} of ${origin.name}, not ${version}`);
 	});
@@ -133,7 +134,7 @@ export async function installGitRelease(paths: StorePaths, origin: GitOrigin, re
 		const commit = await headCommit(deps, staging);
 		// The tag or branch moved after the lookup: the next cycle installs what it points to then.
 		if (commit !== release.commit) throw new Error(`${release.ref} moved during the install`);
-		if (existsSync(join(staging, "package.json"))) await run(deps, "npm install", "npm", ["install", "--omit=dev", "--legacy-peer-deps", NO_NPM_AGE], staging);
+		if (existsSync(join(staging, "package.json"))) await run(deps, "npm install", "npm", ["install", "--omit=dev", "--legacy-peer-deps"], staging);
 	});
 	const manifest = readJson(join(dir, "package.json"));
 	const name = typeof manifest?.name === "string" ? manifest.name : origin.label;

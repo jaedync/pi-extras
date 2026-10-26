@@ -21,6 +21,8 @@ const split = (spec) => {
 
 if (args[0] === "--version") {
 	process.stdout.write("12.0.0\n");
+} else if (args[0] === "config" && args[1] === "get" && args[2] === "min-release-age") {
+	process.stdout.write(`${process.env.FAKE_NPM_MIN_AGE_DAYS ?? "null"}\n`);
 } else if (args[0] === "view") {
 	const entry = registry[args[1]];
 	if (!entry) fail("code E404");

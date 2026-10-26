@@ -116,6 +116,22 @@ async function npmJson(args: readonly string[], runner: Runner): Promise<unknown
 }
 
 /**
+ * npm's own `min-release-age` (days; from the user's .npmrc or the
+ * environment) in hours, 0 when it is not set. The package installs keep
+ * that rule for the package and its dependencies, so the lookup must not
+ * pick a version that is newer than it allows.
+ */
+export async function npmMinAgeHours(runner: Runner): Promise<number> {
+	const result = await runner("npm", ["config", "get", "min-release-age"], { timeoutMs: LOOKUP_TIMEOUT_MS });
+	if (result.code !== 0) throw new Error(`npm config get failed: ${describeFailure(result)}`);
+	const text = result.stdout.trim();
+	if (text === "" || text === "null" || text === "undefined") return 0;
+	const days = Number(text);
+	if (!Number.isFinite(days) || days < 0) throw new Error(`npm config get min-release-age gave ${JSON.stringify(text.slice(0, 40))}, not a number of days`);
+	return days * 24;
+}
+
+/**
  * `npm view --json` prints the value itself (older npm) or an array with one
  * element for each version that the spec matches (npm 12.2.1). The lookups
  * here name the bare package, so the array has one element.

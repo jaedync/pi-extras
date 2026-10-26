@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applySet, classify, entrySource, restoreOriginals, withSource } from "../lib/auto-update/sources.ts";
-import { compareSemver, newestGit, newestNpm, parseSemver } from "../lib/auto-update/versions.ts";
+import { compareSemver, newestGit, newestNpm, npmMinAgeHours, parseSemver } from "../lib/auto-update/versions.ts";
+import { DEFAULT_CONFIG } from "../lib/auto-update/config.ts";
+import { wantedPackage, wantedPi } from "../lib/auto-update/plan.ts";
+import { storePaths } from "../lib/auto-update/paths.ts";
+import { emptyState } from "../lib/auto-update/state.ts";
 import type { RunResult, Runner } from "../lib/auto-update/run.ts";
 import type { UpdateSet } from "../lib/auto-update/state.ts";
 
@@ -154,4 +158,34 @@ test("npm 12 output with several elements: the highest version counts; package f
 		await assert.rejects(newestNpm("x", fakeRunner({ "npm view x version --json": { stdout } }), { minAgeHours: 0, now: 0 }), /npm view/, stdout);
 	}
 	await assert.rejects(newestNpm("x", fakeRunner({ "npm view x dist-tags time --json": { stdout: "[]" } }), { minAgeHours: 1, now: 0 }), /npm view/);
+});
+
+test("npmMinAgeHours reads npm's min-release-age in days; unset is 0, anything else fails", async () => {
+	const reply = (stdout: string) => fakeRunner({ "npm config get min-release-age": { stdout } });
+	for (const unset of ["null\n", "undefined\n", "\n", ""]) assert.equal(await npmMinAgeHours(reply(unset)), 0, JSON.stringify(unset));
+	assert.equal(await npmMinAgeHours(reply("3\n")), 72);
+	assert.equal(await npmMinAgeHours(reply("0.5\n")), 12);
+	for (const bad of ["-1", "three", "1e400"]) await assert.rejects(npmMinAgeHours(reply(bad)), /min-release-age/, bad);
+	await assert.rejects(npmMinAgeHours(fakeRunner({})), /npm config get failed/);
+});
+
+test("an npm package takes the larger of minReleaseAgeHours and npm's min-release-age; Pi follows only minReleaseAgeHours, as Pi's own update does", async () => {
+	const now = Date.parse("2026-10-25T12:00:00Z");
+	const info = { "dist-tags": { latest: "2.1.0" }, time: { "1.0.0": "2026-01-01T00:00:00Z", "2.0.0": "2026-10-20T00:00:00Z", "2.1.0": "2026-10-25T10:00:00Z" } };
+	const calls: string[][] = [];
+	const runner = fakeRunner({
+		"npm config get min-release-age": { stdout: "3\n" },
+		"npm view x dist-tags time --json": { stdout: JSON.stringify([info]) },
+		"npm view x version --json": { stdout: "\"2.1.0\"" },
+		[`npm view ${"@earendil-works/pi-coding-agent"} version --json`]: { stdout: "\"1.5.0\"" },
+	}, calls);
+	const deps = { paths: storePaths("/store"), runner, now: () => now, config: DEFAULT_CONFIG, install: { runner, now: () => now } };
+	const tracked = { key: "npm-x-1", origin: { kind: "npm" as const, source: "npm:x", name: "x", key: "npm-x-1", label: "x" }, mode: "tags" as const, entry: "npm:x" };
+	// npm's 3 days > 0 h: 2.1.0 (2 h old) and 2.0.0 (5.5 days old) -> 2.0.0.
+	assert.equal((await wantedPackage(tracked, emptyState(), deps))?.id, "2.0.0");
+	// minReleaseAgeHours larger than npm's rule: it wins.
+	assert.equal((await wantedPackage(tracked, emptyState(), { ...deps, config: { ...DEFAULT_CONFIG, minReleaseAgeHours: 24 * 30 } }))?.id, "1.0.0");
+	// Pi: its install passes --min-release-age=0 (as pi update does), so npm's rule does not apply.
+	assert.equal((await wantedPi(emptyState(), deps))?.id, "1.5.0");
+	assert.equal(calls.filter((call) => call.join(" ") === "npm config get min-release-age").length, 2, "read once for each package lookup, not for Pi");
 });

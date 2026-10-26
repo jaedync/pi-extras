@@ -23,6 +23,7 @@ import { applySet, classify, entryKey, entrySource } from "./sources.ts";
 import { clearSuspect, markBad, markSuspect, readState, sameSet, updateState, type PackageRelease, type PiRelease, type UpdateSet, type UpdateState } from "./state.ts";
 import { applySwitch, piCurrentMatches, settingsMatch } from "./switch.ts";
 import { writeUndo } from "./undo.ts";
+import { npmMinAgeHours } from "./versions.ts";
 import { SMOKE_TIMEOUT_MS, sweepSmokeDirs, type SmokeInput, type SmokeResult } from "./smoke.ts";
 
 export const CYCLE_LIMIT_MS = 10 * 60_000;
@@ -324,7 +325,11 @@ async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<Cycle
 	const packages = readSettingsPackages(settingsFile(deps.agentDir));
 	const tracked = trackedSources(packages, initial, deps.config, deps.paths.root);
 	setActivity(deps, "checking for updates");
-	const lookup: LookupDeps = { paths: deps.paths, runner: deps.runner, now: deps.now, config: deps.config, install: { runner: deps.runner, now: deps.now, timeoutMs: INSTALL_TIMEOUT_MS } };
+	let npmAge: Promise<number> | undefined;
+	const lookup: LookupDeps = {
+		paths: deps.paths, runner: deps.runner, now: deps.now, config: deps.config, install: { runner: deps.runner, now: deps.now, timeoutMs: INSTALL_TIMEOUT_MS },
+		npmMinAgeHours: () => (npmAge ??= npmMinAgeHours(deps.runner)),
+	};
 	const found = await lookUp(deps, initial, tracked, lookup);
 	const newest = Object.fromEntries([...(found.pi ? [[PI_KEY, found.pi.id]] : []), ...found.packages.map((wanted) => [wanted.key, wanted.id])]);
 	let state = updateState(deps.paths.state, (current) => ({ ...current, lastCheck: deps.now(), newest }));

@@ -9,7 +9,7 @@ import type { StorePaths } from "./paths.ts";
 import type { Runner } from "./run.ts";
 import { classify, entryKey, entrySource, type Origin } from "./sources.ts";
 import { isBlocked, type PackageRelease, type PiRelease, type UpdateState } from "./state.ts";
-import { newestGit, newestNpm } from "./versions.ts";
+import { newestGit, newestNpm, npmMinAgeHours } from "./versions.ts";
 
 export const PI_KEY = "pi";
 export const PI_NAME = "@earendil-works/pi-coding-agent";
@@ -60,6 +60,8 @@ export interface LookupDeps {
 	readonly now: () => number;
 	readonly config: AutoUpdateConfig;
 	readonly install: InstallDeps;
+	/** npm's min-release-age in hours; the cycle reads it once. */
+	readonly npmMinAgeHours?: () => Promise<number>;
 }
 
 const keep = <T>(key: string, id: string, label: string, release: T): Wanted<T> => ({ key, id, label, current: release, install: async () => release });
@@ -71,7 +73,9 @@ export async function wantedPackage(tracked: Tracked, state: UpdateState, deps: 
 	if (tracked.mode === "skip") return kept;
 	const { origin } = tracked;
 	if (origin.kind === "npm") {
-		const version = await newestNpm(origin.name, deps.runner, { minAgeHours: deps.config.minReleaseAgeHours, now: deps.now() });
+		// The install keeps npm's own age rule (unlike Pi's), so the version must pass it too.
+		const npmAge = await (deps.npmMinAgeHours ?? (() => npmMinAgeHours(deps.runner)))();
+		const version = await newestNpm(origin.name, deps.runner, { minAgeHours: Math.max(deps.config.minReleaseAgeHours, npmAge), now: deps.now() });
 		if (version === undefined || version === current?.id || isBlocked(state, tracked.key, version, deps.now())) return kept;
 		return { key: tracked.key, id: version, label: `${origin.label} ${version}`, install: () => installNpmRelease(deps.paths, origin, version, deps.install) };
 	}
@@ -86,6 +90,7 @@ export async function wantedPi(state: UpdateState, deps: LookupDeps): Promise<Wa
 	const name = current?.name ?? PI_NAME;
 	const kept = current ? keep(PI_KEY, current.version, `Pi ${current.version}`, current) : undefined;
 	if (deps.config.pi === "skip") return kept;
+	// Not npm's min-release-age: installPi turns it off, as `pi update` does.
 	const version = await newestNpm(name, deps.runner, { minAgeHours: deps.config.minReleaseAgeHours, now: deps.now() });
 	if (version === undefined || version === current?.version || isBlocked(state, PI_KEY, version, deps.now())) return kept;
 	return {
