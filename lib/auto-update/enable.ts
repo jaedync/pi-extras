@@ -11,7 +11,7 @@ import { waitForLock, type FileLock } from "../file-lock.ts";
 import { readConfig, writeConfig } from "./config.ts";
 import { LOCK_STALE_MS, smokeEntries, switchTo } from "./cycle.ts";
 import { INSTALL_TIMEOUT_MS, installPi } from "./install.ts";
-import { installLauncher, isLauncher, linkAt, renderLauncher, restoreLink } from "./launcher.ts";
+import { installLauncher, isLauncher, linkAt, renderLauncher, restoreLink, syncPiMarker } from "./launcher.ts";
 import type { Log } from "./log.ts";
 import type { StorePaths } from "./paths.ts";
 import { PI_NAME, trackedSources, wantedPackage, type LookupDeps } from "./plan.ts";
@@ -137,6 +137,7 @@ export async function enable(deps: EnableDeps): Promise<void> {
 		const after = readSettingsPackages(settings);
 		installLauncher(launcher, renderLauncher({ store: deps.paths.root, fallbackPi: old.real, fallbackExtras: deps.extrasDir, node: deps.node }));
 		writeConfig(deps.agentDir, { enabled: true });
+		syncPiMarker(deps.paths, readConfig(deps.agentDir));
 		deps.log(`enabled: Pi ${set.pi.version}, ${plural(Object.keys(set.packages).length, "package")}`);
 		deps.out(`Changed ${launcher}: it was a link to ${old.link}. It is now the pi-extras launcher.`);
 		packages.forEach((entry, index) => {
@@ -170,6 +171,7 @@ export async function disable(deps: Pick<EnableDeps, "home" | "agentDir" | "path
 			if (JSON.stringify(entry) !== JSON.stringify(change.after[index])) deps.out(`Changed ${settings}: ${JSON.stringify(entry)} -> ${JSON.stringify(change.after[index])}`);
 		});
 		writeConfig(deps.agentDir, { enabled: false });
+		syncPiMarker(deps.paths, { enabled: false, pi: "skip" });
 		deps.out(`Changed ${join(deps.agentDir, "pi-extras.json")}: autoUpdate.enabled is false.`);
 		// Running sessions may still load from the store, so it stays; "gc" removes what no live session uses.
 		updateState(deps.paths.state, (current) => ({ ...current, enabled: undefined, current: undefined, previous: undefined, managed: {} }));

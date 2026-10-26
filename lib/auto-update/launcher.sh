@@ -38,11 +38,25 @@ node_bin() {
 	if [ -x "$ENABLE_NODE" ]; then printf '%s\n' "$ENABLE_NODE"; else printf '%s\n' node; fi
 }
 
+# `pi update` (Dotfleet runs it before each launch) only starts a check: a
+# detached, low-priority process, so the launch does not wait for installs.
 if [ "${1-}" = "update" ]; then
 	EXTRAS="$STORE/extras-current"
 	[ -f "$EXTRAS/lib/auto-update/cli.ts" ] || EXTRAS="$FALLBACK_EXTRAS"
-	printf '%s\n' "pi-extras: Pi and its packages update automatically. Checking for updates now." >&2
-	exec "$(node_bin)" "$EXTRAS/lib/auto-update/cli.ts" check --force
+	set -- "$(node_bin)" "$EXTRAS/lib/auto-update/cli.ts" check --force
+	command -v nice >/dev/null 2>&1 && set -- nice -n 10 "$@"
+	command -v ionice >/dev/null 2>&1 && set -- ionice -c3 "$@"
+	command -v setsid >/dev/null 2>&1 && set -- setsid "$@"
+	"$@" </dev/null >/dev/null 2>&1 &
+	printf '%s\n' "pi-extras: Pi and its packages update automatically. An update check started in the background. Use /pi-extras update in Pi to see the result." >&2
+	exit 0
+fi
+
+# While auto-update manages Pi, Pi's own "New version ... Run pi update"
+# banner is noise. The cycle keeps this marker in step with `pi` in the config.
+if [ -e "$STORE/pi-managed" ]; then
+	PI_SKIP_VERSION_CHECK=1
+	export PI_SKIP_VERSION_CHECK
 fi
 
 REQUEST="$STORE/restart/$PI_EXTRAS_RESTART_TOKEN"

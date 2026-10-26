@@ -1,7 +1,9 @@
 /** The `~/.local/bin/pi` launcher: rendering it from launcher.sh, recognizing it, installing it atomically. */
 import { randomBytes } from "node:crypto";
-import { chmodSync, lstatSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { AutoUpdateConfig } from "./config.ts";
+import type { StorePaths } from "./paths.ts";
 
 export const LAUNCHER_MARKER = "# pi-extras auto-update launcher v1";
 const TEMPLATE = new URL("./launcher.sh", import.meta.url);
@@ -67,4 +69,17 @@ export function linkAt(path: string): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Keeps `pi-managed` in step with the config. The sh launcher cannot read
+ * JSON cheaply, so it tests for this file. Every cycle (also a throttled
+ * one), enable and disable call this, so a change of `pi` takes effect
+ * within one interval.
+ */
+export function syncPiMarker(paths: StorePaths, config: Pick<AutoUpdateConfig, "enabled" | "pi">): void {
+	const managed = config.enabled && config.pi !== "skip";
+	if (managed === existsSync(paths.piManaged)) return;
+	if (managed) writeFileSync(paths.piManaged, "", { mode: 0o600 });
+	else rmSync(paths.piManaged, { force: true });
 }

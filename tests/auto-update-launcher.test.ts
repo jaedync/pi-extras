@@ -21,6 +21,7 @@ printf '%s\\n' "--- run" >> "$log"
 for arg in "$@"; do printf '[%s]\\n' "$arg" >> "$log"; done
 printf 'token=%s\\n' "$PI_EXTRAS_RESTART_TOKEN" >> "$log"
 printf 'note=%s\\n' "\${PI_EXTRAS_UPDATE_DONE-unset}" >> "$log"
+printf 'skip=%s\\n' "\${PI_SKIP_VERSION_CHECK-unset}" >> "$log"
 [ -r /proc/$$/status ] && grep SigIgn /proc/$$/status >> "$log"
 runs=$(grep -c -- '--- run' "$log")
 case "$FAKE_MODE" in
@@ -52,7 +53,8 @@ function rig(t: test.TestContext, withCurrent = true): Rig {
 	chmodSync(fallback, 0o755);
 	const extras = join(root, "extras");
 	mkdirSync(join(extras, "lib", "auto-update"), { recursive: true });
-	writeFileSync(join(extras, "lib", "auto-update", "cli.ts"), 'import { appendFileSync } from "node:fs"; appendFileSync(process.env.FAKE_LOG, `cli ${process.argv.slice(2).join(" ")}\\n`); process.exit(9);\n');
+	// Slow on purpose: the launcher must not wait for it. It logs its priority, to show the check runs niced.
+	writeFileSync(join(extras, "lib", "auto-update", "cli.ts"), 'import { appendFileSync } from "node:fs"; import { getPriority } from "node:os"; setTimeout(() => { appendFileSync(process.env.FAKE_LOG, `cli ${process.argv.slice(2).join(" ")} nice=${getPriority()}\\n`); process.exit(9); }, 1500);\n');
 	const launcher = join(root, "bin", "pi");
 	mkdirSync(join(root, "bin"));
 	writeFileSync(launcher, renderLauncher({ store, fallbackPi: fallback, fallbackExtras: extras, node: process.execPath }));
@@ -110,12 +112,29 @@ test("more than 3 restarts in 60 s stop the loop with Pi's exit code", async (t)
 	assert.match(result.stderr, /restarted 3 times in 60 s\. No more restarts\. To continue, run: pi --session \/sessions\/s\.jsonl/);
 });
 
-test("pi update runs a forced update check instead", async (t) => {
+test("pi update starts a forced check in the background with a low priority and returns at once", async (t) => {
 	const r = rig(t);
+	const started = Date.now();
 	const result = await launch(r, ["update", "--all"], "exit7").done;
-	assert.equal(result.code, 9);
-	assert.equal(readFileSync(r.log, "utf8"), "cli check --force\n");
-	assert.match(result.stderr, /update automatically/);
+	assert.ok(Date.now() - started < 1_200, "the launch does not wait for the check");
+	assert.equal(result.code, 0);
+	assert.match(result.stderr, /^pi-extras: Pi and its packages update automatically\. An update check started in the background\. Use \/pi-extras update in Pi to see the result\.\n$/);
+	assert.equal(existsSync(r.log), false, "Pi did not run");
+	const deadline = Date.now() + 10_000;
+	while (!existsSync(r.log) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+	const line = readFileSync(r.log, "utf8").match(/^cli check --force nice=(\d+)\n$/);
+	assert.ok(line, readFileSync(r.log, "utf8"));
+	if (existsSync("/usr/bin/nice") || existsSync("/bin/nice")) assert.ok(Number(line[1]) >= 10, `niced: ${line[1]}`);
+});
+
+test("Pi's own update banner is off only while the store says that auto-update manages Pi", async (t) => {
+	const r = rig(t);
+	await launch(r, [], "exit7").done;
+	writeFileSync(join(r.store, "pi-managed"), "");
+	await launch(r, [], "exit7").done;
+	const [without, managed] = runs(r);
+	assert.match(without!, /skip=unset\n/, "pi: \"skip\" or no marker: the user manages Pi and keeps the banner");
+	assert.match(managed!, /skip=1\n/);
 });
 
 test("without pi-current the launcher starts the Pi it replaced and says so", async (t) => {

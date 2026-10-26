@@ -9,6 +9,7 @@ import { isOffline } from "../offline.ts";
 import type { AutoUpdateConfig } from "./config.ts";
 import { collectGarbage, mappedPaths } from "./gc.ts";
 import { INSTALL_TIMEOUT_MS } from "./install.ts";
+import { syncPiMarker } from "./launcher.ts";
 import { readLiveLeases } from "./leases.ts";
 import type { Log } from "./log.ts";
 import type { StorePaths } from "./paths.ts";
@@ -55,6 +56,12 @@ function gate(deps: CycleDeps, state: UpdateState, force: boolean): CycleResult 
 
 export async function runCycle(deps: CycleDeps, options: { force?: boolean } = {}): Promise<CycleResult> {
 	const force = options.force === true;
+	try {
+		syncPiMarker(deps.paths, deps.config);
+	} catch (error) {
+		// Only Pi's own banner depends on it; the cycle goes on.
+		deps.log(`could not update pi-managed: ${(error as Error).message}`);
+	}
 	const early = gate(deps, readState(deps.paths.state), force);
 	if (early) return early;
 	const lock = tryLock(deps.paths.lock, { staleMs: LOCK_STALE_MS });

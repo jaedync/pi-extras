@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { DEFAULT_CONFIG, writeConfig } from "../lib/auto-update/config.ts";
 import { runCycle } from "../lib/auto-update/cycle.ts";
 import { processStart, writeLease } from "../lib/auto-update/leases.ts";
 import { readSettingsPackages } from "../lib/auto-update/settings.ts";
@@ -214,4 +215,17 @@ test("a stale staging folder from a crashed install is removed; a lock of a dead
 	assert.equal(result.outcome, "no-change", result.message);
 	assert.equal(existsSync(staging), false);
 	assert.equal(existsSync(w.paths.lock), false);
+});
+
+test("the pi-managed marker follows the config: on after enable, off with pi: \"skip\" at the next cycle, off after disable", async (t) => {
+	const w = await enabled(t);
+	const marker = join(w.paths.root, "pi-managed");
+	assert.ok(existsSync(marker), "enable: auto-update manages Pi");
+	writeConfig(w.agentDir, { pi: "skip" });
+	await runCycle(w.cycleDeps({ config: { ...DEFAULT_CONFIG, enabled: true, pi: "skip" } }));
+	assert.equal(existsSync(marker), false, "even a throttled cycle brings the marker in step");
+	await runCycle(w.cycleDeps());
+	assert.ok(existsSync(marker));
+	await w.cli("disable");
+	assert.equal(existsSync(marker), false);
 });

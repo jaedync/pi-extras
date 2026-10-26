@@ -49,6 +49,8 @@ export interface StorePaths {
 	readonly leases: string;
 	readonly restart: string;
 	readonly log: string;
+	/** Present while auto-update manages Pi: the launcher then turns off Pi's own update banner. */
+	readonly piManaged: string;
 	readonly piDir: (version: string) => string;
 	readonly releaseDir: (key: string, id: string) => string;
 }
@@ -66,6 +68,7 @@ export function storePaths(root: string): StorePaths {
 		leases: join(root, "leases"),
 		restart: join(root, "restart"),
 		log: join(root, "update.log"),
+		piManaged: join(root, "pi-managed"),
 		piDir: (version) => join(piRoot, safePart(version)),
 		releaseDir: (key, id) => join(packagesRoot, safePart(key), safePart(id)),
 	};
