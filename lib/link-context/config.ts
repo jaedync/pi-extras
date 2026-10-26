@@ -4,6 +4,8 @@ import type { LinkConfig } from "./types.ts";
 
 export const SECTION = "linkContext";
 const DEFAULT_REFRESH_DAYS = 3;
+// Models from other providers have dialed hosts they made up (Qwen3.8 and its Alibaba OSS relay URLs).
+const DEFAULT_HOST_GUARD_EXEMPT: readonly string[] = ["anthropic"];
 
 function agentChains(value: unknown): Record<string, string[]> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -15,6 +17,8 @@ function agentChains(value: unknown): Record<string, string[]> {
 	}
 	return chains;
 }
+
+const names = (list: readonly unknown[]): string[] => list.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
 
 const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
 
@@ -28,6 +32,9 @@ export function parseConfig(section: Record<string, unknown>): LinkConfig {
 		refreshDays: typeof refresh === "number" && refresh >= 0 && refresh <= 365 ? refresh : DEFAULT_REFRESH_DAYS,
 		autoPull: typeof section.autoPull === "boolean" ? section.autoPull : true,
 		browser: section.browser === false ? false : text(section.browser) ?? true,
+		hostGuard: section.hostGuard !== false,
+		hostGuardExempt: Array.isArray(section.hostGuardExempt) ? names(section.hostGuardExempt) : DEFAULT_HOST_GUARD_EXEMPT,
+		hostGuardAllow: Array.isArray(section.hostGuardAllow) ? names(section.hostGuardAllow).map((host) => host.toLowerCase()) : [],
 	};
 }
 

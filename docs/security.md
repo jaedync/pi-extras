@@ -296,6 +296,26 @@ private addresses. A video link in a message can install the media tools (see
 below). Auto-pulled text goes into the context without a model decision, and
 it can contain malicious instructions, as tool results can.
 
+The host guard refuses a `pull_link` or `fetch_content` call to a host that
+no user message, tool result, custom message or system prompt names. Some
+models make up URLs and send them: Qwen3.8 builds call signed Alibaba OSS
+"file proxy" links from their training data, also when their reasoning names
+a different page. Each such request gives a third party your IP address, the
+time and the URL. The guard works on the tool input (`url`, `urls` and
+`proxy`), so a prompt rule is not necessary. It reads a URL as `pull_link`
+does (no scheme means `https://`), and it refuses a URL that does not parse.
+
+Model-written text does not name a host: the model's own messages, subagent
+mail and reports, and a tool result that only repeats its own call's
+arguments (a validation error, `echo`, a fetched page's header). Search
+results count. On shared hosting domains (`aliyuncs.com`, `amazonaws.com`,
+`github.io` and others) only the exact host counts, not a named parent.
+Models from the providers in `linkContext.hostGuardExempt` (default
+`["anthropic"]`) are not checked. The guard does not examine `bash` (for
+example `curl`) or browser tools. A model can still launder a host: it can
+write the host to a file and read the file back, or put it in a codemode
+result that its own script built.
+
 Pull Link reads only public `http` and `https` links and refuses links with credentials. It also refuses
 local names, such as `localhost` or `.local` names, and literal private,
 loopback, link-local, multicast and reserved addresses. It checks each

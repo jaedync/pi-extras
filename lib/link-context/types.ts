@@ -39,6 +39,12 @@ export interface LinkConfig {
 	readonly autoPull: boolean;
 	/** Read pages that refuse plain HTTP with a local browser: on, off, or the path of a browser. */
 	readonly browser: boolean | string;
+	/** Refuse pull_link and fetch_content calls to hosts that no user message, tool result or system prompt named. */
+	readonly hostGuard: boolean;
+	/** Providers whose models the host guard trusts. */
+	readonly hostGuardExempt: readonly string[];
+	/** Hosts (and their subdomains) the host guard always lets through. */
+	readonly hostGuardAllow: readonly string[];
 }
 
 export interface AdapterContext {

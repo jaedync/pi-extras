@@ -11,6 +11,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createReader, DEFAULT_COMMENTS, MAX_AT, type LinkReader, type Params, type ReaderOptions } from "./reader.ts";
 import { registerAutoPull } from "./auto.ts";
+import { registerHostGuard } from "./host-guard.ts";
 import { clean, page, safe, TOOL_NAME, untrusted } from "./format.ts";
 import { platformName, shortUrl, summaryOf } from "./names.ts";
 import { markRow } from "../tool-row.ts";
@@ -122,4 +123,5 @@ export default function (pi: ExtensionAPI): void {
 	const reader = createReader();
 	registerLinkTool(pi, { reader });
 	registerAutoPull(pi, { reader });
+	registerHostGuard(pi);
 }

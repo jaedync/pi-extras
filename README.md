@@ -1660,6 +1660,27 @@ To turn auto-pull off, set `linkContext.autoPull` to `false`. To change it for
 the current session only, use `/autopull on` or `/autopull off`. `/autopull`
 or `/autopull status` shows the current state.
 
+### Host guard
+
+Some models make up URLs and fetch them. Qwen3.8 builds send signed Alibaba
+OSS links (`routify-file-proxy-sg...aliyuncs.com`) from their training data,
+also when their reasoning names a different page. Each request tells a third
+party your IP address and the time. The host guard refuses a `pull_link` or
+`fetch_content` call when no user message, tool result, custom message or
+system prompt names the host or a domain above it. The model's own text does
+not count, and nor do subagent reports or a tool result that only repeats
+its own call's arguments. Search results and a codemode script's nested
+results count. On shared hosting domains (`aliyuncs.com`, `amazonaws.com`,
+`github.io`) only the exact host counts. The refusal writes
+the host as `a[.]b[.]com`, so the refusal itself does not name it. The model
+then uses a URL from the task or searches first.
+
+The guard checks models from all providers except those in
+`hostGuardExempt` (default: Anthropic). A model that names real hosts from
+memory (`raw.githubusercontent.com`, `web.archive.org`) gets one refusal and
+searches. Add such hosts to `hostGuardAllow`. The guard does not examine
+`bash`.
+
 ### Video tools
 
 The first video link installs the media tools into
@@ -1735,6 +1756,13 @@ Put these in the `linkContext` section of `pi-extras.json`:
 - `browser` (default `true`): read pages that refuse plain HTTP with a local
   headless browser (see Pull Link). `false` turns it off. A path, for example
   `/usr/bin/chromium`, uses that browser.
+- `hostGuard` (default `true`): refuse a `pull_link` or `fetch_content` call
+  to a host that nothing in the conversation named (see
+  [Host guard](#host-guard)). `false` turns it off.
+- `hostGuardExempt` (default `["anthropic"]`): the providers whose models the
+  host guard does not check. `[]` checks every model.
+- `hostGuardAllow` (default `[]`): hosts that always pass the host guard,
+  with their subdomains, for example `["web.archive.org"]`.
 - `asrModel`: a different speech-to-text model, for example
   `mlx-community/whisper-small-mlx` or `medium`.
 - `userAgents`: a different list of user agents for an adapter, for example
