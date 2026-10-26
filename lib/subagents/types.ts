@@ -69,6 +69,8 @@ export interface AgentRecord {
 	readOnly: boolean;
 	/** Read-only, with bash in a sandbox that writes nothing and has no network (sandbox.ts). */
 	readOnlyShell?: boolean;
+	/** Main's AGENTS.md files instead of AGENTS.child.md (child-context.ts). */
+	fullInstructions?: boolean;
 	/** Its tool allowlist, fixed at spawn so resumes keep it; unset, it gets every tool it could have. */
 	tools?: string[];
 	/** An isolated workspace, also inherited by helpers sharing their parent's checkout. */
@@ -223,6 +225,7 @@ export interface SpawnRequest {
 	thinking?: Thinking;
 	readOnly: boolean;
 	readOnlyShell?: boolean;
+	fullInstructions?: boolean;
 	tools?: string[];
 	fork: boolean;
 	blocking: boolean;

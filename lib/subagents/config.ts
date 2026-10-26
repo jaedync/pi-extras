@@ -91,6 +91,20 @@ export function loadConfig(file?: string, env: NodeJS.ProcessEnv = process.env):
 	return parseConfig(Number.isInteger(depth) && depth >= 1 ? { ...section, maxDepth: depth } : section);
 }
 
+/**
+ * A guide's `## Summary` section, when it has a non-empty one. The rest of the file (evidence,
+ * history) stays out of the tool description, which every request carries; the model reads the
+ * file when the summary does not settle a choice.
+ */
+export function guideSummary(text: string, path: string): string | null {
+	const match = /^## Summary[ \t]*$/m.exec(text);
+	if (!match) return null;
+	const after = text.slice(match.index + match[0].length);
+	const end = after.search(/^## /m);
+	const body = (end === -1 ? after : after.slice(0, end)).trim();
+	return body.length === 0 ? null : `${body}\n(Summary of ${path}; read the file before a choice that the summary does not settle.)`;
+}
+
 function readCapped(path: string): string | null {
 	let text: string;
 	try {
@@ -99,6 +113,7 @@ function readCapped(path: string): string | null {
 		return null;
 	}
 	if (text.length === 0) return null;
+	text = guideSummary(text, path) ?? text;
 	return text.length > GUIDE_MAX_CHARS ? `${text.slice(0, GUIDE_MAX_CHARS)}\n(guide truncated at ${GUIDE_MAX_CHARS} characters)` : text;
 }
 

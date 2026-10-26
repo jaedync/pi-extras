@@ -27,6 +27,7 @@ import { withChildRetry } from "./retry.ts";
 import { launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "./stamp.ts";
 import { WAITING_FOR_MODEL, type AgentRecord, type AgentWork, type ChildHandle, type ChildHooks, type Launcher, type Usage } from "./types.ts";
 import { editTarget, outsideWorktree, realTarget, sourcePlace, workspaceError } from "./worktree.ts";
+import { childContextFiles } from "./child-context.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
 
@@ -36,6 +37,8 @@ export const CHILD_TOOL_EXCLUDE: readonly string[] = [
 	"agent_send", "agent_request", "list_peers",
 	"get_goal", "create_goal", "propose_goal_draft", "complete_goal", "update_goal_progress",
 	"shell_job_start", "shell_job", "computer_use", "windows_use", "usage", "codemode", "tool_search",
+	// Its hook hides tools behind codemode, which a child does not have (extensions/tool-loadout.ts).
+	"tool_loadout",
 ];
 /**
  * All a read-only child may have: tools that can't change the user's files or
@@ -484,6 +487,7 @@ function childLoader(deps: LauncherDeps, record: AgentRecord, inputs: LoaderInpu
 		// After APPEND_SYSTEM.md, which Pi finds as it finds SYSTEM.md, project trust and all; a plain
 		// appendSystemPrompt would take its place.
 		appendSystemPromptOverride: (base) => [...base, deps.instructions(record)],
+		agentsFilesOverride: (base) => ({ agentsFiles: childContextFiles(base.agentsFiles, { agentDir: deps.agentDir, cwd, full: record.fullInstructions === true }) }),
 		// The budget guard comes first: a call it blocks takes no edit lock.
 		extensionFactories: [budgetGuard(blocked), guard.extension, editGuard(editCheck, editTracker(deps.activity, record.name, cwd)),
 			...(hidden ? [readGuard(hidden, cwd)] : []), ...(timeout === undefined ? [] : [defaultTimeout(timeout)])],

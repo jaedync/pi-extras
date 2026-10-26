@@ -242,6 +242,7 @@ export class Team implements HostTeam {
 		const record: AgentRecord = {
 			name, parent: request.parent, depth, task: request.task, model: request.model, readOnly: request.readOnly || request.readOnlyShell === true || parent?.readOnly === true,
 			...(request.readOnlyShell ? { readOnlyShell: true } : {}),
+			...(request.fullInstructions ? { fullInstructions: true } : {}),
 			fork: request.fork, blocking: request.blocking, state: "queued", createdAt: this.now(), activity: "queued",
 			toolCalls: 0, usage: NO_USAGE, runs: 0, autoResumeAttempts: 0, ...(request.thinking ? { thinking: request.thinking } : {}),
 			...(sessionFile ? { sessionFile } : {}),

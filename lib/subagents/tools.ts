@@ -59,7 +59,7 @@ const checkFields = (check: string) => ({
 	checkTimeoutMinutes: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: MAX_CHECK_TIMEOUT_MINUTES, description: `With check: minutes the command may run. Default ${CHECK_TIMEOUT_MINUTES}.` })),
 });
 
-const subagentParams = Type.Object({
+export const subagentParams = Type.Object({
 	task: Type.String({ minLength: 1, maxLength: MAX_TASK_CHARS, description: "The complete brief: goal, relevant files and facts, constraints, and what the report must contain." }),
 	name: Type.Optional(Type.String({ maxLength: 40, description: "Short name that says what it does, like auth-review or count-md. You, the user and other agents address it by this name." })),
 	model: Type.Optional(Type.String({ description: "Model reference or unique short name from the list above." })),
@@ -69,6 +69,7 @@ const subagentParams = Type.Object({
 	readOnly: Type.Optional(Type.Boolean({ description: "Only tools that can't change your files or run commands that the model chooses: read, grep, find, ls and known search and fetch tools. Other tools are dropped." })),
 	readOnlyShell: Type.Optional(Type.Boolean({ description: "Linux only. readOnly plus bash in a sandbox: every file is read-only but a private /tmp, and there is no network. For git log, show and diff, rg, and builds or tests that write only to /tmp." })),
 	tools: Type.Optional(Type.Array(Type.String(), { description: "Give it only these of the tools it would get; message and clock always stay. Omit for all of them." })),
+	fullInstructions: Type.Optional(Type.Boolean({ description: "Give it your AGENTS.md files in place of the short subagent file (AGENTS.child.md), when one is set up." })),
 	cwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4096, description: "Directory it starts in, absolute or ~/: its tools, AGENTS.md and session work there. Default: your working directory." })),
 	isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")], { description: "Default shared. Use worktree for a separate git worktree of the repository at cwd (default: your working directory), with its current files." })),
 	context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")], { description: "fork gives it this conversation so far; default fresh." })),
@@ -93,7 +94,7 @@ const stopParams = Type.Object({
 }, { additionalProperties: false });
 
 interface SubagentInput extends CheckInput {
-	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; readOnlyShell?: boolean; isolation?: "shared" | "worktree"; cwd?: string; context?: string; wait?: boolean;
+	task: string; name?: string; model?: string; thinking?: string; readOnly?: boolean; readOnlyShell?: boolean; fullInstructions?: boolean; isolation?: "shared" | "worktree"; cwd?: string; context?: string; wait?: boolean;
 	maxMinutes?: number; maxCost?: number; maxWindowPct?: number; tools?: string[]; after?: string[]; afterReports?: boolean; models?: string[]; mode?: PanelMode;
 }
 interface CheckInput { check?: string; fixUntilPass?: number; checkTimeoutMinutes?: number }
@@ -221,7 +222,8 @@ function spawnRequest(tc: ToolContext, parent: string, params: SubagentInput, ch
 		...(afterReports !== undefined ? { afterReports } : {}),
 		...(member.panel ? { panel: member.panel } : {}),
 		...(check ? { check: mergeCheck(check) } : {}),
-		task: params.task.trim(), parent, model: choice.ref, readOnly: params.readOnly === true || shell, ...(shell ? { readOnlyShell: true } : {}), fork,
+		task: params.task.trim(), parent, model: choice.ref, readOnly: params.readOnly === true || shell, ...(shell ? { readOnlyShell: true } : {}),
+		...(params.fullInstructions === true ? { fullInstructions: true } : {}), fork,
 		blocking: params.wait === true, ...(name ? { name } : {}), ...(thinking ? { thinking } : {}),
 	};
 }

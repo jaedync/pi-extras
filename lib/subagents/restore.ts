@@ -111,6 +111,7 @@ function validRecord(value: unknown): value is AgentRecord {
 		&& typeof r.task === "string" && typeof r.model === "string" && STATES.has(r.state)
 		&& (r.activity === null || typeof r.activity === "string")
 		&& typeof r.readOnly === "boolean" && (r.readOnlyShell === undefined || (r.readOnlyShell === true && r.readOnly === true)) && typeof r.fork === "boolean" && typeof r.blocking === "boolean"
+		&& (r.fullInstructions === undefined || r.fullInstructions === true)
 		&& Number.isFinite(r.createdAt) && Number.isInteger(r.runs) && r.runs >= 0
 		&& Number.isInteger(r.toolCalls) && r.toolCalls >= 0 && !!r.usage
 		&& [r.usage.input, r.usage.output, r.usage.cacheRead, r.usage.cacheWrite, r.usage.cost].every((value) => Number.isFinite(value) && value >= 0)
@@ -378,6 +379,7 @@ export function legacyRecords(entries: readonly unknown[], dir: string, parent: 
 		if (!args || typeof args.task !== "string" || typeof details?.name !== "string" || typeof details.model !== "string"
 			|| typeof details.sessionFile !== "string" || dirname(resolve(details.sessionFile)) !== resolve(dir)) continue;
 		records.push({ name: details.name, parent, depth, model: details.model, task: args.task, readOnly: args.readOnly === true || args.readOnlyShell === true, ...(args.readOnlyShell === true ? { readOnlyShell: true } : {}),
+			...(args.fullInstructions === true ? { fullInstructions: true } : {}),
 			fork: args.context === "fork", blocking: false, state: "idle", createdAt: Date.parse(entry.timestamp ?? "") || Date.now(),
 			activity: null, runs: 1, toolCalls: 0, usage: NO_USAGE, sessionFile: details.sessionFile,
 			...(validWorktree(details.worktree) ? { worktree: { ...details.worktree } } : {}),
@@ -389,7 +391,8 @@ export function legacyRecords(entries: readonly unknown[], dir: string, parent: 
 		const matches = [...calls.values()].filter((call) => typeof call.task === "string" && (orphan.task === call.task.trim() || orphan.task.startsWith(`${call.task.trim()}\n\n`)));
 		if (matches.length !== 1) continue;
 		const args = matches[0]!;
-		records.push({ ...orphan, parent, depth, task: (args.task as string).trim(), readOnly: args.readOnly === true || args.readOnlyShell === true, ...(args.readOnlyShell === true ? { readOnlyShell: true } : {}), fork: args.context === "fork", orphaned: false,
+		records.push({ ...orphan, parent, depth, task: (args.task as string).trim(), readOnly: args.readOnly === true || args.readOnlyShell === true, ...(args.readOnlyShell === true ? { readOnlyShell: true } : {}),
+			...(args.fullInstructions === true ? { fullInstructions: true } : {}), fork: args.context === "fork", orphaned: false,
 			...(isThinking(args.thinking) ? { thinking: args.thinking } : {}) });
 	}
 	return records;
