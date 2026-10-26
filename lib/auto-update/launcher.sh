@@ -81,7 +81,8 @@ STAMP="$REQUEST_DIR/.$PI_EXTRAS_RESTART_TOKEN.start"
 # restart only after 30 s of quiet.
 mark_start() {
 	rm -f "$REQUEST"
-	(umask 077 && mkdir -p "$REQUEST_DIR" && : > "$STAMP") 2>/dev/null || rm -f "$STAMP"
+	# Only in a store that exists: a launcher whose store is gone must not make an empty one.
+	(umask 077 && { [ -d "$REQUEST_DIR" ] || mkdir "$REQUEST_DIR"; } && : > "$STAMP") 2>/dev/null || rm -f "$STAMP"
 }
 
 # A restart only after a clean exit: a Pi that crashed after it wrote its

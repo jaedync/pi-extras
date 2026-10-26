@@ -210,3 +210,11 @@ test("a launcher that a Pi child starts does not pass on the outer restart count
 	await new Promise((resolve) => child.on("close", resolve));
 	assert.match(runs(r)[0]!, /restarts=unset target=unset\n/);
 });
+
+test("with the store gone, the launcher starts the Pi it replaced and does not create the store again", async (t) => {
+	const r = rig(t, false);
+	rmSync(r.store, { recursive: true, force: true });
+	const result = await launch(r, ["list"], "exit7").done;
+	assert.equal(result.code, 4);
+	assert.equal(existsSync(r.store), false);
+});
