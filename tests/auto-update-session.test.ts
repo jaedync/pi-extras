@@ -454,3 +454,29 @@ test("the launcher's restart count for this target stops a restart loop that the
 	other.poll();
 	assert.deepEqual(h.calls, ["dispatch"], "a count for another target does not count");
 });
+
+test("a ready update that waits 30 minutes for idle says so in the status line", (t) => {
+	const old = (root: string) => set(root, "1.4.0", "0.29.0");
+	for (const [next, text] of [
+		[(root: string) => set(root, "1.4.0", "0.30.0"), "update ready: waits for idle (/reload to use it)"],
+		[(root: string) => set(root, "1.4.1", "0.29.0"), "update ready: waits for idle (restart to use it)"],
+	] as const) {
+		const h = harness(t, old, next, { previous: old });
+		const session = new UpdateSession(h.host);
+		switchSettings(h, next(h.paths.root));
+		h.signals = { ...h.signals, editorEmpty: false };
+		session.start("startup");
+		for (let minute = 0; minute < 29; minute++) {
+			h.clock += 60_000;
+			session.poll();
+		}
+		assert.equal(h.statuses.filter(Boolean).length, 0, "no line before 30 minutes");
+		h.clock += 60_000;
+		session.poll();
+		assert.equal(h.statuses.at(-1), text);
+		h.signals = { ...h.signals, editorEmpty: true };
+		session.poll();
+		assert.deepEqual(h.calls, ["dispatch"]);
+		session.stop("quit");
+	}
+});

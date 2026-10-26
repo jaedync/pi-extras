@@ -25,6 +25,9 @@ export const POLL_MS = 15_000;
 export const LAUNCHER_WARNING = "auto-update: ~/.local/bin/pi was replaced; run enable again, or disable";
 /** An activity older than this belongs to a cycle that stopped without clearing it. */
 const ACTIVITY_MAX_AGE_MS = 15 * 60_000;
+/** A ready move that waits this long for idle tells the user, who can move by hand. */
+export const LONG_WAIT_MS = 30 * 60_000;
+const LONG_WAIT_TEXT = { reload: "update ready: waits for idle (/reload to use it)", restart: "update ready: waits for idle (restart to use it)" } as const;
 const JITTER = 0.2;
 
 export interface UpdateEntryData {
@@ -115,6 +118,8 @@ export class UpdateSession {
 	private stopped = false;
 	private lastStatus: string | undefined;
 	private launcherNoticeShown = false;
+	/** Since when a reload or restart to `target` waits for idle. */
+	private waiting: { readonly target: string; readonly since: number } | undefined;
 
 	constructor(host: SessionHost) {
 		this.host = host;
@@ -258,8 +263,12 @@ export class UpdateSession {
 			this.host.notify(state.launcherProblem.message, "warning");
 		}
 		const warning = state?.launcherProblem ? LAUNCHER_WARNING : undefined;
-		this.status(activity ?? warning ?? (decision.kind === "notice" ? decision.text : undefined));
-		if (decision.kind !== "reload" && decision.kind !== "restart") return;
+		const moves = decision.kind === "reload" || decision.kind === "restart";
+		if (!moves) this.waiting = undefined;
+		else if (this.waiting?.target !== decision.target) this.waiting = { target: decision.target, since: this.host.now() };
+		const long = moves && this.host.now() - this.waiting!.since >= LONG_WAIT_MS ? LONG_WAIT_TEXT[decision.kind] : undefined;
+		this.status(activity ?? warning ?? (decision.kind === "notice" ? decision.text : long));
+		if (!moves) return;
 		if (!this.idle(decision.kind)) return;
 		this.host.dispatchApply();
 	}
