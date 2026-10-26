@@ -63,6 +63,17 @@ test("a message: each link as pull_link wraps it, cut at 12,000 characters with 
 	assert.deepEqual(message.details.links.map((link) => [link.state, link.chars, link.truncated]), [["read", long.length, true], ["cached", 28, false]]);
 });
 
+test("a message: a long result with a file shows its preview and the path, not an offset", () => {
+	const long = "word ".repeat(5000);
+	const message = autoMessage([{ url: "https://x.com/a/status/1", state: "read", pulled: pulled("https://x.com/a/status/1", { markdown: long, preview: "the short version", saved: "/tmp/full/x-1.md" }) }]);
+	const text = message.content.filter((block) => block.type === "text").map((block) => block.text)[1];
+	assert.equal(text, `<untrusted-content source="https://x.com/a/status/1">\nthe short version\n\n[Preview: the full result has ${long.length.toLocaleString("en-US")} characters and is saved at /tmp/full/x-1.md. Read or search that file for the rest, or call pull_link with url "https://x.com/a/status/1" and offset=0 to page through it.]\n</untrusted-content>`);
+	assert.deepEqual([message.details.links[0]?.truncated, message.details.links[0]?.saved], [true, "/tmp/full/x-1.md"]);
+	// A short result shows whole, with no note, even when its adapter made a preview.
+	const short = autoMessage([{ url: "https://x.com/a/status/2", state: "read", pulled: pulled("https://x.com/a/status/2", { markdown: "all of it", preview: "less", saved: "/tmp/never" }) }]);
+	assert.match(short.content[1]?.type === "text" ? short.content[1].text : "", /\nall of it\n<\/untrusted-content>$/);
+});
+
 test("a message: at most 4 images in all, in link order, each after its link's text", () => {
 	const results: LinkResult[] = [
 		{ url: "https://e.test/1", state: "read", pulled: pulled("https://e.test/1", { images: [image("a1"), image("a2"), image("a3")] }) },

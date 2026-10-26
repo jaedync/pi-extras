@@ -47,3 +47,8 @@ export function clean(value: unknown, max = 160): string {
 	const text = String(value ?? "").replace(/[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, " ").replace(/\s+/g, " ").trim();
 	return text.length > max ? `${text.slice(0, cutIndex(text, max - 1))}…` : text;
 }
+
+/** The note under a preview: where the whole result is and how to read the rest. */
+export function savedNote(chars: number, path: string, call: string): string {
+	return `[Preview: the full result has ${chars.toLocaleString("en-US")} characters and is saved at ${path}. Read or search that file for the rest, or ${call} and offset=0 to page through it.]`;
+}

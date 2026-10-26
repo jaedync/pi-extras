@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { parseConfig } from "../lib/link-context/config.ts";
 import { cacheKey, callLine, clean, page, parseTimes, registerLinkTool, resolveOptions, resultLine, TOOL_NAME } from "../lib/link-context/index.ts";
+import { ALL_QUOTES, ALL_REPLIES } from "../lib/link-context/reader.ts";
 import { fetchImages, MAX_IMAGE_BYTES } from "../lib/link-context/media/images.ts";
 import { pull, type PullDeps } from "../lib/link-context/pull.ts";
 import type { Pulled } from "../lib/link-context/types.ts";
@@ -22,8 +26,11 @@ test("pages end at a line break near the limit and name the next offset", () => 
 });
 
 test("defaults differ for posts and videos", () => {
-	assert.deepEqual(resolveOptions({ url: "x" }, false), { comments: 20, transcript: false, frames: 0, range: undefined, images: true });
-	assert.deepEqual(resolveOptions({ url: "x", range: "1:00-2:00", frames: 6 }, true), { comments: 0, transcript: true, frames: 6, range: { start: 60, end: 120 }, images: true });
+	assert.deepEqual(resolveOptions({ url: "x" }, false), { comments: 20, quotes: 0, transcript: false, frames: 0, range: undefined, images: true });
+	assert.deepEqual(resolveOptions({ url: "x", range: "1:00-2:00", frames: 6 }, true), { comments: 0, quotes: 0, transcript: true, frames: 6, range: { start: 60, end: 120 }, images: true });
+	// X and Bluesky read the whole conversation unless the call sets a smaller number.
+	assert.deepEqual([resolveOptions({ url: "x" }, false, true).comments, resolveOptions({ url: "x" }, false, true).quotes], [ALL_REPLIES, ALL_QUOTES]);
+	assert.deepEqual([resolveOptions({ url: "x", comments: 5, quotes: 0 }, false, true).comments, resolveOptions({ url: "x", comments: 5, quotes: 0 }, false, true).quotes], [5, 0]);
 	assert.equal(cacheKey({ url: "u", frames: 1, offset: 5 }), cacheKey({ frames: 1, url: "u" }));
 	assert.deepEqual(parseTimes(["4:05", "95", "1:02:03"]), [245, 95, 3723]);
 	assert.throws(() => parseTimes(["later"]), /not a time/);
@@ -71,17 +78,26 @@ test("photos are attached first; a non-Mastodon host falls back to the web page"
 	assert.deepEqual(withPhoto.images?.map((i) => i.mimeType), ["image/png"]);
 });
 
-test("the tool pages long results from its cache and sends images only on the first page", async () => {
+test("the tool shows a long result's preview and file, pages it from its cache, and sends images only on the first page", async () => {
 	const tools: { name: string; execute: (...args: unknown[]) => Promise<{ content: { type: string; text?: string }[]; details: Record<string, unknown> }>; renderCall: unknown }[] = [];
 	const long = Array.from({ length: 3000 }, (_, i) => `line ${i} ${"x".repeat(20)}`).join("\n");
 	const { fetcher, calls } = fakeFetch(html("e.test/long", `<title>Long</title><meta property="og:image" content="https://e.test/i.png"><article><pre>${long}</pre></article>`));
-	registerLinkTool({ registerTool: (tool: never) => tools.push(tool) } as never, { fetcher, config: () => parseConfig({}), deps: fakeDeps({}, []) });
+	const saveDir = mkdtempSync(join(tmpdir(), "pull-link-saved-"));
+	registerLinkTool({ registerTool: (tool: never) => tools.push(tool) } as never, { fetcher, config: () => parseConfig({}), deps: fakeDeps({}, []), saveDir });
 	const tool = tools[0];
 	assert.equal(tool.name, TOOL_NAME);
-	const first = await tool.execute("id", { url: "https://e.test/long" }, undefined, undefined);
-	assert.match(first.content[0].text ?? "", /^<untrusted-content source="https:\/\/e\.test\/long">\n# Long/);
-	assert.match(first.content[0].text ?? "", /\[Truncated: \d+ more characters\. Call pull_link again with the same arguments and offset=\d+ for the next page\.\]/);
-	assert.equal(first.content[1]?.type, "image");
+	const preview = await tool.execute("id", { url: "https://e.test/long" }, undefined, undefined);
+	const saved = String(preview.details.saved);
+	assert.equal(dirname(saved), saveDir);
+	assert.match(preview.content[0].text ?? "", /^<untrusted-content source="https:\/\/e\.test\/long">\n# Long/);
+	assert.ok((preview.content[0].text ?? "").includes(`[Preview: the full result has ${Number(preview.details.chars).toLocaleString("en-US")} characters and is saved at ${saved}. Read or search that file for the rest, or call pull_link again with the same arguments and offset=0 to page through it.]`));
+	assert.equal(preview.content[1]?.type, "image");
+	const whole = readFileSync(saved, "utf8");
+	assert.ok(whole.startsWith('<untrusted-content source="https://e.test/long">\n# Long') && whole.includes("line 2999 x") && whole.endsWith("</untrusted-content>\n"), "the file holds the whole result in its wrapper");
+	assert.equal(statSync(saved).mode & 0o777, 0o600);
+	const first = await tool.execute("id", { url: "https://e.test/long", offset: 0 }, undefined, undefined);
+	assert.ok((first.content[0].text ?? "").includes(`for the next page. The whole text is saved at ${saved}.]`));
+	assert.match(first.content[0].text ?? "", /\[Truncated: \d+ more characters\. Call pull_link again with the same arguments and offset=\d+ for the next page\./);
 	const next = Number(first.details.next);
 	const second = await tool.execute("id", { url: "https://e.test/long", offset: next }, undefined, undefined);
 	assert.equal(second.details.cached, true);
@@ -89,6 +105,7 @@ test("the tool pages long results from its cache and sends images only on the fi
 	assert.match(second.content[0].text ?? "", new RegExp(`\\(characters ${next}-`));
 	assert.equal(calls.filter((c) => c.url === "https://e.test/long").length, 1);
 	await assert.rejects(tool.execute("id", { url: "http://localhost:3000/" }, undefined, undefined), /private or local/);
+	rmSync(saveDir, { recursive: true, force: true });
 });
 
 test("image fetches check every redirect, skip imgur's placeholder and cap the size", async () => {

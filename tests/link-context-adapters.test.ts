@@ -44,11 +44,31 @@ test("Bluesky: parents, the post with embeds, and replies by likes", async () =>
 	};
 	const { fetcher, calls } = fakeFetch(json("getPostThread", { thread }));
 	const pulled = await pullBluesky("a.test", "p", context(fetcher, { comments: 2 }));
-	assert.match(calls[0].url, /uri=at%3A%2F%2Fa\.test%2Fapp\.bsky\.feed\.post%2Fp&depth=6/);
+	assert.match(calls[0].url, /uri=at%3A%2F%2Fa\.test%2Fapp\.bsky\.feed\.post%2Fp&depth=1000&parentHeight=100/);
+	assert.equal(calls.length, 1, "no quote request without quotes asked");
 	assert.match(pulled.markdown, /root post[\s\S]*## Post[\s\S]*the post\n\n- photo: https:\/\/cdn\.test\/full\.jpg alt: pic\n\nQuoted post:\n> \*\*q\.test\*\*/);
 	assert.match(pulled.markdown, /## Replies \(2 of 7\)\n\n- \*\*A\*\* \(@a\.test\)[^\n]*5 likes\n  high\n  - \*\*A\*\*[^\n]*\n    nested/);
 	assert.equal(pulled.url, "https://bsky.app/profile/a.test/post/p");
 	assert.deepEqual(pulled.photos, ["https://cdn.test/full.jpg"]);
+});
+
+test("Bluesky: quote posts by likes with their replies, and the default depth when the whole tree fails", async () => {
+	const post = (rkey: string, text: string, extra = {}) => ({ uri: `at://did:plc:a/app.bsky.feed.post/${rkey}`, author: { handle: "a.test", displayName: "A" }, record: { text, createdAt: "2026-01-01T00:00:00Z" }, ...extra });
+	const quoting = (rkey: string, text: string, extra = {}) => post(rkey, text, { embed: { $type: "app.bsky.embed.record#view", record: { uri: "at://did:plc:a/app.bsky.feed.post/p", author: { handle: "a.test" }, value: { text: "the post" } } }, ...extra });
+	const thread = { post: post("p", "the post", { quoteCount: 3 }) };
+	const { fetcher, calls } = fakeFetch(
+		(url) => (url.includes("getPostThread") && url.includes("depth=1000") && url.includes("%2Fp&") ? new Response("busy", { status: 503 }) : undefined),
+		(url) => (url.includes("getPostThread") && url.includes("depth=6") ? Response.json({ thread }) : undefined),
+		json(/getQuotes\?uri=at%3A%2F%2Fdid%3Aplc%3Aa%2Fapp\.bsky\.feed\.post%2Fp&limit=100$/, { posts: [quoting("q1", "low take", { likeCount: 1 }), quoting("q2", "hot take", { likeCount: 8, replyCount: 1 })], cursor: "c1" }),
+		json(/getQuotes.*cursor=c1/, { posts: [quoting("q1", "low take")] }),
+		json(/getPostThread\?uri=at%3A%2F%2Fdid%3Aplc%3Aa%2Fapp\.bsky\.feed\.post%2Fq2&depth=1000/, { thread: { post: post("q2", "hot take"), replies: [{ post: post("r9", "answer to the take") }] } }),
+	);
+	const pulled = await pullBluesky("a.test", "p", context(fetcher, { comments: 2000, quotes: 1000 }));
+	assert.match(pulled.markdown, /## Quote posts \(2 of 3\)\n\n- \*\*A\*\*[^\n]*8 likes[^\n]*\n  hot take\n  - \*\*A\*\*[^\n]*\n    answer to the take\n- \*\*A\*\*[^\n]*\n  low take/);
+	assert.doesNotMatch(pulled.markdown.slice(pulled.markdown.indexOf("## Quote posts")), /Quoted post/, "a quote post does not repeat the post it quotes");
+	assert.match(pulled.markdown, /_The whole reply tree could not be read \(public\.api\.bsky\.app answered HTTP 503\); replies up to 6 levels deep are shown\._/);
+	assert.equal(calls.filter((call) => call.url.includes("getQuotes")).length, 2, "the second page brings nothing new, so paging stops");
+	assert.ok(pulled.preview);
 });
 
 test("Reddit: old.reddit JSON, link-preview agent first, comments nested", async () => {

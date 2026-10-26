@@ -5,6 +5,7 @@
  * second one.
  */
 import { loadConfig } from "./config.ts";
+import { SAVE_CHARS, saveFullText } from "./full-text.ts";
 import { pull, type PullDeps } from "./pull.ts";
 import { parseClock, parseRange } from "./text.ts";
 import type { AdapterContext, LinkConfig, Pulled, PullOptions } from "./types.ts";
@@ -13,6 +14,11 @@ import { classify, parseUrl } from "./url.ts";
 const CACHE_MS = 30 * 60_000;
 const CACHE_ENTRIES = 16;
 export const DEFAULT_COMMENTS = 20;
+/** X and Bluesky read the whole conversation by default; these caps only keep one pull finite. */
+export const ALL_REPLIES = 2000;
+export const ALL_QUOTES = 1000;
+/** Link kinds whose adapters read replies and quote posts in full. */
+const WHOLE_CONVERSATIONS = new Set(["x", "bluesky"]);
 export const MAX_AT = 12;
 /** A video read with captions only differs from a default call's result when it has no captions, so it is kept under its own key. */
 const CAPTIONS_ONLY = "#captions-only";
@@ -26,6 +32,7 @@ export interface Params {
 	range?: string;
 	at?: string[];
 	comments?: number;
+	quotes?: number;
 	images?: boolean;
 	offset?: number;
 }
@@ -39,10 +46,11 @@ export function parseTimes(at: readonly string[] | undefined): number[] | undefi
 	});
 }
 
-export function resolveOptions(params: Params, isVideo: boolean): PullOptions {
+export function resolveOptions(params: Params, isVideo: boolean, whole = false): PullOptions {
 	const at = parseTimes(params.at);
 	return {
-		comments: params.comments ?? (isVideo || at ? 0 : DEFAULT_COMMENTS),
+		comments: params.comments ?? (isVideo || at ? 0 : whole ? ALL_REPLIES : DEFAULT_COMMENTS),
+		quotes: params.quotes ?? (whole ? ALL_QUOTES : 0),
 		transcript: params.transcript ?? (isVideo && !at),
 		frames: params.frames ?? 0,
 		range: parseRange(params.range),
@@ -80,6 +88,8 @@ export interface ReaderOptions {
 	readonly config?: () => LinkConfig;
 	readonly fetcher?: typeof fetch;
 	readonly now?: () => number;
+	/** Folder for the whole text of long results; the default is in the link-context cache. */
+	readonly saveDir?: string;
 }
 
 export interface LinkReader {
@@ -127,9 +137,19 @@ export function createReader(options: ReaderOptions = {}): LinkReader {
 		entries.set(key, { at: now(), pending });
 		return pending;
 	};
+	/** A long result gets a file with its whole text; a write that fails leaves the result as it was. */
+	const keepFull = (pulled: Pulled): Pulled => {
+		if (pulled.markdown.length <= SAVE_CHARS) return pulled;
+		try {
+			return { ...pulled, saved: saveFullText(pulled, options.saveDir, now()) };
+		} catch {
+			return pulled;
+		}
+	};
 	const context = (url: URL, params: Params, signal: AbortSignal | undefined, progress: (text: string) => void, speech = true): AdapterContext => {
-		const isVideo = classify(url).kind === "video";
-		const resolved = resolveOptions(params, isVideo);
+		const kind = classify(url).kind;
+		const isVideo = kind === "video";
+		const resolved = resolveOptions(params, isVideo, WHOLE_CONVERSATIONS.has(kind));
 		return { signal, fetcher: options.fetcher, config: (options.config ?? loadConfig)(), options: isVideo && !speech ? { ...resolved, speech: false } : resolved, progress };
 	};
 	return {
@@ -153,7 +173,7 @@ export function createReader(options: ReaderOptions = {}): LinkReader {
 			const ctx = context(url, params, signal, progress);
 			const wantsVideo = params.transcript === true || (params.frames ?? 0) > 0 || !!params.at?.length;
 			// Parts that failed because of the abort read as "no transcript" or "frames failed"; never keep or return them.
-			const pulled = await track(key, pull(url.href, ctx, options.deps, wantsVideo), () => (signal?.aborted ? undefined : key));
+			const pulled = await track(key, pull(url.href, ctx, options.deps, wantsVideo).then(keepFull), () => (signal?.aborted ? undefined : key));
 			signal?.throwIfAborted();
 			return { pulled, cached: false };
 		},
@@ -165,7 +185,7 @@ export function createReader(options: ReaderOptions = {}): LinkReader {
 			if (pending) return { pulled: await waitFor(pending, signal), cached: true };
 			const url = parseUrl(raw);
 			const ctx = context(url, { url: raw }, signal, () => {}, false);
-			const pulled = await track(key, pull(url.href, ctx, options.deps), (result) => (signal.aborted ? undefined : result.speechSkipped ? key + CAPTIONS_ONLY : key));
+			const pulled = await track(key, pull(url.href, ctx, options.deps).then(keepFull), (result) => (signal.aborted ? undefined : result.speechSkipped ? key + CAPTIONS_ONLY : key));
 			signal.throwIfAborted();
 			return { pulled, cached: false };
 		},

@@ -1485,8 +1485,8 @@ the full result.
 
 | Link | What you get |
 | --- | --- |
-| X/Twitter | The post, its quoted post, media and polls, and the posts above it in the thread, through the public FxTwitter API. Replies need an X login, so they are not included. |
-| Bluesky | The post, the posts above it and the replies (most liked first), through the public AppView API. |
+| X/Twitter | The whole public conversation, through the public FxTwitter API (no login): the post with its media and polls, all the posts above it, the replies as a nested outline (the author's own replies first, then most liked), the posts that quote it with their replies, and the chain of quoted posts (up to 4 levels, each with the posts above it). Without a login, X gives only the top replies of each post. The result says what X reports and what came back. If the newer API fails, you get the post, its quote and the posts above it. |
+| Bluesky | The whole conversation, through the public AppView API: the post, the posts above it, the full reply tree (most liked first), and the posts that quote it, each with its replies. |
 | Threads | The post text and image from the page's preview tags. Replies need a login. |
 | Mastodon | The post, the posts above it and the replies, through the server's public API. Any server with `/@user/<id>` links works. |
 | Reddit | The post and its comment tree, through the JSON view of `old.reddit.com`. Share links (`/s/...`) work. |
@@ -1504,6 +1504,22 @@ The tool gets the type and the size of each image from its bytes, not from the
 server's label. It sends only JPEG, PNG, GIF and WebP files of 3.7 MB or less
 that Pi's image library can decode. It makes an image larger than 2000 pixels
 on a side smaller.
+
+A result longer than one page (40,000 characters) comes back as a preview.
+The tool also saves the whole result to a file and gives its path. The agent
+can read or search the file, or it can page through the result with
+`offset` (start at `offset=0`). The preview of an X or Bluesky conversation
+has the post, its quotes, the nearest posts above it, the top replies and the
+top quote posts, and the notes about what is missing. For other links, the
+preview is the start of the result. The files are in
+`~/.cache/pi-extras/link-context/full-text` (only your account can read
+them). A file is removed after 7 days, and the folder keeps at most 200
+files.
+
+An X conversation can need many requests: each reply that has replies gets
+its own request. One X link uses at most 300 requests and 90 seconds. Most
+posts take 2 to 10 requests and a few seconds. A post with thousands of
+replies can take more than a minute.
 
 A video result is text and one thumbnail. It has no frames, so a long video
 does not fill the context. The transcript ends with a hint: to see a moment
@@ -1524,8 +1540,11 @@ Arguments:
   result gives the folder for the `read` tool.
 - `range`: a part of a video, for example `12:30-15:00`, `90-` or `-0:45`.
   The transcript and the sampled frames use only this part.
-- `comments`: the number of replies or comments (default 20 for posts, 0
-  for videos).
+- `comments`: the number of replies or comments (default all for X and
+  Bluesky, 20 for other posts, 0 for videos). Use a smaller number for a
+  shorter result.
+- `quotes`: X and Bluesky: the number of posts that quote the post, most
+  liked first (default all, 0 for none).
 - `transcript`: for a video link, the default is on. For a post that has a
   video (X, Bluesky, Mastodon), set `transcript: true` or `frames` to read
   the video too.
@@ -1612,8 +1631,9 @@ model does not need them, and a wait before the model starts.
 - It reads up to 5 links for each message. The message names the next 5
   links and gives the number of the others. The model can read them with
   `pull_link`.
-- Each result is the first 12,000 characters of what `pull_link` gives for
-  the link. A note tells the model the `offset` for the rest.
+- Each result is what `pull_link` gives for the link, up to 12,000
+  characters. A longer result comes as a preview, with the path of the file
+  that holds the whole result and the `offset` to page through it.
 - One message has up to 4 images in total (photos and thumbnails), in link
   order.
 - A video gives its title, description, chapters and the transcript from its

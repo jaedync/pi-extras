@@ -326,6 +326,20 @@ body larger than 8 MB. It reuses a result for at most 30 minutes and keeps at
 most 16 results in memory. Page text, posts and comments can contain malicious
 instructions.
 
+An X link reads the whole public conversation through FxTwitter
+(`api.fxtwitter.com`): one request for each reply that has replies, each page
+of quote posts and each level of quoted posts. One link uses at most 300
+requests in 90 seconds, at most 6 at a time. FxTwitter allows 1000 requests a
+minute from one address. Each request tells FxTwitter your IP address and the
+post id. A Bluesky link uses one request for the reply tree, up to 10 for the
+quote posts and up to 50 for their replies, all to `public.api.bsky.app`.
+
+A result of more than 12,000 characters is also saved to a file in
+`~/.cache/pi-extras/link-context/full-text` (mode 0600), in the same untrusted
+wrapper as the tool result, so that the agent can read the rest with its own
+tools. A file is removed after 7 days, and the folder keeps at most 200 files.
+The text in a file can contain malicious instructions, as the tool result can.
+
 When a page refuses the plain request (HTTP 403, 429 or 503, a bot check, a
 timeout or a dropped connection), Pull Link reads it again with a local
 headless Chrome or Chromium that is already installed. It does not install a

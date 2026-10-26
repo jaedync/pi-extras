@@ -11,6 +11,8 @@ export interface ImageBlock {
 export interface PullOptions {
 	/** Most replies or comments to include; 0 leaves them out. */
 	readonly comments: number;
+	/** X and Bluesky: most posts that quote the post to include; absent or 0 leaves them out. */
+	readonly quotes?: number;
 	/** Video: include the spoken transcript. */
 	readonly transcript: boolean;
 	/** Video: frames to sample as images; 0 for none. */
@@ -63,6 +65,10 @@ export interface Pulled {
 	readonly url: string;
 	/** The whole result as markdown; the tool pages it when long. */
 	readonly markdown: string;
+	/** A shorter markdown that keeps the parts a reader needs first, shown when `markdown` is past the limit. */
+	readonly preview?: string;
+	/** The file that holds the whole result when it is past the shortest limit (reader.ts). */
+	readonly saved?: string;
 	/** A few plain lines that say what the link is, for the transcript rows (summary.ts); the model never sees them. */
 	readonly summary?: readonly string[];
 	readonly images?: readonly ImageBlock[];
