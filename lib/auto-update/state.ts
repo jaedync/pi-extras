@@ -122,7 +122,7 @@ export function readState(file: string): UpdateState {
 		...(raw as unknown as UpdateState),
 		bad: isObject(raw.bad) ? (raw.bad as UpdateState["bad"]) : {},
 		managed: isObject(raw.managed) ? (raw.managed as UpdateState["managed"]) : {},
-		suspect: isObject(raw.suspect) ? (raw.suspect as UpdateState["suspect"]) : undefined,
+		...(isObject(raw.suspect) ? { suspect: raw.suspect as UpdateState["suspect"] } : {}),
 	};
 }
 
@@ -167,7 +167,8 @@ export function clearSuspect(state: UpdateState, releases: readonly { key: strin
 		if (Object.keys(rest).length > 0) suspect[key] = rest;
 		else delete suspect[key];
 	}
-	return { ...state, suspect: Object.keys(suspect).length > 0 ? suspect : undefined };
+	const { suspect: _old, ...rest } = state;
+	return Object.keys(suspect).length > 0 ? { ...rest, suspect } : rest;
 }
 
 /** Every release folder a set uses (Pi and packages). */
