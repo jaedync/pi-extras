@@ -5,7 +5,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { collectGarbage } from "../lib/auto-update/gc.ts";
 import { LAUNCHER_MARKER, renderLauncher } from "../lib/auto-update/launcher.ts";
+import { processStart, readLiveLeases } from "../lib/auto-update/leases.ts";
+import { storePaths } from "../lib/auto-update/paths.ts";
+import { emptyState } from "../lib/auto-update/state.ts";
 
 interface Rig {
 	readonly root: string;
@@ -43,6 +47,16 @@ case "$FAKE_MODE" in
 		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T1" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; touch -t 200001010000 "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 0 ;;
 	restart-two-targets)
 		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T$runs" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; [ "$runs" -lt 3 ] || rm -f "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 0 ;;
+	lease-wait)
+		# Logs the launcher's lease, then waits until the test lets it go.
+		cat "$FAKE_STORE"/leases/launcher-*.json >> "$log" 2>/dev/null
+		printf '%s\n' ready >> "$log"
+		while [ ! -e "$FAKE_STORE/go" ] && [ -d "$FAKE_STORE" ]; do sleep 0.05; done ;;
+	lease-switch)
+		# Run 1 moves pi-current to 2.0.0 and asks for a restart; each run logs the lease it sees.
+		cat "$FAKE_STORE"/leases/launcher-*.json >> "$log" 2>/dev/null
+		if [ "$runs" = 1 ]; then ln -sfn pi/2.0.0 "$FAKE_STORE/pi-current"; mkdir -p "$FAKE_STORE/restart"; printf '%s\n' "/sessions/s.jsonl" "" "T1" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; fi
+		exit 0 ;;
 	wait-int)
 		trap 'printf "%s\\n" got-int >> "$log"; exit 5' INT
 		printf '%s\\n' ready >> "$log"
@@ -202,6 +216,52 @@ test("a restart request counts only after Pi exits 0 and only when Pi wrote it a
 		assert.equal(existsSync(join(r.store, "restart", token)), false, `${mode}: the launcher removes the request it ignored`);
 		assert.deepEqual(readdirSync(join(r.store, "restart")), [], `${mode}: no file of the launcher stays`);
 	}
+});
+
+const leaseOf = (run: string) => JSON.parse(run.match(/^\{"pid".*$/m)![0]) as { pid: number; start: string; piDir: string; releases: string[]; mode: string };
+
+test("the launcher leases the real Pi folder that it starts while it lives, and removes the lease when it ends", async (t) => {
+	const r = rig(t);
+	const paths = storePaths(r.store);
+	const { pid, done } = launch(r, [], "lease-wait");
+	// A failed assertion must not leave the fake Pi waiting.
+	t.after(() => existsSync(r.store) && writeFileSync(join(r.store, "go"), ""));
+	while (!(existsSync(r.log) && readFileSync(r.log, "utf8").includes("ready\n"))) await new Promise((resolve) => setTimeout(resolve, 20));
+	const lease = leaseOf(runs(r)[0]!);
+	assert.equal(lease.pid, pid, "keyed by the launcher's own pid");
+	assert.equal(lease.start, processStart(pid), "with the start time that the liveness rule reads");
+	assert.equal(lease.piDir, join(realpathSync(r.store), "pi", "1.0.0"));
+	assert.deepEqual(lease.releases, []);
+	assert.equal(lease.mode, "launcher");
+	assert.deepEqual(readLiveLeases(paths).map((live) => live.piDir), [lease.piDir], "GC reads it as a live lease");
+	// GC with a state that names no Pi folder: only the lease keeps pi/1.0.0.
+	const gc = () => collectGarbage({ paths, state: emptyState(), leases: readLiveLeases(paths), now: Date.now() + 2 * 3_600_000, refs: () => new Set(), mapped: () => new Set() });
+	assert.deepEqual(gc().removed, []);
+	assert.ok(existsSync(join(r.store, "pi", "1.0.0")));
+	writeFileSync(join(r.store, "go"), "");
+	await done;
+	assert.deepEqual(readdirSync(join(r.store, "leases")), [], "the lease is gone after the launcher ends");
+});
+
+test("each restart rewrites the lease for the Pi folder of that start", async (t) => {
+	const r = rig(t);
+	mkdirSync(join(r.store, "pi", "2.0.0", "bin"), { recursive: true });
+	writeFileSync(join(r.store, "pi", "2.0.0", "bin", "pi"), FAKE_PI);
+	chmodSync(join(r.store, "pi", "2.0.0", "bin", "pi"), 0o755);
+	await launch(r, [], "lease-switch").done;
+	const real = realpathSync(r.store);
+	assert.deepEqual(runs(r).map((run) => leaseOf(run).piDir), [join(real, "pi", "1.0.0"), join(real, "pi", "2.0.0")]);
+	assert.deepEqual(readdirSync(join(r.store, "leases")), []);
+});
+
+test("a dead launcher's lease is removed by the dead-lease rule; the fallback Pi gets no lease", async (t) => {
+	const r = rig(t, false);
+	await launch(r, [], "exit7").done;
+	assert.equal(existsSync(join(r.store, "leases")) && readdirSync(join(r.store, "leases")).length > 0, false, "no store Pi, no lease");
+	mkdirSync(join(r.store, "leases"), { recursive: true });
+	writeFileSync(join(r.store, "leases", "launcher-999999999.json"), JSON.stringify({ pid: 999999999, start: "1", piDir: "/x", releases: [], mode: "launcher", updatedAt: 0 }));
+	assert.deepEqual(readLiveLeases(storePaths(r.store)), []);
+	assert.deepEqual(readdirSync(join(r.store, "leases")), []);
 });
 
 test("a launcher that a Pi child starts does not pass on the outer restart count", async (t) => {

@@ -155,6 +155,9 @@ newest versions, run `pi update --all`.
 `enable` replaces `~/.local/bin/pi` with a small shell script. The script:
 
 - starts Pi from the store, with all your arguments;
+- keeps a lease on the Pi folder that it started while Pi runs, so the
+  cleanup does not remove that folder. This also works for a Pi that does
+  not load pi-extras;
 - starts Pi again after a session asks for a restart (at most 3 times in 60
   seconds). After 2 restarts that did not bring the new set, the session
   stops and shows a notice. A restart occurs only when Pi stopped with exit

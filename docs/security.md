@@ -850,7 +850,8 @@ tokens and URL passwords before it goes into the log or `state.json`.
   for each installed version, made read-only after the install, plus
   `state.json`, `update.log` (at most 256 KB), a lock file, one lease file
   for each running session (process ID, mode, session file path and the
-  folders it uses), restart requests (mode `0600`: the session file path
+  folders it uses) and for each running launcher (its process ID and the
+  Pi folder that it started), restart requests (mode `0600`: the session file path
   and the launch options that a restart repeats) and `pi-managed` (an
   empty file; the launcher reads it).
 
@@ -880,9 +881,18 @@ The installed folders are read-only. To remove the store by hand, first run
   Pi sets its process title to `pi`, so `/proc/<pid>/cmdline` of a Pi
   process shows only `pi` and not the path of its Pi folder. Pi reads its
   JavaScript files and does not map them. Leases protect Pi processes, and
-  GC never removes the folders of the current and the previous set. Thus a
-  Pi process that does not load pi-extras writes no lease. GC can remove its
-  folders after two more updates, on Linux and on macOS.
+  GC never removes the folders of the current and the previous set.
+- The launcher writes a lease for the Pi folder that it starts, before it
+  starts Pi and again before each restart. The lease counts while the
+  launcher process lives, and the launcher lives as long as its Pi. The
+  launcher removes the lease when it stops. If the launcher is killed, GC
+  finds that its process is gone and removes the lease. Thus the launcher
+  protects the Pi folder also when Pi does not load pi-extras, for example
+  with `--no-extensions`.
+- A Pi that you start without the launcher (for example by the full path
+  of its store folder) and that does not load pi-extras has no lease. GC
+  can remove its Pi folder after two more Pi updates, on Linux and on
+  macOS. Package folders that such a Pi uses get the same risk.
 - `disable` puts back the Pi and the package versions from before
   `enable`. These can be older than the versions in the store, and older
   versions can have known faults. Run `pi update --all` to get the newest.

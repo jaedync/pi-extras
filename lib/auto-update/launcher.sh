@@ -33,15 +33,57 @@ export PI_EXTRAS_LAUNCHER_PID
 PI_EXTRAS_UPDATE_STORE=$STORE
 export PI_EXTRAS_UPDATE_STORE
 
-# The real folder, not the pi-current link: then /proc/<pid>/cmdline names
-# the Pi release that this process runs, and GC keeps it.
-pi_bin() {
+# A lease on the Pi folder that this launcher starts, so GC keeps that
+# folder also for a Pi that does not load pi-extras (it writes no lease of
+# its own, and its process title "pi" hides its path from the process
+# scan). It counts while this shell lives with the start time written in
+# it: the same rule as a session lease, and the launcher lives as long as
+# its Pi. The EXIT trap removes it; a killed launcher's lease is dead and
+# the next GC removes it.
+LEASE_DIR="$STORE/leases"
+LEASE="$LEASE_DIR/launcher-$$.json"
+LEASE_TMP="$LEASE_DIR/.launcher-$$.tmp"
+
+# The start time as lib/auto-update/leases.ts reads it: field 22 of
+# /proc/<pid>/stat (counted after the command name in parentheses), or
+# `ps -o lstart=` without the spaces around it.
+start_time() {
+	if [ -r "/proc/$$/stat" ]; then
+		sed 's/.*) //' "/proc/$$/stat" | cut -d ' ' -f 20
+	else
+		ps -o lstart= -p "$$" 2>/dev/null | sed 's/^ *//; s/ *$//'
+	fi
+}
+
+json_text() {
+	printf '%s' "$1" | sed 's/[\\"]/\\&/g'
+}
+
+# Temp file, then mv: GC never reads half a lease. Only in a store that
+# exists: a launcher whose store is gone must not make an empty one. A path
+# with a control character gives a file that does not parse, which GC
+# removes: that Pi is then not protected, as without this lease.
+write_lease() {
+	[ -n "$LEASE_START" ] && [ -d "$STORE" ] || return 0
+	(
+		umask 077
+		{ [ -d "$LEASE_DIR" ] || mkdir "$LEASE_DIR"; } &&
+			printf '{"pid":%s,"start":"%s","piDir":"%s","releases":[],"mode":"launcher","updatedAt":%s000}\n' "$$" "$(json_text "$LEASE_START")" "$(json_text "$1")" "$(date +%s)" > "$LEASE_TMP" &&
+			mv -f "$LEASE_TMP" "$LEASE"
+	) 2>/dev/null || rm -f "$LEASE_TMP"
+}
+
+# Sets PI (and the lease) before each start. The real folder, not the
+# pi-current link: the folder can change between restarts.
+pick_pi() {
 	real=$(cd -P "$STORE/pi-current" 2>/dev/null && pwd -P)
 	if [ -n "$real" ] && [ -x "$real/bin/pi" ]; then
-		printf '%s\n' "$real/bin/pi"
+		PI="$real/bin/pi"
+		write_lease "$real"
 	else
 		printf 'pi-extras launcher: %s is missing. Starting %s.\n' "$STORE/pi-current" "$FALLBACK_PI" >&2
-		printf '%s\n' "$FALLBACK_PI"
+		PI=$FALLBACK_PI
+		rm -f "$LEASE"
 	fi
 }
 
@@ -69,6 +111,9 @@ if [ -e "$STORE/pi-managed" ]; then
 	PI_SKIP_VERSION_CHECK=1
 	export PI_SKIP_VERSION_CHECK
 fi
+
+LEASE_START=$(start_time)
+trap 'rm -f "$LEASE" "$LEASE_TMP"' EXIT
 
 REQUEST_DIR="$STORE/restart"
 REQUEST="$REQUEST_DIR/$PI_EXTRAS_RESTART_TOKEN"
@@ -102,7 +147,8 @@ last_target=
 same_target=0
 
 mark_start
-"$(pi_bin)" "$@"
+pick_pi
+"$PI" "$@"
 code=$?
 while restart_wanted; do
 	# Line 1: the session. Line 2: what the new Pi says once it runs (a new
@@ -144,7 +190,8 @@ while restart_wanted; do
 	export PI_EXTRAS_RESTART_COUNT PI_EXTRAS_RESTART_TARGET
 	printf '%s\n' "pi-extras launcher: starting Pi again for the update." >&2
 	mark_start
-	PI_EXTRAS_UPDATE_DONE=$note "$(pi_bin)" "$@" --session "$session"
+	pick_pi
+	PI_EXTRAS_UPDATE_DONE=$note "$PI" "$@" --session "$session"
 	code=$?
 done
 finish "$code"
