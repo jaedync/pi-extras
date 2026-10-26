@@ -18,6 +18,7 @@ export const UPDATE_ENTRY = "pi-extras-update";
 export const APPLY_COMMAND = "pi-extras-update-apply";
 export const STATUS_KEY = "auto-update";
 export const POLL_MS = 15_000;
+export const LAUNCHER_WARNING = "auto-update: ~/.local/bin/pi was replaced; run enable again, or disable";
 /** An activity older than this belongs to a cycle that stopped without clearing it. */
 const ACTIVITY_MAX_AGE_MS = 15 * 60_000;
 const JITTER = 0.2;
@@ -108,6 +109,7 @@ export class UpdateSession {
 	private stops: (() => void)[] = [];
 	private stopped = false;
 	private lastStatus: string | undefined;
+	private launcherNoticeShown = false;
 
 	constructor(host: SessionHost) {
 		this.host = host;
@@ -227,7 +229,12 @@ export class UpdateSession {
 		const state = safeState(this.host.paths);
 		const decision = this.decision(state);
 		const activity = state?.activity && this.host.now() - state.activity.since < ACTIVITY_MAX_AGE_MS ? `updating: ${state.activity.text}` : undefined;
-		this.status(activity ?? (decision.kind === "notice" ? decision.text : undefined));
+		if (state?.launcherProblem && !this.launcherNoticeShown) {
+			this.launcherNoticeShown = true;
+			this.host.notify(state.launcherProblem.message, "warning");
+		}
+		const warning = state?.launcherProblem ? LAUNCHER_WARNING : undefined;
+		this.status(activity ?? warning ?? (decision.kind === "notice" ? decision.text : undefined));
 		if (decision.kind !== "reload" && decision.kind !== "restart") return;
 		if (!this.idle(decision.kind)) return;
 		this.host.dispatchApply();

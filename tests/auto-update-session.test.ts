@@ -271,3 +271,15 @@ test("the status line shows what a running cycle does", (t) => {
 	session.poll();
 	assert.equal(h.statuses.at(-1), undefined, "an old activity from a cycle that died is not shown");
 });
+
+test("a replaced launcher shows a short warning in the status line and one notice", (t) => {
+	const same = (root: string) => set(root, "1.4.0", "0.29.0");
+	const h = harness(t, same, same);
+	writeState(h.paths.state, { ...JSON.parse(readFileSync(h.paths.state, "utf8")), launcherProblem: { at: h.clock, message: "long text" } });
+	const session = new UpdateSession(h.host);
+	session.start("startup");
+	session.poll();
+	assert.equal(h.statuses.at(-1), "auto-update: ~/.local/bin/pi was replaced; run enable again, or disable");
+	assert.equal(h.notices.length, 1);
+	assert.match(h.notices[0]!, /long text/);
+});

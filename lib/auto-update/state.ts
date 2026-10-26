@@ -67,6 +67,8 @@ export interface UpdateState {
 	readonly newest?: Readonly<Record<string, string>>;
 	readonly managed: Readonly<Record<string, ManagedEntry>>;
 	readonly enabled?: EnableRecord;
+	/** Set while the launcher path no longer holds the launcher (something wrote over it). */
+	readonly launcherProblem?: { readonly at: number; readonly message: string };
 }
 
 export function emptyState(): UpdateState {

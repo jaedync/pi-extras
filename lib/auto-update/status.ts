@@ -39,6 +39,7 @@ export function statusLines(state: UpdateState, config: AutoUpdateConfig, now: n
 	lines.push(`Newest found: ${pending.length > 0 ? pending.join(", ") : "nothing newer"}`);
 	lines.push(`Last check: ${state.lastCheck === undefined ? "never" : ago(state.lastCheck, now)}`);
 	if (state.activity) lines.push(`Now: ${state.activity.text} (since ${ago(state.activity.since, now)})`);
-	if (state.lastError) lines.push(`Last error (${ago(state.lastError.at, now)}): ${state.lastError.message}`);
+	if (state.launcherProblem) lines.push(`Problem: ${state.launcherProblem.message}`);
+	if (state.lastError && state.lastError.message !== state.launcherProblem?.message) lines.push(`Last error (${ago(state.lastError.at, now)}): ${state.lastError.message}`);
 	return lines;
 }

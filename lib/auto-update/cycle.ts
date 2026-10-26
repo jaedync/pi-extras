@@ -4,15 +4,16 @@
  * per machine (the updater lock), and at most one per interval however many
  * sessions ask (the `lastCheck` throttle, checked again under the lock).
  */
+import { join } from "node:path";
 import { tryLock } from "../file-lock.ts";
 import { isOffline } from "../offline.ts";
 import type { AutoUpdateConfig } from "./config.ts";
 import { collectGarbage, mappedPaths } from "./gc.ts";
 import { INSTALL_TIMEOUT_MS } from "./install.ts";
-import { syncPiMarker } from "./launcher.ts";
+import { isLauncher, syncPiMarker } from "./launcher.ts";
 import { readLiveLeases } from "./leases.ts";
 import type { Log } from "./log.ts";
-import type { StorePaths } from "./paths.ts";
+import { EXTRAS_DIR, type StorePaths } from "./paths.ts";
 import { PI_KEY, trackedSources, wantedPackage, wantedPi, type LookupDeps, type Tracked, type Wanted } from "./plan.ts";
 import type { Runner } from "./run.ts";
 import { readSettingsPackages, settingsFile } from "./settings.ts";
@@ -103,6 +104,25 @@ export function repair(deps: Pick<CycleDeps, "paths" | "agentDir" | "log">, stat
 	const result = applySwitch(deps.paths, settingsFile(deps.agentDir), state.current);
 	deps.log(`repaired the switch (link ${result.linkChanged ? "fixed" : "ok"}, settings ${result.settingsChanged ? "fixed" : "ok"})`);
 	return true;
+}
+
+/**
+ * What to tell the user when the launcher that enable installed is gone (for
+ * example "npm install -g" of Pi wrote over it). The cycle does not put it
+ * back: the file is outside the store, and the user changed it.
+ */
+export function launcherProblem(state: UpdateState): string | undefined {
+	const launcher = state.enabled?.launcher;
+	if (!launcher || isLauncher(launcher)) return undefined;
+	return `${launcher} is no longer the pi-extras launcher (for example, "npm install -g" of Pi wrote over it). New Pi sessions do not start from the store. Run "node ${join(EXTRAS_DIR, "lib", "auto-update", "cli.ts")} enable" again to put it back, or "disable" to turn auto-update off.`;
+}
+
+function recordLauncher(deps: CycleDeps, state: UpdateState): string | undefined {
+	const problem = launcherProblem(state);
+	if (problem === state.launcherProblem?.message) return problem;
+	if (problem) deps.log(`launcher problem: ${problem}`);
+	updateState(deps.paths.state, (now) => ({ ...now, launcherProblem: problem ? { at: deps.now(), message: problem } : undefined }));
+	return problem;
 }
 
 interface Lookup {
@@ -216,6 +236,7 @@ async function findCulprits(deps: CycleDeps, current: UpdateSet, candidate: Upda
 async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<CycleResult> {
 	const deadline = deps.now() + (deps.limitMs ?? CYCLE_LIMIT_MS);
 	repair(deps, initial);
+	const problem = recordLauncher(deps, initial);
 	const packages = readSettingsPackages(settingsFile(deps.agentDir));
 	const tracked = trackedSources(packages, initial, deps.config, deps.paths.root);
 	setActivity(deps, "checking for updates");
@@ -225,7 +246,7 @@ async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<Cycle
 	let state = updateState(deps.paths.state, (current) => ({ ...current, lastCheck: deps.now(), newest }));
 	const current = state.current!;
 	const installed = await installAll(deps, found, deadline);
-	const errors = [...found.errors, ...installed.errors];
+	const errors = [...(problem ? [problem] : []), ...found.errors, ...installed.errors];
 	const candidate = installed.set;
 	if (!candidate || sameSet(candidate, current)) {
 		finish(deps, errors);

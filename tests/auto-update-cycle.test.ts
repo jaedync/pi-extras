@@ -4,7 +4,7 @@
  * the smoke test.
  */
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_CONFIG, writeConfig } from "../lib/auto-update/config.ts";
@@ -228,4 +228,23 @@ test("the pi-managed marker follows the config: on after enable, off with pi: \"
 	assert.ok(existsSync(marker));
 	await w.cli("disable");
 	assert.equal(existsSync(marker), false);
+});
+
+test("a launcher that something wrote over is reported, not fixed; enable again puts it back", async (t) => {
+	const w = await enabled(t);
+	// What "npm install -g" of Pi does: a new link at ~/.local/bin/pi.
+	rmSync(w.launcher);
+	symlinkSync(`../lib/node_modules/${PI_NAME}/dist/bundle/cli.js`, w.launcher);
+	const result = await runCycle(w.cycleDeps(), { force: true });
+	assert.match(result.message, /\.local\/bin\/pi is no longer the pi-extras launcher/);
+	assert.ok(lstatSync(w.launcher).isSymbolicLink(), "the cycle does not change a file outside the store");
+	const state = readState(w.paths.state);
+	assert.match(state.lastError?.message ?? "", /Run "node .*cli\.ts enable" again to put it back, or "disable"/);
+	assert.match(state.launcherProblem?.message ?? "", /no longer the pi-extras launcher/);
+	const again = await w.cli("enable");
+	assert.equal(again.code, 0, `${again.stdout}\n${again.stderr}`);
+	assert.ok(lstatSync(w.launcher).isFile());
+	await runCycle(w.cycleDeps(), { force: true });
+	assert.equal(readState(w.paths.state).launcherProblem, undefined);
+	assert.equal(readState(w.paths.state).lastError, undefined);
 });
