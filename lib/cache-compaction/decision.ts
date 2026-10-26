@@ -13,7 +13,7 @@ export function readProgress(data: unknown): CompactionProgress | undefined {
 	return typeof value.chars === "number" && Number.isFinite(value.chars) && value.chars >= 0 ? { sessionId: value.sessionId, text: value.text, chars: value.chars } : undefined;
 }
 export interface CompactionPath {
-	readonly path: "prefix-sharing" | "default";
+	readonly path: "prefix-sharing" | "default" | "background";
 	readonly fallbackReason: string | null;
 }
 export interface CompactionNotice extends CompactionPath {
@@ -23,7 +23,7 @@ export interface CompactionNotice extends CompactionPath {
 export function readCompactionPath(data: unknown): CompactionPath | undefined {
 	if (!data || typeof data !== "object") return undefined;
 	const value = data as CompactionPath;
-	return (value.path === "default" || value.path === "prefix-sharing") && (value.fallbackReason === null || typeof value.fallbackReason === "string") ? { path: value.path, fallbackReason: value.fallbackReason } : undefined;
+	return (value.path === "default" || value.path === "prefix-sharing" || value.path === "background") && (value.fallbackReason === null || typeof value.fallbackReason === "string") ? { path: value.path, fallbackReason: value.fallbackReason } : undefined;
 }
 export const compactionKey = (entry: { readonly summary: string; readonly firstKeptEntryId: string; readonly tokensBefore: number }) => fingerprint({ summary: entry.summary, firstKeptEntryId: entry.firstKeptEntryId, tokensBefore: entry.tokensBefore });
 export interface CompactionDecision extends CompactionPath {
@@ -39,4 +39,6 @@ export interface CompactionDecision extends CompactionPath {
 	readonly tailTokens: number | null;
 	readonly stopReason: string | null;
 	readonly usage: { readonly input: number; readonly cacheRead: number; readonly cacheWrite: number; readonly output: number } | null;
+	/** A held background summary: "used", why it was not, or null when none was held. */
+	readonly background: string | null;
 }

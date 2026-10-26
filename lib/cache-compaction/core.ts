@@ -8,15 +8,30 @@ export type RequestEffort = NonNullable<NonNullable<Parameters<typeof complete<"
 
 type RecordValue = Record<string, unknown>;
 const object = (v: unknown): v is RecordValue => !!v && typeof v === "object" && !Array.isArray(v);
-export interface Config { readonly enabled: boolean; readonly idleSeconds: Readonly<Record<string, number>> }
+export interface Config { readonly enabled: boolean; readonly idleSeconds: Readonly<Record<string, number>>; readonly background: boolean; readonly backgroundPercent: number }
 export interface ModelIdentity { readonly provider: string; readonly id: string; readonly api: string; readonly contextWindow: number; readonly baseUrl?: string }
 export interface RequestIdentity extends ModelIdentity { readonly sessionId: string; readonly at: number }
 
 export function loadConfig(section: RecordValue): Config {
 	const values = object(section.idleSeconds) ? section.idleSeconds : {};
 	const idleSeconds = Object.fromEntries(Object.entries(values).filter(([, v]) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= 86400)) as Record<string, number>;
-	return { enabled: typeof section.enabled === "boolean" ? section.enabled : true, idleSeconds };
+	const percent = section.backgroundPercent;
+	const backgroundPercent = typeof percent === "number" && Number.isSafeInteger(percent) && percent >= MIN_BACKGROUND_PERCENT && percent <= MAX_BACKGROUND_PERCENT ? percent : DEFAULT_BACKGROUND_PERCENT;
+	return { enabled: typeof section.enabled === "boolean" ? section.enabled : true, idleSeconds, background: section.background === true, backgroundPercent };
 }
+
+/** The owner's choice (answer 439): late enough that few summaries go unused, early enough to finish before Pi's trigger. */
+export const DEFAULT_BACKGROUND_PERCENT = 90;
+const MIN_BACKGROUND_PERCENT = 50;
+const MAX_BACKGROUND_PERCENT = 99;
+
+/** Meridian on its usual port: it writes one-hour caches and serializes the turns of one session key. */
+export function isMeridian(model: Pick<ModelIdentity, "api" | "baseUrl">): boolean {
+	return model.api === "anthropic-messages" && /^http:\/\/(127\.0\.0\.1|localhost):3456(?:\/|$)/.test(model.baseUrl ?? "");
+}
+
+/** A chat-completions engine on this machine or the LAN: one GPU, so a parallel request slows or evicts the main one. */
+export const isLocalCompletions = (model: Pick<ModelIdentity, "api" | "baseUrl">): boolean => model.api === "openai-completions" && isLocalEngineUrl(model.baseUrl);
 
 export const LOCAL_ENGINE_IDLE_MINUTES = 25;
 /** The IPv4 address in an IPv4-mapped IPv6 host; URL writes ::ffff:192.168.1.5 as ::ffff:c0a8:105. */
@@ -53,11 +68,9 @@ export function idleLimitMs(config: Config, model: Pick<ModelIdentity, "provider
 	if (override !== undefined) return override * 1000;
 	// Meridian's SDK writes one-hour caches. Leave five minutes for expiry/routing skew.
 	// Native Anthropic's usual five-minute TTL and Codex's shorter retention get a one-minute margin.
-	const meridian = model.api === "anthropic-messages" && /^http:\/\/(127\.0\.0\.1|localhost):3456(?:\/|$)/.test(model.baseUrl ?? "");
 	// Local engines usually keep a prefix until memory pressure evicts it. A miss here is a cold prefill of the whole
 	// conversation, larger than Pi's own summary prompt, so stay under a typical gateway idle window.
-	const local = model.api === "openai-completions" && isLocalEngineUrl(model.baseUrl);
-	return (meridian ? 55 : local ? LOCAL_ENGINE_IDLE_MINUTES : 4) * 60000;
+	return (isMeridian(model) ? 55 : isLocalCompletions(model) ? LOCAL_ENGINE_IDLE_MINUTES : 4) * 60000;
 }
 
 export function conversationKey(api: string): "messages" | "input" | "contents" | undefined {
@@ -187,7 +200,7 @@ export function formatFiles(files: Files): string {
 	return sections.length ? `\n\n${sections.join("\n\n")}` : "";
 }
 
-const FORMAT = `## Goal
+export const FORMAT = `## Goal
 [What is the user trying to accomplish? Include all goals.]
 
 ## Constraints & Preferences

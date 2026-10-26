@@ -2,6 +2,22 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Cache Compaction: background summary (opt-in,
+  `cacheCompaction.background: true`). At `backgroundPercent` (default 90)
+  of Pi's compaction trigger, the summary request starts beside the session.
+  At the trigger, the held summary becomes the compaction with no new
+  request, so the run pauses less or not at all. The work after the
+  start point stays verbatim. Changed branches, failed summaries, tails
+  larger than half the trigger, `/compact` and overflow use the normal
+  path. On Meridian the request uses its own session key, so that the main
+  turn does not wait behind it. Local chat-completions engines get no
+  background request. The log has the path `background` and a `background`
+  field.
+
 ## 0.31.0 - 2026-10-26
 
 ### Added

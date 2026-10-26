@@ -575,6 +575,50 @@ the reasoning of all turns before the last user message. Then the cache
 covers the conversation only up to the first assistant message after the
 previous user message (36% of the prompt in a synthetic check).
 
+**Background summary (opt-in).** Pi's automatic compaction pauses the run
+while the summary is written. In local sessions this pause had a median of
+69 s and a 90th percentile of 223 s (425 compactions). With
+`cacheCompaction.background: true`, the summary request starts earlier, beside
+the session:
+
+1. A reply puts the context at `backgroundPercent` (default 90) of Pi's
+   trigger (`contextWindow - reserveTokens`) or more. The extension sends the
+   summary request for the request of that reply. It shares that request's
+   cached prefix, as above.
+2. The session continues. The summary is held in memory. It is not applied.
+3. At Pi's trigger, the held summary becomes the compaction, with no new
+   request. The reply to the summarized request and all later messages stay
+   verbatim after it. If the summary is still being written, compaction waits
+   for the rest.
+
+The kept tail is larger than Pi's `keepRecentTokens`: it holds all the work
+after the start point. Pi uses the normal path (prefix sharing or its own)
+when one of these is true:
+
+- the model, the session or the branch changed after the start point;
+- the summary request failed or gave an unusable summary;
+- the summary plus the kept tail is more than half of Pi's trigger;
+- the compaction is manual (`/compact`) or overflow recovery.
+
+Each cycle sends one background request at most. If it fails (for example a
+short network error), the extension does not try again before Pi's trigger.
+An extension that edits earlier messages (for example one that shortens old
+tool results) changes the branch, so the held summary is not used.
+
+A held summary that Pi does not use is stopped. Its tokens are still billed,
+but they are not in the session's totals. A session that ends between the
+start point and the trigger also leaves its summary unused. The extension
+sends no background request to chat-completions models on a local engine,
+because a parallel request slows or evicts the main request on one GPU.
+
+Meridian serializes the requests of one session key: a summary with the
+session's own key made the next main request wait for the whole summary (10.7 s
+against 2.7 s in a probe). The background request to Meridian therefore uses
+its own key (`<session>:background` in `x-session-affinity`). In the probe,
+that request still read 25.5k of its 26.1k prompt tokens from the cache. Other
+providers get the session's own headers, and every payload keeps the
+session's own cache key.
+
 Subagents always load Cache Compaction, even when a package filter leaves it
 out of the main session. `cacheCompaction.enabled: false` turns it off in both.
 
@@ -585,7 +629,9 @@ Pi compacted, which path ran, the fallback reason and the token estimates.
 Cache-path attempts also record the stop reason and token usage. It never
 holds messages, summaries, headers or payloads. With Tool Display loaded, the
 session's compaction entry also saves the path and fallback reason, outside
-the model's context. Fallback reasons for a missed capture start with
+the model's context. With a background summary, the path is `background`, and
+the field `background` says `used`, why the held summary was not used, or
+`null` when none was held. Fallback reasons for a missed capture start with
 `capture-`: `no-system`, `no-model`, `projection`, `identity`, `payload`,
 `no-context`, `headers` and `failed`.
 
@@ -623,12 +669,19 @@ the room is too small, Pi's own compaction runs with the reason
 {
   "cacheCompaction": {
     "enabled": true,
-    "idleSeconds": { "anthropic": 3300, "openai-codex": 240 }
+    "idleSeconds": { "anthropic": 3300, "openai-codex": 240 },
+    "background": false,
+    "backgroundPercent": 90
   }
 }
 ```
 
 - `enabled`: `false` leaves Pi's compaction untouched.
+- `background`: `true` writes the summary ahead of Pi's trigger (see
+  "Background summary" above). Default `false`.
+- `backgroundPercent`: the start point, as a percent of Pi's trigger, from 50
+  to 99. Default 90. An earlier start gives the summary more time, but the
+  kept tail is larger and more summaries go unused.
 - `idleSeconds`: per provider, how long after the last request the cache
   counts as warm, from 0 to 86400 (0 means never use the cache path). The
   default is 55 minutes for Anthropic through Meridian on port 3456, which

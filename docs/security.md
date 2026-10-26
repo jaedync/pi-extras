@@ -140,6 +140,18 @@ without running it. The extension reads no credential files, changes no
 ordinary request, and adds no network destination, telemetry, timer or disk
 cache.
 
+**Background summary.** Off by default (`cacheCompaction.background`). When
+on, the same summary request goes out earlier, while the session continues:
+after a reply that puts the context at `backgroundPercent` of Pi's trigger.
+It contains the copied request and the summary instruction. The summary stays
+in memory until Pi's trigger and is never written to disk before Pi saves the
+compaction. Model changes, tree navigation, compaction, session start and
+shutdown stop and discard it. For Meridian only, the request's
+`x-session-affinity` header is the session ID plus `:background`, so that
+Meridian does not hold the main turn behind it. No other header or payload
+field changes. Chat-completions models on a local engine get no background
+request.
+
 **What it saves.** Pi saves the summary, file lists and usage, plus
 `details.cachePrefix: true` on prefix-sharing success. The compaction band's
 custom session entry also records the chosen path and fallback category when
@@ -157,7 +169,8 @@ rotation. Remove it when you no longer need the diagnostic history.
 
 **Limits.** Cache hits and expiry can't be guaranteed. Anything uncertain uses
 Pi's own compaction. A failed attempt is billed by the provider but not
-counted in the session's totals. Turn it off with
+counted in the session's totals. The same applies to a background summary that
+Pi does not use. Turn it off with
 `cacheCompaction.enabled: false`. This also turns it off in children, which
 always load it even when the parent excludes the extension through a package
 filter or loads only `subagents.ts` with `-e`.

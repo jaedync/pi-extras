@@ -1,6 +1,7 @@
-import { convertToLlm, type ExtensionAPI, type ExtensionContext, type SessionProjection, type SessionBeforeCompactEvent, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { calculateContextTokens, convertToLlm, estimateTokens, type ExtensionAPI, type ExtensionContext, type SessionEntry, type SessionProjection, type SessionBeforeCompactEvent, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { CONFIG_FILE, readSection } from "../lib/extras-config.ts";
-import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, loadConfig, mergePayload, payloadHashes, reconcile, requestEffort, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
+import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, isLocalCompletions, loadConfig, mergePayload, payloadHashes, reconcile, requestEffort, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
+import { backgroundDue, backgroundHeaders, backgroundInstruction, fileOpsOf, tailFits, type FileOps } from "../lib/cache-compaction/background.ts";
 
 import { dirname, join } from "node:path";
 import { operationalLine } from "../lib/operational-log.ts";
@@ -18,7 +19,7 @@ interface Captured extends RequestIdentity, Snapshot {
 	readonly headers?: Record<string, string>;
 	readonly effort?: RequestEffort;
 }
-type RequestSettings = Pick<SettingsManager, "getProviderRetrySettings" | "getHttpIdleTimeoutMs" | "getWebSocketConnectTimeoutMs" | "getTransport">;
+type RequestSettings = Pick<SettingsManager, "getProviderRetrySettings" | "getHttpIdleTimeoutMs" | "getWebSocketConnectTimeoutMs" | "getTransport" | "getCompactionSettings">;
 export interface CacheCompactionOptions { readonly configFile?: string; readonly now?: () => number; readonly settingsManager?: RequestSettings }
 
 function sessionOptions(settings: RequestSettings) {
@@ -81,6 +82,32 @@ async function streamed(registry: Registry, model: Complete[0], context: Complet
 	return stream.result();
 }
 
+type Model = NonNullable<ExtensionContext["model"]>;
+type Response = Awaited<ReturnType<typeof streamed>>;
+/** A summary written ahead of Pi's trigger: either its text and usage, or why it is unusable. */
+type HeldResult = { readonly summary: string; readonly usage: Response["usage"]; readonly stopReason: string } | { readonly failure: string };
+interface Held { readonly captured: Captured; readonly controller: AbortController; readonly result: Promise<HeldResult>; readonly ops: FileOps }
+
+/** The summary text, or why a response cannot become a checkpoint. */
+function summarize(response: Response, aborted: boolean, payloadFallback: string | undefined): { readonly summary: string } | { readonly failure: string } {
+	const summary = response.content.filter((block) => block.type === "text").map((block) => block.text).join("\n").trim();
+	if (aborted || response.stopReason === "aborted") return { failure: "aborted" };
+	if (response.stopReason === "error" || response.stopReason === "length") return { failure: payloadFallback ?? (response.stopReason === "length" ? "length" : "response-failed") };
+	if (!summary || response.content.some((block) => block.type === "toolCall")) return { failure: "unusable-summary" };
+	return { summary };
+}
+/** Entries Pi can keep first: never a tool result, which needs the call before it. */
+const CUT_ROLES = new Set(["user", "assistant", "bashExecution", "custom", "branchSummary", "compactionSummary"]);
+const cutPoint = (entry: SessionEntry) => entry.type === "message" ? CUT_ROLES.has(entry.message.role) : entry.type === "custom_message" || entry.type === "branch_summary";
+function settle<T>(promise: Promise<T>, signal: AbortSignal, aborted: T): Promise<T> {
+	if (signal.aborted) return Promise.resolve(aborted);
+	return new Promise((resolve) => {
+		const onAbort = () => resolve(aborted);
+		signal.addEventListener("abort", onAbort, { once: true });
+		void promise.then((value) => { signal.removeEventListener("abort", onAbort); resolve(value); });
+	});
+}
+
 function hashOnce(): (message: Message) => string {
 	const hashes = new WeakMap<Message, string>();
 	return (message) => { const known = hashes.get(message); if (known) return known; const hash = fingerprint(message); hashes.set(message, hash); return hash; };
@@ -133,18 +160,106 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 	let pending: Captured | undefined;
 	let latest: Captured | undefined;
 	let captureMiss: string | undefined;
+	let settings: RequestSettings | undefined;
+	let held: Held | undefined;
+	/** The held summary while a compaction waits for it, so a reset still stops it. */
+	let using: Held | undefined;
 	const clear = () => { pending = undefined; latest = undefined; captureMiss = undefined; };
 	const miss = (reason: string) => { clear(); captureMiss = reason; };
+	// An unused summary would only cost tokens; stop it.
+	const drop = () => { held?.controller.abort(); using?.controller.abort(); held = undefined; using = undefined; };
+	const reset = () => { clear(); drop(); };
 	pi.on("session_start", (_event, ctx) => {
-		clear();
-		try { policy = loadConfig(readSection("cacheCompaction", configFile)); requestOptions = sessionOptions(options.settingsManager ?? SettingsManager.create(ctx.cwd, getAgentDir(), { projectTrusted: ctx.isProjectTrusted() })); }
-		catch { requestOptions = undefined; }
+		reset();
+		try {
+			policy = loadConfig(readSection("cacheCompaction", configFile));
+			settings = options.settingsManager ?? SettingsManager.create(ctx.cwd, getAgentDir(), { projectTrusted: ctx.isProjectTrusted() });
+			requestOptions = sessionOptions(settings);
+		} catch { requestOptions = undefined; settings = undefined; }
 	});
-	pi.on("session_shutdown", clear);
-	pi.on("session_tree", clear);
-	pi.on("session_compact", clear);
-	pi.on("model_select", clear);
+	pi.on("session_shutdown", reset);
+	pi.on("session_tree", reset);
+	pi.on("session_compact", reset);
+	pi.on("model_select", reset);
 	pi.on("thinking_level_select", clear);
+
+	/** Sends the summary of the captured request beside the main turn. The promise never rejects. */
+	function startBackground(captured: Captured, model: Model, ctx: ExtensionContext): Held {
+		const controller = new AbortController();
+		const ops = fileOpsOf(captured.messages);
+		const previous = captured.messages.findLast((message) => message.role === "compactionSummary");
+		const previousSummary = previous?.role === "compactionSummary" ? previous.summary : undefined;
+		const prompt: Message = { role: "user", content: [{ type: "text", text: backgroundInstruction({ previousSummary: previousSummary !== undefined }) }], timestamp: now() };
+		const messages = convertToLlm([...captured.messages, prompt]);
+		const estimated = estimateRequestContext(messages);
+		const available = model.contextWindow - estimated.tokens - contextSafetyTokens(estimated.tailTokens);
+		const floor = summaryOutputFloor(previousSummary);
+		// Held as failed, so later replies above the start point do not try again.
+		if (available < floor) return { captured, controller, ops, result: Promise.resolve({ failure: "context-window" }) };
+		const sessionId = captured.sessionId;
+		const progress = (text: string) => {
+			try { pi.events.emit(COMPACTION_PROGRESS_EVENT, { sessionId, text: text.slice(-PROGRESS_TAIL_CHARS), chars: text.length }); }
+			catch { /* The live band is display only. */ }
+		};
+		let payloadFallback: string | undefined;
+		const result: Promise<HeldResult> = streamed(ctx.modelRegistry, model, { messages }, {
+			...requestOptions, headers: backgroundHeaders(model, sessionId, captured.headers), effort: captured.effort,
+			maxTokens: Math.min(model.maxTokens > 0 ? model.maxTokens : Infinity, available),
+			sessionId, signal: controller.signal,
+			onPayload: (generated: unknown) => {
+				try { return mergePayload(model.api, captured.payload!, generated, captured.payloadPrefix, floor); }
+				catch (error) { if (error instanceof Error && ["thinking-budget", "prefix-changed"].includes(error.message)) payloadFallback = error.message; throw error; }
+			},
+		}, progress).then((response): HeldResult => {
+			const text = summarize(response, controller.signal.aborted, payloadFallback);
+			return "failure" in text ? text : { summary: text.summary, usage: response.usage, stopReason: response.stopReason };
+		}, () => ({ failure: controller.signal.aborted ? "aborted" : payloadFallback ?? "request-failed" }));
+		return { captured, controller, ops, result };
+	}
+
+	/** The held summary as Pi's compaction, if the session still extends the request it summarized. */
+	async function useHeld(waiting: Held, event: SessionBeforeCompactEvent, ctx: ExtensionContext): Promise<{ readonly compaction: { summary: string; firstKeptEntryId: string; tokensBefore: number; usage: Response["usage"]; details: Record<string, unknown> }; readonly stopReason: string } | { readonly fallback: string }> {
+		const { captured } = waiting;
+		const model = routedModel(ctx);
+		if (!model || model.provider !== captured.provider || model.id !== captured.id || model.api !== captured.api || model.baseUrl !== captured.baseUrl) return { fallback: "model-changed" };
+		const result = await settle(waiting.result, event.signal, { failure: "aborted" });
+		if ("failure" in result) return { fallback: result.failure };
+		// Read the session after the wait: a reset may have dropped the summary, and the branch may have grown.
+		if (waiting.controller.signal.aborted) return { fallback: "aborted" };
+		if (ctx.sessionManager.getSessionId() !== captured.sessionId) return { fallback: "session-changed" };
+		const branch = ctx.sessionManager.getBranch();
+		const projection = ctx.sessionManager.buildSessionProjection();
+		const hash = hashOnce();
+		if (reconcile(captured, branch.map((entry) => entry.id), projection.messages, projection.messages.map(hash)) === undefined) return { fallback: "branch-changed" };
+		const kept = branch.slice(captured.ids.length).find(cutPoint);
+		const start = kept ? entryMessageIndex(projection, kept.id) : undefined;
+		if (!kept || start === undefined) return { fallback: "unknown-boundary" };
+		const previous = [...event.branchEntries].reverse().find((entry) => entry.type === "compaction");
+		const files = fileLists(waiting.ops, previous?.type === "compaction" ? previous.details : undefined);
+		const summary = result.summary + formatFiles(files);
+		// Like Pi's estimate after a compaction: the current system state, the summary and the kept messages.
+		const system = projection.messages.findLast((message) => message.role === "system");
+		const after = [...(system ? [system] : []), ...projection.messages.slice(start).filter((message) => message.role !== "system")]
+			.reduce((sum, message) => sum + estimateTokens(message), estimateTokens({ role: "user", content: summary, timestamp: 0 }));
+		if (!tailFits(after, Math.min(model.contextWindow, ctx.model?.contextWindow ?? Infinity) - event.preparation.settings.reserveTokens)) return { fallback: "tail-too-large" };
+		const p = event.preparation;
+		return { stopReason: result.stopReason, compaction: { summary, firstKeptEntryId: kept.id, tokensBefore: p.tokensBefore, usage: result.usage, details: { ...files, cachePrefix: true, background: true } } };
+	}
+
+	pi.on("message_end", (event, ctx) => {
+		try {
+			const message = event.message;
+			if (!policy.enabled || !policy.background || held || message.role !== "assistant" || message.stopReason === "aborted" || message.stopReason === "error") return;
+			const captured = latest;
+			const model = routedModel(ctx);
+			if (!captured?.payload || !model || !settings?.getCompactionSettings(model).enabled || isLocalCompletions(model)) return;
+			if (fallbackReason({ enabled: true, captured, model, sessionId: ctx.sessionManager.getSessionId(), now: now(), idleMs: idleLimitMs(policy, model), reason: "threshold", aborted: false })) return;
+			// Pi's trigger uses the selected model, the cache the routed one: the earlier trigger of the two decides.
+			const trigger = Math.min(...[model, ctx.model].flatMap((m) => m ? [m.contextWindow - settings!.getCompactionSettings(m).reserveTokens] : []));
+			if (!backgroundDue(calculateContextTokens(message.usage), trigger, policy.backgroundPercent)) return;
+			held = startBackground(captured, model, ctx);
+		} catch { /* An optimization only: Pi's trigger still compacts on the usual path. */ }
+	});
 
 	pi.on("context_with_system", (event, ctx) => {
 		pending = undefined;
@@ -196,20 +311,39 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 	pi.on("session_before_compact", async (event, ctx) => {
 		const captured = latest;
 		const missed = captureMiss;
+		const waiting = held;
+		held = undefined;
 		// A summary changes the request prefix even if a later hook wins or default compaction runs.
 		clear();
+		let background: string | null = null;
 		let metrics: Pick<CompactionDecision, "estimate" | "available" | "tailTokens"> = { estimate: null, available: null, tailTokens: null };
 		let outcome: Pick<CompactionDecision, "stopReason" | "usage"> = { stopReason: null, usage: null };
 		const floor = summaryOutputFloor(event.preparation.previousSummary);
 		const record = (path: CompactionDecision["path"], fallbackReason: string | null, key?: string) => {
 			// This allowlist deliberately excludes response content, diagnostics and provider errors.
 			try {
-				const decision: CompactionDecision = { time: new Date(now()).toISOString(), sessionId: ctx.sessionManager.getSessionId(), provider: ctx.model?.provider ?? null, model: ctx.model?.id ?? null, reason: event.reason, path, fallbackReason, tokensBefore: event.preparation.tokensBefore, ...metrics, floor, ...outcome };
+				const decision: CompactionDecision = { time: new Date(now()).toISOString(), sessionId: ctx.sessionManager.getSessionId(), provider: ctx.model?.provider ?? null, model: ctx.model?.id ?? null, reason: event.reason, path, fallbackReason, tokensBefore: event.preparation.tokensBefore, ...metrics, floor, ...outcome, background };
 				operationalLine(join(dirname(configFile), "cache-compaction.log"), JSON.stringify(decision));
 				pi.events.emit(COMPACTION_DECISION_EVENT, { path, fallbackReason, sessionId: decision.sessionId, ...(key ? { compactionKey: key } : {}) });
 			} catch { /* Best-effort diagnostics must never replace the compaction decision. */ }
 		};
 		const fallback = (reason: string) => { record("default", reason); report(ctx, `default (${reason})`); return undefined; };
+		if (waiting) {
+			// Manual compaction may carry its own focus, and overflow recovery must not wait on an old request.
+			using = waiting;
+			const used = event.reason !== "threshold" ? { fallback: event.reason } : await useHeld(waiting, event, ctx).catch(() => ({ fallback: "request-failed" }));
+			if (using === waiting) using = undefined;
+			if ("compaction" in used) {
+				const usage = used.compaction.usage;
+				background = "used";
+				outcome = { stopReason: used.stopReason, usage: { input: usage.input, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, output: usage.output } };
+				record("background", null, compactionKey(used.compaction));
+				report(ctx, "background");
+				return { compaction: used.compaction };
+			}
+			waiting.controller.abort();
+			background = used.fallback;
+		}
 		let payloadFallback: string | undefined;
 		try {
 			const model = routedModel(ctx);
@@ -243,10 +377,9 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 				},
 			}, progress);
 			outcome = { stopReason: response.stopReason, usage: { input: response.usage.input, cacheRead: response.usage.cacheRead, cacheWrite: response.usage.cacheWrite, output: response.usage.output } };
-			const summary = response.content.filter((block) => block.type === "text").map((block) => block.text).join("\n").trim();
-			if (event.signal.aborted || response.stopReason === "aborted") return fallback("aborted");
-			if (response.stopReason === "error" || response.stopReason === "length") return fallback(payloadFallback ?? (response.stopReason === "length" ? "length" : "response-failed"));
-			if (!summary || response.content.some((block) => block.type === "toolCall")) return fallback("unusable-summary");
+			const text = summarize(response, event.signal.aborted, payloadFallback);
+			if ("failure" in text) return fallback(text.failure);
+			const { summary } = text;
 			const previous = [...event.branchEntries].reverse().find((entry) => entry.type === "compaction");
 			const files = fileLists(p.fileOps, previous?.type === "compaction" ? previous.details : undefined);
 			const compaction = { summary: summary + formatFiles(files), firstKeptEntryId: p.firstKeptEntryId, tokensBefore: p.tokensBefore, usage: response.usage, details: { ...files, cachePrefix: true } };

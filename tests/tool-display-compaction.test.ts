@@ -225,6 +225,13 @@ test("untrusted saved fallback categories must be strings or null", () => {
 	}
 });
 
+test("a saved background path is read back; unknown paths are not", () => {
+	for (const [path, kept] of [["background", true], ["later", false]] as const) {
+		const saved = { type: "custom", customType: COMPACTION_ENTRY, data: { ...record, path, fallbackReason: null } };
+		assert.equal(matchCompaction(message, [entry, saved] as never)?.path, kept ? path : undefined);
+	}
+});
+
 test("branch changes drop abandoned records, and non-terminal sessions keep Pi's renderer", () => {
 	const h = harness();
 	try {
