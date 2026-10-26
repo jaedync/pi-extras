@@ -25,9 +25,16 @@ export PI_EXTRAS_RESTART_TOKEN
 PI_EXTRAS_LAUNCHER_PID=$$
 export PI_EXTRAS_LAUNCHER_PID
 
+# Sessions read and write this store, also when their XDG_DATA_HOME differs.
+PI_EXTRAS_UPDATE_STORE=$STORE
+export PI_EXTRAS_UPDATE_STORE
+
+# The real folder, not the pi-current link: then /proc/<pid>/cmdline names
+# the Pi release that this process runs, and GC keeps it.
 pi_bin() {
-	if [ -x "$STORE/pi-current/bin/pi" ]; then
-		printf '%s\n' "$STORE/pi-current/bin/pi"
+	real=$(cd -P "$STORE/pi-current" 2>/dev/null && pwd -P)
+	if [ -n "$real" ] && [ -x "$real/bin/pi" ]; then
+		printf '%s\n' "$real/bin/pi"
 	else
 		printf 'pi-extras launcher: %s is missing. Starting %s.\n' "$STORE/pi-current" "$FALLBACK_PI" >&2
 		printf '%s\n' "$FALLBACK_PI"
@@ -62,13 +69,30 @@ fi
 REQUEST="$STORE/restart/$PI_EXTRAS_RESTART_TOKEN"
 restarts=0
 window_start=$(date +%s)
+last_target=
+same_target=0
 
 "$(pi_bin)" "$@"
 code=$?
 while [ -f "$REQUEST" ]; do
-	session=$(sed -n 1p "$REQUEST")
-	# What the new Pi says once it runs: a new session has no file yet to read it from.
-	note=$(sed -n 2p "$REQUEST")
+	# Line 1: the session. Line 2: what the new Pi says once it runs (a new
+	# session has no file yet to read it from). Line 3: the set it moves to.
+	# Then one launch option per line, which the session checked against an
+	# allowlist. A read loop with `set --`: nothing in the file is evaluated.
+	session=
+	note=
+	target=
+	line_no=0
+	set --
+	while IFS= read -r line || [ -n "$line" ]; do
+		line_no=$((line_no + 1))
+		case $line_no in
+			1) session=$line ;;
+			2) note=$line ;;
+			3) target=$line ;;
+			*) set -- "$@" "$line" ;;
+		esac
+	done < "$REQUEST"
 	rm -f "$REQUEST"
 	[ -n "$session" ] || exit "$code"
 	now=$(date +%s)
@@ -81,8 +105,15 @@ while [ -f "$REQUEST" ]; do
 		printf 'pi-extras launcher: Pi restarted %s times in %s s. No more restarts. To continue, run: pi --session %s\n' "$MAX_RESTARTS" "$RESTART_WINDOW_S" "$session" >&2
 		exit "$code"
 	fi
+	# Restarts in a row for one target, however far apart: the session stops
+	# trying when it still does not run the target after a few of them.
+	if [ "$target" = "$last_target" ]; then same_target=$((same_target + 1)); else same_target=1; fi
+	last_target=$target
+	PI_EXTRAS_RESTART_COUNT=$same_target
+	PI_EXTRAS_RESTART_TARGET=$target
+	export PI_EXTRAS_RESTART_COUNT PI_EXTRAS_RESTART_TARGET
 	printf '%s\n' "pi-extras launcher: starting Pi again for the update." >&2
-	PI_EXTRAS_UPDATE_DONE=$note "$(pi_bin)" --session "$session"
+	PI_EXTRAS_UPDATE_DONE=$note "$(pi_bin)" "$@" --session "$session"
 	code=$?
 done
 exit "$code"

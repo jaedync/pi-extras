@@ -1,7 +1,7 @@
 /** The launcher script with a fake `pi`: exit codes, arguments, restarts, the loop guard, `pi update` and Ctrl+C. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,15 +22,21 @@ for arg in "$@"; do printf '[%s]\\n' "$arg" >> "$log"; done
 printf 'token=%s\\n' "$PI_EXTRAS_RESTART_TOKEN" >> "$log"
 printf 'note=%s\\n' "\${PI_EXTRAS_UPDATE_DONE-unset}" >> "$log"
 printf 'skip=%s\\n' "\${PI_SKIP_VERSION_CHECK-unset}" >> "$log"
+printf 'store=%s\\n' "\${PI_EXTRAS_UPDATE_STORE-unset}" >> "$log"
+printf 'self=%s\\n' "$0" >> "$log"
+printf 'restarts=%s target=%s\\n' "\${PI_EXTRAS_RESTART_COUNT-unset}" "\${PI_EXTRAS_RESTART_TARGET-unset}" >> "$log"
 [ -r /proc/$$/status ] && grep SigIgn /proc/$$/status >> "$log"
 runs=$(grep -c -- '--- run' "$log")
 case "$FAKE_MODE" in
 	exit7) exit 7 ;;
 	restart-once)
-		if [ "$runs" = 1 ]; then mkdir -p "$FAKE_STORE/restart"; printf '%s\\n%s\\n' "/sessions/a b.jsonl" "Updated: Pi 1.4.1" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; fi
+		# Lines: the session, the note, the target, then one replayed argument per line.
+		if [ "$runs" = 1 ]; then mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/a b.jsonl" "Updated: Pi 1.4.1" "T1" "--model" "x y" "it's" "*" '$HOME' "" "--offline" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; fi
 		exit 0 ;;
 	restart-always)
-		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 3 ;;
+		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T1" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 3 ;;
+	restart-two-targets)
+		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T$runs" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; [ "$runs" -lt 3 ] || rm -f "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 0 ;;
 	wait-int)
 		trap 'printf "%s\\n" got-int >> "$log"; exit 5' INT
 		printf '%s\\n' ready >> "$log"
@@ -89,19 +95,37 @@ test("the exit code passes through and every argument arrives unchanged", async 
 	assert.match(run!, /token=[0-9a-f]{16}\n/);
 });
 
-test("a restart request starts Pi again on the session, once", async (t) => {
+test("a restart request starts Pi again on the session with the replayed options, once", async (t) => {
 	const r = rig(t);
-	const result = await launch(r, ["--model", "x"], "restart-once").done;
+	const result = await launch(r, ["--model", "x", "--continue", "hello"], "restart-once").done;
 	assert.equal(result.code, 0);
 	const [first, second] = runs(r);
-	assert.ok(first!.startsWith("[--model]\n[x]\n"));
-	assert.ok(second!.startsWith("[--session]\n[/sessions/a b.jsonl]\ntoken="), second);
+	assert.ok(first!.startsWith("[--model]\n[x]\n[--continue]\n[hello]\n"));
+	// Exactly the replayed list, then the session: spaces, quotes, globs, "$HOME" and an empty argument unchanged.
+	assert.ok(second!.startsWith("[--model]\n[x y]\n[it's]\n[*]\n[$HOME]\n[]\n[--offline]\n[--session]\n[/sessions/a b.jsonl]\ntoken="), second);
 	assert.equal(first!.match(/token=(\w+)/)?.[1], second!.match(/token=(\w+)/)?.[1], "the token stays for the restarted Pi");
 	assert.match(first!, /note=unset\n/);
 	assert.match(second!, /note=Updated: Pi 1\.4\.1\n/, "line 2 of the request goes to the restarted Pi");
+	assert.match(first!, /restarts=unset target=unset\n/);
+	assert.match(second!, /restarts=1 target=T1\n/, "Pi learns how often the launcher restarted it for this target");
 	assert.equal(runs(r).length, 2);
 	assert.equal(existsSync(join(r.store, "restart", first!.match(/token=(\w+)/)![1]!)), false, "the request is consumed");
 	assert.match(result.stderr, /starting Pi again for the update/);
+});
+
+test("the restart count goes up for the same target and starts again for a new one", async (t) => {
+	const r = rig(t);
+	await launch(r, [], "restart-two-targets").done;
+	assert.deepEqual(runs(r).map((run) => run.match(/restarts=(\S+) target=(\S+)/)!.slice(1).join(" ")), ["unset unset", "1 T1", "1 T2"]);
+});
+
+test("Pi gets the launcher's store and runs from the real folder that pi-current names", async (t) => {
+	const r = rig(t);
+	await launch(r, [], "exit7").done;
+	const [run] = runs(r);
+	assert.match(run!, new RegExp(`store=${r.store.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n`));
+	// The real path, so /proc/<pid>/cmdline names the release folder that GC must keep.
+	assert.equal(run!.match(/self=(.*)\n/)?.[1], join(realpathSync(r.store), "pi", "1.0.0", "bin", "pi"));
 });
 
 test("more than 3 restarts in 60 s stop the loop with Pi's exit code", async (t) => {
@@ -109,6 +133,7 @@ test("more than 3 restarts in 60 s stop the loop with Pi's exit code", async (t)
 	const result = await launch(r, [], "restart-always").done;
 	assert.equal(result.code, 3);
 	assert.equal(runs(r).length, 4, "the first run and 3 restarts");
+	assert.match(runs(r)[3]!, /restarts=3 target=T1\n/);
 	assert.match(result.stderr, /restarted 3 times in 60 s\. No more restarts\. To continue, run: pi --session \/sessions\/s\.jsonl/);
 });
 
