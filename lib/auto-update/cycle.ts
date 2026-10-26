@@ -326,11 +326,11 @@ interface Search {
  * 4. No single removal helps: start from the changes that passed alone and
  *    add each failed change back; the ones that make that set fail are bad.
  */
-async function findCulprits(deps: CycleDeps, current: UpdateSet, candidate: UpdateSet, packages: readonly unknown[], deadline: number, first: string): Promise<Search> {
+async function findCulprits(deps: CycleDeps, current: UpdateSet, candidate: UpdateSet, packages: readonly unknown[], deadline: number, firstReason: string): Promise<Search> {
 	// Sources that the candidate drops are dropped in every set tried here.
 	const base: UpdateSet = { ...current, packages: Object.fromEntries(Object.entries(current.packages).filter(([key]) => candidate.packages[key])) };
 	const changes = changedKeys(base, candidate).filter((key) => idOf(candidate, key) !== undefined);
-	if (changes.length <= 1) return { culprits: changes.map((key) => ({ key, reason: first })), cleared: [], complete: true };
+	if (changes.length <= 1) return { culprits: changes.map((key) => ({ key, reason: firstReason })), cleared: [], complete: true };
 	const stopped = (cleared: readonly string[], passing?: UpdateSet): Search => ({ culprits: [], cleared, passing, complete: false });
 	const passed: string[] = [];
 	const failed: { key: string; reason: string }[] = [];
@@ -423,7 +423,7 @@ async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<Cycle
 		return { outcome: "smoke-failed", message };
 	}
 	deps.log(`smoke test failed for ${labels.join(", ")}: ${smoke.reason}`);
-	const search = await findCulprits(deps, current, candidate, packages, deadline, "the smoke test failed");
+	const search = await findCulprits(deps, current, candidate, packages, deadline, smoke.reason);
 	const decided = [...search.culprits.map((culprit) => culprit.key), ...search.cleared];
 	updateState(deps.paths.state, (now) => clearSuspect(search.culprits.reduce((next, culprit) => markBad(next, culprit.key, idOf(candidate, culprit.key)!, culprit.reason, deps.now()), now), releases(decided)));
 	for (const culprit of search.culprits) deps.log(`marked bad: ${labelOf(candidate, culprit.key)} (${culprit.reason})`);
@@ -431,8 +431,9 @@ async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<Cycle
 	const bad = search.culprits.map((culprit) => labelOf(candidate, culprit.key));
 	if (search.passing) {
 		const moved = changedKeys(current, search.passing).filter((key) => idOf(search.passing!, key)).map((key) => labelOf(candidate, key));
-		const failure = `${bad.length > 0 ? bad.join(", ") : "The rest"} failed its test: ${search.culprits[0]?.reason ?? smoke.reason}.${unfinished}`;
-		return switched(deps, search.passing, packages, `Updated: ${moved.join(", ")}. ${failure}`, [...errors, failure]);
+		const failure = `${bad.length > 0 ? `${bad.join(", ")} failed its test: ${search.culprits[0]!.reason}.` : ""}${unfinished}`.trim();
+		if (bad.length === 0) deps.log(`the first test failed (${smoke.reason}), and the same set passed again`);
+		return switched(deps, search.passing, packages, `Updated: ${moved.join(", ")}.${failure ? ` ${failure}` : ""}`, failure ? [...errors, failure] : errors);
 	}
 	const message = `The update to ${labels.join(", ")} failed its test: ${smoke.reason}.${unfinished} The current versions stay.`;
 	finish(deps, [...errors, message]);

@@ -101,6 +101,8 @@ test("the combination fails once, each change passes alone, the combination pass
 	const { smoke, tested } = judge(() => (++calls === 1 ? fail("Pi exited (1) before the reply: flaky") : PASS));
 	const result = await runCycle(w.cycleDeps({ smoke }), { force: true });
 	assert.equal(result.outcome, "switched", result.message);
+	assert.equal(result.message, "Updated: fixture-git 2.0.0, fixture-npm 1.0.2.");
+	assert.equal(readState(w.paths.state).lastError, undefined, "no failure to show");
 	assert.deepEqual(tested, ["pi 1.4.0, git 2.0.0, npm 1.0.2", "pi 1.4.0, git 2.0.0, npm 1.0.0", "pi 1.4.0, git 1.0.0, npm 1.0.2", "pi 1.4.0, git 2.0.0, npm 1.0.2"]);
 	const state = readState(w.paths.state);
 	assert.deepEqual(state.bad, {});
