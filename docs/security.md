@@ -842,8 +842,12 @@ tokens and URL passwords before it goes into the log or `state.json`.
   folders it uses) and restart requests (mode `0600`, the session file
   path).
 
-A session that runs when auto-update is off writes no files. The checks
-stop with `PI_OFFLINE=1`.
+When auto-update is off, a session creates no store and no lease. It writes
+only an error line to `pi-extras.log` in the agent directory if something
+fails. The checks stop with `PI_OFFLINE=1`.
+
+The installed folders are read-only. To remove the store by hand, first run
+`chmod -R u+w` on it, or use the `gc` command.
 
 ### Limits
 
