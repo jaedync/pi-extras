@@ -31,6 +31,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   how to use the new set now. A version whose test did not finish 2 times
   in a row waits 24 hours before the next try. A check for a different
   agent directory changes nothing.
+- Auto-update: when a set fails its test, the check finds the version that
+  caused it, also when two new versions need each other. The other new
+  versions switch in the same check. A test that times out marks nothing
+  bad. npm packages follow npm's own `min-release-age` too.
 
 ## 0.29.0 - 2026-10-24
 

@@ -805,8 +805,12 @@ enable` in a shell. A session cannot turn it on.
 
 ### What it runs
 
-- `npm view` and `git ls-remote --tags` to find new versions.
-- `npm install -g --prefix <store folder> --ignore-scripts` for Pi.
+- `npm view`, `npm config get min-release-age` and `git ls-remote --tags`
+  to find new versions. npm and git run in the store folder, so the
+  `.npmrc` of the project where a session started has no effect.
+- `npm install -g --prefix <store folder> --ignore-scripts
+  --min-release-age=0` for Pi, the same as `pi update`. The package
+  installs keep your `min-release-age`, also for their dependencies.
 - `npm install` for an npm package, and `git clone --depth 1` followed by
   `npm install --omit=dev` for a Git package. These run the package's
   install scripts, the same as `pi install` does. A new release of a
@@ -884,9 +888,11 @@ The installed folders are read-only. To remove the store by hand, first run
   GC never removes the folders of the current and the previous set.
 - The launcher writes a lease for the Pi folder that it starts, before it
   starts Pi and again before each restart. The lease counts while the
-  launcher process lives, and the launcher lives as long as its Pi. The
-  launcher removes the lease when it stops. If the launcher is killed, GC
-  finds that its process is gone and removes the lease. Thus the launcher
+  launcher process lives, and the launcher lives as long as its Pi. A
+  SIGTERM or SIGHUP to the launcher takes effect after its Pi stops. The
+  launcher removes the lease when it stops. If the launcher is killed
+  (SIGKILL), GC finds that its process is gone and removes the lease. GC
+  also removes restart requests that are older than one day. Thus the launcher
   protects the Pi folder also when Pi does not load pi-extras, for example
   with `--no-extensions`.
 - A Pi that you start without the launcher (for example by the full path

@@ -110,11 +110,22 @@ newest versions, run `pi update --all`.
   folder.
 - It starts the new set in a test Pi that uses no account and no network.
   If an extension does not load or fails at startup, the set is not used.
-  The version that caused the failure is marked bad and is not tried again.
-- If a check stops before its test gives a result (for example at the
-  10-minute limit), the versions in that test are suspect. After 2 such
-  checks in a row, the checks skip them for 24 hours and then try them
-  again. A suspect version is not marked bad: no fault was found.
+- When a set with several new versions fails, the check tests each new
+  version alone, and then the set without each failed version. Thus it
+  finds the version that caused the failure, also when two new versions
+  need each other (for example a new Pi and a pi-extras release that needs
+  it). That version is marked bad and is not tried again. The other new
+  versions switch in the same check.
+- If each new version passes alone, the check tests the full set one more
+  time. If it passes, the set is used. If it fails again, all its new
+  versions are marked bad.
+- If a test gives no result (no reply in 90 seconds, for example on a busy
+  machine, Pi did not start, or the check stopped at its 10-minute limit),
+  the versions in that test are suspect. After 2 such checks in a row, the
+  checks skip them for 24 hours and then try them again. A suspect version
+  is not marked bad: no fault was found.
+- When you remove a package from `settings.json`, the next check stops
+  updating it without a test.
 - If the test passes, it changes the `pi-current` link in the store and
   the `packages` entries in `settings.json` to the new folders.
 - Each running session moves to the new set when it is idle for 30 seconds.
@@ -158,6 +169,8 @@ newest versions, run `pi update --all`.
 - keeps a lease on the Pi folder that it started while Pi runs, so the
   cleanup does not remove that folder. This also works for a Pi that does
   not load pi-extras;
+- stops after its Pi when it gets SIGTERM or SIGHUP, and then does not
+  start Pi again;
 - starts Pi again after a session asks for a restart (at most 3 times in 60
   seconds). After 2 restarts that did not bring the new set, the session
   stops and shows a notice. A restart occurs only when Pi stopped with exit
@@ -195,7 +208,7 @@ Put these in the `autoUpdate` section of `~/.pi/agent/pi-extras.json`:
 | --- | --- | --- |
 | `enabled` | `false` | `enable` and `disable` set it |
 | `intervalMinutes` | `5` | Minutes between checks (1 or more) |
-| `minReleaseAgeHours` | `0` | Use only npm releases (Pi and npm packages) that are at least this old. Git tags have no age check |
+| `minReleaseAgeHours` | `0` | Use only npm releases (Pi and npm packages) that are at least this old. Git tags have no age check. For npm packages, npm's own `min-release-age` (in days) applies too, and the larger value wins. The Pi install ignores npm's setting, as `pi update` does |
 | `adopt` | `"auto"` | `"notice"`: do not reload or restart; show a notice instead |
 | `paused` | `false` | No checks |
 | `sources` | `{}` | For each source as `settings.json` names it: `"tags"` (Git: newest `v*` tag), `"head"` (Git: newest commit of the default branch) or `"skip"` (do not update it) |
