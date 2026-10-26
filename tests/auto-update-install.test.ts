@@ -94,6 +94,28 @@ test("an npm release lands in its own prefix and names the package folder as its
 	assert.deepEqual(readdirSync(join(paths.packagesRoot, "npm-scope-web-33483486")), ["2.0.0"]);
 });
 
+test("every npm install turns off npm's own min-release-age: only minReleaseAgeHours decides", async (t) => {
+	const root = scratch(t);
+	const paths = storePaths(join(root, "store"));
+	const seen: string[][] = [];
+	const record = (inner: Runner): Runner => async (command, args, options) => {
+		if (command === "npm") seen.push([...args]);
+		return inner(command, args, options);
+	};
+	await installNpmRelease(paths, origin("npm:@scope/web") as Extract<Origin, { kind: "npm" }>, "2.0.0", deps(record(fakeNpm(() => "2.0.0"))));
+	await installPi(paths, "@earendil-works/pi-coding-agent", "1.4.1", deps(record(fakeNpm(() => "1.4.1"))));
+	// A git package with a package.json gets `npm install --omit=dev` in its clone.
+	const host = fakeGitHost(join(root, "host"));
+	const repo = gitPackage(join(host.root, "a", "repo"), "good");
+	tagRelease(repo, "good", "1.0.0");
+	const source = origin(host.url("a/repo")) as Extract<Origin, { kind: "git" }>;
+	const found = await newestGit(source.url, "tags", runCommand, { prereleases: false });
+	const okNpm: Runner = async (command, args, options) => (command === "npm" ? { code: 0, stdout: "", stderr: "", timedOut: false } : runCommand(command, args, options));
+	await installGitRelease(paths, source, found, deps(record(okNpm)));
+	assert.equal(seen.length, 3, JSON.stringify(seen));
+	for (const args of seen) assert.ok(args.includes("--min-release-age=0"), args.join(" "));
+});
+
 test("Pi installs into its own prefix with scripts off", async (t) => {
 	const paths = storePaths(join(scratch(t), "store"));
 	const seen: string[][] = [];
