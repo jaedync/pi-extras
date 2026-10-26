@@ -13,7 +13,7 @@ import { processStart, writeLease } from "../lib/auto-update/leases.ts";
 import { readSettingsPackages } from "../lib/auto-update/settings.ts";
 import { readState } from "../lib/auto-update/state.ts";
 import { flipPiCurrent } from "../lib/auto-update/switch.ts";
-import { fixturePackage, PI_NAME, tagRelease } from "./support/auto-update-fixtures.ts";
+import { fixturePackage, PI_NAME, removeTree, tagRelease } from "./support/auto-update-fixtures.ts";
 import { ORIGINAL_SETTINGS, world, type World } from "./support/auto-update-world.ts";
 
 const GIT_KEY = "git-git.example.invalid-jaedync-fixture-git";
@@ -289,4 +289,24 @@ test("a symlinked store path: enable writes the real path into settings.json and
 	assert.equal(stored.length, 2);
 	for (const source of stored) assert.ok(source.startsWith(`${real}/`), source);
 	assert.match(w.read(w.launcher), new RegExp(`^STORE='${real.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'$`, "m"));
+});
+
+test("with the store gone, disable restores settings.json and the link from the copy in the agent dir", async (t) => {
+	const w = world(t);
+	tagRelease(w.gitRepo, "good", "1.0.0");
+	const beforeSettings = w.read(w.settings);
+	const beforeLink = readlinkSync(w.launcher);
+	assert.equal((await w.cli("enable")).code, 0);
+	const undo = join(w.agentDir, "pi-extras-update-undo.json");
+	assert.ok(existsSync(undo), "enable keeps the undo data beside pi-extras.json");
+	assert.equal(lstatSync(undo).mode & 0o777, 0o600);
+	removeTree(w.paths.root);
+	assert.equal(existsSync(w.paths.root), false);
+	const off = await w.cli("disable");
+	assert.equal(off.code, 0, `${off.stdout}\n${off.stderr}`);
+	assert.match(off.stdout, /copy in .*pi-extras-update-undo\.json/);
+	assert.equal(w.read(w.settings), beforeSettings, "settings.json is byte for byte as before");
+	assert.equal(readlinkSync(w.launcher), beforeLink);
+	assert.equal(existsSync(undo), false, "disable removes the copy");
+	assert.match((await w.cli("disable")).stdout, /not on/);
 });

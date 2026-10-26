@@ -20,6 +20,7 @@ import { readSettingsPackages, settingsFile } from "./settings.ts";
 import { applySet, classify, entryKey, entrySource } from "./sources.ts";
 import { markBad, readState, sameSet, updateState, type PackageRelease, type PiRelease, type UpdateSet, type UpdateState } from "./state.ts";
 import { applySwitch, piCurrentMatches, settingsMatch } from "./switch.ts";
+import { writeUndo } from "./undo.ts";
 import type { SmokeInput, SmokeResult } from "./smoke.ts";
 
 export const CYCLE_LIMIT_MS = 10 * 60_000;
@@ -274,7 +275,7 @@ async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<Cycle
 
 /** Records the new current set (with the original of each newly managed entry, for `disable`), then flips the link and settings. */
 export function switchTo(deps: Pick<CycleDeps, "paths" | "agentDir" | "now">, candidate: UpdateSet, packages: readonly unknown[]): void {
-	updateState(deps.paths.state, (state) => {
+	const next = updateState(deps.paths.state, (state) => {
 		const managed = { ...state.managed };
 		for (const entry of packages) {
 			const key = entryKey(entry, deps.paths.root);
@@ -283,6 +284,8 @@ export function switchTo(deps: Pick<CycleDeps, "paths" | "agentDir" | "now">, ca
 		}
 		return { ...state, previous: state.current, current: candidate, managed };
 	});
+	// Before settings.json names the new folders: the copy must already hold their originals.
+	if (next.enabled) writeUndo(deps.agentDir, { storeRoot: deps.paths.root, enabled: next.enabled, managed: next.managed });
 	applySwitch(deps.paths, settingsFile(deps.agentDir), candidate);
 }
 

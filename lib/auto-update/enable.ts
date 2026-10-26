@@ -19,7 +19,8 @@ import type { Runner } from "./run.ts";
 import { readSettingsPackages, rewriteSettingsPackages, settingsFile } from "./settings.ts";
 import type { SmokeInput, SmokeResult } from "./smoke.ts";
 import { restoreOriginals } from "./sources.ts";
-import { emptyState, readState, updateState, writeState, type PackageRelease, type UpdateSet } from "./state.ts";
+import { emptyState, readState, updateState, writeState, type EnableRecord, type ManagedEntry, type PackageRelease, type UpdateSet, type UpdateState } from "./state.ts";
+import { readUndo, removeUndo, undoFile } from "./undo.ts";
 import { newestNpm } from "./versions.ts";
 
 export interface EnableDeps {
@@ -150,15 +151,31 @@ export async function enable(deps: EnableDeps): Promise<void> {
 	}
 }
 
+/** What disable undoes: from state.json, or from the copy in the agent dir when the store is gone or broken. */
+function undoSource(deps: Pick<EnableDeps, "agentDir" | "paths">): { enabled: EnableRecord; managed: Readonly<Record<string, ManagedEntry>>; storeRoot: string; fromCopy: boolean } | undefined {
+	let state: UpdateState | undefined;
+	try {
+		state = readState(deps.paths.state);
+	} catch {
+		// A state.json this code cannot read: the copy decides.
+		state = undefined;
+	}
+	const copy = readUndo(deps.agentDir);
+	if (state?.enabled) return { enabled: state.enabled, managed: { ...copy?.managed, ...state.managed }, storeRoot: deps.paths.root, fromCopy: false };
+	if (copy) return { enabled: copy.enabled, managed: copy.managed, storeRoot: copy.storeRoot, fromCopy: true };
+	return undefined;
+}
+
 export async function disable(deps: Pick<EnableDeps, "home" | "agentDir" | "paths" | "now" | "log" | "out">): Promise<void> {
-	const state = readState(deps.paths.state);
-	if (!state.enabled) {
+	const source = undoSource(deps);
+	if (!source) {
 		deps.out("Auto-update is not on. Nothing changed.");
 		return;
 	}
 	const lock = takeLock(deps.paths);
 	try {
-		const { launcher, previousLink } = state.enabled;
+		if (source.fromCopy) deps.out(`The store has no record of enable, so disable uses the copy in ${undoFile(deps.agentDir)}.`);
+		const { launcher, previousLink } = source.enabled;
 		if (isLauncher(launcher)) {
 			restoreLink(launcher, previousLink);
 			deps.out(`Changed ${launcher}: it is a link to ${previousLink} again.`);
@@ -166,7 +183,7 @@ export async function disable(deps: Pick<EnableDeps, "home" | "agentDir" | "path
 			deps.out(`${launcher} is not the pi-extras launcher now, so it stays as it is.`);
 		}
 		const settings = settingsFile(deps.agentDir);
-		const change = rewriteSettingsPackages(settings, (packages) => restoreOriginals(packages, state.managed, deps.paths.root));
+		const change = rewriteSettingsPackages(settings, (packages) => restoreOriginals(packages, source.managed, source.storeRoot));
 		change.before.forEach((entry, index) => {
 			if (JSON.stringify(entry) !== JSON.stringify(change.after[index])) deps.out(`Changed ${settings}: ${JSON.stringify(entry)} -> ${JSON.stringify(change.after[index])}`);
 		});
@@ -175,6 +192,7 @@ export async function disable(deps: Pick<EnableDeps, "home" | "agentDir" | "path
 		deps.out(`Changed ${join(deps.agentDir, "pi-extras.json")}: autoUpdate.enabled is false.`);
 		// Running sessions may still load from the store, so it stays; "gc" removes what no live session uses.
 		updateState(deps.paths.state, (current) => ({ ...current, enabled: undefined, current: undefined, previous: undefined, managed: {} }));
+		removeUndo(deps.agentDir);
 		deps.log("disabled");
 		deps.out(`The store at ${deps.paths.root} stays while Pi sessions use it. Run "gc" later to remove what no session uses.`);
 		deps.out("Pi installs the original packages again at its next start.");
