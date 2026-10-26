@@ -6,7 +6,8 @@
  * The cycle tests are in four files, so that they run in parallel.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_CONFIG } from "../lib/auto-update/config.ts";
@@ -34,6 +35,22 @@ test("a new tag and a new npm version are installed, tested and switched; the ol
 	assert.equal(quiet.outcome, "throttled", "a second check within the interval does nothing");
 	const none = await runCycle(w.cycleDeps(), { force: true });
 	assert.equal(none.outcome, "no-change");
+});
+
+test("an annotated tag (as real pi-extras releases have) installs at its commit, not at the tag object", async (t) => {
+	const w = await enabled(t);
+	const commit = tagRelease(w.gitRepo, "good", "1.1.0", true);
+	const tagObject = execFileSync("git", ["-C", w.gitRepo, "rev-parse", "v1.1.0"], { encoding: "utf8" }).trim();
+	assert.notEqual(tagObject, commit, "the fixture tag is annotated");
+	const result = await runCycle(w.cycleDeps(), { force: true });
+	assert.equal(result.outcome, "switched", result.message);
+	const installed = readState(w.paths.state).current!.packages[GIT_KEY]!;
+	assert.equal(installed.id, `1.1.0-${commit.slice(0, 7)}`);
+	assert.equal(installed.label, "fixture-git 1.1.0");
+	// The install checks `git rev-parse HEAD` of the clone against the lookup's commit; the folder holds that commit.
+	assert.equal(execFileSync("git", ["-C", installed.dir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), commit);
+	assert.equal(JSON.parse(readFileSync(join(installed.dir, "package.json"), "utf8")).version, "1.1.0");
+	assert.equal(entrySources(w)[0], installed.entry);
 });
 
 test("two cycles started together install a release once (the updater lock)", async (t) => {

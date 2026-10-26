@@ -10,9 +10,9 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { installNpmRelease } from "../lib/auto-update/install.ts";
+import { installGitRelease, installNpmRelease } from "../lib/auto-update/install.ts";
 import { storePaths } from "../lib/auto-update/paths.ts";
-import { runCommand } from "../lib/auto-update/run.ts";
+import { runCommand, type Runner } from "../lib/auto-update/run.ts";
 import { classify, type Origin } from "../lib/auto-update/sources.ts";
 import { compareSemver, newestGit, newestNpm, parseSemver } from "../lib/auto-update/versions.ts";
 import { removeTree } from "./support/auto-update-fixtures.ts";
@@ -37,6 +37,31 @@ test("newestGit finds the newest v tag of pi-extras on GitHub", { skip }, async 
 	assert.equal(release.id, `${release.version}-${release.commit.slice(0, 7)}`);
 	const head = await newestGit("https://github.com/jaedync/pi-extras", "head", runCommand, { prereleases: false });
 	assert.match(head.id, /^head-[0-9a-f]{7}$/);
+});
+
+test("pi-extras v0.29.0, an annotated tag, gives commit 769297a in the lookup, the store id and the clone", { skip }, async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "au-real-"));
+	t.after(() => removeTree(root));
+	// Real git and GitHub, but ls-remote keeps only the v0.29.0 lines, so that v0.29.0 is the newest tag.
+	// The tag object is e7ea1cb; only the peeled `^{}` line names the commit.
+	const runner: Runner = async (command, args, options) => {
+		if (command === "npm") return { code: 0, stdout: "", stderr: "", timedOut: false };
+		const result = await runCommand(command, args, options);
+		if (args[0] !== "ls-remote") return result;
+		assert.match(result.stdout, /^e7ea1cb[0-9a-f]+\trefs\/tags\/v0\.29\.0$/m);
+		return { ...result, stdout: result.stdout.split("\n").filter((line) => /\trefs\/tags\/v0\.29\.0(\^\{\})?$/.test(line)).join("\n") };
+	};
+	const url = "https://github.com/jaedync/pi-extras";
+	const release = await newestGit(url, "tags", runner, { prereleases: false });
+	assert.equal(release.ref, "v0.29.0");
+	assert.equal(release.commit.slice(0, 7), "769297a");
+	assert.equal(release.id, "0.29.0-769297a");
+	// The install clones the tag and checks `git rev-parse HEAD` against the commit (npm is skipped: no dependencies needed).
+	const origin = (classify(`git:github.com/jaedync/pi-extras`, "/nowhere") as { origin: Origin }).origin as Extract<Origin, { kind: "git" }>;
+	const installed = await installGitRelease(storePaths(root), origin, release, { runner, now: Date.now });
+	assert.equal(installed.id, "0.29.0-769297a");
+	assert.equal(installed.label, "pi-extras 0.29.0");
+	assert.equal((await runCommand("git", ["-C", installed.dir, "rev-parse", "HEAD"], { timeoutMs: 30_000 })).stdout.trim(), release.commit);
 });
 
 test("installNpmRelease installs a small real package and checks its version", { skip }, async (t) => {
