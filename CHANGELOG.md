@@ -15,6 +15,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 - Auto-update: running sessions move to a new set when they are idle for
   30 seconds. They reload for package changes. A terminal session restarts
   for a new Pi. The status line shows `updating: ...` while a check runs.
+- Auto-update: `pi update` through the launcher starts a check in the
+  background and stops at once. Pi's own "New version" message is off while
+  auto-update manages Pi. If something writes over the launcher, sessions
+  show a warning.
 - Auto-update: `/pi-extras update` shows the state. `now`, `rollback`,
   `pause` and `resume` control it. `disable` puts back `~/.local/bin/pi`
   and the original `settings.json` entries.

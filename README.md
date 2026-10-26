@@ -134,11 +134,16 @@ To turn it off, run the same command with `disable`. `disable` puts back
 - starts Pi from the store, with all your arguments;
 - starts Pi again after a session asks for a restart (at most 3 times in 60
   seconds);
-- changes `pi update` to an update check. Pi and its packages update
-  automatically.
+- changes `pi update` to an update check that runs in the background with a
+  low priority. The command stops at once. Use `/pi-extras update` to see
+  the result;
+- turns off Pi's own "New version" message while auto-update manages Pi.
+  With `"pi": "skip"`, the message stays.
 
 Do not run `npm install -g` for Pi while auto-update is on. It writes over
-the launcher. Run `disable` first.
+the launcher. Run `disable` first. If the launcher is gone, the next check
+records the problem and each session shows a warning. Run `enable` again
+to put the launcher back, or run `disable`.
 
 ### Commands
 

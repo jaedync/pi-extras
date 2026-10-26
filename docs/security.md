@@ -817,6 +817,8 @@ enable` in a shell. A session cannot turn it on.
   model server on `127.0.0.1` and no account. It does not see `auth.json`.
 - Each check runs as a separate process with low CPU and disk priority
   (`nice` and, on Linux, `ionice`). A command that runs too long is stopped.
+  `pi update` through the launcher starts a check the same way and does not
+  wait for it.
 
 ### Credentials
 
@@ -839,8 +841,8 @@ tokens and URL passwords before it goes into the log or `state.json`.
   for each installed version, made read-only after the install, plus
   `state.json`, `update.log` (at most 256 KB), a lock file, one lease file
   for each running session (process ID, mode, session file path and the
-  folders it uses) and restart requests (mode `0600`, the session file
-  path).
+  folders it uses), restart requests (mode `0600`, the session file
+  path) and `pi-managed` (an empty file; the launcher reads it).
 
 When auto-update is off, a session creates no store and no lease. It writes
 only an error line to `pi-extras.log` in the agent directory if something
@@ -855,6 +857,8 @@ The installed folders are read-only. To remove the store by hand, first run
   or a tool, so it cannot find a fault that shows only later. Use
   `/pi-extras update rollback` to go back.
 - `npm install -g` of Pi writes over the launcher. Run `disable` first.
+  The check does not repair the launcher, because the file is outside the
+  store. It records the problem, and sessions show a warning.
 - macOS is not fully tested.
 
 ## Idle GC
