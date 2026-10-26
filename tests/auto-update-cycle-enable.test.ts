@@ -4,7 +4,7 @@
  * the smoke test. This file: enable and disable (the first set, the
  * launcher, the pi-managed marker, a symlinked store, the undo copy and
  * skip sources).
- * The cycle tests are in four files, so that they run in parallel.
+ * The cycle tests are in five files, so that they run in parallel.
  */
 import assert from "node:assert/strict";
 import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";

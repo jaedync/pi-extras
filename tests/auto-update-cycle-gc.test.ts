@@ -3,7 +3,7 @@
  * git with local repositories, a fake npm, and the real development Pi in
  * the smoke test. This file: rollback and GC (leases, folders that
  * settings.json names, and stale staging folders).
- * The cycle tests are in four files, so that they run in parallel.
+ * The cycle tests are in five files, so that they run in parallel.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";

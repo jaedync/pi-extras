@@ -3,7 +3,7 @@
  * git with local repositories, a fake npm, and the real development Pi in
  * the smoke test. This file: new versions (install, test and switch,
  * the updater lock, crash repair and new entries).
- * The cycle tests are in four files, so that they run in parallel.
+ * The cycle tests are in five files, so that they run in parallel.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
