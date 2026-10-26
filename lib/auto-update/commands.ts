@@ -1,6 +1,7 @@
 /** `rollback` and `gc`: small commands that run under the updater lock. */
 import { waitForLock, type FileLock } from "../file-lock.ts";
-import { collect, changedKeys, LOCK_STALE_MS, switchTo } from "./cycle.ts";
+import { changedKeys } from "./culprits.ts";
+import { collect, LOCK_STALE_MS, switchTo } from "./cycle.ts";
 import { CommandError } from "./enable.ts";
 import type { Log } from "./log.ts";
 import type { StorePaths } from "./paths.ts";
