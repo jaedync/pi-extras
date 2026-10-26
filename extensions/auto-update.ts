@@ -53,8 +53,8 @@ function restartedFrom(env: NodeJS.ProcessEnv): { count: number; target: string 
 	return Number.isSafeInteger(count) && count > 0 && target ? { count, target } : undefined;
 }
 
-/** Versioned: a later pi-extras that keeps other data here picks a new symbol. */
 const FOCUS_WIDGET = "pi-extras-auto-update-focus";
+/** Versioned: a later pi-extras that keeps other data here picks a new symbol. */
 const HISTORY = Symbol.for("pi-extras.auto-update.loaded-releases.v1");
 
 /** One set per process, on globalThis: each reload loads this module again, and the set must outlive it. */

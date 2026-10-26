@@ -423,6 +423,11 @@ test("a launch option that cannot be replayed: the Pi update is a notice, not a 
 	session.poll();
 	await session.apply(actions(h));
 	assert.deepEqual(h.calls, []);
+	const odd = new UpdateSession({ ...h.host, sessionFile: () => "/sessions/a\nb.jsonl" });
+	odd.start("resume");
+	h.clock += QUIET_MS;
+	odd.poll();
+	assert.deepEqual(h.calls, [], "a session path with a line break cannot go into the request");
 	assert.equal(h.statuses.at(-1), "Pi 1.4.1 ready: restart to use it");
 	assert.equal(existsSync(h.paths.restart), false);
 });

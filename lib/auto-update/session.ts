@@ -227,12 +227,18 @@ export class UpdateSession {
 		}
 	}
 
+	/** The launcher started this process, and the request file can name the session and the options line by line. */
+	private canRestart(): boolean {
+		const file = this.host.sessionFile();
+		return this.host.restartToken !== undefined && this.host.launchedByLauncher && file !== undefined && !/[\r\n]/.test(file) && replayArgs(this.host.argv).ok;
+	}
+
 	decision(state = safeState(this.host.paths)): Decision {
 		if (!state?.current) return { kind: "none" };
 		const target = fingerprint(state.current);
 		return decide({
 			own: this.own, state, storeRoot: this.host.paths.root, adopt: this.config().adopt, mode: this.host.mode,
-			canRestart: this.host.restartToken !== undefined && this.host.launchedByLauncher && this.host.sessionFile() !== undefined && replayArgs(this.host.argv).ok,
+			canRestart: this.canRestart(),
 			ready: this.ready(state), attempts: this.attempts(target),
 		});
 	}
@@ -268,12 +274,12 @@ export class UpdateSession {
 		if (decision.kind === "reload") return actions.reload();
 		const file = this.host.sessionFile();
 		const replay = replayArgs(this.host.argv);
-		if (!file || !this.host.restartToken || !replay.ok) return;
+		if (!file || !this.host.restartToken || !replay.ok || !this.canRestart()) return;
 		mkdirSync(this.host.paths.restart, { recursive: true, mode: 0o700 });
 		const request = join(this.host.paths.restart, this.host.restartToken);
 		// Line 1: the session to resume. Line 2: what the restarted Pi says when the session has no file yet.
 		// Line 3: the target, for the launcher's count. Then one launch option per line (none holds a line break).
-		const lines = [file, after, decision.target].map((line) => line.replace(/[\r\n]+/g, " "));
+		const lines = [file, after.replace(/[\r\n]+/g, " "), decision.target.replace(/[\r\n]+/g, " ")];
 		writeFileSync(request, [...lines, ...replay.args].map((line) => `${line}\n`).join(""), { mode: 0o600 });
 		try {
 			actions.shutdown();
