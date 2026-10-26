@@ -43,6 +43,12 @@ export interface SessionHost {
 	readonly sessionFile: () => string | undefined;
 	/** Real paths of the code this process loaded: pi-extras itself and the sources of tools and commands. */
 	readonly loadedPaths: () => readonly string[];
+	/**
+	 * Every store release this process loaded, across reloads. Old code keeps
+	 * running after a reload (parked runtimes, timers, late imports), so the
+	 * lease names all of them until the process quits.
+	 */
+	readonly history: Set<string>;
 	readonly branch: () => readonly { type: string; customType?: string; data?: unknown }[];
 	readonly appendEntry: (data: UpdateEntryData) => void;
 	readonly notify: (text: string, level: "info" | "warning") => void;
@@ -137,7 +143,8 @@ export class UpdateSession {
 		const start = processStart(process.pid);
 		if (start === undefined) return;
 		const extras = realOr(this.host.extrasDir);
-		const releases = [...new Set([...this.own.entries, ...(isInside(extras, this.host.paths.root) ? [extras] : [])])];
+		for (const entry of [...this.own.entries, ...(isInside(extras, this.host.paths.root) ? [extras] : [])]) this.host.history.add(entry);
+		const releases = [...this.host.history];
 		writeLease(this.host.paths, { pid: process.pid, start, piVersion: this.host.piVersion, piDir: this.host.piDir, releases, extrasDir: extras, mode: this.host.mode, sessionFile: this.host.sessionFile(), updatedAt: this.host.now() });
 	}
 
@@ -161,7 +168,10 @@ export class UpdateSession {
 	stop(reason: string): void {
 		this.stopped = true;
 		for (const stop of this.stops.splice(0)) stop();
-		if (reason === "quit") this.removeLease();
+		if (reason === "quit") {
+			this.removeLease();
+			this.host.history.clear();
+		}
 		this.status(undefined);
 	}
 

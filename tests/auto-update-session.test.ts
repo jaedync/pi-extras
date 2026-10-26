@@ -3,7 +3,7 @@
  * (session.ts) with a fake host, a temp store and a temp agent dir.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -12,7 +12,9 @@ import { writeConfig } from "../lib/auto-update/config.ts";
 import { storePaths, type StorePaths } from "../lib/auto-update/paths.ts";
 import { APPLY_COMMAND, UPDATE_ENTRY, UpdateSession, type SessionHost, type UpdateEntryData } from "../lib/auto-update/session.ts";
 import { loadedEntries } from "../lib/auto-update/own-set.ts";
-import { emptyState, writeState, type UpdateSet, type UpdateState } from "../lib/auto-update/state.ts";
+import { emptyState, readState, writeState, type UpdateSet, type UpdateState } from "../lib/auto-update/state.ts";
+import { collectGarbage } from "../lib/auto-update/gc.ts";
+import { readLiveLeases } from "../lib/auto-update/leases.ts";
 import { flipPiCurrent } from "../lib/auto-update/switch.ts";
 import { removeTree } from "./support/auto-update-fixtures.ts";
 
@@ -76,6 +78,7 @@ interface Harness {
 	signals: Omit<IdleSignals, "now" | "lastActivityAt">;
 	readonly branch: { type: string; customType?: string; data?: unknown }[];
 	loaded: string[];
+	readonly history: Set<string>;
 }
 
 /** A store whose state.json, pi-current and settings.json all name `current`; the session runs `own`. */
@@ -96,7 +99,7 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 	// settings.json first names the session's own set; `switchSettings` moves it to the target.
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: Object.values(mine.packages).map((r) => r.entry) }));
 	const h: Harness = {
-		paths, agentDir, entries: [], statuses: [], notices: [], calls: [], clock: 1_000_000, branch: [], loaded: [],
+		paths, agentDir, entries: [], statuses: [], notices: [], calls: [], clock: 1_000_000, branch: [], loaded: [], history: new Set(),
 		signals: { agentIdle: true, pendingMessages: false, compacting: false, promptOpen: false, subagentRun: false, background: false, editorEmpty: true },
 		host: undefined as unknown as SessionHost,
 	};
@@ -104,6 +107,7 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 		mode: options.mode ?? "tui", paths, agentDir, piVersion: mine.pi.version, piDir: mine.pi.dir, extrasDir: "/dev/pi-extras",
 		sessionFile: () => "/sessions/a.jsonl",
 		loadedPaths: () => h.loaded,
+		history: h.history,
 		branch: () => h.branch,
 		appendEntry: (data) => {
 			h.entries.push(data);
@@ -317,4 +321,34 @@ test("settings rewritten between load and session_start: the session still sees 
 	assert.deepEqual(h.calls, ["dispatch", "reload"]);
 	const lease = JSON.parse(readFileSync(join(h.paths.leases, readdirSync(h.paths.leases)[0]!), "utf8"));
 	assert.ok(lease.releases.includes(old(h.paths.root).packages["npm-pi-extras"]!.entry), "the lease names what is really in use");
+});
+
+test("the lease keeps every release this process loaded: after a reload to B and a switch to C, GC keeps A", (t) => {
+	const a = (root: string) => set(root, "1.4.0", "0.29.0");
+	const b = (root: string) => set(root, "1.4.0", "0.30.0");
+	const c = (root: string) => set(root, "1.4.0", "0.31.0");
+	const h = harness(t, a, a);
+	const old = Date.now() - 2 * 3_600_000;
+	for (const make of [a, b, c]) {
+		const release = make(h.paths.root).packages["npm-pi-extras"]!;
+		mkdirSync(release.entry, { recursive: true });
+		writeFileSync(join(release.dir, ".pi-extras-release.json"), JSON.stringify({ installedAt: old }));
+	}
+	const entry = (make: (root: string) => UpdateSet) => make(h.paths.root).packages["npm-pi-extras"]!.entry;
+	h.loaded = [join(entry(a), "extensions", "x.ts")];
+	const first = new UpdateSession(h.host);
+	first.start("startup");
+	first.stop("reload");
+	// The reload loads B; old code from A (a parked runtime, a timer) still runs in this process.
+	switchSettings(h, b(h.paths.root));
+	h.loaded = [join(entry(b), "extensions", "x.ts")];
+	const second = new UpdateSession(h.host);
+	second.start("reload");
+	writeState(h.paths.state, { ...emptyState(), current: c(h.paths.root), previous: b(h.paths.root) });
+	const gc = () => collectGarbage({ paths: h.paths, state: readState(h.paths.state), leases: readLiveLeases(h.paths), now: Date.now(), mapped: () => new Set() });
+	assert.deepEqual(gc().removed, []);
+	assert.ok(existsSync(entry(a)), "A stays while this process lives");
+	second.stop("quit");
+	assert.equal(h.history.size, 0, "a quit clears what the process loaded");
+	assert.deepEqual(gc().removed, [join(realpathSync(h.paths.root), "packages", "npm-pi-extras", "0.29.0")], "then A goes");
 });

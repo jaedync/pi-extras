@@ -46,6 +46,15 @@ function loadedPaths(pi: ExtensionAPI): string[] {
 	return [...new Set([EXTRAS_DIR, ...sources])].map(realOr);
 }
 
+/** Versioned: a later pi-extras that keeps other data here picks a new symbol. */
+const HISTORY = Symbol.for("pi-extras.auto-update.loaded-releases.v1");
+
+/** One set per process, on globalThis: each reload loads this module again, and the set must outlive it. */
+function processHistory(): Set<string> {
+	const slot = globalThis as { [HISTORY]?: Set<string> };
+	return (slot[HISTORY] ??= new Set());
+}
+
 export default function autoUpdate(pi: ExtensionAPI): void {
 	// The smoke test loads this package in a throwaway Pi: no lease, no timers, no cycle from there.
 	if (process.env.PI_EXTRAS_UPDATE_SMOKE === "1") return;
@@ -108,6 +117,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 				extrasDir: EXTRAS_DIR,
 				sessionFile: () => context.sessionManager.getSessionFile(),
 				loadedPaths: () => loadedPaths(pi),
+				history: processHistory(),
 				branch: () => context.sessionManager.getBranch() as never,
 				appendEntry: (data) => pi.appendEntry<UpdateEntryData>(UPDATE_ENTRY, data),
 				notify: (text, level) => context.ui.notify(text, level),
