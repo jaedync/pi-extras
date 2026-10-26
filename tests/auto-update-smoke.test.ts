@@ -1,6 +1,6 @@
 /** The smoke test against the repo's real development Pi, with fixture packages. No network, no real agent dir. */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -93,8 +93,10 @@ test("a smoke Pi killed by a signal that the test did not send (for example the 
 	}
 });
 
-test("pi-extras itself passes the smoke test", async () => {
-	const result = await smokeTest({ piDir: piPrefix(join(mkdtempSync(join(tmpdir(), "au-smoke-x-")), "pi")), packages: [new URL("../", import.meta.url).pathname.replace(/\/$/, "")], timeoutMs: 55_000 });
+test("pi-extras itself passes the smoke test", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "au-smoke-x-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const result = await smokeTest({ piDir: piPrefix(join(dir, "pi")), packages: [new URL("../", import.meta.url).pathname.replace(/\/$/, "")], timeoutMs: 55_000 });
 	assert.deepEqual(result.ok ? "ok" : result.reason, "ok");
 });
 
