@@ -1,11 +1,11 @@
 /**
- * `/pi-extras update [now | rollback | pause | resume]`, without Pi: the
+ * `/pi-extras update [now | retry | rollback | pause | resume]`, without Pi: the
  * extension passes in the session's own parts and shows the lines this
  * returns. `enable` and `disable` change files outside the agent dir, so
  * they stay in the CLI; the command only prints the line to run.
  */
 import { join } from "node:path";
-import { rollback } from "./commands.ts";
+import { retry, rollback } from "./commands.ts";
 import { readConfig, writeConfig } from "./config.ts";
 import { CommandError } from "./enable.ts";
 import type { Log } from "./log.ts";
@@ -13,7 +13,7 @@ import type { StorePaths } from "./paths.ts";
 import { readState, StateError, type UpdateState } from "./state.ts";
 import { statusLines } from "./status.ts";
 
-export const UPDATE_SUBCOMMANDS = ["now", "rollback", "pause", "resume"] as const;
+export const UPDATE_SUBCOMMANDS = ["now", "retry", "rollback", "pause", "resume"] as const;
 
 export interface SlashDeps {
 	readonly paths: StorePaths;
@@ -65,6 +65,13 @@ export function updateCommand(args: string, deps: SlashDeps): SlashResult {
 				requireOn(deps);
 				deps.spawnCycle();
 				return { lines: ["Started an update check. Use /pi-extras update to see its progress."], level: "info" };
+			case "retry": {
+				requireOn(deps);
+				const lines: string[] = [];
+				retry({ ...deps, out: (line) => lines.push(line) });
+				deps.spawnCycle();
+				return { lines: [...lines, "Started an update check. Use /pi-extras update to see its progress."], level: "info" };
+			}
 			case "rollback": {
 				requireOn(deps);
 				const lines: string[] = [];

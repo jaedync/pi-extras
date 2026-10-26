@@ -38,6 +38,15 @@ function waiting(state: UpdateState, now: number): string[] {
 	);
 }
 
+/** Each bad version, shown as `x 2.0.0`, with its reason and the time of the mark. */
+export function badVersions(state: UpdateState): { label: string; reason: string; at: number }[] {
+	return Object.entries(state.bad).flatMap(([key, ids]) =>
+		Object.entries(ids).map(([id, mark]) => ({ label: `${state.current ? nameOf(state.current, key) : key} ${id}`, reason: mark.reason, at: mark.at })),
+	);
+}
+
+const day = (at: number): string => new Date(at).toISOString().slice(0, 10);
+
 export function statusLines(state: UpdateState, config: AutoUpdateConfig, now: number): string[] {
 	const on = config.enabled && state.current !== undefined;
 	const lines = [`Auto-update: ${on ? (config.paused ? "on, paused" : "on") : "off"}${on ? `, a check every ${config.intervalMinutes} min` : ""}`];
@@ -51,6 +60,9 @@ export function statusLines(state: UpdateState, config: AutoUpdateConfig, now: n
 	lines.push(`Newest found: ${pending.length > 0 ? pending.join(", ") : "nothing newer"}`);
 	const skipped = waiting(state, now);
 	if (skipped.length > 0) lines.push(`Skipped for now: ${skipped.join(", ")}`);
+	const bad = badVersions(state);
+	for (const mark of bad) lines.push(`Bad: ${mark.label} (${day(mark.at)}): ${mark.reason}`);
+	if (bad.length > 0) lines.push(`Use /pi-extras update retry to test ${bad.length === 1 ? "it" : "them"} again.`);
 	lines.push(`Last check: ${state.lastCheck === undefined ? "never" : ago(state.lastCheck, now)}`);
 	if (state.activity) lines.push(`Now: ${state.activity.text} (since ${ago(state.activity.since, now)})`);
 	if (state.launcherProblem) lines.push(`Problem: ${state.launcherProblem.message}`);

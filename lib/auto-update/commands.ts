@@ -1,4 +1,4 @@
-/** `rollback` and `gc`: small commands that run under the updater lock. */
+/** `rollback`, `retry` and `gc`: small commands that run under the updater lock. */
 import { waitForLock, type FileLock } from "../file-lock.ts";
 import { changedKeys } from "./culprits.ts";
 import { collect, LOCK_STALE_MS, switchTo } from "./cycle.ts";
@@ -7,8 +7,8 @@ import type { Log } from "./log.ts";
 import type { StorePaths } from "./paths.ts";
 import { PI_KEY } from "./plan.ts";
 import { readSettingsPackages, settingsFile } from "./settings.ts";
-import { markBad, readState, updateState } from "./state.ts";
-import { setLabel } from "./status.ts";
+import { clearMarks, markBad, readState, updateState } from "./state.ts";
+import { badVersions, setLabel } from "./status.ts";
 
 export interface CommandDeps {
 	readonly paths: StorePaths;
@@ -53,6 +53,27 @@ export function rollback(deps: CommandDeps): void {
 		deps.log(`rolled back from ${setLabel(from)} to ${setLabel(to)}`);
 		deps.out(`Rolled back to: ${setLabel(to)}.`);
 		deps.out("Running sessions move to it when they are idle. New sessions start with it.");
+	} finally {
+		lock.release();
+	}
+}
+
+const count = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
+/**
+ * Removes every bad and suspect mark, so the next check tests those
+ * versions again. A bad mark never expires; this is the way out of a
+ * wrong one. The caller starts the check.
+ */
+export function retry(deps: CommandDeps): void {
+	const lock = takeLock(deps.paths);
+	try {
+		const state = readState(deps.paths.state);
+		const bad = badVersions(state).map((mark) => mark.label);
+		const suspect = Object.values(state.suspect ?? {}).reduce((sum, ids) => sum + Object.keys(ids).length, 0);
+		updateState(deps.paths.state, clearMarks);
+		deps.log(`retry: cleared the bad marks of ${bad.length > 0 ? bad.join(", ") : "nothing"} and ${count(suspect, "suspect mark")}`);
+		deps.out(`Cleared ${count(bad.length, "bad mark")} and ${count(suspect, "suspect mark")}.`);
 	} finally {
 		lock.release();
 	}

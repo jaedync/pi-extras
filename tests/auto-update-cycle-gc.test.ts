@@ -67,7 +67,7 @@ test("a Pi with --no-extensions that the launcher started keeps its Pi folder th
 	assert.equal(existsSync(pi140), false, "removed once the launcher ended");
 });
 
-test("rollback returns to the previous set and marks the newer versions bad", async (t) => {
+test("rollback returns to the previous set and marks the newer versions bad; status lists the mark, and retry clears it and checks", async (t) => {
 	const w = await enabled(t);
 	const first = readState(w.paths.state).current!;
 	w.setRegistry(PI_NAME, "1.4.3");
@@ -80,6 +80,18 @@ test("rollback returns to the previous set and marks the newer versions bad", as
 	assert.equal(readlinkSync(w.paths.piCurrent), "pi/1.4.0");
 	assert.ok(state.bad.pi?.["1.4.3"]);
 	assert.equal((await runCycle(w.cycleDeps(), { force: true })).outcome, "no-change", "the rolled-back version is not installed again");
+	// The way out of a bad mark: status names it, retry clears it and checks at once.
+	const status = await w.cli("status");
+	assert.match(status.stdout, /\nBad: Pi 1\.4\.3 \(\d{4}-\d{2}-\d{2}\): rolled back by the user\n/);
+	assert.match(status.stdout, /Use \/pi-extras update retry to test it again/);
+	const retried = await w.cli("retry");
+	assert.equal(retried.code, 0, retried.stderr);
+	assert.match(retried.stdout, /^Cleared 1 bad mark and 0 suspect marks\.\n.*Updated: Pi 1\.4\.3/s);
+	const after = readState(w.paths.state);
+	assert.deepEqual(after.bad, {});
+	assert.equal(after.current!.pi.version, "1.4.3");
+	assert.match(w.read(w.paths.log), /retry: cleared the bad marks of Pi 1\.4\.3/);
+	assert.doesNotMatch((await w.cli("status")).stdout, /Bad:|update retry/);
 });
 
 test("a stale staging folder from a crashed install is removed; a lock of a dead process is taken over", async (t) => {

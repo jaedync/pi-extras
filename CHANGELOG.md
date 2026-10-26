@@ -19,7 +19,7 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   background and stops at once. Pi's own "New version" message is off while
   auto-update manages Pi. If something writes over the launcher, sessions
   show a warning.
-- Auto-update: `/pi-extras update` shows the state. `now`, `rollback`,
+- Auto-update: `/pi-extras update` shows the state. `now`, `retry`, `rollback`,
   `pause` and `resume` control it. `disable` puts back `~/.local/bin/pi`
   and the original `settings.json` entries. It also works when the store
   is gone. These versions can be older than the store's: run
@@ -35,6 +35,12 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   caused it, also when two new versions need each other. The other new
   versions switch in the same check. A test that times out marks nothing
   bad. npm packages follow npm's own `min-release-age` too.
+- Auto-update: `/pi-extras update retry` (and the shell command `retry`)
+  removes all bad and suspect marks and starts a check. The status shows
+  each bad version with its date and reason. A single new version that
+  fails gets one more test before it is marked bad. A test Pi that a
+  signal from outside stops (for example the out-of-memory killer) gives
+  no result, so it marks nothing bad.
 
 ## 0.29.0 - 2026-10-24
 

@@ -147,6 +147,12 @@ export function markBad(state: UpdateState, key: string, id: string, reason: str
 	return { ...state, bad: { ...state.bad, [key]: { ...state.bad[key], [id]: { reason, at } } } };
 }
 
+/** Without any bad or suspect mark: `retry` gives every release a new test. */
+export function clearMarks(state: UpdateState): UpdateState {
+	const { suspect: _suspect, ...rest } = state;
+	return { ...rest, bad: {} };
+}
+
 /** True while cycles skip this release: it failed its test, or its test gave no verdict too often of late. */
 export function isBlocked(state: UpdateState, key: string, id: string, now: number): boolean {
 	if (isBad(state, key, id)) return true;

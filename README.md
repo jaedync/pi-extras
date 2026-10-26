@@ -114,13 +114,18 @@ newest versions, run `pi update --all`.
   version alone, and then the set without each failed version. Thus it
   finds the version that caused the failure, also when two new versions
   need each other (for example a new Pi and a pi-extras release that needs
-  it). That version is marked bad and is not tried again. The other new
-  versions switch in the same check.
+  it). That version is marked bad and is not tried again until you run
+  `/pi-extras update retry`. The other new versions switch in the same
+  check.
+- A single new version that fails gets one more test before it is marked
+  bad.
 - If each new version passes alone, the check tests the full set one more
   time. If it passes, the set is used. If it fails again, all its new
   versions are marked bad.
 - If a test gives no result (no reply in 90 seconds, for example on a busy
-  machine, Pi did not start, or the check stopped at its 10-minute limit),
+  machine, Pi did not start, a signal from outside such as the
+  out-of-memory killer stopped the test Pi, or the check stopped at its
+  10-minute limit),
   the versions in that test are suspect. After 2 such checks in a row, the
   checks skip them for 24 hours and then try them again. A suspect version
   is not marked bad: no fault was found.
@@ -190,14 +195,15 @@ to put the launcher back, or run `disable`.
 
 | Command | What it does |
 | --- | --- |
-| `/pi-extras update` | Shows the state: on or off, the current set, newer versions, the last check, the last error, and what this session waits for |
+| `/pi-extras update` | Shows the state: on or off, the current set, newer versions, each bad version with its date and reason, the last check, the last error, and what this session waits for |
 | `/pi-extras update now` | Starts a check now |
+| `/pi-extras update retry` | Removes all bad and suspect marks, and then starts a check now. Use it when a version was marked bad by mistake |
 | `/pi-extras update rollback` | Goes back to the previous set. The newer versions are marked bad |
 | `/pi-extras update pause` | Stops the checks. Sessions still move to a set that is ready |
 | `/pi-extras update resume` | Starts the checks again |
 
 The shell command `node <pi-extras>/lib/auto-update/cli.ts` has the
-subcommands `check [--force]`, `status`, `rollback`, `gc`, `enable` and
+subcommands `check [--force]`, `status`, `retry`, `rollback`, `gc`, `enable` and
 `disable`. Only the shell command can do `enable` and `disable`.
 
 ### Settings

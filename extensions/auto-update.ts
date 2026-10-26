@@ -91,7 +91,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 	// release-notes owns `/pi-extras`; this adds `/pi-extras update` to it. The table is shared by the
 	// whole process, so only a main session adds it: a subagent's runtime must not take it over.
 	const addSubcommand = () => registerSubcommand("update", {
-		description: "Auto-update: status, now, rollback, pause, resume",
+		description: "Auto-update: status, now, retry, rollback, pause, resume",
 		handler: async (args, context) => {
 			const result = updateCommand(args, {
 				paths, agentDir, extrasDir: EXTRAS_DIR, now: Date.now, log,
