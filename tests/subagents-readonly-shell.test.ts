@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { checkAllowlist } from "../lib/subagents/allowlist.ts";
 import { childToolNames, noShell } from "../lib/subagents/child.ts";
 import { childInstructions } from "../lib/subagents/format.ts";
@@ -42,7 +42,21 @@ test("readOnlyShell makes the child read-only, and only an agent with a shell ca
 	assert.ok(kept.ok && kept.record.readOnlyShell === true);
 });
 
-test("the Linux prefix: read-only root, fresh /dev, /proc and /tmp, no network, own process view, then the hidden paths", () => {
+/** The prefix asks only whether bwrap is on PATH; CI runners and macOS have none, so the test gives it one. */
+function withBwrapOnPath(run: () => void): void {
+	const dir = mkdtempSync(join(tmpdir(), "fake-bwrap-"));
+	const saved = process.env.PATH;
+	try {
+		writeFileSync(join(dir, "bwrap"), "", { mode: 0o755 });
+		process.env.PATH = `${dir}${delimiter}${saved ?? ""}`;
+		run();
+	} finally {
+		process.env.PATH = saved;
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+test("the Linux prefix: read-only root, fresh /dev, /proc and /tmp, no network, own process view, then the hidden paths", () => withBwrapOnPath(() => {
 	const prefix = readOnlyShellPrefix(NO_HIDING, "linux");
 	assert.ok(prefix);
 	assert.deepEqual(prefix.slice(0, 2), ["/bin/sh", "-c"]);
@@ -56,7 +70,7 @@ test("the Linux prefix: read-only root, fresh /dev, /proc and /tmp, no network, 
 		mkdirSync(join(root, "repo", "sub"), { recursive: true });
 		assert.deepEqual(readOnlyShellPrefix(NO_HIDING, "linux", join(root, "repo", "sub"))!.slice(-3), ["--ro-bind", root, root], "a folder under /tmp stays seen");
 	} finally { rmSync(root, { recursive: true, force: true }); }
-});
+}));
 
 test("macOS has no read-only shell: sandbox-exec leaves system services that write", () => {
 	assert.equal(readOnlyShellPrefix(NO_HIDING, "darwin"), undefined);
