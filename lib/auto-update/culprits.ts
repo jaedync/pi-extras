@@ -80,11 +80,22 @@ export interface Search {
 	readonly complete: boolean;
 }
 
+/** One change failed: test it once more before the bad mark, so a fluke does not block that version for good. */
+async function retryOne(deps: SearchDeps, candidate: UpdateSet, changes: readonly string[], packages: readonly unknown[], deadline: number, firstReason: string): Promise<Search> {
+	const key = changes[0];
+	if (key === undefined) return { culprits: [], cleared: [], complete: true };
+	const again = await verdictOf(deps, candidate, packages, deadline, `testing ${labelOf(candidate, key)} again`);
+	if (again.kind === "none") return { culprits: [], cleared: [], complete: false };
+	if (again.kind === "pass") return { culprits: [], cleared: changes, passing: candidate, complete: true };
+	return { culprits: [{ key, reason: firstReason }], cleared: [], complete: true };
+}
+
 /**
  * Finds which changes broke a candidate that failed its test (a real
  * failure, not a timeout). A test that gives no verdict stops the search
  * and marks nothing more.
  *
+ * 0. A single change: one more test, as a bad mark never expires.
  * 1. Each change alone on the current set.
  * 2. Each passed alone: the combination once more. It passes (the first
  *    failure was not repeatable) or all are bad together.
@@ -98,7 +109,7 @@ export async function findCulprits(deps: SearchDeps, current: UpdateSet, candida
 	// Sources that the candidate drops are dropped in every set tried here.
 	const base: UpdateSet = { ...current, packages: Object.fromEntries(Object.entries(current.packages).filter(([key]) => candidate.packages[key])) };
 	const changes = changedKeys(base, candidate).filter((key) => idOf(candidate, key) !== undefined);
-	if (changes.length <= 1) return { culprits: changes.map((key) => ({ key, reason: firstReason })), cleared: [], complete: true };
+	if (changes.length <= 1) return retryOne(deps, candidate, changes, packages, deadline, firstReason);
 	const stopped = (cleared: readonly string[], passing?: UpdateSet): Search => ({ culprits: [], cleared, passing, complete: false });
 	const passed: string[] = [];
 	const failed: { key: string; reason: string }[] = [];

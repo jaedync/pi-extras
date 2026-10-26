@@ -109,6 +109,34 @@ test("the combination fails once, each change passes alone, the combination pass
 	assert.equal(state.suspect, undefined);
 });
 
+test("a single change that fails gets one more test: a pass switches, a second failure is bad with the first reason, no verdict leaves it suspect", async (t) => {
+	const w = await enabled(t);
+	tagRelease(w.gitRepo, "good", "2.0.0");
+	let calls = 0;
+	const flaky = judge(() => (++calls === 1 ? fail("Pi exited (1) before the reply: flaky") : PASS));
+	const passed = await runCycle(w.cycleDeps({ smoke: flaky.smoke }), { force: true });
+	assert.equal(passed.outcome, "switched", passed.message);
+	assert.equal(passed.message, "Updated: fixture-git 2.0.0.");
+	assert.deepEqual(flaky.tested, ["pi 1.4.0, git 2.0.0, npm 1.0.0", "pi 1.4.0, git 2.0.0, npm 1.0.0"]);
+	assert.deepEqual(readState(w.paths.state).bad, {});
+
+	w.setRegistry("fixture-npm", "1.0.2");
+	calls = 0;
+	const unsure = judge(() => (++calls === 1 ? fail("first failure") : { ok: false, reason: "no reply within 90 s", inconclusive: true }));
+	assert.equal((await runCycle(w.cycleDeps({ smoke: unsure.smoke }), { force: true })).outcome, "smoke-failed");
+	assert.equal(unsure.tested.length, 2);
+	assert.deepEqual(readState(w.paths.state).bad, {}, "the retry gave no verdict");
+	assert.equal(Object.values(readState(w.paths.state).suspect?.[NPM_KEY] ?? {})[0]?.tries, 1);
+
+	calls = 0;
+	const broken = judge(() => fail(++calls === 1 ? "first failure" : "second failure"));
+	const result = await runCycle(w.cycleDeps({ smoke: broken.smoke }), { force: true });
+	assert.equal(result.outcome, "smoke-failed", result.message);
+	assert.equal(broken.tested.length, 2);
+	assert.equal(Object.values(readState(w.paths.state).bad[NPM_KEY] ?? {})[0]?.reason, "first failure");
+	assert.match(result.message, /fixture-npm 1\.0\.2 failed its test: first failure/);
+});
+
 test("the combination fails twice while each change passes alone: all are bad together; a retry without a verdict marks nothing", async (t) => {
 	const w = await enabled(t);
 	tagRelease(w.gitRepo, "good", "2.0.0");
