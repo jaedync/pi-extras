@@ -191,6 +191,31 @@ function realOr(path: string): string {
 	}
 }
 
+/** Restart requests that no launcher read (it was killed) and old start stamps: a launcher reads its request within seconds. */
+export const RESTART_FILE_MAX_AGE_MS = 24 * 3_600_000;
+
+function sweepRestartFiles(paths: StorePaths, now: number): string[] {
+	let names: string[];
+	try {
+		names = readdirSync(paths.restart);
+	} catch {
+		return [];
+	}
+	const removed: string[] = [];
+	for (const name of names) {
+		const file = join(paths.restart, name);
+		try {
+			const stat = lstatSync(file);
+			if (!stat.isFile() || now - stat.mtimeMs < RESTART_FILE_MAX_AGE_MS) continue;
+			rmSync(file, { force: true });
+			removed.push(file);
+		} catch {
+			// Gone already: the launcher read it.
+		}
+	}
+	return removed;
+}
+
 export function collectGarbage(options: GcOptions): GcResult {
 	const { state, leases } = options;
 	const paths = storePaths(realpathSync(options.paths.root));
@@ -219,5 +244,6 @@ export function collectGarbage(options: GcOptions): GcResult {
 			// Not empty: other releases of this source remain.
 		}
 	}
+	removed.push(...sweepRestartFiles(paths, options.now));
 	return { removed, failed };
 }

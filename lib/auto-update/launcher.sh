@@ -111,6 +111,10 @@ fi
 
 LEASE_START=$(start_time)
 trap 'rm -f "$LEASE" "$LEASE_TMP"' EXIT
+# A TERM or HUP to this shell alone: sh runs the trap once the foreground
+# Pi has ended, so the lease stays while Pi runs. Then no restart.
+trap 'finish 143' TERM
+trap 'finish 129' HUP
 
 REQUEST_DIR="$STORE/restart"
 REQUEST=

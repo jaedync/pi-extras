@@ -75,6 +75,19 @@ function release(root: string, rel: string, ageMs: number): string {
 	return dir;
 }
 
+test("GC removes restart requests older than a day; newer ones stay", (t) => {
+	const root = scratch(t);
+	const paths = storePaths(root);
+	mkdirSync(paths.restart, { recursive: true });
+	const day = 24 * 3_600_000;
+	for (const name of ["old-request", ".old.start", "new-request"]) writeFileSync(join(paths.restart, name), "x");
+	const old = new Date(Date.now() - day - 60_000);
+	for (const name of ["old-request", ".old.start"]) utimesSync(join(paths.restart, name), old, old);
+	const result = collectGarbage({ paths, state: emptyState(), leases: [], now: Date.now(), refs: () => new Set(), mapped: () => new Set() });
+	assert.deepEqual(readdirSync(paths.restart), ["new-request"]);
+	assert.deepEqual(result.removed.sort(), [join(realpathSync(root), "restart", ".old.start"), join(realpathSync(root), "restart", "old-request")]);
+});
+
 test("GC removes only old releases that no set, lease or mapping uses", (t) => {
 	const root = scratch(t);
 	const paths = storePaths(root);

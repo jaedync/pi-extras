@@ -245,6 +245,23 @@ test("the launcher leases the real Pi folder that it starts while it lives, and 
 	assert.deepEqual(readdirSync(join(r.store, "leases")), [], "the lease is gone after the launcher ends");
 });
 
+test("SIGTERM or SIGHUP to the launcher waits for Pi, then ends with 143 or 129: the lease stays while Pi runs", { skip: process.platform === "win32" }, async (t) => {
+	for (const [signal, code] of [["SIGTERM", 143], ["SIGHUP", 129]] as const) {
+		const r = rig(t);
+		const { pid, done } = launch(r, [], "lease-wait");
+		t.after(() => existsSync(r.store) && writeFileSync(join(r.store, "go"), ""));
+		while (!(existsSync(r.log) && readFileSync(r.log, "utf8").includes("ready\n"))) await new Promise((resolve) => setTimeout(resolve, 20));
+		process.kill(pid, signal);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.equal(readLiveLeases(storePaths(r.store)).length, 1, `${signal}: the launcher still lives with its Pi`);
+		writeFileSync(join(r.store, "go"), "");
+		const result = await done;
+		assert.equal(result.code, code, signal);
+		assert.equal(runs(r).length, 1, `${signal}: no restart`);
+		assert.deepEqual(readdirSync(join(r.store, "leases")), [], `${signal}: the lease is gone`);
+	}
+});
+
 test("each restart rewrites the lease for the Pi folder of that start", async (t) => {
 	const r = rig(t);
 	mkdirSync(join(r.store, "pi", "2.0.0", "bin"), { recursive: true });
