@@ -1,10 +1,12 @@
 /**
  * What the launcher tells the Pi it starts, through environment variables:
  * the restart token, its own pid, and the restart count for a target. Read
- * once per process and then removed from process.env: a bash tool, an MCP
- * server or a shell job that Pi starts must not inherit the token (a Pi
- * started from there could then ask this launcher for a restart). The values
- * stay on globalThis, because each reload loads the extension again.
+ * once per process and then removed from process.env, so that a bash tool,
+ * an MCP server or a shell job that Pi starts does not inherit the token and
+ * a nested Pi does not ask this launcher for a restart by mistake. This is
+ * not a security boundary: /proc/<pid>/environ keeps the start environment,
+ * and every process of the same user can read it. The values stay on
+ * globalThis, because each reload loads the extension again.
  */
 
 export interface LauncherEnv {
