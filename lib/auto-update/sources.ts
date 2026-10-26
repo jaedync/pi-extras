@@ -91,13 +91,17 @@ function classifyGit(source: string): Classified {
 	return { kind: "managed", origin: { kind: "git", source, url: cloneUrl, key: storeKeyFor("git", `${where.host}/${path}`), label: path.split("/").at(-1) ?? path } };
 }
 
-/** The key of a store path `<root>/packages/<key>/...`, or undefined. */
-function storeKey(path: string, storeRoot: string): string | undefined {
+/** The key and release id of a store path `<root>/packages/<key>/<id>/...`, or undefined. */
+export function storeRelease(path: string, storeRoot: string): { readonly key: string; readonly id: string } | undefined {
 	if (!isAbsolute(path)) return undefined;
 	const rel = relative(resolve(storeRoot, "packages"), resolve(path));
 	if (!rel || rel.startsWith("..") || isAbsolute(rel)) return undefined;
-	const parts = rel.split(sep);
-	return parts.length >= 2 ? parts[0] : undefined;
+	const [key, id] = rel.split(sep);
+	return key && id ? { key, id } : undefined;
+}
+
+function storeKey(path: string, storeRoot: string): string | undefined {
+	return storeRelease(path, storeRoot)?.key;
 }
 
 export function classify(source: string, storeRoot: string): Classified {

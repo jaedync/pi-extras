@@ -4,7 +4,7 @@
  * that an update is ready? The extension (extensions/auto-update.ts) reads
  * the inputs and carries out the decision.
  */
-import { classify } from "./sources.ts";
+import { classify, storeRelease } from "./sources.ts";
 import type { UpdateSet, UpdateState } from "./state.ts";
 
 /** Reloads or restarts for one target that still leave the session on another set: then stop and say so. */
@@ -35,6 +35,18 @@ export function packagesDiffer(own: OwnSet, set: UpdateSet): boolean {
 	return wanted.length !== have.length || wanted.some((entry, index) => entry !== have[index]);
 }
 
+/**
+ * The version that a store entry shows, from its release id: an npm id is
+ * the version, a git id is `<version>-<commit>` or `head-<commit>`. For an
+ * entry whose set is no longer in the state (the session missed a cycle).
+ */
+function storeVersion(entry: string | undefined, storeRoot: string): string | undefined {
+	const found = entry === undefined ? undefined : storeRelease(entry, storeRoot);
+	if (!found) return undefined;
+	if (!found.key.startsWith("git-")) return found.id;
+	return found.id.startsWith("head-") ? found.id.slice("head-".length) : found.id.replace(/-[0-9a-f]{7}$/, "");
+}
+
 /** "pi-extras 0.29.0 -> 0.30.0, Pi 1.4.0 -> 1.4.1": what moving to `set` changes for this session. */
 export function changeText(own: OwnSet, state: UpdateState, set: UpdateSet, storeRoot: string): string {
 	const known = [state.previous, state.current, set].flatMap((candidate) => (candidate ? Object.values(candidate.packages) : []));
@@ -48,9 +60,10 @@ export function changeText(own: OwnSet, state: UpdateState, set: UpdateSet, stor
 		const from = ownByKey.get(key);
 		if (from === release.entry) continue;
 		const to = release.label ?? release.id;
-		const before = known.find((candidate) => candidate.entry === from)?.label;
 		const [name, version] = to.split(" ");
-		parts.push(before?.split(" ")[0] === name && version ? `${name} ${before.split(" ")[1]} -> ${version}` : to);
+		const label = known.find((candidate) => candidate.entry === from)?.label?.split(" ");
+		const before = label?.[0] === name ? label[1] : storeVersion(from, storeRoot);
+		parts.push(before && version ? `${name} ${before} -> ${version}` : to);
 	}
 	return parts.join(", ") || "packages";
 }

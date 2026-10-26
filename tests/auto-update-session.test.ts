@@ -68,6 +68,26 @@ test("decide: reload for packages, restart for Pi in the TUI under the launcher,
 	assert.deepEqual(decide({ ...pi, canRestart: false }), { kind: "notice", text: "Pi 1.4.1 ready: restart to use it" });
 });
 
+test("decide: the change names the session's old version also when the old set left the state", () => {
+	const root = "/store";
+	// The session loaded 0.30.0; two cycles later the state holds only 0.30.1 (previous) and 0.30.2 (current).
+	const own = { piVersion: "1.4.0", piDir: join(root, "pi", "1.4.0"), entries: [release(root, "pi-extras", "0.30.0").entry] };
+	const state = { ...emptyState(), previous: set(root, "1.4.0", "0.30.1"), current: set(root, "1.4.0", "0.30.2") };
+	const input: AdoptInput = { own, state, storeRoot: root, adopt: "auto", mode: "tui", canRestart: true, ready: true, attempts: 0 };
+	assert.equal((decide(input) as { text: string }).text, "Updating pi-extras 0.30.0 -> 0.30.2: reloading");
+	// A git release: the version comes from the store id `<version>-<commit>`, or the commit for a branch head.
+	const git = (id: string, label: string) => ({ origin: "git:x/pi-extras", id, dir: join(root, "packages", "git-pi-extras-1a2b3c4d", id), entry: join(root, "packages", "git-pi-extras-1a2b3c4d", id), label });
+	const gitSet = (id: string, label: string): UpdateSet => ({ pi: { version: "1.4.0", dir: own.piDir }, packages: { "git-pi-extras-1a2b3c4d": git(id, label) } });
+	const gitState = { ...emptyState(), current: gitSet("0.30.2-abcdef1", "pi-extras 0.30.2") };
+	const fromTag = { ...input, own: { ...own, entries: [git("0.30.0-1234567", "").entry] }, state: gitState };
+	assert.equal((decide(fromTag) as { text: string }).text, "Updating pi-extras 0.30.0 -> 0.30.2: reloading");
+	const fromHead = { ...fromTag, own: { ...own, entries: [git("head-89abcde", "").entry] } };
+	assert.equal((decide(fromHead) as { text: string }).text, "Updating pi-extras 89abcde -> 0.30.2: reloading");
+	// An entry outside the store (the user's own source before enable) has no version to show.
+	const outside = { ...input, own: { ...own, entries: ["/home/u/pi-extras"] } };
+	assert.equal((decide(outside) as { text: string }).text, "Updating pi-extras 0.30.2: reloading");
+});
+
 interface Harness {
 	readonly paths: StorePaths;
 	readonly agentDir: string;
