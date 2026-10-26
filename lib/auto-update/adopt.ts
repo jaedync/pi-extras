@@ -101,6 +101,8 @@ export interface IdleSignals {
 	/** Shell jobs that have not ended, or subagents that are still live (also when they wait for mail). */
 	readonly background: boolean;
 	readonly editorEmpty: boolean;
+	/** A user `!` or `!!` command runs (see userBashRunning). A reload or restart would cut it off. */
+	readonly userBash: boolean;
 	readonly lastActivityAt: number;
 	readonly now: number;
 }
@@ -111,7 +113,37 @@ export interface IdleSignals {
  * not a restart, which ends the process, so only a restart waits for them.
  */
 export function idleFor(kind: "reload" | "restart", signals: IdleSignals): boolean {
-	if (!signals.agentIdle || signals.pendingMessages || signals.compacting || signals.promptOpen || signals.subagentRun) return false;
+	if (!signals.agentIdle || signals.pendingMessages || signals.compacting || signals.promptOpen || signals.subagentRun || signals.userBash) return false;
 	if (!signals.editorEmpty || signals.now - signals.lastActivityAt < QUIET_MS) return false;
 	return kind === "reload" || !signals.background;
+}
+
+/** A user command that has not ended after this long counts as ended: its end signal was lost (another extension ran it, or it failed early). */
+export const USER_BASH_MAX_MS = 60 * 60_000;
+
+export interface BashStart {
+	readonly command: string;
+	readonly at: number;
+}
+
+type BranchEntry = { readonly type: string; readonly message?: unknown };
+
+/**
+ * Pi 1.4 fires `user_bash` only when a `!` command starts, and its isIdle()
+ * ignores a running command. The end is the `bashExecution` message that Pi
+ * appends to the branch when the command finishes: one such entry with the
+ * same command, at or after the start, ends one start.
+ */
+export function userBashRunning(starts: readonly BashStart[], branch: readonly BranchEntry[], now: number): boolean {
+	const ends = branch.flatMap((entry) => {
+		const message = entry.type === "message" ? (entry.message as { role?: unknown; command?: unknown; timestamp?: unknown } | undefined) : undefined;
+		return message?.role === "bashExecution" && typeof message.command === "string" && typeof message.timestamp === "number" ? [{ command: message.command, at: message.timestamp }] : [];
+	});
+	const used = new Set<number>();
+	// Oldest start first, so each takes the earliest end after it.
+	return [...starts].sort((a, b) => a.at - b.at).some((start) => {
+		const end = ends.findIndex((candidate, index) => !used.has(index) && candidate.command === start.command && candidate.at >= start.at);
+		if (end >= 0) used.add(end);
+		return end < 0 && now - start.at < USER_BASH_MAX_MS;
+	});
 }

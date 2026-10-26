@@ -18,6 +18,7 @@ import { processBusy } from "../lib/idle-gc.ts";
 import { errorText, operationalError } from "../lib/operational-log.ts";
 import { registerSubcommand } from "../lib/pi-extras-command.ts";
 import { BACKGROUND_EVENT, BACKGROUND_REQUEST_EVENT, backgroundWork } from "../lib/tab-status/events.ts";
+import { type BashStart, userBashRunning } from "../lib/auto-update/adopt.ts";
 import { fileLog } from "../lib/auto-update/log.ts";
 import { EXTRAS_DIR, storePaths, storeRootFrom } from "../lib/auto-update/paths.ts";
 import { APPLY_COMMAND, STATUS_KEY, UPDATE_ENTRY, UpdateSession, type UpdateEntryData } from "../lib/auto-update/session.ts";
@@ -70,8 +71,16 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 	let compacting = false;
 	let removeSubcommand: (() => void) | undefined;
 	let prompts = 0;
+	let bashStarts: BashStart[] = [];
 	const background = new Map<string, number>();
 
+	/** True while a user `!` command runs. The starts are kept until all have ended: an end matches the oldest open start. */
+	const bashRunning = (context: ExtensionContext): boolean => {
+		if (bashStarts.length === 0) return false;
+		const running = userBashRunning(bashStarts, context.sessionManager.getBranch() as never, Date.now());
+		if (!running) bashStarts = [];
+		return running;
+	};
 	const report = (what: string) => (error: unknown) => operationalError(errorLog, "auto-update", `${what}: ${errorText(error)}`);
 	const spawn = (force: boolean) => spawnCycle(EXTRAS_DIR, force, report("could not start the update cycle"));
 
@@ -99,6 +108,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 		ctx = context;
 		compacting = false;
 		prompts = 0;
+		bashStarts = [];
 		background.clear();
 		// Subagents share the process: the main session alone leases, checks and moves.
 		if (isChildSession(context.sessionManager)) return;
@@ -130,6 +140,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 					subagentRun: processBusy(),
 					background: [...background.values()].some((count) => count > 0),
 					editorEmpty: context.mode !== "tui" || context.ui.getEditorText().trim() === "",
+					userBash: bashRunning(context),
 				}),
 				dispatchApply: () => pi.sendUserMessage(`/${APPLY_COMMAND}`, { expandPromptTemplates: true }),
 				spawnCycle: spawn,
@@ -185,8 +196,9 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 	pi.on("input", () => {
 		active();
 	});
-	pi.on("user_bash", () => {
+	pi.on("user_bash", (event) => {
 		active();
+		bashStarts.push({ command: event.command, at: Date.now() });
 	});
 	pi.on("agent_start", active);
 	pi.on("turn_start", active);

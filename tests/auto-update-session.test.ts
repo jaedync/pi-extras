@@ -8,7 +8,7 @@ import { LOCK_STALE_MS } from "../lib/auto-update/cycle.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { decide, idleFor, MAX_ATTEMPTS, QUIET_MS, type AdoptInput, type IdleSignals } from "../lib/auto-update/adopt.ts";
+import { decide, idleFor, MAX_ATTEMPTS, QUIET_MS, USER_BASH_MAX_MS, userBashRunning, type AdoptInput, type IdleSignals } from "../lib/auto-update/adopt.ts";
 import { writeConfig } from "../lib/auto-update/config.ts";
 import { storePaths, type StorePaths } from "../lib/auto-update/paths.ts";
 import { APPLY_COMMAND, UPDATE_ENTRY, UpdateSession, type SessionHost, type UpdateEntryData } from "../lib/auto-update/session.ts";
@@ -31,12 +31,12 @@ function set(root: string, pi: string, extras: string): UpdateSet {
 	return { pi: { version: pi, dir: join(root, "pi", pi) }, packages: { "npm-pi-extras": release(root, "pi-extras", extras) } };
 }
 
-const IDLE: IdleSignals = { agentIdle: true, pendingMessages: false, compacting: false, promptOpen: false, subagentRun: false, background: false, editorEmpty: true, lastActivityAt: 0, now: QUIET_MS };
+const IDLE: IdleSignals = { agentIdle: true, pendingMessages: false, compacting: false, promptOpen: false, subagentRun: false, background: false, editorEmpty: true, userBash: false, lastActivityAt: 0, now: QUIET_MS };
 
 test("idle: every signal blocks a move; background work blocks only a restart", () => {
 	assert.equal(idleFor("reload", IDLE), true);
 	assert.equal(idleFor("restart", IDLE), true);
-	for (const [key, value] of [["agentIdle", false], ["pendingMessages", true], ["compacting", true], ["promptOpen", true], ["subagentRun", true], ["editorEmpty", false]] as const) {
+	for (const [key, value] of [["agentIdle", false], ["pendingMessages", true], ["compacting", true], ["promptOpen", true], ["subagentRun", true], ["editorEmpty", false], ["userBash", true]] as const) {
 		assert.equal(idleFor("reload", { ...IDLE, [key]: value }), false, key);
 		assert.equal(idleFor("restart", { ...IDLE, [key]: value }), false, key);
 	}
@@ -101,7 +101,7 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: Object.values(mine.packages).map((r) => r.entry) }));
 	const h: Harness = {
 		paths, agentDir, entries: [], statuses: [], notices: [], calls: [], clock: 1_000_000, branch: [], loaded: [], history: new Set(),
-		signals: { agentIdle: true, pendingMessages: false, compacting: false, promptOpen: false, subagentRun: false, background: false, editorEmpty: true },
+		signals: { agentIdle: true, pendingMessages: false, compacting: false, promptOpen: false, subagentRun: false, background: false, editorEmpty: true, userBash: false },
 		host: undefined as unknown as SessionHost,
 	};
 	(h as { host: SessionHost }).host = {
@@ -368,4 +368,17 @@ test("an old lock that names a live, unrelated pid does not stop sessions from s
 	utimesSync(h.paths.lock, old, old);
 	session.maybeSpawn();
 	assert.deepEqual(h.calls, ["spawn false"]);
+});
+
+test("a user ! command is busy from user_bash until its bash execution entry is in the branch, at most an hour", () => {
+	const bash = (command: string, timestamp: number) => ({ type: "message", message: { role: "bashExecution", command, timestamp } });
+	const starts = [{ command: "npm test", at: 1_000 }];
+	assert.equal(userBashRunning(starts, [], 2_000), true, "no entry yet: it runs");
+	assert.equal(userBashRunning(starts, [bash("npm test", 500)], 2_000), true, "an older run of the same command does not end this one");
+	assert.equal(userBashRunning(starts, [bash("ls", 3_000)], 4_000), true, "another command's entry does not end it");
+	assert.equal(userBashRunning(starts, [bash("npm test", 3_000)], 4_000), false, "its entry ends it");
+	const twice = [{ command: "make", at: 1_000 }, { command: "make", at: 1_100 }];
+	assert.equal(userBashRunning(twice, [bash("make", 2_000)], 3_000), true, "one entry ends one of two runs");
+	assert.equal(userBashRunning(twice, [bash("make", 2_000), bash("make", 2_500)], 3_000), false);
+	assert.equal(userBashRunning(starts, [], 1_000 + USER_BASH_MAX_MS), false, "past the maximum time: a lost end signal must not block updates forever");
 });
