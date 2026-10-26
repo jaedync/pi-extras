@@ -1,7 +1,7 @@
 /** The launcher script with a fake `pi`: exit codes, arguments, restarts, the loop guard, `pi update` and Ctrl+C. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -34,7 +34,13 @@ case "$FAKE_MODE" in
 		if [ "$runs" = 1 ]; then mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/a b.jsonl" "Updated: Pi 1.4.1" "T1" "--model" "x y" "it's" "*" '$HOME' "" "--offline" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; fi
 		exit 0 ;;
 	restart-always)
+		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T1" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 0 ;;
+	restart-then-fail)
+		# A Pi that wrote its request and then crashed: the launcher must not act on it.
 		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T1" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 3 ;;
+	restart-old-file)
+		# A request with a time from before this Pi started: left over or planted, not from this Pi.
+		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T1" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; touch -t 200001010000 "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 0 ;;
 	restart-two-targets)
 		mkdir -p "$FAKE_STORE/restart"; printf '%s\\n' "/sessions/s.jsonl" "" "T$runs" > "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; [ "$runs" -lt 3 ] || rm -f "$FAKE_STORE/restart/$PI_EXTRAS_RESTART_TOKEN"; exit 0 ;;
 	wait-int)
@@ -131,7 +137,7 @@ test("Pi gets the launcher's store and runs from the real folder that pi-current
 test("more than 3 restarts in 60 s stop the loop with Pi's exit code", async (t) => {
 	const r = rig(t);
 	const result = await launch(r, [], "restart-always").done;
-	assert.equal(result.code, 3);
+	assert.equal(result.code, 0);
 	assert.equal(runs(r).length, 4, "the first run and 3 restarts");
 	assert.match(runs(r)[3]!, /restarts=3 target=T1\n/);
 	assert.match(result.stderr, /restarted 3 times in 60 s\. No more restarts\. To continue, run: pi --session \/sessions\/s\.jsonl/);
@@ -183,4 +189,24 @@ test("Ctrl+C reaches Pi and does not end the launcher; Pi does not inherit an ig
 	assert.match(readFileSync(r.log, "utf8"), /got-int/);
 	const ignored = readFileSync(r.log, "utf8").match(/SigIgn:\s+([0-9a-f]+)/)?.[1];
 	if (ignored) assert.equal(BigInt(`0x${ignored}`) & 2n, 0n, "SIGINT is not ignored in Pi");
+});
+
+test("a restart request counts only after Pi exits 0 and only when Pi wrote it after its start", async (t) => {
+	for (const [mode, code] of [["restart-then-fail", 3], ["restart-old-file", 0]] as const) {
+		const r = rig(t);
+		const result = await launch(r, [], mode).done;
+		assert.equal(result.code, code, mode);
+		assert.equal(runs(r).length, 1, `${mode}: no restart`);
+		assert.doesNotMatch(result.stderr, /starting Pi again/);
+		const token = runs(r)[0]!.match(/token=(\w+)/)![1]!;
+		assert.equal(existsSync(join(r.store, "restart", token)), false, `${mode}: the launcher removes the request it ignored`);
+		assert.deepEqual(readdirSync(join(r.store, "restart")), [], `${mode}: no file of the launcher stays`);
+	}
+});
+
+test("a launcher that a Pi child starts does not pass on the outer restart count", async (t) => {
+	const r = rig(t);
+	const child = spawn(r.launcher, [], { env: { PATH: process.env.PATH, FAKE_LOG: r.log, FAKE_MODE: "exit7", FAKE_STORE: r.store, PI_EXTRAS_RESTART_COUNT: "2", PI_EXTRAS_RESTART_TARGET: "T1" }, stdio: "ignore" });
+	await new Promise((resolve) => child.on("close", resolve));
+	assert.match(runs(r)[0]!, /restarts=unset target=unset\n/);
 });

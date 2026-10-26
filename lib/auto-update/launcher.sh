@@ -18,6 +18,10 @@ RESTART_WINDOW_S=60
 # inherit an ignored signal.
 trap ':' INT
 
+# A launcher that a Pi child starts (a shell job, a nested pi) begins its
+# own count; the outer launcher's values are not for its Pi.
+unset PI_EXTRAS_RESTART_COUNT PI_EXTRAS_RESTART_TARGET
+
 PI_EXTRAS_RESTART_TOKEN=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
 [ -n "$PI_EXTRAS_RESTART_TOKEN" ] || PI_EXTRAS_RESTART_TOKEN="$$-$(date +%s)"
 export PI_EXTRAS_RESTART_TOKEN
@@ -66,15 +70,40 @@ if [ -e "$STORE/pi-managed" ]; then
 	export PI_SKIP_VERSION_CHECK
 fi
 
-REQUEST="$STORE/restart/$PI_EXTRAS_RESTART_TOKEN"
+REQUEST_DIR="$STORE/restart"
+REQUEST="$REQUEST_DIR/$PI_EXTRAS_RESTART_TOKEN"
+STAMP="$REQUEST_DIR/.$PI_EXTRAS_RESTART_TOKEN.start"
+
+# Before each Pi start: no request from earlier, and a stamp with the start
+# time. A request counts only when it is newer than the stamp, so a file
+# left over or put there before this Pi started does not restart it. A
+# shell whose -nt compares whole seconds is enough: a session asks for a
+# restart only after 30 s of quiet.
+mark_start() {
+	rm -f "$REQUEST"
+	(umask 077 && mkdir -p "$REQUEST_DIR" && : > "$STAMP") 2>/dev/null || rm -f "$STAMP"
+}
+
+# A restart only after a clean exit: a Pi that crashed after it wrote its
+# request is not started again, and its exit code passes through.
+restart_wanted() {
+	[ "$code" -eq 0 ] && [ -f "$REQUEST" ] && [ -f "$STAMP" ] && [ "$REQUEST" -nt "$STAMP" ]
+}
+
+finish() {
+	rm -f "$REQUEST" "$STAMP"
+	exit "$1"
+}
+
 restarts=0
 window_start=$(date +%s)
 last_target=
 same_target=0
 
+mark_start
 "$(pi_bin)" "$@"
 code=$?
-while [ -f "$REQUEST" ]; do
+while restart_wanted; do
 	# Line 1: the session. Line 2: what the new Pi says once it runs (a new
 	# session has no file yet to read it from). Line 3: the set it moves to.
 	# Then one launch option per line, which the session checked against an
@@ -94,7 +123,7 @@ while [ -f "$REQUEST" ]; do
 		esac
 	done < "$REQUEST"
 	rm -f "$REQUEST"
-	[ -n "$session" ] || exit "$code"
+	[ -n "$session" ] || finish "$code"
 	now=$(date +%s)
 	if [ $((now - window_start)) -ge "$RESTART_WINDOW_S" ]; then
 		window_start=$now
@@ -103,7 +132,7 @@ while [ -f "$REQUEST" ]; do
 	restarts=$((restarts + 1))
 	if [ "$restarts" -gt "$MAX_RESTARTS" ]; then
 		printf 'pi-extras launcher: Pi restarted %s times in %s s. No more restarts. To continue, run: pi --session %s\n' "$MAX_RESTARTS" "$RESTART_WINDOW_S" "$session" >&2
-		exit "$code"
+		finish "$code"
 	fi
 	# Restarts in a row for one target, however far apart: the session stops
 	# trying when it still does not run the target after a few of them.
@@ -113,7 +142,8 @@ while [ -f "$REQUEST" ]; do
 	PI_EXTRAS_RESTART_TARGET=$target
 	export PI_EXTRAS_RESTART_COUNT PI_EXTRAS_RESTART_TARGET
 	printf '%s\n' "pi-extras launcher: starting Pi again for the update." >&2
+	mark_start
 	PI_EXTRAS_UPDATE_DONE=$note "$(pi_bin)" "$@" --session "$session"
 	code=$?
 done
-exit "$code"
+finish "$code"
