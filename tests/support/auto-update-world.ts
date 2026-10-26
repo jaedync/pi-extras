@@ -4,6 +4,7 @@
  * settings.json, a store, a fake git host (real git, local repositories) and
  * a fake npm on PATH. Nothing outside the temp folder is read or changed.
  */
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,8 +15,9 @@ import { DEFAULT_CONFIG, type AutoUpdateConfig } from "../../lib/auto-update/con
 import type { CycleDeps } from "../../lib/auto-update/cycle.ts";
 import { storePaths, type StorePaths } from "../../lib/auto-update/paths.ts";
 import { runCommand } from "../../lib/auto-update/run.ts";
+import { readSettingsPackages } from "../../lib/auto-update/settings.ts";
 import { smokeTest } from "../../lib/auto-update/smoke.ts";
-import { fakeGitHost, fixturePackage, gitPackage, PI_NAME, PI_PACKAGE, removeTree, REPO } from "./auto-update-fixtures.ts";
+import { fakeGitHost, fixturePackage, gitPackage, PI_NAME, PI_PACKAGE, removeTree, REPO, tagRelease } from "./auto-update-fixtures.ts";
 
 const exec = promisify(execFile);
 export const CLI = join(REPO, "lib", "auto-update", "cli.ts");
@@ -100,3 +102,19 @@ export function world(t: test.TestContext): World {
 		read: (path) => readFileSync(path, "utf8"),
 	};
 }
+
+/** The store keys of the world's two managed sources (sources.ts storeKeyFor). */
+export const GIT_KEY = "git-git.example.invalid-jaedync-fixture-git-ba28a080";
+export const NPM_KEY = "npm-fixture-npm-23995fd2";
+
+/** A world after a successful `enable` with the Git source at v1.0.0. */
+export async function enabled(t: test.TestContext): Promise<World> {
+	const w = world(t);
+	tagRelease(w.gitRepo, "good", "1.0.0");
+	const result = await w.cli("enable");
+	assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+	return w;
+}
+
+/** The source of each `packages` entry in the world's settings.json. */
+export const entrySources = (w: World) => readSettingsPackages(w.settings).map((entry) => (typeof entry === "string" ? entry : (entry as { source: string }).source));
