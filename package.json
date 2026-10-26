@@ -65,6 +65,7 @@
     "test:kagi": "vitest run",
     "test:pi": "node scripts/test-pi.mjs",
     "test:install": "node scripts/install-smoke.mjs",
+    "test:real-tools": "PI_EXTRAS_REAL_TOOLS=1 node --test tests/auto-update-real-tools.test.ts",
     "audit:package": "node scripts/audit-package.mjs",
     "preview:render": "node scripts/preview/render.mjs",
     "preview:check": "node scripts/preview/check.mjs",

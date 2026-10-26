@@ -7,7 +7,10 @@ the checks below and fix what breaks. Install development dependencies with
 `npm ci --ignore-scripts` and run `npm run typecheck`, `npm test`,
 `npm run test:install` and `npm run audit:package`. Tests must use synthetic inputs and isolated homes.
 Run `npm run test:pi -- latest` (or a release number) to typecheck and test
-against one Pi release. The script puts the locked Pi back when it ends. CI
+against one Pi release. The script puts the locked Pi back when it ends.
+After a change to auto-update's npm or git calls, run
+`npm run test:real-tools`. It uses the network and the npm and git on your
+`PATH`, so `npm test` does not run it. CI
 does the same for `latest` on every push and every day, so a new Pi release
 fails CI the same day. When you raise the minimum, change the development
 pins, the peer minimums and the README together. A test checks that they
