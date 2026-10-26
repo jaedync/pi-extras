@@ -4,7 +4,7 @@
  * in memory; only `firstLine` (sanitized) may reach a log or the state file,
  * because raw output can hold credential URLs.
  */
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 
 export interface RunOptions {
 	readonly cwd?: string;
@@ -46,6 +46,28 @@ function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
 	}
 }
 
+/** Commands that run now, by pid; `group` when the command leads its own process group. */
+const running = new Map<number, { readonly group: boolean }>();
+
+/** Registers a child so `killRunning` can stop it; it leaves the list when it closes. */
+export function trackChild(child: ChildProcess, group: boolean): void {
+	if (child.pid === undefined) return;
+	const pid = child.pid;
+	running.set(pid, { group });
+	child.once("close", () => running.delete(pid));
+}
+
+/** Stops every tracked command with SIGKILL: for the hard cycle limit, just before the process ends. */
+export function killRunning(): void {
+	for (const [pid, { group }] of running) {
+		try {
+			process.kill(group ? -pid : pid, "SIGKILL");
+		} catch {
+			// Gone already.
+		}
+	}
+}
+
 export const runCommand: Runner = (command, args, options) =>
 	new Promise((resolveResult) => {
 		let stdout = "";
@@ -57,6 +79,7 @@ export const runCommand: Runner = (command, args, options) =>
 			stdio: ["ignore", "pipe", "pipe"],
 			detached: process.platform !== "win32",
 		});
+		trackChild(child, process.platform !== "win32");
 		const timer = setTimeout(() => {
 			timedOut = true;
 			killGroup(child.pid, "SIGTERM");

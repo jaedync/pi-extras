@@ -27,6 +27,37 @@ export const CYCLE_LIMIT_MS = 10 * 60_000;
 /** Past this, a lock whose holder still lives is taken over: that cycle is stuck far beyond its limit. */
 export const LOCK_STALE_MS = 2 * CYCLE_LIMIT_MS;
 
+export interface HardLimitOptions {
+	readonly ms: number;
+	readonly paths: StorePaths;
+	readonly now: () => number;
+	readonly log: Log;
+	readonly kill: () => void;
+	readonly exit: (code: number) => void;
+}
+
+/**
+ * The cycle's total limit as a timer: the soft deadline only stops new
+ * installs, so a slow install could run on. When the timer fires, the
+ * process records why, stops its commands and ends. Its lock then names a
+ * dead pid, so the next cycle takes it over, and GC removes the staging
+ * folder it left (older than STAGING_MAX_AGE_MS). Returns the disarm.
+ */
+export function armHardLimit(options: HardLimitOptions): () => void {
+	const timer = setTimeout(() => {
+		const message = `The update check passed its limit of ${Math.round(options.ms / 60_000)} minutes and stopped. The next check tries again.`;
+		options.log(`hard limit: ${message}`);
+		try {
+			updateState(options.paths.state, (state) => ({ ...state, activity: undefined, lastError: { at: options.now(), message } }));
+		} catch (error) {
+			options.log(`could not update state.json: ${(error as Error).message}`);
+		}
+		options.kill();
+		options.exit(1);
+	}, options.ms);
+	return () => clearTimeout(timer);
+}
+
 export interface CycleDeps {
 	readonly paths: StorePaths;
 	readonly agentDir: string;

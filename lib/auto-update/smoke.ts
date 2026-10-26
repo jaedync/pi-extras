@@ -18,7 +18,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { firstLine, sanitize } from "./run.ts";
+import { firstLine, sanitize, trackChild } from "./run.ts";
 
 export const SMOKE_TIMEOUT_MS = 90_000;
 const PROVIDER = "pi-extras-smoke";
@@ -103,6 +103,7 @@ function drivePi(drive: Drive): Promise<SmokeResult> {
 		},
 		stdio: ["pipe", "pipe", "pipe"],
 	});
+	trackChild(child, false);
 	return new Promise((resolve) => {
 		let outcome: SmokeResult | undefined;
 		let stderr = "";

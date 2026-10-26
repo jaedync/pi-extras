@@ -6,7 +6,8 @@ import test from "node:test";
 import { describeEntry } from "../lib/auto-update/enable.ts";
 import { DEFAULT_CONFIG, parseConfig, readConfig, writeConfig } from "../lib/auto-update/config.ts";
 import { agentDirFrom, isInside, storePaths, storeRootFrom } from "../lib/auto-update/paths.ts";
-import { firstLine, runCommand, sanitize } from "../lib/auto-update/run.ts";
+import { firstLine, killRunning, runCommand, sanitize } from "../lib/auto-update/run.ts";
+import { armHardLimit } from "../lib/auto-update/cycle.ts";
 import { emptyState, readState, writeState, type UpdateState } from "../lib/auto-update/state.ts";
 
 function scratch(t: test.TestContext): string {
@@ -119,4 +120,37 @@ test("a settings entry is shown by its source, without credentials", () => {
 	assert.equal(describeEntry({ source: "https://user:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/a/b", extensions: ["x"] }), "https://***@github.com/a/b");
 	assert.equal(describeEntry("npm:x"), "npm:x");
 	assert.equal(describeEntry(42), "(an entry without a source)");
+});
+
+test("killRunning stops every command that runCommand started", { skip: process.platform === "win32" }, async () => {
+	const started = Date.now();
+	const running = runCommand("sleep", ["30"], { timeoutMs: 60_000 });
+	await new Promise((resolve) => setTimeout(resolve, 100));
+	killRunning();
+	const result = await running;
+	assert.ok(Date.now() - started < 5_000, "it did not run to its end");
+	assert.notEqual(result.code, 0);
+});
+
+test("the hard cycle limit records the reason, stops running commands and ends the process", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "au-hard-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const paths = storePaths(dir);
+	writeState(paths.state, { ...emptyState(), activity: { text: "installing x", since: 1, pid: 1 } });
+	const calls: string[] = [];
+	const lines: string[] = [];
+	const exited = new Promise<number>((resolve) => {
+		armHardLimit({ ms: 20, paths, now: () => 5, log: (line) => lines.push(line), kill: () => calls.push("kill"), exit: resolve });
+	});
+	assert.equal(await exited, 1);
+	assert.deepEqual(calls, ["kill"]);
+	assert.match(lines.join("\n"), /hard limit/);
+	const state = readState(paths.state);
+	assert.match(state.lastError?.message ?? "", /passed its limit of 0 minutes/);
+	assert.equal(state.activity, undefined);
+	const disarmed: string[] = [];
+	const stop = armHardLimit({ ms: 20, paths, now: () => 5, log: () => {}, kill: () => disarmed.push("kill"), exit: () => disarmed.push("exit") });
+	stop();
+	await new Promise((resolve) => setTimeout(resolve, 60));
+	assert.deepEqual(disarmed, [], "a finished cycle disarms the limit");
 });

@@ -9,10 +9,10 @@ import { homedir } from "node:os";
 import { CommandError, disable, enable } from "./enable.ts";
 import { gc, rollback } from "./commands.ts";
 import { readConfig } from "./config.ts";
-import { runCycle, type CycleOutcome } from "./cycle.ts";
+import { armHardLimit, CYCLE_LIMIT_MS, runCycle, type CycleOutcome } from "./cycle.ts";
 import { fileLog } from "./log.ts";
 import { agentDirFrom, EXTRAS_DIR, storePaths, storeRootFrom } from "./paths.ts";
-import { runCommand } from "./run.ts";
+import { killRunning, runCommand } from "./run.ts";
 import { smokeTest } from "./smoke.ts";
 import { readState } from "./state.ts";
 import { statusLines } from "./status.ts";
@@ -48,7 +48,8 @@ async function main(argv: readonly string[]): Promise<number> {
 	const ctx = context(command);
 	switch (command) {
 		case "check": {
-			const result = await runCycle({ ...ctx, config: readConfig(ctx.agentDir), runner: runCommand, smoke: smokeTest }, { force: rest.includes("--force") });
+			const disarm = armHardLimit({ ms: CYCLE_LIMIT_MS, paths: ctx.paths, now: ctx.now, log: ctx.log, kill: killRunning, exit: (code) => process.exit(code) });
+			const result = await runCycle({ ...ctx, config: readConfig(ctx.agentDir), runner: runCommand, smoke: smokeTest }, { force: rest.includes("--force") }).finally(disarm);
 			ctx.out(result.message);
 			return FAILED.has(result.outcome) ? 1 : 0;
 		}
