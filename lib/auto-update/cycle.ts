@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { tryLock } from "../file-lock.ts";
 import { isOffline } from "../offline.ts";
 import type { AutoUpdateConfig } from "./config.ts";
-import { collectGarbage, mappedPaths } from "./gc.ts";
+import { collectGarbage, processPaths } from "./gc.ts";
 import { INSTALL_TIMEOUT_MS } from "./install.ts";
 import { isLauncher, syncPiMarker } from "./launcher.ts";
 import { readLiveLeases } from "./leases.ts";
@@ -17,7 +17,7 @@ import { EXTRAS_DIR, type StorePaths } from "./paths.ts";
 import { PI_KEY, trackedSources, wantedPackage, wantedPi, type LookupDeps, type Tracked, type Wanted } from "./plan.ts";
 import type { Runner } from "./run.ts";
 import { readSettingsPackages, settingsFile } from "./settings.ts";
-import { applySet, entryKey } from "./sources.ts";
+import { applySet, classify, entryKey, entrySource } from "./sources.ts";
 import { markBad, readState, sameSet, updateState, type PackageRelease, type PiRelease, type UpdateSet, type UpdateState } from "./state.ts";
 import { applySwitch, piCurrentMatches, settingsMatch } from "./switch.ts";
 import type { SmokeInput, SmokeResult } from "./smoke.ts";
@@ -294,9 +294,11 @@ function finish(deps: CycleDeps, errors: readonly string[]): void {
 }
 
 /** GC never fails a cycle: what it could not remove now, it tries again next time. */
-export function collect(deps: Pick<CycleDeps, "paths" | "now" | "log">): void {
+export function collect(deps: Pick<CycleDeps, "paths" | "agentDir" | "now" | "log">): void {
 	try {
-		const result = collectGarbage({ paths: deps.paths, state: readState(deps.paths.state), leases: readLiveLeases(deps.paths), now: deps.now(), mapped: mappedPaths });
+		// A settings.json that does not parse throws here: no GC until it is fixed, so nothing it names goes away.
+		const named = readSettingsPackages(settingsFile(deps.agentDir)).map(entrySource).filter((source): source is string => source !== undefined && classify(source, deps.paths.root).kind === "store");
+		const result = collectGarbage({ paths: deps.paths, state: readState(deps.paths.state), leases: readLiveLeases(deps.paths), named, now: deps.now(), mapped: processPaths });
 		for (const dir of result.removed) deps.log(`removed ${dir}`);
 		for (const failure of result.failed) deps.log(`could not remove ${failure.dir}: ${failure.reason}`);
 	} catch (error) {

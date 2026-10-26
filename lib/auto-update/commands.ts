@@ -41,8 +41,10 @@ export function rollback(deps: CommandDeps): void {
 		const to = state.previous;
 		const packages = readSettingsPackages(settingsFile(deps.agentDir));
 		switchTo(deps, to, packages);
+		// Only a source that both sets have is rolled back; one that the user added since is new, not bad.
+		const shared = changedKeys(to, from).filter((key) => key === PI_KEY || (to.packages[key] !== undefined && from.packages[key] !== undefined));
 		updateState(deps.paths.state, (now) =>
-			changedKeys(to, from).reduce((next, key) => {
+			shared.reduce((next, key) => {
 				const id = key === PI_KEY ? from.pi.version : from.packages[key]?.id;
 				return id === undefined ? next : markBad(next, key, id, "rolled back by the user", deps.now());
 			}, now),

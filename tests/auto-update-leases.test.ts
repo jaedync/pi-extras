@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { collectGarbage, mappedPaths } from "../lib/auto-update/gc.ts";
+import { collectGarbage, mappedPaths, processPaths } from "../lib/auto-update/gc.ts";
 import { leaseFile, processStart, readLiveLeases, removeLease, writeLease, type Lease } from "../lib/auto-update/leases.ts";
 import { storePaths } from "../lib/auto-update/paths.ts";
 import { emptyState, type UpdateSet } from "../lib/auto-update/state.ts";
@@ -79,11 +79,11 @@ test("GC removes only old releases that no set, lease or mapping uses", (t) => {
 	const piCur = release(root, "pi/1.4.0", 2 * hour);
 	const piLeased = release(root, "pi/1.3.0", 2 * hour);
 	const piOld = release(root, "pi/1.2.0", 2 * hour);
-	mkdirSync(join(root, "packages/npm-x/4.0.0.staging-abc"));
-	const staleStaging = join(root, "packages/npm-x/4.0.0.staging-abc");
+	mkdirSync(join(root, "packages/npm-x/4.0.0.staging-0a1b2c3d"));
+	const staleStaging = join(root, "packages/npm-x/4.0.0.staging-0a1b2c3d");
 	const oldTime = new Date(Date.now() - hour);
 	utimesSync(staleStaging, oldTime, oldTime);
-	mkdirSync(join(root, "packages/npm-x/5.0.0.staging-new"));
+	mkdirSync(join(root, "packages/npm-x/5.0.0.staging-4e5f6a7b"));
 	// A symlink inside a release must be removed, never followed.
 	const outside = join(root, "outside");
 	mkdirSync(outside);
@@ -96,11 +96,65 @@ test("GC removes only old releases that no set, lease or mapping uses", (t) => {
 	const leases = [lease({ piDir: piLeased, releases: [join(leased, "node_modules/x")] })];
 	const result = collectGarbage({ paths, state, leases, now: Date.now(), mapped: () => new Set([join(mapped, "native.node")]) });
 	assert.deepEqual(result.removed.sort(), [old, piOld, staleStaging].sort());
-	for (const dir of [cur, prev, leased, young, mapped, piCur, piLeased, join(root, "packages/npm-x/5.0.0.staging-new")]) assert.ok(existsSync(dir), dir);
+	for (const dir of [cur, prev, leased, young, mapped, piCur, piLeased, join(root, "packages/npm-x/5.0.0.staging-4e5f6a7b")]) assert.ok(existsSync(dir), dir);
 	assert.ok(existsSync(join(outside, "keep.txt")));
 });
 
 test("the maps scan finds files a live process has mapped", { skip: process.platform !== "linux" }, () => {
 	const paths = mappedPaths(["/usr", "/lib", process.execPath.split("/").slice(0, 2).join("/")]);
 	assert.ok([...paths].some((path) => path.includes("libc") || path === process.execPath), "node or libc is mapped by this process");
+});
+
+test("GC through a symlinked store root keeps what leases name by real path, and what settings.json names", (t) => {
+	const dir = scratch(t);
+	const realRoot = join(dir, "real-store");
+	mkdirSync(realRoot);
+	const root = join(dir, "store-link");
+	symlinkSync(realRoot, root);
+	const paths = storePaths(root);
+	const hour = 3_600_000;
+	const piCur = release(root, "pi/1.4.0", 2 * hour);
+	const piOld = release(root, "pi/1.3.0", 2 * hour);
+	const piGone = release(root, "pi/1.2.0", 2 * hour);
+	const cur = release(root, "packages/npm-x/3.0.0", 2 * hour);
+	const named = release(root, "packages/npm-y/1.0.0", 2 * hour);
+	const loose = release(root, "packages/npm-y/0.9.0", 2 * hour);
+	const state = { ...emptyState(), current: { pi: { version: "1.4.0", dir: piCur }, packages: { "npm-x": { origin: "npm:x", id: "3.0.0", dir: cur, entry: join(cur, "node_modules/x") } } } };
+	// A session's lease names real paths (Pi's own folder through realpath), not the link.
+	const leases = [lease({ piDir: realpathSync(piOld) })];
+	const result = collectGarbage({ paths, state, leases, named: [join(realpathSync(named), "node_modules/y")], now: Date.now(), mapped: () => new Set() });
+	assert.deepEqual(result.removed.map((removed) => removed.replace(realRoot, root)).sort(), [loose, piGone].sort());
+	for (const kept of [piCur, piOld, cur, named]) assert.ok(existsSync(kept), kept);
+});
+
+test("a release whose name holds .staging- is a release, and a current one is never staging garbage", (t) => {
+	const root = scratch(t);
+	const paths = storePaths(root);
+	const hour = 3_600_000;
+	const prerelease = release(root, "packages/npm-x/2.0.0.staging-1", 2 * hour);
+	const staging = join(root, "packages/npm-x/2.0.0.staging-1.staging-0a1b2c3d");
+	mkdirSync(staging);
+	const old = new Date(Date.now() - hour);
+	utimesSync(staging, old, old);
+	const state = { ...emptyState(), current: { pi: { version: "v", dir: join(root, "pi/none") }, packages: { "npm-x": { origin: "npm:x", id: "2.0.0.staging-1", dir: prerelease, entry: prerelease } } } };
+	const result = collectGarbage({ paths, state, leases: [], now: Date.now(), mapped: () => new Set() });
+	assert.deepEqual(result.removed, [staging]);
+	assert.ok(existsSync(prerelease));
+});
+
+test("the process scan finds store paths in a live process's command line and working folder", { skip: process.platform !== "linux" }, async (t) => {
+	const root = realpathSync(scratch(t));
+	const cwdDir = join(root, "pi", "1.3.0");
+	const argDir = join(root, "pi", "1.2.0");
+	mkdirSync(cwdDir, { recursive: true });
+	mkdirSync(argDir, { recursive: true });
+	const children = [
+		spawn("sleep", ["30"], { cwd: cwdDir, stdio: "ignore" }),
+		spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)", join(argDir, "bin", "pi")], { stdio: "ignore" }),
+	];
+	t.after(() => children.forEach((child) => child.kill("SIGKILL")));
+	await new Promise((resolve) => setTimeout(resolve, 200));
+	const found = [...processPaths([root])];
+	assert.ok(found.includes(cwdDir), `cwd: ${found.join(", ")}`);
+	assert.ok(found.includes(join(argDir, "bin", "pi")), `cmdline: ${found.join(", ")}`);
 });

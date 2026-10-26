@@ -206,7 +206,7 @@ test("a new unpinned entry that the user adds is adopted at the next cycle", asy
 
 test("a stale staging folder from a crashed install is removed; a lock of a dead process is taken over", async (t) => {
 	const w = await enabled(t);
-	const staging = join(w.paths.packagesRoot, GIT_KEY, "9.9.9-abcdef0.staging-dead");
+	const staging = join(w.paths.packagesRoot, GIT_KEY, "9.9.9-abcdef0.staging-deadbeef");
 	mkdirSync(staging, { recursive: true });
 	const old = new Date(Date.now() - 3_600_000);
 	utimesSync(staging, old, old);
@@ -247,4 +247,31 @@ test("a launcher that something wrote over is reported, not fixed; enable again 
 	await runCycle(w.cycleDeps(), { force: true });
 	assert.equal(readState(w.paths.state).launcherProblem, undefined);
 	assert.equal(readState(w.paths.state).lastError, undefined);
+});
+
+test("rollback after a new source was added marks only the sources both sets have", async (t) => {
+	const w = await enabled(t);
+	const extra = fixturePackage(join(w.root, "extra-src"), "good", "fixture-extra");
+	w.setRegistry("fixture-extra", "0.1.0", extra);
+	w.setRegistry(PI_NAME, "1.4.3");
+	const settings = JSON.parse(w.read(w.settings));
+	writeFileSync(w.settings, JSON.stringify({ ...settings, packages: [...settings.packages, "npm:fixture-extra"] }, null, 2));
+	assert.equal((await runCycle(w.cycleDeps(), { force: true })).outcome, "switched");
+	const result = await w.cli("rollback");
+	assert.equal(result.code, 0, result.stderr);
+	const state = readState(w.paths.state);
+	assert.ok(state.bad.pi?.["1.4.3"], "Pi changed in both sets: bad");
+	assert.equal(state.bad["npm-fixture-extra"], undefined, "the previous set had no fixture-extra: not a rollback of it");
+});
+
+test("GC keeps a store folder that settings.json names, also when no set has it", async (t) => {
+	const w = await enabled(t);
+	const named = join(w.paths.packagesRoot, "npm-fixture-zzz", "1.0.0");
+	mkdirSync(named, { recursive: true });
+	writeFileSync(join(named, ".pi-extras-release.json"), JSON.stringify({ installedAt: 0 }));
+	const settings = JSON.parse(w.read(w.settings));
+	writeFileSync(w.settings, JSON.stringify({ ...settings, packages: [...settings.packages, named] }, null, 2));
+	const late = () => Date.now() + 2 * 3_600_000;
+	await runCycle(w.cycleDeps({ now: late }), { force: true });
+	assert.ok(existsSync(named), "new sessions load it");
 });
