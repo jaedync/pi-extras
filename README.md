@@ -1447,6 +1447,29 @@ to a slow crawl when a log goes quiet. Four jobs fit; the rest give way to
 with the same band at the top and buttons (or `c` and `o`) to copy the
 command and the whole log; Esc, `q` or `✕` closes it.
 
+## Tool Loadout
+
+Every request carries the declaration of every active tool, so a tool the
+model calls once a week costs its tokens on every turn. Name such tools in
+`pi-extras.json` and requests leave them out, while `codemode` scripts can
+still call them:
+
+```json
+{
+  "toolLoadout": {
+    "codemodeOnly": ["get_goal", "create_goal", "propose_goal_draft", "gov_search", "stop_subagent"]
+  }
+}
+```
+
+It works for any package's tools. A script sees each hidden tool's full
+description and rules through `describeTool(name)`, so a tool keeps its
+limits. `codemode` itself and the file tools are never hidden, and without
+`codemode` nothing is hidden. Tell the model in your `AGENTS.md` which tools
+are hidden and to read `describeTool(name)` before the first call. Subagents
+keep every tool declared, since they have no `codemode`. The list applies at
+the next session start or `/reload`.
+
 ## Copy Blocks
 
 Code blocks and quotes in the agent's replies are drawn as cards on a
@@ -1848,10 +1871,19 @@ the project. Which model suits what is yours to say in a Markdown guide,
 - opus 5.5: taste; design, naming, reviewing plans
 ```
 
-It goes into the tool's description with the model list. Pi reads it when a
+It goes into the tool's description with the model list. When the guide has a
+non-empty `## Summary` section, only that section goes in, with a pointer to
+the file: keep the rules that decide a choice in the summary and the evidence
+below it. Pi reads it when a
 session starts and on `/reload`, never mid-session, since a changed tool
 description busts the prompt cache. `/subagents guide` edits it, or ask the
 agent to.
+
+When `~/.pi/agent/AGENTS.child.md` exists, a child gets it in place of
+`~/.pi/agent/AGENTS.md`, and it drops the `AGENTS.md` files above its project
+root (the git root of its `cwd`). Put there the rules a worker needs: safety
+limits, how to report, language. Without that file, or with
+`fullInstructions: true` on a spawn, the child gets main's context files.
 
 Each launch of a child reads Pi's `settings.json`, the project's
 `.pi/settings.json` and `models.json` again. It also reads the context files

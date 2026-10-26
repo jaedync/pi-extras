@@ -2,6 +2,26 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.34.0 - 2026-10-26
+
+### Added
+
+- Tool Loadout: tools named in `toolLoadout.codemodeOnly` (`pi-extras.json`)
+  leave the request but stay callable from `codemode` scripts, with their
+  full rules through `describeTool()`. It works for any package's tools.
+- Subagents: a child gets `~/.pi/agent/AGENTS.child.md` in place of the
+  global `AGENTS.md` when that file exists, and drops context files above its
+  project root. The spawn parameter `fullInstructions: true` keeps main's
+  context files.
+
+### Changed
+
+- Subagents: when the model guide has a `## Summary` section, only that
+  section goes into the tool description, with a pointer to the file. A long
+  guide was cut at 4,000 characters before, so its last rules were lost.
+- Subagents and Pull Link: shorter tool descriptions (about 4,000 fewer
+  characters on every request). A test holds both to a token budget.
+
 ## 0.33.1 - 2026-10-26
 
 ### Changed
