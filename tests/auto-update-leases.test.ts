@@ -158,3 +158,41 @@ test("the process scan finds store paths in a live process's command line and wo
 	assert.ok(found.includes(cwdDir), `cwd: ${found.join(", ")}`);
 	assert.ok(found.includes(join(argDir, "bin", "pi")), `cmdline: ${found.join(", ")}`);
 });
+
+test("GC with the real scans keeps a folder that a process works in, names or maps, and removes the rest", { skip: process.platform !== "linux" }, async (t) => {
+	const root = realpathSync(scratch(t));
+	const paths = storePaths(root);
+	const hour = 3_600_000;
+	const worked = release(root, "pi/1.1.0", 2 * hour);
+	const named = release(root, "pi/1.2.0", 2 * hour);
+	const mappedDir = release(root, "packages/npm-x/1.0.0", 2 * hour);
+	const loose = release(root, "packages/npm-x/0.9.0", 2 * hour);
+	const children = [
+		spawn("sleep", ["30"], { cwd: worked, stdio: "ignore" }),
+		spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)", join(named, "bin", "pi")], { stdio: "ignore" }),
+		// A native module or a mapped data file: only /proc/<pid>/maps shows it.
+		spawn("python3", ["-c", "import mmap, sys, time; f = open(sys.argv[1], 'rb'); m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ); print('ready', flush=True); time.sleep(30)", join(mappedDir, "file.txt")], { stdio: ["ignore", "pipe", "ignore"] }),
+	];
+	t.after(() => children.forEach((child) => child.kill("SIGKILL")));
+	await new Promise((resolve) => children[2]!.stdout!.once("data", resolve));
+	const result = collectGarbage({ paths, state: emptyState(), leases: [], now: Date.now() });
+	assert.deepEqual(result.removed, [loose]);
+	for (const kept of [worked, named, mappedDir]) assert.ok(existsSync(kept), kept);
+});
+
+test("GC reads the maps of processes only when the command lines and working folders leave a folder undecided", (t) => {
+	const root = scratch(t);
+	const paths = storePaths(root);
+	const hour = 3_600_000;
+	const a = release(root, "packages/npm-x/1.0.0", 2 * hour);
+	const b = release(root, "packages/npm-x/0.9.0", 2 * hour);
+	const calls: string[] = [];
+	const refs = () => (calls.push("refs"), new Set([join(a, "bin"), join(b, "x")]));
+	const maps = () => (calls.push("maps"), new Set<string>());
+	assert.deepEqual(collectGarbage({ paths, state: emptyState(), leases: [], now: Date.now(), refs, mapped: maps }).removed, []);
+	assert.deepEqual(calls, ["refs"], "every folder was decided without the maps");
+	calls.length = 0;
+	const some = () => (calls.push("refs"), new Set([join(a, "bin")]));
+	assert.deepEqual(collectGarbage({ paths, state: emptyState(), leases: [], now: Date.now(), refs: some, mapped: maps }).removed, [b]);
+	assert.deepEqual(calls, ["refs", "maps"], "one scan of each, not one for each folder");
+});

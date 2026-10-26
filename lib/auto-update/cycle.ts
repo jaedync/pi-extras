@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { tryLock } from "../file-lock.ts";
 import { isOffline } from "../offline.ts";
 import type { AutoUpdateConfig } from "./config.ts";
-import { collectGarbage, processPaths } from "./gc.ts";
+import { collectGarbage } from "./gc.ts";
 import { INSTALL_TIMEOUT_MS } from "./install.ts";
 import { isLauncher, syncPiMarker } from "./launcher.ts";
 import { readLiveLeases } from "./leases.ts";
@@ -359,7 +359,7 @@ export function collect(deps: Pick<CycleDeps, "paths" | "agentDir" | "now" | "lo
 	try {
 		// A settings.json that does not parse throws here: no GC until it is fixed, so nothing it names goes away.
 		const named = readSettingsPackages(settingsFile(deps.agentDir)).map(entrySource).filter((source): source is string => source !== undefined && classify(source, deps.paths.root).kind === "store");
-		const result = collectGarbage({ paths: deps.paths, state: readState(deps.paths.state), leases: readLiveLeases(deps.paths), named, now: deps.now(), mapped: processPaths });
+		const result = collectGarbage({ paths: deps.paths, state: readState(deps.paths.state), leases: readLiveLeases(deps.paths), named, now: deps.now() });
 		for (const dir of result.removed) deps.log(`removed ${dir}`);
 		for (const failure of result.failed) deps.log(`could not remove ${failure.dir}: ${failure.reason}`);
 	} catch (error) {

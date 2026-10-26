@@ -69,6 +69,8 @@ export function mappedPaths(roots: readonly string[]): Set<string> {
 			// Gone, or another user's process: it cannot map our files without our read access anyway.
 			continue;
 		}
+		// Most processes map nothing from the store: skip their maps without a split.
+		if (!roots.some((root) => maps.includes(root))) continue;
 		for (const line of maps.split("\n")) {
 			const slash = line.indexOf("/");
 			if (slash < 0) continue;
@@ -79,14 +81,19 @@ export function mappedPaths(roots: readonly string[]): Set<string> {
 	return found;
 }
 
-/**
- * Store paths that live processes use (Linux): mapped files, command-line
- * arguments and working folders. A Pi that does not load pi-extras writes
- * no lease, but the launcher starts it by its real path, so its command line
- * names its release folder.
- */
+/** Store paths that live processes use (Linux): mapped files, command-line arguments and working folders. */
 export function processPaths(roots: readonly string[]): Set<string> {
-	const found = mappedPaths(roots);
+	return new Set([...processRefs(roots), ...mappedPaths(roots)]);
+}
+
+/**
+ * Store paths in the command lines and working folders of live processes
+ * (Linux). A Pi that does not load pi-extras writes no lease, but the
+ * launcher starts it by its real path, so its command line names its
+ * release folder. Cheaper than the maps scan, so GC reads it first.
+ */
+export function processRefs(roots: readonly string[]): Set<string> {
+	const found = new Set<string>();
 	if (process.platform !== "linux") return found;
 	let pids: string[];
 	try {
@@ -145,6 +152,9 @@ export interface GcOptions {
 	readonly named?: readonly string[];
 	readonly now: number;
 	readonly minAgeMs?: number;
+	/** Command-line and working-folder scan (default `processRefs`). */
+	readonly refs?: (roots: readonly string[]) => Set<string>;
+	/** Maps scan (default `mappedPaths`): read only when `refs` leaves a folder undecided. */
 	readonly mapped?: (roots: readonly string[]) => Set<string>;
 }
 
@@ -153,11 +163,20 @@ export interface GcResult {
 	readonly failed: { readonly dir: string; readonly reason: string }[];
 }
 
-function keepReason(dir: string, options: GcOptions, inUse: readonly string[], mapped: () => Set<string>): string | undefined {
+/** Scans that run at most once for each GC, and only when a folder needs them. */
+interface Scans {
+	readonly refs: () => Set<string>;
+	readonly mapped: () => Set<string>;
+}
+
+const within = (paths: Set<string>, dir: string): boolean => [...paths].some((path) => path === dir || isInside(path, dir));
+
+function keepReason(dir: string, options: GcOptions, inUse: readonly string[], scans: Scans): string | undefined {
 	if (inUse.some((used) => used === dir || isInside(used, dir))) return "in use";
 	if (STAGING_NAME.test(basename(dir))) return options.now - lstatSync(dir).mtimeMs < STAGING_MAX_AGE_MS ? "staging" : undefined;
 	if (options.now - installedAt(dir) < (options.minAgeMs ?? MIN_AGE_MS)) return "young";
-	if ([...mapped()].some((path) => isInside(path, dir))) return "mapped";
+	if (within(scans.refs(), dir)) return "process";
+	if (within(scans.mapped(), dir)) return "mapped";
 	return undefined;
 }
 
@@ -176,12 +195,15 @@ export function collectGarbage(options: GcOptions): GcResult {
 	const paths = storePaths(realpathSync(options.paths.root));
 	const used = [...setDirs(state.current), ...setDirs(state.previous), ...(options.named ?? []), ...leases.flatMap((lease) => [lease.piDir, ...lease.releases])];
 	const inUse = used.map((dir) => realOr(resolve(dir)));
-	let scanned: Set<string> | undefined;
-	const mapped = () => (scanned ??= new Set([...(options.mapped ?? processPaths)([paths.root])].map(realOr)));
+	const once = (scan: (roots: readonly string[]) => Set<string>) => {
+		let found: Set<string> | undefined;
+		return () => (found ??= new Set([...scan([paths.root])].map(realOr)));
+	};
+	const scans: Scans = { refs: once(options.refs ?? processRefs), mapped: once(options.mapped ?? mappedPaths) };
 	const removed: string[] = [];
 	const failed: { dir: string; reason: string }[] = [];
 	for (const dir of candidates(paths)) {
-		if (keepReason(dir, options, inUse, mapped) !== undefined) continue;
+		if (keepReason(dir, options, inUse, scans) !== undefined) continue;
 		try {
 			removeStoreDir(paths, dir);
 			removed.push(dir);
