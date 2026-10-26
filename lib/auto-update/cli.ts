@@ -48,8 +48,10 @@ async function main(argv: readonly string[]): Promise<number> {
 	const ctx = context(command);
 	switch (command) {
 		case "check": {
+			// The cycle's tests must end before the hard limit, so it gets the limit's own end time.
+			const deadline = ctx.now() + CYCLE_LIMIT_MS;
 			const disarm = armHardLimit({ ms: CYCLE_LIMIT_MS, paths: ctx.paths, now: ctx.now, log: ctx.log, kill: killRunning, exit: (code) => process.exit(code) });
-			const result = await runCycle({ ...ctx, config: readConfig(ctx.agentDir), runner: inFolder(runCommand, ctx.paths.root), smoke: smokeTest }, { force: rest.includes("--force") }).finally(disarm);
+			const result = await runCycle({ ...ctx, config: readConfig(ctx.agentDir), runner: inFolder(runCommand, ctx.paths.root), smoke: smokeTest, deadline }, { force: rest.includes("--force") }).finally(disarm);
 			ctx.out(result.message);
 			return FAILED.has(result.outcome) ? 1 : 0;
 		}

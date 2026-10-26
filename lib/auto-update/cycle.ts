@@ -24,7 +24,7 @@ import { clearSuspect, markBad, markSuspect, readState, sameSet, updateState, ty
 import { applySwitch, piCurrentMatches, settingsMatch } from "./switch.ts";
 import { writeUndo } from "./undo.ts";
 import { npmMinAgeHours } from "./versions.ts";
-import { SMOKE_TIMEOUT_MS, sweepSmokeDirs, type SmokeInput, type SmokeResult } from "./smoke.ts";
+import { SMOKE_RESERVE_MS, sweepSmokeDirs, type SmokeInput, type SmokeResult } from "./smoke.ts";
 
 export const CYCLE_LIMIT_MS = 10 * 60_000;
 /** Past this, a lock whose holder still lives is taken over: that cycle is stuck far beyond its limit. */
@@ -71,6 +71,8 @@ export interface CycleDeps {
 	readonly log: Log;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly limitMs?: number;
+	/** The hard limit's end (see armHardLimit), as a `now()` time. */
+	readonly deadline?: number;
 }
 
 export type CycleOutcome = "disabled" | "paused" | "offline" | "throttled" | "locked" | "no-change" | "switched" | "smoke-failed" | "error";
@@ -282,42 +284,98 @@ function labelOf(set: UpdateSet, key: string): string {
 	return key === PI_KEY ? `Pi ${set.pi.version}` : (set.packages[key]?.label ?? key);
 }
 
+/** A test's answer for one set: "none" when it gave no verdict (a timeout, Pi did not start) or no time was left. */
+type Verdict = { readonly kind: "pass" } | { readonly kind: "fail"; readonly reason: string } | { readonly kind: "none"; readonly reason: string };
+
+/** Tests `set` when a whole test fits before the deadline. */
+async function verdictOf(deps: CycleDeps, set: UpdateSet, packages: readonly unknown[], deadline: number, activity: string): Promise<Verdict> {
+	if (deps.now() + SMOKE_RESERVE_MS > deadline) return { kind: "none", reason: "no time left in this check" };
+	setActivity(deps, activity);
+	const result = await deps.smoke({ piDir: set.pi.dir, packages: smokeEntries(packages, set, deps.paths.root) });
+	if (result.ok) return { kind: "pass" };
+	return result.inconclusive ? { kind: "none", reason: result.reason } : { kind: "fail", reason: result.reason };
+}
+
+/** `base` with each of `keys` taken from `candidate`. */
+function withAll(base: UpdateSet, candidate: UpdateSet, keys: readonly string[]): UpdateSet {
+	return keys.reduce((set, key) => withOne(set, candidate, key), base);
+}
+
 interface Search {
-	/** Changes that failed alone (or, when each passed alone, all of them). */
+	/** Changes to mark bad. */
 	readonly culprits: readonly { key: string; reason: string }[];
-	/** Changes that passed alone: they have their verdict too. */
+	/** Changes with a verdict that is not bad: their suspect marks go. */
 	readonly cleared: readonly string[];
-	/** False when the cycle limit left changes untested. */
+	/** A set that passed its test, to switch to now. */
+	readonly passing?: UpdateSet;
+	/** False when a test gave no verdict or the time ran out: the changes left keep their suspect marks. */
 	readonly complete: boolean;
 }
 
 /**
- * Finds which changes broke the candidate: one change is the culprit;
- * several are tried alone against the current set. A test starts only when
- * it can end before the cycle limit, so the hard limit does not cut it off;
- * the changes left untested keep their suspect marks for the next cycle.
+ * Finds which changes broke a candidate that failed its test (a real
+ * failure, not a timeout). A test that gives no verdict stops the search
+ * and marks nothing more.
+ *
+ * 1. Each change alone on the current set.
+ * 2. Each passed alone: the combination once more. It passes (the first
+ *    failure was not repeatable) or all are bad together.
+ * 3. Leave one out: a change whose removal makes the candidate pass is
+ *    the culprit, also when the other changes need each other (a Pi and a
+ *    package that needs that Pi).
+ * 4. No single removal helps: start from the changes that passed alone and
+ *    add each failed change back; the ones that make that set fail are bad.
  */
-async function findCulprits(deps: CycleDeps, current: UpdateSet, candidate: UpdateSet, packages: readonly unknown[], deadline: number): Promise<Search> {
-	const changes = changedKeys(current, candidate).filter((key) => idOf(candidate, key) !== undefined);
-	if (changes.length <= 1) return { culprits: changes.map((key) => ({ key, reason: "the smoke test failed" })), cleared: [], complete: true };
-	const culprits: { key: string; reason: string }[] = [];
-	const cleared: string[] = [];
+async function findCulprits(deps: CycleDeps, current: UpdateSet, candidate: UpdateSet, packages: readonly unknown[], deadline: number, first: string): Promise<Search> {
+	// Sources that the candidate drops are dropped in every set tried here.
+	const base: UpdateSet = { ...current, packages: Object.fromEntries(Object.entries(current.packages).filter(([key]) => candidate.packages[key])) };
+	const changes = changedKeys(base, candidate).filter((key) => idOf(candidate, key) !== undefined);
+	if (changes.length <= 1) return { culprits: changes.map((key) => ({ key, reason: first })), cleared: [], complete: true };
+	const stopped = (cleared: readonly string[], passing?: UpdateSet): Search => ({ culprits: [], cleared, passing, complete: false });
+	const passed: string[] = [];
+	const failed: { key: string; reason: string }[] = [];
 	for (const key of changes) {
-		if (deps.now() + SMOKE_TIMEOUT_MS > deadline) break;
-		setActivity(deps, `testing ${labelOf(candidate, key)} alone`);
-		const alone = withOne(current, candidate, key);
-		const result = await deps.smoke({ piDir: alone.pi.dir, packages: smokeEntries(packages, alone, deps.paths.root) });
-		if (result.ok) cleared.push(key);
-		else culprits.push({ key, reason: result.reason });
+		const alone = await verdictOf(deps, withOne(base, candidate, key), packages, deadline, `testing ${labelOf(candidate, key)} alone`);
+		if (alone.kind === "none") return stopped(passed);
+		if (alone.kind === "pass") passed.push(key);
+		else failed.push({ key, reason: alone.reason });
 	}
-	const complete = culprits.length + cleared.length === changes.length;
-	if (culprits.length > 0 || !complete) return { culprits, cleared, complete };
-	// Each change passed alone, so only the combination fails: mark them all, the next releases decide.
-	return { culprits: changes.map((key) => ({ key, reason: "failed only together with other updates" })), cleared: [], complete };
+	if (failed.length === 0) {
+		const again = await verdictOf(deps, candidate, packages, deadline, "testing all updates together again");
+		if (again.kind === "none") return stopped(passed);
+		if (again.kind === "pass") return { culprits: [], cleared: changes, passing: candidate, complete: true };
+		return { culprits: changes.map((key) => ({ key, reason: "failed only together with other updates" })), cleared: [], complete: true };
+	}
+	for (const culprit of failed) {
+		const without = withOne(candidate, base, culprit.key);
+		const result = await verdictOf(deps, without, packages, deadline, `testing the updates without ${labelOf(candidate, culprit.key)}`);
+		if (result.kind === "none") return stopped(passed);
+		if (result.kind === "pass") return { culprits: [culprit], cleared: changes.filter((key) => key !== culprit.key), passing: without, complete: true };
+	}
+	let set = withAll(base, candidate, passed);
+	if (passed.length > 1) {
+		const start = await verdictOf(deps, set, packages, deadline, "testing the updates that passed alone");
+		if (start.kind === "none") return stopped(passed);
+		// They pass alone but not together, and the rest fail alone: only the failures alone are sure.
+		if (start.kind === "fail") return { culprits: failed, cleared: [], complete: true };
+	}
+	const accepted = [...passed];
+	const culprits: { key: string; reason: string }[] = [];
+	for (const candidateFailure of failed) {
+		const next = withOne(set, candidate, candidateFailure.key);
+		const result = await verdictOf(deps, next, packages, deadline, `testing ${labelOf(candidate, candidateFailure.key)} with the updates that work`);
+		if (result.kind === "none") return { culprits, cleared: accepted, passing: accepted.length > 0 ? set : undefined, complete: false };
+		if (result.kind === "pass") {
+			set = next;
+			accepted.push(candidateFailure.key);
+		} else culprits.push({ key: candidateFailure.key, reason: result.reason });
+	}
+	return { culprits, cleared: accepted, passing: accepted.length > 0 ? set : undefined, complete: true };
 }
 
 async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<CycleResult> {
-	const deadline = deps.now() + (deps.limitMs ?? CYCLE_LIMIT_MS);
+	// The hard limit's deadline when the CLI armed one: tests must end before it, not before a later one.
+	const deadline = deps.deadline ?? deps.now() + (deps.limitMs ?? CYCLE_LIMIT_MS);
 	// Folder times are wall-clock times: the cycle's clock (deps.now) may differ, and a wrong one would remove live tests' folders.
 	for (const dir of sweepSmokeDirs(tmpdir(), Date.now(), CYCLE_LIMIT_MS)) deps.log(`removed an old smoke folder: ${dir}`);
 	repair(deps, initial);
@@ -332,8 +390,8 @@ async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<Cycle
 	};
 	const found = await lookUp(deps, initial, tracked, lookup);
 	const newest = Object.fromEntries([...(found.pi ? [[PI_KEY, found.pi.id]] : []), ...found.packages.map((wanted) => [wanted.key, wanted.id])]);
-	let state = updateState(deps.paths.state, (current) => ({ ...current, lastCheck: deps.now(), newest }));
-	const current = state.current!;
+	updateState(deps.paths.state, (current) => ({ ...current, lastCheck: deps.now(), newest }));
+	const current = readState(deps.paths.state).current!;
 	const installed = await installAll(deps, found, deadline);
 	const errors = [...(problem ? [problem] : []), ...found.errors, ...installed.errors];
 	const candidate = installed.set;
@@ -343,29 +401,57 @@ async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<Cycle
 		return { outcome: errors.length > 0 ? "error" : "no-change", message: errors[0] ?? "Everything is up to date." };
 	}
 	const keys = changedKeys(current, candidate).filter((key) => idOf(candidate, key));
+	if (keys.length === 0) return dropOnly(deps, current, candidate, packages, errors);
 	const labels = keys.map((key) => labelOf(candidate, key));
+	if (deps.now() + SMOKE_RESERVE_MS > deadline) {
+		const message = `There was no time left to test ${labels.join(", ")} in this check. The next check tries again.`;
+		finish(deps, [...errors, message]);
+		return { outcome: "error", message };
+	}
 	const releases = (of: readonly string[]) => of.map((key) => ({ key, id: idOf(candidate, key)! }));
 	// Written before the test: if the hard limit ends this process during it, the next cycles know.
 	updateState(deps.paths.state, (now) => markSuspect(now, releases(keys), deps.now()));
-	setActivity(deps, `testing ${labels.join(", ")}`);
-	const smoke = await deps.smoke({ piDir: candidate.pi.dir, packages: smokeEntries(packages, candidate, deps.paths.root) });
-	if (!smoke.ok) {
-		deps.log(`smoke test failed for ${labels.join(", ")}: ${smoke.reason}`);
-		const search = await findCulprits(deps, current, candidate, packages, deadline);
-		const decided = [...search.culprits.map((culprit) => culprit.key), ...search.cleared];
-		state = updateState(deps.paths.state, (now) => clearSuspect(search.culprits.reduce((next, culprit) => markBad(next, culprit.key, idOf(candidate, culprit.key)!, culprit.reason, deps.now()), now), releases(decided)));
-		const unfinished = search.complete ? "" : " The search for the cause did not finish in this check; the next check goes on.";
-		const message = `The update to ${labels.join(", ")} failed its test: ${smoke.reason}.${unfinished} The current versions stay.`;
-		updateState(deps.paths.state, (now) => ({ ...now, lastError: { at: deps.now(), message } }));
-		for (const culprit of search.culprits) deps.log(`marked bad: ${labelOf(candidate, culprit.key)} (${culprit.reason})`);
+	const smoke = await verdictOf(deps, candidate, packages, deadline, `testing ${labels.join(", ")}`);
+	if (smoke.kind === "pass") {
+		updateState(deps.paths.state, (now) => clearSuspect(now, releases(keys)));
+		return switched(deps, candidate, packages, `Updated: ${labels.join(", ")}.`, errors);
+	}
+	if (smoke.kind === "none") {
+		const message = `The test of ${labels.join(", ")} gave no result: ${smoke.reason}. The current versions stay; the next check tries again.`;
+		deps.log(message);
+		finish(deps, [...errors, message]);
 		return { outcome: "smoke-failed", message };
 	}
-	updateState(deps.paths.state, (now) => clearSuspect(now, releases(keys)));
-	switchTo(deps, candidate, packages);
-	deps.log(`switched to ${labels.join(", ")}`);
+	deps.log(`smoke test failed for ${labels.join(", ")}: ${smoke.reason}`);
+	const search = await findCulprits(deps, current, candidate, packages, deadline, "the smoke test failed");
+	const decided = [...search.culprits.map((culprit) => culprit.key), ...search.cleared];
+	updateState(deps.paths.state, (now) => clearSuspect(search.culprits.reduce((next, culprit) => markBad(next, culprit.key, idOf(candidate, culprit.key)!, culprit.reason, deps.now()), now), releases(decided)));
+	for (const culprit of search.culprits) deps.log(`marked bad: ${labelOf(candidate, culprit.key)} (${culprit.reason})`);
+	const unfinished = search.complete ? "" : " The search for the cause did not finish in this check; the next check goes on.";
+	const bad = search.culprits.map((culprit) => labelOf(candidate, culprit.key));
+	if (search.passing) {
+		const moved = changedKeys(current, search.passing).filter((key) => idOf(search.passing!, key)).map((key) => labelOf(candidate, key));
+		const failure = `${bad.length > 0 ? bad.join(", ") : "The rest"} failed its test: ${search.culprits[0]?.reason ?? smoke.reason}.${unfinished}`;
+		return switched(deps, search.passing, packages, `Updated: ${moved.join(", ")}. ${failure}`, [...errors, failure]);
+	}
+	const message = `The update to ${labels.join(", ")} failed its test: ${smoke.reason}.${unfinished} The current versions stay.`;
+	finish(deps, [...errors, message]);
+	return { outcome: "smoke-failed", message };
+}
+
+function switched(deps: CycleDeps, set: UpdateSet, packages: readonly unknown[], message: string, errors: readonly string[]): CycleResult {
+	switchTo(deps, set, packages);
+	deps.log(message);
 	finish(deps, errors);
 	collect(deps);
-	return { outcome: "switched", message: `Updated: ${labels.join(", ")}.` };
+	return { outcome: "switched", message };
+}
+
+/** A candidate that only drops sources (their settings entries are gone): nothing new to test. */
+function dropOnly(deps: CycleDeps, current: UpdateSet, candidate: UpdateSet, packages: readonly unknown[], errors: readonly string[]): CycleResult {
+	const dropped = changedKeys(current, candidate).map((key) => labelOf(current, key));
+	deps.log(`stopped updating ${dropped.join(", ")}: no longer in settings.json`);
+	return switched(deps, candidate, packages, `Stopped updating: ${dropped.join(", ")}.`, errors);
 }
 
 /** Records the new current set (with the original of each newly managed entry, for `disable`), then flips the link and settings. */
