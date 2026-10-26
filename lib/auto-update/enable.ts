@@ -114,7 +114,9 @@ async function firstSet(deps: EnableDeps, old: OldPi, packages: readonly unknown
 	const piRelease = await installPi(deps.paths, old.name, version, lookup.install);
 	const releases: Record<string, PackageRelease> = {};
 	for (const tracked of trackedSources(packages, seed, config, deps.paths.root)) {
-		const wanted = await wantedPackage(tracked.mode === "skip" ? { ...tracked, mode: "tags" } : tracked, seed, lookup);
+		// The user told the updater to leave this source alone: its entry stays as written.
+		if (tracked.mode === "skip") continue;
+		const wanted = await wantedPackage(tracked, seed, lookup);
 		if (!wanted) continue;
 		deps.out(`Installing ${wanted.label}.`);
 		releases[tracked.key] = await wanted.install();

@@ -311,3 +311,15 @@ test("with the store gone, disable restores settings.json and the link from the 
 	assert.equal(existsSync(undo), false, "disable removes the copy");
 	assert.match((await w.cli("disable")).stdout, /not on/);
 });
+
+test("enable leaves a source with mode skip as the user wrote it", async (t) => {
+	const w = world(t);
+	tagRelease(w.gitRepo, "good", "1.0.0");
+	writeConfig(w.agentDir, { sources: { [w.gitUrl]: "skip" } });
+	const result = await w.cli("enable");
+	assert.equal(result.code, 0, `${result.stdout}\n${result.stderr}`);
+	assert.equal(entrySources(w)[0], w.gitUrl, "skip: not taken into the store");
+	assert.deepEqual(Object.keys(readState(w.paths.state).current!.packages), [NPM_KEY]);
+	assert.equal((await runCycle(w.cycleDeps({ config: { ...DEFAULT_CONFIG, enabled: true, sources: { [w.gitUrl]: "skip" } } }), { force: true })).outcome, "no-change");
+	assert.equal(entrySources(w)[0], w.gitUrl);
+});
