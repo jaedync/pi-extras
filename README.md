@@ -19,7 +19,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all eighteen extensions (quota hibernation and computer use stay off until you opt in); it makes `quiet` available but does not select it. It also adds the prompt templates `/deeper`, `/higher` and `/wider`.
+adds all nineteen extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the prompt templates `/deeper`, `/higher` and `/wider`.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -44,6 +44,7 @@ can still conflict.
 | Pull Link | `pull_link` tool: give it a link to read posts with their threads, replies and images (X, Bluesky, Threads, Mastodon, Reddit, Hacker News, LinkedIn), GitHub pages, images, any web page, and videos with transcript, thumbnail, comments and frames on request (YouTube, TikTok, Instagram, Vimeo and more); the links in your messages are read before the model starts (`/autopull`) |
 | Copy Blocks | Code blocks and quotes in replies drawn on a background of their own with a `copy` label: one click copies the exact text; `/copy-block` does it from the keyboard |
 | Release Notes | What changed in pi-extras, shown one time in the first new session after an update; `/pi-extras changelog` shows it again |
+| Auto-update | Opt-in: Pi and your unpinned packages update by themselves. Each new set is tested before use, and running sessions move to it when they are idle; `/pi-extras update` |
 | Quiet | Low-contrast theme with restrained accent colors |
 | Prompts | `/deeper`, `/higher` and `/wider [task]`: before work starts, the model plans a deeper version of the task (expert methods, raw material, an outside check), the outcome behind the task, or the other fields that can improve it. Then it shows a new prompt and waits for your approval. From Felix Rieseberg's [How to be more ambitious](https://felixrieseberg.com/how-to-be-more-ambitious-a-tutorial-for-humans-with-models/) |
 
@@ -57,7 +58,8 @@ pi remove git:github.com/jaedync/pi-extras
 ```
 
 An unpinned Git install follows upstream commits. Pi can detect available package
-updates. This package does not update itself and adds no background service.
+updates. This package does not update itself unless you turn on
+[Auto-update](#auto-update), and it adds no background service.
 Only the Pull Link media tools update themselves (see
 [Video tools](#video-tools)); `PI_OFFLINE=1` stops that. The Pull Link media
 tools install on the first video link. Voice installs when Pi finds a
@@ -66,6 +68,112 @@ microphone. To pin a published tag, append it to the Git source, for example
 Pinned installs require an explicit installation of a newer tag.
 After an update, restart Pi or use `/reload`; stop active jobs before removing
 the package. Removing it does not remove your credentials or change other packages.
+
+## Auto-update
+
+Auto-update is off by default. When it is on, pi-extras keeps Pi and your
+unpinned packages up to date. It tests each new set of versions before a
+session uses it. Linux and macOS only (macOS is not fully tested).
+
+To turn it on, run this command in a shell:
+
+```sh
+node ~/.pi/agent/git/github.com/jaedync/pi-extras/lib/auto-update/cli.ts enable
+```
+
+Use the path of your pi-extras install. `enable` prints each file that it
+changes. Then start Pi again.
+
+To turn it off, run the same command with `disable`. `disable` puts back
+`~/.local/bin/pi` and the original `packages` entries in `settings.json`.
+
+### Requirements
+
+- Linux or macOS, npm and Git.
+- `~/.local/bin/pi` must be the link that `npm install -g` makes for Pi
+  (npm prefix `~/.local`). If it is a different file, `enable` stops and
+  changes nothing.
+
+### What it does
+
+- Every 5 minutes, one check runs on the machine, not one for each session.
+  It finds the newest Pi on npm, the newest `v*` release tag of each Git
+  package, and the newest version of each npm package.
+- It installs each new version into its own folder in the store
+  (`~/.local/share/pi-extras/updates`). It never changes an installed
+  folder.
+- It starts the new set in a test Pi that uses no account and no network.
+  If an extension does not load or fails at startup, the set is not used.
+  The version that caused the failure is marked bad and is not tried again.
+- If the test passes, it changes the `pi-current` link in the store and
+  the `packages` entries in `settings.json` to the new folders.
+- Each running session moves to the new set when it is idle for 30 seconds.
+  For package changes, the session reloads. For a new Pi, a terminal
+  session restarts with `pi --session <file>`. An RPC session, or a Pi that
+  the launcher did not start, shows "Pi X ready: restart to use it".
+- A session does not move while the agent runs, a message is queued, a
+  compaction runs, a dialog is open, a subagent runs a turn, or the editor
+  has text. A restart also waits for shell jobs and subagents to end. A
+  reload keeps them.
+- The status line shows `updating: ...` while a check installs or tests. The
+  transcript shows a line before and after the session moves.
+
+### Which entries it manages
+
+- Managed: unpinned `npm:` entries and unpinned Git entries (for example
+  `git:github.com/jaedync/pi-extras`). It keeps the filters of an entry
+  (`extensions`, `skills` and others).
+- Not managed: pinned entries (`npm:name@1.2.3`, `git:...@v1.0.0`) and
+  local paths.
+- If you add a new unpinned entry, the next check manages it.
+
+### The launcher
+
+`enable` replaces `~/.local/bin/pi` with a small shell script. The script:
+
+- starts Pi from the store, with all your arguments;
+- starts Pi again after a session asks for a restart (at most 3 times in 60
+  seconds);
+- changes `pi update` to an update check. Pi and its packages update
+  automatically.
+
+Do not run `npm install -g` for Pi while auto-update is on. It writes over
+the launcher. Run `disable` first.
+
+### Commands
+
+| Command | What it does |
+| --- | --- |
+| `/pi-extras update` | Shows the state: on or off, the current set, newer versions, the last check, the last error, and what this session waits for |
+| `/pi-extras update now` | Starts a check now |
+| `/pi-extras update rollback` | Goes back to the previous set. The newer versions are marked bad |
+| `/pi-extras update pause` | Stops the checks. Sessions still move to a set that is ready |
+| `/pi-extras update resume` | Starts the checks again |
+
+The shell command `node <pi-extras>/lib/auto-update/cli.ts` has the
+subcommands `check [--force]`, `status`, `rollback`, `gc`, `enable` and
+`disable`. Only the shell command can do `enable` and `disable`.
+
+### Settings
+
+Put these in the `autoUpdate` section of `~/.pi/agent/pi-extras.json`:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `enabled` | `false` | `enable` and `disable` set it |
+| `intervalMinutes` | `5` | Minutes between checks (1 or more) |
+| `minReleaseAgeHours` | `0` | Use only npm releases (Pi and npm packages) that are at least this old. Git tags have no age check |
+| `adopt` | `"auto"` | `"notice"`: do not reload or restart; show a notice instead |
+| `paused` | `false` | No checks |
+| `sources` | `{}` | For each source as `settings.json` names it: `"tags"` (Git: newest `v*` tag), `"head"` (Git: newest commit of the default branch) or `"skip"` (do not update it) |
+| `pi` | `"latest"` | `"skip"`: do not update Pi |
+| `prereleases` | `false` | Git: use pre-release tags too (for example `v1.0.0-rc.1`) |
+
+`PI_OFFLINE=1` stops the checks. `PI_EXTRAS_UPDATE_STORE` sets a different
+store folder. The log is `update.log` in the store.
+
+Old versions stay in the store while a running session uses them. A version
+that no set and no session uses is removed after 1 hour.
 
 ## Configuration
 

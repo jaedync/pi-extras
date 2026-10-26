@@ -2,6 +2,23 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Auto-update (opt-in, Linux and macOS): Pi and your unpinned packages
+  update by themselves. To turn it on, run
+  `node <pi-extras>/lib/auto-update/cli.ts enable`. One check runs every 5
+  minutes on the machine. Each new version goes into its own folder, and
+  each new set must pass a startup test in an offline Pi before a session
+  uses it. A version that fails is marked bad and is not tried again.
+- Auto-update: running sessions move to a new set when they are idle for
+  30 seconds. They reload for package changes. A terminal session restarts
+  for a new Pi. The status line shows `updating: ...` while a check runs.
+- Auto-update: `/pi-extras update` shows the state. `now`, `rollback`,
+  `pause` and `resume` control it. `disable` puts back `~/.local/bin/pi`
+  and the original `settings.json` entries.
+
 ## 0.29.0 - 2026-10-24
 
 ### Changed

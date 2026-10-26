@@ -3,8 +3,8 @@
 Pi extensions run with the same filesystem, process and network permissions as
 Pi. Review the source before installing. This package adds no telemetry uploader,
 remote management service or credential provisioning. It does not update
-itself. Only the Pull Link media tools update themselves; see
-[Pull Link](#pull-link). The Pull Link media tools install on the first video
+itself unless you turn on [Auto-update](#auto-update). The Pull Link media
+tools also update themselves; see [Pull Link](#pull-link). The Pull Link media tools install on the first video
 link. Voice installs when Pi finds a microphone.
 
 Saves to `pi-extras.json` keep the file's permissions and write through a
@@ -797,6 +797,61 @@ Release Notes reads `CHANGELOG.md` from the installed package and writes the
 last version it showed to `releaseNotes.seen` in `pi-extras.json`. When that
 file does not parse, it writes nothing and shows a warning instead. The notes
 are a custom entry in the session file; they are not sent to the model.
+
+## Auto-update
+
+Auto-update is off until you run `node <pi-extras>/lib/auto-update/cli.ts
+enable` in a shell. A session cannot turn it on.
+
+### What it runs
+
+- `npm view` and `git ls-remote --tags` to find new versions.
+- `npm install -g --prefix <store folder> --ignore-scripts` for Pi.
+- `npm install` for an npm package, and `git clone --depth 1` followed by
+  `npm install --omit=dev` for a Git package. These run the package's
+  install scripts, the same as `pi install` does. A new release of a
+  package that you trust runs its code on this machine, and the test step
+  runs its extensions. Pin an entry (`npm:name@1.2.3` or `git:...@v1.0.0`)
+  to stop updates of that package.
+- A test Pi in a temporary home folder, with `PI_OFFLINE=1`. It uses a fake
+  model server on `127.0.0.1` and no account. It does not see `auth.json`.
+- Each check runs as a separate process with low CPU and disk priority
+  (`nice` and, on Linux, `ionice`). A command that runs too long is stopped.
+
+### Credentials
+
+Auto-update reads no credential file. `npm` and `git` use your own
+configuration, so a private package uses your `.npmrc` token or your Git
+credential helper. Git runs with `GIT_TERMINAL_PROMPT=0` and SSH in batch
+mode, so a check never asks for a password. Error text is cleaned of
+tokens and URL passwords before it goes into the log or `state.json`.
+
+### What it changes
+
+- `~/.local/bin/pi`: `enable` replaces the npm link with the launcher
+  script. `disable` puts back the link.
+- `settings.json`: the `packages` entries that it manages point to folders
+  in the store. It changes only those entries and keeps their filters.
+  It uses Pi's own lock on the file. `disable` puts back the original
+  entries.
+- `pi-extras.json`: the `autoUpdate` section.
+- The store (`~/.local/share/pi-extras/updates`, mode `0700`): one folder
+  for each installed version, made read-only after the install, plus
+  `state.json`, `update.log` (at most 256 KB), a lock file, one lease file
+  for each running session (process ID, mode, session file path and the
+  folders it uses) and restart requests (mode `0600`, the session file
+  path).
+
+A session that runs when auto-update is off writes no files. The checks
+stop with `PI_OFFLINE=1`.
+
+### Limits
+
+- A new set must pass a startup test. The test does not run a model turn
+  or a tool, so it cannot find a fault that shows only later. Use
+  `/pi-extras update rollback` to go back.
+- `npm install -g` of Pi writes over the launcher. Run `disable` first.
+- macOS is not fully tested.
 
 ## Idle GC
 
