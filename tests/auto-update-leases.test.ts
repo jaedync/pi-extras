@@ -11,7 +11,8 @@ import { storePaths } from "../lib/auto-update/paths.ts";
 import { emptyState, type UpdateSet } from "../lib/auto-update/state.ts";
 
 function scratch(t: test.TestContext): string {
-	const dir = mkdtempSync(join(tmpdir(), "au-leases-"));
+	// GC works on the real store root; on macOS tmpdir() is under the /var -> /private/var link.
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "au-leases-")));
 	t.after(() => {
 		chmodTree(dir);
 		rmSync(dir, { recursive: true, force: true });

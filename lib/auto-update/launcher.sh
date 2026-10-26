@@ -88,8 +88,8 @@ node_bin() {
 	if [ -x "$ENABLE_NODE" ]; then printf '%s\n' "$ENABLE_NODE"; else printf '%s\n' node; fi
 }
 
-# `pi update` (Dotfleet runs it before each launch) only starts a check: a
-# detached, low-priority process, so the launch does not wait for installs.
+# `pi update` (by hand, or from a pre-launch update hook) only starts a check:
+# a detached, low-priority process, so the caller does not wait for installs.
 if [ "${1-}" = "update" ]; then
 	EXTRAS="$STORE/extras-current"
 	[ -f "$EXTRAS/lib/auto-update/cli.ts" ] || EXTRAS="$FALLBACK_EXTRAS"

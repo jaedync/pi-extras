@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -43,7 +43,8 @@ export interface World {
 export const ORIGINAL_SETTINGS = (gitUrl: string) => JSON.stringify({ theme: "quiet", packages: [gitUrl, { source: "npm:fixture-npm", extensions: ["extensions/main.ts"] }, "/local/pinned-path", "npm:pinned@1.0.0"], steeringMode: "one-at-a-time" }, null, 2);
 
 export function world(t: test.TestContext): World {
-	const root = mkdtempSync(join(tmpdir(), "au-world-"));
+	// The real path, as the CLI and the extension resolve the store root: on macOS tmpdir() is under the /var -> /private/var link.
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "au-world-")));
 	t.after(() => removeTree(root));
 	const home = join(root, "home");
 	const agentDir = join(home, ".pi", "agent");
