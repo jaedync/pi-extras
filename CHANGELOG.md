@@ -2,7 +2,7 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## Unreleased
+## 0.31.1 - 2026-10-26
 
 ### Added
 
