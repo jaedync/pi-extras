@@ -36,7 +36,14 @@ export interface UpdateEntryData {
 	readonly text: string;
 	/** For "start": what to say once the session runs the target. */
 	readonly after?: string;
+	/** For "start": the pi-extras version that made the move. */
+	readonly from?: string;
+	/** For "done": the pi-extras versions whose notes the entry shows when expanded. */
+	readonly extras?: { readonly from: string; readonly to: string };
 }
+
+/** "Updating pi-extras 0.29.0 -> 0.30.0: ..." from pi-extras 0.31.1 and older, which wrote no `from`. */
+const OLD_FROM = /pi-extras (\d+\.\d+\.\d+) (?:->|→) /;
 
 /** What the controller needs from Pi and the machine. */
 export interface SessionHost {
@@ -46,6 +53,8 @@ export interface SessionHost {
 	readonly piVersion: string;
 	readonly piDir: string;
 	readonly extrasDir: string;
+	/** The version of the pi-extras code that runs this controller. */
+	readonly extrasVersion: string;
 	readonly sessionFile: () => string | undefined;
 	/** Pi's own arguments (process.argv after the script): a restart repeats the safe ones. */
 	readonly argv: readonly string[];
@@ -278,8 +287,8 @@ export class UpdateSession {
 		const state = safeState(this.host.paths);
 		const decision = this.decision(state);
 		if ((decision.kind !== "reload" && decision.kind !== "restart") || !this.idle(decision.kind) || !state?.current) return;
-		const after = `Updated: ${Object.values(state.current.packages).filter((release) => !this.own.entries.includes(release.entry)).map((release) => release.label ?? release.id).concat(piDiffers(this.own, state.current) ? [`Pi ${state.current.pi.version}`] : []).join(", ")}`;
-		this.announce({ phase: "start", target: decision.target, text: decision.text, after });
+		const after = `Updated ${decision.change}`;
+		this.announce({ phase: "start", target: decision.target, text: decision.text, after, from: this.host.extrasVersion });
 		if (decision.kind === "reload") return actions.reload();
 		const file = this.host.sessionFile();
 		const replay = replayArgs(this.host.argv);
@@ -311,7 +320,11 @@ export class UpdateSession {
 		const target = fingerprint(state.current);
 		const last = [...this.host.branch()].reverse().find((entry) => entry.type === "custom" && entry.customType === UPDATE_ENTRY);
 		const data = last?.data as UpdateEntryData | undefined;
-		if (data?.phase === "start" && data.target === target) this.announce({ phase: "done", target, text: data.after ?? "Updated." });
+		if (data?.phase === "start" && data.target === target) {
+			const from = data.from ?? OLD_FROM.exec(data.text)?.[1];
+			const to = this.host.extrasVersion;
+			this.announce({ phase: "done", target, text: data.after ?? "Updated.", ...(from && from !== to ? { extras: { from, to } } : {}) });
+		}
 		else if (data === undefined && this.host.updateNote) this.announce({ phase: "done", target, text: this.host.updateNote });
 	}
 }

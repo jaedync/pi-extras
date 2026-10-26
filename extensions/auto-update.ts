@@ -8,17 +8,18 @@
  * Off until `node lib/auto-update/cli.ts enable`. A session without the
  * store (state.json) writes nothing.
  */
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getAgentDir, getPackageDir, VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { getAgentDir, getMarkdownTheme, getPackageDir, keyHint, VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isChildSession } from "../lib/child-session.ts";
 import { processBusy } from "../lib/idle-gc.ts";
 import { errorText, operationalError } from "../lib/operational-log.ts";
 import { registerSubcommand } from "../lib/pi-extras-command.ts";
 import { BACKGROUND_EVENT, BACKGROUND_REQUEST_EVENT, backgroundWork } from "../lib/tab-status/events.ts";
 import { type BashStart, type FocusView, selectorOpen, userBashRunning } from "../lib/auto-update/adopt.ts";
+import { updateEntryView } from "../lib/auto-update/entry-view.ts";
+import { parseChangelog, type NotesEntry } from "../lib/release-notes.ts";
 import { launcherEnv } from "../lib/auto-update/launcher-env.ts";
 import { fileLog } from "../lib/auto-update/log.ts";
 import { EXTRAS_DIR, storePaths, storeRootFrom } from "../lib/auto-update/paths.ts";
@@ -49,6 +50,23 @@ function loadedPaths(pi: ExtensionAPI): string[] {
 }
 
 const FOCUS_WIDGET = "pi-extras-auto-update-focus";
+
+/** The version of this copy: a reload loads the new copy, so the "done" entry names the version moved to. */
+function extrasVersion(): string {
+	try {
+		const version = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: unknown }).version;
+		return typeof version === "string" ? version : "";
+	} catch {
+		return "";
+	}
+}
+
+let notes: NotesEntry[] | undefined;
+/** Read once per module: the renderer runs again at each resize and expand. */
+function changelog(): NotesEntry[] {
+	notes ??= parseChangelog(readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8"));
+	return notes;
+}
 /** Versioned: a later pi-extras that keeps other data here picks a new symbol. */
 const HISTORY = Symbol.for("pi-extras.auto-update.loaded-releases.v1");
 
@@ -137,6 +155,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 				piVersion: VERSION,
 				piDir: realOr(getPackageDir()),
 				extrasDir: EXTRAS_DIR,
+				extrasVersion: extrasVersion(),
 				sessionFile: () => context.sessionManager.getSessionFile(),
 				argv: process.argv.slice(2),
 				restarted: launcher.restarted,
@@ -250,8 +269,17 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerEntryRenderer<UpdateEntryData>(UPDATE_ENTRY, (entry, _options, theme) => {
-		const text = typeof entry.data?.text === "string" ? entry.data.text : undefined;
-		return text ? new Text(theme.fg("dim", text), 1, 0) : undefined;
-	});
+	pi.registerEntryRenderer<UpdateEntryData>(UPDATE_ENTRY, (entry, options, theme) => updateEntryView(entry.data, {
+		expanded: options.expanded,
+		theme,
+		markdownTheme: getMarkdownTheme(),
+		changelog,
+		hint: (description) => {
+			try {
+				return keyHint("app.tools.expand", description);
+			} catch {
+				return theme.fg("dim", `ctrl+o ${description}`);
+			}
+		},
+	}));
 }

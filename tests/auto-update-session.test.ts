@@ -55,7 +55,7 @@ test("decide: reload for packages, restart for Pi in the TUI under the launcher,
 	const extras = { ...base, state: { ...base.state, current: set(root, "1.4.0", "0.30.0"), previous: old } };
 	const reload = decide(extras);
 	assert.equal(reload.kind, "reload");
-	assert.equal((reload as { text: string }).text, "Updating pi-extras 0.29.0 -> 0.30.0: reloading");
+	assert.equal((reload as { text: string }).text, "Updating pi-extras 0.29.0 → 0.30.0: reloading");
 	assert.equal(decide({ ...extras, ready: false }).kind, "wait", "the cycle has not finished its switch");
 	assert.match((decide({ ...extras, adopt: "notice" }) as { text: string }).text, /use \/reload/);
 	const loop = decide({ ...extras, attempts: MAX_ATTEMPTS });
@@ -63,7 +63,7 @@ test("decide: reload for packages, restart for Pi in the TUI under the launcher,
 	assert.match((loop as { text: string }).text, /did not move to it/);
 	const pi = { ...base, state: { ...base.state, current: set(root, "1.4.1", "0.29.0"), previous: old } };
 	assert.equal(decide(pi).kind, "restart");
-	assert.equal((decide(pi) as { text: string }).text, "Updating Pi 1.4.0 -> 1.4.1: restarting");
+	assert.equal((decide(pi) as { text: string }).text, "Updating Pi 1.4.0 → 1.4.1: restarting");
 	assert.deepEqual(decide({ ...pi, mode: "rpc" }), { kind: "notice", text: "Pi 1.4.1 ready: restart to use it" });
 	assert.deepEqual(decide({ ...pi, canRestart: false }), { kind: "notice", text: "Pi 1.4.1 ready: restart to use it" });
 });
@@ -74,15 +74,15 @@ test("decide: the change names the session's old version also when the old set l
 	const own = { piVersion: "1.4.0", piDir: join(root, "pi", "1.4.0"), entries: [release(root, "pi-extras", "0.30.0").entry] };
 	const state = { ...emptyState(), previous: set(root, "1.4.0", "0.30.1"), current: set(root, "1.4.0", "0.30.2") };
 	const input: AdoptInput = { own, state, storeRoot: root, adopt: "auto", mode: "tui", canRestart: true, ready: true, attempts: 0 };
-	assert.equal((decide(input) as { text: string }).text, "Updating pi-extras 0.30.0 -> 0.30.2: reloading");
+	assert.equal((decide(input) as { text: string }).text, "Updating pi-extras 0.30.0 → 0.30.2: reloading");
 	// A git release: the version comes from the store id `<version>-<commit>`, or the commit for a branch head.
 	const git = (id: string, label: string) => ({ origin: "git:x/pi-extras", id, dir: join(root, "packages", "git-pi-extras-1a2b3c4d", id), entry: join(root, "packages", "git-pi-extras-1a2b3c4d", id), label });
 	const gitSet = (id: string, label: string): UpdateSet => ({ pi: { version: "1.4.0", dir: own.piDir }, packages: { "git-pi-extras-1a2b3c4d": git(id, label) } });
 	const gitState = { ...emptyState(), current: gitSet("0.30.2-abcdef1", "pi-extras 0.30.2") };
 	const fromTag = { ...input, own: { ...own, entries: [git("0.30.0-1234567", "").entry] }, state: gitState };
-	assert.equal((decide(fromTag) as { text: string }).text, "Updating pi-extras 0.30.0 -> 0.30.2: reloading");
+	assert.equal((decide(fromTag) as { text: string }).text, "Updating pi-extras 0.30.0 → 0.30.2: reloading");
 	const fromHead = { ...fromTag, own: { ...own, entries: [git("head-89abcde", "").entry] } };
-	assert.equal((decide(fromHead) as { text: string }).text, "Updating pi-extras 89abcde -> 0.30.2: reloading");
+	assert.equal((decide(fromHead) as { text: string }).text, "Updating pi-extras 89abcde → 0.30.2: reloading");
 	// An entry outside the store (the user's own source before enable) has no version to show.
 	const outside = { ...input, own: { ...own, entries: ["/home/u/pi-extras"] } };
 	assert.equal((decide(outside) as { text: string }).text, "Updating pi-extras 0.30.2: reloading");
@@ -126,7 +126,7 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 		host: undefined as unknown as SessionHost,
 	};
 	(h as { host: SessionHost }).host = {
-		mode: options.mode ?? "tui", paths, agentDir, piVersion: mine.pi.version, piDir: mine.pi.dir, extrasDir: "/dev/pi-extras",
+		mode: options.mode ?? "tui", paths, agentDir, piVersion: mine.pi.version, piDir: mine.pi.dir, extrasDir: "/dev/pi-extras", extrasVersion: mine.packages["npm-pi-extras"]!.id,
 		sessionFile: () => "/sessions/a.jsonl",
 		argv: ["--model", "sonnet:high", "-e", "./my ext.ts"],
 		restarted: undefined,
@@ -182,14 +182,15 @@ test("a package update: waits for the switch and for quiet, then reloads, and sa
 	h.clock += QUIET_MS;
 	await session.apply(actions(h));
 	assert.deepEqual(h.calls, ["dispatch", "reload"]);
-	assert.deepEqual(h.entries.map((e) => [e.phase, e.text]), [["start", "Updating pi-extras 0.29.0 -> 0.30.0: reloading"]]);
+	assert.deepEqual(h.entries.map((e) => [e.phase, e.text, e.from]), [["start", "Updating pi-extras 0.29.0 → 0.30.0: reloading", "0.29.0"]]);
 	session.stop("reload");
 	assert.equal(readdirSync(h.paths.leases).length, 1, "a reload keeps the lease");
 
 	// The reloaded module: it runs the new set now, and reports it once.
-	const after = new UpdateSession({ ...h.host, piDir: next(h.paths.root).pi.dir });
+	const after = new UpdateSession({ ...h.host, piDir: next(h.paths.root).pi.dir, extrasVersion: "0.30.0" });
 	after.start("reload");
-	assert.deepEqual(h.entries.at(-1), { phase: "done", target: h.entries[0]!.target, text: "Updated: pi-extras 0.30.0" });
+	// Both versions, and the pi-extras range whose notes the entry can show.
+	assert.deepEqual(h.entries.at(-1), { phase: "done", target: h.entries[0]!.target, text: "Updated pi-extras 0.29.0 → 0.30.0", extras: { from: "0.29.0", to: "0.30.0" } });
 	const again = new UpdateSession(h.host);
 	again.start("reload");
 	assert.equal(h.entries.length, 2, "only once");
@@ -212,10 +213,20 @@ test("a Pi update restarts through the launcher: the request file names the sess
 	await session.apply(actions(h));
 	assert.deepEqual(h.calls, ["dispatch", "shutdown"]);
 	const target = JSON.stringify(["1.4.1", next(h.paths.root).packages["npm-pi-extras"]!.entry]);
-	assert.equal(readFileSync(join(h.paths.restart, "tok123"), "utf8"), `/sessions/a.jsonl\nUpdated: Pi 1.4.1\n${target}\n--model\nsonnet:high\n-e\n./my ext.ts\n`);
-	assert.equal(h.entries[0]!.text, "Updating Pi 1.4.0 -> 1.4.1: restarting");
-	assert.equal(h.entries[0]!.after, "Updated: Pi 1.4.1");
+	assert.equal(readFileSync(join(h.paths.restart, "tok123"), "utf8"), `/sessions/a.jsonl\nUpdated Pi 1.4.0 → 1.4.1\n${target}\n--model\nsonnet:high\n-e\n./my ext.ts\n`);
+	assert.equal(h.entries[0]!.text, "Updating Pi 1.4.0 → 1.4.1: restarting");
+	assert.equal(h.entries[0]!.after, "Updated Pi 1.4.0 → 1.4.1");
 	assert.equal(new Set(JSON.parse(readFileSync(join(h.paths.leases, readdirSync(h.paths.leases)[0]!), "utf8")).releases).size, 1, "no path twice in the lease");
+});
+
+test("a start entry from an older pi-extras (no from field) still gives the notes range", (t) => {
+	const old = (root: string) => set(root, "1.4.0", "0.29.0");
+	const next = (root: string) => set(root, "1.4.0", "0.30.0");
+	const h = harness(t, next, next, { previous: old });
+	const target = JSON.stringify(["1.4.0", next(h.paths.root).packages["npm-pi-extras"]!.entry]);
+	h.branch.push({ type: "custom", customType: UPDATE_ENTRY, data: { phase: "start", target, text: "Updating pi-extras 0.29.0 -> 0.30.0: reloading", after: "Updated: pi-extras 0.30.0" } });
+	new UpdateSession({ ...h.host, extrasVersion: "0.30.0" }).start("reload");
+	assert.deepEqual(h.entries.at(-1), { phase: "done", target, text: "Updated: pi-extras 0.30.0", extras: { from: "0.29.0", to: "0.30.0" } });
 });
 
 test("after a restart of a session that had no file yet, the launcher's note gives the \"Updated\" line once", (t) => {

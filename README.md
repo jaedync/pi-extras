@@ -149,8 +149,11 @@ newest versions, run `pi update --all`.
   messages. If Pi started with a different option (for example
   `--api-key` or an extension flag), the session does not restart. It
   shows "Pi X ready: restart to use it".
-- The status line shows `updating: ...` while a check installs or tests. The
-  transcript shows a line before and after the session moves.
+- The status line shows `updating: ...` while a check installs or tests.
+  After the session moves, the transcript shows one line with the old and
+  the new versions, for example `Updated pi-extras 0.30.0 → 0.31.0`. When
+  pi-extras changed, expand the line (`ctrl+o`) to read the notes of each
+  version between the two.
 - If a new set waits 30 minutes for the session to become idle, the status
   line shows "update ready: waits for idle (/reload to use it)". For a new
   Pi, it shows "restart to use it".

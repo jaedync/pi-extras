@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Changed
+
+- Auto-update: a move to a new set adds one line to the transcript, not
+  two: `Updated pi-extras 0.30.0 → 0.31.0`, with both versions. Expand it
+  (`ctrl+o`) to read the pi-extras notes since the old version, also in a
+  session that was open during the update. The line before the reload is
+  still saved for the loop guard, but it shows nothing.
+
 ## 0.31.1 - 2026-10-26
 
 ### Added

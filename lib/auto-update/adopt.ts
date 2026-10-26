@@ -47,7 +47,7 @@ function storeVersion(entry: string | undefined, storeRoot: string): string | un
 	return found.id.startsWith("head-") ? found.id.slice("head-".length) : found.id.replace(/-[0-9a-f]{7}$/, "");
 }
 
-/** "pi-extras 0.29.0 -> 0.30.0, Pi 1.4.0 -> 1.4.1": what moving to `set` changes for this session. */
+/** "pi-extras 0.29.0 → 0.30.0, Pi 1.4.0 → 1.4.1": what moving to `set` changes for this session. */
 export function changeText(own: OwnSet, state: UpdateState, set: UpdateSet, storeRoot: string): string {
 	const known = [state.previous, state.current, set].flatMap((candidate) => (candidate ? Object.values(candidate.packages) : []));
 	const ownByKey = new Map(own.entries.map((entry) => {
@@ -55,7 +55,7 @@ export function changeText(own: OwnSet, state: UpdateState, set: UpdateSet, stor
 		return [classified.kind === "store" ? classified.key : entry, entry] as const;
 	}));
 	const parts: string[] = [];
-	if (piDiffers(own, set)) parts.push(`Pi ${own.piVersion} -> ${set.pi.version}`);
+	if (piDiffers(own, set)) parts.push(`Pi ${own.piVersion} → ${set.pi.version}`);
 	for (const [key, release] of Object.entries(set.packages)) {
 		const from = ownByKey.get(key);
 		if (from === release.entry) continue;
@@ -63,7 +63,7 @@ export function changeText(own: OwnSet, state: UpdateState, set: UpdateSet, stor
 		const [name, version] = to.split(" ");
 		const label = known.find((candidate) => candidate.entry === from)?.label?.split(" ");
 		const before = label?.[0] === name ? label[1] : storeVersion(from, storeRoot);
-		parts.push(before && version ? `${name} ${before} -> ${version}` : to);
+		parts.push(before && version ? `${name} ${before} → ${version}` : to);
 	}
 	return parts.join(", ") || "packages";
 }
@@ -85,7 +85,7 @@ export interface AdoptInput {
 export type Decision =
 	| { readonly kind: "none" }
 	| { readonly kind: "wait" }
-	| { readonly kind: "reload" | "restart"; readonly target: string; readonly text: string }
+	| { readonly kind: "reload" | "restart"; readonly target: string; readonly text: string; readonly change: string }
 	| { readonly kind: "notice"; readonly text: string };
 
 export function decide(input: AdoptInput): Decision {
@@ -98,9 +98,9 @@ export function decide(input: AdoptInput): Decision {
 	if (input.attempts >= MAX_ATTEMPTS) return { kind: "notice", text: `${change} is ready, but this session did not move to it. Restart Pi to use it.` };
 	if (input.adopt === "notice") return { kind: "notice", text: `${change} ready: ${pi ? "restart Pi" : "use /reload"} to use it` };
 	const target = fingerprint(set);
-	if (!pi) return { kind: "reload", target, text: `Updating ${change}: reloading` };
+	if (!pi) return { kind: "reload", target, change, text: `Updating ${change}: reloading` };
 	// A restart starts `pi --session <file>`: only the terminal UI can come back that way without losing its client.
-	if (input.canRestart && input.mode === "tui") return { kind: "restart", target, text: `Updating ${change}: restarting` };
+	if (input.canRestart && input.mode === "tui") return { kind: "restart", target, change, text: `Updating ${change}: restarting` };
 	return { kind: "notice", text: `Pi ${set.pi.version} ready: restart to use it` };
 }
 
