@@ -126,13 +126,32 @@ test("a failed lookup throws a sanitized one-line reason", async () => {
 	});
 });
 
-test("newestNpm takes the latest version, or the newest one old enough", async () => {
-	const runner = fakeRunner({
-		"npm view x version --json": { stdout: "\"2.1.0\"\n" },
-		"npm view x dist-tags time --json": { stdout: JSON.stringify({ "dist-tags": { latest: "2.1.0" }, time: { created: "2020-01-01T00:00:00Z", modified: "x", "1.0.0": "2026-01-01T00:00:00Z", "2.0.0": "2026-10-20T00:00:00Z", "2.1.0": "2026-10-25T10:00:00Z", "3.0.0-rc.1": "2026-10-01T00:00:00Z" } }) },
+// Older npm prints the value of `view --json` as it is; npm 12.2.1 (op01) prints an array with one element for each matched version.
+const NPM_SHAPES = { "plain value": (value: unknown) => value, "npm 12 array": (value: unknown) => [value] } as const;
+
+for (const [shape, wrap] of Object.entries(NPM_SHAPES)) {
+	test(`newestNpm takes the latest version, or the newest one old enough (${shape} output)`, async () => {
+		const runner = fakeRunner({
+			"npm view x version --json": { stdout: `${JSON.stringify(wrap("2.1.0"), null, 2)}\n` },
+			"npm view x dist-tags time --json": { stdout: JSON.stringify(wrap({ "dist-tags": { latest: "2.1.0" }, time: { created: "2020-01-01T00:00:00Z", modified: "x", "1.0.0": "2026-01-01T00:00:00Z", "2.0.0": "2026-10-20T00:00:00Z", "2.1.0": "2026-10-25T10:00:00Z", "3.0.0-rc.1": "2026-10-01T00:00:00Z" } }), null, 2) },
+		});
+		assert.equal(await newestNpm("x", runner, { minAgeHours: 0, now: Date.parse("2026-10-25T12:00:00Z") }), "2.1.0");
+		assert.equal(await newestNpm("x", runner, { minAgeHours: 24, now: Date.parse("2026-10-25T12:00:00Z") }), "2.0.0");
+		assert.equal(await newestNpm("x", runner, { minAgeHours: 24 * 365, now: Date.parse("2026-10-25T12:00:00Z") }), undefined);
+		await assert.rejects(newestNpm("x", fakeRunner({ "npm view": { stdout: "not json" } }), { minAgeHours: 0, now: 0 }), /npm view/);
 	});
-	assert.equal(await newestNpm("x", runner, { minAgeHours: 0, now: Date.parse("2026-10-25T12:00:00Z") }), "2.1.0");
-	assert.equal(await newestNpm("x", runner, { minAgeHours: 24, now: Date.parse("2026-10-25T12:00:00Z") }), "2.0.0");
-	assert.equal(await newestNpm("x", runner, { minAgeHours: 24 * 365, now: Date.parse("2026-10-25T12:00:00Z") }), undefined);
-	await assert.rejects(newestNpm("x", fakeRunner({ "npm view": { stdout: "not json" } }), { minAgeHours: 0, now: 0 }), /npm view/);
+}
+
+test("npm 12 output with several elements: the highest version counts; package fields must agree; anything else fails", async () => {
+	const versions = fakeRunner({ "npm view x version --json": { stdout: JSON.stringify(["1.3.0", "1.10.0", "1.4.0"]) } });
+	assert.equal(await newestNpm("x", versions, { minAgeHours: 0, now: 0 }), "1.10.0");
+	const info = { "dist-tags": { latest: "1.4.0" }, time: { "1.4.0": "2020-01-01T00:00:00Z" } };
+	const same = fakeRunner({ "npm view x dist-tags time --json": { stdout: JSON.stringify([info, info]) } });
+	assert.equal(await newestNpm("x", same, { minAgeHours: 1, now: Date.now() }), "1.4.0");
+	const differ = fakeRunner({ "npm view x dist-tags time --json": { stdout: JSON.stringify([info, { ...info, "dist-tags": { latest: "9.0.0" } }]) } });
+	await assert.rejects(newestNpm("x", differ, { minAgeHours: 1, now: Date.now() }), /npm view x: 2 different results/);
+	for (const stdout of ["[]", "[1]", JSON.stringify(["1.0.0", "next"]), "{}", "42"]) {
+		await assert.rejects(newestNpm("x", fakeRunner({ "npm view x version --json": { stdout } }), { minAgeHours: 0, now: 0 }), /npm view/, stdout);
+	}
+	await assert.rejects(newestNpm("x", fakeRunner({ "npm view x dist-tags time --json": { stdout: "[]" } }), { minAgeHours: 1, now: 0 }), /npm view/);
 });

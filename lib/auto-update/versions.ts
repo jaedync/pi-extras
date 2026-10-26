@@ -116,17 +116,37 @@ async function npmJson(args: readonly string[], runner: Runner): Promise<unknown
 }
 
 /**
+ * `npm view --json` prints the value itself (older npm) or an array with one
+ * element for each version that the spec matches (npm 12.2.1). The lookups
+ * here name the bare package, so the array has one element.
+ */
+function oneVersion(name: string, value: unknown): string {
+	const all = Array.isArray(value) ? value : [value];
+	const parsed = all.map((item) => (typeof item === "string" ? parseSemver(item) : undefined));
+	if (parsed.length === 0 || parsed.some((item) => item === undefined)) throw new Error(`npm view gave no version for ${name}`);
+	// Several versions only for a range spec: the highest one is "the newest".
+	return (parsed as Semver[]).reduce((best, item) => (compareSemver(item, best) > 0 ? item : best)).text;
+}
+
+/** Package fields (dist-tags, time) are the same for each matched version; several elements that differ are an error. */
+function onePackageField(name: string, value: unknown): unknown {
+	if (!Array.isArray(value)) return value;
+	if (value.length === 0) throw new Error(`npm view gave no release times for ${name}`);
+	const first = JSON.stringify(value[0]);
+	if (value.some((item) => JSON.stringify(item) !== first)) throw new Error(`npm view ${name}: ${value.length} different results for one package`);
+	return value[0];
+}
+
+/**
  * The newest version of an npm package: its `latest` tag, or, with a
  * minimum age, the newest stable version not newer than `latest` that is
  * old enough. Undefined when no version is old enough.
  */
 export async function newestNpm(name: string, runner: Runner, options: { minAgeHours: number; now: number }): Promise<string | undefined> {
 	if (options.minAgeHours <= 0) {
-		const version = await npmJson([name, "version"], runner);
-		if (typeof version !== "string" || !parseSemver(version)) throw new Error(`npm view gave no version for ${name}`);
-		return version;
+		return oneVersion(name, await npmJson([name, "version"], runner));
 	}
-	const info = (await npmJson([name, "dist-tags", "time"], runner)) as { "dist-tags"?: { latest?: unknown }; time?: Record<string, unknown> } | undefined;
+	const info = onePackageField(name, await npmJson([name, "dist-tags", "time"], runner)) as { "dist-tags"?: { latest?: unknown }; time?: Record<string, unknown> } | undefined;
 	const latest = typeof info?.["dist-tags"]?.latest === "string" ? parseSemver(info["dist-tags"].latest) : undefined;
 	if (!latest || !info?.time) throw new Error(`npm view gave no release times for ${name}`);
 	const limit = options.now - options.minAgeHours * 3_600_000;
