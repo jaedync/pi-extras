@@ -872,10 +872,20 @@ The installed folders are read-only. To remove the store by hand, first run
 - A lease names every release folder that the process loaded since it
   started, also after reloads. GC also keeps each folder that
   `settings.json` names. On Linux, GC also keeps a folder that a process
-  maps, runs from or has as its working folder. macOS has no such process
-  scan: GC keeps only what the sets, the leases and `settings.json` name.
-  Thus on macOS, a Pi process that does not load pi-extras has no
-  protection.
+  maps, names in its command line, or has as its working folder. macOS has
+  no such process scan: GC keeps only what the sets, the leases and
+  `settings.json` name.
+- The process scan finds the processes that Pi starts (for example a shell
+  command or an MCP server in a release folder), but usually not Pi itself.
+  Pi sets its process title to `pi`, so `/proc/<pid>/cmdline` of a Pi
+  process shows only `pi` and not the path of its Pi folder. Pi reads its
+  JavaScript files and does not map them. Leases protect Pi processes, and
+  GC never removes the folders of the current and the previous set. Thus a
+  Pi process that does not load pi-extras writes no lease. GC can remove its
+  folders after two more updates, on Linux and on macOS.
+- `disable` puts back the Pi and the package versions from before
+  `enable`. These can be older than the versions in the store, and older
+  versions can have known faults. Run `pi update --all` to get the newest.
 - A restart does not repeat `--api-key`, because the restart request is a
   file. Such a session shows a notice instead.
 - The restart token goes from the launcher to Pi in the environment. Pi

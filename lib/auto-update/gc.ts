@@ -88,9 +88,10 @@ export function processPaths(roots: readonly string[]): Set<string> {
 
 /**
  * Store paths in the command lines and working folders of live processes
- * (Linux). A Pi that does not load pi-extras writes no lease, but the
- * launcher starts it by its real path, so its command line names its
- * release folder. Cheaper than the maps scan, so GC reads it first.
+ * (Linux). This finds the children of a Pi (tools, MCP servers), not Pi
+ * itself: Pi sets `process.title` to "pi", which writes over its command
+ * line. Leases and the current and previous sets protect Pi. Cheaper than
+ * the maps scan, so GC reads it first.
  */
 export function processRefs(roots: readonly string[]): Set<string> {
 	const found = new Set<string>();

@@ -22,7 +22,8 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 - Auto-update: `/pi-extras update` shows the state. `now`, `rollback`,
   `pause` and `resume` control it. `disable` puts back `~/.local/bin/pi`
   and the original `settings.json` entries. It also works when the store
-  is gone.
+  is gone. These versions can be older than the store's: run
+  `pi update --all` to get the newest.
 - Auto-update: a session does not move while a `!` command runs or a
   selector such as `/model` is open. A restart repeats the launch options
   that are safe to repeat.

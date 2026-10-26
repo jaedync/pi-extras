@@ -89,6 +89,10 @@ To turn it off, run the same command with `disable`. `disable` puts back
 It also works when the store is gone: `enable` keeps a copy of the
 original entries in `~/.pi/agent/pi-extras-update-undo.json`.
 
+After `disable`, Pi and your packages are the versions that you had before
+`enable`. These can be older than the versions in the store. To get the
+newest versions, run `pi update --all`.
+
 ### Requirements
 
 - Linux or macOS, npm and Git.
