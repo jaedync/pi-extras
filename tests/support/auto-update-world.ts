@@ -81,6 +81,8 @@ export function world(t: test.TestContext): World {
 		HOME: home, PI_CODING_AGENT_DIR: agentDir, PI_EXTRAS_UPDATE_STORE: store,
 		FAKE_NPM_LOG: npmLog, FAKE_NPM_REGISTRY: registryFile, FAKE_PI_CLI: join(PI_PACKAGE, "dist", "cli.js"),
 		PATH: `${bin}:${process.env.PATH}`, PI_OFFLINE: "", TMPDIR: tmpdir(),
+		// npm 12's shape by default, the one op01 has; FAKE_NPM_SHAPE=plain runs the cycle tests with older npm's.
+		FAKE_NPM_SHAPE: process.env.FAKE_NPM_SHAPE ?? "array",
 	};
 	// runCommand passes process.env to npm and git, so the fake npm must be first on this process's PATH too.
 	Object.assign(process.env, env);
