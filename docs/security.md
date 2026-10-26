@@ -818,7 +818,9 @@ enable` in a shell. A session cannot turn it on.
 - Each check runs as a separate process with low CPU and disk priority
   (`nice` and, on Linux, `ionice`). A command that runs too long is stopped.
   A check that runs more than 10 minutes stops its commands and ends. The
-  next check removes the folder that it did not finish.
+  next check removes the folder that it did not finish, and the temporary
+  folder of its test Pi. The test Pi runs in its own process group, so a
+  stop also stops the processes that its extensions start.
   `pi update` through the launcher starts a check the same way and does not
   wait for it.
 
@@ -870,10 +872,20 @@ The installed folders are read-only. To remove the store by hand, first run
 - A lease names every release folder that the process loaded since it
   started, also after reloads. GC also keeps each folder that
   `settings.json` names. On Linux, GC also keeps a folder that a process
-  maps, runs from or has as its working folder. On macOS, a Pi process
-  that does not load pi-extras has no such protection.
+  maps, runs from or has as its working folder. macOS has no such process
+  scan: GC keeps only what the sets, the leases and `settings.json` name.
+  Thus on macOS, a Pi process that does not load pi-extras has no
+  protection.
 - A restart does not repeat `--api-key`, because the restart request is a
   file. Such a session shows a notice instead.
+- The restart token goes from the launcher to Pi in the environment. Pi
+  removes it from its environment at startup, so the tools, MCP servers
+  and shell jobs that Pi starts do not get it. The launcher acts on a
+  request only after Pi stops with exit code 0, and only on a request that
+  is newer than the start of that Pi.
+- The store serves the agent directory that `enable` used. A check with a
+  different `PI_CODING_AGENT_DIR` writes no `settings.json` and no marker.
+  It records an error in `state.json`.
 - macOS is not fully tested.
 
 ## Idle GC

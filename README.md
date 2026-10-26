@@ -107,6 +107,10 @@ original entries in `~/.pi/agent/pi-extras-update-undo.json`.
 - It starts the new set in a test Pi that uses no account and no network.
   If an extension does not load or fails at startup, the set is not used.
   The version that caused the failure is marked bad and is not tried again.
+- If a check stops before its test gives a result (for example at the
+  10-minute limit), the versions in that test are suspect. After 2 such
+  checks in a row, the checks skip them for 24 hours and then try them
+  again. A suspect version is not marked bad: no fault was found.
 - If the test passes, it changes the `pi-current` link in the store and
   the `packages` entries in `settings.json` to the new folders.
 - Each running session moves to the new set when it is idle for 30 seconds.
@@ -126,6 +130,12 @@ original entries in `~/.pi/agent/pi-extras-update-undo.json`.
   shows "Pi X ready: restart to use it".
 - The status line shows `updating: ...` while a check installs or tests. The
   transcript shows a line before and after the session moves.
+- If a new set waits 30 minutes for the session to become idle, the status
+  line shows "update ready: waits for idle (/reload to use it)". For a new
+  Pi, it shows "restart to use it".
+- One store serves one agent directory: the one that `enable` used. A
+  check with a different `PI_CODING_AGENT_DIR` changes nothing and records
+  an error.
 
 ### Which entries it manages
 
@@ -143,7 +153,8 @@ original entries in `~/.pi/agent/pi-extras-update-undo.json`.
 - starts Pi from the store, with all your arguments;
 - starts Pi again after a session asks for a restart (at most 3 times in 60
   seconds). After 2 restarts that did not bring the new set, the session
-  stops and shows a notice;
+  stops and shows a notice. A restart occurs only when Pi stopped with exit
+  code 0 and wrote its request after it started;
 - changes `pi update` to an update check that runs in the background with a
   low priority. The command stops at once. Use `/pi-extras update` to see
   the result;

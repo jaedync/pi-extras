@@ -26,6 +26,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 - Auto-update: a session does not move while a `!` command runs or a
   selector such as `/model` is open. A restart repeats the launch options
   that are safe to repeat.
+- Auto-update: after 30 minutes of waiting for idle, the status line says
+  how to use the new set now. A version whose test did not finish 2 times
+  in a row waits 24 hours before the next try. A check for a different
+  agent directory changes nothing.
 
 ## 0.29.0 - 2026-10-24
 
