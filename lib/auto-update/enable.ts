@@ -5,9 +5,10 @@
  * puts back the old ~/.local/bin/pi and the original settings entries. Both
  * print exactly what they changed.
  */
-import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, renameSync } from "node:fs";
 import { join, sep } from "node:path";
 import { waitForLock, type FileLock } from "../file-lock.ts";
+import { UnreadableJsonError } from "../json-file.ts";
 import { readConfig, writeConfig } from "./config.ts";
 import { LOCK_STALE_MS, smokeEntries, switchTo } from "./cycle.ts";
 import { INSTALL_TIMEOUT_MS, installPi } from "./install.ts";
@@ -19,7 +20,7 @@ import { readSettingsPackages, rewriteSettingsPackages, settingsFile } from "./s
 import type { SmokeInput, SmokeResult } from "./smoke.ts";
 import { sanitize, type Runner } from "./run.ts";
 import { entrySource, restoreOriginals } from "./sources.ts";
-import { emptyState, readState, updateState, writeState, type EnableRecord, type ManagedEntry, type PackageRelease, type UpdateSet, type UpdateState } from "./state.ts";
+import { emptyState, readState, StateError, updateState, writeState, type EnableRecord, type ManagedEntry, type PackageRelease, type UpdateSet, type UpdateState } from "./state.ts";
 import { readUndo, removeUndo, undoFile } from "./undo.ts";
 import { newestNpm } from "./versions.ts";
 
@@ -174,6 +175,21 @@ function undoSource(deps: Pick<EnableDeps, "agentDir" | "paths">): { enabled: En
 	return undefined;
 }
 
+/**
+ * Drops the enable record from state.json. A state.json this code cannot
+ * read moves aside (`state.json.corrupt-<time>`), and an empty state takes
+ * its place: disable has done its work from the copy by then, and must end.
+ */
+function clearEnableState(paths: StorePaths, now: number): void {
+	try {
+		updateState(paths.state, (current) => ({ ...current, enabled: undefined, current: undefined, previous: undefined, managed: {} }));
+	} catch (error) {
+		if (!(error instanceof StateError) && !(error instanceof UnreadableJsonError)) throw error;
+		renameSync(paths.state, `${paths.state}.corrupt-${now}`);
+		writeState(paths.state, emptyState());
+	}
+}
+
 export async function disable(deps: Pick<EnableDeps, "home" | "agentDir" | "paths" | "now" | "log" | "out">): Promise<void> {
 	const source = undoSource(deps);
 	if (!source) {
@@ -199,7 +215,7 @@ export async function disable(deps: Pick<EnableDeps, "home" | "agentDir" | "path
 		syncPiMarker(deps.paths, { enabled: false, pi: "skip" });
 		deps.out(`Changed ${join(deps.agentDir, "pi-extras.json")}: autoUpdate.enabled is false.`);
 		// Running sessions may still load from the store, so it stays; "gc" removes what no live session uses.
-		updateState(deps.paths.state, (current) => ({ ...current, enabled: undefined, current: undefined, previous: undefined, managed: {} }));
+		clearEnableState(deps.paths, deps.now());
 		removeUndo(deps.agentDir);
 		deps.log("disabled");
 		deps.out(`The store at ${deps.paths.root} stays while Pi sessions use it. Run "gc" later to remove what no session uses.`);

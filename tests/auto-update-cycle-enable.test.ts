@@ -7,7 +7,7 @@
  * The cycle tests are in four files, so that they run in parallel.
  */
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_CONFIG, writeConfig } from "../lib/auto-update/config.ts";
@@ -139,4 +139,26 @@ test("enable leaves a source with mode skip as the user wrote it", async (t) => 
 	assert.deepEqual(Object.keys(readState(w.paths.state).current!.packages), [NPM_KEY]);
 	assert.equal((await runCycle(w.cycleDeps({ config: { ...DEFAULT_CONFIG, enabled: true, sources: { [w.gitUrl]: "skip" } } }), { force: true })).outcome, "no-change");
 	assert.equal(entrySources(w)[0], w.gitUrl);
+});
+
+test("with a corrupt state.json, disable uses the copy, finishes, and keeps the broken file aside", async (t) => {
+	for (const broken of ["{not json", JSON.stringify({ version: 99 })]) {
+		const w = world(t);
+		tagRelease(w.gitRepo, "good", "1.0.0");
+		const beforeSettings = w.read(w.settings);
+		const beforeLink = readlinkSync(w.launcher);
+		assert.equal((await w.cli("enable")).code, 0);
+		writeFileSync(w.paths.state, broken);
+		const off = await w.cli("disable");
+		assert.equal(off.code, 0, `${off.stdout}\n${off.stderr}`);
+		assert.match(off.stdout, /copy in .*pi-extras-update-undo\.json/);
+		assert.equal(w.read(w.settings), beforeSettings);
+		assert.equal(readlinkSync(w.launcher), beforeLink);
+		assert.equal(existsSync(join(w.agentDir, "pi-extras-update-undo.json")), false, "disable removes the copy");
+		assert.equal(readState(w.paths.state).enabled, undefined, "a fresh state.json");
+		const aside = readdirSync(w.paths.root).filter((name) => name.startsWith("state.json.corrupt-"));
+		assert.equal(aside.length, 1);
+		assert.equal(w.read(join(w.paths.root, aside[0]!)), broken);
+		assert.match((await w.cli("disable")).stdout, /not on/);
+	}
 });
