@@ -37,6 +37,22 @@ export interface BadMark {
 	readonly at: number;
 }
 
+/**
+ * A release whose test began but gave no verdict: the hard cycle limit (or a
+ * crash) ended the process during the test. It is not bad: nothing showed a
+ * fault, and a busy machine can cause it. After SUSPECT_TRIES such tries in
+ * a row, cycles skip the release for SUSPECT_WAIT_MS, so a test that cannot
+ * finish does not use every cycle; then it gets one more try. A verdict (the
+ * release passes, or it is marked bad) removes the mark.
+ */
+export interface SuspectMark {
+	readonly at: number;
+	readonly tries: number;
+}
+
+export const SUSPECT_TRIES = 2;
+export const SUSPECT_WAIT_MS = 24 * 60 * 60_000;
+
 /** One managed settings entry as it was before auto-update rewrote it, for `disable`. */
 export interface ManagedEntry {
 	readonly origin: string;
@@ -59,6 +75,8 @@ export interface UpdateState {
 	readonly previous?: UpdateSet;
 	/** Store key (or `pi`) -> release id -> why it failed. */
 	readonly bad: Readonly<Record<string, Readonly<Record<string, BadMark>>>>;
+	/** Store key (or `pi`) -> release id -> tests that gave no verdict. */
+	readonly suspect?: Readonly<Record<string, Readonly<Record<string, SuspectMark>>>>;
 	readonly lastCheck?: number;
 	readonly lastError?: { readonly at: number; readonly message: string };
 	/** What a cycle does now, for the status line. Cleared at the end of the cycle. */
@@ -104,6 +122,7 @@ export function readState(file: string): UpdateState {
 		...(raw as unknown as UpdateState),
 		bad: isObject(raw.bad) ? (raw.bad as UpdateState["bad"]) : {},
 		managed: isObject(raw.managed) ? (raw.managed as UpdateState["managed"]) : {},
+		suspect: isObject(raw.suspect) ? (raw.suspect as UpdateState["suspect"]) : undefined,
 	};
 }
 
@@ -124,6 +143,31 @@ export function isBad(state: UpdateState, key: string, id: string): boolean {
 
 export function markBad(state: UpdateState, key: string, id: string, reason: string, at: number): UpdateState {
 	return { ...state, bad: { ...state.bad, [key]: { ...state.bad[key], [id]: { reason, at } } } };
+}
+
+/** True while cycles skip this release: it failed its test, or its test gave no verdict too often of late. */
+export function isBlocked(state: UpdateState, key: string, id: string, now: number): boolean {
+	if (isBad(state, key, id)) return true;
+	const mark = state.suspect?.[key]?.[id];
+	return mark !== undefined && mark.tries >= SUSPECT_TRIES && now - mark.at < SUSPECT_WAIT_MS;
+}
+
+/** Counts one more test of each release that has not given its verdict yet. */
+export function markSuspect(state: UpdateState, releases: readonly { key: string; id: string }[], at: number): UpdateState {
+	const suspect = { ...state.suspect };
+	for (const { key, id } of releases) suspect[key] = { ...suspect[key], [id]: { at, tries: (suspect[key]?.[id]?.tries ?? 0) + 1 } };
+	return { ...state, suspect };
+}
+
+/** Removes the marks of releases that got a verdict. */
+export function clearSuspect(state: UpdateState, releases: readonly { key: string; id: string }[]): UpdateState {
+	const suspect: Record<string, Readonly<Record<string, SuspectMark>>> = { ...state.suspect };
+	for (const { key, id } of releases) {
+		const { [id]: _done, ...rest } = suspect[key] ?? {};
+		if (Object.keys(rest).length > 0) suspect[key] = rest;
+		else delete suspect[key];
+	}
+	return { ...state, suspect: Object.keys(suspect).length > 0 ? suspect : undefined };
 }
 
 /** Every release folder a set uses (Pi and packages). */

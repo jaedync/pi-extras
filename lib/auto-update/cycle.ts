@@ -18,10 +18,10 @@ import { PI_KEY, trackedSources, wantedPackage, wantedPi, type LookupDeps, type 
 import type { Runner } from "./run.ts";
 import { readSettingsPackages, settingsFile } from "./settings.ts";
 import { applySet, classify, entryKey, entrySource } from "./sources.ts";
-import { markBad, readState, sameSet, updateState, type PackageRelease, type PiRelease, type UpdateSet, type UpdateState } from "./state.ts";
+import { clearSuspect, markBad, markSuspect, readState, sameSet, updateState, type PackageRelease, type PiRelease, type UpdateSet, type UpdateState } from "./state.ts";
 import { applySwitch, piCurrentMatches, settingsMatch } from "./switch.ts";
 import { writeUndo } from "./undo.ts";
-import type { SmokeInput, SmokeResult } from "./smoke.ts";
+import { SMOKE_TIMEOUT_MS, type SmokeInput, type SmokeResult } from "./smoke.ts";
 
 export const CYCLE_LIMIT_MS = 10 * 60_000;
 /** Past this, a lock whose holder still lives is taken over: that cycle is stuck far beyond its limit. */
@@ -249,20 +249,38 @@ function labelOf(set: UpdateSet, key: string): string {
 	return key === PI_KEY ? `Pi ${set.pi.version}` : (set.packages[key]?.label ?? key);
 }
 
-/** Finds which changes broke the candidate: one change is the culprit; several are tried alone against the current set. */
-async function findCulprits(deps: CycleDeps, current: UpdateSet, candidate: UpdateSet, packages: readonly unknown[], deadline: number): Promise<{ key: string; reason: string }[]> {
+interface Search {
+	/** Changes that failed alone (or, when each passed alone, all of them). */
+	readonly culprits: readonly { key: string; reason: string }[];
+	/** Changes that passed alone: they have their verdict too. */
+	readonly cleared: readonly string[];
+	/** False when the cycle limit left changes untested. */
+	readonly complete: boolean;
+}
+
+/**
+ * Finds which changes broke the candidate: one change is the culprit;
+ * several are tried alone against the current set. A test starts only when
+ * it can end before the cycle limit, so the hard limit does not cut it off;
+ * the changes left untested keep their suspect marks for the next cycle.
+ */
+async function findCulprits(deps: CycleDeps, current: UpdateSet, candidate: UpdateSet, packages: readonly unknown[], deadline: number): Promise<Search> {
 	const changes = changedKeys(current, candidate).filter((key) => idOf(candidate, key) !== undefined);
-	if (changes.length <= 1) return changes.map((key) => ({ key, reason: "the smoke test failed" }));
+	if (changes.length <= 1) return { culprits: changes.map((key) => ({ key, reason: "the smoke test failed" })), cleared: [], complete: true };
 	const culprits: { key: string; reason: string }[] = [];
+	const cleared: string[] = [];
 	for (const key of changes) {
-		if (deps.now() > deadline) break;
+		if (deps.now() + SMOKE_TIMEOUT_MS > deadline) break;
 		setActivity(deps, `testing ${labelOf(candidate, key)} alone`);
 		const alone = withOne(current, candidate, key);
 		const result = await deps.smoke({ piDir: alone.pi.dir, packages: smokeEntries(packages, alone, deps.paths.root) });
-		if (!result.ok) culprits.push({ key, reason: result.reason });
+		if (result.ok) cleared.push(key);
+		else culprits.push({ key, reason: result.reason });
 	}
+	const complete = culprits.length + cleared.length === changes.length;
+	if (culprits.length > 0 || !complete) return { culprits, cleared, complete };
 	// Each change passed alone, so only the combination fails: mark them all, the next releases decide.
-	return culprits.length > 0 ? culprits : changes.map((key) => ({ key, reason: "failed only together with other updates" }));
+	return { culprits: changes.map((key) => ({ key, reason: "failed only together with other updates" })), cleared: [], complete };
 }
 
 async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<CycleResult> {
@@ -285,18 +303,25 @@ async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<Cycle
 		collect(deps);
 		return { outcome: errors.length > 0 ? "error" : "no-change", message: errors[0] ?? "Everything is up to date." };
 	}
-	const labels = changedKeys(current, candidate).filter((key) => idOf(candidate, key)).map((key) => labelOf(candidate, key));
+	const keys = changedKeys(current, candidate).filter((key) => idOf(candidate, key));
+	const labels = keys.map((key) => labelOf(candidate, key));
+	const releases = (of: readonly string[]) => of.map((key) => ({ key, id: idOf(candidate, key)! }));
+	// Written before the test: if the hard limit ends this process during it, the next cycles know.
+	updateState(deps.paths.state, (now) => markSuspect(now, releases(keys), deps.now()));
 	setActivity(deps, `testing ${labels.join(", ")}`);
 	const smoke = await deps.smoke({ piDir: candidate.pi.dir, packages: smokeEntries(packages, candidate, deps.paths.root) });
 	if (!smoke.ok) {
 		deps.log(`smoke test failed for ${labels.join(", ")}: ${smoke.reason}`);
-		const culprits = await findCulprits(deps, current, candidate, packages, deadline);
-		state = updateState(deps.paths.state, (now) => culprits.reduce((next, culprit) => markBad(next, culprit.key, idOf(candidate, culprit.key)!, culprit.reason, deps.now()), now));
-		const message = `The update to ${labels.join(", ")} failed its test: ${smoke.reason}. The current versions stay.`;
+		const search = await findCulprits(deps, current, candidate, packages, deadline);
+		const decided = [...search.culprits.map((culprit) => culprit.key), ...search.cleared];
+		state = updateState(deps.paths.state, (now) => clearSuspect(search.culprits.reduce((next, culprit) => markBad(next, culprit.key, idOf(candidate, culprit.key)!, culprit.reason, deps.now()), now), releases(decided)));
+		const unfinished = search.complete ? "" : " The search for the cause did not finish in this check; the next check goes on.";
+		const message = `The update to ${labels.join(", ")} failed its test: ${smoke.reason}.${unfinished} The current versions stay.`;
 		updateState(deps.paths.state, (now) => ({ ...now, lastError: { at: deps.now(), message } }));
-		for (const culprit of culprits) deps.log(`marked bad: ${labelOf(candidate, culprit.key)} (${culprit.reason})`);
+		for (const culprit of search.culprits) deps.log(`marked bad: ${labelOf(candidate, culprit.key)} (${culprit.reason})`);
 		return { outcome: "smoke-failed", message };
 	}
+	updateState(deps.paths.state, (now) => clearSuspect(now, releases(keys)));
 	switchTo(deps, candidate, packages);
 	deps.log(`switched to ${labels.join(", ")}`);
 	finish(deps, errors);

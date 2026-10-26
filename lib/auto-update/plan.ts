@@ -8,7 +8,7 @@ import { installGitRelease, installNpmRelease, installPi, type InstallDeps } fro
 import type { StorePaths } from "./paths.ts";
 import type { Runner } from "./run.ts";
 import { classify, entryKey, entrySource, type Origin } from "./sources.ts";
-import { isBad, type PackageRelease, type PiRelease, type UpdateState } from "./state.ts";
+import { isBlocked, type PackageRelease, type PiRelease, type UpdateState } from "./state.ts";
 import { newestGit, newestNpm } from "./versions.ts";
 
 export const PI_KEY = "pi";
@@ -72,11 +72,11 @@ export async function wantedPackage(tracked: Tracked, state: UpdateState, deps: 
 	const { origin } = tracked;
 	if (origin.kind === "npm") {
 		const version = await newestNpm(origin.name, deps.runner, { minAgeHours: deps.config.minReleaseAgeHours, now: deps.now() });
-		if (version === undefined || version === current?.id || isBad(state, tracked.key, version)) return kept;
+		if (version === undefined || version === current?.id || isBlocked(state, tracked.key, version, deps.now())) return kept;
 		return { key: tracked.key, id: version, label: `${origin.label} ${version}`, install: () => installNpmRelease(deps.paths, origin, version, deps.install) };
 	}
 	const release = await newestGit(origin.url, tracked.mode, deps.runner, { prereleases: deps.config.prereleases });
-	if (release.id === current?.id || isBad(state, tracked.key, release.id)) return kept;
+	if (release.id === current?.id || isBlocked(state, tracked.key, release.id, deps.now())) return kept;
 	const shown = release.version ?? release.commit.slice(0, 7);
 	return { key: tracked.key, id: release.id, label: `${origin.label} ${shown}`, install: () => installGitRelease(deps.paths, origin, release, deps.install) };
 }
@@ -87,7 +87,7 @@ export async function wantedPi(state: UpdateState, deps: LookupDeps): Promise<Wa
 	const kept = current ? keep(PI_KEY, current.version, `Pi ${current.version}`, current) : undefined;
 	if (deps.config.pi === "skip") return kept;
 	const version = await newestNpm(name, deps.runner, { minAgeHours: deps.config.minReleaseAgeHours, now: deps.now() });
-	if (version === undefined || version === current?.version || isBad(state, PI_KEY, version)) return kept;
+	if (version === undefined || version === current?.version || isBlocked(state, PI_KEY, version, deps.now())) return kept;
 	return {
 		key: PI_KEY, id: version, label: `Pi ${version}`,
 		install: async () => ({ ...(await installPi(deps.paths, name, version, deps.install)), name }),
