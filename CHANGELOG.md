@@ -2,6 +2,21 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.32.0 - 2026-10-26
+
+### Added
+
+- Pull Link: host guard. A `pull_link` or `fetch_content` call to a host
+  that no user message, tool result, custom message or system prompt names
+  is refused, with the host written as `a[.]b[.]com`. Model-written text
+  (its messages, subagent mail and reports, a result that repeats its own
+  call's arguments) names nothing, and on shared hosting domains only the
+  exact host counts. A URL that does not parse is refused. Qwen3.8 builds fetch
+  made-up Alibaba OSS links (`routify-file-proxy-sg...aliyuncs.com`) from
+  their training data, and each request tells a third party your IP address
+  and the time. On by default for all providers except Anthropic. Settings:
+  `linkContext.hostGuard`, `hostGuardExempt` and `hostGuardAllow`.
+
 ## 0.31.2 - 2026-10-26
 
 ### Changed
