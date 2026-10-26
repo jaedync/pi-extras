@@ -3,7 +3,8 @@
  * (session.ts) with a fake host, a temp store and a temp agent dir.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
+import { LOCK_STALE_MS } from "../lib/auto-update/cycle.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -351,4 +352,20 @@ test("the lease keeps every release this process loaded: after a reload to B and
 	second.stop("quit");
 	assert.equal(h.history.size, 0, "a quit clears what the process loaded");
 	assert.deepEqual(gc().removed, [join(realpathSync(h.paths.root), "packages", "npm-pi-extras", "0.29.0")], "then A goes");
+});
+
+test("an old lock that names a live, unrelated pid does not stop sessions from starting cycles", (t) => {
+	const same = (root: string) => set(root, "1.4.0", "0.29.0");
+	const h = harness(t, same, same);
+	writeState(h.paths.state, { ...JSON.parse(readFileSync(h.paths.state, "utf8")), lastCheck: undefined });
+	const session = new UpdateSession(h.host);
+	// pid 1 is always alive. A fresh lock with it counts as held.
+	writeFileSync(h.paths.lock, "1 reused");
+	session.maybeSpawn();
+	assert.deepEqual(h.calls, [], "a fresh lock is held");
+	// Older than the stale time of the cycle's own tryLock: a crashed cycle, and the pid was reused (for example after a reboot).
+	const old = new Date(Date.now() - LOCK_STALE_MS - 60_000);
+	utimesSync(h.paths.lock, old, old);
+	session.maybeSpawn();
+	assert.deepEqual(h.calls, ["spawn false"]);
 });

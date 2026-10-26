@@ -127,6 +127,20 @@ function inspect(path: string, options: LockOptions): Holder {
 	return pidAlive(pid) ? { state: "held" } : { state: "stale", seen: holder.seen };
 }
 
+/**
+ * True while a live holder has the lock, by the same rule `tryLock` uses: a
+ * lock older than `staleMs` is not held, even when its pid is alive (the pid
+ * may belong to another process now).
+ */
+export function isLockHeld(path: string, options: LockOptions = {}): boolean {
+	try {
+		return inspect(path, options).state === "held";
+	} catch {
+		// A lock this process cannot read: let tryLock decide.
+		return false;
+	}
+}
+
 /** Removes the stale lock only if it is still the file that was judged stale. */
 function removeStale(path: string, seen: Stats): void {
 	try {

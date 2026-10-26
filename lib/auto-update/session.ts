@@ -3,10 +3,12 @@
  * cycle, the status line, and adoption (reload or restart when idle). All
  * Pi access goes through `SessionHost`, so tests drive it with fakes.
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { decide, fingerprint, idleFor, packagesDiffer, piDiffers, type Decision, type IdleSignals, type OwnSet } from "./adopt.ts";
+import { isLockHeld } from "../file-lock.ts";
 import { readConfig, type AutoUpdateConfig } from "./config.ts";
+import { LOCK_STALE_MS } from "./cycle.ts";
 import { processStart, removeLease, writeLease } from "./leases.ts";
 import { loadedEntries } from "./own-set.ts";
 import { isInside, type StorePaths } from "./paths.ts";
@@ -100,17 +102,6 @@ function safeState(paths: StorePaths): UpdateState | undefined {
 	}
 }
 
-function lockHeld(path: string): boolean {
-	try {
-		const pid = Number.parseInt(readFileSync(path, "utf8"), 10);
-		if (!Number.isInteger(pid) || pid <= 0) return true;
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
-	}
-}
-
 export class UpdateSession {
 	private readonly host: SessionHost;
 	private own: OwnSet;
@@ -199,7 +190,7 @@ export class UpdateSession {
 		const state = safeState(this.host.paths);
 		if (!config.enabled || config.paused || !state?.current) return;
 		if (state.lastCheck !== undefined && this.host.now() - state.lastCheck < config.intervalMinutes * 60_000) return;
-		if (lockHeld(this.host.paths.lock)) return;
+		if (isLockHeld(this.host.paths.lock, { staleMs: LOCK_STALE_MS })) return;
 		this.host.spawnCycle(false);
 	}
 
