@@ -58,6 +58,19 @@ test("a Pi that cannot start gives no verdict; a Pi that fails gives one", async
 	assert.equal(!exits.ok && exits.inconclusive, undefined, "an exit is a verdict");
 });
 
+test("a smoke Pi killed by a signal that the test did not send (for example the OOM killer) gives no verdict", { skip: process.platform === "win32" }, async (t) => {
+	const dir = scratch(t);
+	for (const signal of ["SIGKILL", "SIGTERM"]) {
+		const pi = join(dir, signal);
+		mkdirSync(join(pi, "bin"), { recursive: true });
+		writeFileSync(join(pi, "bin", "pi"), `process.kill(process.pid, "${signal}");\nsetInterval(() => {}, 1000);\n`);
+		writeFileSync(join(pi, "package.json"), JSON.stringify({ type: "commonjs" }));
+		const result = await smokeTest({ piDir: pi, packages: [], timeoutMs: 10_000 });
+		assert.match(result.ok ? "" : result.reason, new RegExp(`Pi was stopped by ${signal}`), signal);
+		assert.equal(!result.ok && result.inconclusive, true, signal);
+	}
+});
+
 test("pi-extras itself passes the smoke test", async () => {
 	const result = await smokeTest({ piDir: piPrefix(join(mkdtempSync(join(tmpdir(), "au-smoke-x-")), "pi")), packages: [new URL("../", import.meta.url).pathname.replace(/\/$/, "")], timeoutMs: 55_000 });
 	assert.deepEqual(result.ok ? "ok" : result.reason, "ok");

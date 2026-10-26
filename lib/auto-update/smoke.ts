@@ -180,7 +180,10 @@ function drivePi(drive: Drive): Promise<SmokeResult> {
 			resolve(outcome!);
 		});
 		child.on("close", (code, signal) => {
-			finish({ ok: false, reason: `Pi exited (${code ?? signal}) before the reply: ${firstLine(stderr) || "no error text"}` });
+			// Our own stop comes only after the outcome is set, so a signal here
+			// came from outside (the OOM killer, another user command): no verdict.
+			if (signal) finish({ ok: false, reason: `Pi was stopped by ${signal} before the reply: ${firstLine(stderr) || "no error text"}`, inconclusive: true });
+			finish({ ok: false, reason: `Pi exited (${code}) before the reply: ${firstLine(stderr) || "no error text"}` });
 			resolve(outcome!);
 		});
 		send({ type: "get_state", id: "state" });
