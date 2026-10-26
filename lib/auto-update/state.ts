@@ -67,6 +67,8 @@ export interface EnableRecord {
 	readonly previousLink: string;
 	/** The Pi binary that the launcher falls back to when `pi-current` is missing. */
 	readonly fallbackPi: string;
+	/** The real path of the agent dir whose settings.json the store serves. Cycles for another agent dir refuse. */
+	readonly agentDir?: string;
 }
 
 export interface UpdateState {

@@ -4,6 +4,7 @@
  * per machine (the updater lock), and at most one per interval however many
  * sessions ask (the `lastCheck` throttle, checked again under the lock).
  */
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tryLock } from "../file-lock.ts";
@@ -88,8 +89,38 @@ function gate(deps: CycleDeps, state: UpdateState, force: boolean): CycleResult 
 	return undefined;
 }
 
+/** The store serves one agent dir's settings.json; a check from another (another PI_CODING_AGENT_DIR) must not touch it. */
+function foreignAgentDir(deps: Pick<CycleDeps, "agentDir">, state: UpdateState): string | undefined {
+	const owner = state.enabled?.agentDir;
+	if (!owner) return undefined;
+	let mine: string;
+	try {
+		mine = realpathSync(deps.agentDir);
+	} catch {
+		mine = deps.agentDir;
+	}
+	return mine === owner ? undefined : `This update check runs for the agent folder ${deps.agentDir}, but auto-update was turned on for ${owner}. Nothing changed.`;
+}
+
+/** Records the refusal for the status, under the lock; when another cycle holds it, the message alone is enough. */
+function refuse(deps: CycleDeps, message: string): CycleResult {
+	deps.log(message);
+	const lock = tryLock(deps.paths.lock, { staleMs: LOCK_STALE_MS });
+	if (lock) {
+		try {
+			safeUpdate(deps, (state) => ({ ...state, lastError: { at: deps.now(), message } }));
+		} finally {
+			lock.release();
+		}
+	}
+	return { outcome: "error", message };
+}
+
 export async function runCycle(deps: CycleDeps, options: { force?: boolean } = {}): Promise<CycleResult> {
 	const force = options.force === true;
+	// Before anything writes: even the pi-managed marker follows the config of the agent dir that the store serves.
+	const foreign = foreignAgentDir(deps, readState(deps.paths.state));
+	if (foreign) return refuse(deps, foreign);
 	try {
 		syncPiMarker(deps.paths, deps.config);
 	} catch (error) {
@@ -131,6 +162,11 @@ function setActivity(deps: CycleDeps, text: string): void {
 
 /** Fixes a crash between switch steps: pi-current and settings must match `state.current`. */
 export function repair(deps: Pick<CycleDeps, "paths" | "agentDir" | "log">, state: UpdateState): boolean {
+	const foreign = foreignAgentDir(deps, state);
+	if (foreign) {
+		deps.log(`repair skipped: ${foreign}`);
+		return false;
+	}
 	if (!state.current) return false;
 	const packages = readSettingsPackages(settingsFile(deps.agentDir));
 	if (piCurrentMatches(deps.paths, state.current) && settingsMatch(packages, state.current, deps.paths.root)) return false;

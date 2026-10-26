@@ -6,10 +6,11 @@
  * The cycle tests are in four files, so that they run in parallel.
  */
 import assert from "node:assert/strict";
-import { readlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { runCycle } from "../lib/auto-update/cycle.ts";
+import { DEFAULT_CONFIG } from "../lib/auto-update/config.ts";
+import { repair, runCycle } from "../lib/auto-update/cycle.ts";
 import { readState } from "../lib/auto-update/state.ts";
 import { flipPiCurrent } from "../lib/auto-update/switch.ts";
 import { fixturePackage, PI_NAME, tagRelease } from "./support/auto-update-fixtures.ts";
@@ -76,4 +77,28 @@ test("a new unpinned entry that the user adds is adopted at the next cycle", asy
 	assert.equal(result.outcome, "switched", result.message);
 	assert.equal(entrySources(w).at(-1), join(w.paths.root, "packages", "npm-fixture-extra-b75661ca", "0.1.0", "node_modules", "fixture-extra"));
 	assert.equal(readState(w.paths.state).managed["npm-fixture-extra-b75661ca"]?.original, "npm:fixture-extra");
+});
+
+test("a cycle for another agent dir refuses: it records why and changes no settings.json, link or marker", async (t) => {
+	const w = await enabled(t);
+	assert.equal(readState(w.paths.state).enabled?.agentDir, realpathSync(w.agentDir), "enable records its agent dir");
+	const other = join(w.root, "other-agent");
+	mkdirSync(other);
+	const otherSettings = join(other, "settings.json");
+	writeFileSync(otherSettings, ORIGINAL_SETTINGS(w.gitUrl));
+	tagRelease(w.gitRepo, "good", "2.0.0");
+	const before = { state: readState(w.paths.state).current, settings: w.read(w.settings), other: w.read(otherSettings), link: readlinkSync(w.paths.piCurrent) };
+	const result = await runCycle(w.cycleDeps({ agentDir: other, config: { ...DEFAULT_CONFIG, enabled: true, pi: "skip" } }), { force: true });
+	assert.equal(result.outcome, "error");
+	assert.match(result.message, /turned on for .*agent.*Nothing changed/);
+	assert.match(readState(w.paths.state).lastError?.message ?? "", /turned on for/);
+	assert.deepEqual(readState(w.paths.state).current, before.state);
+	assert.equal(w.read(otherSettings), before.other);
+	assert.equal(w.read(w.settings), before.settings);
+	assert.equal(readlinkSync(w.paths.piCurrent), before.link);
+	assert.ok(existsSync(join(w.paths.root, "pi-managed")), "pi: skip in the other config does not turn the marker off");
+	// A repair from there (settings.json does not name the current set) is refused too.
+	assert.equal(repair({ paths: w.paths, agentDir: other, log: () => {} }, readState(w.paths.state)), false);
+	assert.equal(w.read(otherSettings), before.other);
+	assert.equal((await runCycle(w.cycleDeps(), { force: true })).outcome, "switched", "the right agent dir still works");
 });

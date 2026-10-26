@@ -142,7 +142,7 @@ export async function enable(deps: EnableDeps): Promise<void> {
 		deps.out(`Testing Pi ${set.pi.version} with ${plural(Object.keys(set.packages).length, "package")}.`);
 		const smoke = await deps.smoke({ piDir: set.pi.dir, packages: smokeEntries(packages, set, deps.paths.root) });
 		if (!smoke.ok) throw new CommandError(`The test of the new versions failed: ${smoke.reason}. Nothing was switched. The store at ${deps.paths.root} has the new folders; "gc" removes them.`);
-		writeState(deps.paths.state, { ...state, lastCheck: deps.now(), enabled: { at: deps.now(), launcher, previousLink: old.link, fallbackPi: old.real } });
+		writeState(deps.paths.state, { ...state, lastCheck: deps.now(), enabled: { at: deps.now(), launcher, previousLink: old.link, fallbackPi: old.real, agentDir: realpathSync(deps.agentDir) } });
 		switchTo(deps, set, packages);
 		const after = readSettingsPackages(settings);
 		installLauncher(launcher, renderLauncher({ store: deps.paths.root, fallbackPi: old.real, fallbackExtras: deps.extrasDir, node: deps.node }));
