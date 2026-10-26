@@ -2,6 +2,35 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.33.0 - 2026-10-26
+
+### Changed
+
+- Pull Link: an X link gives the whole public conversation through
+  FxTwitter's v2 API, with no login: all the posts above the post, the
+  replies as a nested outline (the author's own replies first, then the
+  most liked), the posts that quote it with their replies, and the chain of
+  quoted posts (up to 4 levels). Without a login, X gives only the top
+  replies of each post; the result says what X reports and what came back.
+  One link uses at most 300 requests in 90 seconds, 6 at a time. When the
+  v2 API fails, you get the post, its quote and the posts above it, as
+  before.
+- Pull Link: a Bluesky link gives the full reply tree and the posts that
+  quote it, each with its replies.
+- Pull Link: `comments` is "all" by default for X and Bluesky (up to 2000).
+  The new parameter `quotes` (default all, 0 for none) sets the number of
+  quote posts.
+- Pull Link: a result longer than 12,000 characters is also saved to a file
+  in `~/.cache/pi-extras/link-context/full-text` (mode 0600, kept 7 days, at
+  most 200 files), and the result gives its path. A long X or Bluesky
+  conversation comes back as a preview: the post, the nearest posts above
+  it, the top replies and quote posts, and the notes about what is missing.
+  `offset=0` pages through the whole text.
+- Auto-pull reads an X or Bluesky conversation for at most 20 seconds, and
+  a message with such a link waits up to 25 seconds (other messages still
+  wait 15). When the limit stops a read, the message tells the model to
+  call `pull_link`, which reads the whole conversation.
+
 ## 0.32.0 - 2026-10-26
 
 ### Added
