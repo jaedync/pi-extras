@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isChildSession, markChildSession } from "../lib/child-session.ts";
-import { registerAutoPull, WAIT_MS } from "../lib/link-context/auto.ts";
+import { CONVERSATION_WAIT_MS, registerAutoPull, WAIT_MS, waitLimit } from "../lib/link-context/auto.ts";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { autoLines } from "../lib/link-context/auto-view.ts";
 import { AUTO_TYPE, autoMessage, findLinks, LINK_CHARS, MAX_IMAGES, MAX_LINKS, type AutoDetails, type LinkResult } from "../lib/link-context/auto-message.ts";
 import { parseConfig } from "../lib/link-context/config.ts";
-import { createReader } from "../lib/link-context/reader.ts";
+import { AUTO_READ_MS, createReader } from "../lib/link-context/reader.ts";
 import type { ImageBlock, Pulled } from "../lib/link-context/types.ts";
 import { quiet } from "./support/quiet-theme.ts";
 
@@ -362,4 +362,14 @@ test("a steer typed while the run is about to start keeps the first message's li
 	await h.emit("input", input("no links here", "interactive", "steer"));
 	await h.emit("input", input("from an extension", "extension", "followUp"));
 	assert.match(messageText(await h.emit("before_agent_start", start("read https://e.test/first"))), /Text of https:\/\/e\.test\/first/);
+});
+
+test("a message with an X or Bluesky link waits for auto-pull's conversation limit; others wait the usual time", () => {
+	assert.equal(AUTO_READ_MS, 20_000);
+	assert.ok(CONVERSATION_WAIT_MS > AUTO_READ_MS, "the conversation read ends before the model starts");
+	assert.equal(waitLimit(["https://e.test/a", "https://www.youtube.com/watch?v=abcdefghijk"]), WAIT_MS);
+	assert.equal(waitLimit(["https://e.test/a", "https://x.com/a/status/1"]), CONVERSATION_WAIT_MS);
+	assert.equal(waitLimit(["https://bsky.app/profile/a.test/post/3l6oveex3ii2l"]), CONVERSATION_WAIT_MS);
+	assert.equal(waitLimit(["not a link", "http://localhost/"]), WAIT_MS, "a link that does not parse is not a conversation");
+	assert.equal(waitLimit([...Array.from({ length: MAX_LINKS }, (_, n) => `https://e.test/${n}`), "https://x.com/a/status/1"]), WAIT_MS, "a link past the ones read does not count");
 });

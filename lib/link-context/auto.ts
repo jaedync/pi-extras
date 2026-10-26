@@ -11,11 +11,18 @@ import { watchMotion } from "../extras-config.ts";
 import { AUTO_TYPE, autoMessage, findLinks, MAX_LINKS, MAX_NAMED_SKIPPED, type AutoMessage, type LinkResult } from "./auto-message.ts";
 import { createAutoRenderer, waitWidget, type WaitLink, type WaitState } from "./auto-view.ts";
 import { loadConfig } from "./config.ts";
-import type { LinkReader } from "./reader.ts";
+import { AUTO_READ_MS, isConversation, type LinkReader } from "./reader.ts";
 import type { LinkConfig } from "./types.ts";
 
 /** The longest the model waits for the links of a message; a slower link is named, and its read goes on. */
 export const WAIT_MS = 15_000;
+/** The wait for a message with an X or Bluesky link: the conversation's read limit, and time for its first request. */
+export const CONVERSATION_WAIT_MS = AUTO_READ_MS + 5_000;
+
+/** How long the model waits for the links that a message reads. */
+export function waitLimit(urls: readonly string[]): number {
+	return urls.slice(0, MAX_LINKS).some(isConversation) ? CONVERSATION_WAIT_MS : WAIT_MS;
+}
 /** A read left running past the wait stops here, so a hung site holds nothing for long. */
 export const BACKGROUND_MS = 5 * 60_000;
 const USAGE = "Usage: /autopull on|off|status";
@@ -38,7 +45,6 @@ interface Pending {
 }
 
 export function registerAutoPull(pi: ExtensionAPI, options: AutoPullOptions): void {
-	const waitMs = options.waitMs ?? WAIT_MS;
 	const backgroundMs = options.backgroundMs ?? BACKGROUND_MS;
 	// `/autopull` changes only this session, so it is not saved.
 	let override: boolean | undefined;
@@ -50,6 +56,7 @@ export function registerAutoPull(pi: ExtensionAPI, options: AutoPullOptions): vo
 
 	const collect = (urls: readonly string[]): Pending => {
 		const startedAt = Date.now();
+		const waitMs = options.waitMs ?? waitLimit(urls);
 		const signal = AbortSignal.any([session.signal, AbortSignal.timeout(backgroundMs)]);
 		let states: readonly WaitLink[] = urls.slice(0, MAX_LINKS).map((url) => ({ url, state: "reading" }));
 		const settle = (index: number, result: LinkResult) => {

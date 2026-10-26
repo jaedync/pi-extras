@@ -24,8 +24,8 @@ export const MAX_AT = 12;
 const CAPTIONS_ONLY = "#captions-only";
 /** A conversation that auto-pull's time limit cut short is kept under its own key, as a captions-only video is. */
 const TIME_LIMITED = "#time-limited";
-/** Auto-pull's time for the optional requests of an X or Bluesky conversation: under its wait for all links (auto.ts WAIT_MS, 15 s). */
-export const AUTO_READ_MS = 10_000;
+/** Auto-pull's time for an X or Bluesky conversation; a message with one waits longer for it (auto.ts CONVERSATION_WAIT_MS). */
+export const AUTO_READ_MS = 20_000;
 /** Shared reads a call waits for before it reads the link itself. */
 const SHARED_ROUNDS = 2;
 
@@ -48,6 +48,15 @@ export function parseTimes(at: readonly string[] | undefined): number[] | undefi
 		if (seconds === undefined || seconds < 0) throw new Error(`at: "${text}" is not a time; use forms like 4:05, 1:02:30 or 95.`);
 		return seconds;
 	});
+}
+
+/** Whether `raw` is a link whose adapter reads the whole conversation; a link that does not parse is not. */
+export function isConversation(raw: string): boolean {
+	try {
+		return WHOLE_CONVERSATIONS.has(classify(parseUrl(raw)).kind);
+	} catch {
+		return false;
+	}
 }
 
 export function resolveOptions(params: Params, isVideo: boolean, whole = false): PullOptions {

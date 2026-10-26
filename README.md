@@ -1636,7 +1636,7 @@ model does not need them, and a wait before the model starts.
   characters. A longer X or Bluesky conversation comes as a preview. Other
   long results come as their first 12,000 characters. Both give the path of
   the file that holds the whole result, and the `offset` to page through it.
-- Auto-pull reads an X or Bluesky conversation for at most 10 seconds. Only
+- Auto-pull reads an X or Bluesky conversation for at most 20 seconds. Only
   the first request for an X post can take longer. When this limit stops the
   read, the message says so,
   and a `pull_link` call for the link reads the whole conversation.
@@ -1647,7 +1647,8 @@ model does not need them, and a wait before the model starts.
   video without captions, the model can call `pull_link`, which transcribes
   the speech.
 - All links are read at the same time. The model starts when all links are
-  read, or after 15 seconds. The message names a link that is still being
+  read, or after 15 seconds (25 seconds when the message has an X or Bluesky
+  link). The message names a link that is still being
   read. Its read continues for up to 5 minutes, and a `pull_link` call for
   that link waits for this read and uses its result.
 - The results go into the `pull_link` cache. A link that was read in the last
