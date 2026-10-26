@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { collectGarbage, mappedPaths, processPaths } from "../lib/auto-update/gc.ts";
-import { leaseFile, processStart, readLiveLeases, removeLease, writeLease, type Lease } from "../lib/auto-update/leases.ts";
+import { leaseFile, processStart, psStart, readLiveLeases, removeLease, writeLease, type Lease } from "../lib/auto-update/leases.ts";
+import { renderLauncher } from "../lib/auto-update/launcher.ts";
 import { storePaths } from "../lib/auto-update/paths.ts";
 import { emptyState, type UpdateSet } from "../lib/auto-update/state.ts";
 
@@ -39,6 +40,14 @@ test("a process start time tells a live process from a reused pid", { skip: proc
 	const pid = child.pid!;
 	await new Promise((resolve) => child.on("exit", resolve));
 	assert.equal(processStart(pid), undefined);
+});
+
+test("the ps start time (macOS) uses the C locale in Node and in the launcher, so both write the same text", { skip: process.platform === "win32" }, (t) => {
+	const saved = process.env.LC_ALL;
+	t.after(() => (saved === undefined ? delete process.env.LC_ALL : (process.env.LC_ALL = saved)));
+	process.env.LC_ALL = "en_US.utf8";
+	assert.match(psStart(process.pid) ?? "", /^[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d \d{4}$/);
+	assert.match(renderLauncher({ store: "/s", fallbackPi: "/p", fallbackExtras: "/e", node: "/n" }), /LC_ALL=C ps -o lstart= -p "\$\$"/);
 });
 
 test("only leases of live processes with the same start time are kept; others are removed", (t) => {

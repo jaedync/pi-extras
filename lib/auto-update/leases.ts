@@ -40,9 +40,10 @@ function linuxStart(pid: number): string | undefined {
 	return fields[19];
 }
 
-function psStart(pid: number): string | undefined {
+/** `ps -o lstart=` in the C locale: the launcher (launcher.sh start_time) writes the same text, whatever the user's locale. */
+export function psStart(pid: number): string | undefined {
 	try {
-		const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 }).trim();
+		const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" }, stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 }).trim();
 		return out || undefined;
 	} catch {
 		// ps exits 1 for a pid that does not exist.

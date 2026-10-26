@@ -46,12 +46,12 @@ LEASE_TMP="$LEASE_DIR/.launcher-$$.tmp"
 
 # The start time as lib/auto-update/leases.ts reads it: field 22 of
 # /proc/<pid>/stat (counted after the command name in parentheses), or
-# `ps -o lstart=` without the spaces around it.
+# `ps -o lstart=` in the C locale, without the spaces around it.
 start_time() {
 	if [ -r "/proc/$$/stat" ]; then
 		sed 's/.*) //' "/proc/$$/stat" | cut -d ' ' -f 20
 	else
-		ps -o lstart= -p "$$" 2>/dev/null | sed 's/^ *//; s/ *$//'
+		LC_ALL=C ps -o lstart= -p "$$" 2>/dev/null | sed 's/^ *//; s/ *$//'
 	fi
 }
 
