@@ -86,6 +86,8 @@ changes. Then start Pi again.
 
 To turn it off, run the same command with `disable`. `disable` puts back
 `~/.local/bin/pi` and the original `packages` entries in `settings.json`.
+It also works when the store is gone: `enable` keeps a copy of the
+original entries in `~/.pi/agent/pi-extras-update-undo.json`.
 
 ### Requirements
 
@@ -112,9 +114,16 @@ To turn it off, run the same command with `disable`. `disable` puts back
   session restarts with `pi --session <file>`. An RPC session, or a Pi that
   the launcher did not start, shows "Pi X ready: restart to use it".
 - A session does not move while the agent runs, a message is queued, a
-  compaction runs, a dialog is open, a subagent runs a turn, or the editor
-  has text. A restart also waits for shell jobs and subagents to end. A
-  reload keeps them.
+  compaction runs, a dialog or a selector (for example `/model` or
+  `/settings`) is open, a `!` command runs, a subagent runs a turn, or the
+  editor has text. A restart also waits for shell jobs and subagents to
+  end. A reload keeps them.
+- A restart starts Pi again with the options that are safe to repeat (for
+  example `--model`, `--thinking`, `--tools`, `-e` and
+  `--append-system-prompt`). It does not repeat session options and
+  messages. If Pi started with a different option (for example
+  `--api-key` or an extension flag), the session does not restart. It
+  shows "Pi X ready: restart to use it".
 - The status line shows `updating: ...` while a check installs or tests. The
   transcript shows a line before and after the session moves.
 
@@ -133,7 +142,8 @@ To turn it off, run the same command with `disable`. `disable` puts back
 
 - starts Pi from the store, with all your arguments;
 - starts Pi again after a session asks for a restart (at most 3 times in 60
-  seconds);
+  seconds). After 2 restarts that did not bring the new set, the session
+  stops and shows a notice;
 - changes `pi update` to an update check that runs in the background with a
   low priority. The command stops at once. Use `/pi-extras update` to see
   the result;

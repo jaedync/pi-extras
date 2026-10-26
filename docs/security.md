@@ -817,6 +817,8 @@ enable` in a shell. A session cannot turn it on.
   model server on `127.0.0.1` and no account. It does not see `auth.json`.
 - Each check runs as a separate process with low CPU and disk priority
   (`nice` and, on Linux, `ionice`). A command that runs too long is stopped.
+  A check that runs more than 10 minutes stops its commands and ends. The
+  next check removes the folder that it did not finish.
   `pi update` through the launcher starts a check the same way and does not
   wait for it.
 
@@ -837,12 +839,18 @@ tokens and URL passwords before it goes into the log or `state.json`.
   It uses Pi's own lock on the file. `disable` puts back the original
   entries.
 - `pi-extras.json`: the `autoUpdate` section.
+- `pi-extras-update-undo.json` in the agent directory (mode `0600`): a copy
+  of the original `packages` entries and of the old `~/.local/bin/pi`
+  link target, so that `disable` works without the store. An original
+  entry can hold a token URL, the same as `settings.json`. `disable`
+  removes the file.
 - The store (`~/.local/share/pi-extras/updates`, mode `0700`): one folder
   for each installed version, made read-only after the install, plus
   `state.json`, `update.log` (at most 256 KB), a lock file, one lease file
   for each running session (process ID, mode, session file path and the
-  folders it uses), restart requests (mode `0600`, the session file
-  path) and `pi-managed` (an empty file; the launcher reads it).
+  folders it uses), restart requests (mode `0600`: the session file path
+  and the launch options that a restart repeats) and `pi-managed` (an
+  empty file; the launcher reads it).
 
 When auto-update is off, a session creates no store and no lease. It writes
 only an error line to `pi-extras.log` in the agent directory if something
@@ -859,6 +867,13 @@ The installed folders are read-only. To remove the store by hand, first run
 - `npm install -g` of Pi writes over the launcher. Run `disable` first.
   The check does not repair the launcher, because the file is outside the
   store. It records the problem, and sessions show a warning.
+- A lease names every release folder that the process loaded since it
+  started, also after reloads. GC also keeps each folder that
+  `settings.json` names. On Linux, GC also keeps a folder that a process
+  maps, runs from or has as its working folder. On macOS, a Pi process
+  that does not load pi-extras has no such protection.
+- A restart does not repeat `--api-key`, because the restart request is a
+  file. Such a session shows a notice instead.
 - macOS is not fully tested.
 
 ## Idle GC
