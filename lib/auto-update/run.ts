@@ -36,7 +36,7 @@ export const QUIET_ENV: Readonly<Record<string, string>> = {
 	npm_config_update_notifier: "false",
 };
 
-function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+export function killGroup(pid: number | undefined, signal: NodeJS.Signals): void {
 	if (pid === undefined) return;
 	try {
 		// The command runs in its own group, so npm's and git's children stop with it.

@@ -1,10 +1,10 @@
 /** The smoke test against the repo's real development Pi, with fixture packages. No network, no real agent dir. */
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { smokeTest } from "../lib/auto-update/smoke.ts";
+import { smokeTest, SMOKE_DIR_PREFIX, sweepSmokeDirs } from "../lib/auto-update/smoke.ts";
 import { fixturePackage, piPrefix, removeTree } from "./support/auto-update-fixtures.ts";
 
 function scratch(t: test.TestContext): string {
@@ -48,4 +48,53 @@ test("a candidate without bin/pi fails at once", async (t) => {
 test("pi-extras itself passes the smoke test", async () => {
 	const result = await smokeTest({ piDir: piPrefix(join(mkdtempSync(join(tmpdir(), "au-smoke-x-")), "pi")), packages: [new URL("../", import.meta.url).pathname.replace(/\/$/, "")], timeoutMs: 55_000 });
 	assert.deepEqual(result.ok ? "ok" : result.reason, "ok");
+});
+
+const alive = (pid: number): boolean => {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+test("a smoke Pi that does not answer is stopped with all its children (its own process group)", { skip: process.platform === "win32" }, async (t) => {
+	const dir = scratch(t);
+	const pidFile = join(dir, "grandchild.pid");
+	mkdirSync(join(dir, "pi", "bin"), { recursive: true });
+	// A Pi that starts a child (an MCP server, a tool) and then never replies.
+	writeFileSync(join(dir, "pi", "bin", "pi"), `const { spawn } = require("node:child_process");
+const child = spawn("sleep", ["300"], { stdio: "ignore" });
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+setInterval(() => {}, 1000);
+`);
+	writeFileSync(join(dir, "pi", "package.json"), JSON.stringify({ type: "commonjs" }));
+	let grandchild = 0;
+	t.after(() => {
+		if (grandchild && alive(grandchild)) process.kill(grandchild, "SIGKILL");
+	});
+	const result = await smokeTest({ piDir: join(dir, "pi"), packages: [], timeoutMs: 1_500 });
+	assert.equal(result.ok, false);
+	assert.match(result.ok ? "" : result.reason, /no reply within/);
+	grandchild = Number(readFileSync(pidFile, "utf8"));
+	for (let i = 0; i < 40 && alive(grandchild); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+	assert.equal(alive(grandchild), false, "the child of the smoke Pi is gone too");
+});
+
+test("old smoke folders that a stopped cycle left are removed; new ones and other folders stay", (t) => {
+	const dir = scratch(t);
+	const now = Date.now();
+	const old = join(dir, `${SMOKE_DIR_PREFIX}old1`);
+	const young = join(dir, `${SMOKE_DIR_PREFIX}new1`);
+	const other = join(dir, "someone-else-old");
+	for (const folder of [old, young, other]) mkdirSync(join(folder, "home", "tmp"), { recursive: true });
+	writeFileSync(join(old, "home", "file"), "x");
+	const past = new Date(now - 11 * 60_000);
+	utimesSync(old, past, past);
+	utimesSync(other, past, past);
+	assert.deepEqual(sweepSmokeDirs(dir, now, 10 * 60_000), [old]);
+	assert.equal(existsSync(old), false);
+	assert.equal(existsSync(young), true);
+	assert.equal(existsSync(other), true);
 });

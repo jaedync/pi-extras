@@ -4,6 +4,7 @@
  * per machine (the updater lock), and at most one per interval however many
  * sessions ask (the `lastCheck` throttle, checked again under the lock).
  */
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tryLock } from "../file-lock.ts";
 import { isOffline } from "../offline.ts";
@@ -21,7 +22,7 @@ import { applySet, classify, entryKey, entrySource } from "./sources.ts";
 import { clearSuspect, markBad, markSuspect, readState, sameSet, updateState, type PackageRelease, type PiRelease, type UpdateSet, type UpdateState } from "./state.ts";
 import { applySwitch, piCurrentMatches, settingsMatch } from "./switch.ts";
 import { writeUndo } from "./undo.ts";
-import { SMOKE_TIMEOUT_MS, type SmokeInput, type SmokeResult } from "./smoke.ts";
+import { SMOKE_TIMEOUT_MS, sweepSmokeDirs, type SmokeInput, type SmokeResult } from "./smoke.ts";
 
 export const CYCLE_LIMIT_MS = 10 * 60_000;
 /** Past this, a lock whose holder still lives is taken over: that cycle is stuck far beyond its limit. */
@@ -285,6 +286,7 @@ async function findCulprits(deps: CycleDeps, current: UpdateSet, candidate: Upda
 
 async function lockedCycle(deps: CycleDeps, initial: UpdateState): Promise<CycleResult> {
 	const deadline = deps.now() + (deps.limitMs ?? CYCLE_LIMIT_MS);
+	for (const dir of sweepSmokeDirs(tmpdir(), deps.now(), CYCLE_LIMIT_MS)) deps.log(`removed an old smoke folder: ${dir}`);
 	repair(deps, initial);
 	const problem = recordLauncher(deps, initial);
 	const packages = readSettingsPackages(settingsFile(deps.agentDir));

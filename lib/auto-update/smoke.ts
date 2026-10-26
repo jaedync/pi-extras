@@ -13,17 +13,18 @@
  */
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { firstLine, sanitize, trackChild } from "./run.ts";
+import { firstLine, killGroup, sanitize, trackChild } from "./run.ts";
 
 export const SMOKE_TIMEOUT_MS = 90_000;
 const PROVIDER = "pi-extras-smoke";
 const MODEL = "smoke";
 const KILL_GRACE_MS = 2_000;
+const GROUP = process.platform !== "win32";
 
 export interface SmokeInput {
 	/** The Pi npm prefix: `<dir>/bin/pi`. */
@@ -102,8 +103,18 @@ function drivePi(drive: Drive): Promise<SmokeResult> {
 			PI_EXTRAS_UPDATE_SMOKE: "1", PI_EXTRAS_UPDATE_STORE: join(drive.home, "store"),
 		},
 		stdio: ["pipe", "pipe", "pipe"],
+		// Its own process group: a stop reaches the servers and tools that its extensions start, too.
+		detached: GROUP,
 	});
-	trackChild(child, false);
+	trackChild(child, GROUP);
+	const stop = (signal: NodeJS.Signals) => {
+		try {
+			if (GROUP) killGroup(child.pid, signal);
+			else child.kill(signal);
+		} catch {
+			// The group is gone or not ours any more: nothing left to stop.
+		}
+	};
 	return new Promise((resolve) => {
 		let outcome: SmokeResult | undefined;
 		let stderr = "";
@@ -115,8 +126,8 @@ function drivePi(drive: Drive): Promise<SmokeResult> {
 			outcome = result;
 			clearTimeout(timer);
 			child.stdin.end();
-			child.kill("SIGTERM");
-			setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS).unref();
+			stop("SIGTERM");
+			setTimeout(() => stop("SIGKILL"), KILL_GRACE_MS).unref();
 			setTimeout(() => resolve(result), 2 * KILL_GRACE_MS).unref();
 		};
 		const timer = setTimeout(() => finish({ ok: false, reason: `no reply within ${Math.round(drive.timeoutMs / 1000)} s` }), drive.timeoutMs);
@@ -158,8 +169,39 @@ function drivePi(drive: Drive): Promise<SmokeResult> {
 	});
 }
 
+/** Each smoke test's temp folder: `<tmpdir>/pi-extras-smoke-<random>`. */
+export const SMOKE_DIR_PREFIX = "pi-extras-smoke-";
+
+/**
+ * Removes smoke folders older than `maxAgeMs` from `dir`: a cycle that the
+ * hard limit ended had no time to remove its own. Run under the updater
+ * lock, with an age above the cycle limit, so no running test loses its
+ * folder. Returns the folders it removed.
+ */
+export function sweepSmokeDirs(dir: string, now: number, maxAgeMs: number): string[] {
+	let names: string[];
+	try {
+		names = readdirSync(dir).filter((name) => name.startsWith(SMOKE_DIR_PREFIX));
+	} catch {
+		return [];
+	}
+	const removed: string[] = [];
+	for (const name of names) {
+		const path = join(dir, name);
+		try {
+			const stat = lstatSync(path);
+			if (!stat.isDirectory() || stat.uid !== process.getuid?.() || now - stat.mtimeMs < maxAgeMs) continue;
+			rmSync(path, { recursive: true, force: true });
+			removed.push(path);
+		} catch {
+			// Gone already, or not ours to remove.
+		}
+	}
+	return removed;
+}
+
 export async function smokeTest(input: SmokeInput): Promise<SmokeResult> {
-	const root = mkdtempSync(join(tmpdir(), "pi-extras-smoke-"));
+	const root = mkdtempSync(join(tmpdir(), SMOKE_DIR_PREFIX));
 	const reply = `smoke-${randomBytes(6).toString("hex")}`;
 	let fake: { server: Server; port: number } | undefined;
 	try {
