@@ -38,16 +38,21 @@ export function renderPost(post: Post): string {
 	return lines.join("\n");
 }
 
+/** Outline levels that get their own indent; a self-thread of 200 posts would otherwise be mostly spaces. */
+export const MAX_INDENT = 6;
+
 /** An outline under a heading; `top` counts only the items at depth 0 (quote posts, not their replies). */
 function renderList(title: string, replies: readonly Reply[], total?: number, top = false): string {
 	if (!replies.length) return "";
 	const shown = top ? replies.filter((reply) => reply.depth === 0).length : replies.length;
 	const heading = total !== undefined && total > shown ? `## ${title} (${shown} of ${total})` : `## ${title} (${shown})`;
 	const body = replies.map(({ post, depth }) => {
-		const pad = "  ".repeat(Math.max(0, depth));
+		const pad = "  ".repeat(Math.min(Math.max(0, depth), MAX_INDENT));
+		// Past the last indent, the level is named, so the outline still says who answers whom.
+		const level = depth > MAX_INDENT ? `(level ${depth + 1}) ` : "";
 		const text = post.text.trim().split("\n").map((line) => `${pad}  ${line}`).join("\n");
 		const media = post.media?.length ? `\n${post.media.map((item) => `${pad}  [${item}]`).join("\n")}` : "";
-		return `${pad}- ${byline(post)}\n${text}${media}`;
+		return `${pad}- ${level}${byline(post)}\n${text}${media}`;
 	});
 	return `${heading}\n\n${body.join("\n")}`;
 }
@@ -87,15 +92,23 @@ export const PREVIEW_REPLIES = 20;
 export const PREVIEW_QUOTES = 10;
 export const PREVIEW_CHARS = 11_000;
 
-function previewAt(c: Conversation, replies: number, quotes: number): string {
+/** The quoted posts of `post`, each level with only its nearest parents (or none). */
+function nearQuotes(post: Post, keep: number): Post {
+	if (!post.quoted) return post;
+	const quoted = nearQuotes(post.quoted, keep);
+	return { ...post, quoted: { ...quoted, parents: keep > 0 ? quoted.parents?.slice(-keep) : undefined } };
+}
+
+function previewAt(c: Conversation, replies: number, quotes: number, post = nearQuotes(c.post, PREVIEW_PARENTS)): string {
 	const parents = c.parents.slice(-PREVIEW_PARENTS);
 	const top = (c.quotes ?? []).filter((quote) => quote.depth === 0);
 	const cut = c.parents.length - parents.length;
 	return renderConversation({
 		...c,
 		parents,
+		post,
 		replies: c.replies.slice(0, replies),
-		repliesTotal: c.replies.length,
+		repliesTotal: Math.max(c.repliesTotal ?? 0, c.replies.length),
 		quotes: top.slice(0, quotes),
 		quotesTotal: top.length,
 		notes: [...(cut > 0 ? [`${cut} earlier ${cut === 1 ? "post" : "posts"} in the thread are in the full result.`] : []), ...(c.notes ?? [])],
@@ -120,8 +133,17 @@ export function previewConversation(c: Conversation, max = PREVIEW_CHARS): strin
 		else replies--;
 		text = previewAt(c, replies, quotes);
 	}
-	return text;
+	if (text.length <= max) return text;
+	// The lists are empty and it is still too long: the quoted posts lose their parents, then the post its end.
+	const bare = nearQuotes(c.post, 0);
+	text = previewAt(c, 0, 0, bare);
+	const over = text.length - max;
+	if (over <= 0) return text;
+	const cut = `${bare.text.slice(0, Math.max(0, bare.text.length - over - CUT_NOTE.length))}${CUT_NOTE}`;
+	return previewAt(c, 0, 0, { ...bare, text: cut });
 }
+
+const CUT_NOTE = "… (the rest of this post is in the full result)";
 
 /** The page for one post: parents first for context, the post, then replies. */
 export function renderThread(parents: readonly Post[], post: Post, replies: readonly Reply[], note?: string, total?: number): string {

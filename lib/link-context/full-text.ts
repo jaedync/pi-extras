@@ -4,7 +4,7 @@
  * rest with its own tools instead of paging through it call by call.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { LINK_CHARS } from "./auto-message.ts";
 import { untrusted } from "./format.ts";
@@ -17,6 +17,8 @@ export const SAVE_CHARS = LINK_CHARS;
 const KEEP_MS = 7 * 86_400_000;
 /** At most this many files are kept, newest first. */
 const KEEP_FILES = 200;
+/** A temporary file this old was left by a write that never finished. */
+const TEMP_MS = 3_600_000;
 
 export function fullTextDir(): string {
 	return join(mediaHome(), "full-text");
@@ -30,7 +32,12 @@ export function fullTextName(pulled: Pulled): string {
 }
 
 function prune(dir: string, keep: string, now: number): void {
-	const files = readdirSync(dir).filter((name) => name.endsWith(".md") && name !== keep).map((name) => {
+	const names = readdirSync(dir);
+	for (const name of names.filter((item) => item.startsWith(".") && item.endsWith(".tmp"))) {
+		const path = join(dir, name);
+		if (now - statSync(path).mtimeMs > TEMP_MS) rmSync(path, { force: true });
+	}
+	const files = names.filter((name) => name.endsWith(".md") && name !== keep).map((name) => {
 		const path = join(dir, name);
 		return { path, at: statSync(path).mtimeMs };
 	}).sort((a, b) => b.at - a.at);
@@ -46,6 +53,8 @@ function prune(dir: string, keep: string, now: number): void {
  */
 export function saveFullText(pulled: Pulled, dir = fullTextDir(), now = Date.now()): string {
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
+	// mkdir does not change a folder that exists; an older or hand-made one may let others list the names.
+	chmodSync(dir, 0o700);
 	const name = fullTextName(pulled);
 	const path = join(dir, name);
 	if (!existsSync(path)) {

@@ -332,7 +332,8 @@ of quote posts and each level of quoted posts. One link uses at most 300
 requests in 90 seconds, at most 6 at a time. FxTwitter allows 1000 requests a
 minute from one address. Each request tells FxTwitter your IP address and the
 post id. A Bluesky link uses one request for the reply tree, up to 10 for the
-quote posts and up to 50 for their replies, all to `public.api.bsky.app`.
+quote posts and up to 50 for their replies (4 at a time, in at most 90
+seconds), all to `public.api.bsky.app`.
 
 A result of more than 12,000 characters is also saved to a file in
 `~/.cache/pi-extras/link-context/full-text` (mode 0600), in the same untrusted

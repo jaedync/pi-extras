@@ -24,6 +24,8 @@ export interface PullOptions {
 	readonly images: boolean;
 	/** Video: transcribe speech when there are no captions (default true). Auto-pull reads captions only. */
 	readonly speech?: boolean;
+	/** X and Bluesky: a shorter time limit for the optional requests of a whole conversation. Auto-pull sets it, so the model does not wait. */
+	readonly readMs?: number;
 }
 
 export interface LinkConfig {
@@ -80,4 +82,6 @@ export interface Pulled {
 	readonly videoUrl?: string;
 	/** The video had no captions and speech was off, so a default call would give more. */
 	readonly speechSkipped?: boolean;
+	/** The `readMs` time limit stopped the read, so a default call would give more. */
+	readonly timeLimited?: boolean;
 }

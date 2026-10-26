@@ -51,11 +51,11 @@ test("a pull_link row with a preview names the preview and the saved file, not p
 	const h = harness();
 	const url = "https://x.com/a/status/1";
 	const pull = row(toolRenderers(h.kit, linkSpec) as never, { url, quotes: 5 });
-	const details = { platform: "x", title: "Thread", url, chars: 349_246, next: 0, saved: "/tmp/x.md" };
+	const details = { platform: "x", title: "Thread", url, chars: 349_246, next: 0, saved: "/tmp/x.md", previewed: true };
 	pull.update({ isPartial: false, result: text(wrapped(url, "x"), details) });
 	assert.equal(strip(pull.lines(110))[0], strip([band("pull_link x.com/a/status/1, 5 quotes, X, preview of 349k chars, whole text saved", "", 110)])[0]);
 	const paged = row(toolRenderers(h.kit, linkSpec) as never, { url, offset: 0 });
-	paged.update({ isPartial: false, result: text(wrapped(url, "x"), { ...details, next: 40_000 }) });
+	paged.update({ isPartial: false, result: text(wrapped(url, "x"), { ...details, next: 40_000, previewed: undefined }) });
 	assert.match(strip(paged.lines(110))[0]!, /page 1 of 9/, "offset=0 pages the whole text");
 });
 

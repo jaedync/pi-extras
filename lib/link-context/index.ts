@@ -9,7 +9,7 @@
 import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { createReader, DEFAULT_COMMENTS, MAX_AT, type LinkReader, type Params, type ReaderOptions } from "./reader.ts";
+import { ALL_QUOTES, ALL_REPLIES, createReader, DEFAULT_COMMENTS, MAX_AT, type LinkReader, type Params, type ReaderOptions } from "./reader.ts";
 import { registerAutoPull } from "./auto.ts";
 import { registerHostGuard } from "./host-guard.ts";
 import { clean, page, PAGE_CHARS, safe, savedNote, TOOL_NAME, untrusted } from "./format.ts";
@@ -45,8 +45,8 @@ const parameters = Type.Object({
 	frames: Type.Optional(Type.Integer({ minimum: 0, maximum: 48, description: "Video: number of frames to sample as images (0 = none, the default)" })),
 	range: Type.Optional(Type.String({ maxLength: 40, description: "Video: time range like '1:00-2:30', '90-', or '-0:45'" })),
 	at: Type.Optional(Type.Array(Type.String({ maxLength: 20 }), { minItems: 1, maxItems: MAX_AT, description: "Video: frames at exactly these times, like ['4:05', '1:02:30', '95']. Returns just those frames unless transcript is true. Replaces frames when both are given" })),
-	comments: Type.Optional(Type.Integer({ minimum: 0, maximum: 200, description: `Replies or comments to include. Default all for X and Bluesky, ${DEFAULT_COMMENTS} for other posts, 0 for videos` })),
-	quotes: Type.Optional(Type.Integer({ minimum: 0, maximum: 1000, description: "X and Bluesky: posts that quote the post to include, most liked first. Default all; 0 for none" })),
+	comments: Type.Optional(Type.Integer({ minimum: 0, maximum: ALL_REPLIES, description: `Replies or comments to include. Default all for X and Bluesky, ${DEFAULT_COMMENTS} for other posts, 0 for videos` })),
+	quotes: Type.Optional(Type.Integer({ minimum: 0, maximum: ALL_QUOTES, description: "X and Bluesky: posts that quote the post to include, most liked first. Default all; 0 for none" })),
 	images: Type.Optional(Type.Boolean({ description: "Attach photos, image links and the video thumbnail as images (default true, up to 6)" })),
 	offset: Type.Optional(Type.Integer({ minimum: 0, description: "Character offset for the next page of a long result" })),
 }, { additionalProperties: false });
@@ -56,13 +56,13 @@ export interface LinkToolOptions extends ReaderOptions {
 	readonly reader?: LinkReader;
 }
 
-function compose(pulled: Pulled, params: Params): { content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]; next?: number } {
+function compose(pulled: Pulled, params: Params): { content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[]; next?: number; previewed?: boolean } {
 	const images = params.offset ? [] : [...(pulled.images ?? [])];
-	// A first call for a result past one page gets the preview and the file; an offset pages the whole text as before.
-	if (params.offset === undefined && pulled.saved && pulled.markdown.length > PAGE_CHARS) {
-		const shown = page(pulled.preview ?? pulled.markdown, 0);
+	// A first call for a conversation past one page gets its preview and the file; an offset pages the whole text as before.
+	if (params.offset === undefined && pulled.saved && pulled.preview && pulled.markdown.length > PAGE_CHARS) {
+		const shown = page(pulled.preview, 0);
 		const note = savedNote(pulled.markdown.length, pulled.saved, `call ${TOOL_NAME} again with the same arguments`);
-		return { content: [{ type: "text", text: untrusted(pulled.url, `${shown.text}\n\n${note}`) }, ...images], next: 0 };
+		return { content: [{ type: "text", text: untrusted(pulled.url, `${shown.text}\n\n${note}`) }, ...images], next: 0, previewed: true };
 	}
 	const offset = params.offset ?? 0;
 	const shown = page(pulled.markdown, offset);
@@ -84,10 +84,10 @@ export function registerLinkTool(pi: ExtensionAPI, options: LinkToolOptions = {}
 			const started = performance.now();
 			const progress = (text: string) => onUpdate?.({ content: [{ type: "text", text: `${text}…` }], details: { progress: text } });
 			const { pulled, cached } = await reader.read(params, signal, progress);
-			const { content, next } = compose(pulled, params);
+			const { content, next, previewed } = compose(pulled, params);
 			return {
 				content,
-				details: { platform: pulled.platform, title: pulled.title, url: pulled.url, chars: pulled.markdown.length, images: offset0(params) ? (pulled.images?.length ?? 0) : 0, next, cached, files: pulled.files, ...(pulled.saved ? { saved: pulled.saved } : {}), durationMs: Math.round(performance.now() - started), preview: summaryOf(pulled) },
+				details: { platform: pulled.platform, title: pulled.title, url: pulled.url, chars: pulled.markdown.length, images: offset0(params) ? (pulled.images?.length ?? 0) : 0, next, cached, files: pulled.files, ...(pulled.saved ? { saved: pulled.saved } : {}), ...(previewed ? { previewed } : {}), durationMs: Math.round(performance.now() - started), preview: summaryOf(pulled) },
 			};
 		},
 		renderCall: (args: Params, theme: Theme) => renderCall(args, theme),

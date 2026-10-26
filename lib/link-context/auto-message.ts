@@ -103,14 +103,15 @@ const quoted = (url: string) => JSON.stringify(url);
 
 function linkBlocks(url: string, pulled: Pulled, room: number): { blocks: Block[]; facts: LinkFacts } {
 	const long = pulled.markdown.length > LINK_CHARS;
-	// A long result with a file shows its preview and the path; without a file, the first part and an offset.
-	const saved = long ? pulled.saved : undefined;
-	const shown = page(saved ? (pulled.preview ?? pulled.markdown) : pulled.markdown, 0, LINK_CHARS);
+	// A long conversation with a file shows its preview and the path; any other long result, its first part and the offset of the rest.
+	const saved = long && pulled.preview ? pulled.saved : undefined;
+	const shown = page(saved ? pulled.preview! : pulled.markdown, 0, LINK_CHARS);
 	const all = pulled.images ?? [];
 	const images = all.slice(0, room);
 	const notes: string[] = [];
 	if (saved) notes.push(savedNote(pulled.markdown.length, saved, `call ${TOOL_NAME} with url ${quoted(url)}`));
-	else if (shown.next !== undefined) notes.push(`[Truncated: ${pulled.markdown.length - shown.next} more characters. Call ${TOOL_NAME} with url ${quoted(url)} and offset=${shown.next} for the rest.]`);
+	else if (shown.next !== undefined) notes.push(`[Truncated: ${pulled.markdown.length - shown.next} more characters. Call ${TOOL_NAME} with url ${quoted(url)} and offset=${shown.next} for the rest.${pulled.saved ? ` The whole text is saved at ${pulled.saved}.` : ""}]`);
+	if (pulled.timeLimited) notes.push(`[Auto-pull stopped reading this conversation at its time limit. Call ${TOOL_NAME} with url ${quoted(url)} to read the rest of it (up to 90 seconds).]`);
 	const dropped = all.length - images.length;
 	if (dropped > 0) notes.push(`[${plural(dropped, "more image")} not attached. Call ${TOOL_NAME} with url ${quoted(url)} to see ${dropped === 1 ? "it" : "them"}.]`);
 	const text = untrusted(pulled.url, [shown.text, ...notes].join("\n\n"));

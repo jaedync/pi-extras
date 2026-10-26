@@ -22,6 +22,10 @@ const WHOLE_CONVERSATIONS = new Set(["x", "bluesky"]);
 export const MAX_AT = 12;
 /** A video read with captions only differs from a default call's result when it has no captions, so it is kept under its own key. */
 const CAPTIONS_ONLY = "#captions-only";
+/** A conversation that auto-pull's time limit cut short is kept under its own key, as a captions-only video is. */
+const TIME_LIMITED = "#time-limited";
+/** Auto-pull's time for the optional requests of an X or Bluesky conversation: under its wait for all links (auto.ts WAIT_MS, 15 s). */
+export const AUTO_READ_MS = 10_000;
 /** Shared reads a call waits for before it reads the link itself. */
 const SHARED_ROUNDS = 2;
 
@@ -50,7 +54,7 @@ export function resolveOptions(params: Params, isVideo: boolean, whole = false):
 	const at = parseTimes(params.at);
 	return {
 		comments: params.comments ?? (isVideo || at ? 0 : whole ? ALL_REPLIES : DEFAULT_COMMENTS),
-		quotes: params.quotes ?? (whole ? ALL_QUOTES : 0),
+		quotes: params.quotes ?? (whole && !isVideo && !at ? ALL_QUOTES : 0),
 		transcript: params.transcript ?? (isVideo && !at),
 		frames: params.frames ?? 0,
 		range: parseRange(params.range),
@@ -90,6 +94,8 @@ export interface ReaderOptions {
 	readonly now?: () => number;
 	/** Folder for the whole text of long results; the default is in the link-context cache. */
 	readonly saveDir?: string;
+	/** Auto-pull's time for a conversation's optional requests (default AUTO_READ_MS); tests shorten it. */
+	readonly autoReadMs?: number;
 }
 
 export interface LinkReader {
@@ -146,12 +152,17 @@ export function createReader(options: ReaderOptions = {}): LinkReader {
 			return pulled;
 		}
 	};
-	const context = (url: URL, params: Params, signal: AbortSignal | undefined, progress: (text: string) => void, speech = true): AdapterContext => {
+	/** `plain` is auto-pull's read: captions only for a video, the shorter time limit for a conversation. */
+	const context = (url: URL, params: Params, signal: AbortSignal | undefined, progress: (text: string) => void, plain = false): AdapterContext => {
 		const kind = classify(url).kind;
 		const isVideo = kind === "video";
-		const resolved = resolveOptions(params, isVideo, WHOLE_CONVERSATIONS.has(kind));
-		return { signal, fetcher: options.fetcher, config: (options.config ?? loadConfig)(), options: isVideo && !speech ? { ...resolved, speech: false } : resolved, progress };
+		const whole = WHOLE_CONVERSATIONS.has(kind);
+		const resolved = resolveOptions(params, isVideo, whole);
+		const limited = plain ? { ...resolved, ...(isVideo ? { speech: false } : {}), ...(whole ? { readMs: options.autoReadMs ?? AUTO_READ_MS } : {}) } : resolved;
+		return { signal, fetcher: options.fetcher, config: (options.config ?? loadConfig)(), options: limited, progress };
 	};
+	/** A plain read that a default call would give more of is kept under its own key, so the next pull_link call reads the link in full. */
+	const plainKey = (key: string, pulled: Pulled) => (pulled.speechSkipped ? key + CAPTIONS_ONLY : pulled.timeLimited ? key + TIME_LIMITED : key);
 	return {
 		async read(params, signal, progress) {
 			const key = cacheKey(params);
@@ -162,12 +173,12 @@ export function createReader(options: ReaderOptions = {}): LinkReader {
 				const pending = entries.get(key)?.pending;
 				if (!pending) break;
 				progress("waiting for the read of this link that is already running");
-				// A failed or captions-only shared read does not answer this call; it reads the link itself.
+				// A failed, captions-only or time-limited shared read does not answer this call; it reads the link itself.
 				const shared = await waitFor(pending, signal).catch(() => {
 					signal?.throwIfAborted();
 					return undefined;
 				});
-				if (shared && !shared.speechSkipped) return { pulled: shared, cached: true };
+				if (shared && !shared.speechSkipped && !shared.timeLimited) return { pulled: shared, cached: true };
 			}
 			const url = parseUrl(params.url);
 			const ctx = context(url, params, signal, progress);
@@ -179,13 +190,13 @@ export function createReader(options: ReaderOptions = {}): LinkReader {
 		},
 		async readPlain(raw, signal) {
 			const key = cacheKey({ url: raw });
-			const kept = recall(key) ?? recall(key + CAPTIONS_ONLY);
+			const kept = recall(key) ?? recall(key + CAPTIONS_ONLY) ?? recall(key + TIME_LIMITED);
 			if (kept) return { pulled: kept, cached: true };
 			const pending = entries.get(key)?.pending;
 			if (pending) return { pulled: await waitFor(pending, signal), cached: true };
 			const url = parseUrl(raw);
-			const ctx = context(url, { url: raw }, signal, () => {}, false);
-			const pulled = await track(key, pull(url.href, ctx, options.deps).then(keepFull), (result) => (signal.aborted ? undefined : result.speechSkipped ? key + CAPTIONS_ONLY : key));
+			const ctx = context(url, { url: raw }, signal, () => {}, true);
+			const pulled = await track(key, pull(url.href, ctx, options.deps).then(keepFull), (result) => (signal.aborted ? undefined : plainKey(key, result)));
 			signal.throwIfAborted();
 			return { pulled, cached: false };
 		},

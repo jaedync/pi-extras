@@ -25,7 +25,7 @@ interface LinkDetails {
 	readonly chars?: number;
 	readonly images?: number;
 	readonly next?: number;
-	readonly saved?: string;
+	readonly previewed?: boolean;
 	readonly cached?: boolean;
 	readonly durationMs?: number;
 	readonly preview?: readonly string[];
@@ -71,9 +71,8 @@ function factSegs(view: View): Seg[] {
 	if (d.images) facts.push(plural(d.images, "image"));
 	if (d.next !== undefined && d.chars) {
 		const offset = numberArg(view.context.args, "offset");
-		// Without an offset, a saved result came as its preview; next is 0 so that the model pages from the start.
-		const preview = offset === undefined && typeof d.saved === "string" && !!d.saved;
-		facts.push(preview ? previewFact(d.chars) : `page ${Math.floor((offset ?? 0) / PAGE_CHARS) + 1} of ${Math.ceil(d.chars / PAGE_CHARS)}`);
+		// A conversation preview has next 0, so that the model pages the whole text from its start.
+		facts.push(d.previewed === true ? previewFact(d.chars) : `page ${Math.floor((offset ?? 0) / PAGE_CHARS) + 1} of ${Math.ceil(d.chars / PAGE_CHARS)}`);
 	}
 	if (d.cached) facts.push("cached");
 	return facts.map((fact) => mutedSeg(`${SEP}${flat(fact)}`));

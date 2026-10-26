@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { pullX } from "../lib/link-context/adapters/x.ts";
+import { MAX_INDENT, PREVIEW_CHARS, previewConversation, renderConversation, type Post } from "../lib/link-context/post.ts";
 import { olderFirst, parentChain, X_LIMITS, type XLimits } from "../lib/link-context/adapters/x-conversation.ts";
 import { context, fakeFetch, json, type Route } from "./support/link-fetch.ts";
 
@@ -54,7 +55,8 @@ test("X: quote posts short of the reported count also come from the top ranking,
 		json(/status\/300\/quotes\?count=100$/, { code: 200, results: [tweet("301", "a", { likes: 1 }), tweet("302", "b")], cursor: { bottom: "dry" } }),
 		json(/status\/300\/quotes\?count=100&cursor=dry/, { code: 200, results: [], cursor: { bottom: "dry2" } }),
 		json(/\/2\/search\?q=quoted_tweet_id%3A300&feed=top&count=100$/, { code: 200, results: [tweet("302", "b"), tweet("303", "c", { likes: 9 })], cursor: { bottom: "t1" } }),
-		json(/\/2\/search\?.*cursor=t1/, { code: 200, results: [tweet("303", "c")], cursor: { bottom: "t2" } }),
+		// A search result that quotes some other post is not a quote of this one.
+		json(/\/2\/search\?.*cursor=t1/, { code: 200, results: [tweet("303", "c"), tweet("304", "z", { quote: tweet("999", "other") })], cursor: { bottom: "t2" } }),
 	);
 	const pulled = await pullX("300", context(fetcher, whole));
 	assert.match(pulled.markdown, /## Quote posts \(3 of 5\)\n\n- \*\*c\*\*[\s\S]*- \*\*a\*\*[\s\S]*- \*\*b\*\*/);
@@ -132,4 +134,89 @@ test("X: when v2 fails, the v1 post and its parents come back with a note", asyn
 	// v2 has no post and v1 has none either: the error names the likely reasons.
 	const gone = fakeFetch(at("conversation/9", { code: 404, status: null }, 404), json("/status/9", { code: 404, message: "NOT_FOUND" }, 404));
 	await assert.rejects(pullX("9", context(gone.fetcher, whole)), /no post with that id/);
+});
+
+test("X: an abort between calls throws; it is not read as the time limit", async () => {
+	const controller = new AbortController();
+	const focal = tweet("1", "op", { replies: 2 });
+	const { fetcher } = fakeFetch(at("conversation/1", conversation(focal, [reply("2", "r", "1", { replies: 1 })])), at("conversation/2", conversation(reply("2", "r", "1"), [reply("3", "s", "2", { replies: 1 })])));
+	const ctx = { ...context(fetcher, whole), signal: controller.signal, progress: () => controller.abort(new Error("stopped by the user")) };
+	await assert.rejects(pullX("1", ctx), /stopped by the user/);
+});
+
+test("X: all the readers together keep at most `parallel` requests in flight", async () => {
+	const focal = tweet("1", "op", { replies: 6, quotes: 3 });
+	const replies = [2, 3, 4, 5, 6, 7].map((n) => reply(String(n), `r${n}`, "1", { replies: 1, likes: n }));
+	const quotes = [21, 22, 23].map((n) => tweet(String(n), `q${n}`, { replies: 2, quote: tweet("1", "op") }));
+	const routes = fakeFetch(
+		at("conversation/1", conversation(focal, replies)),
+		at("status/1/quotes", { code: 200, results: quotes, cursor: {} }),
+		json(/conversation\/2\d$/, conversation(tweet("29", "x"), [reply("31", "a", "21", { replies: 1 }), reply("32", "b", "21", { replies: 1 })])),
+		json(/conversation\/\d+$/, conversation(tweet("9", "x"), [])),
+	);
+	let active = 0;
+	let most = 0;
+	const fetcher = (async (input: string | URL | Request, init: RequestInit = {}) => {
+		active++;
+		most = Math.max(most, active);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		active--;
+		return routes.fetcher(input, init);
+	}) as typeof fetch;
+	const pulled = await pullX("1", context(fetcher, whole), limits({ parallel: 2 }));
+	assert.match(pulled.markdown, /## Quote posts \(3\)/);
+	assert.ok(routes.calls.length > 8, `enough requests to test the limit: ${routes.calls.length}`);
+	assert.equal(most, 2);
+});
+
+test("X: replies that answer each other or themselves hang under the post, and the counts agree", async () => {
+	const focal = tweet("1", "op", { replies: 4 });
+	const { fetcher } = fakeFetch(at("conversation/1", conversation(focal, [reply("2", "a", "3"), reply("3", "b", "2"), reply("4", "c", "4"), reply("5", "d", "1")])));
+	const pulled = await pullX("1", context(fetcher, whole));
+	assert.match(pulled.markdown, /## Replies \(4\)/);
+	for (const id of ["2", "3", "4", "5"]) assert.match(pulled.markdown, new RegExp(`^- \\*\\*[a-d]\\*\\*[^\\n]*\\n  text of ${id}$`, "m"));
+	assert.doesNotMatch(pulled.markdown, /came back than the comments limit shows|nested repl/);
+});
+
+test("X: auto-pull's shorter time limit marks the result, so a pull_link call reads the rest", async () => {
+	const focal = tweet("1", "op", { replies: 1 });
+	const first = fakeFetch(at("conversation/1", conversation(focal, [reply("2", "r", "1", { replies: 3 })])));
+	const slow = (async (input: string | URL | Request, init: RequestInit = {}) => {
+		if (String(input).endsWith("/conversation/1")) return first.fetcher(input, init);
+		return new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true }));
+	}) as typeof fetch;
+	const auto = await pullX("1", context(slow, { ...whole, readMs: 30 }));
+	assert.equal(auto.timeLimited, true);
+	assert.match(auto.markdown, /Reading stopped at the time limit of 0\.03 s/);
+	const own = await pullX("1", context(slow, whole), limits({ ms: 30 }));
+	assert.equal(own.timeLimited, undefined, "the tool's own limit is the most it reads, so nothing more is to come");
+});
+
+test("X: with no replies and no quote posts asked, the v1 post comes with no note", async () => {
+	const { fetcher, calls } = fakeFetch(json("/status/3", { tweet: { text: "third", author: { name: "Cee", screen_name: "cee" }, replying_to_status: "2" } }));
+	const pulled = await pullX("3", context(fetcher, { comments: 0, quotes: 0 }));
+	assert.match(pulled.markdown, /^\*\*Cee\*\*[\s\S]*third$/);
+	assert.equal(calls.length, 1);
+});
+
+const post = (text: string, extra: Partial<Post> = {}): Post => ({ author: "a", text, ...extra });
+
+test("posts: a deep outline stops indenting and names the level", () => {
+	const replies = Array.from({ length: MAX_INDENT + 3 }, (_, depth) => ({ post: post(`at ${depth}`), depth }));
+	const md = renderConversation({ parents: [], post: post("root"), replies });
+	const pad = "  ".repeat(MAX_INDENT);
+	assert.ok(md.includes(`\n${pad}- **a**\n${pad}  at ${MAX_INDENT}`));
+	assert.ok(md.includes(`\n${pad}- (level ${MAX_INDENT + 3}) **a**\n${pad}  at ${MAX_INDENT + 2}`));
+});
+
+test("posts: a preview fits its limit when the quoted posts carry long threads, and keeps its notes", () => {
+	const thread = Array.from({ length: 60 }, (_, n) => post(`parent ${n} ${"w".repeat(500)}`));
+	const conversation = { parents: [], post: post("the post", { quoted: post("quoted", { parents: thread, quoted: post("deeper", { parents: thread }) }) }), replies: [{ post: post("one reply"), depth: 0 }], notes: ["the gap note"] };
+	const preview = previewConversation(conversation);
+	assert.ok(preview.length <= PREVIEW_CHARS, `preview ${preview.length} chars`);
+	assert.match(preview, /parent 59/);
+	assert.doesNotMatch(preview, /parent 56 /);
+	assert.match(preview, /_the gap note_$/);
+	const huge = previewConversation({ ...conversation, post: post("y".repeat(30_000)) });
+	assert.ok(huge.length <= PREVIEW_CHARS && huge.includes("… (the rest of this post is in the full result)") && huge.endsWith("_the gap note_"));
 });

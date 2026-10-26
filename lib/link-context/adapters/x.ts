@@ -15,7 +15,6 @@ import { Calls, collectQuoteChain, collectQuoteReplies, collectQuotes, collectRe
 
 const API = "https://api.fxtwitter.com/status/";
 const MAX_PARENTS = 8;
-const NO_REPLIES = "Replies are not available without an X login; only the parent chain is shown.";
 
 interface FxVariant { url?: string; bitrate?: number; content_type?: string }
 interface FxMedia { type?: string; url?: string; thumbnail_url?: string; duration?: number; altText?: string; variants?: FxVariant[] }
@@ -205,11 +204,13 @@ async function pullWhole(first: XThread, calls: Calls, ctx: AdapterContext, limi
 		summary: threadSummary(post, replies, status.replies),
 		photos: [...photoUrls(status), ...(quoted ? photoUrls(quoted) : [])],
 		videoUrl: video ? videoFile(video) : undefined,
+		// Only auto-pull sets `readMs`; its reader keeps such a result apart, so a pull_link call reads the rest.
+		...(ctx.options.readMs !== undefined && calls.stop.reason === "time" ? { timeLimited: true } : {}),
 	};
 }
 
 /** The v1 API: the post with its quote, and its parents one request each. */
-async function pullSingle(id: string, ctx: AdapterContext, note = NO_REPLIES): Promise<Pulled> {
+async function pullSingle(id: string, ctx: AdapterContext, note?: string): Promise<Pulled> {
 	const agents = agentsFor(ctx.config, "x", [PLAIN_UA]);
 	const load = async (status: string) => cleanTweet((await getJson<{ tweet?: unknown }>(`${API}${status}`, { signal: ctx.signal, fetcher: ctx.fetcher, agents, accept: (r) => r.status !== 429 && r.status < 500 })).tweet);
 	const tweet = await load(id);
@@ -238,14 +239,17 @@ async function pullSingle(id: string, ctx: AdapterContext, note = NO_REPLIES): P
 
 export async function pullX(id: string, ctx: AdapterContext, limits: XLimits = X_LIMITS): Promise<Pulled> {
 	if (ctx.options.comments <= 0 && (ctx.options.quotes ?? 0) <= 0) return pullSingle(id, ctx);
-	const calls = new Calls(ctx, limits);
+	const used = ctx.options.readMs !== undefined ? { ...limits, ms: Math.min(limits.ms, ctx.options.readMs) } : limits;
+	const calls = new Calls(ctx, used);
 	let failure = "FxTwitter gave no post";
+	let first: XThread | undefined;
+	// Only the first call falls back to v1; an error after it is a bug and must show as one.
 	try {
-		const first = await readConversation(calls, id, undefined, true);
-		if (first) return await pullWhole(first, calls, ctx, limits);
+		first = await readConversation(calls, id, undefined, true);
 	} catch (error) {
 		ctx.signal?.throwIfAborted();
 		failure = (error as Error).message;
 	}
+	if (first) return pullWhole(first, calls, ctx, used);
 	return pullSingle(id, ctx, `Replies and quote posts could not be read (${failure}); only the posts above are shown.`);
 }

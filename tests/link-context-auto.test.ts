@@ -74,6 +74,21 @@ test("a message: a long result with a file shows its preview and the path, not a
 	assert.match(short.content[1]?.type === "text" ? short.content[1].text : "", /\nall of it\n<\/untrusted-content>$/);
 });
 
+test("a message: a long result with a file but no preview gives its first part, the offset of the rest and the path", () => {
+	const long = "word ".repeat(5000);
+	const message = autoMessage([{ url: "https://e.test/a", state: "read", pulled: pulled("https://e.test/a", { markdown: long, saved: "/tmp/full/web-1.md" }) }]);
+	const text = message.content.filter((block) => block.type === "text").map((block) => block.text)[1] ?? "";
+	assert.match(text, /\[Truncated: \d+ more characters\. Call pull_link with url "https:\/\/e\.test\/a" and offset=\d+ for the rest\. The whole text is saved at \/tmp\/full\/web-1\.md\.\]/);
+	assert.doesNotMatch(text, /offset=0/);
+	assert.equal(message.details.links[0]?.saved, undefined, "the row says first 12k, not a preview");
+});
+
+test("a message: a conversation cut short by auto-pull's time limit says that pull_link reads the rest", () => {
+	const message = autoMessage([{ url: "https://x.com/a/status/1", state: "read", pulled: pulled("https://x.com/a/status/1", { markdown: "the post", timeLimited: true }) }]);
+	const text = message.content.filter((block) => block.type === "text").map((block) => block.text)[1] ?? "";
+	assert.ok(text.includes('[Auto-pull stopped reading this conversation at its time limit. Call pull_link with url "https://x.com/a/status/1" to read the rest of it (up to 90 seconds).]'));
+});
+
 test("a message: at most 4 images in all, in link order, each after its link's text", () => {
 	const results: LinkResult[] = [
 		{ url: "https://e.test/1", state: "read", pulled: pulled("https://e.test/1", { images: [image("a1"), image("a2"), image("a3")] }) },

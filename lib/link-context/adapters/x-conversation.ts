@@ -91,7 +91,11 @@ export function parentChain(thread: readonly V2Tweet[], post: V2Tweet, max: numb
 
 interface Stop { reason?: "requests" | "time" }
 
-/** The calls of one pull: a shared request count, a shared time limit, the caller's abort. */
+/**
+ * The calls of one pull: a shared request count, a shared time limit, at
+ * most `parallel` requests in flight across all the readers, and the
+ * caller's abort, which always throws and is never counted as a stop.
+ */
 export class Calls {
 	used = 0;
 	failed = 0;
@@ -99,6 +103,8 @@ export class Calls {
 	readonly limits: XLimits;
 	private readonly ctx: AdapterContext;
 	private readonly optional: AbortSignal;
+	private active = 0;
+	private readonly queue: (() => void)[] = [];
 
 	constructor(ctx: AdapterContext, limits: XLimits) {
 		this.ctx = ctx;
@@ -106,20 +112,54 @@ export class Calls {
 		this.optional = deadline(ctx.signal, limits.ms);
 	}
 
+	/** Whether optional calls may still go out; the first reason they may not is recorded. */
+	private open(): boolean {
+		if (this.optional.aborted) this.stop.reason ??= "time";
+		if (this.used >= this.limits.requests) this.stop.reason ??= "requests";
+		return !this.stop.reason;
+	}
+
 	/** Requests left; at none, the stop is recorded. */
 	room(): number {
-		if (this.optional.aborted) this.stop.reason ??= "time";
-		const left = this.stop.reason ? 0 : Math.max(0, this.limits.requests - this.used);
-		if (!left) this.stop.reason ??= "requests";
-		return left;
+		this.ctx.signal?.throwIfAborted();
+		return this.open() ? this.limits.requests - this.used : 0;
+	}
+
+	private async slot(): Promise<void> {
+		if (this.active < this.limits.parallel) {
+			this.active++;
+			return;
+		}
+		await new Promise<void>((resolve) => this.queue.push(resolve));
+	}
+
+	/** Hands the slot to the next waiter, so `active` counts the requests in flight. */
+	private release(): void {
+		const next = this.queue.shift();
+		if (next) next();
+		else this.active--;
 	}
 
 	/** One GET; undefined when the cap or time ran out or the call failed. 404 is an empty answer, not a failure. */
 	async get(path: string, required = false): Promise<Record<string, unknown> | undefined> {
-		if (!required && this.optional.aborted) this.stop.reason ??= "time";
-		if (this.used >= this.limits.requests) this.stop.reason ??= "requests";
-		if (!required && this.stop.reason) return undefined;
+		this.ctx.signal?.throwIfAborted();
+		if (!required && !this.open()) return undefined;
+		// Counted before the wait for a slot, so `room()` never offers a request that is already queued.
 		this.used++;
+		await this.slot();
+		try {
+			return await this.send(path, required);
+		} finally {
+			this.release();
+		}
+	}
+
+	private async send(path: string, required: boolean): Promise<Record<string, unknown> | undefined> {
+		this.ctx.signal?.throwIfAborted();
+		if (!required && this.optional.aborted) {
+			this.stop.reason ??= "time";
+			return undefined;
+		}
 		try {
 			const body = await getJson<unknown>(`${API}${path}`, {
 				signal: required ? this.ctx.signal : this.optional,
@@ -200,11 +240,30 @@ export async function collectReplies(calls: Calls, focal: XThread, limit: number
 		});
 		progress(`reading X replies (${listed.size} so far)`);
 	}
-	const nodes = new Map([...listed].map(([id, entry]) => [id, { tweet: entry.tweet, parent: parentIn(entry) }]));
+	const nodes = rooted(new Map([...listed].map(([id, entry]) => [id, { tweet: entry.tweet, parent: parentIn(entry) }])), root);
 	const children = new Map<string, number>();
 	for (const node of nodes.values()) children.set(node.parent, (children.get(node.parent) ?? 0) + 1);
 	const unread = [...nodes.values()].filter(({ tweet }) => !read.has(tweet.id) && count(tweet.replies) > (children.get(tweet.id) ?? 0)).length;
 	return { nodes, unread };
+}
+
+/**
+ * The nodes with every chain of parents ending at `root`: a reply whose
+ * chain loops (bad data: two posts that answer each other) hangs under the
+ * post itself, so the outline shows it and the counts stay true.
+ */
+function rooted(nodes: ReadonlyMap<string, ReplyNode>, root: string): Map<string, ReplyNode> {
+	const out = new Map(nodes);
+	for (const [id, node] of nodes) {
+		const seen = new Set([id]);
+		let parent = node.parent;
+		while (parent !== root && !seen.has(parent) && nodes.has(parent)) {
+			seen.add(parent);
+			parent = nodes.get(parent)!.parent;
+		}
+		if (parent !== root) out.set(id, { ...node, parent: root });
+	}
+	return out;
 }
 
 /**
@@ -213,14 +272,19 @@ export async function collectReplies(calls: Calls, focal: XThread, limit: number
  */
 export function orderReplies(tree: ReplyTree, root: V2Tweet, limit: number): { tweet: V2Tweet; depth: number }[] {
 	const byParent = new Map<string, V2Tweet[]>();
-	for (const node of tree.nodes.values()) byParent.set(node.parent, [...(byParent.get(node.parent) ?? []), node.tweet]);
+	for (const node of tree.nodes.values()) {
+		const siblings = byParent.get(node.parent);
+		if (siblings) siblings.push(node.tweet);
+		else byParent.set(node.parent, [node.tweet]);
+	}
 	const author = handle(root);
 	const rank = (a: V2Tweet, b: V2Tweet) => Number(handle(b) === author) - Number(handle(a) === author) || count(b.likes) - count(a.likes) || olderFirst(a.id, b.id);
 	const out: { tweet: V2Tweet; depth: number }[] = [];
 	const seen = new Set<string>();
 	const walk = (id: string, depth: number) => {
 		for (const tweet of [...(byParent.get(id) ?? [])].sort(rank)) {
-			if (out.length >= limit || seen.has(tweet.id)) return;
+			if (out.length >= limit) return;
+			if (seen.has(tweet.id)) continue;
 			seen.add(tweet.id);
 			out.push({ tweet, depth });
 			walk(tweet.id, depth + 1);
@@ -235,7 +299,8 @@ async function pageQuotes(calls: Calls, id: string, path: (cursor: string | unde
 	let cursor: string | undefined;
 	for (let page = 0; page < pages && found.size < limit; page++) {
 		const body = await calls.get(path(cursor));
-		const fresh = asTweets(body?.results).filter((tweet) => tweet.id !== id && !found.has(tweet.id));
+		// A result that quotes some other post is a search miss, not a quote of this one.
+		const fresh = asTweets(body?.results).filter((tweet) => tweet.id !== id && !found.has(tweet.id) && (asTweet(tweet.quote)?.id ?? id) === id);
 		// X keeps giving a cursor after its search runs dry, with empty pages; the first page with nothing new ends it.
 		if (!fresh.length) break;
 		for (const tweet of fresh) found.set(tweet.id, asTweet(tweet.quote)?.id === id ? { ...tweet, quote: undefined } : tweet);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -28,6 +28,19 @@ test("the whole text is saved once per result, wrapped, owner-only; old files go
 	assert.notEqual(fullTextName(result("other")), fullTextName(result("body")));
 	assert.match(fullTextName({ ...result("b"), platform: "../../etc" }), /^etc-[0-9a-f]{16}\.md$|^-etc-[0-9a-f]{16}\.md$/);
 	assert.equal(SAVE_CHARS, LINK_CHARS, "the file exists whenever auto-pull shows less than the whole");
+	rmSync(dir, { recursive: true, force: true });
+});
+
+test("a wider folder becomes owner-only; an old temporary file goes, a new one stays", () => {
+	const dir = mkdtempSync(join(tmpdir(), "full-text-"));
+	chmodSync(dir, 0o755);
+	const now = Date.now();
+	writeFileSync(join(dir, ".old.md.1.tmp"), "half");
+	utimesSync(join(dir, ".old.md.1.tmp"), (now - 2 * 3_600_000) / 1000, (now - 2 * 3_600_000) / 1000);
+	writeFileSync(join(dir, ".new.md.2.tmp"), "being written");
+	const path = saveFullText(result("body"), dir, now);
+	assert.equal(statSync(dir).mode & 0o777, 0o700);
+	assert.deepEqual(readdirSync(dir).sort(), [".new.md.2.tmp", path.split("/").at(-1)!].sort());
 	rmSync(dir, { recursive: true, force: true });
 });
 

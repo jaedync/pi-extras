@@ -5,7 +5,7 @@
  * of those get their own reply trees.
  */
 import { agentsFor } from "../config.ts";
-import { getJson, PLAIN_UA } from "../http.ts";
+import { deadline, getJson, PLAIN_UA } from "../http.ts";
 import { previewConversation, renderConversation, type Conversation, type Post, type Reply } from "../post.ts";
 import { threadSummary } from "../summary.ts";
 import { isoDate, stats } from "../text.ts";
@@ -21,6 +21,8 @@ const MAX_QUOTE_PAGES = 10;
 /** Quote posts whose replies are read, most liked first, and how many at once. */
 const QUOTE_THREADS = 50;
 const QUOTE_PARALLEL = 4;
+/** Time for the quote posts and their replies, as for X's optional requests. */
+const QUOTE_MS = 90_000;
 
 interface Author { handle?: string; displayName?: string }
 interface Embed {
@@ -126,20 +128,24 @@ export function flattenReplies(nodes: readonly ThreadNode[] | undefined, limit: 
 
 const agents = (ctx: AdapterContext) => agentsFor(ctx.config, "bluesky", [PLAIN_UA]);
 
-async function readThread(uri: string, depth: number, parents: number, ctx: AdapterContext): Promise<ThreadNode | undefined> {
+async function readThread(uri: string, depth: number, parents: number, ctx: AdapterContext, signal = ctx.signal): Promise<ThreadNode | undefined> {
 	const params = new URLSearchParams({ uri, depth: String(depth), parentHeight: String(parents) });
-	const data = await getJson<{ thread?: ThreadNode }>(`${XRPC}app.bsky.feed.getPostThread?${params}`, { signal: ctx.signal, fetcher: ctx.fetcher, agents: agents(ctx), accept: (r) => r.status === 200 || r.status === 400 });
+	const data = await getJson<{ thread?: ThreadNode }>(`${XRPC}app.bsky.feed.getPostThread?${params}`, { signal, fetcher: ctx.fetcher, agents: agents(ctx), accept: (r) => r.status === 200 || r.status === 400 });
 	return data?.thread?.post ? data.thread : undefined;
 }
 
-/** The posts that quote `uri`, page by page, most liked first. A failed page ends the list and is reported. */
-async function readQuotes(uri: string, limit: number, ctx: AdapterContext): Promise<{ posts: BskyPost[]; failed: boolean }> {
+/**
+ * The posts that quote `uri`, page by page, most liked first. A failed page
+ * ends the list and is reported. `signal` carries the time limit; only the
+ * caller's own abort (`ctx.signal`) throws.
+ */
+async function readQuotes(uri: string, limit: number, ctx: AdapterContext, signal: AbortSignal): Promise<{ posts: BskyPost[]; failed: boolean }> {
 	const posts = new Map<string, BskyPost>();
 	let cursor: string | undefined;
 	try {
 		for (let page = 0; page < MAX_QUOTE_PAGES && posts.size < limit; page++) {
 			const params = new URLSearchParams({ uri, limit: String(QUOTE_PAGE), ...(cursor ? { cursor } : {}) });
-			const data = await getJson<{ posts?: unknown; cursor?: unknown }>(`${XRPC}app.bsky.feed.getQuotes?${params}`, { signal: ctx.signal, fetcher: ctx.fetcher, agents: agents(ctx) });
+			const data = await getJson<{ posts?: unknown; cursor?: unknown }>(`${XRPC}app.bsky.feed.getQuotes?${params}`, { signal, fetcher: ctx.fetcher, agents: agents(ctx) });
 			const fresh = (Array.isArray(data?.posts) ? data.posts : []).filter((post): post is BskyPost => !!post && typeof post === "object" && typeof (post as BskyPost).uri === "string" && !posts.has((post as BskyPost).uri!));
 			if (!fresh.length) break;
 			for (const post of fresh) posts.set(post.uri!, post);
@@ -156,13 +162,18 @@ async function readQuotes(uri: string, limit: number, ctx: AdapterContext): Prom
 const rank = (posts: BskyPost[]) => posts.sort((a, b) => (b.likeCount ?? 0) - (a.likeCount ?? 0));
 
 /** Each quote post with its own replies below it, without its quote of the post itself. */
-async function quoteThreads(quotes: readonly BskyPost[], focalUrl: string | undefined, limit: number, ctx: AdapterContext): Promise<{ items: Reply[]; unread: number }> {
+async function quoteThreads(quotes: readonly BskyPost[], focalUrl: string | undefined, limit: number, ctx: AdapterContext, signal: AbortSignal): Promise<{ items: Reply[]; unread: number }> {
 	const wanted = quotes.filter((post) => (post.replyCount ?? 0) > 0).slice(0, QUOTE_THREADS);
 	const trees = new Map<string, ThreadNode>();
 	let unread = quotes.filter((post) => (post.replyCount ?? 0) > 0).length - wanted.length;
 	for (let start = 0; start < wanted.length; start += QUOTE_PARALLEL) {
+		if (signal.aborted) {
+			ctx.signal?.throwIfAborted();
+			unread += wanted.length - start;
+			break;
+		}
 		await Promise.all(wanted.slice(start, start + QUOTE_PARALLEL).map(async (post) => {
-			const tree = await readThread(post.uri!, FULL_DEPTH, 0, ctx).catch(() => {
+			const tree = await readThread(post.uri!, FULL_DEPTH, 0, ctx, signal).catch(() => {
 				ctx.signal?.throwIfAborted();
 				return undefined;
 			});
@@ -202,12 +213,19 @@ export async function pullBluesky(actor: string, rkey: string, ctx: AdapterConte
 	if ((thread.post.replyCount ?? 0) > direct && comments > replies.length) notes.push(`Bluesky reports ${thread.post.replyCount} replies to this post; ${direct} came back. Replies that are deleted, blocked or hidden are not shown.`);
 	const wanted = ctx.options.quotes ?? 0;
 	let quotes: Reply[] = [];
+	let timeLimited = false;
 	if (wanted > 0 && (thread.post.quoteCount ?? 0) > 0 && thread.post.uri) {
-		const found = await readQuotes(thread.post.uri, wanted, ctx);
-		if (found.failed) notes.push("Some quote posts could not be read.");
-		const withReplies = await quoteThreads(found.posts, post.url, comments, ctx);
+		const ms = Math.min(QUOTE_MS, ctx.options.readMs ?? QUOTE_MS);
+		const limited = deadline(ctx.signal, ms);
+		const found = await readQuotes(thread.post.uri, wanted, ctx, limited);
+		if (found.failed && !limited.aborted) notes.push("Some quote posts could not be read.");
+		const withReplies = await quoteThreads(found.posts, post.url, comments, ctx, limited);
 		quotes = withReplies.items;
 		if (withReplies.unread) notes.push(`The replies to ${withReplies.unread} quote ${withReplies.unread === 1 ? "post were" : "posts were"} not read.`);
+		if (limited.aborted) {
+			notes.push(`Reading stopped at the time limit of ${ms / 1000} s; the counts above say what is missing.`);
+			timeLimited = ctx.options.readMs !== undefined;
+		}
 	}
 	const conversation: Conversation = { parents, post, replies, repliesTotal: thread.post.replyCount, quotes, quotesTotal: thread.post.quoteCount, notes };
 	return {
@@ -219,5 +237,6 @@ export async function pullBluesky(actor: string, rkey: string, ctx: AdapterConte
 		summary: threadSummary(post, replies, thread.post.replyCount),
 		photos: post.images,
 		videoUrl: post.videoUrl,
+		...(timeLimited ? { timeLimited } : {}),
 	};
 }

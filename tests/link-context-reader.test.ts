@@ -143,3 +143,25 @@ test("two pull_link calls waiting on a captions-only read start one full read be
 	assert.equal(full, 1, "speech-to-text runs once");
 	assert.equal(a.pulled, b.pulled);
 });
+
+test("an X conversation that auto-pull's time limit cut short is kept apart; a pull_link call reads it in full", async () => {
+	const status = { id: "1", text: "post", author: { name: "op", screen_name: "op" }, replies: 1 };
+	const replies = [{ id: "2", text: "reply", author: { name: "r", screen_name: "r" }, replies: 2, replying_to: { status: "1" } }];
+	let slow = true;
+	const fetcher = (async (input: string | URL | Request, init: RequestInit = {}) => {
+		const url = String(input);
+		if (url.endsWith("/2/conversation/1")) return Response.json({ code: 200, status, thread: [status], replies });
+		if (slow) return new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true }));
+		return Response.json({ code: 200, status: replies[0], thread: [], replies: [{ id: "3", text: "nested", author: { name: "n", screen_name: "n" }, replying_to: { status: "2" } }] });
+	}) as typeof fetch;
+	const reader = createReader({ fetcher, config: () => parseConfig({}), autoReadMs: 30 });
+	const url = "https://x.com/op/status/1";
+	const auto = await reader.readPlain(url, new AbortController().signal);
+	assert.equal(auto.pulled.timeLimited, true);
+	assert.equal((await reader.readPlain(url, new AbortController().signal)).cached, true, "a second auto read uses the short result");
+	slow = false;
+	const asked = await reader.read({ url }, undefined, () => {});
+	assert.equal(asked.cached, false);
+	assert.match(asked.pulled.markdown, /nested/);
+	assert.equal(asked.pulled.timeLimited, undefined);
+});

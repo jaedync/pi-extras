@@ -1505,13 +1505,14 @@ server's label. It sends only JPEG, PNG, GIF and WebP files of 3.7 MB or less
 that Pi's image library can decode. It makes an image larger than 2000 pixels
 on a side smaller.
 
-A result longer than one page (40,000 characters) comes back as a preview.
-The tool also saves the whole result to a file and gives its path. The agent
-can read or search the file, or it can page through the result with
-`offset` (start at `offset=0`). The preview of an X or Bluesky conversation
-has the post, its quotes, the nearest posts above it, the top replies and the
-top quote posts, and the notes about what is missing. For other links, the
-preview is the start of the result. The files are in
+The tool saves a result longer than 12,000 characters to a file and gives
+its path, so the agent can read or search the file. An X or Bluesky
+conversation longer than one page (40,000 characters) comes back as a
+preview: the post, its quotes, the nearest posts above it, the top replies,
+the top quote posts and the notes about what is missing. The agent can page
+through the whole text with `offset` (start at `offset=0`). Other long
+results come back one page at a time, with the `offset` of the next page.
+The files are in
 `~/.cache/pi-extras/link-context/full-text` (only your account can read
 them). A file is removed after 7 days, and the folder keeps at most 200
 files.
@@ -1632,8 +1633,12 @@ model does not need them, and a wait before the model starts.
   links and gives the number of the others. The model can read them with
   `pull_link`.
 - Each result is what `pull_link` gives for the link, up to 12,000
-  characters. A longer result comes as a preview, with the path of the file
-  that holds the whole result and the `offset` to page through it.
+  characters. A longer X or Bluesky conversation comes as a preview. Other
+  long results come as their first 12,000 characters. Both give the path of
+  the file that holds the whole result, and the `offset` to page through it.
+- Auto-pull reads an X or Bluesky conversation for at most 10 seconds after
+  the first request. When this limit stops the read, the message says so,
+  and a `pull_link` call for the link reads the whole conversation.
 - One message has up to 4 images in total (photos and thumbnails), in link
   order.
 - A video gives its title, description, chapters and the transcript from its
