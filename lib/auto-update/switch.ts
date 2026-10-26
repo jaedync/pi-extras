@@ -5,8 +5,8 @@
  * the next cycle repairs a crash between two steps by running them again.
  */
 import { randomBytes } from "node:crypto";
-import { readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
-import { relative } from "node:path";
+import { readFileSync, readlinkSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { join, relative } from "node:path";
 import type { StorePaths } from "./paths.ts";
 import { rewriteSettingsPackages } from "./settings.ts";
 import { applySet, entrySource } from "./sources.ts";
@@ -23,19 +23,40 @@ function currentLink(path: string): string | undefined {
 	}
 }
 
-/** Points `pi-current` at `piDir` (relative, so the store can move). True when it changed. */
-export function flipPiCurrent(paths: StorePaths, piDir: string): boolean {
-	const target = relative(paths.root, piDir);
-	if (currentLink(paths.piCurrent) === target) return false;
-	const temp = `${paths.piCurrent}.tmp-${randomBytes(4).toString("hex")}`;
+/** Points the link `path` at `dir` (relative, so the store can move). True when it changed. */
+function flipLink(paths: StorePaths, path: string, dir: string): boolean {
+	const target = relative(paths.root, dir);
+	if (currentLink(path) === target) return false;
+	const temp = `${path}.tmp-${randomBytes(4).toString("hex")}`;
 	symlinkSync(target, temp);
 	try {
-		renameSync(temp, paths.piCurrent);
+		renameSync(temp, path);
 	} catch (error) {
 		rmSync(temp, { force: true });
 		throw error;
 	}
 	return true;
+}
+
+export function flipPiCurrent(paths: StorePaths, piDir: string): boolean {
+	return flipLink(paths, paths.piCurrent, piDir);
+}
+
+/** The set's pi-extras release folder (its package.json name is "pi-extras"), if the set has one. */
+export function extrasEntry(set: UpdateSet): string | undefined {
+	return Object.values(set.packages).find((release) => {
+		try {
+			return (JSON.parse(readFileSync(join(release.entry, "package.json"), "utf8")) as { name?: unknown }).name === "pi-extras";
+		} catch {
+			return false;
+		}
+	})?.entry;
+}
+
+/** `extras-current`: the CLI the launcher runs for `pi update`. Left alone when the set has no pi-extras. */
+function flipExtrasCurrent(paths: StorePaths, set: UpdateSet): void {
+	const entry = extrasEntry(set);
+	if (entry) flipLink(paths, join(paths.root, "extras-current"), entry);
 }
 
 /** True when `pi-current` points at the set's Pi. */
@@ -57,6 +78,7 @@ export interface SwitchResult {
 /** Brings `pi-current` and settings.json to `set`. */
 export function applySwitch(paths: StorePaths, settingsFile: string, set: UpdateSet): SwitchResult {
 	const linkChanged = flipPiCurrent(paths, set.pi.dir);
+	flipExtrasCurrent(paths, set);
 	const { changed } = rewriteSettingsPackages(settingsFile, (packages) => applySet(packages, set, paths.root));
 	return { linkChanged, settingsChanged: changed };
 }

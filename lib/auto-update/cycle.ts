@@ -4,7 +4,7 @@
  * per machine (the updater lock), and at most one per interval however many
  * sessions ask (the `lastCheck` throttle, checked again under the lock).
  */
-import { tryLock, type FileLock } from "../file-lock.ts";
+import { tryLock } from "../file-lock.ts";
 import { isOffline } from "../offline.ts";
 import type { AutoUpdateConfig } from "./config.ts";
 import { collectGarbage, mappedPaths } from "./gc.ts";
@@ -72,12 +72,8 @@ export async function runCycle(deps: CycleDeps, options: { force?: boolean } = {
 		return { outcome: "error", message };
 	} finally {
 		safeUpdate(deps, (state) => (state.activity ? { ...state, activity: undefined } : state));
-		release(lock);
+		lock.release();
 	}
-}
-
-function release(lock: FileLock): void {
-	lock.release();
 }
 
 function safeUpdate(deps: CycleDeps, change: (state: UpdateState) => UpdateState): void {
