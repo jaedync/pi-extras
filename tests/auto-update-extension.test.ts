@@ -40,11 +40,12 @@ function fakePi(options: { mode?: string; child?: boolean } = {}) {
 	const renderers = new Map<string, unknown>();
 	const notices: [string, string][] = [];
 	const statuses: [string, string | undefined][] = [];
+	const widgets = new Map<string, unknown>();
 	const sessionManager = { getSessionId: () => "s1", getSessionFile: () => "/s/a.jsonl", getBranch: () => [] };
 	if (options.child) markChildSession(sessionManager);
 	const ctx = {
 		mode: options.mode ?? "tui", sessionManager, isIdle: () => true, hasPendingMessages: () => false,
-		ui: { notify: (text: string, level: string) => notices.push([text, level]), setStatus: (key: string, text: string | undefined) => statuses.push([key, text]), getEditorText: () => "" },
+		ui: { notify: (text: string, level: string) => notices.push([text, level]), setStatus: (key: string, text: string | undefined) => statuses.push([key, text]), getEditorText: () => "", setWidget: (key: string, value: unknown) => (value === undefined ? widgets.delete(key) : widgets.set(key, value)) },
 	};
 	const pi = {
 		on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
@@ -57,7 +58,7 @@ function fakePi(options: { mode?: string; child?: boolean } = {}) {
 		events: { on: () => {}, emit: () => {} },
 	};
 	return {
-		pi, ctx, commands, renderers, notices, statuses, handlers,
+		pi, ctx, commands, renderers, notices, statuses, handlers, widgets,
 		emit: (name: string, event: Record<string, unknown>) => (handlers.get(name) ?? []).forEach((handler) => handler({ type: name, ...event }, ctx)),
 	};
 }
@@ -118,4 +119,24 @@ test("with the store in use, a main session leases and a subagent session does n
 	assert.match(fake.notices.at(-1)![0], /no previous set/);
 	fake.emit("session_shutdown", { reason: "quit" });
 	assert.equal(readdirSync(m.paths.leases).length, 0);
+});
+
+test("in the TUI a zero-row widget gives the session the terminal UI, to see open selectors; it goes at shutdown", (t) => {
+	const m = machine(t);
+	mkdirSync(m.paths.root, { recursive: true });
+	writeState(m.paths.state, { ...emptyState(), current: { pi: { version: "1.4.0", dir: join(m.paths.root, "pi", "1.4.0") }, packages: {} }, lastCheck: Date.now() });
+	writeConfig(m.agentDir, { enabled: true });
+	const fake = fakePi();
+	autoUpdate(fake.pi as never);
+	fake.emit("session_start", { reason: "startup" });
+	const factory = [...fake.widgets.values()][0] as (tui: unknown) => { render: (width: number) => string[] };
+	assert.equal(typeof factory, "function");
+	assert.deepEqual(factory({ hasOverlay: () => false, getFocusedComponent: () => null }).render(80), []);
+	fake.emit("session_shutdown", { reason: "quit" });
+	assert.equal(fake.widgets.size, 0);
+	const rpc = fakePi({ mode: "rpc" });
+	autoUpdate(rpc.pi as never);
+	rpc.emit("session_start", { reason: "startup" });
+	assert.equal(rpc.widgets.size, 0, "no terminal UI in RPC mode");
+	rpc.emit("session_shutdown", { reason: "quit" });
 });

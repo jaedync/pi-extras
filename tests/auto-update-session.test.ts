@@ -8,7 +8,7 @@ import { LOCK_STALE_MS } from "../lib/auto-update/cycle.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { decide, idleFor, MAX_ATTEMPTS, QUIET_MS, USER_BASH_MAX_MS, userBashRunning, type AdoptInput, type IdleSignals } from "../lib/auto-update/adopt.ts";
+import { decide, idleFor, selectorOpen, MAX_ATTEMPTS, QUIET_MS, USER_BASH_MAX_MS, userBashRunning, type AdoptInput, type IdleSignals } from "../lib/auto-update/adopt.ts";
 import { writeConfig } from "../lib/auto-update/config.ts";
 import { storePaths, type StorePaths } from "../lib/auto-update/paths.ts";
 import { APPLY_COMMAND, UPDATE_ENTRY, UpdateSession, type SessionHost, type UpdateEntryData } from "../lib/auto-update/session.ts";
@@ -381,4 +381,15 @@ test("a user ! command is busy from user_bash until its bash execution entry is 
 	assert.equal(userBashRunning(twice, [bash("make", 2_000)], 3_000), true, "one entry ends one of two runs");
 	assert.equal(userBashRunning(twice, [bash("make", 2_000), bash("make", 2_500)], 3_000), false);
 	assert.equal(userBashRunning(starts, [], 1_000 + USER_BASH_MAX_MS), false, "past the maximum time: a lost end signal must not block updates forever");
+});
+
+test("a built-in selector or overlay counts as open: focus away from the editor, or any overlay", () => {
+	const editor = { getText: () => "", render: () => [] };
+	const list = { render: () => [] };
+	assert.equal(selectorOpen(undefined), false, "no terminal UI (RPC): nothing to tell");
+	assert.equal(selectorOpen({ hasOverlay: () => false, getFocusedComponent: () => editor }), false);
+	assert.equal(selectorOpen({ hasOverlay: () => false, getFocusedComponent: () => list }), true, "/model, /settings, /resume, /tree replace the editor and take focus");
+	assert.equal(selectorOpen({ hasOverlay: () => true, getFocusedComponent: () => editor }), true);
+	assert.equal(selectorOpen({ hasOverlay: () => false, getFocusedComponent: () => null }), false, "no focus at all: unknown, the quiet time decides");
+	assert.equal(selectorOpen({ hasOverlay: () => { throw new Error("gone"); }, getFocusedComponent: () => editor }), false, "a TUI that went away");
 });

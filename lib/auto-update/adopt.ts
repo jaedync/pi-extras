@@ -147,3 +147,27 @@ export function userBashRunning(starts: readonly BashStart[], branch: readonly B
 		return end < 0 && now - start.at < USER_BASH_MAX_MS;
 	});
 }
+
+/** The part of Pi's TUI that tells where the keyboard focus is. pi-tui's `TUI` interface has `hasOverlay`; its `TuiBase` class adds `getFocusedComponent`. */
+export interface FocusView {
+	hasOverlay(): boolean;
+	getFocusedComponent?(): unknown;
+}
+
+/**
+ * True while a built-in selector (`/model`, `/settings`, `/resume`, `/tree`)
+ * or an overlay is open. Pi fires no event for these, but each one takes the
+ * focus from the editor, and only pi-tui's Editor (and editors built on it)
+ * has `getText`. No focus at all says nothing; then the quiet time decides.
+ */
+export function selectorOpen(tui: FocusView | undefined): boolean {
+	if (!tui) return false;
+	try {
+		if (tui.hasOverlay()) return true;
+		const focused = tui.getFocusedComponent?.() as { getText?: unknown } | null | undefined;
+		return focused !== null && focused !== undefined && typeof focused.getText !== "function";
+	} catch {
+		// A TUI that stopped: it shows nothing a reload could take away.
+		return false;
+	}
+}

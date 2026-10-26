@@ -18,7 +18,7 @@ import { processBusy } from "../lib/idle-gc.ts";
 import { errorText, operationalError } from "../lib/operational-log.ts";
 import { registerSubcommand } from "../lib/pi-extras-command.ts";
 import { BACKGROUND_EVENT, BACKGROUND_REQUEST_EVENT, backgroundWork } from "../lib/tab-status/events.ts";
-import { type BashStart, userBashRunning } from "../lib/auto-update/adopt.ts";
+import { type BashStart, type FocusView, selectorOpen, userBashRunning } from "../lib/auto-update/adopt.ts";
 import { fileLog } from "../lib/auto-update/log.ts";
 import { EXTRAS_DIR, storePaths, storeRootFrom } from "../lib/auto-update/paths.ts";
 import { APPLY_COMMAND, STATUS_KEY, UPDATE_ENTRY, UpdateSession, type UpdateEntryData } from "../lib/auto-update/session.ts";
@@ -48,6 +48,7 @@ function loadedPaths(pi: ExtensionAPI): string[] {
 }
 
 /** Versioned: a later pi-extras that keeps other data here picks a new symbol. */
+const FOCUS_WIDGET = "pi-extras-auto-update-focus";
 const HISTORY = Symbol.for("pi-extras.auto-update.loaded-releases.v1");
 
 /** One set per process, on globalThis: each reload loads this module again, and the set must outlive it. */
@@ -72,6 +73,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 	let removeSubcommand: (() => void) | undefined;
 	let prompts = 0;
 	let bashStarts: BashStart[] = [];
+	let tui: FocusView | undefined;
 	const background = new Map<string, number>();
 
 	/** True while a user `!` command runs. The starts are kept until all have ended: an end matches the oldest open start. */
@@ -114,6 +116,14 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 		if (isChildSession(context.sessionManager)) return;
 		removeSubcommand?.();
 		removeSubcommand = addSubcommand();
+		tui = undefined;
+		if (context.mode === "tui") {
+			// A zero-row widget is the public way to reach the TUI: it tells when a built-in selector has the focus.
+			context.ui.setWidget(FOCUS_WIDGET, (view) => {
+				tui = view as unknown as FocusView;
+				return { render: () => [], invalidate() {} };
+			});
+		}
 		// The launcher's note is for the first main session of this process only: a later reload must not repeat it.
 		const updateNote = process.env.PI_EXTRAS_UPDATE_DONE || undefined;
 		delete process.env.PI_EXTRAS_UPDATE_DONE;
@@ -136,7 +146,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 					agentIdle: context.isIdle(),
 					pendingMessages: context.hasPendingMessages(),
 					compacting,
-					promptOpen: prompts > 0,
+					promptOpen: prompts > 0 || selectorOpen(tui),
 					subagentRun: processBusy(),
 					background: [...background.values()].some((count) => count > 0),
 					editorEmpty: context.mode !== "tui" || context.ui.getEditorText().trim() === "",
@@ -214,6 +224,14 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 		}
 	});
 	pi.on("session_shutdown", (event) => {
+		if (session && tui) {
+			try {
+				ctx?.ui.setWidget(FOCUS_WIDGET, undefined);
+			} catch {
+				// A context that went stale with its session.
+			}
+		}
+		tui = undefined;
 		session?.stop(event.reason);
 		session = undefined;
 		ctx = undefined;
