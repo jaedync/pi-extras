@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.34.2 - 2026-10-27
+
+### Fixed
+
+- Status Plus: the footer charges a resumed subagent per run, on the branch
+  that started each run, not by its whole session file on each branch that
+  links it. Run 1 counts on the branch that spawned the child. A later run
+  counts on the branch whose `message` call started it, also a nested call in
+  a `codemode` script whose arguments Pi left out. A run that main did not
+  start (an automatic resume, `/subagents resume`, a peer's message) counts on
+  the branch that spawned the child. Before, a child resumed after `/undo`
+  could count in full on both branches, or on the wrong one.
+
 ## 0.34.1 - 2026-10-27
 
 ### Fixed
