@@ -2,6 +2,23 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.34.1 - 2026-10-27
+
+### Fixed
+
+- Subagents: a child's bash call that starts with `sleep` of 15 seconds or
+  more lends its slot to the next agent in line while it sleeps. After the
+  sleep, it waits for a free slot, then runs the rest of the command. Before,
+  children that waited for CI or a review held every slot, and queued agents
+  waited with nothing to show. The slot is lent only when the sleep is the
+  only tool call of the turn.
+- Subagents: a queued row says its place in line, such as `2nd in line for a
+  slot`. A resumed child no longer keeps its old activity while it waits.
+- Status Plus: the footer counts the spend of subagents that a `codemode`
+  script starts, through the team index. Before, such children were not
+  counted, so their provider got no row and no usage limits. Only children
+  whose start is on the current branch count.
+
 ## 0.34.0 - 2026-10-26
 
 ### Added
