@@ -75,9 +75,12 @@ Write the new prompt. It says what to make, from which raw material, with
 which instruments, to which target, and which outside check decides whether
 it is correct. Below it, list the access that is missing.
 
-Show the new prompt and wait for approval before you start, unless the user
-told you to go ahead without one. When this skill loads in the middle of a
-task, keep the reframe short and ask before you change the scope.
+Show the new prompt. Wait for approval when it changes what the user gets: a
+different deliverable, a larger scope, a higher cost, or access that the user
+must give. When it only makes the method deeper inside the same request,
+show it in a few lines and start, unless the user asked to approve it first.
+When this skill loads in the middle of a task, keep the reframe short and ask
+before you change the scope.
 
 ## 3. Do the work at that depth
 
