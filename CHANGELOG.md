@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.34.4 - 2026-10-27
+
+### Added
+
+- Auto-update: the "Updated" line in the transcript says when the update
+  happened. It shows the time for an update today, such as
+  `Updated pi-extras 0.34.2 → 0.34.3 · 2:05 PM`, and the date for an
+  update on another day (`Oct 26`, or `Oct 26, 2026` in another year).
+  Today uses the time zone of the Status Plus footer.
+
 ## 0.34.3 - 2026-10-27
 
 ### Fixed
