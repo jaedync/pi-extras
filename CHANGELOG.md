@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.33.1 - 2026-10-26
+
+### Changed
+
+- be-ambitious: the skill waits for approval of its new prompt only when the
+  prompt changes what the user gets (a different deliverable, a larger
+  scope, a higher cost, or access that the user must give). A deeper method
+  inside the same request is shown in a few lines, and the work starts.
+
 ## 0.33.0 - 2026-10-26
 
 ### Changed
