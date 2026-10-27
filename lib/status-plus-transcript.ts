@@ -53,6 +53,10 @@ export interface TranscriptSource {
 	getBranch(): BranchEntry[];
 	getSessionDir(): string;
 	getSessionFile?(): string | undefined;
+	/** The subagents team index (`index.json`), which links the children a codemode script started. */
+	getChildIndex?(): string | undefined;
+	/** Every session entry in append order, on all branches; bounds a script call whose result is off the branch. */
+	getEntries?(): BranchEntry[];
 	/** Cost of an assistant message, recovering catalog pricing when zero was persisted. */
 	costOf(message: AssistantLike): number;
 }
@@ -290,7 +294,7 @@ function collectEntries(source: TranscriptSource): SessionStats {
 export function collect(source: TranscriptSource): SessionStats {
 	const branch = source.getBranch();
 	const stats = collectEntries({ ...source, getBranch: () => branch });
-	const children = new ChildEvidenceCollector(source.getSessionDir(), source.getSessionFile?.());
+	const children = new ChildEvidenceCollector(source.getSessionDir(), source.getSessionFile?.(), () => source.getChildIndex?.(), () => source.getEntries?.());
 	children.scanBranch(branch, source.getSessionFile?.() ?? "parent");
 	const resolved = children.resolve();
 	if (children.partial) stats.partial = true;

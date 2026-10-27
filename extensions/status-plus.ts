@@ -76,8 +76,11 @@ function assistantMessageCost(ctx: ExtensionContext, message: AssistantLike): nu
 function transcriptSource(ctx: ExtensionContext): TranscriptSource {
 	return {
 		getBranch: () => ctx.sessionManager.getBranch() as unknown as BranchEntry[],
+		getEntries: () => ctx.sessionManager.getEntries() as unknown as BranchEntry[],
 		getSessionDir: () => ctx.sessionManager.getSessionDir(),
 		getSessionFile: () => ctx.sessionManager.getSessionFile(),
+		// Where the subagents extension keeps this session's team (lib/subagents/host-state.ts).
+		getChildIndex: () => join(AGENT_DIR, "sessions", "subagents", ctx.sessionManager.getSessionId(), "index.json"),
 		costOf: (message) => assistantMessageCost(ctx, message),
 	};
 }

@@ -9,10 +9,10 @@ const T = 1_750_000_000_000;
 const iso = (n: number) => new Date(n).toISOString();
 const run = "11111111-1111-1111-1111-111111111111";
 const other = "22222222-2222-2222-2222-222222222222";
-function reply(id: string, provider = "anthropic", start = T, tools = 1) {
+function reply(id: string, provider = "anthropic", start = T, tools = 1, tool = "read") {
 	return { type: "message", id, timestamp: iso(start + 1000), message: {
 		role: "assistant", provider, model: "model", timestamp: start,
-		content: Array.from({ length: tools }, (_, i) => ({ type: "toolCall", id: `${id}-${i}`, name: "read" })),
+		content: Array.from({ length: tools }, (_, i) => ({ type: "toolCall", id: `${id}-${i}`, name: tool })),
 		usage: { input: 10, output: 2, cacheRead: 30, cacheWrite: 4, cost: { total: 0.5 } },
 	} };
 }
@@ -31,9 +31,138 @@ function fixture() {
 		return path;
 	};
 	const meta = (rid: string, value: unknown, index = 0) => { const path = join(artifacts, `${rid}_worker_${index}_meta.json`); json(path, value); return path; };
-	const stats = (branch: any[]) => collect({ getBranch: () => branch, getSessionDir: () => dir, getSessionFile: () => parent, costOf: m => m.usage.cost.total });
+	const stats = (branch: any[], childIndex?: string, entries?: any[]) => collect({ getBranch: () => branch, getSessionDir: () => dir, getSessionFile: () => parent, getChildIndex: () => childIndex,
+		...(entries ? { getEntries: () => entries } : {}), costOf: m => m.usage.cost.total });
 	return { dir, parent, artifacts, session, meta, json, stats };
 }
+
+/** A subagents team index and its children's sessions in its folder, named without run ids. */
+function team(f: ReturnType<typeof fixture>) {
+	const dir = join(f.dir, "subagents", "parent-session");
+	mkdirSync(dir, { recursive: true });
+	const index = join(dir, "index.json");
+	const records: unknown[] = [];
+	const spawn = (name: string, createdAt: number, entries: unknown[], parent = "main", extra: object = {}) => {
+		const sessionFile = join(dir, `${iso(createdAt).replace(/[:.]/g, "-")}_${name}_0a1b2c3d.jsonl`);
+		writeFileSync(sessionFile, entries.map(e => JSON.stringify(e)).join("\n") + "\n");
+		records.push({ name, parent, depth: parent === "main" ? 1 : 2, createdAt, state: "running", model: "openai/model", sessionFile, ...extra });
+		f.json(index, { version: 1, parentSession: "parent-session", cwd: f.dir, records });
+		return sessionFile;
+	};
+	return { index, spawn };
+}
+
+/** A reply that calls codemode, its batch still running from `start`. */
+const scriptCall = (start: number) => reply(`call-${start}`, "anthropic", start - 1000, 1, "codemode");
+
+/** A reply whose tool batch runs from `start` to `end`, with a codemode result whose script called `subagent`. */
+function script(start: number, end: number) {
+	// Pi stamps every result of a batch when the batch ends, so `durationMs` does not give a result's start.
+	return [scriptCall(start), { type: "message", timestamp: iso(end), message: {
+		role: "toolResult", toolName: "codemode", toolCallId: `call-${start}-0`, timestamp: end, durationMs: 5, details: { calls: [] },
+		// A long task leaves out the arguments, so the call does not name the child.
+		nestedCalls: { calls: [{ id: `call-${start}-0/1`, name: "subagent", status: "ok", argumentsBytes: 9000, durationMs: 20 }], complete: false },
+	} }];
+}
+
+const report = (sessionFile: string) => ({ type: "custom_message", customType: "subagent-report", timestamp: iso(T + 9000), content: "**worker** finished", display: true,
+	details: { id: "sa-1", kind: "report", reports: [{ name: "worker", model: "openai/model", state: "idle", cost: .5, toolCalls: 1, sessionFile }] } });
+
+test("a report does not charge a child that this branch did not start", () => {
+	const f = fixture();
+	const sessionFile = team(f).spawn("worker", T + 1500, [prompt("task", T + 1500), reply("w", "openai", T + 2000)]);
+	const stats = f.stats([prompt("parent"), report(sessionFile)]);
+	assert.deepEqual([stats.prompts, stats.turns, stats.providers.size], [1, 0, 0]);
+});
+
+test("a script's running child is charged through the team index, not its own children or orphans", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("worker", T + 1500, [prompt("task", T + 1500), reply("w", "openai", T + 1600)]);
+	// In the window, but started by the child, or found on disk with no call that started it.
+	t.spawn("helper", T + 1700, [prompt("help", T + 1700), reply("h", "opencode-go", T + 1800)], "worker");
+	t.spawn("orphan", T + 1800, [prompt("lost", T + 1800), reply("o", "opencode-go", T + 1900)], "main", { orphaned: true });
+	const stats = f.stats([prompt("parent"), ...script(T + 1000, T + 2000)], t.index);
+	assert.equal(stats.providers.get("openai")?.cost, .5);
+	assert.equal(stats.providers.has("opencode-go"), false);
+	// Without the index, nothing on the branch names them.
+	assert.equal(f.stats([prompt("parent"), ...script(T + 1000, T + 2000)]).providers.has("openai"), false);
+});
+
+test("a script still running at the branch tip charges the children it started so far", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("worker", T + 1500, [prompt("task", T + 1500), reply("w", "openai", T + 1600)]);
+	const later = { type: "custom", customType: "pi-extras.thinking-times", timestamp: iso(T + 1200), data: {} };
+	assert.equal(f.stats([prompt("parent"), scriptCall(T + 1000), later], t.index).providers.get("openai")?.cost, .5);
+});
+
+test("a script batch that never got results ends at the next message", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("before", T + 1500, [prompt("a", T + 1500), reply("b", "openai", T + 1600)]);
+	t.spawn("after", T + 3500, [prompt("c", T + 3500), reply("d", "opencode-go", T + 3600)]);
+	const stats = f.stats([prompt("parent"), scriptCall(T + 1000), prompt("after the crash", T + 3000)], t.index);
+	assert.equal(stats.providers.get("openai")?.cost, .5);
+	assert.equal(stats.providers.has("opencode-go"), false);
+});
+
+test("a script call whose result is on another branch ends at that result, not now or at a later prompt", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("during", T + 1500, [prompt("a", T + 1500), reply("b", "openai", T + 1600)]);
+	t.spawn("elsewhere", T + 5000, [prompt("c", T + 5000), reply("d", "opencode-go", T + 5100)]);
+	const [call, result] = script(T + 1000, T + 2000);
+	const file = [prompt("parent"), call, result, prompt("other branch", T + 4000), ...script(T + 4500, T + 5500)];
+	// `/tree` to the reply, then a prompt typed from there much later.
+	for (const branch of [[prompt("parent"), call], [prompt("parent"), call, prompt("from the tree", T + 60_000)]]) {
+		const stats = f.stats(branch, t.index, file);
+		assert.equal(stats.providers.get("openai")?.cost, .5);
+		assert.equal(stats.providers.has("opencode-go"), false);
+	}
+});
+
+test("a script call in a reply that was aborted or failed ran no script", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("later", T + 5000, [prompt("c", T + 5000), reply("d", "opencode-go", T + 5100)]);
+	for (const stopReason of ["aborted", "error", "length"]) {
+		const call = scriptCall(T + 1000);
+		const stats = f.stats([prompt("parent"), { ...call, message: { ...call.message, stopReason } }], t.index);
+		assert.equal(stats.providers.has("opencode-go"), false);
+	}
+});
+
+test("a user shell command during a running script does not end its batch", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("worker", T + 3000, [prompt("a", T + 3000), reply("b", "openai", T + 3100)]);
+	const shell = { type: "message", timestamp: iso(T + 2000), message: { role: "bashExecution", command: "ls", output: "", timestamp: T + 2000 } };
+	assert.equal(f.stats([prompt("parent"), scriptCall(T + 1000), shell], t.index).providers.get("openai")?.cost, .5);
+});
+
+test("a direct start, a script in the same batch and the report charge one child once", () => {
+	const f = fixture();
+	const t = team(f);
+	const sessionFile = t.spawn("worker", T + 1500, [prompt("task", T + 1500), reply("w", "openai", T + 1600)]);
+	const [call, codemode] = script(T + 1000, T + 2000);
+	const direct = result({ name: "worker", model: "openai/model", sessionFile, wait: false }, "subagent", "spawn");
+	const stats = f.stats([prompt("parent"), call, direct, codemode, report(sessionFile)], t.index);
+	assert.deepEqual([stats.prompts, stats.turns], [2, 2]);
+	assert.equal(stats.providers.get("openai")?.cost, .5);
+});
+
+test("a child that a script started on a branch /undo removed is not charged", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("old", T + 1500, [prompt("old", T + 1500), reply("o", "opencode-go", T + 1600)]);
+	t.spawn("new", T + 5500, [prompt("new", T + 5500), reply("n", "openai", T + 5600)]);
+	assert.equal(f.stats([prompt("parent"), ...script(T + 1000, T + 2000)], t.index).providers.get("opencode-go")?.cost, .5);
+	const stats = f.stats([prompt("parent"), prompt("again", T + 4000), ...script(T + 5000, T + 6000)], t.index);
+	assert.equal(stats.providers.get("openai")?.cost, .5);
+	assert.equal(stats.providers.has("opencode-go"), false);
+	assert.equal(f.stats([prompt("parent")], t.index).providers.size, 0);
+});
 
 test("combined parent and parallel children sum request spans, leaving parent cache state alone", () => {
 	const f = fixture();

@@ -13,6 +13,18 @@ const object = (value: unknown): RecordValue | undefined => value && typeof valu
 const containers = ["results", "children", "childRuns", "childOutputs", "workflowChildren", "steps", "runs", "result", "workflow", "implementation", "reviews"];
 const UUID_ANYWHERE = new RegExp(UUID, "gi");
 
+interface TeamRecord { name: string; parent: string; createdAt: number; sessionFile: string; orphaned?: boolean }
+
+/** What a walk reads of a team index; the rest, tasks and reports, can be most of the file. */
+const teamRecords = (dir: string) => (value: unknown): TeamRecord[] => {
+	const records = object(value)?.records;
+	return Array.isArray(records) ? records.flatMap(r => typeof r?.name === "string" && typeof r.parent === "string" && typeof r.createdAt === "number"
+		&& typeof r.sessionFile === "string" && r.sessionFile.endsWith(".jsonl")
+		// Child sessions are always in the index's folder; a moved session keeps old paths (subagents/restore.ts).
+		? [{ name: r.name, parent: r.parent, createdAt: r.createdAt, sessionFile: join(dir, basename(r.sessionFile)), ...(r.orphaned === true ? { orphaned: true } : {}) }]
+		: []) : [];
+};
+
 /** Tool results and notices the subagent extension writes; other tools' text may name runs this branch never started. */
 function subagentProtocol(entry: BranchEntry): unknown[] | undefined {
 	const message = entry.message as RecordValue | undefined;
@@ -75,12 +87,46 @@ export class ChildEvidenceCollector {
 	private readonly asyncDirs = new Set<string>();
 	private readonly visited = new Set<string>();
 	private readonly expanded = new Set<string>();
+	/**
+	 * Main's tool batches whose scripts called or may call `subagent`. A script's result keeps
+	 * no child session file, so the team index links the children main started between the
+	 * batch's reply and its results: a batch that `/undo` removed links nothing.
+	 */
+	private readonly scripts: Array<{ from: number; to: number }> = [];
+	private team?: TeamRecord[];
 	private budget = 512;
 	private readonly ioBudget: EvidenceBudget = { bytes: 64 * 1024 * 1024 };
+	private readonly main: string;
+	private readonly childIndex?: () => string | undefined;
+	private readonly sessionEntries?: () => BranchEntry[] | undefined;
+	private appended?: BranchEntry[];
 
-	constructor(sessionDir: string, sessionFile?: string) {
+	/**
+	 * `childIndex` gives the team index path, asked for only when a script called `subagent`;
+	 * `entries` gives every session entry in append order, asked for only when a script call has no result.
+	 */
+	constructor(sessionDir: string, sessionFile?: string, childIndex?: () => string | undefined, entries?: () => BranchEntry[] | undefined) {
 		this.artifactDirs.add(join(sessionDir, "subagent-artifacts"));
 		if (sessionFile) this.roots.add(sessionFile.replace(/\.jsonl$/, ""));
+		this.main = sessionFile ?? "parent";
+		this.childIndex = childIndex;
+		this.sessionEntries = entries;
+	}
+
+	/**
+	 * When a script call's batch ended, by the session file: its result or the next request,
+	 * on any branch. After `/tree` to the call, its result is off the branch, so the branch
+	 * cannot tell a running script from one that ended long ago.
+	 */
+	private batchEnd(call: BranchEntry, ids: Set<string>): number | undefined {
+		this.appended ??= this.sessionEntries?.() ?? [];
+		const at = call.id === undefined ? -1 : this.appended.findIndex(entry => entry.id === call.id);
+		if (at < 0) return undefined;
+		const end = this.appended.slice(at + 1).find(entry => {
+			const message = entry.message as RecordValue | undefined;
+			return entry.type === "message" && (message?.role === "user" || message?.role === "assistant" || message?.role === "toolResult" && ids.has(message.toolCallId));
+		});
+		return end ? Date.parse(end.timestamp) : Date.now();
 	}
 
 	private path(value: unknown): string | undefined {
@@ -145,12 +191,35 @@ export class ChildEvidenceCollector {
 	}
 
 	scanBranch(entries: BranchEntry[], origin: string): void {
+		// Children never get codemode (subagents/child.ts), so only main's scripts start children.
+		const main = origin === this.main;
+		let replied: BranchEntry | undefined;
+		// Codemode calls without a result: a script still running, or one a crash cut off.
+		let pending = new Set<string>();
+		const close = (to: number) => {
+			if (main && replied && pending.size > 0) this.scripts.push({ from: Date.parse(replied.timestamp), to: this.batchEnd(replied, pending) ?? to });
+			pending = new Set();
+		};
 		entries.forEach((entry, index) => {
 			const protocol = subagentProtocol(entry);
 			if (protocol) for (const match of JSON.stringify(protocol).matchAll(UUID_ANYWHERE)) this.mentioned.add(match[0].toLowerCase());
 			const message = entry.message as RecordValue | undefined;
+			if (entry.type === "message" && (message?.role === "user" || message?.role === "assistant")) close(Date.parse(entry.timestamp));
+			if (entry.type === "message" && message?.role === "assistant") {
+				replied = entry;
+				// No tool runs for a reply that stopped early; for "length", Pi writes the error results itself.
+				const ran = !["aborted", "error", "length"].includes(message.stopReason);
+				if (ran && Array.isArray(message.content)) pending = new Set(message.content.filter((b: any) => b?.type === "toolCall" && b.name === "codemode").map((b: any) => b.id));
+			}
+			if (entry.type === "message" && message?.role === "toolResult") pending.delete(message.toolCallId);
 			if (entry.type === "message" && message?.role === "toolResult" && ["subagent", "subagent_wait", "subagent_status", "subagent_result"].includes(message.toolName)) {
 				this.scanDetails(message.details, `${origin}:${message.toolCallId ?? entry.id ?? index}`);
+			}
+			// Pi stamps a batch's results when the whole batch ends, so the batch spans from its reply.
+			const nested = object(message?.nestedCalls);
+			if (main && entry.type === "message" && message?.role === "toolResult" && nested && replied
+				&& (nested.complete === false || (Array.isArray(nested.calls) && nested.calls.some((call: any) => call?.name === "subagent")))) {
+				this.scripts.push({ from: Date.parse(replied.timestamp), to: Date.parse(entry.timestamp) });
 			}
 			if (entry.type === "custom_message" && entry.customType === "subagent-notify") {
 				this.scanDetails(entry.details, `${origin}:notify:${index}`);
@@ -174,6 +243,8 @@ export class ChildEvidenceCollector {
 				}
 			}
 		});
+		// At the branch tip a script still runs: its children so far count.
+		close(Date.now());
 	}
 
 	/** Some evidence waited for a later walk's reads, so the children's totals are still loading. */
@@ -230,6 +301,19 @@ export class ChildEvidenceCollector {
 		}
 	}
 
+	/** Index children main started during one of its script batches; one found on disk with no call that started it is not. */
+	private linkScripts(): void {
+		if (this.scripts.length === 0) return;
+		const index = this.team ? undefined : this.childIndex?.();
+		// A missing index stays missing for the rest of the walk.
+		this.team ??= index && this.budget-- > 0 ? evidenceJson(index, this.ioBudget, teamRecords(dirname(index))) as TeamRecord[] | undefined ?? [] : [];
+		for (const { from, to } of this.scripts.splice(0)) {
+			for (const r of this.team) {
+				if (r.parent === "main" && !r.orphaned && r.createdAt >= from && r.createdAt <= to) this.scanDetails({ sessionFile: r.sessionFile }, `script:${from}`);
+			}
+		}
+	}
+
 	private reconcileWorkflowAliases(): void {
 		for (const child of [...this.children.values()]) {
 			const runId = child.workflowAlias && this.workflowAliases.get(child.workflowAlias);
@@ -251,6 +335,7 @@ export class ChildEvidenceCollector {
 				this.visited.add(dir);
 				for (const file of ["status.json", "workflow-result.json"]) this.scanDetails(this.read(join(dir, file)), dir);
 			}
+			this.linkScripts();
 			this.reconcileWorkflowAliases();
 			for (const runId of this.runs) this.discoverRun(runId);
 			this.discoverMentioned();

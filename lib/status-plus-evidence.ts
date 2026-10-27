@@ -137,7 +137,8 @@ function parse(bytes: Buffer, keep: (record: unknown) => unknown): { records: un
 	return { records, bytes: size };
 }
 
-export function evidenceJson(path: string, budget?: EvidenceBudget): unknown {
+/** A JSON file, passed through `keep` once per change. One caller per path: the cache holds what it kept. */
+export function evidenceJson(path: string, budget?: EvidenceBudget, keep: (value: unknown) => unknown = (value) => value): unknown {
 	const key = `json:${path}`;
 	const previous = cache.get(key);
 	try {
@@ -149,8 +150,9 @@ export function evidenceJson(path: string, budget?: EvidenceBudget): unknown {
 		const signature = signatureOf(stat);
 		if (previous?.signature === signature) return touch(key, previous);
 		if (!afford(budget, stat.size)) return previous?.value;
-		const value = JSON.parse(readFileSync(path, "utf8"));
-		remember(key, { signature, value, bytes: stat.size });
+		const parsed = JSON.parse(readFileSync(path, "utf8"));
+		const value = keep(parsed);
+		remember(key, { signature, value, bytes: value === parsed ? stat.size : JSON.stringify(value)?.length ?? 0 });
 		return value;
 	} catch (error) {
 		if (missing(error)) {

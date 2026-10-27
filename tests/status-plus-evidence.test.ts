@@ -29,6 +29,20 @@ test("evidence cache reuses unchanged parses and invalidates appends and rewrite
 	assert.deepEqual(evidenceLines(file), [{ n: 3 }]);
 });
 
+test("a JSON projection is kept, and an unchanged file is not parsed or projected again", () => {
+	const file = join(fixture(), "index.json");
+	writeFileSync(file, JSON.stringify({ records: [{ name: "a", task: "x".repeat(10_000) }] }));
+	let projections = 0;
+	const keep = (value: any) => { projections++; return value.records.map((r: any) => ({ name: r.name })); };
+	const first = evidenceJson(file, undefined, keep);
+	assert.deepEqual(first, [{ name: "a" }]);
+	assert.strictEqual(evidenceJson(file, undefined, keep), first);
+	assert.equal(projections, 1);
+	writeFileSync(file, JSON.stringify({ records: [{ name: "b" }] }));
+	assert.deepEqual(evidenceJson(file, undefined, keep), [{ name: "b" }]);
+	assert.equal(projections, 2);
+});
+
 test("directory cache sees later publications and does not keep missing directories", () => {
 	const dir = join(fixture(), "children");
 	assert.deepEqual(evidenceFiles(dir), []);

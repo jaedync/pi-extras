@@ -371,6 +371,15 @@ Status Plus reads that provider's limits at once. A poll that another Pi
 process made recently counts, so the switch usually does not ask the provider
 again.
 
+**Subagent spend.** The footer adds the spend of the subagents that the
+current branch started. A child that a `subagent` call started counts from
+that call's result. A child that a codemode script started counts through the
+team index of the session. That child counts when it started during a tool
+batch on the current branch, from the reply that called the script to the
+results. A script that still runs counts its children so far. A child that a
+report names, but that the branch did not start, does not count. Thus, after
+`/undo`, children of the removed branch no longer count.
+
 **A click on a status line.** Status Plus shows the status of each other
 extension (`ctx.ui.setStatus(key, text)`) on a line of its own below the grid.
 In fullscreen mode, a left click on one of these lines sends an event on Pi's
