@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { collect } from "../lib/status-plus-transcript.ts";
+import { clockNote, runClockHead } from "../lib/subagents/format.ts";
+import { SWAP_NOTE } from "../lib/subagents/swap.ts";
 
 const T = 1_750_000_000_000;
 const iso = (n: number) => new Date(n).toISOString();
@@ -150,6 +152,190 @@ test("a direct start, a script in the same batch and the report charge one child
 	const stats = f.stats([prompt("parent"), call, direct, codemode, report(sessionFile)], t.index);
 	assert.deepEqual([stats.prompts, stats.turns], [2, 2]);
 	assert.equal(stats.providers.get("openai")?.cost, .5);
+});
+
+/** The first prompt of a child's run, as team.ts `run` writes it. */
+const runStart = (id: string, at: number) => ({ type: "message", id, timestamp: iso(at), message: { role: "user", timestamp: at, content: [{ type: "text", text: `${runClockHead({ now: at, minutes: 60 })}\n\n${id}` }] } });
+
+/** Main's `message` call at `at` and its result: direct, or nested in a codemode script. */
+function resume(to: string, at: number, how: "direct" | "script" | "long" = "direct", delivered = "resumed", end = at + 100) {
+	const call = reply(`msg-${at}`, "anthropic", at - 1000, 1, how === "direct" ? "message" : "codemode");
+	// Pi leaves out a nested call's arguments over 8 KiB, so a long message does not name the child.
+	const nested = how === "long" ? { argumentsBytes: 9000 } : { arguments: { to, text: "go on" } };
+	const message = how === "direct"
+		? { role: "toolResult", toolName: "message", toolCallId: `msg-${at}-0`, details: { to, delivered } }
+		: { role: "toolResult", toolName: "codemode", toolCallId: `msg-${at}-0`, details: { calls: [] },
+			nestedCalls: { calls: [{ id: `msg-${at}-0/1`, name: "message", status: "ok", ...nested }], complete: how !== "long" } };
+	return [call, { type: "message", id: `msg-${at}-result`, timestamp: iso(end), message }];
+}
+
+test("a resumed child's runs count on the branch that started each run, not its whole session on each", () => {
+	// A script that waits for run 1 to end, then resumes the child.
+	for (const [how, at] of [["direct", T + 5000], ["script", T + 5000], ["script", T + 2200]] as const) {
+		const f = fixture();
+		const t = team(f);
+		// Run 1 from a script on branch A; run 2 from main's message on branch B, after /undo.
+		t.spawn("worker", T + 1500, [runStart("task", T + 1500), reply("w1", "openai", T + 1600), runStart("again", T + 5200), reply("w2", "openai", T + 5300)]);
+		const a = [prompt("parent"), ...script(T + 1000, T + 2000)];
+		const b = [prompt("parent"), prompt("other way", T + 2100), ...resume("worker", at, how, "resumed", T + 5100)];
+		const file = [...a, ...b.slice(1)];
+		assert.equal(f.stats(a, t.index, file).providers.get("openai")?.cost, .5, `${how} at ${at}: branch A`);
+		assert.equal(f.stats(b, t.index, file).providers.get("openai")?.cost, .5, `${how} at ${at}: branch B`);
+	}
+});
+
+test("one message call starts at most one run, and a later call claims the run after it", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("worker", T + 1500, [runStart("task", T + 1500), reply("w1", "openai", T + 1600), runStart("again", T + 5200), reply("w2", "openai", T + 5300),
+		runStart("third", T + 9000), reply("w3", "openai", T + 9100)]);
+	const spawn = script(T + 1000, T + 2000);
+	const b = [prompt("parent"), prompt("other way", T + 8000), ...resume("worker", T + 8500)];
+	const file = (a: any[]) => [...a, ...b.slice(1)];
+	// A script on A resumes run 2 and ends after it, or a direct call's batch does; B resumes run 3.
+	for (const how of ["script", "direct"] as const) {
+		const a = [prompt("parent"), ...spawn, prompt("resume", T + 4000), ...resume("worker", T + 5000, how, "resumed", T + 7000)];
+		assert.equal(f.stats(a, t.index, file(a)).providers.get("openai")?.cost, 1, `${how}: branch A`);
+		assert.equal(f.stats(b, t.index, file(a)).providers.get("openai")?.cost, .5, `${how}: branch B`);
+	}
+});
+
+test("a script that steered run 1 and ended after it does not take run 2 from the branch that resumed it", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("worker", T + 1500, [runStart("task", T + 1500), reply("w1", "openai", T + 1600), runStart("again", T + 5200), reply("w2", "openai", T + 5300)]);
+	const [call, result] = script(T + 1000, T + 3000) as any[];
+	const steer = { id: `call-${T + 1000}-0/2`, name: "message", status: "ok", arguments: { to: "worker", text: "also this" } };
+	const a = [prompt("parent"), call, { ...result, message: { ...result.message, nestedCalls: { ...result.message.nestedCalls, calls: [...result.message.nestedCalls.calls, steer] } } }];
+	const b = [prompt("parent"), prompt("other way", T + 4000), ...resume("worker", T + 5000)];
+	const file = [...a, ...b.slice(1)];
+	assert.equal(f.stats(a, t.index, file).providers.get("openai")?.cost, .5);
+	assert.equal(f.stats(b, t.index, file).providers.get("openai")?.cost, .5);
+});
+
+test("a script's message too long to keep its arguments resumes the child whose run starts in its batch", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("worker", T + 1500, [runStart("task", T + 1500), reply("w1", "openai", T + 1600), runStart("again", T + 5200), reply("w2", "openai", T + 5300)]);
+	t.spawn("idle", T + 1600, [runStart("other", T + 1600), reply("i1", "opencode-go", T + 1700)], "main", {});
+	const a = [prompt("parent"), ...script(T + 1000, T + 2000)];
+	const b = [prompt("parent"), prompt("other way", T + 4000), ...resume("worker", T + 5000, "long", "resumed", T + 5300)];
+	const file = [...a, ...b.slice(1)];
+	assert.equal(f.stats(a, t.index, file).providers.get("openai")?.cost, .5);
+	const onB = f.stats(b, t.index, file);
+	assert.equal(onB.providers.get("openai")?.cost, .5);
+	assert.equal(onB.providers.has("opencode-go"), false);
+});
+
+/** One batch on main whose script sends `calls` (`message` arguments, or undefined for one too long to keep), from `from` to `to`. */
+function messages(from: number, to: number, calls: Array<object | undefined>) {
+	const call = reply(`batch-${from}`, "anthropic", from - 1000, 1, "codemode");
+	const nested = calls.map((args, i) => ({ id: `batch-${from}-0/${i}`, name: "message", status: "ok", ...(args ? { arguments: args } : { argumentsBytes: 9000 }) }));
+	return [call, { type: "message", id: `batch-${from}-result`, timestamp: iso(to), message: { role: "toolResult", toolName: "codemode", toolCallId: `batch-${from}-0`,
+		details: { calls: [] }, nestedCalls: { calls: nested, complete: calls.every(Boolean) } } }];
+}
+
+test("a message that names no child resumes one run, the same on every branch, whichever child a walk reads first", () => {
+	const f = fixture();
+	const t = team(f);
+	// y from a script on A; x from a direct call on A. B's long message resumes y; a peer resumes x in that batch.
+	t.spawn("y", T + 1500, [runStart("y1", T + 1500), reply("y1", "openai", T + 1600), runStart("y2", T + 5200), reply("y2", "openai", T + 5300)]);
+	const x = t.spawn("x", T + 3000, [runStart("x1", T + 3000), reply("x1", "opencode-go", T + 3100), runStart("x2", T + 5400), reply("x2", "opencode-go", T + 5500)]);
+	const a = [prompt("parent"), ...script(T + 1000, T + 2000), result({ name: "x", model: "opencode-go/model", sessionFile: x, wait: false }, "subagent", "spawn-x")];
+	const b = [prompt("parent"), prompt("other way", T + 4000), ...messages(T + 5000, T + 7000, [undefined])];
+	const file = [...a, ...b.slice(1)];
+	const [onA, onB] = [f.stats(a, t.index, file), f.stats(b, t.index, file)];
+	assert.deepEqual([onA.providers.get("openai")?.cost, onA.providers.get("opencode-go")?.cost], [.5, 1]);
+	assert.deepEqual([onB.providers.get("openai")?.cost, onB.providers.has("opencode-go")], [.5, false]);
+});
+
+test("a message that names its child explains that run, so the batch's nameless message resumes the other child", () => {
+	const f = fixture();
+	const t = team(f);
+	t.spawn("x", T + 1500, [runStart("x1", T + 1500), reply("x1", "opencode-go", T + 1600), runStart("x2", T + 5200), reply("x2", "opencode-go", T + 5300)]);
+	t.spawn("y", T + 1600, [runStart("y1", T + 1600), reply("y1", "openai", T + 1700), runStart("y2", T + 5300), reply("y2", "openai", T + 5400)]);
+	const a = [prompt("parent"), ...script(T + 1000, T + 2000)];
+	const b = [prompt("parent"), prompt("other way", T + 4000), ...messages(T + 5000, T + 7000, [{ to: "x", text: "go on" }, undefined])];
+	const file = [...a, ...b.slice(1)];
+	for (const branch of [a, b]) {
+		const stats = f.stats(branch, t.index, file);
+		assert.deepEqual([stats.providers.get("openai")?.cost, stats.providers.get("opencode-go")?.cost], [.5, .5]);
+	}
+});
+
+test("a direct spawn recorded at its session's old folder is one child with the index's copy, so a nameless resume counts once", () => {
+	const f = fixture();
+	const t = team(f);
+	const entries = [runStart("x1", T + 1500), reply("x1", "openai", T + 1600), runStart("x2", T + 5200), reply("x2", "openai", T + 5300)];
+	const now = t.spawn("x", T + 1500, entries);
+	// The folder was copied: the spawn's result still names the old path, and the index is rebased to the new one.
+	const old = join(f.dir, "old-folder", basename(now));
+	mkdirSync(dirname(old), { recursive: true });
+	writeFileSync(old, entries.map(e => JSON.stringify(e)).join("\n") + "\n");
+	const a = [prompt("parent"), result({ name: "x", model: "openai/model", sessionFile: old, wait: false }, "subagent", "spawn-x")];
+	const b = [prompt("parent"), prompt("other way", T + 4000), ...messages(T + 5000, T + 7000, [undefined])];
+	const file = [...a, ...b.slice(1)];
+	assert.equal(f.stats(a, t.index, file).providers.get("openai")?.cost, .5);
+	assert.equal(f.stats(b, t.index, file).providers.get("openai")?.cost, .5);
+});
+
+test("a nameless message does not read a child whose last run ended before its batch", () => {
+	const f = fixture();
+	const t = team(f);
+	// The index says z ended before the batch; a run its file shows in the batch is not read.
+	t.spawn("z", T + 1500, [runStart("z1", T + 1500), reply("z1", "openai", T + 1600), runStart("z2", T + 5200), reply("z2", "openai", T + 5300)], "main",
+		{ state: "idle", endedAt: T + 3000 });
+	const b = [prompt("parent"), prompt("other way", T + 4000), ...messages(T + 5000, T + 7000, [undefined])];
+	assert.equal(f.stats(b, t.index, b).providers.has("openai"), false);
+	t.spawn("live", T + 1600, [runStart("l1", T + 1600), reply("l1", "opencode-go", T + 1700), runStart("l2", T + 5200), reply("l2", "opencode-go", T + 5300)], "main",
+		{ state: "running", endedAt: T + 3000 });
+	assert.equal(f.stats(b, t.index, b).providers.get("opencode-go")?.cost, .5);
+});
+
+test("what a child writes at its relaunch before the run's prompt does not end the run before it", () => {
+	const f = fixture();
+	const t = team(f);
+	const change = { type: "model_change", id: "mc", timestamp: iso(T + 5150), provider: "openai", modelId: "model" };
+	const thinking = { type: "thinking_level_change", id: "tl", timestamp: iso(T + 5160), thinkingLevel: "high" };
+	t.spawn("worker", T + 1500, [runStart("task", T + 1500), reply("w1", "openai", T + 1600), change, thinking, runStart("again", T + 5200), reply("w2", "openai", T + 5300)]);
+	const a = [prompt("parent"), ...script(T + 1000, T + 2000)];
+	const b = [prompt("parent"), prompt("other way", T + 4000), ...resume("worker", T + 5000)];
+	const file = [...a, ...b.slice(1)];
+	assert.equal(f.stats(a, t.index, file).providers.get("openai")?.cost, .5);
+	assert.equal(f.stats(b, t.index, file).providers.get("openai")?.cost, .5);
+});
+
+test("a run that main did not start counts on the branch that spawned the child", () => {
+	const f = fixture();
+	const t = team(f);
+	// Run 2 from main's message on branch B; run 3 an auto-resume after a restore, or a peer's message.
+	t.spawn("worker", T + 1500, [runStart("task", T + 1500), reply("w1", "openai", T + 1600), runStart("again", T + 5200), reply("w2", "openai", T + 5300),
+		runStart("restored", T + 9000), reply("w3", "openai", T + 9100)]);
+	const a = [prompt("parent"), ...script(T + 1000, T + 2000)];
+	// A message to a running child steers its run; it starts none.
+	const b = [prompt("parent"), prompt("other way", T + 4000), ...resume("worker", T + 5000), ...resume("worker", T + 5250, "direct", "steered")];
+	const file = [...a, ...b.slice(1)];
+	assert.equal(f.stats(a, t.index, file).providers.get("openai")?.cost, 1);
+	assert.equal(f.stats(b, t.index, file).providers.get("openai")?.cost, .5);
+});
+
+test("a run that moved to a new session or model is still one run, charged once", () => {
+	const f = fixture();
+	const t = team(f);
+	// Run 2 moves at a turn boundary (swap.ts) and falls back to another model: both go on in the same session file.
+	const moved = { type: "message", id: "moved", timestamp: iso(T + 6400), message: { role: "user", timestamp: T + 6400,
+		content: `${clockNote({ now: T + 6400, usedMs: 200, minutes: 60 })}\n\n${SWAP_NOTE}` } };
+	const tool = { type: "message", id: "tool", timestamp: iso(T + 6350), message: { role: "toolResult", toolName: "read", toolCallId: "w2-0", content: [] } };
+	t.spawn("worker", T + 1500, [runStart("task", T + 1500), reply("w1", "openai", T + 1600), runStart("again", T + 5200), reply("w2", "openai", T + 5300), tool,
+		moved, reply("w3", "opencode-go", T + 6500)]);
+	const a = [prompt("parent"), ...script(T + 1000, T + 2000)];
+	const b = [prompt("parent"), prompt("other way", T + 4000), ...resume("worker", T + 5000)];
+	const file = [...a, ...b.slice(1)];
+	const [onA, onB] = [f.stats(a, t.index, file), f.stats(b, t.index, file)];
+	assert.equal(onA.providers.get("openai")?.cost, .5);
+	assert.equal(onA.providers.has("opencode-go"), false);
+	assert.equal(onB.providers.get("openai")?.cost, .5);
+	assert.equal(onB.providers.get("opencode-go")?.cost, .5);
 });
 
 test("a child that a script started on a branch /undo removed is not charged", () => {

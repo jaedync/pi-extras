@@ -3,7 +3,7 @@
  * for the same run/index; native sessions take precedence over artifact copies. */
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { evidenceFiles, evidenceJson, evidenceLines, type EvidenceBudget } from "./status-plus-evidence.ts";
-import { slimRecord } from "./status-plus-slim.ts";
+import { slimRecord, startsRun } from "./status-plus-slim.ts";
 import type { BranchEntry } from "./status-plus-transcript.ts";
 
 type RecordValue = Record<string, any>;
@@ -13,7 +13,11 @@ const object = (value: unknown): RecordValue | undefined => value && typeof valu
 const containers = ["results", "children", "childRuns", "childOutputs", "workflowChildren", "steps", "runs", "result", "workflow", "implementation", "reviews"];
 const UUID_ANYWHERE = new RegExp(UUID, "gi");
 
-interface TeamRecord { name: string; parent: string; createdAt: number; sessionFile: string; orphaned?: boolean }
+interface TeamRecord { name: string; parent: string; createdAt: number; sessionFile: string; orphaned?: boolean; state?: string; endedAt?: number }
+const LIVE = new Set(["queued", "starting", "running", "asking", "waiting"]);
+type Cause = { name?: string; from: number; to: number; here: boolean };
+/** A child's runs, when each later run started and its run before ended, and the call that started each. */
+type Plan = { name: string; runs: BranchEntry[][]; starts: Array<{ k: number; started: number; after: number }>; by: Array<Cause | undefined> };
 
 /** What a walk reads of a team index; the rest, tasks and reports, can be most of the file. */
 const teamRecords = (dir: string) => (value: unknown): TeamRecord[] => {
@@ -21,7 +25,8 @@ const teamRecords = (dir: string) => (value: unknown): TeamRecord[] => {
 	return Array.isArray(records) ? records.flatMap(r => typeof r?.name === "string" && typeof r.parent === "string" && typeof r.createdAt === "number"
 		&& typeof r.sessionFile === "string" && r.sessionFile.endsWith(".jsonl")
 		// Child sessions are always in the index's folder; a moved session keeps old paths (subagents/restore.ts).
-		? [{ name: r.name, parent: r.parent, createdAt: r.createdAt, sessionFile: join(dir, basename(r.sessionFile)), ...(r.orphaned === true ? { orphaned: true } : {}) }]
+		? [{ name: r.name, parent: r.parent, createdAt: r.createdAt, sessionFile: join(dir, basename(r.sessionFile)), ...(r.orphaned === true ? { orphaned: true } : {}),
+			...(typeof r.state === "string" ? { state: r.state } : {}), ...(typeof r.endedAt === "number" ? { endedAt: r.endedAt } : {}) }]
 		: []) : [];
 };
 
@@ -35,6 +40,19 @@ function subagentProtocol(entry: BranchEntry): unknown[] | undefined {
 		return [entry.content, entry.details, entry.data];
 	}
 	return undefined;
+}
+
+/**
+ * Children a main `message` result resumed: a direct call that says so, or a script's call, whose
+ * result is not kept. Undefined for a script's call whose arguments Pi left out as too long.
+ */
+function resumedBy(message: RecordValue | undefined): Array<string | undefined> {
+	if (message?.role !== "toolResult") return [];
+	const details = object(message.details);
+	if (message.toolName === "message") return details?.delivered === "resumed" && typeof details.to === "string" ? [details.to] : [];
+	const calls = object(message.nestedCalls)?.calls;
+	return Array.isArray(calls) ? calls.flatMap((call: any) => call?.name !== "message" || call.status !== "ok" ? []
+		: typeof call.arguments?.to === "string" ? [call.arguments.to] : call.arguments === undefined ? [undefined] : []) : [];
 }
 
 export interface ChildEvidence {
@@ -94,6 +112,21 @@ export class ChildEvidenceCollector {
 	 */
 	private readonly scripts: Array<{ from: number; to: number }> = [];
 	private team?: TeamRecord[];
+	/**
+	 * Main's children by session file, which holds all of a child's runs: the branch is charged
+	 * only for the runs it started (`planRuns`). `spawned` when this branch started the child.
+	 */
+	private readonly owned = new Map<string, { name: string; spawned: boolean }>();
+	/** Children main's `message` calls on this branch resumed; they link through the team index. */
+	private readonly resumed = new Set<string>();
+	/** This branch has a script's `message` call whose child Pi left out (`resumedBy`). */
+	private nameless = false;
+	/** The entries each child of main charges this branch (`planRuns`), by session file. */
+	private charged?: Map<string, BranchEntry[]>;
+	/** Main's branch entries, by id. */
+	private here = new Set<unknown>();
+	private mainBranch: BranchEntry[] = [];
+	private causes?: Cause[];
 	private budget = 512;
 	private readonly ioBudget: EvidenceBudget = { bytes: 64 * 1024 * 1024 };
 	private readonly main: string;
@@ -193,6 +226,10 @@ export class ChildEvidenceCollector {
 	scanBranch(entries: BranchEntry[], origin: string): void {
 		// Children never get codemode (subagents/child.ts), so only main's scripts start children.
 		const main = origin === this.main;
+		if (main) {
+			this.mainBranch = entries;
+			this.here = new Set(entries.map(entry => entry.id ?? entry));
+		}
 		let replied: BranchEntry | undefined;
 		// Codemode calls without a result: a script still running, or one a crash cut off.
 		let pending = new Set<string>();
@@ -214,6 +251,20 @@ export class ChildEvidenceCollector {
 			if (entry.type === "message" && message?.role === "toolResult") pending.delete(message.toolCallId);
 			if (entry.type === "message" && message?.role === "toolResult" && ["subagent", "subagent_wait", "subagent_status", "subagent_result"].includes(message.toolName)) {
 				this.scanDetails(message.details, `${origin}:${message.toolCallId ?? entry.id ?? index}`);
+			}
+			if (main && entry.type === "message" && message?.role === "toolResult" && message.toolName === "subagent") {
+				// A spawn, or a panel's members.
+				const details = object(message.details);
+				for (const spawn of [details, ...(Array.isArray(details?.children) ? details.children : [])]) {
+					const file = this.path(spawn?.sessionFile);
+					if (file && typeof spawn.name === "string") this.own(file, spawn.name, true);
+				}
+			}
+			if (main && entry.type === "message") {
+				for (const name of resumedBy(message)) {
+					if (name !== undefined) this.resumed.add(name);
+					else this.nameless = true;
+				}
 			}
 			// Pi stamps a batch's results when the whole batch ends, so the batch spans from its reply.
 			const nested = object(message?.nestedCalls);
@@ -301,17 +352,141 @@ export class ChildEvidenceCollector {
 		}
 	}
 
-	/** Index children main started during one of its script batches; one found on disk with no call that started it is not. */
-	private linkScripts(): void {
-		if (this.scripts.length === 0) return;
+	private own(file: string, name: string, spawned: boolean): void {
+		this.owned.set(file, { name, spawned: spawned || this.owned.get(file)?.spawned === true });
+	}
+
+	/**
+	 * Main's `message` calls that resumed a child, on any branch, from the reply that made them to
+	 * their batch's results: a script's call can come any time in it. Without every session entry,
+	 * only this branch's calls are known.
+	 */
+	private resumes(): Cause[] {
+		if (this.causes) return this.causes;
+		this.appended ??= this.sessionEntries?.() ?? [];
+		const replies = new Map<string, BranchEntry>();
+		this.causes = [];
+		for (const entry of this.appended.length > 0 ? this.appended : this.mainBranch) {
+			const message = entry.message as RecordValue | undefined;
+			if (entry.type !== "message") continue;
+			if (message?.role === "assistant" && Array.isArray(message.content)) for (const block of message.content) if (block?.type === "toolCall") replies.set(block.id, entry);
+			const reply = message?.role === "toolResult" ? replies.get(message.toolCallId) : undefined;
+			if (reply) for (const name of resumedBy(message)) this.causes.push({ name, from: Date.parse(reply.timestamp), to: Date.parse(entry.timestamp), here: this.here.has(reply.id ?? reply) });
+		}
+		this.causes.sort((a, b) => a.from - b.from);
+		return this.causes;
+	}
+
+	private loadTeam(): TeamRecord[] {
 		const index = this.team ? undefined : this.childIndex?.();
 		// A missing index stays missing for the rest of the walk.
-		this.team ??= index && this.budget-- > 0 ? evidenceJson(index, this.ioBudget, teamRecords(dirname(index))) as TeamRecord[] | undefined ?? [] : [];
-		for (const { from, to } of this.scripts.splice(0)) {
-			for (const r of this.team) {
-				if (r.parent === "main" && !r.orphaned && r.createdAt >= from && r.createdAt <= to) this.scanDetails({ sessionFile: r.sessionFile }, `script:${from}`);
+		return this.team ??= index && this.budget-- > 0 ? evidenceJson(index, this.ioBudget, teamRecords(dirname(index))) as TeamRecord[] | undefined ?? [] : [];
+	}
+
+	/**
+	 * The runs of main's children that this branch started: a child's first run when the branch
+	 * spawned it, and each run that a `message` from here resumed. Each call starts one run at
+	 * most: for a child, the newest call to it not yet used that ended after its run before and
+	 * came before the run's start. An older call in that span steered the run before; a batch's
+	 * results, a script's too, are stamped when the whole batch ends. A call that names no child
+	 * (`resumedBy`) then starts the earliest run of any child of main that starts in its batch and
+	 * that no named call explains; the same runs on every branch, so no run counts twice or not
+	 * at all. A run main did not start (an automatic resume after a restore, `/subagents resume`
+	 * or a peer's message) goes with the spawn: no branch asked for it, and the spawn is what made
+	 * the child. Planned once a walk, after main's links, before any child is read.
+	 */
+	private planRuns(): void {
+		if (this.charged || this.owned.size === 0 && !this.nameless) return;
+		this.charged = new Map();
+		const plans = new Map<string, Plan>();
+		// A relaunch writes its model and thinking level before the run's prompt, after main's call.
+		const ended = (run: BranchEntry[]) => run.reduce((last, entry) => entry.type === "message" ? Math.max(last, Date.parse(entry.timestamp) || -Infinity) : last, -Infinity);
+		const plan = (path: string, name: string) => {
+			const entries = transcriptEntries(this.read(path, true) ?? []);
+			const first = entries.findIndex(entry => entry.message?.role === "user");
+			const bounds = [0, ...entries.flatMap((entry, index) => first >= 0 && index > first && startsRun(entry.message) ? [index] : []), entries.length];
+			const runs = bounds.slice(0, -1).map((from, k) => entries.slice(from, bounds[k + 1]));
+			plans.set(path, { name, runs, starts: runs.slice(1).map((run, i) => ({ k: i + 1, started: Date.parse(run[0].timestamp), after: ended(runs[i]) })), by: [] });
+		};
+		for (const [path, { name }] of this.owned) plan(path, name);
+		const causes = this.nameless || [...plans.values()].some(p => p.runs.length > 1) ? this.resumes() : [];
+		const nameless = causes.filter(cause => cause.name === undefined);
+		// Any child of main may be the one a nameless call resumed, but not one that had ended before its batch and
+		// does not run now. The same children on every branch, so each gives the same answer.
+		const may = (r: TeamRecord, c: Cause) => r.parent === "main" && !r.orphaned && r.createdAt <= c.to && (LIVE.has(r.state ?? "") || (r.endedAt ?? Infinity) >= c.from);
+		const records = new Map(nameless.length > 0 ? this.loadTeam().map(r => [r.sessionFile, r]) : []);
+		// A spawn's result keeps the path from before a session folder moved; the index's is the one nameless calls plan.
+		const moved = new Map([...records.keys()].map(path => [basename(path), path]));
+		for (const [path, { name, spawned }] of [...this.owned]) {
+			const now = moved.get(basename(path));
+			if (!now || now === path) continue;
+			this.owned.delete(path);
+			plans.delete(path);
+			this.own(now, name, spawned);
+			plan(now, name);
+			// Read again under the old path, the child charges nothing: its runs are under the index's.
+			this.charged.set(path, []);
+		}
+		for (const r of records.values()) if (!plans.has(r.sessionFile) && nameless.some(c => may(r, c))) plan(r.sessionFile, r.name);
+		const named = new Map<string, Cause[]>();
+		for (const c of causes) if (c.name !== undefined) named.get(c.name)?.push(c) ?? named.set(c.name, [c]);
+		for (const p of plans.values()) {
+			const used = new Set<Cause>();
+			const mine = named.get(p.name) ?? [];
+			for (const { k, started, after } of p.starts) {
+				const cause = mine.findLast(c => !used.has(c) && c.to > after && c.from <= started);
+				if (cause) used.add(p.by[k] = cause);
 			}
 		}
+		const paths = [...plans.keys()].sort();
+		for (const c of nameless) {
+			let pick: { p: Plan; start: Plan["starts"][number] } | undefined;
+			for (const path of paths) {
+				const r = records.get(path);
+				const p = plans.get(path)!;
+				if (!r || !may(r, c)) continue;
+				for (const start of p.starts) {
+					if (!p.by[start.k] && start.started >= c.from && start.started <= c.to && c.to > start.after && (!pick || start.started < pick.start.started)) pick = { p, start };
+				}
+			}
+			if (pick) pick.p.by[pick.start.k] = c;
+		}
+		this.charge(plans);
+	}
+
+	private charge(plans: Map<string, Plan>): void {
+		for (const [path, { runs, by }] of plans) {
+			const spawned = this.owned.get(path)?.spawned === true;
+			const kept = runs.flatMap((run, k) => (k > 0 && by[k] ? by[k]!.here : spawned) ? run : []);
+			if (!this.owned.has(path) && kept.length === 0) continue;
+			this.charged!.set(path, kept);
+			this.scanDetails({ sessionFile: path }, `run:${path}`);
+		}
+	}
+
+	/**
+	 * Index children main started during one of its script batches, or resumed from this branch;
+	 * one found on disk with no call that started it is not.
+	 */
+	private linkScripts(): void {
+		if (this.scripts.length === 0 && this.resumed.size === 0) return;
+		const team = this.loadTeam();
+		for (const { from, to } of this.scripts.splice(0)) {
+			for (const r of team) {
+				if (r.parent === "main" && !r.orphaned && r.createdAt >= from && r.createdAt <= to) {
+					this.scanDetails({ sessionFile: r.sessionFile }, `script:${from}`);
+					this.own(r.sessionFile, r.name, true);
+				}
+			}
+		}
+		for (const name of this.resumed) {
+			// A name freed by a closed child can be taken again: the newest holds it.
+			const r = team.findLast(r => r.name === name && r.parent === "main");
+			if (!r) continue;
+			this.scanDetails({ sessionFile: r.sessionFile }, `resume:${name}`);
+			this.own(r.sessionFile, r.name, false);
+		}
+		this.resumed.clear();
 	}
 
 	private reconcileWorkflowAliases(): void {
@@ -336,6 +511,7 @@ export class ChildEvidenceCollector {
 				for (const file of ["status.json", "workflow-result.json"]) this.scanDetails(this.read(join(dir, file)), dir);
 			}
 			this.linkScripts();
+			this.planRuns();
 			this.reconcileWorkflowAliases();
 			for (const runId of this.runs) this.discoverRun(runId);
 			this.discoverMentioned();
@@ -354,7 +530,7 @@ export class ChildEvidenceCollector {
 				for (const path of child.sessionFiles) {
 					if (this.visited.has(path)) continue;
 					this.visited.add(path);
-					const entries = transcriptEntries(this.read(path, true) ?? []);
+					const entries = this.charged?.get(path) ?? transcriptEntries(this.read(path, true) ?? []);
 					child.entries.push(...entries);
 					this.roots.add(path.replace(/\.jsonl$/, ""));
 					this.artifactDirs.add(join(dirname(path), "subagent-artifacts"));

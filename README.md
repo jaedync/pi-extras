@@ -380,6 +380,23 @@ results. A script that still runs counts its children so far. A child that a
 report names, but that the branch did not start, does not count. Thus, after
 `/undo`, children of the removed branch no longer count.
 
+The session file of a child holds all its runs. A branch counts only the runs
+that it started: the first run when the branch started the child, and each run
+that a `message` call of main on the branch resumed, direct or in a script.
+A run that main did not start counts on the branch that started the child.
+Examples are an automatic resume after a restore, `/subagents resume`, and a
+message from a peer. A run that moved to a new session or a fallback model is
+one run. A child session from before 0.26.2 has no start line for each run.
+It counts as one run on the branch that started the child.
+
+Pi does not keep the arguments of a script call when they are too long, so a
+long `message` in a script does not name its child. Such a call counts for
+one run: the first run of a child of main that starts in the tool batch of
+the call, and that no named call started. Thus a run that main did not start,
+but that starts in that batch, can count on the branch of that batch. Each
+branch gives the same result. A run that waits for a free slot and starts
+after the batch ends counts on the branch that started the child.
+
 **A click on a status line.** Status Plus shows the status of each other
 extension (`ctx.ui.setStatus(key, text)`) on a line of its own below the grid.
 In fullscreen mode, a left click on one of these lines sends an event on Pi's

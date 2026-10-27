@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CHAIN_ENTRY } from "../lib/chain/run.ts";
-import { slimRecord } from "../lib/status-plus-slim.ts";
+import { slimRecord, startsRun } from "../lib/status-plus-slim.ts";
+import { fallbackNote } from "../lib/subagents/fallback.ts";
+import { clockNote, runClockHead, wrapUpPrompt } from "../lib/subagents/format.ts";
+import { SWAP_NOTE } from "../lib/subagents/swap.ts";
 import { messageIdentity } from "../lib/status-plus-usage.ts";
 import type { BranchEntry } from "../lib/status-plus-transcript.ts";
 
@@ -77,4 +80,20 @@ test("artifact transcript messages are kept like session messages; their other r
 	assert.deepEqual([slim.recordType, slim.sourceEventType, slim.message.content], ["message", "message_end", []]);
 	assert.equal(slimRecord({ recordType: "tool_start", timestamp: at, args: long("a") }), undefined);
 	assert.equal(slimRecord("not a record"), undefined);
+});
+
+test("only a new run's clock head starts a child's run, also once its record is slim", () => {
+	const user = (text: string) => ({ role: "user", timestamp: T, content: [{ type: "text", text: `${text}\n\ntask` }] });
+	for (const notes of [false, true]) {
+		const message = user(runClockHead({ now: T, minutes: 60, notes }));
+		assert.equal(startsRun(message), true);
+		assert.equal(startsRun((slimRecord({ type: "message", id: "u", timestamp: at, message }) as BranchEntry).message), true);
+	}
+	const goesOn = [clockNote({ now: T, usedMs: 1000, minutes: 60 }), SWAP_NOTE, wrapUpPrompt({ reason: "time", parent: "main", subagents: [] }),
+		fallbackNote({ run: 1, from: "a/m", to: "b/m", kind: "rate", reason: "rate limited", at: T } as any)];
+	for (const text of goesOn) {
+		assert.equal(startsRun(user(text)), false, text);
+		assert.equal(startsRun((slimRecord({ type: "message", id: "u", timestamp: at, message: user(text) }) as BranchEntry).message), false, text);
+	}
+	assert.equal(startsRun({ role: "assistant", content: [{ type: "text", text: runClockHead({ now: T, minutes: 60 }) }] }), false);
 });

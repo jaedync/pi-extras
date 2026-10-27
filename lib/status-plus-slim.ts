@@ -15,6 +15,24 @@ type RecordValue = Record<string, any>;
 /** The hash of the content a slim message no longer holds; a symbol, so no message field can clash with it. */
 export const CONTENT_HASH = Symbol("status-plus content hash");
 
+/** Marks a slim user message that starts a child's run (`startsRun`); its text is gone. */
+export const RUN_START = Symbol("status-plus run start");
+
+/**
+ * The first words of a child's new run (subagents/format.ts `runClockHead`). A run that goes on
+ * in a new session after a swap or a fallback model starts with a clock note instead, as one run.
+ */
+const RUN_CLOCK = "[Budget clock] This run started at ";
+
+export function startsRun(message: unknown): boolean {
+	const record = message && typeof message === "object" ? message as Record<PropertyKey, any> : undefined;
+	if (record?.role !== "user") return false;
+	if (record[RUN_START] === true) return true;
+	const { content } = record;
+	const text = typeof content === "string" ? content : Array.isArray(content) ? content.find((block: any) => block?.type === "text")?.text : undefined;
+	return typeof text === "string" && text.startsWith(RUN_CLOCK);
+}
+
 export function contentHash(content: unknown): string {
 	return createHash("sha256").update(JSON.stringify(content ?? null)).digest("hex");
 }
@@ -45,7 +63,7 @@ function slimMessage(message: RecordValue): RecordValue | undefined {
 	const { content, details, nestedCalls, ...rest } = message;
 	if (message.role === "user" || message.role === "assistant") {
 		const calls = Array.isArray(content) ? content.filter((block) => object(block)?.type === "toolCall").map(slimCall) : [];
-		return { ...rest, content: calls, [CONTENT_HASH]: contentHash(content) };
+		return { ...rest, content: calls, [CONTENT_HASH]: contentHash(content), ...(startsRun(message) ? { [RUN_START]: true } : {}) };
 	}
 	if (message.role !== "toolResult") return undefined;
 	// A subagent's result names its children; other tools' output is never read.
