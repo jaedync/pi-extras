@@ -2,6 +2,18 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.34.3 - 2026-10-27
+
+### Fixed
+
+- Pull Link: a link with no image file extension whose server sends an image
+  content-type (a download link) is read as the image, with the same limits as
+  other image links. A real image sent as `application/octet-stream` or with
+  no content-type is found from its bytes. Before, such links failed with
+  "not a page". The result names the link that was given, so a redirect to a
+  signed URL does not put its token in the transcript. A site that refuses an
+  image link gives a clear error, not an empty page.
+
 ## 0.34.2 - 2026-10-27
 
 ### Fixed
