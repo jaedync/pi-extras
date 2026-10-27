@@ -5,7 +5,8 @@
  * that got its answer) waits in line too, ahead of those that have not
  * started, since it has work under way. A spawn waiting for its after agents
  * keeps its place but holds no slot. A parent blocked on a subagent it
- * started with wait: true lends that subagent its slot.
+ * started with wait: true lends that subagent its slot, and a child whose bash
+ * call sleeps lends its slot out until the sleep ends.
  */
 import { waitingFor } from "./after.ts";
 import { ACTIVE_STATES, type AgentRecord, LIVE_STATES } from "./types.ts";
@@ -15,6 +16,8 @@ export interface SlotHost {
 	closed(): boolean;
 	list(): AgentRecord[];
 	get(name: string): AgentRecord | undefined;
+	/** Whether `name` has lent its slot out while its bash call sleeps (bash-rest.ts). */
+	resting(name: string): boolean;
 	/** Launches `name`, which waited in line to start. */
 	start(name: string): void;
 }
@@ -87,11 +90,11 @@ export class Slots {
 		this.line.unshift(...held);
 	}
 
-	/** Slots in use: one for each starting or running child, but a parent blocked on its wait: true subagent shares that subagent's. */
+	/** Slots in use: one for each starting or running child, but a parent blocked on its wait: true subagent shares that subagent's, and a resting child lent its own out. */
 	used(): number {
 		const records = this.host.list();
 		const blocked = new Set(records.filter((record) => record.blocking && LIVE_STATES.has(record.state)).map((record) => record.parent));
-		return records.filter((record) => ACTIVE_STATES.has(record.state) && !blocked.has(record.name)).length;
+		return records.filter((record) => ACTIVE_STATES.has(record.state) && !blocked.has(record.name) && !this.host.resting(record.name)).length;
 	}
 
 	private dropGoOn(name: string): void {

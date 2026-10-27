@@ -24,7 +24,7 @@ import type { SendResult } from "./team.ts";
 import type { Watched } from "./tool-activity.ts";
 import type { AgentRecord, CheckUpdate, Launcher, SpawnRequest } from "./types.ts";
 
-export const HOST_VERSION = 9;
+export const HOST_VERSION = 10;
 
 /** The team, as main's tools, the widget, the inspector and a child's tools use it. */
 export interface HostTeam {

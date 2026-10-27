@@ -18,6 +18,7 @@ import { isVirtualModel } from "../routed-model.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
 import { guardBash } from "./bash-guard.ts";
+import { restingBash } from "./bash-rest.ts";
 import { bashCheck } from "./checks.ts";
 import type { HostActivity } from "./contract.ts";
 import { HIDDEN_READ_TOOLS, hiddenEdit, hiddenReason, type HiddenPaths } from "./hidden.ts";
@@ -384,7 +385,10 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			const settingsManager = childSettings(deps, cwd, record);
 			// An SDK tool wins over a built-in or extension tool of the same name.
 			const hidden = deps.hidden?.(record);
-			const bash = wanted.has("bash") ? childBash(sdk, cwd, settingsManager, record, deps, hidden) : undefined;
+			const shell = wanted.has("bash") ? childBash(sdk, cwd, settingsManager, record, deps, hidden) : undefined;
+			// The session comes later; until it does, no call runs.
+			let alone = () => false;
+			const bash = shell && hooks.rest ? restingBash(shell, hooks.rest, () => alone()) : shell;
 			const editCheck = childEditCheck(deps, record, cwd, hidden);
 			const customTools = [...listed, ...(bash ? [bash] : []), ...childEdits(sdk, cwd, wanted, editCheck)];
 			// A check runs as the child's own bash would; a child without bash gets one made the same way when it needs it.
@@ -405,6 +409,7 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 				tools: [...wanted, ...customTools.map((tool) => tool.name)],
 				customTools,
 			}).catch((error) => { guard.dispose(); throw error; });
+			alone = () => pendingCalls(session) === 1;
 			await bindChild(session, guard, deps.onExtensionError);
 			const context = childContext(deps, settingsManager, modelRuntime, model, record);
 			return { ...handleFor(session, hooks, context, guard, record), stamp, check };
@@ -684,6 +689,9 @@ function watchStreaming(session: AgentSession): { current: () => unknown; stop: 
 	return { current: () => current, stop };
 }
 
+/** The tool calls of the turn that have not ended; Pi runs a turn's calls in parallel. */
+const pendingCalls = (session: AgentSession): number => (session.agent as { state?: { pendingToolCalls?: ReadonlySet<string> } }).state?.pendingToolCalls?.size ?? 0;
+
 function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildContext, guard: ReturnType<typeof createChildRateLimitGuard>, record: AgentRecord): ChildHandle {
 	const streaming = watchStreaming(session);
 	const unwatch = watchChild(session, hooks, context, record);
@@ -712,7 +720,7 @@ function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildConte
 			else void session.steer(text).catch(() => undefined);
 		},
 		abort: () => session.abort(),
-		toolsRunning: () => ((session.agent as { state?: { pendingToolCalls?: ReadonlySet<string> } }).state?.pendingToolCalls?.size ?? 0) > 0,
+		toolsRunning: () => pendingCalls(session) > 0,
 		lastText: () => session.getLastAssistantText(),
 		messages: () => session.messages,
 		streaming: streaming.current,

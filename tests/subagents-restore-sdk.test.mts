@@ -54,7 +54,7 @@ test("a recreated parent notifies without requesting the provider, then message 
 	try {
 		faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 30" }))]);
 		await tool(first, "subagent").execute("spawn", { name: "paused", task: "Inspect the workspace", model: "restore-faux/cheap" });
-		await wait(() => index().records[0]?.activity === "bash sleep 30");
+		await wait(() => index().records[0]?.activity?.startsWith("bash sleep 30") === true);
 		await close(first);
 		const calls = faux.state.callCount;
 		const second = await open(file);
@@ -142,11 +142,11 @@ test("always makes at most one automatic attempt, even if that attempt is interr
 		const index = () => JSON.parse(readFileSync(join(agentDir, "sessions", "subagents", first.sessionManager.getSessionId(), "index.json"), "utf8"));
 		faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 30" }))]);
 		await tool(first, "subagent").execute("first", { name: "one-attempt", task: "Original complete brief", model: "restore-faux/cheap" });
-		await wait(() => index().records[0]?.activity === "bash sleep 30");
+		await wait(() => index().records[0]?.activity?.startsWith("bash sleep 30") === true);
 		await close(first);
 		faux.setResponses([ai.fauxAssistantMessage(ai.fauxToolCall("bash", { command: "sleep 30" }))]);
 		const second = await open(file); sessions.push(second);
-		await wait(() => index().records[0]?.runs === 2 && index().records[0]?.activity === "bash sleep 30");
+		await wait(() => index().records[0]?.runs === 2 && index().records[0]?.activity?.startsWith("bash sleep 30") === true);
 		await close(second);
 		const calls = faux.state.callCount;
 		const third = await open(file); sessions.push(third);

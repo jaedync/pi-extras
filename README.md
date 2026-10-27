@@ -2296,8 +2296,12 @@ processes, network and sockets, so it can, for example, read through
 queue. The limit also applies to a child that goes on in its open session.
 Examples are a resumed idle child, a woken parent, and a child that got its
 answer. Such a child waits in line ahead of spawns that have not started. A subagent that its
-parent starts with `wait: true` runs in that parent's slot. A child can't
-start children of its own by default.
+parent starts with `wait: true` runs in that parent's slot. A child's bash
+call that starts with `sleep` of 15 seconds or more (for example
+`sleep 240; gh run view`) lends its slot to the next agent in line while it
+sleeps. After the sleep, it waits for a free slot, then runs the rest of
+the command. A queued row shows its place in line, such as `2nd in line for
+a slot`. A child can't start children of its own by default.
 Each run of a child has a time budget, `maxRunMinutes` (default 60), and an
 optional cost budget, `maxRunCost` (no limit by default). The `subagent` call
 can set its own with `maxMinutes` and `maxCost`, and the child keeps them

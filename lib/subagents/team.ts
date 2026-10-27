@@ -13,7 +13,9 @@
  * When a child's session is held and when it goes is sessions.ts's to say.
  */
 import { randomUUID } from "node:crypto";
-import { afterBlock, afterError, queuedActivity, stopOrder } from "./after.ts";
+import { setTimeout as delay } from "node:timers/promises";
+import { afterBlock, afterError, isLinePlace, queuedActivity, stopOrder, waitingFor } from "./after.ts";
+import { minutesAndUp } from "../duration.ts";
 import { MAIN, nameFor } from "./names.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import { windowReason, type WindowReading } from "./windows.ts";
@@ -86,6 +88,9 @@ export type SendResult =
 
 type Listener = (record: AgentRecord | null) => void;
 
+/** Resolves after `ms`, or at once when `signal` aborts. */
+const pause = (ms: number, signal?: AbortSignal): Promise<void> => delay(ms, undefined, signal ? { signal } : {}).catch(() => undefined);
+
 export class Team implements HostTeam {
 	private readonly records = new Map<string, AgentRecord>();
 	private readonly sessions: OpenSessions;
@@ -110,6 +115,8 @@ export class Team implements HostTeam {
 	private readonly woken = new Map<string, BudgetUse | undefined>();
 	/** Askers whose answers came, until they have a slot to go on in. */
 	private readonly answered = new Map<string, Promise<void>>();
+	/** Children whose bash call sleeps, with their slots lent out (bash-rest.ts). */
+	private readonly resting = new Set<string>();
 	private readonly swaps = new TurnSwaps();
 	private readonly checks = new RunChecks({
 		get: (name) => this.records.get(name), patch: (name, patch) => this.patch(name, patch), under: (name, ancestor) => this.under(name, ancestor),
@@ -131,7 +138,7 @@ export class Team implements HostTeam {
 		this.now = options.now ?? Date.now;
 		// An asking agent frees its slot for a queued one.
 		this.questions = new OpenQuestions({ replyTimeoutMs: options.replyTimeoutMs, changed: (asker, waitingOn) => { this.showAsking(asker, waitingOn); this.pump(); } });
-		this.slots = new Slots({ maxConcurrent: options.maxConcurrent, closed: () => this.closed, list: () => this.list(), get: this.lookup, start: (name) => void this.start(name) });
+		this.slots = new Slots({ maxConcurrent: options.maxConcurrent, closed: () => this.closed, list: () => this.list(), get: this.lookup, resting: (name) => this.resting.has(name), start: (name) => void this.start(name) });
 		this.wrapUps = new RunWrapUps({ get: this.lookup, list: () => this.list(), patch: (name, patch) => this.patch(name, patch), handle: (name) => this.sessions.get(name), runMessages: (name) => this.sessions.runMessages(name),
 			stop: (name, how) => this.stop(name, how), warn: (message) => (this.options.warn ?? console.warn)(message), abortCheck: (name) => this.checks.abort(name), ended: (name, reason) => this.endAtBudget(name, reason) }, options.budgetTimes);
 		// A note steered during the check would come back as a prompt of its own once the check ends; the run goes without it.
@@ -508,7 +515,9 @@ export class Team implements HostTeam {
 		// Waiting on its subagents, its clock paused; the same run goes on (run()).
 		if (this.records.get(name)?.state === "waiting") this.woken.set(name, this.budgets.used(name));
 		this.patch(name, { state: "queued", activity: "waiting for a free slot" });
-		return new Promise((resolve) => this.slots.goOn(name, () => { go(); resolve(); }, resolve));
+		const waited = new Promise<void>((resolve) => this.slots.goOn(name, () => { go(); resolve(); }, resolve));
+		this.showWaits();
+		return waited;
 	}
 
 	/** A run on the session `name` holds, which a message started; while it waits for a slot, the message waits in its inbox. */
@@ -518,18 +527,76 @@ export class Team implements HostTeam {
 		void this.goOnWhenFree(name, () => void this.run(name, this.takeInbox(name).join("\n\n")));
 	}
 
-	/** A queued spawn says which after agents it still waits for, as the widget shows it. */
+	/** Each queued agent says which after agents it still waits for, or its place in line for a slot, as the widget shows it. */
 	private showWaits(): void {
+		let place = 0;
 		for (const record of this.slots.queued().map(this.lookup)) {
-			const activity = record?.state === "queued" ? queuedActivity(record, this.lookup) : record?.activity;
-			if (record && activity !== record.activity) this.patch(record.name, { activity });
+			if (record?.state !== "queued") continue;
+			if (waitingFor(record, this.lookup).length === 0) place++;
+			const activity = queuedActivity(record, this.lookup, place);
+			if (activity !== record.activity) this.patch(record.name, { activity });
 		}
+	}
+
+	/**
+	 * A child's bash call sleeps for `ms` (bash-rest.ts): its slot goes to the
+	 * next in line meanwhile. After the sleep it goes on when a slot is free,
+	 * ahead of spawns that have not started, as any child that goes on does.
+	 * False when an abort, a stop or a close ends it first.
+	 */
+	private async rest(name: string, ms: number, signal?: AbortSignal): Promise<boolean> {
+		const before = this.records.get(name);
+		// A second rest at once can't happen (bash-rest.ts lends only for a lone call); it would hold no slot of its own.
+		if (before?.state !== "running" || this.resting.has(name)) { await pause(ms, signal); return !signal?.aborted; }
+		const { activity } = before;
+		this.resting.add(name);
+		try {
+			// The command stays in view, so a restore notice still says what it ran.
+			this.patch(name, { activity: `${activity ?? `sleeping ${ms < 60_000 ? `${Math.round(ms / 1000)}s` : minutesAndUp(ms / 1000)}`} (slot lent)` });
+			this.pump();
+			await pause(ms, signal);
+		} finally { this.resting.delete(name); }
+		const state = this.records.get(name)?.state;
+		// A stop wrote its own activity; an abort or a close leaves the row as the command left it.
+		if (state === "running" || state === "interrupted") this.restoreActivity(name, activity);
+		if (signal?.aborted || state !== "running") return false;
+		return this.slots.used() <= this.options.maxConcurrent || this.slotAfterRest(name, activity, signal);
+	}
+
+	/** A wrap-up that began meanwhile keeps saying so. */
+	private restoreActivity(name: string, activity: string | null, patch: Partial<AgentRecord> = {}): void {
+		this.patch(name, { ...patch, activity, ...this.wrapUps.shown(name, { activity }) });
+	}
+
+	/** After a rest, `name` waits in line for a slot; mail that came meanwhile reaches it as steering when it goes on, as it would have while it ran. */
+	private async slotAfterRest(name: string, activity: string | null, signal?: AbortSignal): Promise<boolean> {
+		let went = false;
+		// Its bash call ends at once: the run winds down as an aborted call leaves it, in the state it had.
+		const leave = () => this.slots.remove(name);
+		signal?.addEventListener("abort", leave, { once: true });
+		await this.goOnWhenFree(name, () => {
+			went = true;
+			this.restoreActivity(name, activity, { state: "running" });
+			this.steerInbox(name);
+		});
+		signal?.removeEventListener("abort", leave);
+		if (!went && this.records.get(name)?.state === "queued") this.restoreActivity(name, activity, { state: "running" });
+		return went;
+	}
+
+	private steerInbox(name: string): void {
+		const handle = this.sessions.get(name);
+		if (!handle) return;
+		const inbox = this.takeInbox(name);
+		for (const text of inbox) handle.steer(text);
+		if (inbox.length > 0) this.patch(name, { unread: [...(this.records.get(name)?.unread ?? []), ...inbox] });
 	}
 
 	private async start(name: string): Promise<void> {
 		const startedAt = this.continuing.has(name) ? this.records.get(name)?.startedAt : undefined;
 		// The same run going on keeps saying why it moves: a fallback model, or a swap.
-		this.patch(name, { state: "starting", startedAt: startedAt ?? this.now(), activity: startedAt !== undefined ? this.records.get(name)?.activity ?? "starting" : "starting" });
+		const reason = this.records.get(name)?.activity;
+		this.patch(name, { state: "starting", startedAt: startedAt ?? this.now(), activity: startedAt !== undefined && reason && !isLinePlace(reason) ? reason : "starting" });
 		const launch = (this.launches.get(name) ?? 0) + 1;
 		this.launches.set(name, launch);
 		const opening = this.open(name, launch);
@@ -585,6 +652,7 @@ export class Team implements HostTeam {
 			turnEnded: () => this.launches.get(name) === launch && this.turnEnded(name),
 			toolCalled: (tool) => { if (this.launches.get(name) === launch) this.checks.called(name, tool); },
 			wrapUp: () => (this.launches.get(name) === launch ? this.wrapUps.blocked(name) : undefined),
+			rest: (ms, signal) => (this.launches.get(name) === launch ? this.rest(name, ms, signal) : pause(ms, signal).then(() => !signal?.aborted)),
 			update: (patch) => {
 				const record = this.records.get(name);
 				if (!record) return;

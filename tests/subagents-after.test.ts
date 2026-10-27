@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as tick } from "node:timers/promises";
-import { afterBlock, busyInGroup } from "../lib/subagents/after.ts";
+import { afterBlock, busyInGroup, isLinePlace, linePlace } from "../lib/subagents/after.ts";
 import { ChildIndex } from "../lib/subagents/restore.ts";
 import type { AgentRecord, MainDelivery } from "../lib/subagents/types.ts";
 import { teamHarness } from "./support/team-harness.ts";
@@ -294,4 +294,13 @@ test("wait: true with after is refused: the caller could not answer a question f
 		/wait: true can't go with after: the agents it waits for may need an answer from you first\. Leave out wait; its report arrives as a message\./);
 	assert.equal(h.team.get("check"), undefined, "nothing was recorded");
 	await h.team.close();
+});
+
+test("a place in line reads as one, and only that does", () => {
+	assert.equal(linePlace(1), "next in line for a slot");
+	assert.equal(linePlace(2), "2nd in line for a slot");
+	assert.equal(linePlace(13), "13th in line for a slot");
+	assert.equal(linePlace(22), "22nd in line for a slot");
+	assert.equal(isLinePlace(linePlace(3)), true);
+	assert.equal(isLinePlace("switching to anthropic/claude-opus-5-5"), false);
 });

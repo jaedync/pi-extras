@@ -128,3 +128,133 @@ test("a parent whose wait: true child ended while another agent had their slot w
 	assert.equal(returned, true);
 	assert.deepEqual(slotsUsed(h), ["lead"]);
 });
+
+test("a child that rests in a bash sleep lends its slot, and waits in line for one after", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.spawn("A", { name: "a" });
+	h.spawn("B", { name: "b" });
+	await flush();
+	h.hooks.get("a")!.update({ activity: "bash sleep 240; git status" });
+	let rested = false;
+	const resting = h.hooks.get("a")!.rest!(20).then(() => { rested = true; });
+	await flush();
+	assert.equal(h.team.get("b")!.state, "running", "the sleeper's slot went to the next in line");
+	assert.equal(h.team.get("a")!.state, "running", "its bash call still runs");
+	await new Promise((resolve) => setTimeout(resolve, 40)); await flush();
+	assert.equal(rested, false, "b holds the slot, so a waits for it");
+	assert.equal(h.team.get("a")!.state, "queued");
+	h.lastCall("b").finish("b done"); await flush();
+	await resting;
+	assert.equal(h.team.get("a")!.state, "running");
+	assert.equal(h.team.get("a")!.activity, "bash sleep 240; git status");
+	assert.deepEqual(slotsUsed(h), ["a"]);
+});
+
+test("a rest that ends with a slot free goes on at once", async () => {
+	const h = teamHarness({ maxConcurrent: 2 });
+	h.spawn("A", { name: "a" }); await flush();
+	await h.hooks.get("a")!.rest!(5);
+	assert.equal(h.team.get("a")!.state, "running");
+	assert.deepEqual(slotsUsed(h), ["a"]);
+});
+
+test("a stop of a child that waits for its slot back after a rest ends the wait", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.spawn("A", { name: "a" });
+	h.spawn("B", { name: "b" });
+	await flush();
+	const resting = h.hooks.get("a")!.rest!(5);
+	await new Promise((resolve) => setTimeout(resolve, 20)); await flush();
+	assert.equal(h.team.get("a")!.state, "queued");
+	await h.team.stop("a");
+	assert.equal(await resting, false, "nothing more of the command runs");
+	assert.equal(h.team.get("a")!.state, "stopped");
+	assert.deepEqual(slotsUsed(h), ["b"]);
+});
+
+test("each agent in line for a slot says its place, and a resumed one does not keep its old activity", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.spawn("A", { name: "a" }); await flush();
+	h.hooks.get("a")!.update({ activity: "bash git push" });
+	h.lastCall("a").finish("a done"); await flush();
+	h.spawn("B", { name: "b" });
+	h.spawn("C", { name: "c" });
+	await flush();
+	assert.equal(h.team.get("c")!.activity, "next in line for a slot");
+	await h.team.send("main", "a", "One more thing."); await flush();
+	assert.equal(h.team.get("a")!.activity, "next in line for a slot", "work under way goes first");
+	assert.equal(h.team.get("c")!.activity, "2nd in line for a slot");
+});
+
+test("a stop of a resting child with a live subagent ends the rest before the abort, with no slot", async () => {
+	const h = teamHarness({ maxConcurrent: 2 });
+	h.spawn("A", { name: "a" });
+	h.spawn("B", { name: "b" });
+	await flush();
+	h.spawn("Helper", { name: "helper", parent: "a" });
+	const resting = h.hooks.get("a")!.rest!(5);
+	await new Promise((resolve) => setTimeout(resolve, 20)); await flush();
+	assert.equal(h.team.get("a")!.state, "queued");
+	let settled: boolean | undefined;
+	void resting.then((held) => { settled = held; });
+	const stopping = h.team.stop("a");
+	await tick();
+	assert.notEqual(settled, true, "the rest never says it holds a slot");
+	await stopping;
+	assert.equal(await resting, false);
+});
+
+test("an abort of the bash call while it waits in line after a rest ends the wait at once", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.spawn("A", { name: "a" });
+	h.spawn("B", { name: "b" });
+	await flush();
+	h.hooks.get("a")!.update({ activity: "bash sleep 60; ls" });
+	const controller = new AbortController();
+	const resting = h.hooks.get("a")!.rest!(5, controller.signal);
+	await new Promise((resolve) => setTimeout(resolve, 20)); await flush();
+	assert.equal(h.team.get("a")!.state, "queued");
+	controller.abort();
+	assert.equal(await resting, false);
+	assert.equal(h.team.get("a")!.state, "running", "its run winds down as an aborted call leaves it");
+	assert.equal(h.team.get("a")!.activity, "bash sleep 60; ls");
+	assert.equal(h.team.get("b")!.state, "running");
+});
+
+test("mail to a child that waits in line after a rest is steered to it when it goes on", async () => {
+	const h = teamHarness({ maxConcurrent: 1 });
+	h.spawn("A", { name: "a" });
+	h.spawn("B", { name: "b" });
+	await flush();
+	const resting = h.hooks.get("a")!.rest!(5);
+	await new Promise((resolve) => setTimeout(resolve, 20)); await flush();
+	assert.equal(h.team.get("a")!.state, "queued");
+	assert.equal((await h.team.send("main", "a", "Also check the docs.")).ok, true);
+	h.lastCall("b").finish("b done"); await flush();
+	assert.equal(await resting, true);
+	assert.match((h.steered.get("a") ?? []).join("\n"), /Also check the docs\./);
+	assert.equal(h.team.get("a")!.inbox, undefined);
+	assert.equal(h.lastCall("a").text, "A", "no new run: the same run reads it");
+});
+
+test("a resting child's row says its slot is lent, and the old activity comes back", async () => {
+	const h = teamHarness({ maxConcurrent: 2 });
+	h.spawn("A", { name: "a" }); await flush();
+	h.hooks.get("a")!.update({ activity: "bash sleep 60; ls" });
+	const resting = h.hooks.get("a")!.rest!(15);
+	assert.equal(h.team.get("a")!.activity, "bash sleep 60; ls (slot lent)");
+	assert.equal(await resting, true);
+	assert.equal(h.team.get("a")!.activity, "bash sleep 60; ls");
+});
+
+test("an abort during a rest puts the old activity back", async () => {
+	const h = teamHarness({ maxConcurrent: 2 });
+	h.spawn("A", { name: "a" }); await flush();
+	h.hooks.get("a")!.update({ activity: "bash sleep 240; gh run view" });
+	const controller = new AbortController();
+	const resting = h.hooks.get("a")!.rest!(60_000, controller.signal);
+	assert.equal(h.team.get("a")!.activity, "bash sleep 240; gh run view (slot lent)");
+	controller.abort();
+	assert.equal(await resting, false);
+	assert.equal(h.team.get("a")!.activity, "bash sleep 240; gh run view");
+});

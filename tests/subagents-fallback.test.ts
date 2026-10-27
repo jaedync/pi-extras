@@ -205,3 +205,23 @@ test("a Meridian proxy turn-limit failure that outlasted its retries moves the r
 	assert.deepEqual(classifyFailure(exhausted), { kind: "overloaded", reason: "the Claude Code proxy ended the turn early" });
 	assert.equal(classifyFailure("Claude Code returned an error result: Reached maximum number of turns (1)")?.kind, "overloaded");
 });
+
+test("a fallback that waited in line for a slot starts with a word, not its old place in line", async () => {
+	const h = teamHarness({ fallbackModels: [OPUS], maxConcurrent: 1 });
+	const name = h.spawn("Fix the parser", { model: SOL });
+	await tick();
+	const other = h.spawn("Other work", { model: LUNA });
+	await tick();
+	h.lastCall(name).fail(new Error(CODEX_LIMIT));
+	await settle();
+	assert.equal(h.team.get(other)!.state, "running", "the failed run's slot went to the next in line");
+	assert.equal(h.team.get(name)!.state, "queued");
+	assert.equal(h.team.get(name)!.activity, "next in line for a slot");
+	const seen: string[] = [];
+	h.team.onChange((record) => { if (record?.name === name && record.state === "starting") seen.push(record.activity ?? ""); });
+	h.lastCall(other).finish("Done.");
+	await settle();
+	assert.equal(h.team.get(name)!.model, OPUS);
+	assert.ok(seen.every((activity) => !activity.includes("in line")), seen.join(" | "));
+	await h.team.close();
+});

@@ -283,6 +283,8 @@ export interface ChildHooks {
 	 * blocked. Mail steered then waits for the next run. Undefined otherwise.
 	 */
 	wrapUp?(): string | undefined;
+	/** A bash call that begins with a long sleep: the child's slot is lent out for `ms`, then it waits for one; false when an abort, stop or close ends that (bash-rest.ts). */
+	rest?(ms: number, signal?: AbortSignal): Promise<boolean>;
 }
 
 export interface Launcher {

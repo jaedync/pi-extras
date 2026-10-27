@@ -166,9 +166,23 @@ export function askError(target: AgentRecord | undefined, get: Lookup): string |
 }
 
 /** What a queued spawn shows: the after agents it still waits for, then plain `queued`; any other activity stays. */
-export function queuedActivity(record: AgentRecord, get: Lookup): string | null {
+/** A queued agent's activity: the after agents it waits for, else its `place` (1 is next) among those in line for a slot. */
+export function queuedActivity(record: AgentRecord, get: Lookup, place: number): string {
 	const waits = waitingFor(record, get);
-	return waits.length > 0 ? afterActivity(waits) : record.activity?.startsWith("after ") ? "queued" : record.activity;
+	return waits.length > 0 ? afterActivity(waits) : linePlace(place);
+}
+
+const IN_LINE = "in line for a slot";
+
+export const linePlace = (place: number): string => (place <= 1 ? `next ${IN_LINE}` : `${ordinal(place)} ${IN_LINE}`);
+
+/** Whether `activity` is only a place in line, which says nothing once the agent starts. */
+export const isLinePlace = (activity: string): boolean => activity.endsWith(IN_LINE);
+
+function ordinal(n: number): string {
+	const tens = n % 100;
+	const suffix = tens >= 11 && tens <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] ?? "th";
+	return `${n}${suffix}`;
 }
 
 const oneLine = (text: string, max = 200): string => {
