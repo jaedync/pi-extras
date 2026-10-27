@@ -274,6 +274,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 		theme,
 		markdownTheme: getMarkdownTheme(),
 		changelog,
+		at: entry.timestamp,
 		hint: (description) => {
 			try {
 				return keyHint("app.tools.expand", description);

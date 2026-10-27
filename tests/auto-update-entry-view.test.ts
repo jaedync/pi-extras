@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { updateEntryView } from "../lib/auto-update/entry-view.ts";
+import { updatedWhen, updateEntryView } from "../lib/auto-update/entry-view.ts";
 import { parseChangelog } from "../lib/release-notes.ts";
 
 const CHANGELOG = parseChangelog([
@@ -45,4 +45,26 @@ test("no notes in the range, an older entry or a broken one: a plain line or not
 	assert.equal(view({ phase: "done" }, false), undefined);
 	assert.equal(view(undefined, false), undefined);
 	assert.deepEqual(lines({ ...DONE, extras: { from: 3, to: "0.31.1" } }), [" Updated pi-extras 0.30.0 → 0.31.1"]);
+});
+
+test("the line says when: the time on the same day, the date on another day, and the year in another year", () => {
+	const at = Date.parse("2026-10-27T19:05:00Z");
+	const zone = "America/Chicago";
+	const when = (now: string, timeZone = zone) => updatedWhen(at, Date.parse(now), timeZone);
+	assert.equal(when("2026-10-27T23:00:00Z"), "2:05 PM");
+	// 04:30 UTC on the 28th is still the 27th in Chicago, but the 28th in UTC.
+	assert.equal(when("2026-10-28T04:30:00Z"), "2:05 PM");
+	assert.equal(when("2026-10-28T04:30:00Z", "UTC"), "Oct 27");
+	assert.equal(when("2026-10-28T06:00:00Z"), "Oct 27");
+	assert.equal(when("2027-01-02T12:00:00Z"), "Oct 27, 2026");
+	assert.equal(updatedWhen(Number.NaN, Date.parse("2026-10-27T23:00:00Z"), zone), undefined);
+});
+
+test("collapsed and expanded: the time sits after the text, before the key", () => {
+	const at = "2026-10-27T19:05:00.000Z";
+	const timed = (data: unknown, expanded = false) => updateEntryView(data, { expanded, theme, markdownTheme: markdownTheme as never, changelog: () => CHANGELOG, hint,
+		at, now: () => Date.parse("2026-10-27T23:00:00Z"), timeZone: "America/Chicago" })?.render(80).map((line) => stripTerminalSequences(line).trimEnd());
+	assert.deepEqual(timed(DONE), [" Updated pi-extras 0.30.0 → 0.31.1 · 2:05 PM · ctrl+o for what changed"]);
+	assert.match(timed(DONE, true)!.join("\n"), /^ Updated pi-extras 0\.30\.0 → 0\.31\.1 · 2:05 PM\n/);
+	assert.deepEqual(timed({ ...DONE, extras: undefined }), [" Updated pi-extras 0.30.0 → 0.31.1 · 2:05 PM"]);
 });
