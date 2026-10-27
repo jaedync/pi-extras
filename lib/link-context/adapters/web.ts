@@ -1,14 +1,17 @@
 /**
  * Any other page: title and preview metadata, then readable text from the
  * page's `<article>` or `<main>`, or the body without navigation. Plain text
- * and JSON are returned as they are. When a site refuses plain HTTP clients
- * (403, 429, 503, a bot check, a timeout or a dropped connection), a local
- * headless browser reads the page instead.
+ * and JSON are returned as they are. A link whose content-type says it is an
+ * image (a download link with no file extension) is the image. When a site
+ * refuses plain HTTP clients (403, 429, 503, a bot check, a timeout or a
+ * dropped connection), a local headless browser reads the page instead.
  */
 import { parse } from "node-html-parser";
 import { isChallenge, renderPage } from "../browser.ts";
 import { agentsFor } from "../config.ts";
-import { BROWSER_UA, get, HttpError, type HttpResult, PLAIN_UA, PREVIEW_UA } from "../http.ts";
+import { BROWSER_UA, get, HttpError, type HttpResult, IMAGE_TYPE, PLAIN_UA, PREVIEW_UA } from "../http.ts";
+import { sniffImage } from "../media/image-bytes.ts";
+import { MAX_IMAGE_BYTES, prepareImage, UNLOADABLE_IMAGE } from "../media/images.ts";
 import { decodeEntities, fenced, htmlToText, isoDate, jsonLd, metaTags } from "../text.ts";
 import { plainLine, proseLines } from "../summary.ts";
 import type { AdapterContext, Pulled } from "../types.ts";
@@ -77,6 +80,19 @@ function blockedReason(error: unknown): string | undefined {
 	return undefined;
 }
 
+/** The page a browser makes for an image link: no text and one `<img>` of the link itself. */
+function imageViewer(html: string, url: string): boolean {
+	const root = parse(html);
+	const body = root.querySelector("body") ?? root;
+	const images = body.querySelectorAll("img");
+	if (images.length !== 1 || body.text.trim()) return false;
+	try {
+		return new URL(images[0].getAttribute("src") ?? "", url).href === new URL(url).href;
+	} catch {
+		return false;
+	}
+}
+
 async function pullWithBrowser(url: string, ctx: AdapterContext, reason: string, failure: Error): Promise<Pulled> {
 	const setting = ctx.config.browser;
 	if (setting === false) throw failure;
@@ -89,7 +105,21 @@ async function pullWithBrowser(url: string, ctx: AdapterContext, reason: string,
 		throw new Error(`${failure.message}. ${(error as Error).message}`);
 	}
 	if (isChallenge(body)) throw new Error(`${failure.message}, and the local browser also got a bot check.`);
+	if (imageViewer(body, url)) throw new Error(`${failure.message}; the link is an image that the site refused.`);
 	return webFromHtml(body, url, `_Read with a local browser: ${reason}._`);
+}
+
+/**
+ * The bytes already read are the image, under the same limits as an image link
+ * with a file extension. The result names the link that was given: a redirect
+ * target can be a signed URL whose token must not reach the transcript.
+ */
+async function pullImage(page: HttpResult, url: string, ctx: AdapterContext): Promise<Pulled> {
+	const pulled: Pulled = { platform: "image", title: url, url, markdown: `Image: ${url}`, photos: [] };
+	if (!ctx.options.images) return pulled;
+	const image = page.bytes && page.bytes.length <= MAX_IMAGE_BYTES ? await prepareImage(page.bytes) : undefined;
+	if (!image) throw new Error(UNLOADABLE_IMAGE);
+	return { ...pulled, images: [image] };
 }
 
 export async function pullWeb(url: string, ctx: AdapterContext): Promise<Pulled> {
@@ -103,6 +133,8 @@ export async function pullWeb(url: string, ctx: AdapterContext): Promise<Pulled>
 		return pullWithBrowser(url, ctx, reason, error as Error);
 	}
 	if (/html/i.test(page.contentType) && isChallenge(page.body)) return pullWithBrowser(url, ctx, "the site showed a bot check", new Error(`${new URL(url).hostname} showed a bot check`));
+	// A server that does not know the type sends octet-stream or no type; then the bytes decide.
+	if (IMAGE_TYPE.test(page.contentType) || (page.bytes && sniffImage(page.bytes))) return pullImage(page, url, ctx);
 	if (/json/i.test(page.contentType)) return { platform: "web", title: url, url: page.url, markdown: fenced(page.body, "json"), photos: [] };
 	if (/^text\/plain|markdown/i.test(page.contentType)) return { platform: "web", title: url, url: page.url, markdown: page.body, photos: [] };
 	if (!/html|xml/i.test(page.contentType) && page.contentType) throw new Error(`This link is ${page.contentType.split(";")[0]}, not a page. Use fetch_content for PDFs and documents.`);

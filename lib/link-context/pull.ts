@@ -12,7 +12,7 @@ import { pullReddit } from "./adapters/reddit.ts";
 import { pullLinkedin, pullThreads } from "./adapters/social-pages.ts";
 import { pullWeb } from "./adapters/web.ts";
 import { pullX } from "./adapters/x.ts";
-import { fetchImages, imageLinks } from "./media/images.ts";
+import { fetchImages, imageLinks, UNLOADABLE_IMAGE } from "./media/images.ts";
 import { pullVideo } from "./media/video.ts";
 import type { AdapterContext, Pulled } from "./types.ts";
 import { classify, parseUrl, type Target } from "./url.ts";
@@ -82,7 +82,7 @@ export async function pull(raw: string, ctx: AdapterContext, deps: PullDeps = DE
 	const photos = [...new Set([...(pulled.photos ?? []), ...(LINKED_IMAGES.has(pulled.platform) ? imageLinks(pulled.markdown) : [])])];
 	if (ctx.options.images && photos.length) {
 		const images = await deps.images(photos, { fetcher: ctx.fetcher, signal: ctx.signal });
-		if (target.kind === "image" && !images.length) throw new Error("The image could not be loaded: it is missing, too large (over 3.7 MB or 25 megapixels), or not a readable JPEG, PNG, WebP or GIF.");
+		if (target.kind === "image" && !images.length) throw new Error(UNLOADABLE_IMAGE);
 		if (images.length) pulled = { ...pulled, images: [...images, ...(pulled.images ?? [])] };
 	}
 	if (target.kind !== "video" && wantsVideo) pulled = await attachVideo(pulled, ctx, deps);

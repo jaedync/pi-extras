@@ -5,6 +5,9 @@ import { registerLinkTool } from "../lib/link-context/index.ts";
 import type { PullDeps } from "../lib/link-context/pull.ts";
 import { cacheKey, createReader } from "../lib/link-context/reader.ts";
 import type { Pulled } from "../lib/link-context/types.ts";
+import { MAX_IMAGE_BYTES, UNLOADABLE_IMAGE } from "../lib/link-context/media/images.ts";
+import { sniffImage } from "../lib/link-context/media/image-bytes.ts";
+import { png, pngClaiming } from "./support/image-bytes.ts";
 import { fakeFetch, html } from "./support/link-fetch.ts";
 
 type Tool = { description: string; execute: (...args: unknown[]) => Promise<{ content: { type: string; text?: string }[]; details: Record<string, unknown> }> };
@@ -164,4 +167,94 @@ test("an X conversation that auto-pull's time limit cut short is kept apart; a p
 	assert.equal(asked.cached, false);
 	assert.match(asked.pulled.markdown, /nested/);
 	assert.equal(asked.pulled.timeLimited, undefined);
+});
+
+/** A real 3x2 JPEG, so Pi's image library can decode it. */
+const JPEG = Buffer.from("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAACAAMDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAHCf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ADoDFU3/2Q==", "base64");
+
+/** Download links whose path has no file extension; only the content-type says what they are. */
+function downloads() {
+	const bodies: Record<string, [Buffer, string]> = {
+		"/photo": [JPEG, "image/jpeg"],
+		"/wide": [png(3000, 10), "image/png"],
+		"/huge": [Buffer.concat([png(2, 2), Buffer.alloc(MAX_IMAGE_BYTES)]), "image/png"],
+		"/doc": [Buffer.from("%PDF-1.7"), "application/pdf"],
+		"/octet": [png(4, 4), "application/octet-stream"],
+		"/unlabelled": [png(4, 4), ""],
+		"/signed": [png(4, 4), "image/png"],
+		"/drawing": [Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><title>Logo</title><text>hello</text></svg>'), "image/svg+xml"],
+		"/denied": [Buffer.from("<html><body>Access denied</body></html>"), "image/png"],
+		"/bomb": [pngClaiming(20_000, 20_000), "image/png"],
+	};
+	return fakeFetch(
+		(url) => (new URL(url).pathname === "/redirect" ? new Response(null, { status: 302, headers: { location: "https://e.test/signed?X-Amz-Signature=SECRET123" } }) : undefined),
+		(url) => {
+			const found = bodies[new URL(url).pathname];
+			if (!found) return undefined;
+			const response = new Response(new Uint8Array(found[0]));
+			if (found[1]) response.headers.set("content-type", found[1]);
+			else response.headers.delete("content-type");
+			return response;
+		},
+	);
+}
+
+test("a direct image link without a file extension is the image, read once, in auto-pull and in pull_link", async () => {
+	const { fetcher, calls } = downloads();
+	const reader = createReader({ fetcher, config: () => parseConfig({}) });
+	const photo = (await reader.readPlain("https://e.test/photo?key=k", new AbortController().signal)).pulled;
+	assert.equal(photo.platform, "image");
+	assert.deepEqual(photo.images?.map((image) => image.mimeType), ["image/jpeg"]);
+	assert.equal(calls.length, 1, "the page read's bytes are the image; it is not downloaded again");
+	const wide = (await reader.read({ url: "https://e.test/wide" }, undefined, () => {})).pulled;
+	assert.equal(wide.images?.length, 1);
+	const size = sniffImage(Buffer.from(wide.images?.[0].data ?? "", "base64"));
+	assert.ok(size && size.width <= 2000, `scaled down as other images are: ${JSON.stringify(size)}`);
+});
+
+test("an extension-less image with images: false is a short note, not an error", async () => {
+	const { fetcher } = downloads();
+	const reader = createReader({ fetcher, config: () => parseConfig({}) });
+	const { pulled } = await reader.read({ url: "https://e.test/photo", images: false }, undefined, () => {});
+	assert.equal(pulled.images, undefined);
+	assert.match(pulled.markdown, /image/i);
+	assert.doesNotMatch(pulled.markdown, /fetch_content/);
+});
+
+test("an extension-less image over the size limit fails as a direct image link does; a PDF still points to fetch_content", async () => {
+	const { fetcher } = downloads();
+	const reader = createReader({ fetcher, config: () => parseConfig({}) });
+	await assert.rejects(reader.readPlain("https://e.test/huge", new AbortController().signal), /could not be loaded: it is missing, too large/);
+	await assert.rejects(reader.readPlain("https://e.test/doc", new AbortController().signal), /application\/pdf, not a page\. Use fetch_content for PDFs and documents\./);
+});
+
+test("an image sent as application/octet-stream or with no content-type is the image when its bytes say so", async () => {
+	const { fetcher } = downloads();
+	const reader = createReader({ fetcher, config: () => parseConfig({}) });
+	for (const path of ["/octet", "/unlabelled"]) {
+		const { pulled } = await reader.read({ url: `https://e.test${path}` }, undefined, () => {});
+		assert.equal(pulled.platform, "image", path);
+		assert.deepEqual(pulled.images?.map((image) => image.mimeType), ["image/png"], path);
+	}
+});
+
+test("an image behind a redirect keeps the link that was given, not the signed target", async () => {
+	const { fetcher } = downloads();
+	const reader = createReader({ fetcher, config: () => parseConfig({}) });
+	const { pulled } = await reader.read({ url: "https://e.test/redirect" }, undefined, () => {});
+	assert.equal(pulled.images?.length, 1);
+	assert.doesNotMatch(JSON.stringify({ ...pulled, images: [] }), /SECRET123/);
+	assert.equal(pulled.url, "https://e.test/redirect");
+});
+
+test("SVG stays a page; a fake or oversized image behind an image content-type is not sent", async () => {
+	const { fetcher } = downloads();
+	const reader = createReader({ fetcher, config: () => parseConfig({}) });
+	const svg = (await reader.read({ url: "https://e.test/drawing" }, undefined, () => {})).pulled;
+	assert.equal(svg.platform, "web");
+	assert.equal(svg.title, "Logo", "read as XML text, as before");
+	assert.equal(svg.images, undefined);
+	const unloadable = new RegExp(UNLOADABLE_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+	await assert.rejects(reader.read({ url: "https://e.test/denied" }, undefined, () => {}), unloadable);
+	await assert.rejects(reader.read({ url: "https://e.test/bomb" }, undefined, () => {}), unloadable);
 });

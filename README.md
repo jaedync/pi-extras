@@ -1543,7 +1543,7 @@ the full result.
 | LinkedIn | The post and its top comments from the page's JSON-LD. |
 | GitHub | A repository and its README, issues and pull requests with comments, files, folders, commits, releases and gists. Set `GITHUB_TOKEN` or `GH_TOKEN` for more than 60 requests an hour. |
 | YouTube, TikTok, Instagram, Vimeo, Twitch and [other yt-dlp sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) | Title, channel, date, counts, description, chapters, the thumbnail, a transcript with time stamps, top comments (`comments`) and frames on request (`at`, `frames`). |
-| An image (`.jpg`, `.png`, `.webp`, `.gif`, imgur, `i.redd.it`) | The image. |
+| An image (`.jpg`, `.png`, `.webp`, `.gif`, imgur, `i.redd.it`, or a link whose server sends an image content-type) | The image. |
 | Any other page | Title, author, date, description and the readable text of the page. |
 
 The photos of a post come back as images. Image links in a post or comment

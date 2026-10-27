@@ -294,3 +294,13 @@ test("web: teaser articles in a long main do not hide the main text", async () =
 	const blog = `<main><article><p>${"Article text. ".repeat(50)}</p></article><section><p>${"A comment. ".repeat(200)}</p></section></main>`;
 	assert.doesNotMatch(mainText(blog), /A comment/);
 });
+
+test("browser: an image that the site refused is an error, not an empty page", async () => {
+	const url = "https://e.test/photo";
+	const viewer = `<html><head><meta name="viewport" content="width=device-width"><title>photo (4676×3506)</title></head><body style="margin: 0px;"><img style="display: block;" src="${url}"></body></html>`;
+	const ctx = { ...context(fakeFetch(status("e.test", 403)).fetcher), render: stubRenderer(viewer) };
+	await assert.rejects(pullWeb(url, ctx), /e\.test answered HTTP 403.*; the link is an image that the site refused\./);
+	// A page with text around its one image is still a page.
+	const page = { ...context(fakeFetch(status("e.test", 403)).fetcher), render: stubRenderer(`<html><body><p>Some words.</p><img src="${url}"></body></html>`) };
+	assert.match((await pullWeb(url, page)).markdown, /Some words/);
+});

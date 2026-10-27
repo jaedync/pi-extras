@@ -22,6 +22,7 @@ export const MAX_IMAGE_SIDE = 2000;
  * a small file can claim a huge size, so larger claims (about 100 MB decoded) are never decoded.
  */
 export const MAX_DECODE_PIXELS = 25_000_000;
+export const UNLOADABLE_IMAGE = "The image could not be loaded: it is missing, too large (over 3.7 MB or 25 megapixels), or not a readable JPEG, PNG, WebP or GIF.";
 const IMAGE_FILE = /\.(?:jpe?g|png|webp|gif)$/i;
 const IMAGE_HOSTS = new Set(["i.imgur.com", "i.redd.it", "preview.redd.it", "pbs.twimg.com", "media.giphy.com", "i.giphy.com"]);
 

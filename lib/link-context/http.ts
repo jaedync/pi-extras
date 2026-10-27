@@ -27,6 +27,8 @@ export interface HttpResult {
 	readonly url: string;
 	readonly contentType: string;
 	readonly body: string;
+	/** The body as read, kept only for a body that may be an image: image/* (not SVG), application/octet-stream or no content-type. */
+	readonly bytes?: Buffer;
 	/** The server's Retry-After, in milliseconds, when it gave one. */
 	readonly retryAfter?: number;
 }
@@ -106,9 +108,12 @@ export async function request(url: string, init: { agent: string; headers?: Read
 
 async function once(url: string, agent: string, options: GetOptions, signal: AbortSignal): Promise<HttpResult> {
 	const { response, url: final } = await request(url, { agent, headers: options.headers, signal, fetcher: options.fetcher });
-	const body = (await readBytes(response, options.maxBytes ?? MAX_BODY_BYTES)).toString("utf8");
+	const bytes = await readBytes(response, options.maxBytes ?? MAX_BODY_BYTES);
 	const retryAfter = retryDelay(response.headers.get("retry-after"));
-	return { status: response.status, url: final, contentType: response.headers.get("content-type") ?? "", body, ...(retryAfter === undefined ? {} : { retryAfter }) };
+	const contentType = response.headers.get("content-type") ?? "";
+	const image = IMAGE_TYPE.test(contentType);
+	const kept = image || MAYBE_IMAGE.test(contentType) ? { bytes } : {};
+	return { status: response.status, url: final, contentType, body: image ? "" : bytes.toString("utf8"), ...kept, ...(retryAfter === undefined ? {} : { retryAfter }) };
 }
 
 /** Retry-After as milliseconds from now: delay seconds or an HTTP date. */
@@ -118,6 +123,11 @@ export function retryDelay(header: string | null, now = Date.now()): number | un
 	const at = Date.parse(header);
 	return Number.isNaN(at) ? undefined : Math.max(0, at - now);
 }
+
+/** An image content-type; SVG is XML text, so it is not one. */
+export const IMAGE_TYPE = /^\s*image\/(?!svg)/i;
+/** A server that does not know the type of a file sends one of these. */
+const MAYBE_IMAGE = /^\s*(?:application\/octet-stream\s*(?:;|$)|$)/i;
 
 const okay = (result: HttpResult) => result.status >= 200 && result.status < 300;
 
