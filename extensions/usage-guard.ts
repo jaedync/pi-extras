@@ -220,13 +220,13 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			"plan caps per model for OpenCode Go, the provider's own meter or balance otherwise); a monthly meter adds " +
 			"business days left and a per-business-day share. The top-level `dollars` gives spend today in the local time zone " +
 			"and the tightest remaining USD per provider. " +
-			"setBudget records a session budget so a wrap-up warning fires once when that window reaches pct.",
+			"setBudget records a session budget: a warning point (not a stop) that fires once when that window reaches pct.",
 		promptSnippet: "Check subscription usage limits, resets, and the session usage budget",
 		promptGuidelines: [
-			"Use usage before long autonomous work and whenever the user sets a usage budget (for example: work until 60% of the weekly limit); pass setBudget so a warning fires at that point.",
+			"Use usage before long autonomous work and whenever the user names a usage point (for example: tell me at 60% of the weekly limit); pass setBudget so a warning fires at that point. A budget warns; it does not stop work unless the user said to stop there.",
 			"Usage warnings are not a reason to cut work short: finish tasks that fit in the remaining headroom.",
 			"Before starting subagents, call usage with all: true and size each run's maxCost from dollars.providers.<provider>.remainingUsd (remainingUsdByModel for OpenCode Go) and, for a monthly meter, leftTodayUsd. Treat implied figures as estimates and leave margin.",
-			"When a window near its limit is waitable (resets within a few hours) and work remains, keep going past it: at a clean checkpoint start a background shell job running `sleep <resumeAfterSeconds>` titled \"Wait for usage reset\", end the turn, and continue the task when it completes. Stop and report only at a user-set budget or when the reset is too far away to wait for.",
+			"When a window near its limit is waitable (resets within a few hours) and work remains, keep going past it: at a clean checkpoint start a background shell job running `sleep <resumeAfterSeconds>` titled \"Wait for usage reset\", end the turn, and continue the task when it completes. Stop and report only when the reset is too far away to wait for, or at a point where the user said to stop.",
 		],
 		parameters: Type.Object({
 			refresh: Type.Optional(Type.Boolean({ description: "Poll the provider now instead of reading the cached snapshot." })),
@@ -234,7 +234,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			setBudget: Type.Optional(Type.Object({
 				window: Type.String({ minLength: 1, maxLength: 32, description: "Window label or key, e.g. \"7d\", \"5h\", \"7d-fable\"." }),
 				pct: Type.Number({ minimum: 1, maximum: 100, description: "Warn once when the window reaches this percent." }),
-			}, { description: "Record a session usage budget for one window." })),
+			}, { description: "Record a session usage warning point for one window; it does not stop work." })),
 			clearBudget: Type.Optional(Type.Boolean({ description: "Remove the session budget." })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

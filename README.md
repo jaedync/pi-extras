@@ -27,7 +27,7 @@ can still conflict.
 | Component | Behavior |
 | --- | --- |
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits in a fixed order, $0.00 rows for free local providers, optional linked subagent usage |
-| Usage Guard | `usage` tool, `/usage` command, one-shot wrap-up warnings for a session budget or, when enabled, near a limit |
+| Usage Guard | `usage` tool, `/usage` command, one-shot warnings at a session budget (a warning point, not a stop) or, when enabled, near a limit |
 | Cache Compaction | Prefix-sharing summaries that reuse the session's warm prompt cache, with safe fallback to Pi's default compaction |
 | Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
 | Phase Spinner | Descriptive status with a per-mode spinner in the editor's top divider, with a per-step stopwatch, alongside tokens/sec, time to first token and total elapsed time; live thinking above queued messages and a π end line when a prompt finishes |
@@ -767,7 +767,9 @@ rate limits taken from response headers are reported but never warned on.
 - `usage` tool: percent used, thresholds, reset time, seconds until reset and
   `resumeAfterSeconds` (reset plus margin) per window, and `waitable` when the
   reset is exact and within `maxWaitSeconds`. `setBudget` records a
-  session budget ("work until 60% of the weekly limit"); `all` includes other
+  session budget ("tell me at 60% of the weekly limit"). It is a warning point:
+  its warning asks the agent to note it and keep working, and to stop only when
+  the user said to stop there. `all` includes other
   providers and non-governing windows.
 - Zero-cost models: when every catalog price of the active model is 0 (a
   local model), the report marks it `unmetered` and its first note says that

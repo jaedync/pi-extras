@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.34.5 - 2026-10-28
+
+### Changed
+
+- Usage Guard: a session budget is a warning point, not a stop. Its warning
+  asks the agent to say that the window reached it and to keep working; the
+  agent stops there only when the user said to stop at that point. Before, the
+  warning told the agent to stop, so a budget that the agent set for itself
+  ended work the user wanted done. The `usage` tool's guidance says the same.
+
 ## 0.34.4 - 2026-10-27
 
 ### Added

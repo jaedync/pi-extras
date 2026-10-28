@@ -169,14 +169,18 @@ test("a near reset is slept through, a far one stops, and short work is finished
 	assert.match(unknown, /summarize where things stand\.$/);
 });
 
-test("a session budget near its reset still stops, since the user set it", () => {
-	const warning: Warning = {
-		key: "k", provider: "anthropic", threshold: 60, reason: "budget", final: true,
-		entry: { label: "5h", key: "five_hour", usedPct: 61, resetMs: NOW + 3_600_000 },
-	};
-	const text = warningMessage(warning, ON, NOW, "UTC");
-	assert.match(text, /limit the user set: finish the current step, record state, summarize where things stand, and stop\.$/);
-	assert.doesNotMatch(text, /sleep/);
+test("a session budget is a warning point: it asks for a note and more work, not a stop", () => {
+	for (const resetMs of [NOW + 3_600_000, NOW + 3 * 86_400_000]) {
+		const warning: Warning = {
+			key: "k", provider: "anthropic", threshold: 60, reason: "budget", final: true,
+			entry: { label: "7d", key: "seven_day", usedPct: 61, resetMs },
+		};
+		const text = warningMessage(warning, ON, NOW, "UTC");
+		assert.match(text, /a warning point, not a limit/);
+		assert.match(text, /keep working on the task/);
+		assert.match(text, /told you to stop at this point/);
+		assert.doesNotMatch(text, /and stop\.|stop at a clean checkpoint|sleep/);
+	}
 });
 
 test("with warnings off, bands and blocks stay silent but a budget window still fires", () => {

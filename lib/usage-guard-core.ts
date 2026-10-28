@@ -327,13 +327,16 @@ export function resetTiming(entry: LimitEntry, config: GuardConfig, now: number,
 }
 
 /**
- * What the final warning asks for. A near reset is slept through so the run
- * keeps going; stopping is reserved for a user-set budget or a reset days
- * away. Either way, work that nearly fits is finished rather than cut short.
+ * What the final warning asks for. A session budget is a warning point, not a
+ * stop: agents that read "budget" as a limit stopped work the user wanted
+ * done. A near reset is slept through so the run keeps going; stopping is
+ * reserved for a reset days away. Either way, work that nearly fits is
+ * finished rather than cut short.
  */
 function guidance(warning: Warning, timing: ResetTiming | undefined, config: GuardConfig): string {
 	if (warning.reason === "budget") {
-		return "This is the limit the user set: finish the current step, record state, summarize where things stand, and stop.";
+		return "The session budget is a warning point, not a limit: say in your next status note that the window reached it, " +
+			"then keep working on the task. Stop here only if the user told you to stop at this point.";
 	}
 	if (timing?.waitable) {
 		const margin = formatDuration(config.resumeMarginSeconds * 1000, false);
