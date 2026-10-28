@@ -58,6 +58,28 @@ test("a Pi that cannot start gives no verdict; a Pi that fails gives one", async
 	assert.equal(!exits.ok && exits.inconclusive, undefined, "an exit is a verdict");
 });
 
+test("records after the verdict send nothing more: a reply in the same chunk does not write to a closed stdin", async (t) => {
+	const dir = scratch(t);
+	mkdirSync(join(dir, "pi", "bin"), { recursive: true });
+	// One write holds the extension error and the reply to get_state, as a fast Pi can send them. The reply
+	// used to send the prompt after the error had ended stdin: an uncaught "write after end".
+	writeFileSync(join(dir, "pi", "bin", "pi"), [
+		'process.stdin.once("data", () => process.stdout.write(',
+		'  JSON.stringify({ type: "extension_error", extensionPath: "/x/ext.ts", event: "session_start", error: "boom" }) + "\\n" +',
+		'  JSON.stringify({ type: "response", id: "state", command: "get_state", success: true }) + "\\n"));',
+		"setInterval(() => {}, 1000);",
+		"",
+	].join("\n"));
+	writeFileSync(join(dir, "pi", "package.json"), JSON.stringify({ type: "commonjs" }));
+	const uncaught: Error[] = [];
+	const onError = (error: Error) => uncaught.push(error);
+	process.on("uncaughtException", onError);
+	t.after(() => process.off("uncaughtException", onError));
+	const result = await smokeTest({ piDir: join(dir, "pi"), packages: [], timeoutMs: 10_000 });
+	assert.match(result.ok ? "" : result.reason, /boom/);
+	assert.deepEqual(uncaught.map((error) => error.message), []);
+});
+
 test("a smoke Pi killed by a signal that the test did not send (for example the OOM killer) gives no verdict", { skip: process.platform === "win32" }, async (t) => {
 	const dir = scratch(t);
 	for (const signal of ["SIGKILL", "SIGTERM"]) {

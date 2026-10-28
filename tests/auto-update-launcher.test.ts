@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { getPriority, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { collectGarbage } from "../lib/auto-update/gc.ts";
@@ -170,7 +170,10 @@ test("pi update starts a forced check in the background with a low priority and 
 	while (!existsSync(r.log) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
 	const line = readFileSync(r.log, "utf8").match(/^cli check --force nice=(\d+)\n$/);
 	assert.ok(line, readFileSync(r.log, "utf8"));
-	if (existsSync("/usr/bin/nice") || existsSync("/bin/nice")) assert.ok(Number(line[1]) >= 10, `niced: ${line[1]}`);
+	// nice adds 10 to the caller's value, up to the maximum (19 on Linux). A CI runner can start with a negative
+	// value, so the check is against this process's own priority, not an absolute 10.
+	const own = getPriority();
+	if (existsSync("/usr/bin/nice") || existsSync("/bin/nice")) assert.ok(Number(line[1]) >= Math.min(own + 10, 19), `niced: ${line[1]}, own: ${own}`);
 });
 
 test("Pi's own update banner is off only while the store says that auto-update manages Pi", async (t) => {

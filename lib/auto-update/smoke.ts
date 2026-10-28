@@ -149,8 +149,14 @@ function drivePi(drive: Drive): Promise<SmokeResult> {
 			setTimeout(() => resolve(result), 2 * KILL_GRACE_MS).unref();
 		};
 		const timer = setTimeout(() => finish({ ok: false, reason: `no reply within ${Math.round(drive.timeoutMs / 1000)} s`, inconclusive: true }), drive.timeoutMs);
-		const send = (command: object) => child.stdin.write(`${JSON.stringify(command)}\n`);
+		// After the verdict stdin is ended: a record later in the same chunk must not write to it.
+		const send = (command: object) => {
+			if (!outcome && child.stdin.writable) child.stdin.write(`${JSON.stringify(command)}\n`);
+		};
+		// A Pi that exits before it reads gives EPIPE here; the verdict comes from "close".
+		child.stdin.on("error", () => {});
 		const onRecord = (record: Record<string, unknown>) => {
+			if (outcome) return;
 			if (record.type === "extension_error") return finish({ ok: false, reason: extensionError(record) });
 			if (record.type === "response" && record.success === false) return finish({ ok: false, reason: `RPC ${String(record.command)} failed: ${sanitize(String(record.error ?? "")).slice(0, 160)}` });
 			if (record.type === "response" && record.id === "state") return void send({ type: "prompt", id: "prompt", message: "smoke test" });
