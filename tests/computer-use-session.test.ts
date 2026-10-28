@@ -135,9 +135,9 @@ test("cancelling a call dismisses its approval, and a late answer is still a dec
 			},
 		});
 		await assert.rejects(pending, /cancelled|abort/i);
-		await new Promise((resolve) => setTimeout(resolve, 100));
 		assert.equal(dismissed, true);
-		assert.match(stderr.join(""), /answer=decline/);
+		// A loaded runner can take more than 100 ms to deliver the fake's stderr line: wait for it.
+		assert.match(await stderrMatching(stderr, /answer=decline/), /answer=decline/);
 		assert.doesNotMatch(stderr.join(""), /persist=/);
 	} finally { await session.close(); }
 });

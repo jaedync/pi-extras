@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.34.6 - 2026-10-28
+
+### Fixed
+
+- Auto-update: the smoke test no longer throws an uncaught "write after end"
+  when a candidate Pi sends an extension error and another reply in one chunk.
+  Records after the verdict send nothing, and an EPIPE from a Pi that exits
+  before it reads is ignored: the exit gives the verdict.
+- Tests: the `pi update` priority check is relative to the caller's own nice
+  value, so it passes on CI runners that start below 0 (the macOS runners).
+  A computer-use approval test waits for the fake's stderr line instead of a
+  fixed 100 ms.
+
 ## 0.34.5 - 2026-10-28
 
 ### Changed
