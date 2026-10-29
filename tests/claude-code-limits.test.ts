@@ -9,39 +9,40 @@ import { LIMIT_POLLERS, limitFamily, parseLimitHeaders, pollAnthropicUsage } fro
 
 const NOW = Date.parse("2026-10-29T15:00:00Z");
 
-function home(credentials: unknown, account?: unknown): string {
+function home(credentials: unknown): string {
 	const dir = mkdtempSync(join(tmpdir(), "cc-login-"));
 	mkdirSync(join(dir, ".claude"));
-	if (credentials !== undefined) writeFileSync(join(dir, ".claude", ".credentials.json"), JSON.stringify(credentials));
-	if (account !== undefined) writeFileSync(join(dir, ".claude.json"), JSON.stringify(account));
+	if (credentials !== undefined) writeFileSync(join(dir, ".claude", ".credentials.json"), typeof credentials === "string" ? credentials : JSON.stringify(credentials));
 	return dir;
 }
 
 const login = (expiresAt = NOW + 3_600_000) => ({ claudeAiOauth: { accessToken: "cc-test-token", expiresAt, subscriptionType: "enterprise" } });
-const account = { oauthAccount: { accountUuid: "acct-1", organizationUuid: "org-1" } };
 
-test("Claude Code's login is read from its own files, with the account it names", (t) => {
-	const dir = home(login(), account);
+test("Claude Code's login is read from its credentials file alone", (t) => {
+	const dir = home(login());
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
-	const found = readClaudeCodeLogin(claudeCodePaths({}, dir), NOW);
-	assert.deepEqual(found, { token: "cc-test-token", expiresAtMs: NOW + 3_600_000, accountUuid: "acct-1", organizationUuid: "org-1" });
+	// No account file is read: the token is all the poll needs.
+	writeFileSync(join(dir, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: "acct-1" } }));
+	assert.deepEqual(readClaudeCodeLogin(claudeCodePaths({}, dir), NOW), { token: "cc-test-token", expiresAtMs: NOW + 3_600_000 });
 });
 
-test("an expired, missing or unreadable Claude Code login reads as none", (t) => {
-	const expired = home(login(NOW - 1), account);
-	const missing = home(undefined, account);
+test("an expired, nearly expired, missing, unreadable or oversized Claude Code login reads as none", (t) => {
+	const expired = home(login(NOW - 1));
+	const expiring = home(login(NOW + 59_000));
+	const missing = home(undefined);
 	const broken = home({ claudeAiOauth: { accessToken: 7 } });
-	t.after(() => [expired, missing, broken].forEach((dir) => rmSync(dir, { recursive: true, force: true })));
-	assert.equal(readClaudeCodeLogin(claudeCodePaths({}, expired), NOW), undefined);
-	assert.equal(readClaudeCodeLogin(claudeCodePaths({}, missing), NOW), undefined);
-	assert.equal(readClaudeCodeLogin(claudeCodePaths({}, broken), NOW), undefined);
+	const huge = home(JSON.stringify({ ...login(), pad: "x".repeat(64 * 1024) }));
+	const fresh = home(login(NOW + 61_000));
+	t.after(() => [expired, expiring, missing, broken, huge, fresh].forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+	for (const dir of [expired, expiring, missing, broken, huge]) assert.equal(readClaudeCodeLogin(claudeCodePaths({}, dir), NOW), undefined, dir);
+	assert.ok(readClaudeCodeLogin(claudeCodePaths({}, fresh), NOW), "a token with more than a minute left is a login");
 });
 
-test("PI_CLAUDE_CODE_CONFIG_DIR, then CLAUDE_CONFIG_DIR, moves both of Claude Code's files", () => {
-	assert.deepEqual(claudeCodePaths({ CLAUDE_CONFIG_DIR: "/cfg" }, "/home/u"), { credentials: "/cfg/.credentials.json", account: "/cfg/.claude.json" });
+test("PI_CLAUDE_CODE_CONFIG_DIR, then CLAUDE_CONFIG_DIR, moves Claude Code's credentials file", () => {
+	assert.deepEqual(claudeCodePaths({ CLAUDE_CONFIG_DIR: "/cfg" }, "/home/u"), { credentials: "/cfg/.credentials.json" });
 	// pi-claude-code runs the CLI with PI_CLAUDE_CODE_CONFIG_DIR as its config directory when it is set.
-	assert.deepEqual(claudeCodePaths({ PI_CLAUDE_CODE_CONFIG_DIR: "/pi-cfg", CLAUDE_CONFIG_DIR: "/cfg" }, "/home/u"), { credentials: "/pi-cfg/.credentials.json", account: "/pi-cfg/.claude.json" });
-	assert.deepEqual(claudeCodePaths({}, "/home/u"), { credentials: "/home/u/.claude/.credentials.json", account: "/home/u/.claude.json" });
+	assert.deepEqual(claudeCodePaths({ PI_CLAUDE_CODE_CONFIG_DIR: "/pi-cfg", CLAUDE_CONFIG_DIR: "/cfg" }, "/home/u"), { credentials: "/pi-cfg/.credentials.json" });
+	assert.deepEqual(claudeCodePaths({}, "/home/u"), { credentials: "/home/u/.claude/.credentials.json" });
 });
 
 test("pollers are keyed by family: claude-code and openai poll their family's plan, not a second time", () => {
