@@ -47,6 +47,11 @@ apply, the Anthropic poll reads the access token of Claude Code's own login
 from `.credentials.json` in `PI_CLAUDE_CODE_CONFIG_DIR`, `CLAUDE_CONFIG_DIR`
 or `~/.claude`, and sends it only to `api.anthropic.com`. It reads the file
 again at each poll, keeps no copy, writes nothing to it and never refreshes the token.
+It refuses a file larger than 64 KiB and a token that expires within one minute.
+The usage request does not follow redirects. A family shows the limits of one
+account: the first in the order proxy quota route, Pi's `anthropic` OAuth login,
+Claude Code's login. When two members of a family use different logins, the
+footer and the `usage` tool show the account that comes first in that order.
 Provider endpoints are not guaranteed stable. Missing credentials, unavailable
 quotas and provider errors should not prevent Pi from running.
 

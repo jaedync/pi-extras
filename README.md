@@ -378,12 +378,19 @@ and `openai-codex` and `openai` are the Codex family. Each family has one row,
 which adds up the spend, airtime and tokens of its members, and one limit
 reading, which one poll reads for all Pi processes. The Anthropic poll uses the
 proxy quota route of the `anthropic` provider when it has one, else Pi's
-`anthropic` login, else the Claude Code login of the `claude-code` provider
+`anthropic` OAuth login, else the Claude Code login of the `claude-code` provider
 (`~/.claude/.credentials.json`, or the folder in `PI_CLAUDE_CODE_CONFIG_DIR` or
 `CLAUDE_CONFIG_DIR`). Thus a `claude-code` session needs no setup. Status Plus
 does not refresh an expired Claude Code login: Claude Code does that itself.
 On macOS, Claude Code keeps its login in the Keychain, so a `claude-code`
 session there shows limits only when Pi has its own `anthropic` login.
+
+A family shows the limits of one account: the first login in the poll order
+above. If two members use different accounts, for example Pi's `anthropic`
+login and Claude Code's login, the row shows the account of Pi's `anthropic`
+login for both. A per-token API key is not part of the plan: an `anthropic` API
+key or an `openai` API key gets no plan windows and no plan cooldown, and its
+spend shows on a row of its own.
 
 **Subagent spend.** The footer adds the spend of the subagents that the
 current branch started. A child that a `subagent` call started counts from
@@ -781,7 +788,8 @@ rate limits taken from response headers are reported but never warned on.
   openai-codex`, works as a meter: Status Plus reads the plan's 5h and 7d
   windows with it and shows them on the Codex family's row, which the `openai`
   provider shares. You do not have to use the `openai-codex` models. An
-  `openai` API key is billed per token, so it does not start the plan poll.
+  `openai` API key is billed per token, so it does not start the plan poll,
+  reads no plan windows and keeps its own cooldown and fallback scope.
 - `usage` tool: percent used, thresholds, reset time, seconds until reset and
   `resumeAfterSeconds` (reset plus margin) per window, and `waitable` when the
   reset is exact and within `maxWaitSeconds`. `setBudget` records a
@@ -790,8 +798,8 @@ rate limits taken from response headers are reported but never warned on.
   the user said to stop there. `all` includes other
   providers and non-governing windows.
 - Zero-cost models: when every catalog price of the active model is 0 (a
-  local model), and no model of its provider family has a price, the report
-  marks it `unmetered` and its first note says that
+  local model), and no other provider of its family has a priced model, the
+  report marks it `unmetered` and its first note says that
   usage does not limit the session's own work. A note also says that limits
   with `applies: false` matter only for subagents on that provider. With
   `all: true`, `unmeteredModels` lists the scoped zero-cost models, which a
