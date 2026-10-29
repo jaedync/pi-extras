@@ -185,11 +185,16 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		}
 	}
 
-	/** A first, unforced read for each provider the store has no snapshot of. */
+	/** A first, unforced read for each plan or key the store has no snapshot of, asked once by one of its providers. */
 	async function readUnknown(providers: ReadonlyArray<string | undefined>): Promise<void> {
 		const known = new Set(store.entries().map(([provider]) => storeKey(provider)));
-		const unknown = new Set(providers.filter((provider): provider is string => Boolean(provider) && !known.has(limitKey(provider!))));
-		await Promise.all([...unknown].map((provider) => store.refresh(provider, false)));
+		const unknown = new Map<string, string>();
+		for (const provider of providers) {
+			if (!provider) continue;
+			const key = limitKey(provider);
+			if (!known.has(key) && !unknown.has(key)) unknown.set(key, provider);
+		}
+		await Promise.all([...unknown.values()].map((provider) => store.refresh(provider, false)));
 	}
 
 	function evaluate(ctx: ExtensionContext, deliverWarnings = false): CustomMessage[] {

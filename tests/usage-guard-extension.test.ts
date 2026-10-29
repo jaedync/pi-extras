@@ -472,3 +472,15 @@ test("the usage tool reports the anthropic family's limits for a claude-code mod
 	assert.equal(report.unmeteredModels, undefined);
 	assert.deepEqual(report.limits.map((limit: { provider: string; remaining?: string; applies: boolean }) => [limit.provider, limit.remaining, limit.applies]), [["anthropic", "$369/$3000", true]]);
 });
+
+test("a first read of anthropic and claude-code asks for the family's poll once", async () => {
+	const model = { provider: "claude-code", id: "claude-opus-5-5", cost: { input: 5, output: 25 } };
+	const { pi, store, ctx } = setup(model);
+	const available = [model, { provider: "anthropic", id: "claude-sonnet-5", cost: { input: 3, output: 15 } }, { provider: "meridian", id: "opus", cost: { input: 5, output: 25 } }];
+	const scoped = { ...ctx, scopedModels: available.map((entry) => ({ model: entry })), modelRegistry: { getAvailable: () => available, getAll: () => available, getApiKeyForProvider: async () => undefined } };
+	const refreshed: string[] = [];
+	store.setRefresher(async (provider) => { refreshed.push(provider); });
+	await pi.handlers.get("session_start")!({}, scoped);
+	await pi.tool!.execute("t1", { all: true }, undefined, undefined, scoped);
+	assert.equal(refreshed.length, 1, refreshed.join(", "));
+});
