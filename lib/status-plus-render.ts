@@ -176,7 +176,10 @@ export function thinkingTone(level: string | undefined): string {
 }
 
 export function providerTag(_paint: Painter, id: string): string {
-	return rgb(PROVIDERS[identityId(id)]?.label ?? id, providerColor(id) ?? OTHER_PROVIDER);
+	const label = PROVIDERS[identityId(id)]?.label;
+	// An API key's own row (`anthropic:api-key`) reads "Ant key", apart from its plan's row.
+	const text = label && id.endsWith(":api-key") ? `${label} key` : label ?? id;
+	return rgb(text, providerColor(id) ?? OTHER_PROVIDER);
 }
 
 export function toneForPct(pct: number): "dim" | "warning" | "error" {

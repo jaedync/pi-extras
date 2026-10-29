@@ -181,12 +181,15 @@ test("an anthropic API key is no plan login: its spend stays off the plan's row,
 	await settle();
 	assert.equal(planBilled("anthropic"), false);
 	assert.deepEqual(calls, [], "the fresh shared poll stands in for one of our own");
-	const ant = rows(footer.lines(), "Ant");
-	assert.equal(ant.length, 2, footer.lines().join("\n"));
-	const key = ant.find((line) => /\$0\.50/.test(line));
-	const plan = ant.find((line) => /\$0\.25/.test(line));
-	assert.ok(key && !/\$369/.test(key), key);
-	assert.match(plan ?? "", /\$369\/\$3000/);
+	// The API key's row has a label of its own, so the two Anthropic rows can be told apart.
+	const key = rows(footer.lines(), "Ant key");
+	const plan = rows(footer.lines(), "Ant").filter((line) => !line.startsWith("Ant key"));
+	assert.equal(key.length, 1, footer.lines().join("\n"));
+	assert.equal(plan.length, 1, footer.lines().join("\n"));
+	assert.match(key[0], /\$0\.50/);
+	assert.doesNotMatch(key[0], /\$369/);
+	assert.match(plan[0], /\$0\.25/);
+	assert.match(plan[0], /\$369\/\$3000/);
 });
 
 test("concurrent reads for anthropic and claude-code make one poll", async (t) => {
