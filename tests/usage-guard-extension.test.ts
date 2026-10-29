@@ -7,6 +7,7 @@ import { createLimitStore, type LimitStore } from "../lib/limit-store.ts";
 import { parseProxyQuota, type LimitEntry } from "../lib/status-plus-logic.ts";
 import { rowKind } from "../lib/tool-row.ts";
 import usageGuard, { GUARD_CUSTOM_TYPE, loadGuardConfig, parseBudgetArgs, saveGuardConfig } from "../extensions/usage-guard.ts";
+import { openaiLogin } from "./support/plan-login.ts";
 
 const NOW = 1_800_000_000_000;
 const RESET = NOW + 3_600_000;
@@ -408,7 +409,8 @@ test("all: true polls the scoped models' providers that have no snapshot, so a G
 	assert.deepEqual(report.dollars.providers["opencode-go"].remainingUsdByModel, { "glm-5.3": 1.5 });
 });
 
-test("all: true with no scoped models reads every model with credentials and names the paid providers with no reading", async () => {
+test("all: true with no scoped models reads every model with credentials and names the paid providers with no reading", async (t) => {
+	openaiLogin(t, "api_key");
 	const { pi, store, ctx } = setup();
 	const available = [
 		{ provider: "anthropic", id: "claude-sonnet-5", cost: { input: 3, output: 15 } },

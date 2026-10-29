@@ -28,10 +28,12 @@ function state(): PlanState {
 	return (host[STATE_KEY] ??= { anthropicApiKey: false });
 }
 
-/** Tests point the openai check at a file of their own; undefined goes back to Pi's auth.json. */
-export function setPlanAuthFile(file: string | undefined): void {
+/** Tests point the openai check at a file of their own; undefined goes back to Pi's auth.json. Returns the file it replaces. */
+export function setPlanAuthFile(file: string | undefined): string | undefined {
+	const previous = state().authFile;
 	state().authFile = file;
 	state().openai = undefined;
+	return previous;
 }
 
 /** Called by the Anthropic poll, which reads Pi's anthropic credential. */

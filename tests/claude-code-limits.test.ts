@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeCodePaths, readClaudeCodeLogin } from "../lib/claude-code-login.ts";
 import { setPlanAuthFile } from "../lib/plan-billing.ts";
+import "./support/plan-login.ts";
 import { LIMIT_POLLERS, limitFamily, parseLimitHeaders, pollAnthropicUsage } from "../lib/status-plus-limits.ts";
 
 const NOW = Date.parse("2026-10-29T15:00:00Z");
@@ -57,8 +58,8 @@ test("an openai login asks for the Codex plan poll only when it is Sign in with 
 	const dir = mkdtempSync(join(tmpdir(), "openai-family-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const authFile = join(dir, "auth.json");
-	setPlanAuthFile(authFile);
-	t.after(() => setPlanAuthFile(undefined));
+	const previous = setPlanAuthFile(authFile);
+	t.after(() => setPlanAuthFile(previous));
 	writeFileSync(authFile, JSON.stringify({ openai: { type: "oauth" } }));
 	assert.equal(limitFamily("openai"), "openai-codex");
 	// An API key bills per token and has no plan windows: the Codex meter must not stand in for it.
