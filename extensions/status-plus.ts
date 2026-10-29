@@ -628,8 +628,13 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	/** One poll for each family this branch used or the selection routes to. */
 	function schedulePolls(ctx: ExtensionContext): void {
 		const routed = routedModel(ctx)?.provider;
-		const families = new Set([...seenProviders, ...(routed ? [routed] : [])].map((provider) => limitFamily(provider)));
-		for (const family of families) if (family) void refreshProviderLimits(family, ctx);
+		// One plan member asks for each family's poll; a per-token API key asks for none.
+		const members = new Map<string, string>();
+		for (const provider of [...seenProviders, ...(routed ? [routed] : [])]) {
+			const family = limitFamily(provider);
+			if (family && !members.has(family)) members.set(family, provider);
+		}
+		for (const member of members.values()) void refreshProviderLimits(member, ctx);
 	}
 
 	/**

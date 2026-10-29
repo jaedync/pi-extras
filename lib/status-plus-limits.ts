@@ -415,12 +415,13 @@ export const LIMIT_POLLERS: Record<string, { interval: (ctx: PollerContext) => P
  * Sign in with ChatGPT gives apps no usage endpoint and no rate-limit headers
  * (openai/codex#54219), but its requests count toward the same ChatGPT plan,
  * which an openai-codex login, kept only as a meter, reads. A member that
- * bills per token (an openai API key) starts no plan poll (lib/plan-billing.ts).
- * The family's own id always polls: an anthropic API key's poll still reads
- * the plan through Claude Code's login for the claude-code provider.
+ * bills per token (an openai or anthropic API key) starts no plan poll
+ * (lib/plan-billing.ts). A plan member still does: with an anthropic API key,
+ * claude-code's poll reads the plan through Claude Code's login. Callers pass
+ * a member, not a family id (lib/plan-billing.ts planMember).
  */
 export function limitFamily(provider: string): string | undefined {
 	const family = providerFamily(provider);
 	if (!Object.hasOwn(LIMIT_POLLERS, family)) return undefined;
-	return provider !== family && !planBilled(provider) ? undefined : family;
+	return planBilled(provider) ? family : undefined;
 }

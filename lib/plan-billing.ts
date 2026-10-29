@@ -10,7 +10,7 @@
  * last poll's finding.
  */
 import { CODEX_AUTH_FILE, chatgptLogin } from "./provider-limits.ts";
-import { isFamilyId, providerFamily } from "./provider-family.ts";
+import { familyMembers, isFamilyId, providerFamily } from "./provider-family.ts";
 
 /** The openai login is read from the file at most this often. */
 const AUTH_TTL_MS = 2_000;
@@ -63,6 +63,10 @@ export function limitKey(provider: string): string {
 	if (planBilled(provider)) return family;
 	return family === provider ? `${provider}:api-key` : provider;
 }
+
+/** A provider that bills the plan a family id names, to ask for its poll; any other key is its own. */
+export const planMember = (key: string): string =>
+	(isFamilyId(key) ? familyMembers(key).find((member) => planBilled(member)) : undefined) ?? key;
 
 /** The key of a reading named by a poller (a family id) or by a member. */
 export const storeKey = (provider: string): string => (isFamilyId(provider) ? provider : limitKey(provider));

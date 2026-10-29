@@ -8,6 +8,7 @@ import { parseProxyQuota, type LimitEntry } from "../lib/status-plus-logic.ts";
 import { rowKind } from "../lib/tool-row.ts";
 import usageGuard, { GUARD_CUSTOM_TYPE, loadGuardConfig, parseBudgetArgs, saveGuardConfig } from "../extensions/usage-guard.ts";
 import { openaiLogin } from "./support/plan-login.ts";
+import { noteAnthropicApiKey } from "../lib/plan-billing.ts";
 
 const NOW = 1_800_000_000_000;
 const RESET = NOW + 3_600_000;
@@ -485,4 +486,16 @@ test("a first read of anthropic and claude-code asks for the family's poll once"
 	await pi.handlers.get("session_start")!({}, scoped);
 	await pi.tool!.execute("t1", { all: true }, undefined, undefined, scoped);
 	assert.equal(refreshed.length, 1, refreshed.join(", "));
+});
+
+test("refresh: true asks for the Anthropic plan through a plan member when Pi's anthropic credential is an API key", async (t) => {
+	noteAnthropicApiKey(true);
+	t.after(() => noteAnthropicApiKey(false));
+	const { pi, store, ctx } = setup({ provider: "anthropic", id: "claude-opus-5-5" });
+	store.set("anthropic", { entries: [{ label: "7d", key: "seven_day", usedPct: 40, resetMs: RESET }], atMs: NOW - 5_000, source: "poll" });
+	const refreshed: string[] = [];
+	store.setRefresher(async (provider) => { refreshed.push(provider); });
+	await pi.handlers.get("session_start")!({}, ctx);
+	await pi.tool!.execute("t1", { all: true, refresh: true }, undefined, undefined, ctx);
+	assert.ok(refreshed.includes("claude-code"), refreshed.join(", "));
 });

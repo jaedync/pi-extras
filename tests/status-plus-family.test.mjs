@@ -220,10 +220,20 @@ test("offline, Status Plus asks Pi for no anthropic credential", async (t) => {
 	assert.deepEqual(calls, []);
 });
 
-test("an anthropic API-key session's first frame already shows the key's own row", async (t) => {
+test("an anthropic API-key session polls no plan and reads no Claude Code login; its row shows at once", async (t) => {
+	claudeCodeLogin();
 	const footer = app({ model: CLAUDE, branch: [reply("r1", "anthropic", 0.5)], piToken: "sk-ant-api03-test" });
 	await footer.emit("session_start");
 	t.after(() => footer.emit("session_shutdown"));
+	// The first frame already knows the credential is an API key.
 	assert.equal(planBilled("anthropic"), false);
 	assert.equal(rows(footer.lines(), "Ant key").length, 1, footer.lines().join("\n"));
+	await settle();
+	assert.deepEqual(calls, []);
+	assert.ok(!existsSync(join(SHARE, "anthropic.json")));
+	// claude-code bills the plan: selecting it polls the plan with Claude Code's login.
+	footer.ctx.model = CLAUDE_CODE;
+	await footer.emit("model_select", { model: CLAUDE_CODE, source: "set" });
+	await settle();
+	assert.deepEqual(calls, [{ url: "https://api.anthropic.com/api/oauth/usage", auth: "Bearer cc-test-token" }]);
 });

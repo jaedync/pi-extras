@@ -13,7 +13,7 @@ import { defineTool, getAgentDir, type ContextEvent, type ExtensionAPI, type Ext
 import { Type } from "typebox";
 import { readSection, updateSection } from "../lib/extras-config.ts";
 import { sharedLimitStore, type LimitStore } from "../lib/limit-store.ts";
-import { limitKey, storeKey } from "../lib/plan-billing.ts";
+import { limitKey, planMember, storeKey } from "../lib/plan-billing.ts";
 import { operationalError } from "../lib/operational-log.ts";
 import { markRow } from "../lib/tool-row.ts";
 import { parseRateLimit } from "../lib/rate-limit-recovery/core.ts";
@@ -266,7 +266,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			if (params.refresh) {
 				const providers = params.all ? store.entries().map(([provider]) => provider) : [];
 				if (model.provider && !providers.includes(limitKey(model.provider))) providers.push(model.provider);
-				await Promise.all(providers.map((provider) => store.refresh(provider, true)));
+				// A plan's reading is asked for through a member that bills it (claude-code when Pi's anthropic credential is an API key).
+				await Promise.all(providers.map((provider) => store.refresh(planMember(provider), true)));
 			}
 			// Status Plus polls only providers this session has used or selected; the active one may not
 			// be read yet, and a subagent may run on any model in scope, so its limits must be known before
