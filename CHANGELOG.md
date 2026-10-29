@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.34.7 - 2026-10-29
+
+### Fixed
+
+- Status Plus: the `openai` provider (Sign in with ChatGPT) now shows as
+  "Cdx" in the Codex blue, and `claude-code` as "Ant" in the Anthropic orange,
+  because each reaches the same plan. Before, both showed their raw id in the
+  shared color for unknown providers. They also sort with their plan.
+
 ## 0.34.6 - 2026-10-28
 
 ### Fixed
