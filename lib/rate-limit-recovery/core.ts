@@ -2,7 +2,7 @@
 import { formatDuration } from "../status-plus-logic.ts";
 import type { RecoveryConfig } from "./config.ts";
 import { providerFamily } from "../provider-family.ts";
-import { planBilled } from "../plan-billing.ts";
+import { limitKey, planBilled } from "../plan-billing.ts";
 
 const MAX_ERROR_CHARS = 32_768;
 const MAX_RETRY_SECONDS = 7 * 24 * 3600;
@@ -42,8 +42,10 @@ const clean = (text: string | undefined, fallback: string): string => (text ?? f
 
 export function scopeFor(model: ModelIdentity): string {
 	const id = model.id ?? model.model ?? "";
-	// One plan, one cooldown: a provider family (lib/provider-family.ts) shares its scope; a per-token API key keeps its own.
-	const family = model.provider !== undefined && planBilled(model.provider) ? providerFamily(model.provider) : model.provider;
+	// A per-token API key is no plan login: it keeps its own cooldown (lib/plan-billing.ts).
+	if (model.provider !== undefined && !planBilled(model.provider)) return `provider:${limitKey(model.provider)}`;
+	// One plan, one cooldown: a provider family (lib/provider-family.ts) shares its scope.
+	const family = providerFamily(model.provider);
 	const anthropic = model.api === "anthropic-messages" || family === "anthropic" || /(?:^|[/:])(?:anthropic\/)?claude(?:[-/]|$)/i.test(id);
 	return anthropic ? "anthropic" : `provider:${family ?? "unknown"}`;
 }

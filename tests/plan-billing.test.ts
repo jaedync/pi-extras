@@ -55,6 +55,7 @@ test("an anthropic API key gets no plan limits, while claude-code keeps them", a
 	const api = { provider: "anthropic", id: "claude-opus-5-5" };
 	assert.ok(usageReport(snapshots, api, ON, undefined, NOW, true).limits.every((limit) => !limit.applies));
 	assert.ok("why" in windowReading((provider) => new Map(snapshots).get(provider), "anthropic/claude-opus-5-5", NOW));
+	assert.notEqual(scopeFor({ ...api, api: "anthropic-messages" }), scopeFor({ provider: "claude-code", id: "claude-opus-5-5" }), "an API key keeps its own cooldown");
 	const plan = usageReport(snapshots, { provider: "claude-code", id: "claude-opus-5-5" }, ON, undefined, NOW, true);
 	assert.ok(plan.limits.some((limit) => limit.applies));
 	// A proxy route, or an OAuth login, is the plan again.
