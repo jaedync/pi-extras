@@ -77,11 +77,13 @@ const SPEND = { spend: { enabled: true, used: { amount_minor: 263104, exponent: 
 
 function recorder() {
 	const seen: Array<{ url: string; auth: string | null }> = [];
+	const redirects: Array<RequestInit["redirect"]> = [];
 	const fetchImpl = async (url: string, init?: RequestInit) => {
 		seen.push({ url, auth: new Headers(init?.headers).get("authorization") });
+		redirects.push(init?.redirect);
 		return new Response(JSON.stringify(url.includes("quota") ? { extraUsage: { isEnabled: true, monthlyLimit: 3000, usedCredits: 2631.04 } } : SPEND));
 	};
-	return { seen, fetchImpl };
+	return { seen, redirects, fetchImpl };
 }
 
 const anthropicCtx = (piToken: string | undefined, baseUrl?: string) => ({ modelRegistry: {
@@ -90,12 +92,13 @@ const anthropicCtx = (piToken: string | undefined, baseUrl?: string) => ({ model
 } });
 
 test("with no Pi anthropic login, the anthropic family polls once with Claude Code's own login", async () => {
-	const { seen, fetchImpl } = recorder();
+	const { seen, redirects, fetchImpl } = recorder();
 	let reads = 0;
 	const entries = await pollAnthropicUsage(anthropicCtx(undefined), fetchImpl, () => { reads++; return { token: "cc-test-token" }; });
 	assert.deepEqual(seen, [{ url: "https://api.anthropic.com/api/oauth/usage", auth: "Bearer cc-test-token" }]);
 	assert.equal(entries?.find((entry) => entry.kind === "budget")?.remainingText, "$369/$3000");
 	assert.equal(reads, 1);
+	assert.deepEqual(redirects, ["error"], "the token never follows a redirect to another host");
 	// No login anywhere: no poll.
 	assert.equal(await pollAnthropicUsage(anthropicCtx(undefined), fetchImpl, () => undefined), undefined);
 	assert.equal(seen.length, 1);

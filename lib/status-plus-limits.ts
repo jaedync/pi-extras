@@ -326,6 +326,8 @@ export async function noteAnthropicCredential(ctx: PollerContext): Promise<strin
 async function pollAnthropicOAuth(token: string, fetchImpl: FetchLike = fetch): Promise<LimitEntry[]> {
 	const response = await fetchImpl(ANTHROPIC_OAUTH_USAGE_URL, {
 		headers: { authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" },
+		// The token is for api.anthropic.com alone: a redirect fails the poll instead of carrying it elsewhere.
+		redirect: "error",
 		signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
 	});
 	if (!response.ok) throw refused(response);
