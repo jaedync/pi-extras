@@ -53,6 +53,8 @@ const SHARE_DIR = join(AGENT_DIR, "status-plus-limits");
 const ZEN_NOTE = "balance not exposed by OpenCode";
 /** Pause before reading the child evidence a walk could not afford: input and frames get through between walks. */
 const CATCH_UP_MS = 250;
+/** session_start waits at most this long to learn whether Pi's anthropic credential is an API key. */
+const CREDENTIAL_WAIT_MS = 1_000;
 /** Follow-up walks in a row: enough for 320 MB of children; a cache too small for them could otherwise keep going. */
 const MAX_CATCH_UPS = 4;
 const GO_BILLING_NOTE = "billing Zen";
@@ -748,13 +750,17 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		ctx.ui.setWidget("status-plus-limits", undefined);
 		ctx.ui.setStatus("status-plus-limits", undefined);
 		ctx.ui.setStatus("status-plus", undefined);
+		// An anthropic API key reads no plan windows and starts no plan poll, even when another process's
+		// poll stands in for ours: learn it before the first frame, waiting a second at most.
+		if (!isOffline() && process.env.STATUS_PLUS_POLL_LIMITS !== "0") {
+			await Promise.race([noteAnthropicCredential(ctx).catch(() => undefined), new Promise((resolve) => setTimeout(resolve, CREDENTIAL_WAIT_MS).unref())]);
+			if (latestCtx !== ctx) return;
+		}
 		if (!installFooter(ctx) && ctx.mode === "tui") {
 			operationalError(LOG_FILE, "status-plus", "footer hook unavailable; grid footer disabled");
 		}
 		update(ctx);
 		schedulePolls(ctx);
-		// An anthropic API key reads no plan windows, even when another process's poll stands in for ours.
-		if (!isOffline() && process.env.STATUS_PLUS_POLL_LIMITS !== "0") void noteAnthropicCredential(ctx).then(() => requestFooterRender?.(), () => {});
 		// Keep the clock, cache warmth, and live airtime ticking between events.
 		if (timer) clearInterval(timer);
 		timer = setInterval(() => {
