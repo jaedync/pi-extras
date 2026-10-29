@@ -234,12 +234,13 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			"plan caps per model for OpenCode Go, the provider's own meter or balance otherwise); a monthly meter adds " +
 			"business days left and a per-business-day share. The top-level `dollars` gives spend today in the local time zone " +
 			"and the tightest remaining USD per provider. " +
+			"Providers of one plan report as one family, under its id: claude-code as anthropic, openai as openai-codex. " +
 			"setBudget records a session budget: a warning point (not a stop) that fires once when that window reaches pct.",
 		promptSnippet: "Check subscription usage limits, resets, and the session usage budget",
 		promptGuidelines: [
 			"Use usage before long autonomous work and whenever the user names a usage point (for example: tell me at 60% of the weekly limit); pass setBudget so a warning fires at that point. A budget warns; it does not stop work unless the user said to stop there.",
 			"Usage warnings are not a reason to cut work short: finish tasks that fit in the remaining headroom.",
-			"Before starting subagents, call usage with all: true and size each run's maxCost from dollars.providers.<provider>.remainingUsd (remainingUsdByModel for OpenCode Go) and, for a monthly meter, leftTodayUsd. Treat implied figures as estimates and leave margin.",
+			"Before starting subagents, call usage with all: true and size each run's maxCost from dollars.providers.<provider family>.remainingUsd (remainingUsdByModel for OpenCode Go) and, for a monthly meter, leftTodayUsd. Treat implied figures as estimates and leave margin.",
 			"When a window near its limit is waitable (resets within a few hours) and work remains, keep going past it: at a clean checkpoint start a background shell job running `sleep <resumeAfterSeconds>` titled \"Wait for usage reset\", end the turn, and continue the task when it completes. Stop and report only when the reset is too far away to wait for, or at a point where the user said to stop.",
 		],
 		parameters: Type.Object({

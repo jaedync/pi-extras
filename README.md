@@ -372,6 +372,19 @@ Status Plus reads that provider's limits at once. A poll that another Pi
 process made recently counts, so the switch usually does not ask the provider
 again.
 
+**Provider families.** pi-extras counts provider ids that use one plan as one
+provider: `anthropic`, `claude-code` and `meridian` are the Anthropic family,
+and `openai-codex` and `openai` are the Codex family. Each family has one row,
+which adds up the spend, airtime and tokens of its members, and one limit
+reading, which one poll reads for all Pi processes. The Anthropic poll uses the
+proxy quota route of the `anthropic` provider when it has one, else Pi's
+`anthropic` login, else the Claude Code login of the `claude-code` provider
+(`~/.claude/.credentials.json`, or the folder in `PI_CLAUDE_CODE_CONFIG_DIR` or
+`CLAUDE_CONFIG_DIR`). Thus a `claude-code` session needs no setup. Status Plus
+does not refresh an expired Claude Code login: Claude Code does that itself.
+On macOS, Claude Code keeps its login in the Keychain, so a `claude-code`
+session there shows limits only when Pi has its own `anthropic` login.
+
 **Subagent spend.** The footer adds the spend of the subagents that the
 current branch started. A child that a `subagent` call started counts from
 that call's result. A child that a codemode script started counts through the
@@ -716,7 +729,9 @@ the room is too small, Pi's own compaction runs with the reason
   counts as warm, from 0 to 86400 (0 means never use the cache path). The
   default is 55 minutes for Anthropic through Meridian on port 3456, which
   writes one-hour caches, 25 minutes for chat completions on a local engine
-  (see above), and 4 minutes for everything else. The example's
+  (see above), and 4 minutes for everything else. A provider with no value
+  of its own uses the value of its provider family id (see
+  [Status Plus](#status-plus)). The example's
   `anthropic` value also applies to Anthropic's own API, which keeps caches
   for 5 minutes, so leave it out unless every Anthropic route you use keeps
   long caches.
@@ -747,8 +762,11 @@ its own only for a provider that has no snapshot yet, and for `refresh: true`.
 A `usage` call or `/usage` reads the active model's provider first when it has
 no snapshot. `all: true` also reads each provider of a scoped model (with no
 scoped models, of each model that has credentials). These first reads keep the
-shared poll gap. With `all: true`, `limitsUnavailable` names each paid
-provider in scope that still has no reading, and the reason. For
+shared poll gap. Usage Guard reports by provider family (see
+[Status Plus](#status-plus)): a model of any member reads, and is warned
+about, the limits of its family, so a `claude-code` model gets the
+`anthropic` limits. With `all: true`, `limitsUnavailable` names each paid
+provider family in scope that still has no reading, and the reason. For
 dollar figures, a `usage` call or `/usage` also reads local session files and,
 when set up, Tokenfold and OpenRouter (see [Dollar figures](#dollar-figures)).
 `PI_OFFLINE` stops the Tokenfold and OpenRouter requests. Only windows that
@@ -761,9 +779,9 @@ rate limits taken from response headers are reported but never warned on.
   endpoint and no rate-limit headers (openai/codex#54219). Its requests count
   toward the same ChatGPT plan as Codex, so a second login, `/login
   openai-codex`, works as a meter: Status Plus reads the plan's 5h and 7d
-  windows with it and shows them for the `openai` provider too. You do not have
-  to use the `openai-codex` models. An `openai` API key is billed per token,
-  so it gets no windows.
+  windows with it and shows them on the Codex family's row, which the `openai`
+  provider shares. You do not have to use the `openai-codex` models. An
+  `openai` API key is billed per token, so it does not start the plan poll.
 - `usage` tool: percent used, thresholds, reset time, seconds until reset and
   `resumeAfterSeconds` (reset plus margin) per window, and `waitable` when the
   reset is exact and within `maxWaitSeconds`. `setBudget` records a
@@ -772,7 +790,8 @@ rate limits taken from response headers are reported but never warned on.
   the user said to stop there. `all` includes other
   providers and non-governing windows.
 - Zero-cost models: when every catalog price of the active model is 0 (a
-  local model), the report marks it `unmetered` and its first note says that
+  local model), and no model of its provider family has a price, the report
+  marks it `unmetered` and its first note says that
   usage does not limit the session's own work. A note also says that limits
   with `applies: false` matter only for subagents on that provider. With
   `all: true`, `unmeteredModels` lists the scoped zero-cost models, which a
@@ -1839,7 +1858,9 @@ Put these in the `linkContext` section of `pi-extras.json`:
   to a host that nothing in the conversation named (see
   [Host guard](#host-guard)). `false` turns it off.
 - `hostGuardExempt` (default `["anthropic"]`): the providers whose models the
-  host guard does not check. `[]` checks every model.
+  host guard does not check. A provider exempts its whole provider family (see
+  [Status Plus](#status-plus)), so the default also exempts `claude-code`.
+  `[]` checks every model.
 - `hostGuardAllow` (default `[]`): hosts that always pass the host guard,
   with their subdomains, for example `["web.archive.org"]`.
 - `asrModel`: a different speech-to-text model, for example
@@ -2388,10 +2409,12 @@ does: tool calls are blocked and the child writes its report. The reading is
 the fullest window of the model's provider that applies to the model (for
 example `anthropic 7d`, or a model-family window such as `7d-fable` for
 Fable). It comes from Status Plus, so it works for providers that it polls:
-anthropic, opencode-go and openai-codex. A run is checked at each usage update
+anthropic, opencode-go and openai-codex, and the other members of their
+provider families (see [Status Plus](#status-plus)). A `claude-code` model
+reads the `anthropic` window. A run is checked at each usage update
 and each new reading, but only while it works. The spawn is refused when the
 window is already at the limit. For a provider with no reading, for example
-`openai` signed in with ChatGPT, the spawn result says that the limit can't
+`openai` signed in with ChatGPT and no `openai-codex` login, the spawn result says that the limit can't
 act, and the time and cost budgets still apply. The child's instructions name
 the limit, and the report says, for example, `reached its 80% limit on the
 anthropic 7d window`.

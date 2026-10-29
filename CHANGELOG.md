@@ -2,6 +2,31 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.34.8 - 2026-10-29
+
+### Fixed
+
+- Status Plus, Usage Guard and Subagents: provider ids that use one plan now
+  count as one provider family. `anthropic`, `claude-code` and `meridian` are
+  the Anthropic family; `openai-codex` and `openai` are the Codex family. Each
+  family has one footer row with the summed spend, airtime and tokens, one
+  limit reading and one shared poll. Before, `openai` and `openai-codex`
+  polled the same plan twice and could show two rows.
+- A `claude-code` session now shows the Anthropic limits with no setup. The
+  Anthropic poll uses the proxy quota route of the `anthropic` provider, else
+  Pi's `anthropic` login, else Claude Code's own login file. The file is read
+  again at each poll and never refreshed. Before, `claude-code` had no
+  reading, and the `usage` tool listed it in `limitsUnavailable`.
+- The `usage` tool, Usage Guard warnings and `maxWindowPct` read the family's
+  limits for a model of any member. `limitsUnavailable` and
+  `dollars.providers` are keyed by the family id, so `claude-code` spend
+  counts under `anthropic`. A zero-cost listing of one member is not
+  `unmetered` when its family has a priced model.
+- A quota failure of a subagent skips the fallback models of the whole
+  family; a credentials failure skips only its own provider. Rate-limit
+  Recovery cooldowns, `cacheCompaction.idleSeconds` and
+  `linkContext.hostGuardExempt` also apply to the whole family.
+
 ## 0.34.7 - 2026-10-29
 
 ### Fixed
