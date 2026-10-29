@@ -100,7 +100,10 @@ test("Pi's anthropic OAuth login comes first; an API key, which the usage endpoi
 	const { seen, fetchImpl } = recorder();
 	await pollAnthropicUsage(anthropicCtx("pi-oauth-token"), fetchImpl, () => ({ token: "cc-test-token" }));
 	await pollAnthropicUsage(anthropicCtx("sk-ant-api03-test"), fetchImpl, () => ({ token: "cc-test-token" }));
-	assert.deepEqual(seen.map((call) => call.auth), ["Bearer pi-oauth-token", "Bearer cc-test-token"]);
+	// A registry that cannot answer for anthropic is no Pi login either.
+	const failing = { modelRegistry: { getApiKeyForProvider: async () => { throw new Error("no provider"); }, getProvider: () => undefined } };
+	await pollAnthropicUsage(failing, fetchImpl, () => ({ token: "cc-test-token" }));
+	assert.deepEqual(seen.map((call) => call.auth), ["Bearer pi-oauth-token", "Bearer cc-test-token", "Bearer cc-test-token"]);
 });
 
 test("a proxy quota route on the anthropic provider wins over both logins", async () => {

@@ -302,7 +302,7 @@ export async function pollAnthropicUsage(
 		return entries.length > 0 ? entries : undefined;
 	}
 
-	const piToken = await ctx.modelRegistry.getApiKeyForProvider("anthropic");
+	const piToken = await ctx.modelRegistry.getApiKeyForProvider("anthropic").catch(() => undefined);
 	const token = piToken && !ANTHROPIC_API_KEY.test(piToken) ? piToken : claudeCodeLogin()?.token;
 	return token ? pollAnthropicOAuth(token, fetchImpl) : undefined;
 }
