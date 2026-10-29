@@ -454,3 +454,21 @@ test("a provider with no usage endpoint is named with that reason", async () => 
 	const report = JSON.parse((await pi.tool!.execute("t1", { all: true }, undefined, undefined, unscoped)).content[0].text);
 	assert.match(report.limitsUnavailable.deepinfra, /no usage endpoint/);
 });
+
+test("the usage tool reports the anthropic family's limits for a claude-code model, and no missing reading", async () => {
+	const model = { provider: "claude-code", id: "claude-opus-5-5", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+	const { pi, store, ctx } = setup(model);
+	const available = [model, { provider: "anthropic", id: "claude-opus-5-5", cost: { input: 5, output: 25 } }];
+	const unscoped = { ...ctx, scopedModels: [], modelRegistry: { getAvailable: () => available, getAll: () => available, getApiKeyForProvider: async () => undefined } };
+	store.set("anthropic", { entries: [{ label: "", kind: "budget", remainingText: "$369/$3000", usedUsd: 2631.04, limitUsd: 3000 }], atMs: NOW - 5_000, source: "poll" });
+	const refreshed: string[] = [];
+	store.setRefresher(async (provider) => { refreshed.push(provider); });
+	await pi.handlers.get("session_start")!({}, unscoped);
+	const report = JSON.parse((await pi.tool!.execute("t1", { all: true }, undefined, undefined, unscoped)).content[0].text);
+	assert.deepEqual(refreshed, [], "the family already has a reading");
+	assert.equal(report.limitsUnavailable, undefined);
+	// A zero-cost claude-code listing still bills the Anthropic plan.
+	assert.equal(report.model.unmetered, undefined);
+	assert.equal(report.unmeteredModels, undefined);
+	assert.deepEqual(report.limits.map((limit: { provider: string; remaining?: string; applies: boolean }) => [limit.provider, limit.remaining, limit.applies]), [["anthropic", "$369/$3000", true]]);
+});
