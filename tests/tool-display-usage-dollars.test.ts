@@ -45,6 +45,13 @@ test("the band adds the dollars left for the active provider", () => {
 	assert.equal(usage.lines()[0], band("usage 7d 59% 5h 3%, $1,894 left"));
 });
 
+test("a claude-code model reads the dollars left of its family, anthropic", () => {
+	const report = { ...REPORT, model: { provider: "claude-code", id: "claude-opus-5-5" } };
+	const usage = row(toolRenderers(harness().kit, usageSpec) as never, { all: true });
+	usage.update({ isPartial: false, result: text(JSON.stringify(report, null, 1), report) });
+	assert.equal(usage.lines()[0], band("usage 7d 59% 5h 3%, $1,894 left"));
+});
+
 test("the popup names providers and shows each limit's dollars under it", () => {
 	const { h, usage } = opened();
 	usage.click();

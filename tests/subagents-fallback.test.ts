@@ -225,3 +225,21 @@ test("a fallback that waited in line for a slot starts with a word, not its old 
 	assert.ok(seen.every((activity) => !activity.includes("in line")), seen.join(" | "));
 	await h.team.close();
 });
+
+test("a quota skips the other providers of its family; missing credentials skip only their own provider", async () => {
+	const quota = teamHarness({ fallbackModels: ["openai/gpt-6.1-sol", OPUS] });
+	const a = quota.spawn("Task a", { model: SOL });
+	await tick();
+	quota.lastCall(a).fail(new Error(CODEX_LIMIT));
+	await settle();
+	assert.equal(quota.team.get(a)?.model, OPUS, "openai bills the same Codex plan");
+	await quota.team.close();
+	// Pi keeps a login per provider: the Claude Code CLI's own login can serve when Pi's anthropic one is missing.
+	const login = teamHarness({ fallbackModels: ["claude-code/claude-opus-5-5"] });
+	const b = login.spawn("Task b", { model: OPUS });
+	await tick();
+	login.lastCall(b).fail(new Error("No API key for provider: anthropic"));
+	await settle();
+	assert.equal(login.team.get(b)?.model, "claude-code/claude-opus-5-5");
+	await login.team.close();
+});

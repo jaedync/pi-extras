@@ -81,6 +81,7 @@ test("an exempt provider, an off guard and other tools pass", async () => {
 	const ctx = (provider: string) => context(provider, [message("user", "hello")]);
 	const call = { toolName: "fetch_content", input: { url: FABRICATED } };
 	assert.equal(await install().get("tool_call")!(call, ctx("anthropic")), undefined);
+	assert.equal(await install().get("tool_call")!(call, ctx("claude-code")), undefined, "the exempt family's other providers pass");
 	assert.equal(await install({ hostGuard: false }).get("tool_call")!(call, ctx("fw01")), undefined);
 	assert.equal(await install().get("tool_call")!({ toolName: "bash", input: { command: `curl ${FABRICATED}` } }, ctx("fw01")), undefined);
 	const all = await install({ hostGuardExempt: [] }).get("tool_call")!(call, ctx("anthropic")) as { block?: boolean };

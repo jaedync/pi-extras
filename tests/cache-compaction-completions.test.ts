@@ -102,6 +102,11 @@ test("local OpenAI-compatible engines get a long idle default; hosted and overri
 	for (const url of ["http://engine.example.ts.net:8000/v1", "http://127.0.0.1:8080/v1", "http://localhost:1234/v1", "http://[::1]:8000/v1", "http://10.0.0.5:8092/v1", "http://192.168.1.5/v1", "http://172.20.0.2:8000/v1", "http://100.101.102.103:8000/v1", "http://gpubox:8000/v1", "http://box.local:8000/v1", "http://[fd7a:115c:a1e0::1]:8000/v1"]) assert.equal(local(url), 25 * 60000, url);
 	for (const url of ["https://api.openai.com/v1", "https://openrouter.ai/api/v1", "https://opencode.ai/zen/go/v1", "http://172.32.0.1/v1", "http://100.128.0.1/v1", "not a url", ""]) assert.equal(local(url), 4 * 60000, url);
 	assert.equal(idleLimitMs(loadConfig({}), { provider: "engine", api: "anthropic-messages", baseUrl: "http://10.0.0.2:8000" }), 4 * 60000, "only chat completions gets the local default");
+	// An override for a family id covers its members; a member's own override wins.
+	const family = loadConfig({ idleSeconds: { anthropic: 120, openai: 30 } });
+	assert.equal(idleLimitMs(family, { provider: "claude-code", api: "claude-code-stream-json" }), 120_000);
+	assert.equal(idleLimitMs(family, { provider: "openai", api: "openai-responses" }), 30_000);
+	assert.equal(idleLimitMs(family, { provider: "openai-codex", api: "openai-codex-responses" }), 4 * 60000, "a member's override is not the family's");
 	assert.equal(idleLimitMs(loadConfig({ idleSeconds: { engine: 600 } }), { provider: "engine", api: API, baseUrl: "http://127.0.0.1:8080/v1" }), 600000);
 });
 

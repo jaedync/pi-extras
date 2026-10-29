@@ -1,6 +1,7 @@
 /** Pure, bounded parsing and timing. Provider prose is never injected or logged. */
 import { formatDuration } from "../status-plus-logic.ts";
 import type { RecoveryConfig } from "./config.ts";
+import { providerFamily } from "../provider-family.ts";
 
 const MAX_ERROR_CHARS = 32_768;
 const MAX_RETRY_SECONDS = 7 * 24 * 3600;
@@ -40,8 +41,10 @@ const clean = (text: string | undefined, fallback: string): string => (text ?? f
 
 export function scopeFor(model: ModelIdentity): string {
 	const id = model.id ?? model.model ?? "";
-	const anthropic = model.api === "anthropic-messages" || model.provider === "anthropic" || /(?:^|[/:])(?:anthropic\/)?claude(?:[-/]|$)/i.test(id);
-	return anthropic ? "anthropic" : `provider:${model.provider ?? "unknown"}`;
+	// One plan, one cooldown: a provider family (lib/provider-family.ts) shares its scope.
+	const family = providerFamily(model.provider);
+	const anthropic = model.api === "anthropic-messages" || family === "anthropic" || /(?:^|[/:])(?:anthropic\/)?claude(?:[-/]|$)/i.test(id);
+	return anthropic ? "anthropic" : `provider:${family ?? "unknown"}`;
 }
 
 export const sameScope = (scope: string, model: ModelIdentity | undefined): boolean => !!model && scopeFor(model) === scope;

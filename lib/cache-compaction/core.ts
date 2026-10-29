@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { summaryOutputFloor } from "./estimate.ts";
+import { providerFamily } from "../provider-family.ts";
 
 // Resolve pi-ai's native effort type through the SDK, without a direct pi-ai dependency.
 declare const complete: ModelRuntime["complete"];
@@ -64,7 +65,8 @@ export function isLocalEngineUrl(baseUrl: string | undefined): boolean {
 }
 
 export function idleLimitMs(config: Config, model: Pick<ModelIdentity, "provider" | "api" | "baseUrl">): number {
-	const override = config.idleSeconds[model.provider];
+	// A provider's own override, else its family's (lib/provider-family.ts).
+	const override = config.idleSeconds[model.provider] ?? config.idleSeconds[providerFamily(model.provider)];
 	if (override !== undefined) return override * 1000;
 	// Meridian's SDK writes one-hour caches. Leave five minutes for expiry/routing skew.
 	// Native Anthropic's usual five-minute TTL and Codex's shorter retention get a one-minute margin.

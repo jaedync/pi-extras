@@ -20,6 +20,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { loadConfig } from "./config.ts";
 import { TOOL_NAME } from "./format.ts";
 import type { LinkConfig } from "./types.ts";
+import { sameFamily } from "../provider-family.ts";
 
 /** Tools whose `url` / `urls` / `proxy` inputs go to the network as given. */
 export const GUARDED_TOOLS: ReadonlySet<string> = new Set([TOOL_NAME, "fetch_content"]);
@@ -251,7 +252,8 @@ export function registerHostGuard(pi: ExtensionAPI, config: () => LinkConfig = l
 	pi.on("tool_call", (event, ctx) => {
 		if (!GUARDED_TOOLS.has(event.toolName)) return undefined;
 		const settings = config();
-		if (!settings.hostGuard || settings.hostGuardExempt.includes(ctx.model?.provider ?? "")) return undefined;
+		// An exempt provider exempts its family (lib/provider-family.ts): claude-code runs the same Claude models as anthropic.
+		if (!settings.hostGuard || settings.hostGuardExempt.some((exempt) => sameFamily(exempt, ctx.model?.provider))) return undefined;
 		const { hosts, invalid } = requestedTargets(event.toolName, event.input);
 		if (hosts.length === 0 && !invalid) return undefined;
 		const named = cache.namedHosts(ctx);

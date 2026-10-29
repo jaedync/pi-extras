@@ -47,6 +47,9 @@ test("Anthropic aliases and Claude model switches share cooldown scope", () => {
 		{ provider: "openrouter", id: "anthropic/claude-sonnet", api: "openai-completions" },
 	]) assert.equal(sameScope("anthropic", selected), true);
 	assert.equal(sameScope("anthropic", { provider: "openai-codex", id: "gpt-6" }), false);
+	// A provider family shares one plan, so one cooldown: claude-code with Anthropic, openai with Codex.
+	assert.equal(sameScope("anthropic", { provider: "claude-code", id: "opus", api: "claude-code-stream-json" }), true);
+	assert.equal(scopeFor({ provider: "openai", id: "gpt-6" }), scopeFor({ provider: "openai-codex", id: "gpt-6-luna" }));
 	assert.equal(sameScope("provider:other", { provider: "other", id: "new-model" }), true);
 	assert.equal(sameScope("provider:other", { provider: "third", id: "old-model" }), false);
 });
