@@ -26,6 +26,7 @@ import {
 	type LimitEntry,
 } from "./status-plus-logic.ts";
 import { dateMs, resetTimeMs } from "./date-format.ts";
+import { readClaudeCodeLogin, type ClaudeCodeLogin } from "./claude-code-login.ts";
 
 export { PollRefused, retryAfterMs } from "./provider-limits.ts";
 
@@ -259,6 +260,8 @@ export function openCodeGoEntries(usage: ProviderUsage): LimitEntry[] {
 	}));
 }
 
+export const ANTHROPIC_OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+
 /** Anthropic OAuth windows are keyed five_hour, seven_day, seven_day_<family>. */
 const OAUTH_WINDOW_KEY = /^(five_hour|seven_day)(_[a-z0-9_]+)?$/;
 
@@ -287,8 +290,20 @@ export async function pollAnthropicUsage(ctx: PollerContext): Promise<LimitEntry
 	}
 
 	const token = await ctx.modelRegistry.getApiKeyForProvider("anthropic");
-	if (!token) return undefined;
-	const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
+	return token ? pollAnthropicOAuth(token) : undefined;
+}
+
+/** The claude-code provider's plan, read with Claude Code's own login (lib/claude-code-login.ts). */
+export async function pollClaudeCodeUsage(
+	login: Pick<ClaudeCodeLogin, "token"> | undefined,
+	fetchImpl: FetchLike = fetch,
+): Promise<LimitEntry[] | undefined> {
+	return login ? pollAnthropicOAuth(login.token, fetchImpl) : undefined;
+}
+
+/** Windows and the optional monthly spend from Anthropic's OAuth usage endpoint. */
+async function pollAnthropicOAuth(token: string, fetchImpl: FetchLike = fetch): Promise<LimitEntry[]> {
+	const response = await fetchImpl(ANTHROPIC_OAUTH_USAGE_URL, {
 		headers: { authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" },
 		signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
 	});
@@ -383,6 +398,8 @@ async function pollOpenCodeGoEntries(ctx: PollerContext): Promise<LimitEntry[] |
 /** Throttled non-header limit sources. */
 export const LIMIT_POLLERS: Record<string, { interval: (ctx: PollerContext) => PollInterval; poll: LimitPoller }> = {
 	anthropic: { interval: anthropicPollInterval, poll: pollAnthropicUsage },
+	// The Claude Code CLI shows Pi no response headers, so only a poll reads its plan.
+	"claude-code": { interval: () => ({ normalMs: 5 * 60_000, hotMs: 60_000 }), poll: () => pollClaudeCodeUsage(readClaudeCodeLogin()) },
 	"openai-codex": { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: pollCodexEntries },
 	openai: { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: (ctx) => pollOpenAIPlanEntries(ctx) },
 	"opencode-go": { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: pollOpenCodeGoEntries },
