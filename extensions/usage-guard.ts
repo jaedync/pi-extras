@@ -24,7 +24,7 @@ import {
 	isUnmetered,
 	normalizeGuardConfig,
 	pendingWarnings,
-	pricedFamilies,
+	pricedProviders,
 	unavailableLimits,
 	unmeteredModel,
 	usageReport,
@@ -79,11 +79,11 @@ export function parseBudgetArgs(words: string[]): SessionBudget | null | undefin
 
 interface InScopeModel { provider: string; id: string; cost?: Parameters<typeof isUnmetered>[0] }
 
-/** Provider families with a priced model in the catalog; a registry that fails to list gives none. */
+/** Providers with a priced model in the catalog; a registry that fails to list gives none. */
 function catalogPriced(ctx: Pick<ExtensionContext, "modelRegistry">): Set<string> {
 	try {
 		const registry = ctx.modelRegistry as { getAll?: () => InScopeModel[] } | undefined;
-		return pricedFamilies(typeof registry?.getAll === "function" ? registry.getAll() : []);
+		return pricedProviders(typeof registry?.getAll === "function" ? registry.getAll() : []);
 	} catch {
 		return new Set();
 	}

@@ -7,7 +7,7 @@ import {
 	OPENAI_METER_REASON,
 	missingReason,
 	pendingWarnings,
-	pricedFamilies,
+	pricedProviders,
 	unavailableLimits,
 	unmeteredModel,
 	usageReport,
@@ -62,15 +62,18 @@ test("a claude-code subagent's maxWindowPct reads the anthropic family's window"
 	assert.ok("why" in found && /anthropic reports no usage windows for claude-opus-5-5/.test(found.why), JSON.stringify(found));
 });
 
-test("a zero-cost claude-code listing stays metered while its family has a priced model", () => {
+test("a zero-cost model is metered only when another provider of its family has a priced model", () => {
 	const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-	const priced = pricedFamilies([
+	const priced = pricedProviders([
 		{ provider: "anthropic", cost: { input: 5, output: 25 } },
 		{ provider: "claude-code", cost: zero },
+		{ provider: "openrouter", cost: { input: 1, output: 2 } },
+		{ provider: "openrouter", cost: zero },
 		{ provider: "fw01", cost: zero },
+		{ provider: "fw01" },
 	]);
-	assert.deepEqual([...priced], ["anthropic"]);
-	assert.equal(unmeteredModel({ provider: "claude-code", cost: zero }, priced), false);
-	assert.equal(unmeteredModel({ provider: "fw01", cost: zero }, priced), true);
+	assert.equal(unmeteredModel({ provider: "claude-code", cost: zero }, priced), false, "the Anthropic plan bills it");
+	assert.equal(unmeteredModel({ provider: "openrouter", cost: zero }, priced), true, "an OpenRouter :free model stays free");
+	assert.equal(unmeteredModel({ provider: "fw01", cost: zero }, priced), true, "a local model next to one with no cost stays free");
 	assert.equal(unmeteredModel({ provider: "anthropic", cost: { input: 5 } }, priced), false);
 });

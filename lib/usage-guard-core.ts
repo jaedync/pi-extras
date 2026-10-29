@@ -58,16 +58,20 @@ export function isUnmetered(cost: Partial<Record<(typeof PRICE_KEYS)[number], nu
 
 type Priced = { provider: string; cost?: Parameters<typeof isUnmetered>[0] };
 
-/** Families with a model the catalog prices; one with no price listed counts as priced, as in isUnmetered. */
-export function pricedFamilies(models: Iterable<Priced>): Set<string> {
+/** Providers with a model the catalog prices; one with no price listed counts as priced, as in isUnmetered. */
+export function pricedProviders(models: Iterable<Priced>): Set<string> {
 	const priced = new Set<string>();
-	for (const model of models) if (!isUnmetered(model.cost)) priced.add(providerFamily(model.provider));
+	for (const model of models) if (!isUnmetered(model.cost)) priced.add(model.provider);
 	return priced;
 }
 
-/** Zero token cost, and no model of its family priced: a zero-cost claude-code listing still bills the Anthropic plan. */
+/**
+ * Zero token cost, and no other provider of its family priced: a zero-cost
+ * claude-code listing still bills the Anthropic plan, while a free model next
+ * to priced ones of its own provider (OpenRouter `:free`) stays free.
+ */
 export const unmeteredModel = (model: Priced, priced: ReadonlySet<string>): boolean =>
-	isUnmetered(model.cost) && !priced.has(providerFamily(model.provider));
+	isUnmetered(model.cost) && !familyMembers(providerFamily(model.provider)).some((member) => member !== model.provider && priced.has(member));
 
 export type WarningReason = "band" | "budget" | "exhausted";
 
