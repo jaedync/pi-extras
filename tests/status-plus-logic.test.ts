@@ -134,6 +134,8 @@ test("a provider is free when every model it lists costs nothing", () => {
 		{ provider: "openrouter", cost: { ...zero, output: 0.6 } },
 		{ provider: "tiered", cost: { ...zero, tiers: [{ inputTokensAbove: 200_000, ...zero, input: 1 }] } },
 		{ provider: "no-cost-field" },
+		// A family is metered as a whole: a zero-cost claude-code catalog still bills the Anthropic plan.
+		{ provider: "claude-code", cost: zero },
 	]);
 	assert.deepEqual([...free].sort(), ["fw01", "no-cost-field", "redarch-bonsai"]);
 });

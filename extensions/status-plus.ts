@@ -5,7 +5,9 @@
  * warmth; context bar, model and
  * thinking level, session cost and airtime, counters; then cwd, token totals,
  * cache hit rate) followed by one aligned row per provider with spend this
- * session: cost, airtime, total input and output tokens, limits, resets. Limits come from response headers
+ * session: cost, airtime, total input and output tokens, limits, resets. A row
+ * is a provider family (lib/provider-family.ts): `claude-code` spend and
+ * limits show on the anthropic row. Limits come from response headers
  * and throttled pollers (lib/status-plus-limits.ts); everything durable is
  * recomputed from the transcript on every update (lib/status-plus-transcript.ts).
  */
@@ -25,7 +27,8 @@ import { disagreementText, disagreements, markUnsampled, mergePolled, windowName
 import { isVirtualModel, routedModel } from "../lib/routed-model.ts";
 import { sharedLimitStore, type LimitSnapshot } from "../lib/limit-store.ts";
 import { nextPollMs, readShared, writeShared, type SharedPoll } from "../lib/limit-share.ts";
-import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, PollRefused, REFRESH_INTERVAL_MS, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
+import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, PollRefused, REFRESH_INTERVAL_MS, limitFamily, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
+import { providerFamily } from "../lib/provider-family.ts";
 import { STATUS_TIME_ZONE_PROBLEM, estimateUsageCost, freeProviders, toEpochMs, withPolledBalances, type LimitEntry, type PricedModel } from "../lib/status-plus-logic.ts";
 import { splitMeshStatuses } from "../lib/status-plus-mesh.ts";
 import { TWEEN_FRAME_MS, flashIntensity, incrementAt, isActive, retarget, valueAt, type Tween } from "../lib/status-plus-tween.ts";
@@ -213,11 +216,24 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		return snapshot.entries.some((entry) => entry.exhausted && (entry.resetMs === undefined || entry.resetMs > Date.now()));
 	}
 
+	/** One row per provider family, with its members' spend summed. */
 	function footerRows(stats: SessionStats, selected: string | undefined): FooterRow[] {
-		const providers = [...stats.providers.entries()];
+		const families = new Map<string, { members: string[]; cost: number; airtimeMs: number; inputTokens: number; outputTokens: number }>();
+		const add = (id: string, usage: { cost: number; airtimeMs: number; inputTokens: number; outputTokens: number }) => {
+			const family = providerFamily(id);
+			const row = families.get(family) ?? { members: [], cost: 0, airtimeMs: 0, inputTokens: 0, outputTokens: 0 };
+			row.members.push(id);
+			row.cost += usage.cost;
+			row.airtimeMs += usage.airtimeMs;
+			row.inputTokens += usage.inputTokens;
+			row.outputTokens += usage.outputTokens;
+			families.set(family, row);
+		};
+		for (const [id, usage] of stats.providers) add(id, usage);
+		const selectedFamily = providerFamily(selected);
 		// The transcript knows only providers that did work; the selected one shows its limits before its first request.
-		if (selected && !stats.providers.has(selected)) providers.push([selected, { ...EMPTY_PROVIDER }]);
-		return providers.map(([id, { cost, airtimeMs, inputTokens, outputTokens }]) => ({
+		if (selected && selectedFamily && !families.has(selectedFamily)) add(selected, EMPTY_PROVIDER);
+		return [...families].map(([id, { members, cost, airtimeMs, inputTokens, outputTokens }]) => ({
 			id,
 			cost,
 			airtimeMs,
@@ -225,8 +241,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			entries: providerLimits.get(id)?.entries ?? [],
 			...(id === "opencode-go" && openCodeGoUsesZenBalance() ? { billingNote: GO_BILLING_NOTE } : {}),
 			...(id === "opencode" ? { note: ZEN_NOTE } : {}),
-			...(free.has(id) ? { free: true } : {}),
-			...(id === selected ? { selected: true } : {}),
+			...(members.every((member) => free.has(member)) ? { free: true } : {}),
+			...(id === selectedFamily ? { selected: true } : {}),
 		}));
 	}
 
@@ -559,14 +575,16 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	}
 
 	/**
-	 * Poll a provider's limits at most once a gap across every Pi process of this
-	 * agent directory: Anthropic rate-limits its usage endpoint per account, and
-	 * processes that each polled on their own clock got 429s and no budget.
+	 * Poll a provider family's limits at most once a gap across every Pi process
+	 * of this agent directory: Anthropic rate-limits its usage endpoint per
+	 * account, and processes that each polled on their own clock got 429s and no
+	 * budget. Every member's call polls, shares and reads under the family id.
 	 */
-	async function refreshProviderLimits(provider: string, ctx: ExtensionContext, force = false): Promise<void> {
+	async function refreshProviderLimits(member: string, ctx: ExtensionContext, force = false): Promise<void> {
 		if (isOffline() || process.env.STATUS_PLUS_POLL_LIMITS === "0") return;
-		const poller = LIMIT_POLLERS[provider];
-		if (!poller) return;
+		const provider = limitFamily(member);
+		if (!provider) return;
+		const poller = LIMIT_POLLERS[provider]!;
 		const shared = readShared(SHARE_DIR, provider);
 		adoptShared(provider, shared);
 		const failures = shared?.failures ?? pollFailures.get(provider) ?? 0;
@@ -605,11 +623,11 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		share(provider, { ...claimed, failures: claimed.failures + 1 });
 	}
 
+	/** One poll for each family this branch used or the selection routes to. */
 	function schedulePolls(ctx: ExtensionContext): void {
-		for (const provider of Object.keys(LIMIT_POLLERS)) {
-			if (!seenProviders.has(provider) && routedModel(ctx)?.provider !== provider) continue;
-			void refreshProviderLimits(provider, ctx);
-		}
+		const routed = routedModel(ctx)?.provider;
+		const families = new Set([...seenProviders, ...(routed ? [routed] : [])].map((provider) => limitFamily(provider)));
+		for (const family of families) if (family) void refreshProviderLimits(family, ctx);
 	}
 
 	/**

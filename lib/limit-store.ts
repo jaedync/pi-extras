@@ -20,6 +20,7 @@ export interface LimitSnapshot {
 	source: "headers" | "poll";
 }
 
+/** Called with the provider id as asked, not its family. */
 export type LimitRefresher = (provider: string, force: boolean) => Promise<void>;
 
 export interface LimitStore {
@@ -86,7 +87,8 @@ export function createLimitStore(): LimitStore {
 		setRefresher(next) { refresher = next; },
 		async refresh(provider, force = true) {
 			if (!refresher) return false;
-			await refresher(providerFamily(provider), force);
+			// The poller owner maps the id itself: whether an id may start its family's poll is its decision.
+			await refresher(provider, force);
 			return true;
 		},
 		setHot(provider, value) { if (value) hot.add(providerFamily(provider)); else hot.delete(providerFamily(provider)); },

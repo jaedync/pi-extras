@@ -2,6 +2,7 @@
 
 import { aheadOfClock } from "./clock-skew.ts";
 import { dateFormat, dateMs, resetTimeMs } from "./date-format.ts";
+import { providerFamily } from "./provider-family.ts";
 
 /**
  * "window": a percentage against a rolling quota with a hard reset.
@@ -241,20 +242,17 @@ function priced(cost: Partial<ModelCost> | undefined): boolean {
 
 /**
  * Providers whose every listed model costs nothing, such as local and
- * self-hosted servers. One priced model makes a provider metered.
+ * self-hosted servers. One priced model makes a provider metered, and with
+ * it every provider of its family (lib/provider-family.ts).
  */
 export function freeProviders(models: Iterable<PricedModel>): Set<string> {
-	const free = new Set<string>();
+	const listed = new Set<string>();
 	const metered = new Set<string>();
 	for (const model of models) {
-		if (priced(model.cost)) {
-			metered.add(model.provider);
-			free.delete(model.provider);
-		} else if (!metered.has(model.provider)) {
-			free.add(model.provider);
-		}
+		listed.add(model.provider);
+		if (priced(model.cost)) metered.add(providerFamily(model.provider));
 	}
-	return free;
+	return new Set([...listed].filter((provider) => !metered.has(providerFamily(provider))));
 }
 
 /** Tolerate seconds or milliseconds epochs. */

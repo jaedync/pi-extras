@@ -76,8 +76,9 @@ test("the store keys every reading by provider family", async () => {
 	assert.equal(store.isHot("openai-codex"), true);
 	const calls: string[] = [];
 	store.setRefresher(async (provider) => { calls.push(provider); });
+	// The poller owner decides which ids may start their family's poll (lib/status-plus-limits.ts limitFamily).
 	await store.refresh("claude-code");
-	assert.deepEqual(calls, ["anthropic"]);
+	assert.deepEqual(calls, ["claude-code"]);
 });
 
 test("reload moves an older store's per-id readings to their family, the newest first", () => {
