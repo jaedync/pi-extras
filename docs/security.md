@@ -33,15 +33,20 @@ Set `STATUS_PLUS_POLL_LIMITS=0` to disable polling. `PI_OFFLINE` also disables i
 recorded usage and response-header limits remain available. As in Pi, only
 `PI_OFFLINE=1`, `true` or `yes` turns offline mode on.
 
-Status Plus saves the newest poll result for each provider in
-`status-plus-limits/<provider>.json` in the Pi agent directory, with mode
+Status Plus saves the newest poll result for each provider family in
+`status-plus-limits/<family>.json` in the Pi agent directory, with mode
 `0600`: window percentages, reset times, a budget or credit balance, and when
 the last poll was tried. The Pi processes that share the agent directory read
-it, so they poll each provider one time between them. It holds no credentials.
+it, so they poll each provider family one time between them. It holds no credentials.
 
 It uses your existing provider authentication. Codex fallback reads only the
 configured Pi agent directory's `auth.json` (default `~/.pi/agent/auth.json`),
 or the explicit `PI_CODEX_ACCESS_TOKEN` / `PI_CODEX_ACCOUNT_ID` overrides.
+When Pi has no `anthropic` OAuth login and the proxy quota route does not
+apply, the Anthropic poll reads the access token of Claude Code's own login
+from `.credentials.json` in `PI_CLAUDE_CODE_CONFIG_DIR`, `CLAUDE_CONFIG_DIR`
+or `~/.claude`, and sends it only to `api.anthropic.com`. It reads the file
+again at each poll, keeps no copy, writes nothing to it and never refreshes the token.
 Provider endpoints are not guaranteed stable. Missing credentials, unavailable
 quotas and provider errors should not prevent Pi from running.
 
