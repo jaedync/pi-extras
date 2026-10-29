@@ -53,6 +53,8 @@ These changes alter output and behavior that you may rely on:
   reloaded, an old process can poll the Codex plan one more time.
 - The keys of Usage Guard notices for `openai` changed, so one old notice can
   show again one time.
+- Spend totals group earlier records by today's login: after a change between
+  a plan login and an API key, the older spend moves to the new row.
 
 ## 0.34.7 - 2026-10-29
 
