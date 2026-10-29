@@ -111,7 +111,7 @@ test("message call rows use purple foreground without background; delivery statu
 });
 
 test("message status precedes long text, including awaits answer, and keeps all delivery meanings", () => {
-	for (const [delivered, word] of Object.entries({ steered: "delivered", resumed: "resumed it", queued: "queued", inbox: "for its next run", replied: "answered", main: "delivered" })) {
+	for (const [delivered, word] of Object.entries({ steered: "delivered", resumed: "resumed", queued: "queued", inbox: "for its next run", replied: "answered", main: "delivered" })) {
 		const row = messageCallRow({ to: "scout", text: "hello world", expectReply: true }, theme as never, { state: { delivered } });
 		assert.equal(plain(row.render(100))[0], `  → scout  ${word} · awaits answer  hello world`);
 		const narrow = plain(row.render(55))[0]!;

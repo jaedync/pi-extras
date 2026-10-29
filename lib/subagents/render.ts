@@ -196,7 +196,7 @@ export function subagentResultRow(result: unknown, theme: Theme, context: RowCon
 	});
 }
 
-const DELIVERED: Record<string, string> = { steered: "delivered", resumed: "resumed it", queued: "queued", inbox: "for its next run", replied: "answered", main: "delivered" };
+const DELIVERED: Record<string, string> = { steered: "delivered", resumed: "resumed", queued: "queued", inbox: "for its next run", replied: "answered", main: "delivered" };
 
 export function messageCallRow(args: unknown, theme: Theme, context: RowContext, streaming = ALWAYS, lookup: Lookup = NOBODY, motion: () => Motion = () => "full"): Component {
 	noteLive(context, streaming);
