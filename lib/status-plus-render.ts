@@ -77,6 +77,20 @@ export const PROVIDERS: Record<string, { label: string; color: Rgb }> = {
  */
 export const OTHER_PROVIDER: Rgb = mutedRgb(165, 0.06, 0.82);
 
+/**
+ * Provider ids that reach the plan of a listed provider wear its identity
+ * instead of a second entry: Sign in with ChatGPT (`openai`) uses the Codex
+ * plan, and `claude-code` the Anthropic one.
+ */
+const PROVIDER_ALIASES: Record<string, string> = {
+	openai: "openai-codex",
+	"claude-code": "anthropic",
+};
+
+function identityId(id: string): string {
+	return PROVIDER_ALIASES[id] ?? id;
+}
+
 const PROVIDER_ORDER = Object.keys(PROVIDERS);
 const WARN_PCT = 70;
 const CRITICAL_PCT = 90;
@@ -86,9 +100,9 @@ const DAY_MS = 86_400_000;
 
 /** Keep spend and limit rows in the same stable provider order. */
 export function compareProviderIds(left: string, right: string): number {
-	const leftRank = PROVIDER_ORDER.indexOf(left);
-	const rightRank = PROVIDER_ORDER.indexOf(right);
-	if (leftRank >= 0 && rightRank >= 0) return leftRank - rightRank;
+	const leftRank = PROVIDER_ORDER.indexOf(identityId(left));
+	const rightRank = PROVIDER_ORDER.indexOf(identityId(right));
+	if (leftRank >= 0 && rightRank >= 0) return leftRank - rightRank || left.localeCompare(right);
 	if (leftRank >= 0) return -1;
 	if (rightRank >= 0) return 1;
 	return left.localeCompare(right);
@@ -157,7 +171,7 @@ export function fadeFg(paint: Painter, hot: string, rest: string, t: number, tex
 
 /** The provider's identity colour, for anything that should read as "belongs to this provider". */
 export function providerColor(id: string | undefined): Rgb | undefined {
-	return id ? PROVIDERS[id]?.color ?? OTHER_PROVIDER : undefined;
+	return id ? PROVIDERS[identityId(id)]?.color ?? OTHER_PROVIDER : undefined;
 }
 
 /** Pi's own thinking-level theme token for a level string, so the effort reads in the theme's ramp. */
@@ -169,7 +183,7 @@ export function thinkingTone(level: string | undefined): string {
 }
 
 export function providerTag(_paint: Painter, id: string): string {
-	return rgb(PROVIDERS[id]?.label ?? id, providerColor(id) ?? OTHER_PROVIDER);
+	return rgb(PROVIDERS[identityId(id)]?.label ?? id, providerColor(id) ?? OTHER_PROVIDER);
 }
 
 export function toneForPct(pct: number): "dim" | "warning" | "error" {

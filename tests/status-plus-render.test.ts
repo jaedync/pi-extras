@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { stripAnsi } from "../lib/ansi.ts";
-import { OTHER_PROVIDER, PROVIDERS, barGradient, cacheState, cacheTtl, contextBar, fadeFg, formatTokens, limitText, mixRgb, providerTag, resetLabel, toneForPct, toneRgb } from "../lib/status-plus-render.ts";
+import { OTHER_PROVIDER, PROVIDERS, barGradient, compareProviderIds, providerColor, cacheState, cacheTtl, contextBar, fadeFg, formatTokens, limitText, mixRgb, providerTag, resetLabel, toneForPct, toneRgb } from "../lib/status-plus-render.ts";
 
 const paint = { fg: (tone: string, text: string) => `<${tone}>${text}</${tone}>` };
 const NOON = Date.parse("2026-07-01T17:00:00Z"); // 12:00 Central, a Wednesday
@@ -91,6 +91,19 @@ test("token counts and provider tags", () => {
 	// Any provider pi-extras has no color for shares one, so a local server is not the gray of everything else.
 	assert.equal(providerTag(paint, "kimi-coding"), `\x1b[38;2;${OTHER_PROVIDER.join(";")}mkimi-coding\x1b[39m`);
 	assert.equal(providerTag(paint, "fw01-halogen"), providerTag(paint, "kimi-coding").replace("kimi-coding", "fw01-halogen"));
+});
+
+test("a provider id that reaches the same plan wears that plan's tag and colour", () => {
+	assert.equal(providerTag(paint, "openai"), providerTag(paint, "openai-codex"));
+	assert.equal(providerTag(paint, "claude-code"), providerTag(paint, "anthropic"));
+	assert.deepEqual(providerColor("openai"), PROVIDERS["openai-codex"]!.color);
+	assert.deepEqual(providerColor("claude-code"), PROVIDERS.anthropic!.color);
+	// Rows sort as their plan does, ahead of providers without an identity.
+	assert.equal(compareProviderIds("claude-code", "openai"), compareProviderIds("anthropic", "openai-codex"));
+	assert.ok(compareProviderIds("openai", "kimi-coding") < 0);
+	// Two ids of one plan still sort in a fixed order.
+	assert.ok(compareProviderIds("anthropic", "claude-code") < 0);
+	assert.ok(compareProviderIds("claude-code", "anthropic") > 0);
 });
 
 test("the color for other providers stands apart from every known provider", () => {
