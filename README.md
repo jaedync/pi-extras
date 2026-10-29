@@ -390,7 +390,9 @@ above. If two members use different accounts, for example Pi's `anthropic`
 login and Claude Code's login, the row shows the account of Pi's `anthropic`
 login for both. A per-token API key is not part of the plan: an `anthropic` API
 key or an `openai` API key gets no plan windows and no plan cooldown, and its
-spend shows on a row of its own.
+spend shows on a row of its own ("Ant key" for an `anthropic` API key).
+Status Plus checks Pi's `anthropic` credential at session start; without Status
+Plus, offline, or with polling off, an `anthropic` API key counts as the plan.
 
 **Subagent spend.** The footer adds the spend of the subagents that the
 current branch started. A child that a `subagent` call started counts from
