@@ -203,3 +203,16 @@ test("concurrent reads for anthropic and claude-code make one poll", async (t) =
 	assert.ok(!existsSync(join(SHARE, "claude-code.json")));
 	assert.ok(!existsSync(join(SHARE, "meridian.json")));
 });
+
+test("offline, Status Plus asks Pi for no anthropic credential", async (t) => {
+	process.env.PI_OFFLINE = "1";
+	t.after(() => { delete process.env.PI_OFFLINE; });
+	const footer = app({ branch: [reply("r1", "anthropic", 0.5)], piToken: "sk-ant-api03-test" });
+	const asked = [];
+	footer.ctx.modelRegistry.getApiKeyForProvider = async (provider) => { asked.push(provider); };
+	await footer.emit("session_start");
+	t.after(() => footer.emit("session_shutdown"));
+	await settle();
+	assert.deepEqual(asked, []);
+	assert.deepEqual(calls, []);
+});

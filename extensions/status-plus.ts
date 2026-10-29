@@ -754,7 +754,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		update(ctx);
 		schedulePolls(ctx);
 		// An anthropic API key reads no plan windows, even when another process's poll stands in for ours.
-		void noteAnthropicCredential(ctx).then(() => requestFooterRender?.(), () => {});
+		if (!isOffline() && process.env.STATUS_PLUS_POLL_LIMITS !== "0") void noteAnthropicCredential(ctx).then(() => requestFooterRender?.(), () => {});
 		// Keep the clock, cache warmth, and live airtime ticking between events.
 		if (timer) clearInterval(timer);
 		timer = setInterval(() => {
