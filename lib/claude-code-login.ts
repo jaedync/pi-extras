@@ -2,8 +2,9 @@
  * Claude Code's own login, read only to poll the plan that the claude-code
  * provider bills. That provider runs the Claude Code CLI, so its requests
  * never pass Pi's auth store or show Pi their rate-limit headers: the token
- * and the account it names live in Claude Code's files. Claude Code refreshes
- * the token itself on each run; an expired one reads as no login.
+ * and the account it names live in Claude Code's files. Only Claude Code
+ * refreshes the token: an expired one reads as no login, and the file is read
+ * again at each poll, never cached.
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -21,9 +22,13 @@ export interface ClaudeCodePaths {
 	account: string;
 }
 
-/** Claude Code keeps both files in CLAUDE_CONFIG_DIR when it is set, else in ~/.claude and ~/.claude.json. */
+/**
+ * Claude Code keeps both files in its config directory when one is set, else
+ * in ~/.claude and ~/.claude.json. pi-claude-code gives the CLI
+ * PI_CLAUDE_CODE_CONFIG_DIR as that directory, before CLAUDE_CONFIG_DIR.
+ */
 export function claudeCodePaths(env: NodeJS.ProcessEnv = process.env, home = homedir()): ClaudeCodePaths {
-	const dir = env.CLAUDE_CONFIG_DIR;
+	const dir = env.PI_CLAUDE_CODE_CONFIG_DIR || env.CLAUDE_CONFIG_DIR;
 	return dir
 		? { credentials: join(dir, ".credentials.json"), account: join(dir, ".claude.json") }
 		: { credentials: join(home, ".claude", ".credentials.json"), account: join(home, ".claude.json") };

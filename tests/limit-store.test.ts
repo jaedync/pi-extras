@@ -62,3 +62,48 @@ test("hot flags are per provider", () => {
 	store.setHot("anthropic", false);
 	assert.equal(store.isHot("anthropic"), false);
 });
+
+test("the store keys every reading by provider family", async () => {
+	const store = createLimitStore();
+	const heard: string[] = [];
+	store.subscribe((provider) => heard.push(provider));
+	store.set("claude-code", { entries: [{ label: "", kind: "budget", remainingText: "$369/$3000" }], atMs: 1, source: "poll" });
+	assert.equal(store.get("anthropic")?.atMs, 1);
+	assert.equal(store.get("claude-code"), store.get("anthropic"));
+	assert.deepEqual(store.entries().map(([provider]) => provider), ["anthropic"]);
+	assert.deepEqual(heard, ["anthropic"]);
+	store.setHot("openai", true);
+	assert.equal(store.isHot("openai-codex"), true);
+	const calls: string[] = [];
+	store.setRefresher(async (provider) => { calls.push(provider); });
+	await store.refresh("claude-code");
+	assert.deepEqual(calls, ["anthropic"]);
+});
+
+test("reload moves an older store's per-id readings to their family, the newest first", () => {
+	const key = Symbol.for("pi-extras.limit-store");
+	const host = globalThis as unknown as Record<symbol, unknown>;
+	const saved = host[key];
+	// 0.34.7 kept one snapshot per literal provider id.
+	const rows = new Map([
+		["openai", { entries: [{ label: "5h", usedPct: 10 }], atMs: 5, source: "poll" as const }],
+		["openai-codex", { entries: [{ label: "5h", usedPct: 7 }], atMs: 3, source: "poll" as const }],
+		["claude-code", { entries: [{ label: "7d", usedPct: 2 }], atMs: 4, source: "poll" as const }],
+	]);
+	const legacy = {
+		get: (provider: string) => rows.get(provider),
+		entries: () => [...rows.entries()],
+		set() {}, recordSuccess() {}, recordRejection() {}, subscribe: () => () => {}, setRefresher() {},
+		refresh: async () => false, setHot() {}, isHot: (provider: string) => provider === "claude-code",
+	};
+	host[key] = legacy;
+	try {
+		const upgraded = sharedLimitStore();
+		assert.notEqual(upgraded, legacy as unknown);
+		assert.deepEqual(upgraded.entries().map(([provider]) => provider).sort(), ["anthropic", "openai-codex"]);
+		assert.equal(upgraded.get("openai")?.atMs, 5);
+		assert.equal(upgraded.get("anthropic")?.entries[0]?.usedPct, 2);
+		assert.equal(upgraded.isHot("anthropic"), true);
+		assert.equal(sharedLimitStore(), upgraded);
+	} finally { host[key] = saved; }
+});

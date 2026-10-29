@@ -3,6 +3,8 @@
  * generic fallback, and throttled pollers for providers whose quotas are not
  * in headers. A fresh poll snapshot outranks header parses so richer data is
  * not clobbered between polls. Adding a provider means adding a table entry.
+ * Pollers and parsers are keyed by provider family (lib/provider-family.ts):
+ * one poll reads the plan that every member of a family uses.
  */
 import {
 	CODEX_AUTH_FILE,
@@ -27,6 +29,7 @@ import {
 } from "./status-plus-logic.ts";
 import { dateMs, resetTimeMs } from "./date-format.ts";
 import { readClaudeCodeLogin, type ClaudeCodeLogin } from "./claude-code-login.ts";
+import { providerFamily } from "./provider-family.ts";
 
 export { PollRefused, retryAfterMs } from "./provider-limits.ts";
 
@@ -215,7 +218,7 @@ const LIMIT_HEADER_PARSERS: Record<string, (headers: Record<string, string>, now
 };
 
 export function parseLimitHeaders(provider: string, headers: Record<string, string>, now = Date.now()): LimitEntry[] {
-	const parsed = LIMIT_HEADER_PARSERS[provider]?.(headers, now) ?? [];
+	const parsed = LIMIT_HEADER_PARSERS[providerFamily(provider)]?.(headers, now) ?? [];
 	return parsed.length > 0 ? parsed : parseGenericLimits(headers, now);
 }
 
@@ -276,29 +279,32 @@ export function anthropicPollInterval(ctx: PollerContext): PollInterval {
 		: { normalMs: 5 * 60_000, hotMs: 60_000 };
 }
 
+/** An Anthropic API key bills per token; the OAuth usage endpoint refuses it. */
+const ANTHROPIC_API_KEY = /^sk-ant-api/;
+
 /**
- * Anthropic usage: prefer an Anthropic-compatible proxy's local quota route,
- * otherwise the OAuth endpoint. Both expose windows and optional spend.
+ * Usage of the anthropic family: prefer the anthropic provider's proxy quota
+ * route, else Pi's anthropic OAuth login, else Claude Code's own login. The
+ * claude-code provider runs the Claude Code CLI, so Pi holds no login for
+ * it and sees none of its headers. Claude Code's file is read again at each
+ * poll and never refreshed here: a refresh could rotate its refresh token.
  */
-export async function pollAnthropicUsage(ctx: PollerContext): Promise<LimitEntry[] | undefined> {
+export async function pollAnthropicUsage(
+	ctx: PollerContext,
+	fetchImpl: FetchLike = fetch,
+	claudeCodeLogin: () => Pick<ClaudeCodeLogin, "token"> | undefined = readClaudeCodeLogin,
+): Promise<LimitEntry[] | undefined> {
 	const quotaUrl = proxyQuotaUrl(providerBaseUrl(ctx));
 	if (quotaUrl) {
-		const response = await fetch(quotaUrl, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) });
+		const response = await fetchImpl(quotaUrl, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) });
 		if (!response.ok) throw refused(response);
 		const entries = parseProxyQuota(await response.json());
 		return entries.length > 0 ? entries : undefined;
 	}
 
-	const token = await ctx.modelRegistry.getApiKeyForProvider("anthropic");
-	return token ? pollAnthropicOAuth(token) : undefined;
-}
-
-/** The claude-code provider's plan, read with Claude Code's own login (lib/claude-code-login.ts). */
-export async function pollClaudeCodeUsage(
-	login: Pick<ClaudeCodeLogin, "token"> | undefined,
-	fetchImpl: FetchLike = fetch,
-): Promise<LimitEntry[] | undefined> {
-	return login ? pollAnthropicOAuth(login.token, fetchImpl) : undefined;
+	const piToken = await ctx.modelRegistry.getApiKeyForProvider("anthropic");
+	const token = piToken && !ANTHROPIC_API_KEY.test(piToken) ? piToken : claudeCodeLogin()?.token;
+	return token ? pollAnthropicOAuth(token, fetchImpl) : undefined;
 }
 
 /** Windows and the optional monthly spend from Anthropic's OAuth usage endpoint. */
@@ -374,34 +380,28 @@ async function pollCodexEntries(ctx: PollerContext): Promise<LimitEntry[] | unde
 	return usage ? codexEntries(usage) : undefined;
 }
 
-/**
- * Sign in with ChatGPT gives apps no usage endpoint and no rate-limit headers
- * (openai/codex#54219), but its requests count toward the same ChatGPT plan.
- * An openai-codex login, kept only as a meter, reads that plan's windows.
- * An openai API key bills per token, so the windows do not apply to it.
- */
-export async function pollOpenAIPlanEntries(
-	ctx: PollerContext,
-	authFile = CODEX_AUTH_FILE,
-	fetchImpl: FetchLike = fetch,
-): Promise<LimitEntry[] | undefined> {
-	if (!chatgptLogin(authFile)) return undefined;
-	const usage = await pollCodexUsage(ctx.modelRegistry, fetchImpl, authFile);
-	return usage ? codexEntries(usage) : undefined;
-}
-
 async function pollOpenCodeGoEntries(ctx: PollerContext): Promise<LimitEntry[] | undefined> {
 	const usage = await pollOpenCodeGoUsage(ctx.modelRegistry);
 	return usage ? openCodeGoEntries(usage) : undefined;
 }
 
-/** Throttled non-header limit sources. */
+/** Throttled non-header limit sources, one per provider family. */
 export const LIMIT_POLLERS: Record<string, { interval: (ctx: PollerContext) => PollInterval; poll: LimitPoller }> = {
 	anthropic: { interval: anthropicPollInterval, poll: pollAnthropicUsage },
-	// The Claude Code CLI shows Pi no response headers, so only a poll reads its plan.
-	"claude-code": { interval: () => ({ normalMs: 5 * 60_000, hotMs: 60_000 }), poll: () => pollClaudeCodeUsage(readClaudeCodeLogin()) },
 	"openai-codex": { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: pollCodexEntries },
-	openai: { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: (ctx) => pollOpenAIPlanEntries(ctx) },
 	"opencode-go": { interval: () => ({ normalMs: 60_000, hotMs: REFRESH_INTERVAL_MS }), poll: pollOpenCodeGoEntries },
 	openrouter: { interval: () => ({ normalMs: 10 * 60_000, hotMs: 5 * 60_000 }), poll: pollOpenRouterCredits },
 };
+
+/**
+ * The family whose poll a session's use of `provider` asks for, or none.
+ * Sign in with ChatGPT gives apps no usage endpoint and no rate-limit headers
+ * (openai/codex#54219), but its requests count toward the same ChatGPT plan,
+ * which an openai-codex login, kept only as a meter, reads. An openai API key
+ * bills per token, so the plan's windows do not apply to it.
+ */
+export function limitFamily(provider: string, authFile = CODEX_AUTH_FILE): string | undefined {
+	const family = providerFamily(provider);
+	if (!Object.hasOwn(LIMIT_POLLERS, family)) return undefined;
+	return provider === "openai" && !chatgptLogin(authFile) ? undefined : family;
+}

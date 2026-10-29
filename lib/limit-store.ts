@@ -5,11 +5,14 @@
  *
  * The instance hangs off globalThis under a registered symbol so two
  * extensions loaded through separate module graphs, or across /reload,
- * still see one store.
+ * still see one store. Every method takes any provider id and keys it by
+ * its family (lib/provider-family.ts), so a claude-code model reads the
+ * anthropic reading and listeners hear the family id.
  */
 import type { LimitEntry } from "./status-plus-logic.ts";
 import { aheadOfClock } from "./clock-skew.ts";
 import { createRejectionTracker } from "./limit-rejection.ts";
+import { providerFamily } from "./provider-family.ts";
 
 export interface LimitSnapshot {
 	entries: LimitEntry[];
@@ -20,6 +23,8 @@ export interface LimitSnapshot {
 export type LimitRefresher = (provider: string, force: boolean) => Promise<void>;
 
 export interface LimitStore {
+	/** Absent from stores made before readings were keyed by family; /reload replaces those. */
+	readonly familyKeyed?: true;
 	get(provider: string): LimitSnapshot | undefined;
 	entries(): Array<[string, LimitSnapshot]>;
 	set(provider: string, snapshot: LimitSnapshot): void;
@@ -45,9 +50,11 @@ export function createLimitStore(): LimitStore {
 	let refresher: LimitRefresher | undefined;
 	const rejections = createRejectionTracker();
 	return {
-		get: (provider) => snapshots.get(provider),
+		familyKeyed: true,
+		get: (provider) => snapshots.get(providerFamily(provider)),
 		entries: () => [...snapshots.entries()],
-		set(provider, snapshot) {
+		set(id, snapshot) {
+			const provider = providerFamily(id);
 			const prior = snapshots.get(provider);
 			// A prior stamped well ahead came from a clock that was wrong; it must not hold newer snapshots off.
 			if (prior && snapshot.atMs < prior.atMs && !aheadOfClock(prior.atMs, Date.now())) return;
@@ -57,14 +64,16 @@ export function createLimitStore(): LimitStore {
 				try { listener(provider); } catch { /* reported by the listener's owner */ }
 			}
 		},
-		recordSuccess(provider, modelId, atMs) {
+		recordSuccess(id, modelId, atMs) {
+			const provider = providerFamily(id);
 			const snapshot = snapshots.get(provider);
 			if (!snapshot) return;
 			rejections.succeed(provider, modelId, snapshot.entries, atMs);
 			// Preserve the quota's sample time. A model response does not refresh its utilization.
 			this.set(provider, snapshot);
 		},
-		recordRejection(provider, modelId, atMs) {
+		recordRejection(id, modelId, atMs) {
+			const provider = providerFamily(id);
 			const snapshot = snapshots.get(provider);
 			if (!snapshot) return;
 			rejections.reject(provider, modelId, snapshot.entries, atMs);
@@ -77,23 +86,24 @@ export function createLimitStore(): LimitStore {
 		setRefresher(next) { refresher = next; },
 		async refresh(provider, force = true) {
 			if (!refresher) return false;
-			await refresher(provider, force);
+			await refresher(providerFamily(provider), force);
 			return true;
 		},
-		setHot(provider, value) { if (value) hot.add(provider); else hot.delete(provider); },
-		isHot: (provider) => hot.has(provider),
+		setHot(provider, value) { if (value) hot.add(providerFamily(provider)); else hot.delete(providerFamily(provider)); },
+		isHot: (provider) => hot.has(providerFamily(provider)),
 	};
 }
 
 export function sharedLimitStore(): LimitStore {
 	const host = globalThis as unknown as Record<symbol, LimitStore | undefined>;
 	const existing = host[STORE_KEY];
-	if (!existing || typeof existing.recordSuccess !== "function" || typeof existing.recordRejection !== "function") {
+	if (!existing?.familyKeyed || typeof existing.recordSuccess !== "function" || typeof existing.recordRejection !== "function") {
 		// /reload retains globals from the installed version. Upgrade its API before new handlers use it.
+		// An older store kept one snapshot per provider id: the newest of a family's wins.
 		const next = createLimitStore();
 		for (const [provider, snapshot] of existing?.entries() ?? []) {
 			next.set(provider, snapshot);
-			next.setHot(provider, existing!.isHot(provider));
+			if (existing!.isHot(provider)) next.setHot(provider, true);
 		}
 		host[STORE_KEY] = next;
 	}

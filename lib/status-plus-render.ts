@@ -5,6 +5,7 @@
  */
 import { STATUS_TIME_ZONE, formatDuration, type LimitEntry } from "./status-plus-logic.ts";
 import { dateFormat, dateMs } from "./date-format.ts";
+import { providerFamily } from "./provider-family.ts";
 
 export interface Painter {
 	fg(tone: string, text: string): string;
@@ -77,19 +78,8 @@ export const PROVIDERS: Record<string, { label: string; color: Rgb }> = {
  */
 export const OTHER_PROVIDER: Rgb = mutedRgb(165, 0.06, 0.82);
 
-/**
- * Provider ids that reach the plan of a listed provider wear its identity
- * instead of a second entry: Sign in with ChatGPT (`openai`) uses the Codex
- * plan, and `claude-code` the Anthropic one.
- */
-const PROVIDER_ALIASES: Record<string, string> = {
-	openai: "openai-codex",
-	"claude-code": "anthropic",
-};
-
-function identityId(id: string): string {
-	return PROVIDER_ALIASES[id] ?? id;
-}
+/** A provider id wears its family's identity (lib/provider-family.ts): `claude-code` the Anthropic one, `openai` the Codex one. */
+const identityId = (id: string): string => providerFamily(id);
 
 const PROVIDER_ORDER = Object.keys(PROVIDERS);
 const WARN_PCT = 70;
