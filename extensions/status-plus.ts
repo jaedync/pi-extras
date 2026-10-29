@@ -27,8 +27,8 @@ import { disagreementText, disagreements, markUnsampled, mergePolled, windowName
 import { isVirtualModel, routedModel } from "../lib/routed-model.ts";
 import { sharedLimitStore, type LimitSnapshot } from "../lib/limit-store.ts";
 import { nextPollMs, readShared, writeShared, type SharedPoll } from "../lib/limit-share.ts";
-import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, PollRefused, REFRESH_INTERVAL_MS, limitFamily, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
-import { providerFamily } from "../lib/provider-family.ts";
+import { FORCED_POLL_FLOOR_MS, LIMIT_POLLERS, POLL_FRESH_MS, PollRefused, REFRESH_INTERVAL_MS, limitFamily, noteAnthropicCredential, parseLimitHeaders, pollGapMs } from "../lib/status-plus-limits.ts";
+import { limitKey } from "../lib/plan-billing.ts";
 import { STATUS_TIME_ZONE_PROBLEM, estimateUsageCost, freeProviders, toEpochMs, withPolledBalances, type LimitEntry, type PricedModel } from "../lib/status-plus-logic.ts";
 import { splitMeshStatuses } from "../lib/status-plus-mesh.ts";
 import { TWEEN_FRAME_MS, flashIntensity, incrementAt, isActive, retarget, valueAt, type Tween } from "../lib/status-plus-tween.ts";
@@ -220,7 +220,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 	function footerRows(stats: SessionStats, selected: string | undefined): FooterRow[] {
 		const families = new Map<string, { members: string[]; cost: number; airtimeMs: number; inputTokens: number; outputTokens: number }>();
 		const add = (id: string, usage: { cost: number; airtimeMs: number; inputTokens: number; outputTokens: number }) => {
-			const family = providerFamily(id);
+			const family = limitKey(id);
 			const row = families.get(family) ?? { members: [], cost: 0, airtimeMs: 0, inputTokens: 0, outputTokens: 0 };
 			row.members.push(id);
 			row.cost += usage.cost;
@@ -230,7 +230,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 			families.set(family, row);
 		};
 		for (const [id, usage] of stats.providers) add(id, usage);
-		const selectedFamily = providerFamily(selected);
+		const selectedFamily = selected === undefined ? undefined : limitKey(selected);
 		// The transcript knows only providers that did work; the selected one shows its limits before its first request.
 		if (selected && selectedFamily && !families.has(selectedFamily)) add(selected, EMPTY_PROVIDER);
 		return [...families].map(([id, { members, cost, airtimeMs, inputTokens, outputTokens }]) => ({
@@ -645,9 +645,11 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		applyHeaders(ctx.model?.provider, event.headers);
 	});
 
-	function applyHeaders(provider: string | undefined, headers: Record<string, string>): void {
-		if (!provider) return;
-		const entries = parseLimitHeaders(provider, headers);
+	function applyHeaders(member: string | undefined, headers: Record<string, string>): void {
+		if (!member) return;
+		const entries = parseLimitHeaders(member, headers);
+		// The plan's reading for a plan login, the key's own for an API key (lib/plan-billing.ts).
+		const provider = limitKey(member);
 		if (entries.length === 0) return;
 		// Headers must not clobber a fresh, richer poll snapshot between polls.
 		const existing = providerLimits.get(provider);
@@ -751,6 +753,8 @@ export default function statusPlus(pi: ExtensionAPI): void {
 		}
 		update(ctx);
 		schedulePolls(ctx);
+		// An anthropic API key reads no plan windows, even when another process's poll stands in for ours.
+		void noteAnthropicCredential(ctx).then(() => requestFooterRender?.(), () => {});
 		// Keep the clock, cache warmth, and live airtime ticking between events.
 		if (timer) clearInterval(timer);
 		timer = setInterval(() => {

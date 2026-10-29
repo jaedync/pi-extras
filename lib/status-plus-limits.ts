@@ -7,8 +7,6 @@
  * one poll reads the plan that every member of a family uses.
  */
 import {
-	CODEX_AUTH_FILE,
-	chatgptLogin,
 	pollCodexUsage,
 	pollOpenCodeGoUsage,
 	refused,
@@ -30,6 +28,7 @@ import {
 import { dateMs, resetTimeMs } from "./date-format.ts";
 import { readClaudeCodeLogin, type ClaudeCodeLogin } from "./claude-code-login.ts";
 import { providerFamily } from "./provider-family.ts";
+import { noteAnthropicApiKey, planBilled } from "./plan-billing.ts";
 
 export { PollRefused, retryAfterMs } from "./provider-limits.ts";
 
@@ -296,15 +295,31 @@ export async function pollAnthropicUsage(
 ): Promise<LimitEntry[] | undefined> {
 	const quotaUrl = proxyQuotaUrl(providerBaseUrl(ctx));
 	if (quotaUrl) {
+		noteAnthropicApiKey(false);
 		const response = await fetchImpl(quotaUrl, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) });
 		if (!response.ok) throw refused(response);
 		const entries = parseProxyQuota(await response.json());
 		return entries.length > 0 ? entries : undefined;
 	}
 
-	const piToken = await ctx.modelRegistry.getApiKeyForProvider("anthropic").catch(() => undefined);
-	const token = piToken && !ANTHROPIC_API_KEY.test(piToken) ? piToken : claudeCodeLogin()?.token;
+	const token = (await noteAnthropicCredential(ctx)) || claudeCodeLogin()?.token;
 	return token ? pollAnthropicOAuth(token, fetchImpl) : undefined;
+}
+
+/**
+ * Note for lib/plan-billing.ts whether Pi's anthropic credential is an API
+ * key: it bills per token, so the anthropic provider then reads no plan
+ * windows. A proxy quota route is the plan. Returns the OAuth token, if any.
+ */
+export async function noteAnthropicCredential(ctx: PollerContext): Promise<string | undefined> {
+	if (proxyQuotaUrl(providerBaseUrl(ctx))) {
+		noteAnthropicApiKey(false);
+		return undefined;
+	}
+	const piToken = await ctx.modelRegistry.getApiKeyForProvider("anthropic").catch(() => undefined);
+	const apiKey = piToken !== undefined && ANTHROPIC_API_KEY.test(piToken);
+	noteAnthropicApiKey(apiKey);
+	return apiKey ? undefined : piToken;
 }
 
 /** Windows and the optional monthly spend from Anthropic's OAuth usage endpoint. */
@@ -397,11 +412,13 @@ export const LIMIT_POLLERS: Record<string, { interval: (ctx: PollerContext) => P
  * The family whose poll a session's use of `provider` asks for, or none.
  * Sign in with ChatGPT gives apps no usage endpoint and no rate-limit headers
  * (openai/codex#54219), but its requests count toward the same ChatGPT plan,
- * which an openai-codex login, kept only as a meter, reads. An openai API key
- * bills per token, so the plan's windows do not apply to it.
+ * which an openai-codex login, kept only as a meter, reads. A member that
+ * bills per token (an openai API key) starts no plan poll (lib/plan-billing.ts).
+ * The family's own id always polls: an anthropic API key's poll still reads
+ * the plan through Claude Code's login for the claude-code provider.
  */
-export function limitFamily(provider: string, authFile = CODEX_AUTH_FILE): string | undefined {
+export function limitFamily(provider: string): string | undefined {
 	const family = providerFamily(provider);
 	if (!Object.hasOwn(LIMIT_POLLERS, family)) return undefined;
-	return provider === "openai" && !chatgptLogin(authFile) ? undefined : family;
+	return provider !== family && !planBilled(provider) ? undefined : family;
 }

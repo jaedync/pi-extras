@@ -10,6 +10,7 @@ import { readEnvelopes, reportText } from "../lib/subagents/format.ts";
 import { ChildIndex } from "../lib/subagents/restore.ts";
 import { exhaustedMessage } from "../lib/rate-limit-recovery/transient.ts";
 import { captureLimit, failureMessage } from "../lib/rate-limit-recovery/core.ts";
+import { openaiLogin } from "./support/plan-login.ts";
 import { SETUP_FAILURE } from "../lib/rate-limit-recovery/child.ts";
 import { teamHarness } from "./support/team-harness.ts";
 
@@ -226,7 +227,8 @@ test("a fallback that waited in line for a slot starts with a word, not its old 
 	await h.team.close();
 });
 
-test("a quota skips the other providers of its family; missing credentials skip only their own provider", async () => {
+test("a quota skips the other providers of its family; missing credentials skip only their own provider", async (t) => {
+	openaiLogin(t);
 	const quota = teamHarness({ fallbackModels: ["openai/gpt-6.1-sol", OPUS] });
 	const a = quota.spawn("Task a", { model: SOL });
 	await tick();
@@ -242,4 +244,15 @@ test("a quota skips the other providers of its family; missing credentials skip 
 	await settle();
 	assert.equal(login.team.get(b)?.model, "claude-code/claude-opus-5-5");
 	await login.team.close();
+});
+
+test("a plan's quota does not skip an openai API key, which bills per token", async (t) => {
+	openaiLogin(t, "api_key");
+	const quota = teamHarness({ fallbackModels: ["openai/gpt-6.1-sol", OPUS] });
+	const a = quota.spawn("Task a", { model: SOL });
+	await tick();
+	quota.lastCall(a).fail(new Error(CODEX_LIMIT));
+	await settle();
+	assert.equal(quota.team.get(a)?.model, "openai/gpt-6.1-sol");
+	await quota.team.close();
 });

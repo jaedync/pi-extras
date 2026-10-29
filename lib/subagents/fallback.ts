@@ -13,7 +13,7 @@
 import { SETUP_FAILURE } from "../rate-limit-recovery/child.ts";
 import { parseRateLimit } from "../rate-limit-recovery/core.ts";
 import { isQuotaError, isTemporaryLimitReport, isTransientRateLimit } from "../rate-limit-recovery/transient.ts";
-import { providerFamily } from "../provider-family.ts";
+import { limitKey } from "../plan-billing.ts";
 import { type ModelChoice, resolveModel } from "./models.ts";
 import type { AgentRecord, FailureKind, FallbackStep } from "./types.ts";
 
@@ -50,11 +50,11 @@ const providerOf = (ref: string): string => ref.split("/")[0] ?? ref;
 
 /**
  * What a provider-wide failure blocks: a quota is the plan's, so it blocks the
- * provider's family (lib/provider-family.ts); missing credentials are Pi's
- * login for that provider id alone.
+ * providers that bill that plan (lib/plan-billing.ts limitKey); missing
+ * credentials are Pi's login for that provider id alone.
  */
 const blockKey = (ref: string, kind: FailureKind): string =>
-	kind === "quota" ? `plan:${providerFamily(providerOf(ref))}` : `login:${providerOf(ref)}`;
+	kind === "quota" ? `plan:${limitKey(providerOf(ref))}` : `login:${providerOf(ref)}`;
 
 /**
  * `fallbackModels` as model references, in order: unset or `[]` means no

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createLimitStore, sharedLimitStore } from "../lib/limit-store.ts";
+import { openaiLogin } from "./support/plan-login.ts";
 
 test("the shared store is one instance per process", () => {
 	assert.equal(sharedLimitStore(), sharedLimitStore());
@@ -63,7 +64,8 @@ test("hot flags are per provider", () => {
 	assert.equal(store.isHot("anthropic"), false);
 });
 
-test("the store keys every reading by provider family", async () => {
+test("the store keys every reading by provider family", async (t) => {
+	openaiLogin(t);
 	const store = createLimitStore();
 	const heard: string[] = [];
 	store.subscribe((provider) => heard.push(provider));
@@ -81,7 +83,8 @@ test("the store keys every reading by provider family", async () => {
 	assert.deepEqual(calls, ["claude-code"]);
 });
 
-test("reload moves an older store's per-id readings to their family, the newest first", () => {
+test("reload moves an older store's per-id readings to their family, the newest first", (t) => {
+	openaiLogin(t);
 	const key = Symbol.for("pi-extras.limit-store");
 	const host = globalThis as unknown as Record<symbol, unknown>;
 	const saved = host[key];

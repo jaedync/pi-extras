@@ -13,7 +13,7 @@ import { defineTool, getAgentDir, type ContextEvent, type ExtensionAPI, type Ext
 import { Type } from "typebox";
 import { readSection, updateSection } from "../lib/extras-config.ts";
 import { sharedLimitStore, type LimitStore } from "../lib/limit-store.ts";
-import { providerFamily } from "../lib/provider-family.ts";
+import { limitKey, storeKey } from "../lib/plan-billing.ts";
 import { operationalError } from "../lib/operational-log.ts";
 import { markRow } from "../lib/tool-row.ts";
 import { parseRateLimit } from "../lib/rate-limit-recovery/core.ts";
@@ -187,8 +187,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 
 	/** A first, unforced read for each provider the store has no snapshot of. */
 	async function readUnknown(providers: ReadonlyArray<string | undefined>): Promise<void> {
-		const known = new Set(store.entries().map(([provider]) => providerFamily(provider)));
-		const unknown = new Set(providers.filter((provider): provider is string => Boolean(provider) && !known.has(providerFamily(provider!))));
+		const known = new Set(store.entries().map(([provider]) => storeKey(provider)));
+		const unknown = new Set(providers.filter((provider): provider is string => Boolean(provider) && !known.has(limitKey(provider!))));
 		await Promise.all([...unknown].map((provider) => store.refresh(provider, false)));
 	}
 
@@ -260,7 +260,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			const inScope = params.all ? modelsInScope(ctx) : [];
 			if (params.refresh) {
 				const providers = params.all ? store.entries().map(([provider]) => provider) : [];
-				if (model.provider && !providers.includes(providerFamily(model.provider))) providers.push(model.provider);
+				if (model.provider && !providers.includes(limitKey(model.provider))) providers.push(model.provider);
 				await Promise.all(providers.map((provider) => store.refresh(provider, true)));
 			}
 			// Status Plus polls only providers this session has used or selected; the active one may not
@@ -327,9 +327,9 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	pi.on("message_end", async (event) => {
 		const message = event.message;
 		if (message.role !== "assistant") return;
-		if (["stop", "toolUse"].includes(message.stopReason)) store.recordSuccess(message.provider, message.model, now());
+		if (["stop", "toolUse"].includes(message.stopReason)) store.recordSuccess(limitKey(message.provider), message.model, now());
 		else if (message.stopReason === "error" && parseRateLimit(message.errorMessage)) {
-			store.recordRejection(message.provider, message.model, now());
+			store.recordRejection(limitKey(message.provider), message.model, now());
 		}
 	});
 
@@ -346,7 +346,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		const model = activeModel(ctx);
 		return {
 			messages: [...event.messages.filter((message) => message.role !== "custom" ||
-				message.customType !== GUARD_CUSTOM_TYPE || warningApplies(message.details, model, now(), store.get(model.provider ?? ""), budget ?? null)), ...notices],
+				message.customType !== GUARD_CUSTOM_TYPE || warningApplies(message.details, model, now(), (model.provider ? store.get(limitKey(model.provider)) : undefined), budget ?? null)), ...notices],
 		};
 	});
 

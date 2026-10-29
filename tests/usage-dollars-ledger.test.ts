@@ -4,6 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, renameSync, utimesSync, writeFi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSpendLedger } from "../lib/usage-dollars/ledger.ts";
+import { openaiLogin } from "./support/plan-login.ts";
 
 const NOW = Date.UTC(2026, 9, 10, 17);
 const HOUR = 3_600_000;
@@ -167,7 +168,8 @@ test("compaction, branch summary and cache-warm spend count, under the session's
 	assert.deepEqual(ledger.models("openai-codex", 0), ["gpt-6"]);
 });
 
-test("spend sums by provider family: claude-code counts on the anthropic plan", async () => {
+test("spend sums by provider family: claude-code counts on the anthropic plan", async (t) => {
+	openaiLogin(t);
 	const dir = root();
 	writeFileSync(join(dir, "a.jsonl"), user + line({ cost: 1.5, responseId: "msg_1" }) + line({ provider: "claude-code", cost: 0.25, responseId: "msg_2" })
 		+ line({ provider: "openai", model: "gpt-6-luna", cost: 1 }));

@@ -78,8 +78,11 @@ export const PROVIDERS: Record<string, { label: string; color: Rgb }> = {
  */
 export const OTHER_PROVIDER: Rgb = mutedRgb(165, 0.06, 0.82);
 
-/** A provider id wears its family's identity (lib/provider-family.ts): `claude-code` the Anthropic one, `openai` the Codex one. */
-const identityId = (id: string): string => providerFamily(id);
+/**
+ * A provider id wears its family's identity (lib/provider-family.ts): `claude-code` the Anthropic one, `openai` the Codex one.
+ * An API key's own row (lib/plan-billing.ts limitKey, `anthropic:api-key`) wears its provider's.
+ */
+const identityId = (id: string): string => providerFamily(id.replace(/:api-key$/, ""));
 
 const PROVIDER_ORDER = Object.keys(PROVIDERS);
 const WARN_PCT = 70;

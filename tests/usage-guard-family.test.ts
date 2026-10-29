@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LimitSnapshot } from "../lib/limit-store.ts";
+import { openaiLogin } from "./support/plan-login.ts";
 import {
 	DEFAULT_GUARD_CONFIG,
 	NO_ENDPOINT_REASON,
@@ -34,7 +35,8 @@ test("the usage report gives a claude-code model the anthropic family's budget, 
 	assert.ok(report.notes.some((note) => /reports no subscription windows/.test(note)), "a budget alone fires no warnings, and the report says so");
 });
 
-test("limitsUnavailable lists a family once, by its family id, with the most specific reason", () => {
+test("limitsUnavailable lists a family once, by its family id, with the most specific reason", (t) => {
+	openaiLogin(t);
 	assert.deepEqual(unavailableLimits([{ provider: "claude-code" }, { provider: "anthropic" }, { provider: "kimi-coding" }], []), {
 		anthropic: missingReason("anthropic"),
 		"kimi-coding": NO_ENDPOINT_REASON,

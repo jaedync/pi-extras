@@ -9,7 +9,7 @@ import { SEP } from "../cc-phase.ts";
 import type { Seg } from "../band/band.ts";
 import type { UsageReport, UsageReportLimit } from "../usage-guard-core.ts";
 import { paceText } from "../usage-pace.ts";
-import { providerFamily } from "../provider-family.ts";
+import { limitKey } from "../plan-billing.ts";
 import { sanitize } from "./format.ts";
 import { limitDollarLines, summaryLines, wholeDollars } from "./usage-dollars.ts";
 import { errorLines, mutedSeg, resultText, titleSeg, wrapAll, type PaintKey } from "./kit.ts";
@@ -42,8 +42,8 @@ function budgetSegs(view: View, report: UsageReport | undefined): Seg[] {
 }
 
 function dollarsLeftSegs(report: UsageReport | undefined): Seg[] {
-	// The summary is keyed by provider family; the model names its own provider.
-	const left = report?.model.provider ? report.dollars?.providers[providerFamily(report.model.provider)]?.remainingUsd : undefined;
+	// The summary is keyed by the key of each provider's readings; the model names its own provider.
+	const left = report?.model.provider ? report.dollars?.providers[limitKey(report.model.provider)]?.remainingUsd : undefined;
 	return left !== undefined ? [mutedSeg(`${SEP}${wholeDollars(left)} left`)] : [];
 }
 

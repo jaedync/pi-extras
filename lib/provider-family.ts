@@ -30,3 +30,6 @@ export function familyMembers(family: string): string[] {
 /** True when both ids are set and belong to one family. */
 export const sameFamily = (left: string | undefined, right: string | undefined): boolean =>
 	left !== undefined && right !== undefined && providerFamily(left) === providerFamily(right);
+
+/** True for the id that names a family of several providers (`anthropic`, `openai-codex`). */
+export const isFamilyId = (id: string): boolean => FAMILIES.some((members) => members[0] === id);

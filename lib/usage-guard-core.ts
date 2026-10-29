@@ -7,7 +7,8 @@ import type { LimitSnapshot } from "./limit-store.ts";
 import { formatDuration, quotaKeyParts, quotaLabel, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
 import { localTime } from "./usage-time.ts";
 import { LIMIT_POLLERS } from "./status-plus-limits.ts";
-import { familyMembers, providerFamily, sameFamily } from "./provider-family.ts";
+import { familyMembers, providerFamily } from "./provider-family.ts";
+import { limitKey, planBilled, storeKey } from "./plan-billing.ts";
 import { paceText, usagePace, type UsagePace } from "./usage-pace.ts";
 import { dollarsSummary, entryDollars, type DollarInputs, type DollarsSummary, type EntryDollars } from "./usage-dollars/core.ts";
 export { localTime } from "./usage-time.ts";
@@ -170,7 +171,7 @@ export function warningApplies(details: unknown, model: ActiveModel, now?: numbe
 	const parts = noticeParts(record, record.key);
 	const modelFamily = typeof record.modelFamily === "string" ? record.modelFamily : quotaKeyParts(parts.window).family;
 	// Notices name the family whose reading fired them; an older one may name a member.
-	if (!sameFamily(parts.provider, model.provider)) return false;
+	if (!model.provider || storeKey(parts.provider) !== limitKey(model.provider)) return false;
 	const current = snapshot?.entries.find((entry) => (entry.key ?? entry.label) === parts.window);
 	// Keep raw history, but do not carry a disproved block or a void threshold into another model request.
 	if (record.reason === "exhausted" && current?.exhausted === false) return false;
@@ -241,7 +242,7 @@ function activeWindows(
 	const result: Array<{ provider: string; entry: LimitEntry }> = [];
 	if (!model.provider) return result;
 	for (const [provider, snapshot] of snapshots) {
-		if (!sameFamily(provider, model.provider)) continue;
+		if (provider !== limitKey(model.provider)) continue;
 		for (const entry of snapshot.entries) {
 			if (entryKind(entry) !== "window" || entry.usedPct === undefined) continue;
 			if (!entryApplies(entry, model)) continue;
@@ -493,7 +494,7 @@ function reportLimitFigures(
 	timeZone?: string,
 ): UsageReportLimit {
 	const kind = entryKind(entry);
-	const applies = sameFamily(provider, model.provider) && entryApplies(entry, model);
+	const applies = model.provider !== undefined && provider === limitKey(model.provider) && entryApplies(entry, model);
 	const pct = entry.usedPct;
 	const passed = entry.resetMs !== undefined && entry.resetMs <= now;
 	const status = passed ? "reset" : entry.exhausted ? "exhausted" : entry.allowed === true && pct !== undefined && pct >= 100 ? "full-but-allowed" : "ok";
@@ -536,25 +537,30 @@ const PROVIDER_REASONS: Readonly<Record<string, string>> = { openai: OPENAI_METE
 /** Whether the provider's family has a usage poller (status-plus-limits.ts). */
 const polled = (provider: string): boolean => Object.hasOwn(LIMIT_POLLERS, providerFamily(provider));
 
+/** A per-token API key in a plan's family (lib/plan-billing.ts). */
+export const API_KEY_REASON = "It bills per token with an API key, so its plan's windows do not apply. Limits show only if its responses carry rate-limit headers.";
+
 export const missingReason = (provider: string): string =>
-	PROVIDER_REASONS[provider] ?? (polled(provider) ? NO_READING_REASON : NO_ENDPOINT_REASON);
+	PROVIDER_REASONS[provider] ?? (!planBilled(provider) ? API_KEY_REASON : polled(provider) ? NO_READING_REASON : NO_ENDPOINT_REASON);
 
 /**
- * Paid provider families in scope that have no limit snapshot, by family id,
- * with the most specific reason of their members in scope. A provider whose
+ * Paid providers in scope that have no limit snapshot, by the key of their
+ * readings (lib/plan-billing.ts limitKey: the family id for a plan login),
+ * with the most specific reason of the members in scope. A provider whose
  * scoped models are all unmetered is left out: it has no limit.
  */
 export function unavailableLimits(
 	models: ReadonlyArray<{ provider: string; unmetered?: boolean }>,
 	snapshots: Iterable<[string, LimitSnapshot]>,
 ): Record<string, string> {
-	const known = new Set([...snapshots].map(([provider]) => providerFamily(provider)));
+	const known = new Set([...snapshots].map(([provider]) => storeKey(provider)));
 	const metered = new Set(models.filter((model) => !model.unmetered).map((model) => model.provider));
 	const result: Record<string, string> = {};
-	for (const family of [...new Set([...metered].map((provider) => providerFamily(provider)))].sort()) {
-		if (known.has(family)) continue;
-		const member = familyMembers(family).find((provider) => metered.has(provider) && Object.hasOwn(PROVIDER_REASONS, provider));
-		result[family] = missingReason(member ?? family);
+	for (const key of [...new Set([...metered].map((provider) => limitKey(provider)))].sort()) {
+		if (known.has(key)) continue;
+		const members = [...metered].filter((provider) => limitKey(provider) === key);
+		const member = members.find((provider) => Object.hasOwn(PROVIDER_REASONS, provider));
+		result[key] = missingReason(member ?? (members.includes(key) ? key : members[0] ?? key));
 	}
 	return result;
 }
@@ -618,7 +624,7 @@ export function usageReport(
 	const snapshotAgeSeconds: Record<string, number> = {};
 	let sawActiveProvider = false;
 	for (const [provider, snapshot] of snapshots) {
-		const active = sameFamily(provider, model.provider);
+		const active = model.provider !== undefined && provider === limitKey(model.provider);
 		if (active) sawActiveProvider = true;
 		if (!active && !includeAll) continue;
 		snapshotAgeSeconds[provider] = Math.max(0, Math.round((now - snapshot.atMs) / 1000));

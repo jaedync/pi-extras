@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeCodePaths, readClaudeCodeLogin } from "../lib/claude-code-login.ts";
+import { setPlanAuthFile } from "../lib/plan-billing.ts";
 import { LIMIT_POLLERS, limitFamily, parseLimitHeaders, pollAnthropicUsage } from "../lib/status-plus-limits.ts";
 
 const NOW = Date.parse("2026-10-29T15:00:00Z");
@@ -55,11 +56,14 @@ test("an openai login asks for the Codex plan poll only when it is Sign in with 
 	const dir = mkdtempSync(join(tmpdir(), "openai-family-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const authFile = join(dir, "auth.json");
+	setPlanAuthFile(authFile);
+	t.after(() => setPlanAuthFile(undefined));
 	writeFileSync(authFile, JSON.stringify({ openai: { type: "oauth" } }));
-	assert.equal(limitFamily("openai", authFile), "openai-codex");
+	assert.equal(limitFamily("openai"), "openai-codex");
 	// An API key bills per token and has no plan windows: the Codex meter must not stand in for it.
 	writeFileSync(authFile, JSON.stringify({ openai: { type: "api_key" } }));
-	assert.equal(limitFamily("openai", authFile), undefined);
+	setPlanAuthFile(authFile);
+	assert.equal(limitFamily("openai"), undefined);
 });
 
 test("headers from any member parse with the family's parser", () => {

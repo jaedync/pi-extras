@@ -5,14 +5,16 @@
  *
  * The instance hangs off globalThis under a registered symbol so two
  * extensions loaded through separate module graphs, or across /reload,
- * still see one store. Every method takes any provider id and keys it by
- * its family (lib/provider-family.ts), so a claude-code model reads the
- * anthropic reading and listeners hear the family id.
+ * still see one store. Every method takes a family id, which pollers use, or
+ * a member's id, which it keys by the member's plan (lib/plan-billing.ts): a
+ * claude-code model reads the anthropic reading, an openai API key its own.
+ * A caller that holds a model's provider id passes limitKey() of it, so an
+ * anthropic API key does not read the anthropic plan.
  */
 import type { LimitEntry } from "./status-plus-logic.ts";
 import { aheadOfClock } from "./clock-skew.ts";
 import { createRejectionTracker } from "./limit-rejection.ts";
-import { providerFamily } from "./provider-family.ts";
+import { storeKey } from "./plan-billing.ts";
 
 export interface LimitSnapshot {
 	entries: LimitEntry[];
@@ -52,10 +54,10 @@ export function createLimitStore(): LimitStore {
 	const rejections = createRejectionTracker();
 	return {
 		familyKeyed: true,
-		get: (provider) => snapshots.get(providerFamily(provider)),
+		get: (provider) => snapshots.get(storeKey(provider)),
 		entries: () => [...snapshots.entries()],
 		set(id, snapshot) {
-			const provider = providerFamily(id);
+			const provider = storeKey(id);
 			const prior = snapshots.get(provider);
 			// A prior stamped well ahead came from a clock that was wrong; it must not hold newer snapshots off.
 			if (prior && snapshot.atMs < prior.atMs && !aheadOfClock(prior.atMs, Date.now())) return;
@@ -66,7 +68,7 @@ export function createLimitStore(): LimitStore {
 			}
 		},
 		recordSuccess(id, modelId, atMs) {
-			const provider = providerFamily(id);
+			const provider = storeKey(id);
 			const snapshot = snapshots.get(provider);
 			if (!snapshot) return;
 			rejections.succeed(provider, modelId, snapshot.entries, atMs);
@@ -74,7 +76,7 @@ export function createLimitStore(): LimitStore {
 			this.set(provider, snapshot);
 		},
 		recordRejection(id, modelId, atMs) {
-			const provider = providerFamily(id);
+			const provider = storeKey(id);
 			const snapshot = snapshots.get(provider);
 			if (!snapshot) return;
 			rejections.reject(provider, modelId, snapshot.entries, atMs);
@@ -91,8 +93,8 @@ export function createLimitStore(): LimitStore {
 			await refresher(provider, force);
 			return true;
 		},
-		setHot(provider, value) { if (value) hot.add(providerFamily(provider)); else hot.delete(providerFamily(provider)); },
-		isHot: (provider) => hot.has(providerFamily(provider)),
+		setHot(provider, value) { if (value) hot.add(storeKey(provider)); else hot.delete(storeKey(provider)); },
+		isHot: (provider) => hot.has(storeKey(provider)),
 	};
 }
 

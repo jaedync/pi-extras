@@ -6,7 +6,7 @@
  */
 import type { LimitSnapshot } from "../limit-store.ts";
 import { entryApplies, entryKind, missingReason, NO_READING_REASON } from "../usage-guard-core.ts";
-import { providerFamily } from "../provider-family.ts";
+import { limitKey } from "../plan-billing.ts";
 
 export interface WindowReading {
 	/** The provider and the window, as `anthropic 7d`. */
@@ -17,11 +17,11 @@ export interface WindowReading {
 /** The reading for `model`, or why there is none (a provider with no usage source, or no reading yet). */
 export type WindowLookup = { reading: WindowReading } | { why: string };
 
-/** A model of any member of a family reads the family's reading, named by the family id. */
+/** A model of any member of a family reads the family's reading, named by the family id; an API key reads its own. */
 export function windowReading(get: (provider: string) => LimitSnapshot | undefined, model: string, now: number = Date.now()): WindowLookup {
 	const slash = model.indexOf("/");
 	const member = slash > 0 ? model.slice(0, slash) : model;
-	const provider = providerFamily(member);
+	const provider = limitKey(member);
 	const id = slash > 0 ? model.slice(slash + 1) : model;
 	const snapshot = get(provider);
 	if (!snapshot) {

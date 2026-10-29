@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { captureLimit, failureMessage, parseRateLimit, planWait, resumedMessage, scopeFor, sameScope } from "../lib/rate-limit-recovery/core.ts";
 import { DEFAULT_CONFIG, normalizeConfig } from "../lib/rate-limit-recovery/config.ts";
+import { openaiLogin } from "./support/plan-login.ts";
 
 const NOW = Date.parse("2026-09-30T02:00:00.000Z");
 const error = (retry_after: unknown = 9905, type = "rate_limit_error") => JSON.stringify({ type: "error", error: { type, message: "upstream arbitrary text", retry_after } });
@@ -39,7 +40,8 @@ test("captures a reset estimate without retaining untrusted provider text", () =
 	assert.match(failureMessage(captureLimit(model, {}, NOW), NOW, "Subagents never wait."), /reset time is unknown/i);
 });
 
-test("Anthropic aliases and Claude model switches share cooldown scope", () => {
+test("Anthropic aliases and Claude model switches share cooldown scope", (t) => {
+	openaiLogin(t);
 	assert.equal(scopeFor(model), "anthropic");
 	for (const selected of [
 		{ provider: "anthropic", id: "claude-sonnet-5-5" },
@@ -47,7 +49,7 @@ test("Anthropic aliases and Claude model switches share cooldown scope", () => {
 		{ provider: "openrouter", id: "anthropic/claude-sonnet", api: "openai-completions" },
 	]) assert.equal(sameScope("anthropic", selected), true);
 	assert.equal(sameScope("anthropic", { provider: "openai-codex", id: "gpt-6" }), false);
-	// A provider family shares one plan, so one cooldown: claude-code with Anthropic, openai with Codex.
+	// A provider family shares one plan, so one cooldown: claude-code with Anthropic, openai (Sign in with ChatGPT) with Codex.
 	assert.equal(sameScope("anthropic", { provider: "claude-code", id: "opus", api: "claude-code-stream-json" }), true);
 	assert.equal(scopeFor({ provider: "openai", id: "gpt-6" }), scopeFor({ provider: "openai-codex", id: "gpt-6-luna" }));
 	assert.equal(sameScope("provider:other", { provider: "other", id: "new-model" }), true);

@@ -8,10 +8,11 @@ import { subagentTool } from "../lib/subagents/tools.ts";
 import { windowReading, type WindowLookup, type WindowReading } from "../lib/subagents/windows.ts";
 import { NO_USAGE } from "../lib/subagents/types.ts";
 import { teamHarness } from "./support/team-harness.ts";
+import { openaiLogin } from "./support/plan-login.ts";
 
 const snap = (entries: LimitSnapshot["entries"]): LimitSnapshot => ({ entries, atMs: 0, source: "poll" });
 
-test("the reading is the fullest window that governs the model; a model-family window only for its family", () => {
+test("the reading is the fullest window that governs the model; a model-family window only for its family", (t) => {
 	const store = new Map<string, LimitSnapshot>([
 		["anthropic", snap([{ label: "5h", usedPct: 26 }, { label: "7d", usedPct: 44 }, { label: "7d-fable", usedPct: 90, modelFamily: "fable" }, { label: "credits", kind: "credits", remainingText: "$5" }])],
 		["openai-codex", snap([{ label: "5h", usedPct: 5, exhausted: true }])],
@@ -25,7 +26,8 @@ test("the reading is the fullest window that governs the model; a model-family w
 	assert.ok("why" in glm && /reports no usage windows for glm-5\.3/.test(glm.why));
 	const stale = new Map([["anthropic", snap([{ label: "5h", usedPct: 95, resetMs: 1_000 }, { label: "7d", usedPct: 40, resetMs: 9_000 }])]]);
 	assert.deepEqual(windowReading((provider) => stale.get(provider), "anthropic/claude-opus-5-5", 2_000), { reading: { label: "anthropic 7d", pct: 40 } }, "a window past its reset is stale");
-	// openai is of the Codex family: it reads the family's plan, and says why when there is no reading.
+	// With Sign in with ChatGPT, openai bills the Codex plan: it reads the plan, and says why when there is no reading.
+	openaiLogin(t);
 	assert.deepEqual(windowReading(get, "openai/gpt-6.1-sol"), { reading: { label: "openai-codex 5h", pct: 100 } });
 	const openai = windowReading(() => undefined, "openai/gpt-6.1-sol");
 	assert.ok("why" in openai && /Sign in with ChatGPT reports no usage/.test(openai.why), "openai says why");

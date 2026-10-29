@@ -3,8 +3,9 @@
  * recorded cost, by provider and model, and the spend Pi records outside
  * turns (compaction and branch summaries, cache refreshes). Main sessions, forks and subagent
  * sessions all live under the sessions directory; a turn copied into a fork
- * keeps its response id, so it counts once. Queries and totals go by
- * provider family (lib/provider-family.ts): claude-code spend is anthropic spend.
+ * keeps its response id, so it counts once. Queries and totals go by the key
+ * of a provider's limit readings (lib/plan-billing.ts): claude-code spend is
+ * anthropic spend, while an openai API key keeps its own.
  *
  * Reads are incremental: each file is read from where the last refresh
  * stopped, and only files touched within the window are opened. A cold read
@@ -12,7 +13,7 @@
  */
 import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { providerFamily, sameFamily } from "../provider-family.ts";
+import { limitKey } from "../plan-billing.ts";
 
 export interface SpendRecord {
 	ts: number;
@@ -34,7 +35,7 @@ export interface SpendLedger {
 	refresh(now: number): Promise<void>;
 	/** `family` here is a model family (fable), not a provider family. */
 	sum(query: { provider: string; sinceMs: number; untilMs: number; family?: string }): number;
-	/** Keyed by provider family id. */
+	/** Keyed by limitKey (lib/plan-billing.ts): the family id for a plan login. */
 	byProvider(sinceMs: number, untilMs: number): Record<string, number>;
 	models(provider: string, sinceMs: number): string[];
 }
@@ -251,19 +252,19 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 		},
 		sum({ provider, sinceMs, untilMs, family }) {
 			return unique(sinceMs, untilMs)
-				.filter((record) => sameFamily(record.provider, provider) && (!family || familyMatches(record.model, family)))
+				.filter((record) => limitKey(record.provider) === limitKey(provider) && (!family || familyMatches(record.model, family)))
 				.reduce((total, record) => total + record.cost, 0);
 		},
 		byProvider(sinceMs, untilMs) {
 			const totals: Record<string, number> = {};
 			for (const record of unique(sinceMs, untilMs)) {
-				const family = providerFamily(record.provider);
-				totals[family] = (totals[family] ?? 0) + record.cost;
+				const key = limitKey(record.provider);
+				totals[key] = (totals[key] ?? 0) + record.cost;
 			}
 			return totals;
 		},
 		models(provider, sinceMs) {
-			return [...new Set(unique(sinceMs, Infinity).filter((record) => sameFamily(record.provider, provider)).map((record) => record.model))];
+			return [...new Set(unique(sinceMs, Infinity).filter((record) => limitKey(record.provider) === limitKey(provider)).map((record) => record.model))];
 		},
 	};
 }

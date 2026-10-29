@@ -13,6 +13,7 @@ delete process.env.PI_OFFLINE;
 delete process.env.STATUS_PLUS_POLL_LIMITS;
 const { default: statusPlus } = await import("../extensions/status-plus.ts");
 const { stripAnsi } = await import("../lib/ansi.ts");
+const { noteAnthropicApiKey, planBilled, setPlanAuthFile } = await import("../lib/plan-billing.ts");
 
 const SHARE = join(agentDir, "status-plus-limits");
 const STORE = Symbol.for("pi-extras.limit-store");
@@ -38,7 +39,17 @@ beforeEach(() => {
 	rmSync(SHARE, { recursive: true, force: true });
 	rmSync(claudeDir, { recursive: true, force: true });
 	calls = [];
+	rmSync(AUTH, { force: true });
+	setPlanAuthFile(undefined);
+	noteAnthropicApiKey(false);
 });
+
+const AUTH = join(agentDir, "auth.json");
+/** Sign in with ChatGPT for openai, and an openai-codex login kept as the plan's meter. */
+function chatgptLogins() {
+	writeFileSync(AUTH, JSON.stringify({ openai: { type: "oauth" }, "openai-codex": { type: "oauth", access: "codex-test-token", accountId: "acct-test" } }));
+	setPlanAuthFile(undefined);
+}
 
 function share(provider, entries) {
 	mkdirSync(SHARE, { recursive: true });
@@ -138,6 +149,7 @@ test("a selected claude-code model with no requests yet shows the family's limit
 });
 
 test("openai and openai-codex spend share one Cdx row", async (t) => {
+	chatgptLogins();
 	share("openai-codex", [{ label: "5h", key: "primary", usedPct: 30, windowSeconds: 18_000, resetMs: NOW + 3_600_000 }]);
 	const footer = app({ model: CLAUDE, branch: [reply("r1", "openai", 0.5), reply("r2", "openai-codex", 0.25)] });
 	await footer.emit("session_start");
@@ -147,4 +159,32 @@ test("openai and openai-codex spend share one Cdx row", async (t) => {
 	assert.equal(cdx.length, 1, footer.lines().join("\n"));
 	assert.match(cdx[0], /\$0\.75/);
 	assert.match(cdx[0], /5h ~?30%/);
+});
+
+test("openai with Sign in with ChatGPT and openai-codex poll the Codex plan once, under openai-codex", async (t) => {
+	chatgptLogins();
+	const footer = app({ model: CLAUDE, branch: [reply("r1", "openai", 0.5), reply("r2", "openai-codex", 0.25)] });
+	await footer.emit("session_start");
+	t.after(() => footer.emit("session_shutdown"));
+	await footer.emit("model_select", { model: { ...CLAUDE, provider: "openai", id: "gpt-6.1-sol" }, source: "set" });
+	await settle();
+	assert.deepEqual(calls.map((call) => call.url), ["https://chatgpt.com/backend-api/wham/usage"]);
+	assert.ok(existsSync(join(SHARE, "openai-codex.json")));
+	assert.ok(!existsSync(join(SHARE, "openai.json")));
+});
+
+test("an anthropic API key is no plan login: its spend stays off the plan's row, even when another process polled", async (t) => {
+	share("anthropic", [{ label: "", kind: "budget", remainingText: "$369/$3000", usedUsd: 2631.04, limitUsd: 3000 }]);
+	const footer = app({ branch: [reply("r1", "anthropic", 0.5), reply("r2", "claude-code", 0.25)], piToken: "sk-ant-api03-test" });
+	await footer.emit("session_start");
+	t.after(() => footer.emit("session_shutdown"));
+	await settle();
+	assert.equal(planBilled("anthropic"), false);
+	assert.deepEqual(calls, [], "the fresh shared poll stands in for one of our own");
+	const ant = rows(footer.lines(), "Ant");
+	assert.equal(ant.length, 2, footer.lines().join("\n"));
+	const key = ant.find((line) => /\$0\.50/.test(line));
+	const plan = ant.find((line) => /\$0\.25/.test(line));
+	assert.ok(key && !/\$369/.test(key), key);
+	assert.match(plan ?? "", /\$369\/\$3000/);
 });
