@@ -2,7 +2,24 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## 0.34.8 - 2026-10-29
+## 0.35.0 - 2026-10-29
+
+### Changed
+
+These changes alter output and behavior that you may rely on:
+
+- The `usage` tool keys its output by provider family. `dollars.providers`,
+  `limitsUnavailable`, `limits[].provider` and `snapshotAgeSeconds` now use
+  the family id: a `claude-code` model reports under `anthropic`, and an
+  `openai` model with Sign in with ChatGPT reports under `openai-codex`. An
+  API key keeps its own id (`openai`, `anthropic:api-key`).
+- Subagents: a quota failure skips the fallback models of every provider that
+  bills the same plan. A credentials failure skips only its own provider. An
+  API key bills per token, so a plan's quota does not skip it.
+- Rate-limit Recovery: one cooldown covers the whole family, except an API key,
+  which keeps its own.
+- `linkContext.hostGuardExempt` matches the whole family: the default
+  `["anthropic"]` now also exempts `claude-code` and `meridian`.
 
 ### Fixed
 
@@ -14,18 +31,28 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   polled the same plan twice and could show two rows.
 - A `claude-code` session now shows the Anthropic limits with no setup. The
   Anthropic poll uses the proxy quota route of the `anthropic` provider, else
-  Pi's `anthropic` login, else Claude Code's own login file. The file is read
-  again at each poll and never refreshed. Before, `claude-code` had no
-  reading, and the `usage` tool listed it in `limitsUnavailable`.
-- The `usage` tool, Usage Guard warnings and `maxWindowPct` read the family's
-  limits for a model of any member. `limitsUnavailable` and
-  `dollars.providers` are keyed by the family id, so `claude-code` spend
-  counts under `anthropic`. A zero-cost listing of one member is not
-  `unmetered` when its family has a priced model.
-- A quota failure of a subagent skips the fallback models of the whole
-  family; a credentials failure skips only its own provider. Rate-limit
-  Recovery cooldowns, `cacheCompaction.idleSeconds` and
-  `linkContext.hostGuardExempt` also apply to the whole family.
+  Pi's `anthropic` OAuth login, else Claude Code's own credentials file. The
+  file is read again at each poll and never refreshed. A file over 64 KiB, or
+  a token that expires within one minute, counts as no login. The usage
+  request does not follow redirects. Before, `claude-code` had no reading, and
+  the `usage` tool listed it in `limitsUnavailable`.
+- A family shows the limits of one account, the first in that poll order.
+- A per-token API key is not on the plan. An `openai` API key, or an
+  `anthropic` API key in Pi, gets no plan windows, no plan warnings and no
+  plan cooldown, and its spend shows on its own footer row.
+- Usage Guard warnings and `maxWindowPct` read the family's limits for a model
+  of any member. A zero-cost model is not `unmetered` when another provider of
+  its family has a priced model. A free model next to priced models of its own
+  provider, such as an OpenRouter `:free` model, stays `unmetered`.
+- `cacheCompaction.idleSeconds` uses a provider's own value, else its family's.
+
+### Upgrade notes
+
+- Status Plus no longer reads an old `status-plus-limits/openai.json`. The
+  Codex plan is shared in `openai-codex.json`. Until every Pi process has
+  reloaded, an old process can poll the Codex plan one more time.
+- The keys of Usage Guard notices for `openai` changed, so one old notice can
+  show again one time.
 
 ## 0.34.7 - 2026-10-29
 
