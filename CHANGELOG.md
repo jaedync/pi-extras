@@ -45,6 +45,8 @@ These changes alter output and behavior that you may rely on:
   its family has a priced model. A free model next to priced models of its own
   provider, such as an OpenRouter `:free` model, stays `unmetered`.
 - `cacheCompaction.idleSeconds` uses a provider's own value, else its family's.
+- Subagents: a message that resumes a finished subagent shows "resumed", not
+  "resumed it".
 
 ### Upgrade notes
 
