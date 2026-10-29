@@ -6,6 +6,7 @@
  */
 import type { LimitSnapshot } from "../limit-store.ts";
 import { entryApplies, entryKind, missingReason, NO_READING_REASON } from "../usage-guard-core.ts";
+import { providerFamily } from "../provider-family.ts";
 
 export interface WindowReading {
 	/** The provider and the window, as `anthropic 7d`. */
@@ -16,13 +17,15 @@ export interface WindowReading {
 /** The reading for `model`, or why there is none (a provider with no usage source, or no reading yet). */
 export type WindowLookup = { reading: WindowReading } | { why: string };
 
+/** A model of any member of a family reads the family's reading, named by the family id. */
 export function windowReading(get: (provider: string) => LimitSnapshot | undefined, model: string, now: number = Date.now()): WindowLookup {
 	const slash = model.indexOf("/");
-	const provider = slash > 0 ? model.slice(0, slash) : model;
+	const member = slash > 0 ? model.slice(0, slash) : model;
+	const provider = providerFamily(member);
 	const id = slash > 0 ? model.slice(slash + 1) : model;
 	const snapshot = get(provider);
 	if (!snapshot) {
-		const why = missingReason(provider);
+		const why = missingReason(member);
 		return { why: why === NO_READING_REASON ? `${provider} has no usage reading yet; the limit acts once Status Plus polls one.` : why };
 	}
 	const windows = snapshot.entries.filter((entry) => entryKind(entry) === "window" && entryApplies(entry, { provider, id }) && (entry.usedPct !== undefined || entry.exhausted === true)

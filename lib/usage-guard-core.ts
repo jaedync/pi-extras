@@ -7,6 +7,7 @@ import type { LimitSnapshot } from "./limit-store.ts";
 import { formatDuration, quotaKeyParts, quotaLabel, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
 import { localTime } from "./usage-time.ts";
 import { LIMIT_POLLERS } from "./status-plus-limits.ts";
+import { familyMembers, providerFamily, sameFamily } from "./provider-family.ts";
 import { paceText, usagePace, type UsagePace } from "./usage-pace.ts";
 import { dollarsSummary, entryDollars, type DollarInputs, type DollarsSummary, type EntryDollars } from "./usage-dollars/core.ts";
 export { localTime } from "./usage-time.ts";
@@ -54,6 +55,19 @@ export function isUnmetered(cost: Partial<Record<(typeof PRICE_KEYS)[number], nu
 	const prices = PRICE_KEYS.map((key) => cost?.[key]).filter((price) => price !== undefined);
 	return prices.length > 0 && prices.every((price) => price === 0);
 }
+
+type Priced = { provider: string; cost?: Parameters<typeof isUnmetered>[0] };
+
+/** Families with a model the catalog prices; one with no price listed counts as priced, as in isUnmetered. */
+export function pricedFamilies(models: Iterable<Priced>): Set<string> {
+	const priced = new Set<string>();
+	for (const model of models) if (!isUnmetered(model.cost)) priced.add(providerFamily(model.provider));
+	return priced;
+}
+
+/** Zero token cost, and no model of its family priced: a zero-cost claude-code listing still bills the Anthropic plan. */
+export const unmeteredModel = (model: Priced, priced: ReadonlySet<string>): boolean =>
+	isUnmetered(model.cost) && !priced.has(providerFamily(model.provider));
 
 export type WarningReason = "band" | "budget" | "exhausted";
 
@@ -151,7 +165,8 @@ export function warningApplies(details: unknown, model: ActiveModel, now?: numbe
 	if (now !== undefined && resetMs !== undefined && now >= resetMs) return false;
 	const parts = noticeParts(record, record.key);
 	const modelFamily = typeof record.modelFamily === "string" ? record.modelFamily : quotaKeyParts(parts.window).family;
-	if (!model.provider || parts.provider !== model.provider) return false;
+	// Notices name the family whose reading fired them; an older one may name a member.
+	if (!sameFamily(parts.provider, model.provider)) return false;
 	const current = snapshot?.entries.find((entry) => (entry.key ?? entry.label) === parts.window);
 	// Keep raw history, but do not carry a disproved block or a void threshold into another model request.
 	if (record.reason === "exhausted" && current?.exhausted === false) return false;
@@ -222,7 +237,7 @@ function activeWindows(
 	const result: Array<{ provider: string; entry: LimitEntry }> = [];
 	if (!model.provider) return result;
 	for (const [provider, snapshot] of snapshots) {
-		if (provider !== model.provider) continue;
+		if (!sameFamily(provider, model.provider)) continue;
 		for (const entry of snapshot.entries) {
 			if (entryKind(entry) !== "window" || entry.usedPct === undefined) continue;
 			if (!entryApplies(entry, model)) continue;
@@ -474,7 +489,7 @@ function reportLimitFigures(
 	timeZone?: string,
 ): UsageReportLimit {
 	const kind = entryKind(entry);
-	const applies = provider === model.provider && entryApplies(entry, model);
+	const applies = sameFamily(provider, model.provider) && entryApplies(entry, model);
 	const pct = entry.usedPct;
 	const passed = entry.resetMs !== undefined && entry.resetMs <= now;
 	const status = passed ? "reset" : entry.exhausted ? "exhausted" : entry.allowed === true && pct !== undefined && pct >= 100 ? "full-but-allowed" : "ok";
@@ -511,26 +526,31 @@ export const NO_READING_REASON = "No reading yet: the poll is pending, failed, o
 /** Sign in with ChatGPT reports no usage itself; an openai-codex login reads the same plan (status-plus-limits.ts). */
 export const OPENAI_METER_REASON = "Sign in with ChatGPT reports no usage. Its ChatGPT plan windows show only when an openai-codex login is also present (/login openai-codex), and only for an OAuth openai login, not an API key.";
 
-/** Why a provider that can be polled may still have no reading, when that is not just a pending poll. */
+/** Why a provider that can be polled may still have no reading, when that is not just a pending poll. A Pi login decision, so by provider id. */
 const PROVIDER_REASONS: Readonly<Record<string, string>> = { openai: OPENAI_METER_REASON };
 
+/** Whether the provider's family has a usage poller (status-plus-limits.ts). */
+const polled = (provider: string): boolean => Object.hasOwn(LIMIT_POLLERS, providerFamily(provider));
+
 export const missingReason = (provider: string): string =>
-	PROVIDER_REASONS[provider] ?? (Object.hasOwn(LIMIT_POLLERS, provider) ? NO_READING_REASON : NO_ENDPOINT_REASON);
+	PROVIDER_REASONS[provider] ?? (polled(provider) ? NO_READING_REASON : NO_ENDPOINT_REASON);
 
 /**
- * Paid providers in scope that have no limit snapshot, with the reason. A
- * provider whose scoped models are all unmetered is left out: it has no limit.
+ * Paid provider families in scope that have no limit snapshot, by family id,
+ * with the most specific reason of their members in scope. A provider whose
+ * scoped models are all unmetered is left out: it has no limit.
  */
 export function unavailableLimits(
 	models: ReadonlyArray<{ provider: string; unmetered?: boolean }>,
 	snapshots: Iterable<[string, LimitSnapshot]>,
 ): Record<string, string> {
-	const known = new Set([...snapshots].map(([provider]) => provider));
+	const known = new Set([...snapshots].map(([provider]) => providerFamily(provider)));
 	const metered = new Set(models.filter((model) => !model.unmetered).map((model) => model.provider));
 	const result: Record<string, string> = {};
-	for (const provider of [...metered].sort()) {
-		if (known.has(provider)) continue;
-		result[provider] = missingReason(provider);
+	for (const family of [...new Set([...metered].map((provider) => providerFamily(provider)))].sort()) {
+		if (known.has(family)) continue;
+		const member = familyMembers(family).find((provider) => metered.has(provider) && Object.hasOwn(PROVIDER_REASONS, provider));
+		result[family] = missingReason(member ?? family);
 	}
 	return result;
 }
@@ -553,7 +573,7 @@ function reportNotes(
 	} else if (!sawActiveProvider) {
 		notes.push(model.provider && Object.hasOwn(PROVIDER_REASONS, model.provider)
 			? `No usage data yet for ${provider}. ${PROVIDER_REASONS[model.provider]}`
-			: model.provider && !Object.hasOwn(LIMIT_POLLERS, model.provider)
+			: model.provider && !polled(model.provider)
 			? `No usage data yet for ${provider}. It has no usage endpoint to poll, so limits come only from response headers after its next request.`
 			: `No usage data yet for ${provider}; call again with refresh: true after a request has been made.`);
 	} else if (!ownWindows) {
@@ -594,7 +614,7 @@ export function usageReport(
 	const snapshotAgeSeconds: Record<string, number> = {};
 	let sawActiveProvider = false;
 	for (const [provider, snapshot] of snapshots) {
-		const active = provider === model.provider;
+		const active = sameFamily(provider, model.provider);
 		if (active) sawActiveProvider = true;
 		if (!active && !includeAll) continue;
 		snapshotAgeSeconds[provider] = Math.max(0, Math.round((now - snapshot.atMs) / 1000));

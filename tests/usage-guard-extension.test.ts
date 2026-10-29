@@ -425,8 +425,9 @@ test("all: true with no scoped models reads every model with credentials and nam
 	const report = JSON.parse((await pi.tool!.execute("t1", { all: true }, undefined, undefined, unscoped)).content[0].text);
 	assert.deepEqual(refreshed.sort(), ["openai", "opencode-go"]);
 	assert.match(report.limitsUnavailable["opencode-go"], /No reading yet/);
-	assert.deepEqual(Object.keys(report.limitsUnavailable), ["openai", "opencode-go"]);
-	assert.match(report.limitsUnavailable.openai, /\/login openai-codex/);
+	// openai reads the Codex plan, so its family's id names the missing reading.
+	assert.deepEqual(Object.keys(report.limitsUnavailable), ["openai-codex", "opencode-go"]);
+	assert.match(report.limitsUnavailable["openai-codex"], /\/login openai-codex/);
 	assert.match(report.limitsUnavailable["opencode-go"], /No reading yet/);
 	assert.deepEqual(report.unmeteredModels, ["fw01/local"]);
 	assert.ok(report.notes.some((note: string) => /limitsUnavailable/.test(note)));

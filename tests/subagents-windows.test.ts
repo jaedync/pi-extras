@@ -25,7 +25,9 @@ test("the reading is the fullest window that governs the model; a model-family w
 	assert.ok("why" in glm && /reports no usage windows for glm-5\.3/.test(glm.why));
 	const stale = new Map([["anthropic", snap([{ label: "5h", usedPct: 95, resetMs: 1_000 }, { label: "7d", usedPct: 40, resetMs: 9_000 }])]]);
 	assert.deepEqual(windowReading((provider) => stale.get(provider), "anthropic/claude-opus-5-5", 2_000), { reading: { label: "anthropic 7d", pct: 40 } }, "a window past its reset is stale");
-	const openai = windowReading(get, "openai/gpt-6.1-sol");
+	// openai is of the Codex family: it reads the family's plan, and says why when there is no reading.
+	assert.deepEqual(windowReading(get, "openai/gpt-6.1-sol"), { reading: { label: "openai-codex 5h", pct: 100 } });
+	const openai = windowReading(() => undefined, "openai/gpt-6.1-sol");
 	assert.ok("why" in openai && /Sign in with ChatGPT reports no usage/.test(openai.why), "openai says why");
 });
 
