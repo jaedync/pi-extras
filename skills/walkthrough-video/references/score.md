@@ -75,8 +75,11 @@ refuses without it and says `wv setup --music`. A score with only synth voices n
 
 ## The music kit (optional, one install)
 
-`wv setup --music` installs the kit into `$WV_MUSIC_KIT` (default above). It needs git, cmake
-and a C++ compiler, about 3 GB of free space while it works, and about 5 minutes on 16 cores.
+`wv setup --music` installs the kit into `$WV_MUSIC_KIT` (default above). It needs git,
+cmake 3.16 or later, a C compiler, a C++ compiler, and make or ninja (ninja when it is on
+PATH). It needs about 3 GB of free space while it works, and about 5 minutes on 16 cores.
+It runs each tool before it downloads anything, and its refusal names the install command
+for apt, dnf, pacman and macOS.
 It downloads three pinned sources and builds one binary:
 
 | Source | Pin | Download | Licence |
