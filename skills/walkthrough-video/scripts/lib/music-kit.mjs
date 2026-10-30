@@ -15,6 +15,10 @@ import { findOnPath, run } from "./proc.mjs";
 const PY_DIR = fileURLToPath(new URL("../py/", import.meta.url));
 const GB = 1024 ** 3;
 
+/** One progress line at a time. @typedef {(line: string) => void} Log */
+/** A smoke render's result for one SFZ file. @typedef {{name: string, ok: boolean, peak?: number, detail: string}} SmokeItem */
+/** @typedef {(dir: string) => Promise<SmokeItem[]>} Smoke */
+
 /** What the kit renders at, and what the smoke render expects back. */
 export const MUSIC_KIT_SAMPLE_RATE = 48000;
 /** The kits' sources: commits, licences and the measured size of the checkout. */
@@ -158,6 +162,7 @@ export function musicKitCheckLine(kit = paths().musicKit) {
 /**
  * Reads and tests the kit: each part, its commit from kit.json, and a smoke
  * render of every SFZ. `smoke` is injected so the unit tests never run a binary.
+ * @param {{kit?: string, smoke?: Smoke, log?: Log}} [options]
  */
 export async function checkMusicKit({ kit = paths().musicKit, smoke = (dir) => smokeKit(dir), log = () => {} } = {}) {
 	const p = kitPaths(kit);
@@ -325,6 +330,7 @@ export async function smokeKit(kit = paths().musicKit) {
 /**
  * The real steps behind installMusicKit, so the unit tests can replace any of
  * them: a fetch, the sfizz build, the map writers, the smoke render.
+ * @param {{log?: Log, env?: NodeJS.ProcessEnv}} [options]
  */
 export function kitDeps({ log = () => {}, env = process.env } = {}) {
 	return {
@@ -359,7 +365,12 @@ async function git(args, cwd, timeoutMs) {
 	return result;
 }
 
-/** Fetches one source at its pinned commit; a sparse source downloads only its folders. */
+/**
+ * Fetches one source at its pinned commit; a sparse source downloads only its folders.
+ * @param {any} source
+ * @param {string} dir
+ * @param {Log} [log]
+ */
 export async function fetchSource(source, dir, log = () => {}) {
 	mkdirSync(dir, { recursive: true });
 	log(`${source.name} ${short(source.commit)}: ${source.url}`);
@@ -375,7 +386,12 @@ export async function fetchSource(source, dir, log = () => {}) {
 	if (source.submodules) await git(["submodule", "update", "--init", "--recursive", "--depth", "1"], dir, 30 * 60_000);
 }
 
-/** Builds sfizz_render only: no JACK, LV2, VST, demos or tests. */
+/**
+ * Builds sfizz_render only: no JACK, LV2, VST, demos or tests.
+ * @param {string} src
+ * @param {string} binPath
+ * @param {Log} [log]
+ */
 export async function buildSfizz(src, binPath, log = () => {}) {
 	const build = join(src, "build");
 	log("building sfizz_render with cmake (Release; no JACK, LV2, VST or tests)");
@@ -410,7 +426,13 @@ function findBuilt(dir, name, depth = 4) {
 	return null;
 }
 
-/** Writes the drum kit and mallet maps from the VCSL samples (py/make_vcsl_sfz.py). */
+/**
+ * Writes the drum kit and mallet maps from the VCSL samples (py/make_vcsl_sfz.py).
+ * @param {string} vcslDir
+ * @param {string} out
+ * @param {string} python
+ * @param {Log} [log]
+ */
 async function generateMaps(vcslDir, out, python, log = () => {}) {
 	log("writing kit.sfz, marimba.sfz and glock.sfz");
 	const result = await run(python, [join(PY_DIR, "make_vcsl_sfz.py"), "--src", vcslDir, "--out", out], { timeoutMs: 10 * 60_000 });
@@ -418,7 +440,12 @@ async function generateMaps(vcslDir, out, python, log = () => {}) {
 	for (const file of ["kit.sfz", "marimba.sfz", "glock.sfz"]) if (!existsSync(join(out, file))) throw new Error(`the SFZ map step wrote no ${file} in ${out}`);
 }
 
-/** Trims the leading silence of the piano samples, so a piano hit lands on its frame. */
+/**
+ * Trims the leading silence of the piano samples, so a piano hit lands on its frame.
+ * @param {string} folder
+ * @param {string} python
+ * @param {Log} [log]
+ */
 async function trimSamples(folder, python, log = () => {}) {
 	log(`trimming the leading silence of ${folder}`);
 	const result = await run(python, [join(PY_DIR, "trim_samples.py"), folder, "--threshold-db", "-66", "--max-ms", "15"], { timeoutMs: 10 * 60_000 });
@@ -474,6 +501,7 @@ function replaceKit(staging, kit) {
 /**
  * Installs the kit. Nothing downloads when the kit already passes the check;
  * nothing is moved into place when a step fails, so a half kit never stays.
+ * @param {{kit?: string, log?: Log, deps?: any}} [options]
  */
 export async function installMusicKit({ kit = paths().musicKit, log = () => {}, deps = {} } = {}) {
 	const d = { ...kitDeps({ log }), ...deps };

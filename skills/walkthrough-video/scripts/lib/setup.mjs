@@ -89,6 +89,7 @@ function venvHasPackages(python) {
 /**
  * A venv that can import `modules`, created or repaired with uv and these pinned
  * packages. The voice and the music kit share it, so one install serves both.
+ * @param {{python: string, venv: string, packages: string[], modules: string[], log?: (line: string) => void}} options
  */
 export async function ensurePythonVenv({ python, venv, packages, modules, log = () => {} }) {
 	const uv = findOnPath("uv");
@@ -115,14 +116,14 @@ export async function downloadModel(url, dest, sha) {
 	const out = createWriteStream(part, { mode: 0o600 });
 	const finished = new Promise((resolve, reject) => {
 		out.on("error", reject);
-		out.on("finish", resolve);
+		out.on("finish", () => resolve(undefined));
 	});
 	try {
 		const response = await fetch(url, { signal: AbortSignal.timeout(10 * 60_000) });
 		if (!response.ok || !response.body) throw new Error(`HTTP ${response.status} for ${url}`);
 		for await (const chunk of response.body) {
 			digest.update(chunk);
-			if (!out.write(chunk)) await Promise.race([new Promise((resolve) => out.once("drain", resolve)), finished]);
+			if (!out.write(chunk)) await Promise.race([new Promise((resolve) => out.once("drain", () => resolve(undefined))), finished]);
 		}
 		out.end();
 		await finished;
@@ -158,7 +159,10 @@ function ffmpegStatus() {
 	return { ok: true, path, version: version.stdout.split("\n")[0] };
 }
 
-/** Reads what is installed, without changing anything. */
+/**
+ * Reads what is installed, without changing anything.
+ * @param {(line: string) => void} [log]
+ */
 export async function checkSetup(log = () => {}) {
 	const p = paths();
 	const chromium = await importPlaywrightForCheck(p);
@@ -197,16 +201,15 @@ async function importPlaywrightForCheck(p) {
 }
 
 /** Installs or repairs the runtime. Returns the same report shape as checkSetup. */
-function installNodePackages(root, p, log) {
+async function installNodePackages(root, p, log) {
 	const wanted = { name: "pi-walkthrough-video", private: true, type: "module", dependencies: { "playwright-core": PLAYWRIGHT_CORE, hyperframes: HYPERFRAMES, gsap: GSAP, typescript: TYPESCRIPT } };
 	const onDisk = existsSync(p.packageJson) ? JSON.parse(readFileSync(p.packageJson, "utf8")) : null;
 	if (JSON.stringify(onDisk?.dependencies) !== JSON.stringify(wanted.dependencies)) writeFileSync(p.packageJson, `${JSON.stringify(wanted, null, 2)}\n`, { mode: 0o600 });
 	if (hasModule(root, "playwright-core", PLAYWRIGHT_CORE) && hasModule(root, "hyperframes", HYPERFRAMES) && hasModule(root, "gsap", GSAP) && hasModule(root, "typescript", TYPESCRIPT)) return;
 	log("installing playwright-core, hyperframes, gsap and typescript from npm (this can take a minute)");
 	const npm = findOnPath("npm") ?? "npm";
-	return run(npm, ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: root, env: { ...process.env, PATH: pathWithNode(), npm_config_update_notifier: "false" }, timeoutMs: 15 * 60_000 }).then((result) => {
-		if (result.code !== 0) throw new Error(`npm install failed in ${root}: ${(result.stderr || result.stdout).trim().split("\n").slice(-3).join(" ")}`);
-	});
+	const result = await run(npm, ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: root, env: { ...process.env, PATH: pathWithNode(), npm_config_update_notifier: "false" }, timeoutMs: 15 * 60_000 });
+	if (result.code !== 0) throw new Error(`npm install failed in ${root}: ${(result.stderr || result.stdout).trim().split("\n").slice(-3).join(" ")}`);
 }
 
 async function installBrowsers(p, log) {
@@ -268,7 +271,10 @@ async function installVoice(p, log) {
 	if (!venvHasPackages(p.python)) throw new Error("the voice venv cannot import kokoro_onnx after install; run wv setup again and read the uv output.");
 }
 
-/** Installs or repairs the runtime. Returns the same report shape as checkSetup. */
+/**
+ * Installs or repairs the runtime. Returns the same report shape as checkSetup.
+ * @param {(line: string) => void} [log]
+ */
 export async function installSetup(log = () => {}) {
 	const root = ensureHome();
 	const p = paths();
