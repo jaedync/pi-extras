@@ -5,7 +5,7 @@
  * fork; the timeout tests run real processes that hold their pipes open.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -96,6 +96,35 @@ test("a failed ps is unknown, never matching: no signal goes to a reused pid", a
 	assert.deepEqual(signals, [], "a failed ps sends no signal");
 	assert.deepEqual(result.survivors, [], "a failed ps leaves no known survivor");
 	assert.deepEqual(result.unresolved, live, "a failed ps is unknown, so the pid is reported as unresolved");
+});
+
+test("a pid that is gone is an empty answer from ps, not a failed read", () => {
+	// ps exits 1 with no output and no message when no listed pid exists (procps and macOS).
+	// Read as unknown, it made every stop on macOS wait out its whole deadline.
+	const reader = psReader({ exec: () => ({ status: 1, stdout: "", stderr: "" }) });
+	assert.deepEqual(reader.alive([{ pid: 120, start: "Fri Oct 30 00:00:00 2026" }]), []);
+	assert.equal(reader.start(120), undefined);
+	// A message is a real failure, so the state stays unknown.
+	const broken = psReader({ exec: () => ({ status: 1, stdout: "", stderr: "ps: illegal option -- o\n" }) });
+	assert.equal(broken.alive([{ pid: 120, start: "Fri Oct 30 00:00:00 2026" }]), null);
+	assert.equal(broken.table(), null);
+});
+
+const hasPs = spawnSync("ps", ["-p", String(process.pid), "-o", "pid="], { encoding: "utf8" }).status === 0;
+
+test("the ps reader stops a real child without waiting out the deadline", { skip: !hasPs && "no ps on this host", timeout: 20000 }, async () => {
+	const child = spawn("sleep", ["30"], { stdio: "ignore" });
+	await new Promise((resolve) => child.once("spawn", resolve));
+	const reader = psReader();
+	const start = reader.start(child.pid);
+	assert.ok(start, "ps reads the start time of a live child");
+	const began = Date.now();
+	const result = await stopTrees([{ entries: [{ pid: child.pid, start }] }], { reader, graceMs: 4000, killMs: 2000 });
+	const took = Date.now() - began;
+	assert.ok(took < 2000, `the stop took ${took} ms: a gone pid was read as unknown`);
+	assert.deepEqual(result.unresolved, []);
+	assert.deepEqual(result.survivors, []);
+	assert.equal(result.lastSignal, "SIGTERM");
 });
 
 test("the ps reader takes the tree and the start times from one ps call", () => {

@@ -77,7 +77,11 @@ export function psReader({ exec = (args) => spawnSync("ps", args, { encoding: "u
 	const ps = (args) => {
 		const result = exec(args);
 		const status = result?.status ?? (typeof result === "string" ? 0 : 1);
-		return status === 0 && typeof result?.stdout === "string" ? result.stdout : null;
+		if (status === 0 && typeof result?.stdout === "string") return result.stdout;
+		// No listed pid exists: ps exits 1 with no output and no message (procps and macOS).
+		// That is an empty answer; read as unknown, every stop waited out its deadline.
+		if (status === 1 && result?.stdout === "" && result?.stderr === "") return "";
+		return null;
 	};
 	return {
 		start(pid) {
