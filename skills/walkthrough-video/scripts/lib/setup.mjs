@@ -76,13 +76,20 @@ function hasModule(root, name, version) {
 	return packageVersion(join(root, "node_modules", name)) === version;
 }
 
-function venvHasModules(python, modules) {
+/**
+ * The venv's import check, through the tracked runner: a stop cancels it with
+ * the other children, and the event loop keeps running while it waits.
+ * @param {string} python
+ * @param {string[]} modules
+ * @param {{timeoutMs?: number}} [options]
+ */
+export async function venvHasModules(python, modules, { timeoutMs = 60000 } = {}) {
 	if (!existsSync(python)) return false;
-	const probe = spawnSync(python, ["-c", `import ${modules.join(", ")}; print('ok')`], { encoding: "utf8", timeout: 60000 });
-	return probe.status === 0;
+	const probe = await run(python, ["-c", `import ${modules.join(", ")}; print('ok')`], { timeoutMs });
+	return probe.code === 0;
 }
 
-function venvHasPackages(python) {
+async function venvHasPackages(python) {
 	return venvHasModules(python, ["kokoro_onnx", "soundfile", "numpy", "cv2", "scipy", "mido", "pedalboard"]);
 }
 
@@ -99,13 +106,13 @@ export async function ensurePythonVenv({ python, venv, packages, modules, log = 
 		const created = await run(uv, ["venv", venv], { env: { ...process.env, UV_NO_PROGRESS: "1" }, timeoutMs: 5 * 60_000 });
 		if (created.code !== 0) throw new Error(`uv venv failed: ${(created.stderr || created.stdout).trim()}`);
 	}
-	if (!venvHasModules(python, modules)) {
+	if (!(await venvHasModules(python, modules))) {
 		if (!uv) throw new Error("uv is not on PATH, so the Python packages cannot be installed.");
 		log(`installing ${packages.map((spec) => String(spec).split("==")[0]).join(", ")}`);
 		const result = await run(uv, ["pip", "install", "--python", python, ...packages], { env: { ...process.env, UV_NO_PROGRESS: "1" }, timeoutMs: 20 * 60_000 });
 		if (result.code !== 0) throw new Error(`uv pip install failed: ${(result.stderr || result.stdout).trim().split("\n").slice(-3).join(" ")}`);
 	}
-	if (!venvHasModules(python, modules)) throw new Error(`the venv cannot import ${modules.join(", ")} after install; run the command again and read the uv output.`);
+	if (!(await venvHasModules(python, modules))) throw new Error(`the venv cannot import ${modules.join(", ")} after install; run the command again and read the uv output.`);
 	return python;
 }
 
@@ -176,7 +183,7 @@ export async function checkSetup(log = () => {}) {
 	const browser = browserPaths(chromium);
 	items.push({ name: "chromium-headless-shell", ok: Boolean(browser.shell), detail: browser.shell ?? "not installed" });
 	items.push({ name: "chromium", ok: Boolean(browser.chromium), detail: browser.chromium ?? "not installed" });
-	items.push({ name: "python venv (voice, measures)", ok: venvHasPackages(p.python), detail: existsSync(p.python) ? p.python : "not created" });
+	items.push({ name: "python venv (voice, measures)", ok: await venvHasPackages(p.python), detail: existsSync(p.python) ? p.python : "not created" });
 	// The music kit is optional: a missing kit never makes `wv setup --check` fail.
 	const kit = musicKitStatus(p.musicKit);
 	items.push({ name: "music kit (optional)", ok: kit.present, optional: true, detail: kit.present ? kit.detail : `${kit.detail}; ${kit.hint}` });
@@ -262,13 +269,13 @@ async function installVoice(p, log) {
 		const created = await run(uv, ["venv", p.venv], { env: { ...process.env, UV_NO_PROGRESS: "1" }, timeoutMs: 5 * 60_000 });
 		if (created.code !== 0) throw new Error(`uv venv failed: ${(created.stderr || created.stdout).trim()}`);
 	}
-	if (!venvHasPackages(p.python)) {
+	if (!(await venvHasPackages(p.python))) {
 		if (!uv) throw new Error("uv is not on PATH, so the voice packages cannot be installed.");
 		log(`installing ${pythonPackageNames().join(", ")}`);
 		const result = await run(uv, ["pip", "install", "--python", p.python, ...KOKORO_PACKAGES, ...FILM_PY_PACKAGES, ...SCORE_PY_PACKAGES], { env: { ...process.env, UV_NO_PROGRESS: "1" }, timeoutMs: 20 * 60_000 });
 		if (result.code !== 0) throw new Error(`uv pip install failed: ${(result.stderr || result.stdout).trim().split("\n").slice(-3).join(" ")}`);
 	}
-	if (!venvHasPackages(p.python)) throw new Error("the voice venv cannot import kokoro_onnx after install; run wv setup again and read the uv output.");
+	if (!(await venvHasPackages(p.python))) throw new Error("the voice venv cannot import kokoro_onnx after install; run wv setup again and read the uv output.");
 }
 
 /**

@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -34,6 +34,7 @@ import {
 import { parseCommandLine, usageText } from "../skills/walkthrough-video/scripts/lib/args.mjs";
 import { KIT_PY_PACKAGES, paths } from "../skills/walkthrough-video/scripts/lib/paths.mjs";
 import { scoreNeedsKit } from "../skills/walkthrough-video/scripts/film/sound.mjs";
+import { venvHasModules } from "../skills/walkthrough-video/scripts/lib/setup.mjs";
 
 const SKILL = fileURLToPath(new URL("../skills/walkthrough-video/", import.meta.url));
 const WV = join(SKILL, "scripts/wv.mjs");
@@ -401,6 +402,37 @@ test("the check refuses a kit.json whose pin is not the pinned commit", async ()
 		const item = report.items.find((one) => one.name === "pins");
 		assert.match(item.detail, /sfizz/);
 		assert.match(item.detail, /0000000/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the venv probe waits through the tracked runner, so the event loop keeps running", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-probe-"));
+	try {
+		const python = join(root, "python");
+		writeFileSync(python, "#!/bin/sh\nsleep 0.3\nexit 0\n");
+		chmodSync(python, 0o755);
+		let ticks = 0;
+		const timer = setInterval(() => (ticks += 1), 20);
+		const ok = await venvHasModules(python, ["numpy"]);
+		clearInterval(timer);
+		assert.equal(ok, true);
+		assert.ok(ticks > 2, `the event loop ran during the probe (${ticks} ticks)`);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a venv probe that hangs times out and reports no", { timeout: 20000 }, async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-probe-"));
+	try {
+		const python = join(root, "python");
+		writeFileSync(python, "#!/bin/sh\nsleep 30\n");
+		chmodSync(python, 0o755);
+		const started = Date.now();
+		assert.equal(await venvHasModules(python, ["numpy"], { timeoutMs: 700 }), false);
+		assert.ok(Date.now() - started < 15000, `the probe gave up (${Date.now() - started} ms)`);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
