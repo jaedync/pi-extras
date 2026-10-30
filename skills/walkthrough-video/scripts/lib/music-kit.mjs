@@ -95,24 +95,73 @@ export function formatBytes(bytes) {
 
 const short = (commit) => (commit ? String(commit).slice(0, 7) : null);
 
-/** The build tools the kit needs, each with the fix for the host. */
-export function kitTools(env = process.env) {
-	const git = findOnPath("git", env);
-	const cmake = findOnPath("cmake", env);
-	const compiler = env.CXX || findOnPath("c++", env) || findOnPath("g++", env) || findOnPath("clang++", env);
+/** The install command for each build tool, on every host that wv supports. */
+const TOOL_FIX = {
+	git: "install git (Debian or Ubuntu: sudo apt install git; Fedora: sudo dnf install git; Arch: sudo pacman -S git; macOS: xcode-select --install)",
+	cmake: "install cmake 3.16 or later (Debian or Ubuntu: sudo apt install cmake; Fedora: sudo dnf install cmake; Arch: sudo pacman -S cmake; macOS: brew install cmake, or see https://cmake.org/download/)",
+	compiler: "install a C and a C++ compiler (Debian or Ubuntu: sudo apt install build-essential; Fedora: sudo dnf install gcc gcc-c++; Arch: sudo pacman -S gcc; macOS: xcode-select --install)",
+	make: "install make (Debian or Ubuntu: sudo apt install build-essential; Fedora: sudo dnf install make; Arch: sudo pacman -S base-devel; macOS: xcode-select --install)",
+	ninja: "install ninja (Debian or Ubuntu: sudo apt install ninja-build; Fedora: sudo dnf install ninja-build; Arch: sudo pacman -S ninja; macOS: brew install ninja)",
+};
+
+/** The generator that cmake will use, so the check and the build agree. */
+export function buildGenerator(env = process.env) {
+	const ninja = findOnPath("ninja", env);
+	if (ninja) return { name: "Ninja", path: ninja };
+	const make = findOnPath("make", env);
+	return make ? { name: "Unix Makefiles", path: make } : null;
+}
+
+/** Runs a tool, because a file that exists may not start. */
+async function probeTool(command, args, env = process.env, timeoutMs = 15000) {
+	if (!command) return { ok: false, detail: "not on PATH" };
+	try {
+		const result = await run(command, args, { env, timeoutMs });
+		const text = `${result.stdout}\n${result.stderr}`.trim();
+		if (result.code !== 0) return { ok: false, detail: `cannot run (exit ${result.code ?? result.signal ?? "?"})` };
+		return { ok: true, detail: text.split("\n")[0] ?? "" };
+	} catch (error) {
+		return { ok: false, detail: `cannot run (${(error?.message ?? error).split("\n")[0]})` };
+	}
+}
+
+/** The build tools the kit needs, each with the fix for the host. Every tool is run. */
+export async function kitTools(env = process.env) {
+	const gitPath = findOnPath("git", env);
+	const cmakePath = findOnPath("cmake", env);
+	const ccPath = env.CC || findOnPath("cc", env) || findOnPath("gcc", env) || findOnPath("clang", env);
+	const cxxPath = env.CXX || findOnPath("c++", env) || findOnPath("g++", env) || findOnPath("clang++", env);
+	const generator = buildGenerator(env);
+	const [git, cmake, cc, cxx, gen] = await Promise.all([
+		probeTool(gitPath, ["--version"], env),
+		probeTool(cmakePath, ["--version"], env),
+		probeTool(ccPath, ["--version"], env),
+		probeTool(cxxPath, ["--version"], env),
+		probeTool(generator?.path, ["--version"], env),
+	]);
+	// CMake 3.16 is the oldest that the pinned sfizz build supports.
+	const version = cmake.ok ? cmake.detail.match(/cmake version (\d+)\.(\d+)/) : null;
+	const cmakeOk = cmake.ok && Boolean(version) && (Number(version[1]) > 3 || (Number(version[1]) === 3 && Number(version[2]) >= 16));
 	const items = [
-		{ name: "git", path: git, ok: Boolean(git), fix: "install git with your package manager (on Arch: pacman -S git; on macOS: xcode-select --install)" },
-		{ name: "cmake", path: cmake, ok: Boolean(cmake), fix: "install cmake 3.16 or later (on Arch: pacman -S cmake; on macOS: brew install cmake)" },
-		{ name: "c++ compiler", path: compiler, ok: Boolean(compiler), fix: "install a C++ compiler (on Arch: pacman -S gcc; on macOS: xcode-select --install)" },
+		{ name: "git", path: gitPath, ok: git.ok, detail: git.detail, fix: TOOL_FIX.git },
+		{ name: "cmake", path: cmakePath, ok: cmakeOk, detail: cmakeOk ? cmake.detail : version ? `${cmake.detail}, needs 3.16 or later` : cmake.detail, fix: TOOL_FIX.cmake },
+		{ name: "c compiler", path: ccPath, ok: cc.ok, detail: cc.detail, fix: TOOL_FIX.compiler },
+		{ name: "c++ compiler", path: cxxPath, ok: cxx.ok, detail: cxx.detail, fix: TOOL_FIX.compiler },
+		{ name: "make or ninja", path: generator?.path, ok: gen.ok, detail: gen.ok ? `${generator.name}: ${gen.detail}` : gen.detail, fix: TOOL_FIX[ninjaFix(env)] },
 	];
-	return { ok: items.every((item) => item.ok), items };
+	return { ok: items.every((item) => item.ok), items, generator: gen.ok ? generator : null };
+}
+
+/** The fix for the generator that is missing: ninja when it was the choice, else make. */
+function ninjaFix(env) {
+	return findOnPath("ninja", env) ? "ninja" : "make";
 }
 
 /** Why the kit cannot start on this host, or null. Names every missing tool and its fix. */
 export function toolRefusal(tools) {
 	const missing = tools.items.filter((item) => !item.ok);
 	if (missing.length === 0) return null;
-	return `the music kit needs git, cmake and a C++ compiler to build the sampler. Missing: ${missing.map((item) => `${item.name} (${item.fix})`).join("; ")}. Install them, then run wv setup --music again.`;
+	return `the music kit needs git, cmake 3.16 or later, a C and a C++ compiler, and make or ninja to build the sampler. Missing: ${missing.map((item) => `${item.name} (${item.fix})`).join("; ")}. Install them, then run wv setup --music again.`;
 }
 
 export function readManifest(file) {
@@ -444,7 +493,11 @@ export async function fetchSource(source, dir, log = () => {}) {
 export async function buildSfizz(src, binPath, log = () => {}) {
 	const build = join(src, "build");
 	log("building sfizz_render with cmake (Release; no JACK, LV2, VST or tests)");
-	const configure = await run("cmake", ["-S", src, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DSFIZZ_JACK=OFF", "-DSFIZZ_TESTS=OFF", "-DSFIZZ_DEMOS=OFF", "-DSFIZZ_DEVTOOLS=OFF", "-DSFIZZ_BENCHMARKS=OFF", "-DSFIZZ_RENDER=ON", "-DSFIZZ_SHARED=OFF"], { timeoutMs: 10 * 60_000 });
+	const generator = buildGenerator();
+	const configureArgs = ["-S", src, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DSFIZZ_JACK=OFF", "-DSFIZZ_TESTS=OFF", "-DSFIZZ_DEMOS=OFF", "-DSFIZZ_DEVTOOLS=OFF", "-DSFIZZ_BENCHMARKS=OFF", "-DSFIZZ_RENDER=ON", "-DSFIZZ_SHARED=OFF"];
+	// Ninja when it is there: the same generator that kitTools checked, so the check and the build agree.
+	if (generator?.name === "Ninja") configureArgs.push("-G", "Ninja");
+	const configure = await run("cmake", configureArgs, { timeoutMs: 10 * 60_000 });
 	if (configure.code !== 0) throw new Error(`cmake configure failed: ${(configure.stderr || configure.stdout).trim().split("\n").slice(-3).join(" ")}`);
 	const jobs = String(Math.max(1, Math.min(16, cpus().length)));
 	const built = await run("cmake", ["--build", build, "--target", "sfizz_render", "-j", jobs], { timeoutMs: 60 * 60_000 });

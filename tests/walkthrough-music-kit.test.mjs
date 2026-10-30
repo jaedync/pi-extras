@@ -176,15 +176,15 @@ test("the VCSL fetch names every folder the maps read, and no folder the maps do
 	assert.ok(!folders.some((folder) => folder.includes("Vibraphone")), "a folder no map reads must not be downloaded");
 });
 
-test("kitTools names each missing tool with the fix, and passes a full PATH", () => {
-	const empty = kitTools({ PATH: join(tmpdir(), "no-such-bin-dir") });
+test("kitTools names each missing tool with the fix, and passes a full PATH", async () => {
+	const empty = await kitTools({ PATH: join(tmpdir(), "no-such-bin-dir") });
 	assert.equal(empty.ok, false);
-	assert.deepEqual(empty.items.map((item) => item.name), ["git", "cmake", "c++ compiler"]);
+	assert.deepEqual(empty.items.map((item) => item.name), ["git", "cmake", "c compiler", "c++ compiler", "make or ninja"]);
 	for (const item of empty.items) {
 		assert.equal(item.ok, false);
 		assert.match(item.fix, /install/i, `${item.name} has a fix`);
 	}
-	const found = kitTools({ PATH: process.env.PATH, CXX: undefined });
+	const found = await kitTools({ PATH: process.env.PATH, CC: undefined, CXX: undefined });
 	assert.equal(found.ok, true, found.items.filter((item) => !item.ok).map((item) => item.name).join(", "));
 });
 
@@ -433,6 +433,51 @@ test("a venv probe that hangs times out and reports no", { timeout: 20000 }, asy
 		const started = Date.now();
 		assert.equal(await venvHasModules(python, ["numpy"], { timeoutMs: 700 }), false);
 		assert.ok(Date.now() - started < 15000, `the probe gave up (${Date.now() - started} ms)`);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("kitTools runs each tool: a file that cannot run is not a tool", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-tools-"));
+	try {
+		const dir = join(root, "bin");
+		mkdirSync(dir);
+		// The reviewer's case: files that exist, but cannot run.
+		writeFileSync(join(dir, "git"), "#!/bin/sh\nexit 1\n", { mode: 0o644 });
+		writeFileSync(join(dir, "cmake"), "#!/bin/sh\nexit 1\n", { mode: 0o644 });
+		const tools = await kitTools({ PATH: dir, CC: join(root, "no-cc"), CXX: join(root, "no-cxx") });
+		assert.equal(tools.ok, false);
+		const byName = Object.fromEntries(tools.items.map((item) => [item.name, item]));
+		for (const name of ["git", "cmake", "c compiler", "c++ compiler", "make or ninja"]) assert.equal(byName[name].ok, false, name);
+		assert.match(byName.git.detail, /cannot run|not on PATH/);
+		assert.match(byName.cmake.detail, /cannot run|not on PATH/);
+		for (const item of tools.items) {
+			assert.match(item.fix, /apt/, `${item.name} names apt`);
+			assert.match(item.fix, /dnf/, `${item.name} names dnf`);
+			assert.match(item.fix, /pacman/, `${item.name} names pacman`);
+			assert.match(item.fix, /xcode-select|brew|cmake\.org/, `${item.name} names the macOS fix`);
+		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("kitTools refuses a cmake older than 3.16, and passes a host with every tool", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-tools-"));
+	try {
+		const dir = join(root, "bin");
+		mkdirSync(dir);
+		writeFileSync(join(dir, "cmake"), "#!/bin/sh\necho 'cmake version 3.10.2'\nexit 0\n", { mode: 0o755 });
+		const old = await kitTools({ PATH: `${dir}:${process.env.PATH}`, CC: "/bin/true", CXX: "/bin/true" });
+		const cmake = old.items.find((item) => item.name === "cmake");
+		assert.equal(cmake.ok, false);
+		assert.match(cmake.detail, /3\.10\.2/);
+		assert.match(cmake.detail, /3\.16/);
+
+		const real = await kitTools({ PATH: process.env.PATH, CC: undefined, CXX: undefined });
+		assert.equal(real.ok, true, real.items.filter((item) => !item.ok).map((item) => `${item.name}: ${item.detail}`).join("; "));
+		assert.ok(["Ninja", "Unix Makefiles"].includes(real.generator?.name), "the check names the build generator");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
