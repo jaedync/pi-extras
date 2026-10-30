@@ -532,3 +532,51 @@ await smokeKit(${JSON.stringify(kit)}).catch(() => {});
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("SIGTERM during a music kit install removes its staging folder and its lock", { timeout: 30000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "wv-install-stop-"));
+	try {
+		const kit = join(dir, "music-kit");
+		const worker = join(dir, "worker.mjs");
+		writeFileSync(
+			worker,
+			`import { installMusicKit } from ${JSON.stringify(join(SKILL, "lib", "music-kit.mjs"))};
+import { sleep } from ${JSON.stringify(join(SKILL, "lib", "proc.mjs"))};
+import { installSignalHandlers } from ${JSON.stringify(join(SKILL, "lib", "signals.mjs"))};
+installSignalHandlers();
+const deps = {
+	tools: async () => ({ ok: true, items: [], generator: null }),
+	freeBytes: () => 8 * 1024 ** 3,
+	python: async () => "/py",
+	fetch: async (source) => ({ head: source.commit, submodules: [] }),
+	build: async () => { process.stdout.write("building\\n"); await sleep(60000); },
+	generate: async () => {},
+	trim: async () => {},
+	smoke: async () => [],
+};
+await installMusicKit({ kit: ${JSON.stringify(kit)}, log: () => {}, deps }).catch((error) => process.stdout.write("failed " + error.message + "\\n"));
+`,
+		);
+		const watcher = spawn(process.execPath, [worker], { stdio: ["ignore", "pipe", "pipe"] });
+		const exited = new Promise((resolve) => watcher.on("exit", (value) => resolve(value)));
+		let stderr = "";
+		let building = false;
+		watcher.stdout.on("data", (chunk) => {
+			if (String(chunk).includes("building")) building = true;
+		});
+		watcher.stderr.on("data", (chunk) => (stderr += chunk));
+		await waitFor(() => building, 10000, "the install reached its build step");
+		const staging = readdirSync(dir).filter((name) => name.startsWith(".music-kit.staging-"));
+		assert.equal(staging.length, 1, `the install has one staging folder: ${staging.join(", ")}`);
+		assert.equal(existsSync(`${kit}.lock`), true, "the install holds its lock");
+		watcher.kill("SIGTERM");
+		const code = await exited;
+		assert.equal(code, 143, stderr);
+		await sleep(300);
+		assert.equal(existsSync(`${kit}.lock`), false, "the stop released the lock");
+		assert.deepEqual(readdirSync(dir).filter((name) => name.startsWith(".music-kit.staging-")), [], "the stop removed this run's staging folder");
+		assert.equal(existsSync(kit), false, "a stopped install leaves no kit");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

@@ -11,6 +11,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { paths } from "./paths.mjs";
 import { assertNotStopping, findOnPath, run } from "./proc.mjs";
+import { onSignalCleanup } from "./signals.mjs";
 
 const PY_DIR = fileURLToPath(new URL("../py/", import.meta.url));
 const GB = 1024 ** 3;
@@ -688,7 +689,8 @@ function acquireKitLock(kit, log = () => {}) {
 		try {
 			mkdirSync(lock, { mode: 0o700 });
 			writeFileSync(join(lock, "owner"), `${process.pid}\n`);
-			return { path: lock, release: () => rmSync(lock, { recursive: true, force: true }) };
+			// A lock that another install has taken over is not ours to remove.
+			return { path: lock, release: () => { if (readLockOwner(lock) === process.pid) rmSync(lock, { recursive: true, force: true }); } };
 		} catch (error) {
 			if (error?.code !== "EEXIST") throw error;
 			const owner = readLockOwner(lock);
@@ -702,6 +704,40 @@ function acquireKitLock(kit, log = () => {}) {
 		}
 	}
 	throw new Error(`cannot lock ${lock}: another process keeps recreating it. Remove that folder, then run wv setup --music again.`);
+}
+
+/** The prefix that proves a staging folder belongs to this kit and this run. */
+function stagingPrefix(kit) {
+	return `.music-kit.staging-${basename(kit)}-${process.pid}-`;
+}
+
+/**
+ * Removes a staging folder that a killed install left behind: SIGKILL runs no
+ * cleanup. The name carries the kit and the owner pid, so wv removes only a
+ * folder of this kit whose owner is provably gone, and it runs under the lock.
+ * @param {string} kit
+ * @param {Log} [log]
+ */
+function removeStaleStaging(kit, log = () => {}) {
+	const parent = dirname(kit);
+	const escaped = basename(kit).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const pattern = new RegExp(`^\\.music-kit\\.staging-${escaped}-(\\d+)-[A-Za-z0-9]{6}$`);
+	let names = [];
+	try {
+		names = readdirSync(parent);
+	} catch {
+		return;
+	}
+	for (const name of names) {
+		const match = pattern.exec(name);
+		if (!match) continue;
+		const pid = Number(match[1]);
+		// Alive or unknown: not ours to remove.
+		if (processAlive(pid)) continue;
+		const path = join(parent, name);
+		rmSync(path, { recursive: true, force: true });
+		log(`music kit: removed a leftover staging folder ${path} (pid ${pid} is gone)`);
+	}
 }
 
 /**
@@ -725,14 +761,22 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 	const lock = acquireKitLock(kit, log);
 	/** Only the folder this run made is ever removed. */
 	let staging = null;
+	// A signal runs no finally: the staging folder and this run's lock must go anyway.
+	const stopCleanup = onSignalCleanup(() => {
+		if (staging) rmSync(staging, { recursive: true, force: true });
+		lock.release();
+	}, "the music kit staging folder");
 	try {
+		// Under the lock: a leftover from a killed run of this kit can go before the download.
+		removeStaleStaging(kit, log);
 		const free = d.freeBytes(dirname(kit));
 		if (free < MUSIC_KIT_NEED_BYTES) throw new Error(`the music kit needs ${formatBytes(MUSIC_KIT_NEED_BYTES)} free at ${dirname(kit)} and only ${formatBytes(free)} is free. Free some space, then run wv setup --music again.`);
 		log(`music kit: ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} to download, ${formatBytes(MUSIC_KIT_NEED_BYTES)} of space needed, ${formatBytes(free)} free, at ${kit}`);
 
 		const python = await d.python();
 		// Unique per run and in the kit's parent, so the last rename stays on one filesystem.
-		staging = mkdtempSync(join(dirname(kit), ".music-kit.staging-"));
+		// The name carries the kit and this pid, so a later run can prove a leftover is ours.
+		staging = mkdtempSync(join(dirname(kit), stagingPrefix(kit)));
 		log(`1/5 sfizz ${short(MUSIC_KIT_PINS.sfizz.commit)} (${formatBytes(MUSIC_KIT_PINS.sfizz.bytes)} with its submodules)`);
 		const sfizzSrc = join(staging, "sources", "sfizz");
 		const verified = { sfizz: await d.fetch(MUSIC_KIT_PINS.sfizz, sfizzSrc) };
@@ -766,8 +810,12 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		replaceKit(staging, kit);
 		staging = null;
 	} finally {
-		if (staging) rmSync(staging, { recursive: true, force: true });
-		lock.release();
+		try {
+			if (staging) rmSync(staging, { recursive: true, force: true });
+			lock.release();
+		} finally {
+			stopCleanup();
+		}
 	}
 	log(`music kit: installed at ${kit}`);
 	if (MUSIC_KIT_PINS.salamander) log(`music kit: a published film that uses the piano carries "${MUSIC_KIT_ATTRIBUTION}"`);

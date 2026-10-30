@@ -503,6 +503,33 @@ test("a fresh lock with no owner yet is not taken over, because another install 
 	}
 });
 
+test("the next install removes a leftover staging folder of this kit only when its owner is gone", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
+	try {
+		const kit = join(root, "music-kit");
+		const dead = join(root, ".music-kit.staging-music-kit-2147483647-abc123");
+		const live = join(root, `.music-kit.staging-music-kit-${process.pid}-def456`);
+		const other = join(root, ".music-kit.staging-other-kit-2147483647-ghi789");
+		const unknown = join(root, ".music-kit.staging-music-kit-abc-xyz");
+		for (const dir of [dead, live, other, unknown]) {
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(join(dir, "mine"), "x");
+		}
+		const log = [];
+		const report = await installMusicKit({ kit, log: (line) => log.push(line), deps: fakeDeps([]) });
+		assert.equal(report.ok, true, report.missing.join(", "));
+		assert.equal(existsSync(dead), false, "a dead owner's staging folder is removed");
+		assert.equal(existsSync(live), true, "a live owner's staging folder is kept");
+		assert.equal(existsSync(other), true, "another kit's staging folder is kept");
+		assert.equal(existsSync(unknown), true, "a folder whose owner is unknown is kept");
+		const gone = log.filter((line) => line.includes(dead));
+		assert.equal(gone.length, 1, "the removal is logged with the path");
+		assert.match(gone[0], /leftover staging folder/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("a failed step leaves the old kit in place and removes the staging folder", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
