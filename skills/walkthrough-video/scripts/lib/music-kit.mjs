@@ -14,6 +14,8 @@ import { assertNotStopping, findOnPath, run } from "./proc.mjs";
 
 const PY_DIR = fileURLToPath(new URL("../py/", import.meta.url));
 const GB = 1024 ** 3;
+/** How long a lock with no owner file is trusted to belong to a live install. */
+const LOCK_GRACE_MS = 5000;
 
 /** One progress line at a time. @typedef {(line: string) => void} Log */
 /** A smoke render's result for one SFZ file. @typedef {{name: string, ok: boolean, peak?: number, detail: string}} SmokeItem */
@@ -664,6 +666,15 @@ function readLockOwner(lock) {
 	}
 }
 
+/** A lock with no owner yet may be one that another install made a moment ago. */
+function lockIsFresh(lock) {
+	try {
+		return Date.now() - statSync(lock).mtimeMs < LOCK_GRACE_MS;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * One install at a time per kit. The lock is a folder next to the kit with the
  * owner's pid inside: an install that a kill left behind is taken over, and a
@@ -684,6 +695,8 @@ function acquireKitLock(kit, log = () => {}) {
 			if (owner !== null && processAlive(owner)) {
 				throw new Error(`another wv setup --music is installing the kit (pid ${owner}, lock ${lock}). Wait for that install to finish, or remove that folder if the process is gone.`);
 			}
+			// Between mkdir and the owner file there is no pid to read: do not take a live lock.
+			if (owner === null && lockIsFresh(lock)) throw new Error(`another wv setup --music is starting (lock ${lock}). Wait a moment, then run the command again.`);
 			log(`music kit: taking over the lock of pid ${owner ?? "unknown"}, which is gone`);
 			rmSync(lock, { recursive: true, force: true });
 		}

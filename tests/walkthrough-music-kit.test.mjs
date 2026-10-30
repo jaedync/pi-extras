@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -480,6 +480,24 @@ test("kitTools refuses a cmake older than 3.16, and passes a host with every too
 		const real = await kitTools({ PATH: process.env.PATH, CC: undefined, CXX: undefined });
 		assert.equal(real.ok, true, real.items.filter((item) => !item.ok).map((item) => `${item.name}: ${item.detail}`).join("; "));
 		assert.ok(["Ninja", "Unix Makefiles"].includes(real.generator?.name), "the check names the build generator");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a fresh lock with no owner yet is not taken over, because another install is writing it", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
+	try {
+		const kit = join(root, "music-kit");
+		mkdirSync(`${kit}.lock`, { recursive: true });
+		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) }), /is starting|another wv setup --music/);
+		// An old lock with no owner is left by a crash between the folder and the owner file: take it.
+		const old = (Date.now() - 60_000) / 1000;
+		utimesSync(`${kit}.lock`, old, old);
+		const log = [];
+		const report = await installMusicKit({ kit, log: (line) => log.push(line), deps: fakeDeps([]) });
+		assert.equal(report.ok, true, report.missing.join(", "));
+		assert.match(log.join("\n"), /taking over the lock of pid unknown/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
