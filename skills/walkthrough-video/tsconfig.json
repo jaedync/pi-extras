@@ -1,0 +1,18 @@
+{
+	"compilerOptions": {
+		"allowJs": true,
+		"checkJs": true,
+		"noEmit": true,
+		"strict": false,
+		"target": "es2023",
+		"lib": ["es2023", "dom"],
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"types": ["node"],
+		"skipLibCheck": true,
+		
+		"noImplicitReturns": true,
+		"noFallthroughCasesInSwitch": true
+	},
+	"include": ["scripts/film/*.mjs", "scripts/lib/vclock.mjs"]
+}

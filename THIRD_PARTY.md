@@ -30,6 +30,25 @@ https://github.com/AnswerDotAI/gh-social-preview (ISC, Jeremy Howard), whose
 renewal of the saved session after each upload is followed here too. The due
 check, rendering, confirmation and session file handling here are new.
 
+# Walkthrough video runtime packages
+
+The `walkthrough-video` skill bundles none of these. `wv setup` installs pinned
+versions into `~/.cache/pi-walkthrough-video` on first use, each under its own
+license: `hyperframes` (Apache-2.0, HeyGen), `playwright-core` (Apache-2.0,
+Microsoft), `gsap` (GreenSock standard no-charge license, not an OSI license),
+`typescript` (Apache-2.0, Microsoft) for the film project's type check,
+`kokoro-onnx` (MIT), `onnxruntime` (MIT), `numpy` (BSD-3-Clause), `soundfile`
+(BSD-3-Clause), `scipy` (BSD-3-Clause), `mido` (MIT), `pedalboard` (GPL-3.0,
+Spotify: installed for the score kit, not linked into this package),
+`opencv-python-headless` (Apache-2.0) and the Kokoro-82M voice model
+(Apache-2.0). It also installs `chromium-headless-shell` and `chromium`
+(BSD-3-Clause plus its third-party notices, Google) for the browser.
+
+`wv compose` writes Google Fonts (SIL Open Font License 1.1) into the project
+page from the fonts it fetched at capture time; it copies no font files into
+this package. The composer writes HyperFrames projects; it copies no
+HyperFrames code.
+
 ## MIT License notice for the referenced implementations
 
 Copyright (c) 2026 Thomas Mustier

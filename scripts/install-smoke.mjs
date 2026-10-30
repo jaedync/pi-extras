@@ -69,7 +69,7 @@ try {
   assert.ok(!prompts.includes('deeper'), 'the be-ambitious skill replaced /deeper');
   assert.deepEqual(loader.getPrompts().diagnostics, []);
   // HOME is a scratch folder, so the package is the only skill source.
-  assert.deepEqual(loader.getSkills().skills.map(skill => skill.name), ['be-ambitious']);
+  assert.deepEqual(loader.getSkills().skills.map(skill => skill.name), ['be-ambitious', 'walkthrough-video']);
   assert.deepEqual(loader.getSkills().diagnostics, []);
   const tools = extensions.extensions.flatMap(ext => [...ext.tools.keys()]);
   assert.ok(tools.includes('kagi_search'));

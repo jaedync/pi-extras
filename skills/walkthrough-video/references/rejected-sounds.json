@@ -1,0 +1,11 @@
+{
+ "why": "The owner rejected these sounds (taste.md section 9, 2026-10-29): a stock UI confirmation chime on the big moment sounds bad.",
+ "names": ["reveal-0*.wav"],
+ "sha256": [
+  "8d8a5eb5b097a48f7651f978efdc7e53ca38848718f4026daa5fee12c3e8ffdb",
+  "9a3e36dcf68dde17648dbc134447366f1dc16e95c12b04ff862ef7584b76a998",
+  "800cfe877ee432f8986b4285d9d7385813f42cf084ece5a776a8f6d6aa07fe05",
+  "6a5b52341df22f558209735a8746debd04bb8f33ca4786785ae5a161aebafa85"
+ ],
+ "sources": ["Kenney Interface Sounds confirmation_001 to confirmation_004 (CC0), as reveal-01.wav to reveal-04.wav"]
+}

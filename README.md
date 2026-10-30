@@ -19,7 +19,7 @@ pi install git:github.com/jaedync/pi-extras
 ```
 
 Restart Pi after installation. Use `pi config` to select extensions. Installing
-adds all nineteen extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the skill `be-ambitious` and the prompt templates `/higher` and `/wider`.
+adds all nineteen extensions (quota hibernation, computer use and auto-update stay off until you opt in); it makes `quiet` available but does not select it. It also adds the skills `be-ambitious` and `walkthrough-video` and the prompt templates `/higher` and `/wider`.
 Choose the theme using `/settings`. Use only one custom footer at a time.
 Phase Spinner wraps an existing editor where possible; other editor extensions
 can still conflict.
@@ -47,6 +47,7 @@ can still conflict.
 | Auto-update | Opt-in: Pi and your unpinned packages update by themselves. Each new set is tested before use, and running sessions move to it when they are idle; `/pi-extras update` |
 | Quiet | Low-contrast theme with restrained accent colors |
 | Be Ambitious | Skill: the model plans the deeper version of a task that a field-leading expert would do (raw material, expert instruments, a hard target, a check from outside the model), shows it and waits for your approval, then does the work at that depth. It also looks at the goal behind the task and at methods from other fields. The model loads it for open tasks by itself; `/skill:be-ambitious [task]` starts it. From Felix Rieseberg's [How to be more ambitious](https://felixrieseberg.com/how-to-be-more-ambitious-a-tutorial-for-humans-with-models/) |
+| Walkthrough Video | Skill: the model makes a launch film or a walkthrough of a web app. It captures the real app frame by frame and logs each action, plans a storyboard with the product's own look, then builds the shots, camera moves, cursor, captions, sound and an optional local voiceover (Kokoro). It renders with [HyperFrames](https://github.com/heygen-com/hyperframes) and checks the result with 12 measured gates (framing, text size, captions over controls, dead time, camera churn, smoothness, voice fit, blank frames, sound level and more) before delivery. Runs locally after one `node skills/walkthrough-video/scripts/wv.mjs setup`; the tool never loads a script or a package from the network at render time |
 | Prompts | `/higher` and `/wider [task]`: before work starts, the model plans the outcome behind the task, or the other fields that can improve it. Then it shows a new prompt and waits for your approval |
 
 ## Updates and removal

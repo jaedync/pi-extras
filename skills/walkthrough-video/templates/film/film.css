@@ -1,0 +1,39 @@
+/*
+ * The film's own styles, on top of brand/brand.css (the app's tokens and
+ * fonts from wv lift). The film owns time: no CSS transitions or animations.
+ */
+*, *::before, *::after { transition: none !important; animation: none !important; box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--wv-ground, #111); }
+body { font-family: var(--wv-font-body, system-ui, sans-serif); -webkit-font-smoothing: antialiased; }
+
+.shot { position: absolute; inset: 0; display: none; overflow: hidden; }
+.cam { position: absolute; inset: 0; transform-origin: 50% 50%; }
+.ui { position: absolute; left: 50%; top: 50%; transform-origin: 50% 50%; }
+
+/* Grounds: the brand ground for claims, the app surface for product. The alternation is a visual beat. */
+.ground-brand { background: var(--wv-ground, #111); }
+.ground-surface { background: var(--bg, var(--surface, #fafafa)); }
+
+/* Claims: the display face, large enough for a phone (a 1080p frame at phone width is about 1/3 scale). */
+.claim { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); margin: 0; text-align: center;
+	font-family: var(--wv-font-display, system-ui, sans-serif); font-weight: var(--wv-font-display-weight, 800);
+	font-size: 132px; line-height: 1.05; letter-spacing: -0.02em; color: var(--wv-ink, #fff); padding: 0 120px; }
+.wm { display: inline-block; overflow: hidden; vertical-align: bottom; padding-bottom: 0.08em; }
+.wi { display: inline-block; }
+.dot { display: inline-block; width: 0.2em; height: 0.2em; margin-left: 0.06em; border-radius: 50%; background: var(--wv-accent, #f60);
+	box-shadow: 0 0 0.25em var(--wv-accent, #f60); vertical-align: baseline; }
+
+/* The example product card. Replace with the app's markup and app.css classes. */
+.card { width: 420px; padding: 22px 24px; border-radius: 14px; background: var(--surface, #fff); color: var(--text, #222);
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08); font-size: 16px; }
+.card-title { font-family: var(--wv-font-display, system-ui); font-weight: var(--wv-font-display-weight, 800); font-size: 20px; margin-bottom: 12px; }
+.card-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid rgba(0, 0, 0, 0.06); }
+.pip { width: 10px; height: 10px; border-radius: 50%; background: var(--wv-accent, #f60); }
+
+.footage { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+.endcard { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--wv-ink, #fff); }
+.wordmark { font-family: var(--wv-font-display, system-ui); font-weight: var(--wv-font-display-weight, 800); font-size: 168px; letter-spacing: -0.02em; line-height: 1; }
+.tagline { margin-top: 28px; font-size: 52px; color: var(--wv-ink-2, var(--wv-ink, #ddd)); }
+.url { margin-top: 36px; font-size: 40px; color: var(--wv-ink-3, var(--wv-ink-2, #bbb)); letter-spacing: 0.02em; }
+.fade { position: absolute; inset: 0; background: var(--wv-ground, #000); opacity: 0; }

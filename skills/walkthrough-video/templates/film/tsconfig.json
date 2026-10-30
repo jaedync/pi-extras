@@ -1,0 +1,17 @@
+{
+	"compilerOptions": {
+		"strict": true,
+		"noEmit": true,
+		"target": "es2023",
+		"lib": ["es2023", "dom", "dom.iterable"],
+		"module": "preserve",
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
+		"verbatimModuleSyntax": true,
+		"skipLibCheck": true,
+		"noUnusedLocals": true,
+		"types": []
+	},
+	"include": ["**/*.ts"],
+	"exclude": ["out"]
+}
