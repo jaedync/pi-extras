@@ -55,10 +55,7 @@ sample, so a hit lands on its frame, and plays the samples in a score that the
 film's author composes. A published film that uses the piano must carry this
 line in full, because the licence asks for the licence link and the changes:
 
-    Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0
-    (https://creativecommons.org/licenses/by/3.0/). Source:
-    https://github.com/sfzinstruments/SalamanderGrandPiano. Changes: leading
-    silence trimmed; used as samples in a composed score.
+    Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/). Source: https://github.com/sfzinstruments/SalamanderGrandPiano. Changes: leading silence trimmed; used as samples in a composed score.
 
 `wv compose` writes Google Fonts (SIL Open Font License 1.1) into the project
 page from the fonts it fetched at capture time; it copies no font files into
