@@ -336,8 +336,11 @@ export async function smokeKit(kit = paths().musicKit) {
 export function kitDeps({ log = () => {}, env = process.env } = {}) {
 	return {
 		tools: () => kitTools(env),
+		// The cache root may not exist yet: ask the filesystem that holds it.
 		freeBytes: (dir) => {
-			const stat = statfsSync(dir);
+			let probe = dir;
+			while (!existsSync(probe) && dirname(probe) !== probe) probe = dirname(probe);
+			const stat = statfsSync(probe);
 			return stat.bavail * stat.bsize;
 		},
 		python: () => kitPython(log),
@@ -487,6 +490,7 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 
 	const refusal = toolRefusal(d.tools());
 	if (refusal) throw new Error(refusal);
+	mkdirSync(dirname(kit), { recursive: true, mode: 0o700 });
 	const free = d.freeBytes(dirname(kit));
 	if (free < MUSIC_KIT_NEED_BYTES) throw new Error(`the music kit needs ${formatBytes(MUSIC_KIT_NEED_BYTES)} free at ${dirname(kit)} and only ${formatBytes(free)} is free. Free some space, then run wv setup --music again.`);
 	log(`music kit: ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} to download, ${formatBytes(MUSIC_KIT_NEED_BYTES)} of space needed, ${formatBytes(free)} free, at ${kit}`);

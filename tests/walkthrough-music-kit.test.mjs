@@ -18,6 +18,7 @@ import {
 	MUSIC_KIT_SAMPLE_RATE,
 	checkMusicKit,
 	installMusicKit,
+	kitDeps,
 	kitPaths,
 	kitTools,
 	musicKitCheckLine,
@@ -151,6 +152,11 @@ test("kitTools names each missing tool with the fix, and passes a full PATH", ()
 	}
 	const found = kitTools({ PATH: process.env.PATH, CXX: undefined });
 	assert.equal(found.ok, true, found.items.filter((item) => !item.ok).map((item) => item.name).join(", "));
+});
+
+test("the free-space check reads the filesystem above a cache root that does not exist", () => {
+	const bytes = kitDeps({}).freeBytes(join(tmpdir(), "wv-no-such-cache-dir", "pi-walkthrough-video"));
+	assert.ok(bytes > 1024 ** 3, `a real filesystem reports its free space, got ${bytes}`);
 });
 
 test("a missing tool or too little disk refuses before anything is downloaded", async () => {
