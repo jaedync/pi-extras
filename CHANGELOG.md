@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.38.1 - 2026-10-30
+
+### Fixed
+
+- UI Redline: `redline setup --check` uses the same search as the audit. It
+  now finds a walkthrough-video install, and it names the install that it
+  found. Before, it said "not installed" on a host where the audit ran, so
+  an agent could download Chromium again for no reason.
+
 ## 0.38.0 - 2026-10-30
 
 ### Added
