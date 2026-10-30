@@ -11,7 +11,7 @@ import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { paths } from "./paths.mjs";
-import { assertNotStopping, findOnPath, run } from "./proc.mjs";
+import { assertNotStopping, findOnPath, isStopping, run } from "./proc.mjs";
 import { onSignalCleanup } from "./signals.mjs";
 
 const PY_DIR = fileURLToPath(new URL("../py/", import.meta.url));
@@ -784,16 +784,21 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		// The cloned sources are build input only; the kit keeps the samples and the licences.
 		rmSync(join(staging, "sources"), { recursive: true, force: true });
 		writeManifest(staging, smoke, verified);
-		// Publication is one rename into a path that does not exist: wv never replaces a kit.
+		// A stop must never publish a half kit, and publication is one rename into a missing path.
+		assertNotStopping("the kit publication");
 		if (existsAt(kit)) throw new Error(replaceRefusal(kit, `a kit folder appeared at ${kit} while this install ran. `));
 		renameSync(staging, kit);
 		staging = null;
 	} finally {
-		try {
-			if (staging) rmSync(staging, { recursive: true, force: true });
-			lock.release();
-		} finally {
-			stopCleanup();
+		// During a stop the shutdown owns these: it runs the cleanup after the child trees are gone,
+		// so a descendant that ignores SIGTERM cannot see a missing staging folder or lock.
+		if (!isStopping()) {
+			try {
+				if (staging) rmSync(staging, { recursive: true, force: true });
+				lock.release();
+			} finally {
+				stopCleanup();
+			}
 		}
 	}
 	log(`music kit: installed at ${kit}`);

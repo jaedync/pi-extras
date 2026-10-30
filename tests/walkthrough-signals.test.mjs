@@ -631,3 +631,80 @@ try {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("a stop keeps the staging folder and the lock until the grandchild is gone", { timeout: 40000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "wv-install-tree-"));
+	try {
+		const kit = join(dir, "music-kit");
+		const samples = join(dir, "samples.txt");
+		const grandchild = join(dir, "grandchild.mjs");
+		writeFileSync(
+			grandchild,
+			`import { appendFileSync, existsSync } from "node:fs";
+process.on("SIGTERM", () => {});
+const sample = () => appendFileSync(process.env.SAMPLES, (existsSync(process.env.STAGING) ? 1 : 0) + " " + (existsSync(process.env.LOCK) ? 1 : 0) + "\\n");
+sample();
+setInterval(sample, 50);
+setTimeout(() => process.exit(0), 60000);
+`,
+		);
+		const child = join(dir, "child.mjs");
+		writeFileSync(
+			child,
+			`import { spawn } from "node:child_process";
+spawn(process.execPath, [process.env.GRANDCHILD], { stdio: "ignore" }).unref();
+setTimeout(() => {}, 60000);
+`,
+		);
+		const worker = join(dir, "worker.mjs");
+		writeFileSync(
+			worker,
+			`import { readdirSync } from "node:fs";
+import { installMusicKit } from ${JSON.stringify(join(SKILL, "lib", "music-kit.mjs"))};
+import { run } from ${JSON.stringify(join(SKILL, "lib", "proc.mjs"))};
+import { installSignalHandlers } from ${JSON.stringify(join(SKILL, "lib", "signals.mjs"))};
+installSignalHandlers();
+const deps = {
+	tools: async () => ({ ok: true, items: [], generator: null }),
+	freeBytes: () => 8 * 1024 ** 3,
+	python: async () => "/py",
+	fetch: async (source) => ({ head: source.commit, submodules: [] }),
+	build: async () => {
+		const staging = readdirSync(${JSON.stringify(dir)}).find((name) => name.startsWith(".music-kit.staging-music-kit-"));
+		process.stdout.write("building\\n");
+		await run(process.execPath, [${JSON.stringify(child)}], { timeoutMs: 120000, env: { ...process.env, STAGING: ${JSON.stringify(dir)} + "/" + staging, LOCK: ${JSON.stringify(kit)} + ".lock", SAMPLES: ${JSON.stringify(samples)}, GRANDCHILD: ${JSON.stringify(grandchild)} } });
+	},
+	generate: async () => {},
+	trim: async () => {},
+	smoke: async () => [],
+};
+try {
+	await installMusicKit({ kit: ${JSON.stringify(kit)}, log: () => {}, deps });
+} catch (error) {
+	process.stdout.write("stopped: " + error.name + "\\n");
+}
+`,
+		);
+		const watcher = spawn(process.execPath, [worker], { stdio: ["ignore", "pipe", "pipe"] });
+		const exited = new Promise((resolve) => watcher.on("exit", (value) => resolve(value)));
+		let stderr = "";
+		let building = false;
+		watcher.stdout.on("data", (chunk) => {
+			if (String(chunk).includes("building")) building = true;
+		});
+		watcher.stderr.on("data", (chunk) => (stderr += chunk));
+		await waitFor(() => building, 10000, "the install reached its build step");
+		await waitFor(() => existsSync(samples) && readFileSync(samples, "utf8").trim().length > 0, 10000, "the grandchild sampled once");
+		watcher.kill("SIGTERM");
+		const code = await exited;
+		assert.equal(code, 143, stderr);
+		const lines = readFileSync(samples, "utf8").trim().split("\n");
+		assert.ok(lines.length >= 2, `the grandchild sampled during the stop (${lines.length} lines)`);
+		assert.equal(lines[lines.length - 1], "1 1", `the last sample, while the grandchild ran, has the staging folder and the lock (${lines.slice(-3).join(" | ")})`);
+		assert.equal(existsSync(`${kit}.lock`), false, "the stop released the lock");
+		assert.deepEqual(readdirSync(dir).filter((name) => name.startsWith(".music-kit.staging-")), [], "the stop removed the staging folder");
+		assert.equal(existsSync(kit), false, "a stopped install publishes nothing");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
