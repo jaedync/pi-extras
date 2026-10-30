@@ -19,6 +19,7 @@ import {
 	MUSIC_KIT_NEED_BYTES,
 	MUSIC_KIT_PINS,
 	MUSIC_KIT_SAMPLE_RATE,
+	acquireKitLock,
 	checkMusicKit,
 	verifyCheckout,
 	installMusicKit,
@@ -354,6 +355,28 @@ test("publication reserves the target and removes only the empty folder that it 
 		let renamed = false;
 		assert.throws(() => publishKit(staging, join(root, "racing-kit"), { mkdir: () => { throw Object.assign(new Error("exists"), { code: "EEXIST" }); }, rename: () => { renamed = true; } }), /a kit folder appeared at /);
 		assert.equal(renamed, false, "no rename runs after a failed reservation");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a filesystem without hard links is refused with the fix, and the temp record is removed", () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-nolink-"));
+	try {
+		for (const code of ["EOPNOTSUPP", "ENOTSUP", "EPERM"]) {
+			const kit = join(root, `kit-${code}`);
+			const link = () => {
+				throw Object.assign(new Error(`link failed: ${code}`), { code });
+			};
+			assert.throws(() => acquireKitLock(kit, { link }), (error) => {
+				assert.match(error.message, /does not support hard links/);
+				assert.match(error.message, /WV_MUSIC_KIT/, "the refusal names the fix");
+				assert.match(error.message, /wv setup --music/);
+				return true;
+			});
+			assert.equal(existsSync(`${kit}.lock`), false, "no lock is made");
+			assert.deepEqual(readdirSync(root).filter((name) => name.startsWith(`${basename(kit)}.lock`)), [], "the temp record is gone");
+		}
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

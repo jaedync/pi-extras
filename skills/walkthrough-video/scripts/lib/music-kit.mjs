@@ -682,18 +682,21 @@ function lockRefusal(lock) {
  * a lock: a lock whose owner is gone needs one command from the user, and no
  * automatic recovery can delete the lock that another install just made.
  * @param {string} kit
+ * @param {{link?: (from: string, to: string) => void}} [steps]
  */
-function acquireKitLock(kit) {
+export function acquireKitLock(kit, { link = linkSync } = {}) {
 	const lock = `${kit}.lock`;
 	const token = randomUUID();
 	// Write the record first, then link it into place: a reader never sees an empty lock.
 	const temp = `${lock}.${process.pid}.${token}`;
 	writeFileSync(temp, `${JSON.stringify({ pid: process.pid, token, started: new Date().toISOString() })}\n`, { mode: 0o600, flag: "wx" });
 	try {
-		linkSync(temp, lock);
+		link(temp, lock);
 	} catch (error) {
-		if (error?.code !== "EEXIST") throw error;
-		throw new Error(lockRefusal(lock));
+		if (error?.code === "EEXIST") throw new Error(lockRefusal(lock));
+		// A filesystem that cannot make a hard link cannot make this lock.
+		if (["EOPNOTSUPP", "ENOTSUP", "EPERM"].includes(error?.code)) throw new Error("the kit folder's filesystem does not support hard links, which the install lock needs. Set WV_MUSIC_KIT to a folder on a local disk, then run wv setup --music again.");
+		throw error;
 	} finally {
 		rmSync(temp, { force: true });
 	}
