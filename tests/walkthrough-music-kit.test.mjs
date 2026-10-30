@@ -465,7 +465,8 @@ test("wv sound score refuses a sampled score without the kit, before it renders 
 const venv = paths().python;
 test("sc.py refuses a sampled part with the fix when the kit is missing", { skip: existsSync(venv) ? false : "the runtime venv is not installed (run wv setup)" }, () => {
 	const script = `import sys; sys.path.insert(0, ${JSON.stringify(join(SKILL, "scripts", "py", "score"))}); import sc; sc.sfz_render(sc.PIANO, [(0.5, 60, 100, 0.2)], ${JSON.stringify(join(tmpdir(), "wv-sc-kit.wav"))})`;
-	const result = spawnSync(venv, ["-c", script], { encoding: "utf8", env: { ...process.env, WV_MUSIC_KIT: join(tmpdir(), "no-such-music-kit") }, timeout: 60000 });
+	// -B: this import must not write __pycache__ into the shipped skill.
+	const result = spawnSync(venv, ["-B", "-c", script], { encoding: "utf8", env: { ...process.env, WV_MUSIC_KIT: join(tmpdir(), "no-such-music-kit") }, timeout: 60000 });
 	assert.equal(result.status, 1, result.stdout + result.stderr);
 	assert.match(result.stderr, /wv setup --music/);
 	assert.match(result.stderr, /sampled part/);
