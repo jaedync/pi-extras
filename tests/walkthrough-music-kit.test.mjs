@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -19,6 +19,7 @@ import {
 	MUSIC_KIT_PINS,
 	MUSIC_KIT_SAMPLE_RATE,
 	checkMusicKit,
+	replaceKit,
 	installMusicKit,
 	kitDeps,
 	kitPaths,
@@ -296,6 +297,58 @@ test("an old shared staging folder survives, and a stale lock is taken over", as
 	}
 });
 
+test("an install refuses to replace a kit that wv did not make, and keeps the user's files", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
+	try {
+		const kit = join(root, "music-kit");
+		mkdirSync(join(kit, "my-scores"), { recursive: true });
+		writeFileSync(join(kit, "my-scores", "theme.py"), "the owner's score");
+		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) }), (error) => {
+			assert.match(error.message, /was not installed by wv/);
+			assert.match(error.message, /mv /, "the refusal says how to move it aside");
+			assert.match(error.message, /WV_MUSIC_KIT=/, "the refusal names the override");
+			return true;
+		});
+		assert.equal(readFileSync(join(kit, "my-scores", "theme.py"), "utf8"), "the owner's score");
+		assert.equal(existsSync(join(root, ".music-kit.staging")), false, "this run's staging is gone");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a failed publication puts a managed kit back, and a symlink puts the link back", () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
+	try {
+		const staging = join(root, "staging");
+		mkdirSync(staging, { recursive: true });
+		writeFileSync(join(staging, "new.txt"), "the new kit");
+
+		const kit = join(root, "music-kit");
+		mkdirSync(kit, { recursive: true });
+		writeFileSync(join(kit, "kit.json"), '{ "version": 1 }\n');
+		writeFileSync(join(kit, "old.txt"), "the old kit");
+		let moved = 0;
+		assert.throws(() => replaceKit(staging, kit, { rename: (from, to) => { moved += 1; if (moved === 2) throw new Error("rename failed"); renameSync(from, to); } }), /rename failed/);
+		assert.equal(readFileSync(join(kit, "old.txt"), "utf8"), "the old kit", "the managed kit is back in place");
+
+		// A symlink root is moved aside as a link, not as its target.
+		const target = join(root, "hand-kit");
+		fakePassingKit(target);
+		writeFileSync(join(target, "kit.json"), '{ "version": 1 }\n');
+		const link = join(root, "link-kit");
+		symlinkSync(target, link, "dir");
+		const fresh = join(root, "staging-link");
+		mkdirSync(fresh, { recursive: true });
+		writeFileSync(join(fresh, "new.txt"), "the new kit");
+		moved = 0;
+		assert.throws(() => replaceKit(fresh, link, { rename: (from, to) => { moved += 1; if (moved === 2) throw new Error("rename failed"); renameSync(from, to); } }), /rename failed/);
+		assert.equal(lstatSync(link).isSymbolicLink(), true, "the link is restored as a link");
+		assert.equal(readFileSync(join(target, "kit.json"), "utf8"), '{ "version": 1 }\n', "the link's target was never moved");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("a failed step leaves the old kit in place and removes the staging folder", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
@@ -348,11 +401,12 @@ test("a passing install moves the staging folder into place and records the pins
 	}
 });
 
-test("an install replaces a kit whose samples folder is a broken symlink", async () => {
+test("an install replaces a managed kit whose samples folder is a broken symlink", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
 		const kit = join(root, "music-kit");
 		mkdirSync(kit, { recursive: true });
+		writeFileSync(join(kit, "kit.json"), '{ "version": 1 }\n');
 		symlinkSync(join(root, "gone"), join(kit, "samples"), "dir");
 		const report = await installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) });
 		assert.equal(report.ok, true, report.missing.join(", "));

@@ -476,25 +476,37 @@ function writeManifest(staging, smoke) {
 	writeFileSync(join(staging, "kit.json"), `${JSON.stringify(manifest, null, 1)}\n`);
 }
 
-/** Moves a passing staging folder into place, and keeps the old kit if the move fails. */
-function replaceKit(staging, kit) {
+/**
+ * Moves a passing staging folder into place. A root that wv did not make (no
+ * kit.json, for example a hand-built kit with the owner's own scores) is never
+ * replaced: the install refuses and names the two ways forward. A managed root
+ * and a symlink root are renamed aside first and put back if the move fails, so
+ * a failed publication cannot lose the kit the owner has.
+ * @param {string} staging
+ * @param {string} kit
+ * @param {{rename?: (from: string, to: string) => void, remove?: (path: string, options: any) => void}} [steps]
+ */
+export function replaceKit(staging, kit, { rename = renameSync, remove = rmSync } = {}) {
+	/** @type {import("node:fs").Stats | null} */
 	let entry = null;
 	try {
 		entry = lstatSync(kit);
 	} catch {
 		// No kit yet: nothing to move aside.
 	}
-	// A symlink (for example a link to a kit that moved) is removed, not moved aside.
-	if (entry?.isSymbolicLink()) rmSync(kit, { force: true });
-	const previous = entry && !entry.isSymbolicLink() ? `${kit}.previous-${process.pid}` : null;
-	if (previous) renameSync(kit, previous);
+	if (entry && !readManifest(join(kit, "kit.json"))) {
+		throw new Error(`the music kit folder ${kit} was not installed by wv, so wv will not replace it. Move that folder aside first (mv "${kit}" "${kit}.old"), or install the kit in another folder with WV_MUSIC_KIT=<folder>, then run wv setup --music again.`);
+	}
+	const previous = entry ? `${kit}.previous-${process.pid}` : null;
+	if (previous) rename(kit, previous);
 	try {
-		renameSync(staging, kit);
+		rename(staging, kit);
 	} catch (error) {
-		if (previous) renameSync(previous, kit);
+		if (previous) rename(previous, kit);
 		throw error;
 	}
-	if (previous) rmSync(previous, { recursive: true, force: true });
+	// The old copy goes only once the new kit is in place. A link is unlinked, never followed.
+	if (previous) remove(previous, entry?.isSymbolicLink() ? { force: true } : { recursive: true, force: true });
 }
 
 /** Whether a process with this pid still runs. EPERM means it exists but is not ours. */
