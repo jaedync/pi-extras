@@ -228,9 +228,12 @@ export function loadAnchors(env = process.env, home = homedir()) {
 			.filter((a) => existsSync(a.file))
 			.sort((a, b) => b.score - a.score);
 		const seen = new Set();
-		return anchorScale(found).map((a, i) => {
+		return anchorScale(found).map((a) => {
 			const base = `${a.score}-${slug(a.name)}`;
-			const folder = seen.has(base) ? `${base}-${i + 1}` : base;
+			// An anchor can already be named with the suffix that the next one would take (A, A-3, A):
+			// number until the name is free, or one anchor's folder would overwrite another's.
+			let folder = base;
+			for (let n = 2; seen.has(folder); n += 1) folder = `${base}-${n}`;
 			seen.add(folder);
 			return { ...a, folder };
 		});

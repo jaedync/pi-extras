@@ -174,7 +174,29 @@ test("all anchors load high to low, each with its own packet folder", () => {
 		);
 		const list = loadAnchors({ WV_ANCHORS: dir });
 		assert.deepEqual(list.map((a) => a.score), [7, 5, 5, 4]);
-		assert.deepEqual(list.map((a) => a.folder), ["7-pointer-golden-film", "5-earth-flight-test-2", "5-earth-flight-test-2-3", "4-pointer-gate-film"]);
+		assert.deepEqual(list.map((a) => a.folder), ["7-pointer-golden-film", "5-earth-flight-test-2", "5-earth-flight-test-2-2", "4-pointer-gate-film"]);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+
+test("anchor folder names stay unique when a suffix is already taken", () => {
+	const dir = mkdtempSync(join(tmpdir(), "wv-anchor-"));
+	try {
+		for (const file of ["a1.mp4", "a2.mp4", "a3.mp4"]) writeFileSync(join(dir, file), "x");
+		writeFileSync(
+			join(dir, "anchors.json"),
+			JSON.stringify([
+				{ file: "a1.mp4", score: 5, name: "A" },
+				{ file: "a2.mp4", score: 5, name: "A-3" },
+				{ file: "a3.mp4", score: 5, name: "A" },
+			]),
+		);
+		const list = loadAnchors({ WV_ANCHORS: dir });
+		assert.equal(list.length, 3);
+		assert.deepEqual(list.map((a) => a.folder), ["5-a", "5-a-3", "5-a-2"]);
+		assert.equal(new Set(list.map((a) => a.folder)).size, 3, "no two anchors share a packet folder");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
