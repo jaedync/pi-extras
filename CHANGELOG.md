@@ -2,6 +2,49 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.36.0 - 2026-10-29
+
+### Added
+
+- Walkthrough Video skill (`skills/walkthrough-video`): the model directs a
+  short launch film or a product walkthrough of a web app. The film is code:
+  a typed storyboard, scene modules on the product's own look, and an
+  optional score written in Python. The model makes the film decisions. The
+  tool gives it instruments and blocks only objective defects.
+  - `wv lift` reads the product's look from the live page: colours, fonts,
+    eases, keyframes and the stylesheet, and the markup of named states.
+  - `wv capture` records the real app frame by frame. A virtual clock moves
+    timers, animation frames and CSS animations one frame per captured
+    frame, so a slow host drops no frames.
+  - `wv film new`, `build`, `stills`, `preview` and `render` make a
+    HyperFrames project from a template, type-check it, and render a draft
+    and a 60 fps master.
+  - `wv sound score` renders a score in code and checks that each planned
+    hit is within 10 ms of its picture time. `wv sound mix` places the cues
+    on their frames and masters to -16 LUFS. `wv film mux` refuses a master
+    that is shorter than the picture.
+  - `wv check` blocks only objective defects: a repeat or a freeze at a cut,
+    a staircase in a moving shot, a colour that is not in the product's CSS,
+    text under 30 px or cut by the frame, private data on the page, a picture
+    or a master whose length differs from the storyboard, and loudness or
+    sound-floor errors. `wv measure` compares the film's numbers with 12
+    reference films, as advice only.
+  - `wv film critique` makes a packet for a fresh reviewer from the
+    rendered film. `--plan` makes one from the storyboard before the first
+    render.
+  - `wv taste` holds the owner's notes on earlier films. A quick mode
+    composes a plain screen walkthrough with captions and a local voice.
+  - `wv setup` installs pinned playwright-core, HyperFrames, GSAP, the
+    browsers, a Python venv and the Kokoro voice into
+    `~/.cache/pi-walkthrough-video`. After setup, renders, checks and
+    measures run locally. `wv lift` and `wv capture` read the app that you
+    name, and `wv compose` can download a font from Google Fonts.
+    `THIRD_PARTY.md` lists the installed packages and their licences.
+  - `wv` raises its own OOM score (`WV_OOM_SCORE_ADJ`, default 500), so the
+    kernel stops a render before other processes. On a stop signal, `wv`
+    stops its process tree, removes its preview and cache folders, and
+    exits within 15 s.
+
 ## 0.35.0 - 2026-10-29
 
 ### Changed
