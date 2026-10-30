@@ -16,6 +16,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { UsageError } from "../lib/args.mjs";
+import { MUSIC_KIT_DOWNLOAD_BYTES, formatBytes, musicKitStatus } from "../lib/music-kit.mjs";
 import { paths } from "../lib/paths.mjs";
 import { run } from "../lib/proc.mjs";
 import { loadRejected, rejectedCues } from "../lib/rejected.mjs";
@@ -41,7 +42,9 @@ Subcommands:
   backtime <music.wav> --lift-at <s> --duration <s>
                     where a bed must start so its biggest lift lands on --lift-at
   score <score.py> --cues <out/cues.json> --out <dir> [--fps <n>]
-                    render a score written in code (templates/score/score.py), then
+                    render a score written in code (templates/score/score.py); a score
+                    that plays a sampled part needs the music kit (wv setup --music).
+                    Then
                     check every planned hit (10 ms) and every note against its chord;
                     --fps sets the frame column of the hit table (default: the cue
                     sheet's fps, else 60)
@@ -237,6 +240,15 @@ export function scoreSteps({ score, out, cues, duration, python, fps = null, kit
 	];
 }
 
+/**
+ * A score that plays a sampled part needs the music kit; the synth voices do
+ * not. The markers are the sampler call, load_sample, and the two paths that
+ * sc.py exports for the maps (KIT, PIANO).
+ */
+export function scoreNeedsKit(text) {
+	return /\bsfz_render\s*\(|\bload_sample\s*\(|\bPIANO\b|\bKIT\b/.test(String(text));
+}
+
 /** The files a score run writes in --out. An earlier run's copy is not this run's result. */
 export const SCORE_RESULTS = ["hit-table.md", "hit-plan.json", "notes.json"];
 
@@ -265,6 +277,11 @@ async function score(argv) {
 	if (!values.cues && values.duration === undefined) fail("score needs --cues <out/cues.json> (the film's length and picture events) or --duration <s>");
 	const cues = values.cues ? resolve(values.cues) : "";
 	const duration = values.duration !== undefined ? decimal(values.duration, "--duration", 1, 600) : readCueSheet(cues).duration;
+	// A sampled score is refused before any render, with the fix in the message.
+	const kit = process.env.WV_MUSIC_KIT || paths().musicKit;
+	if (scoreNeedsKit(readFileSync(file, "utf8")) && !musicKitStatus(kit).present) {
+		throw new Error(`this score plays a sampled part, and the music kit is not installed at ${kit}. Run "wv setup --music" (about ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)}, about 10 min), then run this command again. A score with only synth voices needs no kit.`);
+	}
 	const python = paths().python;
 	if (!existsSync(python)) throw new Error(`the runtime venv is not installed (${python}). Run "wv setup", then try again.`);
 	const out = resolve(values.out);

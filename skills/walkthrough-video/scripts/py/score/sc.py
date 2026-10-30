@@ -3,7 +3,7 @@ which the owner rated 7 and 8 of 10). wv sound score sets WV_SCORE_DURATION (the
 WV_MUSIC_KIT (sfizz_render and the sample sets, only for sampled parts; the synth voices need numpy and scipy).
 Times in seconds, pitches as MIDI numbers, audio as float64 stereo (n, 2) at 48 kHz.
 Sampled parts render through sfizz (SFZ + MIDI); synth parts are numpy."""
-import math, os, subprocess, tempfile, json
+import math, os, shutil, subprocess, tempfile, json
 import numpy as np, soundfile as sf, mido
 from scipy import signal
 
@@ -60,11 +60,20 @@ def attack_latency(sfz, pairs):
         json.dump(cache, open(cpath, "w"))
     return {k: cache[f"{int(k[0])}:{int(k[1])}"] for k in pairs}
 
+def require_kit(sfz):
+    """A sampled part needs the music kit: name the fix, not just the missing file."""
+    sfizz = os.path.exists(SFIZZ) or (not os.path.isabs(SFIZZ) and shutil.which(SFIZZ))
+    if not sfizz or not os.path.exists(sfz):
+        raise SystemExit(f"wv sound score: this score plays a sampled part, and the music kit is not installed at {MUSIC_KIT}. "
+                         f"Run `wv setup --music` (about 1 GB, 10 min), then run the score again. "
+                         f"A score with only synth voices needs no kit.")
+
 def sfz_render(sfz, notes, path, seed=0, compensate=None, full=False):
     """notes: list of (t, midi, vel, dur). Writes MIDI, renders with sfizz, returns stereo.
     compensate: start each note early by its measured attack latency (attack_latency), capped at 25 ms.
     Default: on for pitched instruments, off for the drum kit (its round robins make one probe per note
     unreliable: the VCSL shaker 'shake' samples swell for up to 74 ms, the kick and snare start in < 6 ms)."""
+    require_kit(sfz)
     ppq = 960; tpb = ppq * 2  # ticks per second at 120 BPM
     if compensate is None: compensate = not sfz.endswith("kit.sfz")
     if compensate:

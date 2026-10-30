@@ -27,6 +27,8 @@ import {
 	wavPeak,
 } from "../skills/walkthrough-video/scripts/lib/music-kit.mjs";
 import { parseCommandLine, usageText } from "../skills/walkthrough-video/scripts/lib/args.mjs";
+import { paths } from "../skills/walkthrough-video/scripts/lib/paths.mjs";
+import { scoreNeedsKit } from "../skills/walkthrough-video/scripts/film/sound.mjs";
 
 const SKILL = fileURLToPath(new URL("../skills/walkthrough-video/", import.meta.url));
 const WV = join(SKILL, "scripts/wv.mjs");
@@ -392,4 +394,39 @@ test("wv setup --music --check reports each missing part and exits 1", () => {
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("a score that plays a sampled part needs the kit; the synth template does not", () => {
+	const template = readFileSync(join(SKILL, "templates", "score", "score.py"), "utf8");
+	assert.equal(scoreNeedsKit(template), false, "the template uses synth voices only");
+	assert.equal(scoreNeedsKit("kick = sfz_render(KIT + 'kit.sfz', notes, out)"), true);
+	assert.equal(scoreNeedsKit("piano = sfz_render(PIANO, notes, out)"), true);
+	assert.equal(scoreNeedsKit("x = load_sample('bd__BDrumNew_hit_v7_rr1_Sum.wav')"), true);
+});
+
+test("wv sound score refuses a sampled score without the kit, before it renders anything", () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-score-kit-"));
+	try {
+		const score = join(root, "score.py");
+		writeFileSync(score, "from sc import *\npiano = sfz_render(PIANO, [(0.5, 60, 100, 1.0)], 'piano.wav')\n");
+		const env = { ...process.env, XDG_CACHE_HOME: join(root, "cache"), HOME: root, WV_MUSIC_KIT: "" };
+		const out = join(root, "out");
+		const result = spawnSync(process.execPath, [WV, "sound", "score", score, "--duration", "2", "--out", out], { encoding: "utf8", env, timeout: 60000 });
+		assert.equal(result.status, 1);
+		const text = `${result.stdout}\n${result.stderr}`;
+		assert.match(text, /music kit/);
+		assert.match(text, /wv setup --music/);
+		assert.equal(existsSync(out), false, "nothing is rendered before the refusal");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+const venv = paths().python;
+test("sc.py refuses a sampled part with the fix when the kit is missing", { skip: existsSync(venv) ? false : "the runtime venv is not installed (run wv setup)" }, () => {
+	const script = `import sys; sys.path.insert(0, ${JSON.stringify(join(SKILL, "scripts", "py", "score"))}); import sc; sc.sfz_render(sc.PIANO, [(0.5, 60, 100, 0.2)], ${JSON.stringify(join(tmpdir(), "wv-sc-kit.wav"))})`;
+	const result = spawnSync(venv, ["-c", script], { encoding: "utf8", env: { ...process.env, WV_MUSIC_KIT: join(tmpdir(), "no-such-music-kit") }, timeout: 60000 });
+	assert.equal(result.status, 1, result.stdout + result.stderr);
+	assert.match(result.stderr, /wv setup --music/);
+	assert.match(result.stderr, /sampled part/);
 });
