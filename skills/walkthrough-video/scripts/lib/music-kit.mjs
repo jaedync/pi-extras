@@ -732,7 +732,7 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 	const stopCleanup = onSignalCleanup(() => {
 		if (staging) rmSync(staging, { recursive: true, force: true });
 		lock.release();
-	}, "the music kit staging folder");
+	}, "the music kit install");
 	try {
 		// An install that ended while this one waited may have made the root: look again.
 		const now = await checkMusicKit({ kit, smoke: d.smoke, log: () => {} });
@@ -749,7 +749,7 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 
 		const python = await d.python();
 		// Unique per run and in the kit's parent, so the last rename stays on one filesystem.
-		// The name carries the kit and this pid, so a later run can prove a leftover is ours.
+		// The name carries the kit and this pid, so wv removes only this folder and notes the rest.
 		staging = mkdtempSync(join(dirname(kit), stagingPrefix(kit)));
 		log(`1/5 sfizz ${short(MUSIC_KIT_PINS.sfizz.commit)} (${formatBytes(MUSIC_KIT_PINS.sfizz.bytes)} with its submodules)`);
 		const sfizzSrc = join(staging, "sources", "sfizz");
