@@ -20,9 +20,16 @@ const STDOUT = (text) => process.stdout.write(`${text}\n`);
 const STDERR = (text) => process.stderr.write(`${text}\n`);
 
 async function runSetup(options) {
-	const { checkSetup, installSetup } = await import("./lib/setup.mjs");
 	const log = options.json ? () => {} : STDERR;
-	const report = options.check ? await checkSetup(log) : await installSetup(log);
+	let report;
+	if (options.music) {
+		// The music kit is its own install: it builds a sampler and downloads sample sets.
+		const { checkMusicKit, installMusicKit } = await import("./lib/music-kit.mjs");
+		report = options.check ? await checkMusicKit({ log }) : await installMusicKit({ log });
+	} else {
+		const { checkSetup, installSetup } = await import("./lib/setup.mjs");
+		report = options.check ? await checkSetup(log) : await installSetup(log);
+	}
 	if (options.json) STDOUT(JSON.stringify(report, null, 1));
 	return report.ok ? 0 : 1;
 }

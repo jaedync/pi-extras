@@ -4,6 +4,7 @@
  */
 import { parseArgs } from "node:util";
 import { GSAP, HYPERFRAMES, PLAYWRIGHT_CORE, TYPESCRIPT, pythonPackageNames } from "./paths.mjs";
+import { MUSIC_KIT_ATTRIBUTION, MUSIC_KIT_DOWNLOAD_BYTES, MUSIC_KIT_PINS, formatBytes } from "./music-kit.mjs";
 
 export class UsageError extends Error {}
 
@@ -69,7 +70,7 @@ export function parseCommandLine(argv) {
 
 	if (command === "setup") {
 		if (positionals.length > 0) fail(`wv setup takes no arguments (got "${positionals.join(" ")}")`);
-		return { command, check: Boolean(values.check), json: Boolean(values.json) };
+		return { command, check: Boolean(values.check), json: Boolean(values.json), music: Boolean(values.music) };
 	}
 	if (command === "capture") {
 		// A draft is a cheap look at the take: wall clock, scale 1, 10 fps, and a contact sheet.
@@ -116,7 +117,7 @@ function enumValue(value, flag, allowed) {
 }
 
 const OPTIONS = {
-	setup: { check: { type: "boolean" }, json: { type: "boolean" } },
+	setup: { check: { type: "boolean" }, json: { type: "boolean" }, music: { type: "boolean" } },
 	capture: {
 		out: { type: "string" },
 		fps: { type: "string" },
@@ -185,7 +186,7 @@ const USAGE = {
 	root: `Usage: wv <subcommand> [options]
 
 Subcommands:
-  setup     install playwright-core, hyperframes, gsap, the browsers, ffmpeg use and the Kokoro voice into the cache
+  setup     install playwright-core, hyperframes, gsap, the browsers, ffmpeg use and the Kokoro voice into the cache; --music adds the optional music kit
   capture   record a flow as capture.mp4 plus events.json (the capture clock)
   voice     synthesize the narration script with the local Kokoro model
   compose   build the HyperFrames project from events.json and shots.json
@@ -206,7 +207,7 @@ Options:
   --help, -h   show this text, or the text of one subcommand
 
 Try "wv <subcommand> --help" for the options of a subcommand.`,
-	setup: `Usage: wv setup [--check] [--json]
+	setup: `Usage: wv setup [--check] [--json] [--music]
 
 Installs the runtime into \${XDG_CACHE_HOME:-~/.cache}/pi-walkthrough-video:
 playwright-core ${PLAYWRIGHT_CORE} and hyperframes ${HYPERFRAMES} exactly, gsap ${GSAP} and typescript
@@ -214,9 +215,22 @@ ${TYPESCRIPT} for the film project, chromium-headless-shell and chromium, a uv v
 ${pythonPackageNames().join(", ")}, and the two Kokoro model files.
 Reuses ~/.local/share/kokoro-tts when the SHA-256 matches. ffmpeg must be on PATH.
 
+The music kit is optional: it holds the sampled instruments that wv sound score plays.
+It needs git, cmake and a C++ compiler, and installs into <cache>/music-kit.
+
 Options:
-  --check   report what is missing; install nothing (exit 1 if something is missing)
-  --json    print the report as JSON`,
+  --music   install the music kit only: build sfizz_render ${MUSIC_KIT_PINS.sfizz.commit.slice(0, 7)}
+            (BSD-2-Clause), fetch VCSL ${MUSIC_KIT_PINS.vcsl.commit.slice(0, 7)} (CC0 1.0, 10 sample
+            folders) and the Salamander Grand Piano V3 ${MUSIC_KIT_PINS.salamander.commit.slice(0, 7)}
+            (CC BY 3.0), write kit.sfz, marimba.sfz and glock.sfz, trim the piano samples and run
+            a smoke render of every SFZ. About ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} download and 10 min.
+            Nothing downloads when the kit already passes --check. The staging folder moves into
+            place only when every part passed, so a failure leaves no half kit.
+  --check   report what is missing; install nothing (exit 1 if something is missing). With
+            --music, report each part of the kit and its smoke render.
+  --json    print the report as JSON
+
+A published film that uses the piano carries: ${MUSIC_KIT_ATTRIBUTION}`,
 	capture: CAPTURE_USAGE,
 	voice: `Usage: wv voice <script.json> --out <dir> [--voice am_michael] [--speed 1.0]
 

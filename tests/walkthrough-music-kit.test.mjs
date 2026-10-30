@@ -5,6 +5,7 @@
  * The one test that runs the real install is gated by WV_INTEGRATION=1.
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -25,6 +26,7 @@ import {
 	smokeMidi,
 	wavPeak,
 } from "../skills/walkthrough-video/scripts/lib/music-kit.mjs";
+import { parseCommandLine, usageText } from "../skills/walkthrough-video/scripts/lib/args.mjs";
 
 const SKILL = fileURLToPath(new URL("../skills/walkthrough-video/", import.meta.url));
 const WV = join(SKILL, "scripts/wv.mjs");
@@ -346,4 +348,48 @@ test("the real install builds a kit that passes --check", { skip: e2e ? false : 
 	const again = await installMusicKit({ kit, log: (line) => log.push(line) });
 	assert.equal(again.ok, true);
 	assert.ok(log.some((line) => /already installed/.test(line)), "the second run reads the kit and skips the download");
+});
+
+test("setup parses --music, and the setup help names each source, commit and licence", () => {
+	assert.deepEqual(parseCommandLine(["setup", "--music"]), { command: "setup", check: false, json: false, music: true });
+	assert.equal(parseCommandLine(["setup", "--music", "--check"]).check, true);
+	const text = usageText("setup");
+	assert.match(text, /--music/);
+	for (const pin of Object.values(MUSIC_KIT_PINS)) assert.ok(text.includes(pin.commit.slice(0, 7)), `the setup help names ${pin.name} at ${pin.commit.slice(0, 7)}`);
+	assert.match(text, /Salamander Grand Piano V3/);
+	assert.match(text, /CC BY 3\.0/);
+	assert.match(text, /BSD-2-Clause/);
+	assert.match(text, /CC0/);
+	assert.match(text, /1\.0 GB/);
+	assert.match(text, /smoke render/);
+});
+
+test("wv setup without --music leaves the music kit alone, and its check names the option", () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-setup-"));
+	try {
+		const env = { ...process.env, XDG_CACHE_HOME: join(root, "cache"), HOME: root };
+		const result = spawnSync(process.execPath, [WV, "setup", "--check"], { encoding: "utf8", env, timeout: 60000 });
+		const text = `${result.stdout}\n${result.stderr}`;
+		assert.match(text, /music kit \(optional\)/);
+		assert.match(text, /wv setup --music/);
+		assert.match(text, /not installed/);
+		assert.equal(existsSync(join(root, "cache", "pi-walkthrough-video", "music-kit")), false, "the default setup never creates the kit");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("wv setup --music --check reports each missing part and exits 1", () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-setup-"));
+	try {
+		const env = { ...process.env, XDG_CACHE_HOME: join(root, "cache"), HOME: root };
+		const result = spawnSync(process.execPath, [WV, "setup", "--music", "--check"], { encoding: "utf8", env, timeout: 60000 });
+		assert.equal(result.status, 1);
+		const text = `${result.stdout}\n${result.stderr}`;
+		for (const part of ["sfizz_render", "VCSL maps", "VCSL samples", "Salamander piano"]) assert.match(text, new RegExp(part));
+		assert.doesNotMatch(text, /smoke render/, "no smoke run without a binary");
+		assert.equal(existsSync(join(root, "cache", "pi-walkthrough-video", "music-kit")), false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });

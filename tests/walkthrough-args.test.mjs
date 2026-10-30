@@ -32,11 +32,12 @@ test("wv runs when it is reached through a symlink, as a link in ~/bin is", () =
 });
 
 test("setup takes no positional arguments", () => {
-	assert.deepEqual(parseCommandLine(["setup"]), { command: "setup", check: false, json: false });
+	assert.deepEqual(parseCommandLine(["setup"]), { command: "setup", check: false, json: false, music: false });
 });
 
 test("setup accepts --check and --json", () => {
-	assert.deepEqual(parseCommandLine(["setup", "--check", "--json"]), { command: "setup", check: true, json: true });
+	assert.deepEqual(parseCommandLine(["setup", "--check", "--json"]), { command: "setup", check: true, json: true, music: false });
+	assert.deepEqual(parseCommandLine(["setup", "--music"]), { command: "setup", check: false, json: false, music: true });
 });
 
 test("capture fills the documented defaults", () => {
