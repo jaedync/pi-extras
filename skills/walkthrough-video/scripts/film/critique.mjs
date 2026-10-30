@@ -205,6 +205,7 @@ export const MAX_ANCHORS = 4;
  */
 export function anchorScale(list, max = MAX_ANCHORS) {
 	if (list.length <= max) return [...list];
+	if (max <= 1) return list.slice(0, Math.max(0, max));
 	return Array.from({ length: max }, (_, i) => list[Math.round((i * (list.length - 1)) / (max - 1))]);
 }
 

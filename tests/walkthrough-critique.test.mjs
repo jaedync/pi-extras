@@ -186,6 +186,8 @@ test("a long anchor list keeps at most MAX_ANCHORS, spread from the highest scor
 	assert.equal(anchorScale(list).length, MAX_ANCHORS);
 	assert.deepEqual(anchorScale(list.slice(0, 3)).map((a) => a.score), [9, 8, 7]);
 	assert.deepEqual(anchorScale([]), []);
+	assert.deepEqual(anchorScale(list, 1).map((a) => a.score), [9], "one anchor is the highest");
+	assert.deepEqual(anchorScale(list, 0), []);
 });
 
 test("writeCritique makes the whole packet from a real film (WV_INTEGRATION=1)", { skip: process.env.WV_INTEGRATION !== "1" }, async () => {
