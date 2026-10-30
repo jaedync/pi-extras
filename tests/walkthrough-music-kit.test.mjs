@@ -688,8 +688,8 @@ test("setup parses --music, and the setup help names each source, commit and lic
 });
 
 test("one resolver gives setup, its check and the score the same WV_MUSIC_KIT folder", () => {
-	assert.equal(paths({ WV_MUSIC_KIT: "/var/tmp/elsewhere/kit" }, "/home/someone").musicKit, "/var/tmp/elsewhere/kit");
-	assert.equal(paths({ XDG_CACHE_HOME: "/var/tmp/cache" }, "/home/someone").musicKit, join("/var/tmp/cache", "pi-walkthrough-video", "music-kit"));
+	assert.equal(paths({ WV_MUSIC_KIT: "/var/tmp/elsewhere/kit" }, "/var/tmp/fake-home").musicKit, "/var/tmp/elsewhere/kit");
+	assert.equal(paths({ XDG_CACHE_HOME: "/var/tmp/cache" }, "/var/tmp/fake-home").musicKit, join("/var/tmp/cache", "pi-walkthrough-video", "music-kit"));
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-env-"));
 	try {
 		const kit = join(root, "elsewhere", "music-kit");

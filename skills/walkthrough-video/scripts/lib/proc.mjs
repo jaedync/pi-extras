@@ -252,11 +252,6 @@ export function refuseNewChildren() {
 	childrenRefused = true;
 }
 
-/** True once the stop has begun. */
-export function newChildrenRefused() {
-	return childrenRefused;
-}
-
 /** Throws when the stop has begun, so a loop checks between its jobs as well. */
 export function assertNotStopping(what = "a process") {
 	if (childrenRefused) throw new StoppingError(`wv is stopping: ${what} cannot start`);
