@@ -20,6 +20,7 @@ import {
 	MUSIC_KIT_SAMPLE_RATE,
 	checkMusicKit,
 	replaceKit,
+	verifyCheckout,
 	installMusicKit,
 	kitDeps,
 	kitPaths,
@@ -102,6 +103,7 @@ function fakeDeps(calls, { failAt = null, smoke = passingSmoke, free = 8 * 1024 
 				writeFileSync(join(dir, "Samples", "A0v1.flac"), "flac");
 				writeFileSync(join(dir, "Salamander Grand Piano V3.sfz"), "<control>\n");
 			}
+			return { head: source.commit, submodules: [] };
 		},
 		build: async (src, bin) => {
 			step("build");
@@ -227,12 +229,12 @@ test("the check reports each part, and the commits from kit.json", async () => {
 		assert.ok(!empty.missing.includes("smoke render"), "no smoke run without a binary to run");
 
 		fakePassingKit(kit);
-		writeFileSync(join(kit, "kit.json"), `${JSON.stringify({ version: 1, sfizz: { commit: "f5c6e29" }, vcsl: { commit: "c1ea7bc" }, salamander: { commit: "3382bf9" } }, null, 1)}\n`);
+		writeFileSync(join(kit, "kit.json"), `${JSON.stringify({ version: 1, sfizz: { commit: MUSIC_KIT_PINS.sfizz.commit }, vcsl: { commit: MUSIC_KIT_PINS.vcsl.commit }, salamander: { commit: MUSIC_KIT_PINS.salamander.commit } }, null, 1)}\n`);
 		const full = await checkMusicKit({ kit, smoke: passingSmoke, log: () => {} });
 		assert.equal(full.ok, true, full.missing.join(", "));
-		assert.deepEqual(full.items.map((item) => item.name), ["sfizz_render", "VCSL maps", "VCSL samples", "Salamander piano", "smoke render"]);
+		assert.deepEqual(full.items.map((item) => item.name), ["sfizz_render", "VCSL maps", "VCSL samples", "Salamander piano", "pins", "smoke render"]);
 		assert.match(full.items[0].detail, /f5c6e29/);
-		assert.match(full.items[4].detail, /4 of 4/);
+		assert.match(full.items.find((item) => item.name === "smoke render").detail, /4 of 4/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -349,6 +351,61 @@ test("a failed publication puts a managed kit back, and a symlink puts the link 
 	}
 });
 
+test("a checkout that is not the pin is refused, and a moved submodule too", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-pin-"));
+	try {
+		const repo = join(root, "repo");
+		mkdirSync(repo);
+		const git = (...args) => spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+		assert.equal(git("init", "--quiet").status, 0);
+		git("config", "user.email", "test@example.invalid");
+		git("config", "user.name", "test");
+		writeFileSync(join(repo, "file.txt"), "x");
+		git("add", "file.txt");
+		assert.equal(git("commit", "--quiet", "-m", "one").status, 0);
+		const head = git("rev-parse", "HEAD").stdout.trim();
+
+		await assert.rejects(verifyCheckout(repo, { name: "test source", commit: "f".repeat(40) }), (error) => {
+			assert.match(error.message, /not the pinned/);
+			assert.ok(error.message.includes("f".repeat(40)), "the refusal names the pin");
+			assert.ok(error.message.includes(head), "the refusal names the checkout");
+			return true;
+		});
+		const ok = await verifyCheckout(repo, { name: "test source", commit: head });
+		assert.equal(ok.head, head);
+		assert.deepEqual(ok.submodules, []);
+
+		const fakeGit = async (args) => ({
+			stdout: args[0] === "rev-parse" ? `${head}\n` : "+1234567890123456789012345678901234567890 Vendored (heads/main)\n",
+		});
+		await assert.rejects(verifyCheckout(repo, { name: "with submodules", commit: head, submodules: true }, { runGit: fakeGit }), /submodule/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the check refuses a kit.json whose pin is not the pinned commit", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
+	try {
+		const kit = join(root, "music-kit");
+		fakePassingKit(kit);
+		writeFileSync(join(kit, "kit.json"), `${JSON.stringify({
+			version: 1,
+			sfizz: { commit: "0".repeat(40) },
+			vcsl: { commit: MUSIC_KIT_PINS.vcsl.commit },
+			salamander: { commit: MUSIC_KIT_PINS.salamander.commit },
+		})}\n`);
+		const report = await checkMusicKit({ kit, smoke: passingSmoke, log: () => {} });
+		assert.equal(report.ok, false);
+		assert.ok(report.missing.includes("pins"));
+		const item = report.items.find((one) => one.name === "pins");
+		assert.match(item.detail, /sfizz/);
+		assert.match(item.detail, /0000000/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("a failed step leaves the old kit in place and removes the staging folder", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
@@ -392,6 +449,8 @@ test("a passing install moves the staging folder into place and records the pins
 		assert.equal(manifest.version, 1);
 		assert.equal(manifest.sfizz.commit, MUSIC_KIT_PINS.sfizz.commit);
 		assert.equal(manifest.salamander.commit, MUSIC_KIT_PINS.salamander.commit);
+		assert.equal(manifest.sfizz.checkout, MUSIC_KIT_PINS.sfizz.commit, "the manifest records the verified checkout");
+		assert.equal(manifest.vcsl.checkout, MUSIC_KIT_PINS.vcsl.commit);
 		assert.ok(existsSync(join(kit, "licenses", "salamander-LICENSE")), "the piano licence ships with the samples");
 		assert.ok(!existsSync(join(kit, "src")), "the cloned sources do not stay in the kit");
 		assert.equal(existsSync(join(kit, "samples", "salamander", ".git")), false, "the piano's git history does not stay in the kit");

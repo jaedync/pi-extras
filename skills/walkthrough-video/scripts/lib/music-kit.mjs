@@ -189,6 +189,21 @@ export async function checkMusicKit({ kit = paths().musicKit, smoke = (dir) => s
 		detail: pianoOk ? `${flacs} flac, ${MUSIC_KIT_PINS.salamander.licence}${manifest?.salamander?.commit ? ` (Salamander ${short(manifest.salamander.commit)})` : ""}` : `no piano in ${p.piano}`,
 	});
 
+	// The manifest's pins are compared with the code's pins, so an edited kit.json cannot pass.
+	if (manifest) {
+		const wrong = [];
+		for (const [name, pin] of Object.entries(MUSIC_KIT_PINS)) {
+			const recorded = manifest[name];
+			if (!recorded) {
+				wrong.push(`${name}: no pin in kit.json`);
+				continue;
+			}
+			if (recorded.commit !== pin.commit) wrong.push(`${name}: kit.json says ${short(recorded.commit)}, the pin is ${short(pin.commit)}`);
+			if (recorded.checkout && recorded.checkout !== pin.commit) wrong.push(`${name}: the checkout was ${short(recorded.checkout)}, not ${short(pin.commit)}`);
+		}
+		items.push({ name: "pins", ok: wrong.length === 0, detail: wrong.length ? wrong.join("; ") : `${Object.keys(MUSIC_KIT_PINS).length} sources at their pinned commits` });
+	}
+
 	// A smoke render needs a binary and the maps; without them the item above is the fix.
 	if (sfizzOk && missingMaps.length === 0) {
 		let smokeItems;
@@ -369,6 +384,35 @@ async function git(args, cwd, timeoutMs) {
 	return result;
 }
 
+/** The submodule lines of `git submodule status`: a state character, a commit and a path. */
+export function parseSubmodules(text) {
+	return String(text)
+		.split("\n")
+		.filter((line) => /^[ +\-U]/.test(line))
+		.map((line) => ({ state: line[0], commit: line.slice(1, 41), path: line.slice(42).replace(/\s+\(.*\)$/, "") }));
+}
+
+/**
+ * Compares the checkout with the pin, and each submodule with the commit the
+ * source names. The fetch asks for the full hash, but the identity after the
+ * checkout is the only proof that the kit is what the pins say.
+ * @param {string} dir
+ * @param {any} source
+ * @param {{runGit?: typeof git}} [options]
+ */
+export async function verifyCheckout(dir, source, { runGit = git } = {}) {
+	const head = (await runGit(["rev-parse", "HEAD"], dir, 60000)).stdout.trim();
+	if (head !== source.commit) {
+		throw new Error(`${source.name}: the checkout in ${dir} is ${head}, not the pinned ${source.commit}. The kit was not installed. Check the source URL and the pin, then run wv setup --music again.`);
+	}
+	const submodules = source.submodules ? parseSubmodules((await runGit(["submodule", "status", "--recursive"], dir, 60000)).stdout) : [];
+	const moved = submodules.filter((entry) => entry.state !== " ");
+	if (moved.length > 0) {
+		throw new Error(`${source.name}: ${moved.length} submodule(s) are not at their pinned commits (${moved.map((entry) => `${entry.state === "-" ? "not initialised" : entry.state === "U" ? "conflicted" : "moved"}: ${entry.path}`).join(", ")}). The kit was not installed. Remove the staging folder and run wv setup --music again.`);
+	}
+	return { head, submodules };
+}
+
 /**
  * Fetches one source at its pinned commit; a sparse source downloads only its folders.
  * @param {any} source
@@ -388,6 +432,7 @@ export async function fetchSource(source, dir, log = () => {}) {
 	await git(["fetch", "--depth", "1", ...(source.folders ? ["--filter=blob:none"] : []), "origin", source.commit], dir, 30 * 60_000);
 	await git(["checkout", "--quiet", "FETCH_HEAD"], dir, 10 * 60_000);
 	if (source.submodules) await git(["submodule", "update", "--init", "--recursive", "--depth", "1"], dir, 30 * 60_000);
+	return verifyCheckout(dir, source);
 }
 
 /**
@@ -468,14 +513,26 @@ function copyLicences(staging) {
 	for (const [from, name] of pairs) if (existsSync(from)) copyFileSync(from, join(dir, name));
 }
 
-function writeManifest(staging, smoke) {
+function writeManifest(staging, smoke, verified = {}) {
+	const entry = (name) => {
+		const pin = MUSIC_KIT_PINS[name];
+		const seen = verified[name];
+		return {
+			url: pin.url,
+			commit: pin.commit,
+			licence: pin.licence,
+			// The identity that git reported after the checkout, not only the pin asked for.
+			checkout: seen?.head ?? null,
+			...(pin.submodules ? { submodules: (seen?.submodules ?? []).map((one) => ({ path: one.path, commit: one.commit })) } : {}),
+		};
+	};
 	const manifest = {
 		version: 1,
 		installedAt: new Date().toISOString(),
 		sampleRate: MUSIC_KIT_SAMPLE_RATE,
-		sfizz: { url: MUSIC_KIT_PINS.sfizz.url, commit: MUSIC_KIT_PINS.sfizz.commit, licence: MUSIC_KIT_PINS.sfizz.licence },
-		vcsl: { url: MUSIC_KIT_PINS.vcsl.url, commit: MUSIC_KIT_PINS.vcsl.commit, licence: MUSIC_KIT_PINS.vcsl.licence },
-		salamander: { url: MUSIC_KIT_PINS.salamander.url, commit: MUSIC_KIT_PINS.salamander.commit, licence: MUSIC_KIT_PINS.salamander.licence, attribution: MUSIC_KIT_ATTRIBUTION },
+		sfizz: entry("sfizz"),
+		vcsl: entry("vcsl"),
+		salamander: { ...entry("salamander"), attribution: MUSIC_KIT_ATTRIBUTION },
 		smoke: smoke.map((item) => ({ name: item.name, detail: item.detail })),
 	};
 	writeFileSync(join(staging, "kit.json"), `${JSON.stringify(manifest, null, 1)}\n`);
@@ -587,16 +644,16 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		staging = mkdtempSync(join(dirname(kit), ".music-kit.staging-"));
 		log(`1/5 sfizz ${short(MUSIC_KIT_PINS.sfizz.commit)} (${formatBytes(MUSIC_KIT_PINS.sfizz.bytes)} with its submodules)`);
 		const sfizzSrc = join(staging, "sources", "sfizz");
-		await d.fetch(MUSIC_KIT_PINS.sfizz, sfizzSrc);
+		const verified = { sfizz: await d.fetch(MUSIC_KIT_PINS.sfizz, sfizzSrc) };
 		await d.build(sfizzSrc, join(staging, "bin", "sfizz_render"));
 
 		log(`2/5 VCSL ${short(MUSIC_KIT_PINS.vcsl.commit)} (${formatBytes(MUSIC_KIT_PINS.vcsl.bytes)}, 10 sample folders)`);
 		const vcslSrc = join(staging, "sources", "VCSL");
-		await d.fetch(MUSIC_KIT_PINS.vcsl, vcslSrc);
+		verified.vcsl = await d.fetch(MUSIC_KIT_PINS.vcsl, vcslSrc);
 
 		log(`3/5 Salamander Grand Piano V3 ${short(MUSIC_KIT_PINS.salamander.commit)} (${formatBytes(MUSIC_KIT_PINS.salamander.bytes)}, ${MUSIC_KIT_PINS.salamander.licence})`);
 		const pianoSrc = join(staging, "sources", "salamander");
-		await d.fetch(MUSIC_KIT_PINS.salamander, pianoSrc);
+		verified.salamander = await d.fetch(MUSIC_KIT_PINS.salamander, pianoSrc);
 		mkdirSync(join(staging, "samples"), { recursive: true });
 		renameSync(pianoSrc, join(staging, "samples", "salamander"));
 		// The piano's git history is another 714 MB; the samples and their licence are the kit.
@@ -614,7 +671,7 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 
 		// The cloned sources are build input only; the kit keeps the samples and the licences.
 		rmSync(join(staging, "sources"), { recursive: true, force: true });
-		writeManifest(staging, smoke);
+		writeManifest(staging, smoke, verified);
 		replaceKit(staging, kit);
 		staging = null;
 	} finally {
