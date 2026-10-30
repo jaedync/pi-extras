@@ -2,6 +2,33 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.38.0 - 2026-10-30
+
+### Added
+
+- UI Redline skill (`skills/ui-redline`): the model finds and removes the
+  signs of generated-looking UI, then proves the result with a measured
+  audit. Run `/skill:ui-redline` on a screen or a page.
+  - The workflow: a six-line brief of the screen, a first audit, edits in
+    passes (color, icons, copy, type, layout, components, imagery, motion), a
+    second audit, a compare gate and a review by a fresh reviewer.
+  - `redline audit <url|file>` renders the page in Chromium at 1440 × 900
+    and 390 × 844. It reads computed styles, layout and keyboard focus
+    against 41 rules. It writes `audit.json`, screenshots and redlined
+    screenshots with numbered boxes.
+  - Two scores: slop (signs of generated UI, such as hue gradients, glows,
+    emoji icons and hype copy) and craft (contrast, spacing, sizes and
+    focus).
+  - `redline compare` fails when a high finding is left or a rule got worse.
+    It warns when the audits are of different pages or when the after page
+    lost most of its elements.
+  - `redline scan` finds the same signs in Tailwind classes and CSS, with
+    the file and line.
+  - `redline setup` installs pinned playwright-core and Chromium's headless
+    shell once per host.
+  - The idea comes from heydamir/unslop (CC BY 4.0). No text, rule list,
+    example or code is copied; see THIRD_PARTY.md.
+
 ## 0.37.0 - 2026-10-30
 
 ### Added
