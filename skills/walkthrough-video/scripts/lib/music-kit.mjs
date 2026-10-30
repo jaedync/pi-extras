@@ -86,7 +86,6 @@ export function kitPaths(kit = paths().musicKit) {
 		piano: join(kit, "samples", "salamander"),
 		pianoSfz: join(kit, "samples", "salamander", "Salamander Grand Piano V3.sfz"),
 		pianoSamples: join(kit, "samples", "salamander", "Samples"),
-		staging: join(dirname(kit), ".music-kit.staging"),
 	};
 }
 
@@ -498,6 +497,50 @@ function replaceKit(staging, kit) {
 	if (previous) rmSync(previous, { recursive: true, force: true });
 }
 
+/** Whether a process with this pid still runs. EPERM means it exists but is not ours. */
+function processAlive(pid) {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error?.code === "EPERM";
+	}
+}
+
+function readLockOwner(lock) {
+	try {
+		const pid = Number(readFileSync(join(lock, "owner"), "utf8").trim());
+		return Number.isInteger(pid) && pid > 0 ? pid : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * One install at a time per kit. The lock is a folder next to the kit with the
+ * owner's pid inside: an install that a kill left behind is taken over, and a
+ * live one gives a clear refusal instead of a race.
+ */
+function acquireKitLock(kit, log = () => {}) {
+	const lock = `${kit}.lock`;
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		try {
+			mkdirSync(lock, { mode: 0o700 });
+			writeFileSync(join(lock, "owner"), `${process.pid}\n`);
+			return { path: lock, release: () => rmSync(lock, { recursive: true, force: true }) };
+		} catch (error) {
+			if (error?.code !== "EEXIST") throw error;
+			const owner = readLockOwner(lock);
+			if (owner !== null && processAlive(owner)) {
+				throw new Error(`another wv setup --music is installing the kit (pid ${owner}, lock ${lock}). Wait for that install to finish, or remove that folder if the process is gone.`);
+			}
+			log(`music kit: taking over the lock of pid ${owner ?? "unknown"}, which is gone`);
+			rmSync(lock, { recursive: true, force: true });
+		}
+	}
+	throw new Error(`cannot lock ${lock}: another process keeps recreating it. Remove that folder, then run wv setup --music again.`);
+}
+
 /**
  * Installs the kit. Nothing downloads when the kit already passes the check;
  * nothing is moved into place when a step fails, so a half kit never stays.
@@ -505,58 +548,61 @@ function replaceKit(staging, kit) {
  */
 export async function installMusicKit({ kit = paths().musicKit, log = () => {}, deps = {} } = {}) {
 	const d = { ...kitDeps({ log }), ...deps };
-	const p = kitPaths(kit);
 	const existing = await checkMusicKit({ kit, smoke: d.smoke, log: () => {} });
 	if (existing.ok) {
 		log(`music kit: already installed at ${kit} (the smoke render passes, so nothing is downloaded)`);
 		return existing;
 	}
 
-	const refusal = toolRefusal(d.tools());
+	const refusal = toolRefusal(await d.tools());
 	if (refusal) throw new Error(refusal);
 	mkdirSync(dirname(kit), { recursive: true, mode: 0o700 });
-	const free = d.freeBytes(dirname(kit));
-	if (free < MUSIC_KIT_NEED_BYTES) throw new Error(`the music kit needs ${formatBytes(MUSIC_KIT_NEED_BYTES)} free at ${dirname(kit)} and only ${formatBytes(free)} is free. Free some space, then run wv setup --music again.`);
-	log(`music kit: ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} to download, ${formatBytes(MUSIC_KIT_NEED_BYTES)} of space needed, ${formatBytes(free)} free, at ${kit}`);
-
-	const python = await d.python();
-	rmSync(p.staging, { recursive: true, force: true });
-	mkdirSync(p.staging, { recursive: true, mode: 0o700 });
+	const lock = acquireKitLock(kit, log);
+	/** Only the folder this run made is ever removed. */
+	let staging = null;
 	try {
+		const free = d.freeBytes(dirname(kit));
+		if (free < MUSIC_KIT_NEED_BYTES) throw new Error(`the music kit needs ${formatBytes(MUSIC_KIT_NEED_BYTES)} free at ${dirname(kit)} and only ${formatBytes(free)} is free. Free some space, then run wv setup --music again.`);
+		log(`music kit: ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} to download, ${formatBytes(MUSIC_KIT_NEED_BYTES)} of space needed, ${formatBytes(free)} free, at ${kit}`);
+
+		const python = await d.python();
+		// Unique per run and in the kit's parent, so the last rename stays on one filesystem.
+		staging = mkdtempSync(join(dirname(kit), ".music-kit.staging-"));
 		log(`1/5 sfizz ${short(MUSIC_KIT_PINS.sfizz.commit)} (${formatBytes(MUSIC_KIT_PINS.sfizz.bytes)} with its submodules)`);
-		const sfizzSrc = join(p.staging, "sources", "sfizz");
+		const sfizzSrc = join(staging, "sources", "sfizz");
 		await d.fetch(MUSIC_KIT_PINS.sfizz, sfizzSrc);
-		await d.build(sfizzSrc, join(p.staging, "bin", "sfizz_render"));
+		await d.build(sfizzSrc, join(staging, "bin", "sfizz_render"));
 
 		log(`2/5 VCSL ${short(MUSIC_KIT_PINS.vcsl.commit)} (${formatBytes(MUSIC_KIT_PINS.vcsl.bytes)}, 10 sample folders)`);
-		const vcslSrc = join(p.staging, "sources", "VCSL");
+		const vcslSrc = join(staging, "sources", "VCSL");
 		await d.fetch(MUSIC_KIT_PINS.vcsl, vcslSrc);
 
 		log(`3/5 Salamander Grand Piano V3 ${short(MUSIC_KIT_PINS.salamander.commit)} (${formatBytes(MUSIC_KIT_PINS.salamander.bytes)}, ${MUSIC_KIT_PINS.salamander.licence})`);
-		const pianoSrc = join(p.staging, "sources", "salamander");
+		const pianoSrc = join(staging, "sources", "salamander");
 		await d.fetch(MUSIC_KIT_PINS.salamander, pianoSrc);
-		mkdirSync(join(p.staging, "samples"), { recursive: true });
-		renameSync(pianoSrc, join(p.staging, "samples", "salamander"));
+		mkdirSync(join(staging, "samples"), { recursive: true });
+		renameSync(pianoSrc, join(staging, "samples", "salamander"));
 		// The piano's git history is another 714 MB; the samples and their licence are the kit.
-		rmSync(join(p.staging, "samples", "salamander", ".git"), { recursive: true, force: true });
+		rmSync(join(staging, "samples", "salamander", ".git"), { recursive: true, force: true });
 
 		log("4/5 building the sample maps and trimming the piano samples");
-		await d.generate(vcslSrc, join(p.staging, "samples", "vcsl"), python);
-		await d.trim(join(p.staging, "samples", "salamander", "Samples"), python);
-		copyLicences(p.staging);
+		await d.generate(vcslSrc, join(staging, "samples", "vcsl"), python);
+		await d.trim(join(staging, "samples", "salamander", "Samples"), python);
+		copyLicences(staging);
 
 		log("5/5 smoke render: one MIDI pass through each SFZ");
-		const smoke = await d.smoke(p.staging);
+		const smoke = await d.smoke(staging);
 		const failed = smoke.filter((item) => !item.ok);
 		if (failed.length > 0) throw new Error(`the music kit smoke render failed (${failed.map((item) => `${item.name}: ${item.detail}`).join("; ")}). The kit was not installed.`);
 
 		// The cloned sources are build input only; the kit keeps the samples and the licences.
-		rmSync(join(p.staging, "sources"), { recursive: true, force: true });
-		writeManifest(p.staging, smoke);
-		replaceKit(p.staging, kit);
-	} catch (error) {
-		rmSync(p.staging, { recursive: true, force: true });
-		throw error;
+		rmSync(join(staging, "sources"), { recursive: true, force: true });
+		writeManifest(staging, smoke);
+		replaceKit(staging, kit);
+		staging = null;
+	} finally {
+		if (staging) rmSync(staging, { recursive: true, force: true });
+		lock.release();
 	}
 	log(`music kit: installed at ${kit}`);
 	if (MUSIC_KIT_PINS.salamander) log(`music kit: a published film that uses the piano carries "${MUSIC_KIT_ATTRIBUTION}"`);

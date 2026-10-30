@@ -123,6 +123,30 @@ function fakeDeps(calls, { failAt = null, smoke = passingSmoke, free = 8 * 1024 
 	};
 }
 
+
+/** Runs a real command once, for the tool probe tests. */
+function waitUntil(predicate, ms) {
+	const deadline = Date.now() + ms;
+	return new Promise((resolve, reject) => {
+		const tick = () => {
+			if (predicate()) return resolve(undefined);
+			if (Date.now() > deadline) return reject(new Error("the condition did not come true in time"));
+			setTimeout(tick, 25);
+		};
+		tick();
+	});
+}
+
+/** fakeDeps that holds its first fetch until `open()`, so a second install overlaps it. */
+function gatedInstall() {
+	const base = fakeDeps([]);
+	let release;
+	const gate = new Promise((resolve) => {
+		release = resolve;
+	});
+	return { deps: { ...base, fetch: async (source, dir) => { await gate; return base.fetch(source, dir); } }, open: () => release() };
+}
+
 test("the pins are the commits the hand-built kit measured", () => {
 	assert.equal(MUSIC_KIT_PINS.sfizz.url, "https://github.com/sfztools/sfizz.git");
 	assert.equal(MUSIC_KIT_PINS.sfizz.commit, "f5c6e29f23b8057867c08e88f5f6ac6738baa30b");
@@ -223,6 +247,50 @@ test("the check accepts a kit whose samples folder is a symlink, like the first 
 		symlinkSync(hand.samples, join(kit, "samples"), "dir");
 		const report = await checkMusicKit({ kit, smoke: passingSmoke, log: () => {} });
 		assert.equal(report.ok, true, report.missing.join(", "));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("two installs that overlap take one lock, and the second refuses", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
+	try {
+		const kit = join(root, "music-kit");
+		const gate = gatedInstall();
+		const first = installMusicKit({ kit, log: () => {}, deps: gate.deps });
+		await waitUntil(() => existsSync(`${kit}.lock`), 10000);
+		await assert.rejects(
+			installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) }),
+			(error) => {
+				assert.match(error.message, /another wv setup --music is installing the kit/);
+				assert.match(error.message, new RegExp(`${kit}\\.lock`));
+				return true;
+			},
+		);
+		gate.open();
+		const report = await first;
+		assert.equal(report.ok, true, report.missing.join(", "));
+		assert.equal(existsSync(`${kit}.lock`), false, "the lock is released after the install");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("an old shared staging folder survives, and a stale lock is taken over", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
+	try {
+		const kit = join(root, "music-kit");
+		const old = join(root, ".music-kit.staging");
+		mkdirSync(old, { recursive: true });
+		writeFileSync(join(old, "mine.txt"), "not wv's");
+		mkdirSync(`${kit}.lock`, { recursive: true });
+		writeFileSync(join(`${kit}.lock`, "owner"), "2147483647\n");
+		const log = [];
+		const report = await installMusicKit({ kit, log: (line) => log.push(line), deps: fakeDeps([]) });
+		assert.equal(report.ok, true, report.missing.join(", "));
+		assert.equal(readFileSync(join(old, "mine.txt"), "utf8"), "not wv's", "an install never deletes a folder it did not make");
+		assert.match(log.join("\n"), /taking over the lock of pid 2147483647/, "a stale lock is reported");
+		assert.equal(existsSync(`${kit}.lock`), false, "the lock is released");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
