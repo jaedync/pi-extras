@@ -91,8 +91,13 @@ It downloads three pinned sources and builds one binary:
 Then it writes `kit.sfz`, `marimba.sfz` and `glock.sfz` from the VCSL samples, trims the leading
 silence of the piano samples (at the first sample above -66 dBFS, at most 15 ms), and renders a
 short pass through each of the four SFZ files. All four must be non-silent at 48 kHz. The kit is
-built in a staging folder and moves into place only when every step passed, so a failure never
+built in a staging folder and renamed into place only when every step passed, so a failure never
 leaves a half kit.
+
+wv never deletes or replaces a kit folder. If the kit path exists and fails its check, move it
+aside, or set `WV_MUSIC_KIT` to another folder, then run the command again. The lock is a file
+`<kit>.lock`, and wv never takes over a lock: remove it only when no install runs. A signal
+removes this run's staging folder and its lock, so a stopped install leaves no kit.
 
 The finished kit is 732 MB on disk (the piano 691 MB, the VCSL samples 39 MB, the binary 3 MB).
 It also installs the score's Python packages (numpy, soundfile, scipy, mido, pedalboard) into the

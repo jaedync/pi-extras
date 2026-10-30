@@ -225,8 +225,10 @@ Options:
             folders) and the Salamander Grand Piano V3 ${MUSIC_KIT_PINS.salamander.commit.slice(0, 7)}
             (CC BY 3.0), write kit.sfz, marimba.sfz and glock.sfz, trim the piano samples and run
             a smoke render of every SFZ. About ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} download, about 5 min on 16 cores.
-            Nothing downloads when the kit already passes --check. The staging folder moves into
-            place only when every part passed, so a failure leaves no half kit.
+            Nothing downloads when the kit already passes --check. The kit is built in a
+            staging folder and renamed into place only after every part passed. wv never deletes
+            or replaces a kit folder: move an existing one aside, or set WV_MUSIC_KIT. The lock
+            file <kit>.lock is never taken over.
   --check   report what is missing; install nothing (exit 1 if something is missing). With
             --music, report each part of the kit and its smoke render.
   --json    print the report as JSON
