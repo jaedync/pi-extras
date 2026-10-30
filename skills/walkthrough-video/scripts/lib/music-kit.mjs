@@ -5,7 +5,8 @@
  * and moves it into place only when every part, including a smoke render,
  * passed. The pins are the commits the hand-built kit measured (2026-10-29).
  */
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,8 +16,6 @@ import { onSignalCleanup } from "./signals.mjs";
 
 const PY_DIR = fileURLToPath(new URL("../py/", import.meta.url));
 const GB = 1024 ** 3;
-/** How long a lock with no owner file is trusted to belong to a live install. */
-const LOCK_GRACE_MS = 5000;
 
 /** One progress line at a time. @typedef {(line: string) => void} Log */
 /** A smoke render's result for one SFZ file. @typedef {{name: string, ok: boolean, peak?: number, detail: string}} SmokeItem */
@@ -658,52 +657,53 @@ function processAlive(pid) {
 	}
 }
 
-function readLockOwner(lock) {
+function readLock(lock) {
 	try {
-		const pid = Number(readFileSync(join(lock, "owner"), "utf8").trim());
-		return Number.isInteger(pid) && pid > 0 ? pid : null;
+		const parsed = JSON.parse(readFileSync(lock, "utf8"));
+		return parsed && typeof parsed === "object" ? parsed : null;
 	} catch {
 		return null;
 	}
 }
 
-/** A lock with no owner yet may be one that another install made a moment ago. */
-function lockIsFresh(lock) {
-	try {
-		return Date.now() - statSync(lock).mtimeMs < LOCK_GRACE_MS;
-	} catch {
-		return false;
+/** Why this lock cannot be taken, from what the file says. */
+function lockRefusal(lock) {
+	const owner = readLock(lock);
+	if (owner && Number.isInteger(owner.pid) && processAlive(owner.pid)) {
+		return `another wv setup --music is installing the kit (pid ${owner.pid}, started ${owner.started ?? "unknown"}). Wait for it to finish.`;
 	}
+	return `a lock from an earlier install remains at ${lock}. If no install runs now, remove it (rm "${lock}"), then run wv setup --music again.`;
 }
 
 /**
- * One install at a time per kit. The lock is a folder next to the kit with the
- * owner's pid inside: an install that a kill left behind is taken over, and a
- * live one gives a clear refusal instead of a race.
+ * One install at a time per kit. The lock is a file that O_EXCL makes in one
+ * atomic step, so two starts cannot both enter. wv never removes or takes over
+ * a lock: a lock whose owner is gone needs one command from the user, and no
+ * automatic recovery can delete the lock that another install just made.
  * @param {string} kit
- * @param {Log} [log]
  */
-function acquireKitLock(kit, log = () => {}) {
+function acquireKitLock(kit) {
 	const lock = `${kit}.lock`;
-	for (let attempt = 0; attempt < 2; attempt += 1) {
-		try {
-			mkdirSync(lock, { mode: 0o700 });
-			writeFileSync(join(lock, "owner"), `${process.pid}\n`);
-			// A lock that another install has taken over is not ours to remove.
-			return { path: lock, release: () => { if (readLockOwner(lock) === process.pid) rmSync(lock, { recursive: true, force: true }); } };
-		} catch (error) {
-			if (error?.code !== "EEXIST") throw error;
-			const owner = readLockOwner(lock);
-			if (owner !== null && processAlive(owner)) {
-				throw new Error(`another wv setup --music is installing the kit (pid ${owner}, lock ${lock}). Wait for that install to finish, or remove that folder if the process is gone.`);
-			}
-			// Between mkdir and the owner file there is no pid to read: do not take a live lock.
-			if (owner === null && lockIsFresh(lock)) throw new Error(`another wv setup --music is starting (lock ${lock}). Wait a moment, then run the command again.`);
-			log(`music kit: taking over the lock of pid ${owner ?? "unknown"}, which is gone`);
-			rmSync(lock, { recursive: true, force: true });
-		}
+	const token = randomUUID();
+	let fd;
+	try {
+		fd = openSync(lock, "wx", 0o600);
+	} catch (error) {
+		if (error?.code !== "EEXIST") throw error;
+		throw new Error(lockRefusal(lock));
 	}
-	throw new Error(`cannot lock ${lock}: another process keeps recreating it. Remove that folder, then run wv setup --music again.`);
+	try {
+		writeFileSync(fd, `${JSON.stringify({ pid: process.pid, token, started: new Date().toISOString() })}\n`);
+	} finally {
+		closeSync(fd);
+	}
+	return {
+		path: lock,
+		release: () => {
+			// A lock that another install has made since is not this run's to remove.
+			if (readLock(lock)?.token === token) rmSync(lock, { force: true });
+		},
+	};
 }
 
 /** The prefix that proves a staging folder belongs to this kit and this run. */
@@ -758,7 +758,7 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 	const refusal = toolRefusal(await d.tools());
 	if (refusal) throw new Error(refusal);
 	mkdirSync(dirname(kit), { recursive: true, mode: 0o700 });
-	const lock = acquireKitLock(kit, log);
+	const lock = acquireKitLock(kit);
 	/** Only the folder this run made is ever removed. */
 	let staging = null;
 	// A signal runs no finally: the staging folder and this run's lock must go anyway.

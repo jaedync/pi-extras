@@ -580,3 +580,54 @@ await installMusicKit({ kit: ${JSON.stringify(kit)}, log: () => {}, deps }).catc
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("two real installs that start together give one builder and one refusal", { timeout: 30000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "wv-lock-race-"));
+	try {
+		const kit = join(dir, "music-kit");
+		const worker = join(dir, "worker.mjs");
+		writeFileSync(
+			worker,
+			`import { installMusicKit } from ${JSON.stringify(join(SKILL, "lib", "music-kit.mjs"))};
+import { sleep } from ${JSON.stringify(join(SKILL, "lib", "proc.mjs"))};
+import { installSignalHandlers } from ${JSON.stringify(join(SKILL, "lib", "signals.mjs"))};
+installSignalHandlers();
+const deps = {
+	tools: async () => ({ ok: true, items: [], generator: null }),
+	freeBytes: () => 8 * 1024 ** 3,
+	python: async () => "/py",
+	fetch: async (source) => ({ head: source.commit, submodules: [] }),
+	build: async () => { process.stdout.write("building\\n"); await sleep(60000); },
+	generate: async () => {},
+	trim: async () => {},
+	smoke: async () => [],
+};
+try {
+	await installMusicKit({ kit: ${JSON.stringify(kit)}, log: () => {}, deps });
+} catch (error) {
+	process.stdout.write("refused: " + error.message + "\\n");
+}
+`,
+		);
+		const start = () => {
+			const watcher = spawn(process.execPath, [worker], { stdio: ["ignore", "pipe", "pipe"] });
+			const out = { text: "", watcher, exited: new Promise((resolve) => watcher.on("exit", (code) => resolve(code))) };
+			watcher.stdout.on("data", (chunk) => (out.text += chunk));
+			watcher.stderr.on("data", (chunk) => (out.text += chunk));
+			return out;
+		};
+		const [one, two] = [start(), start()];
+		await waitFor(() => (one.text.includes("building") || two.text.includes("building")) && /refused:/.test(one.text + two.text), 20000, "one builder and one refusal");
+		const builders = [one, two].filter((out) => out.text.includes("building"));
+		const refused = [one, two].filter((out) => out.text.includes("refused: another wv setup --music is installing the kit"));
+		assert.equal(builders.length, 1, one.text + two.text);
+		assert.equal(refused.length, 1, one.text + two.text);
+		builders[0].watcher.kill("SIGTERM");
+		assert.equal(await builders[0].exited, 143);
+		assert.equal(await refused[0].exited, 0);
+		assert.equal(existsSync(`${kit}.lock`), false, "the stopped install released the lock");
+		assert.deepEqual(readdirSync(dir).filter((name) => name.startsWith(".music-kit.staging-")), []);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

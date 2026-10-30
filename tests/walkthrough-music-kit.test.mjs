@@ -266,8 +266,8 @@ test("two installs that overlap take one lock, and the second refuses", async ()
 		await assert.rejects(
 			installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) }),
 			(error) => {
-				assert.match(error.message, /another wv setup --music is installing the kit/);
-				assert.match(error.message, new RegExp(`${kit}\\.lock`));
+				assert.match(error.message, new RegExp(`another wv setup --music is installing the kit \\(pid ${process.pid}, started `));
+				assert.match(error.message, /Wait for it to finish/);
 				return true;
 			},
 		);
@@ -280,21 +280,23 @@ test("two installs that overlap take one lock, and the second refuses", async ()
 	}
 });
 
-test("an old shared staging folder survives, and a stale lock is taken over", async () => {
+test("a lock file from an earlier install is refused and left exactly as it was", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
 		const kit = join(root, "music-kit");
-		const old = join(root, ".music-kit.staging");
-		mkdirSync(old, { recursive: true });
-		writeFileSync(join(old, "mine.txt"), "not wv's");
-		mkdirSync(`${kit}.lock`, { recursive: true });
-		writeFileSync(join(`${kit}.lock`, "owner"), "2147483647\n");
-		const log = [];
-		const report = await installMusicKit({ kit, log: (line) => log.push(line), deps: fakeDeps([]) });
-		assert.equal(report.ok, true, report.missing.join(", "));
-		assert.equal(readFileSync(join(old, "mine.txt"), "utf8"), "not wv's", "an install never deletes a folder it did not make");
-		assert.match(log.join("\n"), /taking over the lock of pid 2147483647/, "a stale lock is reported");
-		assert.equal(existsSync(`${kit}.lock`), false, "the lock is released");
+		const lock = `${kit}.lock`;
+		for (const content of ["", `${JSON.stringify({ pid: 2147483647, token: "earlier", started: "2026-01-01T00:00:00.000Z" })}\n`]) {
+			writeFileSync(lock, content);
+			const before = readFileSync(lock, "utf8");
+			await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) }), (error) => {
+				assert.match(error.message, /a lock from an earlier install remains at /);
+				assert.ok(error.message.includes(lock), "the refusal names the lock");
+				assert.match(error.message, new RegExp(`rm "${lock.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`), "the refusal gives the command");
+				return true;
+			});
+			assert.equal(readFileSync(lock, "utf8"), before, "the lock is not removed or rewritten");
+		}
+		assert.equal(existsSync(kit), false, "the install did not start");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -480,24 +482,6 @@ test("kitTools refuses a cmake older than 3.16, and passes a host with every too
 		const real = await kitTools({ PATH: process.env.PATH, CC: undefined, CXX: undefined });
 		assert.equal(real.ok, true, real.items.filter((item) => !item.ok).map((item) => `${item.name}: ${item.detail}`).join("; "));
 		assert.ok(["Ninja", "Unix Makefiles"].includes(real.generator?.name), "the check names the build generator");
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
-test("a fresh lock with no owner yet is not taken over, because another install is writing it", async () => {
-	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
-	try {
-		const kit = join(root, "music-kit");
-		mkdirSync(`${kit}.lock`, { recursive: true });
-		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) }), /is starting|another wv setup --music/);
-		// An old lock with no owner is left by a crash between the folder and the owner file: take it.
-		const old = (Date.now() - 60_000) / 1000;
-		utimesSync(`${kit}.lock`, old, old);
-		const log = [];
-		const report = await installMusicKit({ kit, log: (line) => log.push(line), deps: fakeDeps([]) });
-		assert.equal(report.ok, true, report.missing.join(", "));
-		assert.match(log.join("\n"), /taking over the lock of pid unknown/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
