@@ -368,6 +368,39 @@ test("the shutdown reports a tree that was cut and the pids that survived", asyn
 	assert.deepEqual(shutdownNotes({ unresolved: [{ pid: 9 }], lastSignal: "SIGKILL" }), ["state unknown after SIGKILL: 9 (they may still run)"]);
 });
 
+test("an error that the stop causes keeps the signal's exit code and runs every cleanup", { timeout: 30000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "wv-late-error-"));
+	const ready = join(dir, "ready");
+	const done = join(dir, "cleanup-done");
+	const worker = join(dir, "worker.mjs");
+	writeFileSync(
+		worker,
+		`import { writeFileSync } from "node:fs";
+import { installSignalHandlers, onSignalCleanup } from ${JSON.stringify(join(SKILL, "lib/signals.mjs"))};
+installSignalHandlers();
+onSignalCleanup(async () => {
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	writeFileSync(${JSON.stringify(done)}, "ok");
+}, "slow cleanup");
+// What a killed render does to its caller: the failed run rejects while the shutdown still works.
+process.on("SIGTERM", () => setTimeout(() => Promise.reject(new Error("the render failed")), 20));
+writeFileSync(${JSON.stringify(ready)}, "ready");
+setInterval(() => {}, 1000);
+`,
+	);
+	const watcher = spawn(process.execPath, [worker], { stdio: "ignore" });
+	try {
+		await waitForFile(ready);
+		watcher.kill("SIGTERM");
+		const code = await new Promise((resolve) => watcher.on("exit", (value) => resolve(value)));
+		assert.equal(code, 143, "the late error does not replace the signal's exit code");
+		assert.equal(existsSync(done), true, "the cleanup ran to its end");
+	} finally {
+		watcher.kill("SIGKILL");
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("a signal during wv measure stops its ffmpeg child", { timeout: 40000 }, async () => {
 	const dir = mkdtempSync(join(tmpdir(), "wv-measure-sig-"));
 	const pidFile = join(dir, "ffmpeg.pid");

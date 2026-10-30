@@ -105,6 +105,10 @@ async function shutdown(code) {
 	const exitCode = code;
 	process.exitCode = exitCode;
 	const until = Date.now() + SHUTDOWN_MS;
+	// The stop kills the children, so a run that waits on one fails, and its error can reach the
+	// top level before the cleanups finish: Node then exits with 1 and skips them. From here the
+	// shutdown owns the exit, and such an error is only reported.
+	process.on("uncaughtException", (error) => warn(`during the stop: ${error?.message ?? error}`));
 
 	const children = await untilDeadline(
 		stopChildTrees({
