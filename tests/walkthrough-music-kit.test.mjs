@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -31,8 +31,8 @@ import {
 	wavPeak,
 } from "../skills/walkthrough-video/scripts/lib/music-kit.mjs";
 import { parseCommandLine, usageText } from "../skills/walkthrough-video/scripts/lib/args.mjs";
-import { KIT_PY_PACKAGES, paths } from "../skills/walkthrough-video/scripts/lib/paths.mjs";
-import { scoreNeedsKit } from "../skills/walkthrough-video/scripts/film/sound.mjs";
+import { KIT_PY_PACKAGES, musicKitPath, paths } from "../skills/walkthrough-video/scripts/lib/paths.mjs";
+import { scoreNeedsKit, scoreSteps } from "../skills/walkthrough-video/scripts/film/sound.mjs";
 import { venvHasModules } from "../skills/walkthrough-video/scripts/lib/setup.mjs";
 
 const SKILL = fileURLToPath(new URL("../skills/walkthrough-video/", import.meta.url));
@@ -786,6 +786,14 @@ test("wv setup --music --check reports each missing part and exits 1", () => {
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("the score hands Python the resolved kit path, not the raw override", () => {
+	const kit = "/var/tmp/with space/kit";
+	const steps = scoreSteps({ score: "/tmp/score.py", out: "/tmp/out", cues: "", duration: 3, python: "/py", kit, env: { WV_MUSIC_KIT: "  /var/tmp/with space/kit  " } });
+	for (const step of steps) assert.equal(step.env.WV_MUSIC_KIT, kit, `${step.name} gets the resolved path`);
+	// A relative override is the absolute path that the resolver gives, not the raw value.
+	assert.equal(musicKitPath({ WV_MUSIC_KIT: "relative/kit" }, "/var/tmp/fake-home"), resolve("relative/kit"));
 });
 
 test("a score that plays a sampled part needs the kit; the synth template does not", () => {

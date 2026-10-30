@@ -232,7 +232,7 @@ async function mix(argv) {
  * the cue sheet and the voices on its path), the hit check, the harmony check.
  */
 export function scoreSteps({ score, out, cues, duration, python, fps = null, kit = paths().musicKit, env = process.env }) {
-	const base = { ...env, PYTHONPATH: [SCORE_PY, env.PYTHONPATH].filter(Boolean).join(":"), WV_SCORE_DURATION: String(duration), WV_SCORE_CUES: cues, WV_MUSIC_KIT: env.WV_MUSIC_KIT || kit };
+	const base = { ...env, PYTHONPATH: [SCORE_PY, env.PYTHONPATH].filter(Boolean).join(":"), WV_SCORE_DURATION: String(duration), WV_SCORE_CUES: cues, WV_MUSIC_KIT: kit };
 	return [
 		{ name: "render", cmd: python, args: ["-I", "-B", "-c", "import runpy, sys; sys.path.insert(0, sys.argv[1]); sys.argv = sys.argv[2:]; runpy.run_path(sys.argv[0], run_name='__main__')", SCORE_PY, score, out], env: base },
 		{ name: "hits", cmd: python, args: ["-I", "-B", join(SCORE_PY, "hit_check.py"), out, ...(fps ? [String(fps)] : [])], env: base },
