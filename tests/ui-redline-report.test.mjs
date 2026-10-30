@@ -132,3 +132,21 @@ test("declarations reads only the named properties of a one-line rule", () => {
 	assert.deepEqual(declarations(".a { color: red; box-shadow: 0 0 4px blue; }", "box-shadow"), ["0 0 4px blue"]);
 	assert.deepEqual(declarations(".a { border-color: red }", "color"), []);
 });
+
+test("setup --check reports the playwright-core that the audit uses, also from the walkthrough-video cache", async () => {
+	const { setup } = await import("../skills/ui-redline/scripts/lib/runtime.mjs");
+	const cache = mkdtempSync(join(tmpdir(), "redline-cache-"));
+	try {
+		const env = { XDG_CACHE_HOME: cache };
+		const wv = join(cache, "pi-walkthrough-video", "node_modules", "playwright-core");
+		mkdirSync(wv, { recursive: true });
+		writeFileSync(join(wv, "package.json"), JSON.stringify({ version: "1.60.0" }));
+		writeFileSync(join(wv, "index.mjs"), "export const chromium = { launch: async () => ({ close: async () => {} }) };\n");
+		const status = await setup({ check: true, env });
+		assert.equal(status.playwright, "1.60.0");
+		assert.equal(status.source, wv);
+		assert.equal(status.browser, true);
+	} finally {
+		rmSync(cache, { recursive: true, force: true });
+	}
+});

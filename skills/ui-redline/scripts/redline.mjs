@@ -135,7 +135,7 @@ async function main(argv) {
 	switch (command) {
 		case "setup": {
 			const status = await setup({ check: Boolean(args.flags.check) });
-			console.log(`playwright-core: ${status.playwright ?? "not installed"}\nchromium: ${status.browser ? "ok" : "not installed"}\ncache: ${status.root}`);
+			console.log(`playwright-core: ${status.playwright ? `${status.playwright} (${status.source})` : "not installed"}\nchromium: ${status.browser ? "ok" : "not installed"}\ncache: ${status.root}`);
 			return status.playwright && status.browser ? 0 : 1;
 		}
 		case "audit":

@@ -86,12 +86,11 @@ export async function setup({ check = false, log = console.error, env = process.
 	const dir = join(root, "node_modules", "playwright-core");
 	const installed = packageVersion(dir) === PLAYWRIGHT_CORE;
 	if (check) {
-		let browser = false;
-		if (installed) {
-			const { chromium } = await import(pathToFileURL(join(dir, "index.mjs")).href);
-			browser = await launch(chromium).then((b) => b.close().then(() => true), () => false);
-		}
-		return { root, playwright: installed ? PLAYWRIGHT_CORE : null, browser };
+		// The same search as the audit, so the check never says "not installed" where the audit runs.
+		const found = await loadChromium(env).catch(() => null);
+		const browser = found ? await launch(found.chromium).then((b) => b.close().then(() => true), () => false) : false;
+		const version = found && found.source !== "node_modules" ? packageVersion(found.source) : null;
+		return { root, source: found?.source ?? null, playwright: found ? version ?? "found" : null, browser };
 	}
 	mkdirSync(root, { recursive: true, mode: 0o700 });
 	const release = lock(join(root, ".lock"));

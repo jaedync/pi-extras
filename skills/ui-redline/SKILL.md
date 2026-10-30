@@ -24,7 +24,7 @@ command takes `--help`.
 
 | Command | What it does |
 | --- | --- |
-| `redline setup` | Installs pinned playwright-core into `~/.cache/pi-ui-redline` and Chromium's headless shell into Playwright's browser cache, once per host. `--check` only reports. A walkthrough-video install also works. |
+| `redline setup` | Installs pinned playwright-core into `~/.cache/pi-ui-redline` and Chromium's headless shell into Playwright's browser cache, once per host. `--check` only reports, and names the install that the audit uses. A walkthrough-video install also works. |
 | `redline audit <url\|file> --out <dir>` | Renders the page at 1440×900 and 390×844, reads computed styles and layout, presses Tab through the controls, and writes `audit.json`, `<view>.png` and `<view>-redline.png` (numbered boxes match the finding numbers). `--scheme dark` emulates a dark preference. |
 | `redline compare <before> <after>` | Compares two audits rule by rule. Exit code 1 when a high finding is left or a rule got worse. It warns when the audits are of different URLs or the after page lost most of its elements (a broken page). An HTTP error status stops the audit. |
 | `redline scan <src>` | Searches source files (Tailwind classes and CSS) line by line for the same signs, with file and line. Use it to find where a rendered finding comes from, or when the screen cannot render yet. |
