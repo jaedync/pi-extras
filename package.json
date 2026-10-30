@@ -65,7 +65,7 @@
   },
   "scripts": {
     "test": "node scripts/test.mjs",
-    "typecheck": "tsc -p . && tsc -p skills/walkthrough-video && tsc -p skills/walkthrough-video/templates/film",
+    "typecheck": "tsc -p . && tsc -p skills/walkthrough-video && tsc -p skills/walkthrough-video/templates/film && tsc -p skills/ui-redline",
     "test:unit": "node --import ./tests/support/keep-alive.mjs --test --test-timeout=60000 tests/*.test.ts tests/*.test.mjs tests/*.test.mts",
     "test:kagi": "vitest run",
     "test:pi": "node scripts/test-pi.mjs",

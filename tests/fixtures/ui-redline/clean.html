@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ledgerly</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #151517; color: #ececee; font-size: 14px; }
+  .shell { display: flex; min-height: 100vh; }
+  .side { width: 248px; padding: 20px 12px; border-right: 1px solid rgba(236, 236, 238, 0.08); }
+  .logo { font-size: 16px; font-weight: 600; margin: 0 0 24px 8px; }
+  .label { font-size: 12px; color: #9a9aa2; margin: 24px 8px 8px; }
+  .nav { display: flex; flex-direction: column; gap: 4px; }
+  .nav a { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 8px; border-radius: 8px; color: #c8c8cc; text-decoration: none; transition: background-color 120ms ease-out, color 120ms ease-out; }
+  .nav a.active { background: #232326; color: #ececee; }
+  .nav a:focus-visible, button:focus-visible { outline: 2px solid #5e9bf0; outline-offset: 2px; }
+  .nav svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.5; fill: none; }
+  main { flex: 1; padding: 32px; }
+  h1 { font-size: 24px; font-weight: 500; margin: 0 0 4px; }
+  .sub { color: #9a9aa2; margin: 0 0 24px; }
+  .stats { display: flex; gap: 16px; }
+  .card { flex: 1; padding: 20px; border-radius: 12px; background: #1c1c1f; border: 1px solid rgba(236, 236, 238, 0.08); }
+  .card .k { color: #9a9aa2; }
+  .card .v { font-size: 28px; font-weight: 500; margin: 8px 0 4px; font-variant-numeric: tabular-nums; }
+  .card .d { color: #6fbf8e; font-size: 12px; }
+  section { margin-top: 32px; padding: 24px; border-radius: 12px; background: #1c1c1f; }
+  h2 { font-size: 18px; font-weight: 500; margin: 0 0 8px; }
+  section p { color: #b4b4ba; margin: 0; max-width: 65ch; }
+  button { margin-top: 16px; height: 36px; padding: 0 16px; border: 0; border-radius: 8px; font: inherit; font-weight: 500; color: #151517; background: #ececee; transition: background-color 120ms ease-out; }
+  .rows { margin-top: 24px; display: flex; flex-direction: column; gap: 4px; }
+  .row { display: flex; justify-content: space-between; padding: 8px 12px; font-variant-numeric: tabular-nums; }
+  @media (max-width: 720px) {
+    .shell { flex-direction: column; }
+    .side { width: auto; border-right: 0; border-bottom: 1px solid rgba(236, 236, 238, 0.08); }
+    main { padding: 24px 16px; }
+    .stats { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="logo">Ledgerly</div>
+    <div class="label">Navigation</div>
+    <nav class="nav">
+      <a href="#" class="active"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9H3z"/></svg>Dashboard</a>
+      <a href="#"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>Invoices</a>
+      <a href="#"><svg viewBox="0 0 24 24"><path d="M3 7h18v10H3z"/></svg>Payments</a>
+      <a href="#"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7"/></svg>Reports</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>October 2026</h1>
+    <p class="sub">Invoices and payments for your studio</p>
+    <div class="stats">
+      <div class="card"><div class="k">Paid this month</div><div class="v">$48,210</div><div class="d">+12% vs September</div></div>
+      <div class="card"><div class="k">Outstanding</div><div class="v">$12,860</div><div class="d">3 fewer than September</div></div>
+      <div class="card"><div class="k">Clients</div><div class="v">182</div></div>
+    </div>
+    <section>
+      <h2>Send the September reminders</h2>
+      <p>Four invoices are past due. Ledgerly drafts each reminder with the invoice attached; you check and send them.</p>
+      <button>Review reminders</button>
+    </section>
+    <div class="rows">
+      <div class="row"><span>Hollis Print Co</span><span>$1,200</span></div>
+      <div class="row"><span>Marrow &amp; Pine</span><span>$860</span></div>
+      <div class="row"><span>Northgate Dental</span><span>$4,410</span></div>
+      <div class="row"><span>Okafor Studio</span><span>$990</span></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

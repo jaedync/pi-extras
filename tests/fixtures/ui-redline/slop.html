@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ledgerly</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0f0a1f; color: #e9e4ff; }
+  .shell { display: flex; min-height: 100vh; background: linear-gradient(135deg, #1e1145 0%, #0b1a3f 100%); }
+  .side { width: 250px; padding: 22px 13px; background: rgba(139, 92, 246, 0.08); border-right: 1px solid #8b5cf6; }
+  .logo { font-size: 22px; font-weight: 900; background: linear-gradient(90deg, #a855f7, #3b82f6); -webkit-background-clip: text; background-clip: text; color: transparent; margin-bottom: 26px; }
+  .label { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: #6d5fa3; margin: 18px 0 7px; }
+  .nav a { display: block; color: #c4b5fd; text-decoration: none; padding: 9px 11px; border-radius: 999px; }
+  .nav a.tall { padding: 13px 11px; }
+  .nav a.active { background: linear-gradient(90deg, #7c3aed, #db2777); box-shadow: 0 0 20px rgba(168, 85, 247, 0.6); color: #fff; }
+  .nav a, button { outline: none; transition: all 0.3s cubic-bezier(0.68, -0.55, 0.27, 1.55); }
+  main { flex: 1; padding: 30px 34px; }
+  h1 { font-size: 34px; font-weight: 800; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .sub { color: #7c6fb0; font-size: 15px; margin: 0 0 26px; }
+  .stats { display: flex; gap: 18px; }
+  .card { flex: 1; padding: 22px; border-radius: 22px; background: rgba(255, 255, 255, 0.04); border: 1px solid #a855f7; box-shadow: 0 0 30px rgba(59, 130, 246, 0.35); }
+  .card.wide { padding: 18px 26px; }
+  .card .k { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #8b80c4; }
+  .card .v { font-size: 30px; font-weight: 800; margin: 6px 0; }
+  .card .d { font-size: 13px; color: #34d399; }
+  .chip { display: inline-block; font-size: 10px; padding: 3px 9px; border-radius: 999px; background: #f472b6; color: #fff; animation: pulse 1.6s infinite; }
+  @keyframes pulse { 50% { opacity: 0.5; } }
+  .blob { position: absolute; right: 60px; top: 220px; width: 380px; height: 380px; border-radius: 50%; background: radial-gradient(circle, rgba(236, 72, 153, 0.55), transparent 70%); filter: blur(40px); pointer-events: none; }
+  .hero { margin-top: 30px; padding: 26px; border-radius: 22px; background: rgba(255,255,255,0.03); }
+  .hero p { color: #6b5f9e; }
+  button { margin-top: 14px; padding: 11px 22px; border: 0; border-radius: 999px; font-weight: 700; color: #fff; background: linear-gradient(90deg, #8b5cf6, #ec4899); box-shadow: 0 0 24px rgba(236, 72, 153, 0.5); }
+  .rows { margin-top: 26px; }
+  .row { display: flex; justify-content: space-between; padding: 10px 14px; margin-bottom: 6px; }
+  .row:nth-child(2) { margin-bottom: 15px; }
+  .row:nth-child(3) { padding: 14px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="logo">✨ Ledgerly AI</div>
+    <div class="label">Navigation</div>
+    <nav class="nav">
+      <a href="#" class="active">🏠 Dashboard</a>
+      <a href="#">📥 Invoices</a>
+      <a href="#" class="tall">💰 Payments</a>
+      <a href="#">📈 Reports</a>
+    </nav>
+    <div class="label">Workspace</div>
+    <nav class="nav">
+      <a href="#">⚙️ Settings</a>
+    </nav>
+  </aside>
+  <main>
+    <h1>Welcome back, Sam! 👋</h1>
+    <p class="sub">Supercharge your invoicing with AI-powered magic!!</p>
+    <div class="stats">
+      <div class="card"><div class="k">Paid this month</div><div class="v">$48,210</div><div class="d">+12%!! 🚀</div></div>
+      <div class="card"><div class="k">Outstanding</div><div class="v">$124,860.40</div><div class="d">3 less!!</div></div>
+      <div class="card wide"><div class="k">Clients</div><div class="v">182</div><span class="chip">New ✨</span></div>
+    </div>
+    <div class="blob"></div>
+    <section class="hero">
+      <h2>Unlock seamless billing.</h2>
+      <p>Loved by 10,000+ teams worldwide. Get paid 10x faster with our revolutionary engine.</p>
+      <button>Get Started Free 🚀</button>
+    </section>
+    <div class="rows">
+      <div class="row"><span>Acme Corp</span><span>$1,200</span></div>
+      <div class="row"><span>Globex</span><span>$860</span></div>
+      <div class="row"><span>Initech</span><span>$4,410</span></div>
+      <div class="row"><span>Umbrella</span><span>$990</span></div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

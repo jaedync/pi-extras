@@ -76,8 +76,8 @@ test("the private-name guard finds a canary file with a canary pattern", () => {
 });
 
 test("no shipped file names a private host, address or home path", { skip }, () => {
-	// The skill, the tests of this skill, and the two files at the repository root that describe it.
-	const files = [...walk(SKILL), ...walk(TESTS).filter((f) => /^walkthrough-.*\.(?:mjs|ts|json|md)$/.test(basename(f))), ...["README.md", "THIRD_PARTY.md"].map((f) => join(PACKAGE, f))];
+	// Both shipped skills with scripts, their tests and fixtures, and the two files at the repository root that describe them.
+	const files = [...walk(SKILL), ...walk(join(PACKAGE, "skills", "ui-redline")), ...walk(TESTS).filter((f) => /^(?:walkthrough|ui-redline)-.*\.(?:mjs|ts|json|md|html)$/.test(basename(f))), ...["README.md", "THIRD_PARTY.md"].map((f) => join(PACKAGE, f))];
 	assert.deepEqual(scanFiles(files, patterns), [], `remove the private details:\n${scanFiles(files, patterns).join("\n")}`);
 });
 

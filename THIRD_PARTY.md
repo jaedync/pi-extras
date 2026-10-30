@@ -87,3 +87,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+# UI Redline
+
+The `ui-redline` skill was prompted by the idea of a design-review skill for
+generated UI in https://github.com/heydamir/unslop (CC BY 4.0, Damir
+Sokolovsky). ui-redline copies no text, rule list, example or code from it:
+its measured rules, scripts, brief, passes and review prompt were written for
+this package. `redline setup` installs pinned `playwright-core` (Apache-2.0,
+Microsoft) and `chromium-headless-shell` (BSD-3-Clause plus its third-party
+notices, Google) into `~/.cache/pi-ui-redline` on first use; the skill bundles
+neither.
