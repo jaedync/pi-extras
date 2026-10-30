@@ -6,13 +6,15 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
 	MUSIC_KIT_ATTRIBUTION,
+	MUSIC_KIT_DOWNLOAD_BYTES,
+	formatBytes,
 	MUSIC_KIT_NEED_BYTES,
 	MUSIC_KIT_PINS,
 	MUSIC_KIT_SAMPLE_RATE,
@@ -28,7 +30,7 @@ import {
 	wavPeak,
 } from "../skills/walkthrough-video/scripts/lib/music-kit.mjs";
 import { parseCommandLine, usageText } from "../skills/walkthrough-video/scripts/lib/args.mjs";
-import { paths } from "../skills/walkthrough-video/scripts/lib/paths.mjs";
+import { KIT_PY_PACKAGES, paths } from "../skills/walkthrough-video/scripts/lib/paths.mjs";
 import { scoreNeedsKit } from "../skills/walkthrough-video/scripts/film/sound.mjs";
 
 const SKILL = fileURLToPath(new URL("../skills/walkthrough-video/", import.meta.url));
@@ -93,6 +95,8 @@ function fakeDeps(calls, { failAt = null, smoke = passingSmoke, free = 8 * 1024 
 			mkdirSync(dir, { recursive: true });
 			writeFileSync(join(dir, "LICENSE"), `${source.name} licence`);
 			if (source.name === "salamander") {
+				mkdirSync(join(dir, ".git", "objects"), { recursive: true });
+				writeFileSync(join(dir, ".git", "objects", "pack"), "the piano's history");
 				mkdirSync(join(dir, "Samples"), { recursive: true });
 				writeFileSync(join(dir, "Samples", "A0v1.flac"), "flac");
 				writeFileSync(join(dir, "Salamander Grand Piano V3.sfz"), "<control>\n");
@@ -131,6 +135,8 @@ test("the pins are the commits the hand-built kit measured", () => {
 	assert.equal(MUSIC_KIT_PINS.salamander.licence, "CC BY 3.0");
 	assert.equal(MUSIC_KIT_SAMPLE_RATE, 48000);
 	assert.equal(MUSIC_KIT_ATTRIBUTION, "Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0");
+	// The kit's map tools and the score they serve share one venv.
+	for (const name of ["numpy", "soundfile", "scipy", "mido", "pedalboard"]) assert.ok(KIT_PY_PACKAGES.some((spec) => spec.startsWith(`${name}==`)), `the kit installs ${name}`);
 });
 
 test("the VCSL fetch names every folder the maps read, and no folder the maps do not", () => {
@@ -267,7 +273,22 @@ test("a passing install moves the staging folder into place and records the pins
 		assert.equal(manifest.salamander.commit, MUSIC_KIT_PINS.salamander.commit);
 		assert.ok(existsSync(join(kit, "licenses", "salamander-LICENSE")), "the piano licence ships with the samples");
 		assert.ok(!existsSync(join(kit, "src")), "the cloned sources do not stay in the kit");
+		assert.equal(existsSync(join(kit, "samples", "salamander", ".git")), false, "the piano's git history does not stay in the kit");
 		assert.equal(existsSync(join(root, ".music-kit.staging")), false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("an install replaces a kit whose samples folder is a broken symlink", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
+	try {
+		const kit = join(root, "music-kit");
+		mkdirSync(kit, { recursive: true });
+		symlinkSync(join(root, "gone"), join(kit, "samples"), "dir");
+		const report = await installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) });
+		assert.equal(report.ok, true, report.missing.join(", "));
+		assert.equal(lstatSync(join(kit, "samples")).isSymbolicLink(), false, "the broken link is replaced by real samples");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -346,16 +367,29 @@ test("the real smoke render runs only with WV_INTEGRATION=1 and a kit path", { s
 });
 
 const e2e = process.env.WV_INTEGRATION === "1";
-test("the real install builds a kit that passes --check", { skip: e2e ? false : "set WV_INTEGRATION=1 to download about 1 GB and build sfizz", timeout: 60 * 60_000 }, async () => {
-	const root = "/var/tmp/wv-music-e2e";
-	const kit = join(root, "cache", "pi-walkthrough-video", "music-kit");
-	const log = [];
-	const report = await installMusicKit({ kit, log: (line) => log.push(line) });
-	assert.equal(report.ok, true, report.missing.join(", "));
-	assert.ok(log.some((line) => /already installed/.test(line)) === false);
-	const again = await installMusicKit({ kit, log: (line) => log.push(line) });
-	assert.equal(again.ok, true);
-	assert.ok(log.some((line) => /already installed/.test(line)), "the second run reads the kit and skips the download");
+test("the real install builds a kit that passes --check, and a second run skips the download", { skip: e2e ? false : "set WV_INTEGRATION=1 to download about 1 GB and build sfizz", timeout: 60 * 60_000 }, async () => {
+	const root = "/var/tmp/wv-music-e2e/it";
+	const previous = { XDG_CACHE_HOME: process.env.XDG_CACHE_HOME, TMPDIR: process.env.TMPDIR };
+	const restore = (name, value) => (value === undefined ? delete process.env[name] : (process.env[name] = value));
+	process.env.XDG_CACHE_HOME = join(root, "cache");
+	process.env.TMPDIR = join(root, "tmp");
+	mkdirSync(process.env.TMPDIR, { recursive: true });
+	try {
+		const kit = paths().musicKit;
+		const log = [];
+		const report = await installMusicKit({ kit, log: (line) => log.push(line) });
+		assert.equal(report.ok, true, report.missing.join(", "));
+		assert.ok(log.some((line) => /smoke render: one MIDI pass/.test(line)), "the first run builds the kit");
+		const again = [];
+		const second = await installMusicKit({ kit, log: (line) => again.push(line) });
+		assert.equal(second.ok, true);
+		assert.ok(again.some((line) => /already installed/.test(line)), "the second run reads the kit and skips the download");
+		assert.ok(existsSync(join(kit, "kit.json")));
+		assert.ok(!existsSync(join(dirname(kit), ".music-kit.staging")), "no staging folder stays behind");
+	} finally {
+		restore("XDG_CACHE_HOME", previous.XDG_CACHE_HOME);
+		restore("TMPDIR", previous.TMPDIR);
+	}
 });
 
 test("setup parses --music, and the setup help names each source, commit and licence", () => {
@@ -368,7 +402,7 @@ test("setup parses --music, and the setup help names each source, commit and lic
 	assert.match(text, /CC BY 3\.0/);
 	assert.match(text, /BSD-2-Clause/);
 	assert.match(text, /CC0/);
-	assert.match(text, /1\.0 GB/);
+	assert.ok(text.includes(formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)), "the help names the measured download size");
 	assert.match(text, /smoke render/);
 });
 

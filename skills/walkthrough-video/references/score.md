@@ -76,13 +76,13 @@ refuses without it and says `wv setup --music`. A score with only synth voices n
 ## The music kit (optional, one install)
 
 `wv setup --music` installs the kit into `$WV_MUSIC_KIT` (default above). It needs git, cmake
-and a C++ compiler, about 3 GB of free space while it works, and about 10 minutes on 16 cores.
+and a C++ compiler, about 3 GB of free space while it works, and about 5 minutes on 16 cores.
 It downloads three pinned sources and builds one binary:
 
 | Source | Pin | Download | Licence |
 |---|---|---|---|
 | sfizz, built with cmake to `sfizz_render` only (no JACK, LV2, VST or tests) | `f5c6e29` | about 148 MB with its submodules | BSD-2-Clause |
-| VCSL, 10 sample folders by sparse checkout (no Vibraphone: no map reads it) | `c1ea7bc` | about 181 MB | CC0 1.0 |
+| VCSL, 10 sample folders by sparse checkout (no Vibraphone: no map reads it) | `c1ea7bc` | about 207 MB | CC0 1.0 |
 | Salamander Grand Piano V3, 668 files, 641 FLAC samples | `3382bf9` | 714 MB | CC BY 3.0 |
 
 Then it writes `kit.sfz`, `marimba.sfz` and `glock.sfz` from the VCSL samples, trims the leading
@@ -91,8 +91,14 @@ short pass through each of the four SFZ files. All four must be non-silent at 48
 built in a staging folder and moves into place only when every step passed, so a failure never
 leaves a half kit.
 
-The SFZ maps are byte for byte the maps of the hand-built kit, so a score sounds the same on
-both. A second `wv setup --music` reads the kit, runs the smoke render and skips the download.
+The finished kit is 732 MB on disk (the piano 691 MB, the VCSL samples 39 MB, the binary 3 MB).
+It also installs the score's Python packages (numpy, soundfile, scipy, mido, pedalboard) into the
+runtime venv when they are missing, so `wv setup --music` alone can render a score with a sampled
+part.
+
+The SFZ maps are byte for byte the maps of the hand-built kit, and the smoke render is bit for
+bit the same WAV, so a score sounds the same on both. A second `wv setup --music` reads the kit,
+runs the smoke render and skips the download.
 
 - `wv setup --music --check` reports each part, its commit and its smoke render, and exits 1
   when one is missing.

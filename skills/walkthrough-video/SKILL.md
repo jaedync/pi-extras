@@ -16,7 +16,7 @@ and the voice into
 `~/.cache/pi-walkthrough-video`. It is the only step that downloads the tool's own files.
 
 `wv setup --music` is the one optional download: it builds the sampled instruments for a
-composed score (sfizz, VCSL and the Salamander piano, about 1 GB, 10 minutes) into the same
+composed score (sfizz, VCSL and the Salamander piano, about 1.1 GB, 5 minutes) into the same
 cache. Without it a score uses the synth voices only, and `wv sound score` says so.
 
 Three other steps use the network: `wv lift` and `wv capture` read the app you name, and

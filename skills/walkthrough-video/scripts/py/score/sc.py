@@ -65,7 +65,7 @@ def require_kit(sfz):
     sfizz = os.path.exists(SFIZZ) or (not os.path.isabs(SFIZZ) and shutil.which(SFIZZ))
     if not sfizz or not os.path.exists(sfz):
         raise SystemExit(f"wv sound score: this score plays a sampled part, and the music kit is not installed at {MUSIC_KIT}. "
-                         f"Run `wv setup --music` (about 1 GB, 10 min), then run the score again. "
+                         f"Run `wv setup --music` (about 1 GB), then run the score again. "
                          f"A score with only synth voices needs no kit.")
 
 def sfz_render(sfz, notes, path, seed=0, compensate=None, full=False):

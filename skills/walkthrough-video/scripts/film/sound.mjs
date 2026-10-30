@@ -280,7 +280,7 @@ async function score(argv) {
 	// A sampled score is refused before any render, with the fix in the message.
 	const kit = process.env.WV_MUSIC_KIT || paths().musicKit;
 	if (scoreNeedsKit(readFileSync(file, "utf8")) && !musicKitStatus(kit).present) {
-		throw new Error(`this score plays a sampled part, and the music kit is not installed at ${kit}. Run "wv setup --music" (about ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)}, about 10 min), then run this command again. A score with only synth voices needs no kit.`);
+		throw new Error(`this score plays a sampled part, and the music kit is not installed at ${kit}. Run "wv setup --music" (about ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)}, about 5 min on 16 cores), then run this command again. A score with only synth voices needs no kit.`);
 	}
 	const python = paths().python;
 	if (!existsSync(python)) throw new Error(`the runtime venv is not installed (${python}). Run "wv setup", then try again.`);

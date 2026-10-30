@@ -5,7 +5,7 @@
  * and moves it into place only when every part, including a smoke render,
  * passed. The pins are the commits the hand-built kit measured (2026-10-29).
  */
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +32,8 @@ export const MUSIC_KIT_PINS = {
 		url: "https://github.com/sgossner/VCSL.git",
 		commit: "c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e",
 		licence: "CC0-1.0",
-		bytes: 190_000_000,
+		// The checkout and its shallow history, measured 2026-10-30.
+		bytes: 217_000_000,
 		// Only the folders the maps read. Vibraphone is not one of them, so it is not downloaded.
 		folders: [
 			"LICENSE",
@@ -128,14 +129,6 @@ function countFiles(dir, extension) {
 	}
 }
 
-function isDir(path) {
-	try {
-		return statSync(path).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
 /**
  * The cheap status that `wv setup --check` prints: the four parts are there,
  * with no render. A kit built by hand before this step has no kit.json and is
@@ -149,7 +142,7 @@ export function musicKitStatus(kit = paths().musicKit) {
 		[p.vcslKitSfz, p.vcslMarimbaSfz, p.vcslGlockSfz, p.pianoSfz].every((file) => existsSync(file)) &&
 		countFiles(p.vcslSamples, ".wav") > 0 &&
 		countFiles(p.pianoSamples, ".flac") > 0;
-	if (!present) return { present: false, kit, manifest, detail: "not installed", hint: `run wv setup --music to add the sampled instruments (about ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} download, about 10 min)` };
+	if (!present) return { present: false, kit, manifest, detail: "not installed", hint: `run wv setup --music to add the sampled instruments (about ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} download, about 5 min on 16 cores)` };
 	const detail = manifest
 		? `installed at ${kit} (VCSL ${short(manifest.vcsl?.commit) ?? "?"}, Salamander ${short(manifest.salamander?.commit) ?? "?"})`
 		: `installed at ${kit} (no kit.json: built by hand)`;
@@ -352,12 +345,12 @@ export function kitDeps({ log = () => {}, env = process.env } = {}) {
 	};
 }
 
-/** The Python that writes the maps: the runtime venv, or one uv builds for the kit. */
+/** The Python that writes the maps: the runtime venv, or one uv builds for the kit and its score. */
 async function kitPython(log) {
 	const { ensurePythonVenv } = await import("./setup.mjs");
 	const p = paths();
-	const { KIT_PY_PACKAGES } = await import("./paths.mjs");
-	return ensurePythonVenv({ python: p.python, venv: p.venv, packages: KIT_PY_PACKAGES, modules: ["numpy", "soundfile"], log: (line) => log(`music kit: ${line}`) });
+	const { KIT_PY_PACKAGES, SCORE_MODULES } = await import("./paths.mjs");
+	return ensurePythonVenv({ python: p.python, venv: p.venv, packages: KIT_PY_PACKAGES, modules: SCORE_MODULES, log: (line) => log(`music kit: ${line}`) });
 }
 
 async function git(args, cwd, timeoutMs) {
@@ -459,12 +452,15 @@ function writeManifest(staging, smoke) {
 
 /** Moves a passing staging folder into place, and keeps the old kit if the move fails. */
 function replaceKit(staging, kit) {
-	let previous = null;
+	let entry = null;
 	try {
-		if (statSync(kit)) previous = `${kit}.previous-${process.pid}`;
+		entry = lstatSync(kit);
 	} catch {
 		// No kit yet: nothing to move aside.
 	}
+	// A symlink (for example a link to a kit that moved) is removed, not moved aside.
+	if (entry?.isSymbolicLink()) rmSync(kit, { force: true });
+	const previous = entry && !entry.isSymbolicLink() ? `${kit}.previous-${process.pid}` : null;
 	if (previous) renameSync(kit, previous);
 	try {
 		renameSync(staging, kit);
@@ -513,6 +509,8 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		await d.fetch(MUSIC_KIT_PINS.salamander, pianoSrc);
 		mkdirSync(join(p.staging, "samples"), { recursive: true });
 		renameSync(pianoSrc, join(p.staging, "samples", "salamander"));
+		// The piano's git history is another 714 MB; the samples and their licence are the kit.
+		rmSync(join(p.staging, "samples", "salamander", ".git"), { recursive: true, force: true });
 
 		log("4/5 building the sample maps and trimming the piano samples");
 		await d.generate(vcslSrc, join(p.staging, "samples", "vcsl"), python);
