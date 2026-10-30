@@ -15,6 +15,10 @@ installs pinned playwright-core, HyperFrames (with esbuild), GSAP, the browsers,
 and the voice into
 `~/.cache/pi-walkthrough-video`. It is the only step that downloads the tool's own files.
 
+`wv setup --music` is the one optional download: it builds the sampled instruments for a
+composed score (sfizz, VCSL and the Salamander piano, about 1 GB, 10 minutes) into the same
+cache. Without it a score uses the synth voices only, and `wv sound score` says so.
+
 Three other steps use the network: `wv lift` and `wv capture` read the app you name, and
 `wv compose` downloads the look's font from Google Fonts when the family is not one of the
 families that HyperFrames bundles (the files then live in the project, so the render is local).

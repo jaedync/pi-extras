@@ -430,3 +430,19 @@ test("sc.py refuses a sampled part with the fix when the kit is missing", { skip
 	assert.match(result.stderr, /wv setup --music/);
 	assert.match(result.stderr, /sampled part/);
 });
+
+const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
+test("the docs say how to add the kit, what it downloads, and how to credit the piano", () => {
+	const score = readFileSync(join(SKILL, "references", "score.md"), "utf8");
+	assert.match(score, /wv setup --music/);
+	assert.doesNotMatch(score, /does not install these yet/, "the old note is gone");
+	assert.match(score, /Salamander Grand Piano V3 by Alexander Holm, CC BY 3\.0/);
+	assert.match(score, /714 MB|714MB|748/);
+	assert.match(score, /BSD-2-Clause/);
+	assert.match(score, /CC0 1\.0/);
+	assert.match(score, /published film/i);
+	const skill = readFileSync(join(SKILL, "SKILL.md"), "utf8");
+	assert.match(skill, /wv setup --music/, "the network list names the optional music download");
+	const third = readFileSync(join(PACKAGE, "THIRD_PARTY.md"), "utf8");
+	for (const name of ["sfizz", "BSD-2-Clause", "Salamander Grand Piano V3", "Alexander Holm", "CC BY 3.0", "VCSL", "CC0 1.0"]) assert.ok(third.includes(name), `THIRD_PARTY.md names ${name}`);
+});

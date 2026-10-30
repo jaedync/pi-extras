@@ -44,6 +44,17 @@ Spotify: installed for the score kit, not linked into this package),
 (Apache-2.0). It also installs `chromium-headless-shell` and `chromium`
 (BSD-3-Clause plus its third-party notices, Google) for the browser.
 
+`wv setup --music` (optional) builds and downloads the music kit into the
+same cache. It builds `sfizz` from source, with its submodules, into
+`sfizz_render` (BSD-2-Clause, sfztools), and downloads the VCSL sample
+folders (CC0 1.0, Versilian Studios, https://github.com/sgossner/VCSL) and
+the Salamander Grand Piano V3 (CC BY 3.0, Alexander Holm,
+https://github.com/sfzinstruments/SalamanderGrandPiano). It writes its own
+SFZ maps over the CC0 samples. A published film that uses the piano must
+carry this line:
+
+    Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0
+
 `wv compose` writes Google Fonts (SIL Open Font License 1.1) into the project
 page from the fonts it fetched at capture time; it copies no font files into
 this package. The composer writes HyperFrames projects; it copies no

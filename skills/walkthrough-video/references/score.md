@@ -7,6 +7,7 @@ an ear would be. Say in the delivery that nobody listened.
 ## Commands
 
 ```bash
+wv setup --music                                               # once per host: the sampled instruments
 cp <skill-dir>/templates/score/score.py <film>/score.py        # start from the template
 wv film build <film>                                           # out/cues.json: length and picture events
 wv sound score <film>/score.py --cues <film>/out/cues.json --out <film>/score
@@ -68,15 +69,44 @@ need only the runtime venv (`wv setup` installs numpy, scipy, mido and pedalboar
 Sampled parts (piano, marimba, glockenspiel, drum kit) render through `sfz_render` with
 `sfizz_render` and the sample sets in `$WV_MUSIC_KIT` (default
 `~/.cache/pi-walkthrough-video/music-kit`: `bin/sfizz_render`, `samples/vcsl/*.sfz`,
-`samples/salamander/`). `wv setup` does not install these yet. Sampled notes start 9 to 23 ms
-late; `sfz_render` plays them early by their measured attack.
+`samples/salamander/`). Sampled notes start 9 to 23 ms late; `sfz_render` plays them early by
+their measured attack. A score that plays a sampled part needs the music kit: `wv sound score`
+refuses without it and says `wv setup --music`. A score with only synth voices needs no kit.
+
+## The music kit (optional, one install)
+
+`wv setup --music` installs the kit into `$WV_MUSIC_KIT` (default above). It needs git, cmake
+and a C++ compiler, about 3 GB of free space while it works, and about 10 minutes on 16 cores.
+It downloads three pinned sources and builds one binary:
+
+| Source | Pin | Download | Licence |
+|---|---|---|---|
+| sfizz, built with cmake to `sfizz_render` only (no JACK, LV2, VST or tests) | `f5c6e29` | about 148 MB with its submodules | BSD-2-Clause |
+| VCSL, 10 sample folders by sparse checkout (no Vibraphone: no map reads it) | `c1ea7bc` | about 181 MB | CC0 1.0 |
+| Salamander Grand Piano V3, 668 files, 641 FLAC samples | `3382bf9` | 714 MB | CC BY 3.0 |
+
+Then it writes `kit.sfz`, `marimba.sfz` and `glock.sfz` from the VCSL samples, trims the leading
+silence of the piano samples (at the first sample above -66 dBFS, at most 15 ms), and renders a
+short pass through each of the four SFZ files. All four must be non-silent at 48 kHz. The kit is
+built in a staging folder and moves into place only when every step passed, so a failure never
+leaves a half kit.
+
+The SFZ maps are byte for byte the maps of the hand-built kit, so a score sounds the same on
+both. A second `wv setup --music` reads the kit, runs the smoke render and skips the download.
+
+- `wv setup --music --check` reports each part, its commit and its smoke render, and exits 1
+  when one is missing.
+- `wv setup --check` prints one line about the kit and never fails on the optional kit.
+- The kit's `kit.json` records the three commits and the smoke result. `licenses/` holds the
+  three licence files.
 
 ## Credits
 
 Name every source in the delivery:
 
 - The synth voices and the score: your own work, no licence needed.
-- Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0: the delivery and the published video
-  must carry "Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0".
+- Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0: a published film that uses the piano
+  must carry this line in its description or credits, and the delivery must repeat it:
+  "Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0".
 - VCSL (Versilian Community Sample Library), CC0 1.0: no attribution required; name it anyway.
 - pedalboard is GPL-3.0: it runs as an installed tool. Do not copy its code into the film.
