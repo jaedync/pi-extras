@@ -2,6 +2,21 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.36.1 - 2026-10-30
+
+### Fixed
+
+- Walkthrough Video on macOS: a command timeout, a stop signal and the
+  shutdown no longer wait out their whole deadline. `ps` exits 1 with no
+  output when a process is gone, and wv read that as "state unknown". Now a
+  silent exit 1 means "gone"; any message from `ps` still means unknown.
+- Walkthrough Video: an error that the stop causes (a killed render makes its
+  run fail) no longer ends wv with exit code 1 before the cleanups finish.
+  The shutdown reports the error, runs every cleanup and exits with the
+  signal's code (130, 143 or 129).
+- Tests: the disk-full refusal test no longer needs a `/mnt` folder, which
+  macOS does not have.
+
 ## 0.36.0 - 2026-10-29
 
 ### Added
