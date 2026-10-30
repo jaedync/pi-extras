@@ -487,28 +487,33 @@ test("kitTools refuses a cmake older than 3.16, and passes a host with every too
 	}
 });
 
-test("the next install removes a leftover staging folder of this kit only when its owner is gone", async () => {
+test("wv removes only its own staging folder and names the leftovers without deleting them", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
 		const kit = join(root, "music-kit");
-		const dead = join(root, ".music-kit.staging-music-kit-2147483647-abc123");
-		const live = join(root, `.music-kit.staging-music-kit-${process.pid}-def456`);
-		const other = join(root, ".music-kit.staging-other-kit-2147483647-ghi789");
-		const unknown = join(root, ".music-kit.staging-music-kit-abc-xyz");
-		for (const dir of [dead, live, other, unknown]) {
-			mkdirSync(dir, { recursive: true });
-			writeFileSync(join(dir, "mine"), "x");
-		}
+		const lookalike = join(root, ".music-kit.staging-music-kit-2147483647-ABC123");
+		mkdirSync(lookalike, { recursive: true });
+		writeFileSync(join(lookalike, "user-data"), "keep me");
+		const other = join(root, ".music-kit.staging-other-2147483647-ABC123");
+		mkdirSync(other, { recursive: true });
+		writeFileSync(join(other, "user-data"), "keep me too");
+		// A folder where the lock file goes is not wv's to remove: it refuses.
+		mkdirSync(`${kit}.lock`, { recursive: true });
+		writeFileSync(join(`${kit}.lock`, "user-file"), "keep me");
+		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) }), /a lock from an earlier install remains/);
+		assert.equal(readFileSync(join(`${kit}.lock`, "user-file"), "utf8"), "keep me", "the lock path is not removed");
+		rmSync(`${kit}.lock`, { recursive: true, force: true });
+
 		const log = [];
 		const report = await installMusicKit({ kit, log: (line) => log.push(line), deps: fakeDeps([]) });
 		assert.equal(report.ok, true, report.missing.join(", "));
-		assert.equal(existsSync(dead), false, "a dead owner's staging folder is removed");
-		assert.equal(existsSync(live), true, "a live owner's staging folder is kept");
-		assert.equal(existsSync(other), true, "another kit's staging folder is kept");
-		assert.equal(existsSync(unknown), true, "a folder whose owner is unknown is kept");
-		const gone = log.filter((line) => line.includes(dead));
-		assert.equal(gone.length, 1, "the removal is logged with the path");
-		assert.match(gone[0], /leftover staging folder/);
+		assert.equal(readFileSync(join(lookalike, "user-data"), "utf8"), "keep me", "a lookalike folder is not deleted");
+		assert.equal(readFileSync(join(other, "user-data"), "utf8"), "keep me too", "another kit's folder is not deleted");
+		const note = log.find((line) => line.includes("leftover staging folders from earlier installs"));
+		assert.ok(note, "the install names the leftovers in a note");
+		assert.ok(note.includes(lookalike), "the note names the lookalike path");
+		assert.ok(!note.includes(other), "the note does not name another kit's folder");
+		assert.match(note, /rm -rf /);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

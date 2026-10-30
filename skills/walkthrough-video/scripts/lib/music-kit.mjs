@@ -706,38 +706,34 @@ function acquireKitLock(kit) {
 	};
 }
 
+/** The staging names that belong to this kit. Only this run's own folder is wv's to remove. */
+function stagingFamily(kit) {
+	return `.music-kit.staging-${basename(kit)}-`;
+}
+
 /** The prefix that proves a staging folder belongs to this kit and this run. */
 function stagingPrefix(kit) {
-	return `.music-kit.staging-${basename(kit)}-${process.pid}-`;
+	return `${stagingFamily(kit)}${process.pid}-`;
 }
 
 /**
- * Removes a staging folder that a killed install left behind: SIGKILL runs no
- * cleanup. The name carries the kit and the owner pid, so wv removes only a
- * folder of this kit whose owner is provably gone, and it runs under the lock.
+ * Names the staging folders that earlier installs left behind. wv removes only
+ * the folder that this run made: the others may not be its to delete, so the
+ * note gives the command and the owner runs it.
  * @param {string} kit
  * @param {Log} [log]
  */
-function removeStaleStaging(kit, log = () => {}) {
+function noteLeftoverStaging(kit, log = () => {}) {
 	const parent = dirname(kit);
-	const escaped = basename(kit).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const pattern = new RegExp(`^\\.music-kit\\.staging-${escaped}-(\\d+)-[A-Za-z0-9]{6}$`);
 	let names = [];
 	try {
 		names = readdirSync(parent);
 	} catch {
 		return;
 	}
-	for (const name of names) {
-		const match = pattern.exec(name);
-		if (!match) continue;
-		const pid = Number(match[1]);
-		// Alive or unknown: not ours to remove.
-		if (processAlive(pid)) continue;
-		const path = join(parent, name);
-		rmSync(path, { recursive: true, force: true });
-		log(`music kit: removed a leftover staging folder ${path} (pid ${pid} is gone)`);
-	}
+	const leftovers = names.filter((name) => name.startsWith(stagingFamily(kit))).map((name) => join(parent, name));
+	if (leftovers.length === 0) return;
+	log(`music kit: leftover staging folders from earlier installs use disk space: ${leftovers.join(", ")}. If no install runs now, remove them: rm -rf ${leftovers.join(" ")}`);
 }
 
 /**
@@ -767,8 +763,8 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		lock.release();
 	}, "the music kit staging folder");
 	try {
-		// Under the lock: a leftover from a killed run of this kit can go before the download.
-		removeStaleStaging(kit, log);
+		// Only this run's folder is wv's to remove: name the leftovers, do not delete them.
+		noteLeftoverStaging(kit, log);
 		const free = d.freeBytes(dirname(kit));
 		if (free < MUSIC_KIT_NEED_BYTES) throw new Error(`the music kit needs ${formatBytes(MUSIC_KIT_NEED_BYTES)} free at ${dirname(kit)} and only ${formatBytes(free)} is free. Free some space, then run wv setup --music again.`);
 		log(`music kit: ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} to download, ${formatBytes(MUSIC_KIT_NEED_BYTES)} of space needed, ${formatBytes(free)} free, at ${kit}`);
