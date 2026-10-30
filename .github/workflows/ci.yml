@@ -15,7 +15,8 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         node: [22, 24]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # macOS runs take 8 to 9 minutes, and a slow runner went past 10 on the 0.37.0 release.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
