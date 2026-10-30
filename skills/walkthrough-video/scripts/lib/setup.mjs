@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { FILM_PY_PACKAGES, SCORE_PY_PACKAGES, GSAP, HYPERFRAMES, KOKORO_PACKAGES, MODEL_FILES, MODEL_RELEASE, PLAYWRIGHT_CORE, TYPESCRIPT, ensureHome, paths, pythonPackageNames, writeState } from "./paths.mjs";
 import { HYPERFRAMES_ENV, findOnPath, pathWithNode, run, sleep } from "./proc.mjs";
 import { browserPaths } from "./runtime.mjs";
+import { musicKitStatus } from "./music-kit.mjs";
 
 /** Setup installs the same package list that the setup help names. */
 export { pythonPackageNames };
@@ -75,10 +76,36 @@ function hasModule(root, name, version) {
 	return packageVersion(join(root, "node_modules", name)) === version;
 }
 
-function venvHasPackages(python) {
+function venvHasModules(python, modules) {
 	if (!existsSync(python)) return false;
-	const probe = spawnSync(python, ["-c", "import kokoro_onnx, soundfile, numpy, cv2, scipy, mido, pedalboard; print('ok')"], { encoding: "utf8", timeout: 60000 });
+	const probe = spawnSync(python, ["-c", `import ${modules.join(", ")}; print('ok')`], { encoding: "utf8", timeout: 60000 });
 	return probe.status === 0;
+}
+
+function venvHasPackages(python) {
+	return venvHasModules(python, ["kokoro_onnx", "soundfile", "numpy", "cv2", "scipy", "mido", "pedalboard"]);
+}
+
+/**
+ * A venv that can import `modules`, created or repaired with uv and these pinned
+ * packages. The voice and the music kit share it, so one install serves both.
+ */
+export async function ensurePythonVenv({ python, venv, packages, modules, log = () => {} }) {
+	const uv = findOnPath("uv");
+	if (!existsSync(python)) {
+		if (!uv) throw new Error("uv is not on PATH. Install it (https://docs.astral.sh/uv/) or with your package manager, then run the command again.");
+		log("creating the runtime venv");
+		const created = await run(uv, ["venv", venv], { env: { ...process.env, UV_NO_PROGRESS: "1" }, timeoutMs: 5 * 60_000 });
+		if (created.code !== 0) throw new Error(`uv venv failed: ${(created.stderr || created.stdout).trim()}`);
+	}
+	if (!venvHasModules(python, modules)) {
+		if (!uv) throw new Error("uv is not on PATH, so the Python packages cannot be installed.");
+		log(`installing ${packages.map((spec) => String(spec).split("==")[0]).join(", ")}`);
+		const result = await run(uv, ["pip", "install", "--python", python, ...packages], { env: { ...process.env, UV_NO_PROGRESS: "1" }, timeoutMs: 20 * 60_000 });
+		if (result.code !== 0) throw new Error(`uv pip install failed: ${(result.stderr || result.stdout).trim().split("\n").slice(-3).join(" ")}`);
+	}
+	if (!venvHasModules(python, modules)) throw new Error(`the venv cannot import ${modules.join(", ")} after install; run the command again and read the uv output.`);
+	return python;
 }
 
 /** Downloads to `.part` while hashing, then renames; an exported seam for the tests. */
@@ -146,12 +173,15 @@ export async function checkSetup(log = () => {}) {
 	items.push({ name: "chromium-headless-shell", ok: Boolean(browser.shell), detail: browser.shell ?? "not installed" });
 	items.push({ name: "chromium", ok: Boolean(browser.chromium), detail: browser.chromium ?? "not installed" });
 	items.push({ name: "python venv (voice, measures)", ok: venvHasPackages(p.python), detail: existsSync(p.python) ? p.python : "not created" });
+	// The music kit is optional: a missing kit never makes `wv setup --check` fail.
+	const kit = musicKitStatus(p.musicKit);
+	items.push({ name: "music kit (optional)", ok: kit.present, optional: true, detail: kit.present ? kit.detail : `${kit.detail}; ${kit.hint}` });
 	const models = [];
 	for (const [name, sha] of Object.entries(MODEL_FILES)) models.push(await modelStatus(p.models, p.kokoroShare, name, sha));
 	const modelsOk = models.every((model) => model.how !== "missing");
 	items.push({ name: "kokoro models", ok: modelsOk, detail: modelsOk ? models.map((model) => `${model.name} (${model.how})`).join(", ") : models.filter((model) => model.how === "missing").map((model) => model.name).join(", ") });
-	const missing = items.filter((item) => !item.ok);
-	for (const item of items) log(`${item.ok ? "ok  " : "MISS"}  ${item.name.padEnd(24)} ${item.detail}`);
+	const missing = items.filter((item) => !item.ok && !item.optional);
+	for (const item of items) log(`${item.ok ? "ok  " : item.optional ? "opt " : "MISS"}  ${item.name.padEnd(24)} ${item.detail}`);
 	if (missing.length > 0) log(`\n${missing.length} of ${items.length} missing. Run: wv setup`);
 	return { ok: missing.length === 0, items, missing: missing.map((item) => item.name) };
 }

@@ -18,6 +18,9 @@ export const KOKORO_PACKAGES = ["kokoro-onnx==0.6.1", "soundfile==0.14.0", "nump
 export const FILM_PY_PACKAGES = ["opencv-python-headless==5.0.0.93"];
 /** wv sound score: the synth voices and the hit check need scipy, the sampler path writes MIDI with mido, the master runs through pedalboard (GPL-3.0, used as an installed tool). */
 export const SCORE_PY_PACKAGES = ["scipy==1.18.1", "mido==1.3.3", "pedalboard==0.9.26"];
+/** The two packages the music kit's map tools need: numpy to scale a sample, soundfile to read and write it. */
+export const KIT_PY_PACKAGES = KOKORO_PACKAGES.filter((spec) => ["numpy", "soundfile"].includes(String(spec).split("==")[0]));
+
 /** The Python packages setup installs, by name, from the pinned lists. */
 export const pythonPackageNames = (lists = [KOKORO_PACKAGES, FILM_PY_PACKAGES, SCORE_PY_PACKAGES]) => lists.flat().map((spec) => String(spec).split("==")[0]);
 

@@ -1,0 +1,534 @@
+/**
+ * The optional music kit: the sampled instruments that `wv sound score` plays
+ * (sfizz_render, the VCSL drum and mallet maps, the Salamander piano).
+ * `wv setup --music` builds it from three pinned sources into a staging folder
+ * and moves it into place only when every part, including a smoke render,
+ * passed. The pins are the commits the hand-built kit measured (2026-10-29).
+ */
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
+import { cpus, tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { paths } from "./paths.mjs";
+import { findOnPath, run } from "./proc.mjs";
+
+const PY_DIR = fileURLToPath(new URL("../py/", import.meta.url));
+const GB = 1024 ** 3;
+
+/** What the kit renders at, and what the smoke render expects back. */
+export const MUSIC_KIT_SAMPLE_RATE = 48000;
+/** The kits' sources: commits, licences and the measured size of the checkout. */
+export const MUSIC_KIT_PINS = {
+	sfizz: {
+		name: "sfizz",
+		url: "https://github.com/sfztools/sfizz.git",
+		commit: "f5c6e29f23b8057867c08e88f5f6ac6738baa30b",
+		licence: "BSD-2-Clause",
+		bytes: 155_000_000,
+		submodules: true,
+	},
+	vcsl: {
+		name: "VCSL",
+		url: "https://github.com/sgossner/VCSL.git",
+		commit: "c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e",
+		licence: "CC0-1.0",
+		bytes: 190_000_000,
+		// Only the folders the maps read. Vibraphone is not one of them, so it is not downloaded.
+		folders: [
+			"LICENSE",
+			"Membranophones/Struck Membranophones/Bass Drum 1/*",
+			"Membranophones/Struck Membranophones/Snare Drum, Modern 1/*",
+			"Membranophones/Struck Membranophones/Tom 1/*",
+			"Idiophones/Struck Idiophones/Hi-Hat Cymbal/*",
+			"Idiophones/Struck Idiophones/Suspended Cymbal 1/*",
+			"Idiophones/Struck Idiophones/Claps/*",
+			"Idiophones/Struck Idiophones/Marimba/*",
+			"Idiophones/Struck Idiophones/Glockenspiel/*",
+			"Idiophones/Struck Idiophones/Shaker, Large/*",
+			"Idiophones/Struck Idiophones/Tambourine 1/*",
+		],
+	},
+	salamander: {
+		name: "salamander",
+		url: "https://github.com/sfzinstruments/SalamanderGrandPiano.git",
+		commit: "3382bf9496bba2486f5ab0de55a264d1dfc38404",
+		licence: "CC BY 3.0",
+		// 668 files at that commit, from the GitHub tree API.
+		bytes: 748_451_483,
+		files: 668,
+	},
+};
+export const MUSIC_KIT_DOWNLOAD_BYTES = Object.values(MUSIC_KIT_PINS).reduce((sum, source) => sum + source.bytes, 0);
+/** Free space the install needs: the downloads, the build tree and the staging copy. */
+export const MUSIC_KIT_NEED_BYTES = 3 * GB;
+/** The credit that a published film with the piano must carry. */
+export const MUSIC_KIT_ATTRIBUTION = "Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0";
+
+/** The kit's layout, which sc.py and the score reference too. */
+export function kitPaths(kit = paths().musicKit) {
+	return {
+		root: kit,
+		manifest: join(kit, "kit.json"),
+		bin: join(kit, "bin"),
+		sfizz: join(kit, "bin", "sfizz_render"),
+		licences: join(kit, "licenses"),
+		samples: join(kit, "samples"),
+		vcsl: join(kit, "samples", "vcsl"),
+		vcslKitSfz: join(kit, "samples", "vcsl", "kit.sfz"),
+		vcslMarimbaSfz: join(kit, "samples", "vcsl", "marimba.sfz"),
+		vcslGlockSfz: join(kit, "samples", "vcsl", "glock.sfz"),
+		vcslSamples: join(kit, "samples", "vcsl", "kit"),
+		piano: join(kit, "samples", "salamander"),
+		pianoSfz: join(kit, "samples", "salamander", "Salamander Grand Piano V3.sfz"),
+		pianoSamples: join(kit, "samples", "salamander", "Samples"),
+		staging: join(dirname(kit), ".music-kit.staging"),
+	};
+}
+
+export function formatBytes(bytes) {
+	return bytes >= GB ? `${(bytes / GB).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
+const short = (commit) => (commit ? String(commit).slice(0, 7) : null);
+
+/** The build tools the kit needs, each with the fix for the host. */
+export function kitTools(env = process.env) {
+	const git = findOnPath("git", env);
+	const cmake = findOnPath("cmake", env);
+	const compiler = env.CXX || findOnPath("c++", env) || findOnPath("g++", env) || findOnPath("clang++", env);
+	const items = [
+		{ name: "git", path: git, ok: Boolean(git), fix: "install git with your package manager (on Arch: pacman -S git; on macOS: xcode-select --install)" },
+		{ name: "cmake", path: cmake, ok: Boolean(cmake), fix: "install cmake 3.16 or later (on Arch: pacman -S cmake; on macOS: brew install cmake)" },
+		{ name: "c++ compiler", path: compiler, ok: Boolean(compiler), fix: "install a C++ compiler (on Arch: pacman -S gcc; on macOS: xcode-select --install)" },
+	];
+	return { ok: items.every((item) => item.ok), items };
+}
+
+/** Why the kit cannot start on this host, or null. Names every missing tool and its fix. */
+export function toolRefusal(tools) {
+	const missing = tools.items.filter((item) => !item.ok);
+	if (missing.length === 0) return null;
+	return `the music kit needs git, cmake and a C++ compiler to build the sampler. Missing: ${missing.map((item) => `${item.name} (${item.fix})`).join("; ")}. Install them, then run wv setup --music again.`;
+}
+
+export function readManifest(file) {
+	try {
+		const parsed = JSON.parse(readFileSync(file, "utf8"));
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
+function countFiles(dir, extension) {
+	try {
+		return readdirSync(dir).filter((name) => name.toLowerCase().endsWith(extension)).length;
+	} catch {
+		return 0;
+	}
+}
+
+function isDir(path) {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The cheap status that `wv setup --check` prints: the four parts are there,
+ * with no render. A kit built by hand before this step has no kit.json and is
+ * still installed.
+ */
+export function musicKitStatus(kit = paths().musicKit) {
+	const p = kitPaths(kit);
+	const manifest = readManifest(p.manifest);
+	const present =
+		existsSync(p.sfizz) &&
+		[p.vcslKitSfz, p.vcslMarimbaSfz, p.vcslGlockSfz, p.pianoSfz].every((file) => existsSync(file)) &&
+		countFiles(p.vcslSamples, ".wav") > 0 &&
+		countFiles(p.pianoSamples, ".flac") > 0;
+	if (!present) return { present: false, kit, manifest, detail: "not installed", hint: `run wv setup --music to add the sampled instruments (about ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} download, about 10 min)` };
+	const detail = manifest
+		? `installed at ${kit} (VCSL ${short(manifest.vcsl?.commit) ?? "?"}, Salamander ${short(manifest.salamander?.commit) ?? "?"})`
+		: `installed at ${kit} (no kit.json: built by hand)`;
+	return { present: true, kit, manifest, detail, hint: "" };
+}
+
+/** One line for `wv setup --check`, which never fails on the optional kit. */
+export function musicKitCheckLine(kit = paths().musicKit) {
+	const status = musicKitStatus(kit);
+	return status.present ? `music kit (optional): ${status.detail}` : `music kit (optional): ${status.detail}; ${status.hint}`;
+}
+
+/**
+ * Reads and tests the kit: each part, its commit from kit.json, and a smoke
+ * render of every SFZ. `smoke` is injected so the unit tests never run a binary.
+ */
+export async function checkMusicKit({ kit = paths().musicKit, smoke = (dir) => smokeKit(dir), log = () => {} } = {}) {
+	const p = kitPaths(kit);
+	const manifest = readManifest(p.manifest);
+	const items = [];
+	const sfizzOk = existsSync(p.sfizz);
+	items.push({ name: "sfizz_render", ok: sfizzOk, detail: sfizzOk ? `${p.sfizz}${manifest?.sfizz?.commit ? ` (sfizz ${short(manifest.sfizz.commit)})` : ""}` : "not built; run wv setup --music" });
+
+	const maps = [p.vcslKitSfz, p.vcslMarimbaSfz, p.vcslGlockSfz];
+	const missingMaps = maps.filter((file) => !existsSync(file));
+	items.push({
+		name: "VCSL maps",
+		ok: missingMaps.length === 0,
+		detail: missingMaps.length === 0 ? `kit.sfz, marimba.sfz and glock.sfz${manifest?.vcsl?.commit ? ` (VCSL ${short(manifest.vcsl.commit)})` : ""}` : `${missingMaps.map((file) => basename(file)).join(", ")} missing`,
+	});
+
+	const wavs = countFiles(p.vcslSamples, ".wav");
+	items.push({ name: "VCSL samples", ok: wavs > 0, detail: wavs > 0 ? `${wavs} wav in ${p.vcslSamples}` : `no wav in ${p.vcslSamples}` });
+
+	const flacs = countFiles(p.pianoSamples, ".flac");
+	const pianoOk = existsSync(p.pianoSfz) && flacs > 0;
+	items.push({
+		name: "Salamander piano",
+		ok: pianoOk,
+		detail: pianoOk ? `${flacs} flac, ${MUSIC_KIT_PINS.salamander.licence}${manifest?.salamander?.commit ? ` (Salamander ${short(manifest.salamander.commit)})` : ""}` : `no piano in ${p.piano}`,
+	});
+
+	// A smoke render needs a binary and the maps; without them the item above is the fix.
+	if (sfizzOk && missingMaps.length === 0) {
+		let smokeItems;
+		try {
+			smokeItems = await smoke(kit);
+		} catch (error) {
+			smokeItems = [{ name: "smoke render", ok: false, detail: String(error?.message ?? error).split("\n")[0] }];
+		}
+		const bad = smokeItems.filter((item) => !item.ok);
+		const lowest = smokeItems.reduce((min, item) => Math.min(min, Number(item.peak ?? 1)), 1);
+		items.push({
+			name: "smoke render",
+			ok: bad.length === 0,
+			detail: bad.length === 0 ? `${smokeItems.length} of ${smokeItems.length} SFZ render at ${MUSIC_KIT_SAMPLE_RATE} Hz above silence (lowest peak ${lowest.toFixed(2)})` : bad.map((item) => `${item.name}: ${item.detail}`).join(", "),
+		});
+	}
+
+	const missing = items.filter((item) => !item.ok).map((item) => item.name);
+	for (const item of items) log(`${item.ok ? "ok  " : "MISS"}  ${item.name.padEnd(16)} ${item.detail}`);
+	const report = { ok: missing.length === 0, present: missing.length === 0, kit, items, missing, manifest };
+	return report;
+}
+
+/** A type 0 MIDI file: one note per (t, key, vel, dur), sorted, with an end-of-track. */
+export function smokeMidi(notes = [{ t: 0.5, key: 36, vel: 110, dur: 0.4 }, { t: 1, key: 60, vel: 100, dur: 0.4 }], bpm = 120) {
+	const ppq = 960;
+	const ticks = (seconds) => Math.round((seconds * ppq * bpm) / 60);
+	const events = [];
+	for (const note of notes) {
+		events.push([ticks(note.t), 0x90, note.key, note.vel]);
+		events.push([ticks(note.t + note.dur), 0x80, note.key, 0]);
+	}
+	// Note-off sorts before note-on at the same tick, so a repeated key retriggers.
+	events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+	const track = [];
+	const variable = (value) => {
+		const bytes = [value & 0x7f];
+		while ((value >>= 7) > 0) bytes.unshift((value & 0x7f) | 0x80);
+		return bytes;
+	};
+	track.push(...variable(0), 0xff, 0x51, 0x03, 0x07, 0xa1, 0x20); // 500000 us per beat
+	let last = 0;
+	for (const [tick, status, key, velocity] of events) {
+		track.push(...variable(tick - last), status, key, velocity);
+		last = tick;
+	}
+	track.push(0x00, 0xff, 0x2f, 0x00);
+	const header = Buffer.alloc(14);
+	header.write("MThd", 0, "latin1");
+	header.writeUInt32BE(6, 4);
+	header.writeUInt16BE(0, 8);
+	header.writeUInt16BE(1, 10);
+	header.writeUInt16BE(ppq, 12);
+	const body = Buffer.alloc(8);
+	body.write("MTrk", 0, "latin1");
+	body.writeUInt32BE(track.length, 4);
+	return Buffer.concat([header, body, Buffer.from(track)]);
+}
+
+/** The rate, channel count, frame count and sample peak of a WAV file. */
+export function wavPeak(buffer) {
+	const info = { rate: null, channels: null, bits: null, frames: 0, peak: 0 };
+	if (!Buffer.isBuffer(buffer) || buffer.length < 12 || buffer.toString("latin1", 0, 4) !== "RIFF" || buffer.toString("latin1", 8, 12) !== "WAVE") return info;
+	let format = null;
+	let data = null;
+	for (let offset = 12; offset + 8 <= buffer.length; ) {
+		const id = buffer.toString("latin1", offset, offset + 4);
+		const size = buffer.readUInt32LE(offset + 4);
+		const body = offset + 8;
+		if (id === "fmt " && body + 16 <= buffer.length) {
+			format = buffer.readUInt16LE(body);
+			info.channels = buffer.readUInt16LE(body + 2);
+			info.rate = buffer.readUInt32LE(body + 4);
+			info.bits = buffer.readUInt16LE(body + 14);
+		} else if (id === "data") {
+			data = buffer.subarray(body, Math.min(buffer.length, body + size));
+		}
+		offset = body + size + (size % 2);
+	}
+	if (!data || !info.channels || !info.bits) return info;
+	const width = info.bits / 8;
+	info.frames = Math.floor(data.length / (width * info.channels));
+	const last = info.frames * info.channels;
+	for (let index = 0; index < last; index += 1) {
+		const at = index * width;
+		let sample;
+		if (format === 3 && width === 4) sample = Math.abs(data.readFloatLE(at));
+		else if (width === 2) sample = Math.abs(data.readInt16LE(at)) / 32768;
+		else if (width === 3) sample = Math.abs((data[at] | (data[at + 1] << 8) | (data[at + 2] << 16)) << 8 >> 8) / 8388608;
+		else if (width === 4) sample = Math.abs(data.readInt32LE(at)) / 2147483648;
+		else continue;
+		if (sample > info.peak) info.peak = sample;
+	}
+	return info;
+}
+
+/** Renders a short pass through each SFZ and checks the rate, the length and the level. */
+export async function smokeKit(kit = paths().musicKit) {
+	const p = kitPaths(kit);
+	const jobs = [
+		{ name: "kit", sfz: p.vcslKitSfz, keys: [36, 38, 42] },
+		{ name: "piano", sfz: p.pianoSfz, keys: [60, 64, 67] },
+		{ name: "marimba", sfz: p.vcslMarimbaSfz, keys: [60, 64, 67, 72] },
+		{ name: "glock", sfz: p.vcslGlockSfz, keys: [67, 72, 79] },
+	];
+	const dir = mkdtempSync(join(tmpdir(), "wv-kit-smoke-"));
+	try {
+		const items = [];
+		for (const job of jobs) {
+			if (!existsSync(p.sfizz) || !existsSync(job.sfz)) {
+				items.push({ name: job.name, ok: false, peak: 0, detail: existsSync(job.sfz) ? "no sfizz_render" : `${basename(job.sfz)} is missing` });
+				continue;
+			}
+			const midi = join(dir, `${job.name}.mid`);
+			const wav = join(dir, `${job.name}.wav`);
+			const notes = job.keys.map((key, index) => ({ t: 0.25 + index * 0.5, key, vel: 100, dur: 0.35 }));
+			writeFileSync(midi, smokeMidi(notes));
+			const result = await run(p.sfizz, ["--sfz", job.sfz, "--midi", midi, "--wav", wav, "-s", String(MUSIC_KIT_SAMPLE_RATE), "-q", "3", "--use-eot"], { timeoutMs: 120000 });
+			if (result.code !== 0 || !existsSync(wav)) {
+				items.push({ name: job.name, ok: false, peak: 0, detail: `sfizz_render failed: ${(result.stderr || result.stdout).trim().split("\n").slice(-1)[0] || `exit ${result.code}`}` });
+				continue;
+			}
+			const info = wavPeak(readFileSync(wav));
+			const silent = info.peak <= 0.001;
+			items.push({
+				name: job.name,
+				ok: info.rate === MUSIC_KIT_SAMPLE_RATE && !silent,
+				peak: info.peak,
+				detail: `${info.rate ?? "no"} Hz, ${info.frames} frames, peak ${info.peak.toFixed(3)}${silent ? " (silent)" : ""}`,
+			});
+		}
+		return items;
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+/**
+ * The real steps behind installMusicKit, so the unit tests can replace any of
+ * them: a fetch, the sfizz build, the map writers, the smoke render.
+ */
+export function kitDeps({ log = () => {}, env = process.env } = {}) {
+	return {
+		tools: () => kitTools(env),
+		freeBytes: (dir) => {
+			const stat = statfsSync(dir);
+			return stat.bavail * stat.bsize;
+		},
+		python: () => kitPython(log),
+		fetch: (source, dir) => fetchSource(source, dir, log),
+		build: (src, bin) => buildSfizz(src, bin, log),
+		generate: (vcsl, out, python) => generateMaps(vcsl, out, python, log),
+		trim: (folder, python) => trimSamples(folder, python, log),
+		smoke: (dir) => smokeKit(dir),
+	};
+}
+
+/** The Python that writes the maps: the runtime venv, or one uv builds for the kit. */
+async function kitPython(log) {
+	const { ensurePythonVenv } = await import("./setup.mjs");
+	const p = paths();
+	const { KIT_PY_PACKAGES } = await import("./paths.mjs");
+	return ensurePythonVenv({ python: p.python, venv: p.venv, packages: KIT_PY_PACKAGES, modules: ["numpy", "soundfile"], log: (line) => log(`music kit: ${line}`) });
+}
+
+async function git(args, cwd, timeoutMs) {
+	const result = await run("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeoutMs });
+	if (result.code !== 0) throw new Error(`git ${args[0]} failed in ${cwd}: ${(result.stderr || result.stdout).trim().split("\n").slice(-3).join(" ")}`);
+	return result;
+}
+
+/** Fetches one source at its pinned commit; a sparse source downloads only its folders. */
+export async function fetchSource(source, dir, log = () => {}) {
+	mkdirSync(dir, { recursive: true });
+	log(`${source.name} ${short(source.commit)}: ${source.url}`);
+	await git(["init", "--quiet"], dir, 60000);
+	await git(["remote", "add", "origin", source.url], dir, 60000);
+	if (source.folders) {
+		await git(["sparse-checkout", "init", "--no-cone"], dir, 60000);
+		await git(["sparse-checkout", "set", ...source.folders], dir, 60000);
+	}
+	// A partial clone asks for the pinned commit only, so a later branch never moves the kit.
+	await git(["fetch", "--depth", "1", ...(source.folders ? ["--filter=blob:none"] : []), "origin", source.commit], dir, 30 * 60_000);
+	await git(["checkout", "--quiet", "FETCH_HEAD"], dir, 10 * 60_000);
+	if (source.submodules) await git(["submodule", "update", "--init", "--recursive", "--depth", "1"], dir, 30 * 60_000);
+}
+
+/** Builds sfizz_render only: no JACK, LV2, VST, demos or tests. */
+export async function buildSfizz(src, binPath, log = () => {}) {
+	const build = join(src, "build");
+	log("building sfizz_render with cmake (Release; no JACK, LV2, VST or tests)");
+	const configure = await run("cmake", ["-S", src, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DSFIZZ_JACK=OFF", "-DSFIZZ_TESTS=OFF", "-DSFIZZ_DEMOS=OFF", "-DSFIZZ_DEVTOOLS=OFF", "-DSFIZZ_BENCHMARKS=OFF", "-DSFIZZ_RENDER=ON", "-DSFIZZ_SHARED=OFF"], { timeoutMs: 10 * 60_000 });
+	if (configure.code !== 0) throw new Error(`cmake configure failed: ${(configure.stderr || configure.stdout).trim().split("\n").slice(-3).join(" ")}`);
+	const jobs = String(Math.max(1, Math.min(16, cpus().length)));
+	const built = await run("cmake", ["--build", build, "--target", "sfizz_render", "-j", jobs], { timeoutMs: 60 * 60_000 });
+	if (built.code !== 0) throw new Error(`the sfizz build failed: ${(built.stderr || built.stdout).trim().split("\n").slice(-3).join(" ")}`);
+	const binary = findBuilt(build, "sfizz_render");
+	if (!binary) throw new Error(`the sfizz build wrote no sfizz_render under ${build}`);
+	mkdirSync(dirname(binPath), { recursive: true });
+	copyFileSync(binary, binPath);
+	chmodSync(binPath, 0o755);
+	log(`installed ${binPath} (${formatBytes(statSync(binPath).size)})`);
+}
+
+function findBuilt(dir, name, depth = 4) {
+	const direct = [join(dir, "library", "bin", name), join(dir, "clients", name), join(dir, "bin", name)];
+	for (const candidate of direct) if (existsSync(candidate)) return candidate;
+	if (depth === 0) return null;
+	let entries = [];
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return null;
+	}
+	for (const entry of entries) {
+		if (!entry.isDirectory() || entry.name === ".git") continue;
+		const found = findBuilt(join(dir, entry.name), name, depth - 1);
+		if (found) return found;
+	}
+	return null;
+}
+
+/** Writes the drum kit and mallet maps from the VCSL samples (py/make_vcsl_sfz.py). */
+async function generateMaps(vcslDir, out, python, log = () => {}) {
+	log("writing kit.sfz, marimba.sfz and glock.sfz");
+	const result = await run(python, [join(PY_DIR, "make_vcsl_sfz.py"), "--src", vcslDir, "--out", out], { timeoutMs: 10 * 60_000 });
+	if (result.code !== 0) throw new Error(`the SFZ map step failed: ${(result.stderr || result.stdout).trim().split("\n").slice(-3).join(" ")}`);
+	for (const file of ["kit.sfz", "marimba.sfz", "glock.sfz"]) if (!existsSync(join(out, file))) throw new Error(`the SFZ map step wrote no ${file} in ${out}`);
+}
+
+/** Trims the leading silence of the piano samples, so a piano hit lands on its frame. */
+async function trimSamples(folder, python, log = () => {}) {
+	log(`trimming the leading silence of ${folder}`);
+	const result = await run(python, [join(PY_DIR, "trim_samples.py"), folder, "--threshold-db", "-66", "--max-ms", "15"], { timeoutMs: 10 * 60_000 });
+	if (result.code !== 0) throw new Error(`the sample trim failed: ${(result.stderr || result.stdout).trim().split("\n").slice(-3).join(" ")}`);
+	for (const line of result.stdout.trim().split("\n").filter(Boolean)) log(`  ${line}`);
+}
+
+function copyLicences(staging) {
+	const dir = join(staging, "licenses");
+	mkdirSync(dir, { recursive: true });
+	const pairs = [
+		[join(staging, "sources", "sfizz", "LICENSE"), "sfizz-LICENSE"],
+		[join(staging, "sources", "VCSL", "LICENSE"), "vcsl-LICENSE"],
+		[join(staging, "samples", "salamander", "LICENSE"), "salamander-LICENSE"],
+	];
+	for (const [from, name] of pairs) if (existsSync(from)) copyFileSync(from, join(dir, name));
+}
+
+function writeManifest(staging, smoke) {
+	const manifest = {
+		version: 1,
+		installedAt: new Date().toISOString(),
+		sampleRate: MUSIC_KIT_SAMPLE_RATE,
+		sfizz: { url: MUSIC_KIT_PINS.sfizz.url, commit: MUSIC_KIT_PINS.sfizz.commit, licence: MUSIC_KIT_PINS.sfizz.licence },
+		vcsl: { url: MUSIC_KIT_PINS.vcsl.url, commit: MUSIC_KIT_PINS.vcsl.commit, licence: MUSIC_KIT_PINS.vcsl.licence },
+		salamander: { url: MUSIC_KIT_PINS.salamander.url, commit: MUSIC_KIT_PINS.salamander.commit, licence: MUSIC_KIT_PINS.salamander.licence, attribution: MUSIC_KIT_ATTRIBUTION },
+		smoke: smoke.map((item) => ({ name: item.name, detail: item.detail })),
+	};
+	writeFileSync(join(staging, "kit.json"), `${JSON.stringify(manifest, null, 1)}\n`);
+}
+
+/** Moves a passing staging folder into place, and keeps the old kit if the move fails. */
+function replaceKit(staging, kit) {
+	let previous = null;
+	try {
+		if (statSync(kit)) previous = `${kit}.previous-${process.pid}`;
+	} catch {
+		// No kit yet: nothing to move aside.
+	}
+	if (previous) renameSync(kit, previous);
+	try {
+		renameSync(staging, kit);
+	} catch (error) {
+		if (previous) renameSync(previous, kit);
+		throw error;
+	}
+	if (previous) rmSync(previous, { recursive: true, force: true });
+}
+
+/**
+ * Installs the kit. Nothing downloads when the kit already passes the check;
+ * nothing is moved into place when a step fails, so a half kit never stays.
+ */
+export async function installMusicKit({ kit = paths().musicKit, log = () => {}, deps = {} } = {}) {
+	const d = { ...kitDeps({ log }), ...deps };
+	const p = kitPaths(kit);
+	const existing = await checkMusicKit({ kit, smoke: d.smoke, log: () => {} });
+	if (existing.ok) {
+		log(`music kit: already installed at ${kit} (the smoke render passes, so nothing is downloaded)`);
+		return existing;
+	}
+
+	const refusal = toolRefusal(d.tools());
+	if (refusal) throw new Error(refusal);
+	const free = d.freeBytes(dirname(kit));
+	if (free < MUSIC_KIT_NEED_BYTES) throw new Error(`the music kit needs ${formatBytes(MUSIC_KIT_NEED_BYTES)} free at ${dirname(kit)} and only ${formatBytes(free)} is free. Free some space, then run wv setup --music again.`);
+	log(`music kit: ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} to download, ${formatBytes(MUSIC_KIT_NEED_BYTES)} of space needed, ${formatBytes(free)} free, at ${kit}`);
+
+	const python = await d.python();
+	rmSync(p.staging, { recursive: true, force: true });
+	mkdirSync(p.staging, { recursive: true, mode: 0o700 });
+	try {
+		log(`1/5 sfizz ${short(MUSIC_KIT_PINS.sfizz.commit)} (${formatBytes(MUSIC_KIT_PINS.sfizz.bytes)} with its submodules)`);
+		const sfizzSrc = join(p.staging, "sources", "sfizz");
+		await d.fetch(MUSIC_KIT_PINS.sfizz, sfizzSrc);
+		await d.build(sfizzSrc, join(p.staging, "bin", "sfizz_render"));
+
+		log(`2/5 VCSL ${short(MUSIC_KIT_PINS.vcsl.commit)} (${formatBytes(MUSIC_KIT_PINS.vcsl.bytes)}, 10 sample folders)`);
+		const vcslSrc = join(p.staging, "sources", "VCSL");
+		await d.fetch(MUSIC_KIT_PINS.vcsl, vcslSrc);
+
+		log(`3/5 Salamander Grand Piano V3 ${short(MUSIC_KIT_PINS.salamander.commit)} (${formatBytes(MUSIC_KIT_PINS.salamander.bytes)}, ${MUSIC_KIT_PINS.salamander.licence})`);
+		const pianoSrc = join(p.staging, "sources", "salamander");
+		await d.fetch(MUSIC_KIT_PINS.salamander, pianoSrc);
+		mkdirSync(join(p.staging, "samples"), { recursive: true });
+		renameSync(pianoSrc, join(p.staging, "samples", "salamander"));
+
+		log("4/5 building the sample maps and trimming the piano samples");
+		await d.generate(vcslSrc, join(p.staging, "samples", "vcsl"), python);
+		await d.trim(join(p.staging, "samples", "salamander", "Samples"), python);
+		copyLicences(p.staging);
+
+		log("5/5 smoke render: one MIDI pass through each SFZ");
+		const smoke = await d.smoke(p.staging);
+		const failed = smoke.filter((item) => !item.ok);
+		if (failed.length > 0) throw new Error(`the music kit smoke render failed (${failed.map((item) => `${item.name}: ${item.detail}`).join("; ")}). The kit was not installed.`);
+
+		// The cloned sources are build input only; the kit keeps the samples and the licences.
+		rmSync(join(p.staging, "sources"), { recursive: true, force: true });
+		writeManifest(p.staging, smoke);
+		replaceKit(p.staging, kit);
+	} catch (error) {
+		rmSync(p.staging, { recursive: true, force: true });
+		throw error;
+	}
+	log(`music kit: installed at ${kit}`);
+	if (MUSIC_KIT_PINS.salamander) log(`music kit: a published film that uses the piano carries "${MUSIC_KIT_ATTRIBUTION}"`);
+	return checkMusicKit({ kit, smoke: d.smoke, log: () => {} });
+}
