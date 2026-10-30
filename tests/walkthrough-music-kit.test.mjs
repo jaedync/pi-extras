@@ -6,9 +6,9 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -19,7 +19,6 @@ import {
 	MUSIC_KIT_PINS,
 	MUSIC_KIT_SAMPLE_RATE,
 	checkMusicKit,
-	replaceKit,
 	verifyCheckout,
 	installMusicKit,
 	kitDeps,
@@ -302,55 +301,84 @@ test("a lock file from an earlier install is refused and left exactly as it was"
 	}
 });
 
-test("an install refuses to replace a kit that wv did not make, and keeps the user's files", async () => {
+test("an install refuses an existing root and keeps the owner's files, whatever kit.json says", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
-		const kit = join(root, "music-kit");
-		mkdirSync(join(kit, "my-scores"), { recursive: true });
-		writeFileSync(join(kit, "my-scores", "theme.py"), "the owner's score");
-		const calls = [];
-		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps(calls) }), (error) => {
-			assert.match(error.message, /was not installed by wv/);
-			assert.match(error.message, /mv /, "the refusal says how to move it aside");
-			assert.match(error.message, /WV_MUSIC_KIT=/, "the refusal names the override");
-			return true;
-		});
-		assert.deepEqual(calls, [], "the refusal comes before the download");
-		assert.equal(readFileSync(join(kit, "my-scores", "theme.py"), "utf8"), "the owner's score");
-		assert.equal(existsSync(join(root, ".music-kit.staging")), false, "this run's staging is gone");
+		for (const [name, manifest] of [["whole", '{ "version": 1 }\n'], ["empty", "{}\n"]]) {
+			const kit = join(root, name);
+			mkdirSync(kit, { recursive: true });
+			writeFileSync(join(kit, "kit.json"), manifest);
+			writeFileSync(join(kit, "user.txt"), "keep me");
+			const calls = [];
+			await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps(calls) }), (error) => {
+				assert.match(error.message, /sfizz_render: /, "the refusal names the first failed check item");
+				assert.match(error.message, /wv does not delete or replace a kit folder/);
+				assert.match(error.message, /mv /, "the refusal says how to move it aside");
+				assert.match(error.message, /WV_MUSIC_KIT/, "the refusal names the override");
+				return true;
+			});
+			assert.deepEqual(calls, [], "the refusal comes before the download");
+			assert.equal(readFileSync(join(kit, "user.txt"), "utf8"), "keep me");
+			assert.equal(readFileSync(join(kit, "kit.json"), "utf8"), manifest, "the manifest is not rewritten");
+			assert.deepEqual(readdirSync(root).filter((entry) => entry.startsWith(`.music-kit.staging-${name}-`)), []);
+		}
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
 
-test("a failed publication puts a managed kit back, and a symlink puts the link back", () => {
+test("a managed kit that fails its check is refused and stays as it was", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
-		const staging = join(root, "staging");
-		mkdirSync(staging, { recursive: true });
-		writeFileSync(join(staging, "new.txt"), "the new kit");
-
 		const kit = join(root, "music-kit");
 		mkdirSync(kit, { recursive: true });
-		writeFileSync(join(kit, "kit.json"), '{ "version": 1 }\n');
-		writeFileSync(join(kit, "old.txt"), "the old kit");
-		let moved = 0;
-		assert.throws(() => replaceKit(staging, kit, { rename: (from, to) => { moved += 1; if (moved === 2) throw new Error("rename failed"); renameSync(from, to); } }), /rename failed/);
-		assert.equal(readFileSync(join(kit, "old.txt"), "utf8"), "the old kit", "the managed kit is back in place");
+		const manifest = `${JSON.stringify({ version: 1, sfizz: { commit: MUSIC_KIT_PINS.sfizz.commit }, vcsl: { commit: MUSIC_KIT_PINS.vcsl.commit }, salamander: { commit: MUSIC_KIT_PINS.salamander.commit } })}\n`;
+		writeFileSync(join(kit, "kit.json"), manifest);
+		writeFileSync(join(kit, "user.txt"), "keep me");
+		const calls = [];
+		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps(calls) }), /wv does not delete or replace a kit folder/);
+		assert.deepEqual(calls, []);
+		assert.equal(readFileSync(join(kit, "kit.json"), "utf8"), manifest);
+		assert.equal(readFileSync(join(kit, "user.txt"), "utf8"), "keep me");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
 
-		// A symlink root is moved aside as a link, not as its target.
+test("a symlink root stays a symlink and its target keeps its files", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
+	try {
 		const target = join(root, "hand-kit");
-		fakePassingKit(target);
-		writeFileSync(join(target, "kit.json"), '{ "version": 1 }\n');
+		mkdirSync(target, { recursive: true });
+		writeFileSync(join(target, "user.txt"), "keep me");
 		const link = join(root, "link-kit");
 		symlinkSync(target, link, "dir");
-		const fresh = join(root, "staging-link");
-		mkdirSync(fresh, { recursive: true });
-		writeFileSync(join(fresh, "new.txt"), "the new kit");
-		moved = 0;
-		assert.throws(() => replaceKit(fresh, link, { rename: (from, to) => { moved += 1; if (moved === 2) throw new Error("rename failed"); renameSync(from, to); } }), /rename failed/);
-		assert.equal(lstatSync(link).isSymbolicLink(), true, "the link is restored as a link");
-		assert.equal(readFileSync(join(target, "kit.json"), "utf8"), '{ "version": 1 }\n', "the link's target was never moved");
+		await assert.rejects(installMusicKit({ kit: link, log: () => {}, deps: fakeDeps([]) }), /wv does not delete or replace a kit folder/);
+		assert.equal(lstatSync(link).isSymbolicLink(), true, "the root is still a link");
+		assert.equal(readFileSync(join(target, "user.txt"), "utf8"), "keep me", "the link's target is untouched");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a kit folder that appears mid-install refuses publication and keeps its files", async () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
+	try {
+		const kit = join(root, "music-kit");
+		const calls = [];
+		const base = fakeDeps(calls);
+		const deps = {
+			...base,
+			build: async (src, bin) => {
+				await base.build(src, bin);
+				mkdirSync(kit, { recursive: true });
+				writeFileSync(join(kit, "appeared.txt"), "someone else's kit");
+			},
+		};
+		await assert.rejects(installMusicKit({ kit, log: () => {}, deps }), /a kit folder appeared at /);
+		assert.deepEqual(readdirSync(kit), ["appeared.txt"], "the root is not changed");
+		assert.equal(readFileSync(join(kit, "appeared.txt"), "utf8"), "someone else's kit");
+		assert.deepEqual(readdirSync(root).filter((entry) => entry.startsWith(`.music-kit.staging-music-kit-${process.pid}-`)), [], "this run's staging folder is gone");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -519,18 +547,14 @@ test("wv removes only its own staging folder and names the leftovers without del
 	}
 });
 
-test("a failed step leaves the old kit in place and removes the staging folder", async () => {
+test("a failed step removes this run's staging folder", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
 		const kit = join(root, "music-kit");
-		mkdirSync(kit, { recursive: true });
-		writeFileSync(join(kit, "old.txt"), "the kit before this run");
-		// A kit that wv installed, so the install may replace it after a passing stage.
-		writeFileSync(join(kit, "kit.json"), '{ "version": 1 }\n');
 		const calls = [];
 		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps(calls, { failAt: "build" }) }), /build failed/);
-		assert.equal(readFileSync(join(kit, "old.txt"), "utf8"), "the kit before this run");
-		assert.equal(existsSync(join(root, ".music-kit.staging")), false, "a half kit never stays on disk");
+		assert.equal(existsSync(kit), false, "a half kit never stays on disk");
+		assert.deepEqual(readdirSync(root).filter((entry) => entry.startsWith(`.music-kit.staging-music-kit-${process.pid}-`)), []);
 		assert.ok(calls.includes("fetch:sfizz") && calls.includes("build"));
 		assert.ok(!calls.includes("generate"), "the steps after the failure do not run");
 	} finally {
@@ -545,7 +569,7 @@ test("a failed smoke render refuses the kit and keeps the old one", async () => 
 		const failing = async () => [{ name: "piano", ok: false, detail: "silent" }];
 		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps([], { smoke: failing }) }), /silent/);
 		assert.equal(existsSync(kit), false);
-		assert.equal(existsSync(join(root, ".music-kit.staging")), false);
+		assert.deepEqual(readdirSync(root).filter((entry) => entry.startsWith(`.music-kit.staging-music-kit-${process.pid}-`)), []);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -570,22 +594,21 @@ test("a passing install moves the staging folder into place and records the pins
 		assert.ok(existsSync(join(kit, "licenses", "salamander-LICENSE")), "the piano licence ships with the samples");
 		assert.ok(!existsSync(join(kit, "src")), "the cloned sources do not stay in the kit");
 		assert.equal(existsSync(join(kit, "samples", "salamander", ".git")), false, "the piano's git history does not stay in the kit");
-		assert.equal(existsSync(join(root, ".music-kit.staging")), false);
+		assert.deepEqual(readdirSync(root).filter((entry) => entry.startsWith(`.music-kit.staging-music-kit-${process.pid}-`)), []);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
 
-test("an install replaces a managed kit whose samples folder is a broken symlink", async () => {
+test("a kit whose samples folder is a broken symlink is refused, not replaced", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
 		const kit = join(root, "music-kit");
 		mkdirSync(kit, { recursive: true });
 		writeFileSync(join(kit, "kit.json"), '{ "version": 1 }\n');
 		symlinkSync(join(root, "gone"), join(kit, "samples"), "dir");
-		const report = await installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) });
-		assert.equal(report.ok, true, report.missing.join(", "));
-		assert.equal(lstatSync(join(kit, "samples")).isSymbolicLink(), false, "the broken link is replaced by real samples");
+		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) }), /wv does not delete or replace a kit folder/);
+		assert.equal(lstatSync(join(kit, "samples")).isSymbolicLink(), true, "the root is unchanged");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -682,7 +705,7 @@ test("the real install builds a kit that passes --check, and a second run skips 
 		assert.equal(second.ok, true);
 		assert.ok(again.some((line) => /already installed/.test(line)), "the second run reads the kit and skips the download");
 		assert.ok(existsSync(join(kit, "kit.json")));
-		assert.ok(!existsSync(join(dirname(kit), ".music-kit.staging")), "no staging folder stays behind");
+		assert.deepEqual(readdirSync(dirname(kit)).filter((entry) => entry.startsWith(`.music-kit.staging-${basename(kit)}-`)), [], "no staging folder stays behind");
 	} finally {
 		restore("XDG_CACHE_HOME", previous.XDG_CACHE_HOME);
 		restore("TMPDIR", previous.TMPDIR);

@@ -599,52 +599,26 @@ function writeManifest(staging, smoke, verified = {}) {
 	writeFileSync(join(staging, "kit.json"), `${JSON.stringify(manifest, null, 1)}\n`);
 }
 
-/**
- * Refuses a kit folder that wv did not install: it can hold the owner's own
- * scores, so wv never deletes it. The message gives both ways forward.
- * @param {string} kit
- */
-function assertReplaceableRoot(kit) {
-	/** @type {import("node:fs").Stats | null} */
-	let entry = null;
+/** True when a folder, a file or a link is at `path`. */
+function existsAt(path) {
 	try {
-		entry = lstatSync(kit);
+		lstatSync(path);
+		return true;
 	} catch {
-		return;
+		return false;
 	}
-	if (entry && readManifest(join(kit, "kit.json"))) return;
-	throw new Error(`the music kit folder ${kit} was not installed by wv, so wv will not replace it. Move that folder aside first (mv "${kit}" "${kit}.old"), or install the kit in another folder with WV_MUSIC_KIT=<folder>, then run wv setup --music again.`);
 }
 
-/**
- * Moves a passing staging folder into place. A root that wv did not make (no
- * kit.json, for example a hand-built kit with the owner's own scores) is never
- * replaced: the install refuses and names the two ways forward. A managed root
- * and a symlink root are renamed aside first and put back if the move fails, so
- * a failed publication cannot lose the kit the owner has.
- * @param {string} staging
- * @param {string} kit
- * @param {{rename?: (from: string, to: string) => void, remove?: (path: string, options: any) => void}} [steps]
- */
-export function replaceKit(staging, kit, { rename = renameSync, remove = rmSync } = {}) {
-	/** @type {import("node:fs").Stats | null} */
-	let entry = null;
-	try {
-		entry = lstatSync(kit);
-	} catch {
-		// No kit yet: nothing to move aside.
-	}
-	assertReplaceableRoot(kit);
-	const previous = entry ? `${kit}.previous-${process.pid}` : null;
-	if (previous) rename(kit, previous);
-	try {
-		rename(staging, kit);
-	} catch (error) {
-		if (previous) rename(previous, kit);
-		throw error;
-	}
-	// The old copy goes only once the new kit is in place. A link is unlinked, never followed.
-	if (previous) remove(previous, entry?.isSymbolicLink() ? { force: true } : { recursive: true, force: true });
+/** wv never deletes or replaces a kit folder: the owner moves it, or sets WV_MUSIC_KIT. */
+function replaceRefusal(kit, first = "") {
+	return `${first}wv does not delete or replace a kit folder. Move it aside (mv "${kit}" "${kit}.old"), or set WV_MUSIC_KIT to another folder, then run wv setup --music again.`;
+}
+
+/** Refuses an existing kit path before the probes and the download, with the first failed check item. */
+function refuseExistingRoot(kit, report) {
+	if (!existsAt(kit)) return;
+	const failed = report.items.find((item) => !item.ok);
+	throw new Error(replaceRefusal(kit, failed ? `${failed.name}: ${failed.detail}. ` : ""));
 }
 
 /** Whether a process with this pid still runs. EPERM means it exists but is not ours. */
@@ -748,8 +722,8 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		log(`music kit: already installed at ${kit} (the smoke render passes, so nothing is downloaded)`);
 		return existing;
 	}
-	// Before the probe, the lock and the download: a folder that wv did not make is never replaced.
-	assertReplaceableRoot(kit);
+	// Before the probe, the lock and the download: wv never replaces a kit folder.
+	refuseExistingRoot(kit, existing);
 
 	const refusal = toolRefusal(await d.tools());
 	if (refusal) throw new Error(refusal);
@@ -763,6 +737,13 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		lock.release();
 	}, "the music kit staging folder");
 	try {
+		// An install that ended while this one waited may have made the root: look again.
+		const now = await checkMusicKit({ kit, smoke: d.smoke, log: () => {} });
+		if (now.ok) {
+			log(`music kit: already installed at ${kit} (the smoke render passes, so nothing is downloaded)`);
+			return now;
+		}
+		refuseExistingRoot(kit, now);
 		// Only this run's folder is wv's to remove: name the leftovers, do not delete them.
 		noteLeftoverStaging(kit, log);
 		const free = d.freeBytes(dirname(kit));
@@ -803,7 +784,9 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		// The cloned sources are build input only; the kit keeps the samples and the licences.
 		rmSync(join(staging, "sources"), { recursive: true, force: true });
 		writeManifest(staging, smoke, verified);
-		replaceKit(staging, kit);
+		// Publication is one rename into a path that does not exist: wv never replaces a kit.
+		if (existsAt(kit)) throw new Error(replaceRefusal(kit, `a kit folder appeared at ${kit} while this install ran. `));
+		renameSync(staging, kit);
 		staging = null;
 	} finally {
 		try {
