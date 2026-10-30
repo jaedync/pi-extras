@@ -290,7 +290,7 @@ test("a lock file from an earlier install is refused and left exactly as it was"
 			await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) }), (error) => {
 				assert.match(error.message, /a lock from an earlier install remains at /);
 				assert.ok(error.message.includes(lock), "the refusal names the lock");
-				assert.match(error.message, new RegExp(`rm "${lock.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`), "the refusal gives the command");
+				assert.ok(error.message.includes(`rm -- '${lock}'`), "the refusal gives the quoted command");
 				return true;
 			});
 			assert.equal(readFileSync(lock, "utf8"), before, "the lock is not removed or rewritten");
@@ -313,7 +313,7 @@ test("an install refuses an existing root and keeps the owner's files, whatever 
 			await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps(calls) }), (error) => {
 				assert.match(error.message, /sfizz_render: /, "the refusal names the first failed check item");
 				assert.match(error.message, /wv does not delete or replace a kit folder/);
-				assert.match(error.message, /mv /, "the refusal says how to move it aside");
+				assert.ok(error.message.includes(`mv -- '${kit}' '${kit}.old'`), "the refusal says how to move it aside, quoted");
 				assert.match(error.message, /WV_MUSIC_KIT/, "the refusal names the override");
 				return true;
 			});
@@ -541,7 +541,7 @@ test("wv removes only its own staging folder and names the leftovers without del
 		assert.ok(note, "the install names the leftovers in a note");
 		assert.ok(note.includes(lookalike), "the note names the lookalike path");
 		assert.ok(!note.includes(other), "the note does not name another kit's folder");
-		assert.match(note, /rm -rf /);
+		assert.match(note, /rm -rf -- '/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

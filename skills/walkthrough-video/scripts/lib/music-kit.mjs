@@ -12,6 +12,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { paths } from "./paths.mjs";
 import { assertNotStopping, findOnPath, isStopping, run } from "./proc.mjs";
+import { quoteArg } from "./shell.mjs";
 import { onSignalCleanup } from "./signals.mjs";
 
 const PY_DIR = fileURLToPath(new URL("../py/", import.meta.url));
@@ -610,7 +611,7 @@ function existsAt(path) {
 
 /** wv never deletes or replaces a kit folder: the owner moves it, or sets WV_MUSIC_KIT. */
 function replaceRefusal(kit, first = "") {
-	return `${first}wv does not delete or replace a kit folder. Move it aside (mv "${kit}" "${kit}.old"), or set WV_MUSIC_KIT to another folder, then run wv setup --music again.`;
+	return `${first}wv does not delete or replace a kit folder. Move it aside (mv -- ${quoteArg(kit)} ${quoteArg(`${kit}.old`)}), or set WV_MUSIC_KIT to another folder, then run wv setup --music again.`;
 }
 
 /** Refuses an existing kit path before the probes and the download, with the first failed check item. */
@@ -645,7 +646,7 @@ function lockRefusal(lock) {
 	if (owner && Number.isInteger(owner.pid) && processAlive(owner.pid)) {
 		return `another wv setup --music is installing the kit (pid ${owner.pid}, started ${owner.started ?? "unknown"}). Wait for it to finish.`;
 	}
-	return `a lock from an earlier install remains at ${lock}. If no install runs now, remove it (rm "${lock}"), then run wv setup --music again.`;
+	return `a lock from an earlier install remains at ${lock}. If no install runs now, remove it (rm -- ${quoteArg(lock)}), then run wv setup --music again.`;
 }
 
 /**
@@ -704,7 +705,7 @@ function noteLeftoverStaging(kit, log = () => {}) {
 	}
 	const leftovers = names.filter((name) => name.startsWith(stagingFamily(kit))).map((name) => join(parent, name));
 	if (leftovers.length === 0) return;
-	log(`music kit: leftover staging folders from earlier installs use disk space: ${leftovers.join(", ")}. If no install runs now, remove them: rm -rf ${leftovers.join(" ")}`);
+	log(`music kit: leftover staging folders from earlier installs use disk space: ${leftovers.join(", ")}. If no install runs now, remove them: rm -rf -- ${leftovers.map(quoteArg).join(" ")}`);
 }
 
 /**
