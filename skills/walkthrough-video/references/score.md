@@ -111,8 +111,15 @@ runs the smoke render and skips the download.
 Name every source in the delivery:
 
 - The synth voices and the score: your own work, no licence needed.
-- Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0: a published film that uses the piano
+- Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0
+  (https://creativecommons.org/licenses/by/3.0/), from
+  https://github.com/sfzinstruments/SalamanderGrandPiano. A published film that uses the piano
   must carry this line in its description or credits, and the delivery must repeat it:
-  "Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0".
+  "Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0
+  (https://creativecommons.org/licenses/by/3.0/). Source:
+  https://github.com/sfzinstruments/SalamanderGrandPiano. Changes: leading silence trimmed;
+  used as samples in a composed score."
+  The kit trims the leading silence of each sample, so a piano hit lands on its frame, and
+  plays the samples in a score that you compose. Say both in the credit, as the licence asks.
 - VCSL (Versilian Community Sample Library), CC0 1.0: no attribution required; name it anyway.
 - pedalboard is GPL-3.0: it runs as an installed tool. Do not copy its code into the film.

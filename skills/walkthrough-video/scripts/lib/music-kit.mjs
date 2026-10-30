@@ -66,8 +66,14 @@ export const MUSIC_KIT_PINS = {
 export const MUSIC_KIT_DOWNLOAD_BYTES = Object.values(MUSIC_KIT_PINS).reduce((sum, source) => sum + source.bytes, 0);
 /** Free space the install needs: the downloads, the build tree and the staging copy. */
 export const MUSIC_KIT_NEED_BYTES = 3 * GB;
-/** The credit that a published film with the piano must carry. */
-export const MUSIC_KIT_ATTRIBUTION = "Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0";
+/**
+ * The credit that a published film with the piano must carry. The Salamander
+ * licence asks for the licence link and for the changes to be named, and its
+ * README for the source link, so the line gives all three.
+ */
+export const MUSIC_KIT_ATTRIBUTION =
+	"Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/). " +
+	"Source: https://github.com/sfzinstruments/SalamanderGrandPiano. Changes: leading silence trimmed; used as samples in a composed score.";
 
 /** The kit's layout, which sc.py and the score reference too. */
 export function kitPaths(kit = paths().musicKit) {

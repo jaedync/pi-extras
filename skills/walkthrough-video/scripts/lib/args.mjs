@@ -216,7 +216,8 @@ ${pythonPackageNames().join(", ")}, and the two Kokoro model files.
 Reuses ~/.local/share/kokoro-tts when the SHA-256 matches. ffmpeg must be on PATH.
 
 The music kit is optional: it holds the sampled instruments that wv sound score plays.
-It needs git, cmake and a C++ compiler, and installs into <cache>/music-kit.
+It needs git, cmake 3.16 or later, a C and a C++ compiler, and make or ninja, and installs
+into <cache>/music-kit (or WV_MUSIC_KIT, when set).
 
 Options:
   --music   install the music kit only: build sfizz_render ${MUSIC_KIT_PINS.sfizz.commit.slice(0, 7)}

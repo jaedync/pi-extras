@@ -162,7 +162,7 @@ test("the pins are the commits the hand-built kit measured", () => {
 	assert.equal(MUSIC_KIT_PINS.salamander.bytes, 748451483);
 	assert.equal(MUSIC_KIT_PINS.salamander.licence, "CC BY 3.0");
 	assert.equal(MUSIC_KIT_SAMPLE_RATE, 48000);
-	assert.equal(MUSIC_KIT_ATTRIBUTION, "Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0");
+	assert.ok(MUSIC_KIT_ATTRIBUTION.startsWith("Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0"));
 	// The kit's map tools and the score they serve share one venv.
 	for (const name of ["numpy", "soundfile", "scipy", "mido", "pedalboard"]) assert.ok(KIT_PY_PACKAGES.some((spec) => spec.startsWith(`${name}==`)), `the kit installs ${name}`);
 });
@@ -528,6 +528,7 @@ test("a passing install moves the staging folder into place and records the pins
 		assert.equal(manifest.salamander.commit, MUSIC_KIT_PINS.salamander.commit);
 		assert.equal(manifest.sfizz.checkout, MUSIC_KIT_PINS.sfizz.commit, "the manifest records the verified checkout");
 		assert.equal(manifest.vcsl.checkout, MUSIC_KIT_PINS.vcsl.commit);
+		assert.equal(manifest.salamander.attribution, MUSIC_KIT_ATTRIBUTION, "the manifest carries the whole credit");
 		assert.ok(existsSync(join(kit, "licenses", "salamander-LICENSE")), "the piano licence ships with the samples");
 		assert.ok(!existsSync(join(kit, "src")), "the cloned sources do not stay in the kit");
 		assert.equal(existsSync(join(kit, "samples", "salamander", ".git")), false, "the piano's git history does not stay in the kit");
@@ -763,6 +764,23 @@ test("sc.py refuses a sampled part with the fix when the kit is missing", { skip
 });
 
 const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
+test("the piano credit names the source, the licence URI and the changes", () => {
+	const credit = MUSIC_KIT_ATTRIBUTION;
+	assert.ok(credit.includes("https://github.com/sfzinstruments/SalamanderGrandPiano"), "the credit gives the source");
+	assert.ok(credit.includes("https://creativecommons.org/licenses/by/3.0/"), "the credit gives a link to the licence");
+	assert.match(credit, /leading silence trimmed/i, "the credit says what changed");
+	assert.match(credit, /composed score/i, "the credit says how the samples are used");
+	const docs = [readFileSync(join(SKILL, "references", "score.md"), "utf8"), readFileSync(join(PACKAGE, "THIRD_PARTY.md"), "utf8")];
+	for (const text of docs) {
+		const flat = text.replace(/\s+/g, " ");
+		assert.ok(flat.includes("https://github.com/sfzinstruments/SalamanderGrandPiano"), "the docs give the source");
+		assert.ok(flat.includes("https://creativecommons.org/licenses/by/3.0/"), "the docs link the licence");
+		assert.match(flat, /leading silence trimmed/i);
+		assert.match(flat, /composed score/i);
+	}
+	assert.ok(usageText("setup").includes(credit), "the setup help prints the credit in full");
+});
+
 test("the docs say how to add the kit, what it downloads, and how to credit the piano", () => {
 	const score = readFileSync(join(SKILL, "references", "score.md"), "utf8");
 	assert.match(score, /wv setup --music/);
