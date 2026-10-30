@@ -10,7 +10,7 @@ import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { paths } from "./paths.mjs";
-import { findOnPath, run } from "./proc.mjs";
+import { assertNotStopping, findOnPath, run } from "./proc.mjs";
 
 const PY_DIR = fileURLToPath(new URL("../py/", import.meta.url));
 const GB = 1024 ** 3;
@@ -195,6 +195,8 @@ export async function checkMusicKit({ kit = paths().musicKit, smoke = (dir) => s
 		try {
 			smokeItems = await smoke(kit);
 		} catch (error) {
+			// A stop is not a kit fault: it goes on to the shutdown, not into the report.
+			if (error?.name === "StoppingError") throw error;
 			smokeItems = [{ name: "smoke render", ok: false, detail: String(error?.message ?? error).split("\n")[0] }];
 		}
 		const bad = smokeItems.filter((item) => !item.ok);
@@ -298,6 +300,8 @@ export async function smokeKit(kit = paths().musicKit) {
 	try {
 		const items = [];
 		for (const job of jobs) {
+			// A stop that cancelled the last render must not start the next one.
+			assertNotStopping("the smoke render");
 			if (!existsSync(p.sfizz) || !existsSync(job.sfz)) {
 				items.push({ name: job.name, ok: false, peak: 0, detail: existsSync(job.sfz) ? "no sfizz_render" : `${basename(job.sfz)} is missing` });
 				continue;
@@ -307,6 +311,7 @@ export async function smokeKit(kit = paths().musicKit) {
 			const notes = job.keys.map((key, index) => ({ t: 0.25 + index * 0.5, key, vel: 100, dur: 0.35 }));
 			writeFileSync(midi, smokeMidi(notes));
 			const result = await run(p.sfizz, ["--sfz", job.sfz, "--midi", midi, "--wav", wav, "-s", String(MUSIC_KIT_SAMPLE_RATE), "-q", "3", "--use-eot"], { timeoutMs: 120000 });
+			assertNotStopping("the next smoke render");
 			if (result.code !== 0 || !existsSync(wav)) {
 				items.push({ name: job.name, ok: false, peak: 0, detail: `sfizz_render failed: ${(result.stderr || result.stdout).trim().split("\n").slice(-1)[0] || `exit ${result.code}`}` });
 				continue;

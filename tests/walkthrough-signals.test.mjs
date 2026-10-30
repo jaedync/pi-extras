@@ -4,7 +4,7 @@
  * whole point is what the kernel does when wv is told to stop.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -433,6 +433,102 @@ await detectCuts(${JSON.stringify(join(dir, "film.mp4"))}, 60);
 		assert.equal(alive(child), false, `the measure ffmpeg child ${child} is still running`);
 	} finally {
 		watcher.kill("SIGKILL");
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a child refused after the stop begins is a named error", () => {
+	const code = `import { refuseNewChildren, spawnChild } from ${JSON.stringify(join(SKILL, "lib/proc.mjs"))};
+refuseNewChildren();
+try {
+	spawnChild(${JSON.stringify(process.execPath)}, ["-e", "setTimeout(() => {}, 60000)"]);
+} catch (error) {
+	console.log(error.name + "|" + error.message);
+}`;
+	const result = spawnSync(process.execPath, ["--input-type=module", "-e", code], { encoding: "utf8", timeout: 30000 });
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stdout, /^StoppingError\|wv is stopping/m);
+});
+
+test("SIGTERM during a two-job loop starts no second child", { timeout: 30000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "wv-loop-stop-"));
+	const log = join(dir, "jobs.txt");
+	const worker = join(dir, "worker.mjs");
+	writeFileSync(
+		worker,
+		`import { appendFileSync } from "node:fs";
+import { run } from ${JSON.stringify(join(SKILL, "lib/proc.mjs"))};
+import { installSignalHandlers } from ${JSON.stringify(join(SKILL, "lib/signals.mjs"))};
+installSignalHandlers();
+process.stdout.write("ready");
+const child = 'require("node:fs").appendFileSync(process.env.WV_LOG, process.env.WV_JOB + "\\\\n"); setTimeout(() => {}, 60000)';
+for (const job of ["one", "two"]) {
+	await run(process.execPath, ["-e", child], { timeoutMs: 60000, env: { ...process.env, WV_LOG: ${JSON.stringify(log)}, WV_JOB: job } });
+}
+`,
+	);
+	const watcher = spawn(process.execPath, [worker], { stdio: ["ignore", "pipe", "pipe"] });
+	const exited = new Promise((resolve) => watcher.on("exit", (value) => resolve(value)));
+	let stderr = "";
+	let ready = false;
+	watcher.stdout.on("data", (chunk) => {
+		if (String(chunk).includes("ready")) ready = true;
+	});
+	watcher.stderr.on("data", (chunk) => (stderr += chunk));
+	try {
+		await waitFor(() => ready, 10000, "the worker registered its handlers");
+		await waitForFile(log);
+		watcher.kill("SIGTERM");
+		const code = await exited;
+		assert.equal(code, 143, stderr);
+		await sleep(300);
+		assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["one"], "the second job never started");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("SIGTERM during the music smoke render starts no second render", { timeout: 30000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "wv-smoke-stop-"));
+	const log = join(dir, "renders.txt");
+	try {
+		const kit = join(dir, "music-kit");
+		const sfz = join(kit, "samples", "vcsl");
+		mkdirSync(sfz, { recursive: true });
+		for (const file of ["kit.sfz", "marimba.sfz", "glock.sfz"]) writeFileSync(join(sfz, file), "<control>\n");
+		mkdirSync(join(kit, "samples", "salamander"), { recursive: true });
+		writeFileSync(join(kit, "samples", "salamander", "Salamander Grand Piano V3.sfz"), "<control>\n");
+		mkdirSync(join(kit, "bin"), { recursive: true });
+		const fake = join(kit, "bin", "sfizz_render");
+		writeFileSync(fake, `#!/bin/sh\necho run >> ${JSON.stringify(log)}\nsleep 60\n`);
+		chmodSync(fake, 0o755);
+
+		const worker = join(dir, "worker.mjs");
+		writeFileSync(
+			worker,
+			`import { smokeKit } from ${JSON.stringify(join(SKILL, "lib", "music-kit.mjs"))};
+import { installSignalHandlers } from ${JSON.stringify(join(SKILL, "lib", "signals.mjs"))};
+installSignalHandlers();
+process.stdout.write("ready");
+await smokeKit(${JSON.stringify(kit)}).catch(() => {});
+`,
+		);
+		const watcher = spawn(process.execPath, [worker], { stdio: ["ignore", "pipe", "pipe"] });
+		const exited = new Promise((resolve) => watcher.on("exit", (value) => resolve(value)));
+		let stderr = "";
+		let ready = false;
+		watcher.stdout.on("data", (chunk) => {
+			if (String(chunk).includes("ready")) ready = true;
+		});
+		watcher.stderr.on("data", (chunk) => (stderr += chunk));
+		await waitFor(() => ready, 10000, "the worker registered its handlers");
+		await waitForFile(log);
+		watcher.kill("SIGTERM");
+		const code = await exited;
+		assert.equal(code, 143, stderr);
+		await sleep(300);
+		assert.equal(readFileSync(log, "utf8").trim().split("\n").length, 1, "the smoke loop stopped at the first cancelled render");
+	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

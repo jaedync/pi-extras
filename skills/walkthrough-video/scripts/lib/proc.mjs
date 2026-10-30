@@ -232,6 +232,36 @@ export async function stopTrees(snapshots, { graceMs = 5000, killMs = 2000, sign
 	return { survivors: final ?? [], unresolved: final === null ? entries : [], truncated, escalated, lastSignal };
 }
 
+/**
+ * Set when wv begins to stop. A loop that catches a cancelled child and then
+ * starts the next one would leave that child behind the stop: from here every
+ * start throws, so no loop can.
+ */
+let childrenRefused = false;
+
+/** A start that the stop refused. */
+export class StoppingError extends Error {
+	constructor(message = "wv is stopping") {
+		super(message);
+		this.name = "StoppingError";
+	}
+}
+
+/** From here no new child starts. The shutdown calls this before it takes its snapshot. */
+export function refuseNewChildren() {
+	childrenRefused = true;
+}
+
+/** True once the stop has begun. */
+export function newChildrenRefused() {
+	return childrenRefused;
+}
+
+/** Throws when the stop has begun, so a loop checks between its jobs as well. */
+export function assertNotStopping(what = "a process") {
+	if (childrenRefused) throw new StoppingError(`wv is stopping: ${what} cannot start`);
+}
+
 /** A tracked child and its identity at spawn. */
 /** @type {Set<{child: import("node:child_process").ChildProcess, root: {pid: number, start: string} | null}>} */
 const children = new Set();
@@ -242,6 +272,7 @@ const children = new Set();
  * before the first signal, which is the only moment the tree matters.
  */
 export function spawnChild(command, args, options = {}) {
+	if (childrenRefused) throw new StoppingError();
 	const child = spawn(command, args, options);
 	const start = child.pid ? detectReader().start(child.pid) : undefined;
 	/** @type {{child: any, root: {pid: number, start: string} | null}} */

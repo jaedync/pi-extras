@@ -10,7 +10,7 @@
  * deadline wv says what is left and exits with the code of the signal.
  */
 import { writeSync } from "node:fs";
-import { liveChildPids, stopChildTrees } from "./proc.mjs";
+import { liveChildPids, refuseNewChildren, stopChildTrees } from "./proc.mjs";
 
 /** At the deadline wv stops waiting, prints what is left and exits. */
 export const SHUTDOWN_MS = 15000;
@@ -102,6 +102,8 @@ export function installSignalHandlers() {
 async function shutdown(code) {
 	if (stopping) return;
 	stopping = true;
+	// Before the snapshot: a loop that catches a cancelled child must not start another.
+	refuseNewChildren();
 	const exitCode = code;
 	process.exitCode = exitCode;
 	const until = Date.now() + SHUTDOWN_MS;
