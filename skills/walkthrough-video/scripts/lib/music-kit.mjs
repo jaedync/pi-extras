@@ -5,7 +5,7 @@
  * and moves it into place only when every part, including a smoke render,
  * passed. The pins are the commits the hand-built kit measured (2026-10-29).
  */
-import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -658,17 +658,16 @@ function lockRefusal(lock) {
 function acquireKitLock(kit) {
 	const lock = `${kit}.lock`;
 	const token = randomUUID();
-	let fd;
+	// Write the record first, then link it into place: a reader never sees an empty lock.
+	const temp = `${lock}.${process.pid}.${token}`;
+	writeFileSync(temp, `${JSON.stringify({ pid: process.pid, token, started: new Date().toISOString() })}\n`, { mode: 0o600, flag: "wx" });
 	try {
-		fd = openSync(lock, "wx", 0o600);
+		linkSync(temp, lock);
 	} catch (error) {
 		if (error?.code !== "EEXIST") throw error;
 		throw new Error(lockRefusal(lock));
-	}
-	try {
-		writeFileSync(fd, `${JSON.stringify({ pid: process.pid, token, started: new Date().toISOString() })}\n`);
 	} finally {
-		closeSync(fd);
+		rmSync(temp, { force: true });
 	}
 	return {
 		release: () => {
