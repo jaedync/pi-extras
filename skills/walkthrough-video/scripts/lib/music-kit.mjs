@@ -5,7 +5,7 @@
  * and moves it into place only when every part, including a smoke render,
  * passed. The pins are the commits the hand-built kit measured (2026-10-29).
  */
-import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -621,6 +621,33 @@ function refuseExistingRoot(kit, report) {
 	throw new Error(replaceRefusal(kit, failed ? `${failed.name}: ${failed.detail}. ` : ""));
 }
 
+/**
+ * Reserves the kit path and moves the staging folder in. mkdir is atomic, so a
+ * folder that appeared since the check makes this refuse. The rename replaces
+ * only the empty folder that this run reserved, and a failed rename removes it.
+ * @param {string} staging
+ * @param {string} kit
+ * @param {{mkdir?: (path: string) => void, rename?: (from: string, to: string) => void, rmdir?: (path: string) => void}} [steps]
+ */
+export function publishKit(staging, kit, { mkdir = (path) => mkdirSync(path), rename = renameSync, rmdir = rmdirSync } = {}) {
+	try {
+		mkdir(kit);
+	} catch (error) {
+		if (error?.code === "EEXIST") throw new Error(replaceRefusal(kit, `a kit folder appeared at ${kit} while this install ran. `));
+		throw error;
+	}
+	try {
+		rename(staging, kit);
+	} catch (error) {
+		try {
+			rmdir(kit);
+		} catch {
+			// The reserved folder is already gone; the rename error is the one to report.
+		}
+		throw error;
+	}
+}
+
 /** Whether a process with this pid still runs. EPERM means it exists but is not ours. */
 function processAlive(pid) {
 	try {
@@ -785,10 +812,9 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		// The cloned sources are build input only; the kit keeps the samples and the licences.
 		rmSync(join(staging, "sources"), { recursive: true, force: true });
 		writeManifest(staging, smoke, verified);
-		// A stop must never publish a half kit, and publication is one rename into a missing path.
+		// A stop must never publish a half kit.
 		assertNotStopping("the kit publication");
-		if (existsAt(kit)) throw new Error(replaceRefusal(kit, `a kit folder appeared at ${kit} while this install ran. `));
-		renameSync(staging, kit);
+		publishKit(staging, kit);
 		staging = null;
 	} finally {
 		// During a stop the shutdown owns these: it runs the cleanup after the child trees are gone,

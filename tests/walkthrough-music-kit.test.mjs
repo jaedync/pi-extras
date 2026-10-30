@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -15,6 +15,7 @@ import {
 	MUSIC_KIT_ATTRIBUTION,
 	MUSIC_KIT_DOWNLOAD_BYTES,
 	formatBytes,
+	publishKit,
 	MUSIC_KIT_NEED_BYTES,
 	MUSIC_KIT_PINS,
 	MUSIC_KIT_SAMPLE_RATE,
@@ -327,6 +328,37 @@ test("an install refuses an existing root and keeps the owner's files, whatever 
 	}
 });
 
+test("publication reserves the target and removes only the empty folder that it made", () => {
+	const root = mkdtempSync(join(tmpdir(), "wv-publish-"));
+	try {
+		const staging = join(root, "staging");
+		mkdirSync(staging, { recursive: true });
+		writeFileSync(join(staging, "new.txt"), "the new kit");
+		const kit = join(root, "music-kit");
+		// A folder that is there first is refused and keeps its inode and its file.
+		mkdirSync(kit);
+		writeFileSync(join(kit, "user.txt"), "keep me");
+		const inode = statSync(kit).ino;
+		assert.throws(() => publishKit(staging, kit), /a kit folder appeared at /);
+		assert.equal(statSync(kit).ino, inode, "the folder is the same inode");
+		assert.equal(readFileSync(join(kit, "user.txt"), "utf8"), "keep me");
+		assert.equal(existsSync(join(staging, "new.txt")), true, "the staging folder is kept");
+
+		// A failed rename removes the empty folder that this run reserved.
+		const fresh = join(root, "fresh-kit");
+		assert.throws(() => publishKit(staging, fresh, { rename: () => { throw new Error("rename failed"); } }), /rename failed/);
+		assert.equal(existsSync(fresh), false, "the reserved folder is gone");
+		assert.equal(existsSync(join(staging, "new.txt")), true, "the staging folder is still there for the normal cleanup");
+
+		// The reservation is atomic: an EEXIST from mkdir refuses before any rename.
+		let renamed = false;
+		assert.throws(() => publishKit(staging, join(root, "racing-kit"), { mkdir: () => { throw Object.assign(new Error("exists"), { code: "EEXIST" }); }, rename: () => { renamed = true; } }), /a kit folder appeared at /);
+		assert.equal(renamed, false, "no rename runs after a failed reservation");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("a managed kit that fails its check is refused and stays as it was", async () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-kit-"));
 	try {
@@ -367,16 +399,19 @@ test("a kit folder that appears mid-install refuses publication and keeps its fi
 		const kit = join(root, "music-kit");
 		const calls = [];
 		const base = fakeDeps(calls);
+		let inode = null;
 		const deps = {
 			...base,
 			build: async (src, bin) => {
 				await base.build(src, bin);
 				mkdirSync(kit, { recursive: true });
 				writeFileSync(join(kit, "appeared.txt"), "someone else's kit");
+				inode = statSync(kit).ino;
 			},
 		};
 		await assert.rejects(installMusicKit({ kit, log: () => {}, deps }), /a kit folder appeared at /);
 		assert.deepEqual(readdirSync(kit), ["appeared.txt"], "the root is not changed");
+		assert.equal(statSync(kit).ino, inode, "the folder is the same inode");
 		assert.equal(readFileSync(join(kit, "appeared.txt"), "utf8"), "someone else's kit");
 		assert.deepEqual(readdirSync(root).filter((entry) => entry.startsWith(`.music-kit.staging-music-kit-${process.pid}-`)), [], "this run's staging folder is gone");
 	} finally {
