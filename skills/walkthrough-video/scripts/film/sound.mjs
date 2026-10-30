@@ -278,7 +278,7 @@ async function score(argv) {
 	const cues = values.cues ? resolve(values.cues) : "";
 	const duration = values.duration !== undefined ? decimal(values.duration, "--duration", 1, 600) : readCueSheet(cues).duration;
 	// A sampled score is refused before any render, with the fix in the message.
-	const kit = process.env.WV_MUSIC_KIT || paths().musicKit;
+	const kit = paths().musicKit;
 	if (scoreNeedsKit(readFileSync(file, "utf8")) && !musicKitStatus(kit).present) {
 		throw new Error(`this score plays a sampled part, and the music kit is not installed at ${kit}. Run "wv setup --music" (about ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)}, about 5 min on 16 cores), then run this command again. A score with only synth voices needs no kit.`);
 	}

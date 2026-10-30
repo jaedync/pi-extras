@@ -528,6 +528,38 @@ test("setup parses --music, and the setup help names each source, commit and lic
 	assert.match(text, /smoke render/);
 });
 
+test("one resolver gives setup, its check and the score the same WV_MUSIC_KIT folder", () => {
+	assert.equal(paths({ WV_MUSIC_KIT: "/var/tmp/elsewhere/kit" }, "/home/someone").musicKit, "/var/tmp/elsewhere/kit");
+	assert.equal(paths({ XDG_CACHE_HOME: "/var/tmp/cache" }, "/home/someone").musicKit, join("/var/tmp/cache", "pi-walkthrough-video", "music-kit"));
+	const root = mkdtempSync(join(tmpdir(), "wv-kit-env-"));
+	try {
+		const kit = join(root, "elsewhere", "music-kit");
+		fakePassingKit(kit);
+		const env = { ...process.env, XDG_CACHE_HOME: join(root, "cache"), HOME: root, WV_MUSIC_KIT: kit };
+		const status = spawnSync(process.execPath, [WV, "setup", "--check"], { encoding: "utf8", env, timeout: 60000 });
+		const text = `${status.stdout}\n${status.stderr}`;
+		assert.match(text, /music kit \(optional\).*installed at /);
+		assert.ok(text.includes(kit), "the status line reads the override folder");
+		assert.ok(!text.includes(join(root, "cache", "pi-walkthrough-video", "music-kit")), "the status line does not read the cache kit");
+
+		const checked = spawnSync(process.execPath, [WV, "setup", "--music", "--check"], { encoding: "utf8", env, timeout: 60000 });
+		const checkedText = `${checked.stdout}\n${checked.stderr}`;
+		assert.equal(checked.status, 1, checkedText);
+		assert.ok(checkedText.includes(join(kit, "samples")), "the check reads the override folder");
+		assert.ok(!checkedText.includes(join(root, "cache", "pi-walkthrough-video", "music-kit")), "the check ignores the cache kit");
+
+		// The score reads the same variable, so the repair command in its message repairs this folder.
+		const missing = join(root, "no-kit");
+		const score = join(root, "score.py");
+		writeFileSync(score, "from sc import *\npiano = sfz_render(PIANO, [(0.5, 60, 100, 1.0)], 'piano.wav')\n");
+		const refused = spawnSync(process.execPath, [WV, "sound", "score", score, "--duration", "2", "--out", join(root, "out")], { encoding: "utf8", env: { ...env, WV_MUSIC_KIT: missing }, timeout: 60000 });
+		assert.equal(refused.status, 1);
+		assert.ok(`${refused.stdout}\n${refused.stderr}`.includes(missing), "the score names the override folder");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("wv setup without --music leaves the music kit alone, and its check names the option", () => {
 	const root = mkdtempSync(join(tmpdir(), "wv-setup-"));
 	try {

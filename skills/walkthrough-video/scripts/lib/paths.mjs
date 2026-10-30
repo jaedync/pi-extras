@@ -4,7 +4,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export const PLAYWRIGHT_CORE = "1.63.0";
 export const HYPERFRAMES = "0.8.209";
@@ -41,6 +41,16 @@ export function cacheHome(env = process.env, home = homedir()) {
 	return join(env.XDG_CACHE_HOME || join(home, ".cache"), "pi-walkthrough-video");
 }
 
+/**
+ * The one music kit folder. WV_MUSIC_KIT wins, so `wv setup --music`, its check,
+ * the setup status line and `wv sound score` can never disagree about where the
+ * kit is: a repair command then repairs the folder that the score reads.
+ */
+export function musicKitPath(env = process.env, home = homedir()) {
+	const override = String(env.WV_MUSIC_KIT ?? "").trim();
+	return override ? resolve(override) : join(cacheHome(env, home), "music-kit");
+}
+
 export const paths = (env = process.env, home = homedir()) => {
 	const root = cacheHome(env, home);
 	return {
@@ -55,7 +65,7 @@ export const paths = (env = process.env, home = homedir()) => {
 		venv: join(root, "venv"),
 		python: join(root, "venv", "bin", "python"),
 		models: join(root, "models"),
-		musicKit: join(root, "music-kit"),
+		musicKit: musicKitPath(env, home),
 		kokoroShare: join(home, ".local", "share", "kokoro-tts"),
 	};
 };
