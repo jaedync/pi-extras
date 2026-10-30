@@ -3,8 +3,14 @@ import { at, hasBox, summary, tally } from "./util.mjs";
 const SIDES = [["pt", "padding-top"], ["pr", "padding-right"], ["pb", "padding-bottom"], ["pl", "padding-left"], ["mt", "margin-top"], ["mb", "margin-bottom"]];
 const ROW_TAGS = new Set(["li", "tr", "a", "button", "dt", "dd", "label"]);
 
-function offGrid(value, grid, allow) {
-	if (value <= 0 || allow.includes(value)) return false;
+// Browser default margins of headings and paragraphs, in em; they are not a design decision to redline.
+const UA_MARGINS_EM = [0.67, 0.83, 1, 1.33, 1.67, 2.33];
+const UA_MARGIN_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6", "p"]);
+const isDefaultMargin = (el, value) => UA_MARGIN_TAGS.has(el.tag) && el.font?.size > 0 && UA_MARGINS_EM.some((k) => Math.abs(value / el.font.size - k) < 0.01);
+
+function offGrid(rawValue, grid, allow) {
+	const value = Math.abs(rawValue);
+	if (value === 0 || allow.includes(value)) return false;
 	const steps = value / grid;
 	return Math.abs(steps - Math.round(steps)) * grid > 0.25;
 }
@@ -35,10 +41,10 @@ export const spaceRules = [
 		fix: "Move padding, margins and gaps to multiples of the grid (4px by default). 1 and 2px nudges and the 6 and 10px half-steps inside small controls are fine.",
 		defaults: { grid: 4, allow: [1, 2, 6, 10] },
 		run: ({ elements }, o) => elements.filter((el) => !el.pseudo && el.tag !== "body").flatMap((el) => {
-			const bad = SIDES.filter(([key]) => offGrid(el.spacing[key], o.grid, o.allow)).map(([key, name]) => `${name} ${el.spacing[key]}px`);
+			const bad = SIDES.filter(([key]) => offGrid(el.spacing[key], o.grid, o.allow) && !(key[0] === "m" && isDefaultMargin(el, el.spacing[key]))).map(([key, name]) => `${name} ${el.spacing[key]}px`);
 			// Horizontal margins are often the used value of `auto`; check them only when small and not a centering pair.
 			for (const [key, name] of [["ml", "margin-left"], ["mr", "margin-right"]]) {
-				if (el.spacing.ml !== el.spacing.mr && el.spacing[key] <= 64 && offGrid(el.spacing[key], o.grid, o.allow)) bad.push(`${name} ${el.spacing[key]}px`);
+				if (el.spacing.ml !== el.spacing.mr && Math.abs(el.spacing[key]) <= 64 && offGrid(el.spacing[key], o.grid, o.allow)) bad.push(`${name} ${el.spacing[key]}px`);
 			}
 			if (/flex|grid/.test(el.display ?? "")) {
 				if (offGrid(el.spacing.rowGap, o.grid, o.allow)) bad.push(`row-gap ${el.spacing.rowGap}px`);
@@ -54,8 +60,11 @@ export const spaceRules = [
 		title: "Matching items with different padding or row height",
 		fix: "Give items of one kind one padding and, for rows, one height.",
 		run: ({ elements }) => siblingGroups(elements).flatMap((group) => {
-			const paddings = tally(group.map((el) => [el.spacing.pt, el.spacing.pr, el.spacing.pb, el.spacing.pl].join("/")));
-			if (paddings.length > 1) return [at(group[0], `${group.length} × ${group[0].classKey}: paddings ${paddings.map(([p, n]) => `${p} ×${n}`).join(", ")}`)];
+			const key = (el) => [el.spacing.pt, el.spacing.pr, el.spacing.pb, el.spacing.pl].join("/");
+			// A different first or last item (:first-child { padding-top: 0 } in a divided list) is a common, deliberate pattern.
+			const middle = group.length >= 4 ? group.slice(1, -1) : group;
+			const paddings = tally(middle.map(key));
+			if (paddings.length > 1) return [at(group[0], `${group.length} × ${group[0].classKey}: paddings ${tally(group.map(key)).map(([p, n]) => `${p} ×${n}`).join(", ")}`)];
 			const rows = group.every((el) => el.rect.h <= 72) && group.every((el) => el.rect.w === group[0].rect.w);
 			if (rows && !near(group.map((el) => el.rect.h), 2)) return [at(group[0], `${group.length} rows, heights ${[...new Set(group.map((el) => el.rect.h))].join(", ")}px`)];
 			return [];
@@ -96,9 +105,15 @@ export const spaceRules = [
 				if (!outer) return [];
 				const R = Math.max(...outer.radius);
 				const r = Math.max(...el.radius);
-				const inset = Math.min(el.rect.x - outer.rect.x, el.rect.y - outer.rect.y, outer.rect.x + outer.rect.w - (el.rect.x + el.rect.w), outer.rect.y + outer.rect.h - (el.rect.y + el.rect.h));
+				const left = el.rect.x - outer.rect.x;
+				const top = el.rect.y - outer.rect.y;
+				const right = outer.rect.x + outer.rect.w - (el.rect.x + el.rect.w);
+				const bottom = outer.rect.y + outer.rect.h - (el.rect.y + el.rect.h);
+				if (Math.min(left, top, right, bottom) < 0) return [];
+				// The radii meet only at a corner: both insets of that corner must be small.
+				const inset = Math.min(Math.max(left, top), Math.max(right, top), Math.max(right, bottom), Math.max(left, bottom));
 				// A clipping parent cuts the inner corners itself.
-				if (inset < 0 || inset >= R || (outer.clips && inset < 1)) return [];
+				if (inset >= R || (outer.clips && inset < 1)) return [];
 				const pill = r >= Math.min(el.rect.w, el.rect.h) / 2 - 0.5;
 				if (pill) return [];
 				const expected = r > 0 ? Math.max(R - inset, 4) : Math.max(R - inset, 0);

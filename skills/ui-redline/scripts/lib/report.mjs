@@ -67,8 +67,16 @@ export function compareAudits(before, after) {
 		return { key: k, id: f.id, view: f.view, severity: f.severity, was, now, state };
 	});
 	const remainingHigh = rows.filter((r) => r.now > 0 && r.severity === "high");
+	const warnings = [];
+	if (before.url !== after.url) warnings.push(`the audits are of different pages: ${before.url} and ${after.url}`);
+	for (const [name, view] of Object.entries(after.views)) {
+		const was = before.views?.[name]?.page?.elementCount;
+		const now = view.page?.elementCount;
+		// A page that lost most of its elements is more likely broken than fixed.
+		if (was && now !== undefined && now < was * 0.3) warnings.push(`${name}: ${now} elements after, ${was} before; check that the after page rendered fully`);
+	}
 	const regressions = rows.filter((r) => r.state === "new" || r.state === "worse");
-	return { before: before.scores ?? scores(flat(before)), after: after.scores ?? scores(flat(after)), rows, remainingHigh, regressions, pass: !remainingHigh.length && !regressions.length };
+	return { before: before.scores ?? scores(flat(before)), after: after.scores ?? scores(flat(after)), rows, remainingHigh, regressions, warnings, pass: !remainingHigh.length && !regressions.length };
 }
 
 export function formatCompare(result) {
@@ -77,6 +85,7 @@ export function formatCompare(result) {
 	for (const r of [...result.rows].sort((x, y) => order[x.state] - order[y.state])) {
 		lines.push(`  ${r.state.padEnd(6)} ${r.severity.padEnd(6)} ${r.view}:${r.id} ${r.was} → ${r.now}`);
 	}
+	for (const warning of result.warnings ?? []) lines.push(`warning: ${warning}`);
 	lines.push("", result.pass ? "PASS: no high findings and no regressions." : `FAIL: ${result.remainingHigh.length} high finding(s) left, ${result.regressions.length} regression(s). Fix them, or say in the report why each one stays.`);
 	return lines.join("\n");
 }

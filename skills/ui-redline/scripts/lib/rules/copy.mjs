@@ -1,15 +1,13 @@
-import { at, textElements } from "./util.mjs";
+import { at, emojiIn, textElements } from "./util.mjs";
 
-// Typographic symbols below U+2300 (©, ®, ™, arrows, ‼) are punctuation, not emoji.
-const EMOJI = /\p{Extended_Pictographic}/gu;
-const emojiIn = (text) => (text.match(EMOJI) ?? []).filter((c) => c.codePointAt(0) >= 0x2300);
 const HYPE = /\b(supercharg\w*|seamless(ly)?|unlock\w*|unleash\w*|magic(al)?|revolutioni[sz]\w*|game[- ]chang\w*|effortless(ly)?|next[- ]gen(eration)?|cutting[- ]edge|skyrocket\w*|blazing(ly)?[- ]fast|ai[- ]powered|10x)\b/gi;
 const CLAIMS = [
-	/\b(trusted|loved|used|chosen) by\b/i,
+	// "used by" alone is ordinary prose ("APIs used by the app"); a claim names a crowd or a number.
+	/\b(trusted|loved|used|chosen|relied on) by\s+(over\s+|more than\s+)?(\d|thousands|millions|hundreds|teams|companies|developers|the world|leading|top|industry)/i,
 	/\b\d[\d,.]*\s?[km]?\+\s+(teams|users|customers|companies|developers|businesses|people|creators)\b/i,
 	/\b\d+x\s+(faster|more|better|cheaper|quicker)\b/i,
 	/[★⭐]{3,}/u,
-	/\b(#1|number one|world'?s (best|leading))\b/i,
+	/(?:^|\s)#1\b|\b(number one|world'?s (best|leading))\b/i,
 ];
 const GREETING = /^(welcome( back)?|hey|hi|hello|good (morning|afternoon|evening))\b/i;
 const PLACEHOLDER = /\[(x|n|name|value|number|date)\]|\b123,?456\b|lorem ipsum|\b(john|jane) doe\b|(?<![\d,.])\$?0{1,3},000\b/i;
@@ -24,7 +22,8 @@ export const copyRules = [
 		severity: "high",
 		title: "Emoji used as an icon or as decoration",
 		fix: "Replace each with a line icon from the project's icon set (or lucide) at one size and stroke, or remove it. Keep emoji only in user content.",
-		run: ({ elements }) => prose(elements).flatMap((el) => {
+		// Its own filter: an emoji-only label has no letter, so textElements would drop it.
+		run: ({ elements }) => elements.filter((el) => !el.pseudo && el.text && !el.inCode).flatMap((el) => {
 			const found = emojiIn(el.text);
 			return found.length ? [at(el, found.join(" "))] : [];
 		}),

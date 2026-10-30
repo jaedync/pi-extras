@@ -1,6 +1,6 @@
 import { at, summary } from "./util.mjs";
 
-const LAYOUT_PROPS = /^(width|height|min-|max-|top|left|right|bottom|inset|margin|padding|flex-basis|grid-template)/;
+const LAYOUT_PROPS = /^(width|height|min-|max-|top|left|right|bottom|inset|margin|padding|flex-basis)/;
 
 /** Pairs each transition property with its duration and easing (CSS repeats the shorter lists). */
 function transitions(el) {

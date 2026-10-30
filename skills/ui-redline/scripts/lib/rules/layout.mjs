@@ -20,6 +20,7 @@ export const layoutRules = [
 		run: ({ elements, page, view }) => {
 			// A mobile browser zooms out to fit wide content, so innerWidth grows; compare with the device width asked for.
 			if (view === "mobile" && !/width\s*=\s*device-width/i.test(page.viewportMeta ?? "")) return [];
+			if (page.overflowHidden) return [];
 			const limit = page.requestedWidth ?? page.viewport.w;
 			const width = Math.max(page.scrollWidth, page.viewport.w);
 			if (width <= limit + 1) return [];

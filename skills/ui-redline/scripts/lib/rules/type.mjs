@@ -3,7 +3,7 @@ import { at, formatTally, summary, tally, textElements } from "./util.mjs";
 const letters = (text) => (text.match(/\p{L}/gu) ?? []).length;
 const isAllCaps = (text) => letters(text) >= 4 && text === text.toUpperCase() && text !== text.toLowerCase();
 const NUMBER_ONLY = /^[\s$€£¥+\-−~≈]*\d[\d,.\s]*\s?(%|[kmb]|ms|s|px)?$/i;
-const CURRENCY = /[$€£¥]\s?\d{1,3}(?:,\d{3})*(?:\.(\d+))?/g;
+const CURRENCY = /[$€£¥]\s?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?/g;
 
 export const typeRules = [
 	{

@@ -7,6 +7,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 import { hex, hueSpread, isChromatic, oklch } from "./color.mjs";
+import { emojiIn } from "./rules/util.mjs";
 
 const EXTENSIONS = new Set([".html", ".htm", ".css", ".scss", ".sass", ".less", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".vue", ".svelte", ".astro", ".mdx"]);
 const MARKUP = new Set([".html", ".htm", ".jsx", ".tsx", ".vue", ".svelte", ".astro", ".mdx"]);
@@ -31,7 +32,8 @@ export function declarations(line, property) {
 	return [...line.matchAll(new RegExp(`(?:^|[;{\\s])(?:${property})\\s*:\\s*([^;}]+)`, "g"))].map((m) => m[1]);
 }
 
-const offGrid = (v, grid = 4) => v > 2 && Math.abs(v / grid - Math.round(v / grid)) * grid > 0.25;
+// The same allowance as the audit's off-grid rule: 1, 2, 6 and 10px pass.
+const offGrid = (v, grid = 4) => ![1, 2, 6, 10].includes(v) && v > 0 && Math.abs(v / grid - Math.round(v / grid)) * grid > 0.25;
 const chromatic = (line) => colorsIn(line).filter((c) => c[3] >= 0.15 && isChromatic(c));
 
 export const SCAN_RULES = [
@@ -51,7 +53,7 @@ export const SCAN_RULES = [
 	{ id: "colored-glow", severity: "high", title: "Colored glow", test: (line) => {
 		if (/\b(?:drop-)?shadow-\[0_0_/.test(line) || new RegExp(`\\bshadow-(${TW_HUES})-\\d{2,3}`).test(line)) return "";
 		for (const value of declarations(line, "box-shadow|text-shadow|filter")) {
-			if (/\b0(px)?\s+0(px)?\s+([89]|\d{2,})px/.test(value) && chromatic(value).length) return chromatic(value).map(hex).join(", ");
+			if (/\b0(px)?\s+0(px)?\s+([6-9]|\d{2,})px/.test(value) && chromatic(value).length) return chromatic(value).map(hex).join(", ");
 		}
 		return null;
 	} },
@@ -74,34 +76,52 @@ export const SCAN_RULES = [
 	} },
 	{ id: "emoji", severity: "high", title: "Emoji in markup", markupOnly: true, test: (line) => {
 		if (/^\s*(\/\/|\/\*|\*|<!--)/.test(line)) return null;
-		const found = (line.match(/\p{Extended_Pictographic}/gu) ?? []).filter((c) => c.codePointAt(0) >= 0x2300);
+		const found = emojiIn(line);
 		return found.length ? found.join(" ") : null;
 	} },
 ];
 
-function* walk(dir) {
-	for (const entry of readdirSync(dir, { withFileTypes: true })) {
-		if (entry.name.startsWith(".") && entry.name !== ".") continue;
-		const path = join(dir, entry.name);
-		if (entry.isDirectory()) {
-			if (!SKIP_DIRS.has(entry.name)) yield* walk(path);
-		} else if (entry.isFile() && EXTENSIONS.has(extname(entry.name).toLowerCase())) yield path;
+/** Source files under `dir`, at most MAX_FILES; folders that cannot be read are counted and skipped. */
+function walk(dir, out = { files: [], unreadable: 0, more: false }) {
+	let entries;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		out.unreadable++;
+		return out;
 	}
+	for (const entry of entries) {
+		if (out.files.length >= MAX_FILES) {
+			out.more = true;
+			return out;
+		}
+		if (entry.name.startsWith(".")) continue;
+		const path = join(dir, entry.name);
+		// Dirent types do not follow symlinks, so a link loop is never entered.
+		if (entry.isDirectory()) {
+			if (!SKIP_DIRS.has(entry.name)) walk(path, out);
+		} else if (entry.isFile() && EXTENSIONS.has(extname(entry.name).toLowerCase())) out.files.push(path);
+	}
+	return out;
 }
 
 /** Scans one file or a folder; returns findings in the audit's shape, with file and line in each instance. */
 export function scanSource(target) {
 	const root = statSync(target).isDirectory() ? target : null;
-	const files = root ? [...walk(root)] : [target];
+	const listing = root ? walk(root) : { files: [target], unreadable: 0, more: false };
+	const files = listing.files;
 	const found = new Map();
-	let skipped = 0;
-	for (const file of files.slice(0, MAX_FILES)) {
-		if (statSync(file).size > MAX_BYTES) {
+	let skipped = listing.unreadable;
+	for (const file of files) {
+		let lines;
+		try {
+			if (statSync(file).size > MAX_BYTES) throw new Error("too large");
+			lines = readFileSync(file, "utf8").split("\n");
+		} catch {
 			skipped++;
 			continue;
 		}
 		const markup = MARKUP.has(extname(file).toLowerCase());
-		const lines = readFileSync(file, "utf8").split("\n");
 		lines.forEach((line, index) => {
 			for (const rule of SCAN_RULES) {
 				if (rule.markupOnly && !markup) continue;
@@ -113,11 +133,11 @@ export function scanSource(target) {
 		});
 	}
 	const findings = [...found.values()].map((f) => ({ ...f, count: f.instances.length }));
-	return { files: Math.min(files.length, MAX_FILES), skipped: skipped + Math.max(0, files.length - MAX_FILES), findings };
+	return { files: files.length, skipped, truncated: listing.more, findings };
 }
 
 export function formatScan(result, limit = 10) {
-	const lines = [`ui-redline scan: ${result.files} files${result.skipped ? `, ${result.skipped} skipped (over ${MAX_BYTES / 1024} KB or over ${MAX_FILES} files)` : ""}`];
+	const lines = [`ui-redline scan: ${result.files} files${result.skipped ? `, ${result.skipped} skipped (over ${MAX_BYTES / 1024} KB, or a folder that cannot be read)` : ""}${result.truncated ? `; stopped at ${MAX_FILES} files, scan a smaller folder` : ""}`];
 	if (!result.findings.length) lines.push("no findings");
 	for (const f of result.findings) {
 		lines.push("", `  ${f.severity.padEnd(6)} ${f.id} ×${f.count}  ${f.title}`);

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { overlayBoxes, toUrl } from "../skills/ui-redline/scripts/lib/audit.mjs";
 import { compareAudits, formatAudit, formatCompare, numberFindings } from "../skills/ui-redline/scripts/lib/report.mjs";
 import { declarations, scanSource } from "../skills/ui-redline/scripts/lib/scan.mjs";
-import { parseArgs } from "../skills/ui-redline/scripts/redline.mjs";
+import { FLAGS, parseArgs } from "../skills/ui-redline/scripts/redline.mjs";
 import { RULES } from "../skills/ui-redline/scripts/lib/rules/index.mjs";
 
 const SKILL = new URL("../skills/ui-redline/", import.meta.url);
@@ -68,8 +68,13 @@ test("toUrl keeps URLs and turns an existing path into a file URL", () => {
 });
 
 test("parseArgs reads flags, values and positionals and rejects a missing value", () => {
-	assert.deepEqual(parseArgs(["page.html", "--out", "o", "--json"]), { flags: { out: "o", json: true }, positional: ["page.html"] });
-	assert.throws(() => parseArgs(["--out"]), /needs a value/);
+	assert.deepEqual(parseArgs(["page.html", "--out", "o", "--json"], FLAGS.audit), { flags: { out: "o", json: true }, positional: ["page.html"] });
+	assert.deepEqual(parseArgs(["--out=/tmp/my dir", "page.html"], FLAGS.audit), { flags: { out: "/tmp/my dir" }, positional: ["page.html"] });
+	assert.throws(() => parseArgs(["--out"], FLAGS.audit), /needs a value/);
+	assert.throws(() => parseArgs(["--out", "--json"], FLAGS.audit), /needs a value/);
+	assert.throws(() => parseArgs(["--view", "mobile"], FLAGS.audit), /unknown flag --view/);
+	assert.throws(() => parseArgs(["--json=yes"], FLAGS.audit), /takes no value/);
+	assert.throws(() => parseArgs(["--out", "o"], FLAGS.compare), /unknown flag --out/);
 });
 
 test("scan: finds Tailwind and CSS signs with file and line, and skips node_modules", () => {
@@ -83,7 +88,7 @@ test("scan: finds Tailwind and CSS signs with file and line, and skips node_modu
 			'<p className="uppercase tracking-widest font-black">Plans</p>',
 			"// 🚀 a comment is not markup",
 		].join("\n"));
-		writeFileSync(join(dir, "src", "app.css"), ".card { padding: 10px 16px; box-shadow: 0 0 24px rgba(168, 85, 247, 0.5); border: 1px solid #8b5cf6; }\n.ok { padding: 12px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); }\n");
+		writeFileSync(join(dir, "src", "app.css"), ".card { padding: 14px 16px; box-shadow: 0 0 24px rgba(168, 85, 247, 0.5); border: 1px solid #8b5cf6; }\n.ok { padding: 12px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); }\n");
 		writeFileSync(join(dir, "node_modules", "x", "a.css"), ".x { transition: all 1s; }\n");
 		const result = scanSource(dir);
 		const byId = Object.fromEntries(result.findings.map((f) => [f.id, f]));
@@ -95,6 +100,32 @@ test("scan: finds Tailwind and CSS signs with file and line, and skips node_modu
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("scan: a folder that cannot be read is counted as skipped, not an error", { skip: process.getuid?.() === 0 && "root reads every folder" }, () => {
+	const dir = mkdtempSync(join(tmpdir(), "redline-scan-"));
+	const locked = join(dir, "locked");
+	try {
+		mkdirSync(locked);
+		writeFileSync(join(locked, "a.css"), ".a { transition: all 1s; }\n");
+		writeFileSync(join(dir, "b.css"), ".b { transition: all 1s; }\n");
+		chmodSync(locked, 0o000);
+		const result = scanSource(dir);
+		assert.equal(result.files, 1);
+		assert.equal(result.skipped, 1);
+	} finally {
+		chmodSync(locked, 0o755);
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("compareAudits warns when the pages differ or the after page lost most elements", () => {
+	const withCount = (url, count) => ({ url, views: { desktop: { page: { elementCount: count }, scores: { slop: 100, craft: 100 }, findings: [] } } });
+	assert.deepEqual(compareAudits(withCount("file:///a.html", 200), withCount("file:///a.html", 180)).warnings, []);
+	const broken = compareAudits(withCount("file:///a.html", 200), withCount("file:///a.html", 12));
+	assert.match(broken.warnings.join(" "), /12 elements after, 200 before/);
+	assert.match(formatCompare(broken), /warning: desktop/);
+	assert.match(compareAudits(withCount("file:///a.html", 200), withCount("file:///b.html", 200)).warnings.join(" "), /different pages/);
 });
 
 test("declarations reads only the named properties of a one-line rule", () => {

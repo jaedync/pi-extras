@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const PLAYWRIGHT_CORE = "1.63.0";
-const LOCK_STALE_MS = 30 * 60_000;
+// Longer than the worst setup (two commands of up to 20 minutes each), so a live setup keeps its lock.
+const LOCK_STALE_MS = 60 * 60_000;
 
 export function cacheRoot(env = process.env, home = homedir()) {
 	return join(env.XDG_CACHE_HOME || join(home, ".cache"), "pi-ui-redline");
@@ -22,7 +23,7 @@ function candidates(env = process.env, home = homedir()) {
 	return [join(cacheRoot(env, home), "node_modules", "playwright-core"), join(cache, "pi-walkthrough-video", "node_modules", "playwright-core")];
 }
 
-export const SETUP_HINT = "run `node <skill-dir>/scripts/redline.mjs setup` once (it installs playwright-core and Chromium's headless shell into ~/.cache/pi-ui-redline)";
+export const SETUP_HINT = "run `node <skill-dir>/scripts/redline.mjs setup` once (it installs playwright-core into ~/.cache/pi-ui-redline and Chromium's headless shell into Playwright's browser cache)";
 
 /** playwright-core's chromium from the first place that has it. */
 export async function loadChromium(env = process.env) {
@@ -42,8 +43,9 @@ export async function launch(chromium) {
 	try {
 		return await chromium.launch({ headless: true, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false });
 	} catch (error) {
-		if (/Executable doesn't exist|browserType\.launch/.test(String(error?.message))) throw new Error(`Chromium is not installed for playwright-core: ${SETUP_HINT}`);
-		throw error;
+		const message = String(error?.message ?? error);
+		if (/Executable doesn't exist/.test(message)) throw new Error(`Chromium is not installed for playwright-core: ${SETUP_HINT}`);
+		throw new Error(`Chromium did not start: ${message.split("\n").slice(0, 6).join(" ")}`);
 	}
 }
 

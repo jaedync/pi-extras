@@ -7,6 +7,10 @@ can see; read them on the screenshots every time.
 Each measured rule lists what it reads, then its known false positives. A false positive
 stays a finding in the output; say in the report why you left it.
 
+The audit reads the page and its open shadow roots. It does not read closed shadow roots
+or the content of iframes; the audit prints a note when the page has iframes. Audit each
+frame's URL on its own.
+
 ## Measured: color
 
 | Rule | Reads | False positives |
@@ -15,9 +19,9 @@ stays a finding in the output; say in the report why you left it.
 | `gradient-text` (high) | `background-clip: text` over a gradient with a transparent text fill. | None known. |
 | `colored-glow` (high) | An outer box-shadow, text-shadow or drop-shadow with a blur of 6px or more in a clear hue. | A focus ring drawn with a blurred colored shadow (use an outline instead). |
 | `color-wash` (medium) | A radial or conic gradient of a hue over 5% or more of the viewport, or `blur(16px+)` on a colored fill. | A real photo-like backdrop that the brief calls for. |
-| `low-contrast` (high) | WCAG 2 contrast of text against its own and its ancestors' backgrounds: 4.5:1, or 3:1 from 24px (18.66px bold). Over a gradient, the worst stop. | Disabled controls (WCAG exempts them). Text that sits over a positioned layer from elsewhere in the page: the tool reads only ancestors. Text over an image is not measured; the audit prints a note. |
+| `low-contrast` (high) | WCAG 2 contrast of text against its own and its ancestors' backgrounds: 4.5:1, or 3:1 from 24px (18.66px bold). Over a gradient, the worst stop. Opacity on the element and its ancestors fades the text. | Disabled controls (WCAG exempts them). Text that sits over a positioned layer from elsewhere in the page: the tool reads only ancestors. Text over an image is not measured; the audit prints a note. |
 | `text-colors` (medium) | More than 5 distinct text colors (OKLab distance ≥ 0.03), not counting text on its own fill. | A data screen with many semantic text colors. |
-| `accent-hues` (medium) | More than 3 hue families (30° bins) used on 2 or more elements each, in text, fills and borders. | A category color system that the product needs (labels, calendars). |
+| `accent-hues` (medium) | More than 3 hue families used on 2 or more elements each, in text, fills and borders. A family holds hues within 25° of its first hue, so one color ramp is one family. Each element counts once per family. | A category color system that the product needs (labels, calendars). |
 | `neon-border` (medium) | 3 or more elements with a saturated border (chroma ≥ 0.12, alpha ≥ 0.5). | Many selected chips in a multi-select. |
 
 ## Measured: type
@@ -39,23 +43,23 @@ stays a finding in the output; say in the report why you left it.
 
 | Rule | Reads | False positives |
 | --- | --- | --- |
-| `off-grid` (medium) | Padding, vertical margins, small horizontal margins and flex/grid gaps that are not a multiple of the grid (4px). 1, 2, 6 and 10px pass. | Values from `em` units on purpose, an exact centering offset. Change `grid` for a 2px or 8px system. |
-| `uneven-siblings` (medium) | Three or more siblings with the same tag and classes but different padding, or rows of one width with different heights. | Rows that wrap to two lines on purpose. |
+| `off-grid` (medium) | Padding, vertical margins, small horizontal margins and flex/grid gaps that are not a multiple of the grid (4px). 1, 2, 6 and 10px pass. Negative values count. Browser default margins of headings and paragraphs pass. | Values from `em` units on purpose, an exact centering offset. Change `grid` for a 2px or 8px system. |
+| `uneven-siblings` (medium) | Three or more siblings with the same tag and classes but different padding, or rows of one width with different heights. In a group of 4 or more, a different first or last item passes. | Rows that wrap to two lines on purpose. |
 | `uneven-rhythm` (medium) | Three or more alike siblings in a column or a row with gaps that differ by more than 2px. Gaps over 64px (sections) and flush rows (most gaps 0) pass. | A list with a deliberate group break: give the group its own parent. |
 | `nested-radius` (low) | A rounded box inside a rounded box, near its corner, whose radius is not about the outer radius minus the inset. | |
 | `radius-count` (low) | More than 5 distinct corner radii, pills excluded. | |
-| `focus-ring` (high) | Tab through up to 15 controls; for each, focus must change something on screen. | A control that shows focus by a change in a child element. |
+| `focus-ring` (high) | Tab through up to 15 controls; for each, focus must change something on screen: on the control, its parent or its grandparent (`:focus-within`). | A control that shows focus by a change in a child element, or on a wrapper more than two levels up. |
 
 ## Measured: icons and copy
 
 | Rule | Reads | False positives |
 | --- | --- | --- |
-| `emoji` (high) | Emoji in interface text (symbols below U+2300 such as ©, ™ and arrows pass; code blocks pass). | User content, such as chat messages and reactions. |
+| `emoji` (high) | Emoji in interface text, also a label that is only an emoji. Emoji are characters that show as emoji by default, a symbol followed by U+FE0F, and flags. Text symbols such as ©, ✔, ▶ and ⚠ pass; code blocks pass. | User content, such as chat messages and reactions. |
 | `icon-sizes` (low) | More than 2 sizes among SVG icons of 40px or less. | |
 | `icon-strokes` (low) | More than 1 stroke width among line icons. | Icons from two sets on purpose (rare). |
 | `exclamation` (medium) | `!` in interface text. | Quoted user content, a product name with `!`. |
 | `hype-words` (medium) | supercharge, seamless, unlock, unleash, magic, revolutionize, game-changing, effortless, next-gen, cutting-edge, skyrocket, blazing fast, AI-powered, 10x. | A word used literally (a magic-link login). |
-| `unverified-claims` (medium) | "trusted/loved/used by", "10,000+ teams", "10x faster", rows of stars, "#1", "world's leading". | Never a false positive to ask about: ask the user. |
+| `unverified-claims` (medium) | "trusted/loved/used by" followed by a number or a crowd ("leading teams"), "10,000+ teams", "10x faster", rows of stars, "#1", "world's leading". | Never a false positive to ask about: ask the user. |
 | `greeting` (medium) | A heading that starts with welcome, hi, hey, hello or good morning. | |
 | `trailing-period` (low) | A period at the end of a button, label or heading of 6 words or less. | A brand voice that ends labels with periods: turn the rule off and say so. |
 | `placeholder-data` (medium) | `[X]`, `123,456`, lorem ipsum, John or Jane Doe, `$0,000`. | |
@@ -66,10 +70,10 @@ stays a finding in the output; say in the report why you left it.
 | --- | --- | --- |
 | `looping-animation` (medium) | An infinite CSS animation outside `aria-busy`, progressbar, status and alert regions. | A live indicator outside those roles: add the role. |
 | `transition-all` (low) | `transition-property: all` with a duration. | |
-| `layout-transition` (medium) | Transitions on width, height, position, margins, padding, flex-basis. | An accordion that animates height on purpose (prefer `grid-template-rows` or transform). |
+| `layout-transition` (medium) | Transitions on width, height, position, margins, padding, flex-basis. | An accordion that animates height on purpose (prefer a `grid-template-rows` transition, which this rule does not flag, or a transform). |
 | `motion-curves` (low) | More than 2 easing curves or 4 durations. | |
 | `mobile-viewport` (high, mobile) | No `<meta name="viewport" content="width=device-width">`. | |
-| `horizontal-overflow` (high) | Content wider than the screen. | |
+| `horizontal-overflow` (high) | Content wider than the screen. Skipped when `html` or `body` hides horizontal overflow, because the page cannot scroll sideways then. | Content that the hidden overflow cuts off: check the screenshots. |
 | `clipped-text` (medium) | Text cut off by `overflow: hidden` with no ellipsis. | |
 | `tap-target` (medium, mobile) | A control smaller than 24×24px whose 24px circle touches another target (WCAG 2.5.8 with its spacing exception). Links inside a sentence pass. | |
 

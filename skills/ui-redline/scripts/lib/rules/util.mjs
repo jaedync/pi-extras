@@ -4,7 +4,18 @@ export const SEVERITY_WEIGHT = { high: 6, medium: 3, low: 1 };
 
 /** Elements whose own text people read: not pseudo, not code, with a letter or digit. */
 export function textElements(elements) {
-	return elements.filter((el) => !el.pseudo && el.text && /[\p{L}\p{N}]/u.test(el.text) && (el.color?.[3] ?? 1) > 0.05);
+	return elements.filter((el) => !el.pseudo && el.text && /[\p{L}\p{N}]/u.test(el.text) && (el.color?.[3] ?? 1) > 0.05 && el.font?.size > 0);
+}
+
+/**
+ * Emoji, not text symbols: characters that draw as emoji by default, any
+ * pictograph followed by the emoji selector U+FE0F, and flags (two regional
+ * indicators). ✔ ▶ ♥ ⚠ without U+FE0F are text symbols and pass.
+ */
+export const EMOJI = /\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F|\p{Regional_Indicator}{2}/gu;
+
+export function emojiIn(text) {
+	return (text.match(EMOJI) ?? []).map((e) => e.replace(/\uFE0F/g, ""));
 }
 
 /** One finding instance that points at an element. */

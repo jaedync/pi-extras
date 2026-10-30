@@ -27,6 +27,8 @@ export function toUrl(target) {
 
 /** Draws numbered boxes over the findings; runs in the page. */
 function drawOverlay(boxes) {
+	// In an SVG or XML document, createElement gives elements without a style property.
+	if (!(document.documentElement instanceof HTMLElement)) return;
 	const layer = document.createElement("redline-overlay");
 	const doc = document.documentElement;
 	layer.style.cssText = `all:initial;position:absolute;left:0;top:0;width:${doc.scrollWidth}px;height:${doc.scrollHeight}px;z-index:2147483647;pointer-events:none;display:block`;
@@ -68,9 +70,10 @@ export function overlayBoxes(findings) {
 		});
 }
 
-async function screenshot(page, path, facts) {
-	const height = Math.min(facts.page.scrollHeight, MAX_SHOT_HEIGHT);
-	await page.screenshot({ path, fullPage: true, clip: { x: 0, y: 0, width: facts.page.viewport.w, height } });
+async function screenshot(page, path, facts, html) {
+	// An SVG document can report a scroll height of 0, and a full-page shot of one never finishes.
+	const height = html ? Math.min(Math.max(facts.page.scrollHeight, facts.page.viewport.h), MAX_SHOT_HEIGHT) : facts.page.viewport.h;
+	await page.screenshot({ path, fullPage: html, clip: { x: 0, y: 0, width: facts.page.viewport.w, height } });
 }
 
 async function probeKeyboardFocus(page) {
@@ -92,21 +95,25 @@ async function auditView(browser, url, name, size, options) {
 	const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1, colorScheme: options.scheme ?? "no-preference", hasTouch: name === "mobile", isMobile: name === "mobile" });
 	try {
 		const page = await context.newPage();
-		await page.goto(url, { waitUntil: "load", timeout: 45_000 });
+		const response = await page.goto(url, { waitUntil: "load", timeout: 45_000 });
+		// An error page has almost no findings, so a broken server would pass the compare.
+		if (response && response.status() >= 400) throw new Error(`${url} answered HTTP ${response.status()}; fix the page or the server, then audit again`);
 		await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
 		await page.evaluate(() => document.fonts.ready);
 		await page.waitForTimeout(options.wait ?? 400);
 		const facts = await page.evaluate(collectFacts, { maxElements: options.maxElements ?? 5000 });
 		facts.page.requestedWidth = size.width;
+		// An SVG or XML document has no <head> and no full-page screenshot.
+		const html = await page.evaluate(() => document.documentElement instanceof HTMLElement);
 		const shot = join(options.out, `${name}.png`);
-		await screenshot(page, shot, facts);
-		await page.addStyleTag({ content: FREEZE });
+		await screenshot(page, shot, facts, html);
+		if (html) await page.addStyleTag({ content: FREEZE });
 		const focus = name === "desktop" ? await probeKeyboardFocus(page) : [];
 		const findings = numberFindings(runRules(facts, { view: name, focus, config: options.config }));
 		await page.evaluate(() => window.scrollTo(0, 0));
 		await page.evaluate(drawOverlay, overlayBoxes(findings));
 		const redline = join(options.out, `${name}-redline.png`);
-		await screenshot(page, redline, facts);
+		await screenshot(page, redline, facts, html);
 		if (options.keepFacts) writeFileSync(join(options.out, `${name}-facts.json`), JSON.stringify(facts));
 		const unmeasuredText = facts.elements.filter((el) => el.text && el.effBgUnknown).length;
 		return { page: facts.page, scores: scores(findings), findings, focusChecked: focus.length, unmeasuredText, files: [shot, redline] };
@@ -132,6 +139,8 @@ export async function runAudit({ chromium, target, out, views = ["desktop", "mob
 	result.scores = scores(all);
 	const desktop = result.views.desktop;
 	if (desktop && desktop.focusChecked === 0) result.notes.push("Tab reached no element: the page has no keyboard-focusable controls, or focus is trapped. Check by hand.");
+	const frames = Math.max(...Object.values(result.views).map((v) => v.page.iframes ?? 0));
+	if (frames) result.notes.push(`The page has ${frames} iframe(s); their content is not audited. Audit each frame's URL on its own.`);
 	const unknown = Object.values(result.views).some((v) => v.page.truncated);
 	if (unknown) result.notes.push("The element limit was reached; findings cover the first 5000 elements only.");
 	const overImages = Object.values(result.views).reduce((n, v) => n + (v.unmeasuredText ?? 0), 0);

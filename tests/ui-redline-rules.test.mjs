@@ -225,3 +225,42 @@ test("scores split slop signs from craft defects", () => {
 	assert.equal(kindOf("low-contrast"), "craft");
 	assert.deepEqual(scores([{ id: "emoji", severity: "high", count: 1 }, { id: "off-grid", severity: "medium", count: 2 }]), { slop: 94, craft: 94 });
 });
+
+test("review fixes: emoji-only labels, text symbols, flags and the #1 claim", () => {
+	assert.ok(has([text("🚀")], "emoji"), "an emoji-only label has no letter but still fires");
+	assert.ok(has([text("⚙️ Settings")], "emoji"), "a pictograph with U+FE0F is an emoji");
+	assert.ok(has([text("Ships to 🇺🇸")], "emoji"), "a flag is an emoji");
+	assert.ok(!has([text("✔ Done ▶ Play ♥ ⚠ Warning")], "emoji"), "text symbols without U+FE0F pass");
+	assert.ok(has([text("The #1 rated tool")], "unverified-claims"));
+	assert.ok(!has([text("Issue #12 is fixed")], "unverified-claims"));
+	assert.ok(!has([text("Clean up deprecated APIs used by the rider app")], "unverified-claims"), "used by in plain prose");
+	assert.ok(has([text("Trusted by leading teams")], "unverified-claims"));
+});
+
+test("review fixes: opacity fades text, pseudo loops count, hidden root overflow passes", () => {
+	assert.ok(has([text("Faded", { drawnOpacity: 0.3 })], "low-contrast"), "dark text at 30% opacity is about 2:1");
+	assert.ok(!has([text("Solid", { drawnOpacity: 1 })], "low-contrast"));
+	const shimmer = el({ pseudo: true, tag: "::after", animation: { names: ["shimmer"], iterations: ["infinite"], durations: [1.2] } });
+	assert.ok(has([shimmer], "looping-animation"));
+	assert.ok(!has([el()], "horizontal-overflow", { page: { scrollWidth: 1600, overflowHidden: true } }), "the page cannot scroll sideways");
+});
+
+test("review fixes: default heading margins, first and last siblings, radius away from corners, hue families", () => {
+	assert.ok(!has([el({ tag: "h1", font: { size: 32 }, spacing: { mt: 21.44, mb: 21.44 } })], "off-grid"), "0.67em on an h1 is the browser default");
+	assert.ok(has([el({ tag: "div", font: { size: 32 }, spacing: { mt: 21.44 } })], "off-grid"));
+	assert.ok(has([el({ spacing: { mt: -13 } })], "off-grid"), "negative margins are checked too");
+	assert.ok(!has(rows([0, 8, 8, 8, 0], [0, 48, 96, 144, 192]), "uneven-siblings"), "a different first and last item is deliberate");
+	assert.ok(has(rows([8, 8, 12, 8, 8], [0, 48, 96, 144, 192]), "uneven-siblings"));
+	const card = el({ i: 0, bg: [30, 30, 30, 1], radius: [16, 16, 16, 16], rect: { x: 0, y: 0, w: 300, h: 200 } });
+	const button = el({ i: 1, parent: 0, bg: [40, 40, 40, 1], radius: [6, 6, 6, 6], rect: { x: 120, y: 4, w: 60, h: 30 } });
+	assert.ok(!has([card, button], "nested-radius"), "the radii meet only at a corner");
+	const ringed = (c) => el({ border: border(c) });
+	assert.ok(!has([PURPLE, BLUE, PINK, [234, 179, 8, 1]].map(ringed), "accent-hues"), "four sides of one element count once");
+	const ramp = [[14, 165, 233, 1], [2, 132, 199, 1], [3, 105, 161, 1], [7, 89, 133, 1]];
+	assert.ok(!has([...ramp, PURPLE].flatMap((c) => [el({ bg: c }), el({ bg: c })]), "accent-hues"), "one color ramp is one family");
+});
+
+test("review fixes: money amounts without thousands separators", () => {
+	assert.ok(!has([text("$1500.00"), text("$2,000.00")], "mixed-number-format"));
+	assert.ok(has([text("$1500.00"), text("$2,000")], "mixed-number-format"));
+});

@@ -95,6 +95,6 @@ generated UI in https://github.com/heydamir/unslop (CC BY 4.0, Damir
 Sokolovsky). ui-redline copies no text, rule list, example or code from it:
 its measured rules, scripts, brief, passes and review prompt were written for
 this package. `redline setup` installs pinned `playwright-core` (Apache-2.0,
-Microsoft) and `chromium-headless-shell` (BSD-3-Clause plus its third-party
-notices, Google) into `~/.cache/pi-ui-redline` on first use; the skill bundles
-neither.
+Microsoft) into `~/.cache/pi-ui-redline` and `chromium-headless-shell`
+(BSD-3-Clause plus its third-party notices, Google) into Playwright's browser
+cache on first use; the skill bundles neither.

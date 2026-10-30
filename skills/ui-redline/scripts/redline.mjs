@@ -30,21 +30,35 @@ const HELP = {
 	rules: "redline rules [--json]\n  Lists the rules. Turn one off or change it in .redline.json: { \"rules\": { \"trailing-period\": \"off\", \"font-sizes\": { \"max\": 8 } } }",
 };
 
-/** --name value and --flag arguments; the rest are positional. */
-export function parseArgs(argv) {
+/** The flags each command accepts: `true` for a switch, `false` for a flag that takes a value. */
+export const FLAGS = {
+	setup: { check: true },
+	audit: { out: false, views: false, width: false, height: false, scheme: false, config: false, wait: false, facts: true, json: true },
+	compare: { json: true },
+	scan: { limit: false, json: true },
+	rules: { json: true },
+};
+
+/** `--name value`, `--name=value` and `--switch` arguments; the rest are positional. Unknown flags are errors. */
+export function parseArgs(argv, allowed = {}) {
+	const known = { help: true, ...allowed };
 	const flags = {};
 	const positional = [];
-	const BOOLEAN = new Set(["json", "check", "facts", "help"]);
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (!arg.startsWith("--")) {
 			positional.push(arg);
 			continue;
 		}
-		const name = arg.slice(2);
-		if (BOOLEAN.has(name)) flags[name] = true;
+		const eq = arg.indexOf("=");
+		const name = eq > 0 ? arg.slice(2, eq) : arg.slice(2);
+		if (!(name in known)) throw new Error(`unknown flag --${name}; this command takes ${Object.keys(known).map((f) => `--${f}`).join(", ")}`);
+		if (known[name]) {
+			if (eq > 0) throw new Error(`--${name} takes no value`);
+			flags[name] = true;
+		} else if (eq > 0) flags[name] = arg.slice(eq + 1);
 		else {
-			if (i + 1 >= argv.length) throw new Error(`--${name} needs a value`);
+			if (i + 1 >= argv.length || argv[i + 1].startsWith("--")) throw new Error(`--${name} needs a value`);
 			flags[name] = argv[++i];
 		}
 	}
@@ -72,7 +86,14 @@ function loadConfig(path) {
 function readAudit(path) {
 	const file = existsSync(path) && statSync(path).isDirectory() ? join(path, "audit.json") : path;
 	if (!existsSync(file)) throw new Error(`no audit at ${file}`);
-	return JSON.parse(readFileSync(file, "utf8"));
+	let audit;
+	try {
+		audit = JSON.parse(readFileSync(file, "utf8"));
+	} catch (error) {
+		throw new Error(`cannot read the audit ${file}: ${error.message}`);
+	}
+	if (!audit?.views || typeof audit.views !== "object") throw new Error(`${file} is not a redline audit (no views)`);
+	return audit;
 }
 
 async function audit({ flags, positional }) {
@@ -106,7 +127,7 @@ async function main(argv) {
 		return 0;
 	}
 	if (!HELP[command]) throw new Error(`unknown command "${command}"; use setup, audit, compare, scan or rules`);
-	const args = parseArgs(rest);
+	const args = parseArgs(rest, FLAGS[command]);
 	if (args.flags.help) {
 		console.log(HELP[command]);
 		return 0;

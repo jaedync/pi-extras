@@ -74,8 +74,10 @@ export const colorRules = [
 		run: ({ elements }) => textElements(elements).filter((el) => !el.effBgUnknown && !el.clipText).flatMap((el) => {
 			// Over a gradient, test every stop and keep the worst.
 			const backs = el.effBgStops?.length ? el.effBgStops : [el.effBg];
+			// Opacity on the element or an ancestor fades the text toward what is behind it.
+			const drawn = [...el.color.slice(0, 3), (el.color[3] ?? 1) * (el.drawnOpacity ?? 1)];
 			const [ratio, back, fg] = backs.map((b) => {
-				const f = composite(el.color, b);
+				const f = composite(drawn, b);
 				return [contrastRatio(f, b), b, f];
 			}).sort((x, y) => x[0] - y[0])[0];
 			const large = el.font.size >= 24 || (el.font.size >= 18.66 && el.font.weight >= 700);
@@ -104,25 +106,29 @@ export const colorRules = [
 		severity: "medium",
 		title: "Too many hues in the interface chrome",
 		fix: "Keep one accent hue, plus muted semantic colors that carry a meaning (error, success). Charts and images are not counted.",
-		defaults: { max: 3, binDegrees: 30, minUses: 2 },
+		defaults: { max: 3, hueTolerance: 25, minUses: 2 },
 		run: ({ elements }, o) => {
-			const bins = new Map();
-			const add = (rgba, el) => {
-				if (!isChromatic(rgba, CHROMATIC)) return;
-				const bin = Math.floor(oklch(rgba).h / o.binDegrees);
-				const entry = bins.get(bin) ?? { count: 0, sample: rgba, el };
-				entry.count++;
-				bins.set(bin, entry);
-			};
+			// Families grow around their first hue, so one color ramp (sky-500 and sky-600) stays one family.
+			const families = [];
 			for (const el of elements) {
 				if (el.pseudo) continue;
-				if (el.text) add(el.color, el);
-				if ((el.bg?.[3] ?? 0) > 0.2) add(el.bg, el);
-				el.border?.widths.forEach((w, i) => w > 0 && add(el.border.colors[i], el));
+				const colors = [el.text ? el.color : null, (el.bg?.[3] ?? 0) > 0.2 ? el.bg : null, ...(el.border?.widths ?? []).map((w, i) => (w > 0 ? el.border.colors[i] : null))];
+				const seen = new Set();
+				for (const color of colors) {
+					if (!color || !isChromatic(color, CHROMATIC)) continue;
+					const h = oklch(color).h;
+					let family = families.find((f) => hueSpread([f.hue, h]) <= o.hueTolerance);
+					if (!family) families.push((family = { hue: h, sample: color, el, elements: 0 }));
+					// Each element counts once per family, not once per border side.
+					if (!seen.has(family)) {
+						seen.add(family);
+						family.elements++;
+					}
+				}
 			}
-			const used = [...bins.values()].filter((b) => b.count >= o.minUses);
+			const used = families.filter((f) => f.elements >= o.minUses);
 			if (used.length <= o.max) return [];
-			return [summary(`${used.length} hues (max ${o.max}): ${used.map((b) => `${hex(b.sample)} ×${b.count}`).join(", ")}`, used.map((b) => b.el))];
+			return [summary(`${used.length} hue families (max ${o.max}): ${used.map((f) => `${hex(f.sample)} ×${f.elements}`).join(", ")}`, used.map((f) => f.el))];
 		},
 	},
 	{
