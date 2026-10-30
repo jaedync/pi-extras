@@ -726,6 +726,7 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 	const refusal = toolRefusal(await d.tools());
 	if (refusal) throw new Error(refusal);
 	mkdirSync(dirname(kit), { recursive: true, mode: 0o700 });
+	assertNotStopping("the kit lock");
 	const lock = acquireKitLock(kit);
 	/** Only the folder this run made is ever removed. */
 	let staging = null;
@@ -749,6 +750,8 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		log(`music kit: ${formatBytes(MUSIC_KIT_DOWNLOAD_BYTES)} to download, ${formatBytes(MUSIC_KIT_NEED_BYTES)} of space needed, ${formatBytes(free)} free, at ${kit}`);
 
 		const python = await d.python();
+		// No await between this check and the folder: a stop that arrives now must create nothing.
+		assertNotStopping("the kit staging folder");
 		// Unique per run and in the kit's parent, so the last rename stays on one filesystem.
 		// The name carries the kit and this pid, so wv removes only this folder and notes the rest.
 		staging = mkdtempSync(join(dirname(kit), stagingPrefix(kit)));

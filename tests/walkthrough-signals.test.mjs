@@ -708,3 +708,50 @@ try {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("a stop that arrives while the venv is made leaves no staging folder and no lock", { timeout: 30000 }, async () => {
+	const dir = mkdtempSync(join(tmpdir(), "wv-install-python-"));
+	try {
+		const kit = join(dir, "music-kit");
+		const marker = join(dir, "waiting");
+		const worker = join(dir, "worker.mjs");
+		writeFileSync(
+			worker,
+			`import { writeFileSync } from "node:fs";
+import { installMusicKit } from ${JSON.stringify(join(SKILL, "lib", "music-kit.mjs"))};
+import { installSignalHandlers, onSignalCleanup } from ${JSON.stringify(join(SKILL, "lib", "signals.mjs"))};
+installSignalHandlers();
+const deps = {
+	tools: async () => ({ ok: true, items: [], generator: null }),
+	freeBytes: () => 8 * 1024 ** 3,
+	python: () => new Promise((resolve) => {
+		// A timer keeps the worker alive, as a real venv probe would.
+		const timer = setInterval(() => {}, 1000);
+		// Registered after the install's cleanup, so it resolves only when that cleanup has run.
+		onSignalCleanup(() => { clearInterval(timer); resolve("/py"); }, "the held python");
+		writeFileSync(${JSON.stringify(marker)}, "waiting");
+	}),
+	fetch: async (source) => ({ head: source.commit, submodules: [] }),
+	build: async () => {},
+	generate: async () => {},
+	trim: async () => {},
+	smoke: async () => [],
+};
+await installMusicKit({ kit: ${JSON.stringify(kit)}, log: () => {}, deps }).catch((error) => process.stdout.write("stopped: " + error.name + "\\n"));
+`,
+		);
+		const watcher = spawn(process.execPath, [worker], { stdio: ["ignore", "pipe", "pipe"] });
+		const exited = new Promise((resolve) => watcher.on("exit", (value) => resolve(value)));
+		let stderr = "";
+		watcher.stderr.on("data", (chunk) => (stderr += chunk));
+		await waitFor(() => existsSync(marker), 10000, "the install reached the venv step");
+		watcher.kill("SIGTERM");
+		const code = await exited;
+		assert.equal(code, 143, stderr);
+		await sleep(300);
+		assert.deepEqual(readdirSync(dir).filter((name) => name.startsWith(".music-kit.staging-")), [], "no staging folder stays");
+		assert.equal(existsSync(`${kit}.lock`), false, "no lock stays");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
