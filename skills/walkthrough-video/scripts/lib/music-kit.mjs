@@ -598,6 +598,23 @@ function writeManifest(staging, smoke, verified = {}) {
 }
 
 /**
+ * Refuses a kit folder that wv did not install: it can hold the owner's own
+ * scores, so wv never deletes it. The message gives both ways forward.
+ * @param {string} kit
+ */
+function assertReplaceableRoot(kit) {
+	/** @type {import("node:fs").Stats | null} */
+	let entry = null;
+	try {
+		entry = lstatSync(kit);
+	} catch {
+		return;
+	}
+	if (entry && readManifest(join(kit, "kit.json"))) return;
+	throw new Error(`the music kit folder ${kit} was not installed by wv, so wv will not replace it. Move that folder aside first (mv "${kit}" "${kit}.old"), or install the kit in another folder with WV_MUSIC_KIT=<folder>, then run wv setup --music again.`);
+}
+
+/**
  * Moves a passing staging folder into place. A root that wv did not make (no
  * kit.json, for example a hand-built kit with the owner's own scores) is never
  * replaced: the install refuses and names the two ways forward. A managed root
@@ -615,9 +632,7 @@ export function replaceKit(staging, kit, { rename = renameSync, remove = rmSync 
 	} catch {
 		// No kit yet: nothing to move aside.
 	}
-	if (entry && !readManifest(join(kit, "kit.json"))) {
-		throw new Error(`the music kit folder ${kit} was not installed by wv, so wv will not replace it. Move that folder aside first (mv "${kit}" "${kit}.old"), or install the kit in another folder with WV_MUSIC_KIT=<folder>, then run wv setup --music again.`);
-	}
+	assertReplaceableRoot(kit);
 	const previous = entry ? `${kit}.previous-${process.pid}` : null;
 	if (previous) rename(kit, previous);
 	try {
@@ -688,6 +703,8 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		log(`music kit: already installed at ${kit} (the smoke render passes, so nothing is downloaded)`);
 		return existing;
 	}
+	// Before the probe, the lock and the download: a folder that wv did not make is never replaced.
+	assertReplaceableRoot(kit);
 
 	const refusal = toolRefusal(await d.tools());
 	if (refusal) throw new Error(refusal);

@@ -306,12 +306,14 @@ test("an install refuses to replace a kit that wv did not make, and keeps the us
 		const kit = join(root, "music-kit");
 		mkdirSync(join(kit, "my-scores"), { recursive: true });
 		writeFileSync(join(kit, "my-scores", "theme.py"), "the owner's score");
-		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps([]) }), (error) => {
+		const calls = [];
+		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps(calls) }), (error) => {
 			assert.match(error.message, /was not installed by wv/);
 			assert.match(error.message, /mv /, "the refusal says how to move it aside");
 			assert.match(error.message, /WV_MUSIC_KIT=/, "the refusal names the override");
 			return true;
 		});
+		assert.deepEqual(calls, [], "the refusal comes before the download");
 		assert.equal(readFileSync(join(kit, "my-scores", "theme.py"), "utf8"), "the owner's score");
 		assert.equal(existsSync(join(root, ".music-kit.staging")), false, "this run's staging is gone");
 	} finally {
@@ -489,6 +491,8 @@ test("a failed step leaves the old kit in place and removes the staging folder",
 		const kit = join(root, "music-kit");
 		mkdirSync(kit, { recursive: true });
 		writeFileSync(join(kit, "old.txt"), "the kit before this run");
+		// A kit that wv installed, so the install may replace it after a passing stage.
+		writeFileSync(join(kit, "kit.json"), '{ "version": 1 }\n');
 		const calls = [];
 		await assert.rejects(installMusicKit({ kit, log: () => {}, deps: fakeDeps(calls, { failAt: "build" }) }), /build failed/);
 		assert.equal(readFileSync(join(kit, "old.txt"), "utf8"), "the kit before this run");
