@@ -2,6 +2,43 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.37.0 - 2026-10-30
+
+### Added
+
+- Walkthrough Video: `wv setup --music` builds the optional music kit for
+  sampled scores. It fetches three pinned sources (the sfizz renderer, the
+  VCSL orchestral samples and the Salamander Grand Piano), checks each
+  checkout and submodule against its pin, builds `sfizz_render`, makes the
+  sample maps and runs a smoke render. The kit is about 730 MB. A composed
+  score with no samples needs no kit.
+  - `wv setup --music --check` checks an installed kit.
+  - `WV_MUSIC_KIT` sets another kit folder. Setup, the check and
+    `wv sound score` all use the same resolved folder.
+  - Before any download, wv runs git, cmake, both compilers and the build
+    tool, and gives the install command when one is missing.
+  - wv never deletes, replaces or takes over a folder or a lock that its own
+    run did not make. It refuses and prints the command to run.
+  - A film that uses the piano carries the full credit that the setup
+    prints.
+- Walkthrough Video: the critique packet uses every film that the owner
+  scored as an anchor, at most four, from high to low. The reviewer gets a
+  scale, not one example.
+
+### Changed
+
+- Walkthrough Video: `wv sound score` names `wv setup --music` when a
+  sampled part needs the kit.
+
+### Fixed
+
+- Walkthrough Video: after a stop begins, wv starts no new child process. A
+  loop that caught a stopped child could start the next one, and that child
+  continued after wv exited.
+- Walkthrough Video: `wv setup` runs its Python import checks through the
+  tracked runner. Ctrl-C works during them, and a hung check stops after
+  60 s.
+
 ## 0.36.1 - 2026-10-30
 
 ### Fixed
