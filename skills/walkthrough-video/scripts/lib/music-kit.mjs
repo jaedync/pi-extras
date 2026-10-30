@@ -84,7 +84,6 @@ export function kitPaths(kit = paths().musicKit) {
 		manifest: join(kit, "kit.json"),
 		bin: join(kit, "bin"),
 		sfizz: join(kit, "bin", "sfizz_render"),
-		licences: join(kit, "licenses"),
 		samples: join(kit, "samples"),
 		vcsl: join(kit, "samples", "vcsl"),
 		vcslKitSfz: join(kit, "samples", "vcsl", "kit.sfz"),
@@ -672,7 +671,6 @@ function acquireKitLock(kit) {
 		closeSync(fd);
 	}
 	return {
-		path: lock,
 		release: () => {
 			// A lock that another install has made since is not this run's to remove.
 			if (readLock(lock)?.token === token) rmSync(lock, { force: true });
@@ -711,8 +709,8 @@ function noteLeftoverStaging(kit, log = () => {}) {
 }
 
 /**
- * Installs the kit. Nothing downloads when the kit already passes the check;
- * nothing is moved into place when a step fails, so a half kit never stays.
+ * Installs the kit into a path that does not exist. Nothing downloads when the
+ * kit already passes the check, and an existing kit folder is never replaced.
  * @param {{kit?: string, log?: Log, deps?: any}} [options]
  */
 export async function installMusicKit({ kit = paths().musicKit, log = () => {}, deps = {} } = {}) {
@@ -802,6 +800,6 @@ export async function installMusicKit({ kit = paths().musicKit, log = () => {}, 
 		}
 	}
 	log(`music kit: installed at ${kit}`);
-	if (MUSIC_KIT_PINS.salamander) log(`music kit: a published film that uses the piano carries "${MUSIC_KIT_ATTRIBUTION}"`);
+	log(`music kit: a published film that uses the piano carries "${MUSIC_KIT_ATTRIBUTION}"`);
 	return checkMusicKit({ kit, smoke: d.smoke, log: () => {} });
 }
