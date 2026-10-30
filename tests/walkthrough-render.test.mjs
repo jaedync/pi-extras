@@ -77,8 +77,14 @@ test("the refusal names the filesystem that is full, not the temp folder when th
 	const refusal = spaceRefusal({ needed: 5_000_000_000, free: 1_000_000_000, cacheDir: "/var/tmp/wv-cache", tmp: "/tmp" });
 	assert.match(refusal, /^\/var\/tmp is full:/);
 	assert.match(refusal, /\/var\/tmp\/wv-cache/);
-	const elsewhere = spaceRefusal({ needed: 5_000_000_000, free: 1_000_000_000, cacheDir: "/mnt/big/hf", tmp: "/tmp" });
-	assert.match(elsewhere, /^\/mnt is full:/);
+	// The nearest folder that exists names the filesystem: /mnt is missing on macOS, so the test makes its own.
+	const base = mkdtempSync(join(tmpdir(), "wv-space-"));
+	try {
+		const elsewhere = spaceRefusal({ needed: 5_000_000_000, free: 1_000_000_000, cacheDir: join(base, "big", "hf"), tmp: "/tmp" });
+		assert.ok(elsewhere.startsWith(`${base} is full:`), elsewhere);
+	} finally {
+		rmSync(base, { recursive: true, force: true });
+	}
 });
 
 test("a film caches only the frames of its captured clips, about one byte a pixel as PNG", () => {
