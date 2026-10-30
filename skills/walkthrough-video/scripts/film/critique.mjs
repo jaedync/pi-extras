@@ -8,8 +8,8 @@
  * The packet is self-sufficient: a reviewer in a read-only sandbox cannot
  * extract frames, so the full-size frames of every shot are files in it. The
  * cold read (cold/) comes before the storyboard, because the review that knew
- * the author's intent scored the gate film 2 points over the owner. An anchor
- * film that the owner scored gives the score a fixed point.
+ * the author's intent scored the gate film 2 points over the owner. Anchor
+ * films that the owner scored give the score fixed points on the owner's scale.
  */
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -124,16 +124,26 @@ export function shotTable(film) {
  * The reviewer's brief: references/critique.md with the sound question, the
  * anchor and the score cap for this film, the files in the packet, and the
  * taste text as it was when the packet was made.
- * @param {{taste: string, files: string[], music?: {bed: boolean | null, none?: string | null}, anchor?: {name: string, score: number} | null, tasteDate?: string | null}} options
+ * @param {{taste: string, files: string[], music?: {bed: boolean | null, none?: string | null}, anchors?: {name: string, score: number, note?: string, folder: string}[], tasteDate?: string | null}} options
  */
-export function critiqueBrief({ taste, files, music = { bed: null }, anchor = null, tasteDate = null }) {
+export function critiqueBrief({ taste, files, music = { bed: null }, anchors = [], tasteDate = null }) {
 	const noBed = music.bed === false || (typeof music.none === "string" && music.none.trim() !== "");
 	const sound = noBed
 		? `This film has no music bed${music.none ? ` (the storyboard says: "${music.none}")` : ""}. Does the sound still sound complete and alive, or empty? Does each cue sit on a picture event, and is any jump in loudness a startle?`
 		: "Is the bed there from the first frame to the last? Does each cue sit on a picture event? Does the loudest moment fall on the end card?";
 	const cap = noBed ? "A film with no music bed scores 5 or less unless the storyboard's reason says that the owner accepted it." : "";
-	const anchorText = anchor
-		? `The anchor is \`anchor/\`: "${anchor.name}", which the owner scored ${anchor.score} of 10. Compare first: better, equal or worse in each of story, phone legibility, motion and sound. Then give the score. A film that is worse than the anchor in two of the four scores 6 or less.`
+	const anchorText = anchors.length
+		? [
+				"Films that the owner scored, high to low:",
+				"",
+				...anchors.map((a) => `- \`anchors/${a.folder}/\`: "${a.name}", owner score ${a.score}${a.note ? ` (${a.note})` : ""}.`),
+				"",
+				"Compare first: for each anchor, better, equal or worse in each of story, phone legibility, motion and sound. Then put the film on the owner's scale:",
+				"",
+				"- A film that is worse than an anchor in two of the four scores less than that anchor.",
+				"- A film scores more than an anchor only when it is better in two of the four and worse in none.",
+				"- Give a score that obeys both rules for every anchor. If no score does, give the highest score that obeys the first rule, and name the anchor that conflicts.",
+			].join("\n")
 		: "No anchor film is set (the author sets one with WV_ANCHORS; see wv film critique in SKILL.md). Score against the reference films only, and say so.";
 	const brief = readFileSync(BRIEF, "utf8").trimEnd().replace("{{SOUND_QUESTION}}", sound).replace("{{ANCHOR}}", anchorText).replace(" {{SCORE_CAP}}", cap ? ` ${cap}` : "");
 	return `${brief}\n\n## The files in this folder\n\n${files.map((f) => `- ${f}`).join("\n")}\n\n---\n\n${tasteDate ? `The taste text below was read at ${tasteDate}.\n\n` : ""}${taste.trim()}\n`;
@@ -183,23 +193,61 @@ export function cueList(cues, report) {
 	return [...(report ? [] : ["no mix report: the file of each cue is not known"]), ...lines, ...extra].join("\n");
 }
 
+/** The packet takes at most this many anchors: the critic reads a scale, and each anchor costs a film copy and a sheet. */
+export const MAX_ANCHORS = 4;
+
+/**
+ * At most `max` anchors from a list sorted high to low, spread evenly from the
+ * highest score to the lowest, so the scale keeps both ends.
+ * @template T
+ * @param {T[]} list
+ * @returns {T[]}
+ */
+export function anchorScale(list, max = MAX_ANCHORS) {
+	if (list.length <= max) return [...list];
+	return Array.from({ length: max }, (_, i) => list[Math.round((i * (list.length - 1)) / (max - 1))]);
+}
+
+const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "film";
+
 /**
  * Films that the owner scored: a folder with anchors.json, a list of
  * { file, score, name, note }, files relative to the folder. $WV_ANCHORS, else
  * ~/.config/pi-walkthrough-video/anchors. The package ships none: the films are
- * the owner's.
+ * the owner's. High to low, at most MAX_ANCHORS, each with its packet folder
+ * name (score first, so the folder list reads as the scale).
  */
 export function loadAnchors(env = process.env, home = homedir()) {
 	const dir = env.WV_ANCHORS || join(env.XDG_CONFIG_HOME || join(home, ".config"), "pi-walkthrough-video", "anchors");
 	try {
 		const list = JSON.parse(readFileSync(join(dir, "anchors.json"), "utf8"));
-		return (Array.isArray(list) ? list : [])
+		const found = (Array.isArray(list) ? list : [])
 			.filter((a) => a && typeof a.file === "string" && Number.isFinite(Number(a.score)))
 			.map((a) => ({ name: String(a.name ?? basename(a.file)), score: Number(a.score), note: String(a.note ?? ""), file: resolve(dir, a.file) }))
-			.filter((a) => existsSync(a.file));
+			.filter((a) => existsSync(a.file))
+			.sort((a, b) => b.score - a.score);
+		const seen = new Set();
+		return anchorScale(found).map((a, i) => {
+			const base = `${a.score}-${slug(a.name)}`;
+			const folder = seen.has(base) ? `${base}-${i + 1}` : base;
+			seen.add(folder);
+			return { ...a, folder };
+		});
 	} catch {
 		return [];
 	}
+}
+
+/** One anchor's folder in the packet: the film and its timeline sheet. */
+async function writeAnchor(anchor, dir, work) {
+	const adir = join(dir, "anchors", anchor.folder);
+	mkdirSync(adir, { recursive: true });
+	copyFileSync(anchor.file, join(adir, "film.mp4"));
+	const ainfo = probeVideo(anchor.file);
+	const step = Math.max(1, Math.round(ainfo.frames / TIMELINE_CELLS));
+	const aframes = Array.from({ length: Math.min(TIMELINE_CELLS, ainfo.frames) }, (_, i) => Math.min(ainfo.frames - 1, i * step));
+	const at = await extract(anchor.file, aframes, TIMELINE_PX, join(work, "anchors", anchor.folder));
+	await sheet({ cells: [...at.keys()].map((f) => ({ file: at.get(f), label: `${(f / ainfo.fps).toFixed(2)}s` })), cols: TIMELINE_COLS, width: TIMELINE_PX, out: join(adir, "timeline.jpg"), work });
 }
 
 /** Runs ffmpeg through the tracked runner and throws with its last line on failure. */
@@ -371,19 +419,12 @@ export async function writeCritique(project, { video, check = true, measure = tr
 			writeFileSync(join(dir, "measure.txt"), `${await wvText(["measure", source, "--storyboard", project, ...(camera ? [] : ["--no-camera"])])}\n`);
 			files.push("measure.txt: the numbers beside the reference range");
 		}
-		const [anchor] = loadAnchors();
-		if (anchor) {
+		const anchors = loadAnchors();
+		for (const anchor of anchors) {
 			log(`critique: anchor ${anchor.name}`);
-			const adir = join(dir, "anchor");
-			mkdirSync(adir, { recursive: true });
-			copyFileSync(anchor.file, join(adir, "film.mp4"));
-			const ainfo = probeVideo(anchor.file);
-			const step = Math.max(1, Math.round(ainfo.frames / TIMELINE_CELLS));
-			const aframes = Array.from({ length: Math.min(TIMELINE_CELLS, ainfo.frames) }, (_, i) => Math.min(ainfo.frames - 1, i * step));
-			const at = await extract(anchor.file, aframes, TIMELINE_PX, join(work, "anchor"));
-			await sheet({ cells: [...at.keys()].map((f) => ({ file: at.get(f), label: `${(f / ainfo.fps).toFixed(2)}s` })), cols: TIMELINE_COLS, width: TIMELINE_PX, out: join(adir, "timeline.jpg"), work });
-			files.push(`anchor/: film.mp4 and timeline.jpg of "${anchor.name}", owner score ${anchor.score}${anchor.note ? ` (${anchor.note})` : ""}`);
+			await writeAnchor(anchor, dir, work);
 		}
+		if (anchors.length) files.push(`anchors/: ${anchors.length} films that the owner scored (${anchors.map((a) => a.score).join(", ")}), each with film.mp4 and timeline.jpg`);
 
 		copyFileSync(FILMS_MD, join(dir, "films.md"));
 		files.push("films.md: the 12 reference films, their devices and their measured numbers");
@@ -392,7 +433,7 @@ export async function writeCritique(project, { video, check = true, measure = tr
 			const { notesPath, tasteText } = await import("./taste.mjs");
 			taste = tasteText(notesPath());
 		}
-		writeFileSync(join(dir, "brief.md"), critiqueBrief({ taste, files, music, anchor: anchor ?? null, tasteDate: new Date().toISOString() }));
+		writeFileSync(join(dir, "brief.md"), critiqueBrief({ taste, files, music, anchors, tasteDate: new Date().toISOString() }));
 		return { dir, files };
 	});
 }

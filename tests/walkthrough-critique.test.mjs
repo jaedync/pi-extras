@@ -9,7 +9,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { clipSheetFrames, clipText, critiqueFrames, critiqueBrief, cueList, loadAnchors, loudnessArgs, planBrief, planTable, selectArgs, shotFrames, shotTable, waveArgs, writeCritique, writePlanCritique } from "../skills/walkthrough-video/scripts/film/critique.mjs";
+import { anchorScale, clipSheetFrames, clipText, critiqueFrames, critiqueBrief, cueList, loadAnchors, loudnessArgs, MAX_ANCHORS, planBrief, planTable, selectArgs, shotFrames, shotTable, waveArgs, writeCritique, writePlanCritique } from "../skills/walkthrough-video/scripts/film/critique.mjs";
 
 const FILM = {
 	title: "T",
@@ -99,13 +99,22 @@ test("the brief asks about the bed only when the film has one, and caps a film w
 	assert.match(without, /5 or less unless/);
 });
 
-test("the brief starts with a cold read, names the anchor and its rule, and makes a rejected sound P0", () => {
-	const brief = critiqueBrief({ taste: "t", files: [], music: { bed: true }, anchor: { name: "pointer-golden", score: 7 }, tasteDate: "2026-10-29T17:00:00Z" });
+test("the brief starts with a cold read, names each anchor and the scale rules, and makes a rejected sound P0", () => {
+	const anchors = [
+		{ name: "pointer-golden", score: 7, note: "owner score 2026-10-29", folder: "7-pointer-golden" },
+		{ name: "pointer-gate", score: 4, note: "", folder: "4-pointer-gate" },
+	];
+	const brief = critiqueBrief({ taste: "t", files: [], music: { bed: true }, anchors, tasteDate: "2026-10-29T17:00:00Z" });
 	assert.match(brief, /cold\//);
 	assert.match(brief, /Before you read `shots\.md`/);
 	assert.match(brief, /what is the product, its promise and the best moment/i);
-	assert.match(brief, /pointer-golden.*7/);
-	assert.match(brief, /worse than the anchor in two of .*6 or less/s);
+	assert.match(brief, /`anchors\/7-pointer-golden\/`: "pointer-golden", owner score 7 \(owner score 2026-10-29\)/);
+	assert.match(brief, /`anchors\/4-pointer-gate\/`: "pointer-gate", owner score 4\./);
+	assert.ok(brief.indexOf("7-pointer-golden") < brief.indexOf("4-pointer-gate"), "high to low");
+	assert.match(brief, /worse than an anchor in two of the four scores less than that anchor/);
+	assert.match(brief, /more than an anchor only when it is better in two of the four and worse in none/);
+	assert.match(brief, /Against the anchors/);
+	assert.doesNotMatch(brief, /`anchor\/`/);
 	assert.match(brief, /\*\*P0\*\*[^\n]*\n[^\n]*\n[^\n]*rejected/);
 	assert.match(brief, /frames\//);
 	assert.match(brief, /2026-10-29T17:00:00Z/);
@@ -149,6 +158,36 @@ test("anchors come from a folder with anchors.json, not from the package", () =>
 	}
 });
 
+test("all anchors load high to low, each with its own packet folder", () => {
+	const dir = mkdtempSync(join(tmpdir(), "wv-anchor-"));
+	try {
+		for (const f of ["gate.mp4", "golden.mp4", "flight.mp4", "twin.mp4"]) writeFileSync(join(dir, f), "x");
+		writeFileSync(
+			join(dir, "anchors.json"),
+			JSON.stringify([
+				{ file: "golden.mp4", score: 7, name: "Pointer golden film" },
+				{ file: "gate.mp4", score: 4, name: "Pointer gate film" },
+				{ file: "gone.mp4", score: 9, name: "missing file" },
+				{ file: "flight.mp4", score: 5, name: "Earth Flight / test 2" },
+				{ file: "twin.mp4", score: 5, name: "Earth Flight  test 2" },
+			]),
+		);
+		const list = loadAnchors({ WV_ANCHORS: dir });
+		assert.deepEqual(list.map((a) => a.score), [7, 5, 5, 4]);
+		assert.deepEqual(list.map((a) => a.folder), ["7-pointer-golden-film", "5-earth-flight-test-2", "5-earth-flight-test-2-3", "4-pointer-gate-film"]);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a long anchor list keeps at most MAX_ANCHORS, spread from the highest score to the lowest", () => {
+	const list = [9, 8, 7, 6, 5, 4, 3, 2].map((score) => ({ score, name: `s${score}` }));
+	assert.deepEqual(anchorScale(list).map((a) => a.score), [9, 7, 4, 2]);
+	assert.equal(anchorScale(list).length, MAX_ANCHORS);
+	assert.deepEqual(anchorScale(list.slice(0, 3)).map((a) => a.score), [9, 8, 7]);
+	assert.deepEqual(anchorScale([]), []);
+});
+
 test("writeCritique makes the whole packet from a real film (WV_INTEGRATION=1)", { skip: process.env.WV_INTEGRATION !== "1" }, async () => {
 	const dir = mkdtempSync(join(tmpdir(), "wv-critique-"));
 	try {
@@ -160,8 +199,8 @@ test("writeCritique makes the whole packet from a real film (WV_INTEGRATION=1)",
 		// The anchor is a film the owner scored, from the user's folder.
 		const anchors = join(dir, "anchors");
 		mkdirSync(anchors);
-		spawnSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=60:duration=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", join(anchors, "a.mp4")]);
-		writeFileSync(join(anchors, "anchors.json"), JSON.stringify([{ file: "a.mp4", score: 7, name: "golden" }]));
+		for (const f of ["a.mp4", "b.mp4"]) spawnSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=60:duration=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", join(anchors, f)]);
+		writeFileSync(join(anchors, "anchors.json"), JSON.stringify([{ file: "b.mp4", score: 4, name: "gate" }, { file: "a.mp4", score: 7, name: "golden" }]));
 		const saved = process.env.WV_ANCHORS;
 		process.env.WV_ANCHORS = anchors;
 		let result;
@@ -171,10 +210,11 @@ test("writeCritique makes the whole packet from a real film (WV_INTEGRATION=1)",
 			if (saved === undefined) delete process.env.WV_ANCHORS;
 			else process.env.WV_ANCHORS = saved;
 		}
-		for (const name of ["cold/timeline.jpg", "cold/cuts.jpg", "cold/film.mp4", "sound.png", "loudness.png", "cues.txt", "shots.md", "brief.md", "films.md", "frames/a-first.jpg", "frames/c-last.jpg", "anchor/timeline.jpg", "anchor/film.mp4"]) assert.ok(existsSync(join(result.dir, name)), name);
+		for (const name of ["cold/timeline.jpg", "cold/cuts.jpg", "cold/film.mp4", "sound.png", "loudness.png", "cues.txt", "shots.md", "brief.md", "films.md", "frames/a-first.jpg", "frames/c-last.jpg", "anchors/7-golden/timeline.jpg", "anchors/7-golden/film.mp4", "anchors/4-gate/timeline.jpg", "anchors/4-gate/film.mp4"]) assert.ok(existsSync(join(result.dir, name)), name);
 		const brief = readFileSync(join(result.dir, "brief.md"), "utf8");
 		assert.match(brief, /cold\/cuts\.jpg/);
-		assert.match(brief, /"golden", which the owner scored 7/);
+		assert.match(brief, /`anchors\/7-golden\/`: "golden", owner score 7/);
+		assert.match(brief, /`anchors\/4-gate\/`: "gate", owner score 4/);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

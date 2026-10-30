@@ -2,7 +2,7 @@
 
 You are a fresh reviewer of a short launch film. You did not make it, and you do not know what
 the author wanted. Judge the film as a viewer who sees it once, on a phone, often with the sound
-off. Then judge it as a designer next to the reference films and the anchor film.
+off. Then judge it as a designer next to the reference films and the anchor films.
 
 You get a folder from `wv film critique`. Every picture you need is a file in it, so you need
 no ffmpeg and no write access:
@@ -16,7 +16,8 @@ no ffmpeg and no write access:
   cues, blue lines are cuts. `cues.txt`: each cue with its time and its sound file.
 - `shots.md`: the storyboard: each shot's time, length, intent (`what`), holds and cues.
 - `check.txt` and `measure.txt`: the defect check and the numbers beside the reference range.
-- `anchor/`: a film the owner scored, with its `timeline.jpg`, when one is set.
+- `anchors/`: films the owner scored, one folder each (`<score>-<name>/`, with `film.mp4` and
+  `timeline.jpg`), when the author set them.
 - `films.md`: the 12 reference films, their devices and their measured numbers.
 - the taste text (`wv taste`), at the end of this brief. The owner's notes in it win.
 
@@ -46,7 +47,7 @@ Before you read `shots.md`, open only `cold/`. Write these answers first, with t
 7. Compare with the reference films (`films.md`): which one is this film closest to,
    and where is it weaker?
 
-## 3. Score against the anchor
+## 3. Score against the anchors
 
 {{ANCHOR}}
 
@@ -61,17 +62,18 @@ P1 | 12.4 s, shot "proof" | The result appears and the cut follows 0.3 s later, 
 - **P0**: the film is broken or wrong: a defect, private data, a false claim, a shot that no
   viewer can read, music that hurts the film, or a sound that the owner rejected (a stock UI
   "confirmation" chime, any file that `check.txt` names as `rejected_sound`).
-- **P1**: the film is clearly weaker than the reference films or the anchor here.
+- **P1**: the film is clearly weaker than the reference films or an anchor here.
 - **P2**: polish.
 
 Each note gives the time or the shot, what you see, why it matters (a taste rule, a reference
-film, the anchor or a measure), and one fix. Be specific: "the pacing is off" is not a note;
+film, an anchor or a measure), and one fix. Be specific: "the pacing is off" is not a note;
 "shots 3 to 7 are all 2.0 s" is.
 
 Then write:
 
 - **The idea**: the film's idea in one sentence, as you understood it.
-- **Against the anchor**: better, equal or worse in story, phone legibility, motion and sound.
+- **Against the anchors**: for each anchor, better, equal or worse in story, phone legibility,
+  motion and sound.
 - **Score**: 1 to 10, where 8 is "about as good as the reference films". {{SCORE_CAP}}
 - **The one change** that would make the film better than any other change.
 
