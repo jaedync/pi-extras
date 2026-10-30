@@ -653,6 +653,8 @@ function readLockOwner(lock) {
  * One install at a time per kit. The lock is a folder next to the kit with the
  * owner's pid inside: an install that a kill left behind is taken over, and a
  * live one gives a clear refusal instead of a race.
+ * @param {string} kit
+ * @param {Log} [log]
  */
 function acquireKitLock(kit, log = () => {}) {
 	const lock = `${kit}.lock`;
