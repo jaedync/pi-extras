@@ -2,6 +2,23 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.38.2 - 2026-11-01
+
+### Fixed
+
+- Subagents: the allowed models are read at each call. Before, the tool kept
+  the list from the session start, so it refused a model that you enabled
+  later.
+  - A change in `/scoped-models` applies at once. The tool's model list
+    follows at the next prompt.
+  - After you edit `enabledModels` and run `/reload`, subagents resolve the
+    new patterns. Pi 1.4.0 itself keeps its old list after a reload.
+  - The launch, resume and fallback checks use the same live list.
+  - A refusal of a model that Pi knows says why it is out of scope and how to
+    add it.
+  - When a call names no model, the default is main's model at the time of the
+    call, not at the session start.
+
 ## 0.38.1 - 2026-10-30
 
 ### Fixed
