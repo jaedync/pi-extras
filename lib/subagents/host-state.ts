@@ -60,25 +60,27 @@ interface Place {
 function teamFor(inputs: HostInputs, ports: HostPorts, mail: () => MainMail, place: Place, sessionDir: string): Team {
 	const { config, scanner } = inputs;
 	const warn = (message: string) => ports.notify(message, "warning");
-	const scope = ports.models();
+	// Names outside the scope are told once, at the open.
+	fallbackChain(config.fallbackModels, ports.models().allowed, warn);
 	return new Team({
 		warn, cwd: inputs.cwd,
 		maxConcurrent: config.maxConcurrent,
 		maxDepth: config.maxDepth,
 		replyTimeoutMs: config.replyTimeoutMs,
 		runBudget: { minutes: config.maxRunMinutes, ...(config.maxRunCost !== null ? { cost: config.maxRunCost } : {}) },
-		fallbackModels: fallbackChain(config.fallbackModels, scope.allowed, warn),
+		// Read at a failure, from the scope then, which /scoped-models may have changed; the open warned already.
+		fallbackModels: () => fallbackChain(config.fallbackModels, ports.models().allowed, () => undefined),
 		defaultThinking: (model) => {
 			const choice = ports.models().allowed.find((allowed) => allowed.ref === model);
 			return choice ? thinkingFor(choice, undefined, inputs.thinking ?? {}) : undefined;
 		},
 		swapAtTurn: config.swapAtTurn,
-		// The scope of the session start serving now, as the launcher checks it.
+		// The scope now, as the launcher checks it.
 		modelAllowed: (model) => ports.models().allowed.some((choice) => choice.ref === model),
 		log: swapLog(inputs.agentDir),
 		messagesFor: (record) => record.sessionFile && existsSync(record.sessionFile) && !record.restoreError ? scanner.messages(record.sessionFile) : [],
 		prepareResume: (record) => {
-			// The scope of the session start serving now, which a /reload may have changed.
+			// The scope now, which /scoped-models or a /reload may have changed.
 			const { allowed, fallbackModel } = ports.models();
 			const model = allowed.some((choice) => choice.ref === record.model) ? record.model : fallbackModel;
 			if (!model) throw new Error("No current default model is available for this child. Scope a model before resuming.");

@@ -71,7 +71,7 @@ export interface TeamOptions {
 	/** When a run gets its budget notes (budget.ts), and how long it may take to wrap up at the limit (wrap-up.ts); tests make these small. */
 	budgetTimes?: Partial<WrapUpTimes>;
 	/** Model references a run goes on with, in order, when its model can't serve it (fallback.ts); unset or empty turns fallback off. */
-	fallbackModels?: readonly string[];
+	fallbackModels?: readonly string[] | (() => readonly string[]);
 	/** The thinking level a spawn of `model` gets when the call names none (models.ts `thinkingFor`); a fallback model gets its own. */
 	defaultThinking?(model: string): Thinking | undefined;
 	/** Whether a running child whose session went stale moves to a new session at its next turn boundary (swap.ts); default true. */
@@ -797,6 +797,12 @@ export class Team implements HostTeam {
 		return late.length > 0 ? late.join("\n\n") : null;
 	}
 
+	/** The fallback models now: a host reads them from the live scope (host-state.ts). */
+	private fallbackChain(): readonly string[] {
+		const chain = this.options.fallbackModels;
+		return typeof chain === "function" ? chain() : chain ?? [];
+	}
+
 	/**
 	 * A run its model can't serve goes on from its session on the next fallback
 	 * model, the way a resume does, and stays the same run; any other failure, or
@@ -804,7 +810,7 @@ export class Team implements HostTeam {
 	 */
 	private failOrFallBack(name: string, error: unknown): void {
 		const record = this.records.get(name)!;
-		const plan = planFallback(record, error instanceof Error ? error.message : String(error), this.options.fallbackModels ?? [], this.now());
+		const plan = planFallback(record, error instanceof Error ? error.message : String(error), this.fallbackChain(), this.now());
 		if (!plan.ok) {
 			this.continuing.delete(name);
 			this.parkResume(name);

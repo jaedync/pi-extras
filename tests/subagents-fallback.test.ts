@@ -256,3 +256,15 @@ test("a plan's quota does not skip an openai API key, which bills per token", as
 	assert.equal(quota.team.get(a)?.model, "openai/gpt-6.1-sol");
 	await quota.team.close();
 });
+
+test("the fallback chain is read when a run fails, so a model scoped later is used and one taken out is not", async () => {
+	let chain: string[] = [];
+	const h = teamHarness({ fallbackModels: () => chain });
+	const name = h.spawn("Fix the parser", { model: SOL });
+	await tick();
+	chain = [OPUS];
+	h.lastCall(name).fail(new Error(CODEX_LIMIT));
+	await settle();
+	assert.equal(h.team.get(name)!.model, OPUS);
+	await h.team.close();
+});

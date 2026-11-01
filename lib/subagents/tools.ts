@@ -45,6 +45,8 @@ export interface ToolContext {
 	shellProblem?(): string | undefined;
 	/** The usage window that governs `model` now, or why there is no reading (windows.ts). */
 	windows?(model: string): WindowLookup;
+	/** Why a model Pi knows is not in scope, and the fix (scope.ts); undefined when there is nothing to add. */
+	scopeHint?(query: string): Promise<string | undefined>;
 }
 
 type Result = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> | undefined };
@@ -156,10 +158,9 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 			if (params.mode !== undefined) throw new Error("mode goes with models: it says how a panel's members start.");
 			const wanted = params.model ?? tc.fallbackModel;
 			if (!wanted) throw new Error("No model to run on: name one, or set subagents.defaultModel.");
-			const resolved = resolveModel(wanted, tc.allowed);
-			if (!resolved.ok) throw new Error(resolved.error);
-			const windowNote = windowCheck(tc, [resolved.choice.ref], params.maxWindowPct);
-			const spawned = tc.team.spawn(spawnRequest(tc, parent, params, resolved.choice, {}));
+			const choice = await allowedChoice(tc, wanted);
+			const windowNote = windowCheck(tc, [choice.ref], params.maxWindowPct);
+			const spawned = tc.team.spawn(spawnRequest(tc, parent, params, choice, {}));
 			if (!spawned.ok) throw new Error(spawned.error);
 			const record = spawned.record;
 			const details = { ...childDetails(record), wait: params.wait === true };
@@ -167,6 +168,14 @@ export function subagentTool(tc: ToolContext, parent: string): ToolDefinition {
 			return await waitFor(tc, { name: record.name, parent }, details, signal, onUpdate as ((update: Result) => void) | undefined);
 		},
 	} as ToolDefinition;
+}
+
+/** The allowed model `query` names; a refusal of a model Pi knows says why it is out of scope and how to add it. */
+async function allowedChoice(tc: ToolContext, query: string): Promise<ModelChoice> {
+	const resolved = resolveModel(query, tc.allowed);
+	if (resolved.ok) return resolved.choice;
+	const hint = resolved.missing ? await tc.scopeHint?.(query).catch(() => undefined) : undefined;
+	throw new Error(hint ? `${resolved.error} ${hint}` : resolved.error);
 }
 
 /**
@@ -240,11 +249,8 @@ async function spawnPanel(tc: ToolContext, parent: string, params: SubagentInput
 	if (models.length < PANEL_MIN || models.length > PANEL_MAX) throw new Error(`A panel needs at least ${PANEL_MIN} models and at most ${PANEL_MAX}.`);
 	const mode: PanelMode = params.mode ?? "parallel";
 	if (!PANEL_MODES.includes(mode)) throw new Error("Unknown mode. Use parallel or sequential.");
-	const choices = models.map((query) => {
-		const resolved = resolveModel(query, tc.allowed);
-		if (!resolved.ok) throw new Error(resolved.error);
-		return resolved.choice;
-	});
+	const choices: ModelChoice[] = [];
+	for (const query of models) choices.push(await allowedChoice(tc, query));
 	const twice = choices.find((choice, index) => choices.findIndex((other) => other.ref === choice.ref) !== index);
 	if (twice) throw new Error(`The panel names ${twice.ref} twice; each member needs its own model.`);
 	const windowNote = windowCheck(tc, choices.map((choice) => choice.ref), params.maxWindowPct);

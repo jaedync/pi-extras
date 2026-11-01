@@ -105,6 +105,29 @@ test("a session is not current while parked, so a child that pauses then lets it
 	assert.deepEqual(h.disposed, [name], "its next run starts on the next module's code");
 });
 
+test("a resume reads the scope at that moment: a model that left it continues on the current default", async () => {
+	const h = setup();
+	const first = h.portsFor("first");
+	const choice = (id: string) => ({ ref: `faux/${id}`, model: { id, provider: "faux" } });
+	let scope = { allowed: [choice("cheap")], fallbackModel: "faux/cheap" };
+	Object.assign(first.ports, { models: () => scope });
+	const host = h.open(first);
+	const name = h.spawn(host, "Look");
+	await tick();
+	h.call(name).finish("Seen.");
+	await host.team.whenDone(name);
+	// A host from the index holds no session, so the next message resumes the child from its file.
+	await host.close("quit");
+	const reopened = h.open(first);
+	cleanups.push(() => reopened.close());
+	// /scoped-models took faux/cheap out after the host opened.
+	scope = { allowed: [choice("other")], fallbackModel: "faux/other" };
+	const sent = await reopened.team.send("main", name, "Look again.");
+	assert.equal(sent.ok && sent.delivered, "resumed");
+	assert.equal(reopened.team.get(name)?.model, "faux/other");
+	assert.match(first.notices.join("\n"), /Model faux\/cheap is not available now, running on faux\/other/);
+});
+
 test("the host is quiet only when nothing is live and all mail has reached main and been seen", async () => {
 	const h = setup();
 	const first = h.portsFor("first");

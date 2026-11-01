@@ -27,7 +27,8 @@ export interface ThinkingSettings {
 	defaultThinkingLevel?: Thinking | string;
 }
 
-export type Resolution = { ok: true; choice: ModelChoice } | { ok: false; error: string };
+/** `missing`: the name matches no allowed model, so the caller may say why (scope.ts `scopeHint`). */
+export type Resolution = { ok: true; choice: ModelChoice } | { ok: false; error: string; missing?: true };
 
 export const refOf = (model: ModelLike): string => `${model.provider}/${model.id}`;
 
@@ -66,7 +67,7 @@ function listed(allowed: readonly ModelChoice[]): string {
 /** Exact reference, then bare id, then a unique partial match on id or display name. */
 export function resolveModel(query: string, allowed: readonly ModelChoice[]): Resolution {
 	const wanted = normalize(query);
-	if (allowed.length === 0) return { ok: false, error: `No models are allowed for subagents. Scope some with enabledModels.` };
+	if (allowed.length === 0) return { ok: false, error: `No models are allowed for subagents. Scope some with enabledModels.`, missing: true };
 	const exact = allowed.find((choice) => normalize(choice.ref) === wanted || normalize(choice.model.id) === wanted);
 	if (exact) return { ok: true, choice: exact };
 	const partial = allowed.filter((choice) =>
@@ -75,7 +76,7 @@ export function resolveModel(query: string, allowed: readonly ModelChoice[]): Re
 	if (partial.length > 1) {
 		return { ok: false, error: `"${query}" matches ${partial.length} models: ${listed(partial)}. Name one exactly.` };
 	}
-	return { ok: false, error: `"${query}" is not one of the allowed models: ${listed(allowed)}.` };
+	return { ok: false, error: `"${query}" is not one of the allowed models: ${listed(allowed)}.`, missing: true };
 }
 
 /** Undefined leaves the choice to Pi, which clamps to what the model supports. */

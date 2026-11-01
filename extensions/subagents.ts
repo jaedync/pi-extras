@@ -244,11 +244,26 @@ export default function subagents(pi: ExtensionAPI) {
 		try { ctx.ui.setWidget(BLOCKED_WIDGET, undefined); } catch { /* stale context after a session switch */ }
 	};
 
+	/**
+	 * The subagent tool's description lists the models in scope. /scoped-models
+	 * changes them during the session, so before each prompt a changed list
+	 * registers the tool again; Pi applies the tool loadout after this event.
+	 */
+	let mainDescription = "";
+	pi.on("before_agent_start", (_event, ctx) => {
+		const current = served;
+		if (!current) return;
+		const spawn = subagentTool(current.tools, MAIN);
+		if (spawn.description === mainDescription) return;
+		mainDescription = spawn.description;
+		register(ctx, [spawn]);
+	});
+
 	/** Opens the session's subagents and gives main its tools; false if they could not open, and main's tools then say why. */
 	async function serveFor(ctx: ExtensionContext, reason: string, parked?: ServeOptions["parked"]): Promise<boolean> {
 		try {
 			served = await serveSession({
-				sdk, pi, ctx, generation, parked,
+				sdk, pi, ctx, generation, parked, reason,
 				route: () => mainWatch.route(ctx),
 				teamChanged: () => { widget.update(); publishBackground(); },
 				mailChanged: () => { widget.update(); watchPending(ctx); },
@@ -263,7 +278,9 @@ export default function subagents(pi: ExtensionAPI) {
 		backgroundCtx = ctx;
 		publishBackground();
 		const current = served;
-		register(ctx, [subagentTool(current.tools, MAIN), mainMessageTool(current.tools), stopTool(current.tools, MAIN)]);
+		const spawn = subagentTool(current.tools, MAIN);
+		mainDescription = spawn.description;
+		register(ctx, [spawn, mainMessageTool(current.tools), stopTool(current.tools, MAIN)]);
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui as unknown as InspectorHost : null;
 		inspectorCwd = ctx.cwd;
 		inspectorTrusted = mainTrust(ctx);

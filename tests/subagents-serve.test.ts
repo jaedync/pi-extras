@@ -12,24 +12,82 @@ import { setImmediate as tick } from "node:timers/promises";
 import { HOST_VERSION, type HostPorts, type HostState, type ParkedHost } from "../lib/subagents/contract.ts";
 import { parkHost, takeParked } from "../lib/subagents/host.ts";
 import { serveSession } from "../lib/subagents/serve.ts";
+import { forgetScopeRecords } from "../lib/subagents/scope.ts";
 import { ToolActivity } from "../lib/subagents/tool-activity.ts";
+import { subagentTool } from "../lib/subagents/tools.ts";
 
 const cleanups: Array<() => void | Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); forgetScopeRecords(); });
 
 /** Pi as one module sees it: `replace()` makes its `pi` and `ctx` throw, as a /reload does. */
-function fakePi(dir = mkdtempSync(join(tmpdir(), "subagents-serve-"))) {
+function fakePi(dir = mkdtempSync(join(tmpdir(), "subagents-serve-")), sdkExtra: object = {}, ctxExtra: object = {}) {
 	cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
 	const notices: string[] = [];
 	let replaced = false;
 	const live = <T>(value: T): T => { if (replaced) throw new Error("This extension ctx is stale after session replacement or reload."); return value; };
 	const sessionManager = { getSessionId: () => "parent-serve", getBranch: () => live([]) };
-	const sdk = { getAgentDir: () => join(dir, "agent"), CONFIG_DIR_NAME: ".pi", parseSessionEntries: () => [], migrateSessionEntries: () => undefined };
-	const ctx = { cwd: dir, scopedModels: [], model: undefined, modelRegistry: {}, sessionManager, ui: { notify: (message: string) => { live(notices).push(message); } } };
+	const sdk = { getAgentDir: () => join(dir, "agent"), CONFIG_DIR_NAME: ".pi", parseSessionEntries: () => [], migrateSessionEntries: () => undefined, ...sdkExtra };
+	const ctx: { scopedModels: unknown[] } & Record<string, unknown> = { cwd: dir, scopedModels: [], model: undefined, modelRegistry: {}, sessionManager, ui: { notify: (message: string) => { live(notices).push(message); } }, ...ctxExtra };
 	const pi = { getActiveTools: () => live([]), getAllTools: () => live([]), sendMessage: () => live(undefined) };
 	const serve = (parked?: ParkedHost, extra: object = {}) => serveSession({ sdk, pi, ctx, generation: 2, parked, route: () => "wake", teamChanged() {}, mailChanged() {}, currentGroup: () => "run-2-0", ...extra } as never);
-	return { dir, notices, sessionManager, serve, replace: () => { replaced = true; }, index: join(dir, "agent", "sessions", "subagents", "parent-serve", "index.json") };
+	return { dir, ctx, notices, sessionManager, serve, replace: () => { replaced = true; }, index: join(dir, "agent", "sessions", "subagents", "parent-serve", "index.json") };
 }
+
+const model = (id: string) => ({ provider: "openai-codex", id, name: id });
+const allowedRefs = (scope: { allowed: readonly { ref: string }[] }) => scope.allowed.map((choice) => choice.ref);
+
+test("a model scoped after the session start is allowed at once, and one taken out is refused", async () => {
+	const pi = fakePi();
+	pi.ctx.scopedModels = [{ model: model("gpt-6-luna") }];
+	const served = await pi.serve();
+	cleanups.push(() => served.close());
+	assert.deepEqual(allowedRefs(served.tools), ["openai-codex/gpt-6-luna"]);
+	// /scoped-models sets a new list on the session, which `ctx.scopedModels` returns.
+	pi.ctx.scopedModels = [{ model: model("gpt-6-luna") }, { model: model("gpt-6.1-terra") }];
+	assert.deepEqual(allowedRefs(served.tools), ["openai-codex/gpt-6-luna", "openai-codex/gpt-6.1-terra"], "the tool's check");
+	assert.deepEqual(allowedRefs(served.host().ports.models()), ["openai-codex/gpt-6-luna", "openai-codex/gpt-6.1-terra"], "the launch and resume check");
+	assert.match(served.tools.modelTable, /gpt-6\.1-terra/, "the table a refreshed description shows");
+	pi.ctx.scopedModels = [{ model: model("gpt-6.1-terra") }];
+	assert.deepEqual(allowedRefs(served.host().ports.models()), ["openai-codex/gpt-6.1-terra"]);
+	assert.equal(served.tools.fallbackModel, "openai-codex/gpt-6.1-terra");
+});
+
+test("a /reload after an enabledModels edit allows the new model, though Pi keeps its old scope", async () => {
+	let patterns = ["openai-codex/gpt-6-luna"];
+	const asked: string[][] = [];
+	const sdkExtra = {
+		SettingsManager: { create: () => ({ getEnabledModels: () => patterns }) },
+		resolveModelScopeWithDiagnostics: async (wanted: string[]) => {
+			asked.push(wanted);
+			return { scopedModels: wanted.map((ref) => ({ model: model(ref.split("/")[1]!) })), diagnostics: [] };
+		},
+	};
+	const pi = fakePi(undefined, sdkExtra, { modelRegistry: { runtime: { refresh: () => undefined, getAvailable: async () => [model("gpt-6-luna"), model("gpt-6.1-terra")] } } });
+	const stale = [{ model: model("gpt-6-luna") }];
+	pi.ctx.scopedModels = stale;
+	const first = await pi.serve(undefined, { reason: "startup" });
+	await first.close("quit");
+	patterns = ["openai-codex/gpt-6-luna", "openai-codex/gpt-6.1-terra"];
+	const second = await pi.serve(undefined, { reason: "reload" });
+	cleanups.push(() => second.close());
+	assert.deepEqual(asked, [patterns]);
+	assert.deepEqual(allowedRefs(second.tools), ["openai-codex/gpt-6-luna", "openai-codex/gpt-6.1-terra"]);
+	assert.deepEqual(allowedRefs(second.host().ports.models()), ["openai-codex/gpt-6-luna", "openai-codex/gpt-6.1-terra"]);
+});
+
+test("the subagent tool says why a known model is refused and how to fix it", async () => {
+	const sdkExtra = { SettingsManager: { create: () => ({ getEnabledModels: () => ["openai-codex/gpt-6.1-terra"] }) } };
+	const registry = { getAll: () => [model("gpt-6-luna"), model("gpt-6.1-terra")] };
+	const pi = fakePi(undefined, sdkExtra, { modelRegistry: registry });
+	pi.ctx.scopedModels = [{ model: model("gpt-6-luna") }];
+	const served = await pi.serve();
+	cleanups.push(() => served.close());
+	const tool = subagentTool(served.tools, "main");
+	await assert.rejects((tool.execute as never as (...args: unknown[]) => Promise<unknown>)("id", { task: "Check", model: "openai-codex/gpt-6.1-terra" }, undefined, undefined),
+		/is not one of the allowed models: openai-codex\/gpt-6-luna\. openai-codex\/gpt-6\.1-terra is in enabledModels but not in this session's model scope\. Run \/reload, or enable it with \/scoped-models\./);
+	await assert.rejects((tool.execute as never as (...args: unknown[]) => Promise<unknown>)("id", { task: "Check", model: "gpt-9" }, undefined, undefined),
+		(error: Error) => /^"gpt-9" is not one of the allowed models: openai-codex\/gpt-6-luna\.$/.test(error.message));
+});
 
 /** Ports for a module that claims a host later: what it is told. */
 function laterPorts(notices: string[]): HostPorts {

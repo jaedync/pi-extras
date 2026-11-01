@@ -268,8 +268,8 @@ that no set and no session uses is removed after 1 hour.
   for the current session. `PI_RATE_LIMIT_RECOVERY_ROLE=subagent`
   marks external child sessions as detection-only.
 - `PI_SUBAGENTS=off`: disable Subagents. `subagents` in `pi-extras.json`, all
-  optional: `defaultModel` (a model or short name; default: the session's
-  model), `maxConcurrent` (default `4`), `batchMs` (default `2000`),
+  optional: `defaultModel` (a model or short name; default: main's model at
+  the time of the call), `maxConcurrent` (default `4`), `batchMs` (default `2000`),
   `groupWaitMs` (default `60000`), `replyTimeoutMs` (default `600000`),
   `maxRunMinutes` (default `60`, at most `1440`) and `maxRunCost` (US dollars,
   default `null` for no limit), the budget of each run of a child,
@@ -1921,10 +1921,16 @@ a `cwd` of their own. A resume or a restore keeps it.
 
 **Models.** A child may run on any of the session's scoped models
 (`enabledModels`, the list `/scoped-models` shows); short names such as `luna`
-or `opus` work when they match one. Its thinking level is the call's, else the
-one Pi's `modelThinkingLevels` sets for that model, else your default. These
-settings come from the project's `.pi/settings.json` only when main trusts
-the project. Which model suits what is yours to say in a Markdown guide,
+or `opus` work when they match one. The list is read at each call, so a change
+in `/scoped-models` applies at once, and the tool's model list follows at the
+next prompt. After you edit `enabledModels` in `settings.json`, run `/reload`.
+Pi itself keeps its old list after a reload, so subagents resolve the changed
+patterns. When a call names a model that Pi knows but the scope does not
+include, the error says why and how to add it. An empty scope (all models
+selected in `/scoped-models`) gives subagents only main's model. A child's
+thinking level is the call's, else the one Pi's `modelThinkingLevels` sets for
+that model, else your default. These settings come from the project's
+`.pi/settings.json` only when main trusts the project. Which model suits what is yours to say in a Markdown guide,
 `~/.pi/agent/subagent-models.md`:
 
 ```md
