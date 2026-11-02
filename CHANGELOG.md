@@ -9,6 +9,14 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 - Status Plus and Subagents: the compaction count now has a space after its
   mark (`↻ 3`). Many terminal fonts draw `↻` wider than one cell, so the mark
   covered the digit after it.
+- Cache Compaction: a `/reload` keeps the form wakes that the session still
+  waits for. The warmer rebuilds them from the session entries.
+- Cache Compaction: an answer to one form no longer clears the wake of another
+  open form. A feedback message that names no form still clears all of them.
+- Computer use: a value line such as "2 eggs" is no longer read as a row of
+  the accessibility tree, so the index guard keeps its baseline.
+- Computer use: a failed baseline read no longer drops the view without a word.
+  The tool result now says that the next element action has no staleness check.
 
 ## 0.38.5 - 2026-11-02
 
