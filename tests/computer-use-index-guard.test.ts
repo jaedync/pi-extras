@@ -82,8 +82,18 @@ test("parseTree does not read a value line as a row, even when its number is the
 	const tree = parseTree(`${header()}0 standard window Shopping\n\t1 text Value: List\n2 eggs\n\t2 button Done\n</app_state>`);
 	assert.deepEqual(tree?.rows.get("2"), { depth: 1, text: "button Done" });
 	assert.equal(tree?.rows.size, 3);
-	const alone = parseTree(`${header()}0 standard window Shopping\n\t1 text Value: List\n2 eggs\n</app_state>`);
-	assert.equal(alone?.rows.size, 2, "the value line adds no row");
+	const top = parseTree(`${header()}0 standard window Shopping\n\t1 text Value: List\n2 eggs\n2 menu bar\n\t3 File\n</app_state>`);
+	assert.deepEqual(top?.rows.get("2"), { depth: 0, text: "menu bar" }, "an unindented real row replaces it too");
+	assert.equal(top?.rows.size, 4);
+});
+
+test("parseTree keeps the unindented rows of a real tree: the window and the menu bar", () => {
+	// Calculator on macOS, from a recorded get_app_state: the menu bar is a second unindented row.
+	const body = ["0 standard window Calculator, ID: main, Secondary Actions: Raise", "\t1 split group main, SidebarNavigationSplitView", "\t\t2 button Equals", "\t3 close button", "4 menu bar", "\t5 Calculator", "\t6 Edit"].join("\n");
+	const tree = parseTree(`${header()}${body}\n</app_state>`);
+	assert.equal(tree?.rows.size, 7);
+	assert.deepEqual(tree?.rows.get("4"), { depth: 0, text: "menu bar" });
+	assert.deepEqual(tree?.rows.get("6"), { depth: 1, text: "Edit" });
 });
 
 test("identity ignores what changes with normal use: values, flags, help and secondary actions", () => {
