@@ -698,11 +698,17 @@ of these must be true:
 - `warm.enabled` is `true` and the model's API is in `warm.apis`.
 - The session, the model and the branch are the same as in the captured
   request.
-- No compaction or background summary is in progress.
+- The request has no fixed thinking budget (`budget_tokens`). A replay with
+  a small output limit changes that budget, and the provider then misses the
+  cache. The log shows `thinking-budget` for each such request.
 - A wake is pending, or a tool call is running now. Wakes are a running shell
-  job, a running subagent, a form or page from `artifact_ask` or
-  `artifact_publish` without `watch: false`, and a `pi-extras:wake-pending`
-  event.
+  job, a running subagent, a form from `artifact_ask` without
+  `watch: false`, and a `pi-extras:wake-pending` event. A form wake ends
+  when its feedback comes or when the user sends a new prompt.
+
+If a compaction or a background summary is in progress, or the agent is
+running with no tool call, the warm waits. It tries again every 30 seconds
+until half of the margin before expiry has passed.
 
 Warming stops when one of these is true:
 
@@ -713,7 +719,9 @@ Warming stops when one of these is true:
   five-minute cache, this stops warming after about one hour.
 - The timer ran too late, for example after the machine slept.
 - A warm failed. The extension does not send it again.
-- A real request started. It stops a warm that is in progress.
+- A real request started. It stops a warm that is in progress. If the
+  provider reported usage for the stopped warm, the extension records it as
+  a warm. If not, the log shows `aborted-sent` with the estimated cost.
 
 Each warm adds a `pi-extras.cache-warm` entry to the session with the
 provider, the model and the usage. Status Plus and the usage limits count it
@@ -724,7 +732,9 @@ and the cost. It never holds provider text. A warm to Meridian uses the
 hold the main session's turn lock. Subagents warm as well while they wait for
 their own shell jobs. A subagent that finished has no wake, so it does not
 warm. Pi's own cache warmer stops after 30 minutes idle and needs
-`promptCache` in `models.json`; this one does not.
+`promptCache` in `models.json`; this one does not. For the APIs in
+`warm.apis`, the extension tells Pi's cache warmer to stop, so the two do not
+both warm the same request.
 
 Another extension can announce a wake with
 `pi.events.emit("pi-extras:wake-pending", { sessionId, key, pending })`.
@@ -786,7 +796,7 @@ the room is too small, Pi's own compaction runs with the reason
       "maxHours": 8,
       "minTokens": 20000,
       "apis": ["anthropic-messages"],
-      "formTools": ["artifact_ask", "artifact_publish"]
+      "formTools": ["artifact_ask"]
     }
   }
 }
@@ -803,7 +813,7 @@ the room is too small, Pi's own compaction runs with the reason
   real request, more than 0 and up to 48 (default 8); `minTokens`, the
   smallest prompt to warm (default 20,000); `apis`, the APIs to warm
   (default `["anthropic-messages"]`); `formTools`, the tools whose result
-  waits for feedback (default `["artifact_ask", "artifact_publish"]`). A
+  waits for feedback (default `["artifact_ask"]`). A
   name also matches with an MCP prefix, such as `mcp__oc__artifact_ask`.
 - `idleSeconds`: per provider, how long after the last request the cache
   counts as warm, from 0 to 86400 (0 means never use the cache path). The

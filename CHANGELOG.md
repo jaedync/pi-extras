@@ -14,6 +14,8 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   write. Warming stops after 8 hours, when no wake is pending, when a warm
   fails, or when the warms would cost more than one miss. It is on by
   default. Set `cacheCompaction.warm.enabled: false` to turn it off.
+  For the APIs that it warms, it stops Pi's own cache warmer. A request
+  with a fixed thinking budget is not warmed.
 - Other extensions can announce a pending wake with the
   `pi-extras:wake-pending` event.
 - Status Plus and the usage limits count the spend of each warm.
