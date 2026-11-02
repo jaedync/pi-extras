@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadConfig } from "../lib/cache-compaction/core.ts";
-import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WakeSet, artifactWakes, feedbackIds, formWakeKey, retryAt, payloadThinkingBudget, cacheLifetimeMs, loadWarmConfig, readWakePending, warmCostEstimate, warmDelayMs, warmStop } from "../lib/cache-compaction/warm.ts";
+import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WakeSet, artifactWakes, feedbackIds, formWakeKey, openFormWakes, retryAt, payloadThinkingBudget, cacheLifetimeMs, loadWarmConfig, readWakePending, warmCostEstimate, warmDelayMs, warmStop } from "../lib/cache-compaction/warm.ts";
 
 test("warm config defaults on, with an 8-hour cap, a 20k floor and the Anthropic API", () => {
 	assert.deepEqual(loadWarmConfig(undefined), { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["artifact_ask"] });
@@ -123,6 +123,13 @@ test("a thinking budget in the payload is found for each API shape", () => {
 	assert.equal(payloadThinkingBudget(undefined), undefined);
 });
 
+const formResult = (toolCallId: string, id: string | undefined, watching = true) => ({
+	type: "message",
+	message: { role: "toolResult", toolCallId, toolName: "artifact_ask", content: [], isError: false, timestamp: 1, details: id === undefined ? {} : { tool: "ask", watching, form: { id, url: `https://artifact.test/${id}`, role: "form" } } },
+});
+const userEntry = { type: "message", message: { role: "user", content: "Task.", timestamp: 1 } };
+const feedbackEntry = (...ids: string[]) => ({ type: "message", message: { role: "custom", customType: "artifact-feedback", content: "answers", display: true, timestamp: 2, ...(ids.length > 0 ? { details: { changes: ids.map((id) => ({ kind: "answer", artifact_id: id })) } } : {}) } });
+
 test("a form wake is keyed by the form's id, so its feedback can find it", () => {
 	assert.equal(formWakeKey("call-1", { tool: "ask", form: { id: "f7", url: "https://artifact.test/f7", role: "form" } }), "artifact:f7");
 	assert.equal(formWakeKey("call-1", { tool: "publish", pages: [{ id: "p2" }] }), "artifact:p2");
@@ -141,4 +148,15 @@ test("feedback answers only the forms it names, and all of them when it names no
 	assert.equal(wakes.size, 2, "the other form and the background job stay");
 	wakes.answer(["f9"]);
 	assert.equal(wakes.size, 1, "a form the wakes do not know clears every form");
+});
+
+test("a reload rebuilds the form wakes its entries still wait for", () => {
+	const tools = ["artifact_ask"];
+	assert.deepEqual(openFormWakes([userEntry, formResult("c1", "f1")], tools), ["artifact:f1"]);
+	assert.deepEqual(openFormWakes([userEntry, formResult("c1", "f1"), feedbackEntry("f1")], tools), [], "the answer closed it");
+	assert.deepEqual(openFormWakes([userEntry, formResult("c1", "f1"), formResult("c2", "f2"), feedbackEntry("f1")], tools), ["artifact:f2"], "only the named form closed");
+	assert.deepEqual(openFormWakes([userEntry, formResult("c1", "f1"), userEntry], tools), [], "a later prompt answers every form");
+	assert.deepEqual(openFormWakes([userEntry, formResult("c1", undefined)], tools), ["artifact:c1"], "a result with no id keeps its call id");
+	assert.deepEqual(openFormWakes([userEntry, formResult("c1", "f1", false)], tools), [], "a form made with watch false is no wake");
+	assert.deepEqual(openFormWakes([userEntry, { type: "message", message: { role: "toolResult", toolCallId: "c3", toolName: "bash", content: [], isError: false, timestamp: 1 } }], tools), [], "another tool is no wake");
 });

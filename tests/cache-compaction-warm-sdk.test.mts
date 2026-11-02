@@ -197,6 +197,22 @@ test("a watched artifact form is a wake until its feedback arrives", { timeout: 
 	assert.equal(f.warms().length, 1, "feedback cleared the wake");
 });
 
+test("a reload rebuilds the form wake the session still waits for", { timeout: 15000 }, async (t) => {
+	const f = await fixture(); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	assert.equal(f.live().length, 1);
+	// The form's result is in the session when the extension reloads and the instance is new.
+	f.session.sessionManager.appendMessage({ role: "toolResult", toolCallId: "c1", toolName: "artifact_ask", content: [{ type: "text", text: "Form ready." }], isError: false, timestamp: Date.now(), details: { tool: "ask", watching: true, form: { id: "f1", url: "https://artifact.test/f1", role: "form" } } } as any);
+	await f.session.extensionRunner.emit({ type: "session_start", reason: "reload" });
+	// A message that starts a run keeps the form wakes, and its request plans the next warm.
+	f.send({ customType: "shell-job-complete", content: "job done", display: true }, { triggerTurn: true });
+	for (let i = 0; i < 20 && f.mains().length < 2; i++) await tick();
+	await f.session.agent.waitForIdle?.();
+	assert.equal(f.mains().length, 2);
+	await f.fire();
+	assert.equal(f.warms().length, 1, "the reloaded warmer knows the form is still open");
+});
+
 test("feedback for one form leaves the other form's wake open", { timeout: 15000 }, async (t) => {
 	const f = await fixture(); t.after(() => f.close());
 	await f.session.prompt("Task.");

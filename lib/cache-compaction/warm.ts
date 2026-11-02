@@ -179,3 +179,29 @@ export function feedbackIds(details: unknown): string[] {
 	if (!object(details) || !Array.isArray(details.changes)) return [];
 	return details.changes.flatMap((change) => (object(change) && typeof change.artifact_id === "string" && change.artifact_id.length > 0 ? [change.artifact_id] : []));
 }
+
+/**
+ * The form wakes that a session's entries still wait for. A reload makes a new warmer,
+ * and the entries are the only record of a form that the session waits on: each watched
+ * artifact result after which no user prompt and no feedback for it came.
+ */
+export function openFormWakes(entries: readonly unknown[], tools: readonly string[]): string[] {
+	const open = new Set<string>();
+	const answer = (ids: readonly string[]) => {
+		const keys = namedWakes(ids, (key) => open.has(key));
+		if (keys.length === 0) open.clear();
+		else for (const key of keys) open.delete(key);
+	};
+	for (const entry of entries) {
+		const message = object(entry) && object(entry.message) ? entry.message : undefined;
+		if (!message) continue;
+		if (message.role === "user") { open.clear(); continue; }
+		if (message.role === "custom" && message.customType === ARTIFACT_FEEDBACK) { answer(feedbackIds(message.details)); continue; }
+		if (message.role !== "toolResult" || message.isError === true || typeof message.toolCallId !== "string") continue;
+		if (!toolMatches(tools, typeof message.toolName === "string" ? message.toolName : "")) continue;
+		// A result of a call made with watch false says so; an older result says nothing and stays open.
+		if (object(message.details) && message.details.watching === false) continue;
+		open.add(formWakeKey(message.toolCallId, message.details));
+	}
+	return [...open];
+}

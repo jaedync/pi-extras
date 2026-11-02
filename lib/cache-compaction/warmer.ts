@@ -1,7 +1,7 @@
 import { convertToLlm, type ExtensionAPI, type ExtensionContext, type SessionProjection } from "@earendil-works/pi-coding-agent";
 import { fallbackReason, fingerprint, mergePayload, reconcile, type Config, type RequestEffort, type RequestIdentity, type Snapshot } from "./core.ts";
 import { backgroundHeaders } from "./background.ts";
-import { ARTIFACT_FEEDBACK, CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WARM_MAX_TOKENS, WakeSet, artifactWakes, cacheLifetimeMs, feedbackIds, formWakeKey, payloadThinkingBudget, readWakePending, retryAt, warmCostEstimate, warmDelayMs, warmStop } from "./warm.ts";
+import { ARTIFACT_FEEDBACK, CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WARM_MAX_TOKENS, WakeSet, artifactWakes, cacheLifetimeMs, feedbackIds, formWakeKey, openFormWakes, payloadThinkingBudget, readWakePending, retryAt, warmCostEstimate, warmDelayMs, warmStop } from "./warm.ts";
 import { BACKGROUND_EVENT, BACKGROUND_REQUEST_EVENT, backgroundWork } from "../tab-status/events.ts";
 import { operationalLine } from "../operational-log.ts";
 import { routedModel } from "../routed-model.ts";
@@ -176,6 +176,11 @@ export function createWarmer(d: WarmerDeps): Warmer {
 	pi.on("session_start", (_event, context) => {
 		resetSession();
 		try { ctx = context; sessionId = context.sessionManager.getSessionId(); } catch { ctx = undefined; }
+		// A reload installs a new warmer: only the entries still know which form the session waits for.
+		if (context) {
+			try { for (const key of openFormWakes(context.sessionManager.getBranch(), d.policy().warm.formTools)) wakes.set(key, true); }
+			catch { /* No branch to read: the session starts with no form wake. */ }
+		}
 		// Shell jobs and subagents publish their counts on request; a reload may keep running work.
 		try { pi.events?.emit?.(BACKGROUND_REQUEST_EVENT, { sessionId }); } catch { /* optional */ }
 	});
