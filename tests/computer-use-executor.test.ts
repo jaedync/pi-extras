@@ -33,7 +33,10 @@ test("get_app_state gives a tree and a screenshot handle that emitImage turns in
 	const { session } = fakeSession(() => ({ content: [{ type: "text", text: "tree" }, { type: "image", data: "AAAA", mimeType: "image/png" }], isError: false }));
 	const executor = new CodeExecutor({ session });
 	const result = await executor.execute(`const s = await sky.get_app_state({ app: "Finder" }); emit(s.text); emit(typeof s.screenshot.data); emitImage(s.screenshot);`, { approve });
-	assert.deepEqual(result.content, [{ type: "text", text: "tree" }, { type: "text", text: "undefined" }, { type: "image", data: "AAAA", mimeType: "image/png" }]);
+	// "tree" is neither a full tree nor a diff, so the guard can keep no baseline for Finder.
+	const note = result.content.find((block) => block.type === "text" && block.text.includes("no baseline"));
+	assert.ok(note, "the guard reports the baseline it could not read");
+	assert.deepEqual(result.content.filter((block) => block !== note), [{ type: "text", text: "tree" }, { type: "text", text: "undefined" }, { type: "image", data: "AAAA", mimeType: "image/png" }]);
 });
 
 test("store survives between runs and must stay JSON", async () => {

@@ -253,6 +253,23 @@ test("when the code gets a diff, the guard reads a full tree once for its baseli
 	assert.deepEqual(sky.calls.map((call) => [call.tool, call.args.disableDiff === true]), [["get_app_state", false], ["get_app_state", false], ["get_app_state", true], ["click", false]]);
 });
 
+test("a failed baseline read tells the model that the check is gone, and the call still runs", async () => {
+	const calls: { tool: string; args: Record<string, unknown> }[] = [];
+	const session = { call: async (tool: string, args: Record<string, unknown>) => {
+		calls.push({ tool, args });
+		if (tool !== "get_app_state") return text(`${tool} done`);
+		if (args.disableDiff === true) return text("-10005: timeoutReached", true);
+		return text("<app_state_diff>\n~ 15 button Divide\n</app_state_diff>");
+	} };
+	const executor = new CodeExecutor({ session });
+	const result = await executor.execute(`await sky.get_app_state({ app: "Calculator" }); await sky.click({ app: "Calculator", element_index: "15" }); emit("clicked");`, { approve });
+	assert.equal(result.error, undefined);
+	const said = result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
+	assert.match(said, /no baseline/i);
+	assert.match(said, /sky\.get_app_state/);
+	assert.deepEqual(calls.map((call) => call.tool), ["get_app_state", "get_app_state", "click"], "the action still goes");
+});
+
 test("coordinate clicks and keys are never refused, and an app without a read is not checked", async () => {
 	const sky = fakeSky({ tree: BASIC });
 	const executor = new CodeExecutor({ session: sky.session });

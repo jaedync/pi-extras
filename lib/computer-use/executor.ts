@@ -243,6 +243,11 @@ class Run {
 		if (kept.length > 0 || room > 0) this.content.push({ type: "text", text: kept });
 	}
 
+	/** A guard's note reaches the model as text of the result, as an approval note does. */
+	private guardNote(text: string): void {
+		this.content.push({ type: "text", text });
+	}
+
 	private emitImage(id: string): void {
 		const image = this.screenshot(id);
 		if (!image) return this.stop("that screenshot is no longer available; take a new one");
@@ -280,7 +285,8 @@ class Run {
 			const result = await this.executor.session.call(message.method, sent, { approve, signal: this.options.signal });
 			startupMs = result.startupMs;
 			if (result.isError) throw new Error(textOf(result) || `${message.method} failed`);
-			await this.guard?.after(message.method, sent, result, read);
+			const note = await this.guard?.after(message.method, sent, result, read);
+			if (note) this.guardNote(note);
 			return result;
 		};
 		try {

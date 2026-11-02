@@ -30,8 +30,8 @@ export interface CallGuard {
 	prepare(method: string, args: Record<string, unknown>): Record<string, unknown>;
 	/** A reason to refuse the call before it is sent, or undefined to send it. */
 	before(method: string, args: Record<string, unknown>, read: Reader): Promise<string | undefined>;
-	/** Told about each call that succeeded. */
-	after(method: string, args: Record<string, unknown>, result: ToolResult, read: Reader): Promise<void>;
+	/** Told about each call that succeeded: a note for the model, or undefined. */
+	after(method: string, args: Record<string, unknown>, result: ToolResult, read: Reader): Promise<string | undefined>;
 }
 
 export interface Row {
@@ -207,25 +207,27 @@ export class IndexGuard implements CallGuard {
 		return refusal;
 	}
 
-	async after(method: string, args: Record<string, unknown>, result: ToolResult, read: Reader): Promise<void> {
-		if (method !== "get_app_state") return;
+	async after(method: string, args: Record<string, unknown>, result: ToolResult, read: Reader): Promise<string | undefined> {
+		if (method !== "get_app_state") return undefined;
 		const key = this.key(args.app);
 		let tree = parseTree(textOf(result));
 		if (!tree) {
 			// A diff: the code saw this moment, so a full read now gives the same baseline.
-			// A failed read only means no baseline: the code's own read already succeeded.
 			const full = await read("get_app_state", { app: args.app, disableDiff: true }).catch(() => undefined);
 			tree = full && !full.isError ? parseTree(textOf(full)) : undefined;
 		}
 		if (!tree) {
+			// A failed read is not an error of the code's call, but without a baseline the next
+			// element action on this app goes out unchecked, and the model must know that.
 			this.views.delete(key);
-			return;
+			return `The index guard has no baseline for the app "${clean(typeof args.app === "string" ? args.app : "", SHOWN_CHARS)}": the full get_app_state read failed. The next element action on this app is sent without a staleness check, so call sky.get_app_state again first.`;
 		}
 		const id = tree.bundleId ? norm(tree.bundleId) : key;
 		for (const name of [args.app, id, ...tree.names]) {
 			if (norm(name)) this.aliases.set(norm(name), id);
 		}
 		this.views.set(id, { tree, acted: false, resync: false });
+		return undefined;
 	}
 
 	private async check(view: AppView, app: unknown, index: string, method: string, read: Reader): Promise<string | undefined> {
