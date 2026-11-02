@@ -2641,10 +2641,11 @@ script's last `get_app_state` of that app. Before an element action that follows
 another action on the same app, it reads the full tree again. If the element at
 that index is a different one, the call fails with a "stale" error and the action
 is not sent. To be the same element, it must have the same level in the tree and
-the same role, title, description and ID. At least half of its first child
-elements must also match, so a list row that now shows another item fails. For a
-scroll, only the element itself counts, because a scroll changes the rows that it
-shows. Its value and state can change. Calls of one script that run at the same time
+the same role, title, description and ID. Its first child elements must also
+match, so a list row that now shows another item fails. For a scroll, only the
+element itself counts, because a scroll changes the rows that it shows. Values
+can change. A child label that shows state ("4 unread", "Play") causes a
+refusal; a new `get_app_state` clears it. Calls of one script that run at the same time
 (`Promise.all`) go one at a time, so no call can move the layout between the check
 and the action.
 

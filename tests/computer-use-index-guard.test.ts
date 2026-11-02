@@ -385,19 +385,33 @@ test("a second scroll of a list passes, though the scroll changed the rows that 
 	assert.equal(sky.calls.filter((call) => call.tool === "scroll").length, 2);
 });
 
-test("a row passes when one of its two child labels changed with state, and fails when both changed", async () => {
-	const row = (unread: number, name = "Inbox") => `${header()}0 standard window Mail\n\t1 row\n\t\t2 text ${name}\n\t\t3 text ${unread} unread\n</app_state>`;
-	for (const [next, ok] of [[row(3), true], [row(3, "Sent"), false]] as const) {
-		const { sky, session } = changingSky(row(4), "click", next);
+test("a row is refused when a child label changed, and passes when only a child's value changed", async () => {
+	const row = (name: string, value: string) => `${header()}0 standard window Files\n\t1 row\n\t\t2 image\n\t\t3 text ${name}\n\t\t4 text field Description: Note, Value: ${value}\n</app_state>`;
+	for (const [next, ok] of [[row("Report.pdf", "edited"), true], [row("Taxes.pdf", "draft"), false]] as const) {
+		const { sky, session } = changingSky(row("Report.pdf", "draft"), "click", next);
 		const executor = new CodeExecutor({ session });
 		const result = await executor.execute(`
 			await sky.get_app_state({ app: "Calculator" });
 			await sky.click({ app: "Calculator", element_index: "1" });
-			await sky.click({ app: "Calculator", element_index: "1" });
+			await sky.perform_secondary_action({ app: "Calculator", element_index: "1", action: "Delete" });
 		`, { approve });
 		assert.equal(result.error === undefined, ok, result.error);
-		assert.equal(sky.calls.filter((call) => call.tool === "click").length, ok ? 2 : 1);
+		assert.equal(sky.calls.some((call) => call.tool === "perform_secondary_action"), ok);
 	}
+});
+
+test("a check read that saw a change in a later line of a multi-line value makes the code's next read full", async () => {
+	const area = (second: string) => `${header()}0 standard window Notes\n\t1 text area Value: line one\nline ${second}\n\t2 button Done\n</app_state>`;
+	const { sky, session } = changingSky(area("two"), "type_text", area("two typed"));
+	const executor = new CodeExecutor({ session });
+	await executor.execute(`
+		await sky.get_app_state({ app: "Calculator" });
+		await sky.type_text({ app: "Calculator", text: " typed" });
+		await sky.click({ app: "Calculator", element_index: "2" });
+		await sky.get_app_state({ app: "Calculator" });
+	`, { approve });
+	const reads = sky.calls.filter((call) => call.tool === "get_app_state").map((call) => call.args.disableDiff === true);
+	assert.deepEqual(reads, [false, true, true]);
 });
 
 test("text after the flags counts as a title, and only a bare number counts as a value", () => {

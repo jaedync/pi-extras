@@ -47,6 +47,8 @@ export interface Tree {
 	readonly names: readonly string[];
 	/** The rows by index. */
 	readonly rows: ReadonlyMap<string, Row>;
+	/** The whole <app_state> block, so a change in any line (a multi-line value) is seen. */
+	readonly raw: string;
 }
 
 const ELEMENT_METHODS = new Set(["click", "perform_secondary_action", "set_value", "select_text", "scroll"]);
@@ -87,7 +89,9 @@ export function parseTree(text: string): Tree | undefined {
 	if (rows.size === 0) return undefined;
 	const bundleId = BUNDLE.exec(text)?.[1];
 	const names = [...new Set([APP_PATH.exec(text)?.[1], WINDOW_APP.exec(text)?.[1]].flatMap((name) => name ? [name, `${name}.app`] : []))];
-	return { rows, names, ...(bundleId ? { bundleId } : {}) };
+	const start = text.indexOf("<app_state>");
+	const end = text.indexOf("</app_state>", start);
+	return { rows, names, raw: text.slice(start, end < 0 ? undefined : end), ...(bundleId ? { bundleId } : {}) };
 }
 
 /**
@@ -133,29 +137,18 @@ export function elementKey(tree: Tree, index: string): ElementKey | undefined {
 
 /**
  * Whether two keys name the same element. A list reload can put a row with the
- * same text at the same index ("row", "cell"); its children (the item's text)
- * tell them apart. A child label can hold state ("4 unread", "Play"), so half
- * of the children must match, not all. A scroll changes the children that a
- * scroll area shows, so for a scroll only the row itself counts.
+ * same text at the same index ("row", "cell"); its children (an icon and the
+ * item's name) tell them apart, so all of them must match. A child label that
+ * holds state ("4 unread", "Play") then causes a refusal; that is safe, and a
+ * new get_app_state clears it, while a partial match could send a Delete to the
+ * wrong item. A scroll changes the children that a scroll area shows, so for a
+ * scroll only the row itself counts.
  */
 export function sameElement(was: ElementKey, now: ElementKey | undefined, method: string): boolean {
 	if (!now || now.self !== was.self) return false;
 	if (method === "scroll") return true;
-	const total = Math.max(was.children.length, now.children.length);
-	if (total === 0) return true;
-	const left = [...now.children];
-	let matched = 0;
-	for (const child of was.children) {
-		const at = left.indexOf(child);
-		if (at >= 0) {
-			matched++;
-			left.splice(at, 1);
-		}
-	}
-	return matched * 2 >= total;
+	return was.children.length === now.children.length && was.children.every((child, at) => now.children[at] === child);
 }
-
-const sameRows = (a: Tree, b: Tree) => a.rows.size === b.rows.size && [...a.rows].every(([index, row]) => b.rows.get(index)?.text === row.text);
 
 interface AppView {
 	readonly tree: Tree;
@@ -249,7 +242,7 @@ export class IndexGuard implements CallGuard {
 			view.checked = current;
 			// Sky diffs the code's next read against this read. When nothing changed, that diff is the
 			// same as one against the code's own read; otherwise the code must get a full tree.
-			if (!sameRows(current, view.tree)) view.resync = true;
+			if (current.raw !== view.tree.raw) view.resync = true;
 		}
 		if (sameElement(elementKey(view.tree, index)!, elementKey(current, index), method)) return undefined;
 		const was = view.tree.rows.get(index)!;
