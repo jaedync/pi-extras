@@ -127,7 +127,9 @@ test("spawnCycle starts the cycle in the store root, not in the session's projec
 	mkdirSync(store);
 	spawnCycle(extras, store, false, (error) => assert.fail(error));
 	const deadline = Date.now() + 10_000;
-	while (!existsSync(out) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+	// The child creates the file before it writes to it, so wait for the content, not only the file.
+	const written = () => existsSync(out) && readFileSync(out, "utf8") !== "";
+	while (!written() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
 	assert.equal(readFileSync(out, "utf8"), realpathSync(store));
 });
 
