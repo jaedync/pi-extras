@@ -33,6 +33,11 @@ export interface LimitEntry {
 	/** Budget meters: spend so far and the cap, in USD, for the usage tool's dollar figures. */
 	usedUsd?: number;
 	limitUsd?: number;
+	/**
+	 * A proxy's monthly extra-usage cap in USD. Requests stop at the cap, so Usage Guard
+	 * warns on it like a window (usedUsd over limitUsd). Other balances are never capped.
+	 */
+	capped?: boolean;
 	/** Prepaid credits left, in USD. */
 	balanceUsd?: number;
 	resetApprox?: boolean;
@@ -407,10 +412,11 @@ export function parseProxyQuota(body: unknown, now = Date.now()): LimitEntry[] {
 		const prefix = extra.currency === "USD" || extra.currency === undefined ? "$" : `${String(extra.currency)} `;
 		entries.push({
 			label: "",
+			key: "extra_usage",
 			kind: "budget",
 			remainingText: `${prefix}${formatMoney(extra.monthlyLimit - extra.usedCredits)}/${prefix}${formatMoney(extra.monthlyLimit)}`,
-			// Dollar fields only for USD, so a sum never mixes currencies.
-			...(prefix === "$" ? { usedUsd: extra.usedCredits, limitUsd: extra.monthlyLimit } : {}),
+			// Dollar fields only for USD, so a sum never mixes currencies; the cap warns only in USD.
+			...(prefix === "$" ? { usedUsd: extra.usedCredits, limitUsd: extra.monthlyLimit, capped: true } : {}),
 		});
 	}
 

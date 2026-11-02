@@ -234,7 +234,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			"Report subscription usage limits for the active model: rolling windows (5h, 7d, model-specific weekly), " +
 			"percent used, thresholds, reset time, seconds until reset, a resume delay, and usage pace. " +
 			"Pace estimates usage at reset from the average rate since the window began; early windows omit the projection. " +
-			"Balances (budget, credits) are reported but never warned on. " +
+			"Balances (budget, credits) are reported but never warned on, except a proxy's monthly extra-usage cap, " +
+			"which warns at the same bands as a window. " +
 			"Dollar figures: each limit's `dollars` gives spend, size and remaining USD (implied for subscription windows, " +
 			"plan caps per model for OpenCode Go, the provider's own meter or balance otherwise); a monthly meter adds " +
 			"business days left and a per-business-day share. The top-level `dollars` gives spend today in the local time zone " +

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { LimitSnapshot } from "../lib/limit-store.ts";
-import type { LimitEntry } from "../lib/status-plus-logic.ts";
+import { parseProxyQuota, type LimitEntry } from "../lib/status-plus-logic.ts";
 import {
 	CYCLE_TOLERANCE_MS,
 	DEFAULT_GUARD_CONFIG,
@@ -312,6 +312,36 @@ test("the report keeps governing windows by default and explains the gaps", () =
 		"anthropic/5h/true", "anthropic/7d/true", "anthropic/7d-fable/false", "openai-codex/7d/false",
 	]);
 	assert.equal(everything.limits[3].status, "full-but-allowed");
+});
+
+/** The proxy's quota body with only a monthly extra-usage cap of $100. */
+function extraUsage(usedCredits: number): Array<[string, LimitSnapshot]> {
+	const body = { buckets: [], extraUsage: { isEnabled: true, monthlyLimit: 100, usedCredits, currency: "USD" } };
+	return [["anthropic", snapshot(parseProxyQuota(body, NOW))]];
+}
+
+test("a proxy extra-usage cap warns at the bands like a window, with the spend and the cap in dollars", () => {
+	const fired = new Set<string>();
+	const warnings = pendingWarnings(extraUsage(96), SONNET, ON, undefined, fired, NOW);
+	assert.equal(warnings.length, 1);
+	assert.equal(warnings[0].threshold, 95);
+	assert.equal(warnings[0].final, true);
+	const text = warningMessage(warnings[0], ON, NOW);
+	assert.match(text, /^Usage warning: Extra usage: \$96 of the \$100 monthly cap is spent \(96%\)\. Requests stop at the cap\./);
+	assert.doesNotMatch(text, /warning point/);
+	for (const warning of warnings) fired.add(warning.key);
+	assert.deepEqual(pendingWarnings(extraUsage(97), SONNET, ON, undefined, fired, NOW), [], "one warning per threshold");
+});
+
+test("a proxy extra-usage cap below its first band stays silent", () => {
+	assert.deepEqual(pendingWarnings(extraUsage(50), SONNET, ON, undefined, new Set(), NOW), []);
+});
+
+test("an Enterprise budget and other balances never warn, even at 96% of their cap", () => {
+	const enterprise: Array<[string, LimitSnapshot]> = [["anthropic", snapshot([
+		{ label: "", kind: "budget", remainingText: "$4/$100", usedUsd: 96, limitUsd: 100 },
+	])]];
+	assert.deepEqual(pendingWarnings(enterprise, SONNET, ON, undefined, new Set(), NOW), []);
 });
 
 test("per-minute rate limits from headers are reported but never warned on", () => {

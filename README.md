@@ -862,8 +862,10 @@ when set up, Tokenfold and OpenRouter (see [Dollar figures](#dollar-figures)).
 `PI_OFFLINE` stops the Tokenfold and OpenRouter requests. Only windows that
 govern the active model count: provider-wide windows always, model-specific ones
 (such as an Anthropic `seven_day_fable` bucket) only when the active model id
-carries that family. Balances (Enterprise spend, prepaid credits) and per-minute
-rate limits taken from response headers are reported but never warned on.
+carries that family. Balances (Enterprise spend, prepaid credits) are reported but
+never warned on, and so are per-minute rate limits taken from response headers.
+The exception is a proxy's monthly extra-usage cap: it warns at the same bands as
+a window, because requests stop at the cap.
 
 - OpenAI through Sign in with ChatGPT (`/login openai`) gives apps no usage
   endpoint and no rate-limit headers (openai/codex#54219). Its requests count

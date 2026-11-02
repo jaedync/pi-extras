@@ -4,7 +4,7 @@
  * `usage` tool returns. No I/O; the extension wires this to Pi.
  */
 import type { LimitSnapshot } from "./limit-store.ts";
-import { formatDuration, quotaKeyParts, quotaLabel, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
+import { formatDuration, formatMoney, formatMoneyLike, quotaKeyParts, quotaLabel, type LimitEntry, type LimitKind } from "./status-plus-logic.ts";
 import { localTime } from "./usage-time.ts";
 import { LIMIT_POLLERS } from "./status-plus-limits.ts";
 import { familyMembers, providerFamily } from "./provider-family.ts";
@@ -153,7 +153,8 @@ function thresholdLapsed(
 	}
 	if (!current) return false;
 	if (now !== undefined && current.resetMs !== undefined && current.resetMs <= now) return true;
-	return current.usedPct !== undefined && Number.isFinite(parts.threshold) && current.usedPct < parts.threshold;
+	const pct = guardPct(current);
+	return pct !== undefined && Number.isFinite(parts.threshold) && pct < parts.threshold;
 }
 
 /**
@@ -234,6 +235,17 @@ export function alreadyFired(
 	return false;
 }
 
+/**
+ * Percent a limit warns on: a window's own reading, or a proxy's monthly extra-usage
+ * cap as spend over the cap. Other balances have no percent and never warn.
+ */
+function guardPct(entry: LimitEntry): number | undefined {
+	if (entry.usedPct !== undefined) return entry.usedPct;
+	const { usedUsd, limitUsd } = entry;
+	if (entry.capped !== true || usedUsd === undefined || limitUsd === undefined || !Number.isFinite(usedUsd) || !(limitUsd > 0)) return undefined;
+	return (usedUsd / limitUsd) * 100;
+}
+
 function activeWindows(
 	snapshots: Iterable<[string, LimitSnapshot]>,
 	model: ActiveModel,
@@ -244,11 +256,13 @@ function activeWindows(
 	for (const [provider, snapshot] of snapshots) {
 		if (provider !== limitKey(model.provider)) continue;
 		for (const entry of snapshot.entries) {
-			if (entryKind(entry) !== "window" || entry.usedPct === undefined) continue;
+			const pct = guardPct(entry);
+			if (pct === undefined) continue;
+			if (entry.capped !== true && (entryKind(entry) !== "window" || entry.usedPct === undefined)) continue;
 			if (!entryApplies(entry, model)) continue;
 			// A reset already in the past means the snapshot is stale, not that the window is full.
 			if (entry.resetMs !== undefined && entry.resetMs <= now) continue;
-			result.push({ provider, entry });
+			result.push({ provider, entry: entry.capped === true ? { ...entry, usedPct: pct } : entry });
 		}
 	}
 	return result;
@@ -354,6 +368,10 @@ export function resetTiming(entry: LimitEntry, config: GuardConfig, now: number,
  * finished rather than cut short.
  */
 function guidance(warning: Warning, timing: ResetTiming | undefined, config: GuardConfig): string {
+	if (warning.entry.capped) {
+		return "The monthly extra-usage cap cannot be waited out. Finish anything that fits in the remaining headroom; " +
+			"otherwise stop at a clean checkpoint (commit or record state) and summarize where things stand.";
+	}
 	if (warning.reason === "budget") {
 		return "The session budget is a warning point, not a limit: say in your next status note that the window reached it, " +
 			"then keep working on the task. Stop here only if the user told you to stop at this point.";
@@ -390,7 +408,9 @@ export function warningMessage(warning: Warning, config: GuardConfig, now: numbe
 		: "";
 	const paceClause = paceText(usagePace(entry, now, timeZone), timing?.resetsInSeconds);
 	const pace = paceClause ? ` Pace: ${paceClause}.` : "";
-	const cause = reason === "exhausted"
+	const cause = warning.entry.capped
+		? `Extra usage: $${formatMoneyLike(warning.entry.usedUsd ?? 0, warning.entry.limitUsd ?? 0)} of the $${formatMoney(warning.entry.limitUsd ?? 0)} monthly cap is spent (${pct}%). Requests stop at the cap.`
+		: reason === "exhausted"
 		? `${name} is blocked by the provider (${pct}% used).`
 		: reason === "budget"
 			? `${name} reached the session budget: ${pct}% used, budget ${threshold}%.`

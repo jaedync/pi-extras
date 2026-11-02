@@ -4,6 +4,12 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 ## Unreleased
 
+### Changed
+
+- Usage Guard warns when a proxy's monthly extra-usage cap nears its limit,
+  at the same bands as a window. The warning gives the spend and the cap in dollars.
+- Enterprise spend and other balances still never warn. Warnings are off by default.
+
 ### Fixed
 
 - Status Plus and Subagents: the compaction count now has a space after its
