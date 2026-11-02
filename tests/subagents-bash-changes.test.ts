@@ -27,7 +27,7 @@ function repository(t: TestContext): string {
 	return realpathSync(root);
 }
 
-test("status paths read porcelain -z, a rename's source included", async (t) => {
+test("status paths read porcelain -z, a rename's source included", () => {
 	assert.deepEqual([...statusPaths(" M a.txt\0R  new name.txt\0old name.txt\0?? dir/b.txt\0")], [
 		["a.txt", " M"], ["new name.txt", "R "], ["old name.txt", "R "], ["dir/b.txt", "??"],
 	]);
