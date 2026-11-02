@@ -117,6 +117,17 @@ export class WakeSet {
 	get size(): number { return this.#keys.size; }
 	set(key: string, pending: boolean): void { if (pending) this.#keys.add(key); else this.#keys.delete(key); }
 	clearPrefix(prefix: string): void { for (const key of [...this.#keys]) if (key.startsWith(prefix)) this.#keys.delete(key); }
+	/** A user prompt answers or replaces every open form. */
+	clearForms(): void { this.clearPrefix(ARTIFACT_PREFIX); }
+	/**
+	 * The answer to one form. With two forms open, a feedback message names the one it
+	 * answers, so only that wake goes; a message that names none of them clears them all.
+	 */
+	answer(ids: readonly string[]): void {
+		const keys = namedWakes(ids, (key) => this.#keys.has(key));
+		if (keys.length === 0) return this.clearForms();
+		for (const key of keys) this.#keys.delete(key);
+	}
 	clear(): void { this.#keys.clear(); }
 }
 
@@ -131,4 +142,40 @@ const toolMatches = (tools: readonly string[], name: string) => tools.some((tool
 /** A form or page that sends feedback back to the session, unless the call opted out of watching. */
 export function artifactWakes(tools: readonly string[], name: string, args: unknown, isError: boolean): boolean {
 	return !isError && toolMatches(tools, name) && !(object(args) && args.watch === false);
+}
+
+/** The custom type of the message the artifact extension sends with an answer or a comment. */
+export const ARTIFACT_FEEDBACK = "artifact-feedback";
+const ARTIFACT_PREFIX = "artifact:";
+
+/** The wake keys for the ids that a set already holds; empty means that it holds none of them. */
+function namedWakes(ids: readonly string[], has: (key: string) => boolean): string[] {
+	return ids.map((id) => `${ARTIFACT_PREFIX}${id}`).filter(has);
+}
+
+const idOf = (value: unknown): string | undefined => (object(value) && typeof value.id === "string" && value.id.length > 0 ? value.id : undefined);
+
+/** The id that the artifact extension gave the form (or page) of a call. */
+function artifactId(details: unknown): string | undefined {
+	if (!object(details)) return undefined;
+	const form = idOf(details.form);
+	if (form) return form;
+	for (const page of Array.isArray(details.pages) ? details.pages : []) {
+		const id = idOf(page);
+		if (id) return id;
+	}
+	return undefined;
+}
+
+/**
+ * The wake key of an artifact tool result: the form's id, which its feedback message
+ * names, so that an answer finds its own wake. A result without an id (an older
+ * extension) keeps the call id, and a feedback message then clears every form wake.
+ */
+export const formWakeKey = (toolCallId: string, details: unknown): string => `${ARTIFACT_PREFIX}${artifactId(details) ?? toolCallId}`;
+
+/** The artifacts that a feedback message answers, from the details that the artifact extension sends. */
+export function feedbackIds(details: unknown): string[] {
+	if (!object(details) || !Array.isArray(details.changes)) return [];
+	return details.changes.flatMap((change) => (object(change) && typeof change.artifact_id === "string" && change.artifact_id.length > 0 ? [change.artifact_id] : []));
 }

@@ -1,7 +1,7 @@
 import { convertToLlm, type ExtensionAPI, type ExtensionContext, type SessionProjection } from "@earendil-works/pi-coding-agent";
 import { fallbackReason, fingerprint, mergePayload, reconcile, type Config, type RequestEffort, type RequestIdentity, type Snapshot } from "./core.ts";
 import { backgroundHeaders } from "./background.ts";
-import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WARM_MAX_TOKENS, WakeSet, artifactWakes, cacheLifetimeMs, payloadThinkingBudget, readWakePending, retryAt, warmCostEstimate, warmDelayMs, warmStop } from "./warm.ts";
+import { ARTIFACT_FEEDBACK, CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WARM_MAX_TOKENS, WakeSet, artifactWakes, cacheLifetimeMs, feedbackIds, formWakeKey, payloadThinkingBudget, readWakePending, retryAt, warmCostEstimate, warmDelayMs, warmStop } from "./warm.ts";
 import { BACKGROUND_EVENT, BACKGROUND_REQUEST_EVENT, backgroundWork } from "../tab-status/events.ts";
 import { operationalLine } from "../operational-log.ts";
 import { routedModel } from "../routed-model.ts";
@@ -40,7 +40,6 @@ export interface Warmer {
 }
 
 type Usage = { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens?: number; cost?: { total?: number } };
-const ARTIFACT_PREFIX = "artifact:";
 
 export function createWarmer(d: WarmerDeps): Warmer {
 	const { pi } = d;
@@ -191,7 +190,7 @@ export function createWarmer(d: WarmerDeps): Warmer {
 		} catch { return undefined; }
 	});
 	// A new prompt from the user answers or replaces any open form; a delivered message does not.
-	pi.on("before_agent_start", (event) => { if (event.messageType === "user") wakes.clearPrefix(ARTIFACT_PREFIX); });
+	pi.on("before_agent_start", (event) => { if (event.messageType === "user") wakes.clearForms(); });
 	pi.events?.on?.(BACKGROUND_EVENT, (data) => {
 		const work = backgroundWork(data);
 		if (work && mine(work.sessionId)) wakes.set(`background:${work.source}`, work.count > 0);
@@ -208,12 +207,12 @@ export function createWarmer(d: WarmerDeps): Warmer {
 		tools.delete(event.toolCallId);
 		const args = toolArgs.get(event.toolCallId);
 		toolArgs.delete(event.toolCallId);
-		if (artifactWakes(d.policy().warm.formTools, event.toolName, args, event.isError)) wakes.set(`${ARTIFACT_PREFIX}${event.toolCallId}`, true);
+		if (artifactWakes(d.policy().warm.formTools, event.toolName, args, event.isError)) wakes.set(formWakeKey(event.toolCallId, event.result?.details), true);
 	});
 	pi.on("agent_end", () => { running = false; tools.clear(); toolArgs.clear(); });
 	pi.on("message_end", (event) => {
-		const message = event.message as { role?: string; customType?: string };
-		if (message.role === "custom" && message.customType === "artifact-feedback") wakes.clearPrefix(ARTIFACT_PREFIX);
+		const message = event.message as { role?: string; customType?: string; details?: unknown };
+		if (message.role === "custom" && message.customType === ARTIFACT_FEEDBACK) wakes.answer(feedbackIds(message.details));
 	});
 
 	return {

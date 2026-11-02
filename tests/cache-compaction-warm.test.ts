@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadConfig } from "../lib/cache-compaction/core.ts";
-import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WakeSet, artifactWakes, retryAt, payloadThinkingBudget, cacheLifetimeMs, loadWarmConfig, readWakePending, warmCostEstimate, warmDelayMs, warmStop } from "../lib/cache-compaction/warm.ts";
+import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WakeSet, artifactWakes, feedbackIds, formWakeKey, retryAt, payloadThinkingBudget, cacheLifetimeMs, loadWarmConfig, readWakePending, warmCostEstimate, warmDelayMs, warmStop } from "../lib/cache-compaction/warm.ts";
 
 test("warm config defaults on, with an 8-hour cap, a 20k floor and the Anthropic API", () => {
 	assert.deepEqual(loadWarmConfig(undefined), { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["artifact_ask"] });
@@ -121,4 +121,24 @@ test("a thinking budget in the payload is found for each API shape", () => {
 	assert.equal(payloadThinkingBudget({ config: { thinkingConfig: { thinkingBudget: 512 } } }), 512);
 	assert.equal(payloadThinkingBudget({ thinking_token_budget: 300 }), 300);
 	assert.equal(payloadThinkingBudget(undefined), undefined);
+});
+
+test("a form wake is keyed by the form's id, so its feedback can find it", () => {
+	assert.equal(formWakeKey("call-1", { tool: "ask", form: { id: "f7", url: "https://artifact.test/f7", role: "form" } }), "artifact:f7");
+	assert.equal(formWakeKey("call-1", { tool: "publish", pages: [{ id: "p2" }] }), "artifact:p2");
+	// An older extension sends no details, and a call id is all there is.
+	assert.equal(formWakeKey("call-1", {}), "artifact:call-1");
+	assert.deepEqual(feedbackIds({ changes: [{ kind: "answer", artifact_id: "f7" }, { kind: "comment" }] }), ["f7"]);
+	assert.deepEqual(feedbackIds(undefined), []);
+});
+
+test("feedback answers only the forms it names, and all of them when it names none", () => {
+	const wakes = new WakeSet();
+	wakes.set("artifact:f1", true);
+	wakes.set("artifact:f2", true);
+	wakes.set("background:shell", true);
+	wakes.answer(["f1"]);
+	assert.equal(wakes.size, 2, "the other form and the background job stay");
+	wakes.answer(["f9"]);
+	assert.equal(wakes.size, 1, "a form the wakes do not know clears every form");
 });

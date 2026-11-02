@@ -197,6 +197,24 @@ test("a watched artifact form is a wake until its feedback arrives", { timeout: 
 	assert.equal(f.warms().length, 1, "feedback cleared the wake");
 });
 
+test("feedback for one form leaves the other form's wake open", { timeout: 15000 }, async (t) => {
+	const f = await fixture(); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	const runner = f.session.extensionRunner;
+	const ask = async (call: string, form: string) => {
+		const details = { tool: "ask", watching: true, form: { id: form, url: `https://artifact.test/${form}`, role: "form" } };
+		await runner.emit({ type: "tool_execution_start", toolCallId: call, toolName: "artifact_ask", args: { title: "Q" } });
+		await runner.emit({ type: "tool_execution_end", toolCallId: call, toolName: "artifact_ask", result: { details }, isError: false });
+	};
+	await ask("c1", "f1");
+	await ask("c2", "f2");
+	const feedback = { role: "custom", customType: "artifact-feedback", content: "answer", display: true, timestamp: 1, details: { changes: [{ kind: "answer", artifact_id: "f1" }] } };
+	await runner.emit({ type: "message_end", message: feedback });
+	await f.fire();
+	assert.equal(f.warms().length, 1, "only the answered form's wake was cleared");
+	assert.equal(f.log().at(-1).wakes, 1);
+});
+
 test("a long tool call warms while it runs", { timeout: 15000 }, async (t) => {
 	const f = await fixture(); t.after(() => f.close());
 	await f.session.prompt("Task.");
