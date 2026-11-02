@@ -76,6 +76,7 @@ export class Recovery {
 			ui: (ctx, who, resumeAtMs, cancel, kind) => this.role === "main" && ctx.mode === "tui" && ctx.hasUI
 				? waitUI(ctx, { provider: who }, { resumeAtMs }, Date.now, cancel, (remaining) => `${WAIT_LABELS[kind]} ${who} \u00b7 retrying in ${remaining}`, pi) : undefined,
 			onFailure: (error) => operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `transient wait failed (${error instanceof Error ? error.name : "unknown error"})`),
+			record: (entry) => pi.appendEntry(RECOVERY_TYPE, entry),
 		});
 	}
 

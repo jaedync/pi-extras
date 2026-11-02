@@ -15,12 +15,14 @@
  * patterns: only this backoff sends the request again.
  */
 import type { ExtensionContext, MessageEndEvent, TurnEndEvent, TurnEndEventResult } from "@earendil-works/pi-coding-agent";
-import { connectionCause, connectionHint, type ConnectionCause } from "./connection.ts";
+import { MAX_HINT_SECONDS, connectionCause, connectionHint, type ConnectionCause } from "./connection.ts";
 import { captureLimit, parseRateLimit } from "./core.ts";
 import { takeRetryHint } from "./retry-hint.ts";
 import { waitForDelay, type Wait } from "./wait.ts";
 
 export const BASE_DELAY_MS = 5_000;
+// Pi waited 2 s for a dropped connection, and a short blip clears that fast.
+export const DROPPED_FIRST_DELAY_MS = 2_000;
 export const MAX_DELAY_MS = 60_000;
 // A backstop only: with at least 4 s per wait, even the 900 s maximum budget ends a streak first.
 export const MAX_ATTEMPTS = 30;
@@ -62,6 +64,8 @@ export function isProxyTurnLimit(message: Failure): boolean {
 export function connectionFailure(message: Failure): ConnectionCause | undefined {
 	const text = message.errorMessage;
 	if (message.stopReason !== "error" || typeof text !== "string" || text.length > MAX_ERROR_CHARS || NOT_TRANSIENT.test(text)) return undefined;
+	// A structured rate limit, even inside a 5xx, belongs to quota hibernation or the child's fail-fast.
+	if (parseRateLimit(text) !== undefined) return undefined;
 	return connectionCause(text);
 }
 
@@ -75,14 +79,14 @@ export function isTemporaryLimitReport(text: string): boolean {
 	return text.startsWith(PREFIX) && text.includes(`: ${TEMPORARY}.`);
 }
 
-export function planTransient(streak: Streak, budgetMs: number, random: () => number, hintSeconds?: number): TransientPlan | TransientRefusal {
+export function planTransient(streak: Streak, budgetMs: number, random: () => number, hintSeconds?: number, firstDelayMs = BASE_DELAY_MS): TransientPlan | TransientRefusal {
 	if (streak.attempts >= MAX_ATTEMPTS) return "attempts";
 	const remainingMs = budgetMs - streak.spentMs;
 	// The provider's Retry-After is a floor: a short one must not burn the streak in seconds.
 	const hintMs = hintSeconds === undefined ? 0 : Math.ceil(hintSeconds * 1000);
 	if (hintMs > remainingMs) return "hint-too-long";
 	if (remainingMs < BASE_DELAY_MS) return "budget";
-	const scheduled = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** streak.attempts);
+	const scheduled = streak.attempts === 0 ? firstDelayMs : Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** streak.attempts);
 	const jittered = Math.round(scheduled * (1 - JITTER + 2 * JITTER * random()));
 	return { delayMs: Math.min(Math.max(jittered, hintMs), remainingMs), attempt: streak.attempts + 1, hinted: hintMs > jittered };
 }
@@ -116,7 +120,7 @@ const PREFIX = "Request quota exceeded for";
 const TEMPORARY = "a temporary provider rate limit";
 
 export function waitingMessage(who: string, plan: TransientPlan, budgetMs: number): string {
-	return `${PREFIX} ${who}: ${TEMPORARY}. Waiting ${duration(plan.delayMs)} before sending the request again (retry ${plan.attempt}, at most ${duration(budgetMs)} of waiting in total). Esc cancels.`;
+	return `${PREFIX} ${who}: ${TEMPORARY}. Waiting ${duration(plan.delayMs)} before sending the request again (retry ${plan.attempt}, at most ${duration(budgetMs)} of waiting in total). Press Esc to cancel.`;
 }
 
 export function exhaustedMessage(who: string, refusal: TransientRefusal, streak: Streak, hintSeconds?: number): string {
@@ -133,16 +137,23 @@ export function exhaustedMessage(who: string, refusal: TransientRefusal, streak:
 const PROXY_FAILED = 'Claude Code proxy failure: the proxy ended the turn early ("Reached maximum number of turns")';
 
 export function proxyWaitingMessage(plan: TransientPlan, limit: number): string {
-	return `${PROXY_FAILED}. Sending the request again in ${duration(plan.delayMs)} (retry ${plan.attempt} of ${limit}). Esc cancels.`;
+	return `${PROXY_FAILED}. Sending the request again in ${duration(plan.delayMs)} (retry ${plan.attempt} of ${limit}). Press Esc to cancel.`;
 }
 
 export function proxyExhaustedMessage(streak: Streak): string {
 	return `${PROXY_FAILED}. It persisted after ${streak.attempts} automatic retries over ${duration(streak.spentMs)}. Send the request again later or switch models.`;
 }
 
-// Same rules as PROXY_FAILED: no model name and no phrase of Pi's retry patterns ("server error",
-// "timeout", "unavailable", "overloaded", "rate limit"), so rateLimitRecovery is not named either.
+// Same rule as PROXY_FAILED: no phrase of Pi's retry patterns ("server error", "timeout",
+// "unavailable", "overloaded", "rate limit", a 5xx status), so rateLimitRecovery is not named either.
 const CONNECTION_FAILED = "Provider connection failure";
+// A model name can hold such a phrase (model-502, timeout-tuned); then the message names none.
+const RETRY_WORDING = /(?<![a-z0-9])\d{3}(?![a-z0-9])|time.?out|timed|error|overload|unavailable|terminat|rate.?limit|capacity|busy|retry|network|socket|connect|fetch|upstream|ended|interrupt|exhausted|closed|ENOTFOUND|EAI_AGAIN|getaddrinfo/i;
+const RAW_CHARS = 2_048;
+const named = (who: string) => RETRY_WORDING.test(who) ? "the provider" : who;
+
+/** The provider's own text, which the shown message leaves out; kept in a hidden session entry. */
+export interface ConnectionEvidence { readonly kind: "connection-failure"; readonly cause: ConnectionCause; readonly provider: string; readonly model: string; readonly raw: string }
 const CAUSES: Readonly<Record<ConnectionCause, string>> = {
 	dropped: "the connection dropped",
 	slow: "the provider sent no data in time",
@@ -152,15 +163,17 @@ const CAUSES: Readonly<Record<ConnectionCause, string>> = {
 
 /** This backoff's own report of a transport failure; the subagent fallback reads it as overloaded. */
 export function isConnectionReport(text: string): boolean {
-	return text.startsWith(`${CONNECTION_FAILED}: `);
+	return text.startsWith(`${CONNECTION_FAILED} on `);
 }
 
-export function connectionWaitingMessage(cause: ConnectionCause, plan: TransientPlan, budgetMs: number): string {
-	return `${CONNECTION_FAILED}: ${CAUSES[cause]}. Sending the request again in ${duration(plan.delayMs)} (retry ${plan.attempt}, at most ${duration(budgetMs)} of waiting in total). Esc cancels.`;
+/** `requestedSeconds` is the provider's own retry_after, shown when the plan had to clamp it. */
+export function connectionWaitingMessage(who: string, cause: ConnectionCause, plan: TransientPlan, budgetMs: number, requestedSeconds?: number): string {
+	const asked = requestedSeconds !== undefined && requestedSeconds > MAX_HINT_SECONDS ? `; the provider asked to wait ${Math.ceil(requestedSeconds)} s` : "";
+	return `${CONNECTION_FAILED} on ${named(who)}: ${CAUSES[cause]}. Sending the request again in ${duration(plan.delayMs)} (retry ${plan.attempt}, at most ${duration(budgetMs)} of waiting in total${asked}). Press Esc to cancel.`;
 }
 
-export function connectionExhaustedMessage(cause: ConnectionCause, refusal: TransientRefusal, streak: Streak, hintSeconds?: number): string {
-	const head = `${CONNECTION_FAILED}: ${CAUSES[cause]}.`;
+export function connectionExhaustedMessage(who: string, cause: ConnectionCause, refusal: TransientRefusal, streak: Streak, hintSeconds?: number): string {
+	const head = `${CONNECTION_FAILED} on ${named(who)}: ${CAUSES[cause]}.`;
 	if (refusal === "attempts") return `${head} It persisted through the automatic retry limit of ${MAX_ATTEMPTS} over ${duration(streak.spentMs)}. Send the request again later or switch models.`;
 	const why = refusal === "hint-too-long" ? `The provider asked to wait ${Math.ceil(hintSeconds ?? 0)} seconds, longer than the automatic wait allows.`
 		: `It persisted after ${streak.attempts} automatic ${streak.attempts === 1 ? "retry" : "retries"} over ${duration(streak.spentMs)}.`;
@@ -175,6 +188,8 @@ export interface TransientDeps {
 	/** Countdown for interactive sessions; children and print mode wait silently. */
 	readonly ui?: (ctx: ExtensionContext, who: string, resumeAtMs: number, cancel: () => void, kind: TransientKind) => { tick(): void; close(): void } | undefined;
 	readonly onFailure?: (error: unknown) => void;
+	/** Keeps a connection failure's raw text; called at turn_end, so the entry follows the failed reply. */
+	readonly record?: (entry: ConnectionEvidence) => void;
 }
 
 interface Pending { readonly plan: TransientPlan; readonly who: string; readonly kind: TransientKind }
@@ -188,12 +203,14 @@ export class TransientBackoff {
 	private pending: Pending | undefined;
 	private active: Active | undefined;
 	private ready = false;
+	private evidence: ConnectionEvidence | undefined;
 
 	constructor(deps: TransientDeps) { this.deps = deps; }
 
 	reset(): void {
 		this.streaks = NO_STREAKS;
 		this.pending = undefined;
+		this.evidence = undefined;
 		this.ready = false;
 	}
 
@@ -212,6 +229,7 @@ export class TransientBackoff {
 	messageEnd(message: AssistantMessage, ctx: Pick<ExtensionContext, "signal">): AssistantMessage | undefined {
 		this.pending = undefined;
 		this.ready = false;
+		this.evidence = undefined;
 		// Taken for every reply, so a hint from a quota error cannot reach a later limit.
 		const hint = takeRetryHint(ctx.signal);
 		if (message.stopReason !== "error") {
@@ -235,12 +253,15 @@ export class TransientBackoff {
 			return { ...message, errorMessage: proxyWaitingMessage(plan, proxyRetryLimit(budgetMs)) };
 		}
 		if (kind === "connection" && cause) {
+			const raw = message.errorMessage ?? "";
+			this.evidence = { kind: "connection-failure", cause, provider: limit.provider, model: limit.model, raw: raw.slice(0, RAW_CHARS) };
 			// The body's own hint names this failure; a transport Retry-After is only kept for 429s.
-			const wanted = connectionHint(message.errorMessage ?? "") ?? hint;
-			const plan = planTransient(streak, budgetMs, this.deps.random ?? Math.random, wanted);
-			if (typeof plan === "string") return { ...message, errorMessage: connectionExhaustedMessage(cause, plan, streak, wanted) };
+			const requested = connectionHint(raw) ?? hint;
+			const wanted = requested === undefined ? undefined : Math.min(requested, MAX_HINT_SECONDS);
+			const plan = planTransient(streak, budgetMs, this.deps.random ?? Math.random, wanted, cause === "dropped" ? DROPPED_FIRST_DELAY_MS : BASE_DELAY_MS);
+			if (typeof plan === "string") return { ...message, errorMessage: connectionExhaustedMessage(who, cause, plan, streak, requested) };
 			this.pending = { plan, who, kind };
-			return { ...message, errorMessage: connectionWaitingMessage(cause, plan, budgetMs) };
+			return { ...message, errorMessage: connectionWaitingMessage(who, cause, plan, budgetMs, requested) };
 		}
 		const plan = planTransient(streak, budgetMs, this.deps.random ?? Math.random, hint);
 		if (typeof plan === "string") return { ...message, errorMessage: exhaustedMessage(who, plan, streak, hint) };
@@ -251,6 +272,11 @@ export class TransientBackoff {
 	async turnEnd(event: TurnEndEvent, ctx: ExtensionContext): Promise<TurnEndEventResult | undefined> {
 		const pending = this.pending;
 		this.pending = undefined;
+		const evidence = this.evidence;
+		this.evidence = undefined;
+		if (evidence) {
+			try { this.deps.record?.(evidence); } catch (error) { this.deps.onFailure?.(error); }
+		}
 		if (!pending || event.message.role !== "assistant" || event.message.stopReason !== "error") return undefined;
 		// Pi runs no tool call of a failed reply today. If it ever does, sending the turn again could run a tool twice.
 		if (event.toolResults?.length) return undefined;

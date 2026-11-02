@@ -159,8 +159,12 @@ for (const child of [false, true]) test(`an unavailable gateway and a dropped co
 	assert.equal(f.session.getLastAssistantText(), `Answered by ${f.model.id}.`);
 	assert.deepEqual(failedInContext(f), []);
 	const raw = f.session.sessionManager.getEntries().filter((entry: any) => entry.type === "message" && entry.message.stopReason === "error").map((entry: any) => entry.message.errorMessage);
-	assert.match(raw[0], /^Provider connection failure: the server could not take the request\. Sending the request again in 5 s/);
-	assert.match(raw[1], /^Provider connection failure: the connection dropped\. Sending the request again in 10 s/);
+	assert.match(raw[0], /^Provider connection failure on [^\n]+: the server could not take the request\. Sending the request again in 5 s/);
+	assert.match(raw[1], /^Provider connection failure on [^\n]+: the connection dropped\. Sending the request again in 10 s/);
+	// The provider's own text is kept out of the shown message, in a hidden entry.
+	const evidence = f.session.sessionManager.getEntries().filter((entry: any) => entry.type === "custom" && entry.customType === "rate-limit-recovery").map((entry: any) => entry.data);
+	assert.deepEqual(evidence.map((data: any) => [data.kind, data.cause, data.provider]), [["connection-failure", "down", "openrouter"], ["connection-failure", "dropped", "openrouter"]]);
+	assert.match(evidence[0].raw, /Endpoint is unavailable/);
 	assert.deepEqual(f.errors, []);
 });
 
@@ -175,7 +179,7 @@ test("a local engine that stays stopped ends the run within the budget and no Pi
 	assert.equal(piRetries(f.events), 0);
 	const failure = f.session.messages.at(-1) as any;
 	assert.equal(failure.stopReason, "error");
-	assert.match(failure.errorMessage, /^Provider connection failure: the server could not take the request\. It persisted after 2 automatic retries over 10 s\./);
+	assert.match(failure.errorMessage, /^Provider connection failure on [^\n]+: the server could not take the request\. It persisted after 2 automatic retries over 10 s\./);
 });
 
 test("a Retry-After header on the 429 sets the wait", { timeout: 10_000 }, async (t) => {
@@ -244,8 +248,8 @@ test("switching models during the wait resumes at once with the new model", { ti
 	assert.equal(piRetries(f.events), 0);
 });
 
-test("aborting during the wait ends the run without another request", { timeout: 10_000 }, async (t) => {
-	const http = await endpoint(["limited", "ok"]);
+for (const first of ["limited", "unavailable"] as const) test(`aborting during the wait ends the run without another request (${first})`, { timeout: 10_000 }, async (t) => {
+	const http = await endpoint([first, "ok"]);
 	t.after(() => http.close());
 	let f!: Awaited<ReturnType<typeof session>>;
 	const escape: Wait = (_ms, signal) => new Promise((resolve) => {

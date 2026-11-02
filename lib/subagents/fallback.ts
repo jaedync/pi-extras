@@ -10,6 +10,7 @@
  * Quota and rate-limit errors are told apart the way rate-limit-recovery
  * does, so a child guard's report and a raw provider error read the same.
  */
+import { isContextOverflowText } from "../context-overflow.ts";
 import { SETUP_FAILURE } from "../rate-limit-recovery/child.ts";
 import { parseRateLimit } from "../rate-limit-recovery/core.ts";
 import { isConnectionReport, isQuotaError, isTemporaryLimitReport, isTransientRateLimit } from "../rate-limit-recovery/transient.ts";
@@ -22,8 +23,6 @@ export interface Failure {
 	reason: string;
 }
 
-// A full context is the run's own problem: another model would hit it too, or a compaction fixes it.
-const OVERFLOW = /context.?length|context.?window|prompt is too long|input is too long|too many tokens|maximum context/i;
 const OVERLOADED = /overloaded|high demand|service.?unavailable|temporarily unavailable|bad gateway|gateway timeout|internal server error|server_error|\b(?:502|503|504|529)\b/i;
 const CREDENTIALS = /api key|unauthori[sz]ed|\b40[13]\b|forbidden|authentication|credential|(?:token|session|login)\b.{0,40}\bexpired|expired.{0,40}\b(?:token|credential)|not logged in|\/login\b/i;
 // Meridian, a local Claude Code proxy, ended the turn early, and Rate Limit Recovery's retries (or none) did not clear it.
@@ -35,7 +34,8 @@ const PROVIDER_WIDE: ReadonlySet<FailureKind> = new Set(["quota", "credentials"]
 /** Why the model could not serve the run, or undefined when the failure is the run's own. */
 export function classifyFailure(error: string): Failure | undefined {
 	// The child's quota guard failed to install: a setup problem that says "quota" without being one.
-	if (OVERFLOW.test(error) || error === SETUP_FAILURE) return undefined;
+	// A full context is the run's own problem: another model would hit it too, or a compaction fixes it.
+	if (isContextOverflowText(error) || error === SETUP_FAILURE) return undefined;
 	if (isTemporaryLimitReport(error)) return { kind: "rate-limit", reason: "rate limit" };
 	if (isQuotaError(error)) return { kind: "quota", reason: /usage limit/i.test(error) ? "usage limit reached" : "quota exceeded" };
 	if (parseRateLimit(error) !== undefined || isTransientRateLimit({ stopReason: "error", errorMessage: error })) return { kind: "rate-limit", reason: "rate limit" };

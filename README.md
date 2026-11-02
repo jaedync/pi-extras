@@ -1092,16 +1092,21 @@ for it: OpenRouter's "rate-limited upstream" wording gets this backoff, while a
 generic message such as "Provider returned error" stays with Pi's own retry.
 
 Connection and proxy failures get the same backoff and the same budget, with a
-separate streak. Pi's own retry stops after about 14 seconds. Before this
-change, the run then stopped until a person typed, sometimes for hours. These
-errors are connection failures:
+separate streak: at most 180 s of waiting, not counting the failed requests.
+Pi's own retry stops after about 14 seconds. Before this change, the run then
+stopped until a person typed, sometimes for hours. These errors are connection
+failures:
 
 - A dropped connection: `Connection error.`, `terminated`, `read ECONNRESET`,
-  `connect ECONNREFUSED`, `socket hang up`.
+  `connect ECONNREFUSED`, `socket hang up`. The first wait is 2 s, because a
+  short break in the connection clears fast. The next waits are 10, 20, 40,
+  then 60 s.
 - No data in time: `Request timed out.`, and an `upstream_timeout` error.
-- A busy provider or proxy: an `overloaded_error`. When the error body has a
+- A busy provider or proxy: an `overloaded_error`, or OpenAI's `Our servers are
+  currently overloaded. Please try again later.` When the error body has a
   `retry_after` in seconds, the next wait is at least that long. The extension
-  uses at most 60 s of it.
+  uses at most 60 s of it. The message shows a longer value that the provider
+  asked for.
 - A gateway with no backend: an HTTP 502, 503 or 504 whose body says
   "unavailable", "overloaded", "bad gateway" or "gateway timeout". A local
   engine that is off (`engine_unavailable`) is retried too. The retries stop
@@ -1110,10 +1115,13 @@ errors are connection failures:
 The extension matches only the full error text of the transport, not a mention
 inside other text. These errors still stop the run: quota, billing and
 usage-limit errors, authentication errors (for example `api_key_expired`, 401
-and 403), and a full context window. Other errors, for example a bare HTTP 500,
-stay with Pi's own retry. The extension replaces each error text that it
-handles with its own report, which Pi does not retry. Thus only one retry loop
-runs for each error. A subagent that still fails after its retries moves to
+and 403), a full context window (also inside a 5xx), and a structured
+`rate_limit_error` with a `retry_after` (quota hibernation handles it). Other
+errors, for example a bare HTTP 500, stay with Pi's own retry. The extension
+replaces each error text that it handles with its own report, which names the
+provider and model. Pi does not retry this report. Thus only one retry loop runs
+for each error. The original error text goes into a hidden session entry
+(`rate-limit-recovery`, kind `connection-failure`, at most 2 KB). A subagent that still fails after its retries moves to
 its next `subagents.fallbackModels` entry, as for an overloaded provider.
 
 Meridian, a local Claude Code proxy, sometimes stops a turn with "Reached

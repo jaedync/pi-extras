@@ -6,10 +6,12 @@ import type { ExtensionContext, InlineExtension, MessageEndEvent, MessageEndEven
 import { CONFIG_FILE } from "../extras-config.ts";
 import { loadConfig } from "./config.ts";
 import { captureLimit, failureMessage, parseRateLimit } from "./core.ts";
-import { TransientBackoff, type TransientDeps } from "./transient.ts";
+import { TransientBackoff, type ConnectionEvidence, type TransientDeps } from "./transient.ts";
 import { createQuotaTransportGuard, type QuotaTransportOptions } from "./transport.ts";
 
 export const CHILD_GUARD_NAME = "rate-limit-child-warning";
+// The same custom type as the main session's entries (controller.ts RECOVERY_TYPE).
+const RECOVERY_TYPE = "rate-limit-recovery";
 export const CHILD_GUARD_PATH = `<inline:${CHILD_GUARD_NAME}>`;
 export const SETUP_FAILURE = "Child quota retry protection could not be initialized. Check models.json and custom provider configuration, then reload Pi before retrying.";
 
@@ -43,7 +45,8 @@ export function createChildRateLimitGuard(options: ChildGuardOptions = {}) {
 	let budgetMs = 0;
 	const loadBudget = () => { budgetMs = loadConfig(options.configFile ?? CONFIG_FILE, {}).transientMaxWaitSeconds * 1000; };
 	loadBudget();
-	const transient = new TransientBackoff({ ...options.transient, budgetMs: () => budgetMs, onFailure: () => warn(options, "transient-wait-failed") });
+	let record: ((entry: ConnectionEvidence) => void) | undefined;
+	const transient = new TransientBackoff({ ...options.transient, budgetMs: () => budgetMs, onFailure: () => warn(options, "transient-wait-failed"), record: (entry) => record?.(entry) });
 	let failure: string | undefined;
 	let closed = false;
 	// Only request boundaries may move a guard to another API (see controller).
@@ -69,6 +72,7 @@ export function createChildRateLimitGuard(options: ChildGuardOptions = {}) {
 	const extension: InlineExtension = {
 		name: CHILD_GUARD_NAME,
 		factory(pi) {
+			record = (entry) => pi.appendEntry(RECOVERY_TYPE, entry);
 			pi.on("session_start", (_event, ctx) => { closed = false; failure = undefined; transient.reset(); loadBudget(); release(); protect(ctx); });
 			pi.on("before_agent_start", (_event, ctx) => { transient.reset(); protect(ctx, ctx.model, true); });
 			// Queued work can already have continued the run.

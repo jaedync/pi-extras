@@ -26,21 +26,31 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   the run until a person types. Since 2026-10-20, 31 runs stopped this way, 5
   of them for more than 5 hours, often in subagents.
   - These errors now get the backoff of short rate limits: 5, 10, 20, 40, then
-    60 s, each ±20%, for up to `transientMaxWaitSeconds` (180 s) per streak.
-    The errors are `Connection error.`, `terminated`, `Request timed out.`,
-    `upstream_timeout`, `overloaded_error`, and an HTTP 502, 503 or 504 whose
-    body says that the server is unavailable or overloaded.
+    60 s, each ±20%. A dropped connection starts with 2 s. Each streak has at
+    most `transientMaxWaitSeconds` (180 s) of waiting, not counting the failed
+    requests.
+  - The errors are `Connection error.`, `terminated`, `Request timed out.`,
+    `upstream_timeout`, `overloaded_error`, `Our servers are currently
+    overloaded.`, and an HTTP 502, 503 or 504 whose body says that the server
+    is unavailable or overloaded.
   - A `retry_after` in the error body sets the shortest next wait (at most
-    60 s).
+    60 s). The message shows a longer value that the provider asked for.
+  - The message names the provider and model. The original error text goes
+    into a hidden session entry, at most 2 KB.
   - Quota, billing, usage-limit, authentication and context-window errors
-    still stop the run. A local engine that is off stops it when the budget is
-    spent.
+    still stop the run, also inside a 5xx. A structured `rate_limit_error`
+    goes to quota hibernation. A local engine that is off stops the run when
+    the budget is spent.
   - Pi's own retry does not also run for these errors, so the two retries do
     not add up. Subagents use the same backoff.
 - Rate-limit Recovery: the retries after a Meridian "Reached maximum number of
   turns" failure now continue after 10 s with 30 s, 60 s and 120 s, within
   `transientMaxWaitSeconds`. The default budget gives 6 retries in 3 min. The
   3 retries in 17 s did not clear the failure.
+- Rate-limit Recovery: each waiting message now ends with "Press Esc to
+  cancel." Pi shows no "/bug" hint for it.
+- Subagents: the fallback check for a full context uses the same, wider list
+  of provider texts as Rate-limit Recovery.
 
 ## 0.38.4 - 2026-11-02
 
