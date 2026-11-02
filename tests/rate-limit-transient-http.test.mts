@@ -29,7 +29,7 @@ const { createChildRateLimitGuard } = await import("../lib/rate-limit-recovery/c
 
 const DEADLINE_MS = 5000;
 const UPSTREAM = "is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations";
-type Reply = "limited" | { readonly limited: true; readonly retryAfter: string } | "midstream" | "ok";
+type Reply = "limited" | { readonly limited: true; readonly retryAfter: string } | "midstream" | "ok" | "unavailable" | "stopped" | "drop";
 interface Seen { readonly model: string }
 
 function limited(res: ServerResponse, model: string, retryAfter?: string): void {
@@ -43,6 +43,10 @@ function midstream(res: ServerResponse, model: string): void {
 	res.write(`data: ${JSON.stringify({ id: "gen-synthetic", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta: { role: "assistant", content: "Partial " }, finish_reason: null }] })}\n\n`);
 	res.end(`data: ${JSON.stringify({ error: { message: `${model} ${UPSTREAM}`, code: 429 } })}\n\n`);
 }
+
+// Exact bodies from op01: an OpenCode Go gateway with no backend, and a local engine that is off by schedule.
+const UNAVAILABLE = { type: "server_error", message: "Upstream request failed: Endpoint is unavailable." };
+const STOPPED = { message: "no engine is serving (state stopped)", type: "engine_unavailable" };
 
 function success(res: ServerResponse, model: string): void {
 	const chunk = (delta: object, finish: string | null, extra: object = {}) => res.write(`data: ${JSON.stringify({ id: "gen-synthetic", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`);
@@ -63,6 +67,8 @@ async function endpoint(script: readonly Reply[]) {
 			requests.push({ model: body.model });
 			const reply = script[requests.length - 1] ?? script.at(-1) ?? "ok";
 			if (reply === "ok") success(res, body.model);
+			else if (reply === "drop") res.socket?.destroy();
+			else if (reply === "unavailable" || reply === "stopped") res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify(reply === "stopped" ? STOPPED : UNAVAILABLE));
 			else if (reply === "midstream") midstream(res, body.model);
 			else limited(res, body.model, typeof reply === "object" ? reply.retryAfter : undefined);
 		});
@@ -139,6 +145,37 @@ for (const child of [false, true]) test(`an upstream 429 streak is waited out an
 	assert.deepEqual(failedInContext(f), [], "failed attempts are omitted from the retried context");
 	assert.equal(f.session.sessionManager.getEntries().filter((entry: any) => entry.type === "message" && entry.message.stopReason === "error").length, 2, "raw history keeps them");
 	assert.deepEqual(f.errors, []);
+});
+
+for (const child of [false, true]) test(`an unavailable gateway and a dropped connection are waited out and resumed (${child ? "print-mode subagent guard" : "interactive main"})`, { timeout: 10_000 }, async (t) => {
+	const http = await endpoint(["unavailable", "drop", "ok"]);
+	t.after(() => http.close());
+	const f = await session(http.baseUrl, { child });
+	t.after(() => f.close());
+	await bounded(f.session.prompt("Continue."), () => f.session.abort());
+	assert.equal(http.requests.length, 3, "one request per attempt: Pi's own retry did not also run");
+	assert.deepEqual(f.waits, [5_000, 10_000]);
+	assert.equal(piRetries(f.events), 0);
+	assert.equal(f.session.getLastAssistantText(), `Answered by ${f.model.id}.`);
+	assert.deepEqual(failedInContext(f), []);
+	const raw = f.session.sessionManager.getEntries().filter((entry: any) => entry.type === "message" && entry.message.stopReason === "error").map((entry: any) => entry.message.errorMessage);
+	assert.match(raw[0], /^Provider connection failure: the server could not take the request\. Sending the request again in 5 s/);
+	assert.match(raw[1], /^Provider connection failure: the connection dropped\. Sending the request again in 10 s/);
+	assert.deepEqual(f.errors, []);
+});
+
+test("a local engine that stays stopped ends the run within the budget and no Pi retries", { timeout: 10_000 }, async (t) => {
+	const http = await endpoint(["stopped"]);
+	t.after(() => http.close());
+	const f = await session(http.baseUrl, { transientMaxWaitSeconds: 10 });
+	t.after(() => f.close());
+	await bounded(f.session.prompt("Continue."), () => f.session.abort());
+	assert.deepEqual(f.waits, [5_000, 5_000]);
+	assert.equal(http.requests.length, 3);
+	assert.equal(piRetries(f.events), 0);
+	const failure = f.session.messages.at(-1) as any;
+	assert.equal(failure.stopReason, "error");
+	assert.match(failure.errorMessage, /^Provider connection failure: the server could not take the request\. It persisted after 2 automatic retries over 10 s\./);
 });
 
 test("a Retry-After header on the 429 sets the wait", { timeout: 10_000 }, async (t) => {

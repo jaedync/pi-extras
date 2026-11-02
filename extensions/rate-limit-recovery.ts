@@ -1,4 +1,4 @@
-/** Deterministic quota hibernation; ordinary transient failures stay with Pi. */
+/** Deterministic quota hibernation, and bounded backoff for short rate limits and connection failures. */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Recovery, type RecoveryOptions } from "../lib/rate-limit-recovery/controller.ts";
 

@@ -29,7 +29,7 @@ can still conflict.
 | Status Plus | Usage/cost grid, context and cache indicators, per-provider limits in a fixed order, $0.00 rows for free local providers, optional linked subagent usage |
 | Usage Guard | `usage` tool, `/usage` command, one-shot warnings at a session budget (a warning point, not a stop) or, when enabled, near a limit |
 | Cache Compaction | Prefix-sharing summaries that reuse the session's warm prompt cache, with safe fallback to Pi's default compaction |
-| Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
+| Rate-limit Recovery | `/rate-limit-recovery`, bounded backoff for short rate limits and connection failures, opt-in main-session hibernation for provider cooldowns; subagents fail fast on quotas with reset guidance |
 | Phase Spinner | Descriptive status with a per-mode spinner in the editor's top divider, with a per-step stopwatch, alongside tokens/sec, time to first token and total elapsed time; live thinking above queued messages and a π end line when a prompt finishes |
 | Tab Status | Pi's state in the terminal tab: an iTerm2 status dot and detail, and tab progress in iTerm2, Ghostty, WezTerm and Windows Terminal |
 | Shell Jobs | `shell_job_start`, `shell_job`, `/jobs`, bounded logs and completion notifications; jobs are named after their titles |
@@ -261,7 +261,7 @@ that no set and no session uses is removed after 1 hour.
   `maxRecoveries` (default and maximum `10`), `anthropicFirstEventSeconds`
   (default `45`, `10` to `600`, `0` disables the Anthropic stall retry),
   `transientMaxWaitSeconds` (default `180`, `10` to `900`, `0` leaves short rate
-  limits to Pi's own retry). A number out of range moves to the nearest limit. A
+  limits and connection failures to Pi's own retry). A number out of range moves to the nearest limit. A
   negative number, or a value that is not a number, uses the default. A count
   with a fraction rounds down.
   `/rate-limit-recovery on|off` saves only `autoWait`; commands take precedence
@@ -1091,15 +1091,42 @@ only by its message text, because Pi keeps no status code or structured reset
 for it: OpenRouter's "rate-limited upstream" wording gets this backoff, while a
 generic message such as "Provider returned error" stays with Pi's own retry.
 
+Connection and proxy failures get the same backoff and the same budget, with a
+separate streak. Pi's own retry stops after about 14 seconds. Before this
+change, the run then stopped until a person typed, sometimes for hours. These
+errors are connection failures:
+
+- A dropped connection: `Connection error.`, `terminated`, `read ECONNRESET`,
+  `connect ECONNREFUSED`, `socket hang up`.
+- No data in time: `Request timed out.`, and an `upstream_timeout` error.
+- A busy provider or proxy: an `overloaded_error`. When the error body has a
+  `retry_after` in seconds, the next wait is at least that long. The extension
+  uses at most 60 s of it.
+- A gateway with no backend: an HTTP 502, 503 or 504 whose body says
+  "unavailable", "overloaded", "bad gateway" or "gateway timeout". A local
+  engine that is off (`engine_unavailable`) is retried too. The retries stop
+  when the budget is spent.
+
+The extension matches only the full error text of the transport, not a mention
+inside other text. These errors still stop the run: quota, billing and
+usage-limit errors, authentication errors (for example `api_key_expired`, 401
+and 403), and a full context window. Other errors, for example a bare HTTP 500,
+stay with Pi's own retry. The extension replaces each error text that it
+handles with its own report, which Pi does not retry. Thus only one retry loop
+runs for each error. A subagent that still fails after its retries moves to
+its next `subagents.fallbackModels` entry, as for an overloaded provider.
+
 Meridian, a local Claude Code proxy, sometimes stops a turn with "Reached
 maximum number of turns". Pi does not retry this error. The extension sends the
-request again after 2 s, 5 s, then 10 s, in all sessions, subagents included.
-It does this only when no tool of the failed reply ran. After 3 retries, the run
-stops with an error.
+request again after 2 s, 5 s, 10 s, 30 s, 60 s, then 120 s, in all sessions,
+subagents included. The first 3 retries always run. The later retries must fit
+in `transientMaxWaitSeconds`, so the default budget gives 6 retries in 3 min.
+The extension sends the request again only when no tool of the failed reply
+ran. After the last retry, the run stops with an error.
 
 Recognized quota errors remain errors and are classified as non-transient so
 Pi does not run a competing short retry loop. This recovery policy is independent
-of Pi's `retry.enabled`; ordinary transient failures retain Pi's native retries.
+of Pi's `retry.enabled`; other transient failures retain Pi's native retries.
 For native Anthropic and OpenAI HTTP adapters (including Azure and Codex), a
 request-local guard also stops configured transport retries on recognized JSON
 429 errors. It preserves endpoint, authentication and model configuration;
@@ -1121,7 +1148,8 @@ reset time and time remaining. Hidden transport retries are suppressed on the
 guarded native HTTP paths described above; custom or unsupported adapter retries
 remain owned by those adapters. Print, JSON and RPC sessions likewise never
 auto-wait, so external noninteractive children cannot inherit a long sleep.
-The bounded short-limit backoff above still applies to them.
+The bounded backoff for short rate limits and connection failures above still
+applies to them.
 External launchers that disable extensions must explicitly load detection;
 this package cannot intercept requests made outside Pi's extension runtime.
 The extension makes no quota polls of its own and pauses cache warming for

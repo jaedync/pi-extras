@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { BASE_DELAY_MS, MAX_ATTEMPTS, MAX_DELAY_MS, PROXY_RETRY_DELAYS_MS, TransientBackoff, exhaustedMessage, isProxyTurnLimit, isQuotaError, isTransientRateLimit, planProxyRetry, planTransient, proxyExhaustedMessage, proxyWaitingMessage, waitingMessage } from "../lib/rate-limit-recovery/transient.ts";
+import { BASE_DELAY_MS, MAX_ATTEMPTS, MAX_DELAY_MS, PROXY_RETRY_DELAYS_MS, proxyRetryLimit, TransientBackoff, exhaustedMessage, isProxyTurnLimit, isQuotaError, isTransientRateLimit, planProxyRetry, planTransient, proxyExhaustedMessage, proxyWaitingMessage, waitingMessage } from "../lib/rate-limit-recovery/transient.ts";
 import { parseRetryAfter, recordRetryHint, takeRetryHint } from "../lib/rate-limit-recovery/retry-hint.ts";
 import { DEFAULT_CONFIG, normalizeConfig } from "../lib/rate-limit-recovery/config.ts";
 import { piAiRoot } from "./support/pi-runtime.mjs";
@@ -196,7 +196,8 @@ test("disabled, uncancellable or non-transient errors are left to Pi", async () 
 	const off = backoff({ budgetMs: 0 });
 	assert.equal(off.b.messageEnd(failed(LUNA) as never, off.ctx), undefined);
 	const f = backoff();
-	assert.equal(f.b.messageEnd(failed("502 Bad Gateway") as never, f.ctx), undefined);
+	// A 502 Bad Gateway is now a connection failure (rate-limit-connection.test.ts); a bare 500 stays with Pi.
+	assert.equal(f.b.messageEnd(failed("500 temporary upstream failure") as never, f.ctx), undefined);
 	assert.equal(f.b.messageEnd(failed(LUNA) as never, {} as never), undefined, "no run signal to cancel a wait");
 	f.controller.abort();
 	assert.equal(f.b.messageEnd(failed(LUNA) as never, f.ctx), undefined, "already cancelled");
@@ -263,22 +264,34 @@ test("only the proxy's turn-limit failure is a proxy retry, with or without an H
 	assert.equal(isTransientRateLimit(failed(MERIDIAN)), false, "not a rate limit");
 });
 
-test("proxy retries wait 2, 5, then 10 seconds, at most 3 times", () => {
-	assert.deepEqual(PROXY_RETRY_DELAYS_MS, [2_000, 5_000, 10_000]);
+function proxySchedule(budgetMs: number): number[] {
 	const delays: number[] = [];
 	let state = { attempts: 0, spentMs: 0 };
-	for (let plan = planProxyRetry(state); typeof plan !== "string"; plan = planProxyRetry(state)) {
+	for (let plan = planProxyRetry(state, budgetMs); typeof plan !== "string"; plan = planProxyRetry(state, budgetMs)) {
 		delays.push(plan.delayMs);
 		state = { attempts: plan.attempt, spentMs: state.spentMs + plan.delayMs };
 	}
-	assert.deepEqual(delays, [2_000, 5_000, 10_000]);
-	assert.equal(planProxyRetry(state), "attempts");
+	assert.equal(planProxyRetry(state, budgetMs), "attempts");
+	return delays;
+}
+
+test("proxy retries wait 2, 5 and 10 s, then 30, 60 and 120 s within the transient budget", () => {
+	assert.deepEqual(PROXY_RETRY_DELAYS_MS, [2_000, 5_000, 10_000, 30_000, 60_000, 120_000]);
+	// 17 s did not clear the failure in practice; the default budget now covers 3 min.
+	assert.deepEqual(proxySchedule(180_000), [2_000, 5_000, 10_000, 30_000, 60_000, 73_000]);
+	assert.equal(proxyRetryLimit(180_000), 6);
+	assert.deepEqual(proxySchedule(900_000), [2_000, 5_000, 10_000, 30_000, 60_000, 120_000]);
+	// The first 3 never needed a budget: Pi does not retry this failure at all.
+	assert.deepEqual(proxySchedule(0), [2_000, 5_000, 10_000]);
+	assert.equal(proxyRetryLimit(0), 3);
+	assert.deepEqual(proxySchedule(20_000), [2_000, 5_000, 10_000], "less than one base delay left");
+	assert.deepEqual(proxySchedule(60_000), [2_000, 5_000, 10_000, 30_000, 13_000]);
 });
 
 test("proxy retry messages stop Pi's own retry, are never overflow, quota or a second proxy failure", () => {
-	const plan = planProxyRetry({ attempts: 0, spentMs: 0 });
+	const plan = planProxyRetry({ attempts: 0, spentMs: 0 }, 180_000);
 	assert.ok(typeof plan !== "string");
-	const messages = [proxyWaitingMessage(plan), proxyExhaustedMessage({ attempts: 3, spentMs: 17_000 })];
+	const messages = [proxyWaitingMessage(plan, 6), proxyExhaustedMessage({ attempts: 3, spentMs: 17_000 })];
 	for (const text of messages) {
 		const message = { ...failed(text), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 		assert.equal(isRetryableAssistantError(message), false, text);
@@ -288,12 +301,12 @@ test("proxy retry messages stop Pi's own retry, are never overflow, quota or a s
 		assert.equal(isQuotaError(text), false, text);
 		assert.match(text, /^Claude Code proxy failure: /);
 	}
-	assert.match(messages[0]!, /in 2 s \(retry 1 of 3\)/);
+	assert.match(messages[0]!, /in 2 s \(retry 1 of 6\)/);
 	assert.match(messages[1]!, /persisted after 3 automatic retries over 17 s/);
 });
 
-test("the backoff retries a proxy turn-limit failure 3 times, then ends the run without a wait", async () => {
-	const f = backoff();
+test("the backoff retries a proxy turn-limit failure 3 times without a budget, then ends the run without a wait", async () => {
+	const f = backoff({ budgetMs: 0 });
 	for (const [index, expected] of [2_000, 5_000, 10_000].entries()) {
 		const replaced = f.b.messageEnd(failed(MERIDIAN) as never, f.ctx);
 		assert.match(replaced!.errorMessage!, new RegExp(`in ${expected / 1000} s \\(retry ${index + 1} of 3\\)`));

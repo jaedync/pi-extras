@@ -123,22 +123,22 @@ test("a Meridian turn-limit failure is sent again after 2 s, and its unfinished 
 		assert.ok(!f.session.messages.some((message: any) => message.role === "assistant" && message.stopReason === "error"));
 		const raw: any[] = f.session.sessionManager.getEntries().filter((entry: any) => entry.type === "message" && entry.message.stopReason === "error");
 		assert.equal(raw.length, 1, "raw history keeps the failure");
-		assert.match(raw[0].message.errorMessage, /^Claude Code proxy failure: .* Sending the request again in 2 s \(retry 1 of 3\)/);
+		assert.match(raw[0].message.errorMessage, /^Claude Code proxy failure: .* Sending the request again in 2 s \(retry 1 of 6\)/);
 		assert.deepEqual(f.errors, []);
 	} finally { await f.close(); }
 });
 
-test("a persistent Meridian turn-limit failure ends the run after 3 retries", { timeout: 10_000 }, async () => {
+test("a persistent Meridian turn-limit failure ends the run after 6 retries within the 3 min budget", { timeout: 10_000 }, async () => {
 	const f = await setup();
 	try {
-		f.faux.setResponses([...Array.from({ length: 4 }, proxyFailure), ai.fauxAssistantMessage("Must not run.")]);
+		f.faux.setResponses([...Array.from({ length: 7 }, proxyFailure), ai.fauxAssistantMessage("Must not run.")]);
 		await f.session.prompt("Work.");
-		assert.equal(f.faux.state.callCount, 4);
-		assert.deepEqual(f.waits, [2_000, 5_000, 10_000]);
+		assert.equal(f.faux.state.callCount, 7);
+		assert.deepEqual(f.waits, [2_000, 5_000, 10_000, 30_000, 60_000, 73_000]);
 		assert.equal(f.events.filter((e) => e.type === "auto_retry_start").length, 0);
 		const failure = f.session.messages.at(-1) as any;
 		assert.equal(failure.stopReason, "error");
-		assert.match(failure.errorMessage, /persisted after 3 automatic retries over 17 s/);
+		assert.match(failure.errorMessage, /persisted after 6 automatic retries over 3 min\./);
 		assert.deepEqual(f.errors, []);
 	} finally { await f.close(); }
 });

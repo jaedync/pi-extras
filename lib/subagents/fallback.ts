@@ -12,7 +12,7 @@
  */
 import { SETUP_FAILURE } from "../rate-limit-recovery/child.ts";
 import { parseRateLimit } from "../rate-limit-recovery/core.ts";
-import { isQuotaError, isTemporaryLimitReport, isTransientRateLimit } from "../rate-limit-recovery/transient.ts";
+import { isConnectionReport, isQuotaError, isTemporaryLimitReport, isTransientRateLimit } from "../rate-limit-recovery/transient.ts";
 import { limitKey } from "../plan-billing.ts";
 import { type ModelChoice, resolveModel } from "./models.ts";
 import type { AgentRecord, FailureKind, FallbackStep } from "./types.ts";
@@ -40,6 +40,8 @@ export function classifyFailure(error: string): Failure | undefined {
 	if (isQuotaError(error)) return { kind: "quota", reason: /usage limit/i.test(error) ? "usage limit reached" : "quota exceeded" };
 	if (parseRateLimit(error) !== undefined || isTransientRateLimit({ stopReason: "error", errorMessage: error })) return { kind: "rate-limit", reason: "rate limit" };
 	if (OVERLOADED.test(error)) return { kind: "overloaded", reason: "provider overloaded or unavailable" };
+	// The child guard's report of a connection that did not come back within its retries.
+	if (isConnectionReport(error)) return { kind: "overloaded", reason: "the provider connection failed" };
 	if (PROXY_TURN_LIMIT.test(error)) return { kind: "overloaded", reason: "the Claude Code proxy ended the turn early" };
 	if (CREDENTIALS.test(error)) return { kind: "credentials", reason: "missing or expired credentials" };
 	if (NOT_FOUND.test(error)) return { kind: "not-found", reason: "model not found" };

@@ -395,7 +395,7 @@ for (const meridian of ["stream", "status"] as const) test(`a Meridian turn-limi
 	assert.equal(f.session.getLastAssistantText(), "Recovered over native HTTP.");
 	const failed: any[] = f.session.sessionManager.getEntries().filter((entry: any) => entry.type === "message" && entry.message.stopReason === "error");
 	assert.equal(failed.length, 1);
-	assert.match(failed[0].message.errorMessage, /^Claude Code proxy failure: .*retry 1 of 3/);
+	assert.match(failed[0].message.errorMessage, /^Claude Code proxy failure: .*retry 1 of 6/);
 	assert.ok(!f.session.messages.some((message: any) => message.role === "assistant" && message.stopReason === "error"));
 	assert.deepEqual(f.errors, []);
 });
