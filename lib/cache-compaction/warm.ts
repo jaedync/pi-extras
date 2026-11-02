@@ -8,8 +8,7 @@ import { isMeridian, type ModelIdentity } from "./core.ts";
 /** Another extension (or project) says that something will wake this session later. */
 export const WAKE_PENDING_EVENT = "pi-extras:wake-pending";
 export interface WakePending { readonly sessionId: string; readonly key: string; readonly pending: boolean }
-/** The session entry that records one warm's usage; Status Plus and the dollar ledger count it. */
-export const CACHE_WARM_ENTRY = "pi-extras.cache-warm";
+export { CACHE_WARM_ENTRY } from "../cache-warm-entry.ts";
 /**
  * Meridian ignores max_tokens, so only the instruction keeps the reply short.
  * The probe through Meridian measured 4 output tokens with this text.

@@ -103,6 +103,12 @@ test("summaries and cache refreshes are charged to the model that ran them, with
 		{ type: "branch_summary", timestamp: iso(T0 + 5000), usage: usage(0) },
 		{ type: "usage", kind: "cache_warm", provider: "anthropic", model: "m", timestamp: iso(T0 + 6000), usage: usage(0.25, { input: 1, output: 1, cacheRead: 900 }) },
 	];
+	// The pi-extras warmer cannot write Pi's usage entry, so it records the same fields in a custom entry.
+	const warmed = [...branch, { type: "custom", customType: "pi-extras.cache-warm", timestamp: iso(T0 + 7000), data: { provider: "anthropic", model: "m", usage: usage(0.5, { input: 2, output: 3, cacheRead: 1000 }) } }];
+	const withWarm = collect({ getBranch: () => warmed, getSessionDir: () => "/nowhere", costOf: (m) => m.usage.cost.total || 0.125 });
+	assert.deepEqual(withWarm.providers.get("anthropic"), { cost: 1.25, airtimeMs: 1000, inputTokens: 1904, outputTokens: 5 });
+	assert.equal(withWarm.lastApiEndMs, T0 + 7000);
+	assert.equal(withWarm.turns, 1, "a warm is not a turn");
 	const priced: string[] = [];
 	const stats = collect({ getBranch: () => branch, getSessionDir: () => "/nowhere", costOf: (m) => {
 		priced.push(`${m.provider}/${m.model}`);

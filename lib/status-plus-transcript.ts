@@ -11,6 +11,7 @@ import { ChildEvidenceCollector } from "./status-plus-children.ts";
 import { addChild, messageIdentity, supplementChild } from "./status-plus-usage.ts";
 import { toEpochMs } from "./status-plus-logic.ts";
 import { CHAIN_ENTRY, savedRan } from "./chain/run.ts";
+import { cacheWarmUsage } from "./cache-warm-entry.ts";
 import { EMPTY_PROVIDER, type ProviderStats } from "./status-plus-render.ts";
 import { commandsIn, isShell, type StepUnit } from "./tool-count.ts";
 
@@ -202,7 +203,9 @@ function collectEntries(source: TranscriptSource): SessionStats {
 	/** Tool calls this walk counted, so a script's result can add the calls it made. */
 	const counted = new Set<string>();
 
-	for (const entry of branch) {
+	for (const raw of branch) {
+		// A pi-extras warm counts exactly like the usage entry Pi writes for its own refreshes.
+		const entry = (cacheWarmUsage(raw) ?? raw) as BranchEntry;
 		if (entry.type === "model_change" && typeof entry.provider === "string") {
 			active = { provider: entry.provider, id: String(entry.modelId ?? "") };
 			continue;

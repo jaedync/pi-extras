@@ -70,6 +70,8 @@ test("tool output goes; subagent results, script calls and the entries a walk co
 	assert.deepEqual(slimRecord(model), model);
 	const refresh = { type: "usage", id: "k3", timestamp: at, kind: "cache_warm", provider: "anthropic", model: "m", usage };
 	assert.deepEqual(slimRecord(refresh), refresh);
+	const warm = { type: "custom", id: "k4", timestamp: at, customType: "pi-extras.cache-warm", data: { provider: "anthropic", model: "m", usage } };
+	assert.deepEqual(slimRecord(warm), warm);
 	assert.deepEqual(slimRecord({ type: "session", version: 3, id: "s1", timestamp: at, cwd: "/w", parentSession: "/p.jsonl" }),
 		{ type: "session", id: "s1", timestamp: at, parentSession: "/p.jsonl" });
 });

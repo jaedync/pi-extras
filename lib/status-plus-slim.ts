@@ -8,6 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { CHAIN_ENTRY } from "./chain/run.ts";
+import { CACHE_WARM_ENTRY } from "./cache-warm-entry.ts";
 import { isShell } from "./tool-count.ts";
 
 type RecordValue = Record<string, any>;
@@ -48,7 +49,7 @@ function pick(record: RecordValue, keys: readonly string[]): RecordValue {
 /** Entries a walk counts besides messages: Tool Display chains, Status Plus markers, subagent notices. */
 function countedCustom(type: unknown): boolean {
 	const name = String(type ?? "");
-	return name === CHAIN_ENTRY || name.startsWith("status-plus") || name.startsWith("subagent");
+	return name === CHAIN_ENTRY || name === CACHE_WARM_ENTRY || name.startsWith("status-plus") || name.startsWith("subagent");
 }
 
 /** Only a shell call's command is read, to count the steps it chains. */

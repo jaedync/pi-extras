@@ -14,6 +14,7 @@
 import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { limitKey } from "../plan-billing.ts";
+import { cacheWarmUsage } from "../cache-warm-entry.ts";
 
 export interface SpendRecord {
 	ts: number;
@@ -74,7 +75,7 @@ export interface SessionModel {
 const UNKNOWN_MODEL: SessionModel = { provider: "unknown", model: "unknown" };
 /** Lines with spend outside replies, and the model switches that say whose it is. */
 const OFF_TURN_TYPES = new Set(["compaction", "branch_summary", "usage", "model_change"]);
-const OFF_TURN_HEAD = /"type":"(compaction|branch_summary|usage|model_change)"/;
+const OFF_TURN_HEAD = /"type":"(compaction|branch_summary|usage|model_change)"|"customType":"pi-extras\.cache-warm"/;
 
 /** One line's spend, or the model it switches the session to. */
 export interface LedgerLine {
@@ -132,6 +133,9 @@ export function parseSpendLine(text: string, active: SessionModel = UNKNOWN_MODE
 		return undefined;
 	}
 	if (offTurn && OFF_TURN_TYPES.has(String(entry.type))) return offTurnSpend(entry, active);
+	// The pi-extras cache warmer records its usage in a custom entry; it names its own model.
+	const warm = offTurn ? cacheWarmUsage(entry) : undefined;
+	if (warm) return offTurnSpend(warm as unknown as Record<string, unknown>, active);
 	const record = replySpend(entry as { timestamp?: unknown; message?: Record<string, unknown> });
 	// A reply names the model it came from: under a virtual selection, the one a summary is likely routed to.
 	return record ? { record, model: { provider: record.provider, model: record.model } } : undefined;
