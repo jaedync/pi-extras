@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CHAIN_ENTRY } from "../lib/chain/run.ts";
@@ -69,8 +69,9 @@ test("a Zen billing marker moves a Go message's cost to the Zen category", () =>
 	assert.equal(stats.providers.get("opencode-go")?.cost, 0.2);
 });
 
-test("subagent spend folds in inline results and durable meta files, deduped by run id", () => {
+test("subagent spend folds in inline results and durable meta files, deduped by run id", (t) => {
 	const sessionDir = mkdtempSync(join(tmpdir(), "status-plus-session-"));
+	t.after(() => rmSync(sessionDir, { recursive: true, force: true }));
 	const artifacts = join(sessionDir, "subagent-artifacts");
 	mkdirSync(artifacts);
 	const runA = "11111111-1111-1111-1111-111111111111";

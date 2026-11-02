@@ -13,8 +13,9 @@ import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 10_000 });
 
 function repository(t: TestContext): string {
-	const root = join(mkdtempSync(join(tmpdir(), "subagent-bash-changes-")), "repo");
-	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const base = mkdtempSync(join(tmpdir(), "subagent-bash-changes-"));
+	const root = join(base, "repo");
+	t.after(() => rmSync(base, { recursive: true, force: true }));
 	mkdirSync(root);
 	git(root, "init", "-q");
 	git(root, "config", "user.name", "Test");
@@ -26,7 +27,7 @@ function repository(t: TestContext): string {
 	return realpathSync(root);
 }
 
-test("status paths read porcelain -z, a rename's source included", () => {
+test("status paths read porcelain -z, a rename's source included", async (t) => {
 	assert.deepEqual([...statusPaths(" M a.txt\0R  new name.txt\0old name.txt\0?? dir/b.txt\0")], [
 		["a.txt", " M"], ["new name.txt", "R "], ["old name.txt", "R "], ["dir/b.txt", "??"],
 	]);
@@ -46,7 +47,9 @@ test("a fingerprint sees new, changed, reverted and more-edited dirty files, but
 	assert.deepEqual(changedPaths(before, after), ["dirty.txt", "new.txt", "tracked.txt"].map((path) => join(root, path)));
 	git(root, "checkout", "--", "tracked.txt");
 	assert.deepEqual(changedPaths(after, await fingerprint(root)), [join(root, "tracked.txt")], "a file that became clean again changed too");
-	await assert.rejects(fingerprint(mkdtempSync(join(tmpdir(), "subagent-no-git-"))), /not a git repository/i);
+	const plain = mkdtempSync(join(tmpdir(), "subagent-no-git-"));
+	t.after(() => rmSync(plain, { recursive: true, force: true }));
+	await assert.rejects(fingerprint(plain), /not a git repository/i);
 });
 
 test("activity: edits open at the start or begun during a watch count; another shell in the same place makes it shared", () => {

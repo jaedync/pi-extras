@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { lstatSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLimitStore, type LimitStore } from "../lib/limit-store.ts";
@@ -12,6 +12,15 @@ import { noteAnthropicApiKey } from "../lib/plan-billing.ts";
 
 const NOW = 1_800_000_000_000;
 const RESET = NOW + 3_600_000;
+
+const made: string[] = [];
+/** A temp folder that the closing hook removes, so a full run leaves nothing behind. */
+function tempDir(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+after(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
 
 interface Sent { content: string; deliverAs?: string; triggerTurn?: boolean; details?: unknown }
 interface FakePi {
@@ -60,7 +69,7 @@ function anthropicSnapshot(store: LimitStore, sevenPct: number, fablePct = 10): 
 }
 
 function setup(model = { provider: "anthropic", id: "claude-sonnet-5" }, idle = true, warnings = true) {
-	const dir = mkdtempSync(join(tmpdir(), "usage-guard-"));
+	const dir = tempDir("usage-guard-");
 	const configFile = join(dir, "pi-extras.json");
 	if (warnings) saveGuardConfig({ enabled: true }, configFile);
 	const store = createLimitStore();
@@ -151,7 +160,7 @@ test("a resumed session restores fired keys and the budget instead of repeating 
 	// Same entries, fresh extension instance: nothing new to say.
 	const again = fakePi();
 	again.entries = pi.entries;
-	usageGuard(again as never, { store, configFile: join(tmpdir(), "unused.json"), now: () => NOW });
+	usageGuard(again as never, { store, configFile: join(tempDir("usage-guard-"), "unused.json"), now: () => NOW });
 	const resumed = fakeCtx(again, { provider: "anthropic", id: "claude-sonnet-5" });
 	await again.handlers.get("session_start")!({}, resumed);
 	await request(again, resumed);
@@ -227,7 +236,7 @@ test("/usage injects a snapshot and toggles warnings in the config file", async 
 });
 
 test("config helpers preserve unrelated keys and honour the env override", () => {
-	const dir = mkdtempSync(join(tmpdir(), "usage-guard-"));
+	const dir = tempDir("usage-guard-");
 	const file = join(dir, "pi-extras.json");
 	assert.equal(loadGuardConfig(file).enabled, false);
 	saveGuardConfig({ bands: [80, 90] }, file);
@@ -262,7 +271,7 @@ test("a pi-extras.json that does not parse is kept, and /usage warnings applies 
 });
 
 test("saving the guard config writes through a symlinked pi-extras.json and keeps its mode", () => {
-	const dir = mkdtempSync(join(tmpdir(), "usage-guard-"));
+	const dir = tempDir("usage-guard-");
 	const real = join(dir, "real.json");
 	const link = join(dir, "pi-extras.json");
 	writeFileSync(real, JSON.stringify({ other: { keep: true } }), { mode: 0o640 });

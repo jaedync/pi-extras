@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,6 +16,15 @@ import {
 	pollOpenCodeGoUsage,
 } from "../lib/provider-limits.ts";
 import { PollRefused, pollOpenRouterCredits } from "../lib/status-plus-limits.ts";
+
+const made: string[] = [];
+/** A temp folder that the closing hook removes, so a full run leaves nothing behind. */
+function tempDir(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+after(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
 
 const codexBody = {
 	plan_type: "Plus",
@@ -99,7 +108,7 @@ test("parseOpenCodeGoUsage marks exhausted windows and skips non-numeric ones", 
 });
 
 test("codex credentials come from the auth file when the registry has no api key", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "status-plus-"));
+	const dir = tempDir("status-plus-");
 	const authFile = join(dir, "auth.json");
 	writeFileSync(authFile, JSON.stringify({ "openai-codex": { access: "file-token", accountId: "file-account" } }));
 	const savedToken = process.env.PI_CODEX_ACCESS_TOKEN;
@@ -130,7 +139,7 @@ test("pollCodexUsage sends both credentials and reports a non-2xx as a refusal",
 		return jsonResponse(codexBody);
 	};
 	const registry = { async getApiKeyForProvider() { return "tok"; } };
-	const dir = mkdtempSync(join(tmpdir(), "status-plus-"));
+	const dir = tempDir("status-plus-");
 	const authFile = join(dir, "auth.json");
 	writeFileSync(authFile, JSON.stringify({ "openai-codex": { accountId: "acct" } }));
 	const savedAccount = process.env.PI_CODEX_ACCOUNT_ID;
@@ -187,7 +196,7 @@ function jwt(claims: Record<string, unknown>): string {
 }
 
 test("the codex account id falls back to the access token's claim when the auth file has none", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "status-plus-"));
+	const dir = tempDir("status-plus-");
 	const authFile = join(dir, "auth.json");
 	const access = jwt({ "https://api.openai.com/auth": { chatgpt_account_id: "claim-account" } });
 	writeFileSync(authFile, JSON.stringify({ "openai-codex": { type: "oauth", access } }));
@@ -210,7 +219,7 @@ test("the codex account id falls back to the access token's claim when the auth 
 });
 
 test("chatgptLogin is true only for an OAuth openai credential, not an API key", () => {
-	const dir = mkdtempSync(join(tmpdir(), "status-plus-"));
+	const dir = tempDir("status-plus-");
 	const authFile = join(dir, "auth.json");
 	writeFileSync(authFile, JSON.stringify({ openai: { type: "oauth", access: "x" } }));
 	assert.equal(chatgptLogin(authFile), true);

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -42,8 +42,9 @@ test("settings refuse plain http except on this machine, and default the plan to
 	assert.deepEqual(normalizeDollarsConfig(undefined), { openCodeGo: { plan: "go", caps: {} } });
 });
 
-test("a key file must hold one plausible token", () => {
+test("a key file must hold one plausible token", (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "dollars-key-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	writeFileSync(join(dir, "good"), "abcdefghijklmnopqrstuvwxyz012345\n");
 	writeFileSync(join(dir, "short"), "abc\n");
 	writeFileSync(join(dir, "spaces"), "abc def ghi jkl mno pqr stu vwx\n");

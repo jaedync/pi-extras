@@ -1,7 +1,7 @@
 /** Status Plus counts a subagent's usage through the session file its spawn result names. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collect } from "../lib/status-plus-transcript.ts";
@@ -14,8 +14,9 @@ const reply = (id: string, start: number) => ({ type: "message", id, timestamp: 
 } });
 const prompt = (id: string) => ({ type: "message", id, timestamp: iso(T), message: { role: "user", timestamp: T, content: id } });
 
-test("a spawned child's usage counts from its session file, once, as it grows", () => {
+test("a spawned child's usage counts from its session file, once, as it grows", (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "subagents-status-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const child = join(dir, "subagents", "2026_count-files_ab12cd34.jsonl");
 	mkdirSync(join(dir, "subagents"), { recursive: true });
 	writeFileSync(child, [prompt("task"), reply("c1", T + 2000)].map((e) => JSON.stringify(e)).join("\n") + "\n");

@@ -1,11 +1,20 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nextPollMs, readShared, writeShared, type SharedPoll } from "../lib/limit-share.ts";
 
-const dir = () => join(mkdtempSync(join(tmpdir(), "limit-share-")), "status-plus-limits");
+const made: string[] = [];
+/** A temp folder that the closing hook removes, so a full run leaves nothing behind. */
+function tempDir(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+after(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
+
+const dir = () => join(tempDir("limit-share-"), "status-plus-limits");
 const budget = { label: "", kind: "budget" as const, remainingText: "$1106.83/$2000.00", resetMs: 1_790_000_000_000, resetApprox: true };
 
 test("a poll one Pi process saved is what the next one reads, and only its user can read it", () => {

@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -15,8 +15,12 @@ const NOW = Date.UTC(2026, 9, 10, 17);
 const HOUR = 3_600_000;
 const KEY = "read-key-for-tests-0123456789";
 
+const made: string[] = [];
+after(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
+
 function agentDir(config: unknown): string {
 	const dir = mkdtempSync(join(tmpdir(), "dollars-agent-"));
+	made.push(dir);
 	mkdirSync(join(dir, "sessions", "--cwd--"), { recursive: true });
 	writeFileSync(join(dir, "pi-extras.json"), JSON.stringify({ usageDollars: config }));
 	writeFileSync(join(dir, "read-key"), `${KEY}\n`);

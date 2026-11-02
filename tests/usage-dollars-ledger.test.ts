@@ -1,10 +1,19 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, renameSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSpendLedger } from "../lib/usage-dollars/ledger.ts";
 import { openaiLogin } from "./support/plan-login.ts";
+
+const made: string[] = [];
+/** A temp folder that the closing hook removes, so a full run leaves nothing behind. */
+function tempDir(prefix: string): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	made.push(dir);
+	return dir;
+}
+after(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
 
 const NOW = Date.UTC(2026, 9, 10, 17);
 const HOUR = 3_600_000;
@@ -28,7 +37,8 @@ function line(turn: Turn): string {
 const user = JSON.stringify({ type: "message", id: "u1", message: { role: "user", content: "x", timestamp: NOW } }) + "\n";
 
 function root(): string {
-	return mkdtempSync(join(tmpdir(), "spend-ledger-"));
+	const dir = tempDir("spend-ledger-");
+	return dir;
 }
 
 const ledgerAt = (dir: string) => createSpendLedger({ root: dir, maxAgeMs: 8 * 24 * HOUR, minRefreshMs: 0 });

@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +8,9 @@ import { clockNote, runClockHead } from "../lib/subagents/format.ts";
 import { SWAP_NOTE } from "../lib/subagents/swap.ts";
 
 const T = 1_750_000_000_000;
+
+const made: string[] = [];
+after(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
 const iso = (n: number) => new Date(n).toISOString();
 const run = "11111111-1111-1111-1111-111111111111";
 const other = "22222222-2222-2222-2222-222222222222";
@@ -22,6 +25,7 @@ const prompt = (id: string, timestamp = T) => ({ type: "message", id, timestamp:
 const result = (details: unknown, toolName = "subagent", toolCallId = "call") => ({ type: "message", timestamp: iso(T), message: { role: "toolResult", toolName, toolCallId, details } });
 function fixture() {
 	const dir = mkdtempSync(join(tmpdir(), "status-plus-children-"));
+	made.push(dir);
 	const parent = join(dir, "parent.jsonl");
 	const artifacts = join(dir, "subagent-artifacts");
 	mkdirSync(artifacts);
