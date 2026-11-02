@@ -75,7 +75,9 @@ const textOf = (result: ToolResult) => result.content.flatMap((block) => block.t
  * breaks the order is part of the row before it (a multi-line value). Text with
  * no row 0 or no <app_state> block is not a full tree: a diff, an error or an
  * action's output. An indented row-like line out of order is not a value line,
- * so it marks a partial view too.
+ * so it marks a partial view too. Every row but the root has a tab of depth, so
+ * an unindented line with another number ("2 eggs", a numbered list in a value)
+ * continues a value: it is not a row even when its number is the next index.
  */
 export function parseTree(text: string): Tree | undefined {
 	if (!text.includes("<app_state>")) return undefined;
@@ -83,8 +85,11 @@ export function parseTree(text: string): Tree | undefined {
 	for (const line of text.split("\n")) {
 		const match = ROW.exec(line);
 		if (!match) continue;
-		if (Number(match[2]) === rows.size) rows.set(match[2], { depth: match[1].length, text: match[3].trim() });
-		else if (match[1].length > 0) return undefined;
+		const depth = match[1].length;
+		const index = Number(match[2]);
+		if (depth === 0 && index !== 0) continue;
+		if (index === rows.size) rows.set(match[2], { depth, text: match[3].trim() });
+		else if (depth > 0) return undefined;
 	}
 	if (rows.size === 0) return undefined;
 	const bundleId = BUNDLE.exec(text)?.[1];

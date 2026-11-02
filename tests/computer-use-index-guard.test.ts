@@ -77,6 +77,15 @@ test("parseTree keeps a multi-line value with its row", () => {
 	assert.equal(tree?.rows.size, 3);
 });
 
+test("parseTree does not read a value line as a row, even when its number is the next index", () => {
+	// A numbered list in a text field: "2 eggs" continues the value of row 1, and row 2 comes after it.
+	const tree = parseTree(`${header()}0 standard window Shopping\n\t1 text Value: List\n2 eggs\n\t2 button Done\n</app_state>`);
+	assert.deepEqual(tree?.rows.get("2"), { depth: 1, text: "button Done" });
+	assert.equal(tree?.rows.size, 3);
+	const alone = parseTree(`${header()}0 standard window Shopping\n\t1 text Value: List\n2 eggs\n</app_state>`);
+	assert.equal(alone?.rows.size, 2, "the value line adds no row");
+});
+
 test("identity ignores what changes with normal use: values, flags, help and secondary actions", () => {
 	assert.equal(identity("text Description: Edit field, Value: 7"), identity("text Description: Edit field, Value: 75"));
 	assert.equal(identity("splitter (disabled, settable, float)"), identity("splitter (settable, float)"));
