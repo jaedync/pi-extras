@@ -71,11 +71,11 @@ test("a zero-cost model is metered only when another provider of its family has 
 		{ provider: "claude-code", cost: zero },
 		{ provider: "openrouter", cost: { input: 1, output: 2 } },
 		{ provider: "openrouter", cost: zero },
-		{ provider: "fw01", cost: zero },
-		{ provider: "fw01" },
+		{ provider: "lan-box", cost: zero },
+		{ provider: "lan-box" },
 	]);
 	assert.equal(unmeteredModel({ provider: "claude-code", cost: zero }, priced), false, "the Anthropic plan bills it");
 	assert.equal(unmeteredModel({ provider: "openrouter", cost: zero }, priced), true, "an OpenRouter :free model stays free");
-	assert.equal(unmeteredModel({ provider: "fw01", cost: zero }, priced), true, "a local model next to one with no cost stays free");
+	assert.equal(unmeteredModel({ provider: "lan-box", cost: zero }, priced), true, "a local model next to one with no cost stays free");
 	assert.equal(unmeteredModel({ provider: "anthropic", cost: { input: 5 } }, priced), false);
 });

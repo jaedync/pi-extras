@@ -248,9 +248,9 @@ test("an agent's name and its own spinner wear its provider's color; tool work k
 	const codex = agentHue("openai-codex/gpt-6-luna");
 	assert.deepEqual(nameSegs(record("lead")).map((seg) => seg.color), [codex, codex]);
 	// A local server's agent wears the footer's shared color for other providers, not Pi's purple.
-	const local = agentHue("redarch-lora/qwen3");
+	const local = agentHue("local-lora/qwen3");
 	assert.notEqual(local, AGENT_HUE);
-	assert.deepEqual(nameSegs(record("local", { model: "redarch-lora/qwen3" })).map((seg) => seg.color), [local, local]);
+	assert.deepEqual(nameSegs(record("local", { model: "local-lora/qwen3" })).map((seg) => seg.color), [local, local]);
 	assert.deepEqual(nameSegs(record("bare", { model: "qwen3" })).map((seg) => seg.color), [AGENT_HUE, AGENT_HUE]);
 	const thinking = rowSegs({ record: record("lead", { activity: "thinking", work: "thinking" }), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, tokens: 0, percent: 0, cost: 0, model: 0 });
 	assert.equal(thinking.find((seg) => seg.text === doingGlyph("thinking", 5_000, "reduced").glyph)?.color, codex);

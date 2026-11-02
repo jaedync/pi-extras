@@ -407,11 +407,11 @@ test("a free provider gets its own row after the paid ones: $0.00, its airtime a
 		// No request yet: nothing to show.
 		{ ...FREE, id: "sparky", airtimeMs: 0, tokens: { input: 0, output: 0 } },
 		// A request that failed before any token: time, but no work.
-		{ ...FREE, id: "fw01", airtimeMs: 4_000, tokens: { input: 0, output: 0 } },
-		{ ...FREE, id: "fw01-halogen", airtimeMs: 41_000, tokens: { input: 9_318, output: 117 } },
+		{ ...FREE, id: "lan-box", airtimeMs: 4_000, tokens: { input: 0, output: 0 } },
+		{ ...FREE, id: "lan-box-halogen", airtimeMs: 41_000, tokens: { input: 9_318, output: 117 } },
 	];
 	const plain = renderFooter(model({ rows }), 200, paint).map(stripAnsi);
-	assert.deepEqual(plain.slice(2).map((line) => line.split(/\s+/)[0]), ["Ant", "Cdx", "aaa-local", "fw01-halogen"], plain.join("\n"));
+	assert.deepEqual(plain.slice(2).map((line) => line.split(/\s+/)[0]), ["Ant", "Cdx", "aaa-local", "lan-box-halogen"], plain.join("\n"));
 	const local = plain.find((line) => line.startsWith("aaa-local"))!;
 	assert.match(local, /^aaa-local {2,}\$0\.00 · +2m10s │ 120k in · 8\.0k out$/);
 	// Its cells line up with the paid rows, and it has no empty limit cell after them.

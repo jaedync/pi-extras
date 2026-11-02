@@ -194,7 +194,7 @@ test("an anthropic API key is no plan login: its spend stays off the plan's row,
 
 test("concurrent reads for anthropic and claude-code make one poll", async (t) => {
 	// A local model at the start: nothing of the Anthropic family is polled yet.
-	const footer = app({ model: { id: "local", provider: "fw01", baseUrl: "http://127.0.0.1:1" }, branch: [], piToken: "pi-oauth-token" });
+	const footer = app({ model: { id: "local", provider: "lan-box", baseUrl: "http://127.0.0.1:1" }, branch: [], piToken: "pi-oauth-token" });
 	await footer.emit("session_start");
 	t.after(() => footer.emit("session_shutdown"));
 	await settle();

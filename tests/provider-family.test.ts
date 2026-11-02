@@ -10,7 +10,7 @@ test("anthropic, claude-code and meridian are one family, openai-codex and opena
 });
 
 test("every other provider id is its own family", () => {
-	for (const id of ["openrouter", "opencode-go", "opencode", "fw01-halogen"]) {
+	for (const id of ["openrouter", "opencode-go", "opencode", "lan-box-halogen"]) {
 		assert.equal(providerFamily(id), id);
 		assert.deepEqual(familyMembers(id), [id]);
 	}

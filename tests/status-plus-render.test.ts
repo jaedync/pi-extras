@@ -90,7 +90,7 @@ test("token counts and provider tags", () => {
 	assert.equal(stripAnsi(providerTag(paint, "anthropic")), "Ant");
 	// Any provider pi-extras has no color for shares one, so a local server is not the gray of everything else.
 	assert.equal(providerTag(paint, "kimi-coding"), `\x1b[38;2;${OTHER_PROVIDER.join(";")}mkimi-coding\x1b[39m`);
-	assert.equal(providerTag(paint, "fw01-halogen"), providerTag(paint, "kimi-coding").replace("kimi-coding", "fw01-halogen"));
+	assert.equal(providerTag(paint, "lan-box-halogen"), providerTag(paint, "kimi-coding").replace("kimi-coding", "lan-box-halogen"));
 });
 
 test("a provider id that reaches the same plan wears that plan's tag and colour", () => {

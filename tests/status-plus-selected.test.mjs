@@ -16,7 +16,7 @@ const STORE = Symbol.for("pi-extras.limit-store");
 const NOW = Date.now();
 const CLAUDE = { id: "claude", provider: "anthropic", baseUrl: "https://api.anthropic.com" };
 const GLM = { id: "glm-5.3", provider: "opencode-go", cost: { input: 1, output: 2 } };
-const LOCAL = { id: "local", provider: "fw01", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+const LOCAL = { id: "local", provider: "lan-box", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 
 const realFetch = globalThis.fetch;
 let requests = 0;
@@ -99,6 +99,6 @@ test("a selected free provider with no tokens gets no row", async (t) => {
 	await footer.emit("model_select", { model: LOCAL, previousModel: CLAUDE, source: "set" });
 	await settle();
 	const lines = footer.lines();
-	assert.ok(!lines.some((line) => line.startsWith("fw01")), lines.join("\n"));
+	assert.ok(!lines.some((line) => line.startsWith("lan-box")), lines.join("\n"));
 	assert.ok(lines.some((line) => line.startsWith("Ant")), "the used provider keeps its row");
 });

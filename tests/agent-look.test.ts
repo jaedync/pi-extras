@@ -90,8 +90,8 @@ test("an agent takes its provider's identity color from the footer, the shared o
 	assert.equal(agentHue("anthropic/claude-opus-5-5"), hex(providerColor("anthropic")!));
 	assert.equal(agentHue("openai-codex/gpt-6-luna"), hex(providerColor("openai-codex")!));
 	assert.notEqual(agentHue("anthropic/x"), agentHue("openai-codex/x"));
-	assert.equal(agentHue("redarch-lora/qwen3"), hex(OTHER_PROVIDER));
-	assert.equal(agentHue("fw01-halogen/halogen-qwen3.8-flash-next"), hex(OTHER_PROVIDER));
+	assert.equal(agentHue("local-lora/qwen3"), hex(OTHER_PROVIDER));
+	assert.equal(agentHue("lan-box-halogen/halogen-qwen3.8-flash-next"), hex(OTHER_PROVIDER));
 	for (const model of [undefined, "", "gpt-6-luna", "/x"]) assert.equal(agentHue(model), AGENT_HUE, String(model));
 });
 

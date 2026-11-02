@@ -193,14 +193,14 @@ test("the summary names the tightest window and today's spend per provider", () 
 		{ provider: "anthropic", window: "7d-fable", applies: false, dollars: { basis: "implied", source: "local", remainingUsd: 5 } },
 		{ provider: "opencode-go", window: "5h", applies: false, dollars: { basis: "plan cap", source: "plan table", perModel: { "glm-5.3": { limitUsd: 3, remainingUsd: 2 } } } },
 		{ provider: "opencode-go", window: "7d", applies: false, dollars: { basis: "plan cap", source: "plan table", perModel: { "glm-5.3": { limitUsd: 7.5, remainingUsd: 1 } } } },
-	], inputs({ today: { byProvider: { anthropic: 301.05, "opencode-go": 0.4, fw01: 0 } }, tokenfold: { fetchedAtMs: SAT, costTodayUsd: 455.9 } }));
+	], inputs({ today: { byProvider: { anthropic: 301.05, "opencode-go": 0.4, "lan-box": 0 } }, tokenfold: { fetchedAtMs: SAT, costTodayUsd: 455.9 } }));
 	assert.equal(summary.date, "2026-10-10");
 	assert.equal(summary.timeZone, TZ);
 	assert.equal(summary.spentTodayThisMachineUsd, 301.45);
 	assert.equal(summary.spentTodayAllPersonalMachinesUsd, 455.9);
 	assert.deepEqual(summary.providers.anthropic, { spentTodayUsd: 301.05, remainingUsd: 90, bindingWindow: "7d" });
 	assert.deepEqual(summary.providers["opencode-go"], { spentTodayUsd: 0.4, remainingUsdByModel: { "glm-5.3": 1 } });
-	assert.equal(summary.providers.fw01, undefined);
+	assert.equal(summary.providers["lan-box"], undefined);
 	assert.ok(summary.notes.some((note) => /list price/i.test(note)));
 });
 

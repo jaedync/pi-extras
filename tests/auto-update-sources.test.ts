@@ -130,7 +130,7 @@ test("a failed lookup throws a sanitized one-line reason", async () => {
 	});
 });
 
-// Older npm prints the value of `view --json` as it is; npm 12.2.1 (op01) prints an array with one element for each matched version.
+// Older npm prints the value of `view --json` as it is; npm 12.2.1 on the dev machine prints an array with one element for each matched version.
 const NPM_SHAPES = { "plain value": (value: unknown) => value, "npm 12 array": (value: unknown) => [value] } as const;
 
 for (const [shape, wrap] of Object.entries(NPM_SHAPES)) {

@@ -125,9 +125,9 @@ test("limit windows have one fixed order: shortest window first, its model-famil
 test("a provider is free when every model it lists costs nothing", () => {
 	const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	const free = freeProviders([
-		{ provider: "redarch-bonsai", cost: zero },
-		{ provider: "fw01", cost: zero },
-		{ provider: "fw01", cost: zero },
+		{ provider: "local-bonsai", cost: zero },
+		{ provider: "lan-box", cost: zero },
+		{ provider: "lan-box", cost: zero },
 		{ provider: "anthropic", cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 } },
 		// One priced model makes the whole provider metered.
 		{ provider: "openrouter", cost: zero },
@@ -137,7 +137,7 @@ test("a provider is free when every model it lists costs nothing", () => {
 		// A family is metered as a whole: a zero-cost claude-code catalog still bills the Anthropic plan.
 		{ provider: "claude-code", cost: zero },
 	]);
-	assert.deepEqual([...free].sort(), ["fw01", "no-cost-field", "redarch-bonsai"]);
+	assert.deepEqual([...free].sort(), ["lan-box", "local-bonsai", "no-cost-field"]);
 });
 
 test("a model-family window shows only once it has a real percent", () => {

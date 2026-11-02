@@ -417,7 +417,7 @@ test("all: true with no scoped models reads every model with credentials and nam
 		{ provider: "anthropic", id: "claude-sonnet-5", cost: { input: 3, output: 15 } },
 		{ provider: "opencode-go", id: "glm-5.3", cost: { input: 1, output: 2 } },
 		{ provider: "openai", id: "gpt-6-luna", cost: { input: 1, output: 4 } },
-		{ provider: "fw01", id: "local", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+		{ provider: "lan-box", id: "local", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
 	];
 	const unscoped = { ...ctx, scopedModels: [], modelRegistry: { getAvailable: () => available, getApiKeyForProvider: async () => undefined } };
 	anthropicSnapshot(store, 40);
@@ -432,7 +432,7 @@ test("all: true with no scoped models reads every model with credentials and nam
 	assert.deepEqual(Object.keys(report.limitsUnavailable), ["openai", "opencode-go"]);
 	assert.match(report.limitsUnavailable.openai, /\/login openai-codex/);
 	assert.match(report.limitsUnavailable["opencode-go"], /No reading yet/);
-	assert.deepEqual(report.unmeteredModels, ["fw01/local"]);
+	assert.deepEqual(report.unmeteredModels, ["lan-box/local"]);
 	assert.ok(report.notes.some((note: string) => /limitsUnavailable/.test(note)));
 	// Without all, the report stays on the active model.
 	const own = JSON.parse((await pi.tool!.execute("t2", {}, undefined, undefined, unscoped)).content[0].text);

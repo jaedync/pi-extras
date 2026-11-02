@@ -62,14 +62,14 @@ test("only user text, tool results, custom messages and the system prompt name h
 		{ type: "custom_message", id: "c", content: "Pull Link read https://news.ycombinator.com/item?id=1" },
 		message("bashExecution", "", { output: "curl ok from docs.example.dev" }),
 	];
-	const named = namedHosts(context("fw01", branch, "Reports go to srv.example.me") as never);
+	const named = namedHosts(context("lan-box", branch, "Reports go to srv.example.me") as never);
 	for (const host of ["kmcamera.com", "keh.com", "news.ycombinator.com", "docs.example.dev", "srv.example.me"]) assert.ok(isNamed(host, named), host);
 	assert.ok(!named.has("routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com"));
 });
 
 test("a non-Anthropic model is refused a host nobody named, with the host defanged", async () => {
 	const handlers = install();
-	const ctx = context("fw01", [message("user", "Find prices on kmcamera.com")]);
+	const ctx = context("lan-box", [message("user", "Find prices on kmcamera.com")]);
 	const result = await handlers.get("tool_call")!({ toolName: "pull_link", input: { url: FABRICATED } }, ctx) as { block?: boolean; reason?: string };
 	assert.equal(result?.block, true);
 	assert.match(result.reason!, /routify-file-proxy-sg\[\.\]oss-ap-southeast-1\[\.\]aliyuncs\[\.\]com/);
@@ -82,24 +82,24 @@ test("an exempt provider, an off guard and other tools pass", async () => {
 	const call = { toolName: "fetch_content", input: { url: FABRICATED } };
 	assert.equal(await install().get("tool_call")!(call, ctx("anthropic")), undefined);
 	assert.equal(await install().get("tool_call")!(call, ctx("claude-code")), undefined, "the exempt family's other providers pass");
-	assert.equal(await install({ hostGuard: false }).get("tool_call")!(call, ctx("fw01")), undefined);
-	assert.equal(await install().get("tool_call")!({ toolName: "bash", input: { command: `curl ${FABRICATED}` } }, ctx("fw01")), undefined);
+	assert.equal(await install({ hostGuard: false }).get("tool_call")!(call, ctx("lan-box")), undefined);
+	assert.equal(await install().get("tool_call")!({ toolName: "bash", input: { command: `curl ${FABRICATED}` } }, ctx("lan-box")), undefined);
 	const all = await install({ hostGuardExempt: [] }).get("tool_call")!(call, ctx("anthropic")) as { block?: boolean };
 	assert.equal(all?.block, true, "an empty exempt list guards every provider");
 });
 
 test("hosts from nested tool results (codemode) count for the same session only", async () => {
 	const handlers = install();
-	handlers.get("tool_result")!({ toolName: "web_search", parentToolCallId: "p", content: [{ type: "text", text: "1. https://picclick.com/?q=lens" }] }, context("fw01", [], "", "s1"));
+	handlers.get("tool_result")!({ toolName: "web_search", parentToolCallId: "p", content: [{ type: "text", text: "1. https://picclick.com/?q=lens" }] }, context("lan-box", [], "", "s1"));
 	const call = { toolName: "pull_link", input: { url: "https://picclick.com/?q=lens" } };
-	assert.equal(await handlers.get("tool_call")!(call, context("fw01", [], "", "s1")), undefined);
-	const other = await handlers.get("tool_call")!(call, context("fw01", [], "", "s2")) as { block?: boolean };
+	assert.equal(await handlers.get("tool_call")!(call, context("lan-box", [], "", "s1")), undefined);
+	const other = await handlers.get("tool_call")!(call, context("lan-box", [], "", "s2")) as { block?: boolean };
 	assert.equal(other?.block, true);
 });
 
 test("allowed hosts and their subdomains pass; others are still refused", async () => {
 	const handlers = install({ hostGuardAllow: ["Web.Archive.org", "githubusercontent.com"] });
-	const ctx = context("fw01", [message("user", "hello")]);
+	const ctx = context("lan-box", [message("user", "hello")]);
 	const call = (url: string) => handlers.get("tool_call")!({ toolName: "pull_link", input: { url } }, ctx) as Promise<{ block?: boolean } | undefined>;
 	assert.equal(await call("https://web.archive.org/web/2020/x"), undefined);
 	assert.equal(await call("https://raw.githubusercontent.com/a/b/main/README.md"), undefined);
@@ -123,7 +123,7 @@ test("a URL without a scheme or in angle brackets is checked; a URL that does no
 	assert.deepEqual(requestedHosts("fetch_content", { url: "https://a.example.org", proxy: "http://proxy.example.net:8080" }).sort(), ["a.example.org", "proxy.example.net"]);
 	assert.equal(requestedTargets("pull_link", { url: "https://evil.example.com:99999/x" }).invalid, true);
 	const handlers = install();
-	const result = await handlers.get("tool_call")!({ toolName: "pull_link", input: { url: "https://evil.example.com:99999/x" } }, context("fw01", [message("user", "hi")])) as { block?: boolean; reason?: string };
+	const result = await handlers.get("tool_call")!({ toolName: "pull_link", input: { url: "https://evil.example.com:99999/x" } }, context("lan-box", [message("user", "hi")])) as { block?: boolean; reason?: string };
 	assert.equal(result?.block, true);
 	assert.equal(hostsIn(result.reason!).size, 0);
 });
@@ -140,7 +140,7 @@ test("a tool result that repeats its own call's arguments names nothing; a searc
 		call("3", "web_search", { query: "site:law.cornell.edu 47 CFR 79" }),
 		result("3", "web_search", "1. https://www.law.cornell.edu/cfr/text/47/79.1"),
 	];
-	const named = namedHosts(context("fw01", branch) as never);
+	const named = namedHosts(context("lan-box", branch) as never);
 	assert.ok(!isNamed("routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com", named));
 	assert.ok(!isNamed("echo.example.com", named));
 	assert.ok(isNamed("law.cornell.edu", named));
@@ -170,7 +170,7 @@ test("subagent mail and reports are another model's text and name nothing", () =
 		{ type: "custom_message", id: "m", customType: REPORT_TYPE, content: `Found ${FABRICATED}` },
 		{ type: "custom_message", id: "n", customType: MESSAGE_TYPE, content: "see https://mail.example.com" },
 	];
-	const named = namedHosts(context("fw01", branch) as never);
+	const named = namedHosts(context("lan-box", branch) as never);
 	assert.ok(!named.has("mail.example.com"));
 	assert.ok(!isNamed("routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com", named));
 });

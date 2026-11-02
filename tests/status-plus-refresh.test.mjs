@@ -88,10 +88,10 @@ test("a reply's cost shows once Pi has saved it, not only after its tools ran", 
 test("providers whose models cost nothing get a $0.00 row with their tokens and airtime", async (t) => {
 	const models = [
 		{ provider: "anthropic", id: "m", cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 } },
-		{ provider: "redarch-bonsai", id: "m", cost: ZERO },
+		{ provider: "local-bonsai", id: "m", cost: ZERO },
 		{ provider: "sparky", id: "m", cost: ZERO },
 	];
-	const footer = app([reply("anthropic", 0.5), reply("redarch-bonsai", 0, 130)], models);
+	const footer = app([reply("anthropic", 0.5), reply("local-bonsai", 0, 130)], models);
 	await footer.emit("session_start");
 	t.after(() => {
 		footer.emit("session_shutdown");
@@ -100,5 +100,5 @@ test("providers whose models cost nothing get a $0.00 row with their tokens and 
 	const rows = footer.lines().slice(2);
 	assert.equal(rows.length, 2, rows.join("\n"));
 	assert.match(rows[0], /^Ant /);
-	assert.match(rows[1], /^redarch-bonsai {2}\$0\.00 · +2m10s │ 1\.0k in · 100 out$/);
+	assert.match(rows[1], /^local-bonsai {2}\$0\.00 · +2m10s │ 1\.0k in · 100 out$/);
 });
