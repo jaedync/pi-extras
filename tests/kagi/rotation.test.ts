@@ -1,4 +1,4 @@
-import { expect, it, vi } from 'vitest';
+import { expect, it, onTestFinished, vi } from 'vitest';
 import { KagiClient } from '../../lib/kagi/client.js';
 const html = '<div class="search-result"><a class="__sri_title_link" href="https://example.test/">Safe</a></div>';
 it('blocks the same failed credential but recovers on rotation in the running client', async () => {
@@ -17,12 +17,14 @@ it('blocks the same failed credential but recovers on rotation in the running cl
   expect(fetcher).toHaveBeenCalledTimes(2);
 });
 
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readCredential } from '../../lib/kagi/credential.js';
 it('rereads a changed token FILE after auth failure without restarting Pi', async () => {
-  const path = join(await mkdtemp(join(tmpdir(), 'kagi-rotation-')), 'credential');
+  const dir = await mkdtemp(join(tmpdir(), 'kagi-rotation-'));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, 'credential');
   await writeFile(path, 'synthetic-before', { mode: 0o600 });
   const fetcher = vi.fn().mockResolvedValueOnce(new Response('', { status: 401 }))
     .mockImplementation(async () => new Response(html, { headers: { 'content-type': 'text/html' } }));

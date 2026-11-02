@@ -94,7 +94,7 @@ test("mux copies the picture and cuts the sound to it", () => {
 const skipNoFfmpeg = spawnSync("ffmpeg", ["-version"]).status === 0 ? false : "ffmpeg is not installed";
 
 test("wv film mux refuses a master that is shorter than the picture, and names both lengths", { skip: skipNoFfmpeg, timeout: 120000 }, () => {
-	const dir = mkdtempSync(join(tmpdir(), "wv-mux-"));
+	const dir = tempDir("wv-mux-");
 	mkdirSync(join(dir, "out"), { recursive: true });
 	const video = join(dir, "out", "film.mp4");
 	const audio = join(dir, "master.wav");
@@ -115,10 +115,10 @@ test("wv film mux refuses a master that is shorter than the picture, and names b
 });
 
 test("a film render that fails deletes its own cache folder and nothing else", async () => {
-	const home = mkdtempSync(join(tmpdir(), "wv-film-home-"));
-	const base = mkdtempSync(join(tmpdir(), "wv-film-cache-"));
+	const home = tempDir("wv-film-home-");
+	const base = tempDir("wv-film-cache-");
 	mkdirSync(join(base, "other-agent-work"));
-	const project = mkdtempSync(join(tmpdir(), "wv-film-proj-"));
+	const project = tempDir("wv-film-proj-");
 	mkdirSync(join(project, "out"), { recursive: true });
 	writeFileSync(join(project, "out", "film.json"), JSON.stringify({ timing: { fps: 30, shots: [{ id: "a", start: 0, end: 1 }] }, shots: [{}] }));
 	// A stand-in for the pinned HyperFrames: it writes into the folder it is given, then fails.
@@ -140,7 +140,7 @@ test("a film render that fails deletes its own cache folder and nothing else", a
 const skip = process.env.WV_INTEGRATION === "1" ? false : "set WV_INTEGRATION=1 to build the template in a browser";
 
 test("wv film new and build: the template bundles, type-checks and gives its cues", { skip, timeout: 120000 }, () => {
-	const work = mkdtempSync(join(tmpdir(), "wv-film-"));
+	const work = tempDir("wv-film-");
 	try {
 		const dir = join(work, "film");
 		let r = spawnSync(process.execPath, [WV, "film", "new", dir], { encoding: "utf8" });
@@ -339,3 +339,8 @@ test("a timeline of the wrong length names both causes: a tween before 0 s, and 
 	assert.match(message, /before 0 s.*place\(\)/);
 	assert.match(message, /after its shot ends/);
 });
+
+const made = [];
+/** A temp folder that the exit hook removes, so a full run leaves nothing behind. */
+const tempDir = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); made.push(dir); return dir; };
+process.on("exit", () => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });

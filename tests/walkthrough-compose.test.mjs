@@ -573,7 +573,7 @@ test("compose names a bad events.json by its path, instead of crashing with a Ty
 });
 
 test("compose refuses when the runtime has no GSAP instead of putting a CDN script in the page", () => {
-	const empty = mkdtempSync(join(tmpdir(), "wv-nogsap-"));
+	const empty = tempDir("wv-nogsap-");
 	assert.equal(runtimeGsap({ XDG_CACHE_HOME: empty }, empty), null);
 	assert.match(runtimeGsapError({ XDG_CACHE_HOME: empty }, empty), /is not installed/);
 	assert.match(runtimeGsapError({ XDG_CACHE_HOME: empty }, empty), /Run wv setup/);
@@ -581,7 +581,7 @@ test("compose refuses when the runtime has no GSAP instead of putting a CDN scri
 });
 
 test("preview, render and gates refuse a project that has no local GSAP, and say where to get it", () => {
-	const dir = mkdtempSync(join(tmpdir(), "wv-proj-"));
+	const dir = tempDir("wv-proj-");
 	assert.throws(() => requireProjectGsap(dir), /assets\/gsap\.min\.js is missing/);
 	assert.throws(() => requireProjectGsap(dir), /wv setup|wv compose/);
 	mkdirSync(join(dir, "assets"));
@@ -596,3 +596,8 @@ test("no wv step loads GSAP or HyperFrames from the network at run time", () => 
 		assert.doesNotMatch(text, /npx/, `${file} must not install a package at run time`);
 	}
 });
+
+const made = [];
+/** A temp folder that the exit hook removes, so a full run leaves nothing behind. */
+const tempDir = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); made.push(dir); return dir; };
+process.on("exit", () => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });

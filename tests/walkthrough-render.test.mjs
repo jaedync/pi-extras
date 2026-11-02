@@ -98,7 +98,7 @@ test("gigabytes print with one decimal", () => {
 	assert.equal(formatGB(5_153_126_400), "4.8 GB");
 });
 
-const cacheBase = () => mkdtempSync(join(tmpdir(), "wv-cache-"));
+const cacheBase = () => tempDir("wv-cache-");
 
 test("each render caches into its own folder, and the cleanup leaves every other folder alone", () => {
 	const base = cacheBase();
@@ -123,10 +123,10 @@ test("cache cleanup turns off with the cache, and two renders never share a fold
 });
 
 test("a failed render still deletes its cache folder", async () => {
-	const home = mkdtempSync(join(tmpdir(), "wv-home-"));
+	const home = tempDir("wv-home-");
 	const base = cacheBase();
 	mkdirSync(join(base, "other-agent-work"));
-	const project = mkdtempSync(join(tmpdir(), "wv-proj-"));
+	const project = tempDir("wv-proj-");
 	// A stand-in for the pinned HyperFrames: it writes into the folder it is given, then fails.
 	const bin = join(home, "pi-walkthrough-video", "node_modules", ".bin", "hyperframes");
 	mkdirSync(join(home, "pi-walkthrough-video", "node_modules", ".bin"), { recursive: true });
@@ -449,3 +449,8 @@ test("a preview whose write fails halfway leaves no preview file and no cache fo
 		rmSync(home, { recursive: true, force: true });
 	}
 });
+
+const made = [];
+/** A temp folder that the exit hook removes, so a full run leaves nothing behind. */
+const tempDir = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); made.push(dir); return dir; };
+process.on("exit", () => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });

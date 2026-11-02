@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,7 +22,7 @@ test("the setup messages name every package it installs and do not tell the user
 test("wv runs when it is reached through a symlink, as a link in ~/bin is", () => {
 	// The real path of the file and the path of the link differ; a check on the paths alone
 	// makes wv a silent no-op that exits 0, and an agent reads that as a pass.
-	const dir = mkdtempSync(join(tmpdir(), "wv-link-"));
+	const dir = tempDir("wv-link-");
 	const link = join(dir, "wv");
 	symlinkSync(WV, link);
 	const r = spawnSync(process.execPath, [link, "--help"], { encoding: "utf8", timeout: 60000 });
@@ -150,3 +150,8 @@ test("capture --draft is a cheap wall-clock pass: scale 1, real clock, 10 fps, a
 	assert.equal(draft.fps, 10);
 	assert.equal(parseCommandLine(["capture", "flow.mjs", "--out", "o"]).draft, false);
 });
+
+const made = [];
+/** A temp folder that the exit hook removes, so a full run leaves nothing behind. */
+const tempDir = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); made.push(dir); return dir; };
+process.on("exit", () => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });

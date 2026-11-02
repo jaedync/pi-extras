@@ -46,7 +46,7 @@ const alive = (pid) => {
 };
 
 test("a timeout kills the whole process group, not only the direct child", { timeout: 30000 }, async () => {
-	const dir = mkdtempSync(join(tmpdir(), "wv-tree-"));
+	const dir = tempDir("wv-tree-");
 	const pidFile = join(dir, "grandchild.pid");
 	const tree = join(dir, "tree.sh");
 	// The shell is the direct child; sleep is its child, in the same process group.
@@ -60,7 +60,7 @@ test("a timeout kills the whole process group, not only the direct child", { tim
 });
 
 test("SIGTERM runs the cleanups, stops the children and exits 143", { timeout: 30000 }, async () => {
-	const dir = mkdtempSync(join(tmpdir(), "wv-signal-"));
+	const dir = tempDir("wv-signal-");
 	const marker = join(dir, "marker");
 	const childPidFile = join(dir, "child.pid");
 	writeFileSync(marker, "x");
@@ -89,9 +89,9 @@ await sleep(60000);
 });
 
 test("a SIGTERM during wv preview removes preview.html and the cache folder, and stops the render's group", { timeout: 40000 }, async () => {
-	const home = mkdtempSync(join(tmpdir(), "wv-prev-home-"));
-	const base = mkdtempSync(join(tmpdir(), "wv-prev-cache-"));
-	const project = mkdtempSync(join(tmpdir(), "wv-prev-proj-"));
+	const home = tempDir("wv-prev-home-");
+	const base = tempDir("wv-prev-cache-");
+	const project = tempDir("wv-prev-proj-");
 	mkdirSync(join(project, "assets"), { recursive: true });
 	writeFileSync(join(project, "assets", "gsap.min.js"), "// gsap");
 	const plan = buildPlan(
@@ -170,7 +170,7 @@ test("a parent killed by a group SIGKILL leaves no child alive", { timeout: 3000
 });
 
 test("SIGHUP runs the cleanups and stops the children, and a second signal does not cut them short", { timeout: 30000 }, async () => {
-	const dir = mkdtempSync(join(tmpdir(), "wv-hup-"));
+	const dir = tempDir("wv-hup-");
 	const marker = join(dir, "marker");
 	const childPidFile = join(dir, "child.pid");
 	const seenFile = join(dir, "seen");
@@ -207,7 +207,7 @@ await sleep(60000);
 });
 
 test("the signal path stops the children before it runs the cleanups", { timeout: 30000 }, async () => {
-	const dir = mkdtempSync(join(tmpdir(), "wv-order-"));
+	const dir = tempDir("wv-order-");
 	const childPidFile = join(dir, "child.pid");
 	const orderFile = join(dir, "order");
 	const script = join(dir, "wait.mjs");
@@ -755,3 +755,8 @@ await installMusicKit({ kit: ${JSON.stringify(kit)}, log: () => {}, deps }).catc
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+const made = [];
+/** A temp folder that the exit hook removes, so a full run leaves nothing behind. */
+const tempDir = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); made.push(dir); return dir; };
+process.on("exit", () => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });

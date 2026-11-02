@@ -7,7 +7,7 @@ import { draftSheetArgs, frameHook, mergeTexts, publishArtifacts, stagingDir } f
 import { createFlowApi, racePumpError, waitBudgetMs } from "../skills/walkthrough-video/scripts/lib/flow.mjs";
 import { sleep } from "../skills/walkthrough-video/scripts/lib/proc.mjs";
 
-const work = () => mkdtempSync(join(tmpdir(), "wv-staging-"));
+const work = () => tempDir("wv-staging-");
 
 test("the staging folder sits beside the output folder, not inside it", () => {
 	const out = join(work(), "cap");
@@ -142,3 +142,8 @@ test("the draft sheet tiles the draft capture every half second with its time", 
 	// A long draft (a 94 s take with a 62 s tile wait) keeps the sheet at 48 cells.
 	assert.match(draftSheetArgs({ video: "v", out: "o", seconds: 94.2 }).join(" "), /fps=0\.5095.*tile=6x8/);
 });
+
+const made = [];
+/** A temp folder that the exit hook removes, so a full run leaves nothing behind. */
+const tempDir = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); made.push(dir); return dir; };
+process.on("exit", () => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
