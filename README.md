@@ -676,6 +676,61 @@ session's own cache key.
 Subagents always load Cache Compaction, even when a package filter leaves it
 out of the main session. `cacheCompaction.enabled: false` turns it off in both.
 
+**Cache warming.** A provider keeps a prompt cache entry for a limited time:
+one hour through Meridian or with a `ttl` of `1h`, else five minutes. If the
+next turn comes later, the provider writes the whole context again at the
+cache-write price. In 30 days of local sessions, 610 turns came more than one
+hour after the previous turn. They cost $958, 11% of the Anthropic spend.
+Most of them came after a shell job, a subagent report or a form answer.
+
+The extension keeps the cache entry alive while the session waits for such a
+wake. It sends the last real request again, with one short user message at
+the end: `Cache refresh only. Reply with the single word ok. Do not use
+tools.` The provider reads the full prefix from the cache and writes only the
+short tail. Meridian ignores `max_tokens`, so the instruction keeps the reply
+short. In a probe on a 46k-token context, a warm cost $0.017 and a new write
+cost $0.39. The next real turn still read 99% of its prompt from the cache.
+
+A warm goes out at 90% of the cache lifetime (54 minutes for one hour, 4.5
+minutes for five minutes) after the last real request or the last warm. All
+of these must be true:
+
+- `warm.enabled` is `true` and the model's API is in `warm.apis`.
+- The session, the model and the branch are the same as in the captured
+  request.
+- No compaction or background summary is in progress.
+- A wake is pending, or a tool call is running now. Wakes are a running shell
+  job, a running subagent, a form or page from `artifact_ask` or
+  `artifact_publish` without `watch: false`, and a `pi-extras:wake-pending`
+  event.
+
+Warming stops when one of these is true:
+
+- No wake is pending and no tool call runs.
+- `warm.maxHours` (default 8) passed after the last real request.
+- The prompt is smaller than `warm.minTokens` (default 20,000).
+- The warms of this wait would cost more than one cache miss. For a
+  five-minute cache, this stops warming after about one hour.
+- The timer ran too late, for example after the machine slept.
+- A warm failed. The extension does not send it again.
+- A real request started. It stops a warm that is in progress.
+
+Each warm adds a `pi-extras.cache-warm` entry to the session with the
+provider, the model and the usage. Status Plus and the usage limits count it
+in the session's spend and tokens. Each decision adds one JSON line to
+`cache-warm.log` next to `cache-compaction.log`, with the reason, the tokens
+and the cost. It never holds provider text. A warm to Meridian uses the
+`<session>:background` key, as the background summary does, so it does not
+hold the main session's turn lock. Subagents warm as well while they wait for
+their own shell jobs. A subagent that finished has no wake, so it does not
+warm. Pi's own cache warmer stops after 30 minutes idle and needs
+`promptCache` in `models.json`; this one does not.
+
+Another extension can announce a wake with
+`pi.events.emit("pi-extras:wake-pending", { sessionId, key, pending })`.
+Send `pending: false` with the same `key` when the wake comes or is
+cancelled.
+
 **Log.** Each decision adds one JSON line to
 `PI_CODING_AGENT_DIR/cache-compaction.log` (default
 `~/.pi/agent/cache-compaction.log`): the session ID, provider and model, why
@@ -725,7 +780,14 @@ the room is too small, Pi's own compaction runs with the reason
     "enabled": true,
     "idleSeconds": { "anthropic": 3300, "openai-codex": 240 },
     "background": false,
-    "backgroundPercent": 90
+    "backgroundPercent": 90,
+    "warm": {
+      "enabled": true,
+      "maxHours": 8,
+      "minTokens": 20000,
+      "apis": ["anthropic-messages"],
+      "formTools": ["artifact_ask", "artifact_publish"]
+    }
   }
 }
 ```
@@ -736,6 +798,13 @@ the room is too small, Pi's own compaction runs with the reason
 - `backgroundPercent`: the start point, as a percent of Pi's trigger, from 50
   to 99. Default 90. An earlier start gives the summary more time, but the
   kept tail is larger and more summaries go unused.
+- `warm`: cache warming while the session waits (see "Cache warming"
+  above). `enabled` (default `true`); `maxHours`, the limit after the last
+  real request, more than 0 and up to 48 (default 8); `minTokens`, the
+  smallest prompt to warm (default 20,000); `apis`, the APIs to warm
+  (default `["anthropic-messages"]`); `formTools`, the tools whose result
+  waits for feedback (default `["artifact_ask", "artifact_publish"]`). A
+  name also matches with an MCP prefix, such as `mcp__oc__artifact_ask`.
 - `idleSeconds`: per provider, how long after the last request the cache
   counts as warm, from 0 to 86400 (0 means never use the cache path). The
   default is 55 minutes for Anthropic through Meridian on port 3456, which

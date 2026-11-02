@@ -2,6 +2,22 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Cache Compaction: cache warming. While a session waits for a shell job, a
+  subagent or a form answer, or while one tool call runs for a long time,
+  the extension sends the last real request again before the prompt cache
+  expires. A short instruction at the end keeps the reply to one word. A warm
+  reads the prefix from the cache, so it costs about 1/20 of a new cache
+  write. Warming stops after 8 hours, when no wake is pending, when a warm
+  fails, or when the warms would cost more than one miss. It is on by
+  default. Set `cacheCompaction.warm.enabled: false` to turn it off.
+- Other extensions can announce a pending wake with the
+  `pi-extras:wake-pending` event.
+- Status Plus and the usage limits count the spend of each warm.
+
 ## 0.38.4 - 2026-11-02
 
 ### Changed
