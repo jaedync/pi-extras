@@ -66,7 +66,8 @@ export function createWarmer(d: WarmerDeps): Warmer {
 	const schedule = (at: number) => {
 		clearTimer();
 		dueAt = at;
-		timer = d.timers.set(() => { timer = undefined; void fire(); }, Math.max(0, at - d.now()));
+		// A timer callback has no caller to catch for it, and a warm is only an optimization.
+		timer = d.timers.set(() => { timer = undefined; fire().catch(() => clearTimer()); }, Math.max(0, at - d.now()));
 	};
 	const stop = (reason: string, extra: Record<string, unknown> = {}) => { clearTimer(); log({ event: "stop", reason, ...extra }); };
 	const resetSession = () => { clearTimer(); abort(); wakes.clear(); tools.clear(); toolArgs.clear(); spent = 0; lastWarmCost = undefined; ctx = undefined; sessionId = undefined; };
@@ -76,7 +77,8 @@ export function createWarmer(d: WarmerDeps): Warmer {
 		const branch = context.sessionManager.getBranch();
 		for (let i = branch.length - 1; i >= 0; i--) {
 			const entry = branch[i];
-			if (entry.type === "message" && entry.message.role === "assistant") {
+			// A failed reply reports no prompt; the request before it still owns the cache entry.
+			if (entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason !== "error" && entry.message.stopReason !== "aborted") {
 				const usage = entry.message.usage;
 				return usage.input + usage.cacheRead + usage.cacheWrite;
 			}
