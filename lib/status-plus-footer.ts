@@ -3,7 +3,7 @@
  * row per provider with spend this session.
  *
  *   12:00 ██████████░░░░░░░░░░ 112k / 272k   │ gpt-5.6-sol high │ $2.82 · 19m │ ~/projects/example-app (main) · e2e
- *   ↻2     12 prompts · 31 turns · 48 tools  │ 1.2M in · 310k write · 9.8M read · 48k out  │ cache 92% · 2m warm
+ *   ↻ 2    12 prompts · 31 turns · 48 tools  │ 1.2M in · 310k write · 9.8M read · 48k out  │ cache 92% · 2m warm
  *   Ant   $1.84 · 12m05s │ 9.4M in · 41k out │ 5h 47% · 7d 12% · $87/$100 left │ 3pm · Sun 12:47am
  *
  * The renderer is pure: the extension assembles a FooterModel from Pi's
@@ -23,7 +23,7 @@ import { spendText } from "./status-plus-spend.ts";
 import { meshText, type ExtensionStatus, type MeshState } from "./status-plus-mesh.ts";
 import {
 	cacheState as _cacheState,
-	COMPACTION_MARK,
+	compactionMark,
 	compareProviderIds,
 	contextBar,
 	contextHeat,
@@ -172,7 +172,7 @@ function countersCell(paint: Painter, model: FooterModel, compact: boolean): str
 /** How often main's context was compacted, short enough for the gap under the clock; nothing before the first one. */
 function compactionsCell(paint: Painter, model: FooterModel): string {
 	const count = model.counters.compactions ?? 0;
-	return count > 0 ? paint.fg("dim", `${COMPACTION_MARK}${count}`) : "";
+	return count > 0 ? paint.fg("dim", compactionMark(count)) : "";
 }
 
 /** Where the tool figure was drawn: a row of the footer and its columns, end exclusive. */

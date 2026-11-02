@@ -18,7 +18,7 @@ import { formatTime, type Motion, type Seg } from "../band/band.ts";
 import { agentHue, agentLine, avatarOf, doingGlyph, doingOf, endGlyph, spaced } from "../band/agent-look.ts";
 import { everyFrame } from "../band/clock.ts";
 import { formatMoney } from "../status-plus-logic.ts";
-import { COMPACTION_MARK, contextHeat, formatTokens } from "../status-plus-render.ts";
+import { compactionMark, contextHeat, formatTokens } from "../status-plus-render.ts";
 import { contextShare } from "../compaction-point.ts";
 import type { PendingItem } from "./deliver.ts";
 import { MAIN } from "./names.ts";
@@ -162,7 +162,7 @@ function contextCell(record: AgentRecord, columns: RowColumns): Seg[] {
 }
 
 /** How often its session compacted, marked as main's footer marks its own; empty before the first. */
-export const compactionsText = (record: AgentRecord): string => (record.compactions ? `${COMPACTION_MARK}${record.compactions}` : "");
+export const compactionsText = (record: AgentRecord): string => (record.compactions ? compactionMark(record.compactions) : "");
 
 export const compactionWords = (count: number): string => `${count} ${count === 1 ? "compaction" : "compactions"}`;
 

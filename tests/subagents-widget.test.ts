@@ -237,8 +237,8 @@ test("an agent that compacted shows how often next to its context, and the colum
 	];
 	const columns = rowColumns(rows, 60_000);
 	const lines = rows.map((row) => stripTerminalSequences(presenceLine(quiet() as never, row, 120, 60_000, "reduced", columns)));
-	assert.match(lines[0]!, /48k 24% {2}↻2 {2}\$2\.15/);
-	assert.match(lines[1]!, /12k {2}6% {6}\$0\.31/);
+	assert.match(lines[0]!, /48k 24% {2}↻ 2 {2}\$2\.15/);
+	assert.match(lines[1]!, /12k {2}6% {7}\$0\.31/);
 	assert.equal(new Set(lines.map((line) => line.indexOf("$"))).size, 1);
 	const none = rowColumns([rows[1]!], 60_000);
 	assert.doesNotMatch(stripTerminalSequences(presenceLine(quiet() as never, rows[1]!, 120, 60_000, "reduced", none)), /↻/);

@@ -191,6 +191,9 @@ export function toneForPct(pct: number): "dim" | "warning" | "error" {
 /** Marks a compaction count, in main's footer and in the subagent rows. */
 export const COMPACTION_MARK = "↻";
 
+/** A compaction count with its mark. The space matters: many terminal fonts draw ↻ wider than its one cell, so it covered the digit after it. */
+export const compactionMark = (count: number): string => `${COMPACTION_MARK} ${count}`;
+
 /** How a context figure is colored: dim until it needs attention, warning above 70 percent of the compaction point, error above 90. */
 export const contextHeat = (percent: number): "dim" | "warning" | "error" => (percent > 90 ? "error" : percent > 70 ? "warning" : "dim");
 

@@ -2,6 +2,14 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Status Plus and Subagents: the compaction count now has a space after its
+  mark (`↻ 3`). Many terminal fonts draw `↻` wider than one cell, so the mark
+  covered the digit after it.
+
 ## 0.38.5 - 2026-11-02
 
 ### Added
