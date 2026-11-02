@@ -111,7 +111,7 @@ test("each call is recorded with its target, timing, outcome and any approval", 
 	const { session } = fakeSession(async (tool, args) => {
 		now += tool === "get_app_state" ? 250 : 40;
 		if (tool === "click") return text("no such element", true);
-		return { content: [{ type: "text", text: `App=${args.app}` }], isError: false, ...(tool === "get_app_state" ? { startupMs: 900 } : {}) };
+		return { content: [{ type: "text", text: `App=${args.app}\n0 standard window` }], isError: false, ...(tool === "get_app_state" ? { startupMs: 900 } : {}) };
 	});
 	const withApproval = {
 		async call(tool: string, args: Record<string, unknown>, options: CallOptions) {

@@ -2634,6 +2634,17 @@ desktop session, so it works the same from a local terminal and over SSH. Use
 only one `computer_use` provider at a time; remove another computer-use
 extension before opting in.
 
+An element index is a position in the latest tree, not an element. When an
+action changes an app's layout, an old index can name another control, and the
+service clicks it with no error. So the tool keeps what each index named at the
+script's last `get_app_state` of that app. Before an element action that follows
+another action on the same app, it reads the tree again. If the element at that
+index is a different one, the call fails with a "stale" error and the action is
+not sent. The element's role, title and description must match; its value and
+state can change. The first element action after a `get_app_state` needs no extra
+read. The check does not see layout changes that the script did not cause, for
+example a list that reloads by itself before the first action.
+
 This relies on undocumented parts of the ChatGPT app and can break when it
 updates. OpenAI does not produce or endorse this integration.
 

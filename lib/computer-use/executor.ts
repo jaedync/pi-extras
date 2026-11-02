@@ -5,6 +5,7 @@
  */
 import { Worker } from "node:worker_threads";
 import { type CallTarget, describeCall } from "./describe.ts";
+import { type CallGuard, IndexGuard, type Reader } from "./index-guard.ts";
 import type { Approval, CallOptions, ContentBlock, SkySession, ToolResult } from "./session.ts";
 
 export const METHODS = [
@@ -45,6 +46,8 @@ export interface ScriptApi {
 	args?(method: string, raw: unknown): Record<string, unknown>;
 	/** The value a call resolves to in the script; images stay here behind `keep`'s handles. */
 	value(method: string, args: Record<string, unknown>, result: ToolResult, keep: (image: Image) => ScreenshotHandle): unknown;
+	/** Makes the executor's guard, which may change or refuse calls; it lives as long as the executor. */
+	guard?(): CallGuard;
 }
 
 const textOf = (result: ToolResult) => result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
@@ -62,6 +65,7 @@ export const SKY_API: ScriptApi = {
 		const image = result.content.find((block): block is Image => block.type === "image");
 		return { app: args.app, text, screenshot: image ? keep(image) : null };
 	},
+	guard: () => new IndexGuard(),
 };
 
 export interface ExecutorOptions {
@@ -120,9 +124,11 @@ export class CodeExecutor {
 	private nextScreenshot = 1;
 	private store: Record<string, unknown> = {};
 	private queue: Promise<unknown> = Promise.resolve();
+	private readonly guard?: CallGuard;
 
 	constructor(options: ExecutorOptions) {
 		this.options = options;
+		this.guard = (options.api ?? SKY_API).guard?.();
 	}
 
 	execute(code: string, options: RunOptions): Promise<CodeResult> {
@@ -136,7 +142,7 @@ export class CodeExecutor {
 		if (code.length > MAX_CODE_CHARS) return Promise.reject(new Error(`${api.tool} code is over ${MAX_CODE_CHARS} characters`));
 		return new Promise((resolve, reject) => {
 			const worker = new Worker(WORKER, { workerData: { code, store: this.store, methods: api.methods, global: api.global, imageHint: api.imageHint } });
-			const run = new Run(this.options, options, worker, (key) => this.screenshots.get(key), (image) => this.keepScreenshot(image));
+			const run = new Run(this.options, options, worker, (key) => this.screenshots.get(key), (image) => this.keepScreenshot(image), this.guard);
 			run.settle = (outcome) => {
 				options.signal?.removeEventListener("abort", abort);
 				void worker.terminate();
@@ -190,9 +196,11 @@ class Run {
 	private readonly screenshot: (id: string) => Image | undefined;
 	private readonly keep: (image: Image) => ScreenshotHandle;
 	private readonly api: ScriptApi;
+	private readonly guard?: CallGuard;
 
-	constructor(executor: ExecutorOptions, options: RunOptions, worker: Worker, screenshot: (id: string) => Image | undefined, keep: (image: Image) => ScreenshotHandle) {
+	constructor(executor: ExecutorOptions, options: RunOptions, worker: Worker, screenshot: (id: string) => Image | undefined, keep: (image: Image) => ScreenshotHandle, guard?: CallGuard) {
 		this.executor = executor;
+		this.guard = guard;
 		this.api = executor.api ?? SKY_API;
 		this.options = options;
 		this.worker = worker;
@@ -247,7 +255,8 @@ class Run {
 		this.inFlight++;
 		let raw: unknown = {};
 		try { raw = JSON.parse(message.args); } catch { /* reported by the call below */ }
-		const args = this.api.args ? this.api.args(message.method, raw) : raw as Record<string, unknown>;
+		const given = this.api.args ? this.api.args(message.method, raw) : raw as Record<string, unknown>;
+		const args = this.guard ? this.guard.prepare(message.method, given) : given;
 		const target = { method: message.method, ...this.api.describe(message.method, args) };
 		const started = this.now();
 		let approval: Approval | undefined;
@@ -261,10 +270,15 @@ class Run {
 			this.options.onProgress?.({ calls: [...this.calls] });
 		};
 		this.options.onProgress?.({ calls: [...this.calls], running: target });
+		// The guard's own reads: not counted against the code's calls, and not shown as rows.
+		const read: Reader = (method, readArgs) => this.executor.session.call(method, readArgs, { approve, signal: this.options.signal });
 		try {
+			const refusal = await this.guard?.before(message.method, args, read);
+			if (refusal) throw new Error(refusal);
 			const result = await this.executor.session.call(message.method, args, { approve, signal: this.options.signal });
 			startupMs = result.startupMs;
 			if (result.isError) throw new Error(textOf(result) || `${message.method} failed`);
+			await this.guard?.after(message.method, args, result, read);
 			const value = this.api.value(message.method, args, result, this.keep);
 			record();
 			this.reply(message.id, { value: JSON.stringify(value) });
