@@ -9,6 +9,7 @@ import { describeProblems, validateEvents, validateShots } from "./lib/schema.mj
 import { buildCamera, buildCaptions, buildCursor, buildVoice } from "./lib/compose-timeline.mjs";
 import { lookOf, renderHtml } from "./lib/compose-html.mjs";
 import { projectFont } from "./lib/compose-font.mjs";
+import { runtimeGsap, runtimeGsapError } from "./lib/gsap.mjs";
 
 const USAGE = "Usage: wv compose <captureDir> --shots <shots.json> --out <projectDir> [--voice <voiceDir>]";
 const readJson = (p, what) => {

@@ -166,8 +166,9 @@ function initInstrument() {
 			const lineHeight = parseFloat(style.lineHeight) || fontSize * 1.2;
 			const number = (value) => parseFloat(value) || 0;
 			if (element.tagName === "INPUT" || element.tagName === "TEXTAREA") {
-				const value = element.value ?? "";
-				const end = typeof element.selectionEnd === "number" ? element.selectionEnd : value.length;
+				const field = /** @type {HTMLInputElement | HTMLTextAreaElement} */ (element);
+				const value = field.value ?? "";
+				const end = typeof field.selectionEnd === "number" ? field.selectionEnd : value.length;
 				const upTo = value.slice(0, end);
 				const lines = upTo.split("\n");
 				const lineText = lines[lines.length - 1];
@@ -199,7 +200,7 @@ function initInstrument() {
 		},
 	};
 
-	window.__wv = api;
+	/** @type {any} */ (window).__wv = api;
 }
 
 export async function installInstrument(page) {
@@ -207,7 +208,7 @@ export async function installInstrument(page) {
 }
 
 export function beginAction(page) {
-	return page.evaluate(() => window.__wv.begin());
+	return page.evaluate(() => /** @type {any} */ (window).__wv.begin());
 }
 
 /**
@@ -220,7 +221,7 @@ export function settleAction(page, capMs = SETTLE_CAP_MS) {
 	const cap = new Promise((resolve) => {
 		timer = setTimeout(() => resolve({ rects: [], quietMs: 0, capped: true }), capMs);
 	});
-	return Promise.race([page.evaluate(() => window.__wv.settle()), cap]).finally(() => clearTimeout(timer));
+	return Promise.race([page.evaluate(() => /** @type {any} */ (window).__wv.settle()), cap]).finally(() => clearTimeout(timer));
 }
 
 // A short timeout: the element can be gone after the action (a navigation, a button that
@@ -228,19 +229,19 @@ export function settleAction(page, capMs = SETTLE_CAP_MS) {
 const READ_TIMEOUT_MS = 1500;
 
 export function caretOf(locator) {
-	return locator.evaluate((element) => window.__wv.caret(element), undefined, { timeout: READ_TIMEOUT_MS });
+	return locator.evaluate((element) => /** @type {any} */ (window).__wv.caret(element), undefined, { timeout: READ_TIMEOUT_MS });
 }
 
 export function fontPxOf(locator) {
-	return locator.evaluate((element) => window.__wv.fontPx(element), undefined, { timeout: READ_TIMEOUT_MS });
+	return locator.evaluate((element) => /** @type {any} */ (window).__wv.fontPx(element), undefined, { timeout: READ_TIMEOUT_MS });
 }
 
 export function inkOf(locator) {
-	return locator.evaluate((element) => window.__wv.ink(element), undefined, { timeout: READ_TIMEOUT_MS });
+	return locator.evaluate((element) => /** @type {any} */ (window).__wv.ink(element), undefined, { timeout: READ_TIMEOUT_MS });
 }
 
 export function rectOf(locator) {
-	return locator.evaluate((element) => window.__wv.rect(element), undefined, { timeout: READ_TIMEOUT_MS });
+	return locator.evaluate((element) => /** @type {any} */ (window).__wv.rect(element), undefined, { timeout: READ_TIMEOUT_MS });
 }
 
 /** Text items kept per snapshot; a page with more is a wall of text that no film shows whole. */

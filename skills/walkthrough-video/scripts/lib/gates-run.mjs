@@ -159,7 +159,7 @@ export async function cameraScaleSamples(projectDir, plan) {
 	}
 }
 
-export async function runGates({ project, capture, log = () => {} }) {
+export async function runGates({ project, capture, log = (_line) => {} }) {
 	const projectDir = resolve(project);
 	const captureDir = resolve(capture);
 	const plan = readJson(join(projectDir, "plan.json"), "Run 'wv compose' to write it");

@@ -145,7 +145,7 @@ export class FramePump {
 		const stdin = this.ffmpeg?.stdin;
 		if (!stdin || stdin.destroyed) throw this.ffmpegError ?? new Error("ffmpeg stopped before the capture ended");
 		if (stdin.write(buffer)) return;
-		await new Promise((resolve, reject) => {
+		await new Promise(/** @param {(value?: void) => void} resolve */ (resolve, reject) => {
 			const timer = setTimeout(() => {
 				cleanup();
 				reject(new Error("ffmpeg has not read a frame for 60 s"));
@@ -246,7 +246,7 @@ export class FramePump {
 		await this.loop;
 		const ffmpeg = this.ffmpeg;
 		if (ffmpeg) {
-			await new Promise((resolve) => {
+			await new Promise(/** @param {(value?: void) => void} resolve */ (resolve) => {
 				if (ffmpeg.exitCode !== null || ffmpeg.signalCode !== null) {
 					resolve();
 					return;
