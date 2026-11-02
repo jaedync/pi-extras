@@ -6,12 +6,11 @@ import type { ExtensionContext, InlineExtension, MessageEndEvent, MessageEndEven
 import { CONFIG_FILE } from "../extras-config.ts";
 import { loadConfig } from "./config.ts";
 import { captureLimit, failureMessage, parseRateLimit } from "./core.ts";
+import { RECOVERY_TYPE } from "./entry-type.ts";
 import { TransientBackoff, type ConnectionEvidence, type TransientDeps } from "./transient.ts";
 import { createQuotaTransportGuard, type QuotaTransportOptions } from "./transport.ts";
 
 export const CHILD_GUARD_NAME = "rate-limit-child-warning";
-// The same custom type as the main session's entries (controller.ts RECOVERY_TYPE).
-const RECOVERY_TYPE = "rate-limit-recovery";
 export const CHILD_GUARD_PATH = `<inline:${CHILD_GUARD_NAME}>`;
 export const SETUP_FAILURE = "Child quota retry protection could not be initialized. Check models.json and custom provider configuration, then reload Pi before retrying.";
 

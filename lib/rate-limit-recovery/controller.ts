@@ -2,6 +2,7 @@
 import { dirname, join } from "node:path";
 import type { AgentBeforeSettleEvent, ExtensionAPI, ExtensionContext, MessageEndEvent, MessageEndEventResult, SessionBoundaryDraft, TurnEndEvent, TurnEndEventResult } from "@earendil-works/pi-coding-agent";
 import { CONFIG_FILE } from "../extras-config.ts";
+import { RECOVERY_TYPE } from "./entry-type.ts";
 import { operationalError } from "../operational-log.ts";
 import { loadConfig, saveConfig, type RecoveryConfig } from "./config.ts";
 import { captureLimit, failureMessage, parseRateLimit, planWait, resumedMessage, sameScope, type CapturedLimit, type WaitPlan, type WaitRefusal } from "./core.ts";
@@ -11,7 +12,7 @@ import { createQuotaTransportGuard } from "./transport.ts";
 import { ANTHROPIC_HOSTS, type FirstEventPolicy } from "./first-event.ts";
 import { proxyRetryLimit, TransientBackoff, type TransientKind } from "./transient.ts";
 
-export const RECOVERY_TYPE = "rate-limit-recovery";
+export { RECOVERY_TYPE };
 const WAIT_LABELS: Readonly<Record<TransientKind, string>> = { "rate-limit": "Rate limited on", proxy: "Claude Code proxy failed on", connection: "Connection failed on" };
 const HELP = "Usage: /rate-limit-recovery on|off|status|cancel";
 const REFUSALS: Record<WaitRefusal, string> = {
