@@ -257,7 +257,7 @@ class Run {
 		let raw: unknown = {};
 		try { raw = JSON.parse(message.args); } catch { /* reported by the call below */ }
 		const args = this.api.args ? this.api.args(message.method, raw) : raw as Record<string, unknown>;
-		const target = { method: message.method, ...this.api.describe(message.method, args) };
+		let target = { method: message.method, ...this.api.describe(message.method, args) };
 		const started = this.now();
 		let approval: Approval | undefined;
 		let startupMs: number | undefined;
@@ -274,6 +274,7 @@ class Run {
 		const read: Reader = (method, readArgs) => this.executor.session.call(method, readArgs, { approve, signal: this.options.signal });
 		const send = async () => {
 			const sent = this.guard ? this.guard.prepare(message.method, args) : args;
+			if (sent !== args) target = { method: message.method, ...this.api.describe(message.method, sent) };
 			const refusal = await this.guard?.before(message.method, sent, read);
 			if (refusal) throw new Error(refusal);
 			const result = await this.executor.session.call(message.method, sent, { approve, signal: this.options.signal });

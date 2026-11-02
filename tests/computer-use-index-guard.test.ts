@@ -212,12 +212,21 @@ test("a check read that fails refuses the action with the reason", async () => {
 	assert.deepEqual(calls, ["get_app_state", "press_key", "get_app_state"]);
 });
 
-test("after a check read, the next get_app_state of the code gives a full tree, so a diff never skips what the code did not see", async () => {
-	const sky = fakeSky({ tree: BASIC });
-	const executor = new CodeExecutor({ session: sky.session });
+test("after a check read that saw a change, the next get_app_state of the code gives a full tree, so a diff never skips what the code did not see", async () => {
+	const { sky, session } = changingSky(BASIC, "press_key", BASIC_AFTER_DIGIT);
+	const executor = new CodeExecutor({ session });
 	await executor.execute(`await sky.get_app_state({ app: "Calculator" }); await sky.press_key({ app: "Calculator", key: "a" }); await sky.click({ app: "Calculator", element_index: "15" }); await sky.get_app_state({ app: "Calculator" }); await sky.get_app_state({ app: "Calculator" });`, { approve });
 	const reads = sky.calls.filter((call) => call.tool === "get_app_state").map((call) => call.args.disableDiff === true);
 	assert.deepEqual(reads, [false, true, true, false]);
+});
+
+test("a check read that saw no change leaves the code's next read a diff", async () => {
+	const sky = fakeSky({ tree: BASIC });
+	const executor = new CodeExecutor({ session: sky.session });
+	await executor.execute(`await sky.get_app_state({ app: "Calculator" });`, { approve });
+	await executor.execute(`await sky.click({ app: "Calculator", element_index: "15" }); await sky.get_app_state({ app: "Calculator" });`, { approve });
+	const reads = sky.calls.filter((call) => call.tool === "get_app_state").map((call) => call.args.disableDiff === true);
+	assert.deepEqual(reads, [false, true, false], "the guard's read, then the code's read as it asked for it");
 });
 
 test("when the code gets a diff, the guard reads a full tree once for its baseline", async () => {
@@ -361,4 +370,39 @@ test("refusals in a row reuse one check read while no action goes to the app", a
 		for (const index of ["15", "9", "15"]) { try { await sky.click({ app: "Calculator", element_index: index }); } catch {} }
 	`, { approve });
 	assert.deepEqual(sky.calls.map((call) => call.tool), ["get_app_state", "press_key", "get_app_state"]);
+});
+
+test("a second scroll of a list passes, though the scroll changed the rows that the list shows", async () => {
+	const list = (first: number) => `${header()}0 standard window Mail\n\t1 scroll area Messages\n\t\t2 cell Item ${first}\n\t\t3 cell Item ${first + 1}\n</app_state>`;
+	const { sky, session } = changingSky(list(1), "scroll", list(9));
+	const executor = new CodeExecutor({ session });
+	const result = await executor.execute(`
+		await sky.get_app_state({ app: "Calculator" });
+		await sky.scroll({ app: "Calculator", element_index: "1", direction: "down" });
+		await sky.scroll({ app: "Calculator", element_index: "1", direction: "down" });
+	`, { approve });
+	assert.equal(result.error, undefined);
+	assert.equal(sky.calls.filter((call) => call.tool === "scroll").length, 2);
+});
+
+test("a row passes when one of its two child labels changed with state, and fails when both changed", async () => {
+	const row = (unread: number, name = "Inbox") => `${header()}0 standard window Mail\n\t1 row\n\t\t2 text ${name}\n\t\t3 text ${unread} unread\n</app_state>`;
+	for (const [next, ok] of [[row(3), true], [row(3, "Sent"), false]] as const) {
+		const { sky, session } = changingSky(row(4), "click", next);
+		const executor = new CodeExecutor({ session });
+		const result = await executor.execute(`
+			await sky.get_app_state({ app: "Calculator" });
+			await sky.click({ app: "Calculator", element_index: "1" });
+			await sky.click({ app: "Calculator", element_index: "1" });
+		`, { approve });
+		assert.equal(result.error === undefined, ok, result.error);
+		assert.equal(sky.calls.filter((call) => call.tool === "click").length, ok ? 2 : 1);
+	}
+});
+
+test("text after the flags counts as a title, and only a bare number counts as a value", () => {
+	assert.notEqual(identity("checkbox (settable) Remember me"), identity("checkbox (settable) Send copies"));
+	assert.notEqual(identity("button (disabled) Save"), identity("button (disabled) Delete"));
+	assert.equal(identity("splitter (disabled, settable, float) -1"), identity("splitter (settable, float) 240.5"));
+	assert.equal(identity("slider (settable) 40%"), identity("slider (settable) 75%"));
 });

@@ -2640,16 +2640,19 @@ service clicks it with no error. So the tool keeps what each index named at the
 script's last `get_app_state` of that app. Before an element action that follows
 another action on the same app, it reads the full tree again. If the element at
 that index is a different one, the call fails with a "stale" error and the action
-is not sent. To be the same element, it must have the same level in the tree, the
-same role, title, description and ID, and the same first child elements. Its
-value and state can change. Calls of one script that run at the same time
+is not sent. To be the same element, it must have the same level in the tree and
+the same role, title, description and ID. At least half of its first child
+elements must also match, so a list row that now shows another item fails. For a
+scroll, only the element itself counts, because a scroll changes the rows that it
+shows. Its value and state can change. Calls of one script that run at the same time
 (`Promise.all`) go one at a time, so no call can move the layout between the check
 and the action.
 
 The first element action after a `get_app_state` in the same script needs no
 extra read. Each later element action costs one full read with a screenshot. A
 new script checks its first element action too, because the window can change
-between two tool calls. The check cannot tell apart two elements that look the
+between two tool calls. When a check read finds a change, the script's next
+`get_app_state` of that app returns a full tree, not a diff. The check cannot tell apart two elements that look the
 same in every way it compares. It does not see a change that the script did not
 cause before its first element action, for example a list that reloads by itself
 right after the read.

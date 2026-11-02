@@ -62,6 +62,8 @@ const FLAGS = /\s*\([^)]*\)/g;
 const ID_STATE = /[;:]/;
 /** Children that count toward an element's identity, so two rows that look the same still differ. */
 const MAX_CHILDREN = 8;
+/** A value with no label after the flags: a number, as in "splitter (settable, float) -1". */
+const BARE_VALUE = /^-?\d+(?:\.\d+)?%?$/;
 const SHOWN_CHARS = 80;
 
 const textOf = (result: ToolResult) => result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
@@ -91,15 +93,15 @@ export function parseTree(text: string): Tree | undefined {
 /**
  * What makes a row the same element: its role, its title, its Description and
  * its ID without state. Values, flags such as "disabled", Help and Secondary
- * Actions change with normal use, so they do not count. A value with no label
- * comes after the flags ("splitter (settable, float) -1"), so the text after
- * the last flags does not count either.
+ * Actions change with normal use, so they do not count. A number with no label
+ * after the flags is a value ("splitter (settable, float) -1"), so it does not
+ * count either. Other text after the flags can be a title, so it counts.
  */
 export function identity(row: string): string {
 	const fields = [...row.matchAll(FIELD)];
 	let head = fields.length > 0 ? row.slice(0, fields[0].index) : row;
 	const flags = [...head.matchAll(FLAGS)].at(-1);
-	if (flags) head = head.slice(0, flags.index! + flags[0].length);
+	if (flags && BARE_VALUE.test(head.slice(flags.index! + flags[0].length).trim())) head = head.slice(0, flags.index! + flags[0].length);
 	const field = (key: string): string => {
 		const at = fields.findIndex((match) => match[1] === key);
 		if (at < 0) return "";
@@ -109,12 +111,15 @@ export function identity(row: string): string {
 	return [head.replace(FLAGS, "").trim(), field("Description"), field("ID").split(ID_STATE)[0].trim()].join("\u0000");
 }
 
-/**
- * The identity of the element at `index` in its tree: its level, its own row
- * and its first direct children. A list reload can put a row with the same text
- * at the same index ("row", "cell"); its children (the item's text) tell them apart.
- */
-export function elementKey(tree: Tree, index: string): string | undefined {
+export interface ElementKey {
+	/** The level and the row's own identity. */
+	readonly self: string;
+	/** The identities of the first direct children. */
+	readonly children: readonly string[];
+}
+
+/** The identity of the element at `index` in its tree: its level, its own row and its first direct children. */
+export function elementKey(tree: Tree, index: string): ElementKey | undefined {
 	const row = tree.rows.get(index);
 	if (!row) return undefined;
 	const children: string[] = [];
@@ -123,8 +128,34 @@ export function elementKey(tree: Tree, index: string): string | undefined {
 		if (!next || next.depth <= row.depth) break;
 		if (next.depth === row.depth + 1) children.push(identity(next.text));
 	}
-	return [String(row.depth), identity(row.text), ...children].join("\u0001");
+	return { self: `${row.depth}\u0001${identity(row.text)}`, children };
 }
+
+/**
+ * Whether two keys name the same element. A list reload can put a row with the
+ * same text at the same index ("row", "cell"); its children (the item's text)
+ * tell them apart. A child label can hold state ("4 unread", "Play"), so half
+ * of the children must match, not all. A scroll changes the children that a
+ * scroll area shows, so for a scroll only the row itself counts.
+ */
+export function sameElement(was: ElementKey, now: ElementKey | undefined, method: string): boolean {
+	if (!now || now.self !== was.self) return false;
+	if (method === "scroll") return true;
+	const total = Math.max(was.children.length, now.children.length);
+	if (total === 0) return true;
+	const left = [...now.children];
+	let matched = 0;
+	for (const child of was.children) {
+		const at = left.indexOf(child);
+		if (at >= 0) {
+			matched++;
+			left.splice(at, 1);
+		}
+	}
+	return matched * 2 >= total;
+}
+
+const sameRows = (a: Tree, b: Tree) => a.rows.size === b.rows.size && [...a.rows].every(([index, row]) => b.rows.get(index)?.text === row.text);
 
 interface AppView {
 	readonly tree: Tree;
@@ -170,7 +201,7 @@ export class IndexGuard implements CallGuard {
 		}
 		const index = typeof args.element_index === "string" || typeof args.element_index === "number" ? String(args.element_index) : undefined;
 		const was = index === undefined ? undefined : elementKey(view.tree, index);
-		const refusal = ELEMENT_METHODS.has(method) && view.acted && was !== undefined ? await this.check(view, args.app, index!, read) : undefined;
+		const refusal = ELEMENT_METHODS.has(method) && view.acted && was !== undefined ? await this.check(view, args.app, index!, method, read) : undefined;
 		if (!refusal) {
 			view.acted = true;
 			view.checked = undefined;
@@ -199,11 +230,14 @@ export class IndexGuard implements CallGuard {
 		this.views.set(id, { tree, acted: false, resync: false });
 	}
 
-	private async check(view: AppView, app: unknown, index: string, read: Reader): Promise<string | undefined> {
+	private async check(view: AppView, app: unknown, index: string, method: string, read: Reader): Promise<string | undefined> {
 		let current = view.checked;
 		if (!current) {
-			view.resync = true;
-			const failure = (reason: string) => `could not check element_index "${index}": ${reason}. The action was not sent. Call sky.get_app_state again.`;
+			const failure = (reason: string) => {
+				// The read may have reached Sky, so its next diff may skip a change the code did not see.
+				view.resync = true;
+				return `could not check element_index "${index}": ${reason}. The action was not sent. Call sky.get_app_state again.`;
+			};
 			try {
 				const result = await read("get_app_state", { app, disableDiff: true });
 				if (result.isError) return failure(textOf(result) || "get_app_state failed");
@@ -213,8 +247,11 @@ export class IndexGuard implements CallGuard {
 			}
 			if (!current) return failure("the current tree did not parse");
 			view.checked = current;
+			// Sky diffs the code's next read against this read. When nothing changed, that diff is the
+			// same as one against the code's own read; otherwise the code must get a full tree.
+			if (!sameRows(current, view.tree)) view.resync = true;
 		}
-		if (elementKey(current, index) === elementKey(view.tree, index)) return undefined;
+		if (sameElement(elementKey(view.tree, index)!, elementKey(current, index), method)) return undefined;
 		const was = view.tree.rows.get(index)!;
 		const now = current.rows.get(index);
 		const after = now === undefined ? "no element has that index now" : now.text === was.text ? `now it holds other contents` : `now it is ${shown(now)}`;
