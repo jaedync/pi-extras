@@ -9,6 +9,7 @@ import { routedModel } from "../lib/routed-model.ts";
 import { COMPACTION_DECISION_EVENT, COMPACTION_PROGRESS_EVENT, PROGRESS_TAIL_CHARS, compactionKey, type CompactionDecision } from "../lib/cache-compaction/decision.ts";
 import { foldProjection } from "../lib/cache-compaction/system-fold.ts";
 import { estimateRequestContext, contextSafetyTokens, summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
+import { createWarmer, realTimers, type Timers } from "../lib/cache-compaction/warmer.ts";
 
 type Message = SessionProjection["messages"][number];
 interface Captured extends RequestIdentity, Snapshot {
@@ -20,7 +21,7 @@ interface Captured extends RequestIdentity, Snapshot {
 	readonly effort?: RequestEffort;
 }
 type RequestSettings = Pick<SettingsManager, "getProviderRetrySettings" | "getHttpIdleTimeoutMs" | "getWebSocketConnectTimeoutMs" | "getTransport" | "getCompactionSettings">;
-export interface CacheCompactionOptions { readonly configFile?: string; readonly now?: () => number; readonly settingsManager?: RequestSettings }
+export interface CacheCompactionOptions { readonly configFile?: string; readonly now?: () => number; readonly settingsManager?: RequestSettings; readonly timers?: Timers }
 
 function sessionOptions(settings: RequestSettings) {
 	const retry = settings.getProviderRetrySettings();
@@ -164,7 +165,9 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 	let held: Held | undefined;
 	/** The held summary while a compaction waits for it, so a reset still stops it. */
 	let using: Held | undefined;
-	const clear = () => { pending = undefined; latest = undefined; captureMiss = undefined; };
+	const settled = new WeakSet<Held>();
+	const warmer = createWarmer({ pi, now, timers: options.timers ?? realTimers, logFile: join(dirname(configFile), "cache-warm.log"), policy: () => policy, latest: () => latest, busy: () => !!using || (held !== undefined && !settled.has(held)), requestOptions: () => requestOptions });
+	const clear = () => { pending = undefined; latest = undefined; captureMiss = undefined; warmer.cancel(); };
 	const miss = (reason: string) => { clear(); captureMiss = reason; };
 	// An unused summary would only cost tokens; stop it.
 	const drop = () => { held?.controller.abort(); using?.controller.abort(); held = undefined; using = undefined; };
@@ -257,7 +260,8 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 			// Pi's trigger uses the selected model, the cache the routed one: the earlier trigger of the two decides.
 			const trigger = Math.min(...[model, ctx.model].flatMap((m) => m ? [m.contextWindow - settings!.getCompactionSettings(m).reserveTokens] : []));
 			if (!backgroundDue(calculateContextTokens(message.usage), trigger, policy.backgroundPercent)) return;
-			held = startBackground(captured, model, ctx);
+			const started = held = startBackground(captured, model, ctx);
+			void started.result.then(() => settled.add(started));
 		} catch { /* An optimization only: Pi's trigger still compacts on the usual path. */ }
 	});
 
@@ -289,10 +293,13 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 		catch { miss("capture-headers"); }
 	});
 	pi.on("before_provider_request", (event, ctx) => {
+		// Only the agent loop runs this hook, never a registry request such as a warm, so this is a real request.
+		warmer.cancel();
 		try {
 			const hashes = latest ? payloadHashes(latest.api, event.payload) : undefined;
 			if (latest?.payloadPrefix && hashes && hashes.length === latest.payloadPrefix.length && hashes.every((hash, i) => hash === latest!.payloadPrefix![i])) {
 				latest = { ...latest, at: now() };
+				warmer.rearm(ctx);
 				return;
 			}
 			const request = pending;
@@ -303,7 +310,7 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 			if (!current || current.provider !== request.provider || current.id !== request.id || current.api !== request.api || current.baseUrl !== request.baseUrl || current.sessionId !== request.sessionId) { captureMiss = "capture-identity"; return; }
 			const payload = capturePayload(request.api, event.payload);
 			const payloadPrefix = payloadHashes(request.api, event.payload);
-			if (payload && payloadPrefix) { latest = { ...request, at: now(), payload, payloadPrefix, effort: request.api === "anthropic-messages" ? requestEffort(event.payload) : undefined }; captureMiss = undefined; }
+			if (payload && payloadPrefix) { latest = { ...request, at: now(), payload, payloadPrefix, effort: request.api === "anthropic-messages" ? requestEffort(event.payload) : undefined }; captureMiss = undefined; warmer.rearm(ctx); }
 			else captureMiss = "capture-payload";
 		} catch { miss("capture-payload"); }
 	});

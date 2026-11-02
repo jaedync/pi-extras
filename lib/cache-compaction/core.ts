@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { summaryOutputFloor } from "./estimate.ts";
 import { providerFamily } from "../provider-family.ts";
+import { loadWarmConfig, type WarmConfig } from "./warm.ts";
 
 // Resolve pi-ai's native effort type through the SDK, without a direct pi-ai dependency.
 declare const complete: ModelRuntime["complete"];
@@ -9,7 +10,7 @@ export type RequestEffort = NonNullable<NonNullable<Parameters<typeof complete<"
 
 type RecordValue = Record<string, unknown>;
 const object = (v: unknown): v is RecordValue => !!v && typeof v === "object" && !Array.isArray(v);
-export interface Config { readonly enabled: boolean; readonly idleSeconds: Readonly<Record<string, number>>; readonly background: boolean; readonly backgroundPercent: number }
+export interface Config { readonly enabled: boolean; readonly idleSeconds: Readonly<Record<string, number>>; readonly background: boolean; readonly backgroundPercent: number; readonly warm: WarmConfig }
 export interface ModelIdentity { readonly provider: string; readonly id: string; readonly api: string; readonly contextWindow: number; readonly baseUrl?: string }
 export interface RequestIdentity extends ModelIdentity { readonly sessionId: string; readonly at: number }
 
@@ -18,7 +19,7 @@ export function loadConfig(section: RecordValue): Config {
 	const idleSeconds = Object.fromEntries(Object.entries(values).filter(([, v]) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= 86400)) as Record<string, number>;
 	const percent = section.backgroundPercent;
 	const backgroundPercent = typeof percent === "number" && Number.isSafeInteger(percent) && percent >= MIN_BACKGROUND_PERCENT && percent <= MAX_BACKGROUND_PERCENT ? percent : DEFAULT_BACKGROUND_PERCENT;
-	return { enabled: typeof section.enabled === "boolean" ? section.enabled : true, idleSeconds, background: section.background === true, backgroundPercent };
+	return { enabled: typeof section.enabled === "boolean" ? section.enabled : true, idleSeconds, background: section.background === true, backgroundPercent, warm: loadWarmConfig(section.warm) };
 }
 
 /** The owner's choice (answer 439): late enough that few summaries go unused, early enough to finish before Pi's trigger. */
