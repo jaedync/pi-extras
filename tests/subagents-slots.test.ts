@@ -136,11 +136,12 @@ test("a child that rests in a bash sleep lends its slot, and waits in line for o
 	await flush();
 	h.hooks.get("a")!.update({ activity: "bash sleep 240; git status" });
 	let rested = false;
-	const resting = h.hooks.get("a")!.rest!(20).then(() => { rested = true; });
+	// The rest must outlast the flush and the two checks below; 20 ms ran out first on a slow macOS CI runner.
+	const resting = h.hooks.get("a")!.rest!(200).then(() => { rested = true; });
 	await flush();
 	assert.equal(h.team.get("b")!.state, "running", "the sleeper's slot went to the next in line");
 	assert.equal(h.team.get("a")!.state, "running", "its bash call still runs");
-	await new Promise((resolve) => setTimeout(resolve, 40)); await flush();
+	await new Promise((resolve) => setTimeout(resolve, 260)); await flush();
 	assert.equal(rested, false, "b holds the slot, so a waits for it");
 	assert.equal(h.team.get("a")!.state, "queued");
 	h.lastCall("b").finish("b done"); await flush();

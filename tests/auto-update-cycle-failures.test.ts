@@ -4,7 +4,7 @@
  * the smoke test. This file: sets that fail the smoke test (the bad
  * mark, removals, and the time limits). The culprit search is in
  * auto-update-cycle-search.test.ts.
- * The cycle tests are in five files, so that they run in parallel.
+ * The cycle tests are in six files, so that they run in parallel.
  */
 import assert from "node:assert/strict";
 import { readlinkSync, writeFileSync } from "node:fs";
