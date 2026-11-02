@@ -235,7 +235,9 @@ test("unstarted agent calls use a hollow avatar; message calls keep their arrow 
 
 test("what you wrote to an agent reads as an arrow to it, not as an agent speaking", () => {
 	const render = createMessageRenderer();
-	const relay = render({ details: { kind: "relay", id: "m1", from: "user", to: "reviewer", text: "Check the docs too.", answered: false } } as any, { expanded: false, outputPad: 1 }, theme)!;
+	// A variable, not a literal: Pi 1.5 requires keyText/keyHint, and Pi 1.4 rejects them as excess literal properties.
+	const options = { expanded: false, outputPad: 1, keyText: (key: string) => key, keyHint: (key: string, description: string) => `${key} ${description}` };
+	const relay = render({ details: { kind: "relay", id: "m1", from: "user", to: "reviewer", text: "Check the docs too.", answered: false } } as any, options, theme)!;
 	const [head] = relay.render(60).map(strip);
 	assert.ok(head!.startsWith("  → reviewer"), head);
 	assert.ok(!head!.includes("◆"), head);

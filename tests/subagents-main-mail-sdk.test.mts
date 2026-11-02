@@ -174,7 +174,8 @@ test("mail during a manual compaction waits for it, then wakes main on the compa
 
 test("mail during an automatic compaction at the end of a run is read once it finishes", { timeout: 20_000 }, async () => {
 	const state = requests();
-	const { session, note, close } = await setup(state, { contextWindow: 4_000, compaction: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 200 }, filler: " filler".repeat(400) });
+	// pi-ai 1.5 faux counts each prompt token once (1.4 counted cache hits twice), so the reply alone must cross the 3,000-token threshold; 800 is too few.
+	const { session, note, close } = await setup(state, { contextWindow: 4_000, compaction: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 200 }, filler: " filler".repeat(1600) });
 	try {
 		const run = session.prompt("start");
 		await until(() => state.seen.includes("summary"), "the automatic summary");
