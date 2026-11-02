@@ -577,8 +577,8 @@ prompt, as long as:
 - the summary fits in the context window (see below).
 
 Otherwise Pi's own compaction runs, exactly as it would without this
-extension, unless its summary request does not fit the window (see
-"Summaries that fit the window" below). The notice says which path ran and why. The summary request
+extension. After a context overflow, Pi's summary request can be too large
+for the window; see "Summaries that fit the window" below. The notice says which path ran and why. The summary request
 streams, so the Phase Spinner can show its newest lines while it is written.
 The request is the same as one sent without streaming.
 
@@ -788,27 +788,35 @@ per token. Some tokenizers count more. On one local model, Pi estimated
 summary request then also went past the window, so overflow recovery failed
 and each new prompt stopped with the same error.
 
-Before Pi's own compaction runs, the extension makes an estimate of the size
-of Pi's summary request:
+This check runs only after a context overflow. Before Pi's own compaction
+runs, the extension makes an estimate of the size of Pi's summary request:
 
-1. It finds the newest reply with token usage. It divides the prompt tokens
-   that the provider reported by Pi's estimate of the messages before that
-   reply. The ratio stays between 1.0 and 2.0. Below 16,384 estimated tokens,
-   the ratio is 1.0, because tools and the system prompt make up most of a
-   small prompt.
-2. It multiplies the size of Pi's summary prompt by this ratio. It adds the
+1. It finds the newest reply with token usage after the latest compaction,
+   from the model that compacts. It divides the prompt tokens that the
+   provider reported by Pi's estimate of the messages before that reply.
+   Every system message counts, because a later one holds only its changes.
+   For chat completions, earlier reasoning is not in the estimate, because a
+   chat template can drop it.
+2. The ratio stays between 1.0 and 2.0. If no reply qualifies, or the
+   estimate is below 16,384 tokens, the ratio is 1.0. Tools and the system
+   prompt make up most of a small prompt.
+3. It multiplies the size of Pi's summary prompt by this ratio. It adds the
    `max_tokens` that pi-ai will send.
-3. If the total fits in the context window, Pi's own compaction runs, as
+4. If the total fits in the context window, Pi's own compaction runs, as
    before.
-4. If the total does not fit, the extension sends Pi's summary prompt in
-   parts. Each part holds as many old messages as fit, with room for the
-   summary so far and 16,384 output tokens. Each request updates the summary
+5. If the total does not fit, the extension sends Pi's summary prompt in
+   parts, with Pi's thinking level and retry settings. Each part holds as
+   many old messages as fit, with room for the summary so far and 16,384
+   output tokens. A part ends after a complete step when one is near, so a
+   tool call and its result stay together. Each request updates the summary
    of the part before it. The last request also writes the split-turn
    section. If the split turn does not fit, its messages go into the parts.
 
 The log and the notice show the path `bounded` with the reason that Pi's own
 compaction would have had, for example `overflow`. If one message alone is
-too large for a request, Pi's own compaction runs.
+too large for a request, Pi's own compaction runs. If a part fails, Pi's own
+compaction runs, and the log shows `bounded-failed:request` or
+`bounded-failed:length`. An abort stops the parts and shows `aborted`.
 
 **Settings.** In `PI_CODING_AGENT_DIR/pi-extras.json` (default
 `~/.pi/agent/pi-extras.json`), then `/reload`:

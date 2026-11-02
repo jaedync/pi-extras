@@ -221,7 +221,7 @@ export function registerCompaction(pi: ExtensionAPI, host: SessionHost): { start
 		const timing = started;
 		started = undefined;
 		const entry = event.compactionEntry;
-		const own = decision?.sessionId === ctx.sessionManager.getSessionId() && (decision.path === "default" ? entry.fromHook !== true : entry.fromHook === true && (entry.details as { cachePrefix?: boolean } | undefined)?.cachePrefix === true && decision.compactionKey === compactionKey(entry));
+		const own = decision?.sessionId === ctx.sessionManager.getSessionId() && (decision.path === "default" ? entry.fromHook !== true : entry.fromHook === true && (entry.details as { cachePrefix?: boolean; bounded?: boolean } | undefined)?.[decision.path === "bounded" ? "bounded" : "cachePrefix"] === true && decision.compactionKey === compactionKey(entry));
 		const data: SavedCompaction = {
 			entryId: entry.id, reason: event.reason, ...(own && decision ? { path: decision.path, fallbackReason: decision.fallbackReason } : {}),
 			...(timing && !timing.signal.aborted ? { startedAt: timing.at, durationMs: Math.max(0, host.now() - timing.at) } : {}),

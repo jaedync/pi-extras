@@ -200,6 +200,8 @@ test("decisions attach only to their own compaction, never another hook's result
 			[{ path: "prefix-sharing", fallbackReason: null, compactionKey: key }, { ...entry, summary: "Another hook", fromHook: true, details: { cachePrefix: true } }, undefined],
 			[{ path: "prefix-sharing", fallbackReason: null, compactionKey: key }, { ...entry, fromHook: true, details: { cachePrefix: true } }, "prefix-sharing"],
 			[{ path: "default", fallbackReason: "cold-cache", sessionId: "other-session" }, entry, undefined],
+			[{ path: "bounded", fallbackReason: "overflow", compactionKey: key }, { ...entry, fromHook: true, details: { bounded: true } }, "bounded"],
+			[{ path: "bounded", fallbackReason: "overflow", compactionKey: key }, { ...entry, summary: "Another hook", fromHook: true, details: { bounded: true } }, undefined],
 		] as const) {
 			h.decision(notice);
 			h.fire("session_compact", { compactionEntry: compacted, reason: "manual" });

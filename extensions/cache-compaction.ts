@@ -19,7 +19,7 @@ interface Captured extends RequestIdentity, Snapshot {
 	readonly headers?: Record<string, string>;
 	readonly effort?: RequestEffort;
 }
-type RequestSettings = Pick<SettingsManager, "getProviderRetrySettings" | "getHttpIdleTimeoutMs" | "getWebSocketConnectTimeoutMs" | "getTransport" | "getCompactionSettings">;
+type RequestSettings = Pick<SettingsManager, "getProviderRetrySettings" | "getRetrySettings" | "getHttpIdleTimeoutMs" | "getWebSocketConnectTimeoutMs" | "getTransport" | "getCompactionSettings">;
 export interface CacheCompactionOptions { readonly configFile?: string; readonly now?: () => number; readonly settingsManager?: RequestSettings; readonly timers?: Timers }
 
 function sessionOptions(settings: RequestSettings) {
@@ -334,8 +334,8 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 				pi.events.emit(COMPACTION_DECISION_EVENT, { path, fallbackReason, sessionId: decision.sessionId, ...(key ? { compactionKey: key } : {}) });
 			} catch { /* Best-effort diagnostics must never replace the compaction decision. */ }
 		};
-		// Pi's default summary can exceed the window when the tokenizer counts more than Pi estimates; split it then.
-		const fallback = async (reason: string) => { const fit = policy.enabled && reason !== "aborted" ? await boundedCompaction(event, ctx).catch(() => undefined) : undefined; if (fit) { outcome = { stopReason: "stop", usage: fit.usage ? { input: fit.usage.input, cacheRead: fit.usage.cacheRead, cacheWrite: fit.usage.cacheWrite, output: fit.usage.output } : null }; record("bounded", reason, compactionKey(fit)); report(ctx, `bounded (${reason})`); return { compaction: fit }; } record("default", reason); report(ctx, `default (${reason})`); return undefined; };
+		// After an overflow, Pi's default summary can also overflow when the tokenizer counts more than Pi estimates: split it.
+		const fallback = async (reason: string) => { const bounded = policy.enabled && reason !== "aborted" ? await boundedCompaction(event, ctx, () => ({ thinkingLevel: pi.getThinkingLevel(), retry: settings?.getRetrySettings() })) : undefined; if (bounded && "compaction" in bounded) { const fit = bounded.compaction; outcome = { stopReason: "stop", usage: fit.usage ? { input: fit.usage.input, cacheRead: fit.usage.cacheRead, cacheWrite: fit.usage.cacheWrite, output: fit.usage.output } : null }; record("bounded", reason, compactionKey(fit)); report(ctx, `bounded (${reason})`); return { compaction: fit }; } const why = bounded?.failure ?? reason; record("default", why); report(ctx, `default (${why})`); return undefined; };
 		if (waiting) {
 			// Manual compaction may carry its own focus, and overflow recovery must not wait on an old request.
 			using = waiting;

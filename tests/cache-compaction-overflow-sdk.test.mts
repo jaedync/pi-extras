@@ -28,7 +28,8 @@ async function fixture() {
 	const agentDir = mkdtempSync(join(scratch, "agent-"));
 	const configFile = join(agentDir, "pi-extras.json");
 	writeFileSync(configFile, JSON.stringify({ cacheCompaction: { enabled: true } }));
-	const requests: Array<{ summary: boolean; tokens: number; maxTokens: number; rejected: boolean }> = [];
+	const hooks: { onRequest?: () => void; rejectSummaries?: boolean } = {};
+	const requests: Array<{ summary: boolean; tokens: number; maxTokens: number; rejected: boolean; prompt: string }> = [];
 	const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
 	runtime.registerProvider("engine", { api: "openai-completions", apiKey: "synthetic-not-a-credential", baseUrl: "http://127.0.0.1:1/v1", models: [{ id: "local", name: "local", reasoning: false, input: ["text"], contextWindow: WINDOW, maxTokens: MAX_TOKENS, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
 		streamSimple(model: any, context: any, options: any) {
@@ -38,8 +39,10 @@ async function fixture() {
 			// pi-ai's clamp: the window minus its own chars/3.5 estimate and a 4096-token margin.
 			const maxTokens = Math.min(options?.maxTokens ?? model.maxTokens, Math.max(1, WINDOW - Math.ceil(chars / 3.5) - 4096));
 			const summary = /summariz/i.test(context.systemPrompt ?? "") || context.messages.some((m: any) => m.role === "system" && /summariz/i.test(messageChars(m) ? JSON.stringify(m.content) : ""));
-			const rejected = tokens + maxTokens > WINDOW;
-			requests.push({ summary, tokens, maxTokens, rejected });
+			const rejected = tokens + maxTokens > WINDOW || (summary && !!hooks.rejectSummaries);
+			const last = context.messages.at(-1);
+			hooks.onRequest?.();
+			requests.push({ summary, tokens, maxTokens, rejected, prompt: typeof last?.content === "string" ? last.content : (last?.content ?? []).map((b: any) => b.text ?? "").join("") });
 			const base = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now() };
 			void (async () => {
 				await options?.onPayload?.({ model: model.id, messages: structuredClone(context.messages), max_tokens: maxTokens }, model);
@@ -64,7 +67,7 @@ async function fixture() {
 	const failures: string[] = [];
 	session.subscribe((event: any) => { if (event.type === "compaction_end" && event.errorMessage) failures.push(event.errorMessage); });
 	await session.bindExtensions({ mode: "print", onError: () => {} });
-	return { session, requests, failures, logFile: join(agentDir, "cache-compaction.log"), close() { session.dispose(); } };
+	return { session, requests, failures, settingsManager, hooks, logFile: join(agentDir, "cache-compaction.log"), decisions: () => readFileSync(join(agentDir, "cache-compaction.log"), "utf8").trim().split("\n").map((line) => JSON.parse(line)), close() { session.dispose(); } };
 }
 
 /** 29 earlier turns of about 2,000 estimated tokens each, every reply with the usage this tokenizer reports. */
@@ -79,6 +82,10 @@ function seed(session: any) {
 		const tokens = Math.ceil(chars * TOKENS_PER_CHAR);
 		session.sessionManager.appendMessage({ role: "assistant", api: "openai-completions", provider: "engine", model: "local", content: [{ type: "text", text: "Engine reply." }], stopReason: "stop", timestamp: at++, usage: { ...zero, cacheRead: tokens, output: 8, totalTokens: tokens + 8 } });
 		chars += "Engine reply.".length;
+		if (turn === 3) {
+			session.sessionManager.appendMessage({ role: "assistant", api: "openai-completions", provider: "engine", model: "local", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "/work/notes.md" } }], stopReason: "toolUse", timestamp: at++, usage: { ...zero, cacheRead: tokens, output: 8, totalTokens: tokens + 8 } });
+			session.sessionManager.appendMessage({ role: "toolResult", toolCallId: "read-1", toolName: "read", content: [{ type: "text", text: "Notes." }], isError: false, timestamp: at++ });
+		}
 	}
 	session.refreshContext();
 }
@@ -96,10 +103,55 @@ test("an overflow on a tokenizer that Pi underestimates compacts with summaries 
 	assert.ok(requests.filter((r) => r.summary).every((r) => !r.rejected), "no summary request overflowed the window");
 	assert.ok(requests.filter((r) => r.summary).length >= 2, "the history went out in more than one summary request");
 	const decision = JSON.parse(readFileSync(logFile, "utf8").trim().split("\n").at(-1)!);
+	const summaries = requests.filter((r) => r.summary);
+	for (const [i, r] of summaries.entries()) if (i > 0) assert.ok(r.prompt.includes(`<previous-summary>\n## Goal\nSummary ${requests.indexOf(summaries[i - 1]) + 1}.`), "each part updates the summary of the part before it");
+	assert.match(compactions[0].summary, /<read-files>\n\/work\/notes\.md\n<\/read-files>/, "the final summary has Pi's file lists");
+	assert.equal(compactions[0].details.bounded, true);
 	assert.equal(decision.path, "bounded");
 	assert.equal(decision.reason, "overflow");
 	assert.equal(decision.fallbackReason, "overflow", "the main turn was captured, as in the stalled session");
 	await session.prompt("Next step.");
 	assert.equal(session.messages.at(-1).stopReason, "stop", "the session keeps working after the compaction");
 	assert.deepEqual(failures, []);
+});
+
+for (const reason of ["threshold", "manual"] as const) test(`a ${reason} compaction never takes the bounded path`, { timeout: 30000 }, async (t) => {
+	const f = await fixture(); t.after(f.close);
+	seed(f.session);
+	const { prepareCompaction } = await import(pathToFileURL(join(agentRoot, "dist/core/compaction/compaction.js")).href);
+	const branch = f.session.sessionManager.getBranch();
+	const preparation = prepareCompaction(branch, f.settingsManager.getCompactionSettings(f.session.model));
+	const result = await f.session.extensionRunner.emit({ type: "session_before_compact", preparation, branchEntries: branch, reason, willRetry: false, signal: new AbortController().signal });
+	assert.equal(result?.compaction, undefined);
+	assert.equal(f.requests.length, 0, "no summary request was sent");
+	assert.equal(f.decisions().at(-1).path, "default");
+});
+
+test("an abort between parts stops the bounded path and is logged as aborted", { timeout: 30000 }, async (t) => {
+	const f = await fixture(); t.after(f.close);
+	seed(f.session);
+	const { prepareCompaction } = await import(pathToFileURL(join(agentRoot, "dist/core/compaction/compaction.js")).href);
+	const branch = f.session.sessionManager.getBranch();
+	const preparation = prepareCompaction(branch, f.settingsManager.getCompactionSettings(f.session.model));
+	const controller = new AbortController();
+	f.hooks.onRequest = () => controller.abort();
+	const result = await f.session.extensionRunner.emit({ type: "session_before_compact", preparation, branchEntries: branch, reason: "overflow", willRetry: true, signal: controller.signal });
+	assert.equal(result?.compaction, undefined);
+	assert.equal(f.requests.filter((r) => r.summary).length, 1, "no part starts after the abort");
+	assert.equal(f.decisions().at(-1).fallbackReason, "aborted");
+});
+
+test("a failed bounded part is logged with a fixed reason before Pi's default path runs", { timeout: 30000 }, async (t) => {
+	const f = await fixture(); t.after(f.close);
+	seed(f.session);
+	f.hooks.rejectSummaries = true;
+	const { prepareCompaction } = await import(pathToFileURL(join(agentRoot, "dist/core/compaction/compaction.js")).href);
+	const branch = f.session.sessionManager.getBranch();
+	const preparation = prepareCompaction(branch, f.settingsManager.getCompactionSettings(f.session.model));
+	const result = await f.session.extensionRunner.emit({ type: "session_before_compact", preparation, branchEntries: branch, reason: "overflow", willRetry: true, signal: new AbortController().signal });
+	assert.equal(result?.compaction, undefined);
+	const decision = f.decisions().at(-1);
+	assert.equal(decision.path, "default");
+	assert.equal(decision.fallbackReason, "bounded-failed:request");
+	assert.doesNotMatch(JSON.stringify(f.decisions()), /exceeds the context window/, "no provider error text in the log");
 });
