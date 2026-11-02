@@ -22,7 +22,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { UsageError } from "../lib/args.mjs";
 import { paths } from "../lib/paths.mjs";
-import { HYPERFRAMES_ENV, pathWithNode, run, runStreaming } from "../lib/proc.mjs";
+import { HYPERFRAMES_ENV, isStopping, pathWithNode, run, runStreaming } from "../lib/proc.mjs";
 import { estimateFilmCacheBytes, extractCacheDir, formatGB, freeBytes, makeRenderCacheDir, removeRenderCacheDir, spaceRefusal } from "../lib/render-cache.mjs";
 import { launchBrowser, trackBrowser } from "../lib/browser.mjs";
 import { loadPlaywright } from "../lib/runtime.mjs";
@@ -459,12 +459,16 @@ async function renderFilm(project, { fps, quality, output, workers = "1", extra 
 	try {
 		await hyperframes(project, renderArgs({ fps, quality, out, workers, cacheDir, extra }), log);
 	} finally {
-		dropCache();
-		// A render that fails, runs out of memory or hits the timeout leaves GBs of frames.
-		try {
-			removeRenderCacheDir(cacheDir);
-		} catch {
-			// A cache folder that cannot be deleted is not a render failure.
+		// During a stop the shutdown owns the cleanup: it runs it after the child trees are gone,
+		// so a descendant that ignores SIGTERM cannot write into the folder again after it is removed.
+		if (!isStopping()) {
+			dropCache();
+			// A render that fails, runs out of memory or hits the timeout leaves GBs of frames.
+			try {
+				removeRenderCacheDir(cacheDir);
+			} catch {
+				// A cache folder that cannot be deleted is not a render failure.
+			}
 		}
 	}
 	return out;

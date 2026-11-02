@@ -16,7 +16,7 @@ import { FramePump } from "./pump.mjs";
 import { createClockScripts } from "./clock-scripts.mjs";
 import { virtualClockScript } from "./vclock.mjs";
 import { chromiumPath, headlessShellPath, loadPlaywright } from "./runtime.mjs";
-import { hasFfmpeg, run, sleep, withTimeout } from "./proc.mjs";
+import { hasFfmpeg, isStopping, run, sleep, withTimeout } from "./proc.mjs";
 
 const PROBE_HTML = "data:text/html,<body style='margin:0;background:%23123'><canvas id=c width=200 height=100></canvas><script>const gl=document.getElementById('c').getContext('webgl');if(gl){gl.clearColor(0.1,0.4,0.9,1);gl.clear(gl.COLOR_BUFFER_BIT)}</script></body>";
 
@@ -397,13 +397,17 @@ export async function capture(options) {
 		failure = error;
 		throw error;
 	} finally {
-		for (const drop of cleanups) drop();
-		await created?.api.close().catch(() => {});
-		await pump?.stop().catch(() => {});
-		await session?.browser.close().catch(() => {});
-		if (failure) {
-			rmSync(staging, { recursive: true, force: true });
-			log(`capture failed; the last good capture in ${outDir} is untouched`);
+		// During a stop the shutdown owns the staging folder and the browser: it removes them after
+		// the child trees are gone, so the finally leaves them alone.
+		if (!isStopping()) {
+			for (const drop of cleanups) drop();
+			await created?.api.close().catch(() => {});
+			await pump?.stop().catch(() => {});
+			await session?.browser.close().catch(() => {});
+			if (failure) {
+				rmSync(staging, { recursive: true, force: true });
+				log(`capture failed; the last good capture in ${outDir} is untouched`);
+			}
 		}
 	}
 }

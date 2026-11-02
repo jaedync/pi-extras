@@ -10,7 +10,7 @@ import { parseArgs } from "node:util";
 import { hyperframesBin, hyperframesMissing, paths } from "./lib/paths.mjs";
 import { requireProjectGsap } from "./lib/gsap.mjs";
 import { onSignalCleanup } from "./lib/signals.mjs";
-import { HYPERFRAMES_ENV, failed, pathWithNode, run, runStreaming } from "./lib/proc.mjs";
+import { HYPERFRAMES_ENV, failed, isStopping, pathWithNode, run, runStreaming } from "./lib/proc.mjs";
 import { estimateCacheBytes, extractCacheDir, formatGB, freeBytes, makeRenderCacheDir, removeRenderCacheDir, spaceRefusal } from "./lib/render-cache.mjs";
 import { renderHtml } from "./lib/compose-html.mjs";
 import { BEAT_CELL_PX, BEAT_COLS, beatPages, labelArgs, PHONE_CELL_PX, PHONE_COLS, reviewTimes, SEAM_CELL_PX, tileArgs, timeLabel } from "./lib/review.mjs";
@@ -166,9 +166,13 @@ export async function render(argv) {
 		throw new Error(`hyperframes failed: ${error.message}. Run wv setup; a render that takes over 60 min stops.`);
 	} finally {
 		progress.stop();
-		dropCache();
-		// Success, failure or kill by the host: the cache is this render's, so it goes.
-		cleanCache(cache.cacheDir, { keep: keepCache, log });
+		// During a stop the shutdown owns the cleanup: it runs it after the child trees are gone,
+		// so a descendant that ignores SIGTERM cannot write into the folder again after it is removed.
+		if (!isStopping()) {
+			dropCache();
+			// Success, failure or kill by the host: the cache is this render's, so it goes.
+			cleanCache(cache.cacheDir, { keep: keepCache, log });
+		}
 	}
 	const output = `${r.stdout}\n${r.stderr}`;
 	process.stderr.write(r.stderr.split("\n").filter((l) => !l.startsWith("[INFO]") && /error|warn|complete|rendered in/i.test(l)).join("\n") + "\n");
@@ -246,19 +250,22 @@ export async function preview(argv, { write = writeFileSync } = {}) {
 		}
 	} finally {
 		// The outer finally, so a failed write (a partial file, then ENOSPC) removes it too.
-		try {
+		// During a stop the shutdown owns both cleanups and runs them after the child trees are gone.
+		if (!isStopping()) {
 			try {
-				dropPreview();
+				try {
+					dropPreview();
+				} finally {
+					// A partial write is a file too: remove it even when the cleanup above failed.
+					rmSync(previewFile, { force: true });
+				}
 			} finally {
-				// A partial write is a file too: remove it even when the cleanup above failed.
-				rmSync(previewFile, { force: true });
-			}
-		} finally {
-			// A failed preview removal must not keep the cache cleanup from running.
-			try {
-				dropCache();
-			} finally {
-				cleanCache(cache.cacheDir, { log });
+				// A failed preview removal must not keep the cache cleanup from running.
+				try {
+					dropCache();
+				} finally {
+					cleanCache(cache.cacheDir, { log });
+				}
 			}
 		}
 	}
