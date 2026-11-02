@@ -108,6 +108,8 @@ export interface AgentRecord {
 	contextWindow?: number;
 	/** The context size at which its session compacts (compaction-point.ts); records saved before it have only the window. */
 	compactAt?: number;
+	/** How often its session compacted, over all its runs; unset before the first. */
+	compactions?: number;
 	report?: string;
 	/** The full report of the latest completed run, never reused by a later run. */
 	reportFile?: string;
@@ -269,7 +271,7 @@ export interface ChildHandle {
 }
 
 export interface ChildHooks {
-	update(patch: Partial<Pick<AgentRecord, "activity" | "work" | "toolCalls" | "usage" | "contextTokens" | "contextWindow" | "compactAt">>): void;
+	update(patch: Partial<Pick<AgentRecord, "activity" | "work" | "toolCalls" | "usage" | "contextTokens" | "contextWindow" | "compactAt" | "compactions">>): void;
 	/**
 	 * Called where the run's loop would ask the model again, with the turn's
 	 * tool results recorded and no tool running: true ends the run's prompt

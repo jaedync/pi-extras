@@ -71,6 +71,8 @@ export interface TokenTotals {
 export interface SessionStats {
 	prompts: number;
 	toolCalls: number;
+	/** Compactions on this branch; a branch summary is not one. Children's are not added (addChild): this is main's context. */
+	compactions: number;
 	/** Steps each chained bash call ran, by tool call id, from Tool Display's saved chains. */
 	chains: Map<string, number>;
 	/**
@@ -188,7 +190,7 @@ function chargeOffTurn(stats: SessionStats, source: TranscriptSource, model: { p
 
 function collectEntries(source: TranscriptSource): SessionStats {
 	const stats: SessionStats = {
-		prompts: 0, toolCalls: 0, chains: new Map(), plans: new Map(), turns: 0, providers: new Map(),
+		prompts: 0, toolCalls: 0, compactions: 0, chains: new Map(), plans: new Map(), turns: 0, providers: new Map(),
 		tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	};
 	const branch = source.getBranch();
@@ -206,6 +208,7 @@ function collectEntries(source: TranscriptSource): SessionStats {
 			continue;
 		}
 		if (entry.type === "compaction" || entry.type === "branch_summary") {
+			if (entry.type === "compaction") stats.compactions++;
 			stats.lastContextResetMs = newest(stats.lastContextResetMs, Date.parse(entry.timestamp));
 			const usage = usageOf(entry.usage);
 			if (usage) chargeOffTurn(stats, source, active, usage);

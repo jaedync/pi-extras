@@ -465,3 +465,31 @@ test("wide characters and links in the place, model, statuses and tags never mak
 		for (const line of footerLayout(wide, width, paint).lines) assert.ok(cells(line) <= width, `${width}: ${cells(line)} ${JSON.stringify(stripAnsi(line))}`);
 	}
 });
+
+test("the compaction count sits under the clock, left-aligned, only after a compaction", () => {
+	const none = renderFooter(model(), 200, paint);
+	assert.doesNotMatch(stripAnsi(none[1]!), /↻/);
+	const two = renderFooter(model({ counters: { prompts: 12, turns: 31, toolCalls: 48, compactions: 2 } }), 200, paint);
+	const line = stripAnsi(two[1]!);
+	assert.match(line, /^↻2 +12 prompts · 31 turns · 48 tools │/);
+	assert.deepEqual(columns(two[0]!), columns(none[0]!), "it fits in the room the clock line leaves, so no column moves");
+	assert.deepEqual(columns(two[1]!), columns(none[1]!));
+});
+
+test("a compaction count with no room widens the first column, and the grid stays aligned", () => {
+	const busy = { prompts: 1234, turns: 12345, toolCalls: 123456 };
+	const lines = renderFooter(model({ counters: { ...busy, compactions: 12 } }), 220, paint);
+	const second = stripAnsi(lines[1]!);
+	assert.match(second, /^↻12 1234 prompts · 12345 turns · 123456 tools │/);
+	assert.equal(columns(lines[0]!)[0], columns(lines[1]!)[0]);
+	const { tools } = footerLayout(model({ counters: { ...busy, compactions: 12 } }), 220, paint);
+	assert.equal(second.slice(tools.x0, tools.x1), "123456 tools");
+});
+
+test("on a line of its own the counters keep the compaction count in front", () => {
+	const counters = { prompts: 12, turns: 31, toolCalls: 48, compactions: 3 };
+	const { lines, tools } = footerLayout(model({ counters }), 70, paint);
+	const plain = stripAnsi(lines[tools.y]!);
+	assert.match(plain, /^↻3 12 prompts/);
+	assert.equal(plain.slice(tools.x0, tools.x1), "48 tools");
+});

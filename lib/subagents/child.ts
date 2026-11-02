@@ -628,11 +628,17 @@ export function activityWatch(): (event: ChildEvent) => Activity | undefined {
 	};
 }
 
+/** A compaction that finished; one that was aborted or failed left the context as it was. */
+export function compactionDone(event: { readonly type: string; readonly result?: unknown; readonly aborted?: boolean }): boolean {
+	return event.type === "compaction_end" && event.result !== undefined && event.aborted !== true;
+}
+
 interface ChildContext { window(message: AssistantLike): number | undefined; readonly limits: CompactionLimits | undefined }
 
 function watchChild(session: AgentSession, hooks: ChildHooks, context: ChildContext, record: AgentRecord): () => void {
 	let usage: Usage = { ...record.usage };
 	let toolCalls = record.toolCalls;
+	let compactions = record.compactions ?? 0;
 	const watch = activityWatch();
 	let shown: Activity | undefined;
 	return session.subscribe((event) => {
@@ -643,7 +649,7 @@ function watchChild(session: AgentSession, hooks: ChildHooks, context: ChildCont
 			hooks.update({ activity: next.activity, work: next.work });
 		}
 		// Pi's own rule: the size is unknown until a reply after the compaction.
-		if (e.type === "compaction_end") hooks.update({ contextTokens: undefined });
+		if (e.type === "compaction_end") hooks.update({ contextTokens: undefined, ...(compactionDone(e) ? { compactions: ++compactions } : {}) });
 		else if (e.type === "tool_execution_start") hooks.toolCalled?.(e.toolName ?? "");
 		else if (e.type === "tool_execution_end") hooks.update({ toolCalls: ++toolCalls });
 		else if (e.type === "message_end" && e.message?.role === "assistant") {

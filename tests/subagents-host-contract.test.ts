@@ -14,7 +14,7 @@ import { MainMail } from "../lib/subagents/deliver.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { ToolActivity } from "../lib/subagents/tool-activity.ts";
 
-const PINNED = { version: 10, digest: "ebbd5e4e6eddd94885836758de51376965e8924a5fd483ed69e8aaae051f5272" };
+const PINNED = { version: 11, digest: "e4faf97a328a2b10ec04705de2effcd4f075029b93ddb08b349e42fda51b416f" };
 
 /**
  * Every declaration that crosses from one evaluation to the next, by the file

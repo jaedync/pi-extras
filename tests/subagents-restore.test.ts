@@ -47,6 +47,23 @@ test("the index keeps each child's context size and drops one it can't use", () 
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("the index keeps how often a child compacted and drops a count it can't use", () => {
+	const dir = mkdtempSync(join(tmpdir(), "child-index-"));
+	try {
+		const file = join(dir, "index.json");
+		new ChildIndex(dir, "parent-1", dir).save([record({ compactions: 3 })]);
+		assert.equal(new ChildIndex(dir, "parent-1", dir).load(warn)[0]?.compactions, 3);
+		const data = JSON.parse(readFileSync(file, "utf8"));
+		for (const bad of [-1, 1.5, "3"]) {
+			data.records[0] = { ...data.records[0], compactions: bad };
+			writeFileSync(file, JSON.stringify(data));
+			const [kept] = new ChildIndex(dir, "parent-1", dir).load(warn);
+			assert.equal(kept?.name, "helper", `${bad}: the child itself is still restored`);
+			assert.equal("compactions" in kept!, false, `${bad}`);
+		}
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("an index saved under another path for its folder points its children into the folder, and a path that is no session file still fails", () => {
 	const dir = mkdtempSync(join(tmpdir(), "child-index-"));
 	try {

@@ -125,5 +125,5 @@ export function addChild(stats: SessionStats, child: SessionStats): void {
 		provider.outputTokens += usage.outputTokens;
 		stats.providers.set(id, provider);
 	}
-	// Deliberately do not merge cacheHitPct, lastApiEndMs or lastContextResetMs.
+	// Deliberately do not merge cacheHitPct, lastApiEndMs, lastContextResetMs or compactions: they describe main's own context.
 }

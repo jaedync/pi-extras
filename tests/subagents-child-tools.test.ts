@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { activityWatch, childExtensionPaths, streamingActivity } from "../lib/subagents/child.ts";
+import { activityWatch, childExtensionPaths, compactionDone, streamingActivity } from "../lib/subagents/child.ts";
 
 const info = (name: string, path: string) => ({ name, sourceInfo: { path } });
 
@@ -54,4 +54,12 @@ test("an agent's session events give its spinner every state main's phase spinne
 	assert.deepEqual(watch({ type: "compaction_end" }), waiting);
 	assert.deepEqual(watch({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } }), { activity: "thinking", work: "thinking" });
 	assert.equal(watch({ type: "message_start" }), undefined);
+});
+
+test("only a compaction that finished counts; an aborted or failed one does not", () => {
+	const result = { summary: "s", firstKeptEntryId: "e", tokensBefore: 1 };
+	assert.equal(compactionDone({ type: "compaction_end", result, aborted: false }), true);
+	assert.equal(compactionDone({ type: "compaction_end", result: undefined, aborted: false }), false, "a failed compaction has no result");
+	assert.equal(compactionDone({ type: "compaction_end", result, aborted: true }), false);
+	assert.equal(compactionDone({ type: "compaction_start" }), false);
 });

@@ -26,7 +26,7 @@ test("rows show live agents and finished ones whose report is queued, children u
 	const rows = agentRows(records, new Set(["reported-soon"]));
 	assert.deepEqual(rows.map((row) => [row.record.name, row.depth]), [["lead", 0], ["helper", 1], ["reported-soon", 0]]);
 	const columns = rowColumns(rows, 66_000);
-	assert.deepEqual(columns, { name: 13, time: 5, tokens: 0, percent: 0, cost: 0, model: 15 });
+	assert.deepEqual(columns, { name: 13, time: 5, tokens: 0, percent: 0, compactions: 0, cost: 0, model: 15 });
 	const glyph = doingGlyph("tool", 0, "reduced").glyph;
 	// Name, time and model line up, so what each is doing starts in one column, last, where a narrow terminal cuts it.
 	assert.equal(text(rowSegs(rows[0]!, 66_000, "reduced", columns)), `◆ ${"lead".padEnd(columns.name)}  1m05s  gpt-6-luna high  ${glyph} bash npm test`);
@@ -230,6 +230,22 @@ test("the /subagents picker says what each agent is, did and cost", () => {
 	assert.equal(listLabel(record("big", { state: "idle", endedAt: 12_000, contextTokens: 48_200, contextWindow: 200_000 }), 3, 20_000), "big  finished  gpt-6-luna  11.0s  48k 24%  t");
 });
 
+test("an agent that compacted shows how often next to its context, and the column opens no hole for others", () => {
+	const rows = [
+		{ record: record("lead", { contextTokens: 48_200, contextWindow: 200_000, compactions: 2, usage: { ...NO_USAGE, cost: 2.15 } }), depth: 0 },
+		{ record: record("aide", { contextTokens: 12_100, contextWindow: 200_000, usage: { ...NO_USAGE, cost: 0.31 } }), depth: 0 },
+	];
+	const columns = rowColumns(rows, 60_000);
+	const lines = rows.map((row) => stripTerminalSequences(presenceLine(quiet() as never, row, 120, 60_000, "reduced", columns)));
+	assert.match(lines[0]!, /48k 24% {2}↻2 {2}\$2\.15/);
+	assert.match(lines[1]!, /12k {2}6% {6}\$0\.31/);
+	assert.equal(new Set(lines.map((line) => line.indexOf("$"))).size, 1);
+	const none = rowColumns([rows[1]!], 60_000);
+	assert.doesNotMatch(stripTerminalSequences(presenceLine(quiet() as never, rows[1]!, 120, 60_000, "reduced", none)), /↻/);
+	assert.equal(listLabel(record("big", { state: "idle", endedAt: 12_000, contextTokens: 48_200, contextWindow: 200_000, compactions: 1 }), 3, 20_000), "big  finished  gpt-6-luna  11.0s  48k 24%  1 compaction  t");
+	assert.match(listLabel(record("b2", { state: "idle", endedAt: 12_000, compactions: 3 }), 3, 20_000), /  3 compactions  t$/);
+});
+
 test("a picker line fits the width it is given", () => {
 	const long = record("reader", { state: "idle", task: "Read /Users/someone/project/lib/subagents/format.ts and report the value of REPORT_MAX_CHARS. Be concise.", usage: { ...NO_USAGE, cost: 0.0009 }, endedAt: 5_800 });
 	const line = listLabel(long, 6, 10_000, 60);
@@ -252,9 +268,9 @@ test("an agent's name and its own spinner wear its provider's color; tool work k
 	assert.notEqual(local, AGENT_HUE);
 	assert.deepEqual(nameSegs(record("local", { model: "local-lora/qwen3" })).map((seg) => seg.color), [local, local]);
 	assert.deepEqual(nameSegs(record("bare", { model: "qwen3" })).map((seg) => seg.color), [AGENT_HUE, AGENT_HUE]);
-	const thinking = rowSegs({ record: record("lead", { activity: "thinking", work: "thinking" }), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, tokens: 0, percent: 0, cost: 0, model: 0 });
+	const thinking = rowSegs({ record: record("lead", { activity: "thinking", work: "thinking" }), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, tokens: 0, percent: 0, compactions: 0, cost: 0, model: 0 });
 	assert.equal(thinking.find((seg) => seg.text === doingGlyph("thinking", 5_000, "reduced").glyph)?.color, codex);
-	const tool = rowSegs({ record: record("lead"), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, tokens: 0, percent: 0, cost: 0, model: 0 });
+	const tool = rowSegs({ record: record("lead"), depth: 0 }, 5_000, "reduced", { name: 4, time: 4, tokens: 0, percent: 0, compactions: 0, cost: 0, model: 0 });
 	assert.equal(tool.find((seg) => seg.text === doingGlyph("tool", 5_000, "reduced").glyph)?.color, "accent");
 });
 

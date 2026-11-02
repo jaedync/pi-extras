@@ -65,12 +65,12 @@ function validMail(value: unknown): value is HeldMail {
 /** Saved paths are used as tool and git arguments and shown in prompts, never as shell input. */
 const usableSize = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value > 0;
 
-/** A saved context size is only drawn, so one that is not a positive number is dropped, not the child. */
+/** A saved context size or compaction count is only drawn, so one that is not a positive number is dropped, not the child. */
 function usableContext(record: AgentRecord): AgentRecord {
-	const { contextTokens, contextWindow, compactAt, ...rest } = record;
+	const { contextTokens, contextWindow, compactAt, compactions, ...rest } = record;
 	return {
 		...rest, ...(usableSize(contextTokens) ? { contextTokens } : {}), ...(usableSize(contextWindow) ? { contextWindow } : {}),
-		...(usableSize(compactAt) ? { compactAt } : {}),
+		...(usableSize(compactAt) ? { compactAt } : {}), ...(Number.isInteger(compactions) && (compactions as number) > 0 ? { compactions } : {}),
 	};
 }
 

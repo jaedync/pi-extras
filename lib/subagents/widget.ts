@@ -18,7 +18,7 @@ import { formatTime, type Motion, type Seg } from "../band/band.ts";
 import { agentHue, agentLine, avatarOf, doingGlyph, doingOf, endGlyph, spaced } from "../band/agent-look.ts";
 import { everyFrame } from "../band/clock.ts";
 import { formatMoney } from "../status-plus-logic.ts";
-import { contextHeat, formatTokens } from "../status-plus-render.ts";
+import { COMPACTION_MARK, contextHeat, formatTokens } from "../status-plus-render.ts";
 import { contextShare } from "../compaction-point.ts";
 import type { PendingItem } from "./deliver.ts";
 import { MAIN } from "./names.ts";
@@ -102,11 +102,12 @@ export interface RowColumns {
 	readonly time: number;
 	readonly tokens: number;
 	readonly percent: number;
+	readonly compactions: number;
 	readonly cost: number;
 	readonly model: number;
 }
 
-const NO_COLUMNS: RowColumns = { name: 0, time: 0, tokens: 0, percent: 0, cost: 0, model: 0 };
+const NO_COLUMNS: RowColumns = { name: 0, time: 0, tokens: 0, percent: 0, compactions: 0, cost: 0, model: 0 };
 
 export function rowColumns(rows: readonly AgentRow[], now = 0): RowColumns {
 	const widest = (width: (row: AgentRow) => number) => Math.max(0, ...rows.map(width));
@@ -115,6 +116,7 @@ export function rowColumns(rows: readonly AgentRow[], now = 0): RowColumns {
 		time: widest((row) => runTime(row.record, now)?.length ?? 0),
 		tokens: widest((row) => contextFigures(row.record)?.tokens.length ?? 0),
 		percent: widest((row) => contextFigures(row.record)?.percent.length ?? 0),
+		compactions: widest((row) => compactionsText(row.record).length),
 		cost: widest((row) => costText(row.record).length),
 		model: widest((row) => modelText(row.record).length),
 	};
@@ -159,6 +161,11 @@ function contextCell(record: AgentRecord, columns: RowColumns): Seg[] {
 	];
 }
 
+/** How often its session compacted, marked as main's footer marks its own; empty before the first. */
+export const compactionsText = (record: AgentRecord): string => (record.compactions ? `${COMPACTION_MARK}${record.compactions}` : "");
+
+export const compactionWords = (count: number): string => `${count} ${count === 1 ? "compaction" : "compactions"}`;
+
 /** What it has cost so far; empty while it is free. */
 export const costText = (record: AgentRecord): string => (record.usage.cost > 0 ? `$${formatMoney(record.usage.cost)}` : "");
 
@@ -180,6 +187,7 @@ export function rowSegs(row: AgentRow, now = 0, motion: Motion = "full", columns
 		nameSegs(record, row.depth, columns.name),
 		cell(runTime(record, now) ?? "", columns.time, "text", "right"),
 		contextCell(record, columns),
+		cell(compactionsText(record), columns.compactions, "dim", "left"),
 		cell(costText(record), columns.cost, "dim", "right"),
 		cell(modelText(record), columns.model, "dim", "left"),
 		[{ text: doing.glyph, color: doing.color }, { text: " ", color: "dim" }, statusWords(record, row.reportQueued === true)],
@@ -202,6 +210,7 @@ export function listLabel(record: AgentRecord, nameWidth: number, now: number, m
 	if (record.state !== "queued") parts.push(formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt)));
 	const context = contextFigures(record);
 	if (context) parts.push([context.tokens, context.percent].filter(Boolean).join(" "));
+	if (record.compactions) parts.push(compactionWords(record.compactions));
 	parts.push(record.task.replace(/\s+/g, " ").trim());
 	const line = parts.join("  ");
 	return line.length > maxWidth ? `${line.slice(0, Math.max(1, maxWidth - 1))}…` : line;

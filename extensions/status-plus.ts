@@ -386,7 +386,7 @@ export default function statusPlus(pi: ExtensionAPI): void {
 
 	function toolCounters(stats: SessionStats): FooterModel["counters"] {
 		const toolCalls = toolCount === "calls" ? stats.toolCalls : splitCount(stats.toolCalls, stats.plans, new Map([...liveChains, ...stats.chains]));
-		return { prompts: stats.prompts, turns: stats.turns, toolCalls };
+		return { prompts: stats.prompts, turns: stats.turns, toolCalls, compactions: stats.compactions };
 	}
 
 	/** A click on the tool figure switches how it counts, and the choice is kept for later sessions. */

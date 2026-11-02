@@ -3,7 +3,7 @@
  * row per provider with spend this session.
  *
  *   12:00 ██████████░░░░░░░░░░ 112k / 272k   │ gpt-5.6-sol high │ $2.82 · 19m │ ~/projects/example-app (main) · e2e
- *          12 prompts · 31 turns · 48 tools  │ 1.2M in · 310k write · 9.8M read · 48k out  │ cache 92% · 2m warm
+ *   ↻2     12 prompts · 31 turns · 48 tools  │ 1.2M in · 310k write · 9.8M read · 48k out  │ cache 92% · 2m warm
  *   Ant   $1.84 · 12m05s │ 9.4M in · 41k out │ 5h 47% · 7d 12% · $87/$100 left │ 3pm · Sun 12:47am
  *
  * The renderer is pure: the extension assembles a FooterModel from Pi's
@@ -23,6 +23,7 @@ import { spendText } from "./status-plus-spend.ts";
 import { meshText, type ExtensionStatus, type MeshState } from "./status-plus-mesh.ts";
 import {
 	cacheState as _cacheState,
+	COMPACTION_MARK,
 	compareProviderIds,
 	contextBar,
 	contextHeat,
@@ -82,7 +83,8 @@ export interface FooterModel {
 	 * A positive `delta` overpaints airtime and neighboring cells without resizing the grid.
 	 */
 	spend?: { cost: number; airtimeMs: number; flash: number; delta?: number };
-	counters: { prompts: number; turns: number; toolCalls: number };
+	/** compactions: how often main's context was compacted; shown under the clock once it is above zero. */
+	counters: { prompts: number; turns: number; toolCalls: number; compactions?: number };
 	cwd: string;
 	gitBranch?: string | null;
 	sessionName?: string | null;
@@ -167,6 +169,12 @@ function countersCell(paint: Painter, model: FooterModel, compact: boolean): str
 	return paint.fg("dim", countersText(model, compact));
 }
 
+/** How often main's context was compacted, short enough for the gap under the clock; nothing before the first one. */
+function compactionsCell(paint: Painter, model: FooterModel): string {
+	const count = model.counters.compactions ?? 0;
+	return count > 0 ? paint.fg("dim", `${COMPACTION_MARK}${count}`) : "";
+}
+
 /** Where the tool figure was drawn: a row of the footer and its columns, end exclusive. */
 export interface Span {
 	y: number;
@@ -233,7 +241,10 @@ function gridLines(model: FooterModel, paint: Painter, width: number, compact: b
 	const clock = paint.fg(model.cache.tone, model.lastApiEndMs ? hhmm(model.lastApiEndMs) : "--:--");
 	const clockContent = `${clock} ${contextBar(paint, model.context.percent ?? 0)} ${contextText(paint, model)}`;
 	const counters = countersCell(paint, model, compact);
-	const firstWidth = Math.max(visibleWidth(clockContent), visibleWidth(counters));
+	const compactions = compactionsCell(paint, model);
+	// Left under the clock, one space at least from the counters; with no room it widens the column.
+	const lead = compactions ? visibleWidth(compactions) + 1 : 0;
+	const firstWidth = Math.max(visibleWidth(clockContent), lead + visibleWidth(counters));
 	const modelText = modelCell(paint, model);
 	const modelWidth = visibleWidth(modelText);
 	// The settled total decides the digit count; a moving figure borrows it so the cell never changes width mid-tween.
@@ -250,7 +261,7 @@ function gridLines(model: FooterModel, paint: Painter, width: number, compact: b
 
 	const first = [padEndVisible(clockContent, firstWidth), modelText, padEndVisible(costCell, costWidth)];
 	// Counters end where the context figure ends, right-aligned under the bar.
-	const second = [padStartVisible(counters, firstWidth), padEndVisible(paint.fg("dim", tokensText), midWidth)];
+	const second = [`${compactions}${padStartVisible(counters, firstWidth - visibleWidth(compactions))}`, padEndVisible(paint.fg("dim", tokensText), midWidth)];
 	const room = width - firstWidth - midWidth - 3 * visibleWidth(sep);
 	let meshPlaced = false;
 	if (room >= TAIL_CELL_MIN) {
@@ -274,9 +285,10 @@ function gridLines(model: FooterModel, paint: Painter, width: number, compact: b
 		fadeFg(paint, "error", "text", model.spend?.flash ?? 0, padEndVisible(increment, visibleWidth(costText))),
 	);
 	const wide = visibleWidth(secondLine) <= width;
-	const lines = wide ? [topLine, secondLine] : [topLine, counters, paint.fg("dim", tokensText)];
+	const alone = compactions ? `${compactions} ${counters}` : counters;
+	const lines = wide ? [topLine, secondLine] : [topLine, alone, paint.fg("dim", tokensText)];
 	// The counters end at the first column's edge, or at their own end on a line of their own.
-	const end = wide ? firstWidth : visibleWidth(counters);
+	const end = wide ? firstWidth : visibleWidth(alone);
 	return { lines, meshOverflow, tools: { y: 1, x0: end - visibleWidth(toolsText(model)), x1: end } };
 }
 

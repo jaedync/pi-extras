@@ -195,6 +195,9 @@ test("the top rule carries the facts the row leaves out", () => {
 	const { view, record, lines } = open();
 	Object.assign(record, { contextTokens: 50_000, contextWindow: 200_000, toolCalls: 1, runs: 2, readOnly: true, parent: "lead" });
 	assert.match(lines().at(-4)!, /─ 1 tool call · 2 runs · read-only · under lead ─$/);
+	record.compactions = 1;
+	assert.match(lines().at(-4)!, /─ 1 tool call · 1 compaction · 2 runs · read-only · under lead ─$/);
+	record.compactions = undefined;
 	// Its context is in the row, so the rule doesn't say it again.
 	assert.match(lines().join("\n"), /◆ \S+ .* 50k 25% /);
 	assert.doesNotMatch(lines().join("\n"), /ctx/);

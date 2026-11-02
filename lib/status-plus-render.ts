@@ -188,6 +188,9 @@ export function toneForPct(pct: number): "dim" | "warning" | "error" {
 	return "dim";
 }
 
+/** Marks a compaction count, in main's footer and in the subagent rows. */
+export const COMPACTION_MARK = "↻";
+
 /** How a context figure is colored: dim until it needs attention, warning above 70 percent of the compaction point, error above 90. */
 export const contextHeat = (percent: number): "dim" | "warning" | "error" => (percent > 90 ? "error" : percent > 70 ? "warning" : "dim");
 

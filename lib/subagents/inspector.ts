@@ -19,7 +19,7 @@ import { drawnTool } from "../tool-row.ts";
 import { ChatLog } from "./chat.ts";
 import type { Voices } from "./transcript.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
-import { rowSegs } from "./widget.ts";
+import { compactionWords, rowSegs } from "./widget.ts";
 
 const NOTICE_MS = 4_000;
 const KEYS: readonly SheetKey[] = [
@@ -140,7 +140,7 @@ export class AgentView implements SheetSource {
 	private facts(record: AgentRecord): string {
 		// Its context is in the row above.
 		const calls = `${record.toolCalls} tool ${record.toolCalls === 1 ? "call" : "calls"}`;
-		return [calls, record.runs > 1 && `${record.runs} runs`, record.readOnly && "read-only", record.parent !== "main" && `under ${record.parent}`].filter(Boolean).join(" · ");
+		return [calls, record.compactions && compactionWords(record.compactions), record.runs > 1 && `${record.runs} runs`, record.readOnly && "read-only", record.parent !== "main" && `under ${record.parent}`].filter(Boolean).join(" · ");
 	}
 
 	keys(): readonly SheetKey[] {

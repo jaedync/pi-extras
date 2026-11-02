@@ -36,6 +36,7 @@ test("collect counts prompts, tools, turns, airtime, and per-provider spend from
 	assert.equal(stats.turns, 3);
 	assert.equal(stats.lastApiEndMs, T0 + 9500);
 	assert.equal(stats.lastContextResetMs, T0 + 7000);
+	assert.equal(stats.compactions, 1);
 	// A provider's input is everything sent to it: fresh input plus cache writes and reads.
 	assert.deepEqual(stats.providers.get("anthropic"), { cost: 0.75, airtimeMs: 4000, inputTokens: 161, outputTokens: 8 });
 	assert.deepEqual(stats.providers.get("openai-codex"), { cost: 0.1, airtimeMs: 500, inputTokens: 1, outputTokens: 1 });
@@ -108,6 +109,7 @@ test("summaries and cache refreshes are charged to the model that ran them, with
 		return m.usage.cost.total || 0.125;
 	} });
 	assert.deepEqual([stats.prompts, stats.turns, stats.toolCalls], [0, 1, 0]);
+	assert.equal(stats.compactions, 1, "a branch summary is not a compaction");
 	// A summary persisted without a price is estimated like any other zero-cost call.
 	assert.ok(priced.includes("openai-codex/gpt"));
 	assert.deepEqual(stats.providers.get("openai-codex"), { cost: 2.125, airtimeMs: 0, inputTokens: 200, outputTokens: 40 });
