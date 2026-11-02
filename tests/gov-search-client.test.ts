@@ -276,10 +276,15 @@ test("TLS runs end to end inside the tunnel and checks the API host name", async
 });
 
 test("more calls than the limit at the same time are refused", async () => {
-	const api = await fakeApi(() => {});
+	let arrived!: () => void;
+	const reached = new Promise<void>((resolve) => { arrived = resolve; });
+	const api = await fakeApi(() => arrived());
 	try {
 		const search = client(api.port, { maxInFlight: 1, timeoutMs: 300 });
 		const first = search.search({ query: "a" });
+		// Each call reads its key first, so a second call started at once can take the slot before the first does.
+		first.catch(() => {});
+		await reached;
 		await assert.rejects(search.search({ query: "b" }), failsWith("busy"));
 		await assert.rejects(first, failsWith("timeout"));
 	} finally {
