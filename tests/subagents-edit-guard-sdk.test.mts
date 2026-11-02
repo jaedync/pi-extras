@@ -1,13 +1,14 @@
 /** A child's edit and write calls pass through its edit guard in a real SDK session, driven by Pi's faux provider. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "subagents-edit-guard-"));
+process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
 // Set before importing the SDK. This test must never read real settings or credentials.
 process.env.HOME = scratch;
 const agentDir = join(scratch, "agent");

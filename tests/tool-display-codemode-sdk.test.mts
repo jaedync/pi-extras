@@ -10,6 +10,9 @@ import { formatTime } from "../lib/band/band.ts";
 import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "codemode-sdk-"));
+// Pi spools large tool output to a file in the OS temp folder and leaves it there; keep those files in scratch.
+process.env.TMPDIR = join(scratch, "tmp");
+mkdirSync(process.env.TMPDIR, { recursive: true });
 process.env.HOME = scratch;
 process.env.PI_CODING_AGENT_DIR = join(scratch, "agent");
 process.env.PI_OFFLINE = "1";
@@ -261,4 +264,4 @@ test("legacy foreign codemode keeps its result vocabulary and original execute w
 	} finally { await f.close(); }
 });
 
-test.after(() => rmSync(scratch, { recursive: true, force: true }));
+process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));

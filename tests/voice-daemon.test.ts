@@ -22,13 +22,22 @@ function tone(ms: number, amplitude: number): Int16Array {
 	return samples;
 }
 
+const made: string[] = [];
+/** A short temp folder that the exit hook removes, so a full run leaves nothing behind. */
+function pvHome(): string {
+	const dir = mkdtempSync(join(tmpdir(), "pv-"));
+	made.push(dir);
+	return dir;
+}
+process.on("exit", () => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
+
 function* frames(audio: Int16Array, size = 1600) {
 	for (let i = 0; i < audio.length; i += size) yield audio.subarray(i, i + size);
 }
 
 function setup(extra: string[] = []) {
 	// Short path: macOS limits Unix socket paths to 104 bytes.
-	const home = mkdtempSync(join(tmpdir(), "pv-"));
+	const home = pvHome();
 	mkdirSync(join(home, "sessions"), { recursive: true });
 	writeFileSync(join(home, "sessions", String(process.pid)), "");
 	const children: ChildProcess[] = [];
@@ -96,7 +105,7 @@ test("audio recorded while the model is still loading is transcribed once it loa
 });
 
 test("status reports loading while a model swap holds up decoding", { skip, timeout: 20_000 }, () => {
-	const home = mkdtempSync(join(tmpdir(), "pv-"));
+	const home = pvHome();
 	try {
 		const script = `
 import sys

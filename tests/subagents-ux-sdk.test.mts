@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "subagents-ux-sdk-"));
+process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
 // Set before importing the SDK. This test must never read real settings or credentials.
 process.env.HOME = scratch;
 const agentDir = join(scratch, "agent");

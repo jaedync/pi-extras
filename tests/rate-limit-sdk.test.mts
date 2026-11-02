@@ -273,4 +273,4 @@ test("a failure before context preparation cannot repeat a consumed continuation
 	} finally { await f.close(); }
 });
 
-test.after(() => rmSync(scratch, { recursive: true, force: true }));
+process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));

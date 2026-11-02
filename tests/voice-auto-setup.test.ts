@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProvisionOptions } from "../lib/voice/provision.ts";
 
 const home = mkdtempSync(join(tmpdir(), "voice-auto-"));
+process.on("exit", () => rmSync(home, { recursive: true, force: true }));
 process.env.PI_VOICE_HOME = home;
 const { Setup, startAutoSetup } = await import("../extensions/voice.ts");
 

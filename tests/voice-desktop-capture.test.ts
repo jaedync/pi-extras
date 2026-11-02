@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	capturePlist,
@@ -13,9 +14,19 @@ import {
 
 const FRAME_BYTES = 1600 * 2;
 
+const made: string[] = [];
+/** A short temp folder that the exit hook removes, so a full run leaves nothing behind. */
+function pvHome(): string {
+	const dir = mkdtempSync(join(tmpdir(), "pv-"));
+	made.push(dir);
+	return dir;
+}
+process.on("exit", () => { for (const dir of made) rmSync(dir, { recursive: true, force: true }); });
+
+
 function home(): string {
 	// Unix socket paths are capped near 104 bytes, so keep the fixture short.
-	return mkdtempSync(join("/tmp", "pv-"));
+	return pvHome();
 }
 
 function waitFor(check: () => boolean, ms = 3000): Promise<void> {
