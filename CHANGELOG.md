@@ -2,6 +2,21 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.38.4 - 2026-11-02
+
+### Changed
+
+- Status Plus: the footer shows how often the session's context was
+  compacted, as `↻2` on the second line, left under the clock. It shows
+  nothing before the first compaction. The count is main's own: a subagent's
+  compactions are not added. When the gap under the clock is too small, the
+  first column grows by the width of the count.
+- Subagents: each agent row shows how often its session compacted (`↻3`),
+  after its context size. The `/subagents` list and the agent view's top
+  rule say it in words (`3 compactions`). Only a compaction that finished
+  counts. The count is saved with the agent, so it survives a reload and
+  adds up over resumed runs.
+
 ## 0.38.3 - 2026-11-02
 
 ### Fixed
