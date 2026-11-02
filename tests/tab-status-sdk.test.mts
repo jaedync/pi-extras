@@ -70,6 +70,17 @@ async function fixture({ mode = "tui", hasUI = true, tty = true, native = false,
 	};
 }
 
+/** Waits up to 2 s for a write at or after `from` that matches, so a loaded machine does not fail a write that must arrive. */
+async function waitForWrite(writes: string[], pattern: RegExp, from = 0) {
+	const deadline = Date.now() + 2000;
+	for (;;) {
+		const hit = writes.slice(from).find((w) => pattern.test(w));
+		if (hit !== undefined) return hit;
+		if (Date.now() > deadline) throw new assert.AssertionError({ message: `no write matching ${pattern} within 2 s, saw: ${writes.slice(from).join(" | ")}` });
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+}
+
 test("real SDK: prompt, real bash tool, settlement, failure and next prompt emit terminal bytes", async (t) => {
 	const f = await fixture(); t.after(() => f.close());
 	assert.match(f.writes.join(""), /status=idle/); assert.deepEqual(f.render(), []);
@@ -101,8 +112,9 @@ test("real SDK Cache Compaction observes working before its in-hook model reques
 test("real SDK reply detail is opt-in and restored only when requested", async (t) => {
 	const f = await fixture({ settings: { detail: "reply" } }); t.after(() => f.close());
 	await f.prompt("Reply."); assert.match(f.writes.at(-1)!, /detail=Done\./);
+	const before = f.writes.length;
 	await f.session.extensionRunner.emit({ type: "session_start", reason: "reload" });
-	await f.flushIdle(); assert.match(f.writes.at(-1)!, /detail=Done\./);
+	assert.match(await waitForWrite(f.writes, /detail=Done\./, before), /detail=Done\./);
 });
 
 test("real SDK reload hands off owned metadata and disabled successors clear exactly once", async (t) => {
@@ -130,8 +142,8 @@ test("real SDK public dialog events pause and resume a run", async (t) => {
 
 test("idle tab follows the active theme without writing from render or invalidation", async (t) => {
 	const f = await fixture(); t.after(() => f.close()); const before = f.writes.length;
-	f.changeTheme(); assert.equal(f.writes.length, before); await f.flushIdle();
-	assert.match(f.writes.at(-1)!, /indicator=#141e28/);
+	f.changeTheme(); assert.equal(f.writes.length, before, "render and invalidation must not write");
+	assert.match(await waitForWrite(f.writes, /indicator=#141e28/, before), /indicator=#141e28/);
 });
 
 test("background events scoped to this session, keepalive, invalid payloads and reload reset", async (t) => {
@@ -141,11 +153,12 @@ test("background events scoped to this session, keepalive, invalid payloads and 
 	f.bus.emit(BACKGROUND_EVENT, { sessionId, source: "subagents", count: 1 });
 	assert.match(f.writes.at(-1)!, /status=working.*detail=running 1 subagent/);
 	const before = f.writes.length; await new Promise((resolve) => setTimeout(resolve, 1100)); assert.ok(f.writes.length > before);
-	f.bus.emit(BACKGROUND_EVENT, { sessionId, source: "subagents", count: 0 }); await f.flushIdle(); assert.match(f.writes.at(-1)!, /status=idle/);
+	f.bus.emit(BACKGROUND_EVENT, { sessionId, source: "subagents", count: 0 }); assert.match(await waitForWrite(f.writes, /status=idle/, before), /status=idle/);
 	await f.session.extensionRunner.emit({ type: "agent_start" });
 	f.bus.emit(RATE_WAIT_EVENT, { sessionId, active: true }); assert.match(f.writes.at(-1)!, /9;4;4;100/);
-	await f.session.extensionRunner.emit({ type: "session_start", reason: "reload" }); await f.flushIdle();
-	assert.match(f.writes.at(-1)!, /status=idle/); assert.deepEqual(f.errors, []);
+	const rated = f.writes.length;
+	await f.session.extensionRunner.emit({ type: "session_start", reason: "reload" });
+	assert.match(await waitForWrite(f.writes, /status=idle/, rated), /status=idle/); assert.deepEqual(f.errors, []);
 });
 
 test("Pi native progress owns 9;4; unknown terminals and overrides", async (t) => {
@@ -170,8 +183,9 @@ test("real SDK subagent count broadcasts keep idle main working until its child 
 	f.bus.on(BACKGROUND_EVENT, (value: any) => snapshots.push(value));
 	await f.session.getToolDefinition("subagent")!.execute("spawn", { task: "Run bash.", name: "worker", wait: true } as never, undefined, undefined, f.session.extensionRunner.createContext());
 	assert.ok(snapshots.some((s) => s.source === "subagents" && s.count === 1)); assert.equal(snapshots.at(-1).count, 0);
+	const idleFrom = f.writes.length;
 	await f.flushIdle(); assert.ok(f.writes.some((w) => w.includes("status=working") && w.includes("running 1 subagent")));
-	assert.match(f.writes.at(-1)!, /status=idle/); assert.deepEqual(f.errors, []);
+	assert.match(await waitForWrite(f.writes, /status=idle/, idleFrom), /status=idle/); assert.deepEqual(f.errors, []);
 });
 
 test("real SDK restored paused children stay idle, resumed restored children count as work", async (t) => {
@@ -189,10 +203,11 @@ test("real SDK restored paused children stay idle, resumed restored children cou
 		const records = index.load(() => {});
 		index.save(records.map((r) => ({ ...r, state: "interrupted" as const, interruptedBy: "quit" as const, interruptedOwner: "previous", interruptionId: "synthetic", interruptionAnnounced: false })), "quit", "previous");
 	} });
+	const idleFrom = f.writes.length;
 	await f.flushIdle();
 	assert.ok(snapshots.length); assert.ok(snapshots.every((s) => s.count === 0));
 	assert.equal(index.load(() => {})[0].state, "interrupted"); assert.equal(index.load(() => {})[0].restored, true);
-	assert.match(f.writes.at(-1)!, /status=idle/);
+	assert.match(await waitForWrite(f.writes, /status=idle/, idleFrom), /status=idle/);
 	await f.session.getToolDefinition("message")!.execute("resume", { to: "worker", text: "Continue your task." }, undefined, undefined, ctx());
 	assert.ok(snapshots.some((s) => s.count === 1));
 	assert.ok(f.writes.some((w) => w.includes("status=working") && w.includes("running 1 subagent")));
