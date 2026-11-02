@@ -142,6 +142,7 @@ export class CodeExecutor {
 		if (code.length > MAX_CODE_CHARS) return Promise.reject(new Error(`${api.tool} code is over ${MAX_CODE_CHARS} characters`));
 		return new Promise((resolve, reject) => {
 			const worker = new Worker(WORKER, { workerData: { code, store: this.store, methods: api.methods, global: api.global, imageHint: api.imageHint } });
+			this.guard?.begin();
 			const run = new Run(this.options, options, worker, (key) => this.screenshots.get(key), (image) => this.keepScreenshot(image), this.guard);
 			run.settle = (outcome) => {
 				options.signal?.removeEventListener("abort", abort);
@@ -255,8 +256,7 @@ class Run {
 		this.inFlight++;
 		let raw: unknown = {};
 		try { raw = JSON.parse(message.args); } catch { /* reported by the call below */ }
-		const given = this.api.args ? this.api.args(message.method, raw) : raw as Record<string, unknown>;
-		const args = this.guard ? this.guard.prepare(message.method, given) : given;
+		const args = this.api.args ? this.api.args(message.method, raw) : raw as Record<string, unknown>;
 		const target = { method: message.method, ...this.api.describe(message.method, args) };
 		const started = this.now();
 		let approval: Approval | undefined;
@@ -272,13 +272,18 @@ class Run {
 		this.options.onProgress?.({ calls: [...this.calls], running: target });
 		// The guard's own reads: not counted against the code's calls, and not shown as rows.
 		const read: Reader = (method, readArgs) => this.executor.session.call(method, readArgs, { approve, signal: this.options.signal });
-		try {
-			const refusal = await this.guard?.before(message.method, args, read);
+		const send = async () => {
+			const sent = this.guard ? this.guard.prepare(message.method, args) : args;
+			const refusal = await this.guard?.before(message.method, sent, read);
 			if (refusal) throw new Error(refusal);
-			const result = await this.executor.session.call(message.method, args, { approve, signal: this.options.signal });
+			const result = await this.executor.session.call(message.method, sent, { approve, signal: this.options.signal });
 			startupMs = result.startupMs;
 			if (result.isError) throw new Error(textOf(result) || `${message.method} failed`);
-			await this.guard?.after(message.method, args, result, read);
+			await this.guard?.after(message.method, sent, result, read);
+			return result;
+		};
+		try {
+			const result = await (this.guard ? this.guard.exclusive(send) : send());
 			const value = this.api.value(message.method, args, result, this.keep);
 			record();
 			this.reply(message.id, { value: JSON.stringify(value) });

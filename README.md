@@ -2638,12 +2638,21 @@ An element index is a position in the latest tree, not an element. When an
 action changes an app's layout, an old index can name another control, and the
 service clicks it with no error. So the tool keeps what each index named at the
 script's last `get_app_state` of that app. Before an element action that follows
-another action on the same app, it reads the tree again. If the element at that
-index is a different one, the call fails with a "stale" error and the action is
-not sent. The element's role, title and description must match; its value and
-state can change. The first element action after a `get_app_state` needs no extra
-read. The check does not see layout changes that the script did not cause, for
-example a list that reloads by itself before the first action.
+another action on the same app, it reads the full tree again. If the element at
+that index is a different one, the call fails with a "stale" error and the action
+is not sent. To be the same element, it must have the same level in the tree, the
+same role, title, description and ID, and the same first child elements. Its
+value and state can change. Calls of one script that run at the same time
+(`Promise.all`) go one at a time, so no call can move the layout between the check
+and the action.
+
+The first element action after a `get_app_state` in the same script needs no
+extra read. Each later element action costs one full read with a screenshot. A
+new script checks its first element action too, because the window can change
+between two tool calls. The check cannot tell apart two elements that look the
+same in every way it compares. It does not see a change that the script did not
+cause before its first element action, for example a list that reloads by itself
+right after the read.
 
 This relies on undocumented parts of the ChatGPT app and can break when it
 updates. OpenAI does not produce or endorse this integration.

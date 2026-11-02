@@ -59,9 +59,10 @@ test("parseTree reads each row of a full tree by its index, and the bundle id", 
 	const tree = parseTree(BASIC);
 	assert.ok(tree);
 	assert.equal(tree.bundleId, "com.apple.calculator");
-	assert.equal(tree.rows.get("15"), "button Description: 5, ID: Five");
-	assert.equal(tree.rows.get("0"), "standard window Calculator, ID: main, Secondary Actions: Raise");
+	assert.deepEqual(tree.rows.get("15"), { depth: 3, text: "button Description: 5, ID: Five" });
+	assert.deepEqual(tree.rows.get("0"), { depth: 0, text: "standard window Calculator, ID: main, Secondary Actions: Raise" });
 	assert.equal(tree.rows.size, 17);
+	assert.deepEqual(tree.names, ["Calculator", "Calculator.app"]);
 });
 
 test("parseTree gives nothing for text that is not a full tree", () => {
@@ -72,7 +73,7 @@ test("parseTree gives nothing for text that is not a full tree", () => {
 
 test("parseTree keeps a multi-line value with its row", () => {
 	const tree = parseTree(`${header()}0 standard window Notes\n\t1 text Value: first line\n2026 was a year\n\t2 button Done\n</app_state>`);
-	assert.equal(tree?.rows.get("2"), "button Done");
+	assert.equal(tree?.rows.get("2")?.text, "button Done");
 	assert.equal(tree?.rows.size, 3);
 });
 
@@ -246,4 +247,118 @@ test("coordinate clicks and keys are never refused, and an app without a read is
 	`, { approve });
 	assert.equal(result.error, undefined);
 	assert.deepEqual(sky.calls.map((call) => call.tool), ["click", "get_app_state", "press_key", "click", "type_text"]);
+});
+
+/** A mail list: each row holds the same flag button, and its text tells the items apart. */
+const LIST = (first: number) => `${header()}0 standard window Mail, ID: main
+\t1 table Messages
+\t\t2 row
+\t\t\t3 text Item ${first}
+\t\t\t4 button Description: Flag, ID: flag-${first}
+\t\t5 row
+\t\t\t6 text Item ${first + 1}
+\t\t\t7 button Description: Flag, ID: flag-${first + 1}
+</app_state>`;
+
+/** A session whose tree becomes `next` after the first call of `tool`. */
+function changingSky(first: string, tool: string, next: string) {
+	const screen = { tree: first };
+	const sky = fakeSky(screen);
+	const session = { call: async (name: string, args: Record<string, unknown>, options: CallOptions) => {
+		const result = await sky.session.call(name, args, options);
+		if (name === tool) screen.tree = next;
+		return result;
+	} };
+	return { sky, session };
+}
+
+test("a list that moves by one item is caught: a row is told apart by its children, a button by its ID", async () => {
+	for (const index of ["2", "4"]) {
+		const { sky, session } = changingSky(LIST(3), "press_key", LIST(4));
+		const executor = new CodeExecutor({ session });
+		const result = await executor.execute(`
+			await sky.get_app_state({ app: "Calculator" });
+			await sky.press_key({ app: "Calculator", key: "Down" });
+			await sky.click({ app: "Calculator", element_index: "${index}" });
+		`, { approve });
+		assert.match(result.error ?? "", new RegExp(`element_index "${index}" is stale`), `index ${index}`);
+		assert.equal(sky.calls.some((call) => call.tool === "click"), false);
+	}
+});
+
+test("the same element at the same index still passes when only its value changed", async () => {
+	const slider = (value: string) => `${header()}0 standard window Mixer\n\t1 slider (settable, float) ${value}\n</app_state>`;
+	assert.equal(identity("slider (settable, float) 0.5"), identity("slider (settable, float) 0.7"));
+	const { sky, session } = changingSky(slider("0.5"), "set_value", slider("0.7"));
+	const executor = new CodeExecutor({ session });
+	const result = await executor.execute(`
+		await sky.get_app_state({ app: "Calculator" });
+		await sky.set_value({ app: "Calculator", element_index: "1", value: "0.7" });
+		await sky.set_value({ app: "Calculator", element_index: "1", value: "0.9" });
+	`, { approve });
+	assert.equal(result.error, undefined);
+	assert.equal(sky.calls.filter((call) => call.tool === "set_value").length, 2);
+});
+
+test("a call that runs at the same time cannot move the layout between the check and the click", async () => {
+	const { sky, session: direct } = changingSky(BASIC, "press_key", SCIENTIFIC);
+	// As the real session does: one call at a time, in the order they come, each taking a moment.
+	let queue: Promise<unknown> = Promise.resolve();
+	const session = { call: (tool: string, args: Record<string, unknown>, options: CallOptions) => {
+		const next = queue.then(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); return direct.call(tool, args, options); });
+		queue = next.catch(() => {});
+		return next;
+	} };
+	const executor = new CodeExecutor({ session });
+	const result = await executor.execute(`
+		await sky.get_app_state({ app: "Calculator" });
+		await sky.click({ app: "Calculator", element_index: "16" });
+		await Promise.allSettled([sky.click({ app: "Calculator", element_index: "15" }), sky.press_key({ app: "Calculator", key: "cmd+2" })]);
+	`, { approve });
+	assert.equal(result.error, undefined);
+	const tools = sky.calls.map((call) => call.tool);
+	const click = tools.lastIndexOf("click");
+	assert.equal(tools[click - 1], "get_app_state", `the check read comes right before the click: ${tools.join(", ")}`);
+	assert.ok(click < tools.indexOf("press_key"), "the click, checked against Basic, goes before the mode switch");
+});
+
+test("an app read by its bundle id is checked when the code acts on it by its name, or by a name the guard does not know", async () => {
+	for (const name of ["Calculator", "Calculator.app", "Calc"]) {
+		const { sky, session } = changingSky(BASIC, "press_key", SCIENTIFIC);
+		const executor = new CodeExecutor({ session });
+		const result = await executor.execute(`
+			await sky.get_app_state({ app: "com.apple.calculator" });
+			await sky.press_key({ app: "${name}", key: "cmd+2" });
+			await sky.click({ app: "com.apple.calculator", element_index: "15" });
+		`, { approve });
+		assert.match(result.error ?? "", /element_index "15" is stale/, name);
+		assert.equal(sky.calls.some((call) => call.tool === "click"), false, name);
+	}
+});
+
+test("a new run checks its first element action, since the window can change between tool calls", async () => {
+	const screen = { tree: BASIC };
+	const sky = fakeSky(screen);
+	const executor = new CodeExecutor({ session: sky.session });
+	await executor.execute(`await sky.get_app_state({ app: "Calculator" });`, { approve });
+	screen.tree = SCIENTIFIC;
+	const result = await executor.execute(`await sky.click({ app: "Calculator", element_index: "15" });`, { approve });
+	assert.match(result.error ?? "", /element_index "15" is stale/);
+	assert.equal(sky.calls.some((call) => call.tool === "click"), false);
+});
+
+test("a diff that holds a row 0 is not a full tree", () => {
+	assert.equal(parseTree("<app_state_diff>\n0 standard window W2\n\t\t15 button Divide\n</app_state_diff>"), undefined);
+	assert.equal(parseTree(`${header()}0 standard window W2\n\t\t15 button Divide\n</app_state>`), undefined, "an indented row out of order is a partial view");
+});
+
+test("refusals in a row reuse one check read while no action goes to the app", async () => {
+	const { sky, session } = changingSky(BASIC, "press_key", SCIENTIFIC);
+	const executor = new CodeExecutor({ session });
+	await executor.execute(`
+		await sky.get_app_state({ app: "Calculator" });
+		await sky.press_key({ app: "Calculator", key: "cmd+2" });
+		for (const index of ["15", "9", "15"]) { try { await sky.click({ app: "Calculator", element_index: index }); } catch {} }
+	`, { approve });
+	assert.deepEqual(sky.calls.map((call) => call.tool), ["get_app_state", "press_key", "get_app_state"]);
 });

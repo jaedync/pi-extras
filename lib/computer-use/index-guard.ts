@@ -7,7 +7,9 @@
  * This guard keeps what each index named at the code's last get_app_state for an
  * app. Before an element action that follows another action on that app, it reads
  * a full tree and refuses when the element at that index is not the same one.
- * The first element action after a read needs no check: nothing has moved yet.
+ * The first element action after a read in the same run needs no check: nothing
+ * has moved yet. A new run checks again, because the user or the app can change
+ * the window between two tool calls.
  */
 import { clean } from "./describe.ts";
 import type { ToolResult } from "./session.ts";
@@ -16,6 +18,14 @@ import type { ToolResult } from "./session.ts";
 export type Reader = (method: string, args: Record<string, unknown>) => Promise<ToolResult>;
 
 export interface CallGuard {
+	/** A run of the code starts. */
+	begin(): void;
+	/**
+	 * Runs one call of the code, from its check to its result, with no other call
+	 * between them: otherwise a call that runs at the same time (Promise.all) can
+	 * move the layout after the check and before the action.
+	 */
+	exclusive<T>(task: () => Promise<T>): Promise<T>;
 	/** The arguments to send for a call the code made. */
 	prepare(method: string, args: Record<string, unknown>): Record<string, unknown>;
 	/** A reason to refuse the call before it is sent, or undefined to send it. */
@@ -24,19 +34,34 @@ export interface CallGuard {
 	after(method: string, args: Record<string, unknown>, result: ToolResult, read: Reader): Promise<void>;
 }
 
+export interface Row {
+	/** The number of leading tabs: the row's level in the tree. */
+	readonly depth: number;
+	/** The row text after the index. */
+	readonly text: string;
+}
+
 export interface Tree {
 	readonly bundleId?: string;
-	/** Row text after the index, by index. */
-	readonly rows: ReadonlyMap<string, string>;
+	/** Other names of the app that the tree header gives: the window's app name and the .app name. */
+	readonly names: readonly string[];
+	/** The rows by index. */
+	readonly rows: ReadonlyMap<string, Row>;
 }
 
 const ELEMENT_METHODS = new Set(["click", "perform_secondary_action", "set_value", "select_text", "scroll"]);
 const READ_METHODS = new Set(["list_apps", "get_app_state"]);
 const ROW = /^(\t*)(\d+) (.*)$/;
 const BUNDLE = /\(bundleID ([^,\s)]+)/;
+const APP_PATH = /^App=.*\/([^/\n]+)\.app\/?\s/m;
+const WINDOW_APP = /^Window: .*, App: (.+?)\.?\s*$/m;
 /** The labelled fields of a row. Everything before the first is the role and the title. */
 const FIELD = /(?:,\s*|\s+|^)(Description|Value|Help|ID|Secondary Actions): /g;
 const FLAGS = /\s*\([^)]*\)/g;
+/** An ID can hold state after a ";" or a ":" (Calculator's "StandardInputView;value:7", "Mode: basic"). */
+const ID_STATE = /[;:]/;
+/** Children that count toward an element's identity, so two rows that look the same still differ. */
+const MAX_CHILDREN = 8;
 const SHOWN_CHARS = 80;
 
 const textOf = (result: ToolResult) => result.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
@@ -44,54 +69,91 @@ const textOf = (result: ToolResult) => result.content.flatMap((block) => block.t
 /**
  * The rows of a full tree. Rows are numbered in order from 0, so a line that
  * breaks the order is part of the row before it (a multi-line value). Text with
- * no row 0 is not a full tree: a diff, an error or an action's output.
+ * no row 0 or no <app_state> block is not a full tree: a diff, an error or an
+ * action's output. An indented row-like line out of order is not a value line,
+ * so it marks a partial view too.
  */
 export function parseTree(text: string): Tree | undefined {
-	const rows = new Map<string, string>();
+	if (!text.includes("<app_state>")) return undefined;
+	const rows = new Map<string, Row>();
 	for (const line of text.split("\n")) {
 		const match = ROW.exec(line);
-		if (match && Number(match[2]) === rows.size) rows.set(match[2], match[3].trim());
+		if (!match) continue;
+		if (Number(match[2]) === rows.size) rows.set(match[2], { depth: match[1].length, text: match[3].trim() });
+		else if (match[1].length > 0) return undefined;
 	}
 	if (rows.size === 0) return undefined;
 	const bundleId = BUNDLE.exec(text)?.[1];
-	return { rows, ...(bundleId ? { bundleId } : {}) };
+	const names = [...new Set([APP_PATH.exec(text)?.[1], WINDOW_APP.exec(text)?.[1]].flatMap((name) => name ? [name, `${name}.app`] : []))];
+	return { rows, names, ...(bundleId ? { bundleId } : {}) };
 }
 
 /**
- * What makes a row the same element: its role, its title and its Description.
- * The ID counts only when there is no Description. Values, flags such as
- * "disabled", Help and Secondary Actions change with normal use, so they do not
- * count. An ID can hold state after a ";" (Calculator's "value:7"), so that part
- * does not count either.
+ * What makes a row the same element: its role, its title, its Description and
+ * its ID without state. Values, flags such as "disabled", Help and Secondary
+ * Actions change with normal use, so they do not count. A value with no label
+ * comes after the flags ("splitter (settable, float) -1"), so the text after
+ * the last flags does not count either.
  */
 export function identity(row: string): string {
 	const fields = [...row.matchAll(FIELD)];
-	const head = (fields.length > 0 ? row.slice(0, fields[0].index) : row).replace(FLAGS, "").trim();
+	let head = fields.length > 0 ? row.slice(0, fields[0].index) : row;
+	const flags = [...head.matchAll(FLAGS)].at(-1);
+	if (flags) head = head.slice(0, flags.index! + flags[0].length);
 	const field = (key: string): string => {
 		const at = fields.findIndex((match) => match[1] === key);
 		if (at < 0) return "";
 		const start = fields[at].index! + fields[at][0].length;
 		return row.slice(start, fields[at + 1]?.index ?? row.length).trim();
 	};
-	const description = field("Description");
-	return [head, description, description ? "" : field("ID").split(";")[0].trim()].join("\u0000");
+	return [head.replace(FLAGS, "").trim(), field("Description"), field("ID").split(ID_STATE)[0].trim()].join("\u0000");
+}
+
+/**
+ * The identity of the element at `index` in its tree: its level, its own row
+ * and its first direct children. A list reload can put a row with the same text
+ * at the same index ("row", "cell"); its children (the item's text) tell them apart.
+ */
+export function elementKey(tree: Tree, index: string): string | undefined {
+	const row = tree.rows.get(index);
+	if (!row) return undefined;
+	const children: string[] = [];
+	for (let at = Number(index) + 1; children.length < MAX_CHILDREN; at++) {
+		const next = tree.rows.get(String(at));
+		if (!next || next.depth <= row.depth) break;
+		if (next.depth === row.depth + 1) children.push(identity(next.text));
+	}
+	return [String(row.depth), identity(row.text), ...children].join("\u0001");
 }
 
 interface AppView {
-	readonly rows: ReadonlyMap<string, string>;
+	readonly tree: Tree;
 	/** An action went to the app after the code's last read, so indices may have moved. */
 	acted: boolean;
 	/** A check read changed what Sky diffs against, so the code's next read must be full. */
 	resync: boolean;
+	/** The tree of the last check read, while no action has gone to the app since. */
+	checked?: Tree;
 }
 
 const norm = (app: unknown) => typeof app === "string" ? app.trim().toLowerCase() : "";
-const shown = (row: string) => `"${clean(row, SHOWN_CHARS)}"`;
+const shown = (row: Row) => `"${clean(row.text, SHOWN_CHARS)}"`;
 
 export class IndexGuard implements CallGuard {
 	private readonly views = new Map<string, AppView>();
-	/** The names the code used for an app, to the bundle id its tree gave. */
+	/** The names the code used for an app, and the names its tree gave, to its key. */
 	private readonly aliases = new Map<string, string>();
+	private lock: Promise<unknown> = Promise.resolve();
+
+	begin(): void {
+		this.actedOnAll();
+	}
+
+	exclusive<T>(task: () => Promise<T>): Promise<T> {
+		const run = this.lock.then(task);
+		this.lock = run.catch(() => {});
+		return run;
+	}
 
 	prepare(method: string, args: Record<string, unknown>): Record<string, unknown> {
 		const view = method === "get_app_state" ? this.view(args.app) : undefined;
@@ -101,11 +163,18 @@ export class IndexGuard implements CallGuard {
 	async before(method: string, args: Record<string, unknown>, read: Reader): Promise<string | undefined> {
 		if (READ_METHODS.has(method)) return undefined;
 		const view = this.view(args.app);
-		if (!view) return undefined;
+		if (!view) {
+			// A name the guard has not seen can still be an app it has a view of.
+			this.actedOnAll();
+			return undefined;
+		}
 		const index = typeof args.element_index === "string" || typeof args.element_index === "number" ? String(args.element_index) : undefined;
-		const was = index === undefined ? undefined : view.rows.get(index);
-		const refusal = ELEMENT_METHODS.has(method) && view.acted && was !== undefined ? await this.check(view, args.app, index!, was, read) : undefined;
-		if (!refusal) view.acted = true;
+		const was = index === undefined ? undefined : elementKey(view.tree, index);
+		const refusal = ELEMENT_METHODS.has(method) && view.acted && was !== undefined ? await this.check(view, args.app, index!, read) : undefined;
+		if (!refusal) {
+			view.acted = true;
+			view.checked = undefined;
+		}
 		return refusal;
 	}
 
@@ -124,27 +193,39 @@ export class IndexGuard implements CallGuard {
 			return;
 		}
 		const id = tree.bundleId ? norm(tree.bundleId) : key;
-		this.aliases.set(norm(args.app), id);
-		this.aliases.set(id, id);
-		this.views.set(id, { rows: tree.rows, acted: false, resync: false });
+		for (const name of [args.app, id, ...tree.names]) {
+			if (norm(name)) this.aliases.set(norm(name), id);
+		}
+		this.views.set(id, { tree, acted: false, resync: false });
 	}
 
-	private async check(view: AppView, app: unknown, index: string, was: string, read: Reader): Promise<string | undefined> {
-		const stale = `element_index "${index}" is stale`;
-		let current: Tree | undefined;
-		view.resync = true;
-		try {
-			const result = await read("get_app_state", { app, disableDiff: true });
-			if (result.isError) return `could not check element_index "${index}": ${textOf(result) || "get_app_state failed"}. The action was not sent. Call sky.get_app_state again.`;
-			current = parseTree(textOf(result));
-		} catch (error) {
-			return `could not check element_index "${index}": ${error instanceof Error ? error.message : String(error)}. The action was not sent. Call sky.get_app_state again.`;
+	private async check(view: AppView, app: unknown, index: string, read: Reader): Promise<string | undefined> {
+		let current = view.checked;
+		if (!current) {
+			view.resync = true;
+			const failure = (reason: string) => `could not check element_index "${index}": ${reason}. The action was not sent. Call sky.get_app_state again.`;
+			try {
+				const result = await read("get_app_state", { app, disableDiff: true });
+				if (result.isError) return failure(textOf(result) || "get_app_state failed");
+				current = parseTree(textOf(result));
+			} catch (error) {
+				return failure(error instanceof Error ? error.message : String(error));
+			}
+			if (!current) return failure("the current tree did not parse");
+			view.checked = current;
 		}
-		if (!current) return `could not check element_index "${index}": the current tree did not parse. The action was not sent. Call sky.get_app_state again.`;
+		if (elementKey(current, index) === elementKey(view.tree, index)) return undefined;
+		const was = view.tree.rows.get(index)!;
 		const now = current.rows.get(index);
-		if (now !== undefined && identity(now) === identity(was)) return undefined;
-		const after = now === undefined ? "no element has that index now" : `now it is ${shown(now)}`;
-		return `${stale}: at the last get_app_state it was ${shown(was)}, and ${after}. An earlier action changed the layout, so the action was not sent. Call sky.get_app_state again and take the index from the new tree.`;
+		const after = now === undefined ? "no element has that index now" : now.text === was.text ? `now it holds other contents` : `now it is ${shown(now)}`;
+		return `element_index "${index}" is stale: at the last get_app_state it was ${shown(was)}, and ${after}. The element at that index changed since then, so the action was not sent. Call sky.get_app_state again and take the index from the new tree.`;
+	}
+
+	private actedOnAll(): void {
+		for (const view of this.views.values()) {
+			view.acted = true;
+			view.checked = undefined;
+		}
 	}
 
 	private key(app: unknown): string {

@@ -49,7 +49,7 @@ Available globals:
 - store is a persistent JSON object shared across calls
 
 element_index identifiers are strings (e.g. "7") from the latest get_app_state tree. An index is a position in that tree, not an element: an action that changes the layout (a mode switch, a sheet, a menu, a list that reloads) moves the elements, and the old index then names another element.
-After an action that can change the layout, call get_app_state again before you use an index. When the element at an index is not the one the last get_app_state showed, the call fails with "element_index ... is stale" and the action is not sent.
+After an action that can change the layout, call get_app_state again before you use an index. When the element at an index is not the one the last get_app_state showed, the call fails with "element_index ... is stale" and the action is not sent. Each element action after another action on the app costs one extra full read.
 get_app_state may return an accessibility-tree diff after the first inspection. Pass disableDiff: true for a fresh full tree.
 press_key key names are case-sensitive: "Escape" works, "escape" fails.
 The first use of each app asks the user to allow it; some apps, such as terminals, are never allowed.

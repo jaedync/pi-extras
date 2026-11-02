@@ -1,7 +1,8 @@
 /**
  * One warm connection to the Computer Use client, shared by every call until
  * it has been idle for a while. Keeping it open avoids a restart per prompt and
- * keeps the element indices from the last get_app_state valid across turns.
+ * keeps the client's view of each app across turns. An element index still names
+ * a position in the last tree, not an element: see index-guard.ts.
  */
 import { type ClientProcess, McpLink } from "./mcp-link.ts";
 
