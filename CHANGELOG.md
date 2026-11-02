@@ -2,6 +2,35 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## 0.38.3 - 2026-11-02
+
+### Fixed
+
+- Computer Use: a stale `element_index` no longer clicks the wrong control.
+  An index is a position in the last tree, so after a layout change (a mode
+  switch, a sheet, a menu, a list that reloads) it can name another element,
+  and Sky acted on it with no error.
+  - Before an element action that follows another action on the same app,
+    the tool reads the full tree again. When the element at that index is a
+    different one, the call fails with a "stale" error and the action is not
+    sent.
+  - The same element has the same level, role, title, description and ID,
+    and the same first children. Values can change. A scroll compares only
+    the element itself.
+  - Calls of one script that run at the same time go one at a time through
+    the check. A new script checks its first element action too.
+  - Cost: one full read for each element action after another action on the
+    app.
+  - The tool description says to read the state again after a layout change,
+    and that `press_key` key names are case-sensitive.
+- Walkthrough video: `wv compose` failed with "runtimeGsap is not defined"
+  since 0.36.0. `npm run typecheck` now checks every wv script, so a missing
+  import fails the check.
+- Walkthrough video: a stop (Ctrl-C, SIGTERM) during `wv render`, `wv
+  preview`, the film render or a capture no longer leaves the cache or the
+  staging folder behind. The cleanup now runs after the child processes
+  stop, so a child that ignores SIGTERM cannot write into the folder again.
+
 ## 0.38.2 - 2026-11-01
 
 ### Fixed
