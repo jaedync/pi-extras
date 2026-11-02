@@ -293,7 +293,8 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 		catch { miss("capture-headers"); }
 	});
 	pi.on("before_provider_request", (event, ctx) => {
-		// Only the agent loop runs this hook, never a registry request such as a warm, so this is a real request.
+		// A registry request such as this extension's warm never runs this hook. The agent loop and Pi's own
+		// cache warmer do; the warmer stops Pi's for the APIs it owns, so here the request is a real one.
 		warmer.cancel();
 		try {
 			const hashes = latest ? payloadHashes(latest.api, event.payload) : undefined;

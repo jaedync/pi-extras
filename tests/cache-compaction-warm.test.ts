@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadConfig } from "../lib/cache-compaction/core.ts";
-import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WakeSet, artifactWakes, cacheLifetimeMs, loadWarmConfig, readWakePending, warmCostEstimate, warmDelayMs, warmStop } from "../lib/cache-compaction/warm.ts";
+import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WakeSet, artifactWakes, retryAt, payloadThinkingBudget, cacheLifetimeMs, loadWarmConfig, readWakePending, warmCostEstimate, warmDelayMs, warmStop } from "../lib/cache-compaction/warm.ts";
 
 test("warm config defaults on, with an 8-hour cap, a 20k floor and the Anthropic API", () => {
-	assert.deepEqual(loadWarmConfig(undefined), { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["artifact_ask", "artifact_publish"] });
+	assert.deepEqual(loadWarmConfig(undefined), { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["artifact_ask"] });
 	assert.deepEqual(loadConfig({}).warm, loadWarmConfig(undefined));
 	assert.equal(loadConfig({ warm: { enabled: false } }).warm.enabled, false);
 });
@@ -14,6 +14,7 @@ test("warm config keeps valid values and replaces bad ones with defaults", () =>
 	assert.deepEqual(good, { enabled: false, maxHours: 2.5, minTokens: 5000, apis: ["openai-responses"], formTools: ["ask_form"] });
 	const bad = loadWarmConfig({ enabled: "yes", maxHours: -1, minTokens: "20", apis: "anthropic-messages", formTools: [1, "x"] });
 	assert.deepEqual(bad, { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["x"] });
+	assert.deepEqual(loadWarmConfig({ formTools: "artifact_ask" }).formTools, ["artifact_ask"]);
 	assert.equal(loadWarmConfig({ maxHours: 100 }).maxHours, 8, "more than 48 hours is not a wait");
 	assert.equal(loadWarmConfig({ minTokens: -5 }).minTokens, 20000);
 	assert.deepEqual(loadWarmConfig({ apis: [] }).apis, [], "an empty list turns warming off for every API");
@@ -104,4 +105,20 @@ test("the warm instruction asks for one word and no tools, and the entry type is
 	assert.match(WARM_INSTRUCTION, /Reply with the single word ok/);
 	assert.match(WARM_INSTRUCTION, /Do not use tools/);
 	assert.equal(CACHE_WARM_ENTRY, "pi-extras.cache-warm");
+});
+
+test("a deferred warm retries in 30-second steps until half the margin after its due time", () => {
+	// One hour: due at 54 min, margin 6 min, deadline 3 min after due.
+	assert.equal(retryAt(3_240_000, 3_240_000, 3_600_000), 3_270_000);
+	assert.equal(retryAt(3_240_000 + 150_000, 3_240_000, 3_600_000), 3_240_000 + 180_000);
+	assert.equal(retryAt(3_240_000 + 150_001, 3_240_000, 3_600_000), undefined);
+	assert.equal(retryAt(0, 0, 10_000), undefined, "no warm period at all");
+});
+
+test("a thinking budget in the payload is found for each API shape", () => {
+	assert.equal(payloadThinkingBudget({ thinking: { type: "enabled", budget_tokens: 1024 } }), 1024);
+	assert.equal(payloadThinkingBudget({ thinking: { type: "adaptive" } }), undefined);
+	assert.equal(payloadThinkingBudget({ config: { thinkingConfig: { thinkingBudget: 512 } } }), 512);
+	assert.equal(payloadThinkingBudget({ thinking_token_budget: 300 }), 300);
+	assert.equal(payloadThinkingBudget(undefined), undefined);
 });

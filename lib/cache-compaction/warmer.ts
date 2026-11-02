@@ -1,7 +1,7 @@
 import { convertToLlm, type ExtensionAPI, type ExtensionContext, type SessionProjection } from "@earendil-works/pi-coding-agent";
 import { fallbackReason, fingerprint, mergePayload, reconcile, type Config, type RequestEffort, type RequestIdentity, type Snapshot } from "./core.ts";
 import { backgroundHeaders } from "./background.ts";
-import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WARM_MAX_TOKENS, WakeSet, artifactWakes, cacheLifetimeMs, readWakePending, warmDelayMs, warmStop } from "./warm.ts";
+import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WARM_MAX_TOKENS, WakeSet, artifactWakes, cacheLifetimeMs, payloadThinkingBudget, readWakePending, retryAt, warmCostEstimate, warmDelayMs, warmStop } from "./warm.ts";
 import { BACKGROUND_EVENT, BACKGROUND_REQUEST_EVENT, backgroundWork } from "../tab-status/events.ts";
 import { operationalLine } from "../operational-log.ts";
 import { routedModel } from "../routed-model.ts";
@@ -52,6 +52,8 @@ export function createWarmer(d: WarmerDeps): Warmer {
 	let timer: unknown;
 	let dueAt = 0;
 	let inFlight: AbortController | undefined;
+	/** The agent loop is running: between tool calls its own requests keep the entry warm. */
+	let running = false;
 	/** Dollars spent on warms since the last real request: the break-even guard's running total. */
 	let spent = 0;
 	let lastWarmCost: number | undefined;
@@ -63,14 +65,24 @@ export function createWarmer(d: WarmerDeps): Warmer {
 	};
 	const clearTimer = () => { if (timer !== undefined) d.timers.clear(timer); timer = undefined; };
 	const abort = () => { inFlight?.abort(); inFlight = undefined; };
-	const schedule = (at: number) => {
+	/** A retry keeps the planned due time, so the deadline does not move with it. */
+	const schedule = (at: number, due = at) => {
 		clearTimer();
-		dueAt = at;
+		dueAt = due;
 		// A timer callback has no caller to catch for it, and a warm is only an optimization.
-		timer = d.timers.set(() => { timer = undefined; fire().catch(() => clearTimer()); }, Math.max(0, at - d.now()));
+		timer = d.timers.set(() => {
+			timer = undefined;
+			fire().catch(() => { clearTimer(); log({ event: "stop", reason: "internal" }); });
+		}, Math.max(0, at - d.now()));
 	};
 	const stop = (reason: string, extra: Record<string, unknown> = {}) => { clearTimer(); log({ event: "stop", reason, ...extra }); };
-	const resetSession = () => { clearTimer(); abort(); wakes.clear(); tools.clear(); toolArgs.clear(); spent = 0; lastWarmCost = undefined; ctx = undefined; sessionId = undefined; };
+	const retry = (reason: string, ttlMs: number) => {
+		const at = retryAt(d.now(), dueAt, ttlMs);
+		if (at === undefined) return stop("deadline-missed");
+		log({ event: "defer", reason });
+		schedule(at, dueAt);
+	};
+	const resetSession = () => { clearTimer(); abort(); wakes.clear(); tools.clear(); toolArgs.clear(); spent = 0; lastWarmCost = undefined; ctx = undefined; sessionId = undefined; running = false; };
 	const mine = (id: string) => id === sessionId;
 
 	function promptTokens(context: ExtensionContext): number {
@@ -93,7 +105,9 @@ export function createWarmer(d: WarmerDeps): Warmer {
 		if (!context || !captured?.payload) return stop("no-request");
 		if (!policy.enabled || !policy.warm.enabled) return stop("disabled");
 		if (!wakes.size && !tools.size) return stop("no-wake");
-		if (d.busy()) { log({ event: "defer", reason: "summary-running" }); return schedule(d.now() + (warmDelayMs(cacheLifetimeMs(captured.payload, captured)) ?? 60_000)); }
+		// A summary request or a streaming reply may end soon; a full period later the entry may be gone.
+		if (d.busy()) return retry("summary-running", cacheLifetimeMs(captured.payload, captured));
+		if (running && !tools.size) return retry("agent-running", cacheLifetimeMs(captured.payload, captured));
 		let model: Model | undefined;
 		let tokens = 0;
 		try {
@@ -121,6 +135,8 @@ export function createWarmer(d: WarmerDeps): Warmer {
 		let stopReason: string;
 		let usage: Usage | undefined;
 		let failure: string | undefined;
+		/** The payload was built, so the provider may have the request and bill it. */
+		let dispatched = false;
 		try {
 			const stream = context.modelRegistry.stream(model, { messages: convertToLlm([...captured.messages, prompt]) }, {
 				...d.requestOptions(), maxRetries: 0,
@@ -128,7 +144,7 @@ export function createWarmer(d: WarmerDeps): Warmer {
 				headers: backgroundHeaders(model, captured.sessionId, captured.headers), effort: captured.effort,
 				maxTokens: WARM_MAX_TOKENS, sessionId: captured.sessionId, signal: controller.signal,
 				onPayload: (generated: unknown) => {
-					try { return mergePayload(model.api, captured.payload!, generated, captured.payloadPrefix, 0); }
+					try { const payload = mergePayload(model.api, captured.payload!, generated, captured.payloadPrefix, 0); dispatched = true; return payload; }
 					catch (error) { failure = error instanceof Error && ["thinking-budget", "prefix-changed"].includes(error.message) ? error.message : "payload"; throw error; }
 				},
 			});
@@ -139,8 +155,13 @@ export function createWarmer(d: WarmerDeps): Warmer {
 			if (stopReason === "error") failure ??= /\b429\b|rate.?limit|overloaded/i.test(response.errorMessage ?? "") ? "rate-limited" : "error";
 		} catch { stopReason = "error"; failure ??= "request-failed"; }
 		if (inFlight === controller) inFlight = undefined;
-		if (controller.signal.aborted || stopReason === "aborted") { log({ event: "stop", reason: "aborted" }); return; }
-		if (failure || !usage) { stop(failure ?? "error"); return; }
+		const aborted = controller.signal.aborted || stopReason === "aborted";
+		if (aborted && !dispatched) { log({ event: "stop", reason: "aborted" }); return; }
+		// A real request replaced this warm, and its rearm owns the timer now.
+		if (aborted && !(usage && usage.input + usage.cacheRead > 0)) { log({ event: "stop", reason: "aborted-sent", promptTokens: tokens, estimatedCost: warmCostEstimate(tokens, model.cost) }); return; }
+		if (!aborted && (failure || !usage)) { stop(failure ?? "error"); return; }
+		if (!usage) return;
+		if (aborted) stopReason = "aborted";
 		const cost = Number(usage.cost?.total) || 0;
 		spent += cost;
 		lastWarmCost = cost;
@@ -150,7 +171,7 @@ export function createWarmer(d: WarmerDeps): Warmer {
 		log({ event: "warm", provider: model.provider, model: model.id, promptTokens: tokens, usage: { input: usage.input, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, output: usage.output }, cost, spent, stopReason });
 		// The warm read the prefix at send time, which restarted the entry's lifetime then.
 		const delay = warmDelayMs(ttlMs);
-		if (delay !== undefined && ctx === context) schedule(sentAt + delay);
+		if (!aborted && delay !== undefined && ctx === context) schedule(sentAt + delay);
 	}
 
 	pi.on("session_start", (_event, context) => {
@@ -160,7 +181,17 @@ export function createWarmer(d: WarmerDeps): Warmer {
 		try { pi.events?.emit?.(BACKGROUND_REQUEST_EVENT, { sessionId }); } catch { /* optional */ }
 	});
 	pi.on("session_shutdown", () => resetSession());
-	pi.on("agent_start", () => abort());
+	pi.on("agent_start", () => { running = true; abort(); });
+	// This warmer owns warming for its APIs. Pi's refresh runs the payload hook, which would reset this wait.
+	pi.on("cache_warming_decision", (_event, context) => {
+		try {
+			const policy = d.policy();
+			const api = routedModel(context)?.api;
+			return policy.enabled && policy.warm.enabled && api !== undefined && policy.warm.apis.includes(api) ? { action: "stop" as const } : undefined;
+		} catch { return undefined; }
+	});
+	// A new prompt from the user answers or replaces any open form; a delivered message does not.
+	pi.on("before_agent_start", (event) => { if (event.messageType === "user") wakes.clearPrefix(ARTIFACT_PREFIX); });
 	pi.events?.on?.(BACKGROUND_EVENT, (data) => {
 		const work = backgroundWork(data);
 		if (work && mine(work.sessionId)) wakes.set(`background:${work.source}`, work.count > 0);
@@ -179,7 +210,7 @@ export function createWarmer(d: WarmerDeps): Warmer {
 		toolArgs.delete(event.toolCallId);
 		if (artifactWakes(d.policy().warm.formTools, event.toolName, args, event.isError)) wakes.set(`${ARTIFACT_PREFIX}${event.toolCallId}`, true);
 	});
-	pi.on("agent_end", () => { tools.clear(); toolArgs.clear(); });
+	pi.on("agent_end", () => { running = false; tools.clear(); toolArgs.clear(); });
 	pi.on("message_end", (event) => {
 		const message = event.message as { role?: string; customType?: string };
 		if (message.role === "custom" && message.customType === "artifact-feedback") wakes.clearPrefix(ARTIFACT_PREFIX);
@@ -194,6 +225,8 @@ export function createWarmer(d: WarmerDeps): Warmer {
 			const captured = d.latest();
 			const policy = d.policy();
 			if (!captured?.payload || !policy.enabled || !policy.warm.enabled || !policy.warm.apis.includes(captured.api)) { clearTimer(); return; }
+			// A capped replay changes a fixed thinking budget, which the provider keys the message cache on.
+			if (payloadThinkingBudget(captured.payload) !== undefined) return stop("thinking-budget");
 			const delay = warmDelayMs(cacheLifetimeMs(captured.payload, captured));
 			if (delay === undefined) { clearTimer(); return; }
 			schedule(captured.at + delay);

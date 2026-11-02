@@ -136,6 +136,10 @@ export function mergePayload(api: string, captured: RecordValue, generated: unkn
 const OUTPUT_LIMIT_FIELDS = ["max_tokens", "max_output_tokens", "max_completion_tokens"] as const;
 // pi-ai's default thinkingTokenBudgetField plus the names OpenAI-compatible engines accept.
 const COMPLETIONS_BUDGET_FIELDS = ["thinking_token_budget", "thinking_budget_tokens", "thinking_budget", "max_thinking_tokens"] as const;
+/** A fixed thinking budget in any API's payload shape, which a capped replay cannot keep. */
+export function payloadThinkingBudget(payload: unknown): number | undefined {
+	return object(payload) ? thinkingBudget("contents", payload) : undefined;
+}
 function thinkingBudget(key: string, captured: RecordValue): number | undefined {
 	const config = object(captured.config) ? captured.config : undefined;
 	const budget = key === "contents" && config && object(config.thinkingConfig) ? config.thinkingConfig.thinkingBudget

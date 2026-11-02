@@ -1,5 +1,7 @@
 import { isMeridian, type ModelIdentity } from "./core.ts";
 
+export { payloadThinkingBudget } from "./core.ts";
+
 /**
  * Cache warming while the session waits for an announced wake: the pure parts
  * (config, lifetime, schedule, economics, the wake set). The extension owns the timers.
@@ -21,6 +23,7 @@ const WARM_TAIL_TOKENS = 1000;
 const LONG_TTL_MS = 3_600_000;
 const SHORT_TTL_MS = 300_000;
 const MAX_HOURS_LIMIT = 48;
+const RETRY_STEP_MS = 30_000;
 
 export interface WarmConfig {
 	readonly enabled: boolean;
@@ -29,7 +32,7 @@ export interface WarmConfig {
 	readonly apis: readonly string[];
 	readonly formTools: readonly string[];
 }
-export const DEFAULT_WARM: WarmConfig = { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["artifact_ask", "artifact_publish"] };
+export const DEFAULT_WARM: WarmConfig = { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["artifact_ask"] };
 
 type RecordValue = Record<string, unknown>;
 const object = (v: unknown): v is RecordValue => !!v && typeof v === "object" && !Array.isArray(v);
@@ -65,6 +68,17 @@ export function cacheLifetimeMs(payload: unknown, model: Pick<ModelIdentity, "ap
 export function warmDelayMs(ttlMs: number): number | undefined {
 	if (ttlMs <= 10_000) return undefined;
 	return Math.max(1, Math.floor(Math.min(ttlMs * 0.9, ttlMs - 10_000)));
+}
+
+/**
+ * The next try for a warm that had to wait, or undefined when it would come after
+ * half the margin past its due time, where Pi also counts a refresh as too late.
+ */
+export function retryAt(now: number, dueAt: number, ttlMs: number, stepMs = RETRY_STEP_MS): number | undefined {
+	const delay = warmDelayMs(ttlMs);
+	if (delay === undefined) return undefined;
+	const next = now + stepMs;
+	return next <= dueAt + Math.floor((ttlMs - delay) / 2) ? next : undefined;
 }
 
 /** Dollars per million tokens, as in a Pi model's `cost`. */

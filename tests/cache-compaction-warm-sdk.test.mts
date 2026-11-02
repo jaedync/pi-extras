@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { Type } from "typebox";
 import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
 import cacheCompaction from "../extensions/cache-compaction.ts";
 import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION } from "../lib/cache-compaction/warm.ts";
@@ -21,9 +22,10 @@ const HOUR = 3_600_000;
 const PERIOD = 3_240_000;
 const PROMPT = 46000;
 
-interface Options { readonly warm?: Record<string, unknown>; readonly longTtl?: boolean; readonly tokens?: number }
+interface Options { readonly warm?: Record<string, unknown>; readonly longTtl?: boolean; readonly tokens?: number; readonly piWarmer?: boolean; readonly budget?: boolean; readonly slowTool?: boolean }
 async function fixture(options: Options = {}) {
-	const { warm, longTtl = true, tokens = PROMPT } = options;
+	const { warm, longTtl = true, tokens = PROMPT, piWarmer = false, budget = false, slowTool = false } = options;
+	let failTimers = false;
 	const agentDir = mkdtempSync(join(scratch, "agent-"));
 	const configFile = join(agentDir, "pi-extras.json");
 	writeFileSync(configFile, JSON.stringify({ cacheCompaction: { enabled: true, ...(warm ? { warm } : {}) } }));
@@ -36,7 +38,7 @@ async function fixture(options: Options = {}) {
 	const errors: unknown[] = [];
 	const events: Array<{ name: string; data: any }> = [];
 	const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
-	runtime.registerProvider("fixture", { api: "anthropic-messages", apiKey: "synthetic-not-a-credential", baseUrl: "http://127.0.0.1:1", models: [{ id: "model", name: "model", reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 32000, cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 } }],
+	runtime.registerProvider("fixture", { api: "anthropic-messages", apiKey: "synthetic-not-a-credential", baseUrl: "http://127.0.0.1:1", models: [{ id: "model", name: "model", reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 32000, cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }, ...(piWarmer ? { promptCache: { short: 11 } } : {}) }],
 		streamSimple(model: any, context: any, opts: any) {
 			const stream = new ai.AssistantMessageEventStream();
 			void (async () => {
@@ -44,22 +46,25 @@ async function fixture(options: Options = {}) {
 				const usage = warmCall ? { input: 3, output: 4, cacheRead: tokens, cacheWrite: 900, totalTokens: tokens + 907, cost: { input: 0, output: 0.0001, cacheRead: 0.023, cacheWrite: 0.009, total: 0.0321 } }
 					: { input: 10, output: 2, cacheRead: tokens - 10, cacheWrite: 0, totalTokens: tokens + 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.03 } };
 				const cache = longTtl ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
-				const body = { messages: structuredClone(context.messages).map((m: any, i: number, all: any[]) => i === all.length - 1 ? { ...m, content: [{ type: "text", text: textOf(m), cache_control: cache }] } : m), system: [{ type: "text", text: "system", cache_control: cache }], model: model.id, max_tokens: opts.maxTokens ?? 2000 };
+				const body = { messages: structuredClone(context.messages).map((m: any, i: number, all: any[]) => i === all.length - 1 ? { ...m, content: [{ type: "text", text: textOf(m), cache_control: cache }] } : m), system: [{ type: "text", text: "system", cache_control: cache }], model: model.id, max_tokens: opts.maxTokens ?? 2000, ...(budget ? { thinking: { type: "enabled", budget_tokens: 1024 } } : {}) };
 				const payload = await opts.onPayload?.(body, model) ?? body;
 				calls.push({ context: structuredClone(context), payload: structuredClone(payload), headers: { ...opts.headers }, warm: warmCall, maxTokens: opts.maxTokens });
-				const message = { role: "assistant", api: model.api, provider: model.provider, model: model.id, content: [{ type: "text", text: warmCall ? "ok" : "Fixture reply." }], stopReason: "stop", timestamp: clock, usage };
+				const callTool = slowTool && !warmCall && !context.messages.some((m: any) => m.role === "toolResult");
+				const content = callTool ? [{ type: "toolCall", id: "slow-1", name: "slow", arguments: {} }] : [{ type: "text", text: warmCall ? "ok" : "Fixture reply." }];
+				const message = { role: "assistant", api: model.api, provider: model.provider, model: model.id, content, stopReason: callTool ? "toolUse" : "stop", timestamp: clock, usage };
 				if (warmCall && hold) await hold;
-				if (opts.signal?.aborted) { stream.push({ type: "error", reason: "aborted", error: { ...message, content: [], stopReason: "aborted" } }); stream.end(); return; }
+				const empty = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+				if (opts.signal?.aborted) { stream.push({ type: "error", reason: "aborted", error: { ...message, content: [], stopReason: "aborted", ...(warmMode === "abort-empty" ? { usage: empty } : {}) } }); stream.end(); return; }
 				if (warmCall && warmMode === "error") { stream.push({ type: "error", reason: "error", error: { ...message, content: [], stopReason: "error", errorMessage: "429 rate limit private text" } }); stream.end(); return; }
-				stream.push({ type: "done", reason: "stop", message }); stream.end();
+				stream.push({ type: "done", reason: callTool ? "toolUse" : "stop", message }); stream.end();
 			})();
 			return stream;
 		},
 	});
 	const model = runtime.getModel("fixture", "model")!;
-	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false }, cacheWarming: "off", retry: { enabled: false } });
+	const settingsManager = sdk.SettingsManager.inMemory({ compaction: { enabled: false }, cacheWarming: piWarmer ? "streaming" : "off", retry: { enabled: false } });
 	const timerApi = {
-		set: (fn: () => void, ms: number) => { const timer = { fn, ms, at: clock + ms, cleared: false }; timers.push(timer); return timer; },
+		set: (fn: () => void, ms: number) => { if (failTimers) throw new Error("timer failure"); const timer = { fn, ms, at: clock + ms, cleared: false }; timers.push(timer); return timer; },
 		clear: (timer: any) => { if (timer) timer.cleared = true; },
 	};
 	let piRef: any;
@@ -73,7 +78,7 @@ async function fixture(options: Options = {}) {
 		}] });
 	await loader.reload();
 	assert.deepEqual(loader.getExtensions().errors, []);
-	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model, thinkingLevel: "off", settingsManager, resourceLoader: loader, sessionManager: sdk.SessionManager.inMemory(scratch), noTools: "all" });
+	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model, thinkingLevel: "off", settingsManager, resourceLoader: loader, sessionManager: sdk.SessionManager.inMemory(scratch), ...(slowTool ? { tools: ["slow"], customTools: [{ name: "slow", label: "slow", description: "A slow local tool", parameters: Type.Object({}), execute: async () => { await new Promise((resolve) => setTimeout(resolve, 1500)); return { content: [{ type: "text", text: "Slow result." }], details: undefined }; } }] } : { noTools: "all" }) });
 	await session.bindExtensions({ mode: "print", onError: (error: unknown) => errors.push(error) });
 	const logFile = join(agentDir, "cache-warm.log");
 	return {
@@ -84,6 +89,8 @@ async function fixture(options: Options = {}) {
 		log: () => existsSync(logFile) ? readFileSync(logFile, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [],
 		live: () => timers.filter((t) => !t.cleared),
 		setWarm: (mode: string) => { warmMode = mode; },
+		failTimers: () => { failTimers = true; },
+		send: (message: unknown, opts: unknown) => piRef.sendMessage(message, opts),
 		hold: () => { let release!: () => void; hold = new Promise<void>((resolve) => { release = resolve; }); return () => { hold = undefined; release(); }; },
 		emit: (name: string, data: unknown) => piRef.events.emit(name, data),
 		wake: (pending: boolean, key = "test:1", sessionId = session.sessionId) => piRef.events.emit(WAKE_PENDING_EVENT, { sessionId, key, pending }),
@@ -211,8 +218,11 @@ test("a real request aborts an in-flight warm and restarts the schedule", { time
 	assert.equal(f.warms().length, 1);
 	await f.session.prompt("Next task.");
 	release(); await tick(); await tick();
-	assert.equal(f.entries().length, 0, "an aborted warm records no usage");
-	assert.equal(f.log().at(-1).reason, "aborted");
+	// The provider had the request and reported its usage: it is billed, so it is recorded.
+	assert.equal(f.entries().length, 1, "a sent warm that reported usage is recorded");
+	assert.equal(f.entries()[0].data.stopReason, "aborted");
+	assert.equal(f.log().at(-1).event, "warm");
+	assert.equal(f.log().at(-1).stopReason, "aborted");
 	assert.equal(f.live().length, 1, "the real request scheduled a new warm");
 	assert.equal(f.live()[0].ms, PERIOD);
 	assert.deepEqual(f.errors, []);
@@ -265,6 +275,106 @@ test("a session shutdown drops the wakes and the timer", { timeout: 15000 }, asy
 	await f.close();
 	assert.equal(f.live().length, 0);
 	t.after(() => {});
+});
+
+test("a sent warm aborted with no usage logs its estimated cost", { timeout: 15000 }, async (t) => {
+	const f = await fixture(); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	f.wake(true); f.setWarm("abort-empty");
+	const release = f.hold();
+	await f.fire();
+	await f.session.prompt("Next task.");
+	release(); await tick(); await tick();
+	assert.equal(f.entries().length, 0);
+	const line = f.log().at(-1);
+	assert.equal(line.event, "stop");
+	assert.equal(line.reason, "aborted-sent");
+	assert.ok(line.estimatedCost > 0);
+});
+
+test("Pi's own warmer stands down for the APIs this warmer owns, so the wait is not reset", { timeout: 15000 }, async (t) => {
+	const f = await fixture({ piWarmer: true, slowTool: true }); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	assert.equal(f.calls.filter((call) => call.maxTokens === 1).length, 0, "no refresh from Pi's warmer");
+	assert.equal(f.mains().length, 2, "the tool call and the final reply");
+	assert.equal(f.hooks.request, 2, "only the two real requests ran the payload hook");
+	assert.equal(f.timers.length, 2, "one plan per real request, none from a refresh");
+});
+
+test("Pi's own warmer keeps its decision for an API outside the list", { timeout: 15000 }, async (t) => {
+	const f = await fixture({ piWarmer: true, slowTool: true, warm: { apis: ["openai-responses"] } }); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	assert.ok(f.calls.filter((call) => call.maxTokens === 1).length >= 1, "Pi's warmer refreshed during the slow tool");
+});
+
+test("a user prompt clears artifact wakes; a custom message that starts a run does not", { timeout: 15000 }, async (t) => {
+	const f = await fixture(); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	const runner = f.session.extensionRunner;
+	const ask = async (id: string) => {
+		await runner.emit({ type: "tool_execution_start", toolCallId: id, toolName: "artifact_ask", args: { title: "Q" } });
+		await runner.emit({ type: "tool_execution_end", toolCallId: id, toolName: "artifact_ask", result: {}, isError: false });
+	};
+	await ask("a1");
+	f.send({ customType: "shell-job-complete", content: "job done", display: true }, { triggerTurn: true });
+	for (let i = 0; i < 20 && f.mains().length < 2; i++) await tick();
+	await f.session.agent.waitForIdle?.();
+	assert.equal(f.mains().length, 2);
+	await f.fire();
+	assert.equal(f.warms().length, 1, "the form wake survived a delivered message");
+	await f.session.prompt("New task from the user.");
+	await f.fire();
+	assert.equal(f.warms().length, 1);
+	assert.equal(f.log().at(-1).reason, "no-wake");
+});
+
+test("artifact_publish is not a wake by default", { timeout: 15000 }, async (t) => {
+	const f = await fixture(); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	const runner = f.session.extensionRunner;
+	await runner.emit({ type: "tool_execution_start", toolCallId: "p1", toolName: "artifact_publish", args: { html: "<p>" } });
+	await runner.emit({ type: "tool_execution_end", toolCallId: "p1", toolName: "artifact_publish", result: {}, isError: false });
+	await f.fire();
+	assert.equal(f.warms().length, 0);
+});
+
+test("a running agent with no tool call defers the warm in short steps", { timeout: 15000 }, async (t) => {
+	const f = await fixture(); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	f.wake(true);
+	const runner = f.session.extensionRunner;
+	await runner.emit({ type: "agent_start" });
+	await f.fire();
+	assert.equal(f.warms().length, 0);
+	assert.equal(f.log().at(-1).event, "defer");
+	assert.equal(f.log().at(-1).reason, "agent-running");
+	assert.equal(f.live().at(-1)!.ms, 30_000);
+	await runner.emit({ type: "agent_end", messages: [] });
+	await f.fire();
+	assert.equal(f.warms().length, 1, "the deferred warm goes out once the agent is idle");
+	await runner.emit({ type: "agent_start" });
+	await f.fire();
+	// Past due + margin / 2 (3 minutes for a one-hour cache), a retry would be a full write.
+	await f.fire(180_000);
+	assert.equal(f.log().at(-1).reason, "deadline-missed");
+	assert.equal(f.live().length, 0);
+});
+
+test("budget thinking never warms, and says so when the request is captured", { timeout: 15000 }, async (t) => {
+	const f = await fixture({ budget: true }); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	assert.equal(f.live().length, 0);
+	assert.equal(f.log().at(-1).reason, "thinking-budget");
+});
+
+test("an internal failure in a timer is logged with a fixed reason", { timeout: 15000 }, async (t) => {
+	const f = await fixture(); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	f.wake(true); f.failTimers();
+	await f.fire();
+	assert.equal(f.warms().length, 1);
+	assert.equal(f.log().at(-1).event, "stop");
+	assert.equal(f.log().at(-1).reason, "internal");
 });
 
 after(() => { globalThis.fetch = originalFetch; rmSync(scratch, { recursive: true, force: true }); });
