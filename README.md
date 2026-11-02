@@ -577,7 +577,8 @@ prompt, as long as:
 - the summary fits in the context window (see below).
 
 Otherwise Pi's own compaction runs, exactly as it would without this
-extension. The notice says which path ran and why. The summary request
+extension, unless its summary request does not fit the window (see
+"Summaries that fit the window" below). The notice says which path ran and why. The summary request
 streams, so the Phase Spinner can show its newest lines while it is written.
 The request is the same as one sent without streaming.
 
@@ -780,6 +781,34 @@ An update fits while the previous summary is below about 10k tokens. Each
 token that the context goes past the trigger removes one token of room. When
 the room is too small, Pi's own compaction runs with the reason
 `context-window`.
+
+**Summaries that fit the window.** Pi estimates tokens as four characters
+per token. Some tokenizers count more. On one local model, Pi estimated
+192k tokens for a prompt that the engine counted as 271,737 tokens. Pi's own
+summary request then also went past the window, so overflow recovery failed
+and each new prompt stopped with the same error.
+
+Before Pi's own compaction runs, the extension makes an estimate of the size
+of Pi's summary request:
+
+1. It finds the newest reply with token usage. It divides the prompt tokens
+   that the provider reported by Pi's estimate of the messages before that
+   reply. The ratio stays between 1.0 and 2.0. Below 16,384 estimated tokens,
+   the ratio is 1.0, because tools and the system prompt make up most of a
+   small prompt.
+2. It multiplies the size of Pi's summary prompt by this ratio. It adds the
+   `max_tokens` that pi-ai will send.
+3. If the total fits in the context window, Pi's own compaction runs, as
+   before.
+4. If the total does not fit, the extension sends Pi's summary prompt in
+   parts. Each part holds as many old messages as fit, with room for the
+   summary so far and 16,384 output tokens. Each request updates the summary
+   of the part before it. The last request also writes the split-turn
+   section. If the split turn does not fit, its messages go into the parts.
+
+The log and the notice show the path `bounded` with the reason that Pi's own
+compaction would have had, for example `overflow`. If one message alone is
+too large for a request, Pi's own compaction runs.
 
 **Settings.** In `PI_CODING_AGENT_DIR/pi-extras.json` (default
 `~/.pi/agent/pi-extras.json`), then `/reload`:

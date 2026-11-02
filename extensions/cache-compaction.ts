@@ -2,7 +2,6 @@ import { calculateContextTokens, convertToLlm, estimateTokens, type ExtensionAPI
 import { CONFIG_FILE, readSection } from "../lib/extras-config.ts";
 import { buildInstruction, capturePayload, fallbackReason, fileLists, fingerprint, formatFiles, idleLimitMs, isLocalCompletions, loadConfig, mergePayload, payloadHashes, reconcile, requestEffort, safeHeaders, type RequestIdentity, type RequestEffort, type Snapshot } from "../lib/cache-compaction/core.ts";
 import { backgroundDue, backgroundHeaders, backgroundInstruction, fileOpsOf, tailFits, type FileOps } from "../lib/cache-compaction/background.ts";
-
 import { dirname, join } from "node:path";
 import { operationalLine } from "../lib/operational-log.ts";
 import { routedModel } from "../lib/routed-model.ts";
@@ -10,7 +9,7 @@ import { COMPACTION_DECISION_EVENT, COMPACTION_PROGRESS_EVENT, PROGRESS_TAIL_CHA
 import { foldProjection } from "../lib/cache-compaction/system-fold.ts";
 import { estimateRequestContext, contextSafetyTokens, summaryOutputFloor } from "../lib/cache-compaction/estimate.ts";
 import { createWarmer, realTimers, type Timers } from "../lib/cache-compaction/warmer.ts";
-
+import { boundedCompaction } from "../lib/cache-compaction/bounded.ts";
 type Message = SessionProjection["messages"][number];
 interface Captured extends RequestIdentity, Snapshot {
 	readonly messages: Message[];
@@ -335,7 +334,8 @@ export default function cacheCompaction(pi: ExtensionAPI, options: CacheCompacti
 				pi.events.emit(COMPACTION_DECISION_EVENT, { path, fallbackReason, sessionId: decision.sessionId, ...(key ? { compactionKey: key } : {}) });
 			} catch { /* Best-effort diagnostics must never replace the compaction decision. */ }
 		};
-		const fallback = (reason: string) => { record("default", reason); report(ctx, `default (${reason})`); return undefined; };
+		// Pi's default summary can exceed the window when the tokenizer counts more than Pi estimates; split it then.
+		const fallback = async (reason: string) => { const fit = policy.enabled && reason !== "aborted" ? await boundedCompaction(event, ctx).catch(() => undefined) : undefined; if (fit) { outcome = { stopReason: "stop", usage: fit.usage ? { input: fit.usage.input, cacheRead: fit.usage.cacheRead, cacheWrite: fit.usage.cacheWrite, output: fit.usage.output } : null }; record("bounded", reason, compactionKey(fit)); report(ctx, `bounded (${reason})`); return { compaction: fit }; } record("default", reason); report(ctx, `default (${reason})`); return undefined; };
 		if (waiting) {
 			// Manual compaction may carry its own focus, and overflow recovery must not wait on an old request.
 			using = waiting;

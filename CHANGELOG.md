@@ -23,6 +23,13 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   the accessibility tree, so the index guard keeps its baseline.
 - Computer use: a failed baseline read no longer drops the view without a word.
   The tool result now says that the next element action has no staleness check.
+- Cache Compaction: overflow recovery no longer fails on a model whose
+  tokenizer counts more tokens than Pi estimates. Pi's own summary request
+  went past the context window, and each prompt stopped with the same
+  error. The extension now compares the token usage that the provider
+  reports with Pi's estimate. If Pi's summary request does not fit by that
+  ratio, the extension sends it in parts that fit. The log shows the path
+  `bounded`.
 
 ## 0.38.5 - 2026-11-02
 
