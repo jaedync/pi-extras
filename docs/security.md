@@ -240,7 +240,9 @@ cancellable in-process timers; the failed attempt is omitted from the retried
 context. No extra requests are made beyond the retried one, except for a
 local provider: there a connection failure waits with no limit, and the wait
 sends `GET <baseUrl>/models` to that provider's own server every 10 s, with no
-headers and no credential, and a 5 s timeout. A provider is local only when its
+custom header and no credential (the URL loses any userinfo and query), a 5 s
+timeout, and no redirect. Only interactive main sessions, and subagents with no
+`subagents.fallbackModels`, wait with no limit. A provider is local only when its
 model costs 0 and its host is a private address or name, or when the owner names
 it in `localProviders`.
 

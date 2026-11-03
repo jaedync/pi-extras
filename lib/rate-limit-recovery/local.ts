@@ -64,12 +64,28 @@ export function localTarget(model: ModelLike | undefined, named: readonly string
 	return free(model.cost) && isPrivateHost(host) ? { baseUrl: model.baseUrl } : undefined;
 }
 
-/** True for any HTTP reply below 500: the server is up, even if the path or the key is wrong. */
-export async function probeServer(baseUrl: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+// Only these mean that no backend is there; a 500 or 501 for an unknown path is a server that answers.
+const DOWN_STATUS: ReadonlySet<number> = new Set([502, 503, 504]);
+
+/** `<baseUrl>/models`, without userinfo (fetch refuses it), query or fragment. */
+export function modelsUrl(baseUrl: string): string | undefined {
 	try {
-		const response = await fetchImpl(`${baseUrl.replace(/\/+$/, "")}/models`, { method: "GET", signal: AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) });
+		const url = new URL(baseUrl);
+		url.username = ""; url.password = ""; url.search = ""; url.hash = "";
+		url.pathname = `${url.pathname.replace(/\/+$/, "")}/models`;
+		return url.href;
+	} catch { return undefined; }
+}
+
+/** True when the server answers: any HTTP reply except 502, 503 and 504. No custom header and no credential is sent. */
+export async function probeServer(baseUrl: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+	const url = modelsUrl(baseUrl);
+	if (!url) return false;
+	try {
+		// A redirect is an answer; following it would send the check to another host.
+		const response = await fetchImpl(url, { method: "GET", redirect: "manual", signal: AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) });
 		await response.body?.cancel().catch(() => {});
-		return response.status < 500;
+		return !DOWN_STATUS.has(response.status);
 	} catch {
 		return false;
 	}
@@ -85,15 +101,25 @@ export interface UntilAnswering {
 	readonly probe?: (signal: AbortSignal) => Promise<boolean>;
 }
 
-/** Waits the backoff delay, then until the server answers or FALLBACK_RESEND_MS passes; false when cancelled. */
-export async function waitUntilAnswering(o: UntilAnswering): Promise<boolean> {
-	if (!(await o.wait(o.delayMs, o.signal, o.tick))) return false;
+/** How a local wait ended: the server answered, the fallback timer ran out, or it was cancelled. */
+export type LocalWaitEnd = "answered" | "timer" | "cancelled";
+
+/** Waits the backoff delay, then until the server answers or FALLBACK_RESEND_MS passes. */
+export async function waitUntilAnswering(o: UntilAnswering): Promise<LocalWaitEnd> {
+	if (!(await o.wait(o.delayMs, o.signal, o.tick))) return "cancelled";
 	const start = o.now();
 	for (;;) {
-		if (o.signal.aborted) return false;
-		if (o.probe && (await o.probe(o.signal))) return !o.signal.aborted;
-		if (o.signal.aborted) return false;
-		if (o.now() - start >= FALLBACK_RESEND_MS) return true;
-		if (!(await o.wait(PROBE_INTERVAL_MS, o.signal, o.tick))) return false;
+		if (o.signal.aborted) return "cancelled";
+		if (o.probe && (await probeWithTicks(o))) return o.signal.aborted ? "cancelled" : "answered";
+		if (o.signal.aborted) return "cancelled";
+		if (o.now() - start >= FALLBACK_RESEND_MS) return "timer";
+		if (!(await o.wait(PROBE_INTERVAL_MS, o.signal, o.tick))) return "cancelled";
 	}
+}
+
+// The live line keeps counting while a check waits for its 5 s timeout.
+async function probeWithTicks(o: UntilAnswering): Promise<boolean> {
+	const interval = setInterval(() => { try { o.tick(); } catch { /* the wait's own tick reports UI faults */ } }, 1000);
+	try { return await o.probe!(o.signal); }
+	finally { clearInterval(interval); }
 }

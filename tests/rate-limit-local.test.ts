@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isPrivateHost, localTarget, LOCAL_MAX_DELAY_MS, PROBE_INTERVAL_MS, FALLBACK_RESEND_MS, probeServer, waitUntilAnswering } from "../lib/rate-limit-recovery/local.ts";
-import { TransientBackoff, isConnectionReport } from "../lib/rate-limit-recovery/transient.ts";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isPrivateHost, localTarget, LOCAL_MAX_DELAY_MS, PROBE_INTERVAL_MS, FALLBACK_RESEND_MS, modelsUrl, probeServer, waitUntilAnswering } from "../lib/rate-limit-recovery/local.ts";
+import { MAX_FAILURES_AFTER_ANSWER, TransientBackoff, isConnectionReport, localWaitingMessage, outageText } from "../lib/rate-limit-recovery/transient.ts";
+import { createChildRateLimitGuard } from "../lib/rate-limit-recovery/child.ts";
 import { normalizeConfig } from "../lib/rate-limit-recovery/config.ts";
 import { piAiRoot } from "./support/pi-runtime.mjs";
 
@@ -21,7 +24,7 @@ test("private, loopback, tailnet, link-local and single-label hosts are local; p
 	for (const host of ["localhost", "fw01", "redarch", "127.0.0.1", "127.8.9.10", "10.142.15.84", "172.16.0.1", "172.31.255.255", "192.168.107.1", "169.254.1.1", "100.64.0.1", "100.73.222.109", "100.127.255.255", "::1", "[::1]", "fd12:3456::1", "fe80::1", "kiln.local", "box.lan", "box.internal", "nas.home.arpa", "op01.tail1234.ts.net", "api.localhost"]) {
 		assert.equal(isPrivateHost(host), true, host);
 	}
-	for (const host of ["8.8.8.8", "100.128.0.1", "100.63.255.255", "172.32.0.1", "192.169.0.1", "api.anthropic.com", "opencode.ai", "2001:4860::8888", ""]) {
+	for (const host of ["localhost.evil.com", "localhost.", "::ffff:8.8.8.8", "[::ffff:8.8.8.8]", "8.8.8.8", "100.128.0.1", "100.63.255.255", "172.32.0.1", "192.169.0.1", "api.anthropic.com", "opencode.ai", "2001:4860::8888", ""]) {
 		assert.equal(isPrivateHost(host), false, host);
 	}
 });
@@ -42,16 +45,17 @@ test("a provider is local only when the model is free and its server is not publ
 	assert.deepEqual(localTarget(model("lab", "https://lab.example.com/v1", PAID), ["lab"]), { baseUrl: "https://lab.example.com/v1" });
 });
 
-test("the server counts as answering for any HTTP reply below 500", async () => {
-	const urls: string[] = [];
-	const reply = (status: number) => (async (url: string) => { urls.push(url); return new Response("", { status }); }) as typeof fetch;
+test("the server counts as answering for any HTTP reply except 502, 503 and 504", async () => {
+	const calls: Array<{ url: string; redirect?: string }> = [];
+	const reply = (status: number) => (async (url: string, init?: RequestInit) => { calls.push({ url, redirect: init?.redirect }); return new Response(null, { status }); }) as typeof fetch;
 	const signal = new AbortController().signal;
-	assert.equal(await probeServer("http://fw01:8080/v1", signal, reply(200)), true);
-	assert.equal(await probeServer("http://fw01:8080/v1/", signal, reply(404)), true);
-	assert.equal(await probeServer("http://fw01:8080/v1", signal, reply(401)), true);
-	assert.equal(await probeServer("http://fw01:8080/v1", signal, reply(503)), false, "a gateway with no backend or a model that still loads");
+	for (const status of [200, 301, 401, 404, 500, 501]) assert.equal(await probeServer("http://fw01:8080/v1", signal, reply(status)), true, String(status));
+	for (const status of [502, 503, 504]) assert.equal(await probeServer("http://fw01:8080/v1", signal, reply(status)), false, String(status));
 	assert.equal(await probeServer("http://fw01:8080/v1", signal, (async () => { throw new TypeError("fetch failed"); }) as typeof fetch), false);
-	assert.deepEqual(urls, ["http://fw01:8080/v1/models", "http://fw01:8080/v1/models", "http://fw01:8080/v1/models", "http://fw01:8080/v1/models"]);
+	assert.ok(calls.every((c) => c.url === "http://fw01:8080/v1/models" && c.redirect === "manual"), "no redirect is followed");
+	assert.equal(modelsUrl("http://fw01:8080/v1/"), "http://fw01:8080/v1/models");
+	assert.equal(modelsUrl("http://user:secret@fw01:8080/v1?key=1#x"), "http://fw01:8080/v1/models", "no userinfo, query or fragment");
+	assert.equal(modelsUrl("not a url"), undefined);
 });
 
 test("the wait loop checks every 10 s and ends when the server answers", async () => {
@@ -63,7 +67,7 @@ test("the wait loop checks every 10 s and ends when the server answers", async (
 		wait: async (ms) => { waits.push(ms); clock += ms; return true; },
 		probe: async () => answers.shift() ?? true,
 	});
-	assert.equal(done, true);
+	assert.equal(done, "answered");
 	assert.deepEqual(waits, [5_000, PROBE_INTERVAL_MS, PROBE_INTERVAL_MS]);
 });
 
@@ -75,7 +79,7 @@ test("the wait loop sends the request again after 10 min even when the check nev
 		wait: async (ms) => { clock += ms; return true; },
 		probe: async () => { probes++; return false; },
 	});
-	assert.equal(done, true);
+	assert.equal(done, "timer");
 	assert.ok(clock >= FALLBACK_RESEND_MS && clock < FALLBACK_RESEND_MS + PROBE_INTERVAL_MS + 5_000, String(clock));
 	assert.ok(probes >= 59, String(probes));
 });
@@ -88,7 +92,7 @@ test("the wait loop stops at once when the wait is cancelled", async () => {
 		wait: async () => { controller.abort(); return false; },
 		probe: async () => { probes++; return true; },
 	});
-	assert.equal(done, false);
+	assert.equal(done, "cancelled");
 	assert.equal(probes, 0);
 });
 
@@ -99,9 +103,9 @@ function localBackoff(options: { probe?: () => Promise<boolean>; local?: boolean
 		budgetMs: () => 180_000, random: () => 0.5, now: () => clock,
 		wait: async (ms) => { waits.push(ms); clock += ms; return true; },
 		local: () => ({ enabled: options.local ?? true, providers: options.providers ?? [] }),
-		probe: options.probe ?? (async () => true),
+		probe: options.probe ?? (async () => false),
 	});
-	const registry = { find: (provider: string) => provider === "fw01" ? model("fw01", "http://fw01:8080/v1") : model(provider, "https://api.anthropic.com", PAID) };
+	const registry = { find: (provider: string) => provider.startsWith("fw01") ? model(provider, `http://${provider}:8080/v1`) : model(provider, "https://api.anthropic.com", PAID) };
 	const ctx = { signal: new AbortController().signal, modelRegistry: registry } as never;
 	const turn = (entryId: string) => ({ message: { role: "assistant", stopReason: "error" }, toolResults: [], messageEntryId: entryId, entries: [] }) as never;
 	return { b, waits, ctx, turn, advance: (ms: number) => { clock += ms; } };
@@ -148,7 +152,7 @@ test("the local wait is off when the owner turns it off, and a named provider is
 });
 
 test("the local message says why it waits, how long it is down, and how to cancel; Pi does not retry it", async () => {
-	const f = localBackoff({ probe: async () => false });
+	const f = localBackoff();
 	const first = f.b.messageEnd(failed("fw01", DOWN), f.ctx)!.errorMessage!;
 	await f.b.turnEnd(f.turn("e1"), f.ctx);
 	const later = f.b.messageEnd(failed("fw01", DOWN), f.ctx)!.errorMessage!;
@@ -178,4 +182,99 @@ test("the local settings are on by default and keep only provider names", () => 
 	assert.equal(normalizeConfig({ localRetry: "no" }).localRetry, true);
 	assert.deepEqual(normalizeConfig({ localProviders: ["fw01", 3, "", " lab ", null] }).localProviders, ["fw01", "lab"]);
 	assert.deepEqual(normalizeConfig({ localProviders: "fw01" }).localProviders, []);
+});
+
+test("no outage length makes the message look like a status code to Pi's retry", () => {
+	for (let minutes = 0; minutes <= 60 * 24 * 40; minutes += minutes < 1500 ? 1 : 7) {
+		const text = localWaitingMessage("fw01/qwen3.8-flash-next", "down", minutes * 60_000 + 30_000);
+		assert.equal(isRetryableAssistantError(failed("fw01", text)), false, `${minutes} min: ${text}`);
+	}
+	assert.equal(outageText(502 * 60_000), "8 h 22 min");
+	assert.equal(outageText(26 * 3_600_000), "1 d 2 h");
+	assert.equal(outageText(59 * 60_000), "59 min");
+});
+
+test("a request that fails while the server answers goes back to the budget after 3 tries, until a good reply", async () => {
+	const f = localBackoff({ probe: async () => true });
+	const texts: string[] = [];
+	for (let i = 0; i < 20; i++) {
+		const text = f.b.messageEnd(failed("fw01", DOWN), f.ctx)!.errorMessage!;
+		texts.push(text);
+		if (/persisted/.test(text)) break;
+		await f.b.turnEnd(f.turn(`e${i}`), f.ctx);
+	}
+	assert.equal(texts.filter((t) => /local hardware/.test(t)).length, MAX_FAILURES_AFTER_ANSWER);
+	assert.match(texts.at(-1)!, /persisted after \d+ automatic retries/);
+	// A good reply ends the outage; the next failure is local again.
+	f.b.messageEnd({ ...failed("fw01"), stopReason: "stop", errorMessage: undefined }, f.ctx);
+	assert.match(f.b.messageEnd(failed("fw01", DOWN), f.ctx)!.errorMessage!, /local hardware/);
+});
+
+test("resends after the 10 min timer do not count as failures while the server answers", async () => {
+	const f = localBackoff({ probe: async () => false });
+	for (let i = 0; i < 8; i++) {
+		assert.match(f.b.messageEnd(failed("fw01", DOWN), f.ctx)!.errorMessage!, /local hardware/, `failure ${i}`);
+		await f.b.turnEnd(f.turn(`e${i}`), f.ctx);
+	}
+});
+
+test("hours of local waiting leave a cloud provider's budget whole", async () => {
+	const f = localBackoff();
+	for (let i = 0; i < 35; i++) {
+		f.b.messageEnd(failed("fw01", DOWN), f.ctx);
+		await f.b.turnEnd(f.turn(`l${i}`), f.ctx);
+	}
+	const cloud = f.b.messageEnd(failed("anthropic", DOWN), f.ctx)!.errorMessage!;
+	assert.match(cloud, /retry 1, at most 3 min/);
+});
+
+test("each local provider has its own outage clock", async () => {
+	const f = localBackoff();
+	f.b.messageEnd(failed("fw01", DOWN), f.ctx);
+	await f.b.turnEnd(f.turn("e1"), f.ctx);
+	f.advance(3_600_000);
+	assert.doesNotMatch(f.b.messageEnd(failed("fw01b", DOWN), f.ctx)!.errorMessage!, /no answer for/);
+});
+
+test("Esc during a check ends the local wait with no resend", async () => {
+	let started!: () => void;
+	const probing = new Promise<void>((resolve) => { started = resolve; });
+	const b = new TransientBackoff({
+		budgetMs: () => 180_000, random: () => 0.5,
+		wait: async () => true,
+		local: () => ({ enabled: true, providers: [] }),
+		probe: (_url, signal) => new Promise<boolean>((resolve) => { started(); signal.addEventListener("abort", () => resolve(false), { once: true }); }),
+	});
+	const ctx = { signal: new AbortController().signal, modelRegistry: { find: () => model("fw01", "http://fw01:8080/v1") } } as never;
+	b.messageEnd(failed("fw01", DOWN), ctx);
+	const result = b.turnEnd({ message: { role: "assistant", stopReason: "error" }, toolResults: [], messageEntryId: "e", entries: [] } as never, ctx);
+	await probing;
+	b.cancel();
+	assert.equal(await result, undefined);
+	assert.equal(b.consumeReady(), false);
+});
+
+function childFixture(config: Record<string, unknown>) {
+	const dir = mkdtempSync(join(tmpdir(), "local-retry-child-"));
+	const file = join(dir, "pi-extras.json");
+	writeFileSync(file, JSON.stringify(config));
+	const handlers = new Map<string, (event: any, ctx: any) => any>();
+	const guard = createChildRateLimitGuard({ configFile: file, transient: { wait: async () => true, probe: async () => false } });
+	guard.extension.factory({ on: (name: string, handler: any) => handlers.set(name, handler), appendEntry() {} } as never);
+	const provider = { id: "fw01", name: "fw01", stream() {}, streamSimple() {} };
+	const modelRegistry = { getProvider: () => provider, getRegisteredNativeProvider: () => provider, getRegisteredProviderConfig: () => undefined, registerProvider() {}, unregisterProvider() {}, find: () => model("fw01", "http://fw01:8080/v1") };
+	const controller = new AbortController();
+	const ctx = { modelRegistry, model: { provider: "fw01", api: "openai-completions", id: "m" }, mode: "print", hasUI: false, signal: controller.signal, abort: () => controller.abort(), ui: { notify() {} } };
+	const emit = (name: string, event: unknown = {}) => handlers.get(name)?.(event, ctx);
+	emit("session_start");
+	return { emit, close: () => { guard.dispose(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+test("a subagent waits on a local server only when no fallback model is named", async () => {
+	const alone = childFixture({});
+	try { assert.match(alone.emit("message_end", { message: failed("fw01", DOWN) }).message.errorMessage, /local hardware/); }
+	finally { alone.close(); }
+	const withFallback = childFixture({ subagents: { fallbackModels: ["opencode-go/deepseek-v4.1-flash"] } });
+	try { assert.match(withFallback.emit("message_end", { message: failed("fw01", DOWN) }).message.errorMessage, /at most 3 min/); }
+	finally { withFallback.close(); }
 });

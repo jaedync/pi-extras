@@ -84,7 +84,8 @@ export class Recovery {
 				? waitUI(ctx, { provider: who }, { resumeAtMs }, Date.now, cancel, downSinceMs === undefined
 					? (remaining) => `${WAIT_LABELS[kind]} ${who} \u00b7 retrying in ${remaining}`
 					: () => `${who} not answering for ${formatDuration(Math.max(0, Date.now() - downSinceMs), true)} \u00b7 local server, checked every 10 s`, pi) : undefined,
-			local: () => ({ enabled: this.config.localRetry, providers: this.config.localProviders }),
+			// Only a person can end a wait with no limit: print, JSON and RPC runs keep the budget.
+			local: (ctx) => ({ enabled: this.config.localRetry && this.role === "main" && ctx.mode === "tui" && ctx.hasUI === true, providers: this.config.localProviders }),
 			onFailure: (error) => operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `transient wait failed (${error instanceof Error ? error.name : "unknown error"})`),
 			record: (entry) => pi.appendEntry(RECOVERY_TYPE, entry),
 		});

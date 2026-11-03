@@ -410,3 +410,15 @@ test("a connection failure on a local server waits for it with a live line and r
 		assert.deepEqual(await f.emit("agent_before_settle", { context: { canContinue: true } }), { continue: true });
 	} finally { f.close(); }
 });
+
+test("a print-mode main session keeps the budget for a local server: no one could press Esc", async () => {
+	const f = fixture({}, "print", false, { probe: async () => false });
+	try {
+		await f.emit("session_start");
+		await f.emit("before_agent_start");
+		const failure = { role: "assistant", provider: "fw01", api: "openai-completions", model: "qwen3.8-flash-next", timestamp: NOW, content: [], stopReason: "error", errorMessage: "Connection error." };
+		const replaced = await f.emit("message_end", { message: failure });
+		assert.doesNotMatch(replaced.message.errorMessage, /local hardware/);
+		assert.match(replaced.message.errorMessage, /at most 3 min/);
+	} finally { f.close(); }
+});

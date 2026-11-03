@@ -3,7 +3,7 @@
  * rate limits are waited out with the same bounded backoff as the main session.
  */
 import type { ExtensionContext, InlineExtension, MessageEndEvent, MessageEndEventResult } from "@earendil-works/pi-coding-agent";
-import { CONFIG_FILE } from "../extras-config.ts";
+import { CONFIG_FILE, readSection } from "../extras-config.ts";
 import { loadConfig } from "./config.ts";
 import { captureLimit, failureMessage, parseRateLimit } from "./core.ts";
 import { RECOVERY_TYPE } from "./entry-type.ts";
@@ -33,6 +33,11 @@ function quotaResult(event: MessageEndEvent, ctx: ExtensionContext): MessageEndE
 	return { message: { ...event.message, errorMessage: failureMessage(limit, now, "Subagents never automatically wait or resume. Choose another provider or retry after the reset.") } };
 }
 
+function namesFallback(section: unknown): boolean {
+	const list = section && typeof section === "object" ? (section as { fallbackModels?: unknown }).fallbackModels : undefined;
+	return Array.isArray(list) && list.some((ref) => typeof ref === "string" && ref.trim().length > 0);
+}
+
 export interface ChildGuardOptions extends QuotaTransportOptions {
 	/** The parent's pi-extras.json, for the transient wait budget. */
 	readonly configFile?: string;
@@ -45,10 +50,12 @@ export function createChildRateLimitGuard(options: ChildGuardOptions = {}) {
 	let budgetMs = 0;
 	let local: LocalPolicy = { enabled: false, providers: [] };
 	const loadBudget = () => {
-		const config = loadConfig(options.configFile ?? CONFIG_FILE, {});
+		const file = options.configFile ?? CONFIG_FILE;
+		const config = loadConfig(file, {});
 		budgetMs = config.transientMaxWaitSeconds * 1000;
-		// A subagent's own maxMinutes still ends a wait on a local server that never comes back.
-		local = { enabled: config.localRetry, providers: config.localProviders };
+		// With a fallback model named, the budget ends the wait so the run can move to it (the
+		// fallback reads only the final report). With none, waiting until maxMinutes beats failing.
+		local = { enabled: config.localRetry && !namesFallback(readSection("subagents", file)), providers: config.localProviders };
 	};
 	loadBudget();
 	let record: ((entry: ConnectionEvidence) => void) | undefined;

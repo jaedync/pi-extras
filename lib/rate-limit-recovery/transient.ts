@@ -16,7 +16,11 @@
  */
 import type { ExtensionContext, MessageEndEvent, ModelRegistry, TurnEndEvent, TurnEndEventResult } from "@earendil-works/pi-coding-agent";
 import { MAX_HINT_SECONDS, connectionCause, connectionHint, type ConnectionCause } from "./connection.ts";
-import { LOCAL_MAX_DELAY_MS, localTarget, probeServer, waitUntilAnswering, type LocalPolicy, type LocalTarget, type Probe } from "./local.ts";
+import { LOCAL_MAX_DELAY_MS, localTarget, probeServer, waitUntilAnswering, type LocalPolicy, type LocalTarget, type LocalWaitEnd, type Probe } from "./local.ts";
+
+// A server that answers the check but fails the request this many times in a row is not just off:
+// the request itself fails (a crash on this prompt, a proxy with no engine), so the budget applies again.
+export const MAX_FAILURES_AFTER_ANSWER = 3;
 import { captureLimit, parseRateLimit } from "./core.ts";
 import { takeRetryHint } from "./retry-hint.ts";
 import { waitForDelay, type Wait } from "./wait.ts";
@@ -182,8 +186,21 @@ export function connectionWaitingMessage(who: string, cause: ConnectionCause, pl
 }
 
 /** `downMs` is how long the local server has not answered; under a minute it is left out. */
+/**
+ * Whole minutes, hours and days, so no number reaches 100 before 100 days: Pi's own retry reads a
+ * bare 429, 500 or 502 to 504 anywhere in the text, and "502 min" would start it.
+ */
+export function outageText(ms: number): string {
+	const minutes = Math.floor(ms / 60_000);
+	if (minutes < 60) return `${minutes} min`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+	const days = Math.floor(hours / 24);
+	return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`;
+}
+
 export function localWaitingMessage(who: string, cause: ConnectionCause, downMs: number): string {
-	const down = downMs >= 60_000 ? ` (no answer for ${duration(downMs)})` : "";
+	const down = downMs >= 60_000 ? ` (no answer for ${outageText(downMs)})` : "";
 	return `${CONNECTION_FAILED} on ${named(who)}: ${CAUSES[cause]}${down}. It runs on local hardware, so Pi waits until the server answers and then sends the request again. Press Esc to cancel.`;
 }
 
@@ -203,8 +220,8 @@ export interface TransientDeps {
 	/** Countdown for interactive sessions; children and print mode wait silently. */
 	/** `downSinceMs` is set for a local provider: the wait then has no end time to count down to. */
 	readonly ui?: (ctx: ExtensionContext, who: string, resumeAtMs: number, cancel: () => void, kind: TransientKind, downSinceMs?: number) => { tick(): void; close(): void } | undefined;
-	/** Local providers wait with no limit; undefined keeps every provider on the budget. */
-	readonly local?: () => LocalPolicy | undefined;
+	/** Local providers wait with no limit; undefined keeps every provider on the budget. Read per failure. */
+	readonly local?: (ctx: FailureContext) => LocalPolicy | undefined;
 	readonly probe?: Probe;
 	readonly now?: () => number;
 	readonly onFailure?: (error: unknown) => void;
@@ -213,7 +230,9 @@ export interface TransientDeps {
 }
 
 interface Pending { readonly plan: TransientPlan; readonly who: string; readonly kind: TransientKind; readonly local?: LocalTarget }
-type FailureContext = Pick<ExtensionContext, "signal"> & { readonly modelRegistry?: Pick<ModelRegistry, "find"> };
+export type FailureContext = Pick<ExtensionContext, "signal"> & Partial<Pick<ExtensionContext, "mode" | "hasUI">> & { readonly modelRegistry?: Pick<ModelRegistry, "find"> };
+/** One local server's outage: since when, and how often the request failed although the check said it answered. */
+interface Outage { readonly who: string; readonly sinceMs: number; readonly failedAfterAnswer: number; readonly answered: boolean }
 const NO_STREAKS: Readonly<Record<TransientKind, Streak>> = { "rate-limit": { attempts: 0, spentMs: 0 }, proxy: { attempts: 0, spentMs: 0 }, connection: { attempts: 0, spentMs: 0 } };
 interface Active { readonly cancel: () => void; readonly skip: () => void }
 
@@ -225,22 +244,45 @@ export class TransientBackoff {
 	private active: Active | undefined;
 	private ready = false;
 	private evidence: ConnectionEvidence | undefined;
-	/** When the local server stopped answering; cleared by any good reply. */
-	private downSinceMs: number | undefined;
+	/** The local outage in progress; cleared by any good reply and by a failure that is not local. */
+	private outage: Outage | undefined;
+	// Separate from the connection streak, so hours of local waiting never spend a cloud provider's budget.
+	private localStreak: Streak = { attempts: 0, spentMs: 0 };
 
 	constructor(deps: TransientDeps) { this.deps = deps; }
 
 	private now(): number { return (this.deps.now ?? Date.now)(); }
 
 	private localFor(message: AssistantMessage, ctx: FailureContext): LocalTarget | undefined {
-		const policy = this.deps.local?.();
+		const policy = this.deps.local?.(ctx);
 		if (!policy?.enabled || !ctx.modelRegistry) return undefined;
 		try { return localTarget(ctx.modelRegistry.find(message.provider, message.model), policy.providers); }
 		catch { return undefined; }
 	}
 
+	/** The local target for this failure, or undefined when the budget applies (cloud, off, or a request that fails while the server answers). */
+	private localOutage(message: AssistantMessage, ctx: FailureContext, who: string): (LocalTarget & { readonly sinceMs: number }) | undefined {
+		const target = this.localFor(message, ctx);
+		const previous = this.outage?.who === who ? this.outage : undefined;
+		if (!previous) this.localStreak = { attempts: 0, spentMs: 0 };
+		const failedAfterAnswer = (previous?.failedAfterAnswer ?? 0) + (previous?.answered ? 1 : 0);
+		if (!target) {
+			this.outage = undefined;
+			return undefined;
+		}
+		const outage: Outage = { who, sinceMs: previous?.sinceMs ?? this.now(), failedAfterAnswer, answered: false };
+		// Kept, so the budget stays in charge of this server until a good reply ends the outage.
+		if (failedAfterAnswer >= MAX_FAILURES_AFTER_ANSWER) {
+			this.outage = outage;
+			return undefined;
+		}
+		this.outage = outage;
+		return { ...target, sinceMs: outage.sinceMs };
+	}
+
 	reset(): void {
-		this.downSinceMs = undefined;
+		this.outage = undefined;
+		this.localStreak = { attempts: 0, spentMs: 0 };
 		this.streaks = NO_STREAKS;
 		this.pending = undefined;
 		this.evidence = undefined;
@@ -266,7 +308,7 @@ export class TransientBackoff {
 		// Taken for every reply, so a hint from a quota error cannot reach a later limit.
 		const hint = takeRetryHint(ctx.signal);
 		if (message.stopReason !== "error") {
-			if (message.stopReason !== "aborted") { this.streaks = NO_STREAKS; this.downSinceMs = undefined; }
+			if (message.stopReason !== "aborted") { this.streaks = NO_STREAKS; this.outage = undefined; this.localStreak = { attempts: 0, spentMs: 0 }; }
 			return undefined;
 		}
 		if (!ctx.signal || ctx.signal.aborted) return undefined;
@@ -291,12 +333,11 @@ export class TransientBackoff {
 			// The body's own hint names this failure; a transport Retry-After is only kept for 429s.
 			const requested = connectionHint(raw) ?? hint;
 			const wanted = requested === undefined ? undefined : Math.min(requested, MAX_HINT_SECONDS);
-			const local = this.localFor(message, ctx);
+			const local = this.localOutage(message, ctx, who);
 			if (local) {
-				this.downSinceMs ??= this.now();
-				const localPlan = planLocal(streak, this.deps.random ?? Math.random, wanted, cause === "dropped" ? DROPPED_FIRST_DELAY_MS : BASE_DELAY_MS);
+				const localPlan = planLocal(this.localStreak, this.deps.random ?? Math.random, wanted, cause === "dropped" ? DROPPED_FIRST_DELAY_MS : BASE_DELAY_MS);
 				this.pending = { plan: localPlan, who, kind, local };
-				return { ...message, errorMessage: localWaitingMessage(who, cause, this.now() - this.downSinceMs) };
+				return { ...message, errorMessage: localWaitingMessage(who, cause, this.now() - local.sinceMs) };
 			}
 			const plan = planTransient(streak, budgetMs, this.deps.random ?? Math.random, wanted, cause === "dropped" ? DROPPED_FIRST_DELAY_MS : BASE_DELAY_MS);
 			if (typeof plan === "string") return { ...message, errorMessage: connectionExhaustedMessage(who, cause, plan, streak, requested) };
@@ -331,8 +372,9 @@ export class TransientBackoff {
 		const startedAt = this.now();
 		let ui: ReturnType<NonNullable<TransientDeps["ui"]>>;
 		let finished = false;
+		let end: LocalWaitEnd | boolean = false;
 		try {
-			ui = this.deps.ui?.(ctx, pending.who, startedAt + pending.plan.delayMs, () => this.cancel(), pending.kind, pending.local ? this.downSinceMs ?? startedAt : undefined);
+			ui = this.deps.ui?.(ctx, pending.who, startedAt + pending.plan.delayMs, () => this.cancel(), pending.kind, pending.local ? this.outage?.sinceMs ?? startedAt : undefined);
 			const signal = AbortSignal.any([controller.signal, runSignal]);
 			const wait = this.deps.wait ?? waitForDelay;
 			const local = pending.local;
@@ -340,7 +382,8 @@ export class TransientBackoff {
 			const waited = local
 				? waitUntilAnswering({ delayMs: pending.plan.delayMs, signal, tick: () => ui?.tick(), now: () => this.now(), wait, probe: (s) => probe(local.baseUrl, s) })
 				: wait(pending.plan.delayMs, signal, () => ui?.tick());
-			finished = await Promise.race([waited, skipped]);
+			end = await Promise.race([waited, skipped]);
+			finished = end === true || end === "answered" || end === "timer";
 		} catch (error) { this.deps.onFailure?.(error); }
 		finally {
 			try { ui?.close(); } catch (error) { finished = false; this.deps.onFailure?.(error); }
@@ -352,8 +395,14 @@ export class TransientBackoff {
 		// A completed wait counts in full; a skipped one only as long as it ran.
 		// A local wait has no fixed length: it counts as long as it ran.
 		const ranMs = Math.max(0, this.now() - startedAt);
-		const spentMs = pending.local ? ranMs : wasSkipped ? Math.min(pending.plan.delayMs, ranMs) : pending.plan.delayMs;
-		this.streaks = { ...this.streaks, [pending.kind]: { attempts: pending.plan.attempt, spentMs: this.streaks[pending.kind].spentMs + spentMs } };
+		if (pending.local) {
+			this.localStreak = { attempts: pending.plan.attempt, spentMs: this.localStreak.spentMs + ranMs };
+			// Only a resend after the check said "answering" counts toward MAX_FAILURES_AFTER_ANSWER.
+			if (this.outage?.who === pending.who) this.outage = { ...this.outage, answered: end === "answered" };
+		} else {
+			const spentMs = wasSkipped ? Math.min(pending.plan.delayMs, ranMs) : pending.plan.delayMs;
+			this.streaks = { ...this.streaks, [pending.kind]: { attempts: pending.plan.attempt, spentMs: this.streaks[pending.kind].spentMs + spentMs } };
+		}
 		this.ready = true;
 		// The failed attempt stays in raw history but leaves the retried context, as with Pi's own retry.
 		return { entries: [...event.entries, { type: "context_edit", targetId: event.messageEntryId, replacement: null }] };

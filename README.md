@@ -1177,12 +1177,26 @@ local. Add a provider that this rule misses to `localProviders`. Set
 
 For a local provider, the connection failure shows once. The extension then
 waits 2 to 30 s, and it checks the server with `GET <baseUrl>/models` every 10 s.
-Any HTTP reply below 500 means that the server answers. A 503 from an engine that
-is still loading does not. The request goes again when the server answers, or
-after 10 min if the check never answers. One line below the chat shows the wait,
-for example `fw01/qwen3.8-flash-next not answering for 4m10s · local server,
-checked every 10 s · Esc / Ctrl+C cancels`. Esc cancels the wait. A model switch
-sends the request at once. A subagent's `maxMinutes` still ends its run.
+The server answers when it sends any HTTP reply other than 502, 503 or 504; a 503
+from an engine that is still loading is not an answer. The check does not follow
+a redirect. The request goes again when the server answers, or after 10 min if
+the check never answers. One line below the chat shows the wait, for example
+`fw01/qwen3.8-flash-next not answering for 4m10s · local server, checked every
+10 s · Esc / Ctrl+C cancels`. Esc cancels the wait. A model switch sends the
+request at once.
+
+The wait has no limit only where it can end well:
+
+- Interactive main sessions only. `pi -p`, JSON and RPC runs keep the budget,
+  because no one is there to press Esc.
+- A subagent waits with no limit only when `subagents.fallbackModels` is empty.
+  With a fallback model, the budget ends the wait and the run moves to the
+  fallback. Without one, the run waits until its `maxMinutes`.
+- If the server answers the check but the request fails 3 times in a row (a
+  crash on this prompt, a proxy with no engine behind it), the budget applies
+  again until a good reply.
+- Local waits keep their own streak, so they never use up a cloud provider's
+  budget.
 
 Meridian, a local Claude Code proxy, sometimes stops a turn with "Reached
 maximum number of turns". Pi does not retry this error. The extension sends the

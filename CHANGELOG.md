@@ -12,6 +12,9 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   `localProviders`. The failure shows once; then one live line shows how long
   the server has not answered. The extension checks the server every 10 s and
   sends the request again when it answers. `localRetry: false` turns this off.
+  Print, JSON and RPC runs keep the budget. A subagent keeps it when a fallback
+  model is named. A request that fails 3 times while the server answers goes
+  back to the budget.
 
 ## 0.38.6 - 2026-11-02
 
