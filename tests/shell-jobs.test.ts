@@ -51,7 +51,7 @@ import {
 	stopGroup,
 	groupSize,
 } from "../lib/shell-jobs-process.ts";
-import type { Runtime } from "../lib/shell-jobs-process.ts";
+import type { Job, Runtime } from "../lib/shell-jobs-process.ts";
 
 function contains(haystack: unknown, needle: unknown): void {
 	assert.ok((haystack as { includes(value: unknown): boolean }).includes(needle),
@@ -344,23 +344,24 @@ describe("process layer", () => {
 	});
 
 	test("recordResidual tracks and releases ownership", async () => {
-		const runtime = makeRuntime(new Set());
+		const runtime = makeRuntime(new Map());
 		const pgid = await deadPgid();
 		recordResidual(runtime, pgid, false);
-		assert.strictEqual(runtime.residualPids.has(pgid), true);
+		assert.strictEqual(runtime.residualClaims.has(pgid), true);
 		recordResidual(runtime, pgid, true);
-		assert.strictEqual(runtime.residualPids.has(pgid), false);
+		assert.strictEqual(runtime.residualClaims.has(pgid), false);
 	});
 
 	test("the residual reaper releases a runtime once its groups are gone", async () => {
-		const runtime = makeRuntime(new Set([await deadPgid()]));
+		// Cleanup has ended, so the reaper may take the runtime out of the exit net.
+		const runtime = { ...makeRuntime(new Map([[await deadPgid(), Date.now()]])), released: true };
 		registry().runtimes.add(runtime);
 		scheduleResidualReaper(runtime);
 		assert.notStrictEqual(runtime.residualTimer, null);
 		// A second call must not stack a second timer.
 		scheduleResidualReaper(runtime);
 		await sleep(RESIDUAL_RECHECK_MS + 400);
-		assert.strictEqual(runtime.residualPids.size, 0);
+		assert.strictEqual(runtime.residualClaims.size, 0);
 		assert.strictEqual(runtime.residualTimer, null);
 		assert.strictEqual(registry().runtimes.has(runtime), false);
 	});
@@ -368,24 +369,66 @@ describe("process layer", () => {
 	test("a claim on a group that died later is dropped during the session", async () => {
 		const pgid = await deadPgid();
 		// The session still runs, so the runtime must stay in the exit net.
-		const runtime = { ...makeRuntime(new Set([pgid])), closing: false };
+		const runtime = { ...makeRuntime(new Map([[pgid, Date.now()]])), closing: false };
 		registry().runtimes.add(runtime);
 		// stopGroup could not confirm the group died, so the pgid stays claimed.
 		recordResidual(runtime, pgid, false);
-		assert.strictEqual(runtime.residualPids.has(pgid), true);
+		assert.strictEqual(runtime.residualClaims.has(pgid), true);
 		await sleep(RESIDUAL_RECHECK_MS + 400);
-		assert.strictEqual(runtime.residualPids.has(pgid), false, "the exit net keeps no claim on a number the OS can reuse");
+		assert.strictEqual(runtime.residualClaims.has(pgid), false, "the exit net keeps no claim on a number the OS can reuse");
 		assert.strictEqual(runtime.residualTimer, null);
 		assert.strictEqual(registry().runtimes.has(runtime), true, "a running session stays in the exit net");
 	});
 
 	test("a claim that cleanup confirms stops the recheck at once", async () => {
 		const pgid = await deadPgid();
-		const runtime = { ...makeRuntime(new Set()), closing: false };
+		const runtime = { ...makeRuntime(new Map()), closing: false };
 		recordResidual(runtime, pgid, false);
 		assert.notStrictEqual(runtime.residualTimer, null);
 		recordResidual(runtime, pgid, true);
 		assert.strictEqual(runtime.residualTimer, null);
+	});
+
+	test("a reaper from the session keeps a shutting-down runtime in the exit net", async () => {
+		const runtime = { ...makeRuntime(new Map()), closing: false };
+		registry().runtimes.add(runtime);
+		// A failed cleanup during the session starts the reaper.
+		recordResidual(runtime, await deadPgid(), false);
+		runtime.closing = true;
+		// One job still runs, so cleanup has not ended and the exit net is still needed.
+		runtime.jobs.set("j1", { id: "j1", pid: process.pid, state: "running" } as unknown as Job);
+		await sleep(RESIDUAL_RECHECK_MS + 400);
+		assert.strictEqual(registry().runtimes.has(runtime), true, "cleanup has not ended, so the exit net keeps the runtime");
+	});
+
+	test("a claim added late keeps its own deadline", async () => {
+		const early = await liveGroup();
+		const late = await liveGroup();
+		try {
+			const runtime = { ...makeRuntime(new Map()), closing: false };
+			// The early claim is already past its deadline; the late one starts its own wait.
+			runtime.residualClaims.set(early, Date.now() - 1500);
+			runtime.residualClaims.set(late, Date.now());
+			scheduleResidualReaper(runtime, 1000, 100);
+			await sleep(600);
+			assert.strictEqual(runtime.residualClaims.has(early), false, "a claim past its own deadline is dropped");
+			assert.strictEqual(runtime.residualClaims.has(late), true, "a later claim keeps its own deadline");
+		} finally {
+			killGroup(early);
+			killGroup(late);
+		}
+	});
+
+	test("a repeated claim on the same group keeps its first claim time", async () => {
+		const pgid = await deadPgid();
+		const runtime = { ...makeRuntime(new Map()), closing: false };
+		recordResidual(runtime, pgid, false);
+		const first = runtime.residualClaims.get(pgid);
+		assert.strictEqual(typeof first, "number");
+		await sleep(20);
+		recordResidual(runtime, pgid, false);
+		assert.strictEqual(runtime.residualClaims.get(pgid), first, "a repeated claim does not move the deadline");
+		recordResidual(runtime, pgid, true);
 	});
 
 	test("a pgrep that cannot look (BusyBox has no -g) gives an unknown count, not zero", async () => {
@@ -405,7 +448,7 @@ describe("process layer", () => {
 
 	test("a runtime parked for a reload that never claims it is handed to its shutdown", async () => {
 		const session = {};
-		const runtime = { ...makeRuntime(new Set()), closing: false };
+		const runtime = { ...makeRuntime(new Map()), closing: false };
 		registry().runtimes.add(runtime);
 		let abandoned = 0;
 		parkForReload(session, runtime, () => { abandoned += 1; }, 30);
@@ -427,13 +470,30 @@ async function deadPgid(): Promise<number> {
 	await once(child, "exit");
 	return child.pid as number;
 }
-function makeRuntime(residualPids: Set<number>): Runtime {
+
+/** A detached group that is still alive, so the reaper finds it and keeps its claim. */
+async function liveGroup(): Promise<number> {
+	const child = spawn("/bin/sh", ["-c", "sleep 30"], { detached: true, stdio: "ignore" });
+	await once(child, "spawn");
+	child.unref();
+	return child.pid as number;
+}
+
+function killGroup(pgid: number): void {
+	try {
+		process.kill(-pgid, "SIGKILL");
+	} catch {
+		// The group is already gone.
+	}
+}
+
+function makeRuntime(residualClaims: Map<number, number>): Runtime {
 	return {
 		runtimeId: "test-runtime",
 		jobs: new Map(),
 		finals: new Map(),
 		pendingPids: new Set(),
-		residualPids,
+		residualClaims,
 		abandoned: 0,
 		residualTimer: null,
 		logDir: null,
@@ -441,6 +501,7 @@ function makeRuntime(residualPids: Set<number>): Runtime {
 		epoch: 0,
 		pending: 0,
 		closing: true,
+		released: false,
 		outbox: new Set(),
 		delivery: null,
 		// The reaper never touches the widget; a stub keeps this file free of pi-tui.

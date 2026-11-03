@@ -489,7 +489,8 @@ async function stopEverything(runtime: Runtime): Promise<void> {
 	// Keep the runtime in the exit net until cleanup is done. If any group could
 	// not be confirmed dead, keep it registered and recheck it so the runtime is
 	// eventually released instead of being retained for the life of the process.
-	if (runtime.residualPids.size === 0) registry().runtimes.delete(runtime);
+	runtime.released = true;
+	if (runtime.residualClaims.size === 0) registry().runtimes.delete(runtime);
 	else scheduleResidualReaper(runtime);
 }
 
@@ -519,7 +520,8 @@ async function handOver(runtime: Runtime, session: { file: string; id: string | 
 	runtime.jobs.clear();
 	runtime.finals.clear();
 	runtime.logDir = null;
-	if (runtime.residualPids.size === 0) registry().runtimes.delete(runtime);
+	runtime.released = true;
+	if (runtime.residualClaims.size === 0) registry().runtimes.delete(runtime);
 	else scheduleResidualReaper(runtime);
 }
 

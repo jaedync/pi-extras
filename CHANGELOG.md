@@ -8,10 +8,11 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 - Shell Jobs: Pi no longer keeps a claim on a process group that it could
   not stop. Pi rechecks the group during the session and drops the claim
-  when the group is gone. Before, the claim stayed until Pi exited, and
-  the exit net could kill an unrelated process group that got the same
-  number. A session that still runs stays in the exit net, so its jobs
-  still stop.
+  when the group is gone. It drops the claim after 30 seconds in any case.
+  Before, the claim stayed until Pi exited, and the exit net could kill an
+  unrelated process group that got the same number. A runtime that still
+  cleans up stays in the exit net, so a Pi exit in that time still stops
+  its jobs.
 
 ## 0.39.0 - 2026-11-03
 
