@@ -193,6 +193,20 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 					}, ms).unref();
 					return () => clearInterval(handle);
 				},
+				setOnce: (fn, ms) => {
+					// Unref'd as well: Pi's terminal input holds the event loop while a session runs, so
+					// the watchdog fires when it must; a Pi that ends by itself needs no watchdog.
+					const handle = setTimeout(() => {
+						try {
+							fn();
+						} catch (error) {
+							report("timer failed")(error);
+						}
+					}, ms).unref();
+					return () => clearTimeout(handle);
+				},
+				log,
+				exit: (code) => process.exit(code),
 			});
 			session.start(event.reason);
 		} catch (error) {

@@ -23,6 +23,16 @@ export const UPDATE_ENTRY = "pi-extras-update";
 export const APPLY_COMMAND = "pi-extras-update-apply";
 export const STATUS_KEY = "auto-update";
 export const POLL_MS = 15_000;
+/**
+ * A reload that has not ended after this long is stuck: Pi awaits each
+ * extension's session_shutdown handler with no time limit, so one handler that
+ * never ends holds the reload (and the "Reloading" box) forever.
+ */
+export const RELOAD_STUCK_MS = 60_000;
+/** After the watchdog asked Pi to quit: a Pi still alive this long later is stuck in its own quit. */
+export const SHUTDOWN_STUCK_MS = 30_000;
+const STUCK_RESTART = `The update reload did not finish in ${RELOAD_STUCK_MS / 1000} s. An extension's shutdown step does not end. Pi restarts with this session.`;
+const STUCK_QUIT = `The update reload did not finish in ${RELOAD_STUCK_MS / 1000} s. An extension's shutdown step does not end. Quit Pi and start it again.`;
 export const LAUNCHER_WARNING = "auto-update: ~/.local/bin/pi was replaced; run enable again, or disable";
 /** An activity older than this belongs to a cycle that stopped without clearing it. */
 const ACTIVITY_MAX_AGE_MS = 15 * 60_000;
@@ -89,6 +99,12 @@ export interface SessionHost {
 	readonly random: () => number;
 	/** A repeating, unref'd timer; returns its stop. */
 	readonly setTimer: (fn: () => void, ms: number) => () => void;
+	/** A one-shot, unref'd timer; returns its stop. */
+	readonly setOnce: (fn: () => void, ms: number) => () => void;
+	/** One line in update.log. */
+	readonly log: (line: string) => void;
+	/** Ends the process at once (process.exit): the last step when Pi's own quit hangs. */
+	readonly exit: (code: number) => void;
 }
 
 function realOr(path: string): string {
@@ -118,6 +134,11 @@ function safeState(paths: StorePaths): UpdateState | undefined {
 		// A state this code cannot read: the cycle reports it; sessions keep running as they are.
 		return undefined;
 	}
+}
+
+function undoRestart(request: string): void {
+	clearRestart();
+	rmSync(request, { force: true });
 }
 
 export class UpdateSession {
@@ -290,24 +311,92 @@ export class UpdateSession {
 		if ((decision.kind !== "reload" && decision.kind !== "restart") || !this.idle(decision.kind) || !state?.current) return;
 		const after = `Updated ${decision.change}`;
 		this.announce({ phase: "start", target: decision.target, text: decision.text, after, from: this.host.extrasVersion });
-		if (decision.kind === "reload") return actions.reload();
+		if (decision.kind === "reload") return this.watchedReload(actions, decision.target, after);
+		const request = this.requestRestart(decision.target, after);
+		if (request === undefined) return;
+		try {
+			actions.shutdown();
+		} catch (error) {
+			undoRestart(request);
+			throw error;
+		}
+	}
+
+	/**
+	 * Writes the launcher's restart request and the restart intent; returns the
+	 * request file, or undefined when this session cannot restart.
+	 */
+	private requestRestart(target: string, after: string): string | undefined {
 		const file = this.host.sessionFile();
 		const replay = replayArgs(this.host.argv);
-		if (!file || !this.host.restartToken || !replay.ok || !this.canRestart()) return;
+		if (!file || !this.host.restartToken || !replay.ok || !this.canRestart()) return undefined;
 		mkdirSync(this.host.paths.restart, { recursive: true, mode: 0o700 });
 		const request = join(this.host.paths.restart, this.host.restartToken);
 		// Line 1: the session to resume. Line 2: what the restarted Pi says when the session has no file yet.
 		// Line 3: the target, for the launcher's count. Then one launch option per line (none holds a line break).
-		const lines = [file, after.replace(/[\r\n]+/g, " "), decision.target.replace(/[\r\n]+/g, " ")];
+		const lines = [file, after.replace(/[\r\n]+/g, " "), target.replace(/[\r\n]+/g, " ")];
 		writeFileSync(request, [...lines, ...replay.args].map((line) => `${line}\n`).join(""), { mode: 0o600 });
 		// Pi reports this shutdown as a plain quit; the intent tells shell-jobs to hand its jobs to the next Pi.
 		markRestart(file);
+		return request;
+	}
+
+	/**
+	 * A reload with a watchdog. The timers belong to this call, not to `stops`:
+	 * the old module's session_shutdown runs `stop` during the reload, and a
+	 * stuck reload is exactly when the watchdog must still run.
+	 */
+	private async watchedReload(actions: { readonly reload: () => Promise<void>; readonly shutdown: () => void }, target: string, after: string): Promise<void> {
+		let shutDown = false;
+		let stopExit: (() => void) | undefined;
+		const stopWatch = this.host.setOnce(() => {
+			shutDown = this.reloadStuck(actions, target, after);
+			if (shutDown) {
+				stopExit = this.host.setOnce(() => {
+					this.host.log(`Pi did not quit ${SHUTDOWN_STUCK_MS / 1000} s after the stuck reload to ${target}: exit for the launcher's restart`);
+					this.host.exit(0);
+				}, SHUTDOWN_STUCK_MS);
+			}
+		}, RELOAD_STUCK_MS);
+		try {
+			await actions.reload();
+		} finally {
+			stopWatch();
+			// After a shutdown() that worked, Pi has stopped its TUI and quits whatever the reload does now.
+			// The exit timer stays: if that quit hangs, the process would live on with no screen, and the
+			// launcher, with the restart request on disk, waits for it to end.
+			if (!shutDown) stopExit?.();
+		}
+	}
+
+	/** The watchdog fired: restart through the launcher when possible, else tell the user. True when Pi was asked to quit. */
+	private reloadStuck(actions: { readonly shutdown: () => void }, target: string, after: string): boolean {
+		this.host.log(`reload to ${target} did not finish in ${RELOAD_STUCK_MS / 1000} s: an extension's session_shutdown handler does not end`);
+		const request = this.host.mode === "tui" ? this.requestRestart(target, after) : undefined;
+		if (request === undefined) {
+			this.warn(STUCK_QUIT);
+			return false;
+		}
+		this.warn(STUCK_RESTART);
 		try {
 			actions.shutdown();
+			this.host.log("asked Pi to quit; the launcher restarts the session");
+			return true;
 		} catch (error) {
-			clearRestart();
-			rmSync(request, { force: true });
-			throw error;
+			// A stale context: the old extensions were already let go, so the hang is later in the reload.
+			undoRestart(request);
+			this.host.log(`could not ask Pi to quit: ${error instanceof Error ? error.message : String(error)}`);
+			this.warn(STUCK_QUIT);
+			return false;
+		}
+	}
+
+	/** A notice from a timer: a context that went stale must not stop the steps after it. */
+	private warn(text: string): void {
+		try {
+			this.host.notify(text, "warning");
+		} catch {
+			// The log has the line.
 		}
 	}
 
