@@ -19,6 +19,7 @@ function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "t
 	const widgets: unknown[] = [];
 	const sent: Array<{ message: any; options: any }> = [];
 	let branch: unknown[] = [];
+	let editor = "";
 	let terminal: ((data: string) => unknown) | undefined;
 	let unsubscribed = 0;
 	let terminalFault = false;
@@ -59,6 +60,7 @@ function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "t
 		abort() { controller.abort(); },
 		ui: {
 			notify(text: string) { notices.push(text); },
+			getEditorText() { return editor; },
 			setWidget(_key: string, widget: unknown) { widgets.push(widget); },
 			onTerminalInput(callback: (data: string) => unknown) {
 				if (terminalFault) throw new Error("synthetic UI setup failure");
@@ -83,6 +85,7 @@ function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "t
 	return {
 		ctx, emit, entries, notices, started, file, modelRegistry, widgets, sent,
 		setBranch(value: unknown[]) { branch = value; },
+		setEditor(value: string) { editor = value; },
 		get waited() { return waited; }, get unsubscribed() { return unsubscribed; },
 		key(data: string) { return terminal?.(data); },
 		finish() { release!(true); },
@@ -467,6 +470,7 @@ test("a reload or an update restart goes on with an open wait from the session",
 		await settle();
 		assert.equal(f.sent.length, 1);
 		assert.match(f.sent[0].message.content, /answers again/);
+		assert.equal(f.entries.find((e) => e.data?.kind === "local-wait")?.data.at, NOW, "the restore writes a fresh entry");
 	} finally { f.close(); }
 });
 
@@ -479,5 +483,97 @@ test("a print-mode main session keeps the budget for a local server: no one coul
 		const replaced = await f.emit("message_end", { message: failure });
 		assert.doesNotMatch(replaced.message.errorMessage, /local hardware/);
 		assert.match(replaced.message.errorMessage, /at most 3 min/);
+	} finally { f.close(); }
+});
+
+const openEntry = (ageMs: number) => ({ type: "custom", customType: "rate-limit-recovery", data: { kind: "local-wait", state: "open", who: "fw01/qwen3.8-flash-next", baseUrl: "http://fw01:8080/v1", sinceMs: NOW - 3_600_000, at: NOW - ageMs } });
+
+test("a new process goes on with a wait only right after the old one stopped: an update restart, not a late return", async () => {
+	for (const [reason, ageMs, restored] of [["startup", 60_000, true], ["startup", 20 * 60_000, false], ["resume", 20 * 60_000, false], ["reload", 20 * 60_000, true]] as const) {
+		const f = fixture({}, "tui", false, { probe: async () => true });
+		try {
+			f.setBranch([openEntry(ageMs)]);
+			await f.emit("session_start", { reason });
+			await settle();
+			assert.equal(f.sent.length, restored ? 1 : 0, `${reason} after ${ageMs / 60_000} min`);
+		} finally { f.close(); }
+	}
+});
+
+test("a shutdown during the wait writes the stop time for the next process", async () => {
+	const f = fixture({}, "tui", true, { probe: async () => false });
+	try {
+		await f.emit("session_start");
+		await f.emit("before_agent_start", { messageType: "user", prompt: "hi" });
+		await f.emit("message_end", { message: LOCAL_FAILURE });
+		await f.emit("turn_end", { message: LOCAL_FAILURE, messageEntryId: "f", entries: [], context: { canContinue: true } });
+		const before = f.entries.length;
+		await f.emit("session_shutdown", { reason: "quit" });
+		const last = f.entries.at(-1);
+		assert.equal(f.entries.length, before + 1);
+		assert.equal(last.data.state, "open");
+		assert.equal(last.data.at, NOW);
+	} finally { f.close(); }
+});
+
+test("with a draft in the editor, Esc and Ctrl+C belong to the editor; with an empty editor they end the wait", async () => {
+	const f = fixture({}, "tui", true, { probe: async () => false });
+	try {
+		await f.emit("session_start");
+		await f.emit("before_agent_start", { messageType: "user", prompt: "hi" });
+		await f.emit("message_end", { message: LOCAL_FAILURE });
+		await f.emit("turn_end", { message: LOCAL_FAILURE, messageEntryId: "f", entries: [], context: { canContinue: true } });
+		f.setEditor("half a sentence");
+		assert.equal(f.key("\x1b"), undefined);
+		assert.equal(f.key("\x03"), undefined, "Ctrl+C is not consumed while idle");
+		assert.notEqual(f.entries.filter((e) => e.data?.kind === "local-wait").at(-1)?.data.state, "closed");
+		f.setEditor("");
+		f.key("\x1b");
+		assert.equal(f.entries.filter((e) => e.data?.kind === "local-wait").at(-1)?.data.state, "closed");
+	} finally { f.close(); }
+});
+
+test("a shell job report during the wait keeps the outage: the next wait shows the same start time", async () => {
+	const f = fixture({}, "tui", true, { probe: async () => false });
+	try {
+		await f.emit("session_start");
+		await f.emit("before_agent_start", { messageType: "user", prompt: "hi" });
+		await f.emit("message_end", { message: LOCAL_FAILURE });
+		await f.emit("turn_end", { message: LOCAL_FAILURE, messageEntryId: "f1", entries: [], context: { canContinue: true } });
+		const first = f.entries.find((e) => e.data?.kind === "local-wait").data.sinceMs;
+		f.rollBackClock(-120_000);
+		await f.emit("before_agent_start", { messageType: "custom", message: { customType: "shell-jobs-completion" } });
+		const waits = () => f.entries.filter((e) => e.data?.kind === "local-wait");
+		assert.equal(waits().at(-1).data.state, "closed", "the run carries the task on");
+		const text = (await f.emit("message_end", { message: LOCAL_FAILURE })).message.errorMessage;
+		assert.doesNotMatch(text, /at most 3 min/, "the run's failure goes back to the idle wait, not to the budget");
+		await f.emit("turn_end", { message: LOCAL_FAILURE, messageEntryId: "f2", entries: [], context: { canContinue: true } });
+		assert.equal(waits().at(-1).data.state, "open");
+		assert.equal(waits().at(-1).data.sinceMs, first);
+	} finally { f.close(); }
+});
+
+test("the cancel command ends the idle wait, and status shows it", async () => {
+	const f = fixture({}, "tui", true, { probe: async () => false });
+	try {
+		await f.emit("session_start");
+		await f.emit("before_agent_start", { messageType: "user", prompt: "hi" });
+		await f.emit("message_end", { message: LOCAL_FAILURE });
+		await f.emit("turn_end", { message: LOCAL_FAILURE, messageEntryId: "f", entries: [], context: { canContinue: true } });
+		await f.command("status");
+		assert.match(f.notices.at(-1)!, /waiting for a local server/);
+		await f.command("cancel");
+		assert.equal(f.entries.filter((e) => e.data?.kind === "local-wait").at(-1)?.data.state, "closed");
+	} finally { f.close(); }
+});
+
+test("the context hook keeps only the last resume message", async () => {
+	const f = fixture();
+	try {
+		await f.emit("session_start");
+		const resume = { role: "custom", customType: "rate-limit-recovery-local-resume", content: "x" };
+		const result = await f.emit("context", { messages: [{ role: "user", content: "t" }, resume, { ...resume }] });
+		assert.equal(result.messages.length, 2);
+		assert.equal(await f.emit("context", { messages: [{ role: "user", content: "t" }] }), undefined);
 	} finally { f.close(); }
 });

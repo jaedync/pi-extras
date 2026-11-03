@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LocalIdleWait, openWait, RESTORE_MAX_AGE_MS, resumeText, type LocalWaitEntry } from "../lib/rate-limit-recovery/idle-wait.ts";
+import { dropOldResumes, LOCAL_RESUME_TYPE, LocalIdleWait, openWait, RESTORE_MAX_AGE_MS, resumeText, type LocalWaitEntry } from "../lib/rate-limit-recovery/idle-wait.ts";
 import { FALLBACK_RESEND_MS } from "../lib/rate-limit-recovery/local.ts";
 
-function fixture(answers: boolean[] = [true]) {
+function fixture(answers: boolean[] = [true], fault: "ui" | "tick" | undefined = undefined) {
 	let clock = 1_000_000;
 	const records: LocalWaitEntry[] = [];
 	const resumed: string[] = [];
@@ -16,14 +16,20 @@ function fixture(answers: boolean[] = [true]) {
 		resume: (content) => resumed.push(content),
 		record: (entry) => records.push(entry),
 		probe: async () => answers.shift() ?? true,
-		wait: async (ms, signal) => {
+		// The real wait calls tick on each second, and a throw there rejects the wait.
+		wait: async (ms, signal, tick) => {
+			tick?.();
 			if (held) await new Promise<void>((resolve) => { release = resolve; signal.addEventListener("abort", () => resolve(), { once: true }); });
 			if (signal.aborted) return false;
 			clock += ms;
 			return true;
 		},
 		now: () => clock,
-		ui: (_ctx, who, since, cancel) => { cancelFromUi = cancel; lines.push(`${who} since ${since}`); return { tick() {}, close() { lines.push("closed"); } }; },
+		ui: (_ctx, who, since, cancel) => {
+			if (fault === "ui") throw new Error("synthetic UI failure");
+			cancelFromUi = cancel; lines.push(`${who} since ${since}`);
+			return { tick() { if (fault === "tick") throw new Error("synthetic tick failure"); }, close() { lines.push("closed"); } };
+		},
 		ended: (who, end) => ended.push(`${who}:${end}`),
 	});
 	const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -89,6 +95,8 @@ test("a check that never answers still starts the run after the fallback time", 
 	f.idle.start(ctx, WAIT);
 	for (let i = 0; i < 400 && !f.resumed.length; i++) await f.settle();
 	assert.equal(f.resumed.length, 1);
+	assert.match(f.resumed[0], /still does not answer after 10 min/, "the text must not claim that the server answers");
+	assert.doesNotMatch(f.resumed[0], /answers again/);
 	assert.deepEqual(f.ended, ["fw01/qwen:timer"]);
 	assert.ok(f.now() - 1_000_000 >= FALLBACK_RESEND_MS);
 });
@@ -102,4 +110,44 @@ test("a second start replaces the first wait, which then starts nothing", async 
 	f.release();
 	for (let i = 0; i < 10; i++) { f.release(); await f.settle(); }
 	assert.ok(f.resumed.every((text) => text.includes("fw01/other")));
+});
+
+test("a restored wait writes a fresh open entry, so a long outage with reloads stays under the age limit", async () => {
+	const f = fixture([false, true]);
+	const old: LocalWaitEntry = { kind: "local-wait", state: "open", who: "fw01/qwen", baseUrl: "http://fw01:8000/v1", sinceMs: 1, at: f.now() - 47 * 3600_000 };
+	f.idle.restore(ctx, old);
+	assert.equal(f.records[0].state, "open");
+	assert.equal(f.records[0].at, f.now());
+	assert.equal(f.records[0].sinceMs, 1, "the outage clock goes on");
+});
+
+test("a stop for a shutdown writes the stop time; a plain stop writes nothing", async () => {
+	const f = fixture();
+	f.hold();
+	f.idle.start(ctx, WAIT);
+	await f.settle();
+	f.idle.stop(true);
+	assert.deepEqual(f.records.map((r) => r.state), ["open", "open"]);
+	assert.equal(f.records[1].at, f.now());
+	f.idle.stop(true);
+	assert.equal(f.records.length, 2, "no wait, no entry");
+});
+
+for (const fault of ["ui", "tick"] as const) {
+	test(`a failure of the live line (${fault}) does not stop the wait: the run still starts again`, async () => {
+		const f = fixture([false, false, true], fault);
+		f.idle.start(ctx, WAIT);
+		for (let i = 0; i < 20 && !f.resumed.length; i++) await f.settle();
+		assert.deepEqual(f.resumed, [resumeText("fw01/qwen")]);
+		assert.equal(f.records.at(-1)!.state, "closed");
+	});
+}
+
+test("only the last resume message stays in the model's context", () => {
+	const resume = (n: number) => ({ role: "custom", customType: LOCAL_RESUME_TYPE, content: `r${n}` });
+	const user = { role: "user", content: "task" };
+	const other = { role: "custom", customType: "other", content: "x" };
+	assert.equal(dropOldResumes([user, resume(1), other]), undefined, "one resume: nothing to drop");
+	assert.equal(dropOldResumes([user, other]), undefined);
+	assert.deepEqual(dropOldResumes([user, resume(1), other, resume(2), resume(3)]), [user, other, resume(3)]);
 });

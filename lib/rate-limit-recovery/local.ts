@@ -92,13 +92,29 @@ async function listsNoModel(response: Response): Promise<boolean> {
 		return false;
 	}
 	try {
-		const text = await response.text();
-		if (text.length > MAX_LIST_BYTES) return false;
+		const text = await readAtMost(response, MAX_LIST_BYTES);
+		if (text === undefined) return false;
 		const data = (JSON.parse(text) as { data?: unknown }).data;
 		return Array.isArray(data) && data.length === 0;
 	} catch {
 		return false;
 	}
+}
+
+/** The body as text, or undefined (and the rest not read) when it is longer than `limit` bytes. */
+async function readAtMost(response: Response, limit: number): Promise<string | undefined> {
+	const reader = response.body?.getReader();
+	if (!reader) return "";
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		size += value.byteLength;
+		if (size > limit) { await reader.cancel().catch(() => {}); return undefined; }
+		chunks.push(value);
+	}
+	return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 /**

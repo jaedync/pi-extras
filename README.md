@@ -1183,12 +1183,21 @@ reply other than 502, 503 or 504, and is not a model list with no model in it: a
 gateway whose engine is stopped (Kiln) answers `200 {"data": []}`. The check does
 not follow a redirect. When the server answers, or after 10 min if the check never
 answers, a short message ("… answers again. Continue the task …") starts the run
-again. One line below the chat shows the wait, for example
+again; after the 10 min timer, the message says that the server still does not
+answer. Only the last of these messages stays in the model's context. One line
+below the chat shows the wait, for example
 `fw01/qwen3.8-flash-next not answering for 4m10s · local server, checked every
-10 s · Esc / Ctrl+C cancels`. Esc ends the wait. A message that you send ends it
-too, and your message goes to the model. A model switch starts the run at once
-with the new model. The open wait is saved in the session, so it goes on after a
-reload or an update restart (not in a fork or a new session, and not after 48 h).
+10 s · Esc / Ctrl+C cancels`. Esc or Ctrl+C ends the wait when the editor is
+empty; with a draft in the editor, they work on the draft as usual.
+`/rate-limit-recovery cancel` ends it too. A message that you send ends it, and
+your message goes to the model. A shell job or subagent report starts a run that
+carries the task on; if that run fails on the same server, the wait starts again
+and keeps its start time. A model switch starts the run at once with the new
+model. The open wait is saved in the session. It goes on after a reload, and
+after an update restart or `pi --continue` within 10 min of the old process
+stopping. It does not go on in a fork or a new session. A server whose `/models`
+lists no model while chat works (rare) is sent the request again only by the
+10 min timer.
 
 The wait has no limit only where it can end well:
 

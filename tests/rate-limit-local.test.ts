@@ -313,3 +313,16 @@ test("a server that lists no model is not ready: an engine that is stopped behin
 	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(200, "not json")), true);
 	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(404, '{"data":[]}')), true);
 });
+
+test("a chunked model list is read only up to the limit: a long list is not an empty one", async () => {
+	const signal = new AbortController().signal;
+	let pulled = 0;
+	const chunked = (parts: string[]) => (async () => new Response(new ReadableStream({
+		pull(controller) { const part = parts[pulled++]; if (part === undefined) controller.close(); else controller.enqueue(new TextEncoder().encode(part)); },
+	}), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+	const big = ['{"data":[', ...Array.from({ length: 400 }, (_, i) => `${i ? "," : ""}{"id":"${"m".repeat(1000)}${i}"}`), "]}"];
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, chunked(big)), true);
+	assert.ok(pulled < big.length, "the read stops at the limit");
+	pulled = 0;
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, chunked(['{"object":"list",', '"data":[]}'])), false);
+});

@@ -12,8 +12,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 - Rate Limit Recovery: the wait for a local server no longer holds the run
   open. The run ends after the first failure, the session waits while idle (so
   auto-update can apply an update and you can type), and a short message starts
-  the run again when the server answers. The wait goes on after a reload or an
-  update restart.
+  the run again when the server answers. The wait goes on after a reload, and
+  after an update restart within 10 min. With a draft in the editor, Esc and
+  Ctrl+C work on the draft and do not end the wait. A shell job or subagent
+  report during the wait keeps the outage's start time.
 
 ## 0.38.7 - 2026-11-02
 

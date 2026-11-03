@@ -12,6 +12,12 @@ import type { Wait } from "./wait.ts";
 export const LOCAL_RESUME_TYPE = "rate-limit-recovery-local-resume";
 // A session opened days later must not start a run on its own.
 export const RESTORE_MAX_AGE_MS = 48 * 3600_000;
+/**
+ * A new process (an update restart, or `pi --continue`) goes on with the wait only this soon after
+ * the old one stopped: an update restart takes seconds, and a user who quit and comes back later
+ * must not find a run that started on its own.
+ */
+export const RESTART_RESTORE_MAX_AGE_MS = 10 * 60_000;
 
 export interface IdleLocalWait {
 	readonly who: string;
@@ -47,14 +53,14 @@ export interface IdleWaitDeps {
 }
 
 /** The last local-wait entry on the branch when it is still open and recent enough to go on. */
-export function openWait(entries: ReadonlyArray<{ type: string; customType?: string; data?: unknown }>, type: string, now: number): LocalWaitEntry | undefined {
+export function openWait(entries: ReadonlyArray<{ type: string; customType?: string; data?: unknown }>, type: string, now: number, maxAgeMs = RESTORE_MAX_AGE_MS): LocalWaitEntry | undefined {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		if (entry?.type !== "custom" || entry.customType !== type) continue;
 		const data = entry.data as Partial<LocalWaitEntry> | undefined;
 		if (data?.kind !== "local-wait") continue;
 		const valid = data.state === "open" && typeof data.who === "string" && typeof data.baseUrl === "string"
-			&& typeof data.sinceMs === "number" && typeof data.at === "number" && now - data.at < RESTORE_MAX_AGE_MS;
+			&& typeof data.sinceMs === "number" && typeof data.at === "number" && now - data.at < maxAgeMs;
 		return valid ? data as LocalWaitEntry : undefined;
 	}
 	return undefined;
@@ -62,8 +68,21 @@ export function openWait(entries: ReadonlyArray<{ type: string; customType?: str
 
 const SWITCHED_TEXT = "The model changed during the wait for the local server. Continue the task from where it stopped.";
 
-export function resumeText(who: string): string {
-	return `The local model server ${who} answers again. Continue the task from where it stopped.`;
+export function resumeText(who: string, end: LocalWaitEnd = "answered"): string {
+	return end === "timer"
+		? `The local model server ${who} still does not answer after 10 min of checks. Pi tries the request again; continue the task from where it stopped.`
+		: `The local model server ${who} answers again. Continue the task from where it stopped.`;
+}
+
+/**
+ * Keeps only the last resume message in the model's context. Each one is true only for the run it
+ * started, and an outage of hours would otherwise leave dozens of them in the context.
+ */
+export function dropOldResumes<T>(messages: readonly T[]): T[] | undefined {
+	const isResume = (message: T) => (message as { role?: string; customType?: string }).role === "custom" && (message as { customType?: string }).customType === LOCAL_RESUME_TYPE;
+	const last = messages.findLastIndex(isResume);
+	if (last < 0 || !messages.slice(0, last).some(isResume)) return undefined;
+	return messages.filter((message, i) => i === last || !isResume(message));
 }
 
 export class LocalIdleWait {
@@ -85,8 +104,14 @@ export class LocalIdleWait {
 	/** After a reload or an update restart: go on with an open wait from the branch. */
 	restore(ctx: ExtensionContext, entry: LocalWaitEntry): void {
 		this.stop();
-		void this.run(ctx, entry, 0);
+		// A new entry keeps the wait fresh: a long outage with reloads stays under the age limits.
+		const fresh: LocalWaitEntry = { ...entry, state: "open", at: this.deps.now() };
+		this.safe(() => this.deps.record(fresh));
+		void this.run(ctx, fresh, 0);
 	}
+
+	/** Another run (a shell job report, a subagent report) took over: it carries the task on. */
+	yieldToRun(): void { this.cancel(); }
 
 	/** The user ends the wait (Esc, a new message, another model): no run starts. */
 	cancel(): void {
@@ -108,10 +133,14 @@ export class LocalIdleWait {
 		this.safe(() => this.deps.resume(SWITCHED_TEXT, closed));
 	}
 
-	/** Shutdown or reload: the wait stops here, and its entry stays open for the next module. */
-	stop(): void {
+	/**
+	 * Shutdown or reload: the wait stops here, and its entry stays open for the next module.
+	 * `suspend` writes the stop time, so the next process can tell an update restart from a late return.
+	 */
+	stop(suspend = false): void {
 		const active = this.active;
 		this.active = undefined;
+		if (active && suspend) this.safe(() => this.deps.record({ ...active.entry, state: "open", at: this.deps.now() }));
 		active?.controller.abort();
 	}
 
@@ -121,15 +150,22 @@ export class LocalIdleWait {
 		const started = this.deps.now();
 		let ui: Ui;
 		let end: LocalWaitEnd = "cancelled";
+		// The wait goes on without its line when the line fails: the run must still start again.
+		try { ui = this.deps.ui?.(ctx, entry.who, entry.sinceMs, () => this.cancel()); }
+		catch (error) { this.deps.onFailure?.(error); }
 		try {
-			ui = this.deps.ui?.(ctx, entry.who, entry.sinceMs, () => this.cancel());
 			end = await waitUntilAnswering({
-				delayMs, signal: controller.signal, tick: () => ui?.tick(), now: this.deps.now, wait: this.deps.wait,
+				delayMs, signal: controller.signal, tick: () => this.safe(() => ui?.tick()), now: this.deps.now, wait: this.deps.wait,
 				probe: (signal) => this.deps.probe(entry.baseUrl, signal),
 			});
 		} catch (error) {
 			this.deps.onFailure?.(error);
 			end = "cancelled";
+			// No run starts after an unknown failure, but the entry must not stay open for a reload.
+			if (this.active?.controller === controller) {
+				this.active = undefined;
+				this.safe(() => this.deps.record({ ...entry, state: "closed", end: "cancelled", at: this.deps.now() }));
+			}
 		} finally {
 			this.safe(() => ui?.close());
 		}
@@ -139,7 +175,7 @@ export class LocalIdleWait {
 		const closed: LocalWaitEntry = { ...entry, state: "closed", end, at: this.deps.now() };
 		this.safe(() => this.deps.ended?.(entry.who, end, this.deps.now() - started));
 		this.safe(() => this.deps.record(closed));
-		this.safe(() => this.deps.resume(resumeText(entry.who), closed));
+		this.safe(() => this.deps.resume(resumeText(entry.who, end), closed));
 	}
 
 	private safe(fn: () => void): void {

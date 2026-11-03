@@ -13,7 +13,7 @@ import { ANTHROPIC_HOSTS, type FirstEventPolicy } from "./first-event.ts";
 import { proxyRetryLimit, TransientBackoff, type TransientKind } from "./transient.ts";
 import { formatDuration } from "../status-plus-logic.ts";
 import { probeServer, type Probe } from "./local.ts";
-import { LOCAL_RESUME_TYPE, LocalIdleWait, openWait } from "./idle-wait.ts";
+import { dropOldResumes, LOCAL_RESUME_TYPE, LocalIdleWait, openWait, RESTART_RESTORE_MAX_AGE_MS, RESTORE_MAX_AGE_MS } from "./idle-wait.ts";
 
 export { RECOVERY_TYPE };
 const WAIT_LABELS: Readonly<Record<TransientKind, string>> = { "rate-limit": "Rate limited on", proxy: "Claude Code proxy failed on", connection: "Connection failed on" };
@@ -40,6 +40,11 @@ export interface RecoveryOptions {
 }
 interface Pending { readonly limit: CapturedLimit; readonly eligible: boolean }
 interface Active { readonly controller: AbortController; readonly ctx: ExtensionContext; readonly scope: string }
+
+/** Esc and Ctrl+C cancel an idle wait only with no draft: with a draft they belong to the editor. */
+function editorEmpty(ctx: ExtensionContext): boolean {
+	try { return (ctx.ui.getEditorText?.() ?? "").trim() === ""; } catch { return true; }
+}
 
 export class Recovery {
 	private readonly pi: ExtensionAPI;
@@ -104,7 +109,8 @@ export class Recovery {
 			wait: this.wait,
 			now: () => this.now(),
 			ui: (ctx, who, sinceMs, cancel) => waitUI(ctx, { provider: who }, { resumeAtMs: sinceMs }, Date.now, cancel,
-				() => `${who} not answering for ${formatDuration(Math.max(0, Date.now() - sinceMs), true)} \u00b7 local server, checked every 10 s`, pi, false),
+				() => `${who} not answering for ${formatDuration(Math.max(0, Date.now() - sinceMs), true)} \u00b7 local server, checked every 10 s`, pi, false,
+				() => editorEmpty(ctx)),
 			ended: (who, end, ranMs) => this.transient.localWaitEnded(who, end, ranMs),
 			onFailure: (error) => operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `local idle wait failed (${error instanceof Error ? error.name : "unknown error"})`),
 		});
@@ -120,7 +126,11 @@ export class Recovery {
 		pi.on("turn_end", (event, ctx) => this.turnEnd(event, ctx));
 		pi.on("agent_before_settle", (event) => this.beforeSettle(event));
 		// Queued work or another extension can already have continued the run.
-		pi.on("context", (_event, ctx) => { this.ready = false; this.transient.consumeReady(); this.protectTransport(ctx, ctx.model, true); });
+		pi.on("context", (event, ctx) => {
+			this.ready = false; this.transient.consumeReady(); this.protectTransport(ctx, ctx.model, true);
+			const messages = Array.isArray(event.messages) ? dropOldResumes(event.messages) : undefined;
+			return messages ? { messages } : undefined;
+		});
 		pi.on("model_select", (event, ctx) => {
 			this.protectTransport(ctx, event.model);
 			if (this.active && !sameScope(this.active.scope, event.model)) this.cancel();
@@ -133,7 +143,11 @@ export class Recovery {
 			this.attempts = 0; this.spentMs = 0; this.pending = undefined; this.ready = false;
 			// The idle wait's own run keeps the outage; any other run ends the wait and starts afresh.
 			const resumed = event.messageType === "custom" && event.message?.customType === LOCAL_RESUME_TYPE;
+			// A shell job or subagent report during the wait also carries the task on: keep the outage
+			// (its clock and counts), and a new failure starts a new idle wait.
+			const carried = !resumed && event.messageType !== "user" && this.idleWait.waiting;
 			if (resumed) this.transient.resume();
+			else if (carried) { this.idleWait.yieldToRun(); this.transient.resume(); }
 			else { this.idleWait.cancel(); this.transient.reset(); }
 			this.protectTransport(ctx, ctx.model, true);
 		});
@@ -141,9 +155,9 @@ export class Recovery {
 			this.stopped = false; this.cancel(); this.idleWait.stop(); this.transient.reset(); this.releaseTransport();
 			this.config = loadConfig(this.file, this.env); this.generation++; this.limited = undefined; this.protectTransport(ctx);
 			// A fork or a new session copies entries but not the wait: only the same session goes on.
-			if (event.reason !== "fork" && event.reason !== "new") this.restoreIdleWait(ctx);
+			if (event.reason !== "fork" && event.reason !== "new") this.restoreIdleWait(ctx, event.reason === "reload" ? RESTORE_MAX_AGE_MS : RESTART_RESTORE_MAX_AGE_MS);
 		});
-		pi.on("session_shutdown", () => { this.stopped = true; this.cancel(); this.idleWait.stop(); this.generation++; this.limited = undefined; this.releaseTransport(); });
+		pi.on("session_shutdown", () => { this.stopped = true; this.cancel(); this.idleWait.stop(true); this.generation++; this.limited = undefined; this.releaseTransport(); });
 		if (this.role !== "subagent") pi.registerCommand("rate-limit-recovery", {
 			description: "Opt in to quota hibernation; on|off|status|cancel",
 			handler: (args, ctx) => this.command(args, ctx),
@@ -151,10 +165,10 @@ export class Recovery {
 	}
 
 	/** A reload or an update restart during a local wait: the wait goes on from its entry. */
-	private restoreIdleWait(ctx: ExtensionContext): void {
+	private restoreIdleWait(ctx: ExtensionContext, maxAgeMs: number): void {
 		if (!this.config.localRetry || !this.interactiveMain(ctx)) return;
 		try {
-			const open = openWait(ctx.sessionManager.getBranch() as never, RECOVERY_TYPE, this.now());
+			const open = openWait(ctx.sessionManager.getBranch() as never, RECOVERY_TYPE, this.now(), maxAgeMs);
 			if (!open) return;
 			this.transient.seedOutage(open.who, open.sinceMs);
 			this.idleWait.restore(ctx, open);
@@ -295,13 +309,13 @@ export class Recovery {
 
 	private async command(args: string, ctx: ExtensionContext): Promise<void> {
 		const command = args.trim() || "status";
-		if (command === "cancel") { this.cancel(); ctx.ui.notify("Automatic wait cancelled.", "info"); return; }
+		if (command === "cancel") { this.cancel(); this.idleWait.cancel(); ctx.ui.notify("Automatic wait cancelled.", "info"); return; }
 		if (command === "on" || command === "off") {
 			this.config = { ...this.config, autoWait: command === "on" };
 			if (!this.config.autoWait) this.cancel();
 			try { this.config = saveConfig({ autoWait: this.config.autoWait }, this.file); }
 			catch (error) { ctx.ui.notify(`Automatic quota waiting ${command} for this session only. ${error instanceof Error ? error.message : String(error)}`, "error"); return; }
 		} else if (command !== "status") { ctx.ui.notify(HELP, "warning"); return; }
-		ctx.ui.notify(`Automatic quota waiting ${this.config.autoWait ? "on" : "off"} (interactive main sessions only). Budget ${this.config.maxWaitSeconds}s, at most ${this.config.maxRecoveries} recoveries per run. Anthropic subscription stall retry ${this.config.anthropicFirstEventSeconds ? `after ${this.config.anthropicFirstEventSeconds}s of pings` : "off"}. Temporary rate limits and connection failures ${this.config.transientMaxWaitSeconds ? `retried for up to ${this.config.transientMaxWaitSeconds}s` : "left to Pi"}. Claude Code proxy turn failures retried up to ${proxyRetryLimit(this.config.transientMaxWaitSeconds * 1000)} times.${this.active ? " Currently hibernating." : ""}${this.transient.waiting ? " Currently waiting to send a failed request again." : ""}`, "info");
+		ctx.ui.notify(`Automatic quota waiting ${this.config.autoWait ? "on" : "off"} (interactive main sessions only). Budget ${this.config.maxWaitSeconds}s, at most ${this.config.maxRecoveries} recoveries per run. Anthropic subscription stall retry ${this.config.anthropicFirstEventSeconds ? `after ${this.config.anthropicFirstEventSeconds}s of pings` : "off"}. Temporary rate limits and connection failures ${this.config.transientMaxWaitSeconds ? `retried for up to ${this.config.transientMaxWaitSeconds}s` : "left to Pi"}. Claude Code proxy turn failures retried up to ${proxyRetryLimit(this.config.transientMaxWaitSeconds * 1000)} times.${this.active ? " Currently hibernating." : ""}${this.transient.waiting ? " Currently waiting to send a failed request again." : ""}${this.idleWait.waiting ? " Currently waiting for a local server to answer." : ""}`, "info");
 	}
 }

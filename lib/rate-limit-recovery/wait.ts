@@ -33,7 +33,9 @@ export function isCancelKey(data: string): boolean {
 export function waitUI(ctx: ExtensionContext, limit: Pick<CapturedLimit, "provider">, plan: Pick<WaitPlan, "resumeAtMs"> & Partial<WaitPlan>, now: () => number, cancel: () => void,
 	line: (remaining: string) => string = (remaining) => `Hibernating ${limit.provider} · ${remaining} remaining`, pi?: ExtensionAPI,
 	/** False while the session is idle: Ctrl+C must still clear the editor and quit Pi. */
-	consumeCtrlC = true): { tick(): void; close(): void } {
+	consumeCtrlC = true,
+	/** While idle, Esc and Ctrl+C also close menus and clear drafts: cancel only when this says so. */
+	canCancel: () => boolean = () => true): { tick(): void; close(): void } {
 	let render = () => {};
 	ctx.ui.setWidget(WIDGET, (tui, theme) => {
 		render = () => tui.requestRender();
@@ -48,7 +50,7 @@ export function waitUI(ctx: ExtensionContext, limit: Pick<CapturedLimit, "provid
 	});
 	let unsubscribe = () => {};
 	try { unsubscribe = ctx.ui.onTerminalInput((data) => {
-		if (!isCancelKey(data)) return undefined;
+		if (!isCancelKey(data) || !canCancel()) return undefined;
 		cancel();
 		// Escape still reaches Pi's normal queue/editor/overlay handling. Ctrl+C
 		// would clear the editor rather than abort, so consume it during this wait.
