@@ -244,6 +244,25 @@ test("a session budget replaces the bands for its window and is final", () => {
 	assert.equal(five[0].reason, "band");
 });
 
+test("a session budget warns at a percent whose band notice already went out", () => {
+	const fired = new Set<string>();
+	const config = { ...ON, bands: [50, 75, 95] };
+	// The 75 band notice goes out first.
+	const band = pendingWarnings(anthropic(20, 76, 30), SONNET, config, undefined, fired, NOW);
+	assert.deepEqual(band.map((warning) => [warning.reason, warning.threshold, warning.final]), [["band", 75, false]]);
+	for (const warning of band) fired.add(warning.key);
+	// A session budget is its own wrap-up at 75 %, not a repeat of the band.
+	const budget = { window: "7d", pct: 75 };
+	const afterBand = pendingWarnings(anthropic(20, 76, 30), SONNET, config, budget, fired, NOW);
+	assert.deepEqual(afterBand.map((warning) => [warning.reason, warning.threshold, warning.final]), [["budget", 75, true]]);
+	// It goes out once.
+	fired.add(afterBand[0].key);
+	assert.deepEqual(pendingWarnings(anthropic(20, 76, 30), SONNET, config, budget, fired, NOW), []);
+	// A budget wrap-up does not stand in for the band at the same percent either.
+	const clear = pendingWarnings(anthropic(20, 76, 30), SONNET, config, undefined, new Set([afterBand[0].key]), NOW);
+	assert.deepEqual(clear.map((warning) => warning.reason), ["band"]);
+});
+
 test("an exhausted window is final regardless of its percentage", () => {
 	const exhausted: Array<[string, LimitSnapshot]> = [["opencode-go", snapshot([
 		{ label: "5h", key: "rolling", usedPct: 100, resetMs: RESET, exhausted: true },

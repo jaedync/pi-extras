@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Usage guard: a session budget now warns at a percent that already sent
+  its band notice. Before, the budget wrap-up stayed silent when the band
+  notice for the same percent, for example 75%, had fired. A band and a
+  budget at one percent are now two warnings.
+
 ## 0.39.0 - 2026-11-03
 
 ### Added

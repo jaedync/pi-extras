@@ -204,11 +204,12 @@ export function bandFor(pct: number, thresholds: number[]): number | undefined {
  */
 export const CYCLE_TOLERANCE_MS = 10 * 60_000;
 
+/** `b` marks a budget threshold: a budget and a band at one percent are two different wrap-ups. */
 function cyclePrefix(provider: string, entry: LimitEntry, threshold: number, reason: WarningReason): string {
-	return [provider, entry.key ?? entry.label, reason === "exhausted" ? "x" : threshold].join("|");
+	return [provider, entry.key ?? entry.label, reason === "exhausted" ? "x" : reason === "budget" ? `b${threshold}` : threshold].join("|");
 }
 
-/** One warning per provider, window, threshold and reset cycle. */
+/** One warning per provider, window, threshold, reason and reset cycle. */
 export function warningKey(provider: string, entry: LimitEntry, threshold: number, reason: WarningReason): string {
 	return `${cyclePrefix(provider, entry, threshold, reason)}|${entry.resetMs ?? "none"}`;
 }
@@ -287,6 +288,8 @@ function classify(
 /**
  * Hard cap: once a window's wrap-up has been sent this cycle, nothing more is
  * said about it. A later provider block adds nothing the request error won't.
+ * The cap names the same reason as `classify`: a band notice at a percent does
+ * not count as the budget wrap-up there, or the reverse.
  */
 function finalFired(
 	fired: ReadonlySet<string>,
@@ -296,7 +299,8 @@ function finalFired(
 	budget: SessionBudget | undefined,
 ): boolean {
 	const top = Math.max(...thresholdsFor(entry, config, budget));
-	return alreadyFired(fired, provider, entry, top, "band") || alreadyFired(fired, provider, entry, 100, "exhausted");
+	const reason: WarningReason = budgetMatches(entry, budget) ? "budget" : "band";
+	return alreadyFired(fired, provider, entry, top, reason) || alreadyFired(fired, provider, entry, 100, "exhausted");
 }
 
 /** Threshold crossings not yet announced this cycle, for the active provider only. */
