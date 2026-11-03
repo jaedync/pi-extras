@@ -66,7 +66,7 @@ import {
 } from "../lib/shell-jobs-process.ts";
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, reconcileDeliveries } from "../lib/shell-jobs-delivery.ts";
 import { jobEnv, type Launch, launchArgs, type SessionFacts, withExitFile } from "../lib/shell-jobs-launch.ts";
-import { buildHandover, claimForSession, type Ending, firstLook, jobsFromHandover, mayStop, startIdentity, stopAdoptPoll, watchAdopted } from "../lib/shell-jobs-adopt.ts";
+import { buildHandover, claimForSession, type Ending, firstLook, jobsFromHandover, mayStop, startIdentity, stopAdoptPoll, sweepHandovers, watchAdopted } from "../lib/shell-jobs-adopt.ts";
 import { type Handover, writeHandover } from "../lib/shell-jobs-handover.ts";
 import { restartPending } from "../lib/restart-intent.ts";
 import { watchMotion } from "../lib/extras-config.ts";
@@ -792,6 +792,8 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		started = true;
 		const retained = event.reason === "reload" ? takeReload(ctx.sessionManager) : undefined;
 		const handedOver = retained ? undefined : claimForSession(getAgentDir(), event.reason, sessionFacts(ctx), logError);
+		// Jobs that a failed restart left with no owner stop here, a day later, as a quit would have stopped them.
+		if (!retained) sweepHandovers(getAgentDir(), Date.now(), logError).catch((error: unknown) => logError("hand-over sweep failed", error));
 		runtime = retained ?? createRuntime(jobsWidget(motion), handedOver?.runtimeId);
 		// Refresh the UI implementation without moving process ownership or callbacks.
 		if (retained) runtime.widget = jobsWidget(motion);

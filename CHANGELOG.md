@@ -12,11 +12,13 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   over, and each job sends its completion one time. A job that ended during
   the restart reports when the new Pi starts. A job with no exit code
   reports "ended, exit code unknown". The new Pi signals a job only while
-  its process start time agrees with the recorded one. A hand-over older
-  than 24 hours is dropped. A quit, Ctrl+C, `/new`, `/resume` or a fork
+  its process start time agrees with the recorded one. If no Pi takes over a
+  hand-over within 24 hours, the next Pi to start stops its jobs. A quit, Ctrl+C, `/new`, `/resume` or a fork
   still stops the jobs.
 - Each shell job now runs under a small `/bin/sh` wrapper that writes its
-  exit code to a file next to its log.
+  exit code to a file next to its log. The job's shell is no longer its
+  group's leader (`kill -- -$$` in an inline command finds no group; `kill 0`
+  works), and a shell killed by a signal reports `exit 128+N`.
 - Auto-update: a restart for a new Pi no longer waits for shell jobs.
   It still waits for subagents.
 

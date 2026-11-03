@@ -1722,10 +1722,17 @@ A job that ended while no Pi ran reports when the new Pi starts. A small
 `/bin/sh` wrapper writes each job's exit code to a file next to its log. If
 that file is missing and the process is gone, the completion says "ended,
 exit code unknown". The new Pi signals a job only while its process has the
-start time that was recorded. Thus a reused pid never gets a signal. A
-hand-over file older than 24 hours is dropped, and its processes are left
-alone. Every other end of a session stops the jobs as before: a quit, Ctrl+C,
+start time that was recorded. Thus a reused pid never gets a signal. If no
+Pi takes over a hand-over within 24 hours (for example, the restart failed),
+the next Pi that starts for any session stops its jobs that still run, as a
+quit would have stopped them. Every other end of a session stops the jobs as before: a quit, Ctrl+C,
 `/new`, `/resume` or a fork.
+
+The wrapper has two small effects on every job. The job's shell is not the
+leader of its process group, so `kill -- -$$` in an inline command finds no
+group; `kill 0` still stops the whole group. When the job's shell itself is
+killed by a signal, the completion shows `exit 128+N` (for example `exit 137`
+for SIGKILL), not the signal name.
 
 ## Tool Loadout
 

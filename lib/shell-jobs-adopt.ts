@@ -7,10 +7,11 @@
  * still matches the one recorded when the job started: a reused pid is never
  * signalled. No Pi API lives here.
  */
-import { readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { processStart } from "./auto-update/leases.ts";
-import { claimHandover, type Handover, type HandoverJob, ownLogDir, readExitCode } from "./shell-jobs-handover.ts";
-import type { Job, Runtime } from "./shell-jobs-process.ts";
+import { claimHandover, type Handover, handoverDir, HANDOVER_MAX_AGE_MS, type HandoverJob, ownLogDir, parseHandover, readExitCode } from "./shell-jobs-handover.ts";
+import { type Job, type Runtime, stopGroup } from "./shell-jobs-process.ts";
 
 /** How often a process that is not this one's child is checked for its end. */
 export const ADOPTED_POLL_MS = 500;
@@ -95,20 +96,43 @@ export function firstLook(job: Job, now: number): { ending: Ending | null; unver
 	return processAlive(job) ? { ending: null, unverified: true } : { ending: unknownEnding(now), unverified: false };
 }
 
+/**
+ * The group of an ended leader may still be cleaned up: the leader is gone (its
+ * id cannot be reused as a group id while members of the old group live), or it
+ * is still the recorded process (a zombie). A live pid with another start time
+ * is a new process, so the group with its id is not this job's.
+ */
+function groupStillOurs(job: Job): boolean {
+	if (job.unverified === true || typeof job.pidStart !== "string") return false;
+	const current = startIdentity(job.pid);
+	return current === null || current === job.pidStart;
+}
+
 /** A later look: the exit file, else the process; the exit file is read again once the process is gone, since it is written first. */
 export function laterLook(job: Job, now: number): Ending | null {
-	const touch = job.unverified !== true;
-	const exited = exitEnding(job, now, touch);
-	if (exited) return exited;
+	const exited = exitEnding(job, now, false);
+	if (exited) return { ...exited, touchGroup: groupStillOurs(job) };
 	if (processAlive(job)) return null;
-	return exitEnding(job, now, touch) ?? { ...unknownEnding(now), touchGroup: touch };
+	const ending = exitEnding(job, now, false) ?? unknownEnding(now);
+	return { ...ending, touchGroup: groupStillOurs(job) };
+}
+
+/**
+ * The recorded start time, else, for a running child of this process (a job
+ * from before start times were kept), its start time now: it is not reaped
+ * yet, so its pid still names it. An adopted job never verified stays without.
+ */
+function handoverStart(job: Job): string | null {
+	if (typeof job.pidStart === "string") return job.pidStart;
+	if (job.adopted === true || job.state === "done") return null;
+	return startIdentity(job.pid);
 }
 
 export function toHandoverJob(job: Job): HandoverJob {
 	const done = job.state === "done";
 	return {
 		id: job.id, title: typeof job.title === "string" ? job.title : null, command: job.command, cwd: job.cwd,
-		toolCallId: job.toolCallId ?? null, pid: job.pid, pidStart: typeof job.pidStart === "string" ? job.pidStart : null,
+		toolCallId: job.toolCallId ?? null, pid: job.pid, pidStart: handoverStart(job),
 		logPath: job.logPath, exitPath: typeof job.exitPath === "string" ? job.exitPath : null, startedAt: job.startedAt,
 		// A job that is stopping has exited already, or a kill has it: the next process reads how it ended.
 		state: done ? "done" : "running",
@@ -164,7 +188,8 @@ export function claimForSession(agentDir: string, reason: unknown, session: { se
 			return undefined;
 		}
 		if (claimed.kind === "stale") {
-			log("hand-over dropped", new Error(`older than 24 h; its ${claimed.record.jobs.length} job(s) were left alone`));
+			stopUnclaimed(claimed.record, log);
+			log("hand-over dropped", new Error(`older than 24 h; its jobs that still run were stopped`));
 			return undefined;
 		}
 		const record = claimed.record;
@@ -181,6 +206,55 @@ export function claimForSession(agentDir: string, reason: unknown, session: { se
 		log("could not read the hand-over", error);
 		return undefined;
 	}
+}
+
+/**
+ * A hand-over that no restart claimed in time: its jobs would run on with no
+ * owner for good, so they stop as a quit would have stopped them. Only a job
+ * whose leader is still the recorded process is signalled.
+ */
+function stopUnclaimed(record: Handover, log: Log): Promise<unknown> {
+	const verified = record.jobs.filter((job) => job.state === "running" && typeof job.pidStart === "string" && job.pid > 1 && startIdentity(job.pid) === job.pidStart);
+	return Promise.all(verified.map((job) => stopGroup(job.pid).catch((error: unknown) => log(`could not stop job ${job.id} of an unclaimed hand-over`, error))));
+}
+
+// A claim or temp file this old is a leftover of a process that died mid-claim; a younger one may still be in use.
+const LEFTOVER_MAX_AGE_MS = 60 * 60_000;
+
+/**
+ * At any session start: stop the jobs of hand-overs older than the adoption
+ * limit (no restart came for them) and remove old claim and temp leftovers,
+ * which hold command text. Returns how many hand-overs it ended.
+ */
+export async function sweepHandovers(agentDir: string, now: number, log: Log): Promise<number> {
+	const dir = handoverDir(agentDir);
+	let names: string[];
+	try {
+		names = readdirSync(dir);
+	} catch {
+		return 0;
+	}
+	let ended = 0;
+	for (const name of names) {
+		const path = join(dir, name);
+		try {
+			if (name.endsWith(".claimed") || name.endsWith(".tmp")) {
+				if (now - statSync(path).mtimeMs > LEFTOVER_MAX_AGE_MS) rmSync(path, { force: true });
+				continue;
+			}
+			if (!name.endsWith(".json")) continue;
+			// The age is the record's own; the claim below checks owner and mode, and only the file named for its session counts.
+			const parsed = parseHandover(readFileSync(path, "utf8"));
+			if (typeof parsed === "string" || now - parsed.writtenAt <= HANDOVER_MAX_AGE_MS) continue;
+			const claimed = claimHandover(agentDir, parsed.sessionFile, now);
+			if (claimed.kind !== "stale") continue;
+			await stopUnclaimed(claimed.record, log);
+			ended++;
+		} catch (error) {
+			log("hand-over sweep failed for one file", error);
+		}
+	}
+	return ended;
 }
 
 export function stopAdoptPoll(runtime: Runtime): void {
