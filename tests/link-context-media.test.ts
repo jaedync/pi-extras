@@ -125,6 +125,13 @@ test("packages refresh on schedule, on a changed list, and never when refresh is
 	assert.equal(packagesDue({ packagesAt: 6 * day, packages: list }, 3, 10 * day), true);
 	assert.equal(packagesDue({ packagesAt: 9 * day, packages: "yt-dlp" }, 3, 10 * day), true);
 	assert.equal(packagesDue({ packagesAt: 1, packages: list }, 0, 10 * day), false);
+	// A failed refresh is due again after a day, not before.
+	assert.equal(packagesDue({ packagesAt: 6 * day, packages: list, refreshFailedAt: 10 * day - 3_600_000 }, 3, 10 * day), false);
+	assert.equal(packagesDue({ packagesAt: 6 * day, packages: list, refreshFailedAt: 10 * day - 2 * day }, 3, 10 * day), true);
+	assert.equal(packagesDue({ packagesAt: 9 * day, packages: list, refreshFailedAt: 10 * day - 3_600_000 }, 3, 10 * day), false, "a fresh install needs no refresh yet");
+	// A changed list waits behind a failed refresh too: without a network, pip would run on every read.
+	assert.equal(packagesDue({ packagesAt: 9 * day, packages: "yt-dlp", refreshFailedAt: 10 * day - 3_600_000 }, 3, 10 * day), false);
+	assert.equal(packagesDue({ packagesAt: 9 * day, packages: "yt-dlp", refreshFailedAt: 10 * day - 2 * day }, 3, 10 * day), true);
 	assert.equal(asrPlan("darwin", "arm64").backend, "mlx-whisper");
 	assert.equal(asrPlan("linux", "x64").backend, "faster-whisper");
 	assert.equal(asrPlan("darwin", "x64").backend, "faster-whisper");
@@ -406,6 +413,33 @@ test("ensureMedia with a broken state file installs once, saves the new state, a
 	assert.equal(tools.calls().filter((line) => line.startsWith("pip install")).length, 1);
 	await ensureMedia({ refreshDays: 3, progress: () => {}, home });
 	assert.equal(tools.calls().filter((line) => line.startsWith("pip install")).length, 1, "the saved state stops a second install");
+});
+
+test("ensureMedia: a failed refresh waits a day and keeps the installed version", { skip: process.platform === "win32" ? "POSIX shell scripts" : false }, async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "link-ensure-"));
+	const tools = fakeMediaTools(dir, { pipFails: true });
+	t.after(() => {
+		tools.restore();
+		rmSync(dir, { recursive: true, force: true });
+	});
+	t.mock.method(globalThis, "fetch", async () => Response.json({ tag_name: "2.0.2" }));
+	const home = join(dir, "media");
+	mkdirSync(join(home, "env", "bin"), { recursive: true });
+	writeFileSync(join(home, "env", "bin", "python"), "");
+	// An install from four days ago with a three-day refresh: the update is due, and pip cannot reach the index.
+	writeFileSync(join(home, "state.json"), JSON.stringify({ packagesAt: Date.now() - 4 * 86_400_000, packages: PACKAGES.join(" ") }));
+	const pipCalls = () => tools.calls().filter((line) => line.startsWith("pip install")).length;
+	const messages: string[] = [];
+	const toolchain = await ensureMedia({ refreshDays: 3, progress: (text) => messages.push(text), home });
+	assert.equal(toolchain.python, join(home, "env", "bin", "python"), "the installed version is used");
+	assert.ok(messages.includes("update failed; using the installed version"));
+	assert.equal(pipCalls(), 1);
+	await ensureMedia({ refreshDays: 3, progress: () => {}, home });
+	assert.equal(pipCalls(), 1, "a failed refresh is not tried again on the next call");
+	// A release changes the package list: the installed tools stay, and pip waits for the same day.
+	writeState(home, { packages: "yt-dlp" });
+	await ensureMedia({ refreshDays: 3, progress: () => {}, home });
+	assert.equal(pipCalls(), 1, "a changed list also waits after a failed refresh");
 });
 
 const python = ["python3", "python"].find((bin) => spawnSync(bin, ["--version"]).status === 0);

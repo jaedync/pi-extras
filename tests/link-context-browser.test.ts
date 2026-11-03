@@ -234,6 +234,38 @@ setInterval(() => {}, 1000);`;
 	}
 });
 
+test("browser: an abort during the version check stops the render before Chrome starts", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "plf-browser-"));
+	try {
+		const checking = join(dir, "checking");
+		const argsFile = join(dir, "args.json");
+		const path = join(dir, "chrome");
+		// The version check answers late, which is when the caller can give up, after it already has a slot.
+		writeFileSync(
+			path,
+			`#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+	fs.writeFileSync(${JSON.stringify(checking)}, "");
+	setTimeout(() => { console.log("Chromium 150.0.1.2"); process.exit(0); }, 300);
+} else {
+	fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(args));
+	setInterval(() => {}, 1000);
+}`,
+		);
+		chmodSync(path, 0o755);
+		const controller = new AbortController();
+		const rendered = renderPage("https://e.test/a", { browser: path, signal: controller.signal, timeoutMs: 1000 });
+		while (!existsSync(checking)) await new Promise((r) => setTimeout(r, 20));
+		controller.abort();
+		await assert.rejects(rendered, /abort/i);
+		assert.equal(existsSync(argsFile), false, "the page is not rendered after the caller gave up");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("browser: with no browser, the error gives the install command", async () => {
 	await assert.rejects(renderPage("https://e.test/a", { candidates: ["/nonexistent/chrome"] }), /No local browser.*npx playwright install chromium/);
 });

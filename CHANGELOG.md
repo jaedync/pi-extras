@@ -14,6 +14,13 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   a lower one sets the day's base. A stored snapshot sampled before the day's
   first reading can show a lower dollar value. "Spent today" could then show
   the month's whole spend, or leave out spend from that reading.
+- Pull Link: a media package update that fails now waits one day before
+  it runs again. Each video read after the failure started `pip install -U`
+  again, with a limit of 20 minutes. A release that changes the package
+  list waits for the same day. The installed tools still work.
+- Pull Link: a page no longer starts a headless browser after you give up
+  on the read. An abort that came while the browser slot or the version
+  check ran was not seen, so Chrome ran until its own limit.
 
 ## 0.39.0 - 2026-11-03
 
