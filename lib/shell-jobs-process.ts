@@ -69,7 +69,8 @@ export interface Runtime {
 	readonly jobs: Map<string, Job>;
 	readonly finals: Map<string, Deferred>;
 	readonly pendingPids: Set<number>;
-	readonly residualPids: Set<number>;
+	/** A pgid that cleanup could not confirm gone, and the time its claim started. */
+	readonly residualClaims: Map<number, number>;
 	abandoned: number;
 	residualTimer: ReturnType<typeof setInterval> | null;
 	logDir: string | null;
@@ -77,6 +78,8 @@ export interface Runtime {
 	epoch: number;
 	pending: number;
 	closing: boolean;
+	/** Set when cleanup has ended, so the reaper may take the runtime out of the exit net. */
+	released?: boolean;
 	readonly outbox: Set<string>;
 	delivery: Delivery | null;
 	widget: JobsWidget;
@@ -122,9 +125,10 @@ export function registry(): GlobalRegistry {
 export function createRuntime(widget: JobsWidget, runtimeId = randomUUID().replace(/-/g, "").slice(0, 12)): Runtime {
 	const runtime: Runtime = {
 		runtimeId,
-		jobs: new Map(), finals: new Map(), pendingPids: new Set(), residualPids: new Set(),
+		jobs: new Map(), finals: new Map(), pendingPids: new Set(), residualClaims: new Map(),
 		outbox: new Set(), delivery: null, abandoned: 0, residualTimer: null,
 		logDir: null, counter: 0, epoch: 0, pending: 0, closing: false, widget,
+		released: false,
 	};
 	registry().runtimes.add(runtime);
 	installExitNet();
@@ -246,8 +250,23 @@ export async function stopGroup(pgid: number, graceMs = TERM_GRACE_MS): Promise<
 
 /** Record whether this runtime still owns an unconfirmed group for the exit net. */
 export function recordResidual(runtime: Runtime, pgid: number, cleaned: boolean): void {
-	if (cleaned) runtime.residualPids.delete(pgid);
-	else runtime.residualPids.add(pgid);
+	if (cleaned) {
+		runtime.residualClaims.delete(pgid);
+		// No claim is left to recheck.
+		if (runtime.residualClaims.size === 0) stopResidualReaper(runtime);
+		return;
+	}
+	// Keep the first claim time: a repeated claim must not move the deadline.
+	if (!runtime.residualClaims.has(pgid)) runtime.residualClaims.set(pgid, Date.now());
+	// Recheck during the session too. The exit net kills every claimed pgid, and the
+	// OS can give a number that no group uses to an unrelated group later.
+	scheduleResidualReaper(runtime);
+}
+
+/** Drop the recheck timer. The claims stay, for a shutdown to recheck or the exit net to kill. */
+function stopResidualReaper(runtime: Runtime): void {
+	if (runtime.residualTimer !== null) clearInterval(runtime.residualTimer);
+	runtime.residualTimer = null;
 }
 
 /** Close a descriptor and drop a log file that no job ended up owning. */
@@ -276,30 +295,35 @@ export function installExitNet(): void {
 				if (job.state !== "done" && mayStop(job)) killQuietly(job.pid);
 			}
 			for (const pid of runtime.pendingPids) killQuietly(pid);
-			for (const pid of runtime.residualPids) killQuietly(pid);
+			for (const pid of runtime.residualClaims.keys()) killQuietly(pid);
 		}
 	});
 }
 
 /**
- * Recheck groups that outlived cleanup so their runtime can be released. A
- * SIGKILLed group is essentially always gone within a moment; after the
- * deadline the PGID claim is dropped rather than signaling a number the OS may
- * have since reused for an unrelated process.
+ * Recheck groups that outlived cleanup, and release the runtime once cleanup
+ * has ended and no claim is left. A SIGKILLed group is essentially always gone
+ * within a moment; each claim gets its own deadline, and after it the PGID claim
+ * is dropped rather than signaling a number the OS may have since reused for an
+ * unrelated process. The timings are parameters so a test does not wait 30 s.
  */
-export function scheduleResidualReaper(runtime: Runtime): void {
+export function scheduleResidualReaper(
+	runtime: Runtime,
+	deadlineMs = RESIDUAL_DEADLINE_MS,
+	recheckMs = RESIDUAL_RECHECK_MS,
+): void {
 	if (runtime.residualTimer !== null) return;
-	const deadline = Date.now() + RESIDUAL_DEADLINE_MS;
 	const timer = setInterval(() => {
-		const expired = Date.now() >= deadline;
-		for (const pgid of [...runtime.residualPids]) {
-			if (expired || !groupExists(pgid)) runtime.residualPids.delete(pgid);
+		const now = Date.now();
+		for (const [pgid, claimedAt] of [...runtime.residualClaims]) {
+			// Each claim gets its own wait: a group first rechecked late must not lose its claim early.
+			if (now - claimedAt >= deadlineMs || !groupExists(pgid)) runtime.residualClaims.delete(pgid);
 		}
-		if (runtime.residualPids.size > 0) return;
-		if (runtime.residualTimer !== null) clearInterval(runtime.residualTimer);
-		runtime.residualTimer = null;
-		registry().runtimes.delete(runtime);
-	}, RESIDUAL_RECHECK_MS);
+		if (runtime.residualClaims.size > 0) return;
+		stopResidualReaper(runtime);
+		// Only the end of cleanup releases the runtime. Before that, live jobs still need the exit net.
+		if (runtime.released === true) registry().runtimes.delete(runtime);
+	}, recheckMs);
 	timer.unref?.();
 	runtime.residualTimer = timer;
 }
