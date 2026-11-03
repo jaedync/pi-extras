@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import * as nodeEvents from "node:events";
 import { once } from "node:events";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { SkySession, type Approval, type ApprovalRequest } from "../lib/computer-use/session.ts";
@@ -72,6 +74,51 @@ test("a crashed client is replaced on the next call", async () => {
 		await session.call("list_apps", {}, { approve: allow("once") });
 		assert.equal(launches(), 2);
 	} finally { await session.close(); }
+});
+
+/** A client that answers initialize and every tool call, so only the session's choices are under test. */
+function fakeClient(kills: string[][]) {
+	const { EventEmitter } = nodeEvents;
+	const own: string[] = [];
+	kills.push(own);
+	const proc = Object.assign(new EventEmitter(), {
+		stdin: new PassThrough(),
+		stdout: new PassThrough(),
+		stderr: new PassThrough(),
+		kill: (signal: string) => own.push(signal) > 0,
+	});
+	let buffered = "";
+	proc.stdin.on("data", (chunk: Buffer) => {
+		buffered += chunk;
+		for (let index = buffered.indexOf("\n"); index >= 0; index = buffered.indexOf("\n")) {
+			const message = JSON.parse(buffered.slice(0, index));
+			buffered = buffered.slice(index + 1);
+			if (typeof message.id !== "number") continue;
+			const result = message.method === "initialize" ? { protocolVersion: "2025-06-18" } : { content: [{ type: "text", text: "ok" }] };
+			proc.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`);
+		}
+	});
+	return proc;
+}
+
+// A failed pipe closes the link but not the child: the session must stop that child before a new one starts.
+test("a client whose output failed is killed before the next call replaces it", async () => {
+	const kills: string[][] = [];
+	const procs: ReturnType<typeof fakeClient>[] = [];
+	const session = new SkySession({
+		launch: async () => { const proc = fakeClient(kills); procs.push(proc); return proc as never; },
+		idleMs: 60_000,
+		callTimeoutMs: 5_000,
+	});
+	try {
+		await session.call("list_apps", {}, { approve: allow("once") });
+		procs[0].stdout.emit("error", new Error("read EIO"));
+		assert.equal(session.state, "closed");
+		await session.call("list_apps", {}, { approve: allow("once") });
+		assert.equal(procs.length, 2);
+		assert.deepEqual(kills[0], ["SIGTERM"], "the failed client was left running");
+	} finally { await session.close(); }
+	assert.deepEqual(kills[1], ["SIGTERM"]);
 });
 
 test("an idle session closes itself and restarts on demand", async () => {

@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Computer Use: a client whose output failed no longer keeps running
+  when the next call starts another client. The session stops the failed
+  client before it starts a new one, so no orphaned client or launch job
+  stays in the background.
+
 ## 0.39.0 - 2026-11-03
 
 ### Added
