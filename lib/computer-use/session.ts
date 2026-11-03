@@ -165,6 +165,9 @@ export class SkySession {
 
 	private async connect(signal: AbortSignal): Promise<McpLink> {
 		if (this.link && !this.link.closed) return this.link;
+		// A pipe error closes the link but says nothing about its child, which only close can stop.
+		this.link?.close();
+		this.link = undefined;
 		this.starting ??= this.start().finally(() => { this.starting = undefined; });
 		const link = await this.starting;
 		if (signal.aborted) throw new Error("Computer Use call cancelled");

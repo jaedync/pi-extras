@@ -21,6 +21,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 - Pull Link: a page no longer starts a headless browser after you give up
   on the read. An abort that came while the browser slot or the version
   check ran was not seen, so Chrome ran until its own limit.
+- Computer Use: a client whose output failed no longer keeps running
+  when the next call starts another client. The session stops the failed
+  client before it starts a new one, so no orphaned client or launch job
+  stays in the background.
 
 ## 0.39.0 - 2026-11-03
 
