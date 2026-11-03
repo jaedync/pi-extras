@@ -43,3 +43,4 @@ Rules:
 - One machine that you see in several of your files is one finding.
 - At the end, list the files where you found nothing, so the evaluator knows
   that you read them.
+- Put your whole report in your final reply. Send no message after it.

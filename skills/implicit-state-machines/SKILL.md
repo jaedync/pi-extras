@@ -58,7 +58,15 @@ Do not count:
    [references/scout-brief.md](references/scout-brief.md), with its file list
    and the definition above. With no subagent tool, do the batches yourself,
    one at a time, and say so in the report.
-4. **Evaluate.** On a strong model, merge the scout findings:
+4. **Evaluate.** On a strong model, merge the scout findings. For a large
+   scan (more than about 8 scouts), start one evaluator for each area (3 to 5
+   areas, each with the reports of its scouts), so that each evaluator can
+   open the code for all of its findings. Copy the scout reports to a folder
+   that the evaluators can read: a read-only or sandboxed evaluator may not
+   see the session folders of other subagents. Tell each scout and evaluator
+   to put its whole report in its final reply and to send nothing after it:
+   a later short reply can replace the saved report. If that happens, take
+   the longest final text from the subagent's session file.
    - Join the findings that are one machine seen from several files.
    - **Check each claim in the code.** Open every cited file and line for each
      finding that you place in "needs design thought" or "quick fix". Scouts
