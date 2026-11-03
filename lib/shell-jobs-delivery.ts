@@ -74,7 +74,8 @@ async function sendCompletion(runtime: Runtime, binding: Delivery, pi: Extension
 	const duration = formatDuration((job.endedAt ?? Date.now()) - job.startedAt);
 	// A job parked by an older version has no title field.
 	const title = typeof job.title === "string" ? job.title : null;
-	const lines = [`Job ${job.id} finished: ${jobStatusText(job)} after ${duration}`];
+	// A job that ended while no Pi watched it, with no exit file, has no status to give.
+	const lines = [job.codeUnknown === true ? `Job ${job.id} ended, exit code unknown, after ${duration}` : `Job ${job.id} finished: ${jobStatusText(job)} after ${duration}`];
 	// The title helps the model tie the completion back to what it started,
 	// which matters once compaction has dropped the start call.
 	if (title !== null) lines.push(`title: ${title}`);

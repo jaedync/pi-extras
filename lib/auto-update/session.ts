@@ -16,6 +16,7 @@ import { isInside, type StorePaths } from "./paths.ts";
 import { readSettingsPackages, settingsFile } from "./settings.ts";
 import { classify, entrySource } from "./sources.ts";
 import { readState, type UpdateState } from "./state.ts";
+import { clearRestart, markRestart } from "../restart-intent.ts";
 import { piCurrentMatches, settingsMatch } from "./switch.ts";
 
 export const UPDATE_ENTRY = "pi-extras-update";
@@ -299,9 +300,12 @@ export class UpdateSession {
 		// Line 3: the target, for the launcher's count. Then one launch option per line (none holds a line break).
 		const lines = [file, after.replace(/[\r\n]+/g, " "), decision.target.replace(/[\r\n]+/g, " ")];
 		writeFileSync(request, [...lines, ...replay.args].map((line) => `${line}\n`).join(""), { mode: 0o600 });
+		// Pi reports this shutdown as a plain quit; the intent tells shell-jobs to hand its jobs to the next Pi.
+		markRestart(file);
 		try {
 			actions.shutdown();
 		} catch (error) {
+			clearRestart();
 			rmSync(request, { force: true });
 			throw error;
 		}

@@ -14,8 +14,10 @@
  * expressible with the public extension API, so silent loss is replaced by
  * visible state rather than by a hard delivery guarantee.
  *
- * Known limits: no durability across Pi restarts, and a SIGKILL of Pi can
- * orphan a process group.
+ * A restart of Pi by auto-update keeps the jobs: the old process writes a
+ * hand-over record (lib/shell-jobs-handover.ts) and the next process for the
+ * same session adopts the jobs (lib/shell-jobs-adopt.ts). Any other end of a
+ * session stops them, as before. A SIGKILL of Pi can orphan a process group.
  */
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -63,7 +65,10 @@ import {
 	takeReload,
 } from "../lib/shell-jobs-process.ts";
 import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, reconcileDeliveries } from "../lib/shell-jobs-delivery.ts";
-import { jobEnv, type Launch, launchArgs, type SessionFacts } from "../lib/shell-jobs-launch.ts";
+import { jobEnv, type Launch, launchArgs, type SessionFacts, withExitFile } from "../lib/shell-jobs-launch.ts";
+import { buildHandover, claimForSession, type Ending, firstLook, jobsFromHandover, mayStop, startIdentity, stopAdoptPoll, sweepHandovers, watchAdopted } from "../lib/shell-jobs-adopt.ts";
+import { type Handover, writeHandover } from "../lib/shell-jobs-handover.ts";
+import { restartPending } from "../lib/restart-intent.ts";
 import { watchMotion } from "../lib/extras-config.ts";
 import { operationalError } from "../lib/operational-log.ts";
 import { type ClickTarget, clickToInspect, type InspectorHost, openInspector } from "../lib/shell-jobs-inspector.ts";
@@ -170,14 +175,19 @@ function rememberInspect(context: RowContext, details: unknown): void {
 }
 
 
-async function finalize(runtime: Runtime, id: string, code: number | null, signal: string | null): Promise<void> {
+/** How a job ended, as an adopted job's checks tell it; a child of this process ends with its exit event and passes none. */
+type Outcome = Partial<Pick<Ending, "codeUnknown" | "endedAt" | "touchGroup">>;
+
+async function finalize(runtime: Runtime, id: string, code: number | null, signal: string | null, outcome: Outcome = {}): Promise<void> {
 	const current = runtime.jobs.get(id);
 	if (!current || current.state === "done") return;
 	runtime.jobs.set(id, { ...current, state: "stopping" });
 	// The shell has exited, so whatever is left in its group is background work it
 	// started. It is stopped below, as it always was; the completion now says so.
-	const left = groupExists(current.pid) ? await groupSize(current.pid) : 0;
-	const cleanup = await stopGroup(current.pid);
+	// A job that ended while no Pi watched it keeps its group: nothing confirms the group is still its own.
+	const touch = outcome.touchGroup !== false;
+	const left = touch && groupExists(current.pid) ? await groupSize(current.pid) : 0;
+	const cleanup = touch ? await stopGroup(current.pid) : { cleaned: true, denied: false };
 	// Re-read after the await: an explicit kill may have claimed this job while
 	// the group was draining, and that claim must win over the earlier snapshot.
 	const latest = runtime.jobs.get(id) ?? current;
@@ -186,9 +196,10 @@ async function finalize(runtime: Runtime, id: string, code: number | null, signa
 		state: "done",
 		code,
 		signal,
-		endedAt: Date.now(),
+		endedAt: outcome.endedAt ?? Date.now(),
 		cleanupError: cleanup.cleaned ? null : "could not terminate the whole process group",
 		stoppedBackground: left,
+		...(outcome.codeUnknown === true ? { codeUnknown: true } : {}),
 	};
 	const suppressed = runtime.closing || done.epoch !== runtime.epoch || done.claimed || done.delivered;
 	// Record the delivery attempt before painting. `isVisible` treats a finished
@@ -196,7 +207,7 @@ async function finalize(runtime: Runtime, id: string, code: number | null, signa
 	// row for a beat and then re-added it on the next unrelated update.
 	const settled: Job = suppressed ? done : { ...done, attempts: done.attempts + 1 };
 	runtime.jobs.set(id, settled);
-	recordResidual(runtime, current.pid, cleanup.cleaned);
+	if (touch) recordResidual(runtime, current.pid, cleanup.cleaned);
 	runtime.finals.get(id)?.resolve(settled);
 	if (!suppressed) runtime.outbox.add(id);
 	runtime.widget.update();
@@ -242,10 +253,13 @@ function trimRetained(runtime: Runtime): void {
 			// the lost output, and it is deleted when the session shuts down.
 			continue;
 		}
-		try {
-			unlinkSync(job.logPath);
-		} catch {
-			// The log may already be gone; retention is best effort.
+		for (const path of [job.logPath, job.exitPath]) {
+			if (typeof path !== "string") continue;
+			try {
+				unlinkSync(path);
+			} catch {
+				// The file may already be gone; retention is best effort.
+			}
 		}
 	}
 }
@@ -282,8 +296,10 @@ async function startJob(
 	// Sibling starts run in parallel, so a name is held from here until the job is registered.
 	// It is chosen before the slot is reserved: a throw here must not hold a slot the finally below never frees.
 	const reserved = reservedIds(runtime);
+	// A leftover exit file would read as this job's end after a restart, so it holds its name too.
 	const id = jobIdFor(title, command, (candidate) =>
-		runtime.jobs.has(candidate) || reserved.has(candidate) || (runtime.logDir !== null && existsSync(join(runtime.logDir, `${candidate}.log`))));
+		runtime.jobs.has(candidate) || reserved.has(candidate) ||
+		(runtime.logDir !== null && (existsSync(join(runtime.logDir, `${candidate}.log`)) || existsSync(join(runtime.logDir, `${candidate}.exit`)))));
 	// Reserve the slot synchronously; pi runs sibling tool calls in parallel, so
 	// the registry alone cannot enforce the limit until spawn resolves.
 	runtime.pending += 1;
@@ -292,8 +308,10 @@ async function startJob(
 	let pendingPid: number | null = null;
 	try {
 		let logPath: string;
+		let exitPath: string;
 		try {
 			logPath = join(ensureLogDir(runtime), `${id}.log`);
+			exitPath = join(ensureLogDir(runtime), `${id}.exit`);
 		} catch (error) {
 			return errResult(`Could not create the log directory: ${(error as Error).message}`);
 		}
@@ -306,7 +324,8 @@ async function startJob(
 		const shell = launch.shell;
 		let spawned: SpawnedJob;
 		try {
-			spawned = spawnJob(launch, cwd, fd, id);
+			// The wrapper writes the exit code next to the log, so a Pi that takes the job over at a restart can read it.
+			spawned = spawnJob(withExitFile(launch, exitPath), cwd, fd, id);
 		} catch (error) {
 			discardLog(logPath, fd);
 			return errResult(`Could not spawn ${shell}: ${(error as Error).message}`);
@@ -336,12 +355,16 @@ async function startJob(
 			const cleanup = await stopGroup(pid);
 			recordResidual(runtime, pid, cleanup.cleaned);
 			discardLog(logPath, null);
+			discardLog(exitPath, null);
 			return errResult("The session started shutting down before this job could be registered.");
 		}
 
 		const job: Job = {
 			id,
 			pid,
+			// Read while the job is this process's unreaped child, so the pid cannot belong to anything else yet.
+			pidStart: startIdentity(pid),
+			exitPath,
 			command,
 			title,
 			toolCallId,
@@ -403,26 +426,40 @@ function defer<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 	return { promise, resolve };
 }
 
-async function shutdown(runtime: Runtime): Promise<void> {
-	if (runtime.closing) return;
+/** Stop new work and completions, and let in-flight spawns settle. False when the runtime was already closing. */
+async function beginClosing(runtime: Runtime): Promise<boolean> {
+	if (runtime.closing) return false;
 	runtime.closing = true;
 	runtime.delivery = null;
 	runtime.outbox.clear();
 	runtime.epoch += 1;
 	runtime.widget.detach();
+	stopAdoptPoll(runtime);
 	// Let in-flight spawns either register (where they will see closing and kill
 	// themselves) or abort, so none can slip past the snapshot below.
 	const waitUntil = Date.now() + KILL_WAIT_MS;
 	while (runtime.pending > 0 && Date.now() < waitUntil) await sleep(EXIT_KILL_DELAY_MS);
+	return true;
+}
 
+async function shutdown(runtime: Runtime): Promise<void> {
+	if (await beginClosing(runtime)) await stopEverything(runtime);
+}
+
+async function stopPendingSpawns(runtime: Runtime): Promise<void> {
+	await Promise.all([...runtime.pendingPids].map(async (pid) => {
+		const cleanup = await stopGroup(pid);
+		recordResidual(runtime, pid, cleanup.cleaned);
+	}));
+}
+
+async function stopEverything(runtime: Runtime): Promise<void> {
 	const live = [...runtime.jobs.values()].filter((job) => job.state !== "done");
 	await Promise.all([
-		...[...runtime.pendingPids].map(async (pid) => {
-			const cleanup = await stopGroup(pid);
-			recordResidual(runtime, pid, cleanup.cleaned);
-		}),
+		stopPendingSpawns(runtime),
 		...live.map(async (job) => {
-			const cleanup = await stopGroup(job.pid);
+			// An adopted job whose process is no longer the recorded one is not signalled.
+			const cleanup = mayStop(job) ? await stopGroup(job.pid) : { cleaned: true, denied: false };
 			recordResidual(runtime, job.pid, cleanup.cleaned);
 			const current = runtime.jobs.get(job.id);
 			if (current && current.state !== "done") {
@@ -456,6 +493,57 @@ async function shutdown(runtime: Runtime): Promise<void> {
 	else scheduleResidualReaper(runtime);
 }
 
+/**
+ * The session ends for a restart: write the jobs to the hand-over file and
+ * leave their groups running for the next Pi. The runtime then leaves the
+ * registry, so the exit net does not kill them when this process exits. When
+ * the record cannot be written, the jobs stop as at any other shutdown.
+ */
+async function handOver(runtime: Runtime, session: { file: string; id: string | null }): Promise<void> {
+	if (!(await beginClosing(runtime))) return;
+	await stopPendingSpawns(runtime);
+	const logDir = runtime.logDir;
+	// Finished jobs go too: the next process lists them, reads their logs, and sends a completion still owed.
+	if (logDir === null || runtime.jobs.size === 0) {
+		await stopEverything(runtime);
+		return;
+	}
+	try {
+		writeHandover(getAgentDir(), buildHandover(runtime, logDir, session, Date.now()));
+	} catch (error) {
+		logError("could not write the hand-over for the restart; the jobs stop", error);
+		await stopEverything(runtime);
+		return;
+	}
+	// The next process owns the jobs and the log folder now.
+	runtime.jobs.clear();
+	runtime.finals.clear();
+	runtime.logDir = null;
+	if (runtime.residualPids.size === 0) registry().runtimes.delete(runtime);
+	else scheduleResidualReaper(runtime);
+}
+
+/** Take over a hand-over's jobs: report the ones that ended in the gap, and watch the rest until they end. */
+async function adopt(runtime: Runtime, record: Handover): Promise<void> {
+	runtime.logDir = record.logDir;
+	runtime.counter = record.counter;
+	runtime.abandoned = record.abandoned;
+	const ended: Array<[string, Ending]> = [];
+	for (const job of jobsFromHandover(record, runtime.runtimeId, runtime.epoch)) {
+		if (job.state === "done") {
+			runtime.jobs.set(job.id, job);
+			continue;
+		}
+		const look = firstLook(job, Date.now());
+		runtime.jobs.set(job.id, look.unverified ? { ...job, unverified: true } : job);
+		runtime.finals.set(job.id, defer<Job>());
+		if (look.ending) ended.push([job.id, look.ending]);
+	}
+	for (const [id, ending] of ended) await finalize(runtime, id, ending.code, null, ending);
+	watchAdopted(runtime, (id, ending) => finalize(runtime, id, ending.code, null, ending), logError);
+}
+
+
 /** Test-only introspection; not used by Pi. */
 export const __testing = {
 	getRuntimes: () => registry().runtimes,
@@ -467,6 +555,7 @@ export const __testing = {
 			runtime.widget.detach();
 			if (runtime.residualTimer !== null) clearInterval(runtime.residualTimer);
 			runtime.residualTimer = null;
+			stopAdoptPoll(runtime);
 			if (runtime.logDir !== null) {
 				try {
 					rmSync(runtime.logDir, { recursive: true, force: true });
@@ -702,7 +791,10 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		if (started) return;
 		started = true;
 		const retained = event.reason === "reload" ? takeReload(ctx.sessionManager) : undefined;
-		runtime = retained ?? createRuntime(jobsWidget(motion));
+		const handedOver = retained ? undefined : claimForSession(getAgentDir(), event.reason, sessionFacts(ctx), logError);
+		// Jobs that a failed restart left with no owner stop here, a day later, as a quit would have stopped them.
+		if (!retained) sweepHandovers(getAgentDir(), Date.now(), logError).catch((error: unknown) => logError("hand-over sweep failed", error));
+		runtime = retained ?? createRuntime(jobsWidget(motion), handedOver?.runtimeId);
 		// Refresh the UI implementation without moving process ownership or callbacks.
 		if (retained) runtime.widget = jobsWidget(motion);
 		active = true;
@@ -715,6 +807,13 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		const widget = runtime.widget;
 		runtime.widget = { ...widget, update() { widget.update(); publishBackground(); } };
 		publishBackground();
+		if (handedOver) {
+			try {
+				await adopt(runtime, handedOver);
+			} catch (error) {
+				logError("could not take over the jobs from before the restart", error);
+			}
+		}
 		const delivery = attachDelivery(runtime, pi);
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui : null;
 		if (ctx.hasUI) {
@@ -768,6 +867,12 @@ export default function shellJobs(pi: ExtensionAPI): void {
 			parkForReload(ctx.sessionManager, parked, () => {
 				shutdown(parked).catch((error: unknown) => logError("parked runtime shutdown failed", error));
 			});
+			return;
+		}
+		// Pi reports a restart as a quit; auto-update's intent tells the two apart.
+		const facts = sessionFacts(ctx);
+		if (event.reason === "quit" && facts.sessionFile !== undefined && restartPending(facts.sessionFile)) {
+			await handOver(runtime, { file: facts.sessionFile, id: facts.sessionId ?? null });
 			return;
 		}
 		await shutdown(runtime);

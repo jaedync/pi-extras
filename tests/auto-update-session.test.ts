@@ -8,7 +8,7 @@ import { LOCK_STALE_MS } from "../lib/auto-update/cycle.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { decide, idleFor, selectorOpen, MAX_ATTEMPTS, QUIET_MS, USER_BASH_MAX_MS, userBashRunning, type AdoptInput, type IdleSignals } from "../lib/auto-update/adopt.ts";
+import { backgroundBlocksRestart, decide, idleFor, selectorOpen, MAX_ATTEMPTS, QUIET_MS, USER_BASH_MAX_MS, userBashRunning, type AdoptInput, type IdleSignals } from "../lib/auto-update/adopt.ts";
 import { writeConfig } from "../lib/auto-update/config.ts";
 import { storePaths, type StorePaths } from "../lib/auto-update/paths.ts";
 import { APPLY_COMMAND, UPDATE_ENTRY, UpdateSession, type SessionHost, type UpdateEntryData } from "../lib/auto-update/session.ts";
@@ -18,6 +18,7 @@ import { emptyState, readState, writeState, type UpdateSet, type UpdateState } f
 import { collectGarbage } from "../lib/auto-update/gc.ts";
 import { readLiveLeases } from "../lib/auto-update/leases.ts";
 import { flipPiCurrent } from "../lib/auto-update/switch.ts";
+import { clearRestart, restartPending } from "../lib/restart-intent.ts";
 import { removeTree } from "./support/auto-update-fixtures.ts";
 
 void APPLY_COMMAND;
@@ -44,6 +45,14 @@ test("idle: every signal blocks a move; background work blocks only a restart", 
 	assert.equal(idleFor("reload", { ...IDLE, now: QUIET_MS - 1 }), false, "activity in the last 30 s");
 	assert.equal(idleFor("reload", { ...IDLE, background: true }), true, "shell jobs and subagents survive a reload");
 	assert.equal(idleFor("restart", { ...IDLE, background: true }), false, "a restart ends them");
+});
+
+test("background work that blocks a restart: subagents do, shell jobs do not (they hand over to the next Pi)", () => {
+	assert.equal(backgroundBlocksRestart(new Map()), false);
+	assert.equal(backgroundBlocksRestart(new Map([["shell-jobs", 3]])), false, "shell jobs survive a restart");
+	assert.equal(backgroundBlocksRestart(new Map([["subagents", 1]])), true, "subagents end with the process");
+	assert.equal(backgroundBlocksRestart(new Map([["shell-jobs", 2], ["subagents", 0]])), false);
+	assert.equal(backgroundBlocksRestart(new Map([["shell-jobs", 0], ["subagents", 2]])), true);
 });
 
 test("decide: reload for packages, restart for Pi in the TUI under the launcher, a notice otherwise", () => {
@@ -182,6 +191,7 @@ test("a package update: waits for the switch and for quiet, then reloads, and sa
 	h.clock += QUIET_MS;
 	await session.apply(actions(h));
 	assert.deepEqual(h.calls, ["dispatch", "reload"]);
+	assert.equal(restartPending("/sessions/a.jsonl"), false, "a reload is not a restart");
 	assert.deepEqual(h.entries.map((e) => [e.phase, e.text, e.from]), [["start", "Updating pi-extras 0.29.0 → 0.30.0: reloading", "0.29.0"]]);
 	session.stop("reload");
 	assert.equal(readdirSync(h.paths.leases).length, 1, "a reload keeps the lease");
@@ -210,13 +220,29 @@ test("a Pi update restarts through the launcher: the request file names the sess
 	assert.deepEqual(h.calls, [], "a running shell job or subagent blocks a restart");
 	h.signals = { ...h.signals, background: false };
 	session.poll();
+	clearRestart();
 	await session.apply(actions(h));
 	assert.deepEqual(h.calls, ["dispatch", "shutdown"]);
+	assert.equal(restartPending("/sessions/a.jsonl"), true, "shell jobs learn that this quit is a restart");
+	clearRestart();
 	const target = JSON.stringify(["1.4.1", next(h.paths.root).packages["npm-pi-extras"]!.entry]);
 	assert.equal(readFileSync(join(h.paths.restart, "tok123"), "utf8"), `/sessions/a.jsonl\nUpdated Pi 1.4.0 → 1.4.1\n${target}\n--model\nsonnet:high\n-e\n./my ext.ts\n`);
 	assert.equal(h.entries[0]!.text, "Updating Pi 1.4.0 → 1.4.1: restarting");
 	assert.equal(h.entries[0]!.after, "Updated Pi 1.4.0 → 1.4.1");
 	assert.equal(new Set(JSON.parse(readFileSync(join(h.paths.leases, readdirSync(h.paths.leases)[0]!), "utf8")).releases).size, 1, "no path twice in the lease");
+});
+
+test("a restart whose shutdown throws leaves no restart intent behind, so shell jobs stop at the next quit", async (t) => {
+	const old = (root: string) => set(root, "1.4.0", "0.29.0");
+	const next = (root: string) => set(root, "1.4.1", "0.29.0");
+	const h = harness(t, old, next, { previous: old });
+	const session = new UpdateSession(h.host);
+	session.start("resume");
+	h.clock += QUIET_MS;
+	clearRestart();
+	await assert.rejects(session.apply({ reload: async () => {}, shutdown: () => { throw new Error("no shutdown"); } }), /no shutdown/);
+	assert.equal(restartPending("/sessions/a.jsonl"), false);
+	assert.equal(existsSync(join(h.paths.restart, "tok123")), false);
 });
 
 test("a start entry from an older pi-extras (no from field) still gives the notes range", (t) => {

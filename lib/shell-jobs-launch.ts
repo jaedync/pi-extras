@@ -55,3 +55,17 @@ export function jobEnv(base: NodeJS.ProcessEnv, binDir: string, session: Session
 	for (const [key, value] of Object.entries(values)) if (value) env[key] = value;
 	return env;
 }
+
+/**
+ * The job's shell runs under a small `/bin/sh` that writes the shell's exit
+ * code to `exitPath` (a temp file, then a rename) when it ends. Pi still sees
+ * the code as the wrapper's own, and after a restart the next Pi, which is
+ * not the parent and cannot wait for it, reads the file. The wrapper adds no
+ * output and no signal handling: a signal to the group ends it with the job,
+ * as before, and leaves no file.
+ */
+const EXIT_WRAPPER = 'f=$1; shift; "$@"; c=$?; printf \'%s\\n\' "$c" > "$f.tmp" && mv -f "$f.tmp" "$f"; exit "$c"';
+
+export function withExitFile(launch: Launch, exitPath: string): Launch {
+	return { shell: "/bin/sh", args: ["-c", EXIT_WRAPPER, "pi-shell-job", exitPath, launch.shell, ...launch.args], env: launch.env };
+}
