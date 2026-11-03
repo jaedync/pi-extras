@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { latestReportFile, reportFilePath, savedReport, saveReport, writeReport } from "../lib/subagents/reports.ts";
-import { capReport, REPORT_MAX_CHARS, reportText } from "../lib/subagents/format.ts";
+import { capReport, NOTES_MAX_CHARS, REPORT_MAX_CHARS, reportText } from "../lib/subagents/format.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { commandCompletions } from "../lib/subagents/names.ts";
@@ -85,7 +85,7 @@ test("report save failure logs and keeps today's session-file fallback", (t) => 
 	assert.equal(original.reportFile, "/older.report.md");
 	assert.equal(errors.length, 1);
 	assert.match(errors[0]!, /could not write.*report/);
-	assert.match(reportText(saved, 1_000), /whole report is the last assistant message in/);
+	assert.match(reportText(saved, 1_000), /whole text is in/);
 });
 
 test("every outcome with final text carries a report path and a bounded preview", (t) => {
@@ -97,6 +97,7 @@ test("every outcome with final text carries a report path and a bounded preview"
 		assert.ok(message.includes(`The whole report is in ${saved.reportFile}.`));
 		assert.ok(!message.includes("CRITICAL END"));
 		assert.ok(!message.includes("last assistant message"));
+		assert.ok(!message.includes("whole text is in"));
 		assert.equal(fs.readFileSync(saved.reportFile!, "utf8"), saved.report);
 	}
 	const short = saveReport(record({ sessionFile, runs: 4 }));
@@ -156,7 +157,7 @@ test("a disk failure cannot block the completion delivery or its waiter", async 
 	assert.equal(done.report, full);
 	assert.equal(done.reportFile, undefined);
 	assert.equal(warnings.length, 1);
-	assert.ok(message.includes(`The whole report is the last assistant message in ${sessionFile}.`));
+	assert.ok(message.includes(`The whole text is in ${sessionFile}.`));
 });
 
 test("latest report discovery survives lost in-memory paths and uses numeric run order", (t) => {
@@ -200,6 +201,33 @@ test("preview cuts preserve surrogate pairs and close open Markdown fences", () 
 	const fenced = capReport("```ts\n" + "x".repeat(REPORT_MAX_CHARS), undefined, "/full.report.md");
 	assert.match(fenced, /\n```\n\n\(report cut/);
 	assert.equal((fenced.match(/```/g) ?? []).length % 2, 0);
+});
+
+test("a cut report still carries its later notes", () => {
+	const main = "x".repeat(REPORT_MAX_CHARS + 500);
+	const notes = "\n\nLater note from reviewer:\nThe correction: lib/a.ts:10.";
+	const preview = capReport(main + notes, undefined, "/full.report.md");
+	assert.ok(preview.includes(`(report cut at ${REPORT_MAX_CHARS} characters.`));
+	assert.ok(preview.endsWith("The correction: lib/a.ts:10."), "the notes come after the cut");
+});
+
+test("later notes have a cap of their own", () => {
+	const main = "x".repeat(REPORT_MAX_CHARS + 500);
+	const notes = "\n\nLater note from reviewer:\n" + "y".repeat(NOTES_MAX_CHARS + 100);
+	const preview = capReport(main + notes, undefined, "/full.report.md");
+	assert.ok(preview.includes(`(report cut at ${REPORT_MAX_CHARS} characters.`));
+	assert.ok(preview.includes(`(later notes cut at ${NOTES_MAX_CHARS} characters.`));
+	assert.ok(preview.length < REPORT_MAX_CHARS + NOTES_MAX_CHARS + 200);
+	assert.ok((preview.match(/y/g) ?? []).length <= NOTES_MAX_CHARS);
+});
+
+test("a short report keeps all of its text while its long notes are cut", () => {
+	const main = "Main report.";
+	const notes = "\n\nLater note from reviewer:\n" + "y".repeat(REPORT_MAX_CHARS);
+	const preview = capReport(main + notes, undefined, "/full.report.md");
+	assert.ok(preview.startsWith(main));
+	assert.ok(!preview.includes("(report cut"), "the main part fits");
+	assert.ok(preview.includes(`(later notes cut at ${NOTES_MAX_CHARS} characters.`));
 });
 
 test("resumed failed and stopped runs never reuse the previous assistant's text", async (t) => {
@@ -284,10 +312,10 @@ test("unsupported hard links fall back to exclusive, flushed writes without over
 test("current-run text matches Pi trimming and empty-final-message semantics", async (t) => {
 	const cases = [
 		{ final: { role: "assistant", content: [{ type: "text", text: "  final answer  \n" }] }, expected: "final answer" },
-		{ final: { role: "assistant", content: [] }, expected: undefined },
-		{ final: { role: "assistant", content: [{ type: "thinking", thinking: "done" }] }, expected: undefined },
+		{ final: { role: "assistant", content: [] }, expected: "narration" },
+		{ final: { role: "assistant", content: [{ type: "thinking", thinking: "done" }] }, expected: "narration" },
 		{ final: { role: "assistant", stopReason: "aborted", content: [] }, expected: "narration" },
-		{ final: { role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "  partial  " }] }, expected: "partial" },
+		{ final: { role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "  partial  " }] }, expected: "narration\n\nLater note from review:\npartial" },
 	];
 	for (const item of cases) {
 		let messages: unknown[] = [];

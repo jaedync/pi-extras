@@ -9,18 +9,35 @@ import { formatTokens } from "../status-plus-render.ts";
 import type { RunLimits } from "./budget.ts";
 import { checkLines, checkOf } from "./checks.ts";
 import { MAIN } from "./names.ts";
+import { NOTE_PREFIX } from "./sessions.ts";
 import { type AgentRecord, neverStarted, type Worktree } from "./types.ts";
 import { worktreeFooter } from "./worktree.ts";
 
 export const REPORT_MAX_CHARS = 12_000;
+/** Later notes follow the report's main part and keep a cap of their own. */
+export const NOTES_MAX_CHARS = 4_000;
 
-export function capReport(text: string, sessionFile?: string, reportFile?: string): string {
-	if (text.length <= REPORT_MAX_CHARS) return text;
-	const where = reportFile ? ` The whole report is in ${reportFile}.` : sessionFile ? ` The whole report is the last assistant message in ${sessionFile}.` : "";
-	const end = /[\uD800-\uDBFF]/.test(text[REPORT_MAX_CHARS - 1]!) && /[\uDC00-\uDFFF]/.test(text[REPORT_MAX_CHARS]!) ? REPORT_MAX_CHARS - 1 : REPORT_MAX_CHARS;
+/** `text` cut at `limit` characters, with any Markdown fence it opens closed, then why it stopped. */
+function cutPart(text: string, limit: number, why: string): string {
+	const end = /[\uD800-\uDBFF]/.test(text[limit - 1]!) && /[\uDC00-\uDFFF]/.test(text[limit]!) ? limit - 1 : limit;
 	const preview = text.slice(0, end);
 	const closeFence = (preview.match(/```/g)?.length ?? 0) % 2 === 1 ? "\n```" : "";
-	return `${preview}${closeFence}\n\n(report cut at ${REPORT_MAX_CHARS} characters.${where})`;
+	return `${preview}${closeFence}\n\n(${why})`;
+}
+
+/**
+ * A report as a message to main: its main part, then its later notes, which the
+ * message keeps after a cut, so a correction at the end still reaches main.
+ */
+export function capReport(text: string, sessionFile?: string, reportFile?: string): string {
+	const at = text.indexOf(`\n\n${NOTE_PREFIX}`);
+	const main = at < 0 ? text : text.slice(0, at);
+	const notes = at < 0 ? "" : text.slice(at + 2);
+	if (main.length <= REPORT_MAX_CHARS && notes.length <= NOTES_MAX_CHARS) return text;
+	const where = reportFile ? ` The whole report is in ${reportFile}.` : sessionFile ? ` The whole text is in ${sessionFile}.` : "";
+	const kept = main.length > REPORT_MAX_CHARS ? cutPart(main, REPORT_MAX_CHARS, `report cut at ${REPORT_MAX_CHARS} characters.${where}`) : main;
+	const tail = at < 0 ? "" : `\n\n${notes.length > NOTES_MAX_CHARS ? cutPart(notes, NOTES_MAX_CHARS, `later notes cut at ${NOTES_MAX_CHARS} characters.${where}`) : notes}`;
+	return `${kept}${tail}`;
 }
 
 const replyHint = (from: string) => `answer with message({ to: "${from}", text })`;
