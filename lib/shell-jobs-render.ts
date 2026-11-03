@@ -18,7 +18,8 @@ import { factsOf, jobRow, type JobFacts } from "./shell-jobs-band.ts";
 import { DURATION_PATTERN, formatDuration, sanitizeControl, titlePreview } from "./shell-jobs-core.ts";
 import type { Job } from "./shell-jobs-process.ts";
 
-const TITLE_DURATION_SUFFIX = new RegExp(` after ${DURATION_PATTERN}$`);
+// "Job x ended, exit code unknown, after 3.0s" has a comma before the duration.
+const TITLE_DURATION_SUFFIX = new RegExp(`,? after ${DURATION_PATTERN}$`);
 
 /** Output lines under a collapsed row; the same as Tool Display's bash row. */
 export const PREVIEW_LINES = 4;

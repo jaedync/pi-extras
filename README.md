@@ -143,8 +143,9 @@ newest versions, run `pi update --all`.
 - A session does not move while the agent runs, a message is queued, a
   compaction runs, a dialog or a selector (for example `/model` or
   `/settings`) is open, a `!` command runs, a subagent runs a turn, or the
-  editor has text. A restart also waits for shell jobs and subagents to
-  end. A reload keeps them.
+  editor has text. A restart also waits for subagents to end. A reload
+  keeps them. Shell jobs do not stop a restart: the restarted Pi takes them
+  over (see Shell Jobs).
 - A restart starts Pi again with the options that are safe to repeat (for
   example `--model`, `--thinking`, `--tools`, `-e` and
   `--append-system-prompt`). It does not repeat session options and
@@ -1711,6 +1712,20 @@ to a slow crawl when a log goes quiet. Four jobs fit; the rest give way to
 `+2 more`. Click a job's band to open its live log over the full terminal,
 with the same band at the top and buttons (or `c` and `o`) to copy the
 command and the whole log; Esc, `q` or `✕` closes it.
+
+Jobs continue through a `/reload` and through a restart that auto-update
+does to install a new Pi. At a restart, the old Pi writes the session's jobs
+to a hand-over file (mode 0600, in `<agent dir>/shell-jobs/handover/`). The
+next Pi for the same session takes them over. They show in the widget and in
+`shell_job list`, `logs` and `kill`. Each job sends its completion one time.
+A job that ended while no Pi ran reports when the new Pi starts. A small
+`/bin/sh` wrapper writes each job's exit code to a file next to its log. If
+that file is missing and the process is gone, the completion says "ended,
+exit code unknown". The new Pi signals a job only while its process has the
+start time that was recorded. Thus a reused pid never gets a signal. A
+hand-over file older than 24 hours is dropped, and its processes are left
+alone. Every other end of a session stops the jobs as before: a quit, Ctrl+C,
+`/new`, `/resume` or a fork.
 
 ## Tool Loadout
 

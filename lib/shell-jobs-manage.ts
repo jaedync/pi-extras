@@ -3,6 +3,7 @@
  * both shell-jobs tools return.
  */
 import { stopGroup, recordResidual, jobStatusText, type Job, type Runtime } from "./shell-jobs-process.ts";
+import { mayStop } from "./shell-jobs-adopt.ts";
 import {
 	DETAILS_BUDGET_BYTES,
 	KILL_WAIT_MS,
@@ -112,6 +113,14 @@ export async function recleanFinishedJob(runtime: Runtime, job: Job): Promise<To
 			cleanupError: null,
 		});
 	}
+	// The leader of an adopted job that ended is gone, so nothing confirms the group is still the job's.
+	if (job.adopted === true) {
+		return errResult(`Job ${job.id} finished, and its process group was not signalled again: it was taken over at a restart, and the group cannot be confirmed as the job's. ${job.cleanupError}`, {
+			id: job.id,
+			state: job.state,
+			cleanupError: job.cleanupError,
+		});
+	}
 	// Retry rather than report a tidy stop that never happened.
 	const retry = await stopGroup(job.pid);
 	recordResidual(runtime, job.pid, retry.cleaned);
@@ -132,6 +141,10 @@ export async function recleanFinishedJob(runtime: Runtime, job: Job): Promise<To
 }
 
 export async function stopJob(runtime: Runtime, job: Job): Promise<ToolResult> {
+	// A job taken over at a restart is signalled only while its process is still the one recorded.
+	if (!mayStop(job)) {
+		return errResult(`Job ${job.id} was taken over from the Pi process before a restart, and its process cannot be confirmed as the job's, so it was not signalled. Its completion arrives when it ends.`, { id: job.id, state: job.state });
+	}
 	runtime.jobs.set(job.id, { ...job, claimed: true, state: "stopping" });
 	runtime.widget.update();
 	const cleanup = await stopGroup(job.pid);

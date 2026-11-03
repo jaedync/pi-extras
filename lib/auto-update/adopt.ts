@@ -111,7 +111,7 @@ export interface IdleSignals {
 	readonly promptOpen: boolean;
 	/** A pi-extras subagent runs a turn in this process (lib/idle-gc.ts processBusy). */
 	readonly subagentRun: boolean;
-	/** Shell jobs that have not ended, or subagents that are still live (also when they wait for mail). */
+	/** Background work that a restart would end: subagents that are still live (also when they wait for mail). See backgroundBlocksRestart. */
 	readonly background: boolean;
 	readonly editorEmpty: boolean;
 	/** A user `!` or `!!` command runs (see userBashRunning). A reload or restart would cut it off. */
@@ -122,13 +122,23 @@ export interface IdleSignals {
 
 /**
  * True when the session may move now. Shell jobs and a subagent team survive
- * a reload (both park their runtime and the next module takes it over) but
- * not a restart, which ends the process, so only a restart waits for them.
+ * a reload (both park their runtime and the next module takes it over). A
+ * restart ends the process: subagents end with it, so only a restart waits
+ * for them. Shell jobs survive a restart too (see backgroundBlocksRestart).
  */
 export function idleFor(kind: "reload" | "restart", signals: IdleSignals): boolean {
 	if (!signals.agentIdle || signals.pendingMessages || signals.compacting || signals.promptOpen || signals.subagentRun || signals.userBash) return false;
 	if (!signals.editorEmpty || signals.now - signals.lastActivityAt < QUIET_MS) return false;
 	return kind === "reload" || !signals.background;
+}
+
+/**
+ * Background work, by source, that a restart must wait for. Shell jobs run
+ * in process groups of their own and hand over to the restarted Pi
+ * (lib/shell-jobs-handover.ts), so only subagents count.
+ */
+export function backgroundBlocksRestart(counts: ReadonlyMap<string, number>): boolean {
+	return [...counts].some(([source, count]) => source !== "shell-jobs" && count > 0);
 }
 
 /** A user command that has not ended after this long counts as ended: its end signal was lost (another extension ran it, or it failed early). */

@@ -17,7 +17,7 @@ import { processBusy } from "../lib/idle-gc.ts";
 import { errorText, operationalError } from "../lib/operational-log.ts";
 import { registerSubcommand } from "../lib/pi-extras-command.ts";
 import { BACKGROUND_EVENT, BACKGROUND_REQUEST_EVENT, backgroundWork } from "../lib/tab-status/events.ts";
-import { type BashStart, type FocusView, selectorOpen, userBashRunning } from "../lib/auto-update/adopt.ts";
+import { backgroundBlocksRestart, type BashStart, type FocusView, selectorOpen, userBashRunning } from "../lib/auto-update/adopt.ts";
 import { updateEntryView } from "../lib/auto-update/entry-view.ts";
 import { parseChangelog, type NotesEntry } from "../lib/release-notes.ts";
 import { launcherEnv } from "../lib/auto-update/launcher-env.ts";
@@ -171,7 +171,7 @@ export default function autoUpdate(pi: ExtensionAPI): void {
 					compacting,
 					promptOpen: prompts > 0 || selectorOpen(tui),
 					subagentRun: processBusy(),
-					background: [...background.values()].some((count) => count > 0),
+					background: backgroundBlocksRestart(background),
 					editorEmpty: context.mode !== "tui" || context.ui.getEditorText().trim() === "",
 					userBash: bashRunning(context),
 				}),

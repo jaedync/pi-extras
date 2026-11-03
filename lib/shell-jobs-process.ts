@@ -9,6 +9,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, unlinkSync } from "node:fs";
+import { mayStop } from "./shell-jobs-adopt.ts";
 import { TERM_GRACE_MS } from "./shell-jobs-core.ts";
 import type { JobsWidget } from "./shell-jobs-widget.ts";
 
@@ -42,6 +43,16 @@ export interface Job {
 	 * absent or 0 when there were none (a job parked by an older version has no field).
 	 */
 	readonly stoppedBackground?: number | null;
+	/** The job's process start time, read when it started, to tell it from a later process with the same pid. */
+	readonly pidStart?: string | null;
+	/** Where the exit-code wrapper writes the code; absent for a job an older version started. */
+	readonly exitPath?: string | null;
+	/** Taken over from the Pi process before a restart: not a child of this process. */
+	readonly adopted?: boolean;
+	/** Adopted with no start time to check, so it is never signalled. */
+	readonly unverified?: boolean;
+	/** It ended while no Pi watched it and left no exit code. */
+	readonly codeUnknown?: boolean;
 }
 
 export interface Deferred {
@@ -71,6 +82,8 @@ export interface Runtime {
 	widget: JobsWidget;
 	/** Set while parked for a reload; absent on a runtime an older version parked. */
 	reloadTimer?: ReturnType<typeof setTimeout> | null;
+	/** Checks adopted jobs for their end; set while any runs. */
+	adoptTimer?: ReturnType<typeof setInterval> | null;
 }
 
 interface GlobalRegistry {
@@ -105,9 +118,10 @@ export function registry(): GlobalRegistry {
 	return found;
 }
 
-export function createRuntime(widget: JobsWidget): Runtime {
+/** `runtimeId` is given when the runtime takes over a hand-over: its completions keep the id that history already holds. */
+export function createRuntime(widget: JobsWidget, runtimeId = randomUUID().replace(/-/g, "").slice(0, 12)): Runtime {
 	const runtime: Runtime = {
-		runtimeId: randomUUID().replace(/-/g, "").slice(0, 12),
+		runtimeId,
 		jobs: new Map(), finals: new Map(), pendingPids: new Set(), residualPids: new Set(),
 		outbox: new Set(), delivery: null, abandoned: 0, residualTimer: null,
 		logDir: null, counter: 0, epoch: 0, pending: 0, closing: false, widget,
@@ -153,6 +167,7 @@ export function parkForReload(session: object, runtime: Runtime, abandon: () => 
 export function jobStatusText(job: Job): string {
 	if (job.code !== null) return `exit ${job.code}`;
 	if (job.signal !== null) return `signal ${job.signal}`;
+	if (job.codeUnknown === true && job.state === "done") return "exit code unknown";
 	return job.state;
 }
 
@@ -258,7 +273,7 @@ export function installExitNet(): void {
 	process.on("exit", () => {
 		for (const runtime of reg.runtimes) {
 			for (const job of runtime.jobs.values()) {
-				if (job.state !== "done") killQuietly(job.pid);
+				if (job.state !== "done" && mayStop(job)) killQuietly(job.pid);
 			}
 			for (const pid of runtime.pendingPids) killQuietly(pid);
 			for (const pid of runtime.residualPids) killQuietly(pid);

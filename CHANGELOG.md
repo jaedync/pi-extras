@@ -2,6 +2,24 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Changed
+
+- Shell Jobs: background jobs continue through a Pi restart that
+  auto-update does to install a new Pi. The old Pi writes the jobs to a
+  hand-over file (mode 0600). The next Pi for the same session takes them
+  over, and each job sends its completion one time. A job that ended during
+  the restart reports when the new Pi starts. A job with no exit code
+  reports "ended, exit code unknown". The new Pi signals a job only while
+  its process start time agrees with the recorded one. A hand-over older
+  than 24 hours is dropped. A quit, Ctrl+C, `/new`, `/resume` or a fork
+  still stops the jobs.
+- Each shell job now runs under a small `/bin/sh` wrapper that writes its
+  exit code to a file next to its log.
+- Auto-update: a restart for a new Pi no longer waits for shell jobs.
+  It still waits for subagents.
+
 ## 0.38.8 - 2026-11-02
 
 ### Fixed
