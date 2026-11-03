@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
-import { sampleTimes, sheetColumns } from "../lib/link-context/media/frames.ts";
+import { extractFrames, sampleTimes, sheetColumns, type ComposeRequest } from "../lib/link-context/media/frames.ts";
 import { sniffImage } from "../lib/link-context/media/image-bytes.ts";
 import { fetchImages, imageLink, imageLinks, prepareImage, sized } from "../lib/link-context/media/images.ts";
 import { asrPlan, bgutilDue, ensureAsr, ensureMedia, HELPER, NPM_CI_ARGS, nodePath, packagesDue, PACKAGES, readState, toolEnv, installEnv, writeState } from "../lib/link-context/media/provision.ts";
@@ -14,6 +14,7 @@ import { gifHeader, jpegHeader, png, pngClaiming, webpHeader } from "./support/i
 import { fakeMediaTools } from "./support/fake-media-tools.ts";
 import { runHelper } from "../lib/link-context/media/run.ts";
 import { context } from "./support/link-fetch.ts";
+import type { Pulled } from "../lib/link-context/types.ts";
 
 test("frame times are spread evenly and centred in their slots", () => {
 	assert.deepEqual(sampleTimes(0, 120, 4), [15, 45, 75, 105]);
@@ -21,6 +22,69 @@ test("frame times are spread evenly and centred in their slots", () => {
 	assert.equal(sampleTimes(0, 100, 500).length, 48);
 	assert.deepEqual(sampleTimes(5, 5, 3), [5]);
 	assert.deepEqual([1, 4, 5, 6, 7, 12].map(sheetColumns), [1, 4, 3, 3, 4, 4]);
+});
+
+/** A stand-in ffmpeg: it notes how many cuts run at once, waits longer for earlier frames, and writes its seek time as the frame. */
+function stubFfmpeg(dir: string, failAt?: string): string {
+	const bin = join(dir, "ffmpeg");
+	const running = join(dir, "running");
+	mkdirSync(running);
+	writeFileSync(bin, `#!/bin/sh
+ss=$7
+for last; do :; done
+touch "${running}/$$"
+ls "${running}" | wc -l >> "${dir}/counts"
+${failAt ? `if [ "$ss" = "${failAt}" ]; then rm -f "${running}/$$"; echo "bad frame" >&2; exit 1; fi` : ""}
+sleep $(awk "BEGIN { print (10 - $ss) / 25 }")
+printf '%s' "$ss" > "$last"
+rm -f "${running}/$$"
+`, { mode: 0o755 });
+	return bin;
+}
+
+test("frames are cut at most 4 at a time and keep their order", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "link-frames-"));
+	try {
+		const bin = stubFfmpeg(dir);
+		const sources = [1, 2, 3, 4, 5, 6, 7, 8].map((at) => ({ video: "/v.mp4", at, offset: 0 }));
+		const requests: ComposeRequest[] = [];
+		const compose = async (request: ComposeRequest) => {
+			requests.push(request);
+			writeFileSync(String(request.out), request.frames.map((frame) => readFileSync(frame.path, "utf8")).join(","));
+		};
+		const result = await extractFrames(bin, sources, join(dir, "out"), compose);
+		const counts = readFileSync(join(dir, "counts"), "utf8").trim().split("\n").map(Number);
+		assert.equal(counts.length, 8);
+		assert.equal(Math.max(...counts), 4, `cuts at once: ${counts.join(" ")}`);
+		assert.deepEqual(result.files.map((file) => file.replace(/^.*\//, "")), [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `frame-0${n}-0m0${n}s.jpg`));
+		assert.deepEqual(requests[0].frames.map((frame) => frame.label), ["0:01", "0:02", "0:03", "0:04", "0:05", "0:06", "0:07", "0:08"]);
+		assert.equal(Buffer.from(result.images[0].data, "base64").toString(), "1,2,3,4,5,6,7,8", "each frame file holds its own time");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a failed cut stops the other cuts and fails with its own error", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "link-frames-"));
+	try {
+		const bin = stubFfmpeg(dir, "2");
+		const sources = [1, 2, 3, 4, 5, 6, 7, 8].map((at) => ({ video: "/v.mp4", at, offset: 0 }));
+		await assert.rejects(extractFrames(bin, sources, join(dir, "out"), async () => {}), /ffmpeg failed: bad frame/);
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		assert.ok(readFileSync(join(dir, "counts"), "utf8").trim().split("\n").length < 8, "no new cut starts after a failure");
+		assert.deepEqual(readdirSync(join(dir, "out")), [], "the cuts that ran beside it were stopped");
+		const aborted = join(dir, "aborted");
+		mkdirSync(aborted);
+		const controller = new AbortController();
+		const stopped = extractFrames(stubFfmpeg(aborted), sources, join(aborted, "out"), async () => {}, controller.signal);
+		setTimeout(() => controller.abort(), 100);
+		await assert.rejects(stopped, /abort/i);
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		assert.equal(readFileSync(join(aborted, "counts"), "utf8").trim().split("\n").length, 4, "no cut starts after the abort");
+		assert.deepEqual(readdirSync(join(aborted, "out")), [], "the started cuts were stopped");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("X photos are asked for at the medium size", () => {
@@ -117,7 +181,7 @@ test("video: captions first, then speech-to-text, then frames; results are reuse
 		const deps = fakeDeps(home, { info: { id: "abcdefghijk", title: "Vid", extractor_key: "Youtube", duration: 60, has_video: true }, captions: { segments: [], errors: ["no captions"] }, asr: { source: "speech-to-text", language: "en", segments: [{ start: 1, end: 2, text: "Spoken." }] }, ffmpeg: { path: "/ff" } }, seen);
 		const ctx = context(fetch, { transcript: true, frames: 2, images: true });
 		const pulled = await pullVideo("https://www.youtube.com/watch?v=abcdefghijk", "youtube", ctx, deps);
-		assert.deepEqual(seen.log, ["info", "captions", "download", "asr", "download", "ffmpeg"]);
+		assert.deepEqual(seen.log, ["info", "captions", "download", "asr", "ffmpeg", "download"], "the ffmpeg lookup starts before the clip download");
 		assert.doesNotMatch(pulled.markdown, /thumbnail/, "frames make the thumbnail redundant");
 		assert.equal(pulled.images?.length, 2);
 		const textOnly = await pullVideo("https://www.youtube.com/watch?v=abcdefghijk", "youtube", context(fetch, { transcript: true, images: true }), deps);
@@ -517,6 +581,112 @@ test("video: two pulls of one link at the same time each get the download, and o
 		assert.deepEqual(readdirSync(pullFolder).filter((name) => name.startsWith("video-")), ["video-h720-all"]);
 		const kept = JSON.parse(readFileSync(join(pullFolder, "video-h720-all", "files.json"), "utf8")) as { path: string }[];
 		assert.ok(kept.every((file) => existsSync(file.path) && file.path.startsWith(join(pullFolder, "video-h720-all"))));
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
+/** Collects unhandled rejections while `body` runs, and a little after. */
+async function noUnhandled(body: () => Promise<void>): Promise<unknown[]> {
+	const unhandled: unknown[] = [];
+	const onUnhandled = (reason: unknown) => unhandled.push(reason);
+	process.on("unhandledRejection", onUnhandled);
+	try {
+		await body();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	} finally {
+		process.off("unhandledRejection", onUnhandled);
+	}
+	return unhandled;
+}
+
+test("video: the early ffmpeg lookup reports its own error, and never a dangling one when the clips fail", async () => {
+	const home = mkdtempSync(join(tmpdir(), "link-ffmpeg-"));
+	try {
+		const base = fakeDeps(home, { info: { title: "Clip", has_video: true } });
+		const failing = (clips: boolean) => (async (tools: never, command: string, request: Record<string, unknown>, options: never) => {
+			if (command === "ffmpeg") {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				throw new Error("no ffmpeg here");
+			}
+			if (clips && command === "download") throw new Error("clips failed");
+			return base.run(tools, command, request, options);
+		}) as VideoDeps["run"];
+		let both: Pulled | undefined;
+		const unhandled = await noUnhandled(async () => {
+			both = await pullVideo("https://e.test/a.mp4", "file", context(fetch, { transcript: false, comments: 0, at: [30] }), { ...base, run: failing(true) });
+		});
+		assert.deepEqual(unhandled, []);
+		assert.match(both?.markdown ?? "", /Frames failed: clips failed/, "the clip error wins, as before");
+		const lookup = await pullVideo("https://e.test/b.mp4", "file", context(fetch, { transcript: false, comments: 0, at: [30] }), { ...base, run: failing(false) });
+		assert.match(lookup.markdown, /Frames failed: no ffmpeg here/);
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
+test("video: the thumbnail downloads while the transcript is read, and still comes first", async () => {
+	const home = mkdtempSync(join(tmpdir(), "link-thumb-"));
+	try {
+		const info = { id: "abcdefghijk", title: "Vid", extractor_key: "Youtube", duration: 60, has_video: true };
+		const base = fakeDeps(home, { info, captions: { segments: [{ start: 1, end: 2, text: "Said." }] } });
+		let thumbAsked!: () => void;
+		const thumbSeen = new Promise<void>((resolve) => (thumbAsked = resolve));
+		let captionsAsked!: () => void;
+		const captionsSeen = new Promise<void>((resolve) => (captionsAsked = resolve));
+		const within = (gate: Promise<void>) => Promise.race([gate.then(() => true), new Promise<false>((resolve) => setTimeout(resolve, 1000, false).unref())]);
+		const deps: VideoDeps = {
+			...base,
+			run: (async (tools: never, command: string, request: Record<string, unknown>, options: never) => {
+				if (command === "captions") {
+					captionsAsked();
+					await within(thumbSeen);
+				}
+				return base.run(tools, command, request, options);
+			}) as VideoDeps["run"],
+			images: (async (urls: readonly string[], options) => {
+				thumbAsked();
+				// One after the other, the thumbnail gives up as a failed download does: no image.
+				return (await within(captionsSeen)) ? base.images(urls, options) : [];
+			}) as VideoDeps["images"],
+		};
+		const pulled = await pullVideo("https://www.youtube.com/watch?v=abcdefghijk", "youtube", context(fetch, { transcript: true, images: true, comments: 0 }), deps);
+		assert.deepEqual(pulled.images?.map((i) => i.data), ["TT=="]);
+		assert.match(pulled.markdown, /_The first image is the thumbnail\._\n\n## Transcript\n\n\[0:01\] Said\./);
+		// A thumbnail that does not load leaves the read whole.
+		const none = await pullVideo("https://www.youtube.com/watch?v=abcdefghijk", "youtube", context(fetch, { transcript: true, images: true, comments: 0 }), { ...base, images: async () => [] });
+		assert.equal(none.images?.length ?? 0, 0);
+		assert.doesNotMatch(none.markdown, /thumbnail/);
+		assert.match(none.markdown, /## Transcript/);
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
+test("video: an abort during the transcript leaves no dangling thumbnail rejection", async () => {
+	const home = mkdtempSync(join(tmpdir(), "link-thumb-abort-"));
+	try {
+		const base = fakeDeps(home, { info: { id: "abcdefghijk", title: "Vid", extractor_key: "Youtube", duration: 60, has_video: true } });
+		const controller = new AbortController();
+		const deps: VideoDeps = {
+			...base,
+			run: (async (tools: never, command: string, request: Record<string, unknown>, options: never) => {
+				if (command === "captions") {
+					controller.abort(new Error("stopped by the user"));
+					throw new Error("captions stopped");
+				}
+				return base.run(tools, command, request, options);
+			}) as VideoDeps["run"],
+			images: (async () => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				throw new Error("thumbnail stopped");
+			}) as VideoDeps["images"],
+		};
+		const unhandled = await noUnhandled(async () => {
+			await assert.rejects(pullVideo("https://www.youtube.com/watch?v=abcdefghijk", "youtube", { ...context(fetch, { transcript: true, images: true, comments: 0 }), signal: controller.signal }, deps), /stopped/);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+		});
+		assert.deepEqual(unhandled, []);
 	} finally {
 		rmSync(home, { recursive: true, force: true });
 	}

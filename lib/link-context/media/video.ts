@@ -352,8 +352,11 @@ class VideoJob {
 	}
 
 	async frames(info: VideoInfo, times: readonly number[], name: string): Promise<FrameResult> {
+		// The lookup runs while the clips download; a no-op catch keeps it handled when the clips fail first.
+		const lookup = this.run<{ path: string }>("ffmpeg", {}, 60_000);
+		lookup.catch(() => {});
 		const sources = await this.sources(info, times);
-		const ffmpeg = (await this.run<{ path: string }>("ffmpeg", {}, 60_000)).path;
+		const ffmpeg = (await lookup).path;
 		this.ctx.progress("cutting frames");
 		const compose = (request: object) => this.run("compose", { ...request }, 120_000);
 		return this.deps.frames(ffmpeg, sources, join(this.dir, name), compose, this.ctx.signal);
@@ -436,14 +439,17 @@ export async function pullVideo(url: string, site: string, ctx: AdapterContext, 
 	let files: string[] | undefined;
 	// Frames show the video already; the thumbnail is for a text-only call.
 	const thumbnail = !at.length && !ctx.options.frames && ctx.options.images ? thumbnailUrl(info) : undefined;
-	if (thumbnail) {
-		const [image] = await deps.images([thumbnail], { signal: ctx.signal, fetcher: ctx.fetcher });
+	// The thumbnail downloads while the transcript is read; a no-op catch keeps it handled when the transcript throws first.
+	const thumbnailImages = thumbnail ? deps.images([thumbnail], { signal: ctx.signal, fetcher: ctx.fetcher }) : undefined;
+	thumbnailImages?.catch(() => {});
+	const transcript = ctx.options.transcript ? await transcriptSection(job, info, ctx) : undefined;
+	if (thumbnailImages) {
+		const [image] = await thumbnailImages;
 		if (image) {
 			images.push(image);
 			parts[0] += "\n\n_The first image is the thumbnail._";
 		}
 	}
-	const transcript = ctx.options.transcript ? await transcriptSection(job, info, ctx) : undefined;
 	if (transcript) parts.push(transcript.text);
 	if (at.length && ctx.options.frames > 0) notes.push(`frames: ${ctx.options.frames} was ignored, because at names the times.`);
 	if ((at.length || ctx.options.frames > 0) && info.blocked) notes.push("Frames need a download, which YouTube refused.");

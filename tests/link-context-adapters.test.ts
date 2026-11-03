@@ -155,6 +155,29 @@ test("GitHub: issues with comments, and unknown pages left to the web adapter", 
 	assert.equal(tree.calls[0].url, "https://api.github.com/repos/o/r/contents/user%3Fx?ref=main", "dot segments are dropped and the rest encoded");
 });
 
+test("GitHub: a repository root reads its data and README at the same time", async () => {
+	let readmeAsked!: () => void;
+	const readmeSeen = new Promise<void>((resolve) => (readmeAsked = resolve));
+	const info = { full_name: "o/r", description: "A tool", stargazers_count: 3, language: "TypeScript", html_url: "https://github.com/o/r" };
+	// The repository data waits until the README is asked for; one after the other, it times out.
+	const route = (readme: Response | undefined, repo: () => Response): Route => (url) => {
+		if (url.endsWith("/repos/o/r/readme")) {
+			readmeAsked();
+			return readme ?? new Response("not found", { status: 404 });
+		}
+		if (!url.endsWith("/repos/o/r")) return undefined;
+		return Promise.race([readmeSeen.then(() => true), new Promise<false>((resolve) => setTimeout(resolve, 1000, false))]).then((overlap) => (overlap ? repo() : new Response("README was not asked for in parallel", { status: 500 })));
+	};
+	const { fetcher, calls } = fakeFetch(route(new Response("# Hello\n\nreadme text"), () => Response.json(info)));
+	const pulled = await pullGithub("o", "r", [], context(fetcher));
+	assert.equal(pulled.title, "o/r");
+	assert.match(pulled.markdown, /^# o\/r\nA tool\n3 stars · TypeScript\n\n## README\n\n# Hello\n\nreadme text$/);
+	assert.deepEqual(calls.map((c) => c.url), ["https://api.github.com/repos/o/r", "https://api.github.com/repos/o/r/readme"]);
+	const bare = await pullGithub("o", "r", [], context(fakeFetch(route(undefined, () => Response.json(info))).fetcher));
+	assert.match(bare.markdown, /## README\n\n\(no README\)$/, "a missing README is not an error");
+	await assert.rejects(pullGithub("o", "r", [], context(fakeFetch(route(undefined, () => new Response("gone", { status: 404 }))).fetcher)), /404/);
+});
+
 test("web pages: main text without navigation, metadata on top", () => {
 	const page = `<html><head><title>T</title><meta property="og:site_name" content="Site"><meta name="author" content="Ann"><meta property="og:description" content="Summary here"></head><body><nav>Menu</nav><article><h1>Head</h1><p>Body text.</p><aside>ad</aside></article><footer>foot</footer></body></html>`;
 	assert.equal(mainText(page), "# Head\n\nBody text.");

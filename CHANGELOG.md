@@ -2,6 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Changed
+
+- Pull Link: more work runs at the same time, so reads finish sooner. A
+  GitHub repository link reads its data and its README together. A post's
+  photos download while its attached video is read. Video frames are cut up
+  to 4 at a time, in the same order as before. The ffmpeg lookup runs while
+  the clips download, and the thumbnail downloads while the transcript is
+  read. Errors and abort behave as before.
+
 ## 0.38.8 - 2026-11-02
 
 ### Fixed

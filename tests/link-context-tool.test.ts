@@ -71,6 +71,81 @@ test("a post's video is attached only when asked, without the video's own headin
 	assert.equal(withVideo.images?.length, 1);
 });
 
+test("a post's photos download while its attached video is read; photos stay first", async () => {
+	const tweet = { tweet: { text: "look", author: { name: "A", screen_name: "a" }, media: { all: [{ type: "photo", url: "https://pbs.twimg.com/media/p.jpg" }, { type: "video", url: "https://video.twimg.com/v.mp4" }] } } };
+	const { fetcher } = fakeFetch(json("/status/5", tweet));
+	// Each side waits for the other to start; one after the other, the photos time out.
+	const gate = () => {
+		let open!: () => void;
+		const opened = new Promise<void>((resolve) => (open = resolve));
+		return { open, wait: (what: string) => Promise.race([opened, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${what} did not overlap`)), 1000).unref())]) };
+	};
+	const photosStarted = gate();
+	const videoStarted = gate();
+	const base = fakeDeps({}, []);
+	const deps: PullDeps = {
+		video: async (url, site, ctx) => {
+			videoStarted.open();
+			await photosStarted.wait("video");
+			return base.video(url, site, ctx);
+		},
+		images: async (urls, options) => {
+			photosStarted.open();
+			await videoStarted.wait("photos");
+			return base.images(urls, options);
+		},
+	};
+	const pulled = await pull("https://x.com/a/status/5", context(fetcher, { images: true }), deps, true);
+	assert.deepEqual(pulled.images?.map((i) => i.data), ["AA==", "BB=="], "the post's photos first, then the video's frames");
+	assert.match(pulled.markdown, /# Attached video\n\n## Transcript/);
+});
+
+test("a failed photo download leaves no dangling rejection from the attached video", async () => {
+	const tweet = { tweet: { text: "look", author: { name: "A", screen_name: "a" }, media: { all: [{ type: "photo", url: "https://pbs.twimg.com/media/p.jpg" }, { type: "video", url: "https://video.twimg.com/v.mp4" }] } } };
+	const { fetcher } = fakeFetch(json("/status/5", tweet));
+	const unhandled: unknown[] = [];
+	const onUnhandled = (reason: unknown) => unhandled.push(reason);
+	process.on("unhandledRejection", onUnhandled);
+	try {
+		const controller = new AbortController();
+		let videoDone!: () => void;
+		const videoSettled = new Promise<void>((resolve) => (videoDone = resolve));
+		const deps: PullDeps = {
+			video: async () => {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				videoDone();
+				throw new Error("video stopped");
+			},
+			images: async () => {
+				controller.abort(new Error("stopped by the user"));
+				throw new Error("photos stopped");
+			},
+		};
+		await assert.rejects(pull("https://x.com/a/status/5", { ...context(fetcher, { images: true }), signal: controller.signal }, deps, true), /photos stopped/);
+		await Promise.race([videoSettled, new Promise((resolve) => setTimeout(resolve, 200))]);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.deepEqual(unhandled, []);
+		// Without an abort from the caller, the failed photos still stop the video read.
+		let stopped: boolean | undefined;
+		const quiet: PullDeps = {
+			video: async (_url, _site, ctx) => {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				stopped = ctx.signal?.aborted;
+				throw new Error("video stopped");
+			},
+			images: async () => {
+				throw new Error("photos failed");
+			},
+		};
+		await assert.rejects(pull("https://x.com/a/status/5", context(fetcher, { images: true }), quiet, true), /photos failed/);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		assert.equal(stopped, true, "the video read sees the stop");
+		assert.deepEqual(unhandled, []);
+	} finally {
+		process.off("unhandledRejection", onUnhandled);
+	}
+});
+
 test("photos are attached first; a non-Mastodon host falls back to the web page", async () => {
 	const { fetcher } = fakeFetch(json("/api/v1/statuses/123456", { error: "Record not found" }, 404), html("blog.test/@me/123456", "<title>Blog</title><article><p>words</p></article>"));
 	const pulled = await pull("https://blog.test/@me/123456", context(fetcher), fakeDeps({}, []));

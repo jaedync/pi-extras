@@ -65,8 +65,11 @@ async function issue(owner: string, repo: string, number: string, ctx: AdapterCo
 
 async function repository(owner: string, repo: string, ctx: AdapterContext): Promise<Pulled> {
 	const gh = ghFetch(ctx);
-	const info = await gh.json<{ full_name?: string; description?: string; stargazers_count?: number; forks_count?: number; language?: string; topics?: string[]; html_url?: string; pushed_at?: string; license?: { spdx_id?: string } }>(`/repos/${owner}/${repo}`);
-	const readme = await gh.raw(`/repos/${owner}/${repo}/readme`).catch(() => "");
+	// Both start at once; the README never rejects, so a failed data read leaves nothing dangling.
+	const [info, readme] = await Promise.all([
+		gh.json<{ full_name?: string; description?: string; stargazers_count?: number; forks_count?: number; language?: string; topics?: string[]; html_url?: string; pushed_at?: string; license?: { spdx_id?: string } }>(`/repos/${owner}/${repo}`),
+		gh.raw(`/repos/${owner}/${repo}/readme`).catch(() => ""),
+	]);
 	const facts = [stats([["stars", info.stargazers_count], ["forks", info.forks_count]]), info.language, info.license?.spdx_id, info.pushed_at ? `last push ${isoDate(info.pushed_at)}` : undefined].filter(Boolean).join(" · ");
 	const topics = info.topics?.length ? `\nTopics: ${info.topics.join(", ")}` : "";
 	return { platform: "github", title: info.full_name ?? `${owner}/${repo}`, url: info.html_url ?? `https://github.com/${owner}/${repo}`, markdown: `# ${info.full_name}\n${info.description ?? ""}\n${facts}${topics}\n\n## README\n\n${clip(readme, MAX_FILE_CHARS) || "(no README)"}`, summary: [info.description ?? "", facts].map(plainLine).filter(Boolean) };

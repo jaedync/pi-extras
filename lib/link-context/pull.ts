@@ -80,11 +80,22 @@ export async function pull(raw: string, ctx: AdapterContext, deps: PullDeps = DE
 		pulled = await pullWeb(url.href, ctx);
 	}
 	const photos = [...new Set([...(pulled.photos ?? []), ...(LINKED_IMAGES.has(pulled.platform) ? imageLinks(pulled.markdown) : [])])];
-	if (ctx.options.images && photos.length) {
-		const images = await deps.images(photos, { fetcher: ctx.fetcher, signal: ctx.signal });
-		if (target.kind === "image" && !images.length) throw new Error(UNLOADABLE_IMAGE);
-		if (images.length) pulled = { ...pulled, images: [...images, ...(pulled.images ?? [])] };
+	// The attached video is read while the photos download. If the photos fail, the video read is stopped,
+	// and a no-op catch keeps its rejection handled.
+	const stopVideo = new AbortController();
+	const videoCtx = { ...ctx, signal: ctx.signal ? AbortSignal.any([ctx.signal, stopVideo.signal]) : stopVideo.signal };
+	const video = target.kind !== "video" && wantsVideo ? attachVideo(pulled, videoCtx, deps) : undefined;
+	video?.catch(() => {});
+	let images: Awaited<ReturnType<PullDeps["images"]>> | undefined;
+	try {
+		images = ctx.options.images && photos.length ? await deps.images(photos, { fetcher: ctx.fetcher, signal: ctx.signal }) : undefined;
+		if (images && target.kind === "image" && !images.length) throw new Error(UNLOADABLE_IMAGE);
+	} catch (error) {
+		stopVideo.abort();
+		throw error;
 	}
-	if (target.kind !== "video" && wantsVideo) pulled = await attachVideo(pulled, ctx, deps);
+	if (video) pulled = await video;
+	// The photos come first, before the post's own images and the video's frames.
+	if (images?.length) pulled = { ...pulled, images: [...images, ...(pulled.images ?? [])] };
 	return pulled;
 }

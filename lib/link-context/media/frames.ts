@@ -18,6 +18,8 @@ const SINGLE_LIMIT = 4;
 const SINGLE_WIDTH = 1280;
 const FULL_WIDTH = 1280;
 const TILE_WIDTH = 384;
+/** ffmpeg children that cut frames at the same time. */
+const CUT_JOBS = 4;
 
 export interface ComposeRequest {
 	readonly mode: "singles" | "sheet";
@@ -69,13 +71,27 @@ export interface FrameSource {
 
 export async function extractFrames(binary: string, sources: readonly FrameSource[], dir: string, compose: Compose, signal?: AbortSignal): Promise<FrameResult> {
 	mkdirSync(dir, { recursive: true });
-	const files: string[] = [];
 	const times = sources.map((source) => source.at);
-	for (const [i, source] of sources.entries()) {
-		const file = join(dir, `frame-${String(i + 1).padStart(2, "0")}-${clock(source.at).replace(/:/g, "m")}s.jpg`);
-		await ffmpeg(binary, ["-ss", String(Math.max(0, source.at - source.offset)), "-protocol_whitelist", "file", "-i", source.video, "-frames:v", "1", "-q:v", "3", "-vf", `scale='min(${FULL_WIDTH},iw)':-2`, file], signal);
-		files.push(file);
-	}
+	const files = sources.map((source, i) => join(dir, `frame-${String(i + 1).padStart(2, "0")}-${clock(source.at).replace(/:/g, "m")}s.jpg`));
+	// A small pool: the first failure stops new cuts and kills the running ones, and every child ends before this returns.
+	const stop = new AbortController();
+	const cutSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
+	let next = 0;
+	let failure: { error: unknown } | undefined;
+	const worker = async () => {
+		while (!failure && next < sources.length) {
+			const i = next++;
+			const source = sources[i];
+			try {
+				await ffmpeg(binary, ["-ss", String(Math.max(0, source.at - source.offset)), "-protocol_whitelist", "file", "-i", source.video, "-frames:v", "1", "-q:v", "3", "-vf", `scale='min(${FULL_WIDTH},iw)':-2`, files[i]], cutSignal);
+			} catch (error) {
+				failure ??= { error };
+				stop.abort();
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(CUT_JOBS, sources.length) }, worker));
+	if (failure) throw failure.error;
 	const labelled = files.map((path, i) => ({ path, label: clock(times[i]) }));
 	if (files.length <= SINGLE_LIMIT) {
 		const frames = labelled.map((frame, i) => ({ ...frame, out: join(dir, `.stamped-${i + 1}.jpg`) }));
