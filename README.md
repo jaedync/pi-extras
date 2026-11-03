@@ -717,6 +717,9 @@ until half of the margin before expiry has passed.
 Warming stops when one of these is true:
 
 - No wake is pending and no tool call runs.
+- The model goes through Meridian, unless `warm.meridian` is `true`. Meridian
+  replays the warm as a new session, so the warm does not refresh the main
+  cache entry.
 - `warm.maxHours` (default 8) passed after the last real request.
 - The prompt is smaller than `warm.minTokens` (default 20,000).
 - The warms of this wait would cost more than one cache miss. For a
@@ -731,11 +734,11 @@ Each warm adds a `pi-extras.cache-warm` entry to the session with the
 provider, the model and the usage. Status Plus and the usage limits count it
 in the session's spend and tokens. Each decision adds one JSON line to
 `cache-warm.log` next to `cache-compaction.log`, with the reason, the tokens
-and the cost. It never holds provider text. A warm to Meridian uses the
-`<session>:background` key, as the background summary does, so it does not
-hold the main session's turn lock. Subagents warm as well while they wait for
-their own shell jobs. A subagent that finished has no wake, so it does not
-warm. Pi's own cache warmer stops after 30 minutes idle and needs
+and the cost. It never holds provider text. With `warm.meridian`, a warm to
+Meridian uses the `<session>:background` key, as the background summary does,
+so it does not hold the main session's turn lock. Subagents warm as well while
+they wait for their own shell jobs. A subagent that finished has no wake, so
+it does not warm. Pi's own cache warmer stops after 30 minutes idle and needs
 `promptCache` in `models.json`; this one does not. For the APIs in
 `warm.apis`, the extension tells Pi's cache warmer to stop, so the two do not
 both warm the same request.
@@ -836,7 +839,8 @@ compaction runs, and the log shows `bounded-failed:request` or
       "maxHours": 8,
       "minTokens": 20000,
       "apis": ["anthropic-messages"],
-      "formTools": ["artifact_ask"]
+      "formTools": ["artifact_ask"],
+      "meridian": false
     }
   }
 }
@@ -855,6 +859,9 @@ compaction runs, and the log shows `bounded-failed:request` or
   (default `["anthropic-messages"]`); `formTools`, the tools whose result
   waits for feedback (default `["artifact_ask"]`). A
   name also matches with an MCP prefix, such as `mcp__oc__artifact_ask`.
+  `meridian` (default `false`) lets a warm go through Meridian. Leave it
+  off. The warm key has no lineage there, so Meridian replays each warm as
+  a new session. The main cache entry does not refresh.
 - `idleSeconds`: per provider, how long after the last request the cache
   counts as warm, from 0 to 86400 (0 means never use the cache path). The
   default is 55 minutes for Anthropic through Meridian on port 3456, which

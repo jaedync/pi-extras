@@ -1,5 +1,5 @@
 import { convertToLlm, type ExtensionAPI, type ExtensionContext, type SessionProjection } from "@earendil-works/pi-coding-agent";
-import { fallbackReason, fingerprint, mergePayload, reconcile, type Config, type RequestEffort, type RequestIdentity, type Snapshot } from "./core.ts";
+import { fallbackReason, fingerprint, isMeridian, mergePayload, reconcile, type Config, type RequestEffort, type RequestIdentity, type Snapshot } from "./core.ts";
 import { backgroundHeaders } from "./background.ts";
 import { ARTIFACT_FEEDBACK, CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WARM_MAX_TOKENS, WakeSet, artifactWakes, cacheLifetimeMs, feedbackIds, formWakeKey, openFormWakes, payloadThinkingBudget, readWakePending, retryAt, warmCostEstimate, warmDelayMs, warmStop } from "./warm.ts";
 import { BACKGROUND_EVENT, BACKGROUND_REQUEST_EVENT, backgroundWork } from "../tab-status/events.ts";
@@ -115,6 +115,8 @@ export function createWarmer(d: WarmerDeps): Warmer {
 			const changed = fallbackReason({ enabled: true, captured, model, sessionId: context.sessionManager.getSessionId(), now: d.now(), idleMs: Infinity, reason: "warm", aborted: false });
 			if (changed) return stop(changed);
 			if (!policy.warm.apis.includes(model.api)) return stop("api");
+			// Meridian keeps no cache lineage for the background key, so each warm is a fresh replay.
+			if (isMeridian(model) && !policy.warm.meridian) return stop("meridian");
 			const projection = context.sessionManager.buildSessionProjection();
 			if (reconcile(captured, context.sessionManager.getBranch().map((entry) => entry.id), projection.messages, projection.messages.map(fingerprint)) === undefined) return stop("branch-changed");
 			tokens = promptTokens(context);
