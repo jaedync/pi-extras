@@ -372,7 +372,13 @@ export class UpdateSession {
 	/** The watchdog fired: restart through the launcher when possible, else tell the user. True when Pi was asked to quit. */
 	private reloadStuck(actions: { readonly shutdown: () => void }, target: string, after: string): boolean {
 		this.host.log(`reload to ${target} did not finish in ${RELOAD_STUCK_MS / 1000} s: an extension's session_shutdown handler does not end`);
-		const request = this.host.mode === "tui" ? this.requestRestart(target, after) : undefined;
+		let request: string | undefined;
+		try {
+			request = this.host.mode === "tui" ? this.requestRestart(target, after) : undefined;
+		} catch (error) {
+			clearRestart();
+			this.host.log(`could not write the restart request: ${error instanceof Error ? error.message : String(error)}`);
+		}
 		if (request === undefined) {
 			this.warn(STUCK_QUIT);
 			return false;

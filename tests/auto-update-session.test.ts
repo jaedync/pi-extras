@@ -700,3 +700,16 @@ test("a reload that ends after the watchdog fired, when shutdown threw: no timer
 	advance(h, SHUTDOWN_STUCK_MS);
 	assert.deepEqual(h.exits, []);
 });
+
+test("a stuck reload whose restart request cannot be written: still a warning, and no shutdown", async (t) => {
+	const { h, session } = reloadReady(t);
+	// A file where the restart folder must be: mkdir fails.
+	writeFileSync(h.paths.restart, "");
+	void session.apply(stuck(h, () => new Promise(() => {})));
+	advance(h, RELOAD_STUCK_MS + SHUTDOWN_STUCK_MS);
+	assert.deepEqual(h.levels, ["warning"]);
+	assert.match(h.notices[0]!, /Quit Pi and start it again/);
+	assert.deepEqual(h.calls, []);
+	assert.equal(restartPending("/sessions/a.jsonl"), false);
+	assert.ok(h.logs.some((line) => line.includes("could not write the restart request")));
+});
