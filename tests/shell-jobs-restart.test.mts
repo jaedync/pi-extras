@@ -27,10 +27,13 @@ afterEach(async () => {
 	for (const app of apps.splice(0).reverse()) await fire(app.handlers, "session_shutdown", app.ctx, { reason: "quit" });
 	for (const pid of groups) {
 		try { process.kill(-pid, "SIGKILL"); } catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+			// macOS answers EPERM for a group whose members are all zombies.
+			if (!["ESRCH", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
 		}
 	}
 	groups.clear();
+	// A test that failed before its new process claimed the hand-over must not hand it to the next test.
+	rmSync(handover.handoverDir(agentDir), { recursive: true, force: true });
 	// A dropped or refused hand-over leaves its log folder to the system's temp cleaner; a test removes it.
 	for (const dir of logDirs) rmSync(dir, { recursive: true, force: true });
 	logDirs.clear();
@@ -74,7 +77,8 @@ async function list(app: App) {
 
 const alive = (pgid: number) => {
 	try { process.kill(-pgid, 0); return true; } catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+		// macOS answers EPERM for a group whose members are all zombies: none of them runs.
+		if (["ESRCH", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
 		throw error;
 	}
 };
@@ -186,7 +190,7 @@ test("a corrupt hand-over file does not break session start: it is logged and re
 	assert.ok(next.id);
 });
 
-test("a hand-over record older than 24 h is dropped and its process group is not touched", async () => {
+test("a hand-over record older than 24 h is dropped and its job, still the recorded process, is stopped", async () => {
 	const old = await boot();
 	const job = await start(old, "sleep 30");
 	await restart(old);
@@ -194,9 +198,8 @@ test("a hand-over record older than 24 h is dropped and its process group is not
 	const app = await boot();
 	assert.deepEqual(await list(app), []);
 	assert.equal(existsSync(file()), false);
-	await fire(app.handlers, "session_shutdown", app.ctx, { reason: "quit" });
-	apps.splice(apps.indexOf(app), 1);
-	assert.equal(alive(job.pid), true);
+	// No restart came for it within a day: it stops, as a quit would have stopped it.
+	await until(() => !alive(job.pid));
 });
 
 for (const [what, reason, marked] of [["a normal quit", "quit", false], ["a new session", "new", true], ["a resume", "resume", true], ["a fork", "fork", true]] as const) {
