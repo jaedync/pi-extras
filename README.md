@@ -1175,20 +1175,27 @@ link-local or Tailscale (100.64.0.0/10) address, an IPv6 ULA, a name that ends i
 local. Add a provider that this rule misses to `localProviders`. Set
 `localRetry: false` to give local providers the budget again.
 
-For a local provider, the connection failure shows once. The extension then
-waits 2 to 30 s, and it checks the server with `GET <baseUrl>/models` every 10 s.
-The server answers when it sends any HTTP reply other than 502, 503 or 504; a 503
-from an engine that is still loading is not an answer. The check does not follow
-a redirect. The request goes again when the server answers, or after 10 min if
-the check never answers. One line below the chat shows the wait, for example
+For a local provider, the connection failure shows once, and the run ends: the
+session is idle while it waits. Auto-update can reload or restart Pi, shell jobs
+report, and you can type. The extension waits 2 to 30 s, then checks the server
+with `GET <baseUrl>/models` every 10 s. The server answers when it sends any HTTP
+reply other than 502, 503 or 504, and is not a model list with no model in it: a
+gateway whose engine is stopped (Kiln) answers `200 {"data": []}`. The check does
+not follow a redirect. When the server answers, or after 10 min if the check never
+answers, a short message ("… answers again. Continue the task …") starts the run
+again. One line below the chat shows the wait, for example
 `fw01/qwen3.8-flash-next not answering for 4m10s · local server, checked every
-10 s · Esc / Ctrl+C cancels`. Esc cancels the wait. A model switch sends the
-request at once.
+10 s · Esc / Ctrl+C cancels`. Esc ends the wait. A message that you send ends it
+too, and your message goes to the model. A model switch starts the run at once
+with the new model. The open wait is saved in the session, so it goes on after a
+reload or an update restart (not in a fork or a new session, and not after 48 h).
 
 The wait has no limit only where it can end well:
 
 - Interactive main sessions only. `pi -p`, JSON and RPC runs keep the budget,
   because no one is there to press Esc.
+- A subagent waits inside its run, as before: it has no update of its own to
+  wait for, and its `maxMinutes` ends it.
 - A subagent waits with no limit only when `subagents.fallbackModels` is empty.
   With a fallback model, the budget ends the wait and the run moves to the
   fallback. Without one, the run waits until its `maxMinutes`.

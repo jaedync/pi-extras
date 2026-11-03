@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Rate Limit Recovery: a local server whose engine is stopped no longer fills
+  the chat with one error per retry. A gateway that answers `/models` with an
+  empty model list (Kiln with its engine stopped) now counts as not ready.
+- Rate Limit Recovery: the wait for a local server no longer holds the run
+  open. The run ends after the first failure, the session waits while idle (so
+  auto-update can apply an update and you can type), and a short message starts
+  the run again when the server answers. The wait goes on after a reload or an
+  update restart.
+
 ## 0.38.7 - 2026-11-02
 
 ### Changed

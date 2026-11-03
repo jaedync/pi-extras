@@ -17,6 +17,8 @@ function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "t
 	const entries: any[] = [];
 	const notices: string[] = [];
 	const widgets: unknown[] = [];
+	const sent: Array<{ message: any; options: any }> = [];
+	let branch: unknown[] = [];
 	let terminal: ((data: string) => unknown) | undefined;
 	let unsubscribed = 0;
 	let terminalFault = false;
@@ -48,9 +50,11 @@ function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "t
 		on(name: string, handler: Handler) { handlers.set(name, handler); },
 		appendEntry(type: string, data: unknown) { if (appendFault) throw new Error("synthetic append failure"); entries.push({ type, data }); },
 		registerCommand(_name: string, options: { handler: Handler }) { command = options.handler; },
+		sendMessage(message: unknown, options: unknown) { sent.push({ message, options }); },
 	};
 	const ctx = {
 		mode, hasUI: mode === "tui", signal: controller.signal, modelRegistry,
+		sessionManager: { getBranch: () => branch },
 		get model() { return selected; },
 		abort() { controller.abort(); },
 		ui: {
@@ -77,7 +81,8 @@ function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "t
 	});
 	const emit = (name: string, event: any = {}) => Promise.resolve(handlers.get(name)?.(event, ctx));
 	return {
-		ctx, emit, entries, notices, started, file, modelRegistry, widgets,
+		ctx, emit, entries, notices, started, file, modelRegistry, widgets, sent,
+		setBranch(value: unknown[]) { branch = value; },
 		get waited() { return waited; }, get unsubscribed() { return unsubscribed; },
 		key(data: string) { return terminal?.(data); },
 		finish() { release!(true); },
@@ -391,23 +396,77 @@ test("shutdown clears an active wait and commands preserve unrelated config", as
 	} finally { f.close(); }
 });
 
-test("a connection failure on a local server waits for it with a live line and resumes when it answers", async () => {
+const LOCAL_FAILURE = { role: "assistant", provider: "fw01", api: "openai-completions", model: "qwen3.8-flash-next", timestamp: NOW, content: [], stopReason: "error", errorMessage: "Connection error." };
+const settle = async (n = 20) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
+
+test("a local server's wait leaves the run: the session goes idle, a live line shows, and the run starts again when it answers", async () => {
 	const probed: string[] = [];
 	const answers = [false, true];
 	const f = fixture({}, "tui", false, { probe: async (url) => { probed.push(url); return answers.shift() ?? true; } });
 	try {
 		await f.emit("session_start");
-		await f.emit("before_agent_start");
-		const failure = { role: "assistant", provider: "fw01", api: "openai-completions", model: "qwen3.8-flash-next", timestamp: NOW, content: [], stopReason: "error", errorMessage: "Connection error." };
-		const replaced = await f.emit("message_end", { message: failure });
+		await f.emit("before_agent_start", { messageType: "user", prompt: "hi" });
+		const replaced = await f.emit("message_end", { message: LOCAL_FAILURE });
 		assert.match(replaced.message.errorMessage, /local hardware/);
 		const result = await f.emit("turn_end", { message: replaced.message, messageEntryId: "failure", entries: [], context: { canContinue: true } });
 		assert.deepEqual(result.entries, [{ type: "context_edit", targetId: "failure", replacement: null }]);
-		assert.deepEqual(probed, ["http://fw01:8080/v1", "http://fw01:8080/v1"]);
+		// The run ends, so the session is idle: auto-update and shell job reports can go on.
+		assert.equal(await f.emit("agent_before_settle", { context: { canContinue: true } }), undefined);
+		assert.ok(f.entries.some((e) => e.data?.kind === "local-wait" && e.data.state === "open"), "the open wait is saved for a reload");
 		const widget = f.widgets.find((w) => typeof w === "function") as (tui: unknown, theme: unknown) => { render(width: number): string[] };
 		const line = widget({ requestRender() {} }, { fg: (_color: string, text: string) => text }).render(200).join("");
 		assert.match(line, /fw01\/qwen3\.8-flash-next not answering for .* local server, checked every 10 s .*Esc/);
-		assert.deepEqual(await f.emit("agent_before_settle", { context: { canContinue: true } }), { continue: true });
+		await settle();
+		assert.deepEqual(probed, ["http://fw01:8080/v1", "http://fw01:8080/v1"]);
+		assert.equal(f.sent.length, 1);
+		assert.equal(f.sent[0].message.customType, "rate-limit-recovery-local-resume");
+		assert.deepEqual(f.sent[0].options, { triggerTurn: true });
+	} finally { f.close(); }
+});
+
+test("the resumed run keeps the outage, so failures while the server answers still reach the budget", async () => {
+	const f = fixture({}, "tui", false, { probe: async () => true });
+	try {
+		await f.emit("session_start");
+		await f.emit("before_agent_start", { messageType: "user", prompt: "hi" });
+		let text = "";
+		for (let i = 0; i < 6 && !/at most 3 min/.test(text); i++) {
+			text = (await f.emit("message_end", { message: LOCAL_FAILURE })).message.errorMessage;
+			if (/at most 3 min/.test(text)) break;
+			await f.emit("turn_end", { message: LOCAL_FAILURE, messageEntryId: `f${i}`, entries: [], context: { canContinue: true } });
+			await settle();
+			await f.emit("before_agent_start", { messageType: "custom", message: { customType: "rate-limit-recovery-local-resume" } });
+		}
+		assert.match(text, /at most 3 min/, "the fourth failure after an answered check goes back to the budget");
+		assert.equal(f.sent.length, 3);
+	} finally { f.close(); }
+});
+
+test("a message from the user ends the idle wait: nothing starts on its own", async () => {
+	const f = fixture({}, "tui", false, { probe: async () => false });
+	try {
+		await f.emit("session_start");
+		await f.emit("before_agent_start", { messageType: "user", prompt: "hi" });
+		await f.emit("message_end", { message: LOCAL_FAILURE });
+		await f.emit("turn_end", { message: LOCAL_FAILURE, messageEntryId: "f", entries: [], context: { canContinue: true } });
+		await f.emit("before_agent_start", { messageType: "user", prompt: "never mind" });
+		await settle(60);
+		assert.equal(f.sent.length, 0);
+		assert.equal(f.entries.filter((e) => e.data?.kind === "local-wait").at(-1)?.data.state, "closed");
+	} finally { f.close(); }
+});
+
+test("a reload or an update restart goes on with an open wait from the session", async () => {
+	const f = fixture({}, "tui", false, { probe: async () => true });
+	try {
+		f.setBranch([{ type: "custom", customType: "rate-limit-recovery", data: { kind: "local-wait", state: "open", who: "fw01/qwen3.8-flash-next", baseUrl: "http://fw01:8080/v1", sinceMs: NOW - 3_600_000, at: NOW - 60_000 } }]);
+		await f.emit("session_start", { reason: "fork" });
+		await settle();
+		assert.equal(f.sent.length, 0, "a fork does not take over the wait");
+		await f.emit("session_start", { reason: "reload" });
+		await settle();
+		assert.equal(f.sent.length, 1);
+		assert.match(f.sent[0].message.content, /answers again/);
 	} finally { f.close(); }
 });
 

@@ -224,6 +224,11 @@ export interface TransientDeps {
 	readonly local?: (ctx: FailureContext) => LocalPolicy | undefined;
 	readonly probe?: Probe;
 	readonly now?: () => number;
+	/**
+	 * Takes a local wait out of the run: the run ends, and the host waits while the session is
+	 * idle (lib/rate-limit-recovery/idle-wait.ts). False keeps the wait in the run, as children do.
+	 */
+	readonly idle?: (wait: { readonly who: string; readonly baseUrl: string; readonly delayMs: number; readonly sinceMs: number }, ctx: ExtensionContext) => boolean;
 	readonly onFailure?: (error: unknown) => void;
 	/** Keeps a connection failure's raw text; called at turn_end, so the entry follows the failed reply. */
 	readonly record?: (entry: ConnectionEvidence) => void;
@@ -280,6 +285,24 @@ export class TransientBackoff {
 		}
 		this.outage = outage;
 		return { ...target, sinceMs: outage.sinceMs };
+	}
+
+	/** A run that the idle wait started: the outage and its counts go on. */
+	resume(): void {
+		this.pending = undefined;
+		this.evidence = undefined;
+		this.ready = false;
+	}
+
+	/** After a reload, an idle wait that goes on keeps its outage clock for the next failure. */
+	seedOutage(who: string, sinceMs: number): void {
+		if (!this.outage) this.outage = { who, sinceMs, failedAfterAnswer: 0, answered: false };
+	}
+
+	/** The idle wait ended (lib/rate-limit-recovery/idle-wait.ts); an answered check counts toward MAX_FAILURES_AFTER_ANSWER. */
+	localWaitEnded(who: string, end: LocalWaitEnd, ranMs: number): void {
+		this.localStreak = { attempts: this.localStreak.attempts, spentMs: this.localStreak.spentMs + Math.max(0, ranMs) };
+		if (this.outage?.who === who) this.outage = { ...this.outage, answered: end === "answered" };
 	}
 
 	reset(): void {
@@ -365,6 +388,10 @@ export class TransientBackoff {
 		if (event.toolResults?.length) return undefined;
 		const runSignal = ctx.signal;
 		if (!runSignal || runSignal.aborted) return undefined;
+		if (pending.local && this.handedToIdle(pending, pending.local, ctx)) {
+			// The failed reply leaves the context now; the run that the idle wait starts goes on without it.
+			return { entries: [...event.entries, { type: "context_edit", targetId: event.messageEntryId, replacement: null }] };
+		}
 		const controller = new AbortController();
 		let cancelled = false;
 		let wasSkipped = false;
@@ -408,6 +435,14 @@ export class TransientBackoff {
 		this.ready = true;
 		// The failed attempt stays in raw history but leaves the retried context, as with Pi's own retry.
 		return { entries: [...event.entries, { type: "context_edit", targetId: event.messageEntryId, replacement: null }] };
+	}
+
+	private handedToIdle(pending: Pending, local: LocalTarget, ctx: ExtensionContext): boolean {
+		let handed = false;
+		try { handed = this.deps.idle?.({ who: pending.who, baseUrl: local.baseUrl, delayMs: pending.plan.delayMs, sinceMs: this.outage?.sinceMs ?? this.now() }, ctx) === true; }
+		catch (error) { this.deps.onFailure?.(error); }
+		if (handed) this.localStreak = { attempts: pending.plan.attempt, spentMs: this.localStreak.spentMs };
+		return handed;
 	}
 
 	consumeReady(): boolean {

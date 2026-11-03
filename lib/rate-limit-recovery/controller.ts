@@ -12,7 +12,8 @@ import { createQuotaTransportGuard } from "./transport.ts";
 import { ANTHROPIC_HOSTS, type FirstEventPolicy } from "./first-event.ts";
 import { proxyRetryLimit, TransientBackoff, type TransientKind } from "./transient.ts";
 import { formatDuration } from "../status-plus-logic.ts";
-import type { Probe } from "./local.ts";
+import { probeServer, type Probe } from "./local.ts";
+import { LOCAL_RESUME_TYPE, LocalIdleWait, openWait } from "./idle-wait.ts";
 
 export { RECOVERY_TYPE };
 const WAIT_LABELS: Readonly<Record<TransientKind, string>> = { "rate-limit": "Rate limited on", proxy: "Claude Code proxy failed on", connection: "Connection failed on" };
@@ -58,6 +59,7 @@ export class Recovery {
 	private limited: CapturedLimit | undefined;
 	private readonly transport: ReturnType<typeof createQuotaTransportGuard>;
 	private readonly transient: TransientBackoff;
+	private readonly idleWait: LocalIdleWait;
 	private stopped = false;
 	private unsupportedTransport = false;
 
@@ -88,7 +90,28 @@ export class Recovery {
 			local: (ctx) => ({ enabled: this.config.localRetry && this.role === "main" && ctx.mode === "tui" && ctx.hasUI === true, providers: this.config.localProviders }),
 			onFailure: (error) => operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `transient wait failed (${error instanceof Error ? error.name : "unknown error"})`),
 			record: (entry) => pi.appendEntry(RECOVERY_TYPE, entry),
+			// The local wait leaves the run, so updates, shell job reports and typing go on during it.
+			idle: (wait, ctx) => {
+				if (!this.interactiveMain(ctx)) return false;
+				this.idleWait.start(ctx, wait);
+				return true;
+			},
 		});
+		this.idleWait = new LocalIdleWait({
+			resume: (content, details) => pi.sendMessage({ customType: LOCAL_RESUME_TYPE, content, display: true, details }, { triggerTurn: true }),
+			record: (entry) => pi.appendEntry(RECOVERY_TYPE, entry),
+			probe: options.probe ?? probeServer,
+			wait: this.wait,
+			now: () => this.now(),
+			ui: (ctx, who, sinceMs, cancel) => waitUI(ctx, { provider: who }, { resumeAtMs: sinceMs }, Date.now, cancel,
+				() => `${who} not answering for ${formatDuration(Math.max(0, Date.now() - sinceMs), true)} \u00b7 local server, checked every 10 s`, pi, false),
+			ended: (who, end, ranMs) => this.transient.localWaitEnded(who, end, ranMs),
+			onFailure: (error) => operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `local idle wait failed (${error instanceof Error ? error.name : "unknown error"})`),
+		});
+	}
+
+	private interactiveMain(ctx: Pick<ExtensionContext, "mode" | "hasUI">): boolean {
+		return this.role === "main" && ctx.mode === "tui" && ctx.hasUI === true;
 	}
 
 	register(): void {
@@ -103,15 +126,41 @@ export class Recovery {
 			if (this.active && !sameScope(this.active.scope, event.model)) this.cancel();
 			// Switching away from a limited model is a request to go on with the new one now.
 			this.transient.skip();
+			this.idleWait.skip(`${event.model.provider}/${event.model.id}`);
 		});
 		pi.on("cache_warming_decision", (_event, ctx) => this.limited?.resetAtMs !== undefined && this.limited.resetAtMs > this.now() && this.inScope(this.limited.scope, ctx) ? { action: "stop" } : undefined);
-		pi.on("before_agent_start", (_event, ctx) => { this.attempts = 0; this.spentMs = 0; this.pending = undefined; this.ready = false; this.transient.reset(); this.protectTransport(ctx, ctx.model, true); });
-		pi.on("session_start", (_event, ctx) => { this.stopped = false; this.cancel(); this.transient.reset(); this.releaseTransport(); this.config = loadConfig(this.file, this.env); this.generation++; this.limited = undefined; this.protectTransport(ctx); });
-		pi.on("session_shutdown", () => { this.stopped = true; this.cancel(); this.generation++; this.limited = undefined; this.releaseTransport(); });
+		pi.on("before_agent_start", (event, ctx) => {
+			this.attempts = 0; this.spentMs = 0; this.pending = undefined; this.ready = false;
+			// The idle wait's own run keeps the outage; any other run ends the wait and starts afresh.
+			const resumed = event.messageType === "custom" && event.message?.customType === LOCAL_RESUME_TYPE;
+			if (resumed) this.transient.resume();
+			else { this.idleWait.cancel(); this.transient.reset(); }
+			this.protectTransport(ctx, ctx.model, true);
+		});
+		pi.on("session_start", (event, ctx) => {
+			this.stopped = false; this.cancel(); this.idleWait.stop(); this.transient.reset(); this.releaseTransport();
+			this.config = loadConfig(this.file, this.env); this.generation++; this.limited = undefined; this.protectTransport(ctx);
+			// A fork or a new session copies entries but not the wait: only the same session goes on.
+			if (event.reason !== "fork" && event.reason !== "new") this.restoreIdleWait(ctx);
+		});
+		pi.on("session_shutdown", () => { this.stopped = true; this.cancel(); this.idleWait.stop(); this.generation++; this.limited = undefined; this.releaseTransport(); });
 		if (this.role !== "subagent") pi.registerCommand("rate-limit-recovery", {
 			description: "Opt in to quota hibernation; on|off|status|cancel",
 			handler: (args, ctx) => this.command(args, ctx),
 		});
+	}
+
+	/** A reload or an update restart during a local wait: the wait goes on from its entry. */
+	private restoreIdleWait(ctx: ExtensionContext): void {
+		if (!this.config.localRetry || !this.interactiveMain(ctx)) return;
+		try {
+			const open = openWait(ctx.sessionManager.getBranch() as never, RECOVERY_TYPE, this.now());
+			if (!open) return;
+			this.transient.seedOutage(open.who, open.sinceMs);
+			this.idleWait.restore(ctx, open);
+		} catch (error) {
+			operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `local idle wait restore failed (${error instanceof Error ? error.name : "unknown error"})`);
+		}
 	}
 
 	private firstEventPolicy(): FirstEventPolicy | undefined {

@@ -77,15 +77,45 @@ export function modelsUrl(baseUrl: string): string | undefined {
 	} catch { return undefined; }
 }
 
-/** True when the server answers: any HTTP reply except 502, 503 and 504. No custom header and no credential is sent. */
+// A model list larger than this is not read: it is a long list, so not an empty one.
+const MAX_LIST_BYTES = 256 * 1024;
+
+/**
+ * True for an OpenAI-style model list with no model in it. A gateway whose engine is stopped
+ * (Kiln) answers /models with 200 and `"data": []` but fails every request with 503, so that
+ * reply means "not ready". Any other body, also one that does not parse, keeps the old answer.
+ */
+async function listsNoModel(response: Response): Promise<boolean> {
+	const ok = response.status >= 200 && response.status < 300 && /json/i.test(response.headers.get("content-type") ?? "");
+	if (!ok || Number(response.headers.get("content-length") ?? 0) > MAX_LIST_BYTES) {
+		await response.body?.cancel().catch(() => {});
+		return false;
+	}
+	try {
+		const text = await response.text();
+		if (text.length > MAX_LIST_BYTES) return false;
+		const data = (JSON.parse(text) as { data?: unknown }).data;
+		return Array.isArray(data) && data.length === 0;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * True when the server answers: any HTTP reply except 502, 503 and 504, and except a model list
+ * with no model in it. No custom header and no credential is sent.
+ */
 export async function probeServer(baseUrl: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<boolean> {
 	const url = modelsUrl(baseUrl);
 	if (!url) return false;
 	try {
 		// A redirect is an answer; following it would send the check to another host.
 		const response = await fetchImpl(url, { method: "GET", redirect: "manual", signal: AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) });
-		await response.body?.cancel().catch(() => {});
-		return !DOWN_STATUS.has(response.status);
+		if (DOWN_STATUS.has(response.status)) {
+			await response.body?.cancel().catch(() => {});
+			return false;
+		}
+		return !(await listsNoModel(response));
 	} catch {
 		return false;
 	}

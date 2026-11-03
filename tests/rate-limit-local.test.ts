@@ -299,3 +299,17 @@ test("a cloud failure ends a local outage", async () => {
 	f.b.messageEnd(failed("anthropic", DOWN), f.ctx);
 	assert.doesNotMatch(f.b.messageEnd(failed("fw01", DOWN), f.ctx)!.errorMessage!, /no answer for/);
 });
+
+test("a server that lists no model is not ready: an engine that is stopped behind its gateway", async () => {
+	const reply = (status: number, body: string, type = "application/json") => (async () => new Response(body, { status, headers: { "content-type": type } })) as typeof fetch;
+	const signal = new AbortController().signal;
+	// Kiln with its engine stopped: /v1/models is 200 with an empty list, chat is 503.
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(200, '{"object": "list", "data": []}')), false);
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(200, '{"object":"list","data":[{"id":"qwen3.8-flash-next"}]}')), true);
+	// A model list under another alias still counts: only an empty list says "not ready".
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(200, '{"data":[{"id":"model.gguf"}]}')), true);
+	// Not a model list: any answer below 502 is a server that answers.
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(200, "<html>ok</html>", "text/html")), true);
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(200, "not json")), true);
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(404, '{"data":[]}')), true);
+});
