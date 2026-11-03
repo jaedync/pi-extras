@@ -22,9 +22,9 @@ const HOUR = 3_600_000;
 const PERIOD = 3_240_000;
 const PROMPT = 46000;
 
-interface Options { readonly warm?: Record<string, unknown>; readonly longTtl?: boolean; readonly tokens?: number; readonly piWarmer?: boolean; readonly budget?: boolean; readonly slowTool?: boolean }
+interface Options { readonly warm?: Record<string, unknown>; readonly longTtl?: boolean; readonly tokens?: number; readonly piWarmer?: boolean; readonly budget?: boolean; readonly slowTool?: boolean; readonly baseUrl?: string }
 async function fixture(options: Options = {}) {
-	const { warm, longTtl = true, tokens = PROMPT, piWarmer = false, budget = false, slowTool = false } = options;
+	const { warm, longTtl = true, tokens = PROMPT, piWarmer = false, budget = false, slowTool = false, baseUrl = "http://127.0.0.1:1" } = options;
 	let failTimers = false;
 	const agentDir = mkdtempSync(join(scratch, "agent-"));
 	const configFile = join(agentDir, "pi-extras.json");
@@ -38,7 +38,7 @@ async function fixture(options: Options = {}) {
 	const errors: unknown[] = [];
 	const events: Array<{ name: string; data: any }> = [];
 	const runtime = await sdk.ModelRuntime.create({ credentials: new ai.InMemoryCredentialStore(), modelsPath: null, allowModelNetwork: false, refreshOnCreate: false });
-	runtime.registerProvider("fixture", { api: "anthropic-messages", apiKey: "synthetic-not-a-credential", baseUrl: "http://127.0.0.1:1", models: [{ id: "model", name: "model", reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 32000, cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }, ...(piWarmer ? { promptCache: { short: 11 } } : {}) }],
+	runtime.registerProvider("fixture", { api: "anthropic-messages", apiKey: "synthetic-not-a-credential", baseUrl, models: [{ id: "model", name: "model", reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 32000, cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 10 }, ...(piWarmer ? { promptCache: { short: 11 } } : {}) }],
 		streamSimple(model: any, context: any, opts: any) {
 			const stream = new ai.AssistantMessageEventStream();
 			void (async () => {
@@ -152,6 +152,35 @@ test("a pending wake warms with the captured request plus the instruction, and s
 	assert.equal(f.warms().length, 2);
 	assert.deepEqual(f.warms()[1].payload.messages.slice(0, -1), warm.payload.messages.slice(0, -1));
 	assert.equal(textOf(f.warms()[1].payload.messages.at(-1)), WARM_INSTRUCTION);
+	assert.deepEqual(f.errors, []);
+});
+
+test("a Meridian model sends no warm by default, and logs meridian as the reason", { timeout: 15000 }, async (t) => {
+	const f = await fixture({ baseUrl: "http://127.0.0.1:3456" }); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	f.wake(true);
+	await f.fire();
+	assert.equal(f.warms().length, 0, "no warm goes through Meridian");
+	assert.equal(f.log().at(-1).event, "stop");
+	assert.equal(f.log().at(-1).reason, "meridian");
+	assert.deepEqual(f.errors, []);
+});
+
+test("warm.meridian true sends the warm through Meridian", { timeout: 15000 }, async (t) => {
+	const f = await fixture({ baseUrl: "http://127.0.0.1:3456", warm: { meridian: true } }); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	f.wake(true);
+	await f.fire();
+	assert.equal(f.warms().length, 1);
+	assert.deepEqual(f.errors, []);
+});
+
+test("an Anthropic Messages model that is not Meridian still warms", { timeout: 15000 }, async (t) => {
+	const f = await fixture({ baseUrl: "https://api.anthropic.com" }); t.after(() => f.close());
+	await f.session.prompt("Task.");
+	f.wake(true);
+	await f.fire();
+	assert.equal(f.warms().length, 1);
 	assert.deepEqual(f.errors, []);
 });
 

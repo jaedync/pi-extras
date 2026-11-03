@@ -14,6 +14,11 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   30 more seconds, auto-update ends the process, and the launcher starts Pi
   again. Without a launcher, the warning tells you to quit Pi and start it
   again.
+- Cache Compaction: a cache warm no longer goes through Meridian unless
+  `warm.meridian` is `true`. The warm key has no lineage in Meridian, so
+  Meridian replayed each warm as a new session. The warm read only the
+  system prompt and the tools from the cache. It wrote the rest of the
+  prompt again, so it did not refresh the main cache entry.
 
 ## 0.38.9 - 2026-11-02
 

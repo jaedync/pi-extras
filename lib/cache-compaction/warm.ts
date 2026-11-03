@@ -31,8 +31,10 @@ export interface WarmConfig {
 	readonly minTokens: number;
 	readonly apis: readonly string[];
 	readonly formTools: readonly string[];
+	/** A warm through Meridian replays as a new session, so it cannot refresh the main cache entry. */
+	readonly meridian: boolean;
 }
-export const DEFAULT_WARM: WarmConfig = { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["artifact_ask"] };
+export const DEFAULT_WARM: WarmConfig = { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["artifact_ask"], meridian: false };
 
 type RecordValue = Record<string, unknown>;
 const object = (v: unknown): v is RecordValue => !!v && typeof v === "object" && !Array.isArray(v);
@@ -48,6 +50,7 @@ export function loadWarmConfig(section: unknown): WarmConfig {
 		minTokens: typeof tokens === "number" && Number.isSafeInteger(tokens) && tokens >= 0 ? tokens : DEFAULT_WARM.minTokens,
 		apis: strings(s.apis, DEFAULT_WARM.apis),
 		formTools: strings(s.formTools, DEFAULT_WARM.formTools),
+		meridian: typeof s.meridian === "boolean" ? s.meridian : DEFAULT_WARM.meridian,
 	};
 }
 

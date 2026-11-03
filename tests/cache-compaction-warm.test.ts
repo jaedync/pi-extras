@@ -4,20 +4,30 @@ import { loadConfig } from "../lib/cache-compaction/core.ts";
 import { CACHE_WARM_ENTRY, WAKE_PENDING_EVENT, WARM_INSTRUCTION, WakeSet, artifactWakes, feedbackIds, formWakeKey, openFormWakes, retryAt, payloadThinkingBudget, cacheLifetimeMs, loadWarmConfig, readWakePending, warmCostEstimate, warmDelayMs, warmStop } from "../lib/cache-compaction/warm.ts";
 
 test("warm config defaults on, with an 8-hour cap, a 20k floor and the Anthropic API", () => {
-	assert.deepEqual(loadWarmConfig(undefined), { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["artifact_ask"] });
+	assert.deepEqual(loadWarmConfig(undefined), { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["artifact_ask"], meridian: false });
 	assert.deepEqual(loadConfig({}).warm, loadWarmConfig(undefined));
 	assert.equal(loadConfig({ warm: { enabled: false } }).warm.enabled, false);
 });
 
 test("warm config keeps valid values and replaces bad ones with defaults", () => {
-	const good = loadWarmConfig({ enabled: false, maxHours: 2.5, minTokens: 5000, apis: ["openai-responses"], formTools: ["ask_form"] });
-	assert.deepEqual(good, { enabled: false, maxHours: 2.5, minTokens: 5000, apis: ["openai-responses"], formTools: ["ask_form"] });
+	const good = loadWarmConfig({ enabled: false, maxHours: 2.5, minTokens: 5000, apis: ["openai-responses"], formTools: ["ask_form"], meridian: true });
+	assert.deepEqual(good, { enabled: false, maxHours: 2.5, minTokens: 5000, apis: ["openai-responses"], formTools: ["ask_form"], meridian: true });
 	const bad = loadWarmConfig({ enabled: "yes", maxHours: -1, minTokens: "20", apis: "anthropic-messages", formTools: [1, "x"] });
-	assert.deepEqual(bad, { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["x"] });
+	assert.deepEqual(bad, { enabled: true, maxHours: 8, minTokens: 20000, apis: ["anthropic-messages"], formTools: ["x"], meridian: false });
 	assert.deepEqual(loadWarmConfig({ formTools: "artifact_ask" }).formTools, ["artifact_ask"]);
 	assert.equal(loadWarmConfig({ maxHours: 100 }).maxHours, 8, "more than 48 hours is not a wait");
 	assert.equal(loadWarmConfig({ minTokens: -5 }).minTokens, 20000);
 	assert.deepEqual(loadWarmConfig({ apis: [] }).apis, [], "an empty list turns warming off for every API");
+});
+
+/** A warm through Meridian cannot refresh the main session's cache entry, so it is off by default. */
+test("Meridian warming is off unless warm.meridian is a boolean true", () => {
+	assert.equal(loadWarmConfig(undefined).meridian, false);
+	assert.equal(loadConfig({}).warm.meridian, false);
+	assert.equal(loadConfig({ warm: {} }).warm.meridian, false);
+	assert.equal(loadWarmConfig({ meridian: true }).meridian, true);
+	assert.equal(loadWarmConfig({ meridian: false }).meridian, false);
+	for (const bad of ["true", 1, null, {}, []] as unknown[]) assert.equal(loadWarmConfig({ meridian: bad }).meridian, false, JSON.stringify(bad));
 });
 
 test("the cache lifetime comes from the payload's ttl, else Meridian's one hour, else five minutes", () => {
