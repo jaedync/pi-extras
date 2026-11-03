@@ -8,6 +8,7 @@ import { loadConfig } from "./config.ts";
 import { captureLimit, failureMessage, parseRateLimit } from "./core.ts";
 import { RECOVERY_TYPE } from "./entry-type.ts";
 import { TransientBackoff, type ConnectionEvidence, type TransientDeps } from "./transient.ts";
+import type { LocalPolicy } from "./local.ts";
 import { createQuotaTransportGuard, type QuotaTransportOptions } from "./transport.ts";
 
 export const CHILD_GUARD_NAME = "rate-limit-child-warning";
@@ -36,16 +37,22 @@ export interface ChildGuardOptions extends QuotaTransportOptions {
 	/** The parent's pi-extras.json, for the transient wait budget. */
 	readonly configFile?: string;
 	/** Test seams for the transient backoff. */
-	readonly transient?: Pick<TransientDeps, "wait" | "random">;
+	readonly transient?: Pick<TransientDeps, "wait" | "random" | "probe" | "now">;
 }
 
 export function createChildRateLimitGuard(options: ChildGuardOptions = {}) {
 	const transport = createQuotaTransportGuard(options);
 	let budgetMs = 0;
-	const loadBudget = () => { budgetMs = loadConfig(options.configFile ?? CONFIG_FILE, {}).transientMaxWaitSeconds * 1000; };
+	let local: LocalPolicy = { enabled: false, providers: [] };
+	const loadBudget = () => {
+		const config = loadConfig(options.configFile ?? CONFIG_FILE, {});
+		budgetMs = config.transientMaxWaitSeconds * 1000;
+		// A subagent's own maxMinutes still ends a wait on a local server that never comes back.
+		local = { enabled: config.localRetry, providers: config.localProviders };
+	};
 	loadBudget();
 	let record: ((entry: ConnectionEvidence) => void) | undefined;
-	const transient = new TransientBackoff({ ...options.transient, budgetMs: () => budgetMs, onFailure: () => warn(options, "transient-wait-failed"), record: (entry) => record?.(entry) });
+	const transient = new TransientBackoff({ ...options.transient, budgetMs: () => budgetMs, local: () => local, onFailure: () => warn(options, "transient-wait-failed"), record: (entry) => record?.(entry) });
 	let failure: string | undefined;
 	let closed = false;
 	// Only request boundaries may move a guard to another API (see controller).

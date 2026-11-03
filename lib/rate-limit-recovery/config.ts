@@ -12,6 +12,10 @@ export interface RecoveryConfig {
 	readonly anthropicFirstEventSeconds: number;
 	/** Waiting per streak of short rate limits (OpenRouter upstream, bare 429s); 0 leaves them to Pi. */
 	readonly transientMaxWaitSeconds: number;
+	/** Connection failures on a local provider (free, private address) wait until the server answers. */
+	readonly localRetry: boolean;
+	/** Providers that count as local even when the automatic rule misses them. */
+	readonly localProviders: readonly string[];
 }
 
 export const SECTION = "rateLimitRecovery";
@@ -19,6 +23,7 @@ export const DEFAULT_CONFIG: RecoveryConfig = Object.freeze({
 	autoWait: false, resumeMarginSeconds: 10, maxWaitSeconds: 18_000, maxRecoveries: 10,
 	anthropicFirstEventSeconds: DEFAULT_FIRST_EVENT_SECONDS,
 	transientMaxWaitSeconds: 180,
+	localRetry: true, localProviders: Object.freeze([]) as readonly string[],
 });
 const MAX_WAIT_SECONDS = 18_000;
 const MAX_RECOVERIES = 10;
@@ -55,6 +60,10 @@ export function normalizeConfig(raw: unknown): RecoveryConfig {
 		maxRecoveries: bounded(r.maxRecoveries, DEFAULT_CONFIG.maxRecoveries, 0, MAX_RECOVERIES, true),
 		anthropicFirstEventSeconds: optional(r.anthropicFirstEventSeconds, DEFAULT_CONFIG.anthropicFirstEventSeconds, MIN_FIRST_EVENT_SECONDS, MAX_FIRST_EVENT_SECONDS),
 		transientMaxWaitSeconds: optional(r.transientMaxWaitSeconds, DEFAULT_CONFIG.transientMaxWaitSeconds, MIN_TRANSIENT_SECONDS, MAX_TRANSIENT_SECONDS),
+		localRetry: r.localRetry !== false,
+		localProviders: Array.isArray(r.localProviders)
+			? r.localProviders.filter((p): p is string => typeof p === "string").map((p) => p.trim()).filter(Boolean)
+			: [],
 	};
 }
 

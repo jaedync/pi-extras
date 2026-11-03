@@ -9,7 +9,7 @@ const NOW = Date.parse("2026-09-30T02:00:00Z");
 const limitMessage = (seconds: unknown = 10) => ({ role: "assistant", provider: "anthropic", api: "anthropic-messages", model: "claude-opus", timestamp: NOW, content: [], stopReason: "error", errorMessage: JSON.stringify({ error: { type: "rate_limit_error", retry_after: seconds } }) });
 
 type Handler = (event: any, ctx: any) => any;
-function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "tui", waiting = false) {
+function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "tui", waiting = false, extra: { probe?: (url: string, signal: AbortSignal) => Promise<boolean> } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "rate-limit-test-"));
 	const file = join(dir, "pi-extras.json");
 	writeFileSync(file, JSON.stringify({ rateLimitRecovery: config, keep: { value: true } }));
@@ -32,6 +32,7 @@ function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "t
 	const modelRegistry = {
 		getProvider, getRegisteredNativeProvider: (id: string) => legacy ? undefined : getProvider(id),
 		getRegisteredProviderConfig: () => legacy,
+		find: (id: string, model: string) => id === "fw01" ? { provider: "fw01", id: model, baseUrl: "http://fw01:8080/v1", cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } : undefined,
 		registerProvider(value: ReturnType<typeof provider> | string, config?: typeof legacy) {
 			if (typeof value === "string") legacy = { ...legacy, ...config };
 			else { legacy = undefined; providers.set(value.id, value); }
@@ -63,7 +64,7 @@ function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "t
 		},
 	};
 	recovery(pi as never, {
-		configFile: file, env: {}, now: () => now,
+		configFile: file, env: {}, now: () => now, ...(extra.probe ? { probe: extra.probe } : {}),
 		wait: async (ms: number, signal: AbortSignal) => {
 			waited++;
 			waitStarted!();
@@ -76,7 +77,7 @@ function fixture(config: Record<string, unknown> = { autoWait: true }, mode = "t
 	});
 	const emit = (name: string, event: any = {}) => Promise.resolve(handlers.get(name)?.(event, ctx));
 	return {
-		ctx, emit, entries, notices, started, file, modelRegistry,
+		ctx, emit, entries, notices, started, file, modelRegistry, widgets,
 		get waited() { return waited; }, get unsubscribed() { return unsubscribed; },
 		key(data: string) { return terminal?.(data); },
 		finish() { release!(true); },
@@ -387,5 +388,25 @@ test("shutdown clears an active wait and commands preserve unrelated config", as
 		assert.equal(await turn, undefined);
 		assert.equal(f.ctx.signal.aborted, true);
 		assert.equal(f.unsubscribed, 1);
+	} finally { f.close(); }
+});
+
+test("a connection failure on a local server waits for it with a live line and resumes when it answers", async () => {
+	const probed: string[] = [];
+	const answers = [false, true];
+	const f = fixture({}, "tui", false, { probe: async (url) => { probed.push(url); return answers.shift() ?? true; } });
+	try {
+		await f.emit("session_start");
+		await f.emit("before_agent_start");
+		const failure = { role: "assistant", provider: "fw01", api: "openai-completions", model: "qwen3.8-flash-next", timestamp: NOW, content: [], stopReason: "error", errorMessage: "Connection error." };
+		const replaced = await f.emit("message_end", { message: failure });
+		assert.match(replaced.message.errorMessage, /local hardware/);
+		const result = await f.emit("turn_end", { message: replaced.message, messageEntryId: "failure", entries: [], context: { canContinue: true } });
+		assert.deepEqual(result.entries, [{ type: "context_edit", targetId: "failure", replacement: null }]);
+		assert.deepEqual(probed, ["http://fw01:8080/v1", "http://fw01:8080/v1"]);
+		const widget = f.widgets.find((w) => typeof w === "function") as (tui: unknown, theme: unknown) => { render(width: number): string[] };
+		const line = widget({ requestRender() {} }, { fg: (_color: string, text: string) => text }).render(200).join("");
+		assert.match(line, /fw01\/qwen3\.8-flash-next not answering for .* local server, checked every 10 s .*Esc/);
+		assert.deepEqual(await f.emit("agent_before_settle", { context: { canContinue: true } }), { continue: true });
 	} finally { f.close(); }
 });

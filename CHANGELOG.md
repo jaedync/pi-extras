@@ -2,6 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Changed
+
+- Rate Limit Recovery: a connection failure on a local provider waits until
+  the server answers, with no time limit and no retry limit. A local provider
+  has a model that costs 0 and a private host, or is named in
+  `localProviders`. The failure shows once; then one live line shows how long
+  the server has not answered. The extension checks the server every 10 s and
+  sends the request again when it answers. `localRetry: false` turns this off.
+
 ## 0.38.6 - 2026-11-02
 
 ### Changed

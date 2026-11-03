@@ -261,7 +261,9 @@ that no set and no session uses is removed after 1 hour.
   `maxRecoveries` (default and maximum `10`), `anthropicFirstEventSeconds`
   (default `45`, `10` to `600`, `0` disables the Anthropic stall retry),
   `transientMaxWaitSeconds` (default `180`, `10` to `900`, `0` leaves short rate
-  limits and connection failures to Pi's own retry). A number out of range moves to the nearest limit. A
+  limits and connection failures to Pi's own retry), `localRetry` (default
+  `true`: a local server is waited for with no limit), `localProviders`
+  (default `[]`: provider names that count as local). A number out of range moves to the nearest limit. A
   negative number, or a value that is not a number, uses the default. A count
   with a fraction rounds down.
   `/rate-limit-recovery on|off` saves only `autoWait`; commands take precedence
@@ -1162,6 +1164,25 @@ provider and model. Pi does not retry this report. Thus only one retry loop runs
 for each error. The original error text goes into a hidden session entry
 (`rate-limit-recovery`, kind `connection-failure`, at most 2 KB). A subagent that still fails after its retries moves to
 its next `subagents.fallbackModels` entry, as for an overloaded provider.
+
+A local provider has no wait limit. It is your own hardware, so a retry has no
+cost and takes no share from other users. A local server that does not answer is
+usually off or restarting, and it comes back. A provider is local when its model
+costs 0 and its `baseUrl` host is not public: `localhost`, a loopback, LAN,
+link-local or Tailscale (100.64.0.0/10) address, an IPv6 ULA, a name that ends in
+`.local`, `.lan`, `.internal`, `.home.arpa` or `.ts.net`, or a name with no dot
+(`fw01`). Meridian listens on loopback but bills a cloud model, so it is not
+local. Add a provider that this rule misses to `localProviders`. Set
+`localRetry: false` to give local providers the budget again.
+
+For a local provider, the connection failure shows once. The extension then
+waits 2 to 30 s, and it checks the server with `GET <baseUrl>/models` every 10 s.
+Any HTTP reply below 500 means that the server answers. A 503 from an engine that
+is still loading does not. The request goes again when the server answers, or
+after 10 min if the check never answers. One line below the chat shows the wait,
+for example `fw01/qwen3.8-flash-next not answering for 4m10s · local server,
+checked every 10 s · Esc / Ctrl+C cancels`. Esc cancels the wait. A model switch
+sends the request at once. A subagent's `maxMinutes` still ends its run.
 
 Meridian, a local Claude Code proxy, sometimes stops a turn with "Reached
 maximum number of turns". Pi does not retry this error. The extension sends the

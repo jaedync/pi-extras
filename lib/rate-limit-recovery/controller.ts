@@ -11,6 +11,8 @@ import { waitForDelay, waitUI, type Wait } from "./wait.ts";
 import { createQuotaTransportGuard } from "./transport.ts";
 import { ANTHROPIC_HOSTS, type FirstEventPolicy } from "./first-event.ts";
 import { proxyRetryLimit, TransientBackoff, type TransientKind } from "./transient.ts";
+import { formatDuration } from "../status-plus-logic.ts";
+import type { Probe } from "./local.ts";
 
 export { RECOVERY_TYPE };
 const WAIT_LABELS: Readonly<Record<TransientKind, string>> = { "rate-limit": "Rate limited on", proxy: "Claude Code proxy failed on", connection: "Connection failed on" };
@@ -32,6 +34,8 @@ export interface RecoveryOptions {
 	readonly firstEvent?: Partial<FirstEventPolicy>;
 	/** Jitter source for transient backoff; tests fix it. */
 	readonly random?: () => number;
+	/** The local-server check; tests stub it so no request leaves the process. */
+	readonly probe?: Probe;
 }
 interface Pending { readonly limit: CapturedLimit; readonly eligible: boolean }
 interface Active { readonly controller: AbortController; readonly ctx: ExtensionContext; readonly scope: string }
@@ -74,8 +78,13 @@ export class Recovery {
 			budgetMs: () => this.config.transientMaxWaitSeconds * 1000,
 			wait: this.wait,
 			...(options.random ? { random: options.random } : {}),
-			ui: (ctx, who, resumeAtMs, cancel, kind) => this.role === "main" && ctx.mode === "tui" && ctx.hasUI
-				? waitUI(ctx, { provider: who }, { resumeAtMs }, Date.now, cancel, (remaining) => `${WAIT_LABELS[kind]} ${who} \u00b7 retrying in ${remaining}`, pi) : undefined,
+			...(options.probe ? { probe: options.probe } : {}),
+			now: () => this.now(),
+			ui: (ctx, who, resumeAtMs, cancel, kind, downSinceMs) => this.role === "main" && ctx.mode === "tui" && ctx.hasUI
+				? waitUI(ctx, { provider: who }, { resumeAtMs }, Date.now, cancel, downSinceMs === undefined
+					? (remaining) => `${WAIT_LABELS[kind]} ${who} \u00b7 retrying in ${remaining}`
+					: () => `${who} not answering for ${formatDuration(Math.max(0, Date.now() - downSinceMs), true)} \u00b7 local server, checked every 10 s`, pi) : undefined,
+			local: () => ({ enabled: this.config.localRetry, providers: this.config.localProviders }),
 			onFailure: (error) => operationalError(join(dirname(this.file), "rate-limit-recovery.log"), RECOVERY_TYPE, `transient wait failed (${error instanceof Error ? error.name : "unknown error"})`),
 			record: (entry) => pi.appendEntry(RECOVERY_TYPE, entry),
 		});

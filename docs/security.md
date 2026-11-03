@@ -237,7 +237,12 @@ credential is read for this. The
 replacement error names the provider and model, never provider prose, and uses
 Pi's non-transient class so Pi's own retry does not also run. Waits are
 cancellable in-process timers; the failed attempt is omitted from the retried
-context. No extra requests are made beyond the retried one.
+context. No extra requests are made beyond the retried one, except for a
+local provider: there a connection failure waits with no limit, and the wait
+sends `GET <baseUrl>/models` to that provider's own server every 10 s, with no
+headers and no credential, and a 5 s timeout. A provider is local only when its
+model costs 0 and its host is a private address or name, or when the owner names
+it in `localProviders`.
 
 Meridian, a local Claude Code proxy, can fail a turn with "Claude Code returned
 an error result: Reached maximum number of turns". The same backoff then sends
