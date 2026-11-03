@@ -17,15 +17,15 @@
 import type { ExtensionContext, MessageEndEvent, ModelRegistry, TurnEndEvent, TurnEndEventResult } from "@earendil-works/pi-coding-agent";
 import { MAX_HINT_SECONDS, connectionCause, connectionHint, type ConnectionCause } from "./connection.ts";
 import { LOCAL_MAX_DELAY_MS, localTarget, probeServer, waitUntilAnswering, type LocalPolicy, type LocalTarget, type LocalWaitEnd, type Probe } from "./local.ts";
-
-// A server that answers the check but fails the request this many times in a row is not just off:
-// the request itself fails (a crash on this prompt, a proxy with no engine), so the budget applies again.
-export const MAX_FAILURES_AFTER_ANSWER = 3;
 import { captureLimit, parseRateLimit } from "./core.ts";
 import { takeRetryHint } from "./retry-hint.ts";
 import { waitForDelay, type Wait } from "./wait.ts";
 
 export const BASE_DELAY_MS = 5_000;
+// A server that answers the check but fails the request this many times in a row is not just off:
+// the request itself fails (a crash on this prompt, a proxy with no engine), so the budget applies again.
+// A resend after the 10 min timer that fails too breaks the row: the server was off again.
+export const MAX_FAILURES_AFTER_ANSWER = 3;
 // Pi waited 2 s for a dropped connection, and a short blip clears that fast.
 export const DROPPED_FIRST_DELAY_MS = 2_000;
 export const MAX_DELAY_MS = 60_000;
@@ -185,7 +185,6 @@ export function connectionWaitingMessage(who: string, cause: ConnectionCause, pl
 	return `${CONNECTION_FAILED} on ${named(who)}: ${CAUSES[cause]}. Sending the request again in ${duration(plan.delayMs)} (retry ${plan.attempt}, at most ${duration(budgetMs)} of waiting in total${asked}). Press Esc to cancel.`;
 }
 
-/** `downMs` is how long the local server has not answered; under a minute it is left out. */
 /**
  * Whole minutes, hours and days, so no number reaches 100 before 100 days: Pi's own retry reads a
  * bare 429, 500 or 502 to 504 anywhere in the text, and "502 min" would start it.
@@ -199,6 +198,7 @@ export function outageText(ms: number): string {
 	return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`;
 }
 
+/** `downMs` is how long the local server has not answered; under a minute it is left out. */
 export function localWaitingMessage(who: string, cause: ConnectionCause, downMs: number): string {
 	const down = downMs >= 60_000 ? ` (no answer for ${outageText(downMs)})` : "";
 	return `${CONNECTION_FAILED} on ${named(who)}: ${CAUSES[cause]}${down}. It runs on local hardware, so Pi waits until the server answers and then sends the request again. Press Esc to cancel.`;
@@ -265,7 +265,9 @@ export class TransientBackoff {
 		const target = this.localFor(message, ctx);
 		const previous = this.outage?.who === who ? this.outage : undefined;
 		if (!previous) this.localStreak = { attempts: 0, spentMs: 0 };
-		const failedAfterAnswer = (previous?.failedAfterAnswer ?? 0) + (previous?.answered ? 1 : 0);
+		const before = previous?.failedAfterAnswer ?? 0;
+		// Once the budget is in charge it stays until a good reply; below that, only failures in a row count.
+		const failedAfterAnswer = before >= MAX_FAILURES_AFTER_ANSWER ? before : previous?.answered ? before + 1 : 0;
 		if (!target) {
 			this.outage = undefined;
 			return undefined;

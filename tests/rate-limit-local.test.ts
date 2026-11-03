@@ -278,3 +278,24 @@ test("a subagent waits on a local server only when no fallback model is named", 
 	try { assert.match(withFallback.emit("message_end", { message: failed("fw01", DOWN) }).message.errorMessage, /at most 3 min/); }
 	finally { withFallback.close(); }
 });
+
+test("a resend after the 10 min timer that fails breaks the row of failures while the server answers", async () => {
+	// The check answers twice, then the server is off past the timer, then it answers twice again.
+	const answers = [true, true, false, true, true];
+	let current = true;
+	const f = localBackoff({ probe: async () => current });
+	for (let i = 0; i < answers.length + 1; i++) {
+		assert.match(f.b.messageEnd(failed("fw01", DOWN), f.ctx)!.errorMessage!, /local hardware/, `failure ${i}`);
+		current = answers[i] ?? true;
+		await f.b.turnEnd(f.turn(`e${i}`), f.ctx);
+	}
+});
+
+test("a cloud failure ends a local outage", async () => {
+	const f = localBackoff();
+	f.b.messageEnd(failed("fw01", DOWN), f.ctx);
+	await f.b.turnEnd(f.turn("e1"), f.ctx);
+	f.advance(3_600_000);
+	f.b.messageEnd(failed("anthropic", DOWN), f.ctx);
+	assert.doesNotMatch(f.b.messageEnd(failed("fw01", DOWN), f.ctx)!.errorMessage!, /no answer for/);
+});
