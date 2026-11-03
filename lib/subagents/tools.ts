@@ -313,7 +313,7 @@ async function waitFor(tc: ToolContext, { name, parent }: { name: string; parent
 		// Later runs (after a message resumes it) report as messages.
 		tc.team.detach(name);
 		const failed = done.state !== "idle";
-		const result = text(reportText(done, tc.now()), { ...details, state: done.state, ...(done.report ? { report: capReport(done.report) } : {}) });
+		const result = text(reportText(done, tc.now()), { ...details, state: done.state, ...(done.report ? { report: capReport(done.report, undefined, undefined, done.name) } : {}) });
 		if (failed) throw new Error(result.content[0]!.text);
 		return result;
 	} finally {

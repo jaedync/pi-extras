@@ -230,6 +230,19 @@ test("a short report keeps all of its text while its long notes are cut", () => 
 	assert.ok(preview.includes(`(later notes cut at ${NOTES_MAX_CHARS} characters.`));
 });
 
+test("a report and a long note that fit the limit together reach main whole", () => {
+	const text = "x".repeat(5_000) + "\n\nLater note from reviewer:\n" + "y".repeat(4_500);
+	assert.equal(capReport(text, undefined, "/full.report.md", "reviewer"), text);
+});
+
+test("a paragraph in the report that quotes the note heading does not split the report", () => {
+	const text = "Intro.\n\nLater note from someone: a quoted heading.\n\n" + "x".repeat(20_000);
+	const preview = capReport(text, undefined, "/full.report.md", "reviewer");
+	assert.ok(preview.includes(`(report cut at ${REPORT_MAX_CHARS} characters.`));
+	assert.ok(!preview.includes("(later notes cut"));
+	assert.ok(preview.length > REPORT_MAX_CHARS, "main keeps the whole report cap");
+});
+
 test("resumed failed and stopped runs never reuse the previous assistant's text", async (t) => {
 	for (const state of ["failed", "stopped"] as const) {
 		const sessionFile = scratch(t);

@@ -29,11 +29,12 @@ function cutPart(text: string, limit: number, why: string): string {
  * A report as a message to main: its main part, then its later notes, which the
  * message keeps after a cut, so a correction at the end still reaches main.
  */
-export function capReport(text: string, sessionFile?: string, reportFile?: string): string {
-	const at = text.indexOf(`\n\n${NOTE_PREFIX}`);
+export function capReport(text: string, sessionFile?: string, reportFile?: string, name?: string): string {
+	if (text.length <= REPORT_MAX_CHARS) return text;
+	// With the agent's name, a paragraph that only quotes the heading does not count as a note.
+	const at = text.indexOf(name ? `\n\n${NOTE_PREFIX}${name}:\n` : `\n\n${NOTE_PREFIX}`);
 	const main = at < 0 ? text : text.slice(0, at);
 	const notes = at < 0 ? "" : text.slice(at + 2);
-	if (main.length <= REPORT_MAX_CHARS && notes.length <= NOTES_MAX_CHARS) return text;
 	const where = reportFile ? ` The whole report is in ${reportFile}.` : sessionFile ? ` The whole text is in ${sessionFile}.` : "";
 	const kept = main.length > REPORT_MAX_CHARS ? cutPart(main, REPORT_MAX_CHARS, `report cut at ${REPORT_MAX_CHARS} characters.${where}`) : main;
 	const tail = at < 0 ? "" : `\n\n${notes.length > NOTES_MAX_CHARS ? cutPart(notes, NOTES_MAX_CHARS, `later notes cut at ${NOTES_MAX_CHARS} characters.${where}`) : notes}`;
@@ -131,7 +132,7 @@ function reportCore(record: AgentRecord, now: number): string {
 	const session = `${record.sessionFile ? `\nSession: ${record.sessionFile}` : ""}${record.report && record.reportFile ? `\nReport: ${record.reportFile}` : ""}${contextLine(record)}${fallbackLines(record)}`;
 	if (record.state === "interrupted") {
 		const outcome = record.launchError ? `could not resume: ${oneLine(record.launchError, 300)}` : `was interrupted after ${duration(record, now)}.`;
-		const partial = record.report ? `\n\n${record.launchError ? "" : "Last available message:\n"}${capReport(record.report, record.sessionFile, record.reportFile)}` : "";
+		const partial = record.report ? `\n\n${record.launchError ? "" : "Last available message:\n"}${capReport(record.report, record.sessionFile, record.reportFile, record.name)}` : "";
 		return `${head} ${outcome}${session}\nResume explicitly after checking the current files.${partial}`;
 	}
 	// Stopped before its first run: it used no time or money, and it has no session to read.
@@ -139,10 +140,10 @@ function reportCore(record: AgentRecord, now: number): string {
 	if (record.state === "failed" || record.state === "stopped") {
 		const outcome = record.state === "failed" ? `failed after ${duration(record, now)}: ${record.error ?? "unknown error"}`
 			: `was stopped after ${duration(record, now)}${record.stopReason ? `: ${record.stopReason}` : ""}.`;
-		const partial = record.report ? `\nLast message before it ${record.state}:\n${capReport(record.report, record.sessionFile, record.reportFile)}` : "";
+		const partial = record.report ? `\nLast message before it ${record.state}:\n${capReport(record.report, record.sessionFile, record.reportFile, record.name)}` : "";
 		return `${head} ${outcome}${session}${partial}`;
 	}
-	const report = record.report?.trim() ? capReport(record.report, record.sessionFile, record.reportFile) : noReport(record.state);
+	const report = record.report?.trim() ? capReport(record.report, record.sessionFile, record.reportFile, record.name) : noReport(record.state);
 	const why = record.resumedBy && record.runs > 1 ? `\nThis run (${record.runs}) handled: ${oneLine(record.resumedBy.text, 300)}` : "";
 	if (record.state === "idle" && record.budgetEnd) return `${head} ${budgetOutcome(record, now)}${session}${why}\n\n${report}`;
 	return `${head} finished after ${duration(record, now)}. Message it to follow up; it keeps its context.${session}${why}\n\n${report}`;
