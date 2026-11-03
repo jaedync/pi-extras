@@ -25,6 +25,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   when the next call starts another client. The session stops the failed
   client before it starts a new one, so no orphaned client or launch job
   stays in the background.
+- Subagents: a message to main is no longer lost when Pi cannot take it
+  at that moment. The extension keeps the message queued and tries the
+  send again. Before, the message stayed listed as pending and never
+  arrived, and a reload host could not go quiet.
 
 ## 0.39.0 - 2026-11-03
 

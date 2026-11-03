@@ -316,7 +316,11 @@ export class MainMail implements HostMail {
 			const route = this.where();
 			if (route === "hold") break;
 			const { message, wakes } = this.outbox.shift()!;
-			this.dispatch(message, wakes, route);
+			if (!this.dispatch(message, wakes, route)) {
+				// A failed send loses nothing: the mail keeps its place for the retry timer.
+				this.outbox.unshift({ message, wakes });
+				break;
+			}
 		}
 		if (this.outbox.length > 0 && !this.closed) this.retryTimer = setTimeout(() => this.retry(), this.retryMs);
 	}
@@ -437,15 +441,19 @@ export class MainMail implements HostMail {
 		}
 	}
 
-	private dispatch(message: OutgoingMessage, wakes: boolean, route: "wake" | "queue"): void {
+	/** Hands one item to Pi; false when the send failed, so nothing landed. */
+	private dispatch(message: OutgoingMessage, wakes: boolean, route: "wake" | "queue"): boolean {
 		// Steered mail would sit in the queue Esc clears; mail sent without a turn lands at Pi's next turn boundary.
 		const options = route === "wake" && wakes ? { triggerTurn: true, deliverAs: "steer" as const } : { triggerTurn: false };
 		if (route === "queue" && wakes) this.owing.set(message.details.id, ownerOf(message.details));
 		try {
 			this.port.send(this.withStatus(message), options);
 		} catch {
-			// A stale context after session replacement; the item stays visible as pending.
+			// A stale context after session replacement; main saw nothing, so it owes nothing either.
+			this.owing.delete(message.details.id);
+			return false;
 		}
+		return true;
 	}
 
 	/**
