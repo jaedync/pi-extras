@@ -7,6 +7,7 @@ echo "$*" >> "$(dirname "$0")/calls.log"
 case "$1" in
 --version) echo "uv 99.0.0" ;;
 venv) mkdir -p "$5/bin" && : > "$5/bin/python" ;;
+pip) exit $PIP_EXIT ;;
 esac
 exit 0
 `;
@@ -30,10 +31,12 @@ export interface FakeTools {
 	readonly restore: () => void;
 }
 
-export function fakeMediaTools(dir: string, options: { cloneWorks?: boolean } = {}): FakeTools {
+export function fakeMediaTools(dir: string, options: { cloneWorks?: boolean; pipFails?: boolean } = {}): FakeTools {
 	const bin = join(dir, "fake-bin");
 	mkdirSync(bin, { recursive: true });
-	for (const [name, body] of [["uv", UV], ["git", options.cloneWorks ? CLONING_GIT : GIT]] as const) {
+	// A package index that cannot be reached, as on a host without a network.
+	const uv = UV.replace("$PIP_EXIT", options.pipFails ? "1" : "0");
+	for (const [name, body] of [["uv", uv], ["git", options.cloneWorks ? CLONING_GIT : GIT]] as const) {
 		writeFileSync(join(bin, name), body);
 		chmodSync(join(bin, name), 0o755);
 	}

@@ -193,6 +193,8 @@ function killTree(child: ChildProcess): void {
 const lastLine = (text: string) => text.trim().split("\n").at(-1)?.trim().slice(0, 300) ?? "";
 
 function run(binary: string, args: readonly string[], signal: AbortSignal | undefined, timeoutMs: number, maxBytes: number): Promise<string> {
+	// The caller can give up while the slot and the version are awaited; then no browser starts at all.
+	signal?.throwIfAborted();
 	return new Promise((resolve, reject) => {
 		// Its own process group, so one signal stops the renderers and helpers too.
 		const child = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });

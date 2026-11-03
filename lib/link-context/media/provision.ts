@@ -38,6 +38,7 @@ type Env = Readonly<Record<string, string | undefined>>;
 export interface MediaState {
 	readonly packagesAt?: number;
 	readonly packages?: string;
+	readonly refreshFailedAt?: number;
 	readonly bgutilTag?: string;
 	readonly bgutilError?: string;
 	readonly bgutilFailedAt?: number;
@@ -114,7 +115,11 @@ export function bgutilDue(state: MediaState, now = Date.now()): boolean {
 }
 
 export function packagesDue(state: MediaState, refreshDays: number, now = Date.now()): boolean {
-	return !state.packagesAt || state.packages !== PACKAGES.join(" ") || (refreshDays > 0 && now - state.packagesAt > refreshDays * DAY_MS);
+	// Nothing installed, or a changed list: the install cannot wait, whatever the last attempt did.
+	if (!state.packagesAt || state.packages !== PACKAGES.join(" ")) return true;
+	// A refresh that failed waits a day: it takes up to 20 min, and the installed version still works.
+	if (state.refreshFailedAt && now - state.refreshFailedAt <= DAY_MS) return false;
+	return refreshDays > 0 && now - state.packagesAt > refreshDays * DAY_MS;
 }
 
 /** speech-to-text backend and default model for this machine. */
@@ -317,9 +322,10 @@ export async function ensureMedia(options: EnsureOptions): Promise<Toolchain> {
 			options.progress(state.packagesAt ? "updating yt-dlp" : "installing yt-dlp and helpers");
 			try {
 				await installer.run(uv, ["pip", "install", "--python", python, "-U", ...PACKAGES, `bgutil-ytdlp-pot-provider==${tag}`], STEP_TIMEOUT_MS.pip);
-				state = writeState(home, { packagesAt: Date.now(), packages: PACKAGES.join(" "), bgutilTag: tag });
+				state = writeState(home, { packagesAt: Date.now(), packages: PACKAGES.join(" "), bgutilTag: tag, refreshFailedAt: undefined });
 			} catch (error) {
 				if (!state.packagesAt || options.signal?.aborted) throw error;
+				state = writeState(home, { refreshFailedAt: Date.now() });
 				options.progress("update failed; using the installed version");
 			}
 		}
