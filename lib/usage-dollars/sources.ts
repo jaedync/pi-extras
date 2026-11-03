@@ -167,10 +167,13 @@ export interface MeterAnchor {
 /**
  * The first meter reading of each local day. A reading below the anchor means
  * the meter started a new month during the day, so the day counts from zero.
+ * A reading sampled before the anchor is older news from another process, so
+ * its lower value is no month rollover.
  */
 export function advanceMeterDay(prev: MeterAnchor | undefined, usedUsd: number, now: number, timeZone: string): MeterAnchor {
 	const date = localDateKey(now, timeZone);
 	if (!prev || prev.date !== date) return { date, usedUsd, atMs: now };
+	if (now < prev.atMs) return prev;
 	if (usedUsd < prev.usedUsd) return { ...prev, usedUsd: 0 };
 	return prev;
 }

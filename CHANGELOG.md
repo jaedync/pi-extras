@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Usage Guard: an older meter reading no longer counts as a new month. A
+  stored snapshot sampled before the day's first reading can hold a lower
+  dollar value. "Spent today" could then show the month's whole spend.
+  A reading older than the anchor is now ignored.
+
 ## 0.39.0 - 2026-11-03
 
 ### Added
