@@ -10,6 +10,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   its band notice. Before, the budget wrap-up stayed silent when the band
   notice for the same percent, for example 75%, had fired. A band and a
   budget at one percent are now two warnings.
+- Usage dollars: an older meter reading no longer counts as a new month, and
+  a lower one sets the day's base. A stored snapshot sampled before the day's
+  first reading can show a lower dollar value. "Spent today" could then show
+  the month's whole spend, or leave out spend from that reading.
 
 ## 0.39.0 - 2026-11-03
 

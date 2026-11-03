@@ -114,6 +114,23 @@ test("the meter anchor starts each local day at the first reading", () => {
 	assert.deepEqual(advanceMeterDay(first, 20, NOW + 3_600_000, TZ), { date: "2026-10-10", usedUsd: 0, atMs: NOW });
 });
 
+test("an older meter reading that is lower is the better day anchor", () => {
+	const anchor = advanceMeterDay(undefined, 20, NOW, TZ);
+	// A snapshot sampled an hour before the anchor shows 15 USD: the day's spend started there.
+	const older = { date: "2026-10-10", usedUsd: 15, atMs: NOW - 3_600_000 };
+	assert.deepEqual(advanceMeterDay(anchor, 15, NOW - 3_600_000, TZ), older);
+	// A later reading above it keeps the anchor.
+	assert.equal(advanceMeterDay(older, 20, NOW, TZ), older);
+	// A later reading below it is still the meter's month rollover.
+	assert.deepEqual(advanceMeterDay(older, 5, NOW + 60_000, TZ), { date: "2026-10-10", usedUsd: 0, atMs: NOW - 3_600_000 });
+});
+
+test("an older meter reading that is higher leaves the day anchor alone", () => {
+	const anchor = advanceMeterDay(undefined, 15, NOW, TZ);
+	// A stored snapshot sampled an hour earlier shows 20 USD: it is no base for the day.
+	assert.equal(advanceMeterDay(anchor, 20, NOW - 3_600_000, TZ), anchor);
+});
+
 test("Tokenfold's window_start says where a window's spend starts; a bad one stays absent", () => {
 	const snapshot = parseTokenfoldHa({
 		...HA,
