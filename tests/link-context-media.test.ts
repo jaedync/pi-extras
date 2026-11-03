@@ -87,6 +87,31 @@ test("a failed cut stops the other cuts and fails with its own error", async () 
 	}
 });
 
+test("an abort returns only after the started cuts have ended: no ffmpeg writes into the folder later", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "link-frames-"));
+	try {
+		// A cut that needs 0.2 s to stop after SIGTERM, as ffmpeg finishing a frame can.
+		const bin = join(dir, "ffmpeg");
+		writeFileSync(bin, `#!/bin/sh
+echo x >> "${dir}/started"
+trap 'kill $! 2>/dev/null; sleep 0.2; echo x >> "${dir}/exited"; exit 143' TERM
+sleep 5 &
+wait $!
+`, { mode: 0o755 });
+		const sources = [1, 2, 3, 4, 5, 6].map((at) => ({ video: "/v.mp4", at, offset: 0 }));
+		const controller = new AbortController();
+		const stopped = extractFrames(bin, sources, join(dir, "out"), async () => {}, controller.signal);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		controller.abort();
+		await assert.rejects(stopped, /abort/i);
+		const lines = (name: string) => readFileSync(join(dir, name), "utf8").trim().split("\n").length;
+		assert.equal(lines("started"), 4);
+		assert.equal(lines("exited"), 4, "each started cut ended before extractFrames threw");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("X photos are asked for at the medium size", () => {
 	assert.equal(sized("https://pbs.twimg.com/media/AbC.jpg"), "https://pbs.twimg.com/media/AbC?format=jpg&name=medium");
 	assert.equal(sized("https://cdn.bsky.app/img/x.jpg"), "https://cdn.bsky.app/img/x.jpg");

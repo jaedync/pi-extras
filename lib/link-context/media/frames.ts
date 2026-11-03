@@ -49,8 +49,17 @@ function ffmpeg(binary: string, args: readonly string[], signal?: AbortSignal): 
 		const child = spawn(binary, ["-hide_banner", "-loglevel", "error", "-nostdin", "-y", ...args], { stdio: ["ignore", "ignore", "pipe"], signal });
 		let stderr = "";
 		child.stderr.on("data", (chunk: Buffer) => (stderr = (stderr + chunk.toString()).slice(-2000)));
-		child.on("error", reject);
-		child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg failed: ${stderr.trim().split("\n").pop() ?? code}`))));
+		let failed: { error: unknown } | undefined;
+		// An abort kills the child but reports at once: wait for its exit, so no cut writes into the folder after this returns.
+		child.on("error", (error) => {
+			if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) reject(error);
+			else failed ??= { error };
+		});
+		child.on("close", (code) => {
+			if (failed) reject(failed.error);
+			else if (code === 0) resolve();
+			else reject(new Error(`ffmpeg failed: ${stderr.trim().split("\n").pop() ?? code}`));
+		});
 	});
 }
 
