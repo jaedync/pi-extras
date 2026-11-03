@@ -115,11 +115,12 @@ export function bgutilDue(state: MediaState, now = Date.now()): boolean {
 }
 
 export function packagesDue(state: MediaState, refreshDays: number, now = Date.now()): boolean {
-	// Nothing installed, or a changed list: the install cannot wait, whatever the last attempt did.
-	if (!state.packagesAt || state.packages !== PACKAGES.join(" ")) return true;
+	// A first install cannot wait, whatever the last attempt did.
+	if (!state.packagesAt) return true;
 	// A refresh that failed waits a day: it takes up to 20 min, and the installed version still works.
 	if (state.refreshFailedAt && now - state.refreshFailedAt <= DAY_MS) return false;
-	return refreshDays > 0 && now - state.packagesAt > refreshDays * DAY_MS;
+	// A changed list is due at once, and so is a list older than the refresh interval.
+	return state.packages !== PACKAGES.join(" ") || (refreshDays > 0 && now - state.packagesAt > refreshDays * DAY_MS);
 }
 
 /** speech-to-text backend and default model for this machine. */

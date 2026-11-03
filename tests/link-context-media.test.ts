@@ -129,6 +129,9 @@ test("packages refresh on schedule, on a changed list, and never when refresh is
 	assert.equal(packagesDue({ packagesAt: 6 * day, packages: list, refreshFailedAt: 10 * day - 3_600_000 }, 3, 10 * day), false);
 	assert.equal(packagesDue({ packagesAt: 6 * day, packages: list, refreshFailedAt: 10 * day - 2 * day }, 3, 10 * day), true);
 	assert.equal(packagesDue({ packagesAt: 9 * day, packages: list, refreshFailedAt: 10 * day - 3_600_000 }, 3, 10 * day), false, "a fresh install needs no refresh yet");
+	// A changed list waits behind a failed refresh too: without a network, pip would run on every read.
+	assert.equal(packagesDue({ packagesAt: 9 * day, packages: "yt-dlp", refreshFailedAt: 10 * day - 3_600_000 }, 3, 10 * day), false);
+	assert.equal(packagesDue({ packagesAt: 9 * day, packages: "yt-dlp", refreshFailedAt: 10 * day - 2 * day }, 3, 10 * day), true);
 	assert.equal(asrPlan("darwin", "arm64").backend, "mlx-whisper");
 	assert.equal(asrPlan("linux", "x64").backend, "faster-whisper");
 	assert.equal(asrPlan("darwin", "x64").backend, "faster-whisper");
@@ -433,6 +436,10 @@ test("ensureMedia: a failed refresh waits a day and keeps the installed version"
 	assert.equal(pipCalls(), 1);
 	await ensureMedia({ refreshDays: 3, progress: () => {}, home });
 	assert.equal(pipCalls(), 1, "a failed refresh is not tried again on the next call");
+	// A release changes the package list: the installed tools stay, and pip waits for the same day.
+	writeState(home, { packages: "yt-dlp" });
+	await ensureMedia({ refreshDays: 3, progress: () => {}, home });
+	assert.equal(pipCalls(), 1, "a changed list also waits after a failed refresh");
 });
 
 const python = ["python3", "python"].find((bin) => spawnSync(bin, ["--version"]).status === 0);
