@@ -2,6 +2,17 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Shell Jobs: Pi no longer keeps a claim on a process group that it could
+  not stop. Pi rechecks the group during the session and drops the claim
+  when the group is gone. Before, the claim stayed until Pi exited, and
+  the exit net could kill an unrelated process group that got the same
+  number. A session that still runs stays in the exit net, so its jobs
+  still stop.
+
 ## 0.39.0 - 2026-11-03
 
 ### Added

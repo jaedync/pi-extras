@@ -365,6 +365,29 @@ describe("process layer", () => {
 		assert.strictEqual(registry().runtimes.has(runtime), false);
 	});
 
+	test("a claim on a group that died later is dropped during the session", async () => {
+		const pgid = await deadPgid();
+		// The session still runs, so the runtime must stay in the exit net.
+		const runtime = { ...makeRuntime(new Set([pgid])), closing: false };
+		registry().runtimes.add(runtime);
+		// stopGroup could not confirm the group died, so the pgid stays claimed.
+		recordResidual(runtime, pgid, false);
+		assert.strictEqual(runtime.residualPids.has(pgid), true);
+		await sleep(RESIDUAL_RECHECK_MS + 400);
+		assert.strictEqual(runtime.residualPids.has(pgid), false, "the exit net keeps no claim on a number the OS can reuse");
+		assert.strictEqual(runtime.residualTimer, null);
+		assert.strictEqual(registry().runtimes.has(runtime), true, "a running session stays in the exit net");
+	});
+
+	test("a claim that cleanup confirms stops the recheck at once", async () => {
+		const pgid = await deadPgid();
+		const runtime = { ...makeRuntime(new Set()), closing: false };
+		recordResidual(runtime, pgid, false);
+		assert.notStrictEqual(runtime.residualTimer, null);
+		recordResidual(runtime, pgid, true);
+		assert.strictEqual(runtime.residualTimer, null);
+	});
+
 	test("a pgrep that cannot look (BusyBox has no -g) gives an unknown count, not zero", async () => {
 		const bin = tempDir();
 		const fake = join(bin, "pgrep");

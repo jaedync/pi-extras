@@ -246,8 +246,22 @@ export async function stopGroup(pgid: number, graceMs = TERM_GRACE_MS): Promise<
 
 /** Record whether this runtime still owns an unconfirmed group for the exit net. */
 export function recordResidual(runtime: Runtime, pgid: number, cleaned: boolean): void {
-	if (cleaned) runtime.residualPids.delete(pgid);
-	else runtime.residualPids.add(pgid);
+	if (cleaned) {
+		runtime.residualPids.delete(pgid);
+		// No claim is left to recheck, and a later claim must get its own deadline.
+		if (runtime.residualPids.size === 0) stopResidualReaper(runtime);
+		return;
+	}
+	runtime.residualPids.add(pgid);
+	// Recheck during the session too. The exit net kills every claimed pgid, and the
+	// OS can give a number that no group uses to an unrelated group later.
+	scheduleResidualReaper(runtime);
+}
+
+/** Drop the recheck timer. The claims stay, for a shutdown to recheck or the exit net to kill. */
+function stopResidualReaper(runtime: Runtime): void {
+	if (runtime.residualTimer !== null) clearInterval(runtime.residualTimer);
+	runtime.residualTimer = null;
 }
 
 /** Close a descriptor and drop a log file that no job ended up owning. */
@@ -296,9 +310,9 @@ export function scheduleResidualReaper(runtime: Runtime): void {
 			if (expired || !groupExists(pgid)) runtime.residualPids.delete(pgid);
 		}
 		if (runtime.residualPids.size > 0) return;
-		if (runtime.residualTimer !== null) clearInterval(runtime.residualTimer);
-		runtime.residualTimer = null;
-		registry().runtimes.delete(runtime);
+		stopResidualReaper(runtime);
+		// A session that still runs keeps its runtime: the exit net must still stop its jobs.
+		if (runtime.closing) registry().runtimes.delete(runtime);
 	}, RESIDUAL_RECHECK_MS);
 	timer.unref?.();
 	runtime.residualTimer = timer;
