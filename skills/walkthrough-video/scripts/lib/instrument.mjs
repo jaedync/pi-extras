@@ -10,7 +10,7 @@
 /* The quiet window is 300 ms and the cap is 3 s, as the design sets them. */
 /* eslint-disable no-undef */
 function initInstrument() {
-	const state = { last: 0, els: new Set(), observer: null, listeners: [] };
+	const state = { last: 0, els: new Set(), observer: null, listeners: [], epoch: 0 };
 
 	const rectOf = (element) => {
 		if (!(element instanceof Element)) return null;
@@ -49,6 +49,7 @@ function initInstrument() {
 	const api = {
 		begin() {
 			stop();
+			state.epoch += 1;
 			state.els = new Set();
 			state.last = performance.now();
 			state.observer = new MutationObserver((records) => {
@@ -76,6 +77,7 @@ function initInstrument() {
 		/** Resolves when the DOM has been quiet for 300 ms, or at the 3 s cap. */
 		settle() {
 			return new Promise((resolve) => {
+				const epoch = state.epoch;
 				const deadline = performance.now() + 3000;
 				const finish = () => {
 					const rects = [];
@@ -87,6 +89,12 @@ function initInstrument() {
 					resolve({ rects, quietMs: Math.round(performance.now() - state.last) });
 				};
 				const tick = () => {
+					// Node caps the wait and gives up before the page can. This window is over then, and its
+					// late tick must not stop the window that a later action opened.
+					if (epoch !== state.epoch) {
+						resolve({ rects: [], quietMs: 0, abandoned: true });
+						return;
+					}
 					const now = performance.now();
 					let running = false;
 					try {

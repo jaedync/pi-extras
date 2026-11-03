@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Walkthrough video: a wait that hits its 3.3 s cap no longer hides the
+  change of the next action. The old wait could end late in the page and
+  disconnect the new wait. The film then framed the next action on no
+  change at all.
+
 ## 0.39.0 - 2026-11-03
 
 ### Added
