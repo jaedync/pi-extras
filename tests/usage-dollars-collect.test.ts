@@ -141,7 +141,7 @@ test("meter readings anchor the day in a shared file, and later readings measure
 	assert.deepEqual(stored.anthropic, { date: "2026-10-10", usedUsd: 1100, atMs: NOW });
 });
 
-test("another process's older meter reading does not zero the day anchor", async () => {
+test("another process's older meter reading that is lower becomes the day anchor", async () => {
 	const dir = agentDir({});
 	const meter = (usedUsd: number, sampledMs: number): Array<[string, LimitSnapshot]> =>
 		[["anthropic", { atMs: NOW, source: "poll", entries: [{ label: "", kind: "budget", usedUsd, limitUsd: 2000, sampledMs }] }]];
@@ -151,9 +151,23 @@ test("another process's older meter reading does not zero the day anchor", async
 	later.observe(meter(20, NOW), NOW);
 	earlier.observe(meter(15, NOW - HOUR), NOW);
 	const stored = JSON.parse(readFileSync(join(dir, "usage-dollars", "meter-day.json"), "utf8"));
-	assert.deepEqual(stored.anthropic, { date: "2026-10-10", usedUsd: 20, atMs: NOW });
-	// "Spent today" stays at zero, not the whole month's total.
+	assert.deepEqual(stored.anthropic, { date: "2026-10-10", usedUsd: 15, atMs: NOW - HOUR });
+	// "Spent today" counts the 5 USD from the older reading, not the whole month's total.
 	const { inputs } = await later.collect(context({ snapshots: meter(20, NOW), now: NOW }));
+	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 5, sinceMs: NOW - HOUR } });
+});
+
+test("another process's older meter reading that is higher leaves the day anchor alone", async () => {
+	const dir = agentDir({});
+	const meter = (usedUsd: number, sampledMs: number): Array<[string, LimitSnapshot]> =>
+		[["anthropic", { atMs: NOW, source: "poll", entries: [{ label: "", kind: "budget", usedUsd, limitUsd: 2000, sampledMs }] }]];
+	const later = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
+	const earlier = createDollarsCollector({ agentDir: dir, timeZone: TZ, fetch: async () => new Response("{}") });
+	later.observe(meter(15, NOW), NOW);
+	earlier.observe(meter(20, NOW - HOUR), NOW);
+	const stored = JSON.parse(readFileSync(join(dir, "usage-dollars", "meter-day.json"), "utf8"));
+	assert.deepEqual(stored.anthropic, { date: "2026-10-10", usedUsd: 15, atMs: NOW });
+	const { inputs } = await later.collect(context({ snapshots: meter(15, NOW), now: NOW }));
 	assert.deepEqual(inputs.meterToday, { anthropic: { spentUsd: 0, sinceMs: NOW } });
 });
 
