@@ -6,7 +6,8 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -94,7 +95,9 @@ function editHandover(change: (record: Record<string, any>) => void) {
 
 test("end to end: a job survives the old Pi process, and the new one reports it once with exit 0 and its log", async () => {
 	const fixture = fileURLToPath(new URL("./fixtures/shell-jobs-restart.mts", import.meta.url));
-	const { stdout } = await promisify(execFile)(process.execPath, [fixture, agentDir, SESSION, "sleep 2; echo done-after-restart"], { timeout: 15_000 });
+	// The job waits for a gate file, not a fixed time: a loaded machine must not let it end before the new process looks.
+	const gate = join(mkdtempSync(join(tmpdir(), "restart-gate-")), "go");
+	const { stdout } = await promisify(execFile)(process.execPath, [fixture, agentDir, SESSION, `while [ ! -e '${gate}' ]; do sleep 0.05; done; echo done-after-restart`], { timeout: 15_000 });
 	const job = JSON.parse(stdout) as { id: string; pid: number; logPath: string; cwd: string };
 	groups.add(job.pid);
 	try {
@@ -107,6 +110,7 @@ test("end to end: a job survives the old Pi process, and the new one reports it 
 		assert.equal(listed.title, "Restart job");
 		assert.equal(existsSync(file()), false, "the new process claimed the hand-over file");
 		assert.match(JSON.stringify(app.widgets.at(-1)?.value), /restart-job|Restart job/);
+		writeFileSync(gate, "");
 		await until(() => app.messages.length === 1);
 		const [message] = app.messages;
 		assert.match(message.message.content, new RegExp(`^Job ${job.id} finished: exit 0 after`));
@@ -121,6 +125,7 @@ test("end to end: a job survives the old Pi process, and the new one reports it 
 	} finally {
 		rmSync(dirname(job.logPath), { recursive: true, force: true });
 		rmSync(job.cwd, { recursive: true, force: true });
+		rmSync(dirname(gate), { recursive: true, force: true });
 	}
 });
 
