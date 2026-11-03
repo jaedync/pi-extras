@@ -3,7 +3,8 @@
  * (session.ts) with a fake host, a temp store and a temp agent dir.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { LOCK_STALE_MS } from "../lib/auto-update/cycle.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,7 @@ import test from "node:test";
 import { backgroundBlocksRestart, decide, idleFor, selectorOpen, MAX_ATTEMPTS, QUIET_MS, USER_BASH_MAX_MS, userBashRunning, type AdoptInput, type IdleSignals } from "../lib/auto-update/adopt.ts";
 import { writeConfig } from "../lib/auto-update/config.ts";
 import { storePaths, type StorePaths } from "../lib/auto-update/paths.ts";
-import { APPLY_COMMAND, UPDATE_ENTRY, UpdateSession, type SessionHost, type UpdateEntryData } from "../lib/auto-update/session.ts";
+import { APPLY_COMMAND, RELOAD_STUCK_MS, SHUTDOWN_STUCK_MS, UPDATE_ENTRY, UpdateSession, type SessionHost, type UpdateEntryData } from "../lib/auto-update/session.ts";
 import { loadedEntries } from "../lib/auto-update/own-set.ts";
 import { replayArgs } from "../lib/auto-update/replay.ts";
 import { emptyState, readState, writeState, type UpdateSet, type UpdateState } from "../lib/auto-update/state.ts";
@@ -110,6 +111,24 @@ interface Harness {
 	readonly branch: { type: string; customType?: string; data?: unknown }[];
 	loaded: string[];
 	readonly history: Set<string>;
+	readonly levels: string[];
+	readonly logs: string[];
+	readonly exits: number[];
+	/** One-shot timers from `setOnce`, in the order they were set; `advance` fires the due ones. */
+	readonly timeouts: { at: number; fn: () => void; live: boolean }[];
+}
+
+/** Moves the fake clock forward and fires each live one-shot timer that comes due. */
+function advance(h: Harness, ms: number): void {
+	const end = h.clock + ms;
+	for (;;) {
+		const due = h.timeouts.filter((timer) => timer.live && timer.at <= end).sort((a, b) => a.at - b.at)[0];
+		if (!due) break;
+		h.clock = due.at;
+		due.live = false;
+		due.fn();
+	}
+	h.clock = end;
 }
 
 /** A store whose state.json, pi-current and settings.json all name `current`; the session runs `own`. */
@@ -131,6 +150,7 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: Object.values(mine.packages).map((r) => r.entry) }));
 	const h: Harness = {
 		paths, agentDir, entries: [], statuses: [], notices: [], calls: [], clock: 1_000_000, branch: [], loaded: [], history: new Set(),
+		levels: [], logs: [], exits: [], timeouts: [],
 		signals: { agentIdle: true, pendingMessages: false, compacting: false, promptOpen: false, subagentRun: false, background: false, editorEmpty: true, userBash: false },
 		host: undefined as unknown as SessionHost,
 	};
@@ -146,7 +166,10 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 			h.entries.push(data);
 			h.branch.push({ type: "custom", customType: UPDATE_ENTRY, data });
 		},
-		notify: (text) => h.notices.push(text),
+		notify: (text, level) => {
+			h.notices.push(text);
+			h.levels.push(level);
+		},
 		setStatus: (text) => h.statuses.push(text),
 		signals: () => h.signals,
 		dispatchApply: () => h.calls.push("dispatch"),
@@ -157,6 +180,18 @@ function harness(t: test.TestContext, own: (root: string) => UpdateSet, current:
 		now: () => h.clock,
 		random: () => 0.5,
 		setTimer: () => () => {},
+		setOnce: (fn, ms) => {
+			const timer = { at: h.clock + ms, fn, live: true };
+			h.timeouts.push(timer);
+			return () => {
+				timer.live = false;
+			};
+		},
+		log: (line) => h.logs.push(line),
+		exit: (code) => {
+			h.calls.push("exit");
+			h.exits.push(code);
+		},
 	};
 	return h;
 }
@@ -536,4 +571,168 @@ test("a ready update that waits 30 minutes for idle says so in the status line",
 		assert.deepEqual(h.calls, ["dispatch"]);
 		session.stop("quit");
 	}
+});
+
+/** A session that runs pi-extras 0.29.0 while 0.30.0 is ready: `apply` reloads. */
+function reloadReady(t: test.TestContext, host: Partial<SessionHost> = {}) {
+	const old = (root: string) => set(root, "1.4.0", "0.29.0");
+	const next = (root: string) => set(root, "1.4.0", "0.30.0");
+	const h = harness(t, old, next, { previous: old });
+	const session = new UpdateSession({ ...h.host, ...host });
+	session.start("startup");
+	// The cycle moved settings.json after this session loaded the old set.
+	switchSettings(h, next(h.paths.root));
+	h.clock += QUIET_MS;
+	clearRestart();
+	t.after(clearRestart);
+	const target = JSON.stringify(["1.4.0", next(h.paths.root).packages["npm-pi-extras"]!.entry]);
+	return { h, session, target, request: join(h.paths.restart, "tok123") };
+}
+
+/** A reload that waits until the test settles it. */
+function pendingReload() {
+	let settle: { resolve: () => void; reject: (error: Error) => void } | undefined;
+	const promise = new Promise<void>((resolve, reject) => {
+		settle = { resolve, reject };
+	});
+	return { promise, ...settle! };
+}
+
+const stuck = (h: Harness, reload: () => Promise<void>, shutdown: () => void = () => void h.calls.push("shutdown")) => ({ reload, shutdown });
+const live = (h: Harness) => h.timeouts.filter((timer) => timer.live).length;
+
+test("a reload that ends before the watchdog: no warning, no restart, and no timer stays behind", async (t) => {
+	const { h, session, request } = reloadReady(t);
+	await session.apply(stuck(h, async () => void h.calls.push("reload")));
+	assert.equal(live(h), 0, "the settled reload cleared its watchdog");
+	advance(h, RELOAD_STUCK_MS + SHUTDOWN_STUCK_MS);
+	assert.deepEqual(h.calls, ["reload"]);
+	assert.deepEqual(h.notices, []);
+	assert.deepEqual(h.exits, []);
+	assert.equal(existsSync(request), false);
+	assert.equal(restartPending("/sessions/a.jsonl"), false);
+});
+
+test("a reload that fails: the error comes through as before, and the watchdog is cleared", async (t) => {
+	const { h, session, request } = reloadReady(t);
+	await assert.rejects(session.apply(stuck(h, async () => {
+		throw new Error("reload broke");
+	})), /reload broke/);
+	assert.equal(live(h), 0);
+	advance(h, RELOAD_STUCK_MS + SHUTDOWN_STUCK_MS);
+	assert.deepEqual(h.calls, []);
+	assert.deepEqual(h.notices, []);
+	assert.equal(existsSync(request), false);
+});
+
+test("a reload stuck for 60 s restarts Pi through the launcher, and exits 30 s later if Pi's own quit also hangs", async (t) => {
+	const { h, session, target, request } = reloadReady(t);
+	const reload = pendingReload();
+	void session.apply(stuck(h, () => reload.promise));
+	// The old module's session_shutdown handler runs during the stuck reload: the watchdog must survive it.
+	session.stop("reload");
+	advance(h, RELOAD_STUCK_MS - 1);
+	assert.deepEqual(h.calls, []);
+	advance(h, 1);
+	assert.equal(readFileSync(request, "utf8"), `/sessions/a.jsonl\nUpdated pi-extras 0.29.0 → 0.30.0\n${target}\n--model\nsonnet:high\n-e\n./my ext.ts\n`, "the same lines the restart branch writes");
+	assert.equal(restartPending("/sessions/a.jsonl"), true, "shell jobs hand their jobs to the next Pi");
+	assert.deepEqual(h.levels, ["warning"]);
+	assert.equal(h.notices[0], "The update reload did not finish in 60 s. An extension's shutdown step does not end. Pi restarts with this session.");
+	assert.deepEqual(h.calls, ["shutdown"]);
+	assert.ok(h.logs[0]!.includes("did not finish") && h.logs[0]!.includes(target), "update.log names the stuck reload and its target");
+	advance(h, SHUTDOWN_STUCK_MS - 1);
+	assert.deepEqual(h.exits, []);
+	advance(h, 1);
+	assert.deepEqual(h.exits, [0]);
+	assert.deepEqual(h.calls, ["shutdown", "exit"]);
+	assert.equal(existsSync(request), true, "the launcher reads the request after the exit");
+});
+
+test("a stuck reload whose context went stale: the restart is undone and the user is told to quit", async (t) => {
+	const { h, session, request } = reloadReady(t);
+	void session.apply(stuck(h, () => new Promise(() => {}), () => {
+		throw new Error("This extension ctx is stale");
+	}));
+	advance(h, RELOAD_STUCK_MS + SHUTDOWN_STUCK_MS);
+	assert.equal(existsSync(request), false);
+	assert.equal(restartPending("/sessions/a.jsonl"), false);
+	assert.deepEqual(h.levels, ["warning", "warning"]);
+	assert.match(h.notices.at(-1)!, /Quit Pi and start it again/);
+	assert.deepEqual(h.exits, []);
+	assert.equal(live(h), 0);
+});
+
+test("a stuck reload without the launcher, in RPC mode or without a session file: only a warning", async (t) => {
+	for (const host of [{ launchedByLauncher: false }, { mode: "rpc" }, { sessionFile: () => undefined }, { restartToken: undefined }] as Partial<SessionHost>[]) {
+		const { h, session, request } = reloadReady(t, host);
+		void session.apply(stuck(h, () => new Promise(() => {})));
+		advance(h, RELOAD_STUCK_MS + SHUTDOWN_STUCK_MS);
+		const notices = h.notices.filter((text) => !text.startsWith("Updating"));
+		assert.deepEqual(notices, ["The update reload did not finish in 60 s. An extension's shutdown step does not end. Quit Pi and start it again."], JSON.stringify(Object.keys(host)));
+		assert.deepEqual(h.calls, []);
+		assert.equal(existsSync(request), false);
+		assert.equal(restartPending("/sessions/a.jsonl"), false);
+		assert.equal(live(h), 0);
+	}
+});
+
+test("a reload that ends after the watchdog shut Pi down: the exit timer stays, since Pi still quits", async (t) => {
+	const { h, session } = reloadReady(t);
+	const reload = pendingReload();
+	const applied = session.apply(stuck(h, () => reload.promise));
+	advance(h, RELOAD_STUCK_MS);
+	assert.deepEqual(h.calls, ["shutdown"]);
+	reload.resolve();
+	await applied;
+	advance(h, SHUTDOWN_STUCK_MS);
+	assert.deepEqual(h.exits, [0], "Pi stopped its TUI: a process that stays would have no screen");
+});
+
+test("a reload that ends after the watchdog fired, when shutdown threw: no timer stays", async (t) => {
+	const { h, session } = reloadReady(t);
+	const reload = pendingReload();
+	const applied = session.apply(stuck(h, () => reload.promise, () => {
+		throw new Error("stale");
+	}));
+	advance(h, RELOAD_STUCK_MS);
+	reload.resolve();
+	await applied;
+	assert.equal(live(h), 0);
+	advance(h, SHUTDOWN_STUCK_MS);
+	assert.deepEqual(h.exits, []);
+});
+
+test("a restart request that fails part way leaves no file for the launcher", async (t) => {
+	const { h, session } = reloadReady(t);
+	const real = fs.writeFileSync;
+	// The disk fills (EFBIG, ENOSPC) after the first bytes: the launcher would accept a cut request.
+	t.mock.method(fs, "writeFileSync", (file: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+		if (typeof file !== "string" || !file.startsWith(h.paths.restart)) return real(file, data, options);
+		real(file, String(data).slice(0, 10), options);
+		throw Object.assign(new Error("EFBIG: file too large, write"), { code: "EFBIG" });
+	});
+	syncBuiltinESMExports();
+	t.after(() => syncBuiltinESMExports());
+	void session.apply(stuck(h, () => new Promise(() => {})));
+	advance(h, RELOAD_STUCK_MS + SHUTDOWN_STUCK_MS);
+	t.mock.restoreAll();
+	syncBuiltinESMExports();
+	assert.deepEqual(existsSync(h.paths.restart) ? readdirSync(h.paths.restart) : [], []);
+	assert.deepEqual(h.calls, []);
+	assert.deepEqual(h.exits, []);
+	assert.match(h.notices[0]!, /Quit Pi and start it again/);
+	assert.equal(restartPending("/sessions/a.jsonl"), false);
+});
+
+test("a stuck reload whose restart request cannot be written: still a warning, and no shutdown", async (t) => {
+	const { h, session } = reloadReady(t);
+	// A file where the restart folder must be: mkdir fails.
+	writeFileSync(h.paths.restart, "");
+	void session.apply(stuck(h, () => new Promise(() => {})));
+	advance(h, RELOAD_STUCK_MS + SHUTDOWN_STUCK_MS);
+	assert.deepEqual(h.levels, ["warning"]);
+	assert.match(h.notices[0]!, /Quit Pi and start it again/);
+	assert.deepEqual(h.calls, []);
+	assert.equal(restartPending("/sessions/a.jsonl"), false);
+	assert.ok(h.logs.some((line) => line.includes("could not write the restart request")));
 });

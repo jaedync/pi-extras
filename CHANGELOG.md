@@ -2,6 +2,19 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Auto-update: a reload for new packages that does not finish no longer
+  holds the session forever. A reload stops when an extension's shutdown
+  step does not end. After 60 seconds, auto-update records the stuck
+  reload in `update.log` and shows a warning. When the launcher started Pi
+  in a terminal, Pi restarts with the same session. If Pi does not quit in
+  30 more seconds, auto-update ends the process, and the launcher starts Pi
+  again. Without a launcher, the warning tells you to quit Pi and start it
+  again.
+
 ## 0.38.9 - 2026-11-02
 
 ### Changed

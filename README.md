@@ -158,6 +158,14 @@ newest versions, run `pi update --all`.
   `Updated pi-extras 0.30.0 → 0.31.0 · 2:05 PM`. A line from another day
   shows the date (`Oct 26`) in place of the time. When pi-extras changed, expand the line (`ctrl+o`) to read the notes of each
   version between the two.
+- A reload waits for each extension to end its shutdown step. If one
+  step does not end, the reload stops there. After 60 seconds, auto-update
+  writes a line in `update.log` and shows a warning. If the launcher
+  started Pi in a terminal, Pi then restarts with the same session. If Pi
+  does not stop in 30 more seconds, auto-update stops the process, and the
+  launcher starts Pi again. In other cases (no launcher, RPC mode, or a
+  session with no file), the warning tells you to quit Pi and start it
+  again.
 - If a new set waits 30 minutes for the session to become idle, the status
   line shows "update ready: waits for idle (/reload to use it)". For a new
   Pi, it shows "restart to use it".
