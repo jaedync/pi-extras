@@ -16,6 +16,21 @@ import type { AgentRecord, ChildHandle, Launcher } from "./types.ts";
 /** A follow-up to a report usually comes within a minute or two; after that a relaunch costs less than holding the session. */
 export const IDLE_RELEASE_MS = 120_000;
 
+interface ReplyLike { role?: unknown; stopReason?: unknown; content?: unknown }
+
+const textOf = (entry: ReplyLike): string => {
+	const content = entry.content;
+	if (typeof content === "string") return content.trim();
+	if (!Array.isArray(content)) return "";
+	return content.filter((part) => (part as { type?: unknown }).type === "text")
+		.map((part) => (part as { text?: unknown }).text ?? "").join("").trim();
+};
+
+/** A reply that ended its turn with text and no tool call, so it can be a report. */
+const finalReply = (entry: ReplyLike): boolean => entry.role === "assistant"
+	&& !["aborted", "error", "length"].includes(String(entry.stopReason ?? ""))
+	&& !(Array.isArray(entry.content) && entry.content.some((part) => (part as { type?: unknown }).type === "toolCall"));
+
 export interface SessionOptions {
 	readonly launcher: Launcher;
 	/** How long a finished child keeps its session; default IDLE_RELEASE_MS. */
@@ -63,16 +78,34 @@ export class OpenSessions {
 		return this.handles.get(name)?.messages().filter((message) => !start?.has(message)) ?? [];
 	}
 
-	/** The run's last answer, as text; none before it starts or when it said nothing. */
+	/**
+	 * The run's last answer, as text; none before it starts or when it said nothing.
+	 * When a final reply is longer than the last one, the report keeps the longest
+	 * first and each later reply under a note, so a short reply can't hide it.
+	 */
 	runText(name: string): string | undefined {
 		if (!this.runStarts.has(name)) return undefined;
-		const last = [...this.runMessages(name)].reverse().find((message) => {
-			const entry = message as { role?: unknown; stopReason?: unknown; content?: unknown };
-			return entry.role === "assistant" && !(entry.stopReason === "aborted" && Array.isArray(entry.content) && entry.content.length === 0);
-		}) as { content?: unknown } | undefined;
-		const text = typeof last?.content === "string" ? last.content : Array.isArray(last?.content)
-			? last.content.filter((part) => part.type === "text").map((part) => part.text ?? "").join("") : "";
-		return text.trim() || undefined;
+		const messages = this.runMessages(name);
+		let at = -1;
+		for (let i = messages.length - 1; i >= 0 && at < 0; i -= 1) {
+			const entry = messages[i] as ReplyLike;
+			if (entry.role !== "assistant") continue;
+			if (entry.stopReason === "aborted" && Array.isArray(entry.content) && entry.content.length === 0) continue;
+			at = i;
+		}
+		if (at < 0) return undefined;
+		const text = textOf(messages[at] as ReplyLike);
+		if (!text) return undefined;
+		const replies = messages.flatMap((message, index) => {
+			const entry = message as ReplyLike;
+			const said = finalReply(entry) ? textOf(entry) : "";
+			return said ? [{ index, said }] : [];
+		});
+		// A tie goes to the later reply, so the last one stays the report as it did before.
+		const full = replies.reduce<(typeof replies)[number] | undefined>((best, one) => (!best || one.said.length >= best.said.length ? one : best), undefined);
+		if (!full || full.index === replies.at(-1)!.index) return text;
+		const notes = replies.filter((one) => one.index > full.index).map((one) => `Later note from ${name}:\n${one.said}`);
+		return [full.said, ...notes].join("\n\n");
 	}
 
 	/**

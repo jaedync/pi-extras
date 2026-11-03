@@ -2,6 +2,15 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Subagents: the saved report and the completion message keep the longest
+  final reply of a run. Each reply after it comes next under "Later note
+  from <name>:". Before, a later, shorter reply replaced the full report,
+  such as one sentence after a budget message.
+
 ## 0.39.0 - 2026-11-03
 
 ### Added

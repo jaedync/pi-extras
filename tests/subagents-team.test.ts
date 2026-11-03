@@ -4,7 +4,7 @@ import { setImmediate as tick } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, MainDelivery, SpawnRequest } from "../lib/subagents/types.ts";
 
-interface Call { text: string; finish(result: string): void; fail(error: Error): void }
+interface Call { text: string; finish(result: string): void; end(message: unknown): void; fail(error: Error): void }
 
 /** A launcher whose children finish only when the test says so. */
 function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTimeoutMs?: number; launchError?: Error } = {}) {
@@ -35,6 +35,11 @@ function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTime
 								transcripts.set(record.name, [...(transcripts.get(record.name) ?? []), { role: "assistant", content: [{ type: "text", text: result }] }]);
 								resolve();
 							},
+							/** Ends the prompt with `message` as the last one, such as a reply that called a tool. */
+							end: (message) => {
+								transcripts.set(record.name, [...(transcripts.get(record.name) ?? []), message]);
+								resolve();
+							},
 							fail: reject,
 						}]);
 					}),
@@ -58,7 +63,10 @@ function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTime
 	const responds = (name: string, ...tools: string[]) => transcripts.set(name, [
 		{ role: "assistant", content: tools.map((tool, i) => ({ type: "toolCall", id: `call-${i}`, name: tool, arguments: {} })) },
 	]);
-	return { team, calls, steered, aborted, hooks, queuedLate, main, spawn, lastCall, responds };
+	/** Another final reply of the child's run: text with no tool call, ending a turn. */
+	const said = (name: string, text: string) => transcripts.set(name, [...(transcripts.get(name) ?? []),
+		{ role: "assistant", stopReason: "stop", content: [{ type: "text", text }] }]);
+	return { team, calls, steered, aborted, hooks, queuedLate, main, spawn, lastCall, responds, said };
 }
 
 test("a child runs its task and reports to main once", async () => {
@@ -142,6 +150,73 @@ test("main steers a running child and resumes a finished one with its context", 
 	await tick();
 	assert.equal(h.team.get(name)!.report, "second report");
 	assert.equal(h.main.filter((d) => d.kind === "report").length, 2);
+});
+
+test("a full report stays the run's report after a much shorter note", async () => {
+	const h = harness();
+	const name = h.spawn("review the auth module");
+	await tick();
+	const full = "Full report.\n" + "evidence line\n".repeat(100);
+	h.said(name, full);
+	h.lastCall(name).finish("The report above is final.");
+	const done = await h.team.whenDone(name);
+	assert.equal(done.report, `${full.trim()}\n\nLater note from ${name}:\nThe report above is final.`);
+});
+
+/** Text of exactly `chars` characters, starting with `label`; both reports of a run can be long. */
+const sized = (label: string, chars: number) => label + "y".repeat(chars - label.length);
+
+test("the longest final reply is the report after a later, still long, correction", async () => {
+	const h = harness();
+	const name = h.spawn("anchor the meter");
+	await tick();
+	const full = sized("Full report. ", 2_995);
+	const note = sized("One correction. ", 1_003);
+	h.said(name, full);
+	h.lastCall(name).finish(note);
+	const done = await h.team.whenDone(name);
+	assert.equal(done.report, `${full}\n\nLater note from ${name}:\n${note}`);
+});
+
+test("every later note follows the longest final reply, in order", async () => {
+	const h = harness();
+	const name = h.spawn("review the queue");
+	await tick();
+	const full = sized("Full report. ", 2_000);
+	h.said(name, full);
+	h.said(name, "First correction: lib/a.ts:10.");
+	h.lastCall(name).finish("Second correction: also lib/b.ts:20.");
+	const done = await h.team.whenDone(name);
+	assert.equal(done.report, `${full}\n\nLater note from ${name}:\nFirst correction: lib/a.ts:10.\n\nLater note from ${name}:\nSecond correction: also lib/b.ts:20.`);
+});
+
+test("two short replies keep the last one as the report", async () => {
+	const h = harness();
+	const name = h.spawn("quick check");
+	await tick();
+	h.said(name, "Checked the parser.");
+	h.lastCall(name).finish("Nothing to change yet.");
+	assert.equal((await h.team.whenDone(name)).report, "Nothing to change yet.");
+});
+
+test("a later reply as long as the one before it is the report", async () => {
+	const h = harness();
+	const name = h.spawn("quick look");
+	await tick();
+	h.said(name, "Checked the parser.");
+	h.lastCall(name).finish("Checked the reader.");
+	assert.equal((await h.team.whenDone(name)).report, "Checked the reader.");
+});
+
+test("a run that ends in a tool call reports the text it ended with, as before", async () => {
+	const h = harness();
+	const name = h.spawn("wire the meter");
+	await tick();
+	h.said(name, sized("Full report. ", 400));
+	h.lastCall(name).end({ role: "assistant", stopReason: "toolUse", content: [
+		{ type: "text", text: "Meter wired. Testing now." },
+		{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }] });
+	assert.equal((await h.team.whenDone(name)).report, "Meter wired. Testing now.");
 });
 
 test("a sibling's note to a finished child waits in its inbox; a question resumes it", async () => {
