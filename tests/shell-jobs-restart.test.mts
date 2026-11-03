@@ -156,6 +156,8 @@ test("a job whose process is gone with no exit file reports as ended, exit code 
 	await restart(old);
 	process.kill(-job.pid, "SIGKILL");
 	await until(() => !alive(job.pid));
+	// This test process is the leader's parent; wait until it is reaped, as init reaps it after a real restart.
+	await until(() => { try { process.kill(job.pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } });
 	const app = await boot();
 	assert.equal(app.messages.length, 1);
 	assert.match(app.messages[0].message.content, new RegExp(`^Job ${job.id} ended, exit code unknown, after`));
