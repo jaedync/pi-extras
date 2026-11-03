@@ -8,8 +8,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 - Subagents: the saved report and the completion message keep the longest
   final reply of a run. Each reply after it comes next under "Later note
-  from <name>:". Before, a later, shorter reply replaced the full report,
-  such as one sentence after a budget message.
+  from <name>:", including the text that a tool call, an abort or an error
+  ended with. The message also keeps the notes when it cuts a long report.
+  Before, a later reply replaced the report, and a run that ended in a tool
+  call or an error could lose it.
 
 ## 0.39.0 - 2026-11-03
 

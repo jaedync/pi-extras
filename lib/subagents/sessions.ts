@@ -15,6 +15,8 @@ import type { AgentRecord, ChildHandle, Launcher } from "./types.ts";
 
 /** A follow-up to a report usually comes within a minute or two; after that a relaunch costs less than holding the session. */
 export const IDLE_RELEASE_MS = 120_000;
+/** How a report shows a reply after its main part; format.ts cuts the two parts apart. */
+export const NOTE_PREFIX = "Later note from ";
 
 interface ReplyLike { role?: unknown; stopReason?: unknown; content?: unknown }
 
@@ -80,8 +82,8 @@ export class OpenSessions {
 
 	/**
 	 * The run's last answer, as text; none before it starts or when it said nothing.
-	 * When a final reply is longer than the last one, the report keeps the longest
-	 * first and each later reply under a note, so a short reply can't hide it.
+	 * The report is the longest final reply, then each reply after it under a note,
+	 * so a short reply or a tool call at the end can't hide the report.
 	 */
 	runText(name: string): string | undefined {
 		if (!this.runStarts.has(name)) return undefined;
@@ -95,7 +97,6 @@ export class OpenSessions {
 		}
 		if (at < 0) return undefined;
 		const text = textOf(messages[at] as ReplyLike);
-		if (!text) return undefined;
 		const replies = messages.flatMap((message, index) => {
 			const entry = message as ReplyLike;
 			const said = finalReply(entry) ? textOf(entry) : "";
@@ -103,9 +104,13 @@ export class OpenSessions {
 		});
 		// A tie goes to the later reply, so the last one stays the report as it did before.
 		const full = replies.reduce<(typeof replies)[number] | undefined>((best, one) => (!best || one.said.length >= best.said.length ? one : best), undefined);
-		if (!full || full.index === replies.at(-1)!.index) return text;
-		const notes = replies.filter((one) => one.index > full.index).map((one) => `Later note from ${name}:\n${one.said}`);
-		return [full.said, ...notes].join("\n\n");
+		if (!full) return text || undefined;
+		// The run ended on the longest final reply: the report is that reply alone.
+		if (full.index === at) return text;
+		const notes = replies.filter((one) => one.index > full.index).map((one) => one.said);
+		// Text a tool call, an abort or an error ended with is not a reply, but the parent still reads it.
+		if (text && !notes.includes(text)) notes.push(text);
+		return [full.said, ...notes.map((said) => `${NOTE_PREFIX}${name}:\n${said}`)].join("\n\n");
 	}
 
 	/**

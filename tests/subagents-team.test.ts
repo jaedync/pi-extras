@@ -166,6 +166,11 @@ test("a full report stays the run's report after a much shorter note", async () 
 /** Text of exactly `chars` characters, starting with `label`; both reports of a run can be long. */
 const sized = (label: string, chars: number) => label + "y".repeat(chars - label.length);
 
+/** The run's last message: text plus a tool call, so it is not a final reply. */
+const toolEnd = (text: string) => ({ role: "assistant", stopReason: "toolUse", content: [
+	{ type: "text", text },
+	{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }] });
+
 test("the longest final reply is the report after a later, still long, correction", async () => {
 	const h = harness();
 	const name = h.spawn("anchor the meter");
@@ -208,15 +213,52 @@ test("a later reply as long as the one before it is the report", async () => {
 	assert.equal((await h.team.whenDone(name)).report, "Checked the reader.");
 });
 
-test("a run that ends in a tool call reports the text it ended with, as before", async () => {
+test("a run with no final reply keeps the text it ended in a tool call with", async () => {
 	const h = harness();
 	const name = h.spawn("wire the meter");
 	await tick();
-	h.said(name, sized("Full report. ", 400));
-	h.lastCall(name).end({ role: "assistant", stopReason: "toolUse", content: [
-		{ type: "text", text: "Meter wired. Testing now." },
-		{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }] });
-	assert.equal((await h.team.whenDone(name)).report, "Meter wired. Testing now.");
+	h.lastCall(name).end(toolEnd("Checking one more file."));
+	assert.equal((await h.team.whenDone(name)).report, "Checking one more file.");
+});
+
+test("a report before a tool-call end gains the last text as a note", async () => {
+	const h = harness();
+	const name = h.spawn("wire the meter");
+	await tick();
+	const full = sized("Full report. ", 3_013);
+	h.said(name, full);
+	h.lastCall(name).end(toolEnd("Checking one more file."));
+	assert.equal((await h.team.whenDone(name)).report, `${full}\n\nLater note from ${name}:\nChecking one more file.`);
+});
+
+test("a report before an aborted end gains the aborted text as a note", async () => {
+	const h = harness();
+	const name = h.spawn("scan the tree");
+	await tick();
+	const full = sized("Full report. ", 900);
+	h.said(name, full);
+	h.lastCall(name).end({ role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "Reviewing the last file." }] });
+	assert.equal((await h.team.whenDone(name)).report, `${full}\n\nLater note from ${name}:\nReviewing the last file.`);
+});
+
+test("a report before an error end gains the error text as a note", async () => {
+	const h = harness();
+	const name = h.spawn("scan the queue");
+	await tick();
+	const full = sized("Full report. ", 900);
+	h.said(name, full);
+	h.lastCall(name).end({ role: "assistant", stopReason: "error", content: [{ type: "text", text: "Provider failed." }] });
+	assert.equal((await h.team.whenDone(name)).report, `${full}\n\nLater note from ${name}:\nProvider failed.`);
+});
+
+test("an empty error message does not hide the report", async () => {
+	const h = harness();
+	const name = h.spawn("scan the cache");
+	await tick();
+	const full = sized("Full report. ", 900);
+	h.said(name, full);
+	h.lastCall(name).end({ role: "assistant", stopReason: "error", content: [] });
+	assert.equal((await h.team.whenDone(name)).report, full);
 });
 
 test("a sibling's note to a finished child waits in its inbox; a question resumes it", async () => {
