@@ -2,7 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## Unreleased
+## 0.39.0 - 2026-11-03
+
+### Added
+
+- Implicit State Machines skill (`skills/implicit-state-machines`): the model
+  finds the implicit state machines in a codebase, checks each finding in the
+  code, and sorts them into four groups. Read-only scouts read the source in
+  parallel batches. Strong evaluators, one for each area, check the
+  findings in the code and sort them. Run
+  `/skill:implicit-state-machines` on a repository.
 
 ### Fixed
 
