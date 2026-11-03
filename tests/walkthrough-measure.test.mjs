@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -103,9 +103,11 @@ test("without a storyboard, measure finds hard cuts in the picture", { skip: has
 	}
 });
 
-const GOLDEN = "/tmp/wv-golden/pointer-film.mp4";
-const GOLDEN_SB = "/tmp/wv-golden/src/storyboard.json";
-const goldenSkip = process.env.WV_INTEGRATION !== "1" ? "set WV_INTEGRATION=1 to measure the golden film" : !existsSync(GOLDEN) ? "the golden film is not on disk" : false;
+// Not in /tmp: on op01 /tmp is RAM with a quota, and its 10-day cleaner would delete the golden film.
+const GOLDEN_DIR = process.env.WV_GOLDEN_DIR || join(homedir(), ".cache/pi-walkthrough-video/golden");
+const GOLDEN = join(GOLDEN_DIR, "pointer-film.mp4");
+const GOLDEN_SB = join(GOLDEN_DIR, "src/storyboard.json");
+const goldenSkip = process.env.WV_INTEGRATION !== "1" ? "set WV_INTEGRATION=1 to measure the golden film" : !existsSync(GOLDEN) ? `the golden film is not in ${GOLDEN_DIR} (set WV_GOLDEN_DIR)` : false;
 
 test("wv measure reproduces main's numbers for the golden film", { skip: goldenSkip, timeout: 120000 }, async () => {
 	const m = await measureFilm({ video: GOLDEN, storyboard: GOLDEN_SB, camera: false });
