@@ -7,11 +7,11 @@ import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claimForSession, laterLook, startIdentity, sweepHandovers, toHandoverJob } from "../lib/shell-jobs-adopt.ts";
-import { HANDOVER_MAX_AGE_MS, type Handover, handoverDir, handoverPath, writeHandover } from "../lib/shell-jobs-handover.ts";
+import { claimForSession, laterLook, leaderState, startIdentity, sweepHandovers, toHandoverJob } from "../lib/shell-jobs-adopt.ts";
+import { claimHandover, HANDOVER_MAX_AGE_MS, type Handover, handoverDir, handoverPath, writeHandover } from "../lib/shell-jobs-handover.ts";
 
 const linux = process.platform === "linux";
 const dirs: string[] = [];
@@ -122,4 +122,38 @@ test("a sweep at any start stops the jobs of hand-overs no restart claimed, and 
 	assert.equal(existsSync(handoverPath(agentDir, "/sessions/old.jsonl")), false);
 	assert.equal(existsSync(leftover), false, "an old claim leftover is removed");
 	assert.ok(existsSync(young), "a young temp file may still be in use");
+});
+
+test("a start time that cannot be read is not taken as a process that is gone", async () => {
+	const gone = await gonePid();
+	assert.equal(leaderState(process.pid, "1", () => "1"), "same");
+	assert.equal(leaderState(process.pid, "1", () => "2"), "other");
+	assert.equal(leaderState(process.pid, "1", () => null), "other", "a live pid whose start time failed to read may be anyone's");
+	assert.equal(leaderState(gone, "1", () => null), "gone");
+});
+
+test("a sweep never ends a fresh hand-over: not through a stale file under another name, and not in a race", async () => {
+	const agentDir = temp();
+	const fresh = group();
+	record(agentDir, fresh.pid!, startIdentity(fresh.pid!));
+	const freshPath = handoverPath(agentDir, "/sessions/a.jsonl");
+	// A stale record for the same session under a name that is not its own.
+	const odd = join(handoverDir(agentDir), "0123456789abcdef0123456789abcdef.json");
+	const stale = JSON.parse(readFileSync(freshPath, "utf8"));
+	writeFileSync(odd, JSON.stringify({ ...stale, writtenAt: Date.now() - HANDOVER_MAX_AGE_MS - 1000 }), { mode: 0o600 });
+	await sweepHandovers(agentDir, Date.now(), () => {});
+	assert.ok(existsSync(freshPath), "the fresh hand-over is still there for the restart");
+	assert.ok(alive(fresh.pid!));
+	assert.equal(existsSync(odd), false, "a stale file under a name that is not its own is removed");
+	// The race: a sweep that read a stale record claims after a restart wrote a fresh one.
+	assert.equal(claimHandover(agentDir, "/sessions/a.jsonl", Date.now(), true).kind, "fresh");
+	assert.ok(existsSync(freshPath), "a stale-only claim puts a fresh record back");
+	assert.equal(claimHandover(agentDir, "/sessions/a.jsonl", Date.now()).kind, "ok");
+});
+
+test("a job that is stopping goes over with no start time: its pid may be reaped and reused", () => {
+	const child = group();
+	const fields = { title: "x", command: "c", cwd: "/", logPath: "/l", startedAt: 1, code: null, signal: null, endedAt: null, claimed: false, attempts: 0, delivered: false, deliveryFailed: false };
+	const saved = toHandoverJob({ ...job({ pid: child.pid, pidStart: undefined, exitPath: null }), adopted: false, state: "stopping", ...fields } as never);
+	assert.equal(saved.pidStart, null);
 });

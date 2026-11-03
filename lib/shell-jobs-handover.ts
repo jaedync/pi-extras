@@ -7,11 +7,11 @@
  * expected shape, is refused and removed. No Pi API lives here.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { isJobId } from "./shell-jobs-core.ts";
 
-/** A record that waited longer than this for its session is dropped, and its processes are left alone. */
+/** A record that waited longer than this for its session is dropped, and its jobs that are still the recorded processes are stopped. */
 export const HANDOVER_MAX_AGE_MS = 24 * 60 * 60_000;
 export const HANDOVER_VERSION = 1;
 /** Job log folders are `mkdtemp(<tmp>/pi-shell-jobs-)`; nothing else is ever adopted, or later removed. */
@@ -59,6 +59,8 @@ export type Claimed =
 	| { readonly kind: "none" }
 	| { readonly kind: "ok"; readonly record: Handover }
 	| { readonly kind: "stale"; readonly record: Handover }
+	/** Only from a stale-only claim: the record was fresh and is back in place. */
+	| { readonly kind: "fresh" }
 	| { readonly kind: "bad"; readonly reason: string };
 
 const errorCode = (error: unknown): string | undefined => (error as NodeJS.ErrnoException | undefined)?.code;
@@ -111,7 +113,7 @@ export function writeHandover(agentDir: string, record: Handover): string {
  * processes that open the same session cannot both adopt its jobs. The file
  * is gone after any outcome but "none".
  */
-export function claimHandover(agentDir: string, sessionFile: string, now: number): Claimed {
+export function claimHandover(agentDir: string, sessionFile: string, now: number, staleOnly = false): Claimed {
 	const path = handoverPath(agentDir, sessionFile);
 	const claimed = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.claimed`;
 	try {
@@ -130,6 +132,11 @@ export function claimHandover(agentDir: string, sessionFile: string, now: number
 		if (typeof record === "string") return { kind: "bad", reason: record };
 		if (record.sessionFile !== sessionFile) return { kind: "bad", reason: "it names another session" };
 		if (now - record.writtenAt > HANDOVER_MAX_AGE_MS) return { kind: "stale", record };
+		if (staleOnly) {
+			// A link, not a rename: a newer record written meanwhile is not replaced.
+			try { linkSync(claimed, path); } catch { /* a newer record is in place, or the folder is gone */ }
+			return { kind: "fresh" };
+		}
 		return { kind: "ok", record };
 	} catch (error) {
 		return { kind: "bad", reason: (error as Error).message };

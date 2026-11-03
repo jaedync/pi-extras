@@ -8,9 +8,9 @@
  * signalled. No Pi API lives here.
  */
 import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { processStart } from "./auto-update/leases.ts";
-import { claimHandover, type Handover, handoverDir, HANDOVER_MAX_AGE_MS, type HandoverJob, ownLogDir, parseHandover, readExitCode } from "./shell-jobs-handover.ts";
+import { claimHandover, type Handover, handoverDir, HANDOVER_MAX_AGE_MS, type HandoverJob, handoverPath, ownLogDir, parseHandover, readExitCode } from "./shell-jobs-handover.ts";
 import { type Job, type Runtime, stopGroup } from "./shell-jobs-process.ts";
 
 /** How often a process that is not this one's child is checked for its end. */
@@ -50,12 +50,11 @@ function processAlive(job: Job): boolean {
 		if (fields[0] === "Z" || fields[0] === "X") return false;
 		return typeof job.pidStart !== "string" || fields[19] === job.pidStart;
 	}
-	try {
-		process.kill(job.pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code !== "ESRCH";
-	}
+	if (!pidExists(job.pid)) return false;
+	// Elsewhere ps gives the start time: a pid that another process now holds means the job ended. A failed read keeps waiting.
+	if (typeof job.pidStart !== "string") return true;
+	const current = startIdentity(job.pid);
+	return current === null || current === job.pidStart;
 }
 
 export interface Ending {
@@ -104,8 +103,29 @@ export function firstLook(job: Job, now: number): { ending: Ending | null; unver
  */
 function groupStillOurs(job: Job): boolean {
 	if (job.unverified === true || typeof job.pidStart !== "string") return false;
-	const current = startIdentity(job.pid);
-	return current === null || current === job.pidStart;
+	return leaderState(job.pid, job.pidStart) !== "other";
+}
+
+/** True unless the system says that no process has this pid. */
+function pidExists(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code !== "ESRCH";
+	}
+}
+
+/**
+ * The recorded leader now: the same process, gone, or another (or unknown)
+ * process. A start time that cannot be read (ps failed, /proc refused) counts
+ * as gone only when the pid is free; else it may be anyone's.
+ */
+export function leaderState(pid: number, pidStart: string, read: (pid: number) => string | null = startIdentity, exists: (pid: number) => boolean = pidExists): "same" | "gone" | "other" {
+	const current = read(pid);
+	if (current === pidStart) return "same";
+	if (current !== null) return "other";
+	return exists(pid) ? "other" : "gone";
 }
 
 /** A later look: the exit file, else the process; the exit file is read again once the process is gone, since it is written first. */
@@ -124,7 +144,8 @@ export function laterLook(job: Job, now: number): Ending | null {
  */
 function handoverStart(job: Job): string | null {
 	if (typeof job.pidStart === "string") return job.pidStart;
-	if (job.adopted === true || job.state === "done") return null;
+	// Only "running" holds an unreaped pid: Node reaps the child before the exit event that moves it to "stopping".
+	if (job.adopted === true || job.state !== "running") return null;
 	return startIdentity(job.pid);
 }
 
@@ -182,7 +203,7 @@ export function claimForSession(agentDir: string, reason: unknown, session: { se
 	if (session.sessionFile === undefined) return undefined;
 	try {
 		const claimed = claimHandover(agentDir, session.sessionFile, Date.now());
-		if (claimed.kind === "none") return undefined;
+		if (claimed.kind === "none" || claimed.kind === "fresh") return undefined;
 		if (claimed.kind === "bad") {
 			log("hand-over file refused", new Error(claimed.reason));
 			return undefined;
@@ -246,7 +267,13 @@ export async function sweepHandovers(agentDir: string, now: number, log: Log): P
 			// The age is the record's own; the claim below checks owner and mode, and only the file named for its session counts.
 			const parsed = parseHandover(readFileSync(path, "utf8"));
 			if (typeof parsed === "string" || now - parsed.writtenAt <= HANDOVER_MAX_AGE_MS) continue;
-			const claimed = claimHandover(agentDir, parsed.sessionFile, now);
+			// A file under another name than its session's is not a hand-over any restart reads: remove it, and claim nothing.
+			if (name !== basename(handoverPath(agentDir, parsed.sessionFile))) {
+				rmSync(path, { force: true });
+				continue;
+			}
+			// Stale only: a restart may have written a fresh record since the read above, and that one stays.
+			const claimed = claimHandover(agentDir, parsed.sessionFile, now, true);
 			if (claimed.kind !== "stale") continue;
 			await stopUnclaimed(claimed.record, log);
 			ended++;

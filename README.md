@@ -1724,8 +1724,8 @@ that file is missing and the process is gone, the completion says "ended,
 exit code unknown". The new Pi signals a job only while its process has the
 start time that was recorded. Thus a reused pid never gets a signal. If no
 Pi takes over a hand-over within 24 hours (for example, the restart failed),
-the next Pi that starts for any session stops its jobs that still run, as a
-quit would have stopped them. Every other end of a session stops the jobs as before: a quit, Ctrl+C,
+the next Pi that starts for any session stops its jobs whose processes are
+still the recorded ones. Their logs stay in the temp folder. Every other end of a session stops the jobs as before: a quit, Ctrl+C,
 `/new`, `/resume` or a fork.
 
 The wrapper has two small effects on every job. The job's shell is not the

@@ -13,7 +13,8 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   the restart reports when the new Pi starts. A job with no exit code
   reports "ended, exit code unknown". The new Pi signals a job only while
   its process start time agrees with the recorded one. If no Pi takes over a
-  hand-over within 24 hours, the next Pi to start stops its jobs. A quit,
+  hand-over within 24 hours, the next Pi to start stops its jobs that are
+  still the recorded processes. A quit,
   Ctrl+C, `/new`, `/resume` or a fork still stops the jobs.
 - Each shell job now runs under a small `/bin/sh` wrapper that writes its
   exit code to a file next to its log. The job's shell is no longer its
