@@ -3,7 +3,8 @@
  * (session.ts) with a fake host, a temp store and a temp agent dir.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { LOCK_STALE_MS } from "../lib/auto-update/cycle.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -699,6 +700,28 @@ test("a reload that ends after the watchdog fired, when shutdown threw: no timer
 	assert.equal(live(h), 0);
 	advance(h, SHUTDOWN_STUCK_MS);
 	assert.deepEqual(h.exits, []);
+});
+
+test("a restart request that fails part way leaves no file for the launcher", async (t) => {
+	const { h, session } = reloadReady(t);
+	const real = fs.writeFileSync;
+	// The disk fills (EFBIG, ENOSPC) after the first bytes: the launcher would accept a cut request.
+	t.mock.method(fs, "writeFileSync", (file: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
+		if (typeof file !== "string" || !file.startsWith(h.paths.restart)) return real(file, data, options);
+		real(file, String(data).slice(0, 10), options);
+		throw Object.assign(new Error("EFBIG: file too large, write"), { code: "EFBIG" });
+	});
+	syncBuiltinESMExports();
+	t.after(() => syncBuiltinESMExports());
+	void session.apply(stuck(h, () => new Promise(() => {})));
+	advance(h, RELOAD_STUCK_MS + SHUTDOWN_STUCK_MS);
+	t.mock.restoreAll();
+	syncBuiltinESMExports();
+	assert.deepEqual(existsSync(h.paths.restart) ? readdirSync(h.paths.restart) : [], []);
+	assert.deepEqual(h.calls, []);
+	assert.deepEqual(h.exits, []);
+	assert.match(h.notices[0]!, /Quit Pi and start it again/);
+	assert.equal(restartPending("/sessions/a.jsonl"), false);
 });
 
 test("a stuck reload whose restart request cannot be written: still a warning, and no shutdown", async (t) => {

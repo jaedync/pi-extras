@@ -3,7 +3,7 @@
  * cycle, the status line, and adoption (reload or restart when idle). All
  * Pi access goes through `SessionHost`, so tests drive it with fakes.
  */
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { decide, fingerprint, idleFor, packagesDiffer, piDiffers, type Decision, type IdleSignals, type OwnSet } from "./adopt.ts";
 import { isLockHeld } from "../file-lock.ts";
@@ -335,7 +335,15 @@ export class UpdateSession {
 		// Line 1: the session to resume. Line 2: what the restarted Pi says when the session has no file yet.
 		// Line 3: the target, for the launcher's count. Then one launch option per line (none holds a line break).
 		const lines = [file, after.replace(/[\r\n]+/g, " "), target.replace(/[\r\n]+/g, " ")];
-		writeFileSync(request, [...lines, ...replay.args].map((line) => `${line}\n`).join(""), { mode: 0o600 });
+		// The launcher restarts on any request file it finds, so a request appears whole or not at all.
+		const temp = `${request}.${process.pid}.tmp`;
+		try {
+			writeFileSync(temp, [...lines, ...replay.args].map((line) => `${line}\n`).join(""), { mode: 0o600 });
+			renameSync(temp, request);
+		} catch (error) {
+			rmSync(temp, { force: true });
+			throw error;
+		}
 		// Pi reports this shutdown as a plain quit; the intent tells shell-jobs to hand its jobs to the next Pi.
 		markRestart(file);
 		return request;
