@@ -315,3 +315,39 @@ test("mail that leaves the outbox on a retry tells the listener, so a quiet take
 	assert.ok(changes > before);
 	mail.dispose();
 });
+
+test("a send that fails keeps the mail to main and tries it again", () => {
+	let fail = true;
+	const sent: Array<{ message: OutgoingMessage; options: { triggerTurn: boolean; deliverAs?: string } }> = [];
+	const box = new MainMail({ batchMs: 5, route: () => "queue", retryMs: 1_000_000,
+		port: { send: (message, options) => { if (fail) throw new Error("This session's subagents are closed."); sent.push({ message, options }); } } });
+	box.deliver({ kind: "note", from: "scout", text: "found it" });
+	assert.equal(sent.length, 0, "the send failed");
+	// The mail is not lost: it stays queued, so a reload can hand it over again.
+	assert.deepEqual(box.pending().map((item) => item.text), ["found it"]);
+	assert.equal(box.waiting(), true, "the note still waits to reach main");
+	assert.equal(box.idle(), false);
+	// Main never saw it, so it owes no reply and no reminder names it.
+	box.remind();
+	assert.equal(sent.length, 0, "no reminder for mail that never landed");
+	fail = false;
+	box.retry();
+	assert.equal(sent.length, 1, "the same mail goes once, not twice");
+	assert.equal(sent[0]!.message.content, "Message from scout:\nfound it");
+	assert.deepEqual(sent[0]!.options, { triggerTurn: false });
+	assert.deepEqual(box.pending().map((item) => item.text), ["found it"], "still pending until Pi appends it");
+	box.dispose();
+});
+
+test("a failed send is tried again on the retry timer", async () => {
+	let fail = true;
+	const sent: OutgoingMessage[] = [];
+	const box = new MainMail({ batchMs: 5, route: () => "queue", retryMs: 5,
+		port: { send: (message) => { if (fail) throw new Error("This session's subagents are closed."); sent.push(message); } } });
+	box.deliver({ kind: "note", from: "scout", text: "found it" });
+	fail = false;
+	await sleep(30);
+	assert.deepEqual(sent.map((message) => message.content), ["Message from scout:\nfound it"]);
+	assert.equal(box.waiting(), false);
+	box.dispose();
+});
