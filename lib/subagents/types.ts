@@ -17,6 +17,9 @@ export const LIVE_STATES: ReadonlySet<AgentState> = new Set(["queued", "starting
 /** An agent that never had a run: no start, so no session file on disk and no spend. */
 export const neverStarted = (record: Pick<AgentRecord, "startedAt" | "runs">): boolean => record.startedAt === undefined && record.runs === 0;
 
+/** The deepest a subagent can be: main's children are at depth 1. */
+export const MAX_DEPTH = 4;
+
 /** A run's time budget in minutes and its cost budget in US dollars (budget.ts). */
 export interface RunLimits {
 	minutes?: number;

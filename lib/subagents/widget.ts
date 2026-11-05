@@ -14,6 +14,7 @@ import type { Motion } from "../band/band.ts";
 import { agentLine } from "../band/agent-look.ts";
 import { everyFrame } from "../band/clock.ts";
 import type { PendingItem } from "./contract.ts";
+import { reportsPending } from "./deliver.ts";
 import { MAIN } from "./names.ts";
 import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount, type ControlLine, type Span } from "./overflow.ts";
 import { type AgentRow, agentRows, presenceLine, rowColumns } from "./rows.ts";
@@ -53,16 +54,11 @@ export interface AgentsWidget {
 	detach(): void;
 }
 
-
-/** `motion` is Tool Display's setting, read each frame: reduced holds what agents are doing still. */
-const reportPending = (pending: readonly PendingItem[]): Set<string> =>
-	new Set(pending.filter((item) => item.kind === "report").flatMap((item) => item.from.split(", ")));
-
 interface WidgetView { records: AgentRecord[]; pending: PendingItem[]; expanded: boolean; motion: Motion }
 
 /** The widget's lines at `width`, and where its rows and control line sit, for clicks. */
 function renderAgents(theme: Theme, host: TuiHost, width: number, view: WidgetView): { lines: string[]; layout: Layout } {
-	const all = agentRows(view.records, reportPending(view.pending));
+	const all = agentRows(view.records, reportsPending(view.pending));
 	const mail = pendingLines(view.pending);
 	const budget = expandedBudget(host.terminal?.rows ?? process.stdout.rows ?? 40, mail.length);
 	// A terminal too short to give the rows more room has nothing to expand into.
@@ -100,6 +96,7 @@ function clickAgents(event: MouseEvent, layout: Layout, actions: { select?: (nam
 	return undefined;
 }
 
+/** `motion` is Tool Display's setting, read each frame: reduced holds what agents are doing still. */
 export function createAgentsWidget(motion: () => Motion = () => "full"): AgentsWidget {
 	let ui: WidgetUi | null = null;
 	let source: (() => { records: AgentRecord[]; pending: PendingItem[] }) | null = null;
@@ -148,7 +145,7 @@ export function createAgentsWidget(motion: () => Motion = () => "full"): AgentsW
 		update() {
 			if (!ui || !source) return;
 			const { records, pending } = snapshot();
-			const anything = agentRows(records, reportPending(pending)).length > 0 || pendingLines(pending).length > 0;
+			const anything = agentRows(records, reportsPending(pending)).length > 0 || pendingLines(pending).length > 0;
 			if (!anything) {
 				expanded = false;
 				if (shown) setWidget(undefined);

@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { isReserved, nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
 import { latestReportFile, reportFilePath, reportRun } from "./reports.ts";
-import { LIVE_STATES, NO_USAGE, type AgentRecord, type CheckResult, type CheckSpec, type FallbackStep } from "./types.ts";
+import { LIVE_STATES, MAX_DEPTH, NO_USAGE, type AgentRecord, type CheckResult, type CheckSpec, type FallbackStep } from "./types.ts";
 import { checkError } from "./checks.ts";
 import { validWorktree } from "./worktree.ts";
 import { CONTROL } from "./checkout.ts";
@@ -106,7 +106,7 @@ function validRecord(value: unknown): value is AgentRecord {
 	if (!value || typeof value !== "object") return false;
 	const r = value as AgentRecord;
 	return typeof r.name === "string" && /^[a-z0-9][a-z0-9-]*$/.test(r.name) && !isReserved(r.name)
-		&& typeof r.parent === "string" && Number.isInteger(r.depth) && r.depth >= 1 && r.depth <= 4
+		&& typeof r.parent === "string" && Number.isInteger(r.depth) && r.depth >= 1 && r.depth <= MAX_DEPTH
 		&& typeof r.task === "string" && typeof r.model === "string" && STATES.has(r.state)
 		&& (r.activity === null || typeof r.activity === "string")
 		&& typeof r.readOnly === "boolean" && (r.readOnlyShell === undefined || (r.readOnlyShell === true && r.readOnly === true)) && typeof r.fork === "boolean" && typeof r.blocking === "boolean"
@@ -291,7 +291,7 @@ export function recoverRoster(known: readonly AgentRecord[], dir: string, readBr
 		try { entries = readBranch(record.sessionFile); }
 		catch (error) { records.set(record.name, { ...restoreRecord(record, [], warn), restoreError: (error as Error).message }); continue; }
 		records.set(record.name, restoreRecord({ ...record, restoreError: undefined }, entries, warn));
-		if (record.depth >= 4) continue;
+		if (record.depth >= MAX_DEPTH) continue;
 		for (const child of legacyRecords(entries, dir, record.name, record.depth + 1, readBranch, warn)) {
 			if (!records.has(child.name)) records.set(child.name, child);
 		}

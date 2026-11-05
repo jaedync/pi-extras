@@ -19,10 +19,9 @@ import { HOST_VERSION, type HostActivity, type HostPorts, type HostState, type H
 import type { Route } from "./contract.ts";
 import type { Launcher } from "./types.ts";
 import { childInstructions, conversationDigest, entriesUntil, rosterText } from "./format.ts";
-import { sharedLimitStore } from "../limit-store.ts";
 import { hiddenFrom } from "./hidden.ts";
 import { readOnlyShellProblem } from "./sandbox.ts";
-import { windowReading } from "./windows.ts";
+import { liveWindowReading } from "./windows.ts";
 import { closingHost, parkHost } from "./host.ts";
 import { openHost } from "./host-state.ts";
 import { type ModelLike, modelTable, refOf, resolveModel, type ThinkingSettings } from "./models.ts";
@@ -242,7 +241,7 @@ function mainToolContext(scope: Scope, live: LivePi, team: () => HostTeam, model
 		guide: scope.guide, replyTimeoutMs: scope.config.replyTimeoutMs, now: Date.now, currentGroup,
 		childTools: (readOnly, shell) => childToolNames(live.activeTools(), readOnly, scope.config.childToolsExclude, shell),
 		shellProblem: readOnlyShellProblem,
-		windows: (model) => windowReading((provider) => sharedLimitStore().get(provider), model),
+		windows: (model) => liveWindowReading(model),
 	};
 }
 

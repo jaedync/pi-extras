@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readSection } from "../extras-config.ts";
 import { MAX_RUN_MINUTES } from "./budget.ts";
+import { MAX_DEPTH } from "./types.ts";
 
 export interface SubagentsConfig {
 	/** A model reference or short name; unset means the parent's model. */
@@ -66,7 +67,7 @@ export function parseConfig(section: Record<string, unknown>): SubagentsConfig {
 		: DEFAULTS.childToolsExclude;
 	const config: SubagentsConfig = {
 		maxConcurrent: positiveInt(section.maxConcurrent, DEFAULTS.maxConcurrent, 16),
-		maxDepth: positiveInt(section.maxDepth, DEFAULTS.maxDepth, 4),
+		maxDepth: positiveInt(section.maxDepth, DEFAULTS.maxDepth, MAX_DEPTH),
 		replyTimeoutMs: positiveInt(section.replyTimeoutMs, DEFAULTS.replyTimeoutMs, 60 * 60_000),
 		batchMs: positiveInt(section.batchMs, DEFAULTS.batchMs, 30_000),
 		groupWaitMs: positiveInt(section.groupWaitMs, DEFAULTS.groupWaitMs, 30 * 60_000),

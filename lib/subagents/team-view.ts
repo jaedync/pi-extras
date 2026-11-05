@@ -16,6 +16,7 @@ import { openSheet, type SheetHost, type SheetKey, type SheetSource } from "../b
 import { onBackground, selectedBackground } from "../band/surface.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import type { PendingItem } from "./contract.ts";
+import { reportsPending } from "./deliver.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
 import { stateCounts } from "./overflow.ts";
 import { type AgentRow, presenceLine, rowColumns, teamRows } from "./rows.ts";
@@ -58,7 +59,7 @@ export class TeamView implements SheetSource {
 
 	private read(): Snapshot {
 		const records = this.source.records();
-		const reported = new Set(this.source.pending().filter((item) => item.kind === "report").flatMap((item) => item.from.split(", ")));
+		const reported = reportsPending(this.source.pending());
 		return { records, rows: teamRows(records, reported) };
 	}
 

@@ -44,6 +44,10 @@ export interface MainPort {
 	send(message: OutgoingMessage, options: { triggerTurn: boolean; deliverAs?: "steer" }): void;
 }
 
+/** The agents whose reports are on their way to main: a report item names them all in `from` (`postReports`). */
+export const reportsPending = (pending: readonly PendingItem[]): Set<string> =>
+	new Set(pending.filter((item) => item.kind === "report").flatMap((item) => item.from.split(", ")));
+
 export function summarize(record: AgentRecord): ReportSummary {
 	const { input, output, cacheRead, cacheWrite } = record.usage;
 	const prompt = input + cacheRead + cacheWrite;

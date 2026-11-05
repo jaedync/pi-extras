@@ -29,7 +29,7 @@ import { installSignalRecorder } from "./signals.ts";
 import { Team } from "./team.ts";
 import { ToolActivity } from "./tool-activity.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
-import { windowReading } from "./windows.ts";
+import { liveWindowReading } from "./windows.ts";
 
 export interface HostInputs {
 	readonly generation: number;
@@ -94,9 +94,8 @@ function teamFor(inputs: HostInputs, ports: HostPorts, mail: () => MainMail, pla
 		sessionFileFor: (name) => join(sessionDir, `${new Date().toISOString().replace(/[:.]/g, "-")}_${name}_${randomUUID().slice(0, 8)}.jsonl`),
 		deliverToMain: (delivery) => mail().deliver(delivery),
 		launcher: ports.launcher,
-		// Status Plus fills the store, which is process-wide, so a reload keeps the readings.
 		windowUse: (model) => {
-			const found = windowReading((provider) => sharedLimitStore().get(provider), model);
+			const found = liveWindowReading(model);
 			return "reading" in found ? found.reading : undefined;
 		},
 	});
