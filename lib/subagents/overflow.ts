@@ -9,8 +9,15 @@
  * collapse them again.
  */
 import { ROW_MARGIN, type Seg } from "../band/band.ts";
-import type { AgentState } from "./types.ts";
-import type { AgentRow } from "./widget.ts";
+import type { AgentRecord, AgentState } from "./types.ts";
+
+/** One agent's row in the widget, at its depth under its parent. */
+export interface AgentRow {
+	record: AgentRecord;
+	depth: number;
+	/** Finished, with its report not yet delivered to main. */
+	reportQueued?: boolean;
+}
 
 /** Lines the widget keeps collapsed, the control line among them once there are more agents. */
 export const COLLAPSED_ROWS = 4;

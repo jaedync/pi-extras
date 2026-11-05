@@ -6,11 +6,10 @@
 import { formatElapsed } from "../shell-jobs-widget.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import { formatTokens } from "../status-plus-render.ts";
-import type { RunLimits } from "./budget.ts";
 import { checkLines, checkOf } from "./checks.ts";
 import { MAIN } from "./names.ts";
 import { NOTE_PREFIX } from "./sessions.ts";
-import { type AgentRecord, neverStarted, type Worktree } from "./types.ts";
+import { type AgentRecord, neverStarted, type RunLimits, type Worktree } from "./types.ts";
 import { worktreeFooter } from "./worktree.ts";
 
 export const REPORT_MAX_CHARS = 12_000;

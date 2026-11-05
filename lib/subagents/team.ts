@@ -17,7 +17,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterBlock, afterError, isLinePlace, queuedActivity, stopOrder, waitingFor } from "./after.ts";
 import { minutesAndUp } from "../duration.ts";
 import { MAIN, nameFor } from "./names.ts";
-import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
+import { budgetError, type BudgetUse, RunBudgets } from "./budget.ts";
 import { windowReason, type WindowReading } from "./windows.ts";
 import type { HostTeam, SendResult } from "./contract.ts";
 import { checkError, mergeCheck, RunChecks } from "./checks.ts";
@@ -41,7 +41,7 @@ import { RunWrapUps, type WrapUpTimes } from "./wrap-up.ts";
 import type { Thinking } from "./models.ts";
 import { placeChild } from "./placement.ts";
 import {
-	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, neverStarted, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
+	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, neverStarted, NO_USAGE, type RunLimits, type SpawnRequest, WAITING_FOR_MODEL,
 } from "./types.ts";
 
 export interface TeamOptions {

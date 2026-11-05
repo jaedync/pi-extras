@@ -16,9 +16,9 @@ import { openSheet, type SheetHost, type SheetKey, type SheetSource } from "../b
 import { onBackground, selectedBackground } from "../band/surface.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import type { PendingItem } from "./contract.ts";
-import { stateCounts } from "./overflow.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
-import { presenceLine, rowColumns, teamRows, type AgentRow } from "./widget.ts";
+import { type AgentRow, stateCounts } from "./overflow.ts";
+import { presenceLine, rowColumns, teamRows } from "./widget.ts";
 
 export interface TeamSource {
 	records(): readonly AgentRecord[];

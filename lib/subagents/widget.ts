@@ -22,18 +22,11 @@ import { compactionMark, contextHeat, formatTokens } from "../status-plus-render
 import { contextShare } from "../compaction-point.ts";
 import type { PendingItem } from "./contract.ts";
 import { MAIN } from "./names.ts";
-import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount, type ControlLine, type Span } from "./overflow.ts";
+import { type AgentRow, COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount, type ControlLine, type Span } from "./overflow.ts";
 import { type AgentRecord, type AgentState, LIVE_STATES, neverStarted, WAITING_FOR_MODEL } from "./types.ts";
 
 export const WIDGET_ID = "subagents";
 export const MAX_PENDING_ROWS = 3;
-
-export interface AgentRow {
-	record: AgentRecord;
-	depth: number;
-	/** Finished, with its report not yet delivered to main. */
-	reportQueued?: boolean;
-}
 
 export const shortModel = (ref: string): string => ref.slice(ref.indexOf("/") + 1);
 

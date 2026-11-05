@@ -16,7 +16,7 @@
  */
 import { formatMoney } from "../status-plus-logic.ts";
 import { clockNote, costNote } from "./format.ts";
-import type { AgentState } from "./types.ts";
+import type { AgentState, RunLimits } from "./types.ts";
 
 /** The longest a timer can wait; a later deadline would fire at once. */
 export const MAX_RUN_MINUTES = 24 * 60;
@@ -43,11 +43,6 @@ export interface NoteTimes {
 
 /** A note a run got: `cost`, or `time:<share>`. */
 const timeKey = (share: number): string => `time:${share}`;
-
-export interface RunLimits {
-	minutes?: number;
-	cost?: number;
-}
 
 /** What a run has used of its budget so far. */
 export interface BudgetUse {
