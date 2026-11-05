@@ -21,7 +21,9 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
 /** What a read-only child may have; with `shell`, bash too, which its sandbox keeps from writing (sandbox.ts). */
 export const readOnlyTools = (shell: boolean): ReadonlySet<string> => (shell ? new Set([...READ_ONLY_TOOLS, "bash"]) : READ_ONLY_TOOLS);
 
-const TEAM_TOOLS: ReadonlySet<string> = new Set(["message", "clock", "subagent", "stop_subagent"]);
+/** The child tool that reads the time (tools.ts): every child has it, a read-only one included, so none needs a shell for `date -u`. */
+export const CLOCK_TOOL = "clock";
+const TEAM_TOOLS: ReadonlySet<string> = new Set(["message", CLOCK_TOOL, "subagent", "stop_subagent"]);
 
 /** Its tools: what it could have, cut to its allowlist when it has one. */
 export function allowedTools(available: readonly string[], allowlist: readonly string[] | undefined): string[] {

@@ -6,6 +6,7 @@
 import { formatElapsed } from "../shell-jobs-widget.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import { formatTokens } from "../status-plus-render.ts";
+import { CLOCK_TOOL } from "./allowlist.ts";
 import { checkLines, checkOf } from "./checks.ts";
 import { MAIN } from "./names.ts";
 import { NOTE_PREFIX } from "./sessions.ts";
@@ -360,9 +361,6 @@ export function runClockHead(options: { now: number; minutes: number; notes?: bo
 	const notes = options.notes ? " Notes during the run give the time now and the work minutes used and left." : "";
 	return `[Budget clock] This run started at ${start.slice(11, 16)} UTC on ${start.slice(0, 10)} with a time budget of ${minutes} work minutes. If you do not wait, the budget ends at ${utcAt(now + minutes * MINUTE_MS, now)}. Call the ${CLOCK_TOOL} tool to see the time now and the work minutes left. Do not estimate the time from the work you did.${notes}`;
 }
-
-/** The child tool that reads the time (tools.ts): every child has it, a read-only one included, so none needs a shell for `date -u`. */
-export const CLOCK_TOOL = "clock";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
