@@ -165,7 +165,6 @@ export function askError(target: AgentRecord | undefined, get: Lookup): string |
 	return `${target!.name} has not started: it starts after ${waits.join(", ")} ${waits.length === 1 ? "ends" : "end"}. Send a note instead (no expectReply); it reads it when it starts.`;
 }
 
-/** What a queued spawn shows: the after agents it still waits for, then plain `queued`; any other activity stays. */
 /** A queued agent's activity: the after agents it waits for, else its `place` (1 is next) among those in line for a slot. */
 export function queuedActivity(record: AgentRecord, get: Lookup, place: number): string {
 	const waits = waitingFor(record, get);
@@ -190,7 +189,6 @@ const oneLine = (text: string, max = 200): string => {
 	return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 };
 
-/** The report of its latest run that saved one; a restored record has only its session file to find it by. */
 /** Where its report is; one from an older run says so, since the last run saved none. */
 function reportOf(record: AgentRecord): string | undefined {
 	let saved: ReturnType<typeof savedReport>;
