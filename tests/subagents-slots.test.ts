@@ -154,7 +154,7 @@ test("a child that rests in a bash sleep lends its slot, and waits in line for o
 test("a rest that ends with a slot free goes on at once", async () => {
 	const h = teamHarness({ maxConcurrent: 2 });
 	h.spawn("A", { name: "a" }); await flush();
-	await h.hooks.get("a")!.rest!(5);
+	assert.equal(await h.hooks.get("a")!.rest!(5), true, "the rest of the command runs");
 	assert.equal(h.team.get("a")!.state, "running");
 	assert.deepEqual(slotsUsed(h), ["a"]);
 });
