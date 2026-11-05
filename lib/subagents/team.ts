@@ -629,11 +629,13 @@ export class Team implements HostTeam {
 		this.sessions.endRun(name);
 		const { owedMain } = this.routing.ended(name);
 		this.forgetAnswer(name);
-		// As in finish and interrupt: a parent waits for one run's report, so a later run reports as a message.
-		this.patch(name, { state: "interrupted", blocking: false, error: message, restoreError: message, launchError: message,
+		this.patch(name, { state: "interrupted", error: message, restoreError: message, launchError: message,
 			launchFailures: (previous.launchFailures ?? 0) + 1, endedAt: this.now(), activity: `resume launch failed: ${message}`,
 			interruptedBy: "quit", interruptionId: randomUUID(), interruptionAnnounced: false });
 		const record = this.records.get(name)!;
+		// As in finish: a parent waits for one run's report, so a later run reports as a message.
+		// The kept record has no flag; the run log, the waiters and the failure report get this run's record, with it.
+		if (record.blocking) this.patch(name, { blocking: false });
 		this.settleWaiters(name, record);
 		const failure = { ...record, reportFile: undefined,
 			report: `Resume launch failed: ${message}. The child remains interrupted; fix the problem and resume it again.` };
