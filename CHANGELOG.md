@@ -2,7 +2,7 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
-## Unreleased
+## 0.40.0 - 2026-11-05
 
 ### Added
 
@@ -15,6 +15,27 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   import, and a special-case count before and after. Fresh reviewers check
   each round, with a stop rule. Run `/skill:untangle-codebase [area]`. Based
   on Maze's MIT skill of the same name.
+
+### Fixed
+
+- Subagents: a child that main waited on now reports each later run to
+  main. Before, the child kept its `blocking` flag after the wait ended, so
+  main got no report when a message resumed the child.
+- Subagents: a call of the `clock` tool no longer makes a run's check run
+  again. The list of tools that cannot change files left out `clock`.
+- Subagents: a child that asks its parent a question stops waiting at once
+  when the parent cannot resume (for example, its saved session is missing).
+  Before, the child waited the full reply timeout, 10 minutes by default.
+- Subagents: a question from a call whose signal was already stopped ends at
+  once. Before, it waited until the reply timeout.
+
+### Changed
+
+- Subagents: the code of `lib/subagents` has no import cycles now, and each
+  shared rule has one owner (the handover contract, the read-only tool list,
+  the report file name, the slot limit and the mail kinds). Tool names,
+  parameters, output, commands, settings and files on disk do not change.
+  `HOST_VERSION` stays 11.
 
 ## 0.39.2 - 2026-11-05
 
