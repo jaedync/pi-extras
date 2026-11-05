@@ -11,7 +11,7 @@ import { RunBudgets } from "../lib/subagents/budget.ts";
 import { childInstructions, clockNote, clockText, costNote, runClockHead } from "../lib/subagents/format.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { childClockTool } from "../lib/subagents/tools.ts";
-import type { ChildHandle } from "../lib/subagents/types.ts";
+import type { ChildHandle, ChildHooks } from "../lib/subagents/types.ts";
 import { teamHarness } from "./support/team-harness.ts";
 
 const MINUTE = 60_000;
@@ -281,11 +281,13 @@ test("a run that moves to a new session at a turn keeps its clock and gets a clo
 	const transcript: unknown[] = [];
 	let launches = 0;
 	let stale = false;
+	const hooks: ChildHooks[] = [];
 	const team = new Team({
 		maxConcurrent: 4, maxDepth: 2, replyTimeoutMs: 60_000, warn: () => undefined, deliverToMain: () => undefined, now, budgetTimes: SHARES,
 		launcher: {
-			async launch(): Promise<ChildHandle> {
+			async launch(_record, childHooks): Promise<ChildHandle> {
 				const id = launches++;
+				hooks[id] = childHooks;
 				prompts[id] = [];
 				return {
 					sessionFile: "/sessions/impl.jsonl", stamp: { generation: id, files: [] },
@@ -303,7 +305,7 @@ test("a run that moves to a new session at a turn keeps its clock and gets a clo
 	await pass(6 * MINUTE);
 	stale = true;
 	transcript.push({ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "bash", arguments: {} }] });
-	assert.equal((team as unknown as { turnEnded(name: string): boolean }).turnEnded("impl"), true);
+	assert.equal(hooks[0]!.turnEnded?.(), true);
 	resolvers[0]!();
 	for (let i = 0; i < 12; i++) await tick();
 	assert.equal(prompts[1]?.length, 1);
