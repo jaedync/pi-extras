@@ -14,7 +14,7 @@ import { MainMail } from "../lib/subagents/deliver.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { ToolActivity } from "../lib/subagents/tool-activity.ts";
 
-const PINNED = { version: 11, digest: "e4faf97a328a2b10ec04705de2effcd4f075029b93ddb08b349e42fda51b416f" };
+const PINNED = { version: 11, digest: "9e5a080bb6583993b49b09062e0e696696355f17bebd1f173a67af84a7ca7edc" };
 
 /**
  * Every declaration that crosses from one evaluation to the next, by the file
@@ -56,12 +56,15 @@ function declaration(text: string, file: string, name: string): string {
 
 const normalize = (text: string): string => text.replace(/\s+/g, " ").trim();
 
+/** By name, not by file: a declaration that moves to another file is still the same contract. */
 function digest(): string {
-	const hash = createHash("sha256");
+	const declarations: Array<[string, string]> = [];
 	for (const [file, names] of Object.entries(CONTRACT)) {
 		const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
-		for (const name of names) hash.update(`${file}#${name}\n${declaration(source, file, name)}\n`);
+		for (const name of names) declarations.push([name, declaration(source, file, name)]);
 	}
+	const hash = createHash("sha256");
+	for (const [name, text] of declarations.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) hash.update(`${name}\n${text}\n`);
 	return hash.digest("hex");
 }
 
