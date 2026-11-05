@@ -613,3 +613,17 @@ test("a child its parent waits on can't narrate to it, and asking it ends the wa
 	await tick();
 	assert.equal(h.main.at(-1)?.kind, "report", "its report now arrives as a message");
 });
+
+test("a child main waited on, and then resumed with a message, reports its new run to main", async () => {
+	const h = harness();
+	const name = h.spawn("quick check", { blocking: true });
+	await tick();
+	h.lastCall(name).finish("first");
+	await h.team.whenDone(name);
+	assert.equal(h.main.length, 0, "the first report went to main's wait");
+	assert.deepEqual(await h.team.send("main", name, "Now check the second file."), { ok: true, delivered: "resumed" });
+	await tick();
+	h.lastCall(name).finish("second");
+	await h.team.whenDone(name);
+	assert.equal(h.main.at(-1)?.kind, "report", "no one waits for the second run, so its report arrives as a message");
+});

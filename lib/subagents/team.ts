@@ -915,7 +915,8 @@ export class Team implements HostTeam {
 		// Answers still owed to it die with its run; a message resumes it to ask again.
 		const record = saveReport({ ...this.records.get(name)!, owed: undefined }, this.options.warn ?? console.warn);
 		this.sessions.endRun(name);
-		this.put(record);
+		// A parent waits for one run's report: a later run, which a message starts, reports as a message.
+		this.put(record.blocking ? { ...record, blocking: false } : record);
 		this.answers.forget(name);
 		this.settleWaiters(name, record);
 		handUp(this.handUpHost, record, this.stoppedByParent.delete(name));
