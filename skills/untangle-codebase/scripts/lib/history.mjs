@@ -63,7 +63,7 @@ export function readHistory(root, { since = "12 months ago" } = {}) {
  * @returns {Map<string, number>} paths relative to root
  */
 export function firstAdded({ top, prefix }) {
-	const out = gitText(top, ["log", "--diff-filter=A", "--no-renames", "--format=format:%x01%ct", "--name-only"]);
+	const out = gitText(top, ["log", "--diff-filter=A", "--no-renames", "--format=format:%x01%ct", "--name-only", "--", prefix || "."]);
 	const born = new Map();
 	for (const block of out.split(COMMIT_MARK)) {
 		const [time, ...files] = block.split("\n").map((l) => l.trim()).filter(Boolean);

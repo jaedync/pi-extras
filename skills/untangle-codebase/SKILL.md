@@ -80,6 +80,10 @@ worktree root with the full path of the script, so that the area path and
 
 The numbers find candidates. They do not decide. A hidden link can be a test
 and its subject, or a feature and its changelog. Check each one in the code.
+The special-case count reads names and shapes, not meaning: a rename of a
+retry name can move it, and JSX text with `/*` or one backtick can hide a few
+lines. Before you report a change in the count, read the hits that left and
+the hits that came (`--compare` lists the new ones).
 
 ## Steps
 
