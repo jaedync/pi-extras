@@ -13,45 +13,68 @@ the measured report. -->
 # Untangle a codebase
 
 Refactor the code so that an agent reads less for each change, breaks less
-without noticing, and finds root causes faster. Treat it as a goal: finish it.
+without noticing, and finds root causes faster. Treat it as a goal: finish it,
+inside the budget (see Hard rules).
 
 Ask one question of every piece: **should these pieces change together?**
 Fix every place where the code gives the wrong answer.
 
 If the user gave an area (a folder, a feature, a concern), work only there.
-Imports into and out of the area are in scope; code outside the area is not.
+Code outside the area changes only to follow an interface change of the area
+(see Hard rules).
 
 ## Hard rules
 
-- Work on a new branch in a separate worktree. Do not push. Do not merge.
-  The user reviews the decision log and the diff first.
-- Record a baseline before the first edit (step 2). Intended behavior must be
-  the same at the end, except for bugs that the refactor fixed. Name each one.
-- Make one fix in each commit. Run the tests after each commit. If they fail
-  and the fix does not explain it, revert the commit, do not patch around it.
-- Do not change a public interface (exports used outside the area, CLI flags,
-  file formats, settings, tool schemas) without a line for it in the log.
-- Stop rule for check rounds: stop when a round finds no new critical or high
-  issue. After 3 rounds, ask the user. A critical or high finding needs a
-  repro (a failing test, a probe output or a number), or it is medium at most.
+- Work on a new branch in a separate worktree, from a clean, committed base.
+  Write the base commit in `.untangle/baseline.md`. Do not push. Do not
+  merge. The user reviews the decision log and the diff first.
+- Record a baseline before the first edit (step 2). Behavior must be the same
+  at the end, except for the bugs that the log names as fixed.
+- A refactor commit does not change behavior. It does not change an assertion
+  about behavior that a caller can see. If a test fails after a refactor
+  commit, revert the commit. Do not edit the test to match.
+- A bug fix is its own commit: first a test that fails, then the fix, then a
+  line in the log. A rewrite of a test that checks internals is its own
+  commit too, before the fix that needs it.
+- Interfaces used outside the repository (published exports, CLI flags and
+  output, file formats, settings, tool schemas, network APIs) do not change.
+  Log a change that they need under "Not fixed" as a proposal for the user.
+- An interface used only inside the repository can change. Update every
+  caller in the same commit, and run the full typecheck and the full test
+  suite, not only the tests of the area. `untangle.mjs graph` lists the files
+  outside the area that import it.
+- Stop rule for check rounds: stop when a round has no confirmed critical or
+  high finding that is not fixed. After 3 rounds, stop and report. A critical
+  or high finding needs a repro (a failing test, a probe output or a number),
+  or it is medium at most.
+- Budget: if the user or the harness gives a time or cost limit, stop at 80
+  percent of it. Then finish the commit in progress, run the full checks and
+  report. List the open items under "Not fixed".
 
 ## Instruments
 
 `scripts/untangle.mjs` needs only Node 22 or later and git. Run it from the
-skill folder, or give its full path. Each command takes a path (default `.`).
+worktree root with the full path of the script, so that the area path and
+`--save` paths are relative to the worktree. Each command takes a path
+(default `.`).
 
 - `graph <path>`: import cycles; **imports of more volatile code** (an
   importer that changed much less often than what it imports, from git
-  history); **hidden links** (files that change in the same commits with no
-  import either way); fan-in, fan-out and instability. `--by dir` groups by
-  folder. `--save` and `--compare` measure before and after.
-- `special-cases <path>`: counts swallowed errors, retries and fixed waits,
-  disabled tests, turned-off type or lint checks and TODO notes. The total is
-  the progress number. Branches on one literal value are shown but not in the
+  history, in changes per month; a module with no commit older than 60 days
+  is not judged); **hidden links** (files that change in the same commits
+  with no import either way); **importers outside the area**; fan-in, fan-out
+  and instability. `--by dir` groups by folder. `--save` and `--compare`
+  measure before and after. Only more modules in cycles counts as worse: the
+  history numbers grow with your own commits, so compare them by hand.
+- `special-cases <path>`: counts swallowed errors and fallback values,
+  retries and fixed waits, disabled tests, turned-off type or lint checks and
+  TODO notes. It reads code without comments and strings, and notes only in
+  comments. The total is the progress number. Branches on one literal value are shown but not in the
   total, because a branch over a closed union is often good design.
   `--list <category>` prints each hit with file:line.
-- `skeleton <path>`: the source with function bodies left out, with line
-  numbers, so the whole area fits in one context. It is approximate.
+- `skeleton <path>`: the source of a folder or a file with function bodies
+  left out, with line numbers, so the whole area fits in one context. It is
+  approximate. `--depth 1` keeps one more level.
 
 The numbers find candidates. They do not decide. A hidden link can be a test
 and its subject, or a feature and its changelog. Check each one in the code.
@@ -72,16 +95,14 @@ Also confirm the area and the test command, if they are not clear.
 
 ### 2. Set up and record the baseline
 
-1. Make the worktree and branch. Put working files in `.untangle/` at its
-   root and add `.untangle/` to `.git/info/exclude`.
+1. Make the worktree and branch from a clean, committed base. Put working
+   files in `.untangle/` at its root and add `.untangle/` to
+   `.git/info/exclude`. Write the base commit in `.untangle/baseline.md`.
 2. Run the test suite, the typecheck and the linter. Save the exact commands
    and the pass, fail and skip counts in `.untangle/baseline.md`. A test that
    fails before you start is not your regression: list it.
 3. Save the numbers: `graph <area> --save .untangle/graph-before.json` and
    `special-cases <area> --save .untangle/special-before.json`.
-4. Look at the tests of the area. Where the behavior that you will move has
-   no test, write characterization tests first (tests that pin what the code
-   does now), and commit them before any refactor.
 
 ### 3. List every problem
 
@@ -146,7 +167,18 @@ that the safest ones with the most problems under them come first.
 
 ### 5. Fix everything on the list
 
-Do the fixes in the log order, one commit each. Run the tests after each one.
+Do the fixes in the log order. For each fix:
+
+1. Look at the tests of the behavior that the fix moves. Where it has no
+   test, write characterization tests first (tests that pin what the code
+   does now). Commit them on their own, and see them pass.
+2. Make the fix in one commit, or in a short series of commits that each
+   pass the tests.
+3. Run the tests of the area after each commit, and the full suite after a
+   change to an interface. Fill in the commit and the result in the log.
+4. Rerun `graph <area>`. A new cycle is a regression: fix it before the next
+   fix.
+
 Remove the special cases that the redesign makes unnecessary, and keep the
 ones the system still needs (with the reason in the log). Do not hunt for
 bugs separately. A structural fix can fix some bugs: log each one.
@@ -167,14 +199,18 @@ safety net for the other fixes. A test must fail on a regression, and only
 then.
 
 - A test that repeats the implementation checks the code against itself.
-  Remove it.
 - A test tied to internals breaks when the code changes but the behavior does
-  not. Rewrite it against the behavior.
-- A test that cannot fail checks nothing. Before you remove it, prove it:
-  break the code that it covers (a mutation: flip a condition, return a
-  constant) and show that the test still passes. Put the probe in the log.
-- List every removed test with its reason in the log, so the user can review
-  each one.
+  not. Rewrite it against the behavior, in its own commit.
+- A test that cannot fail checks nothing.
+- Each removed test needs proof in the log. Give one of these:
+  - a mutation probe: break the code that the test covers (flip a condition,
+    return a constant), and show that the rest of the suite still fails on
+    the mutation, so the removed test added nothing;
+  - for a test that cannot fail: the same mutation, with the test itself
+    still passing;
+  - the name of a kept test that checks the same behavior.
+- A test with no proof stays. List every removed test with its reason and its
+  proof in the log, so the user can review each one.
 
 ### 6. Check, and repeat until done
 
@@ -184,16 +220,19 @@ work. They search the changed area for hidden links, needless links, surplus
 and special cases that remain, and for behavior changes. Fix the confirmed
 findings, then start the next round. Use the stop rule in Hard rules.
 
-You are done when:
+You are done when all of these are true:
 
-- As few special cases are left as possible. The count is the best measure
-  of how close you are.
-- A typical change lands in one place.
-- Every import is reasonable, and nothing imports code that is more volatile
-  than itself, or the log says why it must.
-- A review round finds no new critical or high issue.
-- The tests, the typecheck and the linter give the baseline results or
-  better. Run them in full at the end.
+- Each problem in the log is fixed, or it is under "Kept special cases" or
+  "Not fixed" with a reason.
+- Each special case that is left is in the log, with the reason that the
+  system needs it. The count is the best measure of how close you are.
+- `graph --compare` shows no more modules in cycles than the baseline.
+- Each import of more volatile code and each hidden link that the graph
+  shows is checked and logged: fixed, or the reason that it must stay.
+- The last review round has no confirmed critical or high finding that is
+  not fixed.
+- The full tests, the typecheck and the linter give the baseline results or
+  better.
 
 ### 7. Report
 
@@ -216,4 +255,3 @@ You are done when:
 - Use git as evidence of how often pieces change and what changes together.
   The files that change with one file:
   `git show --format= --name-only $(git log --format=%H -- <file>) | sort | uniq -c | sort -rn`.
-- Rerun `graph` after each group of fixes. A new cycle is a regression.

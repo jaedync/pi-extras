@@ -7,69 +7,112 @@ import { execFileSync } from "node:child_process";
 // formatting runs: they say nothing about which pieces belong together.
 export const DEFAULT_MAX_FILES_PER_COMMIT = 25;
 const COMMIT_MARK = "\x01"; // git prints it from %x01; no path holds that byte
+const DAY = 86400;
 
-/**
- * File lists of the commits since `since`, newest first, paths relative to root.
- * Returns null when root is not in a git checkout.
- * @param {string} root @param {{ since?: string }} [options]
- * @returns {string[][] | null}
- */
-export function readCommits(root, { since = "12 months ago" } = {}) {
-	let prefix;
-	try {
-		prefix = execFileSync("git", ["rev-parse", "--show-prefix"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-	} catch {
-		return null;
-	}
-	const out = execFileSync(
-		"git",
-		["log", "--no-merges", "--no-renames", `--since=${since}`, "--format=format:%x01", "--name-only", "--", "."],
-		{ cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 512 * 1024 * 1024 },
-	);
-	return out
-		.split(COMMIT_MARK)
-		.map((block) => block.split("\n").map((l) => l.trim()).filter(Boolean))
-		.filter((files) => files.length > 0)
-		.map((files) => files.filter((f) => f.startsWith(prefix)).map((f) => f.slice(prefix.length)));
+/** @typedef {{ time: number, size: number, files: string[] }} Commit */
+
+/** @param {string} cwd @param {string[]} args */
+function gitText(cwd, args) {
+	return execFileSync("git", ["-c", "core.quotePath=false", ...args], {
+		cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 512 * 1024 * 1024,
+	});
 }
 
 /**
- * Number of commits that touched each file.
- * @param {string[][]} commits @param {Set<string>} [only] limit to these files
+ * Where root sits in its git checkout. Null when root is not in a checkout or
+ * the checkout has no commit yet.
+ * @param {string} root
  */
-export function churn(commits, only) {
+export function gitPlace(root) {
+	try {
+		const top = gitText(root, ["rev-parse", "--show-toplevel"]).trim();
+		const prefix = gitText(root, ["rev-parse", "--show-prefix"]).trim();
+		const head = gitText(root, ["rev-parse", "--verify", "-q", "HEAD"]).trim();
+		return { top, prefix, head };
+	} catch {
+		return null; // not a checkout, or no commit: the caller skips history
+	}
+}
+
+/**
+ * Commits since `since`, newest first. `size` counts every file of the commit in
+ * the whole repository; `files` holds only the files under root, relative to root.
+ * @param {string} root @param {{ since?: string }} [options]
+ * @returns {{ head: string, prefix: string, top: string, commits: Commit[] } | null}
+ */
+export function readHistory(root, { since = "12 months ago" } = {}) {
+	const place = gitPlace(root);
+	if (!place) return null;
+	const out = gitText(place.top, ["log", "--no-merges", "--no-renames", `--since=${since}`, "--format=format:%x01%ct", "--name-only"]);
+	const commits = out
+		.split(COMMIT_MARK)
+		.map((block) => block.split("\n").map((l) => l.trim()).filter(Boolean))
+		.filter((lines) => lines.length > 0)
+		.map(([time, ...all]) => ({
+			time: Number(time),
+			size: all.length,
+			files: all.filter((f) => f.startsWith(place.prefix)).map((f) => f.slice(place.prefix.length)),
+		}));
+	return { ...place, commits };
+}
+
+/**
+ * Number of commits that touched each file, and the time of its first commit in the window.
+ * @param {Commit[]} commits @param {(file: string) => string | null} [keyOf] map a file to a module, or to null to leave it out
+ */
+export function churn(commits, keyOf = (f) => f) {
 	const counts = new Map();
-	for (const files of commits) {
-		for (const file of files) {
-			if (!only || only.has(file)) counts.set(file, (counts.get(file) ?? 0) + 1);
+	const first = new Map();
+	for (const { time, files } of commits) {
+		for (const key of new Set(files.map(keyOf))) {
+			if (key === null) continue;
+			counts.set(key, (counts.get(key) ?? 0) + 1);
+			first.set(key, Math.min(first.get(key) ?? Infinity, time));
 		}
 	}
-	return counts;
+	return { counts, first };
+}
+
+/**
+ * Changes per 30 days since the first commit. A file younger than one month counts
+ * as one month old, so a new file is not called stable for having few changes.
+ * @param {number} changes @param {number} firstTime @param {number} now seconds
+ */
+export function changeRate(changes, firstTime, now) {
+	return changes / Math.max((now - firstTime) / (30 * DAY), 1);
+}
+
+/** @param {number} firstTime @param {number} now */
+export function ageDays(firstTime, now) {
+	return (now - firstTime) / DAY;
 }
 
 /**
  * Pairs of files that change in the same commits.
  * confidence = shared commits / commits of the less-changed file of the pair.
- * @param {string[][]} commits
- * @param {{ only?: Set<string>, minShared?: number, minConfidence?: number, maxFilesPerCommit?: number }} [options]
+ * @param {Commit[]} commits
+ * @param {{ keyOf?: (file: string) => string | null, minShared?: number, minConfidence?: number, maxFilesPerCommit?: number }} [options]
+ *   keyOf maps a file to its module, or to null to leave it out
  */
-export function coChangePairs(commits, { only, minShared = 3, minConfidence = 0.5, maxFilesPerCommit = DEFAULT_MAX_FILES_PER_COMMIT } = {}) {
+export function coChangePairs(commits, { keyOf = (f) => f, minShared = 3, minConfidence = 0.5, maxFilesPerCommit = DEFAULT_MAX_FILES_PER_COMMIT } = {}) {
 	const usable = commits
-		.map((files) => [...new Set(files.filter((f) => !only || only.has(f)))].sort())
-		.filter((files) => files.length > 0 && files.length <= maxFilesPerCommit);
-	const counts = churn(usable);
+		.filter((c) => c.size <= maxFilesPerCommit)
+		.map((c) => [...new Set(c.files.map(keyOf).filter((k) => k !== null))].sort())
+		.filter((keys) => keys.length > 0);
+	const counts = new Map();
 	const shared = new Map();
-	for (const files of usable) {
-		for (let i = 0; i < files.length; i++) {
-			for (let j = i + 1; j < files.length; j++) {
-				const key = `${files[i]}\n${files[j]}`;
-				shared.set(key, (shared.get(key) ?? 0) + 1);
+	for (const keys of usable) {
+		for (const k of keys) counts.set(k, (counts.get(k) ?? 0) + 1);
+		for (let i = 0; i < keys.length; i++) {
+			for (let j = i + 1; j < keys.length; j++) {
+				const pair = `${keys[i]}\n${keys[j]}`;
+				shared.set(pair, (shared.get(pair) ?? 0) + 1);
 			}
 		}
 	}
 	const pairs = [];
-	for (const [key, count] of shared) {
-		const [a, b] = key.split("\n");
+	for (const [pair, count] of shared) {
+		const [a, b] = pair.split("\n");
 		const confidence = count / Math.min(counts.get(a), counts.get(b));
 		if (count >= minShared && confidence >= minConfidence) {
 			pairs.push({ a, b, shared: count, changesA: counts.get(a), changesB: counts.get(b), confidence: round(confidence) });

@@ -1,82 +1,80 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
 import { after, test } from "node:test";
-import { fileURLToPath } from "node:url";
 import { listSourceFiles } from "../skills/untangle-codebase/scripts/lib/files.mjs";
 import { analyze, cycles } from "../skills/untangle-codebase/scripts/lib/graph.mjs";
-import { coChangePairs } from "../skills/untangle-codebase/scripts/lib/history.mjs";
+import { coChangePairs, readHistory } from "../skills/untangle-codebase/scripts/lib/history.mjs";
 import { localImports } from "../skills/untangle-codebase/scripts/lib/imports.mjs";
-import { skeletonOf } from "../skills/untangle-codebase/scripts/lib/skeleton.mjs";
-import { compare, scanText, summarize } from "../skills/untangle-codebase/scripts/lib/special-cases.mjs";
+import { CLI, commit, gitInit, put, removeTemps, tempDir } from "./untangle-codebase-support.mjs";
 
-const CLI = join(dirname(fileURLToPath(import.meta.url)), "../skills/untangle-codebase/scripts/untangle.mjs");
-const temps = [];
-after(() => temps.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+after(removeTemps);
 
-function tempDir() {
-	const dir = mkdtempSync(join(tmpdir(), "untangle-test-"));
-	temps.push(dir);
-	return dir;
-}
-
-function put(root, files) {
-	for (const [path, text] of Object.entries(files)) {
-		mkdirSync(dirname(join(root, path)), { recursive: true });
-		writeFileSync(join(root, path), text);
-	}
-}
-
-const git = (root, ...args) => execFileSync("git", args, { cwd: root, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
-
-function commit(root, files, message) {
-	put(root, files);
-	git(root, "add", "-A");
-	git(root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", message);
-}
-
-const ids = (file, text) => scanText(file, text).map((h) => h.category);
+const commitsOf = (...lists) => lists.map((files) => ({ time: 0, size: files.length, files }));
 
 test("js imports: relative, .js to .ts, index, re-export, dynamic, require; not packages or comments", () => {
-	const known = new Set(["src/a.ts", "src/b.ts", "src/c/index.ts", "src/d.mjs", "src/e.ts", "src/f.ts", "src/g.ts", "src/lodash.ts"]);
+	const known = new Set(["src/a.ts", "src/b.ts", "src/c/index.ts", "src/d.mjs", "src/e.ts", "src/f.ts", "src/g.ts", "src/h.ts", "src/lodash.ts"]);
 	const text = [
 		'import x from "./b.js";',
 		'import { y,\n  z } from "./c";',
 		'export * from "./d.mjs";',
+		'export type { T } from "./h";',
 		'const e = await import("./e");',
 		'const f = require("./f");',
 		'// import g from "./g";',
 		'import fs from "node:fs";',
 		'import _ from "lodash";',
-		'import type { T } from "./a";',
 	].join("\n");
-	assert.deepEqual(localImports("src/a.ts", text, known).sort(), ["src/b.ts", "src/c/index.ts", "src/d.mjs", "src/e.ts", "src/f.ts"]);
+	assert.deepEqual(localImports("src/a.ts", text, known).sort(), ["src/b.ts", "src/c/index.ts", "src/d.mjs", "src/e.ts", "src/f.ts", "src/h.ts"]);
 });
 
-test("python imports: relative modules, `from . import name` and absolute package paths", () => {
-	const known = new Set(["pkg/__init__.py", "pkg/a.py", "pkg/b.py", "pkg/sub/c.py", "pkg/sub/__init__.py"]);
-	const text = "from . import b\nfrom .sub.c import thing\nimport pkg.a\nimport os\n";
+test("js imports: strings and templates neither hide nor invent imports", () => {
+	const known = new Set(["src/a.ts", "src/b.ts", "src/c.ts", "src/foo.ts"]);
+	const text = [
+		'const glob = "src/*";',
+		'const url = "a//b"; import { b } from "./b";',
+		'const code = `import { x } from "./foo"`;',
+		'const s = "require(\\"./foo\\")";',
+		'const re = /\\/\\*/; import("./c"); // */',
+	].join("\n");
+	assert.deepEqual(localImports("src/a.ts", text, known).sort(), ["src/b.ts", "src/c.ts"]);
+});
+
+test("js imports: `..` reaches the root index file", () => {
+	assert.deepEqual(localImports("src/a.ts", 'import x from "..";', new Set(["index.ts", "src/a.ts"])), ["index.ts"]);
+});
+
+test("python imports: relative, parent, parenthesized, aliases; absolute only from the root or src", () => {
+	const known = new Set(["pkg/__init__.py", "pkg/a.py", "pkg/b.py", "pkg/sub/__init__.py", "pkg/sub/c.py", "pkg/sub/d.py", "pkg/sub/pkg/a.py"]);
+	const text = "from . import b\nfrom .sub.c import thing\nimport pkg.a as alias, os\n";
 	assert.deepEqual(localImports("pkg/a.py", text, known).sort(), ["pkg/b.py", "pkg/sub/c.py"]);
-	assert.deepEqual(localImports("pkg/b.py", "import pkg.a\n", known), ["pkg/a.py"]);
+	assert.deepEqual(localImports("pkg/sub/c.py", "from .. import b\nfrom . import (\n    d,\n)\n", known).sort(), ["pkg/b.py", "pkg/sub/d.py"]);
+	assert.deepEqual(localImports("pkg/sub/c.py", "import pkg.a\n", known), ["pkg/a.py"], "not pkg/sub/pkg/a.py");
+	assert.deepEqual(localImports("pkg/a.py", '"""\nimport pkg.b\n"""\n', known), [], "a docstring is not an import");
 });
 
-test("cycles finds each strongly connected group once, with no single nodes", () => {
+test("cycles finds each strongly connected group once, and survives a 20,000-node chain", () => {
 	const edges = new Map([["a", ["b"]], ["b", ["c"]], ["c", ["a"]], ["d", ["a"]], ["e", []]]);
 	assert.deepEqual(cycles(["a", "b", "c", "d", "e"], edges), [["a", "b", "c"]]);
+	const n = 20000;
+	const nodes = Array.from({ length: n }, (_, i) => `n${String(i).padStart(5, "0")}`);
+	const chain = new Map(nodes.map((v, i) => [v, [nodes[(i + 1) % n]]]));
+	assert.equal(cycles(nodes, chain)[0].length, n);
 });
 
-test("co-change pairs skip large commits and need shared commits and confidence", () => {
+test("co-change pairs skip large commits by their full size and need shared commits and confidence", () => {
 	const big = Array.from({ length: 30 }, (_, i) => `f${i}`);
-	const commits = [["a", "b"], ["a", "b"], ["a", "b", "c"], ["c"], ["c"], ["c"], big, big, big];
-	const pairs = coChangePairs(commits);
+	const pairs = coChangePairs(commitsOf(["a", "b"], ["a", "b"], ["a", "b", "c"], ["c"], ["c"], ["c"], big, big, big));
 	assert.deepEqual(pairs.map((p) => [p.a, p.b, p.shared, p.confidence]), [["a", "b", 3, 1]]);
+	// Two area files inside commits of 32 files: the area filter must not shrink the commit.
+	const wide = Array.from({ length: 3 }, () => ({ time: 0, size: 32, files: ["x", "y"] }));
+	assert.deepEqual(coChangePairs(wide), []);
 });
 
-test("analyze: a cycle, an import of volatile code and a hidden link in a real git history", () => {
+/** A repo whose git history shows each kind of finding. Times are spread so that ages are real. */
+function historyRepo() {
 	const root = tempDir();
-	git(root, "init", "-q");
+	gitInit(root);
 	commit(root, {
 		"src/stable.ts": 'import { v } from "./volatile";\nexport const s = v;\n',
 		"src/volatile.ts": "export const v = 1;\n",
@@ -87,19 +85,52 @@ test("analyze: a cycle, an import of volatile code and a hidden link in a real g
 		"src/api.ts": 'import { impl } from "./impl";\nexport const api = impl;\n',
 		"src/impl.ts": "export const impl = 1;\n",
 		"tests/left.test.ts": 'import { left } from "../src/left";\n',
+		"main.ts": 'import { api } from "./src/api";\n',
 	}, "start");
 	for (let i = 2; i <= 5; i++) commit(root, { "src/volatile.ts": `export const v = ${i};\n` }, `volatile ${i}`);
 	for (let i = 2; i <= 4; i++) commit(root, { "src/left.ts": `export const left = ${i};\n`, "src/right.ts": `export const right = ${i};\n` }, `pair ${i}`);
 	// api imports impl and both change together: a visible link, not a hidden one, and not more volatile.
 	for (let i = 2; i <= 4; i++) commit(root, { "src/api.ts": `import { impl } from "./impl";\nexport const api = impl + ${i};\n`, "src/impl.ts": `export const impl = ${i};\n` }, `api ${i}`);
-	const result = analyze(root);
-	assert.equal(result.files, 8, "tests are left out by default");
-	assert.deepEqual(result.cycles, [["src/ping.ts", "src/pong.ts"]]);
-	assert.deepEqual(result.volatileImports.map((v) => [v.from, v.to]), [["src/stable.ts", "src/volatile.ts"]]);
-	assert.deepEqual(result.hiddenLinks.map((p) => [p.a, p.b]), [["src/left.ts", "src/right.ts"]]);
-	const byDir = analyze(root, { by: "dir", includeTests: true });
-	assert.deepEqual(byDir.modulesTable.map((m) => m.name), ["src", "tests"]);
-	assert.deepEqual(byDir.modulesTable.find((m) => m.name === "tests").imports, ["src"]);
+	return root;
+}
+
+test("analyze: cycles, volatile imports, hidden links and importers outside the area", () => {
+	const root = historyRepo();
+	const area = join(root, "src");
+	const result = analyze(area, { minAgeDays: 0 });
+	assert.equal(result.files, 8);
+	assert.deepEqual(result.cycles, [["ping.ts", "pong.ts"]]);
+	assert.deepEqual(result.volatileImports.map((v) => [v.from, v.to]), [["stable.ts", "volatile.ts"]]);
+	assert.deepEqual(result.hiddenLinks.map((p) => [p.a, p.b]), [["left.ts", "right.ts"]]);
+	assert.deepEqual(result.outsideImporters, [{ from: "main.ts", to: "api.ts" }, { from: "tests/left.test.ts", to: "left.ts" }]);
+	assert.match(result.head, /^[0-9a-f]{40}$/);
+});
+
+test("analyze: a young importer is not called stable", () => {
+	const result = analyze(join(historyRepo(), "src"));
+	assert.deepEqual(result.volatileImports, [], "every file is minutes old, under the 60-day default");
+});
+
+test("analyze by dir: hidden links are folder pairs", () => {
+	const root = tempDir();
+	gitInit(root);
+	commit(root, { "a/x.ts": "1", "a/y.ts": "1", "b/z.ts": "1" });
+	for (let i = 2; i <= 4; i++) commit(root, { "a/x.ts": `${i}`, "a/y.ts": `${i}`, "b/z.ts": `${i}` });
+	const byDir = analyze(root, { by: "dir" });
+	assert.deepEqual(byDir.hiddenLinks.map((p) => [p.a, p.b]), [["a", "b"]]);
+});
+
+test("history: a repo with no commits, non-ASCII paths and a subfolder", () => {
+	const empty = tempDir();
+	gitInit(empty);
+	put(empty, { "a.ts": 'import "./b";\n', "b.ts": "" });
+	assert.equal(analyze(empty).hiddenLinks, null);
+	const root = tempDir();
+	gitInit(root);
+	for (let i = 1; i <= 4; i++) commit(root, { "my dir/café.ts": `${i}`, "my dir/a b.ts": `${i}` });
+	const history = readHistory(join(root, "my dir"));
+	assert.equal(history.commits.length, 4);
+	assert.deepEqual(history.commits[0].files.sort(), ["a b.ts", "café.ts"]);
 });
 
 test("analyze works outside git: no history numbers, graph still built", () => {
@@ -113,75 +144,45 @@ test("analyze works outside git: no history numbers, graph still built", () => {
 	assert.deepEqual(listSourceFiles(root), ["a.js", "b.js"]);
 });
 
-test("special cases: each category fires on its shape", () => {
-	assert.deepEqual(ids("a.ts", "try { go(); } catch {}"), ["swallowed-error"]);
-	assert.deepEqual(ids("a.ts", "try {\n  go();\n} catch (error) {\n  // fine\n}\n"), ["swallowed-error"]);
-	assert.deepEqual(ids("a.ts", "p.catch(() => {});"), ["swallowed-error"]);
-	assert.deepEqual(ids("a.py", "try:\n    go()\nexcept Exception:\n    pass\n"), ["swallowed-error"]);
-	assert.deepEqual(ids("a.ts", "setTimeout(() => focus(), 100);"), ["sleep-or-retry"]);
-	assert.deepEqual(ids("a.py", "time.sleep(0.5)"), ["sleep-or-retry"]);
-	assert.deepEqual(ids("a.test.ts", 'test.skip("x", () => {});'), ["disabled-test"]);
-	assert.deepEqual(ids("a.ts", "// @ts-ignore\nconst x = y as any;"), ["suppression", "suppression"]);
-	assert.deepEqual(ids("a.ts", "// TODO remove after the proxy update"), ["workaround-note"]);
-	assert.deepEqual(ids("a.ts", 'if (order.provider === "paypal") {'), ["literal-branch"]);
+const run = (cwd, ...args) => spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: "utf8" });
+
+test("cli graph --compare: only more files in cycles is worse; history numbers are shown, not judged", () => {
+	const root = tempDir();
+	gitInit(root);
+	commit(root, { "src/a.ts": 'import "./b";\n', "src/b.ts": 'import "./a";\n', "src/c.ts": "", "src/d.ts": "" });
+	const saved = join(root, "before.json");
+	assert.equal(run(root, "graph", "src", "--save", saved).status, 0);
+	for (let i = 1; i <= 3; i++) commit(root, { "src/c.ts": `${i}`, "src/d.ts": `${i}` });
+	const same = run(root, "graph", "src", "--compare", saved);
+	assert.equal(same.status, 0, same.stdout);
+	put(root, { "src/c.ts": 'import "./d";\n', "src/d.ts": 'import "./c";\n' });
+	const split = run(root, "graph", "src", "--compare", saved);
+	assert.equal(split.status, 1);
+	assert.match(split.stdout, /modulesInCycles\s+2 ->\s+4/);
+	const wrong = run(root, "graph", "src", "--compare", join(root, "nope.json"));
+	assert.equal(wrong.status, 2);
 });
 
-test("special cases: prose and normal code do not fire", () => {
-	assert.deepEqual(ids("a.ts", "// works the same as any other tool"), []);
-	assert.deepEqual(ids("a.ts", "// Note: any value is fine"), []);
-	assert.deepEqual(ids("a.ts", "try { go(); } catch (error) { log(error); }"), []);
-	assert.deepEqual(ids("a.ts", "const value = compute(input);"), []);
-	assert.deepEqual(ids("a.md", "catch {}"), [], "only source languages are read");
-});
-
-test("compare: the literal-branch signal stays out of the total; a new hit makes it worse", () => {
-	const before = summarize(scanText("a.ts", 'if (kind === "x") go();'), 1);
-	assert.equal(before.total, 0);
-	const after = summarize([...before.hits, ...scanText("b.ts", "catch {}")], 2);
-	const diff = compare(before, after);
-	assert.equal(diff.worse, true);
-	assert.deepEqual(diff.added.map((h) => h.file), ["b.ts"]);
-	assert.equal(compare(after, before).worse, false);
-});
-
-test("skeleton keeps declarations with line numbers and leaves out bodies", () => {
-	const text = [
-		'import { a } from "./a";',
-		"export function run(input: string): number {",
-		"  const x = input.length;",
-		"  if (x > 2) {",
-		"    return x;",
-		"  }",
-		"  return 0;",
-		"}",
-		"export class Box {",
-		"  private open(): void {",
-		"    this.state = 1;",
-		"  }",
-		"}",
-	].join("\n");
-	const out = skeletonOf(text).join("\n");
-	assert.match(out, /^ 1\| import/m);
-	assert.match(out, /^ 2\| export function run/m);
-	assert.match(out, /^10\|   private open\(\): void \{/m);
-	assert.doesNotMatch(out, /input\.length|return x|this\.state/);
-	assert.match(out, /…/);
-});
-
-test("cli: special-cases --compare exits 1 when the total goes up; bad options exit 2", () => {
+test("cli: special-cases --compare, bad options and bad paths", () => {
 	const root = tempDir();
 	put(root, { "a.ts": "export const a = 1;\n" });
 	const saved = join(root, "before.json");
-	const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { cwd: root, encoding: "utf8" });
-	assert.equal(run("special-cases", ".", "--save", saved).status, 0);
+	assert.equal(run(root, "special-cases", ".", "--save", saved).status, 0);
 	put(root, { "b.ts": "try { go(); } catch {}\n" });
-	const worse = run("special-cases", ".", "--compare", saved);
+	const worse = run(root, "special-cases", ".", "--compare", saved);
 	assert.equal(worse.status, 1);
 	assert.match(worse.stdout, /special cases: 0 -> 1 {2}\(WORSE\)/);
 	assert.match(worse.stdout, /b\.ts:1/);
-	const bad = run("graph", ".", "--by", "layer");
+	const graphJson = run(root, "graph", ".", "--compare", saved);
+	assert.equal(graphJson.status, 2, "a special-cases file is not a graph result");
+	assert.match(graphJson.stderr, /not a saved graph result/);
+	const bad = run(root, "graph", ".", "--by", "layer");
 	assert.equal(bad.status, 2);
 	assert.match(bad.stderr, /--by must be file or dir/);
-	assert.equal(run("nope").status, 2);
-	assert.match(run("skeleton", ".").stdout, /== a\.ts \(2 lines\)/);
+	assert.equal(run(root, "nope").status, 2);
+	const missing = run(root, "graph", "missing");
+	assert.equal(missing.status, 2);
+	assert.match(missing.stderr, /no such folder/);
+	assert.match(run(root, "skeleton", ".").stdout, /== a\.ts \(2 lines\)/);
+	assert.match(run(root, "skeleton", "b.ts").stdout, /== b\.ts/, "skeleton takes one file");
 });

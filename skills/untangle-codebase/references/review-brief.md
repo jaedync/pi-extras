@@ -28,9 +28,12 @@ Read the diff in full and read the changed files around it. Then answer:
 4. **Tests.** Do the tests still guard the moved behavior? For each test that
    the log removed, is the mutation probe convincing?
 
-Run `node <skill>/scripts/untangle.mjs graph <area> --compare .untangle/graph-before.json`
-and `special-cases <area> --compare .untangle/special-before.json` and use
-the numbers.
+From the worktree root, run
+`node <skill>/scripts/untangle.mjs graph <area> --compare .untangle/graph-before.json`
+and `node <skill>/scripts/untangle.mjs special-cases <area> --compare .untangle/special-before.json`,
+and use the numbers. Only more modules in cycles makes the graph compare
+fail. The history numbers (hidden links, volatile imports) grow with the
+refactor's own commits, so judge them from the lists, not from the counts.
 
 For each finding, give: severity (critical, high, medium, low), path:line,
 what is wrong, and the evidence. A critical or high finding needs a repro: a
