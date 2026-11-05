@@ -215,9 +215,7 @@ export class MainMail implements HostMail {
 	 * whether any of it asks main for a turn.
 	 */
 	takeAll(): { messages: OutgoingMessage[]; wakes: boolean } {
-		for (const group of [...this.held.keys()]) this.release(group, false);
-		this.flush();
-		const taken = this.outbox.splice(0);
+		const taken = this.takeOutbox();
 		return { messages: taken.map((item) => this.withStatus(item.message)), wakes: taken.some((item) => item.wakes) };
 	}
 
@@ -228,11 +226,16 @@ export class MainMail implements HostMail {
 	 * flushed here is not sent on its own.
 	 */
 	drain(): HeldMail[] {
-		for (const group of [...this.held.keys()]) this.release(group, false);
-		this.flush();
-		const taken = this.outbox.splice(0);
+		const taken = this.takeOutbox();
 		this.dispose();
 		return taken;
+	}
+
+	/** Releases every held group, flushes the batch and empties the outbox. */
+	private takeOutbox(): HeldMail[] {
+		for (const group of [...this.held.keys()]) this.release(group, false);
+		this.flush();
+		return this.outbox.splice(0);
 	}
 
 	/** Mail an earlier host could not hand over, posted again in the order it came (`drain`). */

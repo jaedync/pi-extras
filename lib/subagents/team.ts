@@ -633,8 +633,7 @@ export class Team implements HostTeam {
 			launchFailures: (previous.launchFailures ?? 0) + 1, endedAt: this.now(), activity: `resume launch failed: ${message}`,
 			interruptedBy: "quit", interruptionId: randomUUID(), interruptionAnnounced: false });
 		const record = this.records.get(name)!;
-		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
-		this.waiters.delete(name);
+		this.settleWaiters(name, record);
 		const failure = { ...record, reportFile: undefined,
 			report: `Resume launch failed: ${message}. The child remains interrupted; fix the problem and resume it again.` };
 		handUpFailure(this.handUpHost, failure, owedMain);
@@ -918,11 +917,16 @@ export class Team implements HostTeam {
 		this.sessions.endRun(name);
 		this.put(record);
 		this.answers.forget(name);
-		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
-		this.waiters.delete(name);
+		this.settleWaiters(name, record);
 		handUp(this.handUpHost, record, this.stoppedByParent.delete(name));
 		this.sessions.ended(name, record.state);
 		this.pump();
+	}
+
+	/** Ends the waits of `whenDone(name)` with its record. */
+	private settleWaiters(name: string, record: AgentRecord): void {
+		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
+		this.waiters.delete(name);
 	}
 
 	/** An asker's state follows its open questions. */
