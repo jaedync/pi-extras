@@ -354,7 +354,7 @@ export class Team implements HostTeam {
 	 */
 	afterWait(name: string): Promise<void> {
 		const record = this.records.get(name);
-		if (!record || !ACTIVE_STATES.has(record.state) || this.slots.used() <= this.options.maxConcurrent) return Promise.resolve();
+		if (!record || !ACTIVE_STATES.has(record.state) || this.slots.fits()) return Promise.resolve();
 		return this.goOnWhenFree(name, () => this.patch(name, { state: "running", ...WAITING_FOR_MODEL }));
 	}
 
@@ -556,7 +556,7 @@ export class Team implements HostTeam {
 		// A stop wrote its own activity; an abort or a close leaves the row as the command left it.
 		if (state === "running" || state === "interrupted") this.restoreActivity(name, activity);
 		if (signal?.aborted || state !== "running") return false;
-		return this.slots.used() <= this.options.maxConcurrent || this.slotAfterRest(name, activity, signal);
+		return this.slots.fits() || this.slotAfterRest(name, activity, signal);
 	}
 
 	/** A wrap-up that began meanwhile keeps saying so. */

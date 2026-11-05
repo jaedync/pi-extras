@@ -47,6 +47,11 @@ export class Slots {
 		return !this.host.closed() && this.used() < this.host.maxConcurrent;
 	}
 
+	/** Whether the agents that hold a slot now fit the limit: an agent that counts among them may go on in its own. */
+	fits(): boolean {
+		return this.used() <= this.host.maxConcurrent;
+	}
+
 	/** `name`, now queued, goes on in the session it holds once a slot is free. */
 	goOn(name: string, go: () => void, drop: () => void): void {
 		this.goingOn.get(name)?.drop();
