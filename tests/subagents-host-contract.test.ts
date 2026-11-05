@@ -14,7 +14,7 @@ import { MainMail } from "../lib/subagents/deliver.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { ToolActivity } from "../lib/subagents/tool-activity.ts";
 
-const PINNED = { version: 11, digest: "d5f5ff9e7696324f11ed5cd002a35b87d0419113c8e4fa898e9503f96f5da2e6" };
+const PINNED = { version: 11, digest: "c4926ce155b93e04afb9b9a4d3b37916900cbd00478b4e0db5b0cf4eecfefe1a" };
 
 /**
  * Every declaration that crosses from one evaluation to the next, by the file
@@ -24,7 +24,7 @@ const PINNED = { version: 11, digest: "d5f5ff9e7696324f11ed5cd002a35b87d0419113c
  * start of another version.
  */
 const CONTRACT: Record<string, readonly string[]> = {
-	"lib/subagents/contract.ts": ["MESSAGE_TYPE", "REPORT_TYPE", "Route", "MainContext", "OutgoingMessage", "MailDetails", "ReportSummary", "PendingItem", "reportsPending", "SendResult", "Watched", "callId",
+	"lib/subagents/contract.ts": ["MESSAGE_TYPE", "REPORT_TYPE", "Route", "MainContext", "OutgoingMessage", "MailDetails", "ReportSummary", "PendingItem", "reportSenders", "REPORT_SENDERS", "reportsPending", "SendResult", "Watched", "callId",
 		"HostTeam", "HostMail", "HostActivity", "HeldMail", "HostMessage", "ModelScope", "HostPorts", "HostState", "ParkedHost"],
 	"lib/subagents/types.ts": ["AgentState", "ACTIVE_STATES", "LIVE_STATES", "Usage", "AgentWork", "FailureKind", "FallbackStep", "Worktree", "AgentRecord", "CheckSpec", "CheckUpdate", "CheckResult", "CheckRun", "SpawnRequest", "ChildHandle", "ChildHooks", "Launcher"],
 	"lib/subagents/models.ts": ["THINKING_LEVELS", "Thinking", "ModelLike", "ModelChoice"],

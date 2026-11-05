@@ -30,7 +30,7 @@
  * stops main's turn first, so mail that landed in it gets a reminder that
  * wakes main once the compaction is done (`remind`).
  */
-import { type HeldMail, type HostMail, type MailDetails, type MainContext, MESSAGE_TYPE, type OutgoingMessage, type PendingItem, REPORT_TYPE, type ReportSummary, type Route } from "./contract.ts";
+import { type HeldMail, type HostMail, type MailDetails, type MainContext, MESSAGE_TYPE, type OutgoingMessage, type PendingItem, REPORT_TYPE, reportSenders, type ReportSummary, type Route } from "./contract.ts";
 import { reportWithCheck } from "./checks.ts";
 import { noteText, panelText, questionText, reminderText, reportText } from "./format.ts";
 import type { AgentRecord, MainDelivery } from "./types.ts";
@@ -65,7 +65,7 @@ export function summarize(record: AgentRecord): ReportSummary {
 
 /** Who sent mail, as a reminder names them: the sender, or every agent whose report it carries. */
 function ownerOf(details: MailDetails): string {
-	return details.kind === "report" ? details.reports.map((report) => report.name).join(", ") : details.from;
+	return details.kind === "report" ? reportSenders(details.reports.map((report) => report.name)) : details.from;
 }
 
 /** An assistant message main finished, rather than one that was stopped or failed. */
@@ -191,7 +191,7 @@ export class MainMail implements HostMail {
 	/** Reports sent together, as one message. */
 	private postReports(records: readonly AgentRecord[], wakes: boolean, content = reportsText(records, this.now())): void {
 		const id = this.nextId();
-		this.remember({ id, kind: "report", from: records.map((record) => record.name).join(", "), text: "report", at: this.now() });
+		this.remember({ id, kind: "report", from: reportSenders(records.map((record) => record.name)), text: "report", at: this.now() });
 		// Every report shows its header; one that only repeats an answer keeps its text folded.
 		this.post({ customType: REPORT_TYPE, content, display: true, details: { id, kind: "report", reports: records.map(summarize) } }, wakes);
 	}

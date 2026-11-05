@@ -80,9 +80,13 @@ export interface PendingItem {
 	at: number;
 }
 
-/** The agents whose reports are on their way to main: a report item names them all in `from` (deliver.ts `postReports`). */
+/** A report item's `from`: the names of every agent whose report it carries. `reportsPending` reads it back. */
+export const reportSenders = (names: readonly string[]): string => names.join(REPORT_SENDERS);
+const REPORT_SENDERS = ", ";
+
+/** The agents whose reports are on their way to main. */
 export const reportsPending = (pending: readonly PendingItem[]): Set<string> =>
-	new Set(pending.filter((item) => item.kind === "report").flatMap((item) => item.from.split(", ")));
+	new Set(pending.filter((item) => item.kind === "report").flatMap((item) => item.from.split(REPORT_SENDERS)));
 
 export type SendResult =
 	| { ok: true; delivered: "steered" | "resumed" | "queued" | "replied" | "main" | "inbox"; reply?: string; notice?: string }
@@ -137,10 +141,10 @@ export interface HostMail {
 	takeAll(): { messages: OutgoingMessage[]; wakes: boolean };
 }
 
-/** Every agent's running edit and bash calls; main's tool events and a child's bash guard record them. */
 /** The id of an agent's tool call in the table; a tool call id is only unique in its own session. */
 export const callId = (agent: string, toolCallId: string): string => `${agent}:${toolCallId}`;
 
+/** Every agent's running edit and bash calls; main's tool events and a child's bash guard record them. */
 export interface HostActivity {
 	editStart(id: string, path: string): void;
 	shellStart(id: string, root: string): void;
