@@ -1,13 +1,10 @@
 /**
  * The `edit`, `write` and `bash` calls running now, in main and in every
  * child, so a child's bash call is not blamed for a change another agent
- * made at the same time. Ids are `callId(agent, tool call id)`: call ids are only
+ * made at the same time. Ids are `callId(agent, tool call id)` (contract.ts): call ids are only
  * unique within one session.
  */
 import type { HostActivity, Watched } from "./contract.ts";
-
-/** The id of an agent's tool call in the table; a tool call id is only unique in its own session. */
-export const callId = (agent: string, toolCallId: string): string => `${agent}:${toolCallId}`;
 
 interface Window {
 	readonly id: string;

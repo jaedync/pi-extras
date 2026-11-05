@@ -16,7 +16,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stopOrder } from "../lib/subagents/after.ts";
 import { GUIDE_FILE } from "../lib/subagents/config.ts";
-import { type HostState, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/contract.ts";
+import { callId, type HostState, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/contract.ts";
 import { nextGeneration, takeParked } from "../lib/subagents/host.ts";
 import { watchMain } from "../lib/subagents/main-watch.ts";
 import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";
@@ -41,7 +41,6 @@ import { blockedTools, mainMessageTool, stopTool, subagentTool, userSendWords } 
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget } from "../lib/subagents/widget.ts";
 import { listLabel } from "../lib/subagents/rows.ts";
-import { callId } from "../lib/subagents/tool-activity.ts";
 import { awaitChildren, isHeadless } from "../lib/subagents/headless.ts";
 import { watchMotion } from "../lib/extras-config.ts";
 
