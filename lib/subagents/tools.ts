@@ -309,8 +309,7 @@ async function waitFor(tc: ToolContext, { name, parent }: { name: string; parent
 			tc.team.detach(name);
 			return text(`Stopped waiting. ${name} keeps running in the background and its report will arrive as a message.`, { ...details, detached: true });
 		}
-		// Later runs (after a message resumes it) report as messages.
-		tc.team.detach(name);
+		// Its run has ended, and the team cleared blocking (Team.finish): later runs report as messages.
 		const failed = done.state !== "idle";
 		const result = text(reportText(done, tc.now()), { ...details, state: done.state, ...(done.report ? { report: capReport(done.report, undefined, undefined, done.name) } : {}) });
 		if (failed) throw new Error(result.content[0]!.text);

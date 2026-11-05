@@ -916,6 +916,7 @@ export class Team implements HostTeam {
 		const record = saveReport({ ...this.records.get(name)!, owed: undefined }, this.options.warn ?? console.warn);
 		this.sessions.endRun(name);
 		// A parent waits for one run's report: a later run, which a message starts, reports as a message.
+		// The kept record has no flag; the waiters and handUp get this run's record, with it.
 		this.put(record.blocking ? { ...record, blocking: false } : record);
 		this.answers.forget(name);
 		this.settleWaiters(name, record);
@@ -924,10 +925,11 @@ export class Team implements HostTeam {
 		this.pump();
 	}
 
-	/** Ends the waits of `whenDone(name)` with its record. */
+	/** Ends the waits of `whenDone(name)` with its record; no one waits for a later run's report. */
 	private settleWaiters(name: string, record: AgentRecord): void {
 		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
 		this.waiters.delete(name);
+		if (this.records.get(name)?.blocking) this.patch(name, { blocking: false });
 	}
 
 	/** An asker's state follows its open questions. */
