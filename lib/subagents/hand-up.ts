@@ -46,11 +46,7 @@ export function handUp(host: HandUpHost, record: AgentRecord, silent: boolean): 
 	else if (!asked && !silent) reportUp(host, record, quiet);
 	// Its parent has the report; anyone else it owed an answer gets how its run ended instead.
 	tellUnanswered(host, name, unanswered, reportText(record, host.now()));
-	// Anyone else waiting on it would wait out the whole timeout for an answer that can't come.
-	for (const [asker, questions] of host.questions.entries()) {
-		if (asker === record.parent) continue;
-		for (const question of questions.filter((open) => open.to === name)) question.reject(new Error(`${name} ended without answering (${record.state}). Continue without its answer, or message it again: a finished agent resumes to handle a message.`));
-	}
+	endOtherQuestions(host, record);
 }
 
 /**
@@ -66,6 +62,14 @@ export function handUpFailure(host: HandUpHost, failure: AgentRecord, owedMain: 
 	else host.routing.deliver(failure.name, failure.parent, text, true);
 	if (owedMain && failure.parent !== MAIN) host.deliverToMain({ kind: "report", record: failure });
 	tellUnanswered(host, failure.name, unanswered, text);
+}
+
+/** Anyone but its parent waiting on `record` would wait out the whole timeout for an answer that can't come. */
+function endOtherQuestions(host: HandUpHost, record: AgentRecord): void {
+	for (const [asker, questions] of host.questions.entries()) {
+		if (asker === record.parent) continue;
+		for (const question of questions.filter((open) => open.to === record.name)) question.reject(new Error(`${record.name} ended without answering (${record.state}). Continue without its answer, or message it again: a finished agent resumes to handle a message.`));
+	}
 }
 
 /** The question its parent waits on it for, if any; the report is its answer. */
