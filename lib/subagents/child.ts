@@ -17,6 +17,7 @@ import { operationalError } from "../operational-log.ts";
 import { isVirtualModel } from "../routed-model.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
+import { PI_READ_TOOLS, readOnlyTools } from "./allowlist.ts";
 import { guardBash } from "./bash-guard.ts";
 import { restingBash } from "./bash-rest.ts";
 import { bashCheck } from "./checks.ts";
@@ -41,16 +42,6 @@ export const CHILD_TOOL_EXCLUDE: readonly string[] = [
 	// Its hook hides tools behind codemode, which a child does not have (extensions/tool-loadout.ts).
 	"tool_loadout",
 ];
-/**
- * All a read-only child may have: tools that can't change the user's files or
- * run commands that the model chooses. Pi's read tools, then this package's and
- * common search and fetch tools (`pull_link` runs only its own media tools). Any other tool, an extension's or an MCP server's, could write, so it
- * is left out; an allowlist, not a list of the tools that write.
- */
-export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
-	"read", "grep", "find", "ls",
-	"pull_link", "kagi_search", "web_search", "fetch_content", "get_search_content", "web_fetch",
-]);
 /** The calls the edit guard checks; `bash` can change files too, but its targets can't be read from its input (bash-guard.ts checks after it). */
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const EDIT_GUARD_NAME = "subagent-edit-guard";
@@ -63,7 +54,6 @@ const TIMEOUT_NAME = "subagent-default-timeout";
 const TIMEOUT_PATH = `<inline:${TIMEOUT_NAME}>`;
 /** The shell tools whose calls get main's default timeout. */
 const SHELL_TOOLS: ReadonlySet<string> = new Set(["bash", "powershell"]);
-const READ_TOOLS = ["read", "grep", "find", "ls"];
 const SHUTDOWN_TIMEOUT_MS = 2_000;
 export const CHILD_CACHE_COMPACTION_PATH = fileURLToPath(new URL("../../extensions/cache-compaction.ts", import.meta.url));
 
@@ -78,15 +68,13 @@ export function childExtensionPaths(all: readonly { name: string; sourceInfo?: {
 	return [...new Set(paths)];
 }
 
-/** What a read-only child may have; with `shell`, bash too, which its sandbox keeps from writing (sandbox.ts). */
-export const readOnlyTools = (shell: boolean): ReadonlySet<string> => (shell ? new Set([...READ_ONLY_TOOLS, "bash"]) : READ_ONLY_TOOLS);
 
 /** The tool names a child gets, before its own `message` (and maybe `subagent`). */
 export function childToolNames(parentActive: readonly string[], readOnly: boolean, extraExclude: readonly string[] = [], shell = false): string[] {
 	const exclude = new Set([...CHILD_TOOL_EXCLUDE, ...extraExclude]);
 	const allowed = readOnlyTools(shell);
 	const kept = parentActive.filter((name) => !exclude.has(name) && (!readOnly || allowed.has(name)));
-	const withRead = readOnly ? [...READ_TOOLS, ...kept] : kept;
+	const withRead = readOnly ? [...PI_READ_TOOLS, ...kept] : kept;
 	return [...new Set(withRead)];
 }
 
