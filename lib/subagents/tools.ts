@@ -15,8 +15,7 @@ import { capReport, CLOCK_TOOL, clockText, reportText, rosterText } from "./form
 import { isThinking, type ModelChoice, resolveModel, THINKING_LEVELS, type Thinking, thinkingFor, type ThinkingSettings } from "./models.ts";
 import { baseName, EVERYONE, MAIN } from "./names.ts";
 import { teamNow } from "./status.ts";
-import type { HostTeam } from "./contract.ts";
-import type { SendResult } from "./contract.ts";
+import type { Delivered, HostTeam, SendResult } from "./contract.ts";
 import { type AgentRecord, type CheckUpdate, LIVE_STATES, neverStarted, type SpawnRequest } from "./types.ts";
 
 export const MAX_TASK_CHARS = 60_000;
@@ -329,7 +328,7 @@ function messageCheck(tc: ToolContext, self: string, params: MessageInput): Chec
 	return check;
 }
 
-const deliveredWords: Record<string, string> = {
+const deliveredWords: Record<Delivered, string> = {
 	replied: "Answered; it continues with your reply.",
 	steered: "Delivered; it reads it after its current tool call.",
 	resumed: "It had finished; it resumed with its context to handle this.",
@@ -338,17 +337,18 @@ const deliveredWords: Record<string, string> = {
 	main: "Delivered to main.",
 };
 
-const userWords: Record<string, string> = {
+const userWords: Record<Delivered, string> = {
 	replied: "Answered its question.",
 	steered: "Delivered after its current step.",
 	resumed: "It resumed to handle your message.",
 	queued: "It waits in line to run; it reads this when its run starts.",
 	inbox: "It waits in its inbox for its next run.",
+	main: "Delivered.",
 };
 
 /** What the inspector tells the user about a message they sent a child; a paused child's notice says why it did not resume. */
 export function userSendWords(result: Extract<SendResult, { ok: true }>): string {
-	const words = userWords[result.delivered] ?? "Delivered.";
+	const words = userWords[result.delivered];
 	return result.notice ? `${words} ${result.notice}` : words;
 }
 
@@ -365,7 +365,7 @@ export function mainMessageTool(tc: ToolContext): ToolDefinition {
 			const result = await tc.team.send(MAIN, params.to, params.text, { expectReply: params.expectReply === true, ...(check ? { check } : {}) });
 			if (!result.ok) throw new Error(result.error);
 			const tail = params.expectReply && result.delivered !== "replied" ? " Its answer will wake you." : "";
-			return withRoster(text(`${deliveredWords[result.delivered] ?? "Delivered."}${tail}${result.notice ? `\n${result.notice}` : ""}`, { to: params.to, delivered: result.delivered, ...(result.notice ? { notice: result.notice } : {}) }), tc.team);
+			return withRoster(text(`${deliveredWords[result.delivered]}${tail}${result.notice ? `\n${result.notice}` : ""}`, { to: params.to, delivered: result.delivered, ...(result.notice ? { notice: result.notice } : {}) }), tc.team);
 		},
 	} as ToolDefinition;
 }
@@ -462,7 +462,7 @@ export function childMessageTool(tc: ToolContext, self: string): ToolDefinition 
 			const result = await tc.team.send(self, params.to, params.text, { expectReply: params.expectReply === true, ...(signal ? { signal } : {}), ...(check ? { check } : {}) });
 			if (!result.ok) throw new Error(result.error);
 			const roster = rosterText(self, tc.team.list().map((r) => ({ name: r.name, task: r.task, state: r.state, model: r.model })));
-			const head = result.reply !== undefined ? `Reply from ${params.to}:\n${result.reply}` : deliveredWords[result.delivered] ?? "Delivered.";
+			const head = result.reply !== undefined ? `Reply from ${params.to}:\n${result.reply}` : deliveredWords[result.delivered];
 			const tail = params.expectReply && result.reply === undefined ? " Its answer will arrive as a message; keep working." : "";
 			return text(`${head}${tail}${result.notice ? `\n${result.notice}` : ""}\n\nTeam now:\n${roster}`, { to: params.to, delivered: result.delivered });
 		},

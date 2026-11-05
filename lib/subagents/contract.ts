@@ -84,6 +84,9 @@ export type SendResult =
 	| { ok: true; delivered: "steered" | "resumed" | "queued" | "replied" | "main" | "inbox"; reply?: string; notice?: string }
 	| { ok: false; error: string };
 
+/** How a message reached its target; each reader that words it keys a table by this. */
+export type Delivered = Extract<SendResult, { ok: true }>["delivered"];
+
 export interface Watched {
 	/** Resolved paths an `edit` or `write` call targeted during the watch. */
 	edited: ReadonlySet<string>;

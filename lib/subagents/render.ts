@@ -25,7 +25,7 @@ import { draftPreview, draftRail, flowing, noteDraft, type Draft } from "../band
 import { BULLET_GLYPH, FAILURE_GLYPH, penGlyph } from "../band/glyph.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import { formatTokens } from "../status-plus-render.ts";
-import type { MailDetails, ReportSummary } from "./contract.ts";
+import type { Delivered, MailDetails, ReportSummary } from "./contract.ts";
 import { noReport, reportBody } from "./format.ts";
 import { MAIN } from "./names.ts";
 import { type AgentRecord, LIVE_STATES, neverStarted } from "./types.ts";
@@ -196,7 +196,7 @@ export function subagentResultRow(result: unknown, theme: Theme, context: RowCon
 	});
 }
 
-const DELIVERED: Record<string, string> = { steered: "delivered", resumed: "resumed", queued: "queued", inbox: "for its next run", replied: "answered", main: "delivered" };
+const DELIVERED: Record<Delivered, string> = { steered: "delivered", resumed: "resumed", queued: "queued", inbox: "for its next run", replied: "answered", main: "delivered" };
 
 export function messageCallRow(args: unknown, theme: Theme, context: RowContext, streaming = ALWAYS, lookup: Lookup = NOBODY, motion: () => Motion = () => "full"): Component {
 	noteLive(context, streaming);
@@ -209,7 +209,8 @@ export function messageCallRow(args: unknown, theme: Theme, context: RowContext,
 		if (draft && streaming()) return draftRows(theme, draft.text ? to : spaced(to, text), draft, width, Date.now(), motion());
 		if (context?.isPartial && !context.executionStarted) return [agentLine(theme, spaced(to, text), width)];
 		const delivered = (context?.state as { delivered?: string } | undefined)?.delivered;
-		const word = (delivered && DELIVERED[delivered]) || "";
+		// Row state is untyped: any string can be there.
+		const word = (delivered && (DELIVERED as Record<string, string | undefined>)[delivered]) || "";
 		// What became of it comes before the text, so a long message is what gets cut.
 		const status: Seg[] = context?.isError ? [{ text: "not delivered", color: "error" }]
 			: [...(word ? [{ text: word, color: "dim" }] : []), ...(input.expectReply ? [{ text: `${word ? " · " : ""}awaits answer`, color: "warning" }] : [])];
