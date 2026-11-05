@@ -72,6 +72,16 @@ test("a subagent whose parent can't resume to answer its question stops waiting 
 	assert.match(answer && !answer.ok ? answer.error : "", /lead ended without answering/);
 });
 
+test("a question from a call that was already stopped does not wait for a reply", async () => {
+	const h = teamHarness();
+	h.spawn("Work", { name: "worker" }); await flush();
+	const stopped = AbortSignal.abort();
+	let answer: Awaited<ReturnType<typeof h.team.send>> | undefined;
+	void h.team.send("worker", "main", "Which API?", { expectReply: true, signal: stopped }).then((result) => { answer = result; });
+	await flush();
+	assert.deepEqual(answer, { ok: false, error: "Stopped waiting for a reply." });
+});
+
 test("after a restart, a resumed asker does not wait on a peer that is still paused", async () => {
 	const h = teamHarness();
 	h.team.restore([saved({ name: "worker", state: "interrupted", owed: ["expert"], interruptionId: "i", interruptedBy: "quit" }),

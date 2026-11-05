@@ -72,7 +72,9 @@ export class OpenQuestions {
 			const open = [...this.of(from), pending];
 			this.byAsker.set(from, open);
 			this.options.changed(from, open.map((question) => question.to));
-			signal?.addEventListener("abort", onAbort, { once: true });
+			// An abort that came before the question was put fires no event.
+			if (signal?.aborted) onAbort();
+			else signal?.addEventListener("abort", onAbort, { once: true });
 		});
 	}
 }
