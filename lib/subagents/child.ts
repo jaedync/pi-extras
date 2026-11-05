@@ -22,6 +22,7 @@ import { guardBash } from "./bash-guard.ts";
 import { restingBash } from "./bash-rest.ts";
 import { bashCheck } from "./checks.ts";
 import type { HostActivity } from "./contract.ts";
+import { callId } from "./tool-activity.ts";
 import { HIDDEN_READ_TOOLS, hiddenEdit, hiddenReason, type HiddenPaths } from "./hidden.ts";
 import { confine, type Hiding, hidingFor, NO_HIDING, readOnlyShellFor, sandboxFor } from "./sandbox.ts";
 import { freshModels, piModelsCheck } from "./fresh-models.ts";
@@ -346,9 +347,9 @@ function editTracker(activity: HostActivity | undefined, agent: string, cwd: str
 	return {
 		start(id, path) {
 			const target = editTarget(cwd, path);
-			if (target !== undefined) activity.editStart(`${agent}:${id}`, target);
+			if (target !== undefined) activity.editStart(callId(agent, id), target);
 		},
-		end: (id) => activity.end(`${agent}:${id}`),
+		end: (id) => activity.end(callId(agent, id)),
 	};
 }
 

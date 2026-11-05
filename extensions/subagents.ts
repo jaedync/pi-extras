@@ -16,8 +16,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stopOrder } from "../lib/subagents/after.ts";
 import { GUIDE_FILE } from "../lib/subagents/config.ts";
-import type { HostState } from "../lib/subagents/contract.ts";
-import { MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/contract.ts";
+import { type HostState, MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/contract.ts";
 import { nextGeneration, takeParked } from "../lib/subagents/host.ts";
 import { watchMain } from "../lib/subagents/main-watch.ts";
 import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";
@@ -42,6 +41,7 @@ import { blockedTools, mainMessageTool, stopTool, subagentTool, userSendWords } 
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
 import { createAgentsWidget } from "../lib/subagents/widget.ts";
 import { listLabel } from "../lib/subagents/rows.ts";
+import { callId } from "../lib/subagents/tool-activity.ts";
 import { awaitChildren, isHeadless } from "../lib/subagents/headless.ts";
 import { watchMotion } from "../lib/extras-config.ts";
 
@@ -344,7 +344,7 @@ export default function subagents(pi: ExtensionAPI) {
 	let mainTree: { cwd: string; root: string } | undefined;
 	const treeOf = (cwd: string): string => (mainTree?.cwd === cwd ? mainTree : (mainTree = { cwd, root: checkoutOf(cwd) })).root;
 	pi.on("tool_call", (event, ctx) => {
-		const id = `${MAIN}:${event.toolCallId}`;
+		const id = callId(MAIN, event.toolCallId);
 		const activity = host()?.activity;
 		if (!activity) return;
 		if (event.toolName === "bash") activity.shellStart(id, treeOf(ctx.cwd));
@@ -352,7 +352,7 @@ export default function subagents(pi: ExtensionAPI) {
 		const target = editTarget(ctx.cwd, (event.input as { path?: unknown }).path);
 		if (target !== undefined) activity.editStart(id, target);
 	});
-	pi.on("tool_execution_end", (event) => host()?.activity.end(`${MAIN}:${event.toolCallId}`));
+	pi.on("tool_execution_end", (event) => host()?.activity.end(callId(MAIN, event.toolCallId)));
 
 	pi.on("message_end", (event) => {
 		const message = (event as { message?: { role?: string; customType?: string; details?: { id?: unknown } } }).message;
