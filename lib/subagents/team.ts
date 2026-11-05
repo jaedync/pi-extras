@@ -629,7 +629,8 @@ export class Team implements HostTeam {
 		this.sessions.endRun(name);
 		const { owedMain } = this.routing.ended(name);
 		this.forgetAnswer(name);
-		this.patch(name, { state: "interrupted", error: message, restoreError: message, launchError: message,
+		// As in finish and interrupt: a parent waits for one run's report, so a later run reports as a message.
+		this.patch(name, { state: "interrupted", blocking: false, error: message, restoreError: message, launchError: message,
 			launchFailures: (previous.launchFailures ?? 0) + 1, endedAt: this.now(), activity: `resume launch failed: ${message}`,
 			interruptedBy: "quit", interruptionId: randomUUID(), interruptionAnnounced: false });
 		const record = this.records.get(name)!;
@@ -925,11 +926,10 @@ export class Team implements HostTeam {
 		this.pump();
 	}
 
-	/** Ends the waits of `whenDone(name)` with its record; no one waits for a later run's report. */
+	/** Ends the waits of `whenDone(name)` with the record of the run that ended. */
 	private settleWaiters(name: string, record: AgentRecord): void {
 		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
 		this.waiters.delete(name);
-		if (this.records.get(name)?.blocking) this.patch(name, { blocking: false });
 	}
 
 	/** An asker's state follows its open questions. */
