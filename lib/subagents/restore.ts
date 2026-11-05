@@ -9,7 +9,7 @@ import { LIVE_STATES, MAX_DEPTH, NO_USAGE, type AgentRecord, type CheckResult, t
 import { checkError } from "./checks.ts";
 import { validWorktree } from "./worktree.ts";
 import { CONTROL } from "./checkout.ts";
-import { type HeldMail, MESSAGE_TYPE, REPORT_TYPE } from "./contract.ts";
+import { type HeldMail, type MailDetails, MESSAGE_TYPE, REPORT_TYPE } from "./contract.ts";
 
 const STATES = new Set([...LIVE_STATES, "idle", "failed", "stopped", "interrupted"]);
 const DIRECTORY_WARNING_LIMIT = 64;
@@ -49,6 +49,9 @@ interface IndexData {
 	mail?: HeldMail[];
 }
 
+/** Every kind of mail main gets (`MailDetails`). */
+const MAIL_KINDS: Readonly<Record<MailDetails["kind"], true>> = { note: true, question: true, reply: true, relay: true, report: true, reminder: true };
+
 /** Held mail as a closing host saved it; anything else is left out, since it would reach main's context. */
 function validMail(value: unknown): value is HeldMail {
 	const item = value as HeldMail | null;
@@ -56,7 +59,7 @@ function validMail(value: unknown): value is HeldMail {
 	const details = message?.details as { id?: unknown; kind?: unknown; reports?: unknown } | undefined;
 	return !!item && typeof item.wakes === "boolean" && !!message && (message.customType === MESSAGE_TYPE || message.customType === REPORT_TYPE)
 		&& typeof message.content === "string" && typeof message.display === "boolean"
-		&& typeof details?.id === "string" && ["note", "question", "reply", "relay", "report", "reminder"].includes(details.kind as string)
+		&& typeof details?.id === "string" && typeof details.kind === "string" && Object.hasOwn(MAIL_KINDS, details.kind)
 		// The report renderer reads its summaries.
 		&& (details.kind !== "report" || Array.isArray(details.reports));
 }
