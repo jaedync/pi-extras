@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Shell Jobs: Pi no longer crashes when a job ends after an update and a
+  `/reload`. The reload kept the runtime that the old version made, and
+  0.39.1 read a field that the old version did not set. The reload now
+  upgrades that runtime. The exit net that an old version installed can
+  also read the claims of a new runtime.
+
 ## 0.39.1 - 2026-11-03
 
 ### Fixed

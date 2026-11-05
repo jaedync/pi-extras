@@ -130,9 +130,54 @@ export function createRuntime(widget: JobsWidget, runtimeId = randomUUID().repla
 		logDir: null, counter: 0, epoch: 0, pending: 0, closing: false, widget,
 		released: false,
 	};
+	defineLegacyAlias(runtime);
 	registry().runtimes.add(runtime);
 	installExitNet();
 	return runtime;
+}
+
+/** A runtime as v0.39.0 and older made it: claims were a Set of pgids, and `released` did not exist. */
+type LegacyRuntime = Omit<Runtime, "residualClaims"> & { residualClaims?: Map<number, number>; residualPids?: Set<number> };
+
+/**
+ * Give a runtime the `residualPids` view that a v0.39.0 or older exit listener reads.
+ * That listener stays installed for the life of the process after an update and /reload,
+ * so without the view it throws on Pi's exit and skips the remaining groups.
+ * It is not enumerable, so copies and logs of the runtime do not carry it.
+ */
+function defineLegacyAlias(runtime: Runtime): void {
+	Object.defineProperty(runtime, "residualPids", {
+		configurable: true,
+		enumerable: false,
+		get: () => new Set(runtime.residualClaims.keys()),
+	});
+}
+
+/**
+ * Bring a runtime that an older version of this module parked to the current shape.
+ * A /reload after an update hands the new code the old object, and it must not
+ * read fields that the old code never set.
+ */
+export function upgradeRuntime(runtime: Runtime): Runtime {
+	const legacy = runtime as unknown as LegacyRuntime;
+	if (!(legacy.residualClaims instanceof Map)) {
+		// The old claims had no start time; a claim starts now, so it gets a full deadline.
+		const now = Date.now();
+		legacy.residualClaims = new Map([...(legacy.residualPids ?? [])].map((pgid) => [pgid, now]));
+		// The old reaper's closure prunes residualPids, not the claims: only the new reaper may run.
+		if (runtime.residualTimer != null) clearInterval(runtime.residualTimer);
+		runtime.residualTimer = null;
+		defineLegacyAlias(runtime);
+		if (runtime.residualClaims.size > 0) scheduleResidualReaper(runtime);
+	}
+	runtime.released ??= false;
+	return runtime;
+}
+
+/** Claimed pgids of a runtime of any version, for the exit net. */
+function claimedPgids(runtime: Runtime): Iterable<number> {
+	const legacy = runtime as unknown as LegacyRuntime;
+	return legacy.residualClaims?.keys() ?? legacy.residualPids ?? [];
 }
 
 /** The raw SessionManager is stable across reload, even for in-memory sessions.
@@ -143,7 +188,7 @@ export function takeReload(session: object): Runtime | undefined {
 	registry().reloads.delete(session);
 	if (runtime?.reloadTimer) clearTimeout(runtime.reloadTimer);
 	if (runtime) runtime.reloadTimer = null;
-	return runtime && !runtime.closing && registry().runtimes.has(runtime) ? runtime : undefined;
+	return runtime && !runtime.closing && registry().runtimes.has(runtime) ? upgradeRuntime(runtime) : undefined;
 }
 
 /**
@@ -295,7 +340,7 @@ export function installExitNet(): void {
 				if (job.state !== "done" && mayStop(job)) killQuietly(job.pid);
 			}
 			for (const pid of runtime.pendingPids) killQuietly(pid);
-			for (const pid of runtime.residualClaims.keys()) killQuietly(pid);
+			for (const pid of claimedPgids(runtime)) killQuietly(pid);
 		}
 	});
 }

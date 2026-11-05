@@ -331,3 +331,38 @@ test("the process exit safety net still kills groups if the extension never reat
 		rmSync(job.cwd, { recursive: true, force: true });
 	}
 });
+
+/** Shape of a runtime that v0.39.0 or older parked: a Set of pgids, no claim times, no released flag. */
+function makeLegacy(runtime: any, pgids: number[] = []) {
+	delete runtime.residualClaims;
+	delete runtime.released;
+	// Drop the view that this version adds, so the old data property can take its place.
+	delete runtime.residualPids;
+	runtime.residualPids = new Set(pgids);
+}
+
+test("a runtime that an older version parked finishes its jobs after reload to a newer version", async () => {
+	const first = await boot();
+	const release = join(first.ctx.cwd, "release-legacy");
+	const job = await start(first, `while [ ! -f '${release}' ]; do sleep 0.02; done; echo legacy-done`);
+	const runtime = [...__testing.getRuntimes()][0] as any;
+	await pause(first);
+	makeLegacy(runtime, [999_999_999]);
+	const second = await boot(first);
+	assert.ok(runtime.residualClaims instanceof Map, "the reload upgrades the parked runtime");
+	assert.deepEqual([...runtime.residualClaims.keys()], [999_999_999], "a legacy claim is kept");
+	writeFileSync(release, "");
+	await until(() => second.messages.length === 1);
+	assert.match(second.messages[0].message.content, /legacy-done/);
+	assert.equal(runtime.jobs.get(job.id)?.state, "done");
+});
+
+test("an exit net that an older version installed can still read a new runtime's claims", async () => {
+	await boot();
+	const runtime = [...__testing.getRuntimes()][0] as any;
+	runtime.residualClaims.set(424_242, Date.now());
+	// The v0.39.0 exit listener iterates residualPids and stays installed for the life of the process.
+	assert.deepEqual([...runtime.residualPids], [424_242]);
+	assert.equal(Object.keys(runtime).includes("residualPids"), false, "the alias stays out of copies");
+	runtime.residualClaims.delete(424_242);
+});
