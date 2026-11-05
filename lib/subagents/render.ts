@@ -29,7 +29,7 @@ import type { Delivered, MailDetails, ReportSummary } from "./contract.ts";
 import { noReport, reportBody } from "./format.ts";
 import { MAIN } from "./names.ts";
 import { type AgentRecord, LIVE_STATES, neverStarted } from "./types.ts";
-import { modelText, presenceLine, shortModel } from "./rows.ts";
+import { modelText, presenceLine, modelWithoutProvider } from "./rows.ts";
 
 export type { MarkdownSource } from "../band/message.ts";
 
@@ -257,7 +257,7 @@ function reportLines(theme: Theme, width: number, report: ReportSummary, expande
 	const head = spaced(
 		who(report.name, reportWord(report), [], AVATAR, agentHue(report.model)),
 		took ? [{ text: took, color: "text" }] : [],
-		[{ text: shortModel(report.model), color: "dim" }],
+		[{ text: modelWithoutProvider(report.model), color: "dim" }],
 		joined([
 			...(report.cost > 0 ? [{ text: `$${formatMoney(report.cost)}`, color: "dim" }] : []),
 			...(report.tokens ? [{ text: `${formatTokens(report.tokens.input)} in · ${formatTokens(report.tokens.output)} out`, color: "dim" }] : []),

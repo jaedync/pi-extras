@@ -10,7 +10,7 @@ import { AVATAR, agentHue } from "../band/agent-look.ts";
 import { FAILURE_GLYPH } from "../band/glyph.ts";
 import type { Envelope } from "./format.ts";
 import { MAIN, USER } from "./names.ts";
-import { shortModel } from "./rows.ts";
+import { modelWithoutProvider } from "./rows.ts";
 
 export type Painter = (color: string, text: string) => string;
 
@@ -38,7 +38,7 @@ function header(envelope: Exclude<Envelope, { kind: "prompt" }>, voices: Voices,
 	if (envelope.kind === "report") {
 		const word = REPORT_WORDS[envelope.state];
 		const took = envelope.took ? [paint("text", envelope.took)] : [];
-		return [`${strong(paint(agentHue(envelope.model), `${AVATAR} ${envelope.from}`))}${paint(word.color, ` ${word.text}`)}`, ...took, paint("dim", shortModel(envelope.model))].join(GAP);
+		return [`${strong(paint(agentHue(envelope.model), `${AVATAR} ${envelope.from}`))}${paint(word.color, ` ${word.text}`)}`, ...took, paint("dim", modelWithoutProvider(envelope.model))].join(GAP);
 	}
 	const asks = envelope.kind === "question";
 	if (envelope.from === MAIN || envelope.from === USER) {

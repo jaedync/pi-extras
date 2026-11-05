@@ -21,7 +21,7 @@ export interface AgentRow {
 	reportQueued?: boolean;
 }
 
-export const shortModel = (ref: string): string => ref.slice(ref.indexOf("/") + 1);
+export const modelWithoutProvider = (ref: string): string => ref.slice(ref.indexOf("/") + 1);
 
 /**
  * Live agents and those whose report is still queued, parents before children.
@@ -155,7 +155,7 @@ export const compactionWords = (count: number): string => `${count} ${count === 
 /** What it has cost so far; empty while it is free. */
 export const costText = (record: AgentRecord): string => (record.usage.cost > 0 ? `$${formatMoney(record.usage.cost)}` : "");
 
-export const modelText = (record: AgentRecord): string => `${shortModel(record.model)}${record.thinking ? ` ${record.thinking}` : ""}`;
+export const modelText = (record: AgentRecord): string => `${modelWithoutProvider(record.model)}${record.thinking ? ` ${record.thinking}` : ""}`;
 
 /** One column's cell: empty when neither this row nor any other has a value, so no row opens a hole. */
 const cell = (text: string, width: number, color: string, align: "left" | "right"): Seg[] =>
@@ -191,7 +191,7 @@ const STATE_WORDS: Record<AgentState, string> = {
 
 /** One line of the plain list `/subagents` prints where there is no full-terminal view, cut to `maxWidth`. */
 export function listLabel(record: AgentRecord, nameWidth: number, now: number, maxWidth = Number.POSITIVE_INFINITY): string {
-	const parts = [record.name.padEnd(nameWidth), `${STATE_WORDS[record.state]}${record.orphaned ? " (orphan)" : ""}`.padEnd(8), shortModel(record.model)];
+	const parts = [record.name.padEnd(nameWidth), `${STATE_WORDS[record.state]}${record.orphaned ? " (orphan)" : ""}`.padEnd(8), modelWithoutProvider(record.model)];
 	if (record.usage.cost > 0) parts.push(`$${formatMoney(record.usage.cost)}`);
 	if (record.state !== "queued") parts.push(formatTime((record.endedAt ?? now) - (record.startedAt ?? record.createdAt)));
 	const context = contextFigures(record);
