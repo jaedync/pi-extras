@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { isReserved, nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
-import { latestReportFile, reportFilePath } from "./reports.ts";
+import { latestReportFile, reportFilePath, reportRun } from "./reports.ts";
 import { LIVE_STATES, NO_USAGE, type AgentRecord, type CheckResult, type CheckSpec, type FallbackStep } from "./types.ts";
 import { checkError } from "./checks.ts";
 import { validWorktree } from "./worktree.ts";
@@ -271,9 +271,8 @@ export function reportRunFloor(sessionFile: string | undefined, runs: number, wa
 	if (!sessionFile || !existsSync(dirname(sessionFile))) return runs;
 	try {
 		const file = latest(sessionFile);
-		const match = file?.match(/\.run-(\d+)\.report\.md$/);
-		const run = match ? Number(match[1]) : 0;
-		return file && Number.isSafeInteger(run) && run >= 1 && resolve(file) === resolve(reportFilePath(sessionFile, run)) ? Math.max(runs, run) : runs;
+		const run = file === undefined ? undefined : reportRun(file);
+		return file !== undefined && run !== undefined && Number.isSafeInteger(run) && resolve(file) === resolve(reportFilePath(sessionFile, run)) ? Math.max(runs, run) : runs;
 	} catch (error) { directoryWarning(dirname(sessionFile), error, warn); return runs; }
 }
 
