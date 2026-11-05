@@ -10,7 +10,7 @@ import { AVATAR, agentHue } from "../band/agent-look.ts";
 import { FAILURE_GLYPH } from "../band/glyph.ts";
 import type { Envelope } from "./format.ts";
 import { MAIN, USER } from "./names.ts";
-import { shortModel } from "./widget.ts";
+import { shortModel } from "./rows.ts";
 
 export type Painter = (color: string, text: string) => string;
 

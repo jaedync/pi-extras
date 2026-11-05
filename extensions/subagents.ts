@@ -40,7 +40,8 @@ import { LeaseHeld, type OwnerState, takeOverParent } from "../lib/subagents/own
 import { chatSettings, mainTrust, type ServeOptions, type Served, serveSession } from "../lib/subagents/serve.ts";
 import { blockedTools, mainMessageTool, stopTool, subagentTool, userSendWords } from "../lib/subagents/tools.ts";
 import { LIVE_STATES, type AgentRecord } from "../lib/subagents/types.ts";
-import { createAgentsWidget, listLabel } from "../lib/subagents/widget.ts";
+import { createAgentsWidget } from "../lib/subagents/widget.ts";
+import { listLabel } from "../lib/subagents/rows.ts";
 import { awaitChildren, isHeadless } from "../lib/subagents/headless.ts";
 import { watchMotion } from "../lib/extras-config.ts";
 

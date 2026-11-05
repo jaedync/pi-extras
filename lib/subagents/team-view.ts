@@ -17,8 +17,8 @@ import { onBackground, selectedBackground } from "../band/surface.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import type { PendingItem } from "./contract.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
-import { type AgentRow, stateCounts } from "./overflow.ts";
-import { presenceLine, rowColumns, teamRows } from "./widget.ts";
+import { stateCounts } from "./overflow.ts";
+import { type AgentRow, presenceLine, rowColumns, teamRows } from "./rows.ts";
 
 export interface TeamSource {
 	records(): readonly AgentRecord[];

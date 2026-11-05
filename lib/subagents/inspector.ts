@@ -19,7 +19,7 @@ import { drawnTool } from "../tool-row.ts";
 import { ChatLog } from "./chat.ts";
 import type { Voices } from "./transcript.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
-import { compactionWords, rowSegs } from "./widget.ts";
+import { compactionWords, rowSegs } from "./rows.ts";
 
 const NOTICE_MS = 4_000;
 const KEYS: readonly SheetKey[] = [

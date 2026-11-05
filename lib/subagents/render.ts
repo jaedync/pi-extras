@@ -29,7 +29,7 @@ import type { MailDetails, ReportSummary } from "./contract.ts";
 import { noReport, reportBody } from "./format.ts";
 import { MAIN } from "./names.ts";
 import { type AgentRecord, LIVE_STATES, neverStarted } from "./types.ts";
-import { modelText, presenceLine, shortModel } from "./widget.ts";
+import { modelText, presenceLine, shortModel } from "./rows.ts";
 
 export type { MarkdownSource } from "../band/message.ts";
 

@@ -7,7 +7,7 @@ import { acquireParent } from "../lib/subagents/ownership.ts";
 import { ChildIndex, recoverRoster, reportRunFloor } from "../lib/subagents/restore.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 import { doingOf } from "../lib/band/agent-look.ts";
-import { agentRows } from "../lib/subagents/widget.ts";
+import { agentRows } from "../lib/subagents/rows.ts";
 
 const warn = (message: string) => assert.fail(message);
 const r = (name: string, patch: Partial<AgentRecord> = {}): AgentRecord => ({ name, parent: "main", depth: 1, model: "faux/cheap",
