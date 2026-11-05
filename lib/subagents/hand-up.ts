@@ -38,14 +38,14 @@ export function handUp(host: HandUpHost, record: AgentRecord, silent: boolean): 
 	// So is a report written at the budget: the work may be incomplete.
 	const quiet = (peerRun || awaited(record, host.list())) && record.state === "idle" && !record.budgetEnd && !checkFailed(record) && !parentAsked && !owedMain && !parentWaits;
 	// A parent waiting on this child's answer gets the report as that answer.
-	const asked = host.questions.of(record.parent).find((question) => question.to === name);
+	const asked = parentQuestion(host, record);
 	if (asked) asked.resolve(reportText(record, host.now()));
 	// A panel member's report waits for the others, also one its parent stopped: the last to end sends them all.
 	// Also one whose report answered a question, or the others' reports would wait for it forever.
 	if (heldForPanel(record)) panelUp(host, record);
 	else if (!asked && !silent) reportUp(host, record, quiet);
 	// Its parent has the report; anyone else it owed an answer gets how its run ended instead.
-	for (const asker of unanswered) host.routing.deliver(name, asker, `${name} ended without answering you. ${reportText(record, host.now())}`, true, `Report from ${name}`);
+	tellUnanswered(host, name, unanswered, reportText(record, host.now()));
 	// Anyone else waiting on it would wait out the whole timeout for an answer that can't come.
 	for (const [asker, questions] of host.questions.entries()) {
 		if (asker === record.parent) continue;
@@ -60,12 +60,20 @@ export function handUp(host: HandUpHost, record: AgentRecord, silent: boolean): 
 export function handUpFailure(host: HandUpHost, failure: AgentRecord, owedMain: boolean): void {
 	const text = reportText(failure, host.now());
 	const { unanswered } = payOwed(host, failure);
-	const asked = host.questions.of(failure.parent).find((question) => question.to === failure.name);
+	const asked = parentQuestion(host, failure);
 	if (asked) asked.resolve(text);
 	else if (failure.parent === MAIN) host.deliverToMain({ kind: "report", record: failure });
 	else host.routing.deliver(failure.name, failure.parent, text, true);
 	if (owedMain && failure.parent !== MAIN) host.deliverToMain({ kind: "report", record: failure });
-	for (const asker of unanswered) host.routing.deliver(failure.name, asker, `${failure.name} ended without answering you. ${text}`, true, `Report from ${failure.name}`);
+	tellUnanswered(host, failure.name, unanswered, text);
+}
+
+/** The question its parent waits on it for, if any; the report is its answer. */
+const parentQuestion = (host: HandUpHost, record: AgentRecord) => host.questions.of(record.parent).find((question) => question.to === record.name);
+
+/** Tells each agent that `name` owed an answer that its run ended, with its report. */
+function tellUnanswered(host: HandUpHost, name: string, unanswered: readonly string[], report: string): void {
+	for (const asker of unanswered) host.routing.deliver(name, asker, `${name} ended without answering you. ${report}`, true, `Report from ${name}`);
 }
 
 /** Settles what `record` owed: whether its parent asked it, and who else did. */
