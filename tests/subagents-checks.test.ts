@@ -1,7 +1,7 @@
 /** `check`: the harness runs a command when a run ends normally, and the report carries what it found. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
@@ -428,8 +428,6 @@ test("the check runs through the agent's bash tool: exit codes, output, and a ti
 		assert.match(result.output, /aborted/);
 		const input = await bashCheck(bash, "cat; echo end", { timeoutMs: 10_000, signal, id: "c5" });
 		assert.equal(input.exitCode, 0, "no stdin: cat reads nothing and ends");
-		writeFileSync(join(dir, "x"), "");
-		assert.ok(existsSync(join(dir, "x")));
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
