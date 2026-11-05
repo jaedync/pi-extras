@@ -242,7 +242,7 @@ test("a run that called no tool that can change files since the last check skips
 	assert.equal(answered.checkSkipped, answered.runs);
 	assert.match(reportText(answered, Date.now()), /Which file\? done\.\n\nCheck skipped: no changes since the last check\.$/);
 	assert.doesNotMatch(reportText(answered, Date.now()), /Check run by the harness/, "the last run's check is not this run's");
-	await run("Look again.", ["read", "grep", "find", "ls", "stop_subagent"]);
+	await run("Look again.", ["read", "grep", "find", "ls", "stop_subagent", "clock"]);
 	await run("Just say it.", []);
 	assert.equal(script.asked.length, 1, "reading and writing text change nothing");
 	await run("Run it.", ["bash"]);
