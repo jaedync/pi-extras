@@ -7,7 +7,7 @@ import type { AgentRecord, ChildHandle, ChildHooks, MainDelivery, SpawnRequest }
 interface Call { text: string; finish(result: string): void; end(message: unknown): void; fail(error: Error): void }
 
 /** A launcher whose children finish only when the test says so. */
-function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTimeoutMs?: number; launchError?: Error } = {}) {
+function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTimeoutMs?: number; launchError?: Error; now?: () => number } = {}) {
 	const calls = new Map<string, Call[]>();
 	const steered = new Map<string, string[]>();
 	const aborted: string[] = [];
@@ -20,6 +20,7 @@ function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTime
 		maxDepth: options.maxDepth ?? 1,
 		replyTimeoutMs: options.replyTimeoutMs ?? 60_000,
 		deliverToMain: (delivery) => main.push(delivery),
+		...(options.now ? { now: options.now } : {}),
 		launcher: {
 			async launch(record: AgentRecord, childHooks: ChildHooks): Promise<ChildHandle> {
 				if (options.launchError) throw options.launchError;
@@ -386,8 +387,7 @@ test("main never blocks: its question is delivered and the answer wakes it as a 
 
 test("a resumed run is timed on its own and names what started it", async () => {
 	let clock = 0;
-	const h = harness();
-	(h.team as unknown as { now: () => number }).now = () => clock;
+	const h = harness({ now: () => clock });
 	const name = h.spawn("scan the repo");
 	await tick();
 	clock = 11_000;
