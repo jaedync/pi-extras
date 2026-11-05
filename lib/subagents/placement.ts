@@ -3,10 +3,9 @@
  * inherits, and the checkout its edit lock follows (checkout.ts). Making a
  * worktree is the only side effect, so a spawn checks everything else first.
  */
-import { isAbsolute, relative, sep } from "node:path";
 import { checkoutOf, CONTROL, resolveCwd } from "./checkout.ts";
 import type { AgentRecord, SpawnRequest, Worktree } from "./types.ts";
-import { createWorktree, placeInWorktree } from "./worktree.ts";
+import { createWorktree, placeInWorktree, within } from "./worktree.ts";
 
 export interface Placement {
 	readonly worktree?: Worktree;
@@ -24,12 +23,6 @@ export interface MainPlace {
 
 type Placed = { ok: true; place: Placement } | { ok: false; error: string };
 
-/** Whether the real path `dir` is `tree` or inside it. */
-function inside(tree: string, dir: string): boolean {
-	const rel = relative(tree, dir);
-	return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-}
-
 /** The directory a spawn named, checked against what its parent allows. */
 function namedCwd(request: Pick<SpawnRequest, "cwd" | "isolation">, parent: AgentRecord | null): { ok: true; cwd?: string } | { ok: false; error: string } {
 	if (request.cwd === undefined) return { ok: true };
@@ -38,7 +31,7 @@ function namedCwd(request: Pick<SpawnRequest, "cwd" | "isolation">, parent: Agen
 	catch (error) { return { ok: false, error: (error as Error).message }; }
 	// Its edits are held to the worktree it would inherit (child.ts), wherever it started. Also with isolation: "worktree":
 	// main makes it with git and no sandbox, so only from the parent's worktree, never a repository the sandboxed child chose.
-	if (parent?.worktree && !inside(parent.worktree.path, cwd)) {
+	if (parent?.worktree && !within(parent.worktree.path, cwd)) {
 		return { ok: false, error: `${parent.name}'s subagents work in its worktree ${parent.worktree.path}. Leave out cwd, or name a directory inside it.` };
 	}
 	// Making a worktree runs the repository's git hooks, which a read-only agent must not choose.
