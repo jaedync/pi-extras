@@ -59,6 +59,19 @@ test("a parent whose subagent can't resume to answer gets the failure once, and 
 	assert.equal(h.team.get("lead")!.state, "idle");
 });
 
+test("a subagent whose parent can't resume to answer its question stops waiting at once", async () => {
+	const h = teamHarness({ refuse: (record) => record.name === "lead" ? new Error("The saved child session is missing: /x.jsonl.") : undefined });
+	h.team.restore([saved({ name: "lead", task: "Lead" }),
+		saved({ name: "kid", parent: "lead", depth: 2, task: "Kid", state: "interrupted", interruptionId: "i", interruptedBy: "quit" })]);
+	await h.team.send("user", "kid", "Continue your task."); await flush();
+	let answer: Awaited<ReturnType<typeof h.team.send>> | undefined;
+	void h.team.send("kid", "lead", "Which file?", { expectReply: true }).then((result) => { answer = result; });
+	await flush();
+	assert.equal(h.team.get("lead")!.state, "interrupted");
+	assert.equal(answer?.ok, false, "the answer can't come, so the wait ends now, not at the reply timeout");
+	assert.match(answer && !answer.ok ? answer.error : "", /lead ended without answering/);
+});
+
 test("after a restart, a resumed asker does not wait on a peer that is still paused", async () => {
 	const h = teamHarness();
 	h.team.restore([saved({ name: "worker", state: "interrupted", owed: ["expert"], interruptionId: "i", interruptedBy: "quit" }),

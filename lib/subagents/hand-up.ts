@@ -62,6 +62,7 @@ export function handUpFailure(host: HandUpHost, failure: AgentRecord, owedMain: 
 	else host.routing.deliver(failure.name, failure.parent, text, true);
 	if (owedMain && failure.parent !== MAIN) host.deliverToMain({ kind: "report", record: failure });
 	tellUnanswered(host, failure.name, unanswered, text);
+	endOtherQuestions(host, failure);
 }
 
 /** Anyone but its parent waiting on `record` would wait out the whole timeout for an answer that can't come. */
