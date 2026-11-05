@@ -43,7 +43,6 @@ export class Slots {
 		else this.line.push(name);
 	}
 
-	/** Whether a slot is free now. */
 	free(): boolean {
 		return !this.host.closed() && this.used() < this.host.maxConcurrent;
 	}

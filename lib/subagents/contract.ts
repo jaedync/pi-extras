@@ -175,7 +175,6 @@ export interface HostPorts {
 	notify(message: string, level: "info" | "warning"): void;
 	/** A record changed. */
 	teamChanged(): void;
-	/** The mail changed. */
 	mailChanged(): void;
 	/** Makes child sessions with the serving module's code. */
 	readonly launcher: Launcher;
