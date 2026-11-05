@@ -19,16 +19,31 @@ const PY_IMPORT = /^[ \t]*import[ \t]+([\w.]+(?:[ \t]+as[ \t]+\w+)?(?:[ \t]*,[ \
 // that is usually its root, or `src` in the src layout.
 const PY_ROOTS = ["", "src"];
 
-/** @param {string} text */
+/**
+ * True for `import type ...`, `export type ...`, and a brace list in which every
+ * name is marked `type`: the import is erased at compile time.
+ * @param {string} statement the lexed text from `import` or `export` to `from`
+ */
+function isTypeOnly(statement) {
+	const head = statement.trim();
+	if (/^(import|export)\s+type\b/.test(head)) return true;
+	const braces = /^(import|export)\s*\{([^}]*)\}\s*from/.exec(head);
+	if (!braces) return false;
+	const names = braces[2].split(",").map((n) => n.trim()).filter(Boolean);
+	return names.length > 0 && names.every((n) => /^type\s/.test(n));
+}
+
+/** @param {string} text @returns {{ specifier: string, typeOnly: boolean }[]} */
 function jsSpecifiers(text) {
 	const { code } = lex(text, "js");
 	const out = [];
-	for (const pattern of JS_PATTERNS) {
+	JS_PATTERNS.forEach((pattern, i) => {
 		for (const match of code.matchAll(pattern)) {
 			const [start, end] = match.indices[2];
-			out.push(text.slice(start, end));
+			// Only the static forms (the first two patterns) can be type-only.
+			out.push({ specifier: text.slice(start, end), typeOnly: i < 2 && isTypeOnly(match[0]) });
 		}
-	}
+	});
 	return out;
 }
 
@@ -74,14 +89,25 @@ function pyImports(file, text, known) {
 }
 
 /**
- * The local files that `file` imports, without duplicates and without itself.
+ * The local files that `file` imports, in first-seen order, without itself. An
+ * edge is typeOnly when every import of that file is a type import.
  * @param {string} file @param {string} text @param {Set<string>} known all files that can be targets
- * @returns {string[]}
+ * @returns {{ to: string, typeOnly: boolean }[]}
  */
-export function localImports(file, text, known) {
+export function localImportsDetailed(file, text, known) {
 	const lang = languageOf(file);
-	const targets = lang === "js"
-		? jsSpecifiers(text).map((specifier) => resolveJs(file, known, specifier))
-		: lang === "py" ? pyImports(file, text, known) : [];
-	return [...new Set(targets.filter((t) => t && t !== file))];
+	const found = lang === "js"
+		? jsSpecifiers(text).map(({ specifier, typeOnly }) => ({ to: resolveJs(file, known, specifier), typeOnly }))
+		: lang === "py" ? pyImports(file, text, known).map((to) => ({ to, typeOnly: false })) : [];
+	const edges = new Map();
+	for (const { to, typeOnly } of found) {
+		if (!to || to === file) continue;
+		edges.set(to, (edges.get(to) ?? true) && typeOnly);
+	}
+	return [...edges].map(([to, typeOnly]) => ({ to, typeOnly }));
+}
+
+/** @param {string} file @param {string} text @param {Set<string>} known @returns {string[]} */
+export function localImports(file, text, known) {
+	return localImportsDetailed(file, text, known).map((e) => e.to);
 }

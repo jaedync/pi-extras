@@ -9,6 +9,11 @@ work.
 Review a refactor for structure and for behavior changes. Read-only: do not
 change any file and do not commit.
 
+The lead may keep committing while you work. Review commit <head> only. Make
+a frozen copy with history in a scratch folder:
+`git clone -q --shared <worktree path> <scratch>/review && git -C <scratch>/review checkout -q <head>`.
+Link or install its dependencies there, and run the tests in the copy.
+
 Repository: <worktree path>. Branch <branch>, base <base commit>. Area: <area>.
 Diff: `git diff <base>...<branch> -- <area>`. Decision log:
 `.untangle/decisions.md`. Baseline: `.untangle/baseline.md`.
@@ -25,11 +30,15 @@ Read the diff in full and read the changed files around it. Then answer:
    dead code), special cases that the design should cover.
 3. **New problems** that the refactor added: a new cycle, a new wrapper, a
    new special case, a name that no longer says what the thing does.
-4. **Tests.** Do the tests still guard the moved behavior? For each test that
-   the log removed, is the mutation probe convincing?
+4. **Tests.** Do the tests still guard the moved behavior? Probe it: in the
+   copy, delete a line that a fix moved, and see if a test fails. For each
+   test that the log removed, is the proof convincing?
+5. **Files on disk.** When a fix moves a state change, check each file that
+   a change listener writes (logs, indexes, saved state). Probe the content
+   before and after the change.
 
 From the worktree root, run
-`node <skill>/scripts/untangle.mjs graph <area> --compare .untangle/graph-before.json`
+`node <skill>/scripts/untangle.mjs graph <area> --history-until <base> --compare .untangle/graph-before.json`
 and `node <skill>/scripts/untangle.mjs special-cases <area> --compare .untangle/special-before.json`,
 and use the numbers. Only more modules in cycles makes the graph compare
 fail. The history numbers (hidden links, volatile imports) grow with the

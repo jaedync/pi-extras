@@ -39,8 +39,10 @@ For each finding, write one block:
 - group: hidden link | needless link | surplus | special case
 - where: <path:line>, <path:line>, ...
 - what: <one or two sentences: what must change together, or why the tie is wrong>
-- evidence: <the lines, the import, the git co-change count, or the copy that shows it>
+- evidence: <the lines, the import, the copy, or the co-change count from the hints>
+- bug: yes | no | maybe: can this cause wrong behavior now? Give the sequence of events if yes
 - outside the batch: <names that this finding uses but that other files define>
+- severity: high | medium | low, for how much a fix would help
 - confidence: high | medium | low, with one line of reason
 ```
 

@@ -4,7 +4,7 @@
 import { dirname } from "node:path";
 import { isTestFile, listSourceFiles, readSource } from "./files.mjs";
 import { ageDays, changeRate, churn, coChangePairs, firstAdded, gitPlace, readHistory, round } from "./history.mjs";
-import { localImports } from "./imports.mjs";
+import { localImports, localImportsDetailed } from "./imports.mjs";
 
 /** @param {string} file @param {"file" | "dir"} by */
 export function moduleOf(file, by) {
@@ -117,9 +117,9 @@ export function volatileImports(edges, { counts, born, windowStart }, now, { rat
 }
 
 /** First-added time of each module: its oldest file. */
-function moduleBirth(place, keyOf) {
+function moduleBirth(place, keyOf, until) {
 	const born = new Map();
-	for (const [file, time] of firstAdded(place)) {
+	for (const [file, time] of firstAdded(place, until)) {
 		const key = keyOf(file);
 		if (key !== null) born.set(key, Math.min(born.get(key) ?? Infinity, time));
 	}
@@ -138,10 +138,13 @@ function readArea(root, includeTests) {
 	const all = place ? listSourceFiles(top, { includeTests: true }) : listSourceFiles(root, { includeTests: true });
 	const known = new Set(all);
 	const inArea = new Set(area.map((f) => prefix + f));
-	const edges = new Map(area.map((f) => {
-		const targets = localImports(prefix + f, readSource(root, f), known).filter((t) => inArea.has(t));
-		return [f, targets.map((t) => t.slice(prefix.length))];
-	}));
+	const edges = new Map();
+	const valueEdges = new Map();
+	for (const f of area) {
+		const targets = localImportsDetailed(prefix + f, readSource(root, f), known).filter((e) => inArea.has(e.to));
+		edges.set(f, targets.map((e) => e.to.slice(prefix.length)));
+		valueEdges.set(f, targets.filter((e) => !e.typeOnly).map((e) => e.to.slice(prefix.length)));
+	}
 	// With no prefix the area is the whole repository, so nothing is outside it.
 	const outsideFiles = place && prefix ? all.filter((f) => !f.startsWith(prefix)) : [];
 	const outside = place
@@ -149,22 +152,23 @@ function readArea(root, includeTests) {
 			.filter((to) => inArea.has(to))
 			.map((to) => ({ from: file, to: to.slice(prefix.length), test: isTestFile(file) })))
 		: null;
-	return { place, files: area, edges, outside };
+	return { place, files: area, edges, valueEdges, outside };
 }
 
 /**
  * The full analysis that `untangle graph` prints.
  * @param {string} root
- * @param {{ by?: "file" | "dir", since?: string, includeTests?: boolean, minAgeDays?: number, now?: number }} [options]
+ * @param {{ by?: "file" | "dir", since?: string, historyUntil?: string, includeTests?: boolean, minAgeDays?: number, now?: number }} [options]
  */
-export function analyze(root, { by = "file", since = "12 months ago", includeTests = false, minAgeDays = 60, now = Date.now() / 1000 } = {}) {
-	const { place, files, edges: fileEdges, outside } = readArea(root, includeTests);
+export function analyze(root, { by = "file", since = "12 months ago", historyUntil = "HEAD", includeTests = false, minAgeDays = 60, now = Date.now() / 1000 } = {}) {
+	const { place, files, edges: fileEdges, valueEdges, outside } = readArea(root, includeTests);
 	const { modules, edges } = groupGraph({ files, edges: fileEdges }, by);
-	const history = place ? readHistory(root, { since }) : null;
+	const runtime = groupGraph({ files, edges: valueEdges }, by);
+	const history = place ? readHistory(root, { since, until: historyUntil }) : null;
 	const inArea = new Set(files);
 	const keyOf = (f) => (inArea.has(f) ? moduleOf(f, by) : null);
 	const stats = history ? churn(history.commits, keyOf) : { counts: new Map(), first: new Map() };
-	const born = history ? moduleBirth(place, keyOf) : new Map();
+	const born = history ? moduleBirth(place, keyOf, historyUntil) : new Map();
 	const windowStart = history ? history.commits.reduce((t, c) => Math.min(t, c.time), now) : now;
 	const linked = new Set();
 	for (const [from, targets] of edges) for (const to of targets) linked.add(`${from}\n${to}`).add(`${to}\n${from}`);
@@ -178,7 +182,10 @@ export function analyze(root, { by = "file", since = "12 months ago", includeTes
 		files: files.length,
 		modules: modules.length,
 		edges: [...edges.values()].reduce((n, t) => n + t.length, 0),
+		historyUntil,
 		cycles: cycles(modules, edges),
+		// Cycles that remain when type-only imports are left out: these load at run time.
+		runtimeCycles: cycles(runtime.modules, runtime.edges),
 		volatileImports: history ? volatileImports(edges, { counts: stats.counts, born, windowStart }, now, { minAgeDays }) : null,
 		youngModules: history ? modules.filter((name) => !born.has(name) || ageDays(born.get(name), now) < minAgeDays).length : null,
 		minAgeDays,

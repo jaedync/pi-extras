@@ -37,13 +37,15 @@ export function gitPlace(root) {
 /**
  * Commits since `since`, newest first. `size` counts every file of the commit in
  * the whole repository; `files` holds only the files under root, relative to root.
- * @param {string} root @param {{ since?: string }} [options]
+ * `until` limits the history to the commits reachable from that revision: give
+ * the base commit, so that a refactor's own commits do not count.
+ * @param {string} root @param {{ since?: string, until?: string }} [options]
  * @returns {{ head: string, prefix: string, top: string, commits: Commit[] } | null}
  */
-export function readHistory(root, { since = "12 months ago" } = {}) {
+export function readHistory(root, { since = "12 months ago", until = "HEAD" } = {}) {
 	const place = gitPlace(root);
 	if (!place) return null;
-	const out = gitText(place.top, ["log", "--no-merges", "--no-renames", `--since=${since}`, "--format=format:%x01%ct", "--name-only"]);
+	const out = gitText(place.top, ["log", until, "--no-merges", "--no-renames", `--since=${since}`, "--format=format:%x01%ct", "--name-only"]);
 	const commits = out
 		.split(COMMIT_MARK)
 		.map((block) => block.split("\n").map((l) => l.trim()).filter(Boolean))
@@ -62,8 +64,8 @@ export function readHistory(root, { since = "12 months ago" } = {}) {
  * @param {{ top: string, prefix: string }} place
  * @returns {Map<string, number>} paths relative to root
  */
-export function firstAdded({ top, prefix }) {
-	const out = gitText(top, ["log", "--diff-filter=A", "--no-renames", "--format=format:%x01%ct", "--name-only", "--", prefix || "."]);
+export function firstAdded({ top, prefix }, until = "HEAD") {
+	const out = gitText(top, ["log", until, "--diff-filter=A", "--no-renames", "--format=format:%x01%ct", "--name-only", "--", prefix || "."]);
 	const born = new Map();
 	for (const block of out.split(COMMIT_MARK)) {
 		const [time, ...files] = block.split("\n").map((l) => l.trim()).filter(Boolean);

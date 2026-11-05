@@ -5,7 +5,7 @@ import { after, test } from "node:test";
 import { listSourceFiles } from "../skills/untangle-codebase/scripts/lib/files.mjs";
 import { analyze, cycles } from "../skills/untangle-codebase/scripts/lib/graph.mjs";
 import { coChangePairs, readHistory } from "../skills/untangle-codebase/scripts/lib/history.mjs";
-import { localImports } from "../skills/untangle-codebase/scripts/lib/imports.mjs";
+import { localImports, localImportsDetailed } from "../skills/untangle-codebase/scripts/lib/imports.mjs";
 import { CLI, commit, git, gitInit, put, removeTemps, tempDir } from "./untangle-codebase-support.mjs";
 
 after(removeTemps);
@@ -42,6 +42,15 @@ test("js imports: strings and templates neither hide nor invent imports", () => 
 
 test("js imports: `..` reaches the root index file", () => {
 	assert.deepEqual(localImports("src/a.ts", 'import x from "..";', new Set(["index.ts", "src/a.ts"])), ["index.ts"]);
+});
+
+test("js imports: type-only imports are marked", () => {
+	const known = new Set(["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"]);
+	const text = 'import type { B } from "./b";\nimport { type C, type D2 } from "./c";\nimport { d, type D } from "./d";\nexport type { E } from "./e";\n';
+	assert.deepEqual(localImportsDetailed("a.ts", text, known), [
+		{ to: "b.ts", typeOnly: true }, { to: "c.ts", typeOnly: true }, { to: "d.ts", typeOnly: false }, { to: "e.ts", typeOnly: true },
+	]);
+	assert.deepEqual(localImportsDetailed("a.ts", 'import type { B } from "./b";\nimport { b } from "./b";\n', known), [{ to: "b.ts", typeOnly: false }]);
 });
 
 test("python imports: relative, parent, parenthesized, aliases; absolute only from the root or src", () => {
@@ -122,6 +131,24 @@ test("analyze: an old importer with no change in the window is judged stable", (
 	const result = analyze(join(root, "src"));
 	assert.deepEqual(result.volatileImports.map((v) => [v.from, v.to, v.perMonthFrom]), [["stable.ts", "volatile.ts", 0]]);
 	assert.equal(result.youngModules, 0);
+});
+
+test("analyze: cycles made only of type imports are labeled", () => {
+	const root = tempDir();
+	put(root, { "a.ts": 'import type { B } from "./b";\nexport type A = 1;\n', "b.ts": 'import type { A } from "./a";\nexport type B = 1;\n', "c.ts": 'import "./d";\n', "d.ts": 'import "./c";\n' });
+	const result = analyze(root);
+	assert.deepEqual(result.cycles, [["a.ts", "b.ts"], ["c.ts", "d.ts"]]);
+	assert.deepEqual(result.runtimeCycles, [["c.ts", "d.ts"]]);
+});
+
+test("analyze --history-until: commits after the base do not count", () => {
+	const root = tempDir();
+	gitInit(root);
+	commit(root, { "x.ts": "0", "y.ts": "0" });
+	const base = git(root, "rev-parse", "HEAD").trim();
+	for (let i = 1; i <= 3; i++) commit(root, { "x.ts": `${i}`, "y.ts": `${i}` });
+	assert.equal(analyze(root).hiddenLinks.length, 1);
+	assert.equal(analyze(root, { historyUntil: base }).hiddenLinks.length, 0);
 });
 
 test("analyze by dir: hidden links are folder pairs", () => {

@@ -65,9 +65,12 @@ worktree root with the full path of the script, so that the area path and
   history, in changes per month; a module with no commit older than 60 days
   is not judged); **hidden links** (files that change in the same commits
   with no import either way); **importers outside the area**; fan-in, fan-out
-  and instability. `--by dir` groups by folder. `--save` and `--compare`
-  measure before and after. Only more modules in cycles counts as worse: the
-  history numbers grow with your own commits, so compare them by hand.
+  and instability. Cycles made only of `import type` edges are labeled.
+  `--by dir` groups by folder. `--save` and `--compare` measure before and
+  after. Only more modules in cycles counts as worse. After the first commit,
+  add `--history-until <base>` to each run, so that your own commits do not
+  add hidden links. On a repository younger than `--min-age` (60 days), the
+  volatile-import list is empty and says nothing.
 - `special-cases <path>`: counts swallowed errors and fallback values,
   retries and fixed waits, disabled tests, turned-off type or lint checks and
   TODO notes. It reads code without comments and strings, and notes only in
@@ -78,12 +81,22 @@ worktree root with the full path of the script, so that the area path and
   left out, with line numbers, so the whole area fits in one context. It is
   approximate. `--depth 1` keeps one more level.
 
-The numbers find candidates. They do not decide. A hidden link can be a test
+Cycles are the most reliable number. The numbers find candidates. They do
+not decide. A hidden link can be a test
 and its subject, or a feature and its changelog. Check each one in the code.
 The special-case count reads names and shapes, not meaning: a rename of a
 retry name can move it, and JSX text with `/*` or one backtick can hide a few
 lines. Before you report a change in the count, read the hits that left and
 the hits that came (`--compare` lists the new ones).
+
+## Helpers
+
+Steps 3 and 6 use helper agents: scouts that read batches of code, and
+reviewers that did not do the work. Use the subagent tool when you have it.
+Without one, ask the user how to run them. A fallback must give read-only
+tools (no shell for scouts), a cost cap or a hard time limit, a fixed model,
+and a final text report with its cost. Save scout reports in
+`.untangle/scouts/` and review reports in `.untangle/reviews/round-<N>.md`.
 
 ## Steps
 
@@ -102,11 +115,13 @@ Also confirm the area and the test command, if they are not clear.
 ### 2. Set up and record the baseline
 
 1. Make the worktree and branch from a clean, committed base. Put working
-   files in `.untangle/` at its root and add `.untangle/` to
-   `.git/info/exclude`. Write the base commit in `.untangle/baseline.md`.
+   files in `.untangle/` at its root and add `.untangle/` to the exclude file
+   (`git rev-parse --git-path info/exclude` gives its path; in a linked
+   worktree it is shared). Write the base commit in `.untangle/baseline.md`.
 2. Run the test suite, the typecheck and the linter. Save the exact commands
    and the pass, fail and skip counts in `.untangle/baseline.md`. A test that
-   fails before you start is not your regression: list it.
+   fails before you start is not your regression: list it. Look for a time
+   limit in the test runner: a run near the limit can fail for time only.
 3. Save the numbers: `graph <area> --save .untangle/graph-before.json` and
    `special-cases <area> --save .untangle/special-before.json`.
 
@@ -115,8 +130,19 @@ Also confirm the area and the test command, if they are not clear.
 Do not change code in this step. Use the skeleton, the graph, the git
 history and the special-case list. For more than about 6,000 lines, start
 read-only scouts in parallel, one for each batch of files, with the brief in
-[references/scout-brief.md](references/scout-brief.md). Check each scout
-claim in the code before you log it.
+[references/scout-brief.md](references/scout-brief.md). Give each scout the
+graph and special-case rows for its files (use `--json` or a large `--limit`,
+not the top 20).
+
+A scout claim is a hypothesis. Triage before you check: scouts can give 30
+findings for each 1,000 lines, more than a run can check.
+
+1. Check first the claims with the most leverage: one fix behind several
+   claims, and a case that one of two similar handlers covers and the other
+   does not (that shape found real bugs in the pilot).
+2. Open the code for each claim that you log as a problem.
+3. Log the claims that you did not check under "Not checked", with their
+   scout and file:line.
 
 Write every problem in `.untangle/decisions.md`, in the format of
 [references/decision-log.md](references/decision-log.md). There are only
@@ -205,6 +231,12 @@ If the user chose **Tests**, do this pass last, because the tests are the
 safety net for the other fixes. A test must fail on a regression, and only
 then.
 
+- A scout claim about a test is a hypothesis until a probe confirms it. In
+  the pilot, most "cannot fail" claims were wrong.
+- Run each probe with a time limit (`timeout 120`) and one test
+  (`--test-name-pattern`): a mutation can make a test hang.
+- To find tests that use private members, rename the private member and
+  see which tests break.
 - A test that repeats the implementation checks the code against itself.
 - A test tied to internals breaks when the code changes but the behavior does
   not. Rewrite it against the behavior, in its own commit.
@@ -215,7 +247,9 @@ then.
     the mutation, so the removed test added nothing;
   - for a test that cannot fail: the same mutation, with the test itself
     still passing;
-  - the name of a kept test that checks the same behavior.
+  - the name of a kept test that checks the same behavior;
+  - for a test of dead code that you remove: no caller at the base
+    (`git grep` output), and the live rule has its own tests.
 - A test with no proof stays. List every removed test with its reason and its
   proof in the log, so the user can review each one.
 
@@ -224,8 +258,11 @@ then.
 Start fresh reviewer subagents on a strong model with the brief in
 [references/review-brief.md](references/review-brief.md). They did not do the
 work. They search the changed area for hidden links, needless links, surplus
-and special cases that remain, and for behavior changes. Fix the confirmed
-findings, then start the next round. Use the stop rule in Hard rules.
+and special cases that remain, and for behavior changes. Each round after the
+first reviews the new commits. Check each finding in the code before you act
+on it: a reviewer can be wrong too. Fix the confirmed findings, then start
+the next round. Use the stop rule in Hard rules. A new `fix:` commit after
+the last round needs one more round, also when the last round was clean.
 
 You are done when all of these are true:
 
@@ -245,9 +282,12 @@ You are done when all of these are true:
 
 ### 7. Report
 
-- Run `graph <area> --compare .untangle/graph-before.json` and
-  `special-cases <area> --compare .untangle/special-before.json`. Give the
-  numbers before and after. Explain each number that got worse.
+- Run `graph <area> --history-until <base> --compare .untangle/graph-before.json`
+  and `special-cases <area> --compare .untangle/special-before.json`. Give
+  the numbers before and after. Explain each number that got worse. A
+  special-case count that did not go down is not a failure when each one
+  left is a real boundary: the count does not see removed copies or second
+  owners of a rule. Say what the fixes removed instead.
 - The test, typecheck and lint results against the baseline.
 - The fixes, each with the problems that it solved and its commit.
 - Public interface changes, bugs fixed, removed comments and removed tests.

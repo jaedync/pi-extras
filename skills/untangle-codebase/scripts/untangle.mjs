@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Instruments for the untangle-codebase skill. No dependencies: it runs in any
 // checkout with Node 22 or later and git.
+import { spawnSync } from "node:child_process";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -16,6 +17,8 @@ commands:
                         files outside the folder that import it
       --by file|dir     group by file (default) or by folder
       --since <date>    git history window (default "12 months ago")
+      --history-until <rev>  read git history only up to this commit (default HEAD);
+                        give the base commit so that your own commits do not count
       --min-age <days>  an importer younger than this is not judged stable (default 60)
       --tests           include test files
       --limit <n>       rows to print for each list (default 20)
@@ -41,6 +44,7 @@ const OPTIONS = /** @type {const} */ ({
 	by: { type: "string", default: "file" },
 	since: { type: "string", default: "12 months ago" },
 	"min-age": { type: "string", default: "60" },
+	"history-until": { type: "string", default: "HEAD" },
 	tests: { type: "boolean", default: false },
 	"no-tests": { type: "boolean", default: false },
 	limit: { type: "string", default: "20" },
@@ -73,6 +77,13 @@ function readSaved(file, kind) {
 	return saved;
 }
 
+/** Refuses a revision that git cannot read, unless root has no git history at all. */
+function checkRevision(root, rev) {
+	const git = (args) => spawnSync("git", args, { cwd: root, stdio: "ignore" }).status === 0;
+	if (!git(["rev-parse", "--verify", "-q", "HEAD"])) return;
+	if (!git(["rev-parse", "--verify", "-q", `${rev}^{commit}`])) throw new UsageError(`--history-until: git cannot find the commit "${rev}"`);
+}
+
 /** A folder, or with allowFile one file: { root, only } where only is the file name. */
 function target(path, { allowFile = false } = {}) {
 	const full = resolve(path);
@@ -91,6 +102,7 @@ function graphSummary(result) {
 	return {
 		cycles: result.cycles.length,
 		modulesInCycles: result.cycles.reduce((n, c) => n + c.length, 0),
+		modulesInRuntimeCycles: result.runtimeCycles ? result.runtimeCycles.reduce((n, c) => n + c.length, 0) : null,
 		volatileImports: result.volatileImports?.length ?? null,
 		hiddenLinks: result.hiddenLinks?.length ?? null,
 		outsideImporters: result.outsideImporters?.length ?? null,
@@ -113,10 +125,13 @@ function printGraph(result, limit) {
 	const s = graphSummary(result);
 	const lines = [
 		`${result.files} files, ${result.modules} modules (by ${result.by}), ${result.edges} import edges between modules`,
-		`git window: since ${result.since}${result.volatileImports === null ? " (no git history: churn and hidden links skipped)" : ""}`,
+		`git window: since ${result.since}, up to ${result.historyUntil}${result.volatileImports === null ? " (no git history: churn and hidden links skipped)" : ""}`,
 		"",
-		`Cycles: ${s.cycles} (${s.modulesInCycles} modules)`,
-		...result.cycles.slice(0, limit).map((c) => `  - ${c.join(" -> ")}`),
+		`Cycles: ${s.cycles} (${s.modulesInCycles} modules); without type-only imports: ${result.runtimeCycles.length} (${s.modulesInRuntimeCycles} modules)`,
+		...result.cycles.slice(0, limit).map((c) => {
+			const runtime = result.runtimeCycles.some((r) => c.every((m) => r.includes(m)));
+			return `  - ${c.join(" -> ")}${runtime ? "" : "  (type imports only)"}`;
+		}),
 	];
 	if (result.volatileImports) {
 		lines.push("", `Imports of more volatile code: ${s.volatileImports} (changes per month: importer -> imported)`);
@@ -162,7 +177,8 @@ function runGraph(path, values) {
 	if (!["file", "dir"].includes(values.by)) throw new UsageError(`--by must be file or dir, got "${values.by}"`);
 	const { root } = target(path);
 	const minAgeDays = integer(values["min-age"], "min-age");
-	const result = { kind: "graph", ...analyze(root, { by: values.by, since: values.since, includeTests: values.tests, minAgeDays }) };
+	checkRevision(root, values["history-until"]);
+	const result = { kind: "graph", ...analyze(root, { by: values.by, since: values.since, historyUntil: values["history-until"], includeTests: values.tests, minAgeDays }) };
 	if (values.save) writeFileSync(values.save, JSON.stringify(result, null, "\t"));
 	if (values.compare) {
 		const diff = compareGraph(readSaved(values.compare, "graph"), result);
