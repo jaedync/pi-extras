@@ -2,6 +2,20 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Untangle Codebase skill (`skills/untangle-codebase`): the model refactors
+  a codebase or one area of it so that pieces that change together sit
+  together. It records a test baseline, lists every hidden link, needless
+  link, surplus piece and special case, redesigns, and fixes in small tested
+  commits on a new branch. `scripts/untangle.mjs` measures import cycles,
+  imports of more volatile code, files that change together in git with no
+  import, and a special-case count before and after. Fresh reviewers check
+  each round, with a stop rule. Run `/skill:untangle-codebase [area]`. Based
+  on Maze's MIT skill of the same name.
+
 ## 0.39.2 - 2026-11-05
 
 ### Fixed
