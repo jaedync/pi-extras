@@ -82,6 +82,21 @@ test("a question from a call that was already stopped does not wait for a reply"
 	assert.deepEqual(answer, { ok: false, error: "Stopped waiting for a reply." });
 });
 
+test("a waited-on lead whose stale session can't launch again stops holding later reports", async () => {
+	let stale = false;
+	let refuse = false;
+	const h = teamHarness({ current: () => !stale, refuse: (record) => refuse && record.name === "lead" ? new Error("The model is gone.") : undefined });
+	h.spawn("Lead", { name: "lead", blocking: true }); await flush();
+	const waited = h.team.whenDone("lead");
+	h.spawn("Help", { name: "helper", parent: "lead" }); await flush();
+	h.lastCall("lead").finish("Waiting on the helper."); await flush();
+	assert.equal(h.team.get("lead")!.state, "waiting");
+	stale = true; refuse = true;
+	await h.team.send("main", "lead", "Use the new API."); await flush();
+	assert.equal((await waited).state, "interrupted", "main's wait gets the failed relaunch");
+	assert.equal(h.team.get("lead")!.blocking, false, "a later run reports to main as a message");
+});
+
 test("after a restart, a resumed asker does not wait on a peer that is still paused", async () => {
 	const h = teamHarness();
 	h.team.restore([saved({ name: "worker", state: "interrupted", owed: ["expert"], interruptionId: "i", interruptedBy: "quit" }),
