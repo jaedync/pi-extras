@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as tick } from "node:timers/promises";
 import { turnGoesOn } from "../lib/subagents/child.ts";
-import { fileIdentity } from "../lib/subagents/stamp.ts";
+import { fileIdentity } from "../lib/file-identity.ts";
 import { causeWords, staleCauses, SWAP_NOTE, swapDue, type SwapFacts } from "../lib/subagents/swap.ts";
 import { Team, type TeamOptions } from "../lib/subagents/team.ts";
 import type { AgentRecord, CheckRun, ChildHandle, ChildHooks, MainDelivery, SpawnRequest } from "../lib/subagents/types.ts";

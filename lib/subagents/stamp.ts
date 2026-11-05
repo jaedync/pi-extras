@@ -18,9 +18,6 @@ export interface LaunchStamp {
 	readonly files: ReadonlyArray<readonly [path: string, identity: string]>;
 }
 
-// Moved to lib/ so code outside subagents can use it; its callers here keep this import.
-export { fileIdentity };
-
 export function stampOf(generation: number, paths: readonly string[]): LaunchStamp {
 	return { generation, files: [...new Set(paths)].map((path) => [path, fileIdentity(path)] as const) };
 }

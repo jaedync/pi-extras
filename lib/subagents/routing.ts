@@ -218,11 +218,11 @@ export class Routing {
 			host.patch(to, { unread: [...(host.get(to)?.unread ?? []), body] });
 			return { ok: true, delivered: "steered" };
 		}
-		return this.wake(target, { from, body, said, automatic, peer, stale: false }, { resumes, ended });
+		return this.wake(target, { from, body, said, automatic, peer }, { resumes, ended });
 	}
 
 	/** A message to a child that does not run now: it resumes it, or waits in its inbox. */
-	private wake(target: AgentRecord, why: Resume, how: { resumes: boolean; ended: boolean }): SendResult {
+	private wake(target: AgentRecord, why: Omit<Resume, "stale">, how: { resumes: boolean; ended: boolean }): SendResult {
 		const { host } = this;
 		const { name: to } = target;
 		const handle = host.sessions.get(to);

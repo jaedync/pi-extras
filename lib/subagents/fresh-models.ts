@@ -8,7 +8,7 @@
  * custom providers away with no warning.
  */
 import type { CreateModelRuntimeOptions } from "@earendil-works/pi-coding-agent";
-import { fileIdentity } from "./stamp.ts";
+import { fileIdentity } from "../file-identity.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
 

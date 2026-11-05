@@ -45,9 +45,6 @@ export function nameFor(requested: string | undefined, task: string, taken: (nam
 	}
 }
 
-/** "1 more line", "3 more lines". */
-export const moreLines = (count: number, noun = "line"): string => `${count} more ${noun}${count === 1 ? "" : "s"}`;
-
 /**
  * Completions for `/subagents`. None once the text is a whole command: an open
  * menu takes Enter to re-apply its item, so the command would not run.

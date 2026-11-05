@@ -325,18 +325,6 @@ export function discoverOrphans(dir: string, known: readonly AgentRecord[], read
 	});
 }
 
-export function shouldResume(reason: string, policy: "reload" | "always" | "notify"): boolean {
-	return policy === "always" || (policy === "reload" && reason === "reload");
-}
-
-export function restorationNotice(records: readonly AgentRecord[], resumed: boolean, reason: string): string {
-	const line = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 300);
-	const summary = records.map((r) => `${r.name}: task ${line(r.task)}; last activity ${line(r.activity ?? r.state)}`).join("\n");
-	return `Subagents interrupted by ${reason}. ${resumed ? "Auto-resuming" : "Not resumed"}:\n${summary}\n`
-		+ (resumed ? "Their last tool calls may not have completed. Each child will verify before continuing."
-			: 'Resume with message({ to: "<name>", text: "Continue" }) or /subagents resume <name>. Do not wait for their reports until resumed.');
-}
-
 /** Pi's active branch, not abandoned tool calls, determines whether the last run finished. */
 export function restoreRecord(record: AgentRecord, entries: readonly unknown[], warn: (message: string) => void): AgentRecord {
 	const messages = entries.flatMap((entry) => (entry as Entry).message ? [(entry as Entry).message!] : []);
