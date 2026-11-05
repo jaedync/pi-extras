@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
-import type { ChildHandle } from "../lib/subagents/types.ts";
+import type { ChildHandle, ChildHooks } from "../lib/subagents/types.ts";
 
 const settled = async () => { for (let i = 0; i < 12; i++) await tick(); };
 
@@ -17,13 +17,15 @@ function harness(fallbackModels: string[]) {
 	const resolvers: Array<() => void> = [];
 	const queues: string[][] = [];
 	const gates: Array<{ go: () => void; fail: (e: Error) => void }> = [];
+	const hooks: ChildHooks[] = [];
 	let launches = 0;
 	let stale = false;
 	const team = new Team({
 		maxConcurrent: 4, maxDepth: 2, replyTimeoutMs: 60_000, warn: () => undefined, deliverToMain: () => undefined, fallbackModels,
 		launcher: {
-			async launch(): Promise<ChildHandle> {
+			async launch(_record, childHooks): Promise<ChildHandle> {
 				const id = launches++;
+				hooks[id] = childHooks;
 				if (id > 0) await new Promise<void>((resolve, reject) => { gates[id] = { go: resolve, fail: reject }; });
 				prompts[id] = []; queues[id] = [];
 				return {
@@ -38,7 +40,7 @@ function harness(fallbackModels: string[]) {
 			codeCurrent: (handle) => !(stale && handle.stamp?.generation === 0),
 		},
 	});
-	return { team, transcript, prompts, resolvers, gates, makeStale: () => { stale = true; } };
+	return { team, hooks, transcript, prompts, resolvers, gates, makeStale: () => { stale = true; } };
 }
 
 const order = (text: string, words: string[]) => words.map((w) => text.indexOf(w));
@@ -49,7 +51,7 @@ async function swapWithM1M2(h: ReturnType<typeof harness>) {
 	await h.team.send("main", "impl", "M1");
 	h.makeStale();
 	h.transcript.push({ role: "assistant", content: [{ type: "text", text: "Done, I think." }] });
-	assert.equal((h.team as unknown as { turnEnded(name: string): boolean }).turnEnded("impl"), true);
+	assert.equal(h.hooks[0]!.turnEnded?.(), true, "the first session ends its prompt at the turn");
 	h.resolvers[0]!();
 	await settled();
 	assert.equal(h.team.get("impl")!.state, "starting");

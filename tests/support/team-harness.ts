@@ -24,10 +24,12 @@ type HarnessOptions = Partial<TeamOptions> & {
 	refuse?: (record: AgentRecord) => Error | undefined;
 	/** How a child runs its check; without it, its sessions can't run checks. */
 	check?: (record: AgentRecord, command: string, options: { timeoutMs: number; signal: AbortSignal; id: string }) => Promise<CheckRun>;
+	/** Whether an open session is current; a stale one is launched again at its next run. */
+	current?: (handle: ChildHandle) => boolean;
 };
 
 export function teamHarness(options: HarnessOptions = {}) {
-	const { sessionDir = "/sessions", transcripts = new Map<string, unknown[]>(), refuse, check, ...teamOptions } = options;
+	const { sessionDir = "/sessions", transcripts = new Map<string, unknown[]>(), refuse, check, current, ...teamOptions } = options;
 	const calls = new Map<string, Call[]>();
 	const steered = new Map<string, string[]>();
 	const hooks = new Map<string, ChildHooks>();
@@ -67,6 +69,7 @@ export function teamHarness(options: HarnessOptions = {}) {
 					...(check ? { check: (command: string, checkOptions: { timeoutMs: number; signal: AbortSignal; id: string }) => check(record, command, checkOptions) } : {}),
 				};
 			},
+			...(current ? { current } : {}),
 		},
 		...teamOptions,
 	});

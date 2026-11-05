@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
-import { MainMail, type OutgoingMessage } from "../lib/subagents/deliver.ts";
+import { MainMail } from "../lib/subagents/deliver.ts";
+import type { OutgoingMessage } from "../lib/subagents/contract.ts";
 import { NO_USAGE, type AgentRecord, type ChildHandle, type MainDelivery, type SpawnRequest } from "../lib/subagents/types.ts";
 
 interface Call { text: string; finish(result: string): void; fail(error: Error): void }

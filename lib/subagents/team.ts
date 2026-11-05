@@ -17,9 +17,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterBlock, afterError, isLinePlace, queuedActivity, stopOrder, waitingFor } from "./after.ts";
 import { minutesAndUp } from "../duration.ts";
 import { MAIN, nameFor } from "./names.ts";
-import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
+import { budgetError, type BudgetUse, RunBudgets } from "./budget.ts";
 import { windowReason, type WindowReading } from "./windows.ts";
-import type { HostTeam } from "./contract.ts";
+import type { HostTeam, SendResult } from "./contract.ts";
 import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
 import { EditLocks } from "./edit-lock.ts";
@@ -41,7 +41,7 @@ import { RunWrapUps, type WrapUpTimes } from "./wrap-up.ts";
 import type { Thinking } from "./models.ts";
 import { placeChild } from "./placement.ts";
 import {
-	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, neverStarted, NO_USAGE, type SpawnRequest, WAITING_FOR_MODEL,
+	ACTIVE_STATES, type AgentRecord, type ChildHandle, LIVE_STATES, type Launcher, type MainDelivery, neverStarted, NO_USAGE, type RunLimits, type SpawnRequest, WAITING_FOR_MODEL,
 } from "./types.ts";
 
 export interface TeamOptions {
@@ -81,10 +81,6 @@ export interface TeamOptions {
 	/** Writes one line to the operational log: each swap. */
 	log?(message: string): void;
 }
-
-export type SendResult =
-	| { ok: true; delivered: "steered" | "resumed" | "queued" | "replied" | "main" | "inbox"; reply?: string; notice?: string }
-	| { ok: false; error: string };
 
 type Listener = (record: AgentRecord | null) => void;
 
@@ -358,7 +354,7 @@ export class Team implements HostTeam {
 	 */
 	afterWait(name: string): Promise<void> {
 		const record = this.records.get(name);
-		if (!record || !ACTIVE_STATES.has(record.state) || this.slots.used() <= this.options.maxConcurrent) return Promise.resolve();
+		if (!record || !ACTIVE_STATES.has(record.state) || this.slots.fits()) return Promise.resolve();
 		return this.goOnWhenFree(name, () => this.patch(name, { state: "running", ...WAITING_FOR_MODEL }));
 	}
 
@@ -560,7 +556,7 @@ export class Team implements HostTeam {
 		// A stop wrote its own activity; an abort or a close leaves the row as the command left it.
 		if (state === "running" || state === "interrupted") this.restoreActivity(name, activity);
 		if (signal?.aborted || state !== "running") return false;
-		return this.slots.used() <= this.options.maxConcurrent || this.slotAfterRest(name, activity, signal);
+		return this.slots.fits() || this.slotAfterRest(name, activity, signal);
 	}
 
 	/** A wrap-up that began meanwhile keeps saying so. */
@@ -637,8 +633,10 @@ export class Team implements HostTeam {
 			launchFailures: (previous.launchFailures ?? 0) + 1, endedAt: this.now(), activity: `resume launch failed: ${message}`,
 			interruptedBy: "quit", interruptionId: randomUUID(), interruptionAnnounced: false });
 		const record = this.records.get(name)!;
-		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
-		this.waiters.delete(name);
+		// As in finish: a parent waits for one run's report, so a later run reports as a message.
+		// The kept record has no flag; the run log, the waiters and the failure report get this run's record, with it.
+		if (record.blocking) this.patch(name, { blocking: false });
+		this.settleWaiters(name, record);
 		const failure = { ...record, reportFile: undefined,
 			report: `Resume launch failed: ${message}. The child remains interrupted; fix the problem and resume it again.` };
 		handUpFailure(this.handUpHost, failure, owedMain);
@@ -920,13 +918,20 @@ export class Team implements HostTeam {
 		// Answers still owed to it die with its run; a message resumes it to ask again.
 		const record = saveReport({ ...this.records.get(name)!, owed: undefined }, this.options.warn ?? console.warn);
 		this.sessions.endRun(name);
-		this.put(record);
+		// A parent waits for one run's report: a later run, which a message starts, reports as a message.
+		// The kept record has no flag; the waiters and handUp get this run's record, with it.
+		this.put(record.blocking ? { ...record, blocking: false } : record);
 		this.answers.forget(name);
-		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
-		this.waiters.delete(name);
+		this.settleWaiters(name, record);
 		handUp(this.handUpHost, record, this.stoppedByParent.delete(name));
 		this.sessions.ended(name, record.state);
 		this.pump();
+	}
+
+	/** Ends the waits of `whenDone(name)` with the record of the run that ended. */
+	private settleWaiters(name: string, record: AgentRecord): void {
+		for (const resolve of this.waiters.get(name) ?? []) resolve(record);
+		this.waiters.delete(name);
 	}
 
 	/** An asker's state follows its open questions. */

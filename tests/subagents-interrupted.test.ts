@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
-import { restoreRecord, shouldResume, restorationNotice } from "../lib/subagents/restore.ts";
+import { restoreRecord } from "../lib/subagents/restore.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 
 const warn = (message: string) => assert.fail(message);
@@ -10,16 +10,6 @@ const record = (state: AgentRecord["state"] = "idle"): AgentRecord => ({ name: "
 	model: "faux/cheap", task: "Check files", readOnly: false, fork: false, blocking: false, state, createdAt: 1,
 	activity: "write notes.txt", runs: 1, toolCalls: 0, usage: NO_USAGE, sessionFile: "/sessions/helper.jsonl" });
 const message = (value: unknown) => ({ type: "message", message: value });
-
-test("reload defaults to resuming while startup only notifies, with explicit overrides", () => {
-	assert.equal(shouldResume("reload", "reload"), true);
-	assert.equal(shouldResume("startup", "reload"), false);
-	assert.equal(shouldResume("resume", "always"), true);
-	assert.equal(shouldResume("reload", "notify"), false);
-	const notice = restorationNotice([record("interrupted")], false, "startup");
-	assert.match(notice, /helper.*Check files.*write notes.txt/);
-	assert.match(notice, /resume <name>|message/);
-});
 
 test("aborted, running and unfinished tool sessions restore interrupted, not failed", () => {
 	assert.equal(restoreRecord(record(), [message({ role: "assistant", stopReason: "aborted", content: [] })], warn).state, "interrupted");

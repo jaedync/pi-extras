@@ -17,9 +17,16 @@ function warnSafely(warn: Warn, message: string): void {
 	}
 }
 
+/** A run's report sits beside the session: `<session>.run-<n>.report.md`. */
 export function reportFilePath(sessionFile: string, run: number): string {
 	if (!Number.isSafeInteger(run) || run < 1) throw new Error("A report needs a positive run number.");
 	return `${sessionFile.replace(/\.jsonl$/, "")}.run-${run}.report.md`;
+}
+
+/** The run number in a report file's name; undefined for a name that `reportFilePath` does not make. */
+export function reportRun(file: string): number | undefined {
+	const run = /\.run-([1-9]\d*)\.report\.md$/.exec(file)?.[1];
+	return run === undefined ? undefined : Number(run);
 }
 
 function writeExclusive(file: string, text: string, mode: number, io: ReportIO, warn: Warn): void {
@@ -77,8 +84,8 @@ export function saveReport(record: AgentRecord, warn: Warn = console.warn): Agen
 export function savedReport(record: Pick<AgentRecord, "reportFile" | "sessionFile">): { file: string; run?: number } | undefined {
 	const file = record.reportFile ?? (record.sessionFile ? latestReportFile(record.sessionFile) : undefined);
 	if (!file) return undefined;
-	const run = /\.run-([1-9]\d*)\.report\.md$/.exec(file)?.[1];
-	return { file, ...(run ? { run: Number(run) } : {}) };
+	const run = reportRun(file);
+	return { file, ...(run !== undefined ? { run } : {}) };
 }
 
 /** Restored records from older versions may not carry a report path. Run numbers can have gaps. */
@@ -89,11 +96,10 @@ export function latestReportFile(sessionFile: string): string | undefined {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
-	const prefix = `${basename(sessionFile).replace(/\.jsonl$/, "")}.run-`;
-	const suffix = ".report.md";
-	const runs = entries.filter((entry) => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(suffix))
-		.map((entry) => ({ name: entry.name, run: entry.name.slice(prefix.length, -suffix.length) }))
-		.filter((entry) => /^[1-9]\d*$/.test(entry.run) && Number.isSafeInteger(Number(entry.run)))
-		.sort((a, b) => Number(b.run) - Number(a.run));
+	const runs = entries.filter((entry) => entry.isFile())
+		.map((entry) => ({ name: entry.name, run: reportRun(entry.name) }))
+		.filter((entry): entry is { name: string; run: number } => entry.run !== undefined && Number.isSafeInteger(entry.run)
+			&& entry.name === basename(reportFilePath(sessionFile, entry.run)))
+		.sort((a, b) => b.run - a.run);
 	return runs[0] ? join(dirname(sessionFile), runs[0].name) : undefined;
 }

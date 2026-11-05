@@ -175,5 +175,5 @@ test("signal recording is synchronous, leaves existing host listeners alone and 
 		assert.deepEqual(events, ["SIGTERM", "host"]);
 		assert.equal(process.listenerCount("SIGTERM"), before + 1);
 	} finally { remove(); process.off("SIGTERM", host); }
-	assert.equal(process.listeners("SIGTERM").includes(host), false);
+	assert.equal(process.listenerCount("SIGTERM"), before - 1, "the recorder's handler went with remove()");
 });

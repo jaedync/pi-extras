@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseConfig } from "../lib/link-context/config.ts";
-import { MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
+import { MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/contract.ts";
 import { MODEL_WRITTEN_TYPES, NamedHostCache, defang, resultHosts, hostsIn, isNamed, namedHosts, registerHostGuard, requestedHosts, requestedTargets } from "../lib/link-context/host-guard.ts";
 
 const FABRICATED = "https://routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com/proxy_temp_file/production/2026-10-22/trace_2101815e17926167089461936e0c00/x?Expires=1813720712&Signature=placeholder";

@@ -2,7 +2,8 @@ import { test } from "node:test";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { quiet } from "./support/quiet-theme.ts";
 import assert from "node:assert/strict";
-import { agentRows, contextFigures, createAgentsWidget, costText, listLabel, nameSegs, pendingLines, rowColumns, runTime, presenceLine, rowSegs, shortModel } from "../lib/subagents/widget.ts";
+import { createAgentsWidget, pendingLines } from "../lib/subagents/widget.ts";
+import { agentRows, contextFigures, costText, listLabel, nameSegs, rowColumns, runTime, presenceLine, rowSegs, modelWithoutProvider } from "../lib/subagents/rows.ts";
 import { contextHeat } from "../lib/status-plus-render.ts";
 import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount } from "../lib/subagents/overflow.ts";
 import { AGENT_HUE, agentHue, doingGlyph, doingOf } from "../lib/band/agent-look.ts";
@@ -214,7 +215,7 @@ test("queued messages for main show until appended, questions in amber", () => {
 		{ text: "↳ a → main: x", color: "dim" },
 		{ text: "+1 more queued for main", color: "dim" },
 	]);
-	assert.equal(shortModel("anthropic/claude-opus-5-5"), "claude-opus-5-5");
+	assert.equal(modelWithoutProvider("anthropic/claude-opus-5-5"), "claude-opus-5-5");
 });
 
 test("a child main is blocked on shows only inline, not in the widget", () => {

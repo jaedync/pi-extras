@@ -11,6 +11,7 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { formatElapsed } from "../shell-jobs-widget.ts";
+import { CLOCK_TOOL, PI_READ_TOOLS } from "./allowlist.ts";
 import { MAIN } from "./names.ts";
 import { type AgentRecord, type AgentState, type CheckResult, type CheckRun, type CheckSpec, type CheckUpdate, type ChildHandle, WAITING_FOR_MODEL } from "./types.ts";
 
@@ -26,10 +27,10 @@ export const SKIPPED_LINE = "Check skipped: no changes since the last check.";
 export const NOT_CHECKED_LINE = "Not checked: this run changed files and had no check command. Verify the work before you rely on it.";
 /**
  * Tools that can't change files: Pi's tools that only read, and this
- * extension's messages and stops. Any other tool can, `subagent` too, and
- * a subagent's calls count for each agent above it (`RunChecks.called`).
+ * extension's messages, clock and stops. Any other tool can, `subagent` too,
+ * and a subagent's calls count for each agent above it (`RunChecks.called`).
  */
-const UNCHANGING_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "find", "ls", "message", "stop_subagent"]);
+const UNCHANGING_TOOLS: ReadonlySet<string> = new Set([...PI_READ_TOOLS, "message", CLOCK_TOOL, "stop_subagent"]);
 const PASSED_TAIL = { lines: 10, chars: 1_000 };
 
 /** Why `update` is not a check `target` can have, or undefined. */

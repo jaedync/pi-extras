@@ -13,7 +13,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { HostMail } from "./contract.ts";
-import type { Route } from "./deliver.ts";
+import type { Route } from "./contract.ts";
 import type { Handover } from "./headless.ts";
 
 /**

@@ -30,12 +30,17 @@ function blockers(record: AgentRecord, children: ReadonlyMap<string, readonly st
 	return [...(children.get(record.name) ?? []), ...owed, ...(record.state === "queued" ? waitingFor(record, get) : [])];
 }
 
-/** Whether `name` can't end before `target` does, directly or through other agents. */
-export function dependsOn(name: string, target: string, records: readonly AgentRecord[]): boolean {
+/** The records by name, and the live children of each parent: the graph that the two walks below follow. */
+function graphOf(records: readonly AgentRecord[]): { get: Lookup; children: ReadonlyMap<string, readonly string[]> } {
 	const byName = new Map(records.map((record) => [record.name, record]));
-	const get: Lookup = (other) => byName.get(other);
 	const children = new Map<string, string[]>();
 	for (const record of records) if (live(record)) children.set(record.parent, [...(children.get(record.parent) ?? []), record.name]);
+	return { get: (other) => byName.get(other), children };
+}
+
+/** Whether `name` can't end before `target` does, directly or through other agents. */
+export function dependsOn(name: string, target: string, records: readonly AgentRecord[]): boolean {
+	const { get, children } = graphOf(records);
 	const seen = new Set<string>();
 	const next = [name];
 	while (next.length > 0) {
@@ -56,10 +61,7 @@ export function dependsOn(name: string, target: string, records: readonly AgentR
  * answers alone is not this case).
  */
 export function heldBetween(name: string, target: string, records: readonly AgentRecord[]): string | undefined {
-	const byName = new Map(records.map((record) => [record.name, record]));
-	const get: Lookup = (other) => byName.get(other);
-	const children = new Map<string, string[]>();
-	for (const record of records) if (live(record)) children.set(record.parent, [...(children.get(record.parent) ?? []), record.name]);
+	const { get, children } = graphOf(records);
 	const seen = new Set<string>();
 	const next: Array<{ readonly at: string; readonly held: string | undefined }> = [{ at: name, held: undefined }];
 	while (next.length > 0) {
@@ -165,7 +167,6 @@ export function askError(target: AgentRecord | undefined, get: Lookup): string |
 	return `${target!.name} has not started: it starts after ${waits.join(", ")} ${waits.length === 1 ? "ends" : "end"}. Send a note instead (no expectReply); it reads it when it starts.`;
 }
 
-/** What a queued spawn shows: the after agents it still waits for, then plain `queued`; any other activity stays. */
 /** A queued agent's activity: the after agents it waits for, else its `place` (1 is next) among those in line for a slot. */
 export function queuedActivity(record: AgentRecord, get: Lookup, place: number): string {
 	const waits = waitingFor(record, get);
@@ -190,7 +191,6 @@ const oneLine = (text: string, max = 200): string => {
 	return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 };
 
-/** The report of its latest run that saved one; a restored record has only its session file to find it by. */
 /** Where its report is; one from an older run says so, since the last run saved none. */
 function reportOf(record: AgentRecord): string | undefined {
 	let saved: ReturnType<typeof savedReport>;

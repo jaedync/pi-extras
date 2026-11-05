@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
-import { type AgentRecord, type ChildHandle, type MainDelivery, NO_USAGE } from "../lib/subagents/types.ts";
+import { type AgentRecord, type ChildHandle, type ChildHooks, type MainDelivery, NO_USAGE } from "../lib/subagents/types.ts";
 import { teamHarness } from "./support/team-harness.ts";
 
 const flush = async (rounds = 6) => { for (let i = 0; i < rounds; i++) await tick(); };
@@ -178,11 +178,13 @@ test("swap: mail carried from the old session comes before mail that came during
 	let gate: (() => void) | undefined;
 	let launches = 0;
 	let stale = false;
+	const hooks: ChildHooks[] = [];
 	const team = new Team({
 		maxConcurrent: 4, maxDepth: 2, replyTimeoutMs: 60_000, warn: () => undefined, deliverToMain: () => undefined,
 		launcher: {
-			async launch(): Promise<ChildHandle> {
+			async launch(_record, childHooks): Promise<ChildHandle> {
 				const id = launches++;
+				hooks[id] = childHooks;
 				if (id > 0) await new Promise<void>((resolve) => { gate = resolve; });
 				prompts[id] = []; queues[id] = [];
 				return {
@@ -202,7 +204,7 @@ test("swap: mail carried from the old session comes before mail that came during
 	assert.equal((await team.send("main", "impl", "OLD mail.")).ok, true);
 	stale = true;
 	transcript.push({ role: "assistant", content: [{ type: "text", text: "Done, I think." }] });
-	assert.equal((team as unknown as { turnEnded(name: string): boolean }).turnEnded("impl"), true);
+	assert.equal(hooks[0]!.turnEnded?.(), true);
 	resolvers[0]!();
 	await flush();
 	assert.equal(team.get("impl")!.state, "starting");

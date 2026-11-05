@@ -9,8 +9,7 @@ import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-
 import { relative } from "node:path";
 import { changedPaths, fingerprint, gitRoot, type Fingerprint } from "./fingerprint.ts";
 import { deniedWriteNote, type Sandbox } from "./sandbox.ts";
-import type { HostActivity } from "./contract.ts";
-import type { Watched } from "./tool-activity.ts";
+import { callId, type HostActivity, type Watched } from "./contract.ts";
 import type { Worktree } from "./types.ts";
 
 /** How a child's bash call reports the files it changed. */
@@ -67,7 +66,7 @@ async function before(watch: ChangeWatch, id: string, rootOf: () => Promise<stri
 	if (root === undefined || watch.mayEdit(root)) return undefined;
 	// Watch first: an edit that lands while the fingerprint is taken must not count either.
 	// By work tree, not directory: agents that start in different directories of one tree change the same files.
-	const stop = watch.activity.watch(`${watch.agent}:${id}`, root);
+	const stop = watch.activity.watch(callId(watch.agent, id), root);
 	try { return { root, print: await fingerprint(root, watch.worktree), stop }; }
 	catch (error) {
 		stop();

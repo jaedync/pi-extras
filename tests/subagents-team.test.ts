@@ -7,7 +7,7 @@ import type { AgentRecord, ChildHandle, ChildHooks, MainDelivery, SpawnRequest }
 interface Call { text: string; finish(result: string): void; end(message: unknown): void; fail(error: Error): void }
 
 /** A launcher whose children finish only when the test says so. */
-function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTimeoutMs?: number; launchError?: Error } = {}) {
+function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTimeoutMs?: number; launchError?: Error; now?: () => number } = {}) {
 	const calls = new Map<string, Call[]>();
 	const steered = new Map<string, string[]>();
 	const aborted: string[] = [];
@@ -20,6 +20,7 @@ function harness(options: { maxConcurrent?: number; maxDepth?: number; replyTime
 		maxDepth: options.maxDepth ?? 1,
 		replyTimeoutMs: options.replyTimeoutMs ?? 60_000,
 		deliverToMain: (delivery) => main.push(delivery),
+		...(options.now ? { now: options.now } : {}),
 		launcher: {
 			async launch(record: AgentRecord, childHooks: ChildHooks): Promise<ChildHandle> {
 				if (options.launchError) throw options.launchError;
@@ -386,8 +387,7 @@ test("main never blocks: its question is delivered and the answer wakes it as a 
 
 test("a resumed run is timed on its own and names what started it", async () => {
 	let clock = 0;
-	const h = harness();
-	(h.team as unknown as { now: () => number }).now = () => clock;
+	const h = harness({ now: () => clock });
 	const name = h.spawn("scan the repo");
 	await tick();
 	clock = 11_000;
@@ -612,4 +612,18 @@ test("a child its parent waits on can't narrate to it, and asking it ends the wa
 	h.lastCall(name).finish("done");
 	await tick();
 	assert.equal(h.main.at(-1)?.kind, "report", "its report now arrives as a message");
+});
+
+test("a child main waited on, and then resumed with a message, reports its new run to main", async () => {
+	const h = harness();
+	const name = h.spawn("quick check", { blocking: true });
+	await tick();
+	h.lastCall(name).finish("first");
+	await h.team.whenDone(name);
+	assert.equal(h.main.length, 0, "the first report went to main's wait");
+	assert.deepEqual(await h.team.send("main", name, "Now check the second file."), { ok: true, delivered: "resumed" });
+	await tick();
+	h.lastCall(name).finish("second");
+	await h.team.whenDone(name);
+	assert.equal(h.main.at(-1)?.kind, "report", "no one waits for the second run, so its report arrives as a message");
 });

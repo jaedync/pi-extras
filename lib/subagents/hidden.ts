@@ -10,12 +10,13 @@
  * a sandbox tool is available (sandbox.ts).
  */
 import { resolve, sep } from "node:path";
+import { PI_READ_TOOLS } from "./allowlist.ts";
 import type { HostTeam } from "./contract.ts";
 import type { AgentRecord } from "./types.ts";
 import { realTarget, toolPath } from "./worktree.ts";
 
 /** The tools whose `path` is checked. */
-export const HIDDEN_READ_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "find", "ls"]);
+export const HIDDEN_READ_TOOLS: ReadonlySet<string> = new Set(PI_READ_TOOLS);
 /** The tools that read everything under their path, so a path that holds a hidden one is refused too. */
 const SEARCH_TOOLS: ReadonlySet<string> = new Set(["grep", "find"]);
 

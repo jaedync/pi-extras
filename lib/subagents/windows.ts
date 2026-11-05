@@ -4,7 +4,7 @@
  * fills (limit-store.ts). The team wraps a run up when that window reaches
  * the limit, as at a time or cost budget.
  */
-import type { LimitSnapshot } from "../limit-store.ts";
+import { type LimitSnapshot, sharedLimitStore } from "../limit-store.ts";
 import { entryApplies, entryKind, missingReason, NO_READING_REASON } from "../usage-guard-core.ts";
 import { limitKey } from "../plan-billing.ts";
 
@@ -37,6 +37,9 @@ export function windowReading(get: (provider: string) => LimitSnapshot | undefin
 	const fullest = windows.reduce((top, entry) => (pct(entry) > pct(top) ? entry : top));
 	return { reading: { label: `${provider} ${fullest.label}`, pct: pct(fullest) } };
 }
+
+/** The reading for `model` in the store that Status Plus fills; the store is process-wide, so a reload keeps the readings. */
+export const liveWindowReading = (model: string): WindowLookup => windowReading((provider) => sharedLimitStore().get(provider), model);
 
 /** The wrap-up reason; the report reads `reached its 80% limit on the anthropic 7d window`. */
 export const windowReason = (limit: number, reading: WindowReading): string => `over its ${limit}% limit on the ${reading.label} window`;

@@ -4,13 +4,12 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { isReserved, nameFor } from "./names.ts";
 import { isThinking } from "./models.ts";
-import { latestReportFile, reportFilePath } from "./reports.ts";
-import { LIVE_STATES, NO_USAGE, type AgentRecord, type CheckResult, type CheckSpec, type FallbackStep } from "./types.ts";
+import { latestReportFile, reportFilePath, reportRun } from "./reports.ts";
+import { LIVE_STATES, MAX_DEPTH, NO_USAGE, type AgentRecord, type CheckResult, type CheckSpec, type FallbackStep } from "./types.ts";
 import { checkError } from "./checks.ts";
 import { validWorktree } from "./worktree.ts";
 import { CONTROL } from "./checkout.ts";
-import type { HeldMail } from "./contract.ts";
-import { MESSAGE_TYPE, REPORT_TYPE } from "./deliver.ts";
+import { type HeldMail, type MailDetails, MESSAGE_TYPE, REPORT_TYPE } from "./contract.ts";
 
 const STATES = new Set([...LIVE_STATES, "idle", "failed", "stopped", "interrupted"]);
 const DIRECTORY_WARNING_LIMIT = 64;
@@ -50,6 +49,9 @@ interface IndexData {
 	mail?: HeldMail[];
 }
 
+/** Every kind of mail main gets (`MailDetails`). */
+const MAIL_KINDS: Readonly<Record<MailDetails["kind"], true>> = { note: true, question: true, reply: true, relay: true, report: true, reminder: true };
+
 /** Held mail as a closing host saved it; anything else is left out, since it would reach main's context. */
 function validMail(value: unknown): value is HeldMail {
 	const item = value as HeldMail | null;
@@ -57,7 +59,7 @@ function validMail(value: unknown): value is HeldMail {
 	const details = message?.details as { id?: unknown; kind?: unknown; reports?: unknown } | undefined;
 	return !!item && typeof item.wakes === "boolean" && !!message && (message.customType === MESSAGE_TYPE || message.customType === REPORT_TYPE)
 		&& typeof message.content === "string" && typeof message.display === "boolean"
-		&& typeof details?.id === "string" && ["note", "question", "reply", "relay", "report", "reminder"].includes(details.kind as string)
+		&& typeof details?.id === "string" && typeof details.kind === "string" && Object.hasOwn(MAIL_KINDS, details.kind)
 		// The report renderer reads its summaries.
 		&& (details.kind !== "report" || Array.isArray(details.reports));
 }
@@ -107,7 +109,7 @@ function validRecord(value: unknown): value is AgentRecord {
 	if (!value || typeof value !== "object") return false;
 	const r = value as AgentRecord;
 	return typeof r.name === "string" && /^[a-z0-9][a-z0-9-]*$/.test(r.name) && !isReserved(r.name)
-		&& typeof r.parent === "string" && Number.isInteger(r.depth) && r.depth >= 1 && r.depth <= 4
+		&& typeof r.parent === "string" && Number.isInteger(r.depth) && r.depth >= 1 && r.depth <= MAX_DEPTH
 		&& typeof r.task === "string" && typeof r.model === "string" && STATES.has(r.state)
 		&& (r.activity === null || typeof r.activity === "string")
 		&& typeof r.readOnly === "boolean" && (r.readOnlyShell === undefined || (r.readOnlyShell === true && r.readOnly === true)) && typeof r.fork === "boolean" && typeof r.blocking === "boolean"
@@ -272,9 +274,8 @@ export function reportRunFloor(sessionFile: string | undefined, runs: number, wa
 	if (!sessionFile || !existsSync(dirname(sessionFile))) return runs;
 	try {
 		const file = latest(sessionFile);
-		const match = file?.match(/\.run-(\d+)\.report\.md$/);
-		const run = match ? Number(match[1]) : 0;
-		return file && Number.isSafeInteger(run) && run >= 1 && resolve(file) === resolve(reportFilePath(sessionFile, run)) ? Math.max(runs, run) : runs;
+		const run = file === undefined ? undefined : reportRun(file);
+		return file !== undefined && run !== undefined && Number.isSafeInteger(run) && resolve(file) === resolve(reportFilePath(sessionFile, run)) ? Math.max(runs, run) : runs;
 	} catch (error) { directoryWarning(dirname(sessionFile), error, warn); return runs; }
 }
 
@@ -293,7 +294,7 @@ export function recoverRoster(known: readonly AgentRecord[], dir: string, readBr
 		try { entries = readBranch(record.sessionFile); }
 		catch (error) { records.set(record.name, { ...restoreRecord(record, [], warn), restoreError: (error as Error).message }); continue; }
 		records.set(record.name, restoreRecord({ ...record, restoreError: undefined }, entries, warn));
-		if (record.depth >= 4) continue;
+		if (record.depth >= MAX_DEPTH) continue;
 		for (const child of legacyRecords(entries, dir, record.name, record.depth + 1, readBranch, warn)) {
 			if (!records.has(child.name)) records.set(child.name, child);
 		}
@@ -325,18 +326,6 @@ export function discoverOrphans(dir: string, known: readonly AgentRecord[], read
 			state: "idle", createdAt: Date.parse(entries[0]?.timestamp ?? "") || Date.now(), activity: "recovered from disk",
 			toolCalls: 0, usage: NO_USAGE, runs: 1, sessionFile, orphaned: true }, entries, warn);
 	});
-}
-
-export function shouldResume(reason: string, policy: "reload" | "always" | "notify"): boolean {
-	return policy === "always" || (policy === "reload" && reason === "reload");
-}
-
-export function restorationNotice(records: readonly AgentRecord[], resumed: boolean, reason: string): string {
-	const line = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 300);
-	const summary = records.map((r) => `${r.name}: task ${line(r.task)}; last activity ${line(r.activity ?? r.state)}`).join("\n");
-	return `Subagents interrupted by ${reason}. ${resumed ? "Auto-resuming" : "Not resumed"}:\n${summary}\n`
-		+ (resumed ? "Their last tool calls may not have completed. Each child will verify before continuing."
-			: 'Resume with message({ to: "<name>", text: "Continue" }) or /subagents resume <name>. Do not wait for their reports until resumed.');
 }
 
 /** Pi's active branch, not abandoned tool calls, determines whether the last run finished. */

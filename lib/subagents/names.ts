@@ -11,8 +11,11 @@ export const USER = "user";
 export const EVERYONE = "all";
 export const NAME_MAX = 24;
 const RESERVED = new Set([MAIN, EVERYONE, USER, "you", "me", "parent"]);
-/** `/subagents` subcommands: a child named one could not be opened with `/subagents <name>`. Older saved names stay valid. */
-const COMMAND_WORDS = new Set(["guide", "stats", "report", "resume", "stop", "takeover"]);
+/** `/subagents` subcommands with no argument, and those that take an agent's name (extensions/subagents.ts). */
+const PLAIN_COMMANDS = ["guide", "stats", "takeover"] as const;
+const NAME_COMMANDS = ["stop", "report", "resume"] as const;
+/** A child named after a subcommand could not be opened with `/subagents <name>`. Older saved names stay valid. */
+const COMMAND_WORDS: ReadonlySet<string> = new Set([...PLAIN_COMMANDS, ...NAME_COMMANDS]);
 
 // Words that say nothing about which task this is.
 const FILLER = new Set([
@@ -45,15 +48,12 @@ export function nameFor(requested: string | undefined, task: string, taken: (nam
 	}
 }
 
-/** "1 more line", "3 more lines". */
-export const moreLines = (count: number, noun = "line"): string => `${count} more ${noun}${count === 1 ? "" : "s"}`;
-
 /**
  * Completions for `/subagents`. None once the text is a whole command: an open
  * menu takes Enter to re-apply its item, so the command would not run.
  */
 export function commandCompletions(prefix: string, names: readonly string[]): Array<{ value: string; label: string }> | null {
-	const all = ["guide", "stats", "takeover", "stop all", ...names, ...names.map((name) => `stop ${name}`), ...names.map((name) => `report ${name}`), ...names.map((name) => `resume ${name}`)];
+	const all = [...PLAIN_COMMANDS, "stop all", ...names, ...NAME_COMMANDS.flatMap((verb) => names.map((name) => `${verb} ${name}`))];
 	if (all.includes(prefix)) return null;
 	const matches = all.filter((value) => value.startsWith(prefix));
 	return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;

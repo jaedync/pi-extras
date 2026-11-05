@@ -14,7 +14,7 @@ import { MainMail } from "../lib/subagents/deliver.ts";
 import { Team } from "../lib/subagents/team.ts";
 import { ToolActivity } from "../lib/subagents/tool-activity.ts";
 
-const PINNED = { version: 11, digest: "e4faf97a328a2b10ec04705de2effcd4f075029b93ddb08b349e42fda51b416f" };
+const PINNED = { version: 11, digest: "c4926ce155b93e04afb9b9a4d3b37916900cbd00478b4e0db5b0cf4eecfefe1a" };
 
 /**
  * Every declaration that crosses from one evaluation to the next, by the file
@@ -24,11 +24,9 @@ const PINNED = { version: 11, digest: "e4faf97a328a2b10ec04705de2effcd4f075029b9
  * start of another version.
  */
 const CONTRACT: Record<string, readonly string[]> = {
-	"lib/subagents/contract.ts": ["HostTeam", "HostMail", "HostActivity", "HeldMail", "HostMessage", "ModelScope", "HostPorts", "HostState", "ParkedHost"],
+	"lib/subagents/contract.ts": ["MESSAGE_TYPE", "REPORT_TYPE", "Route", "MainContext", "OutgoingMessage", "MailDetails", "ReportSummary", "PendingItem", "reportSenders", "REPORT_SENDERS", "reportsPending", "SendResult", "Watched", "callId",
+		"HostTeam", "HostMail", "HostActivity", "HeldMail", "HostMessage", "ModelScope", "HostPorts", "HostState", "ParkedHost"],
 	"lib/subagents/types.ts": ["AgentState", "ACTIVE_STATES", "LIVE_STATES", "Usage", "AgentWork", "FailureKind", "FallbackStep", "Worktree", "AgentRecord", "CheckSpec", "CheckUpdate", "CheckResult", "CheckRun", "SpawnRequest", "ChildHandle", "ChildHooks", "Launcher"],
-	"lib/subagents/team.ts": ["SendResult"],
-	"lib/subagents/deliver.ts": ["MESSAGE_TYPE", "REPORT_TYPE", "Route", "MainContext", "OutgoingMessage", "MailDetails", "ReportSummary", "PendingItem"],
-	"lib/subagents/tool-activity.ts": ["Watched"],
 	"lib/subagents/models.ts": ["THINKING_LEVELS", "Thinking", "ModelLike", "ModelChoice"],
 	"lib/subagents/stamp.ts": ["LaunchStamp"],
 	"lib/subagents/host.ts": ["Registry", "REGISTRY"],
@@ -56,12 +54,15 @@ function declaration(text: string, file: string, name: string): string {
 
 const normalize = (text: string): string => text.replace(/\s+/g, " ").trim();
 
+/** By name, not by file: a declaration that moves to another file is still the same contract. */
 function digest(): string {
-	const hash = createHash("sha256");
+	const declarations: Array<[string, string]> = [];
 	for (const [file, names] of Object.entries(CONTRACT)) {
 		const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
-		for (const name of names) hash.update(`${file}#${name}\n${declaration(source, file, name)}\n`);
+		for (const name of names) declarations.push([name, declaration(source, file, name)]);
 	}
+	const hash = createHash("sha256");
+	for (const [name, text] of declarations.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) hash.update(`${name}\n${text}\n`);
 	return hash.digest("hex");
 }
 

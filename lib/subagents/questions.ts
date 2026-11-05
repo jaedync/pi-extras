@@ -4,7 +4,7 @@
  * or the call is aborted. Kept by asker, since a child may wait on several
  * agents at once; the team's record of the asker follows them (`changed`).
  */
-import type { SendResult } from "./team.ts";
+import type { SendResult } from "./contract.ts";
 
 export interface Pending {
 	readonly to: string;
@@ -72,7 +72,9 @@ export class OpenQuestions {
 			const open = [...this.of(from), pending];
 			this.byAsker.set(from, open);
 			this.options.changed(from, open.map((question) => question.to));
-			signal?.addEventListener("abort", onAbort, { once: true });
+			// An abort that came before the question was put fires no event.
+			if (signal?.aborted) onAbort();
+			else signal?.addEventListener("abort", onAbort, { once: true });
 		});
 	}
 }

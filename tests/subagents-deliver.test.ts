@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { MainMail, MESSAGE_TYPE, REPORT_TYPE, type OutgoingMessage, type ReportSummary, type Route } from "../lib/subagents/deliver.ts";
+import { MainMail } from "../lib/subagents/deliver.ts";
+import { MESSAGE_TYPE, REPORT_TYPE, type OutgoingMessage, type ReportSummary, type Route } from "../lib/subagents/contract.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";
 
 function record(name: string, extra: Partial<AgentRecord> = {}): AgentRecord {

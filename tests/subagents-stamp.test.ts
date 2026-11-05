@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileIdentity, launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "../lib/subagents/stamp.ts";
+import { fileIdentity } from "../lib/file-identity.ts";
+import { launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "../lib/subagents/stamp.ts";
 
 const scratch = () => mkdtempSync(join(tmpdir(), "subagents-stamp-"));
 

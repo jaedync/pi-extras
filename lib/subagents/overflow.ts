@@ -9,8 +9,8 @@
  * collapse them again.
  */
 import { ROW_MARGIN, type Seg } from "../band/band.ts";
+import type { AgentRow } from "./rows.ts";
 import type { AgentState } from "./types.ts";
-import type { AgentRow } from "./widget.ts";
 
 /** Lines the widget keeps collapsed, the control line among them once there are more agents. */
 export const COLLAPSED_ROWS = 4;

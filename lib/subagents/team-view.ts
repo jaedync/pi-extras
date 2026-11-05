@@ -15,10 +15,10 @@ import type { ShownOverlay } from "../band/modal.ts";
 import { openSheet, type SheetHost, type SheetKey, type SheetSource } from "../band/sheet.ts";
 import { onBackground, selectedBackground } from "../band/surface.ts";
 import { formatMoney } from "../status-plus-logic.ts";
-import type { PendingItem } from "./deliver.ts";
-import { stateCounts } from "./overflow.ts";
+import { type PendingItem, reportsPending } from "./contract.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
-import { presenceLine, rowColumns, teamRows, type AgentRow } from "./widget.ts";
+import { stateCounts } from "./overflow.ts";
+import { type AgentRow, presenceLine, rowColumns, teamRows } from "./rows.ts";
 
 export interface TeamSource {
 	records(): readonly AgentRecord[];
@@ -58,7 +58,7 @@ export class TeamView implements SheetSource {
 
 	private read(): Snapshot {
 		const records = this.source.records();
-		const reported = new Set(this.source.pending().filter((item) => item.kind === "report").flatMap((item) => item.from.split(", ")));
+		const reported = reportsPending(this.source.pending());
 		return { records, rows: teamRows(records, reported) };
 	}
 

@@ -47,6 +47,7 @@ test("ambiguous and unknown names fail with the allowed list", () => {
 test("an empty allowed list refuses every model", () => {
 	const result = resolveModel("luna", []);
 	assert.equal(result.ok, false);
+	assert.match((result as { error: string }).error, /No models are allowed for subagents\. Scope some with enabledModels\./, "the fix is to scope models, not to name one");
 });
 
 test("thinking: per call, then scoped pattern, then per-model setting, then default", () => {

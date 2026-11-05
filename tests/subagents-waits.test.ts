@@ -7,6 +7,7 @@ import { type TestContext, test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { type AgentRecord, NO_USAGE } from "../lib/subagents/types.ts";
+import { runLogEntry } from "../lib/subagents/runlog.ts";
 import { teamHarness } from "./support/team-harness.ts";
 
 const flush = async (rounds = 6) => { for (let i = 0; i < rounds; i++) await tick(); };
@@ -57,6 +58,49 @@ test("a parent whose subagent can't resume to answer gets the failure once, and 
 	assert.match((h.steered.get("lead") ?? []).join("\n"), /could not resume/);
 	h.lastCall("lead").finish("Read the failure; nothing else to do."); await flush();
 	assert.equal(h.team.get("lead")!.state, "idle");
+});
+
+test("a subagent whose parent can't resume to answer its question stops waiting at once", async () => {
+	const h = teamHarness({ refuse: (record) => record.name === "lead" ? new Error("The saved child session is missing: /x.jsonl.") : undefined });
+	h.team.restore([saved({ name: "lead", task: "Lead" }),
+		saved({ name: "kid", parent: "lead", depth: 2, task: "Kid", state: "interrupted", interruptionId: "i", interruptedBy: "quit" })]);
+	await h.team.send("user", "kid", "Continue your task."); await flush();
+	let answer: Awaited<ReturnType<typeof h.team.send>> | undefined;
+	void h.team.send("kid", "lead", "Which file?", { expectReply: true }).then((result) => { answer = result; });
+	await flush();
+	assert.equal(h.team.get("lead")!.state, "interrupted");
+	assert.equal(answer?.ok, false, "the answer can't come, so the wait ends now, not at the reply timeout");
+	assert.match(answer && !answer.ok ? answer.error : "", /lead ended without answering/);
+});
+
+test("a question from a call that was already stopped does not wait for a reply", async () => {
+	const h = teamHarness();
+	h.spawn("Work", { name: "worker" }); await flush();
+	const stopped = AbortSignal.abort();
+	let answer: Awaited<ReturnType<typeof h.team.send>> | undefined;
+	void h.team.send("worker", "main", "Which API?", { expectReply: true, signal: stopped }).then((result) => { answer = result; });
+	await flush();
+	assert.deepEqual(answer, { ok: false, error: "Stopped waiting for a reply." });
+});
+
+test("a waited-on lead whose stale session can't launch again stops holding later reports", async () => {
+	let stale = false;
+	let refuse = false;
+	const h = teamHarness({ current: () => !stale, refuse: (record) => refuse && record.name === "lead" ? new Error("The model is gone.") : undefined });
+	h.spawn("Lead", { name: "lead", blocking: true }); await flush();
+	const ended: AgentRecord[] = [];
+	h.team.onChange((record) => { if (record?.name === "lead" && record.state === "interrupted") ended.push(record); });
+	const waited = h.team.whenDone("lead");
+	h.spawn("Help", { name: "helper", parent: "lead" }); await flush();
+	h.lastCall("lead").finish("Waiting on the helper."); await flush();
+	assert.equal(h.team.get("lead")!.state, "waiting");
+	stale = true; refuse = true;
+	await h.team.send("main", "lead", "Use the new API."); await flush();
+	const failed = await waited;
+	assert.equal(failed.state, "interrupted", "main's wait gets the failed relaunch");
+	assert.equal(failed.blocking, true, "the wait gets the run's record, as finish gives it");
+	assert.equal(runLogEntry(ended[0]!, 0, "main").blocking, true, "the run log keeps the run's flag");
+	assert.equal(h.team.get("lead")!.blocking, false, "a later run reports to main as a message");
 });
 
 test("after a restart, a resumed asker does not wait on a peer that is still paused", async () => {

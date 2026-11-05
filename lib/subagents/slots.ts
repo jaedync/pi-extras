@@ -43,9 +43,14 @@ export class Slots {
 		else this.line.push(name);
 	}
 
-	/** Whether a slot is free now. */
+	/** Whether one more agent can take a slot now. */
 	free(): boolean {
 		return !this.host.closed() && this.used() < this.host.maxConcurrent;
+	}
+
+	/** Whether the agents that hold a slot now fit the limit: an agent that counts among them may go on in its own slot. */
+	fits(): boolean {
+		return this.used() <= this.host.maxConcurrent;
 	}
 
 	/** `name`, now queued, goes on in the session it holds once a slot is free. */

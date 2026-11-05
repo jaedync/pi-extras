@@ -55,17 +55,22 @@ function dependencyPaths(tree: string, base?: string, call: GitCall = PLAIN): st
 	return tracked || dependenciesIgnored(tree, call) ? [] : ["--", ".", EXCLUDE_DEPENDENCIES];
 }
 
-function snapshot(root: string, name: string, call: GitCall): string {
+/** Runs `use` with the path of a git index file in a new temporary folder, and removes the folder after. */
+function withIndexFile<T>(use: (index: string) => T): T {
 	const temporary = mkdtempSync(join(tmpdir(), "pi-subagent-index-"));
-	const index = join(temporary, "index");
-	try {
+	try { return use(join(temporary, "index")); }
+	finally { rmSync(temporary, { recursive: true, force: true }); }
+}
+
+function snapshot(root: string, name: string, call: GitCall): string {
+	return withIndexFile((index) => {
 		let head: string;
 		try { head = git(root, ["rev-parse", "--verify", "HEAD"], undefined, call).trim(); }
 		catch (error) { throw new Error(`Worktree isolation needs an initial commit (HEAD). ${(error as Error).message}`); }
 		git(root, ["read-tree", head], index, call);
 		const tree = treeOf(root, dependencyPaths(root, undefined, call), call, index);
 		return git(root, ["commit-tree", tree, "-p", head, "-m", `subagent ${name}: base (main's uncommitted changes)`], index, call).trim();
-	} finally { rmSync(temporary, { recursive: true, force: true }); }
+	});
 }
 
 function pathExists(path: string): boolean {
@@ -143,7 +148,8 @@ export function toolPath(path: string): string {
 
 const ADVICE = "Edit only files inside it; your parent applies your changes to its checkout from your report.";
 
-function within(dir: string, target: string): boolean {
+/** Whether the path `target` is `dir` or inside it. */
+export function within(dir: string, target: string): boolean {
 	const rel = relative(dir, target);
 	return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
@@ -315,13 +321,11 @@ function gitIn(root: string): string {
 
 /** Runs `count` against a temporary index of the worktree's files as they are, so the child's own staging stays as it was. */
 function withTemporaryIndex<T>(path: string, paths: readonly string[], call: GitCall, count: (index: string) => T): T {
-	const temporary = mkdtempSync(join(tmpdir(), "pi-subagent-index-"));
-	const index = join(temporary, "index");
-	try {
+	return withIndexFile((index) => {
 		git(path, ["read-tree", "HEAD"], index, call);
 		git(path, ["add", "-A", ...paths], index, call);
 		return count(index);
-	} finally { rmSync(temporary, { recursive: true, force: true }); }
+	});
 }
 
 /** The tree an earlier footer's Apply line applies, so a later footer can apply only what changed since. */
