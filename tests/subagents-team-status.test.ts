@@ -2,7 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick, setTimeout as sleep } from "node:timers/promises";
-import { MainMail, type OutgoingMessage, type Route } from "../lib/subagents/deliver.ts";
+import { MainMail } from "../lib/subagents/deliver.ts";
+import type { OutgoingMessage, Route } from "../lib/subagents/contract.ts";
 import { agentStatus, shortTime, stillWorking, teamNow } from "../lib/subagents/status.ts";
 import { mainMessageTool, stopTool } from "../lib/subagents/tools.ts";
 import { NO_USAGE, type AgentRecord } from "../lib/subagents/types.ts";

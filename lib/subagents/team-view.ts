@@ -15,7 +15,7 @@ import type { ShownOverlay } from "../band/modal.ts";
 import { openSheet, type SheetHost, type SheetKey, type SheetSource } from "../band/sheet.ts";
 import { onBackground, selectedBackground } from "../band/surface.ts";
 import { formatMoney } from "../status-plus-logic.ts";
-import type { PendingItem } from "./deliver.ts";
+import type { PendingItem } from "./contract.ts";
 import { stateCounts } from "./overflow.ts";
 import { type AgentRecord, LIVE_STATES } from "./types.ts";
 import { presenceLine, rowColumns, teamRows, type AgentRow } from "./widget.ts";

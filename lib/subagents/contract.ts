@@ -18,13 +18,78 @@
  * Records follow the index's rule (restore.ts): a new field is optional, so
  * code of either side reads a record the other made.
  */
-import type { MainContext, OutgoingMessage, PendingItem, Route } from "./deliver.ts";
 import type { ModelChoice } from "./models.ts";
-import type { SendResult } from "./team.ts";
-import type { Watched } from "./tool-activity.ts";
 import type { AgentRecord, CheckUpdate, Launcher, SpawnRequest } from "./types.ts";
 
 export const HOST_VERSION = 11;
+
+export const MESSAGE_TYPE = "subagent-message";
+export const REPORT_TYPE = "subagent-report";
+/**
+ * Where main is, for its mail: `wake` when idle (the mail starts a turn),
+ * `queue` while it works (the mail lands at its next turn boundary), `hold`
+ * while it is idle but compacting or summarizing a branch.
+ */
+export type Route = "wake" | "queue" | "hold";
+
+/** Main's context as Pi sees it at a boundary: what is in it, and what lands next. */
+export interface MainContext {
+	readonly contextMessages: readonly unknown[];
+	readonly pendingMessages: readonly unknown[];
+}
+
+export interface OutgoingMessage {
+	customType: string;
+	content: string;
+	display: boolean;
+	details: MailDetails;
+}
+
+export type MailDetails =
+	| { id: string; kind: "note" | "question" | "reply"; from: string; text: string }
+	| { id: string; kind: "relay"; from: string; to: string; text: string; answered: boolean }
+	| { id: string; kind: "report"; reports: ReportSummary[] }
+	| { id: string; kind: "reminder"; from: string };
+
+export interface ReportSummary {
+	name: string;
+	model: string;
+	state: AgentRecord["state"];
+	startedAt?: number;
+	endedAt?: number;
+	cost: number;
+	toolCalls: number;
+	/** Prompt tokens (fresh and cached) and output; absent in sessions saved before it was recorded. */
+	tokens?: { input: number; output: number };
+	/** The run's answer already reached main as a reply. */
+	answered?: true;
+	report?: string;
+	error?: string;
+	/** Why it was stopped when no one asked: a run over its budget. */
+	stopReason?: string;
+	/** The budget its run reached before it wrote this report when told to stop (wrap-up.ts). */
+	budgetEnd?: string;
+	sessionFile?: string;
+}
+
+export interface PendingItem {
+	id: string;
+	kind: MailDetails["kind"];
+	from: string;
+	text: string;
+	at: number;
+}
+
+export type SendResult =
+	| { ok: true; delivered: "steered" | "resumed" | "queued" | "replied" | "main" | "inbox"; reply?: string; notice?: string }
+	| { ok: false; error: string };
+
+export interface Watched {
+	/** Resolved paths an `edit` or `write` call targeted during the watch. */
+	edited: ReadonlySet<string>;
+	/** Whether another agent's bash call ran in the same work tree during the watch. */
+	shared: boolean;
+}
 
 /** The team, as main's tools, the widget, the inspector and a child's tools use it. */
 export interface HostTeam {

@@ -16,7 +16,7 @@ import { allowedTools } from "./allowlist.ts";
 import { childExtensionPaths, childToolNames, createLauncher, describeTool } from "./child.ts";
 import { loadConfig, readGuide, type SubagentsConfig } from "./config.ts";
 import { HOST_VERSION, type HostActivity, type HostPorts, type HostState, type HostTeam, type ModelScope, type ParkedHost } from "./contract.ts";
-import type { Route } from "./deliver.ts";
+import type { Route } from "./contract.ts";
 import type { Launcher } from "./types.ts";
 import { childInstructions, conversationDigest, entriesUntil, rosterText } from "./format.ts";
 import { sharedLimitStore } from "../limit-store.ts";

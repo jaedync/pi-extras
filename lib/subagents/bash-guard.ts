@@ -9,8 +9,7 @@ import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-
 import { relative } from "node:path";
 import { changedPaths, fingerprint, gitRoot, type Fingerprint } from "./fingerprint.ts";
 import { deniedWriteNote, type Sandbox } from "./sandbox.ts";
-import type { HostActivity } from "./contract.ts";
-import type { Watched } from "./tool-activity.ts";
+import type { HostActivity, Watched } from "./contract.ts";
 import type { Worktree } from "./types.ts";
 
 /** How a child's bash call reports the files it changed. */

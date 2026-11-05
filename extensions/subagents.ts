@@ -17,7 +17,7 @@ import { dirname, join } from "node:path";
 import { stopOrder } from "../lib/subagents/after.ts";
 import { GUIDE_FILE } from "../lib/subagents/config.ts";
 import type { HostState } from "../lib/subagents/contract.ts";
-import { MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/deliver.ts";
+import { MESSAGE_TYPE, REPORT_TYPE } from "../lib/subagents/contract.ts";
 import { nextGeneration, takeParked } from "../lib/subagents/host.ts";
 import { watchMain } from "../lib/subagents/main-watch.ts";
 import { commandCompletions, MAIN, USER } from "../lib/subagents/names.ts";

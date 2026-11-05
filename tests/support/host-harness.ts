@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULTS, type SubagentsConfig } from "../../lib/subagents/config.ts";
 import type { HostMessage, HostPorts, HostState } from "../../lib/subagents/contract.ts";
-import type { Route } from "../../lib/subagents/deliver.ts";
+import type { Route } from "../../lib/subagents/contract.ts";
 import { openHost } from "../../lib/subagents/host-state.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, Launcher, SpawnRequest } from "../../lib/subagents/types.ts";
 

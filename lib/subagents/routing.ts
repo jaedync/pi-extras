@@ -17,7 +17,7 @@ import { noteText, questionText, resumeWarning } from "./format.ts";
 import { EVERYONE, MAIN, USER } from "./names.ts";
 import type { OpenQuestions } from "./questions.ts";
 import type { OpenSessions } from "./sessions.ts";
-import type { SendResult } from "./team.ts";
+import type { SendResult } from "./contract.ts";
 import { type AgentRecord, type CheckUpdate, LIVE_STATES, type MainDelivery } from "./types.ts";
 import { workspaceError } from "./worktree.ts";
 

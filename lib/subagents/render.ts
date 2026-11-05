@@ -25,7 +25,7 @@ import { draftPreview, draftRail, flowing, noteDraft, type Draft } from "../band
 import { BULLET_GLYPH, FAILURE_GLYPH, penGlyph } from "../band/glyph.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import { formatTokens } from "../status-plus-render.ts";
-import type { MailDetails, ReportSummary } from "./deliver.ts";
+import type { MailDetails, ReportSummary } from "./contract.ts";
 import { noReport, reportBody } from "./format.ts";
 import { MAIN } from "./names.ts";
 import { type AgentRecord, LIVE_STATES, neverStarted } from "./types.ts";

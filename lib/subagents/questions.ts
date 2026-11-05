@@ -4,7 +4,7 @@
  * or the call is aborted. Kept by asker, since a child may wait on several
  * agents at once; the team's record of the asker follows them (`changed`).
  */
-import type { SendResult } from "./team.ts";
+import type { SendResult } from "./contract.ts";
 
 export interface Pending {
 	readonly to: string;

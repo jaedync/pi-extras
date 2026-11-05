@@ -16,7 +16,7 @@ import { isThinking, type ModelChoice, resolveModel, THINKING_LEVELS, type Think
 import { baseName, EVERYONE, MAIN } from "./names.ts";
 import { teamNow } from "./status.ts";
 import type { HostTeam } from "./contract.ts";
-import type { SendResult } from "./team.ts";
+import type { SendResult } from "./contract.ts";
 import { type AgentRecord, type CheckUpdate, LIVE_STATES, neverStarted, type SpawnRequest } from "./types.ts";
 
 export const MAX_TASK_CHARS = 60_000;

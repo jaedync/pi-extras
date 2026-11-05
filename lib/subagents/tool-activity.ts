@@ -4,20 +4,13 @@
  * made at the same time. Ids are `<agent>:<tool call id>`: call ids are only
  * unique within one session.
  */
-import type { HostActivity } from "./contract.ts";
+import type { HostActivity, Watched } from "./contract.ts";
 
 interface Window {
 	readonly id: string;
 	/** The git work tree's top level, as git gives it, or the directory outside git. */
 	readonly root: string;
 	readonly edited: Set<string>;
-	shared: boolean;
-}
-
-export interface Watched {
-	/** Resolved paths an `edit` or `write` call targeted during the watch. */
-	edited: ReadonlySet<string>;
-	/** Whether another agent's bash call ran in the same work tree during the watch. */
 	shared: boolean;
 }
 

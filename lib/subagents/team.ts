@@ -19,7 +19,7 @@ import { minutesAndUp } from "../duration.ts";
 import { MAIN, nameFor } from "./names.ts";
 import { budgetError, type BudgetUse, RunBudgets, type RunLimits } from "./budget.ts";
 import { windowReason, type WindowReading } from "./windows.ts";
-import type { HostTeam } from "./contract.ts";
+import type { HostTeam, SendResult } from "./contract.ts";
 import { checkError, mergeCheck, RunChecks } from "./checks.ts";
 import { checkoutOf } from "./checkout.ts";
 import { EditLocks } from "./edit-lock.ts";
@@ -81,10 +81,6 @@ export interface TeamOptions {
 	/** Writes one line to the operational log: each swap. */
 	log?(message: string): void;
 }
-
-export type SendResult =
-	| { ok: true; delivered: "steered" | "resumed" | "queued" | "replied" | "main" | "inbox"; reply?: string; notice?: string }
-	| { ok: false; error: string };
 
 type Listener = (record: AgentRecord | null) => void;
 

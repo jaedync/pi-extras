@@ -20,7 +20,7 @@ import { everyFrame } from "../band/clock.ts";
 import { formatMoney } from "../status-plus-logic.ts";
 import { compactionMark, contextHeat, formatTokens } from "../status-plus-render.ts";
 import { contextShare } from "../compaction-point.ts";
-import type { PendingItem } from "./deliver.ts";
+import type { PendingItem } from "./contract.ts";
 import { MAIN } from "./names.ts";
 import { COLLAPSED_ROWS, controlLine, expandedBudget, fitRows, shownCount, type ControlLine, type Span } from "./overflow.ts";
 import { type AgentRecord, type AgentState, LIVE_STATES, neverStarted, WAITING_FOR_MODEL } from "./types.ts";

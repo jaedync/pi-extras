@@ -9,8 +9,7 @@ import { LIVE_STATES, NO_USAGE, type AgentRecord, type CheckResult, type CheckSp
 import { checkError } from "./checks.ts";
 import { validWorktree } from "./worktree.ts";
 import { CONTROL } from "./checkout.ts";
-import type { HeldMail } from "./contract.ts";
-import { MESSAGE_TYPE, REPORT_TYPE } from "./deliver.ts";
+import { type HeldMail, MESSAGE_TYPE, REPORT_TYPE } from "./contract.ts";
 
 const STATES = new Set([...LIVE_STATES, "idle", "failed", "stopped", "interrupted"]);
 const DIRECTORY_WARNING_LIMIT = 64;

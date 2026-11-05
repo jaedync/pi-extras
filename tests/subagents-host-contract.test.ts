@@ -24,11 +24,9 @@ const PINNED = { version: 11, digest: "9e5a080bb6583993b49b09062e0e696696355f17b
  * start of another version.
  */
 const CONTRACT: Record<string, readonly string[]> = {
-	"lib/subagents/contract.ts": ["HostTeam", "HostMail", "HostActivity", "HeldMail", "HostMessage", "ModelScope", "HostPorts", "HostState", "ParkedHost"],
+	"lib/subagents/contract.ts": ["MESSAGE_TYPE", "REPORT_TYPE", "Route", "MainContext", "OutgoingMessage", "MailDetails", "ReportSummary", "PendingItem", "SendResult", "Watched",
+		"HostTeam", "HostMail", "HostActivity", "HeldMail", "HostMessage", "ModelScope", "HostPorts", "HostState", "ParkedHost"],
 	"lib/subagents/types.ts": ["AgentState", "ACTIVE_STATES", "LIVE_STATES", "Usage", "AgentWork", "FailureKind", "FallbackStep", "Worktree", "AgentRecord", "CheckSpec", "CheckUpdate", "CheckResult", "CheckRun", "SpawnRequest", "ChildHandle", "ChildHooks", "Launcher"],
-	"lib/subagents/team.ts": ["SendResult"],
-	"lib/subagents/deliver.ts": ["MESSAGE_TYPE", "REPORT_TYPE", "Route", "MainContext", "OutgoingMessage", "MailDetails", "ReportSummary", "PendingItem"],
-	"lib/subagents/tool-activity.ts": ["Watched"],
 	"lib/subagents/models.ts": ["THINKING_LEVELS", "Thinking", "ModelLike", "ModelChoice"],
 	"lib/subagents/stamp.ts": ["LaunchStamp"],
 	"lib/subagents/host.ts": ["Registry", "REGISTRY"],

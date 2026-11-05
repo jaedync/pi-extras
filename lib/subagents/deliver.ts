@@ -3,7 +3,7 @@
  *
  * - A note, a question, or the answer to something main asked wakes main:
  *   read at its next turn boundary while it works, a new turn when it is
- *   idle (see `Route` below). Children send notes
+ *   idle (see `Route` in contract.ts). Children send notes
  *   only when they would change what main is doing, so none may wait for a
  *   report. Notes landing together share the turn the first one started.
  * - What the user said to a child directly is recorded for main without
@@ -30,75 +30,18 @@
  * stops main's turn first, so mail that landed in it gets a reminder that
  * wakes main once the compaction is done (`remind`).
  */
-import type { HeldMail, HostMail } from "./contract.ts";
+import { type HeldMail, type HostMail, type MailDetails, type MainContext, MESSAGE_TYPE, type OutgoingMessage, type PendingItem, REPORT_TYPE, type ReportSummary, type Route } from "./contract.ts";
 import { reportWithCheck } from "./checks.ts";
 import { noteText, panelText, questionText, reminderText, reportText } from "./format.ts";
 import type { AgentRecord, MainDelivery } from "./types.ts";
 
-export const MESSAGE_TYPE = "subagent-message";
-export const REPORT_TYPE = "subagent-report";
 /** How far back a reconcile looks; pending messages are always recent. */
 export const RECONCILE_WINDOW = 200;
 /** How often held mail checks whether main can take it, between the events that say so. */
 const HOLD_RETRY_MS = 250;
 
-/**
- * Where main is, for its mail: `wake` when idle (the mail starts a turn),
- * `queue` while it works (the mail lands at its next turn boundary), `hold`
- * while it is idle but compacting or summarizing a branch.
- */
-export type Route = "wake" | "queue" | "hold";
-
-/** Main's context as Pi sees it at a boundary: what is in it, and what lands next. */
-export interface MainContext {
-	readonly contextMessages: readonly unknown[];
-	readonly pendingMessages: readonly unknown[];
-}
-
-export interface OutgoingMessage {
-	customType: string;
-	content: string;
-	display: boolean;
-	details: MailDetails;
-}
-
-export type MailDetails =
-	| { id: string; kind: "note" | "question" | "reply"; from: string; text: string }
-	| { id: string; kind: "relay"; from: string; to: string; text: string; answered: boolean }
-	| { id: string; kind: "report"; reports: ReportSummary[] }
-	| { id: string; kind: "reminder"; from: string };
-
-export interface ReportSummary {
-	name: string;
-	model: string;
-	state: AgentRecord["state"];
-	startedAt?: number;
-	endedAt?: number;
-	cost: number;
-	toolCalls: number;
-	/** Prompt tokens (fresh and cached) and output; absent in sessions saved before it was recorded. */
-	tokens?: { input: number; output: number };
-	/** The run's answer already reached main as a reply. */
-	answered?: true;
-	report?: string;
-	error?: string;
-	/** Why it was stopped when no one asked: a run over its budget. */
-	stopReason?: string;
-	/** The budget its run reached before it wrote this report when told to stop (wrap-up.ts). */
-	budgetEnd?: string;
-	sessionFile?: string;
-}
-
 export interface MainPort {
 	send(message: OutgoingMessage, options: { triggerTurn: boolean; deliverAs?: "steer" }): void;
-}
-
-export interface PendingItem {
-	id: string;
-	kind: MailDetails["kind"];
-	from: string;
-	text: string;
-	at: number;
 }
 
 export function summarize(record: AgentRecord): ReportSummary {
