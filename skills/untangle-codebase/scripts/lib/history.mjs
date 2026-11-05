@@ -57,6 +57,26 @@ export function readHistory(root, { since = "12 months ago" } = {}) {
 }
 
 /**
+ * The time each file under root was first added, from the whole history, not
+ * only the window: a file that has not changed for years is old, not unknown.
+ * @param {{ top: string, prefix: string }} place
+ * @returns {Map<string, number>} paths relative to root
+ */
+export function firstAdded({ top, prefix }) {
+	const out = gitText(top, ["log", "--diff-filter=A", "--no-renames", "--format=format:%x01%ct", "--name-only"]);
+	const born = new Map();
+	for (const block of out.split(COMMIT_MARK)) {
+		const [time, ...files] = block.split("\n").map((l) => l.trim()).filter(Boolean);
+		for (const file of files) {
+			if (!file.startsWith(prefix)) continue;
+			const key = file.slice(prefix.length);
+			born.set(key, Math.min(born.get(key) ?? Infinity, Number(time)));
+		}
+	}
+	return born;
+}
+
+/**
  * Number of commits that touched each file, and the time of its first commit in the window.
  * @param {Commit[]} commits @param {(file: string) => string | null} [keyOf] map a file to a module, or to null to leave it out
  */
@@ -74,12 +94,14 @@ export function churn(commits, keyOf = (f) => f) {
 }
 
 /**
- * Changes per 30 days since the first commit. A file younger than one month counts
- * as one month old, so a new file is not called stable for having few changes.
- * @param {number} changes @param {number} firstTime @param {number} now seconds
+ * Changes per 30 days over the part of the window in which the file existed.
+ * A span under one month counts as one month, so a new file is not called
+ * stable for having few changes.
+ * @param {number} changes in the window @param {number} born first added
+ * @param {number} windowStart time of the oldest commit in the window @param {number} now seconds
  */
-export function changeRate(changes, firstTime, now) {
-	return changes / Math.max((now - firstTime) / (30 * DAY), 1);
+export function changeRate(changes, born, windowStart, now) {
+	return changes / Math.max((now - Math.max(born, windowStart)) / (30 * DAY), 1);
 }
 
 /** @param {number} firstTime @param {number} now */

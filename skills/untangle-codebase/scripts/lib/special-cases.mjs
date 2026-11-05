@@ -6,11 +6,13 @@ import { languageOf, listSourceFiles, readSource } from "./files.mjs";
 import { lex } from "./lex.mjs";
 
 /**
- * Each category has per-language patterns on `code` lines, on `comments` lines, and
- * `block` patterns (global regexes) on the whole lexed code for shapes that span lines.
+ * Each category has per-language patterns on `code` lines, on `comments` lines,
+ * `block` patterns (global regexes) on the whole lexed code for shapes that span
+ * lines, and `names` patterns (global regexes) that count the first line of each
+ * name only: one retry mechanism uses its `retryTimer` on many lines.
  * inTotal: false marks a weak signal. A literal comparison is often a good
  * discriminated-union branch, so it is shown but kept out of the progress number.
- * @typedef {{ code?: RegExp[], comments?: RegExp[], block?: RegExp[] }} Patterns
+ * @typedef {{ code?: RegExp[], comments?: RegExp[], block?: RegExp[], names?: RegExp[] }} Patterns
  * @type {{ id: string, title: string, inTotal: boolean, js: Patterns, py: Patterns }[]}
  */
 export const CATEGORIES = [
@@ -31,8 +33,8 @@ export const CATEGORIES = [
 		id: "sleep-or-retry",
 		title: "Retry, sleep or fixed wait",
 		inTotal: true,
-		js: { code: [/\bsetTimeout\([^;]*,\s*\d+\s*\)/, /\b(sleep|delay|wait)\(\s*\d+/, /retr(y|ies|ying)/i] },
-		py: { code: [/\btime\.sleep\(/, /\basyncio\.sleep\(\s*\d/, /retr(y|ies|ying)/i] },
+		js: { code: [/\bsetTimeout\([^;]*,\s*\d+\s*\)/, /\b(sleep|delay|wait)\(\s*\d+/], names: [/[\w$]*retr(?:y|ies|ying)[\w$]*/gi] },
+		py: { code: [/\btime\.sleep\(/, /\basyncio\.sleep\(\s*\d/], names: [/\w*retr(?:y|ies|ying)\w*/gi] },
 	},
 	{
 		id: "disabled-test",
@@ -83,6 +85,16 @@ export function scanText(file, text) {
 			if (!list) continue;
 			source.forEach((line, i) => {
 				if (list.some((re) => re.test(line))) seen.add(i + 1);
+			});
+		}
+		const names = new Set();
+		for (const re of patterns.names ?? []) {
+			codeLines.forEach((line, i) => {
+				for (const [name] of line.matchAll(re)) {
+					if (names.has(name.toLowerCase())) continue;
+					names.add(name.toLowerCase());
+					seen.add(i + 1);
+				}
 			});
 		}
 		for (const re of patterns.block ?? []) {

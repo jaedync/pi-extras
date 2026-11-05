@@ -31,8 +31,10 @@ Code outside the area changes only to follow an interface change of the area
 - Record a baseline before the first edit (step 2). Behavior must be the same
   at the end, except for the bugs that the log names as fixed.
 - A refactor commit does not change behavior. It does not change an assertion
-  about behavior that a caller can see. If a test fails after a refactor
-  commit, revert the commit. Do not edit the test to match.
+  about behavior that a caller can see. In the same commit, you can change a
+  test's import path or a renamed name; you cannot change what it asserts. If
+  a test fails after a refactor commit, revert the commit. Do not edit the
+  test to match.
 - A bug fix is its own commit: first a test that fails, then the fix, then a
   line in the log. A rewrite of a test that checks internals is its own
   commit too, before the fix that needs it.
@@ -181,7 +183,8 @@ Do the fixes in the log order. For each fix:
 
 Remove the special cases that the redesign makes unnecessary, and keep the
 ones the system still needs (with the reason in the log). Do not hunt for
-bugs separately. A structural fix can fix some bugs: log each one.
+bugs separately. When a fix shows a bug, fix it in its own commit as the
+Hard rules say, or log it under "Not fixed".
 
 If the user chose **Comments**:
 
@@ -227,8 +230,10 @@ You are done when all of these are true:
 - Each special case that is left is in the log, with the reason that the
   system needs it. The count is the best measure of how close you are.
 - `graph --compare` shows no more modules in cycles than the baseline.
-- Each import of more volatile code and each hidden link that the graph
-  shows is checked and logged: fixed, or the reason that it must stay.
+- Each import of more volatile code and each hidden link in
+  `graph-before.json` is checked and logged: fixed, or the reason that it
+  must stay. A new hidden link in the final run is logged too; "made by the
+  refactor commits" is a valid reason.
 - The last review round has no confirmed critical or high finding that is
   not fixed.
 - The full tests, the typecheck and the linter give the baseline results or

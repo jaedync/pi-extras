@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { listSourceFiles } from "../skills/untangle-codebase/scripts/lib/files.mjs";
 import { analyze, cycles } from "../skills/untangle-codebase/scripts/lib/graph.mjs";
 import { coChangePairs, readHistory } from "../skills/untangle-codebase/scripts/lib/history.mjs";
 import { localImports } from "../skills/untangle-codebase/scripts/lib/imports.mjs";
-import { CLI, commit, gitInit, put, removeTemps, tempDir } from "./untangle-codebase-support.mjs";
+import { CLI, commit, git, gitInit, put, removeTemps, tempDir } from "./untangle-codebase-support.mjs";
 
 after(removeTemps);
 
@@ -102,13 +102,26 @@ test("analyze: cycles, volatile imports, hidden links and importers outside the 
 	assert.deepEqual(result.cycles, [["ping.ts", "pong.ts"]]);
 	assert.deepEqual(result.volatileImports.map((v) => [v.from, v.to]), [["stable.ts", "volatile.ts"]]);
 	assert.deepEqual(result.hiddenLinks.map((p) => [p.a, p.b]), [["left.ts", "right.ts"]]);
-	assert.deepEqual(result.outsideImporters, [{ from: "main.ts", to: "api.ts" }, { from: "tests/left.test.ts", to: "left.ts" }]);
+	assert.deepEqual(result.outsideImporters, [{ from: "main.ts", to: "api.ts", test: false }, { from: "tests/left.test.ts", to: "left.ts", test: true }]);
 	assert.match(result.head, /^[0-9a-f]{40}$/);
 });
 
 test("analyze: a young importer is not called stable", () => {
 	const result = analyze(join(historyRepo(), "src"));
 	assert.deepEqual(result.volatileImports, [], "every file is minutes old, under the 60-day default");
+});
+
+test("analyze: an old importer with no change in the window is judged stable", () => {
+	const root = tempDir();
+	gitInit(root);
+	const old = { GIT_AUTHOR_DATE: "2024-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2024-01-01T00:00:00Z" };
+	put(root, { "src/stable.ts": 'import { v } from "./volatile";\n', "src/volatile.ts": "export const v = 0;\n" });
+	git(root, "add", "-A");
+	execFileSync("git", ["commit", "-qm", "old"], { cwd: root, env: { ...process.env, ...old } });
+	for (let i = 1; i <= 8; i++) commit(root, { "src/volatile.ts": `export const v = ${i};\n` });
+	const result = analyze(join(root, "src"));
+	assert.deepEqual(result.volatileImports.map((v) => [v.from, v.to, v.perMonthFrom]), [["stable.ts", "volatile.ts", 0]]);
+	assert.equal(result.youngModules, 0);
 });
 
 test("analyze by dir: hidden links are folder pairs", () => {

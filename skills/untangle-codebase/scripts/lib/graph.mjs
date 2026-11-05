@@ -2,8 +2,8 @@
 // that imports more volatile code, files that change together with no import, and
 // the files outside the area that import it (the area's public interface).
 import { dirname } from "node:path";
-import { listSourceFiles, readSource } from "./files.mjs";
-import { ageDays, changeRate, churn, coChangePairs, gitPlace, readHistory, round } from "./history.mjs";
+import { isTestFile, listSourceFiles, readSource } from "./files.mjs";
+import { ageDays, changeRate, churn, coChangePairs, firstAdded, gitPlace, readHistory, round } from "./history.mjs";
 import { localImports } from "./imports.mjs";
 
 /** @param {string} file @param {"file" | "dir"} by */
@@ -94,23 +94,36 @@ export function metrics(modules, edges) {
 /**
  * Edges where the importer changes much less often (per month) than what it
  * imports: the stable piece must follow each change of the volatile one. An
- * importer younger than minAgeDays has too little history to call it stable.
+ * importer first added less than minAgeDays ago has too little history to call
+ * it stable; an importer with no commit in the window has a rate of 0.
+ * @param {Map<string, string[]>} edges
+ * @param {{ counts: Map<string, number>, born: Map<string, number>, windowStart: number }} history
+ * @param {number} now
  */
-export function volatileImports(edges, { counts, first }, now, { ratio = 2, minChanges = 3, minAgeDays = 60 } = {}) {
+export function volatileImports(edges, { counts, born, windowStart }, now, { ratio = 2, minChanges = 3, minAgeDays = 60 } = {}) {
+	const rate = (m) => changeRate(counts.get(m) ?? 0, born.get(m) ?? now, windowStart, now);
 	const out = [];
 	for (const [from, targets] of edges) {
-		if (!first.has(from) || ageDays(first.get(from), now) < minAgeDays) continue;
-		const ownRate = changeRate(counts.get(from), first.get(from), now);
+		if (!born.has(from) || ageDays(born.get(from), now) < minAgeDays) continue;
+		const ownRate = rate(from);
 		for (const to of targets) {
 			const theirs = counts.get(to) ?? 0;
-			if (theirs < minChanges) continue;
-			const theirRate = changeRate(theirs, first.get(to), now);
-			if (theirRate >= ratio * ownRate) {
-				out.push({ from, to, changesFrom: counts.get(from), changesTo: theirs, perMonthFrom: round(ownRate), perMonthTo: round(theirRate) });
-			}
+			if (theirs < minChanges || rate(to) < ratio * ownRate) continue;
+			out.push({ from, to, changesFrom: counts.get(from) ?? 0, changesTo: theirs, perMonthFrom: round(ownRate), perMonthTo: round(rate(to)) });
 		}
 	}
-	return out.sort((a, b) => b.perMonthTo / b.perMonthFrom - a.perMonthTo / a.perMonthFrom || a.from.localeCompare(b.from));
+	const factor = (v) => v.perMonthTo / Math.max(v.perMonthFrom, 0.01);
+	return out.sort((a, b) => factor(b) - factor(a) || a.from.localeCompare(b.from));
+}
+
+/** First-added time of each module: its oldest file. */
+function moduleBirth(place, keyOf) {
+	const born = new Map();
+	for (const [file, time] of firstAdded(place)) {
+		const key = keyOf(file);
+		if (key !== null) born.set(key, Math.min(born.get(key) ?? Infinity, time));
+	}
+	return born;
 }
 
 /**
@@ -134,7 +147,7 @@ function readArea(root, includeTests) {
 	const outside = place
 		? outsideFiles.flatMap((file) => localImports(file, readSource(top, file), known)
 			.filter((to) => inArea.has(to))
-			.map((to) => ({ from: file, to: to.slice(prefix.length) })))
+			.map((to) => ({ from: file, to: to.slice(prefix.length), test: isTestFile(file) })))
 		: null;
 	return { place, files: area, edges, outside };
 }
@@ -151,6 +164,8 @@ export function analyze(root, { by = "file", since = "12 months ago", includeTes
 	const inArea = new Set(files);
 	const keyOf = (f) => (inArea.has(f) ? moduleOf(f, by) : null);
 	const stats = history ? churn(history.commits, keyOf) : { counts: new Map(), first: new Map() };
+	const born = history ? moduleBirth(place, keyOf) : new Map();
+	const windowStart = history ? history.commits.reduce((t, c) => Math.min(t, c.time), now) : now;
 	const linked = new Set();
 	for (const [from, targets] of edges) for (const to of targets) linked.add(`${from}\n${to}`).add(`${to}\n${from}`);
 	const hidden = history ? coChangePairs(history.commits, { keyOf }).filter((p) => !linked.has(`${p.a}\n${p.b}`)) : null;
@@ -164,8 +179,8 @@ export function analyze(root, { by = "file", since = "12 months ago", includeTes
 		modules: modules.length,
 		edges: [...edges.values()].reduce((n, t) => n + t.length, 0),
 		cycles: cycles(modules, edges),
-		volatileImports: history ? volatileImports(edges, stats, now, { minAgeDays }) : null,
-		youngModules: history ? modules.filter((name) => !stats.first.has(name) || ageDays(stats.first.get(name), now) < minAgeDays).length : null,
+		volatileImports: history ? volatileImports(edges, { counts: stats.counts, born, windowStart }, now, { minAgeDays }) : null,
+		youngModules: history ? modules.filter((name) => !born.has(name) || ageDays(born.get(name), now) < minAgeDays).length : null,
 		minAgeDays,
 		hiddenLinks: hidden,
 		outsideImporters: outside?.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to)) ?? null,

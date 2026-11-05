@@ -43,10 +43,21 @@ function endOfRegex(text, start) {
 	return i;
 }
 
+/** True when the `)` at index j closes the condition of `if (...)`, `while (...)` or `for (...)`. */
+function closesCondition(text, j) {
+	let depth = 0;
+	for (let k = j; k >= 0; k--) {
+		if (text[k] === ")") depth++;
+		else if (text[k] === "(" && --depth === 0) return /\b(if|while|for|with)\s*$/.test(text.slice(Math.max(0, k - 8), k));
+	}
+	return false;
+}
+
 function startsRegex(text, i) {
 	let j = i - 1;
 	while (j >= 0 && (text[j] === " " || text[j] === "\t")) j--;
 	if (j < 0 || text[j] === "\n") return true;
+	if (text[j] === ")") return closesCondition(text, j);
 	return REGEX_BEFORE.has(text[j]) || REGEX_AFTER_WORD.test(text.slice(Math.max(0, j - 10), j + 1));
 }
 
@@ -62,7 +73,9 @@ function lexJs(text) {
 		// Reads template text from `from` to its closing backtick or the next `${`.
 		let j = from;
 		while (j < text.length && text[j] !== "`" && !(text[j] === "$" && text[j + 1] === "{")) j += text[j] === "\\" ? 2 : 1;
-		blank(code, from, Math.min(j, text.length));
+		// A backtick with no end is not a template (JSX text, a stray mark): read on as code.
+		if (j >= text.length) return from;
+		blank(code, from, j);
 		if (text[j] === "$") {
 			templates.push(depth);
 			depth++;
@@ -80,9 +93,12 @@ function lexJs(text) {
 			i = stop;
 		} else if (c === "/" && next === "*") {
 			const end = text.indexOf("*/", i + 2);
-			const stop = end === -1 ? text.length : end + 2;
-			moveToComments(code, comments, i, stop);
-			i = stop;
+			if (end === -1) {
+				i += 2; // a `/*` with no end is not a comment (JSX text): read on as code
+				continue;
+			}
+			moveToComments(code, comments, i, end + 2);
+			i = end + 2;
 		} else if (c === '"' || c === "'") {
 			const stop = endOfQuoted(text, i);
 			blank(code, i + 1, stop - 1);

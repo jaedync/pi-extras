@@ -128,9 +128,11 @@ function printGraph(result, limit) {
 		lines.push(...result.hiddenLinks.slice(0, limit).map((p) => `  - ${p.a} + ${p.b}: ${p.shared} shared commits, confidence ${p.confidence}`));
 	}
 	if (result.outsideImporters) {
-		const files = new Set(result.outsideImporters.map((o) => o.to));
-		lines.push("", `Imported from outside the folder: ${files.size} files, by ${new Set(result.outsideImporters.map((o) => o.from)).size} files`);
-		lines.push(...result.outsideImporters.slice(0, limit).map((o) => `  - ${o.from} -> ${o.to}`));
+		const count = (list, key) => new Set(list.map((o) => o[key])).size;
+		const code = result.outsideImporters.filter((o) => !o.test);
+		const tests = result.outsideImporters.filter((o) => o.test);
+		lines.push("", `Imported from outside the folder: ${count(result.outsideImporters, "to")} files, by ${count(code, "from")} code files and ${count(tests, "from")} test files`);
+		lines.push(...code.slice(0, limit).map((o) => `  - ${o.from} -> ${o.to}`));
 	}
 	const hubs = [...result.modulesTable].sort((x, y) => y.fanIn - x.fanIn).slice(0, Math.min(limit, 10));
 	lines.push("", "Most imported (fan-in, fan-out, instability, changes):");
@@ -165,7 +167,8 @@ function runGraph(path, values) {
 	if (values.compare) {
 		const diff = compareGraph(readSaved(values.compare, "graph"), result);
 		const text = diff.rows.map((r) => `  ${r.key.padEnd(16)} ${String(r.before).padStart(5)} -> ${String(r.after).padStart(5)}`).join("\n");
-		return { output: values.json ? diff : `graph${diff.worse ? "  (WORSE)" : ""}\n${text}`, code: diff.worse ? 1 : 0 };
+		const heads = `saved at ${diff.baseHead?.slice(0, 12) ?? "no commit"}, now at ${diff.head?.slice(0, 12) ?? "no commit"}`;
+		return { output: values.json ? diff : `graph (${heads})${diff.worse ? "  (WORSE)" : ""}\n${text}`, code: diff.worse ? 1 : 0 };
 	}
 	return { output: values.json ? result : printGraph(result, integer(values.limit, "limit")), code: 0 };
 }

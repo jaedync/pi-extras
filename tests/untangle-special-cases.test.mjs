@@ -22,6 +22,19 @@ test("lex keeps length and line breaks, blanks strings in code and keeps only co
 	assert.match(py.comments, /# yes/);
 });
 
+test("lex: an unclosed template or block comment does not hide the rest of the file", () => {
+	const after = "\ntry { go(); } catch {}\n";
+	assert.deepEqual(ids("a.tsx", `const x = <p>Press \`</p>;${after}`), ["swallowed-error"]);
+	assert.deepEqual(ids("a.tsx", `const x = <code>/*</code>;${after}`), ["swallowed-error"]);
+	assert.deepEqual(ids("a.ts", `if (ok) /\`/.test(s);${after}`), ["swallowed-error"]);
+	assert.match(lex("const r = (a) / 2; const s = `x`;", "js").code, /\(a\) \/ 2; const s = ` `;/, "division after ) stays code");
+});
+
+test("sleep-or-retry counts one hit for each retry name in a file, not each line", () => {
+	const text = "let retryTimer = null;\nfunction stop() {\n  clearTimeout(retryTimer);\n  retryTimer = null;\n}\nconst maxRetries = 3;\n";
+	assert.deepEqual(scanText("a.ts", text).map((h) => h.line), [1, 6]);
+});
+
 test("special cases: each category fires on its shape", () => {
 	assert.deepEqual(ids("a.ts", "try { go(); } catch {}"), ["swallowed-error"]);
 	assert.deepEqual(ids("a.ts", "try {\n  go();\n} catch (error) {\n  // fine\n}\n"), ["swallowed-error"]);
