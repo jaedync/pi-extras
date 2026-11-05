@@ -30,12 +30,17 @@ function blockers(record: AgentRecord, children: ReadonlyMap<string, readonly st
 	return [...(children.get(record.name) ?? []), ...owed, ...(record.state === "queued" ? waitingFor(record, get) : [])];
 }
 
-/** Whether `name` can't end before `target` does, directly or through other agents. */
-export function dependsOn(name: string, target: string, records: readonly AgentRecord[]): boolean {
+/** The records by name, and the live children of each parent: the graph that the two walks below follow. */
+function graphOf(records: readonly AgentRecord[]): { get: Lookup; children: ReadonlyMap<string, readonly string[]> } {
 	const byName = new Map(records.map((record) => [record.name, record]));
-	const get: Lookup = (other) => byName.get(other);
 	const children = new Map<string, string[]>();
 	for (const record of records) if (live(record)) children.set(record.parent, [...(children.get(record.parent) ?? []), record.name]);
+	return { get: (other) => byName.get(other), children };
+}
+
+/** Whether `name` can't end before `target` does, directly or through other agents. */
+export function dependsOn(name: string, target: string, records: readonly AgentRecord[]): boolean {
+	const { get, children } = graphOf(records);
 	const seen = new Set<string>();
 	const next = [name];
 	while (next.length > 0) {
@@ -56,10 +61,7 @@ export function dependsOn(name: string, target: string, records: readonly AgentR
  * answers alone is not this case).
  */
 export function heldBetween(name: string, target: string, records: readonly AgentRecord[]): string | undefined {
-	const byName = new Map(records.map((record) => [record.name, record]));
-	const get: Lookup = (other) => byName.get(other);
-	const children = new Map<string, string[]>();
-	for (const record of records) if (live(record)) children.set(record.parent, [...(children.get(record.parent) ?? []), record.name]);
+	const { get, children } = graphOf(records);
 	const seen = new Set<string>();
 	const next: Array<{ readonly at: string; readonly held: string | undefined }> = [{ at: name, held: undefined }];
 	while (next.length > 0) {
