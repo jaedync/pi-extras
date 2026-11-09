@@ -6,12 +6,16 @@
  *
  *   node formal/subagents-lifecycle/repro-f2.mts             (the old session calls the model after the stop)
  *   node formal/subagents-lifecycle/repro-f2.mts --no-message (control: the stop alone stops it)
+ *   node formal/subagents-lifecycle/repro-f2.mts --late       (the hook waits past GATE_WAIT_MS: the stop and the
+ *                                                              dispose go on before the run starts, which must still stop)
  *
  * It prints JSON and exits 1 when the stopped session called the model.
  */
+import { GATE_WAIT_MS } from "../../lib/subagents/child-prompt.ts";
 import { entered, liveTeam, open, sleep, spawn, until } from "./repro-support.mts";
 
 const message = !process.argv.includes("--no-message");
+const late = process.argv.includes("--late");
 const { team, launches, reports } = await liveTeam({ slow: "before_agent_start" });
 spawn(team, "kid");
 // 1. The child's first prompt waits in before_agent_start (Pi's _prepareRun).
@@ -23,6 +27,12 @@ const stopWaits = launches.length === 1 && team.get("kid")?.state === "stopped";
 // 3. Main messages it during the stop's abort: routing relaunches it and releases the old session.
 if (message) await team.send("main", "kid", "Go on with the task.");
 await sleep(300);
+let stopReturnedEarly = false;
+if (late) {
+	// The bounded waits end: the stop returns and Pi's dispose of the old session runs, all while the hook still waits.
+	await sleep(GATE_WAIT_MS + 1_000);
+	stopReturnedEarly = await Promise.race([stopped.then(() => true), sleep(0).then(() => false)]);
+}
 const oldDisposed = launches[0]!.disposed;
 // 4. The hook ends (the I/O it waited for is done).
 open("before_agent_start");
@@ -30,7 +40,7 @@ await stopped;
 await until("the team settles", () => !["queued", "starting", "running"].includes(team.get("kid")!.state), 15_000).catch(() => undefined);
 await sleep(500);
 const result = {
-	message, stopWaits, oldSessionDisposedBeforeRun: oldDisposed,
+	message, late, stopWaits, stopReturnedEarly, oldSessionDisposedBeforeRun: oldDisposed,
 	oldSessionModelCalls: launches[0]!.modelCalls, oldSessionBashRuns: launches[0]!.toolRuns,
 	launches: launches.length, newSessionModelCalls: launches[1]?.modelCalls ?? 0,
 	finalState: team.get("kid")!.state, reports,

@@ -9,7 +9,7 @@
 // The child's Pi session is part of the model: AgentSession.prompt, abort and
 // dispose in Pi 1.4.0 (node_modules/@earendil-works/pi-coding-agent/dist/core/
 // agent-session.js, line numbers for 1.4.0) and Agent in pi-agent-core
-// (dist/agent.js). The handle that wraps it is lib/subagents/child.ts:692-735.
+// (dist/agent.js). The handle that wraps it is lib/subagents/child.ts:692-736.
 //
 // The whole team state is one record, `w`, so that the code helpers below
 // (pump, finish, release, run) can be pure functions that the actions chain,
@@ -57,9 +57,12 @@ module lifecycle {
   pure val GATE_REABORTS = true
   // The gate's abort waits for the prompt in flight, also in its pre window.
   pure val GATE_ABORT_WAITS = true
-  // The handle's dispose aborts through the gate and waits for the prompt in
-  // flight before Pi's dispose disconnects the agent_start listener (F2).
+  // The handle's dispose aborts through the gate (`shut`) and waits for the
+  // prompt in flight before Pi's dispose disconnects the agent_start listener (F2).
   pure val DISPOSE_WAITS = true
+  // After `shut`, the gate's own agent listener stops an aborted run at
+  // agent_start. It covers a dispose whose wait ended at GATE_WAIT_MS; the
+  // model has no time, so the waits never end early and it is not modeled.
   // The gate's prompt returns only once its steers in flight are in Pi's queue (F5).
   pure val PROMPT_WAITS_STEERS = true
 
@@ -96,7 +99,7 @@ module lifecycle {
     sqCopy: str -> int,           // the same, after unreadLeft copied them to the inbox
     // Steers that wait for the input handlers (STEER_WINDOW): (child, session,
     // id, kind). kind "unread": on the record's `unread`; "copied": unreadLeft
-    // also put it in the inbox; "orphan": settle cleared `unread` (team.ts:875).
+    // also put it in the inbox; "orphan": settle cleared `unread` (team.ts:878).
     sp: Set[(str, int, int, str)],
     oq: str -> int,               // orphan steers that landed in the held session's Pi queue
     // Ghosts: only the properties and witnesses read them.
@@ -125,7 +128,7 @@ module lifecycle {
 
   pure def isLive(x: World, c: str): bool = LIVE.contains(x.state.get(c))
 
-  // Team.gone (team.ts:794-796). The team never closes in this model.
+  // Team.gone (team.ts:797-799). The team never closes in this model.
   pure def gone(x: World, c: str, l: int): bool =
     x.state.get(c) == "stopped" or x.launches.get(c) != l
 
@@ -193,12 +196,12 @@ module lifecycle {
       }
     }
 
-  // Team.parkResume (team.ts:960-965): the resume prompt's message goes back to the inbox.
+  // Team.parkResume (team.ts:963-968): the resume prompt's message goes back to the inbox.
   pure def parkResume(x: World, c: str): World =
     if (x.resume.get(c) < 0) x
     else { ...x, inbox: x.inbox.set(c, x.inbox.get(c) + x.resume.get(c)), resume: x.resume.set(c, -1) }
 
-  // Team.unreadLeft (team.ts:898-901, mailbox.ts:37-41): unread steering goes
+  // Team.unreadLeft (team.ts:901-904, mailbox.ts:37-41): unread steering goes
   // to the inbox; the Pi queue still holds it until the session goes.
   // A steer that waits is on `unread` too, so it goes to the inbox as well.
   pure def unreadLeft(x: World, c: str): World = {
@@ -234,7 +237,7 @@ module lifecycle {
   // Team.pump (team.ts:505-508) is Slots.pump.
   pure def pump(x: World): World = 1.to(PUMP_PASSES).fold(x, (y, _) => pumpOnce(y))
 
-  // Team.finish (team.ts:917-939): hand the report up, settle the waiters,
+  // Team.finish (team.ts:920-942): hand the report up, settle the waiters,
   // release a failed or stopped child's session (sessions.ts:134-136), pump.
   // The report is silent (hand-up.ts:46) when the stop of this launch was by
   // the child's parent. `reported` counts it; `reportsTotal` counts what main got.
@@ -255,13 +258,13 @@ module lifecycle {
     pump(z)
   }
 
-  // Team.fail (team.ts:879-887).
+  // Team.fail (team.ts:882-890).
   pure def failRun(x: World, c: str): World = {
     val y = unreadLeft(x, c)
     finish({ ...y, state: y.state.set(c, "failed") }, c)
   }
 
-  // Team.failOrFallBack (team.ts:815-835).
+  // Team.failOrFallBack (team.ts:818-838).
   pure def failOrFallBack(x: World, c: str): World =
     if (x.fallbacksLeft.get(c) == 0) failRun(parkResume({ ...x, continuing: x.continuing.exclude(Set(c)) }, c), c)
     else {
@@ -288,14 +291,14 @@ module lifecycle {
     })
   }
 
-  // Team.settle (team.ts:867-877), no subagents to wait for: idle, then finish.
-  // settle also clears `unread` (team.ts:875): a steer that still waits is then on no record.
+  // Team.settle (team.ts:870-880), no subagents to wait for: idle, then finish.
+  // settle also clears `unread` (team.ts:878): a steer that still waits is then on no record.
   pure def settle(x: World, c: str): World =
     finish({ ...x, state: x.state.set(c, "idle"), sp: x.sp.map(t => if (t._1 == c and t._4 == "unread") (t._1, t._2, t._3, "orphan") else t) }, c)
 
-  // Team.work after `await handle.prompt` (team.ts:718-735) and run's catch
+  // Team.work after `await handle.prompt` (team.ts:718-738) and run's catch
   // (:696-699). No wrap-up, swap or check in this model. `late` takes the Pi
-  // queue (handle.takeQueued, child.ts:723-729) and the inbox (team.ts:799-802).
+  // queue (handle.takeQueued, child.ts:727-733) and the inbox (team.ts:802-805).
   pure def afterPrompt(x: World, p: Prompt, outcome: str): World =
     if (gone(x, p.c, p.r)) x
     else if (outcome == "error") failOrFallBack(x, p.c)
@@ -533,7 +536,7 @@ module lifecycle {
   // ---- Properties ----
 
   // A parent hears of each run once: one report for each run (handUp in finish,
-  // or handUpFailure), never two (team.ts:927-932: "A parent waits for one run's report").
+  // or handUpFailure), never two (team.ts:930-935: "A parent waits for one run's report").
   val oneReport = CH.forall(c => w.reported.get(c) <= 1)
 
   // A run that ended, with no stop still at work, has handed its report up.

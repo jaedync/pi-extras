@@ -263,6 +263,8 @@ export interface ChildHandle {
 	lastText(): string | undefined;
 	/** Steering that arrived too late for the run that just ended. */
 	takeQueued(): string[];
+	/** Resolves once no steer is still in its input handlers; undefined when none is (child-prompt.ts). */
+	steering?(): Promise<void> | undefined;
 	/** The session's messages so far, for the inspector. */
 	messages(): readonly unknown[];
 	/** The reply being written now, before it joins the messages; for the inspector. */

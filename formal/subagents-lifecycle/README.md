@@ -124,33 +124,33 @@ cites its file and line in `lifecycle.qnt`.
 |---|---|---|---|---|
 | `faithful` | pass | pass | 494,863 | 29 |
 | `pi-without-windows` | pass | pass | 273,133 | 23 |
-| `mutant-gate-no-reabort` | violates stopMeansStopped | violation of stopMeansStopped | 113 | 4 |
-| `mutant-dispose-no-wait` | violates stopMeansStopped | violation of stopMeansStopped | 341 | 5 |
+| `mutant-gate-no-reabort` | violates stopMeansStopped | violation of stopMeansStopped | 94 | 5 |
+| `mutant-dispose-no-wait` | violates stopMeansStopped | violation of stopMeansStopped | 331 | 5 |
 | `survivor-abort-skips-pre` | pass | pass | 678,123 | 29 |
-| `mutant-stop-refuses-ending` | violates stopHonored | violation of stopHonored | 1,238 | 6 |
-| `mutant-old-stop-clears-ending` | violates reportOnEnd | violation of reportOnEnd | 20,747 | 10 |
-| `mutant-old-stop-clears-parent-mark` | violates parentStopSilent | violation of parentStopSilent | 1,479 | 7 |
-| `mutant-prompt-skips-steers` | violates mailKept | violation of mailKept | 12,290 | 9 |
-| `mutant-stop-keeps-launch` | violates oneReport | violation of oneReport | 6,689 | 8 |
-| `mutant-stop-ignores-relaunch` | violates oneReport | violation of oneReport | 5,669 | 8 |
-| `mutant-work-ignores-gone` | violates oneReport | violation of oneReport | 6,163 | 8 |
-| `mutant-open-ignores-gone` | violates oneSession | violation of oneSession | 747 | 6 |
-| `mutant-stop-keeps-resume` | violates mailKept | violation of mailKept | 144 | 5 |
-| `mutant-stop-drops-unread` | violates mailKept | violation of mailKept | 3,046 | 7 |
+| `mutant-stop-refuses-ending` | violates stopHonored | violation of stopHonored | 1,155 | 6 |
+| `mutant-old-stop-clears-ending` | violates reportOnEnd | violation of reportOnEnd | 20,184 | 10 |
+| `mutant-old-stop-clears-parent-mark` | violates parentStopSilent | violation of parentStopSilent | 1,347 | 7 |
+| `mutant-prompt-skips-steers` | violates mailKept | violation of mailKept | 11,857 | 9 |
+| `mutant-stop-keeps-launch` | violates oneReport | violation of oneReport | 7,261 | 9 |
+| `mutant-stop-ignores-relaunch` | violates oneReport | violation of oneReport | 5,997 | 9 |
+| `mutant-work-ignores-gone` | violates oneReport | violation of oneReport | 6,364 | 9 |
+| `mutant-open-ignores-gone` | violates oneSession | violation of oneSession | 830 | 6 |
+| `mutant-stop-keeps-resume` | violates mailKept | violation of mailKept | 148 | 5 |
+| `mutant-stop-drops-unread` | violates mailKept | violation of mailKept | 2,947 | 7 |
 | `survivor-pump-starts-any` | pass | pass | 494,863 | 29 |
-| `mutant-resume-ignores-slots` | violates slotsBound | violation of slotsBound | 3,470 | 8 |
+| `mutant-resume-ignores-slots` | violates slotsBound | violation of slotsBound | 3,661 | 8 |
 | `mutant-finish-keeps-waiters` | violates waitersSettle | violation of waitersSettle | 2 | 2 |
-| `mutant-release-busy` | violates noStuck | violation of noStuck | 14,960 | 10 |
-| `mutant-resume-failed-drops-message` | violates mailKept | violation of mailKept | 190 | 5 |
-| `mutant-fallback-keeps-session` | violates oneSession | violation of oneSession | 3,007 | 8 |
-| `mutant-late-skips-queue` | violates mailKept | violation of mailKept | 11,656 | 9 |
+| `mutant-release-busy` | violates noStuck | violation of noStuck | 14,664 | 9 |
+| `mutant-resume-failed-drops-message` | violates mailKept | violation of mailKept | 199 | 5 |
+| `mutant-fallback-keeps-session` | violates oneSession | violation of oneSession | 3,416 | 7 |
+| `mutant-late-skips-queue` | violates mailKept | violation of mailKept | 11,394 | 9 |
 | `mutant-stop-no-abort` | violates stopMeansStopped | violation of stopMeansStopped | 80 | 4 |
-| `mutant-settle-skips-finish` | violates reportOnEnd | violation of reportOnEnd | 1,229 | 7 |
+| `mutant-settle-skips-finish` | violates reportOnEnd | violation of reportOnEnd | 1,294 | 6 |
 
 All 24 checks give the expected result. The checks ran with 2 TLC workers on
-a loaded host. Two checks (`faithful`, `mutant-old-stop-clears-ending`)
+a loaded host. One check (`mutant-fallback-keeps-session`)
 first gave `error`, because another process used the Apalache port 8822 at
-the same time. A rerun with `--only` gave the results above.
+the same time. A rerun with `--only` and 1 worker gave the result above.
 
 At f194608 the record had 25 checks, and the findings were checks that
 expected a violation (`faithful`, `faithful-mail`, `f2-dispose-in-prep`,
@@ -197,8 +197,14 @@ the tools still worked, so a stopped child could still change files.
   `prompt()`. Pi calls it with `"started"` after its run exists and before
   the first request (`agent-session.js:1442`). When an abort came before
   that, the gate calls `session.abort()` again, and Pi's own agent_start
-  check stops the run (P2). The gate's `abort` waits for the prompt in
-  flight. `child.ts` `handleFor` uses the gate for `prompt` and `abort`.
+  check stops the run (P2). A compaction that Pi starts in `_prepareRun`
+  comes before that point, so the gate also aborts at `compaction_start`
+  (Pi's abort cancels the compaction). The gate's `abort` waits for Pi's
+  abort and for the prompt in flight. Before the run started, it waits for
+  at most `GATE_WAIT_MS` (10 s): a slow `input` or `before_agent_start`
+  handler can't hang a stop. After the start, it waits as long as Pi's
+  abort of the loop takes, as before. `child.ts` `handleFor` uses the gate
+  for `prompt`, `abort` and `steering`.
 - Mutant: `mutant-gate-no-reabort` breaks `stopMeansStopped` (depth 4).
 - Repro `node formal/subagents-lifecycle/repro-f1.mts`:
   - Before (exit 1): `{"stopResolvedBeforeTheRun":true,"modelCallsAtStop":0,"modelCallsAfter":12,"disposed":true,"state":"stopped"}`
@@ -220,16 +226,32 @@ Path at f194608:
 
 - Model change: the gate constant `DISPOSE_WAITS`. `disposeOne` aborts
   through the gate and marks the prompt disposed. `prepStops` stops it,
-  because Pi's dispose comes only after the prompt ended.
+  because Pi's dispose comes only after the prompt ended. The model has no
+  time, so the wait never ends at `GATE_WAIT_MS`, and the gate's agent
+  listener (below) is not in the model.
 - Code change: `child.ts` `childDisposer` takes the gate. When a prompt is
-  in flight (`gate.busy()`), it first calls `gate.abort()` and waits for the
-  prompt. Only then it disposes the rate-limit guard, unsubscribes, runs the
-  `session_shutdown` handlers and calls Pi's `dispose()`.
-- Mutant: `mutant-dispose-no-wait` breaks `stopMeansStopped` (depth 5).
+  in flight (`gate.busy()`), it first calls `gate.shut()`, which aborts and
+  waits for the prompt for at most `GATE_WAIT_MS`. Only then it disposes the
+  rate-limit guard, unsubscribes, runs the `session_shutdown` handlers and
+  calls Pi's `dispose()`. For a dispose whose wait ended at `GATE_WAIT_MS`,
+  the gate has its own listener on Pi's agent (`session.agent.subscribe`).
+  Pi's dispose removes only the session's own agent listener, so the gate's
+  listener stays. After `shut`, it calls `agent.abort()` at `agent_start` of
+  an aborted run, as Pi's own check does (P2). A first version threw in
+  `preflightResult("started")`. Pi calls it outside the try block of
+  `_startRun`, so the run stayed active, Pi's idle wait never resolved, and
+  the stop hung (the F2 repro found this).
+- Mutant: `mutant-dispose-no-wait` breaks `stopMeansStopped` (depth 4).
 - Repro `node formal/subagents-lifecycle/repro-f2.mts`:
   - Before (exit 1): `{"stopWaits":true,"oldSessionDisposedBeforeRun":true,"oldSessionModelCalls":12,"launches":2,"newSessionModelCalls":2}`
   - After (exit 0): `{"stopWaits":true,"oldSessionDisposedBeforeRun":false,"oldSessionModelCalls":0,"launches":2,"newSessionModelCalls":2}`
   - The control `--no-message` gives 0 model calls.
+- Repro `node formal/subagents-lifecycle/repro-f2.mts --late` (from the
+  review): the `before_agent_start` hook waits past `GATE_WAIT_MS`.
+  - With `abort` unbounded (exit 0, but the test fails): `{"stopReturnedEarly":false,"oldSessionDisposedBeforeRun":false,"oldSessionModelCalls":0}`.
+    The stop and the dispose wait for the hook.
+  - Without the gate's agent listener (exit 1): `{"stopReturnedEarly":true,"oldSessionDisposedBeforeRun":true,"oldSessionModelCalls":12}`
+  - After (exit 0): `{"stopReturnedEarly":true,"oldSessionDisposedBeforeRun":true,"oldSessionModelCalls":0,"launches":2,"newSessionModelCalls":2}`
 
 ### F3. A second stop of a child that a message relaunched during the first stop was refused
 
@@ -284,7 +306,7 @@ silenced, because `finish` took any mark as silent.
   `Map<string, number>`. `stop` sets both to its launch number. The
   relaunch branch deletes a mark only when it is the stop's own
   (`team.ts:426-427`). `finish` is silent only when the mark is the current
-  launch number (`team.ts:933-935`).
+  launch number (`team.ts:936-938`).
 - Mutants: `mutant-old-stop-clears-ending` breaks `reportOnEnd` (depth 10),
   and `mutant-old-stop-clears-parent-mark` breaks `parentStopSilent` (depth 7).
 - Repro `node formal/subagents-lifecycle/repro-f4.mts`:
@@ -318,7 +340,11 @@ Path at f194608:
   any steer is in flight (also one that comes during the wait). With no
   steer in flight it does not await, so the team's continuation keeps its
   place in the event loop. `late` then takes the message from Pi's queue as
-  the run's next prompt.
+  the run's next prompt. The review found the same loss at the end of a
+  check (`team.ts:728-731`): a steer that waits in the input handlers while
+  the check runs. `work` now awaits `handle.steering()` after the check and
+  before `late`. Checks are not in the model; `tests/subagents-check-steer.test.ts`
+  covers this path.
 - Mutant: `mutant-prompt-skips-steers` breaks `mailKept` (depth 9).
 - Repro `node formal/subagents-lifecycle/repro-f5.mts` (the repro no longer
   needs the run to end before the steer lands):
@@ -329,14 +355,33 @@ Path at f194608:
 ### R1. Residual: a steer in the microtasks between `late()` and `settle()`
 
 The model treats the code from the last `late()` to `settle()` as one
-segment. The code has awaits there (`checks.run`, the return of `work` to
-`run`). A message that another chain delivers in those microtasks reaches
-`unread` and then Pi's queue. `settle` clears `unread`, so the message waits
-in the idle session's queue. A next run in the held session reads it, but
-the quiet-spell release drops it. This window was there before the fix and
-with synchronous input handlers too. It needs two chains that resume in the
-same macrotask. No repro exists. A fix would let `settle` take Pi's queue to
-the inbox. It is not in this task.
+segment. After the last `late()`, `work()` returns to `run()`, which then
+calls `settle()`: an `await` of an async function, a few microtasks. A
+message that another chain delivers in those microtasks reaches `unread`,
+and `settle` clears `unread`. The message then waits in the idle session's
+queue: a next run in the held session reads it, but the quiet-spell release
+drops it. The window is microtasks long, and only a chain that resumes in
+the same macrotask can deliver in it. No repro exists. The check boundary
+(`team.ts:728-731`), where the window was as long as the input handler, is
+fixed (see F5).
+
+### Limits of the gate
+
+- A prompt that Pi defers during `agent_settled` (`agent-session.js:1632-1635`)
+  returns at once and runs later. The gate does not track it. No team path
+  calls `handle.prompt` while a session settles.
+- A run that Pi starts on its own (`sendMessage` with `triggerTurn`) is not
+  a gate prompt: `busy()` is false for it.
+- A steer whose input handler never ends keeps the run waiting. A stop
+  still works then, because the gate's abort does not wait for steers.
+- The waits before the start are bounded by `GATE_WAIT_MS`; the model has
+  no time. A wait that ends early is the case of `survivor-abort-skips-pre`
+  (it passes). The bound and the gate's agent listener are checked by
+  `tests/subagents-child-prompt.test.ts` (mock timers) and by
+  `repro-f2.mts --late`.
+- After a dispose that did not wait to the end, Pi's `agent_settled` emit
+  runs on an invalidated extension runner. The run is stopped before its
+  first request; what Pi does with the rest of it is Pi's.
 
 ## Review of the model (skill step 9, at f194608)
 
@@ -376,6 +421,34 @@ what changed:
   first `whenDone`; the goOn insert place (slots.ts:62) is not tested by the
   traces; the replay builds the stop tuples itself.
 
+## Review of the fixes
+
+A fresh Opus 5.5 reviewer read the fix commit against Pi's source, ran the
+tests and the repros, and wrote probes. Its findings and what changed:
+
+- H1 (high, with a repro): a steer in flight when a check ends was lost.
+  Fixed: `work` awaits `handle.steering()` after the check
+  (`tests/subagents-check-steer.test.ts`, which failed first). R1 is
+  corrected.
+- M1 (medium): the new waits had no time limit, so a stop, a dispose, a
+  close or a /reload could hang on a prompt that never left its pre window.
+  Fixed: before the run starts, `GATE_WAIT_MS` bounds the gate's wait,
+  also the wait in Pi's own abort. After `shut`, the gate's agent listener
+  stops an aborted run at `agent_start`. The wait for steers stays
+  unbounded (see the limits of the gate): the next prompt waits for the
+  same input handlers.
+- M2 (medium): a compaction in `_prepareRun` ran after a stop in the pre
+  window. Fixed: the gate aborts at `compaction_start`.
+- M3 (medium): gate paths with no test (a deferred prompt, runs that Pi
+  starts on its own). Written in "Limits of the gate".
+- L1 (low): the usage of an aborted request is dropped when a relaunch is
+  queued and a second stop follows (`team.ts:664` compares with
+  `launches - 1`). Not fixed; a follow-up.
+- L2 (low): a stop of a child that `close()` interrupted while an earlier
+  stop was in flight now goes on after close and reports once. Not fixed; a
+  follow-up.
+- L3 (low): wrong citations (`takeQueued`). Fixed.
+
 ## Mutants and survivors
 
 Each mutant copies one code change into the model, on top of `faithful`.
@@ -385,11 +458,11 @@ least one mutant that breaks it.
 | Mutant | Copies this code change | Breaks | Replay with the same code change |
 |---|---|---|---|
 | `mutant-gate-no-reabort` | `child-prompt.ts` `prompt` without the abort at `preflightResult("started")` (F1) | violation of stopMeansStopped | fails (caught) |
-| `mutant-dispose-no-wait` | `child.ts` `childDisposer` without `await gate.abort()` before Pi's dispose (F2) | violation of stopMeansStopped | fails (caught) |
+| `mutant-dispose-no-wait` | `child.ts` `childDisposer` without `await gate.shut()` before Pi's dispose (F2) | violation of stopMeansStopped | fails (caught) |
 | `survivor-abort-skips-pre` | `child-prompt.ts` `abort` that does not wait for the prompt in flight | nothing (survivor) | fails (caught) |
 | `mutant-stop-refuses-ending` | `team.ts:405` with `this.ending.has(name)`, as at f194608 (F3) | violation of stopHonored | fails (caught) |
 | `mutant-old-stop-clears-ending` | `team.ts:426` deletes `ending` for any stop, as at f194608 (F4) | violation of reportOnEnd | fails (caught), only by the witness `witnessNoStaleStopOverStop` |
-| `mutant-old-stop-clears-parent-mark` | `team.ts:427` and `:934` with `stoppedByParent` as a set, as at f194608 (F4) | violation of parentStopSilent | fails (caught), only by the witness `witnessNoStaleStopOverStop` |
+| `mutant-old-stop-clears-parent-mark` | `team.ts:427` and `:937` with `stoppedByParent` as a set, as at f194608 (F4) | violation of parentStopSilent | fails (caught), only by the witness `witnessNoStaleStopOverStop` |
 | `mutant-prompt-skips-steers` | `child-prompt.ts` `prompt` without the wait for steers in flight (F5) | violation of mailKept | fails (caught) |
 | `mutant-stop-keeps-launch` | `team.ts:407` and `:417` without the new launch number | violation of oneReport | fails (caught) |
 | `mutant-stop-ignores-relaunch` | `team.ts:424` without the check: the stop always finishes after the abort | violation of oneReport | fails (caught) |
@@ -399,13 +472,13 @@ least one mutant that breaks it.
 | `mutant-stop-drops-unread` | `team.ts:420` without `...this.unreadLeft(name)` | violation of mailKept | fails (caught) |
 | `survivor-pump-starts-any` | `slots.ts:89` without the `state !== "queued"` drop | nothing (survivor) | passes (missed) |
 | `mutant-resume-ignores-slots` | `team.ts:527` runWhenFree without `this.slots.free()` | violation of slotsBound | fails (caught) |
-| `mutant-finish-keeps-waiters` | `team.ts:931` without `this.settleWaiters(name, record)` | violation of waitersSettle | fails (caught) |
+| `mutant-finish-keeps-waiters` | `team.ts:934` without `this.settleWaiters(name, record)` | violation of waitersSettle | fails (caught) |
 | `mutant-release-busy` | `sessions.ts:142` without `this.options.idle(name)` | violation of noStuck | not run: the replay calls the timer body by hand, past this guard |
 | `mutant-resume-failed-drops-message` | `team.ts:631` without `this.parkResume(name)` in resumeFailed | violation of mailKept | fails (caught) |
-| `mutant-fallback-keeps-session` | `team.ts:832` without `this.sessions.release(name)` in failOrFallBack | violation of oneSession | fails (caught) |
-| `mutant-late-skips-queue` | `team.ts:800` without `handle.takeQueued()` | violation of mailKept | fails (caught) |
+| `mutant-fallback-keeps-session` | `team.ts:835` without `this.sessions.release(name)` in failOrFallBack | violation of oneSession | fails (caught) |
+| `mutant-late-skips-queue` | `team.ts:803` without `handle.takeQueued()` | violation of mailKept | fails (caught) |
 | `mutant-stop-no-abort` | `team.ts:422` without `await handle?.abort()` | violation of stopMeansStopped | fails (caught) |
-| `mutant-settle-skips-finish` | `team.ts:876` without `this.finish(name)` | violation of reportOnEnd | fails (caught) |
+| `mutant-settle-skips-finish` | `team.ts:879` without `this.finish(name)` | violation of reportOnEnd | fails (caught) |
 
 The survivors:
 
@@ -470,13 +543,17 @@ Code changes that make the replay fail (one at a time, each restored):
 | team.ts:427 and :934 `stoppedByParent` as a set (F4) | fails (caught) |
 | child-prompt.ts no abort at `"started"` (F1) | fails (caught) |
 | child-prompt.ts `abort` without `await run?.ended` | fails (caught) |
-| child.ts `childDisposer` without `gate.abort()` (F2) | fails (caught) |
+| child-prompt.ts without the abort at `compaction_start` (missed: compaction is not modeled; tests/subagents-child-prompt.test.ts catches it) | passes (missed) |
+| child.ts `childDisposer` without `gate.shut()` (F2) | fails (caught) |
+| child-prompt.ts `abort` without the `GATE_WAIT_MS` bound (missed: the model has no time; tests/subagents-child-prompt.test.ts and repro-f2.mts --late catch it) | passes (missed) |
+| child-prompt.ts without the agent_start listener after `shut` (missed: the model has no time; tests/subagents-child-prompt.test.ts and repro-f2.mts --late catch it) | passes (missed) |
+| team.ts:728-731 without the wait for steers after the check (missed: checks are not modeled; tests/subagents-check-steer.test.ts catches it) | passes (missed) |
 | child-prompt.ts `prompt` without the wait for steers (F5) | fails (caught) |
 | slots.ts:89 no `state !== "queued"` drop | passes (missed): no model behavior needs the guard, see survivor-pump-starts-any |
 | team.ts:424 without the `state !== "stopped"` half (the 4a8fa14 fix) | fails (caught) |
 | team.ts:676 without `await handle.dispose()` for a stale launch | fails (caught) |
 
-22 of 23 changes make the replay fail. Each file was restored after its change.
+22 of 27 changes make the replay fail. Each file was restored after its change.
 
 The script is `code-mutants.py` in this folder.
 
@@ -487,9 +564,10 @@ f194608 and passes now:
 
 | Test | Findings | On f194608 |
 |---|---|---|
-| `tests/subagents-lifecycle-repros-sdk.test.mts` | F1 to F5: runs each repro script and its control with real Pi sessions (about 15 s) | 5 of 5 fail |
+| `tests/subagents-lifecycle-repros-sdk.test.mts` | F1 to F5: runs each repro script and its control with real Pi sessions (about 15 s); `repro-f2.mts --late` (review) | 5 of 5 fail; the `--late` test is new |
 | `tests/subagents-stop-relaunch.test.ts` | F3, F4 (both marks, and the silenced report of a relaunched run) on fake sessions | 4 of 4 fail |
-| `tests/subagents-child-prompt.test.ts` | F1, F2, F5 on the gate and the disposer, with a fake session | the module did not exist |
+| `tests/subagents-child-prompt.test.ts` | F1, F2, F5 on the gate and the disposer, with a fake session; the compaction abort, the `GATE_WAIT_MS` bounds and the agent listener after `shut` (review) | the module did not exist; with the first fix's gate (ede4521), 5 of 10 fail: the compaction, the 3 bound and listener tests, and the F5 test, which calls the new `steering()` |
+| `tests/subagents-check-steer.test.ts` | F5 at the check boundary (review, high) | fails |
 | `tests/subagents-lifecycle-conformance.test.mts` | the replay and the finding paths | the traces of the fixed model fail at the finding steps |
 
 ## Commands
@@ -566,3 +644,4 @@ the reason.
 | `subagents-lifecycle-repros-sdk.test.mts` | F1 to F5 (5 tests) | this task | `stopMeansStopped`, `stopHonored`, `reportOnEnd`, `parentStopSilent`, `mailKept` | keeps value | the only tests of the fixes with real Pi sessions |
 | `subagents-stop-relaunch.test.ts` | F3, F4 (4 tests) | this task | `stopHonored`, `reportOnEnd`, `parentStopSilent`; the F3 and F4 mutants | covered by the model | fast checks of the same paths; the F4 catch in the replay needs witness traces |
 | `subagents-child-prompt.test.ts` | the gate and the disposer (5 tests) | this task | the gate mutants (replay with the real gate) | keeps value | it checks the order of Pi calls, which the replay does not compare |
+| `subagents-check-steer.test.ts` | a steer during the check (1 test) | this task | none: checks are not modeled | keeps value | the only test of the wait for steers after a check |

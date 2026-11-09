@@ -656,7 +656,7 @@ export function childDisposer(session: Pick<AgentSession, "extensionRunner" | "d
 	let disposed: Promise<void> | null = null;
 	return () => disposed ??= (async () => {
 		// Pi's dispose takes away the listener that stops a run at its start; a prompt in flight would then run unseen.
-		if (gate.busy()) await gate.abort().catch(() => undefined);
+		if (gate.busy()) await gate.shut().catch(() => undefined);
 		// SDK disposal can skip or time out extension shutdown handlers.
 		guard.dispose();
 		unsubscribe();
@@ -718,6 +718,7 @@ function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildConte
 			else gate.steer(text);
 		},
 		abort: () => gate.abort(),
+		steering: () => gate.steering(),
 		toolsRunning: () => pendingCalls(session) > 0,
 		lastText: () => session.getLastAssistantText(),
 		messages: () => session.messages,

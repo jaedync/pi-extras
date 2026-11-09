@@ -21,7 +21,7 @@
 import type { ModelChoice } from "./models.ts";
 import type { AgentRecord, CheckUpdate, Launcher, SpawnRequest } from "./types.ts";
 
-export const HOST_VERSION = 11;
+export const HOST_VERSION = 12;
 
 export const MESSAGE_TYPE = "subagent-message";
 export const REPORT_TYPE = "subagent-report";

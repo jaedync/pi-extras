@@ -39,7 +39,14 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   a stop by the parent now reports when it ends (F4).
 - Subagents: a message steered while the child's `input` handler waits is no
   longer lost when the run ends first. The run waits until Pi queued the
-  message, then reads it (F5).
+  message, then reads it (F5). This also applies at the end of a run's
+  check.
+- Subagents: a stop or a dispose of a child whose prompt waits before its
+  run waits for at most 10 seconds, and the child's run still stops when it
+  starts. A compaction before the run is also cancelled.
+- Subagents: `HOST_VERSION` is now 12 (the child handle can report steers
+  still in flight). At the first `/reload` to this version, a session's
+  running children are interrupted and then resumed.
 
 ## 0.41.0 - 2026-11-08
 

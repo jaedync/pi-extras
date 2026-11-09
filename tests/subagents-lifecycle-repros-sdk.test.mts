@@ -21,7 +21,7 @@ function run(script: string, ...args: string[]): Promise<Run> {
 	});
 }
 
-const RUNS = [["repro-f1.mts"], ["repro-f1.mts", "--no-stop"], ["repro-f2.mts"], ["repro-f2.mts", "--no-message"], ["repro-f3.mts"],
+const RUNS = [["repro-f1.mts"], ["repro-f1.mts", "--no-stop"], ["repro-f2.mts"], ["repro-f2.mts", "--no-message"], ["repro-f2.mts", "--late"], ["repro-f3.mts"],
 	["repro-f3.mts", "--no-message"], ["repro-f4.mts"], ["repro-f4-byparent.mts"], ["repro-f4-byparent.mts", "--alone"], ["repro-f5.mts"], ["repro-f5.mts", "--no-hold"]];
 const runs = new Map(RUNS.map((args) => [args.join(" "), run(args[0]!, ...args.slice(1))]));
 
@@ -44,6 +44,13 @@ test("F2: a message during a stop's abort of a preparing prompt leaves the old s
 	assert.equal(result.oldSessionModelCalls, 0);
 	assert.equal(result.launches, 2, "the message still relaunched the child");
 	assert.equal((await repro("repro-f2.mts", "--no-message")).oldSessionModelCalls, 0);
+});
+
+test("F2: when the hook waits past GATE_WAIT_MS, the stop and the dispose go on, and the old run still makes no model call", { timeout: 100_000 }, async () => {
+	const result = await repro("repro-f2.mts", "--late");
+	assert.equal(result.stopReturnedEarly, true, "the stop's wait is bounded");
+	assert.equal(result.oldSessionDisposedBeforeRun, true, "the dispose's wait is bounded");
+	assert.equal(result.oldSessionModelCalls, 0);
 });
 
 test("F3: a second stop of a child that a message relaunched during the first stop is not refused", { timeout: 100_000 }, async () => {

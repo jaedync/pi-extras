@@ -726,6 +726,9 @@ export class Team implements HostTeam {
 			if (next !== null && this.swapBefore(name, next)) return false;
 			if (next !== null || this.waitsFor(name)) continue;
 			const fix = await this.checks.run(name, handle);
+			// Mail steered during the check may still wait in the child's input handlers; it lands before late() looks.
+			const landing = handle.steering?.();
+			if (landing) await landing;
 			if (this.gone(name, launch)) return false;
 			if (this.wrapUps.active(name)) return this.wrapUps.finish(name, handle, () => this.gone(name, launch));
 			// Mail that came during the check goes first, with a fix round's prompt; the check runs again after it.

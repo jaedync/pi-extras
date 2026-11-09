@@ -90,7 +90,7 @@
     {
       "name": "mutant-dispose-no-wait",
       "base": "faithful",
-      "mirrors": "lib/subagents/child.ts childDisposer without `await gate.abort()` before session.dispose(), as at HEAD (finding F2)",
+      "mirrors": "lib/subagents/child.ts childDisposer without `await gate.shut()` before session.dispose(), as at f194608 (finding F2)",
       "replace": [
         {
           "from": "pure val DISPOSE_WAITS = true",
@@ -294,7 +294,7 @@
     {
       "name": "mutant-finish-keeps-waiters",
       "base": "faithful",
-      "mirrors": "lib/subagents/team.ts:931 without `this.settleWaiters(name, record)`",
+      "mirrors": "lib/subagents/team.ts:934 without `this.settleWaiters(name, record)`",
       "replace": [
         {
           "from": "      waiters: x.waiters.exclude(Set(c)),\n      wrongSilence:",
@@ -336,7 +336,7 @@
     {
       "name": "mutant-fallback-keeps-session",
       "base": "faithful",
-      "mirrors": "lib/subagents/team.ts:832 without `this.sessions.release(name)` in failOrFallBack",
+      "mirrors": "lib/subagents/team.ts:835 without `this.sessions.release(name)` in failOrFallBack",
       "replace": [
         {
           "from": "      val z = release({",
@@ -354,7 +354,7 @@
     {
       "name": "mutant-late-skips-queue",
       "base": "faithful",
-      "mirrors": "lib/subagents/team.ts:800 without `handle.takeQueued()`: steering that came too late stays in the Pi queue",
+      "mirrors": "lib/subagents/team.ts:803 without `handle.takeQueued()`: steering that came too late stays in the Pi queue",
       "replace": [
         {
           "from": "val late = x.sq.get(c) + x.sqCopy.get(c) + x.oq.get(c) + x.inbox.get(c)",
@@ -386,7 +386,7 @@
     {
       "name": "mutant-settle-skips-finish",
       "base": "faithful",
-      "mirrors": "lib/subagents/team.ts:876 without `this.finish(name)`: the run ends idle and hands no report up",
+      "mirrors": "lib/subagents/team.ts:879 without `this.finish(name)`: the run ends idle and hands no report up",
       "replace": [
         {
           "from": "    finish({ ...x, state: x.state.set(c, \"idle\"), sp:",

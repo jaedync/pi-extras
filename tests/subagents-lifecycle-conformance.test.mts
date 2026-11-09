@@ -147,6 +147,7 @@ function makeWorld() {
 			},
 			steer: (text) => gate.steer(text),
 			abort: () => gate.abort(),
+			steering: () => gate.steering(),
 			lastText: () => undefined,
 			messages: () => transcripts.get(session.c)!,
 			// child.ts takeQueued: what is left in Pi's queue.
