@@ -5,14 +5,21 @@
  *
  * Each resend that fails again adds a reply to the chat, so the wait does not resend on a timer:
  * it checks the server with a cheap GET <baseUrl>/models and sends the request again only when
- * the server answers, or after FALLBACK_RESEND_MS in case the check itself is what fails.
+ * the server answers, or after FALLBACK_RESEND_MS in case the check itself is what fails. A
+ * server that replies "not ready" shows that the check works, so that reply starts the timer again:
+ * Kiln off for the night is one wait, not a failed resend every 10 min.
  */
 import { isIP } from "node:net";
 
 export interface LocalTarget { readonly baseUrl: string }
 /** Read per failure, so a config change applies at the next one. */
 export interface LocalPolicy { readonly enabled: boolean; readonly providers: readonly string[] }
-export type Probe = (baseUrl: string, signal: AbortSignal) => Promise<boolean>;
+/**
+ * true: the server answers. "not-ready": the server replied that it cannot take requests now
+ * (502, 503, 504, a model list with no model, a refused connection). false: no reply came.
+ */
+export type ProbeResult = boolean | "not-ready";
+export type Probe = (baseUrl: string, signal: AbortSignal) => Promise<ProbeResult>;
 type ModelLike = { readonly provider?: string; readonly baseUrl?: string; readonly cost?: unknown };
 
 export const LOCAL_MAX_DELAY_MS = 30_000;
@@ -117,11 +124,23 @@ async function readAtMost(response: Response, limit: number): Promise<string | u
 	return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
+type CodedError = { readonly code?: unknown; readonly errors?: unknown; readonly cause?: unknown };
+
+// Node's fetch wraps the socket error in `cause`; a dual-stack connect wraps one per address in `errors`.
+function refused(error: unknown, depth = 0): boolean {
+	if (!error || typeof error !== "object" || depth > 3) return false;
+	const e = error as CodedError;
+	if (Array.isArray(e.errors) && e.errors.length > 0) return e.errors.every((inner) => refused(inner, depth + 1));
+	if (e.code === "ECONNREFUSED") return true;
+	return refused(e.cause, depth + 1);
+}
+
 /**
- * True when the server answers: any HTTP reply except 502, 503 and 504, and except a model list
- * with no model in it. No custom header and no credential is sent.
+ * true when the server answers: any HTTP reply except 502, 503 and 504, and except a model list
+ * with no model in it. Those replies and a refused connection are "not-ready"; a timeout or another
+ * network failure is false. No custom header and no credential is sent.
  */
-export async function probeServer(baseUrl: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+export async function probeServer(baseUrl: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<ProbeResult> {
 	const url = modelsUrl(baseUrl);
 	if (!url) return false;
 	try {
@@ -129,11 +148,11 @@ export async function probeServer(baseUrl: string, signal: AbortSignal, fetchImp
 		const response = await fetchImpl(url, { method: "GET", redirect: "manual", signal: AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) });
 		if (DOWN_STATUS.has(response.status)) {
 			await response.body?.cancel().catch(() => {});
-			return false;
+			return "not-ready";
 		}
-		return !(await listsNoModel(response));
-	} catch {
-		return false;
+		return (await listsNoModel(response)) ? "not-ready" : true;
+	} catch (error) {
+		return refused(error) ? "not-ready" : false;
 	}
 }
 
@@ -144,27 +163,32 @@ export interface UntilAnswering {
 	readonly now: () => number;
 	readonly wait: (ms: number, signal: AbortSignal, tick: () => void) => Promise<boolean>;
 	/** Undefined when the model has no address to check: then only the fallback resends. */
-	readonly probe?: (signal: AbortSignal) => Promise<boolean>;
+	readonly probe?: (signal: AbortSignal) => Promise<ProbeResult>;
 }
 
 /** How a local wait ended: the server answered, the fallback timer ran out, or it was cancelled. */
 export type LocalWaitEnd = "answered" | "timer" | "cancelled";
 
-/** Waits the backoff delay, then until the server answers or FALLBACK_RESEND_MS passes. */
+/**
+ * Waits the backoff delay, then until the server answers or FALLBACK_RESEND_MS passes with no
+ * "not-ready" reply: each such reply proves the check works, so it starts the timer again.
+ */
 export async function waitUntilAnswering(o: UntilAnswering): Promise<LocalWaitEnd> {
 	if (!(await o.wait(o.delayMs, o.signal, o.tick))) return "cancelled";
-	const start = o.now();
+	let since = o.now();
 	for (;;) {
 		if (o.signal.aborted) return "cancelled";
-		if (o.probe && (await probeWithTicks(o))) return o.signal.aborted ? "cancelled" : "answered";
+		const result = o.probe ? await probeWithTicks(o) : false;
 		if (o.signal.aborted) return "cancelled";
-		if (o.now() - start >= FALLBACK_RESEND_MS) return "timer";
+		if (result === true) return "answered";
+		if (result === "not-ready") since = o.now();
+		if (o.now() - since >= FALLBACK_RESEND_MS) return "timer";
 		if (!(await o.wait(PROBE_INTERVAL_MS, o.signal, o.tick))) return "cancelled";
 	}
 }
 
 // The live line keeps counting while a check waits for its 5 s timeout.
-async function probeWithTicks(o: UntilAnswering): Promise<boolean> {
+async function probeWithTicks(o: UntilAnswering): Promise<ProbeResult> {
 	const interval = setInterval(() => { try { o.tick(); } catch { /* the wait's own tick reports UI faults */ } }, 1000);
 	try { return await o.probe!(o.signal); }
 	finally { clearInterval(interval); }

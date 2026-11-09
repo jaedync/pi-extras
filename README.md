@@ -1199,10 +1199,13 @@ report, and you can type. The extension waits 2 to 30 s, then checks the server
 with `GET <baseUrl>/models` every 10 s. The server answers when it sends any HTTP
 reply other than 502, 503 or 504, and is not a model list with no model in it: a
 gateway whose engine is stopped (Kiln) answers `200 {"data": []}`. The check does
-not follow a redirect. When the server answers, or after 10 min if the check never
-answers, a short message ("… answers again. Continue the task …") starts the run
-again; after the 10 min timer, the message says that the server still does not
-answer. Only the last of these messages stays in the model's context. One line
+not follow a redirect. When the server answers, a short message ("… answers
+again. Continue the task …") starts the run again. A reply that says "not ready"
+(502, 503, 504, an empty model list, or a refused connection) shows that the check
+works, so the wait goes on with no resend: Kiln off for the night is one wait,
+not a failed request every 10 min. Only when the check gets no reply at all
+(a timeout) for 10 min does the request go again, with a message that says the
+server still does not answer. Only the last of these messages stays in the model's context. One line
 below the chat shows the wait, for example
 `fw01/qwen3.8-flash-next not answering for 4m10s · local server, checked every
 10 s · Esc / Ctrl+C cancels`. Esc or Ctrl+C ends the wait when the editor is
@@ -1214,8 +1217,8 @@ and keeps its start time. A model switch starts the run at once with the new
 model. The open wait is saved in the session. It goes on after a reload, and
 after an update restart or `pi --continue` within 10 min of the old process
 stopping. It does not go on in a fork or a new session. A server whose `/models`
-lists no model while chat works (rare) is sent the request again only by the
-10 min timer.
+lists no model while chat works (rare) waits until you send a message or press
+Esc.
 
 The wait has no limit only where it can end well:
 

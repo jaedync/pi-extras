@@ -5,7 +5,7 @@
  * update restart picks it up where it stopped.
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { waitUntilAnswering, type LocalWaitEnd } from "./local.ts";
+import { waitUntilAnswering, type LocalWaitEnd, type Probe } from "./local.ts";
 import type { Wait } from "./wait.ts";
 
 /** The custom message that starts the run again; before_agent_start keeps the outage for it. */
@@ -43,7 +43,7 @@ export interface IdleWaitDeps {
 	/** Starts the run again: pi.sendMessage(..., { triggerTurn: true }). */
 	readonly resume: (content: string, details: LocalWaitEntry) => void;
 	readonly record: (entry: LocalWaitEntry) => void;
-	readonly probe: (baseUrl: string, signal: AbortSignal) => Promise<boolean>;
+	readonly probe: Probe;
 	readonly wait: Wait;
 	readonly now: () => number;
 	readonly ui?: (ctx: ExtensionContext, who: string, sinceMs: number, cancel: () => void) => Ui;

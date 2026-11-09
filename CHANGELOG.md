@@ -2,6 +2,16 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Rate Limit Recovery: a local server that replies "not ready" (502, 503,
+  504, an empty model list, or a refused connection) is now one quiet wait.
+  Before, the 10 min fallback timer sent the request again anyway, so Kiln off
+  for the night added a failed request and a resume message to the chat every
+  10 min. The timer now runs only while the check gets no reply.
+
 ## 0.40.0 - 2026-11-05
 
 ### Added

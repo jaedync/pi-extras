@@ -45,12 +45,12 @@ test("a provider is local only when the model is free and its server is not publ
 	assert.deepEqual(localTarget(model("lab", "https://lab.example.com/v1", PAID), ["lab"]), { baseUrl: "https://lab.example.com/v1" });
 });
 
-test("the server counts as answering for any HTTP reply except 502, 503 and 504", async () => {
+test("the server counts as answering for any HTTP reply except 502, 503 and 504, which say not ready", async () => {
 	const calls: Array<{ url: string; redirect?: string }> = [];
 	const reply = (status: number) => (async (url: string, init?: RequestInit) => { calls.push({ url, redirect: init?.redirect }); return new Response(null, { status }); }) as typeof fetch;
 	const signal = new AbortController().signal;
 	for (const status of [200, 301, 401, 404, 500, 501]) assert.equal(await probeServer("http://fw01:8080/v1", signal, reply(status)), true, String(status));
-	for (const status of [502, 503, 504]) assert.equal(await probeServer("http://fw01:8080/v1", signal, reply(status)), false, String(status));
+	for (const status of [502, 503, 504]) assert.equal(await probeServer("http://fw01:8080/v1", signal, reply(status)), "not-ready", String(status));
 	assert.equal(await probeServer("http://fw01:8080/v1", signal, (async () => { throw new TypeError("fetch failed"); }) as typeof fetch), false);
 	assert.ok(calls.every((c) => c.url === "http://fw01:8080/v1/models" && c.redirect === "manual"), "no redirect is followed");
 	assert.equal(modelsUrl("http://fw01:8080/v1/"), "http://fw01:8080/v1/models");
@@ -82,6 +82,46 @@ test("the wait loop sends the request again after 10 min even when the check nev
 	assert.equal(done, "timer");
 	assert.ok(clock >= FALLBACK_RESEND_MS && clock < FALLBACK_RESEND_MS + PROBE_INTERVAL_MS + 5_000, String(clock));
 	assert.ok(probes >= 59, String(probes));
+});
+
+test("a refused connection is not ready; a timeout or another network failure is no reply", async () => {
+	const signal = new AbortController().signal;
+	const failing = (error: unknown) => (async () => { throw error; }) as typeof fetch;
+	const coded = (code: string) => Object.assign(new Error(code), { code });
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, failing(new TypeError("fetch failed", { cause: coded("ECONNREFUSED") }))), "not-ready");
+	// Dual-stack connect: every address refused.
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, failing(new TypeError("fetch failed", { cause: new AggregateError([coded("ECONNREFUSED"), coded("ECONNREFUSED")]) }))), "not-ready");
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, failing(new TypeError("fetch failed", { cause: new AggregateError([coded("ECONNREFUSED"), coded("ETIMEDOUT")]) }))), false);
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, failing(new TypeError("fetch failed", { cause: coded("EHOSTUNREACH") }))), false);
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, failing(new DOMException("timed out", "TimeoutError"))), false);
+});
+
+test("a server that keeps replying not ready is one wait with no resend: Kiln off for the night", async () => {
+	const controller = new AbortController();
+	let clock = 0;
+	let probes = 0;
+	const night = 16 * 3600_000;
+	const done = await waitUntilAnswering({
+		delayMs: 5_000, signal: controller.signal, tick: () => {}, now: () => clock,
+		wait: async (ms) => { clock += ms; if (clock >= night) controller.abort(); return !controller.signal.aborted; },
+		probe: async () => { probes++; return "not-ready"; },
+	});
+	assert.equal(done, "cancelled");
+	assert.ok(clock >= night, String(clock));
+	assert.ok(probes > 5_000, String(probes));
+});
+
+test("the 10 min timer counts from the last not-ready reply", async () => {
+	let clock = 0;
+	let lastNotReady = 0;
+	// Not ready for 30 min, then no reply at all (the host went off the network).
+	const done = await waitUntilAnswering({
+		delayMs: 5_000, signal: new AbortController().signal, tick: () => {}, now: () => clock,
+		wait: async (ms) => { clock += ms; return true; },
+		probe: async () => { if (clock < 30 * 60_000) { lastNotReady = clock; return "not-ready"; } return false; },
+	});
+	assert.equal(done, "timer");
+	assert.ok(clock - lastNotReady >= FALLBACK_RESEND_MS && clock - lastNotReady < FALLBACK_RESEND_MS + PROBE_INTERVAL_MS, String(clock - lastNotReady));
 });
 
 test("the wait loop stops at once when the wait is cancelled", async () => {
@@ -304,7 +344,7 @@ test("a server that lists no model is not ready: an engine that is stopped behin
 	const reply = (status: number, body: string, type = "application/json") => (async () => new Response(body, { status, headers: { "content-type": type } })) as typeof fetch;
 	const signal = new AbortController().signal;
 	// Kiln with its engine stopped: /v1/models is 200 with an empty list, chat is 503.
-	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(200, '{"object": "list", "data": []}')), false);
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(200, '{"object": "list", "data": []}')), "not-ready");
 	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(200, '{"object":"list","data":[{"id":"qwen3.8-flash-next"}]}')), true);
 	// A model list under another alias still counts: only an empty list says "not ready".
 	assert.equal(await probeServer("http://fw01:8000/v1", signal, reply(200, '{"data":[{"id":"model.gguf"}]}')), true);
@@ -324,5 +364,5 @@ test("a chunked model list is read only up to the limit: a long list is not an e
 	assert.equal(await probeServer("http://fw01:8000/v1", signal, chunked(big)), true);
 	assert.ok(pulled < big.length, "the read stops at the limit");
 	pulled = 0;
-	assert.equal(await probeServer("http://fw01:8000/v1", signal, chunked(['{"object":"list",', '"data":[]}'])), false);
+	assert.equal(await probeServer("http://fw01:8000/v1", signal, chunked(['{"object":"list",', '"data":[]}'])), "not-ready");
 });
