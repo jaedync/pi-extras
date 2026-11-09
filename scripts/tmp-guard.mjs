@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { TEST_TRANSFORM_CACHE } from '../tests/support/transform-cache.mjs';
 
 const SHOWN = 20;
 // The run folder is a short sibling of the run home: macOS limits a Unix socket path to 103 bytes, and voice tests
@@ -22,10 +23,17 @@ export const SHARED_CACHES = ['jiti', 'node-compile-cache'];
 const IGNORED = [...SHARED_CACHES, 'jiti-esm'];
 const CACHE_ROOT = fileURLToPath(new URL('../node_modules/.cache/', import.meta.url));
 
+// jiti uses the cache that the smoke and codemode SDK tests link (tests/support/transform-cache.mjs): one warm cache,
+// named by the Pi and jiti versions, serves the whole suite.
+function cacheTarget(name, cacheRoot) {
+  if (name === 'jiti' && cacheRoot === CACHE_ROOT) return TEST_TRANSFORM_CACHE;
+  return join(cacheRoot, `pi-extras-test-${name}`);
+}
+
 export function runTmpDir(base = tmpdir(), cacheRoot = CACHE_ROOT) {
   const dir = mkdtempSync(join(base, RUN_PREFIX));
   for (const name of SHARED_CACHES) {
-    const target = join(cacheRoot, `pi-extras-test-${name}`);
+    const target = cacheTarget(name, cacheRoot);
     mkdirSync(target, { recursive: true });
     // A junction needs no admin rights on Windows; other systems ignore the type.
     symlinkSync(target, join(dir, name), 'junction');

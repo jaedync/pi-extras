@@ -59,3 +59,10 @@ test('the run folder links each shared cache to a folder that outlives the run',
   rmSync(run, { recursive: true, force: true });
   for (const name of SHARED_CACHES) assert.ok(lstatSync(join(base, 'cache', `pi-extras-test-${name}`)).isDirectory(), `${name} survives the run`);
 });
+
+test("the run folder's jiti links to the transform cache of the smoke and SDK tests, so one cache serves both", async (t) => {
+  const { TEST_TRANSFORM_CACHE } = await import('./support/transform-cache.mjs');
+  const run = runTmpDir(scratch(t));
+  assert.equal(readlinkSync(join(run, 'jiti')).replace(/[/\\]$/, ''), TEST_TRANSFORM_CACHE.replace(/[/\\]$/, ''));
+  assert.match(readlinkSync(join(run, 'node-compile-cache')), /pi-extras-test-node-compile-cache[/\\]?$/);
+});
