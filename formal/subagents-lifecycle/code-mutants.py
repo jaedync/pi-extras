@@ -22,6 +22,8 @@ M = [
  ("settle-skips-finish", "lib/subagents/team.ts", "this.patch(name, { state: \"idle\", endedAt: this.now(), activity: null, report, unread: undefined });\n\t\tthis.finish(name);", "this.patch(name, { state: \"idle\", endedAt: this.now(), activity: null, report, unread: undefined });\n\t\tthis.pump();"),
  ("stop-no-ending-guard", "lib/subagents/team.ts", "if (!record || this.ending.has(name) || (!LIVE_STATES", "if (!record || (!LIVE_STATES"),
  ("pump-starts-any", "lib/subagents/slots.ts", "if (record?.state !== \"queued\") { this.dropGoOn(name); continue; }", ""),
+ ("stop-relaunch-ignores-state", "lib/subagents/team.ts", "if (this.launches.get(name) !== launch || this.records.get(name)?.state !== \"stopped\") {", "if (this.launches.get(name) !== launch) {"),
+ ("open-no-dispose", "lib/subagents/team.ts", "if (this.gone(name, launch)) {\n\t\t\tawait handle.dispose();\n\t\t\treturn null;", "if (this.gone(name, launch)) {\n\t\t\treturn null;"),
 ]
 only = sys.argv[2:] 
 out = []

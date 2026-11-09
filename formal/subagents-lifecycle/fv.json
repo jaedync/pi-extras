@@ -53,7 +53,7 @@
     },
     {
       "name": "faithful-other-properties",
-      "why": "Pi as it is: the properties that no finding breaks hold.",
+      "why": "Pi as it is, with a steer that is queued at once (synchronous input handlers): the properties that no finding breaks hold. F5 breaks mailKept when steer awaits input handlers.",
       "invariants": [
         "oneReport",
         "waitersSettle",
@@ -62,7 +62,23 @@
         "mailKept",
         "oneSession"
       ],
-      "expect": "pass"
+      "expect": "pass",
+      "replace": [
+        {
+          "from": "pure val STEER_WINDOW = true",
+          "to": "pure val STEER_WINDOW = false"
+        }
+      ]
+    },
+    {
+      "name": "faithful-mail",
+      "why": "Pi as it is: a steer that waits for the input handlers is lost (F5).",
+      "invariants": [
+        "mailKept"
+      ],
+      "expect": {
+        "violates": "mailKept"
+      }
     },
     {
       "name": "f2-dispose-in-prep",
@@ -71,6 +87,10 @@
         {
           "from": "pure val PRE_WINDOW = true",
           "to": "pure val PRE_WINDOW = false"
+        },
+        {
+          "from": "pure val STEER_WINDOW = true",
+          "to": "pure val STEER_WINDOW = false"
         }
       ],
       "expect": {
@@ -88,6 +108,10 @@
         {
           "from": "pure val DISPOSE_STOPS_PREP = false",
           "to": "pure val DISPOSE_STOPS_PREP = true"
+        },
+        {
+          "from": "pure val STEER_WINDOW = true",
+          "to": "pure val STEER_WINDOW = false"
         }
       ],
       "expect": {
@@ -105,6 +129,10 @@
         {
           "from": "pure val DISPOSE_STOPS_PREP = false",
           "to": "pure val DISPOSE_STOPS_PREP = true"
+        },
+        {
+          "from": "pure val STEER_WINDOW = true",
+          "to": "pure val STEER_WINDOW = false"
         }
       ],
       "expect": {
@@ -113,7 +141,7 @@
     },
     {
       "name": "assume-fixes",
-      "why": "Assume the three fixes: Pi stops a prompt in its pre-run window and a disposed preparing prompt (F1, F2), and a stop of a relaunched child is not refused, with the newest stop owning `ending` (F3). Every property holds.",
+      "why": "Assume the three fixes: Pi stops a prompt in its pre-run window and a disposed preparing prompt (F1, F2), and a stop of a relaunched child is not refused, with the newest stop owning `ending` (F3). Every property holds. It also assumes a steer that is queued at once (the F5 fix).",
       "replace": [
         {
           "from": "pure val PRE_WINDOW = true",
@@ -130,9 +158,27 @@
         {
           "from": "if (x.launches.get(c) != l or x.state.get(c) != \"stopped\") pump({ ...x, ending: x.ending.exclude(Set(c)) })",
           "to": "if (x.launches.get(c) != l or x.state.get(c) != \"stopped\") pump(if (x.stops.exists(t => t._1 == c)) x else { ...x, ending: x.ending.exclude(Set(c)) })"
+        },
+        {
+          "from": "pure val STEER_WINDOW = true",
+          "to": "pure val STEER_WINDOW = false"
         }
       ],
       "expect": "pass"
+    },
+    {
+      "name": "f5-steer-window",
+      "why": "Pi fixed for F1 and F2, and the F3 and F4 fixes: a message steered into a running child waits for the input handlers, the run settles first, settle clears `unread`, and the steer lands in an idle session's queue that the quiet-spell release drops (F5, found by the step-9 review).",
+      "base": "assume-fixes",
+      "replace": [
+        {
+          "from": "pure val STEER_WINDOW = false",
+          "to": "pure val STEER_WINDOW = true"
+        }
+      ],
+      "expect": {
+        "violates": "mailKept"
+      }
     },
     {
       "name": "mutant-stop-keeps-launch",
@@ -330,11 +376,11 @@
       "mirrors": "lib/subagents/team.ts:794 without `handle.takeQueued()`: steering that came too late stays in the Pi queue",
       "replace": [
         {
-          "from": "val late = x.sq.get(c) + x.sqCopy.get(c) + x.inbox.get(c)",
+          "from": "val late = x.sq.get(c) + x.sqCopy.get(c) + x.oq.get(c) + x.inbox.get(c)",
           "to": "val late = x.inbox.get(c)"
         },
         {
-          "from": "read: x.read.set(c, x.read.get(c) + x.sq.get(c) + x.inbox.get(c)),\n        dup: x.dup.set(c, x.dup.get(c) + x.sqCopy.get(c)),\n        sq: x.sq.set(c, 0), sqCopy: x.sqCopy.set(c, 0), inbox: x.inbox.set(c, 0),",
+          "from": "read: x.read.set(c, x.read.get(c) + x.sq.get(c) + x.oq.get(c) + x.inbox.get(c)),\n        dup: x.dup.set(c, x.dup.get(c) + x.sqCopy.get(c)),\n        sq: x.sq.set(c, 0), sqCopy: x.sqCopy.set(c, 0), oq: x.oq.set(c, 0), inbox: x.inbox.set(c, 0),",
           "to": "read: x.read.set(c, x.read.get(c) + x.inbox.get(c)),\n        inbox: x.inbox.set(c, 0),"
         }
       ],
@@ -362,8 +408,12 @@
       "mirrors": "lib/subagents/team.ts:870 without `this.finish(name)`: the run ends idle and hands no report up",
       "replace": [
         {
-          "from": "pure def settle(x: World, c: str): World = finish({ ...x, state: x.state.set(c, \"idle\") }, c)",
-          "to": "pure def settle(x: World, c: str): World = pump({ ...x, state: x.state.set(c, \"idle\") })"
+          "from": "    finish({ ...x, state: x.state.set(c, \"idle\"), sp:",
+          "to": "    pump({ ...x, state: x.state.set(c, \"idle\"), sp:"
+        },
+        {
+          "from": "(t._1, t._2, t._3, \"orphan\") else t) }, c)\n",
+          "to": "(t._1, t._2, t._3, \"orphan\") else t) })\n"
         }
       ],
       "expect": {
@@ -386,7 +436,7 @@
     }
   ],
   "traces": {
-    "check": "faithful",
+    "check": "faithful-other-properties",
     "out": "traces.itf.jsonl.gz",
     "n": 200,
     "steps": 40,
@@ -401,7 +451,8 @@
       "witnessNoTwoPrompts",
       "witnessNoStopWait",
       "stopMeansStopped",
-      "stopHonored"
+      "stopHonored",
+      "witnessNoQueuedRelaunchInStop"
     ]
   }
 }

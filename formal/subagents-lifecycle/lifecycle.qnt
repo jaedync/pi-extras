@@ -41,6 +41,12 @@ module lifecycle {
   // agent loop with no listener (probe-pi-abort.mts `dispose`).
   // The variant `dispose-aborts` assumes a fixed Pi where dispose stops it.
   pure val DISPOSE_STOPS_PREP = false
+  // AgentSession.steer awaits the input handlers (_queueUserInput,
+  // agent-session.js:1752-1756) before it queues the message, and child.ts:714
+  // does not await steer. So a steered message is on the record's `unread`
+  // (routing.ts:217-218) before it is in Pi's queue. repro-f5.mts shows it.
+  // The variant `atomic-steer` assumes no such await (synchronous input handlers).
+  pure val STEER_WINDOW = true
 
   pure val LIVE = Set("queued", "starting", "running")   // LIVE_STATES without asking and waiting (left out)
   pure val ACTIVE = Set("starting", "running")            // ACTIVE_STATES, types.ts:14
@@ -69,6 +75,11 @@ module lifecycle {
     stops: Set[(str, int, int)],  // stops that await handle.abort(): (child, stop's launch, session)
     sq: str -> int,               // steered, unread messages in the held session's Pi queue (AgentRecord.unread)
     sqCopy: str -> int,           // the same, after unreadLeft copied them to the inbox
+    // Steers that wait for the input handlers (STEER_WINDOW): (child, session,
+    // id, kind). kind "unread": on the record's `unread`; "copied": unreadLeft
+    // also put it in the inbox; "orphan": settle cleared `unread` (team.ts:869).
+    sp: Set[(str, int, int, str)],
+    oq: str -> int,               // orphan steers that landed in the held session's Pi queue
     // Ghosts: only the properties and witnesses read them.
     sent: str -> int,             // messages main sent to the child
     read: str -> int,             // messages that reached a prompt or the child's transcript
@@ -140,9 +151,10 @@ module lifecycle {
         ...x,
         held: x.held.set(c, 0),
         prompts: x.prompts.map(p => if (p.c == c and p.s == s) disposeOne(p) else p),
-        lost: x.lost + x.sq.get(c),
+        lost: x.lost + x.sq.get(c) + x.oq.get(c),
         sq: x.sq.set(c, 0),
         sqCopy: x.sqCopy.set(c, 0),
+        oq: x.oq.set(c, 0),
       }
     }
 
@@ -153,8 +165,16 @@ module lifecycle {
 
   // Team.unreadLeft (team.ts:892-895, mailbox.ts:37-41): unread steering goes
   // to the inbox; the Pi queue still holds it until the session goes.
-  pure def unreadLeft(x: World, c: str): World =
-    { ...x, inbox: x.inbox.set(c, x.inbox.get(c) + x.sq.get(c)), sqCopy: x.sqCopy.set(c, x.sqCopy.get(c) + x.sq.get(c)), sq: x.sq.set(c, 0) }
+  // A steer that waits is on `unread` too, so it goes to the inbox as well.
+  pure def unreadLeft(x: World, c: str): World = {
+    val pend = x.sp.filter(t => t._1 == c and t._4 == "unread")
+    {
+      ...x,
+      inbox: x.inbox.set(c, x.inbox.get(c) + x.sq.get(c) + pend.size()),
+      sqCopy: x.sqCopy.set(c, x.sqCopy.get(c) + x.sq.get(c)), sq: x.sq.set(c, 0),
+      sp: x.sp.map(t => if (pend.contains(t)) (t._1, t._2, t._3, "copied") else t),
+    }
+  }
 
   // Team.start up to `await opening` (team.ts:591-601): state "starting", a new launch number, launcher.launch.
   pure def start(x: World, c: str): World = {
@@ -228,7 +248,9 @@ module lifecycle {
   }
 
   // Team.settle (team.ts:861-871), no subagents to wait for: idle, then finish.
-  pure def settle(x: World, c: str): World = finish({ ...x, state: x.state.set(c, "idle") }, c)
+  // settle also clears `unread` (team.ts:869): a steer that still waits is then on no record.
+  pure def settle(x: World, c: str): World =
+    finish({ ...x, state: x.state.set(c, "idle"), sp: x.sp.map(t => if (t._1 == c and t._4 == "unread") (t._1, t._2, t._3, "orphan") else t) }, c)
 
   // Team.work after `await handle.prompt` (team.ts:712-729) and run's catch
   // (:696-699). No wrap-up, swap or check in this model. `late` takes the Pi
@@ -238,14 +260,15 @@ module lifecycle {
     else if (outcome == "error") failOrFallBack(x, p.c)
     else {
       val c = p.c
-      val late = x.sq.get(c) + x.sqCopy.get(c) + x.inbox.get(c)
+      // A steer that still waits is not in Pi's queue, so takeQueued misses it.
+      val late = x.sq.get(c) + x.sqCopy.get(c) + x.oq.get(c) + x.inbox.get(c)
       if (late == 0) settle(x, c)
       else {
         ...x,
         prompts: x.prompts.union(Set({ ...p, phase: firstPhase, abortReq: false, disposed: false })),
-        read: x.read.set(c, x.read.get(c) + x.sq.get(c) + x.inbox.get(c)),
+        read: x.read.set(c, x.read.get(c) + x.sq.get(c) + x.oq.get(c) + x.inbox.get(c)),
         dup: x.dup.set(c, x.dup.get(c) + x.sqCopy.get(c)),
-        sq: x.sq.set(c, 0), sqCopy: x.sqCopy.set(c, 0), inbox: x.inbox.set(c, 0),
+        sq: x.sq.set(c, 0), sqCopy: x.sqCopy.set(c, 0), oq: x.oq.set(c, 0), inbox: x.inbox.set(c, 0),
       }
     }
 
@@ -280,7 +303,7 @@ module lifecycle {
       line: ["c1", "c2"], goingOn: Set(), opening: Set(), held: CH.mapBy(_ => 0),
       inbox: CH.mapBy(_ => 0), resume: CH.mapBy(_ => -1), continuing: Set(),
       fallbacksLeft: CH.mapBy(_ => FALLBACKS), prompts: Set(), stops: Set(),
-      sq: CH.mapBy(_ => 0), sqCopy: CH.mapBy(_ => 0),
+      sq: CH.mapBy(_ => 0), sqCopy: CH.mapBy(_ => 0), sp: Set(), oq: CH.mapBy(_ => 0),
       sent: CH.mapBy(_ => 0), read: CH.mapBy(_ => 0), lost: 0, dup: CH.mapBy(_ => 0),
       reported: CH.mapBy(_ => 0), reportsTotal: CH.mapBy(_ => 0), waiters: CH, leaked: false, refusedLive: false,
       msgsLeft: MAX_MSGS, stopsLeft: MAX_STOPS,
@@ -347,9 +370,10 @@ module lifecycle {
   // (team.ts:666, :884-889).
   action piReadsSteer(c: str): bool = all {
     w.held.get(c) != 0,
-    w.sq.get(c) + w.sqCopy.get(c) > 0,
+    w.sq.get(c) + w.sqCopy.get(c) + w.oq.get(c) > 0,
     w.prompts.exists(p => p.c == c and p.s == w.held.get(c) and p.phase == "active" and not(p.abortReq)),
     if (w.sq.get(c) > 0) w' = { ...w, sq: w.sq.set(c, w.sq.get(c) - 1), read: w.read.set(c, w.read.get(c) + 1) }
+    else if (w.oq.get(c) > 0) w' = { ...w, oq: w.oq.set(c, w.oq.get(c) - 1), read: w.read.set(c, w.read.get(c) + 1) }
     else w' = { ...w, sqCopy: w.sqCopy.set(c, w.sqCopy.get(c) - 1), dup: w.dup.set(c, w.dup.get(c) + 1) },
   }
 
@@ -385,7 +409,9 @@ module lifecycle {
     val st = x.state.get(c)
     if (st == "running" and x.held.get(c) != 0)
       // routing.ts:216-220: steered, and kept on the record as unread.
-      w' = { ...x, sq: x.sq.set(c, x.sq.get(c) + 1) }
+      // With STEER_WINDOW, Pi queues it later (steerLands).
+      if (STEER_WINDOW) w' = { ...x, sp: x.sp.union(Set((c, x.held.get(c), w.msgsLeft, "unread"))) }
+      else w' = { ...x, sq: x.sq.set(c, x.sq.get(c) + 1) }
     else {
       val ended = st == "failed" or st == "stopped"
       // routing.ts:231: an ended child's held session goes first.
@@ -409,6 +435,19 @@ module lifecycle {
     },
   }
 
+  // The input handlers of a steer end, and _queueSteer puts it in the queue of
+  // the session it was sent to (agent-session.js:1756-1766). A disposed
+  // session's queue reaches nobody: the message is lost unless the inbox has a copy.
+  action steerLands(t: (str, int, int, str)): bool = all {
+    w.sp.contains(t),
+    val x = { ...w, sp: w.sp.exclude(Set(t)) }
+    val c = t._1
+    if (x.held.get(c) != t._2) w' = (if (t._4 == "copied") x else { ...x, lost: x.lost + 1 })
+    else if (t._4 == "unread") w' = { ...x, sq: x.sq.set(c, x.sq.get(c) + 1) }
+    else if (t._4 == "copied") w' = { ...x, sqCopy: x.sqCopy.set(c, x.sqCopy.get(c) + 1) }
+    else w' = { ...x, oq: x.oq.set(c, x.oq.get(c) + 1) },
+  }
+
   // The quiet-spell timer of an idle child's session (sessions.ts:140-143).
   action idleRelease(c: str): bool = all {
     w.state.get(c) == "idle",
@@ -419,6 +458,7 @@ module lifecycle {
   action step = any {
     nondet c = CH.oneOf()
     any { stop(c), message(c), idleRelease(c), piReadsSteer(c) },
+    all { w.sp != Set(), nondet t = w.sp.oneOf() steerLands(t) },
     all { w.opening != Set(), nondet o = w.opening.oneOf() any { launchDone(o._1, o._2), launchFails(o._1, o._2) } },
     all { w.prompts != Set(), nondet p = w.prompts.oneOf() nondet out = Set("ok", "error", "aborted").oneOf() any { piPrepare(p), piAgentStart(p), piEnds(p, out) } },
   }
@@ -450,7 +490,8 @@ module lifecycle {
   // or read twice, and each one is read, in the inbox, in a resume prompt or
   // in the session's queue (resume-prompts.ts:1-8, mailbox.ts:1-6).
   val mailKept = w.lost == 0 and CH.forall(c => w.dup.get(c) == 0) and CH.forall(c =>
-    w.sent.get(c) == w.read.get(c) + w.inbox.get(c) + (if (w.resume.get(c) < 0) 0 else w.resume.get(c)) + w.sq.get(c))
+    w.sent.get(c) == w.read.get(c) + w.inbox.get(c) + (if (w.resume.get(c) < 0) 0 else w.resume.get(c)) + w.sq.get(c) + w.oq.get(c)
+      + w.sp.filter(t => t._1 == c and t._4 != "copied").size())
 
   // A stopped, stale or released child's session makes no more model calls:
   // each prompt that will still call the model belongs to the current run of a
@@ -479,4 +520,6 @@ module lifecycle {
   val witnessNoCopy = CH.forall(c => w.sqCopy.get(c) == 0)
   val witnessNoTwoPrompts = w.prompts.size() < 2
   val witnessNoStopWait = w.stops == Set()
+  // A stop waits while its child's relaunch waits in line behind a full team (4a8fa14).
+  val witnessNoQueuedRelaunchInStop = not(w.stops.exists(t => w.state.get(t._1) == "queued" and not(free(w))))
 }

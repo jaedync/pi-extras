@@ -251,6 +251,8 @@ function makeWorld() {
 			reportsTotal: per((c) => main.filter((d) => d.kind === "report" && d.record.name === c).length),
 			waiters: sorted([...waiting]),
 			refusedLive,
+			// team.ts:669-672 and sessions.ts:161-166: a session that is not held was disposed.
+			stray: sessions.filter((one) => !one.disposed && heldSession(one.c) !== one).length,
 			msgsLeft: 2 - msgs,
 			stopsLeft: 2 - stopsMade,
 		};
@@ -268,7 +270,7 @@ function modelState(state: Record<string, any>) {
 		opening: sorted(w.opening), held: w.held, inbox: w.inbox, resume: w.resume, continuing: sorted(w.continuing),
 		fallbacksLeft: w.fallbacksLeft, prompts: sorted(w.prompts), stops: sorted(w.stops), sq: w.sq, sqCopy: w.sqCopy,
 		sent: w.sent, readPlusDup: per((c) => w.read[c] + w.dup[c]), lost: w.lost,
-		reportsTotal: w.reportsTotal, waiters: sorted(w.waiters), refusedLive: w.refusedLive, msgsLeft: w.msgsLeft, stopsLeft: w.stopsLeft,
+		reportsTotal: w.reportsTotal, waiters: sorted(w.waiters), refusedLive: w.refusedLive, stray: 0, msgsLeft: w.msgsLeft, stopsLeft: w.stopsLeft,
 	};
 }
 
