@@ -1,7 +1,7 @@
 id: py-noqa
 language: python
 severity: hint
-message: "`# noqa` turns off the linter on this line."
+message: "A blanket `# noqa` turns off every linter check on this line, or ast-grep-ignore hides code from ast-grep."
 note: "Fix the finding, or name the code (`# noqa: E501`) and the reason."
 metadata:
   family: checker-off
@@ -9,4 +9,10 @@ metadata:
   overlap: { ruff: [PGH004, RUF100] }
 rule:
   kind: comment
-  regex: '#\s*noqa'
+  any:
+    # ast-grep-ignore hides a site from the ratchet itself, so it always counts.
+    - regex: 'ast-grep-ignore'
+    # A noqa that names its codes is a decision; a blanket noqa turns off every check on the line.
+    - all:
+        - regex: '#\s*noqa'
+        - not: { regex: '#\s*noqa:\s*[A-Z]+[0-9]+' }

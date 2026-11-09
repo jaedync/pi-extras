@@ -1,5 +1,5 @@
 {
-	"about": "Site counts per ast-grep rule. `slop.mjs ratchet` fails when a count goes up. Lower counts with --update.",
+	"about": "Site counts per ast-grep rule. `slop.mjs ratchet` fails when a count goes up or a rule changes. Lower counts with --update.",
 	"worstFiles": [
 		"lib/shell-jobs-progress.ts: 27",
 		"tests/shell-jobs-extension.test.mts: 24",
@@ -12,6 +12,24 @@
 		"tests/subagents-deliver.test.ts: 14",
 		"tests/walkthrough-signals.test.mjs: 14"
 	],
+	"ruleSet": {
+		"py-except-pass": "917d577d1d70686f",
+		"py-noqa": "27154b5b6f89eaed",
+		"sgconfig.yml": "4acf1fcc07ec06e5",
+		"ts-any-annotation": "2f41def4931daf1f",
+		"ts-as-any": "1e0ff44a20eed6a0",
+		"ts-as-never": "2422e7be828da8db",
+		"ts-catch-only-logs": "4e5b44ec26964847",
+		"ts-catch-returns-default": "773d82cdd64cc74e",
+		"ts-double-cast": "56bd0b82e1a91a0e",
+		"ts-empty-default": "6890da7691e3e097",
+		"ts-error-cast": "e734f09f541df8fb",
+		"ts-lint-disable": "0f35a5be5ddd1223",
+		"ts-non-null-assertion": "71349dce82e10b29",
+		"ts-promise-catch-noop": "568712ae3dcff3f0",
+		"ts-sleep-wait": "224cc1ec0be034f3",
+		"ts-swallowed-catch": "2ef5a8874f6944f1"
+	},
 	"rules": {
 		"py-except-pass": {
 			"count": 7,
@@ -22,11 +40,8 @@
 			}
 		},
 		"py-noqa": {
-			"count": 2,
-			"files": {
-				"lib/link-context/media/helper.py": 1,
-				"skills/walkthrough-video/scripts/voice.py": 1
-			}
+			"count": 0,
+			"files": {}
 		},
 		"ts-any-annotation": {
 			"count": 40,
@@ -281,10 +296,10 @@
 			}
 		},
 		"ts-lint-disable": {
-			"count": 4,
+			"count": 3,
 			"files": {
 				"lib/link-context/host-guard.ts": 1,
-				"skills/ui-redline/scripts/lib/collect.mjs": 2,
+				"skills/ui-redline/scripts/lib/collect.mjs": 1,
 				"skills/walkthrough-video/scripts/lib/instrument.mjs": 1
 			}
 		},
@@ -410,21 +425,22 @@
 			}
 		},
 		"ts-promise-catch-noop": {
-			"count": 67,
+			"count": 73,
 			"files": {
 				"extensions/status-plus.ts": 1,
 				"extensions/subagents.ts": 2,
 				"formal/shell-jobs-delivery/repro-f2.mts": 1,
 				"lib/computer-use/executor.ts": 1,
 				"lib/computer-use/index-guard.ts": 2,
-				"lib/computer-use/session.ts": 1,
-				"lib/gov-search/transport.ts": 1,
+				"lib/computer-use/session.ts": 2,
+				"lib/gov-search/transport.ts": 2,
 				"lib/kagi/http.ts": 1,
 				"lib/link-context/adapters/github.ts": 1,
 				"lib/link-context/adapters/x.ts": 1,
 				"lib/link-context/auto.ts": 2,
 				"lib/link-context/http.ts": 1,
-				"lib/link-context/media/video.ts": 1,
+				"lib/link-context/media/video.ts": 2,
+				"lib/link-context/pull.ts": 1,
 				"lib/rate-limit-recovery/first-event.ts": 1,
 				"lib/rate-limit-recovery/local.ts": 3,
 				"lib/status-plus-limits.ts": 1,
@@ -433,10 +449,10 @@
 				"lib/subagents/tools.ts": 1,
 				"lib/subagents/wrap-up.ts": 1,
 				"lib/tool-display/index.ts": 1,
-				"lib/usage-dollars/collect.ts": 1,
+				"lib/usage-dollars/collect.ts": 2,
 				"lib/voice/session.ts": 1,
 				"skills/ui-redline/scripts/lib/audit.mjs": 1,
-				"skills/ui-redline/scripts/lib/runtime.mjs": 1,
+				"skills/ui-redline/scripts/lib/runtime.mjs": 2,
 				"skills/walkthrough-video/scripts/film/film.mjs": 2,
 				"skills/walkthrough-video/scripts/film/lift.mjs": 2,
 				"skills/walkthrough-video/scripts/film/page-check.mjs": 1,

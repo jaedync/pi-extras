@@ -82,7 +82,9 @@ const atLeast = (a, b) => a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b
 export function findAstGrep(root, env = process.env) {
 	/** @type {string[]} */
 	const tried = [];
-	for (const candidate of candidates(root, env)) {
+	// An explicit $AST_GREP_BIN is the only candidate: a quiet fall back would run a version the user did not pick.
+	const list = env.AST_GREP_BIN ? candidates(root, env).slice(0, 1) : candidates(root, env);
+	for (const candidate of list) {
 		const result = spawnSync(candidate.command, [...candidate.args, "--version"], { encoding: "utf8", timeout: 30_000 });
 		const version = result.status === 0 ? parseVersion(result.stdout) : null;
 		if (!version) { tried.push(`${candidate.source}: ${result.error ? result.error.message : "no version"}`); continue; }
@@ -116,7 +118,9 @@ export function setup(log, env = process.env) {
 export function run(tool, args, cwd) {
 	const result = spawnSync(tool.command, [...tool.args, ...args], { cwd, encoding: "utf8", maxBuffer: MAX_OUTPUT, timeout: 10 * 60_000 });
 	if (result.error) throw new Error(`ast-grep could not run: ${result.error.message}`);
-	return { status: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
+	// A signal (the OOM killer, a crash, the timeout) leaves part of the output: never read it as a result.
+	if (result.signal || result.status === null) throw new Error(`ast-grep scan stopped by ${result.signal ?? "an unknown cause"} before it finished`);
+	return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
 /**
@@ -132,17 +136,31 @@ export function scan(tool, { config, cwd, paths = [], metadata = false }) {
 	const ruleIds = [];
 	/** @type {string[]} */
 	const errors = [];
+	let effectiveRules = -1;
+	let scannedFiles = -1;
 	for (const line of result.stderr.split("\n")) {
 		const rule = /^sg: entity\|rule\|([^:]+):/.exec(line);
+		const ruleSummary = /^sg: summary\|rule: effectiveRuleCount=(\d+)/.exec(line);
+		const fileSummary = /^sg: summary\|file: scannedFileCount=(\d+)/.exec(line);
 		if (rule) ruleIds.push(rule[1]);
+		else if (ruleSummary) effectiveRules = Number(ruleSummary[1]);
+		else if (fileSummary) scannedFiles = Number(fileSummary[1]);
 		else if (line.trim() && !line.startsWith("sg: ")) errors.push(line);
 	}
 	// ast-grep exits 1 when an error-severity rule matched; that is a finding, not a failed run.
 	if (result.status !== 0 && (result.status !== 1 || errors.length)) {
 		throw new Error(`ast-grep scan failed (exit ${result.status}): ${errors.join("\n").trim() || result.stdout.trim()}`);
 	}
-	const findings = result.stdout.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
-	return { ruleIds, findings };
+	// ast-grep prints its summary lines after the scan. Without them, or with a rule list that does not match the
+	// rule count, the output is not a whole scan, and zero findings would read as zero sites.
+	if (effectiveRules < 0 || scannedFiles < 0 || effectiveRules !== ruleIds.length || ruleIds.length === 0) {
+		throw new Error(`ast-grep scan gave incomplete output (rules listed ${ruleIds.length}, rule count ${effectiveRules}, files ${scannedFiles}): ${errors.join("\n").trim()}`);
+	}
+	/** @type {any[]} */
+	const findings = result.stdout.split("\n").filter((line) => line.trim()).map((line) => {
+		try { return JSON.parse(line); } catch { throw new Error(`ast-grep scan gave incomplete output: a line is not JSON: ${line.slice(0, 120)}`); }
+	});
+	return { ruleIds, findings, scannedFiles };
 }
 
 /**

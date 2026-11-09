@@ -15,7 +15,8 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { findAstGrep, scan, setup, testRules } from "./lib/ast-grep.mjs";
 import { measureReport } from "./lib/measure.mjs";
-import { compareCounts, countFindings, nextBaseline, worstFiles } from "./lib/counts.mjs";
+import { changedRules, compareCounts, countFindings, nextBaseline, worstFiles } from "./lib/counts.mjs";
+import { CONFIG_KEY, ruleSetHashes } from "./lib/rule-set.mjs";
 
 const SKILL = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CATALOG = join(SKILL, "catalog");
@@ -34,8 +35,9 @@ const HELP = {
   writes a tsx copy (<id>-tsx) of each TypeScript rule.`,
 	ratchet: `slop ratchet [--config sgconfig.yml] [--dir ${DEFAULT_DIR}] [--update] [--allow-increase] [--no-test] [--json]
   Runs the rule tests, then counts the sites of every rule. Exit 1 when a rule has more sites than
-  <dir>/baseline.json records, or has no recorded count. --update writes the counts; it refuses a higher
-  count unless --allow-increase is given too.`,
+  <dir>/baseline.json records, has no recorded count, or was removed or changed (the baseline keeps a hash of each
+  rule and of sgconfig.yml). --update writes the counts; it refuses a higher count, a removed rule and a changed
+  rule unless --allow-increase is given too.`,
 };
 
 /** @param {string} message @returns {never} */
@@ -161,9 +163,11 @@ function formatRatchet(result, baseline, current, findings) {
 		}
 	}
 	if (result.unrecorded.length) lines.push("", `FAIL no baseline for: ${result.unrecorded.join(", ")}. Run the ratchet with --update to record the counts.`);
-	if (!result.ok) lines.push("", "Fix the new sites. If a site is right, run the ratchet with --update --allow-increase and give the reason in the commit message.");
+	if (result.removed.length) lines.push("", `FAIL removed since the baseline: ${result.removed.join(", ")}. A rule that is gone (deleted, renamed, severity off) no longer guards its sites.`);
+	if (result.changed.length) lines.push("", `FAIL changed since the baseline: ${result.changed.join(", ")}. A changed rule or sgconfig.yml can hide sites.`);
+	if (result.rose.length) lines.push("", "Fix the new sites. If a site is right, run the ratchet with --update --allow-increase and give the reason in the commit message.");
+	if (result.removed.length || result.changed.length) lines.push("", "If the rule change is right, run the ratchet with --update --allow-increase and say in the commit message that the rules changed.");
 	if (result.fell.length) lines.push("", `Fewer sites: ${result.fell.map(({ rule, before, now }) => `${rule} ${before} -> ${now}`).join(", ")}. Run the ratchet with --update to lock the gain.`);
-	if (result.stale.length) lines.push("", `Stale baseline rules (no rule has this id now): ${result.stale.join(", ")}. --update drops them.`);
 	return lines.join("\n");
 }
 
@@ -181,23 +185,31 @@ function ratchet(argv) {
 		if (!tested.ok) { console.error(tested.output); console.error("Rule tests failed: fix the rule or its test cases first."); process.exit(1); }
 		if (!values.json) console.log(`Rule tests: ${tested.passed} passed.`);
 	}
-	const { ruleIds, findings } = scan(ast, { config, cwd: root });
+	const { ruleIds, findings, scannedFiles } = scan(ast, { config, cwd: root });
+	if (scannedFiles === 0) fail(`ast-grep scan gave incomplete output: it read no files under ${root}.`);
 	const current = countFindings(findings, ruleIds);
+	const ruleSet = ruleSetHashes(config);
 	const baselinePath = join(root, values.dir, "baseline.json");
 	const saved = existsSync(baselinePath) ? JSON.parse(readFileSync(baselinePath, "utf8")) : { rules: {} };
 	/** @type {import("./lib/counts.mjs").Counts} */
 	const baseline = saved.rules ?? {};
+	// A baseline from before rule hashes existed cannot show what changed: treat its whole rule set as changed.
+	const changed = saved.ruleSet ? changedRules(saved.ruleSet, ruleSet) : Object.keys(baseline).length ? [CONFIG_KEY] : [];
 	if (values.update) {
-		const next = nextBaseline(baseline, current, { allowIncrease: Boolean(values["allow-increase"]) });
-		if (!next.ok) fail(`Refused: more sites than the baseline for ${next.refused.join(", ")}. Add --allow-increase to accept them.`);
-		const doc = { about: "Site counts per ast-grep rule. `slop.mjs ratchet` fails when a count goes up. Lower counts with --update.",
-			worstFiles: worstFiles(next.baseline, 10).map(({ file, count }) => `${file}: ${count}`), rules: next.baseline };
+		const next = nextBaseline(baseline, current, { allowIncrease: Boolean(values["allow-increase"]), changed });
+		if (!next.ok) {
+			const why = [next.rose.length ? `more sites than the baseline for ${next.rose.join(", ")}` : "",
+				next.removedOrChanged.length ? `rules removed or changed: ${next.removedOrChanged.join(", ")}` : ""].filter(Boolean).join("; ");
+			fail(`Refused: ${why}. Add --allow-increase to accept them.`);
+		}
+		const doc = { about: "Site counts per ast-grep rule. `slop.mjs ratchet` fails when a count goes up or a rule changes. Lower counts with --update.",
+			worstFiles: worstFiles(next.baseline, 10).map(({ file, count }) => `${file}: ${count}`), ruleSet, rules: next.baseline };
 		mkdirSync(dirname(baselinePath), { recursive: true });
 		writeFileSync(baselinePath, `${JSON.stringify(doc, null, "\t")}\n`);
 		console.log(`Wrote ${relative(process.cwd(), baselinePath)}: ${Object.entries(next.baseline).map(([rule, { count }]) => `${rule} ${count}`).join(", ")}`);
 		return;
 	}
-	const result = compareCounts(baseline, current);
+	const result = compareCounts(baseline, current, changed);
 	if (values.json) console.log(JSON.stringify({ ...result, current: Object.fromEntries(Object.entries(current).map(([r, c]) => [r, c.count])) }, null, 2));
 	else console.log(formatRatchet(result, baseline, current, findings));
 	process.exitCode = result.ok ? 0 : 1;

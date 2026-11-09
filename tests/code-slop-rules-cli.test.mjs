@@ -148,3 +148,105 @@ test("setup --check names the ast-grep that the commands use", () => {
 	assert.equal(result.status, 0, result.stderr);
 	assert.match(result.stdout, /^ast-grep 0\.51\.\d+ from \$AST_GREP_BIN/);
 });
+
+// Review findings H1, H2, M1, M4 (2026-11-09): each test below failed before its fix.
+
+/** A stand-in ast-grep: `--version` answers as the real one, every other call runs `body`. @param {string} body */
+function fakeAstGrep(body) {
+	const dir = mkdtempSync(join(tmpdir(), "code-slop-fake-"));
+	temps.push(dir);
+	const path = join(dir, "ast-grep");
+	writeFileSync(path, `#!/bin/sh\nif [ "$1" = "--version" ]; then exec "${tool.command}" --version; fi\n${body}\n`, { mode: 0o755 });
+	return path;
+}
+
+/** @param {string} dir */
+function adoptedRepo(dir) {
+	put(dir, "src/a.ts", "export function f() {\n  try { g(); } catch {}\n  try { g(); } catch {}\n}\n");
+	assert.equal(slop(dir, "adopt", "ts-swallowed-catch", "ts-lint-disable").status, 0);
+	assert.equal(slop(dir, "ratchet", "--update").status, 0);
+}
+
+test("ratchet: a scan that a signal stops, or that prints nothing, is an error and never a pass", () => {
+	const dir = repo();
+	adoptedRepo(dir);
+	const before = readFileSync(join(dir, "lint/slop/baseline.json"), "utf8");
+	const killed = fakeAstGrep(`"${tool.command}" "$@" | head -n 1; kill -KILL $$`);
+	const empty = fakeAstGrep("exit 0");
+	// Whole output, then a signal: only the signal tells that the run did not end well.
+	const killedAfter = fakeAstGrep(`"${tool.command}" "$@"; kill -KILL $$`);
+	for (const fake of [killed, empty, killedAfter]) {
+		for (const args of [["ratchet", "--no-test"], ["ratchet", "--no-test", "--update"]]) {
+			const result = spawnSync(process.execPath, [CLI, ...args], { cwd: dir, env: { ...env, AST_GREP_BIN: fake }, encoding: "utf8" });
+			assert.equal(result.status, 2, `${fake} ${args.join(" ")}: ${result.stdout}${result.stderr}`);
+			assert.match(result.stderr, /ast-grep scan (failed|stopped|gave incomplete output)/);
+		}
+	}
+	assert.equal(readFileSync(join(dir, "lint/slop/baseline.json"), "utf8"), before, "a failed scan writes no baseline");
+});
+
+test("ratchet: an ast-grep-ignore comment that hides a new site is itself a new site", () => {
+	const dir = repo();
+	adoptedRepo(dir);
+	put(dir, "src/b.ts", "export function h() {\n  // ast-grep-ignore\n  try { g(); } catch {}\n}\n");
+	const result = slop(dir, "ratchet");
+	assert.equal(result.status, 1, result.stdout);
+	assert.match(result.stdout, /FAIL ts-lint-disable: 0 -> 1 sites/);
+});
+
+test("ratchet: a removed, renamed or changed rule fails, and --update accepts it only with --allow-increase", () => {
+	const dir = repo();
+	adoptedRepo(dir);
+	const rule = join(dir, "lint/slop/rules/ts-swallowed-catch.yml");
+	const text = readFileSync(rule, "utf8");
+
+	writeFileSync(rule, text.replace(/^(severity: .*)$/m, "$1\nfiles: ['nothing/**']"));
+	const narrowed = slop(dir, "ratchet");
+	assert.equal(narrowed.status, 1, narrowed.stdout);
+	assert.match(narrowed.stdout, /FAIL changed since the baseline: ts-swallowed-catch/);
+	assert.equal(slop(dir, "ratchet", "--update").status, 2, "an update must not accept a changed rule by itself");
+
+	writeFileSync(rule, text.replace(/^id: ts-swallowed-catch$/m, "id: ts-empty-catch"));
+	const renamed = slop(dir, "ratchet", "--no-test");
+	assert.equal(renamed.status, 1);
+	assert.match(renamed.stdout, /FAIL removed since the baseline: ts-swallowed-catch/);
+	const refused = slop(dir, "ratchet", "--update", "--no-test");
+	assert.equal(refused.status, 2);
+	assert.match(refused.stderr, /removed or changed: ts-swallowed-catch/);
+
+	rmSync(rule);
+	assert.equal(slop(dir, "ratchet", "--no-test").status, 1, "a deleted rule fails");
+	assert.equal(slop(dir, "ratchet", "--update", "--allow-increase", "--no-test").status, 0);
+	assert.equal(slop(dir, "ratchet", "--no-test").status, 0);
+});
+
+test("ratchet: a change to sgconfig.yml (for example a narrower languageGlobs) fails as a changed rule set", () => {
+	const dir = repo();
+	adoptedRepo(dir);
+	const config = join(dir, "sgconfig.yml");
+	writeFileSync(config, readFileSync(config, "utf8").replace("'*.mjs', ", ""));
+	const result = slop(dir, "ratchet");
+	assert.equal(result.status, 1);
+	assert.match(result.stdout, /FAIL changed since the baseline: sgconfig\.yml/);
+});
+
+test("measure: a fix commit to a file whose name git quotes still counts", () => {
+	const dir = repo();
+	put(dir, "café.ts", "try { g(); } catch {}\n");
+	put(dir, "a b.ts", "try { g(); } catch {}\n");
+	git(dir, "add", ".");
+	git(dir, "commit", "-qm", "feat: start");
+	put(dir, "café.ts", "try { g(); } catch (e) { report(e); }\n");
+	put(dir, "a b.ts", "try { g(); } catch (e) { report(e); }\n");
+	git(dir, "commit", "-qam", "fix: report both failures");
+	const json = join(dir, "measure.json");
+	assert.equal(slop(dir, "measure", "--json", json).status, 0);
+	const rule = JSON.parse(readFileSync(json, "utf8")).rules.find((/** @type {any} */ r) => r.id === "ts-swallowed-catch");
+	assert.equal(rule.fixes.sitesRemoved, 2);
+});
+
+test("an AST_GREP_BIN that does not work is an error, not a quiet fall back to another ast-grep", () => {
+	const found = findAstGrep(ROOT, { ...process.env, AST_GREP_BIN: "/nonexistent/ast-grep" });
+	assert.equal(found.tool, null);
+	assert.match(found.error, /\$AST_GREP_BIN/);
+});

@@ -35,7 +35,7 @@ takes `--help`. Run the commands from the repository root.
 | `slop setup [--check]` | Finds ast-grep: `$AST_GREP_BIN`, the repository's `node_modules`, `~/.cache/pi-code-slop-rules`, then `PATH`. Without one, it installs the pinned `@ast-grep/cli` into the cache. `--check` only reports. |
 | `slop measure [paths...]` | Runs every catalog rule (`catalog/`), counts sites in source and in tests apart, scans each file of the last 300 fix commits before and after the fix, reads the linters' rule state, and prints a table with a verdict for each rule. `--json <file>` keeps the full data. `--samples <n>` sets the number of sample sites for each rule. |
 | `slop adopt <rule-id...>` | Copies catalog rules into `lint/slop/rules` and their tests into `lint/slop/rule-tests`, and writes `sgconfig.yml` when it is missing. `--exclude-tests a,b` makes the named rules skip test files. `--tsx` adds a tsx copy of each TypeScript rule. |
-| `slop ratchet` | Runs the rule tests, counts the sites of each rule, and compares the counts with `lint/slop/baseline.json`. Exit 1 when a count is higher, or a rule has no recorded count. The output names each new site with file and line. `--update` writes the counts; it refuses a higher count unless you also give `--allow-increase`. |
+| `slop ratchet` | Runs the rule tests, counts the sites of each rule, and compares the counts with `lint/slop/baseline.json`. Exit 1 when a count is higher, a rule has no recorded count, or a rule or `sgconfig.yml` was removed or changed since the baseline (the baseline keeps a hash of each). The output names each file that rose with its sites. Exit 2 when the scan did not finish (a signal, a missing summary, output that is not JSON). `--update` writes the counts; it refuses a higher count, a removed rule and a changed rule unless you also give `--allow-increase`. |
 
 The catalog has TypeScript rules (they also parse `.js` and `.mjs`) and Python rules. Each
 rule has a test file with valid and invalid cases. Each rule's `metadata` gives its family,
@@ -135,10 +135,17 @@ Give:
 - Never use `--allow-increase` to make a check pass without a reason. Put the reason in
   the commit message.
 - When a count goes down, run `slop ratchet --update` in the same commit to lock the gain.
-- A rule change that finds more sites (a wider pattern) needs `--update --allow-increase`
-  and a note in the commit message that the rule changed, not the code.
+- Every rule change (a wider or a narrower pattern, a new `files` or `ignores`, a change to
+  `sgconfig.yml`) fails the ratchet until you run `--update --allow-increase`. Say in the
+  commit message that the rules changed, not the code.
+- A `// ast-grep-ignore` or `# ast-grep-ignore` comment hides the next line from every
+  rule. The `ts-lint-disable` and `py-noqa` rules count these comments, so a hidden site is
+  still a new site. Adopt one of them in each language that the repository has.
 - The ratchet scans the files that git does not ignore. An untracked source file counts on
-  your machine but not in CI.
+  your machine but not in CI. A new `.gitignore` entry can hide files: read such changes in
+  review.
+- A lower count is not locked until you run `--update`. Until then, new sites up to the old
+  count pass.
 
 ## Limits
 

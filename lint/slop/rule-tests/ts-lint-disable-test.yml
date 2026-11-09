@@ -1,7 +1,12 @@
 id: ts-lint-disable
 valid:
   - '// Lint passes here.'
+  - '// eslint-disable-next-line no-control-regex -- the input is a terminal stream'
+  - '/* eslint-disable no-undef -- runs in the page */'
+  - '// biome-ignore lint/suspicious/noExplicitAny: the upstream type is any'
 invalid:
   - '// eslint-disable-next-line no-control-regex'
   - '/* eslint-disable no-undef */'
-  - '// biome-ignore lint/suspicious/noExplicitAny: upstream type'
+  - '// biome-ignore lint/suspicious/noExplicitAny'
+  - '// ast-grep-ignore'
+  - '// ast-grep-ignore: ts-swallowed-catch'

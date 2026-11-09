@@ -4,6 +4,7 @@ severity: hint
 ignores:
   - "tests/**"
   - "test/**"
+  - "spec/**"
   - "**/__tests__/**"
   - "**/*.test.*"
   - "**/*.spec.*"

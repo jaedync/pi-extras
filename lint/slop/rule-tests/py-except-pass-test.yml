@@ -16,3 +16,8 @@ invalid:
         f()
     except Exception:  # best effort
         ...
+  - |
+    try:
+        f()
+    except OSError:
+        pass  # the file can be gone

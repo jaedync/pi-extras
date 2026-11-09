@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { compareCounts, countFindings, nextBaseline, worstFiles } from "../skills/code-slop-rules/scripts/lib/counts.mjs";
+import { changedRules, compareCounts, countFindings, nextBaseline, worstFiles } from "../skills/code-slop-rules/scripts/lib/counts.mjs";
 
 const finding = (ruleId, file) => ({ ruleId, file });
 
@@ -46,27 +46,40 @@ test("compareCounts: a rule with no baseline fails, so a new rule cannot start w
 	assert.deepEqual(result.unrecorded, ["a"]);
 });
 
-test("compareCounts: a baseline rule that the config no longer has is stale, not a failure", () => {
+test("compareCounts: a baseline rule that the config no longer has fails as removed", () => {
 	const result = compareCounts({ gone: { count: 4, files: {} } }, {});
-	assert.equal(result.ok, true);
-	assert.deepEqual(result.stale, ["gone"]);
+	assert.equal(result.ok, false);
+	assert.deepEqual(result.removed, ["gone"]);
+});
+
+test("compareCounts: a changed rule fails even when its count fell", () => {
+	const result = compareCounts({ a: { count: 4, files: {} } }, { a: { count: 0, files: {} } }, ["a"]);
+	assert.equal(result.ok, false);
+	assert.deepEqual(result.changed, ["a"]);
+});
+
+test("changedRules: only keys with a different hash on both sides", () => {
+	assert.deepEqual(changedRules({ a: "1", b: "2", gone: "3" }, { a: "1", b: "9", fresh: "4" }), ["b"]);
 });
 
 test("nextBaseline: lowers counts and records new rules", () => {
 	const baseline = { a: { count: 2, files: { "x.ts": 2 } } };
 	const current = { a: { count: 1, files: { "x.ts": 1 } }, b: { count: 5, files: { "y.ts": 5 } } };
-	assert.deepEqual(nextBaseline(baseline, current, { allowIncrease: false }), { ok: true, baseline: current, refused: [] });
+	assert.deepEqual(nextBaseline(baseline, current, { allowIncrease: false }).baseline, current);
 });
 
 test("nextBaseline: refuses a higher count unless the increase is allowed", () => {
 	const baseline = { a: { count: 1, files: { "x.ts": 1 } } };
 	const current = { a: { count: 2, files: { "x.ts": 2 } } };
-	assert.deepEqual(nextBaseline(baseline, current, { allowIncrease: false }), { ok: false, baseline, refused: ["a"] });
-	assert.deepEqual(nextBaseline(baseline, current, { allowIncrease: true }), { ok: true, baseline: current, refused: [] });
+	assert.deepEqual(nextBaseline(baseline, current, { allowIncrease: false }), { ok: false, baseline, refused: ["a"], rose: ["a"], removedOrChanged: [] });
+	assert.deepEqual(nextBaseline(baseline, current, { allowIncrease: true }).baseline, current);
 });
 
-test("nextBaseline: drops stale rules", () => {
-	assert.deepEqual(nextBaseline({ gone: { count: 1, files: {} } }, {}, { allowIncrease: false }).baseline, {});
+test("nextBaseline: a removed or changed rule needs --allow-increase, then it is dropped or recorded", () => {
+	const baseline = { gone: { count: 1, files: {} }, a: { count: 2, files: {} } };
+	const current = { a: { count: 1, files: {} } };
+	assert.deepEqual(nextBaseline(baseline, current, { allowIncrease: false, changed: ["a"] }).refused, ["a", "gone"]);
+	assert.deepEqual(nextBaseline(baseline, current, { allowIncrease: true, changed: ["a"] }).baseline, current);
 });
 
 test("worstFiles: sums every rule per file and keeps the largest first", () => {

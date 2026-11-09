@@ -1,6 +1,7 @@
 id: py-noqa
 valid:
   - 'x = 1  # no quality issue'
+  - 'import os  # noqa: F401 re-exported for callers'
 invalid:
+  - '# ast-grep-ignore'
   - 'import os  # noqa'
-  - 'import os  # noqa: F401'

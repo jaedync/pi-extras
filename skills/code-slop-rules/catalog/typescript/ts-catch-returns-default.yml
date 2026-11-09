@@ -5,7 +5,7 @@ message: A catch block that only returns an empty value hides the failure from t
 note: The caller cannot tell "no value" from "the call failed". Return a result type, or rethrow.
 metadata:
   family: swallowed-error
-  precision: high
+  precision: medium
   overlap: { eslint: [] }
 rule:
   kind: statement_block

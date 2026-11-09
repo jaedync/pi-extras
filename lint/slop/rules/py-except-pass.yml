@@ -10,4 +10,4 @@ metadata:
 rule:
   kind: block
   inside: { kind: except_clause }
-  regex: '^(pass|\.\.\.)$'
+  regex: '^(pass|\.\.\.)\s*(#[^\n]*)?$'

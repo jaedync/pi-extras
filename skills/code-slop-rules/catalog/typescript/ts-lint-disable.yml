@@ -1,12 +1,21 @@
 id: ts-lint-disable
 language: typescript
 severity: warning
-message: A comment turns off a linter rule.
-note: Fix the finding, or keep the disable and give the reason on the same line.
+message: A comment turns off a linter rule with no reason, or hides code from ast-grep.
+note: "Fix the finding, or give the reason on the same line (`-- reason`). Do not use ast-grep-ignore: it hides a new site from the ratchet."
 metadata:
   family: checker-off
   precision: high
   overlap: { eslint: ['eslint-comments/no-unlimited-disable'] }
 rule:
   kind: comment
-  regex: '(eslint-disable|biome-ignore|oxlint-disable|deno-lint-ignore)'
+  any:
+    # ast-grep-ignore hides a site from the ratchet itself, so it always counts.
+    - regex: 'ast-grep-ignore'
+    # A disable that gives its reason (`-- why` for ESLint and oxlint, `: why` for Biome) is a decision, not slop.
+    - all:
+        - regex: '(eslint-disable|oxlint-disable|deno-lint-ignore)'
+        - not: { regex: '\s--\s+\S' }
+    - all:
+        - regex: 'biome-ignore'
+        - not: { regex: 'biome-ignore\S*\s+[\w/]+:\s*\S' }

@@ -60,8 +60,9 @@ export function readBlobs(root, specs) {
 
 /** @param {string} root @param {string} sha */
 function changedFiles(root, sha) {
-	const out = git(root, ["diff-tree", "--no-commit-id", "-r", "--root", "--no-renames", "--name-only", sha]).toString();
-	return out.split("\n").filter((path) => SOURCE_EXTENSIONS.test(path));
+	// -z: without it, git quotes a path with non-ASCII bytes ("caf\303\251.ts") and cat-file cannot find it.
+	const out = git(root, ["diff-tree", "-z", "--no-commit-id", "-r", "--root", "--no-renames", "--name-only", sha]).toString();
+	return out.split("\0").filter((path) => SOURCE_EXTENSIONS.test(path));
 }
 
 /**

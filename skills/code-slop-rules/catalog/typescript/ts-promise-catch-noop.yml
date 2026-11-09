@@ -7,12 +7,30 @@ metadata:
   family: swallowed-error
   precision: high
   overlap: { eslint: [] }
+utils:
+  noop-handler:
+    any:
+      - kind: arrow_function
+        has:
+          field: body
+          any:
+            - { kind: statement_block, regex: '^\{\s*(//[^\n]*\s*|/\*[\s\S]*?\*/\s*)*(return\s*(undefined|null|void 0)?\s*;?\s*)?\}$' }
+            - { kind: undefined }
+            - { kind: 'null' }
+            - { kind: 'false' }
+            - { kind: unary_expression, regex: '^void 0$' }
+            - { kind: parenthesized_expression, regex: '^\(\s*\{\s*\}\s*\)$' }
+      - kind: function_expression
+        has: { field: body, regex: '^\{\s*(//[^\n]*\s*|/\*[\s\S]*?\*/\s*)*\}$' }
+      - { kind: identifier, regex: '^(noop|ignore|ignoreError|swallow)$' }
 rule:
-  pattern: $P.catch($H)
-  has:
-    field: arguments
-    has:
-      any:
-        - { kind: arrow_function, regex: '^(async\s*)?\(?\s*[\w$]*\s*\)?\s*=>\s*(\{\s*(//[^\n]*\s*|/\*[\s\S]*?\*/\s*)*\}|undefined|null|void 0|false|\(\s*\{\s*\}\s*\))$' }
-        - { kind: function_expression, regex: '\{\s*\}$' }
-        - { kind: identifier, regex: '^(noop|ignore|ignoreError|swallow)$' }
+  kind: call_expression
+  any:
+    # p.catch(noop) and p?.catch(noop)
+    - all:
+        - has: { field: function, kind: member_expression, has: { field: property, regex: '^catch$' } }
+        - has: { field: arguments, has: { nthChild: 1, matches: noop-handler } }
+    # p.then(ok, noop): the second argument is the rejection handler
+    - all:
+        - has: { field: function, kind: member_expression, has: { field: property, regex: '^then$' } }
+        - has: { field: arguments, has: { nthChild: 2, matches: noop-handler } }
