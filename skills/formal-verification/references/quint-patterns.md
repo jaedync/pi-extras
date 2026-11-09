@@ -57,6 +57,11 @@ short.
   new events (a run, its own "settled" event), runs one item at a time.
   Model the items left as state (a list), and let the nested events run
   between items.
+- **One operation can have several entry points.** Find every caller of a
+  platform operation (a key press, an RPC command, an API for plugins), and
+  read what each one does around it. In the pilot, only the key press cleared
+  the queue before an abort; the RPC and plugin aborts kept it, and that gave
+  the shortest path to the bug.
 - **A platform check can be split from its act.** A command that checks a
   condition and then awaits before it acts (a reload that checks "not
   busy", then awaits shutdown handlers) is two actions. Other events can
