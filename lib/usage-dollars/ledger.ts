@@ -39,6 +39,8 @@ export interface SpendLedgerOptions {
 	 * Past it, this process reads the new bytes itself and does not save them.
 	 */
 	lockWaitMs?: number;
+	/** For tests: the heartbeat, commit and adopt intervals, and a call after each file read. */
+	testing?: { heartbeatMs?: number; commitEveryMs?: number; adoptEveryMs?: number; afterFile?: (path: string) => Promise<void> | void };
 }
 
 export interface SpendLedger {
@@ -50,7 +52,7 @@ export interface SpendLedger {
 	models(provider: string, sinceMs: number): string[];
 	/** Work done since this ledger was made: files opened, bytes read, lines parsed. */
 	stats(): ReadStats;
-	/** Why the last refresh could not save the shared index, or undefined when it saved or had nothing new. */
+	/** Why the last save, read, lock or heartbeat of the shared index failed; a refresh that takes the lock clears it. */
 	indexProblem(): string | undefined;
 }
 
@@ -64,6 +66,14 @@ const HEARTBEAT_MS = 2_000;
 /** A long read saves its progress this often, so other processes can use it and a stopped process loses little. */
 const COMMIT_EVERY_MS = 5_000;
 const DEFAULT_LOCK_WAIT_MS = 2_000;
+/** A process that reads without the lock looks this often for the holder's saved progress. */
+const ADOPT_EVERY_MS = 1_000;
+
+/** The index file, and the lock while this process holds it; a lost lock clears `held`. */
+interface Shared {
+	indexFile: string;
+	held?: { lock: FileLock };
+}
 
 const errorText = (error: unknown): string =>
 	error instanceof Error ? ("code" in error && typeof error.code === "string" ? error.code : error.message) : String(error);
@@ -85,7 +95,14 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 
 	/** Take each file's saved state that is further along than this process's own. */
 	async function adoptIndex(indexFile: string, found: ReadonlyMap<string, FileInfo>): Promise<void> {
-		const loaded = await readIndex(indexFile, options.maxAgeMs, indexStamp);
+		let loaded;
+		try {
+			loaded = await readIndex(indexFile, options.maxAgeMs, indexStamp);
+		} catch (error) {
+			// A handle that would not close: the records this process has stay, and the report names the reason.
+			saveError = errorText(error);
+			return;
+		}
 		if (loaded.state === "unchanged") return;
 		if (loaded.state !== "read") {
 			// Nothing to take; the next save writes what this process has, so others can use it.
@@ -112,16 +129,10 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 		});
 	}
 
-	async function readFile(path: string, info: FileInfo, cutoff: number, lock: FileLock | undefined): Promise<void> {
+	async function readFile(path: string, info: FileInfo, cutoff: number, heartbeat: (() => void) | undefined): Promise<void> {
 		const known = files.get(path);
 		// A replaced or shrunken file was rewritten; its old records no longer describe it.
 		const base: FileState = describes(known, info) ? known : { ino: info.ino, offset: 0, seen: 0, records: [], model: UNKNOWN_MODEL };
-		let touched = Date.now();
-		const heartbeat = lock ? () => {
-			if (Date.now() - touched < HEARTBEAT_MS) return;
-			touched = Date.now();
-			lock.touch();
-		} : undefined;
 		const read = info.size > base.offset
 			? await readAppended(path, base.offset, info.size, base.model, counters, heartbeat)
 			: { records: [], offset: base.offset, model: base.model };
@@ -160,20 +171,61 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 		}
 	}
 
-	async function readBehind(found: ReadonlyMap<string, FileInfo>, cutoff: number, held?: { lock: FileLock; indexFile: string }): Promise<void> {
+	/**
+	 * Read every file that is behind. With the lock held, touch it every
+	 * HEARTBEAT_MS over the whole read, so a long read keeps it, and save the
+	 * progress every COMMIT_EVERY_MS. A lock that is no longer this process's
+	 * (taken over) or cannot be touched ends the saves; the read goes on in
+	 * memory. Without the lock, take what the holder saves between files.
+	 */
+	async function readBehind(found: ReadonlyMap<string, FileInfo>, cutoff: number, shared?: Shared): Promise<void> {
+		const heartbeatMs = options.testing?.heartbeatMs ?? HEARTBEAT_MS;
+		const commitEveryMs = options.testing?.commitEveryMs ?? COMMIT_EVERY_MS;
+		const adoptEveryMs = options.testing?.adoptEveryMs ?? ADOPT_EVERY_MS;
 		let committed = Date.now();
-		for (const [path, info] of behind(found)) {
+		let looked = Date.now();
+		let touched = Date.now();
+		const heartbeat = shared?.held ? () => {
+			const held = shared.held;
+			if (!held || Date.now() - touched < heartbeatMs) return;
+			touched = Date.now();
 			try {
-				await readFile(path, info, cutoff, held?.lock);
+				if (!held.lock.touch()) shared.held = undefined;
+			} catch (error) {
+				saveError = errorText(error);
+				shared.held = undefined;
+			}
+		} : undefined;
+		for (const [path, info] of behind(found)) {
+			if (shared && !shared.held && Date.now() - looked >= adoptEveryMs) {
+				// The holder saves its progress; a file it already read need not be read here too.
+				looked = Date.now();
+				await adoptIndex(shared.indexFile, found);
+				const state = files.get(path);
+				if (describes(state, info) && state.seen === info.size) continue;
+			}
+			try {
+				await readFile(path, info, cutoff, heartbeat);
 			} catch {
 				// An unreadable file counts as no spend rather than failing the report.
 				files.delete(path);
 			}
-			if (held && Date.now() - committed >= COMMIT_EVERY_MS) {
+			heartbeat?.();
+			await options.testing?.afterFile?.(path);
+			if (shared?.held && Date.now() - committed >= commitEveryMs) {
 				prune(found, cutoff);
-				save(held.indexFile);
+				save(shared.indexFile);
 				committed = Date.now();
 			}
+		}
+	}
+
+	function release(lock: FileLock): void {
+		try {
+			lock.release();
+		} catch (error) {
+			// The records are in memory; a lock that cannot be removed only goes stale for the others.
+			saveError = errorText(error);
 		}
 	}
 
@@ -194,17 +246,20 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 		saveError = undefined;
 		if (!lock) {
 			// Another process is still updating the index; read the gap here rather than wait longer.
-			await readBehind(found, cutoff);
+			await readBehind(found, cutoff, { indexFile });
 			return;
 		}
+		const shared: Shared = { indexFile, held: { lock } };
 		try {
 			// The holder before us may have read these bytes already.
 			await adoptIndex(indexFile, found);
-			await readBehind(found, cutoff, { lock, indexFile });
-			prune(found, cutoff);
-			save(indexFile);
+			await readBehind(found, cutoff, shared);
+			if (shared.held) {
+				prune(found, cutoff);
+				save(indexFile);
+			}
 		} finally {
-			lock.release();
+			release(lock);
 		}
 	}
 

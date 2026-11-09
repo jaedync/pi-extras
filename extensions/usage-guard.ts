@@ -146,7 +146,6 @@ export interface UsageGuardOptions {
  * on and lands in the store for the next call.
  */
 const POLL_BUDGET_MS = 2_000;
-const MIN_FIRST_READ_WAIT_MS = 500;
 
 export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions = {}): void {
 	const store = options.store ?? sharedLimitStore();
@@ -243,7 +242,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			const key = limitKey(provider);
 			if (!known.has(key) && !unknown.has(key)) unknown.set(key, provider);
 		}
-		return [...unknown.values()].map((provider) => [provider, store.refresh(provider, false)]);
+		return [...unknown].map(([key, provider]) => [key, store.refresh(provider, false)]);
 	}
 
 	function evaluate(ctx: ExtensionContext, deliverWarnings = false): CustomMessage[] {
@@ -326,8 +325,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			// Status Plus polls only providers this session has used or selected; the active one may not
 			// be read yet, and a subagent may run on any model in scope, so its limits must be known before
 			// it starts. Not forced: the shared poll gap still holds, and a provider with no poller is skipped.
-			// One budget for both waits; first reads after a slow forced poll still get a short wait.
-			const left = Math.max(pollBudgetMs - (Date.now() - started), Math.min(pollBudgetMs, MIN_FIRST_READ_WAIT_MS));
+			// One budget for both waits: first reads get what the forced polls left.
+			const left = Math.max(0, pollBudgetMs - (Date.now() - started));
 			const slow = [...slowForced, ...await withinBudget(readUnknown([model.provider, ...inScope.filter((entry) => !unmeteredModel(entry, priced)).map((entry) => entry.provider)]), left)];
 			const collected = await collectDollars(ctx, params.refresh === true, model);
 			const snapshots = store.entries();
@@ -390,8 +389,8 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		evaluate(ctx);
 	});
 
+	// No ctx here: a rejection in the last message of a quit still counts for the next session.
 	pi.on("message_end", async (event) => {
-		if (closed) return;
 		const message = event.message;
 		if (message.role !== "assistant") return;
 		if (["stop", "toolUse"].includes(message.stopReason)) store.recordSuccess(limitKey(message.provider), message.model, now());

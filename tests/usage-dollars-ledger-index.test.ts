@@ -6,10 +6,10 @@
  */
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSpendLedger, type SpendLedger } from "../lib/usage-dollars/ledger.ts";
+import { createSpendLedger, type SpendLedger, type SpendLedgerOptions } from "../lib/usage-dollars/ledger.ts";
 
 const made: string[] = [];
 function tempDir(prefix: string): string {
@@ -43,8 +43,8 @@ function setup() {
 	const sessions = join(dir, "sessions");
 	mkdirSync(join(sessions, "--cwd--"), { recursive: true });
 	const indexFile = join(dir, "usage-dollars", "spend-index.json");
-	const open = (lockWaitMs?: number): SpendLedger => createSpendLedger({
-		root: sessions, maxAgeMs: 8 * DAY, minRefreshMs: 0, indexFile, ...(lockWaitMs !== undefined ? { lockWaitMs } : {}),
+	const open = (lockWaitMs?: number, testing?: SpendLedgerOptions["testing"]): SpendLedger => createSpendLedger({
+		root: sessions, maxAgeMs: 8 * DAY, minRefreshMs: 0, indexFile, ...(lockWaitMs !== undefined ? { lockWaitMs } : {}), ...(testing ? { testing } : {}),
 	});
 	const alone = (): SpendLedger => createSpendLedger({ root: sessions, maxAgeMs: 8 * DAY, minRefreshMs: 0 });
 	return { sessions, indexFile, open, alone, file: (name: string) => join(sessions, "--cwd--", name) };
@@ -144,6 +144,55 @@ test("a busy index lock does not hold the refresh: this process reads the gap it
 	await later.refresh(NOW);
 	assert.equal(later.stats().bytesRead, 0);
 	assert.equal(totals(later).anthropic, 7);
+});
+
+test("a long read of many files keeps the lock alive, and stops saving once another process took it over", async () => {
+	const s = setup();
+	for (let index = 0; index < 12; index++) writeFileSync(s.file(`f${index}.jsonl`), turn(1, { id: `m${index}` }));
+	const lockFile = `${s.indexFile}.lock`;
+	// Each file's end dates the lock in the past; a touch after the next file moves it to now.
+	const old = new Date(NOW - DAY);
+	let touches = 0;
+	let reads = 0;
+	const ledger = s.open(undefined, {
+		heartbeatMs: 0, commitEveryMs: Infinity,
+		afterFile: () => {
+			reads++;
+			if (statSync(lockFile).mtimeMs > old.getTime()) touches++;
+			utimesSync(lockFile, old, old);
+			if (reads === 6) {
+				// Another process takes the lock over, as it would after 30 s without a touch.
+				rmSync(lockFile);
+				writeFileSync(lockFile, `${process.pid} other`);
+			}
+		},
+	});
+	await ledger.refresh(NOW);
+	assert.ok(touches >= 5, `the lock was touched after each file before the takeover (${touches})`);
+	assert.equal(totals(ledger).anthropic, 12, "the read went on in memory");
+	assert.ok(!existsSync(s.indexFile), "no save after the takeover");
+	assert.equal(readFileSync(lockFile, "utf8"), `${process.pid} other`, "the other holder's lock is left alone");
+});
+
+test("a process without the lock takes the holder's saved progress between files instead of reading those files", async () => {
+	const s = setup();
+	for (let index = 0; index < 8; index++) writeFileSync(s.file(`f${index}.jsonl`), turn(1, { id: `m${index}` }) + toolResult(10_000));
+	// The holder's progress: another index of the same sessions, ready to appear.
+	const holder = createSpendLedger({ root: s.sessions, maxAgeMs: 8 * DAY, minRefreshMs: 0, indexFile: `${s.indexFile}.holder` });
+	await holder.refresh(NOW);
+	mkdirSync(join(s.indexFile, ".."), { recursive: true });
+	writeFileSync(`${s.indexFile}.lock`, String(process.pid));
+	let reads = 0;
+	const waiting = s.open(0, {
+		adoptEveryMs: 0,
+		afterFile: () => {
+			// The holder saves after this process read its first file.
+			if (++reads === 1) writeFileSync(s.indexFile, readFileSync(`${s.indexFile}.holder`));
+		},
+	});
+	await waiting.refresh(NOW);
+	assert.equal(waiting.stats().filesOpened, 1, "only the file read before the holder saved");
+	assert.equal(totals(waiting).anthropic, 8);
 });
 
 test("a lock left by a stopped process is taken over", async () => {
