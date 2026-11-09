@@ -698,7 +698,16 @@ export class Team implements HostTeam {
 		this.patch(name, { state: "running", ...WAITING_FOR_MODEL, runs: continued ? record.runs : record.runs + 1, endedAt: undefined,
 			...(continued ? {} : { runCost: record.usage.cost, runStart: { usage: { ...record.usage }, toolCalls: record.toolCalls }, budgetEnd: undefined }), ...(leavesGroup ? { group: undefined } : {}) });
 		try {
-			if (!(await this.work(name, handle, this.withClock(name, text, continued), launch))) return;
+			let next: string | null = this.withClock(name, text, continued);
+			while (next !== null) {
+				if (!(await this.work(name, handle, next, launch))) return;
+				// Mail steered in the microtasks since work() last looked would wait in an idle session's queue, which a
+				// quiet-spell release drops. A steer still in the input handlers lands first; then the queue and the inbox
+				// are taken in the same step as settle below, so none can come in between.
+				for (let landing = handle.steering?.(); landing; landing = handle.steering?.()) await landing;
+				if (this.gone(name, launch)) return;
+				next = this.late(name, handle);
+			}
 		} catch (error) {
 			// A run at its budget gets no fallback model: it stops as before (wrap-up.ts).
 			if (!this.gone(name, launch)) void (this.wrapUps.active(name) ? this.stop(name, { reason: this.wrapUps.reason(name) }) : this.failOrFallBack(name, error));

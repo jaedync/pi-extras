@@ -65,6 +65,13 @@ module lifecycle {
   // model has no time, so the waits never end early and it is not modeled.
   // The gate's prompt returns only once its steers in flight are in Pi's queue (F5).
   pure val PROMPT_WAITS_STEERS = true
+  // Residual R1, fixed: Team.run takes the late mail again in the same step as
+  // settle, after it waits for steers in flight (team.ts run). False: the last
+  // late() of work() and settle() are one segment, as in the code. True: the
+  // code before the fix, where work() returns to run() and settle() runs some
+  // microtasks later, so a message main sends meanwhile is steered into a run
+  // that has ended (mutant-late-settle-gap).
+  pure val SETTLE_GAP = false
 
   pure val LIVE = Set("queued", "starting", "running")   // LIVE_STATES without asking and waiting (left out)
   pure val ACTIVE = Set("starting", "running")            // ACTIVE_STATES, types.ts:14
@@ -306,7 +313,7 @@ module lifecycle {
       val c = p.c
       // A steer that still waits is not in Pi's queue, so takeQueued misses it.
       val late = x.sq.get(c) + x.sqCopy.get(c) + x.oq.get(c) + x.inbox.get(c)
-      if (late == 0) settle(x, c)
+      if (late == 0) (if (SETTLE_GAP) { ...x, prompts: x.prompts.union(Set({ ...p, phase: "settling" })) } else settle(x, c))
       else {
         ...x,
         prompts: x.prompts.union(Set({ ...p, phase: firstPhase, abortReq: false, disposed: false, out: "" })),
@@ -517,6 +524,13 @@ module lifecycle {
     else w' = x,
   }
 
+  // With SETTLE_GAP (the code before the R1 fix): run() calls settle() once
+  // work() has returned, with no new look at the queue and no gone() check.
+  action settleAfterGap(p: Prompt): bool = all {
+    w.prompts.contains(p), p.phase == "settling",
+    w' = settle({ ...w, prompts: w.prompts.exclude(Set(p)) }, p.c),
+  }
+
   // The quiet-spell timer of an idle child's session (sessions.ts:140-143).
   action idleRelease(c: str): bool = all {
     w.state.get(c) == "idle",
@@ -530,7 +544,7 @@ module lifecycle {
     any { stop(c, byMain), message(c), idleRelease(c), piReadsSteer(c) },
     all { w.sp != Set(), nondet t = w.sp.oneOf() steerLands(t) },
     all { w.opening != Set(), nondet o = w.opening.oneOf() any { launchDone(o._1, o._2), launchFails(o._1, o._2) } },
-    all { w.prompts != Set(), nondet p = w.prompts.oneOf() nondet out = Set("ok", "error", "aborted").oneOf() any { piPrepare(p), piAgentStart(p), piEnds(p, out) } },
+    all { w.prompts != Set(), nondet p = w.prompts.oneOf() nondet out = Set("ok", "error", "aborted").oneOf() any { piPrepare(p), piAgentStart(p), piEnds(p, out), settleAfterGap(p) } },
   }
 
   // ---- Properties ----

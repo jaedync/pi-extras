@@ -400,6 +400,34 @@
       "expect": {
         "violates": "reportOnEnd"
       }
+    },
+    {
+      "name": "mutant-late-settle-gap",
+      "base": "faithful",
+      "mirrors": "lib/subagents/team.ts run() calling settle() after `await this.work(...)` with no new look at the queue (the code before the R1 fix)",
+      "replace": [
+        {
+          "from": "pure val SETTLE_GAP = false",
+          "to": "pure val SETTLE_GAP = true"
+        }
+      ],
+      "expect": {
+        "violates": "mailKept"
+      }
+    },
+    {
+      "name": "mutant-late-settle-gap-no-stop",
+      "base": "mutant-late-settle-gap",
+      "mirrors": "the same code change, with no stops: a message steered in the gap lands in the idle session's queue, and the quiet-spell release drops it (R1)",
+      "replace": [
+        {
+          "from": "pure val MAX_STOPS = 2",
+          "to": "pure val MAX_STOPS = 0"
+        }
+      ],
+      "expect": {
+        "violates": "mailKept"
+      }
     }
   ],
   "traces": {
