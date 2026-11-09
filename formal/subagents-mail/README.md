@@ -296,6 +296,21 @@ Transcripts after the fix:
 The `note` after the compaction (or after the stopped reply) is the hidden
 reminder. The last `assistant` is main's reply to the mail.
 
+**Two side effects of the fixes.**
+
+- Esc while a run that mail started is still in `_prepareRun` (a slow
+  `before_agent_start`) leaves the mail owed. Pi still sends `message_end`
+  for the starting messages after an abort at `agent_start`
+  (agent-loop.js:55-60). Mail on the route `queue` acts the same way after
+  Esc. The effect: `HostState.quiet()` stays false until main runs again,
+  so a renew swap waits. The review measured this (probe E).
+- `lastSaid` now ignores custom messages. So Esc, then a custom message with
+  no turn (a relay, a quiet report, a usage-guard notice), then a `/compact`
+  within `STOP_WINDOW_MS` gives a reminder. Before the fix, the custom
+  message hid this reminder by chance; Esc and then `/compact` with nothing
+  between gave it already. The cost is one extra turn of main. The review
+  found no case where the change wrongly suppresses a reminder.
+
 **Risk of the F1 fix.** Mail becomes owed only at its `message_end`, so a
 run that Pi fails to start (a failed `_prepareRun`) never makes main owe it.
 The id then stays in `starting` until the mail is disposed. It is also still
@@ -380,7 +395,7 @@ real `MainMail` and `watchMain`). TLC check `f2-quiet-append-cancels-reminder`, 
    note is owed (deliver.ts:417).
 2. The user runs `/compact`. Pi aborts the turn. The note lands in the
    run's `finally` flush. `agent_settled` sets `stopMark` to the last entry
-   (main-watch.ts:127).
+   (main-watch.ts:128).
 3. Before the compaction starts, a message that does not wake main is
    appended: for example a relay of what the user told a child
    (deliver.ts:165-170), sent with `triggerTurn: false` while Pi is idle.
@@ -436,7 +451,7 @@ depth 12. The review of this record found it (R1).
    (as:1978-1979). The boundary ends with no continue, and Pi sends no new
    `agent_end` (as:1572-1580).
 4. `stoppedRun` is false (from the earlier `agent_end`) and `checked` is
-   true. So `agent_settled` sets no stop mark (main-watch.ts:127).
+   true. So `agent_settled` sets no stop mark (main-watch.ts:128).
 5. `session_before_compact` does not set `compactionStopped`
    (main-watch.ts:144-147). No reminder comes, and main never replies.
 
@@ -481,14 +496,14 @@ order (N1, `repro-f4-order.mts`).
 
 1. A note lands while main works on a user turn. It is owed.
 2. The user runs `/compact`. Pi stops the turn, and the note lands. The
-   stop mark is set (main-watch.ts:127).
+   stop mark is set (main-watch.ts:128).
 3. Pi emits `session_before_compact`. If our handler runs, it sets
    `compactionStopped` to true (main-watch.ts:144-147).
 4. An extension returns `cancel` from `session_before_compact`, or the user
    presses Esc during the summary. Pi sends `session_compact_failed` with
    `aborted: true` (as:2263-2266, :2331-2350).
 5. `compacted(event.reason === "manual" && !event.aborted)` gets false
-   (main-watch.ts:149). No reminder comes, and main never replies.
+   (now main-watch.ts:152). No reminder comes, and main never replies.
 
 A failure before the hook takes the same path with no other extension
 (round-3 review, M1). `compact()` aborts the run (as:2231), then throws
@@ -649,6 +664,35 @@ claim for change 8. It found five new items. This version fixes all five:
 - **N5, low.** The F3 text did not say that the TLC path and the live repro
   take a different order. Changed: the F3 text.
 
+## Review of the fixes
+
+A fresh Opus 5.5 reviewer (`review-mail-fixes`) read the three commits of
+the task against Pi 1.4.0, with probes in a real `AgentSession`. It found no
+critical or high issue. Its points:
+
+- Medium, from before the fixes, no natural trigger: when `_prepareRun`
+  throws, Pi drops the starting message. The note never lands, its id stays
+  in `starting` and in the pending items, and `idle()` stays false for good.
+  Main settles (no loop). The review showed it with a patched
+  `_prepareRun`. Not fixed; an open item. A fix could put a starting id
+  with no `message_end` back in the outbox at the `agent_settled` of the run
+  that it started.
+- Low: Esc during `_prepareRun` of a run that mail started leaves it owed;
+  low: Esc, a custom message, then `/compact` gives a reminder. Both are in
+  "Two side effects of the fixes".
+- Low, no repro: the new loop in `team.ts` `run()` sent the late mail with
+  no wrap-up check and no `swapBefore`, which `work()` does before each
+  prompt. Fixed: `run()` now does both checks. No test reaches this
+  window (a budget that ends while a steer is in flight); the existing team,
+  wrap-up, swap and budget tests pass.
+- Low: wrong citations (main-watch.ts, team.ts, a stale comment in
+  `mail.qnt`). Fixed.
+
+It confirmed: deferred mail in `agent_settled`, a reminder that starts a run
+(owed, no loop), the `message_end` paths, the changed test row (a correct
+change of the spec), the R1 fix (the test fails on the old code), the model
+actions, three TLC checks, and all 12 repros (the "After" column).
+
 ## Five weakest points of the model
 
 1. Until the review, `stoppedRun` was forced true on each abort (now fixed; F3).
@@ -706,7 +750,7 @@ claim for change 8. It found five new items. This version fixes all five:
   11. `landed` without the `pendingItems.delete` (deliver.ts:361);
   12. `drain` returning nothing (deliver.ts:237);
   13. `compacted` without `remind()` (main-watch.ts:82).
-  It missed one: the stop mark without `|| !checked` (main-watch.ts:127).
+  It missed one: the stop mark without `|| !checked` (main-watch.ts:128).
   No model behavior needs that guard (see `survivor-stop-mark-ignores-checked`).
 
 ## Test coverage table
@@ -745,11 +789,13 @@ the tests in the last rows.
 ## Open items
 
 - Three fresh reviewers read the record before the fixes (rounds 1 to 3).
-  The fixes have their own review (see "Review of the fixes").
+  The fixes have their own review (see "Review of the fixes" below).
 - A reminder after a cancel by an earlier extension is in the traces (the
   witness `witnessNoCancelFirst`, and the F4 test "loaded before"), but no
   check in `fv.json` asks TLC to reach it.
 - The full bounds in one pass check do not finish in 25 minutes on 2 workers.
+- A failed `_prepareRun` leaves a note in `starting` and pending for good
+  (see "Review of the fixes"). The model leaves out a failed `_prepareRun`.
 
 ## Commands
 

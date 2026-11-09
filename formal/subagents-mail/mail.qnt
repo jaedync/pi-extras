@@ -615,7 +615,8 @@ module mail {
   // The manual compaction fails or is cancelled (as:2331-2350): an extension
   // returns `cancel` from session_before_compact, the user presses Esc during
   // the summary (`aborted` true), or the summary fails (`aborted` false).
-  // session_compact_failed calls compacted(manual && !aborted) (main-watch.ts:149).
+  // session_compact_failed reminds when compactionStopped or the stop-mark test holds
+  // (REMIND_FROM_STOP_MARK, main-watch.ts:152); before the F4 fix, compacted(manual && !aborted).
   // Pi clears the compaction state (as:2335) before it emits the event
   // (as:2344), so Pi is idle and the route is wake: a reminder starts a run.
   // A compaction that an extension cancelled first has `aborted` true.

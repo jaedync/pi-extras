@@ -309,7 +309,7 @@ silenced, because `finish` took any mark as silent.
   `Map<string, number>`. `stop` sets both to its launch number. The
   relaunch branch deletes a mark only when it is the stop's own
   (`team.ts:426-427`). `finish` is silent only when the mark is the current
-  launch number (`team.ts:945-947`).
+  launch number (`team.ts:948-950`).
 - Mutants: `mutant-old-stop-clears-ending` breaks `reportOnEnd` (depth 10),
   and `mutant-old-stop-clears-parent-mark` breaks `parentStopSilent` (depth 7).
 - Repro `node formal/subagents-lifecycle/repro-f4.mts`:
@@ -344,7 +344,7 @@ Path at f194608:
   steer in flight it does not await, so the team's continuation keeps its
   place in the event loop. `late` then takes the message from Pi's queue as
   the run's next prompt. The review found the same loss at the end of a
-  check (`team.ts:737-740`): a steer that waits in the input handlers while
+  check (`team.ts:740-743`): a steer that waits in the input handlers while
   the check runs. `work` now awaits `handle.steering()` after the check and
   before `late`. Checks are not in the model; `tests/subagents-check-steer.test.ts`
   covers this path.
@@ -523,19 +523,19 @@ least one mutant that breaks it.
 | `mutant-prompt-skips-steers` | `child-prompt.ts` `prompt` without the wait for steers in flight (F5) | violation of mailKept | fails (caught) |
 | `mutant-stop-keeps-launch` | `team.ts:407` and `:417` without the new launch number | violation of oneReport | fails (caught) |
 | `mutant-stop-ignores-relaunch` | `team.ts:424` without the check: the stop always finishes after the abort | violation of oneReport | fails (caught) |
-| `mutant-work-ignores-gone` | `team.ts:728` without `if (this.gone(name, launch)) return false` | violation of oneReport | fails (caught) |
+| `mutant-work-ignores-gone` | `team.ts:731` without `if (this.gone(name, launch)) return false` | violation of oneReport | fails (caught) |
 | `mutant-open-ignores-gone` | `team.ts:675-678` without the gone check: a stale launch holds its session | violation of oneSession | fails (caught) |
 | `mutant-stop-keeps-resume` | `team.ts:413` without `this.parkResume(name)` | violation of mailKept | fails (caught) |
 | `mutant-stop-drops-unread` | `team.ts:420` without `...this.unreadLeft(name)` | violation of mailKept | fails (caught) |
 | `survivor-pump-starts-any` | `slots.ts:89` without the `state !== "queued"` drop | nothing (survivor) | passes (missed) |
 | `mutant-resume-ignores-slots` | `team.ts:527` runWhenFree without `this.slots.free()` | violation of slotsBound | fails (caught) |
-| `mutant-finish-keeps-waiters` | `team.ts:943` without `this.settleWaiters(name, record)` | violation of waitersSettle | fails (caught) |
+| `mutant-finish-keeps-waiters` | `team.ts:946` without `this.settleWaiters(name, record)` | violation of waitersSettle | fails (caught) |
 | `mutant-release-busy` | `sessions.ts:142` without `this.options.idle(name)` | violation of noStuck | not run: the replay calls the timer body by hand, past this guard |
 | `mutant-resume-failed-drops-message` | `team.ts:631` without `this.parkResume(name)` in resumeFailed | violation of mailKept | fails (caught) |
-| `mutant-fallback-keeps-session` | `team.ts:844` without `this.sessions.release(name)` in failOrFallBack | violation of oneSession | fails (caught) |
-| `mutant-late-skips-queue` | `team.ts:812` without `handle.takeQueued()` | violation of mailKept | fails (caught) |
+| `mutant-fallback-keeps-session` | `team.ts:847` without `this.sessions.release(name)` in failOrFallBack | violation of oneSession | fails (caught) |
+| `mutant-late-skips-queue` | `team.ts:815` without `handle.takeQueued()` | violation of mailKept | fails (caught) |
 | `mutant-stop-no-abort` | `team.ts:422` without `await handle?.abort()` | violation of stopMeansStopped | fails (caught) |
-| `mutant-settle-skips-finish` | `team.ts:888` without `this.finish(name)` | violation of reportOnEnd | fails (caught) |
+| `mutant-settle-skips-finish` | `team.ts:891` without `this.finish(name)` | violation of reportOnEnd | fails (caught) |
 
 The survivors:
 
@@ -584,17 +584,17 @@ Code changes that make the replay fail (one at a time, each restored):
 |---|---|
 | team.ts:407 and :417 no new launch number | fails (caught) |
 | team.ts:424 no relaunch check | fails (caught) |
-| team.ts:728 no `gone` check | fails (caught) |
+| team.ts:731 no `gone` check | fails (caught) |
 | team.ts:675-678 no `gone` check | fails (caught) |
 | team.ts:413 no `parkResume` | fails (caught) |
 | team.ts:420 no `unreadLeft` | fails (caught) |
 | team.ts:527 no `slots.free()` | fails (caught) |
-| team.ts:940 no `settleWaiters` | fails (caught) |
+| team.ts:946 no `settleWaiters` | fails (caught) |
 | team.ts:631 no `parkResume` | fails (caught) |
-| team.ts:841 no `sessions.release` | fails (caught) |
-| team.ts:809 no `takeQueued` | fails (caught) |
+| team.ts:847 no `sessions.release` | fails (caught) |
+| team.ts:815 no `takeQueued` | fails (caught) |
 | team.ts:422 no `abort()` | fails (caught) |
-| team.ts:885 no `finish` | fails (caught) |
+| team.ts:891 no `finish` | fails (caught) |
 | team.ts:405 with `this.ending.has(name)` (F3, as at f194608) | fails (caught) |
 | team.ts:426 deletes `ending` for any stop (F4) | fails (caught) |
 | team.ts:427 and :934 `stoppedByParent` as a set (F4) | fails (caught) |
@@ -604,7 +604,7 @@ Code changes that make the replay fail (one at a time, each restored):
 | child.ts `childDisposer` without `gate.shut()` (F2) | fails (caught) |
 | child-prompt.ts `abort` without the `GATE_WAIT_MS` bound (missed: the model has no time; tests/subagents-child-prompt.test.ts and repro-f2.mts --late catch it) | passes (missed) |
 | child-prompt.ts without the agent_start listener after `shut` (missed: the model has no time; tests/subagents-child-prompt.test.ts and repro-f2.mts --late catch it) | passes (missed) |
-| team.ts:737-740 without the wait for steers after the check (missed: checks are not modeled; tests/subagents-check-steer.test.ts catches it) | passes (missed) |
+| team.ts:740-743 without the wait for steers after the check (missed: checks are not modeled; tests/subagents-check-steer.test.ts catches it) | passes (missed) |
 | child-prompt.ts `prompt` without the wait for steers (F5) | fails (caught) |
 | slots.ts:89 no `state !== "queued"` drop | passes (missed): no model behavior needs the guard, see survivor-pump-starts-any |
 | team.ts:424 without the `state !== "stopped"` half (the 4a8fa14 fix) | fails (caught) |
