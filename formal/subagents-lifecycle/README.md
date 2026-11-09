@@ -377,7 +377,9 @@ The task `fix-subagent-mail` fixed this residual (commit `fa6888b`).
   waits for steers in flight (`handle.steering()`), checks `gone()`, and
   takes the queue and the inbox again (`late()`). With mail, the run goes
   on with it as its next prompt. Without mail, `settle()` follows in the
-  same synchronous step.
+  same synchronous step. Before that prompt, run() does the wrap-up and swap checks that
+  work() does before each prompt (commit `31d754d`, from the review of the
+  fixes).
 - Repro: `tests/subagents-settle-steer.test.ts` runs the real prompt gate
   over a fake session whose steer takes one microtask to queue, as Pi's
   does. It sends the message after a chain of 0 to 9 microtasks.

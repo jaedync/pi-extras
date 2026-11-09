@@ -35,7 +35,7 @@ M = [
  ("prompt-skips-steers", "lib/subagents/child-prompt.ts", "\t\t\tconst landing = steering();\n\t\t\tif (landing) await landing;\n", ""),
  ("pump-starts-any", "lib/subagents/slots.ts", "if (record?.state !== \"queued\") { this.dropGoOn(name); continue; }", ""),
  ("stop-relaunch-ignores-state", "lib/subagents/team.ts", "if (this.launches.get(name) !== launch || this.records.get(name)?.state !== \"stopped\") {", "if (this.launches.get(name) !== launch) {"),
- ("run-settles-without-late", "lib/subagents/team.ts", "\t\t\t\tif (this.gone(name, launch)) return;\n\t\t\t\tnext = this.late(name, handle);", "\t\t\t\tnext = null;"),
+ ("run-settles-without-late", "lib/subagents/team.ts", "\t\t\t\tnext = this.late(name, handle);\n", "\t\t\t\tnext = null;\n"),
  ("open-no-dispose", "lib/subagents/team.ts", "if (this.gone(name, launch)) {\n\t\t\tawait handle.dispose();\n\t\t\treturn null;", "if (this.gone(name, launch)) {\n\t\t\treturn null;"),
 ]
 only = sys.argv[2:] 
