@@ -20,7 +20,7 @@ import { compareCounts, countFindings, nextBaseline, worstFiles } from "./lib/co
 const SKILL = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CATALOG = join(SKILL, "catalog");
 const DEFAULT_DIR = "lint/slop";
-export const TEST_GLOBS = ["tests/**", "test/**", "**/__tests__/**", "**/*.test.*", "**/*.spec.*"];
+export const TEST_GLOBS = ["tests/**", "test/**", "spec/**", "**/__tests__/**", "**/*.test.*", "**/*.spec.*"];
 
 const HELP = {
 	setup: "slop setup [--check]\n  Installs @ast-grep/cli into ~/.cache/pi-code-slop-rules. --check only reports which ast-grep the commands use.",
