@@ -155,7 +155,8 @@ function formatRatchet(result, baseline, current, findings) {
 	for (const { rule, before, now, files } of result.rose) {
 		lines.push("", `FAIL ${rule}: ${before} -> ${now} sites.`);
 		for (const { file, before: was, now: is } of files) {
-			lines.push(`  ${file}: ${was} -> ${is}`);
+			// The baseline keeps counts, not lines, so all sites of the file are listed; the new one is among them.
+			lines.push(`  ${file}: ${was} -> ${is}. The sites in this file now:`);
 			for (const f of findings.filter((x) => x.ruleId === rule && x.file === file)) lines.push(`    ${file}:${f.range.start.line + 1} ${f.message}`);
 		}
 	}
