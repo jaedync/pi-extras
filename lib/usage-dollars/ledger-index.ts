@@ -13,6 +13,8 @@ import { dirname } from "node:path";
 import type { SessionModel, SpendRecord } from "./ledger-parse.ts";
 
 const VERSION = 2;
+/** The version is in the name, so the processes of two releases never overwrite each other's index. */
+export const INDEX_FILE_NAME = `spend-index-v${VERSION}.json`;
 
 export interface FileState {
 	/** A rename over the path (Pi rewrites a session that way) gives a new inode. */

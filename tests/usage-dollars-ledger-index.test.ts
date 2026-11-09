@@ -195,6 +195,43 @@ test("a process without the lock takes the holder's saved progress between files
 	assert.equal(totals(waiting).anthropic, 8);
 });
 
+test("a process that reads while the holder reads takes the holder's half from its saves", async () => {
+	const s = setup();
+	const count = 20;
+	for (let index = 0; index < count; index++) writeFileSync(s.file(`f${String(index).padStart(2, "0")}.jsonl`), turn(1, { id: `m${index}` }));
+	// The two take turns, one file each, as two processes of the same speed would.
+	const next: Record<"holder" | "waiter", (() => void) | undefined> = { holder: undefined, waiter: undefined };
+	const done = { holder: false, waiter: false };
+	const pass = (me: "holder" | "waiter", other: "holder" | "waiter") => {
+		const resume = next[other];
+		next[other] = undefined;
+		resume?.();
+		return done[other] ? Promise.resolve() : new Promise<void>((resolve) => { next[me] = resolve; });
+	};
+	const finish = (me: "holder" | "waiter", other: "holder" | "waiter") => {
+		done[me] = true;
+		const resume = next[other];
+		next[other] = undefined;
+		resume?.();
+	};
+	const waiter = s.open(0, { adoptEveryMs: 0, afterFile: () => pass("waiter", "holder") });
+	let waiting: Promise<void> | undefined;
+	const holder = s.open(undefined, {
+		commitEveryMs: 0,
+		afterFile: () => {
+			// The holder has the lock now; the other process starts and finds it busy.
+			waiting ??= waiter.refresh(NOW).finally(() => finish("waiter", "holder"));
+			return pass("holder", "waiter");
+		},
+	});
+	await holder.refresh(NOW).finally(() => finish("holder", "waiter"));
+	await waiting;
+	assert.equal(holder.stats().filesOpened, count);
+	assert.ok(waiter.stats().filesOpened <= count / 2 + 2, `the waiter read ${waiter.stats().filesOpened} of ${count} files`);
+	assert.equal(totals(waiter).anthropic, count);
+	assert.equal(totals(holder).anthropic, count);
+});
+
 test("a lock left by a stopped process is taken over", async () => {
 	const s = setup();
 	writeFileSync(s.file("a.jsonl"), turn(1, { id: "m1" }));

@@ -185,9 +185,9 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 		let committed = Date.now();
 		let looked = Date.now();
 		let touched = Date.now();
-		const heartbeat = shared?.held ? () => {
+		const heartbeat = shared?.held ? (now = false) => {
 			const held = shared.held;
-			if (!held || Date.now() - touched < heartbeatMs) return;
+			if (!held || (!now && Date.now() - touched < heartbeatMs)) return;
 			touched = Date.now();
 			try {
 				if (!held.lock.touch()) shared.held = undefined;
@@ -196,7 +196,11 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 				shared.held = undefined;
 			}
 		} : undefined;
-		for (const [path, info] of behind(found)) {
+		// Without the lock, read from the other end: the holder reads in this order, so the two meet halfway
+		// and this process takes the holder's half from its saves instead of reading it too.
+		const todo = behind(found);
+		if (shared && !shared.held) todo.reverse();
+		for (const [path, info] of todo) {
 			if (shared && !shared.held && Date.now() - looked >= adoptEveryMs) {
 				// The holder saves its progress; a file it already read need not be read here too.
 				looked = Date.now();
@@ -213,11 +217,16 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 			heartbeat?.();
 			await options.testing?.afterFile?.(path);
 			if (shared?.held && Date.now() - committed >= commitEveryMs) {
-				prune(found, cutoff);
-				save(shared.indexFile);
+				// A stalled event loop can outlast the lock: check that it is still this process's just before writing.
+				heartbeat?.(true);
+				if (shared.held) {
+					prune(found, cutoff);
+					save(shared.indexFile);
+				}
 				committed = Date.now();
 			}
 		}
+		heartbeat?.(true);
 	}
 
 	function release(lock: FileLock): void {

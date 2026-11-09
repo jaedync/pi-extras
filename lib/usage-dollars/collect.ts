@@ -15,6 +15,7 @@ import { STATUS_TIME_ZONE, type LimitEntry } from "../status-plus-logic.ts";
 import { localDateKey, localDayStartMs } from "./calendar.ts";
 import { entryDollars, sizeKey, type DollarInputs, type OpenRouterKeyInfo, type TokenfoldSnapshot, type WindowSize } from "./core.ts";
 import { createSpendLedger, type SpendLedger } from "./ledger.ts";
+import { INDEX_FILE_NAME } from "./ledger-index.ts";
 import { advanceReading, evidenceOf, isWindowReading, type WindowEvidence, type WindowReading } from "./resets.ts";
 import {
 	advanceMeterDay,
@@ -40,8 +41,7 @@ const RECENT_MODELS_MS = 7 * 86_400_000;
 const LOCK_WAIT_MS = 1_000;
 const LOCK_RETRY_MS = 15;
 /** The ledger index: shared by the processes of this agent directory, so each byte of a session is parsed once. */
-/** The version is in the name, so the processes of two releases never overwrite each other's index. */
-const LEDGER_INDEX = "spend-index-v2.json";
+const LEDGER_INDEX = INDEX_FILE_NAME;
 
 export interface CollectContext {
 	snapshots: Array<[string, LimitSnapshot]>;
