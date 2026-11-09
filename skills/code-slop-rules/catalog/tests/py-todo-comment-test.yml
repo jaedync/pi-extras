@@ -1,0 +1,5 @@
+id: py-todo-comment
+valid:
+  - '# Todos come from the list.'
+invalid:
+  - '# TODO: retry'

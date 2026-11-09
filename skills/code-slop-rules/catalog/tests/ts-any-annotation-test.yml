@@ -1,0 +1,10 @@
+id: ts-any-annotation
+valid:
+  - 'let a: unknown;'
+  - 'const a = b as any;'
+  - 'function f(a: string): void {}'
+invalid:
+  - 'let a: any;'
+  - 'function f(a: any) {}'
+  - 'const m = new Map<string, any>();'
+  - 'type T = { a: any[] };'

@@ -1,0 +1,13 @@
+id: py-bare-except
+valid:
+  - |
+    try:
+        f()
+    except OSError:
+        log()
+invalid:
+  - |
+    try:
+        f()
+    except:
+        log()

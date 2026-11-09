@@ -1,0 +1,22 @@
+id: ts-sleep-wait
+language: typescript
+severity: hint
+message: A fixed sleep waits for time, not for the event.
+note: Wait for the event (a promise, a signal, a poll with a deadline). Fixed sleeps make tests slow and flaky.
+metadata:
+  family: timing-guess
+  precision: high
+  overlap: { eslint: [] }
+rule:
+  any:
+    - kind: new_expression
+      regex: '^new Promise\s*(<[^>]*>)?\(\s*\(?\s*[\w$]+\s*\)?\s*=>\s*\{?\s*setTimeout\(\s*[\w$]+\s*,\s*[\d_.]+\s*\)'
+    - pattern: await $WAIT($MS)
+  # A sleep inside a while, do or C-style for loop is a poll that checks its condition each time, not a guess.
+  not:
+    inside:
+      stopBy: end
+      any: [{ kind: while_statement }, { kind: do_statement }, { kind: for_statement }]
+constraints:
+  WAIT: { regex: '^(sleep|delay|wait|pause|setTimeout|timers\.setTimeout)$' }
+  MS: { kind: number }

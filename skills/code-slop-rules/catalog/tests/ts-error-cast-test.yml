@@ -1,0 +1,7 @@
+id: ts-error-cast
+valid:
+  - 'const m = error instanceof Error ? error.message : String(error);'
+  - 'const a = b as Foo;'
+invalid:
+  - 'const m = (error as Error).message;'
+  - 'const c = (error as NodeJS.ErrnoException).code;'

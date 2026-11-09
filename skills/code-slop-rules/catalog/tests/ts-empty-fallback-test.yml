@@ -1,0 +1,9 @@
+id: ts-empty-fallback
+valid:
+  - 'const a = b ?? defaults.name;'
+  - 'const a = b || "none";'
+invalid:
+  - 'const a = b ?? "";'
+  - 'const a = b || [];'
+  - 'const a = b ?? {};'
+  - 'const a = b ?? 0;'

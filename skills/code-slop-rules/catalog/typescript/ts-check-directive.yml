@@ -1,0 +1,12 @@
+id: ts-check-directive
+language: typescript
+severity: warning
+message: A `@ts-ignore`, `@ts-nocheck` or `@ts-expect-error` comment turns off the type checker.
+note: Fix the type error. If the error is in a third-party type, wrap the call in one typed helper.
+metadata:
+  family: checker-off
+  precision: high
+  overlap: { eslint: ['@typescript-eslint/ban-ts-comment'] }
+rule:
+  kind: comment
+  regex: '@ts-(ignore|nocheck|expect-error)'

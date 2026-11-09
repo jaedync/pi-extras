@@ -1,0 +1,14 @@
+id: ts-double-cast
+language: typescript
+severity: warning
+message: "`as unknown as T` forces a type that the checker refused."
+note: Fix the types so one cast or none is enough, or validate the value at the boundary.
+metadata:
+  family: type-escape
+  precision: high
+  overlap: { eslint: [] }
+rule:
+  kind: as_expression
+  has:
+    kind: as_expression
+    has: { kind: predefined_type, regex: '^unknown$' }

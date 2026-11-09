@@ -1,0 +1,12 @@
+id: py-type-ignore
+language: python
+severity: warning
+message: "`# type: ignore` turns off the type checker on this line."
+note: "Fix the type, or give the exact error code (`# type: ignore[code]`) and the reason."
+metadata:
+  family: checker-off
+  precision: high
+  overlap: { ruff: [PGH003], mypy: [warn_unused_ignores] }
+rule:
+  kind: comment
+  regex: '#\s*type:\s*ignore'

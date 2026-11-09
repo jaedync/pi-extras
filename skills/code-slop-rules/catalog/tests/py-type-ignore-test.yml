@@ -1,0 +1,6 @@
+id: py-type-ignore
+valid:
+  - 'x = 1  # the type is int'
+invalid:
+  - 'x = f()  # type: ignore'
+  - 'x = f()  # type: ignore[attr-defined]'

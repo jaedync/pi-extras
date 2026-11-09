@@ -1,0 +1,12 @@
+id: ts-for-now-comment
+language: typescript
+severity: hint
+message: A comment marks this code as temporary or a workaround.
+note: Fix it now, or move it to the task list with an owner and delete the comment.
+metadata:
+  family: deferred-work
+  precision: high
+  overlap: { eslint: [] }
+rule:
+  kind: comment
+  regex: '(?i)\b(for now|for the time being|for the moment|temporary (fix|hack|workaround|solution)|temporarily (disabled?|skip(ped)?|off)|work-?around|hack(y|ish)?|quick fix|stop-?gap|band-?aid|kludge)\b'

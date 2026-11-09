@@ -1,0 +1,10 @@
+id: ts-for-now-comment
+valid:
+  - '// Write to a temporary file, then rename it.'
+  - '// Retry once now.'
+invalid:
+  - '// Skip the check for now.'
+  - '// Workaround for a Pi bug.'
+  - '/* hacky but works */'
+  - '// A temporary fix until the API is stable.'
+  - '// Stop-gap: the real cache comes later.'

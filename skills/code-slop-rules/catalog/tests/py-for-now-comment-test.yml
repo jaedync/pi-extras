@@ -1,0 +1,6 @@
+id: py-for-now-comment
+valid:
+  - '# Write a temporary file, then rename it.'
+invalid:
+  - '# Skip this for now.'
+  - '# workaround for a yt-dlp bug'

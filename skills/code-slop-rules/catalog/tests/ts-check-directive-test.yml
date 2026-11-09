@@ -1,0 +1,11 @@
+id: ts-check-directive
+valid:
+  - '// The checker runs here.'
+invalid:
+  - |
+    // @ts-ignore
+    f();
+  - |
+    // @ts-expect-error wrong upstream type
+    f();
+  - '// @ts-nocheck'

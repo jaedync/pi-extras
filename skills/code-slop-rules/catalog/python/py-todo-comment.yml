@@ -1,0 +1,12 @@
+id: py-todo-comment
+language: python
+severity: hint
+message: A TODO, FIXME or XXX comment is work that the code does not do.
+note: Do the work, or move it to the task list and delete the comment.
+metadata:
+  family: deferred-work
+  precision: high
+  overlap: { ruff: [FIX001, FIX002, FIX003, TD001] }
+rule:
+  kind: comment
+  regex: '\b(TODO|FIXME|XXX)\b'

@@ -1,0 +1,13 @@
+id: ts-catch-only-logs
+language: typescript
+severity: hint
+message: A catch block that only writes to the console reports the error but continues as if it passed.
+note: Decide what the caller must see. A console line is not error handling in library code.
+metadata:
+  family: swallowed-error
+  precision: high
+  overlap: { eslint: [] }
+rule:
+  kind: statement_block
+  inside: { kind: catch_clause, field: body }
+  regex: '^\{\s*console\.(log|warn|error|debug|info)\([^;]*\);?\s*\}$'

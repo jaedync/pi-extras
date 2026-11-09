@@ -1,0 +1,18 @@
+id: py-broad-except
+valid:
+  - |
+    try:
+        f()
+    except (OSError, ValueError):
+        log()
+invalid:
+  - |
+    try:
+        f()
+    except Exception as error:
+        log(error)
+  - |
+    try:
+        f()
+    except BaseException:
+        raise

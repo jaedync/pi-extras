@@ -1,0 +1,12 @@
+id: py-bare-except
+language: python
+severity: warning
+message: A bare `except:` also catches KeyboardInterrupt and SystemExit.
+note: Name the exceptions that you expect.
+metadata:
+  family: swallowed-error
+  precision: high
+  overlap: { ruff: [E722], flake8: [E722], pylint: [W0702] }
+rule:
+  kind: except_clause
+  regex: '^except\s*:'

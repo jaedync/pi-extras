@@ -1,0 +1,6 @@
+id: py-noqa
+valid:
+  - 'x = 1  # no quality issue'
+invalid:
+  - 'import os  # noqa'
+  - 'import os  # noqa: F401'

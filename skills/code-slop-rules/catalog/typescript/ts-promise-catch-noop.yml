@@ -1,0 +1,18 @@
+id: ts-promise-catch-noop
+language: typescript
+severity: warning
+message: A .catch handler that does nothing swallows the rejection.
+note: Log the rejection with context, pass it to the caller, or name the expected error.
+metadata:
+  family: swallowed-error
+  precision: high
+  overlap: { eslint: [] }
+rule:
+  pattern: $P.catch($H)
+  has:
+    field: arguments
+    has:
+      any:
+        - { kind: arrow_function, regex: '^(async\s*)?\(?\s*[\w$]*\s*\)?\s*=>\s*(\{\s*(//[^\n]*\s*|/\*[\s\S]*?\*/\s*)*\}|undefined|null|void 0|false|\(\s*\{\s*\}\s*\))$' }
+        - { kind: function_expression, regex: '\{\s*\}$' }
+        - { kind: identifier, regex: '^(noop|ignore|ignoreError|swallow)$' }

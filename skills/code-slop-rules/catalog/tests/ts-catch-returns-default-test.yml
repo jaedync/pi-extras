@@ -1,0 +1,12 @@
+id: ts-catch-returns-default
+valid:
+  - 'try { return f(); } catch (error) { throw new Wrapped(error); }'
+  - 'try { return f(); } catch (error) { log(error); return undefined; }'
+  - 'try { return f(); } catch { return cached; }'
+invalid:
+  - 'try { return f(); } catch { return undefined; }'
+  - 'try { return f(); } catch { return; }'
+  - 'try { return f(); } catch { return ""; }'
+  - 'try { return f(); } catch { return []; }'
+  - 'try { return f(); } catch { // Not JSON.
+    return null; }'

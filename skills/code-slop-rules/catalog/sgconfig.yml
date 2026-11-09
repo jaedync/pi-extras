@@ -1,0 +1,7 @@
+# The catalog of candidate rules that `slop.mjs measure` runs. A repository adopts the ones with real sites.
+ruleDirs: [typescript, python]
+testConfigs:
+  - testDir: tests
+# One TypeScript rule set covers JavaScript too: the TypeScript grammar parses plain JS.
+languageGlobs:
+  typescript: ['*.ts', '*.mts', '*.cts', '*.js', '*.mjs', '*.cjs']

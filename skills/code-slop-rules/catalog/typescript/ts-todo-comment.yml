@@ -1,0 +1,12 @@
+id: ts-todo-comment
+language: typescript
+severity: hint
+message: A TODO, FIXME or XXX comment is work that the code does not do.
+note: Do the work, or move it to the task list and delete the comment.
+metadata:
+  family: deferred-work
+  precision: high
+  overlap: { eslint: [no-warning-comments] }
+rule:
+  kind: comment
+  regex: '\b(TODO|FIXME|XXX)\b'

@@ -1,0 +1,13 @@
+id: ts-any-annotation
+language: typescript
+severity: warning
+message: An explicit `any` type turns off type checks.
+note: Use the real type, a generic, or `unknown` with a check.
+metadata:
+  family: type-escape
+  precision: high
+  overlap: { eslint: ['@typescript-eslint/no-explicit-any'], biome: [lint/suspicious/noExplicitAny] }
+rule:
+  kind: predefined_type
+  regex: '^any$'
+  not: { inside: { kind: as_expression } }

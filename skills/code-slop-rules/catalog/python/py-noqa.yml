@@ -1,0 +1,12 @@
+id: py-noqa
+language: python
+severity: hint
+message: "`# noqa` turns off the linter on this line."
+note: "Fix the finding, or name the code (`# noqa: E501`) and the reason."
+metadata:
+  family: checker-off
+  precision: high
+  overlap: { ruff: [PGH004, RUF100] }
+rule:
+  kind: comment
+  regex: '#\s*noqa'

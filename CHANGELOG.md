@@ -2,6 +2,20 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Code Slop Rules skill (`skills/code-slop-rules`): the model measures the
+  sloppy code patterns in a repository with a catalog of 25 ast-grep rules
+  (TypeScript, JavaScript and Python), each with valid and invalid test cases.
+  `slop.mjs measure` counts sites in source and tests apart, scans fix commits
+  before and after each fix, and skips patterns that a configured ESLint or
+  ruff already enforces. `slop.mjs adopt` copies the chosen rules into the
+  repository. `slop.mjs ratchet` fails when a rule has more sites than its
+  recorded baseline; `--update` refuses a higher count unless
+  `--allow-increase` is given. Run `/skill:code-slop-rules`.
+
 ## 0.41.0 - 2026-11-08
 
 ### Added

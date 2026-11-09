@@ -1,0 +1,12 @@
+id: ts-unreachable-throw
+language: typescript
+severity: hint
+message: A throw that says "unreachable" or "not implemented" is a branch the types do not rule out.
+note: Use an exhaustive `never` check, or implement the branch.
+metadata:
+  family: catch-all
+  precision: high
+  overlap: { eslint: [] }
+rule:
+  kind: throw_statement
+  regex: '(?i)(unreachable|not implemented|should never happen|impossible|cannot happen)'

@@ -1,0 +1,8 @@
+id: ts-empty-default
+valid:
+  - 'switch (k) { case 1: a(); break; default: b(); }'
+  - 'switch (k) { case 1: a(); break; default: throw new Error(String(k)); }'
+invalid:
+  - 'switch (k) { case 1: a(); break; default: break; }'
+  - 'switch (k) { case 1: a(); break; default: }'
+  - 'switch (k) { case 1: a(); break; default: {} }'

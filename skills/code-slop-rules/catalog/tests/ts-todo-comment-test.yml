@@ -1,0 +1,7 @@
+id: ts-todo-comment
+valid:
+  - '// Todos come from the list.'
+invalid:
+  - '// TODO: handle the error'
+  - '// FIXME wrong unit'
+  - '/* XXX */'

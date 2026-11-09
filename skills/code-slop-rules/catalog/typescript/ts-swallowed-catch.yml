@@ -1,0 +1,14 @@
+id: ts-swallowed-catch
+language: typescript
+severity: warning
+message: A catch block with no statements swallows the error.
+note: Handle the error, rethrow it, or return an explicit result. A comment explains the silence, but the caller still loses the failure. If the failure is expected, narrow the catch to that error.
+metadata:
+  family: swallowed-error
+  precision: high
+  overlap: { eslint: [no-empty], biome: [lint/suspicious/noEmptyBlockStatements] }
+  overlapNote: ESLint no-empty and Biome flag only a block with no comment. A comment-only block passes them.
+rule:
+  kind: statement_block
+  regex: '^\{\s*(//[^\n]*\s*|/\*[\s\S]*?\*/\s*)*\}$'
+  inside: { kind: catch_clause, field: body }

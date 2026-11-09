@@ -1,0 +1,12 @@
+id: py-broad-except
+language: python
+severity: hint
+message: "`except Exception` catches every error, also the bugs."
+note: Name the exceptions that you expect, or rethrow after the cleanup.
+metadata:
+  family: swallowed-error
+  precision: low
+  overlap: { ruff: [BLE001], pylint: [W0718] }
+rule:
+  kind: except_clause
+  regex: '^except\s*\(?\s*(Exception|BaseException)\s*\)?\s*(as\s+\w+\s*)?:'

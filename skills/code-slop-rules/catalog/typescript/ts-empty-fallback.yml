@@ -1,0 +1,12 @@
+id: ts-empty-fallback
+language: typescript
+severity: hint
+message: A fallback to an empty value can hide a missing value.
+note: Check that the left side can really be missing. If it cannot, delete the fallback. If it can, decide if empty is the right answer.
+metadata:
+  family: dead-fallback
+  precision: low
+  overlap: { eslint: ['@typescript-eslint/no-unnecessary-condition'] }
+rule:
+  kind: binary_expression
+  regex: '(\?\?|\|\|)\s*(''''|""|``|\[\]|\{\}|0)$'
