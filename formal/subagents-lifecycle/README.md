@@ -379,6 +379,13 @@ fixed (see F5).
   (it passes). The bound and the gate's agent listener are checked by
   `tests/subagents-child-prompt.test.ts` (mock timers) and by
   `repro-f2.mts --late`.
+- After a dispose that did not wait to the end, Pi's dispose clears the
+  session's listeners, also the gate's `compaction_start` listener. A prompt
+  that waited in an `input` handler past both bounds (about 20 s) can then
+  still run a compaction in `_prepareRun` and send its summary request. The
+  run itself stops at `agent_start`. Round 2 of the review found this
+  (medium, no repro). A fix would defer Pi's dispose until that prompt
+  ended. It is a follow-up.
 - After a dispose that did not wait to the end, Pi's `agent_settled` emit
   runs on an invalidated extension runner. The run is stopped before its
   first request; what Pi does with the rest of it is Pi's.
@@ -448,6 +455,11 @@ tests and the repros, and wrote probes. Its findings and what changed:
   stop was in flight now goes on after close and reports once. Not fixed; a
   follow-up.
 - L3 (low): wrong citations (`takeQueued`). Fixed.
+
+Round 2 (a fresh Opus 5.5 reviewer, at cb4faf7) found no new critical or
+high defect. It found one medium gap with no repro: a compaction after a
+dispose whose waits ended (see "Limits of the gate"). The review loop
+stops here.
 
 ## Mutants and survivors
 
