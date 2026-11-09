@@ -108,7 +108,7 @@ async function check(path, values) {
 		const source = variantSource(record, item.name);
 		const invariants = invariantsFor(record.manifest, item);
 		const run = runTlc(tools, record, source, invariants, workersFor(item));
-		let violated = item.expect === "pass" ? null : item.expect.violates;
+		let violated = item.expect !== "pass" ? item.expect.violates : invariants.length === 1 ? invariants[0] : null;
 		// A pass check that fails: find which invariant broke, so the report names it.
 		if (item.expect === "pass" && run.result === "violation" && invariants.length > 1) {
 			violated = invariants.find((inv) => runTlc(tools, record, source, [inv], "1").result === "violation") ?? null;
@@ -161,7 +161,8 @@ async function traces(path, values) {
 			// A witness is an invariant that must break: the run that breaks it reaches a rare state.
 			const file = join(scratch, `witness_${witness}.itf.json`);
 			const found = quintRun([`--invariant=${witness}`, "--max-samples=200000"], file);
-			if (found.status === 0 || !existsSync(file)) fail(`no run reaches the witness ${witness} within ${steps} steps; the state may be unreachable`);
+			if (found.status === 0) fail(`no run reaches the witness ${witness} within ${steps} steps; the state may be unreachable`);
+			if (!existsSync(file)) fail(`quint run for the witness ${witness} failed:\n${found.stdout}\n${found.stderr}`);
 			docs.push(read(file, { witness }));
 		}
 		return docs;
