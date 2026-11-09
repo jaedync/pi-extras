@@ -9,7 +9,7 @@
     "idleMeansLanded",
     "wokenForMail"
   ],
-  "syncCommit": "7efacb0",
+  "syncCommit": "fe4d93b",
   "covers": [
     {
       "path": "lib/subagents/deliver.ts",
@@ -283,6 +283,47 @@
       ],
       "expect": {
         "violates": "noLoss"
+      }
+    },
+    {
+      "name": "mutant-send-keeps-outbox",
+      "base": "assume-fixes",
+      "mirrors": "lib/subagents/deliver.ts:259 reading `this.outbox[0]` instead of `this.outbox.shift()`: the sent item stays and goes again",
+      "replace": [
+        {
+          "from": "val b1 = { ...b, outbox: b.outbox.tail() }",
+          "to": "val b1 = b"
+        }
+      ],
+      "expect": {
+        "violates": "landedOnce"
+      }
+    },
+    {
+      "name": "survivor-idle-ignores-outbox",
+      "base": "assume-fixes",
+      "mirrors": "lib/subagents/deliver.ts:202 idle() without `this.outbox.length === 0`",
+      "replace": [
+        {
+          "from": "pending == Set() and not(batch) and outbox == [] and owing == Set())",
+          "to": "pending == Set() and not(batch) and owing == Set())"
+        }
+      ],
+      "expect": "pass",
+      "why": "Every item in the outbox is also pending (deliver.ts:166, :191 remember before post), so pending == {} already implies an empty outbox, except for the hidden reminder, which idleMeansLanded leaves out. Without the outbox check, a held reminder would let the host go quiet, and the renew swap would dispose it; the model does not model renew, so no property sees that."
+    },
+    {
+      "name": "mutant-idle-ignores-pending",
+      "base": "assume-fixes",
+      "mirrors": "lib/subagents/deliver.ts:202 idle() without `this.pendingItems.size === 0`",
+      "replace": [
+        {
+          "from": "(gen == 1 and hostPhase == \"served\" and not(closed) and pending == Set() and not(batch)",
+          "to": "(gen == 1 and hostPhase == \"served\" and not(closed) and not(batch)"
+        }
+      ],
+      "expect": {
+        "violates": "idleMeansLanded"
       }
     }
   ],
