@@ -153,7 +153,7 @@ The model does not cover:
 - `/tree` (`navigateTree`, as:3262-3267) and the summary of a branch.
 - Liveness: the model checks safety. `wokenForMail` checks the quiet states only.
 
-## Results (sync commit `57718bc`, after the fixes and owner answer 846)
+## Results (sync commit `fba2bf0`, after the fixes and owner answer 846)
 
 Run `node skills/formal-verification/scripts/fv.mjs check formal/subagents-mail --workers 1`.
 `results.json` holds the last run (27 of 27 checks gave the expected result).
@@ -402,7 +402,7 @@ The witness `witnessNoEscReminderLanded` puts traces in the replay where
 the quiet reminder lands and a later run ends. Of the 161 traces, 18 have
 the quiet reminder, and 6 start a run after it.
 
-**Regression tests (each fails on the code at `90f60a0` unless named).**
+**Regression tests (each fails on the code at `90f60a0` unless named).** Commit `fba2bf0`.
 
 - `tests/subagents-main-watch.test.ts`: the row "the user cancelled it too:
   no turn now, the reminder comes with the next message" and the row "an

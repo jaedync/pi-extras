@@ -10,7 +10,7 @@
     "wokenForMail",
     "escStartsNoTurn"
   ],
-  "syncCommit": "57718bc",
+  "syncCommit": "fba2bf0",
   "covers": [
     {
       "path": "lib/subagents/deliver.ts",
