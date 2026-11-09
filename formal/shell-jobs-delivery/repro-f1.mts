@@ -3,7 +3,7 @@
  * while agent_settled handlers still run makes shell-jobs deliver one
  * completion twice.
  *
- *   node formal/shell-jobs-delivery/repro-f1.mts              (prints 2 messages)
+ *   node formal/shell-jobs-delivery/repro-f1.mts              (before the fix, cf08a6a: 2 messages; with it: 1)
  *   node formal/shell-jobs-delivery/repro-f1.mts --no-reload  (control: 1 message)
  *
  * Real: Pi's AgentSession, its extension runner, reload(), the deferral of
@@ -12,7 +12,7 @@
  * _emitAgentSettled (what Pi runs when a run ends), and a deferred send is
  * appended to the session at once instead of starting a model run. A second
  * extension stands for any extension whose agent_settled handler awaits I/O.
- * It prints the number of completion messages and exits 1 when it is 2.
+ * It prints the number of completion messages and exits 1 when it is not 1.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -80,4 +80,4 @@ const total = completions();
 console.log(JSON.stringify({ reload, job: job.details.id, inSessionAfterExit: afterExit, completionMessages: total }));
 await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 rmSync(scratch, { recursive: true, force: true });
-process.exit(total === 2 ? 1 : 0);
+process.exit(total === 1 ? 0 : 1);
