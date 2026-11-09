@@ -31,6 +31,21 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   queue, and the quiet-spell release dropped it (residual R1 of
   `formal/subagents-lifecycle`). A stop in that moment is no longer
   overwritten by the end of the run.
+- Usage: the `usage` tool is fast again. The first call in each Pi process
+  and each subagent read the session files of the last 8 days again (about
+  800 MB on a busy machine). That call took 10 to 25 s on a loaded machine,
+  and up to 3 minutes in a busy long-running session. The processes of one
+  agent directory now share the spend they read in
+  `usage-dollars/spend-index-v2.json`, so each new byte is read one time.
+  On op01 at load 50 to 60, a first call takes about 1 s, and a later call
+  takes under 0.1 s. The report numbers do not change. The first read after
+  an update fills the file and takes about as long as before.
+- Usage: a poll for limits that does not answer in 2 s no longer holds the
+  report. The report uses the last reading and names the provider in a note.
+- Usage: a lock that another Pi session holds on a usage state file no longer
+  stops Pi for up to 3 s. The tool tries the lock again in the background.
+- Usage: `usage-guard.log` no longer gets "This extension ctx is stale" when a
+  session quits during a turn.
 
 ## 0.42.1 - 2026-11-09
 
