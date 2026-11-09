@@ -357,7 +357,7 @@ Path at f194608:
 
 ### R1. A message in the microtasks between `late()` and `settle()` was lost (fixed)
 
-The task `fix-subagent-mail` fixed this residual (commit `fa6888b`).
+The task `fix-subagent-mail` fixed this residual (commit `d6e026a`).
 
 - Path: the last `late()` of `work()` finds nothing. `work()` returns to
   `run()`, which calls `settle()` some microtasks later. Main sends a
@@ -378,12 +378,12 @@ The task `fix-subagent-mail` fixed this residual (commit `fa6888b`).
   takes the queue and the inbox again (`late()`). With mail, the run goes
   on with it as its next prompt. Without mail, `settle()` follows in the
   same synchronous step. Before that prompt, run() does the wrap-up and swap checks that
-  work() does before each prompt (commit `31d754d`, from the review of the
+  work() does before each prompt (commit `88972f9`, from the review of the
   fixes).
 - Repro: `tests/subagents-settle-steer.test.ts` runs the real prompt gate
   over a fake session whose steer takes one microtask to queue, as Pi's
   does. It sends the message after a chain of 0 to 9 microtasks.
-  - Before (code at `7649ff9`): at depth 3 the run is `idle`, the
+  - Before (code at `86b79d5`): at depth 3 the run is `idle`, the
     message waits in the session's queue, and `unread` is empty. The test
     fails: `depth 3: nothing waits in the idle session's queue`.
   - After: at each depth the message starts the next prompt, and the run is
@@ -628,7 +628,7 @@ f194608 and passes now:
 | `tests/subagents-stop-relaunch.test.ts` | F3, F4 (both marks, and the silenced report of a relaunched run) on fake sessions | 4 of 4 fail |
 | `tests/subagents-child-prompt.test.ts` | F1, F2, F5 on the gate and the disposer, with a fake session; the compaction abort, the `GATE_WAIT_MS` bounds and the agent listener after `shut` (review) | the module did not exist; with the first fix's gate (f597def), 5 of 10 fail: the compaction, the 3 bound and listener tests, and the F5 test, which calls the new `steering()` |
 | `tests/subagents-check-steer.test.ts` | F5 at the check boundary (review, high) | fails |
-| `tests/subagents-settle-steer.test.ts` | R1 (task `fix-subagent-mail`) | fails on `7649ff9` (depth 3) |
+| `tests/subagents-settle-steer.test.ts` | R1 (task `fix-subagent-mail`) | fails on `86b79d5` (depth 3) |
 | `tests/subagents-lifecycle-conformance.test.mts` | the replay and the finding paths | the traces of the fixed model fail at the finding steps |
 
 ## Commands

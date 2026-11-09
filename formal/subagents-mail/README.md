@@ -143,7 +143,7 @@ The model does not cover:
 - `/tree` (`navigateTree`, as:3262-3267) and the summary of a branch.
 - Liveness: the model checks safety. `wokenForMail` checks the quiet states only.
 
-## Results (sync commit `7649ff9`, after the fixes)
+## Results (sync commit `86b79d5`, after the fixes)
 
 Run `node skills/formal-verification/scripts/fv.mjs check formal/subagents-mail --workers 1`.
 `results.json` holds the last run (23 of 23 checks gave the expected result).
@@ -188,7 +188,7 @@ fixes) is now `before-fixes`; `f1-wake-mail-no-reminder`,
 `f4-failed-compaction` and `f4-old-fix-handler-order` are now the
 `mutant-f1` to `mutant-f4` checks; `assume-fixes`, `assume-fixes-fail` and
 `assume-fixes-reload` are now `faithful-no-reload`, `faithful-fail` and
-`faithful-reload`. Line numbers in this record are for `7649ff9`, also in
+`faithful-reload`. Line numbers in this record are for `86b79d5`, also in
 the text that describes the code before the fixes.
 
 Each invariant has at least one mutant that breaks it. Each of the four
@@ -249,7 +249,7 @@ Model errors that the checks found and that were fixed (each one judged against 
 Each fix went into the model first. All pass checks then passed at the same
 bounds as before, and each mutant still broke its invariant. Then the code
 changed, the replay got the new state, and each live repro became a
-regression test that failed on the old code. Commit `7649ff9`.
+regression test that failed on the old code. Commit `86b79d5`.
 
 | Bug | Model change | Code change | Regression tests (failed on the old code) |
 |---|---|---|---|
@@ -269,7 +269,7 @@ The live repros now wire `message_end` to `acknowledge`, as
 `extensions/subagents.ts` does. Before the fix the wiring changes nothing,
 because `acknowledge` only cleared the widget's item.
 
-**Repros before (code at `7936934`) and after (code at `7649ff9`).** Exit 1
+**Repros before (code at `7936934`) and after (code at `86b79d5`).** Exit 1
 means that main never replied to the note.
 
 | Repro | Before | After |
@@ -328,7 +328,7 @@ the same way, so main must reply after it.
 
 ## Finding F1: waking mail that starts main's turn gets no reminder after /compact
 
-Status: fixed in `7649ff9` (see "The fixes of F1 to F4"). The text below
+Status: fixed in `86b79d5` (see "The fixes of F1 to F4"). The text below
 describes the code before the fix. Confirmed in a real Pi `AgentSession` (Pi 1.4.0, faux provider, the
 real `MainMail` and `watchMain`). TLC checks `faithful` and `f1-wake-mail-no-reminder`, depth 9.
 
@@ -395,7 +395,7 @@ It owes waking mail only once its `message_end` shows that it landed.
 
 ## Finding F2: a quiet append cancels the reminder
 
-Status: fixed in `7649ff9` (`lastSaid` reads only `message` entries). The
+Status: fixed in `86b79d5` (`lastSaid` reads only `message` entries). The
 text below describes the code before the fix. Confirmed in a real Pi `AgentSession` (Pi 1.4.0, faux provider, the
 real `MainMail` and `watchMain`). TLC check `f2-quiet-append-cancels-reminder`, depth 10.
 
@@ -444,7 +444,7 @@ The second option, a flag, is more robust.
 
 ## Finding F3: a /compact during the settle check gets no reminder
 
-Status: fixed in `7649ff9` (`event.aborted` sets the stop mark). The text
+Status: fixed in `86b79d5` (`event.aborted` sets the stop mark). The text
 below describes the code before the fix. Confirmed in a real Pi `AgentSession` (Pi 1.4.0, faux provider, the
 real `MainMail` and `watchMain`). TLC check `f3-abort-in-settle-check`,
 depth 12. The review of this record found it (R1).
@@ -496,7 +496,7 @@ The control `node formal/subagents-mail/repro-f3.mts control` (exit 0) runs
 
 ## Finding F4: a cancelled /compact gets no reminder
 
-Status: fixed in `7649ff9` (the recommended option below). The text below
+Status: fixed in `86b79d5` (the recommended option below). The text below
 describes the code before the fix. Confirmed in a real Pi `AgentSession`. TLC check
 `f4-failed-compaction`, depth 9. The review of this record found it (R2).
 The round-2 review found that the first fix does not work in one extension
@@ -690,7 +690,7 @@ critical or high issue. Its points:
   "Two side effects of the fixes".
 - Low, no repro: the new loop in `team.ts` `run()` sent the late mail with
   no wrap-up check and no `swapBefore`, which `work()` does before each
-  prompt. Fixed: `run()` now does both checks (commit `31d754d`). The test
+  prompt. Fixed: `run()` now does both checks (commit `88972f9`). The test
   "a run whose budget ends as late mail lands ..." in
   `tests/subagents-settle-steer.test.ts` reaches this window: without the
   wrap-up check, the run at depth 3 is `stopped`; with it, the run ends
@@ -699,11 +699,11 @@ critical or high issue. Its points:
   `mail.qnt`). Fixed.
 
 A second fresh reviewer (`review-mail-final`) read the final record and
-commit `31d754d`. It found one high issue with a repro: the host test above
+commit `88972f9`. It found one high issue with a repro: the host test above
 failed on each run, and the record did not say so. Fixed (the test and the
 first side effect above). It also found three wrong citations in the
 lifecycle record (fixed) and gave the probe that became the budget test. It
-judged four event orders of `31d754d` against `work()` and found them
+judged four event orders of `88972f9` against `work()` and found them
 correct.
 
 It confirmed: deferred mail in `agent_settled`, a reminder that starts a run

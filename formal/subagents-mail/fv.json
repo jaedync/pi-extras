@@ -9,7 +9,7 @@
     "idleMeansLanded",
     "wokenForMail"
   ],
-  "syncCommit": "7649ff9",
+  "syncCommit": "86b79d5",
   "covers": [
     {
       "path": "lib/subagents/deliver.ts",
