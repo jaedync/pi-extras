@@ -149,9 +149,11 @@ cites its file and line in `lifecycle.qnt`.
 | `mutant-late-settle-gap-no-stop` | violates mailKept | violation of mailKept | 560 | 9 |
 
 All 26 checks give the expected result. The checks ran with 2 TLC workers on
-a loaded host. One check (`mutant-fallback-keeps-session`)
-first gave `error`, because another process used the Apalache port 8822 at
-the same time. A rerun with `--only` and 1 worker gave the result above.
+a loaded host. Checks that first gave `error` (another process used the
+Apalache port 8822 at the same time) gave the result above in a rerun with
+`--only` and 1 worker. In the last run (task `fix-subagent-mail`), 6 checks
+needed that rerun. With 2 workers, the states and the depth of a violation
+can differ from run to run; the table shows one run.
 
 At f194608 the record had 25 checks, and the findings were checks that
 expected a violation (`faithful`, `faithful-mail`, `f2-dispose-in-prep`,
