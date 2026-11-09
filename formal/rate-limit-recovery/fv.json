@@ -1,0 +1,383 @@
+{
+  "spec": "recovery.qnt",
+  "quint": "0.33.1",
+  "invariants": [
+    "oneWait",
+    "resumeOwed",
+    "withinBudgets",
+    "openEntryHasWait"
+  ],
+  "syncCommit": "343e195",
+  "covers": [
+    {
+      "path": "lib/rate-limit-recovery/controller.ts",
+      "what": "Recovery: register (context, model_select, before_agent_start, session_start, session_shutdown handlers), messageEnd, cancel, hibernate, turnEnd, beforeSettle, command (cancel), restoreIdleWait"
+    },
+    {
+      "path": "lib/rate-limit-recovery/transient.ts",
+      "what": "TransientBackoff: resume, reset, cancel, skip, waiting, messageEnd, turnEnd, handedToIdle, consumeReady, localWaitEnded, seedOutage"
+    },
+    {
+      "path": "lib/rate-limit-recovery/idle-wait.ts",
+      "what": "LocalIdleWait: start, restore, yieldToRun, cancel, skip, stop, run; openWait"
+    },
+    {
+      "path": "lib/rate-limit-recovery/wait.ts",
+      "what": "waitForDelay, waitUI (the cancel keys)"
+    },
+    {
+      "path": "lib/rate-limit-recovery/core.ts",
+      "what": "planWait (attempt and budget refusals only)"
+    },
+    {
+      "path": "lib/rate-limit-recovery/local.ts",
+      "what": "waitUntilAnswering (its end values only)"
+    },
+    {
+      "path": "extensions/rate-limit-recovery.ts",
+      "what": "recovery (the wiring)"
+    }
+  ],
+  "checks": [
+    {
+      "name": "faithful",
+      "why": "Pi and the code as they are. A resume comes for a failure that nothing owes (F1, F2).",
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "faithful-one-wait",
+      "why": "Two waits at once: the idle wait of a failure goes on while the same run continues and its next request starts an in-run wait (F2).",
+      "expect": {
+        "violates": "oneWait"
+      }
+    },
+    {
+      "name": "faithful-open-entry",
+      "why": "An open local-wait entry with no wait behind it (F1: /clone copies it).",
+      "expect": {
+        "violates": "openEntryHasWait"
+      }
+    },
+    {
+      "name": "f1-clone-reload",
+      "why": "Assume the F2 fix: a /clone during an idle wait, then /reload in the clone, starts a run on its own (F1).",
+      "replace": [
+        {
+          "from": "pure val CONTEXT_ENDS_IDLE_WAIT = false",
+          "to": "pure val CONTEXT_ENDS_IDLE_WAIT = true"
+        }
+      ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "f2-run-continues",
+      "why": "Assume the F1 fix: a message that steers into the failing run continues it, and the idle wait still resumes later (F2).",
+      "replace": [
+        {
+          "from": "pure val FORK_CLOSES_ENTRY = false",
+          "to": "pure val FORK_CLOSES_ENTRY = true"
+        }
+      ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "f2-run-continues-one-wait",
+      "why": "Assume the F1 fix: the continued run fails again with a short rate limit while the idle wait goes on (F2).",
+      "replace": [
+        {
+          "from": "pure val FORK_CLOSES_ENTRY = false",
+          "to": "pure val FORK_CLOSES_ENTRY = true"
+        }
+      ],
+      "expect": {
+        "violates": "oneWait"
+      }
+    },
+    {
+      "name": "f2-no-steer",
+      "why": "Assume the F1 fix, and no message steers into a run: another extension's agent_before_settle continue alone gives F2.",
+      "replace": [
+        {
+          "from": "pure val FORK_CLOSES_ENTRY = false",
+          "to": "pure val FORK_CLOSES_ENTRY = true"
+        },
+        {
+          "from": "    if (running) all {\n      phase' = phase, aborted' = aborted, queued' = queued + 1, settleGo' = settleGo,\n      keepQ, keepT, keepI, keepGhost,\n    } else all {\n      startRun(\"user\", iActive, entryOpen),",
+          "to": "    not(running),\n    if (running) all {\n      phase' = phase, aborted' = aborted, queued' = queued + 1, settleGo' = settleGo,\n      keepQ, keepT, keepI, keepGhost,\n    } else all {\n      startRun(\"user\", iActive, entryOpen),"
+        },
+        {
+          "from": "    if (running) all {\n      phase' = phase, aborted' = aborted, queued' = queued + 1, settleGo' = settleGo,\n      keepQ, keepT, keepI, keepGhost,\n    } else all {\n      startRun(\"other\", iActive, entryOpen),",
+          "to": "    not(running),\n    if (running) all {\n      phase' = phase, aborted' = aborted, queued' = queued + 1, settleGo' = settleGo,\n      keepQ, keepT, keepI, keepGhost,\n    } else all {\n      startRun(\"other\", iActive, entryOpen),"
+        }
+      ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "assume-fix",
+      "why": "Both fixes: a new request ends the idle wait, and a fork closes a copied open entry.",
+      "replace": [
+        {
+          "from": "pure val CONTEXT_ENDS_IDLE_WAIT = false",
+          "to": "pure val CONTEXT_ENDS_IDLE_WAIT = true"
+        },
+        {
+          "from": "pure val FORK_CLOSES_ENTRY = false",
+          "to": "pure val FORK_CLOSES_ENTRY = true"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "assume-fix-wide",
+      "base": "assume-fix",
+      "why": "The same with 4 requests and 3 inputs.",
+      "replace": [
+        {
+          "from": "pure val MAX_REQUESTS = 3 ",
+          "to": "pure val MAX_REQUESTS = 4 "
+        },
+        {
+          "from": "pure val MAX_INPUTS = 2 ",
+          "to": "pure val MAX_INPUTS = 3 "
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "assume-fix-no-other-continue",
+      "base": "assume-fix",
+      "why": "The same with no other extension that continues at agent_before_settle.",
+      "replace": [
+        {
+          "from": "pure val OTHER_EXTENSION_CONTINUES = true",
+          "to": "pure val OTHER_EXTENSION_CONTINUES = false"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "mutant-user-run-keeps-idle-wait",
+      "base": "assume-fix",
+      "mirrors": "controller.ts:152 without `this.idleWait.cancel()`: a user prompt does not end the idle wait",
+      "replace": [
+        {
+          "from": "iActive' = if (resumed) idleBefore else false,",
+          "to": "iActive' = if (resumed or kind == \"user\") idleBefore else false,"
+        },
+        {
+          "from": "entryOpen' = if (resumed or not(idleBefore)) entryBefore else false,",
+          "to": "entryOpen' = if (resumed or kind == \"user\" or not(idleBefore)) entryBefore else false,"
+        }
+      ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "mutant-carried-run-keeps-idle-wait",
+      "base": "assume-fix",
+      "mirrors": "controller.ts:151 without `this.idleWait.yieldToRun()`: a shell job report run does not end the idle wait",
+      "replace": [
+        {
+          "from": "iActive' = if (resumed) idleBefore else false,",
+          "to": "iActive' = if (resumed or carried) idleBefore else false,"
+        },
+        {
+          "from": "entryOpen' = if (resumed or not(idleBefore)) entryBefore else false,",
+          "to": "entryOpen' = if (resumed or carried or not(idleBefore)) entryBefore else false,"
+        }
+      ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "mutant-cancel-keeps-entry-open",
+      "base": "assume-fix",
+      "mirrors": "idle-wait.ts:125 without the closed record in LocalIdleWait.cancel(): the entry stays open after a user run ends the wait",
+      "replace": [
+        {
+          "from": "entryOpen' = if (resumed or not(idleBefore)) entryBefore else false,",
+          "to": "entryOpen' = entryBefore,"
+        }
+      ],
+      "expect": {
+        "violates": "openEntryHasWait"
+      }
+    },
+    {
+      "name": "mutant-ready-survives-new-run",
+      "base": "assume-fix",
+      "mirrors": "controller.ts:130, :143 and :238 without `this.ready = false`, and transient.ts reset(), resume() and messageEnd() without `this.ready = false`: a ready flag of an aborted run reaches the next run's agent_before_settle",
+      "replace": [
+        {
+          "from": "qReady' = false, tReady' = false,   // before_agent_start clears ready",
+          "to": "qReady' = qReady, tReady' = tReady,"
+        },
+        {
+          "from": "qReady' = false, tReady' = false,   // context clears ready",
+          "to": "qReady' = qReady, tReady' = tReady,"
+        },
+        {
+          "from": "qReady' = false, tReady' = false,   // message_end clears ready",
+          "to": "qReady' = qReady, tReady' = tReady,"
+        }
+      ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "survivor-context-keeps-ready",
+      "base": "assume-fix",
+      "why": "controller.ts:130 without the ready resets in the context handler. before_agent_start clears ready before any later run (controller.ts:143, transient.ts reset/resume), and a continuation inside the run has no ready left (beforeSettle consumes it, a queued continuation follows a wait that set it for this failure). The model has no path where this guard alone matters.",
+      "replace": [
+        {
+          "from": "qReady' = false, tReady' = false,   // context clears ready",
+          "to": "qReady' = qReady, tReady' = tReady,"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "survivor-start-keeps-ready",
+      "base": "assume-fix",
+      "why": "controller.ts:143 and transient.ts reset()/resume() without the ready resets. The context event of the run's first request clears both flags before agent_before_settle can read them.",
+      "replace": [
+        {
+          "from": "qReady' = false, tReady' = false,   // before_agent_start clears ready",
+          "to": "qReady' = qReady, tReady' = tReady,"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "survivor-message-end-keeps-ready",
+      "base": "assume-fix",
+      "why": "controller.ts:238 and transient.ts:334 without the ready resets at message_end. The context event before the request already cleared both flags.",
+      "replace": [
+        {
+          "from": "qReady' = false, tReady' = false,   // message_end clears ready",
+          "to": "qReady' = qReady, tReady' = tReady,"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "mutant-no-attempt-cap",
+      "base": "assume-fix",
+      "mirrors": "core.ts:65 without `attempts >= config.maxRecoveries`: a third hibernation in one run",
+      "replace": [
+        {
+          "from": "val planOk = attempts < MAX_RECOVERIES and spent < BUDGET",
+          "to": "val planOk = spent < BUDGET"
+        },
+        {
+          "from": "pure val BUDGET = 2 ",
+          "to": "pure val BUDGET = 3 "
+        }
+      ],
+      "why": "With BUDGET 2 the budget refuses the third wait first, so this check allows 3 units.",
+      "expect": {
+        "violates": "withinBudgets"
+      }
+    },
+    {
+      "name": "mutant-no-wait-budget",
+      "base": "assume-fix",
+      "mirrors": "core.ts:69 without the aggregate budget check: a third quota wait past maxWaitSeconds",
+      "replace": [
+        {
+          "from": "val planOk = attempts < MAX_RECOVERIES and spent < BUDGET",
+          "to": "val planOk = attempts < MAX_RECOVERIES"
+        },
+        {
+          "from": "pure val MAX_RECOVERIES = 2 ",
+          "to": "pure val MAX_RECOVERIES = 3 "
+        }
+      ],
+      "why": "With MAX_RECOVERIES 2 the attempt cap refuses the third wait first.",
+      "expect": {
+        "violates": "withinBudgets"
+      }
+    },
+    {
+      "name": "mutant-no-streak-budget",
+      "base": "assume-fix",
+      "mirrors": "transient.ts:99 (planTransient) without the `remainingMs < BASE_DELAY_MS` refusal: the short-rate-limit streak waits past its budget",
+      "replace": [
+        {
+          "from": "k == \"cloud\" and streak < MAX_STREAK",
+          "to": "k == \"cloud\""
+        }
+      ],
+      "expect": {
+        "violates": "withinBudgets"
+      }
+    },
+    {
+      "name": "survivor-transient-wait-ignores-abort",
+      "base": "assume-fix",
+      "why": "transient.ts:404-405 without the `runSignal.aborted` check before the wait. The wait then runs after an Esc, but the check after it (transient.ts:428) and the end of the aborted run (AS:1440-1457: no agent_before_settle after an abort) keep it from resuming, and the next run clears its ready flag. The wasted wait breaks no property. The conformance replay catches this change.",
+      "replace": [
+        {
+          "from": "val transientWait = tPending != \"none\" and not(aborted)",
+          "to": "val transientWait = tPending != \"none\""
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "survivor-model-switch-keeps-hibernation",
+      "base": "assume-fix",
+      "why": "controller.ts:137 without the cancel on a switch out of scope. The scope check after the wait (controller.ts:275 `!this.inScope(...)`) still refuses the resume, so the guard is a second line. The wait runs to its end with no use, which no property states.",
+      "replace": [
+        {
+          "from": "    val cancelH = leftScope\n",
+          "to": "    val cancelH = false\n"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "mutant-model-switch-resumes-out-of-scope",
+      "base": "survivor-model-switch-keeps-hibernation",
+      "mirrors": "controller.ts:137 without the cancel, and controller.ts:275 without `!this.inScope(limit.scope, ctx)`: a hibernation resumes the run on a model of another scope",
+      "replace": [
+        {
+          "from": "val resume = not(aborted) and scopeOf(model) == \"anthropic\"",
+          "to": "val resume = not(aborted)"
+        }
+      ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    }
+  ],
+  "traces": {
+    "check": "faithful",
+    "out": "traces.itf.jsonl.gz",
+    "n": 200,
+    "steps": 30,
+    "seed": "0x5eed",
+    "witnesses": [
+      "witnessNoHibernateResume",
+      "witnessNoTransientResume",
+      "witnessNoAttemptCap",
+      "witnessNoStreakCap",
+      "witnessNoRestore",
+      "witnessNoOtherEndsIdle",
+      "witnessNoUserEndsIdle",
+      "resumeOwed",
+      "oneWait"
+    ]
+  }
+}
