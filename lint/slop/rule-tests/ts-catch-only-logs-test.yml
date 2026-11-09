@@ -1,0 +1,7 @@
+id: ts-catch-only-logs
+valid:
+  - 'try { f(); } catch (e) { console.error(e); throw e; }'
+  - 'try { f(); } catch (e) { report(e); }'
+invalid:
+  - 'try { f(); } catch (e) { console.error(e); }'
+  - 'try { f(); } catch { console.warn("failed"); }'

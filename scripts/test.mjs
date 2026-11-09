@@ -10,7 +10,8 @@ const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || 
   PI_CODING_AGENT_DIR: join(home, 'agent'), PI_OFFLINE: '1', PI_TELEMETRY: '0',
   STATUSLINE_TZ: 'America/Chicago', TZ: 'UTC', CI: 'true' };
 try {
-  for (const command of ['test:unit', 'test:kagi']) {
+  // lint:slop first: it takes under a second and names a new slop site before the long suites run.
+  for (const command of ['lint:slop', 'test:unit', 'test:kagi']) {
     const args = ['run', command, ...(serial && command === 'test:unit' ? ['--', '--test-concurrency=1'] : [])];
     // GitHub's macOS runners took from under 3 to over 5 minutes for the same commit (Node 22, 0.24.18), so CI gets
     // 10; each test's own 60-second limit still names a hang. Locally a hang still shows in 2 minutes.

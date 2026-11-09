@@ -1,0 +1,21 @@
+id: ts-error-cast
+language: typescript
+severity: hint
+ignores:
+  - "tests/**"
+  - "test/**"
+  - "**/__tests__/**"
+  - "**/*.test.*"
+  - "**/*.spec.*"
+message: A cast of a caught value to Error assumes that every throw is an Error.
+note: "Use `error instanceof Error ? error.message : String(error)`, or a shared helper."
+metadata:
+  family: type-escape
+  precision: high
+  overlap: { eslint: [] }
+rule:
+  kind: as_expression
+  has:
+    any:
+      - { kind: type_identifier, regex: '^(Error|ErrnoException)$' }
+      - { kind: nested_type_identifier, regex: '\.ErrnoException$' }

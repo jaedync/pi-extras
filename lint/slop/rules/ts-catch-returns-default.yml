@@ -1,0 +1,13 @@
+id: ts-catch-returns-default
+language: typescript
+severity: warning
+message: A catch block that only returns an empty value hides the failure from the caller.
+note: The caller cannot tell "no value" from "the call failed". Return a result type, or rethrow.
+metadata:
+  family: swallowed-error
+  precision: high
+  overlap: { eslint: [] }
+rule:
+  kind: statement_block
+  inside: { kind: catch_clause, field: body }
+  regex: '^\{\s*(//[^\n]*\s*|/\*[\s\S]*?\*/\s*)*return\s*(null|undefined|false|true|0|-1|''''|""|``|\[\]|\{\}|new Map\(\)|new Set\(\))?\s*;?\s*\}$'

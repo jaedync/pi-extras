@@ -1,0 +1,14 @@
+id: ts-swallowed-catch
+valid:
+  - 'try { f(); } catch (error) { log(error); }'
+  - 'try { f(); } catch { return fallback(); }'
+  - 'try { f(); } finally {}'
+  - 'if (a) {}'
+invalid:
+  - 'try { f(); } catch {}'
+  - 'try { f(); } catch (e) {}'
+  - 'try { f(); } catch { /* ignore */ }'
+  - |
+    try { f(); } catch {
+      // The file can be gone.
+    }

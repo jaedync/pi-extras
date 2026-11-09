@@ -1,0 +1,13 @@
+id: ts-promise-catch-noop
+valid:
+  - 'p.catch((error) => log(error));'
+  - 'p.catch(report);'
+  - 'p.then(() => {});'
+invalid:
+  - 'p.catch(() => {});'
+  - 'p.catch(() => undefined);'
+  - 'p.catch(() => null);'
+  - 'p.catch((_error) => {});'
+  - 'p.catch(() => { /* gone */ });'
+  - 'p.catch(function () {});'
+  - 'p.catch(noop);'

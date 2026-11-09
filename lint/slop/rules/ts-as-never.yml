@@ -1,0 +1,19 @@
+id: ts-as-never
+language: typescript
+severity: warning
+ignores:
+  - "tests/**"
+  - "test/**"
+  - "**/__tests__/**"
+  - "**/*.test.*"
+  - "**/*.spec.*"
+message: "`as never` makes a value fit any type, so the checker cannot check it."
+note: Build a value of the real type (a typed fake in a test), or narrow from `unknown`.
+metadata:
+  family: type-escape
+  precision: high
+  overlap: { eslint: [] }
+  overlapNote: typescript-eslint no-explicit-any does not see `as never`, so a ban on `any` often moves the casts here.
+rule:
+  kind: as_expression
+  has: { kind: predefined_type, regex: '^never$' }

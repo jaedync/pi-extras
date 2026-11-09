@@ -1,0 +1,8 @@
+id: ts-as-any
+valid:
+  - 'const a = b as unknown;'
+  - 'const a = b as Foo;'
+  - 'let a: any;'
+invalid:
+  - 'const a = b as any;'
+  - '(b as any).c();'

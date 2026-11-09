@@ -1,0 +1,7 @@
+id: ts-lint-disable
+valid:
+  - '// Lint passes here.'
+invalid:
+  - '// eslint-disable-next-line no-control-regex'
+  - '/* eslint-disable no-undef */'
+  - '// biome-ignore lint/suspicious/noExplicitAny: upstream type'

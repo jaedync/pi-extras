@@ -1,0 +1,17 @@
+id: ts-non-null-assertion
+language: typescript
+severity: hint
+ignores:
+  - "tests/**"
+  - "test/**"
+  - "**/__tests__/**"
+  - "**/*.test.*"
+  - "**/*.spec.*"
+message: A non-null assertion `!` tells the checker to trust a value that can be null.
+note: Check the value, or change the type so that it cannot be null.
+metadata:
+  family: type-escape
+  precision: medium
+  overlap: { eslint: ['@typescript-eslint/no-non-null-assertion'], biome: [lint/style/noNonNullAssertion] }
+rule:
+  kind: non_null_expression

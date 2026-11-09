@@ -1,0 +1,18 @@
+id: ts-as-any
+language: typescript
+severity: warning
+ignores:
+  - "tests/**"
+  - "test/**"
+  - "**/__tests__/**"
+  - "**/*.test.*"
+  - "**/*.spec.*"
+message: "`as any` turns off type checks for this value."
+note: Give the value its real type, use `unknown` and narrow it, or fix the type at its source.
+metadata:
+  family: type-escape
+  precision: high
+  overlap: { eslint: ['@typescript-eslint/no-explicit-any'], biome: [lint/suspicious/noExplicitAny] }
+rule:
+  kind: as_expression
+  has: { kind: predefined_type, regex: '^any$' }

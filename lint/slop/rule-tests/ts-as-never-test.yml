@@ -1,0 +1,6 @@
+id: ts-as-never
+valid:
+  - 'const a = b as Foo;'
+  - 'const check: never = value;'
+invalid:
+  - 'run({} as never);'

@@ -1,0 +1,8 @@
+id: ts-non-null-assertion
+valid:
+  - 'const a = b?.c;'
+  - 'const a = !b;'
+  - 'if (a !== b) {}'
+invalid:
+  - 'const a = b!.c;'
+  - 'f(map.get(key)!);'

@@ -1,0 +1,6 @@
+id: ts-double-cast
+valid:
+  - 'const a = b as Foo;'
+  - 'const a = b as unknown;'
+invalid:
+  - 'const a = b as unknown as Foo;'

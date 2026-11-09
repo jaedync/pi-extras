@@ -1,0 +1,12 @@
+id: ts-empty-default
+language: typescript
+severity: hint
+message: A `default` branch that does nothing ignores every value that the cases did not name.
+note: Make the switch exhaustive with a `never` check, or handle the other values.
+metadata:
+  family: catch-all
+  precision: high
+  overlap: { eslint: ['@typescript-eslint/switch-exhaustiveness-check'] }
+rule:
+  kind: switch_default
+  regex: '^default\s*:\s*(break\s*;?|\{\s*\}|\{\s*break\s*;?\s*\})?\s*$'

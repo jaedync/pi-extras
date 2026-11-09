@@ -1,0 +1,13 @@
+id: py-except-pass
+language: python
+severity: warning
+message: An except block that only says `pass` swallows the error.
+note: Handle or log the error, or use contextlib.suppress with the exact exception and a comment that says why.
+metadata:
+  family: swallowed-error
+  precision: high
+  overlap: { ruff: [S110, SIM105], bandit: [B110] }
+rule:
+  kind: block
+  inside: { kind: except_clause }
+  regex: '^(pass|\.\.\.)$'

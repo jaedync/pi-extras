@@ -15,6 +15,11 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   repository. `slop.mjs ratchet` fails when a rule has more sites than its
   recorded baseline; `--update` refuses a higher count unless
   `--allow-increase` is given. Run `/skill:code-slop-rules`.
+- pi-extras checks its own code with 15 of the rules: `npm test` runs
+  `npm run lint:slop` first. The baseline (`lint/slop/baseline.json`) keeps
+  the old sites; a new swallowed catch, `as any` in source, fixed sleep or
+  other new site fails the run. The development dependency `@ast-grep/cli`
+  0.51.1 supplies the binary.
 
 ## 0.41.0 - 2026-11-08
 

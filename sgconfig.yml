@@ -1,0 +1,7 @@
+ruleDirs:
+  - lint/slop/rules
+testConfigs:
+  - testDir: lint/slop/rule-tests
+# One TypeScript rule set covers JavaScript too: the TypeScript grammar parses plain JS.
+languageGlobs:
+  typescript: ['*.ts', '*.mts', '*.cts', '*.js', '*.mjs', '*.cjs']
