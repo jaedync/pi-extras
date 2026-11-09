@@ -66,6 +66,8 @@ export function fullscreen() {
 	// The fixed wait lets async work land (an overlay's factory, a log read). On a loaded host the TUI's throttled
 	// frame could still be pending after it (10 of 40 runs beside 30 busy loops), so wait for that frame too.
 	const pending = tui as unknown as { renderRequested: boolean; renderTimer: unknown };
+	// Private fields of pi-tui: if a release renames them, fail here, not quietly back to a bare 40 ms wait.
+	if (!("renderRequested" in pending) || !("renderTimer" in pending)) throw new Error("pi-tui no longer has renderRequested and renderTimer: update settle()");
 	const settle = async (ms = SETTLE_MS) => {
 		tui.requestRender();
 		await sleep(ms);
