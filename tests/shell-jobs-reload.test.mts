@@ -51,6 +51,10 @@ async function pause(app: App) {
 	await fire(app.handlers, "session_shutdown", app.ctx, { reason: "reload" });
 }
 
+function runtimeOf() {
+	return [...__testing.getRuntimes()][0];
+}
+
 async function until(check: () => boolean) {
 	const deadline = Date.now() + 5000;
 	while (!check() && Date.now() < deadline) await sleep(10);
@@ -260,6 +264,9 @@ test("live limit and completion attempt cap survive repeated reloads", async () 
 	await start(current, "echo retry");
 	await until(() => current.messages.length === 1);
 	for (let i = 0; i < 4; i++) {
+		// The run ends and the completion is not in the session: a new attempt.
+		await fire(current.handlers, "agent_settled", current.ctx, { type: "agent_settled", aborted: false });
+		await until(() => current.run.busy || runtimeOf().jobs.get("echo-retry")!.deliveryFailed);
 		await pause(current);
 		current = await boot(current);
 	}
@@ -273,6 +280,27 @@ test("live limit and completion attempt cap survive repeated reloads", async () 
 	const over = await current.tools.get("shell_job_start").execute("over", { command: "true" }, undefined, undefined, current.ctx);
 	assert.equal(over.isError, true);
 	assert.match(over.content[0].text, /Too many live jobs/);
+});
+
+// Finding F1 (formal/shell-jobs-delivery/README.md): Pi still holds the sent
+// completion across the reload, so the new binding must not send it again.
+test("a reload does not send again a completion that Pi still holds", async () => {
+	const first = await boot();
+	await start(first, "echo held");
+	await until(() => first.messages.length === 1);
+	const runtime = runtimeOf();
+	assert.equal(runtime.held?.get("echo-held"), "steered");
+	await pause(first);
+	const second = await boot(first);
+	await sleep(100);
+	assert.equal(first.messages.length + second.messages.length, 1);
+	assert.equal(runtime.jobs.get("echo-held")!.attempts, 1);
+	// It lands later; the next reconcile finds it in the history and acknowledges it.
+	second.ctx.sessionManager.getBranch = () => [{ type: "custom_message", ...first.messages[0].message }];
+	await fire(second.handlers, "agent_settled", second.ctx, { type: "agent_settled", aborted: false });
+	assert.equal(runtime.jobs.get("echo-held")!.delivered, true);
+	assert.equal(runtime.held?.has("echo-held"), false);
+	assert.equal(first.messages.length + second.messages.length, 1);
 });
 
 test("a kill in progress across reload keeps its claim and never emits a completion", async () => {

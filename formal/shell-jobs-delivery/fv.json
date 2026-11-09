@@ -3,6 +3,7 @@
   "quint": "0.33.1",
   "invariants": [
     "oneCompletion",
+    "oneCopy",
     "stoppedMeansSilent",
     "boundedSends",
     "deliveredMeansSeen",
@@ -30,14 +31,50 @@
   "checks": [
     {
       "name": "faithful",
-      "why": "Pi as it is. The shortest path to the duplicate is F4; the f checks show the other paths one at a time.",
+      "why": "Pi as it is, and the code with the fix: every property holds. The TUI flag is chosen at init, so this covers the TUI and the other modes.",
+      "expect": "pass"
+    },
+    {
+      "name": "faithful-wide",
+      "base": "faithful",
+      "why": "The same at wider bounds: 3 jobs.",
+      "replace": [
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\", \"j2\", \"j3\")"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "faithful-runs3",
+      "base": "faithful",
+      "why": "The same with 3 user runs or aborts.",
+      "replace": [
+        {
+          "from": "pure val MAX_RUNS = 2 ",
+          "to": "pure val MAX_RUNS = 3 "
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "old-faithful",
+      "base": "faithful",
+      "why": "The code before the fix (reconcile does not skip held jobs): the shortest path to the duplicate is F4.",
+      "replace": [
+        {
+          "from": "pure val HELD_GUARD = true",
+          "to": "pure val HELD_GUARD = false"
+        }
+      ],
       "expect": {
         "violates": "oneCompletion"
       }
     },
     {
       "name": "f2-pi-extras-alone",
-      "why": "No other extension before shell-jobs and no /reload: pi-extras alone gives a duplicate.",
+      "why": "No other extension before shell-jobs and no /reload (pi-extras alone): every property holds. old-f2-pi-extras-alone shows the duplicate before the fix.",
       "replace": [
         {
           "from": "pure val OTHER_HANDLERS_FIRST = true",
@@ -46,6 +83,22 @@
         {
           "from": "pure val MAX_RELOADS = 1",
           "to": "pure val MAX_RELOADS = 0"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "old-f2-pi-extras-alone",
+      "base": "f2-pi-extras-alone",
+      "why": "The code before the fix, under the same conditions: path F4. No read ends while an aborted run winds down, so that the check shows this path and not F5.",
+      "replace": [
+        {
+          "from": "pure val HELD_GUARD = true",
+          "to": "pure val HELD_GUARD = false"
+        },
+        {
+          "from": "pure val SEND_AFTER_ABORT = true",
+          "to": "pure val SEND_AFTER_ABORT = false"
         }
       ],
       "expect": {
@@ -54,7 +107,7 @@
     },
     {
       "name": "f2-two-jobs",
-      "why": "No other extension before shell-jobs, no /reload, no user prompt, and only Esc aborts: two jobs whose tail reads are in flight when a run ends give the duplicate (F2a). repro-f2.mts reaches it through Esc.",
+      "why": "No other extension before shell-jobs, no /reload, no user prompt, and only Esc aborts: two jobs whose tail reads are in flight when a run ends land once each (path F2a is closed). repro-f2.mts reaches it through Esc.",
       "replace": [
         {
           "from": "pure val OTHER_HANDLERS_FIRST = true",
@@ -71,6 +124,22 @@
         {
           "from": "pure val ABORT_KEEPS_QUEUE = true",
           "to": "pure val ABORT_KEEPS_QUEUE = false"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "old-f2-two-jobs",
+      "base": "f2-two-jobs",
+      "why": "The code before the fix, under the same conditions: path F2a. No read ends while an aborted run winds down, so that the check shows this path and not F5.",
+      "replace": [
+        {
+          "from": "pure val HELD_GUARD = true",
+          "to": "pure val HELD_GUARD = false"
+        },
+        {
+          "from": "pure val SEND_AFTER_ABORT = true",
+          "to": "pure val SEND_AFTER_ABORT = false"
         }
       ],
       "expect": {
@@ -79,7 +148,7 @@
     },
     {
       "name": "f1-one-job-reload",
-      "why": "One job, no other extension before shell-jobs, no user prompt, and only Esc aborts: a /reload during agent_settled gives the duplicate (F1).",
+      "why": "One job, no other extension before shell-jobs, no user prompt, and only Esc aborts: a /reload during agent_settled does not send again (path F1 is closed).",
       "replace": [
         {
           "from": "pure val OTHER_HANDLERS_FIRST = true",
@@ -96,6 +165,22 @@
         {
           "from": "pure val ABORT_KEEPS_QUEUE = true",
           "to": "pure val ABORT_KEEPS_QUEUE = false"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "old-f1-one-job-reload",
+      "base": "f1-one-job-reload",
+      "why": "The code before the fix, under the same conditions: path F1. No read ends while an aborted run winds down, so that the check shows this path and not F5.",
+      "replace": [
+        {
+          "from": "pure val HELD_GUARD = true",
+          "to": "pure val HELD_GUARD = false"
+        },
+        {
+          "from": "pure val SEND_AFTER_ABORT = true",
+          "to": "pure val SEND_AFTER_ABORT = false"
         }
       ],
       "expect": {
@@ -104,7 +189,7 @@
     },
     {
       "name": "f2-one-job-prompt",
-      "why": "One job, no other extension before shell-jobs, no /reload, and only Esc aborts: a prompt that the user sends while agent_settled handlers run is deferred ahead of the job's send, and its run resends the job (F2b).",
+      "why": "One job, no other extension before shell-jobs, no /reload, and only Esc aborts: a prompt deferred ahead of the job's send does not cause a second send (path F2b is closed).",
       "replace": [
         {
           "from": "pure val OTHER_HANDLERS_FIRST = true",
@@ -121,6 +206,22 @@
         {
           "from": "pure val ABORT_KEEPS_QUEUE = true",
           "to": "pure val ABORT_KEEPS_QUEUE = false"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "old-f2-one-job-prompt",
+      "base": "f2-one-job-prompt",
+      "why": "The code before the fix, under the same conditions: path F2b. No read ends while an aborted run winds down, so that the check shows this path and not F5.",
+      "replace": [
+        {
+          "from": "pure val HELD_GUARD = true",
+          "to": "pure val HELD_GUARD = false"
+        },
+        {
+          "from": "pure val SEND_AFTER_ABORT = true",
+          "to": "pure val SEND_AFTER_ABORT = false"
         }
       ],
       "expect": {
@@ -129,7 +230,7 @@
     },
     {
       "name": "f3-earlier-handler",
-      "why": "One job, no /reload, no user prompt, and only Esc aborts, but an extension before shell-jobs awaits in agent_settled: a read that ends before the shell-jobs handler gives the duplicate (F3).",
+      "why": "One job, no /reload, no user prompt, and only Esc aborts, but an extension before shell-jobs awaits in agent_settled: a send deferred before the shell-jobs handler is not sent again (path F3 is closed).",
       "replace": [
         {
           "from": "pure val JOBS = Set(\"j1\", \"j2\")",
@@ -148,17 +249,20 @@
           "to": "pure val ABORT_KEEPS_QUEUE = false"
         }
       ],
-      "expect": {
-        "violates": "oneCompletion"
-      }
+      "expect": "pass"
     },
     {
-      "name": "pi-idle-counts-deferred",
-      "why": "Pi fix, first half: isIdle is false while deferred actions wait or run. It is not enough: an abort that keeps the queue still gives a duplicate (F4).",
+      "name": "old-f3-earlier-handler",
+      "base": "f3-earlier-handler",
+      "why": "The code before the fix, under the same conditions: path F3. No read ends while an aborted run winds down, so that the check shows this path and not F5.",
       "replace": [
         {
-          "from": "pure val IDLE_COUNTS_DEFERRED = false",
-          "to": "pure val IDLE_COUNTS_DEFERRED = true"
+          "from": "pure val HELD_GUARD = true",
+          "to": "pure val HELD_GUARD = false"
+        },
+        {
+          "from": "pure val SEND_AFTER_ABORT = true",
+          "to": "pure val SEND_AFTER_ABORT = false"
         }
       ],
       "expect": {
@@ -167,7 +271,7 @@
     },
     {
       "name": "f4-abort-keeps-queue",
-      "why": "One job, no other extension before shell-jobs, no /reload, no user prompt: an abort that keeps the queue (the RPC abort, or ctx.abort() in RPC, print or SDK mode) gives the duplicate (F4). repro-f2.mts --one-job --keep-queue reaches it live.",
+      "why": "One job, no other extension before shell-jobs, no /reload, no user prompt: an abort that keeps the queue (the RPC abort, or ctx.abort() in RPC, print or SDK mode) does not cause a second send (path F4 is closed). repro-f2.mts --one-job --keep-queue reaches it live.",
       "replace": [
         {
           "from": "pure val OTHER_HANDLERS_FIRST = true",
@@ -186,13 +290,95 @@
           "to": "  action userPrompt: bool = all {\n    false,"
         }
       ],
+      "expect": "pass"
+    },
+    {
+      "name": "old-f4-abort-keeps-queue",
+      "base": "f4-abort-keeps-queue",
+      "why": "The code before the fix, under the same conditions: path F4. No read ends while an aborted run winds down, so that the check shows this path and not F5.",
+      "replace": [
+        {
+          "from": "pure val HELD_GUARD = true",
+          "to": "pure val HELD_GUARD = false"
+        },
+        {
+          "from": "pure val SEND_AFTER_ABORT = true",
+          "to": "pure val SEND_AFTER_ABORT = false"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "f5-send-after-abort",
+      "why": "One job, no other extension before shell-jobs, no /reload, no user prompt, and only aborts that clear the queue (the TUI): a job that ends after Esc cleared the queue, while the aborted run winds down, lands once (path F5 is closed). repro-f2.mts --one-job --job-after-abort reaches it live.",
+      "replace": [
+        {
+          "from": "pure val OTHER_HANDLERS_FIRST = true",
+          "to": "pure val OTHER_HANDLERS_FIRST = false"
+        },
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\")"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        },
+        {
+          "from": "  action userPrompt: bool = all {\n    handlerGate,",
+          "to": "  action userPrompt: bool = all {\n    false,"
+        },
+        {
+          "from": "pure val ABORT_KEEPS_QUEUE = true",
+          "to": "pure val ABORT_KEEPS_QUEUE = false"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "old-f5-send-after-abort",
+      "base": "f5-send-after-abort",
+      "why": "The code before the fix, under the same conditions: path F5. Esc in the TUI clears the queue, the job ends before the run stops, its completion stays in the queue, and the reconcile of agent_settled sends it again.",
+      "replace": [
+        {
+          "from": "pure val HELD_GUARD = true",
+          "to": "pure val HELD_GUARD = false"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "pi-idle-counts-deferred",
+      "why": "Pi fix, first half (isIdle is false while deferred actions wait or run), together with the pi-extras fix.",
+      "replace": [
+        {
+          "from": "pure val IDLE_COUNTS_DEFERRED = false",
+          "to": "pure val IDLE_COUNTS_DEFERRED = true"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "old-pi-idle-counts-deferred",
+      "base": "pi-idle-counts-deferred",
+      "why": "The first half of the Pi fix alone is not enough: an abort that keeps the queue still gives a duplicate (F4).",
+      "replace": [
+        {
+          "from": "pure val HELD_GUARD = true",
+          "to": "pure val HELD_GUARD = false"
+        }
+      ],
       "expect": {
         "violates": "oneCompletion"
       }
     },
     {
       "name": "pi-idle-counts-pending",
-      "why": "Pi fix, both halves: isIdle is false while deferred actions wait or run, and while messages wait in the agent's queues.",
+      "why": "Pi fix, both halves, together with the pi-extras fix.",
       "replace": [
         {
           "from": "pure val IDLE_COUNTS_DEFERRED = false",
@@ -230,8 +416,20 @@
       "expect": "pass"
     },
     {
-      "name": "survivor-send-ignores-binding",
+      "name": "old-pi-idle-counts-pending",
       "base": "pi-idle-counts-pending",
+      "why": "Pi fix, both halves, with the code before the fix: the Pi fix alone also closes finding F.",
+      "replace": [
+        {
+          "from": "pure val HELD_GUARD = true",
+          "to": "pure val HELD_GUARD = false"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "survivor-send-ignores-binding",
+      "base": "faithful",
       "why": "lib/shell-jobs-delivery.ts:71 without `runtime.delivery !== binding`. Under the Pi fix no reconcile runs while the old send waits, so the old binding's send cannot make a second message. The check stops a send through the old API: once Pi invalidates the old runner, sendMessage throws (dist/core/extensions/loader.js:305-307) and the message waits for the next reconcile. The model has no liveness property for that delay. The conformance replay catches this change.",
       "replace": [
         {
@@ -243,7 +441,7 @@
     },
     {
       "name": "mutant-reconcile-ignores-outbox",
-      "base": "pi-idle-counts-pending",
+      "base": "faithful",
       "mirrors": "lib/shell-jobs-delivery.ts:132 without `|| runtime.outbox.has(job.id)`: reconcile counts an attempt for a send that is still in flight",
       "replace": [
         {
@@ -257,7 +455,7 @@
     },
     {
       "name": "mutant-claim-unchecked",
-      "base": "pi-idle-counts-pending",
+      "base": "faithful",
       "mirrors": "extensions/shell-jobs.ts:204 without `done.claimed` and lib/shell-jobs-delivery.ts:73 without `latest.claimed`: a job that the user killed gets a completion",
       "replace": [
         {
@@ -275,7 +473,7 @@
     },
     {
       "name": "mutant-finalize-ignores-claim",
-      "base": "pi-idle-counts-pending",
+      "base": "faithful",
       "mirrors": "extensions/shell-jobs.ts:204 without `done.claimed`: finalize counts an attempt for a job that the user killed. sendCompletion still drops the send (lib/shell-jobs-delivery.ts:73), so only the count breaks",
       "replace": [
         {
@@ -288,26 +486,24 @@
       }
     },
     {
-      "name": "mutant-reconcile-ignores-idle",
-      "base": "pi-idle-counts-pending",
-      "mirrors": "lib/shell-jobs-delivery.ts:121 without the ctx.isIdle() check: a completion sent while /reload waits starts a run, and session_start reconciles during it and sends again",
+      "name": "survivor-reconcile-ignores-idle",
+      "base": "faithful",
+      "why": "lib/shell-jobs-delivery.ts reconcileDeliveries without the ctx.isIdle() check. Before the fix this broke oneCompletion. With the fix, a completion that Pi holds is held, so reconcile skips it also while Pi is busy. The check stays in the code: it keeps reconcile out of a compaction and a run, which the model does not cover.",
       "replace": [
         {
           "from": "    if (piIdle) all {\n      jobs' = JOBS.mapBy(j => results.get(j)._1),",
           "to": "    if (true) all {\n      jobs' = JOBS.mapBy(j => results.get(j)._1),"
         },
         {
-          "from": "      if (piIdle) reconcileAndFlush(b, false)",
-          "to": "      if (true) reconcileAndFlush(b, false)"
+          "from": "      if (piIdle) reconcileAndFlush(b, false, held)",
+          "to": "      if (true) reconcileAndFlush(b, false, held)"
         }
       ],
-      "expect": {
-        "violates": "oneCompletion"
-      }
+      "expect": "pass"
     },
     {
       "name": "mutant-reconcile-ignores-history",
-      "base": "pi-idle-counts-pending",
+      "base": "faithful",
       "mirrors": "lib/shell-jobs-delivery.ts:125-129 without the history lookup: a message that landed while shell-jobs was parked for a reload is sent again",
       "replace": [
         {
@@ -321,7 +517,7 @@
     },
     {
       "name": "mutant-attempt-cap-off-by-one",
-      "base": "pi-idle-counts-pending",
+      "base": "faithful",
       "mirrors": "lib/shell-jobs-delivery.ts:133 with `job.attempts >= MAX_COMPLETION_ATTEMPTS + 1`: a fourth send",
       "replace": [
         {
@@ -340,7 +536,7 @@
     },
     {
       "name": "mutant-ack-on-send",
-      "base": "pi-idle-counts-pending",
+      "base": "faithful",
       "mirrors": "acknowledgeCompletion called right after pi.sendMessage (lib/shell-jobs-delivery.ts:82-104) instead of on message_end: a job is marked delivered before its message is in the session",
       "replace": [
         {
@@ -351,19 +547,91 @@
       "expect": {
         "violates": "deliveredMeansSeen"
       }
+    },
+    {
+      "name": "mutant-release-pending",
+      "base": "faithful",
+      "mirrors": "settleDeliveries in lib/shell-jobs-delivery.ts releases \"pending\" sends too: a nested agent_settled sends again a completion that the outer deferred loop still holds (F2a)",
+      "replace": [
+        {
+          "from": "      if (not(aborted) and (h.get(j) == \"steered\" or h.get(j) == \"kept\")) \"none\"",
+          "to": "      if (not(aborted) and (h.get(j) == \"steered\" or h.get(j) == \"kept\" or h.get(j) == \"pending\")) \"none\""
+        }
+      ],
+      "expect": {
+        "violates": "oneCopy"
+      }
+    },
+    {
+      "name": "mutant-release-ignores-abort",
+      "base": "faithful",
+      "mirrors": "settleDeliveries without the `event.aborted` and `ctx.mode === \"tui\"` checks: an abort outside the TUI keeps the queue, and the release sends the kept completion again (F4)",
+      "replace": [
+        {
+          "from": "      else if (aborted and inTui and h.get(j) == \"steered\") \"none\"",
+          "to": "      else if (aborted and h.get(j) == \"steered\") \"none\""
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "mutant-pending-as-steered",
+      "base": "faithful",
+      "mirrors": "sendCompletion holds every send as \"steered\", without the ctx.signal probe: a send that Pi deferred is released by the next settled run while it still waits (F2a, F2b, F3)",
+      "replace": [
+        {
+          "from": "      deferred' = deferred.append(j), queue' = queue, busy' = busy, starting' = starting,\n      held' = held.set(j, \"pending\"),",
+          "to": "      deferred' = deferred.append(j), queue' = queue, busy' = busy, starting' = starting,\n      held' = held.set(j, \"steered\"),"
+        }
+      ],
+      "expect": {
+        "violates": "oneCopy"
+      }
+    },
+    {
+      "name": "mutant-kept-as-steered",
+      "base": "faithful",
+      "mirrors": "sendCompletion ignores `signal.aborted`: a send into a run that the TUI is aborting is held as \"steered\", the TUI abort settles and releases it, and the next run takes the kept copy as well",
+      "replace": [
+        {
+          "from": "if (abortRequested) \"kept\" else \"steered\"",
+          "to": "\"steered\""
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "mutant-session-start-releases",
+      "base": "faithful",
+      "mirrors": "session_start after a reload releases the \"run\" sends as agent_settled does: an abort outside the TUI kept a completion, the user reloads, and the new binding sends it again",
+      "replace": [
+        {
+          "from": "      if (piIdle) reconcileAndFlush(b, false, held)",
+          "to": "      if (piIdle) reconcileAndFlush(b, false, releaseHeld(held, false, true))"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
     }
   ],
   "traces": {
-    "check": "faithful",
+    "check": "faithful-runs3",
     "out": "traces.itf.jsonl.gz",
     "n": 200,
-    "steps": 40,
+    "steps": 50,
     "seed": "0x5eed",
     "witnesses": [
       "witnessNoFailed",
       "witnessNoLandingWhileParked",
       "witnessNoKeptQueue",
-      "oneCompletion"
+      "witnessNoResend",
+      "witnessNoHeldDeferredInLoop",
+      "witnessNoKeptSend"
     ]
   }
 }

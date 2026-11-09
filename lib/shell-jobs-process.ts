@@ -60,6 +60,16 @@ export interface Deferred {
 	readonly resolve: (job: Job) => void;
 }
 
+/**
+ * Where Pi holds a sent completion that is not in the session yet.
+ * - steered: in the queue of an agent loop that was not aborted.
+ * - kept: in the queue of an agent loop that is being aborted; every mode
+ *   keeps it for the next run.
+ * - pending: sent while no agent loop ran. Pi starts a run for it (now, or
+ *   after agent_settled handlers end), or a running session takes it later.
+ */
+export type HeldCompletion = "steered" | "kept" | "pending";
+
 export interface Delivery {
 	flush(): Promise<void>;
 }
@@ -81,6 +91,8 @@ export interface Runtime {
 	/** Set when cleanup has ended, so the reaper may take the runtime out of the exit net. */
 	released?: boolean;
 	readonly outbox: Set<string>;
+	/** Completions sent to Pi that are not in the session yet. Absent on a runtime an older version parked. */
+	held?: Map<string, HeldCompletion>;
 	delivery: Delivery | null;
 	widget: JobsWidget;
 	/** Set while parked for a reload; absent on a runtime an older version parked. */

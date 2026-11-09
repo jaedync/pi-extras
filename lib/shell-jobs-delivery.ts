@@ -1,7 +1,7 @@
 /** Reloadable delivery adapter. Process callbacks retain the runtime, never a Pi API. */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { capPayload, commandPreview, formatDuration, NOTIFY_TAIL_BYTES, NOTIFY_TAIL_LINES, readLogTail } from "./shell-jobs-core.ts";
-import { type Delivery, type Job, type Runtime, jobStatusText } from "./shell-jobs-process.ts";
+import { type Delivery, type HeldCompletion, type Job, type Runtime, jobStatusText } from "./shell-jobs-process.ts";
 
 export const COMPLETION_CUSTOM_TYPE = "shell-job-complete";
 const MAX_COMPLETION_ATTEMPTS = 3;
@@ -27,7 +27,44 @@ function lookupCompletion(ctx: ExtensionContext, runtimeId: string, id: string):
 	return "out";
 }
 
+/** A runtime that an older version parked has no held map. */
+function heldOf(runtime: Runtime): Map<string, HeldCompletion> {
+	runtime.held ??= new Map();
+	return runtime.held;
+}
+
+/**
+ * Where Pi puts a send, from ctx.signal just before it. The signal exists only
+ * while an agent loop runs, and then Pi steers the message into that loop's
+ * queue. Without a loop, Pi starts a run for the message or defers it while
+ * agent_settled handlers run; ctx.isIdle() cannot tell those apart. When the
+ * probe fails, "pending" is the safe answer.
+ */
+function heldKind(runSignal: () => AbortSignal | undefined): HeldCompletion {
+	try {
+		const signal = runSignal();
+		if (signal === undefined) return "pending";
+		return signal.aborted ? "kept" : "steered";
+	} catch {
+		return "pending";
+	}
+}
+
+/**
+ * before_agent_start: Pi starts a run with this completion as its first
+ * message. It lands as the run starts, or the start failed; either way the
+ * next settled run proves where it went, as for a steered message.
+ */
+export function noteRunStart(runtime: Runtime, event: { messageType?: string; message?: { customType?: string; details?: unknown } }): void {
+	if (event.messageType !== "custom" || event.message?.customType !== COMPLETION_CUSTOM_TYPE) return;
+	const details = event.message.details as { id?: unknown; runtimeId?: unknown } | undefined;
+	if (typeof details?.id !== "string" || details.runtimeId !== runtime.runtimeId) return;
+	const held = heldOf(runtime);
+	if (held.get(details.id) === "pending") held.set(details.id, "steered");
+}
+
 export function acknowledgeCompletion(runtime: Runtime, id: string): void {
+	heldOf(runtime).delete(id);
 	const job = runtime.jobs.get(id);
 	if (!job || (job.delivered && !job.deliveryFailed)) return;
 	runtime.outbox.delete(id);
@@ -35,8 +72,11 @@ export function acknowledgeCompletion(runtime: Runtime, id: string): void {
 	runtime.widget.update();
 }
 
-/** Only the current attachment may submit, including after asynchronous log reads. */
-export function attachDelivery(runtime: Runtime, pi: ExtensionAPI, readTail = readLogTail): Delivery {
+/**
+ * Only the current attachment may submit, including after asynchronous log reads.
+ * `runSignal` reads ctx.signal of the session that this attachment serves.
+ */
+export function attachDelivery(runtime: Runtime, pi: ExtensionAPI, readTail = readLogTail, runSignal: () => AbortSignal | undefined = () => undefined): Delivery {
 	const inFlight = new Map<string, Promise<void>>();
 	const binding: Delivery = {
 		async flush() {
@@ -46,7 +86,7 @@ export function attachDelivery(runtime: Runtime, pi: ExtensionAPI, readTail = re
 				if (existing) return existing;
 				const job = runtime.jobs.get(id);
 				if (!job) { runtime.outbox.delete(id); return Promise.resolve(); }
-				const sent = sendCompletion(runtime, binding, pi, job, readTail).finally(() => inFlight.delete(id));
+				const sent = sendCompletion(runtime, binding, pi, job, readTail, runSignal).finally(() => inFlight.delete(id));
 				inFlight.set(id, sent);
 				return sent;
 			});
@@ -57,7 +97,7 @@ export function attachDelivery(runtime: Runtime, pi: ExtensionAPI, readTail = re
 	return binding;
 }
 
-async function sendCompletion(runtime: Runtime, binding: Delivery, pi: ExtensionAPI, job: Job, readTail: typeof readLogTail): Promise<void> {
+async function sendCompletion(runtime: Runtime, binding: Delivery, pi: ExtensionAPI, job: Job, readTail: typeof readLogTail, runSignal: () => AbortSignal | undefined): Promise<void> {
 	let tail;
 	try {
 		tail = await readTail(job.logPath, NOTIFY_TAIL_BYTES, NOTIFY_TAIL_LINES);
@@ -88,6 +128,10 @@ async function sendCompletion(runtime: Runtime, binding: Delivery, pi: Extension
 	// Removing before send prevents reentrant acknowledgements/settles from
 	// submitting twice. Failed sends use the same bounded history reconciliation.
 	runtime.outbox.delete(job.id);
+	// Pi holds the message until it lands; reconcile must not send it again
+	// meanwhile. Set before the send, so that a landing during it clears it.
+	const held = heldOf(runtime);
+	held.set(job.id, heldKind(runSignal));
 	try {
 		pi.sendMessage({
 			customType: COMPLETION_CUSTOM_TYPE,
@@ -105,6 +149,7 @@ async function sendCompletion(runtime: Runtime, binding: Delivery, pi: Extension
 		}, { triggerTurn: true, deliverAs: "steer" });
 	} catch {
 		// Pi reports API failures; the unacknowledged job remains visible and retryable.
+		held.delete(job.id);
 	}
 }
 
@@ -115,11 +160,31 @@ function stoppedLine(count: number | null | undefined): string | null {
 	return `stopped: ${what} that ${count === 1 ? "was" : "were"} still running when the command exited`;
 }
 
+/**
+ * The agent_settled handler. A run that was not aborted ends only when its
+ * queue is empty, so its "steered" and "kept" completions are in the session
+ * or gone. In the TUI every abort clears the queue first, so "steered" ones
+ * are too; a send after the abort started is "kept". An abort in RPC, print
+ * or SDK mode keeps the queue for the next run. A "pending" send is never
+ * released here: Pi still holds it, or before_agent_start makes it "steered".
+ */
+export async function settleDeliveries(runtime: Runtime, ctx: ExtensionContext, event: { aborted?: boolean }): Promise<void> {
+	if (runtime.closing || runtime.delivery === null) return;
+	const aborted = event.aborted === true;
+	const tui = ctx.mode === "tui";
+	const held = heldOf(runtime);
+	for (const [id, kind] of held) {
+		if ((!aborted && kind !== "pending") || (aborted && tui && kind === "steered")) held.delete(id);
+	}
+	await reconcileDeliveries(runtime, ctx);
+}
+
 /** Recover discarded messages only once Pi has drained its existing queue. */
 export async function reconcileDeliveries(runtime: Runtime, ctx: ExtensionContext): Promise<void> {
 	if (runtime.closing || runtime.delivery === null) return;
 	if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
 	let changed = false;
+	const held = heldOf(runtime);
 	for (const job of runtime.jobs.values()) {
 		if (job.state !== "done" || job.delivered || job.attempts === 0) continue;
 		const lookup = lookupCompletion(ctx, runtime.runtimeId, job.id);
@@ -128,8 +193,10 @@ export async function reconcileDeliveries(runtime: Runtime, ctx: ExtensionContex
 			continue;
 		}
 		// A read in progress or a completion produced during reload already has
-		// an outbox entry. Neither consumes another delivery attempt here.
-		if (lookup === "unknown" || runtime.outbox.has(job.id)) continue;
+		// an outbox entry. Neither consumes another delivery attempt here. A
+		// held completion is still in Pi: ctx.isIdle() is true while Pi runs
+		// deferred sends, and after an abort that kept the queue.
+		if (lookup === "unknown" || runtime.outbox.has(job.id) || held.has(job.id)) continue;
 		if (job.attempts >= MAX_COMPLETION_ATTEMPTS) {
 			if (!job.deliveryFailed) {
 				runtime.jobs.set(job.id, { ...job, deliveryFailed: true });

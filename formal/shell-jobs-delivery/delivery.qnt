@@ -7,6 +7,17 @@
 // Code: lib/shell-jobs-delivery.ts, extensions/shell-jobs.ts (finalize, the
 // message_end, agent_settled and session_start handlers), lib/shell-jobs-manage.ts
 // (stopJob), lib/shell-jobs-process.ts (parkForReload).
+//
+// The fix for finding F (README.md): a sent completion stays "held" until it
+// lands, and reconcile skips held jobs. ctx.signal, read before the send,
+// tells where Pi puts it:
+// - "steered": an agent loop runs and is not aborted. A settled run proves it
+//   landed or was dropped, unless an abort outside the TUI kept the queue.
+// - "kept": the loop is being aborted, so even the TUI keeps it for the next
+//   run. Only a run that settles without an abort proves where it went.
+// - "pending": no agent loop (Pi idle, agent_settled handlers, or a gap of a
+//   run). It waits until before_agent_start names it as the message that
+//   starts a run; then it is "steered". Otherwise only its landing clears it.
 // Pi 1.4.0 (1.5.0 is the same here): dist/core/agent-session.js and
 // dist/modes/interactive/interactive-mode.js. Line numbers are for 1.4.0.
 module delivery {
@@ -44,6 +55,16 @@ module delivery {
   // The variant that assumes no such extension sets this to false.
   pure val OTHER_HANDLERS_FIRST = true
 
+  // The fix: reconcile skips a held job (lib/shell-jobs-delivery.ts reconcileDeliveries).
+  // The checks named old-* set it to false to show each path of finding F in
+  // the code before the fix.
+  pure val HELD_GUARD = true
+
+  // A tail read can end while an aborted run winds down, so its send goes into
+  // the queue after the abort. The checks old-f1 to old-f4 set it to false, so
+  // that each shows its own path and not the shorter F5.
+  pure val SEND_AFTER_ABORT = true
+
   // The deferred item for a user prompt (agent-session.js:1632-1634).
   pure val PROMPT = "prompt"
 
@@ -76,6 +97,18 @@ module delivery {
   var runs: int
   // Ghost: jobs whose message landed while parked. Only a witness reads it.
   var landedParked: Set[str]
+  // runtime.held (lib/shell-jobs-delivery.ts): "none" | "steered" | "kept" | "pending".
+  var held: str -> str
+  // The `aborted` field of the agent_settled event now emitted
+  // (agent-session.js _emitAgentSettled: `this._agentRunAbortRequested`).
+  var settleAborted: bool
+  // ctx.mode is "tui". In the TUI every abort clears the queue first.
+  var tui: bool
+  // A send started a run (an idle send, or a deferred one in settleEnds), and
+  // before_agent_start has not run yet: the job id, or "" for none.
+  var starting: str
+  // _agentRunAbortRequested: AgentSession.abort() ran during this run.
+  var abortRequested: bool
 
   // ---- Helpers that copy one piece of code each ----
 
@@ -88,11 +121,12 @@ module delivery {
   pure def acked(job: Job): Job =
     if (job.delivered and not(job.failed)) job else { ...job, delivered: true, failed: false }
 
-  // The loop of reconcileDeliveries, lib/shell-jobs-delivery.ts:123-143, for one job.
-  pure def reconcileJob(job: Job, inHistory: bool, inOutbox: bool): (Job, bool) =
+  // The loop of reconcileDeliveries (lib/shell-jobs-delivery.ts) for one job.
+  pure def reconcileJob(job: Job, inHistory: bool, inOutbox: bool, isHeld: bool): (Job, bool) =
     if (job.phase != "done" or job.delivered or job.attempts == 0) (job, inOutbox)
     else if (inHistory) (acked(job), false)
     else if (inOutbox) (job, inOutbox)
+    else if (HELD_GUARD and isHeld) (job, inOutbox)
     else if (job.attempts >= MAX_ATTEMPTS) ({ ...job, failed: true }, inOutbox)
     else ({ ...job, attempts: job.attempts + 1 }, true)
 
@@ -100,16 +134,30 @@ module delivery {
   val handlerGate = not(handlerDue) or OTHER_HANDLERS_FIRST
 
   // ctx.isIdle() as Pi computes it.
-  val piIdle = all {
-    not(busy),
-    not(IDLE_COUNTS_DEFERRED) or (deferred == [] and later == [] and not(loopRun)),
-    not(IDLE_COUNTS_QUEUE) or queue == [],
+  pure def idleOf(isBusy: bool, waiting: List[str], outer: List[str], inLoop: bool, queued: List[str]): bool = all {
+    not(isBusy),
+    not(IDLE_COUNTS_DEFERRED) or (waiting == [] and outer == [] and not(inLoop)),
+    not(IDLE_COUNTS_QUEUE) or queued == [],
   }
+  val piIdle = idleOf(busy, deferred, later, loopRun, queue)
 
-  // reconcileDeliveries and its flush. It returns at once while Pi is not idle
-  // (lib/shell-jobs-delivery.ts:121), with no flush.
-  action reconcileAndFlush(b: int, awaited: bool): bool = {
-    val results = JOBS.mapBy(j => reconcileJob(jobs.get(j), history.get(j) > 0, outbox.contains(j)))
+  // Copies of a job's message that Pi holds or has put in the session.
+  pure def count(l: List[str], j: str): int = l.foldl(0, (n, x) => if (x == j) n + 1 else n)
+
+  // settleDeliveries (lib/shell-jobs-delivery.ts): a run that settled with no
+  // abort drained its queue, so "steered" and "kept" sends are in the session
+  // or gone. A TUI abort cleared the queue first, so "steered" sends are.
+  pure def releaseHeld(h: str -> str, aborted: bool, inTui: bool): str -> str =
+    h.keys().mapBy(j =>
+      if (not(aborted) and (h.get(j) == "steered" or h.get(j) == "kept")) "none"
+      else if (aborted and inTui and h.get(j) == "steered") "none"
+      else h.get(j))
+
+  // reconcileDeliveries and its flush. It returns at once while Pi is not idle,
+  // with no flush. `h` is runtime.held after settleDeliveries released it. An
+  // acknowledgement from the history lookup also clears the job's held entry.
+  action reconcileAndFlush(b: int, awaited: bool, h: str -> str): bool = {
+    val results = JOBS.mapBy(j => reconcileJob(jobs.get(j), history.get(j) > 0, outbox.contains(j), h.get(j) != "none"))
     val box = JOBS.filter(j => results.get(j)._2)
     if (piIdle) all {
       jobs' = JOBS.mapBy(j => results.get(j)._1),
@@ -117,19 +165,35 @@ module delivery {
       reading' = flushReads(b, box, reading),
       // The agent_settled handler awaits every read of the outbox ids.
       settleWaits' = if (awaited) box.map(j => (j, b)) else settleWaits,
+      held' = JOBS.mapBy(j => if (results.get(j)._1.delivered and not(jobs.get(j).delivered)) "none" else h.get(j)),
     } else all {
       jobs' = jobs, outbox' = outbox, reading' = reading,
       settleWaits' = if (awaited) Set() else settleWaits,
+      held' = h,
     }
   }
 
   // pi.sendMessage with triggerTurn and deliverAs "steer" (sendCustomMessage,
   // agent-session.js:1844-1872): steer into the active run, wait while
   // agent_settled handlers run, or start a run.
+  // sendCompletion reads ctx.signal before the send (agent.signal: the abort
+  // signal of the agent loop, agent.js). While the session is busy the loop
+  // may run (signal defined) or not (_prepareRun, the gaps between loops):
+  // the model tries both. An idle send starts a run (_startRun), and its
+  // before_agent_start comes later.
   action piSend(j: str): bool = all {
     sends' = sends.setBy(j, n => n + 1),
-    if (settling) all { deferred' = deferred.append(j), queue' = queue, busy' = busy }
-    else all { deferred' = deferred, queue' = queue.append(j), busy' = true },
+    if (settling) all {
+      deferred' = deferred.append(j), queue' = queue, busy' = busy, starting' = starting,
+      held' = held.set(j, "pending"),
+    } else if (busy) all {
+      deferred' = deferred, queue' = queue.append(j), busy' = busy, starting' = starting,
+      nondet loopRuns = Set(true, false).oneOf()
+      held' = held.set(j, if (not(loopRuns)) "pending" else if (abortRequested) "kept" else "steered"),
+    } else all {
+      deferred' = deferred, queue' = queue.append(j), busy' = true, starting' = j,
+      held' = held.set(j, "pending"),
+    },
   }
 
   action keepPi = all {
@@ -137,6 +201,7 @@ module delivery {
     loopRun' = loopRun, reloading' = reloading, queue' = queue, history' = history,
   }
   action keepRest = all { kill' = kill, sends' = sends, reloads' = reloads, runs' = runs, landedParked' = landedParked }
+  action keepMode = all { settleAborted' = settleAborted, tui' = tui, starting' = starting, abortRequested' = abortRequested }
 
   // ---- Init ----
 
@@ -162,6 +227,12 @@ module delivery {
     reloads' = 0,
     runs' = 0,
     landedParked' = Set(),
+    held' = JOBS.mapBy(_ => "none"),
+    settleAborted' = false,
+    nondet inTui = Set(true, false).oneOf()
+    tui' = inTui,
+    starting' = "",
+    abortRequested' = false,
   }
 
   // ---- Job actions ----
@@ -173,7 +244,7 @@ module delivery {
     jobs.get(j).phase == "running",
     jobs' = jobs.setBy(j, job => { ...job, phase: "exiting" }),
     outbox' = outbox, reading' = reading, binding' = binding, lastBinding' = lastBinding,
-    keepPi, settleWaits' = settleWaits, keepRest,
+    keepPi, settleWaits' = settleWaits, keepRest, held' = held, keepMode,
   }
 
   // finalize after its awaits: re-read the job, decide suppression, record the
@@ -189,7 +260,7 @@ module delivery {
       outbox' = box,
       reading' = if (suppressed) reading else flushReads(binding, box, reading),
       binding' = binding, lastBinding' = lastBinding,
-      keepPi, settleWaits' = settleWaits, keepRest,
+      keepPi, settleWaits' = settleWaits, keepRest, held' = held, keepMode,
     }
   }
 
@@ -202,6 +273,7 @@ module delivery {
     kill' = kill.set(j, "waiting"),
     outbox' = outbox, reading' = reading, binding' = binding, lastBinding' = lastBinding,
     keepPi, settleWaits' = settleWaits, sends' = sends, reloads' = reloads, runs' = runs, landedParked' = landedParked,
+    held' = held, keepMode,
   }
 
   // The final status arrives within KILL_WAIT_MS: the tool answers "stopped"
@@ -214,6 +286,7 @@ module delivery {
     kill' = kill.set(j, "stopped"),
     jobs' = jobs, outbox' = outbox, reading' = reading, binding' = binding, lastBinding' = lastBinding,
     keepPi, settleWaits' = settleWaits, sends' = sends, reloads' = reloads, runs' = runs, landedParked' = landedParked,
+    held' = held, keepMode,
   }
 
   // The wait times out: stopJob clears the claim and promises a completion
@@ -226,6 +299,7 @@ module delivery {
     kill' = kill.set(j, "stillStopping"),
     outbox' = outbox, reading' = reading, binding' = binding, lastBinding' = lastBinding,
     keepPi, settleWaits' = settleWaits, sends' = sends, reloads' = reloads, runs' = runs, landedParked' = landedParked,
+    held' = held, keepMode,
   }
 
   // ---- Delivery ----
@@ -238,17 +312,19 @@ module delivery {
     all {
       handlerGate,
       reading.contains((j, b)),
+      SEND_AFTER_ABORT or not(abortRequested),
       reading' = reading.exclude(Set((j, b))),
       settleWaits' = settleWaits.exclude(Set((j, b))),
       binding' = binding, lastBinding' = lastBinding,
       kill' = kill, reloads' = reloads, runs' = runs, landedParked' = landedParked,
       history' = history, settling' = settling, handlerDue' = handlerDue, later' = later,
       loopRun' = loopRun, reloading' = reloading,
+      settleAborted' = settleAborted, tui' = tui, abortRequested' = abortRequested,
       if (binding != b or not(outbox.contains(j)))
         // The binding changed during the read: leave the entry for the new one.
-        all { jobs' = jobs, outbox' = outbox, sends' = sends, deferred' = deferred, queue' = queue, busy' = busy }
+        all { jobs' = jobs, outbox' = outbox, sends' = sends, deferred' = deferred, queue' = queue, busy' = busy, held' = held, starting' = starting }
       else if (job.delivered or job.claimed)
-        all { jobs' = jobs, outbox' = outbox.exclude(Set(j)), sends' = sends, deferred' = deferred, queue' = queue, busy' = busy }
+        all { jobs' = jobs, outbox' = outbox.exclude(Set(j)), sends' = sends, deferred' = deferred, queue' = queue, busy' = busy, held' = held, starting' = starting }
       else
         all { jobs' = jobs, outbox' = outbox.exclude(Set(j)), piSend(j) },
     }
@@ -266,6 +342,9 @@ module delivery {
     // them, they wait for the next run.
     busy,
     queue.length() > 0,
+    // A run takes no message before its before_agent_start handlers end
+    // (_prepareRun, agent-session.js, runs before agent.prompt).
+    starting == "",
     val j = queue.head()
     all {
       history' = history.setBy(j, n => n + 1),
@@ -273,35 +352,65 @@ module delivery {
       jobs' = if (binding != 0) jobs.setBy(j, acked) else jobs,
       outbox' = if (binding != 0) outbox.exclude(Set(j)) else outbox,
       landedParked' = if (binding == 0) landedParked.union(Set(j)) else landedParked,
+      // acknowledgeCompletion clears the held entry too.
+      held' = if (binding != 0) held.set(j, "none") else held,
     },
+    keepMode,
     busy' = busy, settling' = settling, handlerDue' = handlerDue, deferred' = deferred, later' = later,
     loopRun' = loopRun, reloading' = reloading,
     reading' = reading, binding' = binding, lastBinding' = lastBinding,
     settleWaits' = settleWaits, kill' = kill, sends' = sends, reloads' = reloads, runs' = runs,
   }
 
-  // The run ends (all its messages are in), or it is aborted. An abort with
-  // clear drops the messages that the run did not take (Esc: clearQueue,
-  // interactive-mode.js:3853); one without clear keeps them for the next run.
-  // _startRun's finally calls _emitAgentSettled: the run is inactive and the
-  // handlers start (agent-session.js:683-688, 1471).
-  // An abort without clear is the RPC abort, or ctx.abort() in a mode with no abortHandler.
-  action runEnds(abort: bool, clear: bool): bool = all {
+  // The user or a client aborts the run (AgentSession.abort(), agent-session.js:
+  // `_agentRunAbortRequested = true`, then agent.abort()). In the TUI, every
+  // abort clears the queue first: Esc and ctx.abort() through the TUI's
+  // abortHandler (restoreQueuedMessagesToEditor with abort, interactive-mode.js)
+  // and tree navigation all call clearAllQueues. The RPC abort (rpc-mode.js:328),
+  // and ctx.abort() in a mode with no abortHandler (RPC, print, SDK), call
+  // AgentSession.abort() alone, which keeps the queue for the next run
+  // (agent.js:263, :340). An RPC client can also send clear_queue first.
+  // A send after the abort and before the run ends goes into the queue too,
+  // also in the TUI.
+  action abortRequest(clear: bool): bool = all {
     handlerGate,
-    clear or (abort and ABORT_KEEPS_QUEUE),
+    busy, not(settling), not(abortRequested),
+    clear or (ABORT_KEEPS_QUEUE and not(tui)),
+    runs < MAX_RUNS,
+    abortRequested' = true,
+    queue' = if (clear) [] else queue,
+    runs' = runs + 1,
+    busy' = busy, settling' = settling, handlerDue' = handlerDue, deferred' = deferred, later' = later,
+    loopRun' = loopRun, reloading' = reloading, history' = history,
+    jobs' = jobs, outbox' = outbox, reading' = reading, settleWaits' = settleWaits,
+    binding' = binding, lastBinding' = lastBinding, kill' = kill, sends' = sends, reloads' = reloads,
+    landedParked' = landedParked, held' = held,
+    settleAborted' = settleAborted, tui' = tui, starting' = starting,
+  }
+
+  // The run ends: all its messages are in, or it was aborted, and the
+  // messages that it did not take stay in the queue. _startRun's finally calls
+  // _emitAgentSettled: the run is inactive and the handlers start
+  // (agent-session.js:683-688, 1471). The event's `aborted` is
+  // _agentRunAbortRequested; the next _startRun resets it.
+  action runEnds: bool = all {
+    handlerGate,
     busy,
     not(settling),
-    abort or queue.length() == 0,
-    abort implies runs < MAX_RUNS,
+    abortRequested or queue.length() == 0,
+    // An abort during _prepareRun still lets the run start (agent_start then aborts it).
+    starting == "",
     busy' = false,
     settling' = true,
     handlerDue' = true,
-    queue' = if (clear) [] else queue,
-    runs' = if (abort) runs + 1 else runs,
+    settleAborted' = abortRequested,
+    abortRequested' = false,
+    queue' = queue, runs' = runs,
     deferred' = deferred, later' = later, loopRun' = loopRun, reloading' = reloading, history' = history,
     jobs' = jobs, outbox' = outbox, reading' = reading, settleWaits' = settleWaits,
     binding' = binding, lastBinding' = lastBinding, kill' = kill, sends' = sends, reloads' = reloads,
-    landedParked' = landedParked,
+    landedParked' = landedParked, held' = held,
+    tui' = tui, starting' = starting,
   }
 
   // The shell-jobs agent_settled handler runs (extensions/shell-jobs.ts:856-858).
@@ -310,11 +419,11 @@ module delivery {
   action settleHandler: bool = all {
     settling, handlerDue,
     handlerDue' = false,
-    if (binding != 0) reconcileAndFlush(binding, true)
-    else all { jobs' = jobs, outbox' = outbox, reading' = reading, settleWaits' = Set() },
+    if (binding != 0) reconcileAndFlush(binding, true, releaseHeld(held, settleAborted, tui))
+    else all { jobs' = jobs, outbox' = outbox, reading' = reading, settleWaits' = Set(), held' = held },
     busy' = busy, settling' = settling, deferred' = deferred, later' = later, loopRun' = loopRun,
     reloading' = reloading, queue' = queue, history' = history,
-    binding' = binding, lastBinding' = lastBinding, keepRest,
+    binding' = binding, lastBinding' = lastBinding, keepRest, keepMode,
   }
 
   // The shell-jobs handler returned once its reads were done; the handlers of
@@ -331,17 +440,35 @@ module delivery {
       settling' = false,
       settleWaits' = Set(),
       deferred' = [],
-      if (items == []) all { busy' = false, queue' = queue, later' = [], loopRun' = false }
+      if (items == []) all { busy' = false, queue' = queue, later' = [], loopRun' = false, starting' = "" }
       else all {
         busy' = true,
         loopRun' = true,
         queue' = if (items.head() == PROMPT) queue else queue.append(items.head()),
         later' = items.tail(),
+        // A deferred send calls sendCustomMessage again, which calls _startRun
+        // with the message as its trigger (agent-session.js sendCustomMessage).
+        starting' = if (items.head() == PROMPT) "" else items.head(),
       },
       handlerDue' = false, reloading' = reloading, history' = history,
       jobs' = jobs, outbox' = outbox, reading' = reading, binding' = binding, lastBinding' = lastBinding,
-      keepRest,
+      keepRest, held' = held, settleAborted' = settleAborted, tui' = tui, abortRequested' = abortRequested,
     }
+  }
+
+  // The shell-jobs before_agent_start handler sees the completion that starts
+  // the run (extensions/shell-jobs.ts, noteRunStart in lib/shell-jobs-delivery.ts).
+  // The message lands when the run starts, or the start failed. Pi emits the
+  // event to the current runner, so a parked runtime sees nothing.
+  action beforeAgentStart: bool = all {
+    handlerGate,
+    starting != "",
+    held' = if (binding != 0 and held.get(starting) == "pending") held.set(starting, "steered") else held,
+    starting' = "",
+    settleAborted' = settleAborted, tui' = tui, abortRequested' = abortRequested,
+    keepPi, keepRest,
+    jobs' = jobs, outbox' = outbox, reading' = reading, binding' = binding, lastBinding' = lastBinding,
+    settleWaits' = settleWaits,
   }
 
   // The user sends a prompt. While agent_settled handlers run, Pi defers it
@@ -356,6 +483,7 @@ module delivery {
     reloading' = reloading, queue' = queue, history' = history,
     jobs' = jobs, outbox' = outbox, reading' = reading, binding' = binding, lastBinding' = lastBinding,
     settleWaits' = settleWaits, kill' = kill, sends' = sends, reloads' = reloads, landedParked' = landedParked,
+    held' = held, keepMode,
   }
 
   // /reload checks isStreaming (interactive-mode.js:5329), then awaits
@@ -369,6 +497,7 @@ module delivery {
     loopRun' = loopRun, queue' = queue, history' = history,
     jobs' = jobs, outbox' = outbox, reading' = reading, binding' = binding, lastBinding' = lastBinding,
     settleWaits' = settleWaits, kill' = kill, sends' = sends, runs' = runs, landedParked' = landedParked,
+    held' = held, keepMode,
   }
 
   // session_shutdown with reason "reload": parkForReload (lib/shell-jobs-process.ts:199-200).
@@ -383,7 +512,7 @@ module delivery {
     busy' = busy, settling' = settling, handlerDue' = false, deferred' = deferred, later' = later,
     loopRun' = loopRun, queue' = queue, history' = history,
     jobs' = jobs, outbox' = outbox, reading' = reading, lastBinding' = lastBinding,
-    settleWaits' = settleWaits, keepRest,
+    settleWaits' = settleWaits, keepRest, held' = held, keepMode,
   }
 
   // session_start of the reloaded extension: attachDelivery, then reconcile and
@@ -396,10 +525,11 @@ module delivery {
     all {
       binding' = b,
       lastBinding' = b,
-      if (piIdle) reconcileAndFlush(b, false)
-      else all { jobs' = jobs, outbox' = outbox, reading' = flushReads(b, outbox, reading), settleWaits' = settleWaits },
+      // runtime.held survives the reload; session_start releases nothing.
+      if (piIdle) reconcileAndFlush(b, false, held)
+      else all { jobs' = jobs, outbox' = outbox, reading' = flushReads(b, outbox, reading), settleWaits' = settleWaits, held' = held },
     },
-    keepPi, keepRest,
+    keepPi, keepRest, keepMode,
   }
 
   action step = any {
@@ -407,11 +537,12 @@ module delivery {
     any { finishStart(j), finishEnd(j), killStart(j), killAnswer(j), killTimeout(j) },
     readSome,
     piDeliver,
-    runEnds(false, true),
-    runEnds(true, true),
-    runEnds(true, false),
+    runEnds,
+    abortRequest(true),
+    abortRequest(false),
     settleHandler,
     settleEnds,
+    beforeAgentStart,
     userPrompt,
     reloadRequest,
     reloadPark,
@@ -423,6 +554,10 @@ module delivery {
   // The tool promise: "One completion message per job is delivered
   // automatically, except for killed jobs." (extensions/shell-jobs.ts:708)
   val oneCompletion = JOBS.forall(j => history.get(j) <= 1)
+
+  // Pi never holds a second copy of a job's message, also before it lands:
+  // the copies in the session, the run's queue and the deferred actions.
+  val oneCopy = JOBS.forall(j => history.get(j) + count(queue, j) + count(deferred, j) + count(later, j) <= 1)
 
   // A kill that answered "stopped" never gets a completion message.
   val stoppedMeansSilent = JOBS.forall(j => kill.get(j) == "stopped" implies sends.get(j) == 0)
@@ -457,5 +592,15 @@ module delivery {
   // to take it, so the reconcile ran while the message waited.
   val witnessNoKeptQueue = busy or settling or queue == []
 
-  val safety = oneCompletion and stoppedMeansSilent and boundedSends and deliveredMeansSeen and attemptsCountSends
+  // A settled run released a "run" send that did not land, and the job was sent again.
+  val witnessNoResend = JOBS.forall(j => sends.get(j) < 2)
+
+  // A nested agent_settled is about to reconcile while a deferred send of the
+  // outer emission is still held (the F2a schedule).
+  val witnessNoHeldDeferredInLoop = not(JOBS.exists(j => held.get(j) == "pending" and loopRun and handlerDue and count(later, j) > 0))
+
+  // A send went into a run that was being aborted, and that run settled.
+  val witnessNoKeptSend = not(JOBS.exists(j => held.get(j) == "kept" and settling))
+
+  val safety = oneCompletion and oneCopy and stoppedMeansSilent and boundedSends and deliveredMeansSeen and attemptsCountSends
 }

@@ -4,14 +4,15 @@
  * (`fv.mjs traces`) is replayed step by step against the real
  * lib/shell-jobs-delivery.ts, and after each step the code's state must equal
  * the model's: attempts, delivered, failed, claimed, outbox, reads in flight,
- * sends and the messages in the session. A difference means the model no
+ * held completions, sends and the messages in the session. A difference means the model no
  * longer describes the code, so its checks prove nothing about the code.
  *
- * The real code here: attachDelivery, flush, sendCompletion,
- * acknowledgeCompletion, reconcileDeliveries and parkForReload. The test copies
+ * The real code here: attachDelivery, flush, sendCompletion, noteRunStart,
+ * acknowledgeCompletion, settleDeliveries, reconcileDeliveries and parkForReload. The test copies
  * the few lines of finalize, stopJob and the event handlers that feed them.
  * Pi is a fake that follows the model's Pi rules (a send during agent_settled
- * waits, and the waiting actions run one at a time). The replay does not check
+ * waits, the waiting actions run one at a time, and each starts a run whose
+ * before_agent_start names its message). The replay does not check
  * those rules against Pi: repro-f1.mts and repro-f2.mts do that in a real
  * AgentSession. See formal/shell-jobs-delivery/README.md.
  */
@@ -50,8 +51,11 @@ function loadTraces(): Itf[] {
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+/** The choices of one model step that the code side needs. */
+type Step = { j?: string; r?: [string, number]; clear?: boolean; loopRuns?: boolean };
+
 /** The code side of one replay: a runtime, a fake Pi, and controllable tail reads. */
-function makeWorld(first: Record<string, any>) {
+function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean; tui: boolean }) {
 	const jobs = Object.keys(first.jobs);
 	const runtime: any = {
 		runtimeId: RUNTIME_ID, jobs: new Map(), outbox: new Set<string>(), delivery: null, closing: false,
@@ -66,7 +70,10 @@ function makeWorld(first: Record<string, any>) {
 		});
 	}
 	const PROMPT = "prompt";
-	const pi = { busy: Boolean(first.busy), settling: false, deferred: [] as string[], later: [] as string[], loopRun: false, queue: [] as string[], history: [] as any[] };
+	const pi = {
+		busy: Boolean(first.busy), settling: false, aborted: false, abortRequested: false, loopRuns: true, starting: null as string | null,
+		deferred: [] as string[], later: [] as string[], loopRun: false, queue: [] as string[], history: [] as any[],
+	};
 	const sends: Record<string, number> = Object.fromEntries(jobs.map((id) => [id, 0]));
 	const reads = new Map<string, () => void>();
 	let binding = 0;
@@ -78,8 +85,10 @@ function makeWorld(first: Record<string, any>) {
 		// Pi's sendCustomMessage with triggerTurn: steer into a run, start one, or wait for agent_settled to end.
 		sendMessage(message: any) {
 			sends[message.details.id] += 1;
-			if (pi.settling) pi.deferred.push(message.details.id);
-			else { pi.queue.push(message.details.id); pi.busy = true; }
+			const id = message.details.id;
+			if (pi.settling) pi.deferred.push(id);
+			else if (pi.busy) pi.queue.push(id);
+			else { pi.queue.push(id); pi.busy = true; pi.starting = id; }
 			void b;
 		},
 	});
@@ -89,23 +98,26 @@ function makeWorld(first: Record<string, any>) {
 	});
 	const ctx = {
 		isIdle: () => !pi.busy,
+		// agent.signal: defined only while an agent loop runs.
+		get signal() {
+			return pi.busy && pi.loopRuns ? { aborted: pi.abortRequested } : undefined;
+		},
+		mode: first.tui ? "tui" : "rpc",
 		sessionManager: { getBranch: () => pi.history },
 	};
 	const attach = () => {
 		binding += 1;
 		active = true;
-		return delivery.attachDelivery(runtime, apiFor(binding) as any, readTailFor(binding) as any);
+		return delivery.attachDelivery(runtime, apiFor(binding) as any, readTailFor(binding) as any, () => ctx.signal as AbortSignal | undefined);
 	};
 	attach();
 
-	const actions: Record<string, (s: Record<string, any>, before: Record<string, any>) => void> = {
-		finishStart(s) {
-			const id = picked(s, "j");
+	const actions: Record<string, (step: Step) => void> = {
+		finishStart({ j: id }) {
 			runtime.jobs.set(id, { ...runtime.jobs.get(id), state: "stopping" });
 		},
-		finishEnd(s) {
+		finishEnd({ j: id }) {
 			// The tail of finalize, extensions/shell-jobs.ts:193-214.
-			const id = picked(s, "j");
 			const latest = runtime.jobs.get(id);
 			const done = { ...latest, state: "done", code: 0, endedAt: 1 };
 			const suppressed = runtime.closing || done.claimed || done.delivered;
@@ -113,20 +125,19 @@ function makeWorld(first: Record<string, any>) {
 			if (!suppressed) runtime.outbox.add(id);
 			if (!suppressed) void runtime.delivery?.flush();
 		},
-		killStart(s) {
+		killStart({ j: id }) {
 			// stopJob before its first await, lib/shell-jobs-manage.ts:148.
-			const id = picked(s, "j");
 			runtime.jobs.set(id, { ...runtime.jobs.get(id), claimed: true, state: "stopping" });
 		},
 		killAnswer() {},
-		killTimeout(s) {
+		killTimeout({ j: id }) {
 			// stopJob after KILL_WAIT_MS, lib/shell-jobs-manage.ts:160-161.
-			const id = picked(s, "j");
 			const pending = runtime.jobs.get(id);
 			if (pending.state !== "done") runtime.jobs.set(id, { ...pending, claimed: false });
 		},
-		readSome(s) {
-			const [id, b] = picked(s, "r");
+		readSome({ r, loopRuns }) {
+			const [id, b] = r!;
+			pi.loopRuns = loopRuns ?? true;
 			const release = reads.get(`${id}@${b}`);
 			assert.ok(release, `the code has no read in flight for ${id} in binding ${b}`);
 			reads.delete(`${id}@${b}`);
@@ -138,18 +149,23 @@ function makeWorld(first: Record<string, any>) {
 			pi.history.push({ type: "custom_message", customType: delivery.COMPLETION_CUSTOM_TYPE, details: { id, runtimeId: RUNTIME_ID } });
 			if (active) delivery.acknowledgeCompletion(runtime, id);
 		},
-		runEnds(s, before) {
-			// _emitAgentSettled starts. Esc drops the run's messages (clearQueue);
-			// other aborts keep them for the next run. The model's queue says which.
-			if (s.runs > before.runs && s.queue.length === 0) pi.queue = [];
+		abortRequest({ clear }) {
+			// Esc clears the queue first (clearQueue); other aborts keep it for the next run.
+			if (clear) pi.queue = [];
+			pi.abortRequested = true;
+		},
+		runEnds() {
+			// _emitAgentSettled starts; `aborted` is _agentRunAbortRequested.
+			pi.aborted = pi.abortRequested;
+			pi.abortRequested = false;
 			pi.busy = false;
 			pi.settling = true;
 		},
 		settleHandler() {
-			// The agent_settled handler, extensions/shell-jobs.ts:856-858.
+			// The agent_settled handler (extensions/shell-jobs.ts).
 			if (!active) return;
 			settleHandlerDone = false;
-			settleHandler = delivery.reconcileDeliveries(runtime, ctx as any).then(() => { settleHandlerDone = true; });
+			settleHandler = delivery.settleDeliveries(runtime, ctx as any, { aborted: pi.aborted }).then(() => { settleHandlerDone = true; });
 		},
 		settleEnds() {
 			assert.equal(settleHandlerDone, true, "the model ends agent_settled while the shell-jobs handler still awaits a read");
@@ -163,7 +179,21 @@ function makeWorld(first: Record<string, any>) {
 			pi.busy = true;
 			pi.loopRun = true;
 			if (head !== PROMPT) pi.queue.push(head);
+			pi.starting = head === PROMPT ? null : head;
 			pi.later = rest;
+		},
+		beforeAgentStart() {
+			// The before_agent_start handler (extensions/shell-jobs.ts) for the run of a deferred send.
+			const id = pi.starting!;
+			pi.starting = null;
+			const message = { customType: delivery.COMPLETION_CUSTOM_TYPE, details: { id, runtimeId: RUNTIME_ID } };
+			if (active) delivery.noteRunStart(runtime, { messageType: "custom", message });
+		},
+		// Not a model action: _prepareRun throws after before_agent_start. The
+		// run never takes its starting message and emits no agent_settled.
+		startFails() {
+			pi.queue.pop();
+			pi.busy = false;
 		},
 		userPrompt() {
 			if (pi.settling) pi.deferred.push(PROMPT);
@@ -193,6 +223,7 @@ function makeWorld(first: Record<string, any>) {
 		reading: [...reads.keys()].sort(),
 		sends: { ...sends },
 		history: Object.fromEntries(jobs.map((id) => [id, pi.history.filter((e) => e.details.id === id).length])),
+		held: Object.fromEntries(jobs.map((id) => [id, runtime.held?.get(id) ?? "none"])),
 		binding: runtime.delivery === null ? 0 : binding,
 	});
 	return { actions, codeState, pending: () => settleHandler };
@@ -206,8 +237,14 @@ function modelState(s: Record<string, any>) {
 		reading: s.reading.map(([id, b]: [string, number]) => `${id}@${b}`).sort(),
 		sends: s.sends,
 		history: s.history,
+		held: s.held,
 		binding: s.binding,
 	};
+}
+
+/** The choices that a model step made, for the code side. */
+function stepOf(state: Record<string, any>): Step {
+	return { j: picked(state, "j"), r: picked(state, "r"), clear: state.queue.length === 0, loopRuns: picked(state, "loopRuns") };
 }
 
 /** Replay one trace; returns the code's final state. */
@@ -219,7 +256,7 @@ async function replay(trace: Itf, index: number) {
 		const action = states[i]["mbt::actionTaken"];
 		const run = world.actions[action];
 		assert.ok(run, `trace ${index}: the replay has no mapping for action ${action}`);
-		run(states[i], states[i - 1]);
+		run(stepOf(states[i]));
 		await settle();
 		await settle();
 		assert.deepEqual(world.codeState(), modelState(states[i]), `trace ${index}, step ${i} (${action}): the code and the model differ`);
@@ -235,15 +272,113 @@ test("the delivery code follows every step of the model traces", async () => {
 	assert.ok(steps > 3000, `expected over 3000 replayed steps, replayed ${steps}`);
 });
 
-// Finding F in formal/shell-jobs-delivery/README.md: a send that Pi defers
-// during agent_settled is invisible to reconcile, so one completion can be
-// delivered twice. This test shows that the code takes each step of the
-// model's path; it is not a wish. When the code is fixed, the model and this
-// test change with it.
-test("finding F: the code follows the model's path to a duplicate completion", async () => {
-	const traces = loadTraces();
-	const index = traces.findIndex((t: any) => t["#meta"]?.witness === "oneCompletion");
-	assert.ok(index >= 0, "the traces hold no oneCompletion witness; run fv.mjs traces");
-	const { final } = await replay(traces[index], index);
-	assert.ok(Object.values(final.history).some((count) => count === 2), "the replay did not end with two completion messages for one job");
+/**
+ * One schedule of model actions, run against the code. Each step names an
+ * action of delivery.qnt and its choices. Returns the code's final state.
+ */
+async function runSchedule(start: { jobs: string[]; busy: boolean; tui: boolean }, schedule: Array<[string, Step?]>) {
+	const world = makeWorld({ jobs: Object.fromEntries(start.jobs.map((id) => [id, {}])), busy: start.busy, tui: start.tui });
+	for (const [action, step] of schedule) {
+		world.actions[action](step ?? {});
+		await settle();
+		await settle();
+	}
+	return world.codeState();
+}
+
+const ended = (j: string): Array<[string, Step]> => [["finishStart", { j }], ["finishEnd", { j }]];
+const read = (j: string, b = 1): [string, Step] => ["readSome", { r: [j, b] }];
+const runEnds = (): [string, Step?] => ["runEnds"];
+const abort = (clear: boolean): Array<[string, Step?]> => [["abortRequest", { clear }], ["runEnds"]];
+/** A deferred send runs: Pi starts its run, the message lands, and the run settles. */
+const deferredRun: Array<[string, Step?]> = [["settleEnds"], ["beforeAgentStart"], ["piDeliver"], runEnds(), ["settleHandler"]];
+
+// Finding F in formal/shell-jobs-delivery/README.md: before the fix, each of
+// these schedules delivered one completion two times. Each test follows the
+// numbered steps of its path there.
+test("path F4: an abort that keeps the queue does not send the kept completion again", async () => {
+	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: false }, [
+		...ended("j1"), read("j1"), ...abort(false), ["settleHandler"], ["settleEnds"],
+		["userPrompt"], ["piDeliver"], runEnds(), ["settleHandler"], ["settleEnds"],
+	]);
+	assert.deepEqual(final.history, { j1: 1 });
+	assert.deepEqual(final.sends, { j1: 1 });
+	assert.equal(final.jobs.j1.delivered, true);
+});
+
+test("path F5: a send after a TUI abort started stays in the queue and is not sent again", async () => {
+	// Esc cleared the queue before the job ended, so the steer stays in the queue for the next run.
+	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: true }, [
+		...ended("j1"), ["abortRequest", { clear: true }], read("j1"), ["runEnds"], ["settleHandler"], ["settleEnds"],
+		["userPrompt"], ["piDeliver"], runEnds(), ["settleHandler"], ["settleEnds"],
+	]);
+	assert.deepEqual(final.history, { j1: 1 });
+	assert.deepEqual(final.sends, { j1: 1 });
+	assert.equal(final.jobs.j1.delivered, true);
+});
+
+test("path F2a: two deferred sends land once each", async () => {
+	const final = await runSchedule({ jobs: ["j1", "j2"], busy: true, tui: true }, [
+		...ended("j1"), ...ended("j2"), runEnds(), ["settleHandler"], read("j1"), read("j2"),
+		...deferredRun, ...deferredRun, ["settleEnds"],
+	]);
+	assert.deepEqual(final.history, { j1: 1, j2: 1 });
+	assert.deepEqual(final.sends, { j1: 1, j2: 1 });
+});
+
+test("path F2a through Esc in the TUI: the dropped completions are sent again, once each", async () => {
+	const final = await runSchedule({ jobs: ["j1", "j2"], busy: true, tui: true }, [
+		...ended("j1"), ...ended("j2"), read("j1"), read("j2"), ...abort(true), ["settleHandler"],
+		read("j1"), read("j2"), ...deferredRun, ...deferredRun, ["settleEnds"],
+	]);
+	assert.deepEqual(final.history, { j1: 1, j2: 1 });
+	assert.deepEqual(final.sends, { j1: 2, j2: 2 });
+});
+
+test("an abort that clears the queue outside the TUI: the completion waits for the next run to settle", async () => {
+	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: false }, [
+		...ended("j1"), read("j1"), ...abort(true), ["settleHandler"], ["settleEnds"],
+		["userPrompt"], runEnds(), ["settleHandler"], read("j1"), ...deferredRun, ["settleEnds"],
+	]);
+	assert.deepEqual(final.history, { j1: 1 });
+	assert.deepEqual(final.sends, { j1: 2 });
+});
+
+test("path F2b: a prompt deferred ahead of the send does not cause a second send", async () => {
+	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: true }, [
+		...ended("j1"), runEnds(), ["settleHandler"], ["userPrompt"], read("j1"),
+		["settleEnds"], runEnds(), ["settleHandler"], ...deferredRun, ["settleEnds"],
+	]);
+	assert.deepEqual(final.history, { j1: 1 });
+	assert.deepEqual(final.sends, { j1: 1 });
+});
+
+test("path F1: a reload while agent_settled handlers run does not send again", async () => {
+	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: true }, [
+		...ended("j1"), runEnds(), ["settleHandler"], read("j1"),
+		["reloadRequest"], ["reloadPark"], ["sessionStart"], ...deferredRun, ["settleEnds"],
+	]);
+	assert.deepEqual(final.history, { j1: 1 });
+	assert.deepEqual(final.sends, { j1: 1 });
+	assert.equal(final.jobs.j1.delivered, true);
+	// Before the fix, the new binding's session_start counted a second attempt.
+	assert.equal(final.jobs.j1.attempts, 1);
+});
+
+test("path F3: a send deferred before the shell-jobs handler runs is not sent again", async () => {
+	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: true }, [
+		...ended("j1"), runEnds(), read("j1"), ["settleHandler"], ...deferredRun, ["settleEnds"],
+	]);
+	assert.deepEqual(final.history, { j1: 1 });
+	assert.deepEqual(final.sends, { j1: 1 });
+});
+
+test("a deferred send whose run fails to start is sent again after the next settled run", async () => {
+	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: true }, [
+		...ended("j1"), runEnds(), ["settleHandler"], read("j1"), ["settleEnds"], ["beforeAgentStart"], ["startFails"],
+		["userPrompt"], runEnds(), ["settleHandler"], read("j1"), ...deferredRun, ["settleEnds"],
+	]);
+	assert.deepEqual(final.history, { j1: 1 });
+	assert.deepEqual(final.sends, { j1: 2 });
+	assert.deepEqual(final.held, { j1: "none" });
 });

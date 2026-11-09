@@ -64,7 +64,7 @@ import {
 	stopGroup,
 	takeReload,
 } from "../lib/shell-jobs-process.ts";
-import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, reconcileDeliveries } from "../lib/shell-jobs-delivery.ts";
+import { acknowledgeCompletion, attachDelivery, COMPLETION_CUSTOM_TYPE, noteRunStart, reconcileDeliveries, settleDeliveries } from "../lib/shell-jobs-delivery.ts";
 import { jobEnv, type Launch, launchArgs, type SessionFacts, withExitFile } from "../lib/shell-jobs-launch.ts";
 import { buildHandover, claimForSession, type Ending, firstLook, jobsFromHandover, mayStop, startIdentity, stopAdoptPoll, sweepHandovers, watchAdopted } from "../lib/shell-jobs-adopt.ts";
 import { type Handover, writeHandover } from "../lib/shell-jobs-handover.ts";
@@ -246,6 +246,7 @@ function trimRetained(runtime: Runtime): void {
 		runtime.jobs.delete(job.id);
 		runtime.finals.delete(job.id);
 		runtime.outbox.delete(job.id);
+		runtime.held?.delete(job.id);
 		if (undelivered) {
 			protectedJobs -= 1;
 			runtime.abandoned += 1;
@@ -432,6 +433,7 @@ async function beginClosing(runtime: Runtime): Promise<boolean> {
 	runtime.closing = true;
 	runtime.delivery = null;
 	runtime.outbox.clear();
+	runtime.held?.clear();
 	runtime.epoch += 1;
 	runtime.widget.detach();
 	stopAdoptPoll(runtime);
@@ -816,7 +818,7 @@ export default function shellJobs(pi: ExtensionAPI): void {
 				logError("could not take over the jobs from before the restart", error);
 			}
 		}
-		const delivery = attachDelivery(runtime, pi);
+		const delivery = attachDelivery(runtime, pi, undefined, () => ctx.signal);
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui : null;
 		if (ctx.hasUI) {
 			runtime.widget.attach(ctx.ui as WidgetUi, ctx.mode === "tui", () => runtime.jobs.values(), (job) => inspect(job.id));
@@ -851,10 +853,15 @@ export default function shellJobs(pi: ExtensionAPI): void {
 		acknowledgeCompletion(runtime, id);
 	});
 
+	// A pending completion starts its own run; from here a settled run proves where it went.
+	pi.on("before_agent_start", (event) => {
+		if (active) noteRunStart(runtime, event);
+	});
+
 	// Pi may clear the follow-up queue on abort; recover any completion that
 	// never reached session history once the agent is fully settled.
-	pi.on("agent_settled", async (_event, ctx) => {
-		if (active) await reconcileDeliveries(runtime, ctx);
+	pi.on("agent_settled", async (event, ctx) => {
+		if (active) await settleDeliveries(runtime, ctx, event);
 	});
 
 	pi.on("session_shutdown", async (event, ctx) => {

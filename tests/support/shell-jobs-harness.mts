@@ -124,6 +124,29 @@ export function createFakePi(existingToolNames: string[] = [], mode = "rpc") {
 	const selects: Array<{ title: string; options: string[] }> = [];
 	/** Queued answers for `ui.select`; an empty queue answers undefined (cancelled). */
 	const selectAnswers: Array<string | undefined> = [];
+	// Pi's run state, as far as the delivery code reads it. A triggerTurn send
+	// starts a run (sendCustomMessage calls _startRun), steers into an active
+	// one, or waits while agent_settled handlers run. After the handlers, each
+	// waiting send starts its own run. Each run that a send starts emits
+	// before_agent_start with that message, and then its agent loop runs
+	// (ctx.signal). No run ends by itself: a test ends one with agent_settled.
+	const run = { busy: false, settling: false, deferred: [] as Array<FakeMessage["message"]> };
+	const fireAll = async (event: string, payload: unknown, context: unknown) => {
+		for (const handler of handlers.get(event) ?? []) await handler(payload, context);
+	};
+	const settled = (handler: Handler): Handler => async (event, context) => {
+		run.busy = false;
+		run.settling = true;
+		try {
+			return await handler(event, context);
+		} finally {
+			run.settling = false;
+			for (const message of run.deferred.splice(0)) {
+				run.busy = true;
+				await fireAll("before_agent_start", { type: "before_agent_start", messageType: "custom", message }, context);
+			}
+		}
+	};
 	const pi = {
 		registerTool(tool: any) {
 			tools.set(tool.name, tool);
@@ -136,7 +159,7 @@ export function createFakePi(existingToolNames: string[] = [], mode = "rpc") {
 		},
 		on(event: string, handler: Handler) {
 			const list = handlers.get(event) ?? [];
-			list.push(handler);
+			list.push(event === "agent_settled" ? settled(handler) : handler);
 			handlers.set(event, list);
 		},
 		getAllTools() {
@@ -144,13 +167,22 @@ export function createFakePi(existingToolNames: string[] = [], mode = "rpc") {
 		},
 		sendMessage(message: FakeMessage["message"], options: FakeMessage["options"]) {
 			messages.push({ message, options });
+			if (options?.triggerTurn !== true) return;
+			if (run.settling) run.deferred.push(message);
+			else if (!run.busy) {
+				run.busy = true;
+				queueMicrotask(() => void fireAll("before_agent_start", { type: "before_agent_start", messageType: "custom", message }, ctx));
+			}
 		},
 	};
 	const ctx = {
 		cwd: tempDir(),
 		hasUI: true,
 		mode,
-		isIdle: () => true,
+		isIdle: () => !run.busy,
+		get signal() {
+			return run.busy ? new AbortController().signal : undefined;
+		},
 		ui: {
 			notify(text: string, level: string) {
 				notices.push({ text, level });
@@ -170,7 +202,7 @@ export function createFakePi(existingToolNames: string[] = [], mode = "rpc") {
 		},
 		sessionManager: { getBranch: () => [] as Array<Record<string, unknown>> },
 	};
-	return { pi, tools, messages, handlers, commands, notices, widgets, renderers, overlays, selects, selectAnswers, ctx };
+	return { pi, tools, messages, handlers, commands, notices, widgets, renderers, overlays, selects, selectAnswers, ctx, run };
 }
 
 export async function fire(handlers: Map<string, Handler[]>, event: string, ctx: unknown, payload: unknown = { reason: "startup" }): Promise<void> {
