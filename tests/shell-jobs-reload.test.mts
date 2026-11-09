@@ -194,19 +194,19 @@ test("history acknowledgement missed during reload prevents a duplicate", async 
 
 test("reload does not requeue a completion still owned by a busy Pi turn", async () => {
 	const first = await boot();
-	first.ctx.isIdle = () => false;
+	// A turn runs its agent loop: Pi is not idle, and ctx.signal exists.
+	first.run.busy = true;
 	await start(first, "echo queued");
 	await until(() => first.messages.length === 1);
 	await pause(first);
 	const second = createFakePi();
 	second.ctx.sessionManager = first.ctx.sessionManager;
-	second.ctx.isIdle = () => false;
+	second.run.busy = true;
 	apps.push(second);
 	(await loadFreshShellJobs()).default(second.pi as any);
 	await fire(second.handlers, "session_start", second.ctx, { reason: "reload" });
 	assert.equal(second.messages.length, 0);
 	// Once Pi has discarded that queue and settled, normal bounded recovery applies.
-	second.ctx.isIdle = () => true;
 	await fire(second.handlers, "agent_settled", second.ctx);
 	assert.equal(second.messages.length, 1);
 });
@@ -301,6 +301,42 @@ test("a reload does not send again a completion that Pi still holds", async () =
 	assert.equal(runtime.jobs.get("echo-held")!.delivered, true);
 	assert.equal(runtime.held?.has("echo-held"), false);
 	assert.equal(first.messages.length + second.messages.length, 1);
+});
+
+test("a completion that ends in a gap of a run waits, also past the retry, and goes into the loop that starts", async () => {
+	const app = await boot();
+	// A run waits in before_agent_start, as while Pull Link reads a link.
+	app.run.busy = true;
+	app.run.gap = true;
+	await start(app, "echo gap");
+	await until(() => runtimeOf().jobs.get("echo-gap")?.state === "done");
+	await sleep(delivery.GAP_RETRY_MS * 2 + 200);
+	assert.equal(app.messages.length, 0);
+	assert.equal(runtimeOf().outbox.has("echo-gap"), true);
+	assert.equal(runtimeOf().jobs.get("echo-gap")!.attempts, 1);
+	// agent_start: the loop exists now.
+	app.run.gap = false;
+	await fire(app.handlers, "agent_start", app.ctx, { type: "agent_start" });
+	await until(() => app.messages.length === 1);
+	assert.equal(runtimeOf().held?.get("echo-gap"), "steered");
+	await sleep(delivery.GAP_RETRY_MS + 200);
+	assert.equal(app.messages.length, 1);
+});
+
+test("a completion that waited in a gap is sent by the retry when the run ends with no agent_start", async () => {
+	const app = await boot();
+	app.run.busy = true;
+	app.run.gap = true;
+	await start(app, "echo lone");
+	await until(() => runtimeOf().jobs.get("echo-lone")?.state === "done");
+	await sleep(100);
+	assert.equal(app.messages.length, 0);
+	// The run failed in _prepareRun: Pi is idle, and no event comes.
+	app.run.busy = false;
+	app.run.gap = false;
+	await until(() => app.messages.length === 1);
+	// The send started its own run, and that run's before_agent_start named it.
+	assert.equal(runtimeOf().held?.get("echo-lone"), "steered");
 });
 
 test("a kill in progress across reload keeps its claim and never emits a completion", async () => {

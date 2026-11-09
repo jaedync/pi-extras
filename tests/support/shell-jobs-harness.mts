@@ -130,7 +130,9 @@ export function createFakePi(existingToolNames: string[] = [], mode = "rpc") {
 	// waiting send starts its own run. Each run that a send starts emits
 	// before_agent_start with that message, and then its agent loop runs
 	// (ctx.signal). No run ends by itself: a test ends one with agent_settled.
-	const run = { busy: false, settling: false, deferred: [] as Array<FakeMessage["message"]> };
+	// `gap` puts a busy run between its agent loops (before_agent_start
+	// handlers, the agent_before_settle boundary): no ctx.signal then.
+	const run = { busy: false, gap: false, settling: false, deferred: [] as Array<FakeMessage["message"]> };
 	const fireAll = async (event: string, payload: unknown, context: unknown) => {
 		for (const handler of handlers.get(event) ?? []) await handler(payload, context);
 	};
@@ -181,7 +183,7 @@ export function createFakePi(existingToolNames: string[] = [], mode = "rpc") {
 		mode,
 		isIdle: () => !run.busy,
 		get signal() {
-			return run.busy ? new AbortController().signal : undefined;
+			return run.busy && !run.gap ? new AbortController().signal : undefined;
 		},
 		ui: {
 			notify(text: string, level: string) {

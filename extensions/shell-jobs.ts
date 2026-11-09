@@ -818,7 +818,11 @@ export default function shellJobs(pi: ExtensionAPI): void {
 				logError("could not take over the jobs from before the restart", error);
 			}
 		}
-		const delivery = attachDelivery(runtime, pi, undefined, () => ctx.signal);
+		const delivery = attachDelivery(runtime, pi, undefined, {
+			signal: () => ctx.signal,
+			// Older cores have no isIdle; they get no gap wait.
+			idle: () => typeof ctx.isIdle !== "function" || ctx.isIdle(),
+		});
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui : null;
 		if (ctx.hasUI) {
 			runtime.widget.attach(ctx.ui as WidgetUi, ctx.mode === "tui", () => runtime.jobs.values(), (job) => inspect(job.id));
@@ -833,8 +837,9 @@ export default function shellJobs(pi: ExtensionAPI): void {
 			pi.registerTool(offerRows(markRow(tool, "band")) as never);
 			taken.add(tool.name);
 		}
-		await reconcileDeliveries(runtime, ctx);
-		await delivery.flush();
+		// A busy Pi gets no reconcile; the outbox from before the reload is still sent.
+		// After a reconcile, a second flush would only read again a completion that waits in a gap.
+		if (!(await reconcileDeliveries(runtime, ctx))) await delivery.flush();
 	});
 
 	// Completion messages render like a bash tool result rather than a label and blob.
@@ -856,6 +861,11 @@ export default function shellJobs(pi: ExtensionAPI): void {
 	// A pending completion starts its own run; from here a settled run proves where it went.
 	pi.on("before_agent_start", (event) => {
 		if (active) noteRunStart(runtime, event);
+	});
+
+	// An agent loop starts, so ctx.signal exists: a completion that waited in the gap before it goes into this loop.
+	pi.on("agent_start", () => {
+		if (active) runtime.delivery?.flush().catch((error: unknown) => logError("could not send a waiting job completion", error));
 	});
 
 	// Pi may clear the follow-up queue on abort; recover any completion that

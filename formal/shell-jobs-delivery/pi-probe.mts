@@ -15,13 +15,19 @@
  *   abort) keeps a steered message for the next run.
  * - idleAfterClearThenSteer: clearQueue() then abort() (what Esc does in the
  *   TUI), and a message steered before the run stops, is kept for the next run.
+ * - droppedInGapByEsc: a message sent while a before_agent_start handler
+ *   awaits goes into the run's queue, and clearQueue() then abort() drops it
+ *   for good. This is why the fix does not send in such a gap.
  * For each kept message, `landsInNextRun` tells that the next user run puts it
  * in the session.
  *
  * The pi-extras fix relies on two more rules (`fixRules`): ctx.signal is
  * undefined while no agent loop runs, defined while one runs, and aborted
  * once abort() ran; and before_agent_start names the custom message that
- * starts a run, also for a deferred send. When a field is false, read the fix
+ * starts a run, also for a deferred send. The gap wait relies on two more:
+ * while a before_agent_start handler awaits, ctx.signal is undefined and
+ * ctx.isIdle() is false; in the agent_start handler, ctx.signal is defined.
+ * When a field is false, read the fix
  * again (lib/shell-jobs-delivery.ts) before you use that Pi release. Real: AgentSession, its extension runner, prompt(), steer,
  * clearQueue(), abort(). Not real: the model is Pi's faux provider.
  */
@@ -58,8 +64,19 @@ export default function (pi: any) {
 		}
 	});
 	pi.on("session_start", (_event: any, ctx: any) => { state.ctx = ctx; });
-	pi.on("before_agent_start", (event: any) => {
+	pi.on("before_agent_start", async (event: any) => {
 		if (event.messageType === "custom" && event.message?.customType === "probe") state.started.push(event.message.details?.id);
+		// A slow handler, as Pull Link auto-pull is while it reads links.
+		if (state.gapWait) {
+			state.gapWait = false;
+			await new Promise((resolve) => setTimeout(resolve, 300));
+		}
+	});
+	pi.on("agent_start", (_event: any, ctx: any) => {
+		if (state.watchAgentStart) {
+			state.watchAgentStart = false;
+			state.signalAtAgentStart = ctx.signal === undefined ? "undefined" : "defined";
+		}
 	});
 }
 `);
@@ -148,18 +165,41 @@ const late = { idleAfterSettle: idle(), inSessionAfterSettle: inSession("late"),
 await nextRun();
 late.landsInNextRun = inSession("late");
 
+// 4. A send while a before_agent_start handler awaits, then clearQueue() and abort() (Esc in the TUI).
+state.gapWait = true;
+const gapRun = session.prompt("gap").catch(() => undefined);
+await sleep(100);
+const gapSignal = state.ctx.signal;
+const gapIdle = idle();
+state.pi.sendMessage(state.message("gap"), { triggerTurn: true, deliverAs: "steer" });
+session.clearQueue();
+await session.abort();
+await gapRun;
+await session.waitForIdle();
+await sleep(200);
+const gap = { signal: gapSignal === undefined ? "undefined" : "defined", idle: gapIdle, inSessionAfterSettle: inSession("gap"), landsInNextRun: 0 };
+await nextRun();
+gap.landsInNextRun = inSession("gap");
+
+// 5. ctx.signal in the agent_start handler of a plain run.
+state.watchAgentStart = true;
+await nextRun();
+
 const result = {
 	pi: version,
 	idleWhileDeferred: deferred.idleRightAfterSend === true,
 	idleWithKeptQueue: kept.idleAfterSettle && kept.inSessionAfterSettle === 0 && kept.landsInNextRun === 1,
 	idleAfterClearThenSteer: late.idleAfterSettle && late.inSessionAfterSettle === 0 && late.landsInNextRun === 1,
+	droppedInGapByEsc: gap.inSessionAfterSettle === 0 && gap.landsInNextRun === 0,
 	fixRules: {
 		signalUndefinedInSettle: state.signalInSettle === "undefined",
 		signalDefinedInRun: signalInRun !== undefined && signalInRunAborted === false,
 		signalAbortedAfterAbort: signalAfterAbort?.aborted === true,
 		beforeAgentStartNamesDeferredSend: state.started.includes("deferred"),
+		gapIsBusyWithNoSignal: gap.signal === "undefined" && gap.idle === false,
+		signalDefinedAtAgentStart: state.signalAtAgentStart === "defined",
 	},
-	detail: { deferred, kept, late },
+	detail: { deferred, kept, late, gap },
 };
 console.log(JSON.stringify(result));
 await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });

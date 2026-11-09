@@ -6,6 +6,8 @@ import { type Delivery, type HeldCompletion, type Job, type Runtime, jobStatusTe
 export const COMPLETION_CUSTOM_TYPE = "shell-job-complete";
 const MAX_COMPLETION_ATTEMPTS = 3;
 const COMMAND_PREVIEW_BYTES = 120;
+/** How soon a send that waited in a gap of a run tries again. */
+export const GAP_RETRY_MS = 500;
 
 type BranchLookup = "in" | "out" | "unknown";
 
@@ -33,16 +35,34 @@ function heldOf(runtime: Runtime): Map<string, HeldCompletion> {
 	return runtime.held;
 }
 
+/** What sendCompletion reads of the session that an attachment serves, just before a send. */
+export interface SessionProbe {
+	/** ctx.signal: defined only while an agent loop runs. */
+	signal(): AbortSignal | undefined;
+	/** ctx.isIdle(): false from the start of a run to its agent_settled, and during a compaction. */
+	idle(): boolean;
+}
+
+const NO_SESSION: SessionProbe = { signal: () => undefined, idle: () => true };
+
+function retryLater(flush: () => void): void {
+	setTimeout(flush, GAP_RETRY_MS).unref?.();
+}
+
 /**
- * Where Pi puts a send, from ctx.signal just before it. The signal exists only
- * while an agent loop runs, and then Pi steers the message into that loop's
- * queue. Without a loop, Pi starts a run for the message or defers it while
- * agent_settled handlers run; ctx.isIdle() cannot tell those apart. When the
- * probe fails, "pending" is the safe answer.
+ * Where Pi would put a send now (sendCustomMessage). With a signal, an agent
+ * loop runs and Pi steers the message into its queue: "steered". With no
+ * signal and an idle session, Pi starts a run for the message or defers it
+ * while agent_settled handlers run: "pending". With no signal and a busy
+ * session, a run waits between its loops (before_agent_start handlers, the
+ * agent_before_settle boundary) or a compaction runs: "gap". In a gap Pi can
+ * queue the message where an Esc drops it with no proof, so sendCompletion
+ * does not send then. When the probe fails, "pending" is the safe answer.
  */
-function heldKind(runSignal: () => AbortSignal | undefined): HeldCompletion {
+function sendPlace(probe: SessionProbe): HeldCompletion | "gap" {
 	try {
-		return runSignal() === undefined ? "pending" : "steered";
+		if (probe.signal() !== undefined) return "steered";
+		return probe.idle() ? "pending" : "gap";
 	} catch {
 		return "pending";
 	}
@@ -72,10 +92,23 @@ export function acknowledgeCompletion(runtime: Runtime, id: string): void {
 
 /**
  * Only the current attachment may submit, including after asynchronous log reads.
- * `runSignal` reads ctx.signal of the session that this attachment serves.
+ * `probe` reads the session that this attachment serves. `scheduleRetry` runs a
+ * flush later after a gap wait; the agent_start handler flushes too.
  */
-export function attachDelivery(runtime: Runtime, pi: ExtensionAPI, readTail = readLogTail, runSignal: () => AbortSignal | undefined = () => undefined): Delivery {
+export function attachDelivery(
+	runtime: Runtime, pi: ExtensionAPI, readTail = readLogTail, probe: SessionProbe = NO_SESSION,
+	scheduleRetry: (flush: () => void) => void = retryLater,
+): Delivery {
 	const inFlight = new Map<string, Promise<void>>();
+	let retryArmed = false;
+	const waitForGap = () => {
+		if (retryArmed) return;
+		retryArmed = true;
+		scheduleRetry(() => {
+			retryArmed = false;
+			void binding.flush();
+		});
+	};
 	const binding: Delivery = {
 		async flush() {
 			if (runtime.delivery !== binding || runtime.closing) return;
@@ -84,7 +117,7 @@ export function attachDelivery(runtime: Runtime, pi: ExtensionAPI, readTail = re
 				if (existing) return existing;
 				const job = runtime.jobs.get(id);
 				if (!job) { runtime.outbox.delete(id); return Promise.resolve(); }
-				const sent = sendCompletion(runtime, binding, pi, job, readTail, runSignal).finally(() => inFlight.delete(id));
+				const sent = sendCompletion(runtime, binding, pi, job, readTail, probe, waitForGap).finally(() => inFlight.delete(id));
 				inFlight.set(id, sent);
 				return sent;
 			});
@@ -95,7 +128,10 @@ export function attachDelivery(runtime: Runtime, pi: ExtensionAPI, readTail = re
 	return binding;
 }
 
-async function sendCompletion(runtime: Runtime, binding: Delivery, pi: ExtensionAPI, job: Job, readTail: typeof readLogTail, runSignal: () => AbortSignal | undefined): Promise<void> {
+async function sendCompletion(
+	runtime: Runtime, binding: Delivery, pi: ExtensionAPI, job: Job, readTail: typeof readLogTail,
+	probe: SessionProbe, waitForGap: () => void,
+): Promise<void> {
 	let tail;
 	try {
 		tail = await readTail(job.logPath, NOTIFY_TAIL_BYTES, NOTIFY_TAIL_LINES);
@@ -123,13 +159,20 @@ async function sendCompletion(runtime: Runtime, binding: Delivery, pi: Extension
 	if (stopped !== null) lines.push(stopped);
 	lines.push("", tail.text.length > 0 ? tail.text : "(no output)");
 	if (tail.notice !== null) lines.push("", tail.notice);
+	const place = sendPlace(probe);
+	// The outbox entry stays, so the retry or the agent_start flush sends it.
+	// Reconcile skips it meanwhile and counts no attempt for it.
+	if (place === "gap") {
+		waitForGap();
+		return;
+	}
 	// Removing before send prevents reentrant acknowledgements/settles from
 	// submitting twice. Failed sends use the same bounded history reconciliation.
 	runtime.outbox.delete(job.id);
 	// Pi holds the message until it lands; reconcile must not send it again
 	// meanwhile. Set before the send, so that a landing during it clears it.
 	const held = heldOf(runtime);
-	held.set(job.id, heldKind(runSignal));
+	held.set(job.id, place);
 	try {
 		pi.sendMessage({
 			customType: COMPLETION_CUSTOM_TYPE,
@@ -164,7 +207,9 @@ function stoppedLine(count: number | null | undefined): string | null {
  * reconcile may send the gone ones again. An aborted run proves nothing: the
  * RPC abort, and /compact, /new, /resume and /fork in the TUI, keep the queue
  * for the next run. A "pending" send is never released here: Pi still holds
- * it, or before_agent_start makes it "steered".
+ * it in its deferred actions or as the message that starts a run, and
+ * before_agent_start makes it "steered". The gap wait keeps "pending" sends
+ * out of the queue, so an Esc cannot drop one.
  */
 export async function settleDeliveries(runtime: Runtime, ctx: ExtensionContext, event: { aborted?: boolean }): Promise<void> {
 	if (runtime.closing || runtime.delivery === null) return;
@@ -175,10 +220,13 @@ export async function settleDeliveries(runtime: Runtime, ctx: ExtensionContext, 
 	await reconcileDeliveries(runtime, ctx);
 }
 
-/** Recover discarded messages only once Pi has drained its existing queue. */
-export async function reconcileDeliveries(runtime: Runtime, ctx: ExtensionContext): Promise<void> {
-	if (runtime.closing || runtime.delivery === null) return;
-	if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return;
+/**
+ * Recover discarded messages only once Pi has drained its existing queue.
+ * Returns true when it flushed the outbox, and false when it returned early.
+ */
+export async function reconcileDeliveries(runtime: Runtime, ctx: ExtensionContext): Promise<boolean> {
+	if (runtime.closing || runtime.delivery === null) return false;
+	if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return false;
 	let changed = false;
 	const held = heldOf(runtime);
 	for (const job of runtime.jobs.values()) {
@@ -206,4 +254,5 @@ export async function reconcileDeliveries(runtime: Runtime, ctx: ExtensionContex
 	}
 	if (changed) runtime.widget.update();
 	await runtime.delivery?.flush();
+	return true;
 }

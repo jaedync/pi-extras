@@ -7,7 +7,9 @@
     "stoppedMeansSilent",
     "boundedSends",
     "deliveredMeansSeen",
-    "attemptsCountSends"
+    "attemptsCountSends",
+    "noStuckHold",
+    "noHoldPastSettle"
   ],
   "syncCommit": "e95a143",
   "covers": [
@@ -82,10 +84,28 @@
         {
           "from": "pure val HELD_GUARD = true",
           "to": "pure val HELD_GUARD = false"
+        },
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
         }
       ],
       "expect": {
         "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "old-gap-pending",
+      "base": "faithful",
+      "mirrors": "sendCompletion at faabebb, with no gap wait: a send in a gap of a run (another extension's before_agent_start or agent_before_settle handler awaits) is held as \"pending\", and an Esc then drops the message from the queue. Nothing releases the hold, so the completion never arrives (live: repro-gap.mts)",
+      "replace": [
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
+        }
+      ],
+      "expect": {
+        "violates": "noStuckHold"
       }
     },
     {
@@ -115,6 +135,10 @@
         {
           "from": "pure val SEND_AFTER_ABORT = true",
           "to": "pure val SEND_AFTER_ABORT = false"
+        },
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
         }
       ],
       "expect": {
@@ -156,6 +180,10 @@
         {
           "from": "pure val SEND_AFTER_ABORT = true",
           "to": "pure val SEND_AFTER_ABORT = false"
+        },
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
         }
       ],
       "expect": {
@@ -197,6 +225,10 @@
         {
           "from": "pure val SEND_AFTER_ABORT = true",
           "to": "pure val SEND_AFTER_ABORT = false"
+        },
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
         }
       ],
       "expect": {
@@ -238,6 +270,10 @@
         {
           "from": "pure val SEND_AFTER_ABORT = true",
           "to": "pure val SEND_AFTER_ABORT = false"
+        },
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
         }
       ],
       "expect": {
@@ -279,6 +315,10 @@
         {
           "from": "pure val SEND_AFTER_ABORT = true",
           "to": "pure val SEND_AFTER_ABORT = false"
+        },
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
         }
       ],
       "expect": {
@@ -320,6 +360,10 @@
         {
           "from": "pure val SEND_AFTER_ABORT = true",
           "to": "pure val SEND_AFTER_ABORT = false"
+        },
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
         }
       ],
       "expect": {
@@ -361,11 +405,44 @@
         {
           "from": "pure val HELD_GUARD = true",
           "to": "pure val HELD_GUARD = false"
+        },
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
         }
       ],
       "expect": {
         "violates": "oneCompletion"
       }
+    },
+    {
+      "name": "pi-deferred-throws",
+      "replace": [
+        {
+          "from": "pure val DEFERRED_THROWS = false",
+          "to": "pure val DEFERRED_THROWS = true"
+        }
+      ],
+      "note": "The path that the fix leaves open: a deferred action before a deferred completion throws, Pi drops the completion, and its \"pending\" hold has no copy in Pi.",
+      "expect": {
+        "violates": "noStuckHold"
+      }
+    },
+    {
+      "name": "pi-deferred-throws-no-duplicate",
+      "base": "pi-deferred-throws",
+      "note": "The same Pi, with noStuckHold and noHoldPastSettle off: a throw in the deferred actions gives no duplicate and breaks no other invariant.",
+      "replace": [
+        {
+          "from": "val noStuckHold = HELD_GUARD implies",
+          "to": "val noStuckHold = true or"
+        },
+        {
+          "from": "val noHoldPastSettle = HELD_GUARD implies",
+          "to": "val noHoldPastSettle = true or"
+        }
+      ],
+      "expect": "pass"
     },
     {
       "name": "pi-idle-counts-deferred",
@@ -386,6 +463,10 @@
         {
           "from": "pure val HELD_GUARD = true",
           "to": "pure val HELD_GUARD = false"
+        },
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
         }
       ],
       "expect": {
@@ -439,6 +520,10 @@
         {
           "from": "pure val HELD_GUARD = true",
           "to": "pure val HELD_GUARD = false"
+        },
+        {
+          "from": "pure val GAP_WAIT = true",
+          "to": "pure val GAP_WAIT = false"
         }
       ],
       "expect": "pass"
@@ -575,6 +660,20 @@
       }
     },
     {
+      "name": "mutant-release-never",
+      "base": "faithful",
+      "mirrors": "settleDeliveries in lib/shell-jobs-delivery.ts releases nothing: a completion that Esc dropped from the queue stays held after the next run settles with no abort",
+      "replace": [
+        {
+          "from": "if (not(aborted) and h.get(j) == \"steered\") \"none\"",
+          "to": "if (false) \"none\""
+        }
+      ],
+      "expect": {
+        "violates": "noHoldPastSettle"
+      }
+    },
+    {
       "name": "mutant-release-ignores-abort",
       "base": "faithful",
       "mirrors": "settleDeliveries releases \"steered\" sends after an aborted run too, as the first version of the fix did in the TUI: an abort that keeps the queue (the RPC abort, or /compact, /new, /resume or /fork in the TUI) leaves the completion in the queue, and the release sends it again (F4, F5)",
@@ -628,7 +727,8 @@
       "witnessNoKeptQueue",
       "witnessNoResend",
       "witnessNoHeldDeferredInLoop",
-      "witnessNoSendAfterAbort"
+      "witnessNoSendAfterAbort",
+      "witnessNoGapWait"
     ]
   }
 }
