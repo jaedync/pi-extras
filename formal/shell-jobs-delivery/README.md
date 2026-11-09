@@ -142,7 +142,7 @@ stop a completion.
   run. Shell-jobs parks before that run's `before_agent_start`, so no
   shell-jobs handler names the message, and the hold stays `pending`. If
   that run then fails in `_prepareRun`, the message is lost and the hold
-  stays with no end. The check `pi-run-start-fails` shows this path in 8
+  stays with no end. The check `pi-run-start-fails` shows this path in 7
   steps. It needs a reload and a failed run start in the same few
   milliseconds. For a run that a completion starts, only an error in the
   tool loadout or the system prompt build (`_preparePromptAndToolLoadout`)
@@ -251,7 +251,7 @@ Pi's source (1.4.0; 1.5.0 is the same here):
 ## Bounds and what they leave out
 
 The default checks use 2 jobs, 1 reload, 2 user runs or aborts, and 3
-attempts. `faithful-wide` uses 3 jobs (7,465,160 states). `faithful-runs3`
+attempts. `faithful-wide` uses 3 jobs (20,826,360 states). `faithful-runs3`
 uses 3 user runs or aborts. `faithful-one-job-runs6` uses 1 job and 6 user
 runs or aborts. In `faithful`, a resend is always the first message of a
 run, which Pi does not drop, so no job reaches the attempt cap.
@@ -297,34 +297,51 @@ gap wait.
 
 | Check | Expect | Result |
 |---|---|---|
-| `faithful` | pass | pass, 188,748 states |
-| `faithful-wide` | pass | pass, 7,465,160 states |
-| `faithful-runs3` | pass | pass, 464,772 states |
-| `faithful-one-job-runs6` | pass | pass, 65,062 states |
+| `faithful` | pass | pass, 600,264 states |
+| `faithful-wide` | pass | pass, 20,826,360 states |
+| `faithful-runs3` | pass | pass, 1,476,232 states |
+| `faithful-one-job-runs6` | pass | pass, 215,336 states |
 | `old-faithful` | violates `oneCompletion` | violation, 12 steps |
-| `f2-pi-extras-alone` / `old-` | pass / violates `oneCompletion` | pass / violation (F4), 12 steps |
-| `f2-two-jobs` / `old-` | pass / violates `oneCompletion` | pass / violation (F2a), 23 steps |
-| `f1-one-job-reload` / `old-` | pass / violates `oneCompletion` | pass / violation (F1), 14 steps |
-| `f2-one-job-prompt` / `old-` | pass / violates `oneCompletion` | pass / violation (F2b), 19 steps |
-| `f3-earlier-handler` / `old-` | pass / violates `oneCompletion` | pass / violation (F3), 15 steps |
-| `f4-abort-keeps-queue` / `old-` | pass / violates `oneCompletion` | pass / violation (F4), 12 steps |
-| `f5-send-after-abort` / `old-` | pass / violates `oneCompletion` | pass / violation (F5), 12 steps |
-| `pi-idle-counts-deferred` | pass | pass |
-| `old-pi-idle-counts-deferred` | violates `oneCompletion` | violation (F4) |
-| `pi-idle-counts-pending` (and `-wide`, `-runs3`) | pass | pass (8,040,496 states wide) |
-| `old-pi-idle-counts-pending` | pass | pass: the Pi fix alone also closes finding F |
-| `survivor-send-ignores-binding` | pass | pass |
-| `survivor-reconcile-ignores-idle` | pass | pass |
-| `mutant-reconcile-ignores-outbox` | violates `attemptsCountSends` | violation |
-| `mutant-claim-unchecked` | violates `stoppedMeansSilent` | violation |
-| `mutant-finalize-ignores-claim` | violates `attemptsCountSends` | violation |
-| `mutant-reconcile-ignores-history` | violates `oneCompletion` | violation |
-| `mutant-attempt-cap-off-by-one` | violates `boundedSends` | violation (on `faithful-one-job-runs6`, 32 steps) |
-| `mutant-ack-on-send` | violates `deliveredMeansSeen` | violation |
-| `mutant-release-pending` | violates `oneCopy` | violation |
-| `mutant-release-ignores-abort` | violates `oneCompletion` | violation |
-| `mutant-pending-as-steered` | violates `oneCopy` | violation |
-| `mutant-session-start-releases` | violates `oneCompletion` | violation |
+| `old-gap-pending` | violates `noStuckHold` | violation, 4 steps |
+| `f2-pi-extras-alone` | pass | pass, 87,708 states |
+| `old-f2-pi-extras-alone` | violates `oneCompletion` | violation (F4), 12 steps |
+| `f2-two-jobs` | pass | pass, 22,932 states |
+| `old-f2-two-jobs` | violates `oneCompletion` | violation (F2a), 27 steps |
+| `f1-one-job-reload` | pass | pass, 3,252 states |
+| `old-f1-one-job-reload` | violates `oneCompletion` | violation (F1), 12 steps |
+| `f2-one-job-prompt` | pass | pass, 3,636 states |
+| `old-f2-one-job-prompt` | violates `oneCompletion` | violation (F2b), 21 steps |
+| `f3-earlier-handler` | pass | pass, 846 states |
+| `old-f3-earlier-handler` | violates `oneCompletion` | violation (F3), 17 steps |
+| `f4-abort-keeps-queue` | pass | pass, 830 states |
+| `old-f4-abort-keeps-queue` | violates `oneCompletion` | violation (F4), 12 steps |
+| `f5-send-after-abort` | pass | pass, 830 states |
+| `old-f5-send-after-abort` | violates `oneCompletion` | violation (F5), 12 steps |
+| `pi-run-start-fails` | violates `noStuckHold` | violation, 7 steps: a stuck path that Pi must fix |
+| `pi-deferred-throws` | violates `noStuckHold` | violation, 6 steps: a stuck path that Pi must fix |
+| `pi-deferred-throws-no-duplicate` | pass | pass, 1,019,044 states |
+| `pi-deferred-throws-one-job-runs6` | pass | pass, 319,224 states |
+| `pi-idle-counts-deferred` | pass | pass, 530,944 states |
+| `old-pi-idle-counts-deferred` | violates `oneCompletion` | violation (F4), 12 steps |
+| `pi-idle-counts-pending` | pass | pass, 525,744 states |
+| `pi-idle-counts-pending-wide` | pass | pass, 16,736,904 states |
+| `pi-idle-counts-pending-runs3` | pass | pass, 1,235,892 states |
+| `old-pi-idle-counts-pending` | pass | pass, 420,396 states: the Pi fix alone also closes finding F |
+| `survivor-send-ignores-binding` | pass | pass, 766,640 states |
+| `mutant-reconcile-ignores-outbox` | violates `attemptsCountSends` | violation, 4 steps |
+| `mutant-claim-unchecked` | violates `stoppedMeansSilent` | violation, 5 steps |
+| `mutant-finalize-ignores-claim` | violates `attemptsCountSends` | violation, 4 steps |
+| `survivor-reconcile-ignores-idle` | pass | pass, 555,704 states |
+| `mutant-reconcile-ignores-history` | violates `oneCompletion` | violation, 17 steps |
+| `mutant-attempt-cap-off-by-one` | violates `boundedSends` | violation, 23 steps: on `pi-deferred-throws-one-job-runs6` |
+| `mutant-ack-on-send` | violates `deliveredMeansSeen` | violation, 3 steps |
+| `mutant-release-pending` | violates `oneCopy` | violation, 6 steps |
+| `mutant-release-never` | violates `noHoldPastSettle` | violation, 12 steps |
+| `mutant-settle-no-flush` | violates `outboxMoves` | violation, 5 steps |
+| `mutant-gap-no-timer` | violates `outboxMoves` | violation, 3 steps |
+| `mutant-release-ignores-abort` | violates `oneCompletion` | violation, 14 steps |
+| `mutant-pending-as-steered` | violates `oneCopy` | violation, 6 steps |
+| `mutant-session-start-releases` | violates `oneCompletion` | violation, 16 steps |
 
 Each `f` check turns off the other sources of the duplicate, so that its
 `old-` twin shows one path. The `old-f1` to `old-f4` checks also stop reads
