@@ -2,7 +2,7 @@
 
 This folder holds a Quint model of the wait machines of Rate-limit Recovery,
 the TLC results, a conformance replay against the real code, and live repro
-scripts for five findings. The model describes the code at commit `343e195`
+scripts for six findings. The model describes the code at commit `343e195`
 (`syncCommit` in `fv.json`).
 
 ## The promise
@@ -143,40 +143,39 @@ The model leaves out:
 | faithful | violates resumeOwed | violation of resumeOwed | 4482 |
 | faithful-one-wait | violates oneWait | violation of oneWait | 8304 |
 | faithful-open-entry | violates openEntryHasWait | violation of openEntryHasWait | 2343 |
-| f1-clone-reload | violates resumeOwed | violation of resumeOwed | 8803 |
-| f2-run-continues | violates resumeOwed | violation of resumeOwed | 4482 |
-| f2-run-continues-one-wait | violates oneWait | violation of oneWait | 8270 |
-| f2-no-steer | violates resumeOwed | violation of resumeOwed | 2443 |
-| f3-late-return | violates resumeOwed | violation of resumeOwed | 8840 |
+| f1-clone-reload | violates resumeOwed | violation of resumeOwed | 8824 |
+| f2-run-continues | violates resumeOwed | violation of resumeOwed | 4484 |
+| f2-run-continues-one-wait | violates oneWait | violation of oneWait | 8286 |
+| f2-no-steer | violates resumeOwed | violation of resumeOwed | 2451 |
+| f3-late-return | violates resumeOwed | violation of resumeOwed | 8849 |
 | f4-tree-away | violates resumeOwed | violation of resumeOwed | 4830 |
 | f5-tree-back-reload | violates resumeOwed | violation of resumeOwed | 14453 |
-| assume-fix | pass | pass | 384038 |
-| assume-fix-wide | pass | pass | 1357134 |
-| assume-fix-no-other-continue | pass | pass | 241948 |
-| mutant-user-run-keeps-idle-wait | violates resumeOwed | violation of resumeOwed | 4791 |
-| mutant-carried-run-keeps-idle-wait | violates resumeOwed | violation of resumeOwed | 4797 |
+| f6-close-before-move | violates resumeOwed | violation of resumeOwed | 14493 |
+| assume-fix | pass | pass | 408654 |
+| assume-fix-wide | pass | pass | 1486106 |
+| assume-fix-no-other-continue | pass | pass | 257852 |
+| mutant-user-run-keeps-idle-wait | violates resumeOwed | violation of resumeOwed | 4793 |
+| mutant-carried-run-keeps-idle-wait | violates resumeOwed | violation of resumeOwed | 4799 |
 | mutant-cancel-keeps-entry-open | violates openEntryHasWait | violation of openEntryHasWait | 2338 |
-| mutant-ready-survives-new-run | violates resumeOwed | violation of resumeOwed | 19824 |
-| survivor-context-keeps-ready | pass | pass | 385334 |
-| survivor-start-keeps-ready | pass | pass | 384614 |
-| survivor-message-end-keeps-ready | pass | pass | 384038 |
-| mutant-no-attempt-cap | violates withinBudgets | violation of withinBudgets | 105296 |
-| mutant-no-wait-budget | violates withinBudgets | violation of withinBudgets | 133489 |
-| mutant-no-streak-budget | violates withinBudgets | violation of withinBudgets | 133735 |
-| survivor-transient-wait-ignores-abort | pass | pass | 406302 |
-| survivor-model-switch-keeps-hibernation | pass | pass | 443754 |
+| mutant-ready-survives-new-run | violates resumeOwed | violation of resumeOwed | 19955 |
+| survivor-context-keeps-ready | pass | pass | 409950 |
+| survivor-start-keeps-ready | pass | pass | 409230 |
+| survivor-message-end-keeps-ready | pass | pass | 408654 |
+| mutant-no-attempt-cap | violates withinBudgets | violation of withinBudgets | 108640 |
+| mutant-no-wait-budget | violates withinBudgets | violation of withinBudgets | 138254 |
+| mutant-no-streak-budget | violates withinBudgets | violation of withinBudgets | 138500 |
+| survivor-transient-wait-ignores-abort | pass | pass | 433870 |
+| survivor-model-switch-keeps-hibernation | pass | pass | 471202 |
 | mutant-model-switch-resumes-out-of-scope | violates resumeOwed | violation of resumeOwed | 2255 |
 
-All 26 checks give the expected result. Two checks first gave `error`
-because two processes used the Apalache port 8822 at the same time. A rerun
-with `--only` gave the expected result for each of them. `assume-fix`
+All 27 checks give the expected result, with no `error` results. `assume-fix`
 assumes the fixes `CONTEXT_ENDS_IDLE_WAIT`, `FORK_CLOSES_ENTRY`,
-`START_CLOSES_STALE_ENTRY` and `TREE_CLOSES_BEFORE_MOVE`. Under those fixes,
+`START_CLOSES_STALE_ENTRY` and `TREE_CLOSES_ON_ARRIVAL`. Under those fixes,
 all four properties hold within the bounds.
 
 ## Findings
 
-All five findings have a live repro in Pi's real `AgentSession`. The repros fake
+All six findings have a live repro in Pi's real `AgentSession`. The repros fake
 only the model (a faux provider at `http://localhost:0`), the server check and
 the timers.
 
@@ -329,10 +328,11 @@ Found by the step-9 review. The model now has the action `tree(keepsEntry)`.
   and `runsStartedOnTheirOwn: 1` (exit 1). The control `--no-nav` also makes
   one run, but that run is the resume that the failure is owed (exit 0).
 - Model: `f4-tree-away` violates `resumeOwed` with the F1, F2 and F3 fixes on.
-- Fix: end the wait in a `session_before_tree` handler, so that
-  `idleWait.cancel()` writes the closed entry on the old branch before the
-  leaf moves, and call `transient.reset()` (`TREE_CLOSES_BEFORE_MOVE`). A
-  `session_tree` handler is not enough: see F5.
+- Fix (not checked in Pi): in a `session_tree` handler, end the wait and
+  call `transient.reset()`, and when the new branch ends in an open entry
+  and no wait goes on, write a closed entry at the new leaf
+  (`TREE_CLOSES_ON_ARRIVAL`). A handler that only ends the wait is not
+  enough (F5), and a `session_before_tree` handler is not enough (F6).
 
 ### F5: /tree away and back, then /reload, starts a run on its own
 
@@ -357,12 +357,40 @@ Found by the round-2 review. It also breaks the F4 fix as first proposed.
   `"entriesOnYAfterNav":["closed"]`, `"entriesBackOnX":["open"]` and
   `"runsStartedOnTheirOwnAfterReload":1` (exit 1). There is no control that
   passes, because the sound fix needs a product change.
-- Model: `f5-tree-back-reload` (all fixes on, the /tree fix in
-  `session_tree`) violates `resumeOwed`. `assume-fix` uses
-  `TREE_CLOSES_BEFORE_MOVE` and passes.
-- Fix: `TREE_CLOSES_BEFORE_MOVE` (see F4). Or, at `session_tree`, write a
-  closed entry when the new branch ends in an open entry and no wait is
-  active. The second option is not in the model.
+- Model: `f5-tree-back-reload` (all fixes on, the /tree fix only ends the
+  wait in `session_tree`) violates `resumeOwed`. `assume-fix` uses
+  `TREE_CLOSES_ON_ARRIVAL` and passes.
+- Fix: `TREE_CLOSES_ON_ARRIVAL` (see F4).
+- Reach: in Pi's default tree view, the custom entries and the
+  `context_edit` leaf do not show (`tree-selector.js:259-264, 283-285`). A
+  move back to the visible error message gives a path without the open
+  entry. So F5 and F6 need the "all" filter or a call such as
+  `navigateTree(oldLeafId)` (RPC, the SDK or an extension).
+
+### F6: the fix "close the entry before the leaf moves" does not fix F5
+
+Found by the round-3 review.
+
+1. A local request fails on branch X, and the idle wait writes an open entry.
+2. A `session_before_tree` handler ends the wait before the leaf moves
+   (`agent-session.js:3289-3307`, then the move at `:3373-3384`). Its closed
+   entry is appended at the old leaf, as a child of it.
+3. The user moves to branch Y, then back to the old leaf of X. That path
+   stops before the closed entry, so it ends in "open".
+4. A `/reload` restores the wait, and a run starts on its own.
+
+- Live repro: `node formal/rate-limit-recovery/repro-f6.mts` prints
+  `"entriesOnXAfterCancel":["open","closed"]`, `"leafXType":"context_edit"`,
+  `"entriesBackOnX":["open"]` and `"runsStartedOnTheirOwnAfterReload":1`
+  (exit 1). The control `--back-to-closed` (back to the closed entry itself)
+  prints `"entriesBackOnX":["open","closed"]` and 0 runs (exit 0).
+- Model: `f6-close-before-move` violates `resumeOwed`.
+- More harm of that fix (medium, no failing property): it ends the wait
+  also when the navigation does not occur (a later extension cancels, Esc
+  during the summary, or the summary fails). The user stays on the failed
+  branch with no wait and no resume. `resumeOwed` checks only bad resumes,
+  so no check catches this. `TREE_CLOSES_ON_ARRIVAL` does not have this
+  problem, because Pi emits `session_tree` only after a move.
 
 ## Review (skill step 9)
 
@@ -401,6 +429,12 @@ navigations, two branches and `offOpen`. Other round-2 points:
   (`agent-session.js:3330`). The session is not streaming, and `_startRun`
   has no `isCompacting` guard (`:1423`). If the idle wait answers in that
   window, a run starts on the old branch, and the leaf then moves under it.
+- Round 3 (a third fresh Opus 5.5 reviewer, on the changes after round 2)
+  found F6 (high, with a live repro and a Quint repro): the round-2 fix
+  `TREE_CLOSES_BEFORE_MOVE` was wrong, and the model step for it was wrong.
+  The record now models it as Pi does, `f6-close-before-move` shows it, and
+  `assume-fix` uses `TREE_CLOSES_ON_ARRIVAL`. No fourth review read this
+  change. The review loop stops after 3 rounds.
 - Medium: the F3 fix text says that `START_CLOSES_STALE_ENTRY` also fixes F1.
   No check tests that claim. The fix also does not cover a restore that
   `!localRetry` or `!interactiveMain` refuses (`controller.ts:169`).
@@ -529,6 +563,7 @@ node formal/rate-limit-recovery/repro-f2.mts      # and --no-steer, --report
 node formal/rate-limit-recovery/repro-f3.mts      # and --soon
 node formal/rate-limit-recovery/repro-f4.mts      # and --no-nav
 node formal/rate-limit-recovery/repro-f5.mts      # and --fix
+node formal/rate-limit-recovery/repro-f6.mts      # and --back-to-closed
 node skills/formal-verification/scripts/fv.mjs drift formal/rate-limit-recovery
 ```
 

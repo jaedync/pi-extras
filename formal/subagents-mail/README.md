@@ -401,11 +401,21 @@ order (N1, `repro-f4-order.mts`).
 5. `compacted(event.reason === "manual" && !event.aborted)` gets false
    (main-watch.ts:142). No reminder comes, and main never replies.
 
-A summary that fails (`aborted` false) does send the reminder. The TLC path
+A failure before the hook takes the same path with no other extension
+(round-3 review, M1). `compact()` aborts the run (as:2231), then throws
+"Nothing to compact (session too small)", "Already compacted" or "No model
+selected" before `session_before_compact` (as:2237-2249). Our handler does
+not run, so `compactionStopped` stays false, and `session_compact_failed`
+(`aborted` false) sends no reminder. With the default `keepRecentTokens`
+(20000), a short session gives this error. `repro-f4-small.mts` shows it.
+The model reaches the same outcome through `compactStartCancelFirst` and
+`compactFail`, not through this path. A summary that fails after our
+handler ran (`aborted` false) does send the reminder. The TLC path
 of `f4-failed-compaction` runs our handler in step 3 (`compactStart`), then
 the compaction fails with `aborted` true.
 
-**Harm.** Medium for a cancel by an extension: the user did not stop main.
+**Harm.** Medium. A `/compact` of a short session needs no other extension
+(`repro-f4-small.mts`). A cancel by an extension: the user did not stop main.
 Low for Esc during the summary: the user stopped something, but it was the
 compaction, not main's reply.
 
@@ -504,6 +514,23 @@ cancelling extension before or after ours.
   mail lands one time in the old session, but main does not reply to it.
   `owing` is cleared, so a `/resume` back sends no reminder. Nothing goes to
   the index, so nothing comes two times.
+
+## Round 3 of the review
+
+A third fresh reviewer read the round-2 changes (`review3-mail`). It found
+no new critical or high issue, so the review loop stops here. It confirmed
+that N1 to N5 are fixed, that `REMIND_FROM_STOP_MARK` reminds in a real
+`AgentSession` on each failure path that it tried, and that `assume-fixes`
+passes for the right reason. Its points:
+
+- M1, medium: F4 also occurs with no other extension, when the session is
+  too small to compact (see F4). `repro-f4-small.mts` (exit 1; control
+  `--control`, exit 0). `REMIND_FROM_STOP_MARK` covers this path in the
+  reviewer's run.
+- L1, low, no repro: Pi emits `compaction_end` (as:2336) before
+  `session_compact_failed` (as:2344), and the TUI can then send a prompt that
+  waited during the compaction. The reminder on the idle route can race with
+  it. The input grace (main-watch.ts:148) probably covers this.
 
 ## Round 2 of the review
 
@@ -640,5 +667,6 @@ node formal/subagents-mail/repro-f3.mts control
 node formal/subagents-mail/repro-f4.mts
 node formal/subagents-mail/repro-f4-order.mts before
 node formal/subagents-mail/repro-f4-order.mts after
+node formal/subagents-mail/repro-f4-small.mts       # and --control
 node skills/formal-verification/scripts/fv.mjs drift formal/subagents-mail
 ```

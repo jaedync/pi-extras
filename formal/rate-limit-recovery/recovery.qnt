@@ -47,9 +47,14 @@ module recovery {
   // moves the leaf before it emits session_tree (agent-session.js:3379-3398),
   // so the closed entry goes to the new branch (round-2 review, F5).
   pure val TREE_ENDS_IDLE_WAIT = false
-  // F4 and F5 fix: a session_before_tree handler ends the idle wait, so the
-  // closed entry goes to the old branch before the leaf moves.
+  // A wrong F4 and F5 fix (round-3 review, F6): a session_before_tree handler
+  // ends the idle wait before the leaf moves. Its closed entry is a child of
+  // the old leaf, so a /tree back to the old leaf still ends in "open".
   pure val TREE_CLOSES_BEFORE_MOVE = false
+  // F4 and F5 fix (not checked in Pi): a session_tree handler ends the idle
+  // wait (its closed entry goes at the new leaf), and when the new branch ends
+  // in an open entry and no wait goes on, it writes a closed entry there too.
+  pure val TREE_CLOSES_ON_ARRIVAL = false
 
   pure val KINDS = Set("ok", "quota", "cloud", "local", "other")
   pure val MODELS = Set("a1", "a2", "oa", "loc")
@@ -512,18 +517,20 @@ module recovery {
   // (agent-session.js:3379-3398), so an entry that a session_tree handler
   // writes goes to the new branch. No resume is owed after a move away.
   action tree(keepsEntry: bool): bool = {
-    // Fixes: TREE_CLOSES_BEFORE_MOVE closes on this branch before the move;
-    // TREE_ENDS_IDLE_WAIT closes on the new branch after it. cancel() writes
-    // a closed entry only for a wait that is active (idle-wait.ts:118-119).
-    val ends = TREE_CLOSES_BEFORE_MOVE or TREE_ENDS_IDLE_WAIT
-    val here = entryOpen and not(TREE_CLOSES_BEFORE_MOVE and iActive)
+    // Each fix ends the wait. cancel() writes a closed entry only for a wait
+    // that is active (idle-wait.ts:118-119). TREE_ENDS_IDLE_WAIT writes it at
+    // the new leaf. TREE_CLOSES_BEFORE_MOVE writes it under the old leaf,
+    // which neither path sees (round-3 review). TREE_CLOSES_ON_ARRIVAL also
+    // closes a stale open entry on the new branch.
+    val ends = TREE_CLOSES_BEFORE_MOVE or TREE_ENDS_IDLE_WAIT or TREE_CLOSES_ON_ARRIVAL
+    val target = if (keepsEntry) entryOpen else offOpen
     all {
       navs < MAX_NAVS,
       not(running),
       keepPi, keepQ, keepT,
       iActive' = (iActive and not(ends)),
-      entryOpen' = if (keepsEntry) (entryOpen and not(ends and iActive)) else (offOpen and not(TREE_ENDS_IDLE_WAIT and iActive)),
-      offOpen' = if (keepsEntry) offOpen else here,
+      entryOpen' = if (TREE_CLOSES_ON_ARRIVAL) false else (target and not(TREE_ENDS_IDLE_WAIT and iActive)),
+      offOpen' = if (keepsEntry) offOpen else entryOpen,
       idleEndedBy' = idleEndedBy,
       owed' = (owed and keepsEntry), badResume' = badResume, lastKind' = lastKind, resumes' = resumes,
       navs' = navs + 1, requests' = requests, inputs' = inputs, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones,

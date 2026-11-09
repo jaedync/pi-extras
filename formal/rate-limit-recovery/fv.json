@@ -73,8 +73,8 @@
           "to": "pure val START_CLOSES_STALE_ENTRY = true"
         },
         {
-          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
-          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
+          "from": "pure val TREE_CLOSES_ON_ARRIVAL = false",
+          "to": "pure val TREE_CLOSES_ON_ARRIVAL = true"
         }
       ],
       "expect": {
@@ -94,8 +94,8 @@
           "to": "pure val START_CLOSES_STALE_ENTRY = true"
         },
         {
-          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
-          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
+          "from": "pure val TREE_CLOSES_ON_ARRIVAL = false",
+          "to": "pure val TREE_CLOSES_ON_ARRIVAL = true"
         }
       ],
       "expect": {
@@ -115,8 +115,8 @@
           "to": "pure val START_CLOSES_STALE_ENTRY = true"
         },
         {
-          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
-          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
+          "from": "pure val TREE_CLOSES_ON_ARRIVAL = false",
+          "to": "pure val TREE_CLOSES_ON_ARRIVAL = true"
         }
       ],
       "expect": {
@@ -144,8 +144,8 @@
           "to": "pure val START_CLOSES_STALE_ENTRY = true"
         },
         {
-          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
-          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
+          "from": "pure val TREE_CLOSES_ON_ARRIVAL = false",
+          "to": "pure val TREE_CLOSES_ON_ARRIVAL = true"
         }
       ],
       "expect": {
@@ -165,8 +165,8 @@
           "to": "pure val FORK_CLOSES_ENTRY = true"
         },
         {
-          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
-          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
+          "from": "pure val TREE_CLOSES_ON_ARRIVAL = false",
+          "to": "pure val TREE_CLOSES_ON_ARRIVAL = true"
         }
       ],
       "expect": {
@@ -220,8 +220,8 @@
       }
     },
     {
-      "name": "assume-fix",
-      "why": "Both fixes: a new request ends the idle wait, and a fork closes a copied open entry The /tree fix closes the entry before the leaf moves (TREE_CLOSES_BEFORE_MOVE).",
+      "name": "f6-close-before-move",
+      "why": "All fixes on, with the /tree fix in a session_before_tree handler (TREE_CLOSES_BEFORE_MOVE): its closed entry is a child of the old leaf, so /tree away and back to the old leaf finds the open entry, and a /reload restores it (F6, found by the round-3 review).",
       "replace": [
         {
           "from": "pure val CONTEXT_ENDS_IDLE_WAIT = false",
@@ -238,6 +238,31 @@
         {
           "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
           "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
+        }
+      ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "assume-fix",
+      "why": "Both fixes: a new request ends the idle wait, and a fork closes a copied open entry. The /tree fix ends the wait and closes a stale open entry when the user arrives on a branch (TREE_CLOSES_ON_ARRIVAL).",
+      "replace": [
+        {
+          "from": "pure val CONTEXT_ENDS_IDLE_WAIT = false",
+          "to": "pure val CONTEXT_ENDS_IDLE_WAIT = true"
+        },
+        {
+          "from": "pure val FORK_CLOSES_ENTRY = false",
+          "to": "pure val FORK_CLOSES_ENTRY = true"
+        },
+        {
+          "from": "pure val START_CLOSES_STALE_ENTRY = false",
+          "to": "pure val START_CLOSES_STALE_ENTRY = true"
+        },
+        {
+          "from": "pure val TREE_CLOSES_ON_ARRIVAL = false",
+          "to": "pure val TREE_CLOSES_ON_ARRIVAL = true"
         }
       ],
       "expect": "pass"
