@@ -128,7 +128,7 @@ test("a resume reads the scope at that moment: a model that left it continues on
 	assert.match(first.notices.join("\n"), /Model faux\/cheap is not available now, running on faux\/other/);
 });
 
-test("the host is quiet only when nothing is live and all mail has reached main and been seen", async () => {
+test("the host is quiet only when nothing is live and all mail has reached main, been seen and been replied to", async () => {
 	const h = setup();
 	const first = h.portsFor("first");
 	const host = h.open(first);
@@ -145,7 +145,15 @@ test("the host is quiet only when nothing is live and all mail has reached main 
 	const [report] = h.reports(first, name);
 	assert.ok(report);
 	assert.equal(host.quiet(), false, "sent, but main has not shown it yet");
-	host.mail.acknowledge((report.message.details as { id: string }).id);
+	const id = (report.message.details as { id: string }).id;
+	// message_end: the report started main's turn, so main owes it a reply (formal/subagents-mail, F1).
+	host.mail.acknowledge(id);
+	assert.equal(host.quiet(), false, "main has not replied after it yet");
+	// turn_end: main's reply comes after the report.
+	host.mail.answered([
+		{ type: "custom_message", customType: report.message.customType, details: report.message.details },
+		{ type: "message", message: { role: "assistant", stopReason: "stop" } },
+	]);
 	assert.equal(host.quiet(), true);
 });
 
