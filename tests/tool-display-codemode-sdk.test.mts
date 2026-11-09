@@ -8,11 +8,14 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatTime } from "../lib/band/band.ts";
 import { agentRoot, piAiRoot } from "./support/pi-runtime.mjs";
+import { linkTransformCache } from "./support/transform-cache.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "codemode-sdk-"));
 // Pi spools large tool output to a file in the OS temp folder and leaves it there; keep those files in scratch.
 process.env.TMPDIR = join(scratch, "tmp");
 mkdirSync(process.env.TMPDIR, { recursive: true });
+// A new TMPDIR would also mean a cold jiti cache: the first test then spent 7 to 22 s on transforms, past its limit.
+linkTransformCache(process.env.TMPDIR);
 process.env.HOME = scratch;
 process.env.PI_CODING_AGENT_DIR = join(scratch, "agent");
 process.env.PI_OFFLINE = "1";
