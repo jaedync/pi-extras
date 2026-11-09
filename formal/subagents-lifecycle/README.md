@@ -109,11 +109,10 @@ cites its file and line in `lifecycle.qnt`.
 - `session.prompt` can also reject (no model, no login). The model leaves
   that out: there the gate does not wait for steers in flight, and the
   failure path copies `unread` to the inbox.
-- The model treats the code from `late()` to `settle()` as one segment. In
-  the code, `work()` and `run()` have awaits between them (`checks.run`, the
-  return of `work`). A message that another chain steers in those
-  microtasks can still land in an idle session's queue (residual R1, see
-  the findings).
+- The model treats the code from the last `late()` to `settle()` as one
+  segment. Since the fix of R1, the code does the same: `run()` takes the
+  late mail again in the step of `settle()`. `SETTLE_GAP = true` gives the
+  code before that fix (see R1).
 - A pass covers only the model within these bounds. It is safety only, not liveness.
 
 ## Results
@@ -146,8 +145,10 @@ cites its file and line in `lifecycle.qnt`.
 | `mutant-late-skips-queue` | violates mailKept | violation of mailKept | 11,394 | 9 |
 | `mutant-stop-no-abort` | violates stopMeansStopped | violation of stopMeansStopped | 80 | 4 |
 | `mutant-settle-skips-finish` | violates reportOnEnd | violation of reportOnEnd | 1,294 | 6 |
+| `mutant-late-settle-gap` | violates mailKept | violation of mailKept | 20,549 | 9 |
+| `mutant-late-settle-gap-no-stop` | violates mailKept | violation of mailKept | 560 | 9 |
 
-All 24 checks give the expected result. The checks ran with 2 TLC workers on
+All 26 checks give the expected result. The checks ran with 2 TLC workers on
 a loaded host. One check (`mutant-fallback-keeps-session`)
 first gave `error`, because another process used the Apalache port 8822 at
 the same time. A rerun with `--only` and 1 worker gave the result above.
@@ -306,7 +307,7 @@ silenced, because `finish` took any mark as silent.
   `Map<string, number>`. `stop` sets both to its launch number. The
   relaunch branch deletes a mark only when it is the stop's own
   (`team.ts:426-427`). `finish` is silent only when the mark is the current
-  launch number (`team.ts:936-938`).
+  launch number (`team.ts:945-947`).
 - Mutants: `mutant-old-stop-clears-ending` breaks `reportOnEnd` (depth 10),
   and `mutant-old-stop-clears-parent-mark` breaks `parentStopSilent` (depth 7).
 - Repro `node formal/subagents-lifecycle/repro-f4.mts`:
@@ -341,7 +342,7 @@ Path at f194608:
   steer in flight it does not await, so the team's continuation keeps its
   place in the event loop. `late` then takes the message from Pi's queue as
   the run's next prompt. The review found the same loss at the end of a
-  check (`team.ts:728-731`): a steer that waits in the input handlers while
+  check (`team.ts:737-740`): a steer that waits in the input handlers while
   the check runs. `work` now awaits `handle.steering()` after the check and
   before `late`. Checks are not in the model; `tests/subagents-check-steer.test.ts`
   covers this path.
@@ -352,18 +353,40 @@ Path at f194608:
   - After (exit 0): `"atEnd":{"state":"running","reports":0},"afterSteerLands":{"state":"idle","queued":false,"inTranscript":true},"afterIdleRelease":{"messageKeptAnywhere":true}`
   - The control `--no-hold` gives `messageKeptAnywhere: true`.
 
-### R1. Residual: a steer in the microtasks between `late()` and `settle()`
+### R1. A message in the microtasks between `late()` and `settle()` was lost (fixed)
 
-The model treats the code from the last `late()` to `settle()` as one
-segment. After the last `late()`, `work()` returns to `run()`, which then
-calls `settle()`: an `await` of an async function, a few microtasks. A
-message that another chain delivers in those microtasks reaches `unread`,
-and `settle` clears `unread`. The message then waits in the idle session's
-queue: a next run in the held session reads it, but the quiet-spell release
-drops it. The window is microtasks long, and only a chain that resumes in
-the same macrotask can deliver in it. No repro exists. The check boundary
-(`team.ts:728-731`), where the window was as long as the input handler, is
-fixed (see F5).
+The task `fix-subagent-mail` fixed this residual (commit `fa6888b`).
+
+- Path: the last `late()` of `work()` finds nothing. `work()` returns to
+  `run()`, which calls `settle()` some microtasks later. Main sends a
+  message in that gap. The team steers it, because the child still shows
+  `running`. `settle()` clears `unread`, and the steer then lands in the
+  queue of an idle session. A next run in the held session reads it, but the
+  quiet-spell release drops it. A stop in the same gap was also overwritten:
+  `settle()` made the stopped child idle.
+- Model change: the switch `SETTLE_GAP` (false, as the code is now). True
+  puts the prompt in the phase `settling`, and the new action
+  `settleAfterGap` settles it later, with no gone check. Two mutants:
+  `mutant-late-settle-gap` (all bounds, a path with a stop, depth 9) and
+  `mutant-late-settle-gap-no-stop` (no stops: message, settle, steer lands,
+  quiet-spell release, depth 9). Both break `mailKept`. `faithful` passes
+  as before (494,863 states, depth 29).
+- Code change (`team.ts` `run`): after each `await this.work(...)`, run()
+  waits for steers in flight (`handle.steering()`), checks `gone()`, and
+  takes the queue and the inbox again (`late()`). With mail, the run goes
+  on with it as its next prompt. Without mail, `settle()` follows in the
+  same synchronous step.
+- Repro: `tests/subagents-settle-steer.test.ts` runs the real prompt gate
+  over a fake session whose steer takes one microtask to queue, as Pi's
+  does. It sends the message after a chain of 0 to 9 microtasks.
+  - Before (code at `7649ff9`): at depth 3 the run is `idle`, the
+    message waits in the session's queue, and `unread` is empty. The test
+    fails: `depth 3: nothing waits in the idle session's queue`.
+  - After: at each depth the message starts the next prompt, and the run is
+    `running`. The test passes.
+- The replay misses a revert of this fix (`run-settles-without-late` in
+  `code-mutants.py`): the traces of `faithful` have no gap step. The
+  regression test catches it.
 
 ### Limits of the gate
 
@@ -385,7 +408,7 @@ fixed (see F5).
   still run a compaction in `_prepareRun` and send its summary request. The
   run itself stops at `agent_start`. Round 2 of the review found this
   (medium, no repro). A fix would defer Pi's dispose until that prompt
-  ended. It is a follow-up.
+  ended. It is a follow-up (see "Follow-ups").
 - After a dispose that did not wait to the end, Pi's `agent_settled` emit
   runs on an invalidated extension runner. The run is stopped before its
   first request; what Pi does with the rest of it is Pi's.
@@ -450,7 +473,7 @@ tests and the repros, and wrote probes. Its findings and what changed:
   starts on its own). Written in "Limits of the gate".
 - L1 (low): the usage of an aborted request is dropped when a relaunch is
   queued and a second stop follows (`team.ts:664` compares with
-  `launches - 1`). Not fixed; a follow-up.
+  `launches - 1`). Not fixed; a follow-up (see "Follow-ups").
 - L2 (low): a stop of a child that `close()` interrupted while an earlier
   stop was in flight now goes on after close and reports once. Not fixed; a
   follow-up.
@@ -460,6 +483,26 @@ Round 2 (a fresh Opus 5.5 reviewer, at cb4faf7) found no new critical or
 high defect. It found one medium gap with no repro: a compaction after a
 dispose whose waits ended (see "Limits of the gate"). The review loop
 stops here.
+
+## Follow-ups
+
+The task `fix-subagent-mail` (2026-11-09) took the four open items of the
+reviews. R1 fitted this model and is fixed (see R1). These three do not fit
+the mail model or this model, so they stay open:
+
+1. Medium, no repro: a compaction after a dispose whose waits ended (see
+   "Limits of the gate"). Reason: the model has no compaction and no time,
+   so it cannot show the wait that ends early. A fix would defer Pi's
+   dispose until that prompt ended. A test needs a fake session with a
+   compaction in `_prepareRun` and mock timers.
+2. L1, low: the usage of an aborted request is dropped when a relaunch is
+   queued and a second stop follows (the `launches - 1` test in `open`'s
+   `update`, team.ts). Reason: the model has no usage. A fix would keep the
+   launch number of each stop's aborted request, and a unit test with two
+   stops can show it.
+3. L2, low: a stop of a child that `close()` interrupted goes on after
+   close and reports once. Reason: the model leaves out close and the
+   /reload hand-over. A fix would end a stop's tail when the team closed.
 
 ## Mutants and survivors
 
@@ -478,19 +521,19 @@ least one mutant that breaks it.
 | `mutant-prompt-skips-steers` | `child-prompt.ts` `prompt` without the wait for steers in flight (F5) | violation of mailKept | fails (caught) |
 | `mutant-stop-keeps-launch` | `team.ts:407` and `:417` without the new launch number | violation of oneReport | fails (caught) |
 | `mutant-stop-ignores-relaunch` | `team.ts:424` without the check: the stop always finishes after the abort | violation of oneReport | fails (caught) |
-| `mutant-work-ignores-gone` | `team.ts:719` without `if (this.gone(name, launch)) return false` | violation of oneReport | fails (caught) |
+| `mutant-work-ignores-gone` | `team.ts:728` without `if (this.gone(name, launch)) return false` | violation of oneReport | fails (caught) |
 | `mutant-open-ignores-gone` | `team.ts:675-678` without the gone check: a stale launch holds its session | violation of oneSession | fails (caught) |
 | `mutant-stop-keeps-resume` | `team.ts:413` without `this.parkResume(name)` | violation of mailKept | fails (caught) |
 | `mutant-stop-drops-unread` | `team.ts:420` without `...this.unreadLeft(name)` | violation of mailKept | fails (caught) |
 | `survivor-pump-starts-any` | `slots.ts:89` without the `state !== "queued"` drop | nothing (survivor) | passes (missed) |
 | `mutant-resume-ignores-slots` | `team.ts:527` runWhenFree without `this.slots.free()` | violation of slotsBound | fails (caught) |
-| `mutant-finish-keeps-waiters` | `team.ts:934` without `this.settleWaiters(name, record)` | violation of waitersSettle | fails (caught) |
+| `mutant-finish-keeps-waiters` | `team.ts:943` without `this.settleWaiters(name, record)` | violation of waitersSettle | fails (caught) |
 | `mutant-release-busy` | `sessions.ts:142` without `this.options.idle(name)` | violation of noStuck | not run: the replay calls the timer body by hand, past this guard |
 | `mutant-resume-failed-drops-message` | `team.ts:631` without `this.parkResume(name)` in resumeFailed | violation of mailKept | fails (caught) |
-| `mutant-fallback-keeps-session` | `team.ts:835` without `this.sessions.release(name)` in failOrFallBack | violation of oneSession | fails (caught) |
-| `mutant-late-skips-queue` | `team.ts:803` without `handle.takeQueued()` | violation of mailKept | fails (caught) |
+| `mutant-fallback-keeps-session` | `team.ts:844` without `this.sessions.release(name)` in failOrFallBack | violation of oneSession | fails (caught) |
+| `mutant-late-skips-queue` | `team.ts:812` without `handle.takeQueued()` | violation of mailKept | fails (caught) |
 | `mutant-stop-no-abort` | `team.ts:422` without `await handle?.abort()` | violation of stopMeansStopped | fails (caught) |
-| `mutant-settle-skips-finish` | `team.ts:879` without `this.finish(name)` | violation of reportOnEnd | fails (caught) |
+| `mutant-settle-skips-finish` | `team.ts:888` without `this.finish(name)` | violation of reportOnEnd | fails (caught) |
 
 The survivors:
 
@@ -539,17 +582,17 @@ Code changes that make the replay fail (one at a time, each restored):
 |---|---|
 | team.ts:407 and :417 no new launch number | fails (caught) |
 | team.ts:424 no relaunch check | fails (caught) |
-| team.ts:719 no `gone` check | fails (caught) |
+| team.ts:728 no `gone` check | fails (caught) |
 | team.ts:675-678 no `gone` check | fails (caught) |
 | team.ts:413 no `parkResume` | fails (caught) |
 | team.ts:420 no `unreadLeft` | fails (caught) |
 | team.ts:527 no `slots.free()` | fails (caught) |
-| team.ts:931 no `settleWaiters` | fails (caught) |
+| team.ts:940 no `settleWaiters` | fails (caught) |
 | team.ts:631 no `parkResume` | fails (caught) |
-| team.ts:832 no `sessions.release` | fails (caught) |
-| team.ts:800 no `takeQueued` | fails (caught) |
+| team.ts:841 no `sessions.release` | fails (caught) |
+| team.ts:809 no `takeQueued` | fails (caught) |
 | team.ts:422 no `abort()` | fails (caught) |
-| team.ts:876 no `finish` | fails (caught) |
+| team.ts:885 no `finish` | fails (caught) |
 | team.ts:405 with `this.ending.has(name)` (F3, as at f194608) | fails (caught) |
 | team.ts:426 deletes `ending` for any stop (F4) | fails (caught) |
 | team.ts:427 and :934 `stoppedByParent` as a set (F4) | fails (caught) |
@@ -559,13 +602,14 @@ Code changes that make the replay fail (one at a time, each restored):
 | child.ts `childDisposer` without `gate.shut()` (F2) | fails (caught) |
 | child-prompt.ts `abort` without the `GATE_WAIT_MS` bound (missed: the model has no time; tests/subagents-child-prompt.test.ts and repro-f2.mts --late catch it) | passes (missed) |
 | child-prompt.ts without the agent_start listener after `shut` (missed: the model has no time; tests/subagents-child-prompt.test.ts and repro-f2.mts --late catch it) | passes (missed) |
-| team.ts:728-731 without the wait for steers after the check (missed: checks are not modeled; tests/subagents-check-steer.test.ts catches it) | passes (missed) |
+| team.ts:737-740 without the wait for steers after the check (missed: checks are not modeled; tests/subagents-check-steer.test.ts catches it) | passes (missed) |
 | child-prompt.ts `prompt` without the wait for steers (F5) | fails (caught) |
 | slots.ts:89 no `state !== "queued"` drop | passes (missed): no model behavior needs the guard, see survivor-pump-starts-any |
 | team.ts:424 without the `state !== "stopped"` half (the 4a8fa14 fix) | fails (caught) |
 | team.ts:676 without `await handle.dispose()` for a stale launch | fails (caught) |
+| team.ts `run` settling with no new `late()` (R1, `run-settles-without-late`; missed: the traces have no gap step; tests/subagents-settle-steer.test.ts catches it) | passes (missed) |
 
-22 of 27 changes make the replay fail. Each file was restored after its change.
+22 of 28 changes make the replay fail. Each file was restored after its change.
 
 The script is `code-mutants.py` in this folder.
 
@@ -580,6 +624,7 @@ f194608 and passes now:
 | `tests/subagents-stop-relaunch.test.ts` | F3, F4 (both marks, and the silenced report of a relaunched run) on fake sessions | 4 of 4 fail |
 | `tests/subagents-child-prompt.test.ts` | F1, F2, F5 on the gate and the disposer, with a fake session; the compaction abort, the `GATE_WAIT_MS` bounds and the agent listener after `shut` (review) | the module did not exist; with the first fix's gate (f597def), 5 of 10 fail: the compaction, the 3 bound and listener tests, and the F5 test, which calls the new `steering()` |
 | `tests/subagents-check-steer.test.ts` | F5 at the check boundary (review, high) | fails |
+| `tests/subagents-settle-steer.test.ts` | R1 (task `fix-subagent-mail`) | fails on `7649ff9` (depth 3) |
 | `tests/subagents-lifecycle-conformance.test.mts` | the replay and the finding paths | the traces of the fixed model fail at the finding steps |
 
 ## Commands

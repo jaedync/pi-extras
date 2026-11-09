@@ -46,14 +46,14 @@ module mail {
   pure val REMIND_FROM_STOP_MARK = true
 
   // Mail ids. "a": a note (wakes main). "b": a relay of what the user told a
-  // child (does not wake, deliver.ts:157-162). "r": the batched report
-  // (wakes, deliver.ts:180-197). "rem": the hidden reminder (wakes, not kept
-  // as pending, deliver.ts:315-320).
+  // child (does not wake, deliver.ts:165-170). "r": the batched report
+  // (wakes, deliver.ts:188-205). "rem": the hidden reminder (wakes, not kept
+  // as pending, deliver.ts:323-328).
   pure val CHILD_MAIL = Set("a", "b")
   pure val REPORT = "r"
   pure val REMINDER = "rem"
   pure val IDS = Set("a", "b", "r", "rem")
-  // pending-report-<name>: the widget's item for a report still batched (deliver.ts:142).
+  // pending-report-<name>: the widget's item for a report still batched (deliver.ts:150).
   pure val PLACEHOLDER = "pr"
   // The deferred item for a user prompt (as:1631-1634).
   pure val PROMPT = "prompt"
@@ -66,7 +66,7 @@ module mail {
   // isStreaming and the run flag are true in prep, work and bs (as:1068-1074).
   pure def active(p: str): bool = p == "prep" or p == "work" or p == "bs"
 
-  // ---- MainMail (lib/subagents/deliver.ts:88-108) ----
+  // ---- MainMail (lib/subagents/deliver.ts:89-116) ----
   var outbox: List[str]        // outbox, oldest first
   var pending: Set[str]        // pendingItems keys
   var owing: Set[str]          // owing keys
@@ -87,7 +87,7 @@ module mail {
   var stoppedRun: bool
   var stopMark: bool           // stopMark is set and still equals lastSaid(ctx): nothing was said since
   var compactionStopped: bool
-  var retrySoon: bool          // the setTimeout(retry, 0) of retrySoon (main-watch.ts:78)
+  var retrySoon: bool          // the setTimeout(retry, 0) of retrySoon (main-watch.ts:80)
   // ---- Pi ----
   var phase: str
   var ours: bool               // in bs or settle: our handler has run
@@ -135,7 +135,7 @@ module mail {
   val where0: Where = { served: hostPhase == "served", compacting: compacting, grace: grace, running: running, settling: settling }
 
   // The Route: PortBinding.route (host.ts:135) holds while parked or closing;
-  // then watchMain's route (main-watch.ts:145-150).
+  // then watchMain's route (main-watch.ts:155-160).
   pure def routeOf(w: Where, p: str): str =
     if (not(w.served)) "hold"
     else if (not(active(p)) and not(w.compacting)) (if (w.grace) "hold" else "wake")
@@ -161,8 +161,8 @@ module mail {
     if (active(b.phase)) { ...b, pendingCustom: b.pendingCustom.append(id) }
     else land(b, id)
 
-  // One pass of the loop in sendWaiting (deliver.ts:258-272) with dispatch
-  // (deliver.ts:391-403). `fail`: the port throws on this send (642ba00).
+  // One pass of the loop in sendWaiting (deliver.ts:266-280) with dispatch
+  // (deliver.ts:414-427). `fail`: the port throws on this send (642ba00).
   pure def sendStep(w: Where, b: Box): Box =
     if (b.stop or b.outbox == []) { ...b, stop: true }
     else {
@@ -170,7 +170,7 @@ module mail {
       val id = b.outbox.head()
       if (route == "hold") { ...b, stop: true }
       else if (b.fail)
-        // dispatch deletes the owed id; sendWaiting puts the item back (deliver.ts:265-268, :398-400).
+        // dispatch deletes the owed id; sendWaiting puts the item back (deliver.ts:273-276, :398-400).
         { ...b, owing: b.owing.exclude(Set(id)), fail: false, failed: true, stop: true }
       else {
         val b1 = { ...b, outbox: b.outbox.tail() }
@@ -185,7 +185,7 @@ module mail {
   pure def sendWaiting(w: Where, b: Box): Box = range(0, 5).foldl(b, (acc, _) => sendStep(w, acc))
 
   // Assigns what a sendWaiting call changed, and the retry timer it leaves
-  // (deliver.ts:271: armed while mail waits).
+  // (deliver.ts:279: armed while mail waits).
   action applyBox(b: Box, isClosed: bool): bool = all {
     outbox' = b.outbox, owing' = b.owing, starting' = b.starting, woke' = b.woke, phase' = b.phase, prep' = b.prep, deferred' = b.deferred,
     pendingCustom' = b.pendingCustom, steerQ' = b.steerQ, landed' = b.landed, unread' = b.unread,
@@ -200,10 +200,10 @@ module mail {
   }
 
   pure def isLanded(m: str -> int, id: str): bool = IDS.contains(id) and m.get(id) > 0
-  // owed (deliver.ts:280-292): keep the owed ids that wait in Pi or that main has not read.
+  // owed (deliver.ts:288-300): keep the owed ids that wait in Pi or that main has not read.
   pure def owedLeft(o: Set[str], held: List[str], unr: Set[str], m: str -> int): Set[str] =
     o.filter(id => count(held, id) > 0 or unr.contains(id))
-  // reconcile (deliver.ts:327-336) and acknowledge (:346-348): drop pending ids found in the branch.
+  // reconcile (deliver.ts:335-344) and acknowledge (:346-348): drop pending ids found in the branch.
   pure def reconciled(p: Set[str], m: str -> int): Set[str] = p.filter(id => not(isLanded(m, id)))
 
   action keepMail: bool = all {
@@ -234,7 +234,7 @@ module mail {
 
   // ---- Children ----
 
-  // deliver() for a note or a relay: remember, then post (deliver.ts:156-167,
+  // deliver() for a note or a relay: remember, then post (deliver.ts:164-175,
   // :376-379). The team closes with the host, so a closed host takes none.
   action childMail(id: str, throws: bool): bool = all {
     not(created.contains(id)), hostPhase != "closed", not(closed),
@@ -245,7 +245,7 @@ module mail {
     keepHost, keepWatch, keepPi, keepCounts,
   }
 
-  // deliver() for a report: the widget item, then the batch and its timer (deliver.ts:137-154).
+  // deliver() for a report: the widget item, then the batch and its timer (deliver.ts:145-162).
   action childReport: bool = all {
     not(reported), hostPhase != "closed", not(closed),
     reported' = true,
@@ -255,7 +255,7 @@ module mail {
     keepBox, keepHost, keepWatch, keepPi, keepCounts,
   }
 
-  // flush() (deliver.ts:180-189) and postReports (:189-194).
+  // flush() (deliver.ts:188-197) and postReports (:189-194).
   pure def flushed(p: Set[str], m: Set[str], c: Set[str], inBatch: bool): (Set[str], Set[str], Set[str]) =
     if (inBatch) (p.exclude(Set(PLACEHOLDER)).union(Set(REPORT)), m.union(Set(REPORT)), c.union(Set(REPORT)))
     else (p.exclude(Set(PLACEHOLDER)), m, c)
@@ -274,7 +274,7 @@ module mail {
     }
   }
 
-  // The retry timer fires: retry() (deliver.ts:251-256).
+  // The retry timer fires: retry() (deliver.ts:259-264).
   action retryFire(throws: bool): bool = all {
     retryArmed, not(closed),
     throws implies fails < MAX_FAILS,
@@ -282,7 +282,7 @@ module mail {
     keepMail, keepHost, keepWatch, keepPi, keepCounts,
   }
 
-  // retrySoon's timer fires: `mail()?.retry()`; host() is null unless a module serves it (main-watch.ts:76-78).
+  // retrySoon's timer fires: `mail()?.retry()`; host() is null unless a module serves it (main-watch.ts:78-80).
   action retrySoonFire: bool = all {
     retrySoon,
     retrySoon' = false,
@@ -306,7 +306,7 @@ module mail {
   // appended without an extension event), then agent.prompt emits agent_start
   // and the starting messages' message_end (agent-loop.js:55-60; as:752-760
   // persists after the extension handlers). main-watch's agent_start
-  // (main-watch.ts:96-102) sets running and retries; the message_end handler
+  // (main-watch.ts:99-105) sets running and retries; the message_end handler
   // acknowledges (extensions/subagents.ts:356-360).
   action runStart(throws: bool): bool = {
     val served = hostPhase == "served"
@@ -330,11 +330,11 @@ module mail {
     }
   }
 
-  // A turn ends with main's reply. turn_end handlers run: answered (main-watch.ts:129-135,
-  // deliver.ts:294-313) and reconcile (extensions/subagents.ts:337). Then Pi
+  // A turn ends with main's reply. turn_end handlers run: answered (main-watch.ts:133-139,
+  // deliver.ts:302-321) and reconcile (extensions/subagents.ts:337). Then Pi
   // flushes the held custom messages (as:796-798). `more`: the reply made tool
   // calls, so the loop goes on; else agent_end (reconcile, extensions/subagents.ts:338;
-  // stoppedRun, main-watch.ts:115-118) and the settle boundary.
+  // stoppedRun, main-watch.ts:118-121) and the settle boundary.
   action turnEnd(more: bool): bool = {
     val served = hostPhase == "served"
     val owing1 = if (served) owing.filter(id => not(isLanded(landed, id))) else owing
@@ -355,8 +355,8 @@ module mail {
     }
   }
 
-  // main-watch's agent_before_settle handler (main-watch.ts:103-114) with
-  // owed (deliver.ts:280-292). The context holds the queued and held custom
+  // main-watch's agent_before_settle handler (main-watch.ts:106-117) with
+  // owed (deliver.ts:288-300). The context holds the queued and held custom
   // messages as pendingMessages (as:612-614). Other extensions' handlers can
   // run before and after it.
   action beforeSettle: bool = {
@@ -403,7 +403,7 @@ module mail {
     }
   }
 
-  // main-watch's agent_settled handler (main-watch.ts:119-128): not running,
+  // main-watch's agent_settled handler (main-watch.ts:122-132): not running,
   // the stop mark, retry; then the reconcile handler (extensions/subagents.ts:339).
   // While agent_settled handlers run, a send that starts a turn is deferred.
   action settledHandler(throws: bool): bool = {
@@ -450,7 +450,7 @@ module mail {
 
   // ---- The user ----
 
-  // The user sends a prompt while main is idle: the input event (main-watch.ts:95)
+  // The user sends a prompt while main is idle: the input event (main-watch.ts:98)
   // starts the grace; the run starts after the preflight. Pi refuses a prompt
   // while it compacts (as:1647-1649). While agent_settled handlers run, Pi
   // defers the prompt before its input handlers (as:1631-1634).
@@ -496,7 +496,7 @@ module mail {
 
   // An abort of the run (as:1971-1982). In phase work, the agent loop ends
   // with an aborted message, so agent_end says the run was stopped
-  // (main-watch.ts:115-118), and _startRun's finally flushes the held
+  // (main-watch.ts:118-121), and _startRun's finally flushes the held
   // messages (as:1467-1470). In phase bs, Pi only marks
   // _abortDuringBeforeSettle (as:1978-1979): the boundary's handlers still run,
   // so ours runs if it has not yet; the boundary then ends with no continue
@@ -565,7 +565,7 @@ module mail {
   }
   // The abort is over and Pi is idle: compaction starts (as:2232). Its
   // session_before_compact handler decides whether the compaction stopped a
-  // turn (main-watch.ts:137-140).
+  // turn (main-watch.ts:144-147).
   action compactStart: bool = all {
     compactPending, phase == "idle", deferred == [], later == [], not(compacting),
     compacting' = true, compactPending' = false,
@@ -577,9 +577,9 @@ module mail {
   }
   // The same start, but an extension that loads before ours returns `cancel`
   // from session_before_compact. Pi stops the emit at that handler
-  // (runner.js:820-824), so main-watch's handler (main-watch.ts:137-140) does
+  // (runner.js:820-824), so main-watch's handler (main-watch.ts:144-147) does
   // not run, and compactionStopped keeps the false that compacted() left
-  // (main-watch.ts:81). The compaction then fails as cancelled (as:2263-2266).
+  // (main-watch.ts:84). The compaction then fails as cancelled (as:2263-2266).
   // A cancel by an extension that loads after ours is compactStart, then
   // compactFail(true).
   action compactStartCancelFirst: bool = all {
@@ -591,7 +591,7 @@ module mail {
     compactCancelled' = true,
     keepBox, keepMail, keepHost, keepCounts,
   }
-  // session_compact: compacted(true) (main-watch.ts:79-85) runs while Pi
+  // session_compact: compacted(true) (main-watch.ts:81-88) runs while Pi
   // still compacts, so a reminder it posts is held (route hold); retrySoon.
   // Then Pi is done. `drop`: the summary replaced the context the mail was in.
   action compactEnd(drop: bool, throws: bool): bool = {
@@ -615,7 +615,7 @@ module mail {
   // The manual compaction fails or is cancelled (as:2331-2350): an extension
   // returns `cancel` from session_before_compact, the user presses Esc during
   // the summary (`aborted` true), or the summary fails (`aborted` false).
-  // session_compact_failed calls compacted(manual && !aborted) (main-watch.ts:142).
+  // session_compact_failed calls compacted(manual && !aborted) (main-watch.ts:149).
   // Pi clears the compaction state (as:2335) before it emits the event
   // (as:2344), so Pi is idle and the route is wake: a reminder starts a run.
   // A compaction that an extension cancelled first has `aborted` true.
@@ -656,7 +656,7 @@ module mail {
     keepBox, keepMail, keepWatch, keepCounts,
   }
 
-  // session_start of the new module (main-watch.ts:86-94 resets its flags;
+  // session_start of the new module (main-watch.ts:89-97 resets its flags;
   // extensions/subagents.ts:198-213): serve.ts:438-450 claims the parked host,
   // and Host.rebind (host-state.ts:230-236) binds the new ports and retries.
   action reloadAdopt(throws: bool): bool = {
@@ -675,9 +675,9 @@ module mail {
 
   // The takeover falls back (a version mismatch, a failed rebind, the 30 s
   // timeout): the old host closes (host-state.ts:269-288). beginClose makes the
-  // route hold, drain (deliver.ts:228-232) flushes the batch and takes the
+  // route hold, drain (deliver.ts:236-240) flushes the batch and takes the
   // outbox, and handOverMail keeps it all in the index, since no module is
-  // bound (host-state.ts:317-323). dispose clears the rest (deliver.ts:346-358).
+  // bound (host-state.ts:317-323). dispose clears the rest (deliver.ts:368-381).
   action fallbackClose: bool = {
     val f = flushed(pending, mine, created, batch)
     val taken = if (batch) outbox.append(REPORT) else outbox
@@ -697,11 +697,11 @@ module mail {
 
   // The new module opens a host from the index (serve.ts:451-458) and
   // restore posts the kept mail once (host-state.ts:262-267, :326-332):
-  // resend remembers each item but a reminder and posts it (deliver.ts:242-249).
+  // resend remembers each item but a reminder and posts it (deliver.ts:250-257).
   action fallbackOpen(throws: bool): bool = {
     val w = { served: true, compacting: compacting, grace: false, running: false, settling: false }
     val ids = kept.foldl(Set(), (s, id) => if (id == REMINDER) s else s.union(Set(id)))
-    // resend posts one item at a time, and each post runs sendWaiting (deliver.ts:242-249, :376-379).
+    // resend posts one item at a time, and each post runs sendWaiting (deliver.ts:250-257, :376-379).
     val b0 = kept.foldl({ ...box0, outbox: [], owing: Set(), starting: Set(), fail: throws, stopMark: false },
       (acc, id) => sendWaiting(w, { ...acc, outbox: acc.outbox.append(id), stop: false }))
     all {
@@ -770,7 +770,7 @@ module mail {
     and (reported implies (batch or created.contains(REPORT)))
   // No mail is copied: each item is in one place only.
   val noCopy = IDS.forall(id => copies.get(id) <= 1)
-  // The widget drops an item only once the transcript holds it (deliver.ts:321-340).
+  // The widget drops an item only once the transcript holds it (deliver.ts:329-362).
   val ackMeansLanded = mine.forall(id => (id != PLACEHOLDER and not(pending.contains(id))) implies isLanded(landed, id))
   // The host before the reload is quiet (HostState.quiet, host-state.ts:242-244)
   // only when every mail item has reached the transcript.

@@ -13,7 +13,7 @@
     "stopHonored",
     "parentStopSilent"
   ],
-  "syncCommit": "3dd6083",
+  "syncCommit": "fa6888b",
   "covers": [
     {
       "path": "lib/subagents/team.ts",
@@ -208,7 +208,7 @@
     {
       "name": "mutant-work-ignores-gone",
       "base": "faithful",
-      "mirrors": "lib/subagents/team.ts:719 without `if (this.gone(name, launch)) return false`",
+      "mirrors": "lib/subagents/team.ts:728 without `if (this.gone(name, launch)) return false`",
       "replace": [
         {
           "from": "    if (gone(x, p.c, p.r)) x\n",
@@ -294,7 +294,7 @@
     {
       "name": "mutant-finish-keeps-waiters",
       "base": "faithful",
-      "mirrors": "lib/subagents/team.ts:934 without `this.settleWaiters(name, record)`",
+      "mirrors": "lib/subagents/team.ts:943 without `this.settleWaiters(name, record)`",
       "replace": [
         {
           "from": "      waiters: x.waiters.exclude(Set(c)),\n      wrongSilence:",
@@ -336,7 +336,7 @@
     {
       "name": "mutant-fallback-keeps-session",
       "base": "faithful",
-      "mirrors": "lib/subagents/team.ts:835 without `this.sessions.release(name)` in failOrFallBack",
+      "mirrors": "lib/subagents/team.ts:844 without `this.sessions.release(name)` in failOrFallBack",
       "replace": [
         {
           "from": "      val z = release({",
@@ -354,7 +354,7 @@
     {
       "name": "mutant-late-skips-queue",
       "base": "faithful",
-      "mirrors": "lib/subagents/team.ts:803 without `handle.takeQueued()`: steering that came too late stays in the Pi queue",
+      "mirrors": "lib/subagents/team.ts:812 without `handle.takeQueued()`: steering that came too late stays in the Pi queue",
       "replace": [
         {
           "from": "val late = x.sq.get(c) + x.sqCopy.get(c) + x.oq.get(c) + x.inbox.get(c)",
@@ -386,7 +386,7 @@
     {
       "name": "mutant-settle-skips-finish",
       "base": "faithful",
-      "mirrors": "lib/subagents/team.ts:879 without `this.finish(name)`: the run ends idle and hands no report up",
+      "mirrors": "lib/subagents/team.ts:888 without `this.finish(name)`: the run ends idle and hands no report up",
       "replace": [
         {
           "from": "    finish({ ...x, state: x.state.set(c, \"idle\"), sp:",

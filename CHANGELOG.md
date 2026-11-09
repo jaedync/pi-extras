@@ -2,6 +2,31 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Subagents: after a `/compact` stops main's run, main now gets the hidden
+  reminder for the subagent mail that it did not reply to in these cases too
+  (findings F1 to F4 of `formal/subagents-mail`). Before, main did not reply
+  to that mail, and a child that asked a question waited until its reply
+  timeout.
+  - A note or question that started main's turn. Mail that starts a turn is
+    now owed a reply when its `message_end` shows that it landed.
+  - A relay or another custom message appended after the stopped run. The
+    stop mark now ignores custom messages.
+  - A `/compact` during main's settle check. `agent_settled`'s `aborted` now
+    sets the stop mark.
+  - A `/compact` that an extension cancelled, that Esc stopped during the
+    summary, that failed, or that Pi refused for a session too small to
+    compact. The reminder now follows from the stop mark, also when an
+    extension that loads first cancels the compaction.
+- Subagents: a message that main sends to a child as the child's run ends
+  is now the run's next prompt. Before, it could wait in the idle session's
+  queue, and the quiet-spell release dropped it (residual R1 of
+  `formal/subagents-lifecycle`). A stop in that moment is no longer
+  overwritten by the end of the run.
+
 ## 0.42.1 - 2026-11-09
 
 ### Fixed

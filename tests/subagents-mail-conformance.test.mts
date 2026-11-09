@@ -316,7 +316,7 @@ function makeWorld() {
 		for (const e of pi.entries) if (e.type === "custom_message") idKinds.set(e.details.id, modelId(e.details));
 	};
 	const after = () => { failNext = false; learnIds(); };
-	// Each step takes a millisecond, so two MainMail instances never make the same id (deliver.ts:422-424).
+	// Each step takes a millisecond, so two MainMail instances never make the same id (deliver.ts:446-448).
 	const tick = () => { time += 1; };
 	return { actions, codeState, after, tick, dispose: () => mail.dispose() };
 }

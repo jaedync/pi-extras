@@ -9,7 +9,7 @@
     "idleMeansLanded",
     "wokenForMail"
   ],
-  "syncCommit": "343e195",
+  "syncCommit": "7649ff9",
   "covers": [
     {
       "path": "lib/subagents/deliver.ts",
@@ -191,7 +191,7 @@
     {
       "name": "mutant-failed-send-dropped",
       "base": "faithful-fail",
-      "mirrors": "lib/subagents/deliver.ts:265-268 without `this.outbox.unshift({ message, wakes })` (the bug 642ba00 fixed)",
+      "mirrors": "lib/subagents/deliver.ts:273-276 without `this.outbox.unshift({ message, wakes })` (the bug 642ba00 fixed)",
       "replace": [
         {
           "from": "{ ...b, owing: b.owing.exclude(Set(id)), fail: false, failed: true, stop: true }",
@@ -205,7 +205,7 @@
     {
       "name": "mutant-steer-while-working",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/deliver.ts:393 with the route `queue` also sent as triggerTurn and steer (the code before e80d68e)",
+      "mirrors": "lib/subagents/deliver.ts:416 with the route `queue` also sent as triggerTurn and steer (the code before e80d68e)",
       "replace": [
         {
           "from": "if (route == \"wake\" and wakes(id)) sendTurn(",
@@ -219,7 +219,7 @@
     {
       "name": "mutant-no-owing",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/deliver.ts:394 without `this.owing.set(...)`",
+      "mirrors": "lib/subagents/deliver.ts:417 without `this.owing.set(...)`",
       "replace": [
         {
           "from": "val owes = route == \"queue\" and wakes(id)",
@@ -237,7 +237,7 @@
     {
       "name": "mutant-route-ignores-settling",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/main-watch.ts:149 `running` instead of `running && !settling`",
+      "mirrors": "lib/subagents/main-watch.ts:159 `running` instead of `running && !settling`",
       "replace": [
         {
           "from": "else if (w.running and not(w.settling)) \"queue\"",
@@ -251,7 +251,7 @@
     {
       "name": "mutant-not-remembered",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/deliver.ts:165 without `this.remember(...)`",
+      "mirrors": "lib/subagents/deliver.ts:173 without `this.remember(...)`",
       "replace": [
         {
           "from": "pending' = pending.union(Set(id)), mine' = mine.union(Set(id)), created' = created.union(Set(id)),",
@@ -265,7 +265,7 @@
     {
       "name": "mutant-reconcile-ignores-transcript",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/deliver.ts:329-334 acknowledging every pending id, not only those found in the branch",
+      "mirrors": "lib/subagents/deliver.ts:337-342 acknowledging every pending id, not only those found in the branch",
       "replace": [
         {
           "from": "p.filter(id => not(isLanded(m, id)))",
@@ -307,7 +307,7 @@
     {
       "name": "mutant-drain-skips-batch",
       "base": "faithful-reload",
-      "mirrors": "lib/subagents/deliver.ts:237 takeOutbox without `this.flush()`: a batched report is dropped on close",
+      "mirrors": "lib/subagents/deliver.ts:245 takeOutbox without `this.flush()`: a batched report is dropped on close",
       "replace": [
         {
           "from": "val taken = if (batch) outbox.append(REPORT) else outbox",
@@ -321,7 +321,7 @@
     {
       "name": "mutant-send-keeps-outbox",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/deliver.ts:264 reading `this.outbox[0]` instead of `this.outbox.shift()`: the sent item stays and goes again",
+      "mirrors": "lib/subagents/deliver.ts:272 reading `this.outbox[0]` instead of `this.outbox.shift()`: the sent item stays and goes again",
       "replace": [
         {
           "from": "val b1 = { ...b, outbox: b.outbox.tail() }",
@@ -335,7 +335,7 @@
     {
       "name": "survivor-idle-ignores-outbox",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/deliver.ts:204 idle() without `this.outbox.length === 0`",
+      "mirrors": "lib/subagents/deliver.ts:212 idle() without `this.outbox.length === 0`",
       "replace": [
         {
           "from": "pending == Set() and not(batch) and outbox == [] and owing == Set())",
@@ -343,12 +343,12 @@
         }
       ],
       "expect": "pass",
-      "why": "Every item in the outbox is also pending (deliver.ts:165, :194 remember before post), so pending == {} already implies an empty outbox, except for the hidden reminder, which idleMeansLanded leaves out. Without the outbox check, a held reminder would let the host go quiet, and the renew swap would dispose it; the model does not model renew, so no property sees that."
+      "why": "Every item in the outbox is also pending (deliver.ts:173, :194 remember before post), so pending == {} already implies an empty outbox, except for the hidden reminder, which idleMeansLanded leaves out. Without the outbox check, a held reminder would let the host go quiet, and the renew swap would dispose it; the model does not model renew, so no property sees that."
     },
     {
       "name": "mutant-idle-ignores-pending",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/deliver.ts:204 idle() without `this.pendingItems.size === 0`",
+      "mirrors": "lib/subagents/deliver.ts:212 idle() without `this.pendingItems.size === 0`",
       "replace": [
         {
           "from": "(gen == 1 and hostPhase == \"served\" and not(closed) and pending == Set() and not(batch)",
@@ -362,7 +362,7 @@
     {
       "name": "survivor-stop-mark-ignores-checked",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/main-watch.ts:124 the stop mark without `|| !checked`",
+      "mirrors": "lib/subagents/main-watch.ts:127 the stop mark without `|| !checked`",
       "why": "`!checked` marks a run that ended between turns (a retry wait, a compaction between turns). The model has no error or retry turns, so no behavior needs the guard.",
       "replace": [
         {
