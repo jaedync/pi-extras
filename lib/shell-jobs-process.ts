@@ -62,13 +62,11 @@ export interface Deferred {
 
 /**
  * Where Pi holds a sent completion that is not in the session yet.
- * - steered: in the queue of an agent loop that was not aborted.
- * - kept: in the queue of an agent loop that is being aborted; every mode
- *   keeps it for the next run.
+ * - steered: in the queue of a running agent loop, or the first message of a run.
  * - pending: sent while no agent loop ran. Pi starts a run for it (now, or
  *   after agent_settled handlers end), or a running session takes it later.
  */
-export type HeldCompletion = "steered" | "kept" | "pending";
+export type HeldCompletion = "steered" | "pending";
 
 export interface Delivery {
 	flush(): Promise<void>;

@@ -9,7 +9,7 @@
     "deliveredMeansSeen",
     "attemptsCountSends"
   ],
-  "syncCommit": "b96bac5",
+  "syncCommit": "dabe888",
   "covers": [
     {
       "path": "lib/shell-jobs-delivery.ts",
@@ -31,7 +31,7 @@
   "checks": [
     {
       "name": "faithful",
-      "why": "Pi as it is, and the code with the fix: every property holds. The TUI flag is chosen at init, so this covers the TUI and the other modes.",
+      "why": "Pi as it is, and the code with the fix: every property holds.",
       "expect": "pass"
     },
     {
@@ -54,6 +54,22 @@
         {
           "from": "pure val MAX_RUNS = 2 ",
           "to": "pure val MAX_RUNS = 3 "
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "faithful-one-job-runs6",
+      "base": "faithful",
+      "why": "One job and 6 user runs or aborts: deep enough for the attempt cap. Each new send needs a dropped message and then a run that settles with no abort.",
+      "replace": [
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\")"
+        },
+        {
+          "from": "pure val MAX_RUNS = 2 ",
+          "to": "pure val MAX_RUNS = 6 "
         }
       ],
       "expect": "pass"
@@ -271,7 +287,7 @@
     },
     {
       "name": "f4-abort-keeps-queue",
-      "why": "One job, no other extension before shell-jobs, no /reload, no user prompt: an abort that keeps the queue (the RPC abort, or ctx.abort() in RPC, print or SDK mode) does not cause a second send (path F4 is closed). repro-f2.mts --one-job --keep-queue reaches it live.",
+      "why": "One job, no other extension before shell-jobs, no /reload, no user prompt: an abort that keeps the queue (the RPC abort, ctx.abort() with no abortHandler, or /compact, /new, /resume or /fork in the TUI) does not cause a second send (path F4 is closed). repro-f2.mts --one-job --keep-queue and --compact reach it live.",
       "replace": [
         {
           "from": "pure val OTHER_HANDLERS_FIRST = true",
@@ -312,7 +328,7 @@
     },
     {
       "name": "f5-send-after-abort",
-      "why": "One job, no other extension before shell-jobs, no /reload, no user prompt, and only aborts that clear the queue (the TUI): a job that ends after Esc cleared the queue, while the aborted run winds down, lands once (path F5 is closed). repro-f2.mts --one-job --job-after-abort reaches it live.",
+      "why": "One job, no other extension before shell-jobs, no /reload, no user prompt, and only aborts that clear the queue (Esc in the TUI): a job that ends after Esc cleared the queue, while the aborted run winds down, lands once (path F5 is closed). repro-f2.mts --one-job --job-after-abort reaches it live.",
       "replace": [
         {
           "from": "pure val OTHER_HANDLERS_FIRST = true",
@@ -517,22 +533,18 @@
     },
     {
       "name": "mutant-attempt-cap-off-by-one",
-      "base": "faithful",
+      "base": "faithful-one-job-runs6",
       "mirrors": "lib/shell-jobs-delivery.ts:133 with `job.attempts >= MAX_COMPLETION_ATTEMPTS + 1`: a fourth send",
       "replace": [
         {
           "from": "else if (job.attempts >= MAX_ATTEMPTS)",
           "to": "else if (job.attempts >= MAX_ATTEMPTS + 1)"
-        },
-        {
-          "from": "pure val MAX_RUNS = 2 ",
-          "to": "pure val MAX_RUNS = 3 "
         }
       ],
       "expect": {
         "violates": "boundedSends"
       },
-      "why": "Needs a third dropped send to reach a fourth attempt, so this check allows 3 aborts."
+      "why": "Needs three dropped sends, each followed by a run that settles with no abort, to reach a fourth attempt, so it runs on faithful-one-job-runs6."
     },
     {
       "name": "mutant-ack-on-send",
@@ -554,8 +566,8 @@
       "mirrors": "settleDeliveries in lib/shell-jobs-delivery.ts releases \"pending\" sends too: a nested agent_settled sends again a completion that the outer deferred loop still holds (F2a)",
       "replace": [
         {
-          "from": "      if (not(aborted) and (h.get(j) == \"steered\" or h.get(j) == \"kept\")) \"none\"",
-          "to": "      if (not(aborted) and (h.get(j) == \"steered\" or h.get(j) == \"kept\" or h.get(j) == \"pending\")) \"none\""
+          "from": "if (not(aborted) and h.get(j) == \"steered\") \"none\"",
+          "to": "if (not(aborted) and h.get(j) != \"none\") \"none\""
         }
       ],
       "expect": {
@@ -565,11 +577,11 @@
     {
       "name": "mutant-release-ignores-abort",
       "base": "faithful",
-      "mirrors": "settleDeliveries without the `event.aborted` and `ctx.mode === \"tui\"` checks: an abort outside the TUI keeps the queue, and the release sends the kept completion again (F4)",
+      "mirrors": "settleDeliveries releases \"steered\" sends after an aborted run too, as the first version of the fix did in the TUI: an abort that keeps the queue (the RPC abort, or /compact, /new, /resume or /fork in the TUI) leaves the completion in the queue, and the release sends it again (F4, F5)",
       "replace": [
         {
-          "from": "      else if (aborted and inTui and h.get(j) == \"steered\") \"none\"",
-          "to": "      else if (aborted and h.get(j) == \"steered\") \"none\""
+          "from": "if (not(aborted) and h.get(j) == \"steered\") \"none\"",
+          "to": "if (h.get(j) == \"steered\") \"none\""
         }
       ],
       "expect": {
@@ -588,20 +600,6 @@
       ],
       "expect": {
         "violates": "oneCopy"
-      }
-    },
-    {
-      "name": "mutant-kept-as-steered",
-      "base": "faithful",
-      "mirrors": "sendCompletion ignores `signal.aborted`: a send into a run that the TUI is aborting is held as \"steered\", the TUI abort settles and releases it, and the next run takes the kept copy as well",
-      "replace": [
-        {
-          "from": "if (abortRequested) \"kept\" else \"steered\"",
-          "to": "\"steered\""
-        }
-      ],
-      "expect": {
-        "violates": "oneCompletion"
       }
     },
     {
@@ -626,12 +624,11 @@
     "steps": 50,
     "seed": "0x5eed",
     "witnesses": [
-      "witnessNoFailed",
       "witnessNoLandingWhileParked",
       "witnessNoKeptQueue",
       "witnessNoResend",
       "witnessNoHeldDeferredInLoop",
-      "witnessNoKeptSend"
+      "witnessNoSendAfterAbort"
     ]
   }
 }

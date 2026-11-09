@@ -42,9 +42,7 @@ function heldOf(runtime: Runtime): Map<string, HeldCompletion> {
  */
 function heldKind(runSignal: () => AbortSignal | undefined): HeldCompletion {
 	try {
-		const signal = runSignal();
-		if (signal === undefined) return "pending";
-		return signal.aborted ? "kept" : "steered";
+		return runSignal() === undefined ? "pending" : "steered";
 	} catch {
 		return "pending";
 	}
@@ -162,19 +160,17 @@ function stoppedLine(count: number | null | undefined): string | null {
 
 /**
  * The agent_settled handler. A run that was not aborted ends only when its
- * queue is empty, so its "steered" and "kept" completions are in the session
- * or gone. In the TUI every abort clears the queue first, so "steered" ones
- * are too; a send after the abort started is "kept". An abort in RPC, print
- * or SDK mode keeps the queue for the next run. A "pending" send is never
- * released here: Pi still holds it, or before_agent_start makes it "steered".
+ * queue is empty, so its "steered" completions are in the session or gone, and
+ * reconcile may send the gone ones again. An aborted run proves nothing: the
+ * RPC abort, and /compact, /new, /resume and /fork in the TUI, keep the queue
+ * for the next run. A "pending" send is never released here: Pi still holds
+ * it, or before_agent_start makes it "steered".
  */
 export async function settleDeliveries(runtime: Runtime, ctx: ExtensionContext, event: { aborted?: boolean }): Promise<void> {
 	if (runtime.closing || runtime.delivery === null) return;
-	const aborted = event.aborted === true;
-	const tui = ctx.mode === "tui";
-	const held = heldOf(runtime);
-	for (const [id, kind] of held) {
-		if ((!aborted && kind !== "pending") || (aborted && tui && kind === "steered")) held.delete(id);
+	if (event.aborted !== true) {
+		const held = heldOf(runtime);
+		for (const [id, kind] of held) if (kind === "steered") held.delete(id);
 	}
 	await reconcileDeliveries(runtime, ctx);
 }

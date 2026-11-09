@@ -55,7 +55,7 @@ const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 type Step = { j?: string; r?: [string, number]; clear?: boolean; loopRuns?: boolean };
 
 /** The code side of one replay: a runtime, a fake Pi, and controllable tail reads. */
-function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean; tui: boolean }) {
+function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 	const jobs = Object.keys(first.jobs);
 	const runtime: any = {
 		runtimeId: RUNTIME_ID, jobs: new Map(), outbox: new Set<string>(), delivery: null, closing: false,
@@ -102,7 +102,6 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean; tui: b
 		get signal() {
 			return pi.busy && pi.loopRuns ? { aborted: pi.abortRequested } : undefined;
 		},
-		mode: first.tui ? "tui" : "rpc",
 		sessionManager: { getBranch: () => pi.history },
 	};
 	const attach = () => {
@@ -276,8 +275,8 @@ test("the delivery code follows every step of the model traces", async () => {
  * One schedule of model actions, run against the code. Each step names an
  * action of delivery.qnt and its choices. Returns the code's final state.
  */
-async function runSchedule(start: { jobs: string[]; busy: boolean; tui: boolean }, schedule: Array<[string, Step?]>) {
-	const world = makeWorld({ jobs: Object.fromEntries(start.jobs.map((id) => [id, {}])), busy: start.busy, tui: start.tui });
+async function runSchedule(start: { jobs: string[]; busy: boolean }, schedule: Array<[string, Step?]>) {
+	const world = makeWorld({ jobs: Object.fromEntries(start.jobs.map((id) => [id, {}])), busy: start.busy });
 	for (const [action, step] of schedule) {
 		world.actions[action](step ?? {});
 		await settle();
@@ -296,8 +295,8 @@ const deferredRun: Array<[string, Step?]> = [["settleEnds"], ["beforeAgentStart"
 // Finding F in formal/shell-jobs-delivery/README.md: before the fix, each of
 // these schedules delivered one completion two times. Each test follows the
 // numbered steps of its path there.
-test("path F4: an abort that keeps the queue does not send the kept completion again", async () => {
-	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: false }, [
+test("path F4: an abort that keeps the queue (the RPC abort, /compact in the TUI) does not send the kept completion again", async () => {
+	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
 		...ended("j1"), read("j1"), ...abort(false), ["settleHandler"], ["settleEnds"],
 		["userPrompt"], ["piDeliver"], runEnds(), ["settleHandler"], ["settleEnds"],
 	]);
@@ -308,7 +307,7 @@ test("path F4: an abort that keeps the queue does not send the kept completion a
 
 test("path F5: a send after a TUI abort started stays in the queue and is not sent again", async () => {
 	// Esc cleared the queue before the job ended, so the steer stays in the queue for the next run.
-	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: true }, [
+	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
 		...ended("j1"), ["abortRequest", { clear: true }], read("j1"), ["runEnds"], ["settleHandler"], ["settleEnds"],
 		["userPrompt"], ["piDeliver"], runEnds(), ["settleHandler"], ["settleEnds"],
 	]);
@@ -318,7 +317,7 @@ test("path F5: a send after a TUI abort started stays in the queue and is not se
 });
 
 test("path F2a: two deferred sends land once each", async () => {
-	const final = await runSchedule({ jobs: ["j1", "j2"], busy: true, tui: true }, [
+	const final = await runSchedule({ jobs: ["j1", "j2"], busy: true }, [
 		...ended("j1"), ...ended("j2"), runEnds(), ["settleHandler"], read("j1"), read("j2"),
 		...deferredRun, ...deferredRun, ["settleEnds"],
 	]);
@@ -326,26 +325,17 @@ test("path F2a: two deferred sends land once each", async () => {
 	assert.deepEqual(final.sends, { j1: 1, j2: 1 });
 });
 
-test("path F2a through Esc in the TUI: the dropped completions are sent again, once each", async () => {
-	const final = await runSchedule({ jobs: ["j1", "j2"], busy: true, tui: true }, [
-		...ended("j1"), ...ended("j2"), read("j1"), read("j2"), ...abort(true), ["settleHandler"],
-		read("j1"), read("j2"), ...deferredRun, ...deferredRun, ["settleEnds"],
+test("path F2a through Esc: the dropped completions are sent again after the next run settles, once each", async () => {
+	const final = await runSchedule({ jobs: ["j1", "j2"], busy: true }, [
+		...ended("j1"), ...ended("j2"), read("j1"), read("j2"), ...abort(true), ["settleHandler"], ["settleEnds"],
+		["userPrompt"], runEnds(), ["settleHandler"], read("j1"), read("j2"), ...deferredRun, ...deferredRun, ["settleEnds"],
 	]);
 	assert.deepEqual(final.history, { j1: 1, j2: 1 });
 	assert.deepEqual(final.sends, { j1: 2, j2: 2 });
 });
 
-test("an abort that clears the queue outside the TUI: the completion waits for the next run to settle", async () => {
-	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: false }, [
-		...ended("j1"), read("j1"), ...abort(true), ["settleHandler"], ["settleEnds"],
-		["userPrompt"], runEnds(), ["settleHandler"], read("j1"), ...deferredRun, ["settleEnds"],
-	]);
-	assert.deepEqual(final.history, { j1: 1 });
-	assert.deepEqual(final.sends, { j1: 2 });
-});
-
 test("path F2b: a prompt deferred ahead of the send does not cause a second send", async () => {
-	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: true }, [
+	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
 		...ended("j1"), runEnds(), ["settleHandler"], ["userPrompt"], read("j1"),
 		["settleEnds"], runEnds(), ["settleHandler"], ...deferredRun, ["settleEnds"],
 	]);
@@ -354,7 +344,7 @@ test("path F2b: a prompt deferred ahead of the send does not cause a second send
 });
 
 test("path F1: a reload while agent_settled handlers run does not send again", async () => {
-	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: true }, [
+	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
 		...ended("j1"), runEnds(), ["settleHandler"], read("j1"),
 		["reloadRequest"], ["reloadPark"], ["sessionStart"], ...deferredRun, ["settleEnds"],
 	]);
@@ -366,7 +356,7 @@ test("path F1: a reload while agent_settled handlers run does not send again", a
 });
 
 test("path F3: a send deferred before the shell-jobs handler runs is not sent again", async () => {
-	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: true }, [
+	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
 		...ended("j1"), runEnds(), read("j1"), ["settleHandler"], ...deferredRun, ["settleEnds"],
 	]);
 	assert.deepEqual(final.history, { j1: 1 });
@@ -374,11 +364,24 @@ test("path F3: a send deferred before the shell-jobs handler runs is not sent ag
 });
 
 test("a deferred send whose run fails to start is sent again after the next settled run", async () => {
-	const final = await runSchedule({ jobs: ["j1"], busy: true, tui: true }, [
+	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
 		...ended("j1"), runEnds(), ["settleHandler"], read("j1"), ["settleEnds"], ["beforeAgentStart"], ["startFails"],
 		["userPrompt"], runEnds(), ["settleHandler"], read("j1"), ...deferredRun, ["settleEnds"],
 	]);
 	assert.deepEqual(final.history, { j1: 1 });
 	assert.deepEqual(final.sends, { j1: 2 });
 	assert.deepEqual(final.held, { j1: "none" });
+});
+
+test("three dropped sends reach the attempt cap and mark the job as not delivered", async () => {
+	// Each Esc drops the copy in the queue; the next run that settles with no abort releases it.
+	const dropThenRun: Array<[string, Step?]> = [...abort(true), ["settleHandler"], ["settleEnds"], ["userPrompt"], runEnds(), ["settleHandler"]];
+	const resentRunStarts: Array<[string, Step?]> = [read("j1"), ["settleEnds"], ["beforeAgentStart"]];
+	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
+		...ended("j1"), read("j1"), ...dropThenRun, ...resentRunStarts, ...dropThenRun, ...resentRunStarts, ...dropThenRun, ["settleEnds"],
+	]);
+	assert.deepEqual(final.sends, { j1: 3 });
+	assert.deepEqual(final.history, { j1: 0 });
+	assert.equal(final.jobs.j1.attempts, 3);
+	assert.equal(final.jobs.j1.failed, true);
 });

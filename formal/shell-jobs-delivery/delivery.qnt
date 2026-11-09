@@ -11,10 +11,10 @@
 // The fix for finding F (README.md): a sent completion stays "held" until it
 // lands, and reconcile skips held jobs. ctx.signal, read before the send,
 // tells where Pi puts it:
-// - "steered": an agent loop runs and is not aborted. A settled run proves it
-//   landed or was dropped, unless an abort outside the TUI kept the queue.
-// - "kept": the loop is being aborted, so even the TUI keeps it for the next
-//   run. Only a run that settles without an abort proves where it went.
+// - "steered": an agent loop runs, so Pi steers it into the run's queue. A
+//   run that settles without an abort drained its queue: the message landed
+//   or was dropped. An aborted run proves nothing, because some aborts keep
+//   the queue for the next run.
 // - "pending": no agent loop (Pi idle, agent_settled handlers, or a gap of a
 //   run). It waits until before_agent_start names it as the message that
 //   starts a run; then it is "steered". Otherwise only its landing clears it.
@@ -40,14 +40,14 @@ module delivery {
   // while they wait.
   pure val IDLE_COUNTS_QUEUE = false
 
-  // In the TUI, every abort clears the queues first: Esc, tree navigation
-  // (interactive-mode.js:4648-4649) and ctx.abort() through the TUI's
-  // abortHandler (interactive-mode.js:1479-1480, agent-session.js:2819-2824)
-  // all call clearAllQueues (:3853). The RPC abort (rpc-mode.js:328), and
-  // ctx.abort() in a mode with no abortHandler (RPC, print, SDK), call
-  // AgentSession.abort() (agent-session.js:1971-1983) alone. It and
-  // Agent.abort() (agent.js:221-222) leave the queue, and the next run takes
-  // it (agent.js:263, :340). The variant that assumes the TUI sets this to false.
+  // Some aborts clear the queue first: in the TUI, Esc, tree navigation and
+  // ctx.abort() through the TUI's abortHandler call clearAllQueues
+  // (interactive-mode.js:1479-1480, :3853, :4648-4649). Others keep it, and
+  // the next run takes it (agent.js:263, :340): the RPC abort
+  // (rpc-mode.js:328), ctx.abort() with no abortHandler (RPC, print, SDK),
+  // and in the TUI /compact, /new, /resume, /fork, ctx.compact() and
+  // ctx.newSession(), which call AgentSession.abort() (agent-session.js:1971-1983)
+  // alone. The variant with only clearing aborts sets this to false.
   pure val ABORT_KEEPS_QUEUE = true
 
   // An extension loaded before shell-jobs can have an agent_settled handler
@@ -97,13 +97,11 @@ module delivery {
   var runs: int
   // Ghost: jobs whose message landed while parked. Only a witness reads it.
   var landedParked: Set[str]
-  // runtime.held (lib/shell-jobs-delivery.ts): "none" | "steered" | "kept" | "pending".
+  // runtime.held (lib/shell-jobs-delivery.ts): "none" | "steered" | "pending".
   var held: str -> str
   // The `aborted` field of the agent_settled event now emitted
   // (agent-session.js _emitAgentSettled: `this._agentRunAbortRequested`).
   var settleAborted: bool
-  // ctx.mode is "tui". In the TUI every abort clears the queue first.
-  var tui: bool
   // A send started a run (an idle send, or a deferred one in settleEnds), and
   // before_agent_start has not run yet: the job id, or "" for none.
   var starting: str
@@ -145,13 +143,9 @@ module delivery {
   pure def count(l: List[str], j: str): int = l.foldl(0, (n, x) => if (x == j) n + 1 else n)
 
   // settleDeliveries (lib/shell-jobs-delivery.ts): a run that settled with no
-  // abort drained its queue, so "steered" and "kept" sends are in the session
-  // or gone. A TUI abort cleared the queue first, so "steered" sends are.
-  pure def releaseHeld(h: str -> str, aborted: bool, inTui: bool): str -> str =
-    h.keys().mapBy(j =>
-      if (not(aborted) and (h.get(j) == "steered" or h.get(j) == "kept")) "none"
-      else if (aborted and inTui and h.get(j) == "steered") "none"
-      else h.get(j))
+  // abort drained its queue, so its "steered" sends are in the session or gone.
+  pure def releaseHeld(h: str -> str, aborted: bool): str -> str =
+    h.keys().mapBy(j => if (not(aborted) and h.get(j) == "steered") "none" else h.get(j))
 
   // reconcileDeliveries and its flush. It returns at once while Pi is not idle,
   // with no flush. `h` is runtime.held after settleDeliveries released it. An
@@ -189,7 +183,7 @@ module delivery {
     } else if (busy) all {
       deferred' = deferred, queue' = queue.append(j), busy' = busy, starting' = starting,
       nondet loopRuns = Set(true, false).oneOf()
-      held' = held.set(j, if (not(loopRuns)) "pending" else if (abortRequested) "kept" else "steered"),
+      held' = held.set(j, if (loopRuns) "steered" else "pending"),
     } else all {
       deferred' = deferred, queue' = queue.append(j), busy' = true, starting' = j,
       held' = held.set(j, "pending"),
@@ -201,7 +195,7 @@ module delivery {
     loopRun' = loopRun, reloading' = reloading, queue' = queue, history' = history,
   }
   action keepRest = all { kill' = kill, sends' = sends, reloads' = reloads, runs' = runs, landedParked' = landedParked }
-  action keepMode = all { settleAborted' = settleAborted, tui' = tui, starting' = starting, abortRequested' = abortRequested }
+  action keepMode = all { settleAborted' = settleAborted, starting' = starting, abortRequested' = abortRequested }
 
   // ---- Init ----
 
@@ -229,8 +223,6 @@ module delivery {
     landedParked' = Set(),
     held' = JOBS.mapBy(_ => "none"),
     settleAborted' = false,
-    nondet inTui = Set(true, false).oneOf()
-    tui' = inTui,
     starting' = "",
     abortRequested' = false,
   }
@@ -319,7 +311,7 @@ module delivery {
       kill' = kill, reloads' = reloads, runs' = runs, landedParked' = landedParked,
       history' = history, settling' = settling, handlerDue' = handlerDue, later' = later,
       loopRun' = loopRun, reloading' = reloading,
-      settleAborted' = settleAborted, tui' = tui, abortRequested' = abortRequested,
+      settleAborted' = settleAborted, abortRequested' = abortRequested,
       if (binding != b or not(outbox.contains(j)))
         // The binding changed during the read: leave the entry for the new one.
         all { jobs' = jobs, outbox' = outbox, sends' = sends, deferred' = deferred, queue' = queue, busy' = busy, held' = held, starting' = starting }
@@ -363,19 +355,14 @@ module delivery {
   }
 
   // The user or a client aborts the run (AgentSession.abort(), agent-session.js:
-  // `_agentRunAbortRequested = true`, then agent.abort()). In the TUI, every
-  // abort clears the queue first: Esc and ctx.abort() through the TUI's
-  // abortHandler (restoreQueuedMessagesToEditor with abort, interactive-mode.js)
-  // and tree navigation all call clearAllQueues. The RPC abort (rpc-mode.js:328),
-  // and ctx.abort() in a mode with no abortHandler (RPC, print, SDK), call
-  // AgentSession.abort() alone, which keeps the queue for the next run
-  // (agent.js:263, :340). An RPC client can also send clear_queue first.
-  // A send after the abort and before the run ends goes into the queue too,
-  // also in the TUI.
+  // `_agentRunAbortRequested = true`, then agent.abort()). Esc in the TUI clears
+  // the queue first; the other aborts named at ABORT_KEEPS_QUEUE keep it for
+  // the next run (agent.js:263, :340). A send after the abort and before the
+  // run ends goes into the queue too, also after a clear.
   action abortRequest(clear: bool): bool = all {
     handlerGate,
     busy, not(settling), not(abortRequested),
-    clear or (ABORT_KEEPS_QUEUE and not(tui)),
+    clear or ABORT_KEEPS_QUEUE,
     runs < MAX_RUNS,
     abortRequested' = true,
     queue' = if (clear) [] else queue,
@@ -385,7 +372,7 @@ module delivery {
     jobs' = jobs, outbox' = outbox, reading' = reading, settleWaits' = settleWaits,
     binding' = binding, lastBinding' = lastBinding, kill' = kill, sends' = sends, reloads' = reloads,
     landedParked' = landedParked, held' = held,
-    settleAborted' = settleAborted, tui' = tui, starting' = starting,
+    settleAborted' = settleAborted, starting' = starting,
   }
 
   // The run ends: all its messages are in, or it was aborted, and the
@@ -410,7 +397,7 @@ module delivery {
     jobs' = jobs, outbox' = outbox, reading' = reading, settleWaits' = settleWaits,
     binding' = binding, lastBinding' = lastBinding, kill' = kill, sends' = sends, reloads' = reloads,
     landedParked' = landedParked, held' = held,
-    tui' = tui, starting' = starting,
+    starting' = starting,
   }
 
   // The shell-jobs agent_settled handler runs (extensions/shell-jobs.ts:856-858).
@@ -419,7 +406,7 @@ module delivery {
   action settleHandler: bool = all {
     settling, handlerDue,
     handlerDue' = false,
-    if (binding != 0) reconcileAndFlush(binding, true, releaseHeld(held, settleAborted, tui))
+    if (binding != 0) reconcileAndFlush(binding, true, releaseHeld(held, settleAborted))
     else all { jobs' = jobs, outbox' = outbox, reading' = reading, settleWaits' = Set(), held' = held },
     busy' = busy, settling' = settling, deferred' = deferred, later' = later, loopRun' = loopRun,
     reloading' = reloading, queue' = queue, history' = history,
@@ -452,7 +439,7 @@ module delivery {
       },
       handlerDue' = false, reloading' = reloading, history' = history,
       jobs' = jobs, outbox' = outbox, reading' = reading, binding' = binding, lastBinding' = lastBinding,
-      keepRest, held' = held, settleAborted' = settleAborted, tui' = tui, abortRequested' = abortRequested,
+      keepRest, held' = held, settleAborted' = settleAborted, abortRequested' = abortRequested,
     }
   }
 
@@ -465,7 +452,7 @@ module delivery {
     starting != "",
     held' = if (binding != 0 and held.get(starting) == "pending") held.set(starting, "steered") else held,
     starting' = "",
-    settleAborted' = settleAborted, tui' = tui, abortRequested' = abortRequested,
+    settleAborted' = settleAborted, abortRequested' = abortRequested,
     keepPi, keepRest,
     jobs' = jobs, outbox' = outbox, reading' = reading, binding' = binding, lastBinding' = lastBinding,
     settleWaits' = settleWaits,
@@ -599,8 +586,8 @@ module delivery {
   // outer emission is still held (the F2a schedule).
   val witnessNoHeldDeferredInLoop = not(JOBS.exists(j => held.get(j) == "pending" and loopRun and handlerDue and count(later, j) > 0))
 
-  // A send went into a run that was being aborted, and that run settled.
-  val witnessNoKeptSend = not(JOBS.exists(j => held.get(j) == "kept" and settling))
+  // A send went into a run whose abort was requested after a clear of the queue.
+  val witnessNoSendAfterAbort = not(JOBS.exists(j => held.get(j) == "steered" and abortRequested and count(queue, j) > 0))
 
   val safety = oneCompletion and oneCopy and stoppedMeansSilent and boundedSends and deliveredMeansSeen and attemptsCountSends
 }
