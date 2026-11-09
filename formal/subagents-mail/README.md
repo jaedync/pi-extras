@@ -152,16 +152,16 @@ The model does not cover:
 - `/tree` (`navigateTree`, as:3262-3267) and the summary of a branch.
 - Liveness: the model checks safety. `wokenForMail` checks the quiet states only.
 
-## Results (sync commit `86b79d5`, after the fixes)
+## Results (sync commit `57718bc`, after the fixes and owner answer 846)
 
 Run `node skills/formal-verification/scripts/fv.mjs check formal/subagents-mail --workers 1`.
 `results.json` holds the last run (25 of 25 checks gave the expected result).
 Other agents share the Apalache server on port 8822. A check that gives
 `error` lost that port race; run it again with `--only`.
 
-The model now describes the code with the fixes of F1 to F4. The fix
+The model now describes the code with the fixes of F1 to F4 and owner answer 846. The fix
 switches (`OWE_STARTED_MAIL`, `CUSTOM_KEEPS_MARK`, `STOP_FROM_SETTLED_EVENT`,
-`REMIND_FROM_STOP_MARK`) are `true` in `mail.qnt`. A mutant turns one off.
+`REMIND_FROM_STOP_MARK`, `ESC_WAITS`) are `true` in `mail.qnt`. A mutant turns one off.
 The three pass checks have the bounds of the old `assume-fixes`,
 `assume-fixes-fail` and `assume-fixes-reload` checks.
 
@@ -339,7 +339,7 @@ place that starts a run. The replay's fake Pi has the same queue. The
 witness `witnessNoEscReminderLanded` puts a trace in the replay where the
 reminder lands with a later prompt.
 
-**Regression tests (each failed on the code at `90f60a0`).**
+**Regression tests (each failed on the code at `90f60a0`).** Commit `57718bc`.
 
 - `tests/subagents-main-watch.test.ts`: the row "the user cancelled it too:
   no turn now, the reminder comes with the next message" and the row "an
