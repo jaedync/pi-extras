@@ -97,6 +97,12 @@ The parts of Pi 1.4.0 that the mail depends on. Each was read in
   summary, or whose summary fails, sends `session_compact_failed` with
   `aborted` true for the first two (as:2263-2266, :2331-2350).
   `repro-f3.mts cancel` confirms the cancel in a real `AgentSession`.
+- Pi stops the `session_before_compact` emit at the first handler that
+  returns `cancel` (`core/extensions/runner.js:820-824`). The handlers of
+  extensions that load later do not run. `repro-f4-order.mts` confirms this.
+- Pi clears the compaction state (as:2335) before it emits
+  `session_compact_failed` (as:2344). So Pi is idle in that event, and the
+  route is `wake`.
 
 ## Bounds and what they leave out
 
@@ -136,7 +142,7 @@ The model does not cover:
 - `/tree` (`navigateTree`, as:3262-3267) and the summary of a branch.
 - Liveness: the model checks safety. `wokenForMail` checks the quiet states only.
 
-## Results (sync commit `343e195`)
+## Results (sync commit `343e195`, round 2)
 
 Run `node skills/formal-verification/scripts/fv.mjs check formal/subagents-mail --workers 1`.
 `results.json` holds the last run. Other agents share the Apalache server on
@@ -150,9 +156,10 @@ In the last run, no check gave `error`.
 | `f2-quiet-append-cancels-reminder` | violates `wokenForMail` | violation (path F2), depth 10 |
 | `f3-abort-in-settle-check` | violates `wokenForMail` | violation (path F3), depth 12 |
 | `f4-failed-compaction` | violates `wokenForMail` | violation (path F4), depth 9 |
-| `assume-fixes` | pass | pass, 50,238 states |
-| `assume-fixes-fail` | pass | pass, 120,491 states |
+| `assume-fixes` | pass | pass, 51,533 states |
+| `assume-fixes-fail` | pass | pass, 123,069 states |
 | `assume-fixes-reload` | pass | pass, 48,621 states |
+| `f4-old-fix-handler-order` | violates `wokenForMail` | violation (path F4, cancel first), depth 9 |
 | `mutant-failed-send-dropped` | violates `noLoss` | violation |
 | `mutant-steer-while-working` | violates `noLoss` | violation |
 | `mutant-no-owing` | violates `wokenForMail` | violation |
@@ -204,6 +211,13 @@ Model errors that the checks found and that were fixed (each one judged against 
   settle check. The model and the replay's fake Pi copied the error, so the
   replay could not catch it, and `assume-fixes` passed with a false result.
   The model now follows Pi, and F3 is the bug that the error hid.
+- The round-2 review found two more errors. First, `compactStart` always ran
+  our `session_before_compact` handler. Pi skips it when an extension that
+  loads first cancels. So the first F4 fix looked sound, and `assume-fixes`
+  passed for a wrong reason. The model now has `compactStartCancelFirst`.
+  Second, `compactFail` sent the reminder with `compacting: true`. Pi is idle
+  at that point, so the reminder wakes main at once. The model and the
+  replay's fake Pi copied this error. Both now follow Pi.
 
 ## Finding F1: waking mail that starts main's turn gets no reminder after /compact
 
@@ -338,6 +352,12 @@ depth 12. The review of this record found it (R1).
 5. `session_before_compact` does not set `compactionStopped`
    (main-watch.ts:137-140). No reminder comes, and main never replies.
 
+The two paths take a different order. The TLC path aborts in the settle
+check before our handler runs (`compactMidRun` in phase `bs`). Our handler
+then runs in the same model step and finds the owed note. The live repro
+takes the order above: our handler first, then the abort. Both orders give
+the bug.
+
 **Harm.** Low. No handler in pi-extras awaits I/O at that point, so the
 window needs another extension. But the reminder rule then depends on a race.
 
@@ -367,17 +387,23 @@ The control `node formal/subagents-mail/repro-f3.mts control` (exit 0) runs
 
 Status: confirmed in a real Pi `AgentSession`. TLC check
 `f4-failed-compaction`, depth 9. The review of this record found it (R2).
+The round-2 review found that the first fix does not work in one extension
+order (N1, `repro-f4-order.mts`).
 
 1. A note lands while main works on a user turn. It is owed.
-2. The user runs `/compact`. Pi stops the turn, and the note lands.
-   `compactionStopped` becomes true (main-watch.ts:137-140).
-3. An extension returns `cancel` from `session_before_compact`, or the user
+2. The user runs `/compact`. Pi stops the turn, and the note lands. The
+   stop mark is set (main-watch.ts:124).
+3. Pi emits `session_before_compact`. If our handler runs, it sets
+   `compactionStopped` to true (main-watch.ts:137-140).
+4. An extension returns `cancel` from `session_before_compact`, or the user
    presses Esc during the summary. Pi sends `session_compact_failed` with
    `aborted: true` (as:2263-2266, :2331-2350).
-4. `compacted(event.reason === "manual" && !event.aborted)` gets false
+5. `compacted(event.reason === "manual" && !event.aborted)` gets false
    (main-watch.ts:142). No reminder comes, and main never replies.
 
-A summary that fails (`aborted` false) does send the reminder.
+A summary that fails (`aborted` false) does send the reminder. The TLC path
+of `f4-failed-compaction` runs our handler in step 3 (`compactStart`), then
+the compaction fails with `aborted` true.
 
 **Harm.** Medium for a cancel by an extension: the user did not stop main.
 Low for Esc during the summary: the user stopped something, but it was the
@@ -400,10 +426,66 @@ of `repro-f3.mts`, exit 1):
 
 The control is `repro-f3.mts control` (exit 0, reminded).
 
-**Fix options.** Remind on `session_compact_failed` too when the compaction
-stopped main's turn. The variant `REMIND_ON_FAILED_COMPACT = true` models
-it. Or remind only when an extension cancelled (Pi does not tell the two
-cases apart in the event; the code must read `fromExtension` or keep its own record).
+**The first fix depends on the extension order (N1).** The variant
+`REMIND_ON_FAILED_COMPACT = true` reminds on `session_compact_failed` when
+`compactionStopped` is true. Only our `session_before_compact` handler sets
+that flag. Pi stops the emit at the first handler that cancels
+(runner.js:820-824). When the cancelling extension loads before subagents,
+our handler does not run, and the flag keeps the `false` that `compacted()`
+left (main-watch.ts:81). The model action `compactStartCancelFirst` takes
+this step. The check `f4-old-fix-handler-order` (all other fixes assumed)
+gives this path at depth 9:
+`childMail(a) > runStart > compactMidRun > settledHandler > settleEnd > compactStartCancelFirst > compactFail(aborted) > retrySoonFire`.
+
+`node formal/subagents-mail/repro-f4-order.mts <order>` simulates the first
+fix in a real `AgentSession` (main-watch sees `aborted: false`). It loads a
+cancelling extension before or after ours.
+
+`before` (exit 1):
+
+```json
+{
+  "mode": "before",
+  "compactError": "Compaction cancelled",
+  "mainWatchBeforeCompactRan": false,
+  "seen": ["turn"],
+  "replied": false,
+  "transcript": "system > user > assistant > user > assistant > user > assistant > note"
+}
+```
+
+`after` (exit 0):
+
+```json
+{
+  "mode": "after",
+  "compactError": "Compaction cancelled",
+  "mainWatchBeforeCompactRan": true,
+  "seen": ["turn", "turn (sees note) (reminded)"],
+  "replied": true,
+  "transcript": "system > user > assistant > user > assistant > user > assistant > note > note > assistant"
+}
+```
+
+**Fix options.**
+
+- Recommended: in `session_compact_failed`, compute "a compaction stopped
+  this run" from the stop mark itself. Use the test of main-watch.ts:138
+  again (`stopMark`, `settledAt`, `lastSaid(ctx)`). Remind when it holds,
+  whatever `aborted` says. This does not depend on the handler order. The
+  variant `REMIND_FROM_STOP_MARK = true` models it, and `assume-fixes*`
+  assume it. In the model, no mail of this extension lands between the start
+  of the compaction and its failure, because the route holds while Pi
+  compacts. So the stop mark is still valid in that event. An append by
+  another extension in that window cancels the reminder, as in F2. A simulation of `assume-fixes` with the
+  failure step kept found a path where an earlier extension cancels, the
+  reminder lands and main replies. So the pass covers this case.
+- Do not use `REMIND_ON_FAILED_COMPACT` alone. It fails when the cancelling
+  extension loads first (see above).
+- A fix that reminds only for a cancel by an extension is not practical.
+  The event does not tell a cancel from Esc. `fromExtension` is true only
+  when an extension supplies the compaction (as:2268-2270). It is false for
+  a cancel and also for Esc.
 
 ## Other points from the review (no repro)
 
@@ -423,10 +505,40 @@ cases apart in the event; the code must read `fromExtension` or keep its own rec
   `owing` is cleared, so a `/resume` back sends no reminder. Nothing goes to
   the index, so nothing comes two times.
 
+## Round 2 of the review
+
+A second fresh reviewer read the corrected record
+(`review-mail-r2`). It confirmed the F3 changes, the replay (2 of 2) and the
+claim for change 8. It found five new items. This version fixes all five:
+
+- **N1, high.** The first F4 fix (`REMIND_ON_FAILED_COMPACT`) fails when the
+  cancelling extension loads before subagents (runner.js:820-824). Changed:
+  the new action `compactStartCancelFirst` and the flag `compactCancelled`;
+  the sound fix switch `REMIND_FROM_STOP_MARK`, which `assume-fixes*` and the
+  `f1` to `f3` checks now use; the new check `f4-old-fix-handler-order`
+  (violates `wokenForMail`); the reviewer's `repro-f4-order.mts`; the
+  witness `witnessNoCancelFirst`, so the replay runs the new action; and
+  the F4 text above.
+- **N2, medium.** `compactFail` sent with `compacting: true`, but Pi clears
+  the compaction state (as:2335) before it emits `session_compact_failed`
+  (as:2344). Changed: `compactFail` now sends on the idle route, so a
+  reminder wakes main at once. The replay's fake Pi clears `compacting`
+  before the emit, and it now passes the `throws` pick to that send. The
+  old fake failed on the new traces (trace 94, step 17, `compactFail`).
+- **N3, medium-low.** The F4 text said that `fromExtension` tells a cancel
+  from Esc. It does not (as:2268-2270). Changed: the F4 fix options.
+- **N4, low.** Two citations were wrong. Changed: `handOverMail` is
+  host-state.ts:317-323 in the replay test, and `postKeptMail` is
+  host-state.ts:326-332 in the `fallbackOpen` comment of `mail.qnt`.
+- **N5, low.** The F3 text did not say that the TLC path and the live repro
+  take a different order. Changed: the F3 text.
+
 ## Five weakest points of the model
 
 1. Until the review, `stoppedRun` was forced true on each abort (now fixed; F3).
 2. Until the review, it had no `session_compact_failed` (now added; F4).
+   Until round 2, our `session_before_compact` handler ran on each
+   compaction, and the failed compaction kept the route `hold` (N1, N2).
 3. Each turn end counts as a finished reply: no error or retry turns, and no
    `isReply` in `answered()`.
 4. A macrotask gap is allowed between the abort and `compactStart`, and
@@ -442,8 +554,8 @@ cases apart in the event; the code must read `fromExtension` or keep its own rec
 
 ## How the model stays true to the code
 
-- `tests/subagents-mail-conformance.test.mts` replays 159 model traces (150
-  random, 9 witnesses) against the real `MainMail`, the real `watchMain` and
+- `tests/subagents-mail-conformance.test.mts` replays 160 model traces (150
+  random, 10 witnesses) against the real `MainMail`, the real `watchMain` and
   the real `PortBinding`. After each step it compares the outbox, the pending
   items, `owing`, the batch, both timers, `closed`, the route, `idle()`, the
   index, and where Pi holds each message.
@@ -453,13 +565,15 @@ cases apart in the event; the code must read `fromExtension` or keep its own rec
   names its source line. The replay does not check these copies.
 - Its Pi is a fake that follows the model's Pi rules. `repro-f1.mts`, `repro-f2.mts` and
   `repro-f3.mts` (with `repro-f4.mts`) check the rules of F1 to F4 in a real
-  `AgentSession`. The replay does not compare the main-watch flags (see the
+  `AgentSession`. `repro-f4-order.mts` checks that a cancel stops the emit
+  of `session_before_compact` (N1). The replay does not compare the main-watch flags (see the
   weakest points). The other rules are checked by
   reading Pi's source only.
 - The second test replays the F1 witness and confirms that the code ends in
   the state of the finding.
 - The replay caught 8 of 9 one-guard changes to the real code, and
-  `git diff -- lib extensions` was empty after each restore:
+  `git diff -- lib extensions` was empty after each restore. Round 2 ran
+  all 9 again on the new traces, with the same result:
   1. no `this.outbox.unshift` after a failed send (deliver.ts:267);
   2. `wakes` alone choosing `triggerTurn` (deliver.ts:393);
   3. no `this.owing.set` (deliver.ts:394);
@@ -501,9 +615,12 @@ deleted or changed.
 
 ## Open items
 
-- A fresh reviewer read the actions against the code and Pi. This version
-  applies its corrections (F3, F4, the citations and the coverage table).
-  No second review read the corrected model.
+- A fresh reviewer read the actions against the code and Pi. A second
+  fresh reviewer read the corrected record (round 2). This version applies
+  the corrections of both rounds. No third review read this version.
+- The quint simulation that shows a reminder after a cancel by an earlier
+  extension under `assume-fixes` is a random search, not a check in
+  `fv.json`.
 - The full bounds in one pass check do not finish in 25 minutes on 2 workers.
 
 ## Commands
@@ -521,5 +638,7 @@ node formal/subagents-mail/repro-f3.mts boundary
 node formal/subagents-mail/repro-f3.mts cancel
 node formal/subagents-mail/repro-f3.mts control
 node formal/subagents-mail/repro-f4.mts
+node formal/subagents-mail/repro-f4-order.mts before
+node formal/subagents-mail/repro-f4-order.mts after
 node skills/formal-verification/scripts/fv.mjs drift formal/subagents-mail
 ```
