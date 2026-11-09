@@ -9,7 +9,8 @@
  * system calls.
  */
 import { randomBytes } from "node:crypto";
-import { closeSync, linkSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
+import { closeSync, linkSync, openSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync, type Stats } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { basename } from "node:path";
 
 export interface LockOptions {
@@ -26,6 +27,11 @@ export interface LockOptions {
 
 export interface FileLock {
 	release(): void;
+	/**
+	 * Moves the lock's mtime to now, so a holder that works longer than
+	 * `staleMs` keeps it. False when the lock is no longer this holder's.
+	 */
+	touch(): boolean;
 }
 
 const DEFAULT_SETTLE_MS = 10_000;
@@ -153,6 +159,17 @@ function removeStale(path: string, seen: Stats): void {
 
 function releaser(path: string, token: string): FileLock {
 	return {
+		touch: () => {
+			try {
+				if (readFileSync(path, "utf8") !== token) return false;
+				const now = new Date();
+				utimesSync(path, now, now);
+				return true;
+			} catch (error) {
+				if (errorCode(error) === "ENOENT") return false;
+				throw error;
+			}
+		},
 		release: () => {
 			// A lock taken over as stale belongs to someone else now; leave it.
 			try {
@@ -191,6 +208,24 @@ export function withFileLock<T>(file: string, work: () => T, waitMs = SHORT_WAIT
 		return work();
 	} finally {
 		lock.release();
+	}
+}
+
+/** The options withFileLock uses for a short lock: one read, change and replace of a small file. */
+export const SHORT_LOCK: LockOptions = { staleMs: SHORT_STALE_MS, settleMs: SHORT_STALE_MS };
+
+/**
+ * Waits up to `waitMs` for the lock without blocking the thread: the event
+ * loop keeps running between tries. Undefined when it stays busy.
+ */
+export async function acquireLock(path: string, waitMs: number, options: LockOptions = {}, pollMs = 20): Promise<FileLock | undefined> {
+	const now = options.now ?? Date.now;
+	const deadline = now() + waitMs;
+	for (;;) {
+		const lock = tryLock(path, options);
+		if (lock) return lock;
+		if (now() >= deadline) return undefined;
+		await sleep(Math.min(pollMs, Math.max(1, deadline - now())));
 	}
 }
 

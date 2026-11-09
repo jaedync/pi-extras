@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { tryLock, waitForLock } from "../lib/file-lock.ts";
+import { acquireLock, tryLock, waitForLock } from "../lib/file-lock.ts";
 
 function scratch(t: test.TestContext): string {
 	const dir = mkdtempSync(join(tmpdir(), "file-lock-"));
@@ -75,4 +75,30 @@ test("waitForLock gives up with a clear message while another holder keeps the l
 	const lock = waitForLock(path, 50);
 	lock.release();
 	assert.deepEqual(readdirSync(dir), []);
+});
+
+test("acquireLock waits without blocking the thread, then gives up while the holder keeps the lock", async (t) => {
+	const path = join(scratch(t), "x.lock");
+	const held = tryLock(path)!;
+	let ticks = 0;
+	const timer = setInterval(() => { ticks++; }, 5);
+	const lock = await acquireLock(path, 200);
+	clearInterval(timer);
+	assert.equal(lock, undefined);
+	assert.ok(ticks >= 3, `timers ran during the wait (${ticks})`);
+	held.release();
+	const free = await acquireLock(path, 200);
+	assert.ok(free, "a free lock is taken at once");
+	free.release();
+});
+
+test("touch keeps a long holder's lock from counting as stale, and reports a lock that is no longer its own", (t) => {
+	const path = join(scratch(t), "x.lock");
+	const lock = tryLock(path, { staleMs: 30_000 })!;
+	const old = new Date(Date.now() - 60_000);
+	utimesSync(path, old, old);
+	assert.equal(lock.touch(), true);
+	assert.equal(tryLock(path, { staleMs: 30_000 }), undefined, "a touched lock is held");
+	rmSync(path);
+	assert.equal(lock.touch(), false);
 });
