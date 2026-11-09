@@ -2,7 +2,7 @@
 
 This folder holds a model of the shell-jobs delivery code in Quint, the
 checks that TLC runs on it, the traces that a test replays against the code,
-two live repros and a probe of the Pi rules. The `formal-verification` skill
+three live repros and a probe of the Pi rules. The `formal-verification` skill
 made it. The skill folder is `skills/formal-verification`.
 
 ## The promise
@@ -25,6 +25,9 @@ stopped, or the widget shows a wrong count of attempts.
 | `boundedSends` | The code sends a completion at most 3 times (`MAX_COMPLETION_ATTEMPTS`). |
 | `deliveredMeansSeen` | A job is marked delivered only when its message is in the session. |
 | `attemptsCountSends` | Each counted attempt is one send, or one send that waits in the outbox. |
+| `noStuckHold` | A `pending` hold always has its copy in Pi: in the deferred actions, or as the message that starts a run. So no `pending` hold can stay with no end. |
+| `noHoldPastSettle` | No hold lives past one `agent_settled` of a run with no abort while Pi has no copy of it. That settle releases it, and reconcile sends it again. In the faithful model `noStuckHold` breaks first for a `pending` hold, so this one guards the release (`mutant-release-never`). |
+| `outboxMoves` | A completion that waits in the outbox always has a way out: a read in flight, an armed retry timer, an `agent_start` handler still to run, or a run or `agent_settled` that will flush the outbox. |
 
 ## The fix (finding F)
 
@@ -40,8 +43,33 @@ value tells where Pi puts the message:
 
 | Held as | When | Released by |
 |---|---|---|
-| `steered` | An agent loop runs. Pi steers the message into the run's queue. | A run that settles with no abort: it drained its queue, so the message landed or was dropped. |
-| `pending` | No agent loop runs: Pi is idle, agent_settled handlers run, or the run is between loops. Pi starts a run for the message, at once or after the handlers. | `before_agent_start` names the message as the start of a run: then it is `steered`. |
+| `steered` | An agent loop runs (`ctx.signal` is defined). Pi steers the message into the run's queue. | A run that settles with no abort: it drained its queue, so the message landed or was dropped. |
+| `pending` | No agent loop runs and `ctx.isIdle()` is true: Pi is idle, or `agent_settled` handlers run. Pi starts a run for the message, at once or after the handlers. | `before_agent_start` names the message as the start of a run: then it is `steered`. |
+| (not sent) | No agent loop runs and `ctx.isIdle()` is false: a gap of a run, or a compaction. | This is the gap wait, below. |
+
+**The gap wait.** A run can be busy with no agent loop: while
+`before_agent_start` handlers await (Pull Link auto-pull reads the links of
+the user's message), and while `agent_before_settle` handlers await (a
+subagent hand-over). Pi then puts a sent message in the run's queue
+(`sendCustomMessage` steers while `isStreaming`, and `isStreaming` is true
+from the start of `_startRun`). An Esc in the gap clears the queue, and the
+message is gone with no proof. So `sendCompletion` does not send while
+`ctx.signal` is undefined and `ctx.isIdle()` is false. It checks before the
+tail read, so that a retry does not read a large log again, and after the
+read, because a gap can start during the read. The completion stays in the
+outbox, and reconcile skips it. Three things send it later:
+
+- The `agent_start` handler flushes the outbox. The loop now exists, so the
+  send is `steered` and goes into this loop.
+- A retry timer (`GAP_RETRY_MS`, 500 ms) flushes again. It sends once the
+  gap ends, also when no event comes (a run that fails in `_prepareRun`, or
+  a compaction while Pi is idle).
+- The `agent_settled` reconcile flushes the outbox, and Pi defers the send.
+
+The wait sends nothing in the one state where shell-jobs cannot tell the
+run's queue from Pi's deferred actions. A compaction that starts during
+`agent_settled` handlers makes `isIdle()` false with no run, and a send then
+is deferred. The wait waits there too, so that case does not matter.
 
 An aborted run releases nothing, in every mode. Some aborts keep the queue
 for the next run: the RPC `abort`, `ctx.abort()` with no `abortHandler`, and
@@ -74,27 +102,55 @@ The fix makes trades, so that it is safe for every Pi rule that the model has:
   duplicate: if Pi makes `isIdle()` count deferred actions (one half of the
   Pi fix below), that version sent a deferred completion again. `ctx.signal`
   does not have this problem.
-- A send between agent loops of a busy session is `pending`. If a later Esc
-  drops it, nothing sends it again (see "Known limits").
+- A completion that ends in a gap waits until the next agent loop starts or
+  the run settles. A gap lasts as long as the handlers: up to 15 s for a
+  link read, and longer for a compaction or a retry delay. During the wait,
+  the retry checks the session every 500 ms, with no log read.
+- Old Pi cores with no `ctx.isIdle()` get no gap wait.
+- A completion that ends in the gap after the last loop (`agent_before_settle`)
+  is sent after the run settles. Pi defers it, and it starts a new run.
+  Before the gap wait, the run went on with it in one more loop.
+- Esc while `before_agent_start` handlers await: Pi aborts the loop at
+  `agent_start` (`_handleAgentEvent` calls `agent.abort()`), so the
+  `agent_start` flush sees a defined, aborted `ctx.signal`. The completion
+  goes into the queue of the aborted run and lands in the next user run,
+  as in `f5-send-after-abort`. It gives no duplicate. To count an aborted
+  signal as a gap would send it after the settle, but that starts a new
+  turn right after an Esc.
+- The version before the gap wait held such a send as `pending`. With Esc
+  in the gap, it never arrived, and the widget showed "pending" with no end.
+  Live (`repro-gap.mts`, Esc during a 2 s link read): 0 messages with that
+  version, 1 before the fix and 1 with the gap wait. The check
+  `old-gap-pending` copies that version and breaks `noStuckHold` in 4 steps.
 
 ## Known limits of the fix
 
-A review found these. The last one can give a duplicate. The others can only
-stop or delay a completion.
+Reviews found these. The third one can give a duplicate. The first two can
+stop a completion.
 
-- A completion sent while another extension's `before_agent_start` or
-  `agent_before_settle` handler awaits is `pending`: no agent loop runs then.
-  If Esc drops it, it stays held, and the widget shows it as "pending" with
-  no end. Live:
-  with a 1.5 s `before_agent_start` handler and Esc, the old code delivered
-  it once and the fix not at all. The window is the time that such handlers
-  take.
 - `_emitAgentSettled` runs the deferred actions with `for (...) await
-  action()`. If one throws (for example a deferred prompt with no auth), Pi
-  drops the later actions. A `pending` completion among them stays held.
-- A run that settles with no abort can still hold a message that came in the
-  microtasks after its last queue check. Such a send is `pending`, so it is
-  safe, but it lands only in the next run.
+  action()` and no catch. If one throws (for example a deferred prompt with
+  no model or API key), Pi drops the actions after it, also those of outer
+  loops. A `pending` completion among them stays held, and the widget shows
+  it as "pending" with no end. The check `pi-deferred-throws` shows this
+  path (it breaks `noStuckHold`), and `pi-deferred-throws-no-duplicate`
+  shows that the throw gives no duplicate. Pi drops the other extensions'
+  messages and the user's deferred prompt there too. Shell-jobs gets no
+  event for the throw, so it cannot release the hold safely: a deferred
+  send that waits behind other deferred actions looks the same.
+- A `/reload` passes its `isStreaming` check, and then a completion starts a
+  run. Shell-jobs parks before that run's `before_agent_start`, so no
+  shell-jobs handler names the message, and the hold stays `pending`. If
+  that run then fails in `_prepareRun`, the message is lost and the hold
+  stays with no end. The check `pi-run-start-fails` shows this path in 8
+  steps. It needs a reload and a failed run start in the same few
+  milliseconds. For a run that a completion starts, only an error in the
+  tool loadout or the system prompt build (`_preparePromptAndToolLoadout`)
+  makes the start fail, because `emitBeforeAgentStart` catches handler
+  errors. Pi then reports a `send_message` error with no message id, so
+  shell-jobs cannot know which send failed. The fix belongs in Pi (see the
+  fact sheet). When the run does not fail, its message lands, and the next
+  reconcile finds it in the history.
 - A duplicate is possible when a run leaves its loop with a message still in
   the queue and no abort: an exception from `agent.continue()` ("No messages
   to continue from"), from `_handlePostAgentRun` or from
@@ -105,14 +161,9 @@ stop or delay a completion.
   repro exists. The Pi fix below (`isIdle` false while the agent's queue holds
   messages) closes it.
 
-There is no sound fix for the first limit with the current extension API.
-A rule "a send with no signal while `isIdle()` is false is in a run's queue"
-also matches a send that Pi defers while a compaction runs during
-`agent_settled` handlers (`compact()` sets `isCompacting` after its abort).
-That send would then be released by the run of an earlier deferred item, and
-sent again. Shell-jobs would need `isStreaming`, which `ctx` does not show.
-The full Pi fix closes the limit, because then nothing that Pi holds is
-invisible to `isIdle()`.
+An earlier version had a third limit: a run that settles with no abort can
+hold a message that came in the microtasks after its last queue check. With
+the gap wait, no message is sent then: the send waits until the settle.
 
 `pi-probe.mts` checks the Pi rules that the fix uses, on any Pi version.
 
@@ -125,8 +176,8 @@ Each action is one synchronous segment of the code: the code between two
   `noteRunStart`, `acknowledgeCompletion`, `settleDeliveries`,
   `reconcileDeliveries`.
 - `extensions/shell-jobs.ts`: `finalize`, and the `session_start`,
-  `message_end`, `before_agent_start`, `agent_settled` and `session_shutdown`
-  (reload) handlers.
+  `message_end`, `before_agent_start`, `agent_start`, `agent_settled` and
+  `session_shutdown` (reload) handlers.
 - `lib/shell-jobs-manage.ts`: `stopJob`.
 - `lib/shell-jobs-process.ts`: `parkForReload`.
 
@@ -150,9 +201,34 @@ Pi's source (1.4.0; 1.5.0 is the same here):
 - `isIdle` is `!_isAgentRunActive && !isCompacting`. It ignores the actions
   that wait, and the messages that wait in the agent's queues.
 - `ctx.signal` is `agent.signal`: the abort signal of the agent loop
-  (`pi-agent-core/dist/agent.js`). It is undefined when no loop runs. While
-  the session is busy, a loop can run or not (during `_prepareRun` and
-  between loops): the model tries both.
+  (`pi-agent-core/dist/agent.js`). It is undefined when no loop runs. The
+  model has the loop as the state `inLoop`: `loopStart` (`agent.prompt`
+  after `_prepareRun`, or `agent.continue`) and `loopEnd` (the loop found no
+  message in the queue, or the run was aborted). Only a loop takes messages
+  from the queue, and a run ends only after its last loop.
+- The message that starts a run (the `_startRun` trigger of an idle or
+  deferred send) is the state `firstMsg`, not part of `queue`. It is not in
+  the agent's queue, so a clear does not drop it, and it lands first when
+  the loop starts, also after an abort (`agent-loop.js` `runAgentLoop`).
+- The shell-jobs `agent_start` handler is the step `agentStartFlush` after
+  `loopStart`; other extensions' handlers can run first. The retry timer is
+  the state `armed` and the step `retryFire`: a flush in a gap arms it, and
+  a parked binding's timer does nothing. A gap (`gapNow`) is no loop and
+  `piIdle` false, the same test as `sendPlace` with `ctx.isIdle()`. In
+  `faithful` that is a gap of a run; in the `pi-idle-counts-*` checks it
+  also covers deferred or queued messages, as the code would on such a Pi.
+- A run can fail in `_prepareRun` after `before_agent_start` (`startFails`):
+  Pi clears `_isAgentRunActive` and emits no `agent_settled`. Only the retry
+  timer then sends a completion that waited in that run's gap
+  (`mutant-gap-no-timer`). In `faithful` only a user prompt's run fails.
+  `RUN_START_FAILS` lets a run that a completion starts fail too, and then
+  its first message is lost. With `DEFERRED_THROWS`, a run that a deferred
+  action starts can fail, and Pi drops the deferred actions after it.
+  `_checkCompaction`, before `before_agent_start`, catches its errors.
+  A run that started a loop always ends through `_startRun`'s `finally`,
+  which emits `agent_settled`, so `startFails` needs `not(runHadLoop)`.
+- `DEFERRED_THROWS` (off in `faithful`): a deferred action throws, and Pi
+  drops it and all the deferred actions after it.
 - An abort is two steps: `AgentSession.abort()` sets
   `_agentRunAbortRequested`, and later the run ends. A send between the two
   goes into the queue. The run then ends with the message still in the queue.
@@ -177,7 +253,10 @@ Pi's source (1.4.0; 1.5.0 is the same here):
 The default checks use 2 jobs, 1 reload, 2 user runs or aborts, and 3
 attempts. `faithful-wide` uses 3 jobs (7,465,160 states). `faithful-runs3`
 uses 3 user runs or aborts. `faithful-one-job-runs6` uses 1 job and 6 user
-runs or aborts, so that it reaches the attempt cap. Inside these bounds the
+runs or aborts. In `faithful`, a resend is always the first message of a
+run, which Pi does not drop, so no job reaches the attempt cap.
+`pi-deferred-throws-one-job-runs6` lets runs fail to start, so a job can
+reach the cap there. Inside these bounds the
 check is exhaustive. It does not cover:
 
 - More jobs, reloads or runs than the bounds.
@@ -185,30 +264,36 @@ check is exhaustive. It does not cover:
   A restart starts a new Pi process with no held messages, and a new runtime
   with an empty `held` map.
 - `trimRetained`, which can drop a job record (and its `held` entry).
-- Compaction, which makes `isIdle()` false.
+- Compaction, which makes `isIdle()` false. With no signal, the gap wait
+  then sends nothing, and the retry timer sends after the compaction.
 - A history that cannot be read (`lookupCompletion` returns "unknown").
 - A failed `pi.sendMessage`, and a send through the old API after Pi
   invalidated it. The code then removes the `held` entry.
-- A failed run start (`_prepareRun` throws). A unit test covers it: the
+- A failed start of a run that a completion starts, in `faithful`. The
+  checks `pi-run-start-fails`, `pi-deferred-throws-no-duplicate` and
+  `pi-deferred-throws-one-job-runs6` cover it, and so does a unit test: the
   completion is sent again after the next run settles.
-- The cases in "Known limits of the fix": an Esc during the
-  `before_agent_start` or `agent_before_settle` handlers of another
-  extension, an exception in the deferred loop, a send in the microtasks
-  after a run's last queue check (the model's `runEnds` needs an empty queue
-  when no abort was requested), and an exception from `agent.continue()`.
+- An exception from `agent.continue()` or the settle boundary with a message
+  in the queue ("Known limits of the fix"). The model's `runEnds` needs an
+  empty queue when no abort was requested. An exception in the deferred
+  loop is in the model as `DEFERRED_THROWS`.
 - A second kill of the same job.
 - A `clear_queue` while no run is active (RPC), or a TUI Esc while Pi is
   settling. These drop a message. A kept completion then lands only after a
   later run settles and reconcile sends it again. This affects only liveness.
-- The model lets a run's first message be dropped by an abort that clears the
-  queue. Pi does not drop it. This only adds behavior to the model.
-- Liveness: the model checks that nothing bad happens, not that each
-  completion arrives in the end.
+- Liveness, in part. There is no temporal property. `noStuckHold`,
+  `noHoldPastSettle` and `outboxMoves` are the bounded form: every hold has
+  its copy in Pi or the next `agent_settled` of a run with no abort releases
+  it, and every waiting completion has a read, a timer or a flush to come.
+  They assume that Pi in the end runs what it holds, that a later run
+  settles with no abort, and that a timer fires.
 
 ## Results
 
 Run `node skills/formal-verification/scripts/fv.mjs check formal/shell-jobs-delivery`.
-The `old-` checks set `HELD_GUARD` to false: the code before the fix.
+The `old-` checks set `HELD_GUARD` and `GAP_WAIT` to false: the code before
+the fix. `old-gap-pending` sets only `GAP_WAIT` to false: the fix before the
+gap wait.
 
 | Check | Expect | Result |
 |---|---|---|
@@ -381,15 +466,20 @@ has the facts for a Pi issue.
 
 ## How the model stays true to the code
 
-- `tests/shell-jobs-delivery-conformance.test.mts` replays 205 model traces
-  (200 random from `faithful-runs3`, 5 witnesses) step by step against the
+- `tests/shell-jobs-delivery-conformance.test.mts` replays 206 model traces
+  (200 random from `faithful-runs3`, 6 witnesses) step by step against the
   real `lib/shell-jobs-delivery.ts` and `parkForReload` in `npm test`. After
   each step, the code state (attempts, delivered, failed, claimed, outbox,
-  reads in flight, held completions, binding, sends, messages in the session)
-  must equal the model state.
+  reads in flight, held completions, binding, sends, messages in the session,
+  the retry timer) must equal the model state. The replay records the timer
+  that each binding arms, and `retryFire` runs that timer's real callback.
 - The same file has one regression test for each path of finding F (F1, F2a,
-  F2a through Esc, F2b, F3, F4, F5), a test for a run that fails to start, and
-  a test for the attempt cap.
+  F2a through Esc, F2b, F3, F4, F5), a test for a run that fails to start, a
+  test for the attempt cap, three tests for the gap wait (Esc during
+  `before_agent_start`, the `agent_before_settle` gap, and Esc in that gap)
+  and a test for the retry timer. `tests/shell-jobs-reload.test.mts` checks
+  the gap wait through the whole extension: no send in a gap, also past the
+  retry, the `agent_start` flush, and the retry after a gap with no event.
 - The trace replay alone caught 11 of 12 changes to the real code: the held
   skip, a release after an aborted run, the release of `pending` sends,
   `pending` held as `steered`, a `noteRunStart` that does nothing, an
@@ -398,23 +488,36 @@ has the facts for a Pi issue.
   before the send. It missed the attempt cap plus one: with the fix, the cap
   needs more aborts than `faithful-runs3` allows, so no trace reaches it. The
   attempt-cap test catches that change.
+- For the gap wait, the replay catches a removed gap wait, a removed check
+  before the read and a timer that never arms. Two gap-path tests also
+  catch the removed check before the read. The tests above catch an `idle`
+  probe that is always true, a timer that never arms, a timer that arms only once, no
+  `agent_start` flush, and no fallback flush in `session_start`. One change
+  survives: a second flush after the reconcile in `session_start`. It only
+  flushes again, and the replay copies that handler, so it cannot see it.
 - The replay copies a few lines of the code that it does not run (`finalize`,
   `stopJob`, the event handlers). Each copy names its source.
 - Its Pi is a fake that follows the model's Pi rules. The replay does not
   check those rules against Pi. The live scripts do: `pi-probe.mts` checks the
-  five rules of the fix and the three rules behind finding F with a minimal
-  extension, `repro-f2.mts` checks the one-at-a-time deferred runs, the Esc
+  six rules of the fix and the four rules behind finding F and the gap wait
+  with a minimal extension, `repro-f2.mts` checks the one-at-a-time deferred runs, the Esc
   drop, the abort that keeps the queue and the send after a TUI abort, and
-  `repro-f1.mts` checks the deferral and the reload. An earlier version of
+  `repro-f1.mts` checks the deferral and the reload, and `repro-gap.mts`
+  checks Esc during a slow `before_agent_start` handler. An earlier version of
   this model put all deferred sends into one run, a later one let every abort
-  clear the queue, and the one before the fix made an abort and the end of
-  its run one step. Each time, a review or a live script found the error.
+  clear the queue, the one before the fix made an abort and the end of
+  its run one step, and the first gap-wait version (`3fa6099`) let an Esc
+  drop a run's first message. Each time, a review or a live script found the
+  error. At `3fa6099`, `fv.json` also did not list the two new invariants, so
+  `faithful` passed without them; a review found that too. List each new
+  invariant in `fv.json` before the run that is to check it.
   Check each platform rule against the real platform.
 - A witness is an invariant that the simulator must break, so that the traces
   reach a rare state: a message that lands while parked, a message that an
   abort kept while the reconcile runs, a second send after a release, a
-  deferred send held while a nested `agent_settled` reconciles, and a send
-  into a run whose abort was requested.
+  deferred send held while a nested `agent_settled` reconciles, a send
+  into a run whose abort was requested, and a read that ends in a gap and
+  waits.
 - `fv.mjs drift formal/shell-jobs-delivery` lists the covered files that
   changed after the sync commit. When it lists a file, read the change,
   update the model, run `check` and `traces`, run the replay test, and then
@@ -434,6 +537,8 @@ node formal/shell-jobs-delivery/repro-f2.mts
 node formal/shell-jobs-delivery/repro-f2.mts --one-job --keep-queue
 node formal/shell-jobs-delivery/repro-f2.mts --one-job --job-after-abort
 node formal/shell-jobs-delivery/repro-f1.mts
+node formal/shell-jobs-delivery/repro-gap.mts
+node formal/shell-jobs-delivery/repro-gap.mts --no-esc
 ```
 
 Set `PI_TEST_AGENT_ROOT` to the folder of another

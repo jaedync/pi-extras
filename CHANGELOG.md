@@ -2,6 +2,23 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Fixed
+
+- Shell jobs: one job completion could reach the conversation two times. The
+  most common cases were Esc in the TUI while a job ended, and `/compact`
+  during a run: the completion stayed in Pi's queue, and shell-jobs sent it
+  again. Shell-jobs now keeps each sent completion as held until it lands,
+  and sends it again only when a run that settles with no abort proves that
+  Pi dropped it. After an abort, a completion that Pi kept lands in the next
+  run, and one that Esc dropped is sent again when the next run settles with
+  no abort. It no longer starts a new turn right after Esc. A job that ends
+  while a run waits before or after its agent loop (for example while Pull
+  Link reads the links of a message) is sent when the loop starts or the run
+  settles. The formal model (`formal/shell-jobs-delivery/README.md`) checks
+  the fix, and a regression test covers each path.
+
 ## 0.42.0 - 2026-11-09
 
 ### Added
@@ -69,20 +86,8 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   completion can be delivered two times: a send that Pi defers during
   `agent_settled` is invisible to the next reconcile. One job and an abort
   that keeps the queue (the RPC `abort`) are enough, and so are two
-  jobs that end in the same run (live repro `repro-f2.mts`). Fixed below.
-
-### Fixed
-
-- Shell jobs: one job completion could reach the conversation two times. The
-  most common cases were Esc in the TUI while a job ended, and `/compact`
-  during a run: the completion stayed in Pi's queue, and shell-jobs sent it
-  again. Shell-jobs now keeps each sent completion as held until it lands,
-  and sends it again only when a run that settles with no abort proves that
-  Pi dropped it. After an abort, a completion that Pi kept lands in the next
-  run, and one that Esc dropped is sent again when the next run settles with no
-  abort. It no longer starts a new turn right after Esc. The formal model checks the
-  fix, and a regression test covers each of the six paths
-  (`formal/shell-jobs-delivery/README.md`).
+  jobs that end in the same run (live repro `repro-f2.mts`). Not fixed yet; see
+  its README.
 
 ## 0.40.1 - 2026-11-08
 

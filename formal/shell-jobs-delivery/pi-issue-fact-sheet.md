@@ -6,12 +6,13 @@ issues and pull requests from new contributors.
 
 ## Scope
 
-- Date checked: 2026-11-08.
+- Date checked: 2026-11-08; the gap facts on 2026-11-09.
 - Pi versions tested: `@earendil-works/pi-coding-agent` 1.4.0 and 1.5.0.
   The facts apply to these two versions. A later release can change them.
-- pi-extras: the code before the fix is commit `cf08a6a`. The fix is commit
-  `e95a143` (with `dabe888`) on branch `numbrone/fix-shell-jobs-dup`, not
-  released yet. With the fix, pi-extras does not
+- pi-extras: the code before the fix is commit `cf08a6a`. The fix is the
+  commits `f77167c`, `f35413b`, `3fa6099`, `c5fda57` and `d751c32` (the gap wait) on branch
+  `numbrone/fix-shell-jobs-dup`, on top of release 0.42.0 (`7936934`). It is
+  not released yet. With the fix, pi-extras does not
   depend on these Pi rules for correct delivery. So the issue is about Pi's
   contract, not about a pi-extras bug that is still open.
 
@@ -57,6 +58,15 @@ Facts 3 and 4 mean that a TUI abort does not always drop the queue. Esc drops
 only what was in the queue when the user pressed it, and the session commands
 drop nothing.
 
+5. A run is busy before its agent loop starts: `_startRun` sets
+   `_isAgentRunActive` before `_prepareRun` emits `before_agent_start`. While
+   a handler of that event awaits, `ctx.signal` is undefined and
+   `ctx.isIdle()` is false, and a send goes into the run's queue. Esc then
+   drops it for good: it is not in the session after the run, and the next
+   run does not take it. Seen on 1.4.0 and 1.5.0 with `pi-probe.mts`
+   (`droppedInGapByEsc`). This is not a duplicate. It is the reason why the
+   pi-extras fix does not send in such a gap.
+
 ## How to check a new Pi version
 
 Run the probe from the pi-extras checkout. It uses only a minimal extension,
@@ -72,12 +82,15 @@ Result on 1.4.0 and 1.5.0 (both the same):
 
 ```json
 {"idleWhileDeferred":true,"idleWithKeptQueue":true,"idleAfterClearThenSteer":true,
+ "droppedInGapByEsc":true,
  "fixRules":{"signalUndefinedInSettle":true,"signalDefinedInRun":true,
- "signalAbortedAfterAbort":true,"beforeAgentStartNamesDeferredSend":true}}
+ "signalAbortedAfterAbort":true,"beforeAgentStartNamesDeferredSend":true,
+ "gapIsBusyWithNoSignal":true,"signalDefinedAtAgentStart":true}}
 ```
 
 - When `idleWhileDeferred`, `idleWithKeptQueue` and `idleAfterClearThenSteer`
-  are all false, the Pi release fixed the cause.
+  are all false, the Pi release fixed the cause. `droppedInGapByEsc` can stay
+  true: it is how Esc works.
 - When a field of `fixRules` is false, the pi-extras fix uses a Pi rule that
   changed. Read `lib/shell-jobs-delivery.ts` again before you use that release.
 
@@ -133,8 +146,37 @@ Make `isIdle` false in two more cases:
 - While messages wait in the agent's queues (`agent.hasQueuedMessages()`).
 
 With both halves, the model of the pi-extras code before the fix has no
-duplicate (`old-pi-idle-counts-pending`). The full fix also closes two limits
-of the pi-extras fix: a completion that an Esc drops while no agent loop runs
-stays held, and a run that leaves its loop by an exception with a message in
-the queue can still give a duplicate. Both need Pi to show what it holds. The first half alone is not enough
+duplicate (`old-pi-idle-counts-pending`). The first half alone is not enough
 (`old-pi-idle-counts-deferred` still finds the duplicate through a kept queue).
+
+The second half also closes a limit of the pi-extras fix: a run that leaves
+its loop by an exception with a message in the queue can still give a
+duplicate.
+
+A separate Pi problem leaves the other limit: `_emitAgentSettled` runs the
+deferred actions with `for (const action of deferred) await action()` and no
+catch. When one throws (for example a deferred prompt with no model or API
+key), Pi drops the actions after it, also the messages of other extensions
+and the user's deferred prompt. A fix in Pi: catch the error of each action,
+report it, and run the next one. Model check: `pi-deferred-throws`.
+
+A second Pi problem: a message that starts a run is lost when the run fails
+to start. `sendCustomMessage` calls `_startRun({ messageType: "custom",
+message })`. When `_prepareRun` throws (after `before_agent_start`), the
+`catch` in `_startRun` appends the messages that waited in
+`_pendingCustomMessages`, but not the trigger message. The extension API
+`pi.sendMessage` catches the rejection and calls `runner.emitError` with
+`event: "send_message"` and no message id. So the extension cannot know
+which message is lost. Pi emits no `agent_settled` for this run.
+
+This is rare. `emitBeforeAgentStart` catches handler errors, and for a
+custom trigger `_prepareRun` reads no images. Only an error in the tool
+loadout or in the system prompt build (`_preparePromptAndToolLoadout`)
+makes such a run fail.
+
+- Effect on shell-jobs: when a `/reload` parks shell-jobs between the send
+  and the run's `before_agent_start`, the hold stays `pending` with no copy
+  in Pi, and the completion is not sent. Model check: `pi-run-start-fails`.
+- A fix in Pi: in the `catch` of `_startRun`, append the trigger message as
+  it does for the pending messages. Or return the promise from
+  `pi.sendMessage`, so that the extension can see the failure.

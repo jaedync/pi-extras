@@ -12,7 +12,7 @@
     "noHoldPastSettle",
     "outboxMoves"
   ],
-  "syncCommit": "0baa7af",
+  "syncCommit": "c5fda57",
   "covers": [
     {
       "path": "lib/shell-jobs-delivery.ts",
@@ -98,7 +98,7 @@
     {
       "name": "old-gap-pending",
       "base": "faithful",
-      "mirrors": "sendCompletion at faabebb, with no gap wait: a send in a gap of a run (another extension's before_agent_start or agent_before_settle handler awaits) is held as \"pending\", and an Esc then drops the message from the queue. Nothing releases the hold, so the completion never arrives (live: repro-gap.mts)",
+      "mirrors": "sendCompletion at f35413b, with no gap wait: a send in a gap of a run (another extension's before_agent_start or agent_before_settle handler awaits) is held as \"pending\", and an Esc then drops the message from the queue. Nothing releases the hold, so the completion never arrives (live: repro-gap.mts)",
       "replace": [
         {
           "from": "pure val GAP_WAIT = true",
