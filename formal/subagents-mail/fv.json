@@ -1,0 +1,306 @@
+{
+  "spec": "mail.qnt",
+  "quint": "0.33.1",
+  "invariants": [
+    "landedOnce",
+    "noLoss",
+    "noCopy",
+    "ackMeansLanded",
+    "idleMeansLanded",
+    "wokenForMail"
+  ],
+  "syncCommit": "7efacb0",
+  "covers": [
+    {
+      "path": "lib/subagents/deliver.ts",
+      "what": "MainMail: deliver, release, flush, postReports, idle, drain, takeOutbox, resend, retry, sendWaiting, owed, answered, remind, reconcile, acknowledge, dispose, settle, remember, post, where, dispatch"
+    },
+    {
+      "path": "lib/subagents/main-watch.ts",
+      "what": "watchMain: session_start, input, agent_start, agent_before_settle, agent_end, agent_settled, turn_end, session_before_compact, session_compact, route"
+    },
+    {
+      "path": "lib/subagents/contract.ts",
+      "what": "Route, HostMail, HeldMail"
+    },
+    {
+      "path": "lib/subagents/host-state.ts",
+      "what": "Host.rebind, Host.quiet, Host.close (drain and keepMail), handOverMail, postKeptMail"
+    },
+    {
+      "path": "lib/subagents/host.ts",
+      "what": "PortBinding.ports.route and send, bind, park, beginClose"
+    },
+    {
+      "path": "lib/subagents/serve.ts",
+      "what": "serve, Service.start (adopt or fall back), Service.park"
+    },
+    {
+      "path": "extensions/subagents.ts",
+      "what": "session_start, message_end, turn_end, agent_end and agent_settled reconcile, watchPending, session_shutdown"
+    }
+  ],
+  "checks": [
+    {
+      "name": "faithful",
+      "why": "The code and Pi as they are. TLC gives the shortest path to F1.",
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "f1-wake-mail-no-reminder",
+      "why": "Finding F1 alone: no reload, no failed send, and the F2 fix assumed.",
+      "replace": [
+        {
+          "from": "pure val QUIET_KEEPS_MARK = false",
+          "to": "pure val QUIET_KEEPS_MARK = true"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        },
+        {
+          "from": "pure val MAX_FAILS = 1",
+          "to": "pure val MAX_FAILS = 0"
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "f2-quiet-append-cancels-reminder",
+      "why": "Finding F2 alone: no reload, no failed send, and the F1 fix assumed.",
+      "replace": [
+        {
+          "from": "pure val OWE_WAKE_MAIL = false",
+          "to": "pure val OWE_WAKE_MAIL = true"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        },
+        {
+          "from": "pure val MAX_FAILS = 1",
+          "to": "pure val MAX_FAILS = 0"
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "assume-fixes",
+      "why": "Both fixes; no reload and no failed send (the full bounds do not finish in 25 min on 2 workers).",
+      "replace": [
+        {
+          "from": "pure val OWE_WAKE_MAIL = false",
+          "to": "pure val OWE_WAKE_MAIL = true"
+        },
+        {
+          "from": "pure val QUIET_KEEPS_MARK = false",
+          "to": "pure val QUIET_KEEPS_MARK = true"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        },
+        {
+          "from": "pure val MAX_FAILS = 1",
+          "to": "pure val MAX_FAILS = 0"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "assume-fixes-fail",
+      "why": "Both fixes, with one failed send; no reload.",
+      "replace": [
+        {
+          "from": "pure val OWE_WAKE_MAIL = false",
+          "to": "pure val OWE_WAKE_MAIL = true"
+        },
+        {
+          "from": "pure val QUIET_KEEPS_MARK = false",
+          "to": "pure val QUIET_KEEPS_MARK = true"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "assume-fixes-reload",
+      "why": "Both fixes, with one /reload (adopt or fall back); no failed send, no /compact.",
+      "replace": [
+        {
+          "from": "pure val OWE_WAKE_MAIL = false",
+          "to": "pure val OWE_WAKE_MAIL = true"
+        },
+        {
+          "from": "pure val QUIET_KEEPS_MARK = false",
+          "to": "pure val QUIET_KEEPS_MARK = true"
+        },
+        {
+          "from": "pure val MAX_FAILS = 1",
+          "to": "pure val MAX_FAILS = 0"
+        },
+        {
+          "from": "pure val MAX_COMPACTIONS = 1",
+          "to": "pure val MAX_COMPACTIONS = 0"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "mutant-failed-send-dropped",
+      "base": "assume-fixes-fail",
+      "mirrors": "lib/subagents/deliver.ts:260-262 without `this.outbox.unshift({ message, wakes })` (the bug 642ba00 fixed)",
+      "replace": [
+        {
+          "from": "{ ...b, owing: b.owing.exclude(Set(id)), fail: false, failed: true, stop: true }",
+          "to": "{ ...b, outbox: b.outbox.tail(), owing: b.owing.exclude(Set(id)), fail: false, failed: true, stop: true }"
+        }
+      ],
+      "expect": {
+        "violates": "noLoss"
+      }
+    },
+    {
+      "name": "mutant-steer-while-working",
+      "base": "assume-fixes",
+      "mirrors": "lib/subagents/deliver.ts:377 with the route `queue` also sent as triggerTurn and steer (the code before e80d68e)",
+      "replace": [
+        {
+          "from": "if (route == \"wake\" and wakes(id)) sendTurn(",
+          "to": "if ((route == \"wake\" or route == \"queue\") and wakes(id)) sendTurn("
+        }
+      ],
+      "expect": {
+        "violates": "noLoss"
+      }
+    },
+    {
+      "name": "mutant-no-owing",
+      "base": "assume-fixes",
+      "mirrors": "lib/subagents/deliver.ts:378 without `this.owing.set(...)`",
+      "replace": [
+        {
+          "from": "val owes = route == \"queue\" and wakes(id)",
+          "to": "val owes = false"
+        },
+        {
+          "from": "if (OWE_WAKE_MAIL) { ...b1, owing: b1.owing.union(Set(id)) } else b1",
+          "to": "b1"
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "mutant-route-ignores-settling",
+      "base": "assume-fixes",
+      "mirrors": "lib/subagents/main-watch.ts:151 `running` instead of `running && !settling`",
+      "replace": [
+        {
+          "from": "else if (w.running and not(w.settling)) \"queue\"",
+          "to": "else if (w.running) \"queue\""
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "mutant-not-remembered",
+      "base": "assume-fixes",
+      "mirrors": "lib/subagents/deliver.ts:166 without `this.remember(...)`",
+      "replace": [
+        {
+          "from": "pending' = pending.union(Set(id)), mine' = mine.union(Set(id)), created' = created.union(Set(id)),",
+          "to": "pending' = pending, mine' = mine.union(Set(id)), created' = created.union(Set(id)),"
+        }
+      ],
+      "expect": {
+        "violates": "ackMeansLanded"
+      }
+    },
+    {
+      "name": "mutant-reconcile-ignores-transcript",
+      "base": "assume-fixes",
+      "mirrors": "lib/subagents/deliver.ts:337-340 acknowledging every pending id, not only those found in the branch",
+      "replace": [
+        {
+          "from": "p.filter(id => not(isLanded(m, id)))",
+          "to": "p.filter(id => id == PLACEHOLDER)"
+        }
+      ],
+      "expect": {
+        "violates": "ackMeansLanded"
+      }
+    },
+    {
+      "name": "mutant-close-without-drain",
+      "base": "assume-fixes-reload",
+      "mirrors": "lib/subagents/host-state.ts:254 `this.mail.dispose()` instead of keeping `this.mail.drain()` in the index (the code before bcad086)",
+      "replace": [
+        {
+          "from": "kept' = kept.concat(taken),",
+          "to": "kept' = kept,"
+        }
+      ],
+      "expect": {
+        "violates": "noLoss"
+      }
+    },
+    {
+      "name": "mutant-kept-mail-not-forgotten",
+      "base": "assume-fixes-reload",
+      "mirrors": "lib/subagents/host-state.ts:305 reading the kept mail without `index.takeMail()` forgetting it, so it is posted again",
+      "replace": [
+        {
+          "from": "hostPhase' = \"served\", gen' = 2, kept' = [],",
+          "to": "hostPhase' = \"served\", gen' = 2, kept' = kept,"
+        }
+      ],
+      "expect": {
+        "violates": "noCopy"
+      }
+    },
+    {
+      "name": "mutant-drain-skips-batch",
+      "base": "assume-fixes-reload",
+      "mirrors": "lib/subagents/deliver.ts:221 takeOutbox without `this.flush()`: a batched report is dropped on close",
+      "replace": [
+        {
+          "from": "val taken = if (batch) outbox.append(REPORT) else outbox",
+          "to": "val taken = outbox"
+        }
+      ],
+      "expect": {
+        "violates": "noLoss"
+      }
+    }
+  ],
+  "traces": {
+    "check": "faithful",
+    "out": "traces.itf.jsonl.gz",
+    "n": 150,
+    "steps": 30,
+    "seed": "0x5eed",
+    "witnesses": [
+      "witnessNoFallback",
+      "witnessNoResend",
+      "witnessNoReminder",
+      "witnessNoContinue",
+      "witnessNoDeferredMail",
+      "witnessNoFail",
+      "witnessNoHeldWhileParked",
+      "wokenForMail"
+    ]
+  }
+}
