@@ -55,14 +55,17 @@ Pi's source (1.4.0; 1.5.0 is the same here):
   that wait, and the messages that wait in the agent's queues.
 - `/reload` (`dist/modes/interactive/interactive-mode.js:5328-5350`) refuses
   only while a run is active. It then awaits before shell-jobs parks.
-- Esc clears the queues and then aborts the run
-  (`interactive-mode.js:3853`). The messages that the run did not take are
-  gone. Other aborts keep them: the RPC `abort` command (`rpc-mode.js:328`),
-  an extension's `ctx.abort()` (`runner.js:666-668`) and tree navigation
-  (`interactive-mode.js:4648-4649`). `AgentSession.abort()`
-  (`agent-session.js:1971-1983`) and `Agent.abort()` (`agent.js:221-222`) do
-  not touch the queues, and the next run takes the messages (`agent.js:263`,
-  `:340`).
+- In the TUI, every abort clears the queues first, and the messages that
+  the run did not take are gone. This is true for Esc, tree navigation
+  (`interactive-mode.js:4648-4649`) and an extension's `ctx.abort()`, which
+  goes through the TUI's `abortHandler` (`interactive-mode.js:1479-1480`,
+  `agent-session.js:2819-2824`). All three call `clearAllQueues`
+  (`interactive-mode.js:3853`).
+- Other modes keep the messages. The RPC `abort` command (`rpc-mode.js:328`)
+  and `ctx.abort()` in a mode with no `abortHandler` (RPC, print, SDK) call
+  `AgentSession.abort()` (`agent-session.js:1971-1983`) alone. It and
+  `Agent.abort()` (`agent.js:221-222`) do not touch the queues, and the next
+  run takes the messages (`agent.js:263`, `:340`).
 - Pi emits `agent_settled` to the handlers of the runner that started the
   emission (`runner.js:87-88`). After a reload parks shell-jobs, its old
   handler does nothing (`extensions/shell-jobs.ts:862`).
@@ -86,6 +89,13 @@ does not cover:
   `agent-session.js:1683`, and the input handlers). The model starts the run
   at once. In that gap `isIdle()` is true. A review found no extra path
   through it, but no check covers it.
+- A run that ends in the old runner after the park and before the new
+  runtime is built (`agent-session.js:3008-3011`). The model can then
+  reconcile in the new binding, but the old handler does nothing. This only
+  adds behavior to the model, so it cannot hide a path from a pass check.
+- A `clear_queue` while no run is active (RPC, `rpc-mode.js:331-332`). It
+  drops a kept message, and the next reconcile sends it again. This affects
+  only liveness.
 - Liveness: the model checks that nothing bad happens, not that each
   completion arrives in the end.
 
@@ -158,8 +168,9 @@ this path in round 2.
 
 1. A job ends during a run. Its completion is steered into the run.
 2. The run is aborted without a clear of the queue: an RPC client sends
-   `abort`, or an extension calls `ctx.abort()`. The message stays in the
-   agent's queue.
+   `abort`, or an extension calls `ctx.abort()` in RPC, print or SDK mode.
+   The message stays in the agent's queue. In the TUI, every abort clears
+   the queue, so F4 does not occur there.
 3. Pi emits `agent_settled`. The reconcile finds the job in neither the
    session nor the outbox, and `isIdle()` is true. It sends again.
 4. The next run takes both messages. The job lands two times.
@@ -217,13 +228,13 @@ during the emission, not during a run.
 `agent_settled` but before the shell-jobs handler reconciles. Its send is
 deferred, and the reconcile sends again.
 
-**Impact.** Medium. F4 needs only one job and an abort that is not Esc: an
-RPC client (an editor that drives Pi) or an extension that calls
-`ctx.abort()`. F2a needs only pi-extras and two jobs that end near the end of
-the same run, or two completions that Esc dropped. F2b needs a prompt in the
-few milliseconds of `agent_settled`. F1 and F3 need another extension with a
-slow `agent_settled` handler. The harm is a second copy of a job result and
-an extra model turn.
+**Impact.** Medium. F4 needs only one job and an abort outside the TUI: an
+RPC client (an editor that drives Pi) that sends `abort`, or an extension
+that calls `ctx.abort()` in RPC, print or SDK mode. F2a needs only pi-extras
+and two jobs that end near the end of the same run, or two completions that
+Esc dropped. F2b needs a prompt in the few milliseconds of `agent_settled`.
+F1 and F3 need another extension with a slow `agent_settled` handler. The
+harm is a second copy of a job result and an extra model turn.
 
 **Fix options (not made; the owner decides).**
 

@@ -5,7 +5,7 @@
  *
  *   node formal/shell-jobs-delivery/repro-f2.mts                         (F2a: two jobs, Esc: a job gets 2 messages)
  *   node formal/shell-jobs-delivery/repro-f2.mts --one-job               (control: 1 message)
- *   node formal/shell-jobs-delivery/repro-f2.mts --one-job --keep-queue  (F4: one job, an abort without clearQueue, as RPC "abort" and ctx.abort() do: 2 messages)
+ *   node formal/shell-jobs-delivery/repro-f2.mts --one-job --keep-queue  (F4: one job, an abort without clearQueue, as RPC "abort" does: 2 messages)
  *
  * Real: AgentSession, prompt(), steer, clearQueue() and abort() (what Esc
  * does in interactive mode), agent_settled and its deferred sends, and the
@@ -74,7 +74,7 @@ for (const command of jobs) await tool("shell_job_start").execute("call", { comm
 await sleep(800);
 // 3. The user presses Esc: interactive mode clears the queues and aborts the run.
 // With --keep-queue, the abort keeps the queue, as the RPC "abort" command
-// (rpc-mode.js:328) and an extension's ctx.abort() (runner.js:666-668) do.
+// (rpc-mode.js:328) and ctx.abort() in a mode with no abortHandler do.
 if (!process.argv.includes("--keep-queue")) session.clearQueue();
 const aborting = session.abort();
 // The faux model does not watch the abort signal; let its held answer return.

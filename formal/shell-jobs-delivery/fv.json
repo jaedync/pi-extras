@@ -30,7 +30,7 @@
   "checks": [
     {
       "name": "faithful",
-      "why": "Pi as it is. Findings F1 and F2 in README.md.",
+      "why": "Pi as it is. The shortest path to the duplicate is F4; the f checks show the other paths one at a time.",
       "expect": {
         "violates": "oneCompletion"
       }
@@ -167,7 +167,7 @@
     },
     {
       "name": "f4-abort-keeps-queue",
-      "why": "One job, no other extension before shell-jobs, no /reload, no user prompt: an abort that keeps the queue (RPC abort, ctx.abort(), tree navigation) gives the duplicate (F4). repro-f2.mts --one-job --keep-queue reaches it live.",
+      "why": "One job, no other extension before shell-jobs, no /reload, no user prompt: an abort that keeps the queue (the RPC abort, or ctx.abort() in RPC, print or SDK mode) gives the duplicate (F4). repro-f2.mts --one-job --keep-queue reaches it live.",
       "replace": [
         {
           "from": "pure val OTHER_HANDLERS_FIRST = true",

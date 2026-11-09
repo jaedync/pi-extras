@@ -29,12 +29,14 @@ module delivery {
   // while they wait.
   pure val IDLE_COUNTS_QUEUE = false
 
-  // Only interactive Esc clears the queues before the abort
-  // (interactive-mode.js:3853). The RPC abort (rpc-mode.js:328), the extension
-  // ctx.abort() (runner.js:666-668) and tree navigation (interactive-mode.js:4648-4649)
-  // do not; AgentSession.abort() (agent-session.js:1971-1983) and Agent.abort()
-  // (agent.js:221-222) leave the queue, and the next run takes it (agent.js:263, :340).
-  // The variant that assumes only Esc aborts sets this to false.
+  // In the TUI, every abort clears the queues first: Esc, tree navigation
+  // (interactive-mode.js:4648-4649) and ctx.abort() through the TUI's
+  // abortHandler (interactive-mode.js:1479-1480, agent-session.js:2819-2824)
+  // all call clearAllQueues (:3853). The RPC abort (rpc-mode.js:328), and
+  // ctx.abort() in a mode with no abortHandler (RPC, print, SDK), call
+  // AgentSession.abort() (agent-session.js:1971-1983) alone. It and
+  // Agent.abort() (agent.js:221-222) leave the queue, and the next run takes
+  // it (agent.js:263, :340). The variant that assumes the TUI sets this to false.
   pure val ABORT_KEEPS_QUEUE = true
 
   // An extension loaded before shell-jobs can have an agent_settled handler
@@ -283,7 +285,7 @@ module delivery {
   // interactive-mode.js:3853); one without clear keeps them for the next run.
   // _startRun's finally calls _emitAgentSettled: the run is inactive and the
   // handlers start (agent-session.js:683-688, 1471).
-  // abort without clear is an RPC abort, ctx.abort() or tree navigation.
+  // An abort without clear is the RPC abort, or ctx.abort() in a mode with no abortHandler.
   action runEnds(abort: bool, clear: bool): bool = all {
     handlerGate,
     clear or (abort and ABORT_KEEPS_QUEUE),
