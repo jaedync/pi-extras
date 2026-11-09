@@ -42,7 +42,7 @@ function setup() {
 	const dir = tempDir("ledger-index-");
 	const sessions = join(dir, "sessions");
 	mkdirSync(join(sessions, "--cwd--"), { recursive: true });
-	const indexFile = join(dir, "usage-dollars", "spend-index-v1.json");
+	const indexFile = join(dir, "usage-dollars", "spend-index.json");
 	const open = (lockWaitMs?: number): SpendLedger => createSpendLedger({
 		root: sessions, maxAgeMs: 8 * DAY, minRefreshMs: 0, indexFile, ...(lockWaitMs !== undefined ? { lockWaitMs } : {}),
 	});
@@ -164,7 +164,8 @@ test("a damaged or older index is ignored and written again", async () => {
 	const s = setup();
 	writeFileSync(s.file("a.jsonl"), turn(1, { id: "m1" }));
 	mkdirSync(join(s.indexFile, ".."), { recursive: true });
-	for (const damaged of ["{not json", JSON.stringify({ v: 0, files: {} }), JSON.stringify({ v: 1, maxAgeMs: 8 * DAY, strings: [], files: { [s.file("a.jsonl")]: [1, 2] } })]) {
+	const header = JSON.stringify({ v: 2, maxAgeMs: 8 * DAY });
+	for (const damaged of ["{not json", JSON.stringify({ v: 1, maxAgeMs: 8 * DAY }), `${header}\n${JSON.stringify(s.file("a.jsonl"))}\t[1, 2]\n`, `${header}\n${JSON.stringify(s.file("a.jsonl"))}\t[1, 2`]) {
 		writeFileSync(s.indexFile, damaged);
 		const ledger = s.open();
 		await ledger.refresh(NOW);
@@ -174,6 +175,23 @@ test("a damaged or older index is ignored and written again", async () => {
 	const next = s.open();
 	await next.refresh(NOW);
 	assert.equal(next.stats().bytesRead, 0, "the rewritten index is used");
+});
+
+test("a damaged line costs only its own file, and the next save writes it right", async () => {
+	const s = setup();
+	writeFileSync(s.file("a.jsonl"), turn(1, { id: "m1" }));
+	writeFileSync(s.file("b.jsonl"), turn(2, { id: "m2" }));
+	await s.open().refresh(NOW);
+	const lines = readFileSync(s.indexFile, "utf8").split("\n");
+	const damaged = lines.map((line) => line.startsWith(JSON.stringify(s.file("a.jsonl"))) ? line.slice(0, -5) : line).join("\n");
+	writeFileSync(s.indexFile, damaged);
+	const ledger = s.open();
+	await ledger.refresh(NOW);
+	assert.equal(ledger.stats().filesOpened, 1, "only the damaged file is read again");
+	assert.equal(totals(ledger).anthropic, 3);
+	const next = s.open();
+	await next.refresh(NOW);
+	assert.equal(next.stats().filesOpened, 0, "the save repaired the line");
 });
 
 test("a session rewritten under the same path is read again from the start, in every process", async () => {

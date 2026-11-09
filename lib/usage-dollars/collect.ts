@@ -40,7 +40,7 @@ const RECENT_MODELS_MS = 7 * 86_400_000;
 const LOCK_WAIT_MS = 1_000;
 const LOCK_RETRY_MS = 15;
 /** The ledger index: shared by the processes of this agent directory, so each byte of a session is parsed once. */
-const LEDGER_INDEX = "spend-index-v1.json";
+const LEDGER_INDEX = "spend-index.json";
 
 export interface CollectContext {
 	snapshots: Array<[string, LimitSnapshot]>;

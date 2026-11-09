@@ -94,6 +94,7 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 			return;
 		}
 		indexStamp = loaded.stamp;
+		if (loaded.damaged > 0) unsaved = true;
 		const next = new Map(files);
 		for (const [path, theirs] of loaded.files) {
 			const info = found.get(path);
