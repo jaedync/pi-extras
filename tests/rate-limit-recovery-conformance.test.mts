@@ -90,6 +90,8 @@ function makeWorld() {
 	const pi = { phase: "idle", queued: 0, aborted: false, settleGo: false };
 	let run: AbortController | undefined;
 	let branch: any[] = [];
+	// The other branch that /tree can go to: at first the root, before any entry.
+	let other: any[] = [];
 	const waits: PendingWait[] = [];
 	const terminal = new Set<(data: string) => unknown>();
 	let handlers = new Map<string, (event: any, ctx: any) => any>();
@@ -260,6 +262,7 @@ function makeWorld() {
 			const copy = branch.map((entry) => ({ ...entry }));
 			emit("session_shutdown", { type: "session_shutdown", reason: "fork" });
 			branch = copy;
+			other = [];
 			pi.aborted = false;
 			load();
 			emit("session_start", { type: "session_start", reason: "fork" });
@@ -277,8 +280,8 @@ function makeWorld() {
 		},
 		async tree(s) {
 			// AgentSession.navigateTree while idle: no handler of ours runs (controller.ts:123-165).
-			// keepsEntry: the target keeps the branch. Else the user goes back to before the failure.
-			if (picked(s, "keepsEntry") !== true) branch = [];
+			// keepsEntry: the target keeps the branch. Else the user goes to the other branch (first the root, later back).
+			if (picked(s, "keepsEntry") !== true) [branch, other] = [other, branch];
 			await settle();
 		},
 		stutter() {},

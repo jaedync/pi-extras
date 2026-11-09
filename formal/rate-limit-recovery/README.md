@@ -2,7 +2,7 @@
 
 This folder holds a Quint model of the wait machines of Rate-limit Recovery,
 the TLC results, a conformance replay against the real code, and live repro
-scripts for four findings. The model describes the code at commit `343e195`
+scripts for five findings. The model describes the code at commit `343e195`
 (`syncCommit` in `fv.json`).
 
 ## The promise
@@ -98,8 +98,11 @@ For a mutation-testing tool such as Stryker:
 ## Bounds and what they leave out
 
 Bounds: 3 model requests, 2 user prompts or extension messages, 1 model switch,
-1 Esc or cancel command, 1 `/reload`, 1 `/clone`, and 1 navigation (a
-return to the session through `session_start(resume)`, or a `/tree` while idle). Quota waits: at most 2 per
+1 Esc or cancel command, 1 `/reload`, 1 `/clone`, and 2 navigations (a
+return to the session through `session_start(resume)`, or a `/tree` while
+idle). The two kinds share one counter. The model holds two branches for
+`/tree`: the current one and one other. `assume-fix-wide` allows one
+navigation only. Quota waits: at most 2 per
 run (`maxRecoveries`) and a budget of 2 waits. Short-rate-limit streak: 2 waits.
 The check `assume-fix-wide` uses 4 requests and 3 inputs.
 
@@ -137,43 +140,43 @@ The model leaves out:
 
 | Check | Expected | Result | States |
 |---|---|---|---|
-| faithful | violates resumeOwed | violation of resumeOwed | 3936 |
-| faithful-one-wait | violates oneWait | violation of oneWait | 7000 |
-| faithful-open-entry | violates openEntryHasWait | violation of openEntryHasWait | 2136 |
-| f1-clone-reload | violates resumeOwed | violation of resumeOwed | 7440 |
-| f2-run-continues | violates resumeOwed | violation of resumeOwed | 3936 |
-| f2-run-continues-one-wait | violates oneWait | violation of oneWait | 6980 |
-| f2-no-steer | violates resumeOwed | violation of resumeOwed | 2089 |
-| f3-late-return | violates resumeOwed | violation of resumeOwed | 7457 |
-| f4-tree-away | violates resumeOwed | violation of resumeOwed | 4267 |
-| assume-fix | pass | pass | 255030 |
+| faithful | violates resumeOwed | violation of resumeOwed | 4482 |
+| faithful-one-wait | violates oneWait | violation of oneWait | 8304 |
+| faithful-open-entry | violates openEntryHasWait | violation of openEntryHasWait | 2343 |
+| f1-clone-reload | violates resumeOwed | violation of resumeOwed | 8803 |
+| f2-run-continues | violates resumeOwed | violation of resumeOwed | 4482 |
+| f2-run-continues-one-wait | violates oneWait | violation of oneWait | 8270 |
+| f2-no-steer | violates resumeOwed | violation of resumeOwed | 2443 |
+| f3-late-return | violates resumeOwed | violation of resumeOwed | 8840 |
+| f4-tree-away | violates resumeOwed | violation of resumeOwed | 4830 |
+| f5-tree-back-reload | violates resumeOwed | violation of resumeOwed | 14453 |
+| assume-fix | pass | pass | 384038 |
 | assume-fix-wide | pass | pass | 1357134 |
-| assume-fix-no-other-continue | pass | pass | 160636 |
-| mutant-user-run-keeps-idle-wait | violates resumeOwed | violation of resumeOwed | - |
-| mutant-carried-run-keeps-idle-wait | violates resumeOwed | violation of resumeOwed | 4239 |
-| mutant-cancel-keeps-entry-open | violates openEntryHasWait | violation of openEntryHasWait | 2131 |
-| mutant-ready-survives-new-run | violates resumeOwed | violation of resumeOwed | 15484 |
-| survivor-context-keeps-ready | pass | pass | 255894 |
-| survivor-start-keeps-ready | pass | pass | 255414 |
-| survivor-message-end-keeps-ready | pass | pass | 255030 |
-| mutant-no-attempt-cap | violates withinBudgets | violation of withinBudgets | 78926 |
-| mutant-no-wait-budget | violates withinBudgets | violation of withinBudgets | 98455 |
-| mutant-no-streak-budget | violates withinBudgets | violation of withinBudgets | 98691 |
-| survivor-transient-wait-ignores-abort | pass | pass | 269390 |
-| survivor-model-switch-keeps-hibernation | pass | pass | 294722 |
-| mutant-model-switch-resumes-out-of-scope | violates resumeOwed | violation of resumeOwed | 2048 |
+| assume-fix-no-other-continue | pass | pass | 241948 |
+| mutant-user-run-keeps-idle-wait | violates resumeOwed | violation of resumeOwed | 4791 |
+| mutant-carried-run-keeps-idle-wait | violates resumeOwed | violation of resumeOwed | 4797 |
+| mutant-cancel-keeps-entry-open | violates openEntryHasWait | violation of openEntryHasWait | 2338 |
+| mutant-ready-survives-new-run | violates resumeOwed | violation of resumeOwed | 19824 |
+| survivor-context-keeps-ready | pass | pass | 385334 |
+| survivor-start-keeps-ready | pass | pass | 384614 |
+| survivor-message-end-keeps-ready | pass | pass | 384038 |
+| mutant-no-attempt-cap | violates withinBudgets | violation of withinBudgets | 105296 |
+| mutant-no-wait-budget | violates withinBudgets | violation of withinBudgets | 133489 |
+| mutant-no-streak-budget | violates withinBudgets | violation of withinBudgets | 133735 |
+| survivor-transient-wait-ignores-abort | pass | pass | 406302 |
+| survivor-model-switch-keeps-hibernation | pass | pass | 443754 |
+| mutant-model-switch-resumes-out-of-scope | violates resumeOwed | violation of resumeOwed | 2255 |
 
-All 25 checks give the expected result. Three checks first gave `error`
+All 26 checks give the expected result. Two checks first gave `error`
 because two processes used the Apalache port 8822 at the same time. A rerun
-with `--only` gave the expected result for each of them. (The states of
-`mutant-user-run-keeps-idle-wait` come from a rerun with `--trace`, which does
-not print the count.) `assume-fix` assumes all four fixes
-(`CONTEXT_ENDS_IDLE_WAIT`, `FORK_CLOSES_ENTRY`, `START_CLOSES_STALE_ENTRY`
-and `TREE_ENDS_IDLE_WAIT`). Under those fixes, all four properties hold.
+with `--only` gave the expected result for each of them. `assume-fix`
+assumes the fixes `CONTEXT_ENDS_IDLE_WAIT`, `FORK_CLOSES_ENTRY`,
+`START_CLOSES_STALE_ENTRY` and `TREE_CLOSES_BEFORE_MOVE`. Under those fixes,
+all four properties hold within the bounds.
 
 ## Findings
 
-All four findings have a live repro in Pi's real `AgentSession`. The repros fake
+All five findings have a live repro in Pi's real `AgentSession`. The repros fake
 only the model (a faux provider at `http://localhost:0`), the server check and
 the timers.
 
@@ -326,9 +329,40 @@ Found by the step-9 review. The model now has the action `tree(keepsEntry)`.
   and `runsStartedOnTheirOwn: 1` (exit 1). The control `--no-nav` also makes
   one run, but that run is the resume that the failure is owed (exit 0).
 - Model: `f4-tree-away` violates `resumeOwed` with the F1, F2 and F3 fixes on.
-- Fix: add a `session_tree` handler that calls `idleWait.cancel()` (or
-  `stop()` and a closed entry) and `transient.reset()`
-  (`TREE_ENDS_IDLE_WAIT`).
+- Fix: end the wait in a `session_before_tree` handler, so that
+  `idleWait.cancel()` writes the closed entry on the old branch before the
+  leaf moves, and call `transient.reset()` (`TREE_CLOSES_BEFORE_MOVE`). A
+  `session_tree` handler is not enough: see F5.
+
+### F5: /tree away and back, then /reload, starts a run on its own
+
+Found by the round-2 review. It also breaks the F4 fix as first proposed.
+
+1. A local request fails on branch X, and the idle wait writes an open entry.
+2. The user runs `/tree` to an earlier point (branch Y). Pi moves the leaf,
+   then emits `session_tree` (`agent-session.js:3379-3398`). If the wait
+   ends now (the code as it is, when the server answers, or a
+   `session_tree` handler as the first F4 fix proposed), its closed entry
+   goes to branch Y.
+3. The user runs `/tree` back to branch X. Its last local-wait entry is
+   still "open".
+4. A `/reload` within 48 h restores the wait (`controller.ts:168-180`), and
+   a "continue the task" run starts.
+
+- Harm: an unrequested run, as F3.
+- Live repro: `node formal/rate-limit-recovery/repro-f5.mts` prints
+  `"entriesOnY":["closed"]`, `"entriesBackOnX":["open"]` and
+  `"runsStartedOnTheirOwnAfterReload":1` (exit 1). `--fix` ends the wait by
+  hand right after the move, as a `session_tree` handler would. It prints
+  `"entriesOnYAfterNav":["closed"]`, `"entriesBackOnX":["open"]` and
+  `"runsStartedOnTheirOwnAfterReload":1` (exit 1). There is no control that
+  passes, because the sound fix needs a product change.
+- Model: `f5-tree-back-reload` (all fixes on, the /tree fix in
+  `session_tree`) violates `resumeOwed`. `assume-fix` uses
+  `TREE_CLOSES_BEFORE_MOVE` and passes.
+- Fix: `TREE_CLOSES_BEFORE_MOVE` (see F4). Or, at `session_tree`, write a
+  closed entry when the new branch ends in an open entry and no wait is
+  active. The second option is not in the model.
 
 ## Review (skill step 9)
 
@@ -356,6 +390,21 @@ high, with live repros), and the record now models both. Other points:
 - Fix options of F1: the options "put the session id in the entry" and
   "restore only a suspended entry" do not cover F3. Use the F3 fix.
 
+Round 2 (a second fresh Opus 5.5 reviewer, on the changes after round 1)
+found F5 (high, with a live repro). The record now models it: two
+navigations, two branches and `offOpen`. Other round-2 points:
+
+- `leave` and `reload` now use `entryOpen or iActive`: `stop(true)` writes
+  an open entry for a wait that is active (`idle-wait.ts:143-147`), also
+  when the branch has no open entry.
+- Medium, no repro: `/tree` with a summary awaits `generateBranchSummary`
+  (`agent-session.js:3330`). The session is not streaming, and `_startRun`
+  has no `isCompacting` guard (`:1423`). If the idle wait answers in that
+  window, a run starts on the old branch, and the leaf then moves under it.
+- Medium: the F3 fix text says that `START_CLOSES_STALE_ENTRY` also fixes F1.
+  No check tests that claim. The fix also does not cover a restore that
+  `!localRetry` or `!interactiveMain` refuses (`controller.ts:169`).
+
 ## Survivors
 
 | Check | Why it survives |
@@ -373,14 +422,14 @@ tried gives two waits at once without also breaking `resumeOwed` first).
 
 ## Conformance replay
 
-`tests/rate-limit-recovery-conformance.test.mts` replays all 211 traces
-(200 random, 11 witnesses) from `traces.itf.jsonl.gz` against the real
+`tests/rate-limit-recovery-conformance.test.mts` replays all 213 traces
+(200 random, 13 witnesses) from `traces.itf.jsonl.gz` against the real
 `Recovery` class, with its real `TransientBackoff` and `LocalIdleWait`. After
 each step it compares 15 fields: the fake Pi's phase, queue, abort flag and
 model, `pending`, `ready`, `attempts`, `spentMs`, `active`, the transient
 `pending`, `ready`, `waiting` and rate-limit streak, the idle wait, and the
 last `local-wait` entry. The traces come from the faithful model, so they
-include the paths of F1 to F4.
+include the paths of F1 to F5.
 
 The fake Pi copies the model's Pi rules. The replay cannot show that those
 rules are true of Pi. `check-platform.mts` and the repros do that.
@@ -440,7 +489,7 @@ removed or changed.
 | rate-limit-extension.test.ts: "the resumed run keeps the outage ..." | not in the model (outage counts left out) | keeps value: guards fix: 72d7077 |
 | rate-limit-extension.test.ts: "a message from the user ends the idle wait: nothing starts on its own" | mutant-user-run-keeps-idle-wait; replay | covered by the model |
 | rate-limit-extension.test.ts: "a reload or an update restart goes on with an open wait from the session" | `reload`; witness `witnessNoRestore` | partly covered; keeps value: it checks the new `at` of the entry and the update-restart path, which the model leaves out (review) |
-| rate-limit-extension.test.ts: "a new process goes on with a wait only right after the old one stopped" | not in the model (age limits) | keeps value: guards fix: e4c71a8 |
+| rate-limit-extension.test.ts: "a new process goes on with a wait only right after the old one stopped" | `leave(late)` models the 10 min limit after a return; the update restart path and the stop time are not in the model | keeps value: guards fix: e4c71a8 (review) |
 | rate-limit-extension.test.ts: "a shutdown during the wait writes the stop time for the next process" | not in the model (`at` time) | keeps value: guards fix: e4c71a8 |
 | rate-limit-extension.test.ts: "with a draft in the editor, Esc and Ctrl+C belong to the editor" | not in the model (the model assumes an empty editor) | keeps value: guards fix: e4c71a8 |
 | rate-limit-extension.test.ts: "a shell job report during the wait keeps the outage" | mutant-carried-run-keeps-idle-wait; replay | covered by the model (the wait ends); keeps value for the outage start time (fix: e4c71a8) |
@@ -479,6 +528,7 @@ node formal/rate-limit-recovery/repro-f1.mts      # and --no-clone
 node formal/rate-limit-recovery/repro-f2.mts      # and --no-steer, --report
 node formal/rate-limit-recovery/repro-f3.mts      # and --soon
 node formal/rate-limit-recovery/repro-f4.mts      # and --no-nav
+node formal/rate-limit-recovery/repro-f5.mts      # and --fix
 node skills/formal-verification/scripts/fv.mjs drift formal/rate-limit-recovery
 ```
 

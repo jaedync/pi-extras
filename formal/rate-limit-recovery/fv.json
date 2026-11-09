@@ -73,8 +73,8 @@
           "to": "pure val START_CLOSES_STALE_ENTRY = true"
         },
         {
-          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
-          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
+          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
+          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
         }
       ],
       "expect": {
@@ -94,8 +94,8 @@
           "to": "pure val START_CLOSES_STALE_ENTRY = true"
         },
         {
-          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
-          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
+          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
+          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
         }
       ],
       "expect": {
@@ -115,8 +115,8 @@
           "to": "pure val START_CLOSES_STALE_ENTRY = true"
         },
         {
-          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
-          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
+          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
+          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
         }
       ],
       "expect": {
@@ -144,8 +144,8 @@
           "to": "pure val START_CLOSES_STALE_ENTRY = true"
         },
         {
-          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
-          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
+          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
+          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
         }
       ],
       "expect": {
@@ -165,8 +165,8 @@
           "to": "pure val FORK_CLOSES_ENTRY = true"
         },
         {
-          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
-          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
+          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
+          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
         }
       ],
       "expect": {
@@ -175,7 +175,7 @@
     },
     {
       "name": "f4-tree-away",
-      "why": "F1, F2 and F3 fixed: /tree while idle goes back before the failure, but the idle wait goes on and resumes a task that is not on the branch (F4, found by the step-9 review).",
+      "why": "F1, F2 and F3 fixed: /tree while idle goes to a point before the failure, but the idle wait goes on and resumes a task that is not on the branch (F4, found by the step-9 review).",
       "replace": [
         {
           "from": "pure val CONTEXT_ENDS_IDLE_WAIT = false",
@@ -195,8 +195,8 @@
       }
     },
     {
-      "name": "assume-fix",
-      "why": "Both fixes: a new request ends the idle wait, and a fork closes a copied open entry.",
+      "name": "f5-tree-back-reload",
+      "why": "All fixes on, with the /tree fix in a session_tree handler (TREE_ENDS_IDLE_WAIT): /tree away writes the closed entry on the new branch, /tree back finds the old branch's open entry, and a /reload restores it (F5, found by the round-2 review).",
       "replace": [
         {
           "from": "pure val CONTEXT_ENDS_IDLE_WAIT = false",
@@ -215,12 +215,37 @@
           "to": "pure val TREE_ENDS_IDLE_WAIT = true"
         }
       ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "assume-fix",
+      "why": "Both fixes: a new request ends the idle wait, and a fork closes a copied open entry The /tree fix closes the entry before the leaf moves (TREE_CLOSES_BEFORE_MOVE).",
+      "replace": [
+        {
+          "from": "pure val CONTEXT_ENDS_IDLE_WAIT = false",
+          "to": "pure val CONTEXT_ENDS_IDLE_WAIT = true"
+        },
+        {
+          "from": "pure val FORK_CLOSES_ENTRY = false",
+          "to": "pure val FORK_CLOSES_ENTRY = true"
+        },
+        {
+          "from": "pure val START_CLOSES_STALE_ENTRY = false",
+          "to": "pure val START_CLOSES_STALE_ENTRY = true"
+        },
+        {
+          "from": "pure val TREE_CLOSES_BEFORE_MOVE = false",
+          "to": "pure val TREE_CLOSES_BEFORE_MOVE = true"
+        }
+      ],
       "expect": "pass"
     },
     {
       "name": "assume-fix-wide",
       "base": "assume-fix",
-      "why": "The same with 4 requests and 3 inputs.",
+      "why": "The same with 4 requests and 3 inputs. One navigation only, to keep the state space in reach.",
       "replace": [
         {
           "from": "pure val MAX_REQUESTS = 3 ",
@@ -229,6 +254,10 @@
         {
           "from": "pure val MAX_INPUTS = 2 ",
           "to": "pure val MAX_INPUTS = 3 "
+        },
+        {
+          "from": "pure val MAX_NAVS = 2 ",
+          "to": "pure val MAX_NAVS = 1 "
         }
       ],
       "expect": "pass"
@@ -461,7 +490,9 @@
       "resumeOwed",
       "oneWait",
       "witnessNoLateReturn",
-      "witnessNoTreeAway"
+      "witnessNoTreeAway",
+      "witnessNoOffOpen",
+      "witnessNoBackThenRestore"
     ]
   }
 }
