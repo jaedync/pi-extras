@@ -17,10 +17,10 @@
  */
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { limitKey } from "../plan-billing.ts";
 import { acquireLock, type FileLock, type LockOptions } from "../file-lock.ts";
 import { encodeIndex, readIndex, writeIndex, type FileState, type IndexStamp } from "./ledger-index.ts";
-import { familyMatches, UNKNOWN_MODEL, type SpendRecord } from "./ledger-parse.ts";
+import { UNKNOWN_MODEL } from "./ledger-parse.ts";
+import { createSpendQueries, type SpendQueries } from "./ledger-query.ts";
 import { emptyStats, readAppended, sessionFiles, type FileInfo, type ReadStats } from "./ledger-read.ts";
 
 export { parseSpendLine, type LedgerLine, type SessionModel, type SpendRecord } from "./ledger-parse.ts";
@@ -81,8 +81,7 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 	let unsaved = false;
 	let saveError: string | undefined;
 	const counters = emptyStats();
-	/** unique() results by range; a refresh clears them. */
-	let ranges = new Map<string, SpendRecord[]>();
+	let built: SpendQueries | undefined;
 
 	/** Take each file's saved state that is further along than this process's own. */
 	async function adoptIndex(indexFile: string, found: ReadonlyMap<string, FileInfo>): Promise<void> {
@@ -214,25 +213,14 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 		if (options.indexFile) await refreshShared(options.indexFile, found, cutoff);
 		else await readBehind(found, cutoff);
 		prune(found, cutoff);
-		ranges = new Map();
+		built = undefined;
 		lastRefresh = now;
 	}
 
-	function unique(sinceMs: number, untilMs: number): SpendRecord[] {
-		const key = `${sinceMs}|${untilMs}`;
-		const hit = ranges.get(key);
-		if (hit) return hit;
-		const seen = new Set<string>();
-		const result: SpendRecord[] = [];
-		for (const state of files.values()) {
-			for (const record of state.records) {
-				if (record.ts < sinceMs || record.ts > untilMs || seen.has(record.id)) continue;
-				seen.add(record.id);
-				result.push(record);
-			}
-		}
-		ranges.set(key, result);
-		return result;
+	/** Built at the first query after a refresh. */
+	function queries(): SpendQueries {
+		built ??= createSpendQueries(files.values());
+		return built;
 	}
 
 	return {
@@ -241,26 +229,9 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 			pending ??= doRefresh(now).finally(() => { pending = undefined; });
 			await pending;
 		},
-		sum({ provider, sinceMs, untilMs, family }) {
-			const key = limitKey(provider);
-			let total = 0;
-			for (const record of unique(sinceMs, untilMs)) {
-				if (limitKey(record.provider) === key && (!family || familyMatches(record.model, family))) total += record.cost;
-			}
-			return total;
-		},
-		byProvider(sinceMs, untilMs) {
-			const totals: Record<string, number> = {};
-			for (const record of unique(sinceMs, untilMs)) {
-				const key = limitKey(record.provider);
-				totals[key] = (totals[key] ?? 0) + record.cost;
-			}
-			return totals;
-		},
-		models(provider, sinceMs) {
-			const key = limitKey(provider);
-			return [...new Set(unique(sinceMs, Infinity).filter((record) => limitKey(record.provider) === key).map((record) => record.model))];
-		},
+		sum: (query) => queries().sum(query),
+		byProvider: (sinceMs, untilMs) => queries().byProvider(sinceMs, untilMs),
+		models: (provider, sinceMs) => queries().models(provider, sinceMs),
 		stats: () => ({ ...counters }),
 		indexProblem: () => saveError,
 	};

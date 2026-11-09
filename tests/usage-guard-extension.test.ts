@@ -530,3 +530,26 @@ test("events that arrive after session_shutdown leave the stale ctx alone and lo
 	anthropicSnapshot(store, 99);
 	assert.equal(existsSync(logFile) ? readFileSync(logFile, "utf8") : "", "");
 });
+
+test("a slow limit poll does not hold the report: past the budget it uses the last reading and says so", async () => {
+	const dir = tempDir("usage-guard-slow-");
+	const store = createLimitStore();
+	const pi = fakePi();
+	usageGuard(pi as never, { store, configFile: join(dir, "pi-extras.json"), now: () => NOW, pollBudgetMs: 50, logFile: join(dir, "usage-guard.log") });
+	const ctx = fakeCtx(pi, { provider: "anthropic", id: "claude-sonnet-5" });
+	anthropicSnapshot(store, 40);
+	let finish = () => {};
+	store.setRefresher(() => new Promise<void>((resolve) => { finish = resolve; }));
+	await pi.handlers.get("session_start")!({}, ctx);
+	const started = Date.now();
+	const result = await pi.tool!.execute("t1", { refresh: true }, undefined, undefined, ctx);
+	assert.ok(Date.now() - started < 5_000, `the call waited ${Date.now() - started} ms`);
+	const report = result.details as { notes: string[]; limits: Array<{ provider: string }> };
+	assert.ok(report.limits.some((limit) => limit.provider === "anthropic"), "the last reading is reported");
+	assert.ok(report.notes.some((note) => /anthropic/.test(note) && /last reading/.test(note)), report.notes.join(" | "));
+	finish();
+	// A poll that answers within the budget adds no note.
+	store.setRefresher(async () => {});
+	const quick = await pi.tool!.execute("t2", { refresh: true }, undefined, undefined, ctx);
+	assert.ok(!(quick.details as { notes: string[] }).notes.some((note) => /last reading/.test(note)));
+});

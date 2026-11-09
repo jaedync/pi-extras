@@ -33,35 +33,68 @@ export interface IndexStamp {
 	size: number;
 }
 
-/** On disk, strings repeat once: a record is [ts, provider, model, cost, id] with provider and model as string-table indexes. */
-interface IndexFile {
-	v: number;
-	maxAgeMs: number;
-	strings: string[];
-	files: Record<string, [ino: number, offset: number, seen: number, provider: number, model: number, records: Array<[number, number, number, number, string]>]>;
-}
+/**
+ * On disk, each file's names appear once: a file is [ino, offset, seen,
+ * provider, model, names, records], and a record is [ts, provider, model,
+ * cost, id] with provider and model as indexes into the file's names. Each
+ * file has its own names, so the text of a file that did not change is kept
+ * from the last save.
+ */
+type Row = [ts: number, provider: number, model: number, cost: number, id: string];
+type FileEntry = [ino: number, offset: number, seen: number, provider: number, model: number, names: string[], records: Row[]];
 
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
-export function encodeIndex(files: ReadonlyMap<string, FileState>, maxAgeMs: number): string {
-	const strings: string[] = [];
+/** A state object is replaced, never changed, so its text stays right while the object lives. */
+const encoded = new WeakMap<FileState, string>();
+
+function encodeFile(state: FileState): string {
+	const hit = encoded.get(state);
+	if (hit !== undefined) return hit;
+	const names: string[] = [];
 	const ids = new Map<string, number>();
 	const ref = (text: string): number => {
 		let id = ids.get(text);
 		if (id === undefined) {
-			id = strings.length;
-			strings.push(text);
+			id = names.length;
+			names.push(text);
 			ids.set(text, id);
 		}
 		return id;
 	};
-	const out: IndexFile["files"] = {};
-	for (const [path, state] of files) {
-		out[path] = [state.ino, state.offset, state.seen, ref(state.model.provider), ref(state.model.model),
-			state.records.map((record) => [record.ts, ref(record.provider), ref(record.model), record.cost, record.id])];
+	const provider = ref(state.model.provider);
+	const model = ref(state.model.model);
+	const rows = state.records.map((record): Row => [record.ts, ref(record.provider), ref(record.model), record.cost, record.id]);
+	const text = JSON.stringify([state.ino, state.offset, state.seen, provider, model, names, rows] satisfies FileEntry);
+	encoded.set(state, text);
+	return text;
+}
+
+export function encodeIndex(files: ReadonlyMap<string, FileState>, maxAgeMs: number): string {
+	const parts = [...files].map(([path, state]) => `${JSON.stringify(path)}:${encodeFile(state)}`);
+	return `{"v":${VERSION},"maxAgeMs":${JSON.stringify(maxAgeMs)},"files":{${parts.join(",")}}}`;
+}
+
+function decodeFile(entry: unknown): FileState | undefined {
+	if (!Array.isArray(entry) || entry.length !== 7) return undefined;
+	const [ino, offset, seen, provider, model, names, rows] = entry as unknown[];
+	if (!isCount(ino) || !isCount(offset) || !isCount(seen) || seen < offset || !Array.isArray(names) || !Array.isArray(rows)) return undefined;
+	if (!names.every((name) => typeof name === "string")) return undefined;
+	const name = (index: unknown): string | undefined => isCount(index) && index < names.length ? names[index] as string : undefined;
+	const sessionProvider = name(provider);
+	const sessionModel = name(model);
+	if (sessionProvider === undefined || sessionModel === undefined) return undefined;
+	const records: SpendRecord[] = [];
+	for (const row of rows) {
+		if (!Array.isArray(row) || row.length !== 5) return undefined;
+		const [ts, p, m, cost, id] = row as unknown[];
+		const recordProvider = name(p);
+		const recordModel = name(m);
+		if (!finite(ts) || !finite(cost) || cost < 0 || typeof id !== "string" || recordProvider === undefined || recordModel === undefined) return undefined;
+		records.push({ ts, provider: recordProvider, model: recordModel, cost, id });
 	}
-	return JSON.stringify({ v: VERSION, maxAgeMs, strings, files: out } satisfies IndexFile);
+	return { ino, offset, seen, model: { provider: sessionProvider, model: sessionModel }, records };
 }
 
 /**
@@ -69,27 +102,13 @@ export function encodeIndex(files: ReadonlyMap<string, FileState>, maxAgeMs: num
  * fewer days than `maxAgeMs` needs. Throws on text that is not JSON.
  */
 export function decodeIndex(text: string, maxAgeMs: number): Map<string, FileState> | undefined {
-	const raw = JSON.parse(text) as IndexFile;
-	if (!raw || raw.v !== VERSION || !finite(raw.maxAgeMs) || raw.maxAgeMs < maxAgeMs) return undefined;
-	if (!Array.isArray(raw.strings) || !raw.strings.every((entry) => typeof entry === "string") || !raw.files || typeof raw.files !== "object") return undefined;
-	const strings = raw.strings;
-	const text_ = (index: unknown): string | undefined => isCount(index) && index < strings.length ? strings[index] : undefined;
+	const raw = JSON.parse(text) as { v?: unknown; maxAgeMs?: unknown; files?: unknown };
+	if (!raw || raw.v !== VERSION || !finite(raw.maxAgeMs) || raw.maxAgeMs < maxAgeMs || !raw.files || typeof raw.files !== "object") return undefined;
 	const files = new Map<string, FileState>();
 	for (const [path, entry] of Object.entries(raw.files)) {
-		if (!Array.isArray(entry) || entry.length !== 6 || !isCount(entry[0]) || !isCount(entry[1]) || !isCount(entry[2]) || entry[2] < entry[1] || !Array.isArray(entry[5])) return undefined;
-		const provider = text_(entry[3]);
-		const model = text_(entry[4]);
-		if (provider === undefined || model === undefined) return undefined;
-		const records: SpendRecord[] = [];
-		for (const row of entry[5]) {
-			if (!Array.isArray(row) || row.length !== 5) return undefined;
-			const [ts, p, m, cost, id] = row;
-			const recordProvider = text_(p);
-			const recordModel = text_(m);
-			if (!finite(ts) || !finite(cost) || cost < 0 || typeof id !== "string" || recordProvider === undefined || recordModel === undefined) return undefined;
-			records.push({ ts, provider: recordProvider, model: recordModel, cost, id });
-		}
-		files.set(path, { ino: entry[0], offset: entry[1], seen: entry[2], model: { provider, model }, records });
+		const state = decodeFile(entry);
+		if (!state) return undefined;
+		files.set(path, state);
 	}
 	return files;
 }

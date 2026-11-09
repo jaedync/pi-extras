@@ -90,9 +90,10 @@ function catalogPriced(ctx: Pick<ExtensionContext, "modelRegistry">): Set<string
 }
 
 /** The model whose limits apply: under a virtual selection, the one it routed to. */
-function activeModel(ctx: Pick<ExtensionContext, "model" | "sessionManager" | "modelRegistry">): ActiveModel {
+function activeModel(ctx: Pick<ExtensionContext, "model" | "sessionManager" | "modelRegistry">, priced?: ReadonlySet<string>): ActiveModel {
 	const model = routedModel(ctx);
-	const unmetered = model ? unmeteredModel(model, catalogPriced(ctx)) : false;
+	// Listing the catalog builds every model; a usage call lists it once and passes it in.
+	const unmetered = model ? unmeteredModel(model, priced ?? catalogPriced(ctx)) : false;
 	return { provider: model?.provider, id: model?.id, ...(unmetered ? { unmetered: true } : {}) };
 }
 
@@ -118,6 +119,11 @@ function unmeteredScoped(models: readonly InScopeModel[], priced: ReadonlySet<st
 	return models.filter((model) => unmeteredModel(model, priced)).map((model) => `${model.provider}/${model.id}`);
 }
 
+function slowPollNote(providers: readonly string[], budgetMs: number): string {
+	const names = [...new Set(providers)].join(", ");
+	return `The limit poll for ${names} did not answer within ${budgetMs / 1000} s, so this report uses the last reading (none for a provider not read yet). The poll goes on; the next usage call sees its result.`;
+}
+
 function idle(ctx: ExtensionContext): boolean {
 	return typeof ctx.isIdle === "function" ? ctx.isIdle() : true;
 }
@@ -130,13 +136,24 @@ export interface UsageGuardOptions {
 	dollars?: DollarsCollector;
 	/** Where operational errors go; defaults to usage-guard.log in the agent directory. */
 	logFile?: string;
+	/** How long the usage tool waits for limit polls before it reports the last readings. */
+	pollBudgetMs?: number;
 }
+
+/**
+ * A limit poll answers in well under a second, but an endpoint can hang until
+ * its 10 s timeout. Past this, the report uses the last reading; the poll goes
+ * on and lands in the store for the next call.
+ */
+const POLL_BUDGET_MS = 2_000;
+const MIN_FIRST_READ_WAIT_MS = 500;
 
 export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions = {}): void {
 	const store = options.store ?? sharedLimitStore();
 	const configFile = options.configFile ?? CONFIG_FILE;
 	const now = options.now ?? Date.now;
 	const logFile = options.logFile ?? DEFAULT_LOG_FILE;
+	const pollBudgetMs = options.pollBudgetMs ?? POLL_BUDGET_MS;
 	let config = loadGuardConfig(configFile);
 	// pi-extras.json sits in the agent directory, next to the sessions the ledger reads.
 	const dollars = options.dollars ?? createDollarsCollector({ agentDir: dirname(configFile), configFile });
@@ -178,11 +195,11 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	}
 
 	/** Dollar figures fail open: the percent report still goes out without them. */
-	async function collectDollars(ctx: ExtensionContext, force: boolean): Promise<CollectedDollars | undefined> {
+	async function collectDollars(ctx: ExtensionContext, force: boolean, model: ActiveModel): Promise<CollectedDollars | undefined> {
 		try {
 			return await dollars.collect({
 				snapshots: store.entries(),
-				model: activeModel(ctx),
+				model,
 				scopedModels: (ctx.scopedModels ?? []).map((scoped) => ({ provider: scoped.model.provider, id: scoped.model.id })),
 				getApiKey: async (provider) => ctx.modelRegistry?.getApiKeyForProvider(provider),
 				now: now(),
@@ -194,8 +211,31 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		}
 	}
 
+	/**
+	 * Wait for the polls up to the budget. Returns the providers whose poll
+	 * still runs. A poll that fails is logged; the report uses the last reading.
+	 */
+	async function withinBudget(polls: ReadonlyArray<readonly [string, Promise<unknown>]>, waitMs = pollBudgetMs): Promise<string[]> {
+		const running = new Set(polls.map(([provider]) => provider));
+		const settled = Promise.all(polls.map(([provider, poll]) => poll.then(
+			() => { running.delete(provider); },
+			(error: unknown) => {
+				running.delete(provider);
+				operationalError(logFile, "usage-guard", `${provider} limit refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+			},
+		)));
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const budget = new Promise<void>((resolve) => { timer = setTimeout(resolve, waitMs); });
+		try {
+			await Promise.race([settled, budget]);
+		} finally {
+			clearTimeout(timer);
+		}
+		return [...running];
+	}
+
 	/** A first, unforced read for each plan or key the store has no snapshot of, asked once by one of its providers. */
-	async function readUnknown(providers: ReadonlyArray<string | undefined>): Promise<void> {
+	function readUnknown(providers: ReadonlyArray<string | undefined>): Array<[string, Promise<boolean>]> {
 		const known = new Set(store.entries().map(([provider]) => storeKey(provider)));
 		const unknown = new Map<string, string>();
 		for (const provider of providers) {
@@ -203,7 +243,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			const key = limitKey(provider);
 			if (!known.has(key) && !unknown.has(key)) unknown.set(key, provider);
 		}
-		await Promise.all([...unknown.values()].map((provider) => store.refresh(provider, false)));
+		return [...unknown.values()].map((provider) => [provider, store.refresh(provider, false)]);
 	}
 
 	function evaluate(ctx: ExtensionContext, deliverWarnings = false): CustomMessage[] {
@@ -271,23 +311,29 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			latestCtx = ctx;
 			if (params.clearBudget) setBudget(undefined);
 			if (params.setBudget) setBudget({ window: params.setBudget.window.trim(), pct: params.setBudget.pct });
-			const model = activeModel(ctx);
+			const priced = catalogPriced(ctx);
+			const model = activeModel(ctx, priced);
 			const inScope = params.all ? modelsInScope(ctx, logFile) : [];
+			const started = Date.now();
+			const forced: Array<[string, Promise<boolean>]> = [];
 			if (params.refresh) {
 				const providers = params.all ? store.entries().map(([provider]) => provider) : [];
 				if (model.provider && !providers.includes(limitKey(model.provider))) providers.push(model.provider);
 				// A plan's reading is asked for through a member that bills it (claude-code when Pi's anthropic credential is an API key).
-				await Promise.all(providers.map((provider) => store.refresh(planMember(provider), true)));
+				for (const provider of providers) forced.push([limitKey(provider), store.refresh(planMember(provider), true)]);
 			}
+			const slowForced = await withinBudget(forced);
 			// Status Plus polls only providers this session has used or selected; the active one may not
 			// be read yet, and a subagent may run on any model in scope, so its limits must be known before
 			// it starts. Not forced: the shared poll gap still holds, and a provider with no poller is skipped.
-			const priced = catalogPriced(ctx);
-			await readUnknown([model.provider, ...inScope.filter((entry) => !unmeteredModel(entry, priced)).map((entry) => entry.provider)]);
-			const collected = await collectDollars(ctx, params.refresh === true);
+			// One budget for both waits; first reads after a slow forced poll still get a short wait.
+			const left = Math.max(pollBudgetMs - (Date.now() - started), Math.min(pollBudgetMs, MIN_FIRST_READ_WAIT_MS));
+			const slow = [...slowForced, ...await withinBudget(readUnknown([model.provider, ...inScope.filter((entry) => !unmeteredModel(entry, priced)).map((entry) => entry.provider)]), left)];
+			const collected = await collectDollars(ctx, params.refresh === true, model);
 			const snapshots = store.entries();
-			const report = usageReport(snapshots, model, config, budget, now(), params.all === true, undefined, collected,
+			const full = usageReport(snapshots, model, config, budget, now(), params.all === true, undefined, collected,
 				unmeteredScoped(inScope, priced), unavailableLimits(inScope.map((entry) => ({ provider: entry.provider, ...(unmeteredModel(entry, priced) ? { unmetered: true } : {}) })), snapshots));
+			const report = slow.length ? { ...full, notes: [...full.notes, slowPollNote(slow, pollBudgetMs)] } : full;
 			return { content: [{ type: "text", text: JSON.stringify(report, null, 1) }], details: report };
 		},
 	}), "usage"));
@@ -320,9 +366,11 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 				return ctx.ui.notify(parsed ? `Session budget: ${parsed.window} at ${parsed.pct}%` : "Session budget cleared", "info");
 			}
 			if (words.length) return ctx.ui.notify(USAGE_HELP, "warning");
-			await readUnknown([activeModel(ctx).provider]);
-			const collected = await collectDollars(ctx, false);
-			const report = usageReport(store.entries(), activeModel(ctx), config, budget, now(), false, undefined, collected);
+			const model = activeModel(ctx);
+			const slow = await withinBudget(readUnknown([model.provider]));
+			const collected = await collectDollars(ctx, false, model);
+			const full = usageReport(store.entries(), model, config, budget, now(), false, undefined, collected);
+			const report = slow.length ? { ...full, notes: [...full.notes, slowPollNote(slow, pollBudgetMs)] } : full;
 			deliver(`Current usage limits:\n${JSON.stringify(report, null, 1)}`, idle(ctx) ? "nextTurn" : "steer", report);
 			ctx.ui.notify(idle(ctx) ? "Usage snapshot queued for the next turn" : "Usage snapshot queued for the agent", "info");
 		},

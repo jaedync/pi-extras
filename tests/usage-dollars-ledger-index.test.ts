@@ -97,6 +97,21 @@ test("processes that refresh at the same time read new bytes once: the one that 
 	for (const ledger of ledgers) assert.equal(totals(ledger).anthropic, 1);
 });
 
+test("copies of a response id count once; copies that differ in time count once in each range, as before", async () => {
+	const s = setup();
+	writeFileSync(s.file("a.jsonl"), turn(1, { id: "same", ts: NOW - 2 * HOUR }) + turn(3, { id: "fork" }));
+	writeFileSync(s.file("b.jsonl"), turn(1, { id: "same", ts: NOW - 2 * HOUR }) + turn(3, { id: "fork" }));
+	const ledger = s.alone();
+	await ledger.refresh(NOW);
+	assert.equal(ledger.sum({ provider: "anthropic", sinceMs: 0, untilMs: NOW }), 4);
+	// The same id at another time: each range keeps the first copy it holds.
+	appendFileSync(s.file("b.jsonl"), turn(5, { id: "fork", ts: NOW - 30 * 60_000 }));
+	await ledger.refresh(NOW);
+	assert.equal(ledger.sum({ provider: "anthropic", sinceMs: 0, untilMs: NOW }), 4);
+	assert.equal(ledger.sum({ provider: "anthropic", sinceMs: NOW - 45 * 60_000, untilMs: NOW }), 5);
+	assert.deepEqual(ledger.byProvider(NOW - 45 * 60_000, NOW), { anthropic: 5 });
+});
+
 test("only lines that name a spend marker near their start are parsed", async () => {
 	const s = setup();
 	const marker = JSON.stringify({ type: "message", message: { role: "toolResult", content: [{ type: "text", text: `${"y".repeat(5_000)} "role":"assistant"` }] } }) + "\n";
