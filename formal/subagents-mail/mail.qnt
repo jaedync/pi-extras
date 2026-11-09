@@ -17,29 +17,33 @@ module mail {
   pure val MAX_RELOADS = 1
   pure val MAX_FAILS = 1
 
-  // Fix variant for finding F1: dispatch also keeps waking mail that starts
-  // a turn as owed (deliver.ts:394 sets owing only for the queue route).
-  pure val OWE_WAKE_MAIL = false
-  // Fix variant for finding F2: a message that does not wake main, appended
-  // after the stopped turn, does not count as "something said since"
-  // (main-watch.ts:138 compares lastSaid with the stop mark).
-  pure val QUIET_KEEPS_MARK = false
-  // Fix variant for finding F3: agent_settled's handler also sets the stop
-  // mark when the event says the run was aborted (as:686-688 passes
-  // `aborted`; main-watch.ts:119-124 reads only stoppedRun and checked).
-  pure val STOP_FROM_SETTLED_EVENT = false
-  // First fix variant for finding F4: a manual compaction that fails or is
-  // cancelled still reminds main (main-watch.ts:142 passes `!event.aborted`).
-  // It reads compactionStopped, which our session_before_compact handler sets.
-  // Pi stops that emit at the first handler that cancels (runner.js:820-824),
-  // so this fix fails when the cancelling extension loads first (round 2, N1;
-  // check f4-old-fix-handler-order).
+  // The fixes of findings F1 to F4 (README.md). Each is on, as in the code;
+  // a mutant check turns one off to show the bug it fixes.
+  //
+  // F1: waking mail that starts a run (the route wake) is kept as `starting`
+  // (deliver.ts dispatch). When it lands as the run's starting message, its
+  // message_end acknowledges it, and it is owed as mail that landed mid-run
+  // is (deliver.ts acknowledge). Off: only the route queue makes mail owed.
+  pure val OWE_STARTED_MAIL = true
+  // F2: the stop mark is the last entry of type "message" (main-watch.ts
+  // lastSaid). A custom message appended after the stopped turn, ours or
+  // another extension's, does not count as "something said since". All mail
+  // in the model is a custom message. Off: any custom message clears the mark.
+  pure val CUSTOM_KEEPS_MARK = true
+  // F3: agent_settled's handler also sets the stop mark when the event says
+  // the run was aborted (as:686-688 passes `aborted`).
+  pure val STOP_FROM_SETTLED_EVENT = true
+  // An F4 fix that the review rejected: a manual compaction that fails or is
+  // cancelled reminds main when compactionStopped is set, which only our
+  // session_before_compact handler sets. Pi stops that emit at the first
+  // handler that cancels (runner.js:820-824), so this fix fails when the
+  // cancelling extension loads first (round 2, N1; mutant-f4-old-fix-handler-order).
   pure val REMIND_ON_FAILED_COMPACT = false
-  // Sound fix variant for finding F4: session_compact_failed also computes
-  // "a compaction stopped this run" from the stop mark itself (the test of
-  // main-watch.ts:138), and reminds whatever `aborted` says. It does not
-  // depend on whether our session_before_compact handler ran.
-  pure val REMIND_FROM_STOP_MARK = false
+  // F4: session_compact_failed also computes "a compaction stopped this run"
+  // from the stop mark itself (main-watch.ts stoppedByCompaction), and
+  // reminds whatever `aborted` says. It does not depend on whether our
+  // session_before_compact handler ran. Off: compacted(manual && !aborted).
+  pure val REMIND_FROM_STOP_MARK = true
 
   // Mail ids. "a": a note (wakes main). "b": a relay of what the user told a
   // child (does not wake, deliver.ts:157-162). "r": the batched report
@@ -66,6 +70,7 @@ module mail {
   var outbox: List[str]        // outbox, oldest first
   var pending: Set[str]        // pendingItems keys
   var owing: Set[str]          // owing keys
+  var starting: Set[str]       // starting keys: waking mail sent to start a run, not yet acknowledged
   var batch: bool              // the report waits in `batch`
   var batchTimer: bool         // `timer` armed
   var retryArmed: bool         // `retryTimer` armed
@@ -102,6 +107,7 @@ module mail {
   var unread: Set[str]         // in main's context after its last assistant message (owed reads it)
   // ---- Ghosts (only properties and witnesses read them) ----
   var unreplied: Set[str]      // landed since main's last reply; compaction does not clear it
+  var woke: Set[str]           // mail that landed as the starting message of a run
   var excused: Set[str]        // landed in a run the user stopped with Esc
   var created: Set[str]        // mail that a child sent, or that the mail made
   var mine: Set[str]           // ids remembered by this MainMail instance
@@ -114,7 +120,7 @@ module mail {
 
   // What one call of sendWaiting may change.
   type Box = {
-    outbox: List[str], owing: Set[str], phase: str, prep: List[str], deferred: List[str],
+    outbox: List[str], owing: Set[str], starting: Set[str], woke: Set[str], phase: str, prep: List[str], deferred: List[str],
     pendingCustom: List[str], steerQ: List[str], landed: str -> int, unread: Set[str],
     unreplied: Set[str], stopMark: bool, fail: bool, failed: bool, stop: bool,
   }
@@ -122,7 +128,7 @@ module mail {
   type Where = { served: bool, compacting: bool, grace: bool, running: bool, settling: bool }
 
   val box0: Box = {
-    outbox: outbox, owing: owing, phase: phase, prep: prep, deferred: deferred,
+    outbox: outbox, owing: owing, starting: starting, woke: woke, phase: phase, prep: prep, deferred: deferred,
     pendingCustom: pendingCustom, steerQ: steerQ, landed: landed, unread: unread,
     unreplied: unreplied, stopMark: stopMark, fail: false, failed: false, stop: false,
   }
@@ -139,7 +145,7 @@ module mail {
   // A message lands: it is appended to the session.
   pure def land(b: Box, id: str): Box =
     { ...b, landed: b.landed.setBy(id, n => n + 1), unread: b.unread.union(Set(id)),
-      unreplied: b.unreplied.union(Set(id)), stopMark: b.stopMark and QUIET_KEEPS_MARK and not(wakes(id)) }
+      unreplied: b.unreplied.union(Set(id)), stopMark: b.stopMark and CUSTOM_KEEPS_MARK }
   pure def landAll(b: Box, ids: List[str]): Box = ids.foldl(b, (acc, id) => land(acc, id))
 
   // sendCustomMessage with triggerTurn and deliverAs "steer" (as:1855-1871):
@@ -168,7 +174,7 @@ module mail {
         { ...b, owing: b.owing.exclude(Set(id)), fail: false, failed: true, stop: true }
       else {
         val b1 = { ...b, outbox: b.outbox.tail() }
-        if (route == "wake" and wakes(id)) sendTurn(if (OWE_WAKE_MAIL) { ...b1, owing: b1.owing.union(Set(id)) } else b1, id)
+        if (route == "wake" and wakes(id)) sendTurn(if (OWE_STARTED_MAIL) { ...b1, starting: b1.starting.union(Set(id)) } else b1, id)
         else {
           val owes = route == "queue" and wakes(id)
           val b2 = if (owes) { ...b1, owing: b1.owing.union(Set(id)) } else b1
@@ -181,14 +187,14 @@ module mail {
   // Assigns what a sendWaiting call changed, and the retry timer it leaves
   // (deliver.ts:271: armed while mail waits).
   action applyBox(b: Box, isClosed: bool): bool = all {
-    outbox' = b.outbox, owing' = b.owing, phase' = b.phase, prep' = b.prep, deferred' = b.deferred,
+    outbox' = b.outbox, owing' = b.owing, starting' = b.starting, woke' = b.woke, phase' = b.phase, prep' = b.prep, deferred' = b.deferred,
     pendingCustom' = b.pendingCustom, steerQ' = b.steerQ, landed' = b.landed, unread' = b.unread,
     unreplied' = b.unreplied, stopMark' = b.stopMark,
     retryArmed' = (b.outbox != [] and not(isClosed)),
     fails' = if (b.failed) fails + 1 else fails,
   }
   action keepBox: bool = all {
-    outbox' = outbox, owing' = owing, phase' = phase, prep' = prep, deferred' = deferred,
+    outbox' = outbox, owing' = owing, starting' = starting, woke' = woke, phase' = phase, prep' = prep, deferred' = deferred,
     pendingCustom' = pendingCustom, steerQ' = steerQ, landed' = landed, unread' = unread,
     unreplied' = unreplied, stopMark' = stopMark, retryArmed' = retryArmed, fails' = fails,
   }
@@ -196,7 +202,7 @@ module mail {
   pure def isLanded(m: str -> int, id: str): bool = IDS.contains(id) and m.get(id) > 0
   // owed (deliver.ts:280-292): keep the owed ids that wait in Pi or that main has not read.
   pure def owedLeft(o: Set[str], held: List[str], unr: Set[str], m: str -> int): Set[str] =
-    o.filter(id => count(held, id) > 0 or unr.contains(id) or (OWE_WAKE_MAIL and not(isLanded(m, id))))
+    o.filter(id => count(held, id) > 0 or unr.contains(id))
   // reconcile (deliver.ts:327-336) and acknowledge (:346-348): drop pending ids found in the branch.
   pure def reconciled(p: Set[str], m: str -> int): Set[str] = p.filter(id => not(isLanded(m, id)))
 
@@ -216,7 +222,7 @@ module mail {
   action keepCounts: bool = all { excused' = excused, prompts' = prompts, aborts' = aborts, compactions' = compactions }
 
   action init = all {
-    outbox' = [], pending' = Set(), owing' = Set(), batch' = false, batchTimer' = false, retryArmed' = false, closed' = false,
+    outbox' = [], pending' = Set(), owing' = Set(), starting' = Set(), woke' = Set(), batch' = false, batchTimer' = false, retryArmed' = false, closed' = false,
     hostPhase' = "served", gen' = 1, kept' = [],
     running' = false, settling' = false, grace' = false, checked' = false, stoppedRun' = false, stopMark' = false,
     compactionStopped' = false, retrySoon' = false,
@@ -307,11 +313,15 @@ module mail {
     val b1 = landAll({ ...box0, pendingCustom: [], fail: throws }, pendingCustom)
     val w = { ...where0, running: true, settling: false, grace: false }
     val b2 = if (served and not(closed)) sendWaiting(w, { ...b1, phase: "work" }) else { ...b1, phase: "work" }
-    val b3 = landAll({ ...b2, prep: [] }, prep)
+    val b3 = landAll({ ...b2, prep: [], woke: b2.woke.union(prep.foldl(Set(), (s, id) => s.union(Set(id)))) }, prep)
+    // The message_end handler acknowledges each starting message; acknowledge
+    // makes waking mail that this mail sent to start the run owed (deliver.ts acknowledge).
+    val started = b3.starting.filter(id => count(prep, id) > 0)
+    val b4 = if (served) { ...b3, owing: b3.owing.union(started), starting: b3.starting.exclude(started) } else b3
     all {
       phase == "prep",
       throws implies (fails < MAX_FAILS and served),
-      applyBox(b3, closed),
+      applyBox(b4, closed),
       pending' = if (served) pending.filter(id => not(count(prep, id) > 0)) else pending,
       running' = true, settling' = false, grace' = false, checked' = false,
       stoppedRun' = stoppedRun, compactionStopped' = compactionStopped, retrySoon' = retrySoon,
@@ -357,7 +367,7 @@ module mail {
       phase == "bs", not(ours),
       ours' = true,
       checked' = true,
-      owing' = owing1,
+      owing' = owing1, starting' = starting, woke' = woke,
       bsContinue' = owes,
       settling' = if (owes) settling else true,
       outbox' = outbox, phase' = phase, prep' = prep, deferred' = deferred, pendingCustom' = pendingCustom,
@@ -431,7 +441,7 @@ module mail {
         prep' = if (items.head() == PROMPT) prep else prep.append(items.head()),
         later' = items.tail(),
       },
-      outbox' = outbox, owing' = owing, pendingCustom' = pendingCustom, steerQ' = steerQ, landed' = landed,
+      outbox' = outbox, owing' = owing, starting' = starting, woke' = woke, pendingCustom' = pendingCustom, steerQ' = steerQ, landed' = landed,
       unread' = unread, unreplied' = unreplied, stopMark' = stopMark, retryArmed' = retryArmed, fails' = fails,
       compactCancelled' = compactCancelled, runAborted' = false, bsContinue' = bsContinue, compacting' = compacting, compactPending' = compactPending, promptWaiting' = promptWaiting,
       keepMail, keepHost, keepWatch, keepCounts,
@@ -457,7 +467,7 @@ module mail {
   action userInputDeferred: bool = all {
     phase == "settle", hostPhase == "served", prompts < MAX_PROMPTS,
     prompts' = prompts + 1, deferred' = deferred.append(PROMPT),
-    outbox' = outbox, owing' = owing, phase' = phase, prep' = prep, pendingCustom' = pendingCustom, steerQ' = steerQ,
+    outbox' = outbox, owing' = owing, starting' = starting, woke' = woke, phase' = phase, prep' = prep, pendingCustom' = pendingCustom, steerQ' = steerQ,
     landed' = landed, unread' = unread, unreplied' = unreplied, stopMark' = stopMark, retryArmed' = retryArmed, fails' = fails,
     excused' = excused, aborts' = aborts, compactions' = compactions,
     keepMail, keepHost, keepWatch, keepPi,
@@ -470,7 +480,7 @@ module mail {
     // Pi checks for a compaction only before the input handlers (as:1648-1652);
     // a run that a prompt starts during a compaction is left out (README).
     if (phase == "idle" and not(compacting)) all { phase' = "prep" } else all { phase' = phase },
-    outbox' = outbox, owing' = owing, prep' = prep, deferred' = deferred, pendingCustom' = pendingCustom, steerQ' = steerQ,
+    outbox' = outbox, owing' = owing, starting' = starting, woke' = woke, prep' = prep, deferred' = deferred, pendingCustom' = pendingCustom, steerQ' = steerQ,
     landed' = landed, unread' = unread, unreplied' = unreplied, stopMark' = stopMark, retryArmed' = retryArmed, fails' = fails,
     ours' = ours, bsContinue' = bsContinue, later' = later, compactCancelled' = compactCancelled, runAborted' = runAborted, compacting' = compacting, compactPending' = compactPending,
     keepMail, keepHost, keepWatch, keepCounts,
@@ -676,7 +686,7 @@ module mail {
       hostPhase' = "closed",
       kept' = kept.concat(taken),
       created' = f._3,
-      outbox' = [], owing' = Set(), pending' = Set(), mine' = Set(), batch' = false, batchTimer' = false,
+      outbox' = [], owing' = Set(), starting' = Set(), woke' = woke, pending' = Set(), mine' = Set(), batch' = false, batchTimer' = false,
       retryArmed' = false, closed' = true,
       phase' = phase, prep' = prep, deferred' = deferred, pendingCustom' = pendingCustom, steerQ' = steerQ,
       landed' = landed, unread' = unread, unreplied' = unreplied, stopMark' = stopMark, fails' = fails,
@@ -692,7 +702,7 @@ module mail {
     val w = { served: true, compacting: compacting, grace: false, running: false, settling: false }
     val ids = kept.foldl(Set(), (s, id) => if (id == REMINDER) s else s.union(Set(id)))
     // resend posts one item at a time, and each post runs sendWaiting (deliver.ts:242-249, :376-379).
-    val b0 = kept.foldl({ ...box0, outbox: [], owing: Set(), fail: throws, stopMark: false },
+    val b0 = kept.foldl({ ...box0, outbox: [], owing: Set(), starting: Set(), fail: throws, stopMark: false },
       (acc, id) => sendWaiting(w, { ...acc, outbox: acc.outbox.append(id), stop: false }))
     all {
       hostPhase == "closed",
@@ -720,8 +730,8 @@ module mail {
       settledHandler(throws),
       compactEnd(false, throws),
       compactEnd(true, throws),
-      compactFail(true, throws),
-      compactFail(false, throws),
+      nondet failAborted = Set(false, true).oneOf()
+      compactFail(failAborted, throws),
       reloadAdopt(throws),
       fallbackOpen(throws),
     },
@@ -789,5 +799,7 @@ module mail {
   // An extension that loads before ours cancelled the compaction (N1).
   val witnessNoCancelFirst = not(compactCancelled)
   val witnessNoHeldWhileParked = hostPhase != "parked" or outbox == []
+  // A reminder landed after a compaction stopped a run that the note started (F1).
+  val witnessNoReminderForStartedMail = not(woke.contains("a") and landed.get(REMINDER) > 0)
   val witnessNoAdoptWithMail = not(hostPhase == "served" and reloads == 1 and gen == 1 and landed.get("a") == 1 and owing != Set())
 }

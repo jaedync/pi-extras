@@ -251,6 +251,41 @@ test("with nothing owed there is no reminder", () => {
 	assert.equal(sent.length, 1);
 });
 
+test("mail that starts main's turn is owed once it lands, so a /compact that stops that turn reminds main of it", () => {
+	const { box, sent } = routed("wake");
+	box.deliver({ kind: "note", from: "scout", text: "found it" });
+	const id = sent[0]!.message.details.id;
+	assert.deepEqual(sent[0]!.options, { triggerTurn: true, deliverAs: "steer" });
+	box.remind();
+	assert.equal(sent.length, 1, "not owed while Pi may still hold it");
+	assert.equal(box.owed({ contextMessages: [], pendingMessages: [] }), false, "a turn Pi never starts can't keep main from settling");
+	// message_end: the note went into main's context as its turn's starting message.
+	box.acknowledge(id);
+	assert.equal(box.idle(), false, "main owes the note a reply");
+	box.remind();
+	assert.equal(sent.length, 2);
+	assert.match(sent[1]!.message.content, /scout/);
+});
+
+test("mail that lands without a turn, or whose wake send failed, is not owed for starting one", () => {
+	const { box, sent } = routed("wake");
+	box.deliver({ kind: "relay", from: "user", to: "scout", text: "fyi", answered: false });
+	box.acknowledge(sent[0]!.message.details.id);
+	assert.equal(box.idle(), true, "a relay asks for no reply");
+	let fail = true;
+	const tried: OutgoingMessage[] = [];
+	const failing = new MainMail({ batchMs: 5, route: () => "wake", retryMs: 1_000_000,
+		port: { send: (message) => { tried.push(message); if (fail) throw new Error("This session's subagents are closed."); } } });
+	failing.deliver({ kind: "note", from: "scout", text: "found it" });
+	const id = tried[0]!.details.id;
+	fail = false;
+	// A message_end for that id, say from a host that resent it, makes this mail owe nothing.
+	failing.acknowledge(id);
+	failing.remind();
+	assert.equal(tried.length, 1, "no reminder for mail whose send failed");
+	failing.dispose();
+});
+
 test("mail main has replied after, as a turn ends, is no longer owed, so a reminder never names it", () => {
 	const { box, sent, set } = routed("queue");
 	box.deliver({ kind: "note", from: "scout", text: "handled" });

@@ -43,147 +43,15 @@
   "checks": [
     {
       "name": "faithful",
-      "why": "The code and Pi as they are. TLC gives the shortest path to a waking item that main never answers.",
+      "why": "The code and Pi as they are, at the full bounds. The full bounds are too large for a pass check (README.md), so TLC only confirms that they reach a fallback hand-over with mail kept in the index. The traces of the conformance test come from this variant.",
       "expect": {
-        "violates": "wokenForMail"
+        "violates": "witnessNoFallback"
       }
     },
     {
-      "name": "f1-wake-mail-no-reminder",
-      "why": "Finding F1 alone: the fixes of F2, F3 and F4 assumed; no reload, no failed send.",
+      "name": "faithful-no-reload",
+      "why": "All properties at the bounds of the old assume-fixes check: no reload, no failed send.",
       "replace": [
-        {
-          "from": "pure val QUIET_KEEPS_MARK = false",
-          "to": "pure val QUIET_KEEPS_MARK = true"
-        },
-        {
-          "from": "pure val STOP_FROM_SETTLED_EVENT = false",
-          "to": "pure val STOP_FROM_SETTLED_EVENT = true"
-        },
-        {
-          "from": "pure val REMIND_FROM_STOP_MARK = false",
-          "to": "pure val REMIND_FROM_STOP_MARK = true"
-        },
-        {
-          "from": "pure val MAX_RELOADS = 1",
-          "to": "pure val MAX_RELOADS = 0"
-        },
-        {
-          "from": "pure val MAX_FAILS = 1",
-          "to": "pure val MAX_FAILS = 0"
-        }
-      ],
-      "expect": {
-        "violates": "wokenForMail"
-      }
-    },
-    {
-      "name": "f2-quiet-append-cancels-reminder",
-      "why": "Finding F2 alone: the fixes of F1, F3 and F4 assumed; no reload, no failed send.",
-      "replace": [
-        {
-          "from": "pure val OWE_WAKE_MAIL = false",
-          "to": "pure val OWE_WAKE_MAIL = true"
-        },
-        {
-          "from": "pure val STOP_FROM_SETTLED_EVENT = false",
-          "to": "pure val STOP_FROM_SETTLED_EVENT = true"
-        },
-        {
-          "from": "pure val REMIND_FROM_STOP_MARK = false",
-          "to": "pure val REMIND_FROM_STOP_MARK = true"
-        },
-        {
-          "from": "pure val MAX_RELOADS = 1",
-          "to": "pure val MAX_RELOADS = 0"
-        },
-        {
-          "from": "pure val MAX_FAILS = 1",
-          "to": "pure val MAX_FAILS = 0"
-        }
-      ],
-      "expect": {
-        "violates": "wokenForMail"
-      }
-    },
-    {
-      "name": "f3-abort-in-settle-check",
-      "why": "Finding F3 alone: the fixes of F1, F2 and F4 assumed; no reload, no failed send.",
-      "replace": [
-        {
-          "from": "pure val OWE_WAKE_MAIL = false",
-          "to": "pure val OWE_WAKE_MAIL = true"
-        },
-        {
-          "from": "pure val QUIET_KEEPS_MARK = false",
-          "to": "pure val QUIET_KEEPS_MARK = true"
-        },
-        {
-          "from": "pure val REMIND_FROM_STOP_MARK = false",
-          "to": "pure val REMIND_FROM_STOP_MARK = true"
-        },
-        {
-          "from": "pure val MAX_RELOADS = 1",
-          "to": "pure val MAX_RELOADS = 0"
-        },
-        {
-          "from": "pure val MAX_FAILS = 1",
-          "to": "pure val MAX_FAILS = 0"
-        }
-      ],
-      "expect": {
-        "violates": "wokenForMail"
-      }
-    },
-    {
-      "name": "f4-failed-compaction",
-      "why": "Finding F4 alone: the fixes of F1, F2 and F3 assumed; no reload, no failed send. The compaction can be cancelled by an extension that loads before ours or after ours.",
-      "replace": [
-        {
-          "from": "pure val OWE_WAKE_MAIL = false",
-          "to": "pure val OWE_WAKE_MAIL = true"
-        },
-        {
-          "from": "pure val QUIET_KEEPS_MARK = false",
-          "to": "pure val QUIET_KEEPS_MARK = true"
-        },
-        {
-          "from": "pure val STOP_FROM_SETTLED_EVENT = false",
-          "to": "pure val STOP_FROM_SETTLED_EVENT = true"
-        },
-        {
-          "from": "pure val MAX_RELOADS = 1",
-          "to": "pure val MAX_RELOADS = 0"
-        },
-        {
-          "from": "pure val MAX_FAILS = 1",
-          "to": "pure val MAX_FAILS = 0"
-        }
-      ],
-      "expect": {
-        "violates": "wokenForMail"
-      }
-    },
-    {
-      "name": "assume-fixes",
-      "why": "All four fixes; no reload and no failed send.",
-      "replace": [
-        {
-          "from": "pure val OWE_WAKE_MAIL = false",
-          "to": "pure val OWE_WAKE_MAIL = true"
-        },
-        {
-          "from": "pure val QUIET_KEEPS_MARK = false",
-          "to": "pure val QUIET_KEEPS_MARK = true"
-        },
-        {
-          "from": "pure val STOP_FROM_SETTLED_EVENT = false",
-          "to": "pure val STOP_FROM_SETTLED_EVENT = true"
-        },
-        {
-          "from": "pure val REMIND_FROM_STOP_MARK = false",
-          "to": "pure val REMIND_FROM_STOP_MARK = true"
-        },
         {
           "from": "pure val MAX_RELOADS = 1",
           "to": "pure val MAX_RELOADS = 0"
@@ -196,25 +64,9 @@
       "expect": "pass"
     },
     {
-      "name": "assume-fixes-fail",
-      "why": "All four fixes, with one failed send; no reload.",
+      "name": "faithful-fail",
+      "why": "All properties with a failed send (the old assume-fixes-fail bounds): no reload.",
       "replace": [
-        {
-          "from": "pure val OWE_WAKE_MAIL = false",
-          "to": "pure val OWE_WAKE_MAIL = true"
-        },
-        {
-          "from": "pure val QUIET_KEEPS_MARK = false",
-          "to": "pure val QUIET_KEEPS_MARK = true"
-        },
-        {
-          "from": "pure val STOP_FROM_SETTLED_EVENT = false",
-          "to": "pure val STOP_FROM_SETTLED_EVENT = true"
-        },
-        {
-          "from": "pure val REMIND_FROM_STOP_MARK = false",
-          "to": "pure val REMIND_FROM_STOP_MARK = true"
-        },
         {
           "from": "pure val MAX_RELOADS = 1",
           "to": "pure val MAX_RELOADS = 0"
@@ -223,25 +75,9 @@
       "expect": "pass"
     },
     {
-      "name": "assume-fixes-reload",
-      "why": "All four fixes, with one /reload (adopt or fall back); no failed send, no /compact.",
+      "name": "faithful-reload",
+      "why": "All properties with a reload (the old assume-fixes-reload bounds): no failed send, no /compact.",
       "replace": [
-        {
-          "from": "pure val OWE_WAKE_MAIL = false",
-          "to": "pure val OWE_WAKE_MAIL = true"
-        },
-        {
-          "from": "pure val QUIET_KEEPS_MARK = false",
-          "to": "pure val QUIET_KEEPS_MARK = true"
-        },
-        {
-          "from": "pure val STOP_FROM_SETTLED_EVENT = false",
-          "to": "pure val STOP_FROM_SETTLED_EVENT = true"
-        },
-        {
-          "from": "pure val REMIND_FROM_STOP_MARK = false",
-          "to": "pure val REMIND_FROM_STOP_MARK = true"
-        },
         {
           "from": "pure val MAX_FAILS = 1",
           "to": "pure val MAX_FAILS = 0"
@@ -254,9 +90,90 @@
       "expect": "pass"
     },
     {
-      "name": "f4-old-fix-handler-order",
-      "base": "assume-fixes",
-      "why": "Round 2, N1: the first F4 fix (REMIND_ON_FAILED_COMPACT) reads compactionStopped, which our session_before_compact handler sets. When an extension that loads before ours cancels, Pi stops the emit at that handler (runner.js:820-824), so the fix sends no reminder. All other fixes as in assume-fixes.",
+      "name": "before-fixes",
+      "why": "The code before the fixes of F1 to F4, at the full bounds. TLC gives the shortest path to a waking item that main never answers (path F1, depth 9).",
+      "replace": [
+        {
+          "from": "pure val OWE_STARTED_MAIL = true",
+          "to": "pure val OWE_STARTED_MAIL = false"
+        },
+        {
+          "from": "pure val CUSTOM_KEEPS_MARK = true",
+          "to": "pure val CUSTOM_KEEPS_MARK = false"
+        },
+        {
+          "from": "pure val STOP_FROM_SETTLED_EVENT = true",
+          "to": "pure val STOP_FROM_SETTLED_EVENT = false"
+        },
+        {
+          "from": "pure val REMIND_FROM_STOP_MARK = true",
+          "to": "pure val REMIND_FROM_STOP_MARK = false"
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "mutant-f1-started-mail-not-owed",
+      "base": "faithful-no-reload",
+      "mirrors": "lib/subagents/deliver.ts acknowledge without moving a `starting` id to `owing` (the code before the F1 fix: only the route queue makes mail owed)",
+      "replace": [
+        {
+          "from": "pure val OWE_STARTED_MAIL = true",
+          "to": "pure val OWE_STARTED_MAIL = false"
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "mutant-f2-custom-message-clears-mark",
+      "base": "faithful-no-reload",
+      "mirrors": "lib/subagents/main-watch.ts lastSaid also counting custom_message entries (the code before the F2 fix)",
+      "replace": [
+        {
+          "from": "pure val CUSTOM_KEEPS_MARK = true",
+          "to": "pure val CUSTOM_KEEPS_MARK = false"
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "mutant-f3-stop-mark-ignores-aborted",
+      "base": "faithful-no-reload",
+      "mirrors": "lib/subagents/main-watch.ts agent_settled without `|| event.aborted` in the stop mark (the code before the F3 fix)",
+      "replace": [
+        {
+          "from": "pure val STOP_FROM_SETTLED_EVENT = true",
+          "to": "pure val STOP_FROM_SETTLED_EVENT = false"
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "mutant-f4-failed-compaction-no-reminder",
+      "base": "faithful-no-reload",
+      "mirrors": "lib/subagents/main-watch.ts session_compact_failed with `compacted(manual && !event.aborted)` (the code before the F4 fix)",
+      "replace": [
+        {
+          "from": "pure val REMIND_FROM_STOP_MARK = true",
+          "to": "pure val REMIND_FROM_STOP_MARK = false"
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "mutant-f4-old-fix-handler-order",
+      "base": "faithful-no-reload",
+      "mirrors": "lib/subagents/main-watch.ts session_compact_failed reminding on compactionStopped alone, whatever `aborted` says (the F4 fix that the round-2 review rejected, N1)",
       "replace": [
         {
           "from": "pure val REMIND_FROM_STOP_MARK = true",
@@ -273,7 +190,7 @@
     },
     {
       "name": "mutant-failed-send-dropped",
-      "base": "assume-fixes-fail",
+      "base": "faithful-fail",
       "mirrors": "lib/subagents/deliver.ts:265-268 without `this.outbox.unshift({ message, wakes })` (the bug 642ba00 fixed)",
       "replace": [
         {
@@ -287,7 +204,7 @@
     },
     {
       "name": "mutant-steer-while-working",
-      "base": "assume-fixes",
+      "base": "faithful-no-reload",
       "mirrors": "lib/subagents/deliver.ts:393 with the route `queue` also sent as triggerTurn and steer (the code before e80d68e)",
       "replace": [
         {
@@ -301,7 +218,7 @@
     },
     {
       "name": "mutant-no-owing",
-      "base": "assume-fixes",
+      "base": "faithful-no-reload",
       "mirrors": "lib/subagents/deliver.ts:394 without `this.owing.set(...)`",
       "replace": [
         {
@@ -309,7 +226,7 @@
           "to": "val owes = false"
         },
         {
-          "from": "if (OWE_WAKE_MAIL) { ...b1, owing: b1.owing.union(Set(id)) } else b1",
+          "from": "if (OWE_STARTED_MAIL) { ...b1, starting: b1.starting.union(Set(id)) } else b1",
           "to": "b1"
         }
       ],
@@ -319,7 +236,7 @@
     },
     {
       "name": "mutant-route-ignores-settling",
-      "base": "assume-fixes",
+      "base": "faithful-no-reload",
       "mirrors": "lib/subagents/main-watch.ts:149 `running` instead of `running && !settling`",
       "replace": [
         {
@@ -333,7 +250,7 @@
     },
     {
       "name": "mutant-not-remembered",
-      "base": "assume-fixes",
+      "base": "faithful-no-reload",
       "mirrors": "lib/subagents/deliver.ts:165 without `this.remember(...)`",
       "replace": [
         {
@@ -347,7 +264,7 @@
     },
     {
       "name": "mutant-reconcile-ignores-transcript",
-      "base": "assume-fixes",
+      "base": "faithful-no-reload",
       "mirrors": "lib/subagents/deliver.ts:329-334 acknowledging every pending id, not only those found in the branch",
       "replace": [
         {
@@ -361,7 +278,7 @@
     },
     {
       "name": "mutant-close-without-drain",
-      "base": "assume-fixes-reload",
+      "base": "faithful-reload",
       "mirrors": "lib/subagents/host-state.ts:275 `this.mail.dispose()` instead of keeping `this.mail.drain()` in the index (the code before bcad086)",
       "replace": [
         {
@@ -375,7 +292,7 @@
     },
     {
       "name": "mutant-kept-mail-not-forgotten",
-      "base": "assume-fixes-reload",
+      "base": "faithful-reload",
       "mirrors": "lib/subagents/host-state.ts:327 reading the kept mail without `index.takeMail()` forgetting it, so it is posted again",
       "replace": [
         {
@@ -389,7 +306,7 @@
     },
     {
       "name": "mutant-drain-skips-batch",
-      "base": "assume-fixes-reload",
+      "base": "faithful-reload",
       "mirrors": "lib/subagents/deliver.ts:237 takeOutbox without `this.flush()`: a batched report is dropped on close",
       "replace": [
         {
@@ -403,7 +320,7 @@
     },
     {
       "name": "mutant-send-keeps-outbox",
-      "base": "assume-fixes",
+      "base": "faithful-no-reload",
       "mirrors": "lib/subagents/deliver.ts:264 reading `this.outbox[0]` instead of `this.outbox.shift()`: the sent item stays and goes again",
       "replace": [
         {
@@ -417,7 +334,7 @@
     },
     {
       "name": "survivor-idle-ignores-outbox",
-      "base": "assume-fixes",
+      "base": "faithful-no-reload",
       "mirrors": "lib/subagents/deliver.ts:204 idle() without `this.outbox.length === 0`",
       "replace": [
         {
@@ -430,7 +347,7 @@
     },
     {
       "name": "mutant-idle-ignores-pending",
-      "base": "assume-fixes",
+      "base": "faithful-no-reload",
       "mirrors": "lib/subagents/deliver.ts:204 idle() without `this.pendingItems.size === 0`",
       "replace": [
         {
@@ -444,7 +361,7 @@
     },
     {
       "name": "survivor-stop-mark-ignores-checked",
-      "base": "assume-fixes",
+      "base": "faithful-no-reload",
       "mirrors": "lib/subagents/main-watch.ts:124 the stop mark without `|| !checked`",
       "why": "`!checked` marks a run that ended between turns (a retry wait, a compaction between turns). The model has no error or retry turns, so no behavior needs the guard.",
       "replace": [
@@ -472,7 +389,7 @@
       "witnessNoHeldWhileParked",
       "witnessNoAbortInSettleCheck",
       "witnessNoCancelFirst",
-      "wokenForMail"
+      "witnessNoReminderForStartedMail"
     ]
   }
 }

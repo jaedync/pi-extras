@@ -70,7 +70,9 @@ interface Options {
 	compaction?: object;
 	filler?: string;
 	/** More of another extension's handlers, registered after the mail's own. */
-	more?: (pi: any, note: () => void) => void;
+	more?: (pi: any, note: () => void, mail: () => InstanceType<typeof MainMail> | undefined) => void;
+	/** Another extension, loaded before the mail's. */
+	first?: (pi: any) => void;
 }
 
 async function setup(state: Requests, options: Options = {}) {
@@ -79,7 +81,9 @@ async function setup(state: Requests, options: Options = {}) {
 	// The extension's wiring, without the team: main's mail and where main is.
 	const extension = (pi: any) => {
 		const watch = watchMain(pi, () => box.mail);
-		options.more?.(pi, note);
+		// extensions/subagents.ts: Pi appended the mail as it went into main's context.
+		pi.on("message_end", (event: { message?: { role?: string; details?: { id?: unknown } } }) => { const id = event.message?.details?.id; if (event.message?.role === "custom" && typeof id === "string") box.mail?.acknowledge(id); });
+		options.more?.(pi, note, () => box.mail);
 		pi.on("session_start", async (_event: unknown, ctx: any) => {
 			box.mail?.dispose();
 			box.mail = new MainMail({ batchMs: 0, retryMs: 20, port: { send: (message, sendOptions) => pi.sendMessage(message, sendOptions) }, route: () => watch.route(ctx) });
@@ -91,7 +95,7 @@ async function setup(state: Requests, options: Options = {}) {
 	faux.setResponses(steps(state, options.filler));
 	const settingsManager = sdk.SettingsManager.inMemory({ compaction: options.compaction ?? { enabled: false, keepRecentTokens: 1 }, cacheWarming: "off" });
 	const loader = new sdk.DefaultResourceLoader({ cwd: scratch, agentDir, settingsManager, noExtensions: true, noSkills: true,
-		noPromptTemplates: true, noThemes: true, noContextFiles: true, extensionFactories: [extension] });
+		noPromptTemplates: true, noThemes: true, noContextFiles: true, extensionFactories: options.first ? [options.first, extension] : [extension] });
 	await loader.reload();
 	const { session } = await sdk.createAgentSession({ cwd: scratch, agentDir, modelRuntime: runtime, model: runtime.getModel("faux", "m"),
 		settingsManager, resourceLoader: loader, sessionManager: sdk.SessionManager.inMemory(scratch) });
@@ -309,6 +313,129 @@ test("a /compact that stops main inside a tool call wakes main afterwards too", 
 		await Promise.all([run, compacting]);
 		await until(() => state.seen.some((request) => request.endsWith("(reminded)")), "main woken after the compaction");
 		await session.waitForIdle();
+	} finally {
+		close();
+	}
+});
+
+// Findings F1 to F4 of formal/subagents-mail/README.md: each path below once left main with mail it never replied to.
+
+/** Holds main's next turn open until `open` runs: the tests below open it once /compact has started. */
+function holdNextTurn(state: Requests): () => void {
+	let open!: () => void;
+	state.holdTurn = new Promise<void>((resolve) => { open = resolve; });
+	return open;
+}
+
+/** Runs /compact while main's turn works on the note, then opens `gates`, lets the summary go, and waits for main to settle. */
+async function compactWhileWorking(session: any, state: Requests, run: Promise<unknown>, ...gates: Array<() => void>): Promise<string> {
+	let compactError = "";
+	const compacting = session.compact().catch((error: unknown) => { compactError = (error as Error).message; });
+	for (const open of gates) open();
+	await until(() => state.seen.some((request) => request.startsWith("summary")) || compactError !== "", "the summary request or the compaction's failure");
+	state.release();
+	await Promise.all([run, compacting]);
+	await until(() => state.seen.some((request) => request.endsWith("(reminded)")), `main woken after the compaction (${compactError || "compacted"}; ${state.seen})`);
+	await session.waitForIdle();
+	return compactError;
+}
+
+/** Two quick turns, then a user turn that is still working when the note lands; `open` ends that turn. */
+async function noteDuringUserTurn(session: any, state: Requests, note: () => void): Promise<{ run: Promise<unknown>; open: () => void }> {
+	for (const text of ["one", "two"]) await session.prompt(text);
+	state.seen.length = 0;
+	const open = holdNextTurn(state);
+	const run = session.prompt("three");
+	await until(() => state.seen.length === 1, "main's turn");
+	note();
+	// Wrapped: an async function that returned the run itself would wait for it.
+	return { run, open };
+}
+
+test("F1: a /compact that stops the turn a note started wakes main afterwards for that note", { timeout: 20_000 }, async () => {
+	const state = requests();
+	const { session, note, close } = await setup(state);
+	try {
+		for (const text of ["one", "two"]) await session.prompt(text);
+		state.seen.length = 0;
+		const open = holdNextTurn(state);
+		// Main is idle, so the note starts the turn itself.
+		note();
+		await until(() => state.seen.length === 1, "the turn the note started");
+		await compactWhileWorking(session, state, session.waitForIdle(), open);
+		assert.match(transcript(session), /note > assistant > COMPACTION > note > assistant$/, "the stopped reply, the compaction, the reminder, then main's reply");
+	} finally {
+		close();
+	}
+});
+
+test("F2: a relay appended as the stopped run settles does not cancel the reminder", { timeout: 20_000 }, async () => {
+	const state = requests();
+	let relay = false;
+	const { session, note, close } = await setup(state, {
+		// Another agent_settled handler, after main-watch's: a child relays what the user told it, which does not wake main.
+		more: (pi, _note, mail) => pi.on("agent_settled", async () => {
+			if (!relay) return;
+			relay = false;
+			mail()!.deliver({ kind: "relay", from: "user", to: "scan-1", text: "RELAY", answered: false });
+		}),
+	});
+	try {
+		const { run, open } = await noteDuringUserTurn(session, state, note);
+		relay = true;
+		await compactWhileWorking(session, state, run, open);
+		assert.match(transcript(session), /note > note > COMPACTION > note > assistant$/, "the note, the relay, the compaction, the reminder, then main's reply");
+	} finally {
+		close();
+	}
+});
+
+test("F3: a /compact during the settle check, after main-watch asked for a turn, wakes main afterwards", { timeout: 20_000 }, async () => {
+	const state = requests();
+	let slow = false;
+	let inCheck!: () => void;
+	const checking = new Promise<void>((resolve) => { inCheck = resolve; });
+	let ioDone!: () => void;
+	const io = new Promise<void>((resolve) => { ioDone = resolve; });
+	const { session, note, close } = await setup(state, {
+		// Another extension's settle check, after main-watch's, whose I/O ends once the user has run /compact.
+		more: (pi) => pi.on("agent_before_settle", async () => { if (slow) { slow = false; inCheck(); await io; } }),
+	});
+	try {
+		const { run, open } = await noteDuringUserTurn(session, state, note);
+		slow = true;
+		// The turn ends with the note held for its boundary, so the settle check starts with the note owed.
+		open();
+		await checking;
+		await compactWhileWorking(session, state, run, ioDone);
+		assert.match(transcript(session), /note > COMPACTION > note > assistant$/);
+	} finally {
+		close();
+	}
+});
+
+for (const order of ["after", "before"] as const) {
+	test(`F4: a /compact that an extension loaded ${order} the mail's cancels still wakes main for the stopped turn`, { timeout: 20_000 }, async () => {
+		const state = requests();
+		const cancel = (pi: any) => pi.on("session_before_compact", async () => ({ cancel: true }));
+		const { session, note, close } = await setup(state, order === "before" ? { first: cancel } : { more: cancel });
+		try {
+			const { run, open } = await noteDuringUserTurn(session, state, note);
+			assert.equal(await compactWhileWorking(session, state, run, open), "Compaction cancelled");
+			assert.match(transcript(session), /assistant > note > note > assistant$/, "the stopped reply, the note, the reminder, then main's reply");
+		} finally {
+			close();
+		}
+	});
+}
+
+test("F4: a /compact of a session too small to compact still wakes main for the turn it stopped", { timeout: 20_000 }, async () => {
+	const state = requests();
+	const { session, note, close } = await setup(state, { compaction: { enabled: false, keepRecentTokens: 20_000 } });
+	try {
+		const { run, open } = await noteDuringUserTurn(session, state, note);
+		assert.match(await compactWhileWorking(session, state, run, open), /Nothing to compact/);
+		assert.match(transcript(session), /assistant > note > note > assistant$/);
 	} finally {
 		close();
 	}

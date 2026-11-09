@@ -75,8 +75,16 @@ test("a compaction Pi runs before a prompt gives the prompt its grace again", as
 });
 
 test("a reminder follows only a /compact that stopped main's run, however long other handlers take", async () => {
-	type Case = { reason?: string; outcome?: "done" | "failed" | "cancelled"; said?: boolean; checked?: boolean };
-	const stopping = async (end: object, compactAt: number, { reason = "manual", outcome = "done", said = false, checked = end === finished }: Case = {}) => {
+	type Case = {
+		reason?: string; outcome?: "done" | "failed" | "cancelled"; said?: boolean; checked?: boolean;
+		/** A custom message (a relay, a quiet report) appended after the run settled. */
+		relayed?: boolean;
+		/** What agent_settled says: an abort in the settle check sends no new agent_end. */
+		settledAborted?: boolean;
+		/** Whether our session_before_compact handler runs: an earlier extension's cancel, or a session too small, skips it. */
+		hook?: boolean;
+	};
+	const stopping = async (end: object, compactAt: number, { reason = "manual", outcome = "done", said = false, checked = end === finished, relayed = false, settledAborted = false, hook = true }: Case = {}) => {
 		const h = harness();
 		let branch: object[] = [{ type: "message", id: "u1" }, { type: "message", id: "a1" }, { type: "custom_message", id: "n1" }];
 		const ctx = { sessionManager: { getBranch: () => branch } };
@@ -85,19 +93,25 @@ test("a reminder follows only a /compact that stopped main's run, however long o
 		// Pi reaches the settle check only for a run nobody stopped.
 		if (checked) await h.emit("agent_before_settle", { context: {} });
 		h.at(100);
-		await h.emit("agent_settled", {}, ctx);
+		await h.emit("agent_settled", { aborted: settledAborted }, ctx);
 		// Entries that aren't conversation (another extension's state) don't count as something said.
-		branch = [...branch, { type: "custom", id: "state" }, ...(said ? [{ type: "message", id: "u2" }] : [])];
+		branch = [...branch, { type: "custom", id: "state" }, ...(relayed ? [{ type: "custom_message", id: "relay" }] : []), ...(said ? [{ type: "message", id: "u2" }] : [])];
 		h.at(compactAt);
-		await h.emit("session_before_compact", { reason }, ctx);
+		if (hook) await h.emit("session_before_compact", { reason }, ctx);
 		if (outcome === "done") await h.emit("session_compact", { reason });
-		else await h.emit("session_compact_failed", { reason, aborted: outcome === "cancelled" });
+		else await h.emit("session_compact_failed", { reason, aborted: outcome === "cancelled" }, ctx);
 		return h.calls.includes("remind");
 	};
 	assert.equal(await stopping(aborted, 110), true, "/compact mid-run");
 	assert.equal(await stopping(aborted, 30_000), true, "another extension's handler took a while before ours ran");
 	assert.equal(await stopping(aborted, 110, { outcome: "failed" }), true, "the compaction failed, main is still stopped");
-	assert.equal(await stopping(aborted, 110, { outcome: "cancelled" }), false, "the user cancelled it too");
+	// Pi says aborted for Esc during the summary and for an extension's cancel alike; either way main's run is stopped.
+	assert.equal(await stopping(aborted, 110, { outcome: "cancelled" }), true, "the compaction was cancelled, main is still stopped");
+	assert.equal(await stopping(aborted, 110, { outcome: "cancelled", hook: false }), true, "an extension that loads first cancelled it, so our handler never ran");
+	assert.equal(await stopping(aborted, 110, { outcome: "failed", hook: false }), true, "the session was too small, which Pi finds before the handlers");
+	assert.equal(await stopping(aborted, 120_000, { outcome: "cancelled", hook: false }), false, "Esc, then a cancelled /compact much later");
+	assert.equal(await stopping(aborted, 110, { relayed: true }), true, "a relay appended as the run settled says nothing about who stopped it");
+	assert.equal(await stopping(finished, 110, { settledAborted: true }), true, "stopped in the settle check, which sends no new agent_end");
 	assert.equal(await stopping(aborted, 120_000), false, "Esc, then a /compact much later");
 	assert.equal(await stopping(aborted, 110, { said: true }), false, "Esc, then a new prompt, then a /compact");
 	assert.equal(await stopping(finished, 110), false, "the run had ended on its own");

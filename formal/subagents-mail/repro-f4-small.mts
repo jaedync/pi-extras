@@ -44,6 +44,8 @@ const failedEvents: unknown[] = [];
 const box: { mail?: any } = {};
 const mailExt = (pi: any) => {
 	const watch = watchMain(pi, () => box.mail);
+	// extensions/subagents.ts: Pi appended the mail as it went into main's context.
+	pi.on("message_end", (event: { message?: { role?: string; details?: { id?: unknown } } }) => { const id = event.message?.details?.id; if (event.message?.role === "custom" && typeof id === "string") box.mail?.acknowledge(id); });
 	pi.on("session_compact_failed", async (e: any) => { failedEvents.push({ aborted: e.aborted, errorMessage: e.errorMessage }); });
 	pi.on("session_start", async (_event: unknown, ctx: any) => {
 		box.mail?.dispose();

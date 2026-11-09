@@ -87,6 +87,8 @@ async function setup(state: Requests, options: Options = {}) {
 	// The extension's wiring, without the team: main's mail and where main is.
 	const extension = (pi: any) => {
 		const watch = watchMain(pi, () => box.mail);
+		// extensions/subagents.ts: Pi appended the mail as it went into main's context.
+		pi.on("message_end", (event: { message?: { role?: string; details?: { id?: unknown } } }) => { const id = event.message?.details?.id; if (event.message?.role === "custom" && typeof id === "string") box.mail?.acknowledge(id); });
 		options.more?.(pi, note);
 		pi.on("session_start", async (_event: unknown, ctx: any) => {
 			box.mail?.dispose();

@@ -52,6 +52,8 @@ const boundary = new Promise<void>((resolve) => { inBoundary = resolve; });
 const box: { mail?: InstanceType<typeof MainMail> } = {};
 const extension = (pi: any) => {
 	const watch = watchMain(pi, () => box.mail);
+	// extensions/subagents.ts: Pi appended the mail as it went into main's context.
+	pi.on("message_end", (event: { message?: { role?: string; details?: { id?: unknown } } }) => { const id = event.message?.details?.id; if (event.message?.role === "custom" && typeof id === "string") box.mail?.acknowledge(id); });
 	// The Pi rule of F3: which agent_end events (and their last stopReason) the run sends, and what agent_settled says.
 	pi.on("agent_end", async (event: any) => { piEvents.push(`agent_end ${event.messages.at(-1)?.stopReason}`); });
 	pi.on("agent_settled", async (event: any) => { piEvents.push(`agent_settled aborted=${event.aborted}`); });

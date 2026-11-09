@@ -5,7 +5,7 @@
  * (lib/subagents/deliver.ts), the real watchMain (lib/subagents/main-watch.ts)
  * and the real PortBinding (lib/subagents/host.ts). After each step the code's
  * state must equal the model's: the outbox, the pending items, what main owes,
- * the batch and its timer, the retry timer, the route, idle(), and where Pi
+ * the mail sent to start a turn, the batch and its timer, the retry timer, the route, idle(), and where Pi
  * holds each message (the starting message of a run, the deferred actions,
  * the held custom messages, the steering queue, the transcript).
  *
@@ -15,8 +15,9 @@
  * (host-state.ts:269-275, :317-323) and postKeptMail's resend
  * (host-state.ts:326-332). Pi is a fake that follows the model's Pi rules
  * (sendCustomMessage, as:1844-1883; the deferred actions, as:683-701). The
- * replay does not check those rules against Pi: repro-f1.mts does that in a
- * real AgentSession. See formal/subagents-mail/README.md.
+ * replay does not check those rules against Pi: the repros and
+ * tests/subagents-main-mail-sdk.test.mts do that in a real AgentSession.
+ * See formal/subagents-mail/README.md.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -86,7 +87,7 @@ function makeWorld() {
 	const append = (message: OutgoingMessage) => {
 		pi.entries.push({ type: "custom_message", id: `e${++entryId}`, customType: message.customType, content: message.content, display: message.display, details: message.details });
 	};
-	const reply = () => { pi.entries.push({ type: "message", id: `e${++entryId}`, message: { role: "assistant", stopReason: "stop" } }); };
+	const reply = (stopReason = "stop") => { pi.entries.push({ type: "message", id: `e${++entryId}`, message: { role: "assistant", stopReason } }); };
 	// sendCustomMessage (as:1844-1883).
 	const sendMessage = (message: OutgoingMessage, options: { triggerTurn: boolean; deliverAs?: string }) => {
 		if (failNext) { failNext = false; throw new Error("stale pi"); }
@@ -154,7 +155,11 @@ function makeWorld() {
 				const context = { contextMessages: contextMessages(), pendingMessages: pi.pendingCustom.map((m) => ({ role: "custom", ...m })) };
 				await emit("agent_before_settle", { context });
 			}
-		} else await emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] });
+		} else {
+			// Pi saves the stopped reply before agent_end; main-watch's stop mark is that entry.
+			reply("aborted");
+			await emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] });
+		}
 		land(pi.pendingCustom.splice(0));
 		pi.phase = "settle";
 		pi.bsContinue = false;
@@ -232,13 +237,13 @@ function makeWorld() {
 		},
 		async compactMidRun() { await abortRun(); },
 		compactIdle() {},
-		async compactFail(s, before) {
-			// session_compact_failed (as:2331-2350): no reminder came, so the model took `aborted` (or nothing was owed).
-			const reminded = s.created.includes("rem") && !before.created.includes("rem");
+		async compactFail(s) {
+			// session_compact_failed (as:2331-2350), cancelled or aborted, or failed.
+			const aborted = picked(s, "failAborted") === true;
 			failNext = picked(s, "throws") === true;
 			// Pi clears the compaction state (as:2335) before it emits the event (as:2344), so the reminder can wake main at once.
 			pi.compacting = false;
-			await emit("session_compact_failed", { reason: "manual", aborted: !reminded });
+			await emit("session_compact_failed", { reason: "manual", aborted });
 		},
 		async compactStart() { pi.compacting = true; await emit("session_before_compact", { reason: "manual" }); },
 		// An extension that loads before ours cancels: Pi stops the emit there (runner.js:820-824), so our handler does not run.
@@ -286,6 +291,7 @@ function makeWorld() {
 		outbox: box().outbox.map((item: HeldMail) => modelId(item.message.details)),
 		pending: sorted(mail.pending().map((item) => item.id.startsWith("pending-report-") ? "pr" : modelId(item))),
 		owing: sorted([...box().owing.keys()].map((id: string) => idKinds.get(id)!)),
+		starting: sorted([...box().starting.keys()].map((id: string) => idKinds.get(id)!)),
 		batch: box().batch.length > 0,
 		batchTimer: box().timer !== null,
 		retryArmed: box().retryTimer !== null,
@@ -322,7 +328,7 @@ function modelState(s: Record<string, any>) {
 		: !ROUTE_ACTIVE.has(s.phase) && !s.compacting ? (s.grace ? "hold" : "wake")
 			: s.running && !s.settling ? "queue" : "hold";
 	return {
-		outbox: s.outbox, pending: sorted(s.pending), owing: sorted(s.owing), batch: s.batch, batchTimer: s.batchTimer,
+		outbox: s.outbox, pending: sorted(s.pending), owing: sorted(s.owing), starting: sorted(s.starting), batch: s.batch, batchTimer: s.batchTimer,
 		retryArmed: s.retryArmed, closed: s.closed, phase: s.phase, prep: s.prep, deferred: s.deferred, later: s.later,
 		pendingCustom: s.pendingCustom, steerQ: s.steerQ, landed: s.landed, compacting: s.compacting, kept: s.kept,
 		route, idle: s.pending.length === 0 && !s.batch && s.outbox.length === 0 && s.owing.length === 0,
@@ -363,15 +369,15 @@ test("subagent mail follows every step of the model traces", async () => {
 	assert.ok(steps > 2000, `expected over 2000 replayed steps, replayed ${steps}`);
 });
 
-// Finding F1 in formal/subagents-mail/README.md: the model's path to waking
-// mail that main never answers. This test shows that the code takes each step
-// of it; it is not a wish. When the code is fixed, the model and this test change.
-test("finding F1: the code follows the model's path to waking mail main never answers", async () => {
+// Finding F1 in formal/subagents-mail/README.md, fixed: a note that started
+// main's turn is owed once it lands, so the /compact that stops the turn
+// gets a reminder. The code follows the model to that reminder.
+test("finding F1: the code follows the model to a reminder for a note that started the stopped turn", async () => {
 	const traces = loadTraces();
-	const index = traces.findIndex((t: any) => t["#meta"]?.witness === "wokenForMail");
-	assert.ok(index >= 0, "the traces hold no wokenForMail witness; run fv.mjs traces");
+	const index = traces.findIndex((t: any) => t["#meta"]?.witness === "witnessNoReminderForStartedMail");
+	assert.ok(index >= 0, "the traces hold no witnessNoReminderForStartedMail witness; run fv.mjs traces");
 	const { final, last } = await replay(traces[index], index);
-	assert.equal(final.phase, "idle");
-	assert.ok(last.unreplied.some((id: string) => id !== "b" && !last.excused.includes(id)), "the witness ends with waking mail that main did not answer");
+	assert.ok(last.woke.includes("a"), "the note started a run in the witness");
+	assert.equal(final.landed.rem, 1, "the reminder is in main's transcript");
 	void MESSAGE_TYPE;
 });

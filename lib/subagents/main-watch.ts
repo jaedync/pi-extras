@@ -41,13 +41,15 @@ export interface MainWatch {
 	route(ctx: { isIdle(): boolean }): Route;
 }
 
-/** The id of the last message in the conversation, ignoring entries that only hold an extension's state. */
+/**
+ * The id of the last message the user, main or a tool said. Custom messages
+ * don't count: extensions append them without a turn (our relays and quiet
+ * reports among them), so one landing between a stopped turn and the
+ * /compact that stopped it says nothing about who stopped it.
+ */
 function lastSaid(ctx: { sessionManager?: { getBranch(): readonly unknown[] } }): string | undefined {
 	try {
-		const entry = ctx.sessionManager?.getBranch().findLast((e) => {
-			const type = (e as { type?: string }).type;
-			return type === "message" || type === "custom_message";
-		}) as { id?: string } | undefined;
+		const entry = ctx.sessionManager?.getBranch().findLast((e) => (e as { type?: string }).type === "message") as { id?: string } | undefined;
 		return entry?.id;
 	} catch {
 		// A stale context after a session switch; with no mark there is no reminder.
@@ -76,8 +78,9 @@ export function watchMain(pi: Pick<ExtensionAPI, "on">, mail: () => HostMail | n
 	const retry = () => mail()?.retry();
 	// Pi still says it is compacting while these events run; look again once it has let go.
 	const retrySoon = () => { setTimeout(retry, 0); };
-	const compacted = (remind: boolean) => {
-		if (remind && compactionStopped) mail()?.remind();
+	/** A compaction ended; `stopped`: it stopped a run of main, and the mail main owes gets a reminder. */
+	const compacted = (stopped: boolean) => {
+		if (stopped) mail()?.remind();
 		compactionStopped = false;
 		// A prompt Pi compacted for before starting it is still in its preflight.
 		if (now() - inputAt < PENDING_INPUT_MS) inputAt = now();
@@ -116,12 +119,13 @@ export function watchMain(pi: Pick<ExtensionAPI, "on">, mail: () => HostMail | n
 		const last = event.messages.at(-1) as { stopReason?: string } | undefined;
 		stoppedRun = last?.stopReason === "aborted";
 	});
-	pi.on("agent_settled", async (_event, ctx) => {
+	pi.on("agent_settled", async (event, ctx) => {
 		running = false;
 		settling = false;
 		settledAt = now();
-		// Stopped mid-reply, or between turns (waiting to retry, compacting) where the last reply looks finished.
-		stopMark = stoppedRun || !checked ? lastSaid(ctx) : undefined;
+		// Stopped mid-reply, or between turns (waiting to retry, compacting) where the last reply looks finished,
+		// or in the settle check, where Pi sends no new agent_end.
+		stopMark = stoppedRun || !checked || event.aborted ? lastSaid(ctx) : undefined;
 		// Input given while main ran was steered into that run, which has ended.
 		inputAt = Number.NEGATIVE_INFINITY;
 		retry();
@@ -133,13 +137,19 @@ export function watchMain(pi: Pick<ExtensionAPI, "on">, mail: () => HostMail | n
 			// A stale context after a session switch; that session's mail is gone with it.
 		}
 	});
+	/** Whether a compaction starting now follows a stopped run with nothing said since, so it stopped that run. */
+	const stoppedByCompaction = (ctx: { sessionManager?: { getBranch(): readonly unknown[] } }) =>
+		stopMark !== undefined && now() - settledAt < STOP_WINDOW_MS && lastSaid(ctx) === stopMark;
 	// Pi doesn't continue a turn a /compact stopped, so mail main hadn't replied to would sit there.
 	pi.on("session_before_compact", async (event, ctx) => {
-		compactionStopped = event.reason === "manual" && stopMark !== undefined && now() - settledAt < STOP_WINDOW_MS && lastSaid(ctx) === stopMark;
+		compactionStopped = event.reason === "manual" && stoppedByCompaction(ctx);
 		return undefined;
 	});
-	pi.on("session_compact", async (event) => compacted(event.reason === "manual"));
-	pi.on("session_compact_failed", async (event) => compacted(event.reason === "manual" && !event.aborted));
+	pi.on("session_compact", async (event) => compacted(event.reason === "manual" && compactionStopped));
+	// A compaction that failed or was cancelled stopped the run all the same. Our session_before_compact
+	// handler may not have run: Pi ends that emit at the first handler that cancels, and some failures
+	// (a session too small to compact) come before it. So the stop mark decides, whatever `aborted` says.
+	pi.on("session_compact_failed", async (event, ctx) => compacted(event.reason === "manual" && (compactionStopped || stoppedByCompaction(ctx))));
 	pi.on("session_tree", async () => retrySoon());
 	return {
 		route(ctx) {

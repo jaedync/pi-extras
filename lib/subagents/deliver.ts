@@ -25,7 +25,8 @@
  * Pi's steering queue, which Esc clears to put the user's own queued text
  * back in the editor: while main works, a message lands at its next turn
  * boundary instead, and main is kept from settling until it has replied
- * after it (`owed`). While main is idle but compacting, mail waits, since a
+ * after it (`owed`). Mail that starts a turn of its own is owed the same way
+ * once it lands. While main is idle but compacting, mail waits, since a
  * turn started then would run on the context being summarized. A /compact
  * stops main's turn first, so mail that landed in it gets a reminder that
  * wakes main once the compaction is done (`remind`).
@@ -97,6 +98,13 @@ export class MainMail implements HostMail {
 	private retryTimer: ReturnType<typeof setTimeout> | null = null;
 	/** Mail that landed while main worked and that main has not replied after yet: id to who sent it. */
 	private readonly owing = new Map<string, string>();
+	/**
+	 * Mail sent to start a turn of its own, not yet seen landing: id to who sent
+	 * it. It is owed once its turn starts with it (`acknowledge`); until then Pi
+	 * may still hold it, and a turn Pi fails to start never shows it, so owing
+	 * it sooner could keep main from settling for good.
+	 */
+	private readonly starting = new Map<string, string>();
 	private readonly route: () => Route;
 	private readonly retryMs: number;
 	private readonly port: MainPort;
@@ -329,13 +337,27 @@ export class MainMail implements HostMail {
 		for (const entry of entries.slice(-RECONCILE_WINDOW)) {
 			const e = entry as { type?: string; customType?: string; details?: { id?: unknown } };
 			if (e.type === "custom_message" && (e.customType === MESSAGE_TYPE || e.customType === REPORT_TYPE) && typeof e.details?.id === "string") {
-				this.acknowledge(e.details.id);
+				this.landed(e.details.id);
 			}
 		}
 	}
 
-	/** Pi appended the message with this id to the transcript. */
+	/**
+	 * Pi appended the message with this id as it went into main's context
+	 * (message_end). Mail that started the turn is now owed a reply, so a
+	 * /compact that stops this turn reminds main of it.
+	 */
 	acknowledge(id: string): void {
+		const from = this.starting.get(id);
+		if (from !== undefined) {
+			this.starting.delete(id);
+			this.owing.set(id, from);
+		}
+		this.landed(id);
+	}
+
+	/** The transcript holds the message with this id. */
+	private landed(id: string): void {
 		if (this.pendingItems.delete(id)) this.onChange();
 	}
 
@@ -349,6 +371,7 @@ export class MainMail implements HostMail {
 		this.retryTimer = null;
 		this.outbox = [];
 		this.owing.clear();
+		this.starting.clear();
 		for (const held of this.held.values()) clearTimeout(held.timer);
 		this.held.clear();
 		if (this.timer) clearTimeout(this.timer);
@@ -391,12 +414,13 @@ export class MainMail implements HostMail {
 	private dispatch(message: OutgoingMessage, wakes: boolean, route: "wake" | "queue"): boolean {
 		// Steered mail would sit in the queue Esc clears; mail sent without a turn lands at Pi's next turn boundary.
 		const options = route === "wake" && wakes ? { triggerTurn: true, deliverAs: "steer" as const } : { triggerTurn: false };
-		if (route === "queue" && wakes) this.owing.set(message.details.id, ownerOf(message.details));
+		if (wakes) (route === "queue" ? this.owing : this.starting).set(message.details.id, ownerOf(message.details));
 		try {
 			this.port.send(this.withStatus(message), options);
 		} catch {
 			// A stale context after session replacement; main saw nothing, so it owes nothing either.
 			this.owing.delete(message.details.id);
+			this.starting.delete(message.details.id);
 			return false;
 		}
 		return true;

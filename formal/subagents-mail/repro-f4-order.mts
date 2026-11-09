@@ -50,6 +50,8 @@ const mailExt = (pi: any) => {
 			: name === "session_before_compact" ? (e: any, c: any) => { watchRan.push(name); return h(e, c); } : h),
 	};
 	const watch = watchMain(fixed as any, () => box.mail);
+	// extensions/subagents.ts: Pi appended the mail as it went into main's context.
+	pi.on("message_end", (event: { message?: { role?: string; details?: { id?: unknown } } }) => { const id = event.message?.details?.id; if (event.message?.role === "custom" && typeof id === "string") box.mail?.acknowledge(id); });
 	pi.on("session_start", async (_event: unknown, ctx: any) => {
 		box.mail?.dispose();
 		box.mail = new MainMail({ batchMs: 0, retryMs: 20, port: { send: (message, options) => pi.sendMessage(message, options) }, route: () => watch.route(ctx) });

@@ -87,6 +87,8 @@ async function setup(state: Requests, options: Options = {}) {
 	// The extension's wiring, without the team: main's mail and where main is.
 	const extension = (pi: any) => {
 		const watch = watchMain(pi, () => box.mail);
+		// extensions/subagents.ts: Pi appended the mail as it went into main's context.
+		pi.on("message_end", (event: { message?: { role?: string; details?: { id?: unknown } } }) => { const id = event.message?.details?.id; if (event.message?.role === "custom" && typeof id === "string") box.mail?.acknowledge(id); });
 		options.more?.(pi, note);
 		// Another handler of agent_settled, after main-watch's: a child relays what the user told it.
 		pi.on("agent_settled", async () => { if (relayOnSettle) { relayOnSettle = false; box.mail!.deliver({ kind: "relay", from: "user", to: "scan-1", text: "RELAY", answered: false }); } });
