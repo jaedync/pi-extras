@@ -8,21 +8,23 @@
  * anthropic spend, while an openai API key keeps its own.
  *
  * Reads are incremental: each file is read from where the last refresh
- * stopped, and only files touched within the window are opened. A cold read
- * of a busy week (550 MB) took under a second.
+ * stopped, and only files touched within the window are opened. With an
+ * index file, the processes of one agent directory share those offsets and
+ * records (ledger-index.ts): a new process reads only the bytes that no
+ * process has read yet. A full read of a busy week (790 MB) took 20 s of one
+ * core at load and up to three minutes in a busy Pi process; every new Pi
+ * process and every subagent paid it on its first usage call.
  */
-import { open, readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { limitKey } from "../plan-billing.ts";
-import { cacheWarmUsage } from "../cache-warm-entry.ts";
+import { acquireLock, type FileLock, type LockOptions } from "../file-lock.ts";
+import { encodeIndex, readIndex, writeIndex, type FileState, type IndexStamp } from "./ledger-index.ts";
+import { familyMatches, UNKNOWN_MODEL, type SpendRecord } from "./ledger-parse.ts";
+import { emptyStats, readAppended, sessionFiles, type FileInfo, type ReadStats } from "./ledger-read.ts";
 
-export interface SpendRecord {
-	ts: number;
-	provider: string;
-	model: string;
-	cost: number;
-	id: string;
-}
+export { parseSpendLine, type LedgerLine, type SessionModel, type SpendRecord } from "./ledger-parse.ts";
+export type { ReadStats } from "./ledger-read.ts";
 
 export interface SpendLedgerOptions {
 	root: string;
@@ -30,6 +32,13 @@ export interface SpendLedgerOptions {
 	maxAgeMs: number;
 	/** Refreshes closer together than this reuse the last read. */
 	minRefreshMs: number;
+	/** The index shared with other processes. Without one, this process reads every file itself. */
+	indexFile?: string;
+	/**
+	 * How long a refresh waits for another process that is updating the index.
+	 * Past it, this process reads the new bytes itself and does not save them.
+	 */
+	lockWaitMs?: number;
 }
 
 export interface SpendLedger {
@@ -39,203 +48,180 @@ export interface SpendLedger {
 	/** Keyed by limitKey (lib/plan-billing.ts): the family id for a plan login. */
 	byProvider(sinceMs: number, untilMs: number): Record<string, number>;
 	models(provider: string, sinceMs: number): string[];
-}
-
-interface FileState {
-	/** A rename over the path (Pi rewrites a session that way) gives a new inode. */
-	ino: number;
-	offset: number;
-	records: readonly SpendRecord[];
-	/** The session's model at offset, for off-turn spend later in the file. */
-	model: SessionModel;
-}
-
-interface FileInfo {
-	size: number;
-	ino: number;
-}
-
-const CHUNK_BYTES = 8 * 1024 * 1024;
-// Pi writes the role near the start of each line; tool results, the bulk of the bytes, are never parsed.
-const HEAD_CHARS = 600;
-const NEWLINE = 0x0a;
-
-const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-
-function familyMatches(model: string, family: string): boolean {
-	return model.toLowerCase().split(/[^a-z0-9]+/).includes(family.toLowerCase());
-}
-
-/** The session's model, which Pi summarizes and compacts with: the latest model_change line or reply sets it. */
-export interface SessionModel {
-	provider: string;
-	model: string;
-}
-
-const UNKNOWN_MODEL: SessionModel = { provider: "unknown", model: "unknown" };
-/** Lines with spend outside replies, and the model switches that say whose it is. */
-const OFF_TURN_TYPES = new Set(["compaction", "branch_summary", "usage", "model_change"]);
-const OFF_TURN_HEAD = /"type":"(compaction|branch_summary|usage|model_change)"|"customType":"pi-extras\.cache-warm"/;
-
-/** One line's spend, or the model it switches the session to. */
-export interface LedgerLine {
-	record?: SpendRecord;
-	model?: SessionModel;
-}
-
-function recordedCost(usage: { cost?: unknown } | undefined): number | undefined {
-	const raw = typeof usage?.cost === "object" && usage.cost ? (usage.cost as { total?: unknown }).total : usage?.cost;
-	return finite(raw) && raw >= 0 ? raw : undefined;
-}
-
-function replySpend(entry: { timestamp?: unknown; message?: Record<string, unknown> }): SpendRecord | undefined {
-	const message = entry.message;
-	if (!message || message.role !== "assistant") return undefined;
-	const usage = message.usage as { cost?: unknown; totalTokens?: unknown } | undefined;
-	const cost = recordedCost(usage);
-	const ts = finite(message.timestamp) ? message.timestamp : Date.parse(String(entry.timestamp));
-	if (cost === undefined || !finite(ts)) return undefined;
-	const provider = typeof message.provider === "string" ? message.provider : "unknown";
-	const model = typeof message.model === "string" ? message.model : "unknown";
-	const id = typeof message.responseId === "string" && message.responseId
-		? `${provider}:${message.responseId}`
-		: `${ts}|${provider}|${model}|${String(usage?.totalTokens)}`;
-	return { ts, provider, model, cost, id };
+	/** Work done since this ledger was made: files opened, bytes read, lines parsed. */
+	stats(): ReadStats;
+	/** Why the last refresh could not save the shared index, or undefined when it saved or had nothing new. */
+	indexProblem(): string | undefined;
 }
 
 /**
- * Spend Pi records outside replies: compaction and branch summaries (made with
- * the session's model) and usage entries such as cache refreshes (which name
- * their own). A fork copies an entry with its id, so the id makes it count one time.
+ * A holder updates the index for a few milliseconds; only a full read takes
+ * long, and it touches the lock every HEARTBEAT_MS. A lock left this long
+ * without a touch belongs to a stopped process.
  */
-function offTurnSpend(entry: Record<string, unknown>, active: SessionModel): LedgerLine | undefined {
-	if (entry.type === "model_change") {
-		return typeof entry.provider === "string" ? { model: { provider: entry.provider, model: String(entry.modelId ?? "unknown") } } : undefined;
-	}
-	const cost = recordedCost(entry.usage as { cost?: unknown } | undefined);
-	const ts = Date.parse(String(entry.timestamp));
-	if (cost === undefined || !finite(ts)) return undefined;
-	const own = entry.type === "usage" && typeof entry.provider === "string";
-	const provider = own ? entry.provider as string : active.provider;
-	const model = own ? String(entry.model ?? "unknown") : active.model;
-	const id = typeof entry.id === "string" && entry.id ? `${entry.type}:${entry.id}` : `${ts}|${String(entry.type)}|${provider}|${model}`;
-	return { record: { ts, provider, model, cost, id } };
-}
+const LEDGER_LOCK: LockOptions = { staleMs: 30_000, settleMs: 5_000 };
+const HEARTBEAT_MS = 2_000;
+/** A long read saves its progress this often, so other processes can use it and a stopped process loses little. */
+const COMMIT_EVERY_MS = 5_000;
+const DEFAULT_LOCK_WAIT_MS = 2_000;
 
-export function parseSpendLine(text: string, active: SessionModel = UNKNOWN_MODEL): LedgerLine | undefined {
-	const head = text.slice(0, HEAD_CHARS);
-	const offTurn = OFF_TURN_HEAD.test(head);
-	if (!offTurn && !head.includes('"role":"assistant"')) return undefined;
-	let entry: Record<string, unknown>;
-	try {
-		entry = JSON.parse(text);
-	} catch {
-		return undefined;
-	}
-	if (offTurn && OFF_TURN_TYPES.has(String(entry.type))) return offTurnSpend(entry, active);
-	// The pi-extras cache warmer records its usage in a custom entry; it names its own model.
-	const warm = offTurn ? cacheWarmUsage(entry) : undefined;
-	if (warm) return offTurnSpend(warm as unknown as Record<string, unknown>, active);
-	const record = replySpend(entry as { timestamp?: unknown; message?: Record<string, unknown> });
-	// A reply names the model it came from: under a virtual selection, the one a summary is likely routed to.
-	return record ? { record, model: { provider: record.provider, model: record.model } } : undefined;
-}
+const errorText = (error: unknown): string =>
+	error instanceof Error ? ("code" in error && typeof error.code === "string" ? error.code : error.message) : String(error);
 
-/**
- * Session files touched since `sinceMs`. A directory's mtime moves only when
- * files are added or removed, not when a session grows, so every directory is
- * listed; the stats run in parallel.
- */
-async function sessionFiles(dir: string, sinceMs: number): Promise<Map<string, FileInfo>> {
-	let entries;
-	try {
-		entries = await readdir(dir, { withFileTypes: true });
-	} catch {
-		return new Map();
-	}
-	const nested = await Promise.all(entries.filter((entry) => entry.isDirectory())
-		.map((entry) => sessionFiles(join(dir, entry.name), sinceMs)));
-	const own = await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-		.map(async (entry): Promise<[string, FileInfo] | undefined> => {
-			const path = join(dir, entry.name);
-			try {
-				const info = await stat(path);
-				return info.mtimeMs >= sinceMs ? [path, { size: info.size, ino: info.ino }] : undefined;
-			} catch {
-				return undefined; // Removed between listing and stat.
-			}
-		}));
-	return new Map([...nested.flatMap((found) => [...found]), ...own.filter((pair) => !!pair)]);
-}
-
-/**
- * Spend records in the complete lines appended since `offset`, parsed chunk by
- * chunk so a large session never sits in memory as text. A trailing partial
- * line is left for the next read.
- */
-async function readAppended(path: string, offset: number, size: number, from: SessionModel): Promise<{ records: SpendRecord[]; offset: number; model: SessionModel }> {
-	const handle = await open(path, "r");
-	const records: SpendRecord[] = [];
-	let model = from;
-	let position = offset;
-	let carry = Buffer.alloc(0);
-	try {
-		while (position < size) {
-			const chunk = Buffer.alloc(Math.min(CHUNK_BYTES, size - position));
-			const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
-			if (bytesRead === 0) break;
-			position += bytesRead;
-			const data = carry.length ? Buffer.concat([carry, chunk.subarray(0, bytesRead)]) : chunk.subarray(0, bytesRead);
-			const last = data.lastIndexOf(NEWLINE);
-			carry = last < 0 ? data : data.subarray(last + 1);
-			if (last < 0) continue;
-			for (const text of data.subarray(0, last).toString("utf8").split("\n")) {
-				const parsed = parseSpendLine(text, model);
-				if (parsed?.record) records.push(parsed.record);
-				if (parsed?.model) model = parsed.model;
-			}
-		}
-	} finally {
-		await handle.close();
-	}
-	return { records, offset: position - carry.length, model };
-}
+/** Whether a saved state still describes the file: same inode, and not past its end. */
+const describes = (state: FileState | undefined, info: FileInfo): state is FileState =>
+	!!state && state.ino === info.ino && state.offset <= info.size;
 
 export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
-	const files = new Map<string, FileState>();
+	let files = new Map<string, FileState>();
 	let lastRefresh = -Infinity;
 	let pending: Promise<void> | undefined;
+	let indexStamp: IndexStamp | undefined;
+	/** True while this process has records the index does not: they go in at its next save. */
+	let unsaved = false;
+	let saveError: string | undefined;
+	const counters = emptyStats();
+	/** unique() results by range; a refresh clears them. */
+	let ranges = new Map<string, SpendRecord[]>();
 
-	async function readFile(path: string, info: FileInfo, cutoff: number): Promise<void> {
+	/** Take each file's saved state that is further along than this process's own. */
+	async function adoptIndex(indexFile: string, found: ReadonlyMap<string, FileInfo>): Promise<void> {
+		const loaded = await readIndex(indexFile, options.maxAgeMs, indexStamp);
+		if (loaded.state === "unchanged") return;
+		if (loaded.state !== "read") {
+			// Nothing to take; the next save writes what this process has, so others can use it.
+			indexStamp = loaded.state === "unusable" ? loaded.stamp : undefined;
+			unsaved = true;
+			return;
+		}
+		indexStamp = loaded.stamp;
+		const next = new Map(files);
+		for (const [path, theirs] of loaded.files) {
+			const info = found.get(path);
+			if (!info || !describes(theirs, info)) continue;
+			const ours = next.get(path);
+			if (!describes(ours, info) || theirs.seen > ours.seen) next.set(path, theirs);
+		}
+		files = next;
+	}
+
+	function behind(found: ReadonlyMap<string, FileInfo>): Array<[string, FileInfo]> {
+		return [...found].filter(([path, info]) => {
+			const state = files.get(path);
+			return !describes(state, info) || state.seen !== info.size;
+		});
+	}
+
+	async function readFile(path: string, info: FileInfo, cutoff: number, lock: FileLock | undefined): Promise<void> {
 		const known = files.get(path);
 		// A replaced or shrunken file was rewritten; its old records no longer describe it.
-		const same = known && known.ino === info.ino && info.size >= known.offset;
-		const base: FileState = same ? known : { ino: info.ino, offset: 0, records: [], model: UNKNOWN_MODEL };
-		const read = info.size > base.offset ? await readAppended(path, base.offset, info.size, base.model) : { records: [], offset: base.offset, model: base.model };
+		const base: FileState = describes(known, info) ? known : { ino: info.ino, offset: 0, seen: 0, records: [], model: UNKNOWN_MODEL };
+		let touched = Date.now();
+		const heartbeat = lock ? () => {
+			if (Date.now() - touched < HEARTBEAT_MS) return;
+			touched = Date.now();
+			lock.touch();
+		} : undefined;
+		const read = info.size > base.offset
+			? await readAppended(path, base.offset, info.size, base.model, counters, heartbeat)
+			: { records: [], offset: base.offset, model: base.model };
 		files.set(path, {
 			ino: info.ino,
 			offset: read.offset,
+			seen: info.size,
 			model: read.model,
 			records: [...base.records, ...read.records].filter((record) => record.ts >= cutoff),
 		});
+		unsaved = true;
+	}
+
+	function prune(found: ReadonlyMap<string, FileInfo>, cutoff: number): void {
+		const next = new Map<string, FileState>();
+		for (const [path, state] of files) {
+			if (!found.has(path)) {
+				unsaved = true;
+				continue;
+			}
+			const old = state.records.some((record) => record.ts < cutoff);
+			next.set(path, old ? { ...state, records: state.records.filter((record) => record.ts >= cutoff) } : state);
+		}
+		files = next;
+	}
+
+	/** A failed save keeps the records in this process and reports the reason; the next refresh tries again. */
+	function save(indexFile: string): void {
+		if (!unsaved) return;
+		try {
+			indexStamp = writeIndex(indexFile, encodeIndex(files, options.maxAgeMs));
+			unsaved = false;
+			saveError = undefined;
+		} catch (error) {
+			saveError = errorText(error);
+		}
+	}
+
+	async function readBehind(found: ReadonlyMap<string, FileInfo>, cutoff: number, held?: { lock: FileLock; indexFile: string }): Promise<void> {
+		let committed = Date.now();
+		for (const [path, info] of behind(found)) {
+			try {
+				await readFile(path, info, cutoff, held?.lock);
+			} catch {
+				// An unreadable file counts as no spend rather than failing the report.
+				files.delete(path);
+			}
+			if (held && Date.now() - committed >= COMMIT_EVERY_MS) {
+				prune(found, cutoff);
+				save(held.indexFile);
+				committed = Date.now();
+			}
+		}
+	}
+
+	/** Read what no process has read yet, under the index lock, and save it for the others. */
+	async function refreshShared(indexFile: string, found: ReadonlyMap<string, FileInfo>, cutoff: number): Promise<void> {
+		await adoptIndex(indexFile, found);
+		if (behind(found).length === 0 && !unsaved) return;
+		let lock: FileLock | undefined;
+		try {
+			mkdirSync(dirname(indexFile), { recursive: true, mode: 0o700 });
+			lock = await acquireLock(`${indexFile}.lock`, options.lockWaitMs ?? DEFAULT_LOCK_WAIT_MS, LEDGER_LOCK);
+		} catch (error) {
+			// No lock can be made (a read-only or full disk): count this process's spend without the index.
+			saveError = errorText(error);
+			await readBehind(found, cutoff);
+			return;
+		}
+		saveError = undefined;
+		if (!lock) {
+			// Another process is still updating the index; read the gap here rather than wait longer.
+			await readBehind(found, cutoff);
+			return;
+		}
+		try {
+			// The holder before us may have read these bytes already.
+			await adoptIndex(indexFile, found);
+			await readBehind(found, cutoff, { lock, indexFile });
+			prune(found, cutoff);
+			save(indexFile);
+		} finally {
+			lock.release();
+		}
 	}
 
 	async function doRefresh(now: number): Promise<void> {
 		const cutoff = now - options.maxAgeMs;
 		const found = await sessionFiles(options.root, cutoff);
-		for (const path of [...files.keys()]) if (!found.has(path)) files.delete(path);
-		for (const [path, info] of found) {
-			try {
-				await readFile(path, info, cutoff);
-			} catch {
-				// An unreadable file counts as no spend rather than failing the report.
-				files.delete(path);
-			}
-		}
+		if (options.indexFile) await refreshShared(options.indexFile, found, cutoff);
+		else await readBehind(found, cutoff);
+		prune(found, cutoff);
+		ranges = new Map();
 		lastRefresh = now;
 	}
 
 	function unique(sinceMs: number, untilMs: number): SpendRecord[] {
+		const key = `${sinceMs}|${untilMs}`;
+		const hit = ranges.get(key);
+		if (hit) return hit;
 		const seen = new Set<string>();
 		const result: SpendRecord[] = [];
 		for (const state of files.values()) {
@@ -245,6 +231,7 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 				result.push(record);
 			}
 		}
+		ranges.set(key, result);
 		return result;
 	}
 
@@ -255,9 +242,12 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 			await pending;
 		},
 		sum({ provider, sinceMs, untilMs, family }) {
-			return unique(sinceMs, untilMs)
-				.filter((record) => limitKey(record.provider) === limitKey(provider) && (!family || familyMatches(record.model, family)))
-				.reduce((total, record) => total + record.cost, 0);
+			const key = limitKey(provider);
+			let total = 0;
+			for (const record of unique(sinceMs, untilMs)) {
+				if (limitKey(record.provider) === key && (!family || familyMatches(record.model, family))) total += record.cost;
+			}
+			return total;
 		},
 		byProvider(sinceMs, untilMs) {
 			const totals: Record<string, number> = {};
@@ -268,7 +258,10 @@ export function createSpendLedger(options: SpendLedgerOptions): SpendLedger {
 			return totals;
 		},
 		models(provider, sinceMs) {
-			return [...new Set(unique(sinceMs, Infinity).filter((record) => limitKey(record.provider) === limitKey(provider)).map((record) => record.model))];
+			const key = limitKey(provider);
+			return [...new Set(unique(sinceMs, Infinity).filter((record) => limitKey(record.provider) === key).map((record) => record.model))];
 		},
+		stats: () => ({ ...counters }),
+		indexProblem: () => saveError,
 	};
 }
