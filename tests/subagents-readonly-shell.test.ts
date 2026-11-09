@@ -67,7 +67,7 @@ test("the Linux prefix: read-only root, fresh /dev, /proc and /tmp, no network, 
 	assert.equal(readOnlyShellPrefix(NO_HIDING, "linux", undefined, "riscv64"), undefined, "no filter, no shell");
 	// The literal /tmp, not tmpdir(): bwrap's --tmpfs covers /tmp itself whatever TMPDIR says, and the prefix binds back
 	// the top folder of a cwd directly under /tmp, which must exist. On macOS tmpdir() is under /var/folders, so
-	// tmpdir() would not reach this branch there. The folder is empty and goes in the finally below.
+	// tmpdir() would not reach this branch there. The folder holds only empty folders and goes in the finally below.
 	const root = mkdtempSync("/tmp/subagents-roshell-");
 	try {
 		mkdirSync(join(root, "repo", "sub"), { recursive: true });
