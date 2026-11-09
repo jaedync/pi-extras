@@ -1,6 +1,6 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLimitStore, type LimitStore } from "../lib/limit-store.ts";
@@ -507,4 +507,26 @@ test("refresh: true asks for the Anthropic plan through a plan member when Pi's 
 	await pi.handlers.get("session_start")!({}, ctx);
 	await pi.tool!.execute("t1", { all: true, refresh: true }, undefined, undefined, ctx);
 	assert.ok(refreshed.includes("claude-code"), refreshed.join(", "));
+});
+
+/** A ctx after Pi replaced or reloaded the session: every read throws, as Pi's does. */
+function staleCtx(): unknown {
+	return new Proxy({}, { get: () => { throw new Error("This extension ctx is stale after session replacement or reload."); } });
+}
+
+test("events that arrive after session_shutdown leave the stale ctx alone and log nothing", async () => {
+	// A quit in mid-turn: Pi runs session_shutdown, then aborts the turn, whose turn_end comes with the old ctx.
+	const dir = tempDir("usage-guard-stale-");
+	const logFile = join(dir, "usage-guard.log");
+	const store = createLimitStore();
+	const pi = fakePi();
+	usageGuard(pi as never, { store, configFile: join(dir, "pi-extras.json"), now: () => NOW, logFile });
+	await pi.handlers.get("session_start")!({}, fakeCtx(pi, { provider: "anthropic", id: "claude-sonnet-5" }));
+	await pi.handlers.get("session_shutdown")!({ type: "session_shutdown", reason: "quit" }, staleCtx());
+	await pi.handlers.get("turn_end")!({}, staleCtx());
+	await pi.handlers.get("model_select")!({}, staleCtx());
+	assert.equal(await request(pi, staleCtx(), []), undefined, "the request goes on unchanged");
+	await pi.handlers.get("message_end")!({ message: { role: "assistant", provider: "anthropic", model: "claude-sonnet-5", stopReason: "stop" } }, staleCtx());
+	anthropicSnapshot(store, 99);
+	assert.equal(existsSync(logFile) ? readFileSync(logFile, "utf8") : "", "");
 });

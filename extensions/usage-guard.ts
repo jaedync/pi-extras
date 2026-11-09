@@ -38,7 +38,7 @@ import {
 
 const AGENT_DIR = getAgentDir();
 export const CONFIG_FILE = join(AGENT_DIR, "pi-extras.json");
-const LOG_FILE = join(AGENT_DIR, "usage-guard.log");
+const DEFAULT_LOG_FILE = join(AGENT_DIR, "usage-guard.log");
 const CONFIG_KEY = "usageGuard";
 /** Session entries (fired keys, budget) and injected messages share one type. */
 export const GUARD_CUSTOM_TYPE = "usage-guard";
@@ -101,14 +101,14 @@ function activeModel(ctx: Pick<ExtensionContext, "model" | "sessionManager" | "m
  * when none are scoped, every model with credentials. A registry that fails
  * to list leaves the scoped list, which may be empty.
  */
-function modelsInScope(ctx: Pick<ExtensionContext, "scopedModels" | "modelRegistry">): InScopeModel[] {
+function modelsInScope(ctx: Pick<ExtensionContext, "scopedModels" | "modelRegistry">, logFile: string): InScopeModel[] {
 	const scoped = (ctx.scopedModels ?? []).map((entry) => entry.model);
 	if (scoped.length) return scoped;
 	try {
 		const registry = ctx.modelRegistry as { getAvailable?: () => InScopeModel[] } | undefined;
 		return typeof registry?.getAvailable === "function" ? registry.getAvailable() : [];
 	} catch (error) {
-		operationalError(LOG_FILE, "usage-guard", `model list failed: ${(error as Error)?.message ?? "error"}`);
+		operationalError(logFile, "usage-guard", `model list failed: ${(error as Error)?.message ?? "error"}`);
 		return [];
 	}
 }
@@ -128,18 +128,27 @@ export interface UsageGuardOptions {
 	now?: () => number;
 	/** Defaults to one that reads the agent directory holding configFile. */
 	dollars?: DollarsCollector;
+	/** Where operational errors go; defaults to usage-guard.log in the agent directory. */
+	logFile?: string;
 }
 
 export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions = {}): void {
 	const store = options.store ?? sharedLimitStore();
 	const configFile = options.configFile ?? CONFIG_FILE;
 	const now = options.now ?? Date.now;
+	const logFile = options.logFile ?? DEFAULT_LOG_FILE;
 	let config = loadGuardConfig(configFile);
 	// pi-extras.json sits in the agent directory, next to the sessions the ledger reads.
 	const dollars = options.dollars ?? createDollarsCollector({ agentDir: dirname(configFile), configFile });
 	let fired = new Set<string>();
 	let budget: SessionBudget | undefined;
 	let latestCtx: ExtensionContext | undefined;
+	/**
+	 * Set at session_shutdown. Pi stops this instance's ctx right after it, yet
+	 * events can still come: a quit in mid-turn aborts the turn after shutdown,
+	 * and its turn_end carries the stopped ctx. Every read of that ctx throws.
+	 */
+	let closed = false;
 
 	function restore(ctx: ExtensionContext): void {
 		fired = new Set();
@@ -180,7 +189,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 				force,
 			});
 		} catch (error) {
-			operationalError(LOG_FILE, "usage-guard", `dollars failed: ${(error as Error)?.message ?? "error"}`);
+			operationalError(logFile, "usage-guard", `dollars failed: ${(error as Error)?.message ?? "error"}`);
 			return undefined;
 		}
 	}
@@ -221,7 +230,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 				return notice;
 			});
 		} catch (error) {
-			operationalError(LOG_FILE, "usage-guard", `evaluate failed: ${(error as Error)?.message ?? "error"}`);
+			operationalError(logFile, "usage-guard", `evaluate failed: ${(error as Error)?.message ?? "error"}`);
 			return [];
 		}
 	}
@@ -263,7 +272,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 			if (params.clearBudget) setBudget(undefined);
 			if (params.setBudget) setBudget({ window: params.setBudget.window.trim(), pct: params.setBudget.pct });
 			const model = activeModel(ctx);
-			const inScope = params.all ? modelsInScope(ctx) : [];
+			const inScope = params.all ? modelsInScope(ctx, logFile) : [];
 			if (params.refresh) {
 				const providers = params.all ? store.entries().map(([provider]) => provider) : [];
 				if (model.provider && !providers.includes(limitKey(model.provider))) providers.push(model.provider);
@@ -320,6 +329,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		closed = false;
 		latestCtx = ctx;
 		config = loadGuardConfig(configFile);
 		restore(ctx);
@@ -327,11 +337,13 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	});
 
 	pi.on("model_select", async (_event, ctx) => {
+		if (closed) return;
 		latestCtx = ctx;
 		evaluate(ctx);
 	});
 
 	pi.on("message_end", async (event) => {
+		if (closed) return;
 		const message = event.message;
 		if (message.role !== "assistant") return;
 		if (["stop", "toolUse"].includes(message.stopReason)) store.recordSuccess(limitKey(message.provider), message.model, now());
@@ -341,6 +353,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
+		if (closed) return;
 		latestCtx = ctx;
 		evaluate(ctx);
 	});
@@ -348,6 +361,7 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 	// Prompts, automatic job wakes and queued follow-ups all share this request
 	// boundary. before_agent_start alone misses the latter two.
 	pi.on("context", async (event, ctx) => {
+		if (closed) return undefined;
 		latestCtx = ctx;
 		const notices = evaluate(ctx, true);
 		const model = activeModel(ctx);
@@ -367,13 +381,14 @@ export default function usageGuard(pi: ExtensionAPI, options: UsageGuardOptions 
 		try {
 			dollars.observe(store.entries(), now());
 		} catch (error) {
-			operationalError(LOG_FILE, "usage-guard", `dollars observe failed: ${(error as Error)?.message ?? "error"}`);
+			operationalError(logFile, "usage-guard", `dollars observe failed: ${(error as Error)?.message ?? "error"}`);
 		}
 		const ctx = latestCtx;
 		if (ctx && idle(ctx)) evaluate(ctx);
 	});
 
 	pi.on("session_shutdown", async () => {
+		closed = true;
 		unsubscribe();
 		latestCtx = undefined;
 	});
