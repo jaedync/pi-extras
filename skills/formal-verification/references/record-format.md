@@ -54,7 +54,9 @@ Read `traces.itf.jsonl.gz` (one ITF document per line, gzip). For each trace:
 
 1. Build the code side from the first state: the real module, its runtime
    objects, and fakes for the platform. A fake copies the platform rule that
-   the model uses, with a comment that cites the platform source.
+   the model uses, with a comment that cites the platform source. The replay
+   cannot tell whether that rule is true of the platform: check it with a
+   live script against the real platform.
 2. For each next state, read `mbt::actionTaken` and `mbt::nondetPicks` (a
    pick is `{ "tag": "Some", "value": ... }`), and run the code that the
    action stands for. Make each pending promise of the code controllable (a

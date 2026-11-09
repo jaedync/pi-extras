@@ -74,8 +74,10 @@ weaker method, such as a hand trace or more example tests.
    every event handler, timer and I/O callback is its own segment. Then read
    the source of the platform the code calls (the framework, the agent host,
    the runtime) for each behavior the code relies on: when a message is
-   queued or deferred, what "idle" means, which commands it refuses. In the
-   pilot, the bug was in that contract, not in the code alone.
+   queued or deferred, how queued work runs (all at once, or one item at a
+   time with its own events), what "idle" means, which commands it refuses,
+   and where the platform awaits between a check and the act. In the pilot,
+   the bug was in that contract, not in the code alone.
 4. **Write the model.** Follow
    [references/quint-patterns.md](references/quint-patterns.md). One action
    is one segment, with a comment that cites file:line. Use the code's names.
@@ -114,9 +116,16 @@ weaker method, such as a hand trace or more example tests.
    fail for each change that a model mutant covers. Restore the code after
    each change and confirm with `git diff` that it is clean. Report the
    changes that it did not catch and why.
-9. **Reproduce each finding live** when you can: run the real code and the
-   real platform through the counterexample. Keep the repro as a script next
-   to the model, not as a test that expects the bug.
+9. **Check the platform rules and reproduce each finding live.** The
+   conformance test runs a fake platform that copies the model's rules, so
+   it cannot find a wrong platform rule. Check each rule against the real
+   platform with a short script, and run the real code and the real platform
+   through each counterexample. Keep these scripts next to the model, not as
+   tests that expect the bug. Then ask one fresh reviewer, on a strong model,
+   to read every action against the code and the platform source, with the
+   severity rule of your instructions. In the pilot, that review found a
+   platform rule that the model had wrong, and the fixed model found more
+   paths to the bug.
 10. **Record and report.** Write `formal/<area>/README.md`: the promise, the
     properties, what the model covers with file names, the bounds and what
     they leave out, the result table, each finding as numbered steps in the
@@ -131,6 +140,8 @@ weaker method, such as a hand trace or more example tests.
   that decides it.
 - The conformance test replays at least 100 traces, and at least 3 code
   changes were shown to make it fail.
+- Every platform rule in the model is checked against the real platform, or
+  the report lists it as unchecked.
 - `fv.mjs check` gives the expected result for every check before you hand off.
 
 ## Hard rules

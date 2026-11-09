@@ -52,6 +52,15 @@ short.
 - **The platform is part of the model.** Read its source for each behavior
   the code relies on, and model it as actions and guards. Cite the source.
   Model the behaviors the platform allows, not the ones its users usually do.
+- **Queued work is not one step.** When the platform holds work and runs it
+  later, read how: a loop that awaits each item, where each item can start
+  new events (a run, its own "settled" event), runs one item at a time.
+  Model the items left as state (a list), and let the nested events run
+  between items.
+- **A platform check can be split from its act.** A command that checks a
+  condition and then awaits before it acts (a reload that checks "not
+  busy", then awaits shutdown handlers) is two actions. Other events can
+  make the condition false in between.
 - **Over-approximate with care.** Allowing more behaviors than the code has
   is safe for an invariant that passes, but it can give a counterexample
   that cannot happen. Judge each counterexample against the code.
