@@ -54,9 +54,12 @@ export interface PromptGate {
  */
 export const GATE_WAIT_MS = 10_000;
 
-interface Run { aborted: boolean; started: boolean; ended?: Promise<void> }
+interface Run { aborted: boolean; started: boolean; ended?: Promise<unknown> }
 
 const ignore = (): void => undefined;
+
+/** Where the gate reports a failure that no caller awaits: an abort it sent on its own, or a steer. */
+export type GateError = (what: string, error: unknown) => void;
 
 /** `done`, or GATE_WAIT_MS, whichever comes first. */
 function bounded(done: Promise<void>): Promise<void> {
@@ -65,14 +68,16 @@ function bounded(done: Promise<void>): Promise<void> {
 	return Promise.race([done, limit]).finally(() => clearTimeout(timer));
 }
 
-export function promptGate(session: PromptSession): PromptGate {
+export function promptGate(session: PromptSession, onError: GateError): PromptGate {
 	let current: Run | undefined;
 	let shut = false;
 	const steers = new Set<Promise<void>>();
 	// A compaction in Pi's _prepareRun runs before "started"; Pi's abort cancels it, as the run exists by then.
-	session.subscribe?.((event) => { if (event.type === "compaction_start" && current?.aborted) session.abort().catch(ignore); });
+	const abortAgain = (what: string): void => { session.abort().catch((error: unknown) => onError(what, error)); };
+	session.subscribe?.((event) => { if (event.type === "compaction_start" && current?.aborted) abortAgain("the abort at compaction_start"); });
 	// Pi's agent_start check (agent-session.js _handleAgentEvent) does this until Pi's dispose disconnects it.
-	session.agent?.subscribe((event) => { if (event.type === "agent_start" && shut && current?.aborted) session.agent!.abort(); });
+	const agent = session.agent;
+	agent?.subscribe((event) => { if (event.type === "agent_start" && shut && current?.aborted) agent.abort(); });
 	const steering = (): Promise<void> | undefined => (steers.size === 0 ? undefined : (async () => {
 		while (steers.size > 0) await Promise.allSettled([...steers]);
 	})());
@@ -91,10 +96,11 @@ export function promptGate(session: PromptSession): PromptGate {
 				preflightResult: (disposition) => {
 					if (disposition === "started") run.started = true;
 					// A throw here would leave Pi's run active and its idle wait open: a stop then never returns.
-					if (disposition === "started" && run.aborted) session.abort().catch(ignore);
+					if (disposition === "started" && run.aborted) abortAgain("the abort at the run's start");
 				},
 			});
-			run.ended = prompted.then(ignore, ignore);
+			// Only when it ended; its error goes to this prompt's caller below.
+			run.ended = Promise.allSettled([prompted]);
 			try {
 				await prompted;
 			} finally {
@@ -110,7 +116,7 @@ export function promptGate(session: PromptSession): PromptGate {
 			return abort();
 		},
 		steer(text) {
-			const queued: Promise<void> = session.steer(text).then(ignore, ignore).finally(() => steers.delete(queued));
+			const queued: Promise<void> = session.steer(text).then(ignore, (error: unknown) => onError("a steer", error)).finally(() => steers.delete(queued));
 			steers.add(queued);
 		},
 		steering,

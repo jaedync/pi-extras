@@ -8,7 +8,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { Team } from "../lib/subagents/team.ts";
-import { promptGate } from "../lib/subagents/child-prompt.ts";
+import { promptGate, type GateError } from "../lib/subagents/child-prompt.ts";
+
+/** The gate reports no failure in these tests. */
+const unexpected: GateError = (what, error) => { throw new Error(`the gate reported ${what}: ${String(error)}`); };
 import type { CheckRun, ChildHandle, MainDelivery } from "../lib/subagents/types.ts";
 
 const flush = async (rounds = 8) => { for (let i = 0; i < rounds; i++) await tick(); };
@@ -27,7 +30,7 @@ test("a message steered during the check, while the input handler waits, is the 
 		// The input handlers await I/O; the message reaches Pi's queue when the test lands it.
 		steer: (text: string) => new Promise<void>((resolve) => landings.push(() => { queue.push(text); resolve(); })),
 	};
-	const gate = promptGate(session);
+	const gate = promptGate(session, unexpected);
 	const team = new Team({
 		maxConcurrent: 1, maxDepth: 2, replyTimeoutMs: 60_000, idleReleaseMs: 1e9, deliverToMain: (delivery) => main.push(delivery),
 		launcher: {

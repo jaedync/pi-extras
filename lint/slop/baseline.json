@@ -2,9 +2,9 @@
 	"about": "Site counts per ast-grep rule. `slop.mjs ratchet` fails when a count goes up or a rule changes. Lower counts with --update.",
 	"worstFiles": [
 		"lib/shell-jobs-progress.ts: 27",
+		"formal/subagents-lifecycle/repro-f5.mts: 24",
 		"tests/shell-jobs-extension.test.mts: 24",
 		"lib/fold/transcript.ts: 22",
-		"formal/subagents-lifecycle/repro-f5.mts: 21",
 		"lib/band/glyph.ts: 20",
 		"lib/subagents/serve.ts: 20",
 		"tests/subagents-host.test.ts: 19",
@@ -44,7 +44,7 @@
 			"files": {}
 		},
 		"ts-any-annotation": {
-			"count": 108,
+			"count": 109,
 			"files": {
 				"formal/rate-limit-recovery/check-platform.mts": 10,
 				"formal/rate-limit-recovery/repro-f4.mts": 2,
@@ -54,7 +54,7 @@
 				"formal/shell-jobs-delivery/repro-f1.mts": 4,
 				"formal/shell-jobs-delivery/repro-f2.mts": 2,
 				"formal/subagents-lifecycle/probe-pi-abort.mts": 4,
-				"formal/subagents-lifecycle/repro-support.mts": 6,
+				"formal/subagents-lifecycle/repro-support.mts": 7,
 				"formal/subagents-mail/repro-f1.mts": 6,
 				"formal/subagents-mail/repro-f2.mts": 6,
 				"formal/subagents-mail/repro-f3.mts": 6,
@@ -71,7 +71,7 @@
 			}
 		},
 		"ts-as-any": {
-			"count": 24,
+			"count": 23,
 			"files": {
 				"formal/rate-limit-recovery/check-platform.mts": 1,
 				"formal/rate-limit-recovery/repro-support.mts": 2,
@@ -79,7 +79,7 @@
 				"formal/shell-jobs-delivery/repro-f2.mts": 2,
 				"formal/subagents-lifecycle/probe-pi-abort.mts": 1,
 				"formal/subagents-lifecycle/repro-f5.mts": 2,
-				"formal/subagents-lifecycle/repro-support.mts": 2,
+				"formal/subagents-lifecycle/repro-support.mts": 1,
 				"formal/subagents-mail/repro-f1.mts": 2,
 				"formal/subagents-mail/repro-f2.mts": 2,
 				"formal/subagents-mail/repro-f3.mts": 2,
@@ -333,7 +333,7 @@
 			}
 		},
 		"ts-non-null-assertion": {
-			"count": 399,
+			"count": 404,
 			"files": {
 				"extensions/cache-compaction.ts": 5,
 				"extensions/phase-spinner.ts": 2,
@@ -346,7 +346,8 @@
 				"formal/subagents-lifecycle/repro-f3.mts": 3,
 				"formal/subagents-lifecycle/repro-f4-byparent.mts": 6,
 				"formal/subagents-lifecycle/repro-f4.mts": 7,
-				"formal/subagents-lifecycle/repro-f5.mts": 14,
+				"formal/subagents-lifecycle/repro-f5.mts": 16,
+				"formal/subagents-lifecycle/repro-support.mts": 3,
 				"formal/subagents-mail/repro-f1.mts": 1,
 				"formal/subagents-mail/repro-f2.mts": 2,
 				"formal/subagents-mail/repro-f3.mts": 1,
@@ -465,7 +466,7 @@
 			}
 		},
 		"ts-promise-catch-noop": {
-			"count": 85,
+			"count": 84,
 			"files": {
 				"extensions/status-plus.ts": 1,
 				"extensions/subagents.ts": 2,
@@ -473,7 +474,7 @@
 				"formal/subagents-lifecycle/repro-f1.mts": 1,
 				"formal/subagents-lifecycle/repro-f2.mts": 1,
 				"formal/subagents-lifecycle/repro-f3.mts": 2,
-				"formal/subagents-lifecycle/repro-support.mts": 2,
+				"formal/subagents-lifecycle/repro-f5.mts": 1,
 				"formal/subagents-mail/repro-f1.mts": 1,
 				"formal/subagents-mail/repro-f2.mts": 1,
 				"formal/subagents-mail/repro-f3.mts": 1,
@@ -519,7 +520,7 @@
 			}
 		},
 		"ts-sleep-wait": {
-			"count": 246,
+			"count": 247,
 			"files": {
 				"formal/rate-limit-recovery/check-platform.mts": 3,
 				"formal/shell-jobs-delivery/repro-f1.mts": 4,
@@ -527,7 +528,7 @@
 				"formal/subagents-lifecycle/probe-pi-abort.mts": 2,
 				"formal/subagents-lifecycle/repro-f1.mts": 2,
 				"formal/subagents-lifecycle/repro-f2.mts": 3,
-				"formal/subagents-lifecycle/repro-f3.mts": 3,
+				"formal/subagents-lifecycle/repro-f3.mts": 4,
 				"formal/subagents-lifecycle/repro-f4-byparent.mts": 6,
 				"formal/subagents-lifecycle/repro-f4.mts": 5,
 				"formal/subagents-lifecycle/repro-f5.mts": 5,

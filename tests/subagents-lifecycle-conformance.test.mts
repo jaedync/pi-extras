@@ -25,7 +25,10 @@ import { test } from "node:test";
 import { gunzipSync } from "node:zlib";
 import { Team } from "../lib/subagents/team.ts";
 import { childDisposer } from "../lib/subagents/child.ts";
-import { promptGate } from "../lib/subagents/child-prompt.ts";
+import { promptGate, type GateError } from "../lib/subagents/child-prompt.ts";
+
+/** The gate reports no failure in these tests. */
+const unexpected: GateError = (what, error) => { throw new Error(`the gate reported ${what}: ${String(error)}`); };
 import { stillUnread } from "../lib/subagents/mailbox.ts";
 import type { AgentRecord, ChildHandle, ChildHooks, MainDelivery } from "../lib/subagents/types.ts";
 
@@ -134,7 +137,7 @@ function makeWorld() {
 
 	const handleFor = (session: FakeSession): ChildHandle & { session: FakeSession } => {
 		const pi = piSession(session);
-		const gate = promptGate(pi);
+		const gate = promptGate(pi, unexpected);
 		const disposer = childDisposer(pi as never, () => undefined, { dispose() {} }, gate);
 		return {
 			session,

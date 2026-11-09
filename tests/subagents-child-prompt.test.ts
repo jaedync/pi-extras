@@ -10,7 +10,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
-import { GATE_WAIT_MS, promptGate } from "../lib/subagents/child-prompt.ts";
+import { GATE_WAIT_MS, promptGate, type GateError } from "../lib/subagents/child-prompt.ts";
+
+/** The gate reports no failure in these tests. */
+const unexpected: GateError = (what, error) => { throw new Error(`the gate reported ${what}: ${String(error)}`); };
 import { childDisposer } from "../lib/subagents/child.ts";
 
 const flush = async (rounds = 4) => { for (let i = 0; i < rounds; i++) await tick(); };
@@ -75,7 +78,7 @@ function fakeSession() {
 
 test("an abort before the run exists is kept and stops the run at its start; the abort waits for the prompt (F1)", async () => {
 	const fake = fakeSession();
-	const gate = promptGate(fake.session);
+	const gate = promptGate(fake.session, unexpected);
 	const prompted = gate.prompt("task");
 	let aborted = false;
 	const abort = gate.abort().then(() => { aborted = true; });
@@ -91,7 +94,7 @@ test("an abort before the run exists is kept and stops the run at its start; the
 
 test("an abort before the run exists also cancels a compaction before the run", async () => {
 	const fake = fakeSession();
-	const gate = promptGate(fake.session);
+	const gate = promptGate(fake.session, unexpected);
 	const prompted = gate.prompt("task");
 	const abort = gate.abort();
 	fake.prepare();
@@ -104,7 +107,7 @@ test("an abort before the run exists also cancels a compaction before the run", 
 
 test("an abort with no prompt in flight resolves at once, and a later prompt and its compaction run as usual", async () => {
 	const fake = fakeSession();
-	const gate = promptGate(fake.session);
+	const gate = promptGate(fake.session, unexpected);
 	await gate.abort();
 	const prompted = gate.prompt("next");
 	fake.prepare();
@@ -118,7 +121,7 @@ test("an abort with no prompt in flight resolves at once, and a later prompt and
 test("an abort waits at most GATE_WAIT_MS for a prompt that does not start; the prompt is still stopped when it starts", async (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const fake = fakeSession();
-	const gate = promptGate(fake.session);
+	const gate = promptGate(fake.session, unexpected);
 	const prompted = gate.prompt("task");
 	let aborted = false;
 	const abort = gate.abort().then(() => { aborted = true; });
@@ -137,7 +140,7 @@ test("an abort waits at most GATE_WAIT_MS for a prompt that does not start; the 
 test("an abort while Pi's run is in _prepareRun (a before_agent_start handler) waits at most GATE_WAIT_MS, though Pi's own abort waits for idle", async (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const fake = fakeSession();
-	const gate = promptGate(fake.session);
+	const gate = promptGate(fake.session, unexpected);
 	const prompted = gate.prompt("task");
 	fake.prepare();
 	let aborted = false;
@@ -156,7 +159,7 @@ test("an abort while Pi's run is in _prepareRun (a before_agent_start handler) w
 test("an abort after the run started waits for Pi's abort of the loop, with no time limit", async (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const fake = fakeSession();
-	const gate = promptGate(fake.session);
+	const gate = promptGate(fake.session, unexpected);
 	const prompted = gate.prompt("task");
 	fake.prepare();
 	fake.start();
@@ -172,7 +175,7 @@ test("an abort after the run started waits for Pi's abort of the loop, with no t
 
 test("the prompt returns only once each steer sent meanwhile is in Pi's queue (F5)", async () => {
 	const fake = fakeSession();
-	const gate = promptGate(fake.session);
+	const gate = promptGate(fake.session, unexpected);
 	assert.equal(gate.steering(), undefined, "no steer in flight: nothing to await");
 	let returned = false;
 	const prompted = gate.prompt("task").then(() => { returned = true; });
@@ -194,7 +197,7 @@ test("the prompt returns only once each steer sent meanwhile is in Pi's queue (F
 
 test("a dispose with a prompt in flight aborts it and waits for it before Pi's dispose; the run never starts (F2)", async () => {
 	const fake = fakeSession();
-	const gate = promptGate(fake.session);
+	const gate = promptGate(fake.session, unexpected);
 	const dispose = childDisposer(fake.session as never, () => fake.log.push("unsubscribe"), { dispose: () => fake.log.push("guard") }, gate);
 	const prompted = gate.prompt("task");
 	const disposed = dispose();
@@ -212,7 +215,7 @@ test("a dispose with a prompt in flight aborts it and waits for it before Pi's d
 test("a dispose whose wait ends at GATE_WAIT_MS goes on, and the gate stops the prompt that starts later before its first request", async (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const fake = fakeSession();
-	const gate = promptGate(fake.session);
+	const gate = promptGate(fake.session, unexpected);
 	const prompted = gate.prompt("task");
 	const disposed = childDisposer(fake.session as never, () => undefined, { dispose() {} }, gate)();
 	await flush();
@@ -228,7 +231,31 @@ test("a dispose whose wait ends at GATE_WAIT_MS goes on, and the gate stops the 
 
 test("a dispose with no prompt in flight does not abort", async () => {
 	const fake = fakeSession();
-	const gate = promptGate(fake.session);
+	const gate = promptGate(fake.session, unexpected);
 	await childDisposer(fake.session as never, () => undefined, { dispose() {} }, gate)();
 	assert.deepEqual(fake.log, ["dispose"]);
 });
+
+test("a steer that Pi refuses and an abort of its own that fails go to the gate's error report, not to the prompt", async () => {
+	const fake = fakeSession();
+	const reported: string[] = [];
+	const gate = promptGate({ ...fake.session, steer: () => Promise.reject(new Error("input handler failed")) }, (what, error) => reported.push(`${what}: ${(error as Error).message}`));
+	const prompted = gate.prompt("task");
+	fake.prepare();
+	fake.start();
+	gate.steer("one");
+	fake.end();
+	await prompted;
+	assert.deepEqual(reported, ["a steer: input handler failed"]);
+	assert.equal(gate.steering(), undefined);
+	const failing = promptGate({ ...fake.session, abort: () => Promise.reject(new Error("abort failed")) }, (what, error) => reported.push(`${what}: ${(error as Error).message}`));
+	const next = failing.prompt("next");
+	await assert.rejects(failing.abort(), /abort failed/, "the caller's own abort still throws to it");
+	fake.prepare();
+	fake.start();
+	await flush();
+	assert.deepEqual(reported.slice(1), ["the abort at the run's start: abort failed"]);
+	fake.end();
+	await next;
+});
+

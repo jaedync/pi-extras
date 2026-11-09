@@ -13,7 +13,7 @@ import { isBlockingPeer } from "../band/glyph.ts";
 import { markChildSession } from "../child-session.ts";
 import { compactionPoint, type CompactionLimits } from "../compaction-point.ts";
 import { holdBusy } from "../idle-gc.ts";
-import { operationalError } from "../operational-log.ts";
+import { errorText, operationalError } from "../operational-log.ts";
 import { isVirtualModel } from "../routed-model.ts";
 import { CHILD_GUARD_NAME, CHILD_GUARD_PATH, createChildRateLimitGuard } from "../rate-limit-recovery/child.ts";
 import { callPhrase } from "../tool-phrase.ts";
@@ -30,7 +30,7 @@ import { launchFiles, resourceFiles, stampCurrent, stampOf, withFiles } from "./
 import { WAITING_FOR_MODEL, type AgentRecord, type AgentWork, type ChildHandle, type ChildHooks, type Launcher, type Usage } from "./types.ts";
 import { editTarget, outsideWorktree, realTarget, sourcePlace, workspaceError } from "./worktree.ts";
 import { childContextFiles } from "./child-context.ts";
-import { promptGate, type PromptGate } from "./child-prompt.ts";
+import { promptGate, type GateError, type PromptGate } from "./child-prompt.ts";
 
 type Sdk = typeof import("@earendil-works/pi-coding-agent");
 
@@ -401,7 +401,8 @@ export function createLauncher(deps: LauncherDeps): Launcher {
 			alone = () => pendingCalls(session) === 1;
 			await bindChild(session, guard, deps.onExtensionError);
 			const context = childContext(deps, settingsManager, modelRuntime, model, record);
-			return { ...handleFor(session, hooks, context, guard, record), stamp, check };
+			const gateError: GateError = (what, error) => operationalError(join(agentDir, "subagents-child.log"), "subagents", `${record.name}: ${what} failed: ${errorText(error)}`);
+			return { ...handleFor(session, hooks, context, guard, record, gateError), stamp, check };
 		},
 		current: (handle) => !handle.stamp || stampCurrent(handle.stamp, generation),
 		codeCurrent: (handle) => !handle.stamp || handle.stamp.generation === generation,
@@ -689,10 +690,10 @@ function watchStreaming(session: AgentSession): { current: () => unknown; stop: 
 /** The tool calls of the turn that have not ended; Pi runs a turn's calls in parallel. */
 const pendingCalls = (session: AgentSession): number => (session.agent as { state?: { pendingToolCalls?: ReadonlySet<string> } }).state?.pendingToolCalls?.size ?? 0;
 
-function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildContext, guard: ReturnType<typeof createChildRateLimitGuard>, record: AgentRecord): ChildHandle {
+function handleFor(session: AgentSession, hooks: ChildHooks, context: ChildContext, guard: ReturnType<typeof createChildRateLimitGuard>, record: AgentRecord, gateError: GateError): ChildHandle {
 	const streaming = watchStreaming(session);
 	const unwatch = watchChild(session, hooks, context, record);
-	const gate = promptGate(session);
+	const gate = promptGate(session, gateError);
 	const dispose = childDisposer(session, () => { streaming.stop(); unwatch(); }, guard, gate);
 	const held: string[] = [];
 	const turnEnd = endAtTurn(session, hooks, held);
