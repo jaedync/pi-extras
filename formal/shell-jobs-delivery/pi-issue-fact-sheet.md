@@ -9,8 +9,9 @@ issues and pull requests from new contributors.
 - Date checked: 2026-11-08.
 - Pi versions tested: `@earendil-works/pi-coding-agent` 1.4.0 and 1.5.0.
   The facts apply to these two versions. A later release can change them.
-- pi-extras: the code before the fix is commit `cf08a6a`. The fix is on
-  branch `numbrone/fix-shell-jobs-dup`. With the fix, pi-extras does not
+- pi-extras: the code before the fix is commit `cf08a6a`. The fix is commit
+  `e95a143` (with `dabe888`) on branch `numbrone/fix-shell-jobs-dup`, not
+  released yet. With the fix, pi-extras does not
   depend on these Pi rules for correct delivery. So the issue is about Pi's
   contract, not about a pi-extras bug that is still open.
 
