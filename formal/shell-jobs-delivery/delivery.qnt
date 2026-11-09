@@ -69,6 +69,12 @@ module delivery {
   // named pi-deferred-throws set this to true.
   pure val DEFERRED_THROWS = false
 
+  // A run that a completion starts can fail in _prepareRun after
+  // before_agent_start (startFails). Its first message is then lost. The
+  // faithful model lets only a user prompt's run fail; the checks named
+  // pi-run-start-fails set this to true.
+  pure val RUN_START_FAILS = false
+
   // The fix: reconcile skips a held job (lib/shell-jobs-delivery.ts reconcileDeliveries).
   // The checks named old-* set it to false to show each path of finding F in
   // the code before the fix.
@@ -520,21 +526,28 @@ module delivery {
     }
   }
 
-  // A user prompt's run fails in _prepareRun (a compaction error, an error in
-  // a before_agent_start handler): _startRun clears _isAgentRunActive and
-  // throws, with no agent_settled (agent-session.js _startRun). The model
-  // lets only a run with no message of shell-jobs in it fail, and not inside
-  // a deferred loop (a throw there is DEFERRED_THROWS).
+  // A run fails in _prepareRun after before_agent_start (an error in a
+  // handler's result, the prompt images or the tool loadout): _startRun
+  // clears _isAgentRunActive and throws, with no agent_settled
+  // (agent-session.js _startRun). The run's first message never lands. A
+  // run that a deferred action started throws out of the deferred loop, so
+  // Pi drops the deferred actions after it too: that needs DEFERRED_THROWS.
+  // _checkCompaction, before before_agent_start, catches its errors.
   action startFails: bool = all {
     handlerGate,
-    busy, not(inLoop), not(settling), starting == "", firstMsg == "", queue == [], not(loopRun), later == [],
+    busy, not(inLoop), not(settling), starting == "",
+    firstMsg == "" or RUN_START_FAILS,
+    not(loopRun) or DEFERRED_THROWS,
     busy' = false,
     abortRequested' = false,
-    inLoop' = inLoop, settling' = settling, handlerDue' = handlerDue, deferred' = deferred, later' = later,
-    loopRun' = loopRun, reloading' = reloading, queue' = queue, history' = history,
+    firstMsg' = "",
+    later' = if (loopRun) [] else later,
+    loopRun' = false,
+    inLoop' = inLoop, settling' = settling, handlerDue' = handlerDue, deferred' = deferred,
+    reloading' = reloading, queue' = queue, history' = history,
     jobs' = jobs, outbox' = outbox, reading' = reading, settleWaits' = settleWaits,
     binding' = binding, lastBinding' = lastBinding, keepRest, held' = held, keepRetry,
-    settleAborted' = settleAborted, starting' = starting, firstMsg' = firstMsg,
+    settleAborted' = settleAborted, starting' = starting,
   }
 
   // The run ends: all its messages are in, or it was aborted, and the

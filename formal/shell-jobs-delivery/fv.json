@@ -12,7 +12,7 @@
     "noHoldPastSettle",
     "outboxMoves"
   ],
-  "syncCommit": "e95a143",
+  "syncCommit": "0baa7af",
   "covers": [
     {
       "path": "lib/shell-jobs-delivery.ts",
@@ -417,6 +417,19 @@
       }
     },
     {
+      "name": "pi-run-start-fails",
+      "replace": [
+        {
+          "from": "pure val RUN_START_FAILS = false",
+          "to": "pure val RUN_START_FAILS = true"
+        }
+      ],
+      "note": "The other path that the fix leaves open: /reload passes its isStreaming check, a completion starts a run, shell-jobs parks, so that run's before_agent_start reaches no shell-jobs handler, and the run then fails in _prepareRun. The \"pending\" hold has no copy in Pi.",
+      "expect": {
+        "violates": "noStuckHold"
+      }
+    },
+    {
       "name": "pi-deferred-throws",
       "replace": [
         {
@@ -432,7 +445,7 @@
     {
       "name": "pi-deferred-throws-no-duplicate",
       "base": "pi-deferred-throws",
-      "note": "The same Pi, with noStuckHold and noHoldPastSettle off: a throw in the deferred actions gives no duplicate and breaks no other invariant.",
+      "note": "Deferred actions that throw and runs that fail to start (DEFERRED_THROWS, RUN_START_FAILS), with noStuckHold and noHoldPastSettle off: they give no duplicate and break no other invariant.",
       "replace": [
         {
           "from": "val noStuckHold = HELD_GUARD implies",
@@ -441,6 +454,26 @@
         {
           "from": "val noHoldPastSettle = HELD_GUARD implies",
           "to": "val noHoldPastSettle = true or"
+        },
+        {
+          "from": "pure val RUN_START_FAILS = false",
+          "to": "pure val RUN_START_FAILS = true"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "pi-deferred-throws-one-job-runs6",
+      "base": "pi-deferred-throws-no-duplicate",
+      "note": "One job and 6 user runs or aborts, with failed run starts: a resend whose run fails to start is lost, so a job can reach the attempt cap. The base of mutant-attempt-cap-off-by-one.",
+      "replace": [
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\")"
+        },
+        {
+          "from": "pure val MAX_RUNS = 2 ",
+          "to": "pure val MAX_RUNS = 6 "
         }
       ],
       "expect": "pass"
@@ -619,7 +652,7 @@
     },
     {
       "name": "mutant-attempt-cap-off-by-one",
-      "base": "faithful-one-job-runs6",
+      "base": "pi-deferred-throws-one-job-runs6",
       "mirrors": "lib/shell-jobs-delivery.ts:133 with `job.attempts >= MAX_COMPLETION_ATTEMPTS + 1`: a fourth send",
       "replace": [
         {
