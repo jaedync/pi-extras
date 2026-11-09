@@ -24,6 +24,7 @@ module recovery {
   pure val MAX_CANCELS = 1      // Esc presses and /rate-limit-recovery cancel
   pure val MAX_RELOADS = 1
   pure val MAX_CLONES = 1
+  pure val MAX_NAVS = 1         // session_start(resume) and /tree navigations
 
   // ---- Platform switches. The faithful model is Pi as it is. ----
   // Another extension's agent_before_settle handler can return continue
@@ -40,6 +41,10 @@ module recovery {
   pure val CONTEXT_ENDS_IDLE_WAIT = false
   // F1 fix: a session_start of a fork closes a copied open entry.
   pure val FORK_CLOSES_ENTRY = false
+  // F3 fix: a session_start that does not restore an open entry closes it.
+  pure val START_CLOSES_STALE_ENTRY = false
+  // F4 fix: a /tree navigation ends the idle wait.
+  pure val TREE_ENDS_IDLE_WAIT = false
 
   pure val KINDS = Set("ok", "quota", "cloud", "local", "other")
   pure val MODELS = Set("a1", "a2", "oa", "loc")
@@ -86,6 +91,7 @@ module recovery {
   var cancels: int
   var reloads: int
   var clones: int
+  var navs: int
 
   action init = all {
     phase' = "idle", aborted' = false, queued' = 0, settleGo' = false, model' = "a1",
@@ -93,7 +99,7 @@ module recovery {
     tPending' = "none", tReady' = false, tActive' = false, streak' = 0,
     iActive' = false, entryOpen' = false, idleEndedBy' = "none",
     owed' = false, badResume' = false, lastKind' = "none", resumes' = 0,
-    requests' = 0, inputs' = 0, selects' = 0, cancels' = 0, reloads' = 0, clones' = 0,
+    requests' = 0, inputs' = 0, selects' = 0, cancels' = 0, reloads' = 0, clones' = 0, navs' = 0,
   }
 
   // ---- Keep helpers ----
@@ -102,7 +108,7 @@ module recovery {
   action keepT = all { tPending' = tPending, tReady' = tReady, tActive' = tActive, streak' = streak }
   action keepI = all { iActive' = iActive, entryOpen' = entryOpen, idleEndedBy' = idleEndedBy }
   action keepGhost = all { owed' = owed, badResume' = badResume, lastKind' = lastKind, resumes' = resumes }
-  action keepBounds = all { requests' = requests, inputs' = inputs, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones }
+  action keepBounds = all { requests' = requests, inputs' = inputs, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones, navs' = navs }
 
   // planWait (core.ts:63-71) with one unit per quota wait.
   val planOk = attempts < MAX_RECOVERIES and spent < BUDGET
@@ -166,7 +172,7 @@ module recovery {
       startRun("user", iActive, entryOpen),
       owed' = false, badResume' = badResume, lastKind' = lastKind, resumes' = resumes,
     },
-    inputs' = inputs + 1, requests' = requests, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones,
+    inputs' = inputs + 1, requests' = requests, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones, navs' = navs,
   }
 
   // A shell job or subagent report: sendMessage with triggerTurn, which
@@ -181,7 +187,7 @@ module recovery {
       startRun("other", iActive, entryOpen),
       owed' = false, badResume' = badResume, lastKind' = lastKind, resumes' = resumes,
     },
-    inputs' = inputs + 1, requests' = requests, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones,
+    inputs' = inputs + 1, requests' = requests, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones, navs' = navs,
   }
 
   // ---- The request ----
@@ -202,7 +208,7 @@ module recovery {
     if (CONTEXT_ENDS_IDLE_WAIT) all { iActive' = false, entryOpen' = if (iActive) false else entryOpen, idleEndedBy' = idleEndedBy }
     else keepI,
     owed' = false, badResume' = badResume, lastKind' = lastKind, resumes' = resumes,
-    requests' = requests + 1, inputs' = inputs, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones,
+    requests' = requests + 1, inputs' = inputs, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones, navs' = navs,
   }
 
   // message_end of the reply (controller.ts:225-241 and transient.ts:329-376).
@@ -390,7 +396,7 @@ module recovery {
       model' = m,
     },
     lastKind' = lastKind,
-    selects' = selects + 1, requests' = requests, inputs' = inputs, cancels' = cancels, reloads' = reloads, clones' = clones,
+    selects' = selects + 1, requests' = requests, inputs' = inputs, cancels' = cancels, reloads' = reloads, clones' = clones, navs' = navs,
   }
 
   // ---- Esc. While a run is active, the wait lines listen first
@@ -416,7 +422,7 @@ module recovery {
     tActive' = false, streak' = streak,
     iActive' = false, entryOpen' = if (iActive) false else entryOpen, idleEndedBy' = idleEndedBy,
     owed' = false, badResume' = badResume, lastKind' = lastKind, resumes' = resumes,
-    cancels' = cancels + 1, requests' = requests, inputs' = inputs, selects' = selects, reloads' = reloads, clones' = clones,
+    cancels' = cancels + 1, requests' = requests, inputs' = inputs, selects' = selects, reloads' = reloads, clones' = clones, navs' = navs,
   }
 
   // /rate-limit-recovery cancel (controller.ts:312). Extension commands run
@@ -430,7 +436,7 @@ module recovery {
     tPending' = "none", tReady' = false, tActive' = false, streak' = streak,
     iActive' = false, entryOpen' = if (iActive) false else entryOpen, idleEndedBy' = idleEndedBy,
     owed' = false, badResume' = badResume, lastKind' = lastKind, resumes' = resumes,
-    cancels' = cancels + 1, requests' = requests, inputs' = inputs, selects' = selects, reloads' = reloads, clones' = clones,
+    cancels' = cancels + 1, requests' = requests, inputs' = inputs, selects' = selects, reloads' = reloads, clones' = clones, navs' = navs,
   }
 
   // ---- /reload. The TUI refuses it while a run is active (IM:5328-5332).
@@ -446,7 +452,7 @@ module recovery {
     tPending' = "none", tReady' = false, tActive' = false, streak' = 0,
     iActive' = entryOpen, entryOpen' = entryOpen, idleEndedBy' = idleEndedBy,
     keepGhost,
-    reloads' = reloads + 1, requests' = requests, inputs' = inputs, selects' = selects, cancels' = cancels, clones' = clones,
+    reloads' = reloads + 1, requests' = requests, inputs' = inputs, selects' = selects, cancels' = cancels, clones' = clones, navs' = navs,
   }
 
   // ---- /clone while idle: a new session with a copy of the branch
@@ -461,7 +467,45 @@ module recovery {
     iActive' = false, idleEndedBy' = idleEndedBy,
     entryOpen' = (CLONE_COPIES_ENTRIES and entryOpen and not(FORK_CLOSES_ENTRY)),
     owed' = false, badResume' = badResume, lastKind' = lastKind, resumes' = resumes,
-    clones' = clones + 1, requests' = requests, inputs' = inputs, selects' = selects, cancels' = cancels, reloads' = reloads,
+    clones' = clones + 1, requests' = requests, inputs' = inputs, selects' = selects, cancels' = cancels, reloads' = reloads, navs' = navs,
+  }
+
+  // ---- The user leaves the session while idle and comes back: /resume away
+  // and back (ASR newSession, switchSession) or a new `pi --continue`.
+  // session_shutdown of the old module: idleWait.stop(true) keeps the entry
+  // open (controller.ts:160). session_start(resume) (controller.ts:154-158):
+  // restoreIdleWait with RESTART_RESTORE_MAX_AGE_MS, 10 min (idle-wait.ts:20).
+  // late: the user came back after that limit. openWait refuses the entry
+  // (idle-wait.ts:63), and nothing closes it. The code gives the failure up on
+  // purpose, so no resume is owed after a late return.
+  action leave(late: bool): bool = all {
+    navs < MAX_NAVS,
+    not(running),
+    phase' = phase, aborted' = false, queued' = queued, settleGo' = false, model' = model,
+    qPending' = "none", qReady' = false, attempts' = 0, spent' = 0, hActive' = false,
+    tPending' = "none", tReady' = false, tActive' = false, streak' = 0,
+    iActive' = (entryOpen and not(late)),
+    entryOpen' = (entryOpen and not(late and START_CLOSES_STALE_ENTRY)),
+    idleEndedBy' = idleEndedBy,
+    owed' = (owed and not(late)), badResume' = badResume, lastKind' = lastKind, resumes' = resumes,
+    navs' = navs + 1, requests' = requests, inputs' = inputs, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones,
+  }
+
+  // ---- /tree while idle: AgentSession.navigateTree. The TUI aborts only a
+  // run that is active (IM:4645-4650), and the controller has no session_tree
+  // handler (controller.ts:123-165), so the idle wait goes on.
+  // keepsEntry: the new branch still holds the failure and its open entry.
+  // Else the user went back before the failure: the task is not on the
+  // branch, and no resume is owed.
+  action tree(keepsEntry: bool): bool = all {
+    navs < MAX_NAVS,
+    not(running),
+    keepPi, keepQ, keepT,
+    iActive' = (iActive and not(TREE_ENDS_IDLE_WAIT)),
+    entryOpen' = (entryOpen and keepsEntry and not(TREE_ENDS_IDLE_WAIT)),
+    idleEndedBy' = idleEndedBy,
+    owed' = (owed and keepsEntry), badResume' = badResume, lastKind' = lastKind, resumes' = resumes,
+    navs' = navs + 1, requests' = requests, inputs' = inputs, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones,
   }
 
   // Nothing more happens: keeps TLC from reporting a deadlock at the bounds.
@@ -488,6 +532,10 @@ module recovery {
     cancelCommand,
     reload,
     clone,
+    nondet late = Set(true, false).oneOf()
+    leave(late),
+    nondet keepsEntry = Set(true, false).oneOf()
+    tree(keepsEntry),
     stutter,
   }
 
@@ -516,6 +564,10 @@ module recovery {
   val witnessNoRestore = not(reloads > 0 and iActive)
   val witnessNoUserEndsIdle = idleEndedBy != "user"
   val witnessNoOtherEndsIdle = idleEndedBy != "other"
+  // A late return left an open entry with no wait behind it (F3).
+  val witnessNoLateReturn = not(navs > 0 and entryOpen and not(iActive))
+  // /tree left the idle wait running with its entry off the branch (F4).
+  val witnessNoTreeAway = not(navs > 0 and iActive and not(entryOpen))
 
   val safety = oneWait and resumeOwed and withinBudgets
 }

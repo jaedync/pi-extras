@@ -265,6 +265,22 @@ function makeWorld() {
 			emit("session_start", { type: "session_start", reason: "fork" });
 			await settle();
 		},
+		async leave(s) {
+			// /resume away and back, or a new `pi --continue` (agent-session-runtime.js newSession, switchSession).
+			// late: the user comes back after RESTART_RESTORE_MAX_AGE_MS (10 min, idle-wait.ts:20).
+			emit("session_shutdown", { type: "session_shutdown", reason: "resume" });
+			if (picked(s, "late") === true) now += 11 * 60_000;
+			pi.aborted = false;
+			load();
+			emit("session_start", { type: "session_start", reason: "resume" });
+			await settle();
+		},
+		async tree(s) {
+			// AgentSession.navigateTree while idle: no handler of ours runs (controller.ts:123-165).
+			// keepsEntry: the target keeps the branch. Else the user goes back to before the failure.
+			if (picked(s, "keepsEntry") !== true) branch = [];
+			await settle();
+		},
 		stutter() {},
 	};
 
@@ -324,7 +340,7 @@ test("every model trace replays on the real recovery controller with equal state
 			}
 		} finally { await world.close(); }
 	}
-	for (const action of ["userPrompt", "context", "messageEnd", "turnEnd", "transientTimer", "hibernateTimer", "postRun", "settleEnd", "idleWaitEnds", "modelSelect", "esc", "cancelCommand", "reload", "clone"]) {
+	for (const action of ["userPrompt", "context", "messageEnd", "turnEnd", "transientTimer", "hibernateTimer", "postRun", "settleEnd", "idleWaitEnds", "modelSelect", "esc", "cancelCommand", "reload", "clone", "leave", "tree"]) {
 		assert.ok(seen.has(action), `the traces reach ${action}`);
 	}
 	void LOCAL_RESUME_TYPE;

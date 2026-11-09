@@ -67,6 +67,14 @@
         {
           "from": "pure val CONTEXT_ENDS_IDLE_WAIT = false",
           "to": "pure val CONTEXT_ENDS_IDLE_WAIT = true"
+        },
+        {
+          "from": "pure val START_CLOSES_STALE_ENTRY = false",
+          "to": "pure val START_CLOSES_STALE_ENTRY = true"
+        },
+        {
+          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
+          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
         }
       ],
       "expect": {
@@ -80,6 +88,14 @@
         {
           "from": "pure val FORK_CLOSES_ENTRY = false",
           "to": "pure val FORK_CLOSES_ENTRY = true"
+        },
+        {
+          "from": "pure val START_CLOSES_STALE_ENTRY = false",
+          "to": "pure val START_CLOSES_STALE_ENTRY = true"
+        },
+        {
+          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
+          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
         }
       ],
       "expect": {
@@ -93,6 +109,14 @@
         {
           "from": "pure val FORK_CLOSES_ENTRY = false",
           "to": "pure val FORK_CLOSES_ENTRY = true"
+        },
+        {
+          "from": "pure val START_CLOSES_STALE_ENTRY = false",
+          "to": "pure val START_CLOSES_STALE_ENTRY = true"
+        },
+        {
+          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
+          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
         }
       ],
       "expect": {
@@ -114,6 +138,56 @@
         {
           "from": "    if (running) all {\n      phase' = phase, aborted' = aborted, queued' = queued + 1, settleGo' = settleGo,\n      keepQ, keepT, keepI, keepGhost,\n    } else all {\n      startRun(\"other\", iActive, entryOpen),",
           "to": "    not(running),\n    if (running) all {\n      phase' = phase, aborted' = aborted, queued' = queued + 1, settleGo' = settleGo,\n      keepQ, keepT, keepI, keepGhost,\n    } else all {\n      startRun(\"other\", iActive, entryOpen),"
+        },
+        {
+          "from": "pure val START_CLOSES_STALE_ENTRY = false",
+          "to": "pure val START_CLOSES_STALE_ENTRY = true"
+        },
+        {
+          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
+          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
+        }
+      ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "f3-late-return",
+      "why": "F1, F2 and F4 fixed: the user leaves the session during the idle wait and comes back after the 10 min restart limit. session_start(resume) refuses the restore but leaves the entry open, and a later /reload restores it (F3, found by the step-9 review).",
+      "replace": [
+        {
+          "from": "pure val CONTEXT_ENDS_IDLE_WAIT = false",
+          "to": "pure val CONTEXT_ENDS_IDLE_WAIT = true"
+        },
+        {
+          "from": "pure val FORK_CLOSES_ENTRY = false",
+          "to": "pure val FORK_CLOSES_ENTRY = true"
+        },
+        {
+          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
+          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
+        }
+      ],
+      "expect": {
+        "violates": "resumeOwed"
+      }
+    },
+    {
+      "name": "f4-tree-away",
+      "why": "F1, F2 and F3 fixed: /tree while idle goes back before the failure, but the idle wait goes on and resumes a task that is not on the branch (F4, found by the step-9 review).",
+      "replace": [
+        {
+          "from": "pure val CONTEXT_ENDS_IDLE_WAIT = false",
+          "to": "pure val CONTEXT_ENDS_IDLE_WAIT = true"
+        },
+        {
+          "from": "pure val FORK_CLOSES_ENTRY = false",
+          "to": "pure val FORK_CLOSES_ENTRY = true"
+        },
+        {
+          "from": "pure val START_CLOSES_STALE_ENTRY = false",
+          "to": "pure val START_CLOSES_STALE_ENTRY = true"
         }
       ],
       "expect": {
@@ -131,6 +205,14 @@
         {
           "from": "pure val FORK_CLOSES_ENTRY = false",
           "to": "pure val FORK_CLOSES_ENTRY = true"
+        },
+        {
+          "from": "pure val START_CLOSES_STALE_ENTRY = false",
+          "to": "pure val START_CLOSES_STALE_ENTRY = true"
+        },
+        {
+          "from": "pure val TREE_ENDS_IDLE_WAIT = false",
+          "to": "pure val TREE_ENDS_IDLE_WAIT = true"
         }
       ],
       "expect": "pass"
@@ -377,7 +459,9 @@
       "witnessNoOtherEndsIdle",
       "witnessNoUserEndsIdle",
       "resumeOwed",
-      "oneWait"
+      "oneWait",
+      "witnessNoLateReturn",
+      "witnessNoTreeAway"
     ]
   }
 }
