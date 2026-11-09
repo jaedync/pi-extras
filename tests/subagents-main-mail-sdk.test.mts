@@ -32,6 +32,8 @@ interface Requests {
 	gate: Promise<void>;
 	release(): void;
 	holdTurn?: Promise<void>;
+	/** The messages of the last turn request, as JSON. */
+	lastTurn?: string;
 	/** The next turn calls slow_tool instead of answering. */
 	toolTurn?: boolean;
 }
@@ -49,6 +51,7 @@ function steps(state: Requests, filler = "") {
 		const summary = /^\[\{"type":"text","text":"(<conversation>|# Conversation)/.test(JSON.stringify(context.messages.at(-1)?.content ?? ""));
 		const reminded = /was stopped before you replied/.test(JSON.stringify(context.messages.at(-1)?.content ?? ""));
 		state.seen.push(`${summary ? "summary" : "turn"}${text.includes(NOTE) ? " (sees note)" : ""}${reminded ? " (reminded)" : ""}`);
+		if (!summary) state.lastTurn = text;
 		if (summary) {
 			await state.gate;
 			return ai.fauxAssistantMessage("## Summary\nEarlier work.");
@@ -340,11 +343,14 @@ async function compactWhileWorking(session: any, state: Requests, run: Promise<u
 	return compactError;
 }
 
+/** Whether a turn request read the reminder. */
+const REMINDER_TEXT = /was stopped before you replied/;
+
 /**
  * Runs /compact while main's turn works on the note and ends it without a
  * summary: `esc` aborts it as interactive mode does on Esc, else an extension
- * cancels it. No turn may start by itself (owner answer 846); the user's next
- * message must carry the reminder, and main replies.
+ * cancels it. No turn may start by itself (owner answer 846). The reminder
+ * lands without a turn, the user's next turn reads it, and main replies.
  */
 async function cancelWhileWorking(session: any, state: Requests, run: Promise<unknown>, open: () => void, esc: boolean): Promise<string> {
 	let compactError = "";
@@ -358,9 +364,11 @@ async function cancelWhileWorking(session: any, state: Requests, run: Promise<un
 	await sleep(500);
 	await session.waitForIdle();
 	assert.deepEqual(state.seen.filter((request) => request.startsWith("turn")), ["turn"], "no turn starts after the cancel");
+	assert.match(transcript(session), /assistant > note > note$/, "the stopped reply, the note, then the hidden reminder, in the session file");
 	await session.prompt("four");
-	assert.equal(state.seen.at(-1), "turn (sees note) (reminded)", `the next message carries the reminder: ${state.seen}`);
-	assert.match(transcript(session), /user > note > assistant$/, "the user's message, the reminder, then main's reply");
+	assert.match(state.lastTurn ?? "", REMINDER_TEXT, `the next turn reads the reminder: ${state.seen}`);
+	assert.equal(state.seen.at(-1), "turn (sees note)");
+	assert.match(transcript(session), /note > note > user > assistant$/, "the reminder, the user's message, then main's reply");
 	return compactError;
 }
 
@@ -460,6 +468,37 @@ test("Esc during the summary of a /compact that stopped main starts no turn; the
 		const { run, open } = await noteDuringUserTurn(session, state, note);
 		assert.equal(await cancelWhileWorking(session, state, run, open, true), "Compaction cancelled");
 		assert.ok(state.seen.includes("summary"), "Esc came during the summary");
+	} finally {
+		close();
+	}
+});
+
+test("a message typed during the summary, then Esc: that message's run reads the reminder and main replies in it", { timeout: 20_000 }, async () => {
+	const state = requests();
+	const { session, note, close } = await setup(state);
+	try {
+		const { run, open } = await noteDuringUserTurn(session, state, note);
+		// Interactive mode queues what the user types during a compaction and sends it on compaction_end.
+		let typed: Promise<unknown> | undefined;
+		const unsubscribe = session.subscribe((event: { type: string; aborted?: boolean }) => {
+			if (event.type === "compaction_end" && event.aborted && !typed) typed = session.prompt("four");
+		});
+		let compactError = "";
+		const compacting = session.compact().catch((error: unknown) => { compactError = (error as Error).message; });
+		open();
+		await until(() => state.seen.some((request) => request.startsWith("summary")), "the summary request");
+		session.abortCompaction();
+		state.release();
+		await Promise.all([run, compacting]);
+		assert.equal(compactError, "Compaction cancelled");
+		await until(() => typed !== undefined, "the typed message");
+		await typed;
+		await session.waitForIdle();
+		unsubscribe();
+		const turns = state.seen.filter((request) => request.startsWith("turn"));
+		assert.equal(turns.length, 3, `the stopped turn, the typed message's turn, then the reply to the reminder in the same run: ${state.seen}`);
+		assert.match(transcript(session), /user > assistant > note > assistant$/, "the typed message, main's answer, the reminder at the turn boundary, main's reply");
+		assert.match(state.lastTurn ?? "", REMINDER_TEXT);
 	} finally {
 		close();
 	}

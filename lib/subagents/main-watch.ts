@@ -150,10 +150,11 @@ export function watchMain(pi: Pick<ExtensionAPI, "on">, mail: () => HostMail | n
 	// handler may not have run: Pi ends that emit at the first handler that cancels, and some failures
 	// (a session too small to compact) come before it. So the stop mark decides, whatever `aborted` says.
 	// `aborted` is Esc during the summary or an extension's cancel, which Pi does not tell apart: no turn
-	// starts then, and the reminder goes with main's next turn (owner answer 846). A failure reminds now.
+	// starts then (owner answer 846). The reminder lands without a turn and stays owed, so main's next
+	// turn reads it and replies, whatever starts that turn. A failure wakes main now.
 	pi.on("session_compact_failed", async (event, ctx) => {
 		const stopped = event.reason === "manual" && (compactionStopped || stoppedByCompaction(ctx));
-		if (stopped && event.aborted) mail()?.remind({ nextTurn: true });
+		if (stopped && event.aborted) mail()?.remind({ startTurn: false });
 		compacted(stopped && !event.aborted);
 	});
 	pi.on("session_tree", async () => retrySoon());

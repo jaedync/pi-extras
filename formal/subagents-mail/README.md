@@ -39,7 +39,7 @@ check some orders. TLC checks all of them within the bounds.
 | `noCopy` | Each mail item is in one place only. |
 | `ackMeansLanded` | The widget removes a pending item only after the item is in the transcript. |
 | `idleMeansLanded` | When the host from before a reload is idle, every item (but the hidden reminder) is in the transcript. |
-| `wokenForMail` | When nothing is left to run (no run, no deferred action, no timer, no compaction, no reload), main has replied after each waking item in the transcript, unless the user stopped that run with Esc, or the reminder waits in Pi's next-turn queue (owner answer 846). So a reminder is never lost: it is owed until a turn starts with it. |
+| `wokenForMail` | When nothing is left to run (no run, no deferred action, no timer, no compaction, no reload), main has replied after each waking item in the transcript, unless the user stopped that run with Esc. One more exception (owner answer 846): after Esc or a cancel ends a `/compact`, and before the next run starts, the reminder is owed or in the transcript after main's last reply. So the reminder is never lost: the next run reads it and must reply after it. |
 | `escStartsNoTurn` | After Esc or a cancel ends a `/compact` that stopped main, the reminder is in no place that starts a run (the starting message, the deferred actions, the steering queue) until a run starts for another cause. |
 
 ## What the model covers
@@ -104,7 +104,8 @@ The parts of Pi 1.4.0 that the mail depends on. Each was read in
 - Pi clears the compaction state (as:2335) before it emits
   `session_compact_failed` (as:2344). So Pi is idle in that event, and the
   route is `wake`.
-- `sendCustomMessage` with `deliverAs: "nextTurn"` puts the message in
+- (Used only by the first design of answer 846, `57718bc`.)
+  `sendCustomMessage` with `deliverAs: "nextTurn"` puts the message in
   `_pendingNextTurnMessages` and starts no run (as:1854-1856). `_prepareRun`
   adds these messages after the starting message of the next run, whatever
   starts it (a prompt, mail that wakes main), then empties the queue
@@ -155,7 +156,7 @@ The model does not cover:
 ## Results (sync commit `57718bc`, after the fixes and owner answer 846)
 
 Run `node skills/formal-verification/scripts/fv.mjs check formal/subagents-mail --workers 1`.
-`results.json` holds the last run (25 of 25 checks gave the expected result).
+`results.json` holds the last run (27 of 27 checks gave the expected result).
 Other agents share the Apalache server on port 8822. A check that gives
 `error` lost that port race; run it again with `--only`.
 
@@ -168,8 +169,8 @@ The three pass checks have the bounds of the old `assume-fixes`,
 | Check | Expect | Result |
 |---|---|---|
 | `faithful` | violates `witnessNoFallback` | violation, depth 4 (the full bounds reach a fallback hand-over; the traces come from this variant) |
-| `faithful-no-reload` | pass | pass, 85,795 states (no reload, no failed send) |
-| `faithful-fail` | pass | pass, 206,029 states (no reload) |
+| `faithful-no-reload` | pass | pass, 84,071 states (no reload, no failed send) |
+| `faithful-fail` | pass | pass, 199,107 states (no reload) |
 | `faithful-reload` | pass | pass, 65,229 states (no failed send, no `/compact`) |
 | `before-fixes` | violates `wokenForMail` | violation (path F1), depth 9 |
 | `mutant-f1-started-mail-not-owed` | violates `wokenForMail` | violation (path F1), depth 9 |
@@ -179,6 +180,8 @@ The three pass checks have the bounds of the old `assume-fixes`,
 | `mutant-f4-old-fix-handler-order` | violates `wokenForMail` | violation (path F4, cancel first), depth 9 |
 | `mutant-esc-reminder-starts-turn` | violates `escStartsNoTurn` | violation, depth 8 (`ESC_WAITS` off: the code before answer 846) |
 | `mutant-esc-reminder-dropped` | violates `wokenForMail` | violation, depth 9 (the Esc reminder clears `owing` and posts nothing) |
+| `mutant-quiet-miss-stays-quiet` | violates `wokenForMail` | violation, depth 15 (`QUIET_MISS_WAKES` off: the reminder misses the run after the Esc) |
+| `survivor-esc-reminder-not-owed` | pass | pass, 199,107 states (see below) |
 | `mutant-failed-send-dropped` | violates `noLoss` | violation |
 | `mutant-steer-while-working` | violates `noLoss` | violation |
 | `mutant-no-owing` | violates `wokenForMail` | violation |
@@ -211,8 +214,7 @@ and `mutant-drain-skips-batch` (bcad086).
 The pass checks have the same bounds as before the fixes. They have more
 states, because the model has the new variable `starting` and the
 compaction failure now picks `aborted` as a free choice. After owner answer
-846 they have more again (85,795 and 206,029 states), for the next-turn
-queue `nextQ`.
+846 they have more again, for `remQuiet` and `escWait`.
 
 One mutant survived: `survivor-idle-ignores-outbox` (idle() without
 `this.outbox.length === 0`). Each item in the outbox is also pending,
@@ -221,6 +223,15 @@ hidden reminder, and `idleMeansLanded` leaves the reminder out. Without the
 check, a held reminder lets the host go quiet, and the renew swap
 (serve.ts `renew`) then disposes it. The model does not model `renew`, so no
 property sees this. The guard is needed; the model is too small to show it.
+
+A third survivor: `survivor-esc-reminder-not-owed` (the quiet reminder sent
+without `owing`). On the route `queue` the reminder already goes as waking
+mail (`QUIET_MISS_WAKES`), so the change touches only the append at idle.
+That reminder is in the transcript before the next starting message, so the
+next run replies after it, owed or not. `owing` matters only when that run
+is stopped again and a second `/compact` follows, which is outside the
+bounds (1 Esc, 1 `/compact`). The replay catches the code change (code
+mutant 17), because it compares `owing`.
 
 A second survivor: `survivor-stop-mark-ignores-checked` (the stop mark
 without `|| !checked`). In the code, `!checked` marks a run that ended
@@ -276,10 +287,9 @@ reminder for a cancelled compaction ("the user cancelled it too"). That row
 encoded F4. Pi sends `aborted: true` for an extension's cancel and for Esc
 during the summary, and it cannot tell them apart (see F4). The row first
 expected a reminder at once. Owner answer 846 changed the rule again: that
-row now expects a reminder that waits for main's next turn (see the next
-section).
+row now expects a reminder that starts no turn (see the next section).
 
-## Owner answer 846: Esc during the summary waits for the next turn (2026-11-09)
+## Owner answer 846: Esc during the summary starts no turn (2026-11-09)
 
 **Rule.** The owner presses Esc during the summary of a `/compact` while a
 subagent note is owed. Then no turn may start. The reminder stays owed. It
@@ -301,6 +311,8 @@ line 2248). The logic is the same in both.
 - A cancel by an extension (`session_before_compact` returns `cancel`):
   `cancelledByExtension = true`, so `aborted` is true. Pi gives no other
   field that tells it from Esc.
+- Any other `abort()` or `dispose()` during the summary (a session switch,
+  a quit) also gives `aborted: true` (review). The session then ends.
 - A session too small, "Already compacted" and no model: these throw before
   the handlers, on a signal that is new and not aborted. So `aborted` is
   false.
@@ -311,79 +323,150 @@ line 2248). The logic is the same in both.
 
 | Case | `aborted` | Reminder |
 |---|---|---|
-| Esc during the summary | true | waits for main's next turn; no turn starts now |
-| An extension cancels the `/compact` (any load order) | true | waits for main's next turn (Pi cannot tell it from Esc) |
-| A session too small, already compacted, no model | false | at once, as built for F4 |
-| The summary fails | false | at once, as built for F4 |
-| The `/compact` ends with a summary | (`session_compact`) | at once, as built |
+| Esc during the summary | true | starts no turn; main's next turn reads it and replies |
+| An extension cancels the `/compact` (any load order) | true | the same (Pi cannot tell it from Esc) |
+| A session too small, already compacted, no model | false | wakes main at once, as built for F4 |
+| The summary fails | false | wakes main at once, as built for F4 |
+| The `/compact` ends with a summary | (`session_compact`) | wakes main at once, as built |
 
-`main-watch.ts` `session_compact_failed` calls `remind({ nextTurn: true })`
+`main-watch.ts` `session_compact_failed` calls `remind({ startTurn: false })`
 when `aborted` is true, else `compacted(stopped)` as before. The stop-mark
 test (`stoppedByCompaction`) decides in both cases, so the extension order
-does not matter. `deliver.ts` keeps the flag on the held item
-(`HeldMail.nextTurn`) and sends it with
-`{ triggerTurn: false, deliverAs: "nextTurn" }`. The id goes to `starting`,
-so its `message_end` in the next run makes it owed until main replies. A
-held reminder (route `hold`, for example during a `/reload`) keeps the flag
-and goes the same way later. `HOST_VERSION` is 13, because the ports' `send`
-and `HeldMail` changed.
+does not matter. `deliver.ts` marks the held item `HeldMail.owed` and sends
+it with `{ triggerTurn: false }`. It is owed on the routes `wake` and
+`queue`:
+
+- Pi is idle (the usual case): Pi appends the hidden reminder to the session
+  at once, with no turn (as:1879-1881). It is in the session file, so a
+  quit, a session switch or a `/reload` does not lose it. The next turn,
+  whatever starts it (the user's message, mail that wakes main), has it in
+  its context, just before the starting message. Main replies after it, and
+  `owed()` then settles it.
+- A run has already started, for example a message that the user typed
+  during the summary (interactive mode sends it on `compaction_end`, before
+  `session_compact_failed`, so the input grace holds the reminder until that
+  run's `agent_start`): the reminder lands at that run's next turn boundary.
+  It is owed, so the settle check makes main reply after it in the same run.
+
+A second Esc-ended `/compact` before main runs sends no second reminder
+(`quietReminder`). A quiet reminder that still waits in the outbox when a run
+has started (the route `queue`) has missed the turn after Esc. This happens
+when a send ahead of it fails, for example. `sendWaiting` then turns it into
+waking mail: on `queue` that lands owed in the run, as before, and if it
+cannot go, it wakes main later. So it does not land at idle after that run
+with no reply. TLC found this path (`faithful-fail`, depth 16: a report
+starts a run after the Esc, the send of the relay ahead of the reminder
+fails, then Esc in that run). `QUIET_MISS_WAKES` in the model is the fix. `HOST_VERSION` is 13, because `HeldMail` and
+`HostMail.remind` changed.
+
+**First design, replaced after the review (`57718bc`).** The first version
+sent the reminder with `deliverAs: "nextTurn"`, into Pi's
+`_pendingNextTurnMessages` (as:1854-1856), which `_prepareRun` adds to the
+next run (as:1511-1513). The fresh review found:
+
+- H1 (high, repro): a message typed during the summary, then Esc. The input
+  grace held the reminder, and the `agent_start` retry sent it after
+  `_prepareRun` had taken the queue. That message's run had no reminder, and
+  it went one message later. `repro-f3.mts typed` exits 1 on `57718bc` and
+  0 now. The SDK test "a message typed during the summary, then Esc" fails
+  on `57718bc` and passes now.
+- M1 (medium): Pi's queue is in memory only, so a quit or a session switch
+  before the next turn lost the reminder. The new design appends it to the
+  session file.
+- M2 (medium): after a `/reload`, the reminder in Pi's queue was no longer
+  owed. In the new design it is in the transcript, so the next run reads it.
+- L1 (low): the escape clause of `wokenForMail` allowed a reminder that had
+  missed a run. The new clause needs `escWait` (no run has started since).
 
 **Model change.** `ESC_WAITS` in `mail.qnt`. `compactFail(aborted)` posts
-the reminder as a next-turn item. `sendStep` puts it in `nextQ` (Pi's
-`_pendingNextTurnMessages`) on any route but `hold`, and starts no run.
-`runStart` takes `nextQ` with the starting message, and the reminder is
-owed from there. `copies` counts `nextQ`, so `noLoss` and `noCopy` cover it.
-`wokenForMail` allows a quiet state only while the reminder waits in
-`nextQ`. The new invariant `escStartsNoTurn` says that the reminder is in no
-place that starts a run. The replay's fake Pi has the same queue. The
-witness `witnessNoEscReminderLanded` puts a trace in the replay where the
-reminder lands with a later prompt.
+the reminder with `remQuiet`. `sendStep` sends it quietly (`sendQuiet`) on
+any route but `hold` and adds it to `owing`. `escWait` is true from that
+compaction until the next `runStart`. Properties:
 
-**Regression tests (each failed on the code at `90f60a0`).** Commit `57718bc`.
+- `wokenForMail` allows a quiet state with unreplied mail only while
+  `escWait` holds and the reminder is owed or is in the transcript after
+  main's last reply (`escReminderKept`). After the next run starts, the full
+  property applies again, so a reminder that misses that run is a violation
+  (`mutant-quiet-miss-stays-quiet`).
+- `escStartsNoTurn`: while `escWait` holds, the reminder is in no place that
+  starts a run (the starting message, the deferred actions, the steering
+  queue). `mutant-esc-reminder-starts-turn` (`ESC_WAITS` off) breaks it.
+- `mutant-quiet-miss-stays-quiet` (`QUIET_MISS_WAKES` off) breaks
+  `wokenForMail` through a failed send ahead of the reminder in the run
+  after the Esc.
+- `noLoss` and `noCopy` cover the reminder as before.
+  `mutant-esc-reminder-dropped` (the reminder clears `owing` and posts
+  nothing) breaks `wokenForMail`.
+
+The witness `witnessNoEscReminderLanded` puts traces in the replay where
+the quiet reminder lands and a later run ends. Of the 161 traces, 18 have
+the quiet reminder, and 6 start a run after it.
+
+**Regression tests (each fails on the code at `90f60a0` unless named).**
 
 - `tests/subagents-main-watch.test.ts`: the row "the user cancelled it too:
   no turn now, the reminder comes with the next message" and the row "an
-  extension that loads first cancelled it" expect `next`. The rows for a
-  failed and a too-small `/compact` still expect `now`.
-- `tests/subagents-deliver.test.ts` "a next-turn reminder starts no turn,
-  waits in Pi for main's next one, and is owed once that turn starts with it".
-- `tests/subagents-main-mail-sdk.test.mts` "Esc during the summary of a
-  /compact that stopped main starts no turn; the next user message carries
-  the reminder", and the two F4 cancel tests, in a real `AgentSession`. Each
-  checks that no turn starts after the cancel, that the next user message's
-  request carries the reminder, and that main replies
-  (`user > note > assistant`). On the old code, 3 of 16 tests fail.
+  extension that loads first cancelled it" expect `next` (a reminder with
+  `startTurn: false`). The rows for a failed and a too-small `/compact`
+  still expect `now`.
+- `tests/subagents-deliver.test.ts` "a reminder that starts no turn lands
+  at once when main is idle, and main owes it a reply until it replies after
+  it", and "a reminder that starts no turn, held while the user's message
+  comes in, lands in that message's run and is owed there", and "a reminder
+  that starts no turn and fails to send in a run that started missed that
+  run, so it wakes main next".
+- `tests/subagents-main-mail-sdk.test.mts`, in a real `AgentSession`:
+  "Esc during the summary of a /compact that stopped main starts no turn;
+  the next user message carries the reminder", and the two F4 cancel tests.
+  Each checks that no turn starts after the cancel, that the reminder is in
+  the session file (`assistant > note > note`), that the next user turn
+  reads it, and that main replies (`note > note > user > assistant`).
+  On `90f60a0`, 3 of 17 fail; on `57718bc`, 4 of 17 fail.
+- Same file: "a message typed during the summary, then Esc: that message's
+  run reads the reminder and main replies in it" (H1). It passes on
+  `90f60a0` (that code woke main in that run) and fails on `57718bc`.
 
 **Live repro.** `node formal/subagents-mail/repro-f3.mts esc` presses Esc
 (`abortCompaction()`) during the summary, waits 1 s, then sends a user
-message. Exit 0 needs one turn before that message (the stopped one), then
-`turn (sees note) (reminded)`. The `cancel` mode checks the same. After the
-change (exit 0):
+message. Exit 0 needs one turn before that message (the stopped one), the
+reminder in the session file before the message, and main's reply. The
+`cancel` mode checks the same. After the change (exit 0):
 
 ```json
 {
   "mode": "esc",
   "compactError": "Compaction cancelled",
-  "seen": ["turn", "summary", "turn (sees note) (reminded)"],
+  "seen": ["turn", "summary", "turn (sees note) (reads reminder)"],
   "turnsBeforeNext": 1,
   "replied": true,
-  "transcript": "system > user > assistant > user > assistant > user > assistant > note > user > note > assistant"
+  "transcript": "system > user > assistant > user > assistant > user > assistant > note > note > user > assistant"
 }
 ```
 
-On the code at `90f60a0` both modes exit 1 with `turnsBeforeNext: 2`: the
-reminder started a turn by itself (`seen: ["turn", "summary", "turn (sees
-note) (reminded)", "turn (sees note)"]`).
+`(reads reminder)`: the reminder is in the request's context, before the
+user's message. On the code at `90f60a0`, `esc` and `cancel` exit 1 with
+`turnsBeforeNext: 2`: the reminder started a turn by itself.
+
+`node formal/subagents-mail/repro-f3.mts typed` sends a message on
+`compaction_end`, as interactive mode does with text typed during the
+summary, and presses Esc. Exit 0 needs the reminder in that message's run.
+After the change: `seen: ["turn", "summary", "turn (sees note)", "turn (sees
+note) (reminded)"]`, transcript `... > note > user > assistant > note >
+assistant`. On `57718bc` it exits 1 with `seen: ["turn", "summary", "turn
+(sees note)"]`.
 
 **Remaining risks.**
 
-- A process restart while the reminder waits loses Pi's in-memory queue.
-  The note stays in the transcript, so main sees it on its next turn, but
-  with no reminder. A restart also loses everything else in memory.
-- A start of another `HOST_VERSION` that adopts held mail from version 13
-  reads `nextTurn` only if it knows it. `wakes` is false on that item, so an
-  older start appends it without a turn: no turn starts, but the reminder is
-  then not owed.
+- After a fallback `/reload` (another `HOST_VERSION`, or a failed adopt),
+  the new mail does not know that main owes the reminder. It is in the
+  transcript, so the next run reads it, but the settle check does not keep
+  that run for it, and a later `/compact` does not remind of it.
+- A start of another `HOST_VERSION` that takes the held reminder from
+  version 13 reads `owed` only if it knows it. `wakes` is false on that
+  item, so an older start appends it without a turn: no turn starts, but
+  the reminder is then not owed.
+- An Esc during a reminder-free run before the next turn is not checked by
+  the model beyond its bounds (1 Esc, 1 `/compact`).
 
 The live repros now wire `message_end` to `acknowledge`, as
 `extensions/subagents.ts` does. Before the fix the wiring changes nothing,
@@ -397,7 +480,7 @@ means that main never replied to the note.
 | `repro-f1.mts` | exit 1, `seen: ["turn (sees note)", "summary"]`, no reminder | exit 0, `seen: [..., "summary", "turn (sees note) (reminded)"]` |
 | `repro-f2.mts` | exit 1, `seen: ["turn", "summary (sees note)"]`, no reminder | exit 0, `seen: [..., "turn (reminded)"]` |
 | `repro-f3.mts boundary` | exit 1, `replied: false` | exit 0, `replied: true`, reminded |
-| `repro-f4.mts` (cancel) | exit 1, `Compaction cancelled`, `seen: ["turn"]` | exit 0, `seen: ["turn", "turn (sees note) (reminded)"]`; since answer 846 that turn is the user's next message (see that section) |
+| `repro-f4.mts` (cancel) | exit 1, `Compaction cancelled`, `seen: ["turn"]` | exit 0, `seen: ["turn", "turn (sees note) (reminded)"]`; since answer 846 no turn starts, and the user's next turn reads the reminder (see that section) |
 | `repro-f4-order.mts before` | exit 1, our hook did not run, no reply | exit 0, reminded |
 | `repro-f4-order.mts after` | exit 0 (the simulated first fix) | exit 0 |
 | `repro-f4-small.mts` | exit 1, `Nothing to compact (session too small)`, no reply | exit 0, reminded |
@@ -405,8 +488,8 @@ means that main never replied to the note.
 
 `repro-f4-order.mts` still simulates `aborted: false`, so it shows only the
 handler order (N1). The real handler now reminds in both orders. Since owner
-answer 846 a cancel waits for the next turn; the F4 SDK tests check both
-orders that way.
+answer 846 a cancel starts no turn; the F4 SDK tests check both orders
+that way.
 
 Transcripts after the fix:
 
@@ -415,7 +498,7 @@ Transcripts after the fix:
 - F3: `... > user > assistant > note > COMPACTION > note > assistant`
 - F4 (too small): `... > user > assistant > note > note > assistant`
 - F4 (cancel, both orders) and Esc during the summary, since answer 846:
-  `... > user > assistant > note > user > note > assistant`
+  `... > user > assistant > note > note > user > assistant`
 
 The `note` after the compaction (or after the stopped reply) is the hidden
 reminder. The last `assistant` is main's reply to the mail.
@@ -860,7 +943,7 @@ actions, three TLC checks, and all 12 repros (the "After" column).
   random, 11 witnesses) against the real `MainMail`, the real `watchMain` and
   the real `PortBinding`. After each step it compares the outbox, the pending
   items, `owing`, `starting`, the batch, both timers, `closed`, the route, `idle()`, the
-  index, and where Pi holds each message (also its next-turn queue).
+  index, and where Pi holds each message.
 - The test copies a few lines that it cannot run: the event handlers of
   `extensions/subagents.ts:337-360`, `Host.rebind`, the drain and
   `handOverMail` of `Host.close`, and the resend of `postKeptMail`. Each copy
@@ -876,9 +959,9 @@ actions, three TLC checks, and all 12 repros (the "After" column).
 - The second test replays the witness `witnessNoReminderForStartedMail`: a
   note started the run, a `/compact` stopped it, and the code posts the
   reminder (F1, fixed). Before the fix, this test replayed the F1 path.
-- `python3 formal/subagents-mail/code-mutants.py "$PWD"` makes 18 one-guard
+- `python3 formal/subagents-mail/code-mutants.py "$PWD"` makes 19 one-guard
   changes to the real code, one at a time, and runs the replay. The replay
-  caught 17 of 18, and `git diff -- lib extensions` was clean after each restore:
+  caught 17 of 19, and `git diff -- lib extensions` was clean after each restore:
   1. `acknowledge` without the move from `starting` to `owing` (F1);
   2. a failed send that keeps its id in `starting` (F1);
   3. `lastSaid` that counts `custom_message` entries again (F2);
@@ -894,9 +977,14 @@ actions, three TLC checks, and all 12 repros (the "After" column).
   13. `compacted` without `remind()` (main-watch.ts:82);
   14. `session_compact_failed` that reminds at once also when `aborted` (answer 846, the old code);
   15. no reminder at all when `aborted`;
-  16. a next-turn item sent with `triggerTurn` and `steer`;
-  17. a next-turn item not put in `starting`, so it is never owed.
-  It missed one: the stop mark without `|| !checked` (main-watch.ts:128).
+  16. the quiet reminder sent with `wakes` true, so it starts a turn;
+  17. an owed item not put in `owing`, so the run it lands in does not reply (H1).
+  The replay missed two:
+  - no change of a waiting quiet reminder to waking mail on the route
+    `queue` (`QUIET_MISS_WAKES`). No committed trace reaches the depth-16
+    path of TLC. The deliver test "a reminder that starts no turn and fails
+    to send in a run that started..." fails on this change.
+  - the stop mark without `|| !checked` (main-watch.ts:128).
   No model behavior needs that guard (see `survivor-stop-mark-ignores-checked`).
 
 ## Test coverage table
@@ -930,7 +1018,7 @@ the tests in the last rows.
 | `tests/subagents-panel.test.ts`, `subagents-budget.test.ts`, `subagents-peer-runs.test.ts`, `subagents-review-loop.test.ts`, `subagents-team-status.test.ts`, `subagents-sdk.test.mts`, `subagents-ux-sdk.test.mts`, `subagents-host-contract.test.ts`, `link-context-host-guard.test.ts` | none | keeps value: they use `MainMail` for team behavior, text or the contract version |
 | `tests/subagents-main-mail-sdk.test.mts`: the 6 tests "F1: ..." to "F4: ..." | `mutant-f1` to `mutant-f4` and the code mutants 1 to 6, against a fake Pi | keeps value: the real Pi rules of F1 to F4 (who emits what, the handler order, the early failure of a small session) |
 | `tests/subagents-deliver.test.ts`: "mail that starts main's turn is owed once it lands...", "mail that lands without a turn, or whose wake send failed, is not owed..." | `mutant-f1-started-mail-not-owed`, code mutants 1 and 2 | covered by the model, but they also check that a turn Pi never starts can't keep main from settling, which the model leaves out |
-| `tests/subagents-main-mail-sdk.test.mts` "Esc during the summary..." and `tests/subagents-deliver.test.ts` "a next-turn reminder starts no turn..." (answer 846) | `mutant-esc-reminder-starts-turn`, `mutant-esc-reminder-dropped`, code mutants 14 to 17 | keeps value: the real Pi next-turn queue and `abortCompaction()`, which the fake Pi assumes |
+| `tests/subagents-main-mail-sdk.test.mts` "Esc during the summary..." and `tests/subagents-deliver.test.ts` "a reminder that starts no turn..." (two tests) (answer 846) | `mutant-esc-reminder-starts-turn`, `mutant-esc-reminder-dropped`, `mutant-quiet-miss-stays-quiet`, code mutants 14 to 17 | keeps value: the real `abortCompaction()` and the order of `compaction_end` and `session_compact_failed`, which the fake Pi leaves out |
 | `tests/subagents-main-watch.test.ts`: the rows of F2, F3 and F4 in "a reminder follows only a /compact..." | code mutants 3 to 6 and 14 | partly covered: the replay sees the flags only through the reminder; keeps value for `STOP_WINDOW_MS` with a skipped hook |
 
 ## Open items
@@ -943,6 +1031,15 @@ the tests in the last rows.
 - The full bounds in one pass check do not finish in 25 minutes on 2 workers.
 - A failed `_prepareRun` leaves a note in `starting` and pending for good
   (see "Review of the fixes"). The model leaves out a failed `_prepareRun`.
+- A random simulation at the full bounds (`quint run`, no pass check uses
+  them) breaks `wokenForMail` on the code at `90f60a0` too: Esc in a run
+  with a note, a fallback `/reload`, a run, then a `/compact` that an earlier
+  extension cancels. The new mail does not know the owed note, so no
+  reminder comes. Path: `... userAbort > settledHandler > reloadStart >
+  fallbackClose > fallbackOpen > settleEnd > runStart > compactMidRun >
+  settledHandler > settleEnd > compactStartCancelFirst > compactFail`. It
+  needs a fallback hand-over (another `HOST_VERSION` or a failed adopt).
+  Not fixed here: the hand-over keeps no `owing`.
 
 ## Commands
 
@@ -959,6 +1056,7 @@ node formal/subagents-mail/repro-f2.mts --control
 node formal/subagents-mail/repro-f3.mts boundary
 node formal/subagents-mail/repro-f3.mts cancel
 node formal/subagents-mail/repro-f3.mts esc
+node formal/subagents-mail/repro-f3.mts typed
 node formal/subagents-mail/repro-f3.mts control
 node formal/subagents-mail/repro-f4.mts
 node formal/subagents-mail/repro-f4-order.mts before

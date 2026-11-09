@@ -20,7 +20,7 @@ export interface Call { name: string; text: string; launcher: string; finish(res
 export interface FakeModule {
 	readonly label: string;
 	readonly ports: HostPorts;
-	readonly sent: Array<{ message: HostMessage; options: { triggerTurn: boolean; deliverAs?: "steer" | "nextTurn" } }>;
+	readonly sent: Array<{ message: HostMessage; options: { triggerTurn: boolean; deliverAs?: "steer" } }>;
 	readonly notices: string[];
 	readonly launched: string[];
 	route: Route;

@@ -22,9 +22,10 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
     at once.
   - A `/compact` that Esc stopped during the summary, or that an extension
     cancelled (also an extension that loads first). Pi gives the same
-    `aborted: true` for both. No turn starts then. The reminder waits in
-    Pi's next-turn queue and goes with main's next turn: the user's next
-    message, or mail that wakes main.
+    `aborted: true` for both. No turn starts then. The reminder goes into
+    the session without a turn, and main owes it a reply: main's next turn
+    reads it, whatever starts that turn. A message that the user typed
+    during the summary gets the reminder in its own run.
 - Subagents: a message that main sends to a child as the child's run ends
   is now the run's next prompt. Before, it could wait in the idle session's
   queue, and the quiet-spell release dropped it (residual R1 of

@@ -244,24 +244,63 @@ test("after a /compact stops main, a hidden reminder wakes it for mail it hadn't
 	assert.equal(sent.length, 4, "one reminder for the same mail");
 });
 
-test("a next-turn reminder starts no turn, waits in Pi for main's next one, and is owed once that turn starts with it", () => {
+test("a reminder that starts no turn lands at once when main is idle, and main owes it a reply until it replies after it", () => {
 	const { box, sent, set } = routed("queue");
 	box.deliver({ kind: "note", from: "scout", text: "found it" });
 	// It landed while main worked, then a /compact stopped main before it replied.
 	box.acknowledge(sent[0]!.message.details.id);
-	assert.equal(box.idle(), false, "main owes the note a reply");
 	set("wake");
-	box.remind({ nextTurn: true });
+	box.remind({ startTurn: false });
 	const reminder = sent.at(-1)!;
 	assert.equal(sent.length, 2);
-	assert.deepEqual(reminder.options, { triggerTurn: false, deliverAs: "nextTurn" }, "Esc during the summary starts no turn (owner answer 846)");
+	assert.deepEqual(reminder.options, { triggerTurn: false }, "Esc during the summary starts no turn (owner answer 846)");
 	assert.match(reminder.message.content, /scout/);
-	assert.equal(box.idle(), true, "no turn has started with it yet, so nothing keeps main from settling");
-	box.remind({ nextTurn: true });
+	box.remind({ startTurn: false });
 	assert.equal(sent.length, 2, "one reminder for the same mail");
-	// message_end: the user's next message started a turn, and the reminder went in with it.
-	box.acknowledge(reminder.message.details.id);
-	assert.equal(box.idle(), false, "main owes the reminder a reply in that turn");
+	const id = reminder.message.details.id;
+	// Pi appended it; the user's next message starts a turn that reads it.
+	assert.equal(box.owed({ contextMessages: [custom(id), user], pendingMessages: [] }), true, "the settle check keeps that turn until main replies after it");
+	assert.equal(box.owed({ contextMessages: [custom(id), user, reply], pendingMessages: [] }), false, "main's reply settles it");
+});
+
+test("a reminder that starts no turn, held while the user's message comes in, lands in that message's run and is owed there", () => {
+	// The user typed during the summary: Pi sends that message as the compaction ends, so the route holds.
+	const { box, sent, set } = routed("queue");
+	box.deliver({ kind: "note", from: "scout", text: "found it" });
+	box.acknowledge(sent[0]!.message.details.id);
+	set("hold");
+	box.remind({ startTurn: false });
+	assert.equal(sent.length, 1, "held while the input grace lasts");
+	// agent_start of the run the message started.
+	set("queue");
+	box.retry();
+	const reminder = sent.at(-1)!;
+	assert.deepEqual(reminder.options, { triggerTurn: false }, "it lands at the run's next turn boundary");
+	const id = reminder.message.details.id;
+	assert.equal(box.owed({ contextMessages: [user, reply], pendingMessages: [custom(id)] }), true, "the settle check of that run makes main reply after it");
+});
+
+test("a reminder that starts no turn and fails to send in a run that started missed that run, so it wakes main next", () => {
+	let route: Route = "queue";
+	let fail = false;
+	const sent: Array<{ message: OutgoingMessage; options: { triggerTurn: boolean; deliverAs?: string } }> = [];
+	const box = new MainMail({ batchMs: 5, route: () => route, retryMs: 1_000_000,
+		port: { send: (message, options) => { if (fail) throw new Error("This session's subagents are closed."); sent.push({ message, options }); } } });
+	box.deliver({ kind: "note", from: "scout", text: "found it" });
+	box.acknowledge(sent[0]!.message.details.id);
+	route = "hold";
+	box.remind({ startTurn: false });
+	// The user's message started a run; the agent_start retry fails.
+	route = "queue";
+	fail = true;
+	box.retry();
+	fail = false;
+	// That run settled without the reminder; main is idle again.
+	route = "wake";
+	box.retry();
+	assert.deepEqual(sent.at(-1)!.options, { triggerTurn: true, deliverAs: "steer" });
+	assert.match(sent.at(-1)!.message.content, /scout/);
+	box.dispose();
 });
 
 test("with nothing owed there is no reminder", () => {

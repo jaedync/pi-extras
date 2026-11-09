@@ -6,6 +6,7 @@
  *   node formal/subagents-mail/repro-f3.mts boundary  # F3: /compact lands in agent_before_settle after main-watch said continue
  *   node formal/subagents-mail/repro-f3.mts cancel    # F4: another extension cancels the /compact that stopped the turn
  *   node formal/subagents-mail/repro-f3.mts esc       # owner answer 846: Esc during the summary of that /compact
+ *   node formal/subagents-mail/repro-f3.mts typed     # the same, with a message the user typed during the summary
  *   node formal/subagents-mail/repro-f3.mts control   # /compact while the turn streams: main is reminded
  * Exit 1: main never replies to the note.
  */
@@ -39,7 +40,9 @@ const step = async (context: any) => {
 	const last = JSON.stringify(context.messages.at(-1)?.content ?? "");
 	const summary = /^\[\{"type":"text","text":"(<conversation>|# Conversation)/.test(last);
 	const reminded = /was stopped before you replied/.test(last);
-	seen.push(`${summary ? "summary" : "turn"}${text.includes(NOTE) ? " (sees note)" : ""}${reminded ? " (reminded)" : ""}`);
+	// A reminder that landed without a turn comes before the user's message, not last.
+	const readsReminder = !reminded && !summary && /was stopped before you replied/.test(text);
+	seen.push(`${summary ? "summary" : "turn"}${text.includes(NOTE) ? " (sees note)" : ""}${reminded ? " (reminded)" : ""}${readsReminder ? " (reads reminder)" : ""}`);
 	if (summary) { await summaryGate; return ai.fauxAssistantMessage("## Summary\nEarlier work."); }
 	const hold = holdTurn; holdTurn = undefined; await hold;
 	return ai.fauxAssistantMessage(text.includes(NOTE) ? "Got the note." : "Answer.");
@@ -95,19 +98,26 @@ try {
 	let compactError = "";
 	const compacting = session.compact().catch((error: unknown) => { compactError = (error as Error).message; });
 	for (let i = 0; i < 300 && !seen.some((s) => s.startsWith("summary")) && !compactError; i++) await sleep(10);
+	// What interactive mode does with text typed during a compaction: it sends it on compaction_end.
+	let typed: Promise<unknown> | undefined;
+	if (mode === "typed") session.subscribe((event: { type: string; aborted?: boolean }) => { if (event.type === "compaction_end" && event.aborted && !typed) typed = session.prompt("four"); });
 	// What interactive mode does on Esc while the summary streams (interactive-mode.js, compaction_start).
-	if (mode === "esc") session.abortCompaction();
+	if (mode === "esc" || mode === "typed") session.abortCompaction();
 	releaseSummary();
 	await Promise.all([run, compacting]);
 	await sleep(1_000);
+	await typed;
 	await session.waitForIdle();
-	// A cancelled /compact (Esc or an extension) starts no turn; the reminder goes with the user's next message.
+	// A cancelled /compact (Esc or an extension) starts no turn. The reminder lands without one, and the
+	// user's next turn reads it; a message typed during the summary gets it at its run's turn boundary.
 	const waits = mode === "cancel" || mode === "esc";
 	const turnsBeforeNext = seen.filter((s) => s.startsWith("turn")).length;
 	if (waits) await session.prompt("four");
 	const replied = waits
-		? turnsBeforeNext === 1 && seen.at(-1) === "turn (sees note) (reminded)" && /user > note > assistant$/.test(transcript())
-		: /note > (COMPACTION > )?(note > )?assistant$/.test(transcript());
+		? turnsBeforeNext === 1 && seen.at(-1) === "turn (sees note) (reads reminder)" && /note > note > user > assistant$/.test(transcript())
+		: mode === "typed"
+			? seen.filter((s) => s.startsWith("turn")).length === 3 && seen.at(-1) === "turn (sees note) (reminded)" && /user > assistant > note > assistant$/.test(transcript())
+			: /note > (COMPACTION > )?(note > )?assistant$/.test(transcript());
 	console.log(JSON.stringify({ mode, compactError: compactError || undefined, piEvents, seen, turnsBeforeNext: waits ? turnsBeforeNext : undefined, reminded: seen.some((s) => s.endsWith("(reminded)")), replied, transcript: transcript() }, null, 2));
 	process.exitCode = replied ? 0 : 1;
 } finally { box.mail?.dispose(); session.dispose(); }

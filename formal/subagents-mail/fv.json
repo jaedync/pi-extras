@@ -192,7 +192,7 @@
     {
       "name": "mutant-esc-reminder-starts-turn",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/main-watch.ts session_compact_failed calling remind() at once also when `aborted` is true (the code before owner answer 846: Esc during the summary woke main)",
+      "mirrors": "lib/subagents/main-watch.ts session_compact_failed calling remind() (a reminder that wakes main) also when `aborted` is true (the code before owner answer 846: Esc during the summary woke main)",
       "replace": [
         {
           "from": "pure val ESC_WAITS = true",
@@ -206,11 +206,37 @@
     {
       "name": "mutant-esc-reminder-dropped",
       "base": "faithful-no-reload",
-      "mirrors": "lib/subagents/deliver.ts remind({ nextTurn: true }) that clears `owing` but posts nothing: the reminder for the Esc case is lost",
+      "mirrors": "lib/subagents/deliver.ts remind({ startTurn: false }) that clears `owing` but posts nothing: the reminder for the Esc case is lost",
       "replace": [
         {
           "from": "val b = if (remindNow) sendWaiting(w, { ...box0, owing: Set(), outbox: outbox.append(REMINDER), fail: throws,",
           "to": "val b = if (remindNow) sendWaiting(w, { ...box0, owing: Set(), outbox: if (abortedNow) outbox else outbox.append(REMINDER), fail: throws,"
+        }
+      ],
+      "expect": {
+        "violates": "wokenForMail"
+      }
+    },
+    {
+      "name": "survivor-esc-reminder-not-owed",
+      "base": "faithful-fail",
+      "mirrors": "lib/subagents/deliver.ts dispatch without `if (owed) this.owing.set(...)`. On the route queue the reminder already goes as waking mail (QUIET_MISS_WAKES), so this changes only the idle append, and the next run replies after it whether it is owed or not. Owing matters only for a second Esc and /compact before that reply, outside the bounds. The replay catches the code change (it compares owing).",
+      "replace": [
+        {
+          "from": "if (id == REMINDER and b.remQuiet) sendQuiet({ ...b1, owing: b1.owing.union(Set(id)) }, id)",
+          "to": "if (id == REMINDER and b.remQuiet) sendQuiet(b1, id)"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "mutant-quiet-miss-stays-quiet",
+      "base": "faithful-fail",
+      "mirrors": "lib/subagents/deliver.ts sendWaiting without turning a waiting quiet reminder into waking mail on the route `queue`: it misses the run that started (a failed send ahead of it) and lands at idle after it, unreplied",
+      "replace": [
+        {
+          "from": "pure val QUIET_MISS_WAKES = true",
+          "to": "pure val QUIET_MISS_WAKES = false"
         }
       ],
       "expect": {

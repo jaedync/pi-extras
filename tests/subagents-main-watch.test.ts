@@ -10,7 +10,7 @@ function harness(hold?: () => Promise<{ entries: never[]; wakes: boolean } | und
 	let time = 0;
 	let idle = true;
 	const calls: string[] = [];
-	const mail = { retry: () => calls.push("retry"), owed: () => false, remind: (options?: { nextTurn?: boolean }) => calls.push(options?.nextTurn ? "remind next turn" : "remind"), answered: () => calls.push("answered") };
+	const mail = { retry: () => calls.push("retry"), owed: () => false, remind: (options?: { startTurn?: boolean }) => calls.push(options?.startTurn === false ? "remind without a turn" : "remind"), answered: () => calls.push("answered") };
 	const watch = watchMain(pi as never, () => mail as never, () => time, hold);
 	const emit = async (name: string, event: object = {}, ctx: object = {}) => {
 		const results = [];
@@ -100,15 +100,15 @@ test("a reminder follows only a /compact that stopped main's run, however long o
 		if (hook) await h.emit("session_before_compact", { reason }, ctx);
 		if (outcome === "done") await h.emit("session_compact", { reason });
 		else await h.emit("session_compact_failed", { reason, aborted: outcome === "cancelled" }, ctx);
-		// "now": a reminder that wakes main; "next": one that waits for main's next turn; "none".
-		return h.calls.includes("remind") ? "now" : h.calls.includes("remind next turn") ? "next" : "none";
+		// "now": a reminder that wakes main; "next": one that starts no turn, for main's next turn to read; "none".
+		return h.calls.includes("remind") ? "now" : h.calls.includes("remind without a turn") ? "next" : "none";
 	};
 	const now = "now", next = "next", none = "none";
 	assert.equal(await stopping(aborted, 110), now, "/compact mid-run");
 	assert.equal(await stopping(aborted, 30_000), now, "another extension's handler took a while before ours ran");
 	assert.equal(await stopping(aborted, 110, { outcome: "failed" }), now, "the compaction failed, main is still stopped");
-	// Pi says aborted for Esc during the summary and for an extension's cancel alike: no turn starts, and the
-	// reminder goes with main's next turn (owner answer 846). Main's run is still stopped, so it is not dropped.
+	// Pi says aborted for Esc during the summary and for an extension's cancel alike: no turn starts, and
+	// main's next turn reads the reminder (owner answer 846). Main's run is still stopped, so it is not dropped.
 	assert.equal(await stopping(aborted, 110, { outcome: "cancelled" }), next, "the user cancelled it too: no turn now, the reminder comes with the next message");
 	assert.equal(await stopping(aborted, 110, { outcome: "cancelled", hook: false }), next, "an extension that loads first cancelled it, so our handler never ran");
 	assert.equal(await stopping(aborted, 110, { outcome: "failed", hook: false }), now, "the session was too small, which Pi finds before the handlers");

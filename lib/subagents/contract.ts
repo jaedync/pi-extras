@@ -136,7 +136,7 @@ export interface HostMail {
 	retry(): void;
 	owed(context: MainContext): boolean;
 	answered(entries: readonly unknown[]): void;
-	remind(options?: { nextTurn?: boolean }): void;
+	remind(options?: { startTurn?: boolean }): void;
 	waiting(): boolean;
 	takeAll(): { messages: OutgoingMessage[]; wakes: boolean };
 }
@@ -162,11 +162,11 @@ export interface HeldMail {
 	/** Whether it asks main for a turn. */
 	readonly wakes: boolean;
 	/**
-	 * It waits for main's next turn and starts none (`deliverAs: "nextTurn"`):
-	 * the reminder after Esc during a /compact summary. `wakes` is false, so a
-	 * start that does not know the flag appends it without a turn.
+	 * Main owes it a reply, though it starts no turn: the reminder after Esc
+	 * during a /compact summary. `wakes` is false, so a start that does not
+	 * know the flag appends it without a turn too.
 	 */
-	readonly nextTurn?: boolean;
+	readonly owed?: boolean;
 }
 
 /** A custom message for main's session. */
@@ -186,7 +186,7 @@ export interface ModelScope {
 /** Everything a host needs from Pi, bound by the module that serves the session. */
 export interface HostPorts {
 	/** Hands main a message, as `pi.sendMessage`: its mail, or a notice such as the one after a restore. */
-	send(message: HostMessage, options: { triggerTurn: boolean; deliverAs?: "steer" | "nextTurn" }): void;
+	send(message: HostMessage, options: { triggerTurn: boolean; deliverAs?: "steer" }): void;
 	/** Where main is for its mail (main-watch.ts). */
 	route(): Route;
 	notify(message: string, level: "info" | "warning"): void;

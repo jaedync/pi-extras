@@ -42,7 +42,7 @@ export const RECONCILE_WINDOW = 200;
 const HOLD_RETRY_MS = 250;
 
 export interface MainPort {
-	send(message: OutgoingMessage, options: { triggerTurn: boolean; deliverAs?: "steer" | "nextTurn" }): void;
+	send(message: OutgoingMessage, options: { triggerTurn: boolean; deliverAs?: "steer" }): void;
 }
 
 export function summarize(record: AgentRecord): ReportSummary {
@@ -95,6 +95,8 @@ export class MainMail implements HostMail {
 	private closed = false;
 	/** Mail not yet handed to Pi, oldest first; it waits while main can't take it. */
 	private outbox: HeldMail[] = [];
+	/** The id of the last reminder that went without a turn: while main owes only it, another would repeat it. */
+	private quietReminder: string | undefined;
 	private retryTimer: ReturnType<typeof setTimeout> | null = null;
 	/** Mail that landed while main worked and that main has not replied after yet: id to who sent it. */
 	private readonly owing = new Map<string, string>();
@@ -248,10 +250,10 @@ export class MainMail implements HostMail {
 
 	/** Mail an earlier host could not hand over, posted again in the order it came (`drain`). */
 	resend(items: readonly HeldMail[]): void {
-		for (const { message, wakes, nextTurn } of items) {
+		for (const { message, wakes, owed } of items) {
 			const { details } = message;
 			if (details.kind !== "reminder") this.remember({ id: details.id, kind: details.kind, from: ownerOf(details), text: "text" in details ? details.text : "report", at: this.now() });
-			this.post(message, wakes, nextTurn === true);
+			this.post(message, wakes, owed === true);
 		}
 	}
 
@@ -269,6 +271,9 @@ export class MainMail implements HostMail {
 		while (this.outbox.length > 0 && !this.closed) {
 			const route = this.where();
 			if (route === "hold") break;
+			// A run started: a quiet reminder still waiting has missed the turn after Esc that was to read it. On
+			// this route it goes the same way as waking mail, owed; if it can't go now, it wakes main later.
+			if (route === "queue") this.outbox = this.outbox.map((held) => (held.owed ? { message: held.message, wakes: true } : held));
 			const item = this.outbox.shift()!;
 			if (!this.dispatch(item, route)) {
 				// A failed send loses nothing: the mail keeps its place for the retry timer.
@@ -318,16 +323,20 @@ export class MainMail implements HostMail {
 	 * Wakes main for mail it still owes a reply after a /compact stopped the
 	 * turn the mail landed in; Pi doesn't continue a turn it stopped. Hidden,
 	 * since the user already sees the mail it points at, so it is not kept as
-	 * pending for the widget either, and sent once. With `nextTurn` it starts
-	 * no turn: it waits in Pi for main's next turn, whatever starts that, and
-	 * is owed once that turn starts with it.
+	 * pending for the widget either, and sent once. With `startTurn: false` it
+	 * starts no turn and is owed all the same: Pi appends it at once when idle,
+	 * so it stays in the session file, and main's next turn reads it; in a run
+	 * that already started, it lands at the next turn boundary.
 	 */
-	remind(options: { nextTurn?: boolean } = {}): void {
+	remind(options: { startTurn?: boolean } = {}): void {
 		if (this.owing.size === 0 || this.closed) return;
+		const startTurn = options.startTurn !== false;
+		if (!startTurn && this.owing.size === 1 && this.quietReminder !== undefined && this.owing.has(this.quietReminder)) return;
 		const from = [...new Set(this.owing.values())].join(", ");
 		this.settle(() => this.owing.clear());
-		const nextTurn = options.nextTurn === true;
-		this.post({ customType: MESSAGE_TYPE, content: reminderText(from), display: false, details: { id: this.nextId(), kind: "reminder", from } }, !nextTurn, nextTurn);
+		const id = this.nextId();
+		this.quietReminder = startTurn ? undefined : id;
+		this.post({ customType: MESSAGE_TYPE, content: reminderText(from), display: false, details: { id, kind: "reminder", from } }, startTurn, !startTurn);
 	}
 
 	/**
@@ -399,8 +408,8 @@ export class MainMail implements HostMail {
 	}
 
 	/** Queues mail behind anything already waiting, so Pi is handed it in the order it came. */
-	private post(message: OutgoingMessage, wakes: boolean, nextTurn = false): void {
-		this.outbox.push(nextTurn ? { message, wakes, nextTurn } : { message, wakes });
+	private post(message: OutgoingMessage, wakes: boolean, owed = false): void {
+		this.outbox.push(owed ? { message, wakes, owed } : { message, wakes });
 		this.sendWaiting();
 	}
 
@@ -414,12 +423,12 @@ export class MainMail implements HostMail {
 	}
 
 	/** Hands one item to Pi; false when the send failed, so nothing landed. */
-	private dispatch({ message, wakes, nextTurn }: HeldMail, route: "wake" | "queue"): boolean {
+	private dispatch({ message, wakes, owed }: HeldMail, route: "wake" | "queue"): boolean {
 		// Steered mail would sit in the queue Esc clears; mail sent without a turn lands at Pi's next turn boundary.
-		// A next-turn item waits in Pi for the next run, whatever starts it, and is one of its starting messages.
-		const options = nextTurn ? { triggerTurn: false, deliverAs: "nextTurn" as const }
-			: route === "wake" && wakes ? { triggerTurn: true, deliverAs: "steer" as const } : { triggerTurn: false };
-		if (nextTurn) this.starting.set(message.details.id, ownerOf(message.details));
+		const options = route === "wake" && wakes ? { triggerTurn: true, deliverAs: "steer" as const } : { triggerTurn: false };
+		// An owed item that starts no turn is owed on either route: Pi appends it at once when idle, and the
+		// settle check then keeps the next run until main replies after it; in a run it lands at the next boundary.
+		if (owed) this.owing.set(message.details.id, ownerOf(message.details));
 		else if (wakes) (route === "queue" ? this.owing : this.starting).set(message.details.id, ownerOf(message.details));
 		try {
 			this.port.send(this.withStatus(message), options);
