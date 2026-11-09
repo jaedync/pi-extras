@@ -87,7 +87,7 @@ cites its file and line in `lifecycle.qnt`.
 | P3. `dispose()` disconnects that listener. A prompt in `_prepareRun` then runs its loop on the disposed session. Its tools fail ("ctx is stale"). | `:1001-1006`, `:1011-1030` | `probe-pi-abort.mts dispose`: 10 model calls after dispose (the faux model ran out of replies), every tool call failed. |
 | P4. `dispose()` calls `agent.abort()`, which stops an active loop. It does not set `_agentRunAbortRequested`, so the `_startRun` loop can still retry, compact or continue on queued messages; no path in the model releases a running prompt that no stop aborted. | `:1017`, `:1450-1461`, `agent.js:221-222` | Read in the source only. |
 | P5. `waitForIdle` resolves at the end of `_emitAgentSettled`, just before `prompt()` returns, with no macrotask between. So a stop goes on in the same chain as the end of the prompt. | `:683-707`, `:1464-1472` | Read in the source. `repro-f3.mts` and `repro-f4.mts` show a stop that waits for `agent_end` handlers. |
-| P6. `steer()` first awaits the `input` handlers (`_queueUserInput`), and only then puts the message in the agent queue. child.ts:714 does not await it. The loop reads a queued message at a turn boundary, or `clearQueue` hands it back. Dispose does not clear the queue. | `:1752-1766`, `:1795-1807`, `:1944-1952`, `agent.js:203-206` | `repro-f5.mts`: with an input handler that waits, the message is on `unread` but not queued; it lands after the run ended. Added after the review (H1). |
+| P6. `steer()` first awaits the `input` handlers (`_queueUserInput`), and only then puts the message in the agent queue. child.ts:716-719 does not await it. The loop reads a queued message at a turn boundary, or `clearQueue` hands it back. Dispose does not clear the queue. | `:1752-1766`, `:1795-1807`, `:1944-1952`, `agent.js:203-206` | `repro-f5.mts`: with an input handler that waits, the message is on `unread` but not queued; it lands after the run ended. Added after the review (H1). |
 
 ## Bounds and what they leave out
 
@@ -521,7 +521,7 @@ least one mutant that breaks it.
 | `survivor-abort-skips-pre` | `child-prompt.ts` `abort` that does not wait for the prompt in flight | nothing (survivor) | fails (caught) |
 | `mutant-stop-refuses-ending` | `team.ts:405` with `this.ending.has(name)`, as at f194608 (F3) | violation of stopHonored | fails (caught) |
 | `mutant-old-stop-clears-ending` | `team.ts:426` deletes `ending` for any stop, as at f194608 (F4) | violation of reportOnEnd | fails (caught), only by the witness `witnessNoStaleStopOverStop` |
-| `mutant-old-stop-clears-parent-mark` | `team.ts:427` and `:937` with `stoppedByParent` as a set, as at f194608 (F4) | violation of parentStopSilent | fails (caught), only by the witness `witnessNoStaleStopOverStop` |
+| `mutant-old-stop-clears-parent-mark` | `team.ts:427` and `:948-950` with `stoppedByParent` as a set, as at f194608 (F4) | violation of parentStopSilent | fails (caught), only by the witness `witnessNoStaleStopOverStop` |
 | `mutant-prompt-skips-steers` | `child-prompt.ts` `prompt` without the wait for steers in flight (F5) | violation of mailKept | fails (caught) |
 | `mutant-stop-keeps-launch` | `team.ts:407` and `:417` without the new launch number | violation of oneReport | fails (caught) |
 | `mutant-stop-ignores-relaunch` | `team.ts:424` without the check: the stop always finishes after the abort | violation of oneReport | fails (caught) |
@@ -599,7 +599,7 @@ Code changes that make the replay fail (one at a time, each restored):
 | team.ts:891 no `finish` | fails (caught) |
 | team.ts:405 with `this.ending.has(name)` (F3, as at f194608) | fails (caught) |
 | team.ts:426 deletes `ending` for any stop (F4) | fails (caught) |
-| team.ts:427 and :934 `stoppedByParent` as a set (F4) | fails (caught) |
+| team.ts:427 and :948-950 `stoppedByParent` as a set (F4) | fails (caught) |
 | child-prompt.ts no abort at `"started"` (F1) | fails (caught) |
 | child-prompt.ts `abort` without `await run?.ended` | fails (caught) |
 | child-prompt.ts without the abort at `compaction_start` (missed: compaction is not modeled; tests/subagents-child-prompt.test.ts catches it) | passes (missed) |

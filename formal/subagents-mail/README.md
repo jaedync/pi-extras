@@ -298,6 +298,14 @@ reminder. The last `assistant` is main's reply to the mail.
 
 **Two side effects of the fixes.**
 
+- Mail that starts main's turn is owed from its `message_end` until main
+  replies after it. So `idle()` and `HostState.quiet()` stay false until
+  that reply, and a renew swap (serve.ts) waits for it. Before the fix, the
+  host was quiet as soon as Pi had shown the mail. One host test changed for
+  this: `tests/subagents-host.test.ts` "the host is quiet only when ...
+  been replied to" now expects `quiet()` false after the acknowledge and true
+  after main's reply. The final review found that the test still had the
+  old rule.
 - Esc while a run that mail started is still in `_prepareRun` (a slow
   `before_agent_start`) leaves the mail owed. Pi still sends `message_end`
   for the starting messages after an abort at `agent_start`
@@ -682,11 +690,21 @@ critical or high issue. Its points:
   "Two side effects of the fixes".
 - Low, no repro: the new loop in `team.ts` `run()` sent the late mail with
   no wrap-up check and no `swapBefore`, which `work()` does before each
-  prompt. Fixed: `run()` now does both checks. No test reaches this
-  window (a budget that ends while a steer is in flight); the existing team,
-  wrap-up, swap and budget tests pass.
+  prompt. Fixed: `run()` now does both checks (commit `31d754d`). The test
+  "a run whose budget ends as late mail lands ..." in
+  `tests/subagents-settle-steer.test.ts` reaches this window: without the
+  wrap-up check, the run at depth 3 is `stopped`; with it, the run ends
+  `idle` at its budget and keeps the mail.
 - Low: wrong citations (main-watch.ts, team.ts, a stale comment in
   `mail.qnt`). Fixed.
+
+A second fresh reviewer (`review-mail-final`) read the final record and
+commit `31d754d`. It found one high issue with a repro: the host test above
+failed on each run, and the record did not say so. Fixed (the test and the
+first side effect above). It also found three wrong citations in the
+lifecycle record (fixed) and gave the probe that became the budget test. It
+judged four event orders of `31d754d` against `work()` and found them
+correct.
 
 It confirmed: deferred mail in `agent_settled`, a reminder that starts a run
 (owed, no loop), the `message_end` paths, the changed test row (a correct
