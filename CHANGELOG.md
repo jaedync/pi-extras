@@ -4,6 +4,25 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
 ## Unreleased
 
+### Added
+
+- Formal Verification skill (`skills/formal-verification`): the model picks
+  the strongest target in a codebase (races, retries, at-most-once delivery,
+  reload and restart hand-over), writes a Quint model with each action cited
+  to code, and checks every order of events within stated bounds with TLC.
+  Each property must fail on a mutant that copies a code change. A
+  conformance test replays model traces against the real code.
+  `scripts/fv.mjs` installs pinned Quint and a Temurin JRE at user scope,
+  runs every check of a record (`fv.json`) against its expected result,
+  writes random and witness traces, and lists covered code that changed after
+  the sync commit. Run `/skill:formal-verification [area]`. Based on the
+  goals of Lauren Tan's MIT pstack skill create-formal-verification-skill.
+- A formal check of shell-jobs completion delivery
+  (`formal/shell-jobs-delivery`) and its conformance test
+  (`tests/shell-jobs-delivery-conformance.test.mts`). It found that a
+  `/reload` while `agent_settled` handlers still run can deliver one
+  completion two times (not fixed yet; see its README).
+
 ### Fixed
 
 - Rate Limit Recovery: a local server that replies "not ready" (502, 503,

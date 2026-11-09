@@ -1,0 +1,166 @@
+{
+  "spec": "delivery.qnt",
+  "quint": "0.33.1",
+  "invariants": [
+    "oneCompletion",
+    "stoppedMeansSilent",
+    "boundedSends",
+    "deliveredMeansSeen",
+    "attemptsCountSends"
+  ],
+  "syncCommit": "b96bac5",
+  "covers": [
+    {
+      "path": "lib/shell-jobs-delivery.ts",
+      "what": "attachDelivery, flush, sendCompletion, acknowledgeCompletion, reconcileDeliveries"
+    },
+    {
+      "path": "extensions/shell-jobs.ts",
+      "what": "finalize, and the session_start, message_end, agent_settled and session_shutdown handlers"
+    },
+    {
+      "path": "lib/shell-jobs-manage.ts",
+      "what": "stopJob"
+    },
+    {
+      "path": "lib/shell-jobs-process.ts",
+      "what": "parkForReload"
+    }
+  ],
+  "checks": [
+    {
+      "name": "faithful",
+      "why": "Pi as it is: /reload can run while agent_settled handlers still run. Finding F1 in README.md.",
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "no-reload-during-settle",
+      "why": "Assume that /reload waits for agent_settled to end. Every other property must hold.",
+      "replace": [
+        {
+          "from": "pure val RELOAD_DURING_SETTLE = true",
+          "to": "pure val RELOAD_DURING_SETTLE = false"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "no-reload-during-settle-wide",
+      "base": "no-reload-during-settle",
+      "why": "The same assumption at wider bounds: 3 jobs, 2 reloads, 3 user runs or aborts.",
+      "replace": [
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\", \"j2\", \"j3\")"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 2"
+        },
+        {
+          "from": "pure val MAX_RUNS = 2 ",
+          "to": "pure val MAX_RUNS = 3 "
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "mutant-send-ignores-binding",
+      "base": "no-reload-during-settle",
+      "mirrors": "lib/shell-jobs-delivery.ts:71 without `runtime.delivery !== binding`: a read that started before a reload sends through the old binding",
+      "replace": [
+        {
+          "from": "if (binding != b or not(outbox.contains(j)))",
+          "to": "if (not(outbox.contains(j)))"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "survivor-start-ignores-busy",
+      "base": "no-reload-during-settle",
+      "why": "The ctx.isIdle() check of reconcile (lib/shell-jobs-delivery.ts:121) removed. In the model reconcile never runs during a run: agent_settled comes after the run, and Pi refuses /reload while isStreaming. The check guards compaction, which the model leaves out.",
+      "replace": [
+        {
+          "from": "if (not(busy)) reconcileAndFlush(b, false)",
+          "to": "if (true) reconcileAndFlush(b, false)"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "mutant-reconcile-ignores-outbox",
+      "base": "no-reload-during-settle",
+      "mirrors": "lib/shell-jobs-delivery.ts:132 without `|| runtime.outbox.has(job.id)`: reconcile counts an attempt for a send that is still in flight",
+      "replace": [
+        {
+          "from": "    else if (inOutbox) (job, inOutbox)\n",
+          "to": ""
+        }
+      ],
+      "expect": {
+        "violates": "attemptsCountSends"
+      }
+    },
+    {
+      "name": "mutant-claim-unchecked",
+      "base": "no-reload-during-settle",
+      "mirrors": "extensions/shell-jobs.ts:204 without `done.claimed` and lib/shell-jobs-delivery.ts:73 without `latest.claimed`: a job that the user killed gets a completion",
+      "replace": [
+        {
+          "from": "val suppressed = job.claimed or job.delivered",
+          "to": "val suppressed = job.delivered"
+        },
+        {
+          "from": "else if (job.delivered or job.claimed)",
+          "to": "else if (job.delivered)"
+        }
+      ],
+      "expect": {
+        "violates": "stoppedMeansSilent"
+      }
+    },
+    {
+      "name": "mutant-finalize-ignores-claim",
+      "base": "no-reload-during-settle",
+      "mirrors": "extensions/shell-jobs.ts:204 without `done.claimed`: finalize counts an attempt for a job that the user killed. sendCompletion still drops the send (lib/shell-jobs-delivery.ts:73), so only the count breaks",
+      "replace": [
+        {
+          "from": "val suppressed = job.claimed or job.delivered",
+          "to": "val suppressed = job.delivered"
+        }
+      ],
+      "expect": {
+        "violates": "attemptsCountSends"
+      }
+    },
+    {
+      "name": "survivor-reconcile-history",
+      "base": "no-reload-during-settle",
+      "why": "The history lookup of reconcile removed. In the model a message lands only while attached, so message_end always acknowledges it first. The lookup guards cases outside the model: a restart hand-over and a lost message_end.",
+      "replace": [
+        {
+          "from": "    else if (inHistory) (acked(job), false)\n",
+          "to": ""
+        }
+      ],
+      "expect": "pass"
+    }
+  ],
+  "traces": {
+    "check": "faithful",
+    "out": "traces.itf.jsonl.gz",
+    "n": 200,
+    "steps": 40,
+    "seed": "0x5eed",
+    "witnesses": [
+      "witnessNoFailed",
+      "witnessNoLandingWhileParked",
+      "oneCompletion"
+    ]
+  }
+}
