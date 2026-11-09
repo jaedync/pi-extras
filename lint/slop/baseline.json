@@ -29,8 +29,10 @@
 			}
 		},
 		"ts-any-annotation": {
-			"count": 34,
+			"count": 40,
 			"files": {
+				"formal/shell-jobs-delivery/repro-f1.mts": 4,
+				"formal/shell-jobs-delivery/repro-f2.mts": 2,
 				"lib/chain/exec.ts": 5,
 				"lib/status-plus-children.ts": 8,
 				"lib/status-plus-slim.ts": 3,
@@ -42,8 +44,10 @@
 			}
 		},
 		"ts-as-any": {
-			"count": 1,
+			"count": 5,
 			"files": {
+				"formal/shell-jobs-delivery/repro-f1.mts": 2,
+				"formal/shell-jobs-delivery/repro-f2.mts": 2,
 				"lib/status-plus-usage.ts": 1
 			}
 		},
@@ -285,13 +289,14 @@
 			}
 		},
 		"ts-non-null-assertion": {
-			"count": 351,
+			"count": 352,
 			"files": {
 				"extensions/cache-compaction.ts": 5,
 				"extensions/phase-spinner.ts": 2,
 				"extensions/status-plus.ts": 1,
 				"extensions/subagents.ts": 2,
 				"extensions/voice.ts": 1,
+				"formal/shell-jobs-delivery/repro-f1.mts": 1,
 				"lib/auto-update/cycle.ts": 5,
 				"lib/auto-update/entry-view.ts": 1,
 				"lib/auto-update/launcher.ts": 1,
@@ -405,10 +410,11 @@
 			}
 		},
 		"ts-promise-catch-noop": {
-			"count": 66,
+			"count": 67,
 			"files": {
 				"extensions/status-plus.ts": 1,
 				"extensions/subagents.ts": 2,
+				"formal/shell-jobs-delivery/repro-f2.mts": 1,
 				"lib/computer-use/executor.ts": 1,
 				"lib/computer-use/index-guard.ts": 2,
 				"lib/computer-use/session.ts": 1,
@@ -447,8 +453,10 @@
 			}
 		},
 		"ts-sleep-wait": {
-			"count": 199,
+			"count": 206,
 			"files": {
+				"formal/shell-jobs-delivery/repro-f1.mts": 4,
+				"formal/shell-jobs-delivery/repro-f2.mts": 3,
 				"scripts/preview/fake-anthropic.mjs": 1,
 				"tests/auto-update-basics.test.ts": 2,
 				"tests/auto-update-launcher.test.ts": 1,
@@ -521,7 +529,7 @@
 			}
 		},
 		"ts-swallowed-catch": {
-			"count": 100,
+			"count": 101,
 			"files": {
 				"extensions/auto-update.ts": 1,
 				"extensions/cache-compaction.ts": 5,
@@ -529,6 +537,7 @@
 				"extensions/shell-jobs.ts": 3,
 				"extensions/subagents.ts": 5,
 				"extensions/tab-status.ts": 1,
+				"formal/shell-jobs-delivery/repro-f2.mts": 1,
 				"lib/auto-update/entry-view.ts": 1,
 				"lib/auto-update/gc.ts": 5,
 				"lib/auto-update/log.ts": 1,
