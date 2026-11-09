@@ -62,12 +62,12 @@ module recovery {
   var attempts: int
   var spent: int          // spentMs, in quota-wait units
   var hActive: bool       // active (a hibernation in flight)
-  // ---- TransientBackoff (transient.ts:240-249) ----
+  // ---- TransientBackoff (transient.ts:238-249) ----
   var tPending: str       // pending: "none" | "cloud" | "local"
   var tReady: bool
   var tActive: bool
   var streak: int         // streaks["rate-limit"].attempts
-  // ---- LocalIdleWait (idle-wait.ts:94-97) and its session entry ----
+  // ---- LocalIdleWait (idle-wait.ts:92-95) and its session entry ----
   var iActive: bool       // active (waiting)
   var entryOpen: bool     // the last local-wait entry on the branch is "open"
   var idleEndedBy: str    // ghost: "none" | "user" | "other", the run that ended an idle wait
@@ -114,7 +114,7 @@ module recovery {
   // idle wait's own message).
   // idleBefore and entryBefore: the idle wait and its entry as
   // before_agent_start sees them. The idle wait closes both before it sends
-  // its resume (idle-wait.ts:131-139, :176-182).
+  // its resume (idle-wait.ts:126-138, :176-182).
   action startRun(kind: str, idleBefore: bool, entryBefore: bool): bool = {
     val resumed = kind == "resume"
     val carried = not(resumed) and kind != "user" and idleBefore
@@ -122,7 +122,7 @@ module recovery {
       phase' = "starting", aborted' = false, queued' = queued, settleGo' = false,
       // controller.ts:143
       qPending' = "none", attempts' = 0, spent' = 0, hActive' = hActive,
-      // resumed: transient.resume() (transient.ts:290-294); carried:
+      // resumed: transient.resume() (transient.ts:291-295); carried:
       // yieldToRun() and resume(); else idleWait.cancel() and transient.reset().
       tPending' = "none", tActive' = tActive,
       qReady' = false, tReady' = false,   // before_agent_start clears ready
@@ -130,13 +130,13 @@ module recovery {
       iActive' = if (resumed) idleBefore else false,
       // Ghost: which kind of run ended an idle wait (a witness reads it).
       idleEndedBy' = if (not(resumed) and idleBefore) kind else idleEndedBy,
-      // cancel() and yieldToRun() record a closed entry (idle-wait.ts:121-128).
+      // cancel() and yieldToRun() record a closed entry (idle-wait.ts:116-124).
       entryOpen' = if (resumed or not(idleBefore)) entryBefore else false,
     }
   }
 
   // ---- The idle wait's resume: pi.sendMessage(..., { triggerTurn: true })
-  // (controller.ts:103). sendCustomMessage steers into an active run
+  // (controller.ts:106). sendCustomMessage steers into an active run
   // (AS:1857-1862), else starts one (AS:1864-1870). A send during agent_settled
   // waits and then starts a run (AS:1865-1867); this model folds that wait.
   action sendResume: bool = all {
@@ -205,22 +205,22 @@ module recovery {
     requests' = requests + 1, inputs' = inputs, selects' = selects, cancels' = cancels, reloads' = reloads, clones' = clones,
   }
 
-  // message_end of the reply (controller.ts:236-252 and transient.ts:332-379).
+  // message_end of the reply (controller.ts:225-241 and transient.ts:329-376).
   // An abort during the request gives stopReason "aborted", which neither
-  // backoff takes (transient.ts:340-343, controller.ts:240-241).
+  // backoff takes (transient.ts:336-339, controller.ts:226-230).
   action messageEnd(kind: str): bool = {
     val k = if (aborted) "aborted" else kind
     all {
       phase == "request",
       phase' = "msgDone", aborted' = aborted, queued' = queued, settleGo' = settleGo, model' = model,
-      // controller.ts:238, eligible at :248 (inScope: the limit's scope is the selected model's)
+      // controller.ts:227, eligible at :237 (inScope: the limit's scope is the selected model's)
       qPending' = if (k == "quota") (if (planOk and scopeOf(model) == "anthropic") "eligible" else "ineligible") else "none",
       attempts' = attempts, spent' = spent, hActive' = hActive,
-      // transient.ts:358-378: a wait is planned while the streak has budget (planTransient :95-104).
+      // transient.ts:355-375: a wait is planned while the streak has budget (planTransient :87-98).
       tPending' = if (k == "cloud" and streak < MAX_STREAK) "cloud" else if (k == "local") "local" else "none",
       tActive' = tActive,
       qReady' = false, tReady' = false,   // message_end clears ready
-      // A good reply ends every streak (transient.ts:341).
+      // A good reply ends every streak (transient.ts:336).
       streak' = if (k == "ok") 0 else streak,
       keepI,
       owed' = owed, badResume' = badResume, lastKind' = k, resumes' = resumes,
@@ -228,8 +228,8 @@ module recovery {
     }
   }
 
-  // Our turn_end handler up to its first await (controller.ts:291-304,
-  // transient.ts:381-410, controller.ts:259-266). Pi awaits it inside
+  // Our turn_end handler up to its first await (controller.ts:285-300,
+  // transient.ts:378-395, controller.ts:256-263). Pi awaits it inside
   // finishTurn before turn_end and agent_end (AL:148-158, AS:507-523).
   action turnEnd: bool = {
     val candidate = qPending
@@ -241,18 +241,18 @@ module recovery {
       qReady' = qReady, spent' = spent,
       tReady' = tReady, streak' = streak,
       if (transientWait and tPending == "local") all {
-        // handedToIdle (transient.ts:436-442) -> LocalIdleWait.start: stop() an
-        // older wait with no record, write the open entry (idle-wait.ts:99-105).
+        // handedToIdle (transient.ts:440-446) -> LocalIdleWait.start: stop() an
+        // older wait with no record, write the open entry (idle-wait.ts:97-103).
         // The run ends; the idle wait goes on outside it.
         phase' = "post", tActive' = tActive, iActive' = true, entryOpen' = true, idleEndedBy' = idleEndedBy,
         attempts' = attempts, hActive' = hActive, owed' = true,
       } else if (transientWait) all {
-        // The in-run wait starts (transient.ts:411-427).
+        // The in-run wait starts (transient.ts:396-422).
         phase' = "waitT", tActive' = true, keepI, attempts' = attempts, hActive' = hActive, owed' = true,
       } else if (candidate == "eligible" and lastKind == "quota"
                  and planOk
                  and not(aborted) and scopeOf(model) == "anthropic") all {
-        // hibernate up to its await (controller.ts:259-273).
+        // hibernate up to its await (controller.ts:256-272).
         phase' = "waitH", hActive' = true, attempts' = attempts + 1, tActive' = tActive, keepI, owed' = true,
       } else all {
         phase' = "post", tActive' = tActive, keepI, attempts' = attempts, hActive' = hActive, owed' = owed,
@@ -262,7 +262,7 @@ module recovery {
     }
   }
 
-  // The transient wait's timer ends (transient.ts:428-451): the streak grows
+  // The transient wait's timer ends (transient.ts:423-437): the streak grows
   // and ready is set. agent_before_settle consumes it.
   action transientTimer: bool = all {
     phase == "waitT",
@@ -273,7 +273,7 @@ module recovery {
     keepI, keepGhost, keepBounds,
   }
 
-  // The hibernation's timer ends (controller.ts:274-287): spentMs grows and
+  // The hibernation's timer ends (controller.ts:274-283): spentMs grows and
   // ready is set, unless the wait was cancelled, the run aborted, a session
   // boundary moved the generation, or the model left the scope.
   action hibernateTimer: bool = all {
@@ -292,7 +292,7 @@ module recovery {
   // ---- After turn_end: agent_end, then _handlePostAgentRun (AS:1531-1561)
   // and the loop of _startRun (AS:1440-1460). An abort ends the run; queued
   // messages continue it with agent.continue() and no agent_before_settle;
-  // else agent_before_settle runs. Our handler: controller.ts:303-309.
+  // else agent_before_settle runs. Our handler: controller.ts:302-308.
   action postRun: bool = all {
     phase == "post",
     if (aborted) all {
@@ -301,7 +301,7 @@ module recovery {
       // agent.continue() drains the steering queue (AG:254-276, AL:89-90).
       phase' = "starting", queued' = 0, settleGo' = false, keepQ, keepT, keepGhost,
     } else all {
-      // beforeSettle consumes both flags (controller.ts:303-309).
+      // beforeSettle consumes both flags (controller.ts:302-308).
       val go = qReady or tReady
       all {
         phase' = "settle", queued' = queued, settleGo' = go,
@@ -331,26 +331,26 @@ module recovery {
   }
 
   // ---- The idle wait ends: the server answered, or the 10 min timer ran
-  // out (idle-wait.ts:146-183). It closes its entry, then resumes.
+  // out (idle-wait.ts:147-179). It closes its entry, then resumes.
   action idleWaitEnds: bool = all {
     iActive,
     sendResume,
     keepBounds,
   }
 
-  // ---- Model switch (controller.ts:135-141). setModel has no streaming
+  // ---- Model switch (controller.ts:134-140). setModel has no streaming
   // guard (AS:2008-2024), so it can come at any time.
   action modelSelect(m: str): bool = all {
     selects < MAX_SELECTS,
     m != model,
     // A hibernation of another scope is cancelled: Recovery.cancel() aborts
-    // the wait and the run (controller.ts:254-259). In the TUI, ctx.abort()
+    // the wait and the run (controller.ts:243-248). In the TUI, ctx.abort()
     // clears the queues first (IM:1478-1480, AS:2819-2824).
     val leftScope = hActive and scopeOf(m) != "anthropic"
     val cancelH = leftScope
-    // transient.skip() ends the wait now and resumes (transient.ts:322, :428-451).
+    // transient.skip() ends the wait now and resumes (transient.ts:324, :428-451).
     val skipT = tActive and phase == "waitT"
-    // idleWait.skip(): a wait for another model ends and resumes (idle-wait.ts:131-139).
+    // idleWait.skip(): a wait for another model ends and resumes (idle-wait.ts:126-138).
     val skipI = iActive and m != "loc"
     all {
       if (skipI) all {
@@ -398,7 +398,7 @@ module recovery {
   // hibernation line Recovery.cancel(), the idle line idleWait.cancel() (with
   // an empty editor). Then Pi's onEscape clears the queues and aborts
   // (IM:2377-2379, IM:3852-3869, AS:1971-1981). While idle, only the idle
-  // line acts (controller.ts:44-47, idle-wait.ts:121-128).
+  // line acts (controller.ts:44-47, idle-wait.ts:116-124).
   action esc: bool = all {
     cancels < MAX_CANCELS,
     running or iActive,
@@ -419,9 +419,9 @@ module recovery {
     cancels' = cancels + 1, requests' = requests, inputs' = inputs, selects' = selects, reloads' = reloads, clones' = clones,
   }
 
-  // /rate-limit-recovery cancel (controller.ts:313). Extension commands run
+  // /rate-limit-recovery cancel (controller.ts:312). Extension commands run
   // at once, also while a run is active (AS:1636-1644). Recovery.cancel()
-  // (controller.ts:254-259) aborts the run only through a hibernation's ctx.
+  // (controller.ts:243-248) aborts the run only through a hibernation's ctx.
   action cancelCommand: bool = all {
     cancels < MAX_CANCELS,
     phase' = if (phase == "waitT" or phase == "waitH") "post" else phase,
@@ -434,9 +434,9 @@ module recovery {
   }
 
   // ---- /reload. The TUI refuses it while a run is active (IM:5328-5332).
-  // session_shutdown of the old module (controller.ts:162): idleWait.stop(true)
+  // session_shutdown of the old module (controller.ts:160): idleWait.stop(true)
   // keeps the entry open. A new Recovery, then session_start(reload)
-  // (controller.ts:155-160, AS:2998-3030): restoreIdleWait restores an open
+  // (controller.ts:154-158, AS:2998-3030): restoreIdleWait restores an open
   // entry younger than 48 h (controller.ts:168-180). The model assumes it is.
   action reload: bool = all {
     reloads < MAX_RELOADS,
@@ -450,7 +450,7 @@ module recovery {
   }
 
   // ---- /clone while idle: a new session with a copy of the branch
-  // (ASR:174-235). session_start(fork) restores nothing (controller.ts:159).
+  // (ASR:174-235). session_start(fork) restores nothing (controller.ts:158).
   // The failure belongs to the old session, so nothing is owed in the new one.
   action clone: bool = all {
     clones < MAX_CLONES,

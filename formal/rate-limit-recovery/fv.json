@@ -166,7 +166,7 @@
     {
       "name": "mutant-user-run-keeps-idle-wait",
       "base": "assume-fix",
-      "mirrors": "controller.ts:152 without `this.idleWait.cancel()`: a user prompt does not end the idle wait",
+      "mirrors": "controller.ts:151 without `this.idleWait.cancel()`: a user prompt does not end the idle wait",
       "replace": [
         {
           "from": "iActive' = if (resumed) idleBefore else false,",
@@ -184,7 +184,7 @@
     {
       "name": "mutant-carried-run-keeps-idle-wait",
       "base": "assume-fix",
-      "mirrors": "controller.ts:151 without `this.idleWait.yieldToRun()`: a shell job report run does not end the idle wait",
+      "mirrors": "controller.ts:150 without `this.idleWait.yieldToRun()`: a shell job report run does not end the idle wait",
       "replace": [
         {
           "from": "iActive' = if (resumed) idleBefore else false,",
@@ -202,7 +202,7 @@
     {
       "name": "mutant-cancel-keeps-entry-open",
       "base": "assume-fix",
-      "mirrors": "idle-wait.ts:125 without the closed record in LocalIdleWait.cancel(): the entry stays open after a user run ends the wait",
+      "mirrors": "idle-wait.ts:121 without the closed record in LocalIdleWait.cancel(): the entry stays open after a user run ends the wait",
       "replace": [
         {
           "from": "entryOpen' = if (resumed or not(idleBefore)) entryBefore else false,",
@@ -216,7 +216,7 @@
     {
       "name": "mutant-ready-survives-new-run",
       "base": "assume-fix",
-      "mirrors": "controller.ts:130, :143 and :238 without `this.ready = false`, and transient.ts reset(), resume() and messageEnd() without `this.ready = false`: a ready flag of an aborted run reaches the next run's agent_before_settle",
+      "mirrors": "controller.ts:130, :143 and :227 without `this.ready = false`, and transient.ts reset(), resume() and messageEnd() without `this.ready = false`: a ready flag of an aborted run reaches the next run's agent_before_settle",
       "replace": [
         {
           "from": "qReady' = false, tReady' = false,   // before_agent_start clears ready",
@@ -262,7 +262,7 @@
     {
       "name": "survivor-message-end-keeps-ready",
       "base": "assume-fix",
-      "why": "controller.ts:238 and transient.ts:334 without the ready resets at message_end. The context event before the request already cleared both flags.",
+      "why": "controller.ts:227 and transient.ts:331 without the ready resets at message_end. The context event before the request already cleared both flags.",
       "replace": [
         {
           "from": "qReady' = false, tReady' = false,   // message_end clears ready",
@@ -312,7 +312,7 @@
     {
       "name": "mutant-no-streak-budget",
       "base": "assume-fix",
-      "mirrors": "transient.ts:99 (planTransient) without the `remainingMs < BASE_DELAY_MS` refusal: the short-rate-limit streak waits past its budget",
+      "mirrors": "transient.ts:93 (planTransient) without the `remainingMs < BASE_DELAY_MS` refusal: the short-rate-limit streak waits past its budget",
       "replace": [
         {
           "from": "k == \"cloud\" and streak < MAX_STREAK",
@@ -326,7 +326,7 @@
     {
       "name": "survivor-transient-wait-ignores-abort",
       "base": "assume-fix",
-      "why": "transient.ts:404-405 without the `runSignal.aborted` check before the wait. The wait then runs after an Esc, but the check after it (transient.ts:428) and the end of the aborted run (AS:1440-1457: no agent_before_settle after an abort) keep it from resuming, and the next run clears its ready flag. The wasted wait breaks no property. The conformance replay catches this change.",
+      "why": "transient.ts:390 without the `runSignal.aborted` check before the wait. The wait then runs after an Esc, but the check after it (transient.ts:423) and the end of the aborted run (AS:1440-1457: no agent_before_settle after an abort) keep it from resuming, and the next run clears its ready flag. The wasted wait breaks no property. The conformance replay catches this change.",
       "replace": [
         {
           "from": "val transientWait = tPending != \"none\" and not(aborted)",
@@ -338,7 +338,7 @@
     {
       "name": "survivor-model-switch-keeps-hibernation",
       "base": "assume-fix",
-      "why": "controller.ts:137 without the cancel on a switch out of scope. The scope check after the wait (controller.ts:275 `!this.inScope(...)`) still refuses the resume, so the guard is a second line. The wait runs to its end with no use, which no property states.",
+      "why": "controller.ts:136 without the cancel on a switch out of scope. The scope check after the wait (controller.ts:275 `!this.inScope(...)`) still refuses the resume, so the guard is a second line. The wait runs to its end with no use, which no property states.",
       "replace": [
         {
           "from": "    val cancelH = leftScope\n",
@@ -350,7 +350,7 @@
     {
       "name": "mutant-model-switch-resumes-out-of-scope",
       "base": "survivor-model-switch-keeps-hibernation",
-      "mirrors": "controller.ts:137 without the cancel, and controller.ts:275 without `!this.inScope(limit.scope, ctx)`: a hibernation resumes the run on a model of another scope",
+      "mirrors": "controller.ts:136 without the cancel, and controller.ts:275 without `!this.inScope(limit.scope, ctx)`: a hibernation resumes the run on a model of another scope",
       "replace": [
         {
           "from": "val resume = not(aborted) and scopeOf(model) == \"anthropic\"",
