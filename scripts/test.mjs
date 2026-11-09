@@ -17,8 +17,9 @@ try {
     // Vitest keeps a temp folder of its own module cache in TMPDIR; give it one inside the home that this script removes.
     const stepTmp = command === 'test:kagi' ? join(home, 'kagi-tmp') : env.TMPDIR;
     mkdirSync(stepTmp, { recursive: true });
+    const started = Date.now();
     const result = spawnSync('npm', args, { env: { ...env, TMPDIR: stepTmp }, stdio: 'inherit', timeout: STEP_LIMIT_MS });
-    const failure = stepFailure(command, result, STEP_LIMIT_MS);
+    const failure = stepFailure(command, result, STEP_LIMIT_MS, Date.now() - started);
     if (failure) {
       console.error(failure);
       process.exitCode = 1;

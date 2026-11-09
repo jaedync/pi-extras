@@ -4,14 +4,15 @@
 // The old local limit of 120 s cut the last files in name order on every loaded run.
 export const STEP_LIMIT_MS = 600000;
 
-/** Says why a step of `npm test` did not pass, or returns undefined when it passed. */
-export function stepFailure(command, result, limitMs) {
+/** Says why a step of `npm test` did not pass, or returns undefined when it passed. `elapsedMs` is how long it ran. */
+export function stepFailure(command, result, limitMs, elapsedMs) {
+  const after = `after ${(elapsedMs / 1000).toFixed(1)} s`;
   if (result.error?.code === 'ETIMEDOUT') {
-    return `${command} was stopped at the ${limitMs / 1000}-second limit: the files that still ran are reported as cancelled`;
+    return `${command} was stopped at the ${limitMs / 1000}-second limit ${after}: the files that still ran are reported as cancelled`;
   }
   if (result.error) return `${command} did not start: ${result.error.message}`;
   if (result.status !== 0) {
-    return result.status === null ? `${command} was stopped by ${result.signal}` : `${command} failed with exit code ${result.status}`;
+    return result.status === null ? `${command} was stopped by ${result.signal} ${after}` : `${command} failed with exit code ${result.status} ${after}`;
   }
   return undefined;
 }
