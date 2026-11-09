@@ -10,10 +10,10 @@
  * the held custom messages, the steering queue, the transcript).
  *
  * The test copies a few lines that it cannot run: the message_end and
- * reconcile handlers of extensions/subagents.ts:333-353, Host.rebind
- * (host-state.ts:223-229), Host.close's drain and handOverMail
- * (host-state.ts:250-254, :295-301) and postKeptMail's resend
- * (host-state.ts:304-311). Pi is a fake that follows the model's Pi rules
+ * reconcile handlers of extensions/subagents.ts:337-360, Host.rebind
+ * (host-state.ts:230-236), Host.close's drain and handOverMail
+ * (host-state.ts:269-275, :295-301) and postKeptMail's resend
+ * (host-state.ts:326-332). Pi is a fake that follows the model's Pi rules
  * (sendCustomMessage, as:1844-1883; the deferred actions, as:683-701). The
  * replay does not check those rules against Pi: repro-f1.mts does that in a
  * real AgentSession. See formal/subagents-mail/README.md.
@@ -78,7 +78,7 @@ function makeWorld() {
 	const pi = {
 		phase: "idle", prep: [] as OutgoingMessage[], deferred: [] as Array<OutgoingMessage | "prompt">, later: [] as Array<OutgoingMessage | "prompt">,
 		pendingCustom: [] as OutgoingMessage[], steerQ: [] as OutgoingMessage[], compacting: false, bsContinue: false,
-		entries: [] as any[], cut: 0, promptWaiting: false,
+		entries: [] as any[], cut: 0, promptWaiting: false, oursDone: false, runAborted: false,
 	};
 	let entryId = 0;
 	let failNext = false;
@@ -111,7 +111,7 @@ function makeWorld() {
 		handlers = new Map();
 		const bus = { on: (name: string, handler: Handler) => { handlers.set(name, [...(handlers.get(name) ?? []), handler]); } };
 		const watch = watchMain(bus as never, () => host(), now);
-		// extensions/subagents.ts:333-353, registered after watchMain as there.
+		// extensions/subagents.ts:337-360, registered after watchMain as there.
 		const reconcile = () => host()?.reconcile(pi.entries);
 		bus.on("turn_end", async () => reconcile());
 		bus.on("agent_end", async () => reconcile());
@@ -143,6 +143,22 @@ function makeWorld() {
 
 	const land = (messages: OutgoingMessage[]) => { for (const message of messages) append(message); };
 	const contextMessages = () => pi.entries.slice(pi.cut).map((e) => e.type === "message" ? e.message : { role: "custom", customType: e.customType, details: e.details });
+	// An abort (as:1971-1982). In a turn, the loop ends with an aborted message and
+	// agent_end; _startRun's finally flushes (as:1467-1470). In the settle check, Pi
+	// only marks the abort: the other handlers, ours included, still run, and the
+	// boundary ends with no new agent_end (as:1572-1580).
+	const abortRun = async () => {
+		pi.runAborted = true;
+		if (pi.phase === "bs") {
+			if (!pi.oursDone) {
+				const context = { contextMessages: contextMessages(), pendingMessages: pi.pendingCustom.map((m) => ({ role: "custom", ...m })) };
+				await emit("agent_before_settle", { context });
+			}
+		} else await emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] });
+		land(pi.pendingCustom.splice(0));
+		pi.phase = "settle";
+		pi.bsContinue = false;
+	};
 	const startRun = async () => {
 		// _startRun: held custom messages first (as:1437-1440), then agent_start and the starting messages (agent-loop.js:55-60).
 		land(pi.pendingCustom.splice(0));
@@ -158,7 +174,7 @@ function makeWorld() {
 		childMail(s) {
 			failNext = picked(s, "throws") === true;
 			const id = picked(s, "id");
-			// The team calls its own mail, served or parked (host-state.ts:85).
+			// The team calls its own mail, served or parked (host-state.ts:95).
 			mail.deliver(id === "a" ? { kind: "note", from: "scout", text: "found it" } : { kind: "relay", from: "user", to: "scout", text: "hi", answered: false });
 		},
 		childReport() { mail.deliver({ kind: "report", record: record("scout") }); },
@@ -175,11 +191,13 @@ function makeWorld() {
 			if (s.phase === "work") return;
 			await emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
 			pi.phase = "bs";
+			pi.oursDone = false;
 		},
 		async beforeSettle() {
 			const context = { contextMessages: contextMessages(), pendingMessages: pi.pendingCustom.map((m) => ({ role: "custom", ...m })) };
 			const [result] = await emit("agent_before_settle", { context });
 			pi.bsContinue = (result as { continue?: boolean } | undefined)?.continue === true;
+			pi.oursDone = true;
 		},
 		async bsEnd(s) {
 			failNext = picked(s, "throws") === true;
@@ -187,10 +205,16 @@ function makeWorld() {
 			if (pi.bsContinue) { pi.phase = "work"; pi.bsContinue = false; await emit("agent_start"); }
 			else pi.phase = "settle";
 		},
-		async settledHandler(s) { failNext = picked(s, "throws") === true; await emit("agent_settled", { aborted: false }); },
+		async settledHandler(s) {
+			failNext = picked(s, "throws") === true;
+			const aborted = pi.runAborted;
+			pi.runAborted = false;
+			await emit("agent_settled", { aborted });
+		},
 		settleEnd() {
 			const items = [...pi.deferred, ...pi.later];
 			pi.deferred = [];
+			pi.runAborted = false;
 			if (items.length === 0) { pi.phase = "idle"; pi.later = []; return; }
 			const [head, ...rest] = items;
 			pi.phase = "prep";
@@ -202,18 +226,18 @@ function makeWorld() {
 		promptRun() { pi.promptWaiting = false; if (pi.phase === "idle" && !pi.compacting) pi.phase = "prep"; },
 		graceEnds() { time += 2_001; },
 		async userAbort() {
-			// clearAllQueues and abort (interactive-mode.js:3853, as:1971-1982); the finally flushes (as:1467-1471).
+			// clearAllQueues (interactive-mode.js:3853), then the abort.
 			pi.steerQ = [];
-			await emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] });
-			land(pi.pendingCustom.splice(0));
-			pi.phase = "settle";
+			await abortRun();
 		},
-		async compactMidRun() {
-			await emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] });
-			land(pi.pendingCustom.splice(0));
-			pi.phase = "settle";
-		},
+		async compactMidRun() { await abortRun(); },
 		compactIdle() {},
+		async compactFail(s, before) {
+			// session_compact_failed (as:2331-2350): no reminder came, so the model took `aborted` (or nothing was owed).
+			const reminded = s.created.includes("rem") && !before.created.includes("rem");
+			await emit("session_compact_failed", { reason: "manual", aborted: !reminded });
+			pi.compacting = false;
+		},
 		async compactStart() { pi.compacting = true; await emit("session_before_compact", { reason: "manual" }); },
 		async compactEnd(s) {
 			failNext = picked(s, "throws") === true;
@@ -226,13 +250,13 @@ function makeWorld() {
 			failNext = picked(s, "throws") === true;
 			const ports = newModule();
 			await emit("session_start", { reason: "reload" });
-			// Host.rebind, host-state.ts:223-229.
+			// Host.rebind, host-state.ts:230-236.
 			binding.bind(ports);
 			served = true;
 			mail.retry();
 		},
 		fallbackClose() {
-			// Host.close, host-state.ts:250-254, and handOverMail (:295-301) with no module bound.
+			// Host.close, host-state.ts:269-275, and handOverMail (:295-301) with no module bound.
 			const live = binding.beginClose();
 			const items = mail.drain();
 			kept = live ? items.filter(({ message }) => { try { live.send(message, { triggerTurn: false }); return false; } catch { return true; } }) : [...items];
@@ -246,7 +270,7 @@ function makeWorld() {
 			binding = new PortBinding(ports);
 			mail = newMail(binding);
 			served = true;
-			// postKeptMail, host-state.ts:304-311.
+			// postKeptMail, host-state.ts:326-332.
 			const items = kept;
 			kept = [];
 			mail.resend(items);
@@ -282,7 +306,7 @@ function makeWorld() {
 		for (const e of pi.entries) if (e.type === "custom_message") idKinds.set(e.details.id, modelId(e.details));
 	};
 	const after = () => { failNext = false; learnIds(); };
-	// Each step takes a millisecond, so two MainMail instances never make the same id (deliver.ts:420-422).
+	// Each step takes a millisecond, so two MainMail instances never make the same id (deliver.ts:422-424).
 	const tick = () => { time += 1; };
 	return { actions, codeState, after, tick, dispose: () => mail.dispose() };
 }
