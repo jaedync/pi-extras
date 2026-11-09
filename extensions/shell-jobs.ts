@@ -549,8 +549,13 @@ async function adopt(runtime: Runtime, record: Handover): Promise<void> {
 
 
 /** Test-only introspection; not used by Pi. */
+/** Tests only: a replacement for the gap-wait retry timer. */
+let retryScheduler: ((flush: () => void) => void) | undefined;
+
 export const __testing = {
 	getRuntimes: () => registry().runtimes,
+	/** Replace the gap-wait retry timer of the next attachments; undefined restores it. */
+	setRetryScheduler: (scheduler: ((flush: () => void) => void) | undefined) => { retryScheduler = scheduler; },
 	/** Stop widgets and remove every runtime's session log directory. */
 	disposeAll: () => {
 		for (const runtime of registry().runtimes) {
@@ -822,7 +827,7 @@ export default function shellJobs(pi: ExtensionAPI): void {
 			signal: () => ctx.signal,
 			// Older cores have no isIdle; they get no gap wait.
 			idle: () => typeof ctx.isIdle !== "function" || ctx.isIdle(),
-		});
+		}, retryScheduler);
 		inspectorUi = ctx.hasUI && ctx.mode === "tui" ? ctx.ui : null;
 		if (ctx.hasUI) {
 			runtime.widget.attach(ctx.ui as WidgetUi, ctx.mode === "tui", () => runtime.jobs.values(), (job) => inspect(job.id));

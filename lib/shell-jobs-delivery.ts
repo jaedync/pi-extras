@@ -132,6 +132,11 @@ async function sendCompletion(
 	runtime: Runtime, binding: Delivery, pi: ExtensionAPI, job: Job, readTail: typeof readLogTail,
 	probe: SessionProbe, waitForGap: () => void,
 ): Promise<void> {
+	// Wait before the tail read too: each retry would read a large log again.
+	if (sendPlace(probe) === "gap") {
+		waitForGap();
+		return;
+	}
 	let tail;
 	try {
 		tail = await readTail(job.logPath, NOTIFY_TAIL_BYTES, NOTIFY_TAIL_LINES);
@@ -159,6 +164,7 @@ async function sendCompletion(
 	if (stopped !== null) lines.push(stopped);
 	lines.push("", tail.text.length > 0 ? tail.text : "(no output)");
 	if (tail.notice !== null) lines.push("", tail.notice);
+	// The read can end in a gap that started after the check above.
 	const place = sendPlace(probe);
 	// The outbox entry stays, so the retry or the agent_start flush sends it.
 	// Reconcile skips it meanwhile and counts no attempt for it.

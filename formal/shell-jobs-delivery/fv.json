@@ -9,17 +9,18 @@
     "deliveredMeansSeen",
     "attemptsCountSends",
     "noStuckHold",
-    "noHoldPastSettle"
+    "noHoldPastSettle",
+    "outboxMoves"
   ],
   "syncCommit": "e95a143",
   "covers": [
     {
       "path": "lib/shell-jobs-delivery.ts",
-      "what": "attachDelivery, flush, sendCompletion, acknowledgeCompletion, reconcileDeliveries"
+      "what": "attachDelivery, flush, the gap wait and its retry, sendCompletion, noteRunStart, acknowledgeCompletion, settleDeliveries, reconcileDeliveries"
     },
     {
       "path": "extensions/shell-jobs.ts",
-      "what": "finalize, and the session_start, message_end, agent_settled and session_shutdown handlers"
+      "what": "finalize, and the session_start, message_end, before_agent_start, agent_start, agent_settled and session_shutdown handlers"
     },
     {
       "path": "lib/shell-jobs-manage.ts",
@@ -596,8 +597,8 @@
           "to": "    if (true) all {\n      jobs' = JOBS.mapBy(j => results.get(j)._1),"
         },
         {
-          "from": "      if (piIdle) reconcileAndFlush(b, false, held)",
-          "to": "      if (true) reconcileAndFlush(b, false, held)"
+          "from": "      if (piIdle) all { reconcileAndFlush(b, false, held), armed' = armed }",
+          "to": "      if (true) all { reconcileAndFlush(b, false, held), armed' = armed }"
         }
       ],
       "expect": "pass"
@@ -674,6 +675,38 @@
       }
     },
     {
+      "name": "mutant-settle-no-flush",
+      "base": "faithful",
+      "mirrors": "reconcileDeliveries in lib/shell-jobs-delivery.ts without its final flush: a completion that waited in a gap until the run settled is never sent",
+      "replace": [
+        {
+          "from": "      reading' = flushReads(b, box, reading),",
+          "to": "      reading' = reading,"
+        }
+      ],
+      "expect": {
+        "violates": "outboxMoves"
+      }
+    },
+    {
+      "name": "mutant-gap-no-timer",
+      "base": "faithful",
+      "mirrors": "waitForGap in lib/shell-jobs-delivery.ts arms no retry timer: a completion that waited in the gap of a run that then fails in _prepareRun is never sent",
+      "replace": [
+        {
+          "from": "    else if (gapNow) (reading, armed or box.exists(j => not(reading.contains((j, b)))))",
+          "to": "    else if (gapNow) (reading, armed)"
+        },
+        {
+          "from": "and not(job.delivered or job.claimed) and gapNow) true else armed,",
+          "to": "and not(job.delivered or job.claimed) and gapNow) armed else armed,"
+        }
+      ],
+      "expect": {
+        "violates": "outboxMoves"
+      }
+    },
+    {
       "name": "mutant-release-ignores-abort",
       "base": "faithful",
       "mirrors": "settleDeliveries releases \"steered\" sends after an aborted run too, as the first version of the fix did in the TUI: an abort that keeps the queue (the RPC abort, or /compact, /new, /resume or /fork in the TUI) leaves the completion in the queue, and the release sends it again (F4, F5)",
@@ -693,8 +726,8 @@
       "mirrors": "sendCompletion holds every send as \"steered\", without the ctx.signal probe: a send that Pi deferred is released by the next settled run while it still waits (F2a, F2b, F3)",
       "replace": [
         {
-          "from": "      deferred' = deferred.append(j), queue' = queue, busy' = busy, starting' = starting,\n      held' = held.set(j, \"pending\"),",
-          "to": "      deferred' = deferred.append(j), queue' = queue, busy' = busy, starting' = starting,\n      held' = held.set(j, \"steered\"),"
+          "from": "      deferred' = deferred.append(j), queue' = queue, busy' = busy, starting' = starting, firstMsg' = firstMsg,\n      held' = held.set(j, \"pending\"),",
+          "to": "      deferred' = deferred.append(j), queue' = queue, busy' = busy, starting' = starting, firstMsg' = firstMsg,\n      held' = held.set(j, \"steered\"),"
         }
       ],
       "expect": {
@@ -707,8 +740,8 @@
       "mirrors": "session_start after a reload releases the \"run\" sends as agent_settled does: an abort outside the TUI kept a completion, the user reloads, and the new binding sends it again",
       "replace": [
         {
-          "from": "      if (piIdle) reconcileAndFlush(b, false, held)",
-          "to": "      if (piIdle) reconcileAndFlush(b, false, releaseHeld(held, false))"
+          "from": "      if (piIdle) all { reconcileAndFlush(b, false, held), armed' = armed }",
+          "to": "      if (piIdle) all { reconcileAndFlush(b, false, releaseHeld(held, false)), armed' = armed }"
         }
       ],
       "expect": {

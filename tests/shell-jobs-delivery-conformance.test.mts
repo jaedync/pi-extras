@@ -72,6 +72,8 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 	const PROMPT = "prompt";
 	const pi = {
 		busy: Boolean(first.busy), inLoop: false, settling: false, aborted: false, abortRequested: false, starting: null as string | null,
+		// The _startRun trigger of the active run until it lands; not in the queue.
+		first: null as string | null,
 		deferred: [] as string[], later: [] as string[], loopRun: false, queue: [] as string[], history: [] as any[],
 	};
 	const sends: Record<string, number> = Object.fromEntries(jobs.map((id) => [id, 0]));
@@ -88,7 +90,7 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 			const id = message.details.id;
 			if (pi.settling) pi.deferred.push(id);
 			else if (pi.busy) pi.queue.push(id);
-			else { pi.queue.push(id); pi.busy = true; pi.starting = id; }
+			else { pi.first = id; pi.busy = true; pi.starting = id; }
 			void b;
 		},
 	});
@@ -107,7 +109,7 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 	const attach = () => {
 		binding += 1;
 		active = true;
-		// The retry timer is the model's retryFlush step here, so a real timer must not fire.
+		// The retry timer is the model's retryFire step here, so a real timer must not fire.
 		const probe = { signal: () => ctx.signal as AbortSignal | undefined, idle: () => ctx.isIdle() };
 		return delivery.attachDelivery(runtime, apiFor(binding) as any, readTailFor(binding) as any, probe, () => {});
 	};
@@ -145,7 +147,9 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 		},
 		piDeliver() {
 			// Pi appends the message; the message_end handler acknowledges it (extensions/shell-jobs.ts:844-852).
-			const id = pi.queue.shift()!;
+			// The run's first message lands before the queue.
+			const id = pi.first ?? pi.queue.shift()!;
+			pi.first = null;
 			pi.history.push({ type: "custom_message", customType: delivery.COMPLETION_CUSTOM_TYPE, details: { id, runtimeId: RUNTIME_ID } });
 			if (active) delivery.acknowledgeCompletion(runtime, id);
 		},
@@ -161,8 +165,12 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 		loopEnd() {
 			pi.inLoop = false;
 		},
-		retryFlush() {
-			// The agent_start handler, or the retry timer of a gap wait.
+		agentStartFlush() {
+			// The agent_start handler (extensions/shell-jobs.ts).
+			void runtime.delivery?.flush();
+		},
+		retryFire() {
+			// The retry timer of a gap wait (waitForGap in lib/shell-jobs-delivery.ts).
 			void runtime.delivery?.flush();
 		},
 		runEnds() {
@@ -190,7 +198,7 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 			const [head, ...rest] = items;
 			pi.busy = true;
 			pi.loopRun = true;
-			if (head !== PROMPT) pi.queue.push(head);
+			if (head !== PROMPT) pi.first = head;
 			pi.starting = head === PROMPT ? null : head;
 			pi.later = rest;
 		},
@@ -201,10 +209,12 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 			const message = { customType: delivery.COMPLETION_CUSTOM_TYPE, details: { id, runtimeId: RUNTIME_ID } };
 			if (active) delivery.noteRunStart(runtime, { messageType: "custom", message });
 		},
-		// Not a model action: _prepareRun throws after before_agent_start. The
-		// run never takes its starting message and emits no agent_settled.
+		// _prepareRun throws: no agent_settled. The model lets only a user
+		// prompt's run fail; the schedule test below also fails a deferred
+		// send's run after its before_agent_start, which drops its message.
 		startFails() {
-			pi.queue.pop();
+			// _prepareRun throws: the run's first message never lands.
+			pi.first = null;
 			pi.busy = false;
 		},
 		userPrompt() {
@@ -409,9 +419,10 @@ test("three dropped sends reach the attempt cap and mark the job as not delivere
 test("the gap path: a job that ends while another extension's before_agent_start awaits, then Esc, still arrives once", async () => {
 	// The run waits in _prepareRun (Pull Link reads a link): busy, with no agent loop.
 	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
-		...ended("j1"), read("j1"), ["abortRequest", { clear: true }],
+		// The flush in the gap starts no read; the completion waits in the outbox.
+		...ended("j1"), ["abortRequest", { clear: true }],
 		// agent_start: the loop exists, and the shell-jobs handler flushes again.
-		loop, ["retryFlush"], read("j1"), ...runEnds(), ["settleHandler"], ["settleEnds"],
+		loop, ["agentStartFlush"], read("j1"), ...runEnds(), ["settleHandler"], ["settleEnds"],
 		...userRun, ["piDeliver"], ...runEnds(), ["settleHandler"], ["settleEnds"],
 	]);
 	assert.deepEqual(final.history, { j1: 1 });
@@ -423,7 +434,7 @@ test("the gap path: a job that ends while another extension's before_agent_start
 test("the gap path: a job that ends while agent_before_settle handlers await is sent once after the run settles", async () => {
 	// The loop ended; the run waits in _runBeforeSettleBoundary (a subagent hand-over).
 	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
-		loop, ["loopEnd"], ...ended("j1"), read("j1"), ["runEnds"], ["settleHandler"], read("j1"), ...deferredRun, ["settleEnds"],
+		loop, ["loopEnd"], ...ended("j1"), ["runEnds"], ["settleHandler"], read("j1"), ...deferredRun, ["settleEnds"],
 	]);
 	assert.deepEqual(final.history, { j1: 1 });
 	assert.deepEqual(final.sends, { j1: 1 });
@@ -432,11 +443,20 @@ test("the gap path: a job that ends while agent_before_settle handlers await is 
 
 test("the gap path: Esc while agent_before_settle handlers await still delivers the waiting completion once", async () => {
 	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
-		loop, ["loopEnd"], ...ended("j1"), read("j1"), ["abortRequest", { clear: true }], ["runEnds"], ["settleHandler"], read("j1"),
+		loop, ["loopEnd"], ...ended("j1"), ["abortRequest", { clear: true }], ["runEnds"], ["settleHandler"], read("j1"),
 		...deferredRun, ["settleEnds"],
 	]);
 	assert.deepEqual(final.history, { j1: 1 });
 	assert.deepEqual(final.sends, { j1: 1 });
+});
+
+test("the gap path: a read that starts in a loop and ends in the gap after it waits, and is sent once after the settle", async () => {
+	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
+		loop, ...ended("j1"), ["loopEnd"], read("j1"), ["runEnds"], ["settleHandler"], read("j1"), ...deferredRun, ["settleEnds"],
+	]);
+	assert.deepEqual(final.history, { j1: 1 });
+	assert.deepEqual(final.sends, { j1: 1 });
+	assert.equal(final.jobs.j1.attempts, 1);
 });
 
 test("a gap wait arms the retry timer, which sends once the gap ends", async () => {
