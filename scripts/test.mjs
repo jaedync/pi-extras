@@ -8,7 +8,7 @@ import { runTmpDir, sharedLeakWarning, testTmpPrefixes, tmpLeakFailure } from '.
 const serial = process.env.PI_TEST_SERIAL === '1';
 const sharedBefore = readdirSync(tmpdir());
 const home = mkdtempSync(join(tmpdir(), 'pi-extras-tests-'));
-const runTmp = runTmpDir(home);
+const runTmp = runTmpDir();
 // Keep real account state and tokens outside every test process.
 const env = { PATH: process.env.PATH, HOME: home, TMPDIR: runTmp,
   PI_CODING_AGENT_DIR: join(home, 'agent'), PI_OFFLINE: '1', PI_TELEMETRY: '0',
@@ -32,6 +32,7 @@ try {
   checkTmpLeaks();
 } finally {
   rmSync(home, { recursive: true, force: true });
+  rmSync(runTmp, { recursive: true, force: true });
 }
 
 function checkTmpLeaks() {

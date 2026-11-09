@@ -13,8 +13,11 @@ function scratch(t) {
 
 test('an empty run folder passes and one leaked folder fails with its prefix', (t) => {
   const base = scratch(t);
-  const run = runTmpDir(join(base, 'home'), join(base, 'cache'));
+  const run = runTmpDir(base, join(base, 'cache'));
+  assert.match(run, /[/\\]pxt-[^/\\]{6}$/, 'a short run folder keeps socket paths under the macOS limit');
   assert.equal(tmpLeakFailure(run), null, 'the cache links are not leaks');
+  mkdirSync(join(run, 'jiti-esm'));
+  assert.equal(tmpLeakFailure(run), null, "jiti's ESM fallback folder is not a leak");
   mkdirSync(join(run, 'status-plus-children-AbC123'));
   assert.match(tmpLeakFailure(run), /left 1 entries[\s\S]*status-plus-children-\* x1/);
 });
@@ -28,11 +31,12 @@ test('leaks group by prefix, largest group first', () => {
 
 test('the prefixes come from mkdtemp calls, also over two lines and with a literal /tmp', (t) => {
   const dir = scratch(t);
-  writeFileSync(join(dir, 'a.test.ts'), 'mkdtempSync(join(tmpdir(), "usage-guard-"));\nmkdtemp(\n  join(tmpdir(),\n "spend-ledger-"));');
+  writeFileSync(join(dir, 'a.test.ts'), 'mkdtempSync(join(tmpdir(), "usage-guard-"));\nmkdtemp(\n  join(tmpdir(),\n "spend-ledger-"));'
+    + ' mkdtempSync(path.join(os.tmpdir(), "path-join-")); mkdtempSync(join(tmpdir(), "pv-"));');
   mkdirSync(join(dir, 'support'));
   writeFileSync(join(dir, 'support', 'b.mts'), "mkdtempSync('/tmp/roshell-'); mkdtempSync(join(other, 'nested-'));");
   writeFileSync(join(dir, 'notes.md'), 'mkdtempSync("ignored-")');
-  assert.deepEqual(testTmpPrefixes(dir).sort(), ['roshell-', 'spend-ledger-', 'usage-guard-']);
+  assert.deepEqual(testTmpPrefixes(dir).sort(), ['path-join-', 'roshell-', 'spend-ledger-', 'usage-guard-'], 'a prefix under 4 characters is dropped');
 });
 
 test('the shared folder warns only for new entries with a test prefix', () => {
@@ -47,11 +51,11 @@ test('the shared folder warns only for new entries with a test prefix', () => {
 
 test('the run folder links each shared cache to a folder that outlives the run', (t) => {
   const base = scratch(t);
-  const run = runTmpDir(join(base, 'home'), join(base, 'cache'));
+  const run = runTmpDir(base, join(base, 'cache'));
   for (const name of SHARED_CACHES) {
     assert.ok(lstatSync(join(run, name)).isSymbolicLink(), name);
     assert.equal(readlinkSync(join(run, name)), join(base, 'cache', `pi-extras-test-${name}`));
   }
-  rmSync(join(base, 'home'), { recursive: true, force: true });
+  rmSync(run, { recursive: true, force: true });
   for (const name of SHARED_CACHES) assert.ok(lstatSync(join(base, 'cache', `pi-extras-test-${name}`)).isDirectory(), `${name} survives the run`);
 });
