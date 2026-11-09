@@ -706,7 +706,10 @@ export class Team implements HostTeam {
 				// are taken in the same step as settle below, so none can come in between.
 				for (let landing = handle.steering?.(); landing; landing = handle.steering?.()) await landing;
 				if (this.gone(name, launch)) return;
+				// As work() does before each prompt: a run at its budget wraps up, and a session due to move moves first.
+				if (this.wrapUps.active(name)) return void (await this.wrapUps.finish(name, handle, () => this.gone(name, launch)));
 				next = this.late(name, handle);
+				if (next !== null && this.swapBefore(name, next)) return;
 			}
 		} catch (error) {
 			// A run at its budget gets no fallback model: it stops as before (wrap-up.ts).
