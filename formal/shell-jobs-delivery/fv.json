@@ -30,35 +30,115 @@
   "checks": [
     {
       "name": "faithful",
-      "why": "Pi as it is: /reload can run while agent_settled handlers still run. Finding F1 in README.md.",
+      "why": "Pi as it is. Findings F1 and F2 in README.md.",
       "expect": {
         "violates": "oneCompletion"
       }
     },
     {
-      "name": "no-reload-during-settle",
-      "why": "Assume that /reload waits for agent_settled to end. Every other property must hold.",
+      "name": "f2-pi-extras-alone",
+      "why": "No other extension before shell-jobs and no /reload: two jobs and an abort still give a duplicate (F2).",
       "replace": [
         {
-          "from": "pure val RELOAD_DURING_SETTLE = true",
-          "to": "pure val RELOAD_DURING_SETTLE = false"
+          "from": "pure val OTHER_HANDLERS_FIRST = true",
+          "to": "pure val OTHER_HANDLERS_FIRST = false"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "f2-two-jobs",
+      "why": "No other extension before shell-jobs, no /reload and no user prompt: two jobs whose tail reads are in flight when a run ends give the duplicate (F2a). repro-f2.mts reaches it through Esc.",
+      "replace": [
+        {
+          "from": "pure val OTHER_HANDLERS_FIRST = true",
+          "to": "pure val OTHER_HANDLERS_FIRST = false"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        },
+        {
+          "from": "  action userPrompt: bool = all {\n    handlerGate,",
+          "to": "  action userPrompt: bool = all {\n    false,"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "f1-one-job-reload",
+      "why": "One job and no other extension before shell-jobs: only a /reload during agent_settled gives the duplicate (F1).",
+      "replace": [
+        {
+          "from": "pure val OTHER_HANDLERS_FIRST = true",
+          "to": "pure val OTHER_HANDLERS_FIRST = false"
+        },
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\")"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "f2-one-job-prompt",
+      "why": "One job, no other extension before shell-jobs, no /reload: a prompt that the user sends while agent_settled handlers run is deferred ahead of the job's send, and its run resends the job (F2, second path).",
+      "replace": [
+        {
+          "from": "pure val OTHER_HANDLERS_FIRST = true",
+          "to": "pure val OTHER_HANDLERS_FIRST = false"
+        },
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\")"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "pi-idle-counts-deferred",
+      "why": "Assume the Pi fix: isIdle is false while deferred actions wait or run. Every property must hold.",
+      "replace": [
+        {
+          "from": "pure val IDLE_COUNTS_DEFERRED = false",
+          "to": "pure val IDLE_COUNTS_DEFERRED = true"
         }
       ],
       "expect": "pass"
     },
     {
-      "name": "no-reload-during-settle-wide",
-      "base": "no-reload-during-settle",
-      "why": "The same assumption at wider bounds: 3 jobs, 2 reloads, 3 user runs or aborts.",
+      "name": "pi-idle-counts-deferred-wide",
+      "base": "pi-idle-counts-deferred",
+      "why": "The same at wider bounds: 3 jobs.",
       "replace": [
         {
           "from": "pure val JOBS = Set(\"j1\", \"j2\")",
           "to": "pure val JOBS = Set(\"j1\", \"j2\", \"j3\")"
-        },
-        {
-          "from": "pure val MAX_RELOADS = 1",
-          "to": "pure val MAX_RELOADS = 2"
-        },
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "pi-idle-counts-deferred-runs3",
+      "base": "pi-idle-counts-deferred",
+      "why": "The same with 3 user runs or aborts, the bound of mutant-attempt-cap-off-by-one.",
+      "replace": [
         {
           "from": "pure val MAX_RUNS = 2 ",
           "to": "pure val MAX_RUNS = 3 "
@@ -67,34 +147,20 @@
       "expect": "pass"
     },
     {
-      "name": "mutant-send-ignores-binding",
-      "base": "no-reload-during-settle",
-      "mirrors": "lib/shell-jobs-delivery.ts:71 without `runtime.delivery !== binding`: a read that started before a reload sends through the old binding",
+      "name": "survivor-send-ignores-binding",
+      "base": "pi-idle-counts-deferred",
+      "why": "lib/shell-jobs-delivery.ts:71 without `runtime.delivery !== binding`. Under the Pi fix no reconcile runs while the old send waits, so the old binding's send cannot make a second message. The check stops a send through the old API: once Pi invalidates the old runner, sendMessage throws (dist/core/extensions/loader.js:305-307) and the message waits for the next reconcile. The model has no liveness property for that delay. The conformance replay catches this change.",
       "replace": [
         {
           "from": "if (binding != b or not(outbox.contains(j)))",
           "to": "if (not(outbox.contains(j)))"
         }
       ],
-      "expect": {
-        "violates": "oneCompletion"
-      }
-    },
-    {
-      "name": "survivor-start-ignores-busy",
-      "base": "no-reload-during-settle",
-      "why": "The ctx.isIdle() check of reconcile (lib/shell-jobs-delivery.ts:121) removed. In the model reconcile never runs during a run: agent_settled comes after the run, and Pi refuses /reload while isStreaming. The check guards compaction, which the model leaves out.",
-      "replace": [
-        {
-          "from": "if (not(busy)) reconcileAndFlush(b, false)",
-          "to": "if (true) reconcileAndFlush(b, false)"
-        }
-      ],
       "expect": "pass"
     },
     {
       "name": "mutant-reconcile-ignores-outbox",
-      "base": "no-reload-during-settle",
+      "base": "pi-idle-counts-deferred",
       "mirrors": "lib/shell-jobs-delivery.ts:132 without `|| runtime.outbox.has(job.id)`: reconcile counts an attempt for a send that is still in flight",
       "replace": [
         {
@@ -108,7 +174,7 @@
     },
     {
       "name": "mutant-claim-unchecked",
-      "base": "no-reload-during-settle",
+      "base": "pi-idle-counts-deferred",
       "mirrors": "extensions/shell-jobs.ts:204 without `done.claimed` and lib/shell-jobs-delivery.ts:73 without `latest.claimed`: a job that the user killed gets a completion",
       "replace": [
         {
@@ -126,7 +192,7 @@
     },
     {
       "name": "mutant-finalize-ignores-claim",
-      "base": "no-reload-during-settle",
+      "base": "pi-idle-counts-deferred",
       "mirrors": "extensions/shell-jobs.ts:204 without `done.claimed`: finalize counts an attempt for a job that the user killed. sendCompletion still drops the send (lib/shell-jobs-delivery.ts:73), so only the count breaks",
       "replace": [
         {
@@ -139,16 +205,69 @@
       }
     },
     {
-      "name": "survivor-reconcile-history",
-      "base": "no-reload-during-settle",
-      "why": "The history lookup of reconcile removed. In the model a message lands only while attached, so message_end always acknowledges it first. The lookup guards cases outside the model: a restart hand-over and a lost message_end.",
+      "name": "mutant-reconcile-ignores-idle",
+      "base": "pi-idle-counts-deferred",
+      "mirrors": "lib/shell-jobs-delivery.ts:121 without the ctx.isIdle() check: a completion sent while /reload waits starts a run, and session_start reconciles during it and sends again",
+      "replace": [
+        {
+          "from": "    if (piIdle) all {\n      jobs' = JOBS.mapBy(j => results.get(j)._1),",
+          "to": "    if (true) all {\n      jobs' = JOBS.mapBy(j => results.get(j)._1),"
+        },
+        {
+          "from": "      if (piIdle) reconcileAndFlush(b, false)",
+          "to": "      if (true) reconcileAndFlush(b, false)"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "mutant-reconcile-ignores-history",
+      "base": "pi-idle-counts-deferred",
+      "mirrors": "lib/shell-jobs-delivery.ts:125-129 without the history lookup: a message that landed while shell-jobs was parked for a reload is sent again",
       "replace": [
         {
           "from": "    else if (inHistory) (acked(job), false)\n",
           "to": ""
         }
       ],
-      "expect": "pass"
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "mutant-attempt-cap-off-by-one",
+      "base": "pi-idle-counts-deferred",
+      "mirrors": "lib/shell-jobs-delivery.ts:133 with `job.attempts >= MAX_COMPLETION_ATTEMPTS + 1`: a fourth send",
+      "replace": [
+        {
+          "from": "else if (job.attempts >= MAX_ATTEMPTS)",
+          "to": "else if (job.attempts >= MAX_ATTEMPTS + 1)"
+        },
+        {
+          "from": "pure val MAX_RUNS = 2 ",
+          "to": "pure val MAX_RUNS = 3 "
+        }
+      ],
+      "expect": {
+        "violates": "boundedSends"
+      },
+      "why": "Needs a third dropped send to reach a fourth attempt, so this check allows 3 aborts."
+    },
+    {
+      "name": "mutant-ack-on-send",
+      "base": "pi-idle-counts-deferred",
+      "mirrors": "acknowledgeCompletion called right after pi.sendMessage (lib/shell-jobs-delivery.ts:82-104) instead of on message_end: a job is marked delivered before its message is in the session",
+      "replace": [
+        {
+          "from": "        all { jobs' = jobs, outbox' = outbox.exclude(Set(j)), piSend(j) },",
+          "to": "        all { jobs' = jobs.setBy(j, acked), outbox' = outbox.exclude(Set(j)), piSend(j) },"
+        }
+      ],
+      "expect": {
+        "violates": "deliveredMeansSeen"
+      }
     }
   ],
   "traces": {

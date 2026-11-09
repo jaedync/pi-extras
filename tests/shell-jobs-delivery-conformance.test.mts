@@ -8,16 +8,20 @@
  * longer describes the code, so its checks prove nothing about the code.
  *
  * The real code here: attachDelivery, flush, sendCompletion,
- * acknowledgeCompletion and reconcileDeliveries. The test copies the few lines
- * of finalize, stopJob, parkForReload and the event handlers that feed them,
- * and a fake Pi that follows Pi's sendCustomMessage rule: a send during
- * agent_settled waits until the handlers end. See formal/shell-jobs-delivery/README.md.
+ * acknowledgeCompletion, reconcileDeliveries and parkForReload. The test copies
+ * the few lines of finalize, stopJob and the event handlers that feed them.
+ * Pi is a fake that follows the model's Pi rules (a send during agent_settled
+ * waits, and the waiting actions run one at a time). The replay does not check
+ * those rules against Pi: repro-f1.mts and repro-f2.mts do that in a real
+ * AgentSession. See formal/shell-jobs-delivery/README.md.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { gunzipSync } from "node:zlib";
-import { delivery } from "./support/shell-jobs-harness.mts";
+import { delivery, jiti } from "./support/shell-jobs-harness.mts";
+
+const processModule = (await jiti.import("../../lib/shell-jobs-process.ts")) as typeof import("../lib/shell-jobs-process.ts");
 
 const TRACES = new URL("../formal/shell-jobs-delivery/traces.itf.jsonl.gz", import.meta.url);
 const RUNTIME_ID = "conformance";
@@ -51,8 +55,9 @@ function makeWorld(first: Record<string, any>) {
 	const jobs = Object.keys(first.jobs);
 	const runtime: any = {
 		runtimeId: RUNTIME_ID, jobs: new Map(), outbox: new Set<string>(), delivery: null, closing: false,
-		widget: { update() {} },
+		widget: { update() {}, detach() {} }, reloadTimer: null,
 	};
+	const session = {};
 	for (const id of jobs) {
 		runtime.jobs.set(id, {
 			id, pid: 0, command: "true", title: null, toolCallId: null, cwd: "/", logPath: `/log/${id}`, startedAt: 0, epoch: 0,
@@ -60,7 +65,8 @@ function makeWorld(first: Record<string, any>) {
 			deliveryFailed: false, cleanupError: null, runtimeId: RUNTIME_ID,
 		});
 	}
-	const pi = { busy: Boolean(first.busy), settling: false, deferred: [] as string[], queue: [] as string[], history: [] as any[] };
+	const PROMPT = "prompt";
+	const pi = { busy: Boolean(first.busy), settling: false, deferred: [] as string[], later: [] as string[], loopRun: false, queue: [] as string[], history: [] as any[] };
 	const sends: Record<string, number> = Object.fromEntries(jobs.map((id) => [id, 0]));
 	const reads = new Map<string, () => void>();
 	let binding = 0;
@@ -133,30 +139,45 @@ function makeWorld(first: Record<string, any>) {
 			if (active) delivery.acknowledgeCompletion(runtime, id);
 		},
 		runEnds(s, before) {
+			// _emitAgentSettled starts; an abort dropped the run's messages (clearQueue).
 			if (s.runs > before.runs) pi.queue = [];
 			pi.busy = false;
 			pi.settling = true;
-			if (!active) return;
+		},
+		settleHandler() {
 			// The agent_settled handler, extensions/shell-jobs.ts:856-858.
+			if (!active) return;
 			settleHandlerDone = false;
 			settleHandler = delivery.reconcileDeliveries(runtime, ctx as any).then(() => { settleHandlerDone = true; });
 		},
 		settleEnds() {
 			assert.equal(settleHandlerDone, true, "the model ends agent_settled while the shell-jobs handler still awaits a read");
+			// Deferred actions run one at a time; those of a nested emission go first.
+			const items = [...pi.deferred, ...pi.later];
 			pi.settling = false;
-			pi.queue.push(...pi.deferred);
-			pi.busy = pi.deferred.length > 0;
 			pi.deferred = [];
 			settleHandler = null;
+			if (items.length === 0) { pi.busy = false; pi.later = []; pi.loopRun = false; return; }
+			const [head, ...rest] = items;
+			pi.busy = true;
+			pi.loopRun = true;
+			if (head !== PROMPT) pi.queue.push(head);
+			pi.later = rest;
 		},
-		userPrompt() { pi.busy = true; },
-		reloadStart() {
-			// session_shutdown with reason "reload": parkForReload, lib/shell-jobs-process.ts:200.
+		userPrompt() {
+			if (pi.settling) pi.deferred.push(PROMPT);
+			else pi.busy = true;
+		},
+		reloadRequest() {},
+		reloadPark() {
+			// session_shutdown with reason "reload" (extensions/shell-jobs.ts:860-872).
 			active = false;
-			runtime.delivery = null;
+			processModule.parkForReload(session, runtime, () => {});
 		},
 		sessionStart() {
 			// extensions/shell-jobs.ts:818-835: attach, reconcile, flush.
+			if (runtime.reloadTimer) clearTimeout(runtime.reloadTimer);
+			runtime.reloadTimer = null;
 			const fresh = attach();
 			void delivery.reconcileDeliveries(runtime, ctx as any).then(() => fresh.flush());
 		},
@@ -172,7 +193,6 @@ function makeWorld(first: Record<string, any>) {
 		sends: { ...sends },
 		history: Object.fromEntries(jobs.map((id) => [id, pi.history.filter((e) => e.details.id === id).length])),
 		binding: runtime.delivery === null ? 0 : binding,
-		queue: [...pi.queue], deferred: [...pi.deferred], busy: pi.busy, settling: pi.settling,
 	});
 	return { actions, codeState, pending: () => settleHandler };
 }
@@ -186,7 +206,6 @@ function modelState(s: Record<string, any>) {
 		sends: s.sends,
 		history: s.history,
 		binding: s.binding,
-		queue: s.queue, deferred: s.deferred, busy: s.busy, settling: s.settling,
 	};
 }
 
@@ -215,11 +234,12 @@ test("the delivery code follows every step of the model traces", async () => {
 	assert.ok(steps > 3000, `expected over 3000 replayed steps, replayed ${steps}`);
 });
 
-// Finding F1 in formal/shell-jobs-delivery/README.md: a /reload while
-// agent_settled handlers still run can deliver one completion twice. This test
-// shows that the code takes each step of the model's path; it is not a wish.
-// When the code is fixed, the model and this test change with it.
-test("finding F1: the code follows the model's path to a duplicate completion", async () => {
+// Finding F in formal/shell-jobs-delivery/README.md: a send that Pi defers
+// during agent_settled is invisible to reconcile, so one completion can be
+// delivered twice. This test shows that the code takes each step of the
+// model's path; it is not a wish. When the code is fixed, the model and this
+// test change with it.
+test("finding F: the code follows the model's path to a duplicate completion", async () => {
 	const traces = loadTraces();
 	const index = traces.findIndex((t: any) => t["#meta"]?.witness === "oneCompletion");
 	assert.ok(index >= 0, "the traces hold no oneCompletion witness; run fv.mjs traces");

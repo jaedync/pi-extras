@@ -19,9 +19,11 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   goals of Lauren Tan's MIT pstack skill create-formal-verification-skill.
 - A formal check of shell-jobs completion delivery
   (`formal/shell-jobs-delivery`) and its conformance test
-  (`tests/shell-jobs-delivery-conformance.test.mts`). It found that a
-  `/reload` while `agent_settled` handlers still run can deliver one
-  completion two times (not fixed yet; see its README).
+  (`tests/shell-jobs-delivery-conformance.test.mts`). It found that one
+  completion can be delivered two times: a send that Pi defers during
+  `agent_settled` is invisible to the next reconcile. Two jobs that end in
+  the same run are enough (live repro `repro-f2.mts`). Not fixed yet; see
+  its README.
 
 ### Fixed
 
