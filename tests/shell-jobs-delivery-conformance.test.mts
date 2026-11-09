@@ -78,6 +78,8 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 	};
 	const sends: Record<string, number> = Object.fromEntries(jobs.map((id) => [id, 0]));
 	const reads = new Map<string, () => void>();
+	// The retry timer that each binding armed (waitForGap); the model's `armed`.
+	const timers = new Map<number, () => void>();
 	let binding = 0;
 	let active = false;
 	let settleHandler: Promise<void> | null = null;
@@ -109,9 +111,15 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 	const attach = () => {
 		binding += 1;
 		active = true;
-		// The retry timer is the model's retryFire step here, so a real timer must not fire.
+		// The retry timer is the model's retryFire step here, so a real timer must not fire:
+		// the scheduler records the callback, and retryFire runs it.
 		const probe = { signal: () => ctx.signal as AbortSignal | undefined, idle: () => ctx.isIdle() };
-		return delivery.attachDelivery(runtime, apiFor(binding) as any, readTailFor(binding) as any, probe, () => {});
+		const b = binding;
+		const schedule = (fire: () => void) => {
+			assert.ok(!timers.has(b), `binding ${b} armed a second retry timer while one was armed`);
+			timers.set(b, fire);
+		};
+		return delivery.attachDelivery(runtime, apiFor(b) as any, readTailFor(b) as any, probe, schedule);
 	};
 	attach();
 
@@ -170,8 +178,15 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 			void runtime.delivery?.flush();
 		},
 		retryFire() {
-			// The retry timer of a gap wait (waitForGap in lib/shell-jobs-delivery.ts).
-			void runtime.delivery?.flush();
+			// The retry timer of a gap wait (waitForGap in lib/shell-jobs-delivery.ts) fires.
+			const fire = timers.get(binding);
+			assert.ok(fire, `the model fires a retry timer that binding ${binding} did not arm`);
+			timers.delete(binding);
+			fire();
+		},
+		// Not a model action: the schedule tests check that a gap starts no log read.
+		noReadInFlight() {
+			assert.deepEqual([...reads.keys()], [], "a log read started in a gap");
 		},
 		runEnds() {
 			// _emitAgentSettled starts; `aborted` is _agentRunAbortRequested.
@@ -247,6 +262,8 @@ function makeWorld(first: { jobs: Record<string, unknown>; busy: boolean }) {
 		history: Object.fromEntries(jobs.map((id) => [id, pi.history.filter((e) => e.details.id === id).length])),
 		held: Object.fromEntries(jobs.map((id) => [id, runtime.held?.get(id) ?? "none"])),
 		binding: runtime.delivery === null ? 0 : binding,
+		// A parked binding's timer does nothing; the model disarms it at reloadPark.
+		armed: runtime.delivery !== null && timers.has(binding),
 	});
 	return { actions, codeState, pending: () => settleHandler };
 }
@@ -261,6 +278,7 @@ function modelState(s: Record<string, any>) {
 		history: s.history,
 		held: s.held,
 		binding: s.binding,
+		armed: s.armed,
 	};
 }
 
@@ -420,7 +438,7 @@ test("the gap path: a job that ends while another extension's before_agent_start
 	// The run waits in _prepareRun (Pull Link reads a link): busy, with no agent loop.
 	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
 		// The flush in the gap starts no read; the completion waits in the outbox.
-		...ended("j1"), ["abortRequest", { clear: true }],
+		...ended("j1"), ["noReadInFlight"], ["abortRequest", { clear: true }],
 		// agent_start: the loop exists, and the shell-jobs handler flushes again.
 		loop, ["agentStartFlush"], read("j1"), ...runEnds(), ["settleHandler"], ["settleEnds"],
 		...userRun, ["piDeliver"], ...runEnds(), ["settleHandler"], ["settleEnds"],
@@ -434,7 +452,7 @@ test("the gap path: a job that ends while another extension's before_agent_start
 test("the gap path: a job that ends while agent_before_settle handlers await is sent once after the run settles", async () => {
 	// The loop ended; the run waits in _runBeforeSettleBoundary (a subagent hand-over).
 	const final = await runSchedule({ jobs: ["j1"], busy: true }, [
-		loop, ["loopEnd"], ...ended("j1"), ["runEnds"], ["settleHandler"], read("j1"), ...deferredRun, ["settleEnds"],
+		loop, ["loopEnd"], ...ended("j1"), ["noReadInFlight"], ["runEnds"], ["settleHandler"], read("j1"), ...deferredRun, ["settleEnds"],
 	]);
 	assert.deepEqual(final.history, { j1: 1 });
 	assert.deepEqual(final.sends, { j1: 1 });
