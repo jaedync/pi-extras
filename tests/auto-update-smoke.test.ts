@@ -116,6 +116,25 @@ test("a transform cache folder is the test Pi's $TMPDIR/jiti, outlives the test,
 	assert.equal(readFileSync(join(cache, "a.mjs"), "utf8"), "// transformed", "the cleanup of the test's temp folder keeps the cache");
 });
 
+test("a relative transform cache folder is resolved from the working folder, so the link is not left dangling", async (t) => {
+	const dir = scratch(t);
+	const seen = join(dir, "seen.json");
+	mkdirSync(join(dir, "pi", "bin"), { recursive: true });
+	writeFileSync(join(dir, "pi", "bin", "pi"), [
+		'const { appendFileSync, existsSync, realpathSync } = require("node:fs");',
+		'const cache = require("node:path").join(require("node:os").tmpdir(), "jiti");',
+		`appendFileSync(${JSON.stringify(seen)}, JSON.stringify(existsSync(cache) ? realpathSync(cache) : null) + "\\n");`,
+		"process.exit(3);",
+		"",
+	].join("\n"));
+	writeFileSync(join(dir, "pi", "package.json"), JSON.stringify({ type: "commonjs" }));
+	const cwd = process.cwd();
+	process.chdir(dir);
+	t.after(() => process.chdir(cwd));
+	await smokeTest({ piDir: join(dir, "pi"), packages: [], timeoutMs: 5_000, transformCache: "relative-cache" });
+	assert.deepEqual(JSON.parse(readFileSync(seen, "utf8")), realpathSync(join(dir, "relative-cache")));
+});
+
 // A cold transform cache (a new checkout) pays the full transform once, so the test gets the cycle's own smoke limit.
 test("pi-extras itself passes the smoke test", { timeout: SMOKE_RESERVE_MS }, async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "au-smoke-x-"));

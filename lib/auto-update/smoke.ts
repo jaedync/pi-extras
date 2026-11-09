@@ -17,7 +17,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, s
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { firstLine, killGroup, sanitize, trackChild } from "./run.ts";
 
 export const SMOKE_TIMEOUT_MS = 90_000;
@@ -243,8 +243,10 @@ export async function smokeTest(input: SmokeInput): Promise<SmokeResult> {
 		const home = join(root, "home");
 		mkdirSync(join(home, "tmp"), { recursive: true });
 		if (input.transformCache) {
-			mkdirSync(input.transformCache, { recursive: true });
-			symlinkSync(input.transformCache, join(home, "tmp", "jiti"), "dir");
+			// symlinkSync resolves a relative target from the link's folder, not from the working folder.
+			const cache = resolve(input.transformCache);
+			mkdirSync(cache, { recursive: true });
+			symlinkSync(cache, join(home, "tmp", "jiti"), "dir");
 		}
 		fake = await fakeAnthropic(reply);
 		const agentDir = join(home, ".pi", "agent");
