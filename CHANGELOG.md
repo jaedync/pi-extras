@@ -79,8 +79,8 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   again. Shell-jobs now keeps each sent completion as held until it lands,
   and sends it again only when a run that settles with no abort proves that
   Pi dropped it. After an abort, a completion that Pi kept lands in the next
-  run, and one that Esc dropped is sent again when the next run settles. It
-  no longer starts a new turn right after Esc. The formal model checks the
+  run, and one that Esc dropped is sent again when the next run settles with no
+  abort. It no longer starts a new turn right after Esc. The formal model checks the
   fix, and a regression test covers each of the six paths
   (`formal/shell-jobs-delivery/README.md`).
 

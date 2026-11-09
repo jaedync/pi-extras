@@ -55,8 +55,15 @@ The fix makes trades, so that it is safe for every Pi rule that the model has:
 
 - After an abort, a completion is not sent again at once. If the abort kept
   it, it lands in the next run. If the abort dropped it (Esc), shell-jobs
-  sends it again when the next run settles with no abort. Before the fix, it
-  was sent again at once, and that started a new turn right after the Esc.
+  sends it again when the next run settles with no abort; if no such run
+  comes, it does not arrive. Before the fix, it was sent again at once, and
+  that started a new turn right after the Esc.
+- `/new`, `/resume`, `/fork`, `ctx.newSession()`, `ctx.fork()` and
+  `ctx.switchSession()` abort the run, then close the old session
+  (`teardownCurrent` calls `abort()`, emits `session_shutdown` and calls
+  `session.dispose()`, `agent-session-runtime.js`). The kept completion goes
+  with the old session, and the new session does not take over the jobs.
+  Before the fix, it landed two times in the old session.
 - The first version of this fix released `steered` sends after an aborted run
   in the TUI. It used the rule that every TUI abort clears the queue. A review
   found that `/compact`, `/new`, `/resume` and `/fork` do not, and a live
@@ -72,11 +79,13 @@ The fix makes trades, so that it is safe for every Pi rule that the model has:
 
 ## Known limits of the fix
 
-A review found these. None gives a duplicate.
+A review found these. The last one can give a duplicate. The others can only
+stop or delay a completion.
 
 - A completion sent while another extension's `before_agent_start` or
   `agent_before_settle` handler awaits is `pending`: no agent loop runs then.
-  If Esc drops it, it stays held, and the job shows as not delivered. Live:
+  If Esc drops it, it stays held, and the widget shows it as "pending" with
+  no end. Live:
   with a 1.5 s `before_agent_start` handler and Esc, the old code delivered
   it once and the fix not at all. The window is the time that such handlers
   take.
@@ -86,10 +95,24 @@ A review found these. None gives a duplicate.
 - A run that settles with no abort can still hold a message that came in the
   microtasks after its last queue check. Such a send is `pending`, so it is
   safe, but it lands only in the next run.
-- If `agent.continue()` throws "No messages to continue from" while the queue
-  holds a message, the run settles with `aborted: false` and the fix releases
-  a `steered` message that is still queued. This needs a transcript with only
-  system messages.
+- A duplicate is possible when a run leaves its loop with a message still in
+  the queue and no abort: an exception from `agent.continue()` ("No messages
+  to continue from"), from `_handlePostAgentRun` or from
+  `_runBeforeSettleBoundary`, or `_runBeforeSettleBoundary` that returns false
+  because the context cannot continue. Pi then emits `agent_settled` with
+  `aborted: false`, and the fix releases a `steered` message that is still
+  queued. The known causes need a context with only system messages. No live
+  repro exists. The Pi fix below (`isIdle` false while the agent's queue holds
+  messages) closes it.
+
+There is no sound fix for the first limit with the current extension API.
+A rule "a send with no signal while `isIdle()` is false is in a run's queue"
+also matches a send that Pi defers while a compaction runs during
+`agent_settled` handlers (`compact()` sets `isCompacting` after its abort).
+That send would then be released by the run of an earlier deferred item, and
+sent again. Shell-jobs would need `isStreaming`, which `ctx` does not show.
+The full Pi fix closes the limit, because then nothing that Pi holds is
+invisible to `isIdle()`.
 
 `pi-probe.mts` checks the Pi rules that the fix uses, on any Pi version.
 
@@ -152,7 +175,7 @@ Pi's source (1.4.0; 1.5.0 is the same here):
 ## Bounds and what they leave out
 
 The default checks use 2 jobs, 1 reload, 2 user runs or aborts, and 3
-attempts. `faithful-wide` uses 3 jobs (20,553,032 states). `faithful-runs3`
+attempts. `faithful-wide` uses 3 jobs (7,465,160 states). `faithful-runs3`
 uses 3 user runs or aborts. `faithful-one-job-runs6` uses 1 job and 6 user
 runs or aborts, so that it reaches the attempt cap. Inside these bounds the
 check is exhaustive. It does not cover:
@@ -189,9 +212,10 @@ The `old-` checks set `HELD_GUARD` to false: the code before the fix.
 
 | Check | Expect | Result |
 |---|---|---|
-| `faithful` | pass | pass, 453,016 states |
-| `faithful-wide` | pass | pass, 20,553,032 states |
-| `faithful-runs3` | pass | pass, 1,191,816 states |
+| `faithful` | pass | pass, 188,748 states |
+| `faithful-wide` | pass | pass, 7,465,160 states |
+| `faithful-runs3` | pass | pass, 464,772 states |
+| `faithful-one-job-runs6` | pass | pass, 65,062 states |
 | `old-faithful` | violates `oneCompletion` | violation, 12 steps |
 | `f2-pi-extras-alone` / `old-` | pass / violates `oneCompletion` | pass / violation (F4), 12 steps |
 | `f2-two-jobs` / `old-` | pass / violates `oneCompletion` | pass / violation (F2a), 23 steps |
@@ -202,7 +226,7 @@ The `old-` checks set `HELD_GUARD` to false: the code before the fix.
 | `f5-send-after-abort` / `old-` | pass / violates `oneCompletion` | pass / violation (F5), 12 steps |
 | `pi-idle-counts-deferred` | pass | pass |
 | `old-pi-idle-counts-deferred` | violates `oneCompletion` | violation (F4) |
-| `pi-idle-counts-pending` (and `-wide`, `-runs3`) | pass | pass (21,383,088 states wide) |
+| `pi-idle-counts-pending` (and `-wide`, `-runs3`) | pass | pass (8,040,496 states wide) |
 | `old-pi-idle-counts-pending` | pass | pass: the Pi fix alone also closes finding F |
 | `survivor-send-ignores-binding` | pass | pass |
 | `survivor-reconcile-ignores-idle` | pass | pass |
@@ -210,7 +234,7 @@ The `old-` checks set `HELD_GUARD` to false: the code before the fix.
 | `mutant-claim-unchecked` | violates `stoppedMeansSilent` | violation |
 | `mutant-finalize-ignores-claim` | violates `attemptsCountSends` | violation |
 | `mutant-reconcile-ignores-history` | violates `oneCompletion` | violation |
-| `mutant-attempt-cap-off-by-one` | violates `boundedSends` | violation |
+| `mutant-attempt-cap-off-by-one` | violates `boundedSends` | violation (on `faithful-one-job-runs6`, 32 steps) |
 | `mutant-ack-on-send` | violates `deliveredMeansSeen` | violation |
 | `mutant-release-pending` | violates `oneCopy` | violation |
 | `mutant-release-ignores-abort` | violates `oneCompletion` | violation |
@@ -222,9 +246,10 @@ Each `f` check turns off the other sources of the duplicate, so that its
 from ending while an aborted run winds down (`SEND_AFTER_ABORT`). Without
 that, TLC finds the shorter path F5 first.
 
-On a loaded machine (load average near 50), a few checks ended with "error"
-in the Apalache compile step. Each one gave the expected result when it ran
-again alone.
+A few checks ended with "error" in the Apalache compile step while another
+session on the machine ran Quint at the same time (the `quint verify` runs
+share one local Apalache server). Each one gave the expected result when it
+ran again.
 
 A mutant is a change to the model that copies a change to the code, for
 example a removed check. Each mutant must break a property. This shows that

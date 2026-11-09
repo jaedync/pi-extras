@@ -47,9 +47,10 @@ Facts 1 to 3 were seen on 1.4.0 and 1.5.0 with `pi-probe.mts` (below). Fact
 
 4. In the TUI, `/compact` calls `AgentSession.abort()` with no clear of the
    queue (`handleCompactCommand`, then `compact()`, in
-   `interactive-mode.js`). `/new`, `/resume`, `/fork`, `ctx.compact()` and
-   `ctx.newSession()` do the same (from the source; not run live). A steered
-   message is kept for the next run, as in fact 2.
+   `interactive-mode.js`). `ctx.compact()` does the same. A steered message
+   is kept for the next run, as in fact 2. `/new`, `/resume`, `/fork` and
+   `ctx.newSession()` also abort with no clear, and then close the old
+   session (from the source; not run live).
 
 Facts 3 and 4 mean that a TUI abort does not always drop the queue. Esc drops
 only what was in the queue when the user pressed it, and the session commands
@@ -131,5 +132,8 @@ Make `isIdle` false in two more cases:
 - While messages wait in the agent's queues (`agent.hasQueuedMessages()`).
 
 With both halves, the model of the pi-extras code before the fix has no
-duplicate (`old-pi-idle-counts-pending`). The first half alone is not enough
+duplicate (`old-pi-idle-counts-pending`). The full fix also closes two limits
+of the pi-extras fix: a completion that an Esc drops while no agent loop runs
+stays held, and a run that leaves its loop by an exception with a message in
+the queue can still give a duplicate. Both need Pi to show what it holds. The first half alone is not enough
 (`old-pi-idle-counts-deferred` still finds the duplicate through a kept queue).

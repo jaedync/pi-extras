@@ -9,7 +9,7 @@
     "deliveredMeansSeen",
     "attemptsCountSends"
   ],
-  "syncCommit": "dabe888",
+  "syncCommit": "e95a143",
   "covers": [
     {
       "path": "lib/shell-jobs-delivery.ts",
@@ -609,7 +609,7 @@
       "replace": [
         {
           "from": "      if (piIdle) reconcileAndFlush(b, false, held)",
-          "to": "      if (piIdle) reconcileAndFlush(b, false, releaseHeld(held, false, true))"
+          "to": "      if (piIdle) reconcileAndFlush(b, false, releaseHeld(held, false))"
         }
       ],
       "expect": {
