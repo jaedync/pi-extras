@@ -10,6 +10,7 @@ import { tuiReference } from "./tui-reference.ts";
 const COLUMNS = 100;
 const ROWS = 40;
 const SETTLE_MS = 40;
+const RENDER_WAIT_MS = 5000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -62,9 +63,17 @@ export function fullscreen() {
 	const theme = quiet();
 	// SGR mouse reports, 1-based: button 0 is left, 32 marks motion.
 	const mouse = (code: number, x: number, y: number, end: "M" | "m") => input(`\x1b[<${code};${x};${y}${end}`);
+	// The fixed wait lets async work land (an overlay's factory, a log read). On a loaded host the TUI's throttled
+	// frame could still be pending after it (10 of 40 runs beside 30 busy loops), so wait for that frame too.
+	const pending = tui as unknown as { renderRequested: boolean; renderTimer: unknown };
 	const settle = async (ms = SETTLE_MS) => {
 		tui.requestRender();
 		await sleep(ms);
+		const until = Date.now() + RENDER_WAIT_MS;
+		while (pending.renderRequested || pending.renderTimer) {
+			if (Date.now() > until) throw new Error(`the TUI did not render within ${RENDER_WAIT_MS} ms`);
+			await sleep(5);
+		}
 	};
 
 	/** Pi's showExtensionCustom for overlays: the extension gets the TUI reference, and `done` hides the overlay, then disposes it. */
