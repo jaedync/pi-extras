@@ -1,11 +1,11 @@
 /**
- * Live repro of finding F2 (README.md) in Pi's real AgentSession with real
- * model runs (Pi's faux provider): two jobs end during a run, the user presses
- * Esc, and one completion is delivered two times. No /reload and no other
+ * Live repro of findings F2a and F4 (README.md) in Pi's real AgentSession
+ * with real model runs (Pi's faux provider). No /reload and no other
  * extension take part.
  *
- *   node formal/shell-jobs-delivery/repro-f2.mts            (a job gets 2 messages)
- *   node formal/shell-jobs-delivery/repro-f2.mts --one-job  (control: 1 message each)
+ *   node formal/shell-jobs-delivery/repro-f2.mts                         (F2a: two jobs, Esc: a job gets 2 messages)
+ *   node formal/shell-jobs-delivery/repro-f2.mts --one-job               (control: 1 message)
+ *   node formal/shell-jobs-delivery/repro-f2.mts --one-job --keep-queue  (F4: one job, an abort without clearQueue, as RPC "abort" and ctx.abort() do: 2 messages)
  *
  * Real: AgentSession, prompt(), steer, clearQueue() and abort() (what Esc
  * does in interactive mode), agent_settled and its deferred sends, and the
@@ -73,7 +73,9 @@ await sleep(200);
 for (const command of jobs) await tool("shell_job_start").execute("call", { command, title: command });
 await sleep(800);
 // 3. The user presses Esc: interactive mode clears the queues and aborts the run.
-session.clearQueue();
+// With --keep-queue, the abort keeps the queue, as the RPC "abort" command
+// (rpc-mode.js:328) and an extension's ctx.abort() (runner.js:666-668) do.
+if (!process.argv.includes("--keep-queue")) session.clearQueue();
 const aborting = session.abort();
 // The faux model does not watch the abort signal; let its held answer return.
 writeFileSync(holdTurn, "");

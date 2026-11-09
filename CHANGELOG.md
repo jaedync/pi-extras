@@ -21,8 +21,9 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
   (`formal/shell-jobs-delivery`) and its conformance test
   (`tests/shell-jobs-delivery-conformance.test.mts`). It found that one
   completion can be delivered two times: a send that Pi defers during
-  `agent_settled` is invisible to the next reconcile. Two jobs that end in
-  the same run are enough (live repro `repro-f2.mts`). Not fixed yet; see
+  `agent_settled` is invisible to the next reconcile. One job and an abort
+  that keeps the queue (RPC `abort`, `ctx.abort()`) are enough, and so are two
+  jobs that end in the same run (live repro `repro-f2.mts`). Not fixed yet; see
   its README.
 
 ### Fixed

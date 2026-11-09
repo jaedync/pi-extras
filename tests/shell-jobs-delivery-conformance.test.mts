@@ -139,8 +139,9 @@ function makeWorld(first: Record<string, any>) {
 			if (active) delivery.acknowledgeCompletion(runtime, id);
 		},
 		runEnds(s, before) {
-			// _emitAgentSettled starts; an abort dropped the run's messages (clearQueue).
-			if (s.runs > before.runs) pi.queue = [];
+			// _emitAgentSettled starts. Esc drops the run's messages (clearQueue);
+			// other aborts keep them for the next run. The model's queue says which.
+			if (s.runs > before.runs && s.queue.length === 0) pi.queue = [];
 			pi.busy = false;
 			pi.settling = true;
 		},

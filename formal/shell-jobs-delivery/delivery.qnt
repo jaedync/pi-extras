@@ -23,6 +23,19 @@ module delivery {
   // isIdle): it ignores sends that wait in _deferredSettledActions. The fix
   // variant makes it false while deferred work waits or runs.
   pure val IDLE_COUNTS_DEFERRED = false
+  // isIdle also ignores messages that wait in the agent's steering and
+  // follow-up queues (agent.hasQueuedMessages). They are left there by an
+  // abort that does not clear them. The second fix variant makes isIdle false
+  // while they wait.
+  pure val IDLE_COUNTS_QUEUE = false
+
+  // Only interactive Esc clears the queues before the abort
+  // (interactive-mode.js:3853). The RPC abort (rpc-mode.js:328), the extension
+  // ctx.abort() (runner.js:666-668) and tree navigation (interactive-mode.js:4648-4649)
+  // do not; AgentSession.abort() (agent-session.js:1971-1983) and Agent.abort()
+  // (agent.js:221-222) leave the queue, and the next run takes it (agent.js:263, :340).
+  // The variant that assumes only Esc aborts sets this to false.
+  pure val ABORT_KEEPS_QUEUE = true
 
   // An extension loaded before shell-jobs can have an agent_settled handler
   // that awaits I/O, so other segments can run before the shell-jobs handler.
@@ -85,7 +98,11 @@ module delivery {
   val handlerGate = not(handlerDue) or OTHER_HANDLERS_FIRST
 
   // ctx.isIdle() as Pi computes it.
-  val piIdle = not(busy) and (not(IDLE_COUNTS_DEFERRED) or (deferred == [] and later == [] and not(loopRun)))
+  val piIdle = all {
+    not(busy),
+    not(IDLE_COUNTS_DEFERRED) or (deferred == [] and later == [] and not(loopRun)),
+    not(IDLE_COUNTS_QUEUE) or queue == [],
+  }
 
   // reconcileDeliveries and its flush. It returns at once while Pi is not idle
   // (lib/shell-jobs-delivery.ts:121), with no flush.
@@ -243,6 +260,9 @@ module delivery {
   // (extensions/shell-jobs.ts:844-852).
   action piDeliver: bool = all {
     handlerGate,
+    // Only an active run takes queued messages; after an abort that kept
+    // them, they wait for the next run.
+    busy,
     queue.length() > 0,
     val j = queue.head()
     all {
@@ -258,12 +278,15 @@ module delivery {
     settleWaits' = settleWaits, kill' = kill, sends' = sends, reloads' = reloads, runs' = runs,
   }
 
-  // The run ends (all its messages are in) or the user aborts it, which drops
-  // the messages that the run did not take (clearQueue, interactive-mode.js:3821).
+  // The run ends (all its messages are in), or it is aborted. An abort with
+  // clear drops the messages that the run did not take (Esc: clearQueue,
+  // interactive-mode.js:3853); one without clear keeps them for the next run.
   // _startRun's finally calls _emitAgentSettled: the run is inactive and the
   // handlers start (agent-session.js:683-688, 1471).
-  action runEnds(abort: bool): bool = all {
+  // abort without clear is an RPC abort, ctx.abort() or tree navigation.
+  action runEnds(abort: bool, clear: bool): bool = all {
     handlerGate,
+    clear or (abort and ABORT_KEEPS_QUEUE),
     busy,
     not(settling),
     abort or queue.length() == 0,
@@ -271,7 +294,7 @@ module delivery {
     busy' = false,
     settling' = true,
     handlerDue' = true,
-    queue' = [],
+    queue' = if (clear) [] else queue,
     runs' = if (abort) runs + 1 else runs,
     deferred' = deferred, later' = later, loopRun' = loopRun, reloading' = reloading, history' = history,
     jobs' = jobs, outbox' = outbox, reading' = reading, settleWaits' = settleWaits,
@@ -347,11 +370,15 @@ module delivery {
   }
 
   // session_shutdown with reason "reload": parkForReload (lib/shell-jobs-process.ts:199-200).
+  // Pi emits agent_settled to the handlers of the runner that started the
+  // emission (runner.js:87-88). After the park, the old shell-jobs handler sees
+  // active false (extensions/shell-jobs.ts:862) and does nothing, so a handler
+  // that has not run yet is gone.
   action reloadPark: bool = all {
     handlerGate,
     reloading,
     binding' = 0, reloading' = false,
-    busy' = busy, settling' = settling, handlerDue' = handlerDue, deferred' = deferred, later' = later,
+    busy' = busy, settling' = settling, handlerDue' = false, deferred' = deferred, later' = later,
     loopRun' = loopRun, queue' = queue, history' = history,
     jobs' = jobs, outbox' = outbox, reading' = reading, lastBinding' = lastBinding,
     settleWaits' = settleWaits, keepRest,
@@ -378,8 +405,9 @@ module delivery {
     any { finishStart(j), finishEnd(j), killStart(j), killAnswer(j), killTimeout(j) },
     readSome,
     piDeliver,
-    runEnds(false),
-    runEnds(true),
+    runEnds(false, true),
+    runEnds(true, true),
+    runEnds(true, false),
     settleHandler,
     settleEnds,
     userPrompt,
@@ -422,6 +450,10 @@ module delivery {
   // of the next reconcile can acknowledge it (lib/shell-jobs-delivery.ts:125-129).
   // The witness ends after the reload attached again.
   val witnessNoLandingWhileParked = landedParked == Set() or binding == 0
+
+  // An abort kept a message in the queue, and agent_settled ended with no run
+  // to take it, so the reconcile ran while the message waited.
+  val witnessNoKeptQueue = busy or settling or queue == []
 
   val safety = oneCompletion and stoppedMeansSilent and boundedSends and deliveredMeansSeen and attemptsCountSends
 }

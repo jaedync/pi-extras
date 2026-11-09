@@ -52,16 +52,25 @@ Pi's source (1.4.0; 1.5.0 is the same here):
   that loads before shell-jobs can await, so other segments can run before
   the shell-jobs handler.
 - `isIdle` is `!_isAgentRunActive && !isCompacting`. It ignores the actions
-  that wait.
+  that wait, and the messages that wait in the agent's queues.
 - `/reload` (`dist/modes/interactive/interactive-mode.js:5328-5350`) refuses
   only while a run is active. It then awaits before shell-jobs parks.
-- Esc clears the queues (`clearQueue`) and aborts the run. The messages that
-  the run did not take are gone.
+- Esc clears the queues and then aborts the run
+  (`interactive-mode.js:3853`). The messages that the run did not take are
+  gone. Other aborts keep them: the RPC `abort` command (`rpc-mode.js:328`),
+  an extension's `ctx.abort()` (`runner.js:666-668`) and tree navigation
+  (`interactive-mode.js:4648-4649`). `AgentSession.abort()`
+  (`agent-session.js:1971-1983`) and `Agent.abort()` (`agent.js:221-222`) do
+  not touch the queues, and the next run takes the messages (`agent.js:263`,
+  `:340`).
+- Pi emits `agent_settled` to the handlers of the runner that started the
+  emission (`runner.js:87-88`). After a reload parks shell-jobs, its old
+  handler does nothing (`extensions/shell-jobs.ts:862`).
 
 ## Bounds and what they leave out
 
 The default checks use 2 jobs, 1 reload, 2 user runs or aborts, and 3
-attempts. `-wide` uses 3 jobs (3,644,040 states, about 40 s with all cores).
+attempts. `-wide` uses 3 jobs (4,049,304 states, about 45 s with all cores).
 `-runs3` uses 3 user runs. Inside these bounds the check is exhaustive. It
 does not cover:
 
@@ -73,6 +82,10 @@ does not cover:
 - A failed `pi.sendMessage`, a failed run start, and a send through the old
   API after Pi invalidated it (it throws, `dist/core/extensions/loader.js:305-307`).
 - A second kill of the same job.
+- The await in `prompt()` before its run starts (`_modelRuntime.checkAuth`,
+  `agent-session.js:1683`, and the input handlers). The model starts the run
+  at once. In that gap `isIdle()` is true. A review found no extra path
+  through it, but no check covers it.
 - Liveness: the model checks that nothing bad happens, not that each
   completion arrives in the end.
 
@@ -82,14 +95,17 @@ Run `node skills/formal-verification/scripts/fv.mjs check formal/shell-jobs-deli
 
 | Check | Expect | Result |
 |---|---|---|
-| `faithful` | violates `oneCompletion` | violation (path F3), 13 steps |
-| `f2-pi-extras-alone` | violates `oneCompletion` | violation (path F2b), 17 steps |
+| `faithful` | violates `oneCompletion` | violation (path F4), 9 steps |
+| `f2-pi-extras-alone` | violates `oneCompletion` | violation (path F4), 9 steps |
 | `f2-two-jobs` | violates `oneCompletion` | violation (path F2a), 19 steps |
-| `f1-one-job-reload` | violates `oneCompletion` | violation (path F1), 13 steps |
-| `f2-one-job-prompt` | violates `oneCompletion` | violation (path F2b), 17 steps |
-| `pi-idle-counts-deferred` | pass | pass, 101,272 states |
-| `pi-idle-counts-deferred-wide` | pass | pass, 3,644,040 states |
-| `pi-idle-counts-deferred-runs3` | pass | pass, 241,748 states |
+| `f1-one-job-reload` | violates `oneCompletion` | violation (path F1), 12 steps |
+| `f2-one-job-prompt` | violates `oneCompletion` | violation (path F2b), 16 steps |
+| `f3-earlier-handler` | violates `oneCompletion` | violation (path F3), 12 steps |
+| `f4-abort-keeps-queue` | violates `oneCompletion` | violation (path F4), 9 steps |
+| `pi-idle-counts-deferred` | violates `oneCompletion` | violation (path F4), 9 steps |
+| `pi-idle-counts-pending` | pass | pass, 108,464 states |
+| `pi-idle-counts-pending-wide` | pass | pass, 4,049,304 states |
+| `pi-idle-counts-pending-runs3` | pass | pass, 266,340 states |
 | `survivor-send-ignores-binding` | pass | pass |
 | `mutant-reconcile-ignores-outbox` | violates `attemptsCountSends` | violation |
 | `mutant-claim-unchecked` | violates `stoppedMeansSilent` | violation |
@@ -99,8 +115,10 @@ Run `node skills/formal-verification/scripts/fv.mjs check formal/shell-jobs-deli
 | `mutant-attempt-cap-off-by-one` | violates `boundedSends` | violation |
 | `mutant-ack-on-send` | violates `deliveredMeansSeen` | violation |
 
-The mutants run on `pi-idle-counts-deferred`, the variant that assumes the
-Pi fix, because the faithful model already breaks `oneCompletion`.
+Each `f` check turns off the other sources of the duplicate, so that it
+shows one path. The mutants run on `pi-idle-counts-pending`, the variant
+that assumes both halves of the Pi fix, because the faithful model already
+breaks `oneCompletion`.
 
 A mutant is a change to the model that copies a change to the code, for
 example a removed check. Each mutant must break a property. This shows that
@@ -123,14 +141,28 @@ mutant that breaks no property:
 
 **Cause.** `reconcileDeliveries` takes `ctx.isIdle()` to mean "Pi holds no
 completion that it has not put in the session" (`lib/shell-jobs-delivery.ts:118-121`).
-That is not true. While `agent_settled` handlers run, and while Pi runs the
-actions that waited, `isIdle()` can be true while Pi holds a completion that
-shell-jobs sent. `sendCompletion` removed the job from the outbox before the
+That is not true. `isIdle()` can be true while Pi holds a completion that
+shell-jobs sent: while `agent_settled` handlers run, while Pi runs the
+actions that waited, and after an abort that kept the agent's queue. `sendCompletion` removed the job from the outbox before the
 send (`:90`), and the session does not hold the message yet. So the next
 reconcile counts a new attempt and sends again. Then Pi delivers both.
 
-Each path needs a second action that Pi defers. All four paths are TLC
-counterexamples, and the conformance test replays one of them in the code.
+There are five paths. Each one is a TLC counterexample with its own check,
+and the conformance test replays the shortest one in the code.
+
+**F4: one job and an abort that keeps the queue (pi-extras alone).** TLC
+check `f4-abort-keeps-queue`, 9 steps. Status: confirmed in a real Pi
+`AgentSession` with real model runs, on Pi 1.4.0 and 1.5.0:
+`repro-f2.mts --one-job --keep-queue` gives `{"echo-a":2}`. A review found
+this path in round 2.
+
+1. A job ends during a run. Its completion is steered into the run.
+2. The run is aborted without a clear of the queue: an RPC client sends
+   `abort`, or an extension calls `ctx.abort()`. The message stays in the
+   agent's queue.
+3. Pi emits `agent_settled`. The reconcile finds the job in neither the
+   session nor the outbox, and `isIdle()` is true. It sends again.
+4. The next run takes both messages. The job lands two times.
 
 **F2a: two jobs (no reload, no prompt, pi-extras alone).** TLC check
 `f2-two-jobs` (it allows aborts but needs none). Status: confirmed in a
@@ -170,37 +202,51 @@ with one job (`--one-job`) gives 1 message.
 own `_emitAgentSettled()`, because it has no model and no TUI. The job ends
 during the emission, not during a run.
 
-1. A job's send is deferred during `agent_settled`, as in F2b steps 1-4.
+1. A job's send is deferred during `agent_settled`, as in F2b steps 1, 2
+   and 4.
 2. Another extension's handler still runs. The user runs `/reload`. Pi allows
    it, because no run is active.
 3. The new `session_start` reconciles: `isIdle()` is true, and the job is
-   neither in the session nor in the outbox. It sends again. Pi defers it.
-4. The handlers end. Pi runs both sends.
+   neither in the session nor in the outbox. It sends again.
+4. The handlers end. Pi runs the deferred send. The second send lands too:
+   Pi defers it if the handlers still run, or steers it into the run of the
+   first send. TLC's shortest trace has the second order.
 
 **F3: an extension before shell-jobs awaits in agent_settled.** TLC only
-(`faithful`, the shortest path). A read ends after Pi started
+(`f3-earlier-handler`). A read ends after Pi started
 `agent_settled` but before the shell-jobs handler reconciles. Its send is
 deferred, and the reconcile sends again.
 
-**Impact.** Medium. F2a needs only pi-extras and two jobs that end near the
-end of the same run, or two completions that Esc dropped. F2b needs a prompt in the few milliseconds of `agent_settled`.
-F1 and F3 need another extension with a slow `agent_settled` handler. The
-harm is a second copy of a job result and an extra model turn.
+**Impact.** Medium. F4 needs only one job and an abort that is not Esc: an
+RPC client (an editor that drives Pi) or an extension that calls
+`ctx.abort()`. F2a needs only pi-extras and two jobs that end near the end of
+the same run, or two completions that Esc dropped. F2b needs a prompt in the
+few milliseconds of `agent_settled`. F1 and F3 need another extension with a
+slow `agent_settled` handler. The harm is a second copy of a job result and
+an extra model turn.
 
 **Fix options (not made; the owner decides).**
 
-- In Pi: make `isIdle` false while actions wait in `_deferredSettledActions`
-  or while Pi runs them. Pi's doc comment on `isIdle` says that it also means
-  no "queued continuation". The variant `pi-idle-counts-deferred` models
-  this fix, and every property holds there, also at the wider bounds.
+- In Pi: make `isIdle` false in two more cases. Pi's doc comment on
+  `isIdle` says that it also means no "queued continuation".
+  - While actions wait in `_deferredSettledActions`, or while Pi runs them.
+    The loop calls `_resolveIdleWaitIfIdle` in its `finally`
+    (`agent-session.js:697-699`), so the fix must clear its flag before that
+    call, or `waitForIdle()` can wait forever.
+  - While messages wait in the agent's queues (`agent.hasQueuedMessages()`).
+    Clearing the queues on every abort also closes F4.
+
+  The variant `pi-idle-counts-pending` models both cases, and every property
+  holds there, also at the wider bounds. The first case alone is not enough
+  (`pi-idle-counts-deferred` still breaks `oneCompletion` through F4).
 - In shell-jobs: keep a sent completion as "in flight" until it lands or a
   run that could hold it ends with an abort, and let reconcile skip it until
   then. This fix is not modeled yet. Model it before you build it.
 
 ## How the model stays true to the code
 
-- `tests/shell-jobs-delivery-conformance.test.mts` replays 203 model traces
-  (200 random, 3 witnesses) step by step against the real
+- `tests/shell-jobs-delivery-conformance.test.mts` replays 204 model traces
+  (200 random, 4 witnesses) step by step against the real
   `lib/shell-jobs-delivery.ts` and `parkForReload` in `npm test`. After each
   step, the code state (attempts, delivered, failed, claimed, outbox, reads in
   flight, binding, sends, messages in the session) must equal the model state.
@@ -208,14 +254,17 @@ harm is a second copy of a job result and an extra model turn.
   `stopJob`, the event handlers). Each copy names its source line.
 - Its Pi is a fake that follows the model's Pi rules. The replay does not
   check those rules against Pi. The live repros do: `repro-f2.mts` checks the
-  one-at-a-time deferred runs and the Esc drop, and `repro-f1.mts` checks the
+  one-at-a-time deferred runs, the Esc drop and the abort that keeps the
+  queue, and `repro-f1.mts` checks the
   deferral and the reload. An earlier version of this model put all deferred
-  sends into one run; a review found the error by reading Pi's source, and
-  `repro-f2.mts` confirmed it. Check each platform rule against the real
+  sends into one run, and a later one let every abort clear the queue. Each
+  time, a review found the error by reading Pi's source, and `repro-f2.mts`
+  confirmed it. Check each platform rule against the real
   platform.
 - A witness is an invariant that the simulator must break, so that the traces
   reach a rare state: a job marked "not delivered", a message that lands
-  while parked, and the duplicate.
+  while parked, a message that an abort kept while the reconcile runs, and the
+  duplicate.
 - The replay caught 7 of 9 changes to the real code: the binding check, the
   outbox skip, the in-flight read check, the history lookup, the attempt cap,
   the `isIdle()` check, and the outbox removal before the send. It did not
@@ -239,5 +288,6 @@ node skills/formal-verification/scripts/fv.mjs traces formal/shell-jobs-delivery
 node --import ./tests/support/keep-alive.mjs --test tests/shell-jobs-delivery-conformance.test.mts
 node skills/formal-verification/scripts/fv.mjs drift formal/shell-jobs-delivery
 node formal/shell-jobs-delivery/repro-f2.mts
+node formal/shell-jobs-delivery/repro-f2.mts --one-job --keep-queue
 node formal/shell-jobs-delivery/repro-f1.mts
 ```
