@@ -1,0 +1,36 @@
+[TLC] Compiling to TLA+ (via Apalache)...
+# Usage statistics is OFF. We care about your privacy.
+# If you want to help our project, consider enabling statistics with config --enable-stats=true.
+
+Output directory: /scratch/_apalache-out
+The Apalache server is running on port 8822. Press Ctrl-C to stop.
+[TLC] Running TLC model checker...
+
+TLC2 Version 2026.01.01.000000
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 2 and seed 1 with 1 worker on 4 cores with 2048MB heap and 64MB offheap memory [pid: 1000] (Linux amd64, Eclipse Adoptium 21.0.13 64bit, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-01-01 00:00:00)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-01-01 00:00:00.
+Error: Invariant q_inv is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ x = 0
+/\ log = <<>>
+
+State 2: <inc line 25, col 8 to line 25, col 57 of module counter>
+/\ x = 1
+/\ log = <<"inc">>
+
+State 3: <inc line 25, col 8 to line 25, col 57 of module counter>
+/\ x = 2
+/\ log = <<"inc", "inc">>
+
+3 states generated, 3 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 3.
+Finished in 00s at (2026-01-01 00:00:00)
+Trace exploration spec path: /scratch/tlc/counter_TTrace_1794186873.tla
+
+[violation] Found an issue (536ms).
+error: found a counterexample

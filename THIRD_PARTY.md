@@ -133,3 +133,16 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+# Formal verification skill
+
+The goals of `skills/formal-verification` follow Lauren Tan's pstack skills
+`create-formal-verification-skill` and `maintain-formal-verification-skill`,
+https://github.com/cursor/plugins/tree/main/pstack, MIT, Copyright (c) 2026
+Lauren Tan. No text was copied; the skill text, the record format, `fv.mjs`
+and the conformance replay are new. The skill bundles no tools. `fv.mjs
+setup` installs pinned versions into `~/.cache/pi-formal-verification` on
+first use, each under its own license: Quint (`@informalsystems/quint`,
+Apache-2.0) and, when no Java 17 or later is on PATH, the Eclipse Temurin 21
+JRE (GPL-2.0 with the Classpath Exception). Quint then downloads Apalache
+(Apache-2.0), which carries TLC (MIT), into `~/.quint`.

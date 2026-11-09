@@ -2,6 +2,30 @@
 
 Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 
+## Unreleased
+
+### Added
+
+- Formal Verification skill (`skills/formal-verification`): the model picks
+  the strongest target in a codebase (races, retries, at-most-once delivery,
+  reload and restart hand-over), writes a Quint model with each action cited
+  to code, and checks every order of events within stated bounds with TLC.
+  Each property must fail on a mutant that copies a code change. A
+  conformance test replays model traces against the real code.
+  `scripts/fv.mjs` installs pinned Quint and a Temurin JRE at user scope,
+  runs every check of a record (`fv.json`) against its expected result,
+  writes random and witness traces, and lists covered code that changed after
+  the sync commit. Run `/skill:formal-verification [area]`. Based on the
+  goals of Lauren Tan's MIT pstack skill create-formal-verification-skill.
+- A formal check of shell-jobs completion delivery
+  (`formal/shell-jobs-delivery`) and its conformance test
+  (`tests/shell-jobs-delivery-conformance.test.mts`). It found that one
+  completion can be delivered two times: a send that Pi defers during
+  `agent_settled` is invisible to the next reconcile. One job and an abort
+  that keeps the queue (the RPC `abort`) are enough, and so are two
+  jobs that end in the same run (live repro `repro-f2.mts`). Not fixed yet; see
+  its README.
+
 ## 0.40.1 - 2026-11-08
 
 ### Fixed

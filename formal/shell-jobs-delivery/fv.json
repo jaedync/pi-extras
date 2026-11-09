@@ -1,0 +1,369 @@
+{
+  "spec": "delivery.qnt",
+  "quint": "0.33.1",
+  "invariants": [
+    "oneCompletion",
+    "stoppedMeansSilent",
+    "boundedSends",
+    "deliveredMeansSeen",
+    "attemptsCountSends"
+  ],
+  "syncCommit": "b96bac5",
+  "covers": [
+    {
+      "path": "lib/shell-jobs-delivery.ts",
+      "what": "attachDelivery, flush, sendCompletion, acknowledgeCompletion, reconcileDeliveries"
+    },
+    {
+      "path": "extensions/shell-jobs.ts",
+      "what": "finalize, and the session_start, message_end, agent_settled and session_shutdown handlers"
+    },
+    {
+      "path": "lib/shell-jobs-manage.ts",
+      "what": "stopJob"
+    },
+    {
+      "path": "lib/shell-jobs-process.ts",
+      "what": "parkForReload"
+    }
+  ],
+  "checks": [
+    {
+      "name": "faithful",
+      "why": "Pi as it is. The shortest path to the duplicate is F4; the f checks show the other paths one at a time.",
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "f2-pi-extras-alone",
+      "why": "No other extension before shell-jobs and no /reload: pi-extras alone gives a duplicate.",
+      "replace": [
+        {
+          "from": "pure val OTHER_HANDLERS_FIRST = true",
+          "to": "pure val OTHER_HANDLERS_FIRST = false"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "f2-two-jobs",
+      "why": "No other extension before shell-jobs, no /reload, no user prompt, and only Esc aborts: two jobs whose tail reads are in flight when a run ends give the duplicate (F2a). repro-f2.mts reaches it through Esc.",
+      "replace": [
+        {
+          "from": "pure val OTHER_HANDLERS_FIRST = true",
+          "to": "pure val OTHER_HANDLERS_FIRST = false"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        },
+        {
+          "from": "  action userPrompt: bool = all {\n    handlerGate,",
+          "to": "  action userPrompt: bool = all {\n    false,"
+        },
+        {
+          "from": "pure val ABORT_KEEPS_QUEUE = true",
+          "to": "pure val ABORT_KEEPS_QUEUE = false"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "f1-one-job-reload",
+      "why": "One job, no other extension before shell-jobs, no user prompt, and only Esc aborts: a /reload during agent_settled gives the duplicate (F1).",
+      "replace": [
+        {
+          "from": "pure val OTHER_HANDLERS_FIRST = true",
+          "to": "pure val OTHER_HANDLERS_FIRST = false"
+        },
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\")"
+        },
+        {
+          "from": "  action userPrompt: bool = all {\n    handlerGate,",
+          "to": "  action userPrompt: bool = all {\n    false,"
+        },
+        {
+          "from": "pure val ABORT_KEEPS_QUEUE = true",
+          "to": "pure val ABORT_KEEPS_QUEUE = false"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "f2-one-job-prompt",
+      "why": "One job, no other extension before shell-jobs, no /reload, and only Esc aborts: a prompt that the user sends while agent_settled handlers run is deferred ahead of the job's send, and its run resends the job (F2b).",
+      "replace": [
+        {
+          "from": "pure val OTHER_HANDLERS_FIRST = true",
+          "to": "pure val OTHER_HANDLERS_FIRST = false"
+        },
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\")"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        },
+        {
+          "from": "pure val ABORT_KEEPS_QUEUE = true",
+          "to": "pure val ABORT_KEEPS_QUEUE = false"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "f3-earlier-handler",
+      "why": "One job, no /reload, no user prompt, and only Esc aborts, but an extension before shell-jobs awaits in agent_settled: a read that ends before the shell-jobs handler gives the duplicate (F3).",
+      "replace": [
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\")"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        },
+        {
+          "from": "  action userPrompt: bool = all {\n    handlerGate,",
+          "to": "  action userPrompt: bool = all {\n    false,"
+        },
+        {
+          "from": "pure val ABORT_KEEPS_QUEUE = true",
+          "to": "pure val ABORT_KEEPS_QUEUE = false"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "pi-idle-counts-deferred",
+      "why": "Pi fix, first half: isIdle is false while deferred actions wait or run. It is not enough: an abort that keeps the queue still gives a duplicate (F4).",
+      "replace": [
+        {
+          "from": "pure val IDLE_COUNTS_DEFERRED = false",
+          "to": "pure val IDLE_COUNTS_DEFERRED = true"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "f4-abort-keeps-queue",
+      "why": "One job, no other extension before shell-jobs, no /reload, no user prompt: an abort that keeps the queue (the RPC abort, or ctx.abort() in RPC, print or SDK mode) gives the duplicate (F4). repro-f2.mts --one-job --keep-queue reaches it live.",
+      "replace": [
+        {
+          "from": "pure val OTHER_HANDLERS_FIRST = true",
+          "to": "pure val OTHER_HANDLERS_FIRST = false"
+        },
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\")"
+        },
+        {
+          "from": "pure val MAX_RELOADS = 1",
+          "to": "pure val MAX_RELOADS = 0"
+        },
+        {
+          "from": "  action userPrompt: bool = all {\n    handlerGate,",
+          "to": "  action userPrompt: bool = all {\n    false,"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "pi-idle-counts-pending",
+      "why": "Pi fix, both halves: isIdle is false while deferred actions wait or run, and while messages wait in the agent's queues.",
+      "replace": [
+        {
+          "from": "pure val IDLE_COUNTS_DEFERRED = false",
+          "to": "pure val IDLE_COUNTS_DEFERRED = true"
+        },
+        {
+          "from": "pure val IDLE_COUNTS_QUEUE = false",
+          "to": "pure val IDLE_COUNTS_QUEUE = true"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "pi-idle-counts-pending-wide",
+      "base": "pi-idle-counts-pending",
+      "why": "The same at wider bounds: 3 jobs.",
+      "replace": [
+        {
+          "from": "pure val JOBS = Set(\"j1\", \"j2\")",
+          "to": "pure val JOBS = Set(\"j1\", \"j2\", \"j3\")"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "pi-idle-counts-pending-runs3",
+      "base": "pi-idle-counts-pending",
+      "why": "The same with 3 user runs or aborts, the bound of mutant-attempt-cap-off-by-one.",
+      "replace": [
+        {
+          "from": "pure val MAX_RUNS = 2 ",
+          "to": "pure val MAX_RUNS = 3 "
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "survivor-send-ignores-binding",
+      "base": "pi-idle-counts-pending",
+      "why": "lib/shell-jobs-delivery.ts:71 without `runtime.delivery !== binding`. Under the Pi fix no reconcile runs while the old send waits, so the old binding's send cannot make a second message. The check stops a send through the old API: once Pi invalidates the old runner, sendMessage throws (dist/core/extensions/loader.js:305-307) and the message waits for the next reconcile. The model has no liveness property for that delay. The conformance replay catches this change.",
+      "replace": [
+        {
+          "from": "if (binding != b or not(outbox.contains(j)))",
+          "to": "if (not(outbox.contains(j)))"
+        }
+      ],
+      "expect": "pass"
+    },
+    {
+      "name": "mutant-reconcile-ignores-outbox",
+      "base": "pi-idle-counts-pending",
+      "mirrors": "lib/shell-jobs-delivery.ts:132 without `|| runtime.outbox.has(job.id)`: reconcile counts an attempt for a send that is still in flight",
+      "replace": [
+        {
+          "from": "    else if (inOutbox) (job, inOutbox)\n",
+          "to": ""
+        }
+      ],
+      "expect": {
+        "violates": "attemptsCountSends"
+      }
+    },
+    {
+      "name": "mutant-claim-unchecked",
+      "base": "pi-idle-counts-pending",
+      "mirrors": "extensions/shell-jobs.ts:204 without `done.claimed` and lib/shell-jobs-delivery.ts:73 without `latest.claimed`: a job that the user killed gets a completion",
+      "replace": [
+        {
+          "from": "val suppressed = job.claimed or job.delivered",
+          "to": "val suppressed = job.delivered"
+        },
+        {
+          "from": "else if (job.delivered or job.claimed)",
+          "to": "else if (job.delivered)"
+        }
+      ],
+      "expect": {
+        "violates": "stoppedMeansSilent"
+      }
+    },
+    {
+      "name": "mutant-finalize-ignores-claim",
+      "base": "pi-idle-counts-pending",
+      "mirrors": "extensions/shell-jobs.ts:204 without `done.claimed`: finalize counts an attempt for a job that the user killed. sendCompletion still drops the send (lib/shell-jobs-delivery.ts:73), so only the count breaks",
+      "replace": [
+        {
+          "from": "val suppressed = job.claimed or job.delivered",
+          "to": "val suppressed = job.delivered"
+        }
+      ],
+      "expect": {
+        "violates": "attemptsCountSends"
+      }
+    },
+    {
+      "name": "mutant-reconcile-ignores-idle",
+      "base": "pi-idle-counts-pending",
+      "mirrors": "lib/shell-jobs-delivery.ts:121 without the ctx.isIdle() check: a completion sent while /reload waits starts a run, and session_start reconciles during it and sends again",
+      "replace": [
+        {
+          "from": "    if (piIdle) all {\n      jobs' = JOBS.mapBy(j => results.get(j)._1),",
+          "to": "    if (true) all {\n      jobs' = JOBS.mapBy(j => results.get(j)._1),"
+        },
+        {
+          "from": "      if (piIdle) reconcileAndFlush(b, false)",
+          "to": "      if (true) reconcileAndFlush(b, false)"
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "mutant-reconcile-ignores-history",
+      "base": "pi-idle-counts-pending",
+      "mirrors": "lib/shell-jobs-delivery.ts:125-129 without the history lookup: a message that landed while shell-jobs was parked for a reload is sent again",
+      "replace": [
+        {
+          "from": "    else if (inHistory) (acked(job), false)\n",
+          "to": ""
+        }
+      ],
+      "expect": {
+        "violates": "oneCompletion"
+      }
+    },
+    {
+      "name": "mutant-attempt-cap-off-by-one",
+      "base": "pi-idle-counts-pending",
+      "mirrors": "lib/shell-jobs-delivery.ts:133 with `job.attempts >= MAX_COMPLETION_ATTEMPTS + 1`: a fourth send",
+      "replace": [
+        {
+          "from": "else if (job.attempts >= MAX_ATTEMPTS)",
+          "to": "else if (job.attempts >= MAX_ATTEMPTS + 1)"
+        },
+        {
+          "from": "pure val MAX_RUNS = 2 ",
+          "to": "pure val MAX_RUNS = 3 "
+        }
+      ],
+      "expect": {
+        "violates": "boundedSends"
+      },
+      "why": "Needs a third dropped send to reach a fourth attempt, so this check allows 3 aborts."
+    },
+    {
+      "name": "mutant-ack-on-send",
+      "base": "pi-idle-counts-pending",
+      "mirrors": "acknowledgeCompletion called right after pi.sendMessage (lib/shell-jobs-delivery.ts:82-104) instead of on message_end: a job is marked delivered before its message is in the session",
+      "replace": [
+        {
+          "from": "        all { jobs' = jobs, outbox' = outbox.exclude(Set(j)), piSend(j) },",
+          "to": "        all { jobs' = jobs.setBy(j, acked), outbox' = outbox.exclude(Set(j)), piSend(j) },"
+        }
+      ],
+      "expect": {
+        "violates": "deliveredMeansSeen"
+      }
+    }
+  ],
+  "traces": {
+    "check": "faithful",
+    "out": "traces.itf.jsonl.gz",
+    "n": 200,
+    "steps": 40,
+    "seed": "0x5eed",
+    "witnesses": [
+      "witnessNoFailed",
+      "witnessNoLandingWhileParked",
+      "witnessNoKeptQueue",
+      "oneCompletion"
+    ]
+  }
+}
