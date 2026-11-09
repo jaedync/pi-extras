@@ -279,10 +279,16 @@ now has `STEER_WINDOW` and the action `steerLands`.
   `messageKeptAnywhere: true`.
 - Model: `faithful-mail` and `f5-steer-window` violate `mailKept`.
 - Fix options: (a) In child.ts, keep the steer's promise, and let
-  `takeQueued` (or `late`) await the steers that are in flight. (b) In
-  `settle`, move the items of `unread` that Pi has not queued to the inbox,
-  as `unreadLeft` does. (c) In Pi, queue the message before the input
-  handlers run, or give `steer()` a mode with no input handlers.
+  `takeQueued` (or `late`) await the steers that are in flight. This adds an
+  await between the prompt end and `settle`, so a stop or a message can come
+  in that gap. It is not in the model. (b) In `settle`, move the items of
+  `unread` that Pi has not queued to the inbox, as `unreadLeft` does. The
+  round-2 review showed that (b) alone is not sound: the steer still lands
+  in the idle session's queue, so the next run in the held session reads the
+  message two times (`mailKept`, `dup = 1`, in 10 steps). It must also drop
+  the late steer, for example with `clearQueue` at the start of the next run.
+  (c) In Pi, queue the message before the input handlers run, or give
+  `steer()` a mode with no input handlers. `assume-fixes` uses (c).
 
 ## Review (skill step 9)
 
@@ -296,13 +302,25 @@ what changed:
 - M2 (medium): F2 fix (b) leaks a session. Added to F2.
 - M3 (medium): the traces did not reach a relaunch queued behind a full team
   during a stop, so the replay missed the `state !== "stopped"` half of
-  team.ts:419 (the 4a8fa14 fix). The witness `witnessNoQueuedRelaunchInStop`
-  now puts that path in the traces. The code change
-  `stop-relaunch-ignores-state` is in `code-mutants.py`.
+  team.ts:419 (the 4a8fa14 fix). The code change
+  `stop-relaunch-ignores-state` is now in `code-mutants.py`, and the replay
+  catches it. The round-2 review showed that only the random trace 111
+  catches it. The witness `witnessNoQueuedRelaunchInStop` reaches the state,
+  but its trace ends before the abort resolves. A new trace set can lose
+  trace 111. A witness for the state after the abort resolves needs a ghost
+  variable, and the record does not have it yet.
 - M4 (medium): nothing checked the dispose of a stale launch's session
   (team.ts:670). The replay now compares `stray`, the sessions that are not
   held and not disposed. The code change `open-no-dispose` is in
   `code-mutants.py`.
+- Round 2 (a second fresh Opus 5.5 reviewer, on the changes after round 1)
+  found no new critical or high issue. It found the two medium points above
+  (F5 fix (b), the witness of M3). Low points: `STEER_WINDOW = false` is not
+  quite atomic (the await of `_runInputHandlers` takes one microtask even
+  with no handlers; all `input` handlers in pi-extras have no await); the
+  fake `dispose` clears the queue, which Pi's does not (no effect in scope);
+  `steerInbox` (team.ts:583-589) steers with the same window and is out of
+  scope.
 - Low: `drop` removes every copy of a name, but `slots.remove` removes only
   the first (no path puts a name in line twice); `waiters` covers only the
   first `whenDone`; the goOn insert place (slots.ts:62) is not tested by the
@@ -323,7 +341,7 @@ Each mutant copies one code change into the model, on top of `assume-fixes`.
 | `survivor-pump-starts-any` | `lib/subagents/slots.ts:89` without the `state !== "queued"` drop | nothing (survivor) | passes (missed) |
 | `mutant-resume-ignores-slots` | `lib/subagents/team.ts:521` runWhenFree without `this.slots.free()`: a message to an idle child runs it at once | violation of slotsBound | fails (caught) |
 | `mutant-finish-keeps-waiters` | `lib/subagents/team.ts:925` without `this.settleWaiters(name, record)` | violation of waitersSettle | fails (caught) |
-| `survivor-stop-twice` | `lib/subagents/team.ts:400` without `this.ending.has(name)`, | nothing (survivor) | fails (caught) |
+| `survivor-stop-twice` | `lib/subagents/team.ts:400` without `this.ending.has(name)`, on the fixed model | nothing (survivor) | fails (caught): the replay uses traces of Pi as it is, where the guard matters (F3) |
 | `mutant-release-busy` | `lib/subagents/sessions.ts:142` without `this.options.idle(name)`: the quiet-spell timer releases a child that a message woke | violation of noStuck | not run: the replay calls the timer body by hand, past this guard |
 | `mutant-resume-failed-drops-message` | `lib/subagents/team.ts:625` without `this.parkResume(name)` in resumeFailed | violation of mailKept | fails (caught) |
 | `mutant-fallback-keeps-session` | `lib/subagents/team.ts:826` without `this.sessions.release(name)` in failOrFallBack | violation of oneSession | fails (caught) |
@@ -412,7 +430,7 @@ the reason.
 | `subagents-stop.test.ts` | stop all and a parent's stop end a held after spawn before what it waits for, so it never launches | 1eb7157 | none | keeps value | `after` and `stopOrder` are not modeled |
 | `subagents-stop.test.ts` | stopOrder puts agents that have not started first | 1eb7157 | none | keeps value | a pure function outside the model |
 | `subagents-stop.test.ts` | a refused message leaves the target's check as it was; a delivered one sets it | 2918e6f | none | keeps value | checks are not modeled |
-| `subagents-stop.test.ts` | a message during a stop's abort that queues a relaunch behind a full team: the stop reports nothing over it | 4a8fa14 | `oneReport`; mutant-stop-ignores-relaunch; the code change `stop-relaunch-ignores-state` is caught by the replay (trace 111, after the review added `witnessNoQueuedRelaunchInStop`) | covered by the model | |
+| `subagents-stop.test.ts` | a message during a stop's abort that queues a relaunch behind a full team: the stop reports nothing over it | 4a8fa14 | `oneReport`; mutant-stop-ignores-relaunch; the code change `stop-relaunch-ignores-state` is caught by the replay, but only by the random trace 111 (round-2 review) | covered by the model, but the catch is fragile: a new trace set can lose it | |
 | `subagents-stop.test.ts` | an aborted run whose prompt ends after a message queued a relaunch behind a full team does not settle over it | f20f490 | `oneReport`, `noStuck`; mutant-stop-keeps-launch (caught by the replay) | covered by the model |  |
 | `subagents-stop.test.ts` | a failed parent's queued subagent is stopped, never launched only to be stopped | 389b938 | none | keeps value | grandchildren are not modeled |
 | `subagents-stop.test.ts` | an older session's late usage during a later stop does not lower the usage | ed79b8b | none | keeps value | usage updates are not modeled |
