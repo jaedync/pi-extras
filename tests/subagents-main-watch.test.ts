@@ -10,7 +10,7 @@ function harness(hold?: () => Promise<{ entries: never[]; wakes: boolean } | und
 	let time = 0;
 	let idle = true;
 	const calls: string[] = [];
-	const mail = { retry: () => calls.push("retry"), owed: () => false, remind: () => calls.push("remind"), answered: () => calls.push("answered") };
+	const mail = { retry: () => calls.push("retry"), owed: () => false, remind: (options?: { nextTurn?: boolean }) => calls.push(options?.nextTurn ? "remind next turn" : "remind"), answered: () => calls.push("answered") };
 	const watch = watchMain(pi as never, () => mail as never, () => time, hold);
 	const emit = async (name: string, event: object = {}, ctx: object = {}) => {
 		const results = [];
@@ -100,25 +100,28 @@ test("a reminder follows only a /compact that stopped main's run, however long o
 		if (hook) await h.emit("session_before_compact", { reason }, ctx);
 		if (outcome === "done") await h.emit("session_compact", { reason });
 		else await h.emit("session_compact_failed", { reason, aborted: outcome === "cancelled" }, ctx);
-		return h.calls.includes("remind");
+		// "now": a reminder that wakes main; "next": one that waits for main's next turn; "none".
+		return h.calls.includes("remind") ? "now" : h.calls.includes("remind next turn") ? "next" : "none";
 	};
-	assert.equal(await stopping(aborted, 110), true, "/compact mid-run");
-	assert.equal(await stopping(aborted, 30_000), true, "another extension's handler took a while before ours ran");
-	assert.equal(await stopping(aborted, 110, { outcome: "failed" }), true, "the compaction failed, main is still stopped");
-	// Pi says aborted for Esc during the summary and for an extension's cancel alike; either way main's run is stopped.
-	assert.equal(await stopping(aborted, 110, { outcome: "cancelled" }), true, "the compaction was cancelled, main is still stopped");
-	assert.equal(await stopping(aborted, 110, { outcome: "cancelled", hook: false }), true, "an extension that loads first cancelled it, so our handler never ran");
-	assert.equal(await stopping(aborted, 110, { outcome: "failed", hook: false }), true, "the session was too small, which Pi finds before the handlers");
-	assert.equal(await stopping(aborted, 120_000, { outcome: "cancelled", hook: false }), false, "Esc, then a cancelled /compact much later");
-	assert.equal(await stopping(aborted, 110, { relayed: true }), true, "a relay appended as the run settled says nothing about who stopped it");
-	assert.equal(await stopping(finished, 110, { settledAborted: true }), true, "stopped in the settle check, which sends no new agent_end");
-	assert.equal(await stopping(aborted, 120_000), false, "Esc, then a /compact much later");
-	assert.equal(await stopping(aborted, 110, { said: true }), false, "Esc, then a new prompt, then a /compact");
-	assert.equal(await stopping(finished, 110), false, "the run had ended on its own");
-	assert.equal(await stopping(failed, 110), true, "stopped while waiting to retry, after an error reply");
-	assert.equal(await stopping({ messages: [{ role: "assistant", stopReason: "toolUse" }, { role: "toolResult" }] }, 110), true, "stopped inside a tool call");
-	assert.equal(await stopping(finished, 110, { checked: false }), true, "stopped in the compaction Pi runs after a turn");
-	assert.equal(await stopping(aborted, 110, { reason: "threshold" }), false, "Pi's own compaction stops nothing");
+	const now = "now", next = "next", none = "none";
+	assert.equal(await stopping(aborted, 110), now, "/compact mid-run");
+	assert.equal(await stopping(aborted, 30_000), now, "another extension's handler took a while before ours ran");
+	assert.equal(await stopping(aborted, 110, { outcome: "failed" }), now, "the compaction failed, main is still stopped");
+	// Pi says aborted for Esc during the summary and for an extension's cancel alike: no turn starts, and the
+	// reminder goes with main's next turn (owner answer 846). Main's run is still stopped, so it is not dropped.
+	assert.equal(await stopping(aborted, 110, { outcome: "cancelled" }), next, "the user cancelled it too: no turn now, the reminder comes with the next message");
+	assert.equal(await stopping(aborted, 110, { outcome: "cancelled", hook: false }), next, "an extension that loads first cancelled it, so our handler never ran");
+	assert.equal(await stopping(aborted, 110, { outcome: "failed", hook: false }), now, "the session was too small, which Pi finds before the handlers");
+	assert.equal(await stopping(aborted, 120_000, { outcome: "cancelled", hook: false }), none, "Esc, then a cancelled /compact much later");
+	assert.equal(await stopping(aborted, 110, { relayed: true }), now, "a relay appended as the run settled says nothing about who stopped it");
+	assert.equal(await stopping(finished, 110, { settledAborted: true }), now, "stopped in the settle check, which sends no new agent_end");
+	assert.equal(await stopping(aborted, 120_000), none, "Esc, then a /compact much later");
+	assert.equal(await stopping(aborted, 110, { said: true }), none, "Esc, then a new prompt, then a /compact");
+	assert.equal(await stopping(finished, 110), none, "the run had ended on its own");
+	assert.equal(await stopping(failed, 110), now, "stopped while waiting to retry, after an error reply");
+	assert.equal(await stopping({ messages: [{ role: "assistant", stopReason: "toolUse" }, { role: "toolResult" }] }, 110), now, "stopped inside a tool call");
+	assert.equal(await stopping(finished, 110, { checked: false }), now, "stopped in the compaction Pi runs after a turn");
+	assert.equal(await stopping(aborted, 110, { reason: "threshold" }), none, "Pi's own compaction stops nothing");
 });
 
 test("every turn's end tells the mail what main has replied after", async () => {

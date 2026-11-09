@@ -527,7 +527,7 @@
 			}
 		},
 		"ts-sleep-wait": {
-			"count": 261,
+			"count": 262,
 			"files": {
 				"formal/rate-limit-recovery/check-platform.mts": 3,
 				"formal/shell-jobs-delivery/pi-probe.mts": 8,
@@ -589,7 +589,7 @@
 				"tests/subagents-headless.test.ts": 2,
 				"tests/subagents-host.test.ts": 19,
 				"tests/subagents-lifecycle.test.ts": 2,
-				"tests/subagents-main-mail-sdk.test.mts": 7,
+				"tests/subagents-main-mail-sdk.test.mts": 8,
 				"tests/subagents-main-watch.test.ts": 3,
 				"tests/subagents-peer-runs.test.ts": 1,
 				"tests/subagents-reload-parked-sdk.test.mts": 2,

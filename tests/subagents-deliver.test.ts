@@ -244,6 +244,26 @@ test("after a /compact stops main, a hidden reminder wakes it for mail it hadn't
 	assert.equal(sent.length, 4, "one reminder for the same mail");
 });
 
+test("a next-turn reminder starts no turn, waits in Pi for main's next one, and is owed once that turn starts with it", () => {
+	const { box, sent, set } = routed("queue");
+	box.deliver({ kind: "note", from: "scout", text: "found it" });
+	// It landed while main worked, then a /compact stopped main before it replied.
+	box.acknowledge(sent[0]!.message.details.id);
+	assert.equal(box.idle(), false, "main owes the note a reply");
+	set("wake");
+	box.remind({ nextTurn: true });
+	const reminder = sent.at(-1)!;
+	assert.equal(sent.length, 2);
+	assert.deepEqual(reminder.options, { triggerTurn: false, deliverAs: "nextTurn" }, "Esc during the summary starts no turn (owner answer 846)");
+	assert.match(reminder.message.content, /scout/);
+	assert.equal(box.idle(), true, "no turn has started with it yet, so nothing keeps main from settling");
+	box.remind({ nextTurn: true });
+	assert.equal(sent.length, 2, "one reminder for the same mail");
+	// message_end: the user's next message started a turn, and the reminder went in with it.
+	box.acknowledge(reminder.message.details.id);
+	assert.equal(box.idle(), false, "main owes the reminder a reply in that turn");
+});
+
 test("with nothing owed there is no reminder", () => {
 	const { box, sent } = routed("wake");
 	box.deliver({ kind: "note", from: "scout", text: "read at once" });

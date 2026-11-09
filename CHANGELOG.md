@@ -17,10 +17,14 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
     stop mark now ignores custom messages.
   - A `/compact` during main's settle check. `agent_settled`'s `aborted` now
     sets the stop mark.
-  - A `/compact` that an extension cancelled, that Esc stopped during the
-    summary, that failed, or that Pi refused for a session too small to
-    compact. The reminder now follows from the stop mark, also when an
-    extension that loads first cancels the compaction.
+  - A `/compact` that failed, or that Pi refused for a session too small to
+    compact. The reminder now follows from the stop mark, and main gets it
+    at once.
+  - A `/compact` that Esc stopped during the summary, or that an extension
+    cancelled (also an extension that loads first). Pi gives the same
+    `aborted: true` for both. No turn starts then. The reminder waits in
+    Pi's next-turn queue and goes with main's next turn: the user's next
+    message, or mail that wakes main.
 - Subagents: a message that main sends to a child as the child's run ends
   is now the run's next prompt. Before, it could wait in the idle session's
   queue, and the quiet-spell release dropped it (residual R1 of

@@ -340,6 +340,30 @@ async function compactWhileWorking(session: any, state: Requests, run: Promise<u
 	return compactError;
 }
 
+/**
+ * Runs /compact while main's turn works on the note and ends it without a
+ * summary: `esc` aborts it as interactive mode does on Esc, else an extension
+ * cancels it. No turn may start by itself (owner answer 846); the user's next
+ * message must carry the reminder, and main replies.
+ */
+async function cancelWhileWorking(session: any, state: Requests, run: Promise<unknown>, open: () => void, esc: boolean): Promise<string> {
+	let compactError = "";
+	const compacting = session.compact().catch((error: unknown) => { compactError = (error as Error).message; });
+	open();
+	await until(() => state.seen.some((request) => request.startsWith("summary")) || compactError !== "", "the summary request or the compaction's cancel");
+	if (esc) session.abortCompaction();
+	state.release();
+	await Promise.all([run, compacting]);
+	// Long enough for a deferred or retried send to start a turn, had one been made.
+	await sleep(500);
+	await session.waitForIdle();
+	assert.deepEqual(state.seen.filter((request) => request.startsWith("turn")), ["turn"], "no turn starts after the cancel");
+	await session.prompt("four");
+	assert.equal(state.seen.at(-1), "turn (sees note) (reminded)", `the next message carries the reminder: ${state.seen}`);
+	assert.match(transcript(session), /user > note > assistant$/, "the user's message, the reminder, then main's reply");
+	return compactError;
+}
+
 /** Two quick turns, then a user turn that is still working when the note lands; `open` ends that turn. */
 async function noteDuringUserTurn(session: any, state: Requests, note: () => void): Promise<{ run: Promise<unknown>; open: () => void }> {
 	for (const text of ["one", "two"]) await session.prompt(text);
@@ -415,19 +439,31 @@ test("F3: a /compact during the settle check, after main-watch asked for a turn,
 });
 
 for (const order of ["after", "before"] as const) {
-	test(`F4: a /compact that an extension loaded ${order} the mail's cancels still wakes main for the stopped turn`, { timeout: 20_000 }, async () => {
+	// Pi says `aborted` for an extension's cancel as for Esc, so it waits for the next turn too.
+	test(`F4: a /compact that an extension loaded ${order} the mail's cancels reminds main with its next turn`, { timeout: 20_000 }, async () => {
 		const state = requests();
 		const cancel = (pi: any) => pi.on("session_before_compact", async () => ({ cancel: true }));
 		const { session, note, close } = await setup(state, order === "before" ? { first: cancel } : { more: cancel });
 		try {
 			const { run, open } = await noteDuringUserTurn(session, state, note);
-			assert.equal(await compactWhileWorking(session, state, run, open), "Compaction cancelled");
-			assert.match(transcript(session), /assistant > note > note > assistant$/, "the stopped reply, the note, the reminder, then main's reply");
+			assert.equal(await cancelWhileWorking(session, state, run, open, false), "Compaction cancelled");
 		} finally {
 			close();
 		}
 	});
 }
+
+test("Esc during the summary of a /compact that stopped main starts no turn; the next user message carries the reminder", { timeout: 20_000 }, async () => {
+	const state = requests();
+	const { session, note, close } = await setup(state);
+	try {
+		const { run, open } = await noteDuringUserTurn(session, state, note);
+		assert.equal(await cancelWhileWorking(session, state, run, open, true), "Compaction cancelled");
+		assert.ok(state.seen.includes("summary"), "Esc came during the summary");
+	} finally {
+		close();
+	}
+});
 
 test("F4: a /compact of a session too small to compact still wakes main for the turn it stopped", { timeout: 20_000 }, async () => {
 	const state = requests();

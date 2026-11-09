@@ -21,7 +21,7 @@
 import type { ModelChoice } from "./models.ts";
 import type { AgentRecord, CheckUpdate, Launcher, SpawnRequest } from "./types.ts";
 
-export const HOST_VERSION = 12;
+export const HOST_VERSION = 13;
 
 export const MESSAGE_TYPE = "subagent-message";
 export const REPORT_TYPE = "subagent-report";
@@ -136,7 +136,7 @@ export interface HostMail {
 	retry(): void;
 	owed(context: MainContext): boolean;
 	answered(entries: readonly unknown[]): void;
-	remind(): void;
+	remind(options?: { nextTurn?: boolean }): void;
 	waiting(): boolean;
 	takeAll(): { messages: OutgoingMessage[]; wakes: boolean };
 }
@@ -161,6 +161,12 @@ export interface HeldMail {
 	readonly message: OutgoingMessage;
 	/** Whether it asks main for a turn. */
 	readonly wakes: boolean;
+	/**
+	 * It waits for main's next turn and starts none (`deliverAs: "nextTurn"`):
+	 * the reminder after Esc during a /compact summary. `wakes` is false, so a
+	 * start that does not know the flag appends it without a turn.
+	 */
+	readonly nextTurn?: boolean;
 }
 
 /** A custom message for main's session. */
@@ -180,7 +186,7 @@ export interface ModelScope {
 /** Everything a host needs from Pi, bound by the module that serves the session. */
 export interface HostPorts {
 	/** Hands main a message, as `pi.sendMessage`: its mail, or a notice such as the one after a restore. */
-	send(message: HostMessage, options: { triggerTurn: boolean; deliverAs?: "steer" }): void;
+	send(message: HostMessage, options: { triggerTurn: boolean; deliverAs?: "steer" | "nextTurn" }): void;
 	/** Where main is for its mail (main-watch.ts). */
 	route(): Route;
 	notify(message: string, level: "info" | "warning"): void;

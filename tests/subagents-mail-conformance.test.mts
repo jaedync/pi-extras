@@ -78,7 +78,7 @@ function makeWorld() {
 	// Pi, as the model has it.
 	const pi = {
 		phase: "idle", prep: [] as OutgoingMessage[], deferred: [] as Array<OutgoingMessage | "prompt">, later: [] as Array<OutgoingMessage | "prompt">,
-		pendingCustom: [] as OutgoingMessage[], steerQ: [] as OutgoingMessage[], compacting: false, bsContinue: false,
+		pendingCustom: [] as OutgoingMessage[], steerQ: [] as OutgoingMessage[], nextQ: [] as OutgoingMessage[], compacting: false, bsContinue: false,
 		entries: [] as any[], cut: 0, promptWaiting: false, oursDone: false, runAborted: false,
 	};
 	let entryId = 0;
@@ -91,7 +91,9 @@ function makeWorld() {
 	// sendCustomMessage (as:1844-1883).
 	const sendMessage = (message: OutgoingMessage, options: { triggerTurn: boolean; deliverAs?: string }) => {
 		if (failNext) { failNext = false; throw new Error("stale pi"); }
-		if (active() && options.triggerTurn) pi.steerQ.push(message);
+		// _pendingNextTurnMessages (as:1854-1856): it waits for the next _prepareRun, whatever starts that.
+		if (options.deliverAs === "nextTurn") pi.nextQ.push(message);
+		else if (active() && options.triggerTurn) pi.steerQ.push(message);
 		else if (options.triggerTurn) {
 			if (pi.phase === "settle") pi.deferred.push(message);
 			else { pi.phase = "prep"; pi.prep.push(message); }
@@ -167,9 +169,11 @@ function makeWorld() {
 	const startRun = async () => {
 		// _startRun: held custom messages first (as:1437-1440), then agent_start and the starting messages (agent-loop.js:55-60).
 		land(pi.pendingCustom.splice(0));
+		// _prepareRun puts the next-turn messages after the starting message (as:1511-1513), before agent_start.
+		const taken = pi.nextQ.splice(0);
 		pi.phase = "work";
 		await emit("agent_start");
-		for (const message of pi.prep.splice(0)) {
+		for (const message of [...pi.prep.splice(0), ...taken]) {
 			await emit("message_end", { message: { role: "custom", ...message } });
 			append(message);
 		}
@@ -302,6 +306,7 @@ function makeWorld() {
 		later: pi.later.map((m) => (m === "prompt" ? m : modelId(m.details))),
 		pendingCustom: pi.pendingCustom.map((m) => modelId(m.details)),
 		steerQ: pi.steerQ.map((m) => modelId(m.details)),
+		nextQ: pi.nextQ.map((m) => modelId(m.details)),
 		landed: Object.fromEntries(["a", "b", "r", "rem"].map((id) => [id, pi.entries.filter((e) => e.type === "custom_message" && modelId(e.details) === id).length])),
 		compacting: pi.compacting,
 		kept: kept.map((item) => modelId(item.message.details)),
@@ -312,7 +317,7 @@ function makeWorld() {
 	const idKinds = new Map<string, string>();
 	const learnIds = () => {
 		for (const item of box().outbox as HeldMail[]) idKinds.set(item.message.details.id, modelId(item.message.details));
-		for (const m of [...pi.prep, ...pi.pendingCustom, ...pi.steerQ, ...pi.deferred, ...pi.later]) if (m !== "prompt") idKinds.set(m.details.id, modelId(m.details));
+		for (const m of [...pi.prep, ...pi.pendingCustom, ...pi.steerQ, ...pi.nextQ, ...pi.deferred, ...pi.later]) if (m !== "prompt") idKinds.set(m.details.id, modelId(m.details));
 		for (const e of pi.entries) if (e.type === "custom_message") idKinds.set(e.details.id, modelId(e.details));
 	};
 	const after = () => { failNext = false; learnIds(); };
@@ -330,7 +335,7 @@ function modelState(s: Record<string, any>) {
 	return {
 		outbox: s.outbox, pending: sorted(s.pending), owing: sorted(s.owing), starting: sorted(s.starting), batch: s.batch, batchTimer: s.batchTimer,
 		retryArmed: s.retryArmed, closed: s.closed, phase: s.phase, prep: s.prep, deferred: s.deferred, later: s.later,
-		pendingCustom: s.pendingCustom, steerQ: s.steerQ, landed: s.landed, compacting: s.compacting, kept: s.kept,
+		pendingCustom: s.pendingCustom, steerQ: s.steerQ, nextQ: s.nextQ, landed: s.landed, compacting: s.compacting, kept: s.kept,
 		route, idle: s.pending.length === 0 && !s.batch && s.outbox.length === 0 && s.owing.length === 0,
 	};
 }

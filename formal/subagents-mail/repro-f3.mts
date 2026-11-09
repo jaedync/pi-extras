@@ -5,6 +5,7 @@
  * while main works on a user turn, so main owes a reply; the user runs /compact.
  *   node formal/subagents-mail/repro-f3.mts boundary  # F3: /compact lands in agent_before_settle after main-watch said continue
  *   node formal/subagents-mail/repro-f3.mts cancel    # F4: another extension cancels the /compact that stopped the turn
+ *   node formal/subagents-mail/repro-f3.mts esc       # owner answer 846: Esc during the summary of that /compact
  *   node formal/subagents-mail/repro-f3.mts control   # /compact while the turn streams: main is reminded
  * Exit 1: main never replies to the note.
  */
@@ -94,11 +95,19 @@ try {
 	let compactError = "";
 	const compacting = session.compact().catch((error: unknown) => { compactError = (error as Error).message; });
 	for (let i = 0; i < 300 && !seen.some((s) => s.startsWith("summary")) && !compactError; i++) await sleep(10);
+	// What interactive mode does on Esc while the summary streams (interactive-mode.js, compaction_start).
+	if (mode === "esc") session.abortCompaction();
 	releaseSummary();
 	await Promise.all([run, compacting]);
 	await sleep(1_000);
 	await session.waitForIdle();
-	const replied = /note > (COMPACTION > )?(note > )?assistant$/.test(transcript());
-	console.log(JSON.stringify({ mode, compactError: compactError || undefined, piEvents, seen, reminded: seen.some((s) => s.endsWith("(reminded)")), replied, transcript: transcript() }, null, 2));
+	// A cancelled /compact (Esc or an extension) starts no turn; the reminder goes with the user's next message.
+	const waits = mode === "cancel" || mode === "esc";
+	const turnsBeforeNext = seen.filter((s) => s.startsWith("turn")).length;
+	if (waits) await session.prompt("four");
+	const replied = waits
+		? turnsBeforeNext === 1 && seen.at(-1) === "turn (sees note) (reminded)" && /user > note > assistant$/.test(transcript())
+		: /note > (COMPACTION > )?(note > )?assistant$/.test(transcript());
+	console.log(JSON.stringify({ mode, compactError: compactError || undefined, piEvents, seen, turnsBeforeNext: waits ? turnsBeforeNext : undefined, reminded: seen.some((s) => s.endsWith("(reminded)")), replied, transcript: transcript() }, null, 2));
 	process.exitCode = replied ? 0 : 1;
 } finally { box.mail?.dispose(); session.dispose(); }
