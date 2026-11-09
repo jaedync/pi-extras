@@ -22,7 +22,8 @@ issues and pull requests from new contributors.
    agent's queue after an abort.
 2. So an extension that sends a message again when `ctx.isIdle()` is true and
    the message is not in the session cannot tell "Pi still holds it" from "Pi
-   dropped it". Pi then delivers both copies.
+   dropped it". Pi then delivers both copies. No API shows the agent's queue
+   to an extension: `ctx.hasPendingMessages()` counts only user messages.
 
 The doc comment on `isIdle` says: "Whether the session has no active agent
 run, compaction, branch summary, retry, or queued continuation." A deferred
@@ -31,7 +32,8 @@ do not agree.
 
 ## Where Pi holds a message while `isIdle()` is true
 
-All three were seen on 1.4.0 and 1.5.0 with `pi-probe.mts` (below):
+Facts 1 to 3 were seen on 1.4.0 and 1.5.0 with `pi-probe.mts` (below). Fact
+4 was seen on 1.4.0 and 1.5.0 with `repro-f2.mts --one-job --compact`:
 
 1. A send from an `agent_settled` handler waits in `_deferredSettledActions`.
    `isIdle()` is true right after the send. The message lands later.
@@ -43,8 +45,15 @@ All three were seen on 1.4.0 and 1.5.0 with `pi-probe.mts` (below):
    after the clear and before the run stops is kept for the next run. After
    the run settles, `isIdle()` is true and the message is not in the session.
 
-Fact 3 means that Esc in the TUI does not always drop the queue. It drops
-only what was in the queue when the user pressed Esc.
+4. In the TUI, `/compact` calls `AgentSession.abort()` with no clear of the
+   queue (`handleCompactCommand`, then `compact()`, in
+   `interactive-mode.js`). `/new`, `/resume`, `/fork`, `ctx.compact()` and
+   `ctx.newSession()` do the same (from the source; not run live). A steered
+   message is kept for the next run, as in fact 2.
+
+Facts 3 and 4 mean that a TUI abort does not always drop the queue. Esc drops
+only what was in the queue when the user pressed it, and the session commands
+drop nothing.
 
 ## How to check a new Pi version
 

@@ -74,13 +74,15 @@ Versioning rules are in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
 ### Fixed
 
 - Shell jobs: one job completion could reach the conversation two times. The
-  most common case was Esc in the TUI while a job ended: the completion
-  stayed in Pi's queue, and shell-jobs sent it again. Shell-jobs now keeps
-  each sent completion as held until it lands, and sends it again only when
-  a settled run proves that Pi dropped it. After an abort in RPC, print or
-  SDK mode, the completion now lands in the next run and does not start a
-  run of its own. The formal model checks the fix, and a regression test
-  covers each of the six paths (`formal/shell-jobs-delivery/README.md`).
+  most common cases were Esc in the TUI while a job ended, and `/compact`
+  during a run: the completion stayed in Pi's queue, and shell-jobs sent it
+  again. Shell-jobs now keeps each sent completion as held until it lands,
+  and sends it again only when a run that settles with no abort proves that
+  Pi dropped it. After an abort, a completion that Pi kept lands in the next
+  run, and one that Esc dropped is sent again when the next run settles. It
+  no longer starts a new turn right after Esc. The formal model checks the
+  fix, and a regression test covers each of the six paths
+  (`formal/shell-jobs-delivery/README.md`).
 
 ## 0.40.1 - 2026-11-08
 

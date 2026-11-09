@@ -40,26 +40,56 @@ value tells where Pi puts the message:
 
 | Held as | When | Released by |
 |---|---|---|
-| `steered` | An agent loop runs, and it is not aborted. Pi steers the message into the run's queue. | A run that settles with no abort: it drained its queue. An aborted run in the TUI: the TUI clears the queue before each abort. |
-| `kept` | The loop is being aborted (`signal.aborted`). Pi keeps the message for the next run in every mode, also in the TUI. | A run that settles with no abort. |
+| `steered` | An agent loop runs. Pi steers the message into the run's queue. | A run that settles with no abort: it drained its queue, so the message landed or was dropped. |
 | `pending` | No agent loop runs: Pi is idle, agent_settled handlers run, or the run is between loops. Pi starts a run for the message, at once or after the handlers. | `before_agent_start` names the message as the start of a run: then it is `steered`. |
 
-An abort outside the TUI (the RPC `abort`, or `ctx.abort()` in RPC, print or
-SDK mode) keeps the queue, so it releases nothing. A completion that lands
-(`message_end`, or the history lookup of a later reconcile) leaves `held`.
+An aborted run releases nothing, in every mode. Some aborts keep the queue
+for the next run: the RPC `abort`, `ctx.abort()` with no `abortHandler`, and
+in the TUI `/compact`, `/new`, `/resume`, `/fork`, `ctx.compact()` and
+`ctx.newSession()`. Esc in the TUI clears the queue, but a send after the
+clear and before the run stops stays in the queue (F5). Shell-jobs cannot see
+which case it is. A completion that lands (`message_end`, or the history
+lookup of a later reconcile) leaves `held`.
 
-Two choices are trades. They make the fix safe for every Pi rule that the
-model has:
+The fix makes trades, so that it is safe for every Pi rule that the model has:
 
-- After an abort outside the TUI, the completion lands in the next run. It
-  does not start a run of its own. Shell-jobs cannot tell a kept queue from a
-  cleared one (an RPC client can send `clear_queue` and then `abort`). If the
-  queue was cleared, the completion is sent again when the next run settles.
-- `isIdle()` does not tell a deferred send from a send that starts a run. A
-  first version of the fix used it. The check `pi-idle-counts-deferred` then
-  found a duplicate: if Pi makes `isIdle()` count deferred actions (one half
-  of the Pi fix below), that version sent a deferred completion again.
-  `ctx.signal` does not have this problem.
+- After an abort, a completion is not sent again at once. If the abort kept
+  it, it lands in the next run. If the abort dropped it (Esc), shell-jobs
+  sends it again when the next run settles with no abort. Before the fix, it
+  was sent again at once, and that started a new turn right after the Esc.
+- The first version of this fix released `steered` sends after an aborted run
+  in the TUI. It used the rule that every TUI abort clears the queue. A review
+  found that `/compact`, `/new`, `/resume` and `/fork` do not, and a live
+  repro (`repro-f2.mts --one-job --compact`) gave 2 messages with that
+  version. The check `mutant-release-ignores-abort` copies that version.
+- `isIdle()` does not tell a deferred send from a send that starts a run. An
+  earlier version used it. The check `pi-idle-counts-deferred` then found a
+  duplicate: if Pi makes `isIdle()` count deferred actions (one half of the
+  Pi fix below), that version sent a deferred completion again. `ctx.signal`
+  does not have this problem.
+- A send between agent loops of a busy session is `pending`. If a later Esc
+  drops it, nothing sends it again (see "Known limits").
+
+## Known limits of the fix
+
+A review found these. None gives a duplicate.
+
+- A completion sent while another extension's `before_agent_start` or
+  `agent_before_settle` handler awaits is `pending`: no agent loop runs then.
+  If Esc drops it, it stays held, and the job shows as not delivered. Live:
+  with a 1.5 s `before_agent_start` handler and Esc, the old code delivered
+  it once and the fix not at all. The window is the time that such handlers
+  take.
+- `_emitAgentSettled` runs the deferred actions with `for (...) await
+  action()`. If one throws (for example a deferred prompt with no auth), Pi
+  drops the later actions. A `pending` completion among them stays held.
+- A run that settles with no abort can still hold a message that came in the
+  microtasks after its last queue check. Such a send is `pending`, so it is
+  safe, but it lands only in the next run.
+- If `agent.continue()` throws "No messages to continue from" while the queue
+  holds a message, the run settles with `aborted: false` and the fix releases
+  a `steered` message that is still queued. This needs a transcript with only
+  system messages.
 
 `pi-probe.mts` checks the Pi rules that the fix uses, on any Pi version.
 
@@ -97,21 +127,23 @@ Pi's source (1.4.0; 1.5.0 is the same here):
 - `isIdle` is `!_isAgentRunActive && !isCompacting`. It ignores the actions
   that wait, and the messages that wait in the agent's queues.
 - `ctx.signal` is `agent.signal`: the abort signal of the agent loop
-  (`pi-agent-core/dist/agent.js`). It is undefined when no loop runs, and
-  `abort()` aborts it at once. While the session is busy, a loop can run or
-  not (during `_prepareRun` and between loops): the model tries both.
+  (`pi-agent-core/dist/agent.js`). It is undefined when no loop runs. While
+  the session is busy, a loop can run or not (during `_prepareRun` and
+  between loops): the model tries both.
 - An abort is two steps: `AgentSession.abort()` sets
   `_agentRunAbortRequested`, and later the run ends. A send between the two
   goes into the queue. The run then ends with the message still in the queue.
-- In the TUI, every abort clears the queues first: Esc, tree navigation and
-  an extension's `ctx.abort()`, which goes through the TUI's `abortHandler`.
-  All three call `clearAllQueues` (`restoreQueuedMessagesToEditor`,
+- Some aborts clear the queues first: in the TUI, Esc, tree navigation and an
+  extension's `ctx.abort()`, which goes through the TUI's `abortHandler`.
+  They call `clearAllQueues` (`restoreQueuedMessagesToEditor`,
   `dist/modes/interactive/interactive-mode.js`). The clear comes before the
   abort, so a send after the clear stays in the queue.
-- Other modes keep the messages. The RPC `abort` command and `ctx.abort()` in
-  a mode with no `abortHandler` (RPC, print, SDK) call `AgentSession.abort()`
+- The other aborts keep the messages: the RPC `abort` command, `ctx.abort()`
+  in a mode with no `abortHandler` (RPC, print, SDK), and in the TUI
+  `/compact`, `/new`, `/resume`, `/fork`, `ctx.compact()`, `ctx.newSession()`,
+  `ctx.fork()` and `ctx.switchSession()`. They call `AgentSession.abort()`
   alone. It and `Agent.abort()` do not touch the queues, and the next run
-  takes the messages.
+  takes the messages. The model lets each abort clear the queue or keep it.
 - `/reload` refuses only while a run is active. It then awaits before
   shell-jobs parks. `runtime.held` survives the reload.
 - Pi emits each event to the handlers of the runner that started the
@@ -121,9 +153,9 @@ Pi's source (1.4.0; 1.5.0 is the same here):
 
 The default checks use 2 jobs, 1 reload, 2 user runs or aborts, and 3
 attempts. `faithful-wide` uses 3 jobs (20,553,032 states). `faithful-runs3`
-uses 3 user runs or aborts. The TUI flag is chosen at the start, so each
-check covers the TUI and the other modes. Inside these bounds the check is
-exhaustive. It does not cover:
+uses 3 user runs or aborts. `faithful-one-job-runs6` uses 1 job and 6 user
+runs or aborts, so that it reaches the attempt cap. Inside these bounds the
+check is exhaustive. It does not cover:
 
 - More jobs, reloads or runs than the bounds.
 - Quit, restart hand-over (`lib/shell-jobs-adopt.ts`), and `beginClosing`.
@@ -136,6 +168,11 @@ exhaustive. It does not cover:
   invalidated it. The code then removes the `held` entry.
 - A failed run start (`_prepareRun` throws). A unit test covers it: the
   completion is sent again after the next run settles.
+- The cases in "Known limits of the fix": an Esc during the
+  `before_agent_start` or `agent_before_settle` handlers of another
+  extension, an exception in the deferred loop, a send in the microtasks
+  after a run's last queue check (the model's `runEnds` needs an empty queue
+  when no abort was requested), and an exception from `agent.continue()`.
 - A second kill of the same job.
 - A `clear_queue` while no run is active (RPC), or a TUI Esc while Pi is
   settling. These drop a message. A kept completion then lands only after a
@@ -178,7 +215,6 @@ The `old-` checks set `HELD_GUARD` to false: the code before the fix.
 | `mutant-release-pending` | violates `oneCopy` | violation |
 | `mutant-release-ignores-abort` | violates `oneCompletion` | violation |
 | `mutant-pending-as-steered` | violates `oneCopy` | violation |
-| `mutant-kept-as-steered` | violates `oneCompletion` | violation |
 | `mutant-session-start-releases` | violates `oneCompletion` | violation |
 
 Each `f` check turns off the other sources of the duplicate, so that its
@@ -244,12 +280,15 @@ abort and the end of the run one step, so it could not find F5.
 
 **F4: one job and an abort that keeps the queue.** TLC check
 `old-f4-abort-keeps-queue`, 12 steps. Live: `repro-f2.mts --one-job --keep-queue`
-gave `{"echo-a":2}` before the fix and `{"echo-a":1}` with it (the completion
-lands in the next user run).
+(RPC) and `repro-f2.mts --one-job --compact` (`/compact` in the TUI) gave
+`{"echo-a":2}` before the fix and `{"echo-a":1}` with it (the completion
+lands in the next user run). The first version of the fix also gave
+`{"echo-a":2}` for `--compact`.
 
 1. A job ends during a run. Its completion is steered into the run.
 2. The run is aborted without a clear of the queue: an RPC client sends
-   `abort`, or an extension calls `ctx.abort()` in RPC, print or SDK mode.
+   `abort`, an extension calls `ctx.abort()` in RPC, print or SDK mode, or
+   the user enters `/compact`, `/new`, `/resume` or `/fork` in the TUI.
 3. Pi emits `agent_settled`. The reconcile finds the job in neither the
    session nor the outbox, and `isIdle()` is true. It sends again.
 4. The next run takes both messages.
@@ -301,7 +340,7 @@ started `agent_settled` but before the shell-jobs handler reconciles. Its send
 is deferred, and the reconcile sends again.
 
 **Impact before the fix.** High for F5: one job and Esc in the TUI. F4 needed
-an abort outside the TUI. F2a needed two jobs that end near the end of the
+an abort that keeps the queue, for example `/compact` during a run in the TUI. F2a needed two jobs that end near the end of the
 same run. F2b needed a prompt in the few milliseconds of `agent_settled`. F1
 and F3 needed another extension with a slow `agent_settled` handler. The harm
 was a second copy of a job result and an extra model turn.
@@ -317,21 +356,23 @@ has the facts for a Pi issue.
 
 ## How the model stays true to the code
 
-- `tests/shell-jobs-delivery-conformance.test.mts` replays 206 model traces
-  (200 random from `faithful-runs3`, 6 witnesses) step by step against the
+- `tests/shell-jobs-delivery-conformance.test.mts` replays 205 model traces
+  (200 random from `faithful-runs3`, 5 witnesses) step by step against the
   real `lib/shell-jobs-delivery.ts` and `parkForReload` in `npm test`. After
   each step, the code state (attempts, delivered, failed, claimed, outbox,
   reads in flight, held completions, binding, sends, messages in the session)
   must equal the model state.
 - The same file has one regression test for each path of finding F (F1, F2a,
-  F2a through Esc, F2b, F3, F4, F5), and tests for the trades: an abort that
-  clears the queue outside the TUI, and a run that fails to start.
-- The trace replay alone caught 13 of 13 changes to the real code: the held
-  skip, the release that ignores the abort or the mode, the release of
-  `pending` sends, `kept` held as `steered`, `pending` held as `steered`, a
-  `noteRunStart` that does nothing, an acknowledgement that keeps the held
-  entry, the binding check, the outbox skip, the history lookup, the attempt
-  cap, the `isIdle()` check, and the outbox removal before the send.
+  F2a through Esc, F2b, F3, F4, F5), a test for a run that fails to start, and
+  a test for the attempt cap.
+- The trace replay alone caught 11 of 12 changes to the real code: the held
+  skip, a release after an aborted run, the release of `pending` sends,
+  `pending` held as `steered`, a `noteRunStart` that does nothing, an
+  acknowledgement that keeps the held entry, the binding check, the outbox
+  skip, the history lookup, the `isIdle()` check, and the outbox removal
+  before the send. It missed the attempt cap plus one: with the fix, the cap
+  needs more aborts than `faithful-runs3` allows, so no trace reaches it. The
+  attempt-cap test catches that change.
 - The replay copies a few lines of the code that it does not run (`finalize`,
   `stopJob`, the event handlers). Each copy names its source.
 - Its Pi is a fake that follows the model's Pi rules. The replay does not
@@ -345,10 +386,10 @@ has the facts for a Pi issue.
   its run one step. Each time, a review or a live script found the error.
   Check each platform rule against the real platform.
 - A witness is an invariant that the simulator must break, so that the traces
-  reach a rare state: a job marked "not delivered", a message that lands
-  while parked, a message that an abort kept while the reconcile runs, a
-  second send after a release, a deferred send held while a nested
-  `agent_settled` reconciles, and a send that went into a run being aborted.
+  reach a rare state: a message that lands while parked, a message that an
+  abort kept while the reconcile runs, a second send after a release, a
+  deferred send held while a nested `agent_settled` reconciles, and a send
+  into a run whose abort was requested.
 - `fv.mjs drift formal/shell-jobs-delivery` lists the covered files that
   changed after the sync commit. When it lists a file, read the change,
   update the model, run `check` and `traces`, run the replay test, and then

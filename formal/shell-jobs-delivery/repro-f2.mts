@@ -7,12 +7,13 @@
  *   node formal/shell-jobs-delivery/repro-f2.mts --one-job               (control: one job, Esc in the TUI)
  *   node formal/shell-jobs-delivery/repro-f2.mts --one-job --keep-queue  (F4: one job, an abort without clearQueue, as RPC "abort" does)
  *   node formal/shell-jobs-delivery/repro-f2.mts --one-job --job-after-abort  (F5: Esc in the TUI, then the job ends before the run stops)
+ *   node formal/shell-jobs-delivery/repro-f2.mts --one-job --compact          (F4 in the TUI: /compact aborts the run and keeps the queue)
  *   --mode tui|rpc|print   the mode that the extensions see (default: tui, or rpc with --keep-queue)
  *
  * Before the fix (pi-extras cf08a6a) F2a gave {"echo-a":1,"echo-b":2} and F4
- * gave {"echo-a":2}. With the fix every job gets 1 message. After an abort
- * outside the TUI, the completion lands in the next run, so the script starts
- * one more user run at the end.
+ * gave {"echo-a":2}. With the fix every job gets 1 message. After an abort,
+ * a kept completion lands in the next run, and a dropped one is sent again
+ * when the next run settles, so the script starts one more user run at the end.
  *
  * Real: AgentSession, prompt(), steer, clearQueue() and abort() (what Esc
  * does in interactive mode), agent_settled and its deferred sends, and the
@@ -62,9 +63,10 @@ const { session } = await sdk.createAgentSession({
 	cwd: scratch, agentDir, modelRuntime: runtime, model: runtime.getModel("faux", "m"),
 	settingsManager, resourceLoader: loader, sessionManager: sdk.SessionManager.inMemory(scratch),
 });
-const keepQueue = process.argv.includes("--keep-queue");
+const compact = process.argv.includes("--compact");
+const keepQueue = process.argv.includes("--keep-queue") || compact;
 const modeAt = process.argv.indexOf("--mode");
-const mode = modeAt > 0 ? process.argv[modeAt + 1] : keepQueue ? "rpc" : "tui";
+const mode = modeAt > 0 ? process.argv[modeAt + 1] : keepQueue && !compact ? "rpc" : "tui";
 // No UI: shell-jobs reads ctx.mode for the abort rule and skips its widget.
 await session.bindExtensions({ mode, uiContext: { notify: () => undefined } });
 
@@ -92,7 +94,8 @@ if (!afterAbort) await startJobs();
 // With --keep-queue, the abort keeps the queue, as the RPC "abort" command
 // (rpc-mode.js:328) and ctx.abort() in a mode with no abortHandler do.
 if (!keepQueue) session.clearQueue();
-const aborting = session.abort();
+// With --compact, /compact in the TUI: AgentSession.compact() calls abort() and keeps the queue.
+const aborting = compact ? session.compact().catch(() => undefined) : session.abort();
 // With --job-after-abort, the jobs end after the clear, while the aborted run
 // still winds down (here: the faux model has not answered yet). Their
 // completions stay in the queue, also in the TUI.
