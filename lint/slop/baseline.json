@@ -10,7 +10,7 @@
 		"tests/subagents-host.test.ts: 19",
 		"formal/subagents-mail/repro-f4-order.mts: 18",
 		"formal/subagents-mail/repro-f4-small.mts: 16",
-		"lib/subagents/team.ts: 15"
+		"formal/shell-jobs-delivery/pi-probe.mts: 15"
 	],
 	"ruleSet": {
 		"py-except-pass": "917d577d1d70686f",
@@ -44,15 +44,17 @@
 			"files": {}
 		},
 		"ts-any-annotation": {
-			"count": 109,
+			"count": 114,
 			"files": {
 				"formal/rate-limit-recovery/check-platform.mts": 10,
 				"formal/rate-limit-recovery/repro-f4.mts": 2,
 				"formal/rate-limit-recovery/repro-f5.mts": 1,
 				"formal/rate-limit-recovery/repro-f6.mts": 1,
 				"formal/rate-limit-recovery/repro-support.mts": 7,
+				"formal/shell-jobs-delivery/pi-probe.mts": 2,
 				"formal/shell-jobs-delivery/repro-f1.mts": 4,
 				"formal/shell-jobs-delivery/repro-f2.mts": 2,
+				"formal/shell-jobs-delivery/repro-gap.mts": 3,
 				"formal/subagents-lifecycle/probe-pi-abort.mts": 4,
 				"formal/subagents-lifecycle/repro-support.mts": 7,
 				"formal/subagents-mail/repro-f1.mts": 6,
@@ -71,12 +73,14 @@
 			}
 		},
 		"ts-as-any": {
-			"count": 23,
+			"count": 28,
 			"files": {
 				"formal/rate-limit-recovery/check-platform.mts": 1,
 				"formal/rate-limit-recovery/repro-support.mts": 2,
+				"formal/shell-jobs-delivery/pi-probe.mts": 3,
 				"formal/shell-jobs-delivery/repro-f1.mts": 2,
 				"formal/shell-jobs-delivery/repro-f2.mts": 2,
+				"formal/shell-jobs-delivery/repro-gap.mts": 2,
 				"formal/subagents-lifecycle/probe-pi-abort.mts": 1,
 				"formal/subagents-lifecycle/repro-f5.mts": 2,
 				"formal/subagents-lifecycle/repro-support.mts": 1,
@@ -224,13 +228,14 @@
 			}
 		},
 		"ts-double-cast": {
-			"count": 38,
+			"count": 39,
 			"files": {
 				"extensions/auto-update.ts": 1,
 				"extensions/phase-spinner.ts": 1,
 				"extensions/status-plus.ts": 2,
 				"extensions/subagents.ts": 1,
 				"extensions/voice.ts": 2,
+				"formal/shell-jobs-delivery/slow-links-extension.ts": 1,
 				"lib/auto-update/state.ts": 1,
 				"lib/auto-update/undo.ts": 1,
 				"lib/band/band.ts": 1,
@@ -466,11 +471,13 @@
 			}
 		},
 		"ts-promise-catch-noop": {
-			"count": 84,
+			"count": 88,
 			"files": {
 				"extensions/status-plus.ts": 1,
 				"extensions/subagents.ts": 2,
-				"formal/shell-jobs-delivery/repro-f2.mts": 1,
+				"formal/shell-jobs-delivery/pi-probe.mts": 2,
+				"formal/shell-jobs-delivery/repro-f2.mts": 2,
+				"formal/shell-jobs-delivery/repro-gap.mts": 1,
 				"formal/subagents-lifecycle/repro-f1.mts": 1,
 				"formal/subagents-lifecycle/repro-f2.mts": 1,
 				"formal/subagents-lifecycle/repro-f3.mts": 2,
@@ -520,11 +527,13 @@
 			}
 		},
 		"ts-sleep-wait": {
-			"count": 247,
+			"count": 261,
 			"files": {
 				"formal/rate-limit-recovery/check-platform.mts": 3,
+				"formal/shell-jobs-delivery/pi-probe.mts": 8,
 				"formal/shell-jobs-delivery/repro-f1.mts": 4,
-				"formal/shell-jobs-delivery/repro-f2.mts": 3,
+				"formal/shell-jobs-delivery/repro-f2.mts": 4,
+				"formal/shell-jobs-delivery/repro-gap.mts": 2,
 				"formal/subagents-lifecycle/probe-pi-abort.mts": 2,
 				"formal/subagents-lifecycle/repro-f1.mts": 2,
 				"formal/subagents-lifecycle/repro-f2.mts": 3,
@@ -563,7 +572,7 @@
 				"tests/shell-jobs-adopt-safety.test.ts": 1,
 				"tests/shell-jobs-extension.test.mts": 23,
 				"tests/shell-jobs-inspector.test.mts": 1,
-				"tests/shell-jobs-reload.test.mts": 1,
+				"tests/shell-jobs-reload.test.mts": 4,
 				"tests/shell-jobs-restart.test.mts": 2,
 				"tests/shell-jobs-sdk.test.mts": 1,
 				"tests/shell-jobs-spawn.test.mts": 2,
@@ -609,7 +618,7 @@
 			}
 		},
 		"ts-swallowed-catch": {
-			"count": 101,
+			"count": 100,
 			"files": {
 				"extensions/auto-update.ts": 1,
 				"extensions/cache-compaction.ts": 5,
@@ -648,7 +657,6 @@
 				"lib/operational-log.ts": 1,
 				"lib/rate-limit-recovery/local.ts": 1,
 				"lib/shell-jobs-adopt.ts": 1,
-				"lib/shell-jobs-delivery.ts": 1,
 				"lib/shell-jobs-handover.ts": 1,
 				"lib/shell-jobs-inspector.ts": 1,
 				"lib/shell-jobs-process.ts": 3,
