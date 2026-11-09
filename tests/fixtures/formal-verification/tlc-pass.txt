@@ -1,0 +1,25 @@
+[TLC] Compiling to TLA+ (via Apalache)...
+# Usage statistics is OFF. We care about your privacy.
+# If you want to help our project, consider enabling statistics with config --enable-stats=true.
+
+Output directory: /scratch/_apalache-out
+The Apalache server is running on port 8822. Press Ctrl-C to stop.
+[TLC] Running TLC model checker...
+
+TLC2 Version 2026.01.01.000000
+Warning: Please run the Java VM, which executes TLC with a throughput optimized garbage collector, by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 2 and seed 1 with 1 worker on 4 cores with 2048MB heap and 64MB offheap memory [pid: 1000] (Linux amd64, Eclipse Adoptium 21.0.13 64bit, MSBDiskFPSet, DiskStateQueue).
+Starting... (2026-01-01 00:00:00)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-01-01 00:00:00.
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 6.5E-19
+7 states generated, 4 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 4.
+The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 1 and the 95th percentile is 1).
+Finished in 00s at (2026-01-01 00:00:00)
+
+[ok] No violation found (474ms).
